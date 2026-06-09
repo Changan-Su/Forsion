@@ -1,0 +1,38 @@
+{
+  "name": "tangu-agent-desktop",
+  "version": "1.0.0",
+  "description": "Tangu Agent — 本地极简桌面 GUI(Electron),连 standalone 服务",
+  "private": true,
+  "type": "module",
+  "main": "out/main/main.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^40.8.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.7.0"
+  },
+  "build": {
+    "appId": "com.forsion.tangu-desktop",
+    "productName": "Tangu Agent",
+    "files": ["out/**/*"],
+    "linux": { "target": "AppImage" },
+    "mac": { "target": "dmg" },
+    "win": { "target": "nsis" }
+  }
+}

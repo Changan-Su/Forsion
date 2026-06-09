@@ -1,0 +1,56 @@
+{
+  "name": "@forsion/tangu-agent",
+  "version": "1.0.0",
+  "description": "Tangu Agent — 与宿主无关的服务端 agent runtime;可作为 Forsion 微后端插件,也可独立运行(云端大脑客户端)。",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "tangu": "./dist/tui/main.js",
+    "tangu-server": "./dist/standalone/main.js",
+    "tangu-worker": "./dist/worker/main.js"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "tui": "node dist/tui/main.js",
+    "server": "node dist/standalone/main.js",
+    "standalone": "node dist/standalone/main.js",
+    "worker": "node dist/worker/main.js",
+    "clean": "rm -rf dist",
+    "desktop:install": "cd desktop && npm install",
+    "desktop:dev": "cd desktop && npm run dev",
+    "desktop:build": "cd desktop && npm run build"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.1",
+    "cli-highlight": "^2.1.11",
+    "express": "^4.18.2",
+    "ink": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "marked": "^12.0.2",
+    "marked-terminal": "^7.1.0",
+    "pg": "^8.18.0",
+    "react": "^18.3.1",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/node": "^20.10.0",
+    "@types/pg": "^8.11.0",
+    "@types/react": "^18.3.12",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.3.3"
+  }
+}

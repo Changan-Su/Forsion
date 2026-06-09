@@ -1,0 +1,172 @@
+/* Tangu 桌面 — Hanako 简约中式 design tokens(纯极简工具调性,无角色/人格)。
+   源:Temp_Repo/openhanako-main/desktop/src/themes/new-warm-paper.css */
+:root {
+  --bg: #F5EFE4;
+  --bg-card: #FBF7EE;
+  --sidebar-bg: #EFE8DB;
+  --text: #2A2622;
+  --text-light: #4A433C;
+  --text-muted: #6B6158;
+  --accent: #537D96;
+  --accent-hover: #3F6179;
+  --accent-light: rgba(83, 125, 150, 0.08);
+  --green: #4A6B4A;
+  --danger: #8B2C1F;
+  --border: #D8CFBE;
+  --overlay-subtle: rgba(42, 38, 34, 0.03);
+  --overlay-medium: rgba(42, 38, 34, 0.08);
+
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-serif: 'Songti SC', 'Noto Serif SC', 'Source Han Serif SC', 'STSong', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-surface: 6px;
+  --border-width: 0.5px;
+
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 0.15s;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* 顶栏:连接设置(可拖动窗口) */
+.titlebar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  padding-left: 84px; /* 给 macOS 红绿灯留位 */
+  background: var(--sidebar-bg);
+  border-bottom: var(--border-width) solid var(--border);
+  font-size: 13px;
+}
+.titlebar input, .titlebar button { -webkit-app-region: no-drag; }
+
+.brand { font-family: var(--font-serif); font-weight: 600; color: var(--text); margin-right: var(--space-sm); }
+
+input.field {
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+input.field:focus { outline: none; border-color: var(--accent); }
+.field-url { width: 190px; }
+.field-token { width: 150px; }
+.field-model { width: 130px; }
+
+button.btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+button.btn:hover { background: var(--accent-hover); }
+button.btn.ghost { background: var(--overlay-subtle); color: var(--text); }
+button.btn.danger { background: var(--danger); }
+button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.status { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+.status.ok { color: var(--green); }
+.status.err { color: var(--danger); }
+
+/* 对话流 */
+.stream {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+  max-width: 46rem;
+  width: 100%;
+  margin: 0 auto;
+}
+.msg { margin-bottom: var(--space-lg); animation: fade-up var(--duration-fast) var(--ease-out) both; }
+.msg .role { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.msg.user .bubble {
+  background: var(--overlay-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm) var(--space-md);
+  white-space: pre-wrap;
+}
+.msg.assistant .bubble {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+.tool {
+  border-left: 2px solid var(--accent);
+  background: var(--accent-light);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 6px 10px;
+  margin: var(--space-sm) 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-light);
+  white-space: pre-wrap;
+}
+.tool.err { border-left-color: var(--danger); }
+
+/* 输入区 */
+.composer {
+  border-top: var(--border-width) solid var(--border);
+  padding: var(--space-md);
+  display: flex;
+  gap: var(--space-sm);
+  max-width: 46rem;
+  width: 100%;
+  margin: 0 auto;
+}
+textarea.input {
+  flex: 1;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-surface);
+  color: var(--text);
+  font: inherit;
+  padding: var(--space-sm) var(--space-md);
+  resize: none;
+  min-height: 44px;
+  max-height: 180px;
+}
+textarea.input:focus { outline: none; border-color: var(--accent); }
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
