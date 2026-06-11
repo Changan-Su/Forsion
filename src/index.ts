@@ -37,12 +37,14 @@ export interface TanguModule {
   /**
    * 进程重启自愈 + 沙箱/历史员等后台任务。装配后由宿主决定调用时机(migrate 路径不应调)。
    *
-   * opts(分离式云 worker 用):多 worker 共享同一云库时,run 自愈(failStaleRuns/recoverQueuedRuns)
-   * 与 historian 是**全局**的——每个 worker 都跑会互相把对方在飞的 run 标 failed / 重复入队 / 重复复盘。
-   * 故 worker 传 `{ recoverRuns:false, historian:false }`,只留**本机本地**的沙箱 janitor(docker/session)。
-   * 默认全开,microserver/standalone 行为不变。
+   * opts(分离式云 worker / 纯调度网关用):多 worker 共享同一云库时,run 自愈(failStaleRuns/
+   * recoverQueuedRuns)与 historian 是**全局**的——每个 worker 都跑会互相把对方在飞的 run 标
+   * failed / 重复入队 / 重复复盘。故 worker 传 `{ recoverRuns:false, historian:false }`,只留
+   * **本机本地**的沙箱 janitor(docker/session);Forsion 纯调度网关(loop 在远端 worker,
+   * 本机无沙箱)传 `{ recoverRuns:false, sandbox:false, historian:true }`。
+   * 默认全开,standalone 行为不变。
    */
-  startBackgroundTasks: (opts?: { recoverRuns?: boolean; historian?: boolean }) => void;
+  startBackgroundTasks: (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean }) => void;
   /** 卸载/热加载:停掉所有 interval 定时器 + 中止在飞 run(防 interval 泄漏)。 */
   dispose: () => void;
 }
@@ -65,9 +67,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(memoryRouter);
   dataRouter.use(assetsRouter);
 
-  const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean }): void => {
+  const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean }): void => {
     // 进程重启自愈:遗留 running 标 failed → 重新入队仍在飞的 run(顺序不可颠倒)。
     // 共享云库的 worker 集群必须关掉(opts.recoverRuns=false),否则跨 worker 互相干扰。
+    // 纯调度网关(Forsion server)三个全关:loop 不在该进程跑,沙箱也不在该机。
     if (opts?.recoverRuns !== false) {
       failStaleRuns()
         .then((n) => {
@@ -79,11 +82,13 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     }
 
     // 本机本地的沙箱 janitor(docker 容器 / 会话工作区):每个 worker 各管自己的,安全。
-    loadSandboxConfig().catch(() => {});
-    startCacheJanitor();
-    reapOrphanRunContainers();
-    reapOrphanSessions();
-    startSessionReaper();
+    if (opts?.sandbox !== false) {
+      loadSandboxConfig().catch(() => {});
+      startCacheJanitor();
+      reapOrphanRunContainers();
+      reapOrphanSessions();
+      startSessionReaper();
+    }
 
     // historian 也是全局后台扫描,worker 集群关掉避免重复复盘。
     if (opts?.historian !== false) {

@@ -30,6 +30,14 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     if (!session_id || !modelId) {
       return res.status(400).json({ detail: 'session_id and model_id are required' });
     }
+    // 入站硬帽(防 2026-06-10 的巨型粘贴事故;窗口相对的细闸门在 agentLoop):
+    // 400k 字符 ≈ 远超任何正常输入,直接 400,别让它进队列/落库。
+    const MAX_INPUT_CHARS = Number(process.env.TANGU_MAX_INPUT_CHARS) || 400_000;
+    if (typeof message === 'string' && message.length > MAX_INPUT_CHARS) {
+      return res.status(400).json({
+        detail: `消息过长(${message.length.toLocaleString()} 字符,上限 ${MAX_INPUT_CHARS.toLocaleString()})。请把大段材料保存为文件后让 agent 用工具读取。`,
+      });
+    }
 
     // session 可能尚未从客户端同步到服务端（AI Studio 客户端建 session、懒同步）。
     // 存在且属他人 → 拒绝；不存在 → 自动建一条（agent 端自给自足，避免新会话首条消息 404）。

@@ -34,13 +34,16 @@ export interface BuildPayloadOpts {
   attachments?: any[];
   thinkingLevel?: ThinkingLevel;
   stream?: boolean;
+  /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
+  cacheKey?: string;
 }
 
 export interface StreamResult {
   content: string;
   reasoning: string;
   toolCalls: ToolCall[];
-  usage: { prompt_tokens: number; completion_tokens: number };
+  /** cached_tokens/cache_write_tokens:prompt 缓存命中/写入量(provider 上报,brain 归一化;未上报为 0/缺省)。 */
+  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number };
   finishReason?: string;
 }
 
@@ -58,6 +61,8 @@ export interface StreamOpts {
     argsDelta: string;
   }) => void;
   signal?: AbortSignal;
+  /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
+  provider?: string;
 }
 
 export interface LlmBrain {

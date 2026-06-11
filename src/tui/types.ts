@@ -60,7 +60,7 @@ export interface UiState {
   live: Block[] | null; // 进行中的 assistant 回合块序列；null=无活跃回合
   busy: boolean;
   status: RunStatus;
-  usage: { total: number; cost: number };
+  usage: { total: number; cost: number; cached: number };
   approval: PendingApproval | null;
 }
 
@@ -73,7 +73,7 @@ export type UiAction =
   | { type: 'TOOL_CALL'; id: string; name: string; args: string }
   | { type: 'TOOL_STREAM'; id: string; delta: string }
   | { type: 'TOOL_RESULT'; id: string; name: string; result: string; isError: boolean }
-  | { type: 'USAGE'; tokens: number; cost: number; iteration: number }
+  | { type: 'USAGE'; tokens: number; cost: number; cached: number; iteration: number }
   | { type: 'STATUS'; state?: RunStatus['state']; iteration?: number; phase?: string }
   | { type: 'APPROVAL'; approval: PendingApproval }
   | { type: 'APPROVAL_CLEAR' }

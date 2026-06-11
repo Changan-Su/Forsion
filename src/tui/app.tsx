@@ -137,7 +137,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         dispatch({ type: 'TOOL_RESULT', id: p.id, name: p.name, result: String(p.result ?? ''), isError: !!p.isError });
         break;
       case 'usage':
-        dispatch({ type: 'USAGE', tokens: (p.prompt || 0) + (p.completion || 0), cost: p.cost || 0, iteration: p.iteration || 0 });
+        dispatch({ type: 'USAGE', tokens: (p.prompt || 0) + (p.completion || 0), cost: p.cost || 0, cached: p.cached || 0, iteration: p.iteration || 0 });
         break;
       case 'status':
         dispatch({ type: 'STATUS', state: p.state, iteration: p.iteration, phase: p.phase });
@@ -368,7 +368,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       case '/cost': {
         const u = stateRef.current.usage;
-        notice(`本会话用量：${u.total.toLocaleString()} tokens · 约 ${u.cost.toFixed(4)} 费用单位`);
+        notice(`本会话用量：${u.total.toLocaleString()} tokens · 约 ${u.cost.toFixed(4)} 费用单位${u.cached > 0 ? ` · 缓存命中 ${u.cached.toLocaleString()} tokens` : ''}`);
         return;
       }
       case '/copy': {

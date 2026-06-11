@@ -47,6 +47,7 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
     toolChoice,
     attachments = [],
     stream = true,
+    cacheKey,
   } = opts;
 
   const finalMessages = applyAttachments([...messages], attachments);
@@ -63,6 +64,11 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
   if (tools && tools.length) {
     payload.tools = tools;
     if (toolChoice) payload.tool_choice = toolChoice;
+  }
+  // OpenAI 官方 API 直连:prompt_cache_key 按会话粘机提升前缀缓存命中(其他 provider 不发,
+  // 防严格网关拒未知字段)。
+  if (cacheKey && (opts.model as any)?.provider === 'openai') {
+    payload.prompt_cache_key = cacheKey;
   }
   return payload;
 }
@@ -108,7 +114,7 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
-  const usage = { prompt_tokens: 0, completion_tokens: 0 };
+  const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0 };
   const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
 
   const reader = response.body.getReader();
@@ -162,6 +168,15 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
       if (json.usage) {
         usage.prompt_tokens = json.usage.prompt_tokens || usage.prompt_tokens;
         usage.completion_tokens = json.usage.completion_tokens || usage.completion_tokens;
+        // 缓存命中归一化(与 server llmService 同口径):OpenAI prompt_tokens_details.cached_tokens、
+        // DeepSeek prompt_cache_hit_tokens、Anthropic 兼容网关 cache_read_input_tokens。
+        const cached =
+          json.usage.prompt_tokens_details?.cached_tokens ??
+          json.usage.prompt_cache_hit_tokens ??
+          json.usage.cache_read_input_tokens;
+        if (typeof cached === 'number' && cached > 0) usage.cached_tokens = cached;
+        const written = json.usage.cache_creation_input_tokens ?? json.usage.prompt_cache_write_tokens;
+        if (typeof written === 'number' && written > 0) usage.cache_write_tokens = written;
       }
     }
   }

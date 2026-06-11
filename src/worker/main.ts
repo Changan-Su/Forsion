@@ -16,8 +16,10 @@
  */
 import express from 'express';
 import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import jwt from 'jsonwebtoken';
 import { createTanguModule } from '../index.js';
+import { activeRunCount } from '../services/agentLoop.js';
 import { createAiStudioProfile } from '../profiles/index.js';
 import { createCloudWorkerHost } from '../adapters/cloudWorkerHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
@@ -148,9 +150,23 @@ async function main(): Promise<void> {
   // 共享云库:关 run 自愈 + historian(全局任务,多 worker 会互扰),只留本机沙箱 janitor。
   mod.startBackgroundTasks({ recoverRuns: false, historian: false });
 
+  // /health 自描述:version/startedAt/activeRuns 供 Forsion 调度端探测回写 + admin 面板展示。
+  const pkgVersion: string = (() => {
+    try { return createRequire(import.meta.url)('../../package.json').version ?? ''; } catch { return ''; }
+  })();
+  const startedAt = new Date().toISOString();
+
   const app = express();
   app.use(express.json({ limit: '25mb' }));
-  app.get('/health', (_req, res) => res.json({ ok: true, mode: 'worker', appId: cfg.appId, sandbox: sandboxMode }));
+  app.get('/health', (_req, res) => res.json({
+    ok: true,
+    mode: 'worker',
+    appId: cfg.appId,
+    sandbox: sandboxMode,
+    version: pkgVersion,
+    startedAt,
+    activeRuns: activeRunCount(),
+  }));
   app.use('/', mod.userRouter); // /agent/runs、/agent/runs/:id/events、/agent/workspace/*、审批
   app.use('/', mod.dataRouter); // 数据路由(fleet 下通常由调度进程直服;worker 同挂无害,直连 worker 调试可用)
 

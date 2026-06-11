@@ -96,5 +96,13 @@ export async function runMigration(): Promise<void> {
     console.warn('[agent-core] agent_config/emoji 列迁移失败：', e?.message || e);
   }
 
+  // 图片附件链路:hydrateHistory 读 chat_messages.attachments(新基础 schema 已内联;
+  // 老库补列,幂等)。
+  try {
+    await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS attachments JSONB`);
+  } catch (e: any) {
+    console.warn('[agent-core] chat_messages.attachments 列迁移失败：', e?.message || e);
+  }
+
   console.log('✅ [agent-core] migrations done (agent_runs/agent_steps/agent_run_events)');
 }

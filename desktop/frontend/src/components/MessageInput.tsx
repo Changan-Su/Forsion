@@ -7,6 +7,9 @@ import { Send, Square, Paperclip, X, Monitor, Cloud, FolderOpen } from 'lucide-r
 import type { AgentConfig, Attachment } from '../types'
 
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
+// 客户端输入帽(服务端 runs.ts 还有一道):大段材料整体粘贴会让 agent 每轮迭代全量重发,
+// token 消耗 = 消息体量 × 轮数(2026-06-10 的百万 token 事故根因)。
+const MAX_INPUT_CHARS = 150_000
 
 /** 选本机工作目录:Electron 用系统目录对话框,浏览器调试回退手输。 */
 async function pickCwd(current?: string, fallback?: string): Promise<string | null> {
@@ -30,6 +33,7 @@ export const MessageInput: React.FC<{
 }> = ({ disabled, running, execConfig, homeDir, onExecConfigChange, onSend, onStop }) => {
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [hint, setHint] = useState<string | null>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -43,6 +47,11 @@ export const MessageInput: React.FC<{
   const send = () => {
     const text = draft.trim()
     if (!text || disabled || running) return
+    if (text.length > MAX_INPUT_CHARS) {
+      setHint(`消息过长(${text.length.toLocaleString()} 字符,上限 ${MAX_INPUT_CHARS.toLocaleString()})——大段材料请保存为文件,让 agent 用工具按需读取,整段粘贴会按轮数翻倍烧 token。`)
+      return
+    }
+    setHint(null)
     void onSend(text, attachments).then((accepted) => {
       if (!accepted) return // 失败保留草稿
       setDraft('')
@@ -54,16 +63,26 @@ export const MessageInput: React.FC<{
   const pickFiles = async (files: FileList | null) => {
     if (!files) return
     const next: Attachment[] = []
+    const skipped: string[] = []
     for (const f of Array.from(files)) {
-      if (f.size > MAX_ATTACH_BYTES) continue
+      // 只收图片:非图附件目前不进模型上下文(后端会忽略),收了反而像"已发给 AI"的假象。
+      if (!f.type.startsWith('image/')) {
+        skipped.push(`${f.name}(非图片)`)
+        continue
+      }
+      if (f.size > MAX_ATTACH_BYTES) {
+        skipped.push(`${f.name}(超 ${Math.round(MAX_ATTACH_BYTES / 1024 / 1024)}MB)`)
+        continue
+      }
       const buf = await f.arrayBuffer()
       let bin = ''
       const bytes = new Uint8Array(buf)
       for (let i = 0; i < bytes.length; i += 0x8000) {
         bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
       }
-      next.push({ name: f.name, mimeType: f.type || 'application/octet-stream', data: btoa(bin), size: f.size })
+      next.push({ name: f.name, mimeType: f.type, data: btoa(bin), size: f.size })
     }
+    setHint(skipped.length ? `已跳过:${skipped.join('、')}。图片随消息发给模型;其他文件请用右栏工作区上传。` : null)
     setAttachments((prev) => [...prev, ...next])
   }
 
@@ -74,6 +93,11 @@ export const MessageInput: React.FC<{
     <div className="composer">
       <div className="composer-inner">
         <div className="composer-box">
+          {hint && (
+            <div style={{ fontSize: 12, color: 'var(--danger, #c0392b)', marginBottom: 6 }}>
+              {hint}
+            </div>
+          )}
           {attachments.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
               {attachments.map((a, i) => (
@@ -104,12 +128,13 @@ export const MessageInput: React.FC<{
             }}
           />
           <div className="composer-bar">
-            <button className="icon-btn" title="添加附件" onClick={() => fileRef.current?.click()}>
+            <button className="icon-btn" title="添加图片(随消息发给模型;其他文件请用右栏工作区上传)" onClick={() => fileRef.current?.click()}>
               <Paperclip size={15} />
             </button>
             <input
               ref={fileRef}
               type="file"
+              accept="image/*"
               multiple
               hidden
               onChange={(e) => {

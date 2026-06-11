@@ -17,6 +17,11 @@ import { getToolDefinitions, executeTool, type ToolContext } from '../tools/regi
 import { loadSkillLoadout } from './skillLoadout.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession } from '../sandbox/sessionSandbox.js';
+import {
+  CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO,
+  estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent,
+} from './contextBudget.js';
+import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -24,7 +29,8 @@ const buildProviderPayload = (opts: BuildPayloadOpts) => deps().brain.llm.buildP
 const streamProviderCompletion = (opts: StreamOpts) => deps().brain.llm.streamProviderCompletion(opts);
 const canConsumeTokenPoints = (userId: string, amount: number) => deps().billing.canConsumeTokenPoints(userId, amount);
 const consumeTokenPoints = (userId: string, amount: number) => deps().billing.consumeTokenPoints(userId, amount);
-const calculateCost = (modelId: string, tin: number, tout: number, model?: any) => deps().billing.calculateCost(modelId, tin, tout, model);
+const calculateCost = (modelId: string, tin: number, tout: number, model?: any, cached?: number) =>
+  deps().billing.calculateCost(modelId, tin, tout, model, cached);
 const logApiUsage = (...args: any[]) => (deps().billing.logApiUsage as any)(...args);
 const getUserById = (id: string) => deps().brain.users.getUserById(id);
 const getMemory = (userId: string) => deps().brain.memory.getMemory(userId);
@@ -130,15 +136,36 @@ export function abortAllRuns(): void {
   for (const ac of abortControllers.values()) ac.abort();
 }
 
-/** 载入近期会话历史（最近 50 条，时间正序），跳过空内容的 assistant 行避免 provider 拒绝。 */
+/** 本进程在飞 run 数(/health 上报用,worker 模式供 Forsion 调度面板展示)。 */
+export function activeRunCount(): number {
+  return abortControllers.size;
+}
+
+const HYDRATE_MAX = 50;
+const HYDRATE_BLOCK = 10; // 窗口起点按块对齐:跨 run 前缀仅每 ~5 个 run 移动一次,而非逐 run 滑动(缓存友好)
+
+/**
+ * 载入近期会话历史(时间正序),跳过空内容的 assistant 行避免 provider 拒绝。
+ *  - 窗口起点按 HYDRATE_BLOCK 对齐(替代逐条滑动的 LIMIT 50——那会让长会话每个新 run 前缀必断);
+ *  - 单条超长内容确定性截断(防被巨型消息毒化的会话永久不可用;同一条消息每次截出相同字节);
+ *  - 仅**最新带图的 user 消息**把 content 重建成 [text, image_url...] parts(对齐 Hermes 的
+ *    strip_historical_media:旧图不重发,避免多 MB base64 每轮搭车),loop 不再单独注入附件。
+ */
 async function hydrateHistory(sessionId: string, excludeMessageId: string): Promise<ChatMessage[]> {
-  const rows = await query<any[]>(
-    `SELECT id, role, content, tool_calls FROM chat_messages
-     WHERE session_id = ? ORDER BY timestamp DESC LIMIT 50`,
+  const cntRows = await query<any[]>(
+    `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`,
     [sessionId],
   );
-  rows.reverse(); // 回到时间正序
+  const n = Number(cntRows[0]?.n || 0);
+  const start = n > HYDRATE_MAX ? Math.ceil((n - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK : 0;
+  const rows = await query<any[]>(
+    `SELECT id, role, content, tool_calls, attachments FROM chat_messages
+     WHERE session_id = ? ORDER BY timestamp ASC OFFSET ?`,
+    [sessionId, start],
+  );
   const out: ChatMessage[] = [];
+  let lastUserWithImages = -1; // out 中最新带图 user 消息的下标
+  let lastUserImages: ReturnType<typeof normalizeImageAttachments> = [];
   for (const r of rows) {
     if (r.id === excludeMessageId) continue;
     const role = r.role === 'model' ? 'assistant' : r.role;
@@ -146,24 +173,20 @@ async function hydrateHistory(sessionId: string, excludeMessageId: string): Prom
     const content = r.content || '';
     // 跳过空内容的 assistant 行（历史里以 tool_calls 收尾的轮次，无文本；空 assistant 会被部分 provider 拒绝）
     if (role === 'assistant' && !content.trim()) continue;
-    out.push({ role, content } as ChatMessage);
-  }
-  return out;
-}
-
-/** 截断陈旧大工具结果：保留最近 keepLastN 条 tool 消息全文，更早且超 maxChars 的替换成占位。 */
-function trimStaleToolMessages(msgs: ChatMessage[], keepLastN = 3, maxChars = 8000): void {
-  const toolIdx: number[] = [];
-  for (let i = 0; i < msgs.length; i++) if ((msgs[i] as any).role === 'tool') toolIdx.push(i);
-  if (toolIdx.length <= keepLastN) return;
-  const keep = new Set(toolIdx.slice(-keepLastN));
-  for (const i of toolIdx) {
-    if (keep.has(i)) continue;
-    const m = msgs[i] as any;
-    if (typeof m.content === 'string' && m.content.length > maxChars) {
-      m.content = m.content.slice(0, 1500) + '\n…[较早的工具输出已截断以节省上下文]';
+    out.push({ role, content: capHistoryContent(content) } as ChatMessage);
+    if (role === 'user' && r.attachments) {
+      const imgs = normalizeImageAttachments(r.attachments);
+      if (imgs.length) {
+        lastUserWithImages = out.length - 1;
+        lastUserImages = imgs;
+      }
     }
   }
+  if (lastUserWithImages >= 0) {
+    const m = out[lastUserWithImages] as any;
+    m.content = toImageParts(m.content, lastUserImages);
+  }
+  return out;
 }
 
 async function runLoop(runId: string, ac: AbortController): Promise<void> {
@@ -222,6 +245,28 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await publish(runId, 'status', { state: 'running' });
 
     const { model, apiKey, baseUrl, apiModelId } = await resolveModelAndKey(modelId);
+
+    // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
+    // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
+    if (input.message) {
+      const inputTokens = estimateTokensRough(String(input.message));
+      if (inputTokens > CONTEXT_WINDOW_TOKENS * INPUT_HARD_RATIO) {
+        const msg =
+          `输入过大:约 ${inputTokens.toLocaleString()} tokens,超过上下文窗口(${CONTEXT_WINDOW_TOKENS.toLocaleString()})的 ${Math.round(INPUT_HARD_RATIO * 100)}%。` +
+          '请把大段材料保存为文件后让 agent 用工具读取,不要整段粘贴。';
+        await publish(runId, 'error', { error: 'input_too_large', detail: msg });
+        await drain(runId);
+        await updateRunStatus(runId, 'failed', { error: 'input_too_large' });
+        return;
+      }
+      if (inputTokens > CONTEXT_WINDOW_TOKENS * INPUT_WARN_RATIO) {
+        await publish(runId, 'status', {
+          warning: 'large_input',
+          estTokens: inputTokens,
+          detail: `输入约 ${inputTokens.toLocaleString()} tokens(窗口的 ${Math.round((inputTokens / CONTEXT_WINDOW_TOKENS) * 100)}%),每轮迭代都会全量重发,建议改用文件。`,
+        });
+      }
+    }
 
     // user 消息在此（run 真正开始时）才落库——而非 POST 时——保证排队 run 的 user 消息时间戳
     // 排在上一个 run 的 assistant 之后，hydrate/显示顺序才正确。幂等（ON CONFLICT DO NOTHING）。
@@ -312,6 +357,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const allToolResults: any[] = [];
     let tokensTotal = 0;
 
+    let lastRealPromptTokens = 0; // 上一轮 provider 真实 prompt 用量(压缩触发的首选依据,对齐 Hermes)
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
 
@@ -325,11 +371,24 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       await publish(runId, 'status', { iteration });
 
-      // 截断陈旧的大工具结果（如 13万字的 use_skill、超长 run_python 输出）：保留最近若干条全文，
-      // 更早的大结果替换成占位，避免每轮重发巨量 prompt 拖慢 prefill + 烧 token。
-      trimStaleToolMessages(workingMessages);
+      // 上下文压缩(替代旧的每轮就地 trim——那会让前缀缓存逐轮清零):平时 append-only,
+      // 仅当真实用量(或粗估)越过窗口阈值才一次性批量折叠中段,缓存 miss 摊薄成偶发。
+      const estPrompt = lastRealPromptTokens || estimateMessagesTokens(workingMessages);
+      if (estPrompt > CONTEXT_WINDOW_TOKENS * COMPACT_TRIGGER_RATIO) {
+        const r = compactContext(workingMessages);
+        if (r.changed) {
+          lastRealPromptTokens = 0; // 折叠后旧用量失效,下轮重新以真实值为准
+          console.warn(
+            `[agent-core] run=${runId} 上下文压缩:省 ${r.savedChars.toLocaleString()} 字符;` +
+              `压缩前最大消息: ${r.breakdown.map((b) => `#${b.index}(${b.role},${b.chars.toLocaleString()}字符)`).join(' ')}`,
+          );
+          void publish(runId, 'status', { phase: 'compacted', savedChars: r.savedChars, iteration });
+        }
+      }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
+      // attachments 恒传空:图片已由 hydrateHistory 物化进最新 user 消息的 parts(每轮字节一致,
+      // 缓存稳定且多轮可见;旧链路只在第 0 轮注入,前缀分叉还会让模型第 1 轮起丢图)。
       const lastIter = iteration === maxIterations - 1;
       const payload = await buildProviderPayload({
         model,
@@ -339,9 +398,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         temperature: 0.7,
         tools: toolDefs,
         toolChoice: lastIter ? 'none' : 'auto',
-        attachments: iteration === 0 ? attachments : [],
+        attachments: [],
         thinkingLevel,
         stream: true,
+        cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
       });
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
@@ -349,6 +409,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         apiKey,
         baseUrl,
         payload,
+        provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
         signal: ac.signal,
         onToken: (d) => { void publish(runId, 'token', { delta: d }); },
         onReasoning: (d) => { void publish(runId, 'reasoning', { delta: d }); },
@@ -366,12 +427,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         },
       });
 
-      const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens);
+      lastRealPromptTokens = res.usage.prompt_tokens || 0;
+      const cachedTokens = res.usage.cached_tokens || 0;
+      const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
-      // 把本轮 usage 播给订阅者（TUI 状态栏的实时 token / 预算用）。
+      // 把本轮 usage 播给订阅者（TUI 状态栏的实时 token / 预算用;cached=缓存命中量,命中率=cached/prompt）。
       void publish(runId, 'usage', {
         prompt: res.usage.prompt_tokens || 0,
         completion: res.usage.completion_tokens || 0,
+        cached: cachedTokens,
         total: tokensTotal,
         cost,
         iteration,
@@ -380,6 +444,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await logApiUsage(
         user.username, modelId, model.name, model.provider,
         res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, appId, cost,
+        cachedTokens,
       ).catch(() => {});
 
       if (!res.toolCalls || res.toolCalls.length === 0 || lastIter) {
@@ -426,9 +491,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } }
           : call;
         const result = await executeTool(execCall, toolCtx);
-        await publish(runId, 'tool_result', { id: call.id, name: result.name, result: result.result, isError: result.isError });
-        toolResults.push({ tool_call_id: call.id, name: result.name, content: result.result, isError: result.isError });
-        workingMessages.push({ role: 'tool', content: result.result, tool_call_id: call.id } as ChatMessage);
+        // 入列硬帽(写入即定型,append-only):各工具自有更小的帽,这里兜未封顶路径
+        // (host list_dir 大目录、custom provider 等),保证单条结果不可能把上下文炸穿。
+        const capped = capToolResult(result.result);
+        await publish(runId, 'tool_result', { id: call.id, name: result.name, result: capped, isError: result.isError });
+        toolResults.push({ tool_call_id: call.id, name: result.name, content: capped, isError: result.isError });
+        workingMessages.push({ role: 'tool', content: capped, tool_call_id: call.id } as ChatMessage);
       }
       allToolResults.push(...toolResults);
 
