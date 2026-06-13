@@ -211,6 +211,12 @@ export interface InquiryRequest {
   answer?: string
 }
 
+/** 任务清单一项(todo_write/todo_read 工具 + `todo` 事件;对齐 Claude TodoWrite)。 */
+export interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+}
+
 export interface UiMessage {
   id: string
   role: 'user' | 'assistant'
@@ -221,6 +227,8 @@ export interface UiMessage {
   inquiries?: InquiryRequest[]
   /** 计划模式下 agent 提交的计划(plan 事件;渲染为计划卡)。 */
   planProposal?: string
+  /** 本会话任务清单(todo 事件;渲染为 todolist,整单替换)。 */
+  todos?: TodoItem[]
   attachments?: Attachment[]
   status?: 'streaming' | 'done' | 'error'
   error?: string
@@ -275,6 +283,11 @@ declare global {
       providerLogin?(id: string): Promise<{ ok: boolean; id: string }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       pickDirectory?(): Promise<string | null>
+      /** 拖入文件 → 绝对路径(本机模式粘贴路径用)。 */
+      getPathForFile?(file: File): string
+      /** 本机工作区文件浏览(host cwd)。 */
+      listDir?(dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number }>>
+      readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; tooLarge?: boolean }>
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>

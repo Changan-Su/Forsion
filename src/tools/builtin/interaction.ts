@@ -5,6 +5,8 @@
  *     (本轮工具集已冻结仍保持只读,下一轮 run 起生效执行)
  * 仅本地形态(hostExec profile)暴露:云端前端(AI Studio)尚无询问 UI,暴露会让模型挂等。
  */
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { query } from '../../core/db.js';
 import { requestInquiry } from '../../services/inquiries.js';
 import { publish } from '../../services/eventBus.js';
@@ -103,8 +105,27 @@ export const interactionProvider: ToolProvider = {
           } catch (e: any) {
             return `用户已批准,但关闭计划模式失败:${e?.message || e}(请手动关闭计划开关)`;
           }
-          void publish(ctx.runId, 'plan_approved', {});
-          return '用户已批准计划,计划模式已关闭。本轮工具集仍为只读:请简要总结计划收尾;用户的下一条消息将开始执行。';
+          // 把批准的计划存盘(<cwd>/.tangu/plans/plan-<时间>.md;best-effort,失败不阻断退出)
+          let planFile = '';
+          try {
+            const cwd = ctx.cwd || process.cwd();
+            const d = new Date();
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+            const dir = join(cwd, '.tangu', 'plans');
+            await mkdir(dir, { recursive: true });
+            planFile = join(dir, `plan-${ts}.md`);
+            await writeFile(planFile, plan.endsWith('\n') ? plan : `${plan}\n`, 'utf8');
+          } catch {
+            planFile = '';
+          }
+          void publish(ctx.runId, 'plan_approved', planFile ? { file: planFile } : {});
+          return (
+            '用户已批准计划,计划模式已关闭。' +
+            (planFile ? `计划已存档到 ${planFile}。` : '') +
+            '现在请用 todo_write 把计划拆成任务清单(便于跟踪进度),并简要总结收尾;' +
+            '本轮工具集仍为只读,用户的下一条消息将开始执行。'
+          );
         }
         return `用户未批准:${answer}\n请按反馈完善计划,再次调用 exit_plan_mode 提交。`;
       },

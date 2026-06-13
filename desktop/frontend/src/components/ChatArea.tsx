@@ -1,13 +1,16 @@
 /**
- * 聊天流:消息列表(markdown/思考块/工具卡片/审批卡片)+ 自动吸底滚动。
+ * 聊天流:消息列表(markdown/思考块/工具卡片/审批卡片/计划卡/todolist)+ 智能吸底滚动。
+ * 吸底语义对齐 AI Studio:用户上滑即释放自动吸底(流式照样可往上看历史),回到底部自动恢复;
+ * 释放期间右下角浮出「跳到底部」按钮,点一下平滑回底并重新吸附。
  */
-import React, { useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowDown } from 'lucide-react'
 import type { UiMessage } from '../types'
 import { Markdown } from './Markdown'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
 import { ApprovalCard } from './ApprovalCard'
-import { InquiryCard, PlanCard } from './InquiryCard'
+import { InquiryCard, PlanCard, TodoList } from './InquiryCard'
 import { BrandLogo } from './BrandLogo'
 
 export const ChatArea: React.FC<{
@@ -16,21 +19,50 @@ export const ChatArea: React.FC<{
   onInquiry: (runOwnerMessageId: string, inquiryId: string, answer: string) => void
 }> = ({ messages, onApproval, onInquiry }) => {
   const ref = useRef<HTMLDivElement>(null)
-  const stickToBottom = useRef(true)
+  const followBottom = useRef(true) // 是否自动吸底(用户上滑释放,回底恢复)
+  const lastTop = useRef(0)
+  const progScrollAt = useRef(0) // 程序化滚动时刻(抑制把自身滚动误判为用户上滑)
+  const [showJump, setShowJump] = useState(false)
+
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = ref.current
+    if (!el) return
+    progScrollAt.current = performance.now()
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+    lastTop.current = el.scrollHeight
+    followBottom.current = true
+    setShowJump(false)
+  }, [])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const onScroll = () => {
-      stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+      const top = el.scrollTop
+      const scrolledUp = top < lastTop.current - 2
+      lastTop.current = top
+      const dist = el.scrollHeight - top - el.clientHeight
+      const atBottom = dist < 80
+      // 自身程序化滚动刚发生(<120ms)不当作用户操作
+      if (scrolledUp && !atBottom && performance.now() - progScrollAt.current > 120) {
+        followBottom.current = false
+      } else if (atBottom) {
+        followBottom.current = true
+      }
+      setShowJump(!atBottom)
     }
-    el.addEventListener('scroll', onScroll)
+    el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
 
+  // 内容增长(流式 token / 新消息)时,仅在仍吸底时跟随到底,绝不抢用户已上滑的视图。
   useEffect(() => {
     const el = ref.current
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
+    if (el && followBottom.current) {
+      progScrollAt.current = performance.now()
+      el.scrollTop = el.scrollHeight
+      lastTop.current = el.scrollTop
+    }
   }, [messages])
 
   if (!messages.length) {
@@ -44,8 +76,9 @@ export const ChatArea: React.FC<{
   }
 
   return (
-    <div className="chat-stream" ref={ref}>
-      <div className="stream-inner">
+    <div className="chat-area">
+      <div className="chat-stream" ref={ref}>
+        <div className="stream-inner">
         {messages.map((m) =>
           m.role === 'user' ? (
             <div className="msg-row user" key={m.id}>
@@ -72,6 +105,7 @@ export const ChatArea: React.FC<{
                   />
                 ))}
                 {m.planProposal ? <PlanCard plan={m.planProposal} /> : null}
+                {m.todos?.length ? <TodoList todos={m.todos} /> : null}
                 {m.inquiries?.map((q) => (
                   <InquiryCard key={q.inquiryId} req={q} onAnswer={(answer) => onInquiry(m.id, q.inquiryId, answer)} />
                 ))}
@@ -89,7 +123,13 @@ export const ChatArea: React.FC<{
             </div>
           ),
         )}
+        </div>
       </div>
+      {showJump && (
+        <button className="jump-bottom" title="跳到底部" onClick={() => scrollToBottom(true)}>
+          <ArrowDown size={16} />
+        </button>
+      )}
     </div>
   )
 }

@@ -237,7 +237,22 @@ export const MessageInput: React.FC<{
           onDrop={(e) => {
             e.preventDefault()
             setDragOver(false)
-            if (e.dataTransfer?.files?.length) void pickFiles(e.dataTransfer.files)
+            const files = e.dataTransfer?.files
+            if (!files?.length) return
+            // 本机模式:拖入文件 → 把绝对路径粘进输入框(agent 用工具按路径读);云沙箱仍走图片附件。
+            if (isHost && window.tangu?.getPathForFile) {
+              const paths = Array.from(files)
+                .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
+                .filter(Boolean)
+                .map((p) => (/\s/.test(p) ? `"${p}"` : p))
+              if (paths.length) {
+                setDraft((d) => (d ? `${d} ${paths.join(' ')}` : paths.join(' ')))
+                setSlashDismissed(false)
+                requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+                return
+              }
+            }
+            void pickFiles(files)
           }}
         >
           {hint && (

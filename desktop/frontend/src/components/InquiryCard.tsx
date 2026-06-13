@@ -3,8 +3,8 @@
  * 视觉对齐 ApprovalCard(边框卡片,token CSS)。
  */
 import React, { useState } from 'react'
-import { CircleHelp, Send } from 'lucide-react'
-import type { InquiryRequest } from '../types'
+import { CircleHelp, Send, CheckSquare, Square, Loader2 } from 'lucide-react'
+import type { InquiryRequest, TodoItem } from '../types'
 
 export const InquiryCard: React.FC<{
   req: InquiryRequest
@@ -41,6 +41,7 @@ export const InquiryCard: React.FC<{
           <div style={{ display: 'flex', gap: 6 }}>
             <input
               type="text"
+              className="inline-input"
               style={{ flex: 1 }}
               value={draft}
               placeholder={req.options.length ? '或自由输入…' : '输入回答…'}
@@ -88,3 +89,45 @@ export const PlanCard: React.FC<{ plan: string }> = ({ plan }) => (
     </pre>
   </div>
 )
+
+/** 任务清单(todo 事件;对齐 Claude TodoWrite 的实时显示)。 */
+export const TodoList: React.FC<{ todos: TodoItem[] }> = ({ todos }) => {
+  const done = todos.filter((t) => t.status === 'completed').length
+  return (
+    <div
+      style={{
+        border: 'var(--border-width) solid var(--border)',
+        borderLeft: '3px solid var(--accent)',
+        borderRadius: 'var(--radius-md)',
+        padding: '10px 12px',
+        background: 'var(--bg-card)',
+      }}
+    >
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--accent)', marginBottom: 7 }}>
+        ✓ 任务清单 <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>({done}/{todos.length})</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {todos.map((t, i) => (
+          <div
+            key={i}
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 13,
+              color: t.status === 'completed' ? 'var(--text-faint)' : 'var(--text)',
+            }}
+          >
+            <span style={{ flexShrink: 0, marginTop: 1 }}>
+              {t.status === 'completed' ? (
+                <CheckSquare size={14} style={{ color: 'var(--green)' }} />
+              ) : t.status === 'in_progress' ? (
+                <Loader2 size={14} className="spin" style={{ color: 'var(--accent)' }} />
+              ) : (
+                <Square size={14} style={{ color: 'var(--text-ghost)' }} />
+              )}
+            </span>
+            <span style={{ textDecoration: t.status === 'completed' ? 'line-through' : 'none' }}>{t.content}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

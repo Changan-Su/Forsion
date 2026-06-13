@@ -2,7 +2,7 @@
  * Preload:contextBridge 暴露最小安全 API(配置读写 + 托管后端状态)。
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export interface BackendStatus {
   state: 'stopped' | 'starting' | 'ready' | 'crashed'
@@ -35,6 +35,13 @@ const api = {
   },
   /** 本机模式工作目录选择;取消返回 null。 */
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory'),
+  /** 拖入文件 → 绝对路径(Electron≥32 File.path 已移除,必须 webUtils 在渲染层取)。 */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  /** 本机工作区文件浏览:列目录 / 读文件(主进程 fs)。 */
+  listDir: (dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number }>> =>
+    ipcRenderer.invoke('fs:listDir', dirPath),
+  readHostFile: (filePath: string): Promise<{ mimeType: string; content: string; size: number; tooLarge?: boolean }> =>
+    ipcRenderer.invoke('fs:readFile', filePath),
   // ── 直连 provider 管理(~/.tangu/providers.json;managed 模式保存后自动重启后端加载)──
   listProviders: (): Promise<any[]> => ipcRenderer.invoke('providers:list'),
   saveProvider: (provider: Record<string, any>): Promise<any[]> => ipcRenderer.invoke('providers:save', provider),

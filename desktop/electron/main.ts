@@ -6,7 +6,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { dirname, join } from 'path'
 import { pathToFileURL } from 'url'
-import { readFile, writeFile, mkdir, chmod } from 'fs/promises'
+import { readFile, writeFile, mkdir, chmod, readdir, stat } from 'fs/promises'
 import { execFile, spawn } from 'child_process'
 import { BackendManager, type BackendStatus } from './backendManager'
 import {
@@ -286,6 +286,40 @@ app.whenReady().then(async () => {
       ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0]
+  })
+
+  // ── 本机工作区文件浏览(host 模式右栏:直接读 cwd 真实目录)──
+  ipcMain.handle('fs:listDir', async (_e, dirPath: string) => {
+    if (!dirPath || typeof dirPath !== 'string') return []
+    const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => [])
+    const out: Array<{ name: string; isDir: boolean; size: number }> = []
+    for (const e of entries.slice(0, 2000)) {
+      let size = 0
+      if (e.isFile()) {
+        try { size = (await stat(join(dirPath, e.name))).size } catch { /* ignore */ }
+      }
+      out.push({ name: e.name, isDir: e.isDirectory(), size })
+    }
+    // 目录在前,各自按名排序
+    out.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+    return out
+  })
+  const MIME_BY_EXT: Record<string, string> = {
+    txt: 'text/plain', md: 'text/markdown', markdown: 'text/markdown', json: 'application/json',
+    js: 'text/javascript', mjs: 'text/javascript', cjs: 'text/javascript', ts: 'text/typescript',
+    tsx: 'text/typescript', jsx: 'text/javascript', css: 'text/css', html: 'text/html', xml: 'text/xml',
+    yml: 'text/yaml', yaml: 'text/yaml', toml: 'text/plain', csv: 'text/csv', py: 'text/x-python',
+    sh: 'text/x-sh', go: 'text/x-go', rs: 'text/x-rust', java: 'text/x-java', c: 'text/x-c', h: 'text/x-c',
+    cpp: 'text/x-c++', sql: 'text/plain', log: 'text/plain', env: 'text/plain', gitignore: 'text/plain',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
+  }
+  ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
+    const st = await stat(filePath)
+    const ext = (filePath.split('.').pop() || '').toLowerCase()
+    const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream'
+    if (st.size > 2 * 1024 * 1024) return { mimeType, content: '', size: st.size, tooLarge: true }
+    const buf = await readFile(filePath)
+    return { mimeType, content: buf.toString('base64'), size: st.size }
   })
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())

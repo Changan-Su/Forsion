@@ -220,12 +220,17 @@ export function App(): React.JSX.Element {
       case 'plan':
         patchMessage(sessionId, assistantId, (m) => ({ ...m, planProposal: String(pl.plan || '') }))
         break
+      case 'todo':
+        // 任务清单整单替换(todo_write 工具 → todo 事件);渲染为 todolist。
+        patchMessage(sessionId, assistantId, (m) => ({ ...m, todos: Array.isArray(pl.todos) ? pl.todos : [] }))
+        break
       case 'plan_approved':
         // 服务端已把会话 agent_config.planMode 落库为 false;同步本地状态(输入栏开关复位)
         setConfigBySession((prev) => ({
           ...prev,
           [sessionId]: { ...(prev[sessionId] || {}), planMode: false },
         }))
+        if (pl.file) toast(`计划已存档:${pl.file}`)
         break
       case 'done':
         patchMessage(sessionId, assistantId, (m) => ({
@@ -250,7 +255,7 @@ export function App(): React.JSX.Element {
       default:
         break
     }
-  }, [patchMessage, endRun])
+  }, [patchMessage, endRun, toast])
 
   const subscribeRun = useCallback(
     (sessionId: string, runId: string, assistantId: string) => {

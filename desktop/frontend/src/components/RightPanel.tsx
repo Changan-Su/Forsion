@@ -3,7 +3,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  FolderOpen, Wrench, BookOpen, Download, Trash2, Upload, RefreshCw, FileText, Image as ImageIcon, Loader2,
+  FolderOpen, Folder, Wrench, BookOpen, Download, Trash2, Upload, RefreshCw, FileText, Image as ImageIcon, Loader2, ChevronLeft, CornerLeftUp,
 } from 'lucide-react'
 import type { AgentConfig, SkillInfo, TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta } from '../types'
 import * as api from '../services/backendService'
@@ -44,7 +44,124 @@ export const RightPanel: React.FC<{
 
 // ── 工作区 ──────────────────────────────────────────────────────────────────
 
+/** 工作区分发:本机会话浏览 cwd 真实目录(Electron fs);云沙箱走后端工作区。 */
 const WorkspaceTab: React.FC<{
+  cfg: TanguDesktopConfig
+  sessionId: string
+  sessionConfig?: AgentConfig
+  running: boolean
+  onToast: (t: string, e?: boolean) => void
+}> = (p) => {
+  if (p.sessionConfig?.execMode === 'host' && p.sessionConfig.cwd && window.tangu?.listDir) {
+    return <HostFilesTab cwd={p.sessionConfig.cwd} running={p.running} onToast={p.onToast} />
+  }
+  return <SandboxFilesTab {...p} />
+}
+
+/** 本机工作区文件浏览(根=会话 cwd;可进子目录、预览文件;不越过 cwd 根)。 */
+const HostFilesTab: React.FC<{
+  cwd: string
+  running: boolean
+  onToast: (t: string, e?: boolean) => void
+}> = ({ cwd, running, onToast }) => {
+  const [curDir, setCurDir] = useState(cwd)
+  const [entries, setEntries] = useState<Array<{ name: string; isDir: boolean; size: number; path: string }>>([])
+  const [loading, setLoading] = useState(false)
+  const [preview, setPreview] = useState<{ name: string; mimeType: string; content: string; size: number; tooLarge?: boolean } | null>(null)
+
+  useEffect(() => { setCurDir(cwd); setPreview(null) }, [cwd]) // 切会话/工作区复位到根
+
+  const refresh = useCallback(async () => {
+    if (!window.tangu?.listDir) return
+    setLoading(true)
+    try {
+      setEntries((await window.tangu.listDir(curDir)) as any)
+    } catch (e: any) {
+      onToast(`目录读取失败:${e?.message || e}`, true)
+    } finally {
+      setLoading(false)
+    }
+  }, [curDir, onToast])
+
+  useEffect(() => { void refresh() }, [refresh, running])
+
+  const parentOf = (d: string): string => {
+    const i = Math.max(d.lastIndexOf('/'), d.lastIndexOf('\\'))
+    return i > 0 ? d.slice(0, i) : d
+  }
+  const atRoot = curDir === cwd
+  const rel = curDir.startsWith(cwd) ? curDir.slice(cwd.length).replace(/^[/\\]+/, '') : curDir
+  const isText = (m: string) => m.startsWith('text/') || /json|xml|javascript|typescript|yaml|csv/.test(m)
+  const isImage = (m: string) => m.startsWith('image/')
+
+  const open = async (en: { name: string; isDir: boolean; path: string }) => {
+    if (en.isDir) { setCurDir(en.path); return }
+    if (!window.tangu?.readHostFile) return
+    try {
+      const r = await window.tangu.readHostFile(en.path)
+      setPreview({ name: en.name, ...r })
+    } catch (e: any) {
+      onToast(`读取失败:${e?.message || e}`, true)
+    }
+  }
+
+  if (preview) {
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+          <button className="btn ghost sm" onClick={() => setPreview(null)}><ChevronLeft size={13} /> 返回</button>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {preview.name}
+          </span>
+        </div>
+        {preview.tooLarge ? (
+          <div className="panel-note">文件较大({fmtSize(preview.size)}),不在面板预览;请用编辑器打开或让 agent 按需读取。</div>
+        ) : isImage(preview.mimeType) ? (
+          <img src={`data:${preview.mimeType};base64,${preview.content}`} style={{ maxWidth: '100%', borderRadius: 'var(--radius-md)' }} />
+        ) : isText(preview.mimeType) || preview.mimeType === 'application/octet-stream' ? (
+          <pre style={{
+            fontSize: 11.5, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)',
+            borderRadius: 'var(--radius-md)', padding: 10, maxHeight: '70vh', overflowY: 'auto',
+          }}>
+            {safeAtobUtf8(preview.content)}
+          </pre>
+        ) : (
+          <div className="panel-note">二进制文件,无法在面板预览。</div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6 }}>
+        <span className="panel-section-title" style={{ flex: 1, padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={curDir}>
+          {rel ? `…/${rel}` : (cwd.split(/[/\\]/).filter(Boolean).pop() || cwd)}
+        </span>
+        <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => void refresh()} title="刷新">
+          {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+        </button>
+      </div>
+      {!atRoot && (
+        <button className="file-row" onClick={() => setCurDir(parentOf(curDir))}>
+          <CornerLeftUp size={13} />
+          <span className="file-name">..(上级目录)</span>
+        </button>
+      )}
+      {entries.length === 0 && !loading && <div className="panel-note">空目录。</div>}
+      {entries.map((en) => (
+        <button className="file-row" key={en.path} onClick={() => void open(en)}>
+          {en.isDir ? <Folder size={13} style={{ color: 'var(--accent)' }} /> : en.size && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(en.name) ? <ImageIcon size={13} /> : <FileText size={13} />}
+          <span className="file-name">{en.name}</span>
+          {!en.isDir && <span className="file-size">{fmtSize(en.size)}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+const SandboxFilesTab: React.FC<{
   cfg: TanguDesktopConfig
   sessionId: string
   sessionConfig?: AgentConfig
@@ -145,13 +262,6 @@ const WorkspaceTab: React.FC<{
           {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
         </button>
       </div>
-      {sessionConfig?.execMode === 'host' && (
-        <div className="panel-note" style={{ color: 'var(--accent-hover)' }}>
-          本机模式:agent 直接读写工作目录
-          <code style={{ wordBreak: 'break-all' }}> {sessionConfig.cwd || '(进程目录)'} </code>
-          的真实文件(用系统文件管理器查看);本面板仅显示云沙箱模式的会话文件。
-        </div>
-      )}
       {files.length === 0 && <div className="panel-note">暂无文件。agent 产出与拖入的文件都会出现在这里。</div>}
       {files.map((f) => (
         <div className="file-row" key={f.path} onClick={() => void open(f)} role="button" tabIndex={0}>

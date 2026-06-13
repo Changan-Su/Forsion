@@ -26,12 +26,26 @@ export async function loadSkillLoadout(
   appId: string,
   agentConfig: any,
 ): Promise<SkillLoadout> {
-  const enabledSkillIds: string[] = Array.isArray(agentConfig.enabledSkillIds)
-    ? agentConfig.enabledSkillIds
-    : [];
+  const explicit = Array.isArray(agentConfig.enabledSkillIds);
+  let enabledSkillIds: string[] = explicit ? agentConfig.enabledSkillIds : [];
   let inlineSkills: Array<{ name: string; body: string }> = [];
   let deferredSkills: Array<{ id: string; name: string; description: string }> = [];
-  if (enabledSkillIds.length) {
+  if (!explicit && agentConfig.execMode === 'host') {
+    // 本机会话未显式配置技能 → 默认启用「全部本地技能」,但只列进按需 use_skill 目录:
+    // 不内联、不逐个拉全文,零 prompt 膨胀;调不调用全看 agent(use_skill 读盘按需加载)。
+    try {
+      const all = (await (deps().brain.assets.listSkills?.() ?? Promise.resolve([]))) as any[];
+      const local = all.filter((s) => String(s?.id || '').startsWith('local:'));
+      enabledSkillIds = local.map((s) => s.id);
+      deferredSkills = local.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: String(s.description || '').trim(),
+      }));
+    } catch {
+      enabledSkillIds = [];
+    }
+  } else if (enabledSkillIds.length) {
     const skills = (
       await Promise.all(enabledSkillIds.map((id: string) => getSkill(id).catch(() => null)))
     ).filter(Boolean) as any[];
