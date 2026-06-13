@@ -312,7 +312,15 @@ export function App(): React.JSX.Element {
       }
       setCfg(merged)
       setCfgLoaded(true)
-      if (merged.token || stored?.mode === 'managed') void connect(merged)
+      if (stored?.mode === 'managed') {
+        // 托管后端:**就绪才连**(此时 merged 已是 effectiveConfig 折算后的子进程 url/token)。
+        // 未就绪别用 stale 默认配置硬连(会误报「未连接」,且后端随后就绪的 ready 事件若错过就一直卡着——
+        // 正是「启动后显示未连接、去设置重启才好」的根因);改为显示「启动中」,等下方 onBackendStatus 的 ready。
+        if (stored.backendState?.state === 'ready') void connect(merged)
+        else { setConnState('idle'); setConnMessage('托管后端启动中…') }
+      } else if (merged.token) {
+        void connect(merged)
+      }
       // 首启引导:桌面端「从未配置凭证」(未登录、无 token、无直连 provider,且未跳过过)→ 进向导。
       // cloudUrl 不参与判定:它可由 ~/.tangu/.env(TANGU_CLOUD_URL)预配,有地址没登录仍要引导。
       if (stored && window.tangu?.envCheck) {
@@ -336,6 +344,9 @@ export function App(): React.JSX.Element {
           setCfg(eff)
           void connect(eff)
         })
+      } else if (st.state === 'starting') {
+        setConnState('idle')
+        setConnMessage('托管后端启动中…')
       } else if (st.state === 'crashed') {
         setConnState('err')
         setConnMessage(st.lastError || '托管后端已退出')

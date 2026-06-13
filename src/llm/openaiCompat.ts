@@ -12,6 +12,7 @@
  */
 import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError, type AgentModel, type ToolCall } from '../core/types.js';
+import { parseTextToolCalls } from './textToolCalls.js';
 
 /** 直连 payload 的私有标记:multiBrain 据此把 stream 分发到本实现而非 httpBrain。 */
 export const DIRECT_MARK = '__tangu_direct';
@@ -192,7 +193,7 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
     }
   }
 
-  const toolCalls: ToolCall[] = Array.from(toolAcc.entries())
+  let toolCalls: ToolCall[] = Array.from(toolAcc.entries())
     .sort((a, b) => a[0] - b[0])
     .map(([idx, t]) => ({
       id: t.id || `call_${idx}`,
@@ -201,5 +202,16 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
     }))
     .filter((t) => t.function.name);
 
-  return { content, reasoning, toolCalls, usage, finishReason };
+  // 原生 tool_calls 为空 → 文本兜底:个别模型把工具调用当正文吐出(<invoke …>/｜｜DSML｜｜ 等),
+  // 解析回结构化调用并从正文剔除,避免 agent 误判收尾停住。
+  let outContent = content;
+  if (toolCalls.length === 0) {
+    const fb = parseTextToolCalls(content);
+    if (fb.toolCalls.length) {
+      toolCalls = fb.toolCalls as unknown as ToolCall[];
+      outContent = fb.cleaned;
+    }
+  }
+
+  return { content: outContent, reasoning, toolCalls, usage, finishReason };
 }
