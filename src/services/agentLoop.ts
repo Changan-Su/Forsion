@@ -158,10 +158,12 @@ async function hydrateHistory(sessionId: string, excludeMessageId: string): Prom
   );
   const n = Number(cntRows[0]?.n || 0);
   const start = n > HYDRATE_MAX ? Math.ceil((n - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK : 0;
+  // 显式 LIMIT(=窗口剩余条数)而非裸 OFFSET:SQLite 不允许无 LIMIT 的 OFFSET(PG 允许);
+  // 取 [start, n) 区间,n/start 已知,两方言皆合法。
   const rows = await query<any[]>(
     `SELECT id, role, content, tool_calls, attachments FROM chat_messages
-     WHERE session_id = ? ORDER BY timestamp ASC OFFSET ?`,
-    [sessionId, start],
+     WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`,
+    [sessionId, Math.max(0, n - start), start],
   );
   const out: ChatMessage[] = [];
   let lastUserWithImages = -1; // out 中最新带图 user 消息的下标
