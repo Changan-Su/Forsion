@@ -29,7 +29,7 @@ export const ProjectPicker: React.FC<{
       {p.open && (
         <AnimatedModalBackdrop onClose={p.onClose}>
           <AnimatedModalContent>
-            <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal modal-sm">
               <div className="modal-head">
                 新建会话 — 选择项目
                 <span className="grow" />
@@ -41,7 +41,7 @@ export const ProjectPicker: React.FC<{
                 {p.recents.length > 0 && (
                   <div className="field">
                     <label>最近项目</label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 220, overflowY: 'auto' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       {p.recents.map((r) => (
                         <button key={r.path} className="file-row" onClick={() => p.onChoose({ path: r.path, name: r.name })}>
                           <span className="file-name" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>

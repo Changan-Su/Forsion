@@ -13,6 +13,10 @@ export interface HostServices {
   getNowSql(): string;
   getDateSql(column: string): string;
   getDateSubSql(days: number): string;
+  /** 可选:返回「column 早于 minutes 分钟前」的 SQL 片段(整数 minutes 内联,无注入)。
+   *  缺省时 core 用 Postgres 形式(microserver/worker/外部 PG 皆为 PG,无需实现);
+   *  仅 sqliteHost 覆写为 datetime() 形式。 */
+  getOlderThanSql?(column: string, minutes: number): string;
 
   /** 用户鉴权中间件(Bearer token)。 */
   authMiddleware: RequestHandler;

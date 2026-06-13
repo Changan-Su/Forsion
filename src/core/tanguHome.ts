@@ -52,6 +52,8 @@ export const providersFile = (): string => join(tanguHome(), 'providers.json');
 export const mcpConfigFile = (): string => join(tanguHome(), 'mcp.json');
 export const skillsDir = (): string => join(tanguHome(), 'skills');
 export const pgdataDir = (): string => join(tanguHome(), 'pgdata');
+/** 嵌入式 SQLite 本地库文件(TUI / standalone / desktop 三端共用,故本地会话跨前端共享)。 */
+export const stateDbPath = (): string => join(tanguHome(), 'state.db');
 
 /** 确保 home 及子目录存在(幂等);返回 home 路径。 */
 export function ensureHome(): string {

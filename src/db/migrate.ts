@@ -4,10 +4,10 @@
  * 对齐设计文档 server/Documents/Tangu-Agent-云架构设计.md §4.2。
  * 注：agent_sandboxes 表在 Phase B 沙箱落地时追加。
  */
-import { query } from '../core/db.js';
+import { query, ddl, getDbType } from '../core/db.js';
 
 export async function runMigration(): Promise<void> {
-  await query(`
+  await query(ddl(`
     CREATE TABLE IF NOT EXISTS agent_runs (
       id VARCHAR(36) PRIMARY KEY,
       session_id VARCHAR(36) NOT NULL,
@@ -25,12 +25,12 @@ export async function runMigration(): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
-  `);
+  `));
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_runs_session ON agent_runs(session_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_runs_user ON agent_runs(user_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`);
 
-  await query(`
+  await query(ddl(`
     CREATE TABLE IF NOT EXISTS agent_steps (
       id VARCHAR(36) PRIMARY KEY,
       run_id VARCHAR(36) NOT NULL,
@@ -43,10 +43,10 @@ export async function runMigration(): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(run_id, step_no)
     )
-  `);
+  `));
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_steps_run ON agent_steps(run_id)`);
 
-  await query(`
+  await query(ddl(`
     CREATE TABLE IF NOT EXISTS agent_run_events (
       id BIGSERIAL PRIMARY KEY,
       run_id VARCHAR(36) NOT NULL,
@@ -56,8 +56,16 @@ export async function runMigration(): Promise<void> {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(run_id, seq)
     )
-  `);
+  `));
   await query(`CREATE INDEX IF NOT EXISTS idx_agent_events_run ON agent_run_events(run_id)`);
+
+  // 以下迁移仅对共享云库 / 外部 Postgres 生效：standalone(SQLite) 的 base schema(STANDALONE_SCHEMA)
+  // 已完整建好 chat_sessions/chat_messages 的全部列，且 SQLite 的 ALTER ADD COLUMN 不支持
+  // IF NOT EXISTS、也无 pg_constraint 目录，故 sqlite 形态在此提前返回，跳过整段 PG-only 迁移。
+  if (getDbType() !== 'postgres') {
+    console.log('✅ [agent-core] migrations done (sqlite：base schema 已含全部列)');
+    return;
+  }
 
   // 修复共享 files 表唯一约束漏掉 app_id 的 bug：parent_id='ROOT' 是跨 app 共享 sentinel，
   // 旧约束 (user_id, parent_id, name, is_deleted) 让两个 app 不能各自拥有同名顶级目录

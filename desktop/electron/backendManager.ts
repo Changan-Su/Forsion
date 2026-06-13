@@ -125,7 +125,8 @@ export class BackendManager {
         entry,
         '--port', String(this.port),
         '--host', '127.0.0.1',
-        '--data-dir', join(app.getPath('userData'), 'tangu-pgdata'),
+        // 与 TUI/standalone 默认同指 ~/.tangu/state.db,SQLite WAL 多进程共享 → 桌面与 TUI 会话互通。
+        '--data-dir', join(homedir(), '.tangu', 'state.db'),
         '--sandbox', s.sandbox,
       ]
       if (s.cloudUrl) args.push('--cloud-url', s.cloudUrl)

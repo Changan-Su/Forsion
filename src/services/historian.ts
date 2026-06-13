@@ -6,7 +6,7 @@
  * 配合扫描谓词 `last IS NULL OR last < updated_at`，保证只在会话有**新活动**后才再扫，不重复处理。
  * 成本：背景任务、用户未主动发起 → 只记 usage（projectSource='ai-studio-historian'），默认不扣用户配额。
  */
-import { query } from '../core/db.js';
+import { query, getOlderThanSql } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { historianConfig } from './historianConfig.js';
@@ -60,11 +60,11 @@ async function tick(): Promise<void> {
          FROM chat_sessions s
         WHERE s.app_id = 'ai-studio'
           AND s.archived = FALSE
-          AND s.updated_at < NOW() - (? * INTERVAL '1 minute')
+          AND ${getOlderThanSql('s.updated_at', cfg.idleMinutes)}
           AND (s.historian_last_summary_at IS NULL OR s.historian_last_summary_at < s.updated_at)
         ORDER BY s.updated_at ASC
         LIMIT ?`,
-      [cfg.idleMinutes, BATCH],
+      [BATCH],
     );
     if (!rows.length) return;
 
@@ -92,7 +92,7 @@ async function tick(): Promise<void> {
 }
 
 const markPass = (sessionId: string) =>
-  query(`UPDATE chat_sessions SET historian_last_summary_at = NOW() WHERE id = ?`, [sessionId]).catch(() => {});
+  query(`UPDATE chat_sessions SET historian_last_summary_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionId]).catch(() => {});
 
 async function summarizeSession(sessionId: string, userId: string, modelId: string, resolved: Resolved): Promise<void> {
   // 最近消息（去空 / 去 tool 行），拼 transcript 并截断兜成本。

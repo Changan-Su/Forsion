@@ -7,8 +7,8 @@ import type { DirectProvider } from '../llm/providerRegistry.js';
 export interface StandaloneConfig {
   cloudUrl: string; // Forsion 云端地址(brain API 所在),如 https://api.forsion.app
   token: string; // forsion_token(既用于调云端,也作本地端点鉴权)
-  databaseUrl: string; // 可选:外部 Postgres 连接串;留空则用嵌入式 PGlite(零安装,落 dataDir)
-  dataDir: string; // 嵌入式 PGlite 落盘目录(databaseUrl 为空时用;默认 ~/.tangu/pgdata,'memory'=内存)
+  databaseUrl: string; // 可选:外部 Postgres 连接串;留空则用嵌入式 SQLite/WAL(零安装,落 state.db)
+  dataDir: string; // 嵌入式 SQLite 落盘文件(databaseUrl 为空时用;默认 ~/.tangu/state.db,'memory'=内存)
   defaultModelId: string; // CLI 配的模型(run 未指定时用)
   port: number;
   host: string;
@@ -93,8 +93,8 @@ export const HELP = `Tangu Agent — standalone(云端大脑客户端，HTTP/SSE
 
   --cloud-url <url>   Forsion 云端地址(brain API),env TANGU_CLOUD_URL
   --token <token>     forsion_token(调云端 + 本地端点鉴权),env TANGU_TOKEN
-  --db <url>          可选:外部 Postgres 连接串;留空=嵌入式 PGlite,env TANGU_DATABASE_URL
-  --data-dir <path>   嵌入式 PGlite 落盘目录(默认 ~/.tangu/pgdata,'memory'=内存),env TANGU_DATA_DIR
+  --db <url>          可选:外部 Postgres 连接串;留空=嵌入式 SQLite/WAL,env TANGU_DATABASE_URL
+  --data-dir <path>   嵌入式 SQLite 落盘文件(默认 ~/.tangu/state.db,'memory'=内存),env TANGU_DATA_DIR
   --model <id>        默认模型 id,env TANGU_MODEL
   --port <n>          本地服务端口(默认 8787),env TANGU_PORT
   --host <addr>       绑定地址(默认 127.0.0.1),env TANGU_HOST

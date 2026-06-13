@@ -72,7 +72,7 @@ options:
   --token-budget <n>    本回合软 token 预算（超出后收尾停止）
   --cloud-url <url>     Forsion 云端（brain API），env TANGU_CLOUD_URL  [登录后可省]
   --token <token>       forsion_token，env TANGU_TOKEN                  [登录后可省]
-  --data-dir <path>     嵌入式 PGlite 落盘目录（默认 ~/.tangu/pgdata，'memory'=内存）
+  --data-dir <path>     嵌入式 SQLite 落盘文件（默认 ~/.tangu/state.db，'memory'=内存；与 Desktop 共享）
   --db <url>            可选：改用外部 Postgres
   --provider* / --providers-file   直连 LLM provider（同 standalone）
   -h, --help            显示帮助

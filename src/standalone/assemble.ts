@@ -5,10 +5,12 @@
 import { execFile } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { query } from '../core/db.js';
-import { providersFile as homeProvidersFile, pgdataDir } from '../core/tanguHome.js';
+import { providersFile as homeProvidersFile, pgdataDir, stateDbPath } from '../core/tanguHome.js';
+import { toSqliteDDL } from '../core/dialectDDL.js';
 import type { HostServices } from '../seams/hostServices.js';
 import type { CloudBrainServices } from '../seams/cloudBrain.js';
 import { createLocalHost } from '../adapters/standalone/localHost.js';
+import { createSqliteHost } from '../adapters/standalone/sqliteHost.js';
 import { createEmbeddedHost } from '../adapters/standalone/embeddedHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
@@ -70,8 +72,9 @@ export async function resolveSandboxMode(cfg: StandaloneConfig): Promise<'docker
 }
 
 /**
- * 装配 host:配了 --db → 外部 Postgres(localHost);否则 → 嵌入式 PGlite(零安装,落 dataDir)。
- * 返回 host + 跑「base schema」的函数(PGlite 多语句走 exec)+ 存储描述。
+ * 装配 host:配了 --db → 外部 Postgres(localHost);否则 → 嵌入式 **SQLite/WAL**(零安装,落 state.db)。
+ * TUI/standalone/desktop 三端默认同指 ~/.tangu/state.db,WAL 一写多读 → 本地会话/run 跨前端共享。
+ * 返回 host + 跑「base schema」的函数 + 存储描述。(回退:env TANGU_EMBED=pglite 走旧 PGlite,不共享。)
  */
 export async function setupHost(
   cfg: StandaloneConfig,
@@ -81,10 +84,21 @@ export async function setupHost(
     return { host, runBaseSchema: async () => { await pool.query(STANDALONE_SCHEMA); }, storage: '外部 Postgres' };
   }
   const inMemory = cfg.dataDir === 'memory';
-  const dataDir = inMemory ? undefined : (cfg.dataDir || pgdataDir());
-  if (dataDir) mkdirSync(dataDir, { recursive: true });
-  const { host, db } = await createEmbeddedHost({ dataDir, localToken: cfg.token, userId: cfg.userId });
-  return { host, runBaseSchema: async () => { await db.exec(STANDALONE_SCHEMA); }, storage: inMemory ? 'PGlite(内存)' : `PGlite(${dataDir})` };
+  // 回退闸:TANGU_EMBED=pglite 仍走旧 PGlite(单进程,不与他端共享),用于排障/回滚。
+  if (process.env.TANGU_EMBED === 'pglite') {
+    const dataDir = inMemory ? undefined : (cfg.dataDir || pgdataDir());
+    if (dataDir) mkdirSync(dataDir, { recursive: true });
+    const { host, db } = await createEmbeddedHost({ dataDir, localToken: cfg.token, userId: cfg.userId });
+    return { host, runBaseSchema: async () => { await db.exec(STANDALONE_SCHEMA); }, storage: inMemory ? 'PGlite(内存)' : `PGlite(${dataDir})` };
+  }
+  // 默认:原生 SQLite(WAL)。dataDir 是文件路径('memory'=内存库);三端默认同指 ~/.tangu/state.db。
+  const dbPath = inMemory ? 'memory' : (cfg.dataDir || stateDbPath());
+  const { host, db } = createSqliteHost({ dataDir: dbPath, localToken: cfg.token, userId: cfg.userId });
+  return {
+    host,
+    runBaseSchema: async () => { db.exec(toSqliteDDL(STANDALONE_SCHEMA)); },
+    storage: inMemory ? 'SQLite(内存)' : `SQLite(${dbPath})`,
+  };
 }
 
 /**

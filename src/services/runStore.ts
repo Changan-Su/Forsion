@@ -1,7 +1,7 @@
 /**
  * agent_runs / agent_steps / agent_run_events 的存取层。
  */
-import { query } from '../core/db.js';
+import { query, getOlderThanSql } from '../core/db.js';
 
 export interface AgentRun {
   id: string;
@@ -62,7 +62,7 @@ export async function updateRunStatus(
   status: string,
   extra?: { result?: any; error?: string; currentStep?: number; tokensTotal?: number },
 ): Promise<void> {
-  const sets: string[] = ['status = ?', 'updated_at = NOW()'];
+  const sets: string[] = ['status = ?', 'updated_at = CURRENT_TIMESTAMP'];
   const params: any[] = [status];
   if (extra?.result !== undefined) {
     sets.push('result = ?');
@@ -177,11 +177,10 @@ export async function listPendingRunsForRecovery(): Promise<Array<{ id: string; 
 /** 启动时把超时仍 running 的 run 标 failed（进程重启自愈）。 */
 export async function failStaleRuns(olderThanMinutes = 30): Promise<number> {
   const rows = await query<any[]>(
-    `UPDATE agent_runs SET status = 'failed', error = 'stale: process restarted', updated_at = NOW()
+    `UPDATE agent_runs SET status = 'failed', error = 'stale: process restarted', updated_at = CURRENT_TIMESTAMP
      WHERE status IN ('queued','running')
-       AND updated_at < NOW() - (? * INTERVAL '1 minute')
+       AND ${getOlderThanSql('updated_at', olderThanMinutes)}
      RETURNING id`,
-    [olderThanMinutes],
   );
   return Array.isArray(rows) ? rows.length : 0;
 }

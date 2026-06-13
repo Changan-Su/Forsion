@@ -23,13 +23,16 @@ const ECO_LABEL: Record<string, string> = {
   hermes: 'Hermes',
 }
 
-const SKILL_SOURCE_LABEL: Record<string, string> = {
-  local: '本地',
-  claude: 'Claude Code',
-  codex: 'Codex',
-  user: '已上云',
-  cloud: '云端',
-}
+// 技能渠道(agent 文件夹)分组顺序;可扩展:新增渠道(如 opencode 后端扫描接上后)只加一行,
+// 空渠道自动不渲染。未知 source 落入「其他」兜底组。
+const SKILL_CHANNELS: Array<{ key: NonNullable<SkillInfo['source']> | 'opencode'; label: string }> = [
+  { key: 'local', label: '本地' },
+  { key: 'claude', label: 'Claude Code' },
+  { key: 'codex', label: 'Codex' },
+  { key: 'opencode', label: 'OpenCode' },
+  { key: 'user', label: '已上云' },
+  { key: 'cloud', label: '云端' },
+]
 
 const BACKEND_STATE_LABEL: Record<string, string> = {
   stopped: '已停止',
@@ -525,7 +528,7 @@ export const SettingsModal: React.FC<{
                         </button>
                       </label>
                       {models?.models.length ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 280, overflowY: 'auto' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           {models.models.map((m) => (
                             <button
                               key={`${m.source}-${m.id}`}
@@ -981,49 +984,68 @@ export const SettingsModal: React.FC<{
                         </button>
                       </label>
                       <div className="hint" style={{ marginBottom: 8 }}>
-                        本地技能放 ~/.tangu/skills/&lt;id&gt;/SKILL.md;自动识别 ~/.claude/skills 与
-                        ~/.codex/prompts(env TANGU_EXTERNAL_SKILLS=off 可关)。会话内启用在右侧面板或输入
-                        /skill 命令;此处管理全局技能与云端同步。
+                        按来源渠道(agent 文件夹)分组。本地技能放 ~/.tangu/skills/&lt;id&gt;/SKILL.md;自动识别
+                        ~/.claude/skills 与 ~/.codex/prompts(env TANGU_EXTERNAL_SKILLS=off 可关)。会话内启用在
+                        右侧面板或输入 /skill 命令;此处管理全局技能与云端同步。
                       </div>
                       {allSkills === null && <div className="hint">{allSkillsLoading ? '加载中…' : '点击刷新加载'}</div>}
                       {allSkills?.length === 0 && <div className="hint">暂无技能。</div>}
-                      {!!allSkills?.length && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 300, overflowY: 'auto' }}>
-                          {allSkills.map((s) => (
-                            <div key={s.id} className="file-row" style={{ cursor: 'default' }}>
-                              <span className="file-name" style={{ flex: 1 }}>
-                                <b>{s.name}</b>
-                                <span style={{ color: 'var(--accent)', fontSize: 10.5, marginLeft: 6 }}>{SKILL_SOURCE_LABEL[s.source || 'cloud']}</span>
-                                {s.description && (
-                                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
-                                    {s.description.length > 70 ? `${s.description.slice(0, 70)}…` : s.description}
-                                  </span>
-                                )}
-                              </span>
-                              {(s.source === 'local' || s.source === 'claude' || s.source === 'codex') && (
-                                <button
-                                  className="btn ghost sm"
-                                  disabled={skillBusy === s.id}
-                                  title="上传为本人云端技能(云端 Tangu 会话可用)"
-                                  onClick={() => void doUploadSkill(s.id)}
-                                >
-                                  {skillBusy === s.id ? <Loader2 size={11} className="spin" /> : '上传云端'}
-                                </button>
-                              )}
-                              {s.source === 'user' && (
-                                <button
-                                  className="icon-btn"
-                                  title="删除本人云端技能"
-                                  disabled={skillBusy === s.id}
-                                  onClick={() => void doDeleteUserSkill(s.id)}
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      {!!allSkills?.length && (() => {
+                        // 按来源渠道(agent 文件夹)分组,空渠道不渲染;未知 source → 「其他」。
+                        const known = new Set<string>(SKILL_CHANNELS.map((c) => c.key))
+                        const groups = new Map<string, SkillInfo[]>()
+                        for (const s of allSkills) {
+                          const k = known.has(s.source || 'cloud') ? (s.source || 'cloud') : 'other'
+                          const arr = groups.get(k) || []
+                          arr.push(s)
+                          groups.set(k, arr)
+                        }
+                        const sections = [...SKILL_CHANNELS, { key: 'other' as const, label: '其他' }]
+                          .filter((c) => (groups.get(c.key)?.length || 0) > 0)
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {sections.map((c) => (
+                              <div key={c.key}>
+                                <div className="panel-section-title" style={{ padding: '8px 8px 4px' }}>
+                                  {c.label} · {groups.get(c.key)!.length}
+                                </div>
+                                {groups.get(c.key)!.map((s) => (
+                                  <div key={s.id} className="file-row" style={{ cursor: 'default' }}>
+                                    <span className="file-name" style={{ flex: 1 }}>
+                                      <b>{s.name}</b>
+                                      {s.description && (
+                                        <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
+                                          {s.description.length > 70 ? `${s.description.slice(0, 70)}…` : s.description}
+                                        </span>
+                                      )}
+                                    </span>
+                                    {(s.source === 'local' || s.source === 'claude' || s.source === 'codex') && (
+                                      <button
+                                        className="btn ghost sm"
+                                        disabled={skillBusy === s.id}
+                                        title="上传为本人云端技能(云端 Tangu 会话可用)"
+                                        onClick={() => void doUploadSkill(s.id)}
+                                      >
+                                        {skillBusy === s.id ? <Loader2 size={11} className="spin" /> : '上传云端'}
+                                      </button>
+                                    )}
+                                    {s.source === 'user' && (
+                                      <button
+                                        className="icon-btn"
+                                        title="删除本人云端技能"
+                                        disabled={skillBusy === s.id}
+                                        onClick={() => void doDeleteUserSkill(s.id)}
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
                       {skillMsg && <div className="hint" style={{ marginTop: 6 }}>{skillMsg}</div>}
                     </div>
 
@@ -1057,7 +1079,7 @@ export const SettingsModal: React.FC<{
                         {disc && disc.skills.length > 0 && (
                           <div className="field">
                             <label>技能({disc.skills.length})</label>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 200, overflowY: 'auto' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               {disc.skills.map((s) => (
                                 <label key={`${s.ecosystem}:${s.id}`} className="file-row" style={{ cursor: 'pointer' }}>
                                   <input
@@ -1081,7 +1103,7 @@ export const SettingsModal: React.FC<{
                         {disc && disc.mcpServers.length > 0 && (
                           <div className="field">
                             <label>MCP Server({disc.mcpServers.length})</label>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 160, overflowY: 'auto' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                               {disc.mcpServers.map((m) => {
                                 const key = `${m.ecosystem}:${m.name}`
                                 return (

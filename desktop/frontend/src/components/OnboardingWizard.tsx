@@ -160,7 +160,7 @@ export const OnboardingWizard: React.FC<{
 
   return (
     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div className="modal" style={{ maxWidth: 560, width: '100%' }}>
+      <div className="modal modal-md">
         <div className="modal-head">
           <Sparkles size={15} style={{ marginRight: 6 }} />
           欢迎使用 Tangu Agent
@@ -260,7 +260,7 @@ export const OnboardingWizard: React.FC<{
                   </div>
                 )}
                 {!!models?.models.length && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 260, overflowY: 'auto' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     {models.models.map((m) => (
                       <button key={`${m.source}-${m.id}`} className="file-row" onClick={() => setChosenModel(m.id)}>
                         <span className="file-name" style={{ color: m.id === chosenModel ? 'var(--accent)' : undefined }}>

@@ -577,7 +577,7 @@ async function finalizeAssistantMessage(
   await query(
     `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments)
      VALUES (?, ?, 'model', ?, ?, ?, ?, FALSE, ?, ?, NULL)
-     ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, updated_at=NOW()`,
+     ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, updated_at=CURRENT_TIMESTAMP`,
     [
       messageId,
       sessionId,
@@ -589,7 +589,7 @@ async function finalizeAssistantMessage(
       toolResults.length ? JSON.stringify(toolResults) : null,
     ],
   );
-  await query(`UPDATE chat_sessions SET updated_at = NOW() WHERE id = ?`, [sessionId]).catch(() => {});
+  await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionId]).catch(() => {});
 }
 
 function safeParse(s: string): any {

@@ -1,9 +1,13 @@
 /**
- * 输入区:auto-grow textarea + 附件(base64) + 发送/停止 + 执行模式/审批档选择器(host 能力)。
- * auto-grow 模式对齐 AI Studio MessageInput(scrollHeight 撑高,max-height 截断)。
+ * 输入区(Codex 两段式):
+ * - 框内:auto-grow textarea + 底排「+ 附件菜单 / 🎤占位 / 发送·停止」;
+ * - 框外:上下文 chip(云沙箱/本机·目录)、模式菜单(计划/审批)、右侧 模型·思考档 菜单。
+ * 附件支持文件选择 / 粘贴 / 拖拽,chip 带缩略图。auto-grow 对齐 AI Studio(scrollHeight 撑高,截断)。
  */
-import React, { useMemo, useRef, useState } from 'react'
-import { Send, Square, Paperclip, X, Monitor, Cloud, FolderOpen, Brain, ClipboardList } from 'lucide-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Send, Square, Plus, Mic, ImagePlus, X, Monitor, Cloud, FolderOpen, Brain, ClipboardList, Check, ChevronDown,
+} from 'lucide-react'
 import type { AgentConfig, Attachment, ModelInfo, SkillInfo } from '../types'
 
 /** 斜杠命令项(/ 触发的菜单;参考 hermes 的 slash 命令)。 */
@@ -12,6 +16,9 @@ interface SlashItem {
   desc: string
   run: () => void
 }
+
+/** 框外控制排当前打开的弹出菜单。 */
+type OpenMenu = 'add' | 'context' | 'mode' | 'model' | null
 
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
 // 客户端输入帽(服务端 runs.ts 还有一道):大段材料整体粘贴会让 agent 每轮迭代全量重发,
@@ -27,6 +34,10 @@ async function pickCwd(current?: string, fallback?: string): Promise<string | nu
   const v = window.prompt('输入工作目录绝对路径', current || fallback || '')
   return v?.trim() || null
 }
+
+const approvalLabel = { readonly: '只读·全审批', 'auto-edit': '自动编辑', 'full-auto': '全自动' } as const
+const thinkingLabel = { off: '思考·关', low: '思考·浅', medium: '思考·中', high: '思考·深' } as const
+const thinkingShort = { off: '标准', low: '浅', medium: '中', high: '深' } as const
 
 export const MessageInput: React.FC<{
   disabled: boolean
@@ -63,8 +74,30 @@ export const MessageInput: React.FC<{
   const [hint, setHint] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [slashSubMenu, setSlashSubMenu] = useState<'model' | null>(null) // /model 的二级菜单
+  const [slashDismissed, setSlashDismissed] = useState(false) // Esc 关菜单但保留草稿
+  const [openMenu, setOpenMenu] = useState<OpenMenu>(null) // 框外控制排弹出菜单
+  const [dragOver, setDragOver] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const isHost = execConfig.execMode === 'host'
+  const approval = execConfig.approvalMode || 'auto-edit'
+
+  // 点击外部 / Esc 关闭框外弹出菜单
+  useEffect(() => {
+    if (!openMenu) return
+    const onDown = (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest?.('[data-cmenu]')) return
+      setOpenMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [openMenu])
 
   // ── 斜杠命令(/ 开头且无换行 → 浮出菜单;Enter/Tab 执行而非发送)──
   const slashItems = useMemo<SlashItem[]>(() => {
@@ -105,7 +138,7 @@ export const MessageInput: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planMode, thinkingLevel, models, skills, enabledSkillIds, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onOpenSettings, onToggleSkill])
 
-  const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled
+  const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
   const slashMatches = useMemo<SlashItem[]>(() => {
     if (!slashActive) return []
     if (slashSubMenu === 'model') {
@@ -179,30 +212,76 @@ export const MessageInput: React.FC<{
     setAttachments((prev) => [...prev, ...next])
   }
 
-  const isHost = execConfig.execMode === 'host'
-  const approvalLabel = { readonly: '只读·全审批', 'auto-edit': '自动编辑', 'full-auto': '全自动' } as const
-  const thinkingLabel = { off: '思考·关', low: '思考·浅', medium: '思考·中', high: '思考·深' } as const
+  // ── 框外控制:执行环境切换(复用 pickCwd) ──
+  const toSandbox = () => {
+    onExecConfigChange({ execMode: 'sandbox', approvalMode: execConfig.approvalMode, cwd: execConfig.cwd })
+    setOpenMenu(null)
+  }
+  const toHost = (changeDir: boolean) => {
+    void (async () => {
+      const cwd = (changeDir ? await pickCwd(execConfig.cwd, homeDir) : execConfig.cwd)
+        || (await pickCwd(undefined, homeDir))
+        || homeDir
+      if (!cwd) return
+      onExecConfigChange({ execMode: 'host', approvalMode: execConfig.approvalMode || 'auto-edit', cwd })
+    })()
+    setOpenMenu(null)
+  }
+  const setApproval = (m: NonNullable<AgentConfig['approvalMode']>) => {
+    onExecConfigChange({ execMode: 'host', approvalMode: m, cwd: execConfig.cwd })
+    setOpenMenu(null)
+  }
 
   // 模型分组:Forsion 托管 / 各直连 provider
   const forsionModels = (models || []).filter((m) => m.source === 'forsion')
   const directModels = (models || []).filter((m) => m.source === 'direct')
-  const selectedKnown = !modelId || (models || []).some((m) => m.id === modelId)
+  const currentModel = (models || []).find((m) => m.id === modelId)
+
+  // chip 文案
+  const ctxLabel = isHost
+    ? (execConfig.cwd ? (execConfig.cwd.split('/').filter(Boolean).pop() || execConfig.cwd) : '本机')
+    : '云沙箱'
+  const modeLabel = planMode ? '计划模式' : (isHost ? approvalLabel[approval] : '常规')
+  const modelLabel = currentModel?.name || modelId || '选择模型'
+  const effortSuffix = thinkingLevel && thinkingLevel !== 'off' ? ` · ${thinkingShort[thinkingLevel]}` : ''
+
+  const showModeChip = !!onPlanModeChange || isHost
+  const showModelChip = (!!onModelChange && !!models?.length) || !!onThinkingChange
 
   return (
     <div className="composer">
       <div className="composer-inner">
-        <div className="composer-box">
+        <div
+          className={`composer-box${dragOver ? ' dragover' : ''}`}
+          onDragOver={(e) => {
+            if (e.dataTransfer?.types?.includes('Files')) {
+              e.preventDefault()
+              setDragOver(true)
+            }
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false)
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragOver(false)
+            if (e.dataTransfer?.files?.length) void pickFiles(e.dataTransfer.files)
+          }}
+        >
           {hint && (
             <div style={{ fontSize: 12, color: 'var(--danger, #c0392b)', marginBottom: 6 }}>
               {hint}
             </div>
           )}
           {attachments.length > 0 && (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
               {attachments.map((a, i) => (
                 <span className="attach-chip" key={`${a.name}-${i}`}>
+                  {a.mimeType.startsWith('image/') && (
+                    <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />
+                  )}
                   <span>{a.name}</span>
-                  <button onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}>
+                  <button title="移除" onClick={() => setAttachments(attachments.filter((_, j) => j !== i))}>
                     <X size={12} />
                   </button>
                 </span>
@@ -213,14 +292,22 @@ export const MessageInput: React.FC<{
             ref={taRef}
             rows={1}
             value={draft}
-            placeholder={disabled ? '先在设置里连接后端…' : '给 Tangu 派个活(Enter 发送,Shift+Enter 换行)'}
+            placeholder={disabled ? '先在设置里连接后端…' : '输入消息,输入 / 唤起技能(Enter 发送,Shift+Enter 换行)'}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)
+              setSlashDismissed(false)
               autoGrow()
             }}
+            onPaste={(e) => {
+              // 粘贴图片(剪贴板含文件)→ 走附件;纯文本粘贴不受影响。
+              if (e.clipboardData?.files?.length) {
+                e.preventDefault()
+                void pickFiles(e.clipboardData.files)
+              }
+            }}
             onKeyDown={(e) => {
-              // 斜杠菜单导航:↑↓ 选择,Enter/Tab 执行(不发送),Esc 关闭
+              // 斜杠菜单导航:↑↓ 选择,Enter/Tab 执行(不发送),Esc 关菜单(保留草稿)
               if (slashActive && slashMatches.length) {
                 if (e.key === 'ArrowDown') {
                   e.preventDefault()
@@ -239,7 +326,7 @@ export const MessageInput: React.FC<{
                 }
                 if (e.key === 'Escape') {
                   e.preventDefault()
-                  setDraft('')
+                  setSlashDismissed(true) // 仅关菜单,草稿保留(再次编辑会重新唤起)
                   setSlashSubMenu(null)
                   return
                 }
@@ -273,10 +360,30 @@ export const MessageInput: React.FC<{
               ))}
             </div>
           )}
-          <div className="composer-bar">
-            <button className="icon-btn" title="添加图片(随消息发给模型;其他文件请用右栏工作区上传)" onClick={() => fileRef.current?.click()}>
-              <Paperclip size={15} />
-            </button>
+
+          {/* 框内底排:+ 附件菜单 / 麦克风占位 / 发送·停止 */}
+          <div className="composer-inrow">
+            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
+              <button
+                className="icon-btn"
+                title="添加内容"
+                disabled={disabled}
+                onClick={() => setOpenMenu((m) => (m === 'add' ? null : 'add'))}
+              >
+                <Plus size={17} />
+              </button>
+              {openMenu === 'add' && (
+                <div className="composer-menu left">
+                  <button className="menu-item" onClick={() => { fileRef.current?.click(); setOpenMenu(null) }}>
+                    <ImagePlus size={14} />
+                    <span className="grow">添加图片</span>
+                  </button>
+                  <div className="menu-section" style={{ padding: '4px 8px 2px' }}>
+                    其他文件请用右栏工作区上传
+                  </div>
+                </div>
+              )}
+            </span>
             <input
               ref={fileRef}
               type="file"
@@ -288,104 +395,10 @@ export const MessageInput: React.FC<{
                 e.target.value = ''
               }}
             />
-            {onModelChange && models && models.length > 0 && (
-              <select
-                className="mode-select"
-                style={{ maxWidth: 180, cursor: 'pointer' }}
-                title="本会话使用的模型(持久化到会话;切换自然会重建模型侧前缀缓存)"
-                value={modelId || ''}
-                onChange={(e) => e.target.value && onModelChange(e.target.value)}
-              >
-                {!modelId && <option value="">选择模型…</option>}
-                {!selectedKnown && <option value={modelId}>{modelId}(手填)</option>}
-                {forsionModels.length > 0 && (
-                  <optgroup label="Forsion 托管">
-                    {forsionModels.map((m) => (
-                      <option key={`f-${m.id}`} value={m.id}>{m.name}</option>
-                    ))}
-                  </optgroup>
-                )}
-                {directModels.length > 0 && (
-                  <optgroup label="直连 Provider">
-                    {directModels.map((m) => (
-                      <option key={`d-${m.id}`} value={m.id}>{m.name}({m.provider})</option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            )}
-            {onThinkingChange && (
-              <button
-                className="mode-select"
-                title="思考深度:模型推理预算 off/low/medium/high(持久化到会话配置)"
-                onClick={() => {
-                  const order: Array<NonNullable<AgentConfig['thinkingLevel']>> = ['off', 'low', 'medium', 'high']
-                  const cur = order.indexOf(thinkingLevel || 'off')
-                  onThinkingChange(order[(cur + 1) % order.length])
-                }}
-              >
-                <Brain size={13} />
-                {thinkingLabel[thinkingLevel || 'off']}
-              </button>
-            )}
-            {onPlanModeChange && (
-              <button
-                className="mode-select"
-                title="计划模式:agent 只读调研并产出实施计划,经你批准后才执行(/plan 也可切换)"
-                style={planMode ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
-                onClick={() => onPlanModeChange(!planMode)}
-              >
-                <ClipboardList size={13} />
-                {planMode ? '计划中' : '计划'}
-              </button>
-            )}
-            <button
-              className="mode-select"
-              title="执行环境:云沙箱(隔离工作区)/ 本机(后端所在机器的真实文件系统,需审批)——与 TUI 的 host 模式一致"
-              onClick={() => {
-                if (isHost) {
-                  onExecConfigChange({ execMode: 'sandbox', approvalMode: execConfig.approvalMode, cwd: execConfig.cwd })
-                  return
-                }
-                // 切到本机:必须有工作目录(没有则弹目录选择,取消回退主目录)。
-                void (async () => {
-                  const cwd = execConfig.cwd || (await pickCwd(undefined, homeDir)) || homeDir
-                  if (!cwd) return // 实在拿不到目录就不切换
-                  onExecConfigChange({ execMode: 'host', approvalMode: execConfig.approvalMode || 'auto-edit', cwd })
-                })()
-              }}
-            >
-              {isHost ? <Monitor size={13} /> : <Cloud size={13} />}
-              {isHost ? '本机' : '云沙箱'}
-            </button>
-            {isHost && (
-              <>
-                <button
-                  className="mode-select"
-                  title={`工作目录:${execConfig.cwd || '(未设置)'} —— 点击更换`}
-                  onClick={() => {
-                    void pickCwd(execConfig.cwd, homeDir).then((cwd) => {
-                      if (cwd) onExecConfigChange({ execMode: 'host', approvalMode: execConfig.approvalMode, cwd })
-                    })
-                  }}
-                >
-                  <FolderOpen size={13} />
-                  {execConfig.cwd ? (execConfig.cwd.split('/').filter(Boolean).pop() || execConfig.cwd) : '选择目录'}
-                </button>
-                <button
-                  className="mode-select"
-                  title="审批档:只读(写文件/跑命令都审)/ 自动编辑(只审命令)/ 全自动"
-                  onClick={() => {
-                    const order: AgentConfig['approvalMode'][] = ['readonly', 'auto-edit', 'full-auto']
-                    const cur = order.indexOf(execConfig.approvalMode || 'auto-edit')
-                    onExecConfigChange({ execMode: 'host', approvalMode: order[(cur + 1) % 3], cwd: execConfig.cwd })
-                  }}
-                >
-                  {approvalLabel[execConfig.approvalMode || 'auto-edit']}
-                </button>
-              </>
-            )}
             <span className="grow" />
+            <button className="icon-btn composer-mic" title="语音输入即将上线" disabled>
+              <Mic size={16} />
+            </button>
             {running ? (
               <button className="btn danger sm" onClick={onStop}>
                 <Square size={12} /> 停止
@@ -396,6 +409,149 @@ export const MessageInput: React.FC<{
               </button>
             )}
           </div>
+        </div>
+
+        {/* 框外控制排:上下文 / 模式(左)· 模型(右) */}
+        <div className="composer-actions">
+          <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
+            <button
+              className={`composer-chip${isHost ? ' active' : ''}`}
+              title="执行环境:云沙箱(隔离工作区)/ 本机(后端所在机器真实文件系统,需审批)"
+              onClick={() => setOpenMenu((m) => (m === 'context' ? null : 'context'))}
+            >
+              {isHost ? <Monitor size={13} /> : <Cloud size={13} />}
+              <span className="chip-label">{ctxLabel}</span>
+              <ChevronDown size={12} />
+            </button>
+            {openMenu === 'context' && (
+              <div className="composer-menu left">
+                <div className="menu-section">执行环境</div>
+                <button className={`menu-item${!isHost ? ' active' : ''}`} onClick={toSandbox}>
+                  <Cloud size={14} />
+                  <span className="grow">云沙箱</span>
+                  {!isHost && <Check size={13} />}
+                </button>
+                <button className={`menu-item${isHost ? ' active' : ''}`} onClick={() => toHost(false)}>
+                  <Monitor size={14} />
+                  <span className="grow">本机{isHost && execConfig.cwd ? ` · ${ctxLabel}` : ''}</span>
+                  {isHost && <Check size={13} />}
+                </button>
+                {isHost && (
+                  <button className="menu-item" onClick={() => toHost(true)}>
+                    <FolderOpen size={14} />
+                    <span className="grow">更换工作目录…</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </span>
+
+          {showModeChip && (
+            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
+              <button
+                className={`composer-chip${planMode ? ' active' : ''}`}
+                title="模式:计划模式(只读调研→提交计划)与审批档(host)"
+                onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}
+              >
+                <ClipboardList size={13} />
+                <span className="chip-label">{modeLabel}</span>
+                <ChevronDown size={12} />
+              </button>
+              {openMenu === 'mode' && (
+                <div className="composer-menu left">
+                  {onPlanModeChange && (
+                    <>
+                      <div className="menu-section">计划模式</div>
+                      <button
+                        className={`menu-item${planMode ? ' active' : ''}`}
+                        onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}
+                      >
+                        <ClipboardList size={14} />
+                        <span className="grow">{planMode ? '计划模式·已开' : '开启计划模式'}</span>
+                        {planMode && <Check size={13} />}
+                      </button>
+                    </>
+                  )}
+                  {isHost && (
+                    <>
+                      <div className="menu-section">审批档</div>
+                      {(['readonly', 'auto-edit', 'full-auto'] as const).map((m) => (
+                        <button key={m} className={`menu-item${approval === m ? ' active' : ''}`} onClick={() => setApproval(m)}>
+                          <span className="grow">{approvalLabel[m]}</span>
+                          {approval === m && <Check size={13} />}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </span>
+          )}
+
+          <span className="grow" />
+
+          {showModelChip && (
+            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
+              <button
+                className="composer-chip"
+                title="本会话模型与思考深度"
+                onClick={() => setOpenMenu((m) => (m === 'model' ? null : 'model'))}
+              >
+                <span className="chip-label">{modelLabel}{effortSuffix}</span>
+                <ChevronDown size={12} />
+              </button>
+              {openMenu === 'model' && (
+                <div className="composer-menu right">
+                  {onThinkingChange && (
+                    <>
+                      <div className="menu-section">思考深度</div>
+                      {(['off', 'low', 'medium', 'high'] as const).map((lv) => (
+                        <button
+                          key={lv}
+                          className={`menu-item${(thinkingLevel || 'off') === lv ? ' active' : ''}`}
+                          onClick={() => { onThinkingChange(lv); setOpenMenu(null) }}
+                        >
+                          <Brain size={14} />
+                          <span className="grow">{thinkingLabel[lv]}</span>
+                          {(thinkingLevel || 'off') === lv && <Check size={13} />}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {onModelChange && !!models?.length && (
+                    <>
+                      {forsionModels.length > 0 && <div className="menu-section">Forsion 托管</div>}
+                      {forsionModels.map((m) => (
+                        <button
+                          key={`f-${m.id}`}
+                          className={`menu-item${m.id === modelId ? ' active' : ''}`}
+                          onClick={() => { onModelChange(m.id); setOpenMenu(null) }}
+                        >
+                          <span className="grow">{m.name}</span>
+                          {m.id === modelId && <Check size={13} />}
+                        </button>
+                      ))}
+                      {directModels.length > 0 && <div className="menu-section">直连 Provider</div>}
+                      {directModels.map((m) => (
+                        <button
+                          key={`d-${m.id}`}
+                          className={`menu-item${m.id === modelId ? ' active' : ''}`}
+                          onClick={() => { onModelChange(m.id); setOpenMenu(null) }}
+                        >
+                          <span className="grow">{m.name}</span>
+                          <span className="menu-meta">{m.provider}</span>
+                          {m.id === modelId && <Check size={13} />}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                  {onModelChange && !models?.length && (
+                    <div className="menu-section" style={{ padding: '6px 8px' }}>模型加载中…</div>
+                  )}
+                </div>
+              )}
+            </span>
+          )}
         </div>
       </div>
     </div>

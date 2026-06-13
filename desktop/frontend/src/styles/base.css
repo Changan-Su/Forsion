@@ -488,10 +488,11 @@ a:hover { color: var(--accent-hover); }
   background: var(--bg-card);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-chat-surface);
-  padding: 10px 12px 8px;
-  transition: border-color var(--duration-fast);
+  padding: 12px 14px 10px;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 .composer-box:focus-within { border-color: var(--accent); }
+.composer-box.dragover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
 .composer-box textarea {
   display: block;
   width: 100%;
@@ -499,35 +500,120 @@ a:hover { color: var(--accent-hover); }
   border: none;
   outline: none;
   resize: none;
+  min-height: 38px;
   max-height: 200px;
   line-height: 1.55;
   color: var(--text);
 }
 .composer-box textarea::placeholder { color: var(--text-ghost); }
-.composer-bar {
+
+/* 框内底排:左 +(附件菜单),右 麦克风占位 + 发送/停止(Codex 式) */
+.composer-inrow {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
-.composer-bar .grow { flex: 1; }
+.composer-inrow .grow { flex: 1; }
+.composer-mic { color: var(--text-ghost); opacity: 0.5; cursor: not-allowed; }
+.composer-mic:hover { opacity: 0.5; background: none; color: var(--text-ghost); }
+
+/* 框外控制排(参考图:项目/模式在左,模型在右) */
+.composer-actions {
+  position: relative; /* popover 定位锚 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 2px;
+}
+.composer-actions .grow { flex: 1; }
+
+/* chip / 菜单触发钮(项目上下文、模式、模型) */
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 9px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card);
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+  white-space: nowrap;
+}
+.composer-chip:hover { border-color: var(--accent); color: var(--text-light); }
+.composer-chip.active { border-color: var(--accent); color: var(--accent); }
+.composer-chip .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip svg { flex-shrink: 0; }
+
+/* 框外控制排弹出菜单(+ / 模式 / 模型) */
+.composer-menu {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 8px;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--bg-glass);
+  backdrop-filter: var(--panel-blur);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 32px var(--shadow);
+  z-index: 40;
+}
+.composer-menu.right { right: 2px; }
+.composer-menu.left { left: 2px; }
+.composer-menu .menu-section {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  padding: 6px 8px 3px;
+}
+.composer-menu .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  color: var(--text-light);
+  text-align: left;
+}
+.composer-menu .menu-item:hover { background: var(--overlay-light); color: var(--text); }
+.composer-menu .menu-item.active { color: var(--accent); }
+.composer-menu .menu-item .grow { flex: 1; }
+.composer-menu .menu-item .menu-meta { font-size: 11px; color: var(--text-faint); }
+
 .composer-hint { font-size: 11px; color: var(--text-ghost); }
 .attach-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
+  gap: 6px;
+  padding: 3px 8px 3px 3px;
   font-size: 12px;
   color: var(--text-muted);
   background: var(--overlay-light);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   max-width: 200px;
 }
-.attach-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-chip img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.attach-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attach-chip button { color: var(--text-faint); display: inline-flex; }
 .attach-chip button:hover { color: var(--danger); }
 
-/* 模式选择器(执行环境 / 审批档) */
+/* 模式选择器(执行环境 / 审批档;保留供其它处复用) */
 .mode-select {
   display: inline-flex;
   align-items: center;
@@ -586,10 +672,13 @@ a:hover { color: var(--accent-hover); }
   padding: 24px;
   background: var(--overlay-strong);
 }
+/* forsion-ui 规范:二级界面固定尺寸——宽高按类型恒定,内容在 .modal-body 内部滚动,
+ * 绝不随信息量(切 tab/切状态)自适应高度跳变。档位:默认(lg) / modal-sm / modal-md。
+ * 见 .claude/skills/forsion-ui/components/modal.md。 */
 .modal {
-  width: 720px;
+  width: var(--modal-w, 720px);
+  height: min(var(--modal-h, 640px), 88vh);
   max-width: 94vw;
-  max-height: 84vh;
   display: flex;
   flex-direction: column;
   background: var(--bg-glass);
@@ -599,6 +688,8 @@ a:hover { color: var(--accent-hover); }
   box-shadow: 0 18px 50px var(--shadow);
   overflow: hidden;
 }
+.modal.modal-sm { --modal-w: 460px; --modal-h: 520px; } /* 选择/确认类小弹窗 */
+.modal.modal-md { --modal-w: 560px; --modal-h: 600px; } /* 向导/中等弹窗 */
 .modal-head {
   display: flex;
   align-items: center;
