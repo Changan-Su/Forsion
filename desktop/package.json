@@ -2,6 +2,7 @@
   "name": "tangu-agent-desktop",
   "version": "1.0.1",
   "description": "Tangu Agent — 本地极简桌面 GUI(Electron),连 standalone 服务",
+  "author": "Forsion",
   "private": true,
   "type": "module",
   "main": "out/main/main.js",

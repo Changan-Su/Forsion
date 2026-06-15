@@ -27,7 +27,13 @@ exports.default = async function afterPack(context) {
       ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
       : path.join(appOutDir, 'resources');
   const buildPath = path.join(resourcesDir, 'tangu-server'); // extraResources 落点(含 node_modules)
-  const electronVersion = packager.framework.version; // electron-builder 解析出的 Electron 版本
+  // electron-builder 24 的 AfterPackContext:framework 在 packager.info.framework(packager.framework 为 undefined)。
+  // 兼容不同版本,逐级兜底取 Electron 版本。
+  const electronVersion =
+    packager.info?.framework?.version ||
+    packager.framework?.version ||
+    context.electronVersion;
+  if (!electronVersion) throw new Error('[afterPack] 无法解析 Electron 版本(packager.info.framework.version 为空)');
   const archName = Arch[arch]; // 数字枚举 → 'x64' | 'arm64' | 'armv7l'
 
   console.log(`[afterPack] electron-rebuild better-sqlite3 → Electron ${electronVersion} (${archName}) @ ${buildPath}`);
