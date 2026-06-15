@@ -242,7 +242,7 @@ function createWindow(): void {
     minWidth: 880,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#F5EFE4', // 宣纸白,避免白屏闪烁
+    backgroundColor: '#F5F5F7', // qbird 浅色底(默认主题),避免白屏闪烁
     webPreferences: {
       preload: join(__dirname, '../preload/preload.mjs'),
       contextIsolation: true,

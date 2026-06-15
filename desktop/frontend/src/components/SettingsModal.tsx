@@ -1220,7 +1220,7 @@ export const SettingsModal: React.FC<{
                       <span className="grow" />
                       <button
                         className="btn ghost sm"
-                        onClick={() => window.open('https://forsion.app', '_blank')}
+                        onClick={() => window.open('https://forsion.net', '_blank')}
                       >
                         <ExternalLink size={12} /> {t('about.checkUpdates')}
                       </button>

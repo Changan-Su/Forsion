@@ -93,6 +93,7 @@ const zh: Dict = {
   'settings.developer.disable': '关闭开发者模式',
 
   // 引导 - 主题 / 工作区(新增步骤)
+  'onboarding.connect.forsionHint': '用 Forsion 账号登录(云端地址由环境变量配置,无需填写);也可在上方切换为自带 API Key。',
   'onboarding.theme.stepLabel': '选择主题外观',
   'onboarding.theme.modeLabel': '明暗模式',
   'onboarding.theme.light': '浅色',
@@ -168,6 +169,7 @@ const en: Dict = {
   'settings.developer.disable': 'Disable developer mode',
 
   // Onboarding - theme / workspace (new steps)
+  'onboarding.connect.forsionHint': 'Sign in with your Forsion account (the cloud URL is set via an environment variable — nothing to enter here). Or switch to your own API key above.',
   'onboarding.theme.stepLabel': 'Choose a theme',
   'onboarding.theme.modeLabel': 'Light / Dark',
   'onboarding.theme.light': 'Light',

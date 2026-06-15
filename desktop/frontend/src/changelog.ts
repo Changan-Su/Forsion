@@ -11,6 +11,24 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.0.1',
+    date: '2026-06-15',
+    zh: [
+      '本地图片识别:AI 可查看工作区里或拖入的图片(view_image 工具),聊天内显示图片缩略图',
+      '新增开发者模式:在「关于」连点版本号 10 次解锁,可编辑 Forsion 云端地址、重新进入引导',
+      '首启引导新增「选择主题」与「默认本地文件夹」两步;引导不再要求填写云端地址',
+      '默认主题改为 Qbird 浅色;语言与深浅模式切换移至右上角',
+      '账号卡片改用统一用户卡片样式,正确显示头像与会员等级',
+    ],
+    en: [
+      'Local image recognition: the AI can view images in the workspace or dropped in (view_image tool); thumbnails shown in chat',
+      'New developer mode: tap the version 10× in About to unlock — edit the Forsion cloud URL and re-run onboarding',
+      'Onboarding adds theme and default-folder steps; it no longer asks for the cloud URL',
+      'Default theme is now Qbird Light; language & light/dark toggles moved to the top-right',
+      'Account card now uses the unified profile card with avatar and membership tier',
+    ],
+  },
+  {
     version: '1.0.0',
     date: '2026-06-15',
     zh: [

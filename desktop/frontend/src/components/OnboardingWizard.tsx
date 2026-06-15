@@ -198,12 +198,9 @@ export const OnboardingWizard: React.FC<{
               </div>
               {connectMode === 'forsion' ? (
                 <>
-                  <div className="field">
-                    <label>{t('onboarding.connect.cloudUrlLabel')}</label>
-                    <input type="text" value={cloudUrl} onChange={(e) => setCloudUrl(e.target.value.trim())} placeholder="https://api.forsion.app" />
-                    <div className="hint">{t('onboarding.connect.cloudUrlHint')}</div>
-                  </div>
-                  <button className="btn primary sm" disabled={loggingIn || !cloudUrl} onClick={() => void doLogin()}>
+                  {/* 云端地址只由环境变量 TANGU_CLOUD_URL / 内置默认决定,引导界面不再展示/编辑(与设置一致)。 */}
+                  <div className="hint" style={{ marginBottom: 8 }}>{t('onboarding.connect.forsionHint')}</div>
+                  <button className="btn primary sm" disabled={loggingIn} onClick={() => void doLogin()}>
                     {loggingIn ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />} {t('onboarding.connect.loginViaBrowser')}
                   </button>
                   {device && (

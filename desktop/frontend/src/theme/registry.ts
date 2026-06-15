@@ -42,7 +42,7 @@ function buildRegistry(): Record<string, ThemeEntry> {
 
 export const themeRegistry: Readonly<Record<string, ThemeEntry>> = Object.freeze(buildRegistry());
 
-export const DEFAULT_PRESET = 'sozhi';
+export const DEFAULT_PRESET = 'qbird';
 
 /** 全部主题,素纸最前,其余按推荐序。 */
 export function listThemes(): ThemeEntry[] {
