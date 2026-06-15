@@ -1,0 +1,89 @@
+name: build-desktop
+
+# 三平台桌面安装包(macOS .dmg / Windows .exe / Linux .AppImage)。
+# 原生模块 better-sqlite3 必须在各自系统上编译,所以用 GitHub 的三种 runner 各编各的。
+# 触发:
+#   - 手动(Actions 页 Run workflow):只构建,产物在 Artifacts 里,不发 Release。
+#   - 推送 v* tag:构建后自动创建/更新该 tag 的 GitHub Release 并附上三平台安装包。
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # 让 GITHUB_TOKEN 能创建 Release / 上传资产
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            ebargs: --linux
+          - os: windows-latest
+            ebargs: --win
+          - os: macos-latest        # Apple Silicon(arm64)。需 Intel 包再加一行:
+            ebargs: --mac --arm64    #   { os: macos-13, ebargs: "--mac --x64" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ① 后端(standalone):编译出 dist/,会被 extraResources 打进 app 的 tangu-server/
+      - name: Build backend
+        run: |
+          npm ci
+          npm run build
+
+      # ② 桌面壳(renderer/main/preload)→ out/
+      - name: Build desktop shell
+        working-directory: desktop
+        run: |
+          npm ci
+          npm run build
+
+      # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
+      - name: Package installer
+        working-directory: desktop
+        run: npx electron-builder ${{ matrix.ebargs }} --publish never
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: tangu-${{ matrix.os }}
+          path: |
+            desktop/dist/*.AppImage
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
+          if-no-files-found: ignore
+
+  # 仅在打 v* tag 时:收集三平台产物 → 创建/更新对应 Release 并附件。
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true   # 三个 artifact 的文件平铺到 artifacts/
+
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # 已存在则补传并覆盖资产(支持重跑);不存在则新建(自动生成发布说明)。
+          gh release create "$TAG" artifacts/* --title "Tangu $TAG" --generate-notes \
+            || gh release upload "$TAG" artifacts/* --clobber

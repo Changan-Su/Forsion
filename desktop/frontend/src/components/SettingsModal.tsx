@@ -62,7 +62,7 @@ export const SettingsModal: React.FC<{
   /** 开发者选项里「重新进入引导」回调(由 App 控制 onboarding 显隐)。 */
   onRelaunchOnboarding?: () => void
 }> = (p) => {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('connection')
   const [appVersion, setAppVersion] = useState<string>('')
   // 开发者模式:关于页连点版本号 10 次解锁(持久化);解锁后多出「开发者选项」tab。
@@ -1234,7 +1234,7 @@ export const SettingsModal: React.FC<{
                               v{c.version} <span className="changelog-date">{c.date}</span>
                             </div>
                             <ul>
-                              {(locale === 'en' ? c.en : c.zh).map((line, i) => (
+                              {c.lines.map((line, i) => (
                                 <li key={i}>{line}</li>
                               ))}
                             </ul>
