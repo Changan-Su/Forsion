@@ -41,14 +41,14 @@ jobs:
       # ① 后端(standalone):编译出 dist/,会被 extraResources 打进 app 的 tangu-server/
       - name: Build backend
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
 
       # ② 桌面壳(renderer/main/preload)→ out/
       - name: Build desktop shell
         working-directory: desktop
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
 
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
