@@ -25,7 +25,7 @@ jobs:
         include:
           - os: ubuntu-latest
             ebargs: --linux
-          - os: windows-latest
+          - os: windows-2022
             ebargs: --win
           - os: macos-latest        # Apple Silicon(arm64)。需 Intel 包再加一行:
             ebargs: --mac --arm64    #   { os: macos-13, ebargs: "--mac --x64" }
