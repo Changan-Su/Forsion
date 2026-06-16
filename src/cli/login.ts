@@ -26,7 +26,7 @@ function openBrowser(url: string): void {
 
 export async function loginFlow(cloudUrl: string): Promise<void> {
   if (!cloudUrl) {
-    console.error(red('  首次登录需指定 --cloud-url(如 --cloud-url http://localhost:3001)'));
+    console.error(red('  首次登录需指定 --cloud-url(如 --cloud-url https://api.forsion.net)'));
     process.exit(1);
   }
   const base = cloudUrl.replace(/\/+$/, '');

@@ -152,6 +152,14 @@ interface TanguStoredConfig {
   defaultWorkspaceDir: string
 }
 
+/**
+ * 内置默认 Forsion 云端(大脑 brain API)。全新安装(无保存配置/无登录凭证/无 env)即指向生产环境,
+ * 无需任何 .env 或环境变量。覆盖优先级见 loadConfig:
+ *   已存配置 cloudUrl > 环境变量 TANGU_CLOUD_URL(含 ~/.tangu/.env)> 上次登录记忆 > 此默认。
+ * 自建/私有部署改 ~/.tangu/.env 的 TANGU_CLOUD_URL 即可覆盖(打包二进制不读仓库里的 .env)。
+ */
+const DEFAULT_CLOUD_URL = 'https://api.forsion.net'
+
 const DEFAULT_CONFIG: TanguStoredConfig = {
   mode: 'external',
   backendUrl: 'http://localhost:8787',
@@ -183,7 +191,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
   //   TANGU_CLOUD_URL    Forsion 云端地址(managed 模式 / 登录默认地址)
   //   TANGU_BACKEND_URL  external 模式的外部 tangu-server 地址
   if (!merged.cloudUrl) {
-    merged.cloudUrl = process.env.TANGU_CLOUD_URL || loadTanguCreds().cloudUrl || ''
+    merged.cloudUrl = process.env.TANGU_CLOUD_URL || loadTanguCreds().cloudUrl || DEFAULT_CLOUD_URL
   }
   if (process.env.TANGU_BACKEND_URL && merged.backendUrl === DEFAULT_CONFIG.backendUrl) {
     merged.backendUrl = process.env.TANGU_BACKEND_URL
