@@ -3,7 +3,6 @@ node_modules
 dist
 desktop
 # 插件 drop-in 目录（worker 等）：运行时加载，不烘焙进核心镜像。
-plugins
 .git
 *.log
 .env
