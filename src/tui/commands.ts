@@ -22,13 +22,17 @@ export const COMMANDS: CommandSpec[] = [
   { name: '/tools', desc: '列出当前模式可用工具' },
   { name: '/skills', desc: '列出可用技能（含本地/.claude;✓=本会话启用）' },
   { name: '/skill', desc: '启用/停用技能：/skill <id>' },
+  { name: '/agents', desc: '列出本地 Normal Agent（自定义人格）' },
+  { name: '/agent', desc: '启用某 Normal Agent：/agent <slug>（/agent off 取消）' },
+  { name: '/historian', desc: 'Historian 状态/活动；/historian on|off 开关' },
+  { name: '/muse', desc: 'Muse 状态/TODO；/muse on|off 开关' },
   { name: '/memory', desc: '查看长期记忆' },
   { name: '/cost', desc: '本会话 token 用量与费用' },
   { name: '/copy', desc: '复制上一条回复到剪贴板' },
   { name: '/retry', desc: '重跑上一条用户消息' },
   { name: '/config', desc: '查看当前设置' },
   { name: '/login', desc: '重新登录 Forsion（提示重启生效）' },
-  { name: '/compact', desc: '压缩上下文：总结后开新会话续接' },
+  { name: '/compact', desc: '压缩上下文：总结后精简续接（同会话）' },
   { name: '/exit', desc: '退出 Tangu' },
 ];
 

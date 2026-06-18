@@ -77,6 +77,13 @@ interface RunBuffer {
 const FLUSH_THRESHOLD = 64; // 帧数阈值
 const FLUSH_INTERVAL_MS = 120;
 const TERMINAL = new Set(['done', 'failed', 'aborted']);
+// flush 有界重试:此前单次 POST 失败即吞掉 → 丢帧;尤其 'done' 终态帧丢失会让客户端 SSE 永远等不到
+// 结束、看着像「卡死」(实际 run 已完成)。重试几次仍失败才放弃记日志(避免无限阻塞 flush 链)。
+const FLUSH_MAX_RETRY = 3;
+const FLUSH_RETRY_BASE_MS = 200; // 线性退避:200/400ms
+// state-API 请求超时:此前 reqJson 裸 fetch 无超时,server/网络挂死则该调用无限 await(连带 run 卡住、
+// session 串行队列后续 run 全堵)。默认 30s,env 可调。
+const STATE_TIMEOUT_MS = Number(process.env.TANGU_STATE_HTTP_TIMEOUT_MS) || 30_000;
 
 /** 解码 JWT 的 exp(秒)→ 毫秒;失败 null。仅读不验(token 由网关签发,worker 信任之)。 */
 function decodeExpMs(token: string): number | null {
@@ -105,6 +112,7 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
       method,
       headers: headers(token),
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(STATE_TIMEOUT_MS),
     });
     if (r.status === 404) return null as unknown as T;
     if (!r.ok) {
@@ -145,10 +153,20 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     b.frames = [];
     const token = b.token;
     b.chain = b.chain.then(async () => {
-      try {
-        await reqJson('POST', `/runs/${encodeURIComponent(runId)}/stream`, token, { frames });
-      } catch (err: any) {
-        console.error(`[tangu-worker] flush events failed run=${runId}:`, err?.message || err);
+      // 投递语义 = at-least-once:若 server 已提交但响应丢失(超时),重试会重发 → 该批帧可能在 SSE
+      // 回放里重复(append-only 无幂等键)。这是少见的"重复 token/状态"显示态,远好于此前的丢帧
+      // (丢 'done' → 客户端永远等不到结束=卡死)。如需精确一次,后续在 server 侧按 (runId, frameSeq) 去重。
+      for (let attempt = 0; attempt < FLUSH_MAX_RETRY; attempt++) {
+        try {
+          await reqJson('POST', `/runs/${encodeURIComponent(runId)}/stream`, token, { frames });
+          return;
+        } catch (err: any) {
+          if (attempt === FLUSH_MAX_RETRY - 1) {
+            console.error(`[tangu-worker] flush events failed run=${runId} (放弃,共 ${FLUSH_MAX_RETRY} 次):`, err?.message || err);
+            return;
+          }
+          await new Promise((res) => setTimeout(res, FLUSH_RETRY_BASE_MS * (attempt + 1)));
+        }
       }
     });
     return b.chain;

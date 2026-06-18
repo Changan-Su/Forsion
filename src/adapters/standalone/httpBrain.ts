@@ -27,12 +27,19 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     'Content-Type': 'application/json',
   });
 
+  // 所有 brain 请求加超时:thin worker 的 fetch 此前无超时,上游(模型/网关/网络)一挂死,整条 run
+  // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
+  const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
+  const reqSignal = (s?: AbortSignal): AbortSignal => s ?? AbortSignal.timeout(REQ_TIMEOUT_MS);
+  const toB64 = (c: Buffer | string): string =>
+    (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf-8')).toString('base64');
+
   async function postJson<T>(path: string, body: any, signal?: AbortSignal): Promise<T> {
     const r = await fetch(`${base}${path}`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(body),
-      signal,
+      signal: reqSignal(signal),
     });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
@@ -42,14 +49,14 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   }
 
   async function getJson<T>(path: string): Promise<T> {
-    const r = await fetch(`${base}${path}`, { headers: authHeaders() });
+    const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal: reqSignal() });
     if (r.status === 404) return null as unknown as T;
     if (!r.ok) throw new Error(`brain ${path} ${r.status}`);
     return (await r.json()) as T;
   }
 
   async function deleteJson<T>(path: string): Promise<T> {
-    const r = await fetch(`${base}${path}`, { method: 'DELETE', headers: authHeaders() });
+    const r = await fetch(`${base}${path}`, { method: 'DELETE', headers: authHeaders(), signal: reqSignal() });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
       throw new LlmError(r.status, detail || `brain ${path} ${r.status}`);
@@ -60,54 +67,76 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // ── LLM 流式:读 SSE,逐条转回 onToken/onReasoning/onToolCallDelta,done 时返回累积结果 ──
   async function streamProviderCompletion(opts: StreamOpts): Promise<StreamResult> {
     const modelId = String((opts.payload as any)?.__forsion_model_id ?? '');
-    const r = await fetch(`${base}/api/brain/llm/stream`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ modelId, payload: opts.payload }),
-      signal: opts.signal,
-    });
-    if (!r.ok || !r.body) {
-      const detail = await r.text().catch(() => '');
-      throw new LlmError(r.status || 502, detail || `brain stream ${r.status}`);
+    // 流式空闲看门狗:上游若 STREAM_IDLE_MS 内无新帧(模型/网关挂死、连接半开)则主动 abort,使
+    // reader.read() 抛出而非无限 await(否则 run 卡死,且 worker 按 session 串行 → 整个 session 后续
+    // run 全堵)。同时把外部 run abort 转发给内部 controller(组合两个中止源,不依赖 AbortSignal.any)。
+    const STREAM_IDLE_MS = Number(process.env.TANGU_STREAM_IDLE_TIMEOUT_MS) || 120_000;
+    const ac = new AbortController();
+    const onAbort = () => ac.abort((opts.signal as any)?.reason ?? new Error('aborted'));
+    if (opts.signal) {
+      if (opts.signal.aborted) ac.abort((opts.signal as any).reason);
+      else opts.signal.addEventListener('abort', onAbort, { once: true });
     }
-
-    const result: StreamResult = {
-      content: '',
-      reasoning: '',
-      toolCalls: [],
-      usage: { prompt_tokens: 0, completion_tokens: 0 },
+    let idle: ReturnType<typeof setTimeout> | null = null;
+    const armIdle = () => {
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(() => ac.abort(new LlmError(504, 'brain stream idle timeout')), STREAM_IDLE_MS);
     };
-    const reader = r.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const line = frame.split('\n').find((l) => l.startsWith('data:'));
-        if (!line) continue;
-        let ev: any;
-        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
-        if (ev.t === 'token') { result.content += ev.d; opts.onToken?.(ev.d); }
-        else if (ev.t === 'reasoning') { result.reasoning += ev.d; opts.onReasoning?.(ev.d); }
-        else if (ev.t === 'tool') {
-          opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: ev.argsLen, args: ev.args, argsDelta: ev.argsDelta });
-        } else if (ev.t === 'done') {
-          result.content = ev.content ?? result.content;
-          result.reasoning = ev.reasoning ?? result.reasoning;
-          result.toolCalls = ev.toolCalls ?? [];
-          result.usage = ev.usage ?? result.usage;
-          result.finishReason = ev.finishReason;
-        } else if (ev.t === 'error') {
-          throw new LlmError(ev.status || 502, ev.message || 'brain stream error');
+    try {
+      const r = await fetch(`${base}/api/brain/llm/stream`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ modelId, payload: opts.payload }),
+        signal: ac.signal,
+      });
+      if (!r.ok || !r.body) {
+        const detail = await r.text().catch(() => '');
+        throw new LlmError(r.status || 502, detail || `brain stream ${r.status}`);
+      }
+
+      const result: StreamResult = {
+        content: '',
+        reasoning: '',
+        toolCalls: [],
+        usage: { prompt_tokens: 0, completion_tokens: 0 },
+      };
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      armIdle();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        armIdle(); // 收到帧即重置空闲计时
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const line = frame.split('\n').find((l) => l.startsWith('data:'));
+          if (!line) continue;
+          let ev: any;
+          try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (ev.t === 'token') { result.content += ev.d; opts.onToken?.(ev.d); }
+          else if (ev.t === 'reasoning') { result.reasoning += ev.d; opts.onReasoning?.(ev.d); }
+          else if (ev.t === 'tool') {
+            opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: ev.argsLen, args: ev.args, argsDelta: ev.argsDelta });
+          } else if (ev.t === 'done') {
+            result.content = ev.content ?? result.content;
+            result.reasoning = ev.reasoning ?? result.reasoning;
+            result.toolCalls = ev.toolCalls ?? [];
+            result.usage = ev.usage ?? result.usage;
+            result.finishReason = ev.finishReason;
+          } else if (ev.t === 'error') {
+            throw new LlmError(ev.status || 502, ev.message || 'brain stream error');
+          }
         }
       }
+      return result;
+    } finally {
+      if (idle) clearTimeout(idle);
+      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
     }
-    return result;
   }
 
   return {
@@ -201,13 +230,24 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
     storage: {
-      // standalone 用本地沙箱工作区(getSessionDir 命中本地分支);云端 Penzor snapshot 不可用 → 抛(flush 已 try/catch,非致命)。
-      listDirectory: async () => { throw new Error('cloud storage unavailable in standalone'); },
-      createDirectory: async () => { throw new Error('cloud storage unavailable in standalone'); },
-      getFileContent: async () => { throw new Error('cloud storage unavailable in standalone'); },
-      updateFileContent: async () => { throw new Error('cloud storage unavailable in standalone'); },
-      uploadFile: async () => { throw new Error('cloud storage unavailable in standalone'); },
-      deleteItem: async () => { throw new Error('cloud storage unavailable in standalone'); },
+      // 分离式 worker:经云端 /api/brain/storage/*(对端 routes.ts)把 agent 工作区文件回写 Penzor。
+      // 否则 run 结束的 snapshot(snapshotDirToWorkspace → uploadFile)抛错被吞,文件全丢(这是
+      // 「云端不再往 workspace 放文件」的根因)。userId 由 token 隐含(服务端取鉴权用户),入参 userId
+      // 忽略;appId 由调用方(run 所属 app)给;二进制走 base64。standalone 单机走本地沙箱不会调到这。
+      listDirectory: async (parentId, _userId, appId, filters) =>
+        postJson<any[]>('/api/brain/storage/list', { parentId, appId, filters }),
+      createDirectory: async (_userId, appId, parentId, name) =>
+        postJson<any>('/api/brain/storage/mkdir', { parentId, appId, name }),
+      getFileContent: async (fileId, _userId) => {
+        const r = await postJson<{ contentBase64: string; mimeType: string }>('/api/brain/storage/get', { fileId });
+        return { content: Buffer.from(r.contentBase64 || '', 'base64'), mimeType: r.mimeType };
+      },
+      updateFileContent: async (fileId, _userId, content) => {
+        await postJson('/api/brain/storage/update', { fileId, contentBase64: toB64(content) });
+      },
+      uploadFile: async (_userId, appId, parentId, name, content, mimeType, autoRename) =>
+        postJson<any>('/api/brain/storage/upload', { parentId, appId, name, contentBase64: toB64(content), mimeType, autoRename: !!autoRename }),
+      deleteItem: async (...args: any[]) => postJson<any>('/api/brain/storage/delete', { fileId: args[0] }),
     },
   };
 }

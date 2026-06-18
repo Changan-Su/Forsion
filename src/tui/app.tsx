@@ -8,6 +8,10 @@ import { deps } from '../seams/runtime.js';
 import { createRun } from '../services/runStore.js';
 import { enqueueRun, abortRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
+import { compactSession } from '../services/compaction.js';
+import { modelContextWindow } from '../services/contextBudget.js';
+import { listAgents, getAgent } from '../agents/agentRegistry.js';
+import { loadSpecialAgentsConfig, saveSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { resolveApproval, type ApprovalDecision } from '../services/approvals.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { saveModel } from '../standalone/credStore.js';
@@ -22,9 +26,6 @@ import { ApprovalPrompt } from './components/ApprovalPrompt.js';
 import { InquiryPrompt } from './components/InquiryPrompt.js';
 import type { TuiConfig } from './config.js';
 import type { ApprovalMode } from './types.js';
-
-const COMPACT_PROMPT =
-  '请用简洁的要点总结到目前为止的整段对话，供后续延续使用：用户目标、关键决定/结论、已完成与待办、产出的文件路径。只输出总结本身。';
 
 const RUN_AFFECTING = new Set(['/new', '/resume', '/retry', '/compact']);
 
@@ -42,6 +43,8 @@ interface MutableConfig {
   planMode?: boolean;
   /** 本会话启用的技能 id(/skill <id> 切换;/skills 列出)。 */
   enabledSkillIds?: string[];
+  /** 当前启用的 Normal Agent slug(/agent <slug>;仅用于 /agents 显示 ✓,seedSystem 已注入)。 */
+  activeAgentSlug?: string;
 }
 
 export function App({ boot, storage }: { boot: TuiConfig; storage: string }): ReactElement {
@@ -74,7 +77,6 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   const unsubRef = useRef<null | (() => void)>(null);
   const pendingText = useRef('');
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingCompact = useRef(false);
   const sessionListRef = useRef<SessionRow[]>([]);
 
   const notice = (text: string, tone: 'info' | 'error' | 'success' | 'warn' = 'info'): void =>
@@ -145,7 +147,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         dispatch({ type: 'TOOL_RESULT', id: p.id, name: p.name, result: String(p.result ?? ''), isError: !!p.isError });
         break;
       case 'usage':
-        dispatch({ type: 'USAGE', tokens: (p.prompt || 0) + (p.completion || 0), cost: p.cost || 0, cached: p.cached || 0, iteration: p.iteration || 0 });
+        dispatch({ type: 'USAGE', tokens: (p.prompt || 0) + (p.completion || 0), cost: p.cost || 0, cached: p.cached || 0, iteration: p.iteration || 0, prompt: p.prompt || 0 });
         break;
       case 'status':
         dispatch({ type: 'STATUS', state: p.state, iteration: p.iteration, phase: p.phase });
@@ -169,26 +171,11 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       case 'done':
         flushNow();
         teardownRun();
-        if (pendingCompact.current) {
-          pendingCompact.current = false;
-          dispatch({ type: 'DONE' });
-          const summary = String(p.content || '').trim();
-          if (summary) {
-            setCfg((c) => ({ ...c, seedSystem: '## 之前对话摘要（compact）\n' + summary }));
-            const nid = randomUUID();
-            sessionIdRef.current = nid;
-            setSessionId(nid);
-            void ensureSession(nid, cfgRef.current.model);
-          }
-          notice('✓ 上下文已压缩：后续对话基于摘要继续（token 占用下降）', 'success');
-        } else {
-          dispatch({ type: 'DONE' });
-        }
+        dispatch({ type: 'DONE' });
         break;
       case 'error':
         flushNow();
         teardownRun();
-        pendingCompact.current = false;
         dispatch({ type: 'ERROR', msg: String(p.error || 'error'), aborted: !!p.aborted });
         break;
     }
@@ -344,6 +331,76 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           notice(`当前工作目录：${cfgRef.current.cwd}`);
         }
         return;
+      case '/agents': {
+        try {
+          const all = await listAgents();
+          if (!all.length) { notice('（暂无本地 Normal Agent;用设置或 manage_agent 工具创建）'); return; }
+          const active = cfgRef.current.activeAgentSlug;
+          const lines = all.map((a) => `  ${a.slug === active ? '✓' : ' '} ${a.slug}  ${a.name}${a.description ? ' — ' + a.description : ''}`).join('\n');
+          notice('本地 Normal Agent（/agent <slug> 启用,/agent off 取消）：\n' + lines);
+        } catch (e: any) { notice(`列 agent 失败：${e?.message || e}`, 'error'); }
+        return;
+      }
+      case '/agent': {
+        if (!rest || rest.trim() === 'off') {
+          setCfg((c) => ({ ...c, seedSystem: undefined, activeAgentSlug: undefined }));
+          notice(rest.trim() === 'off' ? '已取消 Normal Agent。' : '用法：/agent <slug>（/agents 列出,/agent off 取消）', rest.trim() === 'off' ? 'success' : 'warn');
+          return;
+        }
+        const def = await getAgent(rest.trim());
+        if (!def) { notice(`未找到 agent：${rest}`, 'error'); return; }
+        setCfg((c) => ({
+          ...c,
+          seedSystem: def.systemPrompt,
+          activeAgentSlug: def.slug,
+          model: def.model || c.model,
+          thinkingLevel: (def.thinkingLevel || c.thinkingLevel) as MutableConfig['thinkingLevel'],
+          maxIterations: def.maxIterations || c.maxIterations,
+          approvalMode: (def.approvalMode || c.approvalMode) as ApprovalMode,
+        }));
+        notice(`已启用 Normal Agent：${def.name}（${def.slug}）。`, 'success');
+        return;
+      }
+      case '/historian': {
+        const c = loadSpecialAgentsConfig().historian;
+        const arg = rest.trim();
+        if (arg === 'on' || arg === 'off') {
+          if (arg === 'on' && !c.modelId && !cfgRef.current.model) { notice('先 /model 选模型再开启', 'warn'); return; }
+          saveSpecialAgentsConfig({ historian: { ...c, enabled: arg === 'on', modelId: c.modelId || cfgRef.current.model } });
+          notice(`Historian 已${arg === 'on' ? '开启' : '关闭'}`, 'success');
+          return;
+        }
+        try {
+          const rows = await query<any[]>(
+            `SELECT action, detail, created_at FROM special_agent_log WHERE user_id = ? AND agent = 'historian' ORDER BY created_at DESC LIMIT 15`,
+            [userId],
+          );
+          const head = `Historian：${c.enabled ? '开启' : '关闭'}（模型 ${c.modelId || '未设'}，标题每 ${c.everyTitleRounds} 轮 / 记忆每 ${c.everyMemoryRounds} 轮）`;
+          const body = rows.length ? rows.map((r) => `  · [${r.action}] ${String(r.detail).slice(0, 60)}`).join('\n') : '  （暂无活动）';
+          notice(`${head}\n${body}\n切换：/historian on|off`);
+        } catch (e: any) { notice(`读取失败：${e?.message || e}`, 'error'); }
+        return;
+      }
+      case '/muse': {
+        const c = loadSpecialAgentsConfig().muse;
+        const arg = rest.trim();
+        if (arg === 'on' || arg === 'off') {
+          if (arg === 'on' && !c.modelId && !cfgRef.current.model) { notice('先 /model 选模型再开启', 'warn'); return; }
+          saveSpecialAgentsConfig({ muse: { ...c, enabled: arg === 'on', modelId: c.modelId || cfgRef.current.model } });
+          notice(`Muse 已${arg === 'on' ? '开启' : '关闭'}（重启或下个巡检周期生效）`, 'success');
+          return;
+        }
+        try {
+          const rows = await query<any[]>(
+            `SELECT title, status FROM muse_todos WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 15`,
+            [userId],
+          );
+          const head = `Muse：${c.enabled ? '开启' : '关闭'}（模型 ${c.modelId || '未设'}，每 ${c.restartWindowHours}h 最多重启 ${c.maxRestartsPerWindow} 次 / TODO ${c.maxTodosPerWindow} 条）`;
+          const body = rows.length ? rows.map((r) => `  · ${r.title}`).join('\n') : '  （暂无 TODO）';
+          notice(`${head}\nTODO：\n${body}\n切换：/muse on|off`);
+        } catch (e: any) { notice(`读取失败：${e?.message || e}`, 'error'); }
+        return;
+      }
       case '/sessions': {
         try {
           const rows = await listSessions(userId);
@@ -481,9 +538,18 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           notice('未设置模型：先用 /model <id> 选择', 'warn');
           return;
         }
+        if (activeRunId.current) {
+          notice('有运行中的任务，待其结束后再压缩。', 'warn');
+          return;
+        }
         notice('正在压缩上下文…');
-        pendingCompact.current = true;
-        startRun(COMPACT_PROMPT);
+        void compactSession(sessionIdRef.current, cfgRef.current.model)
+          .then((r) =>
+            r.ok
+              ? notice(`已压缩：折叠 ${r.summarizedCount ?? 0} 条消息为摘要，后续对话从此精简续接。`)
+              : notice(`无需压缩：${r.reason || '没有可压缩的内容'}`, 'warn'),
+          )
+          .catch((e: any) => notice(`压缩失败：${e?.message || e}`, 'error'));
         return;
       default:
         notice(`未知命令：${cmd}（/help 看全部）`, 'error');
@@ -526,6 +592,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         approvalMode={cfg.approvalMode}
         status={state.status}
         tokens={state.usage.total}
+        ctxPct={cfg.model ? (state.usage.lastPrompt / modelContextWindow(cfg.model)) * 100 : 0}
         busy={state.busy}
       />
       {state.approval ? (

@@ -7,7 +7,7 @@ export const initialState: UiState = {
   live: null,
   busy: false,
   status: { state: 'idle', iteration: 0 },
-  usage: { total: 0, cost: 0, cached: 0 },
+  usage: { total: 0, cost: 0, cached: 0, lastPrompt: 0 },
   approval: null,
   inquiry: null,
 };
@@ -102,7 +102,7 @@ export function reducer(state: UiState, action: UiAction): UiState {
     case 'USAGE':
       return {
         ...state,
-        usage: { total: state.usage.total + action.tokens, cost: state.usage.cost + action.cost, cached: state.usage.cached + action.cached },
+        usage: { total: state.usage.total + action.tokens, cost: state.usage.cost + action.cost, cached: state.usage.cached + action.cached, lastPrompt: action.prompt || state.usage.lastPrompt },
         status: { ...state.status, iteration: action.iteration },
       };
 

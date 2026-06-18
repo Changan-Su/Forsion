@@ -36,6 +36,7 @@ const PLAN_MODE_TOOLS = new Set([
   'read_log', 'use_skill', 'todo_write', 'todo_read',
   'list_processes', 'read_process_output',
   'delegate', 'ask_user', 'exit_plan_mode',
+  'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)
 ]);
 
 /** 注册一个 provider。同 id 幂等覆盖(保持原位置,热加载安全)。 */

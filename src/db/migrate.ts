@@ -77,10 +77,58 @@ export async function runMigration(): Promise<void> {
     )
   `));
 
+  // ── 第二轮新增表（本地 Special Agent + 上下文压缩;所有方言,ddl() 把 JSONB→SQLite TEXT）──
+  // Special Agent 为本地特性(桌面/TUI)；云端建这些表只是防御性空表,零写入、零影响。
+
+  // Muse 后台 agent 产出的 TODO 清单（本地隔离）。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS muse_todos (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      source_session_id VARCHAR(36),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_muse_todos_user ON muse_todos(user_id, status)`);
+
+  // Special Agent（Historian/Muse）人类可读活动流（驱动工作视图）。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS special_agent_log (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      agent VARCHAR(16) NOT NULL,
+      action VARCHAR(48) NOT NULL,
+      detail TEXT,
+      session_ref VARCHAR(36),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_special_agent_log_user ON special_agent_log(user_id, agent, created_at)`);
+
+  // 会话压缩检查点：hydrate 时用 summary + through_timestamp 之后的消息重建上下文（前缀稳定,守 prompt-cache）。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS session_summaries (
+      id VARCHAR(36) PRIMARY KEY,
+      session_id VARCHAR(36) NOT NULL,
+      summary TEXT NOT NULL,
+      through_timestamp BIGINT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id)`);
+
   // 以下迁移仅对共享云库 / 外部 Postgres 生效：standalone(SQLite) 的 base schema(STANDALONE_SCHEMA)
   // 已完整建好 chat_sessions/chat_messages 的全部列，且 SQLite 的 ALTER ADD COLUMN 不支持
   // IF NOT EXISTS、也无 pg_constraint 目录，故 sqlite 形态在此提前返回，跳过整段 PG-only 迁移。
   if (getDbType() !== 'postgres') {
+    // 老 SQLite 库补 kind 列（base schema 已含;此 ALTER 兜旧库。SQLite 不支持 IF NOT EXISTS,
+    // 重复列报错吞掉即幂等)。隔离 Special Agent 工作会话不进会话列表。
+    try { await query(`ALTER TABLE chat_sessions ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT 'user'`); }
+    catch { /* 列已存在 */ }
     console.log('✅ [agent-core] migrations done (sqlite：base schema 已含全部列)');
     return;
   }
@@ -112,6 +160,13 @@ export async function runMigration(): Promise<void> {
     await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_historian ON chat_sessions(app_id, archived, updated_at)`);
   } catch (e: any) {
     console.warn('[agent-core] historian 列迁移失败：', e?.message || e);
+  }
+
+  // 会话 kind（user|historian|muse）：隔离 Special Agent 工作会话不进列表。幂等。
+  try {
+    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'user'`);
+  } catch (e: any) {
+    console.warn('[agent-core] chat_sessions.kind 列迁移失败：', e?.message || e);
   }
 
   // 会话级 agent 配置 + emoji（桌面端会话设置;幂等,云端已有同名列时为 no-op）。

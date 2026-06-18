@@ -33,6 +33,7 @@ export function StatusBar({
   approvalMode,
   status,
   tokens,
+  ctxPct,
   busy,
 }: {
   model: string;
@@ -41,16 +42,18 @@ export function StatusBar({
   approvalMode: ApprovalMode;
   status: RunStatus;
   tokens: number;
+  ctxPct?: number;
   busy: boolean;
 }): ReactElement {
   const spin = useSpinner(busy);
   const phase = status.phase ? ` ${status.phase}` : '';
   const stateText = busy ? `${status.state}${status.iteration ? ` ·第${status.iteration + 1}轮` : ''}${phase}` : 'idle';
+  const ctx = typeof ctxPct === 'number' && ctxPct > 0 ? ` · ctx ${Math.min(100, Math.round(ctxPct))}%` : '';
   return (
     <Box marginTop={1}>
       <Text color={busy ? 'white' : theme.dim}>{spin} </Text>
       <Text color={theme.dim}>
-        {model || '⚠ 无模型(/model)'} · {execMode === 'host' ? shortCwd(cwd) : 'sandbox'} · {approvalMode} · ⛁ {tokens.toLocaleString()} tok · {stateText}
+        {model || '⚠ 无模型(/model)'} · {execMode === 'host' ? shortCwd(cwd) : 'sandbox'} · {approvalMode} · ⛁ {tokens.toLocaleString()} tok{ctx} · {stateText}
       </Text>
     </Box>
   );

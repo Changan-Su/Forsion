@@ -4,7 +4,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  AgentConfig, AgentRunEvent, Attachment, ModelsResponse, SessionRecord, SkillInfo, TanguDesktopConfig, UiMessage, WorkspaceDescriptor,
+  AgentConfig, AgentRunEvent, Attachment, ModelsResponse, NormalAgentDef, SessionRecord, SkillInfo, TanguDesktopConfig, UiMessage, WorkspaceDescriptor,
 } from './types'
 import { CLOUD_WORKSPACE_KEY } from './types'
 import * as api from './services/backendService'
@@ -15,6 +15,8 @@ import { ChatArea } from './components/ChatArea'
 import { MessageInput } from './components/MessageInput'
 import { SettingsModal } from './components/SettingsModal'
 import { RightPanel } from './components/RightPanel'
+import { HistorianView } from './components/HistorianView'
+import { MuseView } from './components/MuseView'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
 import { resolveInitialMode, resolveInitialPreset } from './theme/registry'
 import { applyTheme } from './theme/loader'
@@ -79,9 +81,13 @@ export function App(): React.JSX.Element {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [modelsResp, setModelsResp] = useState<ModelsResponse | null>(null)
   const [skillsList, setSkillsList] = useState<SkillInfo[] | null>(null)
+  const [agentDefs, setAgentDefs] = useState<NormalAgentDef[]>([])
+  const [specialView, setSpecialView] = useState<'historian' | 'muse' | null>(null)
   const [messagesBySession, setMessagesBySession] = useState<Record<string, UiMessage[]>>({})
   const [configBySession, setConfigBySession] = useState<Record<string, AgentConfig>>({})
   const [runningBySession, setRunningBySession] = useState<Record<string, string>>({})
+  // 会话上下文/消耗:ctx=最近一轮真实 prompt tokens(占比用);base=已完成 run 累计;live=当前 run 累计。
+  const [usageBySession, setUsageBySession] = useState<Record<string, { ctx: number; base: number; live: number }>>({})
   const [unread, setUnread] = useState<Set<string>>(loadUnread)
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -237,6 +243,13 @@ export function App(): React.JSX.Element {
         }))
         if (pl.file) toast(t('app.planArchived', { file: pl.file }))
         break
+      case 'usage':
+        // ctx=本轮真实 prompt(占比);live=本 run 累计 tokens。会话消耗 = base + live。
+        setUsageBySession((prev) => {
+          const u = prev[sessionId] || { ctx: 0, base: 0, live: 0 }
+          return { ...prev, [sessionId]: { ctx: pl.prompt || u.ctx, base: u.base, live: pl.total || u.live } }
+        })
+        break
       case 'done':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m,
@@ -245,6 +258,12 @@ export function App(): React.JSX.Element {
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
+        // run 结束:把本 run 的 live 累计并入 base(与持久化的 agent_runs.tokens_total 一致),live 归零。
+        setUsageBySession((prev) => {
+          const u = prev[sessionId]
+          if (!u) return prev
+          return { ...prev, [sessionId]: { ctx: u.ctx, base: u.base + u.live, live: 0 } }
+        })
         endRun(sessionId, runId)
         break
       case 'error':
@@ -301,6 +320,8 @@ export function App(): React.JSX.Element {
     void api.listModels(c).then(setModelsResp).catch(() => setModelsResp(null))
     // 技能目录(斜杠命令 /skill:* 用);失败静默。
     void api.listSkills(c).then(setSkillsList).catch(() => setSkillsList(null))
+    // 本地 Normal Agent 目录(斜杠 /agent:* 用;云端 404 → 空)。
+    void api.listAgents(c).then(setAgentDefs).catch(() => setAgentDefs([]))
   }, [refreshSessions, toast, t])
 
   useEffect(() => {
@@ -381,6 +402,10 @@ export function App(): React.JSX.Element {
           listActiveRuns(cfgRef.current, activeId),
         ])
         setConfigBySession((prev) => ({ ...prev, [activeId]: config }))
+        // 会话累计 token 作 base 种子(跨 run 求和);失败不阻断。
+        void api.getSessionUsage(cfgRef.current, activeId)
+          .then((base) => setUsageBySession((prev) => ({ ...prev, [activeId]: { ctx: prev[activeId]?.ctx || 0, base, live: 0 } })))
+          .catch(() => {})
         setMessagesBySession((prev) => {
           // SSE 已在写的消息(本地比远端新)保留
           const existing = prev[activeId] || []
@@ -560,6 +585,8 @@ export function App(): React.JSX.Element {
         ],
       }))
       subscribeRun(sessionId, r.runId, r.assistantMessageId)
+      // 新 run 起步:live 归零(base 保留),usage 事件会重新累计本 run。
+      setUsageBySession((prev) => ({ ...prev, [sessionId]: { ctx: prev[sessionId]?.ctx || 0, base: prev[sessionId]?.base || 0, live: 0 } }))
       // 自动命名:首条消息给 New Chat 改名
       const sess = sessions.find((s) => s.id === sessionId)
       if (sess && (!sess.title || sess.title === 'New Chat')) {
@@ -578,6 +605,20 @@ export function App(): React.JSX.Element {
     const runId = runningBySession[sid]
     if (runId) void abortRun(cfgRef.current, runId)
   }, [runningBySession])
+
+  // 手动压缩上下文(/compact 或输入栏按钮):生成持久化总结检查点,后续 run 起步即精简。
+  const compact = useCallback(async () => {
+    const sid = activeIdRef.current
+    if (!sid) return
+    const modelId = sessions.find((s) => s.id === sid)?.model_id || cfgRef.current.modelId || modelsResp?.defaultModelId || ''
+    toast(t('input.compacting'))
+    try {
+      const r = await api.compactSession(cfgRef.current, sid, modelId)
+      toast(r.ok ? t('input.compactDone', { n: r.summarizedCount || 0 }) : t('input.compactSkip', { reason: r.reason || '' }))
+    } catch (e: any) {
+      toast(t('input.compactFail', { e: e?.message || e }), true)
+    }
+  }, [sessions, modelsResp, toast, t])
 
   const decideApproval = useCallback(
     async (messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>) => {
@@ -674,6 +715,20 @@ export function App(): React.JSX.Element {
     })
   }, [toast, t])
 
+  /** 会话内选用 Normal Agent(/agent:<slug> 斜杠命令;''=取消):写 agent_config.agentSlug,有模型则应用会话模型。 */
+  const selectSessionAgent = useCallback((slug: string) => {
+    const sid = activeIdRef.current
+    if (!sid) return
+    const def = slug ? agentDefs.find((a) => a.slug === slug) : null
+    setConfigBySession((prev) => {
+      const next = { ...(prev[sid] || {}), agentSlug: slug || undefined }
+      void api.putSessionConfig(cfgRef.current, sid, next).catch(() => {})
+      return { ...prev, [sid]: next }
+    })
+    if (def?.model) setSessionModel(def.model)
+    toast(def ? t('input.agentActive', { name: def.name }) : t('input.agentCleared'))
+  }, [agentDefs, setSessionModel, toast, t])
+
   /** 兑现询问(ask_user/exit_plan_mode 的询问卡)。 */
   const answerInquiry = useCallback(
     async (messageId: string, inquiryId: string, answer: string) => {
@@ -731,6 +786,11 @@ export function App(): React.JSX.Element {
     () => sessions.find((s) => s.id === activeId) || archivedSessions.find((s) => s.id === activeId) || null,
     [sessions, archivedSessions, activeId],
   )
+  const activeModel = useMemo(
+    () => (modelsResp?.models || []).find((m) => m.id === (activeSession?.model_id || cfg.modelId || modelsResp?.defaultModelId || '')) || null,
+    [modelsResp, activeSession, cfg.modelId],
+  )
+  const activeUsage = (activeId && usageBySession[activeId]) || { ctx: 0, base: 0, live: 0 }
   const activeMessages = (activeId && messagesBySession[activeId]) || []
   const running = !!(activeId && runningBySession[activeId])
   const runningIds = useMemo(() => new Set(Object.keys(runningBySession)), [runningBySession])
@@ -747,9 +807,12 @@ export function App(): React.JSX.Element {
         activeId={activeId}
         runningIds={runningIds}
         unreadIds={unread}
-        onSelect={setActiveId}
+        onSelect={(id) => { setSpecialView(null); setActiveId(id) }}
+        showSpecial={!!window.tangu?.backendStatus}
+        specialView={specialView}
+        onOpenSpecial={(v) => setSpecialView(v)}
         workspaces={workspaces}
-        onNewInWorkspace={(ws) => void createInWorkspace(ws)}
+        onNewInWorkspace={(ws) => { setSpecialView(null); void createInWorkspace(ws) }}
         onAddWorkspace={() => void addLocalWorkspace()}
         onRename={(id, t) => void renameSession(id, t)}
         onArchive={(id, a) => void archiveSession(id, a)}
@@ -807,6 +870,11 @@ export function App(): React.JSX.Element {
             />
           ) : (
             <>
+              {specialView === 'historian' ? (
+                <HistorianView cfg={cfg} />
+              ) : specialView === 'muse' ? (
+                <MuseView cfg={cfg} sessions={sessions} onInjected={(sid) => { setSpecialView(null); setActiveId(sid) }} />
+              ) : (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <ChatArea
                   messages={activeMessages}
@@ -830,14 +898,22 @@ export function App(): React.JSX.Element {
                   skills={skillsList}
                   enabledSkillIds={execConfig.enabledSkillIds || []}
                   onToggleSkill={toggleSessionSkill}
+                  agents={agentDefs}
+                  activeAgentSlug={execConfig.agentSlug}
+                  onSelectAgent={selectSessionAgent}
                   onNewSession={() => void newSession()}
                   onOpenSettings={() => setSettingsOpen(true)}
                   onExecConfigChange={setExecConfig}
                   onSend={send}
                   onStop={stop}
+                  contextWindow={activeModel?.contextWindow || 0}
+                  ctxTokens={activeUsage.ctx}
+                  sessionTokens={activeUsage.base + activeUsage.live}
+                  onCompact={compact}
                 />
               </div>
-              {rightOpen && activeId && (
+              )}
+              {rightOpen && activeId && !specialView && (
                 <RightPanel
                   cfg={cfg}
                   sessionId={activeId}

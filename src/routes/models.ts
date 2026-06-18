@@ -16,13 +16,15 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
+import { modelContextWindow } from '../services/contextBudget.js';
 
 const router = Router();
 
 router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const profile = deps().profile;
-    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct' }> = [];
+    // contextWindow 供客户端「上下文占比」进度条用(per-model 覆盖 ?? 全局默认)。
+    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; contextWindow: number }> = [];
 
     let forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null } = { status: 'ok', detail: null };
     let cloud: any[] = [];
@@ -43,7 +45,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     }
     for (const m of cloud) {
       if (!m?.id) continue;
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion' });
+      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', contextWindow: modelContextWindow(m.id, m) });
     }
     if (forsion.status === 'ok' && cloud.length === 0) {
       // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。
@@ -60,7 +62,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     const directProviders = deps().brain.models.listDirectProviders?.() ?? [];
     for (const p of directProviders) {
       for (const mid of p.modelIds ?? []) {
-        models.push({ id: mid, name: mid, provider: p.providerId, source: 'direct' });
+        models.push({ id: mid, name: mid, provider: p.providerId, source: 'direct', contextWindow: modelContextWindow(mid) });
       }
     }
 

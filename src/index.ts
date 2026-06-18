@@ -19,6 +19,8 @@ import modelsRouter from './routes/models.js';
 import providersRouter from './routes/providers.js';
 import memoryRouter from './routes/memory.js';
 import assetsRouter from './routes/assets.js';
+import agentsRouter from './routes/agents.js';
+import specialRouter from './routes/special.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { failStaleRuns } from './services/runStore.js';
@@ -28,6 +30,7 @@ import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './
 import { startSessionReaper, stopSessionReaper, reapOrphanSessions } from './sandbox/sessionSandbox.js';
 import { loadHistorianConfig } from './services/historianConfig.js';
 import { startHistorian, stopHistorian } from './services/historian.js';
+import { startMuseSupervisor, stopMuseSupervisor } from './services/muse.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
 
 export interface TanguModule {
@@ -70,6 +73,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(providersRouter);
   dataRouter.use(memoryRouter);
   dataRouter.use(assetsRouter);
+  dataRouter.use(agentsRouter);
+  dataRouter.use(specialRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {
     // 进程重启自愈:遗留 running 标 failed → 重新入队仍在飞的 run(顺序不可颠倒)。
@@ -100,6 +105,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
       startHistorian();
     }
 
+    // Muse(本地后台常驻 Special Agent):supervisor 自带 isLocal 闸门——仅 host-exec profile
+    //（standalone/desktop/TUI）生效,云端/worker(hostExec=false)为 no-op。不受 opts 控制。
+    startMuseSupervisor();
+
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
     if (opts?.profilePolling !== false) deps().profileStore.start();
@@ -109,6 +118,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopCacheJanitor();
     stopSessionReaper();
     stopHistorian();
+    stopMuseSupervisor();
     deps().profileStore.dispose();
     abortAllRuns();
     disposeAllProcesses(); // run_background 的子进程(防热加载/退出泄漏)

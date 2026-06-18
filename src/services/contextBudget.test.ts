@@ -4,6 +4,8 @@ import {
   INPUT_HARD_RATIO,
   INPUT_WARN_RATIO,
   COMPACT_TRIGGER_RATIO,
+  FORCE_COMPACT_RATIO,
+  modelContextWindow,
   estimateTokensRough,
   estimateMessageTokens,
   estimateMessagesTokens,
@@ -11,6 +13,24 @@ import {
   capToolResult,
   capHistoryContent,
 } from './contextBudget.js';
+
+describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
+  it('FORCE_COMPACT_RATIO is 0.95 and above COMPACT_TRIGGER_RATIO', () => {
+    expect(FORCE_COMPACT_RATIO).toBe(0.95);
+    expect(FORCE_COMPACT_RATIO).toBeGreaterThan(COMPACT_TRIGGER_RATIO);
+  });
+  it('falls back to global default with no override/obj', () => {
+    expect(modelContextWindow(undefined)).toBe(CONTEXT_WINDOW_TOKENS);
+    expect(modelContextWindow('whatever')).toBe(CONTEXT_WINDOW_TOKENS);
+  });
+  it('reads context_window / contextWindow from the model object', () => {
+    expect(modelContextWindow('m', { context_window: 200000 })).toBe(200000);
+    expect(modelContextWindow('m', { contextWindow: 32000 })).toBe(32000);
+  });
+  it('ignores sub-4k garbage windows', () => {
+    expect(modelContextWindow('m', { context_window: 100 })).toBe(CONTEXT_WINDOW_TOKENS);
+  });
+});
 
 describe('contextBudget constants', () => {
   it('hold the audited ratios', () => {

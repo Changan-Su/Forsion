@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query, getNowSql } from '../core/db.js';
 import { resolveProfile } from '../seams/appProfile.js';
+import { compactSession } from '../services/compaction.js';
 
 const router = Router();
 
@@ -46,9 +47,10 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${req.query.app_id}` });
     const archived = req.query.archived === 'true';
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
+    // kind = 'user' 排除 Special Agent（historian/muse）工作会话——它们隔离不进会话列表。
     const rows = await query<any[]>(
       `SELECT ${SESSION_COLS} FROM chat_sessions
-       WHERE user_id = ? AND app_id = ? AND archived = ?
+       WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user'
        ORDER BY updated_at DESC LIMIT ${limit}`,
       [userId, profile.appId, archived],
     );
@@ -160,6 +162,38 @@ router.get('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
     res.json({ agent_config: parseMaybeJson(s.agent_config) || {} });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'get config failed' });
+  }
+});
+
+// 本会话累计 token 消耗（跨 run 求和），供客户端「本会话 token」显示。
+router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const rows = await query<any[]>(
+      `SELECT COALESCE(SUM(tokens_total), 0) AS total FROM agent_runs WHERE session_id = ?`,
+      [req.params.id],
+    );
+    res.json({ tokensTotal: Number(rows[0]?.total) || 0 });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'usage failed' });
+  }
+});
+
+// 手动压缩上下文（slash / 按钮触发）：生成并持久化一个总结检查点，后续 run 起步即精简。
+router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || '';
+    if (!modelId) return res.status(400).json({ detail: '需要 model_id 才能压缩（会话未设模型）' });
+    const r = await compactSession(req.params.id, modelId);
+    if (!r.ok) return res.json({ ok: false, reason: r.reason });
+    res.json({ ok: true, summarizedCount: r.summarizedCount, throughTimestamp: r.throughTimestamp });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'compact failed' });
   }
 });
 

@@ -138,7 +138,7 @@ export function createSqlStateStore(): StateStore {
     },
     async listSessionMessagesWindow(sessionId, limit, offset): Promise<RawMessageRow[]> {
       return await query<any[]>(
-        `SELECT id, role, content, tool_calls, attachments FROM chat_messages
+        `SELECT id, role, content, tool_calls, attachments, timestamp FROM chat_messages
          WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`,
         [sessionId, limit, offset],
       );

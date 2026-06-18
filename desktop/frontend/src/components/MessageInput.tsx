@@ -8,7 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Send, Square, Plus, Mic, ImagePlus, X, Brain, ClipboardList, Check, ChevronDown, FileText,
 } from 'lucide-react'
-import type { AgentConfig, Attachment, ModelInfo, SkillInfo } from '../types'
+import type { AgentConfig, Attachment, ModelInfo, NormalAgentDef, SkillInfo } from '../types'
 import { useI18n } from '../i18n'
 import { groupModelsByProvider } from './ModelGroupList'
 
@@ -53,6 +53,10 @@ export const MessageInput: React.FC<{
   skills?: SkillInfo[] | null
   enabledSkillIds?: string[]
   onToggleSkill?: (id: string) => void
+  /** Normal Agent 选用(斜杠 /agent:<slug>;''=取消)。 */
+  agents?: NormalAgentDef[]
+  activeAgentSlug?: string
+  onSelectAgent?: (slug: string) => void
   onNewSession?: () => void
   onOpenSettings?: () => void
   onExecConfigChange: (patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>) => void
@@ -60,12 +64,19 @@ export const MessageInput: React.FC<{
    *  workspaceFiles:云沙箱拖入消息区的文件,发送时上传到会话工作区。 */
   onSend: (text: string, attachments: Attachment[], workspaceFiles?: Attachment[]) => Promise<boolean>
   onStop: () => void
+  /** 上下文占比 + 会话消耗 + 压缩(输入框下方进度行)。 */
+  contextWindow?: number
+  ctxTokens?: number
+  sessionTokens?: number
+  onCompact?: () => void
 }> = ({
   disabled, running, execConfig,
   models, modelId, onModelChange, thinkingLevel, onThinkingChange,
   maxIterations, onMaxIterationsChange,
-  planMode, onPlanModeChange, skills, enabledSkillIds, onToggleSkill, onNewSession, onOpenSettings,
+  planMode, onPlanModeChange, skills, enabledSkillIds, onToggleSkill,
+  agents, activeAgentSlug, onSelectAgent, onNewSession, onOpenSettings,
   onExecConfigChange, onSend, onStop,
+  contextWindow, ctxTokens, sessionTokens, onCompact,
 }) => {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
@@ -128,6 +139,17 @@ export const MessageInput: React.FC<{
     }
     if (onNewSession) items.push({ cmd: '/new', desc: t('input.slash.new'), run: () => { onNewSession(); close() } })
     if (onOpenSettings) items.push({ cmd: '/skills', desc: t('input.slash.skills'), run: () => { onOpenSettings(); close() } })
+    if (onCompact) items.push({ cmd: '/compact', desc: t('input.slash.compact'), run: () => { onCompact(); close() } })
+    if (onSelectAgent && agents && agents.length) {
+      for (const a of agents) {
+        items.push({
+          cmd: `/agent:${a.slug}`,
+          desc: `${activeAgentSlug === a.slug ? '✓ ' : ''}${a.name}${a.description ? ` — ${a.description}` : ''}`,
+          run: () => { onSelectAgent(a.slug); close() },
+        })
+      }
+      if (activeAgentSlug) items.push({ cmd: '/agent:off', desc: t('input.agentCleared'), run: () => { onSelectAgent(''); close() } })
+    }
     if (onToggleSkill) {
       const enabled = new Set(enabledSkillIds || [])
       for (const s of skills || []) {
@@ -140,7 +162,7 @@ export const MessageInput: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planMode, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, enabledSkillIds, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onOpenSettings, onToggleSkill])
+  }, [planMode, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, enabledSkillIds, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onOpenSettings, onToggleSkill, onCompact, agents, activeAgentSlug, onSelectAgent])
 
   const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
   const slashMatches = useMemo<SlashItem[]>(() => {
@@ -512,6 +534,36 @@ export const MessageInput: React.FC<{
           )}
 
           <span className="grow" />
+
+          {/* 上下文占比 + 本会话 token 消耗 */}
+          {!!contextWindow && contextWindow > 0 && (() => {
+            const pct = Math.min(100, Math.round(((ctxTokens || 0) / contextWindow) * 100))
+            const warn = pct >= 80
+            return (
+              <span
+                className="composer-ctx"
+                title={`${(ctxTokens || 0).toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-dim, #888)', marginRight: 4 }}
+              >
+                <span style={{ width: 52, height: 5, borderRadius: 3, background: 'var(--bg-hover, rgba(127,127,127,0.18))', overflow: 'hidden', display: 'inline-block' }}>
+                  <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: warn ? 'var(--danger, #e5534b)' : 'var(--accent, #6b7cff)' }} />
+                </span>
+                <span>{t('input.ctxLabel')} {pct}%</span>
+                {!!sessionTokens && sessionTokens > 0 && <span>· {t('input.sessionTokens', { n: sessionTokens.toLocaleString() })}</span>}
+              </span>
+            )
+          })()}
+          {onCompact && (
+            <button
+              className="composer-chip"
+              title={t('input.slash.compact')}
+              onClick={() => onCompact()}
+              disabled={disabled || running}
+            >
+              <FileText size={13} />
+              <span className="chip-label">{t('input.compact')}</span>
+            </button>
+          )}
 
           {showModelChip && (
             <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>

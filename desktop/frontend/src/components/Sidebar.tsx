@@ -4,7 +4,7 @@
  * 折叠态存 localStorage(键=工作区 key)。右键/省略号菜单 + 内联重命名,标记层 token CSS。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, Settings, ChevronDown, ChevronRight, Folder, Cloud, FolderPlus } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, Settings, ChevronDown, ChevronRight, Folder, Cloud, FolderPlus, History, Sparkles } from 'lucide-react'
 import { CLOUD_WORKSPACE_KEY, type SessionRecord, type WorkspaceDescriptor } from '../types'
 import { BrandLogo } from './BrandLogo'
 import { AccountCard } from './AccountCard'
@@ -40,6 +40,10 @@ interface SidebarProps {
   onToast?: (text: string, error?: boolean) => void
   /** 账号登录/登出后回调(让上层重连托管后端 / 刷新模型)。 */
   onAuthChange?: () => void
+  /** Special Agents 工作区入口(本地后端才显示);点击进入 Historian/Muse 视图。 */
+  showSpecial?: boolean
+  specialView?: 'historian' | 'muse' | null
+  onOpenSpecial?: (v: 'historian' | 'muse') => void
 }
 
 interface MenuState {
@@ -151,6 +155,23 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
       </div>
 
       <div className="session-list">
+        {p.showSpecial && p.onOpenSpecial && (
+          <div style={{ marginBottom: 6 }}>
+            <div className="ws-group-head">
+              <span className="ws-name" style={{ paddingLeft: 6, opacity: 0.7 }}>
+                <Sparkles size={12} /> {t('sidebar.special.title')}
+              </span>
+            </div>
+            <button className={`session-item${p.specialView === 'historian' ? ' active' : ''}`} onClick={() => p.onOpenSpecial!('historian')}>
+              <span className="session-emoji"><History size={13} /></span>
+              <span className="session-title">Historian</span>
+            </button>
+            <button className={`session-item${p.specialView === 'muse' ? ' active' : ''}`} onClick={() => p.onOpenSpecial!('muse')}>
+              <span className="session-emoji"><Sparkles size={13} /></span>
+              <span className="session-title">Muse</span>
+            </button>
+          </div>
+        )}
         {p.workspaces.map((ws) => {
           const items = grouped.get(ws.key) || []
           const isCollapsed = collapsedGroups.has(ws.key)

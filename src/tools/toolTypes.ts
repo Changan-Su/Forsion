@@ -31,6 +31,8 @@ export interface ToolContext {
   subAgentDepth?: number;
   /** 计划模式(类 Claude plan mode):只暴露只读工具 + exit_plan_mode;custom/MCP 工具一并隐藏。 */
   planMode?: boolean;
+  /** Muse run 标记:仅此时 add_muse_todo(Muse 唯一写权限)可见。 */
+  muse?: boolean;
   /** 本次 run 的模型 id(delegate 子代理沿用父模型)。 */
   modelId?: string;
   /**

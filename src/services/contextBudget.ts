@@ -22,8 +22,38 @@ export const CONTEXT_WINDOW_TOKENS = (() => {
 export const INPUT_HARD_RATIO = 0.5;
 /** 入站 user 消息:估算超窗口 25% → 放行但发警告事件。 */
 export const INPUT_WARN_RATIO = 0.25;
-/** 真实 prompt 用量(或粗估)超窗口 50% → 触发一次 compactContext。 */
+/** 真实 prompt 用量(或粗估)超窗口 50% → 触发一次 compactContext(机械折叠安全网)。 */
 export const COMPACT_TRIGGER_RATIO = 0.5;
+/** 实时上下文用量超窗口此比例(0.95) → 强制一次 compactSession(满载兜底,持久化总结)。 */
+export const FORCE_COMPACT_RATIO = 0.95;
+
+/**
+ * per-model 上下文窗口覆盖表(env `TANGU_MODEL_CONTEXT_WINDOWS` = {modelId: tokens} JSON;解析一次)。
+ * 模型库暂无 window 字段——这是把「每个模型窗口」喂给客户端进度条的最小接缝。
+ */
+const MODEL_WINDOW_OVERRIDES: Record<string, number> = (() => {
+  try {
+    const raw = process.env.TANGU_MODEL_CONTEXT_WINDOWS;
+    if (!raw) return {};
+    const o = JSON.parse(raw);
+    const out: Record<string, number> = {};
+    for (const k of Object.keys(o || {})) {
+      const v = Number(o[k]);
+      if (Number.isFinite(v) && v >= 4_000) out[k] = Math.floor(v);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+})();
+
+/** 解析某模型的上下文窗口:覆盖表 > 模型对象自带(context_window/contextWindow) > 全局默认。 */
+export function modelContextWindow(modelId?: string | null, modelObj?: any): number {
+  if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return MODEL_WINDOW_OVERRIDES[modelId];
+  const fromObj = Number(modelObj?.context_window ?? modelObj?.contextWindow);
+  if (Number.isFinite(fromObj) && fromObj >= 4_000) return Math.floor(fromObj);
+  return CONTEXT_WINDOW_TOKENS;
+}
 
 const PROTECT_FIRST = 3; // system 之后的前 N 条不折叠(任务定义锚点)
 const PROTECT_LAST = 20; // 最近 N 条不折叠(模型工作记忆)

@@ -20,6 +20,8 @@ import { todoProvider } from './builtin/todo.js';
 import { hostProcessProvider } from './builtin/hostProcess.js';
 import { delegateProvider } from './builtin/delegate.js';
 import { interactionProvider } from './builtin/interaction.js';
+import { manageAgentProvider } from './builtin/manageAgent.js';
+import { museTodoProvider } from './builtin/museTodo.js';
 import type { ToolContext, ToolResult, ToolImpl } from './toolTypes.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -46,6 +48,8 @@ registerToolProvider(todoProvider);
 registerToolProvider(hostProcessProvider);
 registerToolProvider(delegateProvider);
 registerToolProvider(interactionProvider);
+registerToolProvider(manageAgentProvider); // host-only:本地 Normal Agent 自创建(append 末尾,保前缀缓存)
+registerToolProvider(museTodoProvider); // Muse 唯一写权限;仅 ctx.muse 可见(普通 run 不暴露,快照不变)
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
 function currentProfile(ctx: ToolContext) {

@@ -18,8 +18,10 @@ import { useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
 import { CHANGELOG } from '../changelog'
 import { ModelGroupList } from './ModelGroupList'
+import { AgentsTab } from './AgentsTab'
+import { SpecialAgentsTab } from './SpecialAgentsTab'
 
-type Tab = 'connection' | 'model' | 'mcp' | 'skills' | 'theme' | 'advanced' | 'developer' | 'about'
+type Tab = 'connection' | 'model' | 'mcp' | 'skills' | 'agents' | 'special' | 'theme' | 'advanced' | 'developer' | 'about'
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 
@@ -397,7 +399,7 @@ export const SettingsModal: React.FC<{
                   [
                     ['connection', t('settings.tab.connection')],
                     ['model', t('settings.tab.model')],
-                    ...(isDesktop ? ([['mcp', 'MCP'], ['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
+                    ...(isDesktop ? ([['mcp', 'MCP'], ['skills', t('settings.tab.skills')], ['agents', t('settings.tab.agents')], ['special', t('settings.tab.special')]] as Array<[Tab, string]>) : []),
                     ['theme', t('settings.tab.theme')],
                     ['advanced', t('settings.tab.advanced')],
                     ...(isDesktop && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
@@ -968,6 +970,10 @@ export const SettingsModal: React.FC<{
                     )}
                   </>
                 )}
+
+                {tab === 'agents' && <AgentsTab cfg={p.cfg} />}
+
+                {tab === 'special' && <SpecialAgentsTab cfg={p.cfg} />}
 
                 {tab === 'theme' && (
                   <>

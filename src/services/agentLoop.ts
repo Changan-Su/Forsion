@@ -17,9 +17,12 @@ import { loadSkillLoadout } from './skillLoadout.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession } from '../sandbox/sessionSandbox.js';
 import {
-  CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO,
+  CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent,
 } from './contextBudget.js';
+import { getLatestSummary, compactSession, foldWorkingWithSummary } from './compaction.js';
+import { getAgent } from '../agents/agentRegistry.js';
+import { onUserRunDone } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
@@ -158,11 +161,16 @@ async function hydrateHistory(sessionId: string, excludeMessageId: string): Prom
   // 显式 LIMIT(=窗口剩余条数)而非裸 OFFSET:SQLite 不允许无 LIMIT 的 OFFSET(PG 允许);
   // 取 [start, n) 区间,n/start 已知,两方言皆合法。
   const rows = await deps().state.listSessionMessagesWindow(sessionId, Math.max(0, n - start), start);
+  // 压缩检查点：见 session_summaries 则丢弃 through_timestamp 及之前的消息，开头注入一条摘要。
+  // fail-safe：无检查点 / 读失败 / 行缺 timestamp(worker) → through=0，行为与未压缩完全一致。
+  const checkpoint = await getLatestSummary(sessionId);
+  const through = checkpoint?.throughTimestamp || 0;
   const out: ChatMessage[] = [];
   let lastUserWithImages = -1; // out 中最新带图 user 消息的下标
   let lastUserImages: ReturnType<typeof normalizeImageAttachments> = [];
   for (const r of rows) {
     if (r.id === excludeMessageId) continue;
+    if (through > 0 && (Number(r.timestamp) || 0) <= through) continue;
     const role = r.role === 'model' ? 'assistant' : r.role;
     if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
     const content = r.content || '';
@@ -180,6 +188,10 @@ async function hydrateHistory(sessionId: string, excludeMessageId: string): Prom
   if (lastUserWithImages >= 0) {
     const m = out[lastUserWithImages] as any;
     m.content = toImageParts(m.content, lastUserImages);
+  }
+  // 图片物化在前(用 out 内下标)、摘要 unshift 在后,避免下标错位。
+  if (checkpoint && through > 0) {
+    out.unshift({ role: 'system', content: '## 此前对话的压缩摘要\n' + checkpoint.summary } as ChatMessage);
   }
   return out;
 }
@@ -206,6 +218,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = input.agentConfig || {};
+  // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
+  // 仅本地形态有 agents 目录;不存在/读失败不阻断 run。模型覆盖由客户端在激活时写入会话 model_id。
+  if (agentConfig.agentSlug) {
+    try {
+      const def = await getAgent(String(agentConfig.agentSlug));
+      if (def) {
+        if (!agentConfig.systemPrompt && def.systemPrompt) agentConfig.systemPrompt = def.systemPrompt;
+        if (agentConfig.maxIterations == null && def.maxIterations != null) agentConfig.maxIterations = def.maxIterations;
+        if (!agentConfig.thinkingLevel && def.thinkingLevel) agentConfig.thinkingLevel = def.thinkingLevel;
+        if (!agentConfig.approvalMode && def.approvalMode) agentConfig.approvalMode = def.approvalMode;
+        if ((!agentConfig.enabledToolIds || !agentConfig.enabledToolIds.length) && def.tools.length) {
+          agentConfig.enabledToolIds = def.tools;
+        }
+      }
+    } catch { /* 加载失败不阻断 */ }
+  }
   // 默认 90(原 20):重试型模型/多步任务很容易把少量轮数耗光被迫收尾;可经会话级 agentConfig.maxIterations
   // (桌面/TUI 的 /loop 指令)调节,安全上限 200 防失控。
   const maxIterations = Math.min(Math.max(1, agentConfig.maxIterations || 90), 200);
@@ -366,6 +394,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const toolCtx: ToolContext = {
       userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools,
       enabledSkillIds, execMode, cwd, approvalMode, profile, modelId, planMode,
+      muse: !!agentConfig.muse,
       collectImage: (img) => {
         if (img && typeof img.url === 'string' && img.url && pendingToolImages.length < MAX_TOOL_IMAGES_PER_ROUND) {
           pendingToolImages.push({ url: img.url });
@@ -409,10 +438,24 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       await publish(runId, 'status', { iteration });
 
-      // 上下文压缩(替代旧的每轮就地 trim——那会让前缀缓存逐轮清零):平时 append-only,
-      // 仅当真实用量(或粗估)越过窗口阈值才一次性批量折叠中段,缓存 miss 摊薄成偶发。
+      // 上下文压缩(替代旧的每轮就地 trim——那会让前缀缓存逐轮清零):平时 append-only。
+      //   ≥95%(FORCE_COMPACT_RATIO):满载兜底——持久化一个总结检查点(下个 run 起步即精简)+ 把当前
+      //     run 的内存数组按摘要折叠(立刻把本轮压下去)。总结失败则退回机械折叠。
+      //   ≥50%(COMPACT_TRIGGER_RATIO):机械批量折叠中段(运行内、不落库),缓存 miss 摊薄成偶发。
       const estPrompt = lastRealPromptTokens || estimateMessagesTokens(workingMessages);
-      if (estPrompt > CONTEXT_WINDOW_TOKENS * COMPACT_TRIGGER_RATIO) {
+      if (modelId && estPrompt > CONTEXT_WINDOW_TOKENS * FORCE_COMPACT_RATIO) {
+        void publish(runId, 'status', { phase: 'compacting', forced: true, iteration });
+        const cr = await compactSession(sessionId, modelId);
+        if (cr.ok && cr.summary) {
+          foldWorkingWithSummary(workingMessages, cr.summary);
+          lastRealPromptTokens = 0;
+          void publish(runId, 'status', { phase: 'compacted', forced: true, iteration });
+        } else {
+          const r = compactContext(workingMessages);
+          if (r.changed) lastRealPromptTokens = 0;
+          void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, iteration });
+        }
+      } else if (estPrompt > CONTEXT_WINDOW_TOKENS * COMPACT_TRIGGER_RATIO) {
         const r = compactContext(workingMessages);
         if (r.changed) {
           lastRealPromptTokens = 0; // 折叠后旧用量失效,下轮重新以真实值为准
@@ -616,6 +659,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await drain(runId); // 确保 token 等事件全部落库后再发 done
     await publish(runId, 'done', { content: finalContent });
     await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
+    // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
+    // fire-and-forget，绝不阻断/影响 run；非本地形态或未启用时内部 no-op。
+    void onUserRunDone(sessionId, userId);
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || err instanceof AbortLikeError;
     const status = aborted ? 'aborted' : 'failed';

@@ -35,8 +35,75 @@ export interface SessionRecord {
   updated_at: string
 }
 
+// ── Special Agents（Historian / Muse;本地）──────────────────────────────────
+export interface HistorianConfig {
+  enabled: boolean
+  modelId: string
+  everyTitleRounds: number
+  everyMemoryRounds: number
+  firstRoundTrigger: boolean
+  prompt: string
+}
+export interface MuseConfig {
+  enabled: boolean
+  modelId: string
+  restartWindowHours: number
+  maxRestartsPerWindow: number
+  maxIterationsPerCycle: number
+  maxTodosPerWindow: number
+  supervisorPollMinutes: number
+  compactAtRatio: number
+  activeHours: { start: number; end: number } | null
+  prompt: string
+  allowedFolders: string[]
+}
+export interface SpecialAgentsConfig { historian: HistorianConfig; muse: MuseConfig }
+
+export interface HistorianActivityItem {
+  id: string
+  action: string
+  detail: string
+  session_ref: string | null
+  created_at: string
+}
+export interface MuseTodo {
+  id: string
+  title: string
+  detail: string | null
+  status: 'pending' | 'injected' | 'done' | 'dismissed'
+  source_session_id: string | null
+  created_at: string
+}
+export interface MuseStatusInfo {
+  enabled: boolean
+  hasModel: boolean
+  running: boolean
+  restartsThisWindow: number
+  maxRestartsPerWindow: number
+  lastCycleAt: number | null
+  lastError: string | null
+  sessionId: string | null
+}
+
+/** 本地 Normal Agent 定义(~/.tangu/agents/<slug>.md;后端 agentRegistry 解析)。 */
+export interface NormalAgentDef {
+  slug: string
+  name: string
+  description: string
+  model: string
+  tools: string[]
+  thinkingLevel: 'off' | 'low' | 'medium' | 'high' | ''
+  maxIterations: number | null
+  approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | ''
+  createdBy: 'user' | 'agent'
+  createdAt: string
+  systemPrompt: string
+}
+
 export interface AgentConfig {
   systemPrompt?: string
+  /** 激活的 Normal Agent slug(后端 agentLoop 解析注入人格/模型/工具)。 */
+  agentSlug?: string
   maxIterations?: number
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high'
   enabledSkillIds?: string[]
@@ -81,6 +148,8 @@ export interface ModelInfo {
   name: string
   provider: string
   source: 'forsion' | 'direct'
+  /** 模型上下文窗口(tokens);输入框「上下文占比」进度条用。后端缺省回退全局默认。 */
+  contextWindow?: number
 }
 
 export interface ModelsResponse {

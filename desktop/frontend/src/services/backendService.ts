@@ -3,7 +3,8 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, MessageRecord, ModelsResponse, SessionRecord, SkillInfo,
+  AgentConfig, HistorianActivityItem, MessageRecord, ModelsResponse, MuseStatusInfo, MuseTodo,
+  NormalAgentDef, SessionRecord, SkillInfo, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
 } from '../types'
 
@@ -66,6 +67,17 @@ export const putSessionConfig = (cfg: TanguDesktopConfig, sessionId: string, con
     body: JSON.stringify(config),
   }).then((r) => r.agent_config)
 
+/** 本会话累计 token 消耗(跨 run 求和)。 */
+export const getSessionUsage = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ tokensTotal: number }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/usage`).then((r) => r.tokensTotal)
+
+/** 手动压缩上下文(生成并持久化总结检查点;后续 run 起步即精简)。 */
+export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, modelId?: string) =>
+  request<{ ok: boolean; reason?: string; summarizedCount?: number }>(
+    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/compact`,
+    { method: 'POST', body: JSON.stringify(modelId ? { model_id: modelId } : {}) },
+  )
+
 // ── 模型 / 技能 / 工具 ──
 export const listModels = (cfg: TanguDesktopConfig) => request<ModelsResponse>(cfg, '/agent/models')
 
@@ -94,6 +106,42 @@ export const deleteUserCloudSkill = (cfg: TanguDesktopConfig, id: string) =>
   request<{ ok: boolean }>(cfg, `/agent/skills/user/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 export const listTools = (cfg: TanguDesktopConfig) => request<ToolsResponse>(cfg, '/agent/tools')
+
+// ── Normal Agent（本地自定义人格;仅本地后端可用,云端返回 404 → 调用方降级空列表）──
+export const listAgents = (cfg: TanguDesktopConfig) =>
+  request<{ agents: NormalAgentDef[] }>(cfg, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
+
+export const saveAgentDef = (cfg: TanguDesktopConfig, def: Partial<NormalAgentDef>, slug?: string) =>
+  request<{ agent: NormalAgentDef }>(
+    cfg,
+    slug ? `/agent/agents/${encodeURIComponent(slug)}` : '/agent/agents',
+    { method: slug ? 'PATCH' : 'POST', body: JSON.stringify(def) },
+  ).then((r) => r.agent)
+
+export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+
+// ── Special Agents（Historian / Muse;本地后端）──
+export const getSpecialConfig = (cfg: TanguDesktopConfig) =>
+  request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config').then((r) => r.config)
+
+export const saveSpecialConfig = (cfg: TanguDesktopConfig, patch: Partial<SpecialAgentsConfig>) =>
+  request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
+
+export const getHistorianActivity = (cfg: TanguDesktopConfig, limit = 50) =>
+  request<{ activity: HistorianActivityItem[] }>(cfg, `/agent/special/historian/activity?limit=${limit}`).then((r) => r.activity)
+
+export const getMuseTodos = (cfg: TanguDesktopConfig, status?: string) =>
+  request<{ todos: MuseTodo[] }>(cfg, `/agent/special/muse/todos${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.todos)
+
+export const patchMuseTodo = (cfg: TanguDesktopConfig, id: string, status: MuseTodo['status']) =>
+  request<{ ok: boolean }>(cfg, `/agent/special/muse/todos/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+
+export const injectMuseTodos = (cfg: TanguDesktopConfig, todoIds: string[], sessionId: string) =>
+  request<{ ok: boolean; runId: string }>(cfg, '/agent/special/muse/todos/inject', { method: 'POST', body: JSON.stringify({ todoIds, sessionId }) })
+
+export const getMuseStatus = (cfg: TanguDesktopConfig) =>
+  request<{ status: MuseStatusInfo }>(cfg, '/agent/special/muse/status').then((r) => r.status)
 
 // ── 记忆 / 日志 ──
 export const getMemory = (cfg: TanguDesktopConfig) =>

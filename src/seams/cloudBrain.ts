@@ -148,7 +148,10 @@ export interface StorageBrain {
     name: string,
     content: Buffer | string,
     mimeType: string,
-    isDeleted?: boolean,
+    // 对应 cloudStorageService.uploadFile 第 7 参 autoRename(默认 true:重名自动改名)。
+    // 调用方(fileWorkspace)恒传 false（先 listDirectory 查重命中走 updateFileContent，
+    // 故 uploadFile 只用于全新文件）。勿误名为 isDeleted —— 接到 is_deleted 会把上传文件标删、悄悄丢快照。
+    autoRename?: boolean,
   ): Promise<any>;
   deleteItem(...args: any[]): Promise<any>;
 }

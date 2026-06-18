@@ -51,6 +51,10 @@ export const providerAuthFile = (): string => join(tanguHome(), 'provider-auth.j
 export const providersFile = (): string => join(tanguHome(), 'providers.json');
 export const mcpConfigFile = (): string => join(tanguHome(), 'mcp.json');
 export const skillsDir = (): string => join(tanguHome(), 'skills');
+/** 本地 Normal Agent 定义目录(<slug>.md,frontmatter + 正文人格;镜像 skills 范式)。 */
+export const agentsDir = (): string => join(tanguHome(), 'agents');
+/** Special Agent(Historian/Muse)配置文件(默认关;桌面/TUI 经端点读写)。 */
+export const specialAgentsConfigFile = (): string => join(tanguHome(), 'special-agents.json');
 export const pgdataDir = (): string => join(tanguHome(), 'pgdata');
 /** 嵌入式 SQLite 本地库文件(TUI / standalone / desktop 三端共用,故本地会话跨前端共享)。 */
 export const stateDbPath = (): string => join(tanguHome(), 'state.db');
@@ -58,5 +62,6 @@ export const stateDbPath = (): string => join(tanguHome(), 'state.db');
 /** 确保 home 及子目录存在(幂等);返回 home 路径。 */
 export function ensureHome(): string {
   mkdirSync(skillsDir(), { recursive: true });
+  mkdirSync(agentsDir(), { recursive: true });
   return tanguHome();
 }
