@@ -486,6 +486,50 @@ a:hover { color: var(--accent-hover); }
   padding: 8px 12px;
   font-size: 13px;
 }
+
+/* 消息悬浮操作条(复制 / 编辑 / 重新生成)+ 内联编辑用户消息 */
+.msg-user-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; max-width: 80%; }
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+.msg-actions.assistant { margin-top: 2px; }
+.msg-row:hover .msg-actions,
+.msg-actions:focus-within { opacity: 1; }
+.msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  transition: color var(--duration-fast), background var(--duration-fast);
+}
+.msg-action-btn:hover { color: var(--text); background: var(--overlay-light); }
+.msg-action-btn.copied { color: var(--green); }
+.msg-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.msg-action-btn:disabled:hover { color: var(--text-faint); background: none; }
+
+.msg-edit { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 560px; }
+.msg-edit-input {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+  padding: 9px 13px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--accent);
+  border-radius: var(--radius-chat-card);
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+}
+.msg-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .streaming-caret::after {
   content: '▍';
   color: var(--accent);

@@ -47,36 +47,44 @@ async function recentTranscript(sessionId: string, limit = 30): Promise<string> 
   return s;
 }
 
-/** 单次轻量补全（系统提示 + transcript）。失败返回 ''。记 usage（默认不扣配额）。 */
-async function complete(modelId: string, system: string, transcript: string, userId: string, maxTokens: number): Promise<string> {
+/** 单次轻量补全（系统提示 + transcript）。失败返回 ''(并打日志说明原因)。记 usage（默认不扣配额）。 */
+async function complete(label: string, modelId: string, system: string, transcript: string, userId: string, maxTokens: number): Promise<string> {
   try {
     const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
     const payload = await deps().brain.llm.buildProviderPayload({
       model, apiModelId,
       messages: [{ role: 'system', content: system }, { role: 'user', content: transcript }] as ChatMessage[],
       projectSource: '', temperature: 0.3, maxTokens, stream: true,
+      provider: (model as any)?.provider,
     } as any);
-    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload });
+    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });
     try {
-      const cost = await deps().billing.calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens);
+      const cost = await deps().billing.calculateCost(modelId, res.usage?.prompt_tokens || 0, res.usage?.completion_tokens || 0);
       const u = await deps().brain.users.getUserById(userId);
       await (deps().billing.logApiUsage as any)(
         u?.username || userId, modelId, model.name, model.provider,
-        res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, 'tangu-historian', cost,
+        res.usage?.prompt_tokens || 0, res.usage?.completion_tokens || 0, true, undefined, 'tangu-historian', cost,
       );
       if (CHARGE_USER) await deps().billing.consumeTokenPoints(userId, cost).catch(() => {});
     } catch { /* 记账失败不阻断 */ }
-    return String(res?.content || '').trim();
-  } catch {
+    const out = String(res?.content || '').trim();
+    if (!out) log(`${label} 模型返回空内容(model=${modelId})`);
+    return out;
+  } catch (e: any) {
+    log(`${label} 模型调用失败(model=${modelId}): ${e?.message || e}`);
     return '';
   }
 }
 
 async function logActivity(userId: string, action: string, detail: string, sessionRef: string): Promise<void> {
-  await query(
-    `INSERT INTO special_agent_log (id, user_id, agent, action, detail, session_ref) VALUES (?, ?, 'historian', ?, ?, ?)`,
-    [uuidv4(), userId, action, detail.slice(0, 1000), sessionRef],
-  ).catch(() => {});
+  try {
+    await query(
+      `INSERT INTO special_agent_log (id, user_id, agent, action, detail, session_ref) VALUES (?, ?, 'historian', ?, ?, ?)`,
+      [uuidv4(), userId, action, detail.slice(0, 1000), sessionRef],
+    );
+  } catch (e: any) {
+    log(`写 special_agent_log 失败(${action}): ${e?.message || e}`);
+  }
 }
 
 function log(msg: string): void {
@@ -120,29 +128,32 @@ export async function onUserRunDone(sessionId: string, userId: string): Promise<
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
 
     if (titleDue) {
-      const title = (await complete(cfg.modelId, TITLE_PROMPT, transcript, userId, 40))
+      const title = (await complete('标题', cfg.modelId, TITLE_PROMPT, transcript, userId, 40))
         .replace(/^["'《「]+|["'》」]+$/g, '')
         .slice(0, 60);
       if (title && title.toUpperCase() !== 'NOTHING') {
-        await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [title, sessionId]).catch(() => {});
+        await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [title, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
         await logActivity(userId, 'title_updated', title, sessionId);
+        log(`已更新标题: ${title}`);
       }
     }
 
     if (memoryDue) {
-      const out = await complete(cfg.modelId, cfg.prompt || DEFAULT_HISTORIAN_PROMPT, transcript, userId, 300);
+      const out = await complete('记忆', cfg.modelId, cfg.prompt || DEFAULT_HISTORIAN_PROMPT, transcript, userId, 300);
       const skip = !out || out.toUpperCase() === 'NOTHING' || out.length < 4 || out.length > 400;
+      log(`记忆判断: ${out ? `"${out.slice(0, 40)}"` : '(空)'} → ${skip ? '跳过' : '写入'}`);
       if (!skip) {
         // 同步进用户 LOG 与 memory（共享云端记忆经 brain）。任一失败不连坐另一。
-        await deps().brain.memory.appendLogEntry(userId, out).catch(() => {});
+        await deps().brain.memory.appendLogEntry(userId, out).then(() => log('已写入 LOG')).catch((e: any) => log(`写 LOG 失败: ${e?.message || e}`));
         await logActivity(userId, 'log_appended', out, sessionId);
         try {
           await deps().brain.memory.appendMemoryEntry(userId, out, { dedup: true });
           await logActivity(userId, 'memory_appended', out, sessionId);
-        } catch { /* memory 写入失败仅记 log 那条 */ }
+          log('已写入 memory');
+        } catch (e: any) { log(`写 memory 失败: ${e?.message || e}`); }
       }
     }
-  } catch {
-    /* 背景任务，任何失败静默 */
+  } catch (e: any) {
+    log(`onUserRunDone 异常: ${e?.message || e}`);
   }
 }

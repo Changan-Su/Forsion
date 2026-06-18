@@ -56,6 +56,13 @@ export const listMessages = (cfg: TanguDesktopConfig, sessionId: string, limit =
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
   ).then((r) => r.messages)
 
+/** 按精确 id 列表删除会话内消息(编辑重发 / 重新生成前截断该点及之后的消息)。 */
+export const deleteMessages = (cfg: TanguDesktopConfig, sessionId: string, ids: string[]) =>
+  request<{ ok: boolean; deleted: number }>(
+    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/messages/delete`,
+    { method: 'POST', body: JSON.stringify({ ids }) },
+  )
+
 export const getSessionConfig = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ agent_config: AgentConfig }>(
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/config`,

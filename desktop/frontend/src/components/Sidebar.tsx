@@ -33,6 +33,10 @@ interface SidebarProps {
   onNewInWorkspace: (ws: WorkspaceDescriptor) => void
   /** 浏览文件夹新增本地工作区。 */
   onAddWorkspace: () => void
+  /** 重命名工作区(改其 project_path 下所有会话的 project_name;系统区不触发)。 */
+  onRenameWorkspace: (ws: WorkspaceDescriptor, name: string) => void
+  /** 移除工作区(删除其下所有会话;磁盘文件夹不动)。 */
+  onRemoveWorkspace: (ws: WorkspaceDescriptor) => void
   onRename: (id: string, title: string) => void
   onArchive: (id: string, archived: boolean) => void
   onDelete: (id: string) => void
@@ -61,6 +65,11 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
   const renameRef = useRef<HTMLInputElement>(null)
+  // 工作区操作菜单 + 内联重命名(与会话各自独立的状态,避免 key/id 串扰)。
+  const [wsMenu, setWsMenu] = useState<{ ws: WorkspaceDescriptor; x: number; y: number } | null>(null)
+  const [wsRenaming, setWsRenaming] = useState<string | null>(null)
+  const [wsDraft, setWsDraft] = useState('')
+  const wsRenameRef = useRef<HTMLInputElement>(null)
 
   // 会话按工作区键分组(cloud=哨兵;本地=project_path);工作区列表来自上层(含空的常驻区)。
   const grouped = useMemo(() => {
@@ -88,25 +97,45 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
   }, [renaming])
 
   useEffect(() => {
-    if (!menu) return
-    const close = () => setMenu(null)
+    if (wsRenaming) wsRenameRef.current?.select()
+  }, [wsRenaming])
+
+  useEffect(() => {
+    if (!menu && !wsMenu) return
+    const close = () => { setMenu(null); setWsMenu(null) }
     window.addEventListener('click', close)
     window.addEventListener('contextmenu', close)
     return () => {
       window.removeEventListener('click', close)
       window.removeEventListener('contextmenu', close)
     }
-  }, [menu])
+  }, [menu, wsMenu])
 
   const openMenu = (e: React.MouseEvent, s: SessionRecord) => {
     e.preventDefault()
     e.stopPropagation()
+    setWsMenu(null) // 另一菜单互斥关闭(stopPropagation 会绕过窗口级关闭处理)
     setMenu({ id: s.id, x: e.clientX, y: e.clientY, archived: s.archived })
+  }
+
+  const openWsMenu = (e: React.MouseEvent, ws: WorkspaceDescriptor) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setMenu(null) // 另一菜单互斥关闭
+    setWsMenu({ ws, x: e.clientX, y: e.clientY })
   }
 
   const commitRename = () => {
     if (renaming && draft.trim()) p.onRename(renaming, draft.trim())
     setRenaming(null)
+  }
+
+  const commitWsRename = () => {
+    if (wsRenaming && wsDraft.trim()) {
+      const ws = p.workspaces.find((w) => w.key === wsRenaming)
+      if (ws) p.onRenameWorkspace(ws, wsDraft.trim())
+    }
+    setWsRenaming(null)
   }
 
   const renderItem = (s: SessionRecord) => (
@@ -178,16 +207,40 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
           return (
             <React.Fragment key={ws.key}>
               <div className="ws-group-head">
-                <button className="ws-group-toggle" onClick={() => toggleGroup(ws.key)} title={ws.path || undefined}>
-                  <span className="session-emoji">
-                    {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                  </span>
-                  <span className="ws-name">
-                    {ws.kind === 'cloud' ? <Cloud size={12} /> : <Folder size={12} />}
-                    {ws.name}
-                    <span style={{ opacity: 0.6 }}>({items.length})</span>
-                  </span>
-                </button>
+                {wsRenaming === ws.key ? (
+                  <div className="ws-group-toggle" style={{ cursor: 'default' }}>
+                    <span className="session-emoji">
+                      {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                    </span>
+                    <input
+                      ref={wsRenameRef}
+                      value={wsDraft}
+                      onChange={(e) => setWsDraft(e.target.value)}
+                      onBlur={commitWsRename}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitWsRename()
+                        if (e.key === 'Escape') setWsRenaming(null)
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        flex: 1, minWidth: 0, background: 'var(--bg-card)', fontSize: 11.5, color: 'var(--text)',
+                        border: 'var(--border-width) solid var(--accent)', borderRadius: 'var(--radius-sm)',
+                        padding: '2px 5px', outline: 'none',
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <button className="ws-group-toggle" onClick={() => toggleGroup(ws.key)} title={ws.path || undefined}>
+                    <span className="session-emoji">
+                      {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                    </span>
+                    <span className="ws-name">
+                      {ws.kind === 'cloud' ? <Cloud size={12} /> : <Folder size={12} />}
+                      {ws.name}
+                      <span style={{ opacity: 0.6 }}>({items.length})</span>
+                    </span>
+                  </button>
+                )}
                 <button
                   className="icon-btn ws-add"
                   title={t('sidebar.newChatIn', { name: ws.name })}
@@ -195,6 +248,15 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
                 >
                   <Plus size={14} />
                 </button>
+                {!ws.system && (
+                  <button
+                    className="icon-btn ws-add"
+                    title={t('sidebar.ws.menu')}
+                    onClick={(e) => openWsMenu(e, ws)}
+                  >
+                    <MoreHorizontal size={14} />
+                  </button>
+                )}
               </div>
               {!isCollapsed && items.map(renderItem)}
             </React.Fragment>
@@ -254,6 +316,31 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
             }}
           >
             <Trash2 size={13} /> {t('sidebar.delete')}
+          </button>
+        </div>
+      )}
+
+      {wsMenu && (
+        <div className="ctx-menu" style={{ left: wsMenu.x, top: wsMenu.y }} onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => {
+              setWsDraft(wsMenu.ws.name)
+              setWsRenaming(wsMenu.ws.key)
+              setWsMenu(null)
+            }}
+          >
+            <Pencil size={13} /> {t('sidebar.ws.rename')}
+          </button>
+          <button
+            className="danger"
+            onClick={() => {
+              const ws = wsMenu.ws
+              const count = [...p.sessions, ...p.archivedSessions].filter((s) => s.project_path === ws.key).length
+              setWsMenu(null)
+              if (window.confirm(t('sidebar.ws.removeConfirm', { name: ws.name, count }))) p.onRemoveWorkspace(ws)
+            }}
+          >
+            <Trash2 size={13} /> {t('sidebar.ws.remove')}
           </button>
         </div>
       )}

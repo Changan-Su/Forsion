@@ -125,6 +125,8 @@ export interface WorkspaceDescriptor {
   kind: 'cloud' | 'local'
   /** 本地工作目录绝对路径;cloud 为 null。 */
   path: string | null
+  /** 常驻系统工作区(Cloud / Tangu 默认):不可重命名 / 移除。其余本地工作区(由会话 project_path 派生)可管理。 */
+  system?: boolean
 }
 
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */

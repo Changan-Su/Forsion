@@ -4,7 +4,7 @@
  * 释放期间右下角浮出「跳到底部」按钮,点一下平滑回底并重新吸附。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown } from 'lucide-react'
+import { ArrowDown, Copy, Check, Pencil, RefreshCw } from 'lucide-react'
 import type { UiMessage } from '../types'
 import { Markdown } from './Markdown'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -19,9 +19,35 @@ export const ChatArea: React.FC<{
   containerRef?: React.RefObject<HTMLDivElement | null> // 由 App 提供以与右侧「目录」共享滚动容器
   onApproval: (runOwnerMessageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>) => void
   onInquiry: (runOwnerMessageId: string, inquiryId: string, answer: string) => void
-}> = ({ messages, containerRef, onApproval, onInquiry }) => {
+  /** 重新编辑用户消息并重发(截断该消息及之后,以编辑后的文本重跑)。running 时禁用。 */
+  onEditResend?: (messageId: string, newText: string) => void
+  /** 重新生成某条助手消息(截断到其上一条用户消息后,以原输入重跑)。running 时禁用。 */
+  onRegenerate?: (messageId: string) => void
+  /** 是否有在飞 run:为真时禁用编辑/重生成(避免截断正在跑的会话)。 */
+  running?: boolean
+}> = ({ messages, containerRef, onApproval, onInquiry, onEditResend, onRegenerate, running }) => {
   const { t } = useI18n()
   const internalRef = useRef<HTMLDivElement>(null)
+  // 复制反馈(2s 回弹);内联编辑用户消息(editingId + 草稿)。
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const copyMsg = useCallback((m: UiMessage) => {
+    navigator.clipboard?.writeText(m.content || '').then(() => {
+      setCopiedId(m.id)
+      setTimeout(() => setCopiedId((cur) => (cur === m.id ? null : cur)), 2000)
+    }).catch(() => { /* 忽略剪贴板失败 */ })
+  }, [])
+  const beginEdit = useCallback((m: UiMessage) => {
+    setEditingId(m.id)
+    setEditDraft(m.content || '')
+  }, [])
+  const commitEdit = useCallback(() => {
+    const text = editDraft.trim()
+    const id = editingId
+    setEditingId(null)
+    if (id && text && onEditResend) onEditResend(id, text)
+  }, [editDraft, editingId, onEditResend])
   const ref = containerRef ?? internalRef
   // 是否吸底:**纯位置**判定。每次 scroll 事件按"离底距离"重算 —— 程序化吸底落到底→dist≈0→stick=true
   // (自洽,不会被误判为上滑);用户用任意方式(滚轮/触摸/拖滚动条/键盘)上滑→dist>阈值→stick=false。
@@ -119,26 +145,67 @@ export const ChatArea: React.FC<{
               data-toc-msg-role="user"
               data-toc-title={m.content}
             >
-              <div className="msg-user-bubble">
-                {m.attachments?.length ? (
-                  <div className="msg-attach-grid">
-                    {m.attachments.map((a, i) =>
-                      a.mimeType?.startsWith('image/') && a.data ? (
-                        <img
-                          key={i}
-                          className="msg-attach-img"
-                          src={`data:${a.mimeType};base64,${a.data}`}
-                          alt={a.name}
-                          title={a.name}
-                        />
-                      ) : (
-                        <span key={i} className="msg-attach-file" title={a.name}>📎 {a.name}</span>
-                      ),
+              {editingId === m.id ? (
+                <div className="msg-edit">
+                  <textarea
+                    className="msg-edit-input"
+                    value={editDraft}
+                    autoFocus
+                    rows={Math.min(12, Math.max(2, editDraft.split('\n').length))}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitEdit() }
+                      if (e.key === 'Escape') { e.preventDefault(); setEditingId(null) }
+                    }}
+                  />
+                  <div className="msg-edit-actions">
+                    <button className="btn sm ghost" onClick={() => setEditingId(null)}>{t('common.cancel')}</button>
+                    <button className="btn sm primary" disabled={!editDraft.trim()} onClick={commitEdit}>{t('chat.action.resend')}</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="msg-user-wrap">
+                  <div className="msg-user-bubble">
+                    {m.attachments?.length ? (
+                      <div className="msg-attach-grid">
+                        {m.attachments.map((a, i) =>
+                          a.mimeType?.startsWith('image/') && a.data ? (
+                            <img
+                              key={i}
+                              className="msg-attach-img"
+                              src={`data:${a.mimeType};base64,${a.data}`}
+                              alt={a.name}
+                              title={a.name}
+                            />
+                          ) : (
+                            <span key={i} className="msg-attach-file" title={a.name}>📎 {a.name}</span>
+                          ),
+                        )}
+                      </div>
+                    ) : null}
+                    {m.content}
+                  </div>
+                  <div className="msg-actions user">
+                    <button
+                      className={`msg-action-btn${copiedId === m.id ? ' copied' : ''}`}
+                      title={copiedId === m.id ? t('chat.action.copied') : t('chat.action.copy')}
+                      onClick={() => copyMsg(m)}
+                    >
+                      {copiedId === m.id ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                    {onEditResend && (
+                      <button
+                        className="msg-action-btn"
+                        title={t('chat.action.edit')}
+                        disabled={running}
+                        onClick={() => beginEdit(m)}
+                      >
+                        <Pencil size={13} />
+                      </button>
                     )}
                   </div>
-                ) : null}
-                {m.content}
-              </div>
+                </div>
+              )}
             </div>
           ) : (
             <div
@@ -174,6 +241,27 @@ export const ChatArea: React.FC<{
                   </div>
                 ) : null}
                 {m.error ? <div className="msg-error">{m.error === 'aborted' ? t('chat.aborted') : m.error}</div> : null}
+                {m.status !== 'streaming' && (m.content || m.error) ? (
+                  <div className="msg-actions assistant">
+                    <button
+                      className={`msg-action-btn${copiedId === m.id ? ' copied' : ''}`}
+                      title={copiedId === m.id ? t('chat.action.copied') : t('chat.action.copy')}
+                      onClick={() => copyMsg(m)}
+                    >
+                      {copiedId === m.id ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
+                    {onRegenerate && (
+                      <button
+                        className="msg-action-btn"
+                        title={t('chat.action.regenerate')}
+                        disabled={running}
+                        onClick={() => onRegenerate(m.id)}
+                      >
+                        <RefreshCw size={13} />
+                      </button>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
           ),

@@ -449,8 +449,8 @@ export function App(): React.JSX.Element {
   const workspaces = useMemo<WorkspaceDescriptor[]>(() => {
     const defPath = defaultWsDir || homeDirRef.current || null
     const list: WorkspaceDescriptor[] = [
-      { key: CLOUD_WORKSPACE_KEY, name: t('app.cloudWorkspace'), kind: 'cloud', path: null },
-      { key: defaultWsDir || '__default_ws__', name: t('app.defaultWorkspace'), kind: 'local', path: defPath },
+      { key: CLOUD_WORKSPACE_KEY, name: t('app.cloudWorkspace'), kind: 'cloud', path: null, system: true },
+      { key: defaultWsDir || '__default_ws__', name: t('app.defaultWorkspace'), kind: 'local', path: defPath, system: true },
     ]
     const seen = new Set<string>([CLOUD_WORKSPACE_KEY, defaultWsDir || '__default_ws__'])
     for (const s of [...sessions, ...archivedSessions]) {
@@ -537,6 +537,42 @@ export function App(): React.JSX.Element {
     }
   }, [toast, t])
 
+  // 重命名工作区:工作区名派生自其会话的 project_name → 给该 project_path 下所有会话改名(系统区不可改)。
+  const renameWorkspace = useCallback(async (ws: WorkspaceDescriptor, name: string) => {
+    const newName = name.trim().slice(0, 255)
+    if (!newName || ws.system || ws.kind !== 'local') return
+    const targets = [...sessions, ...archivedSessions].filter((s) => s.project_path === ws.key)
+    if (!targets.length || newName === ws.name) return
+    setSessions((prev) => prev.map((s) => (s.project_path === ws.key ? { ...s, project_name: newName } : s)))
+    setArchivedSessions((prev) => prev.map((s) => (s.project_path === ws.key ? { ...s, project_name: newName } : s)))
+    try {
+      await Promise.all(targets.map((s) => api.updateSession(cfgRef.current, s.id, { project_name: newName })))
+    } catch (e: any) {
+      toast(t('app.wsRenameFail', { e: e?.message || e }), true)
+    }
+  }, [sessions, archivedSessions, toast, t])
+
+  // 移除工作区:删除该 project_path 下所有会话(磁盘文件夹不动)。工作区由会话派生,清空即从侧栏消失。
+  const removeWorkspace = useCallback(async (ws: WorkspaceDescriptor) => {
+    if (ws.system || ws.kind !== 'local') return
+    const targets = [...sessions, ...archivedSessions].filter((s) => s.project_path === ws.key)
+    if (!targets.length) return
+    try {
+      // 不吞错:任一删除失败 → 整体进 catch,不乐观删本地、不报成功。
+      await Promise.all(targets.map((s) => api.deleteSession(cfgRef.current, s.id)))
+      const ids = new Set(targets.map((s) => s.id))
+      setSessions((prev) => prev.filter((s) => !ids.has(s.id)))
+      setArchivedSessions((prev) => prev.filter((s) => !ids.has(s.id)))
+      ids.forEach((id) => loadedHistory.current.delete(id))
+      if (activeIdRef.current && ids.has(activeIdRef.current)) setActiveId(null)
+      toast(t('app.wsRemoved', { name: ws.name }))
+    } catch (e: any) {
+      // 可能部分成功 → 拉服务端对账(成功的消失、失败的留下),避免「报成功但刷新后复活」。
+      toast(t('app.wsRemoveFail', { e: e?.message || e }), true)
+      void refreshSessions(cfgRef.current).catch(() => {})
+    }
+  }, [sessions, archivedSessions, refreshSessions, toast, t])
+
   // ── 发送 / 停止 / 审批 ──
   const send = useCallback(async (text: string, attachments: Attachment[], workspaceFiles?: Attachment[]): Promise<boolean> => {
     let sid = activeIdRef.current
@@ -605,6 +641,53 @@ export function App(): React.JSX.Element {
     const runId = runningBySession[sid]
     if (runId) void abortRun(cfgRef.current, runId)
   }, [runningBySession])
+
+  // 截断会话消息(从 fromIndex 起,含)后以给定文本重发:编辑重发 / 重新生成的公共底座。
+  // 服务端每轮从 DB 全量重建上下文,故必须先删旧消息再发新 run,否则被截断的旧轮次仍会污染生成。
+  // 先删服务端(失败则本地不动、不重发),成功后本地同步截断 + send(send 用函数式 append,接在截断后列表之后)。
+  const truncateAndResend = useCallback(async (fromIndex: number, text: string, attachments: Attachment[]) => {
+    const sid = activeIdRef.current
+    if (!sid) return
+    const list = messagesBySession[sid] || []
+    if (fromIndex < 0 || fromIndex >= list.length) return
+    const removed = list.slice(fromIndex) // 留快照:send 起不来时恢复本地显示,避免静默丢失对话尾巴
+    try {
+      await api.deleteMessages(cfgRef.current, sid, removed.map((m) => m.id))
+    } catch (e: any) {
+      toast(t('app.truncateFail', { e: e?.message || e }), true)
+      return
+    }
+    setMessagesBySession((prev) => ({ ...prev, [sid]: (prev[sid] || []).slice(0, fromIndex) }))
+    const ok = await send(text, attachments)
+    if (!ok) {
+      // 服务端已删但新 run 没起来:恢复本地尾巴(暂与服务端不一致,reload 以服务端为准),让用户看到内容并重试。
+      setMessagesBySession((prev) => ({ ...prev, [sid]: [...(prev[sid] || []).slice(0, fromIndex), ...removed] }))
+      toast(t('app.resendFailed'), true)
+    }
+  }, [messagesBySession, send, toast, t])
+
+  // 编辑用户消息并重发:从该消息处截断(含),以编辑后的文本(沿用原附件)重跑。
+  const editUserMessage = useCallback((messageId: string, newText: string) => {
+    const sid = activeIdRef.current
+    if (!sid || runningBySession[sid]) return
+    const list = messagesBySession[sid] || []
+    const idx = list.findIndex((m) => m.id === messageId)
+    if (idx < 0 || list[idx].role !== 'user') return
+    void truncateAndResend(idx, newText, list[idx].attachments || [])
+  }, [messagesBySession, runningBySession, truncateAndResend])
+
+  // 重新生成助手消息:回退到其上一条用户消息处截断(含该用户消息),以原输入重跑(丢弃其后的轮次)。
+  const regenerate = useCallback((messageId: string) => {
+    const sid = activeIdRef.current
+    if (!sid || runningBySession[sid]) return
+    const list = messagesBySession[sid] || []
+    const idx = list.findIndex((m) => m.id === messageId)
+    if (idx < 0) return
+    let u = idx - 1
+    while (u >= 0 && list[u].role !== 'user') u--
+    if (u < 0) { toast(t('app.regenNoUser'), true); return }
+    void truncateAndResend(u, list[u].content, list[u].attachments || [])
+  }, [messagesBySession, runningBySession, truncateAndResend, toast, t])
 
   // 手动压缩上下文(/compact 或输入栏按钮):生成持久化总结检查点,后续 run 起步即精简。
   const compact = useCallback(async () => {
@@ -814,6 +897,8 @@ export function App(): React.JSX.Element {
         workspaces={workspaces}
         onNewInWorkspace={(ws) => { setSpecialView(null); void createInWorkspace(ws) }}
         onAddWorkspace={() => void addLocalWorkspace()}
+        onRenameWorkspace={(ws, name) => void renameWorkspace(ws, name)}
+        onRemoveWorkspace={(ws) => void removeWorkspace(ws)}
         onRename={(id, t) => void renameSession(id, t)}
         onArchive={(id, a) => void archiveSession(id, a)}
         onDelete={(id) => void deleteSession(id)}
@@ -881,6 +966,9 @@ export function App(): React.JSX.Element {
                   containerRef={chatScrollRef}
                   onApproval={(mid, aid, action, args) => void decideApproval(mid, aid, action, args)}
                   onInquiry={(mid, iid, answer) => void answerInquiry(mid, iid, answer)}
+                  onEditResend={editUserMessage}
+                  onRegenerate={regenerate}
+                  running={running}
                 />
                 <MessageInput
                   disabled={connState !== 'ok'}

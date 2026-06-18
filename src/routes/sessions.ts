@@ -5,6 +5,7 @@
  *   PATCH  /agent/sessions/:id { title?, archived?, model_id?, emoji? }
  *   DELETE /agent/sessions/:id                     显式级联(messages/runs/steps/events——standalone 无 FK CASCADE)
  *   GET    /agent/sessions/:id/messages?limit=&before=
+ *   POST   /agent/sessions/:id/messages/delete { ids }  按 id 截断消息(编辑重发 / 重新生成前清掉该点及之后)
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
  */
@@ -151,6 +152,46 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list messages failed' });
+  }
+});
+
+// 按精确 id 列表删除会话内消息：编辑重发 / 重新生成时，客户端先把「截断点及之后」的消息 id 传来清掉，
+// 再发起新 run。服务端每轮从 DB 全量重建上下文(hydrateHistory)——不先截断，旧轮次会污染新生成。
+// 用客户端给的精确 id(而非 timestamp 区间)删除，避免同毫秒时间戳的边界歧义。前端在「无在飞 run」时才触发。
+router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const sid = req.params.id;
+    const ids: string[] = Array.isArray(req.body?.ids)
+      ? req.body.ids.filter((x: any) => typeof x === 'string' && x).slice(0, 1000)
+      : [];
+    if (!ids.length) return res.json({ ok: true, deleted: 0 });
+    // 在飞/排队 run 时拒绝:跨端共享同一会话时,删消息会让在跑的 run hydrate 出残缺历史 → 污染/重复轮次。
+    const inflight = await query<any[]>(
+      `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
+      [sid],
+    );
+    if (inflight.length) return res.status(409).json({ detail: 'run in progress' });
+    const placeholders = ids.map(() => '?').join(',');
+    // 删前取被删消息的最早时间戳:若落在某压缩检查点覆盖区内,该检查点摘要会继续叙述已删轮次 → 连带失效。
+    const tsRows = await query<any[]>(
+      `SELECT MIN(timestamp) AS mn FROM chat_messages WHERE session_id = ? AND id IN (${placeholders})`,
+      [sid, ...ids],
+    );
+    const minTs = Number(tsRows[0]?.mn) || 0;
+    await query(
+      `DELETE FROM chat_messages WHERE session_id = ? AND id IN (${placeholders})`,
+      [sid, ...ids],
+    );
+    // 失效覆盖到被删区间的压缩检查点(消息已删,摘要不能再吞失败,故吞错保响应)。
+    if (minTs) {
+      await query(`DELETE FROM session_summaries WHERE session_id = ? AND through_timestamp >= ?`, [sid, minTs]).catch(() => {});
+    }
+    res.json({ ok: true, deleted: ids.length });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'delete messages failed' });
   }
 });
 
