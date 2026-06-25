@@ -10,8 +10,6 @@ export const query = <T = any>(sql: string, params?: any[]): Promise<T> =>
 
 export const getDbType = (): string => deps().host.getDbType();
 export const getNowSql = (): string => deps().host.getNowSql();
-export const getDateSql = (column: string): string => deps().host.getDateSql(column);
-export const getDateSubSql = (days: number): string => deps().host.getDateSubSql(days);
 
 /** schema DDL 方言适配:sqlite host 下把 PG DDL 转 SQLite,其余原样(microserver/worker/外部 PG 仍为 PG)。 */
 export const ddl = (sql: string): string =>

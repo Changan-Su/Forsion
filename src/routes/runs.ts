@@ -11,7 +11,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
-import { enqueueRun, abortRun } from '../services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
 
 const router = Router();
@@ -120,7 +120,12 @@ router.get('/agent/runs/:id/events', authMiddleware, async (req: AuthRequest, re
 
   const safeWrite = (s: string) => {
     if (ended || res.writableEnded) return;
-    try { res.write(s); } catch { /* socket closed */ }
+    try {
+      res.write(s);
+      // 部署在压缩/反代之后时,小事件可能滞留在 gzip 缓冲直到下次写入(群聊结束的 ended/总结提问尤甚:
+      // 其后是长时间 await 用户回答,无后续写入触发 flush)。compression 中间件会挂 res.flush;无则 undefined → 安全空操作。
+      (res as any).flush?.();
+    } catch { /* socket closed */ }
   };
   const endStream = () => {
     if (ended) return;
@@ -191,6 +196,33 @@ router.post('/agent/runs/:id/abort', authMiddleware, async (req: AuthRequest, re
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ detail: err?.message || 'Failed to abort run' });
+  }
+});
+
+// 运行时转向(steer)：把消息注入仍在跑的 run，下一迭代边界生效；run 已结束/仅排队 → 409，前端回退起新 run。
+router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const { message, attachments } = req.body || {};
+    if (typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ detail: 'message is required' });
+    }
+    const MAX_INPUT_CHARS = Number(process.env.TANGU_MAX_INPUT_CHARS) || 400_000;
+    if (message.length > MAX_INPUT_CHARS) {
+      return res.status(400).json({ detail: `消息过长(${message.length.toLocaleString()} 字符,上限 ${MAX_INPUT_CHARS.toLocaleString()})。` });
+    }
+    const run = await getRunForUser(req.params.id, userId);
+    if (!run) return res.status(404).json({ detail: 'Run not found' });
+    const userMessageId = uuidv4();
+    const ok = enqueueSteer(req.params.id, {
+      id: userMessageId,
+      content: message,
+      attachments: Array.isArray(attachments) ? attachments : [],
+    });
+    if (!ok) return res.status(409).json({ detail: 'run not active', reason: 'not_active' });
+    res.json({ ok: true, userMessageId });
+  } catch (err: any) {
+    res.status(500).json({ detail: err?.message || 'Failed to steer run' });
   }
 });
 

@@ -104,7 +104,3 @@ export function preloadAllThemes(): void {
     }
   }
 }
-
-export function getCurrentPresetId(): string | null {
-  return currentPresetId;
-}

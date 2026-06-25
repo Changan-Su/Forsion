@@ -18,6 +18,7 @@ import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT } from './specialAgen
 
 const MAX_TRANSCRIPT_CHARS = 8000;
 const CHARGE_USER = false;
+const MIN_NEW_CHARS = 120; // 自上次维护以来的新对话字符数地板;不足视为琐碎轮,跳过整次判断
 
 /**
  * 构造 Historian 的结构化判断 system prompt:一次调用、输出 JSON,title/log/memory 各自独立判断。
@@ -25,11 +26,11 @@ const CHARGE_USER = false;
  * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
  * 不得相同;memory 要克制,多数对话应为空。
  */
-function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantMemory: boolean, curMemory: string): string {
+function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, curMemory: string): string {
   const fields: string[] = [];
   if (wantTitle) fields.push('"title": 用 ≤16 字中文短语概括本对话主题作为会话标题(总是给出)');
+  if (wantLog) fields.push('"log": 若本段对话有「当天值得记一笔」的事件/进展/产出,写一句简短中文;否则给空字符串 ""');
   if (wantMemory) {
-    fields.push('"log": 若本段对话有「当天值得记一笔」的事件/进展/产出,写一句简短中文;否则给空字符串 ""');
     fields.push(
       '"memory": **整体覆盖式**——基于下面【当前长期记忆】与本段对话,输出**更新后的完整长期记忆全文**' +
       '(可新增条目、可修订或删除已过时/被纠正的条目;保留仍然成立的旧条目)。只在确有变化时给出;无任何变化则给空字符串 ""。' +
@@ -65,6 +66,30 @@ export function isRoundDue(roundN: number, every: number, firstRoundTrigger: boo
   if (roundN < 1) return false;
   if (roundN === 1 && firstRoundTrigger) return true;
   return every > 0 && roundN % every === 0;
+}
+
+/**
+ * 自本会话上次 Historian 动作（special_agent_log）以来，新对话内容是否够「实质」。
+ * 无历史动作 = 该会话首次维护 → 放行。两列均为 SQL TIMESTAMP（同域可比，方言安全）。查询失败 → 放行（不阻断既有行为）。
+ */
+async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
+  try {
+    const last = await query<any[]>(
+      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian'
+       ORDER BY created_at DESC LIMIT 1`,
+      [sessionId],
+    );
+    const since = last[0]?.created_at;
+    if (!since) return true; // 本会话尚未维护过 → 放行
+    const rows = await query<any[]>(
+      `SELECT content FROM chat_messages WHERE session_id = ? AND created_at > ? AND role IN ('user', 'model', 'assistant')`,
+      [sessionId, since],
+    );
+    const chars = (rows || []).reduce((s, r) => s + String(r.content || '').trim().length, 0);
+    return chars >= MIN_NEW_CHARS;
+  } catch {
+    return true;
+  }
 }
 
 async function recentTranscript(sessionId: string, limit = 30): Promise<string> {
@@ -160,6 +185,11 @@ export async function onUserRunDone(sessionId: string, userId: string): Promise<
     const titleDue = isRoundDue(roundN, cfg.everyTitleRounds, cfg.firstRoundTrigger);
     const memoryDue = isRoundDue(roundN, cfg.everyMemoryRounds, cfg.firstRoundTrigger);
     if (!titleDue && !memoryDue) return;
+    // LOG(当天流水,append-only,无侵蚀)跟随 title 的较高频率;只有 memory 整文重写走稀疏的 everyMemoryRounds。
+    const logDue = titleDue;
+
+    // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
+    if (!(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
     log(`第 ${roundN} 轮触发(标题:${titleDue} 记忆:${memoryDue},模型 ${cfg.modelId})`);
 
     const transcript = await recentTranscript(sessionId);
@@ -171,7 +201,7 @@ export async function onUserRunDone(sessionId: string, userId: string): Promise<
       : '';
 
     // 一次结构化判断:title / log / memory 各自独立(到期才要、不需要则空)。
-    const sys = buildJudgeSystem(cfg.prompt, titleDue, memoryDue, curMem);
+    const sys = buildJudgeSystem(cfg.prompt, titleDue, logDue, memoryDue, curMem);
     const raw = await complete('判断', cfg.modelId, sys, transcript, userId, 1200);
     const j = parseJudgement(raw);
     if (!j) { log(`判断输出无法解析为 JSON: "${raw.slice(0, 80)}"`); return; }
@@ -186,7 +216,7 @@ export async function onUserRunDone(sessionId: string, userId: string): Promise<
       await logActivity(userId, 'title_updated', title, sessionId);
       log(`已更新标题: ${title}`);
     }
-    if (memoryDue && okShort(logText)) {
+    if (logDue && okShort(logText)) {
       // LOG = 当天流水(append-only)。共享 LOG 经 brain(云端)。
       await deps().brain.memory.appendLogEntry(userId, logText).then(() => log('已写入 LOG')).catch((e: any) => log(`写 LOG 失败: ${e?.message || e}`));
       await logActivity(userId, 'log_appended', logText, sessionId);

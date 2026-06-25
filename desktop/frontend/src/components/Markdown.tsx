@@ -5,9 +5,13 @@
 import React, { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import { Copy, Check } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { normalizeMath } from '../services/mathNormalize'
 
 const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement>> = ({ children, ...props }) => {
   const { t } = useI18n()
@@ -58,11 +62,11 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string }> = Re
     }
     return (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, detect: false }]]}
+        remarkPlugins={[remarkMath, remarkGfm]}
+        rehypePlugins={[rehypeKatex, [rehypeHighlight, { ignoreMissing: true, detect: false }]]}
         components={components}
       >
-        {content}
+        {normalizeMath(content)}
       </ReactMarkdown>
     )
   },

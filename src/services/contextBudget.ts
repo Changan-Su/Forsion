@@ -13,6 +13,16 @@
  */
 import type { ChatMessage } from '../core/types.js';
 
+/**
+ * 锚定消息(借 Codex「reference context item」):注入的 system/skills/memory 块等——compactContext 永不折叠。
+ * 用对象身份(WeakSet)而非消息上的可枚举字段标记,确保不泄漏到发给 provider 的 wire payload、不破坏前缀缓存。
+ */
+const pinnedMessages = new WeakSet<object>();
+export function pinMessage<T extends object>(m: T): T {
+  if (m) pinnedMessages.add(m);
+  return m;
+}
+
 export const CONTEXT_WINDOW_TOKENS = (() => {
   const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
   return Number.isFinite(v) && v >= 4_000 ? Math.floor(v) : 128_000;
@@ -130,6 +140,7 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
   let savedChars = 0;
   for (let i = startProtectEnd; i < lastProtectStart; i++) {
     const m = msgs[i] as any;
+    if (m && pinnedMessages.has(m)) continue; // 锚定消息永不折叠(注入上下文/任务定义)
     if (typeof m?.content !== 'string') continue;
     const len = m.content.length;
     if (m.role === 'tool' && len > TOOL_FOLD_THRESHOLD) {

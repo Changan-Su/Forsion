@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeConfig, isWithinActiveHours, SPECIAL_AGENTS_DEFAULTS, type MuseConfig,
+  normalizeConfig, isWithinActiveHours, buildTodoDedupHint, SPECIAL_AGENTS_DEFAULTS, type MuseConfig,
 } from './specialAgentsConfig.js';
 import { isRoundDue } from './localHistorian.js';
 
@@ -10,14 +10,14 @@ describe('normalizeConfig', () => {
     expect(normalizeConfig({})).toEqual(SPECIAL_AGENTS_DEFAULTS);
     expect(normalizeConfig('nope' as any)).toEqual(SPECIAL_AGENTS_DEFAULTS);
   });
-  it('defaults: both disabled, z=60, t=5', () => {
+  it('defaults: both disabled, z=10(找 1-3 条 TODO 不必更多迭代), t=5', () => {
     const d = SPECIAL_AGENTS_DEFAULTS;
     expect(d.historian.enabled).toBe(false);
     expect(d.muse.enabled).toBe(false);
-    expect(d.muse.maxIterationsPerCycle).toBe(60);
+    expect(d.muse.maxIterationsPerCycle).toBe(10);
     expect(d.muse.maxTodosPerWindow).toBe(5);
-    expect(d.historian.everyTitleRounds).toBe(3);
-    expect(d.historian.everyMemoryRounds).toBe(3);
+    expect(d.historian.everyTitleRounds).toBe(3); // 标题/LOG 跟手
+    expect(d.historian.everyMemoryRounds).toBe(9); // memory 整文重写稀疏化,抗侵蚀
   });
   it('clamps out-of-range numbers', () => {
     const c = normalizeConfig({
@@ -64,6 +64,33 @@ describe('isWithinActiveHours', () => {
   it('start===end → all day', () => {
     expect(isWithinActiveHours(withHours(5, 5), 5)).toBe(true);
     expect(isWithinActiveHours(withHours(5, 5), 20)).toBe(true);
+  });
+});
+
+describe('buildTodoDedupHint (Muse 去重提示)', () => {
+  it('空清单 / 全空白标题 → 空串(不注入噪声)', () => {
+    expect(buildTodoDedupHint([])).toBe('');
+    expect(buildTodoDedupHint([{ title: '  ', status: 'pending' }])).toBe('');
+  });
+  it('pending 列入「请勿重复」, done/dismissed 列入「不要再提」', () => {
+    const h = buildTodoDedupHint([
+      { title: '给 muse 加单测', status: 'pending' },
+      { title: '重构 X', status: 'dismissed' },
+      { title: '写发布说明', status: 'done' },
+    ]);
+    expect(h).toContain('给 muse 加单测');
+    expect(h).toMatch(/请勿重复/);
+    expect(h).toContain('重构 X');
+    expect(h).toContain('写发布说明');
+    expect(h).toMatch(/驳回/);
+  });
+  it('忽略空白标题，单项不产生分隔符', () => {
+    const h = buildTodoDedupHint([
+      { title: '真待办', status: 'pending' },
+      { title: '   ', status: 'pending' },
+    ]);
+    expect(h).toContain('真待办');
+    expect(h.match(/；/g) || []).toHaveLength(0);
   });
 });
 

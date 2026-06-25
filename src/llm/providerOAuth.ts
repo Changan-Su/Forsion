@@ -12,7 +12,7 @@
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import type { DirectProvider } from './providerRegistry.js';
+import type { DirectProvider, DirectProviderProtocol } from './providerRegistry.js';
 import { loadProviderCreds, saveProviderCred, type OAuthTokens } from '../standalone/providerCreds.js';
 
 export interface OAuthProvider {
@@ -25,7 +25,10 @@ export interface OAuthProvider {
   redirectHost: string;
   redirectPort: number;
   redirectPath: string;
-  baseUrl: string; // OpenAI 兼容推理根
+  baseUrl: string; // 推理根(protocol='openai' 时为 OpenAI 兼容根;订阅原生端点见 protocol)
+  protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切原生端点
+  modelIds?: string[]; // 模型选择器提示(实际可填任意 <id>/<model>)
+  extraAuthParams?: Record<string, string>; // 追加到 authorize URL(如 Codex 的 id_token_add_organizations)
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
@@ -38,6 +41,39 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     redirectPort: 56121,
     redirectPath: '/callback',
     baseUrl: 'https://api.x.ai/v1',
+  },
+  // Claude 订阅(Claude Pro/Max → Claude Code 额度)。原生 Messages API,非 OpenAI 兼容。
+  // ⚠️ 私有契约,可能随官方变动——登录失败先核对:clientId、redirect 是否准回环、token 端点是否要 JSON。
+  claude: {
+    id: 'claude',
+    clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e', // Claude Code 公开 desktop client
+    scope: 'org:create_api_key user:profile user:inference',
+    authorizationEndpoint: 'https://claude.ai/oauth/authorize',
+    tokenEndpoint: 'https://console.anthropic.com/v1/oauth/token',
+    redirectHost: '127.0.0.1',
+    redirectPort: 56122, // 避开 xAI 的 56121
+    redirectPath: '/callback',
+    baseUrl: 'https://api.anthropic.com',
+    protocol: 'anthropic-messages',
+    modelIds: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'], // 提示;首次真实登录再核对订阅支持的 slug
+  },
+  // Codex 订阅(ChatGPT Plus/Pro → Codex 额度)。原生 Responses API(chatgpt.com 后端),非 OpenAI 兼容。
+  // ⚠️ 私有契约:固定回环 1455/auth/callback、需 id_token_add_organizations 才拿到 account_id。失效先核对此处。
+  codex: {
+    id: 'codex',
+    clientId: 'app_EMoamEEZ73f0CkXaXp7hrann', // Codex CLI 公开 client
+    scope: 'openid profile email offline_access',
+    authorizationEndpoint: 'https://auth.openai.com/oauth/authorize',
+    tokenEndpoint: 'https://auth.openai.com/oauth/token',
+    redirectHost: 'localhost', // redirect_uri 须精确匹配注册值 http://localhost:1455/auth/callback
+    redirectPort: 1455,
+    redirectPath: '/auth/callback',
+    baseUrl: 'https://chatgpt.com/backend-api/codex',
+    protocol: 'openai-responses',
+    // ChatGPT 账号支持的 slug(取自 Codex 源 models-manager/models.json;gpt-5-codex/gpt-5 不被支持)。
+    // gpt-5.3-codex = 主力编码模型(gpt-5.2 是其降级 fallback)。
+    modelIds: ['gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.2'],
+    extraAuthParams: { id_token_add_organizations: 'true', codex_cli_simplified_flow: 'true' },
   },
 };
 
@@ -63,6 +99,65 @@ async function resolveEndpoints(p: OAuthProvider): Promise<{ authorize: string; 
   const d: any = await fetch(p.discoveryUrl).then((r) => r.json());
   if (!d.authorization_endpoint || !d.token_endpoint) throw new Error(`${p.id} discovery 缺 endpoint`);
   return { authorize: d.authorization_endpoint, token: d.token_endpoint };
+}
+
+/** 解 JWT payload(不验签,只读 claim)。 */
+function decodeJwtPayload(jwt?: string): any {
+  if (!jwt || typeof jwt !== 'string') return null;
+  const seg = jwt.split('.')[1];
+  if (!seg) return null;
+  try {
+    return JSON.parse(Buffer.from(seg.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** 从 id_token / access_token 解出 Codex 的 chatgpt_account_id(responses 端点必需的 header)。 */
+function extractChatgptAccountId(tok: any): string | undefined {
+  for (const jwt of [tok?.id_token, tok?.access_token]) {
+    const p = decodeJwtPayload(jwt);
+    if (!p) continue;
+    const auth = p['https://api.openai.com/auth'] || {};
+    const id = auth.chatgpt_account_id || p.chatgpt_account_id || auth.organization_id;
+    if (id) return String(id);
+  }
+  return undefined;
+}
+
+/**
+ * 登录后问 provider 的 `/models` 端点拿真实可用模型列表,免得硬编 slug 过时。
+ * Claude=`/v1/models`(Bearer+beta);Codex/OpenAI 兼容=`{base}/models`(Codex MODELS_ENDPOINT 即 /models)。
+ * 失败/离线返回 null,调用方回退到 OAUTH_PROVIDERS 里的硬编提示。
+ */
+export async function fetchProviderModels(p: OAuthProvider, accessToken: string, accountId?: string): Promise<string[] | null> {
+  try {
+    const base = p.baseUrl.replace(/\/+$/, '');
+    const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
+    let url: string;
+    if (p.protocol === 'anthropic-messages') {
+      url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+      headers['anthropic-version'] = '2023-06-01';
+      headers['anthropic-beta'] = 'oauth-2025-04-20';
+    } else {
+      url = `${base}/models`; // OpenAI 兼容 + Codex 同形
+      if (accountId) headers['chatgpt-account-id'] = accountId;
+    }
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    const arr: any[] = Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : [];
+    const ids = arr
+      .filter((m) => {
+        const v = m?.visibility;
+        return v == null || (v !== 'hide' && v !== 'hidden');
+      })
+      .map((m) => m?.slug || m?.id)
+      .filter((s: any): s is string => typeof s === 'string' && s.length > 0);
+    return ids.length ? Array.from(new Set(ids)) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 跑完整 loopback+PKCE 登录,返回并落盘 OAuthTokens。 */
@@ -92,7 +187,7 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
     setTimeout(() => { try { server.close(); } catch { /* */ } reject(new Error('登录超时')); }, 5 * 60 * 1000).unref?.();
   });
 
-  const authUrl = `${authorize}?` + new URLSearchParams({
+  const authParams = new URLSearchParams({
     response_type: 'code',
     client_id: p.clientId,
     redirect_uri: redirectUri,
@@ -101,7 +196,9 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
     nonce,
     code_challenge: challenge,
     code_challenge_method: 'S256',
-  }).toString();
+  });
+  for (const [k, v] of Object.entries(p.extraAuthParams || {})) authParams.set(k, v);
+  const authUrl = `${authorize}?${authParams.toString()}`;
 
   console.log(`\n  \x1b[36m在浏览器打开此链接登录 ${p.id}\x1b[0m(已尝试自动打开):`);
   console.log(`  ${authUrl}\n`);
@@ -124,6 +221,14 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
     tokenEndpoint: token,
     clientId: p.clientId,
   };
+  // Codex 订阅:responses 端点必需 chatgpt-account-id,从 id_token JWT 解出存盘。
+  if (p.protocol === 'openai-responses') {
+    const acct = extractChatgptAccountId(tok);
+    if (acct) creds.account_id = acct;
+  }
+  // 登录即问 /models 拿真实模型列表(失败则后续 load 时再懒补;再不行回退硬编提示)。
+  const models = await fetchProviderModels(p, creds.access_token, creds.account_id);
+  if (models) creds.modelIds = models;
   saveProviderCred(p.id, creds);
   return creds;
 }
@@ -154,7 +259,23 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
       tok = await refresh(tok);
       saveProviderCred(id, tok);
     }
-    out.push({ providerId: id, baseUrl: tok.baseUrl, apiKey: tok.access_token });
+    const cfg = OAUTH_PROVIDERS[id];
+    // 模型列表懒补:已登录但还没缓存过(如本次升级前登录的)→ 拉一次回写;失败保持空,下次再试。
+    if ((!tok.modelIds || !tok.modelIds.length) && cfg) {
+      const models = await fetchProviderModels(cfg, tok.access_token, tok.account_id);
+      if (models) {
+        tok = { ...tok, modelIds: models };
+        saveProviderCred(id, tok);
+      }
+    }
+    out.push({
+      providerId: id,
+      baseUrl: tok.baseUrl,
+      apiKey: tok.access_token,
+      protocol: cfg?.protocol,
+      accountId: tok.account_id,
+      modelIds: tok.modelIds && tok.modelIds.length ? tok.modelIds : cfg?.modelIds, // 实拉优先,回退提示
+    });
   }
   return out;
 }

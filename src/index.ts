@@ -16,6 +16,7 @@ import workspaceRouter from './routes/workspace.js';
 import approvalsRouter from './routes/approvals.js';
 import sessionsRouter from './routes/sessions.js';
 import modelsRouter from './routes/models.js';
+import enginesRouter from './routes/engines.js';
 import providersRouter from './routes/providers.js';
 import memoryRouter from './routes/memory.js';
 import assetsRouter from './routes/assets.js';
@@ -72,6 +73,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   const dataRouter = Router();
   dataRouter.use(sessionsRouter);
   dataRouter.use(modelsRouter);
+  dataRouter.use(enginesRouter);
   dataRouter.use(providersRouter);
   dataRouter.use(memoryRouter);
   dataRouter.use(assetsRouter);

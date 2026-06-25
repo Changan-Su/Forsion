@@ -80,9 +80,5 @@ export interface AppProfileOverride {
  * 无 store 的退路(理论上不触发,configureTangu 恒建)保留旧单 profile 语义。
  */
 export function resolveProfile(appId?: string | null): AppProfile | null {
-  const store = deps().profileStore;
-  if (store) return store.resolve(appId);
-  const p = deps().profile;
-  if (!appId || appId === p.appId) return p;
-  return null;
+  return deps().profileStore.resolve(appId);
 }

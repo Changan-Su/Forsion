@@ -12,6 +12,8 @@ export interface OAuthTokens {
   baseUrl: string; // OpenAI 兼容推理根(如 https://api.x.ai/v1)
   tokenEndpoint: string; // 刷新用
   clientId: string;
+  account_id?: string; // Codex 订阅:chatgpt-account-id(从 id_token JWT 解出)
+  modelIds?: string[]; // 登录时从 provider /models 端点拉取并缓存(再登录刷新;失败回退硬编提示)
 }
 
 const dir = (): string => tanguHome();

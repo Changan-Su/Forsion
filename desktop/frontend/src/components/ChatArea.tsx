@@ -14,6 +14,25 @@ import { InquiryCard, PlanCard, TodoList } from './InquiryCard'
 import { BrandLogo } from './BrandLogo'
 import { useI18n } from '../i18n'
 
+/** 群聊每轮投票汇总 chip:第 N 轮 · X/Y 赞成结束 · 各成员表态(✓=结束 / ✗=继续,title 显示理由)。 */
+const GroupVoteChip: React.FC<{ vote: NonNullable<UiMessage['groupVote']> }> = ({ vote }) => {
+  const { t } = useI18n()
+  return (
+    <span className="msg-system-text" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ opacity: 0.8 }}>{t('group.vote.round', { round: vote.round })}</span>
+      <span style={{ fontWeight: 600 }}>{t('group.vote.tally', { end: vote.endCount, total: vote.total })}</span>
+      <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+        {vote.votes.map((v, i) => (
+          <span key={i} title={v.reason || ''} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, opacity: 0.85 }}>
+            <span style={{ color: v.end ? 'var(--accent, #6b7cff)' : 'var(--text-dim, #999)' }}>{v.end ? '✓' : '✗'}</span>
+            {v.name}
+          </span>
+        ))}
+      </span>
+    </span>
+  )
+}
+
 export const ChatArea: React.FC<{
   messages: UiMessage[]
   containerRef?: React.RefObject<HTMLDivElement | null> // 由 App 提供以与右侧「目录」共享滚动容器
@@ -127,6 +146,20 @@ export const ChatArea: React.FC<{
     el.scrollTop = el.scrollHeight
   }, [messages, streamingId, ref])
 
+  // 新出现「待操作」卡片(ask_user 询问 / 审批 / 群聊「是否总结」)时强制吸底一次,确保需要回应的卡片
+  // 进入视野(即便此前用户已上滑——群聊结束的总结提问尤其依赖此,否则停在屏幕外要等下一条消息才显出)。
+  // 仅在待操作总数「增加」时触发,正常浏览/流式不打扰。
+  const pendingCountRef = useRef(0)
+  useEffect(() => {
+    let pending = 0
+    for (const m of messages) {
+      pending += m.inquiries?.filter((q) => q.status === 'pending').length || 0
+      pending += m.approvals?.filter((a) => a.status === 'pending').length || 0
+    }
+    if (pending > pendingCountRef.current) scrollToBottom(true)
+    pendingCountRef.current = pending
+  }, [messages, scrollToBottom])
+
   // 划线引用:在聊天滚动容器内监听 mouseup → 取选区文本 + 位置 → 浮出「引用」按钮。
   // 依赖 messages.length:空态早返回时容器未挂载,有内容后需重新挂监听。
   useEffect(() => {
@@ -173,7 +206,7 @@ export const ChatArea: React.FC<{
         {messages.map((m) =>
           m.role === 'system' ? (
             <div className="msg-row msg-system" key={m.id}>
-              <span className="msg-system-text">{m.content}</span>
+              {m.groupVote ? <GroupVoteChip vote={m.groupVote} /> : <span className="msg-system-text">{m.content}</span>}
             </div>
           ) : m.role === 'user' ? (
             <div
@@ -253,7 +286,14 @@ export const ChatArea: React.FC<{
               data-toc-msg-role="assistant"
               ref={m.id === streamingId ? streamingNodeRef : undefined}
             >
-              <div className="msg-role">TANGU</div>
+              {m.agentName ? (
+                <div className="msg-role" style={m.agentColor ? { color: m.agentColor } : undefined} title={m.agentId}>
+                  <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: m.agentColor || 'currentColor', marginRight: 6, verticalAlign: 'middle' }} />
+                  {m.agentName}
+                </div>
+              ) : (
+                <div className="msg-role">TANGU</div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {m.reasoning ? <ThinkingBlock reasoning={m.reasoning} streaming={m.status === 'streaming' && !m.content} /> : null}
                 {m.toolEvents?.map((t) => <ToolCallCard key={t.id} ev={t} />)}
@@ -279,6 +319,9 @@ export const ChatArea: React.FC<{
                   </div>
                 ) : null}
                 {m.error ? <div className="msg-error">{m.error === 'aborted' ? t('chat.aborted') : m.error}</div> : null}
+                {m.status === 'stopped' ? (
+                  <div style={{ color: 'var(--text-faint)', fontSize: 12, marginTop: 2 }}>⏹ {t('chat.aborted')}</div>
+                ) : null}
                 {m.status !== 'streaming' && (m.content || m.error) ? (
                   <div className="msg-actions assistant">
                     <button

@@ -11,9 +11,9 @@
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { Tool } from '../core/types.js';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
 import type { ToolProvider } from './toolRegistry.js';
+import { checkWritePath } from './fsPolicy.js';
 
 const READ_MAX_CHARS = 100_000;
 const READ_MAX_LINES = 2000;
@@ -37,7 +37,7 @@ function imageMimeForPath(p: string): string | null {
 }
 
 /** 把工具路径解析为绝对路径：相对路径相对 cwd，绝对路径原样。 */
-function resolvePath(ctx: ToolContext, p: string): string {
+export function resolvePath(ctx: ToolContext, p: string): string {
   const cwd = ctx.cwd || process.cwd();
   return path.resolve(cwd, String(p || ''));
 }
@@ -80,36 +80,64 @@ function runBash(
   cwd: string,
   signal?: AbortSignal,
   timeoutMs = BASH_TIMEOUT_MS,
-): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean }> {
+): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean; aborted: boolean }> {
   return new Promise((resolve) => {
+    // detached:true → 子进程自成进程组(pgid=child.pid);超时/中止时杀「整组」,连带它 fork 出的孙进程
+    // (dev server / watch / http.server 等)。否则只杀 shell、孙进程残留撑着 stdout 管道 → 'close' 永不
+    // 触发 → Promise 永不 resolve → 整个 run 挂死(本次修复的根因)。
     let child;
     try {
-      child = spawn(command, { cwd, shell: true, signal });
+      child = spawn(command, { cwd, shell: true, detached: true });
     } catch (e: any) {
-      resolve({ stdout: '', stderr: `[spawn error] ${e?.message || e}`, code: -1, timedOut: false });
+      resolve({ stdout: '', stderr: `[spawn error] ${e?.message || e}`, code: -1, timedOut: false, aborted: false });
       return;
     }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     child.stdout?.on('data', (d) => {
       if (stdout.length < BASH_OUTPUT_CAP) stdout += d.toString();
     });
     child.stderr?.on('data', (d) => {
       if (stderr.length < BASH_OUTPUT_CAP) stderr += d.toString();
     });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGKILL');
-    }, timeoutMs);
+
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ stdout, stderr, code, timedOut, aborted });
+    };
+    // 杀整个进程组(负 pid);非 POSIX / 拿不到 pid 时退回杀 child 本身。杀后给 'close' 1.5s 正常收尾;
+    // 仍不来(残留 fd 撑着管道)就强制 resolve —— 绝不无限等 'close'。
+    const killGroup = (): void => {
+      const pid = child.pid;
+      try {
+        if (pid && process.platform !== 'win32') process.kill(-pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      }
+      if (!graceTimer) graceTimer = setTimeout(() => finish(-1), 1500);
+    };
+    const onAbort = (): void => { aborted = true; killGroup(); };
+
+    timer = setTimeout(() => { timedOut = true; killGroup(); }, timeoutMs);
+    if (signal) {
+      if (signal.aborted) { aborted = true; killGroup(); }
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
     child.on('error', (e: any) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr: `${stderr}\n[error] ${e?.message || e}`, code: -1, timedOut });
+      stderr = `${stderr}\n[error] ${e?.message || e}`;
+      finish(-1);
     });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr, code: code ?? -1, timedOut });
-    });
+    child.on('close', (code) => finish(code ?? -1));
   });
 }
 
@@ -142,7 +170,14 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
       if (r.stderr) out += `stderr:\n${r.stderr}\n`;
-      out += `exit_code: ${r.code}${r.timedOut ? ' (timed out)' : ''}`;
+      out += `exit_code: ${r.code}`;
+      if (r.timedOut) {
+        out += ` (timed out after ${timeout}ms, 进程组已终止)`;
+        out += '\n提示:这条命令未在超时内返回。常驻/长跑命令(dev server、watch、http.server 等)请改用 ' +
+          'run_background 启动,再用 read_process_output / list_processes 查看,避免阻塞。';
+      } else if (r.aborted) {
+        out += ' (aborted)';
+      }
       return truncateOutput(out.trim() || '(no output)');
     },
   },
@@ -204,6 +239,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
     },
     execute: async (args, ctx): Promise<string> => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
+      const guard = checkWritePath(ctx, abs);
+      if (guard.hardDeny) return `Error: ${guard.reason}`;
       const content = String(args.content ?? '');
       try {
         await fs.mkdir(path.dirname(abs), { recursive: true });
@@ -237,6 +274,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
     },
     execute: async (args, ctx): Promise<string> => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
+      const guard = checkWritePath(ctx, abs);
+      if (guard.hardDeny) return `Error: ${guard.reason}`;
       const oldStr = String(args.old_string ?? '');
       const newStr = String(args.new_string ?? '');
       if (!oldStr) return 'Error: old_string is required (新建文件请用 write_file)';
@@ -333,6 +372,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
     },
     execute: async (args, ctx): Promise<string> => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
+      const guard = checkWritePath(ctx, abs);
+      if (guard.hardDeny) return `Error: ${guard.reason}`;
       const edits = Array.isArray(args.edits) ? args.edits : null;
       if (!edits?.length) return 'Error: edits 必须是非空数组';
       let text: string;

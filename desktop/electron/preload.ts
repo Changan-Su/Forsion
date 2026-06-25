@@ -58,6 +58,12 @@ const api = {
   revealHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:reveal', p),
   /** 原生拖出:在元素 onDragStart 里 e.preventDefault() 后调用,主进程接管系统级拖拽。 */
   startHostDrag: (filePath: string): void => ipcRenderer.send('fs:startDrag', filePath),
+  /** 拖 OS 文件/文件夹进 host 工作区目录 → 原生复制(重名加序号)。 */
+  copyHostFiles: (srcPaths: string[], destDir: string): Promise<{ copied: number }> =>
+    ipcRenderer.invoke('fs:copy', srcPaths, destDir),
+  /** 拖一行到文件夹 → 移动(同卷 rename)。 */
+  moveHostPath: (srcPath: string, destDir: string): Promise<{ path: string }> =>
+    ipcRenderer.invoke('fs:move', srcPath, destDir),
   // ── 直连 provider 管理(~/.tangu/providers.json;managed 模式保存后自动重启后端加载)──
   listProviders: (): Promise<any[]> => ipcRenderer.invoke('providers:list'),
   saveProvider: (provider: Record<string, any>): Promise<any[]> => ipcRenderer.invoke('providers:save', provider),
@@ -83,5 +89,3 @@ const api = {
 }
 
 contextBridge.exposeInMainWorld('tangu', api)
-
-export type TanguDesktopApi = typeof api

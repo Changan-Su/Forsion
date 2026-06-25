@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
+import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 
 const router = Router();
 
@@ -49,6 +50,19 @@ router.post('/agent/log', authMiddleware, async (req: AuthRequest, res) => {
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'append log failed' });
   }
+});
+
+// ── 本地 ↔ Forsion Brain 同步(手动「立即同步」/ 桌面端按开关定时调用)──
+router.post('/agent/sync', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    res.json(await syncNow(req.user!.userId));
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'sync failed' });
+  }
+});
+
+router.get('/agent/sync/status', authMiddleware, (_req: AuthRequest, res) => {
+  res.json(getSyncStatus());
 });
 
 export default router;

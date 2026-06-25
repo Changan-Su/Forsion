@@ -6,11 +6,13 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Send, Square, Plus, Mic, ImagePlus, X, Brain, ClipboardList, Check, ChevronDown, FileText,
+  Send, Square, Plus, Mic, ImagePlus, X, ClipboardList, Check, ChevronDown, FileText, Users,
 } from 'lucide-react'
 import type { AgentConfig, Attachment, ModelInfo, NormalAgentDef, SkillInfo } from '../types'
+import { ModelPill, type ModelPillGroup } from './ModelPill'
 import { useI18n } from '../i18n'
 import { groupModelsByProvider } from './ModelGroupList'
+import { GroupChatSetup } from './GroupChatSetup'
 
 /** 斜杠命令项(/ 触发的菜单;参考 hermes 的 slash 命令)。 */
 interface SlashItem {
@@ -20,7 +22,7 @@ interface SlashItem {
 }
 
 /** 框外控制排当前打开的弹出菜单。 */
-type OpenMenu = 'add' | 'mode' | 'model' | null
+type OpenMenu = 'add' | 'mode' | null
 
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
 // 客户端输入帽(服务端 runs.ts 还有一道):大段材料整体粘贴会让 agent 每轮迭代全量重发,
@@ -30,8 +32,6 @@ const MAX_INPUT_CHARS = 150_000
 const MAX_WS_BYTES = 25 * 1024 * 1024
 
 const approvalLabelKey = { readonly: 'input.approval.readonly', 'auto-edit': 'input.approval.autoEdit', 'full-auto': 'input.approval.fullAuto' } as const
-const thinkingLabelKey = { off: 'input.thinking.off', low: 'input.thinking.low', medium: 'input.thinking.medium', high: 'input.thinking.high' } as const
-const thinkingShortKey = { off: 'input.thinkingShort.off', low: 'input.thinkingShort.low', medium: 'input.thinkingShort.medium', high: 'input.thinkingShort.high' } as const
 
 export const MessageInput: React.FC<{
   disabled: boolean
@@ -41,6 +41,15 @@ export const MessageInput: React.FC<{
   models?: ModelInfo[] | null
   modelId?: string
   onModelChange?: (modelId: string) => void
+  /** 运行引擎选择(外部 ACP agent;engines 为空=非 host,隐藏选择器)。''=Tangu 自有 loop。 */
+  engines?: Array<{ id: string; name: string }>
+  engineId?: string
+  /** 外部引擎的模型(来自能力探测)+ 当前选中 + 切换;无则只读「用引擎默认」。 */
+  engineModels?: Array<{ id: string; name: string; description?: string }>
+  engineModelId?: string
+  onEngineModelChange?: (id: string) => void
+  /** 外部引擎自报的 slash 命令(发 /name 文本由引擎解析)。 */
+  engineCommands?: Array<{ name: string; description: string; hint?: string }>
   thinkingLevel?: AgentConfig['thinkingLevel']
   onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>) => void
   /** 会话级最大循环轮数(/loop 指令调节;缺省由后端取默认 90)。 */
@@ -49,6 +58,13 @@ export const MessageInput: React.FC<{
   /** 计划模式开关(只读调研 → exit_plan_mode 提交计划)。 */
   planMode?: boolean
   onPlanModeChange?: (on: boolean) => void
+  /** 群聊模式:≥2 个参与者(已有 Agent + 临时 Agent)轮流发言、投票、可总结。host-only。 */
+  groupChat?: boolean
+  groupAgents?: string[]
+  groupTempAgents?: NormalAgentDef[]
+  groupIntensity?: AgentConfig['groupIntensity']
+  groupMaxRounds?: number
+  onGroupChange?: (patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds'>) => void
   /** 斜杠命令数据源:技能列表 + 本会话已启用技能 + 各动作回调。 */
   skills?: SkillInfo[] | null
   enabledSkillIds?: string[]
@@ -74,9 +90,12 @@ export const MessageInput: React.FC<{
   onCompact?: () => void
 }> = ({
   disabled, running, execConfig,
-  models, modelId, onModelChange, thinkingLevel, onThinkingChange,
+  models, modelId, onModelChange, engines, engineId,
+  engineModels, engineModelId, onEngineModelChange, engineCommands,
+  thinkingLevel, onThinkingChange,
   maxIterations, onMaxIterationsChange,
   planMode, onPlanModeChange, skills, enabledSkillIds, onToggleSkill,
+  groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
   agents, activeAgentSlug, onSelectAgent, onNewSession, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
@@ -91,6 +110,7 @@ export const MessageInput: React.FC<{
   const [slashSubMenu, setSlashSubMenu] = useState<'model' | null>(null) // /model 的二级菜单
   const [slashDismissed, setSlashDismissed] = useState(false) // Esc 关菜单但保留草稿
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null) // 框外控制排弹出菜单
+  const [groupSetupOpen, setGroupSetupOpen] = useState(false) // 群聊设置浮层
   const [dragOver, setDragOver] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -121,6 +141,18 @@ export const MessageInput: React.FC<{
       setDraft('')
       setSlashSubMenu(null)
       requestAnimationFrame(autoGrow)
+    }
+    // 外部引擎模式:只列 /new + 引擎自报命令(发 /name 文本由引擎解析);跳过 Tangu 专属命令。
+    if (engineId) {
+      if (onNewSession) items.push({ cmd: '/new', desc: t('input.slash.new'), run: () => { onNewSession(); close() } })
+      for (const c of engineCommands || []) {
+        items.push({
+          cmd: `/${c.name}`,
+          desc: c.hint ? `${c.description} · ${c.hint}` : c.description,
+          run: () => { setDraft(`/${c.name} `); setSlashIndex(0); requestAnimationFrame(autoGrow) },
+        })
+      }
+      return items
     }
     if (onPlanModeChange) {
       items.push({
@@ -166,7 +198,7 @@ export const MessageInput: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planMode, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, enabledSkillIds, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onOpenSettings, onToggleSkill, onCompact, agents, activeAgentSlug, onSelectAgent])
+  }, [planMode, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, enabledSkillIds, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onOpenSettings, onToggleSkill, onCompact, agents, activeAgentSlug, onSelectAgent, engineId, engineCommands])
 
   const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
   const slashMatches = useMemo<SlashItem[]>(() => {
@@ -217,7 +249,7 @@ export const MessageInput: React.FC<{
       requestAnimationFrame(autoGrow)
       return
     }
-    if (disabled || running) return
+    if (disabled) return // 运行中不再拦:发送即「运行时转向」,由上层注入当前 run(下一迭代生效)。
     // 划线引用:逐行加 `> ` 前缀拼成 markdown 引用块,置于消息正文之前。
     const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
     const outgoing = quoted + text
@@ -292,18 +324,41 @@ export const MessageInput: React.FC<{
 
   // 模型分组:按 Provider 分类(与设置页一致)
   const modelGroups = useMemo(() => groupModelsByProvider(models || []), [models])
-  const currentModel = (models || []).find((m) => m.id === modelId)
 
   // chip 文案
-  const modeLabel = planMode ? t('input.planMode') : (isHost ? t(approvalLabelKey[approval]) : t('input.normal'))
-  const modelLabel = currentModel?.name || modelId || t('input.selectModel')
-  const effortSuffix = thinkingLevel && thinkingLevel !== 'off' ? ` · ${t(thinkingShortKey[thinkingLevel])}` : ''
-
-  const showModeChip = !!onPlanModeChange || isHost
-  const showModelChip = (!!onModelChange && !!models?.length) || !!onThinkingChange
+  const groupActive = !!groupChat && (groupAgents?.length || 0) >= 2
+  const modeLabel = groupActive
+    ? t('group.modeLabel', { n: groupAgents!.length })
+    : planMode ? t('input.planMode') : (isHost ? t(approvalLabelKey[approval]) : t('input.normal'))
+  const showModeChip = !!onPlanModeChange || isHost || !!onGroupChange
+  const currentEngine = (engines || []).find((e) => e.id === engineId)
+  const engineLabel = currentEngine?.name || t('input.engineDefault')
+  const isEngine = !!engineId
+  // ModelPill 分组:引擎模式=该引擎模型单组;否则=Tangu 模型按 provider 分组。
+  const modelPillGroups: ModelPillGroup[] = isEngine
+    ? [{ label: engineLabel, options: engineModels || [] }]
+    : modelGroups.map((g) => ({
+        label: g.provider + (g.source === 'direct' ? ` · ${t('model.group.direct')}` : g.source === 'forsion' ? ` · ${t('model.group.forsion')}` : ''),
+        options: g.models.map((m) => ({ id: m.id, name: m.name, description: `${m.provider} · ${m.id}` })),
+      }))
+  const showModelPill = isEngine || !!onModelChange || !!onThinkingChange
 
   return (
     <div className="composer">
+      {groupSetupOpen && (
+        <GroupChatSetup
+          agents={agents || []}
+          models={models}
+          initialAgents={groupAgents || []}
+          initialTempAgents={groupTempAgents}
+          initialIntensity={groupIntensity}
+          initialRounds={groupMaxRounds}
+          active={groupActive}
+          onConfirm={(r) => { onGroupChange?.({ groupChat: true, ...r }); setGroupSetupOpen(false) }}
+          onDisable={() => onGroupChange?.({ groupChat: false })}
+          onClose={() => setGroupSetupOpen(false)}
+        />
+      )}
       <div className="composer-inner">
         <div
           className={`composer-box${dragOver ? ' dragover' : ''}`}
@@ -512,9 +567,17 @@ export const MessageInput: React.FC<{
               <Mic size={16} />
             </button>
             {running ? (
-              <button className="btn danger sm" onClick={onStop}>
-                <Square size={12} /> {t('input.stop')}
-              </button>
+              <>
+                {!!draft.trim() && (
+                  // 运行中发送 = 排队转向当前 run(下一迭代读取),Enter 同效。
+                  <button className="btn primary sm" onClick={send} disabled={disabled} title={t('input.send')}>
+                    <Send size={13} />
+                  </button>
+                )}
+                <button className="btn danger sm" onClick={onStop}>
+                  <Square size={12} /> {t('input.stop')}
+                </button>
+              </>
             ) : (
               <button className="btn primary sm" onClick={send} disabled={disabled || !draft.trim()}>
                 <Send size={13} /> {t('input.send')}
@@ -548,6 +611,19 @@ export const MessageInput: React.FC<{
                         <ClipboardList size={14} />
                         <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
                         {planMode && <Check size={13} />}
+                      </button>
+                    </>
+                  )}
+                  {onGroupChange && !isEngine && (
+                    <>
+                      <div className="menu-section">{t('group.menu.section')}</div>
+                      <button
+                        className={`menu-item${groupActive ? ' active' : ''}`}
+                        onClick={() => { setGroupSetupOpen(true); setOpenMenu(null) }}
+                      >
+                        <Users size={14} />
+                        <span className="grow">{groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable')}</span>
+                        {groupActive && <Check size={13} />}
                       </button>
                     </>
                   )}
@@ -587,74 +663,16 @@ export const MessageInput: React.FC<{
               </span>
             )
           })()}
-          {onCompact && (
-            <button
-              className="composer-chip"
-              title={t('input.slash.compact')}
-              onClick={() => onCompact()}
-              disabled={disabled || running}
-            >
-              <FileText size={13} />
-              <span className="chip-label">{t('input.compact')}</span>
-            </button>
-          )}
-
-          {showModelChip && (
-            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-              <button
-                className="composer-chip"
-                title={t('input.modelChipTitle')}
-                onClick={() => setOpenMenu((m) => (m === 'model' ? null : 'model'))}
-              >
-                <span className="chip-label">{modelLabel}{effortSuffix}</span>
-                <ChevronDown size={12} />
-              </button>
-              {openMenu === 'model' && (
-                <div className="composer-menu right">
-                  {onThinkingChange && (
-                    <>
-                      <div className="menu-section">{t('input.thinkingSection')}</div>
-                      {(['off', 'low', 'medium', 'high'] as const).map((lv) => (
-                        <button
-                          key={lv}
-                          className={`menu-item${(thinkingLevel || 'off') === lv ? ' active' : ''}`}
-                          onClick={() => { onThinkingChange(lv); setOpenMenu(null) }}
-                        >
-                          <Brain size={14} />
-                          <span className="grow">{t(thinkingLabelKey[lv])}</span>
-                          {(thinkingLevel || 'off') === lv && <Check size={13} />}
-                        </button>
-                      ))}
-                    </>
-                  )}
-                  {onModelChange && !!models?.length && (
-                    <>
-                      {modelGroups.map((g) => (
-                        <React.Fragment key={g.provider}>
-                          <div className="menu-section">
-                            {g.provider}
-                            {g.source === 'direct' ? ` · ${t('model.group.direct')}` : g.source === 'forsion' ? ` · ${t('model.group.forsion')}` : ''}
-                          </div>
-                          {g.models.map((m) => (
-                            <button
-                              key={`${m.source}-${m.id}`}
-                              className={`menu-item${m.id === modelId ? ' active' : ''}`}
-                              onClick={() => { onModelChange(m.id); setOpenMenu(null) }}
-                            >
-                              <span className="grow">{m.name}</span>
-                              {m.id === modelId && <Check size={13} />}
-                            </button>
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </>
-                  )}
-                  {onModelChange && !models?.length && (
-                    <div className="menu-section" style={{ padding: '6px 8px' }}>{t('common.loading')}</div>
-                  )}
-                </div>
-              )}
-            </span>
+          {showModelPill && (
+            <ModelPill
+              disabled={disabled}
+              modelId={isEngine ? engineModelId : modelId}
+              groups={modelPillGroups}
+              onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
+              thinkingLevel={isEngine ? undefined : thinkingLevel}
+              onThinkingChange={isEngine ? undefined : onThinkingChange}
+              emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
+            />
           )}
         </div>
       </div>

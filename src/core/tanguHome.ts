@@ -50,6 +50,8 @@ export const authFile = (): string => join(tanguHome(), 'auth.json');
 export const providerAuthFile = (): string => join(tanguHome(), 'provider-auth.json');
 export const providersFile = (): string => join(tanguHome(), 'providers.json');
 export const mcpConfigFile = (): string => join(tanguHome(), 'mcp.json');
+/** 外部 agent 引擎偏好(每引擎默认模型等):{ [engineId]: { defaultModel } }。 */
+export const enginePrefsFile = (): string => join(tanguHome(), 'engine-prefs.json');
 export const skillsDir = (): string => join(tanguHome(), 'skills');
 /** 本地 Normal Agent 定义目录(<slug>.md,frontmatter + 正文人格;镜像 skills 范式)。 */
 export const agentsDir = (): string => join(tanguHome(), 'agents');
@@ -58,6 +60,10 @@ export const specialAgentsConfigFile = (): string => join(tanguHome(), 'special-
 export const pgdataDir = (): string => join(tanguHome(), 'pgdata');
 /** 嵌入式 SQLite 本地库文件(TUI / standalone / desktop 三端共用,故本地会话跨前端共享)。 */
 export const stateDbPath = (): string => join(tanguHome(), 'state.db');
+/** 本地记忆/日志目录(MEMORY.md / log/<date>.md / .sync.json);Hermes 风格、可人工查看。 */
+export const memoryDir = (): string => join(tanguHome(), 'memory');
+/** per-install 设备标识文件(日志条目按 deviceId 打标,供多端合并去重)。 */
+export const deviceIdFile = (): string => join(tanguHome(), 'device.json');
 
 /** 确保 home 及子目录存在(幂等);返回 home 路径。 */
 export function ensureHome(): string {

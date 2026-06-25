@@ -12,11 +12,16 @@
 import type { ResolvedModel } from '../core/types.js';
 import { makeDirectModel } from './openaiCompat.js';
 
+/** 直连推理协议。'openai' = OpenAI 兼容 /chat/completions(默认);其余为订阅登录的原生端点。 */
+export type DirectProviderProtocol = 'openai' | 'anthropic-messages' | 'openai-responses';
+
 export interface DirectProvider {
   providerId: string; // 'openai' / 'ollama' / 'anthropic-compat' …(也用作 modelId 前缀)
   baseUrl: string; // OpenAI 兼容端点根(含 /v1,如 http://localhost:11434/v1);openaiCompat 会拼 /chat/completions
   apiKey?: string; // 直连厂商的用户自有 key;Ollama 等本地端点可省
   modelIds?: string[]; // 可选:该 provider 的模型白名单(支持不带前缀直接用)
+  protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切到原生端点
+  accountId?: string; // Codex 订阅:chatgpt-account-id 头取值
 }
 
 export interface ProviderRegistry {
@@ -41,13 +46,13 @@ export function createProviderRegistry(providers: DirectProvider[]): ProviderReg
       const rest = modelId.slice(slash + 1);
       const p = byId.get(prefix);
       if (p && rest) {
-        return { model: makeDirectModel(modelId, p.providerId), apiKey: p.apiKey || '', baseUrl: p.baseUrl, apiModelId: rest };
+        return { model: makeDirectModel(modelId, p.providerId, { protocol: p.protocol, accountId: p.accountId }), apiKey: p.apiKey || '', baseUrl: p.baseUrl, apiModelId: rest };
       }
     }
     // 形式 2:精确命中某 provider 的 modelIds
     for (const p of byId.values()) {
       if (p.modelIds?.includes(modelId)) {
-        return { model: makeDirectModel(modelId, p.providerId), apiKey: p.apiKey || '', baseUrl: p.baseUrl, apiModelId: modelId };
+        return { model: makeDirectModel(modelId, p.providerId, { protocol: p.protocol, accountId: p.accountId }), apiKey: p.apiKey || '', baseUrl: p.baseUrl, apiModelId: modelId };
       }
     }
     return null;

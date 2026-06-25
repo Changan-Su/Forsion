@@ -339,6 +339,25 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
+          ]
+        }
+      }
     }
   ],
   "ai-studio:sandbox+skills": [
@@ -700,6 +719,25 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
+          ]
+        }
+      }
     }
   ],
   "ai-studio:host": [
@@ -1005,6 +1043,25 @@
           },
           "required": [
             "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -1332,6 +1389,25 @@
           },
           "required": [
             "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -1723,6 +1799,25 @@
           },
           "required": [
             "question"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -2133,6 +2228,25 @@
           },
           "required": [
             "question"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -2757,7 +2871,7 @@
       "type": "function",
       "function": {
         "name": "run_background",
-        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。",
+        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。也可启动**交互式**进程(如 `python3 -i`、`node`、问答式 CLI),再用 write_process_input 向其 stdin 喂输入。注意:管道而非真 TTY——支持行式输入(REPL/调试器/逐行提示),但不支持全屏 TUI(vim/top)、检测 isatty 才变交互的程序、以及从 /dev/tty 读密码(sudo/ssh)。",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2818,6 +2932,37 @@
             "process_id": {
               "type": "string",
               "description": "要终止的进程 id"
+            }
+          },
+          "required": [
+            "process_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_process_input",
+        "description": "向某后台进程的 stdin 写入一行输入,用于驱动交互式进程(REPL/调试器/问答式 CLI)。默认在末尾补换行(多数行式程序需要换行才处理)。写入后会等待该进程产出新输出并稳定下来,返回**新增**输出。input 留空=只轮询(不写,看进程又吐了什么);input 传单个 Ctrl-C 字符则发送中断信号。进程须由 run_background 启动且仍在运行。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string",
+              "description": "run_background 返回的进程 id"
+            },
+            "input": {
+              "type": "string",
+              "description": "要写入 stdin 的文本(留空=仅轮询新输出)"
+            },
+            "append_newline": {
+              "type": "boolean",
+              "description": "是否在末尾补换行(默认 true)"
+            },
+            "yield_ms": {
+              "type": "number",
+              "description": "最多等待新输出的毫秒数(默认 8000,范围 250-15000)"
             }
           },
           "required": [
@@ -2984,6 +3129,25 @@
           },
           "required": [
             "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -3627,7 +3791,7 @@
       "type": "function",
       "function": {
         "name": "run_background",
-        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。",
+        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。也可启动**交互式**进程(如 `python3 -i`、`node`、问答式 CLI),再用 write_process_input 向其 stdin 喂输入。注意:管道而非真 TTY——支持行式输入(REPL/调试器/逐行提示),但不支持全屏 TUI(vim/top)、检测 isatty 才变交互的程序、以及从 /dev/tty 读密码(sudo/ssh)。",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3688,6 +3852,37 @@
             "process_id": {
               "type": "string",
               "description": "要终止的进程 id"
+            }
+          },
+          "required": [
+            "process_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_process_input",
+        "description": "向某后台进程的 stdin 写入一行输入,用于驱动交互式进程(REPL/调试器/问答式 CLI)。默认在末尾补换行(多数行式程序需要换行才处理)。写入后会等待该进程产出新输出并稳定下来,返回**新增**输出。input 留空=只轮询(不写,看进程又吐了什么);input 传单个 Ctrl-C 字符则发送中断信号。进程须由 run_background 启动且仍在运行。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string",
+              "description": "run_background 返回的进程 id"
+            },
+            "input": {
+              "type": "string",
+              "description": "要写入 stdin 的文本(留空=仅轮询新输出)"
+            },
+            "append_newline": {
+              "type": "boolean",
+              "description": "是否在末尾补换行(默认 true)"
+            },
+            "yield_ms": {
+              "type": "number",
+              "description": "最多等待新输出的毫秒数(默认 8000,范围 250-15000)"
             }
           },
           "required": [
@@ -3854,6 +4049,25 @@
           },
           "required": [
             "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -4204,6 +4418,25 @@
           },
           "required": [
             "question"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -4573,6 +4806,25 @@
           },
           "required": [
             "question"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -5197,7 +5449,7 @@
       "type": "function",
       "function": {
         "name": "run_background",
-        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。",
+        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。也可启动**交互式**进程(如 `python3 -i`、`node`、问答式 CLI),再用 write_process_input 向其 stdin 喂输入。注意:管道而非真 TTY——支持行式输入(REPL/调试器/逐行提示),但不支持全屏 TUI(vim/top)、检测 isatty 才变交互的程序、以及从 /dev/tty 读密码(sudo/ssh)。",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5258,6 +5510,37 @@
             "process_id": {
               "type": "string",
               "description": "要终止的进程 id"
+            }
+          },
+          "required": [
+            "process_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_process_input",
+        "description": "向某后台进程的 stdin 写入一行输入,用于驱动交互式进程(REPL/调试器/问答式 CLI)。默认在末尾补换行(多数行式程序需要换行才处理)。写入后会等待该进程产出新输出并稳定下来,返回**新增**输出。input 留空=只轮询(不写,看进程又吐了什么);input 传单个 Ctrl-C 字符则发送中断信号。进程须由 run_background 启动且仍在运行。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string",
+              "description": "run_background 返回的进程 id"
+            },
+            "input": {
+              "type": "string",
+              "description": "要写入 stdin 的文本(留空=仅轮询新输出)"
+            },
+            "append_newline": {
+              "type": "boolean",
+              "description": "是否在末尾补换行(默认 true)"
+            },
+            "yield_ms": {
+              "type": "number",
+              "description": "最多等待新输出的毫秒数(默认 8000,范围 250-15000)"
             }
           },
           "required": [
@@ -5424,6 +5707,25 @@
           },
           "required": [
             "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }
@@ -6067,7 +6369,7 @@
       "type": "function",
       "function": {
         "name": "run_background",
-        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。",
+        "description": "在本机后台启动一条长跑 shell 命令(dev server、watch、长测试等),立即返回 process_id。用 read_process_output 看输出、list_processes 看状态、kill_process 终止。一次性命令请用 run_bash;只有需要持续运行/不能阻塞后续步骤的才用这个。也可启动**交互式**进程(如 `python3 -i`、`node`、问答式 CLI),再用 write_process_input 向其 stdin 喂输入。注意:管道而非真 TTY——支持行式输入(REPL/调试器/逐行提示),但不支持全屏 TUI(vim/top)、检测 isatty 才变交互的程序、以及从 /dev/tty 读密码(sudo/ssh)。",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6128,6 +6430,37 @@
             "process_id": {
               "type": "string",
               "description": "要终止的进程 id"
+            }
+          },
+          "required": [
+            "process_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_process_input",
+        "description": "向某后台进程的 stdin 写入一行输入,用于驱动交互式进程(REPL/调试器/问答式 CLI)。默认在末尾补换行(多数行式程序需要换行才处理)。写入后会等待该进程产出新输出并稳定下来,返回**新增**输出。input 留空=只轮询(不写,看进程又吐了什么);input 传单个 Ctrl-C 字符则发送中断信号。进程须由 run_background 启动且仍在运行。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string",
+              "description": "run_background 返回的进程 id"
+            },
+            "input": {
+              "type": "string",
+              "description": "要写入 stdin 的文本(留空=仅轮询新输出)"
+            },
+            "append_newline": {
+              "type": "boolean",
+              "description": "是否在末尾补换行(默认 true)"
+            },
+            "yield_ms": {
+              "type": "number",
+              "description": "最多等待新输出的毫秒数(默认 8000,范围 250-15000)"
             }
           },
           "required": [
@@ -6294,6 +6627,25 @@
           },
           "required": [
             "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "对一个或多个文件做结构化补丁编辑(上下文锚定,优于全量覆盖/单串替换;多文件、多处修改一次提交,原子)。参数 patch 是一段补丁文本,格式:\n*** Begin Patch\n*** Update File: 相对路径\n@@ 可选定位上下文(类/函数名)\n 不变的上下文行(前导空格)\n-要删除的行\n+要新增的行\n*** Add File: 相对路径\n+新文件每一行(均以 + 开头)\n*** Delete File: 相对路径\n*** End Patch\n要点:改动处务必带几行不变的上下文行(以空格开头)以便定位;新建用 Add、删除用 Delete、重命名在 Update File 下紧跟一行「*** Move to: 新路径」。云端工作区暂仅支持 Add/Update。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "完整补丁文本(*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
           ]
         }
       }

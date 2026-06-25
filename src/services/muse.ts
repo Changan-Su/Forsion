@@ -14,7 +14,7 @@ import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
-import { loadSpecialAgentsConfig, DEFAULT_MUSE_PROMPT, isWithinActiveHours, type MuseConfig } from './specialAgentsConfig.js';
+import { loadSpecialAgentsConfig, DEFAULT_MUSE_PROMPT, isWithinActiveHours, buildTodoDedupHint, type MuseConfig } from './specialAgentsConfig.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -65,6 +65,39 @@ async function isRunning(sessionId: string): Promise<boolean> {
   return !!rows.length;
 }
 
+/** 是否有任何**用户**会话的 run 正在排队/运行——后台 Muse 据此让位，避免与用户抢同一模型账号/速率。 */
+async function anyUserRunActive(): Promise<boolean> {
+  const rows = await query<any[]>(
+    `SELECT 1 FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id
+     WHERE r.status IN ('queued', 'running') AND s.kind = 'user' LIMIT 1`,
+  );
+  return !!rows.length;
+}
+
+/** 自 sinceMs（epoch ms）以来该用户的 user 会话是否有新消息。sinceMs=0（冷启动/重启）→ 视为有活动、放行。 */
+async function userActivitySince(userId: string, sinceMs: number): Promise<boolean> {
+  if (!sinceMs) return true;
+  const rows = await query<any[]>(
+    `SELECT 1 FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id
+     WHERE s.user_id = ? AND s.kind = 'user' AND m.timestamp > ? LIMIT 1`,
+    [userId, sinceMs],
+  );
+  return !!rows.length;
+}
+
+/** 取该用户近期 TODO（pending + 已处理/驳回）拼成去重提示，注入 Muse 系统提示。失败 → 空串。 */
+async function existingTodoHint(userId: string): Promise<string> {
+  try {
+    const rows = await query<any[]>(
+      `SELECT title, status FROM muse_todos WHERE user_id = ? ORDER BY created_at DESC LIMIT 40`,
+      [userId],
+    );
+    return buildTodoDedupHint(rows || []);
+  } catch {
+    return '';
+  }
+}
+
 /** 授权文件夹的浅列出(注入提示，让 Muse 知道可用 read_file/list_files 探索的路径)。 */
 async function folderHint(folders: string[]): Promise<string> {
   if (!folders.length) return '';
@@ -98,7 +131,7 @@ async function recentSessionTitles(userId: string): Promise<string> {
 async function startCycle(cfg: MuseConfig): Promise<void> {
   const userId = museUserId();
   const sessionId = await ensureMuseSession(userId, cfg.modelId);
-  const hint = (await folderHint(cfg.allowedFolders)) + (await recentSessionTitles(userId));
+  const hint = (await folderHint(cfg.allowedFolders)) + (await recentSessionTitles(userId)) + (await existingTodoHint(userId));
   const system =
     `${cfg.prompt || DEFAULT_MUSE_PROMPT}\n\n` +
     `约束：本时段最多新增 ${cfg.maxTodosPerWindow} 条 TODO，请珍惜额度，只提交真正高价值、可执行的建议。` +
@@ -113,8 +146,8 @@ async function startCycle(cfg: MuseConfig): Promise<void> {
     assistantMessageId: uuidv4(),
     input: {
       message:
-        '开始这一轮思考：通读你掌握的用户信息（记忆、日志、近期会话主题、授权文件夹），' +
-        '找出当前最值得为用户做的 1-3 件事，用 add_muse_todo 记录（珍惜额度）。完成后简要说明你的判断依据。',
+        '开始这一轮思考：先用 read_log 查看近期日志，再结合注入的记忆、近期会话主题与授权文件夹，' +
+        '找出当前最值得为用户做的 1-3 件事。务必避开下方「你已提过的 TODO」，只用 add_muse_todo 记录真正新的高价值待办（珍惜额度）。完成后简要说明你的判断依据。',
       userMessageId: uuidv4(),
       attachments: [],
       agentConfig: {
@@ -149,9 +182,14 @@ async function tick(): Promise<void> {
     if (!cfg.enabled) { lastRunning = false; return; }
     if (!cfg.modelId) { lastRunning = false; log('已启用但未选模型,跳过'); return; }
     if (!isWithinActiveHours(cfg, nowHour())) { log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
-    rollWindow(cfg);
 
     const userId = museUserId();
+    // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
+    if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
+    // 节奏按变化：自上一周期以来无新用户消息 → 空跑无意义，跳过（不占自重启预算）。
+    if (!(await userActivitySince(userId, lastCycleAt))) { lastRunning = false; log('自上一周期以来无新活动，跳过'); return; }
+
+    rollWindow(cfg);
     const sid = currentSessionId || (await getMuseSessionId(userId));
     if (sid && (await isRunning(sid))) { lastRunning = true; return; }
     lastRunning = false;
@@ -199,7 +237,6 @@ export interface MuseStatus {
   running: boolean;
   restartsThisWindow: number;
   maxRestartsPerWindow: number;
-  todosThisWindow?: number;
   lastCycleAt: number | null;
   lastError: string | null;
   sessionId: string | null;

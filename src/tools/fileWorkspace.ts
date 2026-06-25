@@ -181,14 +181,9 @@ export async function writeFileRaw(
 // ── 本地工作区目录直读写（per-run 模式：hydrate 一次到本地目录，全程本地操作，run 结束 snapshot 一次）──
 // 避免每个文件工具调用都打远程 OSS（cn-beijing 单次往返 ~1-2s），大幅提速。
 
-// splitPath 已过滤 '.'/'..' 并归一化工作区前缀，本地路径直接复用同一套规则。
-function safeSegments(p: string): string[] {
-  return splitPath(p);
-}
-
 /** 列出本地工作区目录某子路径下的文件/子目录（输出与 Penzor 版一致）。 */
 export async function listFilesLocal(baseDir: string, sub: string): Promise<string> {
-  const dir = path.join(baseDir, ...safeSegments(sub));
+  const dir = path.join(baseDir, ...splitPath(sub));
   let entries: any[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -210,16 +205,27 @@ export async function listFilesLocal(baseDir: string, sub: string): Promise<stri
 
 /** 读取本地工作区某文件文本（截断 100k）。 */
 export async function readFileLocal(baseDir: string, sub: string, offset?: number, limit?: number): Promise<string> {
-  const segs = safeSegments(sub);
+  const segs = splitPath(sub);
   if (!segs.length) throw new Error('invalid path');
   const abs = path.join(baseDir, ...segs);
   const buf = await fs.readFile(abs).catch(() => { throw new Error(`file not found: ${sub}`); });
   return paginateText(buf.toString('utf-8'), offset, limit);
 }
 
+/** 读取本地工作区某文件的**完整**文本(不分页,供 apply_patch 应用补丁);不存在返回 null。 */
+export async function readFileRawLocal(baseDir: string, sub: string): Promise<string | null> {
+  const segs = splitPath(sub);
+  if (!segs.length) return null;
+  try {
+    return (await fs.readFile(path.join(baseDir, ...segs))).toString('utf-8');
+  } catch {
+    return null;
+  }
+}
+
 /** 写入本地工作区某文件（中间目录自动建）。 */
 export async function writeFileLocal(baseDir: string, sub: string, content: string): Promise<string> {
-  const segs = safeSegments(sub);
+  const segs = splitPath(sub);
   if (!segs.length) throw new Error('invalid path');
   const abs = path.join(baseDir, ...segs);
   await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => {});

@@ -7,6 +7,7 @@ import type { CloudBrainServices } from './cloudBrain.js';
 import type { BillingServices } from './billing.js';
 import type { AppProfile } from './appProfile.js';
 import type { McpManager } from '../mcp/manager.js';
+import type { EngineManager } from '../engines/manager.js';
 import type { StateStore } from './stateStore.js';
 import { createProfileStore, type ProfileStore } from '../profiles/profileStore.js';
 import { createSqlStateStore } from '../services/stateStore/sqlStateStore.js';
@@ -23,6 +24,8 @@ export interface TanguDeps {
   profileStore?: ProfileStore;
   /** MCP 管理器(可选):仅 standalone/TUI 装配(~/.tangu/mcp.json);microserver/worker 不传 → 云端零影响。 */
   mcp?: McpManager;
+  /** 外部 agent 引擎管理器(可选):仅 standalone/desktop 装配(host-only);microserver/worker 不传 → 云端零影响。 */
+  engines?: EngineManager;
   /**
    * 状态存储接缝。不传 → 默认 SqlStateStore(直连 host.query,行为零变化:microserver/standalone/TUI/网关)。
    * thin worker 传 HttpStateStore(状态走 server,无本地 DB)。

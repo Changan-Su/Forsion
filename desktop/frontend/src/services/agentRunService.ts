@@ -55,6 +55,23 @@ export async function abortRun(cfg: TanguDesktopConfig, runId: string): Promise<
   }).catch(() => {})
 }
 
+/** 运行时转向:把消息注入仍在跑的 run(下一迭代生效)。run 已结束 → 409 返回 {ok:false,reason:'not_active'},前端回退起新 run。 */
+export async function steerRun(
+  cfg: TanguDesktopConfig,
+  runId: string,
+  params: { message: string; attachments?: Attachment[] },
+): Promise<{ ok: boolean; reason?: string; userMessageId?: string }> {
+  const r = await fetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/steer`, {
+    method: 'POST',
+    headers: headers(cfg.token),
+    body: JSON.stringify({ message: params.message, attachments: params.attachments || [] }),
+  })
+  if (r.status === 409) return { ok: false, reason: 'not_active' }
+  if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+  const j = await r.json().catch(() => ({}))
+  return { ok: true, userMessageId: j.userMessageId }
+}
+
 /** 列出某会话的在飞/最近 run(刷新恢复:重新挂 SSE)。 */
 export async function listActiveRuns(
   cfg: TanguDesktopConfig,

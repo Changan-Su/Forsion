@@ -15,6 +15,8 @@ import { createEmbeddedHost } from '../adapters/standalone/embeddedHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
+import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
+import { setSyncSources } from '../services/memorySyncService.js';
 import { createProviderRegistry, type DirectProvider } from '../llm/providerRegistry.js';
 import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import type { StandaloneConfig } from './config.js';
@@ -103,14 +105,20 @@ export async function setupHost(
 
 /**
  * brain:有直连 provider 则 multiBrain(本地命中走直连,其余委托 Forsion);否则纯 httpBrain。
- * assets 一律再叠 localAssets overlay(包内置 skills/ + ~/.tangu/skills/ 的磁盘技能,
- * `local:` 前缀 id;skillLoadout/use_skill/技能面板自动可见)。
+ * 再叠两层本地 overlay:
+ *   - assets:包内置 skills/ + ~/.tangu/skills/ 磁盘技能(`local:` 前缀,面板/use_skill 自动可见)。
+ *   - memory:**本地优先**记忆/日志(~/.tangu/memory/),运行时不打网络;与 Forsion Brain 的同步由
+ *     out-of-band 的 memorySync 服务负责(见 services/memorySync.ts),不在热路径。
+ * httpBrain 仍构造(供同步服务调用云端 memory/log 端点),但不再是运行时 memory 来源。
  */
 export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; providers: DirectProvider[] } {
   const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cfg.token });
   const providers = loadProviders(cfg);
   const base = providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain;
-  const brain = { ...base, assets: createLocalAssets(base.assets) };
+  const localMemory = createLocalMemoryBrain();
+  const brain = { ...base, assets: createLocalAssets(base.assets), memory: localMemory };
+  // 同步源:本地 store(运行时记忆来源)+ 云端 httpBrain.memory(out-of-band 推/拉)。
+  setSyncSources({ store: localMemory.store, cloud: httpBrain.memory });
   return { brain, providers };
 }
 

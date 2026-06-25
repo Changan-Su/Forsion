@@ -9,16 +9,21 @@ import type {
 } from './types'
 import { CLOUD_WORKSPACE_KEY } from './types'
 import * as api from './services/backendService'
-import { abortRun, listActiveRuns, resolveApproval, resolveInquiry, startRun, subscribeRunEvents, testConnection } from './services/agentRunService'
+import { abortRun, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from './services/agentRunService'
 import { Sidebar } from './components/Sidebar'
 import { ChatHeader } from './components/ChatHeader'
+import { EnginePicker } from './components/EnginePicker'
 import { ChatArea } from './components/ChatArea'
 import { MessageInput } from './components/MessageInput'
-import { SettingsModal } from './components/SettingsModal'
+import { SettingsModal, type Tab as SettingsTab } from './components/SettingsModal'
 import { RightPanel } from './components/RightPanel'
-import { HistorianView } from './components/HistorianView'
-import { MuseView } from './components/MuseView'
+import { WorkspaceFilePreview, type PreviewTarget } from './components/WorkspaceFilePreview'
+import { AnimatePresence } from 'framer-motion'
 import { WeChatView } from './components/WeChatView'
+import { AgentsDetailView } from './components/AgentsDetailView'
+import { MemoryView } from './components/MemoryView'
+import { WorkspaceDetailView } from './components/WorkspaceDetailView'
+import { ProjectSelector } from './components/ProjectSelector'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
 import { resolveInitialMode, resolveInitialPreset } from './theme/registry'
 import { applyTheme } from './theme/loader'
@@ -70,6 +75,17 @@ function recordToUi(r: any): UiMessage {
   return msg
 }
 
+/** 群聊事件在单条 run 的 assistantRef 上挂的额外状态(跨事件持久;StrictMode 安全:仅在事件体内改)。 */
+type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
+
+/** 群聊发言人徽章配色:按 slug 派生稳定色相(主持人=金色)。前端派生,不改后端 agent 定义。 */
+function groupColor(slug: string): string {
+  if (slug === '__host__') return '#b8860b'
+  let h = 0
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
+  return `hsl(${h % 360} 62% 45%)`
+}
+
 export function App(): React.JSX.Element {
   const { t } = useI18n()
   const [cfg, setCfg] = useState<TanguDesktopConfig>({ backendUrl: 'http://localhost:8787', token: '', modelId: '' })
@@ -90,11 +106,20 @@ export function App(): React.JSX.Element {
   const [modelsResp, setModelsResp] = useState<ModelsResponse | null>(null)
   const [skillsList, setSkillsList] = useState<SkillInfo[] | null>(null)
   const [agentDefs, setAgentDefs] = useState<NormalAgentDef[]>([])
-  const [specialView, setSpecialView] = useState<'historian' | 'muse' | 'wechat' | null>(null)
+  const [engines, setEngines] = useState<Array<{ id: string; name: string; available?: boolean; defaultModel?: string }>>([]) // host 端外部 agent 引擎(含 available 检测;云端=空)
+  const [engineCaps, setEngineCaps] = useState<Record<string, { models: Array<{ id: string; name: string; description?: string }>; commands: Array<{ name: string; description: string; hint?: string }> }>>({}) // engineId → 探测到的模型/命令(懒拉缓存)
+  // 主区面板:微信远程 / 后台智能体详情 / 记忆 / 工作区详情(null=会话或空白新对话)。
+  const [specialView, setSpecialView] = useState<'wechat' | 'agents' | 'memory' | 'workspace' | null>(null)
+  const [detailWsKey, setDetailWsKey] = useState<string | null>(null) // 工作区详情面板的目标工作区 key
+  const [newChatWs, setNewChatWs] = useState<WorkspaceDescriptor | null>(null) // 空白新对话选定的 Project(null=Tangu 默认)
+  const [newChatCfg, setNewChatCfg] = useState<AgentConfig>({}) // 空白新对话草稿配置(审批/计划/思考/技能/agent;发送时并入新会话)
+  const [newChatModel, setNewChatModel] = useState<string | null>(null) // 空白新对话草稿模型(modelId 不在 AgentConfig 内,单列)
   // Special Agents 各自开关(侧栏入口按此显隐;云端 404 / 失败 → 全 false)。
   const [specialEnabled, setSpecialEnabled] = useState<{ historian: boolean; muse: boolean }>({ historian: false, muse: false })
   // 划线引用:聊天区选中的待引用文本(发送时以 markdown 引用拼到消息前)。
   const [quote, setQuote] = useState('')
+  // 工作区文件浮层预览目标(点右侧工作区文件打开;null=关闭)。
+  const [filePreview, setFilePreview] = useState<PreviewTarget | null>(null)
   const [messagesBySession, setMessagesBySession] = useState<Record<string, UiMessage[]>>({})
   const [configBySession, setConfigBySession] = useState<Record<string, AgentConfig>>({})
   const [runningBySession, setRunningBySession] = useState<Record<string, string>>({})
@@ -107,6 +132,8 @@ export function App(): React.JSX.Element {
   // 聊天滚动容器引用:ChatArea 用它吸底,右侧「目录」用它扫描/跳转(共享同一容器)。
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 设置页打开时定位到的 tab(null=默认 connection);微信/技能等入口跳到对应分区。
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
   const [onboarding, setOnboarding] = useState(false)
   const [themePreset, setThemePreset] = useState(resolveInitialPreset)
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>(resolveInitialMode)
@@ -119,11 +146,19 @@ export function App(): React.JSX.Element {
   cfgRef.current = cfg
   const activeIdRef = useRef(activeId)
   activeIdRef.current = activeId
+  const newChatWsRef = useRef(newChatWs)
+  newChatWsRef.current = newChatWs
+  const newChatCfgRef = useRef(newChatCfg)
+  newChatCfgRef.current = newChatCfg
+  const newChatModelRef = useRef(newChatModel)
+  newChatModelRef.current = newChatModel
   // 给轮询读「当前会话是否在本地 streaming」用,避免把 runningBySession 列进 effect 依赖导致定时器频繁重建。
   const runningRef = useRef(runningBySession)
   runningRef.current = runningBySession
   const runAborts = useRef(new Map<string, AbortController>())
   const subscribedRuns = useRef(new Set<string>())
+  // 用户主动停止的 run:SSE 本地中止后,subscribeRun 的 .catch 据此把消息标「已停止」而非「错误」。
+  const stoppedRuns = useRef(new Set<string>())
   const loadedHistory = useRef(new Set<string>())
 
   const toast = useCallback((text: string, error = false) => {
@@ -162,6 +197,7 @@ export function App(): React.JSX.Element {
   const endRun = useCallback((sessionId: string, runId: string) => {
     runAborts.current.delete(runId)
     subscribedRuns.current.delete(runId)
+    stoppedRuns.current.delete(runId)
     setRunningBySession((prev) => {
       if (prev[sessionId] !== runId) return prev
       const next = { ...prev }
@@ -182,8 +218,10 @@ export function App(): React.JSX.Element {
   const refreshSessionsRef = useRef<((c: TanguDesktopConfig) => Promise<unknown>) | null>(null)
 
   // ── SSE 事件归约 ──
-  const reduceEvent = useCallback((sessionId: string, runId: string, assistantId: string, ev: AgentRunEvent) => {
+  const reduceEvent = useCallback((sessionId: string, runId: string, assistantRef: { current: string }, ev: AgentRunEvent) => {
     const pl = ev.payload || {}
+    // 当前正在累积的助手消息 id;turn_boundary(运行时转向)会把它推进到新段,后续 token/工具事件自动落到新段。
+    const assistantId = assistantRef.current
     switch (ev.type) {
       case 'token':
         patchMessage(sessionId, assistantId, (m) => ({ ...m, content: m.content + (pl.delta || '') }))
@@ -252,18 +290,30 @@ export function App(): React.JSX.Element {
           ),
         }))
         break
-      case 'inquiry_request':
-        patchMessage(sessionId, assistantId, (m) => ({
-          ...m,
-          inquiries: [
-            ...(m.inquiries || []),
-            {
-              inquiryId: pl.inquiryId, runId, question: pl.question || '',
-              options: Array.isArray(pl.options) ? pl.options : [], status: 'pending' as const,
-            },
-          ],
-        }))
+      case 'inquiry_request': {
+        const inq = {
+          inquiryId: pl.inquiryId, runId, question: pl.question || '',
+          options: Array.isArray(pl.options) ? pl.options : [], status: 'pending' as const,
+        }
+        const gref = assistantRef as GroupRef
+        if (gref.group && gref.groupEnded) {
+          // 群聊「是否总结」:讨论已结束 → 独立底部气泡(主持人身份),用户答「是」则总结复用本气泡。
+          const id = `grp-inq-${pl.inquiryId}`
+          gref.current = id
+          gref.reuseNext = true
+          setMessagesBySession((prev) => ({
+            ...prev,
+            [sessionId]: [...(prev[sessionId] || []), {
+              id, role: 'assistant' as const, content: '', status: 'done' as const, timestamp: Date.now(),
+              agentId: '__host__', agentName: '主持人', agentColor: groupColor('__host__'), inquiries: [inq],
+            }],
+          }))
+        } else {
+          // 普通 ask_user(含群聊发言人轮内提问):挂到当前发言气泡。
+          patchMessage(sessionId, assistantId, (m) => ({ ...m, inquiries: [...(m.inquiries || []), inq] }))
+        }
         break
+      }
       case 'inquiry_result':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m,
@@ -287,6 +337,59 @@ export function App(): React.JSX.Element {
         }))
         if (pl.file) toast(t('app.planArchived', { file: pl.file }))
         break
+      case 'group_speaker': {
+        // 群聊发言人切换:首位发言人复用 send 建的空占位气泡;reuseNext(总结提问后)复用问句气泡;
+        // 其余新建一条发言气泡并推进 assistantRef。(ref.current 在事件处理体内推进,与 turn_boundary 同款,StrictMode 安全。)
+        const ref = assistantRef as GroupRef
+        ref.group = true
+        const slug = String(pl.slug || '')
+        const name = String(pl.name || slug)
+        const round = Number(pl.round) || 0
+        const color = groupColor(slug)
+        if (pl.phase === 'start') {
+          if (!ref.groupSeen || ref.reuseNext) {
+            ref.groupSeen = true
+            ref.reuseNext = false
+            patchMessage(sessionId, ref.current, (m) => ({ ...m, agentId: slug, agentName: name, agentColor: color, groupRound: round, status: 'streaming' }))
+          } else {
+            const newId = `grp-${slug}-${round}-${Date.now()}`
+            ref.current = newId
+            setMessagesBySession((prev) => ({
+              ...prev,
+              [sessionId]: [...(prev[sessionId] || []), { id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentId: slug, agentName: name, agentColor: color, groupRound: round }],
+            }))
+          }
+        } else if (pl.phase === 'end') {
+          patchMessage(sessionId, ref.current, (m) => ({ ...m, status: 'done' }))
+        }
+        break
+      }
+      case 'group_vote': {
+        const votes = Array.isArray(pl.votes) ? pl.votes : []
+        setMessagesBySession((prev) => ({
+          ...prev,
+          [sessionId]: [...(prev[sessionId] || []), {
+            id: `vote-${pl.round}-${Date.now()}`, role: 'system', content: '', status: 'done', timestamp: Date.now(),
+            groupVote: { round: Number(pl.round) || 0, endCount: Number(pl.endCount) || 0, total: Number(pl.total) || votes.length, votes },
+          }],
+        }))
+        break
+      }
+      case 'group_ended': {
+        (assistantRef as GroupRef).groupEnded = true // 之后的「是否总结」询问走底部独立气泡
+        const reasonMap: Record<string, string> = {
+          vote: t('group.ended.vote'), max_rounds: t('group.ended.maxRounds'),
+          cost_limit: t('group.ended.costLimit'), quota: t('group.ended.quota'),
+        }
+        const reason = reasonMap[String(pl.reason)] || t('group.ended.default')
+        setMessagesBySession((prev) => ({
+          ...prev,
+          [sessionId]: [...(prev[sessionId] || []), {
+            id: `ended-${Date.now()}`, role: 'system', content: t('group.ended.line', { rounds: Number(pl.rounds) || 0, reason }), status: 'done', timestamp: Date.now(),
+          }],
+        }))
+        break
+      }
       case 'usage':
         // ctx=本轮真实 prompt(占比);live=本 run 累计 tokens。会话消耗 = base + live。
         setUsageBySession((prev) => {
@@ -294,6 +397,31 @@ export function App(): React.JSX.Element {
           return { ...prev, [sessionId]: { ctx: pl.prompt || u.ctx, base: u.base, live: pl.total || u.live } }
         })
         break
+      case 'turn_boundary': {
+        // 运行时转向回合切分:关闭(空段则丢弃)当前助手段 A → 插入用户消息 U → 开新流式助手段 B,
+        // 并把后续 token/工具事件路由到 B(推进 assistantRef.current)。U/B 按 id 去重(send 已乐观插了 U)。
+        const finalizedId = pl.finalizedAssistantId
+        const newId = pl.newAssistantId
+        const users: Array<{ id: string; content: string }> = Array.isArray(pl.userMessages) ? pl.userMessages : []
+        setMessagesBySession((prev) => {
+          const list = prev[sessionId] || []
+          const have = new Set(list.map((m) => m.id))
+          const next = list
+            .map((m) => (m.id === finalizedId
+              ? { ...m, content: pl.finalizedContent || m.content, status: 'done' as const }
+              : m))
+            // A 完全空(刚开跑就转向)→ 丢弃,不留空气泡;有正文或工具事件则保留。
+            .filter((m) => !(m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length)))
+          const additions: UiMessage[] = []
+          for (const u of users) {
+            if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, status: 'done', timestamp: Date.now() })
+          }
+          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1 })
+          return { ...prev, [sessionId]: [...next, ...additions] }
+        })
+        if (newId) assistantRef.current = newId
+        break
+      }
       case 'done':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m,
@@ -313,10 +441,12 @@ export function App(): React.JSX.Element {
         setTimeout(() => { void refreshSessionsRef.current?.(cfgRef.current).catch(() => {}) }, 6000)
         break
       case 'error':
+        // 中止(aborted)与真错误分开:中止保留后端落库的部分正文 + 标「已停止」,不显示成失败。
         patchMessage(sessionId, assistantId, (m) => ({
           ...m,
-          status: 'error' as const,
-          error: pl.error || 'error',
+          content: pl.content || m.content,
+          status: pl.aborted ? ('stopped' as const) : ('error' as const),
+          error: pl.aborted ? undefined : (pl.error || 'error'),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
@@ -333,10 +463,15 @@ export function App(): React.JSX.Element {
       subscribedRuns.current.add(runId)
       const ac = new AbortController()
       runAborts.current.set(runId, ac)
+      // 可变盒:turn_boundary(运行时转向)会推进当前助手段 id,后续 token/工具事件自动落到新段。
+      const assistantRef = { current: assistantId }
       setRunningBySession((prev) => ({ ...prev, [sessionId]: runId }))
-      void subscribeRunEvents(cfgRef.current, runId, (ev) => reduceEvent(sessionId, runId, assistantId, ev), ac.signal)
+      void subscribeRunEvents(cfgRef.current, runId, (ev) => reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
         .catch((e) => {
-          patchMessage(sessionId, assistantId, (m) => ({ ...m, status: 'error', error: e?.message || t('app.eventStreamInterrupted') }))
+          // 用户主动停止 → 本地中止 SSE 会走到这里;stop() 已把消息收尾为「已停止」,不要再标错误。
+          if (!stoppedRuns.current.has(runId)) {
+            patchMessage(sessionId, assistantRef.current, (m) => ({ ...m, status: 'error', error: e?.message || t('app.eventStreamInterrupted') }))
+          }
           endRun(sessionId, runId)
         })
     },
@@ -369,6 +504,8 @@ export function App(): React.JSX.Element {
     void api.listSkills(c).then(setSkillsList).catch(() => setSkillsList(null))
     // 本地 Normal Agent 目录(斜杠 /agent:* 用;云端 404 → 空)。
     void api.listAgents(c).then(setAgentDefs).catch(() => setAgentDefs([]))
+    // 外部 agent 引擎(host-only;云端 → 空 → 输入栏不显示引擎选择器)。
+    void api.listEngines(c).then(setEngines).catch(() => setEngines([]))
     // Special Agents 开关(侧栏入口显隐;云端 hostExec=false → 404 → 全 false)。
     void refreshSpecialEnabled(c)
   }, [refreshSessions, toast, t])
@@ -385,8 +522,7 @@ export function App(): React.JSX.Element {
 
   // 正在查看的 Special Agent / 微信远程 被关掉 → 退出其视图,避免停留在死视图。
   useEffect(() => {
-    if (specialView === 'historian' && !specialEnabled.historian) setSpecialView(null)
-    if (specialView === 'muse' && !specialEnabled.muse) setSpecialView(null)
+    if (specialView === 'agents' && !specialEnabled.historian && !specialEnabled.muse) setSpecialView(null)
     const wechatOn = !!window.tangu?.backendStatus && desktopConfig?.wechatEnabled !== false
     if (specialView === 'wechat' && !wechatOn) setSpecialView(null)
   }, [specialEnabled, specialView, desktopConfig?.wechatEnabled])
@@ -706,12 +842,16 @@ export function App(): React.JSX.Element {
   // ── 发送 / 停止 / 审批 ──
   const send = useCallback(async (text: string, attachments: Attachment[], workspaceFiles?: Attachment[]): Promise<boolean> => {
     let sid = activeIdRef.current
+    const wasNewChat = !sid
     let implicitInit: AgentConfig | null = null
     if (!sid) {
-      // 无会话直接发送:落进 Tangu 默认工作区(managed)或云沙箱(其余)。
-      const path = desktopMode.current === 'managed' ? (defaultWsDirRef.current || homeDirRef.current || null) : null
+      // 空白新对话:落进 New Chat 选定的 Project(newChatWs);未选则 Tangu 默认工作区(managed)或云沙箱(其余)。
+      const ws = newChatWsRef.current
+      const path = ws
+        ? (ws.kind === 'local' ? (ws.path || defaultWsDirRef.current || homeDirRef.current || null) : null)
+        : (desktopMode.current === 'managed' ? (defaultWsDirRef.current || homeDirRef.current || null) : null)
       const s = await api.createSession(cfgRef.current, path
-        ? { project_path: path, project_name: t('app.defaultWorkspace') }
+        ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
         : undefined).catch(() => null)
       if (!s) {
         toast(t('app.cannotCreateSession'), true)
@@ -721,9 +861,19 @@ export function App(): React.JSX.Element {
       setActiveId(s.id)
       loadedHistory.current.add(s.id)
       sid = s.id
-      implicitInit = path ? { execMode: 'host', approvalMode: 'auto-edit', cwd: path } : { execMode: 'sandbox' }
+      // 并入空白新对话草稿(审批/计划/思考/技能/agent);execMode/cwd 由 Project 决定,权威覆盖。
+      const draft = newChatCfgRef.current
+      implicitInit = path
+        ? { ...draft, execMode: 'host', approvalMode: draft.approvalMode || 'auto-edit', cwd: path }
+        : { ...draft, execMode: 'sandbox', cwd: undefined }
       setConfigBySession((prev) => ({ ...prev, [s.id]: implicitInit! }))
       void api.putSessionConfig(cfgRef.current, s.id, implicitInit).catch(() => {})
+      // 草稿模型落到新会话(否则首条用全局默认)。
+      if (newChatModelRef.current) {
+        const m = newChatModelRef.current
+        setSessions((prev) => prev.map((x) => (x.id === s.id ? { ...x, model_id: m } : x)))
+        void api.updateSession(cfgRef.current, s.id, { model_id: m }).catch(() => {})
+      }
     }
     const sessionId = sid
     const agentConfig = { ...(implicitInit || configBySession[sessionId] || {}) }
@@ -738,8 +888,32 @@ export function App(): React.JSX.Element {
         toast(t('app.workspaceUploadFail', { e: e?.message || e }), true)
       }
     }
+    // 运行中再发 → 运行时转向:注入当前 run(下一迭代边界生效),而非另起新 run。runningRef 取实时状态。
+    const activeRunId = runningRef.current[sessionId]
+    if (activeRunId) {
+      try {
+        const sr = await steerRun(cfgRef.current, activeRunId, { message: text, attachments })
+        if (sr.ok) {
+          // 乐观插入用户气泡;后端 turn_boundary 事件会按同一 id 去重,并在其后开新助手段。
+          setMessagesBySession((prev) => ({
+            ...prev,
+            [sessionId]: [
+              ...(prev[sessionId] || []),
+              { id: sr.userMessageId || `u-${Date.now()}`, role: 'user', content: text, attachments, status: 'done', timestamp: Date.now() },
+            ],
+          }))
+          return true
+        }
+        // not_active:run 在我们发出前刚结束 → 落到下方起新 run。
+      } catch (e: any) {
+        toast(t('app.sendFail', { e: e?.message || e }), true)
+        return false
+      }
+    }
     // 会话级模型(输入栏切换器持久化在 session.model_id)优先于全局默认。
-    const sessionModelId = sessions.find((s) => s.id === sessionId)?.model_id || undefined
+    const sessionModelId = wasNewChat
+      ? (newChatModelRef.current || undefined)
+      : (sessions.find((s) => s.id === sessionId)?.model_id || undefined)
     try {
       const r = await startRun(cfgRef.current, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
       setMessagesBySession((prev) => ({
@@ -769,8 +943,18 @@ export function App(): React.JSX.Element {
     const sid = activeIdRef.current
     if (!sid) return
     const runId = runningBySession[sid]
-    if (runId) void abortRun(cfgRef.current, runId)
-  }, [runningBySession])
+    if (!runId) return
+    stoppedRuns.current.add(runId)                        // 标记主动停止 → SSE catch 不报错
+    void abortRun(cfgRef.current, runId).catch(() => {})  // 让后端真正取消并落库部分输出(供后续轮次读取)
+    runAborts.current.get(runId)?.abort()                 // 立即停本地 SSE,按钮即时生效(不再「按了不停」)
+    // 乐观:把当前流式消息原地收尾为「已停止」,保留已流出的部分内容(不再凭空消失)。
+    setMessagesBySession((prev) => {
+      const list = prev[sid]
+      if (!list) return prev
+      return { ...prev, [sid]: list.map((m) => (m.status === 'streaming' ? { ...m, status: 'stopped' as const } : m)) }
+    })
+    endRun(sid, runId)
+  }, [runningBySession, endRun])
 
   // 截断会话消息(从 fromIndex 起,含)后以给定文本重发:编辑重发 / 重新生成的公共底座。
   // 服务端每轮从 DB 全量重建上下文,故必须先删旧消息再发新 run,否则被截断的旧轮次仍会污染生成。
@@ -914,6 +1098,55 @@ export function App(): React.JSX.Element {
     })
   }, [])
 
+  /** 运行引擎选择(输入栏「运行引擎」chip):''=Tangu 自有 loop;否则委托外部 ACP 引擎。持久化进 agent_config.engineId。 */
+  const setSessionEngine = useCallback((engineId: string) => {
+    const sid = activeIdRef.current
+    if (!sid) return
+    setConfigBySession((prev) => {
+      // 切引擎清掉旧的引擎模型选择(对新引擎无意义);选外部引擎则关群聊(二者互斥:外部引擎独占整个 turn)。
+      const next = { ...(prev[sid] || {}), engineId: engineId || undefined, engineModelId: undefined, ...(engineId ? { groupChat: false } : {}) }
+      void api.putSessionConfig(cfgRef.current, sid, next).catch(() => {})
+      return { ...prev, [sid]: next }
+    })
+  }, [])
+
+  /** 外部引擎模型选择(ModelPill):写入 agent_config.engineModelId(run 内经 ACP setSessionModel 应用)。 */
+  const setSessionEngineModel = useCallback((engineModelId: string) => {
+    const sid = activeIdRef.current
+    if (!sid) return
+    setConfigBySession((prev) => {
+      const next = { ...(prev[sid] || {}), engineModelId: engineModelId || undefined }
+      void api.putSessionConfig(cfgRef.current, sid, next).catch(() => {})
+      return { ...prev, [sid]: next }
+    })
+  }, [])
+
+  // 选了外部引擎 → 懒拉能力(模型/命令)填选择器;按 engineId 缓存,只拉一次(首次 spawn 慢)。
+  const curEngineId = activeId ? configBySession[activeId]?.engineId : newChatCfg.engineId
+  // 当前会话所用 agent 名(仅外部引擎显示在头部;Tangu 内置不显示)。
+  const curEngineName = curEngineId ? (engines.find((e) => e.id === curEngineId)?.name || '') : ''
+  // 仅「已检测到」的第三方引擎进新会话选择器(未装/未登录的不显示)。
+  const availableEngines = engines.filter((e) => e.available)
+  useEffect(() => {
+    if (!curEngineId || engineCaps[curEngineId]) return
+    let cancelled = false
+    void api.getEngineCapabilities(cfgRef.current, curEngineId).then((caps) => {
+      if (!cancelled) setEngineCaps((p) => ({ ...p, [curEngineId]: caps }))
+    })
+    return () => { cancelled = true }
+  }, [curEngineId, engineCaps])
+
+  /** 群聊模式配置(输入栏「群聊」浮层):合并进 agent_config 的 group* 字段(agentLoop 起 run 时读取)。 */
+  const setSessionGroup = useCallback((patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds'>) => {
+    const sid = activeIdRef.current
+    if (!sid) return
+    setConfigBySession((prev) => {
+      const next = { ...(prev[sid] || {}), ...patch }
+      void api.putSessionConfig(cfgRef.current, sid, next).catch(() => {})
+      return { ...prev, [sid]: next }
+    })
+  }, [])
+
   /** 会话内技能启停(/skill:<id> 斜杠命令):合并进 agent_config.enabledSkillIds。 */
   const toggleSessionSkill = useCallback((skillId: string) => {
     const sid = activeIdRef.current
@@ -985,6 +1218,12 @@ export function App(): React.JSX.Element {
     void refreshSpecialEnabled(cfgRef.current)
   }, [refreshSpecialEnabled])
 
+  // 打开设置,可选定位到具体 tab(无参=默认 connection)。
+  const openSettings = useCallback((tab?: SettingsTab) => {
+    setSettingsTab(tab ?? null)
+    setSettingsOpen(true)
+  }, [])
+
   const onGlassChange = useCallback((on: boolean) => {
     setGlassOn(on)
     document.documentElement.dataset.glass = on ? 'on' : 'off'
@@ -1002,12 +1241,12 @@ export function App(): React.JSX.Element {
       }
       if (e.key === ',') {
         e.preventDefault()
-        setSettingsOpen(true)
+        openSettings()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newSession])
+  }, [newSession, openSettings])
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeId) || archivedSessions.find((s) => s.id === activeId) || null,
@@ -1022,6 +1261,22 @@ export function App(): React.JSX.Element {
   const running = !!(activeId && runningBySession[activeId])
   const runningIds = useMemo(() => new Set(Object.keys(runningBySession)), [runningBySession])
   const execConfig = (activeId && configBySession[activeId]) || {}
+  // 空白新对话:无会话配置可依,按选定 Project 推导执行模式(本地→host,显示审批档;云→sandbox)+ 叠加草稿配置。
+  const mvCfg: AgentConfig = activeId ? execConfig : {
+    execMode: newChatWs?.kind === 'cloud' ? 'sandbox' : 'host',
+    approvalMode: 'auto-edit',
+    cwd: newChatWs?.kind === 'cloud' ? undefined : (newChatWs?.path || undefined),
+    ...newChatCfg,
+  }
+  const mvModelId = activeId
+    ? (activeSession?.model_id || cfg.modelId || modelsResp?.defaultModelId || '')
+    : (newChatModel || cfg.modelId || modelsResp?.defaultModelId || '')
+  // 云端会话(沙箱:在云端 Tangu worker 跑)只能用云端(forsion)模型;本地会话(host)用全部
+  // (本地后端可直连 provider + 调云端 brain-api)。隔离模型列表:云端会话不再列出选了也无效的本地模型。
+  const isCloudSession = mvCfg.execMode === 'sandbox'
+  const visibleModels = !modelsResp?.models
+    ? null
+    : (isCloudSession ? modelsResp.models.filter((m) => m.source === 'forsion') : modelsResp.models)
   const wechatFeatureEnabled = !!window.tangu?.backendStatus && desktopConfig?.wechatEnabled !== false
 
   if (!cfgLoaded) return <div className="app" />
@@ -1038,22 +1293,26 @@ export function App(): React.JSX.Element {
         cfg={cfg}
         modelId={activeSession?.model_id || cfg.modelId || modelsResp?.defaultModelId || ''}
         activeSession={activeSession}
-        onSelect={(id) => { setSpecialView(null); setActiveId(id); setQuote('') }}
+        onSelect={(id) => { if (settingsOpen) closeSettings(); setSpecialView(null); setActiveId(id); setQuote('') }}
         showSpecial={!!window.tangu?.backendStatus}
         historianEnabled={specialEnabled.historian}
         museEnabled={specialEnabled.muse}
         wechatEnabled={wechatFeatureEnabled}
         specialView={specialView}
-        onOpenSpecial={(v) => setSpecialView(v)}
+        onOpenSpecial={(v) => { if (settingsOpen) closeSettings(); setSpecialView(v) }}
+        onNewChat={() => { if (settingsOpen) closeSettings(); setSpecialView(null); setActiveId(null); setNewChatWs(null); setNewChatCfg({}); setNewChatModel(null) }}
+        onOpenMemory={() => { if (settingsOpen) closeSettings(); setSpecialView('memory') }}
+        onOpenAgentsSettings={() => openSettings('agents')}
+        onOpenWorkspace={(wsKey) => { if (settingsOpen) closeSettings(); setDetailWsKey(wsKey); setSpecialView('workspace') }}
         workspaces={workspaces}
-        onNewInWorkspace={(ws) => { setSpecialView(null); void createInWorkspace(ws) }}
+        onNewInWorkspace={(ws) => { if (settingsOpen) closeSettings(); setSpecialView(null); void createInWorkspace(ws) }}
         onAddWorkspace={() => void addLocalWorkspace()}
         onRenameWorkspace={(ws, name) => void renameWorkspace(ws, name)}
         onRemoveWorkspace={(ws) => void removeWorkspace(ws)}
         onRename={(id, t) => void renameSession(id, t)}
         onArchive={(id, a) => void archiveSession(id, a)}
         onDelete={(id) => void deleteSession(id)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openSettings()}
         onToast={toast}
         onAuthChange={() => {
           // 登录/登出后托管后端会重启(主进程触发);稍候重连 + 刷新会话/模型。
@@ -1063,7 +1322,7 @@ export function App(): React.JSX.Element {
       <main className="main">
         <ChatHeader
           title={settingsOpen ? t('settings.title') : (activeSession?.title || 'Tangu Agent')}
-          modelId={activeSession?.model_id || cfg.modelId}
+          engineName={curEngineName}
           connState={connState}
           connMessage={connMessage}
           sidebarCollapsed={sidebarCollapsed}
@@ -1081,6 +1340,7 @@ export function App(): React.JSX.Element {
           {settingsOpen ? (
             <SettingsModal
               open={settingsOpen}
+              initialTab={settingsTab ?? undefined}
               cfg={cfg}
               activeSession={(activeId && sessions.find((s) => s.id === activeId)) || null}
               themePreset={themePreset}
@@ -1128,16 +1388,23 @@ export function App(): React.JSX.Element {
             />
           ) : (
             <>
-              {specialView === 'historian' ? (
-                <HistorianView cfg={cfg} />
-              ) : specialView === 'muse' ? (
-                <MuseView cfg={cfg} sessions={sessions} onInjected={(sid) => { setSpecialView(null); setActiveId(sid) }} />
+              {specialView === 'agents' ? (
+                <AgentsDetailView cfg={cfg} onOpenSettings={() => openSettings('agents')} />
+              ) : specialView === 'memory' ? (
+                <MemoryView cfg={cfg} />
+              ) : specialView === 'workspace' ? (
+                <WorkspaceDetailView
+                  workspace={workspaces.find((w) => w.key === detailWsKey) || defaultWorkspace()}
+                  sessions={[...sessions, ...archivedSessions].filter((s) => (s.project_path || CLOUD_WORKSPACE_KEY) === detailWsKey)}
+                  onOpenSession={(id) => { setSpecialView(null); setActiveId(id) }}
+                  onNewChat={() => { const w = workspaces.find((x) => x.key === detailWsKey) || null; setSpecialView(null); setActiveId(null); setNewChatWs(w); setNewChatCfg({}); setNewChatModel(null) }}
+                />
               ) : specialView === 'wechat' ? (
                 <WeChatView
                   cfg={cfg}
                   activeSession={activeSession}
                   modelId={activeSession?.model_id || cfg.modelId || modelsResp?.defaultModelId || ''}
-                  onOpenSettings={() => setSettingsOpen(true)}
+                  onOpenSettings={() => openSettings('wechat')}
                   onOpenSession={(sid) => { loadedHistory.current.delete(sid); setSpecialView(null); setActiveId(sid); void refreshSessions(cfgRef.current).catch(() => {}) }}
                   onSessionsChanged={() => { void refreshSessions(cfgRef.current).catch(() => {}) }}
                 />
@@ -1153,28 +1420,67 @@ export function App(): React.JSX.Element {
                   running={running}
                   onQuote={setQuote}
                 />
+                {/* 引擎选择器仅在 host(本地)会话且未开群聊时出现:外部引擎是本地 CLI(云端沙箱会话无法用),且与群聊互斥。 */}
+                {activeMessages.length === 0 && availableEngines.length > 0 && mvCfg.execMode === 'host' && !mvCfg.groupChat && (
+                  <EnginePicker
+                    engines={availableEngines}
+                    selectedId={mvCfg.engineId || ''}
+                    warmingId={mvCfg.engineId && !engineCaps[mvCfg.engineId] ? mvCfg.engineId : null}
+                    onSelect={(id) => (activeId ? setSessionEngine(id) : setNewChatCfg((c) => ({ ...c, engineId: id || undefined, engineModelId: undefined, ...(id ? { groupChat: false } : {}) })))}
+                  />
+                )}
+                {!activeId && (
+                  <div className="newchat-projectbar">
+                    <div className="newchat-projectbar-inner">
+                      <ProjectSelector
+                        workspaces={workspaces}
+                        value={newChatWs?.key ?? null}
+                        onChange={(w) => setNewChatWs(w)}
+                        onAddProject={() => void addLocalWorkspace()}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="composer-anchor">
+                <AnimatePresence>
+                  {filePreview && (
+                    <WorkspaceFilePreview key={filePreview.name} target={filePreview} onClose={() => setFilePreview(null)} />
+                  )}
+                </AnimatePresence>
                 <MessageInput
                   disabled={connState !== 'ok'}
                   running={running}
-                  execConfig={execConfig}
-                  models={modelsResp?.models ?? null}
-                  modelId={activeSession?.model_id || cfg.modelId || modelsResp?.defaultModelId || ''}
-                  onModelChange={setSessionModel}
-                  thinkingLevel={execConfig.thinkingLevel}
-                  onThinkingChange={setSessionThinking}
-                  maxIterations={execConfig.maxIterations}
-                  onMaxIterationsChange={setSessionMaxIterations}
-                  planMode={execConfig.planMode}
-                  onPlanModeChange={setSessionPlanMode}
+                  execConfig={mvCfg}
+                  models={visibleModels}
+                  modelId={mvModelId}
+                  onModelChange={activeId ? setSessionModel : (id) => setNewChatModel(id)}
+                  engines={engines}
+                  engineId={mvCfg.engineId}
+                  engineModels={mvCfg.engineId ? (engineCaps[mvCfg.engineId]?.models ?? []) : undefined}
+                  engineModelId={mvCfg.engineModelId}
+                  onEngineModelChange={activeId ? setSessionEngineModel : (id) => setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
+                  engineCommands={mvCfg.engineId ? (engineCaps[mvCfg.engineId]?.commands ?? []) : undefined}
+                  thinkingLevel={mvCfg.thinkingLevel}
+                  onThinkingChange={activeId ? setSessionThinking : (lv) => setNewChatCfg((c) => ({ ...c, thinkingLevel: lv }))}
+                  maxIterations={mvCfg.maxIterations}
+                  onMaxIterationsChange={activeId ? setSessionMaxIterations : (n) => setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
+                  planMode={mvCfg.planMode}
+                  onPlanModeChange={activeId ? setSessionPlanMode : (v) => setNewChatCfg((c) => ({ ...c, planMode: v }))}
+                  groupChat={mvCfg.groupChat}
+                  groupAgents={mvCfg.groupAgents}
+                  groupTempAgents={mvCfg.groupTempAgents}
+                  groupIntensity={mvCfg.groupIntensity}
+                  groupMaxRounds={mvCfg.groupMaxRounds}
+                  onGroupChange={activeId ? setSessionGroup : (patch) => setNewChatCfg((c) => ({ ...c, ...patch }))}
                   skills={skillsList}
-                  enabledSkillIds={execConfig.enabledSkillIds || []}
-                  onToggleSkill={toggleSessionSkill}
+                  enabledSkillIds={mvCfg.enabledSkillIds || []}
+                  onToggleSkill={activeId ? toggleSessionSkill : (id) => setNewChatCfg((c) => { const s = new Set(c.enabledSkillIds || []); s.has(id) ? s.delete(id) : s.add(id); return { ...c, enabledSkillIds: [...s] } })}
                   agents={agentDefs}
-                  activeAgentSlug={execConfig.agentSlug}
-                  onSelectAgent={selectSessionAgent}
+                  activeAgentSlug={mvCfg.agentSlug}
+                  onSelectAgent={activeId ? selectSessionAgent : (slug) => setNewChatCfg((c) => ({ ...c, agentSlug: slug }))}
                   onNewSession={() => void newSession()}
-                  onOpenSettings={() => setSettingsOpen(true)}
-                  onExecConfigChange={setExecConfig}
+                  onOpenSettings={() => openSettings('skills')}
+                  onExecConfigChange={activeId ? setExecConfig : (patch) => setNewChatCfg((c) => ({ ...c, ...patch }))}
                   onSend={send}
                   onStop={stop}
                   quotedText={quote}
@@ -1184,6 +1490,7 @@ export function App(): React.JSX.Element {
                   sessionTokens={activeUsage.base + activeUsage.live}
                   onCompact={compact}
                 />
+                </div>
               </div>
               )}
               {rightOpen && activeId && !specialView && (
@@ -1195,6 +1502,7 @@ export function App(): React.JSX.Element {
                   messages={activeMessages}
                   chatScrollRef={chatScrollRef}
                   onToast={toast}
+                  onOpenPreview={setFilePreview}
                 />
               )}
             </>

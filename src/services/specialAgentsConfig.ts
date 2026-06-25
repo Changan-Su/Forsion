@@ -31,7 +31,7 @@ export interface MuseConfig {
   restartWindowHours: number;
   /** y：每窗口最多自动重启次数。 */
   maxRestartsPerWindow: number;
-  /** z：每个运行周期最多迭代轮数（默认 60）。 */
+  /** z：每个运行周期最多迭代轮数（默认 10；找 1-3 条 TODO 无需更多迭代）。 */
   maxIterationsPerCycle: number;
   /** t：每窗口最多新增 Muse TODO 条数。 */
   maxTodosPerWindow: number;
@@ -67,7 +67,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     enabled: false,
     modelId: '',
     everyTitleRounds: 3,
-    everyMemoryRounds: 3,
+    everyMemoryRounds: 9,
     firstRoundTrigger: true,
     prompt: '',
   },
@@ -76,7 +76,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     modelId: '',
     restartWindowHours: 1,
     maxRestartsPerWindow: 3,
-    maxIterationsPerCycle: 60,
+    maxIterationsPerCycle: 10,
     maxTodosPerWindow: 5,
     supervisorPollMinutes: 5,
     compactAtRatio: 0.8,
@@ -164,4 +164,19 @@ export function isWithinActiveHours(cfg: MuseConfig, hour: number): boolean {
   if (ah.start === ah.end) return true; // 视为全天
   if (ah.start < ah.end) return hour >= ah.start && hour < ah.end;
   return hour >= ah.start || hour < ah.end; // 跨夜，如 22→6
+}
+
+/**
+ * 注入给 Muse 的「既有 TODO」提示：让它看到自己之前提过（pending → 别重复）与被用户处理/驳回
+ * （done/dismissed → 别再提同类）的标题，从而去重并从驳回中学习。纯函数（便于单测）。空清单 → 空串。
+ */
+export function buildTodoDedupHint(rows: Array<{ title?: string; status?: string }>): string {
+  const norm = (s: any): string => String(s || '').trim();
+  const pending = rows.filter((r) => r.status === 'pending').map((r) => norm(r.title)).filter(Boolean);
+  const closed = rows.filter((r) => r.status === 'done' || r.status === 'dismissed').map((r) => norm(r.title)).filter(Boolean);
+  if (!pending.length && !closed.length) return '';
+  const parts: string[] = [];
+  if (pending.length) parts.push(`已在清单中（请勿重复提交）：${pending.slice(0, 15).join('；')}`);
+  if (closed.length) parts.push(`此前已被用户处理/驳回（不要再提同类）：${closed.slice(0, 15).join('；')}`);
+  return `\n\n【你已提过的 TODO】\n${parts.join('\n')}`;
 }

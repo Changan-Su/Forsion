@@ -10,6 +10,7 @@ import type {
   StreamResult,
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
+import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -81,27 +82,16 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // ── LLM 流式:读 SSE,逐条转回 onToken/onReasoning/onToolCallDelta,done 时返回累积结果 ──
   async function streamProviderCompletion(opts: StreamOpts): Promise<StreamResult> {
     const modelId = String((opts.payload as any)?.__forsion_model_id ?? '');
-    // 流式空闲看门狗:上游若 STREAM_IDLE_MS 内无新帧(模型/网关挂死、连接半开)则主动 abort,使
-    // reader.read() 抛出而非无限 await(否则 run 卡死,且 worker 按 session 串行 → 整个 session 后续
-    // run 全堵)。同时把外部 run abort 转发给内部 controller(组合两个中止源,不依赖 AbortSignal.any)。
-    const STREAM_IDLE_MS = Number(process.env.TANGU_STREAM_IDLE_TIMEOUT_MS) || 120_000;
-    const ac = new AbortController();
-    const onAbort = () => ac.abort((opts.signal as any)?.reason ?? new Error('aborted'));
-    if (opts.signal) {
-      if (opts.signal.aborted) ac.abort((opts.signal as any).reason);
-      else opts.signal.addEventListener('abort', onAbort, { once: true });
-    }
-    let idle: ReturnType<typeof setTimeout> | null = null;
-    const armIdle = () => {
-      if (idle) clearTimeout(idle);
-      idle = setTimeout(() => ac.abort(new LlmError(504, 'brain stream idle timeout')), STREAM_IDLE_MS);
-    };
+    // 流式空闲看门狗(复用 streamIdleGuard):上游若 idle 窗口内无新帧(模型/网关挂死、连接半开)则主动
+    // abort,使 reader.read() 抛出而非无限 await(否则 run 卡死,且 worker 按 session 串行 → 整个 session
+    // 后续 run 全堵)。同时合并外部 run abort。详见 ../../llm/streamIdle.ts。
+    const guard = streamIdleGuard(opts.signal);
     try {
       const r = await fetch(`${base}/api/brain/llm/stream`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ modelId, payload: opts.payload }),
-        signal: ac.signal,
+        signal: guard.signal,
       });
       if (!r.ok || !r.body) {
         const detail = await r.text().catch(() => '');
@@ -117,11 +107,11 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
-      armIdle();
+      guard.arm();
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        armIdle(); // 收到帧即重置空闲计时
+        guard.arm(); // 收到帧即重置空闲计时
         buf += decoder.decode(value, { stream: true });
         let idx: number;
         while ((idx = buf.indexOf('\n\n')) >= 0) {
@@ -147,9 +137,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         }
       }
       return result;
+    } catch (err) {
+      throw mapStreamAbort(err, guard.signal, opts.signal);
     } finally {
-      if (idle) clearTimeout(idle);
-      if (opts.signal) opts.signal.removeEventListener('abort', onAbort);
+      guard.dispose();
     }
   }
 
@@ -178,8 +169,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         postJson('/api/brain/memory', { text, dedup: opts?.dedup, cap: opts?.cap }),
       setMemory: async (_userId: string, content: string) =>
         putJson<{ content: string; updatedAt: any }>('/api/brain/memory', { content }),
-      appendLogEntry: async (_userId: string, text: string) =>
-        postJson('/api/brain/log', { text }),
+      appendLogEntry: async (_userId: string, text: string, opts) =>
+        postJson('/api/brain/log', { text, date: opts?.date, time: opts?.time }),
       getLog: async (_userId: string, date?: string) =>
         getJson(`/api/brain/log${date ? `?date=${encodeURIComponent(date)}` : ''}`),
     },

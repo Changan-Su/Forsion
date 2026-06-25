@@ -7,7 +7,7 @@ import { ModeToggle } from './ModeToggle'
 
 export const ChatHeader: React.FC<{
   title: string
-  modelId: string
+  engineName?: string
   connState: 'idle' | 'ok' | 'err'
   connMessage: string
   sidebarCollapsed: boolean
@@ -24,7 +24,7 @@ export const ChatHeader: React.FC<{
         <PanelLeft size={16} />
       </button>
       <div className="chat-title">{p.title}</div>
-      {p.modelId ? <span className="conn-pill" title={t('header.currentModel')}>{p.modelId}</span> : null}
+      {p.engineName ? <span className="conn-pill" title={t('header.currentAgent')}>{p.engineName}</span> : null}
       {/* Host/微信/浏览器/在线 等状态胶囊已移除;仅在掉线时保留一个错误提示。 */}
       {p.connState === 'err' && (
         <span className="conn-pill err" title={p.connMessage}>

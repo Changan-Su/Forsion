@@ -9,7 +9,9 @@
  */
 import type { CloudBrainServices, BuildPayloadOpts, StreamOpts } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
-import { buildOpenAiCompatPayload, streamOpenAiCompat, DIRECT_MARK } from '../../llm/openaiCompat.js';
+import { buildOpenAiCompatPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
+import { streamAnthropicOAuth } from '../../llm/anthropicMessages.js';
+import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
 
 export function createMultiBrain(httpBrain: CloudBrainServices, registry: ProviderRegistry): CloudBrainServices {
   return {
@@ -31,7 +33,13 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         return httpBrain.llm.buildProviderPayload(opts);
       },
       streamProviderCompletion: async (opts: StreamOpts) => {
-        if ((opts.payload as any)?.[DIRECT_MARK]) return streamOpenAiCompat(opts);
+        const p = opts.payload as any;
+        if (p?.[DIRECT_MARK]) {
+          // 订阅登录的原生端点据协议再分发;缺省 OpenAI 兼容。
+          if (p[PROTOCOL_MARK] === 'anthropic-messages') return streamAnthropicOAuth(opts);
+          if (p[PROTOCOL_MARK] === 'openai-responses') return streamOpenAiResponses(opts);
+          return streamOpenAiCompat(opts);
+        }
         return httpBrain.llm.streamProviderCompletion(opts);
       },
     },

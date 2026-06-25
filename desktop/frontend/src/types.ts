@@ -12,7 +12,7 @@ export interface StartRunResult {
   userMessageId: string
 }
 
-/** SSE 事件:{ seq, type, payload }。type ∈ token/reasoning/tool_call/tool_result/tool_stream/status/usage/approval_request/approval_result/done/error。 */
+/** SSE 事件:{ seq, type, payload }。type ∈ token/reasoning/tool_call/tool_result/tool_stream/status/usage/approval_request/approval_result/turn_boundary/done/error。turn_boundary=运行时转向回合切分(关闭旧助手段、插入用户消息、开新助手段)。 */
 export interface AgentRunEvent {
   seq: number
   type: string
@@ -104,6 +104,10 @@ export interface AgentConfig {
   systemPrompt?: string
   /** 激活的 Normal Agent slug(后端 agentLoop 解析注入人格/模型/工具)。 */
   agentSlug?: string
+  /** 外部 agent 引擎 id(如 'claude-code'):设了就把整个 turn 委托给该 ACP 引擎而非 Tangu 自有 loop。host-only。 */
+  engineId?: string
+  /** 为外部引擎选的模型(经 ACP setSessionModel 应用);空=用引擎默认。 */
+  engineModelId?: string
   maxIterations?: number
   thinkingLevel?: 'off' | 'low' | 'medium' | 'high'
   enabledSkillIds?: string[]
@@ -115,6 +119,16 @@ export interface AgentConfig {
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto'
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */
   planMode?: boolean
+  /** 群聊模式:≥2 个 Normal Agent 轮流发言、投票、可总结。host-only。 */
+  groupChat?: boolean
+  /** 群聊参与者 slug(≥2;含已存 Normal Agent 与临时 Agent,按顺序)。 */
+  groupAgents?: string[]
+  /** 临时 Agent 定义(仅本会话群聊用,不持久化到 ~/.tangu/agents)。slug 在 groupAgents 中列出。 */
+  groupTempAgents?: NormalAgentDef[]
+  /** 讨论强度(仅 UI 展示;轮数以 groupMaxRounds 为准)。 */
+  groupIntensity?: 'relaxed' | 'medium' | 'intense' | 'custom'
+  /** 最大讨论轮数(轻松3/中等7/激烈15/自定义N;后端 clamp 1..30)。 */
+  groupMaxRounds?: number
 }
 
 /** 侧栏工作区:Cloud(云沙箱,project_path 为空)或本地目录(host 执行,cwd=path)。 */
@@ -307,9 +321,18 @@ export interface UiMessage {
   /** 本会话任务清单(todo 事件;渲染为 todolist,整单替换)。 */
   todos?: TodoItem[]
   attachments?: Attachment[]
-  status?: 'streaming' | 'done' | 'error'
+  status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
   timestamp: number
+  /** 群聊模式:本条发言的发言人(Normal Agent slug;__host__=主持人)。缺省=普通单 agent 消息。 */
+  agentId?: string
+  agentName?: string
+  /** 发言人徽章配色(前端按 slug 派生)。 */
+  agentColor?: string
+  /** 群聊轮次(用于分组/调试)。 */
+  groupRound?: number
+  /** 群聊投票汇总(role=system 的投票行渲染成投票 chip)。 */
+  groupVote?: { round: number; endCount: number; total: number; votes: Array<{ name: string; end: boolean; reason: string }> }
 }
 
 // ── Electron 托管后端(managed 模式) ──────────────────────────────────────────
@@ -340,6 +363,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   wechatAllowedPeers?: string[]
   /** 「Tangu 默认工作区」本地目录(空=主进程按 ~/Tangu 兜底并首启创建)。设置里可改。 */
   defaultWorkspaceDir?: string
+  /** 本地记忆/日志是否自动同步到 Forsion Brain(默认 false=仅手动「立即同步」,隐私优先)。 */
+  forsionSyncEnabled?: boolean
+  /** 上次成功同步时刻(epoch ms;UI 展示)。 */
+  forsionLastSyncedAt?: number
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string
@@ -389,6 +416,10 @@ declare global {
       trashHostPath?(p: string): Promise<{ ok: boolean }>
       revealHostPath?(p: string): Promise<{ ok: boolean }>
       startHostDrag?(filePath: string): void
+      /** 拖 OS 文件/文件夹进 host 工作区目录 → 复制。 */
+      copyHostFiles?(srcPaths: string[], destDir: string): Promise<{ copied: number }>
+      /** 拖一行到文件夹 → 移动。 */
+      moveHostPath?(srcPath: string, destDir: string): Promise<{ path: string }>
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>

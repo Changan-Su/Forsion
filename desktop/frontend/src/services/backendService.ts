@@ -22,6 +22,25 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
   return r.json() as Promise<T>
 }
 
+// ── 记忆同步(本地 ↔ Forsion Brain)──
+export interface SyncRunResult {
+  ok: boolean
+  memory: 'pushed' | 'pulled' | 'in-sync' | 'skipped'
+  logs: Array<{ date: string; pushed: number; pulled: number }>
+  error?: string
+}
+export interface SyncStatusResult {
+  available: boolean
+  running: boolean
+  lastAt: number | null
+  lastResult: SyncRunResult | null
+}
+/** 触发一次「立即同步」(后端在本地 store ↔ 云端 Brain 间推/拉)。 */
+export const syncNow = (cfg: TanguDesktopConfig) =>
+  request<SyncRunResult>(cfg, '/agent/sync', { method: 'POST' })
+export const getSyncStatus = (cfg: TanguDesktopConfig) =>
+  request<SyncStatusResult>(cfg, '/agent/sync/status')
+
 // ── 会话 ──
 export const listSessions = (cfg: TanguDesktopConfig, archived = false) =>
   request<{ sessions: SessionRecord[] }>(cfg, `/agent/sessions?archived=${archived}`).then((r) => r.sessions)
@@ -87,6 +106,31 @@ export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, model
 
 // ── 模型 / 技能 / 工具 ──
 export const listModels = (cfg: TanguDesktopConfig) => request<ModelsResponse>(cfg, '/agent/models')
+
+/** host 端外部 agent 引擎清单(含 available 检测 + 每引擎默认模型;云端/非 host → 抛或空 → 调用方回退 [])。 */
+export const listEngines = (cfg: TanguDesktopConfig) =>
+  request<{ engines: Array<{ id: string; name: string; available?: boolean; defaultModel?: string }> }>(cfg, '/agent/engines').then((r) => r.engines || [])
+
+/** 设某引擎默认模型(设置页「Agent CLIs」;空串=清除)。 */
+export const setEngineDefaultModel = (cfg: TanguDesktopConfig, engineId: string, defaultModel: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/engines/${encodeURIComponent(engineId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ defaultModel }),
+  })
+
+/** 懒探测某引擎能力(模型 + slash 命令);首次会 spawn(慢),后端缓存。失败 → 空。 */
+export const getEngineCapabilities = (cfg: TanguDesktopConfig, engineId: string) =>
+  request<{
+    models?: Array<{ id: string; name: string; description?: string }>
+    currentModelId?: string
+    commands?: Array<{ name: string; description: string; hint?: string }>
+  }>(cfg, `/agent/engines/${encodeURIComponent(engineId)}/capabilities`)
+    .then((r) => ({ models: r.models || [], currentModelId: r.currentModelId, commands: r.commands || [] }))
+    .catch(() => ({
+      models: [] as Array<{ id: string; name: string; description?: string }>,
+      currentModelId: undefined as string | undefined,
+      commands: [] as Array<{ name: string; description: string; hint?: string }>,
+    }))
 
 /** 探测一个 OpenAI 兼容端点(后端代理,避免 CORS):GET /models → 1-token chat。 */
 export const testProviderConnection = (
@@ -235,12 +279,6 @@ export const getLog = (cfg: TanguDesktopConfig, date?: string) =>
   request<{ date: string; content: string; updatedAt: any }>(
     cfg, `/agent/log${date ? `?date=${encodeURIComponent(date)}` : ''}`,
   )
-
-export const appendLog = (cfg: TanguDesktopConfig, text: string) =>
-  request<{ date: string; time: string }>(cfg, '/agent/log', {
-    method: 'POST',
-    body: JSON.stringify({ text }),
-  })
 
 // ── 工作区 ──
 export const listWorkspace = (cfg: TanguDesktopConfig, sessionId: string) =>

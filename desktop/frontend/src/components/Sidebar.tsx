@@ -4,7 +4,7 @@
  * 折叠态存 localStorage(键=工作区 key)。右键/省略号菜单 + 内联重命名,标记层 token CSS。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, Settings, ChevronDown, ChevronRight, Folder, Cloud, FolderPlus, History, Sparkles, Search, Smartphone } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, Settings, ChevronDown, ChevronRight, Folder, Cloud, FolderPlus, Brain, SquarePen, Sparkles, Search, Smartphone } from 'lucide-react'
 import { CLOUD_WORKSPACE_KEY, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../types'
 import { BrandLogo } from './BrandLogo'
 import { AccountCard } from './AccountCard'
@@ -57,14 +57,23 @@ interface SidebarProps {
   onToast?: (text: string, error?: boolean) => void
   /** 账号登录/登出后回调(让上层重连托管后端 / 刷新模型)。 */
   onAuthChange?: () => void
-  /** Special Agents 工作区入口(本地后端才显示);点击进入 Historian/Muse 视图。 */
+  /** 顶部入口卡片组(本地后端才显示)。 */
   showSpecial?: boolean
-  /** 各 Special Agent / 微信远程 是否开启(入口按此逐个显隐;全部关则整块隐藏)。 */
+  /** 各 Special Agent / 微信远程 是否开启(入口按此逐个显隐)。 */
   historianEnabled?: boolean
   museEnabled?: boolean
   wechatEnabled?: boolean
-  specialView?: 'historian' | 'muse' | 'wechat' | null
-  onOpenSpecial?: (v: 'historian' | 'muse' | 'wechat') => void
+  specialView?: 'wechat' | 'agents' | 'memory' | 'workspace' | null
+  /** 微信远程 / 后台智能体详情面板入口。 */
+  onOpenSpecial?: (v: 'wechat' | 'agents') => void
+  /** 顶部「新对话」卡片:进入空白主界面(activeId=null)。 */
+  onNewChat: () => void
+  /** 顶部「记忆」卡片:打开记忆/日志面板。 */
+  onOpenMemory: () => void
+  /** 「后台智能体」卡片体点击 → 设置·后台智能体。 */
+  onOpenAgentsSettings: () => void
+  /** 工作区卡片体点击 / View More → 打开该工作区详情面板。 */
+  onOpenWorkspace: (wsKey: string) => void
 }
 
 interface MenuState {
@@ -88,21 +97,24 @@ function useWechatConnectedCount(cfg: TanguDesktopConfig, enabled: boolean): num
   return n
 }
 
-/** 通用 Special 入口卡片(Historian / Muse 共用,与微信远程卡片视觉统一)。 */
+/** 通用入口卡片(顶部 New Chat / 记忆 / 后台智能体 共用)。紧凑单行:图标 + 名称 + 箭头。
+ *  传 onExpand 时右侧箭头变独立点击区(stopPropagation),与卡片体 onClick 分开
+ *  (后台智能体:卡片体=设置,箭头=主区详情面板)。 */
 const SpecialCard: React.FC<{
   icon: React.ReactNode
   title: string
-  sub: string
   active: boolean
   onClick: () => void
-}> = ({ icon, title, sub, active, onClick }) => (
+  onExpand?: () => void
+}> = ({ icon, title, active, onClick, onExpand }) => (
   <button className={`special-card${active ? ' active' : ''}`} onClick={onClick}>
     <div className="special-card-head">
       <span className="sc-icon">{icon}</span>
       <span className="sc-title">{title}</span>
-      <ChevronRight size={14} className="sc-go" />
+      <span className="sc-go" onClick={onExpand ? (e) => { e.stopPropagation(); onExpand() } : undefined}>
+        <ChevronRight size={14} />
+      </span>
     </div>
-    <div className="special-card-sub">{sub}</div>
   </button>
 )
 
@@ -111,6 +123,15 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // 每个工作区在侧栏显示的会话数(设置·高级 可调;localStorage + 自定义事件实时同步)。
+  const [sessionLimit, setSessionLimit] = useState(() => {
+    try { return Math.max(1, Number(localStorage.getItem('tangu_ws_session_limit')) || 5) } catch { return 5 }
+  })
+  useEffect(() => {
+    const onChange = (): void => { try { setSessionLimit(Math.max(1, Number(localStorage.getItem('tangu_ws_session_limit')) || 5)) } catch { /* ignore */ } }
+    window.addEventListener('tangu:wslimit', onChange)
+    return () => window.removeEventListener('tangu:wslimit', onChange)
+  }, [])
   const [showArchived, setShowArchived] = useState(false)
   const [query, setQuery] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
@@ -236,7 +257,6 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
       onClick={() => p.onSelect(s.id)}
       onContextMenu={(e) => openMenu(e, s)}
     >
-      <span className="session-emoji">{s.emoji || '💬'}</span>
       {renaming === s.id ? (
         <input
           ref={renameRef}
@@ -286,6 +306,32 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
             : <div className="hint" style={{ padding: '8px 10px' }}>{t('sidebar.search.noResults')}</div>
         ) : (
         <>
+        {/* 顶部入口组:新对话 / 记忆 / 后台智能体(置于工作区之上) */}
+        {p.showSpecial && (
+          <div style={{ marginBottom: 8 }}>
+            <SpecialCard
+              icon={<SquarePen size={15} />}
+              title={t('sidebar.newChat')}
+              active={false}
+              onClick={p.onNewChat}
+            />
+            <SpecialCard
+              icon={<Brain size={15} />}
+              title={t('sidebar.memory')}
+              active={p.specialView === 'memory'}
+              onClick={p.onOpenMemory}
+            />
+            {(p.historianEnabled || p.museEnabled) && (
+              <SpecialCard
+                icon={<Sparkles size={15} />}
+                title={t('sidebar.agents')}
+                active={p.specialView === 'agents'}
+                onClick={p.onOpenAgentsSettings}
+                onExpand={() => p.onOpenSpecial?.('agents')}
+              />
+            )}
+          </div>
+        )}
         {orderedWorkspaces.map((ws) => {
           const items = grouped.get(ws.key) || []
           const isCollapsed = collapsedGroups.has(ws.key)
@@ -341,8 +387,8 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
                     </span>
                   </button>
                 ) : (
-                  <button className="ws-group-toggle" onClick={() => toggleGroup(ws.key)} title={ws.path || undefined}>
-                    <span className="session-emoji">
+                  <button className="ws-group-toggle" onClick={() => p.onOpenWorkspace(ws.key)} title={ws.path || undefined}>
+                    <span className="session-emoji" onClick={(e) => { e.stopPropagation(); toggleGroup(ws.key) }}>
                       {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                     </span>
                     <span className="ws-name">
@@ -369,7 +415,16 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
                   </button>
                 )}
               </div>
-              {!isCollapsed && items.map(renderItem)}
+              {!isCollapsed && (
+                <div className="ws-sessions">
+                  {items.slice(0, sessionLimit).map(renderItem)}
+                  {items.length > sessionLimit && (
+                    <button className="ws-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>
+                      {t('sidebar.viewMore')} · {items.length}
+                    </button>
+                  )}
+                </div>
+              )}
             </React.Fragment>
           )
         })}
@@ -377,34 +432,6 @@ export const Sidebar: React.FC<SidebarProps> = (p) => {
         <button className="ws-add-workspace" onClick={p.onAddWorkspace}>
           <FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}
         </button>
-
-        {p.showSpecial && p.onOpenSpecial && (p.historianEnabled || p.museEnabled) && (
-          <div style={{ marginTop: 8, marginBottom: 6 }}>
-            <div className="ws-group-head">
-              <span className="ws-name" style={{ paddingLeft: 6, opacity: 0.7 }}>
-                <Sparkles size={12} /> {t('sidebar.special.title')}
-              </span>
-            </div>
-            {p.historianEnabled && (
-              <SpecialCard
-                icon={<History size={14} />}
-                title="Historian"
-                sub={t('sidebar.special.historianSub')}
-                active={p.specialView === 'historian'}
-                onClick={() => p.onOpenSpecial!('historian')}
-              />
-            )}
-            {p.museEnabled && (
-              <SpecialCard
-                icon={<Sparkles size={14} />}
-                title="Muse"
-                sub={t('sidebar.special.museSub')}
-                active={p.specialView === 'muse'}
-                onClick={() => p.onOpenSpecial!('muse')}
-              />
-            )}
-          </div>
-        )}
 
         {p.archivedSessions.length > 0 && (
           <>

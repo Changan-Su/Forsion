@@ -16,6 +16,7 @@ import { bridgeTool, contentToText, type LoadedMcpTool } from './toolBridge.js';
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const RESULT_CAP_CHARS = 50_000;
+const RECONNECT_COOLDOWN_MS = 15_000; // 懒重连冷却:死 server 不会每次调用都重连
 
 export interface McpServerStatus {
   name: string;
@@ -33,6 +34,7 @@ interface ServerEntry {
   tools: LoadedMcpTool[];
   status: McpServerStatus['status'];
   error?: string;
+  lastReconnectAt?: number; // 上次懒重连尝试时刻(冷却用)
 }
 
 export interface McpManager {
@@ -143,8 +145,18 @@ export function createMcpManager(configFile?: string): McpManager {
 
     async callTool(bridged, args, signal) {
       const entry = servers.find((s) => s.name === bridged.serverName);
-      if (!entry?.client || entry.status !== 'connected') {
-        return { text: `Error: MCP server "${bridged.serverName}" 未连接`, isError: true };
+      if (!entry) return { text: `Error: MCP server "${bridged.serverName}" 未配置`, isError: true };
+      // 懒重连:server 启动后掉线 / 初次没连上时,调用前按冷却(15s)尝试重连一次——
+      // 避免「server 挂了不重连、工具一直 hang 到 timeout」。冷却防对死 server 每调必连。
+      if (entry.status !== 'connected' || !entry.client) {
+        const now = Date.now();
+        if (now - (entry.lastReconnectAt || 0) >= RECONNECT_COOLDOWN_MS) {
+          entry.lastReconnectAt = now;
+          await connect(entry);
+        }
+        if (entry.status !== 'connected' || !entry.client) {
+          return { text: `Error: MCP server "${bridged.serverName}" 未连接`, isError: true };
+        }
       }
       const timeoutMs = entry.cfg.timeoutMs && entry.cfg.timeoutMs > 0 ? entry.cfg.timeoutMs : DEFAULT_CALL_TIMEOUT_MS;
       try {

@@ -11,7 +11,8 @@ import { testConnection } from '../services/agentRunService'
 import {
   deleteUserCloudSkill, disconnectWechat as disconnectWechatAccount, fetchProviderModels, getSessionConfig,
   getWechatStatus, listMessages, listModels, listSkills, listTools, pollWechatLogin, startWechatLogin,
-  testProviderConnection, uploadSkillToCloud,
+  testProviderConnection, uploadSkillToCloud, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
+  type SyncStatusResult,
 } from '../services/backendService'
 import type { WechatStatusResponse } from '../services/backendService'
 import type {
@@ -23,9 +24,10 @@ import { LocaleToggle } from './LocaleToggle'
 import { CHANGELOG } from '../changelog'
 import { ModelGroupList } from './ModelGroupList'
 import { AgentsSettings } from './AgentsSettings'
+import { AgentClisTab } from './AgentClisTab'
 import { QrImage } from './QrImage'
 
-type Tab = 'connection' | 'model' | 'mcp' | 'skills' | 'agents' | 'browser' | 'wechat' | 'theme' | 'advanced' | 'developer' | 'about'
+export type Tab = 'connection' | 'forsion' | 'model' | 'mcp' | 'skills' | 'agents' | 'agent-clis' | 'browser' | 'wechat' | 'theme' | 'advanced' | 'developer' | 'about'
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 
@@ -69,9 +71,11 @@ export const SettingsModal: React.FC<{
   onRelaunchOnboarding?: () => void
   /** 当前活跃会话(高级→导出日志用;无活跃会话时禁用导出)。 */
   activeSession?: SessionRecord | null
+  /** 打开时直接定位到的 tab(如微信卡片→'wechat'、/skills→'skills');缺省落 connection。 */
+  initialTab?: Tab
 }> = (p) => {
   const { t } = useI18n()
-  const [tab, setTab] = useState<Tab>('connection')
+  const [tab, setTab] = useState<Tab>(p.initialTab ?? 'connection')
   const [appVersion, setAppVersion] = useState<string>('')
   // 开发者模式:关于页连点版本号 10 次解锁(持久化);解锁后多出「开发者选项」tab。
   const [devMode, setDevMode] = useState<boolean>(() => {
@@ -238,6 +242,46 @@ export const SettingsModal: React.FC<{
     void window.tangu.authProviders?.().then(setProviders).catch(() => setProviders([]))
   }
 
+  // ── Forsion 账号退出 + Brain 记忆同步 ──
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState('')
+  const [syncSt, setSyncSt] = useState<SyncStatusResult | null>(null)
+
+  const doForsionLogout = async (): Promise<void> => {
+    if (!window.tangu?.forsionLogout) return
+    setLoggingIn(true)
+    try {
+      await window.tangu.forsionLogout()
+      refreshAuth()
+      p.onReconnect()
+    } finally {
+      setLoggingIn(false)
+    }
+  }
+
+  const refreshSyncStatus = (): void => {
+    backendGetSyncStatus(p.cfg).then(setSyncSt).catch(() => setSyncSt(null))
+  }
+
+  const doSyncNow = async (): Promise<void> => {
+    setSyncing(true)
+    setSyncMsg('')
+    try {
+      const r = await backendSyncNow(p.cfg)
+      if (r.ok) {
+        setSyncMsg(t('settings.forsion.syncOk', { memory: r.memory, logs: r.logs.length }))
+        if (window.tangu?.setConfig) void window.tangu.setConfig({ forsionLastSyncedAt: Date.now() }).then(setStored)
+      } else {
+        setSyncMsg(t('settings.forsion.syncFail', { e: r.error || '?' }))
+      }
+      refreshSyncStatus()
+    } catch (e: any) {
+      setSyncMsg(t('settings.forsion.syncFail', { e: e?.message || e }))
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   // 跨生态资产发现/导入(高级页;扫 ~/.claude、~/.codex、~/.hermes)
   const [disc, setDisc] = useState<DiscoveryResult | null>(null)
   const [discScanning, setDiscScanning] = useState(false)
@@ -298,10 +342,15 @@ export const SettingsModal: React.FC<{
       setLogs(null)
       setDevice(null)
       if (isDesktop) {
-        void window.tangu!.getConfig().then(setStored)
+        void window.tangu!.getConfig().then((s) => {
+          setStored(s)
+          // 自动同步(默认关):开启则打开设置时拉一次;未登录时后端 no-op,不报错。
+          if (s.forsionSyncEnabled) void doSyncNow()
+        })
         void window.tangu!.backendStatus!().then(setBackendSt)
         refreshAuth()
         refreshCustomProviders()
+        refreshSyncStatus()
       }
     }
   }, [p.open, p.cfg, isDesktop])
@@ -503,8 +552,9 @@ export const SettingsModal: React.FC<{
 
   const tabItems = [
     ['connection', t('settings.tab.connection')],
+    ...(isDesktop ? ([['forsion', t('settings.tab.forsion')]] as Array<[Tab, string]>) : []),
     ['model', t('settings.tab.model')],
-    ...(isDesktop ? ([['mcp', 'MCP'], ['skills', t('settings.tab.skills')], ['agents', t('settings.tab.agents')], ['browser', t('settings.tab.browser')], ['wechat', t('settings.tab.wechat')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['mcp', 'MCP'], ['skills', t('settings.tab.skills')], ['agents', t('settings.tab.agents')], ['agent-clis', t('settings.tab.agentClis')], ['browser', t('settings.tab.browser')], ['wechat', t('settings.tab.wechat')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
     ['advanced', t('settings.tab.advanced')],
     ...(isDesktop && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
@@ -684,6 +734,96 @@ export const SettingsModal: React.FC<{
                         </div>
                       </>
                     )}
+                  </>
+                )}
+
+                {tab === 'forsion' && (
+                  <>
+                    {/* 账号 */}
+                    <div className="field">
+                      <label>{t('settings.forsion.accountLabel')}</label>
+                      {authSt?.loggedIn ? (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <span className="conn-pill ok"><span className="dot" />
+                            {t('settings.forsion.loggedInAs', { name: authSt.nickname || authSt.username || '' })}
+                          </span>
+                          <button className="btn ghost sm" onClick={() => void doForsionLogout()} disabled={loggingIn}>
+                            {loggingIn ? <Loader2 size={12} className="spin" /> : <LogOut size={12} />} {t('settings.forsion.logout')}
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <button className="btn primary sm" onClick={() => void doForsionLogin()} disabled={loggingIn}>
+                            {loggingIn ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />} {t('settings.forsion.login')}
+                          </button>
+                          {device && (
+                            <div style={{ marginTop: 10 }}>
+                              <QrImage value={device.url} />
+                              <div className="hint">{device.url} · {device.userCode}</div>
+                            </div>
+                          )}
+                          <div className="hint" style={{ marginTop: 6 }}>{t('settings.forsion.needLoginHint')}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 云端地址(一等设置;原仅在开发者选项) */}
+                    {stored && (
+                      <div className="field">
+                        <label><Globe2 size={11} style={{ verticalAlign: -1 }} /> {t('settings.forsion.cloudUrlLabel')}</label>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <input
+                            type="text"
+                            value={stored.cloudUrl}
+                            onChange={(e) => setStored({ ...stored, cloudUrl: e.target.value.trim() })}
+                            placeholder="https://api.forsion.net"
+                          />
+                          <button
+                            className="btn primary sm"
+                            onClick={() => void window.tangu!.setConfig({ cloudUrl: (stored.cloudUrl || '').trim() }).then(setStored)}
+                          >
+                            {t('settings.forsion.save')}
+                          </button>
+                        </div>
+                        <div className="hint">{t('settings.forsion.cloudUrlHint')}</div>
+                      </div>
+                    )}
+
+                    {/* Brain 记忆同步 */}
+                    {stored && (
+                      <div className="field">
+                        <label>{t('settings.forsion.syncLabel')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.forsion.syncHint')}</div>
+                        <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+                          <input
+                            type="checkbox"
+                            checked={!!stored.forsionSyncEnabled}
+                            onChange={(e) => void window.tangu!.setConfig({ forsionSyncEnabled: e.target.checked }).then(setStored)}
+                          />
+                          {t('settings.forsion.autoSync')}
+                        </label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.forsion.autoSyncHint')}</div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <button className="btn primary sm" onClick={() => void doSyncNow()} disabled={syncing}>
+                            {syncing ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {syncing ? t('settings.forsion.syncing') : t('settings.forsion.syncNow')}
+                          </button>
+                          <span className="hint">
+                            {t('settings.forsion.lastSynced', {
+                              time: stored.forsionLastSyncedAt
+                                ? new Date(stored.forsionLastSyncedAt).toLocaleString()
+                                : (syncSt?.lastAt ? new Date(syncSt.lastAt).toLocaleString() : t('settings.forsion.never')),
+                            })}
+                          </span>
+                        </div>
+                        {syncMsg && <div className="hint" style={{ marginTop: 6 }}>{syncMsg}</div>}
+                      </div>
+                    )}
+
+                    {/* 哪些功能需要登录 */}
+                    <div className="field">
+                      <label>{t('settings.forsion.gatedTitle')}</label>
+                      <div className="hint">{t('settings.forsion.gatedList')}</div>
+                    </div>
                   </>
                 )}
 
@@ -1162,6 +1302,7 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {tab === 'agents' && <AgentsSettings cfg={p.cfg} />}
+                {tab === 'agent-clis' && <AgentClisTab cfg={p.cfg} />}
 
                 {tab === 'browser' && stored && (
                   <>
@@ -1561,6 +1702,22 @@ export const SettingsModal: React.FC<{
                   <>
                     <div className="panel-note">
                       {t('settings.advanced.note')}
+                    </div>
+
+                    <div className="field" style={{ marginTop: 14 }}>
+                      <label>{t('settings.advanced.sessionLimit')}</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={50}
+                        defaultValue={(() => { try { return Math.max(1, Number(localStorage.getItem('tangu_ws_session_limit')) || 5) } catch { return 5 } })()}
+                        onChange={(e) => {
+                          const n = Math.max(1, Math.min(50, Math.floor(Number(e.target.value) || 5)))
+                          try { localStorage.setItem('tangu_ws_session_limit', String(n)) } catch { /* ignore */ }
+                          window.dispatchEvent(new Event('tangu:wslimit'))
+                        }}
+                        style={{ width: 110 }}
+                      />
                     </div>
 
                     <div className="field" style={{ marginTop: 14 }}>

@@ -9,7 +9,6 @@
  * 仅 standalone/TUI 经 localAssetsBrain overlay 消费;microserver/worker 不触本模块。
  */
 import { promises as fs } from 'node:fs';
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -190,8 +189,4 @@ export async function getLocalSkill(id: string): Promise<SkillRecord | null> {
   if (!id.startsWith(LOCAL_SKILL_PREFIX)) return null;
   const all = await listLocalSkills();
   return all.find((s) => s.id === id) || null;
-}
-
-export function hasLocalSkillsSupport(): boolean {
-  return existsSync(builtinSkillsDir()) || existsSync(userSkillsDir());
 }

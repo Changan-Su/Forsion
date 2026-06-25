@@ -4,9 +4,9 @@
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, nativeImage } from 'electron'
-import { dirname, join } from 'path'
+import { basename, dirname, join } from 'path'
 import { pathToFileURL } from 'url'
-import { readFile, writeFile, mkdir, chmod, readdir, stat, rename } from 'fs/promises'
+import { readFile, writeFile, mkdir, chmod, readdir, stat, rename, cp } from 'fs/promises'
 import { execFile, spawn } from 'child_process'
 import { BackendManager, type BackendStatus } from './backendManager'
 import {
@@ -159,6 +159,10 @@ interface TanguStoredConfig {
   wechatDefaultSessionId: string
   wechatRemoteApprovalMode: 'readonly' | 'auto-edit' | 'full-auto'
   wechatAllowedPeers: string[]
+  /** 本地记忆/日志是否自动同步 Forsion Brain(默认 false=仅手动)。 */
+  forsionSyncEnabled: boolean
+  /** 上次成功同步时刻(epoch ms)。 */
+  forsionLastSyncedAt: number
 }
 
 /**
@@ -187,6 +191,8 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   wechatDefaultSessionId: '',
   wechatRemoteApprovalMode: 'readonly',
   wechatAllowedPeers: [],
+  forsionSyncEnabled: false,
+  forsionLastSyncedAt: 0,
 }
 
 /** 默认工作区目录(配置未填时兜底 ~/Tangu);best-effort 创建,失败不阻断。 */
@@ -291,6 +297,8 @@ function createWindow(): void {
       // sandbox:true 不支持 ESM preload(electron-vite 产出 .mjs);renderer 无 Node 能力,
       // 暴露面仅 contextBridge 的最小 API,风险可控。改 CJS preload 后可翻转。
       sandbox: false,
+      // 启用 Chromium 内置 PDFium —— <iframe src="blob:…pdf"> 预览 PDF 依赖此项,默认关。
+      plugins: true,
     },
   })
 
@@ -374,11 +382,14 @@ app.whenReady().then(async () => {
     cpp: 'text/x-c++', sql: 'text/plain', log: 'text/plain', env: 'text/plain', gitignore: 'text/plain',
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
   }
+  // ponytail: 预览读盘上限 50MB —— PDF/Office/图片基本够;超大视频会判 tooLarge 走「在文件管理器显示」兜底。
+  // 整文件 base64 经 IPC 传输,再大就该换 file:// 流式/分块,目前用不上。
+  const MAX_PREVIEW_BYTES = 50 * 1024 * 1024
   ipcMain.handle('fs:readFile', async (_e, filePath: string) => {
     const st = await stat(filePath)
     const ext = (filePath.split('.').pop() || '').toLowerCase()
     const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream'
-    if (st.size > 2 * 1024 * 1024) return { mimeType, content: '', size: st.size, tooLarge: true }
+    if (st.size > MAX_PREVIEW_BYTES) return { mimeType, content: '', size: st.size, tooLarge: true }
     const buf = await readFile(filePath)
     return { mimeType, content: buf.toString('base64'), size: st.size }
   })
@@ -388,6 +399,15 @@ app.whenReady().then(async () => {
   const safeName = (s: unknown): s is string =>
     typeof s === 'string' && s.length > 0 && s.length < 256 && !/[\\/]/.test(s) && !s.includes('\0') && s !== '.' && s !== '..'
   const exists = async (p: string): Promise<boolean> => stat(p).then(() => true).catch(() => false)
+  // 目标重名则在扩展名前加 (1)/(2)…,绝不覆盖已有文件。
+  const uniqueDest = async (dir: string, name: string): Promise<string> => {
+    const dot = name.lastIndexOf('.')
+    const base = dot > 0 ? name.slice(0, dot) : name
+    const ext = dot > 0 ? name.slice(dot) : ''
+    let candidate = join(dir, name)
+    for (let i = 1; await exists(candidate); i++) candidate = join(dir, `${base} (${i})${ext}`)
+    return candidate
+  }
 
   ipcMain.handle('fs:rename', async (_e, oldPath: string, newName: string) => {
     if (!oldPath || typeof oldPath !== 'string' || !safeName(newName)) throw new Error('非法的重命名参数')
@@ -412,6 +432,30 @@ app.whenReady().then(async () => {
     if (!p || typeof p !== 'string') return { ok: false }
     shell.showItemInFolder(p) // 在系统文件管理器中定位并高亮
     return { ok: true }
+  })
+  // 拖拽 OS 文件/文件夹 → 复制进本机工作区目录(host 右栏)。重名自动加序号,不覆盖。
+  ipcMain.handle('fs:copy', async (_e, srcPaths: unknown, destDir: string) => {
+    if (!Array.isArray(srcPaths) || typeof destDir !== 'string' || !destDir) throw new Error('非法的复制参数')
+    let copied = 0
+    for (const src of srcPaths) {
+      if (typeof src !== 'string' || !src) continue
+      await cp(src, await uniqueDest(destDir, basename(src)), { recursive: true })
+      copied++
+    }
+    return { copied }
+  })
+  // 拖一行到文件夹 → 移动(同卷 rename;跨卷回退 copy+回收站)。同目录拖放视为 no-op。
+  ipcMain.handle('fs:move', async (_e, srcPath: string, destDir: string) => {
+    if (typeof srcPath !== 'string' || !srcPath || typeof destDir !== 'string' || !destDir) throw new Error('非法的移动参数')
+    if (dirname(srcPath) === destDir) return { path: srcPath }
+    const dest = await uniqueDest(destDir, basename(srcPath))
+    try {
+      await rename(srcPath, dest)
+    } catch (err: any) {
+      if (err?.code === 'EXDEV') { await cp(srcPath, dest, { recursive: true }); await shell.trashItem(srcPath) }
+      else throw err
+    }
+    return { path: dest }
   })
   // 原生拖出(把工作区文件拖到其它应用 / 桌面):必须用 webContents.startDrag,HTML5 dataTransfer
   // 无法投递真实文件。单向 send(非 invoke);icon 用文件自身图标,取不到则回退一枚 16px 占位图。

@@ -77,16 +77,6 @@ export function reducer(state: UiState, action: UiAction): UiState {
         ],
       };
 
-    case 'TOOL_STREAM': {
-      if (!state.live) return state;
-      return {
-        ...state,
-        live: state.live.map((b) =>
-          b.type === 'tool' && b.id === action.id && !b.done ? { ...b, args: b.args + action.delta } : b,
-        ),
-      };
-    }
-
     case 'TOOL_RESULT': {
       if (!state.live) return state;
       return {

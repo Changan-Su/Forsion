@@ -17,6 +17,7 @@ import { loadCreds } from './credStore.js';
 import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { resolveSandboxMode, setupHost, buildBrain, fixLegacyAppIds } from './assemble.js';
 import { createMcpManager } from '../mcp/manager.js';
+import { createEngineManager } from '../engines/index.js';
 import { loadTanguEnv } from '../core/tanguHome.js';
 import { activateAllPlugins } from '../plugins/bootstrap.js';
 
@@ -51,6 +52,9 @@ async function main(): Promise<void> {
   const mcp = createMcpManager();
   await mcp.start();
 
+  // 外部 agent 引擎(~/.tangu/engines.json + 内置 claude-code):host-only,云端 microserver 不装配。
+  const engines = createEngineManager();
+
   // 插件:激活全部（tool provider 全局注册 + 收集路由挂载器）。tool provider 注册无需 deps()，先于
   // createTanguModule 安全;路由挂载须**在 createTanguModule 之后**（彼时 configureTangu/deps() 才就绪）。
   const mountPluginRoutes = await activateAllPlugins();
@@ -61,6 +65,7 @@ async function main(): Promise<void> {
     billing: createNoopBilling(),
     profile: createTanguProfile({ sandboxMode, defaultModelId: cfg.defaultModelId || undefined }),
     mcp,
+    engines,
   });
   mountPluginRoutes({ userRouter: mod.userRouter, dataRouter: mod.dataRouter, adminRouter: mod.adminRouter });
 
@@ -98,6 +103,10 @@ async function main(): Promise<void> {
     const mcpStatus = mcp.listStatus();
     if (mcpStatus.length) {
       console.log(`[tangu] MCP: ${mcpStatus.map((s) => `${s.name}(${s.status},${s.toolCount}工具)`).join(', ')}`);
+    }
+    const engineList = engines.list();
+    if (engineList.length) {
+      console.log(`[tangu] 外部引擎: ${engineList.map((e) => `${e.name}(${e.id})`).join(', ')}`);
     }
   });
 

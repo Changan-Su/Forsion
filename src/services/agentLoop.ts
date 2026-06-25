@@ -9,7 +9,7 @@ import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { publish, drain, cleanup } from './eventBus.js';
-import { gateToolCall } from './approvals.js';
+import { gateToolCall, requestApproval, type ApprovalDecision } from './approvals.js';
 import { enterRunContext } from '../seams/runContext.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, type ToolContext } from '../tools/registry.js';
@@ -18,7 +18,7 @@ import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js'
 import { snapshotSession } from '../sandbox/sessionSandbox.js';
 import {
   CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
-  estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent,
+  estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
 } from './contextBudget.js';
 import { getLatestSummary, compactSession, foldWorkingWithSummary } from './compaction.js';
 import { getAgent } from '../agents/agentRegistry.js';
@@ -26,6 +26,7 @@ import { onUserRunDone } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
+import { runGroupChat } from './groupChat.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -40,6 +41,27 @@ const getUserById = (id: string) => deps().brain.users.getUserById(id);
 const getMemory = (userId: string) => deps().brain.memory.getMemory(userId);
 
 const abortControllers = new Map<string, AbortController>();
+
+// 运行时转向(steer，类 Codex):用户在 run 跑动期间发来的消息按 runId 暂存，在「迭代边界」注入到
+// 当前 run（而非另起新 run，也不是等整个 run 跑完）。仅「活跃 run」(已注册 AbortController = 已进循环)
+// 接受注入；排队中的 run 还没 AC → 拒收（前端回退起新 run）。
+interface SteerMsg { id: string; content: string; attachments?: any[] }
+const steerQueue = new Map<string, SteerMsg[]>();
+
+/** 入队一条转向消息；run 非活跃返回 false（前端据此回退 startRun）。 */
+export function enqueueSteer(runId: string, msg: SteerMsg): boolean {
+  if (!abortControllers.has(runId)) return false;
+  const q = steerQueue.get(runId);
+  if (q) q.push(msg);
+  else steerQueue.set(runId, [msg]);
+  return true;
+}
+function drainSteer(runId: string): SteerMsg[] {
+  const q = steerQueue.get(runId);
+  if (!q || !q.length) return [];
+  steerQueue.delete(runId);
+  return q;
+}
 
 // 同会话 run 串行化：每个 session 同一时刻至多一个活跃 run，其余 FIFO 排队，活跃 run 跑完
 // （含 abort/失败）后由 advanceQueue 起下一个。保证共享的会话级 kernel/工作区不被并发 run
@@ -69,7 +91,7 @@ export function enqueueRun(sessionId: string, runId: string): void {
 export function startRun(runId: string): void {
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  runLoop(runId, ac).catch((err) => {
+  dispatchRun(runId, ac).catch((err) => {
     console.error(`[agent-core] runLoop crashed run=${runId}:`, err);
     // 兜底：runLoop 在进入 try/finally 之前就抛（如 getRun 抛 DB 错）时，finally 不会跑，
     // 仍需清理并推进队列，否则该 session 永久卡住。用 active===runId 守卫避免与 finally 双重推进。
@@ -92,6 +114,90 @@ function advanceQueue(sessionId: string): void {
   if (!q.length) sessionQueue.delete(sessionId);
   sessionActive.set(sessionId, next);
   startRun(next);
+}
+
+/**
+ * 分流:有 engineId 且本形态支持(hostExec)且引擎已注册 → 委托外部 agent 引擎(ACP);否则走 Tangu 自有 loop。
+ * 双取 run(此处 + runLoop 内)是有意为之:保持 runLoop 签名与缺失处理不变,getRun 为索引点查,成本可忽略。
+ */
+async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
+  try {
+    const run = await getRun(runId);
+    if (run) {
+      const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
+      const engineId: string | undefined = input?.agentConfig?.engineId;
+      const profile = resolveProfile((run as any).app_id) ?? deps().profile;
+      const engines = deps().engines;
+      // 红线:未声明 hostExec 的 profile(云端形态)→ engines 不注入/为空 → 一律回落 runLoop。
+      if (engineId && profile.capabilities.hostExec && engines?.has(engineId)) {
+        return await externalEngineLoop(runId, ac, run, engineId);
+      }
+    }
+  } catch (e) {
+    console.warn(`[agent-core] dispatchRun 回退 runLoop run=${runId}:`, (e as any)?.message || e);
+  }
+  return runLoop(runId, ac);
+}
+
+/**
+ * 外部引擎 run:把整个 turn 委托给 deps().engines(ACP 客户端),复用 eventBus/审批/落库/队列接缝。
+ * 镜像 runLoop 的 finalize/catch/finally(见本文件末);不做 flush(外部 agent 直接在 host cwd 操作,
+ * 非 Tangu 会话沙箱)、不接 steer(ACP 无对应语义)。
+ */
+async function externalEngineLoop(runId: string, ac: AbortController, run: any, engineId: string): Promise<void> {
+  const sessionId = run.session_id;
+  const userId = run.user_id;
+  const modelId = run.model_id || '';
+  const assistantId = run.assistant_message_id;
+  const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
+  const agentConfig = input.agentConfig || {};
+  const engines = deps().engines!;
+  let finalContent = '';
+  try {
+    enterRunContext(userId, runId);
+    await updateRunStatus(runId, 'running');
+    await publish(runId, 'status', { state: 'running' });
+    const result = await engines.run({
+      engineId,
+      runId,
+      sessionId,
+      userId,
+      modelId,
+      engineModelId: agentConfig.engineModelId,
+      message: String(input.message || ''),
+      attachments: input.attachments || [],
+      cwd: typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined,
+      signal: ac.signal,
+      publish: (type: string, payload: any) => {
+        void publish(runId, type, payload);
+      },
+      requestApproval: (preview: string, toolCall: ToolCall): Promise<ApprovalDecision> =>
+        requestApproval(runId, toolCall, preview, ac.signal),
+    });
+    finalContent = result.content || '';
+    await finalizeAssistantMessage(
+      assistantId, sessionId, modelId, finalContent, result.reasoning || '', result.toolCalls || [], result.toolResults || [],
+    );
+    await drain(runId);
+    await publish(runId, 'done', { content: finalContent });
+    await updateRunStatus(runId, 'done', { result: { content: finalContent } });
+  } catch (err: any) {
+    const aborted = err?.name === 'AbortError' || ac.signal.aborted;
+    const status = aborted ? 'aborted' : 'failed';
+    const msg = aborted ? 'aborted' : err?.message || String(err);
+    console.error(`[agent-core] external engine run ${runId} ${status}:`, msg);
+    if (finalContent.trim()) {
+      await finalizeAssistantMessage(assistantId, sessionId, modelId, finalContent, '', [], []).catch(() => {});
+    }
+    await publish(runId, 'error', { error: msg, aborted, content: finalContent }).catch(() => {});
+    await drain(runId).catch(() => {});
+    await updateRunStatus(runId, status, { error: msg }).catch(() => {});
+  } finally {
+    abortControllers.delete(runId);
+    runSession.delete(runId);
+    advanceQueue(sessionId);
+    setTimeout(() => cleanup(runId), 30_000);
+  }
 }
 
 /** 请求中止某个 run。活跃 run 走 AbortController（finally 会推进队列）；排队中的 run 直接移出队列并标终态。 */
@@ -272,9 +378,32 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
   };
 
+  // 累加器提到 try 外:abort/失败时 catch 仍能看见,用于把「已停止」的部分助手轮次落库(否则整轮丢失,
+  // 用户聊天记录里凭空消失,后续 run 也读不到)。运行时转向(steer)也复用它们做迭代边界的回合切分。
+  let finalContent = '';
+  let finalReasoning = '';
+  const allToolCalls: ToolCall[] = [];
+  const allToolResults: any[] = [];
+  // 当前正在累积的助手消息 id;steer 注入时 finalize 当前段、改用新 id 续接下一段(见迭代循环)。
+  let currentAssistantId = run.assistant_message_id || uuidv4();
+
   try {
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
+
+    // 群聊模式(Group Chat):≥2 个 Normal Agent 轮流发言 —— 走独立编排,不进下方单 agent 装载。
+    // host-only(本地形态);在 try 内 return → runLoop 的 finally 仍跑(flush + advanceQueue + cleanup),
+    // runGroupChat 自管终态(done/failed/aborted),不碰会话队列。
+    if (agentConfig.groupChat && profile.capabilities.hostExec) {
+      await runGroupChat({
+        runId, sessionId, userId, appId, modelId, execMode, cwd, profile, agentConfig,
+        message: input.message ? String(input.message) : '',
+        userMessageId: input.userMessageId,
+        attachments,
+        signal: ac.signal,
+      });
+      return;
+    }
 
     const { model, apiKey, baseUrl, apiModelId } = await resolveModelAndKey(modelId);
 
@@ -355,9 +484,40 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     const workingMessages: ChatMessage[] = [];
     if (systemParts.length) {
-      workingMessages.push({ role: 'system', content: systemParts.join('\n\n') } as ChatMessage);
+      // 注入的上下文块(系统提示/记忆/技能/环境)锚定:compactContext 永不折叠它(借 Codex reference-context;
+      // 把「靠位置保护」升级为「显式 pin」,日后消息排序变化也不丢注入上下文)。
+      workingMessages.push(pinMessage({ role: 'system', content: systemParts.join('\n\n') } as ChatMessage));
     }
     workingMessages.push(...history);
+
+    // 运行时转向的「回合切分」:把当前累积的助手段 A 落库 → 持久化注入的用户消息 U(们) → 清空累加器、
+    // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
+    // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
+    const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
+      const finalizedId = currentAssistantId;
+      const finalizedContent = finalContent;
+      if (finalContent.trim() || allToolCalls.length) {
+        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults);
+      }
+      for (const m of msgs) {
+        await deps().state.insertUserMessage({
+          id: m.id, sessionId, content: m.content, modelId,
+          attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
+        });
+        workingMessages.push({ role: 'user', content: m.content } as ChatMessage);
+      }
+      finalContent = '';
+      finalReasoning = '';
+      allToolCalls.length = 0;
+      allToolResults.length = 0;
+      currentAssistantId = uuidv4();
+      await publish(runId, 'turn_boundary', {
+        finalizedAssistantId: finalizedId,
+        finalizedContent,
+        userMessages: msgs.map((m) => ({ id: m.id, content: m.content })),
+        newAssistantId: currentAssistantId,
+      });
+    };
 
     // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
     // 计划模式下整体跳过(外部副作用不可知,不属于只读集)。
@@ -432,7 +592,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await publish(runId, 'tool_call', basePayload);
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
-      const decision = await gateToolCall(runId, call, { sessionId, execMode, approvalMode }, ac.signal);
+      const decision = await gateToolCall(runId, call, { sessionId, execMode, approvalMode, cwd }, ac.signal);
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'reject') {
         const rejected = '用户拒绝了该操作。';
@@ -530,10 +690,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return;
     }
 
-    let finalContent = '';
-    let finalReasoning = '';
-    const allToolCalls: ToolCall[] = [];
-    const allToolResults: any[] = [];
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -542,6 +698,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let lastRealPromptTokens = 0; // 上一轮 provider 真实 prompt 用量(压缩触发的首选依据,对齐 Hermes)
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
+      // 迭代边界注入运行时转向消息(在压缩 / 模型调用之前 → 新 U 参与上下文与折叠 tail 计算)。
+      const steered = drainSteer(runId);
+      if (steered.length) await applySteering(steered);
 
       // 每轮前复查配额（多轮 run 可能远超首轮预估）
       const stepPre = await canConsumeTokenPoints(user.id, estCost);
@@ -685,6 +844,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 仍为空则给一条可读提示,避免最终消息全空白。
         finalContent = res.content || finalContent;
         finalReasoning = res.reasoning || finalReasoning;
+        // 运行时转向:模型本想收尾,但用户在这一轮里发了消息 → 续跑而非结束(最后一轮仍须收尾)。先把刚
+        // 产出的最终文本作为助手轮并入上下文,再切回合注入 U,continue 让下一迭代带着 U 继续。
+        const steeredAtFinish = drainSteer(runId);
+        if (steeredAtFinish.length && !lastIter) {
+          if (finalContent) workingMessages.push({ role: 'assistant', content: finalContent } as ChatMessage);
+          await applySteering(steeredAtFinish);
+          continue;
+        }
         if (!finalContent.trim() && !finalReasoning.trim()) {
           finalContent = looksLikeToolCallText(res.content)
             ? '(本轮达到最大工具调用次数或工具调用格式异常,已停止。发送"继续"可让我接着操作。)'
@@ -741,7 +908,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     await finalizeAssistantMessage(
-      run.assistant_message_id || uuidv4(),
+      currentAssistantId,
       sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults,
     );
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
@@ -756,13 +923,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const status = aborted ? 'aborted' : 'failed';
     const msg = aborted ? 'aborted' : (err?.message || String(err));
     console.error(`[agent-core] run ${runId} ${status}:`, msg);
-    await publish(runId, 'error', { error: msg, aborted }).catch(() => {});
+    // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
+    // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
+    if (finalContent.trim() || allToolCalls.length) {
+      await finalizeAssistantMessage(
+        currentAssistantId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults,
+      ).catch((e) => console.warn('[agent-core] persist partial on abort failed:', e));
+    }
+    // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
+    await publish(runId, 'error', { error: msg, aborted, content: finalContent }).catch(() => {});
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {
     // 兜底 snapshot（失败/中止路径未走到成功段时）；会话沙箱保持温，由空闲 TTL reaper 回收。
     await flush();
     abortControllers.delete(runId);
+    steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

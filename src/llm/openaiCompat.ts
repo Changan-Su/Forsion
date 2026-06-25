@@ -13,9 +13,14 @@
 import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError, type AgentModel, type ToolCall } from '../core/types.js';
 import { parseTextToolCalls } from './textToolCalls.js';
+import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 
 /** 直连 payload 的私有标记:multiBrain 据此把 stream 分发到本实现而非 httpBrain。 */
 export const DIRECT_MARK = '__tangu_direct';
+/** 直连协议标记:multiBrain 据此把 stream 再分发到 anthropic-messages / openai-responses 客户端。 */
+export const PROTOCOL_MARK = '__tangu_protocol';
+/** Codex 订阅:chatgpt-account-id 头取值(从 id_token 解出,随 payload 透传到 responses 客户端)。 */
+export const ACCOUNT_MARK = '__tangu_account';
 
 /** 把 image attachments 合进最后一条 user 消息（搬自 llmService.applyAttachments,纯函数）。 */
 function applyAttachments(finalMessages: any[], attachments: any[]): any[] {
@@ -71,12 +76,27 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
   if (cacheKey && (opts.model as any)?.provider === 'openai') {
     payload.prompt_cache_key = cacheKey;
   }
+  // 透传直连协议/账号标记,供 streamProviderCompletion 分发到原生订阅客户端。
+  const dm = opts.model as any;
+  if (dm?.[PROTOCOL_MARK]) payload[PROTOCOL_MARK] = dm[PROTOCOL_MARK];
+  if (dm?.[ACCOUNT_MARK]) payload[ACCOUNT_MARK] = dm[ACCOUNT_MARK];
   return payload;
 }
 
 /** 从 providerRegistry 命中结果构造的 AgentModel 带此标记,buildProviderPayload 据此走直连。 */
-export function makeDirectModel(modelId: string, providerId: string): AgentModel {
-  return { id: modelId, name: modelId, provider: providerId, [DIRECT_MARK]: true };
+export function makeDirectModel(
+  modelId: string,
+  providerId: string,
+  extra?: { protocol?: string; accountId?: string },
+): AgentModel {
+  return {
+    id: modelId,
+    name: modelId,
+    provider: providerId,
+    [DIRECT_MARK]: true,
+    ...(extra?.protocol ? { [PROTOCOL_MARK]: extra.protocol } : {}),
+    ...(extra?.accountId ? { [ACCOUNT_MARK]: extra.accountId } : {}),
+  };
 }
 
 /**
@@ -84,9 +104,13 @@ export function makeDirectModel(modelId: string, providerId: string): AgentModel
  * 原样搬自 server/src/services/llmService.ts:243-351（纯 fetch,无 server 耦合）。
  */
 export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult> {
-  const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta, signal } = opts;
+  return withStreamIdle(opts.signal, (guard) => runOpenAiCompatStream(opts, guard));
+}
+
+async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
+  const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta } = opts;
   // 剥掉私有标记,再发给 provider。
-  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, ...clean } = payload as any;
+  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, ...clean } = payload as any;
   const streamPayload = { ...clean, stream: true, stream_options: { include_usage: true } };
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -96,7 +120,7 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
     method: 'POST',
     headers,
     body: JSON.stringify(streamPayload),
-    signal,
+    signal: guard.signal,
   });
 
   if (!response.ok || !response.body) {
@@ -122,9 +146,11 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
   const decoder = new TextDecoder();
   let buffer = '';
 
+  guard.arm();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
+    guard.arm();
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';

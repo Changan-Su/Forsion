@@ -79,7 +79,6 @@ export type UiAction =
   | { type: 'APPEND_TEXT'; delta: string }
   | { type: 'APPEND_REASONING'; delta: string }
   | { type: 'TOOL_CALL'; id: string; name: string; args: string }
-  | { type: 'TOOL_STREAM'; id: string; delta: string }
   | { type: 'TOOL_RESULT'; id: string; name: string; result: string; isError: boolean }
   | { type: 'USAGE'; tokens: number; cost: number; cached: number; iteration: number; prompt: number }
   | { type: 'STATUS'; state?: RunStatus['state']; iteration?: number; phase?: string }

@@ -1,18 +1,26 @@
 /**
  * 右侧面板:工作区文件 / 目录(会话大纲) / 记忆·日志 三个 tab(对标 openhanako Desk 的右栏形态)。
+ * 文件区是一个迷你文件管理器:单击选中(cmd/shift 多选)、双击打开/预览、右键菜单、
+ * 拖行进文件夹移动、拖 OS 文件进来复制(host)。预览走 App 的工作区文件浮层面板。
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
-  FolderOpen, Folder, List, BookOpen, Download, Trash2, Upload, RefreshCw, FileText, Image as ImageIcon, Loader2, ChevronLeft, CornerLeftUp,
-  FolderPlus, Pencil, ExternalLink, Check, X,
+  FolderOpen, Folder, List, BookOpen, Download, Trash2, Upload, RefreshCw, FileText, Image as ImageIcon, Loader2, CornerLeftUp,
+  FolderPlus, Pencil, ExternalLink, Check, X, Eye,
 } from 'lucide-react'
 import type { AgentConfig, TanguDesktopConfig, UiMessage, WorkspaceFileMeta } from '../types'
 import * as api from '../services/backendService'
 import { Markdown } from './Markdown'
 import { ChatToc } from './ChatToc'
+import type { PreviewTarget } from './WorkspaceFilePreview'
+import { fmtSize, b64ToBytes } from '../services/fileKinds'
 import { useI18n } from '../i18n'
 
 type Tab = 'workspace' | 'toc' | 'memory'
+
+/** 内部拖拽(拖行进文件夹)携带的源路径;区别于 OS 文件拖入('Files')。 */
+const DRAG_MIME = 'application/x-tangu-paths'
 
 export const RightPanel: React.FC<{
   cfg: TanguDesktopConfig
@@ -22,6 +30,8 @@ export const RightPanel: React.FC<{
   messages: UiMessage[]
   chatScrollRef: React.RefObject<HTMLDivElement | null>
   onToast: (text: string, error?: boolean) => void
+  /** 打开工作区文件浮层预览(由 App 在聊天列渲染面板)。 */
+  onOpenPreview: (target: PreviewTarget) => void
 }> = (p) => {
   const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('workspace')
@@ -47,6 +57,76 @@ export const RightPanel: React.FC<{
   )
 }
 
+// ── 选中模型 + 右键菜单(两个文件 tab 共用) ──────────────────────────────────────
+
+/** 单击选中,cmd/ctrl 切换,shift 区间;列表变化时剔除消失项。 */
+function useSelection(orderedPaths: string[]) {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const anchorRef = useRef<string | null>(null)
+  const key = orderedPaths.join('\n')
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((p) => orderedPaths.includes(p)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [key]) // eslint 无 —— key 已涵盖 orderedPaths 变化
+  const only = (path: string) => { setSelected(new Set([path])); anchorRef.current = path }
+  const clear = () => { setSelected(new Set()); anchorRef.current = null }
+  const onClick = (path: string, e: React.MouseEvent) => {
+    if (e.metaKey || e.ctrlKey) {
+      setSelected((prev) => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n })
+      anchorRef.current = path
+    } else if (e.shiftKey && anchorRef.current) {
+      const a = orderedPaths.indexOf(anchorRef.current); const b = orderedPaths.indexOf(path)
+      if (a >= 0 && b >= 0) { const [lo, hi] = a < b ? [a, b] : [b, a]; setSelected(new Set(orderedPaths.slice(lo, hi + 1))) }
+      else only(path)
+    } else only(path)
+  }
+  return { selected, onClick, only, clear }
+}
+
+interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; run: () => void }
+type CtxMenu = { x: number; y: number; items: CtxItem[] } | null
+
+/** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。 */
+const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void }> = ({ menu, onClose }) => {
+  useEffect(() => {
+    const close = () => onClose()
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('contextmenu', close)
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('contextmenu', close)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('blur', close)
+    }
+  }, [onClose])
+  return createPortal(
+    <div
+      className="ctx-menu"
+      style={{ left: menu.x, top: menu.y }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
+    >
+      {menu.items.map((it, i) => (
+        <button key={i} className={`ctx-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}>
+          {it.icon}<span>{it.label}</span>
+        </button>
+      ))}
+    </div>,
+    document.body,
+  )
+}
+
+/** 右键坐标钳进视口(估算菜单尺寸,避免溢出右/下边)。 */
+const menuPos = (e: React.MouseEvent, count: number) => ({
+  x: Math.min(e.clientX, window.innerWidth - 200),
+  y: Math.min(e.clientY, window.innerHeight - 16 - count * 32),
+})
+
 // ── 工作区 ──────────────────────────────────────────────────────────────────
 
 /** 工作区分发:本机会话浏览 cwd 真实目录(Electron fs);云沙箱走后端工作区。 */
@@ -56,138 +136,149 @@ const WorkspaceTab: React.FC<{
   sessionConfig?: AgentConfig
   running: boolean
   onToast: (t: string, e?: boolean) => void
+  onOpenPreview: (target: PreviewTarget) => void
 }> = (p) => {
   if (p.sessionConfig?.execMode === 'host' && p.sessionConfig.cwd && window.tangu?.listDir) {
-    return <HostFilesTab cwd={p.sessionConfig.cwd} running={p.running} onToast={p.onToast} />
+    return <HostFilesTab cwd={p.sessionConfig.cwd} running={p.running} onToast={p.onToast} onOpenPreview={p.onOpenPreview} />
   }
   return <SandboxFilesTab {...p} />
 }
 
-/** 本机工作区文件浏览(根=会话 cwd;可进子目录、预览文件;不越过 cwd 根)。 */
+/** 本机工作区文件浏览(根=会话 cwd;进子目录、选中/双击预览、右键菜单、拖拽移动/复制)。 */
 const HostFilesTab: React.FC<{
   cwd: string
   running: boolean
   onToast: (t: string, e?: boolean) => void
-}> = ({ cwd, running, onToast }) => {
+  onOpenPreview: (target: PreviewTarget) => void
+}> = ({ cwd, running, onToast, onOpenPreview }) => {
   const { t } = useI18n()
   const [curDir, setCurDir] = useState(cwd)
   const [entries, setEntries] = useState<Array<{ name: string; isDir: boolean; size: number; path: string }>>([])
   const [loading, setLoading] = useState(false)
-  const [preview, setPreview] = useState<{ name: string; mimeType: string; content: string; size: number; tooLarge?: boolean } | null>(null)
-  const [renaming, setRenaming] = useState<string | null>(null) // 正在重命名的条目 path
+  const [renaming, setRenaming] = useState<string | null>(null)
   const [renameVal, setRenameVal] = useState('')
-  const [newFolder, setNewFolder] = useState(false) // 是否显示「新建文件夹」输入
+  const [newFolder, setNewFolder] = useState(false)
   const [newFolderVal, setNewFolderVal] = useState('')
+  const [menu, setMenu] = useState<CtxMenu>(null)
+  const [dragging, setDragging] = useState<string[] | null>(null) // 内部拖拽的源路径
+  const [dropDir, setDropDir] = useState<string | null>(null)      // 高亮的拖入目标
+  const [dragInFiles, setDragInFiles] = useState(false)            // OS 文件悬停面板
 
-  useEffect(() => { setCurDir(cwd); setPreview(null); setRenaming(null); setNewFolder(false) }, [cwd]) // 切会话/工作区复位到根
+  const sel = useSelection(entries.map((en) => en.path))
+
+  useEffect(() => { setCurDir(cwd); setRenaming(null); setNewFolder(false) }, [cwd])
 
   const refresh = useCallback(async () => {
     if (!window.tangu?.listDir) return
     setLoading(true)
-    try {
-      setEntries(await window.tangu.listDir(curDir))
-    } catch (e: any) {
-      onToast(t('panel.toast.listDirFail', { err: e?.message || e }), true)
-    } finally {
-      setLoading(false)
-    }
+    try { setEntries(await window.tangu.listDir(curDir)) }
+    catch (e: any) { onToast(t('panel.toast.listDirFail', { err: e?.message || e }), true) }
+    finally { setLoading(false) }
   }, [curDir, onToast])
-
   useEffect(() => { void refresh() }, [refresh, running])
 
-  const parentOf = (d: string): string => {
-    const i = Math.max(d.lastIndexOf('/'), d.lastIndexOf('\\'))
-    return i > 0 ? d.slice(0, i) : d
-  }
+  const parentOf = (d: string): string => { const i = Math.max(d.lastIndexOf('/'), d.lastIndexOf('\\')); return i > 0 ? d.slice(0, i) : d }
   const atRoot = curDir === cwd
   const rel = curDir.startsWith(cwd) ? curDir.slice(cwd.length).replace(/^[/\\]+/, '') : curDir
-  const isText = (m: string) => m.startsWith('text/') || /json|xml|javascript|typescript|yaml|csv/.test(m)
-  const isImage = (m: string) => m.startsWith('image/')
 
-  const open = async (en: { name: string; isDir: boolean; path: string }) => {
-    if (en.isDir) { setCurDir(en.path); return }
-    if (!window.tangu?.readHostFile) return
-    try {
-      const r = await window.tangu.readHostFile(en.path)
-      setPreview({ name: en.name, ...r })
-    } catch (e: any) {
-      onToast(t('panel.toast.readFail', { err: e?.message || e }), true)
-    }
+  const preview = (en: { name: string; isDir: boolean; path: string }) => {
+    if (en.isDir || !window.tangu?.readHostFile) return
+    onOpenPreview({
+      name: en.name,
+      load: async () => {
+        const r = await window.tangu!.readHostFile!(en.path)
+        if (r.tooLarge) return { tooLarge: true as const, size: r.size }
+        return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
+      },
+      download: () => { void window.tangu?.revealHostPath?.(en.path) },
+    })
   }
+  const open = (en: { name: string; isDir: boolean; path: string }) => { en.isDir ? setCurDir(en.path) : preview(en) }
 
-  // ── 文件操作 ──
   const beginRename = (en: { name: string; path: string }) => { setRenaming(en.path); setRenameVal(en.name) }
   const commitRename = async (en: { name: string; path: string }) => {
-    const name = renameVal.trim()
-    setRenaming(null)
+    const name = renameVal.trim(); setRenaming(null)
     if (!name || name === en.name || !window.tangu?.renameHostPath) return
-    try {
-      await window.tangu.renameHostPath(en.path, name)
-      void refresh()
-    } catch (e: any) {
-      onToast(t('panel.toast.renameFail', { err: e?.message || e }), true)
-    }
+    try { await window.tangu.renameHostPath(en.path, name); void refresh() }
+    catch (e: any) { onToast(t('panel.toast.renameFail', { err: e?.message || e }), true) }
   }
   const commitNewFolder = async () => {
-    const name = newFolderVal.trim()
-    setNewFolder(false)
-    setNewFolderVal('')
+    const name = newFolderVal.trim(); setNewFolder(false); setNewFolderVal('')
     if (!name || !window.tangu?.mkdirHost) return
-    try {
-      await window.tangu.mkdirHost(curDir, name)
-      void refresh()
-    } catch (e: any) {
-      onToast(t('panel.toast.mkdirFail', { err: e?.message || e }), true)
-    }
+    try { await window.tangu.mkdirHost(curDir, name); void refresh() }
+    catch (e: any) { onToast(t('panel.toast.mkdirFail', { err: e?.message || e }), true) }
   }
-  const reveal = (en: { path: string }) => { void window.tangu?.revealHostPath?.(en.path) }
-  const trash = async (en: { name: string; path: string }) => {
-    if (!window.tangu?.trashHostPath) return
-    if (!window.confirm(t('panel.confirm.trash', { name: en.name }))) return
-    try {
-      await window.tangu.trashHostPath(en.path)
-      void refresh()
-    } catch (e: any) {
-      onToast(t('panel.toast.deleteFail', { err: e?.message || e }), true)
-    }
-  }
-  // 原生拖出:阻止 HTML5 默认拖拽,改由主进程 startDrag 投递真实文件给 OS / 其它应用。
-  const onDragStart = (e: React.DragEvent, en: { path: string }) => {
-    if (!window.tangu?.startHostDrag) return
-    e.preventDefault()
-    window.tangu.startHostDrag(en.path)
+  const trashPaths = async (paths: string[]) => {
+    if (!paths.length || !window.tangu?.trashHostPath) return
+    const ok = window.confirm(paths.length === 1
+      ? t('panel.confirm.trash', { name: paths[0].split(/[/\\]/).pop() || '' })
+      : t('panel.confirm.trashN', { n: String(paths.length) }))
+    if (!ok) return
+    try { for (const p of paths) await window.tangu.trashHostPath(p); sel.clear(); void refresh() }
+    catch (e: any) { onToast(t('panel.toast.deleteFail', { err: e?.message || e }), true) }
   }
 
-  if (preview) {
-    return (
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-          <button className="btn ghost sm" onClick={() => setPreview(null)}><ChevronLeft size={13} /> {t('panel.back')}</button>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {preview.name}
-          </span>
-        </div>
-        {preview.tooLarge ? (
-          <div className="panel-note">{t('panel.preview.tooLarge', { size: fmtSize(preview.size) })}</div>
-        ) : isImage(preview.mimeType) ? (
-          <img src={`data:${preview.mimeType};base64,${preview.content}`} style={{ maxWidth: '100%', borderRadius: 'var(--radius-md)' }} />
-        ) : isText(preview.mimeType) || preview.mimeType === 'application/octet-stream' ? (
-          <pre style={{
-            fontSize: 11.5, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)',
-            borderRadius: 'var(--radius-md)', padding: 10, maxHeight: '70vh', overflowY: 'auto',
-          }}>
-            {safeAtobUtf8(preview.content, t('panel.preview.decodeFailed'))}
-          </pre>
-        ) : (
-          <div className="panel-note">{t('panel.preview.binaryNoPreview')}</div>
-        )}
-      </div>
-    )
+  // 拖入文件夹 → 移动选中(或被拖)项;OS 文件拖入 → 复制。
+  const moveInto = async (destDir: string, paths: string[]) => {
+    const todo = paths.filter((p) => p !== destDir)
+    if (!todo.length || !window.tangu?.moveHostPath) return
+    try { for (const p of todo) await window.tangu.moveHostPath(p, destDir); sel.clear(); void refresh() }
+    catch (e: any) { onToast(t('panel.toast.moveFail', { err: e?.message || e }), true) }
+  }
+  const copyFilesInto = async (files: FileList, destDir: string) => {
+    if (!window.tangu?.copyHostFiles || !window.tangu?.getPathForFile) return
+    const paths = Array.from(files).map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } }).filter(Boolean)
+    if (!paths.length) return
+    try { const r = await window.tangu.copyHostFiles(paths, destDir); onToast(t('panel.toast.copied', { n: String(r.copied) })); void refresh() }
+    catch (e: any) { onToast(t('panel.toast.copyFail', { err: e?.message || e }), true) }
+  }
+
+  const openMenu = (e: React.MouseEvent, en: { name: string; isDir: boolean; path: string }) => {
+    e.preventDefault(); e.stopPropagation()
+    const selPaths = sel.selected.has(en.path) ? [...sel.selected] : [en.path]
+    if (!sel.selected.has(en.path)) sel.only(en.path)
+    const multi = selPaths.length > 1
+    const items: CtxItem[] = []
+    if (!multi && !en.isDir) items.push({ label: t('panel.action.preview'), icon: <Eye size={13} />, run: () => preview(en) })
+    if (!multi) items.push({ label: t('panel.action.rename'), icon: <Pencil size={13} />, run: () => beginRename(en) })
+    if (!multi) items.push({ label: t('panel.action.revealInFileManager'), icon: <ExternalLink size={13} />, run: () => window.tangu?.revealHostPath?.(en.path) })
+    items.push({
+      label: multi ? t('panel.action.deleteN', { n: String(selPaths.length) }) : t('panel.action.moveToTrash'),
+      icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths(selPaths),
+    })
+    setMenu({ ...menuPos(e, items.length), items })
+  }
+
+  const rowDragStart = (e: React.DragEvent, en: { path: string }) => {
+    // Alt 拖 = 原生拖出到 OS / 其它应用(主进程 startDrag);默认 = 内部移动(拖进文件夹)。
+    if (e.altKey && window.tangu?.startHostDrag) { e.preventDefault(); window.tangu.startHostDrag(en.path); return }
+    const paths = sel.selected.has(en.path) ? [...sel.selected] : [en.path]
+    setDragging(paths)
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths))
+    e.dataTransfer.effectAllowed = 'move'
+  }
+  const folderDragOver = (e: React.DragEvent, destPath: string) => {
+    const osFiles = e.dataTransfer.types.includes('Files')
+    if (!dragging && !osFiles) return
+    if (dragging?.includes(destPath)) return // 不能拖进自身
+    e.preventDefault(); e.stopPropagation(); setDropDir(destPath); setDragInFiles(false)
+  }
+  const folderDrop = (e: React.DragEvent, destPath: string) => {
+    e.preventDefault(); e.stopPropagation()
+    const files = e.dataTransfer.files; const dg = dragging
+    setDropDir(null); setDragging(null)
+    if (files?.length) void copyFilesInto(files, destPath)
+    else if (dg?.length) void moveInto(destPath, dg)
   }
 
   return (
-    <div>
+    <div
+      className={dragInFiles ? 'wsfiles dragover' : 'wsfiles'}
+      onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }}
+      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files') && !dragging) { e.preventDefault(); setDragInFiles(true) } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragInFiles(false) }}
+      onDrop={(e) => { e.preventDefault(); setDragInFiles(false); setDropDir(null); if (e.dataTransfer.files?.length && !dragging) void copyFilesInto(e.dataTransfer.files, curDir) }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6 }}>
         <span className="panel-section-title" style={{ flex: 1, padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={curDir}>
           {rel ? `…/${rel}` : (cwd.split(/[/\\]/).filter(Boolean).pop() || cwd)}
@@ -221,54 +312,61 @@ const HostFilesTab: React.FC<{
         </div>
       )}
       {!atRoot && (
-        <button className="file-row" onClick={() => setCurDir(parentOf(curDir))}>
-          <CornerLeftUp size={13} />
-          <span className="file-name">{t('panel.parentDir')}</span>
-        </button>
-      )}
-      {entries.length === 0 && !loading && !newFolder && <div className="panel-note">{t('panel.emptyDir')}</div>}
-      {entries.map((en) => (
         <div
-          className="file-row"
-          key={en.path}
+          className={`file-row${dropDir === parentOf(curDir) ? ' drop-target' : ''}`}
           role="button"
           tabIndex={0}
-          draggable={renaming !== en.path}
-          onDragStart={(e) => onDragStart(e, en)}
-          onClick={() => { if (renaming !== en.path) void open(en) }}
-          onKeyDown={(e) => { if (renaming !== en.path && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); void open(en) } }}
+          onClick={() => setCurDir(parentOf(curDir))}
+          onDragOver={(e) => folderDragOver(e, parentOf(curDir))}
+          onDragLeave={() => setDropDir(null)}
+          onDrop={(e) => folderDrop(e, parentOf(curDir))}
         >
-          {en.isDir ? <Folder size={13} style={{ color: 'var(--accent)' }} /> : en.size && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(en.name) ? <ImageIcon size={13} /> : <FileText size={13} />}
-          {renaming === en.path ? (
-            <input
-              autoFocus
-              className="file-rename-input"
-              value={renameVal}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => setRenameVal(e.target.value)}
-              onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') void commitRename(en); else if (e.key === 'Escape') setRenaming(null) }}
-              onBlur={() => setRenaming(null)}
-            />
-          ) : (
-            <span className="file-name">{en.name}</span>
-          )}
-          {renaming === en.path ? (
-            <span className="file-act" style={{ opacity: 1 }}>
-              <button className="icon-btn" style={{ width: 22, height: 22 }} title={t('panel.action.confirm')} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); void commitRename(en) }}><Check size={12} /></button>
-              <button className="icon-btn" style={{ width: 22, height: 22 }} title={t('panel.action.cancel')} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setRenaming(null) }}><X size={12} /></button>
-            </span>
-          ) : (
-            <>
-              {!en.isDir && <span className="file-size">{fmtSize(en.size)}</span>}
-              <span className="file-act">
-                <button className="icon-btn" style={{ width: 22, height: 22 }} title={t('panel.action.rename')} onClick={(e) => { e.stopPropagation(); beginRename(en) }}><Pencil size={12} /></button>
-                <button className="icon-btn" style={{ width: 22, height: 22 }} title={t('panel.action.revealInFileManager')} onClick={(e) => { e.stopPropagation(); reveal(en) }}><ExternalLink size={12} /></button>
-                <button className="icon-btn" style={{ width: 22, height: 22 }} title={t('panel.action.moveToTrash')} onClick={(e) => { e.stopPropagation(); void trash(en) }}><Trash2 size={12} /></button>
-              </span>
-            </>
-          )}
+          <CornerLeftUp size={13} />
+          <span className="file-name">{t('panel.parentDir')}</span>
         </div>
-      ))}
+      )}
+      {entries.length === 0 && !loading && !newFolder && <div className="panel-note">{t('panel.emptyDir')}</div>}
+      {entries.map((en) => {
+        const isSel = sel.selected.has(en.path)
+        const isDrop = en.isDir && dropDir === en.path
+        return (
+          <div
+            className={`file-row${isSel ? ' selected' : ''}${isDrop ? ' drop-target' : ''}`}
+            key={en.path}
+            role="button"
+            tabIndex={0}
+            draggable={renaming !== en.path}
+            onDragStart={(e) => rowDragStart(e, en)}
+            onDragEnd={() => { setDragging(null); setDropDir(null) }}
+            onDragOver={en.isDir ? (e) => folderDragOver(e, en.path) : undefined}
+            onDragLeave={en.isDir ? () => setDropDir(null) : undefined}
+            onDrop={en.isDir ? (e) => folderDrop(e, en.path) : undefined}
+            onClick={(e) => { if (renaming !== en.path) sel.onClick(en.path, e) }}
+            onDoubleClick={() => { if (renaming !== en.path) open(en) }}
+            onContextMenu={(e) => openMenu(e, en)}
+            onKeyDown={(e) => { if (renaming !== en.path && e.key === 'Enter') { e.preventDefault(); open(en) } }}
+          >
+            {en.isDir ? <Folder size={13} style={{ color: 'var(--accent)' }} /> : /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(en.name) ? <ImageIcon size={13} /> : <FileText size={13} />}
+            {renaming === en.path ? (
+              <input
+                autoFocus
+                className="file-rename-input"
+                value={renameVal}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setRenameVal(e.target.value)}
+                onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') void commitRename(en); else if (e.key === 'Escape') setRenaming(null) }}
+                onBlur={() => setRenaming(null)}
+              />
+            ) : (
+              <>
+                <span className="file-name">{en.name}</span>
+                {!en.isDir && <span className="file-size">{fmtSize(en.size)}</span>}
+              </>
+            )}
+          </div>
+        )
+      })}
+      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   )
 }
@@ -279,36 +377,42 @@ const SandboxFilesTab: React.FC<{
   sessionConfig?: AgentConfig
   running: boolean
   onToast: (t: string, e?: boolean) => void
-}> = ({ cfg, sessionId, sessionConfig, running, onToast }) => {
+  onOpenPreview: (target: PreviewTarget) => void
+}> = ({ cfg, sessionId, running, onToast, onOpenPreview }) => {
   const { t } = useI18n()
   const [files, setFiles] = useState<WorkspaceFileMeta[]>([])
   const [loading, setLoading] = useState(false)
-  const [preview, setPreview] = useState<{ path: string; mimeType: string; content: string } | null>(null)
+  const [menu, setMenu] = useState<CtxMenu>(null)
+  const sel = useSelection(files.map((f) => f.path))
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    try {
-      setFiles(await api.listWorkspace(cfg, sessionId))
-    } catch (e: any) {
-      onToast(t('panel.toast.workspaceLoadFail', { err: e?.message || e }), true)
-    } finally {
-      setLoading(false)
-    }
+    try { setFiles(await api.listWorkspace(cfg, sessionId)) }
+    catch (e: any) { onToast(t('panel.toast.workspaceLoadFail', { err: e?.message || e }), true) }
+    finally { setLoading(false) }
   }, [cfg, sessionId, onToast])
+  useEffect(() => { void refresh() }, [refresh, running]) // run 结束(running 变化)后刷新,看到新产物
 
-  useEffect(() => {
-    void refresh()
-  }, [refresh, running]) // run 结束(running 变化)后刷新,看到新产物
-
-  const open = async (f: WorkspaceFileMeta) => {
-    try {
-      const r = await api.readWorkspaceFile(cfg, sessionId, f.path)
-      setPreview({ path: f.path, mimeType: r.mimeType, content: r.content })
-    } catch (e: any) {
-      onToast(t('panel.toast.readFail', { err: e?.message || e }), true)
-    }
+  const preview = (f: WorkspaceFileMeta) => {
+    onOpenPreview({
+      name: f.path,
+      load: async () => {
+        const r = await api.readWorkspaceFile(cfg, sessionId, f.path)
+        return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
+      },
+      download: () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path).catch((err) => onToast(err.message, true)) },
+    })
   }
-
+  const download = (path: string) => { void api.downloadWorkspaceFile(cfg, sessionId, path).catch((err) => onToast(err.message, true)) }
+  const del = async (paths: string[]) => {
+    if (!paths.length) return
+    const ok = window.confirm(paths.length === 1
+      ? t('panel.confirm.delete', { name: paths[0].replace(/^\//, '') })
+      : t('panel.confirm.deleteN', { n: String(paths.length) }))
+    if (!ok) return
+    try { for (const p of paths) await api.deleteWorkspaceFile(cfg, sessionId, p); sel.clear(); void refresh() }
+    catch (err: any) { onToast(err.message, true) }
+  }
   const upload = async (list: FileList | null) => {
     if (!list?.length) return
     const payload = await Promise.all(
@@ -328,42 +432,26 @@ const SandboxFilesTab: React.FC<{
     }
   }
 
-  const isText = (m: string) => m.startsWith('text/') || /json|xml|javascript|csv/.test(m)
-  const isImage = (m: string) => m.startsWith('image/')
-
-  if (preview) {
-    return (
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-          <button className="btn ghost sm" onClick={() => setPreview(null)}>← {t('panel.back')}</button>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {preview.path}
-          </span>
-        </div>
-        {isImage(preview.mimeType) ? (
-          <img src={`data:${preview.mimeType};base64,${preview.content}`} style={{ maxWidth: '100%', borderRadius: 'var(--radius-md)' }} />
-        ) : isText(preview.mimeType) ? (
-          <pre style={{
-            fontSize: 11.5, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)',
-            borderRadius: 'var(--radius-md)', padding: 10, maxHeight: '70vh', overflowY: 'auto',
-          }}>
-            {safeAtobUtf8(preview.content, t('panel.preview.decodeFailed'))}
-          </pre>
-        ) : (
-          <div className="panel-note">{t('panel.preview.binaryDownload')}</div>
-        )}
-      </div>
-    )
+  const openMenu = (e: React.MouseEvent, f: WorkspaceFileMeta) => {
+    e.preventDefault(); e.stopPropagation()
+    const selPaths = sel.selected.has(f.path) ? [...sel.selected] : [f.path]
+    if (!sel.selected.has(f.path)) sel.only(f.path)
+    const multi = selPaths.length > 1
+    const items: CtxItem[] = []
+    if (!multi) items.push({ label: t('panel.action.preview'), icon: <Eye size={13} />, run: () => preview(f) })
+    if (!multi) items.push({ label: t('panel.action.download'), icon: <Download size={13} />, run: () => download(f.path) })
+    items.push({
+      label: multi ? t('panel.action.deleteN', { n: String(selPaths.length) }) : t('panel.action.delete'),
+      icon: <Trash2 size={13} />, danger: true, run: () => void del(selPaths),
+    })
+    setMenu({ ...menuPos(e, items.length), items })
   }
 
   return (
     <div
+      onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }}
       onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault()
-        void upload(e.dataTransfer.files)
-      }}
+      onDrop={(e) => { e.preventDefault(); void upload(e.dataTransfer.files) }}
     >
       <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
         <span className="panel-section-title" style={{ flex: 1, padding: 0 }}>{t('panel.sessionFiles')}</span>
@@ -376,37 +464,26 @@ const SandboxFilesTab: React.FC<{
         </button>
       </div>
       {files.length === 0 && <div className="panel-note">{t('panel.noFilesYet')}</div>}
-      {files.map((f) => (
-        <div className="file-row" key={f.path} onClick={() => void open(f)} role="button" tabIndex={0}>
-          {f.mimeType.startsWith('image/') ? <ImageIcon size={13} /> : <FileText size={13} />}
-          <span className="file-name">{f.path.replace(/^\//, '')}</span>
-          <span className="file-size">{fmtSize(f.size)}</span>
-          <span className="file-act">
-            <button
-              className="icon-btn"
-              style={{ width: 22, height: 22 }}
-              title={t('panel.action.download')}
-              onClick={(e) => {
-                e.stopPropagation()
-                void api.downloadWorkspaceFile(cfg, sessionId, f.path).catch((err) => onToast(err.message, true))
-              }}
-            >
-              <Download size={12} />
-            </button>
-            <button
-              className="icon-btn"
-              style={{ width: 22, height: 22 }}
-              title={t('panel.action.delete')}
-              onClick={(e) => {
-                e.stopPropagation()
-                void api.deleteWorkspaceFile(cfg, sessionId, f.path).then(() => refresh()).catch((err) => onToast(err.message, true))
-              }}
-            >
-              <Trash2 size={12} />
-            </button>
-          </span>
-        </div>
-      ))}
+      {files.map((f) => {
+        const isSel = sel.selected.has(f.path)
+        return (
+          <div
+            className={`file-row${isSel ? ' selected' : ''}`}
+            key={f.path}
+            role="button"
+            tabIndex={0}
+            onClick={(e) => sel.onClick(f.path, e)}
+            onDoubleClick={() => preview(f)}
+            onContextMenu={(e) => openMenu(e, f)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); preview(f) } }}
+          >
+            {f.mimeType.startsWith('image/') ? <ImageIcon size={13} /> : <FileText size={13} />}
+            <span className="file-name">{f.path.replace(/^\//, '')}</span>
+            <span className="file-size">{fmtSize(f.size)}</span>
+          </div>
+        )
+      })}
+      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   )
 }
@@ -505,22 +582,4 @@ const MemoryTab: React.FC<{
       )}
     </div>
   )
-}
-
-function fmtSize(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
-
-/** base64 → UTF-8 文本(atob 直接转会乱码)。 */
-function safeAtobUtf8(b64: string, decodeFailMsg = '(decode failed)'): string {
-  try {
-    const bin = atob(b64)
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    return new TextDecoder().decode(bytes)
-  } catch {
-    return decodeFailMsg
-  }
 }

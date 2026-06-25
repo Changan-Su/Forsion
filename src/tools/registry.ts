@@ -24,6 +24,7 @@ import { interactionProvider } from './builtin/interaction.js';
 import { manageAgentProvider } from './builtin/manageAgent.js';
 import { museTodoProvider } from './builtin/museTodo.js';
 import { wechatToolsProvider } from './builtin/wechatTools.js';
+import { applyPatchProvider } from './builtin/applyPatch.js';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -113,6 +114,7 @@ registerToolProvider(interactionProvider);
 registerToolProvider(manageAgentProvider); // host-only:本地 Normal Agent 自创建(append 末尾,保前缀缓存)
 registerToolProvider(museTodoProvider); // Muse 唯一写权限;仅 ctx.muse 可见(普通 run 不暴露,快照不变)
 registerToolProvider(wechatToolsProvider); // host-only:微信远程会话里发文件/图片(append 末尾,保前缀缓存)
+registerToolProvider(applyPatchProvider); // both:结构化补丁编辑(云端+host 共用,append 末尾,保前缀缓存)
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
 function currentProfile(ctx: ToolContext) {
