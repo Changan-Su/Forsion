@@ -2,9 +2,11 @@ name: build-desktop
 
 # 三平台桌面安装包(macOS .dmg / Windows .exe / Linux .AppImage)。
 # 原生模块 better-sqlite3 必须在各自系统上编译,所以用 GitHub 的三种 runner 各编各的。
-# 触发:
-#   - 手动(Actions 页 Run workflow):只构建,产物在 Artifacts 里,不发 Release。
-#   - 推送 v* tag:构建后自动创建/更新该 tag 的 GitHub Release 并附上三平台安装包。
+#
+# 触发(刻意收紧——日常 push / PR 一律不触发,只在发布时跑):
+#   - 推送 v* 版本 tag:跑测试 → 构建 → 自动创建/更新该 tag 的 GitHub Release 并附三平台安装包。
+#   - 手动(Actions 页 Run workflow):跑测试 → 构建,产物在 Artifacts 里,不发 Release。
+# 测试是构建的前置门禁:测试不过则不构建、不发布。
 
 on:
   workflow_dispatch:
@@ -16,7 +18,20 @@ permissions:
   contents: write   # 让 GITHUB_TOKEN 能创建 Release / 上传资产
 
 jobs:
+  # 门禁:类型检查 + 单测。失败则下游 build/release 不执行。
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
   build:
+    needs: test
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
