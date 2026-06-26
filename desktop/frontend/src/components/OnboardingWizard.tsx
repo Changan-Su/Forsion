@@ -24,11 +24,13 @@ export const OnboardingWizard: React.FC<{
   /** 当前主题/明暗(与 App 同步;主题步骤即时应用 + 持久化)。 */
   themePreset: string
   themeMode: 'light' | 'dark'
+  themeSeed: string
   onThemeChange: (preset: string, mode: 'light' | 'dark') => void
+  onSeedChange: (hex: string) => void
   /** 向导内动作改变了主配置(登录成功/保存 provider)→ App 重连。 */
   onReconnect: () => void
   onFinish: () => void
-}> = ({ themePreset, themeMode, onThemeChange, onReconnect, onFinish }) => {
+}> = ({ themePreset, themeMode, themeSeed, onThemeChange, onSeedChange, onReconnect, onFinish }) => {
   const { t } = useI18n()
   const [step, setStep] = useState<Step>('connect')
   const stepIdx = STEP_ORDER.indexOf(step)
@@ -273,18 +275,30 @@ export const OnboardingWizard: React.FC<{
                       entry={th}
                       mode={themeMode}
                       active={th.manifest.id === themePreset}
-                      onSelect={() => { applyTheme(th.manifest.id, themeMode); onThemeChange(th.manifest.id, themeMode) }}
+                      onSelect={() => { applyTheme(th.manifest.id, themeMode, { customColor: themeSeed }); onThemeChange(th.manifest.id, themeMode) }}
                     />
                   ))}
                 </div>
               </div>
+              {themePreset === 'custom' && (
+                <div className="field">
+                  <label>{t('onboarding.theme.customSeedLabel')}</label>
+                  <input
+                    type="color"
+                    value={themeSeed}
+                    onChange={(e) => { applyTheme('custom', themeMode, { customColor: e.target.value }); onSeedChange(e.target.value) }}
+                    aria-label={t('onboarding.theme.customSeedLabel')}
+                    style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                  />
+                </div>
+              )}
               <div className="field">
                 <label>{t('onboarding.theme.modeLabel')}</label>
                 <div className="seg">
-                  <button className={themeMode === 'light' ? 'active' : ''} onClick={() => { applyTheme(themePreset, 'light'); onThemeChange(themePreset, 'light') }}>
+                  <button className={themeMode === 'light' ? 'active' : ''} onClick={() => { applyTheme(themePreset, 'light', { customColor: themeSeed }); onThemeChange(themePreset, 'light') }}>
                     <Sun size={13} style={{ verticalAlign: -2, marginRight: 4 }} />{t('onboarding.theme.light')}
                   </button>
-                  <button className={themeMode === 'dark' ? 'active' : ''} onClick={() => { applyTheme(themePreset, 'dark'); onThemeChange(themePreset, 'dark') }}>
+                  <button className={themeMode === 'dark' ? 'active' : ''} onClick={() => { applyTheme(themePreset, 'dark', { customColor: themeSeed }); onThemeChange(themePreset, 'dark') }}>
                     <Moon size={13} style={{ verticalAlign: -2, marginRight: 4 }} />{t('onboarding.theme.dark')}
                   </button>
                 </div>

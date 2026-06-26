@@ -162,6 +162,12 @@ export function App(): React.JSX.Element {
   const [glassOn, setGlassOn] = useState(() => {
     try { return localStorage.getItem('forsion_glass') !== 'off' } catch { return true }
   })
+  const [flatOn, setFlatOn] = useState(() => {
+    try { return localStorage.getItem('forsion_theme_flat') === '1' } catch { return false }
+  })
+  const [themeSeed, setThemeSeed] = useState(() => {
+    try { return localStorage.getItem('forsion_theme_seed') || '#8b7fd6' } catch { return '#8b7fd6' }
+  })
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; error?: boolean }>>([])
 
   const cfgRef = useRef(cfg)
@@ -1358,6 +1364,17 @@ export function App(): React.JSX.Element {
     try { localStorage.setItem('forsion_glass', on ? 'on' : 'off') } catch { /* ignore */ }
   }, [])
 
+  // 扁平开关:纯属性切换(html[data-flat]),仿 glass;置空 LCL 高程 token。
+  const onFlatChange = useCallback((on: boolean) => {
+    setFlatOn(on)
+    document.documentElement.dataset.flat = on ? '1' : '0'
+    try { localStorage.setItem('forsion_theme_flat', on ? '1' : '0') } catch { /* ignore */ }
+  }, [])
+  // 取色:同步 React 态(applyTheme 由设置面板负责调用 + 持久化 forsion_theme_seed)。
+  const onSeedChange = useCallback((hex: string) => {
+    setThemeSeed(hex)
+  }, [])
+
   // 快捷键:Cmd/Ctrl+N 新会话,Cmd/Ctrl+, 设置
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1474,7 +1491,7 @@ export function App(): React.JSX.Element {
           onToggleRight={() => { if (!settingsOpen) setRightOpen(!rightOpen) }}
           onToggleMode={() => {
             const m = themeMode === 'dark' ? 'light' : 'dark'
-            applyTheme(themePreset, m) // 切换 + 持久化(forsion_theme)
+            applyTheme(themePreset, m, { customColor: themeSeed }) // 切换 + 持久化;custom 时带 seed
             setThemeMode(m)
           }}
           showFeedback={!!authInfo?.loggedIn}
@@ -1490,6 +1507,8 @@ export function App(): React.JSX.Element {
               themePreset={themePreset}
               themeMode={themeMode}
               glassOn={glassOn}
+              flatOn={flatOn}
+              themeSeed={themeSeed}
               onClose={closeSettings}
               onConfigChange={patchConfig}
               onThemeChange={(preset, mode) => {
@@ -1497,6 +1516,8 @@ export function App(): React.JSX.Element {
                 setThemeMode(mode)
               }}
               onGlassChange={onGlassChange}
+              onFlatChange={onFlatChange}
+              onSeedChange={onSeedChange}
               onReconnect={(patch) => void connect({ ...cfgRef.current, ...(patch || {}) })}
               onRelaunchOnboarding={() => {
                 closeSettings()
@@ -1508,7 +1529,9 @@ export function App(): React.JSX.Element {
             <OnboardingWizard
               themePreset={themePreset}
               themeMode={themeMode}
+              themeSeed={themeSeed}
               onThemeChange={(preset, mode) => { setThemePreset(preset); setThemeMode(mode) }}
+              onSeedChange={onSeedChange}
               onReconnect={() => {
                 desktopMode.current = 'managed'
                 void window.tangu?.getConfig().then((c) => {

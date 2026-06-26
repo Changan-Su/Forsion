@@ -1,0 +1,20 @@
+{
+  "id": "dreamer",
+  "name": "Dreamer · 梦想家",
+  "description": "薰衣草 · 暖桃 · 圆润(LCL soft 基底)。渐变云霞底,大圆角,柔影浮卡,Plus Jakarta Sans。",
+  "version": "1.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": ["lcl", "soft", "lavender", "rounded"],
+  "fonts": { "google": ["Plus Jakarta Sans:wght@400;500;600;700", "Nunito:wght@400;600;700;800"] },
+  "preview": {
+    "background": {
+      "light": "linear-gradient(158deg, #fceee4 0%, #f6edf9 52%, #edeefc 100%)",
+      "dark": "linear-gradient(158deg, #221c2e 0%, #1d1a28 55%, #181a2a 100%)"
+    },
+    "accent": "#8b7fd6",
+    "title": { "text": "Dreamer" },
+    "tagline": "薰衣草 · 暖桃 · 圆润",
+    "swatches": ["#8b7fd6", "#f6edf9", "#6b6675", "#c3b8ee"]
+  }
+}

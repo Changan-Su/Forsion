@@ -3,47 +3,56 @@
  * 组件只引用语义 CSS 变量,主题文件([data-theme=…])整块替换 token —— 即全部换肤面。
  */
 
-/* ─── token 缺省(素纸亮色;真正的主题值由 theme/themes/<id>/theme.css 覆盖) ─── */
+/* ─── token 缺省(=lovable 亮色,FOUC 兜底;真正的主题值由 theme/themes/<id>/theme.css 覆盖) ───
+ * 词表 = LCL 统一设计语言契约(.tangu-lovable);值拷自 Forsion-LCL/src/tangu/tangu.css。
+ * 字体保留 CJK 回退(PingFang/雅黑)以渲染中文。组件只引用这些语义变量,换肤=整块替换 token。 */
 :root {
-  --bg: #F5EFE4;
-  --bg-card: #FBF7EE;
-  --bg-glass: rgba(251, 247, 238, 0.92);
-  --sidebar-bg: #EFE8DB;
-  --text: #2A2622;
-  --text-light: #4A433C;
-  --text-muted: #6B6158;
-  --text-faint: #8F867B;
-  --text-ghost: #B8B0A3;
-  --border: #D8CFBE;
-  --border-width: 0.5px;
-  --shadow: rgba(42, 38, 34, 0.04);
-  --accent: #537D96;
-  --accent-hover: #3F6179;
-  --accent-light: rgba(83, 125, 150, 0.08);
-  --accent-rgb: 83, 125, 150;
-  --green: #4A6B4A;
-  --danger: #8B2C1F;
-  --danger-light: rgba(139, 44, 31, 0.08);
-  --overlay-subtle: rgba(42, 38, 34, 0.03);
-  --overlay-light: rgba(42, 38, 34, 0.04);
-  --overlay-medium: rgba(42, 38, 34, 0.08);
-  --overlay-strong: rgba(42, 38, 34, 0.15);
-  --radius-sm: 2px;
-  --radius-md: 3px;
-  --radius-lg: 4px;
-  --radius-chat-surface: 6px;
-  --radius-chat-card: 4px;
-  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --bg: #f7f4ed;
+  --bg-card: #fefdf9;
+  --bg-glass: rgba(247, 244, 237, 0.9);
+  --sidebar-bg: #f3efe7;
+  --text: #1c1c1c;
+  --text-light: rgba(28, 28, 28, 0.82);
+  --text-muted: #5f5f5d;
+  --text-faint: rgba(28, 28, 28, 0.4);
+  --text-ghost: rgba(28, 28, 28, 0.28);
+  --border: #efece4;
+  --border-width: 1px;
+  --shadow: rgba(0, 0, 0, 0.05);
+  --accent: #1c1c1c;
+  --accent-hover: #000000;
+  --accent-light: rgba(28, 28, 28, 0.05);
+  --accent-rgb: 28, 28, 28;
+  --green: #4f6f52;
+  --danger: #a3503f;
+  --danger-light: rgba(163, 80, 63, 0.08);
+  --overlay-subtle: rgba(28, 28, 28, 0.03);
+  --overlay-light: rgba(28, 28, 28, 0.04);
+  --overlay-medium: rgba(28, 28, 28, 0.07);
+  --overlay-strong: rgba(28, 28, 28, 0.14);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-chat-surface: 12px;
+  --radius-chat-card: 10px;
+  --font-ui: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-body: var(--font-ui);
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
-  --user-bg: rgba(83, 125, 150, 0.08);
-  --tool-bg: rgba(83, 125, 150, 0.06);
-  --tool-text: #6B6158;
-  --panel-blur: blur(14px) saturate(120%);
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  --user-bg: rgba(28, 28, 28, 0.04);
+  --tool-bg: rgba(28, 28, 28, 0.03);
+  --tool-text: #5f5f5d;
+  --panel-blur: none;
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
   --duration-slow: 0.25s;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  /* ── LCL 高程 token(扁平开关 html[data-flat='1'] 置空;P1 shell 暂未消费,前置铺垫) ── */
+  --on-accent: #fcfbf8;
+  --inset: rgba(255, 255, 255, 0.2) 0 0.5px 0 0 inset, rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset, rgba(0, 0, 0, 0.05) 0 1px 2px 0;
+  --focus: rgba(0, 0, 0, 0.1) 0 4px 12px;
+  --card-shadow: 0 1px 2px rgba(42, 36, 26, 0.04), 0 10px 26px rgba(42, 36, 26, 0.05);
+  --btn-shadow: var(--inset);
+  --icon-shadow: var(--inset);
 }
 
 /* 主题切换瞬间抑制全树过渡(loader.ts 挂/摘) */
@@ -56,6 +65,15 @@
 html[data-glass='off'] * {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* 扁平开关:置空 LCL 高程 token(localStorage forsion_theme_flat=1,FOUC 脚本/设置面板设 data-flat)。
+ * 用 [data-mode](始终存在)抬高特异性到 (0,2,1),压过暗色主题块 .dark[data-theme=…] 的 (0,2,0),
+ * 否则深色下 flat 失效(暗色主题重声明了 --card-shadow)。 */
+html[data-flat='1'][data-mode] {
+  --card-shadow: none;
+  --btn-shadow: none;
+  --icon-shadow: none;
 }
 
 /* ─── 重置 ─── */
@@ -814,33 +832,37 @@ a:hover { color: var(--accent-hover); }
   word-break: break-word;
 }
 
-/* ─── 工具卡片 ─── */
+/* ─── 工具卡片(对齐 LCL .tool-card:整框 + 柔阴影 + 全圆角,head 用 UI 字、hint 用等宽) ─── */
 .tool-card {
-  border-left: 2px solid var(--accent);
+  border: var(--border-width) solid var(--border);
   background: var(--tool-bg);
-  border-radius: 0 var(--radius-chat-card) var(--radius-chat-card) 0;
+  border-radius: var(--radius-chat-card);
+  box-shadow: var(--card-shadow);
   font-size: 12.5px;
   overflow: hidden;
 }
-.tool-card.err { border-left-color: var(--danger); }
+.tool-card.err { border-color: var(--danger); }
 .tool-card-head {
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
   padding: 7px 10px;
-  color: var(--tool-text);
-  font-family: var(--font-mono);
+  color: var(--text-light);
+  font-family: var(--font-ui);
+  font-size: 13px;
   text-align: left;
 }
 .tool-card-head:hover { background: var(--overlay-subtle); }
-.tool-card-head .tool-name { font-weight: 600; color: var(--text-light); }
+.tool-card-head .tool-name { font-weight: 600; color: var(--text); }
 .tool-card-head .tool-hint {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
 }
 .tool-chip {
   display: inline-flex;
@@ -1279,6 +1301,18 @@ a:hover { color: var(--accent-hover); }
   color: var(--accent);
   background: var(--accent-light);
   font-weight: 600;
+}
+/* Obsidian 式分类分组(P2):分组标题 + 组内项 */
+.settings-nav-list { gap: 0; }
+.settings-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-group + .settings-nav-group { margin-top: 14px; }
+.settings-nav-grouphead {
+  padding: 6px 10px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
 }
 .settings-main {
   min-width: 0;

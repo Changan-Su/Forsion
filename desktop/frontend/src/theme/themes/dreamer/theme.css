@@ -1,0 +1,76 @@
+/**
+ * Dreamer — 薰衣草/暖桃 · 圆润(LCL「soft」基底,与 Amadeus 的 Dreamer/暖桃同源)。
+ * 值译自 Forsion-LCL 的 tangu-soft(Amadeus softData/tanguSoft.css):渐变云霞底 + 大圆角 + 柔影浮卡。
+ * 表达在 Tangu lovable token 词表里(--bg/--accent/--radius-* 等),仅覆盖与 :root(lovable)不同处。
+ */
+
+[data-theme='dreamer'] {
+  --bg: linear-gradient(158deg, #fceee4 0%, #f6edf9 52%, #edeefc 100%);
+  --bg-card: #ffffff;
+  --bg-glass: rgba(247, 244, 251, 0.85);
+  --sidebar-bg: #f7f4fb;
+  --text: #2e2a36;
+  --text-light: rgba(46, 42, 54, 0.82);
+  --text-muted: #6b6675;
+  --text-faint: #a59fb0;
+  --text-ghost: #c4bfce;
+  --border: rgba(90, 70, 130, 0.1);
+  --shadow: rgba(90, 70, 130, 0.12);
+  --accent: #8b7fd6;
+  --accent-hover: #7a6dcb;
+  --accent-light: rgba(139, 127, 214, 0.12);
+  --accent-rgb: 139, 127, 214;
+  --green: #5aa977;
+  --danger: #e0685a;
+  --danger-light: rgba(224, 104, 90, 0.10);
+  --overlay-subtle: rgba(46, 42, 54, 0.03);
+  --overlay-light: rgba(46, 42, 54, 0.05);
+  --overlay-medium: rgba(46, 42, 54, 0.08);
+  --overlay-strong: rgba(46, 42, 54, 0.14);
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-chat-surface: 20px;
+  --radius-chat-card: 14px;
+  --font-ui: 'Plus Jakarta Sans', 'Nunito', ui-rounded, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --user-bg: rgba(139, 127, 214, 0.10);
+  --tool-bg: rgba(139, 127, 214, 0.06);
+  --tool-text: #6b6675;
+  --on-accent: #ffffff;
+  --card-shadow: 0 1px 2px rgba(70, 50, 100, 0.05), 0 12px 30px -10px rgba(90, 70, 130, 0.18);
+  --btn-shadow: 0 3px 12px rgba(139, 127, 214, 0.28);
+  --icon-shadow: 0 1px 5px rgba(90, 70, 130, 0.16);
+}
+
+/* Dreamer dark — 暮霭紫:深紫蓝渐变,提亮薰衣草 */
+.dark[data-theme='dreamer'] {
+  --bg: linear-gradient(158deg, #221c2e 0%, #1d1a28 55%, #181a2a 100%);
+  --bg-card: #2a2536;
+  --bg-glass: rgba(42, 37, 54, 0.85);
+  --sidebar-bg: #241f30;
+  --text: #efe9f6;
+  --text-light: rgba(239, 233, 246, 0.82);
+  --text-muted: #b3acc2;
+  --text-faint: #7d7690;
+  --text-ghost: #5b5570;
+  --border: rgba(200, 180, 240, 0.1);
+  --shadow: rgba(0, 0, 0, 0.4);
+  --accent: #a99cf0;
+  --accent-hover: #bcb1f6;
+  --accent-light: rgba(169, 156, 240, 0.16);
+  --accent-rgb: 169, 156, 240;
+  --on-accent: #1c1726;
+  --green: #6fbf8a;
+  --danger: #f0897a;
+  --danger-light: rgba(240, 137, 122, 0.16);
+  --overlay-subtle: rgba(239, 233, 246, 0.03);
+  --overlay-light: rgba(239, 233, 246, 0.05);
+  --overlay-medium: rgba(239, 233, 246, 0.08);
+  --overlay-strong: rgba(239, 233, 246, 0.15);
+  --user-bg: rgba(169, 156, 240, 0.12);
+  --tool-bg: rgba(169, 156, 240, 0.06);
+  --tool-text: #b3acc2;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 34px -10px rgba(0, 0, 0, 0.55);
+  --btn-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+  --icon-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+}

@@ -42,12 +42,38 @@ function buildRegistry(): Record<string, ThemeEntry> {
 
 export const themeRegistry: Readonly<Record<string, ThemeEntry>> = Object.freeze(buildRegistry());
 
-export const DEFAULT_PRESET = 'qbird';
+export const DEFAULT_PRESET = 'lovable';
+export const DEFAULT_SEED = '#8b7fd6';
 
-/** 全部主题,素纸最前,其余按推荐序。 */
+/** 「自定义」取色皮肤:无 theme.css 文件夹,骑 lovable 基底 CSS,强调色+背景由内联 seed 变量驱动
+ *  (见 theme/loader.ts applyTheme 的 custom 分支)。cssUrl 指向 lovable 作兜底。 */
+const CUSTOM_THEME_ENTRY: ThemeEntry = {
+  manifest: {
+    id: 'custom',
+    name: '自定义',
+    description: '取色 · 自适应。强调色由你定,背景氛围微染,明暗自适应。',
+    version: '1.0.0',
+    author: 'Forsion',
+    supportsDarkMode: true,
+    tags: ['lcl', 'custom'],
+    preview: {
+      background: {
+        light: 'linear-gradient(135deg, #f6f6f7 0%, #eeeef0 100%)',
+        dark: 'linear-gradient(135deg, #1b1b1d 0%, #29292b 100%)',
+      },
+      accent: DEFAULT_SEED,
+      title: { text: '自定义' },
+      tagline: '取色 · 自适应',
+      swatches: [DEFAULT_SEED, '#f6f6f7', '#6e6e73', '#e6e6e9'],
+    },
+  },
+  cssUrl: themeRegistry['lovable']?.cssUrl ?? Object.values(themeRegistry)[0]?.cssUrl ?? '',
+};
+
+/** 全部主题:lovable/echo/qbird/dreamer 按推荐序,「自定义」殿后。 */
 export function listThemes(): ThemeEntry[] {
-  const preferred = ['sozhi', 'monet', 'qbird'];
-  return Object.values(themeRegistry).slice().sort((a, b) => {
+  const preferred = ['lovable', 'echo', 'qbird', 'dreamer'];
+  const folders = Object.values(themeRegistry).slice().sort((a, b) => {
     const ia = preferred.indexOf(a.manifest.id);
     const ib = preferred.indexOf(b.manifest.id);
     if (ia >= 0 && ib >= 0) return ia - ib;
@@ -55,14 +81,16 @@ export function listThemes(): ThemeEntry[] {
     if (ib >= 0) return 1;
     return a.manifest.id.localeCompare(b.manifest.id);
   });
+  return [...folders, CUSTOM_THEME_ENTRY];
 }
 
 export function getTheme(id: string): ThemeEntry | null {
+  if (id === 'custom') return CUSTOM_THEME_ENTRY;
   return themeRegistry[id] ?? null;
 }
 
 export function hasTheme(id: string): boolean {
-  return id in themeRegistry;
+  return id === 'custom' || id in themeRegistry;
 }
 
 /** 启动时解析应使用的 preset(localStorage 键与全家桶一致:forsion_theme_preset)。 */

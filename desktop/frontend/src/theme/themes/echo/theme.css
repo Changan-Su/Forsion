@@ -1,0 +1,74 @@
+/**
+ * Echo — 珊瑚/薰衣草 · 圆润(LCL 皮肤)。仅覆盖与 lovable 基底不同处,其余从 :root(lovable)继承。
+ * 值拷自 Forsion-LCL/src/tangu/tangu.css 的 [data-skin='echo'] / [data-mode='dark'] 块。
+ */
+
+[data-theme='echo'] {
+  --bg: #fbf5ef;
+  --bg-card: #fffdfb;
+  --bg-glass: rgba(255, 253, 251, 0.8);
+  --sidebar-bg: #f6ede4;
+  --text: #36291f;
+  --text-light: #5c4d42;
+  --text-muted: #897668;
+  --text-faint: #b3a294;
+  --text-ghost: #cdbfb2;
+  --border: #f0e4d8;
+  --shadow: rgba(190, 140, 110, 0.12);
+  --accent: #ff8a6b;
+  --accent-hover: #f57254;
+  --accent-light: rgba(255, 138, 107, 0.12);
+  --accent-rgb: 255, 138, 107;
+  --green: #5aa977;
+  --danger: #e0685a;
+  --danger-light: rgba(224, 104, 90, 0.10);
+  --overlay-subtle: rgba(120, 80, 55, 0.03);
+  --overlay-light: rgba(120, 80, 55, 0.05);
+  --overlay-medium: rgba(120, 80, 55, 0.09);
+  --overlay-strong: rgba(120, 80, 55, 0.16);
+  --radius-sm: 12px;
+  --radius-md: 14px;
+  --radius-lg: 14px;
+  --radius-chat-surface: 18px;
+  --radius-chat-card: 16px;
+  --font-ui: 'Nunito', ui-rounded, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --user-bg: rgba(255, 138, 107, 0.12);
+  --tool-bg: rgba(182, 164, 236, 0.10);
+  --tool-text: #897668;
+  --card-shadow: 0 4px 18px rgba(200, 150, 120, 0.16);
+  --btn-shadow: 0 3px 12px rgba(255, 138, 107, 0.32);
+  --icon-shadow: 0 1px 5px rgba(200, 150, 120, 0.18);
+}
+
+/* Echo dark — 深李黑,提亮珊瑚 + 薰衣草 */
+.dark[data-theme='echo'] {
+  --bg: #19131a;
+  --bg-card: #241b26;
+  --bg-glass: rgba(25, 19, 26, 0.85);
+  --sidebar-bg: #1f1722;
+  --text: #f3eaf5;
+  --text-light: rgba(243, 234, 245, 0.82);
+  --text-muted: #b3a3bb;
+  --text-faint: rgba(243, 234, 245, 0.42);
+  --text-ghost: rgba(243, 234, 245, 0.3);
+  --border: #352b3a;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --accent: #ff9a7d;
+  --accent-hover: #ffb199;
+  --accent-light: rgba(255, 154, 125, 0.14);
+  --accent-rgb: 255, 154, 125;
+  --on-accent: #2a160f;
+  --green: #6fbf8a;
+  --danger: #f08a7a;
+  --danger-light: rgba(240, 138, 122, 0.14);
+  --overlay-subtle: rgba(243, 234, 245, 0.03);
+  --overlay-light: rgba(243, 234, 245, 0.05);
+  --overlay-medium: rgba(243, 234, 245, 0.09);
+  --overlay-strong: rgba(243, 234, 245, 0.16);
+  --user-bg: rgba(255, 154, 125, 0.14);
+  --tool-bg: rgba(182, 164, 236, 0.14);
+  --tool-text: #b3a3bb;
+  --card-shadow: 0 4px 18px rgba(0, 0, 0, 0.42);
+  --btn-shadow: 0 3px 12px rgba(255, 138, 107, 0.3);
+  --icon-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+}

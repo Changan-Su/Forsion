@@ -1,19 +1,19 @@
 {
   "id": "qbird",
   "name": "QBird",
-  "description": "石墨终端。Apple HIG 精度,青色点睛,macOS 暗色面板。",
-  "version": "1.0.0",
+  "description": "石墨 · 柔青。Apple HIG 系统字,低饱和软影。",
+  "version": "1.1.0",
   "author": "Forsion",
   "supportsDarkMode": true,
-  "tags": ["glass", "graphite", "system"],
+  "tags": ["lcl", "graphite", "system"],
   "preview": {
     "background": {
-      "light": "linear-gradient(135deg, #F5F5F7 0%, #e8e8ed 100%)",
-      "dark": "linear-gradient(135deg, #1C1C1E 0%, #2c2c2e 100%)"
+      "light": "linear-gradient(135deg, #f5f5f7 0%, #eeeef1 100%)",
+      "dark": "linear-gradient(135deg, #1c1c1e 0%, #2a2a2c 100%)"
     },
-    "accent": "#06b6d4",
+    "accent": "#4d8794",
     "title": { "text": "QBird" },
-    "tagline": "石墨终端。Apple HIG 精度,青色点睛,macOS 暗色面板。",
-    "swatches": ["#06b6d4", "#2dd4bf", "#cbd5e1", "#1f2937"]
+    "tagline": "石墨 · 柔青 · 系统字",
+    "swatches": ["#4d8794", "#5fa3b2", "#f5f5f7", "#1d1d1f"]
   }
 }

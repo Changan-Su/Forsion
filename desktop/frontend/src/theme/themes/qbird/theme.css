@@ -1,96 +1,75 @@
 /**
- * QBird — 石墨终端(移植自 Forsion-AI-Studio themes/qbird,token 契约按桌面端补全)。
- * 亮:Apple 灰 #F5F5F7;暗:macOS 石墨 #1C1C1E。青色 #06b6d4 点睛,10-16px 圆角,1px 边线。
+ * Qbird — 石墨 · 柔青(LCL 皮肤,Apple HIG)。仅覆盖与 lovable 基底不同处。
+ * 值拷自 Forsion-LCL/src/tangu/tangu.css 的 [data-skin='qbird'] / [data-mode='dark'] 块。
+ * (注:旧 qbird 的青是 #06B6D4;LCL roster 统一为柔青 #4d8794。)
  */
 
 [data-theme='qbird'] {
-  --bg: #F5F5F7;
-  --bg-card: rgba(255, 255, 255, 0.85);
-  --bg-glass: rgba(255, 255, 255, 0.9);
-  --sidebar-bg: rgba(236, 236, 239, 0.8);
-
-  --text: #1D1D1F;
+  --bg: #f5f5f7;
+  --bg-card: #fcfcfd;
+  --bg-glass: rgba(255, 255, 255, 0.85);
+  --sidebar-bg: #eeeef1;
+  --text: #1d1d1f;
   --text-light: #3a3a3c;
   --text-muted: #6e6e73;
-  --text-faint: #98989d;
-  --text-ghost: #c7c7cc;
-
-  --border: rgba(0, 0, 0, 0.08);
-  --border-width: 1px;
-  --shadow: rgba(0, 0, 0, 0.08);
-
-  --accent: #0891B2;
-  --accent-hover: #0E7490;
-  --accent-light: rgba(8, 145, 178, 0.1);
-  --accent-rgb: 8, 145, 178;
-
-  --green: #16a34a;
-  --danger: #dc2626;
-  --danger-light: rgba(220, 38, 38, 0.09);
-
-  --overlay-subtle: rgba(0, 0, 0, 0.03);
-  --overlay-light: rgba(0, 0, 0, 0.05);
-  --overlay-medium: rgba(0, 0, 0, 0.09);
-  --overlay-strong: rgba(0, 0, 0, 0.3);
-
+  --text-faint: #8e8e93;
+  --text-ghost: #aeaeb2;
+  --border: #e7e7ea;
+  --shadow: rgba(0, 0, 0, 0.04);
+  --accent: #4d8794;
+  --accent-hover: #3f717c;
+  --accent-light: rgba(77, 135, 148, 0.10);
+  --accent-rgb: 77, 135, 148;
+  --green: #5f9b73;
+  --danger: #cf6155;
+  --danger-light: rgba(207, 97, 85, 0.10);
+  --overlay-subtle: rgba(0, 0, 0, 0.025);
+  --overlay-light: rgba(0, 0, 0, 0.035);
+  --overlay-medium: rgba(0, 0, 0, 0.06);
+  --overlay-strong: rgba(0, 0, 0, 0.12);
   --radius-sm: 10px;
   --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-chat-surface: 16px;
+  --radius-lg: 13px;
+  --radius-chat-surface: 14px;
   --radius-chat-card: 12px;
-
-  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-body: var(--font-ui);
-  --font-mono: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
-
-  --user-bg: rgba(8, 145, 178, 0.1);
-  --tool-bg: rgba(8, 145, 178, 0.06);
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --user-bg: rgba(77, 135, 148, 0.09);
+  --tool-bg: rgba(0, 0, 0, 0.025);
   --tool-text: #6e6e73;
-  --panel-blur: blur(20px) saturate(140%);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.035), 0 3px 10px rgba(0, 0, 0, 0.035);
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.10);
+  --icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.045);
 }
 
+/* Qbird dark — macOS 石墨 + 柔青(低饱和软影) */
 .dark[data-theme='qbird'] {
-  --bg: #1C1C1E;
-  --bg-card: rgba(44, 44, 46, 0.82);
-  --bg-glass: rgba(44, 44, 46, 0.92);
-  --sidebar-bg: rgba(22, 22, 24, 0.85);
-
-  --text: rgba(255, 255, 255, 0.94);
-  --text-light: rgba(255, 255, 255, 0.72);
-  --text-muted: rgba(255, 255, 255, 0.55);
-  --text-faint: rgba(255, 255, 255, 0.38);
-  --text-ghost: rgba(255, 255, 255, 0.25);
-
-  --border: rgba(255, 255, 255, 0.1);
-  --shadow: rgba(0, 0, 0, 0.5);
-
-  --accent: #06B6D4;
-  --accent-hover: #22D3EE;
-  --accent-light: rgba(6, 182, 212, 0.14);
-  --accent-rgb: 6, 182, 212;
-
-  --green: #4ade80;
-  --danger: #f87171;
-  --danger-light: rgba(248, 113, 113, 0.13);
-
-  --overlay-subtle: rgba(255, 255, 255, 0.04);
-  --overlay-light: rgba(255, 255, 255, 0.06);
-  --overlay-medium: rgba(255, 255, 255, 0.1);
-  --overlay-strong: rgba(0, 0, 0, 0.5);
-
-  --user-bg: rgba(6, 182, 212, 0.13);
-  --tool-bg: rgba(6, 182, 212, 0.08);
-  --tool-text: rgba(255, 255, 255, 0.55);
+  --bg: #1c1c1e;
+  --bg-card: #2a2a2c;
+  --bg-glass: rgba(44, 44, 46, 0.82);
+  --sidebar-bg: #242426;
+  --text: #f2f2f5;
+  --text-light: #c7c7cc;
+  --text-muted: #9a9aa0;
+  --text-faint: #76767c;
+  --text-ghost: #5a5a60;
+  --border: #3a3a3c;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --accent: #5fa3b2;
+  --accent-hover: #74b3c0;
+  --accent-light: rgba(95, 163, 178, 0.14);
+  --accent-rgb: 95, 163, 178;
+  --on-accent: #102126;
+  --green: #6fb085;
+  --danger: #e0857a;
+  --danger-light: rgba(224, 133, 122, 0.14);
+  --overlay-subtle: rgba(255, 255, 255, 0.03);
+  --overlay-light: rgba(255, 255, 255, 0.05);
+  --overlay-medium: rgba(255, 255, 255, 0.08);
+  --overlay-strong: rgba(255, 255, 255, 0.14);
+  --user-bg: rgba(95, 163, 178, 0.13);
+  --tool-bg: rgba(255, 255, 255, 0.03);
+  --tool-text: #9a9aa0;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 3px 10px rgba(0, 0, 0, 0.3);
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
-
-/* 玻璃面:侧栏/右栏(macOS 半透明窗 chrome 质感) */
-[data-theme='qbird'] .sidebar,
-[data-theme='qbird'] .right-panel {
-  backdrop-filter: var(--panel-blur);
-  -webkit-backdrop-filter: var(--panel-blur);
-}
-
-html[data-glass='off'][data-theme='qbird'] .sidebar,
-html[data-glass='off'] [data-theme='qbird'] .right-panel { background: #ececef; }
-html[data-glass='off'].dark[data-theme='qbird'] .sidebar,
-html[data-glass='off'].dark[data-theme='qbird'] .right-panel { background: #161618; }

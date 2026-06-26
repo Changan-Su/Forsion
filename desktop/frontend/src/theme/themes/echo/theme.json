@@ -1,0 +1,20 @@
+{
+  "id": "echo",
+  "name": "Echo",
+  "description": "珊瑚 / 薰衣草 · 圆润。Nunito 圆体,大圆角,柔磨砂。",
+  "version": "1.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": ["lcl", "coral", "rounded"],
+  "fonts": { "google": ["Nunito:wght@400;600;700;800"] },
+  "preview": {
+    "background": {
+      "light": "linear-gradient(135deg, #fbf5ef 0%, #f6ede4 100%)",
+      "dark": "linear-gradient(135deg, #19131a 0%, #241b26 100%)"
+    },
+    "accent": "#ff8a6b",
+    "title": { "text": "Echo" },
+    "tagline": "珊瑚 / 薰衣草 · 圆润",
+    "swatches": ["#ff8a6b", "#b6a4ec", "#fbf5ef", "#36291f"]
+  }
+}

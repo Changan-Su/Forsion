@@ -64,10 +64,14 @@ export const SettingsModal: React.FC<{
   themePreset: string
   themeMode: 'light' | 'dark'
   glassOn: boolean
+  flatOn: boolean
+  themeSeed: string
   onClose: () => void
   onConfigChange: (patch: Partial<TanguDesktopConfig>) => void
   onThemeChange: (preset: string, mode: 'light' | 'dark') => void
   onGlassChange: (on: boolean) => void
+  onFlatChange: (on: boolean) => void
+  onSeedChange: (hex: string) => void
   /** patch 随调用传入:避免「setState 未刷新就重连」的旧值竞态。 */
   onReconnect: (patch?: Partial<TanguDesktopConfig>) => void
   /** 开发者选项里「重新进入引导」回调(由 App 控制 onboarding 显隐)。 */
@@ -552,6 +556,16 @@ export const SettingsModal: React.FC<{
   ] as Array<[Tab, string]>
   const activeTabLabel = tabItems.find(([id]) => id === tab)?.[1] || t('settings.title')
 
+  // Obsidian 式分类导航:把扁平 tab 归到分组下;每组只渲染 tabItems 里实际存在的项(沿用其 desktop/devMode 过滤)。
+  const navGroups: Array<{ key: string; label: string; tabs: Tab[] }> = [
+    { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme'] },
+    { key: 'account', label: t('settings.group.account'), tabs: ['connection', 'forsion'] },
+    { key: 'model', label: t('settings.group.model'), tabs: ['model'] },
+    { key: 'plugins', label: t('settings.group.plugins'), tabs: ['mcp', 'skills', 'agents', 'plugins', 'agent-clis'] },
+    { key: 'advanced', label: t('settings.group.advanced'), tabs: ['browser', 'wechat', 'advanced', 'developer'] },
+    { key: 'about', label: t('settings.group.about'), tabs: ['about'] },
+  ]
+
   if (!p.open) return null
 
   return (
@@ -560,11 +574,22 @@ export const SettingsModal: React.FC<{
         <div className="settings-nav-kicker">Tangu Agent</div>
         <div className="settings-nav-title">{t('settings.title')}</div>
         <div className="settings-nav-list">
-          {tabItems.map(([id, label]) => (
-            <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
-              {label}
-            </button>
-          ))}
+          {navGroups.map((grp) => {
+            const items = grp.tabs
+              .map((id) => tabItems.find(([tid]) => tid === id))
+              .filter((x): x is [Tab, string] => !!x)
+            if (items.length === 0) return null
+            return (
+              <div key={grp.key} className="settings-nav-group">
+                <div className="settings-nav-grouphead">{grp.label}</div>
+                {items.map(([id, label]) => (
+                  <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )
+          })}
         </div>
       </aside>
       <section className="settings-main">
@@ -1484,27 +1509,45 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('settings.theme.themeLabel')}</label>
                       <div className="theme-grid">
-                        {listThemes().map((t) => (
+                        {listThemes().map((th) => (
                           <ThemeCard
-                            key={t.manifest.id}
-                            entry={t}
+                            key={th.manifest.id}
+                            entry={th}
                             mode={p.themeMode}
-                            active={t.manifest.id === p.themePreset}
+                            active={th.manifest.id === p.themePreset}
                             onSelect={() => {
-                              applyTheme(t.manifest.id, p.themeMode)
-                              p.onThemeChange(t.manifest.id, p.themeMode)
+                              applyTheme(th.manifest.id, p.themeMode, { customColor: p.themeSeed })
+                              p.onThemeChange(th.manifest.id, p.themeMode)
                             }}
                           />
                         ))}
                       </div>
                     </div>
+                    {p.themePreset === 'custom' && (
+                      <div className="field">
+                        <label>{t('settings.theme.customSeedLabel')}</label>
+                        <div className="field-row" style={{ alignItems: 'center', gap: 10 }}>
+                          <input
+                            type="color"
+                            value={p.themeSeed}
+                            onChange={(e) => {
+                              applyTheme('custom', p.themeMode, { customColor: e.target.value })
+                              p.onSeedChange(e.target.value)
+                            }}
+                            aria-label={t('settings.theme.customSeedLabel')}
+                            style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                          />
+                          <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{p.themeSeed}</span>
+                        </div>
+                      </div>
+                    )}
                     <div className="field">
                       <label>{t('settings.theme.modeLabel')}</label>
                       <div className="seg">
                         <button
                           className={p.themeMode === 'light' ? 'active' : ''}
                           onClick={() => {
-                            applyTheme(p.themePreset, 'light')
+                            applyTheme(p.themePreset, 'light', { customColor: p.themeSeed })
                             p.onThemeChange(p.themePreset, 'light')
                           }}
                         >
@@ -1514,13 +1557,20 @@ export const SettingsModal: React.FC<{
                         <button
                           className={p.themeMode === 'dark' ? 'active' : ''}
                           onClick={() => {
-                            applyTheme(p.themePreset, 'dark')
+                            applyTheme(p.themePreset, 'dark', { customColor: p.themeSeed })
                             p.onThemeChange(p.themePreset, 'dark')
                           }}
                         >
                           <Moon size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-                          {t('settings.theme.dark')}{p.themePreset === 'sozhi' ? t('settings.theme.darkNightRead') : ''}
+                          {t('settings.theme.dark')}
                         </button>
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>{t('settings.theme.flatLabel')}</label>
+                      <div className="seg">
+                        <button className={!p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(false)}>{t('settings.theme.flatOff')}</button>
+                        <button className={p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(true)}>{t('settings.theme.flatOn')}</button>
                       </div>
                     </div>
                     <div className="field">

@@ -78,6 +78,34 @@ export const PluginSettingsForm: React.FC<{
   const inputStyle: React.CSSProperties = { width: '100%', marginTop: 4, fontSize: 12.5 }
 
   const renderField = (f: PluginField): React.ReactNode => {
+    // ── P3 声明式主题面板:展示/结构件(全部走 token,天然继承主题/明暗/扁平) ──
+    if (f.type === 'section') {
+      return (
+        <div className="field" key={f.key} style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em', paddingBottom: 6, borderBottom: 'var(--border-width) solid var(--border)' }}>{lbl(f)}</div>
+          {f.help && <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
+        </div>
+      )
+    }
+    if (f.type === 'note') {
+      const tone = f.tone || 'info'
+      const bg = tone === 'warn' ? 'var(--danger-light)'
+        : tone === 'success' ? 'color-mix(in srgb, var(--green) 12%, transparent)'
+        : 'var(--accent-light)'
+      const fg = tone === 'warn' ? 'var(--danger)' : tone === 'success' ? 'var(--green)' : 'var(--text-muted)'
+      return (
+        <div className="field" key={f.key}>
+          <div style={{ background: bg, color: fg, borderRadius: 'var(--radius-md, 8px)', padding: '10px 12px', fontSize: 12.5, lineHeight: 1.6 }}>{lbl(f)}</div>
+        </div>
+      )
+    }
+    if (f.type === 'link') {
+      return (
+        <div className="field" key={f.key}>
+          <a className="btn sm" href={f.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', display: 'inline-flex' }}>{lbl(f)}</a>
+        </div>
+      )
+    }
     if (f.type === 'toggle') {
       return (
         <div className="field" key={f.key}>

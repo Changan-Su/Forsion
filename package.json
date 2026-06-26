@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "postbuild": "npm run build:plugins",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -30,13 +31,15 @@
     "server": "node dist/standalone/main.js",
     "standalone": "node dist/standalone/main.js",
     "clean": "rm -rf dist",
+    "build:plugins": "tsc -p plugins/stickers/tsconfig.json && tsc -p plugins/wechat-segment/tsconfig.json",
     "desktop:install": "cd desktop && npm install",
     "desktop:dev": "cd desktop && npm run dev",
-    "desktop:build": "cd desktop && npm run build"
+    "desktop:build": "npm run build && cd desktop && npm run build"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.14.1",
     "@electric-sql/pglite": "^0.5.1",
+    "@llamaindex/liteparse": "^2.2.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.11.1",
     "express": "^4.18.2",

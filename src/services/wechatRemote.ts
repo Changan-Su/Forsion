@@ -19,8 +19,9 @@ import { IlinkRuntime } from '../wechat/ilinkRuntime.js';
 import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
 import { splitMessage, segmentDelayMs } from '../wechat/splitMessage.js';
 import { isPluginEnabledSync, getPluginSettingsSync } from '../plugins/settingsStore.js';
-import { WECHAT_SEGMENT_ID } from '../plugins/builtin/wechatSegment.js';
 
+// 微信分段消息插件 id(契约常量;插件本体是 plugins/wechat-segment 文件夹插件,只声明面板,行为留在此处)。
+const WECHAT_SEGMENT_ID = 'wechat-segment';
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';

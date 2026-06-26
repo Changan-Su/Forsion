@@ -13,6 +13,7 @@
 import type { Router } from 'express';
 import type { ToolProvider } from '../tools/toolRegistry.js';
 import type { PluginMeta } from './registry.js';
+import type * as PluginStore from './settingsStore.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { HostServices } from '../seams/hostServices.js';
 import type { CloudBrainServices } from '../seams/cloudBrain.js';
@@ -65,6 +66,10 @@ export interface TanguSdk {
   activeRunCount: typeof activeRunCount;
   /** thin worker 装配:httpWorkerHost(无 pg/JWT_SECRET) + HttpStateStore(状态走 server) + brainToken。 */
   createThinWorker: typeof createThinWorker;
+  /** 插件设置/数据存储(读写自身设置 + image-list blob;按 id + scope)。folder 插件经此读写,不直接 import 核心。 */
+  pluginStore: typeof PluginStore;
+  /** 把媒体(图片/文件)发到当前微信会话连接的用户(send_sticker 等用;非微信会话返回 ok:false)。 */
+  sendWechatMedia(userId: string, sessionId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 }
 
 /** 插件可挂载额外路由的三组 router（标准/数据/admin）。 */

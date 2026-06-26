@@ -207,3 +207,5 @@ export type {
   PluginRouters,
   TanguSdk,
 } from './plugins/types.js';
+export type { PluginMeta, SettingsField, PluginSettingsSchema, SettingsScope, PluginPromptCtx } from './plugins/registry.js';
+export type { Scope, PluginFileMeta } from './plugins/settingsStore.js';

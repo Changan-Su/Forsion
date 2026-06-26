@@ -1,0 +1,78 @@
+/**
+ * Lovable — 奶油纸感 · 单色(LCL 统一设计语言默认皮肤)。
+ * 值拷自 Forsion-LCL/src/tangu/tangu.css 的 .tangu-lovable / [data-mode='dark'] 块。
+ * custom 取色皮肤复用本皮肤的 CSS(data-theme='lovable' + 内联 seed 变量)。
+ */
+
+[data-theme='lovable'] {
+  --bg: #f7f4ed;
+  --bg-card: #fefdf9;
+  --bg-glass: rgba(247, 244, 237, 0.9);
+  --sidebar-bg: #f3efe7;
+  --text: #1c1c1c;
+  --text-light: rgba(28, 28, 28, 0.82);
+  --text-muted: #5f5f5d;
+  --text-faint: rgba(28, 28, 28, 0.4);
+  --text-ghost: rgba(28, 28, 28, 0.28);
+  --border: #efece4;
+  --border-width: 1px;
+  --shadow: rgba(0, 0, 0, 0.05);
+  --accent: #1c1c1c;
+  --accent-hover: #000000;
+  --accent-light: rgba(28, 28, 28, 0.05);
+  --accent-rgb: 28, 28, 28;
+  --green: #4f6f52;
+  --danger: #a3503f;
+  --danger-light: rgba(163, 80, 63, 0.08);
+  --overlay-subtle: rgba(28, 28, 28, 0.03);
+  --overlay-light: rgba(28, 28, 28, 0.04);
+  --overlay-medium: rgba(28, 28, 28, 0.07);
+  --overlay-strong: rgba(28, 28, 28, 0.14);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-chat-surface: 12px;
+  --radius-chat-card: 10px;
+  --user-bg: rgba(28, 28, 28, 0.04);
+  --tool-bg: rgba(28, 28, 28, 0.03);
+  --tool-text: #5f5f5d;
+  --panel-blur: none;
+  --on-accent: #fcfbf8;
+  --inset: rgba(255, 255, 255, 0.2) 0 0.5px 0 0 inset, rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset, rgba(0, 0, 0, 0.05) 0 1px 2px 0;
+  --card-shadow: 0 1px 2px rgba(42, 36, 26, 0.04), 0 10px 26px rgba(42, 36, 26, 0.05);
+  --btn-shadow: var(--inset);
+  --icon-shadow: var(--inset);
+}
+
+/* Lovable dark — 暖夜纸:墨色反转为奶油,强调色成为亮面 */
+.dark[data-theme='lovable'] {
+  --bg: #1c1a16;
+  --bg-card: #262219;
+  --bg-glass: rgba(28, 26, 22, 0.9);
+  --sidebar-bg: #211e18;
+  --text: #f2efe8;
+  --text-light: rgba(242, 239, 232, 0.82);
+  --text-muted: #a8a096;
+  --text-faint: rgba(242, 239, 232, 0.42);
+  --text-ghost: rgba(242, 239, 232, 0.3);
+  --border: #34302a;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --accent: #ece7dd;
+  --accent-hover: #fffaf0;
+  --accent-light: rgba(236, 231, 221, 0.10);
+  --accent-rgb: 236, 231, 221;
+  --on-accent: #1c1a16;
+  --green: #8fb295;
+  --danger: #d99080;
+  --danger-light: rgba(217, 144, 128, 0.12);
+  --overlay-subtle: rgba(242, 239, 232, 0.03);
+  --overlay-light: rgba(242, 239, 232, 0.05);
+  --overlay-medium: rgba(242, 239, 232, 0.08);
+  --overlay-strong: rgba(242, 239, 232, 0.15);
+  --user-bg: rgba(242, 239, 232, 0.06);
+  --tool-bg: rgba(242, 239, 232, 0.04);
+  --tool-text: #a8a096;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px rgba(0, 0, 0, 0.35);
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}

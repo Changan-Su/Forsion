@@ -13,8 +13,11 @@ try { document.documentElement.lang = resolveInitialLocale() === 'zh' ? 'zh-CN' 
 // 标记宿主平台:macOS 用 hiddenInset 标题栏,交通灯按钮浮在窗口左上角,需给左上品牌区让出留白。
 try { if (window.tangu?.platform === 'darwin') document.documentElement.dataset.platform = 'mac' } catch { /* ignore */ }
 
-// index.html 的 FOUC 脚本已设 data-theme/.dark;这里接管为 registry 校验过的 preset 并激活其 CSS。
-applyTheme(resolveInitialPreset(), resolveInitialMode())
+// index.html 的 FOUC 脚本已设 data-theme/.dark/data-flat;这里接管为 registry 校验过的 preset 并激活其 CSS。
+let initSeed: string | undefined
+try { initSeed = localStorage.getItem('forsion_theme_seed') || undefined } catch { /* private mode */ }
+applyTheme(resolveInitialPreset(), resolveInitialMode(), { customColor: initSeed })
+try { document.documentElement.dataset.flat = localStorage.getItem('forsion_theme_flat') === '1' ? '1' : '0' } catch { /* private mode */ }
 preloadAllThemes()
 document.documentElement.style.removeProperty('background') // 交还给主题 CSS
 

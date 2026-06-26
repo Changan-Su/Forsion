@@ -1,0 +1,20 @@
+{
+  "id": "lovable",
+  "name": "Lovable",
+  "description": "奶油纸感 · 单色。炭黑强调,柔阴影代线条,Pill 按钮。",
+  "version": "1.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": ["lcl", "paper", "mono"],
+  "fonts": { "google": ["Hanken Grotesk:wght@400;500;600;700"] },
+  "preview": {
+    "background": {
+      "light": "linear-gradient(135deg, #f7f4ed 0%, #efe9de 100%)",
+      "dark": "linear-gradient(135deg, #1c1a16 0%, #262219 100%)"
+    },
+    "accent": "#1c1c1c",
+    "title": { "text": "Lovable" },
+    "tagline": "奶油纸感 · 单色",
+    "swatches": ["#1c1c1c", "#f7f4ed", "#5f5f5d", "#efece4"]
+  }
+}

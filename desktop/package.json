@@ -1,6 +1,6 @@
 {
   "name": "tangu-agent-desktop",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Tangu Agent — 本地极简桌面 GUI(Electron),连 standalone 服务",
   "author": "Forsion",
   "private": true,
@@ -74,6 +74,22 @@
       {
         "from": "../package.json",
         "to": "tangu-server/package.json"
+      },
+      {
+        "from": "../plugins/stickers/dist",
+        "to": "tangu-server/plugins/stickers/dist"
+      },
+      {
+        "from": "../plugins/stickers/tangu-plugin.json",
+        "to": "tangu-server/plugins/stickers/tangu-plugin.json"
+      },
+      {
+        "from": "../plugins/wechat-segment/dist",
+        "to": "tangu-server/plugins/wechat-segment/dist"
+      },
+      {
+        "from": "../plugins/wechat-segment/tangu-plugin.json",
+        "to": "tangu-server/plugins/wechat-segment/tangu-plugin.json"
       }
     ],
     "linux": {

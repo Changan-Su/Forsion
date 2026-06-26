@@ -26,7 +26,6 @@ import { museTodoProvider } from './builtin/museTodo.js';
 import { wechatToolsProvider } from './builtin/wechatTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
-import { registerBuiltinPlugins } from '../plugins/builtin/index.js';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -118,8 +117,7 @@ registerToolProvider(museTodoProvider); // Muse 唯一写权限;仅 ctx.muse 可
 registerToolProvider(wechatToolsProvider); // host-only:微信远程会话里发文件/图片(append 末尾,保前缀缓存)
 registerToolProvider(applyPatchProvider); // both:结构化补丁编辑(云端+host 共用,append 末尾,保前缀缓存)
 registerToolProvider(discussProvider); // host-only:start_discussion/wait_discussion(分身进后台群聊讨论;append 末尾,保前缀缓存)
-// ── 内置插件(统一注册表)的工具 provider:append 末尾,按 启用+作用域 门禁(默认禁用→不入快照)。──
-registerBuiltinPlugins();
+// 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
 function currentProfile(ctx: ToolContext) {

@@ -11,6 +11,8 @@
  */
 import { registerToolProvider } from '../tools/toolRegistry.js';
 import { registerPlugin } from './registry.js';
+import * as pluginStore from './settingsStore.js';
+import { wechatRemote } from '../services/wechatRemote.js';
 import { createTanguModule } from '../index.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
@@ -40,6 +42,8 @@ const sdk: TanguSdk = {
   currentRunUserId,
   activeRunCount,
   createThinWorker,
+  pluginStore,
+  sendWechatMedia: (userId, sessionId, buffer, opts, signal) => wechatRemote.sendMediaForSession(userId, sessionId, buffer, opts, signal),
 };
 
 interface HostState {

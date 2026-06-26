@@ -10,16 +10,22 @@
       // 避免主题/暗色闪烁。preset 合法性由 registry 启动后兜底纠正。
       (function () {
         try {
-          var preset = localStorage.getItem('forsion_theme_preset') || 'sozhi';
+          var preset = localStorage.getItem('forsion_theme_preset') || 'lovable';
           var mode = localStorage.getItem('forsion_theme') === 'dark' ? 'dark' : 'light';
           var glass = localStorage.getItem('forsion_glass') === 'off' ? 'off' : 'on';
+          var flat = localStorage.getItem('forsion_theme_flat') === '1' ? '1' : '0';
           var root = document.documentElement;
-          root.dataset.theme = preset;
+          // 退役/合成皮肤(旧 sozhi/monet、custom)首帧骑 lovable 基底,registry 启动后纠正。
+          var cssTheme = (preset === 'lovable' || preset === 'echo' || preset === 'qbird' || preset === 'dreamer') ? preset : 'lovable';
+          root.dataset.theme = cssTheme;
           root.dataset.mode = mode;
           root.dataset.glass = glass;
+          root.dataset.flat = flat;
           if (mode === 'dark') root.classList.add('dark');
-          // 首帧背景:素纸宣纸白 / 夜读暖黑(其它主题由其 CSS 接管)。
-          root.style.background = mode === 'dark' ? '#211D18' : '#F5EFE4';
+          // 首帧背景:lovable 奶油底 / 暖夜黑;dreamer 渐变底色差异大,单独给底防紫色闪烁(其它皮肤由其 CSS 接管)。
+          root.style.background = cssTheme === 'dreamer'
+            ? (mode === 'dark' ? '#1b1726' : '#f3eef7')
+            : (mode === 'dark' ? '#1c1a16' : '#f7f4ed');
         } catch (e) { /* private mode */ }
       })();
     </script>

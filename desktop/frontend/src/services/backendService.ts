@@ -337,6 +337,11 @@ export type PluginField =
   | { key: string; type: 'number'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: number; min?: number; max?: number }
   | { key: string; type: 'select'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: string; options: Array<{ value: string; label: string; labelEn?: string }> }
   | { key: string; type: 'image-list'; label: string; labelEn?: string; help?: string; helpEn?: string; itemFields: PluginField[] }
+  // ── P3 声明式主题面板 DSL:展示/结构件(无设置值)。Tangu 渲染端用统一 token 渲染 → 天然继承
+  //    主题/明暗/扁平,零样式泄漏。详见 desktop/PLUGIN_UI_CONTRACT.md。 ──
+  | { key: string; type: 'section'; label: string; labelEn?: string; help?: string; helpEn?: string }
+  | { key: string; type: 'note'; label: string; labelEn?: string; tone?: 'info' | 'warn' | 'success' }
+  | { key: string; type: 'link'; label: string; labelEn?: string; url: string }
 export type PluginInfo = {
   id: string; name: string; nameEn?: string; description: string; descriptionEn?: string;
   scopes: Array<'global' | 'agent'>; settings: { fields: PluginField[] } | null; source: 'builtin' | 'folder'; enabled: boolean
