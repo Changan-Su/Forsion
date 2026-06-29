@@ -4,6 +4,7 @@
  * 复刻 apps/Forsion-AI-Studio/client/services/cloudAgentService.ts 的成熟模式。
  */
 import type { AgentConfig, AgentRunEvent, Attachment, StartRunResult, TanguDesktopConfig } from '../types'
+import { authFetch } from './http'
 
 function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
@@ -11,7 +12,7 @@ function headers(token: string): Record<string, string> {
 
 export async function testConnection(cfg: TanguDesktopConfig): Promise<{ ok: boolean; message: string }> {
   try {
-    const r = await fetch(`${cfg.backendUrl}/health`, { headers: headers(cfg.token) })
+    const r = await authFetch(`${cfg.backendUrl}/health`, { headers: headers(cfg.token) })
     if (r.ok) {
       const j = await r.json().catch(() => ({}))
       return { ok: true, message: `已连接 · sandbox=${j.sandbox ?? '?'}` }
@@ -32,7 +33,7 @@ export async function startRun(
     agentConfig?: AgentConfig
   },
 ): Promise<StartRunResult> {
-  const r = await fetch(`${cfg.backendUrl}/agent/runs`, {
+  const r = await authFetch(`${cfg.backendUrl}/agent/runs`, {
     method: 'POST',
     headers: headers(cfg.token),
     body: JSON.stringify({
@@ -49,7 +50,7 @@ export async function startRun(
 }
 
 export async function abortRun(cfg: TanguDesktopConfig, runId: string): Promise<void> {
-  await fetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/abort`, {
+  await authFetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/abort`, {
     method: 'POST',
     headers: headers(cfg.token),
   }).catch(() => {})
@@ -61,7 +62,7 @@ export async function steerRun(
   runId: string,
   params: { message: string; attachments?: Attachment[] },
 ): Promise<{ ok: boolean; reason?: string; userMessageId?: string }> {
-  const r = await fetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/steer`, {
+  const r = await authFetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/steer`, {
     method: 'POST',
     headers: headers(cfg.token),
     body: JSON.stringify({ message: params.message, attachments: params.attachments || [] }),
@@ -77,7 +78,7 @@ export async function listActiveRuns(
   cfg: TanguDesktopConfig,
   sessionId: string,
 ): Promise<Array<{ id: string; status: string; assistant_message_id: string | null }>> {
-  const r = await fetch(`${cfg.backendUrl}/agent/runs?session_id=${encodeURIComponent(sessionId)}`, {
+  const r = await authFetch(`${cfg.backendUrl}/agent/runs?session_id=${encodeURIComponent(sessionId)}`, {
     headers: headers(cfg.token),
   })
   if (!r.ok) return []
@@ -92,7 +93,7 @@ export async function resolveInquiry(
   inquiryId: string,
   answer: string,
 ): Promise<{ ok: boolean; gone: boolean }> {
-  const r = await fetch(
+  const r = await authFetch(
     `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(inquiryId)}`,
     { method: 'POST', headers: headers(cfg.token), body: JSON.stringify({ answer }) },
   )
@@ -107,7 +108,7 @@ export async function resolveApproval(
   action: 'approve' | 'approve_always' | 'reject',
   argsOverride?: Record<string, any>,
 ): Promise<{ ok: boolean; gone: boolean }> {
-  const r = await fetch(
+  const r = await authFetch(
     `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: 'POST', headers: headers(cfg.token), body: JSON.stringify({ action, argsOverride }) },
   )
@@ -129,7 +130,7 @@ export async function subscribeRunEvents(
     if (signal?.aborted) return
     let res: Response
     try {
-      res = await fetch(
+      res = await authFetch(
         `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/events?fromSeq=${lastSeq}`,
         { headers: headers(cfg.token), signal },
       )

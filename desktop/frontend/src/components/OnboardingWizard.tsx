@@ -51,6 +51,7 @@ export const OnboardingWizard: React.FC<{
   const [cloudUrl, setCloudUrl] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
+  const [syncEnabled, setSyncEnabled] = useState(false) // 登录后:是否开启云同步(记忆 + 云端 agents 双向同步)
   const [device, setDevice] = useState<{ url: string; userCode: string } | null>(null)
   const [connectMsg, setConnectMsg] = useState('')
   // byok 表单
@@ -120,7 +121,7 @@ export const OnboardingWizard: React.FC<{
   // ── ④ 默认本地工作区目录 ──
   const [workspaceDir, setWorkspaceDir] = useState('')
   useEffect(() => {
-    void window.tangu?.getConfig?.().then((c) => setWorkspaceDir(c.defaultWorkspaceDir || '')).catch(() => {})
+    void window.tangu?.getConfig?.().then((c) => { setWorkspaceDir(c.defaultWorkspaceDir || ''); setSyncEnabled(!!c.forsionSyncEnabled) }).catch(() => {})
   }, [])
 
   const loadStepModels = (): void => {
@@ -275,7 +276,20 @@ export const OnboardingWizard: React.FC<{
                       {device.userCode ? <> · {t('onboarding.connect.verifyCode')} <b>{device.userCode}</b></> : null}
                     </div>
                   )}
-                  {loggedIn && <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.connect.loggedIn')}</div>}
+                  {loggedIn && (
+                    <>
+                      <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.connect.loggedIn')}</div>
+                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10 }}>
+                        <input
+                          type="checkbox"
+                          checked={syncEnabled}
+                          onChange={(e) => { setSyncEnabled(e.target.checked); void window.tangu?.setConfig?.({ forsionSyncEnabled: e.target.checked }) }}
+                        />
+                        {t('onboarding.connect.cloudSync')}
+                      </label>
+                      <div className="hint" style={{ marginTop: 4 }}>{t('onboarding.connect.cloudSyncHint')}</div>
+                    </>
+                  )}
                 </>
               ) : (
                 <>

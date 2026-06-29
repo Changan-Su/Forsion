@@ -428,10 +428,12 @@ export const Composer2: React.FC<{
               if (others.length) {
                 const paths: string[] = []
                 for (const f of others) {
+                  // 仅 host 会话才插入本机绝对路径(与 onDrop 一致);云端/沙箱会话模型读不到本机路径,
+                  // 一律回退上传到会话工作区,避免「显示了路径但模型读不到、文件也没进工作区」。
                   let p = ''
-                  try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' }
+                  if (isHost) { try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' } }
                   if (p) paths.push(/\s/.test(p) ? `"${p}"` : p)
-                  else leftover.push(f) // 无路径(网页端/剪贴板内容非磁盘文件)→ 回退上传工作区
+                  else leftover.push(f) // 无路径(云端/网页/剪贴板非磁盘文件)→ 上传工作区
                 }
                 if (paths.length) {
                   setDraft((d) => (d ? `${d} ${paths.join(' ')}` : paths.join(' ')))

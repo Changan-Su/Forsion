@@ -7,13 +7,14 @@ import type {
   NormalAgentDef, SessionRecord, SkillInfo, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
 } from '../types'
+import { authFetch } from './http'
 
 function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 }
 
 async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${cfg.backendUrl}${path}`, { ...init, headers: headers(cfg.token) })
+  const r = await authFetch(`${cfg.backendUrl}${path}`, { ...init, headers: headers(cfg.token) })
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     try { detail = (await r.json())?.detail || detail } catch { /* keep */ }
@@ -292,7 +293,7 @@ export const deleteAgentAvatar = (cfg: TanguDesktopConfig, slug: string) =>
 /** 拉头像为 object URL(带鉴权;无/失败返回 null)。调用方负责 URL.revokeObjectURL。 */
 export async function fetchAgentAvatar(cfg: TanguDesktopConfig, slug: string): Promise<string | null> {
   try {
-    const r = await fetch(`${cfg.backendUrl}/agent/agents/${encodeURIComponent(slug)}/avatar`, { headers: headers(cfg.token) })
+    const r = await authFetch(`${cfg.backendUrl}/agent/agents/${encodeURIComponent(slug)}/avatar`, { headers: headers(cfg.token) })
     if (!r.ok) return null
     return URL.createObjectURL(await r.blob())
   } catch { return null }
@@ -349,9 +350,14 @@ export type PluginField =
 export type PluginInfo = {
   id: string; name: string; nameEn?: string; description: string; descriptionEn?: string;
   scopes: Array<'global' | 'agent'>; settings: { fields: PluginField[] } | null; source: 'builtin' | 'folder'; enabled: boolean
+  /** 运行期激活但贡献了路由,需重启才完整生效。 */
+  needsRestart?: boolean
 }
 export const listPlugins = (cfg: TanguDesktopConfig) =>
   request<{ plugins: PluginInfo[] }>(cfg, '/agent/plugins').then((r) => r.plugins).catch(() => [] as PluginInfo[])
+/** 运行期重扫:市场装新插件后即生效(无需重启)。addedIds=新激活的;needsRestart=贡献路由的插件需重启。 */
+export const rescanPlugins = (cfg: TanguDesktopConfig) =>
+  request<{ ok: boolean; addedIds: string[]; needsRestart: boolean; plugins: PluginInfo[] }>(cfg, '/agent/plugins/rescan', { method: 'POST' })
 export const setPluginEnabled = (cfg: TanguDesktopConfig, id: string, enabled: boolean) =>
   request<{ ok: boolean; enabled: boolean }>(cfg, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
 export const getPluginSettings = (cfg: TanguDesktopConfig, id: string, scope: string) =>
@@ -419,7 +425,7 @@ export const workspaceDownloadUrl = (cfg: TanguDesktopConfig, sessionId: string,
 
 /** 下载工作区文件(fetch 带 Bearer → blob → 触发保存)。 */
 export async function downloadWorkspaceFile(cfg: TanguDesktopConfig, sessionId: string, path: string): Promise<void> {
-  const r = await fetch(workspaceDownloadUrl(cfg, sessionId, path), { headers: headers(cfg.token) })
+  const r = await authFetch(workspaceDownloadUrl(cfg, sessionId, path), { headers: headers(cfg.token) })
   if (!r.ok) throw new Error(`下载失败 (${r.status})`)
   const blob = await r.blob()
   const a = document.createElement('a')

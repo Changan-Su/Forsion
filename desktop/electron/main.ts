@@ -15,7 +15,7 @@ import {
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate } from './updater'
 import { readThemesDir, seedDefaultThemes } from './themes'
-import { extractZipToDir, MARKET_SUBDIR, isSafeSlug } from './marketInstall'
+import { extractZipToDir, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion } from './marketInstall'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 const tanguHomeDir = (): string => process.env.TANGU_HOME || join(app.getPath('home'), '.tangu')
@@ -400,12 +400,54 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
+  // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
+  mainWindow.webContents.on('render-process-gone', (_e, d) => {
+    if (d.reason !== 'clean-exit') recoverRenderer(`render-process-gone:${d.reason}`)
+  })
+  mainWindow.webContents.on('unresponsive', () => recoverRenderer('unresponsive'))
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3) recoverRenderer(`did-fail-load:${code} ${desc}`) // -3=ERR_ABORTED(外链 deny),忽略
+  })
+
+  loadRenderer(mainWindow)
 }
+
+function loadRenderer(win: BrowserWindow): void {
+  if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  else win.loadFile(join(__dirname, '../renderer/index.html'))
+}
+
+// 60s 内崩溃≥3 次则熔断(避免崩溃-重载风暴),弹框让用户决定重载或退出。
+let reloadTimestamps: number[] = []
+function recoverRenderer(reason: string): void {
+  console.error('[tangu-desktop] renderer recover, reason=', reason)
+  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return }
+  const now = Date.now()
+  reloadTimestamps = reloadTimestamps.filter((t) => now - t < 60_000)
+  if (reloadTimestamps.length >= 3) {
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'error',
+        buttons: ['重新加载', '退出'],
+        defaultId: 0,
+        message: '界面多次崩溃',
+        detail: `原因:${reason}\n可重新加载,或退出后重开 Tangu。`,
+      })
+      .then((r) => {
+        if (r.response === 0 && mainWindow && !mainWindow.isDestroyed()) { reloadTimestamps = []; loadRenderer(mainWindow) }
+        else app.quit()
+      })
+    return
+  }
+  reloadTimestamps.push(now)
+  loadRenderer(mainWindow)
+}
+
+// GPU 硬化(必须在 app ready 前设):Windows 上 GPU 进程崩溃不要触发整体白屏;
+// TANGU_DISABLE_GPU=1 是逃生阀,驱动有问题的机器可彻底关硬件加速(默认不关,避免牺牲所有人性能)。
+if (process.platform === 'win32') app.commandLine.appendSwitch('disable-gpu-process-crash-limit')
+if (process.env.TANGU_DISABLE_GPU === '1') app.disableHardwareAcceleration()
 
 app.whenReady().then(async () => {
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
@@ -681,11 +723,13 @@ app.whenReady().then(async () => {
     const who = token ? await forsionWhoami(cloudUrl, token) : null
     return {
       loggedIn: !!token,
+      // null=未校验/离线(不确定);true=有效;false=已失效(401/403)。供前端检测「登录过期」用,离线不误判。
+      tokenValid: who ? (who.status === 'ok' ? true : who.status === 'expired' ? false : null) : null,
       cloudUrl,
-      username: who?.username || null,
-      nickname: who?.nickname || null,
-      avatar: who?.avatar || null,
-      membershipTier: who?.membershipTier || null,
+      username: who?.user?.username || null,
+      nickname: who?.user?.nickname || null,
+      avatar: who?.user?.avatar || null,
+      membershipTier: who?.user?.membershipTier || null,
       tokenSource: stored.cloudToken ? 'config' : creds.token ? 'tangu-login' : null,
     }
   })
@@ -754,16 +798,20 @@ app.whenReady().then(async () => {
     if (!zipRes.ok) throw new Error(`下载失败 HTTP ${zipRes.status}`)
     const buf = Buffer.from(await zipRes.arrayBuffer())
     const dest = join(tanguHomeDir(), sub, info.installSlug)
-    const files = await extractZipToDir(buf, dest)
+    const files = await extractZipToDir(buf, dest, MARKET_MANIFEST[info.type] || [])
     return { ok: true, path: dest, files, type: info.type, slug: info.installSlug }
   })
 
   ipcMain.handle('market:installed', async () => {
-    const out: Record<string, string[]> = { skill: [], agent: [], plugin: [] }
+    // 每个已装项带版本号(读其 manifest),供市场「可更新」检查。
+    const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [] }
     for (const [type, sub] of Object.entries(MARKET_SUBDIR)) {
       try {
-        const ents = await readdir(join(tanguHomeDir(), sub), { withFileTypes: true })
-        out[type] = ents.filter((e) => e.isDirectory()).map((e) => e.name)
+        const base = join(tanguHomeDir(), sub)
+        const ents = await readdir(base, { withFileTypes: true })
+        out[type] = await Promise.all(
+          ents.filter((e) => e.isDirectory()).map(async (e) => ({ slug: e.name, version: await readInstalledVersion(type, join(base, e.name)) })),
+        )
       } catch {
         /* 目录不存在 = 空 */
       }
@@ -886,6 +934,11 @@ app.whenReady().then(async () => {
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+  // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。
+  app.on('child-process-gone', (_e, d) => {
+    console.error('[tangu-desktop] child-process-gone', d.type, d.reason)
+    if (d.type === 'GPU' && d.reason !== 'clean-exit') recoverRenderer(`gpu-gone:${d.reason}`)
   })
 })
 

@@ -36,6 +36,11 @@ export const PluginsTab: React.FC<{
                 <span style={{ fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
                   {p.source === 'folder' ? t('settings.plugins.folder') : t('settings.plugins.builtin')}
                 </span>
+                {p.needsRestart && (
+                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 10.5, color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
+                    {t('settings.plugins.needsRestart')}
+                  </span>
+                )}
               </div>
               <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
             </div>

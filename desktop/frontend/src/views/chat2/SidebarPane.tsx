@@ -328,7 +328,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               )
             })}
 
-            <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>
+            {window.tangu?.pickDirectory && <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>}
 
             {p.archivedSessions.length > 0 && (
               <>

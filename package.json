@@ -30,7 +30,7 @@
     "server": "node dist/standalone/main.js",
     "standalone": "node dist/standalone/main.js",
     "clean": "rm -rf dist",
-    "build:plugins": "tsc -p plugins/stickers/tsconfig.json && tsc -p plugins/wechat-segment/tsconfig.json",
+    "build:plugins": "tsc -p plugins/stickers/tsconfig.json && tsc -p plugins/reply-segment/tsconfig.json",
     "desktop:install": "cd desktop && npm install",
     "desktop:dev": "cd desktop && npm run dev",
     "desktop:build": "npm run build && cd desktop && npm run build"

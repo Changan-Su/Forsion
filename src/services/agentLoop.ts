@@ -19,6 +19,7 @@ import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession } from '../sandbox/sessionSandbox.js';
+import { listFilesLocal } from '../tools/fileWorkspace.js';
 import {
   CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
@@ -522,6 +523,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 7/8) 技能目录 + 环境段(environment 在技能段后,保留原相对次序)
     systemParts.push(...skillLoadout.sections);
     systemParts.push(...promptSections.environment);
+
+    // 8b) host:注入工作区(cwd)顶层文件清单,让 agent 主动认知现有文件(修「工作区文件意识弱」)。
+    //     ephemeral——随系统块每 run 重建,绝不落库。sandbox/云端不在此预拉(保留懒 hydrate),靠环境段提示按需 list_files。
+    if (execMode === 'host') {
+      try {
+        const listing = await listFilesLocal(cwd || process.cwd(), '/');
+        if (listing && listing !== '(empty directory)') {
+          const lines = listing.split('\n');
+          const shown = lines.slice(0, 60).join('\n') + (lines.length > 60 ? `\n… (+${lines.length - 60} more)` : '');
+          systemParts.push(`## Files in the Working Directory\nTop-level contents of \`${cwd || process.cwd()}\` right now (use list_dir/read_file to go deeper):\n\n${shown}`);
+        }
+      } catch { /* 列目录失败不阻断 run */ }
+    }
 
     // 9) 插件:已启用且带 promptSection 的插件注入各自系统提示片段(如表情包清单)。放在环境段后,
     //    随插件内容(如表情库)变化只失效最短后缀。读失败不阻断 run。

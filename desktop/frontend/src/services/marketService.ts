@@ -17,5 +17,6 @@ export const getMarketDetail = (id: string): Promise<MarketDetail> => bridge().m
 export const installMarket = (id: string): Promise<{ ok: boolean; path: string; type: string; slug: string }> =>
   bridge().marketInstall!(id)
 
-export const listInstalled = (): Promise<Record<string, string[]>> =>
+export type InstalledItem = { slug: string; version: string | null }
+export const listInstalled = (): Promise<Record<string, InstalledItem[]>> =>
   window.tangu?.marketInstalled?.() ?? Promise.resolve({})

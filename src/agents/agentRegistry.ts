@@ -26,6 +26,8 @@ export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | '';
 export interface NormalAgentDef {
   slug: string;
   name: string;
+  /** 版本号(来自 config.toml version,缺省 1.0.0);市场「可更新」检查用。 */
+  version: string;
   description: string;
   /** 覆盖会话模型（''=不覆盖）。 */
   model: string;
@@ -105,6 +107,7 @@ export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
   return {
     slug,
     name: meta.name || slug,
+    version: meta.version || '1.0.0',
     description: meta.description || '',
     model: meta.model || '',
     tools,
@@ -158,6 +161,7 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
   return {
     slug,
     name: str(meta.name) || slug,
+    version: str(meta.version) || '1.0.0', // 市场「可更新」检查用;缺省 1.0.0
     description: str(meta.description),
     model: str(meta.model),
     tools,
@@ -186,6 +190,7 @@ export async function parseAgentFolder(slug: string, dir: string): Promise<Norma
 /** 序列化 def 为 config.toml 内容(SOUL/MEMORY/LOG/Library 不在此,各自单独落盘)。 */
 export function serializeAgentConfig(def: NormalAgentDef): string {
   const obj: Record<string, unknown> = { name: def.name };
+  if (def.version) obj.version = def.version;
   if (def.description) obj.description = def.description;
   if (def.model) obj.model = def.model;
   if (def.thinkingLevel) obj.model_reasoning_effort = def.thinkingLevel;
@@ -300,7 +305,7 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
   mkdirSync(path.join(adir, 'Library'), { recursive: true }); // 建 agent 目录 + Library(头像/资料)
   if (!existsSync(path.join(adir, 'config.toml'))) {
     const def: NormalAgentDef = {
-      slug: a.slug, name: a.name, description: a.description || '', model: a.model || '',
+      slug: a.slug, name: a.name, version: '1.0.0', description: a.description || '', model: a.model || '',
       tools: a.tools || [], thinkingLevel: a.thinkingLevel || '', maxIterations: a.maxIterations ?? null,
       approvalMode: a.approvalMode || '', createdBy: 'user', createdAt: new Date().toISOString(),
       systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: [],
@@ -551,6 +556,7 @@ export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> 
   const def: NormalAgentDef = {
     slug,
     name: input.name.trim().slice(0, 120),
+    version: existing?.version || '1.0.0', // 保留原版本;新建默认 1.0.0
     description: (input.description || '').trim().slice(0, 300),
     model: (input.model || '').trim(),
     tools: Array.isArray(input.tools) ? input.tools.filter((t) => typeof t === 'string' && t.trim()).slice(0, 100) : [],

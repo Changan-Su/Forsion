@@ -10,7 +10,7 @@
  *   - `activateAllPlugins`（standalone `tangu-server`）:激活全部（tool provider 全局注册 + 收集路由挂载器）。
  */
 import { registerToolProvider } from '../tools/toolRegistry.js';
-import { registerPlugin } from './registry.js';
+import { registerPlugin, getPluginMeta, pluginsNeedingRestart } from './registry.js';
 import * as pluginStore from './settingsStore.js';
 import { wechatRemote } from '../services/wechatRemote.js';
 import { createTanguModule } from '../index.js';
@@ -140,4 +140,27 @@ export async function activateAllPlugins(): Promise<(r: PluginRouters) => void> 
       }
     }
   };
+}
+
+/**
+ * 运行期重扫:激活磁盘上「尚未注册」的新插件(市场装后无需重启即可见/可用)。
+ * tool provider / promptSection / 元数据 / 启用态都即时生效(resolveTools 等运行期实时读);
+ * 唯一例外:插件经 registerRoutes 贡献的 Express 路由无法挂到已建好的 app → needsRestart=true。
+ * 仅处理「全新 id」;原地升级(覆盖同 slug 代码)受 import 缓存所限仍需重启。
+ */
+export async function activateNewPlugins(): Promise<{ addedIds: string[]; needsRestart: boolean }> {
+  const addedIds: string[] = [];
+  let needsRestart = false;
+  for (const d of discoverPlugins()) {
+    if (getPluginMeta(d.manifest.id)) continue; // 已注册 → 跳过(避免重复 activate 副作用)
+    const state = newState();
+    try {
+      await activatePlugin(d, makeContext(d, state));
+      addedIds.push(d.manifest.id);
+      if (state.routeMounters.length) { needsRestart = true; pluginsNeedingRestart.add(d.manifest.id); } // 贡献了路由 → 必须重启
+    } catch (e: any) {
+      console.warn(`[tangu] 插件 ${d.manifest.id} 重扫激活失败,跳过:${e?.message || e}`);
+    }
+  }
+  return { addedIds, needsRestart };
 }

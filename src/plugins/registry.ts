@@ -42,6 +42,9 @@ export interface PluginMeta {
 
 const REGISTRY = new Map<string, PluginMeta>();
 
+/** 运行期激活但贡献了路由(必须重启才挂上)的插件 id。供「设置→插件」逐条标「需重启」。 */
+export const pluginsNeedingRestart = new Set<string>();
+
 /** 登记一个插件。若带 toolProvider,顺带注册到工具表(append,按 isEnabledFor 门禁)。同 id 幂等覆盖。 */
 export function registerPlugin(meta: PluginMeta): void {
   const m: PluginMeta = { source: 'builtin', scopes: ['global'], ...meta };

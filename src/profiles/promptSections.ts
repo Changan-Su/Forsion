@@ -16,6 +16,7 @@ export function hostEnvSection(cwd?: string): string {
     '## Local Execution Environment (important)\n' +
     `You are running on the **user's own machine**; the current working directory is \`${cwd || process.cwd()}\`.\n` +
     '- Use `run_bash` to run shell commands; `list_dir`/`read_file` to inspect; `edit_file` for precise local edits and `write_file` for new files — all act on the real filesystem (relative paths resolve against the current working directory).\n' +
+    '- When a task involves existing files, or you are unsure what is in the working directory, call `list_dir` first instead of assuming it is empty.\n' +
     '- For live web information prefer `browser_search`; to open a page, click, type, or take a screenshot use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` / `browser_screenshot`.\n' +
     '- Prefer `edit_file` (a single matching old_string→new_string) for small changes; do not rewrite whole files.\n' +
     '- Destructive operations (writing files / running commands) may require user approval; when denied, switch approach or ask the user — do not retry the same operation repeatedly.'
@@ -28,7 +29,8 @@ export const SANDBOX_OUTPUT_SECTION =
   'This session has a **workspace**, the only place that is preserved and returned to the user. ' +
   'When writing files with `write_file` or inside `run_python`, always use **relative paths** (e.g. `report.docx`, `out/data.csv`) — ' +
   'they land in the workspace (run_python\'s current directory is /workspace, equivalent to /mnt/data).\n' +
-  '**Do not** write deliverables to `/tmp`, `~/` (HOME), or other absolute paths — those are outside the workspace, are not preserved, and the files will be lost.';
+  '**Do not** write deliverables to `/tmp`, `~/` (HOME), or other absolute paths — those are outside the workspace, are not preserved, and the files will be lost.\n' +
+  'The user may have uploaded files into this workspace. When a task involves existing files, or you are unsure what is present, call `list_files` first instead of assuming the workspace is empty.';
 
 /** sandbox 模式:执行效率约束(最影响耗时的是模型「生成量」:慢模型 ~50 tok/s,写 8000 token 要 ~160s)。 */
 export const EFFICIENCY_SECTION =

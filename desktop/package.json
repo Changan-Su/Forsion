@@ -1,6 +1,6 @@
 {
   "name": "tangu-agent-desktop2",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Tangu Agent Desktop 2.0 — Obsidian 式工作区引擎(Electron),连 standalone 服务",
   "author": "Forsion",
   "private": true,
@@ -61,6 +61,7 @@
     "productName": "Tangu Agent 2.0",
     "afterPack": "build/afterPack.cjs",
     "publish": { "provider": "github", "owner": "Changan-Su", "repo": "Tangu" },
+    "artifactName": "Tangu-Agent-${version}-${arch}.${ext}",
     "files": [
       "out/**/*"
     ],

@@ -116,6 +116,8 @@ export const SettingsModal: React.FC<{
   const [modelsLoading, setModelsLoading] = useState(false)
   // Electron 托管后端(window.tangu 缺省=浏览器调试,隐藏 managed UI)
   const isDesktop = !!window.tangu?.backendStatus
+  // Tangu Web(浏览器云端客户端):解闸云端可用特性(技能);其余 host tab 仍随 isDesktop 隐藏。
+  const cloudWeb = !!window.tangu?.cloudWeb
   const [stored, setStored] = useState<StoredDesktopConfig | null>(null)
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
   const [logs, setLogs] = useState<string[] | null>(null)
@@ -577,7 +579,10 @@ export const SettingsModal: React.FC<{
   const tabItems = [
     ['general', t('settings.tab.general')], // = 连接 + Forsion 合并
     ['model', t('settings.tab.model')],
-    ...(isDesktop ? ([['agents', t('settings.tab.agents')], ['skills', t('settings.tab.skills')], ['mcp', 'MCP'], ['wechat', t('settings.tab.wechat')], ['browser', t('settings.tab.browser')], ['plugins', t('settings.tab.plugins')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
+    // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
+    ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['mcp', 'MCP'], ['wechat', t('settings.tab.wechat')], ['browser', t('settings.tab.browser')], ['plugins', t('settings.tab.plugins')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
     ['shortcuts', t('settings.tab.shortcuts')],
     ['advanced', t('settings.tab.advanced')],
@@ -762,7 +767,7 @@ export const SettingsModal: React.FC<{
                       </>
                     )}
 
-                    {(!isDesktop || mode === 'external') && (
+                    {(!isDesktop || mode === 'external') && !cloudWeb && (
                       <>
                         <div className="field">
                           <label>{t('settings.external.urlLabel')}</label>

@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listPluginMetas, getPluginMeta } from '../plugins/registry.js';
+import { listPluginMetas, getPluginMeta, pluginsNeedingRestart } from '../plugins/registry.js';
 import {
   isPluginEnabledSync, setPluginEnabled, getScopeSettings, setScopeSettings,
   listPluginFiles, readPluginFile, writePluginFile, deletePluginFile, parseScope,
@@ -21,15 +21,27 @@ function ensureLocal(res: any): boolean {
   return true;
 }
 
+function pluginView(m: ReturnType<typeof listPluginMetas>[number]) {
+  return {
+    id: m.id, name: m.name, nameEn: m.nameEn, description: m.description, descriptionEn: m.descriptionEn,
+    scopes: m.scopes || ['global'], settings: m.settings || null, source: m.source || 'builtin',
+    enabled: isPluginEnabledSync(m.id), needsRestart: pluginsNeedingRestart.has(m.id),
+  };
+}
+
 router.get('/agent/plugins', authMiddleware, (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
-  res.json({
-    plugins: listPluginMetas().map((m) => ({
-      id: m.id, name: m.name, nameEn: m.nameEn, description: m.description, descriptionEn: m.descriptionEn,
-      scopes: m.scopes || ['global'], settings: m.settings || null, source: m.source || 'builtin',
-      enabled: isPluginEnabledSync(m.id),
-    })),
-  });
+  res.json({ plugins: listPluginMetas().map(pluginView) });
+});
+
+// 运行期重扫:市场装新插件后无需重启即出现在列表并可启用。返回新激活的 id 与是否仍需重启(贡献路由的插件)。
+router.post('/agent/plugins/rescan', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const { activateNewPlugins } = await import('../plugins/bootstrap.js'); // 动态 import 避免 index↔bootstrap 早期环引用
+    const { addedIds, needsRestart } = await activateNewPlugins();
+    res.json({ ok: true, addedIds, needsRestart, plugins: listPluginMetas().map(pluginView) });
+  } catch (e: any) { res.status(400).json({ detail: e?.message || 'rescan failed' }); }
 });
 
 router.put('/agent/plugins/:id/enabled', authMiddleware, async (req: AuthRequest, res) => {

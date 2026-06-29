@@ -4,15 +4,28 @@
  * 浏览/安装全走主进程 IPC(marketService),token 不下发渲染层。
  */
 import { useEffect, useState, useCallback } from 'react'
-import { ArrowLeft, Download, Check, Loader2, ExternalLink, PackageOpen } from 'lucide-react'
+import { ArrowLeft, Download, Check, Loader2, ExternalLink, PackageOpen, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
-import { listMarket, getMarketDetail, installMarket, listInstalled } from '../services/marketService'
+import { listMarket, getMarketDetail, installMarket, listInstalled, type InstalledItem } from '../services/marketService'
 import type { MarketCard, MarketDetail } from '../types'
 
-type Tab = 'skill' | 'agent' | 'plugin' | 'submit'
+type Tab = 'skill' | 'agent' | 'plugin' | 'updates' | 'submit'
 const CONTENT_TABS: Tab[] = ['skill', 'agent', 'plugin']
+
+/** 最新版本是否比已装的新(仅数值 semver 比较;不可比/未知已装版本 → 不提示,避免误报)。 */
+function isNewer(latest: string | null | undefined, installed: string | null): boolean {
+  if (!latest || !installed) return false
+  const norm = (s: string) => s.trim().replace(/^v/i, '').split(/[.\-+]/).map((x) => parseInt(x, 10))
+  const a = norm(latest), b = norm(installed)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0, y = b[i] ?? 0
+    if (Number.isNaN(x) || Number.isNaN(y)) return false // 含非数字段 → 不可靠比较,不提示
+    if (x !== y) return x > y
+  }
+  return false
+}
 
 export function MarketModal() {
   const { t } = useI18n()
@@ -22,19 +35,28 @@ export function MarketModal() {
   const [items, setItems] = useState<MarketCard[]>([])
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
-  const [installed, setInstalled] = useState<Record<string, string[]>>({})
+  const [installed, setInstalled] = useState<Record<string, InstalledItem[]>>({})
+  const [updatable, setUpdatable] = useState<MarketCard[]>([])
   const [detail, setDetail] = useState<MarketDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
 
-  const refreshInstalled = useCallback(() => {
-    listInstalled().then(setInstalled).catch(() => {})
+  // 扫描可更新:拉已装版本 + 三类市场卡片,比对每个已装项的 manifest 版本 vs 市场最新版本。
+  const scanUpdates = useCallback(async () => {
+    const inst = await listInstalled().catch(() => ({} as Record<string, InstalledItem[]>))
+    setInstalled(inst)
+    const lists = await Promise.all(CONTENT_TABS.map((tp) => listMarket(tp).catch(() => [])))
+    const ups = lists.flat().filter((c) => {
+      const e = (inst[c.type] || []).find((x) => x.slug === c.installSlug)
+      return !!e && isNewer(c.latestVersion, e.version)
+    })
+    setUpdatable(ups)
   }, [])
 
-  useEffect(() => { refreshInstalled() }, [refreshInstalled])
+  useEffect(() => { void scanUpdates() }, [scanUpdates])
 
   useEffect(() => {
-    if (tab === 'submit') return
+    if (tab === 'submit' || tab === 'updates') return // 投稿跳网页;可更新用 updatable(已扫描),都不走列表拉取
     setDetail(null)
     setErr('')
     setLoading(true)
@@ -44,14 +66,21 @@ export function MarketModal() {
       .finally(() => setLoading(false))
   }, [tab, t])
 
-  const isInstalled = (c: MarketCard): boolean => (installed[c.type] || []).includes(c.installSlug)
+  const installedEntry = (c: MarketCard): InstalledItem | undefined => (installed[c.type] || []).find((x) => x.slug === c.installSlug)
+  const isInstalled = (c: MarketCard): boolean => !!installedEntry(c)
+  const hasUpdate = (c: MarketCard): boolean => isNewer(c.latestVersion, installedEntry(c)?.version ?? null)
 
   const onInstall = async (c: MarketCard): Promise<void> => {
     setInstalling(c.id)
     try {
       await installMarket(c.id)
-      toast(t('market.installOk', { name: c.name }))
-      refreshInstalled()
+      if (c.type === 'plugin') {
+        // 插件:重扫免重启出现 + 装即启用 + 跳转设置(在 onPluginInstalled 内 toast)。
+        await useApp.getState().onPluginInstalled()
+      } else {
+        toast(t('market.installOk', { name: c.name }))
+      }
+      await scanUpdates() // 刷新已装版本 + 重算可更新
     } catch (e: any) {
       toast(t('market.installFail', { e: e?.message || String(e) }), true)
     } finally {
@@ -71,10 +100,17 @@ export function MarketModal() {
   const installBtn = (c: MarketCard) => {
     const busy = installing === c.id
     const done = isInstalled(c)
+    const upd = hasUpdate(c)
+    const inst = installedEntry(c)
     return (
-      <button className={`btn sm ${done ? '' : 'primary'}`} disabled={busy} onClick={(e) => { e.stopPropagation(); void onInstall(c) }}>
-        {busy ? <Loader2 size={13} className="mk-spin" /> : done ? <Check size={13} /> : <Download size={13} />}
-        {busy ? t('market.installing') : done ? t('market.reinstall') : t('market.install')}
+      <button
+        className={`btn sm ${upd || !done ? 'primary' : ''}`}
+        disabled={busy}
+        title={upd ? t('market.updateTitle', { from: inst?.version || '?', to: c.latestVersion || '?' }) : undefined}
+        onClick={(e) => { e.stopPropagation(); void onInstall(c) }}
+      >
+        {busy ? <Loader2 size={13} className="mk-spin" /> : upd ? <RefreshCw size={13} /> : done ? <Check size={13} /> : <Download size={13} />}
+        {busy ? t('market.installing') : upd ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
       </button>
     )
   }
@@ -83,6 +119,7 @@ export function MarketModal() {
     skill: t('market.tab.skills'),
     agent: t('market.tab.agents'),
     plugin: t('market.tab.plugins'),
+    updates: t('market.tab.updates'),
     submit: t('market.tab.submit'),
   }
 
@@ -100,6 +137,9 @@ export function MarketModal() {
             {CONTENT_TABS.map((id) => (
               <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{navLabel[id]}</button>
             ))}
+            <button className={tab === 'updates' ? 'active' : ''} onClick={() => setTab('updates')}>
+              {navLabel.updates}{updatable.length > 0 ? ` (${updatable.length})` : ''}
+            </button>
             <button className={tab === 'submit' ? 'active' : ''} onClick={() => setTab('submit')}>{navLabel.submit}</button>
           </div>
         </div>
@@ -110,7 +150,24 @@ export function MarketModal() {
           <div className="settings-main-title">{detail ? detail.name : navLabel[tab]}</div>
         </div>
         <div className="settings-body">
-          {tab === 'submit' ? (
+          {tab === 'updates' ? (
+            updatable.length === 0 ? (
+              <div className="mk-state mk-muted">{t('market.allUpToDate')}</div>
+            ) : (
+              <div className="mk-grid">
+                {updatable.map((c) => (
+                  <div key={c.id} className="mk-card" onClick={() => openDetail(c)}>
+                    <div className="mk-card-title">{c.name}</div>
+                    <div className="mk-card-summary">{c.summary || ''}</div>
+                    <div className="mk-card-foot">
+                      <span className="mk-card-meta">{navLabel[c.type as Tab]} · v{installedEntry(c)?.version || '?'} → v{c.latestVersion}</span>
+                      {installBtn(c)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : tab === 'submit' ? (
             <div className="mk-submit">
               <PackageOpen size={40} className="mk-submit-ic" />
               <p className="mk-submit-hint">{t('market.submitHint')}</p>

@@ -45,8 +45,9 @@ describe('appStore.reduceEvent', () => {
     emit('plan', { plan: '1. test' })
     emit('todo', { todos: [{ status: 'pending', content: 'test' }] })
     emit('plan_approved', { file: 'plan.md' })
-    emit('group_speaker', { phase: 'start', slug: 'xyra', name: 'Xyra', round: 1 })
-    emit('group_speaker', { phase: 'end', slug: 'xyra', round: 1 })
+    // 群聊首位发言人:就地把占位气泡(a1)改成后端下发的持久 messageId(此处仍为 a1)并盖发言人身份。
+    emit('group_speaker', { phase: 'start', slug: 'xyra', name: 'Xyra', round: 1, messageId: 'a1' })
+    emit('group_speaker', { phase: 'end', slug: 'xyra', round: 1, messageId: 'a1' })
     emit('group_voting')
     emit('group_vote', { round: 1, endCount: 1, total: 2, votes: [] })
     emit('group_ended', { rounds: 1, reason: 'vote' })

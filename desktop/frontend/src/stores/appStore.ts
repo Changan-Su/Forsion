@@ -30,14 +30,32 @@ function saveUnread(s: Set<string>): void {
   try { localStorage.setItem(UNREAD_KEY, JSON.stringify([...s])) } catch { /* ignore */ }
 }
 
+/** 群聊发言落库为 `**🗣 名字**\n\n正文`(DB 无结构化发言人列)。重载时据此还原发言人身份并剥前缀。 */
+const GROUP_SPEAKER_RE = /^\*\*🗣\s*([^*\n]+?)\s*\*\*\n+([\s\S]*)$/
+
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
-function recordToUi(r: any): UiMessage {
+function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: string; color: string }): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
+  let content = r.content || ''
+  let agentId: string | undefined
+  let agentName: string | undefined
+  let agentColor: string | undefined
+  if (role === 'assistant' && resolveGroup) {
+    const m = GROUP_SPEAKER_RE.exec(content)
+    if (m) {
+      agentName = m[1].trim()
+      content = m[2]
+      const g = resolveGroup(agentName)
+      agentId = g.slug
+      agentColor = g.color
+    }
+  }
   const msg: UiMessage = {
-    id: r.id, role, content: r.content || '', reasoning: r.reasoning || undefined,
+    id: r.id, role, content, reasoning: r.reasoning || undefined,
     attachments: r.attachments || undefined,
     displayFiles: Array.isArray(r.display_files) && r.display_files.length ? r.display_files : undefined,
     status: 'done', timestamp: Number(r.timestamp) || 0,
+    agentId, agentName, agentColor,
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -61,6 +79,15 @@ function groupColor(slug: string): string {
   let h = 0
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
   return `hsl(${h % 360} 62% 45%)`
+}
+/** 发言人名 → {slug, color}:用于重载历史时按名还原 agent 身份(DB 只存了名字)。 */
+function groupSpeakerResolver(agentDefs: NormalAgentDef[], hostName: string) {
+  return (name: string): { slug?: string; color: string } => {
+    if (name === '主持人' || name === hostName) return { slug: '__host__', color: groupColor('__host__') }
+    const a = agentDefs.find((x) => x.name === name)
+    if (a) return { slug: a.slug, color: groupColor(a.slug) }
+    return { color: groupColor(name) } // 临时 agent / 名字未在册:仍给稳定派生色,slug 缺省(头像靠 ChatView 按名兜底)
+  }
 }
 function appendSubText(s: SubChat, delta: string): SubChat {
   const segs = s.segs.slice()
@@ -89,6 +116,14 @@ const runAborts = new Map<string, AbortController>()
 const subscribedRuns = new Set<string>()
 const stoppedRuns = new Set<string>()
 const loadedHistory = new Set<string>()
+let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
+const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
+const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
+const recentSessions: string[] = [] // 最近查看的会话 id(MRU 在前),用于 LRU 淘汰
+/** 单条正文超上限则截断 + 标注(后端仍完整落库;仅界面侧防 OOM)。 */
+function capContent(s: string): string {
+  return s.length >= MAX_MSG_CHARS ? s.slice(0, MAX_MSG_CHARS) + '\n\n[输出过长,界面已截断显示]' : s
+}
 
 type ConnState = 'idle' | 'ok' | 'err'
 
@@ -192,8 +227,12 @@ export interface AppState {
   ensureEngineCaps(engineId: string | undefined): void
   openSettings(tab?: SettingsTab): void
   closeSettings(): void
+  /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。 */
+  handleAuthExpired(): void
   openMarket(): void
   closeMarket(): void
+  /** 插件装好后:重扫(免重启出现)+ 启用 + 重启提示 + 跳转对应设置。 */
+  onPluginInstalled(): Promise<void>
   openFeedback(): void
   closeFeedback(): void
   setOnboarding(on: boolean): void
@@ -302,7 +341,11 @@ export const useApp = create<AppState>((set, get) => ({
     }
     switch (ev.type) {
       case 'token':
-        patchMessage(sessionId, assistantId, (m) => ({ ...m, content: m.content + (pl.delta || '') }))
+        patchMessage(sessionId, assistantId, (m) => {
+          // 单条正文软上限:超长正文 + markdown 重渲染会持续吃渲染进程内存(白屏 OOM 诱因之一)。
+          if (m.content.length >= MAX_MSG_CHARS) return m // 已达上限,停止累积(后端仍完整落库)
+          return { ...m, content: capContent(m.content + (pl.delta || '')) }
+        })
         break
       case 'reasoning':
         patchMessage(sessionId, assistantId, (m) => ({ ...m, reasoning: (m.reasoning || '') + (pl.delta || '') }))
@@ -401,18 +444,27 @@ export const useApp = create<AppState>((set, get) => ({
         const name = String(pl.name || slug)
         const round = Number(pl.round) || 0
         const color = groupColor(slug)
+        // 用后端下发的持久 uuid 作气泡 id → 与落库行对齐,轮询/重载按 id 合并不再产生重复。旧后端无 messageId 时回退合成 id。
+        const mid = String(pl.messageId || '') || `grp-${slug}-${round}-${Date.now()}`
         if (pl.phase === 'start') {
-          if (!ref.groupSeen || ref.reuseNext) {
-            ref.groupSeen = true
-            ref.reuseNext = false
-            patchMessage(sessionId, ref.current, (m) => ({ ...m, agentId: slug, agentName: name, agentColor: color, groupRound: round, status: 'streaming' }))
-          } else {
-            const newId = `grp-${slug}-${round}-${Date.now()}`
-            ref.current = newId
-            set((s) => ({
-              messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), { id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentId: slug, agentName: name, agentColor: color, groupRound: round }] },
-            }))
-          }
+          const wasFirst = !ref.groupSeen
+          ref.reuseNext = false
+          ref.groupSeen = true
+          ref.current = mid
+          set((s) => {
+            const list = s.messagesBySession[sessionId] || []
+            // 首位发言人:把 run 占位气泡(assistantId)就地改成持久 uuid 并盖发言人身份(保留已有内容);
+            // 其余发言人:各自追加一条以持久 uuid 为 id 的气泡。id 对齐落库行 → 轮询/重载不产生重复。
+            if (wasFirst) {
+              const idx = list.findIndex((m) => m.id === assistantId)
+              if (idx >= 0) {
+                const next = list.slice()
+                next[idx] = { ...next[idx], id: mid, status: 'streaming', agentId: slug, agentName: name, agentColor: color, groupRound: round }
+                return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+              }
+            }
+            return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, { id: mid, role: 'assistant' as const, content: '', status: 'streaming' as const, timestamp: Date.now(), agentId: slug, agentName: name, agentColor: color, groupRound: round }] } }
+          })
         } else if (pl.phase === 'end') {
           patchMessage(sessionId, ref.current, (m) => ({ ...m, status: 'done' }))
         }
@@ -462,7 +514,7 @@ export const useApp = create<AppState>((set, get) => ({
           const finalizedId = have.has(pl.finalizedAssistantId) ? pl.finalizedAssistantId : assistantRef.current
           const prevSeg = list.find((m) => m.id === finalizedId)
           const next = list
-            .map((m) => (m.id === finalizedId ? { ...m, content: pl.finalizedContent || m.content, status: 'done' as const } : m))
+            .map((m) => (m.id === finalizedId ? { ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const } : m))
             .filter((m) => !(m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length)))
           const additions: UiMessage[] = []
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, status: 'done', timestamp: Date.now() })
@@ -474,7 +526,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       case 'done':
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, content: pl.content || m.content, status: 'done' as const,
+          ...m, content: capContent(pl.content || m.content), status: 'done' as const,
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
@@ -495,6 +547,13 @@ export const useApp = create<AppState>((set, get) => ({
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
         endRun(set, get, sessionId, runId)
+        // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
+        // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
+        if (!pl.aborted && get().authInfo?.loggedIn) {
+          void window.tangu?.authStatus?.()
+            .then((a) => { if (a?.loggedIn && a.tokenValid === false) get().handleAuthExpired() })
+            .catch(() => {})
+        }
         break
       case 'subchat': {
         const id = String(pl.id || '')
@@ -664,7 +723,8 @@ export const useApp = create<AppState>((set, get) => ({
         .catch(() => {})
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
-        const ui = records.map(recordToUi)
+        const resolveGroup = groupSpeakerResolver(s.agentDefs, t('group.host'))
+        const ui = records.map((r) => recordToUi(r, resolveGroup))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...byId.values()].sort((a, b) => a.timestamp - b.timestamp) } }
@@ -698,7 +758,8 @@ export const useApp = create<AppState>((set, get) => ({
       if (get().activeId !== sessionId || get().runningBySession[sessionId]) return
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
-        const ui = records.map(recordToUi)
+        const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
+        const ui = records.map((r) => recordToUi(r, resolveGroup))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
         const merged = [...byId.values()].sort((a, b) => a.timestamp - b.timestamp)
@@ -724,6 +785,20 @@ export const useApp = create<AppState>((set, get) => ({
     // 选/建会话 → 焦点回对话,清掉特殊视图高亮。
     set({ activeId: id, activeSpecial: null })
     if (id) {
+      // LRU:把当前会话提到最前;超出上限的旧会话淘汰其内存消息(非运行中),下次进入重新拉。
+      const i = recentSessions.indexOf(id)
+      if (i >= 0) recentSessions.splice(i, 1)
+      recentSessions.unshift(id)
+      if (recentSessions.length > MAX_LIVE_SESSIONS) {
+        const evict = recentSessions.splice(MAX_LIVE_SESSIONS).filter((sid) => sid !== id && !get().runningBySession[sid])
+        if (evict.length) {
+          set((s) => {
+            const next = { ...s.messagesBySession }
+            for (const sid of evict) { delete next[sid]; loadedHistory.delete(sid) }
+            return { messagesBySession: next }
+          })
+        }
+      }
       void get().loadSessionHistory(id)
       // 焦点回到会话 → 展开它所在工作区(文件面板 + 会话列表共享 activeWorkspaceKey;
       // 否则启动/恢复/从特殊视图跳回时无人设置,右栏文件面板全收起显得「空」)。
@@ -1123,6 +1198,20 @@ export const useApp = create<AppState>((set, get) => ({
     void api.listSkills(get().cfg).then((s) => set({ skillsList: s })).catch(() => { /* ignore */ })
   },
 
+  onPluginInstalled: async () => {
+    const t = get().tr
+    try {
+      // 重扫让后端立刻发现新插件(免重启);装即启用;提示可能需重启;跳转到对应设置。
+      const r = await api.rescanPlugins(get().cfg)
+      for (const id of r.addedIds) await api.setPluginEnabled(get().cfg, id, true).catch(() => {})
+      get().toast(r.needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
+      set({ marketOpen: false })
+      get().openSettings(r.addedIds[0] ? (`plugin:${r.addedIds[0]}` as SettingsTab) : 'plugins')
+    } catch (e: any) {
+      get().toast(t('market.installFail', { e: e?.message || String(e) }), true)
+    }
+  },
+
   closeSettings: () => {
     set({ settingsOpen: false })
     // 设置里可能改了默认工作区目录 / Special Agents 开关 → 重读折算值刷新。
@@ -1130,6 +1219,22 @@ export const useApp = create<AppState>((set, get) => ({
     void get().refreshSpecialEnabled(get().cfg)
     // 关设置后刷新本地 Agent 目录(设置页可能新建/改头像)。
     get().refreshAgents()
+  },
+
+  handleAuthExpired: () => {
+    const s = get()
+    if (!s.authInfo?.loggedIn) return // standalone/未登录:绝不踢去 Forsion 登录
+    const now = Date.now()
+    if (now - lastAuthExpiredAt < 10_000) return // 幂等去抖
+    lastAuthExpiredAt = now
+    const t = s.tr
+    set({
+      authInfo: { ...s.authInfo, loggedIn: false, tokenValid: false },
+      connState: 'err',
+      connMessage: t('app.sessionExpired'),
+    })
+    s.toast(t('app.sessionExpired'), true)
+    get().openSettings('forsion') // 复用现成 forsion tab 的登录入口
   },
 
   openFeedback: () => {

@@ -272,7 +272,13 @@ export function ChatView({ leaf, params }: ViewProps) {
                     key={m.id}
                     msg={m}
                     rootRef={m.id === streamingId ? streamingNodeRef : undefined}
-                    avatarUrl={m.role === 'assistant' ? (m.agentId ? s.agentAvatars[m.agentId] : (curEngineId ? undefined : chatAgentAvatar)) : undefined}
+                    avatarUrl={m.role !== 'assistant' ? undefined : (() => {
+                      // 群聊发言人:优先 agentId,缺失时按名反查 slug(agentDefs 晚到时自动纠正);仍无则不回退会话默认头像。
+                      const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => a.name === m.agentName)?.slug : undefined)
+                      if (aid) return s.agentAvatars[aid]
+                      if (m.agentName) return undefined
+                      return curEngineId ? undefined : chatAgentAvatar
+                    })()}
                     agentNameFallback={chatAgentName}
                     userName={userName}
                     userAvatar={userAvatar}
@@ -339,7 +345,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               workspaces={s.workspaces()}
               value={s.newChatWs?.key ?? null}
               onChange={(w) => s.setNewChatWs(w)}
-              onAddProject={() => void s.addLocalWorkspace()}
+              onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
             />
           </div>
         </div>

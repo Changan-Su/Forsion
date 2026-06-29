@@ -58,10 +58,11 @@ export function installEngine(): void {
   registerView({ type: 'launcher', displayName: () => app().tr('newtab.title'), icon: Plus, factory: (props) => <NewTabView {...props} /> })
 
   // ribbon = 左侧功能条:商店置顶为第一个图标,其后明暗/语言/反馈/命令。左右栏折叠钮已移到各自面板右缘(见 WorkspaceHost)。
-  addRibbonIcon({ id: 'rb-market', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
+  // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册。
+  if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-mode', icon: Moon, tooltip: () => app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
   addRibbonIcon({ id: 'rb-locale', icon: Languages, tooltip: () => app().tr('locale.toggleTitle'), onClick: () => cycleLocale() })
-  addRibbonIcon({ id: 'rb-feedback', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => app().openFeedback() })
+  if (window.tangu?.submitFeedback) addRibbonIcon({ id: 'rb-feedback', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => app().openFeedback() })
   addRibbonIcon({ id: 'rb-cmd', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
 
   // commands

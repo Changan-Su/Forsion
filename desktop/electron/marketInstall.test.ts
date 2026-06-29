@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { isSafeSlug, shouldStripTop, safeEntryPath, extractZipToDir } from './marketInstall'
+import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir } from './marketInstall'
 
 describe('isSafeSlug', () => {
   it('接受 kebab', () => { expect(isSafeSlug('my-skill')).toBe(true); expect(isSafeSlug('a1')).toBe(true) })
@@ -15,22 +15,48 @@ describe('isSafeSlug', () => {
   })
 })
 
-describe('shouldStripTop', () => {
-  it('单层顶级目录(source zip)→ 剥', () => {
-    expect(shouldStripTop(['repo-sha/SKILL.md', 'repo-sha/lib/x.js'])).toBe(true)
+describe('isJunkPath', () => {
+  it('命中 __MACOSX/.DS_Store/Thumbs.db', () => {
+    expect(isJunkPath('__MACOSX/my-skill/._SKILL.md')).toBe(true)
+    expect(isJunkPath('my-skill/.DS_Store')).toBe(true)
+    expect(isJunkPath('Thumbs.db')).toBe(true)
+    expect(isJunkPath('my-skill/SKILL.md')).toBe(false)
+  })
+})
+
+describe('computeStripPrefix', () => {
+  it('单层顶级目录(source zip)无 manifest → 剥该目录', () => {
+    expect(computeStripPrefix(['repo-sha/SKILL.md', 'repo-sha/lib/x.js'])).toBe('repo-sha/')
   })
   it('内容在根 / 多个顶级 → 不剥', () => {
-    expect(shouldStripTop(['SKILL.md', 'lib/x.js'])).toBe(false)
-    expect(shouldStripTop(['SKILL.md'])).toBe(false)
+    expect(computeStripPrefix(['SKILL.md', 'lib/x.js'])).toBe('')
+    expect(computeStripPrefix(['SKILL.md'])).toBe('')
+  })
+  it('macOS 压缩文件夹(__MACOSX 兄弟目录)→ 按 manifest 重定根到包裹目录', () => {
+    expect(
+      computeStripPrefix(['my-skill/SKILL.md', '__MACOSX/my-skill/._SKILL.md'], ['SKILL.md']),
+    ).toBe('my-skill/')
+  })
+  it('嵌套多层 → 以最浅 manifest 所在目录为根', () => {
+    expect(computeStripPrefix(['parent/my-skill/SKILL.md', 'parent/my-skill/lib/x.js'], ['SKILL.md'])).toBe('parent/my-skill/')
+  })
+  it('manifest 已在根 → 不剥', () => {
+    expect(computeStripPrefix(['SKILL.md', 'lib/x.js'], ['SKILL.md'])).toBe('')
+  })
+  it('plugin/agent manifest 名', () => {
+    expect(computeStripPrefix(['pkg/tangu-plugin.json'], ['tangu-plugin.json'])).toBe('pkg/')
+    expect(computeStripPrefix(['pkg/config.toml', 'pkg/SOUL.md'], ['config.toml'])).toBe('pkg/')
   })
 })
 
 describe('safeEntryPath', () => {
-  it('剥顶层后取相对路径', () => { expect(safeEntryPath('repo/SKILL.md', true)).toBe('SKILL.md') })
+  it('剥前缀后取相对路径', () => { expect(safeEntryPath('repo/SKILL.md', 'repo/')).toBe('SKILL.md') })
+  it('不在前缀下 → null(旁支丢弃)', () => { expect(safeEntryPath('other/x.js', 'repo/')).toBeNull() })
+  it('垃圾条目 → null', () => { expect(safeEntryPath('__MACOSX/x', '')).toBeNull() })
   it('穿越路径 → null', () => {
-    expect(safeEntryPath('../evil', false)).toBeNull()
-    expect(safeEntryPath('repo/../../etc/passwd', true)).toBeNull()
-    expect(safeEntryPath('/abs', false)).toBe('abs') // 前导斜杠被剥成相对,仍安全
+    expect(safeEntryPath('../evil', '')).toBeNull()
+    expect(safeEntryPath('repo/../../etc/passwd', 'repo/')).toBeNull()
+    expect(safeEntryPath('/abs', '')).toBe('abs') // 前导斜杠被剥成相对,仍安全
   })
 })
 
@@ -46,6 +72,23 @@ describe('extractZipToDir', () => {
     expect(readFileSync(join(dest, 'SKILL.md'), 'utf8')).toBe('# hi')
     expect(existsSync(join(dest, 'lib/util.js'))).toBe(true)
     expect(existsSync(join(dest, 'owner-repo-abc123'))).toBe(false) // 顶层已剥
+  })
+
+  it('macOS 压缩文件夹(__MACOSX 兄弟目录)→ manifest 重定根到 dest 根,不写垃圾/包裹层', async () => {
+    const zip = new JSZip()
+    zip.file('my-skill/SKILL.md', '# hi')
+    zip.file('my-skill/lib/util.js', 'export const x=1')
+    zip.file('__MACOSX/my-skill/._SKILL.md', 'junk')
+    zip.file('.DS_Store', 'junk')
+    const buf = await zip.generateAsync({ type: 'nodebuffer' })
+    const dest = mkdtempSync(join(tmpdir(), 'mk-'))
+    const n = await extractZipToDir(buf, dest, ['SKILL.md'])
+    expect(n).toBe(2)
+    expect(readFileSync(join(dest, 'SKILL.md'), 'utf8')).toBe('# hi')
+    expect(existsSync(join(dest, 'lib/util.js'))).toBe(true)
+    expect(existsSync(join(dest, 'my-skill'))).toBe(false) // 包裹层已剥
+    expect(existsSync(join(dest, '__MACOSX'))).toBe(false) // 垃圾未写
+    expect(existsSync(join(dest, '.DS_Store'))).toBe(false)
   })
 
   // jszip 自身在 generate 时会规整 '../' → 经它造的 zip 到不了 safeEntryPath 的拒绝分支(双重防线)。

@@ -71,7 +71,7 @@ describe('parseAgentFile', () => {
 describe('serializeAgent ↔ parseAgentFile round-trip', () => {
   it('survives a round trip', () => {
     const def: NormalAgentDef = {
-      slug: 'r', name: 'Round', description: 'd', model: 'm', tools: ['t1', 't2'],
+      slug: 'r', name: 'Round', version: '1.0.0', description: 'd', model: 'm', tools: ['t1', 't2'],
       thinkingLevel: 'medium', maxIterations: 30, approvalMode: 'full-auto',
       createdBy: 'user', createdAt: '2026-06-18T00:00:00.000Z', systemPrompt: 'persona body',
     };
@@ -89,11 +89,20 @@ describe('config.toml apps tag (per-app 标签)', () => {
   });
   it('survives serialize → parse round-trip', () => {
     const def: NormalAgentDef = {
-      slug: 'r', name: 'R', description: '', model: '', tools: [],
+      slug: 'r', name: 'R', version: '1.0.0', description: '', model: '', tools: [],
       thinkingLevel: '', maxIterations: null, approvalMode: '',
       createdBy: 'user', createdAt: '2026-06-18T00:00:00.000Z', systemPrompt: 'p',
       apps: ['echo'],
     };
     expect(parseAgentConfig('r', serializeAgentConfig(def), '').apps).toEqual(['echo']);
+  });
+  it('version: 持久化并回读;缺省 → 1.0.0', () => {
+    const base: NormalAgentDef = {
+      slug: 'r', name: 'R', version: '2.3.0', description: '', model: '', tools: [],
+      thinkingLevel: '', maxIterations: null, approvalMode: '',
+      createdBy: 'user', createdAt: '2026-06-18T00:00:00.000Z', systemPrompt: 'p',
+    };
+    expect(parseAgentConfig('r', serializeAgentConfig(base), '').version).toBe('2.3.0');
+    expect(parseAgentConfig('r', 'name = "R"\n', '').version).toBe('1.0.0'); // 缺省
   });
 });

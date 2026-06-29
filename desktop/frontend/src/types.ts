@@ -116,6 +116,8 @@ export interface AgentsMeta { order: string[]; defaultSlug: string }
 export interface NormalAgentDef {
   slug: string
   name: string
+  /** 版本号(config.toml version,缺省 1.0.0);市场「可更新」检查用。 */
+  version?: string
   description: string
   model: string
   tools: string[]
@@ -446,6 +448,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
 
 export interface AuthStatusInfo {
   loggedIn: boolean
+  /** token 是否仍有效:true=有效,false=已失效(401/403),null=未校验/离线(不确定)。用于检测登录过期。 */
+  tokenValid?: boolean | null
   cloudUrl: string
   username: string | null
   nickname?: string | null
@@ -460,6 +464,8 @@ declare global {
     tangu?: {
       /** 宿主平台('darwin' | 'win32' | 'linux');静态值,渲染层据此调标题栏留白。 */
       platform?: string
+      /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
+      cloudWeb?: boolean
       getConfig(): Promise<StoredDesktopConfig>
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -517,7 +523,7 @@ declare global {
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
       marketDetail?(id: string): Promise<MarketDetail>
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }>
-      marketInstalled?(): Promise<Record<string, string[]>>
+      marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
     }
   }
 }
@@ -533,6 +539,8 @@ export interface MarketCard {
   installSlug: string
   downloads: number
   latestTag?: string | null
+  /** 可比较的最新版本(github=release tag,zip=manifest/手填 version);null=不参与「可更新」判断。 */
+  latestVersion?: string | null
 }
 
 /** 市场详情(含 README 正文)。 */

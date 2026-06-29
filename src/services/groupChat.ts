@@ -135,17 +135,19 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         const ctx = ctxByAgent.get(agent.slug)!;
         ctx.push({ role: 'user', content: formatDelta(transcript.slice(from), agent.name) } as ChatMessage);
 
-        await publish(runId, 'group_speaker', { slug: agent.slug, name: agent.name, round, phase: 'start' });
+        // 持久消息 id 下发给前端,使实时气泡 id 与落库 uuid 对齐 → 轮询/重载按 id 合并不产生重复气泡。
+        const messageId = uuidv4();
+        await publish(runId, 'group_speaker', { slug: agent.slug, name: agent.name, round, phase: 'start', messageId });
         const turn = await runGroupTurn(ctx, agent, p, meter);
         costTotal += turn.cost;
-        await publish(runId, 'group_speaker', { slug: agent.slug, name: agent.name, round, phase: 'end' });
+        await publish(runId, 'group_speaker', { slug: agent.slug, name: agent.name, round, phase: 'end', messageId });
 
         transcript.push({ round, slug: agent.slug, name: agent.name, text: turn.text });
         seen.set(agent.slug, transcript.length); // 含自己这条 → 下次 delta 自动排除自己
 
         // 每条发言 = 一条独立 model 消息(前缀发言人,reload/网页可读)。复用 finalizeAssistantMessage。
         await state.finalizeAssistantMessage({
-          messageId: uuidv4(), sessionId, modelId: agent.model || modelId,
+          messageId, sessionId, modelId: agent.model || modelId,
           content: `**🗣 ${agent.name}**\n\n${turn.text}`, reasoning: '', toolCalls: [], toolResults: [],
         }).catch(() => {});
 
@@ -192,11 +194,12 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
           );
       if (ans.startsWith('是')) {
         const hostRound = roundsRun + 1;
-        await publish(runId, 'group_speaker', { slug: HOST_SLUG, name: '主持人', round: hostRound, phase: 'start' });
+        const hostMessageId = uuidv4();
+        await publish(runId, 'group_speaker', { slug: HOST_SLUG, name: '主持人', round: hostRound, phase: 'start', messageId: hostMessageId });
         const summary = await runHostSummary(transcript, p, meter);
-        await publish(runId, 'group_speaker', { slug: HOST_SLUG, name: '主持人', round: hostRound, phase: 'end' });
+        await publish(runId, 'group_speaker', { slug: HOST_SLUG, name: '主持人', round: hostRound, phase: 'end', messageId: hostMessageId });
         await state.finalizeAssistantMessage({
-          messageId: uuidv4(), sessionId, modelId,
+          messageId: hostMessageId, sessionId, modelId,
           content: `**🗣 主持人**\n\n${summary.text}`, reasoning: '', toolCalls: [], toolResults: [],
         }).catch(() => {});
         summarized = true;
@@ -372,6 +375,7 @@ function sanitizeTempAgents(raw: any): NormalAgentDef[] {
     out.push({
       slug,
       name: name.slice(0, 120),
+      version: '1.0.0', // 临时群聊 agent,不落盘,版本仅占位
       description: String(r.description || '').slice(0, 300),
       model: String(r.model || '').trim(),
       tools: Array.isArray(r.tools) ? r.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100) : [],

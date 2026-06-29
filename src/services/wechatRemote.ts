@@ -18,11 +18,8 @@ import { resolveApproval } from './approvals.js';
 import { IlinkClient, ILINK_BASE_URL } from '../wechat/ilinkClient.js';
 import { IlinkRuntime } from '../wechat/ilinkRuntime.js';
 import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
-import { splitMessage, segmentDelayMs } from '../wechat/splitMessage.js';
-import { isPluginEnabledSync, getPluginSettingsSync } from '../plugins/settingsStore.js';
-
-// 微信分段消息插件 id(契约常量;插件本体是 plugins/wechat-segment 文件夹插件,只声明面板,行为留在此处)。
-const WECHAT_SEGMENT_ID = 'wechat-segment';
+// 拟人分段回复:通道无关 + 按 agent(见 services/replySegment.ts;面板由 plugins/reply-segment 声明,行为留在核心)。
+import { resolveReplySegment, splitMessage, segmentDelayMs } from './replySegment.js';
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';
@@ -105,7 +102,7 @@ class WechatRemoteService {
   private started = false;
   private readonly pending = new Map<string, PendingLogin>();
   // 微信内审批:peer → 当前待批操作(收到 approval_request 时登记;用户回「批准/拒绝」时取用)。
-  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string }>();
+  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string }>();
   // typing 指示:peer → 周期性重发「正在输入」的定时器(run 期间开启,出回复时关闭)。
   private readonly typingTimers = new Map<string, ReturnType<typeof setInterval>>();
   // 挂起的 waitForRunReply 强制结束器:stop()/服务重载时把所有等待中的回复 settle 掉,避免泄漏。
@@ -298,12 +295,12 @@ class WechatRemoteService {
       if (/^(批准|同意|确认|可以|好的?|是的?|yes|y|ok|approve|👍)$/i.test(text)) {
         this.pendingApprovalByPeer.delete(key);
         const ok = resolveApproval(pendingApproval.approvalId, { action: 'approve' });
-        return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.openid) : '该操作已过期或已在别处处理。';
+        return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.openid, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
       }
       if (/^(拒绝|不同意|不行|否|不|no|n|reject)$/i.test(text)) {
         this.pendingApprovalByPeer.delete(key);
         const ok = resolveApproval(pendingApproval.approvalId, { action: 'reject' });
-        return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.openid) : '该操作已过期或已在别处处理。';
+        return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.openid, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
       }
     }
 
@@ -351,7 +348,7 @@ class WechatRemoteService {
     });
     activeRunsByPeer.set(key, runId);
     enqueueRun(binding.session_id, runId);
-    return this.waitForRunReply(runId, key, msg.accountId, msg.openid);
+    return this.waitForRunReply(runId, key, msg.accountId, msg.openid, agentConfig.agentSlug);
   }
 
   /**
@@ -360,7 +357,7 @@ class WechatRemoteService {
    *  - approval_request → 登记待批 + 回发 preview(run 仍挂起等用户回「批准/拒绝」),terminal=false
    *  - done/error → 终止,清理 peer 状态,terminal=true
    */
-  private waitForRunReply(runId: string, key: string, accountId: string, openid: string): Promise<string> {
+  private waitForRunReply(runId: string, key: string, accountId: string, openid: string, agentSlug?: string): Promise<string> {
     let settled = false;
     let closed = false;
     let unsubscribe: (() => void) | null = null;
@@ -393,14 +390,14 @@ class WechatRemoteService {
         if (ev.type === 'approval_request') {
           const approvalId = String(ev.payload?.approvalId || '');
           const preview = String(ev.payload?.preview || ev.payload?.name || '操作');
-          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview });
+          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview, agentSlug });
           deliver(`⚠️ 需要你批准这个操作:\n${preview}\n\n回复「批准」执行,「拒绝」取消,或「停止」结束任务。`);
           close(false); // 退订(用户回「批准」时会新建一次等待重新订阅);保留 run + 待批登记
           return;
         }
         if (ev.type === 'done') {
-          // 分段消息(本地全局性插件):开启时把回复拆成多条依次发出;否则单条(行为与现状逐字节一致)。
-          void this.deliverReply(String(ev.payload?.content || '完成。'), deliver, () => close(true), { accountId, openid, key, runId });
+          // 拟人分段(按 agent,回落全局):该 agent 开启时把回复拆成多条依次发出;否则单条。
+          void this.deliverReply(String(ev.payload?.content || '完成。'), deliver, () => close(true), { accountId, openid, key, runId, agentSlug });
           return;
         }
         if (ev.type === 'error') { deliver(ev.payload?.aborted ? '任务已停止。' : `任务失败：${ev.payload?.error || 'unknown error'}`); close(true); }
@@ -417,12 +414,12 @@ class WechatRemoteService {
     content: string,
     deliver: (text: string) => void,
     done: () => void,
-    ctx: { accountId: string; openid: string; key: string; runId: string },
+    ctx: { accountId: string; openid: string; key: string; runId: string; agentSlug?: string },
   ): Promise<void> {
     try {
-      const on = isPluginEnabledSync(WECHAT_SEGMENT_ID);
-      const delayBase = on ? (getPluginSettingsSync(WECHAT_SEGMENT_ID).segmentDelayMs as number | undefined) : undefined;
-      const segs = on ? splitMessage(content) : [content];
+      const seg = resolveReplySegment(ctx.agentSlug);
+      const delayBase = seg.delayBase;
+      const segs = seg.enabled ? splitMessage(content) : [content];
       deliver(segs[0] ?? content);
       for (let i = 1; i < segs.length; i++) {
         if (activeRunsByPeer.get(ctx.key) !== ctx.runId) break; // 被停止/取代 → 停发

@@ -103,31 +103,41 @@ export async function forsionDeviceLogin(
   }
 }
 
-/** 用 token 查当前用户(账号卡:头像/昵称/用户名/会员等级);失败返回 null(token 失效/云端不可达)。 */
-export async function forsionWhoami(
-  cloudUrl: string,
-  token: string,
-): Promise<{ username?: string; nickname?: string; avatar?: string; membershipTier?: string } | null> {
-  if (!cloudUrl || !token) return null
+export interface WhoamiResult {
+  /** ok=token 有效;expired=401/403 凭证失效;offline=网络/云端不可达(token 未必失效)。 */
+  status: 'ok' | 'expired' | 'offline'
+  user?: { username?: string; nickname?: string; avatar?: string; membershipTier?: string }
+}
+
+/**
+ * 用 token 查当前用户(账号卡)。除返回用户信息外,还区分 token「失效(401/403)」与「离线」——
+ * 后者不应被当作登录过期(避免云端抖动把用户误登出)。
+ */
+export async function forsionWhoami(cloudUrl: string, token: string): Promise<WhoamiResult> {
+  if (!cloudUrl || !token) return { status: 'offline' }
   const base = cloudUrl.replace(/\/+$/, '')
   try {
     const r = await fetch(`${base}/api/brain/users/me`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(5000),
     })
-    if (!r.ok) return null
+    if (r.status === 401 || r.status === 403) return { status: 'expired' }
+    if (!r.ok) return { status: 'offline' } // 5xx 等:不确定凭证是否失效,按离线处理
     const u: any = await r.json()
-    if (!u) return null
+    if (!u) return { status: 'offline' }
     let avatar: string | undefined = u.avatar || u.avatarUrl || u.avatar_url || undefined
     // 相对路径头像(如 /uploads/...)在桌面 file:// 下无法加载 → 用云端地址补成绝对 URL。
     if (avatar && /^\/(?!\/)/.test(avatar)) avatar = base + avatar
     return {
-      username: u.username || u.nickname || undefined,
-      nickname: u.nickname || undefined,
-      avatar,
-      membershipTier: u.membershipTier || u.membership_tier || undefined,
+      status: 'ok',
+      user: {
+        username: u.username || u.nickname || undefined,
+        nickname: u.nickname || undefined,
+        avatar,
+        membershipTier: u.membershipTier || u.membership_tier || undefined,
+      },
     }
   } catch {
-    return null
+    return { status: 'offline' }
   }
 }
