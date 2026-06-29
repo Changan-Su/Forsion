@@ -601,10 +601,13 @@ export const useApp = create<AppState>((set, get) => ({
     } else if (merged.token) {
       void get().connect(merged)
     }
-    // 首启引导:从未配置凭证(未登录、无 token、无直连 provider,且未跳过过)→ 进向导。
+    // 首启引导:从未配置凭证(未登录、无直连 provider,且未跳过过)→ 进向导。
+    // 注意:不能再用 stored.token 当「有无凭证」信号——managed 后端现在恒有 token(无 Forsion 时回退本地令牌,
+    // 见 backendManager.getToken),会把新用户误判为已配置。真实凭证只看 authStatus.loggedIn(读 cloudToken||auth.json,
+    // 不含本地回退)+ 直连 provider。
     if (stored && window.tangu?.envCheck) {
       try {
-        if (!localStorage.getItem(ONBOARDING_DISMISS_KEY) && !stored.cloudToken && !stored.token) {
+        if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) {
           const [auth, provs] = await Promise.all([
             window.tangu.authStatus?.().catch(() => null) ?? null,
             window.tangu.listProviders?.().catch(() => []) ?? [],

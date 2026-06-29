@@ -1,6 +1,6 @@
 {
   "name": "tangu-agent-desktop2",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Tangu Agent Desktop 2.0 — Obsidian 式工作区引擎(Electron),连 standalone 服务",
   "author": "Forsion",
   "private": true,
@@ -67,10 +67,19 @@
     "extraResources": [
       { "from": "../dist", "to": "tangu-server/dist" },
       { "from": "../node_modules", "to": "tangu-server/node_modules" },
-      { "from": "../package.json", "to": "tangu-server/package.json" }
+      { "from": "../package.json", "to": "tangu-server/package.json" },
+      { "from": "../skills", "to": "tangu-server/skills" }
     ],
     "linux": { "target": "AppImage", "icon": "build/icon.png" },
-    "mac": { "target": "dmg", "icon": "build/icon.icns" },
+    "mac": { "target": "dmg", "icon": "build/icon.icns", "identity": null },
+    "dmg": {
+      "window": { "width": 560, "height": 440 },
+      "contents": [
+        { "x": 150, "y": 200 },
+        { "x": 410, "y": 200, "type": "link", "path": "/Applications" },
+        { "x": 280, "y": 372, "type": "file", "path": "build/打不开请先读我.txt" }
+      ]
+    },
     "win": { "target": "nsis", "icon": "build/icon.ico" }
   }
 }

@@ -1,0 +1,48 @@
+Tangu Agent · macOS 首次打开说明
+================================
+
+如果首次打开时提示「"Tangu Agent 2.0" 已损坏，无法打开」
+或「无法验证开发者 / 来自身份不明的开发者」——
+
+这不是真的损坏。只是本 App 暂未做 Apple 付费公证（notarization），
+macOS 默认会拦下载来的未公证 App。按下面任一方法即可正常打开，安全无虞。
+
+
+方法一（推荐，最简单）
+----------------------
+1. 把「Tangu Agent 2.0」拖到左边的「应用程序」文件夹。
+2. 到「应用程序」里，【右键】（或按住 Control 点）App 图标 →「打开」。
+3. 弹窗里再点一次「打开」。
+之后就能像平常一样双击打开了。
+
+
+方法二（系统设置）
+------------------
+1. 先双击打开一次（会被拦下，没关系）。
+2. 打开「系统设置」→「隐私与安全性」→ 往下滚到「安全性」一栏。
+3. 看到关于 Tangu Agent 的提示，点「仍要打开 / Open Anyway」。
+
+
+方法三（前两种都不行时，用终端）
+--------------------------------
+打开「终端」(Terminal)，粘贴这一行回车：
+
+    xattr -dr com.apple.quarantine "/Applications/Tangu Agent 2.0.app"
+
+然后正常双击打开即可。
+
+
+--------------------------------------------------------------------
+English
+
+If macOS says the app is "damaged" or from an "unidentified developer"
+on first launch, it is NOT actually damaged — the app just isn't
+Apple-notarized yet. Any one of these opens it safely:
+
+  1) Drag the app to Applications, then RIGHT-CLICK it → Open → Open.
+  2) System Settings → Privacy & Security → scroll to Security →
+     "Open Anyway".
+  3) In Terminal, run:
+     xattr -dr com.apple.quarantine "/Applications/Tangu Agent 2.0.app"
+
+— Forsion · Tangu
