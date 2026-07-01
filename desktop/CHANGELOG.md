@@ -13,6 +13,10 @@
 与 docs/Log/ 的开发日志分工:这里是面向用户的精炼 What's New。
 -->
 
+## Tangu 2.0.4 (2026-07-01)
+
+- **修复启动即崩溃**:2.0.x 安装包漏打了运行时依赖(electron-updater 等),导致打开报 “A JavaScript error … Cannot find package 'electron-updater'”。本版已随包带齐,正常启动。
+
 ## Tangu 2.0.3 (2026-07-01)
 
 - **内置 Python,免安装**:应用自带独立 Python 运行时,不必再手动安装、也不会和你自己的 Python 冲突;设置里可切换「内置 / 系统」

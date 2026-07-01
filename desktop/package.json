@@ -1,6 +1,6 @@
 {
   "name": "tangu-agent-desktop2",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Tangu Agent Desktop 2.0 — Obsidian 式工作区引擎(Electron),连 standalone 服务",
   "author": "Forsion",
   "private": true,
@@ -84,7 +84,25 @@
     },
     "artifactName": "Tangu-Agent-${version}-${arch}.${ext}",
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "node_modules/**/*",
+      "!node_modules/.bin",
+      "!node_modules/**/*.{d.ts,map,md,markdown}",
+      "!node_modules/typescript/**",
+      "!node_modules/vite/**",
+      "!node_modules/vitest/**",
+      "!node_modules/@vitest/**",
+      "!node_modules/@vitejs/**",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!node_modules/electron-vite/**",
+      "!node_modules/app-builder-lib/**",
+      "!node_modules/dmg-builder/**",
+      "!node_modules/esbuild/**",
+      "!node_modules/@esbuild/**",
+      "!node_modules/rollup/**",
+      "!node_modules/@rollup/**",
+      "!node_modules/@types/**"
     ],
     "extraResources": [
       {
