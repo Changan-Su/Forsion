@@ -37,12 +37,24 @@ const buildDir = () => __dirname;
 /** 最终落点:build/python(tar 顶层目录就叫 python)。 */
 const pythonDir = () => path.join(buildDir(), 'python');
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function ghJson(url) {
   const headers = { 'User-Agent': 'tangu-build', Accept: 'application/vnd.github+json' };
-  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  const r = await fetch(url, { headers });
-  if (!r.ok) throw new Error(`[fetch-python] GitHub API ${r.status} @ ${url}`);
-  return r.json();
+  // CI 未鉴权的 API 请求会被限流(403/429);带 token(GITHUB_TOKEN/GH_TOKEN)升到 5000/h。
+  const tok = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (tok) headers.Authorization = `Bearer ${tok}`;
+  let lastErr;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const r = await fetch(url, { headers });
+      if (r.ok) return r.json();
+      lastErr = new Error(`GitHub API ${r.status}`);
+      if (![403, 429, 500, 502, 503].includes(r.status)) break; // 非限流/瞬态 → 不重试
+    } catch (e) { lastErr = e; }
+    await sleep(1500 * (i + 1)); // 退避重试
+  }
+  throw new Error(`GitHub API failed @ ${url}: ${lastErr?.message || lastErr}`);
 }
 
 /** 在 assets 里挑匹配三元组的 install_only tar.gz(优先 PY_MINORS 顺序)。 */
@@ -55,33 +67,51 @@ function pickAsset(assets, triple) {
   return null;
 }
 
+/** 降级:建空 build/python 占位(extraResources 不缺 from;运行时 resolveBundledPython 返回 null → 回落系统 Python)。 */
+function degrade(dest, reason) {
+  console.warn(`[fetch-python] ⚠ 未打包内置 Python(运行时回落系统 Python):${reason}`);
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(path.join(dest, '.skipped'), `python bundle skipped: ${reason}\n`);
+  return dest;
+}
+
 async function fetchPython({ platformName, archName }) {
   const dest = pythonDir();
-  if (process.env.TANGU_SKIP_FETCH_PYTHON) {
-    console.log('[fetch-python] TANGU_SKIP_FETCH_PYTHON set → 跳过下载(建空目录占位)');
-    mkdirSync(dest, { recursive: true });
-    writeFileSync(path.join(dest, '.skipped'), 'python bundle skipped\n');
+  if (process.env.TANGU_SKIP_FETCH_PYTHON) return degrade(dest, 'TANGU_SKIP_FETCH_PYTHON');
+  // 拉取失败**不阻断整包构建**(否则 GitHub API 限流/网络抖动就毁掉整个发布)——降级为不打包。
+  // 强制要求内置可设 TANGU_REQUIRE_PYTHON=1(本地校验用)。
+  try {
+    const triple = tripleFor(platformName, archName);
+    const release = await ghJson(`https://api.github.com/repos/${REPO}/releases/latest`);
+    const asset = pickAsset(release.assets || [], triple);
+    if (!asset) throw new Error(`最新 release 无 ${triple} 的 install_only 资产(试过 ${PY_MINORS.join('/')})`);
+
+    console.log(`[fetch-python] ${asset.name}  (release ${release.tag_name})`);
+    let buf;
+    for (let i = 0; ; i++) {
+      try {
+        const r = await fetch(asset.browser_download_url, { headers: { 'User-Agent': 'tangu-build' } });
+        if (!r.ok) throw new Error(`下载 HTTP ${r.status}`);
+        buf = Buffer.from(await r.arrayBuffer());
+        break;
+      } catch (e) { if (i >= 3) throw e; await sleep(1500 * (i + 1)); }
+    }
+    const tmp = path.join(buildDir(), asset.name);
+    writeFileSync(tmp, buf);
+    rmSync(dest, { recursive: true, force: true }); // 换 arch 重跑:先清旧
+    // tar 自动识别 gzip(GNU tar / Windows bsdtar 均可);顶层目录名为 python → 落到 build/python。
+    execFileSync('tar', ['-xf', tmp, '-C', buildDir()], { stdio: 'inherit' });
+    rmSync(tmp, { force: true });
+    if (!existsSync(path.join(dest, 'bin')) && !existsSync(path.join(dest, 'python.exe'))) {
+      throw new Error(`解压后 ${dest} 无解释器`);
+    }
+    console.log(`[fetch-python] ✓ ${dest}`);
     return dest;
+  } catch (e) {
+    if (process.env.TANGU_REQUIRE_PYTHON) throw e;
+    return degrade(dest, e.message || String(e));
   }
-  const triple = tripleFor(platformName, archName);
-  const release = await ghJson(`https://api.github.com/repos/${REPO}/releases/latest`);
-  const asset = pickAsset(release.assets || [], triple);
-  if (!asset) throw new Error(`[fetch-python] 最新 release 里找不到 ${triple} 的 install_only 资产(尝试 ${PY_MINORS.join('/')})`);
-
-  console.log(`[fetch-python] ${asset.name}  (release ${release.tag_name})`);
-  const r = await fetch(asset.browser_download_url, { headers: { 'User-Agent': 'tangu-build' } });
-  if (!r.ok) throw new Error(`[fetch-python] 下载失败 HTTP ${r.status}`);
-  const buf = Buffer.from(await r.arrayBuffer());
-  const tmp = path.join(buildDir(), asset.name);
-  writeFileSync(tmp, buf);
-
-  rmSync(dest, { recursive: true, force: true }); // 换 arch 重跑:先清旧
-  // tar 自动识别 gzip(GNU tar / Windows bsdtar 均可);顶层目录名为 python → 落到 build/python。
-  execFileSync('tar', ['-xf', tmp, '-C', buildDir()], { stdio: 'inherit' });
-  rmSync(tmp, { force: true });
-  if (!existsSync(dest)) throw new Error(`[fetch-python] 解压后未见 ${dest}`);
-  console.log(`[fetch-python] ✓ ${dest}`);
-  return dest;
 }
 
 module.exports = { fetchPython, pythonDir };

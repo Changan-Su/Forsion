@@ -13,7 +13,7 @@
 与 docs/Log/ 的开发日志分工:这里是面向用户的精炼 What's New。
 -->
 
-## Tangu 2.0.4 (2026-07-01)
+## Tangu 2.0.5 (2026-07-01)
 
 - **修复启动即崩溃**:2.0.x 安装包漏打了运行时依赖(electron-updater 等),导致打开报 “A JavaScript error … Cannot find package 'electron-updater'”。本版已随包带齐,正常启动。
 

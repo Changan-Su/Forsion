@@ -67,8 +67,11 @@ jobs:
           npm run build
 
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
+      # GITHUB_TOKEN:beforeBuild 的 fetch-python 调 GitHub API 拉内置 Python,未鉴权在 runner 上会 403 限流。
       - name: Package installer
         working-directory: desktop
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: npx electron-builder ${{ matrix.ebargs }} --publish never
 
       # electron-builder 在有 publish 配置时随包产出更新 feed 清单(Win=latest.yml / Linux=latest-linux.yml);
