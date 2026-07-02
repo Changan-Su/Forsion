@@ -321,6 +321,19 @@ async function startAssistDiscussion(opts: {
       const c = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
       if (c?.agentSlug && (await getAgent(String(c.agentSlug)).catch(() => null))) activeSlug = String(c.agentSlug);
     } catch { /* 默认 agent */ }
+    if (activeSlug === DEFAULT_AGENT_SLUG) {
+      // 会话没存 agentSlug(老会话/老客户端):按最后一条助手消息的展示身份兜底——
+      // 讨论对象必须是真正跟用户聊的那个 agent,不能落到默认 agent 头上。
+      try {
+        const r = await query<any[]>(
+          `SELECT agent_slug FROM chat_messages WHERE session_id = ? AND role IN ('model', 'assistant')
+             AND agent_slug IS NOT NULL ORDER BY timestamp DESC LIMIT 1`,
+          [sessionId],
+        );
+        const s2 = r[0]?.agent_slug ? String(r[0].agent_slug) : '';
+        if (s2 && s2 !== DEFAULT_AGENT_SLUG && (await getAgent(s2).catch(() => null))) activeSlug = s2;
+      } catch { /* 默认 agent */ }
+    }
     const mainDef = await getAgent(activeSlug);
     if (!mainDef) return null;
 

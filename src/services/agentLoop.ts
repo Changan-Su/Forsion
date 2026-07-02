@@ -347,6 +347,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
   // 不存在/读失败不阻断 run。模型覆盖由客户端在激活时写入会话 model_id。
+  // 会话身份兜底/固化(在人格激活之前):run 未带 agentSlug → 从会话存的 agent_config 补
+  // (老客户端/其他发起入口);run 带了而会话没存 → 把 slug 写回会话(只补这一个键,不动其余)。
+  // 否则「会话生效的 agent」只活在前端易变状态里:前后轮可能换人、Historian 辅助讨论等
+  // 后台消费方也解析不到正确的讨论对象。
+  try {
+    const rawStored = await deps().state.getAgentConfig(sessionId);
+    const stored = rawStored ? (typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored) : null;
+    if (!agentConfig.agentSlug && stored?.agentSlug) {
+      agentConfig.agentSlug = stored.agentSlug;
+    } else if (agentConfig.agentSlug && !stored?.agentSlug) {
+      await deps().state.setAgentConfig(
+        sessionId,
+        JSON.stringify({ ...(stored || {}), agentSlug: agentConfig.agentSlug }),
+      );
+    }
+  } catch { /* 兜底失败不阻断 run */ }
+
   const { activeAgentSlug, memScopeSlug } = await applyAgentActivation(
     agentConfig,
     userId,
@@ -922,8 +939,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         messages: workingMessages,
         projectSource: appId,
         temperature: 0.7,
-        tools: toolDefs,
-        toolChoice: lastIter ? 'none' : 'auto',
+        // 最后一轮不发 tools(而非 toolChoice:'none'):部分思考模式渠道(DeepSeek 等)
+        // 会以 "Thinking mode does not support this tool_choice" 拒绝显式 tool_choice。
+        tools: lastIter ? undefined : toolDefs,
+        toolChoice: lastIter ? undefined : 'auto',
         attachments: [],
         thinkingLevel,
         stream: true,

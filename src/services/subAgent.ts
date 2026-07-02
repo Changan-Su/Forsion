@@ -104,8 +104,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       messages,
       projectSource: parentCtx.appId,
       temperature: 0.7,
-      tools: toolDefs,
-      toolChoice: lastIter ? 'none' : 'auto',
+      // 最后一轮不发 tools(而非 toolChoice:'none'):思考模式渠道(DeepSeek 等)拒绝显式 tool_choice。
+      tools: lastIter ? undefined : toolDefs,
+      toolChoice: lastIter ? undefined : 'auto',
       attachments: [],
       thinkingLevel: thinking,
       stream: true,

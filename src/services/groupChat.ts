@@ -256,9 +256,11 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
   for (let iteration = 0; iteration < maxIter; iteration++) {
     if (signal.aborted) throw new AbortLikeError();
     const lastIter = iteration === maxIter - 1;
+    // 最后一轮不发 tools(而非 toolChoice:'none'):思考模式渠道(DeepSeek 等)会以
+    // "Thinking mode does not support this tool_choice" 拒绝显式 tool_choice,整场讨论直接失败。
     const payload = await llm.buildProviderPayload({
       model, apiModelId, messages: ctx, projectSource: appId,
-      temperature: 0.7, tools: toolDefs, toolChoice: lastIter ? 'none' : 'auto',
+      temperature: 0.7, tools: lastIter ? undefined : toolDefs, toolChoice: lastIter ? undefined : 'auto',
       attachments: [], thinkingLevel: agent.thinkingLevel || 'off', stream: true,
       cacheKey: `${sessionId}:grp:${agent.slug}`,
     });
@@ -309,12 +311,27 @@ async function castVote(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupChatP
   const effModelId = agent.model || p.modelId;
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(effModelId);
   const messages: ChatMessage[] = [...ctx, { role: 'user', content: VOTE_PROMPT } as ChatMessage];
-  const payload = await llm.buildProviderPayload({
-    model, apiModelId, messages, projectSource: p.appId,
-    temperature: 0, tools: [CAST_VOTE_DEF], toolChoice: { type: 'function', function: { name: 'cast_vote' } },
-    attachments: [], thinkingLevel: 'off', stream: true, cacheKey: `${p.sessionId}:grp:${agent.slug}`,
-  });
-  const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: p.signal });
+  const attempt = async (toolChoice: any) => {
+    const payload = await llm.buildProviderPayload({
+      model, apiModelId, messages, projectSource: p.appId,
+      temperature: 0, tools: [CAST_VOTE_DEF], toolChoice,
+      attachments: [], thinkingLevel: 'off', stream: true, cacheKey: `${p.sessionId}:grp:${agent.slug}`,
+    });
+    return llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: p.signal });
+  };
+  // 投票是收束手段不是硬需求:强制 tool_choice 被渠道拒绝(思考模式模型)→ 降级 'auto' 再试;
+  // 仍失败 → 默认「继续」,绝不让投票把整场群聊/讨论打挂。
+  let res;
+  try {
+    res = await attempt({ type: 'function', function: { name: 'cast_vote' } });
+  } catch (e: any) {
+    if (p.signal.aborted || e?.name === 'AbortError' || e instanceof AbortLikeError) throw e;
+    try {
+      res = await attempt('auto');
+    } catch {
+      return { end: false, reason: '', cost: 0 };
+    }
+  }
   const cost = await account(p, res, effModelId, model, agent.slug, meter);
   let end = false;
   let reason = '';
