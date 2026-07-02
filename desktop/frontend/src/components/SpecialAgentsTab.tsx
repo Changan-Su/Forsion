@@ -90,8 +90,7 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
           <div className="hint" style={{ marginTop: 4 }}>{t('settings.special.h.modeHint')}</div>
         </div>
         <div className="field-row">
-          {numField(t('settings.special.h.titleRounds'), h.everyTitleRounds, (n) => saveHistorian({ everyTitleRounds: n }), 1, 100)}
-          {numField(t('settings.special.h.memoryRounds'), h.everyMemoryRounds, (n) => saveHistorian({ everyMemoryRounds: n }), 1, 100)}
+          {numField(t('settings.special.h.rounds'), h.everyRounds, (n) => saveHistorian({ everyRounds: n }), 1, 100)}
           <div className="field">
             <label>{t('settings.special.h.firstRound')}</label>
             <Seg value={h.firstRoundTrigger} onChange={(v) => saveHistorian({ firstRoundTrigger: v })}

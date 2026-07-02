@@ -2,9 +2,9 @@
  * 本地 Historian（Special Agent）—— 按「轮」触发，区别于云端 historian.ts 的空闲扫描。
  *
  * 一应一和 = 1 轮（= 1 个 done run）。每个用户会话 run 完成后（agentLoop done 钩子）：
- *   - 每 everyTitleRounds 轮：总结并更新会话标题；
- *   - 每 everyMemoryRounds 轮：判断是否更新用户 LOG/memory（经 brain.memory），有则写入；
- *   - 首轮（roundN===1 且 firstRoundTrigger）必触发两者。
+ *   - 每 everyRounds 轮（周期合一,标题与 LOG/memory 同一节奏）：总结并更新会话标题 +
+ *     判断是否更新用户 LOG/memory（经 brain.memory），有则写入；
+ *   - 首轮（roundN===1 且 firstRoundTrigger）必触发。
  *
  * 两种工作模式（cfg.mode）：
  *   - independent（默认）：Historian 自己结构化判断并写 title/LOG/memory（memory=读-改-写整文覆盖）。
@@ -216,11 +216,12 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
     const roundN = Number(cntRows[0]?.n) || 0;
     if (roundN < 1) return;
 
-    const titleDue = isRoundDue(roundN, cfg.everyTitleRounds, cfg.firstRoundTrigger);
-    const memoryDue = isRoundDue(roundN, cfg.everyMemoryRounds, cfg.firstRoundTrigger);
-    if (!titleDue && !memoryDue) return;
-    // LOG(当天流水,append-only,无侵蚀)跟随 title 的较高频率;只有 memory 整文重写走稀疏的 everyMemoryRounds。
-    const logDue = titleDue;
+    // 周期合一:标题 + LOG/memory 同一节奏(每 everyRounds 轮),用户设几轮就是几轮,节奏可预期。
+    const due = isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
+    if (!due) return;
+    const titleDue = due;
+    const memoryDue = due;
+    const logDue = due;
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
     if (!(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
@@ -231,7 +232,7 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
     const assistMode = cfg.mode === 'assist' && roundN > 1;
     const judgeLog = logDue && !assistMode;
     const judgeMemory = memoryDue && !assistMode;
-    log(`第 ${roundN} 轮触发(标题:${titleDue} 记忆:${memoryDue}${assistMode ? ',辅助模式' : ''},模型 ${cfg.modelId})`);
+    log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : ''}模型 ${cfg.modelId})`);
 
     const transcript = await recentTranscript(sessionId);
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }

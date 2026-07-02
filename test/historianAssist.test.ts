@@ -26,10 +26,10 @@ const USER = 'u1';
 let home: string;
 let appendedLogs: string[];
 
-function writeConfig(mode: 'independent' | 'assist', everyMemoryRounds = 9): void {
+function writeConfig(mode: 'independent' | 'assist', everyRounds = 3): void {
   writeFileSync(join(home, 'config.json'), JSON.stringify({
     specialAgents: {
-      historian: { enabled: true, modelId: 'm1', everyTitleRounds: 3, everyMemoryRounds, firstRoundTrigger: true, mode },
+      historian: { enabled: true, modelId: 'm1', everyRounds, firstRoundTrigger: true, mode },
     },
   }), 'utf8');
 }
@@ -157,17 +157,16 @@ describe('Historian assist 模式', () => {
     expect(bgRun[0].status).toBe('queued'); // enqueueRun 被 mock,run 停在落库初态
   });
 
-  it('标题轮(titleDue 但 memory 未到期)不再拉起讨论:节奏只跟记忆周期', async () => {
-    writeConfig('assist'); // title 每 3 轮、memory 每 9 轮 → roundN=3 只有 titleDue
+  it('未到期轮什么都不做(周期合一:标题+记忆同一节奏,每 everyRounds 轮)', async () => {
+    writeConfig('assist', 5); // 每 5 轮 → roundN=3 不到期
     await seedSession('S2');
     await seedMessages('S2');
     await seedDoneRuns('S2', 3);
 
     await onUserRunDone('S2', USER);
 
-    // 标题照常独立维护;但不起讨论、也不独立写 LOG(LOG 在辅助模式下随记忆周期一并商议)
     const s = await query<any[]>(`SELECT title FROM chat_sessions WHERE id = 'S2'`);
-    expect(s[0].title).toBe('新标题');
+    expect(s[0].title).not.toBe('新标题'); // 标题未动
     expect(appendedLogs).toEqual([]);
     const disc = await query<any[]>(`SELECT id FROM chat_sessions WHERE kind = 'discussion'`);
     expect(disc.length).toBe(0);

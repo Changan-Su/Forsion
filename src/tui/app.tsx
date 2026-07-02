@@ -495,7 +495,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
             `SELECT action, detail, created_at FROM special_agent_log WHERE user_id = ? AND agent = 'historian' ORDER BY created_at DESC LIMIT 15`,
             [userId],
           );
-          const head = `Historian：${c.enabled ? '开启' : '关闭'}（模型 ${c.modelId || '未设'}，标题每 ${c.everyTitleRounds} 轮 / 记忆每 ${c.everyMemoryRounds} 轮）`;
+          const head = `Historian：${c.enabled ? '开启' : '关闭'}（模型 ${c.modelId || '未设'}，每 ${c.everyRounds} 轮维护标题+记忆）`;
           const body = rows.length ? rows.map((r) => `  · [${r.action}] ${String(r.detail).slice(0, 60)}`).join('\n') : '  （暂无活动）';
           notice(`${head}\n${body}\n切换：/historian on|off`);
         } catch (e: any) { notice(`读取失败：${e?.message || e}`, 'error'); }

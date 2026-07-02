@@ -16,19 +16,23 @@ describe('normalizeConfig', () => {
     expect(d.muse.enabled).toBe(false);
     expect(d.muse.maxIterationsPerCycle).toBe(10);
     expect(d.muse.maxTodosPerWindow).toBe(5);
-    expect(d.historian.everyTitleRounds).toBe(3); // 标题/LOG 跟手
-    expect(d.historian.everyMemoryRounds).toBe(9); // memory 整文重写稀疏化,抗侵蚀
+    expect(d.historian.everyRounds).toBe(3); // 周期合一:标题+LOG/memory 同一节奏
   });
   it('clamps out-of-range numbers', () => {
     const c = normalizeConfig({
-      historian: { everyTitleRounds: 0, everyMemoryRounds: 9999 },
+      historian: { everyRounds: 0 },
       muse: { maxIterationsPerCycle: 100000, restartWindowHours: 99, compactAtRatio: 5, supervisorPollMinutes: 0 },
     });
-    expect(c.historian.everyTitleRounds).toBe(1); // min 1
-    expect(c.historian.everyMemoryRounds).toBe(100); // max 100
+    expect(c.historian.everyRounds).toBe(1); // min 1
+    expect(normalizeConfig({ historian: { everyRounds: 9999 } }).historian.everyRounds).toBe(100); // max 100
     expect(c.muse.maxIterationsPerCycle).toBe(500); // max 500
     expect(c.muse.restartWindowHours).toBe(24); // max 24
     expect(c.muse.supervisorPollMinutes).toBe(1); // min 1
+  });
+  it('旧双周期兼容:无 everyRounds 时沿用 everyTitleRounds;两者都有则 everyRounds 优先', () => {
+    expect(normalizeConfig({ historian: { everyTitleRounds: 5, everyMemoryRounds: 9 } }).historian.everyRounds).toBe(5);
+    expect(normalizeConfig({ historian: { everyRounds: 4, everyTitleRounds: 5 } }).historian.everyRounds).toBe(4);
+    expect((normalizeConfig({ historian: { everyTitleRounds: 5 } }).historian as any).everyTitleRounds).toBeUndefined();
   });
   it('旧字段(muse.prompt / compactAtRatio)被静默丢弃(人格已迁入 agents/muse/ 文件夹)', () => {
     const c = normalizeConfig({ muse: { prompt: 'custom', compactAtRatio: 0.5, enabled: true, modelId: 'm' } });

@@ -19,6 +19,7 @@ import { AmadeusPropertiesPanel } from './amadeusProperties'
 import { openDailyNote } from './amadeusTemplates'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { openNote } from './amadeusNav'
+import { buildTree, type TreeNode } from '@amadeus/lib/pageTree'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
 import { recordNav, useWorkspace } from './engine'
 import type { ViewProps } from './engine'
@@ -27,9 +28,18 @@ import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 si
 import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
 
 const ps = () => usePageStore.getState()
-const baseName = (p: string): string => p.split('/').pop()!.replace(/\.md$/, '')
-const parentOf = (p: string): string => { const a = p.split('/'); a.pop(); return a.join('/') }
+const baseName = (p: string): string => p.split(/[\\/]/).pop()!.replace(/\.md$/, '')
+/** buildTree 把两种分隔符都当分隔并用 '/' 连接文件夹路径;父级计算必须说同一种「方言」,
+ *  否则拖拽守卫/展开集合与树节点路径对不上(Windows 反斜杠路径、含 '\' 的文件名)。 */
+const parentOf = (p: string): string => { const a = p.split(/[\\/]/).filter(Boolean); a.pop(); return a.join('/') }
 const folderName = (p: string): string => p.split('/').pop() || p
+/** 归一化并返回全部祖先前缀(含自身):'a/b/c' → ['a','a/b','a/b/c']。喂给 expanded 集合逐级展开。 */
+const prefixesOf = (p: string): string[] => {
+  const out: string[] = []
+  let acc = ''
+  for (const seg of p.split(/[\\/]/).filter(Boolean)) { acc = acc ? `${acc}/${seg}` : seg; out.push(acc) }
+  return out
+}
 
 /** 把某页改名:renamePage 作用于当前活动页,故先 loadPage 再改名(修复非活动页改名失效)。 */
 async function renameAt(path: string, newName: string): Promise<void> {
@@ -94,7 +104,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
           <span className="t2s-chev">{open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
           <span className="t2s-group-name">{icon}<span className="t2s-group-label">{label}</span><span className="t2s-count">{items.length}</span></span>
         </button>
-        {open && <div className="t2s-group-sessions">{items.map(row)}</div>}
+        {open && <div className="t2s-group-sessions">{items.map((p) => row(p))}</div>}
       </div>
     )
   )
@@ -139,11 +149,11 @@ export function AmadeusPagesView() {
     window.addEventListener('contextmenu', close)
     return () => { window.removeEventListener('click', close); window.removeEventListener('contextmenu', close) }
   }, [menu])
-  // 面包屑定位:展开目标 folder(或 page 的父 folder)→ 滚动到目标行 → 短暂高亮。
+  // 面包屑定位:逐级展开目标 folder(或 page 的父 folder)的所有祖先 → 滚动到目标行 → 短暂高亮。
   useEffect(() => {
     if (!nav) return
     const open = folders.includes(nav.path) ? nav.path : parentOf(nav.path)
-    if (open) setExpanded((prev) => { if (prev.has(open)) return prev; const n = new Set(prev); n.add(open); return n })
+    if (open) setExpanded((prev) => new Set([...prev, ...prefixesOf(open)]))
     setFlash(nav.path)
     const t = setTimeout(() => setFlash(null), 1200)
     return () => clearTimeout(t)
@@ -151,11 +161,7 @@ export function AmadeusPagesView() {
   useEffect(() => { if (flash) flashRef.current?.scrollIntoView({ block: 'nearest' }) }, [flash])
 
   const q = query.trim().toLowerCase()
-  const rootPages = useMemo(() => pages.filter((p) => !p.includes('/')), [pages])
-  const groups = useMemo(
-    () => folders.slice().sort().map((f) => ({ folder: f, items: pages.filter((p) => parentOf(p) === f) })),
-    [folders, pages],
-  )
+  const tree = useMemo(() => buildTree(pages, folders), [pages, folders]) // 嵌套树:文件夹在前、字母序,空文件夹可见
   const matches = useMemo(() => (q ? pages.filter((p) => baseName(p).toLowerCase().includes(q)) : []), [q, pages])
 
   const toggle = (f: string): void => setExpanded((prev) => {
@@ -175,15 +181,20 @@ export function AmadeusPagesView() {
   const startRename = (path: string): void => { setDraft(baseName(path)); setRenaming(path); setMenu(null) }
   const newFolder = (parent: string): void => {
     const name = window.prompt(parent ? `在「${folderName(parent)}」中新建文件夹` : '新建文件夹', '新文件夹')?.trim()
-    if (name) void ps().createFolder(parent, name)
+    if (name) {
+      void ps().createFolder(parent, name)
+      // 展开父链,否则折叠父级下新建的子文件夹看不见(用户会误以为没建成)。
+      setExpanded((prev) => new Set([...prev, ...prefixesOf(parent ? `${parent}/${name}` : name)]))
+    }
     setMenu(null)
   }
 
-  const row = (path: string): ReactNode => (
+  const row = (path: string, depth = 0): ReactNode => (
     <button
       key={path}
       ref={(el) => { if (path === flash) flashRef.current = el }}
       className={`t2s-srow${path === activePage ? ' active' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}`}
+      style={depth > 0 ? { paddingLeft: 18 + depth * 14 } : undefined}
       onClick={(e) => void openNote(path, { newTab: e.metaKey || e.ctrlKey })}
       onContextMenu={(e) => { e.preventDefault(); setMenu({ kind: 'page', path, x: e.clientX, y: e.clientY }) }}
       draggable={renaming !== path}
@@ -216,6 +227,53 @@ export function AmadeusPagesView() {
     </button>
   )
 
+  /** 递归渲染树节点(Obsidian 式嵌套):文件夹头 + 展开的子树,均按 depth 缩进。
+   *  拖拽时无论是否可落都 stopPropagation,防止事件冒泡让祖先文件夹误抢落点。 */
+  const renderNode = (node: TreeNode, depth: number): ReactNode => {
+    if (node.kind === 'file') return row(node.path, depth)
+    const folder = node.path
+    const isCol = !expanded.has(folder)
+    const fileCount = node.children.filter((c) => c.kind === 'file').length
+    const folderDragOver = (e: RDragEvent<HTMLDivElement>): void => {
+      if (!dragPath) return
+      e.stopPropagation()
+      if (parentOf(dragPath) === folder) return // 拖回原文件夹 = 不可落(且不让祖先接手)
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (dragOver !== folder) setDragOver(folder)
+    }
+    return (
+      <div key={folder}>
+        <div
+          ref={(el) => { if (folder === flash) flashRef.current = el }}
+          className={`t2s-group${folder === flash ? ' amx-flash' : ''}${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
+          style={depth > 0 ? { paddingLeft: depth * 14 } : undefined}
+          onDragOver={folderDragOver}
+          onDragLeave={() => { if (dragOver === folder) setDragOver(null) }}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
+        >
+          <button className="t2s-group-toggle" onClick={() => toggle(folder)}>
+            <span className="t2s-chev">{isCol ? <ChevronRight size={12} /> : <ChevronDown size={12} />}</span>
+            <span className="t2s-group-name"><Folder size={12} /><span className="t2s-group-label">{folderName(folder)}</span><span className="t2s-count">{fileCount}</span></span>
+          </button>
+          <button className="t2s-group-add" title="在此文件夹新建笔记" onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(folder)])); void ps().createPageInFolder(folder) }}><Plus size={14} /></button>
+          <button className="t2s-group-add" title="文件夹操作" onClick={(e) => { e.stopPropagation(); setMenu({ kind: 'folder', path: folder, x: e.clientX, y: e.clientY }) }}><MoreHorizontal size={14} /></button>
+        </div>
+        {/* 展开的文件夹内部(含其中的笔记行)也是该文件夹的落点——与文件管理器语义一致。 */}
+        {!isCol && (
+          <div
+            className={`t2s-group-sessions${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
+            onDragOver={folderDragOver}
+            onDragLeave={() => { if (dragOver === folder) setDragOver(null) }}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
+          >
+            {node.children.map((c) => renderNode(c, depth + 1))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
       <aside className="t2s-side">
@@ -242,7 +300,7 @@ export function AmadeusPagesView() {
           }}
         >
           {q ? (
-            matches.length ? matches.map(row) : <div className="t2s-hint">没有匹配的笔记</div>
+            matches.length ? matches.map((p) => row(p)) : <div className="t2s-hint">没有匹配的笔记</div>
           ) : (
             <>
               <div className="t2s-special-group">
@@ -264,52 +322,7 @@ export function AmadeusPagesView() {
 
               {!vaultRoot && <div className="t2s-hint">打开一个 Vault 文件夹开始。</div>}
               <PrefsSections row={row} pages={pages} />
-              {rootPages.map(row)}
-
-              {groups.map(({ folder, items }) => {
-                const isCol = !expanded.has(folder)
-                return (
-                  <div key={folder}>
-                    <div
-                      ref={(el) => { if (folder === flash) flashRef.current = el }}
-                      className={`t2s-group${folder === flash ? ' amx-flash' : ''}${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
-                      onDragOver={(e) => {
-                        if (!dragPath || parentOf(dragPath) === folder) return
-                        e.preventDefault()
-                        e.stopPropagation()
-                        e.dataTransfer.dropEffect = 'move'
-                        if (dragOver !== folder) setDragOver(folder)
-                      }}
-                      onDragLeave={() => { if (dragOver === folder) setDragOver(null) }}
-                      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
-                    >
-                      <button className="t2s-group-toggle" onClick={() => toggle(folder)}>
-                        <span className="t2s-chev">{isCol ? <ChevronRight size={12} /> : <ChevronDown size={12} />}</span>
-                        <span className="t2s-group-name"><Folder size={12} /><span className="t2s-group-label">{folderName(folder)}</span><span className="t2s-count">{items.length}</span></span>
-                      </button>
-                      <button className="t2s-group-add" title="在此文件夹新建笔记" onClick={() => void ps().createPageInFolder(folder)}><Plus size={14} /></button>
-                      <button className="t2s-group-add" title="文件夹操作" onClick={(e) => { e.stopPropagation(); setMenu({ kind: 'folder', path: folder, x: e.clientX, y: e.clientY }) }}><MoreHorizontal size={14} /></button>
-                    </div>
-                    {/* 展开的文件夹内部(含其中的笔记行)也是该文件夹的落点——与文件管理器语义一致。 */}
-                    {!isCol && (
-                      <div
-                        className={`t2s-group-sessions${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
-                        onDragOver={(e) => {
-                          if (!dragPath || parentOf(dragPath) === folder) return
-                          e.preventDefault()
-                          e.stopPropagation()
-                          e.dataTransfer.dropEffect = 'move'
-                          if (dragOver !== folder) setDragOver(folder)
-                        }}
-                        onDragLeave={() => { if (dragOver === folder) setDragOver(null) }}
-                        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
-                      >
-                        {items.map(row)}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+              {tree.children.map((n) => renderNode(n, 0))}
 
               {vaultRoot && <button className="t2s-add-ws" onClick={() => newFolder('')}><FolderPlus size={14} /> 新建文件夹</button>}
             </>
@@ -330,7 +343,7 @@ export function AmadeusPagesView() {
       )}
       {menu?.kind === 'folder' && (
         <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { void ps().createPageInFolder(menu.path); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
+          <button onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(menu.path)])); void ps().createPageInFolder(menu.path); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
           <button onClick={() => newFolder(menu.path)}><FolderPlus size={13} /> 新建子文件夹</button>
           <button onClick={() => { const f = menu.path; setMenu(null); const name = window.prompt('重命名文件夹', folderName(f))?.trim(); if (name) void ps().renameFolder(f, name) }}><Pencil size={13} /> 重命名</button>
           <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>

@@ -14,10 +14,8 @@ import { getRawSection, saveSection } from '../core/config.js';
 export interface HistorianConfig {
   enabled: boolean;
   modelId: string;
-  /** x：每 x 轮（一应一和=1 轮）总结并更新会话标题。 */
-  everyTitleRounds: number;
-  /** y：每 y 轮判断是否更新用户 LOG / memory。 */
-  everyMemoryRounds: number;
+  /** 每 x 轮(一应一和=1 轮)触发一次维护:标题 + LOG/memory 同一节奏(旧的双周期已合一)。 */
+  everyRounds: number;
   /** 首轮（roundN===1）必触发。 */
   firstRoundTrigger: boolean;
   /**
@@ -74,8 +72,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
   historian: {
     enabled: false,
     modelId: '',
-    everyTitleRounds: 3,
-    everyMemoryRounds: 9,
+    everyRounds: 3,
     firstRoundTrigger: true,
     mode: 'independent',
     prompt: '',
@@ -116,8 +113,9 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
     historian: {
       enabled: asBool(h.enabled, d.historian.enabled),
       modelId: asStr(h.modelId, d.historian.modelId),
-      everyTitleRounds: clampInt(h.everyTitleRounds, d.historian.everyTitleRounds, 1, 100),
-      everyMemoryRounds: clampInt(h.everyMemoryRounds, d.historian.everyMemoryRounds, 1, 100),
+      // 周期合一:标题跟随记忆周期。旧配置兼容:优先新键 everyRounds,其次旧 everyTitleRounds
+      // (它是用户感知的「多久维护一次」高频值;旧 everyMemoryRounds 的低频含义已废弃)。
+      everyRounds: clampInt(h.everyRounds ?? h.everyTitleRounds, d.historian.everyRounds, 1, 100),
       firstRoundTrigger: asBool(h.firstRoundTrigger, d.historian.firstRoundTrigger),
       mode: h.mode === 'assist' ? 'assist' : d.historian.mode,
       prompt: asStr(h.prompt, d.historian.prompt),

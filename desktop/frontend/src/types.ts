@@ -57,8 +57,8 @@ export interface SessionRecord {
 export interface HistorianConfig {
   enabled: boolean
   modelId: string
-  everyTitleRounds: number
-  everyMemoryRounds: number
+  /** 每 x 轮触发一次维护(标题 + 日志/记忆同一节奏)。 */
+  everyRounds: number
   firstRoundTrigger: boolean
   /** independent=自己判断并写日志/记忆(默认);assist=分支出后台讨论,由主 Agent 自己定夺并写入(首轮始终 independent)。 */
   mode: 'independent' | 'assist'
