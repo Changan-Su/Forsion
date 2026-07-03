@@ -9,6 +9,7 @@
  * 大脑（记忆/技能/LLM）走云端 brain-api（httpBrain），故需登录或 --cloud-url + --token。
  */
 import { render } from 'ink';
+import { createRequire } from 'node:module';
 import { createTanguModule } from '../index.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
@@ -23,6 +24,15 @@ import { parseTuiConfig, TUI_HELP } from './config.js';
 import { printBanner } from './components/Banner.js';
 import { App } from './app.js';
 import { dispatchPluginCommand, listPlugins, activateAllPlugins } from '../plugins/bootstrap.js';
+
+/** CLI 版本 = 包 package.json(dist/tui/main.js 的 ../../;打包态即 resources/tangu-server/package.json)。 */
+function pkgVersion(): string {
+  try {
+    return String(createRequire(import.meta.url)('../../package.json').version || '');
+  } catch {
+    return '';
+  }
+}
 
 async function main(): Promise<void> {
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseTuiConfig
@@ -136,8 +146,10 @@ async function main(): Promise<void> {
     model: cfg.defaultModelId,
     cwd: cfg.cwd,
     execMode: cfg.execMode,
+    approvalMode: cfg.approvalMode,
     storage,
     providers: providers.map((p) => p.providerId),
+    version: pkgVersion(),
   });
 
   const app = render(<App boot={cfg} storage={storage} />, { exitOnCtrlC: false });
