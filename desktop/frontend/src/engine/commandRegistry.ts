@@ -33,6 +33,10 @@ export const addCommand = (cmd: Command): void => useCommandStore.getState().add
 export const removeCommand = (id: string): void => useCommandStore.getState().removeCommand(id)
 export const openCommandPalette = (): void => useCommandStore.getState().setPaletteOpen(true)
 
+/** shift 按下时 e.key 给的是 '{'/'}'(US 布局),归一为 '['/']' —— 存储格式统一用 bracket,
+ *  'mod+shift+[' 才能直配 Ctrl/⌘+{。 */
+const KEY_ALIAS: Record<string, string> = { '{': '[', '}': ']' }
+
 /** 把 'mod+shift+k' 规范化为与事件比较的 token。 */
 function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
   const parts = hotkey.toLowerCase().split('+').map((p) => p.trim())
@@ -44,7 +48,8 @@ function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
   if (wantMod !== mod) return false
   if (wantShift !== e.shiftKey) return false
   if (wantAlt !== e.altKey) return false
-  return e.key.toLowerCase() === key
+  const k = e.key.toLowerCase()
+  return (KEY_ALIAS[k] ?? k) === key
 }
 
 /**

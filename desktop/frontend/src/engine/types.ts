@@ -16,6 +16,8 @@ export type ViewLocation = 'main' | 'left' | 'right'
 export interface Leaf {
   readonly id: string
   readonly type: string
+  /** 所在区域(主区/左右侧栏),来自 panel 的 __loc。统一工作区等视图按侧自适应。 */
+  readonly loc: ViewLocation
   /** 当前可序列化参数(如 {sessionId})。视图据此从 store 重建。 */
   readonly params: Record<string, unknown>
   setTitle(title: string): void

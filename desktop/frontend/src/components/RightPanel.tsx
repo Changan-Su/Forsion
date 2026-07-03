@@ -107,11 +107,11 @@ function useSelection(orderedPaths: string[]) {
   return { selected, onClick, only, clear }
 }
 
-interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; run: () => void }
-type CtxMenu = { x: number; y: number; items: CtxItem[] } | null
+export interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; run: () => void }
+export type CtxMenu = { x: number; y: number; items: CtxItem[] } | null
 
 /** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。 */
-const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void }> = ({ menu, onClose }) => {
+export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void }> = ({ menu, onClose }) => {
   useEffect(() => {
     const close = () => onClose()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -144,7 +144,7 @@ const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void }>
 }
 
 /** 右键坐标钳进视口(估算菜单尺寸,避免溢出右/下边)。 */
-const menuPos = (e: React.MouseEvent, count: number) => ({
+export const menuPos = (e: React.MouseEvent, count: number) => ({
   x: Math.min(e.clientX, window.innerWidth - 200),
   y: Math.min(e.clientY, window.innerHeight - 16 - count * 32),
 })
@@ -207,10 +207,11 @@ const HostFilesTab: React.FC<{
     if (en.isDir || !window.tangu?.readHostFile) return
     onOpenPreview({
       name: en.name,
+      path: en.path, // 本机路径 → 预览标签页可随布局持久化(见 views/wsFileNav)
       load: async () => {
         const r = await window.tangu!.readHostFile!(en.path)
         if (r.tooLarge) return { tooLarge: true as const, size: r.size }
-        return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
+        return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size, mtimeMs: r.mtimeMs }
       },
       download: () => { void window.tangu?.revealHostPath?.(en.path) },
     })

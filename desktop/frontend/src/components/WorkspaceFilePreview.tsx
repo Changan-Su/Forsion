@@ -23,35 +23,37 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 
 const CodeView = lazy(() => import('./CodeView'))
 
-export interface PreviewData { mimeType: string; bytes: Uint8Array; size: number }
-/** name=显示名(文件名/相对路径);load=拉取字节(或超限);download=可选下载。 */
+export interface PreviewData { mimeType: string; bytes: Uint8Array; size: number; mtimeMs?: number }
+/** name=显示名(文件名/相对路径);load=拉取字节(或超限);download=可选下载;
+ *  path=本机绝对路径(有则预览可持久化为标签页、可系统打开;云沙箱/内联无)。 */
 export interface PreviewTarget {
   name: string
+  path?: string
   load: () => Promise<PreviewData | { tooLarge: true; size: number } | null>
   download?: () => void
 }
 
-type ImgView = { s: number; x: number; y: number }
+export type ImgView = { s: number; x: number; y: number }
 
-const TEXT_KINDS = new Set<PreviewKind>(['html', 'code', 'markdown', 'csv', 'json', 'text', 'diff'])
-const BLOB_KINDS = new Set<PreviewKind>(['image', 'video', 'audio']) // pdf 走 pdf.js,不需 blobUrl
-const CSV_ROW_CAP = 500
+export const TEXT_KINDS = new Set<PreviewKind>(['html', 'code', 'markdown', 'csv', 'json', 'text', 'diff'])
+export const BLOB_KINDS = new Set<PreviewKind>(['image', 'video', 'audio']) // pdf 走 pdf.js,不需 blobUrl
+export const CSV_ROW_CAP = 500
 const SPRING = { type: 'spring' as const, stiffness: 300, damping: 26, mass: 0.9 }
 const clampScale = (s: number) => Math.min(8, Math.max(0.1, s))
 
-const Spinner = () => <div className="wsfile-center"><Loader2 size={20} className="spin" /></div>
+export const Spinner = () => <div className="wsfile-center"><Loader2 size={20} className="spin" /></div>
 
 /** 解码 XML 实体(pptx 文本提取用);&amp; 最后解,避免二次解码。 */
-function unescapeXml(s: string): string {
+export function unescapeXml(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
 }
 
 /** 懒加载的 CodeMirror 视图(代码 / JSON / 文本 / md·html 源码)。 */
-const cm = (props: { value: string; fileName?: string; language?: string; wrap?: boolean }) => (
+export const cm = (props: { value: string; fileName?: string; language?: string; wrap?: boolean }) => (
   <div className="wsfile-cmwrap"><Suspense fallback={<Spinner />}><CodeView {...props} /></Suspense></div>
 )
 
-const OfficeFail: React.FC<{ t: (k: string, v?: Record<string, unknown>) => string; download?: () => void }> = ({ t, download }) => (
+export const OfficeFail: React.FC<{ t: (k: string, v?: Record<string, unknown>) => string; download?: () => void }> = ({ t, download }) => (
   <div className="wsfile-center wsfile-fallback">
     <FileWarning size={26} />
     <div>{t('preview.loadFailed')}</div>
@@ -60,7 +62,7 @@ const OfficeFail: React.FC<{ t: (k: string, v?: Record<string, unknown>) => stri
 )
 
 // ── 图片缩放/平移(滚轮以光标为中心、拖拽平移、双击复位)──────────────────────────
-const ImageView: React.FC<{ src: string; alt: string; view: ImgView; setView: React.Dispatch<React.SetStateAction<ImgView>> }> = ({ src, alt, view, setView }) => {
+export const ImageView: React.FC<{ src: string; alt: string; view: ImgView; setView: React.Dispatch<React.SetStateAction<ImgView>> }> = ({ src, alt, view, setView }) => {
   const drag = useRef<{ x: number; y: number; sx: number; sy: number } | null>(null)
   return (
     <div
@@ -83,7 +85,7 @@ const ImageView: React.FC<{ src: string; alt: string; view: ImgView; setView: Re
 }
 
 // ── docx → docx-preview(真实 OOXML 版式;库直接操作 DOM)──────────────────────────
-const DocxView: React.FC<{ bytes: Uint8Array; download?: () => void }> = ({ bytes, download }) => {
+export const DocxView: React.FC<{ bytes: Uint8Array; download?: () => void }> = ({ bytes, download }) => {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [err, setErr] = useState(false)
@@ -107,7 +109,7 @@ const DocxView: React.FC<{ bytes: Uint8Array; download?: () => void }> = ({ byte
 }
 
 // ── diff → diff2html(并排/逐行;暗色加 d2h-dark-color-scheme)─────────────────────
-const DiffView: React.FC<{ text: string; side: boolean; download?: () => void }> = ({ text, side, download }) => {
+export const DiffView: React.FC<{ text: string; side: boolean; download?: () => void }> = ({ text, side, download }) => {
   const { t } = useI18n()
   const dark = useIsDark()
   const [html, setHtml] = useState<string | null>(null)
@@ -131,7 +133,7 @@ const DiffView: React.FC<{ text: string; side: boolean; download?: () => void }>
 
 // ── PDF → pdf.js 渲染到 canvas(渲染器侧,不依赖 Electron PDF 插件 / file:// / blob)──
 const MAX_PDF_PAGES = 100
-const PdfView: React.FC<{ bytes: Uint8Array; download?: () => void }> = ({ bytes, download }) => {
+export const PdfView: React.FC<{ bytes: Uint8Array; download?: () => void }> = ({ bytes, download }) => {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [err, setErr] = useState(false)
@@ -175,6 +177,26 @@ const PdfView: React.FC<{ bytes: Uint8Array; download?: () => void }> = ({ bytes
       {more && <div className="panel-note">{t('preview.pdfPages', { n: String(more.shown), total: String(more.total) })}</div>}
     </div>
   )
+}
+
+// ── xlsx / pptx 解析(懒加载重库;浮层与标签页预览共用)──────────────────────────
+export type OfficeRender = { kind: 'xlsx'; sheets: { name: string; html: string }[] } | { kind: 'pptx'; slides: string[] }
+export async function loadOffice(bytes: Uint8Array, kind: 'xlsx' | 'pptx'): Promise<OfficeRender> {
+  if (kind === 'xlsx') {
+    const x: any = await import('xlsx'); const XLSX = x.read ? x : x.default
+    const wb = XLSX.read(bytes, { type: 'array' })
+    return { kind: 'xlsx', sheets: wb.SheetNames.map((name: string) => ({ name, html: XLSX.utils.sheet_to_html(wb.Sheets[name]) })) }
+  }
+  const j: any = await import('jszip'); const JSZip = j.loadAsync ? j : (j.default ?? j)
+  const zip = await JSZip.loadAsync(bytes)
+  const order = (p: string): number => parseInt(p.match(/(\d+)\.xml$/)?.[1] || '0', 10)
+  const files = Object.keys(zip.files).filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p)).sort((a, b) => order(a) - order(b))
+  const slides: string[] = []
+  for (const p of files) {
+    const xml: string = await zip.files[p].async('text')
+    slides.push([...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((mm) => unescapeXml(mm[1])).join('\n'))
+  }
+  return { kind: 'pptx', slides }
 }
 
 export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: () => void }> = ({ target, onClose }) => {
@@ -231,7 +253,6 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
   )
 
   // xlsx / pptx 懒加载(docx 走独立 DocxView)。
-  type OfficeRender = { kind: 'xlsx'; sheets: { name: string; html: string }[] } | { kind: 'pptx'; slides: string[] }
   const [office, setOffice] = useState<OfficeRender | null>(null)
   const [officeErr, setOfficeErr] = useState(false)
   const [sheetIdx, setSheetIdx] = useState(0)
@@ -239,28 +260,9 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
     if (!data || (kind !== 'xlsx' && kind !== 'pptx')) { setOffice(null); setOfficeErr(false); return }
     let cancelled = false
     setOffice(null); setOfficeErr(false); setSheetIdx(0)
-    void (async () => {
-      try {
-        const bytes = data.bytes
-        if (kind === 'xlsx') {
-          const x: any = await import('xlsx'); const XLSX = x.read ? x : x.default
-          const wb = XLSX.read(bytes, { type: 'array' })
-          const sheets = wb.SheetNames.map((name: string) => ({ name, html: XLSX.utils.sheet_to_html(wb.Sheets[name]) }))
-          if (!cancelled) setOffice({ kind: 'xlsx', sheets })
-        } else {
-          const j: any = await import('jszip'); const JSZip = j.loadAsync ? j : (j.default ?? j)
-          const zip = await JSZip.loadAsync(bytes)
-          const order = (p: string): number => parseInt(p.match(/(\d+)\.xml$/)?.[1] || '0', 10)
-          const files = Object.keys(zip.files).filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p)).sort((a, b) => order(a) - order(b))
-          const slides: string[] = []
-          for (const p of files) {
-            const xml: string = await zip.files[p].async('text')
-            slides.push([...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((mm) => unescapeXml(mm[1])).join('\n'))
-          }
-          if (!cancelled) setOffice({ kind: 'pptx', slides })
-        }
-      } catch { if (!cancelled) setOfficeErr(true) }
-    })()
+    loadOffice(data.bytes, kind)
+      .then((r) => { if (!cancelled) setOffice(r) })
+      .catch(() => { if (!cancelled) setOfficeErr(true) })
     return () => { cancelled = true }
   }, [data, kind])
 
@@ -358,7 +360,7 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
       transition={SPRING}
       style={{ transformOrigin: 'bottom center' }}
     >
-      <div className={`wsfile-panel${expanded ? ' expanded' : ''}`}>
+      <div className={`wsfile-panel${expanded ? ' expanded' : ''}${kind === 'html' && docView === 'preview' && ready ? ' fill' : ''}`}>
         <div className="wsfile-head">
           <Icon size={14} className="wsfile-head-icon" />
           <div className="wsfile-title" title={target.name}>

@@ -49,6 +49,19 @@ export const syncNow = (cfg: TanguDesktopConfig) =>
 export const getSyncStatus = (cfg: TanguDesktopConfig) =>
   request<SyncStatusResult>(cfg, '/agent/sync/status')
 
+// ── 百炼音色管理(声音复刻/声音设计;后端代理免 CORS,key 只在请求中过境)──
+export type TtsVoiceKind = 'clone' | 'design' | 'cosy' // clone=qwen复刻 design=qwen设计 cosy=CosyVoice复刻
+export interface TtsVoiceInfo { voice: string; kind: TtsVoiceKind; targetModel?: string }
+export const listTtsVoices = (cfg: TanguDesktopConfig, body: { baseUrl: string; apiKey: string }) =>
+  request<{ voices: TtsVoiceInfo[] }>(cfg, '/agent/tts/voices/list', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.voices)
+// engine 缺省 qwen(audioData=base64);engine='cosy' 走 CosyVoice 复刻(audioUrl=公网 URL,百炼不收 base64)。
+export const cloneTtsVoice = (cfg: TanguDesktopConfig, body: { baseUrl: string; apiKey: string; name: string; engine?: 'qwen' | 'cosy'; audioData?: string; audioUrl?: string; targetModel?: string }) =>
+  request<{ voice: string; targetModel: string }>(cfg, '/agent/tts/voices/clone', { method: 'POST', body: JSON.stringify(body) })
+export const designTtsVoice = (cfg: TanguDesktopConfig, body: { baseUrl: string; apiKey: string; name: string; voicePrompt: string; previewText?: string; targetModel?: string }) =>
+  request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(cfg, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
+export const deleteTtsVoice = (cfg: TanguDesktopConfig, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
+  request<{ ok: boolean }>(cfg, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
+
 // ── 会话 ──
 export const listSessions = (cfg: TanguDesktopConfig, archived = false) =>
   request<{ sessions: SessionRecord[] }>(cfg, `/agent/sessions?archived=${archived}`).then((r) => r.sessions)
@@ -408,6 +421,22 @@ export const injectMuseTodos = (cfg: TanguDesktopConfig, todoIds: string[], sess
 
 export const getMuseStatus = (cfg: TanguDesktopConfig) =>
   request<{ status: MuseStatusInfo }>(cfg, '/agent/special/muse/status').then((r) => r.status)
+
+// ── Lifecycle Hooks（本地后端；host-only shell 回调）──
+export type HookDiscovered = {
+  key: string; matcher: string; command: string; commandWindows: string; timeout: number;
+  statusMessage: string; source: string; trust: 'trusted' | 'needs-review' | 'managed'; enabled: boolean; active: boolean
+}
+export type HooksData = { events: Record<string, any>; discovered: Record<string, HookDiscovered[]>; eventNames: string[] }
+
+export const getHooks = (cfg: TanguDesktopConfig) =>
+  request<HooksData>(cfg, '/agent/hooks')
+export const saveHooks = (cfg: TanguDesktopConfig, events: Record<string, any>) =>
+  request<Pick<HooksData, 'events' | 'discovered'>>(cfg, '/agent/hooks', { method: 'PUT', body: JSON.stringify({ events }) })
+export const trustHookReq = (cfg: TanguDesktopConfig, key: string) =>
+  request<{ discovered: Record<string, HookDiscovered[]> }>(cfg, '/agent/hooks/trust', { method: 'POST', body: JSON.stringify({ key }) })
+export const enableHookReq = (cfg: TanguDesktopConfig, key: string, enabled: boolean) =>
+  request<{ discovered: Record<string, HookDiscovered[]> }>(cfg, '/agent/hooks/enable', { method: 'POST', body: JSON.stringify({ key, enabled }) })
 
 // ── 记忆 / 日志 ──
 export const getMemory = (cfg: TanguDesktopConfig) =>

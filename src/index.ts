@@ -23,8 +23,10 @@ import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import pluginsRouter from './routes/plugins.js';
 import specialRouter from './routes/special.js';
+import hooksRouter from './routes/hooks.js';
 import wechatRouter from './routes/wechat.js';
 import inboxRouter from './routes/inbox.js';
+import ttsRouter from './routes/tts.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { failStaleRuns } from './services/runStore.js';
@@ -83,8 +85,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(agentsRouter);
   dataRouter.use(pluginsRouter);
   dataRouter.use(specialRouter);
+  dataRouter.use(hooksRouter);
   dataRouter.use(wechatRouter);
   dataRouter.use(inboxRouter);
+  dataRouter.use(ttsRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean }): void => {
     // 进程重启自愈:遗留 running 标 failed → 重新入队仍在飞的 run(顺序不可颠倒)。

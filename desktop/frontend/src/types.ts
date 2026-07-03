@@ -220,7 +220,7 @@ export interface ModelInfo {
 
 export interface ModelsResponse {
   models: ModelInfo[]
-  directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[] }>
+  directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[] }>
   defaultModelId: string | null
   /** 云端托管面诊断:empty=可达但 admin 没配模型;error=不可达/未授权/未部署 brain-api。 */
   forsion?: { status: 'ok' | 'empty' | 'error'; detail: string | null }
@@ -234,6 +234,8 @@ export interface DirectProviderConfig {
   modelIds?: string[]
   /** 该 provider 的生图模型 id(OpenAI 兼容 /images/generations;generate_image 用)。 */
   imageModelIds?: string[]
+  /** 该 provider 的语音合成模型 id(OpenAI 兼容 /audio/speech;朗读用)。 */
+  ttsModelIds?: string[]
 }
 
 export interface SkillInfo {
@@ -456,6 +458,14 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   notesDailyFolder?: string
   /** 收件箱新消息系统通知(undefined 视为 true=默认开;ribbon/dock 角标不受此控)。 */
   inboxNotifyEnabled?: boolean
+  /** 朗读(TTS)模型 id(<providerId>/<model> 或某 provider ttsModelIds 命中);空/缺省=未启用,不显示朗读按钮。 */
+  ttsModelId?: string
+  /** 朗读音色 id(provider 特定);空=provider 默认。 */
+  ttsVoice?: string
+  /** 朗读语速 0.5–2(缺省 1)。 */
+  ttsSpeed?: number
+  /** 新回复完成后自动朗读(仅当前活跃会话)。 */
+  ttsAutoSpeak?: boolean
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string
@@ -509,7 +519,11 @@ declare global {
       getPathForFile?(file: File): string
       /** 本机工作区文件浏览(host cwd)。 */
       listDir?(dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number; path: string }>>
-      readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; tooLarge?: boolean }>
+      readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
+      /** 用系统默认应用打开(预览不支持的类型)。 */
+      openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
+      /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
+      writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */
       renameHostPath?(oldPath: string, newName: string): Promise<{ path: string }>
       mkdirHost?(parentDir: string, name: string): Promise<{ path: string }>

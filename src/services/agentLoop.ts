@@ -10,6 +10,7 @@ import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { publish, drain, cleanup } from './eventBus.js';
 import { gateToolCall, requestApproval, type ApprovalDecision } from './approvals.js';
+import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, readUserMd } from '../core/tanguHome.js';
@@ -398,6 +399,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // custom/MCP 工具整体跳过;run 级冻结——批准退出后下一轮 run 才拿到完整工具集。
   const planMode = !!agentConfig.planMode && profile.capabilities.hostExec;
 
+  // —— Lifecycle Hooks 派发上下文（host-only；云端因 hostExec:false 在 runHooks 顶部即空判定，绝不 spawn）——
+  const hookCtx = (): HookRunContext => ({ profile, execMode, cwd, sessionId, runId, agentSlug: activeAgentSlug, signal: ac.signal });
+  const hookParseArgs = (s: string): any => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
+  /** 把 hook 的 additionalContext / systemMessage 拼成一段可注入文本（无则空串）。 */
+  const hookContextText = (v: HookVerdict): string =>
+    [...v.additionalContext, ...v.systemMessages.map((m) => `⚠ ${m}`)].join('\n\n').trim();
+
   // 会话级沙箱：工作区/容器/kernel 按 (user, session) 跨消息常驻（懒 hydrate、空闲 TTL 回收）。
   // 文件工具与 run_python 都在本地操作（首次触发懒 hydrate），run 末按 sha256 diff 选择性回写 Penzor，
   // 沙箱保持温——避免每条消息全量 hydrate/snapshot 打远程 OSS（cn-beijing 单次往返 ~1-2s）。
@@ -591,6 +599,31 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       } catch (e) { console.warn(`[agent-core] plugin ${p.id} promptSection failed:`, e); }
     }
 
+    // —— SessionStart / UserPromptSubmit hooks：把 additionalContext 注入系统提示（host-only；云端 no-op）——
+    // 首轮(history 无助手消息)视作 SessionStart；每个 run(=一次用户提交)都触发 UserPromptSubmit（否决在 routes/runs.ts）。
+    {
+      const lastUserMsg = [...history].reverse().find((m) => m.role === 'user');
+      const promptText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+      if (!history.some((m) => m.role === 'assistant')) {
+        const sv = await runHooks('SessionStart', { source: 'startup', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
+        const t = hookContextText(sv);
+        if (t) systemParts.push(t);
+      }
+      const uv = await runHooks('UserPromptSubmit', { prompt: promptText, session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
+      if (uv.block) {
+        // 否决本次提交：不跑模型，直接以 hook 原因收尾（同一次触发即含否决+注入，避免在路由层重复触发同一 hook）。
+        const reason = `⛔ Hook 拦截了本次提交：${uv.blockReason || 'UserPromptSubmit hook 阻止'}`;
+        await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, reason, '', [], [], []);
+        await drain(runId);
+        await publish(runId, 'done', { content: reason });
+        await updateRunStatus(runId, 'done', { result: { content: reason } });
+        void onUserRunDone(sessionId, userId, memScopeSlug);
+        return;
+      }
+      const ut = hookContextText(uv);
+      if (ut) systemParts.push(ut);
+    }
+
     // 计划模式指引(追加在最后,不动既有段落的字节序;planMode 是 run 级配置,同 run 内稳定)。
     if (planMode) {
       systemParts.push(
@@ -769,6 +802,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const line = text.split('\n').find((l) => /(?:saved|wrote|path|文件|输出).*\/[^ \n]+/i.test(l));
       return line?.match(/(\/[^\s"'<>]+)/)?.[1];
     };
+    // 拒绝/拦截时的统一工具结果（用户审批 reject 与 PreToolUse hook block 共用）。
+    const mkRejected = async (call: ToolCall, startedAt: number, parallelGroup: string | undefined, msg: string): Promise<ExecutedToolCall> => {
+      const elapsedMs = Date.now() - startedAt;
+      await publish(runId, 'tool_result', {
+        id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup,
+      });
+      return {
+        toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
+        toolMessage: { role: 'tool', content: msg, tool_call_id: call.id } as ChatMessage,
+      };
+    };
     const executeOneToolCall = async (call: ToolCall, parallelGroup?: string): Promise<ExecutedToolCall> => {
       if (ac.signal.aborted) throw new AbortLikeError();
       const startedAt = Date.now();
@@ -781,31 +825,31 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       };
       await publish(runId, 'tool_call', basePayload);
 
+      // —— PreToolUse hook：拦截 / 改写参数 / 注入上下文（host-only；云端在 runHooks 顶部即空判定）——
+      const preV = await runHooks('PreToolUse', {
+        tool_name: call.function.name, tool_input: hookParseArgs(call.function.arguments),
+        session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug,
+      }, hookCtx());
+      if (ac.signal.aborted) throw new AbortLikeError();
+      if (preV.block) {
+        return mkRejected(call, startedAt, parallelGroup, `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`);
+      }
+      // hook 改写参数 → 用改写后的 call 走审批与执行（审批基于改写后的内容，更安全）。
+      const effCall = preV.updatedInput
+        ? { ...call, function: { ...call.function, arguments: JSON.stringify(preV.updatedInput) } }
+        : call;
+      const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
+
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
-      const decision = await gateToolCall(runId, call, { sessionId, execMode, approvalMode, cwd }, ac.signal);
+      const decision = await gateToolCall(runId, effCall, { sessionId, execMode, approvalMode, cwd, profile }, ac.signal);
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'reject') {
-        const rejected = '用户拒绝了该操作。';
-        const elapsedMs = Date.now() - startedAt;
-        await publish(runId, 'tool_result', {
-          id: call.id,
-          name: call.function.name,
-          result: rejected,
-          isError: true,
-          startedAt,
-          elapsedMs,
-          outputChars: rejected.length,
-          parallelGroup,
-        });
-        return {
-          toolResult: { tool_call_id: call.id, name: call.function.name, content: rejected, isError: true, startedAt, elapsedMs, outputChars: rejected.length, parallelGroup },
-          toolMessage: { role: 'tool', content: rejected, tool_call_id: call.id } as ChatMessage,
-        };
+        return mkRejected(call, startedAt, parallelGroup, '用户拒绝了该操作。');
       }
       // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
       const execCall = decision.argsOverride
-        ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } }
-        : call;
+        ? { ...effCall, function: { ...effCall.function, arguments: JSON.stringify(decision.argsOverride) } }
+        : effCall;
       const result = await executeTool(execCall, toolCtx);
       // 入列硬帽(写入即定型,append-only):各工具自有更小的帽,这里兜未封顶路径
       // (host list_dir 大目录、custom provider 等),保证单条结果不可能把上下文炸穿。
@@ -825,6 +869,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         metadata: result.metadata,
       };
       await publish(runId, 'tool_result', payload);
+
+      // —— PostToolUse hook：跑格式化/lint/审计、把反馈或上下文喂回模型（host-only；云端 no-op）——
+      const postV = await runHooks('PostToolUse', {
+        tool_name: result.name, tool_input: hookParseArgs(execCall.function.arguments),
+        tool_response: capped, is_error: result.isError,
+        session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug,
+      }, hookCtx());
+      // Pre/Post 注入上下文 + PostToolUse block 反馈 → 追加到本工具结果消息尾部
+      // （追加进 tool 消息本身，保持 tool 消息与 assistant tool_calls 的相邻性，不破坏消息序）。
+      const hookExtra = [
+        preCtxText,
+        hookContextText(postV),
+        postV.block ? `⛔ Hook 反馈：${postV.blockReason || 'PostToolUse hook 阻止'}` : '',
+      ].filter(Boolean).join('\n\n');
+      const toolMsgContent = hookExtra ? `${capped}\n\n${hookExtra}` : capped;
       return {
         toolResult: {
           tool_call_id: call.id,
@@ -838,7 +897,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           artifactPath,
           metadata: result.metadata,
         },
-        toolMessage: { role: 'tool', content: capped, tool_call_id: call.id } as ChatMessage,
+        toolMessage: { role: 'tool', content: toolMsgContent, tool_call_id: call.id } as ChatMessage,
       };
     };
     const executeToolCallsInOrder = async (calls: ToolCall[]): Promise<any[]> => {
@@ -907,7 +966,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       //     run 的内存数组按摘要折叠(立刻把本轮压下去)。总结失败则退回机械折叠。
       //   ≥50%(COMPACT_TRIGGER_RATIO):机械批量折叠中段(运行内、不落库),缓存 miss 摊薄成偶发。
       const estPrompt = lastRealPromptTokens || estimateMessagesTokens(workingMessages);
-      if (modelId && estPrompt > CONTEXT_WINDOW_TOKENS * FORCE_COMPACT_RATIO) {
+      // —— PreCompact hook：压缩将触发时先问 hook（continue:false → 跳过本次压缩；host-only，云端 no-op）——
+      let skipCompact = false;
+      if (modelId && estPrompt > CONTEXT_WINDOW_TOKENS * COMPACT_TRIGGER_RATIO) {
+        const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
+        skipCompact = !!pcV.stop;
+      }
+      if (!skipCompact && modelId && estPrompt > CONTEXT_WINDOW_TOKENS * FORCE_COMPACT_RATIO) {
         void publish(runId, 'status', { phase: 'compacting', forced: true, iteration });
         const cr = await compactSession(sessionId, modelId);
         if (cr.ok && cr.summary) {
@@ -1045,6 +1110,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           await applySteering(steeredAtFinish);
           continue;
         }
+        // —— Stop hook：run 自然收尾即触发（host-only；云端 no-op）。decision:block+reason → 复用 steer 机制
+        //    强制续跑（非末轮），否则纯 side-effect（通知/webhook/日志）。——
+        const stopV = await runHooks('Stop', {
+          session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: 'end_turn',
+        }, hookCtx());
+        if (stopV.block && stopV.blockReason && !lastIter) {
+          if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+          await applySteering([{ id: uuidv4(), content: stopV.blockReason }]);
+          continue;
+        }
         if (!finalContent.trim() && !finalReasoning.trim()) {
           finalContent = looksLikeToolCallText(res.content)
             ? '(本轮达到最大工具调用次数或工具调用格式异常,已停止。发送"继续"可让我接着操作。)'
@@ -1131,6 +1206,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
     await publish(runId, 'error', { error: msg, aborted, content: finalContent }).catch(() => {});
+    // —— Stop hook：失败/中止路径也触发（host-only；纯 side-effect 通知，不影响错误处理，无续跑）。——
+    void runHooks('Stop', {
+      session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: aborted ? 'aborted' : 'error',
+    }, hookCtx()).catch(() => {});
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {

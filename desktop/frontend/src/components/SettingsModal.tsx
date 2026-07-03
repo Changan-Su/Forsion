@@ -3,7 +3,7 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useState } from 'react'
-import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, RotateCcw, LogIn, LogOut, ExternalLink, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Globe2, QrCode, Smartphone, FolderOpen } from 'lucide-react'
+import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, RotateCcw, LogIn, LogOut, ExternalLink, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Globe2, QrCode, Smartphone, FolderOpen, Play } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { listLanguages, listSkins } from '../theme/registry'
 import { applyTheme } from '../theme/loader'
@@ -28,17 +28,29 @@ import { CHANGELOG } from '../changelog'
 import { Markdown } from './Markdown'
 import { ModelGroupList } from './ModelGroupList'
 import { AgentsSettings } from './AgentsSettings'
+import { TtsVoiceStudio } from './TtsVoiceStudio'
+import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
+import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
 import { QrImage } from './QrImage'
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'skills' | 'agents' | 'plugins' | 'agent-clis' | 'browser' | 'wechat' | 'notes' | 'theme' | 'shortcuts' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'agent-clis' | 'browser' | 'wechat' | 'notes' | 'theme' | 'shortcuts' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Obsidian 式一级入口)。
 export type Tab = StaticTab | `plugin:${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+
+// 系统音色候选(datalist 可输可选;百炼无音色列表 API,静态维护常用项;全量见百炼「Qwen-TTS 音色列表」文档)。
+const TTS_VOICE_SUGGESTIONS: Array<[string, string]> = [
+  ['Cherry', '百炼 芊悦(女)'], ['Serena', '百炼 苏瑶(女)'], ['Ethan', '百炼 晨煦(男)'], ['Chelsie', '百炼 千雪(女)'],
+  ['Nofish', '百炼(男·不会翘舌)'], ['Jennifer', '百炼(英语女)'], ['Ryan', '百炼(英语男)'], ['Katerina', '百炼(俄语女)'],
+  ['Dylan', '百炼 北京话'], ['Jada', '百炼 上海话'], ['Sunny', '百炼 四川话'], ['Rocky', '百炼 粤语'],
+  ['Kiki', '百炼 粤语(女)'], ['Marcus', '百炼 陕西话'], ['Roy', '百炼 闽南语'], ['Peter', '百炼 天津话'],
+  ['alloy', 'OpenAI'], ['echo', 'OpenAI'], ['fable', 'OpenAI'], ['onyx', 'OpenAI'], ['nova', 'OpenAI'], ['shimmer', 'OpenAI'],
+]
 
 const ECO_LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -129,7 +141,11 @@ export const SettingsModal: React.FC<{
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   // 直连 provider 配置(~/.tangu/providers.json)
   const [customProviders, setCustomProviders] = useState<DirectProviderConfig[]>([])
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { modelsCsv: string; imageModelsCsv: string }) | null>(null)
+  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { modelsCsv: string; imageModelsCsv: string; ttsModelsCsv: string }) | null>(null)
+  // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
+  const [ttsSpeedText, setTtsSpeedText] = useState<string | null>(null)
+  const [ttsTesting, setTtsTesting] = useState(false)
+  const [ttsTestMsg, setTtsTestMsg] = useState('')
   const [providerTestMsg, setProviderTestMsg] = useState('')
   const [providerTesting, setProviderTesting] = useState(false)
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
@@ -584,7 +600,7 @@ export const SettingsModal: React.FC<{
     ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
     // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop ? ([['mcp', 'MCP'], ['wechat', t('settings.tab.wechat')], ['browser', t('settings.tab.browser')], ['plugins', t('settings.tab.plugins')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['mcp', 'MCP'], ['hooks', 'Hooks'], ['wechat', t('settings.tab.wechat')], ['browser', t('settings.tab.browser')], ['plugins', t('settings.tab.plugins')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
     ['shortcuts', t('settings.tab.shortcuts')],
@@ -599,7 +615,7 @@ export const SettingsModal: React.FC<{
   // 分类导航(4 大类):选项 / AI / 核心插件 / 社区插件。每类只渲染 tabItems 里实际存在的项(沿用 desktop/devMode 过滤)。
   const navGroups: Array<{ key: string; label: string; tabs: Tab[] }> = [
     { key: 'options', label: t('settings.group.options'), tabs: ['general', 'theme', 'shortcuts', 'advanced', 'developer', 'about'] },
-    { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp'] },
+    { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks'] },
     { key: 'core', label: t('settings.group.corePlugins'), tabs: ['wechat', 'browser', 'notes'] },
     { key: 'community', label: t('settings.group.communityPlugins'), tabs: ['plugins'] },
   ]
@@ -1135,7 +1151,7 @@ export const SettingsModal: React.FC<{
                                 className="icon-btn"
                                 title={t('settings.btn.edit')}
                                 onClick={() => {
-                                  setEditProvider({ ...cp, modelsCsv: (cp.modelIds || []).join(', '), imageModelsCsv: (cp.imageModelIds || []).join(', ') })
+                                  setEditProvider({ ...cp, modelsCsv: (cp.modelIds || []).join(', '), imageModelsCsv: (cp.imageModelIds || []).join(', '), ttsModelsCsv: (cp.ttsModelIds || []).join(', ') })
                                   setProviderTestMsg('')
                                   setProviderSaveMsg('')
                                   setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
@@ -1164,7 +1180,7 @@ export const SettingsModal: React.FC<{
                         <button
                           className="btn ghost sm"
                           onClick={() => {
-                            setEditProvider({ providerId: '', baseUrl: '', apiKey: '', modelIds: [], modelsCsv: '', imageModelsCsv: '' })
+                            setEditProvider({ providerId: '', baseUrl: '', apiKey: '', modelIds: [], modelsCsv: '', imageModelsCsv: '', ttsModelsCsv: '' })
                             setProviderTestMsg('')
                             setProviderSaveMsg('')
                             setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
@@ -1228,6 +1244,15 @@ export const SettingsModal: React.FC<{
                               placeholder={t('settings.customProvider.imageModelsPlaceholder')}
                             />
                           </div>
+                          <div className="field">
+                            <label>{t('settings.customProvider.ttsModelsLabel')}</label>
+                            <input
+                              type="text"
+                              value={editProvider.ttsModelsCsv}
+                              onChange={(e) => setEditProvider({ ...editProvider, ttsModelsCsv: e.target.value })}
+                              placeholder={t('settings.customProvider.ttsModelsPlaceholder')}
+                            />
+                          </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <button
@@ -1276,12 +1301,14 @@ export const SettingsModal: React.FC<{
                             onClick={() => {
                               const modelIds = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
                               const imageModelIds = editProvider.imageModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
+                              const ttsModelIds = editProvider.ttsModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
                               void window.tangu!.saveProvider!({
                                 providerId: editProvider.providerId,
                                 baseUrl: editProvider.baseUrl.replace(/\/+$/, ''),
                                 apiKey: editProvider.apiKey || undefined,
                                 modelIds: modelIds.length ? modelIds : undefined,
                                 imageModelIds: imageModelIds.length ? imageModelIds : undefined,
+                                ttsModelIds: ttsModelIds.length ? ttsModelIds : undefined,
                               }).then((list) => {
                                 setCustomProviders(list)
                                 setEditProvider(null)
@@ -1343,6 +1370,98 @@ export const SettingsModal: React.FC<{
                       <div className="hint" style={{ marginTop: 10 }}>
                         {t('settings.customProvider.externalWarning')}
                       </div>
+                    )}
+
+                    {/* 语音朗读(TTS):OpenAI 兼容 /audio/speech;模型 id 命中直连 provider 的 ttsModelIds 或 <providerId>/<model>。 */}
+                    {stored && (
+                      <>
+                        <div className="panel-section-title" style={{ marginTop: 8, padding: '12px 0 6px', borderTop: 'var(--border-width) solid var(--border)' }}>
+                          {t('settings.tts.sectionTitle')}
+                        </div>
+                        <div className="field">
+                          <label>{t('settings.tts.model')}</label>
+                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
+                          <input
+                            type="text"
+                            value={stored.ttsModelId ?? ''}
+                            onChange={(e) => setStored({ ...stored, ttsModelId: e.target.value })}
+                            onBlur={() => void window.tangu!.setConfig({ ttsModelId: (stored.ttsModelId || '').trim() }).then(setStored)}
+                            placeholder={t('settings.tts.modelPlaceholder')}
+                          />
+                        </div>
+                        <div className="field">
+                          <label>{t('settings.tts.voice')}</label>
+                          <input
+                            type="text"
+                            list="tts-voice-options"
+                            value={stored.ttsVoice ?? ''}
+                            onChange={(e) => setStored({ ...stored, ttsVoice: e.target.value })}
+                            onBlur={() => void window.tangu!.setConfig({ ttsVoice: (stored.ttsVoice || '').trim() }).then(setStored)}
+                            placeholder={t('settings.tts.voicePlaceholder')}
+                          />
+                          {/* 系统音色候选(可输可选;百炼无音色列表 API,静态表);复刻/设计音色经下方工作室「使用」自动填入 */}
+                          <datalist id="tts-voice-options">
+                            {TTS_VOICE_SUGGESTIONS.map(([v, label]) => <option key={v} value={v} label={label} />)}
+                          </datalist>
+                        </div>
+                        <div className="field">
+                          <label>{t('settings.tts.speed')}</label>
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={2}
+                            step={0.1}
+                            style={{ width: 90 }}
+                            value={ttsSpeedText ?? String(stored.ttsSpeed ?? 1)}
+                            onChange={(e) => setTtsSpeedText(e.target.value)}
+                            onBlur={() => {
+                              const n = Number(ttsSpeedText)
+                              const v = ttsSpeedText !== null && Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, 0.5), 2) : (stored.ttsSpeed ?? 1)
+                              setTtsSpeedText(null)
+                              void window.tangu!.setConfig({ ttsSpeed: v }).then(setStored)
+                            }}
+                          />
+                        </div>
+                        <div className="field">
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <button
+                              className="btn ghost sm"
+                              disabled={ttsTesting || !(stored.ttsModelId || '').trim()}
+                              onClick={() => {
+                                setTtsTesting(true); setTtsTestMsg('')
+                                previewTts(p.cfg, { model: (stored.ttsModelId || '').trim(), voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
+                                  .then(() => setTtsTestMsg(`✓ ${t('settings.tts.testOk')}`))
+                                  .catch((e: any) => setTtsTestMsg(`✗ ${e?.message || e}`))
+                                  .finally(() => setTtsTesting(false))
+                              }}
+                            >
+                              {ttsTesting ? <Loader2 size={12} className="spin" /> : <Play size={12} />} {t('settings.tts.testBtn')}
+                            </button>
+                            <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{ttsTestMsg}</span>
+                          </div>
+                        </div>
+                        <div className="field">
+                          <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={stored.ttsAutoSpeak === true}
+                              onChange={(e) => void window.tangu!.setConfig({ ttsAutoSpeak: e.target.checked }).then(setStored)}
+                            />
+                            {t('settings.tts.autoSpeak')}
+                          </label>
+                          <div className="hint">{t('settings.tts.autoSpeakHint')}</div>
+                        </div>
+                        {(() => {
+                          // 百炼音色工作室:有指向阿里云百炼的 provider 才可用(域名判定与后端 isDashScopeBase 一致)。
+                          // 非本地 external 后端不渲染:本地 providers 文件到不了远端 registry,采用的音色无法合成(判定同上方 externalWarning)。
+                          const remoteExternal = stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')
+                          if (remoteExternal) return null
+                          const ds = customProviders.find((cp) => /dashscope|aliyuncs\.com/i.test(cp.baseUrl))
+                          return ds
+                            ? <TtsVoiceStudio cfg={p.cfg} provider={ds} onApplied={() => void window.tangu!.getConfig().then(setStored)} />
+                            : <div className="hint">{t('settings.tts.studio.needProvider')}</div>
+                        })()}
+                      </>
                     )}
                   </>
                 )}
@@ -1519,6 +1638,7 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {tab === 'agents' && <><div className="settings-sec">{t('settings.tab.agents')}</div><AgentsSettings cfg={p.cfg} /></>}
+                {tab === 'hooks' && <><div className="settings-sec">Hooks</div><HooksTab cfg={p.cfg} /></>}
                 {tab === 'plugins' && (
                   <PluginsTab
                     cfg={p.cfg}

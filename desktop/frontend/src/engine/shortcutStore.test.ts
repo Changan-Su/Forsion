@@ -14,6 +14,10 @@ describe('eventToHotkey', () => {
     expect(eventToHotkey(ev({ key: 'Shift', shiftKey: true }))).toBeNull()
     expect(eventToHotkey(ev({ key: 'Meta', metaKey: true }))).toBeNull()
   })
+  it('normalizes braces to brackets (shift+[ yields "{")', () => {
+    expect(eventToHotkey(ev({ key: '{', metaKey: true, shiftKey: true }))).toBe('mod+shift+[')
+    expect(eventToHotkey(ev({ key: '}', ctrlKey: true, shiftKey: true }))).toBe('mod+shift+]')
+  })
 })
 
 describe('formatHotkey', () => {

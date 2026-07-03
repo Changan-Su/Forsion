@@ -15,6 +15,9 @@ import path from 'node:path';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace } from '../tools/fsPolicy.js';
 import type { ToolCall } from '../core/types.js';
+import { runHooks } from '../hooks/index.js';
+import { currentAgentSlug } from '../seams/runContext.js';
+import type { AppProfile } from '../seams/appProfile.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
@@ -49,9 +52,10 @@ export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined):
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
+  // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
   const runsCommands =
     name === 'run_bash' || name === 'kill_process' || name === 'run_background' ||
-    name === 'write_process_input' || name.startsWith('mcp__');
+    name === 'write_process_input' || name === 'browser_task' || name.startsWith('mcp__');
   if (mode === 'readonly') return writesFiles || runsCommands;
   if (mode === 'auto-edit') return runsCommands;
   return false;
@@ -80,6 +84,11 @@ export function approvalPreview(call: ToolCall): string {
     return `apply_patch (${n} file change(s))`;
   }
   if (name === 'kill_process') return `kill process ${args.process_id ?? ''}`;
+  if (name === 'browser_task') {
+    const t = String(args.task ?? '').trim();
+    const domains = Array.isArray(args.allowed_domains) && args.allowed_domains.length ? ` [${args.allowed_domains.join(', ')}]` : '';
+    return `browser_task${domains}: ${t.length > 160 ? `${t.slice(0, 160)}…` : t}`;
+  }
   return `${name} ${JSON.stringify(args).slice(0, 200)}`;
 }
 
@@ -198,6 +207,15 @@ function bashCommandOf(call: ToolCall): string {
   }
 }
 
+/** 安全解析工具参数（供 PermissionRequest hook payload）。坏 JSON → 空对象。 */
+function parseCallArgs(call: ToolCall): any {
+  try {
+    return call.function.arguments ? JSON.parse(call.function.arguments) : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * loop 工具执行前的审批闸门。返回归一化决定（approve / reject）。
  *   - execMode!=='host' 且非 mcp__ → 立即 approve（**server/worker 零影响**）
@@ -208,7 +226,7 @@ function bashCommandOf(call: ToolCall): string {
 export async function gateToolCall(
   runId: string,
   call: ToolCall,
-  ctx: { sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string },
+  ctx: { sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; profile?: AppProfile },
   signal?: AbortSignal,
 ): Promise<ApprovalDecision> {
   const name = call.function.name;
@@ -226,6 +244,19 @@ export async function gateToolCall(
     if (!toolNeedsApproval(name, ctx.approvalMode)) return { action: 'approve' };
     if (isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
   }
+
+  // —— PermissionRequest hook：在弹审批 UI 前问 hook（host-only）。deny → 拒绝；allow → 跳过用户审批直接放行。——
+  const permV = await runHooks('PermissionRequest', {
+    tool_name: name,
+    tool_input: parseCallArgs(call),
+    session_id: ctx.sessionId, run_id: runId, cwd: ctx.cwd, agent_slug: currentAgentSlug(),
+  }, {
+    profile: ctx.profile,
+    execMode: ctx.execMode === 'host' ? 'host' : 'sandbox',
+    cwd: ctx.cwd, sessionId: ctx.sessionId, runId, signal,
+  });
+  if (permV.block) return { action: 'reject' };
+  if (permV.allow) return { action: 'approve' };
 
   const preview = escalate ? '⚠ 工作区外写入 · ' + approvalPreview(call) : approvalPreview(call);
   const d = await requestApproval(runId, call, preview, signal);

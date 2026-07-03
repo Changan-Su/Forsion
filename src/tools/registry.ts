@@ -29,6 +29,7 @@ import { discussProvider } from './builtin/discuss.js';
 import { displayFileProvider } from './builtin/displayTools.js';
 import { imageGenProvider } from './builtin/imageTools.js';
 import { inboxSendProvider } from './builtin/inboxSend.js';
+import { browserUseProvider } from './builtin/browserUse.js';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -49,6 +50,7 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   browser_press: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 30_000 },
   browser_console: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 30_000 },
   browser_screenshot: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 30_000 },
+  browser_task: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 300_000 },
   search_files: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 30_000 },
   glob_files: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 20_000 },
   list_files: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 15_000 },
@@ -123,6 +125,7 @@ registerToolProvider(discussProvider); // host-only:start_discussion/wait_discus
 registerToolProvider(displayFileProvider); // both:display_file 在桌面对话区展示文件给用户(append 末尾,保前缀缓存)
 registerToolProvider(imageGenProvider); // both:generate_image 文生图→落盘+对话区展示(append 末尾,保前缀缓存)
 registerToolProvider(inboxSendProvider); // 本地限定:inbox_send 发消息进用户收件箱、可定时(append 末尾,保前缀缓存)
+registerToolProvider(browserUseProvider); // host-only:browser_task 委派整包网页任务给 browser-use 自主 agent(真实 Chrome;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

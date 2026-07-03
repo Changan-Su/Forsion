@@ -48,7 +48,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     if (saved && ws.applyNamed(spaceLayoutName(toId))) ws.saveCurrent()
     else ws.resetLayout()
 
-    useNav.setState({ entries: [], idx: -1 }) // 每 Space 一份独立主面板历史(避免跨 Space 前进后退错乱)
+    useNav.getState().reset() // 布局整体更换,旧 leaf id 全失效 → 清全部 per-tab 历史
   },
 }))
 

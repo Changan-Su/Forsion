@@ -123,7 +123,7 @@ export interface ModelsBrain {
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
    */
-  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[] }>;
+  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[] }>;
   /**
    * 按应用过滤的模型列表(遵守 Forsion admin「应用模型配置」project_model_configs)。
    * 可选:旧版云端/brain 未实现 → 调用方回退 listGlobalModels。
@@ -198,6 +198,23 @@ export interface ImagesBrain {
   generate(req: ImageGenRequest): Promise<ImageGenResult>;
 }
 
+/** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech。 */
+export interface SpeechRequest {
+  model: string; // TTS 模型 id(direct=apiModelId 或 <providerId>/<model>)
+  text: string;
+  voice?: string; // provider 特定音色 id
+  speed?: number; // 0.5–2,缺省 1
+  format?: 'mp3' | 'wav' | 'pcm'; // 缺省 mp3(朗读用);微信语音气泡需 wav(转 SILK)
+  signal?: AbortSignal;
+}
+export interface SpeechResult {
+  audio: Uint8Array;
+  mime: string;
+}
+export interface TtsBrain {
+  synthesize(req: SpeechRequest): Promise<SpeechResult>;
+}
+
 export interface CloudBrainServices {
   llm: LlmBrain;
   users: UsersBrain;
@@ -208,6 +225,8 @@ export interface CloudBrainServices {
   storage: StorageBrain;
   /** 文生图;可选:仅 standalone(httpBrain/multiBrain)实现,云端 worker/microserver 未注入 → 工具优雅降级。 */
   images?: ImagesBrain;
+  /** 语音合成;可选:仅 standalone multiBrain 实现(BYO-key 直连),云端未注入 → /agent/tts 返回 501。 */
+  tts?: TtsBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */
   agentFiles?: AgentFilesBrain;
   /** 每-agent 人格(Phase 2 云端运行水合);可选:未注入 → agentLoop 回落本地 getAgent。 */

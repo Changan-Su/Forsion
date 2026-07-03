@@ -83,6 +83,15 @@
 .t2sf-size { flex-shrink: 0; font-size: 11px; color: var(--text-faint, var(--text-muted)); }
 .t2sf-loading { font-size: 12px; color: var(--text-faint, var(--text-muted)); padding: 3px 8px; }
 .t2sf-empty { font-size: 12px; color: var(--text-faint, var(--text-muted)); padding: 4px 8px 4px 22px; }
+.t2sf-row.sel { background: var(--overlay-medium); }
+.t2sf-row.drop, .t2s-group.drop { background: var(--accent-light); box-shadow: inset 0 0 0 1px var(--accent); border-radius: var(--radius-sm, 8px); }
+.t2sf-input {
+  display: block; width: calc(100% - 32px); margin: 2px 8px 2px 0;
+  padding: 3px 6px; font-size: 12.5px; color: var(--text);
+  background: var(--bg-card); border: 1px solid var(--accent); border-radius: var(--radius-sm, 8px);
+  outline: none;
+}
+
 
 /* 滚动区 */
 .t2s-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 12px; }
@@ -257,3 +266,20 @@
 .t2s-add-ws:hover { border-color: var(--accent); color: var(--text); }
 
 .t2s-archived-toggle { margin-top: 6px; padding-left: 8px; }
+
+/* ── 统一「工作区」视图壳(WorkspaceView):头部模式切换器 + 模式体容器 ── */
+.t2sw { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.t2sw-head { display: flex; align-items: center; gap: 2px; padding: 6px 8px 2px; flex: 0 0 auto; }
+.t2sw-seg {
+  border: none; background: transparent; font-family: var(--font-ui); font-size: 11.5px;
+  padding: 3px 8px; border-radius: 6px; color: var(--text-muted); cursor: pointer; white-space: nowrap;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.t2sw-seg:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
+.t2sw-seg.on { background: var(--accent-light); color: var(--accent); }
+.t2sw-auto-now { opacity: 0.75; margin-left: 2px; }
+.t2sw-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.t2sw-body > * { flex: 1; min-height: 0; }
+/* 子视图(会话/文件/笔记)不自带底色 —— 直接用工作区视图所在面板的背景,切换时无「另一层」。 */
+.t2sw .t2s-side { background: transparent; }
+.t2sw-empty { padding: 18px 12px; color: var(--text-muted); font-size: 12.5px; }

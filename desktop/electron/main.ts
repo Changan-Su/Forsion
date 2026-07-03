@@ -6,7 +6,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, nativeImage, Notification } from 'electron'
 import { basename, dirname, join } from 'path'
 import { pathToFileURL } from 'url'
-import { readFile, writeFile, mkdir, chmod, readdir, stat, rename, cp } from 'fs/promises'
+import { readFile, writeFile, mkdir, chmod, readdir, stat, rename, cp, open as fsOpen, unlink } from 'fs/promises'
 import { existsSync } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { execFile, spawn } from 'child_process'
@@ -78,6 +78,7 @@ interface DirectProviderConfig {
   apiKey?: string
   modelIds?: string[]
   imageModelIds?: string[]
+  ttsModelIds?: string[]
 }
 
 async function readProvidersFile(): Promise<DirectProviderConfig[]> {
@@ -250,6 +251,14 @@ interface TanguStoredConfig {
   notesImportPreview: boolean
   /** 日记(每日笔记)所在 vault 相对文件夹;'' = vault 根。 */
   notesDailyFolder: string
+  /** 朗读(TTS)模型 id(<providerId>/<model> 或某 provider ttsModelIds 命中);'' = 未启用,聊天不显示朗读按钮。 */
+  ttsModelId: string
+  /** 朗读音色 id(provider 特定,如 'alloy');'' = 不传该参数(OpenAI 等部分服务必填音色)。 */
+  ttsVoice: string
+  /** 朗读语速 0.5–2。 */
+  ttsSpeed: number
+  /** 新回复完成后自动朗读(仅当前活跃会话)。 */
+  ttsAutoSpeak: boolean
 }
 
 /**
@@ -286,6 +295,10 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   notesAttachmentFolder: 'assets',
   notesImportPreview: true,
   notesDailyFolder: '',
+  ttsModelId: '',
+  ttsVoice: '',
+  ttsSpeed: 1,
+  ttsAutoSpeak: false,
 }
 
 /** 默认工作区目录(配置未填时兜底 ~/Tangu);best-effort 创建,失败不阻断。 */
@@ -330,7 +343,7 @@ async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
 async function loadConfig(): Promise<TanguStoredConfig> {
   const shell = await readShellConfig()
   const home = await readHomeConfig()
-  const cloud = home.cloud || {}, browser = home.browser || {}, wechat = home.wechat || {}, notes = home.notes || {}
+  const cloud = home.cloud || {}, browser = home.browser || {}, wechat = home.wechat || {}, notes = home.notes || {}, tts = home.tts || {}
   const merged: TanguStoredConfig = {
     ...DEFAULT_CONFIG,
     ...shell, // 旧 desktop 文件:既给 shell 键,也作未迁移段的回落
@@ -351,6 +364,12 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       notesAttachmentFolder: notes.folder || 'assets',
       notesImportPreview: notes.preview !== false,
       notesDailyFolder: notes.dailyFolder || '',
+    } : {}),
+    ...(home.tts !== undefined ? {
+      ttsModelId: tts.modelId || '',
+      ttsVoice: tts.voice || '',
+      ttsSpeed: typeof tts.speed === 'number' ? tts.speed : 1,
+      ttsAutoSpeak: !!tts.autoSpeak,
     } : {}),
   }
   // 环境变量兜底:TANGU_CLOUD_URL(managed/登录默认)、TANGU_BACKEND_URL(external 外部地址)。
@@ -375,8 +394,8 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   }
   // config-backed 键 → config.json 段
   const home = await readHomeConfig()
-  const cloud = { ...(home.cloud || {}) }, browser = { ...(home.browser || {}) }, wechat = { ...(home.wechat || {}) }, notes = { ...(home.notes || {}) }
-  let cT = false, bT = false, wT = false, oT = false, nT = false
+  const cloud = { ...(home.cloud || {}) }, browser = { ...(home.browser || {}) }, wechat = { ...(home.wechat || {}) }, notes = { ...(home.notes || {}) }, tts = { ...(home.tts || {}) }
+  let cT = false, bT = false, wT = false, oT = false, nT = false, tT = false
   if ('cloudUrl' in patch) { cloud.url = patch.cloudUrl; cT = true }
   if ('cloudToken' in patch) { cloud.token = patch.cloudToken; cT = true }
   if ('modelId' in patch) { cloud.defaultModel = patch.modelId; cT = true }
@@ -394,11 +413,16 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if ('notesAttachmentFolder' in patch) { notes.folder = patch.notesAttachmentFolder; nT = true }
   if ('notesImportPreview' in patch) { notes.preview = patch.notesImportPreview; nT = true }
   if ('notesDailyFolder' in patch) { notes.dailyFolder = patch.notesDailyFolder; nT = true }
+  if ('ttsModelId' in patch) { tts.modelId = patch.ttsModelId; tT = true }
+  if ('ttsVoice' in patch) { tts.voice = patch.ttsVoice; tT = true }
+  if ('ttsSpeed' in patch) { tts.speed = patch.ttsSpeed; tT = true }
+  if ('ttsAutoSpeak' in patch) { tts.autoSpeak = patch.ttsAutoSpeak; tT = true }
   if (cT) home.cloud = cloud
   if (bT) home.browser = browser
   if (wT) home.wechat = wechat
   if (nT) home.notes = notes
-  if (cT || bT || wT || oT || nT) await writeHomeConfig(home)
+  if (tT) home.tts = tts
+  if (cT || bT || wT || oT || nT || tT) await writeHomeConfig(home)
   return loadConfig()
 }
 
@@ -641,9 +665,44 @@ app.whenReady().then(async () => {
     const st = await stat(filePath)
     const ext = (filePath.split('.').pop() || '').toLowerCase()
     const mimeType = MIME_BY_EXT[ext] || 'application/octet-stream'
-    if (st.size > MAX_PREVIEW_BYTES) return { mimeType, content: '', size: st.size, tooLarge: true }
+    if (st.size > MAX_PREVIEW_BYTES) return { mimeType, content: '', size: st.size, mtimeMs: st.mtimeMs, tooLarge: true }
     const buf = await readFile(filePath)
-    return { mimeType, content: buf.toString('base64'), size: st.size }
+    return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
+  })
+  // 用系统默认应用打开(预览不支持的类型走这里);openPath 失败返回错误串而非抛异常。
+  ipcMain.handle('fs:openPath', async (_e, p: string) => {
+    if (!p || typeof p !== 'string') return { ok: false, error: 'invalid path' }
+    const err = await shell.openPath(p)
+    return err ? { ok: false, error: err } : { ok: true }
+  })
+  // 写回文本文件(工作区 .md 编辑 / 新建文件):写 tmp → fsync → rename 原子替换,失败清理 tmp;
+  // expectedMtimeMs 不符**或文件已消失(被删/改名)** → 冲突不写(外部修改保护,防复活旧路径);
+  // createNew=O_EXCL 内核原子独占创建(新建绝不覆盖,无 TOCTOU)。
+  ipcMain.handle('fs:writeFile', async (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) => {
+    if (!filePath || typeof filePath !== 'string' || filePath.includes('\0') || typeof content !== 'string')
+      throw new Error('非法的写入参数')
+    if (createNew) {
+      try { await writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' }) }
+      catch (e: any) { throw e?.code === 'EEXIST' ? new Error('同名文件/文件夹已存在') : e }
+      const st0 = await stat(filePath)
+      return { ok: true, mtimeMs: st0.mtimeMs }
+    }
+    if (typeof expectedMtimeMs === 'number') {
+      const cur = await stat(filePath).catch(() => null)
+      if (!cur) return { conflict: true, mtimeMs: 0 } // 基准文件已不在:视作冲突,别在旧路径复活
+      if (Math.abs(cur.mtimeMs - expectedMtimeMs) > 1) return { conflict: true, mtimeMs: cur.mtimeMs }
+    }
+    const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
+    try {
+      const fh = await fsOpen(tmp, 'w')
+      try { await fh.writeFile(content, 'utf8'); await fh.sync() } finally { await fh.close() }
+      await rename(tmp, filePath)
+    } catch (e) {
+      await unlink(tmp).catch(() => {}) // 半写残留清理(ENOSPC/rename 失败等)
+      throw e
+    }
+    const st = await stat(filePath)
+    return { ok: true, mtimeMs: st.mtimeMs }
   })
 
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──

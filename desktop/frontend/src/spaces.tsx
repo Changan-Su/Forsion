@@ -31,12 +31,12 @@ function SpaceButton({ space, expanded }: { space: SpaceDefinition; expanded: bo
   )
 }
 
-/** Tangu Space 的侧栏默认:左=会话;右=文件/目录/记忆/子聊天 同组 tab。 */
+/** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=工作区(自动→文件)/大纲/记忆/子聊天 同组 tab。 */
 const TANGU_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'sessions', params: {} }],
+  left: [{ type: 'workspace', params: {} }],
   right: [
-    { type: 'files', params: {} },
-    { type: 'toc', params: {} },
+    { type: 'workspace', params: {} },
+    { type: 'outline', params: {} },
     { type: 'memory', params: {} },
     { type: 'subchats', params: {} },
   ],
@@ -47,14 +47,14 @@ const tanguSpace: SpaceDefinition = {
   name: () => app().tr('space.tangu'),
   icon: Bot,
   sidebarDefaults: TANGU_SIDE_VIEWS,
-  /** 对话(主)→ 会话(左)→ 右栏(文件 + 目录/记忆/子聊天 同组 tab)。窄屏右栏默认收起。 */
+  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(工作区[自动=文件] + 大纲/记忆/子聊天 同组 tab)。窄屏右栏默认收起。 */
   build() {
     ws().setSidebarDefaults(TANGU_SIDE_VIEWS)
     ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-    ws().openView('sessions', {}, 'left')
+    ws().openView('workspace', {}, 'left')
     if (typeof window === 'undefined' || window.innerWidth >= 1100) {
-      ws().openView('files', {}, 'right')
-      ws().openView('toc', {}, 'right')
+      ws().openView('workspace', {}, 'right')
+      ws().openView('outline', {}, 'right')
       ws().openView('memory', {}, 'right')
       ws().openView('subchats', {}, 'right')
     } else {
@@ -84,15 +84,15 @@ const inboxSpace: SpaceDefinition = {
   newPage: () => { ws().openView('inbox-reader', {}, 'main') },
 }
 
-/** Amadeus Space 的侧栏默认:左=笔记/搜索/标签 同组 tab;右=大纲/反链/关系图 同组 tab。 */
+/** Amadeus Space 的侧栏默认:左=工作区(自动→笔记)/搜索/标签 同组 tab;右=大纲/反链/关系图 同组 tab。 */
 const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
   left: [
-    { type: 'amadeus-pages', params: {} },
+    { type: 'workspace', params: {} },
     { type: 'amadeus-search', params: {} },
     { type: 'amadeus-tags', params: {} },
   ],
   right: [
-    { type: 'amadeus-outline', params: {} },
+    { type: 'outline', params: {} },
     { type: 'amadeus-backlinks', params: {} },
     { type: 'amadeus-graph', params: {} },
   ],
@@ -110,10 +110,10 @@ const amadeusSpace: SpaceDefinition = {
   build() {
     ws().setSidebarDefaults(AMADEUS_SIDE_VIEWS)
     ws().openView('amadeus-editor', {}, 'main')
-    const pagesLeaf = ws().openView('amadeus-pages', {}, 'left')
+    const pagesLeaf = ws().openView('workspace', {}, 'left')
     ws().openView('amadeus-search', {}, 'left')
     ws().openView('amadeus-tags', {}, 'left')
-    const outlineLeaf = ws().openView('amadeus-outline', {}, 'right')
+    const outlineLeaf = ws().openView('outline', {}, 'right')
     ws().openView('amadeus-backlinks', {}, 'right')
     ws().openView('amadeus-graph', {}, 'right')
     if (outlineLeaf) ws().activateLeaf(outlineLeaf.id)
@@ -125,7 +125,7 @@ const amadeusSpace: SpaceDefinition = {
  *  Amadeus 需 electron 的 window.amadeus 文件系统桥;Tangu Web(无 host)下不注册该 Space。
  *  Amadeus(Phase 4 融合中,未完工)暂对普通用户隐藏 —— 仅开发者模式(关于页连点版本号 10 次解锁,
  *  localStorage forsion_tangu_dev_mode='1')下注册其 Space + ribbon 入口;切换后需重开生效。 */
-const AMADEUS_ENABLED = (() => {
+export const AMADEUS_ENABLED = (() => {
   try { return localStorage.getItem('forsion_tangu_dev_mode') === '1' } catch { return false }
 })()
 const SPACES: SpaceDefinition[] = [

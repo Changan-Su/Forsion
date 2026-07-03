@@ -42,6 +42,8 @@ export const Composer2: React.FC<{
   onMaxIterationsChange?: (n: number) => void
   planMode?: boolean
   onPlanModeChange?: (on: boolean) => void
+  voiceMode?: boolean
+  onVoiceModeChange?: (on: boolean) => void
   groupChat?: boolean
   groupAgents?: string[]
   groupTempAgents?: NormalAgentDef[]
@@ -68,7 +70,7 @@ export const Composer2: React.FC<{
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
   maxIterations, onMaxIterationsChange,
-  planMode, onPlanModeChange, skills,
+  planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
   groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
   agents, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
@@ -91,6 +93,10 @@ export const Composer2: React.FC<{
   const [mentionDismissed, setMentionDismissed] = useState(false)
   const [mentionedSlug, setMentionedSlug] = useState('')
   const [mentionAgents, setMentionAgents] = useState<string[]>([])
+  const [refIndex, setRefIndex] = useState(0)
+  const [refDismissed, setRefDismissed] = useState(false)
+  const [refFiles, setRefFiles] = useState<string[] | null>(null) // [[ 文件引用候选(工作区相对路径);null=未构建
+  const refFilesFor = useRef('')
   const [dragOver, setDragOver] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -138,6 +144,9 @@ export const Composer2: React.FC<{
     if (onPlanModeChange) {
       items.push({ cmd: '/plan', desc: planMode ? t('input.slash.planOff') : t('input.slash.planOn'), run: () => { onPlanModeChange(!planMode); close() } })
     }
+    if (onVoiceModeChange) {
+      items.push({ cmd: voiceMode ? '/text' : '/voice', desc: voiceMode ? t('input.slash.voiceOff') : t('input.slash.voiceOn'), run: () => { onVoiceModeChange(!voiceMode); close() } })
+    }
     if (onThinkingChange) {
       for (const lv of ['off', 'low', 'medium', 'high'] as const) {
         items.push({ cmd: `/think ${lv}`, desc: `${t('input.slash.thinkDesc', { level: lv })}${thinkingLevel === lv ? t('input.slash.current') : ''}`, run: () => { onThinkingChange(lv); close() } })
@@ -164,7 +173,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onOpenSettings, onCompact, engineId, engineCommands])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onOpenSettings, onCompact, engineId, engineCommands])
 
   const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
   const slashMatches = useMemo<SlashItem[]>(() => {
@@ -221,6 +230,67 @@ export const Composer2: React.FC<{
     })
   }
 
+  // ── [[ 文件引用:列当前工作区可引用文件,选中插入相对路径(与拖放/粘贴插路径同一契约,后端零改动)。
+  //    仅 host 会话(云端/沙箱读不到本机路径)。候选 = listDir 惰性 BFS,忽略巨目录/隐藏项,双上限封顶。
+  const fileRefCtx = useMemo(() => {
+    if (disabled || slashActive || refDismissed || !isHost || !execConfig.cwd) return null
+    const m = /\[\[([^\]\n]*)$/.exec(draft.slice(0, cursorPos))
+    return m ? { query: m[1], start: cursorPos - m[1].length - 2 } : null
+  }, [draft, cursorPos, disabled, slashActive, refDismissed, isHost, execConfig.cwd])
+  useEffect(() => {
+    if (!fileRefCtx) return
+    const root = execConfig.cwd
+    // 只认 refFilesFor(已发射标记):打字使 fileRefCtx 每键变化,若依赖 refFiles 是否就绪,
+    // 首次 BFS 完成前每个字符都会重复发射一整轮 BFS(listDir 风暴)。
+    if (!root || refFilesFor.current === root) return
+    refFilesFor.current = root
+    setRefFiles(null) // 换工作区先清旧候选,避免过渡期显示上一工作区的文件
+    const IGNORE = new Set(['node_modules', 'dist', 'build', 'out', 'target', '.git', '.venv', 'venv', '__pycache__'])
+    const run = async (): Promise<string[]> => {
+      const found: string[] = []
+      const queue: Array<{ dir: string; rel: string; depth: number }> = [{ dir: root, rel: '', depth: 0 }]
+      while (queue.length && found.length < 2000) {
+        const { dir, rel, depth } = queue.shift()!
+        let entries: Array<{ name: string; isDir: boolean; path: string }> = []
+        try { entries = (await window.tangu?.listDir?.(dir)) || [] } catch { continue }
+        for (const e of entries) {
+          if (e.name.startsWith('.')) continue
+          if (e.isDir) { if (depth < 8 && !IGNORE.has(e.name)) queue.push({ dir: e.path, rel: rel ? `${rel}/${e.name}` : e.name, depth: depth + 1 }) }
+          else { found.push(rel ? `${rel}/${e.name}` : e.name); if (found.length >= 2000) break }
+        }
+      }
+      return found
+    }
+    void run().then((list) => { if (refFilesFor.current === root) setRefFiles(list) }).catch(() => {})
+  }, [fileRefCtx, execConfig.cwd])
+  const refMatches = useMemo<string[]>(() => {
+    if (!fileRefCtx || !refFiles) return []
+    const q = fileRefCtx.query.toLowerCase()
+    const pool = q ? refFiles.filter((p) => p.toLowerCase().includes(q)) : refFiles
+    // 文件名前缀命中 > 文件名包含 > 仅路径包含;同档路径短者先。
+    const score = (p: string): number => {
+      const base = p.split('/').pop()!.toLowerCase()
+      return (base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + p.length
+    }
+    return [...pool].sort((a, b) => score(a) - score(b)).slice(0, 10)
+  }, [fileRefCtx, refFiles])
+  const refActive = !!fileRefCtx && refMatches.length > 0
+  useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])
+
+  const pickRef = (p: string) => {
+    if (!fileRefCtx) return
+    const before = draft.slice(0, fileRefCtx.start)
+    const insert = `${/\s/.test(p) ? `"${p}"` : p} ` // 含空格加引号,与粘贴本机路径一致
+    const next = before + insert + draft.slice(cursorPos)
+    setDraft(next)
+    const caret = before.length + insert.length
+    requestAnimationFrame(() => {
+      const ta = taRef.current
+      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
+      autoGrow()
+    })
+  }
+
   const send = () => {
     const text = draft.trim()
     if (!text) return
@@ -233,6 +303,14 @@ export const Composer2: React.FC<{
       } else {
         setHint(t('input.slash.loop', { current: maxIterations || 90 }))
       }
+      setDraft('')
+      requestAnimationFrame(autoGrow)
+      return
+    }
+    if (onVoiceModeChange && /^\/(voice|text)$/i.test(text)) {
+      const on = /^\/voice$/i.test(text)
+      onVoiceModeChange(on)
+      setHint(on ? t('input.slash.voiceOnHint') : t('input.slash.voiceOffHint'))
       setDraft('')
       requestAnimationFrame(autoGrow)
       return
@@ -412,6 +490,7 @@ export const Composer2: React.FC<{
               setCursorPos(e.target.selectionStart || 0)
               setSlashDismissed(false)
               setMentionDismissed(false)
+              setRefDismissed(false)
               if (!e.target.value.includes('@')) { setMentionedSlug(''); setMentionAgents([]) }
               autoGrow()
             }}
@@ -445,6 +524,12 @@ export const Composer2: React.FC<{
               if (leftover.length) { const dt = new DataTransfer(); leftover.forEach((f) => dt.items.add(f)); void pickWsFiles(dt.files) }
             }}
             onKeyDown={(e) => {
+              if (refActive) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setRefIndex((i) => (i + 1) % refMatches.length); return }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setRefIndex((i) => (i - 1 + refMatches.length) % refMatches.length); return }
+                if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); pickRef(refMatches[Math.min(refIndex, refMatches.length - 1)]); return }
+                if (e.key === 'Escape') { e.preventDefault(); setRefDismissed(true); return }
+              }
               if (mentionActive) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIndex((i) => (i + 1) % mentionMatches.length); return }
                 if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIndex((i) => (i - 1 + mentionMatches.length) % mentionMatches.length); return }
@@ -476,7 +561,7 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {mentionActive && (
+          {mentionActive && !refActive && ( /* [[ 内打 @ 时两菜单可同时命中,文件引用优先(与 onKeyDown 一致) */
             <div className="t2c-menu">
               <div className="t2c-menu-sec">{inGroup ? t('input.mention.groupNote') : t('input.mention.delegateNote')}</div>
               {mentionMatches.map((a, i) => (
@@ -489,6 +574,23 @@ export const Composer2: React.FC<{
                 >
                   <span className="t2c-menu-cmd">@{a.name}</span>
                   <span className="t2c-menu-desc">{a.description || a.slug}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {refActive && (
+            <div className="t2c-menu">
+              <div className="t2c-menu-sec">{t('input.fileref.note')}</div>
+              {refMatches.map((p, i) => (
+                <button
+                  key={p}
+                  className="t2c-menu-item"
+                  data-active={i === Math.min(refIndex, refMatches.length - 1) || undefined}
+                  onMouseEnter={() => setRefIndex(i)}
+                  onClick={() => pickRef(p)}
+                >
+                  <span className="t2c-menu-cmd">{p.split('/').pop()}</span>
+                  <span className="t2c-menu-desc">{p}</span>
                 </button>
               ))}
             </div>

@@ -68,8 +68,13 @@ const api = {
   /** 本机工作区文件浏览:列目录 / 读文件(主进程 fs)。 */
   listDir: (dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number; path: string }>> =>
     ipcRenderer.invoke('fs:listDir', dirPath),
-  readHostFile: (filePath: string): Promise<{ mimeType: string; content: string; size: number; tooLarge?: boolean }> =>
+  readHostFile: (filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }> =>
     ipcRenderer.invoke('fs:readFile', filePath),
+  /** 用系统默认应用打开(预览不支持的类型)。 */
+  openHostPath: (p: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('fs:openPath', p),
+  /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict 不覆盖。 */
+  writeHostFile: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }> =>
+    ipcRenderer.invoke('fs:writeFile', filePath, content, expectedMtimeMs, createNew),
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   renameHostPath: (oldPath: string, newName: string): Promise<{ path: string }> =>
     ipcRenderer.invoke('fs:rename', oldPath, newName),

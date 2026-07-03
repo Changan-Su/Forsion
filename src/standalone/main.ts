@@ -34,7 +34,7 @@ function maskSecret(s?: string): string {
 function printEffectiveConfig(cfg: StandaloneConfig): void {
   const providers = loadProviders(cfg).map((p) => ({
     providerId: p.providerId, baseUrl: p.baseUrl, apiKey: maskSecret(p.apiKey),
-    modelIds: p.modelIds, imageModelIds: p.imageModelIds, protocol: p.protocol,
+    modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, protocol: p.protocol,
   }));
   const mcp = Object.entries(loadMcpConfig().mcpServers).map(([name, s]: [string, any]) => ({
     name, transport: s.transport || (s.command ? 'stdio' : 'http'), enabled: s.enabled !== false,

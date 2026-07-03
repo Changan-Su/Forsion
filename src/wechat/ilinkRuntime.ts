@@ -46,6 +46,11 @@ const BACKOFF_DELAY_MS = 30_000;
 const SESSION_EXPIRED_PAUSE_MS = 600_000;
 const DEDUP_TTL_MS = 300_000;
 const DEDUP_MAX = 2_000;
+// 出站限速:iLink 对连发有限流(ret:-2),超了会**静默丢**后续消息(微信只显示第一条)。
+// 同账号所有出站串行 + 最小间隔,命中限流退避重试,别丢消息。
+const MIN_SEND_INTERVAL_MS = 1_200;
+const RATE_LIMIT_RETRIES = 4;
+const RATE_LIMIT_BACKOFF_MS = 4_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -56,6 +61,9 @@ export class IlinkRuntime {
   private readonly dedup = new Map<string, Map<string, number>>();
   // typing ticket 缓存:key=`${accountId}:${openid}` → {ticket, expiresAt}(iLink ticket ~600s TTL)。
   private readonly typingTickets = new Map<string, { ticket: string; expiresAt: number }>();
+  // 出站限速:按账号串行(promise 链尾)+ 最后发送时刻,保证相邻发送不小于 MIN_SEND_INTERVAL_MS。
+  private readonly sendChains = new Map<string, Promise<void>>();
+  private readonly lastSentAt = new Map<string, number>();
   private shuttingDown = false;
   private readonly log: (level: 'info' | 'warn' | 'error', msg: string) => void;
 
@@ -165,6 +173,26 @@ export class IlinkRuntime {
     }));
   }
 
+  /**
+   * 同账号串行 + 最小间隔执行一次发送(所有出站文本/媒体都经此)。
+   * 防止一次回复的「分段文字 + 语音文件」亚秒级连发触发 iLink 限流 → 后续被静默丢。
+   */
+  private async paced<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.sendChains.get(accountId) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((r) => { release = r; });
+    this.sendChains.set(accountId, prev.then(() => mine));
+    await prev.catch(() => {});
+    try {
+      const gap = MIN_SEND_INTERVAL_MS - (Date.now() - (this.lastSentAt.get(accountId) ?? 0));
+      if (gap > 0) await sleep(gap);
+      return await fn();
+    } finally {
+      this.lastSentAt.set(accountId, Date.now());
+      release();
+    }
+  }
+
   async send(accountId: string, openid: string, text: string): Promise<{ ok: boolean; error?: string }> {
     const account = this.accounts.get(accountId);
     const client = this.clients.get(accountId);
@@ -191,20 +219,27 @@ export class IlinkRuntime {
     const account = this.accounts.get(accountId);
     const client = this.clients.get(accountId);
     if (!account || !client) return { ok: false, error: `unknown account ${accountId}` };
-    try {
-      const res = await client.sendMedia(openid, buffer, opts, account.contextTokens[openid], signal);
-      if (isSessionExpired(res)) {
-        delete account.contextTokens[openid];
-        await this.persistState(account);
-        return { ok: false, error: '微信会话已过期,请让对方重新发一条消息或在 Desktop 重新扫码。' };
+    return this.paced(accountId, async () => {
+      try {
+        let res = await client.sendMedia(openid, buffer, opts, account.contextTokens[openid], signal);
+        if (isSessionExpired(res)) {
+          delete account.contextTokens[openid];
+          await this.persistState(account);
+          return { ok: false, error: '微信会话已过期,请让对方重新发一条消息或在 Desktop 重新扫码。' };
+        }
+        for (let i = 0; i < RATE_LIMIT_RETRIES && isRateLimited(res); i++) {
+          this.log('warn', `[${accountId}] media rate-limited, retry ${i + 1}/${RATE_LIMIT_RETRIES}`);
+          await sleep(RATE_LIMIT_BACKOFF_MS);
+          res = await client.sendMedia(openid, buffer, opts, account.contextTokens[openid], signal);
+        }
+        if ((res.ret ?? 0) !== 0 || (res.errcode ?? 0) !== 0) {
+          return { ok: false, error: `iLink 发送失败(ret=${res.ret ?? ''} errcode=${res.errcode ?? ''} ${res.errmsg ?? ''})`.trim() };
+        }
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
       }
-      if ((res.ret ?? 0) !== 0 || (res.errcode ?? 0) !== 0) {
-        return { ok: false, error: `iLink 发送失败(ret=${res.ret ?? ''} errcode=${res.errcode ?? ''} ${res.errmsg ?? ''})`.trim() };
-      }
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e) };
-    }
+    });
   }
 
   /**
@@ -351,13 +386,21 @@ export class IlinkRuntime {
   }
 
   private async sendWithContext(account: AccountState, client: IlinkClient, openid: string, text: string): Promise<void> {
-    const ctx = account.contextTokens[openid];
-    let res = await client.sendText(openid, text, ctx);
-    if (isSessionExpired(res) && ctx) {
-      delete account.contextTokens[openid];
-      await this.persistState(account);
-      res = await client.sendText(openid, text);
-    }
-    if (isRateLimited(res)) this.log('warn', `[${account.accountId}] send rate-limited for ${openid}`);
+    await this.paced(account.accountId, async () => {
+      const ctx = account.contextTokens[openid];
+      let res = await client.sendText(openid, text, ctx);
+      if (isSessionExpired(res) && ctx) {
+        delete account.contextTokens[openid];
+        await this.persistState(account);
+        res = await client.sendText(openid, text);
+      }
+      // 命中限流(ret:-2)→ 退避重试,别静默丢(否则微信只显示第一条)。
+      for (let i = 0; i < RATE_LIMIT_RETRIES && isRateLimited(res); i++) {
+        this.log('warn', `[${account.accountId}] send rate-limited, retry ${i + 1}/${RATE_LIMIT_RETRIES} in ${RATE_LIMIT_BACKOFF_MS}ms`);
+        await sleep(RATE_LIMIT_BACKOFF_MS);
+        res = await client.sendText(openid, text, account.contextTokens[openid]);
+      }
+      if (isRateLimited(res)) this.log('error', `[${account.accountId}] send 重试后仍被限流,已丢弃 for ${openid}`);
+    });
   }
 }

@@ -30,7 +30,7 @@
     "server": "node dist/standalone/main.js",
     "standalone": "node dist/standalone/main.js",
     "clean": "rm -rf dist",
-    "build:plugins": "tsc -p plugins/stickers/tsconfig.json && tsc -p plugins/reply-segment/tsconfig.json",
+    "build:plugins": "tsc -p plugins/stickers/tsconfig.json && tsc -p plugins/reply-segment/tsconfig.json && tsc -p plugins/voice-message/tsconfig.json",
     "desktop:install": "cd desktop && npm install",
     "desktop:dev": "cd desktop && npm run dev",
     "desktop:build": "npm run build && cd desktop && npm run build"
@@ -48,7 +48,8 @@
     "pg": "^8.18.0",
     "react": "^18.3.1",
     "smol-toml": "^1.3.1",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
@@ -57,6 +58,7 @@
     "@types/pg": "^8.11.0",
     "@types/react": "^18.3.12",
     "@types/uuid": "^9.0.7",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.3.3",
     "vitest": "^3.2.4"
   }

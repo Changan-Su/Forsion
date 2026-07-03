@@ -1328,11 +1328,11 @@
   color: var(--text);
 }
 .am-app .ctx-item[data-danger] {
-  color: #e5484d;
+  color: var(--danger, #e5484d);
 }
 .am-app .ctx-item[data-danger]:hover {
-  background: rgba(229, 72, 77, 0.12);
-  color: #e5484d;
+  background: var(--danger-light, rgba(229, 72, 77, 0.12));
+  color: var(--danger, #e5484d);
 }
 
 /* ── Dialogs (confirm / prompt / folder picker) ──────────── */
@@ -1427,9 +1427,9 @@
   color: var(--on-primary);
 }
 .am-app .dialog-btn[data-danger] {
-  background: #e5484d;
-  border-color: #e5484d;
-  color: #fff;
+  background: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+  color: var(--on-accent, #fff);
 }
 
 /* ── Theme picker ─────────────────────────────────────────── */

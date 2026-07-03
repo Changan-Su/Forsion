@@ -15,6 +15,7 @@ import { FloatingToc } from './chat2/FloatingToc'
 import { useApp } from '../stores/appStore'
 import { useWorkspace } from '../engine'
 import { useI18n } from '../i18n'
+import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import type { ViewProps } from '../engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
@@ -43,6 +44,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     isGroupVoting: !!(activeId && state.groupVoting[activeId]),
     cfg: state.cfg,
     authInfo: state.authInfo,
+    desktopConfig: state.desktopConfig,
     modelsResp: state.modelsResp,
     newChatWs: state.newChatWs,
     newChatCfg: state.newChatCfg,
@@ -57,6 +59,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     connMessage: state.connMessage,
     filePreview: state.filePreview,
     openFeedback: state.openFeedback,
+    toast: state.toast,
     editUserMessage: state.editUserMessage,
     regenerate: state.regenerate,
     branchFromMessage: state.branchFromMessage,
@@ -76,6 +79,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     setSessionThinking: state.setSessionThinking,
     setSessionMaxIterations: state.setSessionMaxIterations,
     setSessionPlanMode: state.setSessionPlanMode,
+    voiceOnByAgent: state.voiceOnByAgent,
+    setVoiceMode: state.setVoiceMode,
     setSessionGroup: state.setSessionGroup,
     newSession: state.newSession,
     openSettings: state.openSettings,
@@ -131,8 +136,11 @@ export function ChatView({ leaf, params }: ViewProps) {
     : (chatAgentSlug ? s.agentDefs.find((a) => a.slug === chatAgentSlug)?.name : undefined)
   const userName = s.authInfo?.nickname || s.authInfo?.username || undefined
   const userAvatar = s.authInfo?.avatar || undefined
+  // 语音消息:该会话 agent 是否开启(voice-message 插件设置驱动);渲染语音条还需配了朗读 TTS 模型。
+  const voiceOn = chatAgentSlug ? !!s.voiceOnByAgent[chatAgentSlug] : false
 
   useEffect(() => { useApp.getState().ensureEngineCaps(curEngineId || undefined) }, [curEngineId])
+  useEffect(() => { if (chatAgentSlug) void useApp.getState().refreshVoiceMode(chatAgentSlug) }, [chatAgentSlug])
 
   // DOM 登记在 workspace 层,右栏(目录)跟随最近聚焦的 Chat leaf。
   // 用 callback ref 而非一次性 effect:.t2-stream 会因 <ErrorBoundary key={activeId}> 在切会话时重挂,
@@ -245,6 +253,16 @@ export function ChatView({ leaf, params }: ViewProps) {
   }, [activeId, activeMessages.length])
 
   const copy = (text: string): void => { try { void navigator.clipboard.writeText(text) } catch { /* ignore */ } }
+  // 朗读:配置了 TTS 模型才显示入口;点击播放/合成中的消息 = 停止。
+  const [tts, setTts] = useState<TtsState>(ttsState())
+  useEffect(() => subscribeTts(setTts), [])
+  const ttsEnabled = !!s.desktopConfig?.ttsModelId?.trim()
+  const speak = (id: string, text: string): void => {
+    if (tts?.msgId === id) { stopSpeaking(); return }
+    speakMessage(s.cfg, s.desktopConfig, id, text).catch((e: any) => {
+      s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
+    })
+  }
   const startEdit = (id: string, content: string): void => { setEditingId(id); setEditText(content) }
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
 
@@ -292,6 +310,8 @@ export function ChatView({ leaf, params }: ViewProps) {
                     userName={userName}
                     userAvatar={userAvatar}
                     fileCtx={{ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }}
+                    speakState={tts?.msgId === m.id ? tts.phase : undefined}
+                    voice={ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined}
                     handlers={{
                       onCopy: copy,
                       onRegenerate: () => s.regenerate(m.id, activeId),
@@ -299,6 +319,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                       onEdit: () => startEdit(m.id, m.content),
                       onApproval: (aid, action, args) => void s.decideApproval(m.id, aid, action, args, activeId),
                       onInquiry: (iid, ans) => void s.answerInquiry(m.id, iid, ans, activeId),
+                      ...(ttsEnabled ? { onSpeak: () => speak(m.id, m.content) } : {}),
                     }}
                   />
                 )
@@ -385,6 +406,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           onMaxIterationsChange={activeId ? (n) => s.setSessionMaxIterations(n, activeId) : (n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
           planMode={mvCfg.planMode}
           onPlanModeChange={activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
+          voiceMode={voiceOn}
+          onVoiceModeChange={chatAgentSlug ? (on) => void s.setVoiceMode(chatAgentSlug, on) : undefined}
           groupChat={mvCfg.groupChat}
           groupAgents={mvCfg.groupAgents}
           groupTempAgents={mvCfg.groupTempAgents}

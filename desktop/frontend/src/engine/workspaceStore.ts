@@ -11,6 +11,7 @@ import { getView } from './viewRegistry'
 import { getActiveSpace } from './spaceRegistry'
 import { label } from './types'
 import { locOf, type DropTarget } from './dropModel'
+import { useNav } from './navStore'
 import {
   LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts,
   type LayoutEnvelopeV4, type PersistedPanel,
@@ -105,11 +106,11 @@ function panelType(p: IDockviewPanel): string {
 function makeLeaf(panel: IDockviewPanel): Leaf {
   const raw = (panel.params ?? {}) as Record<string, unknown>
   const { __loc, __type, ...userParams } = raw as PanelMeta & Record<string, unknown>
-  void __loc
   void __type
   return {
     id: panel.id,
     type: panelType(panel),
+    loc: __loc ?? 'main',
     params: userParams,
     setTitle: (t) => panel.api.setTitle(t),
     setParams: (p) => panel.api.updateParameters({ ...(panel.params ?? {}), ...p }),
@@ -119,6 +120,15 @@ function makeLeaf(panel: IDockviewPanel): Leaf {
 
 function panelsAt(api: DockviewApi, loc: ViewLocation): IDockviewPanel[] {
   return api.panels.filter((p) => ((p.params ?? {}) as PanelMeta).__loc === loc)
+}
+
+/** 主区「当前显示」的 panel:全局 activePanel 若在主区用它;否则(焦点在侧栏,最常见于点侧栏列表项)
+ *  取主区组内的 activePanel。就地导航/前进后退都以它为作用对象。 */
+export function activeMainPanel(api: DockviewApi): IDockviewPanel | null {
+  const mains = panelsAt(api, 'main')
+  const global = api.activePanel
+  if (global && mains.some((p) => p.id === global.id)) return global
+  return mains.find((p) => (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id) ?? mains[0] ?? null
 }
 
 /** 给某 location 计算新 panel 的放置位置。 */
@@ -212,8 +222,11 @@ interface WorkspaceState {
   closeSideView(side: 'left' | 'right', type: string): void
   /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。 */
   resetLayout(): void
-  /** 开/聚焦一个视图。singleton 已存在则聚焦。返回 leaf。 */
-  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation): Leaf | null
+  /** 开/聚焦一个视图。singleton 已存在则聚焦;主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
+   *  opts.newTab 显式新建);侧栏同侧同类型复用。返回 leaf。 */
+  openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean }): Leaf | null
+  /** 就地把某 leaf 切换为另一视图类型(同 tab 内导航的原语)。旧视图参数全清,不残留。 */
+  navigateLeaf(leafId: string, type: string, params?: Record<string, unknown>): Leaf | null
   getActiveLeaf(): Leaf | null
   /** 把当前活动视图分屏到一侧(同 type+params 复制一份)。 */
   splitActive(direction: 'right' | 'down', paramsOverride?: Record<string, unknown>): Leaf | null
@@ -320,13 +333,19 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 分屏 / 多 tab(主区还有别的 panel)走默认 close:Dockview 自动移除空组 = 关掉那个分屏 panel。
     const loc = ((panel.params ?? {}) as PanelMeta).__loc ?? 'main'
     const wasLastMain = loc === 'main' && panelsAt(api, 'main').length <= 1
+    // 侧栏关空 → 补「空侧栏」占位(保住 group 作拖放靶;toggleSidebar 折叠不走 closeLeaf,不受影响)。
+    const wasLastSide = (loc === 'left' || loc === 'right')
+      && panelType(panel) !== 'sidebar-empty' && panelsAt(api, loc).length <= 1
     // 先关再填:新页面可能与被关视图同 type(如 Amadeus 单例编辑器),open-first 会复用到正被关的那个。
     panel.api.close()
     if (wasLastMain) {
       const np = getActiveSpace()?.newPage
       if (np) np()
       else get().openView('launcher', {}, 'main')
+    } else if (wasLastSide) {
+      get().openView('sidebar-empty', {}, loc)
     }
+    useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
     get().refreshTabs()
   },
   dropView: (panelId, target) => {
@@ -334,6 +353,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const panel = api?.getPanel(panelId)
     if (!api || !panel) return
     const loc = locOf(target.group) // 目标面板身份 → 落子后视图继承(侧栏=图标 / 主区=tab+标题)
+    // 拖动前各侧计数:占位进退判定不能依赖 visible 标志(moveTo 触发的 syncPanelState 可能已翻转它)。
+    const sideBefore = { left: panelsAt(api, 'left').length, right: panelsAt(api, 'right').length }
     try {
       if (target.mode === 'tab') panel.api.moveTo({ group: target.group, position: 'center', index: target.index })
       else panel.api.moveTo({ group: target.group, position: target.dir }) // 方向 = 面板内分屏并新建组
@@ -344,6 +365,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const np = getActiveSpace()?.newPage
       if (np) np()
       else get().openView('launcher', {}, 'main')
+    }
+    // 侧栏占位进退:某侧被拖空 → 补占位(保住 drop 靶);拖入真实 tab 的一侧若有占位 → 占位退位。
+    for (const side of ['left', 'right'] as const) {
+      const now = panelsAt(api, side)
+      if (sideBefore[side] > 0 && now.length === 0) get().openView('sidebar-empty', {}, side)
+      else if (now.length > 1) now.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
     }
     pinSides(api) // 侧栏可能变动 → 重钉黄金分割宽
     get().refreshTabs()
@@ -378,12 +405,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api) return
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
+    useNav.getState().reset() // 布局重建,旧 leaf id 全失效
     set({ stash: { left: [], right: [] }, leftVisible: true, rightVisible: true, focusedChatLeafId: null })
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
   },
 
-  openView(type, params = {}, loc = 'main') {
+  openView(type, params = {}, loc = 'main', opts) {
     const api = get().api
     if (!api) return null
     const def = getView(type)
@@ -402,12 +430,27 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         return makeLeaf(existing)
       }
     }
+    if (loc === 'main' && !opts?.newTab) {
+      // 主区默认「就地导航」:替换当前活动主 leaf(浏览器/Obsidian 式;singleton 已在上方被捕获激活)。
+      // ＋按钮/兜底填充等显式 newTab;主区为空(Space build 期)时自然落到下方新建。
+      const cur = activeMainPanel(api)
+      if (cur) return get().navigateLeaf(cur.id, type, params)
+    }
+    if (loc !== 'main') {
+      // 侧栏同侧同类型复用(非 singleton 也复用):侧栏 tab 按类型唯一,如左右各一个「工作区」视图。
+      const existingSide = panelsAt(api, loc).find((p) => panelType(p) === type)
+      if (existingSide) {
+        existingSide.api.setActive()
+        return makeLeaf(existingSide)
+      }
+    }
     const id = def?.singleton ? type : nextId(api, type)
     const title = def ? label(def.displayName) : type
     const firstOfSide = loc !== 'main' && panelsAt(api, loc).length === 0
     const panel = api.addPanel({
       id,
-      component: type,
+      // 主区 panel 一律挂 __frame 宿主(就地切视图靠 updateParameters 换 __type);侧栏保持 per-type 组件。
+      component: loc === 'main' ? '__frame' : type,
       title,
       params: { ...params, __loc: loc, __type: type },
       position: positionFor(api, loc) as never,
@@ -417,6 +460,32 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (loc === 'left') set({ leftVisible: true })
     if (loc === 'right') set({ rightVisible: true })
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
+    scheduleWorkspaceSave()
+    return makeLeaf(panel)
+  },
+
+  navigateLeaf(leafId, type, params = {}) {
+    const api = get().api
+    const panel = api?.getPanel(leafId)
+    const def = getView(type)
+    if (!api || !panel || !def) return null
+    const old = (panel.params ?? {}) as PanelMeta & Record<string, unknown>
+    const sameType = panelType(panel) === type
+    // dockview updateParameters 是 merge 语义,但值为 undefined 的键会被显式删除(dockviewPanel.update)
+    // → 旧视图参数全部映射为 undefined,防 followActive/reuseKey 之类残留污染新视图。
+    const cleared: Record<string, unknown> = {}
+    for (const k of Object.keys(old)) cleared[k] = undefined
+    panel.api.updateParameters({ ...cleared, ...params, __loc: old.__loc ?? 'main', __type: type })
+    panel.api.setTitle(label(def.displayName))
+    panel.api.setActive()
+    // 就地切换不触发 onDidActivePanelChange(panel 未变)→ 自补簿记。
+    if (type === 'chat') set({ focusedChatLeafId: panel.id })
+    else if (!sameType && get().focusedChatLeafId === panel.id) {
+      // 本 leaf 从 chat 切走 → 焦点会话 leaf 移交给其他 chat panel(无则清空,右栏目录等显示空态)。
+      const otherChat = panelsAt(api, 'main').find((p) => p.id !== panel.id && panelType(p) === 'chat')
+      set({ focusedChatLeafId: otherChat?.id ?? null })
+    }
+    get().refreshTabs()
     scheduleWorkspaceSave()
     return makeLeaf(panel)
   },
@@ -434,12 +503,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const type = panelType(active)
     const { __loc, __type, ...userParams } = (active.params ?? {}) as PanelMeta & Record<string, unknown>
     void __type
+    // 侧栏严禁左右分屏(与拖拽路径 dropModel.splitDirection 同一铁律):焦点在侧栏时向右分一律折叠成向下。
+    const inSidebar = __loc === 'left' || __loc === 'right'
     const panel = api.addPanel({
       id: nextId(api, type),
-      component: type,
+      component: inSidebar ? type : '__frame', // 主区分屏 panel 同样挂 frame 宿主(支持就地切视图)
       title: active.title ?? type,
       params: { ...userParams, ...paramsOverride, __loc: __loc ?? 'main', __type: type },
-      position: { referencePanel: active.id, direction: direction === 'right' ? 'right' : 'below' } as never,
+      position: { referencePanel: active.id, direction: direction === 'right' && !inSidebar ? 'right' : 'below' } as never,
     })
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
     scheduleWorkspaceSave()
@@ -453,8 +524,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const panels = panelsAt(api, side)
     const visible = panels.length > 0
     if (visible) {
-      // 收起:暂存内容,先把该侧宽度补间到 0(丝滑),动画结束再移除 panel。
-      const stashed: Stashed[] = panels.map((p) => {
+      // 收起:暂存内容,先把该侧宽度补间到 0(丝滑),动画结束再移除 panel。占位不入 stash
+      // (空 stash 展开时回落 sidebarDefaults —— 折叠空侧栏再展开会复活默认视图,有意为之)。
+      const stashed: Stashed[] = panels.filter((p) => panelType(p) !== 'sidebar-empty').map((p) => {
         const { __loc, __type, ...userParams } = (p.params ?? {}) as PanelMeta & Record<string, unknown>
         void __loc
         void __type
@@ -518,7 +590,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const blob = loadNamedLayout(name)
     if (!api || !blob) return false
     try {
+      migrateLayoutBlob(blob)
       api.fromJSON(blob.dockview as never)
+      useNav.getState().reset() // 布局整体更换,旧 leaf id 全失效
       set({
         leftVisible: blob.sidebars.left.visible,
         rightVisible: blob.sidebars.right.visible,
@@ -548,9 +622,44 @@ function layoutViewsAllRegistered(dockview: unknown): boolean {
   return true
 }
 
+/** 退役视图 → 统一视图(2026-07-03):会话列表/工作区文件/笔记库 并入 'workspace',
+ *  目录/Amadeus 大纲 并入 'outline'。迁移后旧注册删除,launcher/palette 不再出现旧名。 */
+const RETIRED_VIEW_MAP: Record<string, string> = {
+  sessions: 'workspace',
+  files: 'workspace',
+  'amadeus-pages': 'workspace',
+  toc: 'outline',
+  'amadeus-outline': 'outline',
+}
+
+/** 历史布局就地迁移(幂等,载入时跑):①退役视图改名(dockview panels + 侧栏 stash;同侧重复由
+ *  openView 的「同侧同类型复用」自然合并);②主区 panel 组件统一为 '__frame' 宿主(params.__type
+ *  早已持久化,v3→v4 迁移即为此铺垫)。新代码保存的布局天然已是终态。 */
+export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 'sidebars'>): void {
+  const panels = (layout.dockview as { panels?: Record<string, { contentComponent?: string; params?: { __loc?: string; __type?: string } }> } | null)?.panels
+  if (panels) {
+    for (const p of Object.values(panels)) {
+      if (!p || typeof p !== 'object') continue
+      const params = p.params ?? {}
+      const next = params.__type && RETIRED_VIEW_MAP[params.__type]
+      if (next) {
+        params.__type = next
+        p.contentComponent = next
+      }
+      if ((params.__loc ?? 'main') === 'main') p.contentComponent = '__frame'
+    }
+  }
+  for (const side of ['left', 'right'] as const) {
+    const sb = layout.sidebars?.[side]
+    if (!sb) continue
+    sb.stash = sb.stash.map((v) => (RETIRED_VIEW_MAP[v.type] ? { ...v, type: RETIRED_VIEW_MAP[v.type] } : v))
+  }
+}
+
 export function tryRestoreLayout(api: DockviewApi): boolean {
   const layout = loadLayout()
   if (!layout) return false
+  migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局
   if (!layoutViewsAllRegistered(layout.dockview)) return false
   const known = (v: PersistedPanel): boolean => !!getView(v.type) // 收起态 stash 也剔除未注册视图,防展开时重开死视图
   try {

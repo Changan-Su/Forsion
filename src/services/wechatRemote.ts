@@ -20,6 +20,11 @@ import { IlinkRuntime } from '../wechat/ilinkRuntime.js';
 import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
 // 拟人分段回复:通道无关 + 按 agent(见 services/replySegment.ts;面板由 plugins/reply-segment 声明,行为留在核心)。
 import { resolveReplySegment, splitMessage, segmentDelayMs } from './replySegment.js';
+// 语音消息:该 agent 开启时,除文字外再把整条回复合成音频、当**文件**发一份到微信。
+// (微信 iLink bot 平台不渲染 bot 发的原生语音气泡——sendmessage 返回成功也不显示,已实测证实;
+//  故退而发可播放的音频文件。面板由 plugins/voice-message 声明。)
+import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from './voiceMessage.js';
+import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';
@@ -408,7 +413,12 @@ class WechatRemoteService {
         unsubscribe?.();
         this.stopTyping(accountId, openid, key);
         this.pendingSettlers.delete(forceSettle);
-        if (terminal) { activeRunsByPeer.delete(key); this.pendingApprovalByPeer.delete(key); }
+        if (terminal) {
+          // 只清「本 run」的登记:新消息可能已把 activeRunsByPeer 指向新 run(run2),别把它误删——
+          // 否则 run2 的分段循环会因 activeRunsByPeer 变 undefined 而中断(只发第一条)。
+          if (activeRunsByPeer.get(key) === runId) activeRunsByPeer.delete(key);
+          this.pendingApprovalByPeer.delete(key);
+        }
       };
       // stop()/服务重载时强制结束挂起的等待。
       const forceSettle = (): void => { if (!settled) { settled = true; resolve('微信远程服务已停止。'); } close(true); };
@@ -452,18 +462,46 @@ class WechatRemoteService {
       const seg = resolveReplySegment(ctx.agentSlug);
       const delayBase = seg.delayBase;
       const segs = seg.enabled ? splitMessage(content) : [content];
+      // 文本(始终发,分段插件开启则拆多条):首段走 deliver(同步回复),其余段延迟后推送。
+      // 只在「被停止」(activeRunsByPeer 整个清掉)时中断;被新消息取代(指向另一个 run)不算 —— 每条回复都要发全,
+      // 否则「回复中又发一条消息」会把上一条回复截成只剩第一段(实测的吞消息 bug)。新回复会经 paced 排队跟在后面。
       deliver(segs[0] ?? content);
       for (let i = 1; i < segs.length; i++) {
-        if (activeRunsByPeer.get(ctx.key) !== ctx.runId) break; // 被停止/取代 → 停发
+        if (!activeRunsByPeer.has(ctx.key)) break; // 被「停止」清空 → 停发
         await sleep(segmentDelayMs(segs[i], delayBase));
-        if (activeRunsByPeer.get(ctx.key) !== ctx.runId) break;
+        if (!activeRunsByPeer.has(ctx.key)) break;
         void this.runtime?.setTyping(ctx.accountId, ctx.openid, true).catch(() => {});
         deliver(segs[i]);
+      }
+      // 语音模式:文字之外,再把整条回复合成音频、当文件发一份(bot 发不出原生语音气泡,退而发可播放音频文件)。
+      const voice = resolveVoiceMessage(ctx.agentSlug);
+      if (voice.enabled && voice.wechat && this.runtime && activeRunsByPeer.has(ctx.key)) {
+        if (voice.model) await this.sendVoiceFile(ctx.accountId, ctx.openid, content, voice);
+        else console.warn('[wechat-remote] 语音已开启但未配置 TTS 模型(设置→模型→语音朗读),只发了文字。');
       }
     } catch (e) {
       console.warn('[wechat-remote] deliverReply failed:', e);
     } finally {
       done();
+    }
+  }
+
+  /**
+   * 把整条回复合成音频、当**文件**发到微信(voice.wav)。微信 bot 发不出原生语音气泡,这是退路。
+   * 失败静默(文字已经发过了,不影响主回复)。合成较慢,期间靠 startTyping 的定时器维持「正在输入」。
+   */
+  private async sendVoiceFile(
+    accountId: string,
+    openid: string,
+    text: string,
+    cfg: { model: string; voice?: string; speed?: number; enabled: boolean; wechat: boolean },
+  ): Promise<void> {
+    try {
+      const audio = await synthesizeVoiceWav(text, cfg); // WAV 字节
+      const res = await this.runtime?.sendMedia(accountId, openid, Buffer.from(audio), { kind: 'file', fileName: 'voice.wav' });
+      if (!res?.ok) console.warn('[wechat-remote] 语音文件发送失败:', res?.error);
+    } catch (e: any) {
+      console.warn('[wechat-remote] 语音文件合成/发送失败:', e?.message || e);
     }
   }
 
@@ -604,8 +642,23 @@ class WechatRemoteService {
       await deps().state.setAgentConfig(binding.session_id, JSON.stringify({ ...cfg, agentSlug: def.slug }));
       return `✓ 已切换到 Agent:${def.name}(${def.slug})。之后本会话的消息都用它。`;
     }
+    if (c === 'voice' || c === 'text' || c === '语音' || c === '文字') {
+      const on = c === 'voice' || c === '语音';
+      // 目标 = 本会话当前 agent(与 /agent 同源;缺省用默认 agent)。
+      const rows = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [binding.session_id, binding.user_id]);
+      const slug = (parseJson(rows[0]?.agent_config) || {}).agentSlug || readAgentsMeta().defaultSlug;
+      try {
+        if (on) await setPluginEnabled(VOICE_MESSAGE_PLUGIN_ID, true); // 确保插件启用(WeChat-only 用户也能开)
+        await setScopeSettings(VOICE_MESSAGE_PLUGIN_ID, { agentSlug: slug }, { apply: on });
+      } catch (e: any) {
+        return `切换失败:${e?.message || e}`;
+      }
+      return on
+        ? '✓ 已切到语音消息:之后本会话的回复会以微信语音气泡发出。需先在 Desktop「设置 → 模型 → 语音朗读」配好 TTS 模型;未配则回退发文字。回复 /text 切回文字。'
+        : '✓ 已切回文字消息。回复 /voice 再切到语音。';
+    }
     if (c === 'help' || c === 'h' || c === '帮助' || c === '?') {
-      return ['可用命令:', '/new 新建会话并切换连接', '/list 列出会话(● 为正在连接)', '/switch <序号> 切换正在连接的会话', '/agents 列出可用 Agent', '/agent <slug> 切换本会话的 Agent', '/help 显示本帮助', '停止 中止当前任务', '批准 / 拒绝 处理待批操作'].join('\n');
+      return ['可用命令:', '/new 新建会话并切换连接', '/list 列出会话(● 为正在连接)', '/switch <序号> 切换正在连接的会话', '/agents 列出可用 Agent', '/agent <slug> 切换本会话的 Agent', '/voice 语音消息 · /text 文字消息', '/help 显示本帮助', '停止 中止当前任务', '批准 / 拒绝 处理待批操作'].join('\n');
     }
     return `未知命令 /${parts[0]}。回复 /help 查看可用命令。`;
   }

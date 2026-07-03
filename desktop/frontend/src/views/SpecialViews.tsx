@@ -17,14 +17,21 @@ const VIEW_TYPE: Record<SpecialKind, string> = {
   workspace: 'workspace-detail',
 }
 
-/** 打开一个特殊视图(主区 tab)。workspace 需带 wsKey。 */
+/** 打开一个特殊视图(主区 tab,默认就地替换当前 tab)。workspace 需带 wsKey。 */
 export function openSpecial(kind: SpecialKind, wsKey?: string): void {
   const a = useApp.getState()
   if (kind === 'workspace' && wsKey != null) a.setDetailWsKey(wsKey)
   a.setActiveSpecial(kind)
-  useWorkspace.getState().openView(VIEW_TYPE[kind], {}, 'main')
-  // 喂主面板导航历史(前进/后退)。back/forward 复原期间 recordNav 有闸,不重记。
-  recordNav(`special:${kind}${wsKey ? `:${wsKey}` : ''}`, () => openSpecial(kind, wsKey))
+  const leaf = useWorkspace.getState().openView(VIEW_TYPE[kind], {}, 'main')
+  // 喂 per-tab 导航历史。restore 作用于本 leaf 自身(navigateLeaf,不再全局 openSpecial —— 那会跳去别的 tab)。
+  if (leaf) {
+    recordNav(leaf.id, `special:${kind}${wsKey ? `:${wsKey}` : ''}`, () => {
+      const a2 = useApp.getState()
+      if (kind === 'workspace' && wsKey != null) a2.setDetailWsKey(wsKey)
+      a2.setActiveSpecial(kind)
+      useWorkspace.getState().navigateLeaf(leaf.id, VIEW_TYPE[kind], {})
+    })
+  }
 }
 
 /** 从特殊视图里打开某会话 → 设为活动 + 焦点回对话 leaf。 */

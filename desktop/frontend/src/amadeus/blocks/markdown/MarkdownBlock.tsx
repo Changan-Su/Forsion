@@ -33,6 +33,7 @@ import { Plugin, Selection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
+import { unescapeWikiOutsideFences } from '@amadeus-shared/links'
 import { emptyDb, serializeDb } from '@amadeus-shared/db/schema'
 import { amadeus } from '../../api'
 import { getAttachmentPrefs } from '../../lib/attachments'
@@ -63,7 +64,8 @@ interface BlockKeys {
   mergePrev(): void
   arrow(dir: 'prev' | 'next'): void
   moveDir(dir: 'up' | 'down'): void
-  slash(): void
+  /** 返回 false = 不接管 '/'(整篇宿主 PlainMarkdownEditor 用,让 '/' 正常落字);void = 接管弹菜单。 */
+  slash(): boolean | void
 }
 
 function placeholderPlugin(text: string) {
@@ -178,8 +180,7 @@ function MilkdownInner({
         if (wikiOpenRef.current || mentionOpenRef.current) return false
         const before = state.doc.textBetween(Math.max(0, sel.from - 1), sel.from)
         if (state.doc.textContent === '' || before === '' || before === ' ' || before === ' ') {
-          keysRef.current.slash()
-          return true
+          return keysRef.current.slash() !== false
         }
       }
       return false
@@ -221,7 +222,9 @@ function MilkdownInner({
         }))
         ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
           if (!ready.current || readOnly) return
-          onChange(markdown)
+          // 新打的 [[链接]] 在重解析成 wikilink 节点前仍是纯文本,remark 序列化会把它转义成 \[\[ ——
+          // 索引的 /\[\[…\]\]/ 就永远抽不到(后加双链全部失联,反链/关系图空)。落盘前统一去转义。
+          onChange(unescapeWikiOutsideFences(markdown))
         })
       })
       .use(commonmark)
@@ -504,6 +507,39 @@ export function MarkdownBlock({
         />
       </MilkdownProvider>
       {slashOpen && !readOnly && <SlashMenu onPick={applySlash} onClose={() => setSlashOpen(false)} />}
+    </div>
+  )
+}
+
+/** 整篇 markdown 的独立 Milkdown 宿主(工作区外部 .md 编辑用):字符串进出,零 vault/pageStore 依赖。
+ *  块级机关全部降级:无 slash 菜单('/' 正常落字,markdown 输入规则仍生效)、粘贴图片/文件忽略、
+ *  双链建议无候选(输入 [[ 仅作纯文本)。资源不做 display/stored 变换 —— 外部文件原文往返无损。 */
+export function PlainMarkdownEditor({ initial, onChange, readOnly = false }: {
+  initial: string
+  onChange: (md: string) => void
+  readOnly?: boolean
+}) {
+  const noop = (): void => {}
+  const keys: BlockKeys = {
+    insertAfter: noop, deleteEmpty: noop, mergePrev: noop, arrow: noop, moveDir: noop,
+    slash: () => false,
+  }
+  return (
+    <div className="md-block md-plain">
+      <MilkdownProvider>
+        <MilkdownInner
+          initial={initial}
+          onChange={onChange}
+          keys={keys}
+          saveImage={async () => null}
+          saveFiles={async () => {}}
+          onOpenWiki={noop}
+          getPageNames={() => []}
+          focusPlace={null}
+          onFocused={noop}
+          readOnly={readOnly}
+        />
+      </MilkdownProvider>
     </div>
   )
 }

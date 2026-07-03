@@ -2,7 +2,7 @@
  * ~/.tangu/config.json —— Tangu 本地实例配置的**单一事实来源(唯一真源)**。
  *
  * 一处编辑、CLI 友好:cloud / database / server / sandbox / workspace / providers / mcp /
- * engines / enginePrefs / specialAgents / plugins / browser / wechat 全段集中于此文件。
+ * engines / enginePrefs / specialAgents / plugins / browser / wechat / notes / tts 全段集中于此文件。
  *
  * 设计(刻意保持 generic,避免与各 section 模块循环依赖):
  *   - 本模块只做「config.json 的通用 JSON 读写 + 段取用」,**不** import 任何 section 模块,

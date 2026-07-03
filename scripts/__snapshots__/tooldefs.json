@@ -3843,6 +3843,40 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_task",
+        "description": "Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that drives the user's real, logged-in local Chrome with vision + reasoning, and returns the final result. Use this for goals that need several page interactions or the user's existing logins — e.g. \"check my inbox for X\", \"book the cheapest flight on <site>\", \"fill and submit this form\", \"research <topic> across these pages\". It runs its own loop end-to-end (no step-by-step driving from you). For a single navigate/click/read, prefer the lighter browser_navigate/browser_click tools instead. It acts as the user on logged-in sites — scope it with allowed_domains when possible.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "The full natural-language goal to accomplish in the browser."
+            },
+            "start_url": {
+              "type": "string",
+              "description": "Optional URL to open first before pursuing the task."
+            },
+            "max_steps": {
+              "type": "number",
+              "description": "Optional cap on the agent's browser steps (default 50)."
+            },
+            "allowed_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional domain allowlist to scope where the agent may navigate (e.g. [\"*.github.com\"])."
+            }
+          },
+          "required": [
+            "task"
+          ]
+        }
+      }
     }
   ],
   "tangu-docker:host+skills": [
@@ -4934,6 +4968,40 @@
           },
           "required": [
             "title"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_task",
+        "description": "Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that drives the user's real, logged-in local Chrome with vision + reasoning, and returns the final result. Use this for goals that need several page interactions or the user's existing logins — e.g. \"check my inbox for X\", \"book the cheapest flight on <site>\", \"fill and submit this form\", \"research <topic> across these pages\". It runs its own loop end-to-end (no step-by-step driving from you). For a single navigate/click/read, prefer the lighter browser_navigate/browser_click tools instead. It acts as the user on logged-in sites — scope it with allowed_domains when possible.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "The full natural-language goal to accomplish in the browser."
+            },
+            "start_url": {
+              "type": "string",
+              "description": "Optional URL to open first before pursuing the task."
+            },
+            "max_steps": {
+              "type": "number",
+              "description": "Optional cap on the agent's browser steps (default 50)."
+            },
+            "allowed_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional domain allowlist to scope where the agent may navigate (e.g. [\"*.github.com\"])."
+            }
+          },
+          "required": [
+            "task"
           ]
         }
       }
@@ -7063,6 +7131,40 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_task",
+        "description": "Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that drives the user's real, logged-in local Chrome with vision + reasoning, and returns the final result. Use this for goals that need several page interactions or the user's existing logins — e.g. \"check my inbox for X\", \"book the cheapest flight on <site>\", \"fill and submit this form\", \"research <topic> across these pages\". It runs its own loop end-to-end (no step-by-step driving from you). For a single navigate/click/read, prefer the lighter browser_navigate/browser_click tools instead. It acts as the user on logged-in sites — scope it with allowed_domains when possible.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "The full natural-language goal to accomplish in the browser."
+            },
+            "start_url": {
+              "type": "string",
+              "description": "Optional URL to open first before pursuing the task."
+            },
+            "max_steps": {
+              "type": "number",
+              "description": "Optional cap on the agent's browser steps (default 50)."
+            },
+            "allowed_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional domain allowlist to scope where the agent may navigate (e.g. [\"*.github.com\"])."
+            }
+          },
+          "required": [
+            "task"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:host+skills": [
@@ -8154,6 +8256,40 @@
           },
           "required": [
             "title"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_task",
+        "description": "Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that drives the user's real, logged-in local Chrome with vision + reasoning, and returns the final result. Use this for goals that need several page interactions or the user's existing logins — e.g. \"check my inbox for X\", \"book the cheapest flight on <site>\", \"fill and submit this form\", \"research <topic> across these pages\". It runs its own loop end-to-end (no step-by-step driving from you). For a single navigate/click/read, prefer the lighter browser_navigate/browser_click tools instead. It acts as the user on logged-in sites — scope it with allowed_domains when possible.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "The full natural-language goal to accomplish in the browser."
+            },
+            "start_url": {
+              "type": "string",
+              "description": "Optional URL to open first before pursuing the task."
+            },
+            "max_steps": {
+              "type": "number",
+              "description": "Optional cap on the agent's browser steps (default 50)."
+            },
+            "allowed_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional domain allowlist to scope where the agent may navigate (e.g. [\"*.github.com\"])."
+            }
+          },
+          "required": [
+            "task"
           ]
         }
       }

@@ -2186,6 +2186,9 @@ html.dark .brand-logo--dark { display: inline-block; }
   overflow: hidden;
 }
 .wsfile-panel.expanded { max-width: 1080px; max-height: 82vh; }
+/* iframe 预览(html)没有固有高度(默认 150px),内容驱动的面板撑不起来:预览态给定高 */
+.wsfile-panel.fill { height: 58vh; }
+.wsfile-panel.fill.expanded { height: 82vh; }
 .wsfile-head {
   flex-shrink: 0;
   display: flex;
@@ -2216,6 +2219,22 @@ html.dark .brand-logo--dark { display: inline-block; }
 .wsfile-table { border-collapse: collapse; font-size: 12px; width: max-content; min-width: 100%; }
 .wsfile-table th, .wsfile-table td { border: var(--border-width) solid var(--border); padding: 4px 10px; text-align: left; white-space: nowrap; vertical-align: top; }
 .wsfile-table th { background: var(--overlay-light); position: sticky; top: 0; font-weight: 600; }
+
+/* ── 工作区文件预览标签页(wsfile 视图;复用上方 wsfile-* 渲染器样式)── */
+.wsfile-tab { height: 100%; display: flex; flex-direction: column; min-height: 0; background: transparent; }
+.wsfile-tab .wsfile-head { flex-shrink: 0; }
+.wsfile-ask-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+/* 本机 .md 编辑(Amadeus Milkdown 整篇宿主) */
+.wsmd-edit { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.wsmd-banner {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; font-size: 12.5px; color: var(--text-light);
+  background: var(--accent-light); border-bottom: var(--border-width) solid var(--border);
+}
+.wsmd-banner.danger { background: var(--danger-light); color: var(--danger); }
+.wsmd-scope { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 26px 40px; background: transparent; }
+.wsmd-scope .md-plain .milkdown { outline: none; }
+
 
 /* ── 右键菜单(工作区文件管理) ── */
 .ctx-menu {

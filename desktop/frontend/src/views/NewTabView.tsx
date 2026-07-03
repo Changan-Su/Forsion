@@ -1,12 +1,13 @@
 /** 新建标签页(空白启动器):点主区标签栏末尾的 ＋ 打开,所有 Space 统一用它。
- *  三段:最近使用(精准视图:某篇笔记/某个会话)→ 主区视图 → 侧栏视图;
- *  主区列表按当前 Space 给,侧栏列表直接取 Space 的 sidebarDefaults(名称/图标查视图注册表)。
- *  选中即在对应区打开,并关闭本空白页(空白页「变成」所选视图)。 */
+ *  三段:最近使用(精准视图:某篇笔记/某个会话)→ 主区视图 → 侧栏视图。
+ *  主区/最近**跨 Space 全量列出**(视图注册本就全局;Amadeus 项跟随其 dev 门控),
+ *  侧栏列表取当前 Space 的 sidebarDefaults。选中即打开:主区项经就地导航「变成」所选视图。 */
 import { type ReactNode } from 'react'
 import { Plus, SquarePen, Smartphone, Bot, MessageCircle, FileText, CalendarDays } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { openSpecial } from './SpecialViews'
 import { useWorkspace, useSpaceStore, getActiveSpace, getView, label } from '../engine'
+import { AMADEUS_ENABLED } from '../spaces'
 import { useRecentViews } from '../recentViews'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { openNote } from '../amadeusNav'
@@ -27,14 +28,12 @@ export function NewTabView({ leaf }: ViewProps) {
     setNewChatCfg: state.setNewChatCfg,
     setNewChatModel: state.setNewChatModel,
   })))
-  useSpaceStore((state) => state.activeSpaceId) // 仅订阅换 Space 重渲
-  // 逻辑一律用注册表解析后的 Space:持久化的 activeSpaceId 可能指向未注册空间(如关掉开发者模式后的
-  // 'amadeus'),getActiveSpace 会回落首个注册空间——主区/侧栏/最近三段必须同源,否则错配。
-  const spaceId = getActiveSpace()?.id ?? 'tangu'
+  useSpaceStore((state) => state.activeSpaceId) // 仅订阅换 Space 重渲(侧栏段取自当前 Space 的 defaults)
   const recents = useRecentViews((state) => state.items)
   const vaultRoot = usePageStore((state) => state.vaultRoot)
   const pages = usePageStore((state) => state.pages)
   const hasBackend = !!window.tangu?.backendStatus
+  const amadeusOn = !!window.amadeus && AMADEUS_ENABLED // 笔记项跟随 Amadeus 的 dev 门控(与 Space 注册同纪律)
   const ws = () => useWorkspace.getState()
 
   const newChat = (): void => {
@@ -52,18 +51,14 @@ export function NewTabView({ leaf }: ViewProps) {
     if (vaultRoot) void usePageStore.getState().createPage()
   }
 
-  // 主区视图按 Space 给(主视图没有注册表级的归属声明,此处是唯一清单)。
-  const main: Item[] =
-    spaceId === 'amadeus'
-      ? [
-          { key: 'new-note', icon: <SquarePen size={20} />, label: t('newtab.newNote'), run: newNote, show: true },
-          { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { ensureEditor(); void openDailyNote() }, show: !!vaultRoot },
-        ]
-      : [
-          { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: true },
-          { key: 'wechat', icon: <Smartphone size={20} />, label: t('special.wechat.title'), run: () => openSpecial('wechat'), show: hasBackend },
-          { key: 'agents', icon: <Bot size={20} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
-        ]
+  // 主区视图跨 Space 全量列出(主视图没有注册表级的归属声明,此处是唯一清单)。
+  const main: Item[] = [
+    { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: true },
+    { key: 'new-note', icon: <SquarePen size={20} />, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
+    { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { ensureEditor(); void openDailyNote() }, show: amadeusOn && !!vaultRoot },
+    { key: 'wechat', icon: <Smartphone size={20} />, label: t('special.wechat.title'), run: () => openSpecial('wechat'), show: hasBackend },
+    { key: 'agents', icon: <Bot size={20} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
+  ]
 
   // 侧栏视图 = 当前 Space 的 sidebarDefaults(左右两栏),名称/图标查视图注册表。
   // 打开顺序:该侧收起时先 toggleSidebar 展开(同步还原 stash 里的全部视图——直接 openView 会把
@@ -88,11 +83,10 @@ export function NewTabView({ leaf }: ViewProps) {
     }),
   )
 
-  // 最近使用:精准视图快捷跳转,按当前 Space 过滤(笔记→Amadeus,会话→Tangu);会话标题用实时值覆盖快照。
+  // 最近使用:精准视图快捷跳转,跨 Space 不过滤(笔记项跟随 Amadeus 门控);会话标题用实时值覆盖快照。
   // 只显示仍然存在的目标:已删除的笔记若点开,loadPage 的「缺文件即新建」语义会把它复活成空文件。
   const recentItems: Item[] = recents
-    .filter((r) => (spaceId === 'amadeus' ? r.kind === 'note' : r.kind === 'chat'))
-    .filter((r) => (r.kind === 'note' ? pages.includes(r.id) : s.sessions.some((x) => x.id === r.id)))
+    .filter((r) => (r.kind === 'note' ? amadeusOn && pages.includes(r.id) : s.sessions.some((x) => x.id === r.id)))
     .slice(0, 8)
     .map((r) => ({
       key: r.key,
@@ -104,10 +98,14 @@ export function NewTabView({ leaf }: ViewProps) {
       show: true,
     }))
 
-  // 选中:先在对应区打开,再关闭本空白页 → 视觉上「空白页变成所选视图」。
-  // 必须走 store 的 closeLeaf(而非 leaf.close 裸关):它带「主区关空即回填」兜底——选侧栏项时
-  // 主区若只剩本启动器,裸关会留下零面板的主区,后续 openView 会把主区视图错落进侧栏并被持久化。
-  const pick = (it: Item): void => { it.run(); useWorkspace.getState().closeLeaf(leaf.id) }
+  // 选中:主区项经 openView 的「就地导航」直接把本空白页变成目标视图(不可再关,否则关掉的是刚
+  // 切好的视图);run 后本页仍是 launcher 的情形(侧栏项 / 跳去既有 tab 的项)才关掉自己,维持
+  // 「空白页消失」的旧观感。closeLeaf 带「主区关空即回填」兜底,不裸关。
+  const pick = (it: Item): void => {
+    it.run()
+    const p = useWorkspace.getState().api?.getPanel(leaf.id)
+    if (p && ((p.params ?? {}) as { __type?: string }).__type === 'launcher') useWorkspace.getState().closeLeaf(leaf.id)
+  }
 
   const section = (title: string, items: Item[]): ReactNode => {
     const shown = items.filter((i) => i.show)

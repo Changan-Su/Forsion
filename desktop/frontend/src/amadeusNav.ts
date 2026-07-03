@@ -17,7 +17,8 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
     return
   }
   if (opts?.newTab || editors.length === 0) {
-    ws.openView('amadeus-editor', { notePath: path }, 'main')
+    // newTab(⌘点击)显式新开;「一个编辑器都没有」走 openView 默认的就地导航(当前 tab 变编辑器)。
+    ws.openView('amadeus-editor', { notePath: path }, 'main', { newTab: opts?.newTab })
     await waitForActive(path)
     return
   }

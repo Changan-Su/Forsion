@@ -18,7 +18,7 @@ import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
 import { label } from './types'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave } from './workspaceStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel } from './workspaceStore'
 import { useNav } from './navStore'
 import { getActiveSpace } from './spaceRegistry'
 import { computeDropTarget, type DropTarget } from './dropModel'
@@ -27,10 +27,10 @@ import { computeDropTarget, type DropTarget } from './dropModel'
 function leafFromProps(props: IDockviewPanelProps): Leaf {
   const raw = (props.params ?? {}) as Record<string, unknown>
   const { __loc, __type, ...userParams } = raw
-  void __loc
   return {
     id: props.api.id,
     type: (typeof __type === 'string' && __type) || (props.api as { component?: string }).component || '',
+    loc: (__loc === 'left' || __loc === 'right') ? __loc : 'main',
     params: userParams,
     setTitle: (t) => props.api.setTitle(t),
     setParams: (p) => props.api.updateParameters({ ...raw, ...p }),
@@ -55,6 +55,20 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       return changed
     })
     return <div className={`wb-view${enter ? ' wb-view-enter' : ''}`}>{def.factory({ leaf, params: leaf.params })}</div>
+  }
+}
+
+/** 主区 frame 宿主:按 params.__type 动态派发到注册视图(包装组件按类型缓存)。
+ *  就地切视图 = navigateLeaf 改 __type → key 换 → 内层 remount,复用 makeComponent 的
+ *  「类型真变才播淡入」机制(lastMainViewType)。视图注册变化时整个 components map 重建,缓存随之作废。 */
+function makeFrameHost(cache: Map<string, React.FC<IDockviewPanelProps>>): React.FC<IDockviewPanelProps> {
+  return function FrameHost(props) {
+    const type = ((props.params ?? {}) as { __type?: string }).__type || ''
+    const def = getView(type)
+    if (!def) return null
+    let Comp = cache.get(type)
+    if (!Comp) { Comp = makeComponent(def); cache.set(type, Comp) }
+    return <Comp key={type} {...props} />
   }
 }
 
@@ -87,7 +101,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   return (
     <div
       ref={tabRef}
-      className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}`}
+      className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}${type === 'sidebar-empty' ? ' wb-tab--empty' : ''}`}
       title={api.title}
       draggable
       onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}
@@ -142,17 +156,23 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
   return function PrefixActions({ panels }) {
     // 左栏收起后,主区组成为最左 → 折叠钮要躲开 mac 交通灯(加 --edge,见 engine.css)。
     const leftCollapsed = !useWorkspace((s) => s.leftVisible)
-    const canBack = useNav((s) => s.idx > 0)
-    const canFwd = useNav((s) => s.idx >= 0 && s.idx < s.entries.length - 1)
+    // per-tab 历史:箭头只作用于「当前活动主 leaf」的栈。订阅 mainTabs(激活变化)与 stacks 重渲。
+    useWorkspace((s) => s.mainTabs)
+    const stacks = useNav((s) => s.stacks)
+    const api = useWorkspace.getState().api
+    const amId = api ? activeMainPanel(api)?.id ?? null : null
+    const st = amId ? stacks[amId] : undefined
+    const canBack = !!st && st.idx > 0
+    const canFwd = !!st && st.idx >= 0 && st.idx < st.entries.length - 1
     if (!isMainGroup(panels)) return null
     const zh = document.documentElement.lang.startsWith('zh')
     return (
       <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
-        {/* 主面板常驻前进/后退(Workbench 级,任意 view 都有;历史由各 feature recordNav 喂)。 */}
-        <button className="dv-nav-btn" disabled={!canBack} title={zh ? '后退 (⌘/Ctrl+⌥+←)' : 'Back'} onClick={() => useNav.getState().back()}>
+        {/* 主面板常驻前进/后退(per-tab 历史,只走当前 tab 的栈;由各 feature recordNav(leafId,…) 喂)。 */}
+        <button className="dv-nav-btn" disabled={!canBack} title={zh ? '后退 (⌘/Ctrl+⇧+[)' : 'Back'} onClick={() => { if (amId) useNav.getState().back(amId) }}>
           <ArrowLeft size={15} />
         </button>
-        <button className="dv-nav-btn" disabled={!canFwd} title={zh ? '前进 (⌘/Ctrl+⌥+→)' : 'Forward'} onClick={() => useNav.getState().forward()}>
+        <button className="dv-nav-btn" disabled={!canFwd} title={zh ? '前进 (⌘/Ctrl+⇧+])' : 'Forward'} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
           <ArrowRight size={15} />
         </button>
         <button className="dv-edge-toggle" title={zh ? '左侧栏' : 'Toggle left panel'} onClick={() => useWorkspace.getState().toggleSidebar('left')}>
@@ -169,7 +189,7 @@ function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
     if (!isMainGroup(panels)) return null
     const zh = document.documentElement.lang.startsWith('zh')
     return (
-      <button className="dv-new-tab" title={zh ? '新建标签页' : 'New tab'} onClick={() => { const sp = getActiveSpace(); if (sp?.newPage) sp.newPage(); else useWorkspace.getState().openView('launcher', {}, 'main') }}>
+      <button className="dv-new-tab" title={zh ? '新建标签页' : 'New tab'} onClick={() => { const sp = getActiveSpace(); if (sp?.newPage) sp.newPage(); else useWorkspace.getState().openView('launcher', {}, 'main', { newTab: true }) }}>
         <Plus size={15} />
       </button>
     )
@@ -248,6 +268,7 @@ export const WorkspaceHost: React.FC<{
   const components = useMemo(() => {
     const map: Record<string, React.FC<IDockviewPanelProps>> = {}
     for (const def of allViews()) map[def.type] = makeComponent(def)
+    map['__frame'] = makeFrameHost(new Map()) // 主区统一宿主(见 makeFrameHost)
     return map
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version])
@@ -288,12 +309,16 @@ export const WorkspaceHost: React.FC<{
     }
   }, [])
 
-  // 主面板前进/后退快捷键(⌘/Ctrl+⌥+←/→,捕获阶段先于视图内部键位)。全局:任意 view 都有。
+  // 主面板前进/后退快捷键(⌘/Ctrl+⌥+←/→,捕获阶段先于视图内部键位)。作用于当前活动主 leaf 的栈;
+  // ⌘/Ctrl+⇧+[/] 走命令系统(nav-back/nav-forward,可重绑定),两组指向同一动作。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault(); e.stopPropagation()
-        if (e.key === 'ArrowLeft') useNav.getState().back(); else useNav.getState().forward()
+        const api = useWorkspace.getState().api
+        const id = api ? activeMainPanel(api)?.id : null
+        if (!id) return
+        if (e.key === 'ArrowLeft') useNav.getState().back(id); else useNav.getState().forward(id)
       }
     }
     window.addEventListener('keydown', onKey, true)

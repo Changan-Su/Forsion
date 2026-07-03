@@ -13,7 +13,9 @@ import type {
 import { CLOUD_WORKSPACE_KEY, SHOW_SYSTEM_PROMPT_KEY } from '../types'
 import * as api from '../services/backendService'
 import { abortRun, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
+import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
+import { openWsFile } from '../views/wsFileNav'
 import type { Tab as SettingsTab } from '../components/SettingsModal'
 import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
 
@@ -22,6 +24,7 @@ export type { SettingsTab }
 /** 主区特殊视图(从侧栏特殊卡片打开;作主区 leaf,与对话同组 tab)。 */
 export type SpecialKind = 'wechat' | 'agents' | 'workspace'
 
+const VOICE_MESSAGE_PLUGIN_ID = 'voice-message' // 语音消息插件 id(与 plugins/voice-message 一致)
 const UNREAD_KEY = 'forsion_tangu_unread_sessions'
 function loadUnread(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(UNREAD_KEY) || '[]')) } catch { return new Set() }
@@ -170,6 +173,8 @@ export interface AppState {
   groupVoting: Record<string, boolean>
   subChatsBySession: Record<string, SubChat[]>
   usageBySession: Record<string, { ctx: number; base: number; live: number }>
+  /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
+  voiceOnByAgent: Record<string, boolean>
   unread: Set<string>
   toasts: Array<{ id: number; text: string; error?: boolean }>
   // Phase 2: 设置 / 引导 / 更新
@@ -225,6 +230,9 @@ export interface AppState {
   setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null): void
   setSessionMaxIterations(n: number, sessionId?: string | null): void
   setSessionPlanMode(on: boolean, sessionId?: string | null): void
+  /** 语音消息(按 agent,单一真源=voice-message 插件设置)。 */
+  refreshVoiceMode(slug?: string | null): Promise<void>
+  setVoiceMode(slug: string, on: boolean): Promise<void>
   setSessionEngine(engineId: string, sessionId?: string | null): void
   setSessionEngineModel(engineModelId: string, sessionId?: string | null): void
   setSessionGroup(patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds'>, sessionId?: string | null): void
@@ -282,6 +290,7 @@ export const useApp = create<AppState>((set, get) => ({
   filePreview: null,
   messagesBySession: {},
   configBySession: {},
+  voiceOnByAgent: {},
   runningBySession: {},
   groupVoting: {},
   subChatsBySession: {},
@@ -541,6 +550,20 @@ export const useApp = create<AppState>((set, get) => ({
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
+        // 自动朗读:仅当前活跃会话的新完成回复(历史加载走 loadSessionHistory 不经本 reducer,无误触发)。
+        // 每次 done 实时拉 config 而非用 store 缓存:设置模态开着改的开关/音色立即生效(store 副本只在关模态时刷新)。
+        if (sessionId === get().activeId && window.tangu?.getConfig) {
+          void window.tangu.getConfig().then((dc) => {
+            if (!dc?.ttsAutoSpeak || !dc?.ttsModelId) return
+            const st = get()
+            const msg = (st.messagesBySession[sessionId] || []).find((m) => m.id === assistantId)
+            if (msg?.content?.trim()) {
+              speakMessage(st.cfg, dc, assistantId, msg.content).catch((e: any) => {
+                if (e?.message !== 'EMPTY') get().toast(get().tr('tts.failed', { e: e?.message || e }), true)
+              })
+            }
+          }).catch(() => {})
+        }
         set((s) => {
           const u = s.usageBySession[sessionId]
           if (!u) return s
@@ -1096,6 +1119,9 @@ export const useApp = create<AppState>((set, get) => ({
     try { await api.deleteMessages(get().cfg, sid, removed.map((m) => m.id)) }
     catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return }
     set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, fromIndex) } }))
+    // 正在朗读的消息被删(重新生成/编辑重发)→ 停播,否则音频没了停止按钮还在响。
+    const speaking = ttsState()
+    if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
     const ok = await get().send(text, attachments, undefined, undefined, undefined, sid)
     if (!ok) {
       set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: [...(s.messagesBySession[sid] || []).slice(0, fromIndex), ...removed] } }))
@@ -1213,6 +1239,33 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => { const next = { ...(s.configBySession[sid] || {}), planMode: on }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
   },
 
+  refreshVoiceMode: async (slug) => {
+    if (!slug || get().voiceOnByAgent[slug] !== undefined) return // 已缓存不重复拉
+    const cfg = get().cfg
+    try {
+      const plugins = await api.listPlugins(cfg)
+      const enabled = !!plugins.find((p) => p.id === VOICE_MESSAGE_PLUGIN_ID)?.enabled
+      let on = false
+      if (enabled) {
+        const v = await api.getPluginSettings(cfg, VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`).catch(() => ({} as Record<string, any>))
+        on = v?.apply !== false // apply 默认开
+      }
+      set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: on } }))
+    } catch { /* 插件不可用/云端 → 视为关 */ }
+  },
+
+  setVoiceMode: async (slug, on) => {
+    set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: on } })) // 乐观更新
+    const cfg = get().cfg
+    try {
+      if (on) await api.setPluginEnabled(cfg, VOICE_MESSAGE_PLUGIN_ID, true).catch(() => {}) // 确保插件启用
+      await api.putPluginSettings(cfg, VOICE_MESSAGE_PLUGIN_ID, `agent:${slug}`, { apply: on })
+    } catch (e: any) {
+      set((s) => ({ voiceOnByAgent: { ...s.voiceOnByAgent, [slug]: !on } })) // 失败回滚
+      get().toast(get().tr('voice.toggleFailed', { e: e?.message || String(e) }), true)
+    }
+  },
+
   setSessionEngine: (engineId, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
@@ -1255,7 +1308,9 @@ export const useApp = create<AppState>((set, get) => ({
   setNewChatWs: (ws) => set({ newChatWs: ws }),
   setNewChatCfg: (fn) => set((s) => ({ newChatCfg: fn(s.newChatCfg) })),
   setNewChatModel: (id) => set({ newChatModel: id }),
-  setFilePreview: (p) => set({ filePreview: p }),
+  // 预览改道:所有入口(文件面板/右栏工作区/对话内联)汇聚于此 —— 一律开主区标签页(wsfile 视图)。
+  // 原 chatbox 上方浮层暂时停用(filePreview 永不置非空,ChatView 渲染块保留但不触发)。
+  setFilePreview: (p) => { if (p) openWsFile(p); else set({ filePreview: null }) },
 
   patchConfig: (patch) => {
     set((s) => { void window.tangu?.setConfig(patch); return { cfg: { ...s.cfg, ...patch } } })

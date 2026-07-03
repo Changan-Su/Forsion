@@ -4,10 +4,11 @@
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown } from 'lucide-react'
-import type { UiMessage, TanguDesktopConfig, AgentConfig } from '../../types'
+import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2 } from 'lucide-react'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { Markdown } from '../../components/Markdown'
+import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import { ToolGroup } from '../../components/ToolGroup'
@@ -49,11 +50,13 @@ export interface MessageHandlers {
   onRegenerate?: () => void
   onBranch?: () => void
   onEdit?: () => void
+  /** 朗读本条(再次点击=停止);未配置 TTS 时不传 → 按钮不渲染。 */
+  onSpeak?: () => void
   onApproval?: (approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, unknown>) => void
   onInquiry?: (inquiryId: string, answer: string) => void
 }
 
-export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement> }) {
+export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null } }) {
   const { t } = useI18n()
   if (msg.role === 'system') {
     if (msg.groupVote) {
@@ -104,7 +107,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} />}
         {msg.planProposal && <PlanCard plan={msg.planProposal} />}
         {!!msg.todos?.length && <TodoList todos={msg.todos} />}
-        {msg.content && <div className={`t2-content${msg.status === 'streaming' ? ' streaming-caret' : ''}`}><Markdown content={msg.content} anchorPrefix={`toc-${msg.id}`} /></div>}
+        {msg.content && (
+          voice?.on && (msg.status === 'done' || msg.status === 'stopped')
+            ? <VoiceBubble text={msg.content} cfg={voice.cfg} stored={voice.stored} anchorPrefix={`toc-${msg.id}`} />
+            : <div className={`t2-content${msg.status === 'streaming' ? ' streaming-caret' : ''}`}><Markdown content={msg.content} anchorPrefix={`toc-${msg.id}`} /></div>
+        )}
         {!msg.content && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && <div className="t2-dim streaming-caret">{t('chat.thinking')}</div>}
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
@@ -116,6 +123,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {(msg.status === 'done' || msg.status === 'stopped') && (
           <div className="t2-actions">
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
+            {handlers?.onSpeak && !!msg.content && (
+              <button className="t2-iconbtn" title={t(speakState ? 'chat.action.stopSpeak' : 'chat.action.speak')} onClick={() => handlers.onSpeak?.()}>
+                {speakState === 'loading' ? <Loader2 size={14} className="spin" /> : speakState === 'playing' ? <Square size={14} /> : <Volume2 size={14} />}
+              </button>
+            )}
             <button className="t2-iconbtn" title={t('chat.action.regenerate')} onClick={() => handlers?.onRegenerate?.()}><RotateCcw size={14} /></button>
             <button className="t2-iconbtn" title={t('chat.action.branch')} onClick={() => handlers?.onBranch?.()}><GitBranch size={14} /></button>
           </div>

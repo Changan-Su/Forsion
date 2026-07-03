@@ -338,17 +338,17 @@ export class IlinkClient {
   }
 
   /**
-   * 发送图片 / 文件给某用户。三步:getuploadurl → AES-128-ECB 加密后 POST 到 CDN → sendmessage 引用密文。
-   * 任一步上游业务错误(ret/errcode)由 getuploadurl/CDN 抛出;最终 sendmessage 的结果原样返回(调用方判 ret)。
+   * 上传一段媒体到 CDN,返回 sendmessage 里 item.media 引用的密文描述。
+   * 三步:getuploadurl → AES-128-ECB 加密 → POST CDN 取 x-encrypted-param。
+   * 会话过期时返回 { expired } 让调用方按会话过期处理(清 context / 提示重连)。
+   * aes_key 必须是 base64(32 字符 hex 串)、encrypt_type 必须是 1(图片/文件/语音统一,少一个都收不到)。
    */
-  async sendMedia(
+  private async uploadEncryptedMedia(
     to: string,
     buffer: Buffer,
-    opts: { kind: IlinkMediaKind; fileName: string },
-    contextToken?: string,
+    mediaType: number,
     signal?: AbortSignal,
-  ): Promise<IlinkSendResult> {
-    const mediaType = opts.kind === 'image' ? MEDIA_IMAGE : MEDIA_FILE;
+  ): Promise<{ media: { encrypt_query_param: string; aes_key: string; encrypt_type: number }; filesize: number } | { expired: IlinkSendResult }> {
     const rawsize = buffer.length;
     const rawfilemd5 = createHash('md5').update(buffer).digest('hex');
     const filesize = aesEcbPaddedSize(rawsize);
@@ -361,7 +361,7 @@ export class IlinkClient {
       { filekey, media_type: mediaType, to_user_id: to, rawsize, rawfilemd5, filesize, no_need_thumb: true, aeskey: aesKeyHex },
       API_TIMEOUT_MS,
     );
-    if (isSessionExpired(up as any)) return up as IlinkSendResult; // 让调用方按会话过期处理(清 context / 提示重连)
+    if (isSessionExpired(up as any)) return { expired: up as IlinkSendResult };
     // iLink 不同账号/版本二选一返回:upload_full_url(直接给完整 CDN URL,优先)或 upload_param(需自拼 CDN URL)。
     const uploadFullUrl = String((up as any).upload_full_url ?? '');
     const uploadParam = String((up as any).upload_param ?? '');
@@ -371,11 +371,11 @@ export class IlinkClient {
 
     const ciphertext = encryptAesEcb(buffer, aesKey);
     const downloadParam = await this.uploadCdn(uploadUrl, ciphertext, signal);
+    return { media: { encrypt_query_param: downloadParam, aes_key: Buffer.from(aesKeyHex, 'ascii').toString('base64'), encrypt_type: 1 }, filesize };
+  }
 
-    const media = { encrypt_query_param: downloadParam, aes_key: Buffer.from(aesKeyHex, 'ascii').toString('base64'), encrypt_type: 1 };
-    const item = opts.kind === 'image'
-      ? { type: ITEM_IMAGE, image_item: { media, mid_size: filesize } }
-      : { type: ITEM_FILE, file_item: { media, file_name: opts.fileName, len: String(rawsize) } };
+  /** 组 bot 消息信封并发出(from_user_id 必须空串,不能传 bot_id)。 */
+  private async sendItem(to: string, item: Record<string, unknown>, contextToken?: string): Promise<IlinkSendResult> {
     const msg: Record<string, unknown> = {
       from_user_id: '',
       to_user_id: to,
@@ -386,6 +386,27 @@ export class IlinkClient {
     };
     if (contextToken) msg.context_token = contextToken;
     return (await this.post(EP_SEND_MESSAGE, { msg }, API_TIMEOUT_MS)) as IlinkSendResult;
+  }
+
+  /**
+   * 发送图片 / 文件给某用户。getuploadurl → 加密上传 CDN → sendmessage 引用密文。
+   * 上传步的上游业务错误(ret/errcode)由 getuploadurl/CDN 抛出;最终 sendmessage 结果原样返回(调用方判 ret)。
+   */
+  async sendMedia(
+    to: string,
+    buffer: Buffer,
+    opts: { kind: IlinkMediaKind; fileName: string },
+    contextToken?: string,
+    signal?: AbortSignal,
+  ): Promise<IlinkSendResult> {
+    const mediaType = opts.kind === 'image' ? MEDIA_IMAGE : MEDIA_FILE;
+    const uploaded = await this.uploadEncryptedMedia(to, buffer, mediaType, signal);
+    if ('expired' in uploaded) return uploaded.expired;
+    const { media, filesize } = uploaded;
+    const item = opts.kind === 'image'
+      ? { type: ITEM_IMAGE, image_item: { media, mid_size: filesize } }
+      : { type: ITEM_FILE, file_item: { media, file_name: opts.fileName, len: String(buffer.length) } };
+    return this.sendItem(to, item, contextToken);
   }
 
   /**

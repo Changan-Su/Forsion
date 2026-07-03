@@ -21,6 +21,7 @@ export interface DirectProvider {
   apiKey?: string; // 直连厂商的用户自有 key;Ollama 等本地端点可省
   modelIds?: string[]; // 可选:该 provider 的 LLM 模型白名单(支持不带前缀直接用)
   imageModelIds?: string[]; // 可选:该 provider 的生图模型白名单(generate_image 用;OpenAI 兼容 /images/generations)
+  ttsModelIds?: string[]; // 可选:该 provider 的语音合成模型白名单(朗读用;OpenAI 兼容 /audio/speech)
   protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切到原生端点
   accountId?: string; // Codex 订阅:chatgpt-account-id 头取值
 }

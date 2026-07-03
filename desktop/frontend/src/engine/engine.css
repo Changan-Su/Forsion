@@ -440,3 +440,12 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   color: var(--accent);
   background: transparent;
 }
+
+/* ── 空侧栏占位(sidebar-empty):侧栏关空/拖空后自动补的占位视图。
+ *    整组只剩占位 tab 时隐藏 tab 条(贴 Obsidian 无 tab 的空侧栏观感;拖入真实 tab 后占位退位、tab 条复现)。 ── */
+.dockview-theme-lcl .dv-group:has(.wb-tab--empty):not(:has(.wb-tab:not(.wb-tab--empty))) .dv-tabs-and-actions-container { display: none; }
+.wb-sidebar-empty {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  padding: 24px; text-align: center; font-size: 12.5px; line-height: 1.6;
+  color: var(--text-faint, var(--text-muted)); user-select: none;
+}

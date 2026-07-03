@@ -140,3 +140,12 @@ export function parseDelimited(text: string, delim: string): string[][] {
   if (cur !== '' || row.length) { row.push(cur); rows.push(row) }
   return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ''))
 }
+
+/** 剥离 YAML frontmatter(工作区 .md 编辑:Milkdown 不识别 `---` 块,喂正文、存盘原样拼回)。
+ *  仅匹配文件头部的 `---\n…\n---\n`;无 frontmatter 时 fm=''。往返恒等:fm + body === 原文。 */
+export function splitFrontmatter(text: string): { fm: string; body: string } {
+  // 闭合 --- 必须独占一行(否则 `---xyz` 会被从中劈开);内容组可选(空 frontmatter `---\n---\n` 也识别)。
+  const m = text.match(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*\r?(?:\n|$)/)
+  const fm = m?.[0] ?? ''
+  return { fm, body: text.slice(fm.length) }
+}

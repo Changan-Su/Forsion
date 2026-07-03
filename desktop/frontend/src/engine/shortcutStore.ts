@@ -52,6 +52,8 @@ export function eventToHotkey(e: KeyboardEvent): string | null {
   if (e.altKey) parts.push('alt')
   let key = e.key.toLowerCase()
   if (key === ' ') key = 'space'
+  else if (key === '{') key = '[' // shift 下 e.key 给 brace,存储统一 bracket(与 hotkeyMatches 归一一致)
+  else if (key === '}') key = ']'
   parts.push(key)
   return parts.join('+')
 }

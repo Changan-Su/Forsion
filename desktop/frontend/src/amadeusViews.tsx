@@ -2,7 +2,7 @@
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
  *  外壳直接用 Tangu token/类 → 与 Tangu Desktop 一致,并随其换肤/明暗同步。 */
-import { type ReactNode, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, type CSSProperties, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'zustand'
 import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
@@ -23,7 +23,7 @@ import { openNote } from './amadeusNav'
 import { useRecentViews } from './recentViews'
 import { buildTree, type TreeNode } from '@amadeus/lib/pageTree'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace } from './engine'
+import { recordNav, useWorkspace, activeMainPanel } from './engine'
 import type { ViewProps } from './engine'
 import { PageView } from '@amadeus/components/PageView'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
@@ -55,33 +55,63 @@ const useAmadeusNav = create<{ locate: { path: string; n: number } | null; reque
   requestLocate: (path) => set((s) => ({ locate: { path, n: (s.locate?.n ?? 0) + 1 } })),
 }))
 
-// ── 笔记切换喂给主面板导航历史(Workbench 级前进/后退;箭头由引擎在主区左上角渲染,见 WorkspaceHost)。
-//    recordNav 内部有 navigating 闸,back/forward 复原触发的 activePage 变化不会被重记。 ──
+// ── 笔记切换喂 per-tab 导航历史(箭头由引擎在主区左上角渲染,见 WorkspaceHost)。
+//    记入当前活动 editor leaf 的栈;推迟一拍(microtask)等 openView/navigateLeaf 就位(同 chat 订阅,
+//    back/forward 复原期间 navigating 闸仍闭合,不会重记)。restore 作用于该 leaf 自身:若它已被
+//    就地切成别的视图,先 navigateLeaf 切回编辑器再 loadPage。 ──
 usePageStore.subscribe((state, prev) => {
   const p = state.activePage
   if (!p || p === prev.activePage) return
-  recordNav(`amadeus:${p}`, () => usePageStore.getState().loadPage(p))
+  queueMicrotask(() => {
+    const api = useWorkspace.getState().api
+    const am = api ? activeMainPanel(api) : null
+    const leafId = am && ((am.params ?? {}) as { __type?: string }).__type === 'amadeus-editor' ? am.id : null
+    recordNav(leafId, `amadeus:${p}`, () => {
+      const w = useWorkspace.getState()
+      const cur = leafId ? w.api?.getPanel(leafId) : null
+      if (!cur) return
+      if (((cur.params ?? {}) as { __type?: string }).__type !== 'amadeus-editor') w.navigateLeaf(leafId!, 'amadeus-editor', { notePath: p })
+      void usePageStore.getState().loadPage(p)
+    })
+  })
   useRecentViews.getState().record({ key: `note:${p}`, kind: 'note', id: p, title: baseName(p) })
 })
 
-/** 编辑器顶部面包屑:笔记路径(文件夹 / 文件),点任意段在左栏定位高亮。 */
+/** 编辑器顶部面包屑:默认只显示当前标题(可用区内居中);悬停标题栏时父级路径从标题左侧
+ *  逐级展开淡入(宽度 0fr→1fr + 段级 stagger,见 amadeus-host.css),移出反向收拢。
+ *  当前标题自始至终是同一个元素,由父级展开的布局变化推它右移(无双文字交叉闪烁)。
+ *  父级超过 3 段压缩为「首2 + … + 末1」,当前标题永远完整。点任意段在左栏定位高亮。 */
 function Breadcrumb() {
   const activePage = usePageStore((s) => s.activePage)
   const requestLocate = useAmadeusNav((s) => s.requestLocate)
   if (!activePage) return null
   const segs = activePage.replace(/\.md$/, '').split('/')
+  const leaf = segs[segs.length - 1]
+  const parents = segs.slice(0, -1).map((seg, i) => ({ seg, target: segs.slice(0, i + 1).join('/') as string | null }))
+  const shown = parents.length > 3
+    ? [...parents.slice(0, 2), { seg: '…', target: null }, parents[parents.length - 1]]
+    : parents
+  const n = shown.length
   return (
     <div className="amx-crumbs">
-      {segs.map((seg, i) => {
-        const isLast = i === segs.length - 1
-        const target = isLast ? activePage : segs.slice(0, i + 1).join('/') // 文件夹段=累积路径;末段=完整页路径
-        return (
-          <span className="amx-crumb-seg" key={i}>
-            {i > 0 && <span className="amx-crumb-sep">/</span>}
-            <button className="amx-crumb" title={target} onClick={() => requestLocate(target)}>{seg}</button>
+      {n > 0 && (
+        <span className="amx-crumbs-parents">
+          <span className="amx-crumbs-parents-in">
+            {shown.map((p, i) => (
+              // 靠近标题的段先淡入(delay 递减);收起态无 delay,同步淡出(见 CSS)。
+              <span className="amx-crumb-seg" key={`${p.target ?? 'gap'}-${i}`} style={{ '--d': `${(n - 1 - i) * 25}ms` } as CSSProperties}>
+                {p.target ? (
+                  <button className="amx-crumb" title={p.target} onClick={() => requestLocate(p.target!)}>{p.seg}</button>
+                ) : (
+                  <span className="amx-crumb amx-crumb-ellipsis" title={activePage}>…</span>
+                )}
+                <span className="amx-crumb-sep">/</span>
+              </span>
+            ))}
           </span>
-        )
-      })}
+        </span>
+      )}
+      <button className="amx-crumb amx-crumb-leaf" title={activePage} onClick={() => requestLocate(activePage)}>{leaf}</button>
     </div>
   )
 }
@@ -619,6 +649,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
   return (
     <EditorScope dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick}>
       {activePage && (
+        // 顶栏与编辑器融为一体:透明浮在纸面上,不是独立的一层(无底色/无分割线;滚动穿过靠 blur,见 CSS)。
         <div className="amx-toolbar">
           <Breadcrumb />
           <PluginStatusItems />
@@ -627,7 +658,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
             onClick={() => useUiOverlay.getState().toggleEditorMode()}
             title={mode === 'source' ? '切换到可视编辑(所见即所得)' : '切换到源码 Markdown'}
           >
-            {mode === 'source' ? <><Eye size={14} /> 可视</> : <><Code2 size={14} /> 源码</>}
+            {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
           </button>
           <button
             className="amx-mode-btn amx-more-btn"

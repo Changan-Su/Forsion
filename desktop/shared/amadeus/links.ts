@@ -94,6 +94,31 @@ export function resolvePageName(name: string, pages: string[]): string | null {
 }
 
 /**
+ * Undo remark-stringify's escaping of plain-text `[[` (it emits `\[\[` for wikilinks that were
+ * typed but not yet re-parsed into nodes — the index regex above then never matches, so freshly
+ * added links form no relations). Fenced code blocks are verbatim user content — a literal `\[\[`
+ * there (regex/escaping examples) must NOT be touched, so a per-line fence state machine skips
+ * ``` / ~~~ blocks. ponytail: inline-code `\[\[` and indented code blocks accept residual risk
+ * (remark emits fenced by default; go AST-level if it ever matters).
+ */
+export function unescapeWikiOutsideFences(md: string): string {
+  if (!md.includes('\\[\\[')) return md
+  const lines = md.split('\n')
+  let fence: '`' | '~' | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
+    if (m) {
+      const mark = m[1][0] as '`' | '~'
+      if (!fence) fence = mark
+      else if (mark === fence) fence = null
+      continue
+    }
+    if (!fence) lines[i] = lines[i].replace(/\\\[\\\[/g, '[[')
+  }
+  return lines.join('\n')
+}
+
+/**
  * Strip YAML frontmatter and all HTML comments (the invisible Amadeus block/layout
  * markers) so search snippets and indexed text never surface marker noise.
  */

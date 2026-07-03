@@ -14,7 +14,7 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { registerView, unregisterView, getView, allViews } from './viewRegistry'
-export { useWorkspace } from './workspaceStore'
+export { useWorkspace, activeMainPanel, scheduleWorkspaceSave } from './workspaceStore'
 export type { MainTab, SideTab } from './workspaceStore'
 export { useCommandStore, addCommand, removeCommand, openCommandPalette } from './commandRegistry'
 export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey } from './shortcutStore'
