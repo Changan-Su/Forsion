@@ -189,7 +189,7 @@ export const OnboardingWizard: React.FC<{
       void listAgents(cfg).then(setAgents)
       // 老/external 后端无 special 路由 → 静默隐藏 Historian 卡片。
       void getSpecialConfig(cfg).then((r) => setSpecial(r.config)).catch(() => setSpecial(null))
-    })
+    }).catch(() => {})
   }
 
   const createQuickAgent = async (): Promise<void> => {
@@ -199,7 +199,10 @@ export const OnboardingWizard: React.FC<{
     setAgMsg('')
     try {
       const cfg = await apiCfg()
-      await saveAgentDef(cfg, { name, systemPrompt: agPersona.trim() })
+      // systemPrompt 新建必填(后端拒空):不填人格时给一句中性默认(硬编码提示词按项目纪律用英文),
+      // 兑现「只需名字即可创建」;之后在「智能体」页随时可改。
+      const persona = agPersona.trim() || `You are ${name}, a helpful assistant. Reply in the user's language.`
+      await saveAgentDef(cfg, { name, systemPrompt: persona })
       setAgName('')
       setAgPersona('')
       setAgMsg(t('onboarding.agents.created', { name }))
@@ -221,7 +224,13 @@ export const OnboardingWizard: React.FC<{
       return
     }
     setSpecial({ ...special, historian: h })
-    void apiCfg().then((cfg) => saveSpecialConfig(cfg, { historian: h }).then(setSpecial).catch(() => {}))
+    // 保存失败绝不静默:提示 + 回读服务端真值(否则乐观 UI 显示已开而后端没存上)。
+    void apiCfg().then((cfg) =>
+      saveSpecialConfig(cfg, { historian: h }).then(setSpecial).catch((e) => {
+        setAgMsg(t('onboarding.agents.historianSaveFail', { e: e?.message || e }))
+        void getSpecialConfig(cfg).then((r) => setSpecial(r.config)).catch(() => {})
+      }),
+    ).catch(() => {})
   }
 
   useEffect(() => {

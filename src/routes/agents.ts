@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug } from '../agents/agentRegistry.js';
 import path from 'node:path';
 import { agentsDir, readUserMd, writeUserMd } from '../core/tanguHome.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
@@ -41,8 +41,18 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const b = req.body || {};
     if (!b.name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
+    // POST=新建语义,但 saveAgent 是按 slug 的 upsert:派生 slug 已存在时若直接传入会**静默覆盖**
+    // 既有 agent(中文等非 ASCII 名全部派生为兜底 'agent',极易相撞)→ 这里先唯一化,撞了递增后缀。
+    // 想更新请走 PATCH /agent/agents/:slug。
+    let slug = typeof b.slug === 'string' && isValidSlug(b.slug) ? b.slug : slugify(String(b.name));
+    if (await getAgent(slug)) {
+      const base = slug.slice(0, 60);
+      let n = 2;
+      while (await getAgent(`${base}-${n}`)) n++;
+      slug = `${base}-${n}`;
+    }
     const agent = await saveAgent({
-      slug: typeof b.slug === 'string' ? b.slug : undefined,
+      slug,
       name: String(b.name),
       description: b.description,
       model: b.model,
