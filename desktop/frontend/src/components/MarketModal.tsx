@@ -10,10 +10,15 @@ import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, type InstalledItem } from '../services/marketService'
 import { loadUserSpaces } from '../userSpaces'
+import { useTheme } from '../stores/themeStore'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { installAmadeusPlugins } from '../amadeusPlugins'
 import type { MarketCard, MarketDetail } from '../types'
 
-type Tab = 'skill' | 'agent' | 'plugin' | 'space' | 'updates' | 'submit'
-const CONTENT_TABS: Tab[] = ['skill', 'agent', 'plugin', 'space']
+type Tab = 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin' | 'updates' | 'submit'
+const CONTENT_TABS: Tab[] = ['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin']
+// 笔记插件 tab 只在带 Amadeus 的产品档案里露出(与设置页同门禁);updates 扫描仍扫全类型,无害。
+const NAV_TABS: Tab[] = CONTENT_TABS.filter((tp) => tp !== 'amadeus-plugin' || !!window.amadeus)
 
 /** 最新版本是否比已装的新(仅数值 semver 比较;不可比/未知已装版本 → 不提示,避免误报)。 */
 function isNewer(latest: string | null | undefined, installed: string | null): boolean {
@@ -82,6 +87,17 @@ export function MarketModal() {
         // 数据 Space:装完热注册,ribbon 顶部实时出现,无需重启。
         await loadUserSpaces()
         toast(t('market.spaceInstalled', { name: c.name }))
+      } else if (c.type === 'theme') {
+        // 主题:装完热重载磁盘主题,设置 → 主题 里即时可选,无需重启。
+        await useTheme.getState().reloadThemes()
+        toast(t('market.themeInstalled', { name: c.name }))
+      } else if (c.type === 'amadeus-plugin') {
+        // 笔记插件:落全局目录(~/.tangu/amadeus/plugins),重载外部插件即生效,免 vault。
+        if (window.amadeus) {
+          installAmadeusPlugins()
+          await usePluginStore.getState().reloadExternal()
+        }
+        toast(t('market.amadeusPluginInstalled', { name: c.name }))
       } else {
         toast(t('market.installOk', { name: c.name }))
       }
@@ -125,6 +141,8 @@ export function MarketModal() {
     agent: t('market.tab.agents'),
     plugin: t('market.tab.plugins'),
     space: t('market.tab.spaces'),
+    theme: t('market.tab.themes'),
+    'amadeus-plugin': t('market.tab.amadeusPlugins'),
     updates: t('market.tab.updates'),
     submit: t('market.tab.submit'),
   }
@@ -140,7 +158,7 @@ export function MarketModal() {
         <div className="settings-nav-list">
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.title')}</div>
-            {CONTENT_TABS.map((id) => (
+            {NAV_TABS.map((id) => (
               <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{navLabel[id]}</button>
             ))}
             <button className={tab === 'updates' ? 'active' : ''} onClick={() => setTab('updates')}>

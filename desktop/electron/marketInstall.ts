@@ -3,11 +3,18 @@
  * 纯逻辑(只依赖 jszip + fs/path,不 import electron),便于单测路径穿越 / 剥顶层。
  */
 import JSZip from 'jszip'
-import { mkdir, writeFile, readFile } from 'fs/promises'
+import { mkdir, writeFile, readFile, readdir } from 'fs/promises'
 import { join, dirname, relative, isAbsolute } from 'path'
 
 /** type → ~/.tangu 下的子目录。 */
-export const MARKET_SUBDIR: Record<string, string> = { skill: 'skills', agent: 'agents', plugin: 'plugins', space: 'spaces' }
+export const MARKET_SUBDIR: Record<string, string> = {
+  skill: 'skills',
+  agent: 'agents',
+  plugin: 'plugins',
+  space: 'spaces',
+  theme: 'themes',
+  'amadeus-plugin': 'amadeus/plugins', // join 会展开嵌套;= Amadeus 全局插件目录
+}
 
 /** type → manifest 文件名(用于 manifest 感知重定根,见 computeStripPrefix)。 */
 export const MARKET_MANIFEST: Record<string, string[]> = {
@@ -15,6 +22,8 @@ export const MARKET_MANIFEST: Record<string, string[]> = {
   agent: ['config.toml'],
   plugin: ['tangu-plugin.json'],
   space: ['space.json'],
+  theme: ['theme.json'],
+  'amadeus-plugin': ['manifest.json'],
 }
 
 /** 规整版本字符串(去前导 v、去空白);空 → null。 */
@@ -35,6 +44,12 @@ export async function readInstalledVersion(type: string, dir: string): Promise<s
     if (type === 'space') {
       return normVer(JSON.parse(await readFile(join(dir, 'space.json'), 'utf8'))?.version)
     }
+    if (type === 'theme') {
+      return normVer(JSON.parse(await readFile(join(dir, 'theme.json'), 'utf8'))?.version)
+    }
+    if (type === 'amadeus-plugin') {
+      return normVer(JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))?.version)
+    }
     if (type === 'skill') {
       const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(await readFile(join(dir, 'SKILL.md'), 'utf8'))
       const m = fm && /(?:^|\n)version\s*:\s*["']?([^"'\n]+)/.exec(fm[1])
@@ -51,6 +66,21 @@ export async function readInstalledVersion(type: string, dir: string): Promise<s
 /** install_slug 必须是 kebab(防目录穿越 / data-attr 注入)。 */
 export function isSafeSlug(s: unknown): s is string {
   return typeof s === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(s)
+}
+
+/** 扫用户插件目录,读每个子目录的 tangu-plugin.json,返回 manifest id → 目录名(id 可能 ≠ 目录名)。 */
+export async function readUserPluginDirs(pluginsRoot: string): Promise<Array<{ id: string; slug: string }>> {
+  let entries
+  try { entries = await readdir(pluginsRoot, { withFileTypes: true }) } catch { return [] }
+  const out: Array<{ id: string; slug: string }> = []
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith('.')) continue
+    try {
+      const m = JSON.parse(await readFile(join(pluginsRoot, e.name, 'tangu-plugin.json'), 'utf8'))
+      if (typeof m?.id === 'string' && m.id) out.push({ id: m.id, slug: e.name })
+    } catch { /* 无/坏 manifest → 跳过 */ }
+  }
+  return out
 }
 
 /** zip 里常见的垃圾条目(macOS/Windows 压缩残留),解压时一律丢弃。 */

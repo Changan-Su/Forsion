@@ -49,6 +49,9 @@ const api = {
   checkForUpdates: (): Promise<any> => ipcRenderer.invoke('updater:check'),
   downloadUpdate: (): Promise<void> => ipcRenderer.invoke('updater:download'),
   installUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:install'),
+  /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
+  clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('app:clearData', opts),
   onUpdaterStatus: (cb: (st: any) => void): (() => void) => {
     const listener = (_e: unknown, st: any): void => cb(st)
     ipcRenderer.on('updater:status', listener)
@@ -118,6 +121,9 @@ const api = {
   marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
     ipcRenderer.invoke('market:install', id),
   marketInstalled: (): Promise<Record<string, string[]>> => ipcRenderer.invoke('market:installed'),
+  // ── 后端插件卸载(仅 ~/.tangu/plugins 用户目录;设置清理走后端 DELETE,重启由前端触发)──
+  pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
+  pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
   spacesList: (): Promise<Array<{ slug: string; json: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
@@ -144,6 +150,7 @@ const AGENT_KEYS = [
   'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
+  'pluginsUserInstalled', 'pluginsUninstall',
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'marketInstalled'] as const) delete (api as Record<string, unknown>)[k]

@@ -3,8 +3,9 @@
  * 启用且有 settings 的插件,其设置页移到左栏「扩展」组下的一级 nav 项(见 SettingsModal),此处给「设置」直达按钮。
  * 插件清单与 agents 由 SettingsModal 统一持有并下传(避免双拉,启用态变更即时反映到 nav)。仅本地后端可用。
  */
-import React from 'react'
-import { setPluginEnabled, type PluginInfo } from '../services/backendService'
+import React, { useEffect, useState } from 'react'
+import { setPluginEnabled, uninstallPlugin, type PluginInfo } from '../services/backendService'
+import { useApp } from '../stores/appStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 
@@ -18,8 +19,27 @@ export const PluginsTab: React.FC<{
   const nm = (p: PluginInfo): string => (locale === 'en' && p.nameEn ? p.nameEn : p.name)
   const ds = (p: PluginInfo): string => (locale === 'en' && p.descriptionEn ? p.descriptionEn : p.description)
 
+  // 用户目录(~/.tangu/plugins)里的 manifest id 集合:只有这些可卸载(<pkg>/plugins 首方插件删不到,不给按钮)。
+  const [userIds, setUserIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    window.tangu?.pluginsUserInstalled?.().then((l) => setUserIds(new Set(l.map((x) => x.id)))).catch(() => {})
+  }, [plugins])
+
   const toggle = async (p: PluginInfo): Promise<void> => {
     try { await setPluginEnabled(cfg, p.id, !p.enabled); onReload() } catch { /* ignore */ }
+  }
+
+  const uninstall = async (p: PluginInfo): Promise<void> => {
+    if (!window.confirm(t('settings.plugins.uninstallConfirm', { name: nm(p) }))) return
+    try {
+      await uninstallPlugin(cfg, p.id).catch(() => {}) // 后端不在也继续:剩孤儿设置好过卸不掉
+      await window.tangu?.pluginsUninstall?.(p.id)
+      await window.tangu?.backendRestart?.() // 工具/路由无法运行期反注册,重启后 discoverPlugins 不再发现它
+      useApp.getState().toast(t('settings.plugins.uninstalled', { name: nm(p) }))
+      onReload()
+    } catch (e: any) {
+      useApp.getState().toast(e?.message || String(e), true)
+    }
   }
 
   if (!plugins) return <div className="hint">{t('common.loading')}</div>
@@ -46,6 +66,11 @@ export const PluginsTab: React.FC<{
             </div>
             {p.settings && p.enabled && (
               <button className="btn ghost sm" onClick={() => onOpenSettings(p.id)}>{t('settings.plugins.openSettings')}</button>
+            )}
+            {p.source === 'folder' && userIds.has(p.id) && (
+              <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall(p)}>
+                {t('settings.plugins.uninstall')}
+              </button>
             )}
             <input type="checkbox" checked={p.enabled} onChange={() => void toggle(p)} style={{ cursor: 'pointer' }} />
           </div>

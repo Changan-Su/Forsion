@@ -2,11 +2,11 @@
  * Market 安装解压单测:重点是**安全边界**(路径穿越拒绝)+ GitHub source zip 的剥顶层。
  */
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir } from './marketInstall'
+import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs } from './marketInstall'
 
 describe('isSafeSlug', () => {
   it('接受 kebab', () => { expect(isSafeSlug('my-skill')).toBe(true); expect(isSafeSlug('a1')).toBe(true) })
@@ -47,6 +47,38 @@ describe('computeStripPrefix', () => {
     expect(computeStripPrefix(['pkg/tangu-plugin.json'], ['tangu-plugin.json'])).toBe('pkg/')
     expect(computeStripPrefix(['pkg/config.toml', 'pkg/SOUL.md'], ['config.toml'])).toBe('pkg/')
     expect(computeStripPrefix(['focus/space.json'], ['space.json'])).toBe('focus/')
+  })
+  it('theme/amadeus-plugin manifest 名', () => {
+    expect(computeStripPrefix(['kami/theme.json', 'kami/theme.css'], ['theme.json'])).toBe('kami/')
+    expect(computeStripPrefix(['pkg/manifest.json', 'pkg/main.js'], ['manifest.json'])).toBe('pkg/')
+  })
+})
+
+describe('readInstalledVersion(theme/amadeus-plugin)', () => {
+  it('theme 读 theme.json version(去前导 v)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mk-th-'))
+    writeFileSync(join(dir, 'theme.json'), JSON.stringify({ id: 'kami', name: 'Kami', version: 'v1.2.0' }))
+    expect(await readInstalledVersion('theme', dir)).toBe('1.2.0')
+  })
+  it('amadeus-plugin 读 manifest.json version;缺 manifest → null', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mk-ap-'))
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'hello', version: '0.3.1' }))
+    expect(await readInstalledVersion('amadeus-plugin', dir)).toBe('0.3.1')
+    expect(await readInstalledVersion('amadeus-plugin', join(dir, 'nope'))).toBeNull()
+  })
+})
+
+describe('readUserPluginDirs', () => {
+  it('manifest id → 目录名映射(id 可 ≠ 目录名);无/坏 manifest 与点目录跳过;根缺失 → 空', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mk-up-'))
+    mkdirSync(join(root, 'my-dir'), { recursive: true })
+    writeFileSync(join(root, 'my-dir', 'tangu-plugin.json'), JSON.stringify({ id: 'real-id', version: '1.0.0' }))
+    mkdirSync(join(root, 'broken'))
+    writeFileSync(join(root, 'broken', 'tangu-plugin.json'), '{oops')
+    mkdirSync(join(root, 'no-manifest'))
+    mkdirSync(join(root, '.hidden'))
+    expect(await readUserPluginDirs(root)).toEqual([{ id: 'real-id', slug: 'my-dir' }])
+    expect(await readUserPluginDirs(join(root, 'missing'))).toEqual([])
   })
 })
 

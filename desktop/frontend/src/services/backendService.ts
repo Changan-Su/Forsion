@@ -388,6 +388,9 @@ export const rescanPlugins = (cfg: TanguDesktopConfig) =>
   request<{ ok: boolean; addedIds: string[]; needsRestart: boolean; plugins: PluginInfo[] }>(cfg, '/agent/plugins/rescan', { method: 'POST' })
 export const setPluginEnabled = (cfg: TanguDesktopConfig, id: string, enabled: boolean) =>
   request<{ ok: boolean; enabled: boolean }>(cfg, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+/** 卸载数据清理(注销 meta + 清设置/blob);文件夹删除与重启由桌面侧 IPC 负责。 */
+export const uninstallPlugin = (cfg: TanguDesktopConfig, id: string) =>
+  request<{ ok: boolean; restartRequired: boolean }>(cfg, `/agent/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getPluginSettings = (cfg: TanguDesktopConfig, id: string, scope: string) =>
   request<{ values: Record<string, any> }>(cfg, `/agent/plugins/${encodeURIComponent(id)}/settings?scope=${encodeURIComponent(scope)}`).then((r) => r.values)
 export const putPluginSettings = (cfg: TanguDesktopConfig, id: string, scope: string, patch: Record<string, any>) =>

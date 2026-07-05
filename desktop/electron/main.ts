@@ -10,7 +10,7 @@ import { readFile, writeFile, mkdir, chmod, readdir, stat, rename, cp, open as f
 import { existsSync } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
-import { forsionHomeDir, migrateForsionHome, migratePair, setDevMode } from './forsionHome'
+import { forsionHomeDir, migrateForsionHome, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { execFile, spawn } from 'child_process'
 import { homedir } from 'os'
 import { BackendManager, bundledPythonBin, type BackendStatus } from './backendManager'
@@ -19,8 +19,9 @@ import {
 } from './forsionAuth'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate } from './updater'
+import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
-import { extractZipToDir, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion } from './marketInstall'
+import { extractZipToDir, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs } from './marketInstall'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
@@ -32,6 +33,10 @@ if (app.isPackaged) migratePair(join(app.getPath('appData'), 'Tangu Agent 2.0'),
 const tanguHomeDir = forsionHomeDir // 品牌迁移后真身在 ~/.forsion(名字保留,少动 20+ 调用点)
 /** ~/.tangu/themes:拖入式主题目录(每主题一子目录:theme.json + theme.css)。 */
 const themesDir = (): string => join(tanguHomeDir(), 'themes')
+
+// 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
+if (!app.requestSingleInstanceLock()) app.exit(0)
+app.on('second-instance', () => showMainWindow())
 
 /**
  * 加载 ~/.tangu/.env 进 process.env(不覆盖真实环境;与包内 tanguHome.loadTanguEnv 同语义)。
@@ -433,6 +438,8 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
 
 const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
+// 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
+let isQuitting = false
 
 /** renderer 视角的有效配置:managed 就绪时 backendUrl/token 来自托管子进程。 */
 async function effectiveConfig(): Promise<TanguStoredConfig & { backendState: BackendStatus; homeDir: string }> {
@@ -522,12 +529,27 @@ function createWindow(): void {
     if (isMainFrame && code !== -3) recoverRenderer(`did-fail-load:${code} ${desc}`) // -3=ERR_ABORTED(外链 deny),忽略
   })
 
+  // 关闭窗口 = 最小化到托盘(App 常驻后台,后端/Muse 不中断);真正退出走托盘「退出」/before-quit(置 isQuitting)。
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return
+    e.preventDefault()
+    mainWindow?.hide()
+  })
+
   loadRenderer(mainWindow)
 }
 
 function loadRenderer(win: BrowserWindow): void {
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else win.loadFile(join(__dirname, '../renderer/index.html'))
+}
+
+/** 召回主窗:隐藏则显示、最小化则还原、销毁则重建。托盘/通知/单实例/activate 共用。 */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
 }
 
 // 60s 内崩溃≥3 次则熔断(避免崩溃-重载风暴),弹框让用户决定重载或退出。
@@ -603,11 +625,8 @@ app.whenReady().then(async () => {
     if (!Notification.isSupported()) return
     const n = new Notification({ title: String(title || '').slice(0, 200), body: String(body || '').slice(0, 200) })
     n.on('click', () => {
-      if (!mainWindow || mainWindow.isDestroyed()) return
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-      mainWindow.webContents.send('inbox:open')
+      showMainWindow()
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('inbox:open')
     })
     n.show()
   })
@@ -949,6 +968,27 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
+  // 应用内「卸载 / 清空数据」(mac/linux 无 NSIS 卸载器,靠此;Windows 也可用)。清完 relaunch 为全新状态。
+  //   tangu:  ~/.forsion(账号/设置/Agent 数据/会话/state.db)+ ~/Forsion 工作区 + ~/.tangu、~/Tangu 兼容软链
+  //   desktop:userData 里的壳层配置(窗口/Amadeus)
+  ipcMain.handle('app:clearData', async (_e, opts: { desktop?: boolean; tangu?: boolean }) => {
+    await backend.stop() // 释放 state.db 句柄,否则占用删不掉
+    if (opts?.tangu) {
+      for (const p of [forsionHomeDir(), forsionWorkspaceDir(), join(homedir(), '.tangu'), join(homedir(), 'Tangu')]) {
+        await rm(p, { recursive: true, force: true }).catch(() => {})
+      }
+    }
+    if (opts?.desktop) {
+      for (const f of ['tangu-desktop-config.json', 'amadeus-config.json']) {
+        await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
+      }
+    }
+    isQuitting = true
+    app.relaunch()
+    app.exit(0)
+    return { ok: true }
+  })
+
   // 打开 Forsion 个人中心(对齐 AI Studio:{cloudUrl}/account?token=…)。token 留在主进程,不下发渲染层。
   // 可选 section → 追加 #<section>(如投稿页 #submission)。
   ipcMain.handle('auth:openAccountCenter', async (_e, section?: string) => {
@@ -1030,7 +1070,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('market:installed', async () => {
     // 每个已装项带版本号(读其 manifest),供市场「可更新」检查。
-    const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [], space: [] }
+    const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
     for (const [type, sub] of Object.entries(MARKET_SUBDIR)) {
       try {
         const base = join(tanguHomeDir(), sub)
@@ -1067,6 +1107,17 @@ app.whenReady().then(async () => {
   ipcMain.handle('spaces:delete', async (_e, slug: string) => {
     if (!isSafeSlug(slug)) throw new Error('非法的 Space 标识')
     await rm(join(tanguHomeDir(), 'spaces', slug), { recursive: true, force: true })
+    return { ok: true }
+  })
+
+  // ── 后端插件卸载:只动 ~/.tangu/plugins(用户目录);<pkg>/plugins 首方插件结构性安全(不在这里,删不到)。
+  // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
+  ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguHomeDir(), 'plugins')))
+  ipcMain.handle('plugins:uninstall', async (_e, id: string) => {
+    if (!isSafeSlug(id)) throw new Error('非法的插件标识')
+    const hit = (await readUserPluginDirs(join(tanguHomeDir(), 'plugins'))).find((p) => p.id === id)
+    if (!hit) throw new Error('插件不在用户目录(内置/首方插件不可卸载)')
+    await rm(join(tanguHomeDir(), 'plugins', hit.slug), { recursive: true, force: true })
     return { ok: true }
   })
 
@@ -1183,12 +1234,16 @@ app.whenReady().then(async () => {
 
   void ensureBackend()
   createWindow()
+  // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
+  createTray({
+    show: showMainWindow,
+    checkUpdates: () => { void checkForUpdates() },
+    quit: () => { isQuitting = true; app.quit() },
+  })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot } = registerAmadeusIpc(() => mainWindow)
   registerAmadeusAssetProtocol(getVaultRoot)
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。
   app.on('child-process-gone', (_e, d) => {
     console.error('[tangu-desktop] child-process-gone', d.type, d.reason)
@@ -1197,6 +1252,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', (e) => {
+  isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。
   const st = backend.getStatus().state
   if (st === 'ready' || st === 'starting') {
@@ -1206,5 +1262,6 @@ app.on('before-quit', (e) => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // 关窗只是隐藏到托盘(见 createWindow 的 close 拦截),App 常驻后台。
+  // 故此处不再 app.quit();退出统一走托盘「退出」或 mac Cmd+Q → before-quit。
 })

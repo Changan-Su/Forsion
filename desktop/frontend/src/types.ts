@@ -513,6 +513,8 @@ declare global {
       downloadUpdate?(): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
       onUpdaterStatus?(cb: (st: UpdaterStatusInfo) => void): () => void
+      /** 应用内清空数据(卸载/重置);清完主进程 relaunch。 */
+      clearAppData?(opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       pickDirectory?(): Promise<string | null>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
@@ -558,6 +560,9 @@ declare global {
       marketDetail?(id: string): Promise<MarketDetail>
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }>
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
+      /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
+      pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
+      pluginsUninstall?(id: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
       spacesList?(): Promise<Array<{ slug: string; json: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
@@ -573,7 +578,7 @@ declare global {
 /** 市场卡片(浏览列表)。 */
 export interface MarketCard {
   id: string
-  type: 'skill' | 'agent' | 'plugin' | 'space'
+  type: 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin'
   source: 'github' | 'zip'
   name: string
   summary: string
