@@ -101,7 +101,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   return (
     <div
       ref={tabRef}
-      className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}${type === 'sidebar-empty' ? ' wb-tab--empty' : ''}`}
+      className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}${type === 'sidebar-empty' || type === 'home' ? ' wb-tab--empty' : ''}`}
       title={api.title}
       draggable
       onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}

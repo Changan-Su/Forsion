@@ -449,3 +449,20 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   padding: 24px; text-align: center; font-size: 12.5px; line-height: 1.6;
   color: var(--text-faint, var(--text-muted)); user-select: none;
 }
+
+/* ── 主区空态(home):关掉最后一个主区 tab 后就地填充,Forsion 品牌图 + 「新建」按钮。
+ *    tab 条隐藏机关同上(WbTab 给 home 挂 wb-tab--empty)→ 呈现为纯背景。 ── */
+.wb-home {
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 20px; padding: 40px; user-select: none;
+}
+.wb-home-mark { display: inline-flex; align-items: center; justify-content: center; opacity: .95; }
+.wb-home-new {
+  display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px;
+  border: var(--border-width, 1px) solid var(--border); border-radius: 999px;
+  background: var(--bg-card); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+  transition: border-color var(--duration-fast, .15s), background var(--duration-fast, .15s), transform var(--duration-fast, .15s);
+}
+.wb-home-new:hover { border-color: var(--accent); background: var(--overlay-light); transform: translateY(-1px); }
+.wb-home-new:active { transform: translateY(0) scale(.98); }
+.wb-home-new > svg { color: var(--accent); }

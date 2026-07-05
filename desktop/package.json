@@ -1,6 +1,6 @@
 {
   "name": "tangu-agent-desktop2",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "description": "Tangu Agent Desktop 2.0 — Obsidian 式工作区引擎(Electron),连 standalone 服务",
   "author": "Forsion",
   "private": true,

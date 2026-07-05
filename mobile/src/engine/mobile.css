@@ -1,0 +1,108 @@
+/* 移动端外壳样式。复用 desktop base.css 的 LCL token(--bg/--fg/--border/--accent 等);此处只排布局。 */
+.mb-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #fff);
+  color: var(--fg, #111);
+  overflow: hidden;
+}
+
+.mb-topbar {
+  flex: 0 0 auto;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  background: var(--bg-elevated, var(--bg, #fff));
+}
+.mb-title {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mb-icon-btn {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.mb-icon-btn:active { background: var(--hover, rgba(0, 0, 0, 0.06)); }
+.mb-icon-btn--ghost { pointer-events: none; opacity: 0; }
+
+.mb-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.mb-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 侧滑抽屉 */
+.mb-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+}
+.mb-drawer {
+  position: relative;
+  width: min(86vw, 380px);
+  height: 100%;
+  background: var(--bg, #fff);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.25);
+  animation: mb-slide-in 0.18s ease-out;
+}
+.mb-drawer--left { margin-right: auto; }
+.mb-drawer--right { margin-left: auto; }
+@keyframes mb-slide-in { from { transform: translateX(var(--mb-from, -8%)); opacity: 0.6; } to { transform: none; opacity: 1; } }
+.mb-drawer--right { --mb-from: 8%; }
+.mb-drawer-bar { height: 44px; display: flex; align-items: center; padding: 0 6px; border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08)); }
+.mb-drawer-body { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
+
+/* 底部 Space 切换栏 */
+.mb-bottomnav {
+  flex: 0 0 auto;
+  display: flex;
+  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  background: var(--bg-elevated, var(--bg, #fff));
+}
+.mb-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted, rgba(0, 0, 0, 0.55));
+  cursor: pointer;
+}
+.mb-tab.on { color: var(--accent, #4d8794); }
+.mb-tab-label { font-size: 11px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }

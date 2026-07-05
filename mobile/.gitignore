@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.vite/
+# android/ 入库(含深链 intent-filter 等原生定制);其构建产物/复制的 web 资源由 android/.gitignore 忽略。
+# ios/ 暂未添加。

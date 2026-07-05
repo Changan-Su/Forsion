@@ -491,6 +491,8 @@ declare global {
       platform?: string
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
       cloudWeb?: boolean
+      /** 移动端(Capacitor/Android)标志:由 mobile 垫片注入;Inbox 等据此走设备本地存储实现。 */
+      mobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -556,6 +558,10 @@ declare global {
       marketDetail?(id: string): Promise<MarketDetail>
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }>
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
+      /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
+      spacesList?(): Promise<Array<{ slug: string; json: string }>>
+      spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
+      spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
       setInboxBadge?(count: number): Promise<void>
@@ -567,7 +573,7 @@ declare global {
 /** 市场卡片(浏览列表)。 */
 export interface MarketCard {
   id: string
-  type: 'skill' | 'agent' | 'plugin'
+  type: 'skill' | 'agent' | 'plugin' | 'space'
   source: 'github' | 'zip'
   name: string
   summary: string

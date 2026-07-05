@@ -8,7 +8,6 @@ import { create } from 'zustand'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { Leaf, ViewLocation } from './types'
 import { getView } from './viewRegistry'
-import { getActiveSpace } from './spaceRegistry'
 import { label } from './types'
 import { locOf, type DropTarget } from './dropModel'
 import { useNav } from './navStore'
@@ -329,22 +328,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const api = get().api
     const panel = api?.getPanel(id)
     if (!api || !panel) return
-    // 主区关掉「最后一个」view → 不留空白,填充当前 Space 的「新页面」。
-    // 分屏 / 多 tab(主区还有别的 panel)走默认 close:Dockview 自动移除空组 = 关掉那个分屏 panel。
+    if (panelType(panel) === 'home') return // home 是主区空态占位,不可关(无 close 入口,防御性)
     const loc = ((panel.params ?? {}) as PanelMeta).__loc ?? 'main'
-    const wasLastMain = loc === 'main' && panelsAt(api, 'main').length <= 1
+    // 主区关掉「最后一个」view → 就地把它变成 home 空态占位(Forsion 品牌图 + 新建),而非
+    // close→addPanel。后者会销毁主区组,让侧栏瞬间回流吞掉主区宽再弹回 = 侧栏「被关」+卡顿(本次修复的 bug)。
+    // navigateLeaf 复用同一 panel/组,只换 __type → 零组结构变化,侧栏纹丝不动。
+    // 分屏 / 多 tab(主区还有别的 panel)走默认 close:Dockview 自动移除空组 = 关掉那个分屏 panel。
+    if (loc === 'main' && panelsAt(api, 'main').length <= 1) {
+      useNav.getState().drop(id)      // 旧 tab 导航史销毁(panel 复用,仅清栈)
+      get().navigateLeaf(id, 'home')  // 内部已 refreshTabs
+      return
+    }
     // 侧栏关空 → 补「空侧栏」占位(保住 group 作拖放靶;toggleSidebar 折叠不走 closeLeaf,不受影响)。
     const wasLastSide = (loc === 'left' || loc === 'right')
       && panelType(panel) !== 'sidebar-empty' && panelsAt(api, loc).length <= 1
-    // 先关再填:新页面可能与被关视图同 type(如 Amadeus 单例编辑器),open-first 会复用到正被关的那个。
+    // 先关再填:占位可能与被关视图同 type,open-first 会复用到正被关的那个。
     panel.api.close()
-    if (wasLastMain) {
-      const np = getActiveSpace()?.newPage
-      if (np) np()
-      else get().openView('launcher', {}, 'main')
-    } else if (wasLastSide) {
-      get().openView('sidebar-empty', {}, loc)
-    }
+    if (wasLastSide) get().openView('sidebar-empty', {}, loc)
     useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
     get().refreshTabs()
   },
@@ -360,12 +360,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       else panel.api.moveTo({ group: target.group, position: target.dir }) // 方向 = 面板内分屏并新建组
     } catch { return }
     panel.api.updateParameters({ ...(panel.params ?? {}), __loc: loc })
-    // 把最后一个主区 view 拖去侧栏 → 主区空:填充当前 Space 的「新页面」(不留空白)。
-    if (panelsAt(api, 'main').length === 0) {
-      const np = getActiveSpace()?.newPage
-      if (np) np()
-      else get().openView('launcher', {}, 'main')
-    }
+    // 把最后一个主区 view 拖去侧栏 → 主区空:补 home 空态占位(与关掉最后一个 tab 同观感,不留空白)。
+    if (panelsAt(api, 'main').length === 0) get().openView('home', {}, 'main')
     // 侧栏占位进退:某侧被拖空 → 补占位(保住 drop 靶);拖入真实 tab 的一侧若有占位 → 占位退位。
     for (const side of ['left', 'right'] as const) {
       const now = panelsAt(api, side)
@@ -555,7 +551,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }
     } else {
       // 展开:还原暂存内容(pinSides 跳过本侧),把该侧宽度从 ~0 补间到黄金分割目标宽。
-      const stashed = get().stash[side].length ? get().stash[side] : get().sidebarDefaults[side]
+      // stash 与 defaults 都为空(如无该侧默认的自定义 Space)→ 开占位:否则不建任何 panel,
+      // syncPanelState 又按「无 panel」把 visible 复位,toggle 变成永远空转的死键。
+      const restored = get().stash[side].length ? get().stash[side] : get().sidebarDefaults[side]
+      const stashed: Stashed[] = restored.length ? restored : [{ type: 'sidebar-empty', params: {} }]
       set({ [visKey]: true } as Partial<WorkspaceState>)
       sidebarAnimating[side] = true
       stashed.forEach((v) => get().openView(v.type, v.params, side))

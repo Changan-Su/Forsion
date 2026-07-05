@@ -6,7 +6,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, nativeImage, Notification } from 'electron'
 import { basename, dirname, join } from 'path'
 import { pathToFileURL } from 'url'
-import { readFile, writeFile, mkdir, chmod, readdir, stat, rename, cp, open as fsOpen, unlink } from 'fs/promises'
+import { readFile, writeFile, mkdir, chmod, readdir, stat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
 import { existsSync } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { execFile, spawn } from 'child_process'
@@ -1023,7 +1023,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('market:installed', async () => {
     // 每个已装项带版本号(读其 manifest),供市场「可更新」检查。
-    const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [] }
+    const out: Record<string, Array<{ slug: string; version: string | null }>> = { skill: [], agent: [], plugin: [], space: [] }
     for (const [type, sub] of Object.entries(MARKET_SUBDIR)) {
       try {
         const base = join(tanguHomeDir(), sub)
@@ -1036,6 +1036,31 @@ app.whenReady().then(async () => {
       }
     }
     return out
+  })
+
+  // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
+  ipcMain.handle('spaces:list', async () => {
+    const out: Array<{ slug: string; json: string }> = []
+    try {
+      const base = join(tanguHomeDir(), 'spaces')
+      for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
+        try { out.push({ slug: e.name, json: await readFile(join(base, e.name, 'space.json'), 'utf8') }) } catch { /* 无 manifest 跳过 */ }
+      }
+    } catch { /* 目录不存在 = 空 */ }
+    return out
+  })
+  ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
+    if (!isSafeSlug(slug)) throw new Error('非法的 Space 标识')
+    JSON.parse(json) // 落盘前校验合法 JSON,防写入损坏配方
+    const dir = join(tanguHomeDir(), 'spaces', slug)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'space.json'), json, 'utf8')
+    return { ok: true }
+  })
+  ipcMain.handle('spaces:delete', async (_e, slug: string) => {
+    if (!isSafeSlug(slug)) throw new Error('非法的 Space 标识')
+    await rm(join(tanguHomeDir(), 'spaces', slug), { recursive: true, force: true })
+    return { ok: true }
   })
 
   // 提交反馈到 Forsion 反馈中心(token 留主进程,不下发渲染层)。会话日志 JSON 作附件随附,

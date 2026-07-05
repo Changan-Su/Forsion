@@ -41,9 +41,9 @@ export function useBootstrap(): void {
     return () => window.clearInterval(timer)
   }, [])
 
-  // 收件箱:全局常驻未读轮询(ribbon/dock 角标在任何 Space 下更新)。桌面壳 gate,Tangu Web 不跑。
+  // 收件箱:全局常驻未读轮询(ribbon/dock 角标在任何 Space 下更新)。桌面壳 或 移动端(本地 inbox)gate;Tangu Web 不跑。
   useEffect(() => {
-    if (!window.tangu?.backendStatus) return
+    if (!window.tangu?.backendStatus && !window.tangu?.mobile) return
     useInbox.getState().startPolling()
     return () => useInbox.getState().stopPolling()
   }, [])

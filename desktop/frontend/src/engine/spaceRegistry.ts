@@ -20,6 +20,8 @@ interface SpaceState {
   activeSpaceId: string
   /** 注册一个 Space(按 id upsert,保持注册序)。 */
   registerSpace(def: SpaceDefinition): void
+  /** 注销一个 Space(用户自定义 Space 删除用)。调用方须先切走活动 Space,再清 ribbon/命名布局。 */
+  unregisterSpace(id: string): void
   /** 切到某 Space(整体换布局)。同 id 则 no-op。 */
   setActiveSpace(id: string): void
 }
@@ -30,6 +32,8 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
 
   registerSpace: (def) =>
     set((s) => ({ spaces: [...s.spaces.filter((x) => x.id !== def.id), def] })),
+
+  unregisterSpace: (id) => set((s) => ({ spaces: s.spaces.filter((x) => x.id !== id) })),
 
   setActiveSpace: (toId) => {
     const { spaces, activeSpaceId: fromId } = get()
@@ -59,4 +63,5 @@ export const getActiveSpace = (): SpaceDefinition | undefined => {
 }
 
 export const registerSpace = (def: SpaceDefinition): void => useSpaceStore.getState().registerSpace(def)
+export const unregisterSpace = (id: string): void => useSpaceStore.getState().unregisterSpace(id)
 export const setActiveSpace = (id: string): void => useSpaceStore.getState().setActiveSpace(id)

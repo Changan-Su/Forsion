@@ -43,9 +43,10 @@ describe('computeStripPrefix', () => {
   it('manifest 已在根 → 不剥', () => {
     expect(computeStripPrefix(['SKILL.md', 'lib/x.js'], ['SKILL.md'])).toBe('')
   })
-  it('plugin/agent manifest 名', () => {
+  it('plugin/agent/space manifest 名', () => {
     expect(computeStripPrefix(['pkg/tangu-plugin.json'], ['tangu-plugin.json'])).toBe('pkg/')
     expect(computeStripPrefix(['pkg/config.toml', 'pkg/SOUL.md'], ['config.toml'])).toBe('pkg/')
+    expect(computeStripPrefix(['focus/space.json'], ['space.json'])).toBe('focus/')
   })
 })
 
@@ -89,6 +90,16 @@ describe('extractZipToDir', () => {
     expect(existsSync(join(dest, 'my-skill'))).toBe(false) // 包裹层已剥
     expect(existsSync(join(dest, '__MACOSX'))).toBe(false) // 垃圾未写
     expect(existsSync(join(dest, '.DS_Store'))).toBe(false)
+  })
+
+  it('space 包(space.json manifest)重定根解压', async () => {
+    const zip = new JSZip()
+    zip.file('focus/space.json', JSON.stringify({ id: 'focus', name: 'Focus', layout: { main: [{ type: 'chat' }] } }))
+    const buf = await zip.generateAsync({ type: 'nodebuffer' })
+    const dest = mkdtempSync(join(tmpdir(), 'mk-'))
+    const n = await extractZipToDir(buf, dest, ['space.json'])
+    expect(n).toBe(1)
+    expect(JSON.parse(readFileSync(join(dest, 'space.json'), 'utf8')).id).toBe('focus')
   })
 
   // jszip 自身在 generate 时会规整 '../' → 经它造的 zip 到不了 safeEntryPath 的拒绝分支(双重防线)。

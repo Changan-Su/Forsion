@@ -8,6 +8,7 @@ import type {
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
 } from '../types'
 import { authFetch } from './http'
+import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 
 function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
@@ -511,20 +512,33 @@ export interface InboxMessage {
 }
 export type InboxFilter = 'all' | 'unread' | 'archived' | 'scheduled'
 
+// 移动端(window.tangu?.mobile)inbox 走设备本地存储(localInbox);桌面/web 走远程 /agent/inbox。
 export const listInbox = (cfg: TanguDesktopConfig, filter: InboxFilter = 'all') =>
-  request<{ messages: InboxMessage[] }>(cfg, `/agent/inbox?filter=${filter}&limit=200`).then((r) => r.messages)
+  window.tangu?.mobile
+    ? localInbox.list(filter)
+    : request<{ messages: InboxMessage[] }>(cfg, `/agent/inbox?filter=${filter}&limit=200`).then((r) => r.messages)
 
 export const getInboxUnreadCount = (cfg: TanguDesktopConfig) =>
-  request<{ count: number; latestId: string | null }>(cfg, '/agent/inbox/unread-count')
+  window.tangu?.mobile
+    ? localInbox.unreadCount()
+    : request<{ count: number; latestId: string | null }>(cfg, '/agent/inbox/unread-count')
 
 export const patchInboxMessage = (cfg: TanguDesktopConfig, id: string, patch: { read?: boolean; archived?: boolean }) =>
-  request<{ ok: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  window.tangu?.mobile
+    ? localInbox.patch(id, patch)
+    : request<{ ok: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
 
 export const readAllInbox = (cfg: TanguDesktopConfig) =>
-  request<{ ok: boolean }>(cfg, '/agent/inbox/read-all', { method: 'POST' })
+  window.tangu?.mobile
+    ? localInbox.readAll()
+    : request<{ ok: boolean }>(cfg, '/agent/inbox/read-all', { method: 'POST' })
 
 export const deleteInboxMessage = (cfg: TanguDesktopConfig, id: string) =>
-  request<{ ok: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  window.tangu?.mobile
+    ? localInbox.remove(id)
+    : request<{ ok: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 export const pullInbox = (cfg: TanguDesktopConfig) =>
-  request<{ pulled: boolean; added: number; detail?: string }>(cfg, '/agent/inbox/pull', { method: 'POST' })
+  window.tangu?.mobile
+    ? localInbox.pull(cfg)
+    : request<{ pulled: boolean; added: number; detail?: string }>(cfg, '/agent/inbox/pull', { method: 'POST' })

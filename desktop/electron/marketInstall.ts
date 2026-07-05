@@ -7,13 +7,14 @@ import { mkdir, writeFile, readFile } from 'fs/promises'
 import { join, dirname, relative, isAbsolute } from 'path'
 
 /** type → ~/.tangu 下的子目录。 */
-export const MARKET_SUBDIR: Record<string, string> = { skill: 'skills', agent: 'agents', plugin: 'plugins' }
+export const MARKET_SUBDIR: Record<string, string> = { skill: 'skills', agent: 'agents', plugin: 'plugins', space: 'spaces' }
 
 /** type → manifest 文件名(用于 manifest 感知重定根,见 computeStripPrefix)。 */
 export const MARKET_MANIFEST: Record<string, string[]> = {
   skill: ['SKILL.md'],
   agent: ['config.toml'],
   plugin: ['tangu-plugin.json'],
+  space: ['space.json'],
 }
 
 /** 规整版本字符串(去前导 v、去空白);空 → null。 */
@@ -30,6 +31,9 @@ export async function readInstalledVersion(type: string, dir: string): Promise<s
   try {
     if (type === 'plugin') {
       return normVer(JSON.parse(await readFile(join(dir, 'tangu-plugin.json'), 'utf8'))?.version)
+    }
+    if (type === 'space') {
+      return normVer(JSON.parse(await readFile(join(dir, 'space.json'), 'utf8'))?.version)
     }
     if (type === 'skill') {
       const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(await readFile(join(dir, 'SKILL.md'), 'utf8'))

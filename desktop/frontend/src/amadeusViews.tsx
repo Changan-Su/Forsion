@@ -527,6 +527,7 @@ let lastActiveEditorLeafId: string | null = null
 
 export function AmadeusEditorView({ leaf }: ViewProps) {
   const activePage = usePageStore((s) => s.activePage)
+  const vaultRoot = usePageStore((s) => s.vaultRoot) // 无笔记时的空态引导据此二态(未开 Vault / 已开待新建)
   // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state。
   const mode = useUiOverlay((s) => s.editorMode)
   const [dragging, setDragging] = useState(false)
@@ -687,7 +688,26 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
         </div>
       )}
       {!activePage ? (
-        <div className="amx-empty">从左栏选择一篇笔记,或新建 / 打开一个 Vault 开始。</div>
+        <div className="amx-welcome">
+          <div className="amx-welcome-title">📓 Amadeus 笔记</div>
+          <p className="amx-welcome-sub">
+            {vaultRoot
+              ? '从左栏选一篇笔记开始,或新建一篇。'
+              : '把任意文件夹选作你的笔记库(Vault)就能开写 —— 所见即所得,像 Obsidian 一样用双链把想法连起来。'}
+          </p>
+          <div className="amx-welcome-actions">
+            {vaultRoot ? (
+              <button className="amx-welcome-btn" onClick={() => void ps().createPage()}><SquarePen size={16} /> 新建笔记</button>
+            ) : (
+              <button className="amx-welcome-btn" onClick={() => void ps().openVault()}><FolderOpen size={16} /> 打开 Vault 文件夹</button>
+            )}
+          </div>
+          <ul className="amx-welcome-tips">
+            <li><span className="amx-kbd">[[</span> 引用其它笔记,自动生成反向链接</li>
+            <li><Paperclip size={13} /> 拖入图片 / 文件直接插入;支持数据库块、LaTeX、代码高亮</li>
+            <li><Code2 size={13} /> 顶栏切「可视 / 源码」,右上角 ⋮ 可导出 PDF</li>
+          </ul>
+        </div>
       ) : mode === 'source' ? (
         <SourceEditor key={activePage} />
       ) : (

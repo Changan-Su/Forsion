@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../desktop/frontend/src/*"],
+      "@amadeus/*": ["../desktop/frontend/src/amadeus/*"],
+      "@amadeus-shared/*": ["../desktop/shared/amadeus/*"],
+      "@mobile/*": ["src/*"]
+    }
+  },
+  "include": ["src", "../desktop/frontend/src"]
+}

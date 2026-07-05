@@ -9,10 +9,11 @@ import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, type InstalledItem } from '../services/marketService'
+import { loadUserSpaces } from '../userSpaces'
 import type { MarketCard, MarketDetail } from '../types'
 
-type Tab = 'skill' | 'agent' | 'plugin' | 'updates' | 'submit'
-const CONTENT_TABS: Tab[] = ['skill', 'agent', 'plugin']
+type Tab = 'skill' | 'agent' | 'plugin' | 'space' | 'updates' | 'submit'
+const CONTENT_TABS: Tab[] = ['skill', 'agent', 'plugin', 'space']
 
 /** 最新版本是否比已装的新(仅数值 semver 比较;不可比/未知已装版本 → 不提示,避免误报)。 */
 function isNewer(latest: string | null | undefined, installed: string | null): boolean {
@@ -77,6 +78,10 @@ export function MarketModal() {
       if (c.type === 'plugin') {
         // 插件:重扫免重启出现 + 装即启用 + 跳转设置(在 onPluginInstalled 内 toast)。
         await useApp.getState().onPluginInstalled()
+      } else if (c.type === 'space') {
+        // 数据 Space:装完热注册,ribbon 顶部实时出现,无需重启。
+        await loadUserSpaces()
+        toast(t('market.spaceInstalled', { name: c.name }))
       } else {
         toast(t('market.installOk', { name: c.name }))
       }
@@ -119,6 +124,7 @@ export function MarketModal() {
     skill: t('market.tab.skills'),
     agent: t('market.tab.agents'),
     plugin: t('market.tab.plugins'),
+    space: t('market.tab.spaces'),
     updates: t('market.tab.updates'),
     submit: t('market.tab.submit'),
   }

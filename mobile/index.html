@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 移动端：禁缩放、覆盖刘海安全区（viewport-fit=cover 配合 env(safe-area-inset-*)）。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:;" />
+    <title>Tangu</title>
+    <script>
+      // FOUC 防护（与 desktop/web 共用同一套 localStorage 键）：React 挂载前按持久化设主题。
+      (function () {
+        try {
+          var mode = localStorage.getItem('forsion_theme') === 'dark' ? 'dark' : 'light';
+          var glass = localStorage.getItem('forsion_glass') === 'off' ? 'off' : 'on';
+          var flat = localStorage.getItem('forsion_theme_flat') === '1' ? '1' : '0';
+          var MIG = { lovable: ['lovable', 'cream'], echo: ['lovable', 'coral'], qbird: ['lovable', 'teal'], dreamer: ['soft', 'lavender'], custom: ['lovable', 'custom'] };
+          var legacy = MIG[localStorage.getItem('forsion_theme_preset')] || null;
+          var lang = localStorage.getItem('forsion_theme_lang') || (legacy ? legacy[0] : 'lovable');
+          if (!/^[a-z0-9-]+$/.test(lang)) lang = 'lovable';
+          var skin = localStorage.getItem('forsion_theme_skin') || (legacy ? legacy[1] : 'cream');
+          if (['cream', 'coral', 'teal', 'lavender', 'custom'].indexOf(skin) < 0) skin = 'cream';
+          var root = document.documentElement;
+          root.dataset.theme = lang;
+          root.dataset.skin = skin;
+          root.dataset.mode = mode;
+          root.dataset.glass = glass;
+          root.dataset.flat = flat;
+          if (mode === 'dark') root.classList.add('dark');
+          var BG = {
+            cream: ['#f7f4ed', '#1c1a16'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
+            lavender: ['#f4eef7', '#1e1a29'], custom: ['#f6f6f7', '#1b1b1d']
+          };
+          root.style.background = (BG[skin] || BG.cream)[mode === 'dark' ? 1 : 0];
+        } catch (e) { /* private mode */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

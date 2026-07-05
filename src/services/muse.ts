@@ -16,7 +16,7 @@
  */
 import { v4 as uuidv4 } from 'uuid';
 import { promises as fs } from 'node:fs';
-import { query } from '../core/db.js';
+import { query, getOlderThanSql } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
@@ -72,6 +72,18 @@ async function isRunning(sessionId: string): Promise<boolean> {
     [sessionId],
   );
   return !!rows.length;
+}
+
+/** 本 Muse 会话在最近 windowHours 小时内累计消耗的 token（滚动窗口，直接从 agent_runs 求和 →
+ *  跨进程重启不丢；单 run 失控另由 TANGU_MAX_RUN_COST 兜底，此处只算「一段时间反复唤醒」的累计）。 */
+export async function tokensInWindow(sessionId: string, windowHours: number): Promise<number> {
+  // NOT(older than) = created_at 落在窗口内；created_at 有默认值不为空，故取反等价于 >=。方言经 getOlderThanSql。
+  const within = `NOT (${getOlderThanSql('created_at', Math.round(windowHours * 60))})`;
+  const rows = await query<any[]>(
+    `SELECT COALESCE(SUM(tokens_total), 0) AS t FROM agent_runs WHERE session_id = ? AND ${within}`,
+    [sessionId],
+  );
+  return Number(rows[0]?.t || 0);
 }
 
 /** 是否有任何**用户**会话的 run 正在排队/运行——后台 Muse 据此让位，避免与用户抢同一模型账号/速率。 */
@@ -278,6 +290,16 @@ async function tick(): Promise<void> {
     const sid = currentSessionId || (await getMuseSessionId(userId));
     if (sid && (await isRunning(sid))) { lastRunning = true; return; }
     lastRunning = false;
+
+    // token 预算：本 Muse 会话最近 tokenBudgetWindowHours 小时累计 token 超上限 → 本轮不起新周期。
+    // 挡的是「后台反复唤醒把一段时间的额度烧穿」；单趟失控由 TANGU_MAX_RUN_COST 兜底，两层不重叠。
+    if (cfg.maxTokensPerWindow > 0 && sid) {
+      const spent = await tokensInWindow(sid, cfg.tokenBudgetWindowHours);
+      if (spent >= cfg.maxTokensPerWindow) {
+        log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 已用 ${spent}/${cfg.maxTokensPerWindow}),本轮跳过`);
+        return;
+      }
+    }
 
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;

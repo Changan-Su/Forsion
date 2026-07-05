@@ -1408,6 +1408,8 @@ const I18nContext = createContext<I18nValue | null>(null)
 let _locale: Locale = resolveInitialLocale()
 let _setLocale: ((l: Locale) => void) | null = null
 export function cycleLocale(): void { _setLocale?.(_locale === 'zh' ? 'en' : 'zh') }
+/** 当前语言(模块级快照):供非组件代码(如用户 Space 的 name 懒求值)读取。 */
+export function currentLocale(): Locale { return _locale }
 
 export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [locale, setLocaleState] = useState<Locale>(resolveInitialLocale)

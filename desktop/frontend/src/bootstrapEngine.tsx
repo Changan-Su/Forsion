@@ -3,6 +3,7 @@ import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, M
 import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, getActiveSpace, recordNav, useNav, activeMainPanel } from './engine'
 import { useRecentViews } from './recentViews'
 import { registerSpaces } from './spaces'
+import { loadUserSpaces, saveCurrentAsSpace } from './userSpaces'
 import { AccountCard } from './components/AccountCard'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -11,6 +12,7 @@ import { ChatView } from './views/ChatView'
 import { MemoryPanelView, SubchatsView } from './views/RightViews'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
+import { HomeEmptyView } from './views/HomeEmpty'
 import { WeChatSpecialView, AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from './amadeusPanels'
@@ -67,6 +69,8 @@ export function installEngine(): void {
   registerView({ type: 'wsfile', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // 空侧栏占位:侧栏关空/拖空后由 closeLeaf/dropView 自动补上,保住 group 作拖放靶(整组只剩它时 tab 条隐藏,见 engine.css)。
   registerView({ type: 'sidebar-empty', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: () => <SidebarEmptyView />, closable: false })
+  // 主区空态占位:关掉最后一个主区 tab 后 closeLeaf 就地把该 leaf 变成它(Forsion 品牌图 + 新建;tab 条隐藏机关同 sidebar-empty)。
+  registerView({ type: 'home', displayName: () => app().tr('newtab.title'), icon: Plus, factory: () => <HomeEmptyView />, closable: false })
 
   // Amadeus Space:原生可停靠视图(左 笔记列表 / 主 编辑器 / 右 大纲+反链),共享 pageStore。
   // Amadeus 依赖 electron 预载的 window.amadeus 文件系统桥;Tangu Web(无 host)下缺省 → 整个 Space 不注册,
@@ -85,8 +89,8 @@ export function installEngine(): void {
   // Inbox Space:收件箱(左 邮件列表 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
   // gate = window.tangu?.backendStatus(桌面壳语义,含 external 模式;webShim 无 → Tangu Web 不注册,
   // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩)。
-  if (window.tangu?.backendStatus) {
-    registerView({ type: 'inbox-list', displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true, closable: false })
+  if (window.tangu?.backendStatus || window.tangu?.mobile) {
+    registerView({ type: 'inbox-list', displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true })
     registerView({ type: 'inbox-reader', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true })
   }
 
@@ -95,6 +99,8 @@ export function installEngine(): void {
   registerSpaces()
   const activeSpace = getActiveSpace()
   if (activeSpace) ws().setSidebarDefaults(activeSpace.sidebarDefaults)
+  // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
+  if (window.tangu?.spacesList) void loadUserSpaces()
 
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。
   // 时序:点会话列表是 setActiveId → openView,订阅同步 fire 时目标 chat leaf 可能尚未就位/激活,
@@ -154,6 +160,11 @@ export function installEngine(): void {
   addCommand({ id: 'nav-back', title: () => app().tr('command.navBack'), keywords: 'back history 后退 历史', hotkey: 'mod+shift+[', run: () => navGo('back') })
   addCommand({ id: 'nav-forward', title: () => app().tr('command.navForward'), keywords: 'forward history 前进 历史', hotkey: 'mod+shift+]', run: () => navGo('forward') })
   addCommand({ id: 'reset-layout', title: () => app().tr('command.resetLayout'), keywords: 'layout reset default 布局 默认 黄金分割', run: () => ws().resetLayout() })
+  // 另存为 Space:当前布局序列化成 ~/.tangu/spaces/<slug>/space.json 并注册(仅桌面)。
+  if (window.tangu?.spacesSave) addCommand({ id: 'save-as-space', title: () => app().tr('command.saveAsSpace'), keywords: 'space 空间 另存 保存 custom', run: () => {
+    const name = window.prompt(app().tr('spaces.namePrompt'))?.trim()
+    if (name) void saveCurrentAsSpace(name)
+  } })
   addCommand({ id: 'save-layout', title: () => app().tr('command.saveLayout'), keywords: 'layout workspace save 命名布局', run: () => {
     const name = window.prompt(app().tr('layout.namePrompt'))?.trim()
     if (name) { ws().saveNamed(name); app().toast(app().tr('layout.saved', { name })) }

@@ -36,6 +36,10 @@ export interface MuseConfig {
   restartWindowHours: number;
   /** y：每窗口最多自动重启次数。 */
   maxRestartsPerWindow: number;
+  /** token 预算：滚动窗口（小时；默认 5）。与 restartWindowHours 相互独立。 */
+  tokenBudgetWindowHours: number;
+  /** token 预算：每窗口内本 Muse 会话最多累计消耗 token（默认 100000；0=关闭）。 */
+  maxTokensPerWindow: number;
   /** z：每个运行周期最多迭代轮数（默认 10；找 1-3 条 TODO 无需更多迭代）。 */
   maxIterationsPerCycle: number;
   /** t：每窗口最多新增 Muse TODO 条数。 */
@@ -82,6 +86,8 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     modelId: '',
     restartWindowHours: 1,
     maxRestartsPerWindow: 3,
+    tokenBudgetWindowHours: 5,
+    maxTokensPerWindow: 100_000,
     maxIterationsPerCycle: 10,
     maxTodosPerWindow: 5,
     supervisorPollMinutes: 5,
@@ -125,6 +131,8 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       modelId: asStr(m.modelId, d.muse.modelId),
       restartWindowHours: clampInt(m.restartWindowHours, d.muse.restartWindowHours, 1, 24),
       maxRestartsPerWindow: clampInt(m.maxRestartsPerWindow, d.muse.maxRestartsPerWindow, 0, 100),
+      tokenBudgetWindowHours: clampInt(m.tokenBudgetWindowHours, d.muse.tokenBudgetWindowHours, 1, 168),
+      maxTokensPerWindow: clampInt(m.maxTokensPerWindow, d.muse.maxTokensPerWindow, 0, 100_000_000),
       maxIterationsPerCycle: clampInt(m.maxIterationsPerCycle, d.muse.maxIterationsPerCycle, 1, 500),
       maxTodosPerWindow: clampInt(m.maxTodosPerWindow, d.muse.maxTodosPerWindow, 0, 100),
       supervisorPollMinutes: clampInt(m.supervisorPollMinutes, d.muse.supervisorPollMinutes, 1, 240),

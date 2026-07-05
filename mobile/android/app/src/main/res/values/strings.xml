@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Tangu</string>
+    <string name="title_activity_main">Tangu</string>
+    <string name="package_name">com.forsion.tangu</string>
+    <string name="custom_url_scheme">com.forsion.tangu</string>
+</resources>

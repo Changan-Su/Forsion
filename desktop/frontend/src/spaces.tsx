@@ -11,8 +11,9 @@ import { installAmadeusCommands } from './amadeusCommands'
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
 
-/** Space 的 ribbon 顶部图标:复用 .rb-btn,当前空间加 .on 高亮(订阅 activeSpaceId 自动刷新)。 */
-function SpaceButton({ space, expanded }: { space: SpaceDefinition; expanded: boolean }) {
+/** Space 的 ribbon 顶部图标:复用 .rb-btn,当前空间加 .on 高亮(订阅 activeSpaceId 自动刷新)。
+ *  导出供用户自定义 Space(userSpaces.tsx)复用同一观感。 */
+export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expanded: boolean }) {
   const active = useSpaceStore((s) => s.activeSpaceId === space.id)
   // hook 无条件调用(React 规则),选择器按 space.id 归零:只有收件箱图标显示未读角标。
   const unread = useInbox((s) => (space.id === 'inbox' ? s.unreadCount : 0))
@@ -63,10 +64,12 @@ const tanguSpace: SpaceDefinition = {
   },
 }
 
-/** Inbox Space:左=邮件列表;右栏无内容默认收起。主区 = 阅读面板。 */
+/** Inbox Space:左=邮件列表;右=工作区(默认收起,toggle 可展)。主区 = 阅读面板。
+ *  不定义 newPage(曾指向 singleton 的 inbox-reader,使 ＋ 键永远只是重激活已有面板 = 死键):
+ *  ＋ 与「关掉最后一个主区 view」统一落 launcher,与 Tangu/Amadeus 一致。 */
 const INBOX_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
   left: [{ type: 'inbox-list', params: {} }],
-  right: [],
+  right: [{ type: 'workspace', params: {} }],
 }
 
 const inboxSpace: SpaceDefinition = {
@@ -80,8 +83,6 @@ const inboxSpace: SpaceDefinition = {
     ws().openView('inbox-list', {}, 'left')
     ws().initializeSidebar('right', false)
   },
-  // 关掉最后一个主区 view → 回阅读面板空态(Gmail 语义),不落 launcher。
-  newPage: () => { ws().openView('inbox-reader', {}, 'main') },
 }
 
 /** Amadeus Space 的侧栏默认:左=工作区(自动→笔记)/搜索/标签 同组 tab;右=大纲/反链/关系图 同组 tab。 */
@@ -128,8 +129,8 @@ const amadeusSpace: SpaceDefinition = {
 export const AMADEUS_ENABLED = true // ponytail: 曾按 dev-mode 门控,现全量开放;闸只剩 window.amadeus(见各消费处的 && 前置)
 const SPACES: SpaceDefinition[] = [
   tanguSpace,
-  // Inbox 与视图注册同门控(桌面壳;Tangu Web 的 webShim 无 backendStatus → 不注册)。
-  ...(window.tangu?.backendStatus ? [inboxSpace] : []),
+  // Inbox 与视图注册同门控(桌面壳 backendStatus 或 移动端本地 inbox mobile;Tangu Web 两者皆无 → 不注册)。
+  ...((window.tangu?.backendStatus || window.tangu?.mobile) ? [inboxSpace] : []),
   ...(window.amadeus && AMADEUS_ENABLED ? [amadeusSpace] : []),
 ]
 
