@@ -90,7 +90,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: tangu-${{ matrix.os }}
+          name: forsion-${{ matrix.os }}
           path: |
             desktop/dist/*.AppImage
             desktop/dist/*.dmg
@@ -118,5 +118,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           # 已存在则补传并覆盖资产(支持重跑);不存在则新建(自动生成发布说明)。
-          gh release create "$TAG" artifacts/* --title "Tangu $TAG" --generate-notes \
+          gh release create "$TAG" artifacts/* --title "Forsion $TAG" --generate-notes \
             || gh release upload "$TAG" artifacts/* --clobber

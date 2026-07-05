@@ -1,4 +1,4 @@
-/** 产品档案:默认档案值级锁死(= build 段迁出前的 package.json 值,保证全家桶零行为变化)+ 结构校验。 */
+/** 产品档案:默认档案值级锁死 + 结构校验。2026-07-05 产品名正式改 Forsion(appId 刻意保留=Windows 升级链锚点)。 */
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -11,8 +11,8 @@ describe('产品档案', () => {
       id: 'forsion',
       displayName: 'Forsion',
       appId: 'com.forsion.tangu-desktop2',
-      productName: 'Tangu Agent 2.0',
-      artifactPrefix: 'Tangu-Agent',
+      productName: 'Forsion',
+      artifactPrefix: 'Forsion',
       defaultSpace: 'tangu',
       spaces: ['tangu', 'inbox', 'amadeus'],
       agentBackend: true,

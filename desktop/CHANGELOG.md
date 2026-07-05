@@ -13,7 +13,9 @@
 与 docs/Log/ 的开发日志分工:这里是面向用户的精炼 What's New。
 -->
 
-## Tangu 2.3.0 (2026-07-04)
+## Forsion 2.3.0 (2026-07-05)
+
+- **应用与安装包正式更名 Forsion**——安装包为 `Forsion-<版本>-<架构>`;macOS 用户安装后可删除旧的 "Tangu Agent 2.0.app"(Windows/Linux 自动原地升级)
 
 - **数据目录随品牌迁移**——`~/.tangu` 自动改名为 `~/.forsion`、默认工作区 `~/Tangu` 改名 `~/Forsion`(首次启动瞬时完成,不复制不丢数据);旧路径留兼容软链,CLI/微信/插件等旧引用照常工作
 - **应用品牌升级为 Forsion**——欢迎引导页、窗口标题、关于页现在以 Forsion 为整体品牌;Tangu 是其中对话 Agent 空间的名字
