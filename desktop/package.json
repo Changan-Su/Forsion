@@ -13,13 +13,13 @@
     "preview": "electron-vite preview",
     "web": "vite frontend",
     "test": "vitest run",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "pack": "electron-builder --config electron-builder.config.cjs --dir",
+    "dist": "electron-builder --config electron-builder.config.cjs",
     "fetch-python": "node build/fetch-python.cjs",
     "typecheck": "tsc --noEmit",
     "dev:amadeus": "FORSION_PRODUCT=amadeus electron-vite dev --noSandbox",
     "build:amadeus": "FORSION_PRODUCT=amadeus electron-vite build",
-    "pack:amadeus": "FORSION_PRODUCT=amadeus npm run build:amadeus && FORSION_PRODUCT=amadeus electron-builder --dir"
+    "pack:amadeus": "FORSION_PRODUCT=amadeus npm run build:amadeus && FORSION_PRODUCT=amadeus electron-builder --config electron-builder.config.cjs --dir"
   },
   "dependencies": {
     "@codemirror/language-data": "^6.5.1",
