@@ -2,7 +2,7 @@
  *  - 有本机路径(target.path)→ 参数只存 {path,name},随布局持久化,重启可恢复;同路径已开则聚焦。
  *  - 无路径(云沙箱/对话内联,load 是闭包不可序列化)→ 存进内存注册表,params 只带注册键;
  *    重启后注册表为空 → WsFileView 显示「内容已过期」占位,从来源重新打开即可。 */
-import { useWorkspace } from '../engine'
+import { useWorkspace } from '@lcl/engine'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { b64ToBytes } from '../services/fileKinds'
 

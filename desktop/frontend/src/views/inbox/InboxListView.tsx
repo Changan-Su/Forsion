@@ -8,7 +8,7 @@ import { Archive, ArchiveRestore, CheckCheck, Clock, Cloud, Inbox, Info, Mail, M
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
-import { useWorkspace } from '../../engine'
+import { useWorkspace } from '@lcl/engine'
 import '../chat2/sidebar2.css'
 import './inbox.css'
 

@@ -2,8 +2,8 @@
  *  (engine 命令是全局平面列表,没有 Space 作用域,只能 add/remove 手动圈地)。
  *  mod+n 在 Space 内让位给「新建笔记」:进入时摘下 new-chat、离开时原样放回;
  *  若进入时 new-chat 尚未注册(启动即恢复到 Amadeus),它随后注册也排在本命令集之后,分发仍先命中这里。 */
-import { useCommandStore, useSpaceStore, useWorkspace } from './engine'
-import type { Command } from './engine'
+import { useCommandStore, useSpaceStore, useWorkspace } from '@lcl/engine'
+import type { Command } from '@lcl/engine'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'

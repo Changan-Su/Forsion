@@ -153,7 +153,7 @@ export class BackendManager {
   static resolveEntry(): string | null {
     const candidates = app.isPackaged
       ? [join(process.resourcesPath, 'tangu-server', 'dist', 'standalone', 'main.js')]
-      : [join(__dirname, '..', '..', '..', 'dist', 'standalone', 'main.js')]
+      : [join(__dirname, '..', '..', '..', 'tangu-agent', 'dist', 'standalone', 'main.js')]
     for (const p of candidates) if (existsSync(p)) return p
     return null
   }

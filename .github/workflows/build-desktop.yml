@@ -21,6 +21,9 @@ jobs:
   # 门禁:类型检查 + 单测。失败则下游 build/release 不执行。
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tangu-agent
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,6 +58,7 @@ jobs:
 
       # ① 后端(standalone):编译出 dist/,会被 extraResources 打进 app 的 tangu-server/
       - name: Build backend
+        working-directory: tangu-agent
         run: |
           npm install --no-audit --no-fund
           npm run build

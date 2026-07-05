@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { useI18n } from '../i18n'
 import { useApp } from './appStore'
 import { useInbox } from './inboxStore'
-import { setActiveSpace } from '../engine'
+import { setActiveSpace } from '@lcl/engine'
 import { setUnauthorizedHandler } from '../services/http'
 
 // 任意请求(含轮询/SSE)返回 401 → 集中触发登录过期处理(在 React 外注册一次)。

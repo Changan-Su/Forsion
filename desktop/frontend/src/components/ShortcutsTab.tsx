@@ -4,7 +4,7 @@
  */
 import React, { useState } from 'react'
 import { RotateCcw, X } from 'lucide-react'
-import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey } from '../engine'
+import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey } from '@lcl/engine'
 import { useI18n } from '../i18n'
 
 const isMac = (): boolean => { try { return document.documentElement.dataset.platform === 'mac' } catch { return false } }

@@ -3,10 +3,10 @@ import { useEffect, useState, type KeyboardEvent } from 'react'
 import { useCommandStore } from './commandRegistry'
 import { fuzzyRank } from './fuzzy'
 import { label } from './types'
-import { useI18n } from '../i18n'
+import { useEngineI18n } from './i18nSeam'
 
 export function CommandPalette() {
-  const { t } = useI18n()
+  const { t } = useEngineI18n()
   const open = useCommandStore((s) => s.paletteOpen)
   const setOpen = useCommandStore((s) => s.setPaletteOpen)
   const commands = useCommandStore((s) => s.commands)

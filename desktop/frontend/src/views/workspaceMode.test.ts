@@ -1,7 +1,7 @@
 /** 统一工作区视图的自动模式规则 + 布局迁移(退役视图改名/主区 frame 化)。 */
 import { describe, it, expect } from 'vitest'
 import { autoWorkspaceMode } from './workspaceMode'
-import { migrateLayoutBlob } from '../engine/workspaceStore'
+import { migrateLayoutBlob } from '@lcl/engine/workspaceStore'
 
 describe('autoWorkspaceMode', () => {
   it('chat 主视图:左=会话,右=文件', () => {

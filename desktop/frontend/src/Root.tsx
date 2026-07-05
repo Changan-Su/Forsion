@@ -1,7 +1,7 @@
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Shell } from './engine'
+import { Shell } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'

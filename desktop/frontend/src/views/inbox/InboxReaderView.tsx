@@ -7,7 +7,7 @@ import { Archive, ArchiveRestore, Clock, Cloud, Info, Mail, MailOpen, MessageCir
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useInbox, senderOf, parseUtc } from '../../stores/inboxStore'
-import { useWorkspace, setActiveSpace } from '../../engine'
+import { useWorkspace, setActiveSpace } from '@lcl/engine'
 import { Markdown } from '../../components/Markdown'
 import './inbox.css'
 

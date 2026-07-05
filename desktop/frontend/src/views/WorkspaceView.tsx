@@ -8,8 +8,8 @@
  * (定位到笔记所在目录;笔记与工作区层级不一致时以笔记所在目录为准);其他主视图 → 维持上一模式。
  */
 import { useMemo, useRef, useState, useEffect, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, scheduleWorkspaceSave } from '../engine'
-import type { ViewProps } from '../engine'
+import { useWorkspace, activeMainPanel, scheduleWorkspaceSave } from '@lcl/engine'
+import type { ViewProps } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'

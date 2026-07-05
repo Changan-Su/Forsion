@@ -6,7 +6,7 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { pageKey } from '@amadeus-shared/links'
-import { fuzzyRank } from './engine/fuzzy'
+import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { openNote } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 

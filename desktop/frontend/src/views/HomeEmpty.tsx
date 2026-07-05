@@ -4,7 +4,7 @@
  *  与 sidebar-empty 同机关),呈现为纯背景空态。 */
 import { Plus } from 'lucide-react'
 import { BrandLogo } from '../components/BrandLogo'
-import { getActiveSpace, useWorkspace } from '../engine'
+import { getActiveSpace, useWorkspace } from '@lcl/engine'
 import { useI18n } from '../i18n'
 
 export function HomeEmptyView() {

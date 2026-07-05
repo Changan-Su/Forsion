@@ -14,9 +14,9 @@
 FROM node:20-alpine AS builder
 RUN apk add --no-cache python3 make g++   # better-sqlite3 等原生模块编译
 WORKDIR /app
-COPY package*.json ./
+COPY tangu-agent/package*.json ./
 RUN npm ci
-COPY . .
+COPY tangu-agent/ .
 RUN npm run build   # tsc + postbuild(build:plugins → stickers / wechat-segment)
 # forsion-worker 插件（独立私有仓，嵌套在 plugins/forsion-worker/；开源构建可缺席）——
 # 存在则容器内构建，使 `git clone → docker build` 全自包含（Tangu Manager 宿主机 GitOps 用，
@@ -29,7 +29,7 @@ RUN if [ -f plugins/forsion-worker/package.json ]; then \
 FROM node:20-alpine AS prod-deps
 RUN apk add --no-cache python3 make g++
 WORKDIR /app
-COPY package*.json ./
+COPY tangu-agent/package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # ---------- Stage 3: 运行时 ----------
@@ -56,7 +56,7 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/plugins ./plugins
 COPY --from=builder /app/skills ./skills
-COPY package*.json ./
+COPY tangu-agent/package*.json ./
 
 EXPOSE 8787 8790
 # 容器即沙箱（TANGU_SANDBOX=none），默认 root 运行以免挂载卷的 perms 摩擦。

@@ -7,7 +7,7 @@
  */
 import { useEffect } from 'react'
 import { PanelLeft, PanelRight, X } from 'lucide-react'
-import { useSpaceStore, setActiveSpace, getView, label } from '@/engine'
+import { useSpaceStore, setActiveSpace, getView, label } from '@lcl/engine'
 import { buildDefaultLayout } from '@/bootstrapEngine'
 import { useWorkspace } from './mobileWorkspaceStore'
 import './mobile.css'

@@ -9,7 +9,7 @@ import { calloutBlocks, wordCount } from '@amadeus/plugins/builtins'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { useUiOverlay } from './amadeusOverlayStore'
-import { addCommand, removeCommand, useSpaceStore } from './engine'
+import { addCommand, removeCommand, useSpaceStore } from '@lcl/engine'
 import { openSearchView } from './amadeusCommands'
 
 let installed = false

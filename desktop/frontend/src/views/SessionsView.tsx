@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import { SidebarPane } from './chat2/SidebarPane'
 import { useApp } from '../stores/appStore'
 import { openSpecial } from './SpecialViews'
-import { useWorkspace } from '../engine'
+import { useWorkspace } from '@lcl/engine'
 import { useShallow } from 'zustand/react/shallow'
 
 export function SessionsView() {

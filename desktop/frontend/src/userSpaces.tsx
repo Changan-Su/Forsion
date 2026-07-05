@@ -12,10 +12,10 @@ import type { LucideIcon } from 'lucide-react'
 import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
   useWorkspace, deleteNamedLayout, getActiveSpace, getView, label, spaceLayoutName,
-} from './engine'
-import type { SpaceDefinition, PersistedPanel } from './engine'
+} from '@lcl/engine'
+import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './spaces'
-import { parseSpaceJson, slugifyId, uniqueId, type SpaceSpec, type SpacePanelSpec } from './userSpaces.core'
+import { parseSpaceJson, slugifyId, uniqueId, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
 

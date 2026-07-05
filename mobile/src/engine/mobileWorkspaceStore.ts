@@ -9,10 +9,10 @@
  * 布局序列化 / 命名布局 / Dockview api 在移动端退化为 no-op / 空(见各方法注释)。
  */
 import { create } from 'zustand'
-import type { Leaf, ViewLocation } from '@/engine/types'
-import { label } from '@/engine/types'
-import { getView } from '@/engine/viewRegistry'
-import type { PersistedPanel } from '@/engine/layoutPersist'
+import type { Leaf, ViewLocation } from '@lcl/engine/types'
+import { label } from '@lcl/engine/types'
+import { getView } from '@lcl/engine/viewRegistry'
+import type { PersistedPanel } from '@lcl/engine/layoutPersist'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者。 */
 export interface MainTab { id: string; type: string; title: string; active: boolean; closable: boolean; sessionId?: string; followActive: boolean }

@@ -7,7 +7,7 @@ import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, RotateCcw, LogIn, LogOut, 
 import { ThemeCard } from './ThemeCard'
 import { listLanguages, listSkins } from '../theme/registry'
 import { applyTheme } from '../theme/loader'
-import { useWorkspace } from '../engine' // 工作区引擎:恢复默认布局
+import { useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局
 import { testConnection } from '../services/agentRunService'
 import {
   deleteUserCloudSkill, disconnectWechat as disconnectWechatAccount, fetchProviderModels,

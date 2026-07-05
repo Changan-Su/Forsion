@@ -1,6 +1,6 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Smartphone, Store, Settings, FileText, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, getActiveSpace, recordNav, useNav, activeMainPanel } from './engine'
+import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, getActiveSpace, recordNav, useNav, activeMainPanel, setEngineI18n } from '@lcl/engine'
 import { useRecentViews } from './recentViews'
 import { registerSpaces } from './spaces'
 import { loadUserSpaces, saveCurrentAsSpace } from './userSpaces'
@@ -46,6 +46,8 @@ let installed = false
 export function installEngine(): void {
   if (installed) return
   installed = true
+
+  setEngineI18n(useI18n) // LCL 引擎的 i18n 接缝:注入宿主 hook(引擎自身不依赖 desktop 的 i18n 实现)
 
   // 统一「工作区」视图(合并 原会话列表/工作区文件/笔记库):非 singleton —— 左右侧栏各放一个,
   // 各自独立的模式覆盖(存 leaf params);同侧防重复靠 openView 的「同侧同类型复用」。

@@ -2,8 +2,8 @@
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText } from 'lucide-react'
-import { registerSpace, addRibbonIcon, useSpaceStore, setActiveSpace, useWorkspace, deleteNamedLayout, clearLayout, label } from './engine'
-import type { SpaceDefinition, PersistedPanel } from './engine'
+import { registerSpace, addRibbonIcon, useSpaceStore, setActiveSpace, useWorkspace, deleteNamedLayout, clearLayout, label } from '@lcl/engine'
+import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useInbox } from './stores/inboxStore'
 import { installAmadeusCommands } from './amadeusCommands'

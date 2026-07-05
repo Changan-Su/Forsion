@@ -2,7 +2,7 @@
 // 语义(类 Obsidian):已有认领该笔记的编辑器 tab → 激活它;newTab(⌘点击)→ 新开 tab;
 // 一个编辑器都没有(全被关掉)→ 带 notePath 新开;否则在当前(最近活动)编辑器里加载。
 import { usePageStore } from '@amadeus/store/pageStore'
-import { useWorkspace } from './engine'
+import { useWorkspace } from '@lcl/engine'
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 

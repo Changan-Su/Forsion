@@ -23,8 +23,8 @@ import { openNote } from './amadeusNav'
 import { useRecentViews } from './recentViews'
 import { buildTree, type TreeNode } from '@amadeus/lib/pageTree'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel } from './engine'
-import type { ViewProps } from './engine'
+import { recordNav, useWorkspace, activeMainPanel } from '@lcl/engine'
+import type { ViewProps } from '@lcl/engine'
 import { PageView } from '@amadeus/components/PageView'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
 import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)

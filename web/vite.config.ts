@@ -20,6 +20,7 @@ export default defineConfig({
     alias: {
       // 被复用的 desktop 源里 `@/...` 与 web 自身都解析到 desktop/frontend/src。
       // @amadeus / @amadeus-shared 与 desktop 打包配置(electron.vite.config.ts)保持一致。
+      '@lcl': resolve(__dirname, '../lcl'),
       '@amadeus-shared': resolve(__dirname, '../desktop/shared/amadeus'),
       '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),
       '@': DESKTOP_SRC,

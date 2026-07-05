@@ -7,7 +7,7 @@ import {
   Download, FileWarning, RefreshCw, WrapText, Code2, Eye, Columns2, AlignJustify,
   ZoomIn, ZoomOut, Maximize, ExternalLink, FolderSearch, Pencil, Clock,
 } from 'lucide-react'
-import type { ViewProps } from '../engine'
+import type { ViewProps } from '@lcl/engine'
 import { Markdown } from '../components/Markdown'
 import {
   ImageView, PdfView, DocxView, DiffView, Spinner, cm, loadOffice,

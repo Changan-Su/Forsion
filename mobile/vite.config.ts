@@ -39,6 +39,7 @@ export default defineConfig({
   plugins: [engineSwap(), react()],
   resolve: {
     alias: {
+      '@lcl': resolve(__dirname, '../lcl'),
       '@amadeus-shared': resolve(__dirname, '../desktop/shared/amadeus'),
       '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),
       '@': DESKTOP_SRC,

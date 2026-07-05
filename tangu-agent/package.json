@@ -31,9 +31,9 @@
     "standalone": "node dist/standalone/main.js",
     "clean": "rm -rf dist",
     "build:plugins": "tsc -p plugins/stickers/tsconfig.json && tsc -p plugins/reply-segment/tsconfig.json && tsc -p plugins/voice-message/tsconfig.json",
-    "desktop:install": "cd desktop && npm install",
-    "desktop:dev": "cd desktop && npm run dev",
-    "desktop:build": "npm run build && cd desktop && npm run build"
+    "desktop:install": "cd ../desktop && npm install",
+    "desktop:dev": "cd ../desktop && npm run dev",
+    "desktop:build": "npm run build && cd ../desktop && npm run build"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.14.1",

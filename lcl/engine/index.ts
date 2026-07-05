@@ -31,3 +31,4 @@ export {
   clearLayout,
 } from './layoutPersist'
 export type { PersistedPanel } from './layoutPersist'
+export { setEngineI18n, useEngineI18n } from './i18nSeam'

@@ -6,7 +6,7 @@ import { WeChatView } from '../components/WeChatView'
 import { AgentsDetailView } from '../components/AgentsDetailView'
 import { WorkspaceDetailView } from '../components/WorkspaceDetailView'
 import { useApp, type SpecialKind } from '../stores/appStore'
-import { useWorkspace, recordNav } from '../engine'
+import { useWorkspace, recordNav } from '@lcl/engine'
 import { CLOUD_WORKSPACE_KEY } from '../types'
 import { useShallow } from 'zustand/react/shallow'
 

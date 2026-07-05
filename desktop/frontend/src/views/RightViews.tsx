@@ -7,7 +7,7 @@ import { useEffect } from 'react'
 import { RightPanel } from '../components/RightPanel'
 import { FilesPanel } from './chat2/FilesPanel'
 import { useApp } from '../stores/appStore'
-import { useWorkspace } from '../engine'
+import { useWorkspace } from '@lcl/engine'
 import { useShallow } from 'zustand/react/shallow'
 import { getBackgroundSessions } from '../services/backendService'
 

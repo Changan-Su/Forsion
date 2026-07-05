@@ -34,9 +34,9 @@ Thumbs.db
 .vscode/
 .idea/
 
-# 插件 drop-in 目录：运行时从 ./plugins 发现加载（见 src/plugins/loader.ts）。
+# 插件 drop-in 目录：运行时从 ./plugins 发现加载（见 src/tangu-agent/plugins/loader.ts）。
 # worker 等插件独立维护/分发，永不提交进核心仓库（开源核心 = standalone/desktop/TUI）。
-/plugins/
+/tangu-agent/plugins/
 
 Dockerfile
 docker-compose.yml
