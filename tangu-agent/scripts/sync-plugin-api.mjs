@@ -11,10 +11,14 @@ const canonical = join(root, 'plugin-api', 'tangu-agent.d.ts');
 const src = readFileSync(canonical, 'utf8');
 const check = process.argv.includes('--check');
 
-const targets = readdirSync(join(root, 'plugins'), { withFileTypes: true })
-  .filter((d) => d.isDirectory())
-  .map((d) => join(root, 'plugins', d.name, 'types', 'tangu-agent.d.ts'))
-  .filter((f) => existsSync(f));
+// plugins/ 是本地首方插件工作拷贝目录,CI 全新 checkout 里可能不存在 → 缺失即视为「无拷贝待同步」,不崩。
+const pluginsDir = join(root, 'plugins');
+const targets = existsSync(pluginsDir)
+  ? readdirSync(pluginsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => join(pluginsDir, d.name, 'types', 'tangu-agent.d.ts'))
+      .filter((f) => existsSync(f))
+  : [];
 
 let drifted = 0;
 for (const f of targets) {
