@@ -99,9 +99,13 @@
 }
 .rb-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
 /* 折叠/展开切换钮(常驻顶部)+ 顶部图标的拖动槽(可改序)。 */
-.rb-slot { -webkit-app-region: no-drag; display: flex; justify-content: center; border-radius: var(--radius-sm, 8px); }
+.rb-slot { -webkit-app-region: no-drag; position: relative; display: flex; justify-content: center; border-radius: var(--radius-sm, 8px); }
 .rb-slot.dragging { opacity: 0.4; }
-.rb-slot.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
+/* 落点提示:目标上方间隙里一道插入线(与左栏分组拖动同款,见 sidebar2.css .t2s-group.drag-over::before)。 */
+.rb-slot.drag-over::before {
+  content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
+  height: 3px; border-radius: 999px; background: var(--accent); z-index: 3;
+}
 .rb-label { font-size: 13px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rb { transition: width var(--duration-fast, 0.15s) ease; }
 /* ribbon 内可交互元素一律 no-drag(否则落在 -webkit-app-region:drag 的 .rb 上会被当成拖窗)。 */
@@ -109,7 +113,7 @@
 .rb-group .account-card { flex: 0 0 auto; }
 
 /* 展开态:宽条,按钮变「图标 + 名称」左对齐行;底部账号卡铺满。 */
-.rb-expanded { width: 224px; align-items: stretch; }
+.rb-expanded { width: 180px; align-items: stretch; }
 .rb-expanded .rb-group { align-items: stretch; }
 .rb-expanded .rb-top,
 .rb-expanded .rb-bottom { padding: 0 8px; }

@@ -14,17 +14,17 @@ describe('产品档案', () => {
       productName: 'Forsion',
       artifactPrefix: 'Forsion',
       defaultSpace: 'tangu',
-      spaces: ['tangu', 'inbox', 'amadeus'],
+      spaces: ['tangu', 'inbox', 'amadeus', 'calendar', 'coding'],
       agentBackend: true,
       market: true,
     })
   })
 
-  it('amadeus 单品:无 agent 后端/无市场/仅 amadeus space', () => {
+  it('amadeus 单品:无 agent 后端/无市场/amadeus + calendar space', () => {
     const p = load('amadeus')
     expect(p.agentBackend).toBe(false)
     expect(p.market).toBe(false)
-    expect(p.spaces).toEqual(['amadeus'])
+    expect(p.spaces).toEqual(['amadeus', 'calendar'])
     expect(p.defaultSpace).toBe('amadeus')
   })
 

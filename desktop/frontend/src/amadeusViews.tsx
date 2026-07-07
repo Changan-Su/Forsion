@@ -15,7 +15,7 @@ import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { installAmadeusPlugins } from './amadeusPlugins'
+import { ensureAmadeusReady } from './amadeusPlugins'
 import { AmadeusPropertiesPanel } from './amadeusProperties'
 import { openDailyNote } from './amadeusTemplates'
 import { useAmadeusPrefs } from './amadeusPrefs'
@@ -172,7 +172,7 @@ export function AmadeusPagesView() {
 
   // 首次挂载装插件(builtins 子集 + 外部插件)+ 恢复上次 Vault + 订阅外部文件变更。
   useEffect(() => {
-    if (!restoreTried) { restoreTried = true; installAmadeusPlugins(); void ps().restoreVault() }
+    ensureAmadeusReady()
     const offExt = amadeus.onExternalChange?.((p) => void ps().reconcileExternal(p))
     const offStruct = amadeus.onStructureChange?.(() => void ps().refreshStructure())
     return () => { offExt?.(); offStruct?.() }
@@ -408,8 +408,6 @@ export function AmadeusPagesView() {
     </div>
   )
 }
-
-let restoreTried = false
 
 // ─────────────────────────────── 主:编辑器(Amadeus 内核 + Tangu 排版) ───────────────────────────────
 

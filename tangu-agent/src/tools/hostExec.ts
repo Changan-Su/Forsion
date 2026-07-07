@@ -50,23 +50,21 @@ function relDisplay(ctx: ToolContext, abs: string): string {
   return rel && !rel.startsWith('..') ? rel : abs;
 }
 
-/** 按行分页 + 字符兜底（host read_file），带 [lines a-b of N] 头便于模型续翻。 */
-function paginate(text: string, offset?: number, limit?: number): string {
-  if (offset === undefined && limit === undefined) {
-    if (text.length <= READ_MAX_CHARS) return text;
-    return text.slice(0, READ_MAX_CHARS) + '\n…[truncated; use offset/limit to read more]';
-  }
+/** cat -n 风格按行分页(host read_file):每行前缀「右对齐行号 + Tab」(1-based),带 [lines a-b of N] 头。
+ *  行号给模型定位坐标、并逼它精确复制缩进,从而命中 edit_file/multi_edit 的唯一 old_string —— 这是模型
+ *  敢做「局部编辑」而非「整文件覆写」的关键。offset 仍是 0-based 入参(向后兼容),显示行号一律 1-based。 */
+export function paginate(text: string, offset?: number, limit?: number): string {
   const lines = text.split('\n');
-  const start = Math.min(Math.max(0, offset || 0), lines.length);
+  const total = lines.length;
+  const start = Math.min(Math.max(0, offset ?? 0), total);
   const cappedLimit = Math.min(limit ?? READ_MAX_LINES, READ_MAX_LINES);
-  const end = Math.min(start + cappedLimit, lines.length);
-  let out = lines.slice(start, end).join('\n');
+  const end = Math.min(start + cappedLimit, total);
+  let body = lines.slice(start, end).map((l, i) => String(start + i + 1).padStart(6) + '\t' + l).join('\n');
   let trimmed = false;
-  if (out.length > READ_MAX_CHARS) {
-    out = out.slice(0, READ_MAX_CHARS);
-    trimmed = true;
-  }
-  return `[lines ${start}-${end} of ${lines.length}]\n` + out + (trimmed ? '\n…[truncated; narrow your limit]' : '');
+  if (body.length > READ_MAX_CHARS) { body = body.slice(0, READ_MAX_CHARS); trimmed = true; }
+  const more = trimmed ? '\n…[truncated; narrow your limit]'
+    : end < total ? `\n…[${total - end} more line(s) below; read with offset:${end}]` : '';
+  return `[lines ${start + 1}-${end} of ${total}]\n` + body + more;
 }
 
 /** 大输出 head+tail 截断（host 模式无云工作区落盘）。 */
@@ -189,7 +187,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       type: 'function',
       function: {
         name: 'read_file',
-        description: 'Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit.',
+        description: 'Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. ' +
+          'Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that "<number>\\t" prefix — old_string must match the file\'s RAW text, not the numbered view.',
         parameters: {
           type: 'object',
           properties: {
@@ -227,7 +226,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       type: 'function',
       function: {
         name: 'write_file',
-        description: 'Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this tool to overwrite a whole file; for partial changes prefer edit_file.',
+        description: 'Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). ' +
+          'Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.',
         parameters: {
           type: 'object',
           properties: {
@@ -261,7 +261,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         name: 'edit_file',
         description:
           'Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). ' +
-          'old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. To create a new file, use write_file.',
+          'old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. ' +
+          'Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. ' +
+          'old_string matches the RAW file text — do NOT include the leading "<number>\\t" prefix that read_file shows. To create a new file, use write_file.',
         parameters: {
           type: 'object',
           properties: {
@@ -348,8 +350,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         name: 'multi_edit',
         description:
           'Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). ' +
-          'Each edit\'s old_string must appear exactly once in the text after the preceding edits have been applied in order. ' +
-          'Use this tool for multiple edits to the same file; it is safer and saves turns versus firing off several edit_file calls.',
+          'Each edit\'s old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file\'s "<number>\\t" line prefix). ' +
+          'Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.',
         parameters: {
           type: 'object',
           properties: {

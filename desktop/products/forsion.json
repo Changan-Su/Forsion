@@ -8,7 +8,9 @@
   "spaces": [
     "tangu",
     "inbox",
-    "amadeus"
+    "amadeus",
+    "calendar",
+    "coding"
   ],
   "agentBackend": true,
   "market": true

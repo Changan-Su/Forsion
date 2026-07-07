@@ -102,20 +102,21 @@ async function resolveDir(
 const READ_FILE_MAX_CHARS = 100_000;
 const READ_FILE_MAX_LINES = 2000;
 
-/** read_file 分页：按行 slice + 字符上限兜底；给位置头便于模型续翻。off/lim 都省略时与旧行为一致。 */
+/** read_file 分页(云工作区):cat -n 风格每行前缀「行号 + Tab」(1-based)+ [lines a-b of N] 头。
+ *  与 host paginate 同款:行号给模型坐标、逼它精确复制缩进,好让 apply_patch 的上下文/edit 唯一命中,
+ *  从而做局部编辑而非整文件覆写。offset 仍 0-based 入参,显示行号 1-based。 */
 function paginateText(text: string, offset?: number, limit?: number): string {
-  if (offset === undefined && limit === undefined) {
-    if (text.length <= READ_FILE_MAX_CHARS) return text;
-    return text.slice(0, READ_FILE_MAX_CHARS) + '\n…[truncated; use offset/limit to read more]';
-  }
   const lines = text.split('\n');
-  const start = Math.min(Math.max(0, offset || 0), lines.length);
+  const total = lines.length;
+  const start = Math.min(Math.max(0, offset ?? 0), total);
   const cappedLimit = Math.min(limit ?? READ_FILE_MAX_LINES, READ_FILE_MAX_LINES);
-  const end = Math.min(start + cappedLimit, lines.length);
-  let out = lines.slice(start, end).join('\n');
+  const end = Math.min(start + cappedLimit, total);
+  let body = lines.slice(start, end).map((l, i) => String(start + i + 1).padStart(6) + '\t' + l).join('\n');
   let trimmed = false;
-  if (out.length > READ_FILE_MAX_CHARS) { out = out.slice(0, READ_FILE_MAX_CHARS); trimmed = true; }
-  return `[lines ${start}-${end} of ${lines.length}]\n` + out + (trimmed ? '\n…[truncated; narrow your limit]' : '');
+  if (body.length > READ_FILE_MAX_CHARS) { body = body.slice(0, READ_FILE_MAX_CHARS); trimmed = true; }
+  const more = trimmed ? '\n…[truncated; narrow your limit]'
+    : end < total ? `\n…[${total - end} more line(s) below; read with offset:${end}]` : '';
+  return `[lines ${start + 1}-${end} of ${total}]\n` + body + more;
 }
 
 export async function listFiles(userId: string, appId: string, sessionId: string, path: string): Promise<string> {

@@ -52,12 +52,22 @@ const api: AmadeusApi = {
       ipcRenderer.removeListener(IPC.structureChange, listener)
     }
   },
+  onDbExternalChange: (cb) => {
+    const listener = (_event: IpcRendererEvent, dbPath: string): void => cb(dbPath)
+    ipcRenderer.on(IPC.dbChange, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.dbChange, listener)
+    }
+  },
   listPlugins: () => ipcRenderer.invoke(IPC.listPlugins),
   openPluginsFolder: () => ipcRenderer.invoke(IPC.openPluginsFolder),
   scaffoldSamplePlugin: () => ipcRenderer.invoke(IPC.scaffoldPlugin),
   revealInFileManager: (targetPath) => ipcRenderer.invoke(IPC.revealInFileManager, targetPath),
   readDatabase: (pagePath, ref) => ipcRenderer.invoke(IPC.dbRead, pagePath, ref),
   writeDatabase: (dbPath, data) => ipcRenderer.invoke(IPC.dbWrite, dbPath, data),
+  listPageProps: (folder) => ipcRenderer.invoke(IPC.listPageProps, folder),
+  setPageFrontmatter: (pagePath, patch) => ipcRenderer.invoke(IPC.setPageFrontmatter, pagePath, patch),
+  renamePageFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renamePageFile, oldPath, newBaseName),
 }
 
 contextBridge.exposeInMainWorld('amadeus', api)

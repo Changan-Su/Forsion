@@ -19,8 +19,6 @@ export function Root() {
   useBootstrap()
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
-    updateAvailable: s.updateAvailable,
-    updateDismissed: s.updateDismissed,
     sessions: s.sessions,
     archivedSessions: s.archivedSessions,
     activeId: s.activeId,
@@ -34,7 +32,6 @@ export function Root() {
     cfg: s.cfg,
     tr: s.tr,
     openSettings: s.openSettings,
-    dismissUpdate: s.dismissUpdate,
     closeSettings: s.closeSettings,
     patchConfig: s.patchConfig,
     connect: s.connect,
@@ -65,14 +62,7 @@ export function Root() {
       {/* Amadeus 全局浮层(快速切换等):须在 shell-host 之后(拖窗区 DOM 顺序,同下)。 */}
       {window.amadeus && <AmadeusOverlays />}
 
-      {/* 必须排在 shell-host 之后:拖窗区按 DOM 顺序合成,横幅的 no-drag 若早于 Shell 的 drag 区会失效(见 base.css「Electron 拖窗区兜底」)。 */}
-      {a.updateAvailable && !a.updateDismissed && (
-        <div className="update-banner" style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 40 }}>
-          <span>{a.tr('app.update.bannerTitle', { version: a.updateAvailable.version || '' })}</span>
-          <button className="btn primary sm" onClick={() => a.openSettings('about')}>{a.tr('app.update.bannerAction')}</button>
-          <button className="update-banner-x" title={a.tr('app.update.bannerDismiss')} onClick={() => a.dismissUpdate()}>×</button>
-        </div>
-      )}
+      {/* 更新提示已改为检测到新版自动弹出「更新」标签页(见 stores/bootstrap.ts),不再用顶部横幅。 */}
 
       <AnimatePresence>
         {a.settingsOpen && (

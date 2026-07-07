@@ -35,12 +35,13 @@ import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { AmadeusPluginsTab } from './AmadeusPluginsTab'
+import { SpacesTab } from './SpacesTab'
 import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
 import { QrImage } from './QrImage'
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'wechat' | 'notes' | 'theme' | 'shortcuts' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'wechat' | 'notes' | 'spaces' | 'theme' | 'shortcuts' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Obsidian 式一级入口)。
 export type Tab = StaticTab | `plugin:${string}`
 
@@ -608,6 +609,7 @@ export const SettingsModal: React.FC<{
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
     ...(isDesktop ? ([['mcp', 'MCP'], ['hooks', 'Hooks'], ['wechat', t('settings.tab.wechat')], ['browser', t('settings.tab.browser')], ['plugins', t('settings.tab.plugins')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')], ['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
     ['shortcuts', t('settings.tab.shortcuts')],
     ['advanced', t('settings.tab.advanced')],
@@ -620,7 +622,7 @@ export const SettingsModal: React.FC<{
 
   // 分类导航(4 大类):选项 / AI / 核心插件 / 社区插件。每类只渲染 tabItems 里实际存在的项(沿用 desktop/devMode 过滤)。
   const navGroups: Array<{ key: string; label: string; tabs: Tab[] }> = [
-    { key: 'options', label: t('settings.group.options'), tabs: ['general', 'theme', 'shortcuts', 'advanced', 'developer', 'about'] },
+    { key: 'options', label: t('settings.group.options'), tabs: ['general', 'spaces', 'theme', 'shortcuts', 'advanced', 'developer', 'about'] },
     { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks'] },
     { key: 'core', label: t('settings.group.corePlugins'), tabs: ['wechat', 'browser', 'notes'] },
     { key: 'community', label: t('settings.group.communityPlugins'), tabs: ['plugins', 'amadeus-plugins'] },
@@ -1654,6 +1656,7 @@ export const SettingsModal: React.FC<{
                   />
                 )}
                 {tab === 'amadeus-plugins' && <AmadeusPluginsTab />}
+                {tab === 'spaces' && <><div className="settings-sec">{t('settings.tab.spaces')}</div><SpacesTab /></>}
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
                   const pl = (plugins || []).find((x) => x.id === pid)

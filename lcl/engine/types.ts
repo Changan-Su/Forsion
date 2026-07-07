@@ -95,6 +95,9 @@ export interface SpaceDefinition {
   /** 主区关掉最后一个 view 时填充的「新页面」(不留空白)。缺省 = 打开 launcher 启动器。
    *  Amadeus 等无启动器的 Space 用它指向自己的主视图(如空白编辑器)。 */
   newPage?(): void
+  /** 哪些侧栏「可自由拖宽 + 持久化」(默认 20% 宽);缺省两侧都钉黄金分割宽。
+   *  Coding Space 的对话栏(左)用它当宽 IDE 侧栏。 */
+  resizableSides?: { left?: boolean; right?: boolean }
 }
 
 /** 插件契约 —— Amadeus PluginContext 的超集(加了 registerView / registerRibbonIcon)。 */

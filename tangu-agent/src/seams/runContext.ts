@@ -19,6 +19,8 @@ interface RunCtx {
   agentSlug?: string;
   /** 本 run 实际激活的 agent slug(展示身份用,不受 shareDefaultMemory 折叠成 DEFAULT 影响)。 */
   displayAgentSlug?: string;
+  /** 本 run 的工作目录(host 模式;项目级技能 <cwd>/.forsion/skills 据此扫描)。 */
+  cwd?: string;
 }
 
 const als = new AsyncLocalStorage<RunCtx>();
@@ -40,6 +42,17 @@ export function currentRunUserId(): string | undefined {
 /** 当前 run 的 runId(thin worker 据此取该 run 的 per-dispatch token)。 */
 export function currentRunId(): string | undefined {
   return als.getStore()?.runId;
+}
+
+/** 把本 run 的 cwd 并入上下文(agentLoop 解析出 cwd 后调;merge 不覆盖已有 userId/agentSlug 等)。 */
+export function setRunCwd(cwd?: string): void {
+  const s = als.getStore();
+  if (s) als.enterWith({ ...s, cwd });
+}
+
+/** 当前 run 的 cwd(项目级技能扫描用;非 host / 不在 run 内 → undefined)。 */
+export function currentRunCwd(): string | undefined {
+  return als.getStore()?.cwd;
 }
 
 /** 当前 run 激活的 agent slug(本地记忆层据此选 agent 文件夹;不在 run 上下文内时 undefined)。 */

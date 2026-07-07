@@ -11,7 +11,7 @@ import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '.
 import { publish, drain, cleanup } from './eventBus.js';
 import { gateToolCall, requestApproval, type ApprovalDecision } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, readUserMd } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
@@ -393,6 +393,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     agentConfig.execMode === 'host' && profile.capabilities.hostExec ? 'host' : 'sandbox';
   const cwd: string | undefined =
     typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
+  setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
   const approvalMode: 'readonly' | 'auto-edit' | 'full-auto' =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // 计划模式(类 Claude plan mode):工具集收敛为只读 + exit_plan_mode(toolRegistry 集中过滤),

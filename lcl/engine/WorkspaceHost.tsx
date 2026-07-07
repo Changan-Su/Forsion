@@ -18,7 +18,7 @@ import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
 import { label } from './types'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel } from './workspaceStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths } from './workspaceStore'
 import { useNav } from './navStore'
 import { getActiveSpace } from './spaceRegistry'
 import { computeDropTarget, type DropTarget } from './dropModel'
@@ -341,6 +341,7 @@ export const WorkspaceHost: React.FC<{
     // 布局变更:只同步侧栏可见态 + 存盘。跨组变形已由 dropView 显式写 __loc(不再位置反查 reconcile)。
     const syncLayout = (): void => {
       ws.syncPanelState()
+      captureSideWidths(e.api) // 记住「可自由拖宽」侧栏(如 Coding 对话栏)被拖后的宽度 → 持久
       scheduleWorkspaceSave()
     }
     e.api.onDidLayoutChange(syncLayout)

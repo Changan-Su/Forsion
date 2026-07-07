@@ -46,6 +46,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     set({ activeSpaceId: toId })           // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
     try { localStorage.setItem(ACTIVE_KEY, toId) } catch { /* ignore */ }
     ws.setSidebarDefaults(toSpace.sidebarDefaults) // 3. 两路都需(applyNamed 不跑 build)
+    ws.setSideProfile(toId, toSpace.resizableSides ?? {}) // 载入该 Space 记住的可拖宽侧栏宽度(须先于 applyNamed/build 的 pinSides)
 
     // 4. 还原目标 Space:有命名布局则应用(applyNamed 不持久化,补 saveCurrent);否则 resetLayout 重建+持久化
     const saved = ws.namedLayouts().includes(spaceLayoutName(toId))

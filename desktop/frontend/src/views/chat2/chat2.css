@@ -328,7 +328,7 @@
   .t2-toolbar-title { max-width: 120px; }
   .t2-toolbar-pill { display: none; }
   .t2c-inner { padding: 7px 10px 12px; }
-  .t2c-chips { flex-wrap: wrap; gap: 5px; }
+  .t2c-row { gap: 4px; }
   .t2c-pill-label { max-width: 92px; }
   .t2-user-col { max-width: 88%; }
 }

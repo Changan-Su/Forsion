@@ -39,6 +39,7 @@ export const IPC = {
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
+  dbChange: 'db:external-change',
   setPageFrontmatter: 'page:set-frontmatter',
   listPageProps: 'vault:page-props',
   renamePageFile: 'page:rename-file',
@@ -225,6 +226,8 @@ export interface AmadeusApi {
   deleteFolder(folderPath: string): Promise<void>
   /** Subscribe to vault structure changes (pages/folders added/removed). Returns unsubscribe. */
   onStructureChange(cb: () => void): () => void
+  /** Subscribe to external `.db` content changes (e.g. the agent editing calendars on disk). Returns unsubscribe. */
+  onDbExternalChange(cb: (dbPath: string) => void): () => void
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
   /** Open the vault's plugins folder in the OS file manager (creating it if needed). */

@@ -76,6 +76,11 @@ const api = {
     ipcRenderer.invoke('fs:readFile', filePath),
   /** 用系统默认应用打开(预览不支持的类型)。 */
   openHostPath: (p: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('fs:openPath', p),
+  /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 加载多文件 web app 预览)。 */
+  codePreviewServe: (rootDir: string): Promise<{ origin: string }> => ipcRenderer.invoke('codePreview:serve', rootDir),
+  codePreviewStop: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('codePreview:stop'),
+  /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
+  codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
   /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict 不覆盖。 */
   writeHostFile: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }> =>
     ipcRenderer.invoke('fs:writeFile', filePath, content, expectedMtimeMs, createNew),

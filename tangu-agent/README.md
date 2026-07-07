@@ -81,7 +81,7 @@
 
 ### 👥 智能体编排
 
-- **文件夹化智能体**：每个 Agent 是 `~/.tangu/agents/<slug>/` 下一个文件夹（`config.toml` 人格/模型/工具 + `SOUL.md` 灵魂设定 + `MEMORY.md` 长期记忆 + `LOG/` 每日日志 + `Library/` 资料库），可读可改可版本化。内置默认智能体自带长期记忆与日志。
+- **文件夹化智能体**：每个 Agent 是 `~/.tangu/agents/<slug>/` 下一个文件夹（`config.toml` 人格/模型/工具 + `SOUL.md` 灵魂设定 + `MEMORY.md` 长期记忆 + `LOG/` 每日日志 + `Library/` 资料库 + `skills/` 专属技能），可读可改可版本化。内置默认智能体自带长期记忆与日志。
 - **全局用户画像** `USER.md`：你的背景与偏好，所有 Agent 共享可见（带引导模板）。
 - **`manage_agent` 工具**：Agent 可自行新建/改/删可复用人格，把沉淀下来的角色持久化（本地）。
 - **群聊模式**：多个智能体围绕同一话题轮流发言、每轮投票、可由主持人总结（纯编排，本地/桌面）。
@@ -96,6 +96,7 @@
 
 - **本地优先记忆**（`~/.tangu/memory` + 每-Agent `MEMORY.md`/`LOG/`），可选与云端 Brain **双向同步**（记忆 LWW、日志按设备追加合并），默认手动。
 - **Skills（技能）**：兼容 Claude 技能格式，内置 8 个开箱即用——`code-review` · `data-analysis-python` · `debugging-methodology` · `document-writing-cn` · `git-workflow` · `web-research` · `manage-agents-guide` · `skill-creator`（教 Agent 自己写技能）。首启自动落进 `~/.tangu/skills/`（可见可改），`use_skill` 按需懒加载、不撑爆提示词。
+- **技能四级作用域**：技能按 **内置 < 用户 `~/.tangu/skills` < 当前智能体 `agents/<slug>/skills`（含该 Agent 随包自带的默认技能）< 当前项目 `<cwd>/.forsion/skills`** 叠加，越具体越优先（同 id 覆盖）——让某个 Agent 或某个项目带自己的专属技能。
 - **上下文管理**：CJK 友好的 token 估算 + 输入闸门；过半自动折叠工具输出/中段消息，95% 强制压缩并留持久检查点；上下文用量条 + 一键压缩。
 - **每-run 花费上限**（`TANGU_MAX_RUN_COST`）：单次运行点数硬顶，挡住工具死循环烧额度。
 - **零安装数据库**：嵌入式 SQLite（WAL），落单文件 `~/.tangu/state.db`，TUI 与桌面**共享会话**。
@@ -240,7 +241,8 @@ src/
 ├── standalone/     # standalone 入口(`tangu-server`)
 └── db/             # 迁移 + schema
 desktop/            # Electron + React 本地 GUI:engine/ 是 Obsidian 式工作区引擎(构建隔离,自带 electron-vite)
-skills/             # 内置技能源(打包随安装包分发,首启 seed 进 ~/.tangu/skills)
+skills/             # 全局内置技能源(打包随安装包分发,首启 seed 进 ~/.tangu/skills)
+agent-skills/       # 内置智能体的随包默认技能(agent-skills/<slug>/;该 Agent 激活时按 agent 级加载)
 ```
 
 ---

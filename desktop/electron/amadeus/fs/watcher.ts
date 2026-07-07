@@ -13,6 +13,8 @@ export class VaultWatcher {
     private readonly vault: VaultManager,
     private readonly onExternalPageChange: (pagePath: string) => void,
     private readonly onStructureChange: () => void,
+    /** 外部对 `.db` 文件的内容改动(如 agent 直连磁盘改日历);桌面据此热重载 dbStore。 */
+    private readonly onExternalDbChange?: (dbPath: string) => void,
   ) {}
 
   start(root: string): void {
@@ -38,7 +40,9 @@ export class VaultWatcher {
   }
 
   private async handle(abs: string, root: string): Promise<void> {
-    if (!abs.endsWith('.md')) return
+    const isMd = abs.endsWith('.md')
+    const isDb = abs.endsWith('.db')
+    if (!isMd && !isDb) return
     let content = ''
     try {
       content = await fs.readFile(abs, 'utf8')
@@ -47,7 +51,8 @@ export class VaultWatcher {
     }
     // Ignore the echo of our own atomic writes.
     if (this.vault.wasSelfWrite(abs, content)) return
-    this.onExternalPageChange(path.relative(root, abs))
+    if (isDb) this.onExternalDbChange?.(path.relative(root, abs))
+    else this.onExternalPageChange(path.relative(root, abs))
   }
 
   stop(): void {

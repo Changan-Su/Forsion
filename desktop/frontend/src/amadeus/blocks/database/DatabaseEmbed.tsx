@@ -13,8 +13,11 @@ import {
   type DbFile,
   type DbRow,
 } from '@amadeus-shared/db/schema'
+import { deriveColumns, fmValueToCell } from '@amadeus-shared/db/pageFrontmatter'
+import { allPropertyTypes, getPropertyType, resolveBaseType, usePropertyTypesVersion } from './propertyTypes'
 import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { useDbStore } from '../../store/dbStore'
+import { useNoteViewStore } from '../../store/noteViewStore'
 import { usePageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
 
@@ -26,11 +29,19 @@ const TYPE_META: Record<ColumnType, { icon: string; label: string }> = {
   select: { icon: '◉', label: '单选' },
   multiselect: { icon: '⊞', label: '多选' },
   url: { icon: '🔗', label: '链接' },
+  page: { icon: '📄', label: 'Page Name' },
+}
+
+/** 列元数据(图标/名):自定义注册类型优先,否则 primitive TYPE_META,再否则回退显示 type 字符串。 */
+const colMeta = (type: string): { icon: string; label: string } => {
+  const custom = getPropertyType(type)
+  if (custom) return { icon: custom.icon, label: custom.label }
+  return TYPE_META[type as ColumnType] ?? { icon: '·', label: type }
 }
 
 interface Pop {
-  kind: 'options' | 'colmenu'
-  colId: string
+  kind: 'options' | 'colmenu' | 'folder'
+  colId?: string
   rowId?: string
   x: number
   y: number
@@ -72,10 +83,43 @@ export function DatabaseEmbed({ target, pagePath }: { target: string; pagePath: 
 function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath: string }) {
   const [sort, setSort] = useState<{ colId: string; dir: 'asc' | 'desc' } | null>(null)
   const [pop, setPop] = useState<Pop | null>(null)
+  usePropertyTypesVersion() // 三方插件注册/卸载属性类型 → 列菜单与单元格分发即时刷新
+
+  // 笔记视图(Bases):db.source.folder 存在 → 行 = 该文件夹里的笔记(实时,来自 noteViewStore),
+  // 不走 .db rows;列(视图定义)仍存 .db。首列恒为不可删的 Name 身份列(普通表=text,笔记视图=page)。
+  const noteFolder = db.source?.folder
+  const isNoteView = noteFolder !== undefined
+  const nv = (): ReturnType<typeof useNoteViewStore.getState> => useNoteViewStore.getState()
+  const nvProps = useNoteViewStore((s) => (isNoteView ? s.folders[noteFolder as string]?.props : undefined))
+  useEffect(() => {
+    if (isNoteView) void useNoteViewStore.getState().load(noteFolder as string)
+  }, [isNoteView, noteFolder])
 
   const m = (fn: (d: DbFile) => DbFile): void => useDbStore.getState().mutate(dbRef, fn)
 
-  const setCell = (rowId: string, colId: string, v: CellValue | undefined): void =>
+  const identityId = db.columns[0]?.id
+  const isIdentity = (colId: string): boolean => colId === identityId
+
+  // 行数据源:笔记视图从 store 合成(cell key = 列 id = frontmatter 键;page 列 = 笔记标题)。
+  const baseRows: DbRow[] = useMemo(() => {
+    if (!isNoteView) return db.rows
+    return (nvProps ?? []).map((p) => ({
+      id: p.path,
+      cells: Object.fromEntries(db.columns.map((c) => [c.id, c.type === 'page' ? p.title : fmValueToCell(p.fm[c.id], resolveBaseType(c.type))])),
+    }))
+  }, [isNoteView, db.rows, db.columns, nvProps])
+
+  const setCell = (rowId: string, colId: string, v: CellValue | undefined): void => {
+    if (isNoteView) {
+      const col = db.columns.find((c) => c.id === colId)
+      if (col?.type === 'page') {
+        // Page Name = 文件名:提交即重命名笔记(不落 frontmatter)。
+        if (v != null && String(v).trim()) void nv().renameNote(noteFolder as string, rowId, String(v))
+        return
+      }
+      nv().setProp(noteFolder as string, rowId, colId, v, resolveBaseType(col?.type ?? 'text'))
+      return
+    }
     m((d) => ({
       ...d,
       rows: d.rows.map((r) => {
@@ -86,13 +130,42 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
         return { ...r, cells }
       }),
     }))
-  const addRow = (): void => m((d) => ({ ...d, rows: [...d.rows, { id: dbId(), cells: {} }] }))
-  const delRow = (rowId: string): void => m((d) => ({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }))
+  }
+  const addRow = (): void => {
+    if (isNoteView) return void nv().addNote(noteFolder as string)
+    m((d) => ({ ...d, rows: [...d.rows, { id: dbId(), cells: {} }] }))
+  }
+  const delRow = (rowId: string): void => {
+    if (isNoteView) {
+      if (window.confirm('删除此行会一并删除对应的笔记文件,确定?')) void nv().deleteNote(noteFolder as string, rowId)
+      return
+    }
+    m((d) => ({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }))
+  }
   const addCol = (): void =>
-    m((d) => ({ ...d, columns: [...d.columns, { id: dbId(), name: `列 ${d.columns.length + 1}`, type: 'text' }] }))
+    m((d) => {
+      // 笔记视图:新列 id = frontmatter 键(取唯一默认键);普通表:随机 id + 显示名。
+      if (!isNoteView) return { ...d, columns: [...d.columns, { id: dbId(), name: `列 ${d.columns.length + 1}`, type: 'text' }] }
+      const have = new Set(d.columns.map((c) => c.id))
+      let id = '属性'
+      let i = 1
+      while (have.has(id)) id = `属性${++i}`
+      return { ...d, columns: [...d.columns, { id, name: id, type: 'text' }] }
+    })
   const patchCol = (colId: string, patch: Partial<DbColumn>): void =>
     m((d) => ({ ...d, columns: d.columns.map((c) => (c.id === colId ? { ...c, ...patch } : c)) }))
-  const delCol = (colId: string): void =>
+  // 列改名:笔记视图的属性列 → 跨该文件夹所有笔记重写 frontmatter 键(列 id = 键);其余仅改显示名。
+  const renameCol = (col: DbColumn, name: string): void => {
+    if (isNoteView && col.type !== 'page' && name !== col.id) {
+      if (db.columns.some((c) => c.id === name)) return // 目标键已是某列,避免撞键覆盖 + 重复列 id
+      void nv().renameProp(noteFolder as string, col.id, name)
+      m((d) => ({ ...d, columns: d.columns.map((c) => (c.id === col.id ? { ...c, id: name, name } : c)) }))
+    } else {
+      patchCol(col.id, { name })
+    }
+  }
+  const delCol = (colId: string): void => {
+    if (isIdentity(colId)) return // 首列(Name)不可删除
     m((d) => ({
       ...d,
       columns: d.columns.filter((c) => c.id !== colId),
@@ -103,6 +176,7 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
         return { ...r, cells }
       }),
     }))
+  }
   const createOption = (colId: string, label: string): void =>
     m((d) => ({
       ...d,
@@ -111,27 +185,38 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
       ),
     }))
 
+  // 笔记视图:切换数据来源文件夹 → 并集推导列(导入该文件夹笔记的 frontmatter 键)。
+  const setFolder = async (folder: string): Promise<void> => {
+    const props = await amadeus.listPageProps(folder)
+    m((d) => ({ ...d, source: { folder }, columns: deriveColumns(d.columns, props.map((p) => p.fm)) }))
+    void nv().refresh(folder)
+    setPop(null)
+  }
+
   const setColSort = (colId: string, dir: 'asc' | 'desc' | null): void =>
     setSort(dir === null ? null : { colId, dir })
 
   // 仅视图态排序:不动文件里的 rows 顺序。
   const rows = useMemo(() => {
-    if (!sort) return db.rows
+    if (!sort) return baseRows
     const col = db.columns.find((c) => c.id === sort.colId)
-    if (!col) return db.rows
+    if (!col) return baseRows
+    const custom = getPropertyType(col.type)
+    const base = resolveBaseType(col.type)
     const key = (r: DbRow): string | number => {
-      const v = coerceForDisplay(r.cells[col.id], col.type)
-      if (col.type === 'number') return typeof v === 'number' ? v : Number.NEGATIVE_INFINITY
-      if (col.type === 'checkbox') return v === true ? 1 : 0
+      if (custom?.sortValue) return custom.sortValue(r.cells[col.id] ?? null)
+      const v = coerceForDisplay(r.cells[col.id], base)
+      if (base === 'number') return typeof v === 'number' ? v : Number.NEGATIVE_INFINITY
+      if (base === 'checkbox') return v === true ? 1 : 0
       return Array.isArray(v) ? v.join(', ') : String(v ?? '')
     }
-    return [...db.rows].sort((a, b) => {
+    return [...baseRows].sort((a, b) => {
       const ka = key(a)
       const kb = key(b)
       const cmp = typeof ka === 'number' && typeof kb === 'number' ? ka - kb : String(ka).localeCompare(String(kb), 'zh')
       return sort.dir === 'asc' ? cmp : -cmp
     })
-  }, [db, sort])
+  }, [baseRows, db.columns, sort])
 
   const openPop = (e: ReactMouseEvent, p: Omit<Pop, 'x' | 'y'>): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -145,14 +230,19 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
   return (
     <div className="amx-db">
       <div className="amx-db-head">
-        <span aria-hidden>𝄜</span>
+        <span aria-hidden>{isNoteView ? '🗂' : '𝄜'}</span>
         <input
           className="amx-db-name"
           value={db.name}
-          placeholder="未命名数据库"
+          placeholder={isNoteView ? '未命名视图' : '未命名数据库'}
           onChange={(e) => m((d) => ({ ...d, name: e.target.value }))}
         />
-        <span className="amx-db-count">{db.rows.length} 行</span>
+        {isNoteView && (
+          <button className="amx-db-linkbtn" onClick={(e) => openPop(e, { kind: 'folder' })} title="选择数据来源文件夹(行 = 该文件夹里的笔记)">
+            📁 {noteFolder || '整库'}
+          </button>
+        )}
+        <span className="amx-db-count">{rows.length} 行</span>
       </div>
 
       {db.columns.length === 0 ? (
@@ -166,8 +256,8 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
             <div />
             {db.columns.map((col) => (
               <div className="amx-db-th" key={col.id}>
-                <button className="amx-db-thbtn" onClick={(e) => openPop(e, { kind: 'colmenu', colId: col.id })} title={`${TYPE_META[col.type].label} · 点击打开列菜单`}>
-                  <span className="amx-db-th-icon" aria-hidden>{TYPE_META[col.type].icon}</span>
+                <button className="amx-db-thbtn" onClick={(e) => openPop(e, { kind: 'colmenu', colId: col.id })} title={`${colMeta(col.type).label} · 点击打开列菜单`}>
+                  <span className="amx-db-th-icon" aria-hidden>{colMeta(col.type).icon}</span>
                   <span className="amx-db-th-name">{col.name}</span>
                   {sort?.colId === col.id && <span className="amx-db-th-sort">{sort.dir === 'asc' ? '↑' : '↓'}</span>}
                 </button>
@@ -198,9 +288,10 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
             col={popCol}
             sort={sort?.colId === popCol.id ? sort.dir : null}
             onSort={(dir) => { setColSort(popCol.id, dir); setPop(null) }}
-            onRename={(name) => patchCol(popCol.id, { name })}
+            onRename={(name) => renameCol(popCol, name)}
             onSetType={(type) => patchCol(popCol.id, { type })}
             onDelete={() => { delCol(popCol.id); setPop(null) }}
+            locked={isIdentity(popCol.id)}
           />
         </PopShell>
       )}
@@ -208,7 +299,7 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
         <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
           <OptionPopover
             col={popCol}
-            value={coerceForDisplay(popRow.cells[popCol.id], popCol.type)}
+            value={coerceForDisplay(popRow.cells[popCol.id], resolveBaseType(popCol.type))}
             multi={popCol.type === 'multiselect'}
             onPick={(label) => {
               setCell(popRow.id, popCol.id, label === '' ? undefined : label)
@@ -232,11 +323,16 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
           />
         </PopShell>
       )}
+      {pop && pop.kind === 'folder' && (
+        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+          <FolderPopover current={noteFolder ?? ''} onPick={(f) => void setFolder(f)} />
+        </PopShell>
+      )}
     </div>
   )
 }
 
-// ── 单元格(七类型) ──────────────────────────────────────────────────────────
+// ── 单元格(七/八类型) ────────────────────────────────────────────────────────
 
 const CELL_WIKI_RE = /(\[\[[^\]\n]+\]\])/
 
@@ -255,7 +351,8 @@ function Cell({
 }) {
   const [editing, setEditing] = useState(false) // text 含 [[ ]] 时的展示/编辑切换 + url 编辑态
   const cancelRef = useRef(false)
-  const v = coerceForDisplay(row.cells[col.id], col.type)
+  const custom = getPropertyType(col.type)
+  const v = coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))
 
   /** [[目标]] 点击:linkTarget 剥 |别名 与 #锚点(与 Markdown 块同语义);已存在页面优先
    *  (v2.1 这类带点号页名不被误判为附件),未命中且带非 .md 扩展名才当附件系统打开。 */
@@ -265,6 +362,12 @@ function Cell({
     if (resolvePageName(t, st.pages)) return void st.openWikiLink(t.replace(/\.md$/i, ''))
     if (/\.[a-z0-9]{1,8}$/i.test(t) && !/\.md$/i.test(t)) return void amadeus.openAttachment(pagePath, t)
     st.openWikiLink(t.replace(/\.md$/i, ''))
+  }
+
+  // 自定义注册类型:交给注册表的 Cell(value 已按 baseType 折算)。
+  if (custom) {
+    const Custom = custom.Cell
+    return <Custom value={v} onChange={(nv) => setCell(row.id, col.id, nv)} />
   }
 
   switch (col.type) {
@@ -390,6 +493,47 @@ function Cell({
         </div>
       )
     }
+    case 'page': {
+      // 笔记视图身份列:显示 = 笔记名(点开笔记);✎ 进入编辑 → 提交即重命名文件。
+      const s = v as string
+      if (editing) {
+        const commit = (raw: string): void => {
+          setEditing(false)
+          if (cancelRef.current) { cancelRef.current = false; return }
+          const t = raw.trim()
+          if (t && t !== s) setCell(row.id, col.id, t)
+        }
+        return (
+          <input
+            className="amx-db-input"
+            autoFocus
+            defaultValue={s}
+            onBlur={(e) => commit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              else if (e.key === 'Escape') { cancelRef.current = true; (e.target as HTMLInputElement).blur() }
+            }}
+          />
+        )
+      }
+      return (
+        <div className="amx-db-urlcell">
+          <button className="amx-db-wikilink amx-db-pagename" onClick={() => void usePageStore.getState().loadPage(row.id)} title={`打开 ${s}`}>
+            {s || '未命名'}
+          </button>
+          <button className="amx-db-edit" onClick={() => setEditing(true)} title="重命名笔记" aria-label="rename note">✎</button>
+        </div>
+      )
+    }
+    default:
+      // 未知类型(无注册项 + 非 primitive):按文本兜底,永不空白/丢数据。
+      return (
+        <input
+          className="amx-db-input"
+          value={typeof v === 'string' ? v : v == null ? '' : String(v)}
+          onChange={(e) => setCell(row.id, col.id, e.target.value === '' ? undefined : e.target.value)}
+        />
+      )
   }
 }
 
@@ -476,13 +620,16 @@ function ColMenu({
   onRename,
   onSetType,
   onDelete,
+  locked,
 }: {
   col: DbColumn
   sort: 'asc' | 'desc' | null
   onSort: (dir: 'asc' | 'desc' | null) => void
   onRename: (name: string) => void
-  onSetType: (t: ColumnType) => void
+  onSetType: (t: string) => void
   onDelete: () => void
+  /** 首列(Name)身份列:锁定类型 + 禁删。 */
+  locked: boolean
 }) {
   return (
     <>
@@ -505,17 +652,45 @@ function ColMenu({
           <button className="amx-db-opt amx-db-opt-clear" onClick={() => onSort(null)}>清除排序</button>
         )}
       </div>
-      <div className="amx-db-pop-sec">类型</div>
+      {locked ? (
+        <div className="amx-db-pop-sec">首列(Name)不可删除 · 不可改类型</div>
+      ) : (
+        <>
+          <div className="amx-db-pop-sec">类型</div>
+          <div className="amx-db-pop-list">
+            {[...COLUMN_TYPES, ...allPropertyTypes().map((p) => p.type)].map((t) => (
+              <button key={t} className="amx-db-opt" onClick={() => onSetType(t)}>
+                <span className="amx-db-th-icon" aria-hidden>{colMeta(t).icon}</span>
+                {colMeta(t).label}
+                {col.type === t && <span className="amx-db-opt-check">✓</span>}
+              </button>
+            ))}
+          </div>
+          <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>删除列</button>
+        </>
+      )}
+    </>
+  )
+}
+
+/** 笔记视图数据来源文件夹选择:列出全库子文件夹(+ 整库顶层)。切换即并集导入其笔记的属性。 */
+function FolderPopover({ current, onPick }: { current: string; onPick: (f: string) => void }) {
+  const [folders, setFolders] = useState<string[] | null>(null)
+  useEffect(() => {
+    void amadeus.listFolders().then((f) => setFolders(['', ...f]))
+  }, [])
+  return (
+    <>
+      <div className="amx-db-pop-sec">数据来源文件夹(行 = 其中的笔记)</div>
       <div className="amx-db-pop-list">
-        {COLUMN_TYPES.map((t) => (
-          <button key={t} className="amx-db-opt" onClick={() => onSetType(t)}>
-            <span className="amx-db-th-icon" aria-hidden>{TYPE_META[t].icon}</span>
-            {TYPE_META[t].label}
-            {col.type === t && <span className="amx-db-opt-check">✓</span>}
+        {folders === null && <div className="amx-db-blank">读取中…</div>}
+        {folders?.map((f) => (
+          <button key={f || '__root'} className="amx-db-opt" onClick={() => onPick(f)}>
+            <span aria-hidden>📁</span> {f || '整库(顶层笔记)'}
+            {f === current && <span className="amx-db-opt-check">✓</span>}
           </button>
         ))}
       </div>
-      <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>删除列</button>
     </>
   )
 }

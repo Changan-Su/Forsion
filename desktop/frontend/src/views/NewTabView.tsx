@@ -3,7 +3,7 @@
  *  主区/最近**跨 Space 全量列出**(视图注册本就全局;Amadeus 项跟随其 dev 门控),
  *  侧栏列表取当前 Space 的 sidebarDefaults。选中即打开:主区项经就地导航「变成」所选视图。 */
 import { type ReactNode } from 'react'
-import { Plus, SquarePen, Smartphone, Bot, MessageCircle, FileText, CalendarDays, Mail } from 'lucide-react'
+import { Plus, SquarePen, Smartphone, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { openSpecial } from './SpecialViews'
@@ -57,6 +57,8 @@ export function NewTabView({ leaf }: ViewProps) {
     { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: PRODUCT.spaces.includes('tangu') },
     { key: 'new-note', icon: <SquarePen size={20} />, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
     { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { ensureEditor(); void openDailyNote() }, show: amadeusOn && !!vaultRoot },
+    { key: 'calendar', icon: <CalendarDays size={20} />, label: t('view.calendar'), run: () => ws().openView('calendar', {}, 'main'), show: amadeusOn },
+    { key: 'todo-list', icon: <ListTodo size={20} />, label: t('view.todo'), run: () => ws().openView('todo-list', {}, 'main'), show: amadeusOn },
     { key: 'inbox', icon: <Mail size={20} />, label: t('inbox.reader'), run: () => ws().openView('inbox-reader', {}, 'main'), show: hasBackend },
     { key: 'wechat', icon: <Smartphone size={20} />, label: t('special.wechat.title'), run: () => openSpecial('wechat'), show: hasBackend },
     { key: 'agents', icon: <Bot size={20} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },

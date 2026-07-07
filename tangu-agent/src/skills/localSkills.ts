@@ -11,17 +11,34 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skillsDir as userSkillsDir } from '../core/tanguHome.js';
+import { skillsDir as userSkillsDir, agentsDir } from '../core/tanguHome.js';
+import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
-type SkillSource = 'builtin' | 'user';
+type SkillSource = 'builtin' | 'user' | 'agent' | 'project';
+
+const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** 包内置技能目录(打包进 npm files;dist/skills/../../skills → 包根 skills/)。 */
 function builtinSkillsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url)); // dist/skills
   return path.resolve(here, '..', '..', 'skills');
+}
+
+/** 某内置 agent 的默认技能目录(包根 agent-skills/<slug>/;供该 agent 激活时按 agent 级加载 + 播种)。 */
+export function builtinAgentSkillsDir(slug: string): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..', 'agent-skills', slug);
+}
+/** agent 私有技能目录 ~/.forsion/agents/<slug>/skills(用户为该 agent 增改的)。 */
+function agentSkillsDir(slug: string): string {
+  return path.join(agentsDir(), slug, 'skills');
+}
+/** 项目级技能目录 <cwd>/.forsion/skills(对标 Claude Code 的 .claude/skills)。 */
+function projectSkillsDir(cwd: string): string {
+  return path.join(cwd, '.forsion', 'skills');
 }
 
 /** 极简 frontmatter 解析:--- 包围块内的顶层 `key: value` 单行标量(带引号可)。 */
@@ -76,7 +93,7 @@ function toRecord(id: string, fallbackName: string, raw: string, source: SkillSo
     name: meta.name || fallbackName,
     description: meta.description || firstLine.slice(0, 200) || null,
     icon: meta.icon || null,
-    category: meta.category || (source === 'builtin' ? 'built-in' : 'local'),
+    category: meta.category || (source === 'builtin' ? 'built-in' : source === 'agent' ? 'agent' : source === 'project' ? 'project' : 'local'),
     version: meta.version || null,
     author: meta.author || null,
     tools: null,
@@ -148,16 +165,26 @@ export async function seedBuiltinSkills(): Promise<void> {
   await seedSkillsInto(builtinSkillsDir(), userSkillsDir());
 }
 
-/** 列出全部本地技能:包内置 + ~/.tangu/skills(同 id 用户覆盖内置)。 */
+/** 列出当前 run 可见的本地技能。四级作用域,越具体越优先(同 id 覆盖):
+ *  内置(全局) < 用户 ~/.forsion/skills < **当前 agent** agents/<slug>/skills(+包内置默认) < **项目** <cwd>/.forsion/skills。
+ *  agent/项目级仅在有激活 agent / host cwd 时加入,故云端/无上下文时行为与原来一致。 */
 export async function listLocalSkills(): Promise<SkillRecord[]> {
-  await seedBuiltinSkills(); // 首启把内置复制进 ~/.tangu/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
-  const [builtin, user] = await Promise.all([
-    scanDir(builtinSkillsDir(), 'builtin'),
-    scanDir(userSkillsDir(), 'user'),
-  ]);
+  await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
+  const roots: Array<[string, SkillSource]> = [
+    [builtinSkillsDir(), 'builtin'],
+    [userSkillsDir(), 'user'],
+  ];
+  const slug = currentDisplayAgentSlug();
+  if (slug && SAFE_SLUG.test(slug)) {
+    roots.push([builtinAgentSkillsDir(slug), 'agent']); // 该 agent 的包内置默认技能
+    roots.push([agentSkillsDir(slug), 'agent']);        // 用户为该 agent 增改的(覆盖同 id 默认)
+  }
+  const cwd = currentRunCwd();
+  if (cwd) roots.push([projectSkillsDir(cwd), 'project']);
+
+  const scanned = await Promise.all(roots.map(([dir, src]) => scanDir(dir, src)));
   const byId = new Map<string, SkillRecord>();
-  for (const s of builtin) byId.set(s.id, s);
-  for (const s of user) byId.set(s.id, s); // 用户同名覆盖内置
+  for (const list of scanned) for (const s of list) byId.set(s.id, s); // 后面的根覆盖前面(越具体越优先)
   return [...byId.values()];
 }
 

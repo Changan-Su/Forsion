@@ -9,6 +9,12 @@ import type {
   StreamOpts,
   StreamResult,
 } from '../../seams/cloudBrain.js';
+import {
+  AMADEUS_MAX_FILE_BYTES,
+  AmadeusConflictError,
+  AmadeusNotFoundError,
+  AmadeusTooLargeError,
+} from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
@@ -311,6 +317,59 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         postJson('/api/brain/agents/file/put', { slug, relPath, ...body }),
       deleteFile: async (_userId: string, slug: string, relPath: string, mtimeMs: number, deviceId?: string) => {
         await postJson('/api/brain/agents/file/delete', { slug, relPath, mtimeMs, deviceId });
+      },
+    },
+    // ── Amadeus 云笔记库(v1):对端 /api/amadeus/vaults/default/*(契约冻结)。userId 由 token
+    //    隐含(thin worker 的 per-dispatch token 经 cfg.token() 每请求现取)。错误映射:
+    //    404→AmadeusNotFoundError;409→AmadeusConflictError(带最新 seq+content 供调用方重放);
+    //    413/客户端预检→AmadeusTooLargeError;其余透传状态码。──
+    amadeus: {
+      list: async () => {
+        const r = await fetch(`${base}/api/amadeus/vaults/default/tree`, {
+          headers: { ...authHeaders(), 'X-Amadeus-Client': 'agent' },
+          signal: reqSignal(),
+        });
+        if (r.status === 404) return []; // 旧云端无 Amadeus API → 空 vault 降级(工具报「无笔记」)
+        if (!r.ok) throw new Error(`amadeus tree ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json();
+        // pages=笔记(markdown 页面)路径;个别实现若省略扩展名则补 .md(页面即 .md 文件,file 端点按路径取)。
+        const pages: Array<{ path: string; size: number }> = Array.isArray(j?.pages)
+          ? j.pages.map((p: any) => ({ path: /\.md$/i.test(String(p)) ? String(p) : `${String(p)}.md`, size: 0 }))
+          : [];
+        const files: Array<{ path: string; size: number }> = Array.isArray(j?.files)
+          ? j.files.map((f: any) => ({ path: String(f?.path ?? ''), size: Number(f?.size) || 0 })).filter((f: any) => f.path)
+          : [];
+        const seen = new Set(pages.map((p) => p.path));
+        return [...pages, ...files.filter((f) => !seen.has(f.path))];
+      },
+      read: async (relPath: string) => {
+        const r = await fetch(
+          `${base}/api/amadeus/vaults/default/file?path=${encodeURIComponent(relPath)}`,
+          { headers: { ...authHeaders(), 'X-Amadeus-Client': 'agent' }, signal: reqSignal() },
+        );
+        if (r.status === 404) throw new AmadeusNotFoundError(relPath);
+        if (!r.ok) throw new Error(`amadeus read ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json();
+        return { content: String(j?.content ?? ''), seq: Number(j?.seq) || 0 };
+      },
+      write: async (relPath: string, content: string, opts?: { baseSeq?: number; force?: boolean }) => {
+        if (Buffer.byteLength(content, 'utf-8') > AMADEUS_MAX_FILE_BYTES) throw new AmadeusTooLargeError(relPath);
+        const r = await fetch(`${base}/api/amadeus/vaults/default/file`, {
+          method: 'PUT',
+          headers: { ...authHeaders(), 'X-Amadeus-Client': 'agent' },
+          // force=无条件覆盖时不带 baseSeq(避免陈旧票据反而触发 409);否则带乐观锁票据。
+          body: JSON.stringify({ path: relPath, content, ...(opts?.force ? { force: true } : { baseSeq: opts?.baseSeq }) }),
+          signal: reqSignal(),
+        });
+        if (r.status === 409) {
+          const j: any = await r.json().catch(() => ({}));
+          throw new AmadeusConflictError(Number(j?.seq) || 0, String(j?.content ?? ''));
+        }
+        if (r.status === 413) throw new AmadeusTooLargeError(relPath);
+        if (r.status === 404) throw new AmadeusNotFoundError(relPath);
+        if (!r.ok) throw new Error(`amadeus write ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json().catch(() => ({}));
+        return { seq: Number(j?.seq) || 0 };
       },
     },
     // 云端运行水合(B):worker 本地 FS 无 agents → 从云读 config.toml+SOUL.md 组装人格。软失败 → null。

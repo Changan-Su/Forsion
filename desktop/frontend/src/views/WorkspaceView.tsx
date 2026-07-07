@@ -16,10 +16,12 @@ import { useShallow } from 'zustand/react/shallow'
 import { SessionsView } from './SessionsView'
 import { TocView } from './RightViews'
 import { FilesPanel } from './chat2/FilesPanel'
+import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { AmadeusPagesView, AmadeusOutlineView } from '../amadeusViews'
 import { usePageStore } from '@amadeus/store/pageStore'
 import type { WorkspaceDescriptor } from '../types'
 import { autoWorkspaceMode, type WorkspaceMode } from './workspaceMode'
+import { useCodeStudio } from '../stores/codeStudioStore'
 
 /** 当前活动主 leaf 的视图类型(订阅 mainTabs 驱动重算;焦点在侧栏时 activeMainPanel 有组内回退)。 */
 function useActiveMainType(): string | null {
@@ -52,10 +54,15 @@ function FilesBody({ vaultCtx }: { vaultCtx: { root: string; noteDir: string | n
     }
     return [vaultWs, ...base.filter((w) => w.path !== vaultCtx.root)] // 同目录已是会话工作区 → 去重
   }, [s, vaultCtx, vaultKey])
+  // Coding Space:主区 focus 为工作台时,点文件不另开 wsfile tab,而是喂给主区 Code 面板(codeStudioStore)。
+  const mainType = useActiveMainType()
+  const onOpenPreview = mainType === 'code-studio'
+    ? (target: PreviewTarget): void => { if (target.path) useCodeStudio.getState().openFile(target.path) }
+    : s.setFilePreview
   return (
     <FilesPanel
       workspaces={workspaces}
-      onOpenPreview={s.setFilePreview}
+      onOpenPreview={onOpenPreview}
       activeWorkspaceKey={vaultCtx ? localKey : s.activeWorkspaceKey}
       onEnterWorkspace={(key) => (vaultCtx ? setLocalKey(key) : s.setActiveWorkspaceKey(key))}
       expandToPath={vaultCtx?.noteDir ?? null}

@@ -1810,3 +1810,25 @@
 .am-app .accent-input::-webkit-color-swatch-wrapper {
   padding: 0;
 }
+
+/* LaTeX 实况预览(见 blocks/markdown/mathLivePreview.ts):离行时隐藏源码、就地显示 KaTeX 渲染;在行时源码照常可编辑。 */
+.math-src-hidden { display: none; }
+.math-rendered { cursor: pointer; }
+/* 任务3:$$…$$ 块公式水平居中(整块占满一行、内容居中;顺带压平 katex-display 默认外边距) */
+.math-rendered--block { display: block; width: 100%; text-align: center; margin: 6px 0; }
+.math-rendered--block .katex-display { margin: 0; text-align: center; }
+
+/* ── 任务1:block 高亮仅在 hover / 选中时保留;光标进入该 block 开始编辑(focus-within)即去掉。 ── */
+.am-app .block-host:focus-within { background: transparent; }
+
+/* ── 任务2:笔记顶栏去卡片/玻璃质感,与正文同底色、去分隔线,并上移填满顶部空隙。
+ *    用 .am-app.tangu-{lovable,soft} 双类提高特异性,稳压 tangu.css/tanguSoft.css 的基类规则。 ── */
+.am-app.tangu-lovable .chat-header,
+.am-app.tangu-soft .ts-header {
+  background: transparent;
+  border-bottom: none;
+  box-shadow: none;
+  min-height: 32px;
+  padding-top: 2px;
+  padding-bottom: 4px;
+}

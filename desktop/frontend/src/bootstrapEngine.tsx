@@ -1,5 +1,5 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Smartphone, Store, Settings, FileText, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft } from 'lucide-react'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Smartphone, Store, Settings, FileText, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2 } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, getActiveSpace, recordNav, useNav, activeMainPanel, setEngineI18n } from '@lcl/engine'
 import { useRecentViews } from './recentViews'
 import { registerSpaces } from './spaces'
@@ -17,9 +17,14 @@ import { HomeEmptyView } from './views/HomeEmpty'
 import { WeChatSpecialView, AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from './amadeusPanels'
+import { CalendarView } from './views/CalendarView'
+import { CalendarConfigView } from './views/CalendarConfigView'
+import { TodoListView } from './views/TodoListView'
 import { InboxListView } from './views/inbox/InboxListView'
 import { InboxReaderView } from './views/inbox/InboxReaderView'
 import { WsFileView } from './views/WsFileView'
+import { CodeStudioView } from './views/CodeStudioView'
+import { ChangelogView } from './views/ChangelogView'
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -70,6 +75,10 @@ export function installEngine(): void {
   // 替代原 chatbox 上方的浮层预览 —— 浮层暂时停用,见 appStore.setFilePreview)。无条件注册:
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
   registerView({ type: 'wsfile', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
+  // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
+  if (PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+  // 「更新」标签页(更新日志 + 下载/安装):检测到新版自动弹出;任何产品变体都注册。
+  registerView({ type: 'changelog', displayName: () => app().tr('view.changelog'), icon: FileText, factory: () => <ChangelogView />, singleton: true })
   // 空侧栏占位:侧栏关空/拖空后由 closeLeaf/dropView 自动补上,保住 group 作拖放靶(整组只剩它时 tab 条隐藏,见 engine.css)。
   registerView({ type: 'sidebar-empty', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: () => <SidebarEmptyView />, closable: false })
   // 主区空态占位:关掉最后一个主区 tab 后 closeLeaf 就地把该 leaf 变成它(Forsion 品牌图 + 新建;tab 条隐藏机关同 sidebar-empty)。
@@ -87,6 +96,10 @@ export function installEngine(): void {
     registerView({ type: 'amadeus-search', displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
     registerView({ type: 'amadeus-tags', displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
     registerView({ type: 'amadeus-graph', displayName: () => app().tr('amadeus.graph'), icon: Waypoints, factory: () => <AmadeusLocalGraphView />, singleton: true })
+    // Calendar Space:待办清单(汇总全库 todo 属性)+ 日历(汇总全库 calendarDate 属性)。数据经 dbAggregateStore。
+    registerView({ type: 'todo-list', displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <TodoListView />, singleton: true })
+    registerView({ type: 'calendar', displayName: () => app().tr('view.calendar'), icon: CalendarDays, factory: () => <CalendarView />, singleton: true })
+    registerView({ type: 'calendar-config', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <CalendarConfigView />, singleton: true })
   }
 
   // Inbox Space:收件箱(左 邮件列表 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
@@ -101,7 +114,10 @@ export function installEngine(): void {
   // 同时按当前活动 Space 设侧栏默认,使恢复的非 Tangu Space 在首次 toggle 前即正确。
   registerSpaces()
   const activeSpace = getActiveSpace()
-  if (activeSpace) ws().setSidebarDefaults(activeSpace.sidebarDefaults)
+  if (activeSpace) {
+    ws().setSidebarDefaults(activeSpace.sidebarDefaults)
+    ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
+  }
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
   if (window.tangu?.spacesList) void loadUserSpaces()
 
@@ -123,10 +139,11 @@ export function installEngine(): void {
     useRecentViews.getState().record({ key: `chat:${id}`, kind: 'chat', id, title: title || app().tr('workbench.chat') })
   })
 
-  // ribbon = 左侧功能条:顶部 = Space 图标组 + 商店;明暗/语言/反馈/命令面板与设置/账号移到底部常驻(在设置之上)。
+  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);商店/明暗/语言/反馈/命令/设置/账号常驻底部。
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
   // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册。
-  if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
+  // 商店置于底部首位:注册序即上下序,故在 rb-mode 之前注册 → 落在底部组最上方。
+  if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: Moon, tooltip: () => app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
   addRibbonIcon({ id: 'rb-locale', side: 'bottom', icon: Languages, tooltip: () => app().tr('locale.toggleTitle'), onClick: () => cycleLocale() })
   if (window.tangu?.submitFeedback) addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => app().openFeedback() })

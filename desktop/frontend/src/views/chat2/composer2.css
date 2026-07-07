@@ -25,8 +25,8 @@
 }
 .t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); }
 
-/* 卡内底排:+ / mic / 圆形发送 · 停止 */
-.t2c-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+/* 卡内底排:+ · 模式 / 上下文环 · 模型 · mic · 圆形发送 · 停止 */
+.t2c-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .t2c-grow { flex: 1; }
 .t2c-iconbtn {
   width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
@@ -70,8 +70,7 @@
 .t2c-menu-desc { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2c-menu-sec { padding: 5px 10px 3px; font-size: 11px; color: var(--text-faint, var(--text-muted)); }
 
-/* 卡下药丸 chips 行 */
-.t2c-chips { display: flex; align-items: center; gap: 8px; padding: 0 4px; min-height: 28px; min-width: 0; flex-wrap: wrap; }
+/* 模式 / 模型 药丸(移入卡内底排 .t2c-row) */
 .t2c-pill {
   display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border: none;
   border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text);
@@ -80,7 +79,21 @@
 .t2c-pill:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
 .t2c-pill.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* ModelPill 进 chips 行时也圆润成药丸 */
-.t2c-chips .model-pill { border-radius: 999px; }
-.t2c-ctx { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin-right: 2px; }
-.t2c-ctx-bar { width: 52px; height: 5px; border-radius: 3px; background: var(--overlay-light, rgba(127, 127, 127, 0.18)); overflow: hidden; display: inline-block; }
+
+/* 上下文进度圈:平时只是一个圆环,hover 弹出 token 占用详情(替代旧的横条+文字) */
+.t2c-ctxring { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; }
+.t2c-ctxring svg { transform: rotate(-90deg); }
+.t2c-ctxring-track { fill: none; stroke: var(--overlay-light, rgba(127, 127, 127, 0.2)); stroke-width: 3; }
+.t2c-ctxring-fill { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.35s var(--ease-out, ease); }
+.t2c-ctxring[data-warn] .t2c-ctxring-fill { stroke: var(--danger, #e0564b); }
+.t2c-ctxring-pop {
+  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 30;
+  display: none; flex-direction: column; gap: 3px; padding: 8px 11px; min-width: 150px;
+  background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+}
+.t2c-ctxring:hover .t2c-ctxring-pop { display: flex; }
+.t2c-ctxring-pct { font-weight: 600; color: var(--text); }
+.t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 11.5px; font-family: var(--font-ui); cursor: pointer; }
+.t2c-ctxring-compact:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }

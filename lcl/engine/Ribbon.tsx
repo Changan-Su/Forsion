@@ -60,7 +60,13 @@ export function Ribbon() {
             key={i.id}
             className={`rb-slot${dragId === i.id ? ' dragging' : ''}${overId === i.id && dragId !== i.id ? ' drag-over' : ''}`}
             draggable
-            onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragId(i.id) }}
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move'
+              // 拖影对齐抓取点(与左栏分组拖动同款):默认幽灵图会带整槽留白偏移。
+              const r = e.currentTarget.getBoundingClientRect()
+              e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
+              setDragId(i.id)
+            }}
             onDragOver={(e) => { if (dragId && dragId !== i.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overId !== i.id) setOverId(i.id) } }}
             onDragLeave={() => { if (overId === i.id) setOverId(null) }}
             onDrop={(e) => { e.preventDefault(); drop(i.id) }}

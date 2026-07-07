@@ -13,10 +13,10 @@ import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { forsionHomeDir, defaultWorkspaceDir } from './forsionHome'
+import { amadeusConfigPath } from './amadeus/settings'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
@@ -215,6 +215,9 @@ export class BackendManager {
       if (s.wechatStateDir) env.TANGU_WECHAT_STATE_DIR = s.wechatStateDir
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。
       env.TANGU_DEFAULT_WORKSPACE = s.defaultWorkspaceDir?.trim() || defaultWorkspaceDir()
+      // agent 的 amadeus_* 工具直连磁盘读写。给它 amadeus-config.json 的路径,让它 **实时读** 桌面当前
+      // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
+      env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
 
       // 内置 Python:bundled(默认)+ 拿得到内置解释器 → 前置 PATH + TANGU_PYTHON_BIN,
       // 让 run_bash 里的 python/pip 落到隔离的内置解释器(免装、不与用户 python 冲突);'system' 用系统 PATH。

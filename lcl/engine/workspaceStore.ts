@@ -40,11 +40,39 @@ const SIDE_FRACTION = 0.191
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。 */
 const sidebarAnimating: Record<'left' | 'right', boolean> = { left: false, right: false }
 
-/** 某侧栏的黄金分割目标宽(与 pinSides 同样钳制)。 */
+const RESIZABLE_MIN = 220
+/** 某侧栏的目标宽:默认黄金分割钳制;若该侧「可自由拖宽」(sideFree)则用记住的宽度,
+ *  首次无记录时给「黄金分割×1.2」(比常规宽 ~20%)。pinSides 与折叠/展开动画都以此为准,
+ *  故记住宽度即被尊重(不被重钉回黄金分割)= 持久化。 */
 function sideTargetWidth(api: DockviewApi, loc: 'left' | 'right'): number {
   const min = loc === 'left' ? 220 : 240
   const max = loc === 'left' ? 280 : 300
-  return Math.round(Math.min(max, Math.max(min, api.width * SIDE_FRACTION)))
+  const golden = Math.round(Math.min(max, Math.max(min, api.width * SIDE_FRACTION)))
+  const st = useWorkspace.getState()
+  if (!st.sideFree[loc]) return golden
+  const saved = st.sideWidths[loc]
+  const target = typeof saved === 'number' ? saved : Math.round(golden * 1.2)
+  const hardMax = Math.max(RESIZABLE_MIN, Math.min(680, Math.round(api.width * 0.6)))
+  return Math.min(hardMax, Math.max(RESIZABLE_MIN, target))
+}
+
+/** 记住「可自由拖宽」侧栏的当前宽度(WorkspaceHost 在布局变更时调):用户拖动 sash 后即被捕获 +
+ *  写 localStorage,下次 pinSides/展开都用它 → 拖宽持久。动画期间跳过(避免记下补间中间值)。 */
+export function captureSideWidths(api: DockviewApi): void {
+  const st = useWorkspace.getState()
+  if (!st.sideProfileKey) return
+  let changed = false
+  const next = { ...st.sideWidths }
+  for (const loc of ['left', 'right'] as const) {
+    if (!st.sideFree[loc] || sidebarAnimating[loc]) continue
+    const w = (panelsAt(api, loc)[0] as { group?: SizableGroup } | undefined)?.group?.api?.width
+    if (typeof w !== 'number' || w < 120) continue
+    if (next[loc] == null || Math.abs(next[loc]! - w) > 2) { next[loc] = Math.round(w); changed = true }
+  }
+  if (changed) {
+    useWorkspace.setState({ sideWidths: next })
+    try { localStorage.setItem(`lcl.sideWidth.${st.sideProfileKey}`, JSON.stringify(next)) } catch { /* private mode */ }
+  }
 }
 
 type SizableGroup = { api: { setSize: (s: { width: number }) => void; width?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number }) => void } }
@@ -200,9 +228,17 @@ interface WorkspaceState {
   sidebarDefaults: Record<'left' | 'right', Stashed[]>
   /** 默认布局构建器(WorkspaceHost 从 buildDefault prop 注入,供 resetLayout 复用)。 */
   defaultBuilder: (() => void) | null
+  /** 可自由拖宽 + 持久化的侧栏(如 Coding 的对话栏);其余侧栏仍钉黄金分割宽。 */
+  sideFree: Record<'left' | 'right', boolean>
+  /** 记住的侧栏宽度(仅 sideFree 侧生效;null=用「黄金分割×1.2」默认宽)。按当前 Space 从 localStorage 载。 */
+  sideWidths: Record<'left' | 'right', number | null>
+  /** 当前宽度持久化归属键(= 活动 Space id);切 Space 时重载对应记忆。 */
+  sideProfileKey: string | null
   setApi(api: DockviewApi | null): void
   setDefaultBuilder(fn: () => void): void
   setSidebarDefaults(defaults: Record<'left' | 'right', Stashed[]>): void
+  /** 设置「可自由拖宽」侧栏画像(切 Space 时调):载入该 Space 记住的宽度。 */
+  setSideProfile(key: string, free: { left?: boolean; right?: boolean }): void
   initializeSidebar(side: 'left' | 'right', visible: boolean): void
   setFocusedLeaf(panel: IDockviewPanel | null | undefined): void
   registerChatSurface(leafId: string, el: HTMLDivElement | null): void
@@ -249,10 +285,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   stash: { left: [], right: [] },
   sidebarDefaults: { left: [], right: [] },
   defaultBuilder: null,
+  sideFree: { left: false, right: false },
+  sideWidths: { left: null, right: null },
+  sideProfileKey: null,
 
   setApi: (api) => set({ api }),
   setDefaultBuilder: (fn) => set({ defaultBuilder: fn }),
   setSidebarDefaults: (defaults) => set({ sidebarDefaults: defaults }),
+  setSideProfile: (key, free) => {
+    let widths: Record<'left' | 'right', number | null> = { left: null, right: null }
+    try {
+      const raw = localStorage.getItem(`lcl.sideWidth.${key}`)
+      if (raw) { const p = JSON.parse(raw) as Record<string, unknown>; widths = { left: typeof p.left === 'number' ? p.left : null, right: typeof p.right === 'number' ? p.right : null } }
+    } catch { /* private mode */ }
+    set({ sideProfileKey: key, sideFree: { left: !!free.left, right: !!free.right }, sideWidths: widths })
+  },
   initializeSidebar: (side, visible) => set((s) => ({
     [side === 'left' ? 'leftVisible' : 'rightVisible']: visible,
     stash: visible ? s.stash : { ...s.stash, [side]: s.sidebarDefaults[side] },

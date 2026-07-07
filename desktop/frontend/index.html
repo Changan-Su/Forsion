@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- amadeus-asset: 是 Amadeus vault 附件协议(图片/PDF/音视频内联预览),img/media/frame 三处都须放行,否则 CSP 静默拦截。 -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https://liteapp.weixin.qq.com; media-src 'self' blob: amadeus-asset:; frame-src 'self' amadeus-asset:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https://liteapp.weixin.qq.com; media-src 'self' blob: amadeus-asset:; frame-src 'self' amadeus-asset: http://127.0.0.1:* http://localhost:*;" />
     <title>Forsion</title>
     <script>
       // FOUC 防护:React 挂载前按 localStorage 设 data-theme(语言)/data-skin(配色)/.dark/data-glass,

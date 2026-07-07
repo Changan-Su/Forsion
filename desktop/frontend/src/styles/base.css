@@ -2220,6 +2220,44 @@ html.dark .brand-logo--dark { display: inline-block; }
 .wsfile-table th, .wsfile-table td { border: var(--border-width) solid var(--border); padding: 4px 10px; text-align: left; white-space: nowrap; vertical-align: top; }
 .wsfile-table th { background: var(--overlay-light); position: sticky; top: 0; font-weight: 600; }
 
+/* ── Coding Space 工作台(Code | Preview 双切换,模仿 AI Studio)── */
+.csx { height: 100%; display: flex; flex-direction: column; min-height: 0; background: transparent; }
+.csx-head { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 10px; border-bottom: var(--border-width) solid var(--border); }
+.csx-seg { display: inline-flex; align-items: center; gap: 2px; background: var(--overlay-light); border-radius: var(--radius-sm); padding: 2px; }
+.csx-seg button { font-size: 11px; color: var(--text-muted); padding: 3px 10px; border-radius: calc(var(--radius-sm) - 2px); display: inline-flex; align-items: center; gap: 5px; }
+.csx-seg button:hover { color: var(--text); }
+.csx-seg button.active { background: var(--bg-card); color: var(--accent); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+.csx-title { flex: 1; min-width: 0; display: flex; align-items: center; }
+.csx-path { font-size: 12px; font-family: var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csx-entry { font-size: 12px; font-family: var(--font-mono); color: var(--text); background: var(--bg-input); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); padding: 2px 6px; max-width: 100%; }
+.csx-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.csx-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+.csx-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; font-size: 13px; color: var(--text-muted); }
+.csx-body .wsfile-cm, .csx-body .cm-editor { height: 100%; }
+.csx-proj { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); padding: 3px 8px; border-radius: var(--radius-sm); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csx-proj:hover { background: var(--overlay-light); color: var(--accent); }
+.csx-proj svg { flex-shrink: 0; color: var(--accent); }
+/* 项目选择器(空态) */
+.csx-picker { height: 100%; display: flex; flex-direction: column; min-height: 0; padding: 20px 24px; overflow: auto; }
+.csx-picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.csx-picker-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.csx-newproj { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); padding: 5px 12px; border-radius: var(--radius-sm); border: var(--border-width) solid var(--border); }
+.csx-newproj:hover { background: var(--overlay-light); }
+.csx-newrow { display: flex; gap: 8px; margin-bottom: 12px; }
+.csx-newinput { flex: 1; font-size: 13px; color: var(--text); background: var(--bg-input); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; }
+.csx-newinput:focus { border-color: var(--accent); outline: none; }
+.csx-newok { font-size: 12px; color: var(--bg-card); background: var(--accent); border-radius: var(--radius-sm); padding: 6px 14px; }
+.csx-newerr { font-size: 12px; color: #d9534f; margin-bottom: 10px; }
+.csx-projlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.csx-projcard { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius); padding: 12px 14px; text-align: left; overflow: hidden; }
+.csx-projcard span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csx-projcard:hover { border-color: var(--accent); background: var(--overlay-light); }
+.csx-projcard svg { flex-shrink: 0; color: var(--accent); }
+/* 流式生成中徽标 */
+.csx-genbadge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-family: var(--font-mono); color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csx-spin { animation: csx-spin 0.9s linear infinite; flex-shrink: 0; }
+@keyframes csx-spin { to { transform: rotate(360deg); } }
+
 /* ── 工作区文件预览标签页(wsfile 视图;复用上方 wsfile-* 渲染器样式)── */
 .wsfile-tab { height: 100%; display: flex; flex-direction: column; min-height: 0; background: transparent; }
 .wsfile-tab .wsfile-head { flex-shrink: 0; }

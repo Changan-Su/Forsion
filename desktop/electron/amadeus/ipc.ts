@@ -72,6 +72,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         getWindow()?.webContents.send(IPC.structureChange)
       }, 300)
     },
+    (dbPath) => {
+      // 外部改 .db(如 agent 直连磁盘改日历)→ 通知渲染端热重载对应 dbStore 条目。
+      getWindow()?.webContents.send(IPC.dbChange, dbPath)
+    },
   )
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: pagePath })
 

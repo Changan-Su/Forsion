@@ -24,8 +24,19 @@ export function relFrom(dir: string, vaultRel: string): string {
   return vaultRel.startsWith(prefix) ? vaultRel.slice(prefix.length) : vaultRel
 }
 
+/** 可替换的资源 URL 构建器(接缝):默认 = amadeus-asset:// 自定义协议(桌面主进程解析,
+ *  移动端由原生 WebView 拦截)。Tangu Web 无 host 协议,启动时经 setAssetUrlBuilder 注入
+ *  HTTP 版(→ /api/amadeus/vaults/:v/asset?ref=…)。桌面/移动不调用注入,零影响。 */
+let assetUrlBuilder: (ref: string) => string = (ref) =>
+  `${ASSET_SCHEME}://v/${encodeURIComponent(ref)}`
+
+/** Install a custom display-URL builder for vault assets (web cloud bridge). */
+export function setAssetUrlBuilder(fn: (ref: string) => string): void {
+  assetUrlBuilder = fn
+}
+
 export function toAssetUrl(vaultRelPath: string): string {
-  return `${ASSET_SCHEME}://v/${encodeURIComponent(vaultRelPath)}`
+  return assetUrlBuilder(vaultRelPath)
 }
 
 export function fromAssetUrl(url: string): string | null {

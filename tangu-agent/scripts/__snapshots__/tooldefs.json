@@ -130,7 +130,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -157,7 +157,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -412,6 +412,211 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
     }
   ],
   "ai-studio:sandbox+skills": [
@@ -545,7 +750,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -572,7 +777,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -843,6 +1048,211 @@
           },
           "required": [
             "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
           ]
         }
       }
@@ -1768,7 +2178,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1795,7 +2205,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2192,6 +2602,211 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
     }
   ],
   "tangu-docker:sandbox+skills": [
@@ -2325,7 +2940,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2352,7 +2967,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2768,6 +3383,211 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
     }
   ],
   "tangu-docker:host": [
@@ -2907,7 +3727,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2934,7 +3754,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this tool to overwrite a whole file; for partial changes prefer edit_file.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2958,7 +3778,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3004,7 +3824,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order. Use this tool for multiple edits to the same file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3874,6 +4694,211 @@
           },
           "required": [
             "task"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
           ]
         }
       }
@@ -4035,7 +5060,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4062,7 +5087,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this tool to overwrite a whole file; for partial changes prefer edit_file.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4086,7 +5111,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4132,7 +5157,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order. Use this tool for multiple edits to the same file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5005,6 +6030,211 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:sandbox": [
@@ -5138,7 +6368,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5165,7 +6395,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5521,6 +6751,211 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:sandbox+skills": [
@@ -5654,7 +7089,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5681,7 +7116,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6056,6 +7491,211 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:host": [
@@ -6195,7 +7835,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6222,7 +7862,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this tool to overwrite a whole file; for partial changes prefer edit_file.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6246,7 +7886,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6292,7 +7932,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order. Use this tool for multiple edits to the same file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7162,6 +8802,211 @@
           },
           "required": [
             "task"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
           ]
         }
       }
@@ -7323,7 +9168,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7350,7 +9195,7 @@
       "type": "function",
       "function": {
         "name": "write_file",
-        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this tool to overwrite a whole file; for partial changes prefer edit_file.",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7374,7 +9219,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7420,7 +9265,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order. Use this tool for multiple edits to the same file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8290,6 +10135,211 @@
           },
           "required": [
             "task"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
           ]
         }
       }

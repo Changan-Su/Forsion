@@ -20,6 +20,8 @@ interface DbStoreState {
   load(pagePath: string, ref: string): Promise<void>
   /** 强制重读(missing/corrupt 态「重试」)。 */
   reload(pagePath: string, ref: string): Promise<void>
+  /** 外部改了某 vault 相对路径的 .db(如 agent 直连磁盘)→ 重读所有解析到该路径的已载条目。 */
+  reloadByPath(dbPath: string): Promise<void>
   /** 纯函数换 data + 防抖写穿;非 ok 态 no-op(损坏文件绝不回写)。 */
   mutate(ref: string, fn: (d: DbFile) => DbFile): void
   flushAll(): Promise<void>
@@ -63,6 +65,14 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     }
   },
 
+  async reloadByPath(dbPath) {
+    // entry.path 是 readDatabase 解析出的确切 vault 相对路径;传它作 pagePath 让 basename ref 也能正确重解析。
+    const refs = Object.entries(get().entries)
+      .filter(([, e]) => e.path === dbPath)
+      .map(([ref]) => ref)
+    await Promise.all(refs.map((ref) => get().reload(dbPath, ref)))
+  },
+
   mutate(ref, fn) {
     const e = get().entries[ref]
     if (!e || e.status !== 'ok' || !e.data) return
@@ -84,4 +94,8 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
 // 退出前 best-effort 冲刷(与 pageStore 400ms 防抖同级的既有丢尾窗口,尽力缩小)。
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => { void useDbStore.getState().flushAll() })
+}
+// 外部改 .db(如 agent 直连磁盘改日历)→ 热重载对应条目,Calendar/表格实时刷新。
+if (typeof window !== 'undefined' && window.amadeus) {
+  amadeus.onDbExternalChange?.((dbPath) => { void useDbStore.getState().reloadByPath(dbPath) })
 }

@@ -3,6 +3,7 @@
  * ⚠️ 改动这些文本会改变所有 app 的 prompt——per-app 定制请在各自 profile 工厂里覆盖,勿改默认段。
  */
 import type { PromptSectionCtx, PromptSections } from '../seams/appProfile.js';
+import { amadeusPromptSection, amadeusCloudPromptSection } from '../tools/builtin/amadeus.js';
 
 /** 「记忆与日志」使用指引(用户记忆段之后、技能段之前)。 */
 export const MEMORY_LOG_GUIDANCE =
@@ -18,7 +19,7 @@ export function hostEnvSection(cwd?: string): string {
     '- Use `run_bash` to run shell commands; `list_dir`/`read_file` to inspect; `edit_file` for precise local edits and `write_file` for new files — all act on the real filesystem (relative paths resolve against the current working directory).\n' +
     '- When a task involves existing files, or you are unsure what is in the working directory, call `list_dir` first instead of assuming it is empty.\n' +
     '- For live web information prefer `browser_search`; to open a page, click, type, or take a screenshot use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` / `browser_screenshot`.\n' +
-    '- Prefer `edit_file` (a single matching old_string→new_string) for small changes; do not rewrite whole files.\n' +
+    '- To change an existing file, edit only the affected lines — use `edit_file` (one region), `multi_edit` (several regions of one file), or `apply_patch`; do NOT re-read and re-emit a whole file for a small change (it wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so old_string matches the file\'s raw text.\n' +
     '- Destructive operations (writing files / running commands) may require user approval; when denied, switch approach or ask the user — do not retry the same operation repeatedly.'
   );
 }
@@ -30,7 +31,8 @@ export const SANDBOX_OUTPUT_SECTION =
   'When writing files with `write_file` or inside `run_python`, always use **relative paths** (e.g. `report.docx`, `out/data.csv`) — ' +
   'they land in the workspace (run_python\'s current directory is /workspace, equivalent to /mnt/data).\n' +
   '**Do not** write deliverables to `/tmp`, `~/` (HOME), or other absolute paths — those are outside the workspace, are not preserved, and the files will be lost.\n' +
-  'The user may have uploaded files into this workspace. When a task involves existing files, or you are unsure what is present, call `list_files` first instead of assuming the workspace is empty.';
+  'The user may have uploaded files into this workspace. When a task involves existing files, or you are unsure what is present, call `list_files` first instead of assuming the workspace is empty.\n' +
+  'To change part of an existing file, use `apply_patch` to edit only the affected lines rather than re-emitting the whole file with `write_file` (which wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so a patch\'s context/old lines match the raw text.';
 
 /** sandbox 模式:执行效率约束(最影响耗时的是模型「生成量」:慢模型 ~50 tok/s,写 8000 token 要 ~160s)。 */
 export const EFFICIENCY_SECTION =
@@ -46,7 +48,11 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
     guidance: [MEMORY_LOG_GUIDANCE],
     environment:
       ctx.execMode === 'host'
-        ? [hostEnvSection(ctx.cwd)]
-        : [SANDBOX_OUTPUT_SECTION, EFFICIENCY_SECTION],
+        ? // host 模式:本地环境段 + (若本机存在 Amadeus vault)笔记/日历指引
+          [hostEnvSection(ctx.cwd), amadeusPromptSection()].filter((s): s is string => !!s)
+        : // 非 host:沙箱段 + (若云端 amadeus facet 已装配,如 thin worker)云笔记库指引
+          [SANDBOX_OUTPUT_SECTION, EFFICIENCY_SECTION, amadeusCloudPromptSection()].filter(
+            (s): s is string => !!s,
+          ),
   };
 }

@@ -8,5 +8,7 @@ set -e
 export BACKEND_URL=${BACKEND_URL:-http://host.docker.internal:3001}
 export NGINX_RESOLVER=${NGINX_RESOLVER:-$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)}
 export NGINX_RESOLVER=${NGINX_RESOLVER:-127.0.0.11}
-envsubst '$BACKEND_URL $NGINX_RESOLVER' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
+# PORT:容器内 nginx 监听端口(默认 80)。改这个记得同步 docker 端口映射 -p <host>:<PORT>。
+export PORT=${PORT:-80}
+envsubst '$BACKEND_URL $NGINX_RESOLVER $PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf
 exec nginx -g "daemon off;"

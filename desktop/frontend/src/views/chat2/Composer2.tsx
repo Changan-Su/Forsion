@@ -612,7 +612,83 @@ export const Composer2: React.FC<{
               )}
             </span>
             <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { void pickFiles(e.target.files); e.target.value = '' }} />
+            {showModeChip && (
+              <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
+                <button className={`t2c-pill${planMode ? ' active' : ''}`} title={t('input.modeChipTitle')} onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}>
+                  <ClipboardList size={13} />
+                  <span className="t2c-pill-label">{modeLabel}</span>
+                  <ChevronDown size={12} />
+                </button>
+                {openMenu === 'mode' && (
+                  <div className="composer-menu left">
+                    {onPlanModeChange && (
+                      <>
+                        <div className="menu-section">{t('input.planMode')}</div>
+                        <button className={`menu-item${planMode ? ' active' : ''}`} onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}>
+                          <ClipboardList size={14} />
+                          <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
+                          {planMode && <Check size={13} />}
+                        </button>
+                      </>
+                    )}
+                    {onGroupChange && !isEngine && (
+                      <>
+                        <div className="menu-section">{t('group.menu.section')}</div>
+                        <button className={`menu-item${groupActive ? ' active' : ''}`} onClick={() => { setGroupSetupOpen(true); setOpenMenu(null) }}>
+                          <Users size={14} />
+                          <span className="grow">{groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable')}</span>
+                          {groupActive && <Check size={13} />}
+                        </button>
+                      </>
+                    )}
+                    {isHost && (
+                      <>
+                        <div className="menu-section">{t('input.approvalSection')}</div>
+                        {(['readonly', 'auto-edit', 'full-auto'] as const).map((m) => (
+                          <button key={m} className={`menu-item${approval === m ? ' active' : ''}`} onClick={() => setApproval(m)}>
+                            <span className="grow">{t(approvalLabelKey[m])}</span>
+                            {approval === m && <Check size={13} />}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+              </span>
+            )}
             <span className="t2c-grow" />
+            {!!contextWindow && contextWindow > 0 && (() => {
+              const pct = Math.min(100, Math.round(((ctxTokens || 0) / contextWindow) * 100))
+              const warn = pct >= 80
+              const R = 9
+              const CIRC = 2 * Math.PI * R
+              return (
+                <span className="t2c-ctxring" data-warn={warn || undefined}>
+                  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                    <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />
+                    <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
+                  </svg>
+                  {/* 悬停详情:token 占用 / 会话累计 / 压缩(替代旧的横条+文字,平时只留进度圈) */}
+                  <span className="t2c-ctxring-pop">
+                    <span className="t2c-ctxring-pct">{t('input.ctxLabel')} {pct}%</span>
+                    <span>{(ctxTokens || 0).toLocaleString()} / {contextWindow.toLocaleString()} tokens</span>
+                    {!!sessionTokens && sessionTokens > 0 && <span>{t('input.sessionTokens', { n: sessionTokens.toLocaleString() })}</span>}
+                    {onCompact && <button className="t2c-ctxring-compact" onClick={onCompact}>{t('input.slash.compact')}</button>}
+                  </span>
+                </span>
+              )
+            })()}
+            {showModelPill && (
+              <ModelPill
+                disabled={disabled}
+                modelId={isEngine ? engineModelId : modelId}
+                groups={modelPillGroups}
+                onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
+                thinkingLevel={isEngine ? undefined : thinkingLevel}
+                onThinkingChange={isEngine ? undefined : onThinkingChange}
+                emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
+              />
+            )}
             <button className="t2c-iconbtn" title={t('input.micComingSoon')} disabled><Mic size={16} /></button>
             {running ? (
               <>
@@ -625,78 +701,6 @@ export const Composer2: React.FC<{
               <button className="t2c-send" onClick={send} disabled={disabled || !draft.trim()} title={t('input.send')}><ArrowUp size={18} /></button>
             )}
           </div>
-        </div>
-
-        <div className="t2c-chips">
-          {showModeChip && (
-            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-              <button className={`t2c-pill${planMode ? ' active' : ''}`} title={t('input.modeChipTitle')} onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}>
-                <ClipboardList size={13} />
-                <span className="t2c-pill-label">{modeLabel}</span>
-                <ChevronDown size={12} />
-              </button>
-              {openMenu === 'mode' && (
-                <div className="composer-menu left">
-                  {onPlanModeChange && (
-                    <>
-                      <div className="menu-section">{t('input.planMode')}</div>
-                      <button className={`menu-item${planMode ? ' active' : ''}`} onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}>
-                        <ClipboardList size={14} />
-                        <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
-                        {planMode && <Check size={13} />}
-                      </button>
-                    </>
-                  )}
-                  {onGroupChange && !isEngine && (
-                    <>
-                      <div className="menu-section">{t('group.menu.section')}</div>
-                      <button className={`menu-item${groupActive ? ' active' : ''}`} onClick={() => { setGroupSetupOpen(true); setOpenMenu(null) }}>
-                        <Users size={14} />
-                        <span className="grow">{groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable')}</span>
-                        {groupActive && <Check size={13} />}
-                      </button>
-                    </>
-                  )}
-                  {isHost && (
-                    <>
-                      <div className="menu-section">{t('input.approvalSection')}</div>
-                      {(['readonly', 'auto-edit', 'full-auto'] as const).map((m) => (
-                        <button key={m} className={`menu-item${approval === m ? ' active' : ''}`} onClick={() => setApproval(m)}>
-                          <span className="grow">{t(approvalLabelKey[m])}</span>
-                          {approval === m && <Check size={13} />}
-                        </button>
-                      ))}
-                    </>
-                  )}
-                </div>
-              )}
-            </span>
-          )}
-
-          <span className="t2c-grow" />
-
-          {!!contextWindow && contextWindow > 0 && (() => {
-            const pct = Math.min(100, Math.round(((ctxTokens || 0) / contextWindow) * 100))
-            const warn = pct >= 80
-            return (
-              <span className="t2c-ctx" title={`${(ctxTokens || 0).toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}>
-                <span className="t2c-ctx-bar"><span style={{ display: 'block', height: '100%', width: `${pct}%`, background: warn ? 'var(--danger)' : 'var(--accent)' }} /></span>
-                <span>{t('input.ctxLabel')} {pct}%</span>
-                {!!sessionTokens && sessionTokens > 0 && <span>· {t('input.sessionTokens', { n: sessionTokens.toLocaleString() })}</span>}
-              </span>
-            )
-          })()}
-          {showModelPill && (
-            <ModelPill
-              disabled={disabled}
-              modelId={isEngine ? engineModelId : modelId}
-              groups={modelPillGroups}
-              onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
-              thinkingLevel={isEngine ? undefined : thinkingLevel}
-              onThinkingChange={isEngine ? undefined : onThinkingChange}
-              emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
-            />
-          )}
         </div>
       </div>
     </div>

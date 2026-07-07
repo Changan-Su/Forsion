@@ -6,5 +6,6 @@ export type WorkspaceMode = 'sessions' | 'files' | 'notes'
 export function autoWorkspaceMode(loc: 'left' | 'right' | 'main', mainType: string | null, prev: WorkspaceMode): WorkspaceMode {
   if (mainType === 'chat') return loc === 'right' ? 'files' : 'sessions'
   if (mainType === 'amadeus-editor') return loc === 'right' ? 'files' : 'notes'
+  if (mainType === 'code-studio') return 'files' // Coding Space:侧栏恒为工作区文件树(点文件 → 主区代码)
   return prev
 }

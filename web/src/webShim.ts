@@ -20,6 +20,24 @@ function gotoLogin(): void {
   location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-web')
 }
 
+// —— 供 Amadeus 云端桥(src/amadeus/*)复用的三件套:同一 token 键、同一 API 基址、同一登录跳转。 ——
+
+/** 当前登录 token(localStorage forsion_token;无 = '')。 */
+export function getToken(): string {
+  return readToken()
+}
+
+/** API 基址(与 installWebShim 内部一致):VITE_API_URL 覆盖,否则同源 origin+/api,无尾斜杠。 */
+export function getApiBase(): string {
+  return String(import.meta.env.VITE_API_URL || (location.origin + '/api')).replace(/\/$/, '')
+}
+
+/** 清 token 并跳 Forsion 登录页(带回跳)。 */
+export function redirectToLogin(): void {
+  try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
+  gotoLogin()
+}
+
 /**
  * 装垫片。返回 true=已就绪可挂载;false=未登录已跳转,调用方应停止挂载。
  */
@@ -75,12 +93,12 @@ export function installWebShim(): boolean {
     openAccountCenter: () => { window.open('/account/', '_blank', 'noopener') },
   }
 
-  // 4) 401 兜底:任一 /api/agent/* 鉴权失败 → 清 token 重新登录。
+  // 4) 401 兜底:任一 /api/agent/* 或 /api/amadeus/*(Amadeus 云端桥)鉴权失败 → 清 token 重新登录。
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const res = await origFetch(input, init)
     try {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (res.status === 401 && url.includes('/api/agent/')) {
+      if (res.status === 401 && (url.includes('/api/agent/') || url.includes('/api/amadeus/'))) {
         try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
         gotoLogin()
       }

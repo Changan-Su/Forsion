@@ -22,6 +22,7 @@ import { checkForUpdates, downloadUpdate, installUpdate } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { extractZipToDir, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs } from './marketInstall'
+import { serveDir as codePreviewServe, stopCodePreview } from './codePreview'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
@@ -694,6 +695,19 @@ app.whenReady().then(async () => {
     if (st.size > MAX_PREVIEW_BYTES) return { mimeType, content: '', size: st.size, mtimeMs: st.mtimeMs, tooLarge: true }
     const buf = await readFile(filePath)
     return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
+  })
+  // ── Coding Space:本地静态预览服务器(整 cwd 挂 127.0.0.1 随机端口;渲染端 iframe 加载多文件 web app)──
+  ipcMain.handle('codePreview:serve', async (_e, rootDir: string) => {
+    if (!rootDir || typeof rootDir !== 'string') throw new Error('非法的预览根目录')
+    return codePreviewServe(rootDir)
+  })
+  ipcMain.handle('codePreview:stop', () => { stopCodePreview(); return { ok: true } })
+  // Coding Space 的项目根目录 = ~/Forsion/Project(与 Amadeus 的 ~/Forsion/Amadeus 同级;dev=~/Forsion-Dev/Project),
+  // 每个项目一个子文件夹。返回时确保存在(子文件夹经 fs:mkdir 的 safeName 校验创建)。
+  ipcMain.handle('codeProjects:root', async () => {
+    const root = join(forsionWorkspaceDir(), 'Project')
+    await mkdir(root, { recursive: true }).catch(() => { /* ignore */ })
+    return root
   })
   // 用系统默认应用打开(预览不支持的类型走这里);openPath 失败返回错误串而非抛异常。
   ipcMain.handle('fs:openPath', async (_e, p: string) => {

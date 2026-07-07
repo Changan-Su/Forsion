@@ -51,3 +51,13 @@ export function installAmadeusPlugins(): void {
     else if (pal === 'search') openSearchView()
   })
 }
+
+let amadeusBooted = false
+/** 幂等应用引导:装插件 + 恢复上次 Vault。Amadeus 编辑器 或 Calendar/ToDo 视图 任一先挂载都触发一次
+ *  —— 修复「重启后直接进 Calendar Space,vault 从未恢复 → 日历/待办一直空白,须先进一次 Amadeus」。 */
+export function ensureAmadeusReady(): void {
+  if (amadeusBooted) return
+  amadeusBooted = true
+  installAmadeusPlugins()
+  void usePageStore.getState().restoreVault()
+}

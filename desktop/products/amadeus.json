@@ -5,7 +5,7 @@
   "productName": "Amadeus",
   "artifactPrefix": "Amadeus",
   "defaultSpace": "amadeus",
-  "spaces": ["amadeus"],
+  "spaces": ["amadeus", "calendar"],
   "agentBackend": false,
   "market": false
 }

@@ -1,7 +1,7 @@
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
-import { Bot, Inbox, NotebookText } from 'lucide-react'
+import { Bot, Inbox, NotebookText, CalendarDays, Code2 } from 'lucide-react'
 import { registerSpace, addRibbonIcon, useSpaceStore, setActiveSpace, useWorkspace, deleteNamedLayout, clearLayout, label } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { useApp } from './stores/appStore'
@@ -123,6 +123,50 @@ const amadeusSpace: SpaceDefinition = {
   },
 }
 
+/** Calendar Space:左=待办清单;主=日历;右=日历配置(颜色/显隐/默认库)。
+ *  数据来自全库多维表的 todo / calendarDate 属性(dbAggregateStore)。 */
+const CALENDAR_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
+  left: [{ type: 'todo-list', params: {} }],
+  right: [{ type: 'calendar-config', params: {} }],
+}
+
+const calendarSpace: SpaceDefinition = {
+  id: 'calendar',
+  name: () => app().tr('space.calendar'),
+  icon: CalendarDays,
+  sidebarDefaults: CALENDAR_SIDE_VIEWS,
+  build() {
+    ws().setSidebarDefaults(CALENDAR_SIDE_VIEWS)
+    ws().openView('calendar', {}, 'main')
+    ws().openView('todo-list', {}, 'left')
+    ws().openView('calendar-config', {}, 'right')
+  },
+}
+
+/** Coding Space:左=Tangu 对话(Prompt,复用 ChatView);主=Code|Preview 工作台;右=工作区文件树。
+ *  模仿 Google AI Studio:左侧描述需求 → Coding Agent 生成 web app → 主区实时预览/改代码。
+ *  新会话默认落 Coding Agent(不改全局 defaultSlug,只设新会话草稿)。 */
+const CODING_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
+  left: [{ type: 'chat', params: { followActive: true, reuseKey: 'primary' } }],
+  right: [{ type: 'workspace', params: {} }],
+}
+
+const codingSpace: SpaceDefinition = {
+  id: 'coding',
+  name: () => app().tr('space.coding'),
+  icon: Code2,
+  sidebarDefaults: CODING_SIDE_VIEWS,
+  // 左栏 = 对话(Prompt),当宽 IDE 侧栏用:可自由拖宽 + 记住宽度(默认比常规宽 20%)。
+  resizableSides: { left: true },
+  build() {
+    ws().setSidebarDefaults(CODING_SIDE_VIEWS)
+    app().selectNewChatAgent?.('coding') // 新会话默认 Coding agent
+    ws().openView('code-studio', {}, 'main')
+    ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'left')
+    ws().openView('workspace', {}, 'right')
+  },
+}
+
 /** 注册序 = ribbon 顶部默认序(在商店之上)。在 installEngine 内、商店图标注册之前调用。
  *  Amadeus 需 electron 的 window.amadeus 文件系统桥;Tangu Web(无 host)下不注册该 Space。
  *  2026-07-04 起对所有桌面用户开放(此前仅开发者模式 localStorage forsion_tangu_dev_mode='1');
@@ -134,6 +178,10 @@ const SPACES: SpaceDefinition[] = [
   // Inbox 与视图注册同门控(桌面壳 backendStatus 或 移动端本地 inbox mobile;Tangu Web 两者皆无 → 不注册)。
   ...(PRODUCT.spaces.includes('inbox') && (window.tangu?.backendStatus || window.tangu?.mobile) ? [inboxSpace] : []),
   ...(PRODUCT.spaces.includes('amadeus') && window.amadeus && AMADEUS_ENABLED ? [amadeusSpace] : []),
+  // Calendar 依赖 window.amadeus(跨库聚合走 vault 文件系统桥),与 Amadeus 同门控。
+  ...(PRODUCT.spaces.includes('calendar') && window.amadeus && AMADEUS_ENABLED ? [calendarSpace] : []),
+  // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。
+  ...(PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
 ]
 
 export function registerSpaces(): void {

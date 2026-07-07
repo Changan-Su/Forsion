@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import { useApp } from './appStore'
 import { useInbox } from './inboxStore'
 import { setActiveSpace } from '@lcl/engine'
+import { openChangelogTab } from '../views/ChangelogView'
 import { setUnauthorizedHandler } from '../services/http'
 
 // 任意请求(含轮询/SSE)返回 401 → 集中触发登录过期处理(在 React 外注册一次)。
@@ -22,11 +23,17 @@ export function useBootstrap(): void {
     void useApp.getState().boot()
   }, [])
 
-  // 启动静默检查更新 + 订阅状态(检测到新版/已下载 → 顶部横幅)。
+  // 启动静默检查更新:检测到新版(或已下载)→ 自动弹出「更新」标签页,每个版本只弹一次。
   useEffect(() => {
     const off = window.tangu?.onUpdaterStatus?.((st) => {
-      if (st.phase === 'available' || st.phase === 'downloaded') useApp.getState().setUpdateAvailable({ version: st.version })
-      else if (st.phase === 'not-available' || st.phase === 'idle') useApp.getState().setUpdateAvailable(null)
+      if ((st.phase === 'available' || st.phase === 'downloaded') && st.version) {
+        const KEY = 'forsion_update_shown_version'
+        try {
+          if (localStorage.getItem(KEY) === st.version) return // 本版本已弹过,不再打扰
+          localStorage.setItem(KEY, st.version)
+        } catch { /* localStorage 不可用则每次弹,无妨 */ }
+        openChangelogTab()
+      }
     })
     void window.tangu?.checkForUpdates?.()
     return () => off?.()

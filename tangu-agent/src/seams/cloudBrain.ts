@@ -215,6 +215,47 @@ export interface TtsBrain {
   synthesize(req: SpeechRequest): Promise<SpeechResult>;
 }
 
+// ── Amadeus 云笔记库(v1)────────────────────────────────────────────────────
+// 对端:server /api/amadeus/vaults/default/*(契约冻结)。让云端 Tangu(thin worker)的
+// amadeus_* 工具读写用户的云 vault(host 模式仍直连本地磁盘,见 tools/builtin/amadeus.ts)。
+
+/** Amadeus 文本文件上限(与 workspace WS_MAX_FILE_BYTES 同款 5MB 契约;服务端 413 对应)。 */
+export const AMADEUS_MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+/** 写冲突(409):携带服务端当前 seq+content,调用方据此重放读-改-写(重试一次)。 */
+export class AmadeusConflictError extends Error {
+  constructor(
+    public seq: number,
+    public content: string,
+  ) {
+    super(`amadeus write conflict (server seq=${seq})`);
+    this.name = 'AmadeusConflictError';
+  }
+}
+/** 文件不存在(404)。 */
+export class AmadeusNotFoundError extends Error {
+  constructor(public path: string) {
+    super(`amadeus file not found: ${path}`);
+    this.name = 'AmadeusNotFoundError';
+  }
+}
+/** 超限(413 / 客户端预检):文本 ≤ AMADEUS_MAX_FILE_BYTES。 */
+export class AmadeusTooLargeError extends Error {
+  constructor(public path: string) {
+    super(`amadeus file too large (max ${AMADEUS_MAX_FILE_BYTES} bytes): ${path}`);
+    this.name = 'AmadeusTooLargeError';
+  }
+}
+
+export interface AmadeusBrain {
+  /** 全 vault 文件清单(GET tree 的 pages+files 合并;path=vault 相对路径)。 */
+  list(): Promise<Array<{ path: string; size: number }>>;
+  /** 读文本文件;404 → AmadeusNotFoundError(二进制 → 服务端 400,原样上抛)。 */
+  read(path: string): Promise<{ content: string; seq: number }>;
+  /** 写文本文件;baseSeq=乐观锁(409 → AmadeusConflictError 带最新 seq+content),force=无条件覆盖。 */
+  write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
+}
+
 export interface CloudBrainServices {
   llm: LlmBrain;
   users: UsersBrain;
@@ -233,6 +274,8 @@ export interface CloudBrainServices {
   agents?: AgentsBrain;
   /** 收件箱广播拉取(桌面 standalone 定期拉服务端公告);可选:旧云端/微服务进程/纯本地未注入 → inboxPull 调度器不启动。 */
   inbox?: InboxBrain;
+  /** Amadeus 云笔记库(v1);可选:仅 httpBrain(thin worker / standalone 云连)实现 → 非 host 环境的 amadeus_* 工具经此读写云 vault;未注入 → 工具在非 host 环境隐藏。 */
+  amadeus?: AmadeusBrain;
 }
 
 /** 服务端收件箱广播(对端 GET /api/brain/inbox/broadcasts;created_at 为服务端微秒原文,原样回传做游标)。 */

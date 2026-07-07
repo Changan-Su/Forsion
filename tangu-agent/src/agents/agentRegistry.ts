@@ -298,6 +298,33 @@ export const DEFAULT_AGENTS: Array<Pick<NormalAgentDef, 'slug' | 'name' | 'descr
       "You are a writing editor. Your task is to make the text clearer, smoother, and more persuasive while preserving the author's original meaning and tone: " +
       'cut redundancy, tighten logic, unify terminology, and fix grammatical errors. Unless asked, do not change facts or opinions; provide the revised version, and you may append one or two notes on the key changes.',
   },
+  {
+    // Coding Space 的默认 agent:像 Google AI Studio 的 app builder。预览端(codePreview.ts)按需转译
+    // .ts/.tsx/.jsx(sucrase,vite-dev 式,无打包/无 npm install),裸依赖走 importmap→esm.sh。
+    slug: 'coding',
+    name: 'Coding',
+    version: '1.1.0', // 提示词更新即 bump → refreshBuiltinAgent 覆盖旧版(保留用户 model/thinking)
+    description: 'AI Studio 式网页应用构建者:多文件 + JSX/TSX + CDN 包,即时预览',
+    thinkingLevel: 'medium',
+    systemPrompt:
+      "You are a web app builder, like Google AI Studio's app builder. When the user describes an app, BUILD it as real files in the current working directory, then briefly say what you made. " +
+      'The live preview runs a dev-server that resolves relative imports and transpiles .ts/.tsx/.jsx on the fly (like Vite dev) — so there is NO build step and NO npm install, yet you get a real multi-file project. Follow these rules: ' +
+      '(1) Always create an "index.html" entry at the project root. It declares an ESM importmap for every npm package you use (resolved from the https://esm.sh/ CDN) and loads your entry module. ' +
+      '(2) STRUCTURE IT LIKE A REAL PROJECT — multiple files: split components/hooks/utils/styles into separate files (e.g. index.tsx, App.tsx, components/*.tsx, styles.css) and import them with relative paths. Do NOT cram everything into one index.html. ' +
+      '(3) USE PACKAGES instead of writing from scratch — pull in React, and any npm library (state, routing, charts, animation, UI kits, icons, date, etc.) via the importmap → esm.sh. You may write modern JSX/TSX/TypeScript freely; the preview transpiles it. ' +
+      '(4) For React with automatic JSX runtime, the importmap MUST include "react/jsx-runtime". Link CSS with <link rel="stylesheet"> in index.html (do not `import` .css from JS). ' +
+      '(5) Prefer clean, modern, responsive UI. ' +
+      'Minimal React starter to follow:\n' +
+      '```html\n<!-- index.html -->\n<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="./styles.css">\n' +
+      '<script type="importmap">{"imports":{"react":"https://esm.sh/react@18","react-dom/client":"https://esm.sh/react-dom@18/client","react/jsx-runtime":"https://esm.sh/react@18/jsx-runtime"}}</script>\n' +
+      '</head><body><div id="root"></div><script type="module" src="./index.tsx"></script></body></html>\n```\n' +
+      '```tsx\n// index.tsx\nimport { createRoot } from "react-dom/client";\nimport App from "./App.tsx";\ncreateRoot(document.getElementById("root")!).render(<App />);\n```\n' +
+      'Add more packages by adding importmap entries (e.g. "zustand":"https://esm.sh/zustand@4"). ' +
+      'Use write_file / edit_file to create and update files; the preview refreshes automatically after each write. Iterate on the user\'s feedback by editing files. Reply in the user\'s language.',
+    soul:
+      '# Coding\n\nA fast, tasteful front-end builder. Turns an idea into a real, well-structured multi-file app you can see immediately — reaching for the right npm package instead of reinventing it, ' +
+      'writing clean modern JSX/TSX. Ships something runnable first, then refines.',
+  },
 ];
 
 /** 写一个默认 agent 的骨架(目录 + Library/ + 缺失的 config.toml / SOUL.md);幂等,不覆盖已有文件。
@@ -317,6 +344,28 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
   if (!existsSync(path.join(adir, 'SOUL.md'))) {
     await fs.writeFile(path.join(adir, 'SOUL.md'), a.soul || '', 'utf-8');
   }
+}
+
+/** 内置(系统维护)agent 的提示词升级:磁盘版本 ≠ 预设版本时,用预设覆盖 systemPrompt/soul/version/描述,
+ *  但**保留用户可调项**(model / thinkingLevel / maxIterations / approvalMode / tools)。仅对预设声明了 version 的 agent 生效。 */
+async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<void> {
+  if (!a.version) return;
+  const adir = path.join(agentsDir(), a.slug);
+  const cfgPath = path.join(adir, 'config.toml');
+  const txt = await fs.readFile(cfgPath, 'utf-8').catch(() => null);
+  if (txt === null) return;
+  const cur = parseAgentConfig(a.slug, txt, '');
+  if (cur.version === a.version) return; // 已是最新
+  const def: NormalAgentDef = {
+    slug: a.slug, name: a.name, version: a.version, description: a.description || '',
+    model: cur.model || a.model || '', tools: cur.tools?.length ? cur.tools : (a.tools || []),
+    thinkingLevel: cur.thinkingLevel || a.thinkingLevel || '', maxIterations: cur.maxIterations ?? a.maxIterations ?? null,
+    approvalMode: cur.approvalMode || a.approvalMode || '',
+    createdBy: cur.createdBy || 'user', createdAt: cur.createdAt || new Date().toISOString(),
+    systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: cur.libraryOrder || [],
+  };
+  await fs.writeFile(cfgPath, serializeAgentConfig(def), 'utf-8');
+  await fs.writeFile(path.join(adir, 'SOUL.md'), a.soul || '', 'utf-8');
 }
 
 // ── Muse 系统 agent(Special Agent 的文件夹化身份;由 muse supervisor 按需播种/自愈)──
@@ -390,10 +439,14 @@ async function seedDefaultAgentsOnce(): Promise<void> {
   const xyra = DEFAULT_AGENTS.find((a) => a.slug === DEFAULT_AGENT_SLUG);
   if (xyra) await writeAgentScaffold(xyra);
   await ensureXyraDefaults().catch(() => { /* ignore */ });
+  // coding = Coding Space 默认 agent,晚于 .seeded 机制加入 → 无视 marker 总是补齐(幂等,不覆盖用户改动),
+  // 否则老用户升级后 Coding Space 里选不到它。版本更新时刷新提示词(内置 builder agent 的提示词由我们维护)。
+  const coding = DEFAULT_AGENTS.find((a) => a.slug === 'coding');
+  if (coding) { await writeAgentScaffold(coding); await refreshBuiltinAgent(coding).catch(() => { /* ignore */ }); }
   const marker = path.join(agentsDir(), '.seeded');
   if (existsSync(marker)) return;
   for (const a of DEFAULT_AGENTS) {
-    if (a.slug === DEFAULT_AGENT_SLUG) continue; // 已处理
+    if (a.slug === DEFAULT_AGENT_SLUG || a.slug === 'coding') continue; // 已处理
     await writeAgentScaffold(a);
   }
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');

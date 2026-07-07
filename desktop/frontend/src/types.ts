@@ -526,6 +526,11 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
+      /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
+      codePreviewServe?(rootDir: string): Promise<{ origin: string }>
+      codePreviewStop?(): Promise<{ ok: boolean }>
+      /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
+      codeProjectsRoot?(): Promise<string>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */

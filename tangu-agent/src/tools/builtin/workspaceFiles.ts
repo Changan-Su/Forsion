@@ -40,7 +40,8 @@ export const workspaceFilesProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'read_file',
-          description: 'Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages.',
+          description: 'Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. ' +
+            'Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that "<number>\\t" prefix — a patch\'s context/old lines must match the file\'s RAW text.',
           parameters: {
             type: 'object',
             properties: {
@@ -69,7 +70,8 @@ export const workspaceFilesProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'write_file',
-          description: 'Write/overwrite a text file in the agent workspace (intermediate directories are created automatically).',
+          description: 'Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). ' +
+            'Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.',
           parameters: {
             type: 'object',
             properties: {

@@ -1,10 +1,11 @@
 /**
- * 代码/文本只读视图 —— CodeMirror 6(对齐 AionUI 的 CodeEditor):行号、语法高亮、
+ * 代码/文本视图 —— CodeMirror 6(对齐 AionUI 的 CodeEditor):行号、语法高亮、
  * 搜索(Cmd+F)、代码折叠、可选自动换行。语言按文件名/语言名经 @codemirror/language-data
- * 动态加载(自动分包);>30KB 关高亮免卡。供 WorkspaceFilePreview 懒加载使用。
+ * 动态加载(自动分包);>30KB 关高亮免卡。默认只读(供 WorkspaceFilePreview 懒加载预览);
+ * 传 editable + onChange 则可编辑(Coding Space 的代码面板)。
  */
-import React, { useEffect, useMemo, useState } from 'react'
-import CodeMirror from '@uiw/react-codemirror'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import { LanguageDescription } from '@codemirror/language'
@@ -13,10 +14,18 @@ import { useIsDark } from '../services/useIsDark'
 
 const HIGHLIGHT_MAX = 30_000 // >30KB 不挂语言扩展(免卡),对齐 AionUI shouldDisableHighlighting
 
-const CodeView: React.FC<{ value: string; fileName?: string; language?: string; wrap?: boolean }> = ({ value, fileName, language, wrap }) => {
+const CodeView: React.FC<{ value: string; fileName?: string; language?: string; wrap?: boolean; editable?: boolean; onChange?: (v: string) => void; autoScroll?: boolean }> = ({ value, fileName, language, wrap, editable, onChange, autoScroll }) => {
   const dark = useIsDark()
   const [langExt, setLangExt] = useState<Extension[]>([])
   const disableHighlight = value.length > HIGHLIGHT_MAX
+  const cmRef = useRef<ReactCodeMirrorRef>(null)
+
+  // 流式生成时钉在底部(跟随最新一行,AI Studio 式)。
+  useEffect(() => {
+    if (!autoScroll) return
+    const view = cmRef.current?.view
+    if (view) view.dispatch({ effects: EditorView.scrollIntoView(Math.max(0, view.state.doc.length - 1)) })
+  }, [value, autoScroll])
 
   useEffect(() => {
     let cancelled = false
@@ -33,11 +42,14 @@ const CodeView: React.FC<{ value: string; fileName?: string; language?: string; 
 
   return (
     <CodeMirror
+      ref={cmRef}
       className="wsfile-cm"
       value={value}
       height="100%"
       theme={dark ? 'dark' : 'light'}
-      readOnly
+      readOnly={!editable}
+      editable={editable}
+      onChange={editable ? onChange : undefined}
       extensions={extensions}
       basicSetup={{
         lineNumbers: true,

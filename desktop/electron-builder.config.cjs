@@ -40,15 +40,20 @@ module.exports = {
     '!node_modules/@rollup/**',
     '!node_modules/@types/**',
   ],
-  extraResources: product.agentBackend
-    ? [
-        { from: '../tangu-agent/dist', to: 'tangu-server/dist' },
-        { from: '../tangu-agent/node_modules', to: 'tangu-server/node_modules' },
-        { from: '../tangu-agent/package.json', to: 'tangu-server/package.json' },
-        { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
-        { from: 'build/python', to: 'python' },
-      ]
-    : [],
+  extraResources: [
+    // 托盘/菜单栏图标:运行时主进程读 resources/tray.png(build/ 不进包,故显式复制)。
+    { from: 'build/icon.png', to: 'tray.png' },
+    ...(product.agentBackend
+      ? [
+          { from: '../tangu-agent/dist', to: 'tangu-server/dist' },
+          { from: '../tangu-agent/node_modules', to: 'tangu-server/node_modules' },
+          { from: '../tangu-agent/package.json', to: 'tangu-server/package.json' },
+          { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
+          { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
+          { from: 'build/python', to: 'python' },
+        ]
+      : []),
+  ],
   linux: { target: 'AppImage', icon: 'build/icon.png' },
   mac: { target: 'dmg', icon: 'build/icon.icns', identity: null },
   dmg: {
@@ -60,4 +65,6 @@ module.exports = {
     ],
   },
   win: { target: 'nsis', icon: 'build/icon.ico' },
+  // 卸载时询问是否清除用户数据(~/.forsion、~/Forsion、%APPDATA%\Forsion);见 build/installer.nsh。
+  nsis: { include: 'build/installer.nsh' },
 }
