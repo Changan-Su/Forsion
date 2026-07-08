@@ -20,7 +20,7 @@
 
 .t2c-ta {
   width: 100%; border: none; outline: none; background: transparent; resize: none;
-  color: var(--text); font-family: var(--font-ui); font-size: 15px; line-height: 1.6;
+  color: var(--text); font-family: var(--font-ui); font-size: 14px; line-height: 1.6;
   max-height: 200px; display: block;
 }
 .t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); }
@@ -29,32 +29,32 @@
 .t2c-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .t2c-grow { flex: 1; }
 .t2c-iconbtn {
-  width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; color: var(--text-muted); border-radius: 999px; cursor: pointer;
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2c-iconbtn:hover:not(:disabled) { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
 .t2c-iconbtn:disabled { opacity: 0.4; cursor: default; }
 .t2c-send {
-  width: 36px; height: 36px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   border: none; border-radius: 999px; background: var(--accent); color: var(--on-accent, #fff); cursor: pointer;
   transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s);
 }
 .t2c-send:hover:not(:disabled) { transform: translateY(-1px); }
 .t2c-send:disabled { opacity: 0.35; cursor: default; background: var(--overlay-medium, var(--overlay-light, rgba(127, 127, 127, 0.25))); color: var(--text-faint, var(--text-muted)); }
 .t2c-stop {
-  display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 14px; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 12px; flex-shrink: 0;
   border: none; border-radius: 999px; background: color-mix(in srgb, var(--danger, #e0564b) 14%, transparent);
-  color: var(--danger, #e0564b); font-size: 13px; font-family: var(--font-ui); cursor: pointer;
+  color: var(--danger, #e0564b); font-size: 11px; font-family: var(--font-ui); cursor: pointer;
 }
 .t2c-stop:hover { background: color-mix(in srgb, var(--danger, #e0564b) 22%, transparent); }
 
 /* 引用卡 */
 .t2c-quote { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; padding: 6px 10px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); border-left: 3px solid var(--accent); border-radius: var(--radius-sm, 8px); }
-.t2c-quote-text { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-muted); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.t2c-quote-text { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-muted); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
 .t2c-quote-x { flex-shrink: 0; background: none; border: none; cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 2px; line-height: 0; }
 
-.t2c-hint { font-size: 12px; color: var(--danger, #e0564b); margin-bottom: 6px; }
+.t2c-hint { font-size: 11px; color: var(--danger, #e0564b); margin-bottom: 6px; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 
 /* slash / @ 菜单(浮在卡上方) */
@@ -66,22 +66,24 @@
 }
 .t2c-menu-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: none; background: transparent; color: var(--text); text-align: left; border-radius: var(--radius-sm, 8px); cursor: pointer; }
 .t2c-menu-item[data-active] { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
-.t2c-menu-cmd { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
-.t2c-menu-desc { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t2c-menu-sec { padding: 5px 10px 3px; font-size: 11px; color: var(--text-faint, var(--text-muted)); }
+.t2c-menu-cmd { font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.t2c-menu-desc { font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2c-menu-sec { padding: 5px 10px 3px; font-size: 10px; color: var(--text-faint, var(--text-muted)); }
 
 /* 模式 / 模型 药丸(移入卡内底排 .t2c-row) */
 .t2c-pill {
-  display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border: none;
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: none;
   border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text);
-  font-size: 12px; font-family: var(--font-ui); cursor: pointer; transition: background var(--duration-fast, 0.15s);
+  font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; transition: background var(--duration-fast, 0.15s);
 }
+/* 模型药丸(ModelPill 用 base.css .composer-chip)在底排里也随「再缩小一号」——作用域限定,不动别处的 chip。 */
+.t2c-row .composer-chip { font-size: 10.5px; }
 .t2c-pill:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
 .t2c-pill.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 上下文进度圈:平时只是一个圆环,hover 弹出 token 占用详情(替代旧的横条+文字) */
-.t2c-ctxring { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; }
+.t2c-ctxring { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex-shrink: 0; }
 .t2c-ctxring svg { transform: rotate(-90deg); }
 .t2c-ctxring-track { fill: none; stroke: var(--overlay-light, rgba(127, 127, 127, 0.2)); stroke-width: 3; }
 .t2c-ctxring-fill { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.35s var(--ease-out, ease); }
@@ -91,9 +93,9 @@
   display: none; flex-direction: column; gap: 3px; padding: 8px 11px; min-width: 150px;
   background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
-  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+  font-size: 11px; color: var(--text-muted); white-space: nowrap;
 }
 .t2c-ctxring:hover .t2c-ctxring-pop { display: flex; }
 .t2c-ctxring-pct { font-weight: 600; color: var(--text); }
-.t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 11.5px; font-family: var(--font-ui); cursor: pointer; }
+.t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; }
 .t2c-ctxring-compact:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }

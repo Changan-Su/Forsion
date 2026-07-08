@@ -53,9 +53,16 @@ describe('unescapeMathSource', () => {
   it('还原块级公式里的转义(下标)', () => {
     expect(unescapeMathSource('$$a\\_b$$')).toBe('$$a_b$$')
   })
-  it('LaTeX 命令的反斜杠被 remark 翻倍 → 反转义正好还原(\\\\sum → \\sum)', () => {
-    // remark 把 LaTeX 里的 \sum 序列化成 \\sum;标准反转义 \X→X 把 \\ 收回单个 \,得回 \sum。
-    expect(unescapeMathSource('$$\\\\sum_{x}$$')).toBe('$$\\sum_{x}$$')
+  it('LaTeX 命令(反斜杠后接字母)原样保留,不被吞成 sum / begin', () => {
+    // 真实 serializer:\sum 后接字母 → remark 不加转义、原样单反斜杠;反转义必须保留(旧的 \X→X 会误删成 sum)。
+    expect(unescapeMathSource('$$\\sum_{x}$$')).toBe('$$\\sum_{x}$$')
+    expect(unescapeMathSource('$$\\frac{a}{b}$$')).toBe('$$\\frac{a}{b}$$')
+  })
+  it('矩阵/数组:\\\\ 换行与 \\hline / \\begin 保留,只反转义 remark 加的 \\| 等标点', () => {
+    // serializer 产物:\begin 原样、c\|cccc(| 被转义)、行分隔 \\ 的首个反斜杠被翻倍成 \\\。旧盲删会把命令与换行全吞 → 数组炸。
+    const serialized = '$$\\begin{array}{c\\|cccc} a & b \\\\\\ \\hline c \\end{array}$$'
+    const want = '$$\\begin{array}{c|cccc} a & b \\\\ \\hline c \\end{array}$$'
+    expect(unescapeMathSource(serialized)).toBe(want)
   })
   it('围栏代码块内不动(块内 $…$ 不是公式)', () => {
     const md = '```\n$a\\_b$ echo "\\n"\n```'

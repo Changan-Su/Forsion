@@ -10,10 +10,35 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn
 }
 
-export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const res = await fetch(input, init)
-  if (res.status === 401) {
-    try { onUnauthorized?.() } catch { /* 拦截器自身不应影响请求返回 */ }
+/**
+ * opts.timeoutMs: **opt-in** 超时(不设=永不超时,SSE/长轮询保持原样)。
+ * 与调用方自带的 init.signal 组合:任一 abort(用户取消 或 超时)即取消请求。
+ * 不给全体请求兜底超时——流式/长连接会被误杀;只在会「卡死」的探测类调用显式传入。
+ */
+export async function authFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  opts?: { timeoutMs?: number },
+): Promise<Response> {
+  let signal = init?.signal ?? undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  if (opts?.timeoutMs && opts.timeoutMs > 0) {
+    const ac = new AbortController()
+    timer = setTimeout(() => ac.abort(new DOMException('Request timed out', 'TimeoutError')), opts.timeoutMs)
+    const caller = init?.signal
+    if (caller) {
+      if (caller.aborted) ac.abort((caller as AbortSignal).reason)
+      else caller.addEventListener('abort', () => ac.abort((caller as AbortSignal).reason), { once: true })
+    }
+    signal = ac.signal
   }
-  return res
+  try {
+    const res = await fetch(input, signal ? { ...init, signal } : init)
+    if (res.status === 401) {
+      try { onUnauthorized?.() } catch { /* 拦截器自身不应影响请求返回 */ }
+    }
+    return res
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }

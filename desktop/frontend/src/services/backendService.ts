@@ -14,8 +14,8 @@ function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 }
 
-async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestInit): Promise<T> {
-  const r = await authFetch(`${cfg.backendUrl}${path}`, { ...init, headers: headers(cfg.token) })
+async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
+  const r = await authFetch(`${cfg.backendUrl}${path}`, { ...init, headers: headers(cfg.token) }, opts)
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     try { detail = (await r.json())?.detail || detail } catch { /* keep */ }
@@ -185,7 +185,7 @@ export const getEngineCapabilities = (cfg: TanguDesktopConfig, engineId: string)
     models?: Array<{ id: string; name: string; description?: string }>
     currentModelId?: string
     commands?: Array<{ name: string; description: string; hint?: string }>
-  }>(cfg, `/agent/engines/${encodeURIComponent(engineId)}/capabilities`)
+  }>(cfg, `/agent/engines/${encodeURIComponent(engineId)}/capabilities`, undefined, { timeoutMs: 45000 })
     .then((r) => ({ models: r.models || [], currentModelId: r.currentModelId, commands: r.commands || [] }))
     .catch(() => ({
       models: [] as Array<{ id: string; name: string; description?: string }>,
@@ -197,21 +197,25 @@ export const getEngineCapabilities = (cfg: TanguDesktopConfig, engineId: string)
 export const testProviderConnection = (
   cfg: TanguDesktopConfig,
   probe: { baseUrl: string; apiKey?: string; modelId?: string },
+  signal?: AbortSignal,
 ) =>
   request<{ success: boolean; message: string }>(cfg, '/agent/providers/test', {
     method: 'POST',
     body: JSON.stringify(probe),
-  })
+    signal,
+  }, { timeoutMs: 30000 })
 
 /** 后端代拉上游 GET {baseUrl}/models(避 CORS),返回可选模型名列表;软失败回 []。 */
 export const fetchProviderModels = (
   cfg: TanguDesktopConfig,
   probe: { baseUrl: string; apiKey?: string },
+  signal?: AbortSignal,
 ) =>
   request<{ models: Array<{ id: string; name?: string }> }>(cfg, '/agent/providers/fetch-models', {
     method: 'POST',
     body: JSON.stringify(probe),
-  }).then((r) => r.models)
+    signal,
+  }, { timeoutMs: 30000 }).then((r) => r.models)
 
 export const listSkills = (cfg: TanguDesktopConfig) =>
   request<{ skills: SkillInfo[] }>(cfg, '/agent/skills').then((r) => r.skills)

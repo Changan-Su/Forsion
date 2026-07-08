@@ -124,11 +124,26 @@ const pendingInstallCommands = new Map<string, string>()
  *  Homebrew/用户目录装的 node/git/docker 会被误判「未检测到」。环境探测与引导安装统一用补全 PATH。 */
 function envWithFullPath(extra?: Record<string, string>): NodeJS.ProcessEnv {
   const sep = process.platform === 'win32' ? ';' : ':'
+  const home = homedir()
+  // Windows 上 GUI Electron 拿到的 PATH 常缺 nvm/scoop/winget/npm-global 等 per-user 目录 → node/npm/docker 误判未装。
+  // 补进最常见的安装位置(存在才补)。真正让 npm.cmd 等 .cmd shim 能被探测到的是 probeVersion 的 shell:true。
   const additions = process.platform === 'win32'
-    ? []
-    : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/local/sbin', join(homedir(), '.local', 'bin')]
+    ? [
+        join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'npm'),
+        join(home, 'scoop', 'shims'),
+        join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Microsoft', 'WindowsApps'),
+        join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
+        join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'cmd'),
+      ]
+    : [
+        '/opt/homebrew/bin', '/usr/local/bin', '/usr/local/sbin',
+        join(home, '.local', 'bin'), join(home, '.volta', 'bin'),
+        join(home, '.pyenv', 'shims'), join(home, '.cargo', 'bin'),
+      ]
   const cur = (process.env.PATH || '').split(sep).filter(Boolean)
-  const PATH = [...cur, ...additions.filter((p) => !cur.includes(p))].join(sep)
+  // 只补「真实存在且尚不在 PATH」的目录(existsSync 过滤,避免塞进不存在的路径 + 无意义查找)。
+  const add = additions.filter((p) => existsSync(p) && !cur.includes(p))
+  const PATH = [...cur, ...add].join(sep)
   return { ...process.env, PATH, ...(extra || {}) }
 }
 
@@ -146,7 +161,9 @@ function chinaInstallEnv(): Record<string, string> {
 
 function probeVersion(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    const p = execFile(cmd, args, { timeout: 8000, env: envWithFullPath() }, (err, stdout, stderr) => {
+    // Windows:npm/docker/python 等多为 .cmd/.bat shim,execFile 不带 shell 无法执行(npm 根本没有 npm.exe)→ 一律
+    // 误判「未装」。shell:true 交 cmd.exe 解析。args 全为硬编码常量(--version 等),无注入面。windowsHide 免弹窗。
+    const p = execFile(cmd, args, { timeout: 8000, env: envWithFullPath(), shell: process.platform === 'win32', windowsHide: true }, (err, stdout, stderr) => {
       if (err) return resolve(null)
       resolve(String(stdout || stderr).trim().split('\n')[0].slice(0, 80) || '(ok)')
     })
@@ -191,7 +208,9 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     { tool: 'npm', cmd: 'npm', args: ['--version'] },
     { tool: 'python3', cmd: process.platform === 'win32' ? 'python' : 'python3', args: ['--version'] },
     { tool: 'git', cmd: 'git', args: ['--version'] },
-    { tool: 'docker', cmd: 'docker', args: ['version', '--format', '{{.Server.Version}}'] },
+    // `--version` 只问客户端(docker.exe),不连 daemon:原来的 `version --format {{.Server.Version}}` 要查
+    // daemon,Docker Desktop 没开/慢启动时会卡满 8s 超时并误报「未装」。检测存在性用客户端版本即可。
+    { tool: 'docker', cmd: 'docker', args: ['--version'] },
   ]
   const out: EnvProbe[] = []
   for (const p of probes) {
@@ -858,6 +877,38 @@ app.whenReady().then(async () => {
         resolve({ exitCode: code ?? -1 })
       })
     })
+  })
+  // 镜像连通性测试:让用户在切「中国大陆镜像」前后确认 registry 是否真的可达/更快。URL 走固定枚举表
+  // (不接受 renderer 传 URL → 无 SSRF);每个目标各自 catch,整体绝不抛(任一挂了不影响另一个)。
+  ipcMain.handle('env:test-mirror', async (_e, mirrorArg?: 'default' | 'china') => {
+    const mirror: 'default' | 'china' =
+      mirrorArg === 'china' || mirrorArg === 'default' ? mirrorArg : (await loadConfig()).mirror
+    const TARGETS: Record<'default' | 'china', Array<{ name: string; url: string }>> = {
+      china: [
+        { name: 'npm', url: 'https://registry.npmmirror.com/' },
+        { name: 'pip', url: 'https://pypi.tuna.tsinghua.edu.cn/simple/' },
+      ],
+      default: [
+        { name: 'npm', url: 'https://registry.npmjs.org/' },
+        { name: 'pip', url: 'https://pypi.org/simple/' },
+      ],
+    }
+    const targets = await Promise.all(
+      TARGETS[mirror].map(async (t) => {
+        const started = Date.now()
+        try {
+          // 任何 HTTP 响应(含 4xx/405,某些 registry 不吃 HEAD)= 网络可达;只有网络层错误/超时才算不可达。
+          const r = await fetch(t.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) })
+          return { name: t.name, url: t.url, ok: true, status: r.status, latencyMs: Date.now() - started }
+        } catch (e: any) {
+          return {
+            name: t.name, url: t.url, ok: false, status: 0, latencyMs: Date.now() - started,
+            error: e?.name === 'TimeoutError' ? 'timeout' : e?.message || 'unreachable',
+          }
+        }
+      }),
+    )
+    return { mirror, targets }
   })
 
   // ── MCP server 管理(写 config.json 的 mcp 段;managed 模式保存后重启后端重连)──

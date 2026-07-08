@@ -14,22 +14,26 @@
 @import './amadeus/lcl/bridge.css';
 
 /* ── 编辑器(.am-app 作用域:Amadeus 块组件经 bridge 取色) ── */
-/* 背景透明:与聊天视图同一纪律 —— 主区视图不自带底色,统一透出 dockview 纸面
- * (.dv-react-part 的 --bg,见 engine.css),编辑器与聊天物理上共用同一块底,不可能出现色差。 */
+/* 背景透明:主区视图不自带底色,透出 dockview 纸面(--bg,见 engine.css)。
+ * --bg 拉回继承:standalone amadeus 主题包 themes/{id}/theme.css 用了过宽的 [data-mode] 裸选择器设 --bg,
+ * 经 pluginStore→ThemeManager→engine 的 eager glob 全局注入;编辑器根 div 恰带 data-mode → 该规则直接把本元素 --bg
+ * 钉成硬编码 cream,盖过从 :root[data-skin] 继承的 LCL 主题色,于是顶栏(.am-app 内 var(--bg))≠ 纸面(.dv-react-part
+ * 在 .am-app 外,取 LCL skin --bg)。这里以 0,3,0 特异性把 --bg 拉回 inherit(= 纸面那份 LCL skin 值,压过 [data-mode]
+ * 的 0,1,0),顶栏与纸面即恒同色、随主题流动。不改纸面本身(仍透明显真纸)。 */
+.am-app.tangu-lovable.amx-pane { --bg: inherit; }
 .am-app.amx-pane { height: 100%; overflow: auto; background: transparent; color: var(--text); }
-.amx-editor { padding: 8px 0 40px; }
+/* 顶栏(sticky, top:0)之上不留纸面空隙:top padding 归零,顶栏贴到纸卡最上沿、与正文同底色无缝(见 .amx-toolbar)。 */
+.amx-editor { padding: 0 0 40px; }
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
 .amx-doc { max-width: 920px; margin: 0 auto; padding: 0 48px; }
-/* 可编辑标题:与编辑器一级标题同字号(1.7em × 15px = 25.5px / 700);悬浮·聚焦给底色提示可改;提交即 renamePage。 */
+/* 可编辑标题:与编辑器一级标题同字号(1.7em × 15px = 25.5px / 700)。无 hover/focus 高亮框
+ * (会与顶栏冲突,已去除);上移与顶栏之间留出间距(margin-top);提交即 renamePage。 */
 .amx-title-input {
   width: 100%; border: none; outline: none; background: transparent; color: var(--text);
   font-family: inherit; font-size: 25.5px; font-weight: 700; line-height: 1.3;
-  margin: 0 0 2px; padding: 4px 6px 4px 2px; border-radius: var(--radius-sm, 8px);
-  transition: background var(--duration-fast, 0.15s);
+  margin: 10px 0 2px; padding: 4px 6px 4px 2px;
 }
-.amx-title-input:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.06)); }
-.amx-title-input:focus { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 
 /* 编辑器正文排版:两边留白 + Obsidian 式贴左对齐。Amadeus 块默认左侧有 edge-zone(14)+列内距(2)+
  * 拖拽槽(22)+块体(4)≈42px 缩进,把正文文字推得很靠右。这里将其归零 → 正文文字贴到内容最左边(与标题齐),
@@ -46,14 +50,13 @@
 .am-app .block-host[data-menu] { background: var(--accent-soft, var(--surface, rgba(127, 127, 127, 0.08))); }
 
 /* 顶部工具条(sticky,随滚动常驻顶部):左 前进后退 + 路径面包屑 / 右 模式切换钮。
- * 与编辑器**融为一体**,不是独立的一层:无底色无分割线,直接浮在纸面上(透明=纸面本身,
- * 任何主题/浮卡下天然同色);滚动时正文从其后穿过,仅靠 backdrop blur 模糊化保持可读。 */
+ * 与编辑器融为一体:实色纸面底(var(--bg),同 dockview 纸面),不玻璃、不分割线、不投影;
+ * 滚动时正文从其后穿过被实色底遮住,无毛玻璃、无接缝(此前 backdrop blur 已去除)。 */
 .amx-toolbar {
   position: sticky; top: 0; z-index: 3;
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px 2px;
-  background: transparent;
-  backdrop-filter: blur(8px);
+  background: var(--bg);
 }
 /* 前进 / 后退导航(常驻左上角)。 */
 .amx-nav { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }

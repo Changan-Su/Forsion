@@ -1,12 +1,12 @@
 /**
- * 模型选择器 pill(参考 AionUI):圆角 pill(Brain 图标 + 模型名 + 下拉箭头,长名跑马灯)+ 下拉菜单
+ * 模型选择器 pill(参考 AionUI):圆角 pill(模型名 + 下拉箭头,长名跑马灯;无前导图标)+ 下拉菜单
  * (reasoning 组 + 模型组,分组标题吸顶,左勾号 + 高亮)+ 三态(只读「用引擎默认」/ 交互)。
  *
  * 数据源由调用方决定:Tangu 模式传 groups=按 provider 分组 + thinking;外部引擎模式传 groups=引擎模型单组、
  * 无 thinking、emptyLabel=「用引擎默认」。组件本身与数据来源无关。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Brain, ChevronDown } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { useI18n } from '../i18n'
 import type { AgentConfig } from '../types'
 
@@ -67,7 +67,6 @@ export const ModelPill: React.FC<{
   if (readonly) {
     return (
       <span className="composer-chip composer-chip--readonly" title={title}>
-        <Brain size={13} />
         <MarqueeLabel text={label} />
       </span>
     )
@@ -76,9 +75,8 @@ export const ModelPill: React.FC<{
   return (
     <span ref={wrapRef} style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
       <button className="composer-chip" title={title || t('input.modelChipTitle')} disabled={disabled} onClick={() => setOpen((o) => !o)}>
-        <Brain size={13} />
         <MarqueeLabel text={label + effort} />
-        <ChevronDown size={12} />
+        <ChevronDown size={10} />
       </button>
       {open && (
         <div className="composer-menu right composer-menu--sticky">

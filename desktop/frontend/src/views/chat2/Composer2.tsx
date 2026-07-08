@@ -599,7 +599,7 @@ export const Composer2: React.FC<{
           <div className="t2c-row">
             <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
               <button className="t2c-iconbtn" title={t('input.addContent')} disabled={disabled} onClick={() => setOpenMenu((m) => (m === 'add' ? null : 'add'))}>
-                <Plus size={18} />
+                <Plus size={16} />
               </button>
               {openMenu === 'add' && (
                 <div className="composer-menu left">
@@ -615,9 +615,8 @@ export const Composer2: React.FC<{
             {showModeChip && (
               <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
                 <button className={`t2c-pill${planMode ? ' active' : ''}`} title={t('input.modeChipTitle')} onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}>
-                  <ClipboardList size={13} />
                   <span className="t2c-pill-label">{modeLabel}</span>
-                  <ChevronDown size={12} />
+                  <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
                   <div className="composer-menu left">
@@ -664,7 +663,7 @@ export const Composer2: React.FC<{
               const CIRC = 2 * Math.PI * R
               return (
                 <span className="t2c-ctxring" data-warn={warn || undefined}>
-                  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                     <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />
                     <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
                   </svg>
@@ -689,16 +688,16 @@ export const Composer2: React.FC<{
                 emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
               />
             )}
-            <button className="t2c-iconbtn" title={t('input.micComingSoon')} disabled><Mic size={16} /></button>
+            <button className="t2c-iconbtn" title={t('input.micComingSoon')} disabled><Mic size={14} /></button>
             {running ? (
               <>
                 {!!draft.trim() && (
-                  <button className="t2c-send" onClick={send} disabled={disabled} title={t('input.send')}><ArrowUp size={18} /></button>
+                  <button className="t2c-send" onClick={send} disabled={disabled} title={t('input.send')}><ArrowUp size={16} /></button>
                 )}
-                <button className="t2c-stop" onClick={onStop}><Square size={12} /> {t('input.stop')}</button>
+                <button className="t2c-stop" onClick={onStop}><Square size={10} /> {t('input.stop')}</button>
               </>
             ) : (
-              <button className="t2c-send" onClick={send} disabled={disabled || !draft.trim()} title={t('input.send')}><ArrowUp size={18} /></button>
+              <button className="t2c-send" onClick={send} disabled={disabled || !draft.trim()} title={t('input.send')}><ArrowUp size={16} /></button>
             )}
           </div>
         </div>

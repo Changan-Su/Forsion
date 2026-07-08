@@ -136,6 +136,10 @@ const api = {
   // ── 环境检测 + 引导安装(首启向导;run 仅认 check 登记的 opaque id)──
   envCheck: (): Promise<any[]> => ipcRenderer.invoke('env:check'),
   envRun: (installId: string): Promise<{ exitCode: number }> => ipcRenderer.invoke('env:run', installId),
+  envTestMirror: (
+    mirror?: 'default' | 'china',
+  ): Promise<{ mirror: 'default' | 'china'; targets: Array<{ name: string; url: string; ok: boolean; status: number; latencyMs: number; error?: string }> }> =>
+    ipcRenderer.invoke('env:test-mirror', mirror),
   onEnvOutput: (cb: (ev: { installId: string; line: string }) => void): (() => void) => {
     const listener = (_e: unknown, ev: { installId: string; line: string }): void => cb(ev)
     ipcRenderer.on('env:output', listener)

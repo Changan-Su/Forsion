@@ -16,6 +16,7 @@ import { homedir } from 'os'
  *  本模块刻意不 import electron(vitest 直测),由宿主注入。 */
 let devMode = false
 export function setDevMode(v: boolean): void { devMode = v }
+export const isDevMode = (): boolean => devMode
 
 export const forsionHomeDir = (): string =>
   process.env.TANGU_HOME || join(homedir(), devMode ? '.forsion-dev' : '.forsion')

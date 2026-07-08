@@ -34,6 +34,33 @@ export interface AcpClientCtx {
   requestApproval: (preview: string, toolCall: ToolCall) => Promise<ApprovalDecision>;
 }
 
+/** 引擎握手上限:spawn + initialize + newSession 若在此窗口内没完成(子进程卡死/Windows 上 .cmd shim spawn
+ *  失败永不吐 stdout)就放弃,避免切换引擎时 UI 无限转圈。冷启 `npx -y` 首次下载较慢 → 给足 30s,可经 env 调。 */
+const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_MS) || 30_000;
+
+/** 跨平台起引擎子进程。Windows 上 npx/claude/codex 等是 .cmd 批处理 shim,spawn 不带 shell 无法执行
+ *  (Node CVE-2024-27980 后更是硬拒 .cmd)→ win32 必须 shell:true 交 cmd.exe 解析,这正是「切换外部 CLI 在
+ *  Windows 卡死」的根因。args:内置引擎为常量;自定义引擎取自用户本机 engines.json(host-only,等价用户自己
+ *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。 */
+export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean }) {
+  return spawn(def.command, def.args ?? [], {
+    cwd: opts?.cwd,
+    stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
+    env: { ...process.env, ...(def.env ?? {}) },
+    shell: process.platform === 'win32',
+    windowsHide: true,
+    detached: opts?.detached ?? false,
+  });
+}
+
+/** 给 promise 加超时闸(到点 reject);用于外部引擎握手兜底,防子进程不回包时无限 await。 */
+export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`engine ${label} timed out after ${ms}ms`)), ms);
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
 /** 从 ACP tool_call_update 的 content[] 抽人类可读文本（用于 tool_result）。 */
 function toolUpdateText(content: unknown): string {
   if (!Array.isArray(content)) return '';
@@ -173,13 +200,14 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   // host 能力下运行：继承父 env（等价于用户自己在终端跑 claude），叠加 def.env。适配器据此读 ANTHROPIC_API_KEY/~/.claude。
   // detached:true → 子进程自成进程组(pgid=child.pid);kill 时杀「整组」，连带 npx 衍生的真子进程(claude-code-acp)，
   // 否则只杀外层 npx、孙进程残留成孤儿。范本 ../tools/hostExec.ts。
-  const child = spawn(def.command, def.args ?? [], {
-    cwd,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-    env: { ...process.env, ...(def.env ?? {}) },
+  const child = spawnEngine(def, { cwd, detached: true });
+  // spawn 失败(Windows 上 shell 缺失/Node 未装/命令不存在)必须让握手立刻失败,否则 initialize 会永久 await。
+  let onSpawnError: (e: Error) => void = () => {};
+  const spawnFailed = new Promise<never>((_, reject) => { onSpawnError = reject; });
+  child.on('error', (e) => {
+    ctx.publish('status', { detail: `engine spawn error: ${e.message}` });
+    onSpawnError(new Error(`engine spawn failed: ${e.message}（请确认已安装 Node/npx）`));
   });
-  child.on('error', (e) => ctx.publish('status', { detail: `engine spawn error: ${e.message}` }));
   // 适配器把日志写 stderr；只做诊断，不进协议流。
   child.stderr?.on('data', (d: Buffer) => {
     const s = d.toString().trim();
@@ -245,13 +273,16 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
 
   ctx.signal.addEventListener('abort', onAbort, { once: true });
 
+  // 握手闸:任一步超时 或 spawn 失败即 reject,绝不在死子进程上无限等 initialize(idle 看门狗要到 prompt 前才起表)。
+  const guard = <T>(p: Promise<T>, label: string): Promise<T> =>
+    Promise.race([withTimeout(p, HANDSHAKE_TIMEOUT_MS, label), spawnFailed]) as Promise<T>;
   try {
-    await conn.initialize({
+    await guard(conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
       // fs/terminal 不声明 → 外部 agent 用自带工具直接在 cwd 上做文件/命令操作（host 模式与 Tangu 一致）。
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-    });
-    const s = await conn.newSession({ cwd, mcpServers: [] });
+    }), 'initialize');
+    const s = await guard(conn.newSession({ cwd, mcpServers: [] }), 'newSession');
     sessionId = s.sessionId;
     // 应用用户为该引擎选的模型(若与当前不同);失败不阻断,用引擎默认继续。
     if (ctx.engineModelId && ctx.engineModelId !== (s as any).models?.currentModelId) {
@@ -276,11 +307,11 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
  * 不累积正文/不接审批(与 createAcpClient 区分);仅用于 UI 填模型/命令选择器。
  */
 export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities> {
-  const child = spawn(def.command, def.args ?? [], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...(def.env ?? {}) },
-  });
-  child.on('error', () => {});
+  const child = spawnEngine(def);
+  // 原本空 error 处理器吞掉了 Windows 上的 spawn 失败 → initialize 永久 await → /capabilities 永不返回 → UI 卡死。
+  let onSpawnError: (e: Error) => void = () => {};
+  const spawnFailed = new Promise<never>((_, reject) => { onSpawnError = reject; });
+  child.on('error', (e) => onSpawnError(new Error(`engine spawn failed: ${e.message}（请确认已安装 Node/npx）`)));
   child.stderr?.on('data', (d: Buffer) => {
     const s = d.toString().trim();
     if (s) console.warn(`[engine:${def.id}] (probe) ${s}`);
@@ -311,12 +342,14 @@ export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities
   );
   const conn = new ClientSideConnection(() => client, stream);
 
+  const guard = <T>(p: Promise<T>, label: string): Promise<T> =>
+    Promise.race([withTimeout(p, HANDSHAKE_TIMEOUT_MS, label), spawnFailed]) as Promise<T>;
   try {
-    await conn.initialize({
+    await guard(conn.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-    });
-    const s = await conn.newSession({ cwd: process.cwd(), mcpServers: [] });
+    }), 'initialize');
+    const s = await guard(conn.newSession({ cwd: process.cwd(), mcpServers: [] }), 'newSession');
     const { models, currentModelId } = mapAcpModels((s as any).models);
     // 命令在 newSession 后异步到达;收到即返回,否则 1.5s 超时。
     await Promise.race([commandsReceived, new Promise<void>((r) => setTimeout(r, 1500))]);

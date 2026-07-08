@@ -16,9 +16,9 @@
   border-bottom: var(--border-width, 1px) solid var(--border);
   background: color-mix(in srgb, var(--bg-card, var(--bg)) 82%, transparent);
 }
-.t2-toolbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.t2-toolbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .t2-toolbar-grow { flex: 1; }
-.t2-toolbar-pill { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 2px 9px; font-size: 11px; color: var(--text-muted); background: var(--overlay-light); }
+.t2-toolbar-pill { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 2px 9px; font-size: 10px; color: var(--text-muted); background: var(--overlay-light); }
 .t2-toolbar-pill.error { color: var(--danger); background: var(--danger-light); }
 .t2-toolbar .locale-toggle, .t2-toolbar .icon-btn { flex-shrink: 0; }
 .t2-chat-body { position: relative; flex: 1; min-height: 0; display: flex; }
@@ -76,7 +76,7 @@
   overflow: hidden;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 11.5px;
   border-radius: var(--radius-sm, 8px);
 }
 .t2-ftoc.open .t2-ftoc-item { gap: 8px; padding: 5px 8px; }
@@ -114,7 +114,7 @@
   width: 34px; height: 34px; flex-shrink: 0;
   border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 16px; line-height: 1;
+  font-size: 15px; line-height: 1;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   overflow: hidden; user-select: none;
@@ -135,14 +135,14 @@
 .t2-asst-col > .inquiry-card,
 .t2-asst-col > .thinking-block { max-width: 700px; width: 100%; box-sizing: border-box; }
 .t2-name {
-  font-size: 11px; letter-spacing: .05em; text-transform: uppercase;
+  font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
   color: var(--text-muted); font-weight: 600;
   display: inline-flex; align-items: center; gap: 6px;
 }
 .t2-name .t2-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .t2-content {
   max-width: 700px;
-  font-size: 15px; line-height: 1.72; color: var(--text);
+  font-size: 14px; line-height: 1.72; color: var(--text);
   word-break: break-word;
 }
 /* 让内嵌 Markdown 段落呼吸感更强(只在新外壳内,不影响旧组件) */
@@ -189,7 +189,7 @@
 /* ====== 用户消息(暖色带尾气泡,右对齐 + 昵称/头像) ====== */
 .t2-userwrap { display: flex; justify-content: flex-end; align-items: flex-start; gap: 8px; }
 .t2-user-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 76%; min-width: 0; }
-.t2-username { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+.t2-username { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
 .t2-user-avatar { color: var(--text-light, var(--text)); }
 .t2-user {
   max-width: 100%;
@@ -197,22 +197,22 @@
   color: var(--text);
   border-radius: 18px 18px 6px 18px;
   padding: 10px 14px;
-  font-size: 15px; line-height: 1.6;
+  font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
 .t2-userwrap .t2-actions { align-self: center; }
 .t2-user .msg-attach-grid { margin-bottom: 8px; }
 
 /* ====== 系统行(分隔/提示) ====== */
-.t2-sys { text-align: center; font-size: 12px; color: var(--text-faint, var(--text-muted)); padding: 2px 0; }
+.t2-sys { text-align: center; font-size: 11px; color: var(--text-faint, var(--text-muted)); padding: 2px 0; }
 
 /* ====== 思考块 ====== */
 .t2-think { border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); padding-left: 12px; }
 .t2-think-head {
   background: none; border: none; padding: 0; cursor: pointer;
-  font-size: 13px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px;
 }
-.t2-think-body { font-size: 13px; line-height: 1.65; color: var(--text-muted); margin-top: 6px; }
+.t2-think-body { font-size: 12px; line-height: 1.65; color: var(--text-muted); margin-top: 6px; }
 .t2-dim { color: var(--text-faint, var(--text-muted)); }
 
 /* ====== 工具卡 ====== */
@@ -222,13 +222,13 @@
   background: var(--bg-card, var(--bg));
   padding: 9px 12px;
   display: flex; align-items: center; gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
 }
 .t2-tool.err { border-color: color-mix(in srgb, #e0564b 50%, var(--border)); }
 .t2-tool-name { font-weight: 600; color: var(--text); }
 .t2-tool-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .t2-chip {
-  font-size: 11px; color: var(--text-muted);
+  font-size: 10px; color: var(--text-muted);
   background: var(--overlay-light, rgba(127,127,127,.1));
   border-radius: 999px; padding: 2px 8px; white-space: nowrap;
 }
@@ -242,8 +242,8 @@
   background: var(--bg-card, var(--bg));
   padding: 12px 14px;
 }
-.t2-card-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; display: flex; gap: 6px; align-items: center; }
-.t2-todo-row { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 3px 0; color: var(--text); }
+.t2-card-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; display: flex; gap: 6px; align-items: center; }
+.t2-todo-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 3px 0; color: var(--text); }
 .t2-todo-mark { width: 16px; text-align: center; flex-shrink: 0; }
 .t2-todo-mark.completed { color: var(--accent); }
 .t2-todo-mark.in_progress { color: var(--text-muted); }
@@ -258,10 +258,10 @@
   padding: 14px;
   display: flex; flex-direction: column; gap: 10px;
 }
-.t2-panel-title { font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
+.t2-panel-title { font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
 .t2-accent-ic { color: var(--accent); }
 .t2-preview {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
   background: var(--overlay-light, rgba(127,127,127,.08)); color: var(--text);
   border-radius: var(--radius-sm, 8px); padding: 9px 11px; white-space: pre-wrap; word-break: break-all;
 }
@@ -270,14 +270,14 @@
 .t2-inline-input {
   flex: 1; min-width: 0;
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-sm, 8px);
-  background: var(--bg); color: var(--text); padding: 7px 10px; font-size: 13px; font-family: var(--font-ui); outline: none;
+  background: var(--bg); color: var(--text); padding: 7px 10px; font-size: 12px; font-family: var(--font-ui); outline: none;
 }
 .t2-inline-input:focus { border-color: var(--accent); }
 
 /* ====== 按钮 ====== */
 .t2-btn {
   border: none; border-radius: var(--radius-sm, 8px); cursor: pointer;
-  font-family: var(--font-ui); font-size: 13px; padding: 7px 13px;
+  font-family: var(--font-ui); font-size: 12px; padding: 7px 13px;
   display: inline-flex; align-items: center; gap: 5px;
   transition: filter var(--duration-fast, .15s), background var(--duration-fast, .15s);
 }
@@ -293,8 +293,8 @@
   display: inline-flex; align-items: center; justify-content: center;
   /* 整图 logo 自带圆角瓦片(同启动加载页),不再套 accent 方框;明暗各一版由 BrandLogo 切换。 */
 }
-.t2-empty-title { font-size: 17px; font-weight: 500; color: var(--text); }
-.t2-empty-sub { font-size: 13px; color: var(--text-muted); }
+.t2-empty-title { font-size: 16px; font-weight: 500; color: var(--text); }
+.t2-empty-sub { font-size: 12px; color: var(--text-muted); }
 
 .t2-jump { position: absolute; right: 22px; bottom: 16px; z-index: 12; }
 .t2-quote {
@@ -312,7 +312,7 @@
   box-shadow: var(--card-shadow);
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 @media (max-width: 1040px) {
@@ -347,7 +347,7 @@
 .t2-composer:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .t2-ta {
   border: none; outline: none; resize: none; background: transparent;
-  font-family: var(--font-ui); font-size: 15px; line-height: 1.5; color: var(--text);
+  font-family: var(--font-ui); font-size: 14px; line-height: 1.5; color: var(--text);
   width: 100%; max-height: 240px; min-height: 24px;
 }
 .t2-ta::placeholder { color: var(--text-faint, var(--text-muted)); }
@@ -364,7 +364,7 @@
 .t2-chips { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
 .t2-pill {
   display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12px; color: var(--text-muted);
+  font-size: 11px; color: var(--text-muted);
   background: var(--overlay-light, rgba(127,127,127,.1));
   border-radius: 999px; padding: 4px 11px; cursor: pointer; border: none;
   transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
@@ -376,7 +376,7 @@
 .t2-preview-side { width: 264px; flex-shrink: 0; border-right: var(--border-width, 1px) solid var(--border); }
 .t2-preview-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .t2-preview-right { width: 250px; flex-shrink: 0; border-left: var(--border-width, 1px) solid var(--border); display: flex; flex-direction: column; min-height: 0; }
-.t2-preview-right-title { height: 38px; flex-shrink: 0; display: flex; align-items: center; padding: 0 12px; border-bottom: var(--border-width, 1px) solid var(--border); color: var(--text-muted); font-size: 12px; }
+.t2-preview-right-title { height: 38px; flex-shrink: 0; display: flex; align-items: center; padding: 0 12px; border-bottom: var(--border-width, 1px) solid var(--border); color: var(--text-muted); font-size: 11px; }
 @media (max-width: 1099px) { .t2-preview-right { display: none; } }
 
 /* ====== 语音消息条 ====== */
@@ -395,7 +395,7 @@
 .t2-voice-play:hover { filter: brightness(1.08); }
 .t2-voice-track { flex: 1; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--accent) 22%, transparent); overflow: hidden; }
 .t2-voice-track > span { display: block; height: 100%; background: var(--accent); transition: width .15s linear; }
-.t2-voice-dur { flex-shrink: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+.t2-voice-dur { flex-shrink: 0; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
 .t2-voice-txt {
   flex-shrink: 0; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; border-radius: 6px; cursor: pointer; color: var(--text-faint);

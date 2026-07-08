@@ -12,7 +12,7 @@ function headers(token: string): Record<string, string> {
 
 export async function testConnection(cfg: TanguDesktopConfig): Promise<{ ok: boolean; message: string }> {
   try {
-    const r = await authFetch(`${cfg.backendUrl}/health`, { headers: headers(cfg.token) })
+    const r = await authFetch(`${cfg.backendUrl}/health`, { headers: headers(cfg.token) }, { timeoutMs: 15000 })
     if (r.ok) {
       const j = await r.json().catch(() => ({}))
       return { ok: true, message: `已连接 · sandbox=${j.sandbox ?? '?'}` }

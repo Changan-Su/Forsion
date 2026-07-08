@@ -118,7 +118,7 @@ function Breadcrumb() {
 
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
 
-interface Ctx { kind: 'page' | 'folder' | 'asset'; path: string; x: number; y: number }
+interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root'; path: string; x: number; y: number }
 
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 
@@ -239,7 +239,7 @@ export function AmadeusPagesView() {
       className={`t2s-srow${path === activePage ? ' active' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}`}
       style={depth > 0 ? { paddingLeft: 18 + depth * 14 } : undefined}
       onClick={(e) => { isNote ? void openNote(path, { newTab: e.metaKey || e.ctrlKey }) : void amadeus.openVaultFile(path).catch(() => {}) }}
-      onContextMenu={(e) => { e.preventDefault(); setMenu({ kind: ctxKind, path, x: e.clientX, y: e.clientY }) }}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: ctxKind, path, x: e.clientX, y: e.clientY }) }}
       draggable={renaming !== path}
       onDragStart={(e) => {
         // 用元素自身作拖影并按抓取点对齐光标(同会话列表:默认拖影/setState 重渲会让内容与光标错位)。
@@ -295,6 +295,7 @@ export function AmadeusPagesView() {
           ref={(el) => { if (folder === flash) flashRef.current = el }}
           className={`t2s-group${folder === flash ? ' amx-flash' : ''}${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
           style={depth > 0 ? { paddingLeft: depth * 14 } : undefined}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: 'folder', path: folder, x: e.clientX, y: e.clientY }) }}
           onDragOver={folderDragOver}
           onDragLeave={() => { if (dragOver === folder) setDragOver(null) }}
           onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
@@ -331,6 +332,14 @@ export function AmadeusPagesView() {
 
         <div
           className={`t2s-scroll${dragPath && dragOver === '' ? ' amx-drop-root' : ''}`}
+          onContextMenu={(e) => {
+            // 空白处右键 = 根目录新建。行/文件夹头/顶部特殊按钮各有自己的右键菜单(已 stopPropagation),这里只兜真空白。
+            if ((e.target as HTMLElement).closest('.t2s-srow, .t2s-group, .t2s-special-group')) return
+            if (!vaultRoot) return
+            e.preventDefault()
+            e.stopPropagation()
+            setMenu({ kind: 'root', path: '', x: e.clientX, y: e.clientY })
+          }}
           onDragOver={(e) => {
             // 根目录落点 = 真空白区。行/组/分区上不 preventDefault → 松手即取消,绝不静默搬到根。
             if (!dragPath || parentOf(dragPath) === '' || q) return
@@ -370,8 +379,6 @@ export function AmadeusPagesView() {
               {!vaultRoot && <div className="t2s-hint">打开一个 Vault 文件夹开始。</div>}
               <PrefsSections row={row} pages={pages} />
               {tree.children.map((n) => renderNode(n, 0))}
-
-              {vaultRoot && <button className="t2s-add-ws" onClick={() => newFolder('')}><FolderPlus size={14} /> 新建文件夹</button>}
             </>
           )}
         </div>
@@ -402,6 +409,12 @@ export function AmadeusPagesView() {
           <button onClick={() => { const f = menu.path; setMenu(null); const name = window.prompt('重命名文件夹', folderName(f))?.trim(); if (name) void ps().renameFolder(f, name) }}><Pencil size={13} /> 重命名</button>
           <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (window.confirm(`删除文件夹「${folderName(f)}」及其全部内容?不可撤销。`)) void ps().deleteFolder(f) }}><Trash2 size={13} /> 删除</button>
+        </div>
+      )}
+      {menu?.kind === 'root' && (
+        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { void ps().createPage(); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
+          <button onClick={() => newFolder('')}><FolderPlus size={13} /> 新建文件夹</button>
         </div>
       )}
 

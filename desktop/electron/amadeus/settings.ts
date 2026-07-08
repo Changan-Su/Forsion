@@ -4,6 +4,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { isDevMode } from '../forsionHome'
 
 export interface AmadeusConfig {
   lastVault?: string
@@ -13,7 +14,9 @@ export interface AmadeusConfig {
 let cache: AmadeusConfig | null = null
 
 function configFile(): string {
-  return path.join(app.getPath('userData'), 'amadeus-config.json')
+  // dev(未打包)与正式版分用不同配置文件:dev 永不继承正式版历史写入的 lastVault,
+  // 两边 Amadeus vault 彻底隔离(dev→~/Forsion-Dev/Amadeus,正式版→~/Forsion/Amadeus)。
+  return path.join(app.getPath('userData'), isDevMode() ? 'amadeus-config.dev.json' : 'amadeus-config.json')
 }
 
 /** Absolute path of the persisted Amadeus config (lastVault/lastPage). The agent's

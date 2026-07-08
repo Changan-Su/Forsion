@@ -61,7 +61,7 @@ const BREAK_NAMES = new Set(['hardbreak', 'hard_break', 'break'])
 
 /** 把一个 textblock 的内联内容抟成与文档位置 1:1 对齐的字符串:text 原样;code 文本抹成等长空格(不参与公式匹配);
  *  硬换行→'\n'(挡行内公式跨行);其它内联原子(size 1)→ '￼'(绝不是 `$`)。offset i ↔ 文档位 contentStart+i。 */
-function buildBlockString(block: PMNode): string {
+export function buildBlockString(block: PMNode): string {
   let s = ''
   block.forEach((child) => {
     if (child.isText) {
@@ -77,13 +77,43 @@ function buildBlockString(block: PMNode): string {
   return s
 }
 
-function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: number): HTMLElement {
+/** KaTeX 渲染进 el。throwOnError:false 下 KaTeX 对无法解析的公式会渲一段 `.katex-error` 源码红字(刺眼、常跨多行);
+ *  这里把它收敛成一枚干净徽章「⚠」(悬停 title 看 KaTeX 报因),不再把整段源码铺成红字。
+ *  数组/矩阵的 `\\` 转义修复(见 unescapeMathSource)后,合法公式正常渲染,只有真不支持的构造才会走到徽章。 */
+function katexInto(el: HTMLElement, latex: string, display: boolean): void {
+  try {
+    katex.render(latex, el, { throwOnError: false, displayMode: display, errorColor: '#e5484d' })
+    const err = el.querySelector('.katex-error')
+    if (err) {
+      const msg = err.getAttribute('title') || 'LaTeX 无法渲染'
+      el.replaceChildren()
+      const badge = document.createElement('span')
+      badge.className = 'math-error'
+      badge.title = msg
+      badge.textContent = display ? '⚠ 公式无法渲染' : '⚠'
+      el.appendChild(badge)
+    }
+  } catch {
+    el.textContent = display ? `$$${latex}$$` : `$${latex}$`
+  }
+}
+
+/** 离行渲染(点击回到源码可编辑)。preview=true → 作「本行实况预览」:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在下方,不拦鼠标(光标已在源码)。 */
+function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: number, preview = false): HTMLElement {
+  if (preview) {
+    const wrap = document.createElement(display ? 'div' : 'span')
+    wrap.className = display ? 'math-preview math-preview--block' : 'math-preview math-preview--inline'
+    wrap.contentEditable = 'false'
+    const inner = document.createElement(display ? 'div' : 'span')
+    inner.className = 'math-preview-inner'
+    katexInto(inner, latex, display)
+    wrap.appendChild(inner)
+    return wrap
+  }
   const el = document.createElement(display ? 'div' : 'span')
   el.className = display ? 'math-rendered math-rendered--block' : 'math-rendered'
   el.contentEditable = 'false'
-  // throwOnError:false → 非法公式就地标红而非抛异常炸整块(承接旧崩溃修复,渲染路径已换到这里)。
-  try { katex.render(latex, el, { throwOnError: false, displayMode: display, errorColor: '#e5484d' }) }
-  catch { el.textContent = display ? `$$${latex}$$` : `$${latex}$` }
+  katexInto(el, latex, display)
   // 点渲染结果 → 把光标塞进源码(srcFrom+1,即开 `$` 之后)并置焦,该行随即露出源码可编辑。
   el.addEventListener('mousedown', (e) => {
     if (!view.editable) return // 只读视图:点公式不进入编辑态(否则会闪出源码)
@@ -96,8 +126,10 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
 }
 
 /** 落盘前把 remark 在 $…$/$$…$$ 里加的反斜杠转义抹掉,让公式按原文持久化(对齐 Obsidian/remark-math)。
- *  math 现是纯文本节点,序列化经 remark 短语转义器会被转义(x_i→x\_i、a*b→a\*b、\{→\\{ 等);
- *  标准反转义「\X→X」精确还原(remark 只以「反斜杠+字符」加转义,LaTeX 自带反斜杠被翻倍,反转义同样抵消)。
+ *  math 现是纯文本节点,序列化经 mdast-util-to-markdown **只在「反斜杠后紧接 ASCII 标点」时**加/翻倍转义
+ *  (x_i→x\_i、a*b→a\*b、\{→\\{;而 \sum、\begin 这类「反斜杠后接字母」的**原样不动**,\\ 换行也只把首个反斜杠翻倍 → \\\ )。
+ *  所以只能反转「\标点→标点」;**绝不能**用 \X→X 盲删——那会把 \sum→sum、\begin→begin、\\→\ 一起吞掉,
+ *  命令名和 \\ 换行全丢 → 矩阵/数组(\begin{array}…\hline)当场炸。字符类同 mdast escapeBackslashes 的 [!-/:-@[-`{-~]。
  *  先按 ``` 围栏切出代码块跳过——块内的 $…$ 不是公式,反转义会破坏代码里的 \n 等序列。 */
 export function unescapeMathSource(md: string): string {
   if (md.indexOf('$') === -1) return md
@@ -110,7 +142,7 @@ export function unescapeMathSource(md: string): string {
       let out = ''
       let last = 0
       for (const sp of spans) {
-        out += part.slice(last, sp.from) + part.slice(sp.from, sp.to).replace(/\\(.)/g, '$1')
+        out += part.slice(last, sp.from) + part.slice(sp.from, sp.to).replace(/\\([!-/:-@[-`{-~])/g, '$1')
         last = sp.to
       }
       return out + part.slice(last)
@@ -145,7 +177,16 @@ function buildDecorations(state: EditorState): DecorationSet {
     }
     for (const sp of spans) {
       const onActiveLine = lineFrom !== -1 && sp.from < lineTo && sp.to > lineFrom
-      if (onActiveLine) continue // 本行 → 保留源码编辑态
+      if (onActiveLine) {
+        // 本行 → 源码保持可编辑,同时给一个实况预览:行内 $..$ 浮层在上方、块级 $$..$$ 渲染在源码下方。
+        const anchor = sp.display ? cs + sp.to : cs + sp.from
+        decos.push(Decoration.widget(anchor, (v) => renderMath(v, sp.latex, sp.display, cs + sp.from, true), {
+          side: sp.display ? 1 : -1,
+          ignoreSelection: true,
+          key: `p${cs + sp.from}:${sp.display ? 'b' : 'i'}:${sp.latex}`,
+        }))
+        continue
+      }
       const from = cs + sp.from
       const to = cs + sp.to
       const { latex, display } = sp

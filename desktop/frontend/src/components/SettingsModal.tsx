@@ -2,7 +2,7 @@
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, RotateCcw, LogIn, LogOut, ExternalLink, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Globe2, QrCode, Smartphone, FolderOpen, Play } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { listLanguages, listSkins } from '../theme/registry'
@@ -18,7 +18,7 @@ import {
 import type { WechatStatusResponse } from '../services/backendService'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
-  AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, ModelsResponse,
+  AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
   NormalAgentDef, SessionRecord, SkillInfo, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
 } from '../types'
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
@@ -152,7 +152,11 @@ export const SettingsModal: React.FC<{
   const [ttsTestMsg, setTtsTestMsg] = useState('')
   const [providerTestMsg, setProviderTestMsg] = useState('')
   const [providerTesting, setProviderTesting] = useState(false)
+  const providerTestAbort = useRef<AbortController | null>(null) // 供「测试连接」取消用
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
+  // 镜像连通性测试(设置页管理后端)
+  const [mirrorTesting, setMirrorTesting] = useState(false)
+  const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
   // 「拉取模型」:后端代拉 baseUrl/models → 可搜索多选 → 勾选写回 modelsCsv。
   const [fetchedModels, setFetchedModels] = useState<string[] | null>(null)
   const [modelSearch, setModelSearch] = useState('')
@@ -774,7 +778,28 @@ export const SettingsModal: React.FC<{
                           </div>
                         </div>
                         <div className="hint" style={{ marginBottom: 10 }}>{t('settings.python.hint')}</div>
-                        <div className="hint" style={{ marginBottom: 10 }}>{t('settings.mirror.hint')}</div>
+                        <div className="hint" style={{ marginBottom: 6 }}>{t('settings.mirror.hint')}</div>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                          <button
+                            className="btn ghost sm"
+                            disabled={mirrorTesting || !window.tangu?.envTestMirror}
+                            onClick={() => {
+                              if (!window.tangu?.envTestMirror) return
+                              setMirrorTesting(true); setMirrorTest(null)
+                              void window.tangu.envTestMirror(stored.mirror || 'default')
+                                .then((r) => setMirrorTest(r))
+                                .catch(() => setMirrorTest(null))
+                                .finally(() => setMirrorTesting(false))
+                            }}
+                          >
+                            {mirrorTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {t('settings.mirror.test')}
+                          </button>
+                          {mirrorTest?.targets.map((tg) => (
+                            <span key={tg.name} style={{ fontSize: 12.5, color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
+                              {tg.ok ? '✓' : '✗'} {tg.name} · {tg.ok ? `${tg.latencyMs}ms` : (tg.error || t('settings.mirror.unreachable'))}
+                            </span>
+                          ))}
+                        </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
                           <button className="btn primary sm" onClick={saveManaged}>{t('settings.backend.saveRestart')}</button>
                           <button
@@ -1265,8 +1290,12 @@ export const SettingsModal: React.FC<{
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <button
                             className="btn ghost sm"
-                            disabled={providerTesting || !editProvider.baseUrl}
+                            disabled={!editProvider.baseUrl}
                             onClick={() => {
+                              // 已在测试中 → 这个按钮变成「取消」:abort 掉挂起的请求(错误 URL/密钥时不再无限转圈)。
+                              if (providerTesting) { providerTestAbort.current?.abort(); return }
+                              const ac = new AbortController()
+                              providerTestAbort.current = ac
                               setProviderTesting(true)
                               setProviderTestMsg('')
                               const firstModel = editProvider.modelsCsv.split(',').map((s) => s.trim()).filter(Boolean)[0]
@@ -1274,13 +1303,16 @@ export const SettingsModal: React.FC<{
                                 baseUrl: editProvider.baseUrl,
                                 apiKey: editProvider.apiKey || undefined,
                                 modelId: firstModel,
-                              })
+                              }, ac.signal)
                                 .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
-                                .catch((e) => setProviderTestMsg(`✗ ${e?.message || e}`))
-                                .finally(() => setProviderTesting(false))
+                                .catch((e) => setProviderTestMsg(
+                                  e?.name === 'AbortError' ? t('settings.test.canceled')
+                                    : e?.name === 'TimeoutError' ? t('settings.test.timeout')
+                                    : `✗ ${e?.message || e}`))
+                                .finally(() => { setProviderTesting(false); providerTestAbort.current = null })
                             }}
                           >
-                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {t('settings.btn.testConnection')}
+                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {providerTesting ? t('settings.btn.cancel') : t('settings.btn.testConnection')}
                           </button>
                           <button
                             className="btn ghost sm"

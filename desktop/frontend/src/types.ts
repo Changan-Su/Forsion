@@ -293,6 +293,12 @@ export interface EnvProbeResult {
   installCommand: string | null
 }
 
+/** 镜像连通性测试结果(每个 registry 目标一行)。 */
+export interface MirrorTestResult {
+  mirror: 'default' | 'china'
+  targets: Array<{ name: string; url: string; ok: boolean; status: number; latencyMs: number; error?: string }>
+}
+
 /** ~/.tangu/mcp.json 一项。 */
 export interface McpServerConfigEntry {
   command?: string
@@ -553,6 +559,7 @@ declare global {
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[] }>
       envCheck?(): Promise<EnvProbeResult[]>
       envRun?(installId: string): Promise<{ exitCode: number }>
+      envTestMirror?(mirror?: 'default' | 'china'): Promise<MirrorTestResult>
       onEnvOutput?(cb: (ev: { installId: string; line: string }) => void): () => void
       /** 拖入式主题:列 ~/.tangu/themes/(每项 {id,manifest,css})/ 打开该文件夹。 */
       listThemes?(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string }>>

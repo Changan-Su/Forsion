@@ -9,7 +9,7 @@ import {
   MonitorCheck, Play, Plus, SkipForward, Sparkles, Palette, FolderOpen, Sun, Moon, X, FileText, RefreshCw,
 } from 'lucide-react'
 import { listModels, testProviderConnection, listAgents, saveAgentDef, getSpecialConfig, saveSpecialConfig } from '../services/backendService'
-import type { EnvProbeResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
+import type { EnvProbeResult, MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
 import { listLanguages, listSkins } from '../theme/registry'
@@ -154,6 +154,8 @@ export const OnboardingWizard: React.FC<{
   // ── ④ 默认本地工作区目录 + 网络镜像(环境步骤)──
   const [workspaceDir, setWorkspaceDir] = useState('')
   const [mirror, setMirror] = useState<'default' | 'china'>('default')
+  const [mirrorTesting, setMirrorTesting] = useState(false)
+  const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
   useEffect(() => {
     void window.tangu?.getConfig?.().then((c) => {
       setWorkspaceDir(c.defaultWorkspaceDir || '')
@@ -719,6 +721,27 @@ export const OnboardingWizard: React.FC<{
                   <option value="china">{t('onboarding.env.mirrorChina')}</option>
                 </select>
                 <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.env.mirrorHint')}</div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                  <button
+                    className="btn ghost sm"
+                    disabled={mirrorTesting || !window.tangu?.envTestMirror}
+                    onClick={() => {
+                      if (!window.tangu?.envTestMirror) return
+                      setMirrorTesting(true); setMirrorTest(null)
+                      void window.tangu.envTestMirror(mirror)
+                        .then((r) => setMirrorTest(r))
+                        .catch(() => setMirrorTest(null))
+                        .finally(() => setMirrorTesting(false))
+                    }}
+                  >
+                    {mirrorTesting ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {t('settings.mirror.test')}
+                  </button>
+                  {mirrorTest?.targets.map((tg) => (
+                    <span key={tg.name} style={{ fontSize: 12.5, color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
+                      {tg.ok ? '✓' : '✗'} {tg.name} · {tg.ok ? `${tg.latencyMs}ms` : (tg.error || t('settings.mirror.unreachable'))}
+                    </span>
+                  ))}
+                </div>
               </div>
               <div className="field">
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
