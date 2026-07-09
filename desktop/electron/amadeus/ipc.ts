@@ -3,6 +3,7 @@ import path from 'node:path'
 import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron'
 import { IPC, gatePluginManifest, type DbReadResult, type ExternalPluginSource, type PageProps } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
+import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { loadPage, newPage, pageFileName, savePage } from '@amadeus-shared/compiler'
@@ -308,6 +309,44 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     index.remove(oldPath)
     await index.update(newPath)
     return newPath
+  })
+
+  ipcMain.handle(IPC.renameDbFile, async (_e, oldPath: string, newBaseName: string): Promise<{ newPath: string; rewrittenPages: string[] }> => {
+    const norm = (s: string): string => s.replace(/\\/g, '/')
+    const oldRel = norm(oldPath)
+    let base = newBaseName.trim().replace(/[\\/]/g, '')
+    if (base.toLowerCase().endsWith('.db')) base = base.slice(0, -3)
+    if (!base) throw new Error('名称不能为空')
+    const dir = path.dirname(oldRel)
+    const newPath = dir === '.' ? `${base}.db` : `${dir}/${base}.db`
+    if (newPath === oldRel) return { newPath, rewrittenPages: [] }
+    if (await vault.pathExists(newPath)) throw new Error('目标文件已存在')
+    await vault.moveEntry(oldRel, newPath)
+
+    // title 同步:name = 新 basename。parseDb 失败(损坏文件)只移动不动内容。
+    try {
+      const parsed = parseDb(await fs.readFile(vault.absPath(newPath), 'utf8'))
+      if (parsed.ok && parsed.data.name !== base) {
+        await vault.writeTextFile(newPath, serializeDb({ ...parsed.data, name: base }))
+      }
+    } catch { /* corrupt: 跳过 name 同步 */ }
+
+    // 引用重写(纯函数 rewriteDbRefs,规则见其注释)。
+    // ponytail: 朴素全库扫描,个人 vault 规模足够;[名](rel.db) 形式的 md 链接 v1 不重写。
+    const rewrittenPages: string[] = []
+    for (const p of await vault.listPages()) {
+      const pRel = norm(p)
+      let raw: string
+      try { raw = await fs.readFile(vault.absPath(p), 'utf8') } catch { continue }
+      const next = rewriteDbRefs(raw, { oldRel, newBase: `${base}.db`, pageDir: path.posix.dirname(pRel) })
+      if (next !== raw) {
+        await vault.writeTextFile(p, next)
+        await index.update(p)
+        getWindow()?.webContents.send(IPC.externalChange, p)
+        rewrittenPages.push(p)
+      }
+    }
+    return { newPath, rewrittenPages }
   })
 
   ipcMain.handle(IPC.search, (_e, query: string) => index.search(query))

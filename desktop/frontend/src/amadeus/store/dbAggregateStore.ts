@@ -81,7 +81,8 @@ export function useAggregatedDatabases(type: string): AggDb[] {
         out.push({ path: p, name: db.name, isNoteView: true, folder, columns: db.columns, rows })
       } else {
         const nameId = db.columns[0]?.id ?? ''
-        const rows: AggRow[] = db.rows.map((r) => ({ rowId: r.id, name: cellText(r.cells[nameId]) || r.id, cells: r.cells }))
+        // 名称空就是空:不回落 r.id(随机编码曾漏进日历/待办显示),消费方自己决定兜底文案或隐藏。
+        const rows: AggRow[] = db.rows.map((r) => ({ rowId: r.id, name: cellText(r.cells[nameId]), cells: r.cells }))
         out.push({ path: p, name: db.name, isNoteView: false, columns: db.columns, rows })
       }
     }

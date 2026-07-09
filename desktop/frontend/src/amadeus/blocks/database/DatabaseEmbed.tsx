@@ -17,6 +17,7 @@ import { deriveColumns, fmValueToCell } from '@amadeus-shared/db/pageFrontmatter
 import { allPropertyTypes, getPropertyType, resolveBaseType, usePropertyTypesVersion } from './propertyTypes'
 import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { useDbStore } from '../../store/dbStore'
+import { renameDb } from '../../lib/dbFileOps'
 import { useNoteViewStore } from '../../store/noteViewStore'
 import { usePageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
@@ -223,6 +224,17 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
     setPop({ ...p, x: Math.min(r.left, window.innerWidth - 250), y: Math.min(r.bottom + 4, window.innerHeight - 260) })
   }
 
+  /** title 提交(blur/Enter)→ 文件名跟随(renameDb:文件+内部name+全库引用+日历配置一起动)。
+   *  onChange 仍只走内存防抖;空名/同名 no-op(空名=文件留旧名,title 显示空由 placeholder 兜)。 */
+  const commitTitleRename = (): void => {
+    const path = useDbStore.getState().entries[dbRef]?.path
+    if (!path) return
+    const name = db.name.trim().replace(/[\\/]/g, '')
+    const curBase = (path.split(/[\\/]/).pop() || path).replace(/\.db$/i, '')
+    if (!name || name === curBase) return
+    void renameDb(path, name).catch((e: unknown) => window.alert(`重命名失败:${e instanceof Error ? e.message : String(e)}`))
+  }
+
   const gridCols = `28px repeat(${db.columns.length}, minmax(140px, 1fr)) 36px`
   const popCol = pop ? db.columns.find((c) => c.id === pop.colId) : undefined
   const popRow = pop?.rowId ? db.rows.find((r) => r.id === pop.rowId) : undefined
@@ -236,6 +248,8 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
           value={db.name}
           placeholder={isNoteView ? '未命名视图' : '未命名数据库'}
           onChange={(e) => m((d) => ({ ...d, name: e.target.value }))}
+          onBlur={commitTitleRename}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
         />
         {isNoteView && (
           <button className="amx-db-linkbtn" onClick={(e) => openPop(e, { kind: 'folder' })} title="选择数据来源文件夹(行 = 该文件夹里的笔记)">

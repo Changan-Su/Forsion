@@ -7,6 +7,7 @@ import { create } from 'zustand'
 import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
   ChevronRight, Search, Code2, Eye, CalendarDays, Star, History, Paperclip, FileDown,
+  Database, ExternalLink,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -19,7 +20,9 @@ import { ensureAmadeusReady } from './amadeusPlugins'
 import { AmadeusPropertiesPanel } from './amadeusProperties'
 import { openDailyNote } from './amadeusTemplates'
 import { useAmadeusPrefs } from './amadeusPrefs'
-import { openNote } from './amadeusNav'
+import { openNote, openDb } from './amadeusNav'
+import { renameDb } from '@amadeus/lib/dbFileOps'
+import { emptyDb, serializeDb } from '@amadeus-shared/db/schema'
 import { useRecentViews } from './recentViews'
 import { buildTree, type TreeNode } from '@amadeus/lib/pageTree'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
@@ -121,6 +124,8 @@ function Breadcrumb() {
 interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root'; path: string; x: number; y: number }
 
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
+const isDbPath = (p: string): boolean => /\.db$/i.test(p)
+const dbBaseName = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.db$/i, '')
 
 /** 收藏⭐ / 最近🕘 分区(顶部,可折叠):渲染对 pages 过滤 → 已删除的自然消失。 */
 function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages: string[] }) {
@@ -216,9 +221,18 @@ export function AmadeusPagesView() {
   const commitRename = (): void => {
     const path = renaming
     setRenaming(null)
-    if (path && draft.trim() && draft.trim() !== baseName(path)) void renameAt(path, draft.trim())
+    const name = draft.trim()
+    if (!path || !name) return
+    if (isNotePath(path)) {
+      if (name !== baseName(path)) void renameAt(path, name)
+    } else if (isDbPath(path)) {
+      // .db 改名走 renameDb 编排器:文件+内部 name+全库引用一起动
+      if (name.replace(/\.db$/i, '') !== dbBaseName(path)) {
+        renameDb(path, name).catch((e: unknown) => window.alert(`重命名失败:${e instanceof Error ? e.message : String(e)}`))
+      }
+    }
   }
-  const startRename = (path: string): void => { setDraft(baseName(path)); setRenaming(path); setMenu(null) }
+  const startRename = (path: string): void => { setDraft(isDbPath(path) ? dbBaseName(path) : baseName(path)); setRenaming(path); setMenu(null) }
   const newFolder = (parent: string): void => {
     const name = window.prompt(parent ? `在「${folderName(parent)}」中新建文件夹` : '新建文件夹', '新文件夹')?.trim()
     if (name) {
@@ -227,6 +241,24 @@ export function AmadeusPagesView() {
       setExpanded((prev) => new Set([...prev, ...prefixesOf(parent ? `${parent}/${name}` : name)]))
     }
     setMenu(null)
+  }
+  /** 新建 base(.db 多维表):出生即 文件名=title。saveAttachment 撞名会静默加 -1 后缀破坏一致性,先挡重名。 */
+  const newBase = (parent: string): void => {
+    setMenu(null)
+    const name = window.prompt(parent ? `在「${folderName(parent)}」中新建 Base` : '新建 Base', '未命名数据库')?.trim().replace(/[\\/]/g, '')
+    if (!name) return
+    const rel = parent ? `${parent}/${name}.db` : `${name}.db`
+    if (ps().files.some((f) => f.replace(/\\/g, '/') === rel)) {
+      window.alert(`「${name}.db」已存在`)
+      return
+    }
+    void (async () => {
+      const bytes = new TextEncoder().encode(serializeDb(emptyDb(name)))
+      await amadeus.saveAttachment('', `${name}.db`, bytes, { mode: 'vault', folder: parent })
+      await ps().refreshStructure()
+      if (parent) setExpanded((prev) => new Set([...prev, ...prefixesOf(parent)]))
+      openDb(rel)
+    })().catch((e: unknown) => window.alert(`新建 Base 失败:${e instanceof Error ? e.message : String(e)}`))
   }
 
   const row = (path: string, depth = 0): ReactNode => {
@@ -238,7 +270,7 @@ export function AmadeusPagesView() {
       ref={(el) => { if (path === flash) flashRef.current = el }}
       className={`t2s-srow${path === activePage ? ' active' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}`}
       style={depth > 0 ? { paddingLeft: 18 + depth * 14 } : undefined}
-      onClick={(e) => { isNote ? void openNote(path, { newTab: e.metaKey || e.ctrlKey }) : void amadeus.openVaultFile(path).catch(() => {}) }}
+      onClick={(e) => { isNote ? void openNote(path, { newTab: e.metaKey || e.ctrlKey }) : isDbPath(path) ? openDb(path) : void amadeus.openVaultFile(path).catch(() => {}) }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: ctxKind, path, x: e.clientX, y: e.clientY }) }}
       draggable={renaming !== path}
       onDragStart={(e) => {
@@ -263,7 +295,9 @@ export function AmadeusPagesView() {
         />
       ) : (
         <span className="t2s-srow-title">
-          {!isNote && <Paperclip size={11} className="t2s-dim" style={{ marginRight: 5, verticalAlign: -1 }} />}
+          {!isNote && (isDbPath(path)
+            ? <Database size={11} className="t2s-dim" style={{ marginRight: 5, verticalAlign: -1 }} />
+            : <Paperclip size={11} className="t2s-dim" style={{ marginRight: 5, verticalAlign: -1 }} />)}
           {isNote ? baseName(path) : path.split(/[\\/]/).pop()}
         </span>
       )}
@@ -397,7 +431,15 @@ export function AmadeusPagesView() {
       )}
       {menu?.kind === 'asset' && (
         <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><Eye size={13} /> 打开</button>
+          {isDbPath(menu.path) ? (
+            <>
+              <button onClick={() => { openDb(menu.path); setMenu(null) }}><Eye size={13} /> 打开</button>
+              <button onClick={() => startRename(menu.path)}><Pencil size={13} /> 重命名</button>
+              <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><ExternalLink size={13} /> 用系统程序打开</button>
+            </>
+          ) : (
+            <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><Eye size={13} /> 打开</button>
+          )}
           <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); if (window.confirm(`删除文件「${p.split(/[\\/]/).pop()}」?此操作不可撤销。`)) void ps().deletePage(p) }}><Trash2 size={13} /> 删除</button>
         </div>
@@ -406,6 +448,7 @@ export function AmadeusPagesView() {
         <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(menu.path)])); void ps().createPageInFolder(menu.path); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
           <button onClick={() => newFolder(menu.path)}><FolderPlus size={13} /> 新建子文件夹</button>
+          <button onClick={() => newBase(menu.path)}><Database size={13} /> 新建 Base</button>
           <button onClick={() => { const f = menu.path; setMenu(null); const name = window.prompt('重命名文件夹', folderName(f))?.trim(); if (name) void ps().renameFolder(f, name) }}><Pencil size={13} /> 重命名</button>
           <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (window.confirm(`删除文件夹「${folderName(f)}」及其全部内容?不可撤销。`)) void ps().deleteFolder(f) }}><Trash2 size={13} /> 删除</button>
@@ -415,6 +458,7 @@ export function AmadeusPagesView() {
         <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { void ps().createPage(); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
           <button onClick={() => newFolder('')}><FolderPlus size={13} /> 新建文件夹</button>
+          <button onClick={() => newBase('')}><Database size={13} /> 新建 Base</button>
         </div>
       )}
 

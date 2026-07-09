@@ -154,6 +154,19 @@ export class VaultManager {
     if (looksLikePath) {
       const pageDirAbs = path.resolve(root, path.dirname(pagePath))
       abs = path.resolve(pageDirAbs, safeDecode(r))
+      // 页相对解析落空 → 回退按 vault 根解析:dbAggregateStore/独立 db 视图传的是完整 vault 相对路径
+      // (pagePath=dbPath 时页相对会双拼目录,子文件夹 .db 曾因此静默 missing)。
+      try {
+        await fs.access(abs)
+      } catch {
+        const rootAbs = path.resolve(root, safeDecode(r))
+        try {
+          await fs.access(rootAbs)
+          abs = rootAbs
+        } catch {
+          /* 两处都不存在:保留页相对语义,由调用方按 missing 处理 */
+        }
+      }
     } else {
       const found = await this.findByBasename(root, r)
       if (!found) return null

@@ -25,6 +25,18 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
   await usePageStore.getState().loadPage(path)
 }
 
+/** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
+export function openDb(dbPath: string): void {
+  const ws = useWorkspace.getState()
+  const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
+  const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-db' && p.params?.dbPath === dbPath)
+  if (hit) {
+    ws.activateLeaf(hit.id)
+    return
+  }
+  ws.openView('amadeus-db', { dbPath }, 'main')
+}
+
 /** resolve 时笔记必须真的加载完(调用方靠它定位/高亮块);超时兜底防 leaf 效果没接住。 */
 function waitForActive(path: string, timeoutMs = 3000): Promise<void> {
   if (usePageStore.getState().activePage === path) return Promise.resolve()

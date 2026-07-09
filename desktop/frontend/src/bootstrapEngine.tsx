@@ -1,5 +1,5 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Smartphone, Store, Settings, FileText, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2 } from 'lucide-react'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Smartphone, Store, Settings, FileText, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2, Database } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, getActiveSpace, recordNav, useNav, activeMainPanel, setEngineI18n } from '@lcl/engine'
 import { useRecentViews } from './recentViews'
 import { registerSpaces } from './spaces'
@@ -16,6 +16,7 @@ import { NewTabView } from './views/NewTabView'
 import { HomeEmptyView } from './views/HomeEmpty'
 import { WeChatSpecialView, AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
+import { AmadeusDbView } from './views/AmadeusDbView'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from './amadeusPanels'
 import { CalendarView } from './views/CalendarView'
 import { CalendarConfigView } from './views/CalendarConfigView'
@@ -92,6 +93,8 @@ export function installEngine(): void {
     // 编辑器 = 非 singleton 多实例(类 Obsidian 每笔记一个 tab,params.notePath 认领笔记并随布局持久化);
     // 可关闭:关到主区最后一个 → 落 launcher 启动器(见 workspaceStore.closeLeaf)。
     registerView({ type: 'amadeus-editor', displayName: () => app().tr('amadeus.editor'), icon: FileText, factory: (props) => <AmadeusEditorView {...props} /> })
+    // 独立 .db 数据库视图(多实例,params.dbPath 认领文件并随布局持久化;树上点 .db 打开,见 amadeusNav.openDb)。
+    registerView({ type: 'amadeus-db', displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} /> })
     registerView({ type: 'amadeus-backlinks', displayName: () => app().tr('amadeus.backlinks'), icon: Link2, factory: () => <AmadeusBacklinksView />, singleton: true })
     registerView({ type: 'amadeus-search', displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
     registerView({ type: 'amadeus-tags', displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })

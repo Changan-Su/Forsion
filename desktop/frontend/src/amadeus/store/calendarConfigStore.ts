@@ -15,6 +15,8 @@ interface CalCfgState {
   clearColor(vault: string, dbPath: string): void
   toggleHidden(vault: string, dbPath: string): void
   setDefault(vault: string, dbPath: string): void
+  /** .db 文件改名后迁移颜色/隐藏/默认库三处 dbPath 键,防配置静默丢失。 */
+  migratePath(vault: string, oldPath: string, newPath: string): void
 }
 
 const KEY = 'amadeus.calendar.cfg'
@@ -65,6 +67,26 @@ export const useCalendarConfig = create<CalCfgState>((set) => ({
     set((s) => {
       const cur = vc(s.byVault, vault)
       const next = { ...s.byVault, [vault]: { ...cur, defaultDbPath: dbPath } }
+      persist(next)
+      return { byVault: next }
+    }),
+  migratePath: (vault, oldPath, newPath) =>
+    set((s) => {
+      const cur = s.byVault[vault]
+      if (!cur) return s
+      const colors = { ...cur.colors }
+      if (oldPath in colors) {
+        colors[newPath] = colors[oldPath]
+        delete colors[oldPath]
+      }
+      const next = {
+        ...s.byVault,
+        [vault]: {
+          colors,
+          hidden: cur.hidden.map((x) => (x === oldPath ? newPath : x)),
+          defaultDbPath: cur.defaultDbPath === oldPath ? newPath : cur.defaultDbPath,
+        },
+      }
       persist(next)
       return { byVault: next }
     }),

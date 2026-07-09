@@ -68,6 +68,7 @@ const api: AmadeusApi = {
   listPageProps: (folder) => ipcRenderer.invoke(IPC.listPageProps, folder),
   setPageFrontmatter: (pagePath, patch) => ipcRenderer.invoke(IPC.setPageFrontmatter, pagePath, patch),
   renamePageFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renamePageFile, oldPath, newBaseName),
+  renameDbFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renameDbFile, oldPath, newBaseName),
 }
 
 contextBridge.exposeInMainWorld('amadeus', api)

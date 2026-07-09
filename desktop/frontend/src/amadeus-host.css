@@ -24,6 +24,8 @@
 .am-app.amx-pane { height: 100%; overflow: auto; background: transparent; color: var(--text); }
 /* 顶栏(sticky, top:0)之上不留纸面空隙:top padding 归零,顶栏贴到纸卡最上沿、与正文同底色无缝(见 .amx-toolbar)。 */
 .amx-editor { padding: 0 0 40px; }
+/* 独立 .db 数据库视图(AmadeusDbView):.amx-pane 已管高度/滚动,这里只给表格四周留白。 */
+.amx-dbview { padding: 18px 24px 40px; }
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
 .amx-doc { max-width: 920px; margin: 0 auto; padding: 0 48px; }
@@ -482,15 +484,16 @@
 .amx-cal-ghours { position: relative; }
 .amx-cal-tscroll { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .amx-cal-tgrid2 { display: grid; position: relative; }
-/* 落点吸附提示(拖动事件时的虚线幽灵块;跟随吸附后的目标列+时刻)。 */
-.amx-cal-dropghost { position: absolute; display: none; z-index: 3; box-sizing: border-box; border: 2px dashed var(--accent, #6c5ce7); background: color-mix(in srgb, var(--accent, #6c5ce7) 15%, transparent); border-radius: 5px; pointer-events: none; }
+/* 落点吸附提示(拖动事件时的虚线幽灵块;跟随吸附后的目标列+时刻,内文 = 实时时间区间)。 */
+.amx-cal-dropghost { position: absolute; display: none; z-index: 3; box-sizing: border-box; border: 2px dashed var(--accent, #6c5ce7); background: color-mix(in srgb, var(--accent, #6c5ce7) 15%, transparent); border-radius: 5px; pointer-events: none; padding: 2px 6px; font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent, #6c5ce7); overflow: hidden; }
 .amx-cal-thead2 { background: var(--bg); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent, #6c5ce7); }
 .amx-cal-tdow { font-size: 11px; color: var(--text-muted); }
 .amx-cal-tdate { font-size: 14px; font-weight: 600; }
 .amx-cal-allday2 { background: var(--bg); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 2px 3px; display: flex; flex-direction: column; gap: 2px; }
 .amx-cal-hour { font-size: 10.5px; color: var(--text-faint, var(--text-muted)); text-align: right; padding-right: 6px; box-sizing: border-box; transform: translateY(-6px); }
-.amx-cal-daycol2 { position: relative; border-left: 1px solid var(--border); background-image: repeating-linear-gradient(to bottom, var(--border) 0, var(--border) 1px, transparent 1px, transparent 44px); }
+/* 网格线周期 = --amx-hour-px(TimeScroll 注入,随时间轴缩放同步;缺省 44 兜底)。 */
+.amx-cal-daycol2 { position: relative; border-left: 1px solid var(--border); background-image: repeating-linear-gradient(to bottom, var(--border) 0, var(--border) 1px, transparent 1px, transparent var(--amx-hour-px, 44px)); }
 .amx-cal-event { position: absolute; left: 2px; right: 2px; border: none; border-radius: 5px; color: #fff; font: inherit; font-size: 11.5px; line-height: 1.25; padding: 2px 6px; text-align: left; cursor: grab; overflow: hidden; display: flex; flex-direction: column; touch-action: none; }
 .amx-cal-event.dragging { cursor: grabbing; opacity: 0.82; box-shadow: 0 4px 14px var(--shadow, rgba(0,0,0,0.24)); z-index: 50; }
 /* 上下 7px 边缘 = 拉伸时长(ns-resize 光标提示;命中判定在 JS 的 offY < EDGE) */
@@ -503,6 +506,9 @@
 
 /* 事件卡片(块旁不覆盖:透明捕获层点外关闭,卡片 fixed 定位在块旁) */
 .amx-cal-cardcatch { position: fixed; inset: 0; z-index: 60; background: transparent; }
+/* astryx 试点壳:外层只管 定位/动画/滚动/投影,面子(底色/圆角内饰)交给 astryx Card。 */
+.amx-cal-cardwrap { position: fixed; width: 320px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); border-radius: var(--radius-md, 12px); box-shadow: 0 16px 44px var(--shadow, rgba(0,0,0,0.24)); }
+.amx-cal-cardin { display: flex; flex-direction: column; gap: 8px; }
 @keyframes amx-cal-cardin { from { opacity: 0; transform: scale(0.95) translateY(-6px); } to { opacity: 1; transform: none; } }
 .amx-cal-card { position: fixed; width: 320px; max-height: 80vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md, 12px); box-shadow: 0 16px 44px var(--shadow, rgba(0,0,0,0.24)); padding: 14px; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); }
 .amx-cal-card-db { font-size: 12px; font-weight: 600; }
@@ -583,6 +589,7 @@
 .amx-todo-list { list-style: none; margin: 0; padding: 0 0 4px; }
 .amx-todo-item { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 30px; }
 .amx-todo-item:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-todo-name { font-size: 13px; }
+.amx-todo-name { font-size: 13px; cursor: pointer; border-radius: 4px; }
+.amx-todo-name:hover { text-decoration: underline; text-underline-offset: 2px; }
 .amx-todo-name.done { color: var(--text-faint, var(--text-muted)); text-decoration: line-through; }
 .amx-todo-blank { padding: 4px 12px 4px 30px; font-size: 12px; color: var(--text-faint, var(--text-muted)); }

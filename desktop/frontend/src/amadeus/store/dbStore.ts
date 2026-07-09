@@ -1,7 +1,7 @@
 /** Database(.db 文件)渲染端共享 store:key = `![[ ]]` 的 ref 原文 → 同一 db 的多处嵌入
  *  (同页多块 / 多标签同页)命中同一 entry,数据共享、写穿互见,不互踩。
  *  写穿:mutate 纯函数换 data + per-ref 500ms 防抖落盘(照 pageStore 模块级 saveTimer 先例);
- *  watcher 不监听 .db(外部改动无推送),v1 自管理文件,missing/corrupt 态靠「重试」手动 reload。 */
+ *  外部改动经 watcher 的 onDbExternalChange → reloadByPath 热重载;missing/corrupt 态另有「重试」手动 reload。 */
 import { create } from 'zustand'
 import type { DbFile } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
@@ -25,6 +25,8 @@ interface DbStoreState {
   /** 纯函数换 data + 防抖写穿;非 ok 态 no-op(损坏文件绝不回写)。 */
   mutate(ref: string, fn: (d: DbFile) => DbFile): void
   flushAll(): Promise<void>
+  /** 文件改名后清场:清 timer + 删所有解析到该路径的条目,不落盘(防 stale entry 把数据写回旧路径)。 */
+  dropByPath(dbPath: string): void
 }
 
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -88,6 +90,23 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     for (const t of saveTimers.values()) clearTimeout(t)
     saveTimers.clear()
     await Promise.all(refs.map((r) => persist(r)))
+  },
+
+  dropByPath(dbPath) {
+    const refs = Object.entries(get().entries)
+      .filter(([, e]) => e.path === dbPath)
+      .map(([ref]) => ref)
+    if (!refs.length) return
+    for (const ref of refs) {
+      const t = saveTimers.get(ref)
+      if (t) clearTimeout(t)
+      saveTimers.delete(ref)
+    }
+    set((s) => {
+      const entries = { ...s.entries }
+      for (const ref of refs) delete entries[ref]
+      return { entries }
+    })
   },
 }))
 

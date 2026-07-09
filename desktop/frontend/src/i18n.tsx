@@ -80,6 +80,7 @@ const zh: Dict = {
   'view.todo': '待办清单',
   'view.calendar': '日历',
   'view.calendarConfig': '日历设置',
+  'view.db': '数据库',
   // ── Coding Space(编码)──
   'space.coding': '编码',
   'view.codeStudio': '代码工作台',
@@ -828,6 +829,7 @@ const en: Dict = {
   'view.todo': 'To-Do List',
   'view.calendar': 'Calendar',
   'view.calendarConfig': 'Calendar Settings',
+  'view.db': 'Database',
   // ── Coding Space ──
   'space.coding': 'Coding',
   'view.codeStudio': 'Code Studio',

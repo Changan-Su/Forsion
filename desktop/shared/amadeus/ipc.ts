@@ -43,6 +43,7 @@ export const IPC = {
   setPageFrontmatter: 'page:set-frontmatter',
   listPageProps: 'vault:page-props',
   renamePageFile: 'page:rename-file',
+  renameDbFile: 'db:rename-file',
 } as const
 
 /** Plugin API version the host implements. Manifests without apiVersion are treated as 1 (back-compat). */
@@ -246,6 +247,9 @@ export interface AmadeusApi {
   setPageFrontmatter(pagePath: string, patch: Record<string, unknown>): Promise<void>
   /** 同目录纯重命名笔记文件(不加载/不落 v3,外来 .md 不被收编);返回新 vault 相对路径。 */
   renamePageFile(oldPath: string, newBaseName: string): Promise<string>
+  /** 同目录重命名 .db 文件:同步回写内部 name(=新 basename)并重写全 vault 的 [[/![[ 引用。
+   *  rewrittenPages = 被改写的笔记(主进程已逐页发 externalChange,渲染端对 activePage 仍须显式 reconcile)。 */
+  renameDbFile(oldPath: string, newBaseName: string): Promise<{ newPath: string; rewrittenPages: string[] }>
 }
 
 declare global {

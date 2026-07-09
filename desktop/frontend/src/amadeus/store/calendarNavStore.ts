@@ -11,9 +11,21 @@ const loadMode = (): CalMode => {
   return m === 'week' || m === '3day' || m === 'day' || m === 'month' ? m : 'week'
 }
 
+// ④时间轴缩放:每小时像素高(持久化)。CSS 网格线经 --amx-hour-px 变量同步(见 TimeScroll 注入)。
+export const HOUR_PX_DEFAULT = 44
+const HOUR_PX_KEY = 'amadeus.calendar.hourPx'
+export const clampHourPx = (px: number): number => Math.max(28, Math.min(120, Math.round(px)))
+const loadHourPx = (): number => {
+  const v = Number(localStorage.getItem(HOUR_PX_KEY))
+  return Number.isFinite(v) && v > 0 ? clampHourPx(v) : HOUR_PX_DEFAULT
+}
+
 interface CalNavState {
   mode: CalMode
   setMode(m: CalMode): void
+  /** 时间视图每小时像素高(28–120,持久化);月视图不受影响。 */
+  hourPx: number
+  setHourPx(px: number): void
   /** 主区 Calendar 当前可见首/末日('YYYY-MM-DD');null = Calendar 未挂载。mini 据此画淡区间条。 */
   visibleStart: string | null
   visibleEnd: string | null
@@ -33,6 +45,16 @@ export const useCalendarNav = create<CalNavState>((set) => ({
       /* ignore */
     }
     set({ mode })
+  },
+  hourPx: loadHourPx(),
+  setHourPx: (px) => {
+    const hourPx = clampHourPx(px)
+    try {
+      localStorage.setItem(HOUR_PX_KEY, String(hourPx))
+    } catch {
+      /* ignore */
+    }
+    set({ hourPx })
   },
   visibleStart: null,
   visibleEnd: null,
