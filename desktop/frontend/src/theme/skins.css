@@ -6,25 +6,25 @@
  * 未覆盖的中性色回退 base.css :root。`--glow` 仅 soft 语言消费(角落辉光),按配色色相微染。
  */
 
-/* ── 奶油 Cream(= 原 lovable 配色;亦即 :root 默认)──────────────────────── */
-/* 2026-07-10 淡化:用户反馈米黄越来越黄。色度砍半(bg 10→5),只留「淡淡的」暖底;暗侧不动。base.css :root 同步。 */
+/* ── 经典 Classic(id 沿用 cream;= 原 lovable 配色;亦即 :root 默认)──────────── */
+/* 2026-07-10 二改:奶油→「经典」,底族以 #f8f7f6 为基调中性化(去黄,留一丝暖);暗侧不动。base.css :root 同步。 */
 :root[data-skin='cream'] {
-  --bg: #f9f8f4;
-  --bg-card: #fefdfb;
-  --bg-glass: rgba(249, 248, 244, 0.9);
-  --sidebar-bg: #f4f2ec;
+  --bg: #f8f7f6;
+  --bg-card: #fdfdfc;
+  --bg-glass: rgba(248, 247, 246, 0.9);
+  --sidebar-bg: #f2f1ef;
   --text: #1c1c1c;
   --text-light: rgba(28, 28, 28, 0.82);
   --text-muted: #5f5f5d;
   --text-faint: rgba(28, 28, 28, 0.4);
   --text-ghost: rgba(28, 28, 28, 0.28);
-  --border: #ecebe5;
+  --border: #eae9e7;
   --shadow: rgba(0, 0, 0, 0.05);
   --accent: #1c1c1c;
   --accent-hover: #000000;
   --accent-light: rgba(28, 28, 28, 0.05);
   --accent-rgb: 28, 28, 28;
-  --on-accent: #fcfbf8;
+  --on-accent: #fbfbfa;
   --green: #4f6f52;
   --danger: #a3503f;
   --danger-light: rgba(163, 80, 63, 0.08);
@@ -35,7 +35,7 @@
   --user-bg: rgba(28, 28, 28, 0.04);
   --tool-bg: rgba(28, 28, 28, 0.03);
   --tool-text: #5f5f5d;
-  --glow: radial-gradient(110% 75% at 82% -12%, rgba(206, 192, 168, 0.16), transparent 56%);
+  --glow: radial-gradient(110% 75% at 82% -12%, rgba(191, 188, 182, 0.14), transparent 56%);
 }
 :root.dark[data-skin='cream'] {
   --bg: #1c1a16;

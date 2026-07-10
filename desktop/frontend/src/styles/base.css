@@ -7,17 +7,17 @@
  * 词表 = LCL 统一设计语言契约(.tangu-lovable);值拷自 Forsion-LCL/src/tangu/tangu.css。
  * 字体保留 CJK 回退(PingFang/雅黑)以渲染中文。组件只引用这些语义变量,换肤=整块替换 token。 */
 :root {
-  /* 奶油底 2026-07-10 淡化(与 skins.css cream 同步):色度砍半,只留淡淡的暖调。 */
-  --bg: #f9f8f4;
-  --bg-card: #fefdfb;
-  --bg-glass: rgba(249, 248, 244, 0.9);
-  --sidebar-bg: #f4f2ec;
+  /* 「经典」底(id cream) 2026-07-10 二改(与 skins.css cream 同步):以 #f8f7f6 为基调中性化,去黄留一丝暖。 */
+  --bg: #f8f7f6;
+  --bg-card: #fdfdfc;
+  --bg-glass: rgba(248, 247, 246, 0.9);
+  --sidebar-bg: #f2f1ef;
   --text: #1c1c1c;
   --text-light: rgba(28, 28, 28, 0.82);
   --text-muted: #5f5f5d;
   --text-faint: rgba(28, 28, 28, 0.4);
   --text-ghost: rgba(28, 28, 28, 0.28);
-  --border: #ecebe5;
+  --border: #eae9e7;
   --border-width: 1px;
   --shadow: rgba(0, 0, 0, 0.05);
   --accent: #1c1c1c;
@@ -57,7 +57,7 @@
   /* 「agent 切换」同款灵动曲线(轻微过冲);用于展开/弹出等微动效,全局统一 taste */
   --ease-spring: cubic-bezier(0.2, 0.8, 0.3, 1);
   /* ── LCL 高程 token(扁平开关 html[data-flat='1'] 置空;P1 shell 暂未消费,前置铺垫) ── */
-  --on-accent: #fcfbf8;
+  --on-accent: #fbfbfa;
   --inset: rgba(255, 255, 255, 0.2) 0 0.5px 0 0 inset, rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset, rgba(0, 0, 0, 0.05) 0 1px 2px 0;
   --focus: rgba(0, 0, 0, 0.1) 0 4px 12px;
   --card-shadow: 0 1px 2px rgba(42, 36, 26, 0.04), 0 10px 26px rgba(42, 36, 26, 0.05);

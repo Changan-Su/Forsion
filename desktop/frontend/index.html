@@ -32,7 +32,7 @@
           if (mode === 'dark') root.classList.add('dark');
           // 首帧背景按配色取纯色底,防闪烁(skins.css 接管后即一致;custom 用中性底)。
           var BG = {
-            cream: ['#f9f8f4', '#1c1a16'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
+            cream: ['#f8f7f6', '#1c1a16'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
             lavender: ['#f4eef7', '#1e1a29'], custom: ['#f6f6f7', '#1b1b1d']
           };
           root.style.background = (BG[skin] || BG.cream)[mode === 'dark' ? 1 : 0];
