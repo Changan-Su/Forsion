@@ -2433,6 +2433,12 @@ html.dark .brand-logo--dark { display: inline-block; }
 .mk-submit-hint { font-size: 13.5px; color: var(--text-light); line-height: 1.6; }
 .mk-submit .btn { display: inline-flex; align-items: center; gap: 6px; }
 
+/* ── Shell 层叠封箱 ──
+ * dockview 分割条(.dv-sash)自带 z-index:99、resize tick 更高,若 Shell 不建层叠上下文,
+ * 它们会与全屏浮层(设置/市场/成就 zIndex:50)在 root context 直接比大小 → 分割线穿透
+ * 浮层可见且可拖。isolate 把 Shell 内部所有 z 封进自己的上下文,浮层作为后续兄弟稳压其上。 */
+.shell-host { isolation: isolate; }
+
 /* ── Electron 拖窗区兜底 ──
  * 拖窗区按 DOM 顺序几何合成(drag 并集、no-drag 差集),与 z-index/遮盖完全无关;
  * drag 区内的鼠标事件(含 hover)被系统当窗口标题栏吞掉,永远到不了 DOM。
