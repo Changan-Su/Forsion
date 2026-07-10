@@ -2,7 +2,7 @@
  *  数据经 dbStore 按 ref 共享 → 同一 db 的多处嵌入(同页多块/多标签)实时互通、写穿防抖落盘。
  *  排序仅视图态不写盘(文件 rows 顺序即规范顺序);列类型切换非破坏(coerceForDisplay 宽容显示)。
  *  弹层(选项/列菜单)用 fixed 定位:表格外层是 overflow 滚动层,absolute 会被裁剪。 */
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   COLUMN_TYPES,
   coerceForDisplay,
@@ -39,6 +39,17 @@ const colMeta = (type: string): { icon: string; label: string } => {
   if (custom) return { icon: custom.icon, label: custom.label }
   return TYPE_META[type as ColumnType] ?? { icon: '·', label: type }
 }
+
+/** chip 色板类:label 简单字符串哈希 → 'amx-chip-c0'..'amx-chip-c9',同名恒同色。
+ *  色板是内容色(区分选项)而非主题色,10 色定义在 amadeus-host.css 的 .amx-db 段。 */
+const chipClass = (label: string): string => {
+  let h = 0
+  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) | 0
+  return `amx-chip-c${Math.abs(h) % 10}`
+}
+
+/** 列宽夹取:太窄列头没法点,太宽失控;与 CSS 弹性列 minmax(140px,1fr) 并存。 */
+const clampW = (w: number): number => Math.min(800, Math.max(100, w))
 
 interface Pop {
   kind: 'options' | 'colmenu' | 'folder'
@@ -84,6 +95,8 @@ export function DatabaseEmbed({ target, pagePath }: { target: string; pagePath: 
 function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath: string }) {
   const [sort, setSort] = useState<{ colId: string; dir: 'asc' | 'desc' } | null>(null)
   const [pop, setPop] = useState<Pop | null>(null)
+  // 拖拽改宽的过程态:pointermove 只写这里驱动 gridTemplateColumns 即时反馈,pointerup 才落进 column。
+  const [liveWidths, setLiveWidths] = useState<Record<string, number>>({})
   usePropertyTypesVersion() // 三方插件注册/卸载属性类型 → 列菜单与单元格分发即时刷新
 
   // 笔记视图(Bases):db.source.folder 存在 → 行 = 该文件夹里的笔记(实时,来自 noteViewStore),
@@ -235,7 +248,39 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
     void renameDb(path, name).catch((e: unknown) => window.alert(`重命名失败:${e instanceof Error ? e.message : String(e)}`))
   }
 
-  const gridCols = `28px repeat(${db.columns.length}, minmax(140px, 1fr)) 36px`
+  /** 列宽拖拽:实时改宽即反馈(ponytail:不做 AFFiNE 的全局竖直指示线);pointerup 经与列改名
+   *  同一条 mutate 写路径把 width 落进 column(复用 500ms 防抖落盘);双击命中区清除 width 恢复弹性。 */
+  const startResize = (e: ReactPointerEvent, col: DbColumn): void => {
+    e.preventDefault()
+    const grip = e.currentTarget as HTMLElement
+    // 起点宽:优先已落盘宽,弹性列量 DOM 实际宽 → 首次拖拽从当前观感起步不跳变。
+    const startW = liveWidths[col.id] ?? col.width ?? (grip.parentElement?.getBoundingClientRect().width || 140)
+    const startX = e.clientX
+    grip.setPointerCapture(e.pointerId)
+    grip.setAttribute('data-active', '')
+    const onMove = (ev: PointerEvent): void =>
+      setLiveWidths((m) => ({ ...m, [col.id]: clampW(startW + ev.clientX - startX) }))
+    const onUp = (ev: PointerEvent): void => {
+      grip.removeEventListener('pointermove', onMove)
+      grip.removeEventListener('pointerup', onUp)
+      grip.removeAttribute('data-active')
+      patchCol(col.id, { width: clampW(startW + ev.clientX - startX) })
+      setLiveWidths((m) => {
+        const n = { ...m }
+        delete n[col.id]
+        return n
+      })
+    }
+    grip.addEventListener('pointermove', onMove)
+    grip.addEventListener('pointerup', onUp)
+  }
+
+  // 拖过的列固定 px(clamp 100~800),没拖过的保持 minmax 弹性 —— 两者可混排。
+  const colW = (c: DbColumn): string => {
+    const w = liveWidths[c.id] ?? c.width
+    return w === undefined ? 'minmax(140px, 1fr)' : `${clampW(w)}px`
+  }
+  const gridCols = `28px ${db.columns.map(colW).join(' ')} 36px`
   const popCol = pop ? db.columns.find((c) => c.id === pop.colId) : undefined
   const popRow = pop?.rowId ? db.rows.find((r) => r.id === pop.rowId) : undefined
 
@@ -275,6 +320,12 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
                   <span className="amx-db-th-name">{col.name}</span>
                   {sort?.colId === col.id && <span className="amx-db-th-sort">{sort.dir === 'asc' ? '↑' : '↓'}</span>}
                 </button>
+                <div
+                  className="amx-db-resize"
+                  onPointerDown={(e) => startResize(e, col)}
+                  onDoubleClick={() => patchCol(col.id, { width: undefined })}
+                  title="拖拽调整列宽 · 双击恢复弹性"
+                />
               </div>
             ))}
             <button className="amx-db-addcol" onClick={addCol} title="添加列">＋</button>
@@ -284,7 +335,7 @@ function DbTable({ dbRef, db, pagePath }: { dbRef: string; db: DbFile; pagePath:
             <div className="amx-db-row" key={row.id} style={{ gridTemplateColumns: gridCols }}>
               <button className="amx-db-rowdel" onClick={() => delRow(row.id)} title="删除行" aria-label="delete row">✕</button>
               {db.columns.map((col) => (
-                <div className="amx-db-cell" key={col.id}>
+                <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)}>
                   <Cell row={row} col={col} pagePath={pagePath} setCell={setCell} openOptions={(e) => openPop(e, { kind: 'options', colId: col.id, rowId: row.id })} />
                 </div>
               ))}
@@ -458,7 +509,7 @@ function Cell({
       const s = v as string
       return (
         <button className="amx-db-cellbtn" onClick={openOptions}>
-          {s ? <span className="amx-db-chip">{s}</span> : <span className="amx-db-blank">空</span>}
+          {s ? <span className={`amx-db-chip ${chipClass(s)}`}>{s}</span> : <span className="amx-db-blank">空</span>}
         </button>
       )
     }
@@ -466,7 +517,7 @@ function Cell({
       const arr = v as string[]
       return (
         <button className="amx-db-cellbtn" onClick={openOptions}>
-          {arr.length ? arr.map((t) => <span key={t} className="amx-db-chip">{t}</span>) : <span className="amx-db-blank">空</span>}
+          {arr.length ? arr.map((t) => <span key={t} className={`amx-db-chip ${chipClass(t)}`}>{t}</span>) : <span className="amx-db-blank">空</span>}
         </button>
       )
     }
@@ -596,11 +647,11 @@ function OptionPopover({
           multi ? (
             <label key={o} className="amx-db-opt">
               <input type="checkbox" checked={selected.includes(o)} onChange={() => onToggle(o)} />
-              <span className="amx-db-chip">{o}</span>
+              <span className={`amx-db-chip ${chipClass(o)}`}>{o}</span>
             </label>
           ) : (
             <button key={o} className="amx-db-opt" onClick={() => onPick(o)}>
-              <span className="amx-db-chip">{o}</span>
+              <span className={`amx-db-chip ${chipClass(o)}`}>{o}</span>
               {value === o && <span className="amx-db-opt-check">✓</span>}
             </button>
           ),

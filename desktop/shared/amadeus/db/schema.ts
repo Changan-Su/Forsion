@@ -19,6 +19,8 @@ export interface DbColumn {
   type: string
   /** select 与 multiselect 共用的选项池(标签字符串,顺序即菜单顺序);互切类型零迁移。 */
   options?: string[]
+  /** 列宽 px,拖拽落盘;缺=弹性列。 */
+  width?: number
 }
 
 export interface DbRow {
@@ -55,6 +57,7 @@ const dbColumnSchema = z.object({
   // 值本身仍由 cellValueSchema 严格校验,未知类型只会渲染回退为文本,不丢数据。
   type: z.string().min(1),
   options: z.array(z.string()).optional(),
+  width: z.number().positive().optional(),
 })
 const dbRowSchema = z.object({
   id: z.string().min(1),

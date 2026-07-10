@@ -329,28 +329,59 @@
 .am-app .embed-video { display: block; width: 100%; max-height: 420px; background: #000; }
 .am-app .embed-audio { display: block; width: 100%; padding: 8px 10px; }
 
-/* ── Database 嵌入(![[xxx.db]]):Notion 式表格 ── */
-.amx-db { border: 1px solid var(--border); border-radius: var(--radius-md, 10px); overflow: hidden; font-size: 13px; }
-.amx-db-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
-.amx-db-name { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-weight: 600; font-size: 13.5px; padding: 2px 4px; border-radius: 6px; }
+/* ── Database 嵌入(![[xxx.db]]):AFFiNE 式表格 —— 无外框与正文齐平,行线常驻、列线弱化、表头透明 ── */
+.amx-db { font-size: 13.5px; }
+/* 标题栏:外框已去,灰底条会悬空 → AFFiNE 式纯文字标题(hover 才现底) */
+.amx-db-head { display: flex; align-items: center; gap: 8px; padding: 6px 2px; }
+.amx-db-name { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-weight: 600; font-size: 14px; padding: 2px 4px; border-radius: 6px; }
 .amx-db-name:hover, .amx-db-name:focus { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .amx-db-count { flex: 0 0 auto; color: var(--text-muted); font-size: 11.5px; }
 .amx-db-scroll { overflow-x: auto; }
+/* 行线常驻;表头行同样吃 border-top → 上下各一条(首个数据行的 border-top 即表头下缘线) */
 .amx-db-row { display: grid; align-items: stretch; border-top: 1px solid var(--border); min-width: max-content; }
-.amx-db-hrow { border-top: none; background: var(--overlay-light, rgba(127, 127, 127, 0.03)); }
-.amx-db-th { display: flex; align-items: center; min-width: 0; border-right: 1px solid var(--border); }
-.amx-db-thbtn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 600; padding: 6px 8px; cursor: pointer; text-align: left; }
-.amx-db-thbtn:hover { color: var(--text); }
+/* 列分隔线弱化;最后一列数据列(其后是加列按钮列)不画 */
+.amx-db-th { position: relative; display: flex; align-items: center; min-width: 0; border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.amx-db-th:nth-last-child(2), .amx-db-cell:nth-last-child(2) { border-right: none; }
+.amx-db-thbtn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 12.5px; font-weight: 500; padding: 6px 8px; cursor: pointer; text-align: left; border-radius: 4px; transition: background 0.15s ease; }
+.amx-db-thbtn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.06)); }
 .amx-db-th-icon { flex: 0 0 auto; opacity: 0.75; }
 .amx-db-th-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .amx-db-th-sort { flex: 0 0 auto; color: var(--accent, #6c5ce7); }
-.amx-db-cell { display: flex; align-items: center; min-width: 0; border-right: 1px solid var(--border); }
-.amx-db-input { width: 100%; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 6px 8px; }
-.amx-db-input:focus { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: 4px; }
-.amx-db-checkbox { margin: 6px 8px; accent-color: var(--accent, #6c5ce7); }
-.amx-db-cellbtn { width: 100%; min-height: 30px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; border: none; background: transparent; font: inherit; cursor: pointer; padding: 4px 8px; text-align: left; }
+/* 列宽拖拽命中区:默认透明,hover/拖拽中(data-active)显 2px accent 竖条;实时改宽即反馈,不做全局指示线 */
+.amx-db-resize { position: absolute; top: 0; right: -4px; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
+.amx-db-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; }
+.amx-db-resize:hover::after, .amx-db-resize[data-active]::after { background: var(--accent, #6c5ce7); }
+.amx-db-cell { display: flex; align-items: center; min-width: 0; border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+/* 数字列右对齐(data-coltype = 渲染层按列 baseType 标注) */
+.amx-db-cell[data-coltype='number'] { text-align: right; }
+.amx-db-cell[data-coltype='number'] .amx-db-input { text-align: right; }
+.amx-db-input { width: 100%; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 22px; padding: 6px; }
+.amx-db-input:focus { box-shadow: inset 0 0 0 1px var(--accent, #6c5ce7), 0 0 0 2px color-mix(in srgb, var(--accent, #6c5ce7) 30%, transparent); border-radius: 2px; }
+.amx-db-checkbox { margin: 6px; accent-color: var(--accent, #6c5ce7); }
+.amx-db-cellbtn { width: 100%; min-height: 30px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; border: none; background: transparent; font: inherit; line-height: 22px; cursor: pointer; padding: 6px; text-align: left; }
 .amx-db-cellbtn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
-.amx-db-chip { display: inline-flex; align-items: center; font-size: 11.5px; line-height: 1; background: var(--accent-light, rgba(108, 92, 231, 0.14)); color: var(--text); border-radius: 999px; padding: 4px 8px; }
+.amx-db-chip { display: inline-flex; align-items: center; height: 22px; font-size: 12px; line-height: 1; color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 0 8px; }
+/* chip 色板(c0..c9,chipClass 按 label 哈希取色,c9 仅描边):内容色而非主题色,硬编码是刻意的 */
+.amx-chip-c0 { background: #ffe4e0; }
+.amx-chip-c1 { background: #ffe6d5; }
+.amx-chip-c2 { background: #fff3c7; }
+.amx-chip-c3 { background: #dff4de; }
+.amx-chip-c4 { background: #def5f3; }
+.amx-chip-c5 { background: #ddedfb; }
+.amx-chip-c6 { background: #ebe3fd; }
+.amx-chip-c7 { background: #fbe0ef; }
+.amx-chip-c8 { background: #ececec; }
+.amx-chip-c9 { background: transparent; }
+.am-app[data-mode='dark'] .amx-chip-c0 { background: rgba(244, 87, 71, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c1 { background: rgba(255, 125, 48, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c2 { background: rgba(255, 199, 31, 0.2); }
+.am-app[data-mode='dark'] .amx-chip-c3 { background: rgba(64, 182, 109, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c4 { background: rgba(46, 178, 170, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c5 { background: rgba(30, 150, 235, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c6 { background: rgba(139, 92, 246, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c7 { background: rgba(236, 72, 153, 0.22); }
+.am-app[data-mode='dark'] .amx-chip-c8 { background: rgba(255, 255, 255, 0.1); }
+.am-app[data-mode='dark'] .amx-chip-c9 { background: transparent; }
 .amx-db-blank { color: var(--text-faint, var(--text-muted)); font-size: 12px; }
 .amx-db-urlcell { display: flex; align-items: center; gap: 4px; min-width: 0; width: 100%; padding: 4px 8px; cursor: text; }
 .amx-db-richtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
@@ -358,21 +389,24 @@
 .am-app[data-mode='dark'] .amx-db-wikilink { color: #a89bf5; }
 .amx-db-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent, #6c5ce7); text-decoration: underline; text-underline-offset: 2px; }
 .amx-db-urltext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.amx-db-edit { flex: 0 0 auto; margin-left: auto; border: none; background: transparent; color: var(--text-faint, var(--text-muted)); cursor: pointer; padding: 2px 4px; border-radius: 4px; opacity: 0; }
+.amx-db-edit { flex: 0 0 auto; margin-left: auto; border: none; background: transparent; color: var(--text-faint, var(--text-muted)); cursor: pointer; padding: 2px 4px; border-radius: 4px; opacity: 0; transition: opacity 0.2s ease-in-out; }
 .amx-db-urlcell:hover .amx-db-edit { opacity: 1; }
-.amx-db-rowdel { border: none; border-right: 1px solid var(--border); background: transparent; color: var(--text-faint, var(--text-muted)); cursor: pointer; font-size: 11px; opacity: 0; }
+.amx-db-rowdel { border: none; border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent); background: transparent; color: var(--text-faint, var(--text-muted)); cursor: pointer; font-size: 11px; opacity: 0; transition: opacity 0.2s ease-in-out; }
 .amx-db-row:hover .amx-db-rowdel { opacity: 1; }
 .amx-db-rowdel:hover { color: var(--danger, #e5484d); }
-.amx-db-addcol { border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; }
-.amx-db-addcol:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
-.amx-db-addrow { display: block; width: 100%; border: none; border-top: 1px solid var(--border); background: transparent; color: var(--text-muted); font: inherit; font-size: 12.5px; padding: 7px 10px; cursor: pointer; text-align: left; }
-.amx-db-addrow:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.05)); color: var(--text); }
+.amx-db-addcol { border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 14px; transition: background 0.2s ease-in-out, color 0.2s ease-in-out; }
+.amx-db-addcol:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.06)); }
+.amx-db-addrow { display: block; width: 100%; height: 28px; border: none; border-top: 1px solid var(--border); background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; text-align: left; transition: background 0.2s ease-in-out, color 0.2s ease-in-out; }
+.amx-db-addrow:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.06)); color: var(--text); }
 .amx-db-state { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 12px; color: var(--text-muted); font-size: 13px; }
 .amx-db-linkbtn { border: none; background: transparent; color: var(--accent, #6c5ce7); font: inherit; font-size: 12.5px; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
 .amx-db-linkbtn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
-/* 弹层(选项池 / 列菜单):fixed,免被 amx-db-scroll 裁剪 */
+/* 弹层(选项池 / 列菜单):fixed,免被 amx-db-scroll 裁剪;0.5px 描边并进 box-shadow,挂载纯 opacity 淡入 */
 .amx-db-popwrap { position: fixed; inset: 0; z-index: 80; -webkit-app-region: no-drag; }
-.amx-db-pop { position: fixed; width: 230px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: 0 8px 28px var(--shadow, rgba(0, 0, 0, 0.18)); padding: 6px; }
+.amx-db-pop { position: fixed; width: 230px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; background: var(--bg-card, var(--bg)); border-radius: 8px; box-shadow: 0 0 0 0.5px var(--border), 0 0 12px var(--shadow, rgba(66, 65, 73, 0.14)); padding: 8px; transition: opacity 120ms ease-in; }
+@starting-style {
+  .amx-db-pop { opacity: 0; }
+}
 .amx-db-pop-sec { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-muted)); padding: 4px 6px 2px; }
 .amx-db-pop-list { display: flex; flex-direction: column; gap: 1px; }
 .amx-db-opt { display: flex; align-items: center; gap: 7px; border: none; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; padding: 5px 7px; border-radius: 6px; cursor: pointer; text-align: left; }

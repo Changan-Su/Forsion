@@ -73,4 +73,25 @@ describe('db schema', () => {
     expect(coerceForDisplay(undefined, 'url')).toBe('')
     expect(coerceForDisplay(null, 'text')).toBe('')
   })
+
+  it('column.width(列宽拖拽落盘)往返无损;无 width 的旧文件照常解析(缺=弹性列)', () => {
+    const db: DbFile = {
+      ...SAMPLE,
+      columns: SAMPLE.columns.map((c, i) => (i === 0 ? { ...c, width: 240 } : c)),
+    }
+    const r = parseDb(serializeDb(db))
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data.columns[0].width).toBe(240)
+      expect(r.data.columns[1].width).toBeUndefined()
+      expect(r.data).toEqual(db)
+    }
+    // 旧文件(无 width 字段)向后兼容
+    const legacy = parseDb(serializeDb(SAMPLE))
+    expect(legacy.ok).toBe(true)
+    if (legacy.ok) expect(legacy.data.columns.every((c) => c.width === undefined)).toBe(true)
+    // 非正数宽度是坏数据,结构校验拒绝
+    const bad = { ...SAMPLE, columns: [{ id: 'c1', name: 'x', type: 'text', width: -10 }] }
+    expect(parseDb(JSON.stringify(bad)).ok).toBe(false)
+  })
 })

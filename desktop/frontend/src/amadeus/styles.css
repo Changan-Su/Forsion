@@ -446,7 +446,8 @@
   grid-template-columns: 22px 1fr 22px;
   align-items: start;
   border-radius: var(--radius-sm);
-  transition: background var(--dur-fast) var(--ease-apple);
+  /* 近似 AFFiNE hover-rect 0.25s expand 的柔和感;只管 background,不碰 [data-menu] 高亮 */
+  transition: background 0.2s ease;
 }
 
 /* Insertion line shown on the block under the pointer while dragging. */
@@ -461,12 +462,15 @@
   box-shadow: 0 0 6px var(--primary);
   z-index: 5;
   pointer-events: none;
+  /* 元素随落点切换重挂,grow-in 即每次落点变更的反馈 */
+  transform-origin: left center;
+  animation: amx-dropline-in 100ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .am-app .block-host:hover {
   background: var(--surface);
 }
 .am-app .block-host[data-dragging] {
-  opacity: 0.4;
+  opacity: 0.7; /* AFFiNE 值 */
 }
 
 .am-app .block-gutter {
@@ -494,8 +498,32 @@
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-apple), color var(--dur-fast);
 }
+/* grabber 竖条(AFFiNE 页面模式签名观感):按钮命中区/点击行为不变,
+   文字图标 ⠿ 用 font-size:0 藏掉(svg 规则兜底),::before 画条。 */
 .am-app .drag-handle {
   cursor: grab;
+  width: 16px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;
+}
+.am-app .drag-handle svg {
+  display: none;
+}
+.am-app .drag-handle::before {
+  content: '';
+  width: 4px;
+  height: 16px;
+  min-height: 12px;
+  border-radius: 2px;
+  background: var(--text-faint, var(--text-muted));
+  transition: width 0.25s ease, background 0.15s ease;
+}
+.am-app .drag-handle:hover::before {
+  width: 5px;
+  background: var(--text-muted);
 }
 .am-app .drag-handle:active {
   cursor: grabbing;
@@ -653,8 +681,19 @@
 .am-app .milkdown .ProseMirror blockquote {
   margin: 0.4em 0;
   padding-left: 0.9em;
-  border-left: 3px solid var(--primary);
+  position: relative;
   color: var(--text-sec);
+}
+/* 左竖条:圆头 2px,上下各留 10%(border-left 做不了圆角/内缩,改 ::before) */
+.am-app .milkdown .ProseMirror blockquote::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10%;
+  bottom: 10%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--primary);
 }
 .am-app .milkdown .ProseMirror code {
   font-family: var(--font-mono);
@@ -735,7 +774,18 @@
   background: var(--surface-2);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease-apple),
-    border-color var(--dur-fast) var(--ease-apple);
+    border-color var(--dur-fast) var(--ease-apple),
+    box-shadow 0.4s var(--ease-apple, ease-out);
+  /* 勾选爆花(AFFiNE playCheckAnimation 的 transition 版):6 颗粒子藏在盒内
+     (spread -8px 使 16px 盒下不可见);用 transition 而非 animation,
+     只在状态翻转时插值飞出——初次渲染已勾选项直接呈现终态,不放炮。 */
+  box-shadow:
+    4px 0 0 -8px var(--accent, #6c5ce7),
+    -4px 0 0 -8px var(--accent, #6c5ce7),
+    0 4px 0 -8px var(--accent, #6c5ce7),
+    0 -4px 0 -8px var(--accent, #6c5ce7),
+    3px 3px 0 -8px var(--accent, #6c5ce7),
+    -3px -3px 0 -8px var(--accent, #6c5ce7);
 }
 .am-app .milkdown .ProseMirror li[data-item-type='task']:hover::before {
   border-color: var(--primary);
@@ -743,6 +793,14 @@
 .am-app .milkdown .ProseMirror li[data-item-type='task'][data-checked='true']::before {
   background: var(--primary);
   border-color: var(--primary);
+  /* 爆花终态:粒子飞到 ≈20px 处渐透明(途中 spread≈-7 可见) */
+  box-shadow:
+    20px 0 0 -6px transparent,
+    -20px 0 0 -6px transparent,
+    0 20px 0 -6px transparent,
+    0 -20px 0 -6px transparent,
+    15px 15px 0 -6px transparent,
+    -15px -15px 0 -6px transparent;
 }
 .am-app .milkdown .ProseMirror li[data-item-type='task'][data-checked='true']::after {
   content: '';
@@ -782,11 +840,12 @@
   max-height: 344px;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-panel);
+  /* AFFiNE 浮层规格:8px 圆角 + 0.5px 描边层 + 12px 弥散,入场统一 120ms */
+  border-radius: 8px;
+  box-shadow: 0 0 0 0.5px var(--border), 0 0 12px var(--shadow, rgba(66, 65, 73, 0.14));
   padding: 6px;
   backdrop-filter: blur(20px) saturate(140%);
-  animation: pop-in var(--dur-fast) var(--ease-apple);
+  animation: pop-in 120ms var(--ease-apple);
 }
 .am-app .slash-scroll {
   display: flex;
@@ -807,7 +866,7 @@
 }
 .am-app .slash-item {
   display: grid;
-  grid-template-columns: 22px 1fr auto;
+  grid-template-columns: 28px 1fr auto;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -827,9 +886,10 @@
 .am-app .slash-icon {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-xs);
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   background: var(--surface);
   color: var(--text-sec);
   font-size: 11px;
@@ -1177,6 +1237,16 @@
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+@keyframes amx-dropline-in {
+  from {
+    transform: scaleX(0.3);
+    opacity: 0.4;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 1;
   }
 }
 
