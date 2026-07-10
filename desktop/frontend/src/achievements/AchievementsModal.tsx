@@ -28,6 +28,7 @@ export function AchievementsModal(): React.ReactElement {
   const pts = seriesPoints(active, claimed)
   const total = active.achievements.reduce((sum, a) => sum + a.points, 0)
   const tier = medalTier(active, pts)
+  const nextTier = TIERS.find((tr) => pts < active.medals[tr]) ?? null
 
   return (
     <div className="settings-page">
@@ -68,14 +69,12 @@ export function AchievementsModal(): React.ReactElement {
               </div>
               <div className="ach-progressbar"><i style={{ width: `${total ? Math.round((pts / total) * 100) : 0}%` }} /></div>
             </div>
-            {/* 勋章占位:纯 CSS 圆徽,圈内显示阈值点数;正式图案后续替换 */}
-            <div className="ach-medals">
-              {TIERS.map((tr) => (
-                <div key={tr} className={`ach-medal${pts >= active.medals[tr] ? '' : ' off'}`} data-tier={tr}
-                  title={`${t(`achievements.medal.${tr}`)} · ${t('achievements.pts', { n: active.medals[tr] })}`}>
-                  {active.medals[tr]}
-                </div>
-              ))}
+            {/* 每系列一枚勋章:随已领取点数跨阈值升级 灰→铜→银→金(占位图案=单色奖杯圆徽,后续替换) */}
+            <div className={`ach-medal${tier ? '' : ' off'}`} data-tier={tier ?? undefined}
+              title={nextTier
+                ? `${t(`achievements.medal.${nextTier}`)} · ${t('achievements.pts', { n: active.medals[nextTier] })}`
+                : t('achievements.medal.gold')}>
+              <Trophy />
             </div>
           </div>
 

@@ -44,13 +44,13 @@
 .ach-progressbar { height: 6px; border-radius: 3px; background: var(--overlay-light); overflow: hidden; }
 .ach-progressbar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width var(--duration-slow) var(--ease-out); }
 
-/* 勋章占位:圆徽三色,圈内=阈值点数;未达成灰显 */
-.ach-medals { display: flex; gap: 10px; flex: none; }
-.ach-medal { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+/* 每系列一枚勋章(占位=单色奖杯圆徽):随等级变色 灰→铜→银→金;title 提示下一级阈值 */
+.ach-medal { width: 46px; height: 46px; flex: none; border-radius: 50%; display: grid; place-items: center; color: #fff; border: 1px solid var(--border); transition: background var(--duration-slow) var(--ease-out); }
+.ach-medal > svg { width: 20px; height: 20px; }
 .ach-medal[data-tier='bronze'] { background: #b87333; }
 .ach-medal[data-tier='silver'] { background: #a9a9a9; }
 .ach-medal[data-tier='gold'] { background: #d4af37; }
-.ach-medal.off { background: var(--overlay-light); color: var(--text-faint); border-color: var(--border); filter: grayscale(1); }
+.ach-medal.off { background: var(--overlay-light); color: var(--text-faint); }
 
 /* ── 面板:成就列表 ───────────────────────────────────────── */
 .ach-row { display: flex; align-items: center; gap: 12px; padding: 13px 4px; border-bottom: 1px solid var(--border); }
