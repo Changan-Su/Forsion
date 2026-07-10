@@ -1,0 +1,17 @@
+{
+  "id": "affine",
+  "name": "AFFiNE",
+  "description": "AFFiNE 官方配色 1:1 还原:全部取自 @toeverything/theme@1.1.23(AFFiNE 仓库锁定版本)的 light/dark 原值——纯白纸面 + #1E96EB 蓝强调 + 灰阶文字梯队 + AFFiNE 阴影体系与 Inter 字栈。自带整套 28 色(压过配色轴,任意配色下都呈现 AFFiNE 观感;custom 配色的 seed 会穿透,可用来换强调色)。",
+  "version": "1.0.0",
+  "author": "Forsion",
+  "supportsDarkMode": true,
+  "tags": ["affine", "blue", "clean"],
+  "fonts": { "google": ["Inter"] },
+  "preview": {
+    "background": { "light": "#ffffff", "dark": "#141414" },
+    "accent": "#1e96eb",
+    "title": { "text": "Af" },
+    "tagline": "AFFiNE 官方配色 1:1",
+    "swatches": ["#1e96eb", "#ffffff", "#8e8d91", "#e3e2e4"]
+  }
+}

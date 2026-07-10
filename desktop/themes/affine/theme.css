@@ -1,0 +1,97 @@
+/**
+ * AFFiNE — 官方配色 1:1 还原。
+ * 全部色值/阴影/半径/字栈取自 @toeverything/theme@1.1.23(AFFiNE 仓库锁定的主题包版本)
+ * dist/style.css 的 [data-theme=light] / [data-theme=dark] 两块原值,手工映射到 LCL 契约;
+ * 个别 LCL 有而 AFFiNE 没有的键(text-light/overlay 梯队/hover 强调/user-bg/glow)按其体系推导,逐处注明。
+ * 照 kami 先例「语言自带整套 28 色」:用 :root[data-theme][data-skin](0,3,0)
+ * 压过 skins.css 的配色轴;唯 custom 配色的 9 个内联 seed 变量会穿透(可借此换强调色)。
+ *
+ * ⚠ 暗色块必须与亮色块 28/28 逐键对称:漏声明的键会在暗色下拿到本文件的亮色值。
+ */
+
+/* ─── 结构层:AFFiNE 半径(元素 4 / 菜单 8 / popover 12 原值)+ 官方阴影体系 + Inter 字栈(补 CJK) ─── */
+[data-theme='affine'] {
+  --border-width: 1px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px; /* = --affine-popover-radius 原值 */
+  --radius-chat-surface: 12px;
+  --radius-chat-card: 8px;
+  /* --affine-font-family 原栈;AFFiNE 无 CJK 回退,在 sans-serif 前补 PingFang/雅黑 */
+  --font-ui: 'Inter', 'Source Sans 3', Poppins, apple-system, BlinkMacSystemFont, 'Helvetica Neue', Tahoma, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --panel-blur: none;
+  /* shadow-1 / button-shadow 亮侧原值 */
+  --card-shadow: 0px 0px 4px 0px rgba(66, 65, 73, 0.14);
+  --btn-shadow: 0px 0px 1px 0px rgba(0, 0, 0, 0.12), 0px 1px 5px 0px rgba(0, 0, 0, 0.12);
+  --icon-shadow: 0px 0px 1px 0px rgba(0, 0, 0, 0.12);
+}
+.dark[data-theme='affine'] {
+  /* shadow-1 / button-shadow 暗侧原值 */
+  --card-shadow: 0px 0px 4px 0px rgba(0, 0, 0, 0.24);
+  --btn-shadow: 0px 0px 1px 0px rgba(0, 0, 0, 0.2), 0px 1px 5px 0px rgba(0, 0, 0, 0.2);
+  --icon-shadow: 0px 0px 1px 0px rgba(0, 0, 0, 0.2);
+}
+
+/* ─── 亮色颜色层:纸面 #fff / 侧栏 #f4f4f5 / 蓝强调 #1e96eb(AFFiNE light 原值) ─── */
+:root[data-theme='affine'][data-skin] {
+  --bg: #ffffff;                              /* background-primary */
+  --bg-card: #fbfbfc;                         /* background-overlay-panel(AFFiNE 极扁平,面板与纸面几乎同色靠边线/阴影分层) */
+  --bg-glass: rgba(255, 255, 255, 0.9);
+  --sidebar-bg: #f4f4f5;                      /* background-secondary */
+  --text: #121212;                            /* text-primary */
+  --text-light: rgba(18, 18, 18, 0.78);       /* 推导:AFFiNE v1 无此级,取 text-primary 78% */
+  --text-muted: #8e8d91;                      /* text-secondary */
+  --text-faint: #a9a9ad;                      /* text-disable */
+  --text-ghost: #c0bfc1;                      /* placeholder */
+  --border: #e3e2e4;                          /* border-color(divider 同值) */
+  --shadow: rgba(66, 65, 73, 0.14);           /* shadow-1 的色部 */
+  --accent: #1e96eb;                          /* primary */
+  --accent-hover: #1c81d9;                    /* blue-700 原值(官方深一档蓝) */
+  --accent-light: #e9f1ff;                    /* background-processing(官方蓝 tint 面) */
+  --accent-rgb: 30, 150, 235;
+  --on-accent: #ffffff;
+  --green: #10cb86;                           /* success */
+  --danger: #eb4335;                          /* error */
+  --danger-light: #fdeceb;                    /* background-error 原值 */
+  --overlay-subtle: rgba(0, 0, 0, 0.02);      /* 推导:hover 的半档 */
+  --overlay-light: rgba(0, 0, 0, 0.04);       /* hover-color 原值 */
+  --overlay-medium: rgba(0, 0, 0, 0.1);       /* black-10 原值 */
+  --overlay-strong: rgba(0, 0, 0, 0.15);      /* 推导:black-10 与 black-30 之间,LCL 边线级 */
+  --overlay-scrim: rgba(0, 0, 0, 0.75);       /* background-modal 原值 */
+  --user-bg: rgba(30, 150, 235, 0.08);        /* 推导:AFFiNE 无聊天,取 primary 8% tint */
+  --tool-bg: #f7f8fa;                         /* background-code-block 原值(工具卡≈代码块) */
+  --tool-text: #77757d;                       /* icon-color */
+  --glow: radial-gradient(120% 80% at 82% -12%, rgba(0, 0, 0, 0.02), transparent 58%); /* AFFiNE 无 glow,给近不可见值保持消费处合法 */
+}
+
+/* ─── 暗色颜色层:纸面 #141414 / 侧栏 #252525 / 蓝强调 #1c9ee4(AFFiNE dark 原值) ─── */
+:root.dark[data-theme='affine'][data-skin] {
+  --bg: #141414;                              /* background-primary */
+  --bg-card: #1e1e1e;                         /* background-overlay-panel */
+  --bg-glass: rgba(20, 20, 20, 0.9);
+  --sidebar-bg: #252525;                      /* background-secondary */
+  --text: #eaeaea;                            /* text-primary */
+  --text-light: rgba(234, 234, 234, 0.78);    /* 推导:同亮侧规则 */
+  --text-muted: #9c9ca0;                      /* text-secondary */
+  --text-faint: #77757d;                      /* text-disable */
+  --text-ghost: #3e3e3f;                      /* placeholder */
+  --border: #2e2e2e;                          /* border-color */
+  --shadow: rgba(0, 0, 0, 0.24);              /* shadow-1 暗侧色部 */
+  --accent: #1c9ee4;                          /* primary(暗侧官方微调蓝) */
+  --accent-hover: #38a8e8;                    /* 推导:暗下 hover 提亮一档(官方 blue-700 暗侧反而更沉,不合 hover 语义) */
+  --accent-light: #162030;                    /* background-processing 暗侧原值 */
+  --accent-rgb: 28, 158, 228;
+  --on-accent: #ffffff;
+  --green: #0da26b;                           /* success 暗侧 */
+  --danger: #bc362a;                          /* error 暗侧 */
+  --danger-light: #2e1a18;                    /* background-error 暗侧原值 */
+  --overlay-subtle: rgba(255, 255, 255, 0.04);
+  --overlay-light: rgba(255, 255, 255, 0.1);  /* hover-color 暗侧原值 */
+  --overlay-medium: rgba(255, 255, 255, 0.14);
+  --overlay-strong: rgba(255, 255, 255, 0.22);
+  --overlay-scrim: rgba(0, 0, 0, 0.5);        /* background-modal 暗侧原值 */
+  --user-bg: rgba(28, 158, 228, 0.14);
+  --tool-bg: #1f2022;                         /* background-code-block 暗侧原值 */
+  --tool-text: #a8a8a0;                       /* icon-color 暗侧 */
+  --glow: radial-gradient(120% 80% at 82% -12%, rgba(255, 255, 255, 0.015), transparent 58%);
+}
