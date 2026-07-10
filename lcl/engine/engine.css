@@ -294,6 +294,16 @@
 .dockview-theme-lcl .dv-sash-container .dv-sash:active::after {
   background: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
+/* 邻侧为主区浮卡时线与热区贴到卡缘(±8px 与主区卡 padding 同步;data-lcl-shift 由 sashAffordance 校准,
+   end=浮卡在右/下,start=浮卡在左/上;热区只扩到卡缘为止,不侵入卡内滚动条)。 */
+.dockview-theme-lcl .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash[data-lcl-shift='end']::after { left: calc(50% + 8px); }
+.dockview-theme-lcl .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash[data-lcl-shift='start']::after { left: calc(50% - 8px); }
+.dockview-theme-lcl .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash[data-lcl-shift='end']::before { right: -6px; }
+.dockview-theme-lcl .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash[data-lcl-shift='start']::before { left: -6px; }
+.dockview-theme-lcl .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash[data-lcl-shift='end']::after { top: calc(50% + 8px); }
+.dockview-theme-lcl .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash[data-lcl-shift='start']::after { top: calc(50% - 8px); }
+.dockview-theme-lcl .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash[data-lcl-shift='end']::before { bottom: -6px; }
+.dockview-theme-lcl .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash[data-lcl-shift='start']::before { top: -6px; }
 .dockview-theme-lcl .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled {
   cursor: col-resize;
 }
