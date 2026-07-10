@@ -13,7 +13,6 @@ import { AmadeusOverlays } from './amadeusOverlays'
 import { MarketModal } from './components/MarketModal'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
 import { FeedbackModal } from './components/FeedbackModal'
-import { AstryxScope } from './theme/astryxBridge'
 import { useShallow } from 'zustand/react/shallow'
 
 export function Root() {
@@ -55,9 +54,7 @@ export function Root() {
   }, [a.onboarding])
 
   return (
-    // 全局 AstryxScope(display:contents,零布局影响):让全应用的局部 Scope 都成为 nested,
-    // astryx 只在这一处根 Theme 同步 <html> 属性(桥内 effect 会把 data-theme 抢回 LCL 语言)。
-    <AstryxScope>
+    <>
       <div className={`shell-host${revealMain ? ' main-enter' : ''}`}>
         <Shell dark={theme.mode === 'dark'} soft={!!getLanguage(theme.lang)?.manifest.panelGap} buildDefault={buildDefaultLayout} header={<TopBar />} />
       </div>
@@ -169,6 +166,6 @@ export function Root() {
           </div>
         ))}
       </div>
-    </AstryxScope>
+    </>
   )
 }
