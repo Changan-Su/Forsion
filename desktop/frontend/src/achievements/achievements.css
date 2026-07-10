@@ -1,0 +1,73 @@
+/* 成就系统:toast + 面板内容区(外壳复用 .settings-page,零新增外壳样式)。全部取 base.css token。 */
+
+/* ── 成就 toast:凝聚显形→停留→失焦淡出(无位移无弹跳) ───────────── */
+.ach-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 128px; /* chat 输入框(≈110px)之上一点 */
+  transform: translateX(-50%);
+  z-index: 90; /* 市场/设置浮层(50)之上,右上系统 toast(100)之下 */
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 10px 13px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  animation: ach-toast-life 3.15s var(--ease-out) both;
+  will-change: filter, opacity;
+}
+.ach-toast > svg { width: 18px; height: 18px; color: var(--text-muted); flex: none; }
+.ach-toast-sub { font-size: 10.5px; color: var(--text-muted); letter-spacing: 0.02em; }
+.ach-toast-title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.35; }
+@keyframes ach-toast-life {
+  0%   { opacity: 0; filter: blur(6px) brightness(1.5); } /* 过曝+模糊 */
+  8%   { opacity: 1; filter: blur(0) brightness(1); }     /* ≈250ms 凝聚显形 */
+  90%  { opacity: 1; filter: blur(0) brightness(1); }     /* 停留 */
+  100% { opacity: 0; filter: blur(3px) brightness(1); }   /* ≈315ms 轻微失焦淡出 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .ach-toast { animation: none; } /* 出队由 3.6s timeout 兜底 */
+}
+
+/* ── 面板:系列头(点数/进度条/勋章) ───────────────────────────── */
+.ach-serieshead { display: flex; align-items: center; gap: 24px; padding: 4px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.ach-serieshead-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.ach-serieshead-pts { font-size: 12.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.ach-tier-tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; color: #fff; }
+.ach-tier-tag[data-tier='bronze'] { background: #b87333; }
+.ach-tier-tag[data-tier='silver'] { background: #a9a9a9; }
+.ach-tier-tag[data-tier='gold'] { background: #d4af37; }
+.ach-progressbar { height: 6px; border-radius: 3px; background: var(--overlay-light); overflow: hidden; }
+.ach-progressbar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width var(--duration-slow) var(--ease-out); }
+
+/* 勋章占位:圆徽三色,圈内=阈值点数;未达成灰显 */
+.ach-medals { display: flex; gap: 10px; flex: none; }
+.ach-medal { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; border: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.ach-medal[data-tier='bronze'] { background: #b87333; }
+.ach-medal[data-tier='silver'] { background: #a9a9a9; }
+.ach-medal[data-tier='gold'] { background: #d4af37; }
+.ach-medal.off { background: var(--overlay-light); color: var(--text-faint); border-color: var(--border); filter: grayscale(1); }
+
+/* ── 面板:成就列表 ───────────────────────────────────────── */
+.ach-row { display: flex; align-items: center; gap: 12px; padding: 13px 4px; border-bottom: 1px solid var(--border); }
+.ach-row:last-child { border-bottom: none; }
+.ach-row.claimed { opacity: 0.55; }
+.ach-row > svg { width: 18px; height: 18px; color: var(--text-muted); flex: none; }
+.ach-row-main { flex: 1; min-width: 0; }
+.ach-row-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.ach-row-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.ach-row-pts, .ach-row-prog { font-size: 12px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
+.ach-row-got { color: var(--accent); display: grid; place-items: center; width: 26px; flex: none; }
+.ach-claim {
+  height: 26px; padding: 0 12px; flex: none;
+  border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent); color: var(--on-accent);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+  -webkit-app-region: no-drag;
+}
+.ach-claim:hover { background: var(--accent-hover); border-color: var(--accent-hover); }

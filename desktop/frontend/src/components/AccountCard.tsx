@@ -10,6 +10,7 @@ import { LogOut, Loader2 } from 'lucide-react'
 import type { AuthStatusInfo } from '../types'
 import { useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
+import { track } from '../achievements/store'
 
 export const AccountCard: React.FC<{
   onToast?: (text: string, error?: boolean) => void
@@ -43,6 +44,7 @@ export const AccountCard: React.FC<{
     setLoggingIn(true)
     try {
       await window.tangu.forsionLogin()
+      track('account.login')
       refresh()
       onAuthChange?.()
     } catch (e: any) {

@@ -5,6 +5,7 @@
  * 磁盘主题(~/.tangu/themes)经 initThemes/reloadThemes 异步合并进 registry,themesVersion 触发 UI 重渲染。
  */
 import { create } from 'zustand'
+import { track } from '../achievements/store'
 import { applyTheme, removeInjectedThemeStyles } from '../theme/loader'
 import {
   resolveInitialLang, resolveInitialSkin, resolveInitialMode, listSkins, listLanguages,
@@ -77,9 +78,10 @@ export const useTheme = create<ThemeState>((set, get) => {
     flat: readFlat(),
     themesVersion: 0,
     setLang: (lang) => apply(lang, get().skin, get().mode, get().seed),
-    setSkin: (skin) => apply(get().lang, skin, get().mode, get().seed),
+    // 成就打点只在用户显式换主题/配色的动作里(setTheme/setSkin);严禁挪进 apply——启动初始化也走 apply 会误计。
+    setSkin: (skin) => { track('theme.change'); apply(get().lang, skin, get().mode, get().seed) },
     setMode: (mode) => withModeTransition(() => apply(get().lang, get().skin, mode, get().seed)),
-    setTheme: (lang, skin, mode) => apply(lang, skin, mode, get().seed),
+    setTheme: (lang, skin, mode) => { track('theme.change'); apply(lang, skin, mode, get().seed) },
     setSeed: (seed) => apply(get().lang, 'custom', get().mode, seed),
     // 只更新 seed 值 + 持久化(若当前是 custom 则即时重应用);不强行切到 custom——对齐 App.tsx onSeedChange。
     setSeedValue: (seed) => {

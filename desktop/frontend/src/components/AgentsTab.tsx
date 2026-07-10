@@ -8,6 +8,7 @@ import { listAgents, saveAgentDef, deleteAgentDef, listModels, uploadAgentAvatar
 import { AgentMemoryModal } from './AgentMemoryModal'
 import type { ModelInfo, NormalAgentDef, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { track } from '../achievements/store'
 
 type Draft = {
   slug?: string
@@ -90,6 +91,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
         shareDefaultMemory: editing.shareDefaultMemory,
         cloudSync: editing.cloudSync,
       } as Partial<NormalAgentDef>, editing.slug)
+      if (!editing.slug) track('agent.create')
       setEditing(null)
       load()
     } catch (e: any) {

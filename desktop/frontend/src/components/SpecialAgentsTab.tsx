@@ -8,6 +8,7 @@ import { History, Sparkles, FolderPlus } from 'lucide-react'
 import { getSpecialConfig, saveSpecialConfig, listModels } from '../services/backendService'
 import type { HistorianConfig, ModelInfo, MuseConfig, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { track } from '../achievements/store'
 
 /** 分段开关(对齐 .seg):关 | 开。canOn=false 时禁用「开」。 */
 const Seg: React.FC<{ value: boolean; onChange: (b: boolean) => void; onLabel: string; offLabel: string; canOn?: boolean }> =
@@ -83,7 +84,7 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
         <div className="agent-card-head">
           <span className="ac-title"><History size={15} /> {t('settings.special.historian')}</span>
           <span className="grow" />
-          <Seg value={h.enabled} canOn={!!h.modelId || !!slotDefault} onChange={(v) => saveHistorian({ enabled: v })}
+          <Seg value={h.enabled} canOn={!!h.modelId || !!slotDefault} onChange={(v) => { if (v) track('special.enable'); saveHistorian({ enabled: v }) }}
             onLabel={t('settings.special.on')} offLabel={t('settings.special.off')} />
         </div>
         <p className="ac-desc">{t('settings.special.historianDesc')}{!h.modelId && !slotDefault && ` · ${t('settings.special.pickModelFirst')}`}</p>
@@ -120,7 +121,7 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
         <div className="agent-card-head">
           <span className="ac-title"><Sparkles size={15} /> {t('settings.special.muse')}</span>
           <span className="grow" />
-          <Seg value={m.enabled} canOn={!!m.modelId || !!slotDefault} onChange={(v) => saveMuse({ enabled: v })}
+          <Seg value={m.enabled} canOn={!!m.modelId || !!slotDefault} onChange={(v) => { if (v) track('special.enable'); saveMuse({ enabled: v }) }}
             onLabel={t('settings.special.on')} offLabel={t('settings.special.off')} />
         </div>
         <p className="ac-desc">{t('settings.special.museDesc')}{!m.modelId && !slotDefault && ` · ${t('settings.special.pickModelFirst')}`}</p>

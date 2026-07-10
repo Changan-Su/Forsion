@@ -13,6 +13,8 @@ import { AmadeusOverlays } from './amadeusOverlays'
 import { MarketModal } from './components/MarketModal'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
 import { FeedbackModal } from './components/FeedbackModal'
+import { AchievementsModal } from './achievements/AchievementsModal'
+import { AchievementToast } from './achievements/AchievementToast'
 import { useShallow } from 'zustand/react/shallow'
 
 export function Root() {
@@ -28,6 +30,7 @@ export function Root() {
     feedbackOpen: s.feedbackOpen,
     marketOpen: s.marketOpen,
     closeMarket: s.closeMarket,
+    achievementsOpen: s.achievementsOpen,
     toasts: s.toasts,
     cfg: s.cfg,
     tr: s.tr,
@@ -155,9 +158,26 @@ export function Root() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {a.achievementsOpen && (
+        <motion.div
+          key="achievements"
+          style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--bg)' }}
+          initial={{ opacity: 0, scale: 0.985 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.985 }}
+          transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+        >
+          <AchievementsModal />
+        </motion.div>
+        )}
+      </AnimatePresence>
+
       {a.feedbackOpen && (
         <FeedbackModal cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
       )}
+
+      <AchievementToast />
 
       <div className="toast-wrap" aria-live="polite" aria-atomic="true">
         {a.toasts.map((toast) => (

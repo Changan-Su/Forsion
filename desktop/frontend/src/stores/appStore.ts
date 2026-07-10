@@ -18,6 +18,7 @@ import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
 import type { Tab as SettingsTab } from '../components/SettingsModal'
 import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
+import { track } from '../achievements/store'
 
 export type { SettingsTab }
 
@@ -182,6 +183,7 @@ export interface AppState {
   settingsTab: SettingsTab | null
   feedbackOpen: boolean
   marketOpen: boolean
+  achievementsOpen: boolean
   onboarding: boolean
   updateAvailable: { version?: string } | null
   updateDismissed: boolean
@@ -250,6 +252,8 @@ export interface AppState {
   handleAuthExpired(): void
   openMarket(): void
   closeMarket(): void
+  openAchievements(): void
+  closeAchievements(): void
   /** 插件装好后:重扫(免重启出现)+ 启用 + 重启提示 + 跳转对应设置。 */
   onPluginInstalled(): Promise<void>
   openFeedback(): void
@@ -301,6 +305,7 @@ export const useApp = create<AppState>((set, get) => ({
   settingsTab: null,
   feedbackOpen: false,
   marketOpen: false,
+  achievementsOpen: false,
   onboarding: false,
   updateAvailable: null,
   updateDismissed: false,
@@ -383,6 +388,7 @@ export const useApp = create<AppState>((set, get) => ({
         })
         break
       case 'tool_call':
+        if (pl.name === 'generate_image') track('image.generate')
         patchMessage(sessionId, assistantId, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
@@ -1005,6 +1011,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
+    track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
     const wasNewChat = !sid
@@ -1324,6 +1331,10 @@ export const useApp = create<AppState>((set, get) => ({
   openSettings: (tab) => set({ settingsTab: tab ?? null, settingsOpen: true }),
 
   openMarket: () => set({ marketOpen: true }),
+
+  openAchievements: () => set({ achievementsOpen: true }),
+  closeAchievements: () => set({ achievementsOpen: false }),
+
   closeMarket: () => {
     set({ marketOpen: false })
     // 装了新技能/智能体/插件 → 刷新本地 Agent 目录 + 技能列表(让 /skill 选择器即时反映新技能,

@@ -13,6 +13,7 @@ import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
+import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -143,6 +144,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       registerPropType(def)
       set((s) => ({ propertyTypes: [...s.propertyTypes, { pluginId, item: def }] }))
     },
+    // 成就:注册/计数都在 achievements/store 内强制 plugin:<id>: 前缀(防撞官方 id/伪造官方计数)。
+    achievements: {
+      registerSeries: (def) => registerPluginSeries(pluginId, def),
+      track: (event, n) => track(`plugin:${pluginId}:${event}`, n),
+    },
   })
 
   /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
@@ -154,6 +160,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     for (const o of get().themes) if (o.pluginId === id) removeThemeStyle(o.item.id)
     for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
+    unregisterPluginAchievements(id)
     set((s) => ({
       activeIds: s.activeIds.filter((x) => x !== id),
       slashItems: s.slashItems.filter((o) => o.pluginId !== id),

@@ -18,6 +18,7 @@ import { SpaceButton } from './spaces'
 import { parseSpaceJson, slugifyId, uniqueId, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
+import { track } from './achievements/store'
 
 const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus'] as const
 /** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。 */
@@ -130,6 +131,7 @@ export async function saveCurrentAsSpace(name: string): Promise<void> {
   const id = uniqueId(slugifyId(name), taken)
   const spec: SpaceSpec = { id, name, icon: 'boxes', layout }
   await window.tangu.spacesSave(id, JSON.stringify(spec, null, 2))
+  track('space.save')
   installUserSpace(spec)
   app().toast(app().tr('spaces.saved', { name }))
 }

@@ -58,6 +58,27 @@ export interface PluginAppApi {
   notify(message: string): void
 }
 
+/** One achievement inside a plugin-registered series. Titles/descriptions are literal strings
+ *  (plugins don't go through app i18n). `event` is the counter key the plugin bumps via
+ *  ctx.achievements.track(); the host prefixes ids/events with `plugin:<pluginId>:` automatically. */
+export interface AchievementContribution {
+  id: string
+  title: string
+  desc: string
+  event: string
+  goal: number
+  points: number
+}
+
+/** An achievement series a plugin can contribute (shows up in the Achievements panel).
+ *  medals = claimed-points thresholds for bronze/silver/gold; omit to auto-derive from total points. */
+export interface AchievementSeriesContribution {
+  id: string
+  title: string
+  medals?: { bronze: number; silver: number; gold: number }
+  achievements: AchievementContribution[]
+}
+
 /** A collapsible panel a plugin contributes to the sidebar. (React component; built-in plugins.) */
 export interface PanelContribution {
   id: string
@@ -80,6 +101,12 @@ export interface PluginContext {
   registerStatusItem(item: StatusItemContribution): void
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
   registerPropertyType(def: PropertyTypeContribution): void
+  /** Achievements: register a series and bump its counters. Series/achievement ids and events
+   *  are auto-prefixed `plugin:<pluginId>:` (can't collide with or forge official ones). */
+  achievements: {
+    registerSeries(def: AchievementSeriesContribution): void
+    track(event: string, n?: number): void
+  }
 }
 
 export interface AmadeusPlugin {

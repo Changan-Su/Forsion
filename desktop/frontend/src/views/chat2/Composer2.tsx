@@ -13,6 +13,7 @@ import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { useI18n } from '../../i18n'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
 import { GroupChatSetup } from '../../components/GroupChatSetup'
+import { track } from '../../achievements/store'
 import './composer2.css'
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
@@ -405,7 +406,7 @@ export const Composer2: React.FC<{
           initialIntensity={groupIntensity}
           initialRounds={groupMaxRounds}
           active={groupActive}
-          onConfirm={(r) => { onGroupChange?.({ groupChat: true, ...r }); setGroupSetupOpen(false) }}
+          onConfirm={(r) => { onGroupChange?.({ groupChat: true, ...r }); setGroupSetupOpen(false); track('chat.group') }}
           onDisable={() => onGroupChange?.({ groupChat: false })}
           onClose={() => setGroupSetupOpen(false)}
         />

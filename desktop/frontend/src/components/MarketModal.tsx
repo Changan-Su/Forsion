@@ -13,6 +13,7 @@ import { loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { installAmadeusPlugins } from '../amadeusPlugins'
+import { track } from '../achievements/store'
 import type { MarketCard, MarketDetail } from '../types'
 
 type Tab = 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin' | 'updates' | 'submit'
@@ -80,6 +81,7 @@ export function MarketModal() {
     setInstalling(c.id)
     try {
       await installMarket(c.id)
+      track('market.install')
       if (c.type === 'plugin') {
         // 插件:重扫免重启出现 + 装即启用 + 跳转设置(在 onPluginInstalled 内 toast)。
         await useApp.getState().onPluginInstalled()

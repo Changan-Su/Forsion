@@ -18,6 +18,7 @@ import { ThemeCard } from './ThemeCard'
 import { BrandLogo } from './BrandLogo'
 import { Markdown } from './Markdown'
 import { CHANGELOG } from '../changelog'
+import { track } from '../achievements/store'
 
 /** 系统语言/时区疑似中国大陆 → 引导/设置里推荐开镜像(仅推荐,不代选)。 */
 export const likelyMainlandChina = (): boolean => {
@@ -105,6 +106,7 @@ export const OnboardingWizard: React.FC<{
     try {
       await window.tangu.setConfig({ mode: 'managed', cloudUrl })
       await window.tangu.forsionLogin(cloudUrl)
+      track('account.login')
       setLoggedIn(true)
       setConnectMsg(t('onboarding.connect.loginOk'))
       onReconnect()
