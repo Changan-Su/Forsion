@@ -7,14 +7,14 @@
  */
 
 /* ── 经典 Classic(id 沿用 cream;= 原 lovable 配色;亦即 :root 默认)──────────── */
-/* 2026-07-10 三改:经典 = custom seed #f8f7f6 的静态定格——9 个 seed 派生键(accent 族/bg/sidebar/card/user-bg)
- * 逐字节取 customSkinVars('#f8f7f6') 亮/暗输出(lovableData.ts),其余键即 custom 的回退面,天然一致。
- * 改这套值须重跑 customSkinVars 对齐,别手调。base.css :root(.dark) 同步。 */
+/* 2026-07-10 四改(终稿):配色=强调+背景两个自由度——经典 = 炭黑强调 × #f8f7f6 中性背景族。
+ * 此前把 #f8f7f6 整体当 custom seed 定格(三改)使 accent 变纸白,选中/按钮全线对比崩坏,已回炉。
+ * base.css :root 同步;暗侧=石墨底+纸白强调(用户确认可读)不动。 */
 :root[data-skin='cream'] {
-  --bg: #f6f6f7;
-  --bg-card: #fcfcfd;
+  --bg: #f8f7f6;
+  --bg-card: #fdfdfc;
   --bg-glass: rgba(248, 247, 246, 0.9);
-  --sidebar-bg: #efeff0;
+  --sidebar-bg: #f2f1ef;
   --text: #1c1c1c;
   --text-light: rgba(28, 28, 28, 0.82);
   --text-muted: #5f5f5d;
@@ -22,12 +22,11 @@
   --text-ghost: rgba(28, 28, 28, 0.28);
   --border: #eae9e7;
   --shadow: rgba(0, 0, 0, 0.05);
-  --accent: #f8f7f6;
-  --accent-ink: rgb(124, 124, 123); /* = customSkinVars 亮输出:纸白过浅,前景压深为中灰 */
-  --accent-hover: #d5d4d4;
-  --accent-light: rgba(248, 247, 246, 0.1);
-  --accent-rgb: 248, 247, 246;
-  --on-accent: #161018;
+  --accent: #1c1c1c;
+  --accent-hover: #000000;
+  --accent-light: rgba(28, 28, 28, 0.05);
+  --accent-rgb: 28, 28, 28;
+  --on-accent: #fbfbfa;
   --green: #4f6f52;
   --danger: #a3503f;
   --danger-light: rgba(163, 80, 63, 0.08);
@@ -35,7 +34,7 @@
   --overlay-light: rgba(28, 28, 28, 0.04);
   --overlay-medium: rgba(28, 28, 28, 0.07);
   --overlay-strong: rgba(28, 28, 28, 0.14);
-  --user-bg: rgba(248, 247, 246, 0.1);
+  --user-bg: rgba(28, 28, 28, 0.04);
   --tool-bg: rgba(28, 28, 28, 0.03);
   --tool-text: #5f5f5d;
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(191, 188, 182, 0.14), transparent 56%);
@@ -53,7 +52,6 @@
   --border: #34302a;
   --shadow: rgba(0, 0, 0, 0.4);
   --accent: #f8f7f6;
-  --accent-ink: #f8f7f6; /* 暗底上纸白本就可读(=customSkinVars 暗输出);暗块须显式声明防亮块的灰泄漏 */
   --accent-hover: #f9f8f8;
   --accent-light: rgba(248, 247, 246, 0.16);
   --accent-rgb: 248, 247, 246;

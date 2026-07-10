@@ -1,7 +1,7 @@
 {
   "id": "lovable",
   "name": "Genesis",
-  "description": "经典纸感 · 单色。纸白强调,柔阴影代线条,Pill 按钮。",
+  "description": "经典纸感 · 单色。炭黑强调,柔阴影代线条,Pill 按钮。",
   "version": "1.0.0",
   "author": "Forsion",
   "supportsDarkMode": true,
@@ -9,12 +9,12 @@
   "fonts": { "google": ["Hanken Grotesk:wght@400;500;600;700"] },
   "preview": {
     "background": {
-      "light": "linear-gradient(135deg, #f6f6f7 0%, #ececee 100%)",
+      "light": "linear-gradient(135deg, #f8f7f6 0%, #efeeec 100%)",
       "dark": "linear-gradient(135deg, #2a292b 0%, #353538 100%)"
     },
-    "accent": "#f8f7f6",
+    "accent": "#1c1c1c",
     "title": { "text": "Genesis" },
     "tagline": "经典纸感 · 单色",
-    "swatches": ["#f8f7f6", "#f6f6f7", "#5f5f5d", "#2a292b"]
+    "swatches": ["#1c1c1c", "#f8f7f6", "#5f5f5d", "#eae9e7"]
   }
 }

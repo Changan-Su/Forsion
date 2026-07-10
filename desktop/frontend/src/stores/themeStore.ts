@@ -28,6 +28,8 @@ interface ThemeState {
   skin: string
   mode: Mode
   seed: string
+  /** custom 配色的独立背景色 seed(''=未设,背景跟随强调色微染——旧单色行为)。 */
+  bgSeed: string
   glass: boolean
   flat: boolean
   /** 磁盘主题合并/重载后自增,驱动设置面板/引导/Shell 重渲染。 */
@@ -38,6 +40,8 @@ interface ThemeState {
   setTheme(lang: string, skin: string, mode: Mode): void
   setSeed(seed: string): void
   setSeedValue(seed: string): void
+  /** 设/清 custom 背景色(''=清除恢复跟随);当前为 custom 时即时重应用。 */
+  setBgSeedValue(bg: string): void
   setGlass(on: boolean): void
   setFlat(on: boolean): void
   toggleMode(): void
@@ -51,6 +55,9 @@ interface ThemeState {
 
 function readSeed(): string {
   try { return localStorage.getItem('forsion_theme_seed') || DEFAULT_SEED } catch { return DEFAULT_SEED }
+}
+function readBgSeed(): string {
+  try { return localStorage.getItem('forsion_theme_bg_seed') || '' } catch { return '' }
 }
 function readGlass(): boolean {
   try { return localStorage.getItem('forsion_glass') !== 'off' } catch { return true }
@@ -74,6 +81,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     skin: resolveInitialSkin(),
     mode: resolveInitialMode(),
     seed: readSeed(),
+    bgSeed: readBgSeed(),
     glass: readGlass(),
     flat: readFlat(),
     themesVersion: 0,
@@ -88,6 +96,17 @@ export const useTheme = create<ThemeState>((set, get) => {
       try { localStorage.setItem('forsion_theme_seed', seed) } catch { /* ignore */ }
       set({ seed })
       if (get().skin === 'custom') applyTheme(get().lang, 'custom', get().mode, { customColor: seed })
+    },
+    setBgSeedValue: (bg) => {
+      set({ bgSeed: bg })
+      // 持久化在 loader 内(customBg 空串=removeItem);非 custom 时也写盘,下次切到 custom 生效。
+      if (get().skin === 'custom') applyTheme(get().lang, 'custom', get().mode, { customBg: bg })
+      else {
+        try {
+          if (bg) localStorage.setItem('forsion_theme_bg_seed', bg)
+          else localStorage.removeItem('forsion_theme_bg_seed')
+        } catch { /* ignore */ }
+      }
     },
     setGlass: (on) => {
       try { document.documentElement.dataset.glass = on ? 'on' : 'off' } catch { /* ignore */ }

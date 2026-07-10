@@ -82,12 +82,13 @@ function mix(c: RGB, t: RGB, k: number): string {
 }
 
 /** Accent + ambiance vars from a seed color (applied inline on the custom skin); neutrals stay from the CSS base. Pure. */
-export function customSkinVars(color: string, dark: boolean): Record<string, string> {
+export function customSkinVars(color: string, dark: boolean, bg?: string): Record<string, string> {
   const [r, g, b] = hexToRgb(color)
   const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
   const onAccent = lum < 0.62 ? '#ffffff' : '#161018'
   const c: RGB = [r, g, b]
   const rgb = `${r},${g},${b}`
+  const bc: RGB = bg ? hexToRgb(bg) : c
   if (dark) {
     return {
       '--accent': color,
@@ -98,9 +99,9 @@ export function customSkinVars(color: string, dark: boolean): Record<string, str
       '--accent-rgb': rgb,
       '--on-accent': onAccent,
       '--user-bg': `rgba(${rgb},0.16)`,
-      '--bg': mix(c, [26, 26, 28], 0.93), // graphite faintly tinted by the seed
-      '--sidebar-bg': mix(c, [33, 33, 36], 0.92),
-      '--bg-card': mix(c, [41, 41, 44], 0.94),
+      '--bg': bg ? mix(bc, [26, 26, 28], 0.88) : mix(c, [26, 26, 28], 0.93), // graphite faintly tinted by the (bg) seed
+      '--sidebar-bg': bg ? mix(bc, [33, 33, 36], 0.88) : mix(c, [33, 33, 36], 0.92),
+      '--bg-card': bg ? mix(bc, [41, 41, 44], 0.88) : mix(c, [41, 41, 44], 0.94),
     }
   }
   return {
@@ -112,9 +113,9 @@ export function customSkinVars(color: string, dark: boolean): Record<string, str
     '--accent-rgb': rgb,
     '--on-accent': onAccent,
     '--user-bg': `rgba(${rgb},0.10)`,
-    '--bg': mix(c, [246, 246, 247], 0.96), // near-white with a hint of the seed
-    '--sidebar-bg': mix(c, [238, 238, 240], 0.94),
-    '--bg-card': mix(c, [252, 252, 253], 0.975),
+    '--bg': bg || mix(c, [246, 246, 247], 0.96), // near-white with a hint of the seed; 显式背景 seed 原色直用
+    '--sidebar-bg': bg ? mix(bc, [0, 0, 0], 0.03) : mix(c, [238, 238, 240], 0.94),
+    '--bg-card': bg ? mix(bc, [255, 255, 255], 0.55) : mix(c, [252, 252, 253], 0.975),
   }
 }
 

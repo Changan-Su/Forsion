@@ -460,6 +460,10 @@ const zh: Dict = {
   'settings.theme.flatOff': '立体',
   'settings.theme.flatOn': '扁平',
   'settings.theme.customSeedLabel': '自定义强调色',
+  'settings.theme.customBgLabel': '自定义背景色',
+  'settings.theme.customBgFollow': '跟随强调色',
+  'settings.theme.customBgClear': '恢复跟随',
+  'settings.theme.customBgHint': '不设置时背景由强调色微染;设置后背景独立于强调色,浅色强调也不再影响背景。',
   // 双轴主题:设计语言(结构)× 配色(颜色)
   'settings.theme.langLabel': '设计语言',
   'settings.theme.openFolder': '打开主题文件夹',
@@ -1259,6 +1263,10 @@ const en: Dict = {
   'settings.theme.flatOff': 'Raised',
   'settings.theme.flatOn': 'Flat',
   'settings.theme.customSeedLabel': 'Custom accent',
+  'settings.theme.customBgLabel': 'Custom background',
+  'settings.theme.customBgFollow': 'Follows accent',
+  'settings.theme.customBgClear': 'Reset',
+  'settings.theme.customBgHint': 'Unset: background is tinted by the accent. Set: background is independent of the accent.',
   // Two-axis theme: design language (structure) × color scheme (palette)
   'settings.theme.langLabel': 'Design language',
   'settings.theme.openFolder': 'Open themes folder',

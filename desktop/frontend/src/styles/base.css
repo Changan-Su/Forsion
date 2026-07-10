@@ -7,11 +7,11 @@
  * 词表 = LCL 统一设计语言契约(.tangu-lovable);值拷自 Forsion-LCL/src/tangu/tangu.css。
  * 字体保留 CJK 回退(PingFang/雅黑)以渲染中文。组件只引用这些语义变量,换肤=整块替换 token。 */
 :root {
-  /* 「经典」(id cream) 2026-07-10 三改:= custom seed #f8f7f6 的静态定格(customSkinVars 亮输出),与 skins.css cream 同步。 */
-  --bg: #f6f6f7;
-  --bg-card: #fcfcfd;
+  /* 「经典」(id cream) 2026-07-10 四改终稿:炭黑强调 × #f8f7f6 中性背景族(与 skins.css cream 同步)。 */
+  --bg: #f8f7f6;
+  --bg-card: #fdfdfc;
   --bg-glass: rgba(248, 247, 246, 0.9);
-  --sidebar-bg: #efeff0;
+  --sidebar-bg: #f2f1ef;
   --text: #1c1c1c;
   --text-light: rgba(28, 28, 28, 0.82);
   --text-muted: #5f5f5d;
@@ -20,14 +20,13 @@
   --border: #eae9e7;
   --border-width: 1px;
   --shadow: rgba(0, 0, 0, 0.05);
-  --accent: #f8f7f6;
-  /* 可读强调色:accent 作前景(选中文字/图标/高亮底/聚焦边)一律用它——浅 accent(经典纸白/custom 浅 seed)
-   * 下自动可读,正常深 accent 下恒等于 accent(此兜底 var() 在使用处解析,跟随任何 skin/主题覆盖)。
-   * cream 位的实际值在 skins.css 覆盖;custom 由 customSkinVars 内联。 */
+  --accent: #1c1c1c;
+  /* 可读强调色:accent 作前景(选中文字/图标/高亮底/聚焦边)一律用它——custom 选浅 seed 时
+   * 自动可读(customSkinVars 的 lum 守卫),正常深 accent 下恒等(此兜底 var() 在使用处解析,跟随一切覆盖)。 */
   --accent-ink: var(--accent);
-  --accent-hover: #d5d4d4;
-  --accent-light: rgba(248, 247, 246, 0.1);
-  --accent-rgb: 248, 247, 246;
+  --accent-hover: #000000;
+  --accent-light: rgba(28, 28, 28, 0.05);
+  --accent-rgb: 28, 28, 28;
   --green: #4f6f52;
   --danger: #a3503f;
   --danger-light: rgba(163, 80, 63, 0.08);
@@ -43,7 +42,7 @@
   --font-ui: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-body: var(--font-ui);
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
-  --user-bg: rgba(248, 247, 246, 0.1);
+  --user-bg: rgba(28, 28, 28, 0.04);
   --tool-bg: rgba(28, 28, 28, 0.03);
   --tool-text: #5f5f5d;
   --panel-blur: none;
@@ -61,7 +60,7 @@
   /* 「agent 切换」同款灵动曲线(轻微过冲);用于展开/弹出等微动效,全局统一 taste */
   --ease-spring: cubic-bezier(0.2, 0.8, 0.3, 1);
   /* ── LCL 高程 token(扁平开关 html[data-flat='1'] 置空;P1 shell 暂未消费,前置铺垫) ── */
-  --on-accent: #161018;
+  --on-accent: #fbfbfa;
   --inset: rgba(255, 255, 255, 0.2) 0 0.5px 0 0 inset, rgba(0, 0, 0, 0.2) 0 0 0 0.5px inset, rgba(0, 0, 0, 0.05) 0 1px 2px 0;
   --focus: rgba(0, 0, 0, 0.1) 0 4px 12px;
   --card-shadow: 0 1px 2px rgba(42, 36, 26, 0.04), 0 10px 26px rgba(42, 36, 26, 0.05);

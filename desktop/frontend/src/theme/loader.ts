@@ -71,12 +71,13 @@ function ensureFontLink(langId: string): void {
 }
 
 /** 应用 语言 × 配色 × 明暗(幂等)。`custom` 配色骑当前语言结构 + 内联 seed 变量(其余中性色回退 :root)。
- *  opts.customColor 缺省时回退已存 forsion_theme_seed,故明暗/语言切换无需调用方再传 seed。 */
+ *  opts.customColor/customBg 缺省时回退已存 forsion_theme_seed / forsion_theme_bg_seed,
+ *  故明暗/语言切换无需调用方再传;customBg 传空串 = 清除背景色(恢复「背景跟随强调色」单色模式)。 */
 export function applyTheme(
   langId: string,
   skinId: string,
   mode: 'light' | 'dark',
-  opts?: { customColor?: string },
+  opts?: { customColor?: string; customBg?: string },
 ): void {
   ensureThemeLinks();
 
@@ -106,9 +107,17 @@ export function applyTheme(
   if (skinId === 'custom') {
     let seed = opts?.customColor;
     if (!seed) { try { seed = localStorage.getItem('forsion_theme_seed') || undefined; } catch { /* ignore */ } }
-    const vars = customSkinVars(seed || DEFAULT_SEED, mode === 'dark');
+    let bgSeed = opts?.customBg;
+    if (bgSeed === undefined) { try { bgSeed = localStorage.getItem('forsion_theme_bg_seed') || undefined; } catch { /* ignore */ } }
+    const vars = customSkinVars(seed || DEFAULT_SEED, mode === 'dark', bgSeed || undefined);
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
     if (opts?.customColor) { try { localStorage.setItem('forsion_theme_seed', opts.customColor); } catch { /* ignore */ } }
+    if (opts?.customBg !== undefined) {
+      try {
+        if (opts.customBg) localStorage.setItem('forsion_theme_bg_seed', opts.customBg);
+        else localStorage.removeItem('forsion_theme_bg_seed');
+      } catch { /* ignore */ }
+    }
   } else {
     for (const k of CUSTOM_SKIN_VAR_KEYS) root.style.removeProperty(k);
   }
