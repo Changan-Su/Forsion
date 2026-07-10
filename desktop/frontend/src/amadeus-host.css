@@ -135,6 +135,9 @@
 /* 笔记拖进文件夹:目标文件夹(头/展开区)描边(区别于会话列表 drag-over 的「插入线」——这里是「放进去」语义)。 */
 .t2s-group.amx-drop-into,
 .t2s-group-sessions.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: 8px; }
+/* .fd 合并笔记节点(Notion「笔记即文件夹」):笔记行内嵌 chevron + 拖入描边。 */
+.amx-tree .t2s-srow .amx-note-chev { margin-right: 2px; }
+.t2s-srow.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: 8px; }
 /* 拖到真空白处 = 移到根目录:整个滚动区内描边提示。 */
 .t2s-scroll.amx-drop-root { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: 8px; }
 .t2s-srow.dragging { opacity: 0.4; }
@@ -176,6 +179,13 @@
 /* 双链 [[wikilink]]:跟随主题 accent(明暗/皮肤自适应;下划线弱化区分正文)。曾是固定紫 #6c5ce7,
  * 用户要求编辑器色彩与主题统一后改 token。比 styles.css 的选择器多一层 .am-app → 特异性更高,覆盖其 color。 */
 .am-app .milkdown .ProseMirror .wikilink { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+/* 未解析双链:压过上面的 accent 覆盖(同层选择器,声明在后),黯淡虚线。 */
+.am-app .milkdown .ProseMirror .wikilink.wikilink-unresolved {
+  color: var(--text-muted);
+  opacity: 0.75;
+  text-decoration-style: dashed;
+  text-decoration-color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+}
 
 /* ── 快速切换浮层(复用 engine 的 cmd-* 外观;这两个双行类 engine.css 没有) ── */
 .cmd-row { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
@@ -208,6 +218,11 @@
 .amx-graph-node.center circle { fill: var(--accent, #6c5ce7); }
 .amx-graph-node text { fill: var(--text-muted); font-size: 10px; cursor: pointer; user-select: none; }
 .amx-graph-node.center text { fill: var(--text); font-weight: 600; }
+/* ghost = 未解析 [[链接]](目标不存在):黯淡虚线空心圆 + 斜体,点击询问创建;与 .dim 悬停态可叠加。 */
+.amx-graph-node.ghost { opacity: 0.55; }
+.amx-graph-node.ghost circle { fill: var(--surface-2, transparent); stroke: var(--text-faint, var(--text-muted)); stroke-width: 1.2; stroke-dasharray: 2 2; }
+.amx-graph-node.ghost:hover circle, .amx-graph-node.ghost.hl circle { fill: var(--surface-2, transparent); stroke: var(--accent, #6c5ce7); }
+.amx-graph-node.ghost text { font-style: italic; }
 
 /* ── 全局吐司(插件 notify / 字数统计):底部居中,非交互。 ── */
 .amx-toast {
@@ -454,11 +469,8 @@
 .amx-cal-btn:hover { background: var(--bg-hover, var(--overlay-light)); }
 .amx-cal-today { font-size: 12.5px; }
 .amx-cal-title { margin-left: 8px; font-size: 15px; font-weight: 600; }
-.amx-cal-modes { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); overflow: hidden; }
-.amx-cal-mode { padding: 5px 12px; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 12.5px; cursor: pointer; }
-.amx-cal-mode + .amx-cal-mode { border-left: 1px solid var(--border); }
-.amx-cal-mode:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-cal-mode.on { background: var(--accent, #6c5ce7); color: var(--on-accent, #fff); }
+/* 模式组已换 astryx SegmentedControl(自带描边/选中态):容器只管排布,旧边框+overflow 裁剪会把它挤瘪。 */
+.amx-cal-modes { display: inline-flex; align-items: center; gap: 6px; }
 .amx-cal-empty { padding: 18px; color: var(--text-faint, var(--text-muted)); font-size: 13px; text-align: center; }
 
 /* 月视图(纵向连续周行,原生滚动跟手) */

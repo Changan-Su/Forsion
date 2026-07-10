@@ -22,6 +22,8 @@ interface CodeStudioState {
   bindChatToProject(path: string, name: string): void
   /** 回到项目选择器。 */
   closeProject(): void
+  /** 无项目时左侧对话回「新对话」待机:coding agent 草稿、不挂项目、不显示别处漂来的旧会话。 */
+  idleChat(): void
 
   mode: StudioMode
   setMode(m: StudioMode): void
@@ -66,6 +68,12 @@ export const useCodeStudio = create<CodeStudioState>((set, get) => ({
     }
   },
   closeProject: () => set({ activeProject: null }),
+  idleChat: () => {
+    const app = useApp.getState()
+    app.selectNewChatAgent('coding')
+    app.setNewChatWs(null)
+    app.setActiveId(null)
+  },
 
   mode: loadMode(),
   setMode: (mode) => {

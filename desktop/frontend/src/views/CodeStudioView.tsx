@@ -170,9 +170,11 @@ export function CodeStudioView(_: ViewProps) {
     void window.tangu.codeProjectsRoot().then((r) => setProjectsRoot(r)).catch(() => {})
   }, [projectsRoot, setProjectsRoot])
 
-  // 左侧对话跟随当前项目:切回 Coding Space(或活动会话在别处漂移过)时,把对话重绑回本项目。
+  // 左侧对话跟随当前项目:切回 Coding Space(或活动会话在别处漂移过)时,把对话重绑回本项目;
+  // 没选项目(项目选择器态)→ 左侧回「新对话」待机,不显示别处漂来的旧会话。
   useEffect(() => {
     if (root) useCodeStudio.getState().bindChatToProject(root, baseName(root))
+    else useCodeStudio.getState().idleChat()
   }, [root])
 
   // 项目变 → 起/切静态服务器,重扫入口。切根后 origin 不变(同端口),同名 index.html 会导致 src 不变 → 主动 reload。
