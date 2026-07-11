@@ -19,7 +19,8 @@ const EVENT_RE = /^[a-z][a-z0-9:._-]*$/
 const LINE_CAP = 200
 const VALUE_CAP = 80
 const KEEP_DAYS = 30
-const EDIT_WINDOW_MS = 5 * 60_000
+// 2min:太长的话「编辑完立刻问 Muse/看实时视图」窗口内必扑空(dev Ctrl+C 强杀还会丢 buffer)
+const EDIT_WINDOW_MS = 2 * 60_000
 
 let enabled = true
 /** 配置闸(main 读 config 后/config:set 时刷新);关=丢弃一切新事件,旧日志不动。 */
@@ -136,6 +137,16 @@ export function flushAllNoteEdits(): void {
   for (const key of [...editBuffer.keys()]) flushNoteEdit(key)
 }
 
+/** 合并窗口内未落盘的编辑,合成行(ts=now)。导出/实时视图附带,免得「刚编辑却看不到」。 */
+export function pendingNoteEditLines(): string[] {
+  const out: string[] = []
+  for (const [f, e] of editBuffer) {
+    const line = formatActivityLine('note.edit', { f, l: e.from === e.to ? String(e.from) : `${e.from}-${e.to}` })
+    if (line) out.push(line)
+  }
+  return out
+}
+
 // ── 维护:30 天轮转 + 导出 ───────────────────────────────────────────────────
 
 /** 启动时调用:删 30 天前的日志文件。绝不抛。 */
@@ -160,5 +171,6 @@ export async function exportActivity(days = 7): Promise<string> {
       parts.push(await fs.readFile(join(activityDir(), `${localDateStr(d)}.log`), 'utf8'))
     } catch { /* 当日无文件 */ }
   }
-  return parts.join('')
+  const pending = pendingNoteEditLines()
+  return parts.join('') + (pending.length ? pending.join('\n') + '\n' : '')
 }
