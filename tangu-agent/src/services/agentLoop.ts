@@ -31,6 +31,7 @@ import { applyAgentActivation } from './agentActivation.js';
 import { onUserRunDone } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
+import { isRetryableLlmError, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { runGroupChat } from './groupChat.js';
 import { listPluginMetas } from '../plugins/registry.js';
@@ -1018,27 +1019,47 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       });
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
-      const res = await streamProviderCompletion({
-        apiKey,
-        baseUrl,
-        payload,
-        provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
-        signal: ac.signal,
-        onToken: (d) => { void publish(runId, 'token', { delta: d }); },
-        onReasoning: (d) => { void publish(runId, 'reasoning', { delta: d }); },
-        onToolCallDelta: (info) => {
-          // Stream the raw arg delta so the client can render a live "writing
-          // file" preview (it reassembles per tool-call id and extracts path/content).
-          if (info.argsDelta) {
-            void publish(runId, 'tool_stream', { id: info.id, name: info.name, delta: info.argsDelta });
-          }
-          // Keep the throttled generic "生成中…(N 字符)" status for the status bar.
-          if (info.argsLen - lastGenChars >= 600) {
-            lastGenChars = info.argsLen;
-            void publish(runId, 'status', { phase: 'generating', iteration, tool: info.name, chars: info.argsLen });
-          }
-        },
-      });
+      // 有界重试:兜「首帧前的瞬时传输错」(fetch failed / 网关 502 / idle 504 等——托管面偶发抖动的主因)。
+      // 一旦本次尝试已向客户端吐过帧(emitted)就不重试,否则会重复流;用户 abort 与 4xx 也不重试(见 llm/retry.ts)。
+      let res!: Awaited<ReturnType<typeof streamProviderCompletion>>;
+      for (let attempt = 0; ; attempt++) {
+        let emitted = false;
+        try {
+          res = await streamProviderCompletion({
+            apiKey,
+            baseUrl,
+            payload,
+            provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
+            signal: ac.signal,
+            onToken: (d) => { emitted = true; void publish(runId, 'token', { delta: d }); },
+            onReasoning: (d) => { emitted = true; void publish(runId, 'reasoning', { delta: d }); },
+            onToolCallDelta: (info) => {
+              emitted = true;
+              // Stream the raw arg delta so the client can render a live "writing
+              // file" preview (it reassembles per tool-call id and extracts path/content).
+              if (info.argsDelta) {
+                void publish(runId, 'tool_stream', { id: info.id, name: info.name, delta: info.argsDelta });
+              }
+              // Keep the throttled generic "生成中…(N 字符)" status for the status bar.
+              if (info.argsLen - lastGenChars >= 600) {
+                lastGenChars = info.argsLen;
+                void publish(runId, 'status', { phase: 'generating', iteration, tool: info.name, chars: info.argsLen });
+              }
+            },
+          });
+          break;
+        } catch (err) {
+          if (emitted || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
+          const wait = MODEL_RETRY_BASE_MS * (attempt + 1);
+          console.warn(
+            `[agent-core] run=${runId} LLM 调用瞬时失败,${wait}ms 后重试 ${attempt + 1}/${MODEL_MAX_RETRIES}: ` +
+              `${(err as any)?.status ?? (err as any)?.name ?? 'net'} ${(err as any)?.message || err}`,
+          );
+          void publish(runId, 'status', { phase: 'llm_retry', attempt: attempt + 1, iteration });
+          await new Promise((r) => setTimeout(r, wait));
+          if (ac.signal.aborted) throw new AbortLikeError();
+        }
+      }
 
       lastRealPromptTokens = res.usage.prompt_tokens || 0;
       const cachedTokens = res.usage.cached_tokens || 0;

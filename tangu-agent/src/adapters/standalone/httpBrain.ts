@@ -17,6 +17,7 @@ import {
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
+import { friendlyUpstreamError } from './upstreamError.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
 import { currentAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
@@ -107,7 +108,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       });
       if (!r.ok || !r.body) {
         const detail = await r.text().catch(() => '');
-        throw new LlmError(r.status || 502, detail || `brain stream ${r.status}`);
+        throw new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail));
       }
 
       const result: StreamResult = {

@@ -1,6 +1,6 @@
 {
   "name": "forsion-desktop",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Forsion Desktop — AI 驱动的应用生态系统的桌面端(Electron):Tangu Agent 引擎 + LCL 可停靠工作区框架 + 可插拔功能空间(对话/笔记/日历/收件箱/编码),按产品档案裁出全家桶与单品发行版",
   "author": "Forsion",
   "private": true,
