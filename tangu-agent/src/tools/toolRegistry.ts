@@ -41,6 +41,9 @@ const PLAN_MODE_TOOLS = new Set([
   'read_activity', // 只读用户活动日志;Muse 周期跑 planMode 故必须白名单(可见性另由 ctx.muse/activityAccess 收口)
 ]);
 
+/** 名单不可及的基建工具:砍掉 exit_plan_mode 会让 planMode 死锁,ask_user 断交互。 */
+const LOADOUT_EXEMPT = new Set(['exit_plan_mode', 'ask_user']);
+
 /** 注册一个 provider。同 id 幂等覆盖(保持原位置,热加载安全)。 */
 export function registerToolProvider(p: ToolProvider): void {
   const i = providerIndex.get(p.id);
@@ -77,10 +80,32 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     // 洞察,不触达用户资产——「对用户的唯一写」仍是 add_muse_todo;普通 plan mode 行为零变化。
     if (ctx.planMode && !PLAN_MODE_TOOLS.has(t.name) && !((ctx as any).muse && t.name === 'remember')) return;
     if (isBuiltin && builtins !== 'all' && !builtins.includes(t.name)) return;
+    // 每-agent 内置工具黑白名单(config.toml tools_mode/tools_list):只约束**无门禁**的内置工具——
+    // 门禁工具(isEnabledFor)可见性归引擎逻辑且不在 UI 目录里(allow 模式不误伤 Muse/inbox 系);
+    // 基建工具豁免;MCP/app 工具(isBuiltin=false)不受约束。范围与 listLoadoutTools() 严格一致。
+    if (isBuiltin && !t.isEnabledFor && !LOADOUT_EXEMPT.has(t.name)
+      && (ctx.toolsMode === 'allow' || ctx.toolsMode === 'deny')) {
+      const listed = !!ctx.toolsList?.includes(t.name);
+      if (ctx.toolsMode === 'deny' ? listed : !listed) return;
+    }
     if (t.isEnabledFor && !t.isEnabledFor(profile, ctx)) return;
     out.set(t.name, t);
   };
   for (const p of providers) for (const t of p.tools()) add(t, true);
   for (const p of profile.toolLoadout.providers ?? []) for (const t of p.tools()) add(t, false);
   return out;
+}
+
+/** 工具目录(agent 编辑 UI「工具黑白名单」的可勾选项)=名单能约束的范围:无门禁、非豁免的内置工具。
+ *  同名双版本(host/sandbox)按名字去重。description 取首行截断,供 UI 悬浮提示。 */
+export function listLoadoutTools(): { name: string; description: string }[] {
+  const seen = new Map<string, string>();
+  for (const p of providers) {
+    for (const t of p.tools()) {
+      if (t.isEnabledFor || LOADOUT_EXEMPT.has(t.name)) continue;
+      const d = t.definition?.function?.description || '';
+      seen.set(t.name, d.split('\n')[0].slice(0, 160));
+    }
+  }
+  return [...seen.entries()].map(([name, description]) => ({ name, description }));
 }

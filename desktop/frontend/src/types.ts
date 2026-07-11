@@ -147,6 +147,11 @@ export interface NormalAgentDef {
   shareDefaultMemory?: boolean
   /** 开启云同步:该 agent 全部文件跨设备完全镜像(默认 false=纯本地)。 */
   cloudSync?: boolean
+  /** 允许读用户活动日志(read_activity 工具);默认 false=仅 Muse 可读。 */
+  activityAccess?: boolean
+  /** 内置工具名单:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。 */
+  toolsMode?: 'allow' | 'deny'
+  toolsList?: string[]
 }
 
 export interface AgentConfig {

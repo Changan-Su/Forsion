@@ -14,6 +14,7 @@ import { deps } from '../seams/runtime.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug } from '../agents/agentRegistry.js';
 import path from 'node:path';
 import { agentsDir, readUserMd, writeUserMd } from '../core/tanguHome.js';
+import { listLoadoutTools } from '../tools/toolRegistry.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 
 const router = Router();
@@ -34,6 +35,12 @@ router.get('/agent/agents', authMiddleware, async (_req: AuthRequest, res) => {
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list agents failed' });
   }
+});
+
+/** 工具目录:agent 编辑 UI「工具黑白名单」的可勾选项(=名单能约束的无门禁内置工具)。 */
+router.get('/agent/tool-catalog', authMiddleware, (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  res.json({ tools: listLoadoutTools() });
 });
 
 router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
@@ -64,6 +71,9 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       soul: b.soul != null ? String(b.soul) : undefined,
       shareDefaultMemory: b.shareDefaultMemory != null ? !!b.shareDefaultMemory : undefined,
       cloudSync: b.cloudSync != null ? !!b.cloudSync : undefined,
+      activityAccess: b.activityAccess != null ? !!b.activityAccess : undefined,
+      toolsMode: b.toolsMode !== undefined ? b.toolsMode : undefined,
+      toolsList: b.toolsList !== undefined ? b.toolsList : undefined,
       createdBy: 'user',
     });
     res.json({ agent });
@@ -92,6 +102,10 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
       soul: b.soul != null ? String(b.soul) : cur.soul,
       shareDefaultMemory: b.shareDefaultMemory != null ? !!b.shareDefaultMemory : cur.shareDefaultMemory,
       cloudSync: b.cloudSync != null ? !!b.cloudSync : cur.cloudSync,
+      activityAccess: b.activityAccess != null ? !!b.activityAccess : cur.activityAccess,
+      // null=显式清除(saveAgent 收 null → undefined 落盘);缺省保留现值
+      toolsMode: b.toolsMode !== undefined ? b.toolsMode : cur.toolsMode,
+      toolsList: b.toolsList !== undefined ? b.toolsList : cur.toolsList,
     });
     res.json({ agent });
   } catch (e: any) {

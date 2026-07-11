@@ -1,8 +1,9 @@
 /**
  * read_activity —— 读用户应用内活动日志(~/.tangu/activity/<date>.log,桌面 UI 埋点+引擎 agent.edit 双写)。
  *
- * 可见性:本地限定(hostExec)且 **默认仅 Muse**(ctx.muse);普通 agent 需在其 config.toml 显式
- * `activity_access = true`(经 agentActivation → agentConfig → ctx.activityAccess)。默认全 false →
+ * 可见性:本地限定(hostExec)且 **默认仅 Muse**——周期 run(ctx.muse)与手聊 Muse(ctx.agentSlug='muse',
+ * 普通会话路径不设 muse 旗标)都放行;其他 agent 需在其 config.toml 显式 `activity_access = true`
+ * (经 agentActivation → agentConfig → ctx.activityAccess,agent 编辑 UI 有开关)。默认全 false →
  * tooldefs 快照零扰动。只读工具,已列入 PLAN_MODE_TOOLS(Muse 周期跑 planMode)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
@@ -15,7 +16,9 @@ export const readActivityProvider: ToolProvider = {
       name: 'read_activity',
       mode: 'both',
       isEnabledFor: (profile, ctx) =>
-        !!profile.capabilities.hostExec && (!!ctx.muse || !!ctx.activityAccess),
+        !!profile.capabilities.hostExec &&
+        // 'muse' = MUSE_AGENT_SLUG(硬编码避免 builtin→agentRegistry import 环)
+        (!!ctx.muse || !!ctx.activityAccess || ctx.agentSlug === 'muse'),
       capabilities: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 10_000 },
       definition: {
         type: 'function',

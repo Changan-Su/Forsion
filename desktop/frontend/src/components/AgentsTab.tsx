@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { Loader2, Plus, Trash2, Pencil, Bot, Star, GripVertical, BookOpen, User, Cloud, FolderOpen } from 'lucide-react'
-import { listAgents, saveAgentDef, deleteAgentDef, listModels, uploadAgentAvatar, fetchAgentAvatar, deleteAgentAvatar, getAgentsMeta, putAgentsMeta, getUserProfile, putUserProfile } from '../services/backendService'
+import { listAgents, saveAgentDef, deleteAgentDef, listModels, uploadAgentAvatar, fetchAgentAvatar, deleteAgentAvatar, getAgentsMeta, putAgentsMeta, getUserProfile, putUserProfile, fetchToolCatalog } from '../services/backendService'
 import { AgentMemoryModal } from './AgentMemoryModal'
 import type { ModelInfo, NormalAgentDef, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
@@ -23,11 +23,16 @@ type Draft = {
   approvalMode: '' | 'readonly' | 'auto-edit' | 'full-auto'
   shareDefaultMemory: boolean
   cloudSync: boolean
+  activityAccess: boolean
+  /** ''=不限制;deny=toolsList 内禁用;allow=仅 toolsList 可用。 */
+  toolsMode: '' | 'allow' | 'deny'
+  toolsList: string[]
 }
 
 const emptyDraft = (): Draft => ({
   name: '', description: '', model: '', systemPrompt: '', soul: '',
   thinkingLevel: '', maxIterations: '', approvalMode: '', shareDefaultMemory: false, cloudSync: false,
+  activityAccess: false, toolsMode: '', toolsList: [],
 })
 
 export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (editing: boolean) => void }> = ({ cfg, onEditingChange }) => {
@@ -45,6 +50,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
   const [userMd, setUserMd] = useState('')
   const [userMdBusy, setUserMdBusy] = useState(false)
   const [userMdOpen, setUserMdOpen] = useState(false)
+  const [toolCatalog, setToolCatalog] = useState<{ name: string; description: string }[]>([])
 
   const load = (): void => {
     void listAgents(cfg).then(setAgents).catch(() => setAgents([]))
@@ -53,6 +59,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
   useEffect(() => {
     load()
     void listModels(cfg).then((r) => setModels(r.models)).catch(() => setModels([]))
+    void fetchToolCatalog(cfg).then(setToolCatalog)
     // USER.md:有内容直接载入;为空则用登录用户名/昵称预填模板。
     void getUserProfile(cfg).then(async (content) => {
       if (content.trim()) { setUserMd(content); return }
@@ -70,6 +77,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
       systemPrompt: a.systemPrompt, soul: a.soul || '', thinkingLevel: a.thinkingLevel,
       maxIterations: a.maxIterations != null ? String(a.maxIterations) : '', approvalMode: a.approvalMode,
       shareDefaultMemory: !!a.shareDefaultMemory, cloudSync: !!a.cloudSync,
+      activityAccess: !!a.activityAccess, toolsMode: a.toolsMode || '', toolsList: a.toolsList || [],
     })
     setAvatarUrl(null)
     if (a.avatar) void fetchAgentAvatar(cfg, a.slug).then(setAvatarUrl).catch(() => {})
@@ -91,7 +99,11 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
         approvalMode: editing.approvalMode || undefined,
         shareDefaultMemory: editing.shareDefaultMemory,
         cloudSync: editing.cloudSync,
-      } as Partial<NormalAgentDef>, editing.slug)
+        activityAccess: editing.activityAccess,
+        // null=显式清除(JSON 里 undefined 会被剔键=保留旧值,清除必须传 null)
+        toolsMode: editing.toolsMode || null,
+        toolsList: editing.toolsMode ? editing.toolsList : null,
+      }, editing.slug)
       if (!editing.slug) { track('agent.create'); act('agent.create', { text: editing.name }) }
       setEditing(null)
       load()
@@ -100,6 +112,23 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
     } finally {
       setBusy(false)
     }
+  }
+
+  /** 工具名单 UI 恒「勾选=允许」:deny 存未勾集,allow 存勾集。 */
+  const isToolChecked = (name: string): boolean =>
+    editing?.toolsMode === 'allow' ? editing.toolsList.includes(name) : !editing?.toolsList.includes(name)
+  const toggleTool = (name: string): void => {
+    if (!editing?.toolsMode) return
+    const has = editing.toolsList.includes(name)
+    setEditing({ ...editing, toolsList: has ? editing.toolsList.filter((n) => n !== name) : [...editing.toolsList, name] })
+  }
+  /** 切模式:deny↔allow 名单取补集(勾选视觉状态不变);从「不限制」进入=全勾起步。 */
+  const switchToolsMode = (mode: Draft['toolsMode']): void => {
+    if (!editing || mode === editing.toolsMode) return
+    const all = toolCatalog.map((c) => c.name)
+    const list = !mode ? [] : !editing.toolsMode ? (mode === 'deny' ? [] : all)
+      : all.filter((n) => !editing.toolsList.includes(n))
+    setEditing({ ...editing, toolsMode: mode, toolsList: list })
   }
 
   const remove = async (a: NormalAgentDef): Promise<void> => {
@@ -259,6 +288,36 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
             {t('settings.agents.cloudSync')}
           </label>
           <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncHint')}</div>
+        </div>
+        <div className="field">
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+            <input type="checkbox" checked={editing.activityAccess}
+              onChange={(e) => setEditing({ ...editing, activityAccess: e.target.checked })} />
+            {t('settings.agents.activityAccess')}
+          </label>
+          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.activityAccessHint')}</div>
+        </div>
+        <div className="field">
+          <label>{t('settings.agents.toolPolicy')}</label>
+          <select value={editing.toolsMode} onChange={(e) => switchToolsMode(e.target.value as Draft['toolsMode'])}>
+            <option value="">{t('settings.agents.toolPolicyNone')}</option>
+            <option value="deny">{t('settings.agents.toolPolicyDeny')}</option>
+            <option value="allow">{t('settings.agents.toolPolicyAllow')}</option>
+          </select>
+          {!!editing.toolsMode && (toolCatalog.length ? (
+            <>
+              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', margin: '4px 0 6px' }}>{t('settings.agents.toolPolicyHint')}</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '2px 10px' }}>
+                {toolCatalog.map((tl) => (
+                  <label key={tl.name} title={tl.description}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', userSelect: 'none' }}>
+                    <input type="checkbox" checked={isToolChecked(tl.name)} onChange={() => toggleTool(tl.name)} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tl.name}</span>
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 4 }}>{t('settings.agents.toolPolicyEmpty')}</div>)}
         </div>
         {editing.slug && (
           <div className="field">

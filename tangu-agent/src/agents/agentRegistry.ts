@@ -55,6 +55,11 @@ export interface NormalAgentDef {
   cloudSync?: boolean;
   /** 允许读用户活动日志(read_activity 工具);默认/false=仅 Muse 可读。 */
   activityAccess?: boolean;
+  /** 内置工具名单模式:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。
+   *  只约束无门禁的内置工具(见 toolRegistry.resolveTools);区别于 tools=自定义工具选择。 */
+  toolsMode?: 'allow' | 'deny';
+  /** 配合 toolsMode 的内置工具名单(config.toml tools_list)。 */
+  toolsList?: string[];
   /** 该 agent 支持/出现于哪些 app(小写,如 ["echo"]);空=不限制(由调用方默认)。来自 config.toml apps。 */
   apps?: string[];
 }
@@ -181,6 +186,10 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     shareDefaultMemory: !!meta.share_default_memory,
     cloudSync: !!meta.cloud_sync,
     activityAccess: !!meta.activity_access,
+    toolsMode: meta.tools_mode === 'allow' || meta.tools_mode === 'deny' ? meta.tools_mode : undefined,
+    toolsList: Array.isArray(meta.tools_list)
+      ? meta.tools_list.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 200)
+      : undefined,
     apps,
   };
 }
@@ -208,6 +217,10 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   if (def.shareDefaultMemory) obj.share_default_memory = true;
   if (def.cloudSync) obj.cloud_sync = true;
   if (def.activityAccess) obj.activity_access = true;
+  if (def.toolsMode && def.toolsList) { // allow+空数组=全禁,合法;缺 mode 不落盘
+    obj.tools_mode = def.toolsMode;
+    obj.tools_list = def.toolsList;
+  }
   obj.created_by = def.createdBy;
   obj.created_at = def.createdAt || new Date().toISOString();
   const di = def.systemPrompt || '';
@@ -634,6 +647,10 @@ export interface SaveAgentInput {
   cloudSync?: boolean;
   /** 允许读用户活动日志;缺省保留已有。 */
   activityAccess?: boolean;
+  /** 内置工具名单模式;null=清除(回到不限制),缺省保留已有。 */
+  toolsMode?: 'allow' | 'deny' | null;
+  /** 内置工具名单;null=清除,缺省保留已有。 */
+  toolsList?: string[] | null;
 }
 
 /** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。 */
@@ -667,6 +684,14 @@ export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> 
     shareDefaultMemory: input.shareDefaultMemory !== undefined ? input.shareDefaultMemory : existing?.shareDefaultMemory,
     cloudSync: input.cloudSync !== undefined ? input.cloudSync : existing?.cloudSync,
     activityAccess: input.activityAccess !== undefined ? input.activityAccess : existing?.activityAccess,
+    toolsMode: input.toolsMode !== undefined
+      ? (input.toolsMode === 'allow' || input.toolsMode === 'deny' ? input.toolsMode : undefined)
+      : existing?.toolsMode,
+    toolsList: input.toolsList !== undefined
+      ? (Array.isArray(input.toolsList)
+        ? input.toolsList.filter((t) => typeof t === 'string' && t.trim()).slice(0, 200)
+        : undefined)
+      : existing?.toolsList,
   };
   const adir = path.join(agentsDir(), slug);
   mkdirSync(adir, { recursive: true });

@@ -303,7 +303,8 @@ export const createWechatSession = (cfg: TanguDesktopConfig, title?: string) =>
 export const listAgents = (cfg: TanguDesktopConfig) =>
   request<{ agents: NormalAgentDef[] }>(cfg, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
 
-export const saveAgentDef = (cfg: TanguDesktopConfig, def: Partial<NormalAgentDef>, slug?: string) =>
+/** toolsMode/toolsList 传 null=显式清除(JSON 会剔掉 undefined 键=保留旧值)。 */
+export const saveAgentDef = (cfg: TanguDesktopConfig, def: Omit<Partial<NormalAgentDef>, 'toolsMode' | 'toolsList'> & { toolsMode?: 'allow' | 'deny' | null; toolsList?: string[] | null }, slug?: string) =>
   request<{ agent: NormalAgentDef }>(
     cfg,
     slug ? `/agent/agents/${encodeURIComponent(slug)}` : '/agent/agents',
@@ -312,6 +313,11 @@ export const saveAgentDef = (cfg: TanguDesktopConfig, def: Partial<NormalAgentDe
 
 export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string) =>
   request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+
+/** 工具目录:agent 编辑「工具黑白名单」的可勾选项(名单只约束这批无门禁内置工具)。 */
+export const fetchToolCatalog = (cfg: TanguDesktopConfig) =>
+  request<{ tools: { name: string; description: string }[] }>(cfg, '/agent/tool-catalog')
+    .then((r) => r.tools).catch(() => [] as { name: string; description: string }[])
 
 /** 上传头像(data URL 或纯 base64;≤1MB;后端写进该 agent 的 Library/ 并设 config.avatar)。 */
 export const uploadAgentAvatar = (cfg: TanguDesktopConfig, slug: string, data: string, mimeType: string) =>
