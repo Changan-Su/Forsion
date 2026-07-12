@@ -6,14 +6,14 @@ import JSZip from 'jszip'
 import { mkdir, writeFile, readFile, readdir } from 'fs/promises'
 import { join, dirname, relative, isAbsolute } from 'path'
 
-/** type → ~/.tangu 下的子目录。 */
+/** type → ~/.forsion 下的子目录(join 会展开嵌套)。引擎域装 tangu/;desktop 域留顶层。 */
 export const MARKET_SUBDIR: Record<string, string> = {
-  skill: 'skills',
-  agent: 'agents',
-  plugin: 'plugins',
+  skill: 'tangu/skills',
+  agent: 'tangu/agents',
+  plugin: 'tangu/plugins',
   space: 'spaces',
   theme: 'themes',
-  'amadeus-plugin': 'amadeus/plugins', // join 会展开嵌套;= Amadeus 全局插件目录
+  'amadeus-plugin': 'amadeus/plugins', // Amadeus 全局插件目录
 }
 
 /** type → manifest 文件名(用于 manifest 感知重定根,见 computeStripPrefix)。 */

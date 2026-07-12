@@ -3,7 +3,8 @@
  * `tangu-chat login <provider>`(如 xai)写入;chat 启动时读出、按需刷新,接进 provider registry 当 LLM。
  */
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
-import { tanguHome, providerAuthFile } from '../core/tanguHome.js';
+import { dirname } from 'node:path';
+import { providerAuthFile } from '../core/tanguHome.js';
 
 export interface OAuthTokens {
   access_token: string;
@@ -16,7 +17,7 @@ export interface OAuthTokens {
   modelIds?: string[]; // 登录时从 provider /models 端点拉取并缓存(再登录刷新;失败回退硬编提示)
 }
 
-const dir = (): string => tanguHome();
+const dir = (): string => dirname(providerAuthFile()); // 共享域(home=…/tangu 时为其父目录)
 const file = (): string => providerAuthFile();
 
 export function loadProviderCreds(): Record<string, OAuthTokens> {

@@ -1,23 +1,38 @@
 /**
- * ~/.tangu —— Tangu 本地 home 目录统一布局(单一事实来源,各处不再散落拼路径)。
+ * Tangu 本地 home 目录统一布局(单一事实来源,各处不再散落拼路径)。
  *
- *   ~/.tangu/
- *   ├── auth.json            Forsion 凭证 { cloudUrl, token, model }(credStore)
- *   ├── provider-auth.json   provider OAuth 凭证 { [providerId]: OAuthTokens }(providerCreds)
- *   ├── providers.json       直连 provider 配置 DirectProvider[](desktop Providers 页/手编;assemble 自动合并)
- *   ├── mcp.json             MCP server 配置 { mcpServers: {...} }(P6)
- *   ├── skills/              本地技能(<id>/SKILL.md,兼容 .claude 技能格式;P5)
- *   └── pgdata/              嵌入式 PGlite 数据目录
+ * 两层布局(2026-07-12 起):引擎私有数据全在 home 内;desktop 与引擎**共用**的文件在
+ * 「共享域」= home 的父目录(见 forsionSharedDir)。桌面托管形态:
  *
+ *   ~/.forsion/                     ← 共享域(auth.json / provider-auth.json / config.json / activity/)
+ *   └── tangu/                      ← 引擎 home(desktop spawn 传 TANGU_HOME 指此;~/.tangu 软链亦指此)
+ *       ├── agents/  memory/  skills/  plugins/  state.db  wechat/ ...
+ *       ├── providers.json  mcp.json  engines.json  engine-prefs.json
+ *       └── pgdata/
+ *
+ * 纯 standalone(无 desktop,~/.tangu 为真目录)/云 worker/测试重定向:共享域=home 自身,旧行为零变化。
  * 仅 standalone/TUI/desktop 形态使用;microserver/worker 不读本目录。
  * 测试/多实例可用 env TANGU_HOME 整体重定向。
  */
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 
 export function tanguHome(): string {
   return process.env.TANGU_HOME || join(homedir(), '.tangu');
+}
+
+/**
+ * Forsion 共享域:desktop 与引擎共用文件(auth.json/provider-auth.json/config.json/activity/)的所在地。
+ * home 目录名为 `tangu`(桌面托管 ~/.forsion/tangu;CLI 经 ~/.tangu 软链指入)→ 父目录(如 ~/.forsion);
+ * 否则(纯 standalone ~/.tangu 真目录、云 worker、测试)→ home 自身=旧行为。经 realpath 判断:
+ * ~/.tangu 是软链时按真身归位,CLI 与桌面不分脑。
+ */
+export function forsionSharedDir(): string {
+  const h = tanguHome();
+  let real = h;
+  try { real = realpathSync(h); } catch { /* home 尚不存在:按字面路径判断 */ }
+  return basename(real) === 'tangu' ? dirname(real) : h;
 }
 
 export const envFile = (): string => join(tanguHome(), '.env');
@@ -46,8 +61,9 @@ export function loadTanguEnv(): void {
   }
 }
 
-export const authFile = (): string => join(tanguHome(), 'auth.json');
-export const providerAuthFile = (): string => join(tanguHome(), 'provider-auth.json');
+// 共享域文件(desktop 也直接读写,见 forsionSharedDir 注释)
+export const authFile = (): string => join(forsionSharedDir(), 'auth.json');
+export const providerAuthFile = (): string => join(forsionSharedDir(), 'provider-auth.json');
 export const providersFile = (): string => join(tanguHome(), 'providers.json');
 export const mcpConfigFile = (): string => join(tanguHome(), 'mcp.json');
 /** 外部 agent 引擎清单(覆盖/新增内置引擎):{ engines: EngineDef[] }。 */
@@ -57,9 +73,9 @@ export const enginePrefsFile = (): string => join(tanguHome(), 'engine-prefs.jso
 /**
  * 统一实例配置(唯一真源):cloud/database/server/sandbox/workspace/providers/mcp/engines/
  * enginePrefs/specialAgents/plugins/browser/wechat 全段。存在即权威(见 core/config.ts);
- * 不存在则各 loader 回落各自 legacy 文件(过渡/测试)。CLI/桌面/standalone 三端共读写。
+ * 不存在则各 loader 回落各自 legacy 文件(过渡/测试)。CLI/桌面/standalone 三端共读写 → 共享域。
  */
-export const configFile = (): string => join(tanguHome(), 'config.json');
+export const configFile = (): string => join(forsionSharedDir(), 'config.json');
 export const skillsDir = (): string => join(tanguHome(), 'skills');
 /** 用户安装的全局插件目录(~/.tangu/plugins;可写、跨升级保留)。首方插件随包发在 <pkg>/plugins。 */
 export const pluginsDir = (): string => join(tanguHome(), 'plugins');

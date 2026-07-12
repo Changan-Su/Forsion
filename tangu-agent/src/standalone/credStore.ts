@@ -3,7 +3,8 @@
  * `tangu login` 写入,`tangu chat` / standalone 在未显式传 --token 时读取(去掉手动塞 token)。
  */
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
-import { tanguHome, authFile } from '../core/tanguHome.js';
+import { dirname } from 'node:path';
+import { authFile } from '../core/tanguHome.js';
 
 export interface Creds {
   cloudUrl?: string;
@@ -11,7 +12,7 @@ export interface Creds {
   model?: string; // TUI 内 /model 选定后记住,下次免 --model
 }
 
-const dir = (): string => tanguHome();
+const dir = (): string => dirname(authFile()); // 共享域(home=…/tangu 时为其父目录)
 const file = (): string => authFile();
 
 export function loadCreds(): Creds {

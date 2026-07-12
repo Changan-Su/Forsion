@@ -15,7 +15,7 @@ import { createServer } from 'node:net'
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { forsionHomeDir, defaultWorkspaceDir } from './forsionHome'
+import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 import { amadeusConfigPath } from './amadeus/settings'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
@@ -184,8 +184,9 @@ export class BackendManager {
         entry,
         '--port', String(this.port),
         '--host', '127.0.0.1',
-        // 与 TUI/standalone 默认同指 ~/.tangu/state.db,SQLite WAL 多进程共享 → 桌面与 TUI 会话互通。
-        '--data-dir', join(forsionHomeDir(), 'state.db'),
+        // 与 TUI/standalone 同指引擎数据目录 tangu/state.db(~/.tangu 软链也指 tangu/),
+        // SQLite WAL 多进程共享 → 桌面与 TUI 会话互通。
+        '--data-dir', join(tanguDataDir(), 'state.db'),
         '--sandbox', s.sandbox,
       ]
       if (s.cloudUrl) args.push('--cloud-url', s.cloudUrl)
@@ -203,7 +204,7 @@ export class BackendManager {
       else delete env.ELECTRON_RUN_AS_NODE
       // 凭证走 env,不出现在 ps 输出。用 getToken()(config.cloudToken > auth.json > 本地回退令牌)——
       // **始终非空**,保证后端 validate(强制要 token)通过、无 Forsion 登录也能独立启动(BYOK/订阅可用)。
-      env.TANGU_HOME = forsionHomeDir() // 三重保险之③:软链被删也不分脑(包内 tanguHome 认此 env)
+      env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
       env.TANGU_TOKEN = this.getToken()
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'
       env.TANGU_BROWSER_ENGINE = s.browserEngine || 'auto'

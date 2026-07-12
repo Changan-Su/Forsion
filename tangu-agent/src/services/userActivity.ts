@@ -12,9 +12,10 @@
  */
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { tanguHome } from '../core/tanguHome.js';
+import { forsionSharedDir } from '../core/tanguHome.js';
 
-export const activityDir = (): string => join(tanguHome(), 'activity');
+// 共享域(desktop main 也直写此目录;home=…/tangu 时为其父目录,见 forsionSharedDir)
+export const activityDir = (): string => join(forsionSharedDir(), 'activity');
 
 const EVENT_RE = /^[a-z][a-z0-9:._-]*$/;
 const LINE_CAP = 200;

@@ -10,7 +10,7 @@ import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, op
 import { existsSync } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
-import { forsionHomeDir, migrateForsionHome, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { execFile, spawn } from 'child_process'
 import { homedir } from 'os'
 import { BackendManager, bundledPythonBin, type BackendStatus } from './backendManager'
@@ -47,7 +47,7 @@ app.on('second-instance', () => showMainWindow())
 async function loadTanguEnvFile(): Promise<void> {
   let raw: string
   try {
-    raw = await readFile(join(tanguHomeDir(), '.env'), 'utf8')
+    raw = await readFile(join(tanguDataDir(), '.env'), 'utf8') // .env 属引擎域(loadTanguEnv 同位)
   } catch {
     return
   }
@@ -97,7 +97,7 @@ async function readProvidersFile(): Promise<DirectProviderConfig[]> {
   const sec = (await readHomeConfig()).providers
   if (sec !== undefined) return Array.isArray(sec) ? sec : []
   try {
-    const parsed = JSON.parse(await readFile(join(tanguHomeDir(), 'providers.json'), 'utf8'))
+    const parsed = JSON.parse(await readFile(join(tanguDataDir(), 'providers.json'), 'utf8')) // legacy 文件在引擎域
     return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.providers) ? parsed.providers : []
   } catch {
     return []
@@ -624,6 +624,7 @@ app.whenReady().then(async () => {
   // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
   app.setAppUserModelId('com.forsion.tangu')
   migrateForsionHome() // 品牌迁移 ~/.tangu→~/.forsion + ~/Tangu→~/Forsion(改名+兼容软链;最早期,先于一切读盘)
+  migrateEngineData() // 两层布局:顶层引擎条目 → ~/.forsion/tangu/ + ~/.tangu 软链改指(dev 家同法;须在 backend spawn/读盘之前)
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -941,7 +942,7 @@ app.whenReady().then(async () => {
   })
 
   // ── MCP server 管理(写 config.json 的 mcp 段;managed 模式保存后重启后端重连)──
-  const mcpFile = (): string => join(tanguHomeDir(), 'mcp.json')
+  const mcpFile = (): string => join(tanguDataDir(), 'mcp.json') // legacy 文件在引擎域
   ipcMain.handle('mcp:read', async () => {
     const sec = (await readHomeConfig()).mcp
     if (sec !== undefined) return { mcpServers: sec?.mcpServers && typeof sec.mcpServers === 'object' ? sec.mcpServers : {} }
@@ -970,7 +971,7 @@ app.whenReady().then(async () => {
 
   // ── 设置界面「打开文件夹」:在系统文件管理器打开 agent / skills 目录(~/.tangu/{agents,skills})──
   ipcMain.handle('agents:openDir', async (_e, slug?: string) => {
-    const base = join(tanguHomeDir(), 'agents')
+    const base = join(tanguDataDir(), 'agents')
     // slug 安全化(只允许文件名字符,防路径穿越);无效/缺省则打开 agents 根目录。
     const safe = typeof slug === 'string' && /^[A-Za-z0-9_-]+$/.test(slug) ? slug : ''
     const dir = safe ? join(base, safe) : base
@@ -979,7 +980,7 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
   ipcMain.handle('skills:openDir', async () => {
-    const dir = join(tanguHomeDir(), 'skills')
+    const dir = join(tanguDataDir(), 'skills')
     await mkdir(dir, { recursive: true })
     await shell.openPath(dir)
     return { ok: true }
@@ -990,13 +991,13 @@ app.whenReady().then(async () => {
   // 技能落盘 ~/.tangu/skills/ 后由后端按 mtime 重扫即时生效。
   ipcMain.handle('discovery:scan', () => scanAll())
   ipcMain.handle('discovery:importSkills', (_e, ids: string[]) =>
-    importSkills(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [], tanguHomeDir()))
+    importSkills(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [], tanguDataDir()))
   ipcMain.handle('discovery:importMcp', async (_e, names: string[]) => {
     // importMcp 在 legacy mcp.json 上做合并:先把 config.json 的 mcp 段播种进去(免丢已有),导入后再写回 config.json。
     const home = await readHomeConfig()
-    await mkdir(tanguHomeDir(), { recursive: true })
+    await mkdir(tanguDataDir(), { recursive: true })
     await writeFile(mcpFile(), JSON.stringify({ mcpServers: home.mcp?.mcpServers || {} }, null, 2), 'utf8')
-    const r = await importMcp(Array.isArray(names) ? names.filter((x) => typeof x === 'string') : [], tanguHomeDir())
+    const r = await importMcp(Array.isArray(names) ? names.filter((x) => typeof x === 'string') : [], tanguDataDir())
     try {
       const merged = JSON.parse(await readFile(mcpFile(), 'utf8'))
       await saveHomeSection('mcp', { mcpServers: merged?.mcpServers || {} })
@@ -1206,12 +1207,12 @@ app.whenReady().then(async () => {
 
   // ── 后端插件卸载:只动 ~/.tangu/plugins(用户目录);<pkg>/plugins 首方插件结构性安全(不在这里,删不到)。
   // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
-  ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguHomeDir(), 'plugins')))
+  ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguDataDir(), 'plugins')))
   ipcMain.handle('plugins:uninstall', async (_e, id: string) => {
     if (!isSafeSlug(id)) throw new Error('非法的插件标识')
-    const hit = (await readUserPluginDirs(join(tanguHomeDir(), 'plugins'))).find((p) => p.id === id)
+    const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
     if (!hit) throw new Error('插件不在用户目录(内置/首方插件不可卸载)')
-    await rm(join(tanguHomeDir(), 'plugins', hit.slug), { recursive: true, force: true })
+    await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
     return { ok: true }
   })
 

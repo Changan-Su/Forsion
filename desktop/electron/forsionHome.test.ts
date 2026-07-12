@@ -1,9 +1,9 @@
-/** ~/.tangu → ~/.forsion 迁移:改名/兼容软链/并存保守/幂等。 */
+/** ~/.tangu → ~/.forsion 迁移:改名/兼容软链/并存保守/幂等 + 两层布局 migrateEngineData。 */
 import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { migratePair, setDevMode, forsionHomeDir, defaultWorkspaceDir } from './forsionHome'
+import { migratePair, migrateEngineData, setDevMode, forsionHomeDir, defaultWorkspaceDir } from './forsionHome'
 
 const noop = (): void => {}
 const setup = (): { old: string; nu: string } => {
@@ -49,6 +49,42 @@ describe('migratePair', () => {
     migratePair(old, nu, { ensureNew: true, log: noop })
     expect(lstatSync(old).isSymbolicLink()).toBe(true)
     expect(readFileSync(join(nu, 'z'), 'utf8')).toBe('3')
+  })
+})
+
+describe('migrateEngineData(两层布局:顶层引擎条目 → tangu/)', () => {
+  it('引擎条目搬进 tangu/,共享域与 desktop 自有内容留顶层;纯 rename 不留链', () => {
+    const home = mkdtempSync(join(tmpdir(), 'fh-eng-'))
+    mkdirSync(join(home, 'agents', 'muse'), { recursive: true })
+    writeFileSync(join(home, 'agents', 'muse', 'config.toml'), 'name = "Muse"')
+    writeFileSync(join(home, 'state.db'), 'db')
+    writeFileSync(join(home, 'USER.md'), 'u')
+    // 共享域 + desktop 自有:必须原地不动
+    writeFileSync(join(home, 'auth.json'), '{}')
+    writeFileSync(join(home, 'config.json'), '{}')
+    mkdirSync(join(home, 'activity'), { recursive: true })
+    mkdirSync(join(home, 'themes', 't'), { recursive: true })
+    migrateEngineData(noop, home)
+    expect(readFileSync(join(home, 'tangu', 'agents', 'muse', 'config.toml'), 'utf8')).toBe('name = "Muse"')
+    expect(existsSync(join(home, 'tangu', 'state.db'))).toBe(true)
+    expect(existsSync(join(home, 'tangu', 'USER.md'))).toBe(true)
+    expect(existsSync(join(home, 'agents'))).toBe(false) // 不留链,顶层干净
+    expect(existsSync(join(home, 'auth.json'))).toBe(true)
+    expect(existsSync(join(home, 'config.json'))).toBe(true)
+    expect(existsSync(join(home, 'activity'))).toBe(true)
+    expect(existsSync(join(home, 'themes', 't'))).toBe(true)
+  })
+
+  it('幂等 + 并存保守(旧位保留人工合并)', () => {
+    const home = mkdtempSync(join(tmpdir(), 'fh-eng-'))
+    mkdirSync(join(home, 'skills'), { recursive: true })
+    writeFileSync(join(home, 'skills', 'old.md'), 'old')
+    mkdirSync(join(home, 'tangu', 'skills'), { recursive: true })
+    writeFileSync(join(home, 'tangu', 'skills', 'new.md'), 'new')
+    migrateEngineData(noop, home)
+    migrateEngineData(noop, home)
+    expect(readFileSync(join(home, 'skills', 'old.md'), 'utf8')).toBe('old') // 并存:旧位不动
+    expect(readFileSync(join(home, 'tangu', 'skills', 'new.md'), 'utf8')).toBe('new')
   })
 })
 

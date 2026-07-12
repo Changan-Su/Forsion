@@ -8,7 +8,7 @@
  * 默认工作区 ~/Tangu → ~/Forsion 同法(sessions 表里存的绝对 project_path 经软链继续解析)。
  * TANGU_HOME 已被显式设置(测试/多实例重定向)→ 整体跳过迁移,尊重重定向。
  */
-import { existsSync, lstatSync, mkdirSync, renameSync, symlinkSync } from 'fs'
+import { existsSync, lstatSync, mkdirSync, renameSync, rmSync, symlinkSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
 
@@ -20,6 +20,9 @@ export const isDevMode = (): boolean => devMode
 
 export const forsionHomeDir = (): string =>
   process.env.TANGU_HOME || join(homedir(), devMode ? '.forsion-dev' : '.forsion')
+/** 引擎(tangu-agent)数据子目录:spawn 托管后端时 TANGU_HOME 指此,引擎私有数据全在其内。
+ *  顶层 ~/.forsion 只留共享域文件(auth/provider-auth/config.json/activity)与 desktop 自有内容。 */
+export const tanguDataDir = (): string => join(forsionHomeDir(), 'tangu')
 /** 默认本机工作区(会话 host 执行 cwd 兜底)。 */
 export const defaultWorkspaceDir = (): string => join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
 
@@ -61,4 +64,56 @@ export function migrateForsionHome(log: (m: string) => void = console.log): void
   const home = homedir()
   migratePair(join(home, '.tangu'), join(home, '.forsion'), { ensureNew: true, log })
   migratePair(join(home, 'Tangu'), join(home, 'Forsion'), { log })
+}
+
+/** 顶层 → tangu/ 的引擎私有条目(2026-07-12 两层布局)。共享域(auth.json/provider-auth.json/
+ *  config.json/activity/)与 desktop 自有(amadeus/themes/spaces/bin/desktop-local-token)留顶层。 */
+const ENGINE_ENTRIES = [
+  'agents', 'memory', 'skills', 'plugins', 'plugins-config', 'pgdata',
+  'state.db', 'state.db-wal', 'state.db-shm',
+  'wechat', 'browser', 'browser-use',
+  'providers.json', 'providers.json.bak', 'mcp.json', 'mcp.json.bak',
+  'engines.json', 'engine-prefs.json', 'special-agents.json', 'special-agents.json.bak',
+  'device.json', 'USER.md', 'worker-key', '.env',
+]
+
+/**
+ * 顶层引擎条目搬进 <home>/tangu/。纯 rename、不留每项软链(顶层才真干净;旧版桌面降级需手动搬回)。
+ * ~/.tangu 兼容软链改指 tangu/——CLI/TUI 与桌面同一真身;纯 standalone 的 ~/.tangu 真目录不受影响
+ * (那种机器 desktop 根本没跑过,本函数不会碰它)。幂等;须在 migrateForsionHome 之后、backend
+ * spawn/一切引擎文件读取之前调用。dev 家(~/.forsion-dev)同样迁移,只是不动生产的 ~/.tangu 链。
+ */
+export function migrateEngineData(log: (m: string) => void = console.log, homeOverride?: string): void {
+  if (!homeOverride && process.env.TANGU_HOME) return // 显式重定向 → 不迁(override 供测试注入)
+  const home = homeOverride || forsionHomeDir()
+  const dest = join(home, 'tangu')
+  try { mkdirSync(dest, { recursive: true }) } catch { /* 逐项迁移会各自报错 */ }
+  for (const name of ENGINE_ENTRIES) {
+    const oldPath = join(home, name)
+    const newPath = join(dest, name)
+    try {
+      const st = lstatOrNull(oldPath)
+      if (!st || st.isSymbolicLink()) continue // 不存在/已是链 → 不动
+      if (existsSync(newPath)) { log(`[forsion-home] ⚠️ ${name} 新旧并存:以 tangu/ 为准,旧条目未动(请人工合并)`); continue }
+      renameSync(oldPath, newPath)
+      log(`[forsion-home] 引擎数据已迁 ${name} → tangu/${name}`)
+    } catch (e) {
+      log(`[forsion-home] 迁移 ${name} 失败(不阻塞启动): ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  if (devMode || homeOverride) return // dev 家/测试不碰生产 ~/.tangu 链
+  const legacy = join(homedir(), '.tangu')
+  try {
+    const st = lstatOrNull(legacy)
+    if (st?.isSymbolicLink()) {
+      rmSync(legacy) // 重指:~/.forsion → ~/.forsion/tangu(CLI 的 tanguHome 经 realpath 归位共享域)
+      symlinkSync(dest, legacy, process.platform === 'win32' ? 'junction' : 'dir')
+      log(`[forsion-home] 兼容软链 ~/.tangu → ${dest}`)
+    } else if (!st) {
+      symlinkSync(dest, legacy, process.platform === 'win32' ? 'junction' : 'dir') // 空缺补链(上次重指中断的自愈)
+      log(`[forsion-home] 兼容软链 ~/.tangu → ${dest}`)
+    }
+  } catch (e) {
+    log(`[forsion-home] ~/.tangu 软链更新失败: ${e instanceof Error ? e.message : String(e)}`)
+  }
 }

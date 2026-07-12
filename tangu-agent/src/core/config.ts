@@ -17,8 +17,9 @@
  * 仅 standalone/TUI/desktop 形态使用;microserver/worker 不读本目录。chmod 600(含 token/apiKey)。
  */
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
+import { dirname } from 'node:path';
 import {
-  configFile, tanguHome, authFile, providersFile, mcpConfigFile,
+  configFile, authFile, providersFile, mcpConfigFile,
   enginesFile, enginePrefsFile, specialAgentsConfigFile,
 } from './tanguHome.js';
 
@@ -48,7 +49,7 @@ export function getRawSection(name: string): any {
 }
 
 function writeConfig(c: Record<string, any>): void {
-  mkdirSync(tanguHome(), { recursive: true });
+  mkdirSync(dirname(configFile()), { recursive: true }); // config.json 在共享域(home=…/tangu 时为其父目录)
   writeFileSync(configFile(), JSON.stringify(c, null, 2), 'utf8');
   try { chmodSync(configFile(), 0o600); } catch { /* best-effort 私有权限(含 token/apiKey) */ }
 }
