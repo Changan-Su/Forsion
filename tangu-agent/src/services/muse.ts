@@ -26,7 +26,7 @@ import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { readActivityLines } from './userActivity.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, buildTriggerKickoff, type MuseTrigger } from './museTriggers.js';
-import { launchAutomationTriggers } from './automation.js';
+import { launchAutomationTriggers, launchDueSchedules } from './automation.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -313,6 +313,13 @@ async function tick(): Promise<void> {
       }
     } catch (e: any) {
       log(`盯任务评估失败:${e?.message || e}`);
+    }
+
+    // ── Agent 日程到期评估(agents/<slug>/SCHEDULE.db 的 auto 条目;同在 muse.enabled 闸之前)。
+    try {
+      await launchDueSchedules();
+    } catch (e: any) {
+      log(`日程评估失败:${e?.message || e}`);
     }
 
     const cfg = loadSpecialAgentsConfig().muse;

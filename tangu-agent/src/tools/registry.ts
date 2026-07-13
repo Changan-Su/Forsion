@@ -33,6 +33,7 @@ import { browserUseProvider } from './builtin/browserUse.js';
 import { amadeusProvider } from './builtin/amadeus.js';
 import { readActivityProvider } from './builtin/readActivity.js';
 import { museWatchProvider } from './builtin/museWatch.js';
+import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
 
@@ -133,6 +134,7 @@ registerToolProvider(browserUseProvider); // host-only:browser_task 委派整包
 registerToolProvider(amadeusProvider); // both:Amadeus 笔记库 + Calendar —— host 直连磁盘 vault,非 host 经 brain.amadeus 云 vault API(append 末尾,保前缀缓存)
 registerToolProvider(readActivityProvider); // 默认仅 Muse(ctx.muse/activityAccess 收口,普通 run 不暴露,快照不变):读用户活动日志
 registerToolProvider(museWatchProvider); // 本地限定:给 Muse 设「盯任务」规则(append 末尾,保前缀缓存)
+registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 SCHEDULE.db(append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

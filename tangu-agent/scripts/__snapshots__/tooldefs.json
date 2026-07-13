@@ -2876,6 +2876,66 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
     }
   ],
   "tangu-docker:sandbox+skills": [
@@ -3719,6 +3779,66 @@
             "id": {
               "type": "string",
               "description": "remove: rule id (from list)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
             }
           },
           "required": [
@@ -5102,6 +5222,66 @@
             "id": {
               "type": "string",
               "description": "remove: rule id (from list)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
             }
           },
           "required": [
@@ -6511,6 +6691,66 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:sandbox": [
@@ -7294,6 +7534,66 @@
             "id": {
               "type": "string",
               "description": "remove: rule id (from list)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
             }
           },
           "required": [
@@ -8103,6 +8403,66 @@
             "id": {
               "type": "string",
               "description": "remove: rule id (from list)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
             }
           },
           "required": [
@@ -9486,6 +9846,66 @@
             "id": {
               "type": "string",
               "description": "remove: rule id (from list)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
             }
           },
           "required": [
@@ -10888,6 +11308,66 @@
             "id": {
               "type": "string",
               "description": "remove: rule id (from list)"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_schedule",
+        "description": "Manage your own schedule (per-agent calendar, shown in the user's Calendar). Entries are either plain planning items (auto=false, just a calendar record) or automated tasks (auto=true: when due, you are woken up unattended to run the prompt). Use when the user says e.g. \"every morning at 9 summarize the news\" → set an entry with date=next 9:00, repeat=\"1d\", auto=true, prompt=the task; or to plan your own upcoming work as auto=false entries. date format: YYYY-MM-DD (all-day, due at local 00:00) or YYYY-MM-DDTHH:mm, optionally \"/end\" for a range. repeat: empty=one-off, or \"<n>h\"/\"<n>d\" (e.g. 1h, 1d, 3d; min 1h) rolling from the date anchor. Your upcoming schedule is injected into your prompt at activation. Entries are evaluated every few minutes at zero cost.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "list",
+                "remove"
+              ],
+              "description": "set=add/update an entry, list=show entries, remove=delete by id"
+            },
+            "agent": {
+              "type": "string",
+              "description": "agent slug whose schedule to manage (default: yourself)"
+            },
+            "id": {
+              "type": "string",
+              "description": "set: entry id to update (omit = create new); remove: entry id"
+            },
+            "name": {
+              "type": "string",
+              "description": "set: entry name (required; shown on the calendar)"
+            },
+            "date": {
+              "type": "string",
+              "description": "set: anchor date \"YYYY-MM-DD[THH:mm][/end]\" (local time)"
+            },
+            "repeat": {
+              "type": "string",
+              "description": "set: repeat interval \"<n>h\"/\"<n>d\" rolling from date; omit for one-off"
+            },
+            "auto": {
+              "type": "boolean",
+              "description": "set: true = run the prompt unattended when due (requires date + prompt); false/omit = planning-only"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "set: what to do when the entry is due (required when auto=true)"
+            },
+            "description": {
+              "type": "string",
+              "description": "set: optional context/notes"
+            },
+            "todo": {
+              "type": "boolean",
+              "description": "set: mark as a todo item"
             }
           },
           "required": [

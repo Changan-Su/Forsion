@@ -11,6 +11,9 @@
  *   DELETE   /agent/special/muse/triggers/:id          删除一条盯任务规则
  *   GET      /agent/special/automation/sessions        agent 自动化的常驻会话列表(?triggerId= 过滤)
  *   GET      /agent/special/automation/runs?sessionId= 某会话的历次运行(muse 会话与自动化会话通用)
+ *   GET      /agent/special/schedule                    全 agent 日程聚合(SCHEDULE.db;Calendar/自动化 Space)
+ *   POST     /agent/special/schedule/:slug/entries      upsert 日程条目(带 id 改/无 id 建)
+ *   DELETE   /agent/special/schedule/:slug/entries/:id  删除一条日程条目
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404。
  */
@@ -25,7 +28,8 @@ import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PRO
 import { museStatus, kickMuse } from '../services/muse.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger } from '../services/museTriggers.js';
 import { listAutomationSessions } from '../services/automation.js';
-import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent } from '../agents/agentRegistry.js';
+import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, removeEntry } from '../services/agentSchedule.js';
+import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 
 const router = Router();
@@ -251,6 +255,56 @@ router.get('/agent/special/automation/sessions', authMiddleware, async (req: Aut
     res.json({ sessions: await listAutomationSessions(triggerId) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'automation sessions failed' });
+  }
+});
+
+// ── Agent 日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具同源) ──────────
+
+// 全 agent 日程聚合(桌面 Calendar 合成只读源 + 自动化 Space「Agent 日程」组;只含有文件的 agent)。
+router.get('/agent/special/schedule', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const schedules: { slug: string; name: string; db: unknown; entries: unknown[] }[] = [];
+    for (const a of await listAgents()) {
+      const db = await loadSchedule(a.slug);
+      if (db) schedules.push({ slug: a.slug, name: a.name, db, entries: entriesOf(db) });
+    }
+    res.json({ schedules });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'schedule failed' });
+  }
+});
+
+// upsert 日程条目(带 id 改/无 id 建;校验与 manage_schedule 工具共用,muse 拒 auto)。
+router.post('/agent/special/schedule/:slug/entries', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const slug = String(req.params.slug || '');
+    const def = isValidSlug(slug) ? await getAgent(slug) : null;
+    if (!def) return res.status(404).json({ detail: `agent "${slug}" 不存在` });
+    const body = req.body || {};
+    const v = validateEntryInput(body, { slug });
+    if (!v.ok) return res.status(400).json({ detail: v.error });
+    const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : undefined;
+    const r = await upsertEntry(slug, v.value, id, def.name);
+    if (!r.ok) return res.status(id ? 404 : 400).json({ detail: r.error });
+    kickMuse(); // auto 条目尽快被下一次巡检评估
+    res.json({ entry: r.entry, created: r.created });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'save schedule entry failed' });
+  }
+});
+
+router.delete('/agent/special/schedule/:slug/entries/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const slug = String(req.params.slug || '');
+    if (!isValidSlug(slug)) return res.status(404).json({ detail: 'agent not found' });
+    const ok = await removeEntry(slug, String(req.params.id || ''));
+    if (!ok) return res.status(404).json({ detail: 'entry not found' });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'delete schedule entry failed' });
   }
 });
 

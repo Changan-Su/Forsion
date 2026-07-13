@@ -27,6 +27,7 @@ import {
 } from './contextBudget.js';
 import { getLatestSummary, compactSession, foldWorkingWithSummary } from './compaction.js';
 import { getAgent } from '../agents/agentRegistry.js';
+import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { applyAgentActivation } from './agentActivation.js';
 import { onUserRunDone } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -589,6 +590,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           systemParts.push(`## Files in the Working Directory\nTop-level contents of \`${cwd || process.cwd()}\` right now (use list_dir/read_file to go deeper):\n\n${shown}`);
         }
       } catch { /* 列目录失败不阻断 run */ }
+    }
+
+    // 8c) host:注入该 agent 的近期日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具维护)。
+    //     放易变区(8b 之后)防打穿前缀缓存;文本刻意不含相对时间/lastRun——只在条目集变化或跨天时变。
+    //     sandbox/云端不注入(SCHEDULE.db 不进 agentFileSync,云端读不到)。
+    if (execMode === 'host') {
+      try {
+        const schedDb = await loadSchedule(activeAgentSlug);
+        const upcoming = schedDb ? upcomingScheduleLines(entriesOf(schedDb)) : [];
+        if (upcoming.length) {
+          systemParts.push(
+            '## Upcoming Schedule\nYour schedule for the coming days (auto entries run unattended when due; manage with the manage_schedule tool):\n\n' +
+            upcoming.join('\n'),
+          );
+        }
+      } catch { /* 日程读取失败不阻断 run */ }
     }
 
     // 9) 插件:已启用且带 promptSection 的插件注入各自系统提示片段(如表情包清单)。放在环境段后,
