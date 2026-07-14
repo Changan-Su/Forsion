@@ -25,9 +25,14 @@ export const readActivityProvider: ToolProvider = {
         function: {
           name: 'read_activity',
           description:
-            "Read the user's in-app activity log (compact, one event per line, oldest first): new/sent chats, note edits with line ranges, " +
-            'task/database rows, opened notes, installs, agent file edits, etc. Line format: `YYYYMMDDHHMM event key=value \"snippet\"` (local time). ' +
-            'Use it to understand what the user has been doing recently and to detect whether a task has started or finished.',
+            "Read the user's activity log (compact, one event per line, oldest first): new/sent chats, note edits with line ranges, " +
+            'task/database rows, opened notes, installs, agent file edits, etc. Plugins may also write system-wide lines — e.g. with the ' +
+            'activitywatch plugin installed, `plugin:activitywatch:focus app=… m=<minutes> "window title"` records which external apps ' +
+            '(browser, IDE, chat…) the user focused, so the log is NOT limited to in-app events. ' +
+            'Line format: `YYYYMMDDHHMM event key=value "snippet"` (local time). ' +
+            'Use it to understand what the user has been doing recently and to detect whether a task has started or finished. ' +
+            'If a small window comes back (nearly) empty, retry with a larger `hours` before concluding there was no activity; ' +
+            'app-focus lines land with a ~2 minute settling delay, so the very latest activity may not be visible yet.',
           parameters: {
             type: 'object',
             properties: {
@@ -45,8 +50,15 @@ export const readActivityProvider: ToolProvider = {
           limit: Number(args.limit) || undefined,
           query: typeof args.query === 'string' ? args.query : undefined,
         });
-        if (!lines.length) return '(no activity recorded in this window)';
-        return `${lines.length} events (oldest first):\n${lines.join('\n')}`;
+        // 与 readActivityLines 内部同款 clamp,仅用于提示文案(实测坑:Muse 用 hours:2 扑空后
+        // 不再扩窗重查,反而向用户断言「日志不记录外部应用」——尾注把「扩窗重试」推给模型)。
+        const hours = Math.min(Math.max(1, Number(args.hours) || 24), 720);
+        const widen = hours < 720 ? ` Older entries may exist outside this window — retry with a larger hours (e.g. ${Math.min(hours * 12, 720)}).` : '';
+        if (!lines.length) {
+          return `(no activity recorded in the last ${hours}h — note app-focus lines land with a ~2 min settling delay.${widen})`;
+        }
+        const fewNote = lines.length <= 2 && widen ? `\n(only ${lines.length} event(s) in the last ${hours}h.${widen})` : '';
+        return `${lines.length} events (oldest first):\n${lines.join('\n')}${fewNote}`;
       },
     },
   ],
