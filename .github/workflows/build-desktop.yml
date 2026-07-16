@@ -85,11 +85,16 @@ jobs:
         working-directory: desktop
         shell: bash
         run: |
-          asar=$(find dist -type f -name app.asar | head -1)
+          # 两个已实证的坑:①asar list 在 Windows 输出反斜杠路径(\node_modules\...)须归一化;
+          # ②runner 的 bash 带 -o pipefail,grep -q 命中即关管道会把上游 tr/asar 打成 SIGPIPE(141)
+          #   → 好包被判失败。所以先完整落临时文件,grep 不接管道。
+          asar=$(find dist -type f -name app.asar -print -quit)
           test -n "$asar" || { echo "::error::dist 下未找到 app.asar"; exit 1; }
-          # asar list 在 Windows 输出反斜杠路径(\node_modules\...),先归一化再匹配(v2.6.1 首跑曾误杀好包)。
-          npx --yes @electron/asar list "$asar" | tr '\\' '/' | grep -q "^/node_modules/electron-updater/" \
+          tmp=$(mktemp)
+          npx --yes @electron/asar list "$asar" | tr '\\' '/' > "$tmp"
+          grep -q "^/node_modules/electron-updater/" "$tmp" \
             || { echo "::error::asar 缺 node_modules(beforeBuild 返回值语义回归?)— 该包启动即崩,拒绝发布"; exit 1; }
+          rm -f "$tmp"
 
       # electron-builder 在有 publish 配置时随包产出更新 feed 清单(Win=latest.yml / Linux=latest-linux.yml);
       # 缺失则应用内更新形同虚设 → 这里硬失败,避免发出一个装不了更新的版本。
