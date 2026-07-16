@@ -87,7 +87,8 @@ jobs:
         run: |
           asar=$(find dist -type f -name app.asar | head -1)
           test -n "$asar" || { echo "::error::dist 下未找到 app.asar"; exit 1; }
-          npx --yes @electron/asar list "$asar" | grep -q "^/node_modules/electron-updater/" \
+          # asar list 在 Windows 输出反斜杠路径(\node_modules\...),先归一化再匹配(v2.6.1 首跑曾误杀好包)。
+          npx --yes @electron/asar list "$asar" | tr '\\' '/' | grep -q "^/node_modules/electron-updater/" \
             || { echo "::error::asar 缺 node_modules(beforeBuild 返回值语义回归?)— 该包启动即崩,拒绝发布"; exit 1; }
 
       # electron-builder 在有 publish 配置时随包产出更新 feed 清单(Win=latest.yml / Linux=latest-linux.yml);
