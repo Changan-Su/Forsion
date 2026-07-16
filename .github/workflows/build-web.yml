@@ -1,0 +1,43 @@
+# 构建 Forsion Web(tangu-web)镜像 → 推 ghcr.io,部署服务器免构建直接 pull。
+# 动机:web 镜像里的 vite 打包吃内存,小内存 ECS 现场 --build 会 swap 卡死(2026-07-16 实测 25min+ 不出)。
+# 触发:web/** 推 main 自动出镜像;desktop 渲染层/lcl 改了想吃到新代码 → Actions 页手动 Run workflow。
+name: build-web
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/build-web.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name (ghcr 要求全小写)
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/forsion-web" >> "$GITHUB_OUTPUT"
+      # context 必须是仓根:web 复用 desktop/frontend + desktop/shared + lcl 源码(同 web/README 的坑 1)。
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          platforms: linux/amd64 # ponytail: 服务器是 x86;要 arm 部署再加 linux/arm64(QEMU 构建时间翻倍)
+          push: true
+          tags: |
+            ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -42,6 +42,18 @@ BACKEND_URL=http://host.docker.internal:3001 \
 
 站点默认发布在宿主机 **`:8090`**(`WEB_PORT` 可改)。
 
+### 方式零:服务器免构建(推荐,CI 出镜像只管 pull)
+
+**小内存服务器别现场 `--build`**:vite 打包吃内存,2G 机器会 swap 卡死(实测 25min+ 出不来)。GitHub Actions `build-web` 在 `web/**` 推 main 时自动构建并推 `ghcr.io/changan-su/forsion-web:latest`(desktop 渲染层/lcl 改了想吃到新代码:GitHub → Actions → build-web → Run workflow)。
+
+```bash
+cd Forsion-Genesis
+docker compose -f web/docker-compose.yml pull
+BACKEND_URL=... docker compose -f web/docker-compose.yml up -d --no-build
+```
+
+首次注意:ghcr 的 package 默认 private——要么去 GitHub → 头像 → Packages → forsion-web → Package settings 把 visibility 改 public(之后服务器免登录),要么服务器 `docker login ghcr.io -u <用户名> -p <有 read:packages 的 PAT>`。想钉住版本:`WEB_IMAGE=ghcr.io/changan-su/forsion-web:<commit-sha>`。
+
 ### 方式二:docker build / run
 
 ```bash

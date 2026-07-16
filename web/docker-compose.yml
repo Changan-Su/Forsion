@@ -6,6 +6,9 @@
 # =====================================================
 services:
   tangu-web:
+    # CI(build-web workflow)出的现成镜像;服务器免构建:pull + up -d --no-build。
+    # 本地想现场构建仍然可以 --build(会以此名 tag);WEB_IMAGE 可覆盖(如钉住某个 sha)。
+    image: ${WEB_IMAGE:-ghcr.io/changan-su/forsion-web:latest}
     build:
       context: ..            # = Forsion-Genesis/(含 web/ 与 desktop/frontend/)
       dockerfile: web/Dockerfile
