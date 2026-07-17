@@ -39,8 +39,9 @@ export async function startRun(
     body: JSON.stringify({
       session_id: params.sessionId,
       model_id: params.modelId || cfg.modelId || undefined,
-      // standalone(桌面)基线 profile 应答 'tangu';Tangu Web 走云端注册的 'tangu-web' app profile。
-      app_id: window.tangu?.cloudWeb ? 'tangu-web' : 'tangu',
+      // 全端共用 'tangu':桌面 standalone 基线本就应答它,云端 worker 经 appProfiles.config 文件层
+      // 覆盖同样认它(2026-07-17 弃用独立 'tangu-web',web/桌面云会话与 admin 模型配置统一一份)。
+      app_id: 'tangu',
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

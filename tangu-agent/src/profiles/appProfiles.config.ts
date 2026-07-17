@@ -20,11 +20,13 @@ import type { AppProfileOverride } from '../seams/appProfile.js';
 export const APP_PROFILE_OVERRIDES: Record<string, AppProfileOverride> = {
   // 'ai-studio' 即基线,无需条目。
   //
-  // Tangu Web(浏览器版完整 agent,连云端)——**必须走文件层**:worker 若用本地 SQLite(非共享 PG),
-  // gateway 往 PG 的 app_profile_overrides seed 到不了它,只有 checked-in 文件层随镜像烘进每个 worker。
-  // 与 server/microserver/tangu-web/agent.manifest.ts 保持一致(改一处记得改另一处)。
-  'tangu-web': {
-    displayName: 'Tangu Web',
+  // Tangu 全端共用 app id(桌面 standalone 基线本就是 'tangu';此条让云端 worker 也认它,
+  // web/桌面云会话统一走这一个 id,admin 的应用模型配置也只配一份)。值与 standalone 基线等价,
+  // 桌面本地行为零变化。**必须走文件层**:worker 若用本地 SQLite(非共享 PG),gateway 往 PG 的
+  // app_profile_overrides seed 到不了它,只有 checked-in 文件层随镜像烘进每个 worker。
+  // 2026-07-17 弃用独立的 'tangu-web' id(用户拍板共用;server/microserver/tangu-web 挂载留作兼容)。
+  'tangu': {
+    displayName: 'Tangu',
     toolBuiltins: 'all',
     capabilities: { memory: true, log: true, groupChat: true },
     features: { webSearch: true, customTools: true, sandbox: true },
