@@ -1,6 +1,8 @@
 # 构建 Tangu 云端 worker 镜像 → 推 ghcr.io,生产服务器 pull 后重建容器。
 # 此前 worker 从服务器上一个 Genesis 迁移前的旧 Tangu checkout 手工构建,停在 2026-06-18 —— 引擎
-# 新增的 app profile(如 tangu-web)/端点全都缺,表现为 /agent/runs 400 unknown app_id。
+# 新增的 app profile(如 tangu)/端点全都缺,表现为 /agent/runs 400 unknown app_id。
+# worker 插件是独立私仓 Changan-Su/Tangu-Worker(本仓 .gitignore 刻意排除,开源边界):
+# 经 TANGU_WORKER_DEPLOY_KEY secret(该私仓的只读 deploy key)checkout 后放进构建上下文。
 # 触发:手动 Run workflow(worker 部署是慎重动作);Dockerfile/本文件改动推 main 也触发。
 name: build-worker
 
@@ -21,6 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout worker plugin (私仓 Tangu-Worker)
+        uses: actions/checkout@v4
+        with:
+          repository: Changan-Su/Tangu-Worker
+          ssh-key: ${{ secrets.TANGU_WORKER_DEPLOY_KEY }}
+          path: tangu-agent/plugins/forsion-worker
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
