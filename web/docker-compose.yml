@@ -25,7 +25,8 @@ services:
       # 例:http://host.docker.internal:3001 / http://192.168.1.100:3001 / https://api.yourdomain.com
       BACKEND_URL: ${BACKEND_URL:-http://host.docker.internal:3001}
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      # 127.0.0.1 而非 localhost:busybox wget 先解析 ::1,而 nginx listen 80 只绑 IPv4 → 恒 refused 假 unhealthy。
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/"]
       interval: 30s
       timeout: 10s
       start_period: 10s
