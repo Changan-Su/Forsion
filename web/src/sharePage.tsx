@@ -55,6 +55,9 @@ body { margin: 0; }
 /** 剥 frontmatter + wiki 语法轻转换(嵌入图→md 图;不可渲染的构件→纯 markdown 占位,不依赖 rehype-raw)。 */
 function preprocess(raw: string, opts: { assetUrl: (ref: string) => string; pageHref: (name: string) => string | null }): string {
   let s = raw.replace(/^---\n[\s\S]*?\n---\n?/, '')
+  // Amadeus 块锚点标记(<!-- a <id> -->,见 compiler/markers.ts BLOCK_MARKER_RE):仅用于存储切块,
+  // 读者不该看到。react-markdown 无 rehype-raw 会把这些 HTML 注释漏成可见文本,故在此整行剥除。
+  s = s.replace(/^[ \t]*<!--\s*a\s+[A-Za-z0-9_]+\s*-->[ \t]*(?:\r?\n|$)/gm, '')
   s = s.replace(/!\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_m, ref: string, _alias?: string) => {
     const r = ref.trim()
     if (IMG_EXT.test(r)) return `![](${opts.assetUrl(r)})`
