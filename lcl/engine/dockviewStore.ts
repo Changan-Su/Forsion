@@ -10,7 +10,6 @@ import type { Leaf, ViewLocation } from './types'
 import { getView } from './viewRegistry'
 import { label } from './types'
 import { computeSideWidth } from './sideWidth'
-import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { useNav } from './navStore'
 import {
@@ -39,12 +38,6 @@ function nextId(api: DockviewApi, type: string): string {
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。 */
 const sidebarAnimating: Record<'left' | 'right', boolean> = { left: false, right: false }
 
-/** pinSides 的延迟钉宽窗口标记:置位期间 captureSideWidths 一律不记宽(防把系统过渡态当用户拖宽写进
- *  localStorage → 焊死错宽 = 侧栏抽风根因 R1)。pinGen 让「最后一次 pin」负责清旗,多次 pin 叠加时
- *  不被先到的 setTimeout 提前解锁。 */
-let pinPending = false
-let pinGen = 0
-
 /** 某侧栏的目标宽 = computeSideWidth(纯几何,见 sideWidth.ts)喂上当前 Space 的画像。
  *  pinSides 与折叠/展开动画都以此为准,故记住宽度即被尊重(不被重钉回黄金分割)= 持久化。 */
 function sideTargetWidth(api: DockviewApi, loc: 'left' | 'right'): number {
@@ -62,12 +55,11 @@ export function captureSideWidths(api: DockviewApi): void {
   for (const loc of ['left', 'right'] as const) {
     if (!st.sideFree[loc] || sidebarAnimating[loc]) continue
     const w = (panelsAt(api, loc)[0] as { group?: SizableGroup } | undefined)?.group?.api?.width
-    if (typeof w !== 'number') continue
-    // 「这是不是用户拖出来的、该记的宽」抽到 sideCapture.shouldRecordSideWidth(纯函数,可单测)。
-    // 关键:pinPending 期(pinSides 延迟落地前的过渡宽)绝不记,否则污染 → 抽风(见 sideCapture 注释)。
-    if (!shouldRecordSideWidth({ measured: w, target: sideTargetWidth(api, loc), prev: next[loc], pinPending })) continue
-    next[loc] = Math.round(w)
-    changed = true
+    if (typeof w !== 'number' || w < 120) continue
+    // onDidLayoutChange 不分来源:pinSides 自己 setSize 也会进这里。宽 ≈ 当前目标宽 = 系统钉的,
+    // 不是用户拖动 → 不进记忆(否则首启的默认宽被记死,窗口变宽后不再自适应黄金分割)。
+    if (Math.abs(w - sideTargetWidth(api, loc)) <= 2) continue
+    if (next[loc] == null || Math.abs(next[loc]! - w) > 2) { next[loc] = Math.round(w); changed = true }
   }
   if (changed) {
     useWorkspace.setState({ sideWidths: next })
@@ -109,8 +101,6 @@ function tweenGroupWidth(group: SizableGroup, from: number, to: number, done: ()
  *  Dockview split/setSize 异步竞争 → rAF + setTimeout 双重兜底,在布局沉降后再钉。
  *  正在补间动画的一侧跳过(sidebarAnimating),避免钉宽打断丝滑过渡。 */
 function pinSides(api: DockviewApi): void {
-  const gen = ++pinGen
-  pinPending = true // 钉宽落地前 captureSideWidths 不记宽(防过渡态污染)
   const apply = (): void => {
     const W = api.width
     if (!W) return
@@ -121,8 +111,7 @@ function pinSides(api: DockviewApi): void {
   }
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => f()
   raf(() => raf(apply))
-  // Dockview 布局沉降后再钉一次(rAF 偶尔早于其内部 resize);顺带关闭 pin 窗口(仅最后一次 pin 清旗)。
-  setTimeout(() => { apply(); if (gen === pinGen) pinPending = false }, 60)
+  setTimeout(apply, 60) // Dockview 布局沉降后再钉一次(rAF 偶尔早于其内部 resize)
 }
 
 /** 读 panel 的视图类型:优先 params.__type(可靠),回退 Dockview 的 component(跨版本不保证暴露,
@@ -264,8 +253,6 @@ interface WorkspaceState {
   closeSideView(side: 'left' | 'right', type: string): void
   /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。 */
   resetLayout(): void
-  /** 按当前容器宽把两侧栏重钉回目标宽(容器 resize 后调,补 dockview 不自动重算黄金分割的缺口)。 */
-  repinSides(): void
   /** 开/聚焦一个视图。singleton 已存在则聚焦;主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
    *  opts.newTab 显式新建);侧栏同侧同类型复用。返回 leaf。 */
   openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean }): Leaf | null
@@ -469,8 +456,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
   },
-
-  repinSides: () => { const api = get().api; if (api) pinSides(api) },
 
   openView(type, params = {}, loc = 'main', opts) {
     const api = get().api
