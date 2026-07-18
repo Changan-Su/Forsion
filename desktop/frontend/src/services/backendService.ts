@@ -597,3 +597,9 @@ export const pullInbox = (cfg: TanguDesktopConfig) =>
   window.tangu?.mobile
     ? localInbox.pull(cfg)
     : request<{ pulled: boolean; added: number; detail?: string }>(cfg, '/agent/inbox/pull', { method: 'POST' })
+
+/** 本地系统消息(sender_kind='system';壳自用:插件引导提醒等)。移动端本地收件箱不承载,静默 no-op。 */
+export const postInboxMessage = (cfg: TanguDesktopConfig, msg: { title: string; body?: string; sender_id?: string }) =>
+  window.tangu?.mobile
+    ? Promise.resolve({ ok: false, id: '' })
+    : request<{ ok: boolean; id: string }>(cfg, '/agent/inbox', { method: 'POST', body: JSON.stringify(msg) })

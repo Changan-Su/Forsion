@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron'
-import { IPC, gatePluginManifest, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeOnboarding, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
@@ -38,38 +38,59 @@ const SAMPLE_MANIFEST = `{
   "name": "Hello Amadeus",
   "version": "1.0.0",
   "apiVersion": 1,
-  "description": "示例插件：演示命令、slash 项与主题三种贡献点。",
+  "description": "示例插件：演示命令、slash 项、主题与自定义视图四种贡献点。",
   "main": "main.js"
 }
 `
 
 // The plugin body runs with \`ctx\` in scope and may return a disposer (see PluginContext).
 const SAMPLE_MAIN = `// Hello Amadeus —— 示例插件。文件体即 setup(ctx)，可 return 一个清理函数。
+// ⚠️ 命令/slash 的 id 处于全局命名空间（与其他插件共享），必须带自己的插件前缀，
+//    如 'hello-amadeus-greet'——裸 id（'start'/'hello'）两个插件一撞就互相顶掉。
 ctx.registerCommand({
-  id: 'hello',
+  id: 'hello-amadeus-greet',
   title: 'Hello：打个招呼',
   keywords: 'hello hi 你好 shili',
   run: () => ctx.app.notify('你好，来自示例插件 👋'),
 })
 ctx.registerSlashItem({
-  id: 'signature',
+  id: 'hello-amadeus-signature',
   label: '示例签名',
   icon: '✶',
   group: '示例',
   scaffold: '> —— 由 Amadeus 示例插件插入\\n\\n',
   keywords: 'sign 签名 shili sample',
 })
+// 主题 id 同样要独一无二（它就是 data-theme 的值，也是样式注入的键）。
 ctx.registerTheme({
   id: 'sky',
   label: '天蓝',
   swatch: '#38bdf8',
   css: "[data-theme='sky'][data-mode='light']{--primary:#0284c7;--primary-2:#0369a1;--on-primary:#ffffff} [data-theme='sky'][data-mode='dark']{--primary:#38bdf8;--primary-2:#7dd3fc;--on-primary:#04283b}",
 })
+// 自定义视图：纯 DOM mount，宿主注册为 plugin:hello-amadeus:hello-board——
+// Space 配方可用这个名字组合它；mount 里起的定时器/监听在返回的清理函数里收掉。
+ctx.registerView({
+  id: 'hello-board',
+  title: 'Hello 面板',
+  mount(el) {
+    el.style.padding = '16px'
+    el.textContent = '来自示例插件的自定义视图 ✶'
+    return () => { /* 清理定时器/监听 */ }
+  },
+})
+ctx.registerCommand({
+  id: 'hello-amadeus-open-board',
+  title: 'Hello：打开示例视图',
+  keywords: 'board view 视图 shili',
+  run: () => ctx.openView('hello-board'),
+})
 return () => {}
 `
 
 export function registerIpc(getWindow: () => BrowserWindow | null): {
   getVaultRoot: () => string | null
+  restartSync: () => void
 } {
   const vault = new VaultManager()
   const index = new VaultIndex(vault)
@@ -339,12 +360,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(SYNC_IPC.get, () => ({ ...sync.getStatus(), side: onCloudSide() ? 'cloud' : 'local' }))
   ipcMain.handle(SYNC_IPC.setEnabled, (_e, on: boolean) => sync.setEnabled(on))
-  ipcMain.handle(SYNC_IPC.syncNow, async () => {
+  // 踢一遍所有同步引擎(主镜像 + 共享 + 按条目):auth-required/停摆的引擎会经 syncNow 内部转 restart
+  // 重读凭据并拉起双向同步。手动「立即同步」与「登录后自动拉起」(main.ts auth:forsionLogin)共用此函数。
+  const kickAllSync = (): ReturnType<typeof sync.syncNow> => {
     void refreshSharedBindings() // 顺带发现新接受的共享
     for (const { engine } of sharedEngines.values()) void engine.syncNow()
     for (const { engine } of entryEngines.values()) void engine.syncNow()
     return sync.syncNow()
-  })
+  }
+  ipcMain.handle(SYNC_IPC.syncNow, () => kickAllSync())
 
   // ── 按条目云同步 IPC 面 ────────────────────────────────────────────────────
   ipcMain.handle(SYNC_IPC.entryGet, async () => {
@@ -916,6 +940,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           apiVersion?: number
           minAppVersion?: string
           requiresApp?: string
+          onboarding?: unknown
         }
         const id = m.id || e.name
         if (seen.has(id)) continue
@@ -935,6 +960,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           minAppVersion: typeof m.minAppVersion === 'string' ? m.minAppVersion : undefined,
           requiresApp: typeof m.requiresApp === 'string' ? m.requiresApp : undefined,
           readme,
+          onboarding: sanitizeOnboarding(m.onboarding),
           blocked: blocked ?? undefined,
         })
       } catch {
@@ -968,5 +994,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   void refreshSharedBindings() // 与我共享的绑定引擎(未登录时静默,syncNow/共享列表访问时再刷)
   void refreshEntryBindings() // 按条目同步绑定(注册表为空时零动作;vault 根不在时该绑定停在 error 态)
 
-  return { getVaultRoot: () => vault.getRoot() }
+  return {
+    getVaultRoot: () => vault.getRoot(),
+    /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
+    restartSync: () => { void kickAllSync() },
+  }
 }

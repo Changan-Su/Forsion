@@ -4,7 +4,7 @@
  * 插件清单与 agents 由 SettingsModal 统一持有并下传(避免双拉,启用态变更即时反映到 nav)。仅本地后端可用。
  */
 import React, { useEffect, useState } from 'react'
-import { setPluginEnabled, uninstallPlugin, installPluginFromNpm, type PluginInfo } from '../services/backendService'
+import { setPluginEnabled, uninstallPlugin, installPluginFromNpm, rescanPlugins, type PluginInfo } from '../services/backendService'
 import { useApp } from '../stores/appStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
@@ -32,6 +32,22 @@ export const PluginsTab: React.FC<{
 
   const toggle = async (p: PluginInfo): Promise<void> => {
     try { await setPluginEnabled(cfg, p.id, !p.enabled); onReload() } catch { /* ignore */ }
+  }
+
+  // 运行期重扫:发现新装入文件夹的插件(市场/手动拷贝)。已有插件的代码改动受 ESM 缓存影响,仍需重启后端。
+  const [rescanning, setRescanning] = useState(false)
+  const doRescan = async (): Promise<void> => {
+    setRescanning(true)
+    try {
+      const r = await rescanPlugins(cfg)
+      const msg = r.addedIds.length
+        ? t('settings.plugins.rescanAdded', { n: String(r.addedIds.length) })
+        : t('settings.plugins.rescanNone')
+      useApp.getState().toast(r.needsRestart ? `${msg} · ${t('settings.plugins.needsRestartHint')}` : msg)
+      onReload()
+    } catch (e: any) {
+      useApp.getState().toast(e?.message || String(e), true)
+    } finally { setRescanning(false) }
   }
 
   const uninstall = async (p: PluginInfo): Promise<void> => {
@@ -65,6 +81,14 @@ export const PluginsTab: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 6 }}>
+        {window.tangu?.openPluginsDir && (
+          <button className="btn ghost sm" onClick={() => void window.tangu?.openPluginsDir?.()}>{t('settings.plugins.openFolder')}</button>
+        )}
+        <button className="btn ghost sm" title={t('settings.plugins.rescanHint')} disabled={rescanning} onClick={() => void doRescan()}>
+          {rescanning ? t('settings.plugins.rescanning') : t('settings.plugins.rescan')}
+        </button>
+      </div>
       <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontSize: 12, fontWeight: 600 }}>{t('settings.plugins.npmInstallTitle')}</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>

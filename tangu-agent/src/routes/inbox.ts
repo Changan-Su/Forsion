@@ -6,12 +6,14 @@
  *   POST   /agent/inbox/read-all                                              全部已读(不动未投递定时消息)
  *   DELETE /agent/inbox/:id                                                   软删(定时消息「取消」同此)
  *   POST   /agent/inbox/pull                                                  手动拉服务端广播
+ *   POST   /agent/inbox { title, body? }                                      本地系统消息(桌面壳用:插件引导提醒等)
  *
  * 时间纪律:写入/比较一律 JS 生成的 UTC 'YYYY-MM-DD HH:MM:SS' 串(不用 SQL CURRENT_TIMESTAMP 比较——
  * 外部 PG 的它是服务器本地墙钟);响应统一过 ts() 归一(PG host 回 Date、SQLite 回字符串)。
  * 到期投递无定时器:deliver_at IS NULL OR deliver_at <= now 即「已投递」。DELETE=软删,理由见 migrate.ts。
  */
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
@@ -103,6 +105,28 @@ router.get('/agent/inbox/unread-count', authMiddleware, async (req: AuthRequest,
     res.json({ count: Number(cntRows?.[0]?.n) || 0, latestId: latestRows?.[0]?.id || null });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'unread-count failed' });
+  }
+});
+
+// 本地系统消息:桌面壳自用(插件引导提醒、更新提示等)。sender_kind 钉死 'system'(不可伪装 agent/server 消息);
+// 立即投递、无定时;标题/正文与 inbox_send 同口径截断。仅本地形态(hostExec)可写,与其余 inbox 路由同门禁。
+router.post('/agent/inbox', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const userId = req.user!.userId;
+    const title = String(req.body?.title || '').trim().slice(0, 200);
+    if (!title) return res.status(400).json({ detail: 'title 必填' });
+    const body = String(req.body?.body || '').trim().slice(0, 4000);
+    const senderId = String(req.body?.sender_id || 'desktop').trim().slice(0, 64) || 'desktop';
+    const id = randomUUID();
+    await query(
+      `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id)
+       VALUES (?, ?, ?, ?, 'system', ?)`,
+      [id, userId, title, body, senderId],
+    );
+    res.json({ ok: true, id });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'inbox post failed' });
   }
 });
 

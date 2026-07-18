@@ -6,6 +6,7 @@
 
 import type { ComponentType } from 'react'
 import type { PropertyTypeDef } from '../blocks/database/propertyTypes'
+import type { PluginOnboardingSpec } from '@amadeus-shared/ipc'
 
 /** A custom multi-dimensional-table (Database) property/column type a plugin can register.
  *  Provides render+edit + a primitive baseType for storage; see blocks/database/propertyTypes. */
@@ -79,17 +80,37 @@ export interface AchievementSeriesContribution {
   achievements: AchievementContribution[]
 }
 
-/** A collapsible panel a plugin contributes to the sidebar. (React component; built-in plugins.) */
+/** A collapsible panel a plugin contributes to the sidebar. (React component; built-in plugins.)
+ *  @deprecated Dead since the LCL shell — panels only ever rendered in the retired VaultSidebar.
+ *  Contribute a workbench view via `registerView` instead. */
 export interface PanelContribution {
   id: string
   title: string
   component: ComponentType
 }
 
-/** An item a plugin contributes to the bottom status bar. (React component; built-in plugins.) */
+/** An item a plugin contributes to the bottom status bar. (React component; built-in plugins.)
+ *  @deprecated Dead since the LCL shell — no live consumer renders these. */
 export interface StatusItemContribution {
   id: string
   component: ComponentType
+}
+
+/** A workbench view a plugin can contribute (plain DOM mount — no React needed in the plugin).
+ *  The host registers it into the engine view registry as `plugin:<pluginId>:<viewId>`, so custom
+ *  Spaces can compose it (and declare it under `requires.views`), and the plugin's own commands
+ *  can open it via `ctx.openView(viewId)`. Unregistered again when the plugin is disabled
+ *  (open instances are closed first). */
+export interface ViewContribution {
+  /** View id, unique within the plugin (kebab-case recommended). */
+  id: string
+  /** Tab title shown in the workbench. */
+  title: string
+  /** Build the view's DOM into the host-provided element; called once per opened instance.
+   *  Return a cleanup to run when the instance closes (clear timers/observers here). */
+  mount(el: HTMLElement): (() => void) | void
+  /** Default true: at most one instance app-wide (re-opening focuses the existing one). */
+  singleton?: boolean
 }
 
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
@@ -111,8 +132,15 @@ export interface PluginContext {
   registerSlashItem(item: SlashContribution): void
   registerCommand(command: CommandContribution): void
   registerTheme(theme: ThemeContribution): void
+  /** @deprecated No live render surface — use registerView. */
   registerPanel(panel: PanelContribution): void
+  /** @deprecated No live render surface. */
   registerStatusItem(item: StatusItemContribution): void
+  /** Contribute a workbench view (registered as engine view type `plugin:<pluginId>:<id>`). */
+  registerView(view: ViewContribution): void
+  /** Open (or focus) one of this plugin's own registered views in the main area.
+   *  No-op on hosts without a workbench (e.g. the standalone notes app). */
+  openView(viewId: string): void
   /** Declare a tunable setting (rendered on the plugin detail page; localStorage-backed). */
   registerSetting(def: SettingContribution): void
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
@@ -145,6 +173,8 @@ export interface AmadeusPlugin {
   requiresApp?: string
   /** README.md content for the detail page (external plugins only). */
   readme?: string
+  /** Declarative first-run setup card (manifest `onboarding`; sanitized by the host). */
+  onboarding?: PluginOnboardingSpec
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old. Never activated. */
   blocked?: 'api' | 'minApp'
   /** Wire up contributions; optionally return a disposer for teardown on disable. */

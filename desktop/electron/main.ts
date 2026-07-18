@@ -35,6 +35,11 @@ import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMateria
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
+// dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
+// name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
+// → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
+// 「安装版在跑时 npm run dev 静默退出」)。dev 重定向 userData 到独立目录,彻底隔离(锁 + 壳层配置 + 窗口状态)→ 可同开。
+if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
 // productName 改名(Tangu Agent 2.0 → Forsion)→ userData 目录随名走:一次性迁移壳层配置(打包态才有产品名目录)。
 if (app.isPackaged) migratePair(join(app.getPath('appData'), 'Tangu Agent 2.0'), join(app.getPath('appData'), 'Forsion'))
 const tanguHomeDir = forsionHomeDir // 品牌迁移后真身在 ~/.forsion(名字保留,少动 20+ 调用点)
@@ -1267,6 +1272,12 @@ app.whenReady().then(async () => {
     await shell.openPath(dir)
     return { ok: true }
   })
+  ipcMain.handle('plugins:openDir', async () => {
+    const dir = join(tanguDataDir(), 'plugins')
+    await mkdir(dir, { recursive: true })
+    await shell.openPath(dir)
+    return { ok: true }
+  })
 
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启;
@@ -1578,6 +1589,9 @@ app.whenReady().then(async () => {
     }
   })
 
+  // 登录成功后踢一次 Amadeus 云同步引擎(值由下方 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
+  // auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
+  let restartAmadeusSync: (() => void) | null = null
   ipcMain.handle('auth:forsionLogin', async (_e, cloudUrl?: string) => {
     const stored = await loadConfig()
     const url = (cloudUrl || stored.cloudUrl || '').trim()
@@ -1590,6 +1604,7 @@ app.whenReady().then(async () => {
     // 必命中「已就绪 + 已鉴权」的后端。否则后端尚在重启时渲染端就 connect → 失败,只能靠异步 ready 广播
     // 自愈(竞态;新用户引导里常表现为登录后一直「连接后端」、模型加载不出,得手动去设置重启)。
     if (stored.mode === 'managed') await ensureBackend()
+    restartAmadeusSync?.() // 登录成功:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)
     return { ok: true, cloudUrl: r.cloudUrl }
   })
 
@@ -1696,7 +1711,8 @@ app.whenReady().then(async () => {
     quit: () => { isQuitting = true; app.quit() },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot } = registerAmadeusIpc(() => mainWindow)
+  const { getVaultRoot, restartSync } = registerAmadeusIpc(() => mainWindow)
+  restartAmadeusSync = restartSync
   registerAmadeusAssetProtocol(getVaultRoot)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。

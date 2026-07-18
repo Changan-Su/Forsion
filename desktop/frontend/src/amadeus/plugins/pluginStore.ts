@@ -26,6 +26,7 @@ import type {
   SlashContribution,
   StatusItemContribution,
   ThemeContribution,
+  ViewContribution,
 } from './types'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 
@@ -49,6 +50,10 @@ interface PluginState {
   statusItems: Owned<StatusItemContribution>[]
   propertyTypes: Owned<PropertyTypeContribution>[]
   settings: Owned<SettingContribution>[]
+  views: Owned<ViewContribution>[]
+  /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
+  viewOpener: ((type: string) => void) | null
+  setViewOpener(fn: ((type: string) => void) | null): void
   disposers: Record<string, (() => void) | undefined>
   initialized: boolean
   /** 注册并按偏好启用一组插件;缺省 = 全部 builtins(独立版);桌面壳传自己的选择性子集。 */
@@ -121,6 +126,7 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
     readme: src.readme,
+    onboarding: src.onboarding,
     blocked: src.blocked,
     setup: (ctx) => {
       const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
@@ -144,6 +150,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
     registerPanel: (panel) => set((s) => ({ panels: [...s.panels, { pluginId, item: panel }] })),
     registerStatusItem: (item) =>
       set((s) => ({ statusItems: [...s.statusItems, { pluginId, item }] })),
+    registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
+    // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
+    openView: (viewId) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`),
     registerSetting: (def) => set((s) => ({ settings: [...s.settings, { pluginId, item: def }] })),
     registerPropertyType: (def) => {
       registerPropType(def)
@@ -179,6 +188,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       statusItems: s.statusItems.filter((o) => o.pluginId !== id),
       propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
       settings: s.settings.filter((o) => o.pluginId !== id),
+      views: s.views.filter((o) => o.pluginId !== id),
       disposers: { ...s.disposers, [id]: undefined },
     }))
   }
@@ -198,6 +208,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
     statusItems: [],
     propertyTypes: [],
     settings: [],
+    views: [],
+    viewOpener: null,
+    setViewOpener: (fn) => set({ viewOpener: fn }),
     disposers: {},
     initialized: false,
 
@@ -231,6 +244,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           statusItems: s.statusItems.filter((o) => o.pluginId !== id),
           propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
           settings: s.settings.filter((o) => o.pluginId !== id),
+          views: s.views.filter((o) => o.pluginId !== id),
         }))
         return
       }

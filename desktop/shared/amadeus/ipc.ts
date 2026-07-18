@@ -62,6 +62,79 @@ export const IPC = {
 /** Plugin API version the host implements. Manifests without apiVersion are treated as 1 (back-compat). */
 export const AMADEUS_PLUGIN_API = 1
 
+/** One informational step in a plugin's onboarding card. */
+export interface PluginOnboardingStep {
+  title: string
+  description?: string
+}
+
+/** A market item the plugin recommends installing during onboarding (matched by installSlug). */
+export interface PluginOnboardingRecommend {
+  type: 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin'
+  slug: string
+  /** Display name fallback when the item isn't found in the market. */
+  name?: string
+  /** One-line reason shown next to the item. */
+  reason?: string
+}
+
+/** Declarative first-run onboarding a plugin ships in its manifest (`onboarding` key).
+ *  Rendered by the host as a setup card on first enable; skipping leaves a badge + one inbox nudge. */
+export interface PluginOnboardingSpec {
+  /** One-liner shown at the top of the setup card. */
+  intro?: string
+  steps?: PluginOnboardingStep[]
+  /** true = embed all of the plugin's registered settings in the card; or a list of setting keys. */
+  settings?: boolean | string[]
+  recommends?: PluginOnboardingRecommend[]
+}
+
+const REC_TYPES = new Set(['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin'])
+const str = (v: unknown, cap: number): string | undefined =>
+  typeof v === 'string' && v.trim() ? v.trim().slice(0, cap) : undefined
+
+/** Validate + cap a raw manifest `onboarding` value (main process runs this before shipping to the renderer).
+ *  Returns undefined when there is nothing renderable — malformed shapes degrade silently, never block the plugin. */
+export function sanitizeOnboarding(raw: unknown): PluginOnboardingSpec | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const out: PluginOnboardingSpec = {}
+  const intro = str(r.intro, 500)
+  if (intro) out.intro = intro
+  if (Array.isArray(r.steps)) {
+    const steps: PluginOnboardingStep[] = []
+    for (const s of r.steps.slice(0, 8)) {
+      const title = str((s as Record<string, unknown>)?.title, 120)
+      if (!title) continue
+      const description = str((s as Record<string, unknown>)?.description, 500)
+      steps.push(description ? { title, description } : { title })
+    }
+    if (steps.length) out.steps = steps
+  }
+  if (r.settings === true) out.settings = true
+  else if (Array.isArray(r.settings)) {
+    const keys = r.settings.filter((k): k is string => typeof k === 'string' && !!k).slice(0, 16)
+    if (keys.length) out.settings = keys
+  }
+  if (Array.isArray(r.recommends)) {
+    const recs: PluginOnboardingRecommend[] = []
+    for (const it of r.recommends.slice(0, 6)) {
+      const o = it as Record<string, unknown>
+      const type = typeof o?.type === 'string' && REC_TYPES.has(o.type) ? (o.type as PluginOnboardingRecommend['type']) : null
+      const slug = str(o?.slug, 64)
+      if (!type || !slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) continue
+      const rec: PluginOnboardingRecommend = { type, slug }
+      const name = str(o?.name, 80)
+      const reason = str(o?.reason, 200)
+      if (name) rec.name = name
+      if (reason) rec.reason = reason
+      recs.push(rec)
+    }
+    if (recs.length) out.recommends = recs
+  }
+  return out.intro || out.steps || out.settings || out.recommends ? out : undefined
+}
+
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
@@ -77,6 +150,8 @@ export interface ExternalPluginSource {
   requiresApp?: string
   /** README.md content from the plugin folder (capped), for the settings detail page. */
   readme?: string
+  /** Declarative first-run setup card (manifest `onboarding`, sanitized by the main process). */
+  onboarding?: PluginOnboardingSpec
   /** Present → listed but not loadable: 'api' = apiVersion mismatch, 'minApp' = app too old. */
   blocked?: 'api' | 'minApp'
 }

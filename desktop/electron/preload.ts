@@ -131,6 +131,7 @@ const api = {
   // 设置界面「打开文件夹」:agent(slug 缺省=agents 根)/ skills 目录。
   openAgentDir: (slug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agents:openDir', slug),
   openSkillsDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('skills:openDir'),
+  openPluginsDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:openDir'),
   // ── Forsion Market(浏览/详情/安装全走主进程:公开浏览 + 本地解压安装)──
   marketList: (type?: string): Promise<{ items: any[] }> => ipcRenderer.invoke('market:list', type),
   marketDetail: (id: string): Promise<any> => ipcRenderer.invoke('market:detail', id),

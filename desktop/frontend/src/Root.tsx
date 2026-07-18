@@ -13,6 +13,7 @@ import { AmadeusOverlays } from './amadeusOverlays'
 import { QuickFind } from './quickFind'
 import { HoverTip } from './hoverTip'
 import { MarketModal } from './components/MarketModal'
+import { PluginOnboardingHost } from './components/PluginOnboardingModal'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
 import { FeedbackModal } from './components/FeedbackModal'
 import { AchievementsModal } from './achievements/AchievementsModal'
@@ -203,6 +204,8 @@ export function Root() {
       {a.feedbackOpen && (
         <FeedbackModal cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
       )}
+
+      <PluginOnboardingHost />
 
       <AchievementToast />
 

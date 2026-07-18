@@ -8,6 +8,7 @@ import React, { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { installAmadeusPlugins } from '../amadeusPlugins'
+import { usePluginOnboarding, needsOnboarding, promptIfPending } from '../stores/pluginOnboardingStore'
 import { useI18n } from '../i18n'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
@@ -22,8 +23,9 @@ const card: React.CSSProperties = {
 }
 
 /** 插件声明的设置项(registerSetting)表单行:值存 localStorage `plugin.<id>.<key>`(全存字符串,
- *  number=String(n)/boolean='true'|'false'),插件在使用处自行读取——轮询型插件下一轮生效。 */
-const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }> = ({ pluginId, def }) => {
+ *  number=String(n)/boolean='true'|'false'),插件在使用处自行读取——轮询型插件下一轮生效。
+ *  导出给首启引导就绪卡复用(PluginOnboardingModal)。 */
+export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }> = ({ pluginId, def }) => {
   const lsKey = `plugin.${pluginId}.${def.key}`
   const [val, setVal] = useState<string>(() => {
     const raw = localStorage.getItem(lsKey)
@@ -148,8 +150,14 @@ const PluginDetail: React.FC<{ plugin: AmadeusPlugin; onBack: () => void }> = ({
   const toggle = usePluginStore((s) => s.toggle)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
   const settings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
+  usePluginOnboarding((s) => s.version) // 完成引导后徽标即时消失
   const on = activeIds.includes(p.id)
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
+  const toggleHere = (): void => {
+    const wasOff = !on
+    toggle(p.id)
+    if (wasOff) promptIfPending(p.id) // 手动启用成功且引导未完成 → 弹就绪卡
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -167,10 +175,16 @@ const PluginDetail: React.FC<{ plugin: AmadeusPlugin; onBack: () => void }> = ({
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
             )}
+            {needsOnboarding(p) && (
+              <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
+            )}
           </div>
           {p.description && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 3 }}>{p.description}</div>}
         </div>
-        <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={() => toggle(p.id)} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />
+        {p.onboarding && !p.blocked && (
+          <button className="btn ghost sm" onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
+        )}
+        <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />
       </div>
       {dep && (
         <>
@@ -215,6 +229,7 @@ export const AmadeusPluginsTab: React.FC = () => {
   const openFolder = usePluginStore((s) => s.openPluginsFolder)
   const reload = usePluginStore((s) => s.reloadExternal)
   const scaffold = usePluginStore((s) => s.scaffoldSample)
+  usePluginOnboarding((s) => s.version) // 「待引导」徽标随完成态即时消失
   const [detail, setDetail] = useState<string | null>(null)
 
   // 设置页可能先于 Amadeus Space 打开 → 兜底装载(幂等,installed 闸在 amadeusPlugins 内)。
@@ -249,6 +264,9 @@ export const AmadeusPluginsTab: React.FC = () => {
                   {p.blocked && (
                     <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
                   )}
+                  {needsOnboarding(p) && (
+                    <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
+                  )}
                 </div>
                 {p.description && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{p.description}</div>}
               </div>
@@ -257,7 +275,7 @@ export const AmadeusPluginsTab: React.FC = () => {
                 checked={on}
                 disabled={!!p.blocked}
                 onClick={(e) => e.stopPropagation()}
-                onChange={() => toggle(p.id)}
+                onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) promptIfPending(p.id) }}
                 style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
               />
             </div>

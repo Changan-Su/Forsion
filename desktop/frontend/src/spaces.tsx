@@ -49,19 +49,13 @@ const tanguSpace: SpaceDefinition = {
   name: () => app().tr('space.tangu'),
   icon: Bot,
   sidebarDefaults: TANGU_SIDE_VIEWS,
-  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(工作区[自动=文件] + 大纲/记忆/子聊天 同组 tab)。窄屏右栏默认收起。 */
+  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(工作区[自动=文件] + 大纲/记忆/子聊天,默认折叠)。 */
   build() {
     ws().setSidebarDefaults(TANGU_SIDE_VIEWS)
     ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
     ws().openView('workspace', {}, 'left')
-    if (typeof window === 'undefined' || window.innerWidth >= 1100) {
-      ws().openView('workspace', {}, 'right')
-      ws().openView('outline', {}, 'right')
-      ws().openView('memory', {}, 'right')
-      ws().openView('subchats', {}, 'right')
-    } else {
-      ws().initializeSidebar('right', false)
-    }
+    // 右栏默认折叠 —— 内容入 stash,toggle 可展(仅作用于全新布局;已存布局尊重用户,见 spaceRegistry.applyNamed 路径)。
+    ws().initializeSidebar('right', false)
   },
 }
 
@@ -111,18 +105,16 @@ const amadeusSpace: SpaceDefinition = {
   autoWorkspaceMode: 'notes',
   // 不定义 newPage:＋ 与「关掉最后一个主区 view」统一落到 launcher 启动器(与 Tangu Space 一致),
   // 启动器按当前 Space 列出可用视图 + 最近使用;「新建笔记」成为启动器里的一项。
-  /** 编辑器(主)→ 左栏(笔记 + 搜索/标签 同组 tab)→ 右栏(大纲 + 反链 同组 tab)。
-   *  openView 会把新面板设为活动 tab,故最后把「笔记」「大纲」拉回活动态。 */
+  /** 编辑器(主)→ 左栏(笔记 + 搜索/标签 同组 tab)→ 右栏(大纲/反链/关系图,默认折叠)。
+   *  openView 会把新面板设为活动 tab,故最后把左栏「笔记」拉回活动态。 */
   build() {
     ws().setSidebarDefaults(AMADEUS_SIDE_VIEWS)
     ws().openView('amadeus-editor', {}, 'main')
     const pagesLeaf = ws().openView('workspace', {}, 'left')
     ws().openView('amadeus-search', {}, 'left')
     ws().openView('amadeus-tags', {}, 'left')
-    const outlineLeaf = ws().openView('outline', {}, 'right')
-    ws().openView('amadeus-backlinks', {}, 'right')
-    ws().openView('amadeus-graph', {}, 'right')
-    if (outlineLeaf) ws().activateLeaf(outlineLeaf.id)
+    // 右栏默认折叠 —— 内容入 stash,toggle 可展(仅作用于全新布局;已存布局尊重用户,见 spaceRegistry.applyNamed 路径)。
+    ws().initializeSidebar('right', false)
     if (pagesLeaf) ws().activateLeaf(pagesLeaf.id)
   },
 }
@@ -225,6 +217,19 @@ export function registerSpaces(): void {
     useSpaceStore.setState({ activeSpaceId: fallback })
     try { localStorage.setItem('forsion_tangu_active_space', fallback) } catch { /* ignore */ }
   }
+  // 右栏默认折叠(2026-07-18):旧 Amadeus/Tangu 命名布局是「右栏展开」时存的,会经 applyNamed/tryRestoreLayout
+  // 恢复、绕过新的 build()(其默认折叠右栏)→ 老用户永远看不到折叠。一次性清掉这两个空间的旧布局
+  // (+ 若当前正停留其一则清当前布局),下次进入按新默认重建(右栏折叠)。代价=这两个空间的布局微调丢一次。
+  // 不 gate 在 window.amadeus:Tangu 空间在无 amadeus 桥的端(Tangu Web)也存在、也要迁移。
+  try {
+    if (localStorage.getItem('forsion_rightpanel_collapse_v1') !== '1') {
+      deleteNamedLayout('space:amadeus')
+      deleteNamedLayout('space:tangu')
+      const active = localStorage.getItem('forsion_tangu_active_space')
+      if (active === 'amadeus' || active === 'tangu') clearLayout()
+      localStorage.setItem('forsion_rightpanel_collapse_v1', '1')
+    }
+  } catch { /* ignore */ }
   if (window.amadeus && AMADEUS_ENABLED) {
     installAmadeusCommands()
     // 旧 space:amadeus 命名布局没有新加的 搜索/标签/关系图 侧栏 tab → 一次性删除,下次进入按新默认重建。

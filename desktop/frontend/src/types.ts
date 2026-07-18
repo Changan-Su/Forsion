@@ -692,9 +692,10 @@ declare global {
       /** 拖入式主题:列 ~/.tangu/themes/(每项 {id,manifest,css})/ 打开该文件夹。 */
       listThemes?(): Promise<Array<{ id: string; manifest: Record<string, unknown>; css: string }>>
       openThemesDir?(): Promise<{ ok: boolean }>
-      /** 设置界面「打开文件夹」:在系统文件管理器打开 agent(slug 缺省=agents 根)/ skills 目录(仅桌面)。 */
+      /** 设置界面「打开文件夹」:在系统文件管理器打开 agent(slug 缺省=agents 根)/ skills / plugins 目录(仅桌面)。 */
       openAgentDir?(slug?: string): Promise<{ ok: boolean }>
       openSkillsDir?(): Promise<{ ok: boolean }>
+      openPluginsDir?(): Promise<{ ok: boolean }>
       /** Forsion Market:浏览(公开)/ 详情含 README / 安装(下载+按类型解压到 ~/.tangu)/ 已装列表。 */
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
       marketDetail?(id: string): Promise<MarketDetail>

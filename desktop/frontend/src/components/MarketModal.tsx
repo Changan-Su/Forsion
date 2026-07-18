@@ -13,6 +13,7 @@ import { loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { installAmadeusPlugins } from '../amadeusPlugins'
+import { usePluginOnboarding, needsOnboarding } from '../stores/pluginOnboardingStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import type { MarketCard, MarketDetail } from '../types'
@@ -98,7 +99,12 @@ export function MarketModal() {
         // 笔记插件:落全局目录(~/.tangu/amadeus/plugins),重载外部插件即生效,免 vault。
         if (window.amadeus) {
           installAmadeusPlugins()
+          const before = new Set(usePluginStore.getState().plugins.map((p) => p.id))
           await usePluginStore.getState().reloadExternal()
+          // 新装且带引导声明的插件:装完即弹就绪卡(用户注意力正在场;更新/重装不弹)。
+          const state = usePluginStore.getState()
+          const fresh = state.plugins.find((p) => !before.has(p.id) && state.activeIds.includes(p.id) && needsOnboarding(p))
+          if (fresh) usePluginOnboarding.getState().open(fresh.id)
         }
         toast(t('market.amadeusPluginInstalled', { name: c.name }))
       } else {
