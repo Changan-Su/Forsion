@@ -10,9 +10,11 @@ import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useEntrySync, isSyncedEntry } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from './CloudSyncDialog'
+import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
 import type { AmadeusPageShare, AmadeusCollabQuota } from '../types'
 
 const fmtQuota = (n: number): string => (Number.isFinite(n) ? String(n) : '无限制')
+const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
 export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x: number; y: number }; onClose: () => void }): React.ReactElement | null {
   const collab = window.amadeusCollab
@@ -21,6 +23,7 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
   const [share, setShare] = useState<AmadeusPageShare | null>(null)
   const [quota, setQuota] = useState<AmadeusCollabQuota | null>(null)
   const [pub, setPub] = useState<{ token: string; url: string } | null>(null)
+  const [pubState, setPubState] = useState<PublishState>({ kind: 'none' }) // 含「被上级文件夹发布覆盖」
   const [pubCount, setPubCount] = useState(0)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
@@ -38,6 +41,7 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
         setPubCount(r.shares.length)
         const hit = r.shares.find((s) => s.path === path && s.mode === 'page')
         setPub(hit ? { token: hit.token, url: collab.publishUrl(hit.token) } : null)
+        setPubState(publishStateFor(path, r.shares))
       })
       .catch(() => {})
   }
@@ -150,14 +154,7 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
           )
         ) : (
           <div className="amxc-body">
-            {!pub ? (
-              <>
-                <div className="amxc-hint">发布后,任何拿到链接的人**无需账号**即可只读查看这一页(含子页面)。</div>
-                <button className="amxc-primary" disabled={busy} onClick={() => run(collab.createPublish('page', path), '已发布,链接已生成')}>
-                  <Globe2 size={13} /> 发布到公开链接
-                </button>
-              </>
-            ) : (
+            {pub ? (
               <>
                 <div className="amxc-frow">
                   <input className="amxc-input" readOnly value={pub.url} />
@@ -167,6 +164,26 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
                   <button className="amxc-danger" disabled={busy} onClick={() => run(collab.revokePublish(pub.token), '已取消发布,链接立即失效')}>取消发布</button>
                   <a className="amxc-view" href={pub.url} target="_blank" rel="noreferrer">查看页面</a>
                 </div>
+              </>
+            ) : pubState.kind === 'inherited' ? (
+              <>
+                <div className="amxc-hint">
+                  本页已通过上级{pubState.viaMode === 'subtree' ? '文件夹' : '页面'}《{baseName(pubState.via)}》整体发布 —— 拿到链接的人都能只读查看本页,无需单独发布。
+                </div>
+                <div className="amxc-frow">
+                  <input className="amxc-input" readOnly value={`${collab.publishUrl(pubState.token)}#${encodeURIComponent(path)}`} />
+                  <button className="amxc-ic" title="复制本页链接" onClick={() => copy(`${collab.publishUrl(pubState.token)}#${encodeURIComponent(path)}`, 'pub')}>
+                    {copied === 'pub' ? <Check size={13} /> : <Copy size={13} />}
+                  </button>
+                </div>
+                <div className="amxc-hint">要停止公开,请到该{pubState.viaMode === 'subtree' ? '文件夹' : '页面'}取消发布。</div>
+              </>
+            ) : (
+              <>
+                <div className="amxc-hint">发布后,任何拿到链接的人**无需账号**即可只读查看这一页(含子页面)。</div>
+                <button className="amxc-primary" disabled={busy} onClick={() => run(collab.createPublish('page', path), '已发布,链接已生成')}>
+                  <Globe2 size={13} /> 发布到公开链接
+                </button>
               </>
             )}
             {quota && <div className="amxc-hint">已发布 {pubCount} / {fmtQuota(quota.publish)} 页。</div>}

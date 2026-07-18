@@ -6,13 +6,14 @@
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import { getApiBase } from './webShim'
+import { ShareDbEmbed } from './shareDb'
 
 interface ShareMeta { mode: 'page' | 'subtree'; path: string; title: string }
 interface ShareTree { root: string; pages: string[]; folders: string[] }
@@ -42,6 +43,16 @@ body { margin: 0; }
 .shv-doc th, .shv-doc td { border: 1px solid rgba(127,127,127,.25); padding: 5px 10px; font-size: 14px; }
 .shv-wik { color: #4c6ef5; opacity: .75; border-bottom: 1px dashed currentColor; }
 .shv-chip { display: inline-block; padding: 1px 10px; border-radius: 999px; background: rgba(127,127,127,.12); font-size: 12.5px; opacity: .8; }
+.shv-db { margin: 14px 0; border: 1px solid rgba(127,127,127,.2); border-radius: 10px; overflow: hidden; }
+.shv-db-head { padding: 8px 12px; font-size: 13px; font-weight: 600; background: rgba(127,127,127,.06); border-bottom: 1px solid rgba(127,127,127,.15); }
+.shv-db-scroll { overflow-x: auto; }
+.shv-db-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.shv-db-table th, .shv-db-table td { border: 1px solid rgba(127,127,127,.18); padding: 5px 10px; text-align: left; vertical-align: top; }
+.shv-db-table th { font-weight: 600; background: rgba(127,127,127,.05); white-space: nowrap; }
+.shv-db-chip { display: inline-block; padding: 0 8px; margin: 1px 3px 1px 0; border-radius: 999px; background: rgba(76,110,245,.16); color: #4c6ef5; font-size: 12px; }
+.shv-db-check { font-size: 14px; }
+.shv-db-foot { padding: 6px 12px; font-size: 12px; opacity: .6; }
+.shv-db-err { padding: 10px 12px; font-size: 12.5px; opacity: .7; }
 .shv-foot { margin-top: 64px; padding-top: 16px; border-top: 1px solid rgba(127,127,127,.15); font-size: 12px; opacity: .55; }
 .shv-center { margin: auto; text-align: center; padding: 48px; }
 @media (prefers-color-scheme: dark) {
@@ -61,7 +72,7 @@ function preprocess(raw: string, opts: { assetUrl: (ref: string) => string; page
   s = s.replace(/!\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_m, ref: string, _alias?: string) => {
     const r = ref.trim()
     if (IMG_EXT.test(r)) return `![](${opts.assetUrl(r)})`
-    if (/\.db$/i.test(r)) return `\`📊 ${r.replace(/\.db$/i, '')}(数据库,在 Forsion 中查看)\``
+    if (/\.db$/i.test(r)) return `\n\n\`\`\`forsion-db\n${r}\n\`\`\`\n\n` // 占位 fence → dbComponents 覆写渲染只读多维表
     return `\`嵌入:${r}\``
   })
   s = s.replace(/\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_m, target: string, alias?: string) => {
@@ -127,6 +138,24 @@ function ShareApp({ token }: { token: string }): React.ReactElement {
     })
   }, [content, current, tree, base])
 
+  // ![[x.db]] 占位 fence(language-forsion-db)→ 只读多维表;经 hast node 识别语言,pre 去壳让表格块级呈现。
+  const dbComponents: Components = useMemo(() => ({
+    code({ className, children }) {
+      if (current && /\blanguage-forsion-db\b/.test(className ?? '')) {
+        const ref = (Array.isArray(children) ? children.join('') : String(children ?? '')).trim()
+        return <ShareDbEmbed base={base} page={current} dbRef={ref} />
+      }
+      return <code className={className}>{children}</code>
+    },
+    pre({ node, children }) {
+      const codeNode = (node as { children?: Array<{ tagName?: string; properties?: { className?: unknown } }> } | undefined)
+        ?.children?.find((n) => n.tagName === 'code')
+      const cls = codeNode?.properties?.className
+      const isDb = Array.isArray(cls) ? cls.includes('language-forsion-db') : String(cls ?? '').includes('language-forsion-db')
+      return isDb ? <>{children}</> : <pre>{children}</pre>
+    },
+  }), [base, current])
+
   useEffect(() => {
     const onHash = (): void => {
       const p = decodeURIComponent(location.hash.slice(1))
@@ -156,7 +185,11 @@ function ShareApp({ token }: { token: string }): React.ReactElement {
         <article className="shv-doc">
           <h1 className="shv-title">{title}</h1>
           {err ? <p>{err}</p> : (
-            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeHighlight, rehypeKatex]}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, plainText: ['forsion-db'] }], rehypeKatex]}
+              components={dbComponents}
+            >
               {md}
             </ReactMarkdown>
           )}

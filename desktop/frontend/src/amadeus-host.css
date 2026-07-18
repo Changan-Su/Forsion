@@ -244,6 +244,17 @@
 /* ── 插件状态条项(字数统计等):编辑器工具条右侧。 ── */
 .amx-status { display: inline-flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .amx-status .status-item { font-size: 12px; color: var(--text-faint, var(--text-muted)); white-space: nowrap; }
+/* 共享/发布状态指示(字数统计左边):小胶囊,点击开 ShareCard。 */
+.amx-sharestat { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.amx-sharestat-chip {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap;
+  border: none; border-radius: 999px; font-family: inherit; font-size: 11.5px; line-height: 1;
+  padding: 3px 8px; color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.1));
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.amx-sharestat-chip:hover { color: var(--text); background: var(--overlay-med, rgba(127, 127, 127, 0.16)); }
+.amx-sharestat-chip svg { flex: 0 0 auto; }
+.amx-sharestat-chip.is-pub { color: var(--accent-ink, var(--accent)); background: var(--accent-light, rgba(127, 127, 127, 0.14)); }
 
 /* ── Callout 标注(> [!note] …,Obsidian 语法;纯装饰,序列化零影响) ── */
 .am-app .milkdown .ProseMirror blockquote.callout {

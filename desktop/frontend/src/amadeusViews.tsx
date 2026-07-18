@@ -41,6 +41,7 @@ import { PageView, focusBody } from '@amadeus/components/PageView'
 import { CloudVaultPanel } from './components/CloudVaultPanel'
 import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
+import { ShareStatus } from './components/ShareStatus'
 import { tipProps, tipT, fsTipLines, type TipLines } from './hoverTip'
 import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry } from './stores/entrySyncStore'
 import { openCloudSyncDialog } from './components/CloudSyncDialog'
@@ -1485,6 +1486,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
   // 笔记多功能菜单(Obsidian 式右上角 ⋮):导出/收藏/定位/删除。
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
+  const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
   const starred = useAmadeusPrefs((s) => !!activePage && s.starred.includes(activePage))
   const pinned = useAmadeusPrefs((s) => !!activePage && s.pins.includes(activePage))
@@ -1612,6 +1614,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
         // 顶栏与编辑器融为一体:透明浮在纸面上,不是独立的一层(无底色/无分割线;滚动穿过靠 blur,见 CSS)。
         <div className="amx-toolbar">
           <Breadcrumb />
+          {window.amadeusCollab && <ShareStatus path={activePage} refreshKey={shareVer} onOpen={(x, y) => setShareCard({ x, y })} />}
           <PluginStatusItems />
           {/* 置顶图钉(字数统计右侧):写 amadeusPrefs(每 vault localStorage),侧边栏「置顶」分区同步点亮。 */}
           <button
@@ -1681,7 +1684,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
         </div>
       )}
       {shareCard && activePage && (
-        <ShareCard path={activePage} anchor={shareCard} onClose={() => setShareCard(null)} />
+        <ShareCard path={activePage} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
       )}
       {!activePage ? (
         <div className="amx-welcome">
