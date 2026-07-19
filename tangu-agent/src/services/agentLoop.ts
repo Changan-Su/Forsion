@@ -19,8 +19,8 @@ import { getToolDefinitions, executeTool, getToolCapabilities, type ToolContext 
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
-import { snapshotSession } from '../sandbox/sessionSandbox.js';
-import { listFilesLocal } from '../tools/fileWorkspace.js';
+import { snapshotSession, refreshSessionWorkspace } from '../sandbox/sessionSandbox.js';
+import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
   CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
@@ -413,7 +413,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 会话级沙箱：工作区/容器/kernel 按 (user, session) 跨消息常驻（懒 hydrate、空闲 TTL 回收）。
   // 文件工具与 run_python 都在本地操作（首次触发懒 hydrate），run 末按 sha256 diff 选择性回写 Penzor，
   // 沙箱保持温——避免每条消息全量 hydrate/snapshot 打远程 OSS（cn-beijing 单次往返 ~1-2s）。
-  const sessKey = { userId, appId, sessionId };
+  // 云端 Project 工作区(sandbox 模式):agentConfig.workspaceProject 由客户端随会话配置传入,
+  // 文件工具/沙箱落 <appId>/Cloud-Workspaces/Projects/<name>/(跨会话共享、Penzor 可见)。
+  // host 模式不适用(真实 FS 由 cwd 决定)。非法名(路径分隔等)按未设处理。
+  const wsProject = execMode === 'host' ? null : sanitizeProjectName(agentConfig.workspaceProject);
+  const sessKey = { userId, appId, sessionId, wsProject };
+  // run 开始使沙箱懒 hydrate 失效:拉到其它端/会话此前写入的 Project 文件与客户端新上传的文件。
+  refreshSessionWorkspace(sessKey);
   let flushed = false;
   const flush = async () => {
     if (flushed) return;
@@ -456,7 +462,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // advanceQueue + cleanup),runGroupChat 自管终态(done/failed/aborted),不碰会话队列。
     if (agentConfig.groupChat && profile.capabilities.groupChat) {
       await runGroupChat({
-        runId, sessionId, userId, appId, modelId, execMode, cwd, profile, agentConfig,
+        runId, sessionId, userId, appId, modelId, execMode, cwd, wsProject, profile, agentConfig,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
         attachments,
@@ -787,7 +793,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const MAX_DISPLAY_FILES_PER_RUN = 40;
     const toolCtx: ToolContext = {
       userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools,
-      enabledSkillIds, execMode, cwd, approvalMode, profile, modelId, planMode,
+      enabledSkillIds, execMode, cwd, approvalMode, profile, modelId, planMode, wsProject,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,

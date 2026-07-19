@@ -8,7 +8,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Search, Smartphone, MessageSquare } from 'lucide-react'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
-import { CLOUD_WORKSPACE_KEY, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
+import { sessionWorkspaceKey, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { useI18n } from '../../i18n'
 import { tipProps, tipT } from '../../hoverTip'
@@ -123,7 +123,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     const byKey = new Map<string, SessionRecord[]>()
     for (const ws of p.workspaces) byKey.set(ws.key, [])
     for (const s of p.sessions) {
-      const key = s.project_path || CLOUD_WORKSPACE_KEY
+      const key = sessionWorkspaceKey(s)
       if (!byKey.has(key)) byKey.set(key, [])
       byKey.get(key)!.push(s)
     }
@@ -234,7 +234,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       className={`t2s-srow${s.id === p.activeId ? ' active' : ''}`}
       // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts。
       style={{ paddingLeft: rowPadLeft(1) }}
-      onClick={() => { p.onSelect(s.id); accordion(s.project_path || CLOUD_WORKSPACE_KEY) }}
+      onClick={() => { p.onSelect(s.id); accordion(sessionWorkspaceKey(s)) }}
       onContextMenu={(e) => openMenu(e, s)}
     >
       {/* 前导槽:与笔记/文件 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,

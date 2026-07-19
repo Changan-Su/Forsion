@@ -229,6 +229,8 @@ export interface NormalAgentDef {
 
 export interface AgentConfig {
   systemPrompt?: string
+  /** 云端 Project 工作区名(sandbox 会话):run 的文件工具/沙箱落 Penzor Cloud-Workspaces/Projects/<名>/(跨会话共享)。 */
+  workspaceProject?: string
   /** 默认生图模型 id(generate_image 缺省据此;来自全局设置 cfg.imageModelId,随 run 透传)。 */
   imageModelId?: string
   /** 激活的 Normal Agent slug(后端 agentLoop 解析注入人格/模型/工具)。 */
@@ -268,20 +270,34 @@ export interface AgentConfig {
   groupMaxRounds?: number
 }
 
-/** 侧栏工作区:Cloud(云沙箱,project_path 为空)或本地目录(host 执行,cwd=path)。 */
+/** 侧栏工作区:Cloud Project(云沙箱,文件落 Penzor Cloud-Workspaces/Projects/<名>)或本地目录(host 执行,cwd=path)。 */
 export interface WorkspaceDescriptor {
-  /** 分组键:cloud 用 CLOUD_WORKSPACE_KEY 哨兵;本地用绝对路径(= project_path)。 */
+  /** 分组键:cloud 用 cloudProjectKey(project);本地用绝对路径(= project_path)。 */
   key: string
   name: string
   kind: 'cloud' | 'local' | 'wechat'
   /** 本地工作目录绝对路径;cloud 为 null。 */
   path: string | null
-  /** 常驻系统工作区(Cloud / Tangu 默认):不可重命名 / 移除。其余本地工作区(由会话 project_path 派生)可管理。 */
+  /** 常驻系统工作区(默认云 Project / Tangu 默认本地区):不可重命名 / 移除。 */
   system?: boolean
+  /** 云端 Project 名(kind='cloud'):会话 project_name 与 run 的 workspaceProject 都用它。 */
+  project?: string
 }
 
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */
 export const CLOUD_WORKSPACE_KEY = '__cloud__'
+
+/** 默认云 Project 名(新会话未选时的「Tangu」默认工作区项目;与引擎 DEFAULT_PROJECT_NAME 一致)。 */
+export const DEFAULT_CLOUD_PROJECT = 'Tangu'
+
+/** 云 Project 的工作区分组键。 */
+export const cloudProjectKey = (project?: string | null): string =>
+  `${CLOUD_WORKSPACE_KEY}:${project || DEFAULT_CLOUD_PROJECT}`
+
+/** 会话 → 工作区分组键:本地按 project_path;云会话按 project_name 归组(旧会话
+ *  project_name 为空 → 归默认 Tangu 组,文件视图仍走其 per-session 工作区,不迁移)。 */
+export const sessionWorkspaceKey = (s: { project_path?: string | null; project_name?: string | null }): string =>
+  s.project_path || cloudProjectKey(s.project_name)
 
 export interface MessageRecord {
   id: string

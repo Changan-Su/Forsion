@@ -12,10 +12,14 @@ export const ProjectSelector: React.FC<{
   value: string | null
   onChange: (ws: WorkspaceDescriptor) => void
   onAddProject?: () => void
-}> = ({ workspaces, value, onChange, onAddProject }) => {
+  /** 新建云端 Project(名字经内联输入收集);与 onAddProject(本地目录)可并存。 */
+  onAddCloudProject?: (name: string) => void
+}> = ({ workspaces, value, onChange, onAddProject, onAddCloudProject }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
+  const [naming, setNaming] = useState(false)
+  const [draft, setDraft] = useState('')
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -54,6 +58,25 @@ export const ProjectSelector: React.FC<{
               </button>
             ))}
           </div>
+          {onAddCloudProject && (naming ? (
+            <div className="project-menu-search project-menu-naming">
+              <Cloud size={13} />
+              <input
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder={t('input.project.cloudName')}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && draft.trim()) { onAddCloudProject(draft.trim()); setDraft(''); setNaming(false); setOpen(false) }
+                  if (e.key === 'Escape') { setDraft(''); setNaming(false) }
+                }}
+              />
+            </div>
+          ) : (
+            <button className="project-menu-item project-menu-add" onClick={() => setNaming(true)}>
+              <FolderPlus size={14} /> {t('input.project.addCloud')}
+            </button>
+          ))}
           {onAddProject && (
             <button className="project-menu-item project-menu-add" onClick={() => { onAddProject(); setOpen(false) }}>
               <FolderPlus size={14} /> {t('input.project.add')}

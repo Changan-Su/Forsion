@@ -509,6 +509,14 @@ export const getLog = (cfg: TanguDesktopConfig, date?: string) =>
     cfg, `/agent/log${date ? `?date=${encodeURIComponent(date)}` : ''}`,
   )
 
+// ── 云端 Project(Penzor Cloud-Workspaces/Projects/ 目录) ──
+export const listProjects = (cfg: TanguDesktopConfig) =>
+  request<{ projects: Array<{ name: string; isDefault?: boolean }> }>(cfg, '/agent/projects')
+    .then((r) => r.projects.map((p) => p.name))
+
+export const createProject = (cfg: TanguDesktopConfig, name: string) =>
+  request<{ name: string }>(cfg, '/agent/projects', { method: 'POST', body: JSON.stringify({ name }) })
+
 // ── 工作区 ──
 export const listWorkspace = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ files: WorkspaceFileMeta[] }>(

@@ -27,12 +27,16 @@ import {
   acquireSlot, releaseSlot, beginExec, endExec,
   runPython, DEFAULT_TIMEOUT_MS, MAX_CAPTURE, type ExecResult,
 } from './dockerProvider.js';
-import { hydrateWorkspaceToDir, snapshotDirToWorkspace } from '../tools/fileWorkspace.js';
+import { hydrateWorkspaceToDir, snapshotDirToWorkspace, scopeOf } from '../tools/fileWorkspace.js';
 
 export interface SessionKey {
   userId: string;
   appId: string;
   sessionId: string;
+  /** 云端 Project 工作区名:有值时沙箱按 (user, app, project) 归并——同 Project 多会话共享同一
+   *  本地目录/容器/kernel(per-project 锁串行,天然避免并发写各自基线互踩),hydrate/snapshot 走
+   *  Cloud-Workspaces/Projects/<name>/ 云树。缺省=旧 per-session 工作区。 */
+  wsProject?: string | null;
 }
 
 const BASE_DIR = process.env.AGENT_SANDBOX_SESSION_DIR || path.join(os.tmpdir(), 'forsion-agent-sessions');
@@ -195,7 +199,9 @@ interface Session {
 const sessions = new Map<string, Session>();
 
 function keyStr(k: SessionKey): string {
-  return `${k.userId} ${k.appId} ${k.sessionId}`;
+  return k.wsProject
+    ? `${k.userId} ${k.appId} proj:${k.wsProject}`
+    : `${k.userId} ${k.appId} ${k.sessionId}`;
 }
 function shortId(k: SessionKey): string {
   return createHash('sha1').update(keyStr(k)).digest('hex').slice(0, 24);
@@ -263,14 +269,30 @@ function disposeContainer(s: Session): void {
   if (name) execFile('docker', ['rm', '-f', name], () => {});
 }
 
-/** 确保会话工作区目录已从 Penzor hydrate（整会话只拉一次）。并发首调用去重。 */
+/** 确保会话工作区目录已从 Penzor hydrate（整会话只拉一次）。并发首调用去重。
+ *  重 hydrate(refreshSessionWorkspace 之后)会**清理云端已删文件**:上轮来自云端(旧 manifest 有)、
+ *  本轮云端没有、且本地未被改动(sha 仍等于旧 manifest)的文件删掉——否则跨端删除的文件残留本地,
+ *  下次 snapshot 又被当新文件回写云端(删除被悄悄撤销)。本地改过/新建的文件一律保留(冲突保守留数据)。 */
 async function ensureHydrated(s: Session): Promise<void> {
   if (s.hydrated) return;
   if (!s.hydrating) {
     s.hydrating = (async () => {
       await fsp.mkdir(s.dir, { recursive: true }).catch(() => {});
+      const prev = s.manifest;
       try {
-        s.manifest = await hydrateWorkspaceToDir(s.key.userId, s.key.appId, s.key.sessionId, s.dir);
+        const r = await hydrateWorkspaceToDir(s.key.userId, s.key.appId, scopeOf(s.key), s.dir);
+        s.manifest = r.manifest;
+        // 只有权威完整快照(complete)才可据缺席判「云端已删」——部分失败的缺席可能只是网络抖。
+        if (r.complete) {
+          for (const [rel, hash] of prev) {
+            if (s.manifest.has(rel)) continue;
+            const abs = path.join(s.dir, rel);
+            const buf = await fsp.readFile(abs).catch(() => null);
+            if (buf && createHash('sha256').update(buf).digest('hex') === hash) {
+              await fsp.rm(abs, { force: true }).catch(() => {});
+            }
+          }
+        }
       } catch (e) {
         console.warn('[agent-core] session workspace hydrate failed:', e);
         s.manifest = new Map();
@@ -342,6 +364,14 @@ export function markSessionDirty(k: SessionKey): void {
   if (s) { s.dirty = true; s.lastUsed = Date.now(); }
 }
 
+/** 使沙箱的懒 hydrate 失效(run 开始时调):下次文件操作重新从云端拉取,看见其它端/会话
+ *  在此期间写入的 Project 文件与客户端新上传的文件。dirty(上次 snapshot 失败残留)时不失效,
+ *  防止重 hydrate 覆盖未回写的本地改动——那些文件留在目录里,下次 snapshot 自动重试回写。 */
+export function refreshSessionWorkspace(k: SessionKey): void {
+  const s = sessions.get(keyStr(k));
+  if (s && s.hydrated && !s.dirty) { s.hydrated = false; s.hydrating = null; }
+}
+
 /** 在会话持久 kernel 里执行 Python（跨调用保留 import/变量）。失败回退 ephemeral（挂同一本地目录）。 */
 export async function runPythonInSession(
   k: SessionKey,
@@ -389,7 +419,7 @@ export async function snapshotSession(k: SessionKey): Promise<string[]> {
     if (!s.dirty) return [];
     let changed: string[] = [];
     try {
-      changed = await snapshotDirToWorkspace(s.key.userId, s.key.appId, s.key.sessionId, s.dir, s.manifest);
+      changed = await snapshotDirToWorkspace(s.key.userId, s.key.appId, scopeOf(s.key), s.dir, s.manifest);
     } catch (e) {
       console.warn('[agent-core] session snapshot failed:', e);
     }
@@ -405,7 +435,7 @@ export async function disposeSession(ks: string): Promise<void> {
   if (!s) return;
   sessions.delete(ks);
   if (s.dirty && s.hydrated) {
-    try { await snapshotDirToWorkspace(s.key.userId, s.key.appId, s.key.sessionId, s.dir, s.manifest); } catch { /* best-effort */ }
+    try { await snapshotDirToWorkspace(s.key.userId, s.key.appId, scopeOf(s.key), s.dir, s.manifest); } catch { /* best-effort */ }
   }
   disposeContainer(s);
   await fsp.rm(s.dir, { recursive: true, force: true }).catch(() => {});

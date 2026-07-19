@@ -8,17 +8,51 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
+import { query } from '../core/db.js';
 import {
   writeFileRaw, listWorkspaceMetas, readWorkspaceFileRaw, deleteWorkspaceFile,
-  mimeForName, type WorkspaceMeta,
+  mimeForName, sanitizeProjectName, listProjects, ensureProject, DEFAULT_PROJECT_NAME,
+  type WorkspaceMeta, type WsScope,
 } from '../tools/fileWorkspace.js';
-import { getSessionDir, markSessionDirty } from '../sandbox/sessionSandbox.js';
+import { getSessionDir, markSessionDirty, type SessionKey } from '../sandbox/sessionSandbox.js';
 
 const router = Router();
 
 /** appId 缺省回退本进程 profile(microserver='ai-studio' 与旧硬编码等价;standalone='tangu')。 */
 const defaultAppId = (v: unknown): string =>
   typeof v === 'string' && v ? v : deps().profile.appId;
+
+/**
+ * 解析请求的工作区 scope + appId：显式 project/appId 参数优先，否则查 session 行——
+ * project_name 有值且非本地目录会话(project_path 空)即云端 Project 会话，文件落
+ * <appId>/Cloud-Workspaces/Projects/<name>/(跨会话共享)；否则旧 per-session 工作区。
+ * 服务端解析使旧客户端(只传 sessionId)对 Project 会话也拿到正确文件视图。
+ */
+async function resolveScope(
+  userId: string,
+  sessionId: string,
+  explicitProject: unknown,
+  explicitAppId: unknown,
+): Promise<{ scope: WsScope; appId: string; key: SessionKey }> {
+  let project = sanitizeProjectName(explicitProject);
+  let appId = typeof explicitAppId === 'string' && explicitAppId ? explicitAppId : '';
+  if (!project || !appId) {
+    try {
+      const rows = await query<any[]>(
+        'SELECT user_id, app_id, project_name, project_path FROM chat_sessions WHERE id = ? LIMIT 1',
+        [sessionId],
+      );
+      const s = rows[0];
+      if (s && s.user_id === userId) {
+        if (!project && !s.project_path) project = sanitizeProjectName(s.project_name);
+        if (!appId && s.app_id) appId = String(s.app_id);
+      }
+    } catch { /* standalone 旧库缺列等 → 回退旧 per-session 行为 */ }
+  }
+  appId = appId || deps().profile.appId;
+  const scope: WsScope = { sessionId, project };
+  return { scope, appId, key: { userId, appId, sessionId, wsProject: project } };
+}
 
 // ── 本地会话目录回退(standalone):brain.storage 在 standalone 不可用(httpBrain 全抛),
 //    而文件工具本就 local-first 写在会话沙箱目录——云存储不可用时改用同一目录,
@@ -45,8 +79,8 @@ function safeJoin(baseDir: string, p: string): string | null {
   return abs;
 }
 
-async function localList(userId: string, appId: string, sessionId: string): Promise<WorkspaceMeta[]> {
-  const dir = await getSessionDir({ userId, appId, sessionId });
+async function localList(key: SessionKey): Promise<WorkspaceMeta[]> {
+  const dir = await getSessionDir(key);
   const out: WorkspaceMeta[] = [];
   async function walk(rel: string): Promise<void> {
     const abs = path.join(dir, rel);
@@ -64,8 +98,8 @@ async function localList(userId: string, appId: string, sessionId: string): Prom
   return out;
 }
 
-async function localRead(userId: string, appId: string, sessionId: string, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
-  const dir = await getSessionDir({ userId, appId, sessionId });
+async function localRead(key: SessionKey, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
+  const dir = await getSessionDir(key);
   const abs = safeJoin(dir, p);
   if (!abs) return null;
   const content = await fs.readFile(abs).catch(() => null);
@@ -78,12 +112,12 @@ router.get('/agent/workspace/list', authMiddleware, async (req: AuthRequest, res
   try {
     const userId = req.user!.userId;
     const sessionId = String(req.query.sessionId || '');
-    const appId = defaultAppId(req.query.appId);
     if (!sessionId) return res.status(400).json({ detail: 'sessionId is required' });
-    const files = (await isCloudStorageUp(userId, appId))
-      ? await listWorkspaceMetas(userId, appId, sessionId)
-      : await localList(userId, appId, sessionId);
-    res.json({ files });
+    const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
+    const files = (await isCloudStorageUp(userId, r.appId))
+      ? await listWorkspaceMetas(userId, r.appId, r.scope)
+      : await localList(r.key);
+    res.json({ files, project: r.scope.project || null });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list failed' });
   }
@@ -94,12 +128,12 @@ router.get('/agent/workspace/read', authMiddleware, async (req: AuthRequest, res
   try {
     const userId = req.user!.userId;
     const sessionId = String(req.query.sessionId || '');
-    const appId = defaultAppId(req.query.appId);
     const p = String(req.query.path || '');
     if (!sessionId || !p) return res.status(400).json({ detail: 'sessionId and path are required' });
-    const f = (await isCloudStorageUp(userId, appId))
-      ? await readWorkspaceFileRaw(userId, appId, sessionId, p)
-      : await localRead(userId, appId, sessionId, p);
+    const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
+    const f = (await isCloudStorageUp(userId, r.appId))
+      ? await readWorkspaceFileRaw(userId, r.appId, r.scope, p)
+      : await localRead(r.key, p);
     if (!f) return res.status(404).json({ detail: 'file not found' });
     res.json({ path: p, mimeType: f.mimeType, content: f.content.toString('base64'), encoding: 'base64', size: f.content.length });
   } catch (e: any) {
@@ -112,12 +146,12 @@ router.get('/agent/workspace/download', authMiddleware, async (req: AuthRequest,
   try {
     const userId = req.user!.userId;
     const sessionId = String(req.query.sessionId || '');
-    const appId = defaultAppId(req.query.appId);
     const p = String(req.query.path || '');
     if (!sessionId || !p) return res.status(400).json({ detail: 'sessionId and path are required' });
-    const f = (await isCloudStorageUp(userId, appId))
-      ? await readWorkspaceFileRaw(userId, appId, sessionId, p)
-      : await localRead(userId, appId, sessionId, p);
+    const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
+    const f = (await isCloudStorageUp(userId, r.appId))
+      ? await readWorkspaceFileRaw(userId, r.appId, r.scope, p)
+      : await localRead(r.key, p);
     if (!f) return res.status(404).json({ detail: 'file not found' });
     const filename = p.split('/').filter(Boolean).pop() || 'file';
     res.setHeader('Content-Type', f.mimeType || 'application/octet-stream');
@@ -132,19 +166,19 @@ router.get('/agent/workspace/download', authMiddleware, async (req: AuthRequest,
 router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { sessionId, appId, path: p } = req.body || {};
+    const { sessionId, appId, path: p, project } = req.body || {};
     if (!sessionId || !p) return res.status(400).json({ detail: 'sessionId and path are required' });
-    const app = defaultAppId(appId);
+    const r = await resolveScope(userId, String(sessionId), project, appId);
     let ok: boolean;
-    if (await isCloudStorageUp(userId, app)) {
-      ok = await deleteWorkspaceFile(userId, app, sessionId, p);
+    if (await isCloudStorageUp(userId, r.appId)) {
+      ok = await deleteWorkspaceFile(userId, r.appId, r.scope, p);
     } else {
-      const dir = await getSessionDir({ userId, appId: app, sessionId });
+      const dir = await getSessionDir(r.key);
       const abs = safeJoin(dir, p);
       ok = false;
       if (abs) {
         ok = await fs.unlink(abs).then(() => true).catch(() => false);
-        if (ok) markSessionDirty({ userId, appId: app, sessionId });
+        if (ok) markSessionDirty(r.key);
       }
     }
     res.json({ ok });
@@ -156,11 +190,11 @@ router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, 
 router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { sessionId, appId, files } = req.body || {};
+    const { sessionId, appId, files, project } = req.body || {};
     if (!sessionId || !Array.isArray(files)) {
       return res.status(400).json({ detail: 'sessionId and files[] are required' });
     }
-    const app = defaultAppId(appId);
+    const r = await resolveScope(userId, String(sessionId), project, appId);
     let saved = 0;
     const errors: string[] = [];
     for (const f of files) {
@@ -170,16 +204,16 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
           f.encoding === 'base64'
             ? Buffer.from(String(f.content || ''), 'base64')
             : Buffer.from(String(f.content || ''), 'utf-8');
-        if (await isCloudStorageUp(userId, app)) {
-          await writeFileRaw(userId, app, sessionId, f.path, buf, f.mimeType);
+        if (await isCloudStorageUp(userId, r.appId)) {
+          await writeFileRaw(userId, r.appId, r.scope, f.path, buf, f.mimeType);
         } else {
           // standalone:云存储不可用 → 写本地会话目录(与文件工具同一目录)。
-          const dir = await getSessionDir({ userId, appId: app, sessionId });
+          const dir = await getSessionDir(r.key);
           const abs = safeJoin(dir, f.path);
           if (!abs) throw new Error('invalid path');
           await fs.mkdir(path.dirname(abs), { recursive: true });
           await fs.writeFile(abs, buf);
-          markSessionDirty({ userId, appId: app, sessionId });
+          markSessionDirty(r.key);
         }
         saved++;
       } catch (e: any) {
@@ -189,6 +223,38 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
     res.json({ success: true, saved, total: files.length, errors });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'upload failed' });
+  }
+});
+
+// ── 云端 Project 管理:<appId>/Cloud-Workspaces/Projects/ 下的目录即项目,
+//    在 Penzor 云空间(网页)以普通文件夹可见。默认项目 Tangu 恒在列表首位(目录懒创建——
+//    首次写文件时 resolveDir 自动建链,列表阶段不落库)。──────────────────────────
+
+router.get('/agent/projects', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const appId = defaultAppId(req.query.appId);
+    const names = (await isCloudStorageUp(userId, appId)) ? await listProjects(userId, appId) : [];
+    if (!names.includes(DEFAULT_PROJECT_NAME)) names.unshift(DEFAULT_PROJECT_NAME);
+    res.json({ projects: names.map((name) => ({ name, isDefault: name === DEFAULT_PROJECT_NAME })) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'list projects failed' });
+  }
+});
+
+router.post('/agent/projects', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const name = sanitizeProjectName(req.body?.name);
+    if (!name) return res.status(400).json({ detail: 'invalid project name' });
+    const appId = defaultAppId(req.body?.appId);
+    if (!(await isCloudStorageUp(userId, appId))) {
+      return res.status(503).json({ detail: 'cloud storage unavailable' });
+    }
+    await ensureProject(userId, appId, name);
+    res.json({ name });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'create project failed' });
   }
 });
 

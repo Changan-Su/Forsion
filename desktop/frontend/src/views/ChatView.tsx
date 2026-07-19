@@ -76,6 +76,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     workspaces: state.workspaces,
     setNewChatWs: state.setNewChatWs,
     addLocalWorkspace: state.addLocalWorkspace,
+    addCloudProject: state.addCloudProject,
     setSessionModel: state.setSessionModel,
     setNewChatModel: state.setNewChatModel,
     setSessionEngineModel: state.setSessionEngineModel,
@@ -388,6 +389,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               value={s.newChatWs?.key ?? null}
               onChange={(w) => s.setNewChatWs(w)}
               onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+              onAddCloudProject={(name) => void s.addCloudProject(name)}
             />
           </div>
         </div>

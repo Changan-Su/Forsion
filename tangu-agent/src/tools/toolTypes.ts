@@ -23,6 +23,8 @@ export interface ToolContext {
   execMode?: 'sandbox' | 'host';
   /** host 模式的工作目录（文件/命令相对此解析）。 */
   cwd?: string;
+  /** 云端 Project 工作区名(sandbox 模式):有值时文件工具落 <appId>/Cloud-Workspaces/Projects/<name>/(跨会话共享),缺省落旧 per-session 工作区。 */
+  wsProject?: string | null;
   /** host 模式的审批档（loop 据此决定哪些破坏性工具执行前需用户批准）。 */
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto';
   /** 本次 run 的 AppProfile(接缝①):工具门禁 isEnabledFor 据此过滤。缺省回退 deps().profile。 */

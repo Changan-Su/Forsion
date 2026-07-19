@@ -62,9 +62,34 @@ function splitPath(p: string): string[] {
   return segs;
 }
 
-/** 会话工作区根：<appId>/workspace/<sessionId>/...（加上调用方给的子路径段）。 */
-function wsSegments(sessionId: string, sub: string[]): string[] {
-  return ['workspace', sessionId, ...sub];
+/**
+ * 工作区 scope：project 有值 → 云端 Project 共享工作区（<appId>/Cloud-Workspaces/Projects/<project>/，
+ * 跨会话共享、Penzor 云空间可见）；否则旧 per-session 工作区（<appId>/workspace/<sessionId>/，兼容存量会话）。
+ */
+export interface WsScope { sessionId: string; project?: string | null }
+
+/** 默认云端 Project 名（新会话未选时的「Tangu」默认工作区项目）。 */
+export const DEFAULT_PROJECT_NAME = 'Tangu';
+
+/** 校验/归一 Project 名：单个目录段（禁路径分隔/控制字符/点名），空或非法返回 null。 */
+export function sanitizeProjectName(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const name = v.trim();
+  if (!name || name === '.' || name === '..' || name.length > 100) return null;
+  if (/[/\\\u0000-\u001f]/.test(name)) return null;
+  return name;
+}
+
+/** 从 ToolContext / SessionKey 形状构造 WsScope（wsProject/project 二名兼容）。 */
+export function scopeOf(c: { sessionId: string; wsProject?: string | null; project?: string | null }): WsScope {
+  return { sessionId: c.sessionId, project: c.wsProject ?? c.project ?? null };
+}
+
+/** 工作区根路径段（加上调用方给的子路径段）。 */
+function wsSegments(scope: WsScope, sub: string[]): string[] {
+  return scope.project
+    ? ['Cloud-Workspaces', 'Projects', scope.project, ...sub]
+    : ['workspace', scope.sessionId, ...sub];
 }
 
 /** 解析（可选创建）目录链，返回最终目录 fileId（ROOT 为根）。 */
@@ -119,10 +144,10 @@ function paginateText(text: string, offset?: number, limit?: number): string {
   return `[lines ${start + 1}-${end} of ${total}]\n` + body + more;
 }
 
-export async function listFiles(userId: string, appId: string, sessionId: string, path: string): Promise<string> {
+export async function listFiles(userId: string, appId: string, scope: WsScope, path: string): Promise<string> {
   let parent: string;
   try {
-    parent = await resolveDir(userId, appId, wsSegments(sessionId, splitPath(path)), false);
+    parent = await resolveDir(userId, appId, wsSegments(scope, splitPath(path)), false);
   } catch {
     return '(empty directory)'; // 工作区尚未创建
   }
@@ -133,8 +158,8 @@ export async function listFiles(userId: string, appId: string, sessionId: string
     .join('\n');
 }
 
-export async function readFile(userId: string, appId: string, sessionId: string, path: string, offset?: number, limit?: number): Promise<string> {
-  const all = wsSegments(sessionId, splitPath(path));
+export async function readFile(userId: string, appId: string, scope: WsScope, path: string, offset?: number, limit?: number): Promise<string> {
+  const all = wsSegments(scope, splitPath(path));
   const name = all.pop();
   if (!name) throw new Error('invalid path');
   const parent = await resolveDir(userId, appId, all, false);
@@ -149,11 +174,11 @@ export async function readFile(userId: string, appId: string, sessionId: string,
 export async function writeFile(
   userId: string,
   appId: string,
-  sessionId: string,
+  scope: WsScope,
   path: string,
   contentStr: string,
 ): Promise<string> {
-  await writeFileRaw(userId, appId, sessionId, path, Buffer.from(contentStr, 'utf-8'));
+  await writeFileRaw(userId, appId, scope, path, Buffer.from(contentStr, 'utf-8'));
   return `wrote ${path}`;
 }
 
@@ -161,12 +186,12 @@ export async function writeFile(
 export async function writeFileRaw(
   userId: string,
   appId: string,
-  sessionId: string,
+  scope: WsScope,
   path: string,
   buffer: Buffer,
   mimeType?: string,
 ): Promise<void> {
-  const all = wsSegments(sessionId, splitPath(path));
+  const all = wsSegments(scope, splitPath(path));
   const name = all.pop();
   if (!name) throw new Error('invalid path');
   const parent = await resolveDir(userId, appId, all, true);
@@ -262,21 +287,24 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
 }
 
 /**
- * 把会话工作区（<appId>/workspace/<sessionId>/）递归写入 destDir。
+ * 把工作区 scope 递归写入 destDir。
  * 返回 manifest：相对路径 → sha256（供 snapshot 做变更检测）。工作区不存在则返回空表。
+ * complete=遍历与下载全部成功(权威快照):只有此时调用方才可据 manifest 缺席判定「云端已删」;
+ * 任何 listDirectory/getFileContent 失败都置 false(部分树缺席≠远端删除,不可据此清理本地)。
  */
 export async function hydrateWorkspaceToDir(
   userId: string,
   appId: string,
-  sessionId: string,
+  scope: WsScope,
   destDir: string,
-): Promise<Map<string, string>> {
+): Promise<{ manifest: Map<string, string>; complete: boolean }> {
   const manifest = new Map<string, string>();
+  let complete = true;
   let rootId: string;
   try {
-    rootId = await resolveDir(userId, appId, wsSegments(sessionId, []), false);
+    rootId = await resolveDir(userId, appId, wsSegments(scope, []), false);
   } catch {
-    return manifest; // 尚无工作区
+    return { manifest, complete: true }; // 尚无工作区(权威的「空」)
   }
 
   // Phase 1：BFS 遍历树（listDirectory 是元数据调用）→ 建目录 + 收集待下载文件节点。
@@ -288,6 +316,7 @@ export async function hydrateWorkspaceToDir(
     try {
       items = await cloudStorageService.listDirectory(node.id, userId, appId);
     } catch {
+      complete = false;
       continue;
     }
     for (const it of items) {
@@ -296,7 +325,7 @@ export async function hydrateWorkspaceToDir(
         await fs.mkdir(path.join(destDir, rel), { recursive: true }).catch(() => {});
         queue.push({ id: it.id, rel });
       } else if (it.fileType === 'file') {
-        if (fileNodes.length >= WS_MAX_FILES) continue;
+        if (fileNodes.length >= WS_MAX_FILES) { complete = false; continue; }
         if ((it.fileSize || 0) > WS_MAX_FILE_BYTES) continue;
         fileNodes.push({ id: it.id, rel });
       }
@@ -311,9 +340,9 @@ export async function hydrateWorkspaceToDir(
       await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => {});
       await fs.writeFile(abs, content);
       manifest.set(f.rel, sha256(content)); // Map.set 同步、单线程无竞态
-    } catch { /* 跳过坏文件 */ }
+    } catch { complete = false; /* 跳过坏文件 */ }
   });
-  return manifest;
+  return { manifest, complete };
 }
 
 /** 递归列出本地目录下所有文件的相对路径。 */
@@ -348,7 +377,7 @@ async function walkLocal(dir: string, base = dir): Promise<string[]> {
 export async function snapshotDirToWorkspace(
   userId: string,
   appId: string,
-  sessionId: string,
+  scope: WsScope,
   srcDir: string,
   beforeManifest: Map<string, string>,
 ): Promise<string[]> {
@@ -375,7 +404,7 @@ export async function snapshotDirToWorkspace(
   const changed: string[] = [];
   await mapLimit(pending, SNAPSHOT_CONCURRENCY, async (p) => {
     try {
-      await writeFileRaw(userId, appId, sessionId, p.posixRel, p.buf);
+      await writeFileRaw(userId, appId, scope, p.posixRel, p.buf);
       beforeManifest.set(p.posixRel, p.hash);
       changed.push(p.posixRel);
     } catch { /* 单文件失败不阻断 */ }
@@ -391,11 +420,11 @@ const materializedCache = new Set<string>();
 
 export interface WorkspaceMeta { path: string; size: number; mimeType: string; updatedAt: number; }
 
-/** 递归列出会话云端工作区 <appId>/workspace/<sessionId>/ 的所有文件（扁平相对路径 + 元信息）。 */
-export async function listWorkspaceMetas(userId: string, appId: string, sessionId: string): Promise<WorkspaceMeta[]> {
+/** 递归列出工作区 scope 下的所有文件（扁平相对路径 + 元信息）。 */
+export async function listWorkspaceMetas(userId: string, appId: string, scope: WsScope): Promise<WorkspaceMeta[]> {
   let rootId: string;
   try {
-    rootId = await resolveDir(userId, appId, wsSegments(sessionId, []), false);
+    rootId = await resolveDir(userId, appId, wsSegments(scope, []), false);
   } catch {
     return [];
   }
@@ -422,8 +451,8 @@ export async function listWorkspaceMetas(userId: string, appId: string, sessionI
 }
 
 /** 读取会话云端工作区某文件的原始字节 + mime（供前端预览/下载）。 */
-export async function readWorkspaceFileRaw(userId: string, appId: string, sessionId: string, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
-  const all = wsSegments(sessionId, splitPath(p));
+export async function readWorkspaceFileRaw(userId: string, appId: string, scope: WsScope, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
+  const all = wsSegments(scope, splitPath(p));
   const name = all.pop();
   if (!name) return null;
   let parent: string;
@@ -437,8 +466,8 @@ export async function readWorkspaceFileRaw(userId: string, appId: string, sessio
 }
 
 /** 删除会话云端工作区某文件。 */
-export async function deleteWorkspaceFile(userId: string, appId: string, sessionId: string, p: string): Promise<boolean> {
-  const all = wsSegments(sessionId, splitPath(p));
+export async function deleteWorkspaceFile(userId: string, appId: string, scope: WsScope, p: string): Promise<boolean> {
+  const all = wsSegments(scope, splitPath(p));
   const name = all.pop();
   if (!name) return false;
   let parent: string;
@@ -448,6 +477,24 @@ export async function deleteWorkspaceFile(userId: string, appId: string, session
   if (!file) return false;
   await cloudStorageService.deleteItem(file.id, userId);
   return true;
+}
+
+// ── 云端 Project 管理(<appId>/Cloud-Workspaces/Projects/ 下的目录 = 项目,Penzor 云空间直接可见)──
+
+/** 列出云端项目名（Projects 目录下的子目录名）。Projects 树尚未创建/云存储不可用 → []。 */
+export async function listProjects(userId: string, appId: string): Promise<string[]> {
+  try {
+    const parent = await resolveDir(userId, appId, ['Cloud-Workspaces', 'Projects'], false);
+    const items: any[] = await cloudStorageService.listDirectory(parent, userId, appId);
+    return items.filter((i) => i.fileType === 'directory').map((i) => String(i.name));
+  } catch {
+    return [];
+  }
+}
+
+/** 确保云端 Project 目录存在（建目录链，幂等）。 */
+export async function ensureProject(userId: string, appId: string, name: string): Promise<void> {
+  await resolveDir(userId, appId, ['Cloud-Workspaces', 'Projects', name], true);
 }
 
 /** 物化一个技能到 <appId>/.agent/skills/<skillId>/SKILL.md（与云空间规范对应）。幂等（进程内缓存）。 */

@@ -4,8 +4,7 @@
  */
 import {
   listFiles, readFile, writeFile,
-  listFilesLocal, readFileLocal, writeFileLocal,
-} from '../fileWorkspace.js';
+  listFilesLocal, readFileLocal, writeFileLocal, scopeOf } from '../fileWorkspace.js';
 import { getSessionDir, markSessionDirty } from '../../sandbox/sessionSandbox.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
@@ -30,7 +29,7 @@ export const workspaceFilesProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const p = String(args.path ?? '/');
         const dir = await getSessionDir(ctx).catch(() => null);
-        return dir ? listFilesLocal(dir, p) : listFiles(ctx.userId, ctx.appId, ctx.sessionId, p);
+        return dir ? listFilesLocal(dir, p) : listFiles(ctx.userId, ctx.appId, scopeOf(ctx), p);
       },
     },
     {
@@ -60,7 +59,7 @@ export const workspaceFilesProvider: ToolProvider = {
         const dir = await getSessionDir(ctx).catch(() => null);
         return dir
           ? readFileLocal(dir, p, offset, limit)
-          : readFile(ctx.userId, ctx.appId, ctx.sessionId, p, offset, limit);
+          : readFile(ctx.userId, ctx.appId, scopeOf(ctx), p, offset, limit);
       },
     },
     {
@@ -91,7 +90,7 @@ export const workspaceFilesProvider: ToolProvider = {
           markSessionDirty(ctx); // 标脏 → run 末 snapshot 选择性回写
           return r;
         }
-        return writeFile(ctx.userId, ctx.appId, ctx.sessionId, p, content);
+        return writeFile(ctx.userId, ctx.appId, scopeOf(ctx), p, content);
       },
     },
   ],

@@ -10,7 +10,7 @@ import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SubChat, TanguDesktopConfig, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
 } from '../types'
-import { CLOUD_WORKSPACE_KEY, SHOW_SYSTEM_PROMPT_KEY } from '../types'
+import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY } from '../types'
 import * as api from '../services/backendService'
 import { abortRun, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -183,6 +183,8 @@ export interface AppState {
   engineCaps: Record<string, { models: Array<{ id: string; name: string; description?: string }>; commands: Array<{ name: string; description: string; hint?: string }> }>
   specialEnabled: { historian: boolean; muse: boolean }
   newChatWs: WorkspaceDescriptor | null
+  /** 云端 Project 名列表(Penzor Cloud-Workspaces/Projects/;connect 后拉取,失败=只有默认 Tangu)。 */
+  cloudProjects: string[]
   newChatCfg: AgentConfig
   newChatModel: string | null
   /** 瞬态:外部入口(反馈诊断/对话建 agent/插件)预填聊天框的草稿;Composer2 mount 消费一次即清,不落盘。 */
@@ -220,6 +222,9 @@ export interface AppState {
   reduceEvent(sessionId: string, runId: string, assistantRef: { current: string }, ev: AgentRunEvent): void
   subscribeRun(sessionId: string, runId: string, assistantId: string): void
   refreshSessions(c: TanguDesktopConfig): Promise<SessionRecord[]>
+  refreshCloudProjects(c: TanguDesktopConfig): Promise<void>
+  /** 新建云端 Project 并选为 new chat 目标。 */
+  addCloudProject(name: string): Promise<void>
   connect(c: TanguDesktopConfig): Promise<void>
   refreshSpecialEnabled(c: TanguDesktopConfig): Promise<void>
   /** 把 Background Session(@讨论/Historian 辅助讨论等,经 /background 端点轮询)合并进该会话的子聊天列表。 */
@@ -313,6 +318,7 @@ export const useApp = create<AppState>((set, get) => ({
   engineCaps: {},
   specialEnabled: { historian: false, muse: false },
   newChatWs: null,
+  cloudProjects: [],
   newChatCfg: {},
   newChatModel: null,
   pendingDraft: null,
@@ -715,6 +721,7 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e: any) {
       get().toast(t('app.sessionListLoadFail', { e: e?.message || e }), true)
     }
+    void get().refreshCloudProjects(c)
     void api.listModels(c).then((m) => set({ modelsResp: m })).catch(() => set({ modelsResp: null }))
     void api.listSkills(c).then((s) => set({ skillsList: s })).catch(() => set({ skillsList: null }))
     void api.listEngines(c).then((e) => set({ engines: e })).catch(() => set({ engines: [] }))
@@ -942,7 +949,7 @@ export const useApp = create<AppState>((set, get) => ({
       // 焦点回到会话 → 展开它所在工作区(文件面板 + 会话列表共享 activeWorkspaceKey;
       // 否则启动/恢复/从特殊视图跳回时无人设置,右栏文件面板全收起显得「空」)。
       const s = get().sessions.find((x) => x.id === id) || get().archivedSessions.find((x) => x.id === id)
-      if (s) set({ activeWorkspaceKey: s.project_path || CLOUD_WORKSPACE_KEY })
+      if (s) set({ activeWorkspaceKey: sessionWorkspaceKey(s) })
     }
   },
   setActiveWorkspaceKey: (key) => set({ activeWorkspaceKey: key }),
@@ -955,15 +962,25 @@ export const useApp = create<AppState>((set, get) => ({
   }),
 
   workspaces: () => {
-    const { defaultWsDir, homeDir, sessions, archivedSessions, desktopConfig, tr: t } = get()
+    const { defaultWsDir, homeDir, sessions, archivedSessions, desktopConfig, cloudProjects, tr: t } = get()
     const defPath = defaultWsDir || homeDir || null
     const wechatOn = !!window.tangu?.backendStatus && desktopConfig?.wechatEnabled !== false
     const webotPath = defPath ? `${defPath}/webot` : null
+    // 云端 Project 列表(默认 Tangu 恒在首位);每个项目一个工作区分组。
+    // 并上会话行派生的项目名:/agent/projects 拉取失败/滞后时,含该 project_name 的会话
+    // 仍有组头可挂(否则 SidebarPane 只渲染 workspaces() 里的组,这些会话会整组隐身)。
+    const projSet = new Set<string>([DEFAULT_CLOUD_PROJECT, ...cloudProjects])
+    for (const s of [...sessions, ...archivedSessions]) {
+      if (!s.project_path && s.project_name) projSet.add(s.project_name)
+    }
+    const projNames = [...projSet]
     const list: WorkspaceDescriptor[] = [
-      { key: CLOUD_WORKSPACE_KEY, name: t('app.cloudWorkspace'), kind: 'cloud', path: null, system: true },
+      ...projNames.map((p): WorkspaceDescriptor => ({
+        key: cloudProjectKey(p), name: p, kind: 'cloud', path: null, system: p === DEFAULT_CLOUD_PROJECT, project: p,
+      })),
       { key: defaultWsDir || '__default_ws__', name: t('app.defaultWorkspace'), kind: 'local', path: defPath, system: true },
     ]
-    const seen = new Set<string>([CLOUD_WORKSPACE_KEY, defaultWsDir || '__default_ws__'])
+    const seen = new Set<string>([...projNames.map(cloudProjectKey), defaultWsDir || '__default_ws__'])
     if (wechatOn && webotPath) { list.push({ key: webotPath, name: t('app.wechatWorkspace'), kind: 'wechat', path: webotPath, system: true }); seen.add(webotPath) }
     for (const s of [...sessions, ...archivedSessions]) {
       if (s.project_path && s.project_path !== defPath && !seen.has(s.project_path)) {
@@ -978,12 +995,17 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     try {
       const path = ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null
-      const s = await api.createSession(get().cfg, path ? { project_path: path, project_name: ws.name } : undefined)
+      const cloudProject = ws.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : null
+      const s = await api.createSession(get().cfg, path
+        ? { project_path: path, project_name: ws.name }
+        : cloudProject ? { project_name: cloudProject } : undefined)
       act('chat.new', { s: s.id.slice(0, 6) })
       set((st) => ({ sessions: [s, ...st.sessions] }))
       loadedHistory.add(s.id) // 先标记再 setActiveId(其内部 loadSessionHistory 会拉空配置冲掉 init,同 send)
       get().setActiveId(s.id)
-      const init: AgentConfig = path ? { execMode: 'host', approvalMode: 'auto-edit', cwd: path } : { execMode: 'sandbox' }
+      const init: AgentConfig = path
+        ? { execMode: 'host', approvalMode: 'auto-edit', cwd: path }
+        : { execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
       set((st) => ({ messagesBySession: { ...st.messagesBySession, [s.id]: [] }, configBySession: { ...st.configBySession, [s.id]: init } }))
       void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
     } catch (e: any) {
@@ -997,6 +1019,27 @@ export const useApp = create<AppState>((set, get) => ({
     const dir = await window.tangu?.pickDirectory?.()
     if (!dir) return
     await get().createInWorkspace({ key: dir, name: dir.split('/').filter(Boolean).pop() || dir, kind: 'local', path: dir })
+  },
+
+  refreshCloudProjects: async (c) => {
+    try {
+      const names = await api.listProjects(c)
+      set({ cloudProjects: names })
+    } catch { /* 云端不可用/standalone → 保持现值(workspaces() 恒补默认 Tangu) */ }
+  },
+
+  addCloudProject: async (name) => {
+    const t = get().tr
+    const clean = name.trim().slice(0, 100)
+    if (!clean) return
+    try {
+      await api.createProject(get().cfg, clean)
+      set((st) => ({ cloudProjects: st.cloudProjects.includes(clean) ? st.cloudProjects : [...st.cloudProjects, clean] }))
+      const ws = get().workspaces().find((w) => w.kind === 'cloud' && w.project === clean)
+      if (ws) set({ newChatWs: ws })
+    } catch (e: any) {
+      get().toast(t('app.createProjectFail', { e: e?.message || e }), true)
+    }
   },
 
   renameSession: async (id, title) => {
@@ -1067,7 +1110,11 @@ export const useApp = create<AppState>((set, get) => ({
       const path = ws
         ? (ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null)
         : (get().desktopMode === 'managed' ? (get().defaultWsDir || get().homeDir || null) : null)
-      const s = await api.createSession(get().cfg, path ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') } : undefined).catch(() => null)
+      // 云沙箱新会话一律落云端 Project(选择器未选 = 默认 Tangu 项目):文件跨会话共享且 Penzor 可见。
+      const cloudProject = path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
+      const s = await api.createSession(get().cfg, path
+        ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
+        : { project_name: cloudProject! }).catch(() => null)
       if (!s) { get().toast(t('app.cannotCreateSession'), true); return false }
       set((st) => ({ sessions: [s, ...st.sessions] }))
       // 必须先标记再 setActiveId:setActiveId 内部会 void loadSessionHistory,新会话此刻服务端
@@ -1079,7 +1126,7 @@ export const useApp = create<AppState>((set, get) => ({
       const draft = get().newChatCfg
       implicitInit = path
         ? { ...draft, execMode: 'host', approvalMode: draft.approvalMode || 'auto-edit', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined }
+        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!implicitInit.agentSlug && get().defaultAgentSlug) implicitInit.agentSlug = get().defaultAgentSlug

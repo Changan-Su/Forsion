@@ -11,7 +11,7 @@ import { parsePatch, applyHunksToContent } from '../applyPatch.js';
 import { resolvePath } from '../hostExec.js';
 import { checkWritePath } from '../fsPolicy.js';
 import { getSessionDir, markSessionDirty } from '../../sandbox/sessionSandbox.js';
-import { readFileRawLocal, writeFileLocal, writeFile, readWorkspaceFileRaw } from '../fileWorkspace.js';
+import { readFileRawLocal, writeFileLocal, writeFile, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
 import type { ToolContext } from '../toolTypes.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
@@ -23,7 +23,7 @@ async function backendRead(ctx: ToolContext, p: string): Promise<string | null> 
   }
   const dir = await getSessionDir(ctx).catch(() => null);
   if (dir) return readFileRawLocal(dir, p);
-  const raw = await readWorkspaceFileRaw(ctx.userId, ctx.appId, ctx.sessionId, p);
+  const raw = await readWorkspaceFileRaw(ctx.userId, ctx.appId, scopeOf(ctx), p);
   return raw ? raw.content.toString('utf-8') : null;
 }
 
@@ -36,7 +36,7 @@ async function backendWrite(ctx: ToolContext, p: string, content: string): Promi
   }
   const dir = await getSessionDir(ctx).catch(() => null);
   if (dir) { await writeFileLocal(dir, p, content); markSessionDirty(ctx); return; }
-  await writeFile(ctx.userId, ctx.appId, ctx.sessionId, p, content);
+  await writeFile(ctx.userId, ctx.appId, scopeOf(ctx), p, content);
 }
 
 async function backendDelete(ctx: ToolContext, p: string): Promise<void> {

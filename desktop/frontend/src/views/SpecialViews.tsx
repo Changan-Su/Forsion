@@ -7,7 +7,7 @@ import { AgentsDetailView } from '../components/AgentsDetailView'
 import { WorkspaceDetailView } from '../components/WorkspaceDetailView'
 import { useApp, type SpecialKind } from '../stores/appStore'
 import { useWorkspace, recordNav } from '@lcl/engine'
-import { CLOUD_WORKSPACE_KEY } from '../types'
+import { sessionWorkspaceKey } from '../types'
 import { useShallow } from 'zustand/react/shallow'
 
 /** 特殊视图 kind → 引擎视图注册类型。 */
@@ -93,7 +93,7 @@ export function WorkspaceDetailSpecialView() {
   })))
   const key = s.detailWsKey
   const workspace = s.workspaces().find((w) => w.key === key) || s.defaultWorkspace()
-  const sessions = [...s.sessions, ...s.archivedSessions].filter((x) => (x.project_path || CLOUD_WORKSPACE_KEY) === key)
+  const sessions = [...s.sessions, ...s.archivedSessions].filter((x) => sessionWorkspaceKey(x) === key)
   return (
     <WorkspaceDetailView
       workspace={workspace}

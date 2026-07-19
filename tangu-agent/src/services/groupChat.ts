@@ -50,6 +50,8 @@ export interface GroupChatParams {
   modelId: string;
   execMode: 'sandbox' | 'host';
   cwd?: string;
+  /** 云端 Project 工作区名(主 loop 已按 host 门/合法性算好);群聊发言人工具与主 loop 落同一工作区。 */
+  wsProject?: string | null;
   profile: AppProfile;
   agentConfig: any;
   message: string;
@@ -247,6 +249,7 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
   const toolCtx: ToolContext = {
     userId: p.userId, sessionId, appId, runId, signal,
     execMode, cwd, approvalMode, profile, modelId: effModelId, planMode: false, muse: false,
+    wsProject: p.wsProject,
     // 群聊发言人不可再起讨论(start_discussion/wait_discussion 隐藏)——防递归裂变。
     inDiscussion: true,
     // ponytail: v1 群聊每 agent 用内置工具集(读/写/执行已够「完整工具」);custom/MCP per-agent 暂不接,

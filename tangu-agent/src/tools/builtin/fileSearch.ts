@@ -11,7 +11,7 @@ import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { getSessionDir } from '../../sandbox/sessionSandbox.js';
-import { listWorkspaceMetas, readWorkspaceFileRaw } from '../fileWorkspace.js';
+import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.cache', '.venv', 'venv', '__pycache__', '.next', 'target', 'out']);
 const MAX_FILES_VISITED = 5000;
@@ -178,14 +178,14 @@ function rgSearch(cwd: string, pattern: string, include?: string, signal?: Abort
 
 /** 纯 Penzor 云模式:按元数据挑文件,逐个拉内容搜(上限收紧)。 */
 async function cloudSearch(ctx: ToolContext, regex: RegExp, include?: RegExp): Promise<string> {
-  const metas = await listWorkspaceMetas(ctx.userId, ctx.appId, ctx.sessionId);
+  const metas = await listWorkspaceMetas(ctx.userId, ctx.appId, scopeOf(ctx));
   const candidates = metas
     .filter((m) => (!include || include.test(m.path)) && m.size <= MAX_FILE_BYTES && (m.mimeType.startsWith('text/') || m.mimeType === 'application/json'))
     .slice(0, CLOUD_SEARCH_MAX_FILES);
   const hits: SearchHit[] = [];
   for (const m of candidates) {
     if (hits.length >= MAX_MATCHES) break;
-    const raw = await readWorkspaceFileRaw(ctx.userId, ctx.appId, ctx.sessionId, m.path).catch(() => null);
+    const raw = await readWorkspaceFileRaw(ctx.userId, ctx.appId, scopeOf(ctx), m.path).catch(() => null);
     if (!raw || looksBinary(raw.content)) continue;
     const lines = raw.content.toString('utf-8').split('\n');
     for (let i = 0; i < lines.length && hits.length < MAX_MATCHES; i++) {
@@ -273,7 +273,7 @@ export const fileSearchProvider: ToolProvider = {
         if (baseDir) {
           rels = await walkFiles(baseDir);
         } else {
-          rels = (await listWorkspaceMetas(ctx.userId, ctx.appId, ctx.sessionId)).map((m) => m.path);
+          rels = (await listWorkspaceMetas(ctx.userId, ctx.appId, scopeOf(ctx))).map((m) => m.path);
         }
         const matched = rels.filter((r) => re.test(r)).slice(0, MAX_GLOB_RESULTS);
         if (!matched.length) return '(no files matched)';
