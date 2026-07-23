@@ -296,7 +296,12 @@ export interface AppState {
 
 export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
-  cfg: { backendUrl: 'http://localhost:8787', token: '', modelId: '' },
+  // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
+  // localhost:8787(控制台 ERR_CONNECTION_REFUSED 红噪音)。壳在挂载前已装好
+  // window.tangu.cloudWeb + localStorage token(统一键 forsion_token),同步读即得正确初值。
+  cfg: typeof window !== 'undefined' && (window as any).tangu?.cloudWeb
+    ? { backendUrl: location.origin + '/api', token: (() => { try { return localStorage.getItem('forsion_token') || '' } catch { return '' } })(), modelId: '' }
+    : { backendUrl: 'http://localhost:8787', token: '', modelId: '' },
   desktopConfig: null,
   cfgLoaded: false,
   connState: 'idle',
