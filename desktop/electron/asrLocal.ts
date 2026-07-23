@@ -8,12 +8,33 @@ import { mkdir, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
 import type { OfflineRecognizer } from 'sherpa-onnx-node'
 import { forsionHomeDir } from './forsionHome'
+import { healMacQuarantine } from './macQuarantine'
+
+// 自愈须早于 app ready / 引擎子进程 spawn;本模块被 main.ts 顶层 import,模块加载期即执行。
+healMacQuarantine()
 
 // sherpa-onnx-node 是原生 CJS 模块;electron-vite 把 main 打成 ESM 且外置它 → ESM 具名 import 运行时报
 // "Named export not found"。改 createRequire 运行期加载,类型走 `import type`(编译期擦除,不产生运行时 import)。
-const sherpa = createRequire(import.meta.url)('sherpa-onnx-node') as typeof import('sherpa-onnx-node')
+// ⚠️必须懒加载:顶层加载曾在 Gatekeeper 拦 dylib 时把整个 App 启动崩死(v2.6.0~v2.6.8 macOS 安装版)。
+// 只缓存成功——失败后用户清完隔离属性无需重启即可重试。
+let sherpaMod: typeof import('sherpa-onnx-node') | undefined
+function loadSherpa(): typeof import('sherpa-onnx-node') {
+  if (!sherpaMod) {
+    try {
+      sherpaMod = createRequire(import.meta.url)('sherpa-onnx-node') as typeof import('sherpa-onnx-node')
+    } catch (e) {
+      const bundle = process.platform === 'darwin' ? resolve(process.resourcesPath || '', '..', '..') : ''
+      throw new Error(
+        `本地语音识别组件加载失败:${(e as Error).message}` +
+          (bundle.endsWith('.app') ? `\n(macOS 常见原因是隔离属性拦截,可在终端执行 xattr -dr com.apple.quarantine "${bundle}" 后重试)` : ''),
+      )
+    }
+  }
+  return sherpaMod
+}
 
 // 官方 SenseVoice sherpa 模型(zh/en/ja/ko/yue);int8 ~230MB,tokens 极小。
 const REPO = 'csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17'
@@ -78,7 +99,7 @@ let recognizerP: Promise<OfflineRecognizer> | null = null
 /** 懒建 recognizer 并缓存(首次加载 ~230MB 模型有秒级延迟,用 async 工厂不阻塞主进程)。 */
 function getRecognizer(): Promise<OfflineRecognizer> {
   if (!recognizerP) {
-    recognizerP = sherpa.OfflineRecognizer.createAsync({
+    recognizerP = loadSherpa().OfflineRecognizer.createAsync({
       featConfig: { sampleRate: 16000, featureDim: 80 },
       modelConfig: {
         senseVoice: { model: modelFile(), language: '', useInverseTextNormalization: 1 },

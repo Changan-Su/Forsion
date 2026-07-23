@@ -1,5 +1,12 @@
 # Forsion 更新日志
 
+## 2.6.9 (2026-07-23)
+
+- 修复:macOS 安装版启动即报「A JavaScript error occurred … Could not find sherpa-onnx-node」无法打开的问题(2.6.0~2.6.8 的下载安装版受影响)。若旧版本已撞上,终端执行 `xattr -dr com.apple.quarantine /Applications/Forsion.app` 后即可打开,或直接安装本版
+- macOS 首次成功打开后,App 自动清除包内残留的系统隔离属性——语音输入、内置引擎等原生组件不再需要手动跑终端命令
+- 语音输入的本地识别组件改为按需加载:即使它在个别环境加载失败,也只影响本地语音识别,不再影响应用启动
+- 安装包补齐 remotesync 组件的第三方 LICENSE/NOTICE 文件
+
 ## 2.6.8 (2026-07-22)
 
 - 首启引导页右上角可直接切换中文 / English
