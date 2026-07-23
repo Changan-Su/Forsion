@@ -400,12 +400,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   }
 
   // ---- binary 上传 -------------------------------------------------------------
-  const postBinary = async (path: string, fileName: string, bytes: Uint8Array, ifAbsent: boolean): Promise<{ path: string; size: number; seq: number }> => {
+  const postBinary = async (path: string, fileName: string, bytes: Uint8Array, ifAbsent: boolean, onProgress?: (sent: number, total: number) => void): Promise<{ path: string; size: number; seq: number }> => {
     const form = new FormData()
     form.append('file', new Blob([bytes as BlobPart]), fileName)
     form.append('path', path)
     if (ifAbsent) form.append('ifAbsent', '1')
-    const r = await http.postForm<{ path: string; size: number; seq: number }>(`/amadeus/vaults/${encodeURIComponent(vid())}/binary`, form)
+    const r = await http.postForm<{ path: string; size: number; seq: number }>(`/amadeus/vaults/${encodeURIComponent(vid())}/binary`, form, onProgress)
     noteSeq(r.path ?? path, r.seq)
     invalidateTree()
     return r
@@ -565,7 +565,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     },
 
     // 粘贴/拖入的图片落页面 .amadeus/ 文件夹(镜像 vaultManager.writeAsset 的命名)。
-    saveAsset: async (pagePath, fileName, bytes) => {
+    saveAsset: async (pagePath, fileName, bytes, onProgress) => {
       await ensureVault()
       const rawExt = extnamePosix(fileName)
       const ext = (rawExt || '.png').toLowerCase().replace(/[^.a-z0-9]/g, '')
@@ -577,7 +577,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const vaultRel = normalizePosix(joinRel(dirnamePosix(pagePath), `.amadeus/${unique}`))
         if (vaultRel === null) throw new Error('Asset escapes vault')
         try {
-          await postBinary(vaultRel, unique, bytes, true)
+          await postBinary(vaultRel, unique, bytes, true, onProgress)
           return `.amadeus/${unique}`
         } catch (e) {
           if (is409(e)) continue // 时间戳+计数器撞车近乎不可能;真撞了换名重试
@@ -588,7 +588,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     },
 
     // 拖入附件:保留原名、撞名 -1/-2(镜像 vaultManager.writeAttachment + uniqueName)。
-    saveAttachment: async (pagePath, fileName, bytes, opts) => {
+    saveAttachment: async (pagePath, fileName, bytes, opts, onProgress) => {
       await ensureVault()
       const safeName = (basenamePosix(fileName) || 'file').replace(/[\\/]/g, '')
       const { destDirRel } = attachmentPaths(pagePath, safeName, opts)
@@ -605,7 +605,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         if (clamped === null) throw new Error('Asset escapes vault')
         try {
           if (isText) await putFile(clamped, new TextDecoder().decode(bytes), 0)
-          else await postBinary(clamped, base, bytes, true)
+          else await postBinary(clamped, base, bytes, true, onProgress)
           return { pageRel, base }
         } catch (e) {
           if (is409(e)) {

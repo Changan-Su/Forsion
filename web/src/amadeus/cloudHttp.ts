@@ -31,7 +31,8 @@ export interface CloudHttpCfg {
 export interface CloudHttp {
   get<T>(path: string, query?: Record<string, string>): Promise<T>
   post<T>(path: string, json?: unknown): Promise<T>
-  postForm<T>(path: string, form: FormData): Promise<T>
+  /** onProgress 有值时走 XMLHttpRequest(fetch 无上传进度事件),否则照旧 fetch。 */
+  postForm<T>(path: string, form: FormData, onProgress?: (sent: number, total: number) => void): Promise<T>
   put<T>(path: string, json: unknown): Promise<T>
   del<T>(path: string, query?: Record<string, string>): Promise<T>
 }
@@ -65,10 +66,30 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     return parsed as T
   }
 
+  // XHR 版 POST multipart:唯一目的是 upload.onprogress;鉴权/401 跳转/宽容解析/HttpError 与 request 对齐。
+  const postFormXhr = <T>(path: string, form: FormData, onProgress: (sent: number, total: number) => void): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', `${cfg.apiBase}${path}`)
+      xhr.setRequestHeader('Authorization', `Bearer ${cfg.getToken()}`)
+      xhr.setRequestHeader('X-Amadeus-Client', cfg.clientId)
+      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) onProgress(ev.loaded, ev.total) }
+      xhr.onload = () => {
+        if (xhr.status === 401) { cfg.onUnauthorized(); reject(new HttpError(401, null)); return }
+        let parsed: unknown
+        try { parsed = xhr.responseText ? JSON.parse(xhr.responseText) : undefined } catch { parsed = xhr.responseText }
+        if (xhr.status < 200 || xhr.status >= 300) { reject(new HttpError(xhr.status, parsed)); return }
+        resolve(parsed as T)
+      }
+      xhr.onerror = () => reject(new HttpError(0, null, 'network error'))
+      xhr.ontimeout = () => reject(new HttpError(0, null, 'timeout'))
+      xhr.send(form)
+    })
+
   return {
     get: (path, query) => request('GET', path, { query }),
     post: (path, json) => request('POST', path, { json: json ?? {} }),
-    postForm: (path, form) => request('POST', path, { form }),
+    postForm: (path, form, onProgress) => (onProgress ? postFormXhr(path, form, onProgress) : request('POST', path, { form })),
     put: (path, json) => request('PUT', path, { json }),
     del: (path, query) => request('DELETE', path, { query }),
   }

@@ -304,8 +304,15 @@ export interface AmadeusApi {
     prevContents: Record<string, string>,
   ): Promise<LoadedPage>
   /** Save a pasted/dropped binary asset under the page's .amadeus/ folder.
-   *  Returns the page-folder-relative path, e.g. ".amadeus/img-xyz.png". */
-  saveAsset(pagePath: string, fileName: string, bytes: Uint8Array): Promise<string>
+   *  Returns the page-folder-relative path, e.g. ".amadeus/img-xyz.png".
+   *  onProgress: upload progress (cloud HTTP only; local-disk bridges ignore it — it is an
+   *  extra trailing arg their explicit param lists drop, so it never crosses IPC). */
+  saveAsset(
+    pagePath: string,
+    fileName: string,
+    bytes: Uint8Array,
+    onProgress?: (sent: number, total: number) => void,
+  ): Promise<string>
   /** Overwrite an existing vault file in place by its vault-relative path (PDF 批注写回等)。 */
   saveVaultBytes(path: string, bytes: Uint8Array): Promise<void>
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
@@ -318,6 +325,7 @@ export interface AmadeusApi {
     fileName: string,
     bytes: Uint8Array,
     opts: AttachmentOpts,
+    onProgress?: (sent: number, total: number) => void,
   ): Promise<{ pageRel: string; base: string }>
   /** Open an attachment (ref = page-relative path or bare basename) with the OS default app. */
   openAttachment(pagePath: string, ref: string): Promise<void>

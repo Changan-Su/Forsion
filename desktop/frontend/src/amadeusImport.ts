@@ -48,6 +48,33 @@ async function refreshTree(): Promise<void> {
   try { await ps().refreshStructure?.() } catch { /* 刷新失败不致命 */ }
 }
 
+/** 上传进度吐司(云端 XHR 才回调;本地磁盘瞬时,不触发)。pct 整数变化才刷,progress 事件很密。 */
+function progressNotifier(name: string): (sent: number, total: number) => void {
+  let last = -1
+  return (sent, total) => {
+    const pct = total > 0 ? Math.min(100, Math.floor((sent / total) * 100)) : 0
+    if (pct !== last) { last = pct; notify(`正在上传 ${name}… ${pct}%`) }
+  }
+}
+
+/** 正文占位:上传开始就插「⏳ 上传中」块,完成后原地替换 / 失败改成失败标记。只在仍是原页、
+ *  块还在、且**内容仍是占位文本**时才动它——切页后 blocks 已是新页集合(直接 set 造幽灵块);
+ *  BlockId 是 max+1 复用的,用户删掉尾部占位再插新块会拿到同一 id,内容校验挡住误覆盖。
+ *  失败不走 deleteBlock:它内部 await 云端 backlinks、await 前捕获的旧 manifest 会在切页后混页提交;
+ *  同步 setBlockContent 无竞态,失败标记留正文用户可见可手删。
+ *  ponytail: 占位插入/替换是两步 undo(完成后 undo 一次回到 ⏳ 文本),pageStore 无免历史突变,不值得加;
+ *  切页场景占位行随自动保存留在原页,由吐司提示,不做跨页读改写回收。 */
+function placeholder(page: string, name: string): { done(text: string): boolean; fail(): void } {
+  const marker = `⏳ 正在上传 ${name}…`
+  const pid = ps().activePage === page ? ps().insertBlockAfter(null, undefined, marker) : null
+  const alive = (): boolean => !!pid && ps().activePage === page && ps().blocks[pid!]?.content === marker
+  return {
+    // false = 占位已不可替换(切了页,或用户删/改了占位——后者尊重用户操作,不再硬插)。
+    done: (text) => { if (!alive()) return false; ps().setBlockContent(pid!, text); return true },
+    fail: () => { if (alive()) ps().setBlockContent(pid!, `⚠️ 上传失败:${name}`) },
+  }
+}
+
 /** 拖入 / 上传到当前笔记:存到配置的附件位置 + 插入 ![[嵌入]] 或 [名](相对路径)。 */
 export async function importToPage(files: File[], page: string): Promise<void> {
   if (!files.length || !page) return
@@ -58,18 +85,19 @@ export async function importToPage(files: File[], page: string): Promise<void> {
   for (const f of files) {
     const over = overLimit(f)
     if (over) { fails.push(`${f.name}(${over})`); continue }
+    const ph = placeholder(page, f.name)
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
-      const { pageRel, base } = await amadeus.saveAttachment(page, f.name, bytes, opts)
-      // insertBlockAfter 隐式落在 activePage:仅当仍是原页才插入(check→insert 同步无缝隙,不会插错笔记)。
-      if (ps().activePage === page) { ps().insertBlockAfter(null, undefined, embedOrLink(base, f.name, pageRel, preview)); ok++ }
+      const { pageRel, base } = await amadeus.saveAttachment(page, f.name, bytes, opts, progressNotifier(f.name))
+      // 占位原地换成真实引用;占位被用户删了 = 尊重删除(文件已在库,树里可见);切页才计 movedAway。
+      if (ph.done(embedOrLink(base, f.name, pageRel, preview)) || ps().activePage === page) ok++
       else movedAway++
-    } catch (e) { fails.push(`${f.name}(${explain(e)})`) }
+    } catch (e) { ph.fail(); fails.push(`${f.name}(${explain(e)})`) }
   }
   await refreshTree()
   if (fails.length) notify(`${fails.length} 个文件未导入:${fails[0]}`)
-  else if (movedAway) notify(`文件已存入原笔记(已切换页,未自动插入)`)
-  else if (files.length > 1) notify(`已导入 ${ok} 个文件`)
+  else if (movedAway) notify(`文件已存入原笔记(已切换页,占位行未替换)`)
+  else notify(files.length > 1 ? `已导入 ${ok} 个文件` : `已上传 ${files[0].name}`)
 }
 
 /** 拖到文件树 / 库侧栏:把文件写进库里的目标文件夹(空串=库根,不插入嵌入),类似文件管理器导入。 */
@@ -82,7 +110,7 @@ export async function importToFolder(files: File[], folder: string): Promise<voi
     if (over) { fails.push(`${f.name}(${over})`); continue }
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
-      await amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder })
+      await amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, progressNotifier(f.name))
       ok++
     } catch (e) { fails.push(`${f.name}(${explain(e)})`) }
   }
@@ -100,16 +128,16 @@ export async function pasteImagesToPage(imgs: File[], page: string): Promise<voi
   const fails: string[] = []
   for (const f of imgs) {
     if (overLimit(f)) { fails.push('图片超 5MB'); continue }
+    const name = (f.name || 'pasted.png').replace(/\s+/g, '_')
+    const ph = placeholder(page, name)
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
-      const name = (f.name || 'pasted.png').replace(/\s+/g, '_')
-      const rel = await amadeus.saveAsset(page, name, bytes) // → ".amadeus/<unique>"(页相对)
-      // 同 importToPage:切了页就不误插到别的笔记(图片已存原页 .amadeus/,提示用户避免默认丢失)。
-      if (ps().activePage === page) ps().insertBlockAfter(null, undefined, `![](${rel})`)
-      else movedAway++
-    } catch (e) { fails.push(explain(e)) }
+      const rel = await amadeus.saveAsset(page, name, bytes, progressNotifier(name)) // → ".amadeus/<unique>"(页相对)
+      // 占位原地换成图片;占位被用户删了 = 尊重删除(图片已存原页 .amadeus/);切页才计 movedAway。
+      if (!ph.done(`![](${rel})`) && ps().activePage !== page) movedAway++
+    } catch (e) { ph.fail(); fails.push(explain(e)) }
   }
   await refreshTree()
   if (fails.length) notify(`粘贴图片:${fails[0]}`)
-  else if (movedAway) notify('图片已存入原笔记(已切换页,未自动插入)')
+  else if (movedAway) notify('图片已存入原笔记(已切换页,占位行未替换)')
 }
