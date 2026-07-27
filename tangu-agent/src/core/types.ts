@@ -31,7 +31,12 @@ export interface ChatMessage {
 }
 
 // ── LLM 解析/思考等级/错误 ──────────────────────────────────────────────────
-export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+/**
+ * 思考强度档位(七档,对齐 PI/Codex)。旧版只有 off/low/medium/high —— 那四个仍是本联合的子集,
+ * 落盘的历史值不用迁移;脏值/布尔旧值统一走 `llm/modelCapabilities.ts` 的 normalizeThinkingLevel。
+ * 「哪个模型真支持哪几档」不在类型里,在能力表里(见 modelCapabilities.supportedThinkingLevels)。
+ */
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** 模型(对 core 不透明:只读 id/name/provider,其余字段透传给 buildProviderPayload)。 */
 export interface AgentModel {

@@ -1,0 +1,8 @@
+{
+  "id": "sample-bundle-tool",
+  "name": "示例捆绑工具",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "entry": "dist/index.js",
+  "description": "捆绑包模板的内嵌引擎插件:演示 tangu-plugins/ 子目录里的工具贡献,由引擎经 bundle 搜索根原地加载。"
+}

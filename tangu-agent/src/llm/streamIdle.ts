@@ -46,6 +46,9 @@ export function streamIdleGuard(externalSignal?: AbortSignal, idleMs = DEFAULT_I
     if (externalSignal) externalSignal.removeEventListener('abort', onExt);
   };
 
+  // 建流即开表:调用点都是「构造 guard → 立刻 fetch」,而 `await fetch()`(DNS/TCP/TLS/等响应头)
+  // 本身就会无限挂——半开连接、上游收了连接不回头都卡在这里。等首帧才计时等于这段完全裸奔。
+  arm();
   return { signal: ac.signal, arm, dispose };
 }
 

@@ -1,0 +1,16 @@
+{
+  "id": "sample-bundle",
+  "name": "示例捆绑包",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "description": "捆绑包(bundle)开发模板:一个 Forsion 插件目录内嵌引擎插件(tangu-plugins/)、Agent+技能(agents/)与 Space(spaces/),装一处全就位。",
+  "main": "main.js",
+  "onboarding": {
+    "intro": "这是捆绑包模板:UI 插件 + 内嵌引擎工具 + Agent(带 agent 级技能)+ Space,一个目录装完、随包就位。",
+    "steps": [
+      { "title": "看引擎侧", "description": "重启/重扫引擎后:设置 → 插件 的引擎区能看到 sample-bundle-tool 由本包捆绑提供(随本插件启停);Agents 页出现「示例捆绑助手」(播种一次,插件升级不覆盖、卸载也保留)。" },
+      { "title": "看 Space", "description": "左侧 ribbon 出现「示例捆绑 Space」,随本插件启停显隐;禁用插件它就收起。" },
+      { "title": "试一试", "description": "命令面板跑「示例捆绑包:打个招呼」;或让「示例捆绑助手」调 sample_bundle_echo 工具回显一句话。" }
+    ]
+  }
+}

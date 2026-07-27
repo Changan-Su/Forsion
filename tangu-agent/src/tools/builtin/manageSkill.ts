@@ -37,6 +37,8 @@ export const manageSkillProvider: ToolProvider = {
     {
       name: 'manage_skill',
       mode: 'host',
+      deferred: true, // P0-2:1.5KB schema,低频管理面 → 按需装载
+      deferHint: 'Save or update a reusable local skill ("how to do X") for future sessions.',
       definition: {
         type: 'function',
         function: {

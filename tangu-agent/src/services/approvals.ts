@@ -18,9 +18,10 @@ import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 import { declaredApproval } from '../tools/toolRegistry.js';
+import { getRawSection } from '../core/config.js';
 import type { AppProfile } from '../seams/appProfile.js';
 
-export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';
+export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
 export interface ApprovalDecision {
   action: ApprovalAction;
@@ -46,9 +47,11 @@ function nextApprovalId(): string {
  *   readonly  : 写文件 + 跑命令都要批
  *   auto-edit : 写文件放行，跑命令要批（codex「auto edit」语义）
  *   full-auto : 全放行
+ *   custom    : 按 config.json approval 段的 base 档(逐条规则的命中判定在 gateToolCall)
  * 只读工具（read_file/list_dir/web_search/...）永不在此返回 true。
  */
 export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined): boolean {
+  if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
@@ -194,11 +197,12 @@ function writeTargetsOf(call: ToolCall): string[] {
 }
 
 /** 写目标是否越界(工作区外,但非硬拒保护路径)→ 需升级审批。借 Codex writable-roots escalation。 */
-export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string }): boolean {
+export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): boolean {
   const targets = writeTargetsOf(call);
   if (!targets.length) return false;
   const cwd = ctx.cwd || process.cwd();
-  const fakeCtx = { cwd } as any;
+  // extraRoots 必须一起带上,否则用户在「工作范围」里加的目录仍会被判越界写、逐次弹审批。
+  const fakeCtx = { cwd, extraRoots: ctx.extraRoots } as any;
   return targets.some((t) => isOutsideWorkspace(fakeCtx, path.isAbsolute(t) ? t : path.resolve(cwd, t)));
 }
 
@@ -219,9 +223,63 @@ function parseCallArgs(call: ToolCall): any {
   }
 }
 
+// ── custom 档：规则来自 ~/.tangu/config.json 的 approval 段（与三档并列的第四档）。────────────
+//   { "approval": { "base": "auto-edit", "allow": [...], "ask": [...], "deny": [...] } }
+//   规则串 = 工具名（`*` 结尾为前缀通配），可再跟 `:参数前缀`（跑命令比 command，写文件比 path）：
+//     "web_fetch"    "mcp__*"    "run_bash:npm test"    "write_file:/etc/"
+//   优先级 deny > ask > allow > base 档；一条都没命中就退回 base 档的原三档语义。
+export interface CustomApprovalRules {
+  base: Exclude<ApprovalMode, 'custom'>;
+  allow: string[];
+  ask: string[];
+  deny: string[];
+}
+
+const strList = (v: unknown): string[] =>
+  (Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : []);
+
+/** 读 approval 段。ponytail: 每次现读(config.json 就几 KB)——改完规则立刻生效，不必重启引擎。 */
+export function customRules(): CustomApprovalRules {
+  const raw = (getRawSection('approval') as any) || {};
+  const base = raw.base;
+  return {
+    base: base === 'readonly' || base === 'full-auto' ? base : 'auto-edit',
+    allow: strList(raw.allow),
+    ask: strList(raw.ask),
+    deny: strList(raw.deny),
+  };
+}
+
+/** 规则串里 `:` 后半段要比对的「参数主体」：跑命令取 command，写工具取目标路径。 */
+function ruleSubject(call: ToolCall): string {
+  const name = call.function.name;
+  if (name === 'run_bash' || name === 'run_background') return bashCommandOf(call);
+  return writeTargetsOf(call)[0] || '';
+}
+
+function ruleMatches(rule: string, call: ToolCall): boolean {
+  const i = rule.indexOf(':');
+  const toolPat = (i >= 0 ? rule.slice(0, i) : rule).trim();
+  const argPrefix = i >= 0 ? rule.slice(i + 1).trim() : '';
+  const name = call.function.name;
+  const toolOk = toolPat.endsWith('*') ? name.startsWith(toolPat.slice(0, -1)) : name === toolPat;
+  if (!toolOk) return false;
+  return !argPrefix || ruleSubject(call).trim().startsWith(argPrefix);
+}
+
+/** custom 档判定：命中即返回该档，全不命中返回 undefined（交回 base 档处理）。 */
+export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allow' | 'ask' | 'deny' | undefined {
+  const hit = (list: string[]): boolean => list.some((r) => ruleMatches(r, call));
+  if (hit(rules.deny)) return 'deny';
+  if (hit(rules.ask)) return 'ask';
+  if (hit(rules.allow)) return 'allow';
+  return undefined;
+}
+
 /**
  * loop 工具执行前的审批闸门。返回归一化决定（approve / reject）。
  *   - execMode!=='host' 且非 mcp__ → 立即 approve（**server/worker 零影响**）
+ *   - custom 档命中规则 → deny 直接拒 / allow 直接放 / ask 强制批；未命中按其 base 档
  *   - run_bash 且 known-safe(只读单命令) → 立即 approve（纯 UX,即便 readonly）
  *   - 越界写(工作区外,非保护路径)→ 强制升级审批（auto-edit 也要批;full-auto 放行;不吃「总允许」）
  *   - 否则按档:不需审批 / 已「总允许」→ approve;否则 await 用户决定
@@ -229,22 +287,34 @@ function parseCallArgs(call: ToolCall): any {
 export async function gateToolCall(
   runId: string,
   call: ToolCall,
-  ctx: { sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; profile?: AppProfile },
+  ctx: { sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile },
   signal?: AbortSignal,
 ): Promise<ApprovalDecision> {
   const name = call.function.name;
   // host 模式全部过闸;非 host 仅 MCP 工具过闸(本地形态的 sandbox 会话也可能挂 MCP)。
   if (ctx.execMode !== 'host' && !name.startsWith('mcp__')) return { action: 'approve' };
 
+  // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
+  // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
+  let mode = ctx.approvalMode;
+  let forceAsk = false;
+  if (mode === 'custom') {
+    const rules = customRules();
+    const v = customVerdict(call, rules);
+    if (v === 'deny') return { action: 'reject' };
+    if (v === 'allow') return { action: 'approve' };
+    forceAsk = v === 'ask';
+    mode = rules.base;
+  }
+
   // known-safe 只读 bash:免审批。
-  if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call))) return { action: 'approve' };
+  if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call))) return { action: 'approve' };
 
   // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。
-  const escalate =
-    ctx.execMode === 'host' && ctx.approvalMode !== 'full-auto' && writeEscalationNeeded(call, ctx);
+  const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, ctx);
 
-  if (!escalate) {
-    if (!toolNeedsApproval(name, ctx.approvalMode)) return { action: 'approve' };
+  if (!escalate && !forceAsk) {
+    if (!toolNeedsApproval(name, mode)) return { action: 'approve' };
     if (isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
   }
 
@@ -264,7 +334,8 @@ export async function gateToolCall(
   const preview = escalate ? '⚠ 工作区外写入 · ' + approvalPreview(call) : approvalPreview(call);
   const d = await requestApproval(runId, call, preview, signal);
   if (d.action === 'approve_always') {
-    if (!escalate) allowAlways(ctx.sessionId, name); // 越界写不进「总允许」,每次都确认
+    // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
+    if (!escalate && !forceAsk) allowAlways(ctx.sessionId, name);
     return { action: 'approve', argsOverride: d.argsOverride };
   }
   return d;

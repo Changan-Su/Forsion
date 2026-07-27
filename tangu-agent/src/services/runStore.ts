@@ -40,11 +40,43 @@ export const getRun = (id: string): Promise<AgentRun | null> => deps().state.get
 export const getRunForUser = (id: string, userId: string): Promise<AgentRun | null> =>
   deps().state.getRunForUser(id, userId);
 
-export const updateRunStatus = (
+// ── run 终态收敛点:全部引擎调用方(agentLoop/groupChat)都经此写终态,单点发 run.done 活动行。
+// 供 event_seen 盯「某 agent 的 run 结束」;automation run 带 o=triggerKey(评估侧防自激)。
+// muse 周期跳过(高频噪音);仅本地形态(活动日志=hostExec 专属)。监听器由 muse.ts 注册(kickMuse,避免 import 环)。
+const TERMINAL_STATUSES = new Set(['done', 'failed', 'aborted']);
+let runTerminalListener: (() => void) | null = null;
+export function setRunTerminalListener(cb: (() => void) | null): void {
+  runTerminalListener = cb;
+}
+
+async function emitRunTerminal(id: string, status: string): Promise<void> {
+  if (!deps().profile.capabilities.hostExec) return;
+  const run = await deps().state.getRun(id);
+  if (!run) return;
+  let input: any = run.input;
+  if (typeof input === 'string') { try { input = JSON.parse(input); } catch { input = {}; } }
+  const cfg = (input && typeof input === 'object' ? input.agentConfig : null) || {};
+  if (cfg.muse) return;
+  const { appendActivityLine } = await import('./userActivity.js');
+  await appendActivityLine('run.done', {
+    agent: typeof cfg.agentSlug === 'string' ? cfg.agentSlug : undefined,
+    s: String(run.session_id || '').slice(0, 6),
+    status,
+    o: typeof cfg.automationOrigin === 'string' ? cfg.automationOrigin : undefined,
+  });
+  runTerminalListener?.();
+}
+
+export const updateRunStatus = async (
   id: string,
   status: string,
   extra?: { result?: any; error?: string; currentStep?: number; tokensTotal?: number },
-): Promise<void> => deps().state.updateRunStatus(id, status, extra);
+): Promise<void> => {
+  await deps().state.updateRunStatus(id, status, extra);
+  if (TERMINAL_STATUSES.has(status)) {
+    emitRunTerminal(id, status).catch(() => {}); // 尽力而为,绝不影响 run 收尾
+  }
+};
 
 export const appendStep = (step: StepInput): Promise<void> => deps().state.appendStep(step);
 

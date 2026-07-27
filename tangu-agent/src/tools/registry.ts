@@ -24,17 +24,20 @@ import { interactionProvider } from './builtin/interaction.js';
 import { manageAgentProvider } from './builtin/manageAgent.js';
 import { manageSkillProvider } from './builtin/manageSkill.js';
 import { museTodoProvider } from './builtin/museTodo.js';
-import { wechatToolsProvider } from './builtin/wechatTools.js';
+import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
 import { displayFileProvider } from './builtin/displayTools.js';
+import { deskPresentProvider } from './builtin/deskPresent.js';
 import { imageGenProvider } from './builtin/imageTools.js';
 import { inboxSendProvider } from './builtin/inboxSend.js';
 import { browserUseProvider } from './builtin/browserUse.js';
 import { amadeusProvider } from './builtin/amadeus.js';
 import { readActivityProvider } from './builtin/readActivity.js';
-import { museWatchProvider } from './builtin/museWatch.js';
+import { readSessionProvider } from './builtin/readSession.js';
+import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
+import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
 
@@ -125,7 +128,7 @@ registerToolProvider(delegateProvider);
 registerToolProvider(interactionProvider);
 registerToolProvider(manageAgentProvider); // host-only:本地 Normal Agent 自创建(append 末尾,保前缀缓存)
 registerToolProvider(museTodoProvider); // Muse 唯一写权限;仅 ctx.muse 可见(普通 run 不暴露,快照不变)
-registerToolProvider(wechatToolsProvider); // host-only:微信远程会话里发文件/图片(append 末尾,保前缀缓存)
+registerToolProvider(channelToolsProvider); // host-only:通道会话里发文件/图片(append 末尾,保前缀缓存)
 registerToolProvider(applyPatchProvider); // both:结构化补丁编辑(云端+host 共用,append 末尾,保前缀缓存)
 registerToolProvider(discussProvider); // host-only:start_discussion/wait_discussion(分身进后台群聊讨论;append 末尾,保前缀缓存)
 registerToolProvider(displayFileProvider); // both:display_file 在桌面对话区展示文件给用户(append 末尾,保前缀缓存)
@@ -135,8 +138,11 @@ registerToolProvider(inboxSendProvider); // 本地限定:inbox_send 发消息进
 registerToolProvider(browserUseProvider); // host-only:browser_task 委派整包网页任务给 browser-use 自主 agent(真实 Chrome;append 末尾,保前缀缓存)
 registerToolProvider(amadeusProvider); // both:Amadeus 笔记库 + Calendar —— host 直连磁盘 vault,非 host 经 brain.amadeus 云 vault API(append 末尾,保前缀缓存)
 registerToolProvider(readActivityProvider); // 默认仅 Muse(ctx.muse/activityAccess 收口,普通 run 不暴露,快照不变):读用户活动日志
-registerToolProvider(museWatchProvider); // 本地限定:给 Muse 设「盯任务」规则(append 末尾,保前缀缓存)
+registerToolProvider(manageAutomationProvider); // 本地限定:自动化规则 触发×动作链(原 muse_watch,改名属 schema 大改同批打穿缓存)
 registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 SCHEDULE.db(append 末尾,保前缀缓存)
+registerToolProvider(loadToolsProvider); // both:load_tools 解锁 deferred 工具定义(P0-2;仅有未解锁项且调用方支持时可见)
+registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面聊天旁的 Agent Desk 演出面板展示文件(实验;append 末尾,保前缀缓存)
+registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -150,18 +156,35 @@ function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext,
   if (ctx.execMode !== 'host' || !AGENT_EDIT_TOOLS.has(name)) return;
   if (result.startsWith('Error')) return;
   const f = String(args.path || args.file_path || '').trim();
-  appendActivityLine('agent.edit', { tool: name, agent: ctx.agentSlug, f: f || undefined });
+  appendActivityLine('agent.edit', { tool: name, agent: ctx.agentSlug, f: f || undefined, o: ctx.automationOrigin || undefined });
 }
 
 /** 返回喂给 LLM 的工具定义（OpenAI function 格式）：按模式/profile 过滤的内置 + 本 run 的自定义工具 + MCP 工具（按名去重，内置 > 自定义 > MCP）。 */
 export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const hasSkills = !!(ctx.enabledSkillIds && ctx.enabledSkillIds.length);
   const tools = resolveTools(currentProfile(ctx), ctx);
+  // deferred 按需装载(P0-2,借 pi deferred-tools):defer 标记的工具默认不进 defs(系统提示只留
+  // 目录一行),load_tools 解锁后**追加在内置 defs 末尾**——immediate 前缀字节不动,缓存只在解锁
+  // 那一刻断一次。系统驱动的 run(Muse/自动化)全量可见不吃这套;无 unlockTools 回调的调用方
+  // (delegate 子代理/群聊)看不到 load_tools,deferred 保持隐藏(拿到的就是精简集)。
+  const deferBypass = !!ctx.muse || !!ctx.automationOrigin;
+  const unlocked = ctx.unlockedTools;
+  let lockedCount = 0;
+  if (!deferBypass) {
+    for (const t of tools.values()) if (t.deferred && !unlocked?.has(t.name)) lockedCount++;
+  }
   const defs: Tool[] = [];
+  const unlockedDeferred: Tool[] = [];
   for (const [name, t] of tools) {
     if (name === 'use_skill' && !hasSkills) continue; // 无启用技能时不暴露 use_skill
+    if (name === 'load_tools' && (lockedCount === 0 || !ctx.unlockTools)) continue; // 无可解锁项/不支持解锁时不暴露
+    if (t.deferred && !deferBypass) {
+      if (unlocked?.has(name)) unlockedDeferred.push(t.definition);
+      continue;
+    }
     defs.push(t.definition);
   }
+  defs.push(...unlockedDeferred);
   const taken = new Set<string>(tools.keys());
   if (ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
@@ -181,9 +204,24 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   return defs;
 }
 
+/** deferred 工具目录(agentLoop 拼「Additional Tools」系统提示段):resolve 过滤后仍存在的全量
+ *  deferred 工具——**不随解锁状态变**(稳定文本,护前缀缓存)。 */
+export function listDeferredTools(ctx: ToolContext): { name: string; hint: string; group?: string }[] {
+  const out: { name: string; hint: string; group?: string }[] = [];
+  for (const [name, t] of resolveTools(currentProfile(ctx), ctx)) {
+    if (!t.deferred) continue;
+    const hint = t.deferHint || String(t.definition?.function?.description || '').split('\n')[0].slice(0, 120);
+    out.push({ name, hint, ...(t.deferGroup ? { group: t.deferGroup } : {}) });
+  }
+  return out;
+}
+
+/** 旧工具名静默别名(不进 defs/快照):只兜升级瞬间仍引用旧名的存量会话上下文。 */
+const TOOL_NAME_ALIASES: Record<string, string> = { muse_watch: 'manage_automation' };
+
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
-  const name = call.function.name;
+  const name = TOOL_NAME_ALIASES[call.function.name] || call.function.name;
   let args: Record<string, any> = {};
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
@@ -201,7 +239,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       return { toolCallId: call.id, name, result: String(result), isError: false };
     } catch (e: any) {
       if (scopedCtx.signal?.aborted && !ctx.signal?.aborted) {
-        return { toolCallId: call.id, name, result: `Error: tool timed out after ${caps.defaultTimeoutMs}ms`, isError: true };
+        return { toolCallId: call.id, name, result: `Error: tool timed out after ${caps.defaultTimeoutMs}ms. If you retry, narrow the operation (smaller file / shorter command) or split it into steps.`, isError: true };
       }
       return { toolCallId: call.id, name, result: `Error: ${e?.message || e}`, isError: true };
     } finally {
@@ -227,5 +265,23 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     return { toolCallId: call.id, name, result: r.text, isError: r.isError };
   }
 
-  return { toolCallId: call.id, name, result: `Tool "${name}" is not available.`, isError: true };
+  // 错误消息即提示词:说明「为什么不可用 + 下一步做什么」,不留死胡同(借 pi/Codex 的恢复导向文案)。
+  if (ctx.planMode && resolveTools(currentProfile(ctx), { ...ctx, planMode: false }).has(name)) {
+    return {
+      toolCallId: call.id, name,
+      result: `Tool "${name}" is blocked by plan mode (read-only). Finish researching with read-only tools and submit your plan via exit_plan_mode; it becomes available after the user approves.`,
+      isError: true,
+    };
+  }
+  // 目录提示只在本 ctx 真有可解锁目录时给(delegate 无 unlockTools、Muse/自动化全量豁免,这些场景
+  // 没有 load_tools,瞎指会把「出路」变成第二次失败——Codex 评审 #4);plan 模式下 custom/MCP 工具
+  // 根本不进 ctx、无法逐名识别 → 补一句模式级说明兜底(Codex 评审 #3)。
+  const canLoad = !!ctx.unlockTools && !ctx.muse && !ctx.automationOrigin &&
+    [...resolveTools(currentProfile(ctx), ctx).values()].some((t) => t.deferred && !ctx.unlockedTools?.has(t.name));
+  const planNote = ctx.planMode ? ' Note: plan mode is active — custom/external tools are disabled until the plan is approved.' : '';
+  return {
+    toolCallId: call.id, name,
+    result: `Tool "${name}" is not available in this session.${planNote} Use only tools from your tool list${canLoad ? ', or load a listed one from the "Additional Tools" catalog with load_tools' : ''}; do not retry this name.`,
+    isError: true,
+  };
 }

@@ -9,9 +9,11 @@
  * (整夹复制进 ~/.tangu/skills/),导入后才以 `local:` 出现。见 engines/assets.ts。
  */
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { skillsDir as userSkillsDir, agentsDir } from '../core/tanguHome.js';
+import { bundleSkillRoots } from '../plugins/bundles.js';
 import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 
@@ -133,25 +135,149 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
   return skills;
 }
 
-let seeded = false;
+let seeding: Promise<SeedReport> | null = null;
 
-/** 把 srcDir 下的技能子目录复制进 destRoot(逐个;目标已存在则跳过——不覆盖用户编辑/导入)。按目录工作,便于测试。 */
-export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<void> {
+/**
+ * 播种指纹:**与被描述的东西同住**——写在技能目录里的 `.seed-stamp`,内容 = 我们写下去时**整棵目录树**的哈希。
+ *
+ * 为什么不是集中式账本(第一版就是,codex 一次打穿):账本与目录是两次独立写入,复制成功而账本写失败
+ * (只读/磁盘满)就永久错位——目标已是 v2、账本还记 v1,下一版把它误判成「用户改过」而永久停更;
+ * 反过来复制中途失败、账本却已推进,缺的文件永远补不回来。同住 + 整目录原子替换就没有这个断层。
+ *
+ * 为什么哈希整棵树而不只 SKILL.md:用户可能只改了 `scripts/` 或模板而没碰 SKILL.md,只看 SKILL.md
+ * 会把他的改动当「没动过」覆盖掉。
+ */
+const SEED_STAMP = '.seed-stamp';
+
+/** 目录树指纹:相对路径 + 内容,排序后一起哈希;`.seed-stamp` 自身不参与(它是描述,不是内容)。 */
+async function treeHash(dir: string): Promise<string | null> {
+  const files: string[] = [];
+  const walk = async (rel: string): Promise<void> => {
+    const entries = await fs.readdir(path.join(dir, rel), { withFileTypes: true });
+    for (const e of entries) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) await walk(r);
+      else if (e.isFile() && r !== SEED_STAMP) files.push(r);
+    }
+  };
+  try {
+    await walk('');
+  } catch {
+    return null; // 目录不存在
+  }
+  files.sort();
+  const h = createHash('sha256');
+  for (const f of files) {
+    h.update(f);
+    h.update('\0');
+    h.update(await fs.readFile(path.join(dir, f)));
+    h.update('\0');
+  }
+  return h.digest('hex').slice(0, 16);
+}
+
+const readStamp = async (dir: string): Promise<string | null> =>
+  fs
+    .readFile(path.join(dir, SEED_STAMP), 'utf8')
+    .then((s) => s.trim() || null)
+    .catch(() => null);
+
+/**
+ * 整目录**替换**(不是 merge):先复制到同盘暂存目录,再原子换上去。
+ * merge 的毛病是源里删掉的文件会残留在用户那边 —— 上一版留下的脚本还在,还可能被枚举执行(codex)。
+ * 指纹写在暂存目录里一起换上去,所以「目录内容」与「它的指纹」永远是同一次提交,不会各自成功一半。
+ */
+async function replaceDir(srcDir: string, destDir: string, stamp: string): Promise<boolean> {
+  const staging = `${destDir}.seed-tmp-${process.pid}`;
+  const trash = `${destDir}.seed-old-${process.pid}`;
+  try {
+    await fs.rm(staging, { recursive: true, force: true });
+    await fs.cp(srcDir, staging, { recursive: true });
+    await fs.writeFile(path.join(staging, SEED_STAMP), stamp, 'utf8');
+    let hadOld = false;
+    try {
+      await fs.rename(destDir, trash);
+      hadOld = true;
+    } catch {
+      /* 目标本来就不存在 */
+    }
+    try {
+      await fs.rename(staging, destDir);
+    } catch (e) {
+      if (hadOld) await fs.rename(trash, destDir).catch(() => {}); // 换不上去 → 把旧的放回来
+      throw e;
+    }
+    if (hadOld) await fs.rm(trash, { recursive: true, force: true }).catch(() => {});
+    return true;
+  } catch {
+    await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+    return false;
+  }
+}
+
+export interface SeedReport {
+  installed: string[];
+  updated: string[];
+  /** 有新版但被保护住没更新的(用户改过 / 老装机无指纹)。上层据此提示,而不是静默停更。 */
+  protectedStale: string[];
+}
+
+/**
+ * 把 srcDir 下的技能子目录复制进 destRoot。按目录工作,便于测试。
+ *
+ * 语义(2026-07-26 改):**用户没改过的副本跟着内置更新,改过的原样保护**。
+ * 旧写法是「目标已存在就永远跳过」,本意护用户改动,实际后果是内置技能的修订**永远传不下去** ——
+ * 而查表时用户目录优先,于是陈年副本一直遮住仓库里已修好的版本(实测:forsion-plugin 仓库 1.3.0、
+ * 家目录 1.0.0,新增的一整节 agent 根本看不到)。
+ *
+ * 判据是**目录树哈希**而非版本号:版本号靠作者自觉 bump,哈希不会说谎。
+ *
+ * ⚠️**没有指纹的既有副本一律保护,不自动迁移**。诱惑是「假定它没被改过,覆盖了事」——但那会吃掉用户
+ * 在旧机制下做过的所有编辑,而旧机制恰恰鼓励编辑(播种的初衷就是「可见可改」)。代价是老装机上的陈年
+ * 副本仍挡着新版,所以这里**必须把话说出来**(见 protectedStale),让上层提示用户,而不是静默停更。
+ */
+export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<SeedReport> {
+  const out: SeedReport = { installed: [], updated: [], protectedStale: [] };
   let names: string[];
   try {
-    names = (await fs.readdir(srcDir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    names = (await fs.readdir(srcDir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => e.name);
   } catch {
-    return; // 源不存在 → 跳过
+    return out; // 源不存在 → 跳过
   }
   await fs.mkdir(destRoot, { recursive: true }).catch(() => {});
   for (const name of names) {
+    const srcSkill = path.join(srcDir, name);
     const dest = path.join(destRoot, name);
-    try {
-      await fs.access(path.join(dest, 'SKILL.md')); // 已存在 → 跳过(护用户改动)
-    } catch {
-      await fs.cp(path.join(srcDir, name), dest, { recursive: true }).catch(() => {});
+    const hasSkillMd = await fs
+      .access(path.join(srcSkill, 'SKILL.md'))
+      .then(() => true)
+      .catch(() => false);
+    if (!hasSkillMd) continue; // 不是技能目录
+    const srcHash = await treeHash(srcSkill);
+    if (!srcHash) continue;
+    const curHash = await treeHash(dest);
+    if (curHash === null) {
+      if (await replaceDir(srcSkill, dest, srcHash)) out.installed.push(name);
+      continue;
+    }
+    if (curHash === srcHash) {
+      // 已经是这一版。老装机可能没有指纹 → 补一个:内容既然逐字节相同,补它吃不掉任何改动,
+      // 于是下一次内置更新就能正常跟上(这是老装机唯一安全的自愈口子)。
+      if (!(await readStamp(dest))) {
+        await fs.writeFile(path.join(dest, SEED_STAMP), srcHash, 'utf8').catch(() => {});
+      }
+      continue;
+    }
+    const stamp = await readStamp(dest);
+    if (stamp && stamp === curHash) {
+      if (await replaceDir(srcSkill, dest, srcHash)) out.updated.push(name); // 用户没动过 → 跟着更新
+    } else {
+      out.protectedStale.push(name); // 用户改过 / 老装机无指纹 → 保护并报告
     }
   }
+  return out;
 }
 
 /**
@@ -159,19 +285,54 @@ export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<
  * 已存在则跳过(护用户编辑/导入);包内副本仍作运行时来源 + 兜底(复制失败/首跑竞态时不至于看不到技能)。
  * 幂等,进程内只跑一次。
  */
-export async function seedBuiltinSkills(): Promise<void> {
-  if (seeded) return;
-  seeded = true;
-  await seedSkillsInto(builtinSkillsDir(), userSkillsDir());
+export async function seedBuiltinSkills(): Promise<SeedReport> {
+  // ⚠️共享 Promise,不是布尔闩:布尔闩的语义其实是「后来的调用**不等**第一次跑完」——并发首调会去扫
+  // 一个正在被写的目录,读到半个技能;而且第一次抛错后闩仍为 true,本进程永不重试(codex)。
+  if (!seeding) {
+    seeding = seedSkillsInto(builtinSkillsDir(), userSkillsDir()).catch((e) => {
+      seeding = null; // 失败允许下次重试
+      throw e;
+    });
+  }
+  const r = await seeding;
+  // 有新版却被保护住的,说出来 —— 静默停更就是这次事故的成因(用户看不到内置技能已经修好了)。
+  if (r.protectedStale.length) {
+    console.warn(
+      `[skills] 内置技能有更新但你的副本不同,已保护未覆盖: ${r.protectedStale.join(', ')}。` +
+        `想用新版就删掉 ${userSkillsDir()}/<名字> 后重启。`,
+    );
+  }
+  return r;
 }
 
-/** 列出当前 run 可见的本地技能。四级作用域,越具体越优先(同 id 覆盖):
- *  内置(全局) < 用户 ~/.forsion/skills < **当前 agent** agents/<slug>/skills(+包内置默认) < **项目** <cwd>/.forsion/skills。
+/** 列出当前 run 可见的本地技能。作用域从泛到专,越具体越优先(同 id 覆盖):
+ *  内置(全局) < bundle(Forsion 插件内嵌) < 用户 ~/.forsion/skills < **当前 agent** agents/<slug>/skills(+包内置默认) < **项目** <cwd>/.forsion/skills。
  *  agent/项目级仅在有激活 agent / host cwd 时加入,故云端/无上下文时行为与原来一致。 */
+/** 用户目录里指纹仍匹配的技能 id 集合 —— 即「原样的内置镜像,用户没动过」。 */
+async function untouchedMirrors(destRoot: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  let names: string[];
+  try {
+    names = (await fs.readdir(destRoot, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return out;
+  }
+  await Promise.all(
+    names.map(async (n) => {
+      const dir = path.join(destRoot, n);
+      const stamp = await readStamp(dir);
+      if (stamp && stamp === (await treeHash(dir))) out.add(`${LOCAL_SKILL_PREFIX}${n}`);
+    }),
+  );
+  return out;
+}
+
 export async function listLocalSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
   const roots: Array<[string, SkillSource]> = [
     [builtinSkillsDir(), 'builtin'],
+    // Forsion bundle 内嵌技能(共享域 plugins/<id>/skills/):内置 < bundle < 用户(同 id 用户改动胜)
+    ...bundleSkillRoots().map((d): [string, SkillSource] => [d, 'user']),
     [userSkillsDir(), 'user'],
   ];
   const slug = currentDisplayAgentSlug();
@@ -183,8 +344,35 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
   if (cwd) roots.push([projectSkillsDir(cwd), 'project']);
 
   const scanned = await Promise.all(roots.map(([dir, src]) => scanDir(dir, src)));
+  // ⚠️用户目录里那些**未被改动的内置镜像**不算「用户技能」:它们只是为了可见可改而复制过去的副本,
+  // 却因为排在最后而把同名的 bundle 技能盖掉,声明的 builtin < bundle < user 优先级形同虚设(codex)。
+  // 判据:目录指纹仍等于我们写下去时的那一份 = 用户没动过 → 降格,让 bundle 能盖住它;
+  // 用户真改过才升格为 user 层。
+  const mirrors = await untouchedMirrors(userSkillsDir());
+  const bundleRoots = new Set(bundleSkillRoots());
+  const fromBundle = new Set<string>();
   const byId = new Map<string, SkillRecord>();
-  for (const list of scanned) for (const s of list) byId.set(s.id, s); // 后面的根覆盖前面(越具体越优先)
+  for (let i = 0; i < scanned.length; i++) {
+    const isUserRoot = roots[i][0] === userSkillsDir();
+    const isBundleRoot = bundleRoots.has(roots[i][0]);
+    for (const s of scanned[i]) {
+      if (isUserRoot && mirrors.has(s.id) && byId.has(s.id)) continue; // 未改镜像不覆盖已有(bundle)条目
+      // ⚠️无指纹的用户副本挡住 bundle 技能 —— 说出来,别静默。
+      // 怎么会有这种副本:某个技能原本是**内置**、被播种进用户目录,后来它随能力搬进了 Forsion 插件
+      // 捆绑包。播种早于指纹机制的老装机留下的那份没有指纹,于是既判不出「用户没改过」(不能降格),
+      // 内置源也没了(seedSkillsInto 再也扫不到它,连 protectedStale 都报不出来)→ 用户永远用着
+      // 陈年版本还不知道。分不清「老副本」与「用户自己写的同名技能」是设计使然(所以不自动删),
+      // 但把话说出来的成本是零。
+      if (isUserRoot && fromBundle.has(s.id) && !mirrors.has(s.id)) {
+        console.warn(
+          `[skills] ${userSkillsDir()}/${s.id.slice(LOCAL_SKILL_PREFIX.length)} 挡住了插件随包提供的同名技能。` +
+            `没改过它就删掉该目录,以后随插件更新。`,
+        );
+      }
+      if (isBundleRoot) fromBundle.add(s.id);
+      byId.set(s.id, s);
+    }
+  }
   return [...byId.values()];
 }
 

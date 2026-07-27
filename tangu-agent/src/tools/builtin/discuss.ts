@@ -23,6 +23,9 @@ export const discussProvider: ToolProvider = {
       name: 'start_discussion',
       mode: 'both',
       isEnabledFor: guard,
+      deferred: true, // P0-2:1.6KB schema,低频 → 按需装载;与 wait_discussion 同组连坐解锁
+      deferGroup: 'discussion',
+      deferHint: 'Start a background multi-persona group discussion; fetch results with wait_discussion (loads together).',
       definition: {
         type: 'function',
         function: {
@@ -78,6 +81,9 @@ export const discussProvider: ToolProvider = {
       name: 'wait_discussion',
       mode: 'both',
       isEnabledFor: guard,
+      deferred: true,
+      deferGroup: 'discussion',
+      deferHint: 'Wait for / fetch the result of a discussion started by start_discussion.',
       definition: {
         type: 'function',
         function: {

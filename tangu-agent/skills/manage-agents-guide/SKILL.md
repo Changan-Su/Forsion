@@ -9,6 +9,8 @@ category: agent 管理
 
 把一种值得复用的角色 / 工作方式沉淀成一个 **Normal Agent**(本地个性化 agent)。每个 agent 是 `~/.tangu/agents/<slug>/` 下的一个文件夹,被用户在新会话里选用后,其人格 / 模型 / 工具 / 设置会套用到该会话。
 
+Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子目录的 Forsion 插件时,引擎把它拷入一次,之后就是普通本地 agent —— 插件升级不覆盖它、卸载插件也保留;要分发一个做好的 agent,把它放进捆绑包是默认方式(见 `forsion-plugin` 技能)。
+
 ## 一个 Agent 由什么组成
 
 `~/.tangu/agents/<slug>/`(slug = 小写字母数字与连字符):

@@ -33,6 +33,23 @@ describe('foldWorkingWithSummary', () => {
     expect(msgs).toEqual(copy);
   });
 
+  it('折叠边界落在 tool 结果批次中间:回退到该批次的 assistant,绝不产出孤立 role:tool', () => {
+    const msgs: ChatMessage[] = [
+      mk('system', 's'),
+      ...Array.from({ length: 10 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`)),
+      { role: 'assistant', content: '', tool_calls: [{ id: 't1' }] } as any,
+      ...Array.from({ length: 6 }, (_, i) => ({ role: 'tool', content: `r${i}`, tool_call_id: `t${i}` }) as any),
+      mk('assistant', 'final'),
+    ];
+    // 总长 19;名义边界 19-4=15 落在 tool 批次(12..17)→ 回退到 11(带 tool_calls 的 assistant)
+    foldWorkingWithSummary(msgs, 'S', 4);
+    expect(msgs.length).toBe(10); // head(1) + summary(1) + [assistant+6 tool+final](8)
+    const roles = msgs.map((m: any) => m.role);
+    const firstTool = roles.indexOf('tool');
+    expect(firstTool).toBeGreaterThan(0);
+    expect((msgs[firstTool - 1] as any).tool_calls).toBeTruthy(); // 第一条 tool 前必是它的 assistant
+  });
+
   it('handles no leading system block', () => {
     const msgs: ChatMessage[] = Array.from({ length: 30 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`));
     foldWorkingWithSummary(msgs, 'S', 4);

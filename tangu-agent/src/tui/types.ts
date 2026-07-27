@@ -45,7 +45,7 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed';
 }
 
-export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto';
+export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
 export interface PendingApproval {
   approvalId: string;

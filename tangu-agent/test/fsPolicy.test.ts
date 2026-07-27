@@ -4,7 +4,7 @@ import os from 'node:os';
 import { checkWritePath, isOutsideWorkspace } from '../src/tools/fsPolicy.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 
-const ctx = (cwd: string) => ({ cwd } as any);
+const ctx = (cwd: string, extraRoots?: string[]) => ({ cwd, extraRoots } as any);
 const ws = path.resolve('/tmp/forsion-ws-test');
 
 describe('fsPolicy.checkWritePath', () => {
@@ -30,6 +30,21 @@ describe('fsPolicy.checkWritePath', () => {
     const lib = path.join(agentsDir(), DEFAULT_AGENT_SLUG, 'Library', 'notes.md');
     expect(checkWritePath(ctx(ws), lib)).toEqual({ ok: true, hardDeny: false, reason: '' });
   });
+  it('额外工作文件夹并入可写根:不再判越界写', () => {
+    const extra = path.resolve('/tmp/forsion-extra-test');
+    expect(checkWritePath(ctx(ws, [extra]), path.join(extra, 'docs/a.md')).ok).toBe(true);
+    expect(isOutsideWorkspace(ctx(ws, [extra]), path.join(extra, 'docs/a.md'))).toBe(false);
+    // 没加进来的目录照旧升审批
+    expect(isOutsideWorkspace(ctx(ws, [extra]), path.resolve('/tmp/nope/a.md'))).toBe(true);
+  });
+
+  it('⚠️额外工作文件夹提不了权:受保护路径仍硬拒', () => {
+    const ssh = path.join(os.homedir(), '.ssh');
+    expect(checkWritePath(ctx(ws, [ssh]), path.join(ssh, 'id_rsa')).hardDeny).toBe(true);
+    const repo = path.resolve('/tmp/forsion-extra-test');
+    expect(checkWritePath(ctx(ws, [repo]), path.join(repo, '.git', 'config')).hardDeny).toBe(true);
+  });
+
 });
 
 describe('fsPolicy.isOutsideWorkspace', () => {

@@ -13,13 +13,15 @@
  * 不从 ./agentLoop import(agentLoop import 本模块 → 避免循环);所需 brain/billing/state 直接走 deps()。
  */
 import { v4 as uuidv4 } from 'uuid';
+import { projectDocSection } from './projectDoc.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage, Tool } from '../core/types.js';
 import type { StreamResult } from '../seams/cloudBrain.js';
+import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { ToolContext } from '../tools/registry.js';
-import { getToolDefinitions, executeTool } from '../tools/registry.js';
-import { gateToolCall } from './approvals.js';
+import { getToolDefinitions, executeTool, listDeferredTools } from '../tools/registry.js';
+import { gateToolCall, type ApprovalMode } from './approvals.js';
 import { publish, drain } from './eventBus.js';
 import { updateRunStatus } from './runStore.js';
 import { requestInquiry } from './inquiries.js';
@@ -114,10 +116,21 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     const roster = participants.map((a) => `- ${a.name}(${a.slug})：${a.description || '——'}`).join('\n');
 
     // ③ 每 agent 私有持久上下文 + 已读指针(seen[slug] = transcript 中已注入到该 agent 的条数)
+    // deferred 工具目录段(P0-2):群聊发言人与主 loop 同款按需装载——目录进各自 system,
+    // load_tools 解锁(per-turn,见 runGroupTurn)。不注入则 deferred 工具被静默砍掉。
+    const groupDeferred = listDeferredTools({
+      userId: p.userId, sessionId, appId: p.appId, profile: p.profile, execMode: p.execMode, cwd: p.cwd,
+    });
+    const deferSection = groupDeferred.length
+      ? '\n\n## Additional Tools (load on demand)\nThese tools exist but are not loaded yet. When needed, FIRST call `load_tools` with the exact names, wait for the result, then call them normally.\n' +
+        groupDeferred.map((d) => `- ${d.name}: ${d.hint}`).join('\n')
+      : '';
     const ctxByAgent = new Map<string, ChatMessage[]>();
     const seen = new Map<string, number>();
     for (const a of participants) {
-      ctxByAgent.set(a.slug, [{ role: 'system', content: buildGroupSystem(a, roster, p.message) } as ChatMessage]);
+    // 群聊发言人与子代理同理:同一个 cwd、同一套文件工具 → 项目约定必须在场(codex)。
+    const groupProjectDoc = p.execMode === 'host' ? ((s) => (s ? '\n\n---\n' + s : ''))(projectDocSection(p.cwd)) : '';
+      ctxByAgent.set(a.slug, [{ role: 'system', content: buildGroupSystem(a, roster, p.message) + deferSection + groupProjectDoc } as ChatMessage]);
       seen.set(a.slug, 0);
     }
     const transcript: TranscriptEntry[] = [
@@ -243,25 +256,35 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
   const llm = deps().brain.llm;
   const effModelId = agent.model || p.modelId;
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(effModelId);
-  const approvalMode: 'readonly' | 'auto-edit' | 'full-auto' =
+  const approvalMode: ApprovalMode =
     agent.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
 
+  // deferred 解锁:per-turn 空集起步(与主 loop 的 per-run 同构,粒度更小;turn 内 load_tools 后下一迭代生效)。
+  const turnUnlocked = new Set<string>();
+  let turnDefsDirty = false;
   const toolCtx: ToolContext = {
     userId: p.userId, sessionId, appId, runId, signal,
     execMode, cwd, approvalMode, profile, modelId: effModelId, planMode: false, muse: false,
     wsProject: p.wsProject,
     // 群聊发言人不可再起讨论(start_discussion/wait_discussion 隐藏)——防递归裂变。
     inDiscussion: true,
+    unlockedTools: turnUnlocked,
+    unlockTools: (names) => {
+      let changed = false;
+      for (const n of names) if (!turnUnlocked.has(n)) { turnUnlocked.add(n); changed = true; }
+      if (changed) turnDefsDirty = true;
+    },
     // ponytail: v1 群聊每 agent 用内置工具集(读/写/执行已够「完整工具」);custom/MCP per-agent 暂不接,
     // 需要时按 agent.tools 走 loadCustomTools 即可补上。
   };
-  const toolDefs = getToolDefinitions(toolCtx);
+  let toolDefs = getToolDefinitions(toolCtx);
   const maxIter = Math.min(agent.maxIterations || GROUP_TURN_MAX_ITER, GROUP_TURN_MAX_ITER);
 
   let text = '';
   let cost = 0;
   for (let iteration = 0; iteration < maxIter; iteration++) {
     if (signal.aborted) throw new AbortLikeError();
+    if (turnDefsDirty) { toolDefs = getToolDefinitions(toolCtx); turnDefsDirty = false; } // load_tools 解锁生效
     const lastIter = iteration === maxIter - 1;
     // 最后一轮不发 tools(而非 toolChoice:'none'):思考模式渠道(DeepSeek 等)会以
     // "Thinking mode does not support this tool_choice" 拒绝显式 tool_choice,整场讨论直接失败。
@@ -393,7 +416,7 @@ function clampRounds(v: any): number {
   return Math.min(n, MAX_GROUP_ROUNDS);
 }
 
-const THINK_LEVELS = ['off', 'low', 'medium', 'high'];
+const THINK_LEVELS: readonly string[] = THINKING_LEVELS;
 const APPROVAL_MODES = ['readonly', 'auto-edit', 'full-auto'];
 
 /** 临时 Agent 定义来自客户端(本会话用,不落盘):校验必填 + 钳制各字段,复刻 agentRegistry.saveAgent 的口径。 */

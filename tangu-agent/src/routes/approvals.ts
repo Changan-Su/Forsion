@@ -15,6 +15,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { getRunForUser } from '../services/runStore.js';
 import { resolveApproval, type ApprovalAction } from '../services/approvals.js';
 import { resolveInquiry } from '../services/inquiries.js';
+import { resolveDeskShot } from '../services/deskCapture.js';
 
 const router = Router();
 
@@ -55,6 +56,29 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'inquiry failed' });
+  }
+});
+
+// Agent Desk 截屏(desk_screenshot)兑现端点;机制同上(登记表在 services/deskCapture.ts)。
+//   POST /agent/runs/:runId/captures/:shotId { dataUrl?: string, mode?: 'card'|'open', error?: string }
+//     → 200 | 404 run 不存在/非本人 | 410 该请求已不在等待(超时/重复/多窗口第二个到达者)
+// dataUrl 会被回灌进模型上下文 → 只认 png/jpeg 的 data URL,其余一律按失败兑现。
+router.post('/agent/runs/:runId/captures/:shotId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const run = await getRunForUser(req.params.runId, req.user!.userId);
+    if (!run) return res.status(404).json({ detail: 'Run not found' });
+    const dataUrl = typeof req.body?.dataUrl === 'string' ? req.body.dataUrl : '';
+    const valid = /^data:image\/(png|jpeg);base64,/.test(dataUrl) && dataUrl.length <= 12_000_000;
+    const ok = resolveDeskShot(
+      req.params.shotId,
+      valid
+        ? { dataUrl, mode: req.body?.mode === 'card' ? 'card' : 'open' }
+        : { error: String(req.body?.error || 'capture failed').slice(0, 200) },
+    );
+    if (!ok) return res.status(410).json({ detail: 'capture is no longer pending' });
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'capture failed' });
   }
 });
 

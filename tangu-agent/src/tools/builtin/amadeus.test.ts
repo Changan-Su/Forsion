@@ -156,11 +156,17 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     });
   });
 
-  it('isEnabledFor: 非 host 看 facet,host 看 hostExec', () => {
-    const t = tools['amadeus_read_note'];
+  it('isEnabledFor: 非 host 看 facet,host 看 hostExec;云端专用的两个笔记工具 host 下隐藏', () => {
+    const t = tools['amadeus_read_note']; // 云端专用
     expect(t.isEnabledFor!({ capabilities: { hostExec: false } } as any, { execMode: 'sandbox' } as any)).toBe(true);
     expect(t.isEnabledFor!({ capabilities: { hostExec: false } } as any, { execMode: 'host' } as any)).toBe(false);
-    expect(t.isEnabledFor!({ capabilities: { hostExec: true } } as any, { execMode: 'host' } as any)).toBe(true);
+    // ⚠️host 下即便有 hostExec 也不给 —— 本机 vault 是真目录,笔记走通用文件工具;
+    // 暴露出来再拒绝既与提示词矛盾,又会被 registry 记成 isError:false 的「成功」(codex)。
+    expect(t.isEnabledFor!({ capabilities: { hostExec: true } } as any, { execMode: 'host' } as any)).toBe(false);
+    // 非云端专用的工具(日历/列表)照旧跟 hostExec
+    const cal = tools['amadeus_list_calendars'];
+    expect(cal.isEnabledFor!({ capabilities: { hostExec: true } } as any, { execMode: 'host' } as any)).toBe(true);
+    expect(cal.isEnabledFor!({ capabilities: { hostExec: false } } as any, { execMode: 'host' } as any)).toBe(false);
   });
 
   it('write_note 走 force 覆盖 + read_note 剥标记;host ctx 仍走本地 vault(后端切换)', async () => {
@@ -192,21 +198,31 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
 });
 
 describe('note tools', () => {
-  it('write → list → read; read strips frontmatter + block markers', async () => {
-    await run('amadeus_write_note', { path: 'Notes/hello.md', content: '# Hello\n\nworld' });
-    expect(await run('amadeus_list_notes')).toContain('Notes/hello.md');
-    const read = await run('amadeus_read_note', { path: 'Notes/hello.md' });
-    expect(read).toContain('# Hello');
-    expect(read).toContain('world');
-
-    await fs.writeFile(
-      path.join(vault, 'x.md'),
-      '---\namadeus_page: 1\namadeus_layout: {}\n---\n<!-- a 1 -->\n内容一\n<!-- a 2 -->\n内容二',
+  // 07-26 起:host 侧退役 —— 本机 vault 是真目录,笔记必须用通用文件工具读写。
+  // 这两个工具**剥 frontmatter 与块标记 / 覆盖时重置布局**,对 .mindmap.md 这类结构化文件就是毁档,
+  // 只保留给云端(云端 vault 走远端 brain API,没有任何文件工具够得着)。
+  it('⚠️host 模式抛错拒绝(不是返回字符串:registry 只有 throw 才记 isError)', async () => {
+    await expect(run('amadeus_write_note', { path: 'Notes/hello.md', content: '# Hello' })).rejects.toThrow(
+      /cloud vaults only/,
     );
-    const cleaned = await run('amadeus_read_note', { path: 'x.md' });
-    expect(cleaned).not.toContain('amadeus_page');
-    expect(cleaned).not.toContain('<!-- a');
-    expect(cleaned).toContain('内容一');
-    expect(cleaned).toContain('内容二');
+    await expect(run('amadeus_read_note', { path: 'Notes/hello.md' })).rejects.toThrow(/ordinary file tools/);
+    expect(await run('amadeus_list_notes')).not.toContain('Notes/hello.md'); // 拒绝 = 什么都没写
   });
+
+  it('⚠️结构化文件(.mindmap.md/.excalidraw.md/.db)在实现层硬拒,云端也拒 —— 没有无损 API 时宁可失败', async () => {
+    const tool = tools['amadeus_write_note'];
+    await expect(
+      Promise.resolve(tool.execute({ path: 'a.mindmap.md', content: '# 覆盖' }, { execMode: 'sandbox' } as any)),
+    ).rejects.toThrow(/structured Amadeus file/);
+    await expect(
+      Promise.resolve(tools['amadeus_read_note'].execute({ path: 'b.excalidraw.md' }, { execMode: 'sandbox' } as any)),
+    ).rejects.toThrow(/structured Amadeus file/);
+  });
+
+  it('查找仍然可用(list 不受影响,它给的是路径)', async () => {
+    await fs.writeFile(path.join(vault, 'x.md'), '# 标题\n正文');
+    expect(await run('amadeus_list_notes')).toContain('x.md');
+  });
+
+  // 云端路径已由上面「cloud backend」那组覆盖(write_note force 覆盖 + read_note 剥标记)。
 });

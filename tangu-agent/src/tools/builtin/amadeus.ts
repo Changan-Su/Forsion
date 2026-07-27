@@ -189,6 +189,21 @@ function cloudBackend(facet: AmadeusBrain): AmadeusBackend {
 }
 
 /** execMode='host' → 本地磁盘(与旧 host-only 行为逐字节一致);否则 → 云端 facet;两者皆无 → null。 */
+/** 这些扩展名的结构(frontmatter + `<!-- a id -->` 块标记)会被 read 剥掉、被 write 的线性覆盖抹平。
+ *  云端目前没有无损的 raw 读写 API → **宁可失败,也不许覆盖**(codex:描述里写 "never use" 不是执行层保护)。 */
+const STRUCTURED_RE = /\.(mindmap\.md|excalidraw\.md|db)$/i;
+const structuredRefusal = (rel: string): string =>
+  `"${rel}" is a structured Amadeus file (mind map / whiteboard / database): its content lives in frontmatter ` +
+  'and inline block markers that these note tools strip and overwrite. There is no lossless cloud API for it yet, ' +
+  'so this would destroy the file. Ask the user to edit it in the app, or open it on a machine where the vault is ' +
+  'a real directory and use the ordinary file tools.';
+
+const hostUseFileTools =
+  'this tool is for cloud vaults only. On this machine the Amadeus vault is a real directory — ' +
+  'find the note with amadeus_list_notes, then read/write it with the ordinary file tools at ' +
+  '`<vault root>/<relative path>` (the vault root is in your Amadeus prompt section). Notes keep structure in ' +
+  'frontmatter and inline block markers that this tool strips.';
+
 function backendFor(ctx: ToolContext | undefined): AmadeusBackend | null {
   if (ctx?.execMode === 'host') return localBackend;
   const facet = cloudAmadeus();
@@ -314,6 +329,8 @@ function mk(
   required: string[],
   caps: ToolCapabilities,
   execute: (args: Record<string, any>, ctx: ToolContext) => Promise<string>,
+  /** true = 云端 vault 专用:host 下**不进工具表**(本机 vault 是真目录,用通用文件工具读写)。 */
+  cloudOnly = false,
 ): ToolDef {
   return {
     name,
@@ -322,7 +339,7 @@ function mk(
     mode: 'both',
     capabilities: caps,
     isEnabledFor: (profile: AppProfile, ctx: ToolContext) =>
-      ctx?.execMode === 'host' ? profile.capabilities.hostExec : !!cloudAmadeus(),
+      ctx?.execMode === 'host' ? !cloudOnly && profile.capabilities.hostExec : !!cloudAmadeus(),
     definition: { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } },
     execute,
   };
@@ -353,24 +370,27 @@ export const amadeusProvider: ToolProvider = {
     ),
     mk(
       'amadeus_read_note',
-      'Read one Amadeus note and return its markdown content (frontmatter and internal block markers stripped).',
+      'CLOUD VAULTS ONLY. Read one cloud Amadeus note as plain markdown (frontmatter and internal block markers are stripped, so structured formats come back incomplete). On this machine the vault is a real directory — use the ordinary file tools instead.',
       { path: { type: 'string', description: 'Vault-relative note path, e.g. "Notes/ideas.md".' } },
       ['path'],
       READ_CAPS,
       async (args, ctx) => {
+        if (ctx?.execMode === 'host') throw new Error(hostUseFileTools);
         const be = backendFor(ctx);
         if (!be) return noBackend;
         if (!be.exists()) return noVault;
         let rel = String(args.path ?? '').trim();
         if (!rel) return 'Error: path is required';
         if (!/\.md$/i.test(rel)) rel += '.md';
+        if (STRUCTURED_RE.test(rel)) throw new Error(structuredRefusal(rel));
         const { content: raw } = await be.read(rel);
         return toCleanMarkdown(raw) || '(empty note)';
       },
+      true, // cloudOnly
     ),
     mk(
       'amadeus_write_note',
-      'Create or overwrite an Amadeus note with plain markdown. To edit an existing note, read it first, modify, then write the full new content. Overwriting resets the note to a simple linear layout.',
+      'CLOUD VAULTS ONLY. Create or overwrite a cloud Amadeus note with plain markdown; overwriting RESETS the note to a simple linear layout (so never use it on `.mindmap.md` / `.excalidraw.md` / `.db`). On this machine, write the file directly with the ordinary file tools instead.',
       {
         path: { type: 'string', description: 'Vault-relative note path, e.g. "Notes/ideas.md" (".md" appended if missing).' },
         content: { type: 'string', description: 'The full markdown content of the note.' },
@@ -378,16 +398,19 @@ export const amadeusProvider: ToolProvider = {
       ['path', 'content'],
       WRITE_CAPS,
       async (args, ctx) => {
+        if (ctx?.execMode === 'host') throw new Error(hostUseFileTools);
         const be = backendFor(ctx);
         if (!be) return noBackend;
         await be.ensureVault();
         let rel = String(args.path ?? '').trim();
         if (!rel) return 'Error: path is required';
         if (!/\.md$/i.test(rel)) rel += '.md';
+        if (STRUCTURED_RE.test(rel)) throw new Error(structuredRefusal(rel));
         // 保留覆盖语义:cloud 走 force=true 无条件覆盖(与本地直接 writeFile 等价)。
         await be.write(rel, String(args.content ?? ''), { overwrite: true });
         return `Saved note ${rel}.`;
       },
+      true, // cloudOnly
     ),
 
     // ── 日历 ──
@@ -540,7 +563,7 @@ export const amadeusProvider: ToolProvider = {
 
 /** 通用工具指引(local/cloud 两段共用;硬编码进模型的提示一律英文)。 */
 const AMADEUS_TOOL_GUIDANCE =
-  '- Notes: `amadeus_list_notes` to find, `amadeus_read_note` to read, `amadeus_write_note` to create or rewrite (plain markdown).\n' +
+  '- Notes: `amadeus_list_notes` finds them (vault-relative paths).\n' +
   '- A note `X.md` may own a sibling folder `X.fd/` holding its child notes/databases (Notion-style subpages); the parent\'s frontmatter `children:` list mirrors that folder. To add a subpage under `X.md`, write to `X.fd/<name>.md`.\n' +
   '- Calendar / schedule: `amadeus_list_calendars` lists calendars; `amadeus_list_events` reads events; `amadeus_create_event` / `amadeus_edit_event` / `amadeus_delete_event` manage them.\n' +
   '- Event times are `YYYY-MM-DD` (all-day) or `YYYY-MM-DDTHH:mm` (with a time); an event has a start and an optional end.\n' +
@@ -554,7 +577,8 @@ export function amadeusCloudPromptSection(): string | null {
   if (!cloudAmadeus()) return null;
   return (
     '## Amadeus Notes & Calendar (cloud)\n' +
-    "The user's Amadeus cloud note vault is available through the amadeus_* tools (reads and writes go to the user's cloud vault).\n" +
+    "The user's Amadeus cloud note vault is available through the amadeus_* tools (reads and writes go to the user's cloud vault). " +
+    'There is no filesystem access to the cloud vault, so `amadeus_read_note` / `amadeus_write_note` are the only way in here — but they strip frontmatter and reset layout, so do not use them on `.mindmap.md` / `.excalidraw.md` / `.db`.\n' +
     AMADEUS_TOOL_GUIDANCE
   );
 }
@@ -565,6 +589,13 @@ export function amadeusPromptSection(): string | null {
   return (
     '## Amadeus Notes & Calendar (local)\n' +
     `The user keeps notes and calendars in a local Amadeus vault at \`${amadeusVaultPath()}\`.\n` +
+    '- **A note is a real file. Read and write it with the ordinary file tools** at ' +
+    `\`${amadeusVaultPath()}/<relative path>\`. There is deliberately no note read/write tool here: ` +
+    'notes carry structure in frontmatter and inline `<!-- a id -->` block markers, and anything that ' +
+    '"helpfully" returns clean prose or rewrites the file linearly silently destroys that structure.\n' +
+    '- **Several extensions are not plain markdown even though they end in `.md`**: `.mindmap.md` (mind map), ' +
+    '`.excalidraw.md` (whiteboard), plus `.db` (database). Before editing one, load the matching skill ' +
+    '(e.g. `mindmap-format`) — rewriting one as prose or as an indented outline destroys it.\n' +
     AMADEUS_TOOL_GUIDANCE
   );
 }

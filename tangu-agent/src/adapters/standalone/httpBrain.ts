@@ -43,6 +43,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
   const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
   const IMG_TIMEOUT_MS = Number(process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS) || 180_000; // 生图比 LLM 慢,单独放宽
+  // 托管流的兜底窗口(只兜 server 进程死/网络整体失联)。上游判死归服务端 upstreamIdleGuard(默认 180s),
+  // 这里必须留足余量让服务端先响,否则用户看到的是本地 504 而非上游真实错因。
+  const BRAIN_STREAM_IDLE_MS = Number(process.env.TANGU_BRAIN_STREAM_IDLE_MS) || 300_000;
   const reqSignal = (s?: AbortSignal): AbortSignal => s ?? AbortSignal.timeout(REQ_TIMEOUT_MS);
   const toB64 = (c: Buffer | string): string =>
     (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf-8')).toString('base64');
@@ -96,10 +99,15 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // ── LLM 流式:读 SSE,逐条转回 onToken/onReasoning/onToolCallDelta,done 时返回累积结果 ──
   async function streamProviderCompletion(opts: StreamOpts): Promise<StreamResult> {
     const modelId = String((opts.payload as any)?.__forsion_model_id ?? '');
-    // 流式空闲看门狗(复用 streamIdleGuard):上游若 idle 窗口内无新帧(模型/网关挂死、连接半开)则主动
-    // abort,使 reader.read() 抛出而非无限 await(否则 run 卡死,且 worker 按 session 串行 → 整个 session
+    // 流式空闲看门狗(复用 streamIdleGuard):idle 窗口内无新帧(server 进程死、连接半开)则主动 abort,
+    // 使 reader.read() 抛出而非无限 await(否则 run 卡死,且 worker 按 session 串行 → 整个 session
     // 后续 run 全堵)。同时合并外部 run abort。详见 ../../llm/streamIdle.ts。
-    const guard = streamIdleGuard(opts.signal);
+    //
+    // ⚠️ 这里**只认 `data:` 帧**,与直连流的帧级续命相反。brain/llm/stream 每 15s 发的 `: ping` 是
+    // **服务端自己**发的(防边缘代理 60s 判 504),上游挂死时它照发不误——按帧续命等于被假活信号
+    // 一路喂饱,run 无声挂死且永不报错(2026-07-25 实测 400s+ 零 token 零错误)。直连流没这问题:
+    // 那边的 keepalive 由上游发出,确实代表上游还活着,故 openaiCompat/anthropicMessages 保持帧级。
+    const guard = streamIdleGuard(opts.signal, BRAIN_STREAM_IDLE_MS);
     try {
       const r = await fetch(`${base}/api/brain/llm/stream`, {
         method: 'POST',
@@ -125,14 +133,14 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        guard.arm(); // 收到帧即重置空闲计时
         buf += decoder.decode(value, { stream: true });
         let idx: number;
         while ((idx = buf.indexOf('\n\n')) >= 0) {
           const frame = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
           const line = frame.split('\n').find((l) => l.startsWith('data:'));
-          if (!line) continue;
+          if (!line) continue; // `: ping` 心跳落在这里被丢弃——刻意不续命,见上方 guard 注释
+          guard.arm(); // 只有真数据帧(token/reasoning/tool/done/error)才重置空闲计时
           let ev: any;
           try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
           if (ev.t === 'token') { result.content += ev.d; opts.onToken?.(ev.d); }

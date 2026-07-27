@@ -20,9 +20,12 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { DEFAULT_AGENT_AVATAR_B64, DEFAULT_AGENT_AVATAR_MIME } from './defaultAvatar.js';
 import { loadSpecialAgentsConfig, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
+import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
+import type { ThinkingLevel } from '../core/types.js';
 
-export type ThinkLevel = 'off' | 'low' | 'medium' | 'high' | '';
-export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | '';
+/** agent 定义里的思考档位。`''` = 未声明(跟随会话默认),其余同 core 的 ThinkingLevel 七档。 */
+export type ThinkLevel = ThinkingLevel | '';
+export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | '';
 
 export interface NormalAgentDef {
   slug: string;
@@ -85,8 +88,8 @@ export function isValidSlug(slug: string): boolean {
   return SLUG_RE.test(slug);
 }
 
-const THINK: ThinkLevel[] = ['off', 'low', 'medium', 'high'];
-const APPROVAL: ApprovalMode[] = ['readonly', 'auto-edit', 'full-auto'];
+const THINK: ThinkLevel[] = [...THINKING_LEVELS];
+const APPROVAL: ApprovalMode[] = ['readonly', 'auto-edit', 'full-auto', 'custom'];
 
 /** 解析旧扁平 agent 文件（frontmatter 单行标量 + tools 列表 + 正文)。容错:缺字段回退默认。迁移源。 */
 export function parseAgentFile(slug: string, raw: string): NormalAgentDef {

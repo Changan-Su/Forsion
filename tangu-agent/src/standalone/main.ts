@@ -24,6 +24,7 @@ import { loadSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadTanguEnv, configFile } from '../core/tanguHome.js';
 import { migrateLegacyConfig } from '../core/config.js';
 import { activateAllPlugins } from '../plugins/bootstrap.js';
+import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 
 /** --print-config:打印生效配置(config.json + env 叠加),token/apiKey 脱敏(仅留尾 4 位)。 */
@@ -96,6 +97,8 @@ async function main(): Promise<void> {
 
   // 内置技能首启播种进 ~/.tangu/skills(像 Claude/Codex 落用户家目录,可见可改;已存在跳过,best-effort)。
   await seedBuiltinSkills().catch(() => {});
+  // 同理播种一条示例自定义命令进 ~/.tangu/commands/(目录已存在就跳过,不覆盖用户的)。
+  seedExampleCommand();
 
   // 插件:激活全部（tool provider 全局注册 + 收集路由挂载器）。tool provider 注册无需 deps()，先于
   // createTanguModule 安全;路由挂载须**在 createTanguModule 之后**（彼时 configureTangu/deps() 才就绪）。

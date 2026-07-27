@@ -258,6 +258,8 @@ router.get('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
 });
 
 // 本会话累计 token 消耗（跨 run 求和），供客户端「本会话 token」显示。
+// contextTokens = 最近一次 usage 事件的 prompt（当前上下文占用）：客户端只在流式期间收到 usage 事件，
+// 重载/重开会话后没有它，上下文圈只能显示 0%（连「该不该压缩」都判断不了）。事件本就落库，这里回放最后一条。
 router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -267,7 +269,14 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
       `SELECT COALESCE(SUM(tokens_total), 0) AS total FROM agent_runs WHERE session_id = ?`,
       [req.params.id],
     );
-    res.json({ tokensTotal: Number(rows[0]?.total) || 0 });
+    // e.id 单调递增（PG BIGSERIAL / SQLite AUTOINCREMENT），跨 run 取真正的最后一条。
+    const ev = await query<any[]>(
+      `SELECT e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
+       WHERE r.session_id = ? AND e.type = 'usage' ORDER BY e.id DESC LIMIT 1`,
+      [req.params.id],
+    );
+    const last = parseMaybeJson(ev[0]?.payload) || {};
+    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: Number(last.prompt) || 0 });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
   }

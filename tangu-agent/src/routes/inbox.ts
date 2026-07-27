@@ -1,16 +1,18 @@
 /**
  * 收件箱(Inbox Space)HTTP API。handler 自带 authMiddleware;本地特性(hostExec=false 一律 404)。
- *   GET    /agent/inbox?filter=all|unread|archived|scheduled&limit=&offset=   消息列表
- *   GET    /agent/inbox/unread-count                                          未读数 + 最新已投递消息 id
+ *   GET    /agent/inbox?filter=all|unread|archived&limit=&offset=             消息列表
+ *   GET    /agent/inbox/unread-count                                          未读数 + 最新消息 id
  *   PATCH  /agent/inbox/:id { read?, archived? }                              标已读/未读、归档/取消
- *   POST   /agent/inbox/read-all                                              全部已读(不动未投递定时消息)
- *   DELETE /agent/inbox/:id                                                   软删(定时消息「取消」同此)
+ *   POST   /agent/inbox/read-all                                              全部已读
+ *   DELETE /agent/inbox/:id                                                   软删
  *   POST   /agent/inbox/pull                                                  手动拉服务端广播
  *   POST   /agent/inbox { title, body? }                                      本地系统消息(桌面壳用:插件引导提醒等)
  *
  * 时间纪律:写入/比较一律 JS 生成的 UTC 'YYYY-MM-DD HH:MM:SS' 串(不用 SQL CURRENT_TIMESTAMP 比较——
  * 外部 PG 的它是服务器本地墙钟);响应统一过 ts() 归一(PG host 回 Date、SQLite 回字符串)。
- * 到期投递无定时器:deliver_at IS NULL OR deliver_at <= now 即「已投递」。DELETE=软删,理由见 migrate.ts。
+ * 定时消息(deliver_at)已下线(定时提醒改走自动化 at/every+notify);读端仍保留
+ * `deliver_at IS NULL OR <= now` 过滤兜历史行——存量未到期定时消息按原时刻优雅日落,不提前冒出。
+ * DELETE=软删,理由见 migrate.ts。
  */
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -18,6 +20,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import { pullBroadcastsOnce } from '../services/inboxPull.js';
+import { forwardInboxToChannels } from '../channels/forward.js';
 
 const router = Router();
 
@@ -34,7 +37,7 @@ const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', 
 const ts = (v: any): string | null =>
   v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : String(v).slice(0, 19);
 
-const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, deliver_at, read_at, archived_at, created_at';
+const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, created_at';
 
 function serialize(r: any) {
   return {
@@ -44,7 +47,6 @@ function serialize(r: any) {
     sender_kind: r.sender_kind,
     sender_id: r.sender_id,
     origin_broadcast_id: r.origin_broadcast_id ?? null,
-    deliver_at: ts(r.deliver_at),
     read_at: ts(r.read_at),
     archived_at: ts(r.archived_at),
     created_at: ts(r.created_at),
@@ -66,12 +68,8 @@ router.get('/agent/inbox', authMiddleware, async (req: AuthRequest, res) => {
       where = `user_id = ? AND deleted_at IS NULL AND archived_at IS NOT NULL`;
       order = `archived_at DESC, id DESC`;
       params = [userId];
-    } else if (filter === 'scheduled') {
-      where = `user_id = ? AND deleted_at IS NULL AND deliver_at > ?`;
-      order = `deliver_at ASC, id ASC`;
-      params = [userId, now];
     } else {
-      // all / unread(非法值按 all)
+      // all / unread(非法值按 all)。deliver_at 过滤=legacy 定时行日落,见头注释。
       where = `user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND (deliver_at IS NULL OR deliver_at <= ?)`;
       if (filter === 'unread') where += ` AND read_at IS NULL`;
       order = `created_at DESC, id DESC`;
@@ -124,6 +122,7 @@ router.post('/agent/inbox', authMiddleware, async (req: AuthRequest, res) => {
        VALUES (?, ?, ?, ?, 'system', ?)`,
       [id, userId, title, body, senderId],
     );
+    forwardInboxToChannels({ userId, title, body, senderKind: 'system', senderId });
     res.json({ ok: true, id });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'inbox post failed' });

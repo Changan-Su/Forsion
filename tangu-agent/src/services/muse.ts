@@ -18,14 +18,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { promises as fs } from 'node:fs';
 import { query, getOlderThanSql } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
-import { createRun } from './runStore.js';
+import { createRun, setRunTerminalListener } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTodoDedupHint, resolveBackgroundModelId, type MuseConfig } from './specialAgentsConfig.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { readActivityLines } from './userActivity.js';
-import { loadTriggers, evaluateTriggers, markTriggersFired, buildTriggerKickoff, type MuseTrigger } from './museTriggers.js';
+import { loadTriggers, evaluateTriggers, markTriggersFired, buildTriggerKickoff, type MuseTrigger, type EventCursor } from './museTriggers.js';
 import { launchAutomationTriggers, launchDueSchedules } from './automation.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -291,24 +291,31 @@ function rollWindow(cfg: MuseConfig): void {
   }
 }
 
+let ticking = false;
+
 async function tick(): Promise<void> {
+  // interval 与 kickMuse 的 setTimeout 会重叠(tick 内多处 await);重入=重复评估/重复起 run。
+  if (ticking) return;
+  ticking = true;
   try {
     if (!isLocal()) return;
     // ── 盯任务规则评估(零 token 代码判定)。刻意放在 muse.enabled/activeHours 闸**之前**:
     // 带 agentSlug 的规则属于任意 agent 的自动化,关掉 Muse 不应连它们一起灭。
     let museFired: MuseTrigger[] = [];
+    const trigCursors: Record<string, EventCursor> = {};
     try {
       const triggers = await loadTriggers();
       if (triggers.length) {
         const activityLines = await readActivityLines({ hours: 24, limit: 500 });
-        const fired = await evaluateTriggers(triggers, { activityLines });
-        const agentFired = fired.filter((t) => t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG);
+        const fired = await evaluateTriggers(triggers, { activityLines, outCursors: trigCursors });
+        // 动作链规则与旧式 agentSlug 规则都走 automation launcher;两者皆无 → 老路唤醒 Muse。
+        const agentFired = fired.filter((t) => (t.actions && t.actions.length) || (t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG));
         museFired = fired.filter((t) => !agentFired.includes(t));
         if (agentFired.length) {
           log(`agent 自动化命中 ${agentFired.length} 条:${agentFired.map((t) => t.id).join(', ')}`);
           // launcher 自带让位/防重入/模型守卫;只对**实际起跑**的规则烧 cooldown(与 Muse 老路同语义)。
           const launched = await launchAutomationTriggers(agentFired);
-          if (launched.length) await markTriggersFired(launched);
+          if (launched.length) await markTriggersFired(launched, undefined, trigCursors);
         }
       }
     } catch (e: any) {
@@ -360,10 +367,12 @@ async function tick(): Promise<void> {
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId})`);
     await startCycle(cfg, buildTriggerKickoff(museFired));
     // lastFiredAt 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
-    if (museFired.length) await markTriggersFired(museFired.map((t) => t.id));
+    if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
   } catch (e: any) {
     lastError = e?.message || String(e);
     log(`tick 失败:${lastError}`);
+  } finally {
+    ticking = false;
   }
 }
 
@@ -376,6 +385,8 @@ export function startMuseSupervisor(): void {
   log(`supervisor 启动(每 ${pollMin} 分钟巡检;15s 后首次)`);
   timer = setInterval(() => { void tick(); }, Math.max(1, pollMin) * 60_000);
   (timer as any).unref?.();
+  // run 终态 → 催一次评估:event_seen 盯 run.done 的规则不用等满一个巡检周期。
+  setRunTerminalListener(() => kickMuse());
   // 首次延迟 15s 即跑(开机不抢资源、但开启后很快就能起来,不必等满一个 poll 周期)。
   kickTimer = setTimeout(() => { void tick(); }, 15_000);
   (kickTimer as any).unref?.();

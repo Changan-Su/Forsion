@@ -1,0 +1,16 @@
+{
+  "id": "sample-bundle-space",
+  "name": { "zh": "示例捆绑 Space", "en": "Sample Bundle Space" },
+  "icon": "boxes",
+  "version": "1.0.0",
+  "layout": {
+    "main": [
+      { "type": "chat", "params": { "followActive": true, "reuseKey": "primary" } }
+    ],
+    "left": [
+      { "type": "workspace", "params": { "mode": "sessions" } }
+    ],
+    "right": []
+  },
+  "requires": { "views": ["chat", "workspace"] }
+}

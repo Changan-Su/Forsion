@@ -6,7 +6,10 @@
  *   PATCH    /agent/special/muse/todos/:id { status }  改 TODO 状态
  *   POST     /agent/special/muse/todos/inject { todoIds, sessionId }  注入选中 TODO 到会话并起 run
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
- *   GET      /agent/special/muse/triggers              盯任务规则列表(muse_watch 工具/构建器写入)
+ *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
+ *   POST     /agent/special/automation/triggers/:id/fire  试跑(同执行器,origin=manual,不动 lastFiredAt)
+ *   GET      /agent/special/automation/actions          tool_call 动作目录(白名单+automationSafe)
+ *   GET      /agent/special/automation/executions       动作链执行账本(?triggerId=&limit=)
  *   POST     /agent/special/muse/triggers              upsert 规则(带 id 改/无 id 建;桌面「自动化」构建器)
  *   DELETE   /agent/special/muse/triggers/:id          删除一条盯任务规则
  *   GET      /agent/special/automation/sessions        agent 自动化的常驻会话列表(?triggerId= 过滤)
@@ -26,8 +29,10 @@ import { createRun } from '../services/runStore.js';
 import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt } from '../services/specialAgentsConfig.js';
 import { museStatus, kickMuse } from '../services/muse.js';
-import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger } from '../services/museTriggers.js';
-import { listAutomationSessions } from '../services/automation.js';
+import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt } from '../services/museTriggers.js';
+import { listAutomationSessions, runActions, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
+import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
+import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, removeEntry } from '../services/agentSchedule.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
@@ -206,11 +211,12 @@ router.get('/agent/special/muse/status', authMiddleware, async (_req: AuthReques
   }
 });
 
-// 盯任务规则(muse_watch 工具写入;面板只读列表+删除)。
+// 盯任务规则(manage_automation 工具写入;面板列表+删除)。nextRunAt 服务端权威计算(时区/补发语义都在引擎)。
 router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    res.json({ triggers: await loadTriggers() });
+    const list = await loadTriggers();
+    res.json({ triggers: list.map((t) => ({ ...t, nextRunAt: nextRunAt(t) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
   }
@@ -227,15 +233,24 @@ router.delete('/agent/special/muse/triggers/:id', authMiddleware, async (req: Au
   }
 });
 
-// upsert 规则(桌面「自动化」构建器;校验与 muse_watch 工具共用)。HTTP 无 cwd → path 需绝对路径(~ 展开可用)。
+// upsert 规则(桌面「自动化」构建器;校验与 manage_automation 工具共用)。HTTP 无 cwd → path 需绝对路径(~ 展开可用)。
+// tool_call 步骤只在这条 UI 通道放行(allowToolCall:保存即人工预批);agent 经工具只能建 notify/agent_run。
 router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     const body = req.body || {};
-    const v = validateTriggerInput(body);
+    const v = validateTriggerInput(body, { allowToolCall: true });
     if (!v.ok) return res.status(400).json({ detail: v.error });
     if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
       return res.status(400).json({ detail: `agent "${v.value.agentSlug}" 不存在` });
+    }
+    for (const a of v.value.actions || []) {
+      if (a.type === 'agent_run' && !(await getAgent(a.agentSlug))) {
+        return res.status(400).json({ detail: `agent "${a.agentSlug}" 不存在` });
+      }
+      if (a.type === 'tool_call' && !isAutomationTool(a.tool)) {
+        return res.status(400).json({ detail: `工具 "${a.tool}" 不可作自动化动作(不在白名单且未声明 automationSafe)` });
+      }
     }
     const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : undefined;
     const r = await upsertTrigger(v.value, id);
@@ -244,6 +259,61 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     res.json({ trigger: r.trigger, created: r.created });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'save trigger failed' });
+  }
+});
+
+// 试跑:绕过 cond/cooldown 立即执行动作链(同一执行器,origin='manual',不动 lastFiredAt/enabled)。
+// 旧式 agentSlug 规则=直接起一次无人值守 run;Muse 唤醒类无独立动作,不支持。
+router.post('/agent/special/automation/triggers/:id/fire', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const id = String(req.params.id || '');
+    const t = (await loadTriggers()).find((x) => x.id === id);
+    if (!t) return res.status(404).json({ detail: 'trigger not found' });
+    if (t.actions?.length) {
+      const r = await runActions(t, 'manual');
+      return res.json({ ok: r.status === 'done', execId: r.execId, status: r.status, steps: r.steps });
+    }
+    if (t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) {
+      const ok = await launchUnattendedRun({ agentSlug: t.agentSlug, triggerKey: t.id, title: t.desc, message: automationMessage(t) });
+      return res.json({ ok, status: ok ? 'launched' : 'busy' });
+    }
+    return res.status(400).json({ detail: 'Muse 唤醒类规则没有独立动作,不支持试跑' });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'fire failed' });
+  }
+});
+
+// 动作目录:tool_call 步骤选择器的数据源(白名单内置 + automationSafe 插件工具;参数 JSON schema 供表单生成)。
+router.get('/agent/special/automation/actions', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const ctx: ToolContext = { userId: 'local', sessionId: 'catalog', appId: deps().profile.appId, execMode: 'host' };
+    const tools = [];
+    for (const [name, t] of resolveTools(deps().profile, ctx)) {
+      if (!isAutomationTool(name)) continue;
+      tools.push({
+        name,
+        description: String(t.definition?.function?.description || '').split('\n')[0].slice(0, 200),
+        parameters: t.definition?.function?.parameters || { type: 'object', properties: {} },
+        dangerous: name === 'run_bash' || declaredApproval(name) === 'command',
+      });
+    }
+    res.json({ tools });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'actions catalog failed' });
+  }
+});
+
+// 执行账本(动作链规则的「触发记录」;agent run 类记录仍走 automation/runs)。
+router.get('/agent/special/automation/executions', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const triggerId = typeof req.query.triggerId === 'string' && req.query.triggerId ? req.query.triggerId : undefined;
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    res.json({ executions: await listExecutions(triggerId, limit) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'executions failed' });
   }
 });
 

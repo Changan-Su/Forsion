@@ -9,6 +9,7 @@
  */
 import type { CloudBrainServices, BuildPayloadOpts, StreamOpts, ImageGenRequest, ImageGenResult, SpeechRequest, SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
+import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
 import { streamAnthropicOAuth } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
@@ -162,6 +163,20 @@ function synthesizeCosyVoiceWs(baseUrl: string, apiKey: string | undefined, apiM
 export function createMultiBrain(httpBrain: CloudBrainServices, registry: ProviderRegistry): CloudBrainServices {
   return {
     ...httpBrain,
+    search: {
+      // 搜索分发:本地配了 provider(config.json webSearch 段)→ 本地直搜(BYO-key);
+      // 否则走云 brain;云不可用(未登录/断网/云侧全败)→ 本地 DuckDuckGo 免费兜底。
+      runSearch: async (query: string, maxResults: number) => {
+        if (hasLocalSearchProvider(loadLocalWebSearchConfig())) return runLocalSearch(query, maxResults);
+        try {
+          return await httpBrain.search.runSearch(query, maxResults);
+        } catch (e) {
+          const out = await runLocalSearch(query, maxResults, { provider: 'duckduckgo' });
+          out.text = `[web_search note] cloud search unavailable (${e instanceof Error ? e.message : String(e)}); results served by local ${out.provider}.\n\n${out.text}`;
+          return out;
+        }
+      },
+    },
     models: {
       ...httpBrain.models,
       // 直连 provider 目录(模型选择器/Providers 页用;剥掉 apiKey,baseUrl 仅供 UI 展示)。
@@ -208,8 +223,14 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       buildProviderPayload: async (opts: BuildPayloadOpts) => {
         if ((opts.model as any)?.[DIRECT_MARK]) {
           const payload = buildOpenAiCompatPayload(opts);
-          // 官方 OpenAI 的 gpt-5.x:思考关补 reasoning_effort:'none',思考开改道 /v1/responses(见 tune 注释)。
-          tuneOpenAiDirectPayload(payload, opts.thinkingLevel, registry.resolve((opts.model as any).id)?.baseUrl);
+          // 思考档位按 modelCapabilities 能力表下发(每家形态不同:effort / budget_tokens /
+          // enable_thinking / thinking:{type} …;未知端点退到系统提示兜底)。见 tune 注释。
+          const resolved = registry.resolve((opts.model as any).id);
+          tuneOpenAiDirectPayload(payload, opts.thinkingLevel, {
+            baseUrl: resolved?.baseUrl,
+            provider: (opts.model as any).provider,
+            apiModelId: resolved?.apiModelId,
+          });
           return payload;
         }
         return httpBrain.llm.buildProviderPayload(opts);

@@ -1,7 +1,8 @@
 /**
- * 微信远程发送工具:在「微信远程」会话里把工作区的文件/图片发回给连接的微信用户。
- * 仅 hostExec profile 暴露(本地形态);执行时经会话的活跃绑定解析微信联系人,
- * 非微信会话(无绑定)优雅报错。底层走 iLink getuploadurl + CDN 密文上传 + sendmessage。
+ * 通道媒体发送工具:在通道会话(微信/Telegram/QQ)里把工作区的文件/图片发回给连接的用户。
+ * 07-25 由 wechat_send_* 改名 channel_send_*(通道通用化后旧名不再准确)。实现经 channelHub
+ * 按会话活跃绑定解析所属通道。仅 hostExec profile **且当前会话连接着通道**(ctx.channelSession,
+ * loop 每 run 预查)时暴露——未接通道的会话不背这两个定义(P0-3)。
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -31,24 +32,24 @@ async function sendMedia(ctx: ToolContext, rawPath: string, kind: 'image' | 'fil
   }
   const fileName = path.basename(abs);
   const r = await wechatRemote.sendMediaForSession(ctx.userId, ctx.sessionId, buf, { kind, fileName }, ctx.signal);
-  if (!r.ok) return `Error: 发送到微信失败:${r.error || 'unknown error'}`;
-  return `已把${kind === 'image' ? '图片' : '文件'}「${fileName}」(${(buf.length / 1024).toFixed(0)} KB)发送到当前微信会话连接的用户。`;
+  if (!r.ok) return `Error: 发送到通道失败:${r.error || 'unknown error'}`;
+  return `已把${kind === 'image' ? '图片' : '文件'}「${fileName}」(${(buf.length / 1024).toFixed(0)} KB)发送到当前通道会话连接的用户。`;
 }
 
-export const wechatToolsProvider: ToolProvider = {
-  id: 'builtin:wechat-tools',
+export const channelToolsProvider: ToolProvider = {
+  id: 'builtin:channel-tools',
   tools: () => [
     {
-      name: 'wechat_send_file',
+      name: 'channel_send_file',
       mode: 'host',
-      isEnabledFor: (profile) => profile.capabilities.hostExec,
-      capabilities: { sideEffect: 'network', parallel: false, concurrencyKey: 'wechat-send', defaultTimeoutMs: 130_000 },
+      isEnabledFor: (profile, ctx) => profile.capabilities.hostExec && !!ctx.channelSession,
+      capabilities: { sideEffect: 'network', parallel: false, concurrencyKey: 'channel-send', defaultTimeoutMs: 130_000 },
       definition: {
         type: 'function',
         function: {
-          name: 'wechat_send_file',
+          name: 'channel_send_file',
           description:
-            'Send a file from the workspace as a "file" to the WeChat user connected to the current WeChat session. Only works in a "WeChat Remote" session (WeChat connected via QR scan); calling it in a normal session returns "WeChat not connected". path is relative to the working directory or an absolute path; any type (document/archive/audio etc.), up to 50MB. To display an image inline, use wechat_send_image instead.',
+            'Send a file from the workspace as a "file" to the chat-channel user (WeChat/Telegram/QQ) connected to the current channel session. Only works in a channel session (created when a channel is connected); calling it in a normal session returns "channel not connected". path is relative to the working directory or an absolute path; any type (document/archive/audio etc.), up to 50MB. To display an image inline, use channel_send_image instead.',
           parameters: {
             type: 'object',
             properties: {
@@ -61,16 +62,16 @@ export const wechatToolsProvider: ToolProvider = {
       execute: (args, ctx) => sendMedia(ctx, String(args.path ?? ''), 'file'),
     },
     {
-      name: 'wechat_send_image',
+      name: 'channel_send_image',
       mode: 'host',
-      isEnabledFor: (profile) => profile.capabilities.hostExec,
-      capabilities: { sideEffect: 'network', parallel: false, concurrencyKey: 'wechat-send', defaultTimeoutMs: 130_000 },
+      isEnabledFor: (profile, ctx) => profile.capabilities.hostExec && !!ctx.channelSession,
+      capabilities: { sideEffect: 'network', parallel: false, concurrencyKey: 'channel-send', defaultTimeoutMs: 130_000 },
       definition: {
         type: 'function',
         function: {
-          name: 'wechat_send_image',
+          name: 'channel_send_image',
           description:
-            'Send an image from the workspace inline as an "image" bubble to the WeChat user connected to the current WeChat session. Only works in a "WeChat Remote" session. path is relative to the working directory or an absolute path; good for screenshots/charts/generated images (png/jpg/gif etc.), up to 50MB. For non-images or to keep the original filename, use wechat_send_file.',
+            'Send an image from the workspace inline as an "image" bubble to the chat-channel user (WeChat/Telegram/QQ) connected to the current channel session. Only works in a channel session. path is relative to the working directory or an absolute path; good for screenshots/charts/generated images (png/jpg/gif etc.), up to 50MB. For non-images or to keep the original filename, use channel_send_file.',
           parameters: {
             type: 'object',
             properties: {

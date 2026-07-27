@@ -89,4 +89,22 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(seen[1]['OpenAI-Beta']).toBe('responses=experimental');
     expect(seen[1]['chatgpt-account-id']).toBe('acct_1');
   });
+
+  it('response.incomplete(输出截断)归一化为 finishReason=length——半截函数参数不得伪装成 tool_calls 被执行', async () => {
+    const sse = [
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc1","call_id":"call_1","name":"write_file","arguments":""}}',
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc1","delta":"{\\"path\\":\\"a.txt\\",\\"content\\":\\"半截"}',
+      'data: {"type":"response.incomplete","response":{"usage":{"input_tokens":5,"output_tokens":99},"incomplete_details":{"reason":"max_output_tokens"}}}',
+      '',
+    ].join('\n');
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({
+        ok: true,
+        body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }),
+      }),
+    );
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://api.openai.com/v1', payload: { model: 'gpt-5.6-luna', messages: [] } } as any);
+    expect(res.finishReason).toBe('length');
+    expect(res.toolCalls.length).toBe(1); // 调用保留(供 loop 置错回喂),但绝不能报 tool_calls
+  });
 });

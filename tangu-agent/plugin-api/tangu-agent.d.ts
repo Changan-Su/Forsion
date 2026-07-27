@@ -45,6 +45,10 @@ export interface ToolCapabilities {
   /** 声明本工具的审批档:'command' = 与 run_bash 同档(readonly/auto-edit 下需用户批准)。
    *  缺省=只读语义,不触发审批。核心据此把插件工具并入审批,无需硬编码工具名。 */
   approval?: 'command';
+  /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM、参数在规则里冻结、full-auto 直执行)。
+   *  缺省 false——不声明就不进桌面自动化构建器的动作目录。只给参数可完整预填、
+   *  无会话交互依赖、副作用可控的工具声明。 */
+  automationSafe?: boolean;
 }
 
 export interface ToolDef {
@@ -127,6 +131,8 @@ export interface TanguPluginContext {
   sdk: TanguSdk;
   log(msg: string): void;
   paths: { pluginDir: string };
+  /** 发用户活动事件(宿主强制加 `plugin:<id>:` 前缀)——自动化 event_seen 可盯;云端 worker no-op。 */
+  activity: { append(event: string, detail?: Record<string, unknown>): void };
 }
 
 export interface TanguPlugin {

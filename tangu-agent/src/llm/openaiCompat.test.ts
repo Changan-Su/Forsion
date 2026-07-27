@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { tuneOpenAiDirectPayload, PROTOCOL_MARK } from './openaiCompat.js';
 
-// 官方 api.openai.com 直连 gpt-5.x 的实测契约(2026-07,gpt-5.6-luna):
-//   chat/completions + tools 必须显式 reasoning_effort:'none';思考开只能走 /v1/responses;
-//   temperature≠1 与 max_tokens 均被拒。见 tuneOpenAiDirectPayload 头注释的探测矩阵。
-describe('tuneOpenAiDirectPayload(官方 OpenAI gpt-5.x 适配)', () => {
+// 直连面的档位下发契约。「哪个模型该发什么」的矩阵在 modelCapabilities.test.ts;
+// 这里只守 tune 这一层的职责:查表 → 写 payload → 需要时打改道标记。
+describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
   const base = () => ({ model: 'gpt-5.6-luna', temperature: 0.7, messages: [], tools: [{}] }) as any;
   const OFFICIAL = 'https://api.openai.com/v1';
 
@@ -30,23 +29,59 @@ describe('tuneOpenAiDirectPayload(官方 OpenAI gpt-5.x 适配)', () => {
     expect(p.max_completion_tokens).toBe(1200);
   });
 
-  it('非官方域名(网关/Ollama)零打扰', () => {
-    const p = base();
-    tuneOpenAiDirectPayload(p, 'off', 'https://api.siliconflow.cn/v1');
+  it('官方但非 gpt-5 族(gpt-4o)不发 effort(实测会被拒),退到系统提示兜底', () => {
+    const p = { ...base(), model: 'gpt-4o-mini', messages: [{ role: 'system', content: 'BASE' }] };
+    tuneOpenAiDirectPayload(p, 'high', OFFICIAL);
     expect(p.reasoning_effort).toBeUndefined();
+    expect(p.messages[0].content).toContain('BASE');
+    expect(p.messages[0].content.length).toBeGreaterThan('BASE'.length);
+  });
+
+  it('未知网关:不发任何厂商私有字段,只动系统提示', () => {
+    const p = { ...base(), model: 'my-model', messages: [{ role: 'system', content: 'BASE' }] };
+    tuneOpenAiDirectPayload(p, 'high', 'https://llm.mycorp.internal/v1');
+    expect(p.reasoning_effort).toBeUndefined();
+    expect(p.thinking).toBeUndefined();
+    expect(p.enable_thinking).toBeUndefined();
     expect(p.temperature).toBe(0.7);
   });
 
-  it('官方但非 gpt-5 族(gpt-4o)零打扰(实测发 effort 会被拒)', () => {
-    const p = { ...base(), model: 'gpt-4o-mini' };
-    tuneOpenAiDirectPayload(p, 'off', OFFICIAL);
-    expect(p.reasoning_effort).toBeUndefined();
+  it('未知网关思考关:一个字都不改(与改造前逐字节一致)', () => {
+    const p = { ...base(), model: 'my-model', messages: [{ role: 'system', content: 'BASE' }] };
+    tuneOpenAiDirectPayload(p, 'off', 'https://llm.mycorp.internal/v1');
+    expect(p.messages[0].content).toBe('BASE');
+    expect(p.temperature).toBe(0.7);
   });
 
-  it('已带协议标记(codex 订阅)勿动', () => {
-    const p = { ...base(), [PROTOCOL_MARK]: 'openai-responses' };
-    tuneOpenAiDirectPayload(p, 'off', 'https://chatgpt.com/backend-api/codex');
-    expect(p.reasoning_effort).toBeUndefined();
-    expect(p.temperature).toBe(0.7);
+  it('没有 system 消息时 prefix 兜底会补一条', () => {
+    const p = { ...base(), model: 'my-model', messages: [{ role: 'user', content: 'hi' }] };
+    tuneOpenAiDirectPayload(p, 'low', 'https://llm.mycorp.internal/v1');
+    expect(p.messages[0].role).toBe('system');
+    expect(p.messages[1].role).toBe('user');
+  });
+
+  it('Codex 订阅(已带协议标记)现在也能拿到档位', () => {
+    const p = { ...base(), model: 'gpt-5.6-codex', [PROTOCOL_MARK]: 'openai-responses' };
+    tuneOpenAiDirectPayload(p, 'high', { baseUrl: 'https://chatgpt.com/backend-api/codex' });
+    expect(p.reasoning_effort).toBe('high');
+    expect(p[PROTOCOL_MARK]).toBe('openai-responses');
+  });
+
+  it('Claude 订阅拿到 thinking(改造前此路径完全无思考字段)', () => {
+    const p = { ...base(), model: 'claude-sonnet-5', [PROTOCOL_MARK]: 'anthropic-messages' };
+    tuneOpenAiDirectPayload(p, 'high', { baseUrl: 'https://api.anthropic.com' });
+    expect(p.thinking).toEqual({ type: 'enabled', budget_tokens: 16384 });
+  });
+
+  it('阿里 DashScope 的 Qwen3 拿到 enable_thinking(改造前是静默无效)', () => {
+    const p = { ...base(), model: 'qwen3-max' };
+    tuneOpenAiDirectPayload(p, 'medium', { baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' });
+    expect(p.enable_thinking).toBe(true);
+    expect(p.thinking_budget).toBe(8192);
+  });
+
+  it('返回夹紧后的实际档位', () => {
+    const p = { ...base(), model: 'o3-mini' };
+    expect(tuneOpenAiDirectPayload(p, 'off', OFFICIAL)).toBe('minimal'); // o 系关不掉思考
   });
 });

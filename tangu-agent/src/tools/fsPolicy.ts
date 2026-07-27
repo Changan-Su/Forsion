@@ -12,7 +12,7 @@ import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 
-/** 本次 run 的可写根:当前工作目录 + 当前 agent 的专属文件夹。 */
+/** 本次 run 的可写根:当前工作目录 + 当前 agent 的专属文件夹 + 用户显式添加的额外工作文件夹。 */
 export function writableRoots(ctx: ToolContext): string[] {
   const roots = [path.resolve(ctx.cwd || process.cwd())];
   // agent 的 ~/.tangu/agents/<slug>/ 是它自己的私有目录(Library/ 在此):系统提示承诺它能主动
@@ -20,6 +20,11 @@ export function writableRoots(ctx: ToolContext): string[] {
   try {
     roots.push(path.join(agentsDir(), currentAgentSlug() || DEFAULT_AGENT_SLUG));
   } catch { /* ignore */ }
+  // 用户在「工作范围」里显式加的目录:等同工作区,不再逐次弹越界写审批。
+  // 仍受 isProtected 约束(.git 内部、~/.ssh 等一律硬拒),加进来也提不了权。
+  for (const r of ctx.extraRoots || []) {
+    if (typeof r === 'string' && r.trim()) roots.push(path.resolve(r.trim()));
+  }
   return roots;
 }
 

@@ -9,6 +9,8 @@
 import { Router } from 'express';
 import { authMiddleware } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
+import { loadLocalWebSearchConfig, redactedLocalConfig, testLocalSearch } from '../adapters/standalone/localSearch.js';
+import { saveSection } from '../core/config.js';
 
 const router = Router();
 
@@ -120,6 +122,66 @@ router.post('/agent/providers/fetch-models', authMiddleware, async (req, res) =>
     res.json({ models: deduped });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'fetch models failed' });
+  }
+});
+
+// ── 本地联网搜索(BYO-key)设置:config.json webSearch 段 ─────────────────────
+//   GET  /agent/websearch       → redacted 配置(hasKey 布尔,不回明文)
+//   PUT  /agent/websearch       → 保存(key:'__keep__' 不变 / '' 清除 / 其余覆写)
+//   POST /agent/websearch/test  → 只测指定 provider,不落盘
+// 写的是本机 config.json → 云端(hostExec=false)一律 404,与 special 同门。
+
+function ensureLocal(res: any): boolean {
+  if (!deps().profile.capabilities.hostExec) {
+    res.status(404).json({ detail: '本地搜索设置仅在本地(桌面/TUI)可用' });
+    return false;
+  }
+  return true;
+}
+
+router.get('/agent/websearch', authMiddleware, async (_req, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    res.json(redactedLocalConfig());
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'read websearch config failed' });
+  }
+});
+
+router.put('/agent/websearch', authMiddleware, async (req, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const cur = loadLocalWebSearchConfig();
+    const b = req.body ?? {};
+    const VALID = ['auto', 'bocha', 'tavily', 'zhipu', 'duckduckgo'];
+    if (b.provider !== undefined && !VALID.includes(String(b.provider))) {
+      return res.status(400).json({ detail: `provider must be one of: ${VALID.join(', ')}` });
+    }
+    const mergeKey = (next: any, prev: string | null): string | null => {
+      if (next === undefined || next === '__keep__') return prev;
+      if (next === null || next === '') return null;
+      return String(next);
+    };
+    saveSection('webSearch', {
+      provider: b.provider !== undefined ? String(b.provider) : cur.provider,
+      bochaApiKey: mergeKey(b.bochaApiKey, cur.bochaApiKey),
+      tavilyApiKey: mergeKey(b.tavilyApiKey, cur.tavilyApiKey),
+      zhipuApiKey: mergeKey(b.zhipuApiKey, cur.zhipuApiKey),
+    });
+    res.json({ success: true, config: redactedLocalConfig() });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'save websearch config failed' });
+  }
+});
+
+router.post('/agent/websearch/test', authMiddleware, async (req, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const provider = String(req.body?.provider ?? 'auto');
+    // 始终 200,调用方看 result.ok(与 server 端 test 同约定)。
+    res.json(await testLocalSearch({ provider: provider as any, apiKey: req.body?.apiKey }));
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'websearch test failed' });
   }
 });
 

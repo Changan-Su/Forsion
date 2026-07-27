@@ -23,10 +23,13 @@ export interface ToolContext {
   execMode?: 'sandbox' | 'host';
   /** host 模式的工作目录（文件/命令相对此解析）。 */
   cwd?: string;
+  /** host 模式的**额外工作文件夹**(绝对路径):并入可写根,免逐次「越界写」审批。
+   *  相对路径**仍只**相对 cwd 解析 —— 这些目录一律用绝对路径引用,避免多根相对解析的歧义。 */
+  extraRoots?: string[];
   /** 云端 Project 工作区名(sandbox 模式):有值时文件工具落 <appId>/Cloud-Workspaces/Projects/<name>/(跨会话共享),缺省落旧 per-session 工作区。 */
   wsProject?: string | null;
   /** host 模式的审批档（loop 据此决定哪些破坏性工具执行前需用户批准）。 */
-  approvalMode?: 'readonly' | 'auto-edit' | 'full-auto';
+  approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
   /** 本次 run 的 AppProfile(接缝①):工具门禁 isEnabledFor 据此过滤。缺省回退 deps().profile。 */
   profile?: AppProfile;
   /** delegate 子代理深度(0/缺省=主 loop,1=子代理内)。深度 ≥1 时 delegate 工具不可见,防递归裂变。 */
@@ -41,10 +44,20 @@ export interface ToolContext {
   muse?: boolean;
   /** 用户活动日志读取授权(config.toml activity_access;Muse 之外的 agent 用 read_activity 需显式开)。 */
   activityAccess?: boolean;
+  /** 无人值守自动化的来源(triggerKey):活动行加 o= 标记,event_seen 评估据此跳过本规则自己产生的事件(防自激)。 */
+  automationOrigin?: string;
   /** 内置工具黑白名单(config.toml tools_mode/tools_list):'deny'=名单内禁用,'allow'=仅名单内可用;
    *  缺省=不限制。只约束无门禁的内置工具,见 resolveTools。 */
   toolsMode?: 'allow' | 'deny';
   toolsList?: string[];
+  /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。 */
+  channelSession?: boolean;
+  /** 已解锁的 deferred 工具名(P0-2):**严格 run-local**,每 run 从空集起步、本 run 内经 load_tools 增量;
+   *  不从历史恢复(hydrate 不带 tool_calls)。 */
+  unlockedTools?: ReadonlySet<string>;
+  /** load_tools 的解锁回调(loop 提供):记入 run 级集合并触发下一迭代 defs 重算。
+   *  缺省(子代理/群聊等)= 不支持解锁 → load_tools 不暴露,deferred 保持隐藏。 */
+  unlockTools?: (names: string[]) => void;
   /** 本次 run 的模型 id(delegate 子代理沿用父模型)。 */
   modelId?: string;
   /** 默认生图模型 id(generate_image 缺省据此选模型;来自 agentConfig.imageModelId)。 */
@@ -62,6 +75,23 @@ export interface ToolContext {
    * 缺省(未装配此闸,如 TUI/纯云)时工具应优雅降级,不要假定一定可用。
    */
   displayFile?: (item: DisplayFileItem) => void;
+  /**
+   * 「Agent Desk」演出闸(desk_present 用):把要给用户看的视图清单交给 loop,loop 即时 publish
+   * 'desk_present' 事件,桌面端在聊天右侧的实验性 Agent Desk 面板里并排展示(不落库、不回灌上下文)。
+   * 缺省(TUI/纯云等未装配此闸的运行环境)时工具应优雅降级,不要假定一定可用。
+   */
+  presentDesk?: (spec: DeskPresentSpec) => void;
+}
+
+/** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);
+ *  size=展示形态(card=收起成预览卡片,half/wide=展开侧板;宽度被用户拖过后不再被 agent 覆盖)。 */
+export interface DeskPresentSpec {
+  views: Array<
+    | { type: 'file'; path: string; name?: string }
+    | { type: 'view'; view: string; params?: Record<string, unknown>; name?: string }
+  >;
+  size?: 'card' | 'half' | 'wide';
+  note?: string;
 }
 
 /** 展示给用户的文件:path=工作区文件(前端懒加载字节);dataUrl=内联字节(无工作区路径,如表情包 blob)。二选一。 */
@@ -95,6 +125,9 @@ export interface ToolCapabilities {
   /** 审批档：'command' = 与 run_bash 同档(readonly/auto-edit 下需批准）。缺省=只读语义、不触发审批。
    *  approvals.toolNeedsApproval 经 declaredApproval(name) 读此，插件工具无需核心硬编码工具名。 */
   approval?: 'command';
+  /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
+   *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
+  automationSafe?: boolean;
 }
 
 export interface ToolImpl {

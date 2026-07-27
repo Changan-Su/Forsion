@@ -31,6 +31,8 @@ export const calculatorProvider: ToolProvider = {
   tools: () => [
     {
       name: 'calculator',
+      deferred: true, // P0-2:host 有 bash、docker 沙箱有 run_python,常驻不值一席 → 按需装载
+      deferHint: 'Precise arithmetic evaluation of a math expression.',
       definition: {
         type: 'function',
         function: {

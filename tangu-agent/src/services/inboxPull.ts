@@ -2,7 +2,7 @@
  * 收件箱广播拉取调度器:定期从 Forsion 云端拉服务端广播,落进本地 inbox_messages(sender='forsion')。
  *
  * 只在本地形态(hostExec)且装配了 brain.inbox seam(httpBrain,即配置了 TANGU_CLOUD_URL+TOKEN)时启动;
- * 云端 worker / 微服务进程 no-op。到期定时消息的「投递」不在这里——读端 SQL 过滤 deliver_at 即投递。
+ * 云端 worker / 微服务进程 no-op。
  *
  * 游标 = 本地 MAX(created_at) WHERE origin_broadcast_id IS NOT NULL(零额外状态;**含软删行**——
  * 用户删了广播不等于没拉过,软删行继续锚住游标与去重,防止下轮把它复活)。created_at 存服务端
@@ -11,6 +11,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
+import { forwardInboxToChannels } from '../channels/forward.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -34,6 +35,9 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
   const s = seam();
   if (!s) return { added: 0 };
   let added = 0;
+  // 整轮性质在首页判定一次:首拉基准(游标为空)的**全部分页**都不转发通道——
+  // 游标在页间推进,若逐页判会把第 2 页起的历史广播误判成增量而转发轰炸。
+  let baselinePull: boolean | null = null;
   // 翻页护栏:单轮最多 5×200 条;积压更多留给下个 tick,防病态同游标死循环。
   for (let page = 0; page < 5; page++) {
     const curRows = await query<any[]>(
@@ -43,6 +47,7 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
     const rawCursor = curRows?.[0]?.cursor;
     // PG host 回 Date、SQLite 回字符串;服务端契约要「原文」,Date 已失真但仅在云端形态出现(此处恒本地 SQLite)。
     const since = rawCursor == null ? undefined : String(rawCursor);
+    if (baselinePull === null) baselinePull = since === undefined;
     const rows = await s.listBroadcasts(since);
     if (!rows.length) break;
     for (const b of rows) {
@@ -59,6 +64,10 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
         [uuidv4(), userId, String(b.title || '').slice(0, 500), String(b.body || ''), b.id, String(b.created_at)],
       );
       added++;
+      // 通道转发:首拉基准(整轮,含后续分页)不转发,防历史广播轰炸;之后的增量轮才推。
+      if (!baselinePull) {
+        forwardInboxToChannels({ userId, title: String(b.title || ''), body: String(b.body || ''), senderKind: 'server', senderId: 'forsion' });
+      }
     }
     if (rows.length < 200) break; // 未满页=已到头
   }

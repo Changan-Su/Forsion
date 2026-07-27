@@ -1,0 +1,18 @@
+{
+  "name": "sample-bundle-tool",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "捆绑包模板的内嵌引擎插件:演示 bundle 里的工具贡献。对核心仅 import type,运行时走 ctx.sdk。",
+  "license": "MIT",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3"
+  }
+}

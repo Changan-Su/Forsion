@@ -1,52 +1,34 @@
 /** Slash 命令元数据（用于 /help 与 Tab 补全）+ 剪贴板 / 文件补全小工具。 */
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { commandsFor, canonicalCommandName } from '../core/commandCatalog.js';
+import { listCustomCommands } from '../services/customCommands.js';
 
 export interface CommandSpec {
   name: string;
   desc: string;
 }
 
-export const COMMANDS: CommandSpec[] = [
-  { name: '/help', desc: '显示帮助与命令列表' },
-  { name: '/new', desc: '开始新会话' },
-  { name: '/clear', desc: '清屏（保留会话历史）' },
-  { name: '/model', desc: '切换模型：/model <id>' },
-  { name: '/sessions', desc: '列出最近会话' },
-  { name: '/resume', desc: '恢复会话并续聊：/resume <id|序号>' },
-  { name: '/branch', desc: '从某条回复后分支新会话（继承历史）：/branch [序号]，缺省最近' },
-  { name: '/approval', desc: '切换审批档：/approval readonly|auto-edit|full-auto' },
-  { name: '/think', desc: '思考强度：/think off|low|medium|high（思考内容默认折叠）' },
-  { name: '/loop', desc: '最大循环轮数：/loop <1-200>（默认 90；耗尽会提示）' },
-  { name: '/plan', desc: '切换计划模式：只读调研 → exit_plan_mode 提交计划求批准' },
-  { name: '/cwd', desc: '查看或切换工作目录：/cwd [path]' },
-  { name: '/tools', desc: '列出当前模式可用工具' },
-  { name: '/skills', desc: '列出可用技能（含本地/.claude;✓=本会话启用）' },
-  { name: '/skill', desc: '启用/停用技能：/skill <id>' },
-  { name: '/agents', desc: '列出本地 Normal Agent（自定义人格）' },
-  { name: '/agent', desc: '启用 Agent：/agent <slug>；管理：/agent new|edit|rm <slug>（/agent off 取消）' },
-  { name: '/groupchat', desc: '群聊模式：/groupchat <slug1> <slug2> …（/groupchat off 退出）' },
-  { name: '/historian', desc: 'Historian 状态/活动；/historian on|off 开关' },
-  { name: '/muse', desc: 'Muse 状态/TODO；/muse on|off 开关' },
-  { name: '/memory', desc: '查看/编辑长期记忆：/memory [edit]' },
-  { name: '/log', desc: '查看每日日志：/log [YYYY-MM-DD]' },
-  { name: '/mcp', desc: '列出 MCP server 状态' },
-  { name: '/plugins', desc: '列出已发现插件' },
-  { name: '/edit', desc: '编辑最近一条消息并重跑（$EDITOR）' },
-  { name: '/delete', desc: '删除最近一轮对话' },
-  { name: '/cost', desc: '本会话 token 用量与费用' },
-  { name: '/copy', desc: '复制上一条回复到剪贴板' },
-  { name: '/retry', desc: '重跑上一条用户消息' },
-  { name: '/config', desc: '查看当前设置' },
-  { name: '/login', desc: '重新登录 Forsion（提示重启生效）' },
-  { name: '/compact', desc: '压缩上下文：总结后精简续接（同会话）' },
-  { name: '/exit', desc: '退出 Tangu' },
-];
+/**
+ * TUI 露出的命令。名字/描述来自 core/commandCatalog(与 Desktop 同一张表),
+ * 这里只按 surface 过滤 + 拼上参数提示。加命令改 catalog,别改这里。
+ */
+export const COMMANDS: CommandSpec[] = commandsFor('tui').map((c) => ({
+  name: c.name,
+  desc: c.arg ? `${c.zh}：${c.name} ${c.arg}` : c.zh,
+}));
 
-/** 前缀匹配命令（token 形如 "/mod"）。 */
+/**
+ * 前缀匹配命令（token 形如 "/mod"）。内置命令在前、用户自定义命令（~/.tangu/commands/*.md）在后。
+ * 别名（/effort → /think）也参与匹配，命中后按正名展示。
+ */
 export function matchCommands(token: string): CommandSpec[] {
   const t = token.toLowerCase();
-  return COMMANDS.filter((c) => c.name.startsWith(t));
+  const builtin = COMMANDS.filter((c) => c.name.startsWith(t) || canonicalCommandName(t) === c.name);
+  const custom = listCustomCommands()
+    .filter((c) => `/${c.name}`.startsWith(t))
+    .map((c) => ({ name: `/${c.name}`, desc: c.argHint ? `${c.description}：/${c.name} ${c.argHint}` : c.description }));
+  return [...builtin, ...custom];
 }
 
 /**

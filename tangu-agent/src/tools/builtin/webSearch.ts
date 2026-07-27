@@ -29,10 +29,18 @@ export const webSearchProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        const r: any = await runSearch(String(args.query ?? ''), Number(args.max_results) || 5);
-        // runSearch 返回 { provider, text, results }：落可读 text（而非盲 JSON dump）；超限则落盘+预览。
-        const text = typeof r === 'string' ? r : (r?.text || JSON.stringify(r));
-        return formatToolOutput(ctx, 'web_search', String(text));
+        try {
+          const r: any = await runSearch(String(args.query ?? ''), Number(args.max_results) || 5);
+          // runSearch 返回 { provider, text, results }：落可读 text（而非盲 JSON dump）；超限则落盘+预览。
+          const text = typeof r === 'string' ? r : (r?.text || JSON.stringify(r));
+          return formatToolOutput(ctx, 'web_search', String(text));
+        } catch (e) {
+          // 错误消息即提示词:降级链全败(或云不可达)时明示模型可用的退路,别反复重试同一工具。
+          const msg = e instanceof Error ? e.message : String(e);
+          throw new Error(
+            `${msg}\nWeb search is currently unavailable. Do not retry web_search immediately — fall back to browser_search (if available) to search via the local browser, or fetch a known site directly with web_fetch.`,
+          );
+        }
       },
     },
   ],

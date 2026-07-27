@@ -13,6 +13,13 @@ export interface ToolDef extends ToolImpl {
   name: string;
   /** 运行时门禁:缺省=总可用。resolve 时统一过滤(在 mode/toolLoadout 过滤之后)。 */
   isEnabledFor?(profile: AppProfile, ctx: ToolContext): boolean;
+  /** 按需装载(P0-2,借 pi deferred-tools):true=定义默认不进 defs,系统提示只留目录一行;
+   *  经 load_tools 解锁(或历史里用过/系统 run)后追加在 defs 末尾。执行侧不受影响。 */
+  deferred?: boolean;
+  /** 同组连坐解锁(如 start/wait_discussion):解锁组内任一即整组解锁。 */
+  deferGroup?: string;
+  /** 目录行文案(英文一句话,带典型触发意图;缺省取 description 首行截断)。 */
+  deferHint?: string;
 }
 
 /** 一组工具的提供者:内置工具按域拆若干 provider,app 自带工具经 AppProfile.toolLoadout.providers 注入。 */
@@ -37,12 +44,15 @@ const PLAN_MODE_TOOLS = new Set([
   'read_log', 'use_skill', 'todo_write', 'todo_read',
   'list_processes', 'read_process_output',
   'delegate', 'ask_user', 'exit_plan_mode',
+  'load_tools', // 纯解锁无副作用;planMode 下 deferred 白名单工具(calculator 等)须经它可达
+
   'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)
   'read_activity', // 只读用户活动日志;Muse 周期跑 planMode 故必须白名单(可见性另由 ctx.muse/activityAccess 收口)
 ]);
 
-/** 名单不可及的基建工具:砍掉 exit_plan_mode 会让 planMode 死锁,ask_user 断交互。 */
-const LOADOUT_EXEMPT = new Set(['exit_plan_mode', 'ask_user']);
+/** 名单不可及的基建工具:砍掉 exit_plan_mode 会让 planMode 死锁,ask_user 断交互,
+ *  load_tools 会让 deferred 工具永久不可达。 */
+const LOADOUT_EXEMPT = new Set(['exit_plan_mode', 'ask_user', 'load_tools']);
 
 /** 注册一个 provider。同 id 幂等覆盖(保持原位置,热加载安全)。 */
 export function registerToolProvider(p: ToolProvider): void {
@@ -70,7 +80,14 @@ export function listToolProviders(): ToolProvider[] {
  */
 export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string, ToolDef> {
   const host = ctx.execMode === 'host';
-  const builtins = profile.toolLoadout.builtins;
+  let builtins = profile.toolLoadout.builtins;
+  // 部署级白名单(TANGU_TOOL_BUILTINS 等)含 deferred 工具却漏列 load_tools → 自动补上:
+  // 否则目录还在、唯一解锁入口没了,deferred 工具永久不可达(还可能被同名 custom 工具顶替)。
+  if (builtins !== 'all' && !builtins.includes('load_tools')) {
+    const wl = new Set(builtins);
+    const hasDeferred = providers.some((p) => p.tools().some((t) => t.deferred && wl.has(t.name)));
+    if (hasDeferred) builtins = [...builtins, 'load_tools'];
+  }
   const out = new Map<string, ToolDef>();
   const add = (t: ToolDef, isBuiltin: boolean): void => {
     const m = t.mode || 'both';
@@ -121,6 +138,17 @@ export function declaredApproval(name: string): 'command' | undefined {
   for (const p of providers) {
     for (const t of p.tools()) {
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
+    }
+  }
+  return found;
+}
+
+/** 工具自声明的自动化可用性(capabilities.automationSafe)。与 declaredApproval 同款遍历语义。 */
+export function declaredAutomationSafe(name: string): boolean {
+  let found = false;
+  for (const p of providers) {
+    for (const t of p.tools()) {
+      if (t.name === name && t.capabilities?.automationSafe !== undefined) found = !!t.capabilities.automationSafe;
     }
   }
   return found;

@@ -11,8 +11,9 @@
  * core 的 agentLoop 已把 agent 基底系统提示拼进 workingMessages[0],故直连面不会丢系统提示。
  */
 import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
-import { LlmError, type AgentModel, type ToolCall } from '../core/types.js';
+import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '../core/types.js';
 import { parseTextToolCalls } from './textToolCalls.js';
+import { applyThinking, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 
 /** 直连 payload 的私有标记:multiBrain 据此把 stream 分发到本实现而非 httpBrain。 */
@@ -84,31 +85,52 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
 }
 
 /**
- * 官方 api.openai.com 直连的 reasoning 档位适配(2026-07 实测矩阵,gpt-5.6-luna):
- *   - chat/completions + tools + 缺省档位 → 400「Function tools with reasoning_effort are not
- *     supported … use /v1/responses or set reasoning_effort to 'none'」(gpt-5.x 默认档位≠none)
- *   - 思考关 → 补 `reasoning_effort:'none'` 后 chat/completions 照常可用
- *   - 思考开 → 只能走 /v1/responses(打 PROTOCOL_MARK 分发到 openaiResponses 客户端,effort 随传)
- *   - gpt-4o 等旧模型发 reasoning_effort 会被拒「Unrecognized request argument」→ 必须按模型族门控
- *   - temperature≠1 被拒(错误文案离谱:「insufficient permissions」);max_tokens 被拒(要
- *     max_completion_tokens)—— 两者一并适配
- * 仅官方域名 + ^gpt-5 生效:其他 OpenAI 兼容网关(Ollama/硅基流动/自建)多不认这些字段/端点,零打扰。
- * ponytail: o 系(o1/o3…)维持原路(chat/completions 缺省档位可带 tools,且不认 'none');出问题再扩族。
+ * 把系统提示追加进 OpenAI 形态 payload(prefix 兜底档用)。
+ * agentLoop 已把 agent 基底提示拼进 messages[0];没有 system 消息就补一条。
  */
-export function tuneOpenAiDirectPayload(payload: any, thinkingLevel: string | undefined, baseUrl: string | undefined): void {
-  if (!baseUrl || payload[PROTOCOL_MARK]) return; // 订阅登录(codex 等)已显式定协议,勿动
-  let host = '';
-  try { host = new URL(baseUrl).hostname; } catch { return; }
-  if (!/(^|\.)api\.openai\.com$/i.test(host)) return;
-  if (!/^gpt-5/i.test(String(payload.model || ''))) return;
-  const effort = thinkingLevel === 'low' || thinkingLevel === 'medium' || thinkingLevel === 'high' ? thinkingLevel : 'none';
-  payload.reasoning_effort = effort;
-  delete payload.temperature;
-  if (payload.max_tokens) {
-    payload.max_completion_tokens = payload.max_tokens;
-    delete payload.max_tokens;
+function appendSystemToPayload(payload: any, text: string): void {
+  if (!text) return;
+  const msgs: any[] = Array.isArray(payload.messages) ? payload.messages : (payload.messages = []);
+  const sys = msgs.find((m) => m?.role === 'system');
+  if (!sys) {
+    msgs.unshift({ role: 'system', content: text });
+    return;
   }
-  if (effort !== 'none') payload[PROTOCOL_MARK] = 'openai-responses';
+  if (typeof sys.content === 'string') sys.content = `${sys.content}\n\n${text}`;
+  else if (Array.isArray(sys.content)) sys.content.push({ type: 'text', text });
+  else sys.content = text;
+}
+
+/**
+ * 直连 payload 的 provider 适配 —— 档位/字段名/温度这些差异**全部**查 `modelCapabilities` 能力表。
+ *
+ * 改造前这里只对官方 api.openai.com + `^gpt-5` 特判,其余 provider 的 thinkingLevel 被静默吞掉。
+ * 现在由能力表按 host/协议/模型族路由到各家的线上形态(见该文件头注释),本函数只剩两件事:
+ *   1. 调 applyThinking 写字段
+ *   2. 思考开且该端点要求改道时,打 PROTOCOL_MARK 分发到 /v1/responses
+ *
+ * 保留的实测契约(2026-07,gpt-5.6-luna):chat/completions + tools + 缺省档位会 400
+ * 「…use /v1/responses or set reasoning_effort to 'none'」→ 关档补 'none' 留在 chat/completions,
+ * 开档改道 responses。temperature≠1 与 max_tokens 同样被拒,由能力表的 quirk 位处理。
+ *
+ * @returns 夹紧后实际生效的档位(可能被模型能力降档);仅供日志/UI 回显。
+ */
+export function tuneOpenAiDirectPayload(
+  payload: any,
+  thinkingLevel: string | undefined,
+  target: { baseUrl?: string; provider?: string; apiModelId?: string } | string | undefined,
+): ThinkingLevel {
+  const t = typeof target === 'string' ? { baseUrl: target } : (target || {});
+  const cap = resolveModelCapability({
+    baseUrl: t.baseUrl,
+    provider: t.provider,
+    modelId: t.apiModelId || String(payload.model || ''),
+    protocol: typeof payload[PROTOCOL_MARK] === 'string' ? payload[PROTOCOL_MARK] : undefined,
+  });
+  const level = normalizeThinkingLevel(thinkingLevel, 'off');
+  const { effective, viaResponses } = applyThinking(payload, level, cap, (text) => appendSystemToPayload(payload, text));
+  if (viaResponses) payload[PROTOCOL_MARK] = 'openai-responses';
+  return effective;
 }
 
 /** 从 providerRegistry 命中结果构造的 AgentModel 带此标记,buildProviderPayload 据此走直连。 */

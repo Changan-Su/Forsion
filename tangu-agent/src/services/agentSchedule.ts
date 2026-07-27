@@ -187,7 +187,7 @@ export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: str
   if (auto) {
     if (!date) return { ok: false, error: 'auto entries need a date' };
     if (!prompt) return { ok: false, error: 'auto entries need a prompt (what to do when due)' };
-    if (opts.slug === 'muse') return { ok: false, error: 'muse cannot have auto entries (planning-only); use muse_watch daily_at instead' };
+    if (opts.slug === 'muse') return { ok: false, error: 'muse cannot have auto entries (planning-only); use manage_automation daily_at instead' };
   }
   return {
     ok: true,

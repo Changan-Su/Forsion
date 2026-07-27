@@ -3,6 +3,7 @@
  * 而消息编辑/删除本就是 standalone/TUI 的宿主功能）。抽成模块以便真 sqlite 单测。
  */
 import { query } from '../core/db.js';
+import type { TranscriptItem } from './types.js';
 
 /** 最近一条 user 消息内容（无则 null）。供 /edit 取初值。 */
 export async function getLastUserMessageContent(sessionId: string): Promise<string | null> {
@@ -25,4 +26,24 @@ export async function deleteLastExchange(sessionId: string): Promise<string | nu
   if (!rows.length) return null;
   await query(`DELETE FROM chat_messages WHERE session_id = ? AND timestamp >= ?`, [sessionId, rows[0].timestamp]);
   return String(rows[0].content ?? '');
+}
+
+/**
+ * 会话 → Markdown（/export 用）。只导出对话本身：用户消息、助手正文、工具调用一行摘要；
+ * 思考内容与 notice 不导出（前者可能含未定稿推理，后者是 TUI 自己的提示，都不属于对话记录）。
+ */
+export function renderSessionMarkdown(items: TranscriptItem[], model: string): string {
+  const lines: string[] = ['# Tangu 会话记录', '', `模型：${model || '(未设置)'}`, ''];
+  for (const it of items) {
+    if (it.kind === 'user') {
+      lines.push('## 我', '', it.text.trim(), '');
+    } else if (it.kind === 'assistant') {
+      lines.push('## Tangu', '');
+      for (const b of it.blocks) {
+        if (b.type === 'text' && b.text.trim()) lines.push(b.text.trim(), '');
+        else if (b.type === 'tool') lines.push(`> 🔧 \`${b.name}\`${b.isError ? '（失败）' : ''}`, '');
+      }
+    }
+  }
+  return lines.join('\n');
 }

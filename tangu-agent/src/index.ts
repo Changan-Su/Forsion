@@ -23,8 +23,10 @@ import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import pluginsRouter from './routes/plugins.js';
 import specialRouter from './routes/special.js';
+import commandsRouter from './routes/commands.js';
 import hooksRouter from './routes/hooks.js';
 import wechatRouter from './routes/wechat.js';
+import channelsRouter from './routes/channels.js';
 import inboxRouter from './routes/inbox.js';
 import ttsRouter from './routes/tts.js';
 import adminRouter from './routes/admin.js';
@@ -38,7 +40,7 @@ import { loadHistorianConfig } from './services/historianConfig.js';
 import { startHistorian, stopHistorian } from './services/historian.js';
 import { startMuseSupervisor, stopMuseSupervisor } from './services/muse.js';
 import { startInboxPull, stopInboxPull } from './services/inboxPull.js';
-import { startWechatRemote, stopWechatRemote } from './services/wechatRemote.js';
+import { startChannels, stopChannels } from './channels/hub.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
 
 export interface TanguModule {
@@ -77,6 +79,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
 
   const dataRouter = Router();
   dataRouter.use(sessionsRouter);
+  dataRouter.use(commandsRouter);
   dataRouter.use(modelsRouter);
   dataRouter.use(enginesRouter);
   dataRouter.use(providersRouter);
@@ -87,6 +90,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(specialRouter);
   dataRouter.use(hooksRouter);
   dataRouter.use(wechatRouter);
+  dataRouter.use(channelsRouter);
   dataRouter.use(inboxRouter);
   dataRouter.use(ttsRouter);
 
@@ -126,7 +130,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     startMuseSupervisor();
     // 收件箱广播拉取:自带 isLocal + brain.inbox seam 双闸——仅配置了云端连接的本地形态生效,其余 no-op。
     startInboxPull();
-    void startWechatRemote().catch((e: any) => console.warn('[tangu] WeChat Remote 启动失败:', e?.message || e));
+    // 多通道(微信/Telegram/QQ):自带 hostExec 闸门,云端/worker no-op。
+    void startChannels().catch((e: any) => console.warn('[tangu] Channels 启动失败:', e?.message || e));
 
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
@@ -139,7 +144,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopHistorian();
     stopMuseSupervisor();
     stopInboxPull();
-    stopWechatRemote();
+    stopChannels();
     deps().profileStore.dispose();
     abortAllRuns();
     disposeAllProcesses(); // run_background 的子进程(防热加载/退出泄漏)
@@ -208,6 +213,28 @@ export function refreshAppProfiles(): Promise<void> {
 export type { ToolDef, ToolProvider } from './tools/toolRegistry.js';
 export type { ToolContext, ToolResult, ToolImpl } from './tools/toolTypes.js';
 export * from './core/types.js';
+
+/**
+ * 思考档位能力表 —— 直连面(本包 multiBrain)与托管面(server thinkingAdapter)共用的唯一真源。
+ * server 侧改动后须跑 `npm run vendor:tangu` 重新打包,否则拿的是旧表。
+ */
+export {
+  THINKING_LEVELS,
+  THINKING_ON_LEVELS,
+  isThinkingLevel,
+  normalizeThinkingLevel,
+  resolveModelCapability,
+  supportedThinkingLevels,
+  clampThinkingLevel,
+  applyThinking,
+} from './llm/modelCapabilities.js';
+export type {
+  ThinkingFormat,
+  LevelMap,
+  ModelCapability,
+  CapabilityQuery,
+  ApplyThinkingResult,
+} from './llm/modelCapabilities.js';
 
 // ── 插件契约（外部插件经 dist/index.d.ts 只读 import type;运行时全走 ctx.sdk，见 src/plugins/types.ts）──
 export { TANGU_PLUGIN_API } from './plugins/types.js';

@@ -9,15 +9,16 @@ import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { publish, drain, cleanup } from './eventBus.js';
-import { gateToolCall, requestApproval, type ApprovalDecision } from './approvals.js';
+import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, readUserMd } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
+import { TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession, refreshSessionWorkspace } from '../sandbox/sessionSandbox.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
@@ -29,15 +30,17 @@ import { getLatestSummary, compactSession, foldWorkingWithSummary } from './comp
 import { getAgent } from '../agents/agentRegistry.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { applyAgentActivation } from './agentActivation.js';
+import { projectDocSection } from './projectDoc.js';
 import { onUserRunDone } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS } from '../llm/retry.js';
+import { isRetryableLlmError, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { runGroupChat } from './groupChat.js';
 import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { runAgentFilesSync, scheduleAgentFilesSync } from './agentFileSync.js';
+import { channelHub } from '../channels/hub.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -386,6 +389,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 文本兜底也没解出来)时,回灌一次纠正提示让它改用原生函数调用,而非静默收尾。
   const MAX_TOOLCALL_RECOVERY = 2;
   let toolCallRecoveryUsed = 0;
+  // 截断恢复独立预算:模型对同一大输出反复顶到 max_tokens 时,不许拿整个 maxIterations(默认 90)空转。
+  const MAX_TRUNCATION_RECOVERY = 3;
+  let truncationRecoveryUsed = 0;
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
   const thinkingLevel: ThinkingLevel = agentConfig.thinkingLevel || 'medium';
   const attachments = input.attachments || [];
@@ -397,7 +403,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const cwd: string | undefined =
     typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
-  const approvalMode: 'readonly' | 'auto-edit' | 'full-auto' =
+  // 额外工作文件夹(用户在「工作范围」里显式添加):只认 host、只认绝对路径,去重后封顶 8 个
+  // —— 每个都要占一行系统提示,且都是免审批可写根,不该无节制。cwd 本身不重复列。
+  const extraRoots: string[] =
+    execMode === 'host' && Array.isArray(agentConfig.extraRoots)
+      ? [
+          ...new Set<string>(
+            (agentConfig.extraRoots as unknown[])
+              .filter((r): r is string => typeof r === 'string' && path.isAbsolute(r.trim()))
+              .map((r) => path.resolve(r.trim())),
+          ),
+        ]
+          .filter((r) => !cwd || r !== path.resolve(cwd))
+          .slice(0, 8)
+      : [];
+  const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // 计划模式(类 Claude plan mode):工具集收敛为只读 + exit_plan_mode(toolRegistry 集中过滤),
   // custom/MCP 工具整体跳过;run 级冻结——批准退出后下一轮 run 才拿到完整工具集。
@@ -518,8 +538,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const enabledSkillIds = skillLoadout.enabledSkillIds;
 
     const systemParts: string[] = [];
+    // 通道会话判定(每 run 一次):channel_send_* 只在「连接着通道的会话」暴露(P0-3),
+    // 回复风格段也据此分裁(通道端纯文本渲染)。绑定可中途建立/解除 → 按 run 重查;非 host 恒 false。
+    const channelSession = profile.capabilities.hostExec
+      ? await channelHub.isChannelSession(userId, sessionId)
+      : false;
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
-    const promptSections = profile.promptSections({ execMode, cwd });
+    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession });
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
     if (agentConfig.systemPrompt) systemParts.push(String(agentConfig.systemPrompt));
@@ -529,6 +554,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 3) 静态指引(记忆与日志用法),置于记忆块之前以稳定前缀
     systemParts.push(...promptSections.guidance);
+    // 3b) 引擎级契约段(失败恢复 + 输出风格):直接注入而非经 guidance——per-app promptGuidance
+    //     覆盖是整段替换,放 guidance 会被自定义 app 静默丢掉(Codex 评审 #1)。所有 run 强制在场。
+    systemParts.push(TOOL_FAILURE_SECTION, responseStyleSection(channelSession));
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
     try {
       const userMd = readUserMd();
@@ -536,6 +564,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         systemParts.push('## About the User\nA long-term profile/preferences the user maintains themselves; take it into account, do not recite it, and do not treat it as instructions for this turn.\n\n' + userMd.trim());
       }
     } catch { /* ignore */ }
+    // 4b) 项目级指令(AGENTS.md / CLAUDE.md …,从项目根到 cwd 沿途收集)。放在用户画像之后、
+    //     专属文件夹之前:它随 cwd 变化(半稳定),且应当压过通用指引、但不越过用户本轮的话。
+    //     仅 host —— 云端 sandbox 的 cwd 是临时工作区,没有用户的项目约定可读。
+    if (execMode === 'host') {
+      const projectDoc = projectDocSection(cwd);
+      if (projectDoc) systemParts.push(projectDoc);
+    }
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     if (execMode === 'host') {
@@ -582,8 +617,30 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     } catch (e) {
       console.warn('[agent-core] load agent memory failed:', e);
     }
-    // 7/8) 技能目录 + 环境段(environment 在技能段后,保留原相对次序)
+    // 7/8) 技能目录 + deferred 工具目录 + 环境段(environment 在技能段后,保留原相对次序)
     systemParts.push(...skillLoadout.sections);
+    // deferred 工具目录(P0-2,借 pi deferred-tools):defer 工具的定义不进 defs,系统提示只留
+    // 一行/工具的目录(列全量、不随解锁状态变——稳定文本护前缀缓存);模型经 load_tools 按需解锁,
+    // 解锁只活在本 run(与 use_skill 每-run 按需同模式;hydrate 不带 tool_calls,历史重放无数据源)。
+    // 系统驱动的 run(Muse/自动化)不吃这套:registry 全量可见,目录段也不注入。
+    const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
+    const toolsList = Array.isArray(agentConfig.toolsList)
+      ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string')
+      : undefined;
+    const deferBypass = !!agentConfig.muse || !!agentConfig.automationOrigin;
+    const deferredCatalog = deferBypass
+      ? []
+      : listDeferredTools({
+          userId, sessionId, appId, profile, execMode, cwd, planMode, toolsMode, toolsList,
+        });
+    const unlockedTools = new Set<string>();
+    if (deferredCatalog.length) {
+      systemParts.push(
+        '## Additional Tools (load on demand)\n' +
+          'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
+          deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n'),
+      );
+    }
     systemParts.push(...promptSections.environment);
 
     // 8b) host:注入工作区(cwd)顶层文件清单,让 agent 主动认知现有文件(修「工作区文件意识弱」)。
@@ -608,7 +665,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const upcoming = schedDb ? upcomingScheduleLines(entriesOf(schedDb)) : [];
         if (upcoming.length) {
           systemParts.push(
-            '## Upcoming Schedule\nYour schedule for the coming days (auto entries run unattended when due; manage with the manage_schedule tool):\n\n' +
+            '## Upcoming Schedule\nYour schedule for the coming days (auto entries run unattended when due; manage with the manage_schedule tool — it is in Additional Tools, call load_tools first):\n\n' +
             upcoming.join('\n'),
           );
         }
@@ -791,16 +848,26 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 累积到下一次 finalize 时随 assistant 消息落库(刷新会话仍在)。不回灌模型上下文、不计费。
     // (pendingDisplayFiles 在函数级声明 → 中止/失败 catch 路径也能持久化。)
     const MAX_DISPLAY_FILES_PER_RUN = 40;
+    // Agent Desk 演出:纯 UI 即时事件(不落库不回灌——是状态不是内容,刷新即散场);防 spam 上限。
+    const MAX_DESK_PRESENTS_PER_RUN = 30;
+    let deskPresentCount = 0;
+    // load_tools 解锁 → 置脏,下一迭代重算 defs(解锁那一刻打一次前缀缓存,之后稳定)。
+    let toolDefsDirty = false;
     const toolCtx: ToolContext = {
-      userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools,
-      enabledSkillIds, execMode, cwd, approvalMode, profile, modelId, planMode, wsProject,
+      userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools, channelSession,
+      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
-      toolsMode: agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined,
-      toolsList: Array.isArray(agentConfig.toolsList)
-        ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string')
-        : undefined,
+      automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
+      toolsMode,
+      toolsList,
+      unlockedTools,
+      unlockTools: (names) => {
+        let changed = false;
+        for (const n of names) if (!unlockedTools.has(n)) { unlockedTools.add(n); changed = true; }
+        if (changed) toolDefsDirty = true;
+      },
       // 激活的 agent 定义 slug → start_discussion 的「分身」据此取主 agent 人设(memScopeSlug 可能是共用默认,不可混用)。
       agentSlug: activeAgentSlug,
       collectImage: (img) => {
@@ -814,8 +881,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'display_file', item); // 即时扇出给在线桌面端
         }
       },
+      presentDesk: (spec) => {
+        if (spec && Array.isArray(spec.views) && spec.views.length && deskPresentCount < MAX_DESK_PRESENTS_PER_RUN) {
+          deskPresentCount++;
+          void publish(runId, 'desk_present', spec);
+        }
+      },
     };
-    const toolDefs = getToolDefinitions(toolCtx);
+    let toolDefs = getToolDefinitions(toolCtx);
 
     type ExecutedToolCall = {
       toolResult: any;
@@ -872,7 +945,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
-      const decision = await gateToolCall(runId, effCall, { sessionId, execMode, approvalMode, cwd, profile }, ac.signal);
+      const decision = await gateToolCall(runId, effCall, { sessionId, execMode, approvalMode, cwd, extraRoots, profile }, ac.signal);
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'reject') {
         return mkRejected(call, startedAt, parallelGroup, '用户拒绝了该操作。');
@@ -986,6 +1059,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let lastRealPromptTokens = 0; // 上一轮 provider 真实 prompt 用量(压缩触发的首选依据,对齐 Hermes)
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
+      // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
+      if (toolDefsDirty) { toolDefs = getToolDefinitions(toolCtx); toolDefsDirty = false; }
       // 迭代边界注入运行时转向消息(在压缩 / 模型调用之前 → 新 U 参与上下文与折叠 tail 计算)。
       const steered = drainSteer(runId);
       if (steered.length) await applySteering(steered);
@@ -1061,6 +1136,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       let res!: Awaited<ReturnType<typeof streamProviderCompletion>>;
       for (let attempt = 0; ; attempt++) {
         let emitted = false;
+        const attemptStart = Date.now();
         try {
           res = await streamProviderCompletion({
             apiKey,
@@ -1086,7 +1162,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           });
           break;
         } catch (err) {
-          if (emitted || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
+          // 慢失败不重试:瞬时抖动(fetch failed / 网关 502 / 429)都是秒级就崩,重试便宜且有效;
+          // 而「上游静默到 idle 看门狗超时」是分钟级慢失败——重试只是把用户的干等 ×4。
+          // 服务端 180s idle 504 若照旧重试三次,最终失败要 4×180+9=729s,比不修好不了多少。
+          // 按失败耗时判、而非按 status 判:未来任何新增的慢失败路径自动受此保护。
+          const slowFail = Date.now() - attemptStart >= SLOW_FAIL_NO_RETRY_MS;
+          if (emitted || slowFail || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
           const wait = MODEL_RETRY_BASE_MS * (attempt + 1);
           console.warn(
             `[agent-core] run=${runId} LLM 调用瞬时失败,${wait}ms 后重试 ${attempt + 1}/${MODEL_MAX_RETRIES}: ` +
@@ -1209,6 +1290,51 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         appendFinal(res.content || '');
         if (!finalContent.trim()) finalContent = '(额度不足，已停止)';
         break;
+      }
+
+      // 截断硬化(借 pi failToolCallsFromTruncatedMessage):finish_reason=length 说明响应被输出 token
+      // 上限截断,流式 JSON 补救可能让工具调用参数「能解析但不完整」——执行等于拿半截参数写文件/跑命令
+      // (write_file 写半个文件)。全部置错回喂、一个不执行,让模型用更短参数重发(大写入拆多次 edit)。
+      if (res.finishReason === 'length') {
+        if (res.content && !looksLikeToolCallText(res.content)) appendFinal(res.content);
+        workingMessages.push({
+          role: 'assistant',
+          content: res.content || '',
+          tool_calls: res.toolCalls,
+        } as ChatMessage);
+        allToolCalls.push(...res.toolCalls);
+        usedTools = true;
+        const truncatedResults: any[] = [];
+        for (const call of res.toolCalls) {
+          const startedAt = Date.now();
+          const msg =
+            `Tool call "${call.function.name}" was NOT executed: the response hit the output token limit ` +
+            '(finish_reason=length), so its arguments may be silently truncated. Re-issue the call with ' +
+            'complete, shorter arguments — e.g. split a large write into several smaller edit/apply_patch calls.';
+          await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, startedAt });
+          await publish(runId, 'tool_result', {
+            id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length,
+          });
+          truncatedResults.push({ tool_call_id: call.id, name: call.function.name, content: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length });
+          workingMessages.push({ role: 'tool', content: msg, tool_call_id: call.id } as ChatMessage);
+        }
+        allToolResults.push(...truncatedResults);
+        void publish(runId, 'status', { phase: 'toolcalls_truncated', iteration, count: res.toolCalls.length });
+        await appendStep({
+          id: uuidv4(), runId, stepNo: iteration,
+          llmResponse: { content: res.content, usage: res.usage },
+          toolCalls: res.toolCalls,
+          toolResults: truncatedResults,
+        });
+        // 独立预算:连续截断超限即收尾,不许拿整个 maxIterations 空转烧最大输出额度。
+        truncationRecoveryUsed++;
+        if (truncationRecoveryUsed >= MAX_TRUNCATION_RECOVERY) {
+          const notice = `⚠️ 连续 ${truncationRecoveryUsed} 次输出被 token 上限截断,已停止。请把任务拆小(如分多次写入/编辑),或换支持更大输出的模型后发送「继续」。`;
+          finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n> ${notice}` : notice;
+          void publish(runId, 'status', { phase: 'truncation_exhausted', iteration, attempts: truncationRecoveryUsed });
+          break;
+        }
+        continue;
       }
 
       // 中间迭代的 preamble 正文累积进终稿(工具标记样式的杂文除外,那是待纠正的假工具调用)。

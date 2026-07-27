@@ -7,6 +7,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, slugify } from '../../agents/agentRegistry.js';
+import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 
 export const manageAgentProvider: ToolProvider = {
   id: 'builtin:manage_agent',
@@ -14,6 +15,8 @@ export const manageAgentProvider: ToolProvider = {
     {
       name: 'manage_agent',
       mode: 'host',
+      deferred: true, // P0-2:1.7KB schema,低频管理面 → 按需装载
+      deferHint: 'Create or update a local agent (name/persona/model).',
       definition: {
         type: 'function',
         function: {
@@ -33,7 +36,7 @@ export const manageAgentProvider: ToolProvider = {
               soul: { type: 'string', description: 'Persona definition (SOUL.md; tone/values; optional)' },
               model: { type: 'string', description: 'Model id that overrides the session model (optional)' },
               tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of enabled custom/MCP tool ids (optional)' },
-              thinking_level: { type: 'string', enum: ['off', 'low', 'medium', 'high'], description: 'Thinking intensity (optional)' },
+              thinking_level: { type: 'string', enum: [...THINKING_LEVELS], description: 'Thinking intensity (optional)' },
               max_iterations: { type: 'number', description: 'Maximum number of loop iterations (optional)' },
               approval_mode: { type: 'string', enum: ['readonly', 'auto-edit', 'full-auto'], description: 'Approval level (optional)' },
             },

@@ -199,14 +199,22 @@ function parseManifest(entries: TarEntry[]): TanguPluginManifest {
   return manifest;
 }
 
-/** 同 id 冲突预检:首方(随包内置)同名一律拒;用户目录同 id 但来源包名不同 → 要 --force。 */
+/** 同 id 冲突预检:首方(随包内置)同名一律拒;Forsion bundle 内嵌同 id → 要 --force(用户目录按
+ *  loader 优先级会胜出,允许显式覆盖,不能误报成首方,codex P1-6);用户目录同 id 但来源包名不同 → 要 --force。 */
 async function checkConflict(id: string, newName: string, force: boolean | undefined): Promise<void> {
   const { discoverPlugins } = await import('./loader.js');
+  const { bundleEnginePluginRoots } = await import('./bundles.js');
   const existing = discoverPlugins().find((d) => d.manifest.id === id);
   if (!existing) return;
+  const existingDir = path.resolve(existing.dir);
   const userRoot = path.resolve(pluginsDir());
-  const inUser = path.resolve(existing.dir).startsWith(userRoot + path.sep);
-  if (!inUser) throw new Error(`插件 id「${id}」与随包内置插件同名,拒绝安装`);
+  const inUser = existingDir.startsWith(userRoot + path.sep);
+  if (!inUser) {
+    const fromBundle = bundleEnginePluginRoots().some((r) => existingDir.startsWith(path.resolve(r) + path.sep));
+    if (!fromBundle) throw new Error(`插件 id「${id}」与随包内置插件同名,拒绝安装`);
+    if (!force) throw new Error(`插件 id「${id}」已由 Forsion 捆绑包提供——加 --force 安装用户目录版本(将优先生效)`);
+    return;
+  }
   if (force) return;
   const prev = readSource(existing.dir);
   if (prev && prev.name && prev.name !== newName) {

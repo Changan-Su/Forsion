@@ -37,6 +37,8 @@ export const imageGenProvider: ToolProvider = {
     {
       name: 'generate_image',
       mode: 'both',
+      deferred: true, // P0-2:1KB schema,非常驻需求 → 按需装载
+      deferHint: 'Generate an image from a text prompt (text-to-image).',
       capabilities: { sideEffect: 'network', parallel: false, defaultTimeoutMs: 200_000 },
       definition: {
         type: 'function',

@@ -13,7 +13,8 @@ const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } 
 
 function dumpFor(profile: any, label: string): Record<string, unknown> {
   configureTangu({ host: stub, brain: stub, billing: stub, profile });
-  const base = { userId: 'u1', sessionId: 's1', appId: profile.appId, profile } as any;
+  // unlockTools 桩与 scripts/dump-tooldefs.mjs 保持一致:load_tools 进快照,deferred 本体不进。
+  const base = { userId: 'u1', sessionId: 's1', appId: profile.appId, profile, unlockTools: () => {} } as any;
   const out: Record<string, unknown> = {};
   out[`${label}:sandbox`] = getToolDefinitions({ ...base, execMode: 'sandbox' });
   out[`${label}:sandbox+skills`] = getToolDefinitions({ ...base, execMode: 'sandbox', enabledSkillIds: ['sk1'] });

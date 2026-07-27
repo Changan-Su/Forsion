@@ -18,7 +18,8 @@ const stub = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
 
 function dumpFor(profile, label) {
   configureTangu({ host: stub, brain: stub, billing: stub, profile });
-  const base = { userId: 'u1', sessionId: 's1', appId: profile.appId, profile };
+  // unlockTools 桩:让 load_tools 进快照(真实 loop 均提供回调;deferred 工具本体不进快照=精简后的正典)。
+  const base = { userId: 'u1', sessionId: 's1', appId: profile.appId, profile, unlockTools: () => {} };
   const out = {};
   out[`${label}:sandbox`] = getToolDefinitions({ ...base, execMode: 'sandbox' });
   out[`${label}:sandbox+skills`] = getToolDefinitions({ ...base, execMode: 'sandbox', enabledSkillIds: ['sk1'] });

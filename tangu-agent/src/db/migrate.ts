@@ -128,6 +128,7 @@ export async function runMigration(): Promise<void> {
       id VARCHAR(128) PRIMARY KEY,
       user_id VARCHAR(36) NOT NULL,
       wx_user_id VARCHAR(128),
+      channel VARCHAR(16) NOT NULL DEFAULT 'wechat',
       status VARCHAR(24) NOT NULL DEFAULT 'active',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -139,10 +140,11 @@ export async function runMigration(): Promise<void> {
     CREATE TABLE IF NOT EXISTS tangu_wechat_bindings (
       id VARCHAR(36) PRIMARY KEY,
       user_id VARCHAR(36) NOT NULL,
+      channel VARCHAR(16) NOT NULL DEFAULT 'wechat',
       account_id VARCHAR(128) NOT NULL,
       peer_id VARCHAR(128),
       session_id VARCHAR(36) NOT NULL,
-      remote_approval_mode VARCHAR(24) NOT NULL DEFAULT 'readonly',
+      remote_approval_mode VARCHAR(24) NOT NULL DEFAULT 'auto-edit',
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -175,6 +177,22 @@ export async function runMigration(): Promise<void> {
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_messages_broadcast
     ON inbox_messages(user_id, origin_broadcast_id) WHERE origin_broadcast_id IS NOT NULL`);
 
+  // 自动化动作链执行账本(本地特性,同 inbox 纪律直连 query())。真源在此;常驻 automation 会话里的
+  // role='model' 合成消息只是它的人读投影。steps=JSON 数组 [{type,tool?,ok,summary}](TEXT,方言无关)。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS automation_executions (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      trigger_id VARCHAR(64) NOT NULL,
+      origin VARCHAR(16) NOT NULL DEFAULT 'auto',
+      status VARCHAR(16) NOT NULL,
+      steps TEXT,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_automation_exec_trigger ON automation_executions(trigger_id, created_at)`);
+
   // 以下迁移仅对共享云库 / 外部 Postgres 生效：standalone(SQLite) 的 base schema(STANDALONE_SCHEMA)
   // 已完整建好 chat_sessions/chat_messages 的全部列，且 SQLite 的 ALTER ADD COLUMN 不支持
   // IF NOT EXISTS、也无 pg_constraint 目录，故 sqlite 形态在此提前返回，跳过整段 PG-only 迁移。
@@ -192,6 +210,9 @@ export async function runMigration(): Promise<void> {
       // Background Session 父链接:@讨论 / Historian 辅助讨论等隐藏子会话指回其来源会话,
       // 供 GET /agent/sessions/:id/background(右栏「子聊天」)持久列出。
       `ALTER TABLE chat_sessions ADD COLUMN parent_session_id VARCHAR(36)`,
+      // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
+      `ALTER TABLE tangu_wechat_accounts ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`,
+      `ALTER TABLE tangu_wechat_bindings ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`,
     ]) {
       try { await query(sql); }
       catch { /* 列已存在 */ }
@@ -235,6 +256,14 @@ export async function runMigration(): Promise<void> {
     await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'user'`);
   } catch (e: any) {
     console.warn('[agent-core] chat_sessions.kind 列迁移失败：', e?.message || e);
+  }
+
+  // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。幂等。
+  try {
+    await query(`ALTER TABLE tangu_wechat_accounts ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`);
+    await query(`ALTER TABLE tangu_wechat_bindings ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`);
+  } catch (e: any) {
+    console.warn('[agent-core] 通道 channel 列迁移失败：', e?.message || e);
   }
 
   // Background Session 父链接(@讨论/Historian 辅助讨论等指回来源会话)。幂等。

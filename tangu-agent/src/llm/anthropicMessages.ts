@@ -162,7 +162,19 @@ export function openaiToAnthropicBody(payload: any): any {
   if (tc === 'none') body.tool_choice = { type: 'none' };
   else if (tc === 'auto') body.tool_choice = tools ? { type: 'auto' } : undefined;
   else if (tc && typeof tc === 'object' && tc.type === 'function') body.tool_choice = { type: 'tool', name: tc.function?.name };
-  if (typeof payload.temperature === 'number') body.temperature = payload.temperature;
+  // 扩展思考:tuneOpenAiDirectPayload 按能力表把档位写成 payload.thinking(+ 自适应档的 output_config),
+  // 这里原样透传。Anthropic 强制 max_tokens > budget_tokens —— 能力表已夹紧,此处兜底再抬一次。
+  const think = payload.thinking;
+  const thinkOn = think?.type === 'enabled' || think?.type === 'adaptive';
+  if (thinkOn || think?.type === 'disabled') {
+    body.thinking = think;
+    if (think.type === 'enabled' && typeof think.budget_tokens === 'number' && body.max_tokens <= think.budget_tokens) {
+      body.max_tokens = think.budget_tokens + 1024;
+    }
+    if (think.type === 'adaptive' && payload.output_config) body.output_config = payload.output_config;
+  }
+  // 思考开时 Anthropic 拒 temperature≠1,索性不发。
+  if (!thinkOn && typeof payload.temperature === 'number') body.temperature = payload.temperature;
   return body;
 }
 

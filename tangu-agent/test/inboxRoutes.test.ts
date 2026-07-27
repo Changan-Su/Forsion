@@ -1,7 +1,7 @@
 /**
  * /agent/inbox 路由集成测试:真 SQLite(内存)+ 真 express(listen 随机端口,fetch 直打,不引 supertest)。
- * 覆盖:四 filter 可见集/unread-count(latestId 含已读)/PATCH 读写/read-all 不动未投递/软删语义
- * (视图消失但广播游标仍含该行)/pull 无 seam 时优雅降级。
+ * 覆盖:filter 可见集(scheduled 档已下线;legacy 未到期 deliver_at 行不冒出)/unread-count(latestId 含已读)/
+ * PATCH 读写/read-all 不动 legacy 未投递行/软删语义(视图消失但广播游标仍含该行)/pull 无 seam 时优雅降级。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express from 'express';
@@ -49,7 +49,8 @@ beforeAll(async () => {
   srv = app.listen(0);
   base = `http://127.0.0.1:${(srv.address() as any).port}`;
 
-  // 六态种子(created_at 递增控制排序):m1 未读已投/m2 已读/m3 归档/m4 软删+广播锚/m5 定时未来/m6 过去 deliver_at 已投未读
+  // 六态种子(created_at 递增控制排序):m1 未读已投/m2 已读/m3 归档/m4 软删+广播锚/
+  // m5 legacy 未到期定时行(功能已下线,读端日落过滤仍须挡住它)/m6 过去 deliver_at 已投未读
   await seed('m1', { created_at: utc(-50_000) });
   await seed('m2', { read_at: utc(-40_000), created_at: utc(-40_000) });
   await seed('m3', { archived_at: utc(-30_000), created_at: utc(-30_000) });
@@ -76,9 +77,11 @@ describe('/agent/inbox', () => {
     expect(messages.map((m: any) => m.id)).toEqual(['m6', 'm1']);
   });
 
-  it('filter=archived / filter=scheduled', async () => {
+  it('filter=archived;scheduled 档已下线(未知值按 all,legacy 未到期行 m5 不冒出)', async () => {
     expect((await api('/agent/inbox?filter=archived')).messages.map((m: any) => m.id)).toEqual(['m3']);
-    expect((await api('/agent/inbox?filter=scheduled')).messages.map((m: any) => m.id)).toEqual(['m5']);
+    const { messages } = await api('/agent/inbox?filter=scheduled');
+    expect(messages.map((m: any) => m.id)).toEqual(['m6', 'm2', 'm1']);
+    expect(messages.some((m: any) => 'deliver_at' in m)).toBe(false); // serialize 不再回传 deliver_at
   });
 
   it('unread-count:count=未读数,latestId=最新已投递(含已读)', async () => {
@@ -97,7 +100,7 @@ describe('/agent/inbox', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('read-all:清未读但不动未投递的定时消息', async () => {
+  it('read-all:清未读但不动 legacy 未投递行', async () => {
     expect((await api('/agent/inbox/read-all', { method: 'POST' })).ok).toBe(true);
     expect((await api('/agent/inbox/unread-count')).count).toBe(0);
     const m5 = await query<any[]>(`SELECT read_at FROM inbox_messages WHERE id = 'm5'`);

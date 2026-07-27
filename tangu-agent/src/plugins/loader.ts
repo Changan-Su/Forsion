@@ -13,6 +13,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { pluginsDir } from '../core/tanguHome.js';
+import { bundleEnginePluginRoots } from './bundles.js';
 import {
   TANGU_PLUGIN_API,
   type TanguPlugin,
@@ -26,7 +27,8 @@ const MANIFEST = 'tangu-plugin.json';
  * 插件搜索目录(按优先级,先扫的同 id 胜):
  *   ① <pkg>/plugins —— 随包发布的首方插件(如 forsion-worker;会进 worker 镜像)。受保护,不被用户插件顶掉。
  *   ② ~/.tangu/plugins —— 用户安装的全局插件(可写、跨升级保留)。
- * `TANGU_PLUGINS=off` 全关;`TANGU_PLUGINS_DIR=<path>` 只扫该目录(覆盖以上两者)。
+ *   ③ 共享域 plugins/<bundle>/tangu-plugins —— Forsion 插件捆绑包内嵌的引擎插件(原地读取,见 bundles.ts)。
+ * `TANGU_PLUGINS=off` 全关;`TANGU_PLUGINS_DIR=<path>` 只扫该目录(覆盖以上全部,含 bundle)。
  */
 export function resolvePluginsDirs(): string[] {
   if (process.env.TANGU_PLUGINS === 'off') return [];
@@ -36,6 +38,7 @@ export function resolvePluginsDirs(): string[] {
   return [
     path.resolve(here, '../../plugins'), // ① <pkg>/plugins(首方,随包/进 worker 镜像)
     pluginsDir(), // ② ~/.tangu/plugins(用户安装的全局插件)
+    ...bundleEnginePluginRoots(), // ③ Forsion bundle 内嵌(优先级最低:顶不掉首方/用户装的同 id)
   ];
 }
 

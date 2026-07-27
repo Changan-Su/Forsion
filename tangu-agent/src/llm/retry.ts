@@ -16,3 +16,12 @@ export function isRetryableLlmError(err: unknown): boolean {
 
 export const MODEL_MAX_RETRIES = 3; // 首次 + 至多 3 次重试 = 4 次尝试
 export const MODEL_RETRY_BASE_MS = 1500; // 线性退避 1.5/3/4.5s:扛 Wi-Fi 切换级别的网络抖动(旧 400ms 兜不住真实断网)
+/**
+ * 单次尝试耗时超过此值就不再重试(慢失败一票否决,优先级高于 isRetryableLlmError)。
+ *
+ * 重试的前提是「失败很便宜」:fetch failed / 502 / 429 都是秒级崩,重试三次几乎不花用户时间。
+ * 而上游静默到 idle 看门狗超时是分钟级——服务端 180s idle 504 若照旧重试三次,最终失败要
+ * 4×180+9 = 729s(~12min),用户体感和「一直没反应」没差别。按耗时判而非按 status 判,
+ * 是为了让未来任何新增的慢失败路径自动落进这条保护里。
+ */
+export const SLOW_FAIL_NO_RETRY_MS = Number(process.env.TANGU_SLOW_FAIL_NO_RETRY_MS) || 60_000;

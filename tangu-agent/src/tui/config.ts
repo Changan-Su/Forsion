@@ -5,6 +5,8 @@
  */
 import path from 'node:path';
 import { parseConfig, type StandaloneConfig } from '../standalone/config.js';
+import { isThinkingLevel } from '../llm/modelCapabilities.js';
+import type { ThinkingLevel } from '../core/types.js';
 import type { ApprovalMode } from './types.js';
 
 export interface TuiConfig extends StandaloneConfig {
@@ -12,7 +14,7 @@ export interface TuiConfig extends StandaloneConfig {
   execMode: 'host' | 'sandbox';
   approvalMode: ApprovalMode;
   tokenBudget?: number;
-  thinkingLevel: 'off' | 'low' | 'medium' | 'high';
+  thinkingLevel: ThinkingLevel;
 }
 
 const BOOL_FLAGS = new Set(['--host-exec', '--sandbox-exec']);
@@ -41,13 +43,13 @@ export function parseTuiConfig(argv: string[]): TuiConfig {
     if (a === '--cwd' || a.startsWith('--cwd=')) cfg.cwd = readVal();
     else if (a === '--approval' || a.startsWith('--approval=')) {
       const v = readVal();
-      if (v === 'readonly' || v === 'auto-edit' || v === 'full-auto') cfg.approvalMode = v;
+      if (v === 'readonly' || v === 'auto-edit' || v === 'full-auto' || v === 'custom') cfg.approvalMode = v;
     } else if (a === '--token-budget' || a.startsWith('--token-budget=')) {
       const n = Number(readVal());
       if (Number.isFinite(n) && n > 0) cfg.tokenBudget = n;
     } else if (a === '--think' || a.startsWith('--think=')) {
       const v = readVal();
-      if (v === 'off' || v === 'low' || v === 'medium' || v === 'high') cfg.thinkingLevel = v;
+      if (isThinkingLevel(v)) cfg.thinkingLevel = v;
     }
   }
   cfg.cwd = path.resolve(cfg.cwd || process.cwd());
@@ -68,7 +70,8 @@ options:
   --host-exec           本地直连真实文件系统 + shell（默认）
   --sandbox-exec        改用云沙箱 + 云工作区（run_python 等）
   --approval <mode>     审批档：readonly | auto-edit | full-auto（默认 auto-edit）
-  --think <level>       思考强度：off | low | medium | high（默认 off；开启后思考内容默认折叠）
+  --think <level>       思考强度：off | minimal | low | medium | high | xhigh | max（默认 medium；
+                        模型不支持的档位自动降到最近可用档，开启后思考内容默认折叠）
   --token-budget <n>    本回合软 token 预算（超出后收尾停止）
   --cloud-url <url>     Forsion 云端（brain API），env TANGU_CLOUD_URL  [登录后可省]
   --token <token>       forsion_token，env TANGU_TOKEN                  [登录后可省]

@@ -65,9 +65,13 @@ export function openaiToResponsesBody(payload: any): any {
     stream: true,
     store: false,
   };
-  // 官方 OpenAI 直连按思考档改道到此(tuneOpenAiDirectPayload 随 payload 带 effort);
-  // summary:'auto' 让思考过程以 reasoning delta 流回(否则 UI 只见沉默)。Codex 订阅路径不带此字段,不受影响。
-  if (payload.reasoning_effort) body.reasoning = { effort: payload.reasoning_effort, summary: 'auto' };
+  // 思考档由 tuneOpenAiDirectPayload 按能力表写进 payload.reasoning_effort(官方直连与 Codex 订阅都走这里)。
+  // summary:'auto' 让思考过程以 reasoning delta 流回(否则 UI 只见沉默);effort 'none' 时不发 summary
+  // ——「不思考」与「要思考摘要」互斥,同发会被拒。
+  if (payload.reasoning_effort) {
+    body.reasoning =
+      payload.reasoning_effort === 'none' ? { effort: 'none' } : { effort: payload.reasoning_effort, summary: 'auto' };
+  }
   const cap = payload.max_completion_tokens ?? payload.max_tokens;
   if (cap) body.max_output_tokens = cap;
   const instructions = sysTexts.join('\n\n');
@@ -131,6 +135,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
+  let incomplete = false; // response.incomplete(max_output_tokens 等):输出被截断,工具参数不可信
   const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0 };
   // function_call:按 item_id 累积,order 保留输出顺序
   const fnCalls = new Map<string, { id: string; name: string; arguments: string }>();
@@ -184,6 +189,9 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           onReasoning?.(ev.delta);
         }
       } else if (type === 'response.completed' || type === 'response.incomplete') {
+        // incomplete=响应被截断(常见 max_output_tokens;content_filter 等其他原因的半截参数同样不可信)
+        // → 统一归一化为 finishReason:'length',让 agentLoop 的截断硬化把工具调用全部置错不执行。
+        if (type === 'response.incomplete') incomplete = true;
         const u = ev.response?.usage;
         if (u) {
           usage.prompt_tokens = u.input_tokens || usage.prompt_tokens;
@@ -202,7 +210,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     .filter((c): c is { id: string; name: string; arguments: string } => !!c && !!c.name)
     .map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments || '{}' } }));
 
-  finishReason = toolCalls.length ? 'tool_calls' : 'stop';
+  finishReason = incomplete ? 'length' : toolCalls.length ? 'tool_calls' : 'stop';
   if (usage.completion_tokens === 0 && content) usage.completion_tokens = Math.ceil(content.length / 4);
 
   return { content, reasoning, toolCalls, usage, finishReason };

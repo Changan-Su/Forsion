@@ -1,0 +1,23 @@
+{
+  "comment": "对 @forsion/tangu-agent 仅 import type(paths 指向本目录 types/ 类型契约,可脱离核心仓独立构建)。verbatimModuleSyntax=true 把任何【值导入】核心变成编译错误——P0 硬保证(插件绝不复制核心模块图)。构建:本目录 `npm run build`,或借 Genesis 的 tsc(无本地 node_modules 时)。dist/ 已提交,装包免构建。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "declaration": false,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "paths": {
+      "@forsion/tangu-agent": ["./types/tangu-agent.d.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

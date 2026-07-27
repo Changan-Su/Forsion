@@ -18,13 +18,17 @@ import { agentsDir } from '../core/tanguHome.js';
 import { discoverPlugins } from '../plugins/loader.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { resolveApproval, type ApprovalDecision } from '../services/approvals.js';
+import { isThinkingLevel, THINKING_LEVELS } from '../llm/modelCapabilities.js';
+import { canonicalCommandName } from '../core/commandCatalog.js';
+import { listCustomCommands, getCustomCommand, expandCustomCommand, commandsDir } from '../services/customCommands.js';
+import type { ThinkingLevel } from '../core/types.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { saveModel } from '../standalone/credStore.js';
 import { getToolDefinitions } from '../tools/registry.js';
 import { reducer, initialState } from './events.js';
 import { listSessions, loadSessionItems, type SessionRow } from './sessions.js';
 import { COMMANDS, copyToClipboardOSC52 } from './commands.js';
-import { getLastUserMessageContent, deleteLastExchange } from './messageOps.js';
+import { getLastUserMessageContent, deleteLastExchange, renderSessionMarkdown } from './messageOps.js';
 import { ItemView, LiveView, TodoPanel } from './components/Message.js';
 import { StatusBar } from './components/StatusBar.js';
 import { InputBox } from './components/InputBox.js';
@@ -46,7 +50,7 @@ interface MutableConfig {
   execMode: 'host' | 'sandbox';
   approvalMode: ApprovalMode;
   tokenBudget?: number;
-  thinkingLevel: 'off' | 'low' | 'medium' | 'high';
+  thinkingLevel: ThinkingLevel;
   seedSystem?: string;
   /** 最大循环轮数(/loop 调节;缺省由后端取默认 90,后端 clamp 1-200)。 */
   maxIterations?: number;
@@ -334,7 +338,8 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
 
   const runSlash = async (line: string): Promise<void> => {
     const sp = line.indexOf(' ');
-    const cmd = (sp >= 0 ? line.slice(0, sp) : line).toLowerCase();
+    const raw = (sp >= 0 ? line.slice(0, sp) : line).toLowerCase();
+    const cmd = canonicalCommandName(raw); // /effort → /think 之类的别名归一
     const rest = sp >= 0 ? line.slice(sp + 1).trim() : '';
 
     if (busyRef.current && RUN_AFFECTING.has(cmd)) {
@@ -343,9 +348,18 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     }
 
     switch (cmd) {
-      case '/help':
-        notice('命令：\n' + COMMANDS.map((c) => `  ${c.name.padEnd(11)} ${c.desc}`).join('\n'));
+      case '/help': {
+        const custom = listCustomCommands();
+        notice(
+          '命令：\n' +
+            COMMANDS.map((c) => `  ${c.name.padEnd(11)} ${c.desc}`).join('\n') +
+            (custom.length
+              ? `\n\n自定义命令（${commandsDir()}）：\n` +
+                custom.map((c) => `  ${`/${c.name}`.padEnd(11)} ${c.description}`).join('\n')
+              : `\n\n提示：把提示词存成 ${commandsDir()}/<名字>.md 就能当 /<名字> 用。`),
+        );
         return;
+      }
       case '/exit':
         exit();
         return;
@@ -389,11 +403,16 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         }
         return;
       case '/think':
-        if (rest === 'off' || rest === 'low' || rest === 'medium' || rest === 'high') {
+      case '/effort': // codex/PI 的叫法,同一件事
+        if (isThinkingLevel(rest)) {
           setCfg((c) => ({ ...c, thinkingLevel: rest }));
-          notice(`思考强度已设为 ${rest}${rest === 'off' ? '' : '（思考内容默认折叠，流式时展开）'}`, 'success');
+          notice(
+            `思考强度已设为 ${rest}${rest === 'off' ? '' : '（思考内容默认折叠，流式时展开）'}\n` +
+              '模型不支持该档时会自动降到最近的可用档。',
+            'success',
+          );
         } else {
-          notice(`当前思考强度：${cfgRef.current.thinkingLevel}\n用法：/think off|low|medium|high`);
+          notice(`当前思考强度：${cfgRef.current.thinkingLevel}\n用法：/think ${THINKING_LEVELS.join('|')}`);
         }
         return;
       case '/loop': {
@@ -724,6 +743,41 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         notice(`当前可用工具（${cfgRef.current.execMode}）：\n  ${names.join(', ')}`);
         return;
       }
+      case '/status': {
+        // PI/Codex 借鉴:一条命令看全「这局在什么条件下跑」——排「怎么和我想的不一样」先看它。
+        const c = cfgRef.current;
+        const u = stateRef.current.usage;
+        const agent = c.activeAgentSlug || '(默认)';
+        const group = groupAgentsRef.current?.length ? groupAgentsRef.current.join(', ') : '关';
+        notice(
+          [
+            `会话 ${String(sessionIdRef.current).slice(0, 8)} · ${stateRef.current.items.length} 条消息`,
+            `  模型      ${c.model || '(未设置)'}`,
+            `  思考      ${c.thinkingLevel}${c.planMode ? ' · 计划模式开' : ''}`,
+            `  审批      ${c.approvalMode} · 执行 ${c.execMode}`,
+            `  工作目录  ${c.cwd}`,
+            `  Agent     ${agent} · 群聊 ${group}`,
+            `  循环上限  ${c.maxIterations ?? 90} 轮 · 预算 ${c.tokenBudget ?? '无'}`,
+            `  用量      ${u.total.toLocaleString()} tokens · 约 ${u.cost.toFixed(4)} 费用单位`,
+          ].join('\n'),
+        );
+        return;
+      }
+      case '/export': {
+        const items = stateRef.current.items;
+        if (!items.length) {
+          notice('本会话还没有内容可导出', 'warn');
+          return;
+        }
+        const target = rest
+          ? path.resolve(cfgRef.current.cwd, rest)
+          : path.resolve(cfgRef.current.cwd, `tangu-${String(sessionIdRef.current).slice(0, 8)}.md`);
+        void fs
+          .writeFile(target, renderSessionMarkdown(items, cfgRef.current.model))
+          .then(() => notice(`已导出：${target}`, 'success'))
+          .catch((e: any) => notice(`导出失败：${e?.message || e}`, 'error'));
+        return;
+      }
       case '/cost': {
         const u = stateRef.current.usage;
         notice(`本会话用量：${u.total.toLocaleString()} tokens · 约 ${u.cost.toFixed(4)} 费用单位${u.cached > 0 ? ` · 缓存命中 ${u.cached.toLocaleString()} tokens` : ''}`);
@@ -777,9 +831,16 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           )
           .catch((e: any) => notice(`压缩失败：${e?.message || e}`, 'error'));
         return;
-      default:
+      default: {
+        // 内置没命中 → 查用户自定义命令（~/.tangu/commands/*.md）：展开成普通消息发出去。
+        const custom = getCustomCommand(cmd);
+        if (custom) {
+          void submit(expandCustomCommand(custom, rest));
+          return;
+        }
         notice(`未知命令：${cmd}（/help 看全部）`, 'error');
         return;
+      }
     }
   };
 

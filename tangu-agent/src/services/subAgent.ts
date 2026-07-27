@@ -17,6 +17,7 @@ import { gateToolCall } from './approvals.js';
 import { publish } from './eventBus.js';
 import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
+import { projectDocSection } from './projectDoc.js';
 import { loadCustomTools } from '../tools/customTools.js';
 import type { ChatMessage } from '../core/types.js';
 
@@ -54,7 +55,11 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   const persona = def
     ? [def.systemPrompt, def.soul].map((s) => String(s || '').trim()).filter(Boolean).join('\n\n')
     : (p.instructions ? String(p.instructions).trim() : '');
-  const sysPrompt = persona ? `${persona}\n\n---\n${SUB_SYSTEM_PROMPT}` : SUB_SYSTEM_PROMPT;
+  // 项目级指令(AGENTS.md/CLAUDE.md)必须跟着走:子代理拿的是**同一个 cwd 和同一套文件工具**,
+  // 主 agent 一句「按项目约定来」不构成传递 —— 不注入的话「禁止改 generated/」这类约束委派后就失效(codex)。
+  const projectDoc = parentCtx.execMode === 'host' ? projectDocSection(parentCtx.cwd) : null;
+  const subBase = persona ? `${persona}\n\n---\n${SUB_SYSTEM_PROMPT}` : SUB_SYSTEM_PROMPT;
+  const sysPrompt = projectDoc ? `${subBase}\n\n---\n${projectDoc}` : subBase;
   const effModelId = def?.model || p.modelId;
   const thinking = (def?.thinkingLevel as any) || 'medium'; // 子代理默认思考·中(与会话默认一致);agent 显式档位优先
   const memSlug = def ? resolveMemorySlug(def) : ''; // 具名子代理:remember/log_event 落它自己(或共用默认)
@@ -73,6 +78,10 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     ...parentCtx,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     customTools: subCustomTools,
+    // 子代理拿精简集:显式剥掉父的解锁面。若继承 unlockTools,子代理会看到 load_tools 且「解锁成功」,
+    // 但自己的 toolDefs 本轮已冻结永不刷新,反而把父 run 的集合污染置脏——语义与「完全隐藏」设计对齐。
+    unlockedTools: undefined,
+    unlockTools: undefined,
   };
   const toolDefs = getToolDefinitions(subCtx);
 

@@ -1,17 +1,18 @@
 ---
 name: Forsion 扩展开发
-description: 当用户要给 Forsion / Tangu 做插件、主题、Space 或智能体(agent)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置四类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.0.0
+description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
+version: 1.4.0
 author: Forsion
 category: Forsion
 ---
 
 # Forsion 扩展开发
 
-Forsion / Tangu 有四类可分发扩展。每类都有一份官方模板放在本技能的 `samples/` 下 —— **先复制对应模板再改**,别从零搭。
+Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 起口径):一个 Forsion 插件目录内嵌 UI / 引擎插件 / Agent / 技能 / Space,装一处全就位 —— 哪怕当下只有一类内容,bundle 布局也让之后追加其它层零迁移。四类单体形态仍完整支持、互不影响(纯数据内容如主题、单个 Space 可以更轻)。每类都有一份官方模板放在本技能的 `samples/` 下 —— **先复制对应模板再改**,别从零搭。
 
 | 类型 | 是什么 | 模板 | 最小产物 |
 |------|--------|------|----------|
+| **捆绑包(默认起点)** | 一个 Forsion 插件内嵌引擎插件/Agent/技能/Space | `samples/forsion-sample-bundle/` | `manifest.json` + 约定子目录 |
 | **引擎插件** | 给 agent 加工具 / 设置 / 提示片段 | `samples/forsion-sample-plugin/` | `tangu-plugin.json` + `dist/index.js` |
 | **主题** | 换 UI 结构+配色(纯数据) | `samples/forsion-sample-theme/` | `theme.json` + `theme.css` |
 | **Space** | 视图布局配方(纯数据) | `samples/forsion-sample-space/` | `space.json` |
@@ -19,7 +20,8 @@ Forsion / Tangu 有四类可分发扩展。每类都有一份官方模板放在�
 
 > ⚠️ "插件"有**两个互不相干的系统**,先分清用户要哪个:
 > - **引擎插件**(本技能 `samples/forsion-sample-plugin`):后端/Agent 层,`tangu-plugin.json` + `activate(ctx)`,给模型加工具。
-> - **Amadeus 编辑器插件**:笔记编辑器层,`manifest.json` + 裸 `main.js`(宿主 `new Function('ctx', code)` 跑),加命令/斜杠项/视图/文件类型。**不在本模板集内** —— 桌面端 设置 → 笔记插件 有一键脚手架(hello-amadeus),真实范例见 `forsion-plugin-mindmap`。
+> - **Amadeus/Forsion 桌面插件**:UI 层,`manifest.json` + 裸 `main.js`(宿主 `new Function('ctx', code)` 跑),加命令/斜杠项/视图/文件类型。桌面端 设置 → 插件 有一键脚手架(hello-amadeus);捆绑包模板的根即这一形态。
+> 要"一套功能跨两层发行"(UI+工具+Agent+Space)时,用**捆绑包**把它们装进一个目录。
 
 ## 通用纪律
 
@@ -55,6 +57,63 @@ Forsion / Tangu 有四类可分发扩展。每类都有一份官方模板放在�
 
 文件夹式:`config.toml`(模型/工具/技能开关)+ `SOUL.md`(人设,英文写给模型)+ `Library/`(参考资料)+ 每-agent 记忆。装 `~/.forsion/agents/<slug>/`。
 
+## 捆绑包(samples/forsion-sample-bundle)—— 默认起点
+
+**新扩展默认从这个模板起步**:除非明确只做主题或单个纯数据 Space/智能体,插件类工作一律用 bundle 布局(只填用得上的子目录即可,单一内容的 bundle 完全合法)。一个 Forsion 桌面插件目录内嵌引擎侧/跨域内容,装进 `~/.forsion/plugins/<id>/` 一处全就位。识别全靠**标志文件**,manifest 无新增字段;所有子目录可选,纯捆绑包连 `main.js` 都可省:
+
+```
+<id>/manifest.json                     ← bundle 标志(普通 Forsion 插件 manifest)
+     main.js                           ← UI 部分(可省)
+     tangu-plugins/<pid>/tangu-plugin.json   ← 内嵌引擎插件:引擎原地加载(优先级最低,顶不掉手装同 id)
+     skills/<slug>/SKILL.md            ← 内嵌全局技能:引擎原地扫描(内置 < bundle < 用户)
+     agents/<slug>/config.toml         ← 内嵌 Agent(可带 skills/ agent 级技能):播种一次
+     spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐
+```
+
+两种生命周期,发包前必须分清:**随包**(引擎插件、Space —— 父插件禁用即级联关闭/收起,卸载一并消失)与**播种一次**(Agent —— 首次发现拷入引擎成为活体,升级不覆盖、卸载保留)。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
+
+## 块表面:让插件的界面里放**真 Amadeus 块**(2026-07-26 起)
+
+**能力对等原则**:内置插件和外置插件拿到的 `ctx` 一模一样,唯一区别是内置的**已经装好了**。此前不是这样 —— 内置插件跑在进程内、能直接给 React 组件,所以只有它们能渲染真块;外置插件是裸 `setup(ctx)` 体,只有 DOM。补上 `ctx.app` 的块表面之后这条缺口关掉了。
+
+想做「一个节点/一张卡片里就是一个可编辑的 Amadeus 块」这类界面(思维导图、看板、白板便签),别自己复刻编辑器 —— **把 DOM 交给宿主渲染**:
+
+```js
+const page = ctx.app.getPage()          // {token, path, status, blocks:{id→markdown}, order, fmExtra}
+const dispose = ctx.app.mountBlocks(el, {
+  token: page.token,
+  blockId,
+  // 传了 onInsertAfter = 宣告「块结构归我管」:笔记式结构键(块首退格并块 / 方向键跨块 / 上下移块)
+  // 被中和,而「会新建下一个块」的动作(/数据库 脚手架、非空块里 Shift+Enter)重路由到这里。
+  onInsertAfter: (id, content) => addChildNode(id, content),
+})
+```
+
+**改数据一律要带 `page.token`**:块 id 是**页内**递增的(两页都有 `b1`)。插件拿着 A 页的 id、用户已切到 B 页时继续提交,轻则把块插进 B、重则删掉 B 的同名块 —— 令牌不匹配宿主直接拒绝并 warn。每次 `await` 之后重新 `getPage()` 取新令牌。
+
+| | 用途 |
+|---|---|
+| `getPage()` | 活动页快照(**冻结且全插件共用,别改它**) |
+| `subscribePage(cb)` | 块/顺序/外来 frontmatter 变了才回调,返回退订函数 |
+| `insertBlockAfter(token, afterId, content)` | 建块,返回新 id(`null` = 插到最前;令牌过期返回 `null`) |
+| `deleteBlock(token, id)` | 删块(async) |
+| `setFmExtra(token, text)` | 写**外来 frontmatter**——你的每页数据存这儿,进页面撤销栈 |
+| `undo(token)` / `redo(token)` | 走页面自己的撤销栈(结构改动天然可撤销) |
+| `requestFocus(id, place)` / `consumeFocus(id)` | 把光标送进某个块(只读焦点,不要令牌) |
+| `prompt(title, initial)` | 模态输入。**Electron 没有 `window.prompt`,永远别用 DOM 那个** |
+
+坑,按踩到的顺序:
+
+- **只服务活动页**。Amadeus 是「单活页」模型(同一时刻只加载一处,笔记编辑器和文件类型视图共用),插件跟着走。令牌闸是宿主兜的底,你自己也别拿旧快照连环操作。
+- **`fmExtra` 要外科式改**:用户和别的插件的键也在同一份 frontmatter 里,整段重写会抹掉它们。**绝不把数据塞进 `amadeus_layout`**(zod 无 passthrough,未知键加载即被 strip)。
+- **`blocks` 的引用是稳定的**:`subscribePage` 靠引用比较去重,自己缓存派生结果时也按引用判,别每帧深比较。快照本身是 `Object.freeze` 的(全插件共用一份,改它没用也不许改)。
+- **块 id 会被复用**:落盘前剪掉指向已不存在的块的记录,否则新块会继承旧记录的状态。
+- **自己的浮层要小心 `transform`**:`.slash-menu` / 行内工具栏这些是 `position: fixed` + 视口坐标;你的画布若带 pan/zoom 的 `transform`,它就成了 fixed 的包含块,浮层会被平移+缩放一次。把浮层传送到最近的 `.am-app` 下。
+- **忘记清理宿主也会兜**:插件被禁用/重载/`setup` 抛错时,你开的 `subscribePage` 与 `mountBlocks` 由宿主统一收掉,之后整份 `ctx.app` 块表面变哑(在飞的异步任务改不动用户文件)。但这是安全网不是设计:该 dispose 还是要 dispose。
+- **内置类型优先是硬规则**:`registerFileType` 的后缀若已被内置认领(`.excalidraw.md`/`.db`/`.pdf`/图片),宿主**拒绝注册并返回 `false`** —— 拿到 `false` 就整体退让,连创建器/斜杠项/命令一起别注册(那几个宿主拦不住,不退让用户会看到两份「新建 X」)。旧宿主返回 `undefined`,所以判定写 `=== false`。
+- **四条新建主路径都要注册**:文件树右键(`registerFileCreator`)、命令面板(`registerCommand`)、笔记里的 `/`(`registerSlashItem` + `run()`,建完就地嵌入)、**新建标签页启动器**(2026-07-26 起也列 `registerFileCreator`,与内置的「新建白板」并排)。少注册一条,用户就会问「为什么 XX 里没有它」。
+- **想做「节点/卡片里是真块」的界面,照 `forsion-plugin-mindmap` 3.0.0 抄**:它是块表面 seam 的样板 —— 一层薄适配(`src/host.tsx`)把 `ctx.app` 伪装成宿主 store/组件的形状,画布本体几乎原样;令牌只在适配层管一次。⚠️那层里按内容去重的缓存**不是优化是正确性**:`getPage()` 每次返回新对象,不去重则 `useSyncExternalStore` 每次判「变了」→ 无限重渲挂死。React 也内联进包(插件拿不到宿主模块图;两份 React 共存没问题,边界就是 `mountBlocks` 那个 DOM 节点)。
+
 ## 发布到市场
 
-推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 个人中心 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
+推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 个人中心 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。捆绑包(默认形态)按 **amadeus-plugin** 类投稿(桌面按包内 manifest 实测路由,自然落进 `~/.forsion/plugins/`)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。

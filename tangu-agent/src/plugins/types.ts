@@ -104,6 +104,11 @@ export interface TanguPluginContext {
   log(msg: string): void;
   /** 路径信息。 */
   paths: { pluginDir: string };
+  /**
+   * 发用户活动事件(强制 `plugin:<id>:` 前缀,对齐桌面 ctx.activity.log)——自动化 event_seen 可盯,
+   * Muse/read_activity 可读。仅本地形态生效(云端 worker 静默 no-op)。detail 值折叠空白截断,勿放敏感原文。
+   */
+  activity: { append(event: string, detail?: Record<string, unknown>): void };
 }
 
 /** 插件入口默认导出。 */

@@ -11,6 +11,10 @@ import type { ToolProvider } from '../tools/toolRegistry.js';
 export interface PromptSectionCtx {
   execMode: 'sandbox' | 'host';
   cwd?: string;
+  /** host:用户显式添加的额外工作文件夹(绝对路径),已并入可写根,环境段据此告知模型。 */
+  extraRoots?: string[];
+  /** 本会话是否经消息通道(微信等)转发——通道端只渲染纯文本,回复风格段据此分裁。 */
+  channelSession?: boolean;
 }
 
 /**

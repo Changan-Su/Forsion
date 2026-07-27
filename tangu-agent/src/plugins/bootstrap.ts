@@ -22,6 +22,8 @@ import { activeRunCount } from '../services/agentLoop.js';
 import { createThinWorker } from '../adapters/httpWorkerHost.js';
 import { createProfileStore } from '../profiles/profileStore.js';
 import { activatePlugin, discoverPlugins, type DiscoveredPlugin } from './loader.js';
+import { appendActivityLine } from '../services/userActivity.js';
+import { seedBundleAgents } from './bundles.js';
 import type {
   PluginCommand,
   PluginRouters,
@@ -83,6 +85,12 @@ function makeContext(d: DiscoveredPlugin, state: HostState): TanguPluginContext 
     sdk,
     log: (msg) => console.log(`[plugin:${d.manifest.id}] ${msg}`),
     paths: { pluginDir: d.dir },
+    activity: {
+      append: (event, detail) => {
+        // 强制插件命名空间前缀(与桌面 ctx.activity.log 同纪律);appendActivityLine 自身吞错,事件流是尽力而为的旁路。
+        appendActivityLine(`plugin:${d.manifest.id}:${String(event || '')}`, detail as Record<string, any>);
+      },
+    },
   };
 }
 
@@ -125,6 +133,7 @@ export async function dispatchPluginCommand(name: string, argv: string[]): Promi
  * 路由挂载器内部可能读 `deps()`）。tool provider 注册是无状态的静态写入，先于 createTanguModule 也安全。
  */
 export async function activateAllPlugins(): Promise<(r: PluginRouters) => void> {
+  await seedBundleAgents().catch(() => {}); // bundle 内嵌 agent 播种(幂等,永不覆盖已有)
   const state = newState();
   for (const d of discoverPlugins()) {
     try {
@@ -151,6 +160,7 @@ export async function activateAllPlugins(): Promise<(r: PluginRouters) => void> 
  * 仅处理「全新 id」;原地升级(覆盖同 slug 代码)受 import 缓存所限仍需重启。
  */
 export async function activateNewPlugins(): Promise<{ addedIds: string[]; needsRestart: boolean }> {
+  await seedBundleAgents().catch(() => {}); // 市场装 bundle 后重扫即播种其内嵌 agent,无需重启
   const addedIds: string[] = [];
   let needsRestart = false;
   for (const d of discoverPlugins()) {

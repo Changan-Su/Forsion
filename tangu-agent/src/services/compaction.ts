@@ -123,6 +123,12 @@ export function foldWorkingWithSummary(msgs: ChatMessage[], summary: string, tai
   let head = 0;
   while (head < msgs.length && (msgs[head] as any).role === 'system') head++;
   if (msgs.length - head <= tail + 1) return; // 太短不值得折
+  // 折叠边界不许落在工具结果批次中间:孤立的 role:'tool'(前面没有带 tool_calls 的 assistant)
+  // 会被 OpenAI 协议校验直接拒、在 Anthropic 生成无 tool_use 配对的 tool_result。边界落在 tool 上
+  // 就往前扩到该批次的 assistant(大批工具调用时 tail 实际保留数会多于名义值,正确性优先)。
+  let cut = msgs.length - tail;
+  while (cut > head && (msgs[cut] as any).role === 'tool') cut--;
+  if (cut - head < 1) return; // 边界一路退到头:没有可折叠的前缀
   const summaryMsg = { role: 'system', content: '## Compacted Summary of Earlier Conversation\n' + summary } as ChatMessage;
-  msgs.splice(head, msgs.length - head - tail, summaryMsg);
+  msgs.splice(head, cut - head, summaryMsg);
 }

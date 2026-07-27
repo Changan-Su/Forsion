@@ -1,6 +1,6 @@
 /**
  * Agent 自动化 launcher —— 两类到期任务共用一条无人值守管道:
- *   ① muse_watch 规则带 agentSlug(命中不唤 Muse,triggerKey=规则 id);
+ *   ① manage_automation 规则(动作链 runActions,或旧式 agentSlug 单 run;triggerKey=规则 id);
  *   ② agents/<slug>/SCHEDULE.db 的 auto 日程条目(triggerKey=`sched:<slug>:<rowId>`)。
  * 每个 triggerKey 一条**常驻 kind='automation' 会话**(首次命中创建),到期 enqueue 一个 run。
  *
@@ -23,8 +23,12 @@ import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { getAgent, listAgents, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { resolveBackgroundModelId } from './specialAgentsConfig.js';
-import type { MuseTrigger } from './museTriggers.js';
+import { condSummary, disableTrigger, type MuseTrigger, type ActionSpec } from './museTriggers.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
+import { executeTool } from '../tools/registry.js';
+import { declaredAutomationSafe } from '../tools/toolRegistry.js';
+import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
+import type { ToolContext } from '../tools/toolTypes.js';
 
 function log(msg: string): void {
   try { deps().host.log(`[automation] ${msg}`); } catch { console.log(`[automation] ${msg}`); }
@@ -101,16 +105,11 @@ async function anyUserRunActive(): Promise<boolean> {
   return !!rows.length;
 }
 
-function automationMessage(t: MuseTrigger): string {
-  const c = t.cond;
-  const cond =
-    c.type === 'file_chars_gte' ? `file ${c.path} reached ${c.n}+ non-whitespace chars`
-    : c.type === 'event_seen' ? `new activity matched "${c.match}"`
-    : `daily at ${c.time}`;
+export function automationMessage(t: MuseTrigger, prompt?: string): string {
   return (
-    `[Automation] Watch rule "${t.desc}" fired (${cond}). ` +
+    `[Automation] Watch rule "${t.desc}" fired (${condSummary(t.cond)}). ` +
     'You are running unattended — do not ask the user questions; finish the task and summarize what you did.\n\n' +
-    `Task: ${t.prompt || t.desc}`
+    `Task: ${prompt || t.prompt || t.desc}`
   );
 }
 
@@ -125,7 +124,7 @@ export interface UnattendedSpec {
 }
 
 /** 启动单个无人值守 run;true=实际起跑(agent 缺失/无模型/在跑 → false,调用方不 mark)。让位闸由批量入口把守。 */
-async function launchUnattendedRun(spec: UnattendedSpec): Promise<boolean> {
+export async function launchUnattendedRun(spec: UnattendedSpec): Promise<boolean> {
   const def = await getAgent(spec.agentSlug);
   if (!def) { log(`${spec.triggerKey} 的 agent "${spec.agentSlug}" 不存在,跳过`); return false; }
   const modelId = def.model || (await resolveBackgroundModelId(''));
@@ -149,6 +148,7 @@ async function launchUnattendedRun(spec: UnattendedSpec): Promise<boolean> {
         execMode: 'host',
         approvalMode: 'full-auto',
         maxIterations: Math.min(def.maxIterations ?? 20, 50),
+        automationOrigin: spec.triggerKey, // 活动行 o= 标记 → event_seen 防自激
       },
     },
   });
@@ -157,9 +157,121 @@ async function launchUnattendedRun(spec: UnattendedSpec): Promise<boolean> {
   return true;
 }
 
+// ── 动作链执行器(tool_call 白名单=内置 curated 集 + 插件 capabilities.automationSafe 正向声明)──
+
+const AUTOMATION_TOOL_ALLOWLIST = new Set(['run_bash', 'write_file', 'web_fetch', 'web_search']);
+
+/** 工具是否可作 tool_call 动作(动作目录端点与执行前校验共用)。 */
+export function isAutomationTool(name: string): boolean {
+  return AUTOMATION_TOOL_ALLOWLIST.has(name) || declaredAutomationSafe(name);
+}
+
+export interface ExecStepRecord { type: string; tool?: string; ok: boolean; summary: string }
+
+export interface ExecutionRow {
+  id: string;
+  trigger_id: string;
+  origin: string;
+  status: string;
+  steps: ExecStepRecord[];
+  error: string | null;
+  created_at: string;
+}
+
+/** 执行账本(桌面「触发记录」栏与试跑结果都读它)。 */
+export async function listExecutions(triggerId?: string, limit = 50): Promise<ExecutionRow[]> {
+  const lim = Math.min(200, Math.max(1, limit));
+  const rows = triggerId
+    ? await query<any[]>(
+        `SELECT id, trigger_id, origin, status, steps, error, created_at FROM automation_executions
+         WHERE user_id = ? AND trigger_id = ? ORDER BY created_at DESC LIMIT ${lim}`,
+        [automationUserId(), triggerId],
+      )
+    : await query<any[]>(
+        `SELECT id, trigger_id, origin, status, steps, error, created_at FROM automation_executions
+         WHERE user_id = ? ORDER BY created_at DESC LIMIT ${lim}`,
+        [automationUserId()],
+      );
+  return (rows || []).map((r) => {
+    let steps: ExecStepRecord[] = [];
+    try { steps = JSON.parse(String(r.steps || '[]')); } catch { /* 留空 */ }
+    return { id: r.id, trigger_id: r.trigger_id, origin: r.origin, status: r.status, steps, error: r.error ?? null, created_at: r.created_at };
+  });
+}
+
 /**
- * 启动一批命中的 agent 规则,返回**实际起跑**的规则 id(调用方只对这些 markTriggersFired——
- * 让位/在跑/无模型/agent 缺失都不烧 cooldown,下轮重试)。
+ * 顺序执行规则的动作链,失败即停。**开跑即视为已触发**(调用方 mark):notify 等副作用不可重放,
+ * 步骤失败后整链重试会重复打扰用户;失败细节进账本,tool_call 目标不可用则停用规则+通知。
+ * origin='manual'(试跑)走同一条路,只是账本标记不同、调用方不 mark。
+ */
+export async function runActions(t: MuseTrigger, origin: 'auto' | 'manual'): Promise<{ execId: string; status: 'done' | 'failed'; steps: ExecStepRecord[] }> {
+  const userId = automationUserId();
+  const actions: ActionSpec[] = t.actions || [];
+  const firstAgent = actions.find((a): a is Extract<ActionSpec, { type: 'agent_run' }> => a.type === 'agent_run');
+  const sessionId = await ensureAutomationSession(t.id, firstAgent?.agentSlug || '', String(t.desc), '');
+  const steps: ExecStepRecord[] = [];
+  let error: string | undefined;
+  for (const a of actions) {
+    try {
+      if (a.type === 'notify') {
+        const r = await sendInboxMessage(userId, { title: a.title, body: a.body, senderId: `automation:${t.id}` });
+        steps.push({ type: 'notify', ok: r.ok, summary: r.ok ? `notified: ${a.title}` : String(r.error || 'failed').slice(0, 300) });
+        if (!r.ok) { error = r.error || 'notify failed'; break; }
+      } else if (a.type === 'agent_run') {
+        const ok = await launchUnattendedRun({ agentSlug: a.agentSlug, triggerKey: t.id, title: String(t.desc), message: automationMessage(t, a.prompt) });
+        steps.push({ type: 'agent_run', ok, summary: ok ? `run started (${a.agentSlug})` : `agent "${a.agentSlug}" busy/unavailable` });
+        if (!ok) { error = 'agent_run not started'; break; }
+      } else if (a.type === 'tool_call') {
+        if (!isAutomationTool(a.tool)) {
+          // 不可恢复(工具被卸载/未声明 automationSafe):停用规则防每轮空转,通知用户人工处理。
+          steps.push({ type: 'tool_call', tool: a.tool, ok: false, summary: `tool "${a.tool}" not available for automation` });
+          error = `tool ${a.tool} unavailable`;
+          await disableTrigger(t.id);
+          await sendInboxMessage(userId, {
+            title: `自动化「${t.desc}」已停用`,
+            body: `步骤工具 ${a.tool} 不可用(未安装或未声明 automationSafe)。请在自动化面板检查后重新启用。`,
+            senderId: `automation:${t.id}`,
+          });
+          break;
+        }
+        const ctx: ToolContext = {
+          userId, sessionId, appId: deps().profile.appId,
+          execMode: 'host', approvalMode: 'full-auto', automationOrigin: t.id,
+        };
+        const res = await executeTool({ id: uuidv4(), type: 'function', function: { name: a.tool, arguments: JSON.stringify(a.args || {}) } }, ctx);
+        const failed = res.isError || String(res.result).startsWith('Error');
+        steps.push({ type: 'tool_call', tool: a.tool, ok: !failed, summary: String(res.result).slice(0, 300) });
+        if (failed) { error = String(res.result).slice(0, 300); break; }
+      }
+    } catch (e: any) {
+      steps.push({ type: a.type, ok: false, summary: String(e?.message || e).slice(0, 300) });
+      error = String(e?.message || e).slice(0, 300);
+      break;
+    }
+  }
+  const status: 'done' | 'failed' = error ? 'failed' : 'done';
+  const execId = uuidv4();
+  await query(
+    `INSERT INTO automation_executions (id, user_id, trigger_id, origin, status, steps, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [execId, userId, t.id, origin, status, JSON.stringify(steps), error || null],
+  ).catch((e: any) => log(`执行账本写入失败:${e?.message || e}`));
+  // 人读投影:常驻会话里插一条 model 消息(桌面 Detail 的 transcript 白得展示;账本才是真源)。
+  const lines = steps.map((s, i) => `${s.ok ? '✓' : '✗'} ${i + 1}. ${s.type}${s.tool ? `(${s.tool})` : ''} — ${s.summary}`);
+  await query(
+    `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error)
+     VALUES (?, ?, 'model', ?, ?, NULL, ?)`,
+    [uuidv4(), sessionId, `[Automation${origin === 'manual' ? ' · test-run' : ''}] ${t.desc} (${condSummary(t.cond)})\n${lines.join('\n') || '(no steps)'}`, Date.now(), status === 'failed'],
+  ).catch((e: any) => log(`transcript 投影写入失败:${e?.message || e}`));
+  await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionId]).catch(() => {});
+  log(`规则 ${t.id} 动作链执行完毕(${origin}):${status}${error ? ` — ${error}` : ''}`);
+  return { execId, status, steps };
+}
+
+/**
+ * 启动一批命中的规则,返回**应烧 cooldown** 的规则 id:
+ *   动作链规则 → runActions 开跑即算(部分失败也 mark,防副作用重放);
+ *   旧式 agentSlug 规则 → 实际起跑才算(让位/在跑/无模型不烧 cooldown,下轮重试)。
  */
 export async function launchAutomationTriggers(fired: MuseTrigger[]): Promise<string[]> {
   const launched: string[] = [];
@@ -169,13 +281,18 @@ export async function launchAutomationTriggers(fired: MuseTrigger[]): Promise<st
   } catch { return launched; }
   for (const t of fired) {
     try {
-      const ok = await launchUnattendedRun({
-        agentSlug: String(t.agentSlug || ''),
-        triggerKey: t.id,
-        title: String(t.desc),
-        message: automationMessage(t),
-      });
-      if (ok) launched.push(t.id);
+      if (t.actions?.length) {
+        await runActions(t, 'auto');
+        launched.push(t.id);
+      } else {
+        const ok = await launchUnattendedRun({
+          agentSlug: String(t.agentSlug || ''),
+          triggerKey: t.id,
+          title: String(t.desc),
+          message: automationMessage(t),
+        });
+        if (ok) launched.push(t.id);
+      }
     } catch (e: any) {
       log(`规则 ${t.id} 启动失败:${e?.message || e}`);
     }
