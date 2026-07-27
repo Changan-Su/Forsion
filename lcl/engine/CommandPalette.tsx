@@ -10,6 +10,7 @@ export function CommandPalette() {
   const open = useCommandStore((s) => s.paletteOpen)
   const setOpen = useCommandStore((s) => s.setPaletteOpen)
   const commands = useCommandStore((s) => s.commands)
+  const pickCb = useCommandStore((s) => s.pickCb)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
 
@@ -27,8 +28,10 @@ export function CommandPalette() {
 
   const run = (i: number): void => {
     const c = results[i]
-    close()
-    if (c) c.run()
+    close() // 选取模式:close 会清 pickCb,故用 render 捕获的引用
+    if (!c) return
+    if (pickCb) pickCb(c.id)
+    else c.run()
   }
 
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -53,7 +56,7 @@ export function CommandPalette() {
         <input
           className="cmd-input"
           autoFocus
-          placeholder={t('command.placeholder')}
+          placeholder={pickCb ? (document.documentElement.lang.startsWith('zh') ? '选择要添加的命令…' : 'Pick a command to add…') : t('command.placeholder')}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -70,7 +73,10 @@ export function CommandPalette() {
               onMouseEnter={() => setActive(i)}
               onClick={() => run(i)}
             >
-              <span className="cmd-title">{label(c.title)}</span>
+              <span className="cmd-title">
+                {c.icon && <c.icon size={14} className="cmd-icon" />}
+                {label(c.title)}
+              </span>
               {c.hotkey && <kbd className="cmd-hotkey">{c.hotkey}</kbd>}
             </button>
           ))}

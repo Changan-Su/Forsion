@@ -21,8 +21,9 @@ import { allViews, getView, subscribeViews } from './viewRegistry'
 import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths } from './dockviewStore'
 import { useNav } from './navStore'
 import { getActiveSpace } from './spaceRegistry'
-import { computeDropTarget, type DropTarget } from './dropModel'
+import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
+import { OverlayAt, zoomOf } from './menuAnchor'
 
 /** 从 Dockview panel.params 造可跨窗重建的 ViewRef({type, 用户 params});剥引擎私有 __loc/__type。 */
 function viewRefFromParams(params: Record<string, unknown> | undefined, component?: string): ViewRef | null {
@@ -64,7 +65,7 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       lastMainViewType = def.type
       return changed
     })
-    return <div className={`wb-view${enter ? ' wb-view-enter' : ''}`}>{def.factory({ leaf, params: leaf.params })}</div>
+    return <div className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}>{def.factory({ leaf, params: leaf.params })}</div>
   }
 }
 
@@ -141,7 +142,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
         </button>
       )}
       {menu && createPortal(
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
           {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。 */}
           {getDetachApi() && (
             <button onClick={() => {
@@ -156,7 +157,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
           <button onClick={() => { useWorkspace.getState().closeLeaf(api.id); setMenu(null) }}>
             <X size={13} /> {document.documentElement.lang.startsWith('zh') ? '关闭' : 'Close'}
           </button>
-        </div>,
+        </OverlayAt>,
         document.body,
       )}
     </div>
@@ -230,6 +231,9 @@ function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
 // 提示显示在哪就落在哪(根治提示≠落点)。固定 3 面板:tab 栏=并标签页;正文半边=面板内分屏(侧栏仅上下,主区四向);违规=null 弹回。
 let draggingId: string | null = null
 let draggingView: ViewRef | null = null // 跨窗撕拽:源视图的可重建描述({type,params})
+// 「落点即开」:从新建标签页把一个尚未打开的视图卡片拖进 tab/side bar → 在落点新开(而非搬已开面板)。
+// 与 draggingId(搬面板)互斥;同一套 dragover 提示 + computeDropTarget 落点,drop 分派到 openView。
+let draggingOpen: { type: string; params?: Record<string, unknown> } | null = null
 let lastDragUpdate = 0 // 节流 drag→dragUpdate(屏幕坐标上报)
 let dropLineEl: HTMLDivElement | null = null
 let dropZoneEl: HTMLDivElement | null = null
@@ -247,31 +251,60 @@ function hideIndicator(): void {
 }
 
 function showTarget(t: DropTarget): void {
+  // t 全是视口 px(rect/clientX 系);提示条是挂在 body 下的 fixed 元素,祖先 CSS zoom 会把
+  // left/top/宽高再乘一遍 → 整体除掉自身累计缩放。见 menuAnchor.tsx,仪器 npm run check:overlay。
+  // ⚠️ display 必须先置回 block 再读 zoomOf:`currentCSSZoom` 对**未被渲染**(display:none)的元素
+  // 恒返回 1,上一轮 hideIndicator 藏起来之后直接读就会拿到 1 = 不补偿(实测坐实)。
   if (t.mode === 'tab') {
     if (dropZoneEl) dropZoneEl.style.display = 'none'
     const el = (dropLineEl ??= indicatorEl('wb-drop-line'))
     el.style.display = 'block'
-    el.style.left = `${Math.round(t.lineX) - 1}px`
-    el.style.top = `${Math.round(t.top)}px`
-    el.style.height = `${Math.round(t.height)}px`
+    const z = zoomOf(el)
+    el.style.left = `${Math.round(t.lineX) / z - 1}px`
+    el.style.top = `${Math.round(t.top) / z}px`
+    el.style.height = `${Math.round(t.height) / z}px`
   } else {
     if (dropLineEl) dropLineEl.style.display = 'none'
     const el = (dropZoneEl ??= indicatorEl('wb-drop-zone'))
     el.style.display = 'block'
-    el.style.left = `${Math.round(t.rect.left)}px`
-    el.style.top = `${Math.round(t.rect.top)}px`
-    el.style.width = `${Math.round(t.rect.width)}px`
-    el.style.height = `${Math.round(t.rect.height)}px`
+    const z = zoomOf(el)
+    el.style.left = `${Math.round(t.rect.left) / z}px`
+    el.style.top = `${Math.round(t.rect.top) / z}px`
+    el.style.width = `${Math.round(t.rect.width) / z}px`
+    el.style.height = `${Math.round(t.rect.height) / z}px`
   }
 }
 
-// 收尾:清 draggingId + data-dv-dragging(app-region 拖窗区复位)+ 撤源 tab 标记 + 撤提示。
+// 收尾:清 draggingId/draggingOpen + data-dv-dragging(app-region 拖窗区复位)+ 撤源 tab 标记 + 撤提示。
 function clearDragState(): void {
   draggingId = null
   draggingView = null
+  draggingOpen = null
   if (document.documentElement.dataset.dvDragging) delete document.documentElement.dataset.dvDragging
   document.querySelector('.dv-tab.wb-tab-dragging')?.classList.remove('wb-tab-dragging')
   hideIndicator()
+}
+
+/** 新建标签页视图卡片发起「落点即开」拖拽:记下要开的视图 + 抑制 tab 栏窗拖区(同 onTabDragStart,否则
+ *  macOS 下 tab 栏吞掉 dragover/drop)。落点由全局 drop 监听经 computeDropTarget 决定(见 onDrop)。 */
+export function startOpenDrag(dt: DataTransfer | null, spec: { type: string; params?: Record<string, unknown> }): void {
+  draggingOpen = spec
+  if (dt) { dt.effectAllowed = 'copy'; try { dt.setData('application/x-forsion-open', spec.type) } catch { /* ignore */ } }
+  document.documentElement.dataset.dvDragging = '1'
+}
+
+/** 落点即开:据目标组所在区打开新视图 —— 主区=新标签;侧栏=该侧(收起先展开还原 stash,同 launcher 侧栏项)。 */
+function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<string, unknown> }): void {
+  const loc = locOf(t.group)
+  const ws = useWorkspace.getState()
+  if (loc === 'main') { ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true }); return }
+  const visible = loc === 'left' ? ws.leftVisible : ws.rightVisible
+  if (!visible) ws.toggleSidebar(loc) // 收起态直接 openView 会把 stash 覆盖成单视图 → 先展开还原
+  ws.openView(spec.type, spec.params ?? {}, loc)
+  // 该侧原只有 sidebar-empty 占位时,落入真视图后清掉它(镜像 dockviewStore.dropView 的占位退位)。
+  const api = ws.api
+  const sidePanels = api ? api.panels.filter((p) => ((p.params as { __loc?: string } | undefined)?.__loc) === loc) : []
+  if (sidePanels.length > 1) sidePanels.filter((p) => ((p.params as { __type?: string } | undefined)?.__type) === 'sidebar-empty').forEach((p) => p.api.close())
 }
 
 // WbTab 拖拽发起:记源 panelId + 标记源 tab(供 computeDropTarget/让位排除)+ 打 data-dv-dragging
@@ -316,21 +349,24 @@ export const WorkspaceHost: React.FC<{
   //  收尾只认 dragend(HTML5 收尾信号:drop/取消/ESC 都 fire),drop 里也兜底清一次(源节点被 moveTo 移走时 dragend 可能不达 window)。
   useEffect(() => {
     const onDragOver = (e: DragEvent): void => {
-      if (!draggingId) return
+      if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
       const api = useWorkspace.getState().api
       const t = api ? computeDropTarget(api, e.clientX, e.clientY) : null
       if (!t) { hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
       e.preventDefault() // 有效落点才放行 drop
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+      if (e.dataTransfer) e.dataTransfer.dropEffect = draggingOpen ? 'copy' : 'move'
       showTarget(t)
     }
     const onDrop = (e: DragEvent): void => {
-      const id = draggingId
-      if (!id) return
+      const id = draggingId, open = draggingOpen
+      if (!id && !open) return
       e.preventDefault()
       const api = useWorkspace.getState().api
       const t = api ? computeDropTarget(api, e.clientX, e.clientY) : null
-      if (t) useWorkspace.getState().dropView(id, t)
+      if (t) {
+        if (open) openViewAtTarget(t, open)       // 落点即开(新视图,不搬面板)
+        else if (id) useWorkspace.getState().dropView(id, t)
+      }
       clearDragState()
     }
     // 跨窗撕拽:drag 在源元素全程触发(含移出窗口)→ 节流上报屏幕坐标,主进程给光标下窗口画落点预览。

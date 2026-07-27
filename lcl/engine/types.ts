@@ -53,6 +53,8 @@ export interface Command {
   keywords?: string
   /** 形如 'mod+k' / 'mod+shift+p';mod = mac⌘ / 其它 Ctrl。 */
   hotkey?: string
+  /** 命令面板行首 + 钉进 ribbon 命令区时的图标;缺省用通用图标。 */
+  icon?: LucideIcon
   run(): void
 }
 
@@ -64,8 +66,10 @@ export interface RibbonItem {
   /** 图标钮的悬浮名;ribbon 展开时也作为图标右侧的名称。 */
   tooltip?: string | (() => string)
   onClick?(): void
-  /** 顶部(默认,可拖动改序)或底部(常驻:设置 / 账号)。 */
+  /** 上区(默认;Spaces)或下区(命令);两区内均可拖拽改序、可进收纳夹,跨区禁止。 */
   side?: 'top' | 'bottom'
+  /** 钉死在 ribbon 最底部:不参与拖拽/收纳/溢出(账号卡)。仅对 side:'bottom' 有意义。 */
+  pinned?: boolean
   /** 复合项:自定义组件渲染,拿到 ribbon 展开态(替代 icon/onClick)。用于账号卡。 */
   component?: ComponentType<{ expanded: boolean }>
 }

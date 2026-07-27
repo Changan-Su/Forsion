@@ -7,8 +7,11 @@
 .shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  /* zoom 反补偿:body 的 CSS zoom 缩放视觉但不缩 vh(vh 恒=物理视口)——不补偿则 zoom≠1 时全屏壳
+     溢出(放大)/留白(缩小),已 playwright 实证(z=0.8 留白 20%)。--uiz 由 uiZoom.apply 与 body.zoom 同步
+     设值:布局先反向除掉 zoom,渲染 ×zoom 后正好满视口。未设(=1,及不接 uiZoom 的端)等价旧 100vh,零回归。 */
+  height: calc(100vh / var(--uiz, 1));
+  width: calc(100vw / var(--uiz, 1));
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
@@ -33,7 +36,7 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-  position: relative;
+  position: relative; /* 状态栏悬浮层(.sb)的定位锚 */
 }
 /* 引导结束 → 主界面一次性入场(淡入 + 轻微放大),与引导退场叠化衔接。 */
 .main-enter { animation: main-rise .55s cubic-bezier(.2, .8, .2, 1) both; transform-origin: center; }
@@ -46,10 +49,11 @@
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   padding: 8px 0;
   background: var(--sidebar-bg);
+  position: relative; /* 收纳夹/「…」浮层、右键菜单以 ribbon 为定位参照(fixed 定位读其 rect) */
   /* 与侧栏之间刻意无分割线(用户拍板):两侧同为 --sidebar-bg,连成一片背景。 */
   /* 顶部交通灯避让:mac 下只在 ribbon 顶部留空(交通灯落此),中间 tab 栏 / 右栏直接顶到最上,免中/右留白。 */
   -webkit-app-region: drag;
@@ -59,6 +63,16 @@
  * (右栏远离交通灯,不动 → 用 .wb-tab--left 精确只命中左栏组)。 */
 [data-platform='mac'] .dockview-theme-lcl .dv-groupview:has(.wb-tab--left) .dv-tabs-and-actions-container { padding-left: 26px; }
 .rb-group { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+/* 两区弹性分配:head+Spaces 靠上,命令+账号靠下(margin-top:auto 把命令区连同其后一起推到底)。 */
+.rb-head { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
+.rb-top { flex-shrink: 0; }
+.rb-bottom { margin-top: auto; flex-shrink: 0; }
+.rb-pinned { flex-shrink: 0; margin-top: 4px; }
+/* ＋ 号:比图标钮更淡,悬停才显形(不喧宾夺主)。 */
+.rb-plus { opacity: 0.4; }
+.rb-plus:hover { opacity: 1; }
+/* 收纳夹/「…」作为拖入目标时的高亮(整钮描边,区别于槽位间的插入线)。 */
+.rb-btn.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent, var(--text)); }
 /* Space 图标 = 顶部 ribbon 项(可拖动改序,排在折叠钮之下、商店之上):当前空间高亮。 */
 .rb-space.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); color: var(--accent, var(--text)); }
 .rb-space.on:hover { color: var(--accent, var(--text)); }
@@ -99,9 +113,18 @@
 }
 .rb-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
 /* 折叠/展开切换钮(常驻顶部)+ 顶部图标的拖动槽(可改序)。 */
-.rb-slot { -webkit-app-region: no-drag; position: relative; display: flex; justify-content: center; border-radius: var(--radius-sm, 8px); }
+/* 【落点丢失的真因】.rb 整条是 -webkit-app-region:drag,只有槽/按钮打了 no-drag 洞 —— 槽之间那 4px
+ * 缝和组边缘仍是**窗口拖拽区**,mac 把它当非客户区,dragover/drop 直接被吞:预览还停在最后一次
+ * 命中槽的位置,松手却收不到 drop → 只剩 dragend → 弹回原地 =「显示了落点但没落过去」。
+ * 拖图标期间整条抑成 no-drag(同 tab 栏的 html[data-dv-dragging] 那条)。 */
+.rb.rb-dragging { -webkit-app-region: no-drag; }
+.rb-slot { -webkit-app-region: no-drag; position: relative; display: flex; justify-content: center; border-radius: var(--radius-sm, 8px); transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
 .rb-slot.dragging { opacity: 0.4; }
-/* 落点提示:目标上方间隙里一道插入线(与左栏分组拖动同款,见 sidebar2.css .t2s-group.drag-over::before)。 */
+/* 落点提示 = 让位动画本身(手机桌面那套排斥占位):图标整槽平移让出空位,ghost 滑进去,松手即落。
+ * transition 只在 .rb-dragging 期间挂 —— 松手那一帧 DOM 顺序变了、transform 归零,带着过渡会从错位飞回来。 */
+.rb-dragging .rb-slot { transition: transform 0.19s cubic-bezier(0.3, 1.3, 0.5, 1), opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
+@media (prefers-reduced-motion: reduce) { .rb-dragging .rb-slot { transition: none; } }
+/* 被拖项不在本条上(从收纳夹/「…」浮层拖回来)→ 没得让位,画插入线标落点。 */
 .rb-slot.drag-over::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
   height: 3px; border-radius: 999px; background: var(--accent-ink); z-index: 3;
@@ -115,31 +138,139 @@
 /* 展开态:宽条,按钮变「图标 + 名称」左对齐行;底部账号卡铺满。 */
 .rb-expanded { width: 180px; align-items: stretch; }
 .rb-expanded .rb-group { align-items: stretch; }
+.rb-expanded .rb-head,
 .rb-expanded .rb-top,
-.rb-expanded .rb-bottom { padding: 0 8px; }
+.rb-expanded .rb-bottom,
+.rb-expanded .rb-pinned { padding: 0 8px; }
 .rb-expanded .rb-slot { width: 100%; justify-content: stretch; }
 .rb-expanded .rb-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 10px; height: 34px; }
 
-/* ===== 状态栏(底固定条) ===== */
+/* ===== 收纳夹 / 「…」浮层(悬停在 ribbon 右侧展开:icon + 文字行,可拖排/拖出) ===== */
+.rb-fly {
+  position: fixed;
+  z-index: 900;
+  min-width: 190px;
+  max-width: 260px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
+  -webkit-app-region: no-drag;
+}
+.rb-fly-head { font-size: 11px; color: var(--text-faint, var(--text-muted)); padding: 2px 8px 6px; font-weight: 600; }
+.rb-fly-sub { font-size: 10.5px; color: var(--text-faint, var(--text-muted)); padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+/* 「…」里溢出的收纳夹标题:可拖出重排 + 可放入(codex#6)。 */
+.rb-fly-folderhead { display: flex; align-items: center; gap: 6px; border-radius: var(--radius-sm, 8px); cursor: grab; }
+.rb-fly-folderhead.dragging { opacity: 0.4; }
+.rb-fly-folderhead.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent, var(--text)); }
+.rb-fly-empty { font-size: 12px; color: var(--text-muted); padding: 4px 8px 8px; }
+.rb-fly-row { position: relative; border-radius: var(--radius-sm, 8px); }
+.rb-fly-row .rb-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 10px; height: 32px; }
+.rb-fly-row.dragging { opacity: 0.4; }
+.rb-fly-row.drag-over::before {
+  content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
+  height: 3px; border-radius: 999px; background: var(--accent-ink); z-index: 3;
+}
+/* 下移:落点在该行之下,线画下沿(悬停谁就顶掉谁 → 线必须画在真正的落点上)。 */
+.rb-fly-row.drag-over.below::before { top: auto; bottom: -3px; }
+
+/* ===== ribbon 右键 / ＋ 菜单(轻量,复用命令面板卡片观感) ===== */
+.rb-menu-backdrop { position: fixed; inset: 0; z-index: 1100; -webkit-app-region: no-drag; }
+.rb-menu {
+  position: fixed;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
+  display: flex;
+  flex-direction: column;
+}
+.rb-menu button {
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rb-menu button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+
+/* ===== 图标选择器(收纳夹 / 命令项自定义图标):图标网格浮层,复用菜单卡片观感。 ===== */
+.rb-iconpick {
+  position: fixed;
+  z-index: 1101;
+  width: 224px;
+  padding: 6px;
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
+}
+.rb-iconpick-reset {
+  display: block; width: 100%; text-align: left; margin-bottom: 4px;
+  padding: 6px 8px; border: none; background: transparent; color: var(--text-muted);
+  font-family: var(--font-ui); font-size: 12px; border-radius: var(--radius-sm, 8px); cursor: pointer;
+}
+.rb-iconpick-reset:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
+.rb-iconpick-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; max-height: 200px; overflow-y: auto; }
+.rb-iconpick-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 100%; aspect-ratio: 1; border: none; background: transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm, 8px); cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.rb-iconpick-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+.rb-iconpick-btn.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); color: var(--accent, var(--text)); box-shadow: inset 0 0 0 1.5px var(--accent-ink); }
+
+/* 命令面板行首图标(选取模式 + 常规都用)。 */
+.cmd-title { display: inline-flex; align-items: center; gap: 8px; }
+.cmd-icon { flex-shrink: 0; color: var(--text-muted); }
+
+/* ===== 状态栏(悬浮右下 ≈ Obsidian;整体右靠,side 只决定前后段次序) =====
+   悬浮不占布局 → ribbon 与 left 会话侧栏都满高不抬;只有 main/right 视图容器 height 缩掉 --sb-h 让位
+   (见 .wb-view--main/--right),状态栏正好落进那条让位区。透明无背景 → 显下方主区底色,自动适配任何主题。
+   pointer-events:none 让透明区把点击透传下方,只有实际状态项(.sb-item)捕获。 */
 .sb {
-  height: 24px;
-  flex-shrink: 0;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  height: var(--sb-h, 18px);
+  z-index: 5;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 0 10px;
   gap: 12px;
-  background: var(--sidebar-bg);
-  border-top: var(--border-width, 1px) solid var(--border);
   font-size: 11px;
+  line-height: 1;
   color: var(--text-muted);
+  pointer-events: none;
 }
+.sb-item { pointer-events: auto; }
+/* 图标(svg)按块盒参与 flex 居中,杜绝任何 baseline 缝隙 */
+.sb svg { display: block; }
 .sb-group { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .sb-right { justify-content: flex-end; }
 .sb-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+/* 项目内容的两种形态:sb-plain(纯展示)/ sb-click(可点,hover 提亮)。 */
+.sb .sb-plain, .sb .sb-click { display: inline-flex; align-items: center; gap: 4px; }
+.sb .sb-click { cursor: pointer; border-radius: 4px; padding: 1px 6px; margin: -1px -6px; }
+.sb .sb-click:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 
 /* ===== 视图容器 ===== */
 .wb-view { width: 100%; height: 100%; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+/* 状态栏让位:right panel(无圆角纸卡的图标侧栏)直接缩内容容器高度让出状态栏高(--sb-h,由 DesktopStatusBar
+   mount 时设;未设=0 → 满高)。left 会话侧栏不缩(用户方向:只抬 main+right)。用 height 缩而非 padding →
+   滚动内容不进让位区,状态栏不重叠。main 主区是圆角纸卡,让位改由纸卡外框(.dv-content-container)底 padding 完成,见下。 */
+.wb-view--right { height: calc(100% - var(--sb-h, 0px)); }
 /* 切换主 view 的丝滑淡入(激活时由 ViewHost 重放)。 */
 @keyframes wb-view-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .wb-view.wb-view-enter { animation: wb-view-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1); }
@@ -256,7 +387,10 @@
  *   react-part = 纸面(--bg)+ 圆角 + 裁切。tab 栏在其上方,保持扁平满铺。 */
 .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container {
   background: var(--sidebar-bg);
-  padding: 8px;
+  /* 底部额外让 --sb-h:圆角纸卡底边整体上移,在纸卡**下方**(圆角外)腾出状态栏的位置(状态栏落纸卡外);
+     纸卡底与状态栏之间留 4px 间距。--sb-h 由 DesktopStatusBar mount 时设;未设(非主窗/关闭状态栏)=0
+     → 底部回 4px(比其他三边窄 4px,可忽略),零副作用。 */
+  padding: 8px 8px calc(4px + var(--sb-h, 0px));
 }
 .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part {
   border-radius: var(--radius-lg, 14px);

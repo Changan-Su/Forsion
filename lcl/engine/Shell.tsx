@@ -20,7 +20,9 @@ export const Shell: React.FC<{
   header?: React.ReactNode
   /** 独立窗口:不渲染左侧 ribbon 活动栏(以区别主窗;WorkspaceHost 占满宽度)。 */
   noRibbon?: boolean
-}> = ({ dark, soft, buildDefault, header, noRibbon }) => {
+  /** 底部条(feature 层注入,如 StatusBar;引擎不 import feature 代码)。mobile 单列壳不渲染。 */
+  footer?: React.ReactNode
+}> = ({ dark, soft, buildDefault, header, noRibbon, footer }) => {
   useEffect(() => installHotkeys(), [])
   useEffect(() => installSashAffordance(), [])
   // UI_MODE==='mobile'(开发者预览):渲染单列壳 + 命令面板(Cmd/K = 切回桌面 UI 的逃生口)。「手机框」由
@@ -40,6 +42,8 @@ export const Shell: React.FC<{
         {!noRibbon && <Ribbon />}
         <div className="shell-work">
           <WorkspaceHost dark={dark} soft={soft} buildDefault={buildDefault} />
+          {/* 状态栏占 .shell-work 底部一条(顶起 dockview 的 main/left/right,不占 .shell-top→ribbon 满高不抬)。 */}
+          {footer}
         </div>
       </div>
       <CommandPalette />

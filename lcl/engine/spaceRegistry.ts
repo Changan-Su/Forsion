@@ -63,6 +63,16 @@ export const getActiveSpace = (): SpaceDefinition | undefined => {
   return spaces.find((s) => s.id === activeSpaceId) ?? spaces[0]
 }
 
+/** 冷启动定位:直接把活动 Space 钉到 id + 写 ACTIVE_KEY,不存旧布局、不套命名布局 ——
+ *  布局交给 onReady 的 buildDefault 重建成该 Space 的干净默认(「默认 Space」启动设置用)。
+ *  id 未注册(如用户 L0 Space 尚未异步装载)则不动,调用方自行回退。 */
+export function setActiveSpaceCold(id: string): void {
+  const { spaces } = useSpaceStore.getState()
+  if (!spaces.some((s) => s.id === id)) return
+  useSpaceStore.setState({ activeSpaceId: id })
+  try { localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
+}
+
 export const registerSpace = (def: SpaceDefinition): void => useSpaceStore.getState().registerSpace(def)
 export const unregisterSpace = (id: string): void => useSpaceStore.getState().unregisterSpace(id)
 export const setActiveSpace = (id: string): void => useSpaceStore.getState().setActiveSpace(id)

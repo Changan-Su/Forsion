@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useSpaceStore, getActiveSpace, spaceLayoutName } from './spaceRegistry'
+import { useSpaceStore, getActiveSpace, spaceLayoutName, setActiveSpaceCold } from './spaceRegistry'
 import { useWorkspace } from './workspaceStore'
 import type { SpaceDefinition } from './types'
 
@@ -100,5 +100,29 @@ describe('spaceRegistry', () => {
     useSpaceStore.setState({ spaces: [mkSpace('tangu')], activeSpaceId: 'tangu' })
     useSpaceStore.getState().setActiveSpace('tangu')
     expect(calls).toEqual([])
+  })
+
+  // 冷启动定位(默认 Space 启动设置的地基):只钉 id + 写 ACTIVE_KEY,绝不碰布局
+  // —— 布局交给 onReady 的 buildDefault 重建干净默认。若回归成也存/套布局,「干净默认」契约就破了。
+  it('setActiveSpaceCold pins active id + persists, without any layout op', () => {
+    const calls: string[] = []
+    useWorkspace.setState({
+      saveNamed: () => { calls.push('saveNamed') },
+      applyNamed: () => { calls.push('applyNamed'); return true },
+      resetLayout: () => { calls.push('resetLayout') },
+      saveCurrent: () => { calls.push('saveCurrent') },
+    })
+    useSpaceStore.setState({ spaces: [mkSpace('tangu'), mkSpace('amadeus')], activeSpaceId: 'tangu' })
+
+    setActiveSpaceCold('amadeus')
+    expect(useSpaceStore.getState().activeSpaceId).toBe('amadeus')
+    expect(localStorage.getItem('forsion_tangu_active_space')).toBe('amadeus')
+    expect(calls).toEqual([]) // 无任何布局操作
+  })
+
+  it('setActiveSpaceCold ignores an unregistered id (caller falls back)', () => {
+    useSpaceStore.setState({ spaces: [mkSpace('tangu')], activeSpaceId: 'tangu' })
+    setActiveSpaceCold('ghost')
+    expect(useSpaceStore.getState().activeSpaceId).toBe('tangu')
   })
 })

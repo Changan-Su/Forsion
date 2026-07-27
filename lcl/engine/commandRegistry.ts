@@ -9,6 +9,8 @@ import { useShortcuts, effectiveHotkey } from './shortcutStore'
 interface CommandState {
   commands: Command[]
   paletteOpen: boolean
+  /** 选取模式:非空时命令面板变「挑一条命令」,选中回调而不执行(ribbon 添加命令用)。关面板即取消。 */
+  pickCb: ((id: string) => void) | null
   addCommand(cmd: Command): void
   removeCommand(id: string): void
   run(id: string): void
@@ -18,6 +20,7 @@ interface CommandState {
 export const useCommandStore = create<CommandState>((set, get) => ({
   commands: [],
   paletteOpen: false,
+  pickCb: null,
   addCommand: (cmd) =>
     set((s) => ({ commands: [...s.commands.filter((c) => c.id !== cmd.id), cmd] })),
   removeCommand: (id) => set((s) => ({ commands: s.commands.filter((c) => c.id !== id) })),
@@ -25,13 +28,15 @@ export const useCommandStore = create<CommandState>((set, get) => ({
     const cmd = get().commands.find((c) => c.id === id)
     if (cmd) cmd.run()
   },
-  setPaletteOpen: (open) => set({ paletteOpen: open }),
+  setPaletteOpen: (open) => set(open ? { paletteOpen: true } : { paletteOpen: false, pickCb: null }),
 }))
 
 /** 命令式快捷别名(非 React 上下文亦可调用)。 */
 export const addCommand = (cmd: Command): void => useCommandStore.getState().addCommand(cmd)
 export const removeCommand = (id: string): void => useCommandStore.getState().removeCommand(id)
 export const openCommandPalette = (): void => useCommandStore.getState().setPaletteOpen(true)
+/** 以选取模式打开命令面板:用户挑一条命令后回调其 id(不执行)。 */
+export const openCommandPicker = (cb: (id: string) => void): void => useCommandStore.setState({ pickCb: cb, paletteOpen: true })
 
 /** shift 按下时 e.key 给的是 '{'/'}'(US 布局),归一为 '['/']' —— 存储格式统一用 bracket,
  *  'mod+shift+[' 才能直配 Ctrl/⌘+{。 */

@@ -77,16 +77,24 @@ export function captureSideWidths(api: DockviewApi): void {
 
 type SizableGroup = { api: { setSize: (s: { width: number }) => void; width?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number }) => void } }
 
-/** 收起一侧期间临时锁住另一侧宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收。
- *  否则另一侧会瞬间吞掉空白「突然变宽」再被 pinSides 弹回 = 收栏闪屏。返回释放函数(沉降后调)。 */
-function lockOtherSide(api: DockviewApi, side: 'left' | 'right'): () => void {
-  const other = side === 'left' ? 'right' : 'left'
-  const og = (panelsAt(api, other)[0] as { group?: SizableGroup } | undefined)?.group
-  if (!og) return () => {}
-  const w = sideTargetWidth(api, other)
-  try { og.api.setConstraints?.({ minimumWidth: w, maximumWidth: w }) } catch { /* 跨版本兜底 */ }
-  return () => { try { og.api.setConstraints?.({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* ignore */ } }
+/** 临时锁住指定侧栏的宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收 ——
+ *  Dockview 默认把腾出的宽度按比例摊给所有组,侧栏会「突然变宽」而剩下的主区纹丝不动。
+ *  返回释放函数(布局沉降后调,恢复可手动拖宽)。 */
+function lockSides(api: DockviewApi, sides: ('left' | 'right')[], keepCurrent = false): () => void {
+  const locked: SizableGroup[] = []
+  for (const s of sides) {
+    const g = (panelsAt(api, s)[0] as { group?: SizableGroup } | undefined)?.group
+    if (!g) continue
+    // keepCurrent:钉「此刻的宽」= 用户要的「侧栏纹丝不动」。收栏那条路径必须钉目标宽 —— 它随后
+    // 就要 pinSides 纠正漂移,钉当前宽会把漂移一起锁死。
+    const w = (keepCurrent ? g.api.width : 0) || sideTargetWidth(api, s)
+    try { g.api.setConstraints?.({ minimumWidth: w, maximumWidth: w }) } catch { /* 跨版本兜底 */ }
+    locked.push(g)
+  }
+  return () => { for (const g of locked) { try { g.api.setConstraints?.({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* ignore */ } } }
 }
+/** 收起一侧期间锁住**另一**侧(空白只给主区,免另一侧变宽再被 pinSides 弹回 = 收栏闪屏)。 */
+const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) => lockSides(api, [side === 'left' ? 'right' : 'left'])
 
 /** rAF 把某组宽度从 from 平滑补间到 to(ease-out cubic),done 收尾。无 rAF(测试)时直接收尾。 */
 function tweenGroupWidth(group: SizableGroup, from: number, to: number, done: () => void): void {
@@ -405,11 +413,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 侧栏关空 → 补「空侧栏」占位(保住 group 作拖放靶;toggleSidebar 折叠不走 closeLeaf,不受影响)。
     const wasLastSide = (loc === 'left' || loc === 'right')
       && panelType(panel) !== 'sidebar-empty' && panelsAt(api, loc).length <= 1
+    // 关掉分屏的一半 → 腾出的宽度必须全给剩下的主区。不锁两侧的话 Dockview 按比例摊给所有组:
+    // 侧栏被强行拉宽、剩下的主区纹丝不动(用户实报)。180ms 后释放,恢复手动拖宽。
+    const release = loc === 'main' ? lockSides(api, ['left', 'right'], true) : () => {}
     // 先关再填:占位可能与被关视图同 type,open-first 会复用到正被关的那个。
     panel.api.close()
     if (wasLastSide) get().openView('sidebar-empty', {}, loc)
     useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
     get().refreshTabs()
+    setTimeout(release, 180)
   },
   dropView: (panelId, target) => {
     const api = get().api
@@ -606,25 +618,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const activeType = activeP && panelType(activeP) !== 'sidebar-empty' ? panelType(activeP) : null
       set((s) => ({ stash: { ...s.stash, [side]: stashed }, stashActive: { ...s.stashActive, [side]: activeType }, [visKey]: false } as Partial<WorkspaceState>))
       const group = (panels[0] as { group?: SizableGroup }).group
+      // 另一侧**全程**锁死:补间每帧吐出的宽和 close 释放的空白都会被 Dockview 按比例摊给所有组,
+      // 只锁 close 那一下的话,对侧仍会在这 200ms 里一路鼓起来、收尾再被 pinSides 弹回 = 抽闪。
+      const release = lockOtherSide(api, side)
+      const finish = (): void => {
+        panels.forEach((p) => p.api.close())
+        pinSides(api) // 收起后另一侧会吃掉空白漂移 → 重新钉回 0.191
+        setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
+        scheduleWorkspaceSave()
+      }
       if (group) {
         sidebarAnimating[side] = true
         try { group.api.setConstraints?.({ minimumWidth: 0 }) } catch { /* ignore */ } // 放开最小宽,补间能到 0
         const from = group.api.width ?? sideTargetWidth(api, side)
-        tweenGroupWidth(group, from, 0, () => {
-          sidebarAnimating[side] = false
-          const release = lockOtherSide(api, side) // 锁住另一侧,close 释放的空白只给主区,防「突然变宽再弹回」
-          panels.forEach((p) => p.api.close())
-          pinSides(api) // 收起后另一侧会吃掉空白漂移 → 重新钉回 0.191
-          setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
-          scheduleWorkspaceSave()
-        })
-      } else {
-        const release = lockOtherSide(api, side)
-        panels.forEach((p) => p.api.close())
-        pinSides(api)
-        setTimeout(release, 180)
-        scheduleWorkspaceSave()
-      }
+        tweenGroupWidth(group, from, 0, () => { sidebarAnimating[side] = false; finish() })
+      } else finish()
     } else {
       // 展开:还原暂存内容(pinSides 跳过本侧),把该侧宽度从 ~0 补间到黄金分割目标宽。
       // stash 与 defaults 都为空(如无该侧默认的自定义 Space)→ 开占位:否则不建任何 panel,
@@ -633,6 +641,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const stashed: Stashed[] = restored.length ? restored : [{ type: 'sidebar-empty', params: {} }]
       set({ [visKey]: true } as Partial<WorkspaceState>)
       sidebarAnimating[side] = true
+      // ⚠️必须在 openView **之前**锁另一侧:新组按 Dockview 默认宽(~50%)诞生、紧接着被 setSize(1)
+      // 压回去,这一进一出的宽都是按比例摊给所有组的 → 对侧先被顶宽,补间收尾 pinSides 再把它弹回,
+      // 就是用户看到的「左栏抽闪一下」。锁死后这些空白只能由中间主区吞吐。
+      const release = lockOtherSide(api, side)
       stashed.forEach((v) => get().openView(v.type, v.params, side))
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
       const wantActive = get().stashActive[side]
@@ -641,18 +653,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         if (p) get().activateLeaf(p.id)
       }
       const group = (panelsAt(api, side)[0] as { group?: SizableGroup } | undefined)?.group
-      if (group) {
-        try { group.api.setSize({ width: 1 }) } catch { /* ignore */ } // 起点贴 0,免首帧闪到默认宽
-        tweenGroupWidth(group, 1, sideTargetWidth(api, side), () => {
-          sidebarAnimating[side] = false
-          pinSides(api)
-          scheduleWorkspaceSave()
-        })
-      } else {
+      const settle = (): void => {
         sidebarAnimating[side] = false
         pinSides(api)
+        setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
         scheduleWorkspaceSave()
       }
+      if (group) {
+        try { group.api.setSize({ width: 1 }) } catch { /* ignore */ } // 起点贴 0,免首帧闪到默认宽
+        tweenGroupWidth(group, 1, sideTargetWidth(api, side), settle)
+      } else settle()
     }
   },
 

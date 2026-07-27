@@ -39,6 +39,66 @@ describe('pinSides / repinSides / captureSideWidths(抽风集成:R1 + R3)', () =
     vi.runAllTimers()
   })
 
+  // 关掉分屏的一半时,Dockview 默认把腾出的宽按比例摊给**所有**组 → 侧栏被拉宽、剩下的主区不变
+  // (用户实报)。修法是 close 前把两侧 min=max 钉死,空白只能被主区吃掉,沉降后再放开。
+  it('关主区分屏的一半:两侧先被钉死宽度,沉降后释放', () => {
+    type Con = { minimumWidth?: number; maximumWidth?: number } | null
+    const mkP = (id: string, loc: string) => ({
+      id, title: id, params: { __loc: loc },
+      api: { close: () => { const i = panels.findIndex((x) => x.id === id); if (i >= 0) panels.splice(i, 1) } },
+      group: { api: { width: 0, setSize(s: { width: number }) { this.width = s.width }, constraints: null as Con, setConstraints(c: Con) { this.constraints = c } } },
+    })
+    const panels: ReturnType<typeof mkP>[] = []
+    for (const [id, loc] of [['l', 'left'], ['m1', 'main'], ['m2', 'main'], ['r', 'right']] as const) panels.push(mkP(id, loc))
+    const api = { width: 1600, panels, getPanel: (id: string) => panels.find((p) => p.id === id), activePanel: null } as unknown as DockviewApi
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+
+    useWorkspace.getState().closeLeaf('m2')
+    expect(panels.map((p) => p.id)).toEqual(['l', 'm1', 'r']) // 确实关掉了那一半
+    const con = (p: (typeof panels)[number]): NonNullable<Con> => p.group.api.constraints!
+    for (const p of [panels[0], panels[2]]) {
+      expect(con(p).minimumWidth).toBe(con(p).maximumWidth) // 钉死 = 吃不到空白
+      expect(con(p).minimumWidth).toBeGreaterThan(0)
+    }
+    vi.runAllTimers()
+    for (const p of [panels[0], panels[2]]) expect(con(p).minimumWidth).toBe(0) // 沉降后放开,仍可手动拖宽
+  })
+
+  // 用户实报:展开右栏时左栏「抽闪一下」——先鼓宽再弹回。Dockview 里新组按默认宽(~50%)诞生、
+  // 紧接着被 setSize(1) 压回去,这一进一出的宽都是按比例摊给**所有**组的,对侧先被顶宽,
+  // 补间收尾 pinSides 再把它弹回去。修法 = 展开全程把对侧 min=max 钉死,空白只由主区吞吐。
+  it('展开一侧:对侧从 openView 前就被钉死,沉降后才释放', () => {
+    type Con = { minimumWidth?: number; maximumWidth?: number } | null
+    const mkGroup = () => ({ api: { width: 0, setSize(s: { width: number }) { this.width = s.width }, constraints: null as Con, setConstraints(c: Con) { this.constraints = c } } })
+    const panels: Array<{ id: string; params: { __loc: string; __type: string }; group: ReturnType<typeof mkGroup>; api: unknown }> = []
+    const mkP = (id: string, loc: string, type: string) => ({
+      id, params: { __loc: loc, __type: type }, group: mkGroup(),
+      api: { close: () => { }, setActive: () => { }, setTitle: () => { }, updateParameters: () => { } },
+    })
+    panels.push(mkP('l', 'left', 'files'), mkP('m', 'main', 'home')) // 右栏已收起
+    const api = {
+      width: 1600, panels, getPanel: (id: string) => panels.find((p) => p.id === id), activePanel: null,
+      toJSON: () => ({}),
+      addPanel: (o: { id: string; params: { __loc: string; __type: string } }) => {
+        const p = mkP(o.id, o.params.__loc, o.params.__type)
+        panels.push(p)
+        return p
+      },
+    } as unknown as DockviewApi
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+
+    useWorkspace.getState().toggleSidebar('right')
+    expect(panels.some((p) => p.params.__loc === 'right')).toBe(true) // 确实展开了
+    const left = panels[0].group.api
+    expect(left.constraints!.minimumWidth).toBe(left.constraints!.maximumWidth) // 钉死 = 吃不到空白
+    expect(left.constraints!.minimumWidth).toBeGreaterThan(0)
+
+    vi.runAllTimers()
+    expect(panels[0].group.api.constraints!.minimumWidth).toBe(0) // 沉降后放开,仍可手动拖宽
+  })
+
   it('R1:pin 窗口内 captureSideWidths 不记宽(过渡态不污染);窗口关闭后真拖宽才记', () => {
     const { api, panels } = mkApi(1600)
     useWorkspace.getState().setApi(api)

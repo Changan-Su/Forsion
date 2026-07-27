@@ -6,6 +6,8 @@
  *    偏到卡缘(规则在 engine.css「Resize divider」段)。
  */
 
+import { zoomOf } from './menuAnchor'
+
 /** 主区浮卡的内缩量;与 engine.css 主区卡规则的 padding: 8px 保持同步。 */
 const CARD_INSET = 8
 
@@ -58,12 +60,15 @@ export function installSashAffordance(): () => void {
     raf = requestAnimationFrame(() => {
       tick.classList.add('show')
       tick.classList.toggle('h', !horizontal)
+      // 视口坐标 ÷ 自身累计 zoom:tick 挂在 body 下,body 的 CSS zoom(网页 1.1/触屏 1.15)会把
+      // fixed 的 left/top 再乘一遍 → 刻度离鼠标越来越远。见 menuAnchor.tsx。
+      const z = zoomOf(tick)
       if (horizontal) {
-        tick.style.left = `${r.left + r.width / 2 + shift}px`
-        tick.style.top = `${Math.min(Math.max(e.clientY, r.top), r.bottom)}px`
+        tick.style.left = `${(r.left + r.width / 2 + shift) / z}px`
+        tick.style.top = `${Math.min(Math.max(e.clientY, r.top), r.bottom) / z}px`
       } else {
-        tick.style.left = `${Math.min(Math.max(e.clientX, r.left), r.right)}px`
-        tick.style.top = `${r.top + r.height / 2 + shift}px`
+        tick.style.left = `${Math.min(Math.max(e.clientX, r.left), r.right) / z}px`
+        tick.style.top = `${(r.top + r.height / 2 + shift) / z}px`
       }
     })
   }

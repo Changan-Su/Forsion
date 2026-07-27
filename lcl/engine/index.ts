@@ -13,20 +13,25 @@ export type {
 export { label } from './types'
 
 export { Shell } from './Shell'
+export { startOpenDrag } from './WorkspaceHost'
 export { SingleColumnHost } from './SingleColumnHost'
 export { MiniColumnHost } from './MiniColumnHost'
 export { UI_MODE, setUiMode } from './uiMode'
 export type { UiMode } from './uiMode'
-export { registerView, unregisterView, getView, allViews } from './viewRegistry'
+export { registerView, unregisterView, getView, allViews, subscribeViews } from './viewRegistry'
 export { useWorkspace, activeMainPanel, scheduleWorkspaceSave } from './workspaceStore'
 export type { MainTab, SideTab } from './workspaceStore'
-export { useCommandStore, addCommand, removeCommand, openCommandPalette } from './commandRegistry'
+export { useCommandStore, addCommand, removeCommand, openCommandPalette, openCommandPicker } from './commandRegistry'
 export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey } from './shortcutStore'
-export { useRibbonStore, addRibbonIcon, removeRibbonIcon } from './ribbonRegistry'
-export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, getActiveSpace, spaceLayoutName } from './spaceRegistry'
+export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions } from './ribbonRegistry'
+/** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
+export { moveTo } from './ribbonRegistry'
+export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
+export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, getActiveSpace, spaceLayoutName } from './spaceRegistry'
 export { useNav, recordNav } from './navStore'
 export type { NavEntry } from './navStore'
 export { useStatusStore, addStatusItem, removeStatusItem } from './statusRegistry'
+export { StatusBar, arrangeStatusItems } from './StatusBar'
 export {
   saveNamedLayout,
   loadNamedLayout,
@@ -35,6 +40,9 @@ export {
   clearLayout,
 } from './layoutPersist'
 export type { PersistedPanel } from './layoutPersist'
+/** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
+export { OverlayAt, useClampedMenu, clampMenu, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export type { AnchorOpts } from './menuAnchor'
 export { setEngineI18n, useEngineI18n } from './i18nSeam'
 export { setDetachApi, getDetachApi } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
