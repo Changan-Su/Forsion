@@ -1,8 +1,7 @@
 /**
- * 主区特殊视图(从侧栏特殊卡片打开):微信远程 / 后台智能体详情 / 整页记忆 / 工作区详情。
+ * 主区特殊视图(从侧栏特殊卡片打开):后台智能体详情 / 工作区详情。
  * 复用真实组件,props 对齐 App.tsx 的 specialView 分支。作主区 singleton leaf,与对话同组 tab。
  */
-import { WeChatView } from '../components/WeChatView'
 import { AgentsDetailView } from '../components/AgentsDetailView'
 import { WorkspaceDetailView } from '../components/WorkspaceDetailView'
 import { useApp, type SpecialKind } from '../stores/appStore'
@@ -12,7 +11,6 @@ import { useShallow } from 'zustand/react/shallow'
 
 /** 特殊视图 kind → 引擎视图注册类型。 */
 const VIEW_TYPE: Record<SpecialKind, string> = {
-  wechat: 'wechat',
   agents: 'agents-detail',
   workspace: 'workspace-detail',
 }
@@ -38,30 +36,6 @@ export function openSpecial(kind: SpecialKind, wsKey?: string): void {
 function focusSession(id: string): void {
   useApp.getState().setActiveId(id)
   useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-}
-
-export function WeChatSpecialView() {
-  const s = useApp(useShallow((state) => ({
-    sessions: state.sessions,
-    archivedSessions: state.archivedSessions,
-    activeId: state.activeId,
-    cfg: state.cfg,
-    modelsResp: state.modelsResp,
-    openSettings: state.openSettings,
-    refreshSessions: state.refreshSessions,
-  })))
-  const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
-  const modelId = activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''
-  return (
-    <WeChatView
-      cfg={s.cfg}
-      activeSession={activeSession}
-      modelId={modelId}
-      onOpenSettings={() => s.openSettings('wechat')}
-      onOpenSession={focusSession}
-      onSessionsChanged={() => { void s.refreshSessions(s.cfg).catch(() => {}) }}
-    />
-  )
 }
 
 export function AgentsDetailSpecialView() {

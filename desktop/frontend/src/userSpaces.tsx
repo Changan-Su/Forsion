@@ -20,6 +20,7 @@ import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
 import { track } from './achievements/store'
 import { act } from './activity/log'
+import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
 
 const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus'] as const
 /** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。 */
@@ -36,6 +37,10 @@ const app = () => useApp.getState()
 /** 本进程内经此文件注册的用户 Space:id → 磁盘目录名。market 安装目录名来自上架名称的 slug,
  *  可与 space.json 的 id 不一致,删除必须按映射删目录,否则残留目录重启后复活。 */
 const userIds = new Map<string, string>()
+/** 插件捆绑包内嵌的 Space:spec id → 所属插件 id。随插件启停显隐,不落 userIds(不可单独删,卸载随插件走)。 */
+const pluginSpaceOwner = new Map<string, string>()
+/** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
+const pluginSpaceJson = new Map<string, string>()
 
 export const isUserSpace = (id: string): boolean => userIds.has(id)
 
@@ -88,18 +93,69 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id): void {
   })
 }
 
-/** 扫 ~/.tangu/spaces 装载全部合法配方(幂等:已注册 id 跳过)。market 装完 space 后再调即热注册。 */
-export async function loadUserSpaces(): Promise<void> {
+/** 插件 Space 注册:同 installUserSpace 但不进 userIds(不可右键删除——生命周期随插件),悬停提示来源。 */
+function installPluginSpace(spec: SpaceSpec, pluginId: string): void {
+  const def = specToDefinition(spec)
+  registerSpace(def)
+  pluginSpaceOwner.set(spec.id, pluginId)
+  addRibbonIcon({
+    id: `space:${spec.id}`,
+    side: 'top',
+    component: ({ expanded }) => <SpaceButton space={def} expanded={expanded} />,
+  })
+}
+
+/** 注销一个插件 Space(不删磁盘,不清命名布局——重新启用插件即原样回来)。 */
+function removePluginSpace(id: string): void {
+  if (useSpaceStore.getState().activeSpaceId === id) setActiveSpace('tangu')
+  unregisterSpace(id)
+  removeRibbonIcon(`space:${id}`)
+  pluginSpaceOwner.delete(id)
+  pluginSpaceJson.delete(id)
+}
+
+/** 扫 ~/.tangu/spaces + 各插件捆绑包 spaces/ 装载全部合法配方(幂等:已注册 id 跳过;
+ *  用户目录条目在列表前面,同 id 用户版本胜)。插件 Space 随插件启停显隐:本函数每次调用都会
+ *  把「主人被禁用/已卸载」的插件 Space 注销,故插件启停/卸载后重调即同步。market 装完 space 后再调即热注册。 */
+let loadChain: Promise<void> = Promise.resolve()
+export function loadUserSpaces(): Promise<void> {
+  // 串行化:现在有多个触发点(启动、插件装载完、market/设置/引导),并发跑会「一边注销一边注册」——
+  // removePluginSpace 顺手把活动 Space 打回 tangu,用户会看到闪一下。排队跑即无此窗口。
+  loadChain = loadChain.catch(() => {}).then(loadUserSpacesOnce)
+  return loadChain
+}
+async function loadUserSpacesOnce(): Promise<void> {
   const list = await window.tangu?.spacesList?.().catch(() => null)
-  if (!list?.length) return
+  if (!list) return // 无桥(Web/移动)→ 不装载;空数组仍需走注销分支(最后一个插件被卸时清干净)
   const appVersion = await window.tangu?.appVersion?.().catch(() => null) ?? null
-  const taken = new Set(useSpaceStore.getState().spaces.map((s) => s.id))
-  for (const { slug, json } of list) {
+  const disabled = new Set(readDisabledPluginIds())
+
+  // 想要的最终集合:解析全部配方,禁用插件的条目排除;同 spec id 先到先得(用户目录在前)。
+  const wanted = new Map<string, { spec: SpaceSpec; dirSlug: string; plugin?: string; raw: string }>()
+  for (const { slug, json, plugin } of list) {
+    if (plugin && disabled.has(plugin)) continue
     const r = parseSpaceJson(json, { isViewRegistered: (t) => !!getView(t), appVersion, reservedIds: BUILTIN_IDS })
     if (!r.ok) { console.warn(`[spaces] 跳过 ${slug}: ${r.error}`); continue }
-    if (taken.has(r.spec.id)) continue // 已注册(重复 reload / 两目录同 id,先到先得)
-    taken.add(r.spec.id)
-    installUserSpace(r.spec, slug) // 目录名可与 id 不同(market 目录来自上架名称 slug)
+    if (!wanted.has(r.spec.id)) wanted.set(r.spec.id, { spec: r.spec, dirSlug: slug, plugin, raw: json })
+  }
+
+  // 先注销:此前注册的插件 Space,如今主人被禁用/卸载、文件消失,或**配方内容变了**(插件更新,
+  // codex P1-7)→ 撤下;内容不变则不动。用户 Space 不在此列(删除走 deleteUserSpace)。
+  for (const [id, owner] of [...pluginSpaceOwner]) {
+    const w = wanted.get(id)
+    if (!w || w.plugin !== owner || pluginSpaceJson.get(id) !== w.raw) removePluginSpace(id)
+  }
+
+  const taken = new Set(useSpaceStore.getState().spaces.map((s) => s.id))
+  for (const [id, w] of wanted) {
+    if (taken.has(id)) continue // 已注册(重复 reload / 两目录同 id,先到先得)
+    taken.add(id)
+    if (w.plugin) {
+      installPluginSpace(w.spec, w.plugin)
+      pluginSpaceJson.set(id, w.raw)
+    } else {
+      installUserSpace(w.spec, w.dirSlug) // 目录名可与 id 不同(market 目录来自上架名称 slug)
+    }
   }
   // 启动恢复时活动 Space 可能正是刚注册的用户 Space:installEngine 曾按 fallback(tangu)设过侧栏默认,补正。
   const sp = getActiveSpace()
@@ -134,6 +190,19 @@ export async function saveCurrentAsSpace(name: string): Promise<void> {
   await window.tangu.spacesSave(id, JSON.stringify(spec, null, 2))
   track('space.save'); act('space.save', { id })
   installUserSpace(spec)
+  app().toast(app().tr('spaces.saved', { name }))
+}
+
+/** 新建空白 Space:落一个只含启动器的配方 + 注册 + 切过去,用户往里摆视图(布局自动记住)。 */
+export async function createBlankSpace(name: string): Promise<void> {
+  if (!window.tangu?.spacesSave) return
+  const taken = new Set<string>([...BUILTIN_IDS, ...useSpaceStore.getState().spaces.map((s) => s.id)])
+  const id = uniqueId(slugifyId(name) || 'space', taken)
+  const spec: SpaceSpec = { id, name, icon: 'boxes', layout: { main: [{ type: 'launcher' }], left: [], right: [] } }
+  await window.tangu.spacesSave(id, JSON.stringify(spec, null, 2))
+  track('space.save'); act('space.save', { id, blank: true })
+  installUserSpace(spec)
+  setActiveSpace(id)
   app().toast(app().tr('spaces.saved', { name }))
 }
 

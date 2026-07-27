@@ -20,11 +20,13 @@ import type { Tab as SettingsTab } from '../components/SettingsModal'
 import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
+import { notifyApp } from './notificationStore'
+import { DESK_EDIT_TOOLS, DESK_PERSIST_KEY, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
 
 export type { SettingsTab }
 
 /** 主区特殊视图(从侧栏特殊卡片打开;作主区 leaf,与对话同组 tab)。 */
-export type SpecialKind = 'wechat' | 'agents' | 'workspace'
+export type SpecialKind = 'agents' | 'workspace'
 
 const VOICE_MESSAGE_PLUGIN_ID = 'voice-message' // 语音消息插件 id(与 plugins/voice-message 一致)
 const UNREAD_KEY = 'forsion_tangu_unread_sessions'
@@ -147,6 +149,24 @@ const stoppedRuns = new Set<string>()
 // streaming。看门狗周期性查:该 run 已不在后端活跃集 → 重载消息收尾(有内容标 done,无则 error),解除卡死。
 const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
 const loadedHistory = new Set<string>()
+/** 审批档缺省(全端统一「替我批准」);新会话没有记忆时的起步值。 */
+export const DEFAULT_APPROVAL = 'auto-edit' as const
+/** 新会话的起步档位 = 上次用的那套(没记忆过就用全端默认「替我批准」+ 不指定思考档)。
+ *  只吐 AgentConfig 的键,好让调用方直接展开进 init;模型不在此(走 cfg.modelId 老路)。
+ *  **云沙箱会话不带审批档**:引擎那边 approvalMode 缺席才等于 full-auto,写死 auto-edit 会让
+ *  云会话的 MCP 调用开始逐个弹审批(gateToolCall 对 mcp__ 工具非 host 也过闸)。 */
+export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> {
+  const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> = {}
+  if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
+  if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
+  return out
+}
+/** 记住「上次用的」审批档/思考档:**新会话据此起步**。先落内存(web/mobile 无 window.tangu,
+ *  至少本次会期内粘住),再异步写盘(桌面跨重启)。 */
+function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
+  useApp.setState((s) => ({ desktopConfig: { ...((s.desktopConfig || {}) as StoredDesktopConfig), ...patch } }))
+  void window.tangu?.setConfig?.(patch).catch(() => {})
+}
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
 const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
@@ -158,6 +178,22 @@ function capContent(s: string): string {
 
 type ConnState = 'idle' | 'ok' | 'err'
 
+export type { DeskItem } from './deskPlan'
+/** Agent Desk per-session 状态。纯 UI 态:不落库、不持久化、刷新即散场。 */
+export interface DeskState {
+  /** 从上到下的演出项(至多 2 格,2 格=上下分屏)。 */
+  items: DeskItem[]
+  /** agent 建议的宽度档位;用户拖过(userResized)后不再被 agent 覆盖。仅 open 态生效。 */
+  size: 'half' | 'wide'
+  /** 展示形态:缺省=卡片态(Pin Summary 下方的预览小卡);'open'=展开成侧板。
+   *  用户可随时点卡片放大/缩回;agent 也可在 desk_present 里用 size(card/half/wide)显式切换
+   *  (2026-07-26 用户裁决,废「形态 100% 用户主权」);自动上台(deskAutoShow)仍永不改形态。 */
+  mode?: 'open'
+  /** 用户拖出的自定义占比(0-1,优先于 size 档位;比例制对 body zoom 免疫)。 */
+  fraction?: number
+  userResized?: boolean
+  note?: string
+}
 export interface AppState {
   tr: (k: string, vars?: Record<string, unknown>) => string
   cfg: TanguDesktopConfig
@@ -185,10 +221,14 @@ export interface AppState {
   newChatWs: WorkspaceDescriptor | null
   /** 云端 Project 名列表(Penzor Cloud-Workspaces/Projects/;connect 后拉取,失败=只有默认 Tangu)。 */
   cloudProjects: string[]
+  /** 已启用通道的工作区文件夹快照(channelsStore 轮询后写入;workspaces() 合并展示)。 */
+  channelWorkspaces: WorkspaceDescriptor[]
   newChatCfg: AgentConfig
   newChatModel: string | null
   /** 瞬态:外部入口(反馈诊断/对话建 agent/插件)预填聊天框的草稿;Composer2 mount 消费一次即清,不落盘。 */
   pendingDraft: string | null
+  /** 拖引用进聊天:追加到草稿末尾(区别于 pendingDraft 的整体覆盖)。seq 让连拖同一条也能触发。 */
+  draftAppend: { text: string; seq: number } | null
   filePreview: PreviewTarget | null
   messagesBySession: Record<string, UiMessage[]>
   configBySession: Record<string, AgentConfig>
@@ -198,10 +238,11 @@ export interface AppState {
   llmRetryBySession: Record<string, { attempt: number; max: number; waitMs: number; error?: string } | undefined>
   subChatsBySession: Record<string, SubChat[]>
   usageBySession: Record<string, { ctx: number; base: number; live: number }>
+  /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
+  deskBySession: Record<string, DeskState>
   /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
   voiceOnByAgent: Record<string, boolean>
   unread: Set<string>
-  toasts: Array<{ id: number; text: string; error?: boolean }>
   // Phase 2: 设置 / 引导 / 更新
   settingsOpen: boolean
   settingsTab: SettingsTab | null
@@ -254,9 +295,21 @@ export interface AppState {
   compact(sessionId?: string | null): Promise<void>
   decideApproval(messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>, sessionId?: string | null): Promise<void>
   answerInquiry(messageId: string, inquiryId: string, answer: string, sessionId?: string | null): Promise<void>
-  setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>, sessionId?: string | null): void
-  setSessionModel(modelId: string, sessionId?: string | null): void
-  setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null): void
+  /** Agent Desk:接收 desk_present 事件(白名单校验/静音/档位策略都在这)。 */
+  deskPresent(sessionId: string, spec: Record<string, any>): void
+  /** Agent Desk:编辑类工具成功后把目标文件自动搬上顶格(host 会话限定)。 */
+  deskAutoShow(sessionId: string, toolId: string): void
+  /** Agent Desk:编辑参数还在流式生成时把「直播格」搬上顶格(Cursor 式;内容由 LivePane 直接订阅)。 */
+  deskLiveSync(sessionId: string, msgId: string, toolId: string, tool: string): void
+  /** Agent Desk:清掉顶格残留的直播格(工具失败/未能落盘切换时)。 */
+  deskLiveClear(sessionId: string, toolId: string): void
+  /** Agent Desk:用户主动点开某文件(TaskSummary「正在编辑」入口):解除静音并上台。 */
+  deskShowFile(sessionId: string, path: string): void
+  patchDesk(sessionId: string, patch: Partial<DeskState>): void
+  setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots'>, sessionId?: string | null): void
+  /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
+  setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
+  setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean): void
   setSessionMaxIterations(n: number, sessionId?: string | null): void
   setSessionPlanMode(on: boolean, sessionId?: string | null): void
   /** 语音消息(按 agent,单一真源=voice-message 插件设置)。 */
@@ -272,6 +325,8 @@ export interface AppState {
   setNewChatModel(id: string | null): void
   /** 预填聊天框草稿(外部 via-chat 入口的统一接缝);Composer2 消费后自行清空。 */
   setPendingDraft(text: string | null): void
+  appendDraft(text: string): void
+  clearDraftAppend(): void
   setFilePreview(p: PreviewTarget | null): void
   patchConfig(patch: Partial<TanguDesktopConfig>): void
   ensureEngineCaps(engineId: string | undefined): void
@@ -292,6 +347,19 @@ export interface AppState {
   dismissUpdate(): void
   setDetailWsKey(k: string | null): void
   setActiveSpecial(k: SpecialKind | null): void
+}
+
+/** Desk 会话快照:变更后 500ms 合并落盘(直播格在 pack 时剔除,超容量按最近展示截断)。
+ *  localStorage 是会话键共享,多窗口各自启动时水化、写入合并为后写胜——与 desk 本身的
+ *  per-session 语义一致;写失败(配额/隐私模式)静默容忍,退化回"刷新散场"。 */
+let deskPersistTimer: ReturnType<typeof setTimeout> | null = null
+function persistDeskSoon(): void {
+  if (typeof localStorage === 'undefined') return
+  if (deskPersistTimer) clearTimeout(deskPersistTimer)
+  deskPersistTimer = setTimeout(() => {
+    deskPersistTimer = null
+    try { localStorage.setItem(DESK_PERSIST_KEY, packDeskMap(useApp.getState().deskBySession)) } catch { /* ignore */ }
+  }, 500)
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -324,12 +392,16 @@ export const useApp = create<AppState>((set, get) => ({
   specialEnabled: { historian: false, muse: false },
   newChatWs: null,
   cloudProjects: [],
+  channelWorkspaces: [],
   newChatCfg: {},
   newChatModel: null,
   pendingDraft: null,
+  draftAppend: null,
   filePreview: null,
   messagesBySession: {},
   configBySession: {},
+  // 上次各会话展示的内容随快照复活("上次展示的东西还展示着");直播格是瞬态,不在快照里
+  deskBySession: typeof localStorage !== 'undefined' ? unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY)) : {},
   voiceOnByAgent: {},
   runningBySession: {},
   groupVoting: {},
@@ -337,7 +409,6 @@ export const useApp = create<AppState>((set, get) => ({
   subChatsBySession: {},
   usageBySession: {},
   unread: loadUnread(),
-  toasts: [],
   settingsOpen: false,
   settingsTab: null,
   feedbackOpen: false,
@@ -351,10 +422,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   setTr: (tr) => set({ tr }),
 
+  // 垫片:旧 toast(text, error) → 通知系统(error 走 error 级=常驻手动关,其余 info 自动消失)。
   toast: (text, error = false) => {
-    const id = Date.now() + Math.random()
-    set((s) => ({ toasts: [...s.toasts, { id, text, error }] }))
-    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })), 4200)
+    notifyApp({ text, level: error ? 'error' : 'info' })
   },
 
   pushNotice: (text) => {
@@ -428,6 +498,8 @@ export const useApp = create<AppState>((set, get) => ({
           evs.push({ id: pl.id, name: pl.name || 'tool', arguments: pl.delta || '', done: false })
           return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id) }
         })
+        // Agent Desk 直播:编辑参数还在流式生成就上台(state 只动上台/路径就位两次,内容 LivePane 自己订)。
+        if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name))) get().deskLiveSync(sessionId, assistantId, String(pl.id), String(pl.name))
         break
       case 'tool_call':
         if (pl.name === 'generate_image') { track('image.generate'); act('image.generate') }
@@ -453,11 +525,23 @@ export const useApp = create<AppState>((set, get) => ({
           }
           return { ...m, toolEvents: evs }
         })
+        if (!pl.isError) get().deskAutoShow(sessionId, String(pl.id)) // 成功:磁盘真身顶格(覆盖直播格)
+        get().deskLiveClear(sessionId, String(pl.id)) // 失败/未切换成功的直播格残留在此清场(成功路径上是 no-op)
         break
       case 'display_file':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl }],
         }))
+        break
+      case 'desk_present':
+        get().deskPresent(sessionId, pl)
+        break
+      // desk_screenshot:引擎在等一张图 —— 截 Desk 面板回传(懒加载防 store↔views 循环依赖)。
+      case 'desk_capture_request':
+        if (pl.shotId) {
+          const cfg = get().cfg
+          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(cfg, runId, sessionId, String(pl.shotId)))
+        }
         break
       case 'approval_request':
         patchMessage(sessionId, assistantId, (m) => ({
@@ -802,7 +886,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     // 首启引导:从未配置凭证(未登录、无直连 provider,且未跳过过)→ 进向导。
     // 注意:不能再用 stored.token 当「有无凭证」信号——managed 后端现在恒有 token(无 Forsion 时回退本地令牌,
-    // 见 backendManager.getToken),会把新用户误判为已配置。真实凭证只看 authStatus.loggedIn(读 cloudToken||auth.json,
+    // 见 backendManager.getToken),会把新用户误判为已配置。真实凭证只看 authStatus.loggedIn(读 auth.json,
     // 不含本地回退)+ 直连 provider。
     if (stored && window.tangu?.envCheck) {
       try {
@@ -837,6 +921,11 @@ export const useApp = create<AppState>((set, get) => ({
         set({ connState: 'err', connMessage: st.lastError || t('app.managedBackendExited') })
       }
     })
+    // 登录态变化(含 CLI tangu login 等外部来源,主进程 auth.json watcher 广播)→ 刷新 authInfo。
+    // managed 后端的重连由上面 onBackendStatus 的 ready 分支承接(登录变化会触发后端带新 token 重启)。
+    window.tangu?.onAuthChanged?.(() => {
+      void window.tangu?.authStatus?.().then((a) => set({ authInfo: a })).catch(() => set({ authInfo: null }))
+    })
   },
 
   loadSessionHistory: async (sessionId) => {
@@ -862,13 +951,15 @@ export const useApp = create<AppState>((set, get) => ({
       // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
       const sess = get().sessions.find((x) => x.id === sessionId) || get().archivedSessions.find((x) => x.id === sessionId)
       const base: AgentConfig = sess?.project_path
-        ? { execMode: 'host', approvalMode: 'auto-edit', cwd: sess.project_path }
+        ? { execMode: 'host', approvalMode: DEFAULT_APPROVAL, cwd: sess.project_path }
         : {}
       // 本地已有的键优先(local-wins):本地每次改配置都会同步 PUT,永远不旧于服务端;而这里的
       // fetch 可能与「新会话初始配置 PUT」竞速,整体替换会把刚选好的 agentSlug/thinkingLevel 冲掉。
       set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))
+      // ctx 只有流式 usage 事件会喂,重开会话后本地是空的 → 用服务端回放的「最近一次上下文占用」兜底
+      // (本地已有值更新,不覆盖:历史加载可能与正在跑的 run 竞速)。
       void api.getSessionUsage(c, sessionId)
-        .then((base) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || 0, base, live: 0 } } })))
+        .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
         .catch(() => {})
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
@@ -967,10 +1058,8 @@ export const useApp = create<AppState>((set, get) => ({
   }),
 
   workspaces: () => {
-    const { defaultWsDir, homeDir, sessions, archivedSessions, desktopConfig, cloudProjects, tr: t } = get()
+    const { defaultWsDir, homeDir, sessions, archivedSessions, cloudProjects, channelWorkspaces, tr: t } = get()
     const defPath = defaultWsDir || homeDir || null
-    const wechatOn = !!window.tangu?.backendStatus && desktopConfig?.wechatEnabled !== false
-    const webotPath = defPath ? `${defPath}/webot` : null
     // 云端 Project 列表(默认 Tangu 恒在首位);每个项目一个工作区分组。
     // 并上会话行派生的项目名:/agent/projects 拉取失败/滞后时,含该 project_name 的会话
     // 仍有组头可挂(否则 SidebarPane 只渲染 workspaces() 里的组,这些会话会整组隐身)。
@@ -986,7 +1075,10 @@ export const useApp = create<AppState>((set, get) => ({
       { key: defaultWsDir || '__default_ws__', name: t('app.defaultWorkspace'), kind: 'local', path: defPath, system: true },
     ]
     const seen = new Set<string>([...projNames.map(cloudProjectKey), defaultWsDir || '__default_ws__'])
-    if (wechatOn && webotPath) { list.push({ key: webotPath, name: t('app.wechatWorkspace'), kind: 'wechat', path: webotPath, system: true }); seen.add(webotPath) }
+    // 已启用通道的专属工作区文件夹(webot/tgbot/qqbot;channelsStore 轮询维护,通道停用则回落普通本地组)。
+    for (const cw of channelWorkspaces) {
+      if (!seen.has(cw.key)) { list.push(cw); seen.add(cw.key) }
+    }
     for (const s of [...sessions, ...archivedSessions]) {
       if (s.project_path && s.project_path !== defPath && !seen.has(s.project_path)) {
         seen.add(s.project_path)
@@ -999,6 +1091,15 @@ export const useApp = create<AppState>((set, get) => ({
   createInWorkspace: async (ws) => {
     const t = get().tr
     try {
+      // 通道文件夹:走引擎通道会话接口(盖默认 Agent/模型 + 切为正在连接),不是普通 createSession。
+      if (ws.kind === 'channel' && ws.channel) {
+        const sid = await api.newChannelSession(get().cfg, ws.channel)
+        act('chat.new', { s: sid.slice(0, 6) })
+        await get().refreshSessions(get().cfg)
+        loadedHistory.add(sid)
+        get().setActiveId(sid)
+        return
+      }
       const path = ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null
       const cloudProject = ws.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : null
       const s = await api.createSession(get().cfg, path
@@ -1008,9 +1109,11 @@ export const useApp = create<AppState>((set, get) => ({
       set((st) => ({ sessions: [s, ...st.sessions] }))
       loadedHistory.add(s.id) // 先标记再 setActiveId(其内部 loadSessionHistory 会拉空配置冲掉 init,同 send)
       get().setActiveId(s.id)
+      // 新会话延续「上次用的」档位(审批 + 思考;模型走 cfg.modelId 的老路)。
+      const sticky = stickyDefaults(get().desktopConfig, !!path)
       const init: AgentConfig = path
-        ? { execMode: 'host', approvalMode: 'auto-edit', cwd: path }
-        : { execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
+        ? { ...sticky, execMode: 'host', cwd: path }
+        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
       set((st) => ({ messagesBySession: { ...st.messagesBySession, [s.id]: [] }, configBySession: { ...st.configBySession, [s.id]: init } }))
       void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
     } catch (e: any) {
@@ -1104,6 +1207,120 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  // ── Agent Desk:聊天右侧演出面板。会话级快照落 localStorage(persistDeskSoon),
+  //    重开会话/重启应用时上次展示的内容复活;直播格是流式瞬态,不落快照。 ──
+  deskPresent: (sessionId, spec) => {
+    if (!get().desktopConfig?.agentDeskEnabled) return
+    const cur = get().deskBySession[sessionId]
+    const views = (Array.isArray(spec?.views) ? spec.views : [])
+      .filter((v: any) => v && ((v.type === 'file' && typeof v.path === 'string' && v.path)
+        || (v.type === 'view' && typeof v.view === 'string' && v.view)))
+      .slice(0, 2)
+    if (!views.length) return
+    const ts = Date.now()
+    const items: DeskItem[] = views.map((v: any, i: number) => v.type === 'view'
+      ? {
+          key: `view:${v.view}@${ts}:${i}`, path: '', name: v.name || v.view, at: ts,
+          view: { type: v.view, ...(v.params && typeof v.params === 'object' && !Array.isArray(v.params) ? { params: v.params } : {}) },
+        }
+      : { key: `${v.path}@${ts}:${i}`, path: v.path, name: v.name || v.path.split(/[\\/]/).pop() || v.path, at: ts })
+    const size: DeskState['size'] = cur?.userResized
+      ? cur.size
+      : (spec.size === 'wide' ? 'wide' : spec.size === 'half' ? 'half' : cur?.size || 'half')
+    // size 也是形态指令(用户裁决):card=收回卡片,half/wide=展开侧板;不带 size=保持现状。
+    const mode: DeskState['mode'] = spec.size === 'card' ? undefined
+      : spec.size === 'half' || spec.size === 'wide' ? 'open' : cur?.mode
+    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...cur, items, size, mode, note: typeof spec.note === 'string' ? spec.note : cur?.note } } }))
+    persistDeskSoon()
+  },
+  deskAutoShow: (sessionId, toolId) => {
+    if (!get().desktopConfig?.agentDeskEnabled) return
+    const cur = get().deskBySession[sessionId]
+    const cfg = get().configBySession[sessionId] || {}
+    const session = get().sessions.find((x) => x.id === sessionId)
+    // 面板读文件走 readHostFile,只对本机会话有意义(execMode 未加载时按 project_path 兜底,同 ChatView)。
+    if (cfg.execMode ? cfg.execMode !== 'host' : !session?.project_path) return
+    let ev: { name?: string; arguments?: string } | undefined
+    const msgs = get().messagesBySession[sessionId] || []
+    outer: for (let i = msgs.length - 1; i >= 0; i--) {
+      for (const e of msgs[i].toolEvents || []) if (e.id === toolId) { ev = e; break outer }
+    }
+    if (!ev?.name || !DESK_EDIT_TOOLS.has(ev.name)) return
+    let raw = ''
+    try { raw = String(JSON.parse(ev.arguments || '{}')?.path || '') } catch { return }
+    const p = resolveDeskPath(raw, cfg.cwd || session?.project_path || undefined)
+    if (!p) return
+    const now = Date.now()
+    // 顶格是直播格时必须被磁盘真身替换,节流只防「磁盘格连续重挂」。
+    if (!cur?.items[0]?.live && isDuplicateShow(cur?.items[0], p, now)) return
+    const item = deskItemFor(p, now)
+    set((s) => {
+      const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: replaceTop(c.items, item) } } }
+    })
+    persistDeskSoon()
+  },
+  deskLiveSync: (sessionId, msgId, toolId, tool) => {
+    if (!get().desktopConfig?.agentDeskEnabled) return
+    const cur = get().deskBySession[sessionId]
+    const cfg = get().configBySession[sessionId] || {}
+    const session = get().sessions.find((x) => x.id === sessionId)
+    if (cfg.execMode ? cfg.execMode !== 'host' : !session?.project_path) return
+    const top = cur?.items[0]
+    const already = top?.live?.toolId === toolId
+    if (already && top!.path) return // 已上台且路径就位:内容直播由 LivePane 订阅,state 不再动
+    // 从累积参数里试提目标路径(可能还没流到)
+    let p: string | null = null
+    const msgs = get().messagesBySession[sessionId] || []
+    outer: for (let i = msgs.length - 1; i >= 0; i--) {
+      for (const e of msgs[i].toolEvents || []) if (e.id === toolId) {
+        const raw = extractStreamingString(e.arguments || '', 'path')
+        p = raw ? resolveDeskPath(raw.value, cfg.cwd || session?.project_path || undefined) : null
+        break outer
+      }
+    }
+    if (already && !p) return
+    const item: DeskItem = {
+      key: `live:${toolId}`, // key 稳定:路径就位不 remount,tool_result 换磁盘格才 remount
+      path: p || '',
+      name: p ? (p.split(/[\\/]/).pop() || p) : '…',
+      at: Date.now(),
+      live: { msgId, toolId, tool },
+    }
+    set((s) => {
+      const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
+      const items = c.items[0]?.live?.toolId === toolId ? [item, ...c.items.slice(1)] : replaceTop(c.items, item)
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items } } }
+    })
+    persistDeskSoon() // 直播格本身不落盘,但 replaceTop 可能挤掉了要落盘的磁盘格
+  },
+  deskLiveClear: (sessionId, toolId) => {
+    set((s) => {
+      const c = s.deskBySession[sessionId]
+      if (!c || c.items[0]?.live?.toolId !== toolId) return {}
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: c.items.slice(1) } } }
+    })
+    persistDeskSoon()
+  },
+  deskShowFile: (sessionId, path) => {
+    if (!get().desktopConfig?.agentDeskEnabled) return
+    set((s) => {
+      const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
+      // 顶格正是这个文件的直播格 → 别打断直播,解除静音即可
+      const items = c.items[0]?.live && c.items[0].path === path ? c.items : replaceTop(c.items, deskItemFor(path, Date.now()))
+      // 用户点了「正在编辑」入口 = 用户动作,直接展开(卡片态 → 侧板)
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, mode: 'open' as const, items } } }
+    })
+    persistDeskSoon()
+  },
+  patchDesk: (sessionId, patch) => {
+    set((s) => {
+      // upsert:卡片态是默认态,展开/拖宽可能发生在 desk 态还没建过的时候
+      const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...patch } } }
+    })
+    persistDeskSoon()
+  },
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
     track('chat.send')
     const t = get().tr
@@ -1128,9 +1345,9 @@ export const useApp = create<AppState>((set, get) => ({
       loadedHistory.add(s.id)
       get().setActiveId(s.id)
       sid = s.id
-      const draft = get().newChatCfg
+      const draft = { ...stickyDefaults(get().desktopConfig, !!path), ...get().newChatCfg }
       implicitInit = path
-        ? { ...draft, execMode: 'host', approvalMode: draft.approvalMode || 'auto-edit', cwd: path }
+        ? { ...draft, execMode: 'host', cwd: path }
         : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
@@ -1145,6 +1362,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const sessionId = sid
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
+    // Agent Desk:新一条用户消息解除「用户关过面板」的静音。
     const agentConfig = { ...(implicitInit || get().configBySession[sessionId] || {}) }
     if (!agentConfig.agentSlug && get().defaultAgentSlug) {
       // 会话没有显式选 agent → 用全局默认兜底,并**固化进会话配置**(本地 + 后端)。
@@ -1305,8 +1523,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setExecConfig: (patch, targetSessionId) => {
+    if (patch.approvalMode) rememberDefaults({ lastApprovalMode: patch.approvalMode })
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, ...patch } })); return } // 空态:落新会话草稿
     set((s) => {
       const next = { ...(s.configBySession[sid] || {}), ...patch }
       void api.putSessionConfig(get().cfg, sid, next).catch(() => {})
@@ -1314,12 +1533,11 @@ export const useApp = create<AppState>((set, get) => ({
     })
   },
 
-  setSessionModel: (modelId, targetSessionId) => {
+  setSessionModel: (modelId, targetSessionId, remember = true) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) {
-      set((s) => { void window.tangu?.setConfig({ modelId }); return { cfg: { ...s.cfg, modelId } } })
-      return
-    }
+    // 在会话里换模型 = 也换掉全局默认(新会话延续);cfg.modelId 本来就是「新会话用哪个模型」的真源。
+    if (remember) set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+    if (!sid) { set({ newChatModel: modelId }); return }
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
@@ -1327,9 +1545,10 @@ export const useApp = create<AppState>((set, get) => ({
     void api.updateSession(get().cfg, sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 
-  setSessionThinking: (level, targetSessionId) => {
+  setSessionThinking: (level, targetSessionId, remember = true) => {
+    if (remember) rememberDefaults({ lastThinkingLevel: level })
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level } })); return }
     set((s) => { const next = { ...(s.configBySession[sid] || {}), thinkingLevel: level }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
   },
 
@@ -1403,8 +1622,9 @@ export const useApp = create<AppState>((set, get) => ({
     if (!sid) return
     const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
     set((s) => { const next = { ...(s.configBySession[sid] || {}), agentSlug: slug || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
-    if (def?.model) get().setSessionModel(def.model, sid)
-    if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid)
+    // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
+    if (def?.model) get().setSessionModel(def.model, sid, false)
+    if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)
     get().pushNotice(def ? t('input.agentActive', { name: def.name }) : t('input.agentCleared'))
   },
 
@@ -1418,6 +1638,8 @@ export const useApp = create<AppState>((set, get) => ({
   setNewChatCfg: (fn) => set((s) => ({ newChatCfg: fn(s.newChatCfg) })),
   setNewChatModel: (id) => set({ newChatModel: id }),
   setPendingDraft: (text) => set({ pendingDraft: text }),
+  appendDraft: (text) => set((s) => ({ draftAppend: { text, seq: (s.draftAppend?.seq || 0) + 1 } })),
+  clearDraftAppend: () => set({ draftAppend: null }),
   // 预览改道:所有入口(文件面板/右栏工作区/对话内联)汇聚于此 —— 一律开主区标签页(wsfile 视图)。
   // 原 chatbox 上方浮层暂时停用(filePreview 永不置非空,ChatView 渲染块保留但不触发)。
   setFilePreview: (p) => { if (p) openWsFile(p); else set({ filePreview: null }) },

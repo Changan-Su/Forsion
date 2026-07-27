@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { useI18n } from '../i18n'
 import { useApp } from './appStore'
 import { useInbox } from './inboxStore'
+import { useChannels } from './channelsStore'
 import { setActiveSpace } from '@lcl/engine'
 import { openChangelogTab } from '../views/ChangelogView'
 import { setUnauthorizedHandler } from '../services/http'
@@ -53,6 +54,13 @@ export function useBootstrap(): void {
     if (!window.tangu?.backendStatus && !window.tangu?.mobile) return
     useInbox.getState().startPolling()
     return () => useInbox.getState().stopPolling()
+  }, [])
+
+  // 通道(微信/Telegram/QQ):全局常驻状态轮询(侧栏通道文件夹 + 连接状态点)。仅内置本地后端。
+  useEffect(() => {
+    if (!window.tangu?.backendStatus) return
+    useChannels.getState().startPolling()
+    return () => useChannels.getState().stopPolling()
   }, [])
 
   // 系统通知点击 → 聚焦窗口后回跳 Inbox Space(main 进程 webContents.send('inbox:open'))。

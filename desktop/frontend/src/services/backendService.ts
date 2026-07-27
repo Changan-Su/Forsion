@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationRunInfo, AutomationSessionInfo, HistorianActivityItem, MessageRecord, ModelsResponse, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert,
   NormalAgentDef, SessionRecord, SkillInfo, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
 } from '../types'
@@ -136,9 +136,10 @@ export const putSessionConfig = (cfg: TanguDesktopConfig, sessionId: string, con
     body: JSON.stringify(config),
   }).then((r) => r.agent_config)
 
-/** 本会话累计 token 消耗(跨 run 求和)。 */
+/** 本会话累计 token 消耗(跨 run 求和)+ 最近一次的上下文占用(重载会话后恢复上下文圈用)。 */
 export const getSessionUsage = (cfg: TanguDesktopConfig, sessionId: string) =>
-  request<{ tokensTotal: number }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/usage`).then((r) => r.tokensTotal)
+  request<{ tokensTotal: number; contextTokens?: number }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/usage`)
+    .then((r) => ({ base: Number(r.tokensTotal) || 0, ctx: Number(r.contextTokens) || 0 }))
 
 /** 手动压缩上下文(生成并持久化总结检查点;后续 run 起步即精简)。 */
 export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, modelId?: string) =>
@@ -192,6 +193,39 @@ export const getEngineCapabilities = (cfg: TanguDesktopConfig, engineId: string)
       currentModelId: undefined as string | undefined,
       commands: [] as Array<{ name: string; description: string; hint?: string }>,
     }))
+
+/** 本地联网搜索(BYO-key)配置:engine /agent/websearch(写 config.json webSearch 段;云端 404)。 */
+export interface LocalWebSearchRedacted {
+  provider: string
+  bochaHasKey: boolean
+  tavilyHasKey: boolean
+  zhipuHasKey: boolean
+  effectiveProvider: string
+  configured: boolean
+}
+
+export const getLocalWebSearch = (cfg: TanguDesktopConfig) =>
+  request<LocalWebSearchRedacted>(cfg, '/agent/websearch')
+
+export const saveLocalWebSearch = (
+  cfg: TanguDesktopConfig,
+  body: { provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string },
+) =>
+  request<{ success: boolean; config: LocalWebSearchRedacted }>(cfg, '/agent/websearch', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+
+export const testLocalWebSearch = (
+  cfg: TanguDesktopConfig,
+  body: { provider: string; apiKey?: string },
+  signal?: AbortSignal,
+) =>
+  request<{ ok: boolean; provider: string; latencyMs: number; resultCount?: number; sampleTitle?: string; error?: string }>(
+    cfg, '/agent/websearch/test',
+    { method: 'POST', body: JSON.stringify(body), signal },
+    { timeoutMs: 30000 },
+  )
 
 /** 探测一个 OpenAI 兼容端点(后端代理,避免 CORS):GET /models → 1-token chat。 */
 export const testProviderConnection = (
@@ -298,6 +332,63 @@ export const setWechatSessionAgent = (cfg: TanguDesktopConfig, sessionId: string
 /** 在微信 Project 下新建会话并(默认)切为正在连接。 */
 export const createWechatSession = (cfg: TanguDesktopConfig, title?: string) =>
   request<{ sessionId: string }>(cfg, '/agent/wechat/sessions/new', { method: 'POST', body: JSON.stringify({ title }) }).then((r) => r.sessionId)
+
+// ── 多通道(Channels:微信/Telegram/QQ;本地后端)──
+export type { ChannelKind } from '../types'
+
+export interface ChannelStatus {
+  kind: ChannelKind
+  enabled: boolean
+  sessions: boolean
+  agentSlug: string
+  modelId: string
+  imageModelId: string
+  ttsModelId: string
+  ttsVoice: string
+  approvalMode: string
+  inboxForward: { enabled: boolean; senders: 'all' | string[] }
+  credentials: { botTokenSet: boolean; appIdSet: boolean; appSecretSet: boolean; appId: string }
+  runtime: Array<{ accountId: string; running: boolean; peers?: number; label?: string }>
+  connectedSessionId: string | null
+  /** 活跃绑定的账号 id(断开连接用;runtime[0] 未必是活跃绑定的账号)。 */
+  accountId: string | null
+  peerBound: boolean
+  workspace: string
+}
+
+export interface ChannelConfigPatch {
+  enabled?: boolean
+  sessions?: boolean
+  agentSlug?: string
+  modelId?: string
+  imageModelId?: string
+  ttsModelId?: string
+  ttsVoice?: string
+  approvalMode?: string
+  inboxForward?: { enabled: boolean; senders: 'all' | string[] }
+  botToken?: string
+  appId?: string
+  appSecret?: string
+}
+
+export const listChannels = (cfg: TanguDesktopConfig) =>
+  request<{ available: boolean; channels: ChannelStatus[] }>(cfg, '/agent/channels')
+
+export const saveChannelConfig = (cfg: TanguDesktopConfig, kind: ChannelKind, patch: ChannelConfigPatch) =>
+  request<{ ok: boolean }>(cfg, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(patch) })
+
+export const connectChannel = (cfg: TanguDesktopConfig, kind: ChannelKind) =>
+  request<{ ok: boolean; accountId: string; label: string; sessionId: string }>(cfg, `/agent/channels/${kind}/connect`, { method: 'POST', body: '{}' })
+
+export const disconnectChannel = (cfg: TanguDesktopConfig, kind: ChannelKind, accountId?: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/channels/${kind}/disconnect`, { method: 'POST', body: JSON.stringify({ account_id: accountId }) })
+
+export const newChannelSession = (cfg: TanguDesktopConfig, kind: ChannelKind, title?: string) =>
+  request<{ sessionId: string }>(cfg, `/agent/channels/${kind}/sessions/new`, { method: 'POST', body: JSON.stringify({ title }) }).then((r) => r.sessionId)
+
+/** 把某会话切为该通道「正在连接」的会话。 */
+export const setChannelConnectedSession = (cfg: TanguDesktopConfig, kind: ChannelKind, sessionId: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/channels/${kind}/connect-session`, { method: 'POST', body: JSON.stringify({ session_id: sessionId }) })
 
 // ── Normal Agent（本地自定义人格;仅本地后端可用,云端返回 404 → 调用方降级空列表）──
 export const listAgents = (cfg: TanguDesktopConfig) =>
@@ -462,6 +553,22 @@ export const getAutomationRuns = (cfg: TanguDesktopConfig, sessionId: string, li
     cfg, `/agent/special/automation/runs?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`,
   ).then((r) => r.runs)
 
+/** 试跑:同一执行器立即跑动作链(origin=manual,不动 lastFiredAt/enabled)。 */
+export const fireAutomationTrigger = (cfg: TanguDesktopConfig, id: string) =>
+  request<{ ok: boolean; execId?: string; status: string; steps?: AutomationExecutionInfo['steps'] }>(
+    cfg, `/agent/special/automation/triggers/${encodeURIComponent(id)}/fire`, { method: 'POST' },
+  )
+
+/** tool_call 动作目录(白名单内置 + automationSafe 插件工具,含参数 JSON schema)。 */
+export const getAutomationActions = (cfg: TanguDesktopConfig) =>
+  request<{ tools: AutomationActionCatalogItem[] }>(cfg, '/agent/special/automation/actions').then((r) => r.tools)
+
+/** 动作链执行账本。 */
+export const getAutomationExecutions = (cfg: TanguDesktopConfig, triggerId?: string, limit = 50) =>
+  request<{ executions: AutomationExecutionInfo[] }>(
+    cfg, `/agent/special/automation/executions?limit=${limit}${triggerId ? `&triggerId=${encodeURIComponent(triggerId)}` : ''}`,
+  ).then((r) => r.executions)
+
 // ── Agent 日程(agents/<slug>/SCHEDULE.db;Calendar 只读源 + 自动化 Space「Agent 日程」组)──
 export const getAgentSchedules = (cfg: TanguDesktopConfig) =>
   request<{ schedules: AgentScheduleInfo[] }>(cfg, '/agent/special/schedule').then((r) => r.schedules)
@@ -573,12 +680,11 @@ export interface InboxMessage {
   sender_kind: 'agent' | 'server' | 'system'
   sender_id: string | null
   origin_broadcast_id: string | null
-  deliver_at: string | null
   read_at: string | null
   archived_at: string | null
   created_at: string | null
 }
-export type InboxFilter = 'all' | 'unread' | 'archived' | 'scheduled'
+export type InboxFilter = 'all' | 'unread' | 'archived'
 
 // 移动端(window.tangu?.mobile)inbox 走设备本地存储(localInbox);桌面/web 走远程 /agent/inbox。
 export const listInbox = (cfg: TanguDesktopConfig, filter: InboxFilter = 'all') =>
@@ -616,3 +722,24 @@ export const postInboxMessage = (cfg: TanguDesktopConfig, msg: { title: string; 
   window.tangu?.mobile
     ? Promise.resolve({ ok: false, id: '' })
     : request<{ ok: boolean; id: string }>(cfg, '/agent/inbox', { method: 'POST', body: JSON.stringify(msg) })
+
+// ── Slash 命令目录（内置来自引擎的 commandCatalog；custom 来自 ~/.tangu/commands/*.md）──
+export interface CustomCommandInfo { name: string; description: string; argHint?: string }
+export interface CommandsCatalogResponse {
+  builtin: Array<{ name: string; key: string; zh: string; en: string; arg?: string; surfaces: string[]; aliases?: string[] }>
+  custom: CustomCommandInfo[]
+  dir: string | null
+}
+
+/** 用户自定义命令列表。引擎不可达/云端 profile 无此能力 → 空表（输入框照常可用）。 */
+export const getCustomCommands = (cfg: TanguDesktopConfig) =>
+  request<CommandsCatalogResponse>(cfg, '/agent/commands')
+    .then((r) => r.custom || [])
+    .catch(() => [] as CustomCommandInfo[])
+
+/** 展开自定义命令（$ARGUMENTS/$1..$9 的替换在服务端做，两端不各写一份正则）。 */
+export const expandCustomCommand = (cfg: TanguDesktopConfig, name: string, args: string) =>
+  request<{ text: string }>(cfg, `/agent/commands/${encodeURIComponent(name)}/expand`, {
+    method: 'POST',
+    body: JSON.stringify({ args }),
+  }).then((r) => r.text)

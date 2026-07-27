@@ -6,7 +6,7 @@
     <!-- amadeus-asset: 是 Amadeus vault 附件协议(图片/PDF/音视频内联预览),img/media/frame 三处都须放行,否则 CSP 静默拦截。
          'unsafe-eval' 是 Forsion 外置插件的求值通道(pluginStore new Function;信任模型 Obsidian 式「装=信任」,
          且 'unsafe-inline' 已在,eval 不扩大 XSS 面),删掉它=所有外置插件 setup 失败。 -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https:; media-src 'self' blob: amadeus-asset: https:; frame-src 'self' amadeus-asset: https://www.youtube-nocookie.com http://127.0.0.1:* http://localhost:*;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https:; media-src 'self' blob: amadeus-asset: https:; frame-src 'self' amadeus-asset: https://www.youtube-nocookie.com http://127.0.0.1:* http://localhost:* http://*.localhost:*;" />
     <title>Forsion</title>
     <script>
       // FOUC 防护:React 挂载前按 localStorage 设 data-theme(语言)/data-skin(配色)/.dark/data-glass,
@@ -53,17 +53,31 @@
     </script>
 
     <style id="tangu-splash-style">
-      /* 启动闪屏(白屏过渡):底色取动画 stage 底色 #fbf8f5;logo 动画 1600ms 后整层淡出。 */
+      /* 启动闪屏(白屏过渡):底色取动画 stage 底色 #fbf8f5。
+         ⚠️退场不再是定时器:装插件/扫工作目录可能比 1600ms 的 logo 动画慢,写死时长会让闪屏在
+         应用还没起来时就撤走。改成 **logo 动画无限循环 + 首帧画出来才淡出**(下方脚本;带 10s 天花板)。 */
       #tangu-splash {
         position: fixed; inset: 0; z-index: 99999;
         display: flex; align-items: center; justify-content: center;
         background: #fbf8f5;
-        animation: tangu-splash-out 2100ms both;
       }
       #tangu-splash .tangu-splash-logo { width: 184px; height: 184px; }
+      #tangu-splash.out { animation: tangu-splash-out 380ms both; }
+
       @keyframes tangu-splash-out {
-        0%, 76% { opacity: 1; visibility: visible; }   /* ~1600ms 动画跑完前保持 */
-        100% { opacity: 0; visibility: hidden; }       /* 末 ~500ms 淡出 */
+        0% { opacity: 1; visibility: visible; }
+        100% { opacity: 0; visibility: hidden; }
+      }
+
+      /* 循环接缝遮罩:入场动画的末态(落定)与初态(隐形+模糊)之间是硬跳,直接 infinite 会"眨眼"。
+         同周期给整个 logo 套一层淡入淡出,把那一帧的复位藏在不透明度 0 里。 */
+      #tangu-splash .tangu-splash-logo {
+        animation: p2m-seam var(--p2m-duration) linear infinite;
+      }
+      @keyframes p2m-seam {
+        0% { opacity: 0; }
+        4%, 92% { opacity: 1; }
+        100% { opacity: 0; }
       }
       :root {
         --p2m-duration: 1600ms;
@@ -82,18 +96,18 @@
 
       #tangu-splash #panel-stack {
         transform-origin: center;
-        animation: p2m-panel var(--p2m-duration) linear both;
+        animation: p2m-panel var(--p2m-duration) linear infinite both;
       }
 
       #tangu-splash #tree-mark {
         transform-origin: 50% 100%;
-        animation: p2m-tree var(--p2m-duration) linear both;
+        animation: p2m-tree var(--p2m-duration) linear infinite both;
       }
 
       #tangu-splash #tree-outline {
         stroke-dasharray: 1 1;
         stroke-dashoffset: 1;
-        animation: p2m-outline var(--p2m-duration) linear both;
+        animation: p2m-outline var(--p2m-duration) linear infinite both;
       }
 
       @keyframes p2m-panel {
@@ -180,7 +194,7 @@
       html[data-mode="dark"] #tangu-splash { background: #252327; }
 
       @media (prefers-reduced-motion: reduce) {
-        #tangu-splash { animation-duration: 700ms; }
+        #tangu-splash .tangu-splash-logo,
         #tangu-splash #panel-stack,
         #tangu-splash #tree-mark,
         #tangu-splash #tree-outline { animation: none; }
@@ -204,13 +218,34 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      // 闪屏在淡出动画结束后移除(按 animationName 过滤,避免被内部部件的 animationend 冒泡误触发)。
+      // 闪屏退场:logo 动画一直循环,**等 React 把首帧真画出来**才淡出——启动要装插件、扫工作目录,
+      // 比 1600ms 慢很正常,写死时长会让闪屏在应用还没起来时就撤走(露出半成品/空壳)。
       (function () {
         var s = document.getElementById('tangu-splash');
         if (!s) return;
+        var CYCLE = 1600;  // 与 --p2m-duration 一致
+        var LEAD = 300;    // 提前于循环接缝淡出:在 logo「落定」那一刻淡出,别在接缝的空档里淡出
+        var CEIL = 10000;  // 天花板:首帧永远画不出来(初始化抛错)也不能把用户锁在闪屏后面
+        var t0 = Date.now();
+        var ceil = setTimeout(fade, CEIL);
+        function fade() {
+          clearTimeout(ceil);
+          s.classList.add('out');
+        }
+        // 淡出动画结束后移除(按 animationName 过滤,避免被内部部件的 animationend 冒泡误触发)。
         s.addEventListener('animationend', function (e) {
           if (e.animationName === 'tangu-splash-out') s.remove();
         });
+        (function waitForFirstPaint() {
+          var root = document.getElementById('root');
+          if (!root || !root.firstChild) return requestAnimationFrame(waitForFirstPaint); // 还没挂上 → 继续循环
+          // 已提交内容 → 再等一帧确保真画出来了,然后排到最近一个「落定」时刻淡出(至少放完一整轮)。
+          requestAnimationFrame(function () {
+            var el = Date.now() - t0;
+            var n = Math.max(1, Math.ceil((el + LEAD) / CYCLE));
+            setTimeout(fade, Math.max(0, n * CYCLE - LEAD - el));
+          });
+        })();
       })();
     </script>
   </body>

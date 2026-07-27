@@ -4,7 +4,9 @@
  * 失败纪律:轮询/列表静默(external 老后端无 /agent/inbox 时 404 不弹错);用户主动操作失败 toast + 刷新回收。
  */
 import { create } from 'zustand'
+import { setActiveSpace } from '@lcl/engine'
 import { useApp } from './appStore'
+import { notifyApp } from './notificationStore'
 import {
   listInbox, getInboxUnreadCount, patchInboxMessage, readAllInbox, deleteInboxMessage, pullInbox,
   type InboxMessage, type InboxFilter,
@@ -84,8 +86,14 @@ export const useInbox = create<InboxState>((set, get) => ({
         const msgs = await listInbox(cfg(), get().filter)
         set({ messages: msgs })
         const m = msgs.find((x) => x.id === r.latestId) ?? (await listInbox(cfg(), 'all')).find((x) => x.id === r.latestId)
-        if (m && useApp.getState().desktopConfig?.inboxNotifyEnabled !== false) {
-          void window.tangu?.notifyInbox?.(m.title, senderOf(m))
+        // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
+        // 不再单发 notifyInbox,避免与统一系统通知重复)。
+        if (m) {
+          notifyApp({
+            event: 'inbox.message', level: 'info',
+            title: senderOf(m), text: m.title,
+            action: { label: useApp.getState().tr('ntf.view'), run: () => setActiveSpace('inbox') },
+          })
         }
       } catch { /* 静默 */ }
     }

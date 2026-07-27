@@ -1,5 +1,14 @@
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
 
+/**
+ * 思考强度七档 —— 与引擎的 `modelCapabilities.ThinkingLevel` 同款。
+ * UI 一律给全七档,「这个模型真支持哪几档」由引擎侧能力表判定并自动降档
+ * (Forsion-Genesis/tangu-agent/src/llm/modelCapabilities.ts)。
+ */
+export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
 export interface TanguDesktopConfig {
   backendUrl: string
   token: string
@@ -8,6 +17,25 @@ export interface TanguDesktopConfig {
   imageModelId?: string
   /** 默认语音识别模型 id(语音输入转写用;缺省=跟随 app 级 asr 默认)。 */
   asrModelId?: string
+}
+
+/** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
+export interface AsrTimedResult { text: string; segments?: Array<{ start: number; end: number; text: string }> }
+
+/** Computer Use 正在操控的窗口的一帧。active:false = 现在没人在操控(或本平台/本 helper 不支持)。 */
+export interface CuLiveFrame {
+  active: boolean
+  windowId?: number
+  pid?: number
+  app?: string
+  bundleId?: string
+  title?: string
+  width?: number
+  height?: number
+  /** JPEG base64(不含 data: 前缀)。缺失 = 本次没取到画面,看 error。 */
+  jpegBase64?: string
+  ageMs?: number
+  error?: string
 }
 
 export interface StartRunResult {
@@ -104,32 +132,67 @@ export interface MuseStatusInfo {
   lastError: string | null
   sessionId: string | null
 }
-/** Muse 盯任务规则(muse_watch 工具/自动化构建器写入 agents/muse/triggers.json)。 */
+/** 自动化动作链步骤(引擎 museTriggers.ActionSpec 镜像;tool_call 只能在构建器创建)。 */
+export type AutomationActionSpec =
+  | { type: 'notify'; title: string; body?: string }
+  | { type: 'agent_run'; agentSlug: string; prompt: string }
+  | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
+/** 自动化规则(manage_automation 工具/构建器写入 agents/muse/triggers.json)。 */
 export interface MuseTriggerInfo {
   id: string
   desc: string
-  cond: { type: 'file_chars_gte'; path: string; n: number } | { type: 'event_seen'; match: string } | { type: 'daily_at'; time: string }
+  cond:
+    | { type: 'file_chars_gte'; path: string; n: number }
+    | { type: 'event_seen'; match: string }
+    | { type: 'daily_at'; time: string }
+    | { type: 'at'; datetime: string }
+    | { type: 'every'; interval: string }
   prompt?: string
   cooldownHours: number
   lastFiredAt: string | null
   enabled: boolean
   createdAt: string
-  /** 命中后执行的 agent(缺省=唤醒 Muse;设置=该 agent 无人值守 full-auto 执行 prompt)。 */
+  /** 旧式单动作:命中后执行的 agent(缺省=唤醒 Muse)。actions 存在时此字段为空。 */
   agentSlug?: string
+  /** 动作链(有则取代 agentSlug/Muse 旧语义)。 */
+  actions?: AutomationActionSpec[]
+  /** 服务端权威计算的下次应触时刻(ISO;事件/文件类或已禁用 → null)。 */
+  nextRunAt?: string | null
 }
-/** POST /agent/special/muse/triggers 的 upsert 入参(snake_case 对齐引擎校验)。 */
+/** POST /agent/special/muse/triggers 的 upsert 入参(snake_case 对齐引擎校验)。
+ *  actions:数组=设置;null=显式清空(回到 Muse/agentSlug 旧语义);缺席=保留旧值。 */
 export interface MuseTriggerUpsert {
   id?: string
   desc: string
-  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at'
+  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every'
   path?: string
   n?: number
   match?: string
   time?: string
+  datetime?: string
+  interval?: string
   prompt?: string
   cooldown_hours?: number
   agent_slug?: string
   enabled?: boolean
+  actions?: AutomationActionSpec[] | null
+}
+/** GET /agent/special/automation/actions 的目录项(tool_call 步骤选择器+参数表单生成)。 */
+export interface AutomationActionCatalogItem {
+  name: string
+  description: string
+  parameters: { type?: string; properties?: Record<string, { type?: string; description?: string; enum?: string[] }>; required?: string[] }
+  dangerous?: boolean
+}
+/** 动作链执行账本行(GET /agent/special/automation/executions)。 */
+export interface AutomationExecutionInfo {
+  id: string
+  trigger_id: string
+  origin: 'auto' | 'manual' | string
+  status: string
+  steps: { type: string; tool?: string; ok: boolean; summary: string }[]
+  error: string | null
+  created_at: string
 }
 /** agent 自动化的常驻会话(每规则一条;运行历史=该会话的 runs)。 */
 export interface AutomationSessionInfo {
@@ -193,6 +256,9 @@ export const DEFAULT_AGENT_SLUG = 'xyra'
 /** 开发者「回复前显示 system prompt」开关(localStorage;仅 dev 模式可见,App.send 据此带 debugSystemPrompt)。 */
 export const SHOW_SYSTEM_PROMPT_KEY = 'forsion_tangu_show_system_prompt'
 
+/** 丝滑光标开关(localStorage,**缺席=开**;smoothCaret.ts 全局模块 + 设置→外观)。 */
+export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
+
 /** Agent 列表的全局 meta:展示顺序 + 用户选定的默认 agent。 */
 export interface AgentsMeta { order: string[]; defaultSlug: string }
 
@@ -205,9 +271,9 @@ export interface NormalAgentDef {
   description: string
   model: string
   tools: string[]
-  thinkingLevel: 'off' | 'low' | 'medium' | 'high' | ''
+  thinkingLevel: ThinkingLevel | ''
   maxIterations: number | null
-  approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | ''
+  approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | ''
   /** system = 内置系统 agent(如 Muse):名册/选择器显示「后台」徽章,启用期间禁删。 */
   createdBy: 'user' | 'agent' | 'system'
   createdAt: string
@@ -240,7 +306,7 @@ export interface AgentConfig {
   /** 为外部引擎选的模型(经 ACP setSessionModel 应用);空=用引擎默认。 */
   engineModelId?: string
   maxIterations?: number
-  thinkingLevel?: 'off' | 'low' | 'medium' | 'high'
+  thinkingLevel?: ThinkingLevel
   enabledSkillIds?: string[]
   /** 本条消息经 /skill 显式点选的技能 id(per-message,加性:并入可用集 + 强制使用;不持久化、不收窄目录)。 */
   requestedSkillIds?: string[]
@@ -251,7 +317,10 @@ export interface AgentConfig {
   enabledMcpServers?: string[]
   execMode?: 'sandbox' | 'host'
   cwd?: string
-  approvalMode?: 'readonly' | 'auto-edit' | 'full-auto'
+  /** 额外工作文件夹(host-only,绝对路径):并入引擎可写根 + 写进系统提示,免逐次「越界写」审批。
+   *  cwd 仍是默认目录 —— 相对路径只相对 cwd 解析,这些一律绝对路径引用。引擎侧封顶 8 个。 */
+  extraRoots?: string[]
+  approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */
   planMode?: boolean
   /** 群聊模式:≥2 个 Normal Agent 轮流发言、投票、可总结。host-only。 */
@@ -270,18 +339,24 @@ export interface AgentConfig {
   groupMaxRounds?: number
 }
 
+/** 通道类型(微信/Telegram/QQ;与引擎 channels/types.ts 对齐)。 */
+export type ChannelKind = 'wechat' | 'telegram' | 'qq'
+
 /** 侧栏工作区:Cloud Project(云沙箱,文件落 Penzor Cloud-Workspaces/Projects/<名>)或本地目录(host 执行,cwd=path)。 */
 export interface WorkspaceDescriptor {
   /** 分组键:cloud 用 cloudProjectKey(project);本地用绝对路径(= project_path)。 */
   key: string
   name: string
-  kind: 'cloud' | 'local' | 'wechat'
+  /** channel = 通道专属工作区文件夹(webot/tgbot/qqbot;会话按 project_path 归入)。 */
+  kind: 'cloud' | 'local' | 'channel'
   /** 本地工作目录绝对路径;cloud 为 null。 */
   path: string | null
   /** 常驻系统工作区(默认云 Project / Tangu 默认本地区):不可重命名 / 移除。 */
   system?: boolean
   /** 云端 Project 名(kind='cloud'):会话 project_name 与 run 的 workspaceProject 都用它。 */
   project?: string
+  /** 通道种类(kind='channel')。 */
+  channel?: ChannelKind
 }
 
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */
@@ -555,7 +630,6 @@ export interface UpdaterStatusInfo {
 export interface StoredDesktopConfig extends TanguDesktopConfig {
   mode: 'managed' | 'external'
   cloudUrl: string
-  cloudToken: string
   sandbox: 'auto' | 'docker' | 'none'
   /** Python 来源:bundled=内置解释器(默认,免装/隔离);system=用系统已装 python。 */
   pythonMode?: 'bundled' | 'system'
@@ -566,10 +640,6 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   browserSearchEngine?: 'duckduckgo' | 'bing' | 'google' | 'baidu'
   browserAllowPrivateUrls?: boolean
   browserCommandTimeoutMs?: number
-  wechatEnabled?: boolean
-  wechatDefaultSessionId?: string
-  wechatRemoteApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto'
-  wechatAllowedPeers?: string[]
   /** 「Tangu 默认工作区」本地目录(空=主进程按 ~/Tangu 兜底并首启创建)。设置里可改。 */
   defaultWorkspaceDir?: string
   /** 本地记忆/日志是否自动同步到 Forsion Brain(默认 false=仅手动「立即同步」,隐私优先)。 */
@@ -588,6 +658,14 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   inboxNotifyEnabled?: boolean
   /** 记录应用内活动日志(undefined 视为 true=默认开;喂后台 Muse + 可导出排查 bug)。 */
   activityLogEnabled?: boolean
+  /** 对外 MCP 端点开关(默认 false=关;开=主进程起本地 HTTP MCP server,外部 agent 可调桌面能力)。 */
+  mcpEnabled?: boolean
+  /** Agent Desk 演出面板:聊天右侧 agent 展示区。默认开,设置→高级可关。 */
+  agentDeskEnabled?: boolean
+  /** 任务概览里点来源/产物文件时开在哪:'tab'=新标签页(默认)、'desk'=Agent Desk 演出格。 */
+  summaryOpenIn?: 'tab' | 'desk'
+  /** 对外 MCP 端点运行态(主进程 effectiveConfig 注入,非持久化):供「高级」页展示连接信息。 */
+  forsionMcp?: { running: boolean; url: string | null; token: string }
   /** 朗读(TTS)模型 id(<providerId>/<model> 或某 provider ttsModelIds 命中);空/缺省=未启用,不显示朗读按钮。 */
   ttsModelId?: string
   /** 朗读音色 id(provider 特定);空=provider 默认。 */
@@ -598,6 +676,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   ttsAutoSpeak?: boolean
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=Forsion 云端/自带 key。缺省 cloud。(就绪与否走 asrLocalStatus IPC,不落 config) */
   asrBackend?: 'local' | 'cloud'
+  /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
+   *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
+  lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
+  lastThinkingLevel?: ThinkingLevel
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string
@@ -612,7 +694,9 @@ export interface AuthStatusInfo {
   nickname?: string | null
   avatar?: string | null
   membershipTier?: string | null
-  tokenSource: 'config' | 'tangu-login' | null
+  tokenSource: 'tangu-login' | null
+  /** managed 模式下的引擎进程态;null=external/无 agent 后端形态(前端不渲染引擎态)。 */
+  backendState?: 'stopped' | 'starting' | 'ready' | 'crashed' | null
 }
 
 /** preload 注入的 window.tangu(浏览器内调试时缺省,backend/auth 能力按需探测)。 */
@@ -650,6 +734,10 @@ declare global {
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
       setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark' }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
+      /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源)→ 刷新账号卡/authInfo。 */
+      onAuthChanged?(cb: (info: { loggedIn: boolean }) => void): () => void
+      /** 截当前窗口的一块视口矩形(Agent Desk 截屏 → 引擎 desk_screenshot);失败返回 null。 */
+      captureRect?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>
       pickDirectory?(): Promise<string | null>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
       saveTextFile?(defaultName: string, content: string): Promise<{ ok: boolean; path: string | null }>
@@ -669,9 +757,16 @@ declare global {
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
+      /** 单文件 HTML 预览:挂其所在目录到不可猜的令牌根,返回可直接进 iframe 的 http URL。 */
+      codePreviewServePath?(filePath: string): Promise<{ url: string }>
       codePreviewStop?(): Promise<{ ok: boolean }>
       /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
       codeProjectsRoot?(): Promise<string>
+      /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
+      connectMeta?(dir: string): Promise<{ slug?: string }>
+      connectList?(): Promise<{ ok: boolean; code?: string; detail?: string; base?: string; handle?: string | null; apps?: Array<{ slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string }>; used?: number; limit?: number; tier?: string }>
+      connectPublish?(p: { dir: string; name: string; slug: string; entry: string }): Promise<{ ok: boolean; code?: string; detail?: string; slug?: string; handle?: string; url?: string; used?: number; limit?: number }>
+      connectUnpublish?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */
@@ -684,11 +779,33 @@ declare global {
       copyHostFiles?(srcPaths: string[], destDir: string): Promise<{ copied: number }>
       /** 拖一行到文件夹 → 移动。 */
       moveHostPath?(srcPath: string, destDir: string): Promise<{ path: string }>
+      // ── 内置浏览器 / 内置终端(builtins/)──
+      /** 用系统浏览器打开(主进程只放 http(s))。 */
+      openExternal?(url: string): Promise<void>
+      /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。返回取消订阅。 */
+      onOpenUrl?(cb: (url: string) => void): () => void
+      /** 内置终端 PTY;spawn 失败(原生模块未就绪)返回 { error } 而非抛。 */
+      pty?: {
+        spawn(opts: { cols?: number; rows?: number; cwd?: string }): Promise<{ id?: string; shell?: string; error?: string }>
+        write(id: string, data: string): void
+        resize(id: string, cols: number, rows: number): void
+        kill(id: string): void
+        onData(id: string, cb: (data: string) => void): () => void
+        onExit(id: string, cb: (code: number) => void): () => void
+      }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
+      /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; language?: string }): Promise<string>
+      transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; language?: string; timestamps: true }): Promise<AsrTimedResult>
+      /** 按路径转写(几十 MB 音轨不走 base64;主进程直接读盘)。 */
+      transcribeAudioFile?(filePath: string, req?: { mime?: string; modelId?: string; language?: string }): Promise<string>
+      transcribeAudioFile?(filePath: string, req: { mime?: string; modelId?: string; language?: string; timestamps: true }): Promise<AsrTimedResult>
+      /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
+       *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
+      computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }): Promise<CuLiveFrame>
       /** 本地语音模型(SenseVoice)状态 / 下载 / 删除 + 下载进度订阅(返回取消函数)。 */
       asrLocalStatus?(): Promise<{ ready: boolean; sizeBytes: number }>
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>
@@ -721,11 +838,13 @@ declare global {
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
-      spacesList?(): Promise<Array<{ slug: string; json: string }>>
+      spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
       notifyInbox?(title: string, body: string): Promise<void>
+      /** 通用系统通知(所有应用内通知同步发);web/mobile 下 undefined。 */
+      notify?(title: string, body: string): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
       // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 ──
@@ -767,7 +886,16 @@ declare global {
       publishes(): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: AmadeusCollabQuota }>
       createPublish(mode: 'page' | 'subtree', path: string): Promise<{ token: string; mode: string; path: string; url: string }>
       revokePublish(token: string): Promise<void>
+      /** Public View 跨库撤销：显式带 vaultId（默认变体只作用于 own vault）。 */
+      revokePublishIn(vaultId: string, token: string): Promise<void>
+      revokePageShareIn(vaultId: string, id: string): Promise<void>
       publishUrl(token: string): string
+      /** Public View：跨全部 vault 汇总「我发布的公开链接 + 我创建的页面协作共享」。 */
+      listAllShares(): Promise<{
+        publishes: Array<{ token: string; mode: string; path: string; createdAt?: string; vaultId: string; vaultName: string }>
+        pageShares: Array<Record<string, unknown>>
+        linkBase: string
+      }>
       // presence
       heartbeat(page: string | null): void
       stopHeartbeat(): void
@@ -804,20 +932,36 @@ declare global {
       set(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig>
       run(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): Promise<RemoteSyncReport>
       check(): Promise<{ ok: boolean; error?: string }>
-      onStatus(cb: (s: { running: boolean; lastReport: RemoteSyncReport | null }) => void): () => void
+      dropboxAuthStart(appKey: string): Promise<{ ok: boolean; error?: string }>
+      dropboxAuthFinish(appKey: string, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }>
+      onStatus(cb: (s: { running: boolean; lastReport: RemoteSyncReport | null; progress: RemoteSyncProgress | null }) => void): () => void
     }
   }
 }
 
+/** 执行阶段进度(主进程 150ms 节流广播;key = 当前处理的文件)。 */
+export interface RemoteSyncProgress {
+  done: number
+  total: number
+  key: string
+}
+
 /** 本地库远程同步配置(镜像 electron/remotesyncIpc.ts 的 RemoteSyncConfig)。 */
 export interface RemoteSyncConfig {
-  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor'
+  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox'
   /** 定时同步间隔(分钟);0 = 仅手动。 */
   intervalMin: number
   folder?: { path: string }
   s3?: { endpoint: string; region: string; accessKeyID: string; secretAccessKey: string; bucket: string; prefix?: string; forcePathStyle?: boolean }
   webdav?: { address: string; username: string; password: string; authType?: 'basic' | 'digest'; baseDir?: string }
   penzor?: { vault?: string }
+  dropbox?: { appKey: string; refreshToken?: string; accountId?: string; email?: string; baseDir?: string }
+  /** 同步方式:both=双向(默认);push=仅上传(增量备份);pull=仅下载(增量还原)。 */
+  direction?: 'both' | 'push' | 'pull'
+  /** 启动后自动同步一次(15s 后)。 */
+  syncOnStart?: boolean
+  /** 传输并发(1-16,缺省 4)。 */
+  concurrency?: number
   ignore?: string[]
   maxFileMB?: number
 }
@@ -835,12 +979,15 @@ export interface RemoteSyncReport {
   skippedLarge: string[]
   pendingDeletions: number
   errors: string[]
+  /** dryRun 时返回完整计划(不执行任何写)。 */
+  plan?: Array<{ key: string; kind: 'push' | 'pull' | 'pushDelete' | 'deleteLocal' | 'join' | 'conflict' }>
 }
 
 export interface RemoteSyncState {
   config: RemoteSyncConfig
   running: boolean
   lastReport: RemoteSyncReport | null
+  progress: RemoteSyncProgress | null
   root: string | null
   rootError: string | null
 }

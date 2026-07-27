@@ -108,7 +108,8 @@ export function MarketModal() {
     const info = installedInfo(c)
     if (!info || !canOpenSettings(c)) return
     close()
-    useApp.getState().openSettings(info.realType === 'amadeus-plugin' ? 'amadeus-plugins' : 'plugins')
+    // 插件家族统一入口:引擎插件与 Forsion 插件同在 amadeus-plugins 页(两区一页)。
+    useApp.getState().openSettings('amadeus-plugins')
   }
 
   const onInstall = async (c: MarketCard): Promise<void> => {
@@ -130,14 +131,20 @@ export function MarketModal() {
         await useTheme.getState().reloadThemes()
         toast(t('market.themeInstalled', { name: c.name }))
       } else if (effType === 'amadeus-plugin') {
-        // 笔记插件:落全局目录(~/.tangu/amadeus/plugins),重载外部插件即生效,免 vault。
+        // Forsion 插件:落全局目录(~/.forsion/plugins),重载外部插件即生效,免 vault。
         if (window.amadeus) {
           installAmadeusPlugins()
           const before = new Set(usePluginStore.getState().plugins.map((p) => p.id))
           await usePluginStore.getState().reloadExternal()
-          // 新装且带引导声明的插件:装完即弹就绪卡(用户注意力正在场;更新/重装不弹)。
           const state = usePluginStore.getState()
-          const fresh = state.plugins.find((p) => !before.has(p.id) && state.activeIds.includes(p.id) && needsOnboarding(p))
+          const freshAll = state.plugins.filter((p) => !before.has(p.id))
+          // 捆绑包装后流程:内嵌引擎插件 → 引擎重扫+装即启用;内嵌 Space → 热注册(幂等,ribbon 实时出现)。
+          // 重扫条件看「装后现存」而非「本次新增」:更新/重装同 id 时 freshAll 为空,但新版可能新增了
+          // 内嵌引擎插件(codex P1-7);重扫幂等,已知 id 会被跳过。原地代码升级仍需重启,由重扫 toast 提示。
+          if (state.plugins.some((p) => p.bundle?.enginePlugins?.length)) await useApp.getState().onPluginInstalled()
+          await loadUserSpaces() // 内含「同 owner 配方变更 → 注销重注册」,更新的 Space 布局即时生效
+          // 新装且带引导声明的插件:装完即弹就绪卡(用户注意力正在场;更新/重装不弹)。
+          const fresh = freshAll.find((p) => state.activeIds.includes(p.id) && needsOnboarding(p))
           if (fresh) usePluginOnboarding.getState().open(fresh.id)
         }
         toast(t('market.amadeusPluginInstalled', { name: c.name }))

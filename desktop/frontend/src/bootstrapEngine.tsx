@@ -1,10 +1,14 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Smartphone, Store, Settings, FileText, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2, Database, PenTool, Trophy, Activity, Workflow } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, getActiveSpace, recordNav, useNav, activeMainPanel, setEngineI18n } from '@lcl/engine'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2, Database, PenTool, Trophy, Activity, Workflow, Network, Rocket } from 'lucide-react'
+import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, clearLayout, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE } from '@lcl/engine'
+import { windowKind } from './windowKind'
+import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
 import { useRecentViews } from './recentViews'
-import { registerSpaces } from './spaces'
-import { loadUserSpaces, saveCurrentAsSpace } from './userSpaces'
+import { registerSpaces, DEFAULT_SPACE_KEY, LAST_EXIT_SPACE } from './spaces'
+import { loadUserSpaces, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
+import { installAmadeusPlugins } from './amadeusPlugins'
+import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
@@ -15,12 +19,13 @@ import { MemoryPanelView, SubchatsView, SessionFilesView } from './views/RightVi
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
 import { HomeEmptyView } from './views/HomeEmpty'
-import { WeChatSpecialView, AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
+import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
 import { AmadeusDbView } from './views/AmadeusDbView'
 import { AmadeusDrawingView } from './views/AmadeusDrawingView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { AmadeusPdfView } from './views/AmadeusPdfView'
+import { AmadeusImageView } from './views/AmadeusImageView'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from './amadeusPanels'
 import { CalendarView } from './views/CalendarView'
 import { CalendarConfigView } from './views/CalendarConfigView'
@@ -29,10 +34,13 @@ import { InboxListView } from './views/inbox/InboxListView'
 import { InboxReaderView } from './views/inbox/InboxReaderView'
 import { WsFileView } from './views/WsFileView'
 import { CodeStudioView } from './views/CodeStudioView'
+import { PublicView } from './views/PublicView'
 import { ChangelogView } from './views/ChangelogView'
 import { setMobileUiCommand, MOBILE_UI_KEY } from './mobileUiCommand'
 import { initUiZoom } from './uiZoom'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from './activityViewCommand'
+import { isSmoothCaretOn, setSmoothCaretEnabled } from './smoothCaret'
+import { SMOOTH_CARET_KEY } from './types'
 import { ActivityLogView } from './views/ActivityLogView'
 import { AutomationListView } from './views/automation/AutomationListView'
 import { AutomationDetailView } from './views/automation/AutomationDetailView'
@@ -67,6 +75,11 @@ export function installEngine(): void {
 
   setEngineI18n(useI18n) // LCL 引擎的 i18n 接缝:注入宿主 hook(引擎自身不依赖 desktop 的 i18n 实现)
 
+  // 内置插件(浏览器 / 终端):默认开,可在 设置 → Forsion 插件 关掉。**放最前面**——它同时接管
+  // 主进程回投的外链(app:open-url),排在几十个 registerView 之后的话,那些调用里任一处抛错
+  // 都会让全应用的外链彻底失效(主进程已不再自己 openExternal)。也满足「早于布局恢复」的要求。
+  installBuiltins()
+
   // 统一「工作区」视图(合并 原会话列表/工作区文件/笔记库):非 singleton —— 左右侧栏各放一个,
   // 各自独立的模式覆盖(存 leaf params);同侧防重复靠 openView 的「同侧同类型复用」。
   registerView({ type: 'workspace', displayName: () => app().tr('view.workspace'), icon: Folder, factory: (props) => <WorkspaceView {...props} /> })
@@ -78,8 +91,7 @@ export function installEngine(): void {
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'memory', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'subchats', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'session-files', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
-  // 主区特殊视图(按需从侧栏打开,不进默认布局)
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'wechat', displayName: () => app().tr('special.wechat.title'), icon: Smartphone, factory: () => <WeChatSpecialView />, singleton: true })
+  // 主区特殊视图(按需从侧栏打开,不进默认布局)。旧 'wechat' 视图已退役:恢复布局时未注册类型被引擎自动剔除。
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'agents-detail', displayName: () => app().tr('special.agents.title'), icon: Bot, factory: () => <AgentsDetailSpecialView />, singleton: true })
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'workspace-detail', displayName: () => app().tr('app.workspace'), icon: FolderOpen, factory: () => <WorkspaceDetailSpecialView />, singleton: true })
   // 新建标签页(空白启动器):列出所有视图按 主区/侧区 分类,选中即在对应区打开。
@@ -90,6 +102,8 @@ export function installEngine(): void {
   registerView({ type: 'wsfile', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
   if (PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+  // Public Space:管理已发布网站(Forsion Connect)+ 已公开发布/协作共享的笔记。档案点名 public 时注册。
+  if (PRODUCT.spaces.includes('public')) registerView({ type: 'public-view', displayName: () => app().tr('view.publicHub'), icon: Rocket, factory: (props) => <PublicView {...props} />, singleton: true })
   // Automation Space 三件套(左=列表/主=详情+构建器/右=触发记录);仅档案点名 automation 时注册。
   if (PRODUCT.spaces.includes('automation')) {
     registerView({ type: 'automation-list', displayName: () => app().tr('view.automationList'), icon: Workflow, factory: () => <AutomationListView />, singleton: true })
@@ -119,6 +133,8 @@ export function installEngine(): void {
     registerView({ type: 'amadeus-drawing', displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} /> })
     // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf)。
     registerView({ type: 'amadeus-pdf', displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} /> })
+    // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。
+    registerView({ type: 'amadeus-image', displayName: () => (document.documentElement.lang.startsWith('zh') ? '图片' : 'Image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
     // 通用「插件文件类型」视图(多实例,params.filePath 认领文件;树上点插件声明的文件类型 / 笔记里点
     // ![[x.ext]] 打开,见 amadeusNav.openFile + 插件的 ctx.registerFileType)。一个视图服务所有插件文件类型。
     registerView({ type: 'amadeus-plugin-file', displayName: () => (document.documentElement.lang.startsWith('zh') ? '插件文件' : 'Plugin File'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
@@ -143,13 +159,41 @@ export function installEngine(): void {
   // Space:注册(注册序 = ribbon 顶部默认序,排在商店等功能图标之上;每个 Space 贡献一个可拖动的 ribbon 顶部图标)。
   // 同时按当前活动 Space 设侧栏默认,使恢复的非 Tangu Space 在首次 toggle 前即正确。
   registerSpaces()
+  // 启动策略(仅主窗、非移动端):默认或用户在「设置 → Spaces」指定的固定 Space,冷启动进其干净默认布局 ——
+  // 不再被上次退出的布局强行覆盖(bug 修复)。选「上次退出的 Space」(LAST_EXIT_SPACE)则保留旧的
+  // tryRestoreLayout 行为。卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局;
+  // 移动端是另一套 SingleColumnHost(无 dockview onReady 恢复链)→ 不介入,保持其原生启动行为。
+  if (windowKind() === 'main' && UI_MODE !== 'mobile') {
+    let pref = PRODUCT.defaultSpace
+    try { pref = localStorage.getItem(DEFAULT_SPACE_KEY) || PRODUCT.defaultSpace } catch { /* private mode */ }
+    if (pref !== LAST_EXIT_SPACE) {
+      const target = useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
+      setActiveSpaceCold(target) // 用户 L0 Space 作默认:此刻尚未异步装载 → 先回退 defaultSpace,下面 loadUserSpaces 完再补定位
+      clearLayout()              // 清本窗布局键 → onReady 的 tryRestoreLayout 落空 → buildDefault 重建 target 的干净默认布局
+    }
+  }
   const activeSpace = getActiveSpace()
   if (activeSpace) {
     ws().setSidebarDefaults(activeSpace.sidebarDefaults)
     ws().setSideProfile(activeSpace.id, activeSpace.resizableSides ?? {}, activeSpace.sideDefaultScale) // 首启 Space 的可拖宽侧栏画像(须先于 onReady 的 pinSides)
   }
+  // Forsion 插件在启动期就装(此前只在 Amadeus/Calendar/聊天输入框挂载时懒引导 → 从 Inbox 之类的 Space
+  // 冷启动时插件根本没装):插件视图要尽早进注册表,内嵌 Space 才通得过「视图已注册」闸、旧布局引用
+  // 插件视图也才恢复得回来。装完由 installAmadeusPlugins 自己补跑 loadUserSpaces。vault 恢复仍然懒。
+  if (window.amadeus) installAmadeusPlugins()
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
-  if (window.tangu?.spacesList) void loadUserSpaces()
+  // 若「启动 Space」设置指向某用户 Space,它在上面的同步策略里尚未注册(回退了 defaultSpace)→ 装载完成后
+  // 补一次冷定位 + resetLayout 重建(仅此情形有一瞬 Tangu→目标;默认是内置 Space 时下面整段早退不闪)。
+  if (window.tangu?.spacesList) void loadUserSpaces().then(() => {
+    if (windowKind() !== 'main' || UI_MODE === 'mobile') return
+    let pref = ''
+    try { pref = localStorage.getItem(DEFAULT_SPACE_KEY) || '' } catch { /* private mode */ }
+    if (!pref || pref === LAST_EXIT_SPACE) return
+    const sp = useSpaceStore.getState()
+    if (sp.activeSpaceId === pref || !sp.spaces.some((s) => s.id === pref)) return // 已是它 / 仍未注册 → 不动
+    setActiveSpaceCold(pref)
+    ws().resetLayout() // 装载晚于 onReady 首建 → 补重建该用户 Space 的干净默认布局
+  })
 
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。
   // 时序:点会话列表是 setActiveId → openView,订阅同步 fire 时目标 chat leaf 可能尚未就位/激活,
@@ -172,6 +216,38 @@ export function installEngine(): void {
     useRecentViews.getState().record({ key: `chat:${id}`, kind: 'chat', id, title: title || app().tr('workbench.chat') })
   })
 
+  // 「最近使用」扩展到所有主区文件 + 功能视图(chat/note 已在上面 / amadeusViews 记账,此处只补其余):
+  // 订阅主区标签变化 → 看活动主 leaf 的 __type + 身份参数记账。无身份的辅助视图(工作区/大纲/启动器等)不记。
+  // ponytail: 只认 mainTabs 引用变化 → 活动文件「就地改名」(params 原地改、mainTabs 引用不变)不会即时补记,
+  //   旧路径条目滞留到下次切标签才自愈;无损(点了顶多开个空视图),不值为它给活动面板打身份指纹。
+  const RECENT_FILE_PARAM: Record<string, string> = {
+    'amadeus-db': 'dbPath', 'amadeus-pdf': 'pdfPath', 'amadeus-drawing': 'drawingPath', 'amadeus-image': 'imagePath', 'amadeus-plugin-file': 'filePath',
+    'wsfile': 'path', // 工作区文件预览:只记有 path 的(tkey 瞬态目标无 path → 天然排除,重开不了)
+  }
+  const RECENT_VIEW_TYPES = new Set(['calendar', 'todo-list', 'inbox-reader', 'agents-detail', 'code-studio', 'automation-detail'])
+  let lastRecentKey = ''
+  useWorkspace.subscribe((st, prev) => {
+    if (st.mainTabs === prev.mainTabs) return // 主区标签(含激活)变化才看
+    const api = ws().api
+    const p = api ? activeMainPanel(api) : null
+    const params = (p?.params ?? {}) as Record<string, unknown>
+    const type = typeof params.__type === 'string' ? params.__type : ''
+    const fileParam = RECENT_FILE_PARAM[type]
+    if (fileParam && typeof params[fileParam] === 'string') {
+      const path = params[fileParam] as string
+      const key = `file:${type}:${path}`
+      if (key === lastRecentKey) return
+      lastRecentKey = key
+      useRecentViews.getState().record({ key, kind: 'file', id: path, viewType: type, title: path.split(/[\\/]/).pop() || path })
+    } else if (RECENT_VIEW_TYPES.has(type) || type.startsWith('plugin:')) {
+      const key = `view:${type}`
+      if (key === lastRecentKey) return
+      lastRecentKey = key
+      const def = getView(type)
+      useRecentViews.getState().record({ key, kind: 'view', id: type, viewType: type, title: def ? label(def.displayName) : type })
+    }
+  })
+
   // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);商店/明暗/语言/反馈/命令/设置/账号常驻底部。
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
   // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册。
@@ -190,6 +266,7 @@ export function installEngine(): void {
   if (PRODUCT.agentBackend) addRibbonIcon({
     id: 'rb-account',
     side: 'bottom',
+    pinned: true, // 账号卡钉死最底:不参与拖拽/收纳/溢出
     component: ({ expanded }) => (
       <AccountCard
         compact={!expanded}
@@ -199,14 +276,28 @@ export function installEngine(): void {
     ),
   })
 
+  // ribbon 空白/＋ 号菜单的 feature 动作(引擎不 import feature 代码):新建空白 Space + 文本输入用 askString
+  // (Electron 无 window.prompt)。newSpace 仅桌面(需 spacesSave 落盘);无则菜单不显示该项。
+  setRibbonActions({
+    newSpace: window.tangu?.spacesSave ? () => { void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void createBlankSpace(name) }) } : undefined,
+    prompt: (title, initial) => askString(title, initial),
+  })
+
   // commands
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat })
-  addCommand({ id: 'toggle-left', title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+b', run: () => ws().toggleSidebar('left') })
-  addCommand({ id: 'quick-find', title: () => '快速查找', keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
-  addCommand({ id: 'toggle-right', title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
-  addCommand({ id: 'theme-mode', title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
+  // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
+  // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。
+  addCommand({ id: 'toggle-left', icon: PanelLeft, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
+  addCommand({ id: 'quick-find', icon: Search, title: () => '快速查找', keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
+  addCommand({ id: 'toggle-right', icon: PanelLeft, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
+  addCommand({ id: 'theme-mode', icon: Moon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })
+  addCommand({ id: 'toggle-smooth-caret', title: () => app().tr('command.toggleSmoothCaret'), keywords: 'smooth caret cursor 光标 丝滑 word', run: () => {
+    const on = !isSmoothCaretOn()
+    try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
+    setSmoothCaretEnabled(on)
+  } })
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
   // per-tab 前进/后退(Ctrl/⌘+{ 与 }):只走当前活动主 leaf 的历史栈;与主区左上角箭头同源。
   const navGo = (dir: 'back' | 'forward'): void => {
@@ -221,8 +312,7 @@ export function installEngine(): void {
   if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => (document.documentElement.lang.startsWith('zh') ? '打开 Mini 卡片' : 'Open mini card'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => window.tangu?.openMini?.() })
   // 另存为 Space:当前布局序列化成 ~/.tangu/spaces/<slug>/space.json 并注册(仅桌面)。
   if (window.tangu?.spacesSave) addCommand({ id: 'save-as-space', title: () => app().tr('command.saveAsSpace'), keywords: 'space 空间 另存 保存 custom', run: () => {
-    const name = window.prompt(app().tr('spaces.namePrompt'))?.trim()
-    if (name) void saveCurrentAsSpace(name)
+    void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void saveCurrentAsSpace(name) })
   } })
   addCommand({ id: 'save-layout', title: () => app().tr('command.saveLayout'), keywords: 'layout workspace save 命名布局', run: () => {
     const name = window.prompt(app().tr('layout.namePrompt'))?.trim()
@@ -237,7 +327,7 @@ export function installEngine(): void {
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: () => app().stop() })
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
-  addCommand({ id: 'open-settings', title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() })
+  addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() })
   // UI 缩放:应用持久值 + 注册放大/缩小/重置命令。端默认:桌面 Electron 1 / 触屏窄屏 1.15(同
   // singleColumn.css 移动 zoom 段) / 桌面浏览器(网页端) 1.1 / 移动端平板 1。
   {

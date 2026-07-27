@@ -197,18 +197,9 @@
   gap: 4px;
   align-items: center;
 }
-.ibx-sched-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
-  border-radius: 999px;
-  padding: 3px 10px;
-}
 .ibx-reader-body { font-size: 14px; line-height: 1.65; color: var(--text-light, var(--text)); }
+/* 整块 ![[...]] 嵌入卡片(InboxBody):与前后正文块留出间距;.am-app 作用域内块样式自带边框/左条。 */
+.ibx-reader-body .ibx-embed { margin: 12px 0; }
 .ibx-reader-empty {
   height: 100%;
   display: flex;

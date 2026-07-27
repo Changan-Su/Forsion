@@ -3,9 +3,10 @@
  * 启用且有 settings 的插件,其设置页移到左栏「扩展」组下的一级 nav 项(见 SettingsModal),此处给「设置」直达按钮。
  * 插件清单与 agents 由 SettingsModal 统一持有并下传(避免双拉,启用态变更即时反映到 nav)。仅本地后端可用。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { setPluginEnabled, uninstallPlugin, installPluginFromNpm, rescanPlugins, type PluginInfo } from '../services/backendService'
 import { useApp } from '../stores/appStore'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 
@@ -24,6 +25,17 @@ export const PluginsTab: React.FC<{
   useEffect(() => {
     window.tangu?.pluginsUserInstalled?.().then((l) => setUserIds(new Set(l.map((x) => x.id)))).catch(() => {})
   }, [plugins])
+
+  // Forsion 捆绑包内嵌的引擎插件不在此单列(在统一插件页的对应插件卡片里随父插件启停级联管理)。
+  // 仅隐藏「当前胜出实例真来自 bundle」的行:用户目录手装同 id(loader 优先级更高)或首方内置同 id
+  // 时,胜出的不是 bundle 版,必须照常单列管理,不许按 id 一刀切隐藏(codex P1-5)。
+  const amPlugins = usePluginStore((s) => s.plugins)
+  const bundleOwned = useMemo(() => new Set(amPlugins.flatMap((p) => p.bundle?.enginePlugins ?? [])), [amPlugins])
+  const shown = useMemo(
+    () => (plugins ? plugins.filter((p) => !(bundleOwned.has(p.id) && p.source === 'folder' && !userIds.has(p.id))) : null),
+    [plugins, bundleOwned, userIds],
+  )
+  const hiddenCount = (plugins?.length ?? 0) - (shown?.length ?? 0)
 
   // 从 npm 一条命令装引擎插件。
   const [spec, setSpec] = useState('')
@@ -111,11 +123,12 @@ export const PluginsTab: React.FC<{
         </div>
         <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{t('settings.plugins.npmInstallHint')}</div>
       </div>
-      {!plugins
+      {hiddenCount > 0 && <div className="hint">{t('settings.plugins.bundleOwnedHint', { n: String(hiddenCount) })}</div>}
+      {!shown
         ? <div className="hint">{t('common.loading')}</div>
-        : !plugins.length
+        : !shown.length
           ? <div className="hint">{t('settings.plugins.empty')}</div>
-          : plugins.map((p) => (
+          : shown.map((p) => (
         <div key={p.id} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>

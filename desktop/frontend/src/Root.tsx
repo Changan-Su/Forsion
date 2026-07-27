@@ -18,6 +18,9 @@ import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/Onboardin
 import { FeedbackModal } from './components/FeedbackModal'
 import { AchievementsModal } from './achievements/AchievementsModal'
 import { AchievementToast } from './achievements/AchievementToast'
+import { NotificationHost } from './components/NotificationHost'
+import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
+import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
 
@@ -46,6 +49,7 @@ function MobilePreviewFrame({ children }: { children: ReactNode }) {
 export function Root() {
   useBootstrap()
   useEffect(() => installFileDropGuard(), []) // 全局 OS 文件拖放守卫:未被任何视图接手的拖放不再把 SPA 导航冲掉
+  useEffect(() => { installStatusBarItems(); installNotificationWiring() }, []) // 状态栏内置项 + 通知事件接线(幂等)
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
     sessions: s.sessions,
@@ -58,7 +62,6 @@ export function Root() {
     marketOpen: s.marketOpen,
     closeMarket: s.closeMarket,
     achievementsOpen: s.achievementsOpen,
-    toasts: s.toasts,
     cfg: s.cfg,
     tr: s.tr,
     openSettings: s.openSettings,
@@ -100,7 +103,7 @@ export function Root() {
         className={`shell-host${revealMain ? ' main-enter' : ''}`}
         style={shellHidden ? { visibility: 'hidden' } : undefined}
       >
-        <Shell dark={theme.mode === 'dark'} soft={!!getLanguage(theme.lang)?.manifest.panelGap} buildDefault={buildDefaultLayout} header={<TopBar />} />
+        <Shell dark={theme.mode === 'dark'} soft={!!getLanguage(theme.lang)?.manifest.panelGap} buildDefault={buildDefaultLayout} header={<TopBar />} footer={<DesktopStatusBar />} />
       </div>
 
       {/* Amadeus 全局浮层(快速切换等):须在 shell-host 之后(拖窗区 DOM 顺序,同下)。 */}
@@ -229,13 +232,7 @@ export function Root() {
 
       <AchievementToast />
 
-      <div className="toast-wrap" aria-live="polite" aria-atomic="true">
-        {a.toasts.map((toast) => (
-          <div key={toast.id} className={`toast${toast.error ? ' error' : ''}`}>
-            {toast.text}
-          </div>
-        ))}
-      </div>
+      <NotificationHost />
     </MobilePreviewFrame>
   )
 }

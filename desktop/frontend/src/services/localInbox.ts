@@ -16,6 +16,7 @@ const KEY = 'tangu_inbox_msgs'
 
 interface StoredMsg extends InboxMessage {
   deleted_at: string | null // 软删:置位后不显示,但保留以维持广播 origin_broadcast_id 去重 + 游标
+  deliver_at?: string | null // legacy:定时消息已下线;老存量行仍带此字段,读端按原时刻日落
 }
 
 /** UTC 'YYYY-MM-DD HH:MM:SS'(秒精度,与后端无后缀 UTC 串对齐;广播的微秒 created_at 原样保留另算)。 */
@@ -33,14 +34,13 @@ function saveAll(msgs: StoredMsg[]): void {
   try { localStorage.setItem(KEY, JSON.stringify(msgs)) } catch { /* quota / private mode */ }
 }
 
-/** 已投递:deliver_at 为空 或 <= now(字符串比较,同为 UTC 'YYYY-...' 可比)。 */
+/** legacy 已投递过滤:定时消息已下线,存量未到期行按原时刻日落(对齐 routes/inbox.ts 读端)。 */
 function delivered(m: StoredMsg, now: string): boolean {
   return !m.deliver_at || m.deliver_at <= now
 }
 const cmp = (a: string | null, b: string | null): number => (a || '').localeCompare(b || '')
 const byCreatedDesc = (a: StoredMsg, b: StoredMsg): number => cmp(b.created_at, a.created_at)
 const byArchivedDesc = (a: StoredMsg, b: StoredMsg): number => cmp(b.archived_at, a.archived_at)
-const byDeliverAsc = (a: StoredMsg, b: StoredMsg): number => cmp(a.deliver_at, b.deliver_at)
 
 /** 广播游标 = 本地广播来源(origin_broadcast_id 非空)消息的 max created_at(含软删,微秒原文;对齐后端 pull 语义)。 */
 function broadcastCursor(rows: StoredMsg[]): string {
@@ -57,8 +57,7 @@ export const localInbox = {
     let rows: StoredMsg[]
     if (filter === 'unread') rows = live.filter((m) => !m.archived_at && delivered(m, now) && !m.read_at).sort(byCreatedDesc)
     else if (filter === 'archived') rows = live.filter((m) => !!m.archived_at).sort(byArchivedDesc)
-    else if (filter === 'scheduled') rows = live.filter((m) => m.deliver_at && m.deliver_at > now).sort(byDeliverAsc)
-    else rows = live.filter((m) => !m.archived_at && delivered(m, now)).sort(byCreatedDesc) // all
+    else rows = live.filter((m) => !m.archived_at && delivered(m, now)).sort(byCreatedDesc) // all(scheduled 档已下线)
     return rows
   },
 
@@ -122,7 +121,7 @@ export const localInbox = {
       rows.push({
         id: `bc:${b.id}`, title: b.title, body: b.body,
         sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: b.id,
-        deliver_at: null, read_at: null, archived_at: null, created_at: b.created_at, deleted_at: null,
+        read_at: null, archived_at: null, created_at: b.created_at, deleted_at: null,
       })
       seen.add(b.id)
       added++

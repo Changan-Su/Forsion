@@ -14,6 +14,7 @@ import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'
 import { installMultiWindow } from './multiWindow'
+import { installSmoothCaret } from './smoothCaret'
 
 // 全局错误兜底:ErrorBoundary 只接 React 渲染期异常,接不到事件回调/异步里的未捕获错误,
 // 也接不到渲染进程级崩溃。这里至少把它们记到 console(配合主进程崩溃自愈),便于诊断白屏。
@@ -51,6 +52,8 @@ try {
   installEngine()
   // 多窗接线:把引擎 detach 缝接到 window.tangu(桌面);web/移动 no-op。须在任何 WbTab 渲染前设好缝。
   installMultiWindow()
+  // 丝滑光标(默认开;设置→外观开关)。
+  installSmoothCaret()
 } catch (err) {
   console.error('[tangu] init failed, continue to mount:', err)
 }

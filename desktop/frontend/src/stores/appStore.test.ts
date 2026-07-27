@@ -52,7 +52,6 @@ describe('appStore.reduceEvent', () => {
       usageBySession: { s1: { ctx: 0, base: 10, live: 0 } },
       subChatsBySession: {},
       groupVoting: {},
-      toasts: [],
     })
   })
 

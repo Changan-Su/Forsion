@@ -1,16 +1,18 @@
 /**
  * 收件箱列表(Inbox Space 左栏 side view):Gmail 式两行行(发件人+时间 / 标题+摘要)+ 未读点 +
- * filter chips(全部/未读/已归档/定时中)+ 本地搜索 + 右键菜单。容器复用 t2s-side(drag region 纪律自动生效,
- * 交互元素一律 button/input)。选中 → store.select(乐观标已读)+ 打开阅读面板。
+ * filter chips(全部/未读/已归档;「定时中」已随 deliver_at 下线,定时提醒=自动化 at/every+notify)+
+ * 本地搜索 + 右键菜单。容器复用 t2s-side(drag region 纪律自动生效,交互元素一律 button/input)。
+ * 选中 → store.select(乐观标已读)+ 打开阅读面板。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, CheckCheck, Clock, Cloud, Inbox, Info, Mail, MailOpen, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, CheckCheck, Cloud, Inbox, Info, Mail, MailOpen, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace } from '@lcl/engine'
 import '../chat2/sidebar2.css'
 import './inbox.css'
+import { OverlayAt } from '@lcl/engine'
 
 /** 相对时间(仓内无现成 helper);>7 天转日期。 */
 function timeAgo(iso: string | null, t: (k: string, v?: Record<string, string | number>) => string): string {
@@ -38,7 +40,7 @@ function Avatar({ m }: { m: InboxMessage }) {
   return <span className="ibx-ava-fallback">{(senderOf(m) || '?').slice(0, 1).toUpperCase()}</span>
 }
 
-const FILTERS = ['all', 'unread', 'archived', 'scheduled'] as const
+const FILTERS = ['all', 'unread', 'archived'] as const
 
 export function InboxListView() {
   const { t } = useI18n()
@@ -115,7 +117,6 @@ export function InboxListView() {
         ) : (
           filtered.map((m) => {
             const unread = !m.read_at
-            const scheduled = filter === 'scheduled'
             return (
               <button
                 key={m.id}
@@ -130,10 +131,7 @@ export function InboxListView() {
                 <span className="ibx-main">
                   <span className="ibx-l1">
                     <span className="ibx-sender">{senderOf(m)}</span>
-                    <span className="ibx-time">
-                      {scheduled && <Clock size={10} />}
-                      {scheduled ? (parseUtc(m.deliver_at)?.toLocaleString() ?? '') : timeAgo(m.created_at, t)}
-                    </span>
+                    <span className="ibx-time">{timeAgo(m.created_at, t)}</span>
                   </span>
                   <span className="ibx-l2">
                     <span className="ibx-title">{m.title}</span>
@@ -147,7 +145,7 @@ export function InboxListView() {
       </div>
 
       {menu && menuMsg && (
-        <div ref={menuRef} className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt innerRef={(el) => { menuRef.current = el }} className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { markRead(menu.id, !menuMsg.read_at); setMenu(null) }}>
             {menuMsg.read_at ? <Mail size={13} /> : <MailOpen size={13} />}
             {menuMsg.read_at ? t('inbox.action.markUnread') : t('inbox.action.markRead')}
@@ -165,7 +163,7 @@ export function InboxListView() {
           >
             <Trash2 size={13} /> {t('inbox.action.delete')}
           </button>
-        </div>
+        </OverlayAt>
       )}
     </aside>
   )

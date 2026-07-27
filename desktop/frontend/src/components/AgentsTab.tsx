@@ -7,7 +7,8 @@ import { Loader2, Plus, Trash2, Pencil, Bot, Star, GripVertical, BookOpen, User,
 import { useWorkspace } from '@lcl/engine'
 import { listAgents, saveAgentDef, deleteAgentDef, listModels, uploadAgentAvatar, fetchAgentAvatar, deleteAgentAvatar, getAgentsMeta, putAgentsMeta, getUserProfile, putUserProfile, fetchToolCatalog } from '../services/backendService'
 import { AgentMemoryModal } from './AgentMemoryModal'
-import type { ModelInfo, NormalAgentDef, TanguDesktopConfig } from '../types'
+import { THINKING_LEVELS } from '../types'
+import type { ModelInfo, NormalAgentDef, TanguDesktopConfig, ThinkingLevel } from '../types'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { track } from '../achievements/store'
@@ -20,9 +21,9 @@ type Draft = {
   model: string
   systemPrompt: string
   soul: string
-  thinkingLevel: '' | 'off' | 'low' | 'medium' | 'high'
+  thinkingLevel: '' | ThinkingLevel
   maxIterations: string
-  approvalMode: '' | 'readonly' | 'auto-edit' | 'full-auto'
+  approvalMode: '' | 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   shareDefaultMemory: boolean
   cloudSync: boolean
   activityAccess: boolean
@@ -265,8 +266,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
             <label>{t('settings.agents.thinking')}</label>
             <select value={editing.thinkingLevel} onChange={(e) => setEditing({ ...editing, thinkingLevel: e.target.value as Draft['thinkingLevel'] })}>
               <option value="">{t('settings.agents.inherit')}</option>
-              <option value="off">off</option><option value="low">low</option>
-              <option value="medium">medium</option><option value="high">high</option>
+              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{lv}</option>)}
             </select>
           </div>
           <div className="field">
@@ -281,6 +281,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
               <option value="readonly">readonly</option>
               <option value="auto-edit">auto-edit</option>
               <option value="full-auto">full-auto</option>
+              <option value="custom">custom</option>
             </select>
           </div>
         </div>

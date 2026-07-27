@@ -4,7 +4,7 @@
  * (与 singleColumn.css 的移动 zoom 段同判据同值;inline style 覆盖同属性的 CSS 值,不叠乘)。
  * 用户显式调过(localStorage 有值)则一律以用户值为准;重置=清值回端默认。
  */
-import { addCommand } from '@lcl/engine'
+import { addCommand, UI_ZOOM_EVENT } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 
 const KEY = 'forsion_ui_zoom'
@@ -27,6 +27,13 @@ function apply(v: number): void {
   try {
     // v===1 清空 inline,让端级 CSS(如 mini-shell 局部 zoom)自然接管
     ;(document.body.style as CSSStyleDeclaration & { zoom: string }).zoom = v === 1 ? '' : String(v)
+    // 与 zoom 同步设 --uiz:引擎 .shell 用 calc(100vh/var(--uiz)) 反补偿,消除 zoom≠1 时的全屏壳溢出/留白
+    // (CSS zoom 不缩 vh 的陷阱,已实证)。v===1 移除 → 回退 var 默认 1 = 原生 100vh。
+    if (v === 1) document.documentElement.style.removeProperty('--uiz')
+    else document.documentElement.style.setProperty('--uiz', String(v))
+    // 改 zoom 不会触发 window.resize:视口锚定的 fixed 浮层(菜单/补全/工具栏)按旧 zoom 算的
+    // left/top 会当场偏掉 → 发一个约定事件让它们重算。见 lcl/engine/menuAnchor.tsx。
+    window.dispatchEvent(new Event(UI_ZOOM_EVENT))
   } catch {
     /* ignore */
   }

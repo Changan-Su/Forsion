@@ -14,6 +14,7 @@ import { DEFAULT_AGENT_SLUG } from '../types'
 import * as api from '../services/backendService'
 import { Markdown } from './Markdown'
 import { ChatToc } from './ChatToc'
+import { OverlayAt } from '@lcl/engine'
 import { SubChatsTab } from './SubChatsTab'
 import type { PreviewTarget } from './WorkspaceFilePreview'
 import { fmtSize, b64ToBytes } from '../services/fileKinds'
@@ -127,9 +128,10 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
     }
   }, [onClose])
   return createPortal(
-    <div
+    <OverlayAt
       className="ctx-menu"
-      style={{ left: menu.x, top: menu.y }}
+      x={menu.x}
+      y={menu.y}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
     >
@@ -138,16 +140,18 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
           {it.icon}<span>{it.label}</span>
         </button>
       ))}
-    </div>,
+    </OverlayAt>,
     document.body,
   )
 }
 
-/** 右键坐标钳进视口(估算菜单尺寸,避免溢出右/下边)。 */
-export const menuPos = (e: React.MouseEvent, count: number) => ({
-  x: Math.min(e.clientX, window.innerWidth - 200),
-  y: Math.min(e.clientY, window.innerHeight - 16 - count * 32),
-})
+/** 右键坐标原样交给 OverlayAt —— 夹取/翻面由它量真实尺寸后决定。
+ *  ⚠️别恢复这里按 count 估高度的预夹:预夹过的 y 会被当成真锚点再翻一次面(codex#2)。
+ *  count 保留在签名里,免得改所有调用点。 */
+export const menuPos = (e: React.MouseEvent, count?: number) => {
+  void count
+  return { x: e.clientX, y: e.clientY }
+}
 
 // ── 工作区 ──────────────────────────────────────────────────────────────────
 

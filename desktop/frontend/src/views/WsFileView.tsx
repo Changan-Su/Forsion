@@ -5,12 +5,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Download, FileWarning, RefreshCw, WrapText, Code2, Eye, Columns2, AlignJustify,
-  ZoomIn, ZoomOut, Maximize, ExternalLink, FolderSearch, Pencil, Clock,
+  ZoomIn, ZoomOut, Maximize, ExternalLink, FolderSearch, Pencil, Clock, NotebookPen,
 } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { Markdown } from '../components/Markdown'
 import {
-  ImageView, PdfView, DocxView, DiffView, Spinner, cm, loadOffice,
+  ImageView, PdfView, DocxView, DiffView, Spinner, cm, loadOffice, HtmlPreview,
   TEXT_KINDS, BLOB_KINDS, CSV_ROW_CAP, OfficeFail,
   type PreviewTarget, type PreviewData, type ImgView, type OfficeRender,
 } from '../components/WorkspaceFilePreview'
@@ -21,6 +21,9 @@ import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
 import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
 import { useApp } from '../stores/appStore'
 import { bumpDir } from './chat2/FilesPanel'
+import { usePageStore } from '@amadeus/store/pageStore'
+import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { openNote } from '../amadeusNav'
 
 /** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
 async function salvageDraft(path: string, content: string): Promise<void> {
@@ -205,7 +208,25 @@ export function WsFileView({ leaf }: ViewProps) {
     <button className="btn ghost sm" onClick={target.download}><Download size={13} /> {t('preview.download')}</button>
   ) : null
 
-  const mdEditable = kind === 'markdown' && !!path && !!window.tangu?.writeHostFile
+  // 毁档防线:画板/导图/插件文件类型磁盘同为 .md 但载荷不是笔记,喂 Milkdown 会被 normalize 改写
+  // → 一律只读源码,原生编辑请走「在 Amadeus 中打开」。
+  // ponytail: 内置特型后缀写死(shared 判定函数在另一会话未提交 WIP 里,不引);插件类型订阅
+  // fileTypes 响应晚注册(插件异步装载期不误放行);已禁用插件的文件回归普通 md,与全 app 判定口径一致。
+  const fileTypes = usePluginStore((s) => s.fileTypes)
+  const specialMd = !!path && (/\.(excalidraw|mindmap)\.md$/i.test(path) || !!findFileType(fileTypes, path))
+  const mdEditable = kind === 'markdown' && !!path && !!window.tangu?.writeHostFile && !specialMd
+
+  // 文件在当前打开的 Amadeus vault 里 → 原生 view 优先:「在 Amadeus 中打开」交给 openNote 门面
+  // (笔记/画板/导图/插件文件类型各自改道,这里不重复判定)。只对 .md 系开这个门,附件类型不进笔记编辑器。
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const vaultRel = useMemo(() => {
+    if (!path || !vaultRoot) return null
+    const norm = (x: string): string => x.replace(/\\/g, '/').replace(/\/+$/, '')
+    const r = norm(vaultRoot)
+    const q = norm(path)
+    return q.startsWith(r + '/') ? q.slice(r.length + 1) : null
+  }, [path, vaultRoot])
+  const amadeusOpen = vaultRel && /\.md$/i.test(vaultRel) ? () => void openNote(vaultRel) : undefined
 
   let body: React.ReactNode
   if (!target) body = (
@@ -241,8 +262,8 @@ export function WsFileView({ leaf }: ViewProps) {
         onReload={() => setReloadNonce((n) => n + 1)}
       />
     )
-    else if (docView === 'preview') body = <div className="wsfile-doc msg-content"><Markdown content={text} /></div>
-    else body = cm({ value: text, fileName: name, wrap })
+    else if (specialMd || docView === 'source') body = cm({ value: text, fileName: name, wrap })
+    else body = <div className="wsfile-doc msg-content"><Markdown content={text} /></div>
   }
   else if (kind === 'json') { let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2) } catch { /* keep raw */ } body = cm({ value: pretty, fileName: 'x.json', language: 'json', wrap }) }
   else if (kind === 'code') body = cm({ value: text, fileName: name, wrap })
@@ -262,7 +283,7 @@ export function WsFileView({ leaf }: ViewProps) {
     )
   }
   else if (kind === 'html') body = docView === 'preview'
-    ? <iframe key={reloadNonce} className="wsfile-frame" srcDoc={text} sandbox="allow-scripts allow-popups allow-forms allow-modals" title={name} />
+    ? <HtmlPreview path={path ?? target.path} text={text} title={name} nonce={reloadNonce} />
     : cm({ value: text, language: 'html', wrap })
   else if (kind === 'docx') body = <DocxView bytes={data.bytes} download={target.download} />
   else if (kind === 'xlsx' || kind === 'pptx') {
@@ -304,7 +325,7 @@ export function WsFileView({ leaf }: ViewProps) {
   const ready = !loading && !error && tooLarge === null && !!data
   const isCode = ready && (kind === 'code' || kind === 'json' || kind === 'text'
     || (kind === 'html' && docView === 'source')
-    || (kind === 'markdown' && !mdEditable && docView === 'source'))
+    || (kind === 'markdown' && !mdEditable && (docView === 'source' || specialMd)))
 
   return (
     <div className="wsfile-tab">
@@ -321,11 +342,15 @@ export function WsFileView({ leaf }: ViewProps) {
             <button className={mdMode === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setMdMode('source')}><Code2 size={13} /></button>
           </div>
         )}
-        {ready && !mdEditable && (kind === 'markdown' || kind === 'html') && (
+        {ready && !mdEditable && !specialMd && (kind === 'markdown' || kind === 'html') && (
           <div className="wsfile-seg">
             <button className={docView === 'preview' ? 'active' : ''} title={t('preview.htmlPreview')} onClick={() => setDocView('preview')}><Eye size={13} /></button>
             <button className={docView === 'source' ? 'active' : ''} title={t('preview.htmlCode')} onClick={() => setDocView('source')}><Code2 size={13} /></button>
             {kind === 'html' && docView === 'preview' && <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>}
+            {/* 在系统浏览器里调试:令牌根按目录 memo,重复 servePath 返回同一 URL,无需从 HtmlPreview 里把它抬出来 */}
+            {kind === 'html' && docView === 'preview' && !!(path ?? target?.path) && !!window.tangu?.codePreviewServePath && !!window.tangu?.openExternal && (
+              <button title={t('preview.openInBrowser')} onClick={() => void window.tangu!.codePreviewServePath!((path ?? target!.path)!).then((r) => window.tangu!.openExternal!(r.url)).catch(() => {})}><ExternalLink size={12} /></button>
+            )}
           </div>
         )}
         {ready && kind === 'diff' && (
@@ -345,6 +370,7 @@ export function WsFileView({ leaf }: ViewProps) {
           </>
         )}
 
+        {amadeusOpen && <button className="icon-btn" title={t('preview.openInAmadeus')} onClick={amadeusOpen}><NotebookPen size={14} /></button>}
         {path && <button className="icon-btn" title={t('preview.openWithDefault')} onClick={openWithDefault}><ExternalLink size={14} /></button>}
         {target?.download && <button className="icon-btn" title={path ? t('panel.action.revealInFileManager') : t('preview.download')} onClick={target.download}><Download size={14} /></button>}
         <button className="icon-btn" title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={14} /></button>

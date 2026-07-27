@@ -7,12 +7,79 @@
 import React, { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending } from '../stores/pluginOnboardingStore'
 import { useI18n } from '../i18n'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
+import { setPluginEnabled, type PluginInfo } from '../services/backendService'
+import { loadUserSpaces } from '../userSpaces'
+import { BuiltinPluginsSection } from '../builtins'
+import { useApp } from '../stores/appStore'
+import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution } from '@amadeus/plugins/types'
+
+/** 同一插件的级联串行链:快速连点按序执行,防两批 PUT 乱序落成「父关子开」(codex P1-4)。 */
+const cascadeChain = new Map<string, Promise<void>>()
+
+/** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 内嵌引擎插件随父插件同开同关(经引擎 HTTP)。
+ *  纪律(codex P1-4/P1-5):以父插件**实际**启用结果为准(setup 抛错=未启用,不按点击意图猜);
+ *  用户目录手装的同 id(loader 优先级更高的覆盖版)与首方内置不归捆绑包管,跳过;失败 toast,不静默。 */
+function cascadeAfterToggle(
+  p: AmadeusPlugin,
+  cfg?: TanguDesktopConfig | null,
+  onEngineReload?: () => void,
+  enginePlugins?: PluginInfo[] | null,
+): Promise<void> {
+  const run = async (): Promise<void> => {
+    void loadUserSpaces() // 无 bundle 时幂等无害
+    const ids = p.bundle?.enginePlugins ?? []
+    if (!ids.length || !cfg) return
+    const on = usePluginStore.getState().isActive(p.id)
+    let userOwned = new Set<string>()
+    try {
+      userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.()) ?? []).map((x) => x.id))
+    } catch { /* 桥缺位按空集 */ }
+    let failed = 0
+    for (const id of ids) {
+      if (userOwned.has(id)) continue // 用户手装同 id 胜出,不归本捆绑包管
+      if (enginePlugins?.find((e) => e.id === id)?.source === 'builtin') continue // 首方内置同 id,绝不去动
+      try {
+        await setPluginEnabled(cfg, id, on)
+      } catch {
+        failed += 1
+      }
+    }
+    if (failed) useApp.getState().toast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
+    onEngineReload?.()
+  }
+  const prev = cascadeChain.get(p.id) ?? Promise.resolve()
+  const next = prev.then(run, run)
+  cascadeChain.set(p.id, next)
+  return next
+}
+
+/** 捆绑内容徽章(计数;空捆绑不渲染)。 */
+const BundleChips: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  if (!p.bundle) return null
+  const parts: Array<[string, number]> = [
+    ['settings.amadeusPlugins.bundleEngine', p.bundle.enginePlugins.length],
+    ['settings.amadeusPlugins.bundleAgents', p.bundle.agents.length],
+    ['settings.amadeusPlugins.bundleSkills', p.bundle.skills.length],
+    ['settings.amadeusPlugins.bundleSpaces', p.bundle.spaces.length],
+  ]
+  return (
+    <>
+      {parts.filter(([, n]) => n > 0).map(([k, n]) => (
+        <span key={k} style={{ ...badge, color: 'var(--accent, var(--text-faint))', borderColor: 'var(--accent, var(--border))' }}>
+          {t(k, { n: String(n) })}
+        </span>
+      ))}
+    </>
+  )
+}
 
 const badge: React.CSSProperties = {
   fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)',
@@ -144,7 +211,13 @@ const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
   )
 }
 
-const PluginDetail: React.FC<{ plugin: AmadeusPlugin; onBack: () => void }> = ({ plugin: p, onBack }) => {
+const PluginDetail: React.FC<{
+  plugin: AmadeusPlugin
+  onBack: () => void
+  cfg?: TanguDesktopConfig | null
+  onEngineReload?: () => void
+  enginePlugins?: PluginInfo[] | null
+}> = ({ plugin: p, onBack, cfg, onEngineReload, enginePlugins }) => {
   const { t } = useI18n()
   const activeIds = usePluginStore((s) => s.activeIds)
   const toggle = usePluginStore((s) => s.toggle)
@@ -157,6 +230,33 @@ const PluginDetail: React.FC<{ plugin: AmadeusPlugin; onBack: () => void }> = ({
     const wasOff = !on
     toggle(p.id)
     if (wasOff) promptIfPending(p.id) // 手动启用成功且引导未完成 → 弹就绪卡
+    void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins)
+  }
+  const uninstall = async (): Promise<void> => {
+    if (!window.confirm(t('settings.amadeusPlugins.uninstallConfirm', { name: p.name }))) return
+    const ids = p.bundle?.enginePlugins ?? []
+    // 先级联关停内嵌引擎插件(尽力):目录一删设置落点就没了,先关能让工具即刻对模型不可见
+    if (cfg) for (const id of ids) await setPluginEnabled(cfg, id, false).catch(() => {})
+    try {
+      await amadeus.uninstallPlugin?.(p.id)
+    } catch (e: any) {
+      useApp.getState().toast(e?.message || String(e), true)
+      return
+    }
+    onBack()
+    await usePluginStore.getState().reloadExternal()
+    void loadUserSpaces() // 撤下其内嵌 Space
+    if (ids.length) {
+      // 引擎侧已装载的内嵌插件(工具/路由)无法运行期反注册 → 重启并核实;
+      // 失败要说清「文件已删但引擎待重启」而非谎报成功(codex P1-8)。
+      const st = await window.tangu?.backendRestart?.().catch(() => null)
+      onEngineReload?.()
+      if (!st || st.state === 'crashed') {
+        useApp.getState().toast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: p.name }), true)
+        return
+      }
+    }
+    useApp.getState().toast(t('settings.amadeusPlugins.uninstalled', { name: p.name }))
   }
 
   return (
@@ -178,14 +278,32 @@ const PluginDetail: React.FC<{ plugin: AmadeusPlugin; onBack: () => void }> = ({
             {needsOnboarding(p) && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
             )}
+            <BundleChips p={p} />
           </div>
           {p.description && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 3 }}>{p.description}</div>}
         </div>
         {p.onboarding && !p.blocked && (
           <button className="btn ghost sm" onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
         )}
+        {!p.builtin && !!amadeus?.uninstallPlugin && (
+          <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
+            {t('settings.amadeusPlugins.uninstall')}
+          </button>
+        )}
         <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />
       </div>
+      {p.bundle && (
+        <>
+          <div className="hint">{t('settings.amadeusPlugins.bundleTitle')}</div>
+          <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+            {p.bundle.enginePlugins.length > 0 && <div>{t('settings.amadeusPlugins.bundleEngineList', { list: p.bundle.enginePlugins.join(', ') })}</div>}
+            {p.bundle.agents.length > 0 && <div>{t('settings.amadeusPlugins.bundleAgentsList', { list: p.bundle.agents.join(', ') })}</div>}
+            {p.bundle.skills.length > 0 && <div>{t('settings.amadeusPlugins.bundleSkillsList', { list: p.bundle.skills.join(', ') })}</div>}
+            {p.bundle.spaces.length > 0 && <div>{t('settings.amadeusPlugins.bundleSpacesList', { list: p.bundle.spaces.join(', ') })}</div>}
+            <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>{t('settings.amadeusPlugins.bundleHint')}</div>
+          </div>
+        </>
+      )}
       {dep && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.dep')}</div>
@@ -227,7 +345,14 @@ const PluginDetail: React.FC<{ plugin: AmadeusPlugin; onBack: () => void }> = ({
   )
 }
 
-export const AmadeusPluginsTab: React.FC = () => {
+export const AmadeusPluginsTab: React.FC<{
+  /** 引擎连接配置:捆绑包启停级联内嵌引擎插件用(缺省 = 不级联,仅本地启停)。 */
+  cfg?: TanguDesktopConfig | null
+  /** 级联改动引擎插件启用态后刷新引擎插件清单(SettingsModal 的 reloadPlugins)。 */
+  onEngineReload?: () => void
+  /** 引擎插件清单(SettingsModal 下传):级联时识别首方内置同 id,绝不去动它们。 */
+  enginePlugins?: PluginInfo[] | null
+}> = ({ cfg, onEngineReload, enginePlugins }) => {
   const { t } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
@@ -242,14 +367,16 @@ export const AmadeusPluginsTab: React.FC = () => {
   useEffect(() => { installAmadeusPlugins() }, [])
 
   const detailPlugin = detail ? plugins.find((p) => p.id === detail) : undefined
-  if (detailPlugin) return <PluginDetail plugin={detailPlugin} onBack={() => setDetail(null)} />
+  if (detailPlugin) return <PluginDetail plugin={detailPlugin} onBack={() => setDetail(null)} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div className="hint">{t('settings.amadeusPlugins.hint')}</div>
+      {/* 内置插件(浏览器/终端):随 App 发行、默认开;放最上面因为它们是默认在场的能力。 */}
+      <BuiltinPluginsSection />
+      <div className="hint" style={{ marginTop: 6 }}>{t('settings.amadeusPlugins.hint')}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>
-        <button className="btn ghost sm" onClick={() => void reload()}>{t('settings.amadeusPlugins.reload')}</button>
+        <button className="btn ghost sm" onClick={() => void reload().then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
         <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>
       </div>
       {plugins.length === 0 && <div className="hint">{t('settings.amadeusPlugins.empty')}</div>}
@@ -273,6 +400,7 @@ export const AmadeusPluginsTab: React.FC = () => {
                   {needsOnboarding(p) && (
                     <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
                   )}
+                  <BundleChips p={p} />
                 </div>
                 {p.description && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{p.description}</div>}
               </div>
@@ -281,7 +409,7 @@ export const AmadeusPluginsTab: React.FC = () => {
                 checked={on}
                 disabled={!!p.blocked}
                 onClick={(e) => e.stopPropagation()}
-                onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) promptIfPending(p.id) }}
+                onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
                 style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
               />
             </div>

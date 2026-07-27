@@ -102,6 +102,20 @@ export async function resolveInquiry(
   return { ok: r.ok, gone: r.status === 410 }
 }
 
+/** 兑现一次 Agent Desk 截屏请求(desk_screenshot)。失败也要发——引擎那头在等,不发就是干等超时。
+ *  网络异常吞掉:重试没意义(引擎 8s 就超时了),这是纯附加能力,不该冒泡打断会话。 */
+export async function sendDeskCapture(
+  cfg: TanguDesktopConfig,
+  runId: string,
+  shotId: string,
+  body: { dataUrl?: string; mode?: 'card' | 'open'; error?: string },
+): Promise<void> {
+  await authFetch(
+    `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/captures/${encodeURIComponent(shotId)}`,
+    { method: 'POST', headers: headers(cfg.token), body: JSON.stringify(body) },
+  ).catch(() => {})
+}
+
 /** 兑现一次 host-exec 审批。410 = 已不在等待(过期/他端已处理)。 */
 export async function resolveApproval(
   cfg: TanguDesktopConfig,

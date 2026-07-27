@@ -4,16 +4,28 @@ import { useMemo } from 'react'
 import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { splitWiki, wikiLabel } from './wikiChat'
+import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
 
 export function ChatWikiLink({ inner }: { inner: string }) {
   const pages = usePageStore((s) => s.pages)
   const root = usePageStore((s) => s.vaultRoot)
   const label = wikiLabel(inner)
+  // 会话引用(工作区拖会话进聊天):`[[session:<id>|标题]]` —— 不是笔记,别拿去全库匹配
+  // (匹配不上会渲染成灰色「未解析」,看着像坏链)。点击 = 打开那个会话。
+  const sessionId = sessionIdOfTarget(linkTarget(inner))
   const path = useMemo(() => {
+    if (sessionId) return null
     const target = linkTarget(inner)
     const rel = root && target.startsWith(root + '/') ? target.slice(root.length + 1) : target
     return resolvePageName(rel, pages)
-  }, [inner, root, pages])
+  }, [inner, root, pages, sessionId])
+  if (sessionId) {
+    return (
+      <a className="wikilink" onClick={() => { void import('../sessionNav').then((m) => m.openSession(sessionId)) }}>
+        {label}
+      </a>
+    )
+  }
   if (!path) return <span className="wikilink wikilink-unresolved">{label}</span>
   return (
     <a

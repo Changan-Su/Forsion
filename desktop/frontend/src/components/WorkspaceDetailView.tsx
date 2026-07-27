@@ -7,6 +7,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Plus, Folder, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown } from 'lucide-react'
 import type { SessionRecord, WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
+import { OverlayAt } from '@lcl/engine'
 
 const PAGE = 11 // 每页会话格数(留一格给 View More)
 
@@ -143,7 +144,7 @@ export const WorkspaceDetailView: React.FC<{
       </div>
 
       {menu && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <button
             onClick={() => {
               const s = sessions.find((x) => x.id === menu.id)
@@ -176,7 +177,7 @@ export const WorkspaceDetailView: React.FC<{
               <Trash2 size={13} /> {t('sidebar.delete')}
             </button>
           )}
-        </div>
+        </OverlayAt>
       )}
     </div>
   )

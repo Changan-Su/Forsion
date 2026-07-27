@@ -115,3 +115,46 @@
   border-color: var(--accent); color: var(--accent-ink, var(--accent)); font-weight: 500;
 }
 .auto-builder-actions { display: flex; gap: 10px; margin-top: 22px; justify-content: flex-end; }
+
+/* ── 构建器 v2:步骤链/加步/护栏/提示 ── */
+.auto-node input[type='datetime-local'] {
+  width: 100%; box-sizing: border-box; font-size: 12.5px; padding: 6px 9px;
+  border: var(--border-width) solid var(--border); border-radius: 7px;
+  background: var(--bg-input, transparent); color: var(--text);
+}
+.auto-hint { font-size: 11px; color: var(--text-faint); margin-top: 4px; line-height: 1.5; }
+.auto-inline { display: flex; gap: 6px; align-items: center; }
+.auto-inline select { width: auto; }
+.auto-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-light); }
+.auto-check input[type='checkbox'] { width: auto; }
+.auto-node-head .auto-step-tools { margin-left: auto; display: flex; gap: 2px; }
+.auto-node-head .auto-step-tools .icon-btn { opacity: 0.55; }
+.auto-node-head .auto-step-tools .icon-btn:hover { opacity: 1; }
+.auto-node-muse { border-style: dashed; }
+.auto-addstep { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
+.auto-addstep button {
+  display: flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 8px;
+  border: var(--border-width) dashed var(--border); background: none;
+  color: var(--text-light); font-size: 12px; cursor: pointer;
+}
+.auto-addstep button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-ink, var(--accent)); }
+.auto-addstep button:disabled { opacity: 0.45; cursor: default; }
+.auto-guard {
+  display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; color: var(--text-light);
+}
+.auto-guard label { font-size: 11.5px; color: var(--text-faint); }
+.auto-guard input[type='number'] {
+  width: 80px; font-size: 12.5px; padding: 5px 8px; border: var(--border-width) solid var(--border);
+  border-radius: 7px; background: var(--bg-input, transparent); color: var(--text);
+}
+.auto-fire-result { font-size: 11.5px; color: var(--text-faint); }
+
+/* ── 已结束归档组:淡显行 + 状态徽标 + 可折叠组头 ── */
+.auto-item.finished { opacity: 0.62; }
+.auto-item.finished:hover, .auto-item.finished.active { opacity: 0.85; }
+.auto-badge-done {
+  font-size: 10.5px; color: var(--text-faint); white-space: nowrap;
+  border: var(--border-width) solid var(--border); border-radius: 20px; padding: 1px 8px;
+}
+.auto-grouphead.clickable { display: flex; align-items: center; gap: 3px; cursor: pointer; user-select: none; }
+.auto-grouphead.clickable:hover { color: var(--text); }

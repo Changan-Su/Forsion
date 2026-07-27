@@ -17,6 +17,8 @@ import {
 } from '../services/fileKinds'
 import { useIsDark } from '../services/useIsDark'
 import { useI18n } from '../i18n'
+import { Webview } from '../builtins/browserView'
+import { BROWSER_PARTITION } from '../../../shared/browser'
 import 'diff2html/bundles/css/diff2html.min.css'
 // pdf.js worker(?url 走 Vite 资源,单独 asset);PDF 渲染到 canvas,不依赖 Electron PDF 插件。
 // ⚠️legacy 构建:pdf.js 5.7 用了 Map.prototype.getOrInsertComputed,Electron 40 V8 没有(见 PdfAnnotator)。
@@ -32,6 +34,49 @@ export interface PreviewTarget {
   path?: string
   load: () => Promise<PreviewData | { tooLarge: true; size: number } | null>
   download?: () => void
+}
+
+/**
+ * HTML 预览宿主。两条**别改回去**的硬约束,各自都有实测:
+ *  ① 别用 `srcDoc`:srcdoc 文档继承宿主 CSP(`script-src` 无外部源)、sandbox 缺 allow-same-origin
+ *     = 不透明源 → CDN 脚本/importmap 被拦、`fetch('./model.glb')` 被拦,three.js 这类页面一片空白。
+ *     改为把文件**所在目录**挂到本地 http 令牌根,给它一个真实源。
+ *  ② 别用 `<iframe>`:令牌根与宿主必然**跨源**,而 Chromium 对跨源子框架**硬禁 file picker**
+ *     (`SecurityError: Cross origin sub frames aren't allowed to show a file picker`,任何用户手势
+ *     都救不了)→ 页面的「导入文件」全废。`<webview>` 是独立**顶层文档**,不受这条限制。
+ * 没有本机路径(云沙箱/对话内联的瞬态内容)才退回 srcdoc —— 那种内容本来也没有同目录资源可加载。
+ */
+export const HtmlPreview: React.FC<{ path?: string; text: string; title: string; nonce: number }> = ({ path, text, title, nonce }) => {
+  // 能否挂根**同步**就能判定(有路径 + 宿主有这个桥)→ 退回 srcdoc 的情形一帧都不空。
+  const canServe = !!path && !!window.tangu?.codePreviewServePath
+  const [base, setBase] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    if (!canServe) return
+    let cancel = false
+    setFailed(false)
+    void window.tangu!.codePreviewServePath!(path!)
+      .then((r) => { if (!cancel) setBase(r.url) })
+      .catch(() => { if (!cancel) setFailed(true) })
+    return () => { cancel = true }
+  }, [path, canServe]) // ⚠️不带 nonce:挂根只跟路径有关,重载不必再走一次 IPC(否则每次刷新都空白一下)
+
+  if (canServe && !failed) {
+    // 首帧(IPC 往返中)给个占位;拿到 base 之后重载只换 key,不再回到占位态。
+    if (!base) return <div className="wsfile-frame" />
+    const src = nonce ? `${base}?n=${nonce}` : base
+    return (
+      <Webview
+        key={`${base}#${nonce}`}
+        className="wsfile-frame"
+        src={src}
+        partition={BROWSER_PARTITION}
+        allowpopups="true"
+        style={{ display: 'flex', background: '#fff' }}
+      />
+    )
+  }
+  return <iframe key={nonce} className="wsfile-frame" srcDoc={text} sandbox="allow-scripts allow-popups allow-forms allow-modals" title={title} />
 }
 
 export type ImgView = { s: number; x: number; y: number }
@@ -336,7 +381,7 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
     )
   }
   else if (kind === 'html') body = docView === 'preview'
-    ? <iframe key={reloadNonce} className="wsfile-frame" srcDoc={text} sandbox="allow-scripts allow-popups allow-forms allow-modals" title={target.name} />
+    ? <HtmlPreview path={target.path} text={text} title={target.name} nonce={reloadNonce} />
     : cm({ value: text, language: 'html', wrap })
   else if (kind === 'docx') body = <DocxView bytes={data.bytes} download={target.download} />
   else if (kind === 'xlsx' || kind === 'pptx') body = officeBody()

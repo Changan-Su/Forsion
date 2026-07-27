@@ -34,11 +34,11 @@
   --overlay-light: rgba(28, 28, 28, 0.04);
   --overlay-medium: rgba(28, 28, 28, 0.07);
   --overlay-strong: rgba(28, 28, 28, 0.14);
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-chat-surface: 12px;
-  --radius-chat-card: 10px;
+  --radius-sm: 8px;
+  --radius-md: 11px;
+  --radius-lg: 16px;
+  --radius-chat-surface: 20px; /* 聊天区外壳(输入框/任务概览卡)统一圆角;曾被 .t2-composer 硬编码成 20 绕开 */
+  --radius-chat-card: 14px;
   --font-ui: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-body: var(--font-ui);
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
@@ -53,6 +53,20 @@
   --bg-input: var(--bg-card);
   --accent-soft: var(--accent-light);
   --overlay-scrim: rgba(0, 0, 0, 0.35);
+  /* 选中态:细线 --sel-line + 淡填充 --sel-fill。别直接拿 --accent-ink 描边——单色配色下它深色态近白、
+   * 浅色态近黑,满强度描一圈就是「深色太亮 / 浅色太黑」。36% 是实测出来的:45% 时单色配色暗色态还有
+   * 3.66:1(仍旧「太亮」),36% 落到 1.33–2.89 全区间内。调这个数必跑 npm run check:settingsui ——
+   * 它按 主题×配色×明暗 24 组合钉住上下限。
+   * ⚠️ 别名里的 var() 在**声明处**(:root)解析,不是使用处 —— 好在主题包一律把 token 写到 :root,
+   * 所以这里成立。ponytail: 哪天有作用域在 :root 之下自己改 --accent(如 .tangu-lovable 那层),
+   * 它下面的 --sel-line 会是 :root 的旧值,那时在该作用域补一条同名声明即可。
+   * ⚠️⚠️ 这里**先给不含 color-mix 的值**,再在 @supports 里换成 color-mix —— 顺序不能反,也不能只写
+   * color-mix 版:自定义属性永远「合法」,不支持 color-mix 的浏览器(Chrome <111 / Safari <16.2,
+   * frontend 也会被 npm run web 当普通网页跑)是在**使用处**才失效,而 border-color 的
+   * invalid-at-computed-value-time 结果是 `unset` → 落到初始值 `currentColor` = 正文色,
+   * 深色态近白、浅色态近黑 —— 比没修之前还刺眼。不是「优雅降级」,是反向劣化。 */
+  --sel-line: var(--overlay-strong);
+  --sel-fill: var(--accent-light);
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
   --duration-slow: 0.25s;
@@ -82,7 +96,10 @@
   --text-muted: #a8a096;
   --text-faint: rgba(242, 239, 232, 0.42);
   --text-ghost: rgba(242, 239, 232, 0.3);
-  --border: #34302a;
+  /* ⚠️ 曾是 #34302a(奶油暖调残留):比本块的中性 --bg-card #353538 还**暗**,卡片/胶囊在暗色下
+   * 全被描了一圈黑边(用户实报)。暗色里的边线必须比所在表面亮,浅色里必须比表面暗——
+   * 这条不变量由 scripts/settings-ui.check.cjs 逐主题×明暗钉住。 */
+  --border: #3f3f43;
   --shadow: rgba(0, 0, 0, 0.4);
   --accent: #f8f7f6;
   --accent-hover: #f9f8f8;
@@ -104,6 +121,14 @@
   --icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(206, 192, 168, 0.12), transparent 56%);
   --overlay-scrim: rgba(0, 0, 0, 0.55);
+}
+
+/* 支持 color-mix 就换成按 accent 调配的版本(见 :root 里 --sel-line 的长注释)。 */
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  :root {
+    --sel-line: color-mix(in srgb, var(--accent-ink) 36%, transparent);
+    --sel-fill: color-mix(in srgb, var(--accent-ink) 7%, var(--bg-card));
+  }
 }
 
 /* 主题切换瞬间抑制全树过渡(loader.ts 挂/摘) */
@@ -230,6 +255,13 @@ a:hover { color: var(--accent-hover); }
   border-radius: 999px; background: var(--danger, #e5484d); border: 1.5px solid var(--sidebar-bg);
 }
 .account-card.expired .account-sub { color: var(--danger, #e5484d); }
+/* 引擎未运行态(managed 引擎 stopped/crashed):同过期的红点/红副标语言,点击=重启引擎。 */
+.ribbon-account.engine-down { position: relative; }
+.ribbon-account.engine-down::after {
+  content: ''; position: absolute; top: -1px; right: -1px; width: 9px; height: 9px;
+  border-radius: 999px; background: var(--danger, #e5484d); border: 1.5px solid var(--sidebar-bg);
+}
+.account-card.engine-down .account-sub { color: var(--danger, #e5484d); }
 
 /* ─── 侧栏 ─── */
 .sidebar {
@@ -487,21 +519,6 @@ a:hover { color: var(--accent-hover); }
 .special-card-head .sc-go { color: var(--text-faint); flex-shrink: 0; opacity: 0; transition: opacity var(--duration-fast); }
 .special-card:hover .sc-go,
 .special-card.active .sc-go { opacity: 1; }
-/* WeChatView 主界面的「连接状态 + 扫码」卡片 */
-.special-panel-card {
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-  padding: 14px;
-}
-.sidebar-wechat-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  margin-bottom: 7px;
-}
 .mini-dot {
   width: 7px;
   height: 7px;
@@ -509,33 +526,6 @@ a:hover { color: var(--accent-hover); }
   background: var(--text-ghost);
 }
 .mini-dot.ok { background: var(--green); }
-.sidebar-wechat-connect {
-  width: 100%;
-  justify-content: center;
-}
-.sidebar-wechat-qrbox {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-.sidebar-wechat-qrbox img {
-  width: 72px;
-  height: 72px;
-  object-fit: contain;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-sm);
-  background: #fff;
-  padding: 4px;
-}
-.sidebar-wechat-msg {
-  margin-top: 6px;
-  color: var(--text-faint);
-  font-size: 11px;
-  line-height: 1.4;
-}
 .session-item {
   position: relative;
   display: flex;
@@ -958,6 +948,25 @@ a:hover { color: var(--accent-hover); }
   animation: pulse-soft 1s infinite;
 }
 
+/* 丝滑光标(默认开;smoothCaret.ts):隐藏原生 caret,自绘覆盖层平滑跟随 */
+html.sc-on .milkdown .ProseMirror,
+html.sc-on textarea.t2c-ta { caret-color: transparent; }
+.sc-caret {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1px;
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 9999;
+  will-change: transform;
+  transition: transform 90ms cubic-bezier(0.2, 0.6, 0.3, 1), height 90ms ease-out;
+  animation: sc-blink 1s step-end infinite;
+}
+/* sc-blink / sc-blink-b 内容等价:移动时切名重启闪烁(免 reflow,保住 transform 过渡) */
+@keyframes sc-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes sc-blink-b { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
 /* 代码高亮(highlight.js,token 化:跟主题走) */
 .hljs-comment, .hljs-quote { color: var(--text-faint); font-style: italic; }
 .hljs-keyword, .hljs-selector-tag, .hljs-tag { color: var(--accent-hover); }
@@ -1074,7 +1083,7 @@ a:hover { color: var(--accent-hover); }
   box-shadow: var(--card-shadow);
   overflow: hidden;
 }
-.tool-group.err { border-color: var(--danger); }
+/* 失败**不描红边**(用户裁定:一圈红轮廓太吵) —— 失败标识只留行尾的红叉图标 */
 .tool-group-head {
   display: flex; align-items: center; gap: 7px; width: 100%;
   padding: 7px 10px; text-align: left;
@@ -1264,23 +1273,23 @@ a:hover { color: var(--accent-hover); }
 }
 .composer-actions .grow { flex: 1; }
 
-/* chip / 菜单触发钮(项目上下文、模式、模型) */
+/* chip / 菜单触发钮(模型药丸)——与旁边的模式药丸(.t2c-pill)同一套观感:
+   无边框、底色填充,hover 只加深底色。**别再加 border-color 高亮**(用户明确否掉了轮廓效果)。 */
 .composer-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   max-width: 240px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text);
   padding: 4px 9px;
-  border: var(--border-width) solid var(--border);
+  border: none;
   border-radius: var(--radius-pill, 999px);
-  background: var(--bg-card);
-  transition: border-color var(--duration-fast), color var(--duration-fast);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.1));
+  transition: background var(--duration-fast);
   white-space: nowrap;
 }
-.composer-chip:hover { border-color: var(--accent-ink); color: var(--text-light); }
-.composer-chip.active { border-color: var(--accent-ink); color: var(--accent-ink); }
+.composer-chip:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
 .composer-chip .chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-chip svg { flex-shrink: 0; }
 
@@ -1297,7 +1306,7 @@ a:hover { color: var(--accent-hover); }
   background: var(--bg-card, var(--bg));
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 10px 32px var(--shadow);
+  box-shadow: var(--card-shadow);
   z-index: 40;
   transform-origin: bottom;
   animation: pop 0.16s var(--ease-spring);
@@ -1326,18 +1335,28 @@ a:hover { color: var(--accent-hover); }
 .composer-menu .menu-item .grow { flex: 1; }
 .composer-menu .menu-item .menu-meta { font-size: 11px; color: var(--text-faint); }
 
-/* ModelPill(参考 AionUI):分组标题吸顶 + 长名跑马灯 + 左勾号 + 只读态 */
+/* 模式菜单单独放大到 1.6×(宽 200→320 / 上限 320→512,高 320→512):它装的是四档审批的
+   两行说明,按通用尺寸每条都折成三行、还要滚动,又窄又挤。只给这一个菜单放大,
+   + / 模型菜单不受影响。实际宽度由 min-width 定 —— 锚点(药丸)只有百来 px 宽,
+   shrink-to-fit 的可用宽度不够,永远落在下限上。 */
+.composer-menu--mode { min-width: 320px; max-width: 512px; max-height: 512px; }
+
+/* 审批档位行(Codex 形):图标 + 标题 + 说明副行。说明要能折行,故不设 nowrap;
+   图标与勾号 align-self:start,两行文案时不被拉到垂直居中。 */
+.composer-menu .menu-item.approval-item { align-items: flex-start; gap: 9px; padding: 8px 9px; }
+.composer-menu .menu-item.approval-item .grow { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.approval-ic, .approval-ck { flex: none; margin-top: 1px; color: var(--text-muted); }
+.menu-item.approval-item.active .approval-ic, .menu-item.approval-item.active .approval-ck { color: inherit; }
+.approval-title { font-size: 12.5px; line-height: 1.25; }
+.approval-desc { font-size: 11px; line-height: 1.35; color: var(--text-faint); }
+/* 完全放行:整行染 danger —— 交出整台电脑的那一档,不该和其余三档长得一样(截图里的橙色行)。 */
+.composer-menu .menu-item.approval-item.danger,
+.composer-menu .menu-item.approval-item.danger .approval-desc,
+.composer-menu .menu-item.approval-item.danger .approval-ic { color: var(--danger); }
+
+/* ModelPill:长名跑马灯 + 勾号 + 只读态 */
 .composer-chip--readonly { opacity: 0.7; cursor: default; }
-.composer-chip--readonly:hover { border-color: var(--border); color: var(--text-muted); }
-.composer-menu--sticky .menu-section.sticky {
-  position: sticky;
-  top: -5px;
-  z-index: 2;
-  background: var(--bg-card);
-  margin: 0 -5px;
-  padding-left: 13px;
-  padding-right: 13px;
-}
+.composer-chip--readonly:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .composer-menu .menu-item .mi-check { width: 14px; flex-shrink: 0; text-align: center; color: var(--accent-ink); }
 .composer-chip .pill-marquee { display: inline-block; overflow: hidden; white-space: nowrap; max-width: 160px; vertical-align: bottom; }
 .composer-chip .pill-marquee__inner { display: inline-block; }
@@ -1346,6 +1365,50 @@ a:hover { color: var(--accent-hover); }
   0%, 12% { transform: translateX(0); }
   88%, 100% { transform: translateX(calc(160px - 100%)); }
 }
+
+/* ── 模型菜单两级形(Codex 形):左面板「模型 / 思考」两行 + 右侧子面板 ── */
+.model-pill-wrap { position: relative; display: inline-flex; }
+/* 打开时药丸撑到与菜单同宽、右缘对齐。
+   ⚠️ 走 min-width 不走 width:width:auto → 224px 不可插值,动画不会跑;0 → 224px 才行。
+   .is-open 三段选择器是为了压过 .t2c-row .composer-chip{min-width:0}(窄屏收缩用)。 */
+/* ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它,fit-content(以及 auto)
+   到 224px 不可插值,过渡根本不跑。
+   ⚠️ 别改回「min-width: 0 → 224px」那版:它开的时候看着对,收的时候几乎瞬变 —— 因为可见区间只有
+   [自然宽, 224],而动画区间是 [0, 224],front-loaded 的 spring 曲线在头 25ms 就跌破了自然宽,
+   剩下 155ms 全动在看不见的地方。实测钉在 scripts/model-menu.check.cjs(开/收各采样)。
+   ponytail: Safari 尚不支持 interpolate-size,那边优雅降级为无动画;真要管 Safari 再改成 JS 量自然宽写 px。 */
+.composer-chip.model-pill-btn {
+  min-width: 0;
+  interpolate-size: allow-keywords;
+  width: fit-content;
+  transition: background var(--duration-fast), width 0.18s var(--ease-spring);
+}
+.composer-chip.model-pill-btn.is-open { width: 224px; background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
+.model-pill-wrap.is-open { flex-shrink: 0; }
+.model-pill-btn.is-open .pill-marquee { flex: 1; max-width: none; text-align: left; }
+/* ⚠️ 子面板绝对定位到菜单**外面**,故此变体必须 overflow:visible —— 通用 .composer-menu 的
+   overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
+.composer-menu--model { right: 0; width: 224px; min-width: 0; max-width: none; max-height: none; overflow: visible; }
+.cm-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 9px; border-radius: var(--radius-md); font-size: 12.5px; color: var(--text-light); text-align: left; }
+.cm-row:hover, .cm-row.is-open { background: var(--overlay-light); color: var(--text); }
+.cm-row-k { flex: none; }
+.cm-row-v { flex: 1; min-width: 0; text-align: right; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-row svg { flex: none; color: var(--text-faint); }
+.cm-foot { white-space: normal; letter-spacing: 0; margin-top: 4px; border-top: var(--border-width) solid var(--border); }
+/* 子面板贴菜单右侧;右边放不下就翻到左侧(只换 class、不写坐标 → 免疫 body 端级 zoom)。
+   底边与菜单底对齐、向上生长:菜单本身就贴在输入框上方,向下长会盖住输入框。 */
+.cm-sub {
+  position: absolute; bottom: 0; left: calc(100% + 6px);
+  min-width: 168px; max-width: 260px; max-height: 320px; overflow-y: auto;
+  padding: 5px;
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  animation: pop 0.16s var(--ease-spring);
+}
+.cm-sub.flip { left: auto; right: calc(100% + 6px); }
+.cm-sub .menu-item { white-space: nowrap; }
 
 /* ── 新会话「运行引擎」选择条(EnginePicker,参考 AionUI 的 agent pill bar) ── */
 /* ⚠️ margin 横向不能 auto:flex 列容器里横向 auto margin 会盖掉 stretch、把自己打回 fit-content,
@@ -1712,6 +1775,29 @@ a:hover { color: var(--accent-hover); }
   font-weight: 650;
   color: var(--text);
 }
+/* ── 中分类:一级页标题下的横排栏目条(常驻标题区,不随正文滚动) ── */
+.settings-subbar {
+  max-width: 720px;
+  margin: 12px auto 0;
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.settings-subbar::-webkit-scrollbar { display: none; }
+.settings-subtab {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.settings-subtab:hover { background: var(--overlay-light); color: var(--text); }
+.settings-subtab.active { background: var(--overlay-medium); color: var(--text); font-weight: 600; }
+
 .settings-body {
   flex: 1;
   min-height: 0;
@@ -1721,6 +1807,21 @@ a:hover { color: var(--accent-hover); }
 }
 /* codex 风:内容居中成一列 */
 .settings-body > * { max-width: 720px; margin-inline: auto; }
+/* 切分类时新内容按方向滑入 + 淡入。方向由 data-dir 给:+1=点了右边的栏目(从右侧滑入),-1=左边,
+ * 0=换了一级页(无左右语义,纯淡入)。只动新内容——旧内容同时在场的话两页高度不同会让容器抽搐。
+ * 动画靠 React key 重挂触发(见 SettingsModal 的 `key={tab:sub}`),不需要 JS 量任何几何。 */
+@keyframes settings-sub-in {
+  from { opacity: 0; transform: translateX(var(--sub-x, 0px)); }
+  to { opacity: 1; transform: none; }
+}
+/* ponytail: 动画那 220ms 里 transform 会让 .settings-sub 成为 fixed 后代的包含块 —— 恰好在这个
+ * 窗口里弹出的 fixed 浮层会偏 ≤16px,动画结束即自愈。真要根治得把浮层挪出这层(见 lcl/engine 的 OverlayAt)。 */
+.settings-sub { animation: settings-sub-in 0.22s var(--ease-out); }
+.settings-sub[data-dir='1'] { --sub-x: 16px; }
+.settings-sub[data-dir='-1'] { --sub-x: -16px; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-sub { animation: none; }
+}
 /* 合并 tab(常规设置=连接+Forsion / 智能体=Agents+Agent CLI)的小节标题 */
 .settings-sec {
   font-size: 13px;
@@ -1735,7 +1836,11 @@ a:hover { color: var(--accent-hover); }
 /* codex 风:每个设置项 = 浮起表单块(纸面卡 + 边 + 圆角) */
 .settings-body .field {
   background: var(--bg-card);
-  border: var(--border-width) solid var(--border);
+  /* ⚠️ 同 .seg/.switch/.theme-card:走 --overlay-medium 而不是硬色 --border。
+   * 实证:custom 配色的 seed 会内联改写 --bg-card(customSkinVars),把卡面提亮到硬色 --border 之上
+   * —— zhi 暗色的 #2e2e2e 配纯白 seed 就站到了错的一边(边比卡暗),又是一圈黑边。
+   * 边线只要跟主题给的固定色挂钩,就总有某个 主题×seed 组合把它翻到反面。 */
+  border: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
   border-radius: var(--radius-md);
   padding: 13px 15px;
   margin-bottom: 10px;
@@ -1844,9 +1949,13 @@ a:hover { color: var(--accent-hover); }
 }
 .field label.inline-check input { margin: 0; }
 
+/* 分段控件(明暗 / 阴影 / 玻璃…)。
+ * ⚠️ 边线走 --overlay-medium 而**不是** --border:--border 是硬色值,与所在卡面没有相对关系,
+ * 某些主题的暗色下会比卡面还暗 → 胶囊像被描了一圈黑边(用户实报)。overlay-* 天生跟着明暗翻向
+ * (浅色态黑向、深色态白向),永远只比表面「深/浅一点」。同理见 .switch / .theme-card / .skin-chip。 */
 .seg {
   display: inline-flex;
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -1856,7 +1965,7 @@ a:hover { color: var(--accent-hover); }
   color: var(--text-muted);
   transition: background var(--duration-fast), color var(--duration-fast);
 }
-.seg button + button { border-left: var(--border-width) solid var(--border); }
+.seg button + button { border-left: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12)); }
 .seg button.active { background: var(--accent-light); color: var(--accent-hover); }
 
 /* ── 开关(Switch):通用二态开关,<button role="switch" class="switch [on]">;文案配 .switch-row ── */
@@ -1866,7 +1975,7 @@ a:hover { color: var(--accent-hover); }
   height: 20px;
   flex: none;
   padding: 0;
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
   border-radius: 999px;
   background: var(--overlay-light, rgba(127, 127, 127, 0.12));
   cursor: pointer;
@@ -1898,13 +2007,13 @@ a:hover { color: var(--accent-hover); }
 }
 .theme-card {
   position: relative;
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
   border-radius: var(--radius-lg);
   overflow: hidden;
   text-align: left;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), background var(--duration-fast);
 }
-.theme-card:hover { border-color: var(--accent-ink); }
+.theme-card:hover { border-color: var(--sel-line); }
 
 /* ── 主题自曝参数(manifest settings[])的就地展开面板,紧贴主题卡下方 ── */
 .theme-opts {
@@ -1941,9 +2050,13 @@ a:hover { color: var(--accent-hover); }
   font-size: 11.5px;
   color: var(--text-muted);
 }
-.theme-card.active { border-color: var(--accent-ink); box-shadow: 0 0 0 1px var(--accent-ink); }
+/* 选中态 = 1px 柔和细线 + 卡面淡填充。
+ * ⚠️ 别再叠 `box-shadow: 0 0 0 1px var(--accent-ink)`:那和同色 border 加起来是 2px 满强度 accent 描边,
+ * 而单色配色下 accent 深色态近白、浅色态近黑 —— 正是用户报的「太夸张 / 深色太亮 / 浅色太黑」。 */
+.theme-card.active { border-color: var(--sel-line); }
 .theme-card .theme-preview { height: 64px; }
 .theme-card .theme-meta { padding: 9px 11px; background: var(--bg-card); }
+.theme-card.active .theme-meta { background: var(--sel-fill); }
 .theme-card .theme-name { font-size: 13px; font-weight: 600; color: var(--text); }
 .theme-card .theme-tagline {
   font-size: 11px;
@@ -1968,17 +2081,22 @@ a:hover { color: var(--accent-hover); }
   align-items: center;
   gap: 7px;
   padding: 6px 11px 6px 8px;
-  border: var(--border-width) solid var(--border);
+  border: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
   border-radius: 999px;
   background: var(--bg-card);
   color: var(--text-muted);
   font-size: 12px;
   font-family: var(--font-ui);
   cursor: pointer;
-  transition: border-color var(--duration-fast), color var(--duration-fast), box-shadow var(--duration-fast);
+  transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
-.skin-chip:hover { border-color: var(--accent-ink); color: var(--text); }
-.skin-chip.active { border-color: var(--accent-ink); color: var(--text); box-shadow: 0 0 0 1px var(--accent-ink); }
+.skin-chip:hover { border-color: var(--sel-line); color: var(--text); }
+/* 同 .theme-card.active:细线 + 淡底,不再叠外圈 ring。 */
+.skin-chip.active {
+  border-color: var(--sel-line);
+  color: var(--text);
+  background: var(--sel-fill);
+}
 .skin-chip .skin-dot {
   width: 14px; height: 14px;
   border-radius: 50%;
@@ -2245,6 +2363,31 @@ html.dark .brand-logo--dark { display: inline-block; }
   background: #fff;
   padding: 6px;
 }
+
+/* 设置 → 通道:一卡一通道(头部 = 图标+名+状态点+启用;体 = 凭据/默认模型/转发)。 */
+.settings-body .field.chan-card { padding: 0; overflow: hidden; }
+.chan-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 12px 14px; background: none; border: 0; cursor: pointer; text-align: left;
+  font: inherit; color: var(--text);
+}
+.chan-head:hover { background: var(--overlay-subtle); }
+.chan-name { font-weight: 600; font-size: 13.5px; }
+.chan-status { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--text-muted); }
+.chan-switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.chan-body {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 10px 14px 14px; border-top: var(--border-width) solid var(--border);
+}
+.chan-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chan-row > label { font-size: 12px; color: var(--text-muted); min-width: 84px; }
+.chan-row select { max-width: 260px; }
+.chan-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.chan-chip {
+  font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 999px; cursor: pointer;
+  border: var(--border-width) solid var(--border); background: transparent; color: var(--text-muted);
+}
+.chan-chip.on { background: var(--accent-light); color: var(--accent-ink); border-color: var(--accent-ink); }
 .agent-card {
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
@@ -2260,29 +2403,79 @@ html.dark .brand-logo--dark { display: inline-block; }
 /* seg 紧凑变体(卡头开关) */
 .seg.seg-sm button { padding: 3px 12px; font-size: 12px; }
 
-/* ─── Toast ─── */
-.toast-wrap {
+/* ─── 通知(右上角悬浮卡片,NotificationHost;位置略低于右栏 36px 图标条) ───
+   拖窗区法则:fixed 浮层必须 no-drag 且 DOM 晚于 shell-host(Root 里挂在最后)。 */
+.ntf-wrap {
   position: fixed;
-  top: 14px;
-  right: 14px;
+  top: 46px;
+  right: 12px;
   z-index: 100;
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 8px;
+  max-width: min(360px, calc(100vw - 24px));
+  pointer-events: none; /* 空隙不挡点击;卡片自身恢复 */
+  -webkit-app-region: no-drag;
 }
-.toast {
-  padding: 9px 14px;
-  font-size: 13px;
-  background: var(--bg-glass);
-  backdrop-filter: var(--panel-blur);
+.ntf {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  /* 与整体浮层卡片(命令面板/右键菜单/ribbon 菜单)统一:实色卡 + 四周同边 + 卡片阴影;无左侧强调竖条。 */
+  background: var(--bg-card, var(--bg));
   border: var(--border-width) solid var(--border);
-  border-left: 2px solid var(--accent-ink);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px var(--shadow);
+  box-shadow: var(--card-shadow, 0 8px 24px var(--shadow));
   color: var(--text);
-  animation: fade-up var(--duration-slow) var(--ease-out);
 }
-.toast.error { border-left-color: var(--danger); }
+/* 级别只由左侧小图标的颜色传达(无边框高亮) */
+.ntf-icon { flex-shrink: 0; margin-top: 1px; color: var(--text-muted); }
+.ntf-success .ntf-icon { color: var(--green, #34a262); }
+.ntf-warning .ntf-icon { color: #d9930d; }
+.ntf-error .ntf-icon { color: var(--danger); }
+.ntf-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ntf-title { font-size: 11px; color: var(--text-muted); }
+.ntf-text { word-break: break-word; white-space: pre-wrap; }
+.ntf-count { margin-left: 6px; font-size: 11px; color: var(--text-muted); }
+.ntf-action {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 10px;
+  font-size: 12px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+.ntf-action:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.ntf-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 2px;
+  margin: -2px -2px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.ntf-close:hover { color: var(--text); }
+.ntf-more {
+  pointer-events: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+  background: var(--bg-glass);
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+}
 
 .spin { animation: spin 0.9s linear infinite; }
 
@@ -2557,6 +2750,9 @@ html.dark .brand-logo--dark { display: inline-block; }
 /* 设置/市场页顶部标题行补回拖窗条(交互子元素抠回,防止重蹈本 bug)。 */
 .settings-main-head { -webkit-app-region: drag; }
 .settings-main-head button, .settings-main-head input { -webkit-app-region: no-drag; }
+/* ⚠️ 整条中分类栏目条(不止里面的按钮)必须 no-drag:它是 overflow-x:auto 的横滑条,
+ * 栏目多/窗口窄时要能拖着滚——拖窗区会把这些指针事件整个吞掉(同 [[project_electron_dragregion_overlays]])。 */
+.settings-subbar { -webkit-app-region: no-drag; }
 
 /* ── 移动端(触屏+窄屏)二级页统一形态:左列表 → 顶部横滑 chips(用户拍板)。
    结构级选择器,settings 与 market 同一套 .settings-page/.settings-nav 布局一起吃到。 ── */
@@ -2618,3 +2814,70 @@ body[data-file-drag] .shell-work::after {
   border-radius: 12px;
   background: rgba(76, 110, 245, 0.05);
 }
+
+/* ── remotesync 设置页进度条(执行阶段定宽,对账阶段不定态滑动)── */
+.rsync-progress { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.rsync-progress-track { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.rsync-progress-fill { height: 100%; border-radius: 2px; background: var(--accent-ink); transition: width 0.15s linear; }
+.rsync-progress-fill.indet { width: 40%; animation: rsync-indet 1.2s ease-in-out infinite; }
+@keyframes rsync-indet { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+
+/* ── Coding Space:Forsion Connect 发布对话框 ── */
+.csx-pub-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.42); display: grid; place-items: center; }
+.csx-pub-card { width: 380px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); overflow: auto; background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); padding: 16px 18px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25); }
+.csx-pub-head { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.csx-pub-title { flex: 1; font-size: 14px; font-weight: 600; }
+.csx-pub-desc { font-size: 12px; line-height: 1.6; color: var(--text-muted); margin: 8px 0 14px; }
+.csx-pub-busy { display: grid; place-items: center; padding: 18px 0; color: var(--text-muted); }
+.csx-pub-login { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; font-size: 13px; color: var(--text); padding: 4px 0 6px; }
+.csx-pub-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.csx-pub-row > label { flex: 0 0 64px; font-size: 12px; color: var(--text-muted); }
+.csx-pub-row .csx-newinput { flex: 1; min-width: 0; }
+.csx-pub-row .csx-entry { flex: 1; min-width: 0; }
+.csx-pub-mono { font-family: var(--font-mono); }
+.csx-pub-hint { font-size: 11.5px; color: var(--text-faint); margin: 2px 0 6px; }
+.csx-pub-warn { color: var(--danger); }
+.csx-pub-err { font-size: 12px; color: var(--danger); margin: 8px 0 2px; }
+.csx-pub-url { display: flex; align-items: center; gap: 6px; margin: 10px 0 2px; padding: 7px 10px; background: var(--bg-input); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
+.csx-pub-url a { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-family: var(--font-mono); color: var(--accent-ink); text-decoration: none; flex: 1; }
+.csx-pub-url a:hover { text-decoration: underline; }
+.csx-pub-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.csx-pub-spacer { flex: 1; }
+.csx-pub-primary { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--on-accent); background: var(--accent); border-radius: var(--radius-sm); padding: 7px 16px; }
+.csx-pub-primary:disabled { opacity: 0.5; }
+.csx-pub-danger { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--danger); background: transparent; border: var(--border-width) solid var(--danger); border-radius: var(--radius-sm); padding: 6px 12px; }
+.csx-pub-danger:disabled { opacity: 0.5; }
+.csx-pub-ghost { font-size: 12.5px; color: var(--text-muted); background: transparent; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); padding: 7px 14px; }
+.csx-pub-terms-list { margin: 4px 0 12px; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.csx-pub-terms-list li { font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.csx-pub-agree { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 2px; font-size: 12.5px; line-height: 1.5; color: var(--text); cursor: pointer; }
+.csx-pub-agree input { margin-top: 2px; flex: 0 0 auto; }
+.csx-pub-agree a { color: var(--accent-ink); text-decoration: none; }
+.csx-pub-agree a:hover { text-decoration: underline; }
+
+/* ── Public View（发布管理） ── */
+.pv { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.pv-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: var(--border-width) solid var(--border); }
+.pv-titles { flex: 1; min-width: 0; }
+.pv-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.pv-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+.pv-notice { margin: 12px 16px 0; padding: 10px 12px; font-size: 12.5px; color: var(--accent-ink); background: var(--overlay-light); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
+.pv-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 18px; }
+.pv-section { border: var(--border-width) solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.pv-sec-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: var(--overlay-light); color: var(--text); }
+.pv-sec-titles { flex: 1; min-width: 0; }
+.pv-sec-title { font-size: 13px; font-weight: 600; }
+.pv-sec-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+.pv-count { font-size: 12px; color: var(--text-faint); min-width: 18px; text-align: right; }
+.pv-empty { padding: 18px 14px; text-align: center; font-size: 12.5px; color: var(--text-faint); display: grid; place-items: center; }
+.pv-rows { display: flex; flex-direction: column; }
+.pv-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: var(--border-width) solid var(--border); }
+.pv-row-main { flex: 1; min-width: 0; }
+.pv-row-title { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-row-sub { font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.pv-row-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.pv-badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); font-weight: 400; }
+.pv-del:hover { color: var(--danger); }
+.pv-confirm { font-size: 11px; color: var(--danger); white-space: nowrap; }
+.pv-spin { animation: csx-spin 0.8s linear infinite; }
+.pv-rowerr { color: var(--danger); }

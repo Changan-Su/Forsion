@@ -3,26 +3,29 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, ExternalLink, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Globe2, QrCode, Smartphone, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks } from 'lucide-react'
+import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
 import { applyTheme } from '../theme/loader'
 import { useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局
+import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import {
-  deleteUserCloudSkill, disconnectWechat as disconnectWechatAccount, fetchProviderModels,
-  getWechatStatus, listModels, listSkills, listTools, pollWechatLogin, startWechatLogin,
+  deleteUserCloudSkill, fetchProviderModels,
+  listModels, listSkills, listTools,
   testProviderConnection, uploadSkillToCloud, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
+  getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
-import type { WechatStatusResponse } from '../services/backendService'
+import { ChannelsTab } from './ChannelsTab'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
   AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
   NormalAgentDef, SessionRecord, SkillInfo, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
 } from '../types'
-import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
+import { SHOW_SYSTEM_PROMPT_KEY, SMOOTH_CARET_KEY } from '../types'
+import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
 import { useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
 import { RemoteSyncSection } from './RemoteSyncSection'
@@ -32,13 +35,15 @@ import { UpdateActions } from './UpdateActions'
 import { openChangelogTab } from '../views/ChangelogView'
 import { ModelGroupList } from './ModelGroupList'
 import { AsrModelChoice } from './AsrModelChoice'
-import { AgentsSettings } from './AgentsSettings'
+import { AgentsTab } from './AgentsTab'
+import { SpecialAgentsTab } from './SpecialAgentsTab'
 import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { AmadeusPluginsTab } from './AmadeusPluginsTab'
 import { SpacesTab } from './SpacesTab'
+import { NotificationsTab, StatusBarTab } from './NotificationsTab'
 import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
@@ -49,7 +54,7 @@ import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'wechat' | 'notes' | 'spaces' | 'theme' | 'shortcuts' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Obsidian 式一级入口)。
 export type Tab = StaticTab | `plugin:${string}`
 
@@ -61,7 +66,10 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   spaces: <LayoutGrid size={14} />,
   theme: <Palette size={14} />,
   shortcuts: <Keyboard size={14} />,
+  notifications: <Bell size={14} />,
+  statusbar: <PanelBottom size={14} />,
   notes: <NotebookPen size={14} />,
+  sync: <RefreshCw size={14} />,
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   developer: <Bug size={14} />,
@@ -71,7 +79,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   skills: <Sparkles size={14} />,
   mcp: <Plug size={14} />,
   hooks: <Webhook size={14} />,
-  wechat: <MessageCircle size={14} />,
+  channels: <MessageCircle size={14} />,
   browser: <Globe2 size={14} />,
   plugins: <Blocks size={14} />,
 }
@@ -136,19 +144,22 @@ export const SettingsModal: React.FC<{
   onRelaunchOnboarding?: () => void
   /** 当前活跃会话(高级→导出日志用;无活跃会话时禁用导出)。 */
   activeSession?: SessionRecord | null
-  /** 打开时直接定位到的 tab(如微信卡片→'wechat'、/skills→'skills');缺省落 connection。 */
+  /** 打开时直接定位到的 tab(如 /skills→'skills';旧深链 'wechat' 归一到 'channels');缺省落 connection。 */
   initialTab?: Tab
 }> = (p) => {
   const { t, locale } = useI18n()
-  // 合并后:连接/Forsion → 常规设置(general);Agent CLI → 智能体(agents)。旧入口 tab 归一。
+  // 合并后:连接/Forsion → 常规设置(general);Agent CLI → 智能体(agents);微信 → 通道。旧入口 tab 归一。
   const normalizeTab = (x: Tab | undefined): Tab =>
-    x === 'connection' || x === 'forsion' ? 'general' : x === 'agent-clis' ? 'agents' : (x ?? 'general')
-  const [tab, setTab] = useState<Tab>(normalizeTab(p.initialTab))
+    x === 'connection' || x === 'forsion' ? 'general' : x === 'agent-clis' ? 'agents' : (x as string) === 'wechat' ? 'channels' : (x ?? 'general')
+  const [rawTab, setTab] = useState<Tab>(normalizeTab(p.initialTab))
+  // 中分类(标题下那排横向栏目)。只存 key,**有效值在渲染时推导**(见下方 activeSub):
+  // 这样换一级页 / 某个中分类因条件消失时自动落回第一项,不需要 effect 复位,也就没有复位竞态。
+  const [sub, setSub] = useState('')
+  // 滑入方向:+1 点了右边的栏目,-1 左边,0 换了一级页(纯淡入)。喂给 .settings-sub[data-dir]。
+  const [subDir, setSubDir] = useState(0)
+  /** 换一级页统一入口:方向清零(换页无左右语义,纯淡入)。裸 setTab 会让上次点分类的方向漏过来。 */
+  const goTab = (x: Tab): void => { setSubDir(0); setTab(x) }
   const [navQuery, setNavQuery] = useState('')
-  // 选中项滚到可见:移动端顶部横滑 chips 必需(initialTab 可能在条深处);桌面竖列表同样受益。
-  useEffect(() => {
-    document.querySelector('.settings-nav-list button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' })
-  }, [tab])
   const [appVersion, setAppVersion] = useState<string>('')
   // custom 配色的独立背景色(强调/背景双取色器;走 themeStore,不经 props 链)。
   const themeBgSeed = useTheme((s) => s.bgSeed)
@@ -164,6 +175,8 @@ export const SettingsModal: React.FC<{
   const [showSysPrompt, setShowSysPrompt] = useState<boolean>(() => {
     try { return localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1' } catch { return false }
   })
+  // 丝滑光标(默认开;localStorage,smoothCaret.ts 全局模块即时生效)。
+  const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
@@ -182,6 +195,34 @@ export const SettingsModal: React.FC<{
   const isDesktop = !!window.tangu?.backendStatus
   // Tangu Web(浏览器云端客户端):解闸云端可用特性(技能);其余 host tab 仍随 isDesktop 隐藏。
   const cloudWeb = !!window.tangu?.cloudWeb
+  const tabItems = [
+    // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
+    // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
+    // 而它还是默认落点。整页无正文就别列。
+    ...(!isDesktop && cloudWeb ? [] : ([['general', t('settings.tab.general')]] as Array<[Tab, string]>)),
+    ['model', t('settings.tab.model')],
+    ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
+    // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
+    ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
+    // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(effect 重定向)。
+    ...(isDesktop ? ([['mcp', 'MCP'], ['hooks', 'Hooks'], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')], ['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')], ['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
+    ['theme', t('settings.tab.theme')],
+    ['shortcuts', t('settings.tab.shortcuts')],
+    ['notifications', t('settings.tab.notifications')],
+    ['statusbar', t('settings.tab.statusbar')],
+    ['advanced', t('settings.tab.advanced')],
+    ...((isDesktop || cloudWeb) && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
+    ['about', t('settings.tab.about')],
+  ] as Array<[Tab, string]>
+
+  // 一级页也做 activeSub 同款推导:请求的页在本端不存在时(深链带来的旧 tab、或上面被摘掉的 general)
+  // 落到第一个可用页,免得停在白板上。plugin:<id> 动态页不在 tabItems 里,单独放行。
+  const tab: Tab = tabItems.some(([id]) => id === rawTab) || rawTab.startsWith('plugin:')
+    ? rawTab
+    : (tabItems[0]?.[0] ?? rawTab)
+
   const [stored, setStored] = useState<StoredDesktopConfig | null>(null)
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
   const [logs, setLogs] = useState<string[] | null>(null)
@@ -202,6 +243,13 @@ export const SettingsModal: React.FC<{
   const [providerTesting, setProviderTesting] = useState(false)
   const providerTestAbort = useRef<AbortController | null>(null) // 供「测试连接」取消用
   const [providerSaveMsg, setProviderSaveMsg] = useState('')
+  // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
+  const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
+  const [wsProvider, setWsProvider] = useState('auto')
+  const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
+  const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
+  const [wsMsg, setWsMsg] = useState('')
+  const [wsBusy, setWsBusy] = useState(false)
   // 镜像连通性测试(设置页管理后端)
   const [mirrorTesting, setMirrorTesting] = useState(false)
   const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
@@ -216,10 +264,11 @@ export const SettingsModal: React.FC<{
   // 清空数据(应用内卸载/重置):默认勾 Tangu 数据,不默认勾桌面设置。
   const [clearTangu, setClearTangu] = useState(true)
   const [clearDesktop, setClearDesktop] = useState(false)
-  const [wechatStatus, setWechatStatus] = useState<WechatStatusResponse | null>(null)
-  const [wechatBusy, setWechatBusy] = useState(false)
-  const [wechatMsg, setWechatMsg] = useState('')
-  const [wechatLogin, setWechatLogin] = useState<{ loginId: string; qrcodeImg: string; expiresAt: number; status?: string } | null>(null)
+  // 「高级」→ 对外 MCP:复制端点/命令的短暂「已复制」反馈(记住是哪一项)+ 当前选中的 agent 接入预设。
+  const [mcpCopied, setMcpCopied] = useState<string | null>(null)
+  const [mcpPreset, setMcpPreset] = useState('claude')
+  const [remoteBusy, setRemoteBusy] = useState(false)
+  const [remoteMsg, setRemoteMsg] = useState('')
 
   const exportSessionLogs = async (): Promise<void> => {
     const session = p.activeSession
@@ -271,10 +320,27 @@ export const SettingsModal: React.FC<{
     reloadPlugins()
     void listAgents(p.cfg).then(setPluginAgents).catch(() => { /* ignore */ })
   }, [p.open, isDesktop, reloadPlugins, p.cfg])
+
+  // 本地联网搜索配置:进模型 tab 拉取;云端/旧后端 404 → wsRed=null 整段隐藏。
+  useEffect(() => {
+    if (!p.open || tab !== 'model' || !isDesktop) return
+    void getLocalWebSearch(p.cfg)
+      .then((r) => {
+        setWsRed(r)
+        setWsProvider(r.provider)
+        setWsKeys({ bocha: '', tavily: '', zhipu: '' })
+        setWsClear({ bocha: false, tavily: false, zhipu: false })
+        setWsMsg('')
+      })
+      .catch(() => setWsRed(null))
+  }, [p.open, tab, isDesktop, p.cfg])
   const pluginNm = (pl: PluginInfo): string => (locale === 'en' && pl.nameEn ? pl.nameEn : pl.name)
   const pluginNavItems = (plugins || [])
     .filter((pl) => pl.enabled && pl.settings)
     .map((pl) => [`plugin:${pl.id}`, pluginNm(pl)] as [Tab, string])
+
+  // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
+  useEffect(() => { if (tab === 'plugins') setTab('amadeus-plugins') }, [tab])
 
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
@@ -509,30 +575,17 @@ export const SettingsModal: React.FC<{
     void window.tangu!.setConfig({
       mode: 'managed',
       cloudUrl: stored.cloudUrl,
-      cloudToken: stored.cloudToken,
       sandbox: stored.sandbox,
       pythonMode: stored.pythonMode || 'bundled',
       mirror: stored.mirror || 'default',
     }).then(setStored)
   }
 
-  const refreshWechat = (): void => {
-    if (!isDesktop) return
-    void getWechatStatus(p.cfg)
-      .then((r) => {
-        setWechatStatus(r)
-        setWechatMsg('')
-      })
-      .catch((e) => {
-        setWechatStatus(null)
-        setWechatMsg(t('settings.wechat.statusUnavailable', { e: e?.message || e }))
-      })
-  }
-
+  // 浏览器工具设置保存(原与微信共用;微信设置已迁「通道」tab,走引擎 /agent/channels)。
   const saveRemoteSettings = async (): Promise<void> => {
     if (!stored || !window.tangu?.setConfig) return
-    setWechatBusy(true)
-    setWechatMsg('')
+    setRemoteBusy(true)
+    setRemoteMsg('')
     try {
       const next = await window.tangu.setConfig({
         browserEnabled: stored.browserEnabled !== false,
@@ -540,48 +593,13 @@ export const SettingsModal: React.FC<{
         browserSearchEngine: stored.browserSearchEngine || 'duckduckgo',
         browserAllowPrivateUrls: !!stored.browserAllowPrivateUrls,
         browserCommandTimeoutMs: Number(stored.browserCommandTimeoutMs || 30000),
-        wechatEnabled: stored.wechatEnabled !== false,
-        wechatDefaultSessionId: stored.wechatDefaultSessionId || p.activeSession?.id || '',
-        wechatRemoteApprovalMode: stored.wechatRemoteApprovalMode || 'readonly',
-        wechatAllowedPeers: stored.wechatAllowedPeers || [],
       })
       setStored(next)
-      setWechatMsg(t('settings.remote.saved'))
+      setRemoteMsg(t('settings.remote.saved'))
     } catch (e: any) {
-      setWechatMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`)
+      setRemoteMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`)
     } finally {
-      setWechatBusy(false)
-    }
-  }
-
-  const startWechatBind = async (): Promise<void> => {
-    setWechatBusy(true)
-    setWechatMsg('')
-    try {
-      const r = await startWechatLogin(p.cfg, {
-        session_id: stored?.wechatDefaultSessionId || undefined,
-        model_id: p.activeSession?.model_id || draft.modelId || p.cfg.modelId,
-        approval_mode: stored?.wechatRemoteApprovalMode || 'readonly',
-      })
-      setWechatLogin({ loginId: r.loginId, qrcodeImg: r.qrcodeImg, expiresAt: r.expiresAt, status: 'pending' })
-    } catch (e: any) {
-      setWechatMsg(t('settings.wechat.startFailed', { e: e?.message || e }))
-    } finally {
-      setWechatBusy(false)
-    }
-  }
-
-  const disconnectWechat = async (accountId: string): Promise<void> => {
-    setWechatBusy(true)
-    setWechatMsg('')
-    try {
-      await disconnectWechatAccount(p.cfg, accountId)
-      setWechatMsg(t('settings.wechat.disconnected'))
-      refreshWechat()
-    } catch (e: any) {
-      setWechatMsg(t('settings.wechat.disconnectFailed', { e: e?.message || e }))
-    } finally {
-      setWechatBusy(false)
+      setRemoteBusy(false)
     }
   }
 
@@ -601,7 +619,6 @@ export const SettingsModal: React.FC<{
     if (p.open && tab === 'model' && !models && !modelsLoading) void loadModels()
     if (p.open && tab === 'mcp') refreshMcp()
     if (p.open && tab === 'skills' && !allSkills && !allSkillsLoading) loadAllSkills()
-    if (p.open && tab === 'wechat') refreshWechat()
     // appVersion 一打开就取(不只 about tab):高级→导出日志也要带版本号,否则导出里恒为 null。
     if (p.open && !appVersion) void window.tangu?.appVersion?.().then((v) => setAppVersion(v || '')).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -612,43 +629,6 @@ export const SettingsModal: React.FC<{
     const off = window.tangu?.onUpdaterStatus?.((st) => setUpd(st))
     return () => off?.()
   }, [])
-
-  useEffect(() => {
-    if (!p.open || tab !== 'wechat' || !wechatLogin) return
-    let canceled = false
-    let timer = 0
-    const tick = async (): Promise<void> => {
-      try {
-        const r = await pollWechatLogin(p.cfg, wechatLogin.loginId)
-        if (canceled) return
-        setWechatLogin((cur) => (cur && cur.loginId === wechatLogin.loginId ? { ...cur, status: r.status } : cur))
-        if (r.status === 'confirmed') {
-          setWechatMsg(t('settings.wechat.connectedMsg'))
-          setWechatLogin(null)
-          if (r.sessionId && window.tangu?.setConfig) {
-            void window.tangu.setConfig({ wechatDefaultSessionId: r.sessionId }).then(setStored).catch(() => {})
-          }
-          refreshWechat()
-          window.clearInterval(timer)
-        } else if (r.status === 'expired' || r.status === 'failed') {
-          setWechatMsg(r.detail || t('settings.wechat.loginStatus', { status: r.status }))
-          setWechatLogin(null)
-          window.clearInterval(timer)
-        }
-      } catch (e: any) {
-        if (canceled) return
-        setWechatMsg(t('settings.wechat.pollFailed', { e: e?.message || e }))
-        window.clearInterval(timer)
-      }
-    }
-    timer = window.setInterval(() => void tick(), 2000)
-    void tick()
-    return () => {
-      canceled = true
-      window.clearInterval(timer)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.open, tab, wechatLogin?.loginId])
 
   const test = async () => {
     setTesting(true)
@@ -663,38 +643,82 @@ export const SettingsModal: React.FC<{
     p.onReconnect(patch)
   }
 
-  const tabItems = [
-    ['general', t('settings.tab.general')], // = 连接 + Forsion 合并
-    ['model', t('settings.tab.model')],
-    ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
-    // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
-    ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop ? ([['mcp', 'MCP'], ['hooks', 'Hooks'], ['wechat', t('settings.tab.wechat')], ['browser', t('settings.tab.browser')], ['plugins', t('settings.tab.plugins')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')], ['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
-    ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
-    ['theme', t('settings.tab.theme')],
-    ['shortcuts', t('settings.tab.shortcuts')],
-    ['advanced', t('settings.tab.advanced')],
-    ...((isDesktop || cloudWeb) && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
-    ['about', t('settings.tab.about')],
-  ] as Array<[Tab, string]>
   const activeTabLabel = tab.startsWith('plugin:')
     ? (pluginNavItems.find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
     : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
+
+  // 中分类:只给内容确实长、且本来就有天然分界的一级页;短页(笔记/浏览器/关于/开发者…)不加栏目条,
+  // 免得为一两项设置硬造分类。条目的显隐条件必须与下方正文块的渲染条件一一对应,否则会出现
+  // 「点得到栏目却空白」。key 全局唯一 → 换页时旧 key 落不进新列表,activeSub 自动落回第一项。
+  const subItems: Array<[string, string]> = ({
+    general: [
+      ['g-conn', t('settings.sub.connection')],
+      ...(isDesktop ? [['g-forsion', 'Forsion'] as [string, string]] : []),
+      ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
+    ],
+    model: [
+      ['m-models', t('settings.sub.models')],
+      ...(isDesktop ? ([
+        ['m-providers', t('settings.sub.providers')],
+        ...(wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
+        ...(stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
+      ] as Array<[string, string]>) : []),
+    ],
+    // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/阴影/玻璃/光标 各自一张小卡就够,
+    // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
+    agents: [
+      ['ag-roster', t('settings.tab.agents')],
+      ['ag-special', t('settings.sub.specialAgents')],
+      ['ag-clis', t('settings.tab.agentClis')],
+    ],
+    'amadeus-plugins': [
+      // Forsion 插件区整块在 window.amadeus 后面 —— 没有就只剩引擎插件一项,栏目条自动隐藏。
+      ...(window.amadeus ? [['pl-forsion', t('settings.plugins.secForsion')] as [string, string]] : []),
+      ['pl-engine', t('settings.plugins.secEngine')],
+    ],
+    advanced: [
+      ...(isDesktop ? [['a-mcp', t('settings.sub.mcpServer')] as [string, string]] : []),
+      ['a-ui', t('settings.sub.uiSession')],
+      ...(window.tangu?.clearAppData ? [['a-data', t('settings.sub.data')] as [string, string]] : []),
+    ],
+    skills: [
+      ['k-library', t('settings.sub.skillLibrary')],
+      ...(isDesktop && !!window.tangu?.discoveryScan ? [['k-discovery', t('settings.discovery.label')] as [string, string]] : []),
+    ],
+    sync: [
+      // 「在线同步」整块都在 window.amadeusSync 后面:没这个能力就别挂栏目,否则点进去是白板。
+      ...(window.amadeusSync ? [['s-cloud', t('settings.sync.cloudSec')] as [string, string]] : []),
+      // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走。
+      ...(window.remoteSync ? [['s-remote', t('settings.sync.remoteSec')] as [string, string]] : []),
+    ],
+  } as Record<string, Array<[string, string]>>)[tab] ?? []
+  // 单项栏目条没有意义(只剩一个分类=没分类),直接不显示;正文的 activeSub 判断照常命中那一项。
+  const activeSub = subItems.some(([k]) => k === sub) ? sub : (subItems[0]?.[0] ?? '')
+  // 换页/换分类后:①选中项滚到可见(移动端顶部横滑 chips 必需,initialTab 可能在条深处);
+  // ②正文回到顶部 —— ⚠️ 滚动容器是**外层** .settings-body,内层 `key` 重挂不会重置父容器的
+  // scrollTop:在技能库往下滚过再切到另一个长分类,会直接落在新页中段(短分类则落到底)。
+  useEffect(() => {
+    document.querySelector('.settings-nav-list button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' })
+    const body = document.querySelector('.settings-body')
+    if (body) body.scrollTop = 0
+  }, [tab, activeSub])
+  const pickSub = (k: string): void => {
+    setSubDir(subItems.findIndex(([x]) => x === k) > subItems.findIndex(([x]) => x === activeSub) ? 1 : -1)
+    setSub(k)
+  }
 
   // 分类导航(两域两级,与数据目录两层布局同构):大类=Forsion(桌面壳,含笔记等内置 views)/Tangu(引擎),
   // 组内再分小类。品牌名作大类名,不进 i18n。只渲染 tabItems 里实际存在的项(沿用 desktop/devMode 过滤)。
   // Amadeus 不设组——它只是一个 Space(views 组合),笔记设置归「选项」,插件只有 Forsion/Tangu 两种。
   const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[] }> }> = [
     { key: 'forsion', label: 'Forsion', groups: [
-      { key: 'options', label: t('settings.group.options'), tabs: ['general', 'spaces', 'theme', 'shortcuts', 'notes'] },
+      { key: 'options', label: t('settings.group.options'), tabs: ['general', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'notes', 'sync'] },
       { key: 'fplugins', label: t('settings.group.communityPlugins'), tabs: ['amadeus-plugins'] },
       { key: 'system', label: t('settings.group.system'), tabs: ['advanced', 'developer', 'about'] },
     ] },
     { key: 'tangu', label: 'Tangu', groups: [
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks'] },
-      { key: 'tools', label: t('settings.group.tools'), tabs: ['wechat', 'browser'] },
-      { key: 'community', label: t('settings.group.communityPlugins'), tabs: ['plugins'] },
+      { key: 'tools', label: t('settings.group.tools'), tabs: ['channels', 'browser'] },
     ] },
   ]
 
@@ -729,7 +753,7 @@ export const SettingsModal: React.FC<{
                   .map((id) => tabItems.find(([tid]) => tid === id))
                   .filter((x): x is [Tab, string] => !!x)
                 // 「社区插件」组末尾追加已启用且有设置的外置 agent 插件,各成一级项(动态项无图标)。
-                const all = grp.key === 'community' ? [...base, ...pluginNavItems] : base
+                const all = grp.key === 'fplugins' ? [...base, ...pluginNavItems] : base
                 const items = secHit || grp.label.toLowerCase().includes(ql)
                   ? all
                   : all.filter(([, label]) => label.toLowerCase().includes(ql))
@@ -744,7 +768,7 @@ export const SettingsModal: React.FC<{
                   <div key={grp.key} className="settings-nav-group">
                     <div className="settings-nav-grouphead">{grp.label}</div>
                     {grp.items.map(([id, label]) => (
-                      <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
+                      <button key={id} className={tab === id ? 'active' : ''} onClick={() => goTab(id)}>
                         {TAB_ICONS[id]}{label}
                       </button>
                     ))}
@@ -758,11 +782,28 @@ export const SettingsModal: React.FC<{
       <section className="settings-main">
         <div className="settings-main-head">
           <div className="settings-main-title">{activeTabLabel}</div>
+          {subItems.length > 1 && (
+            <div className="settings-subbar" role="tablist" aria-label={activeTabLabel}>
+              {subItems.map(([k, label]) => (
+                <button
+                  key={k}
+                  role="tab"
+                  aria-selected={activeSub === k}
+                  className={`settings-subtab${activeSub === k ? ' active' : ''}`}
+                  onClick={() => pickSub(k)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="settings-body">
-                {tab === 'general' && (
+          {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
+          <div key={`${tab}:${activeSub}`} className="settings-sub" data-dir={subDir}>
+                {/* 小节标题(原 .settings-sec)已由标题下的中分类栏目条承担,不再在正文重复一遍。 */}
+                {tab === 'general' && activeSub === 'g-conn' && (
                   <>
-                    <div className="settings-sec">{t('settings.tab.connection')}</div>
                     {isDesktop && (
                       <div className="field">
                         <label>{t('settings.backend.modeLabel')}</label>
@@ -811,15 +852,6 @@ export const SettingsModal: React.FC<{
                     {isDesktop && mode === 'managed' && stored && (
                       <>
                         <div className="field-row">
-                          <div className="field">
-                            <label><KeyRound size={11} style={{ verticalAlign: -1 }} /> {t('settings.token.label')}</label>
-                            <input
-                              type="password"
-                              value={stored.cloudToken}
-                              onChange={(e) => setStored({ ...stored, cloudToken: e.target.value })}
-                              placeholder={t('settings.token.placeholder')}
-                            />
-                          </div>
                           <div className="field" style={{ maxWidth: 160 }}>
                             <label>{t('settings.sandbox.label')}</label>
                             <select
@@ -961,9 +993,8 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'general' && isDesktop && (
+                {tab === 'general' && isDesktop && activeSub === 'g-forsion' && (
                   <>
-                    <div className="settings-sec settings-sec--gap">{t('settings.tab.forsion')}</div>
                     {/* 账号 */}
                     <div className="field">
                       <label>{t('settings.forsion.accountLabel')}</label>
@@ -1057,9 +1088,8 @@ export const SettingsModal: React.FC<{
                 )}
 
                 {/* 收件箱(Inbox Space):系统通知开关。非 managedKeys,保存即生效不重启后端。 */}
-                {tab === 'general' && isDesktop && stored && (
+                {tab === 'general' && isDesktop && stored && activeSub === 'g-inbox' && (
                   <>
-                    <div className="settings-sec settings-sec--gap">{t('settings.inbox.title')}</div>
                     <div className="field">
                       <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <input
@@ -1138,6 +1168,11 @@ export const SettingsModal: React.FC<{
                       <div className="hint">{t('settings.notes.dailyHint')}</div>
                     </div>
 
+                  </>
+                )}
+
+                {tab === 'sync' && activeSub === 's-cloud' && (
+                  <>
                     {window.amadeusSync && noteSync && (
                       <div className="field">
                         <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1208,11 +1243,12 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
 
-                    <RemoteSyncSection />
                   </>
                 )}
 
-                {tab === 'model' && (
+                {tab === 'sync' && activeSub === 's-remote' && <RemoteSyncSection />}
+
+                {tab === 'model' && activeSub === 'm-models' && (
                   <>
                     <div className="field">
                       <label>{t('settings.model.defaultLabel')}</label>
@@ -1326,11 +1362,8 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'model' && isDesktop && (
+                {tab === 'model' && isDesktop && activeSub === 'm-providers' && (
                   <>
-                    <div className="panel-section-title" style={{ marginTop: 8, padding: '12px 0 6px', borderTop: 'var(--border-width) solid var(--border)' }}>
-                      {t('settings.customProvider.sectionTitle')}
-                    </div>
                     <div className="field">
                       <label>{t('settings.customProvider.label')}</label>
                       <div className="hint" style={{ marginBottom: 8 }}>
@@ -1591,12 +1624,121 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
 
-                    {/* 语音朗读(TTS):OpenAI 兼容 /audio/speech;模型 id 命中直连 provider 的 ttsModelIds 或 <providerId>/<model>。 */}
+                  </>
+                )}
+
+                {/* 本地联网搜索(BYO-key):engine /agent/websearch,写 config.json webSearch 段,搜索时即时生效。 */}
+                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && (
+                  <>
+                    {wsRed && (
+                      <>
+                        <div className="field">
+                          <div className="hint" style={{ marginBottom: 8 }}>{t('settings.websearch.intro')}</div>
+                          <div className="field-row">
+                            <div className="field">
+                              <label>{t('settings.websearch.providerLabel')}</label>
+                              <select value={wsProvider} onChange={(e) => setWsProvider(e.target.value)}>
+                                <option value="auto">{t('settings.websearch.provider.auto')}</option>
+                                <option value="bocha">{t('settings.websearch.provider.bocha')}</option>
+                                <option value="tavily">{t('settings.websearch.provider.tavily')}</option>
+                                <option value="zhipu">{t('settings.websearch.provider.zhipu')}</option>
+                                <option value="duckduckgo">{t('settings.websearch.provider.duckduckgo')}</option>
+                              </select>
+                            </div>
+                            <div className="field">
+                              <label>{t('settings.websearch.effectiveLabel')}</label>
+                              <div className="hint" style={{ paddingTop: 8 }}>
+                                {wsRed.configured
+                                  ? t('settings.websearch.effectiveLocal', { provider: wsRed.effectiveProvider })
+                                  : t('settings.websearch.effectiveCloud')}
+                              </div>
+                            </div>
+                          </div>
+                          {([['bocha', 'Bocha API Key', wsRed.bochaHasKey], ['tavily', 'Tavily API Key', wsRed.tavilyHasKey], ['zhipu', 'Zhipu API Key', wsRed.zhipuHasKey]] as const).map(([k, label, hasKey]) => (
+                            <div className="field" key={k} style={{ marginTop: 6 }}>
+                              <label>
+                                {label}
+                                {hasKey && !wsClear[k] && (
+                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyStored')}</span>
+                                )}
+                                {wsClear[k] && (
+                                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {t('settings.websearch.keyCleared')}</span>
+                                )}
+                              </label>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <input
+                                  type="password"
+                                  autoComplete="off"
+                                  style={{ flex: 1 }}
+                                  value={wsKeys[k]}
+                                  placeholder={hasKey && !wsClear[k] ? t('settings.websearch.keyKeepPlaceholder') : t('settings.websearch.keyEmptyPlaceholder')}
+                                  onChange={(e) => {
+                                    setWsKeys({ ...wsKeys, [k]: e.target.value })
+                                    if (e.target.value) setWsClear({ ...wsClear, [k]: false })
+                                  }}
+                                />
+                                {hasKey && !wsClear[k] && (
+                                  <button className="btn ghost sm" onClick={() => { setWsClear({ ...wsClear, [k]: true }); setWsKeys({ ...wsKeys, [k]: '' }) }}>
+                                    {t('settings.websearch.clearKey')}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                            <button
+                              className="btn primary sm"
+                              disabled={wsBusy}
+                              onClick={() => {
+                                const keyOut = (k: 'bocha' | 'tavily' | 'zhipu'): string => (wsClear[k] ? '' : (wsKeys[k] || '__keep__'))
+                                setWsBusy(true); setWsMsg('')
+                                void saveLocalWebSearch(p.cfg, {
+                                  provider: wsProvider,
+                                  bochaApiKey: keyOut('bocha'),
+                                  tavilyApiKey: keyOut('tavily'),
+                                  zhipuApiKey: keyOut('zhipu'),
+                                }).then((r) => {
+                                  setWsRed(r.config)
+                                  setWsKeys({ bocha: '', tavily: '', zhipu: '' })
+                                  setWsClear({ bocha: false, tavily: false, zhipu: false })
+                                  setWsMsg(t('settings.websearch.saved'))
+                                }).catch((e) => setWsMsg(`✗ ${e?.message || e}`))
+                                  .finally(() => setWsBusy(false))
+                              }}
+                            >
+                              {t('settings.btn.save')}
+                            </button>
+                            <button
+                              className="btn ghost sm"
+                              disabled={wsBusy}
+                              onClick={() => {
+                                const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
+                                const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
+                                setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
+                                void testLocalWebSearch(p.cfg, { provider: wsProvider, apiKey: draft || '__keep__' })
+                                  .then((r) => setWsMsg(r.ok
+                                    ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
+                                    : `✗ ${r.provider}: ${r.error || 'failed'}`))
+                                  .catch((e) => setWsMsg(`✗ ${e?.message || e}`))
+                                  .finally(() => setWsBusy(false))
+                              }}
+                            >
+                              {wsBusy ? <Loader2 size={12} className="spin" /> : null} {t('settings.websearch.test')}
+                            </button>
+                            {wsMsg && <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{wsMsg}</span>}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                  </>
+                )}
+
+                {/* 语音朗读(TTS):OpenAI 兼容 /audio/speech;模型 id 命中直连 provider 的 ttsModelIds 或 <providerId>/<model>。 */}
+                {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
+                  <>
                     {stored && (
                       <>
-                        <div className="panel-section-title" style={{ marginTop: 8, padding: '12px 0 6px', borderTop: 'var(--border-width) solid var(--border)' }}>
-                          {t('settings.tts.sectionTitle')}
-                        </div>
                         <div className="field">
                           <label>{t('settings.tts.model')}</label>
                           <div className="hint" style={{ marginBottom: 8 }}>{t('settings.tts.intro')}</div>
@@ -1856,18 +1998,29 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'agents' && <><div className="settings-sec">{t('settings.tab.agents')}</div><AgentsSettings cfg={p.cfg} /></>}
+                {/* 三段各成中分类:名册 / 后台智能体 / Agent CLI。原 <AgentsSettings> 只是把前两段
+                    叠起来加条分割线,分栏后没意义,已就地化掉(它「编辑时隐藏后台区」的专注模式同理:
+                    两者不在同一页了)。 */}
+                {tab === 'agents' && activeSub === 'ag-roster' && <AgentsTab cfg={p.cfg} />}
+                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} />}
                 {tab === 'hooks' && <><div className="settings-sec">Hooks</div><HooksTab cfg={p.cfg} /></>}
-                {tab === 'plugins' && (
-                  <PluginsTab
-                    cfg={p.cfg}
-                    plugins={plugins}
-                    onReload={reloadPlugins}
-                    onOpenSettings={(id) => setTab(`plugin:${id}` as Tab)}
-                  />
+                {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。 */}
+                {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
+                  <AmadeusPluginsTab cfg={p.cfg} onEngineReload={reloadPlugins} enginePlugins={plugins} />
                 )}
-                {tab === 'amadeus-plugins' && <AmadeusPluginsTab />}
+                {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && (
+                  <>
+                    <PluginsTab
+                      cfg={p.cfg}
+                      plugins={plugins}
+                      onReload={reloadPlugins}
+                      onOpenSettings={(id) => goTab(`plugin:${id}` as Tab)}
+                    />
+                  </>
+                )}
                 {tab === 'spaces' && <><div className="settings-sec">{t('settings.tab.spaces')}</div><SpacesTab /></>}
+                {tab === 'notifications' && <><div className="settings-sec">{t('settings.tab.notifications')}</div><NotificationsTab /></>}
+                {tab === 'statusbar' && <><div className="settings-sec">{t('settings.tab.statusbar')}</div><StatusBarTab /></>}
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
                   const pl = (plugins || []).find((x) => x.id === pid)
@@ -1875,7 +2028,7 @@ export const SettingsModal: React.FC<{
                     ? <PluginSettingsPage cfg={p.cfg} plugin={pl} agents={pluginAgents} />
                     : <div className="hint">{t('settings.plugins.empty')}</div>
                 })()}
-                {tab === 'agents' && <><div className="settings-sec settings-sec--gap">{t('settings.tab.agentClis')}</div><AgentClisTab cfg={p.cfg} /></>}
+                {tab === 'agents' && activeSub === 'ag-clis' && <AgentClisTab cfg={p.cfg} />}
 
                 {tab === 'browser' && stored && (
                   <>
@@ -1946,118 +2099,18 @@ export const SettingsModal: React.FC<{
                       </label>
                       <div className="hint">{t('settings.browser.allowPrivateHint')}</div>
                     </div>
-                    <button className="btn primary sm" disabled={wechatBusy} onClick={() => void saveRemoteSettings()}>
-                      {wechatBusy ? <Loader2 size={12} className="spin" /> : null}
+                    <button className="btn primary sm" disabled={remoteBusy} onClick={() => void saveRemoteSettings()}>
+                      {remoteBusy ? <Loader2 size={12} className="spin" /> : null}
                       {t('settings.btn.save')}
                     </button>
-                    {wechatMsg && <div className="hint" style={{ marginTop: 8 }}>{wechatMsg}</div>}
+                    {remoteMsg && <div className="hint" style={{ marginTop: 8 }}>{remoteMsg}</div>}
                   </>
                 )}
 
-                {tab === 'wechat' && stored && (
+                {tab === 'channels' && (
                   <>
-                    <div className="settings-section-title">
-                      <Smartphone size={14} /> {t('settings.wechat.title')}
-                    </div>
-                    <div className="field">
-                      <label>{t('settings.wechat.channel')}</label>
-                      <div className="seg">
-                        <button
-                          className={stored.wechatEnabled !== false ? 'active' : ''}
-                          onClick={() => setStored({ ...stored, wechatEnabled: true })}
-                        >
-                          {t('common.enabled')}
-                        </button>
-                        <button
-                          className={stored.wechatEnabled === false ? 'active' : ''}
-                          onClick={() => setStored({ ...stored, wechatEnabled: false })}
-                        >
-                          {t('common.disabled')}
-                        </button>
-                      </div>
-                      <div className="hint">
-                        {t('settings.wechat.hint')}
-                      </div>
-                    </div>
-                    <div className="field-row">
-                      <div className="field">
-                        <label>{t('settings.wechat.defaultSession')}</label>
-                        <input
-                          type="text"
-                          value={stored.wechatDefaultSessionId || p.activeSession?.id || ''}
-                          onChange={(e) => setStored({ ...stored, wechatDefaultSessionId: e.target.value.trim() })}
-                          placeholder={p.activeSession?.id || t('settings.wechat.defaultSessionPlaceholder')}
-                        />
-                      </div>
-                      <div className="field" style={{ maxWidth: 220 }}>
-                        <label>{t('settings.wechat.approvalMode')}</label>
-                        <select
-                          value={stored.wechatRemoteApprovalMode || 'readonly'}
-                          onChange={(e) => setStored({ ...stored, wechatRemoteApprovalMode: e.target.value as StoredDesktopConfig['wechatRemoteApprovalMode'] })}
-                        >
-                          <option value="readonly">{t('approval.mode.readonly')}</option>
-                          <option value="auto-edit">{t('approval.mode.autoEdit')}</option>
-                          <option value="full-auto">{t('approval.mode.fullAuto')}</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-                      <button className="btn primary sm" disabled={wechatBusy} onClick={() => void saveRemoteSettings()}>
-                        {wechatBusy ? <Loader2 size={12} className="spin" /> : null}
-                        {t('settings.btn.save')}
-                      </button>
-                      <button className="btn ghost sm" disabled={wechatBusy || stored.wechatEnabled === false} onClick={() => void startWechatBind()}>
-                        {wechatBusy ? <Loader2 size={12} className="spin" /> : <QrCode size={12} />}
-                        {t('settings.wechat.startQr')}
-                      </button>
-                      <button className="btn ghost sm" onClick={refreshWechat}>
-                        <RefreshCw size={12} /> {t('common.refresh')}
-                      </button>
-                      {wechatStatus && (
-                        <span className={`conn-pill ${wechatStatus.enabled ? 'ok' : ''}`}>
-                          <span className="dot" />
-                          {wechatStatus.enabled ? t('settings.wechat.runtimeOn') : t('settings.wechat.runtimeOff')}
-                        </span>
-                      )}
-                    </div>
-                    {wechatLogin && (
-                      <div className="wechat-login-box">
-                        <QrImage className="wechat-qr" value={wechatLogin.qrcodeImg} size={132} alt={t('settings.wechat.qrAlt')} />
-                        <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('settings.wechat.scanTitle')}</div>
-                          <div className="hint">{t('settings.wechat.statusLine', { status: wechatLogin.status || 'pending', time: new Date(wechatLogin.expiresAt).toLocaleTimeString() })}</div>
-                        </div>
-                      </div>
-                    )}
-                    {wechatStatus?.bindings.length ? (
-                      <div className="field">
-                        <label>{t('settings.wechat.bindings')}</label>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {wechatStatus.bindings.map((b) => (
-                            <div key={b.id} className="file-row" style={{ cursor: 'default' }}>
-                              <span className="file-name">
-                                <b>{b.wx_user_id || b.account_id}</b>
-                                <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
-                                  {b.peer_id ? t('settings.wechat.peer', { peer: b.peer_id }) : t('settings.wechat.waitingPeer')}
-                                </span>
-                              </span>
-                              <span className="file-size">{b.session_title || b.session_id} · {b.remote_approval_mode}</span>
-                              <button
-                                className="icon-btn"
-                                disabled={wechatBusy}
-                                title={t('settings.wechat.disconnect')}
-                                onClick={() => void disconnectWechat(b.account_id)}
-                              >
-                                <LogOut size={13} />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="hint">{t('settings.wechat.noBinding')}</div>
-                    )}
-                    {wechatMsg && <div className="hint" style={{ marginTop: 8 }}>{wechatMsg}</div>}
+                    <div className="settings-sec">{t('settings.tab.channels')}</div>
+                    <ChannelsTab cfg={p.cfg} />
                   </>
                 )}
 
@@ -2209,12 +2262,28 @@ export const SettingsModal: React.FC<{
                         <button className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
                       </div>
                     </div>
+                    <div className="field">
+                      <label className="inline-check">
+                        <input
+                          type="checkbox"
+                          checked={smoothCaret}
+                          onChange={(e) => {
+                            const on = e.target.checked
+                            setSmoothCaret(on)
+                            try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
+                            setSmoothCaretEnabled(on)
+                          }}
+                        />
+                        {t('settings.theme.smoothCaret')}
+                      </label>
+                      <div className="hint">{t('settings.theme.smoothCaretHint')}</div>
+                    </div>
                   </>
                 )}
 
                 {tab === 'shortcuts' && <ShortcutsTab />}
 
-                {tab === 'skills' && (
+                {tab === 'skills' && activeSub === 'k-library' && (
                   <>
                     <div className="field">
                       <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2291,9 +2360,13 @@ export const SettingsModal: React.FC<{
                       })()}
                       {skillMsg && <div className="hint" style={{ marginTop: 6 }}>{skillMsg}</div>}
                     </div>
+                  </>
+                )}
 
+                {tab === 'skills' && activeSub === 'k-discovery' && (
+                  <>
                     {isDesktop && !!window.tangu?.discoveryScan && (
-                      <div className="field" style={{ marginTop: 14 }}>
+                      <div className="field">
                         <label>{t('settings.discovery.label')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>
                           {t('settings.discovery.hint')}
@@ -2375,11 +2448,123 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'advanced' && (
+                {tab === 'advanced' && activeSub === 'a-mcp' && (
+                  <>
+                    {isDesktop && (
+                      <div className="field">
+                        <label>{t('settings.mcpServer.label')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.mcpServer.hint')}</div>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={!!stored?.mcpEnabled}
+                            onChange={(e) => void window.tangu!.setConfig({ mcpEnabled: e.target.checked }).then(setStored)}
+                          />
+                          {t('settings.mcpServer.enable')}
+                        </label>
+
+                        {stored?.mcpEnabled && stored.forsionMcp?.running && stored.forsionMcp.url && (() => {
+                          const url = stored.forsionMcp.url
+                          const token = stored.forsionMcp.token
+                          // 各家 agent 的接入配置(都走 Streamable HTTP + Authorization: Bearer)。任意支持 HTTP MCP 的客户端照「通用」即可。
+                          const presets: { id: string; label: string; snippet: string }[] = [
+                            { id: 'claude', label: 'Claude Code', snippet: `claude mcp add --transport http forsion ${url} --header "Authorization: Bearer ${token}"` },
+                            { id: 'codex', label: 'Codex', snippet: `# ~/.codex/config.toml\n[mcp_servers.forsion]\nurl = "${url}"\nbearer_token = "${token}"` },
+                            { id: 'opencode', label: 'OpenCode', snippet: `// opencode.json\n{\n  "mcp": {\n    "forsion": {\n      "type": "remote",\n      "url": "${url}",\n      "headers": { "Authorization": "Bearer ${token}" },\n      "oauth": false\n    }\n  }\n}` },
+                            { id: 'generic', label: t('settings.mcpServer.generic'), snippet: `{\n  "mcpServers": {\n    "forsion": {\n      "url": "${url}",\n      "headers": { "Authorization": "Bearer ${token}" }\n    }\n  }\n}` },
+                          ]
+                          const active = presets.find((x) => x.id === mcpPreset) ?? presets[0]
+                          const copy = (key: string, text: string) => {
+                            void navigator.clipboard?.writeText(text)
+                            setMcpCopied(key)
+                            setTimeout(() => setMcpCopied(null), 1500)
+                          }
+                          return (
+                            <div style={{ marginTop: 12 }}>
+                              <div className="hint" style={{ marginBottom: 8 }}>{t('settings.mcpServer.connectHint')}</div>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
+                                <span style={{ fontSize: 12, opacity: 0.7, flexShrink: 0 }}>{t('settings.mcpServer.endpoint')}</span>
+                                <input
+                                  readOnly
+                                  value={url}
+                                  onFocus={(e) => e.currentTarget.select()}
+                                  style={{ flex: 1, fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 12 }}
+                                />
+                                <button className="btn ghost sm" onClick={() => copy('url', url)} title={t('settings.mcpServer.copy')}>
+                                  {mcpCopied === 'url' ? <Check size={13} /> : <Copy size={13} />}
+                                </button>
+                              </div>
+                              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                                {presets.map((pr) => (
+                                  <button
+                                    key={pr.id}
+                                    className={mcpPreset === pr.id ? 'btn sm' : 'btn ghost sm'}
+                                    onClick={() => setMcpPreset(pr.id)}
+                                  >
+                                    {pr.label}
+                                  </button>
+                                ))}
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                                <pre style={{ flex: 1, margin: 0, padding: '8px 10px', background: 'var(--surface-2, rgba(127,127,127,0.1))', borderRadius: 6, fontSize: 11.5, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}>{active.snippet}</pre>
+                                <button className="btn ghost sm" onClick={() => copy(`snip-${active.id}`, active.snippet)} title={t('settings.mcpServer.copy')}>
+                                  {mcpCopied === `snip-${active.id}` ? <Check size={13} /> : <Copy size={13} />}
+                                </button>
+                              </div>
+                              <div className="hint" style={{ marginTop: 8 }}>{t('settings.mcpServer.genericNote')}</div>
+                            </div>
+                          )
+                        })()}
+
+                        {stored?.mcpEnabled && !stored.forsionMcp?.running && (
+                          <div className="hint" style={{ marginTop: 8, color: 'var(--danger)' }}>{t('settings.mcpServer.notRunning')}</div>
+                        )}
+                      </div>
+                    )}
+
+                  </>
+                )}
+
+                {tab === 'advanced' && activeSub === 'a-ui' && (
                   <>
                     <div className="panel-note">
                       {t('settings.advanced.note')}
                     </div>
+
+                    {isDesktop && (
+                      <div className="field" style={{ marginTop: 14 }}>
+                        <label>{t('settings.advanced.agentDesk')}</label>
+                        <div className="hint" style={{ marginBottom: 8 }}>{t('settings.advanced.agentDeskHint')}</div>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={!!stored?.agentDeskEnabled}
+                            onChange={(e) => void window.tangu!.setConfig({ agentDeskEnabled: e.target.checked }).then((c) => {
+                              setStored(c)
+                              useApp.setState({ desktopConfig: c })
+                            })}
+                          />
+                          {t('settings.advanced.agentDeskEnable')}
+                        </label>
+                        {/* 「开在 Agent Desk」只有 Desk 开着才成立;关着时新标签页是唯一去处,不必露这个选择。 */}
+                        {stored?.agentDeskEnabled && (
+                          <div style={{ marginTop: 10 }}>
+                            <label>{t('settings.advanced.summaryOpenIn')}</label>
+                            <div className="hint" style={{ marginBottom: 6 }}>{t('settings.advanced.summaryOpenInHint')}</div>
+                            <select
+                              value={stored?.summaryOpenIn || 'tab'}
+                              onChange={(e) => void window.tangu!.setConfig({ summaryOpenIn: e.target.value as 'tab' | 'desk' }).then((c) => {
+                                setStored(c)
+                                useApp.setState({ desktopConfig: c })
+                              })}
+                            >
+                              <option value="tab">{t('settings.advanced.summaryOpenIn.tab')}</option>
+                              <option value="desk">{t('settings.advanced.summaryOpenIn.desk')}</option>
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="field" style={{ marginTop: 14 }}>
                       <label>恢复默认布局</label>
@@ -2424,8 +2609,13 @@ export const SettingsModal: React.FC<{
                       {exportMsg && <div className="hint" style={{ marginTop: 6, wordBreak: 'break-all' }}>{exportMsg}</div>}
                     </div>
 
+                  </>
+                )}
+
+                {tab === 'advanced' && activeSub === 'a-data' && (
+                  <>
                     {window.tangu?.clearAppData && (
-                      <div className="field" style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+                      <div className="field">
                         <label style={{ color: 'var(--danger)' }}>{t('settings.clearData.label')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.clearData.hint')}</div>
                         <label className="inline-check">
@@ -2578,7 +2768,7 @@ export const SettingsModal: React.FC<{
                           setActivityViewCommand(false)
                           setDevMode(false)
                           setDevClicks(0)
-                          setTab('about')
+                          goTab('about')
                         }}
                       >
                         {t('settings.developer.disable')}
@@ -2649,6 +2839,7 @@ export const SettingsModal: React.FC<{
                     </div>
                   </>
                 )}
+          </div>
         </div>
       </section>
     </div>

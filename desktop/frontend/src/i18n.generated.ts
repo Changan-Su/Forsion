@@ -127,20 +127,24 @@ registerMessages({
     "en": "Delete"
   },
   "input.approval.readonly": {
-    "zh": "只读·全审批",
-    "en": "Read-only · Approve all"
+    "zh": "询问我批准",
+    "en": "Ask for approval"
   },
   "input.approval.autoEdit": {
-    "zh": "自动编辑",
-    "en": "Auto-edit"
+    "zh": "替我批准",
+    "en": "Approve for me"
   },
   "input.approval.fullAuto": {
-    "zh": "全自动",
-    "en": "Full-auto"
+    "zh": "完全放行",
+    "en": "Full access"
   },
   "input.thinking.off": {
     "zh": "思考·关",
     "en": "Thinking · Off"
+  },
+  "input.thinking.minimal": {
+    "zh": "思考·极简",
+    "en": "Thinking · Minimal"
   },
   "input.thinking.low": {
     "zh": "思考·浅",
@@ -154,9 +158,21 @@ registerMessages({
     "zh": "思考·深",
     "en": "Thinking · High"
   },
+  "input.thinking.xhigh": {
+    "zh": "思考·极深",
+    "en": "Thinking · Extra high"
+  },
+  "input.thinking.max": {
+    "zh": "思考·拉满",
+    "en": "Thinking · Max"
+  },
   "input.thinkingShort.off": {
     "zh": "标准",
     "en": "Standard"
+  },
+  "input.thinkingShort.minimal": {
+    "zh": "极简",
+    "en": "Minimal"
   },
   "input.thinkingShort.low": {
     "zh": "浅",
@@ -169,6 +185,42 @@ registerMessages({
   "input.thinkingShort.high": {
     "zh": "深",
     "en": "High"
+  },
+  "input.thinkingShort.xhigh": {
+    "zh": "极深",
+    "en": "X-high"
+  },
+  "input.thinkingShort.max": {
+    "zh": "拉满",
+    "en": "Max"
+  },
+  "input.slash.thinkSet": {
+    "zh": "思考强度已设为 {level}（模型不支持时自动降档）",
+    "en": "Thinking level set to {level} (auto-clamped if the model can't do it)"
+  },
+  "input.slash.thinkUsage": {
+    "zh": "用法：/think {levels}",
+    "en": "Usage: /think {levels}"
+  },
+  "input.slash.status": {
+    "zh": "本会话",
+    "en": "This session"
+  },
+  "input.slash.copied": {
+    "zh": "已复制上一条回复",
+    "en": "Copied the last reply"
+  },
+  "input.slash.nothingToCopy": {
+    "zh": "没有可复制的回复",
+    "en": "No reply to copy"
+  },
+  "input.slash.nothingToRetry": {
+    "zh": "没有可重试的消息",
+    "en": "No message to retry"
+  },
+  "input.slash.nothingToExport": {
+    "zh": "本会话还没有内容可导出",
+    "en": "Nothing to export in this session yet"
   },
   "input.slash.planOff": {
     "zh": "关闭计划模式",
@@ -315,8 +367,28 @@ registerMessages({
     "en": "Turn on plan mode"
   },
   "input.approvalSection": {
-    "zh": "审批档",
-    "en": "Approval level"
+    "zh": "Tangu 的操作如何批准?",
+    "en": "How should Tangu actions be approved?"
+  },
+  "input.approval.readonlyDesc": {
+    "zh": "改文件、跑命令、联网,每次都先问我",
+    "en": "Always ask before editing files, running commands or using the internet"
+  },
+  "input.approval.autoEditDesc": {
+    "zh": "工作区内可直接改文件,跑命令才问我",
+    "en": "Edits files in the workspace freely, asks before running commands"
+  },
+  "input.approval.fullAutoDesc": {
+    "zh": "不受限地访问网络和你电脑上的任何文件",
+    "en": "Unrestricted access to the internet and any file on your computer"
+  },
+  "input.approval.custom": {
+    "zh": "自定义(config.json)",
+    "en": "Custom (config.json)"
+  },
+  "input.approval.customDesc": {
+    "zh": "按 config.json 的 approval 段(allow / ask / deny)判定",
+    "en": "Uses permissions defined in config.json"
   },
   "input.modelChipTitle": {
     "zh": "本会话模型与思考深度",
@@ -627,8 +699,9 @@ registerMessages({
     "en": "Skills"
   },
   "settings.tab.theme": {
-    "zh": "主题",
-    "en": "Theme"
+    // 页名 2026-07-27 由「主题」改为「外观」(key 保持 theme:tab id / 深链 / 已存 sub 都按它走)。
+    "zh": "外观",
+    "en": "Appearance"
   },
   "settings.tab.advanced": {
     "zh": "高级",
@@ -909,6 +982,82 @@ registerMessages({
   "settings.customProvider.sectionTitle": {
     "zh": "自定义 Provider(BYO-key 直连)",
     "en": "Custom provider (BYO-key direct connection)"
+  },
+  "settings.websearch.sectionTitle": {
+    "zh": "联网搜索(web_search)",
+    "en": "Web search (web_search)"
+  },
+  "settings.websearch.intro": {
+    "zh": "web_search 工具的本地搜索源(BYO-key)。配置后本机直搜、不依赖云端;不配置则登录用户走云端,未登录回落免费 DuckDuckGo。失败自动按「其余已配 Key → DuckDuckGo」降级。大陆网络 DuckDuckGo 不可达,建议配博查或智谱。",
+    "en": "Local search source for the web_search tool (BYO-key). When configured, searches run from this machine without the cloud; otherwise signed-in users go through the cloud and others fall back to free DuckDuckGo. On failure it degrades through your other configured keys, then DuckDuckGo. DuckDuckGo is unreachable from mainland China — use Bocha or Zhipu there."
+  },
+  "settings.websearch.providerLabel": {
+    "zh": "搜索源",
+    "en": "Provider"
+  },
+  "settings.websearch.provider.auto": {
+    "zh": "auto(按已配 Key 自动选)",
+    "en": "auto (pick by configured key)"
+  },
+  "settings.websearch.provider.bocha": {
+    "zh": "博查 Bocha(国内直连)",
+    "en": "Bocha (CN-friendly)"
+  },
+  "settings.websearch.provider.tavily": {
+    "zh": "Tavily(海外,免费 1k 次/月)",
+    "en": "Tavily (intl, free 1k/mo)"
+  },
+  "settings.websearch.provider.zhipu": {
+    "zh": "智谱 Web Search(国内直连)",
+    "en": "Zhipu Web Search (CN-friendly)"
+  },
+  "settings.websearch.provider.duckduckgo": {
+    "zh": "DuckDuckGo(免 Key)",
+    "en": "DuckDuckGo (no key)"
+  },
+  "settings.websearch.effectiveLabel": {
+    "zh": "当前生效",
+    "en": "Effective"
+  },
+  "settings.websearch.effectiveLocal": {
+    "zh": "本地直搜:{provider}",
+    "en": "Local: {provider}"
+  },
+  "settings.websearch.effectiveCloud": {
+    "zh": "未配置:登录走云端,否则免费 DuckDuckGo 兜底",
+    "en": "Not configured: cloud when signed in, else free DuckDuckGo"
+  },
+  "settings.websearch.keyStored": {
+    "zh": "已保存",
+    "en": "stored"
+  },
+  "settings.websearch.keyCleared": {
+    "zh": "将清除(保存后生效)",
+    "en": "will clear on save"
+  },
+  "settings.websearch.keyKeepPlaceholder": {
+    "zh": "已保存,留空则不变",
+    "en": "Stored — leave blank to keep"
+  },
+  "settings.websearch.keyEmptyPlaceholder": {
+    "zh": "未配置",
+    "en": "Not set"
+  },
+  "settings.websearch.clearKey": {
+    "zh": "清除",
+    "en": "Clear"
+  },
+  "settings.websearch.saved": {
+    "zh": "✓ 已保存,搜索时即时生效",
+    "en": "✓ Saved — takes effect on next search"
+  },
+  "settings.websearch.testing": {
+    "zh": "测试中…",
+    "en": "Testing…"
+  },
+  "settings.websearch.test": {
+    "zh": "连通性测试",
+    "en": "Test connection"
   },
   "settings.customProvider.label": {
     "zh": "自定义 Provider(BYO-key 直连;对齐 Forsion 模型添加:base_URL + api key)",
@@ -1681,7 +1830,7 @@ registerMessages({
   "settings.tts.testBtn": { "zh": "试听", "en": "Test voice" },
   "settings.tts.testOk": { "zh": "合成成功,正在播放", "en": "Synthesized, playing" },
   "settings.tts.testText": { "zh": "你好呀,我是 Tangu。今天过得怎么样?", "en": "Hi, I'm Tangu. How is your day going?" },
-  "settings.notes.cloudSyncLabel": { "zh": "云同步(Cloud Vault)", "en": "Cloud sync (Cloud Vault)" },
+  "settings.notes.cloudSyncLabel": { "zh": "在线同步(Cloud Vault)", "en": "Online sync (Cloud Vault)" },
   "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 agent 实时可见。本地侧的笔记永不上云。单文件上限 5MB。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. 5MB per-file limit." },
   "notes.cloud.loginHint": { "zh": "登录 Forsion 账号后,这里会与你的云端 vault 自动双向同步。", "en": "Sign in to Forsion and this vault will two-way sync with your cloud vault automatically." },
   "notes.cloud.loginBtn": { "zh": "登录", "en": "Sign in" },
@@ -1694,7 +1843,31 @@ registerMessages({
   "settings.notes.cloudSyncPendingDel": { "zh": "删除保护:{n} 项批量删除已被拦下,确认后才会执行", "en": "Deletion guard: {n} bulk deletion(s) held, confirm to proceed" },
   "settings.notes.cloudSyncConfirmDel": { "zh": "确认删除", "en": "Confirm deletions" },
   "settings.remotesync.label": { "zh": "本地库远程同步", "en": "Vault remote sync" },
-  "settings.remotesync.hint": { "zh": "把本地库同步到你自己的存储(S3 / WebDAV / 文件夹),手动或定时,非实时;与云端模式互不相干。删除有防误删闸,冲突两版都保留。", "en": "Sync your local vault to your own storage (S3 / WebDAV / folder), manually or on a schedule. Independent from Cloud mode. Mass-delete guard and conflict copies keep data safe." },
+  "settings.remotesync.hint": { "zh": "把本地库同步到你自己的存储(Dropbox / S3 / WebDAV / 文件夹),手动或定时,非实时;与上方的在线同步(Cloud Vault)互不相干。删除有防误删闸,冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Independent from Online sync (Cloud Vault) above. Mass-delete guard and conflict copies keep data safe." },
+  "settings.remotesync.service": { "zh": "远程服务", "en": "Remote service" },
+  "settings.remotesync.schedule": { "zh": "同步计划", "en": "Sync schedule" },
+  "settings.remotesync.scheduleHint": { "zh": "按固定间隔在后台自动同步;任何时候都可以手动「立即同步」。", "en": "Runs automatically in the background at the chosen interval; you can always sync manually." },
+  "settings.remotesync.advanced": { "zh": "高级", "en": "Advanced" },
+  "settings.remotesync.maxFile": { "zh": "单文件上限(MB,0 = 不限)", "en": "Max file size (MB, 0 = unlimited)" },
+  "settings.remotesync.preparing": { "zh": "正在对账…(扫描本地与远端)", "en": "Preparing… (scanning local & remote)" },
+  "settings.remotesync.scope": { "zh": "同步范围:整个本地库的全部文件(含附件/画板/多维表;系统垃圾与 .git、.trash 除外)—— {root}", "en": "Scope: every file in the local vault (attachments, drawings, databases included; system junk, .git and .trash excluded) — {root}" },
+  "settings.remotesync.dirBoth": { "zh": "双向同步(默认)", "en": "Bidirectional (default)" },
+  "settings.remotesync.dirPush": { "zh": "仅上传(增量备份,不删远端)", "en": "Upload only (incremental backup)" },
+  "settings.remotesync.dirPull": { "zh": "仅下载(增量还原,不删本地)", "en": "Download only (incremental restore)" },
+  "settings.remotesync.syncOnStart": { "zh": "启动后自动同步一次(15 秒后)", "en": "Sync once after startup (after 15s)" },
+  "settings.remotesync.concurrency": { "zh": "传输并发(1-16)", "en": "Transfer concurrency (1-16)" },
+  "settings.remotesync.dryRun": { "zh": "预演", "en": "Dry run" },
+  "settings.remotesync.dryResult": { "zh": "预演(未执行):推 {push} · 拉 {pull} · 删 {del} · 冲突 {conf}", "en": "Dry run (nothing executed): push {push} · pull {pull} · delete {del} · conflict {conf}" },
+  "settings.remotesync.dbxAppKey": { "zh": "App Key(在 Dropbox App Console 创建应用获取)", "en": "App Key (create an app in Dropbox App Console)" },
+  "settings.remotesync.dbxBaseDir": { "zh": "远端目录(默认根目录,如 /Forsion-Vault)", "en": "Remote folder (default root, e.g. /Forsion-Vault)" },
+  "settings.remotesync.dbxConnect": { "zh": "连接 Dropbox", "en": "Connect Dropbox" },
+  "settings.remotesync.dbxReconnect": { "zh": "重新连接", "en": "Reconnect" },
+  "settings.remotesync.dbxConnected": { "zh": "已连接:{who}", "en": "Connected: {who}" },
+  "settings.remotesync.dbxOpened": { "zh": "已打开浏览器授权页;同意后把页面上的授权码粘贴到下方。", "en": "Browser opened; approve and paste the code shown back below." },
+  "settings.remotesync.dbxCodePlaceholder": { "zh": "粘贴授权码", "en": "Paste authorization code" },
+  "settings.remotesync.dbxFinish": { "zh": "完成连接", "en": "Finish" },
+  "settings.remotesync.dbxNeedKey": { "zh": "先填 App Key", "en": "Enter App Key first" },
+  "settings.remotesync.dbxHint": { "zh": "在 dropbox.com/developers 创建应用(Scoped access,权限勾 files.content.read/write),App Key 填这里;授权走浏览器,凭据只存本机。", "en": "Create an app at dropbox.com/developers (Scoped access with files.content.read/write), paste its App Key here; authorization happens in your browser and credentials stay on this device." },
   "settings.remotesync.backendOff": { "zh": "关闭", "en": "Off" },
   "settings.remotesync.backendPenzor": { "zh": "Forsion 云端(条件写,推荐)", "en": "Forsion Cloud (conditional writes, recommended)" },
   "settings.remotesync.penzorVault": { "zh": "同步库名(默认 default)", "en": "Sync vault name (default: default)" },

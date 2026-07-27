@@ -6,6 +6,7 @@
 import { create } from 'zustand'
 import {
   getAgentSchedules,
+  getAutomationActions,
   getAutomationSessions,
   getMuseStatus,
   getMuseTriggers,
@@ -13,6 +14,7 @@ import {
 } from '../services/backendService'
 import type {
   AgentScheduleInfo,
+  AutomationActionCatalogItem,
   AutomationSessionInfo,
   MuseStatusInfo,
   MuseTriggerInfo,
@@ -36,6 +38,8 @@ interface AutomationState {
   autoSessions: AutomationSessionInfo[]
   /** agent 日程(SCHEDULE.db 聚合;「Agent 日程」组数据源)。 */
   schedules: AgentScheduleInfo[]
+  /** tool_call 动作目录(构建器工具选择器+参数表单生成;旧引擎无端点 → 空)。 */
+  actionsCatalog: AutomationActionCatalogItem[]
   sel: AutomationSel | null
   builder: null | { editingId?: string }
   /** 保存/启停/删除后 bump,右栏 runs 与列表跟着重拉。 */
@@ -54,20 +58,22 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   triggers: [],
   autoSessions: [],
   schedules: [],
+  actionsCatalog: [],
   sel: null,
   builder: null,
   refreshNonce: 0,
 
   async refresh(cfg) {
-    // 五源并发,单源失败不阻断其余(旧引擎无 automation/schedule 端点 → 该项保持旧值/空)。
-    const [special, status, triggers, autoSessions, schedules] = await Promise.all([
+    // 六源并发,单源失败不阻断其余(旧引擎无 automation/schedule 端点 → 该项保持旧值/空)。
+    const [special, status, triggers, autoSessions, schedules, actionsCatalog] = await Promise.all([
       getSpecialConfig(cfg).then((r) => r.config).catch(() => get().specialCfg),
       getMuseStatus(cfg).catch(() => get().museStatus),
       getMuseTriggers(cfg).catch(() => get().triggers),
       getAutomationSessions(cfg).catch(() => get().autoSessions),
       getAgentSchedules(cfg).catch(() => get().schedules),
+      getAutomationActions(cfg).catch(() => get().actionsCatalog),
     ])
-    set({ specialCfg: special, museStatus: status, triggers, autoSessions, schedules, loaded: true })
+    set({ specialCfg: special, museStatus: status, triggers, autoSessions, schedules, actionsCatalog, loaded: true })
     // 选中的规则/日程被删了 → 清选中
     const sel = get().sel
     if (sel?.kind === 'trigger' && !triggers.some((t) => t.id === sel.triggerId)) set({ sel: null })

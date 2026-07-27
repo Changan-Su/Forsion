@@ -5,6 +5,7 @@
 import { useWorkspace } from '@lcl/engine'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { b64ToBytes } from '../services/fileKinds'
+import { openLocalHtml } from '../builtins'
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
@@ -40,6 +41,9 @@ export function openWsFile(target: PreviewTarget): void {
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   if (target.path) {
+    // 本地 .html 交给内置浏览器(file:// 直开,页面里的相对资源/跳转都对);wsfile 预览器只会把它
+    // 当文本渲染。内置浏览器被关掉 → openLocalHtml 返 false,照旧落 wsfile 预览。
+    if (/\.html?$/i.test(target.path) && openLocalHtml(target.path)) return
     const hit = api?.panels.find((p) => p.params?.__type === 'wsfile' && p.params?.path === target.path)
     if (hit) { ws.activateLeaf(hit.id); return }
     ws.openView('wsfile', { path: target.path, name: target.name }, 'main', { newTab: true })

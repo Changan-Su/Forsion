@@ -49,7 +49,10 @@
   --text-muted: #a8a096;
   --text-faint: rgba(242, 239, 232, 0.42);
   --text-ghost: rgba(242, 239, 232, 0.3);
-  --border: #34302a;
+  /* ⚠️ 曾是 #34302a(奶油暖调残留):比本块的中性 --bg-card #353538 还**暗**,暗色下卡片/胶囊
+   * 全被描了一圈黑边(用户实报「甚至会比背景还要黑」)。暗色里边线必须比表面亮。
+   * 同款兜底在 base.css :root.dark;两处都由 scripts/settings-ui.check.cjs 逐配色×明暗钉住。 */
+  --border: #3f3f43;
   --shadow: rgba(0, 0, 0, 0.4);
   --accent: #f8f7f6;
   --accent-hover: #f9f8f8;

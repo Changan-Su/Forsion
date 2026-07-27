@@ -4,7 +4,9 @@
  */
 import React, { useEffect, useState } from 'react'
 import { Sparkles, RefreshCw, Play, Check, XCircle, Crosshair, Trash2 } from 'lucide-react'
+import { setActiveSpace } from '@lcl/engine'
 import { getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger } from '../services/backendService'
+import { useApp } from '../stores/appStore'
 import type { MuseStatusInfo, MuseTodo, MuseTriggerInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 
@@ -21,6 +23,9 @@ export const MuseView: React.FC<{
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [target, setTarget] = useState<string>('')
   const [msg, setMsg] = useState('')
+  // 本面板只管 Muse 唤醒式规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义);
+  // 带动作的自动化在自动化 Space 统一管理
+  const museTriggers = triggers.filter((tg) => !tg.actions?.length && (!tg.agentSlug || tg.agentSlug === 'muse'))
 
   const load = async (): Promise<void> => {
     const st = await getMuseStatus(cfg).catch(() => null)
@@ -65,7 +70,13 @@ export const MuseView: React.FC<{
       ? t('special.muse.trigFile', { path: tg.cond.path.split('/').pop() || tg.cond.path, n: tg.cond.n })
       : tg.cond.type === 'event_seen'
         ? t('special.muse.trigEvent', { match: tg.cond.match })
-        : t('special.muse.trigDaily', { time: tg.cond.time })
+        : tg.cond.type === 'daily_at'
+          ? t('special.muse.trigDaily', { time: tg.cond.time })
+          : tg.cond.type === 'at'
+            ? tg.cond.datetime.replace('T', ' ')
+            : tg.cond.type === 'every'
+              ? `every ${tg.cond.interval}`
+              : '—'
 
   const running = !!status?.running
   return (
@@ -91,13 +102,20 @@ export const MuseView: React.FC<{
         </div>
       </div>
 
-      {/* 盯任务(muse_watch 规则):聊天里说「帮我盯着…」即可设定,这里只读+删除 */}
+      {/* 盯任务(Muse 唤醒式规则):只列无动作链/无执行者的老式规则;带动作的自动化归自动化 Space 统一管理 */}
       <div className="field">
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <Crosshair size={13} /> {t('special.muse.watches')}
+          <span style={{ flex: 1 }} />
+          <a
+            style={{ cursor: 'pointer', fontSize: 11.5, fontWeight: 400, color: 'var(--accent-ink, var(--accent))' }}
+            onClick={() => { useApp.getState().closeSettings(); setActiveSpace('automation') }}
+          >
+            {t('special.muse.watchesAll')}
+          </a>
         </label>
-        {triggers.length === 0 && <div className="hint">{t('special.muse.watchesHint')}</div>}
-        {triggers.map((tg) => (
+        {museTriggers.length === 0 && <div className="hint">{t('special.muse.watchesHint')}</div>}
+        {museTriggers.map((tg) => (
           <div key={tg.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>

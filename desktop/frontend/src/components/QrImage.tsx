@@ -37,7 +37,7 @@ export const QrImage: React.FC<{
   if (failed) {
     return (
       <div className={className} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, fontSize: 11, color: 'var(--danger)', textAlign: 'center', padding: 6 }}>
-        {t('special.wechat.qrFailed')}
+        {t('qr.failed')}
       </div>
     )
   }
@@ -48,5 +48,5 @@ export const QrImage: React.FC<{
       </div>
     )
   }
-  return <img className={className} src={src} alt={alt || t('settings.wechat.qrAlt')} width={size} height={size} />
+  return <img className={className} src={src} alt={alt || t('qr.alt')} width={size} height={size} />
 }

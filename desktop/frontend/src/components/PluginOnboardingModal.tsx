@@ -51,6 +51,7 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
       else if (effType === 'amadeus-plugin' && window.amadeus) {
         installAmadeusPlugins()
         await usePluginStore.getState().reloadExternal()
+        await loadUserSpaces() // 捆绑包内嵌 Space → 热注册(此前只有 market 路径补了这步,引导卡装的会漏)
       }
       setState('done')
     } catch (e: any) {

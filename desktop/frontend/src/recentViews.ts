@@ -1,13 +1,16 @@
-/** 「最近使用」精准视图登记:某篇笔记 / 某个会话的快捷跳转,喂给新建标签页启动器。
- *  只记带身份参数的主区视图(chat:sessionId / note:notePath),localStorage 持久化,LRU 去重。 */
+/** 「最近使用」精准视图登记:会话 / 笔记 / 各类文件 / 功能视图的快捷跳转,喂给新建标签页启动器。
+ *  记带身份的主区项(chat/note/文件路径/视图类型),localStorage 持久化,LRU 去重。 */
 import { create } from 'zustand'
 
 export interface RecentView {
-  /** 去重键:'chat:<sessionId>' | 'note:<notePath>' */
+  /** 去重键:'chat:<sessionId>' | 'note:<notePath>' | 'file:<viewType>:<path>' | 'view:<viewType>' */
   key: string
-  kind: 'chat' | 'note'
-  /** sessionId 或 vault 相对笔记路径 */
+  /** chat/note = 会话/笔记(专属重开逻辑);file = 带路径的文件视图(db/pdf/白板/图片/插件文件);view = 功能视图(日历/待办/收件箱/插件视图) */
+  kind: 'chat' | 'note' | 'file' | 'view'
+  /** sessionId / 笔记路径 / 文件路径 / 视图类型(kind=view) */
   id: string
+  /** kind=file|view 时的 LCL 视图类型(重开时按它分派门面 / openView) */
+  viewType?: string
   /** 记录时的标题快照;渲染端可用实时标题覆盖 */
   title: string
   ts: number

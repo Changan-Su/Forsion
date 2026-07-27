@@ -14,6 +14,7 @@ import { useTodoPrefs, prefsOf } from '../amadeus/store/todoPrefsStore'
 import { centeredRange, windowTotal, type TodoWindow } from './calendar/todoWindow'
 import { fmtStamp, startOfDay } from './calendar/dateUtils'
 import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
+import { OverlayAt } from '@lcl/engine'
 
 const MODE_LABEL: Record<TodoWindow, string> = { day: '日', '3day': '3日', week: '周', month: '月', custom: '自定义' }
 const ALL_MODES: TodoWindow[] = ['day', '3day', 'week', 'month', 'custom']
@@ -152,13 +153,13 @@ export function TodoListView() {
 
       {setPos && (
         <div className="amx-db-popwrap" onMouseDown={() => setSetPos(null)}>
-          <div className="amx-db-pop amx-todo-setpop" style={{ left: setPos.x, top: setPos.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <OverlayAt className="amx-db-pop amx-todo-setpop" x={setPos.x} y={setPos.y} onMouseDown={(e) => e.stopPropagation()}>
             <label className="amx-todo-setrow"><input type="checkbox" checked={prefs.hideDone} onChange={(e) => setPref(vault, { hideDone: e.target.checked })} /> 隐藏已完成</label>
             <div className="amx-db-pop-sec">排序</div>
             {([['name', '按字母'], ['undone-first', '未完成优先'], ['done-first', '已完成优先']] as const).map(([v, label]) => (
               <label key={v} className="amx-todo-setrow"><input type="radio" name="todo-sort" checked={prefs.sort === v} onChange={() => setPref(vault, { sort: v })} /> {label}</label>
             ))}
-          </div>
+          </OverlayAt>
         </div>
       )}
       {target && card && <EventCard ev={target} at={card.at} onClose={() => setCard(null)} />}

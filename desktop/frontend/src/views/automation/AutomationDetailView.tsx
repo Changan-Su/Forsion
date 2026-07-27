@@ -6,17 +6,49 @@
  *   Historian → special_agent_log 活动流;
  *   Muse 老路规则(无 agentSlug)→ 提示内容在「Muse 巡检」的会话里。
  */
-import React, { useEffect } from 'react'
-import { CalendarClock, History, Settings, Sparkles, Zap } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
-import { getHistorianActivity } from '../../services/backendService'
+import { deleteAgentScheduleEntry, fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
-import { condText, fmtTime, runnerName } from './lib'
+import { actionsText, condText, fmtTime, isFinishedTrigger } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
-import type { HistorianActivityItem } from '../../types'
+import type { AgentScheduleEntry, HistorianActivityItem, MuseTriggerInfo } from '../../types'
 import './automation.css'
+
+/** 试跑按钮:同一执行器立即执行动作链(旧式规则=起一次无人值守 run),结果行内展示。 */
+const FireButton: React.FC<{ tr: MuseTriggerInfo }> = ({ tr }) => {
+  const { t } = useI18n()
+  const cfg = useApp((s) => s.cfg)
+  const st = useAutomation()
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState('')
+  // Muse 唤醒类(含 legacy 显式 agentSlug:'muse')没有独立动作,引擎会 400——不给按钮
+  if (!tr.actions?.length && (!tr.agentSlug || tr.agentSlug === 'muse')) return null
+  const fire = async (): Promise<void> => {
+    setBusy(true)
+    setResult('')
+    try {
+      const r = await fireAutomationTrigger(cfg, tr.id)
+      setResult(r.ok ? t('automation.fire.ok', { status: r.status }) : t('automation.fire.fail', { status: r.status }))
+      st.bump()
+    } catch (e: any) {
+      setResult(t('automation.fire.fail', { status: String(e?.message || e).slice(0, 80) }))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <button className="btn ghost sm" disabled={busy} title={t('automation.fire.hint')} onClick={() => void fire()}>
+        <Play size={12} /> {busy ? '…' : t('automation.fire.btn')}
+      </button>
+      {result && <span className="auto-fire-result">{result}</span>}
+    </>
+  )
+}
 
 /** 某会话的只读消息列表(倒序会话尾部=最近一次运行;流式中的消息会随轮询/事件更新)。 */
 const SessionTranscript: React.FC<{ sessionId: string }> = ({ sessionId }) => {
@@ -67,6 +99,113 @@ const HistorianFeed: React.FC = () => {
           <div className="auto-msg-body">{it.detail}</div>
         </div>
       ))}
+    </div>
+  )
+}
+
+/** 日程条目内联编辑(name/date/repeat/prompt;date 文本含 /end 尾整串原样往返——datetime 控件
+ * 会静默改全天/定时语义,拆开编辑又会藏住区间尾,引擎校验兜格式)。date/prompt 必填:清空会让
+ * 条目退出自动化列表(列表只收 date&&prompt 条目),纯规划条目去 Calendar 建。 */
+const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: () => void }> = ({ slug, en, onDone }) => {
+  const { t } = useI18n()
+  const cfg = useApp((s) => s.cfg)
+  const st = useAutomation()
+  const [name, setName] = useState(en.name)
+  const [date, setDate] = useState(en.date)
+  const [repeat, setRepeat] = useState(en.repeat)
+  const [prompt, setPrompt] = useState(en.prompt)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async (): Promise<void> => {
+    setBusy(true)
+    setError('')
+    try {
+      await saveAgentScheduleEntry(cfg, slug, {
+        id: en.id, name: name.trim(), date: date.trim(),
+        repeat: repeat.trim(), auto: en.auto, prompt: prompt.trim(),
+        description: en.description, todo: en.todo,
+      })
+      st.bump()
+      onDone()
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="auto-card">
+      <div className="field">
+        <label>{t('automation.sched.name')}</label>
+        <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} />
+      </div>
+      <div className="field">
+        <label>{t('automation.sched.date')}</label>
+        <input type="text" value={date} placeholder="2026-08-01T09:00" onChange={(e) => setDate(e.target.value)} />
+        <div className="auto-hint">{t('automation.sched.dateHint')}</div>
+      </div>
+      <div className="field">
+        <label>{t('automation.sched.repeat')}</label>
+        <input type="text" value={repeat} placeholder="24h / 7d" onChange={(e) => setRepeat(e.target.value)} />
+        <div className="auto-hint">{t('automation.sched.repeatHint')}</div>
+      </div>
+      <div className="field">
+        <label>{t('automation.builder.prompt')}</label>
+        <textarea value={prompt} maxLength={500} onChange={(e) => setPrompt(e.target.value)} />
+      </div>
+      {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 12 }}>{error}</div>}
+      <div className="auto-builder-actions" style={{ marginTop: 4 }}>
+        <button className="btn ghost sm" onClick={onDone}>{t('common.cancel')}</button>
+        <button className="btn sm" disabled={busy || !name.trim() || !date.trim() || !prompt.trim()} onClick={() => void save()}>{busy ? '…' : t('common.save')}</button>
+      </div>
+    </div>
+  )
+}
+
+/** 日程条目详情(与规则详情同构:卡片+编辑/删除+触发记录)。key 按条目挂载,切换即重置编辑态。 */
+const ScheduleDetail: React.FC<{ slug: string; rowId: string }> = ({ slug, rowId }) => {
+  const { t } = useI18n()
+  const cfg = useApp((s) => s.cfg)
+  const st = useAutomation()
+  const [editing, setEditing] = useState(false)
+  const sched = st.schedules.find((s) => s.slug === slug)
+  const en = sched?.entries.find((e) => e.id === rowId)
+  if (!sched || !en) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
+  const sessionId = sessionForTrigger(st.autoSessions, `sched:${slug}:${rowId}`)
+  const remove = async (): Promise<void> => {
+    try {
+      await deleteAgentScheduleEntry(cfg, slug, rowId)
+      st.bump()
+      st.setSel(null)
+    } catch (e: any) {
+      useApp.getState().toast(String(e?.message || e), true)
+    }
+  }
+  return (
+    <div className="auto-detail">
+      {editing ? (
+        <ScheduleEditor slug={slug} en={en} onDone={() => setEditing(false)} />
+      ) : (
+        <div className="auto-card">
+          <div className="auto-card-head">
+            <CalendarClock size={17} />
+            <div className="auto-card-title">{en.name}</div>
+            <button className="btn ghost sm" onClick={() => setEditing(true)}><Pencil size={12} /> {t('common.edit')}</button>
+            <button className="btn ghost sm" title={t('common.delete')} onClick={() => void remove()}><Trash2 size={12} /></button>
+          </div>
+          <div className="auto-facts">
+            <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{en.date.replace('/', ' → ').replace(/T/g, ' ')}{en.repeat ? ` · ${t('automation.schedule.every', { ivl: en.repeat })}` : ` · ${t('automation.schedule.once')}`}</span>
+            <span className="auto-fact"><b>{t('automation.fact.runner')}</b>{sched.name}</span>
+            {en.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{en.prompt.slice(0, 80)}</span>}
+            {en.description && <span className="auto-fact"><b>{t('automation.fact.desc')}</b>{en.description.slice(0, 80)}</span>}
+            <span className="auto-fact"><b>{t('automation.fact.lastRun')}</b>{fmtTime(en.lastRun || null)}</span>
+          </div>
+        </div>
+      )}
+      <div className="auto-transcript-head">{t('automation.detail.latest')}</div>
+      {sessionId
+        ? <SessionTranscript sessionId={sessionId} />
+        : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>}
     </div>
   )
 }
@@ -138,54 +277,34 @@ export const AutomationDetailView: React.FC = () => {
   }
 
   if (sel.kind === 'schedule') {
-    const sched = st.schedules.find((s) => s.slug === sel.slug)
-    const en = sched?.entries.find((e) => e.id === sel.rowId)
-    if (!sched || !en) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
-    const sessionId = sessionForTrigger(st.autoSessions, `sched:${sel.slug}:${sel.rowId}`)
-    return (
-      <div className="auto-detail">
-        <div className="auto-card">
-          <div className="auto-card-head">
-            <CalendarClock size={17} />
-            <div className="auto-card-title">{en.name}</div>
-          </div>
-          <div className="auto-facts">
-            <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{en.date.replace('/', ' → ').replace(/T/g, ' ')}{en.repeat ? ` · ${t('automation.schedule.every', { ivl: en.repeat })}` : ` · ${t('automation.schedule.once')}`}</span>
-            <span className="auto-fact"><b>{t('automation.fact.runner')}</b>{sched.name}</span>
-            {en.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{en.prompt.slice(0, 80)}</span>}
-            {en.description && <span className="auto-fact"><b>{t('automation.fact.desc')}</b>{en.description.slice(0, 80)}</span>}
-            <span className="auto-fact"><b>{t('automation.fact.lastRun')}</b>{fmtTime(en.lastRun || null)}</span>
-          </div>
-        </div>
-        <div className="auto-transcript-head">{t('automation.detail.latest')}</div>
-        {sessionId
-          ? <SessionTranscript sessionId={sessionId} />
-          : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>}
-      </div>
-    )
+    return <ScheduleDetail key={`${sel.slug}:${sel.rowId}`} slug={sel.slug} rowId={sel.rowId} />
   }
 
   const tr = st.triggers.find((x) => x.id === sel.triggerId)
   if (!tr) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
   const sessionId = sessionForTrigger(st.autoSessions, tr.id)
+  const hasOwnAction = !!tr.actions?.length || (!!tr.agentSlug && tr.agentSlug !== 'muse')
   return (
     <div className="auto-detail">
       <div className="auto-card">
         <div className="auto-card-head">
           <Zap size={17} />
           <div className="auto-card-title">{tr.desc}</div>
+          <FireButton tr={tr} />
           <button className="btn ghost sm" onClick={() => st.openBuilder(tr.id)}>{t('common.edit')}</button>
         </div>
         <div className="auto-facts">
+          {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}
           <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{condText(t, tr.cond)}</span>
-          <span className="auto-fact"><b>{t('automation.fact.runner')}</b>{runnerName(agentDefs, tr.agentSlug)}</span>
+          <span className="auto-fact"><b>{t('automation.fact.actions')}</b>{actionsText(t, agentDefs, tr)}</span>
           {tr.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{tr.prompt.slice(0, 80)}</span>}
-          <span className="auto-fact"><b>{t('automation.fact.cooldown')}</b>{tr.cooldownHours}h</span>
+          {tr.cooldownHours > 0 && <span className="auto-fact"><b>{t('automation.fact.cooldown')}</b>{tr.cooldownHours}h</span>}
           <span className="auto-fact"><b>{t('automation.fact.lastRun')}</b>{fmtTime(tr.lastFiredAt)}</span>
+          {tr.enabled && tr.nextRunAt && <span className="auto-fact"><b>{t('automation.fact.nextRun')}</b>{fmtTime(tr.nextRunAt)}</span>}
         </div>
       </div>
       <div className="auto-transcript-head">{t('automation.detail.latest')}</div>
-      {tr.agentSlug
+      {hasOwnAction
         ? sessionId
           ? <SessionTranscript sessionId={sessionId} />
           : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>

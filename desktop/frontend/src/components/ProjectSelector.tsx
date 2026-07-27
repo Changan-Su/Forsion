@@ -30,7 +30,7 @@ export const ProjectSelector: React.FC<{
   }, [open])
 
   // 仅在工作区(排除微信);选中项缺省取 value,再退回常驻系统本地区(Tangu 默认),再退回首个。
-  const pickable = workspaces.filter((w) => w.kind !== 'wechat')
+  const pickable = workspaces.filter((w) => w.kind !== 'channel')
   const selected = pickable.find((w) => w.key === value)
     || pickable.find((w) => w.kind === 'local' && w.system)
     || pickable[0] || null

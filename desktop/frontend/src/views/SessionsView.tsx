@@ -1,5 +1,5 @@
 /** 左侧栏视图:复用真实 <Sidebar/>,props 由 appStore 映射(对齐 App.tsx 的 sidebarEl)。
- *  特殊视图入口(记忆/后台智能体/工作区详情/微信)→ openSpecial 开主区 leaf。 */
+ *  特殊视图入口(工作区详情)→ openSpecial 开主区 leaf。 */
 import { useMemo } from 'react'
 import { SidebarPane } from './chat2/SidebarPane'
 import { useApp } from '../stores/appStore'
@@ -19,8 +19,6 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
     unread: state.unread,
     cfg: state.cfg,
     modelsResp: state.modelsResp,
-    desktopConfig: state.desktopConfig,
-    activeSpecial: state.activeSpecial,
     setActiveId: state.setActiveId,
     setNewChatWs: state.setNewChatWs,
     setNewChatCfg: state.setNewChatCfg,
@@ -41,7 +39,6 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
   })))
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
-  const wechatEnabled = !!window.tangu?.backendStatus && s.desktopConfig?.wechatEnabled !== false
 
   // 侧过滤:会话的云/本地归属 = project_path 有无(appStore 同判据);工作区按 kind。
   const inSide = (p: string | null | undefined): boolean => (sideFilter === 'cloud' ? !p : !!p)
@@ -69,9 +66,6 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       activeSession={activeSession}
       onSelect={(id) => openSession(id)}
       showSpecial={true} // 新对话 = createSession HTTP,云 web(无本地后端)同样可用,不 gate backendStatus
-      wechatEnabled={wechatEnabled}
-      specialView={s.activeSpecial}
-      onOpenSpecial={(v) => openSpecial(v)}
       onNewChat={() => {
         s.setActiveId(null); s.setNewChatWs(null); s.setNewChatCfg(() => ({})); s.setNewChatModel(null)
         useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')

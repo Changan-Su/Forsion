@@ -25,7 +25,7 @@ describe('autoWorkspaceMode', () => {
   })
   it('⚠️无硬规则的主视图 → 落本 Space 默认档(不再是「维持上一模式」)', () => {
     expect(autoWorkspaceMode('left', 'launcher', 'notes')).toBe('notes') // Amadeus Space
-    expect(autoWorkspaceMode('left', 'wechat', 'sessions')).toBe('sessions') // Tangu Space
+    expect(autoWorkspaceMode('left', 'agents-detail', 'sessions')).toBe('sessions') // Tangu Space
     expect(autoWorkspaceMode('left', null, 'notes')).toBe('notes') // 主区空着也算
   })
   it('Space 默认档缺省 = sessions(没点名的 Space 沿用现状)', () => {

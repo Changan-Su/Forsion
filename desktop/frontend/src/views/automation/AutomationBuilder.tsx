@@ -1,59 +1,180 @@
 /**
- * 可视化新建/编辑自动化(Dify 简约版):触发 → 对象 → 动作 三张卡竖排 + CSS 连接线,
- * 与 MuseTrigger schema 一一对应(线性链,刻意不做自由画布——等多步/分支编排再升级)。
- * 保存 = POST /agent/special/muse/triggers upsert(校验在引擎端与 muse_watch 工具同源)。
+ * 可视化新建/编辑自动化(Dify 借鉴的是执行契约与表单化配置,不是画布):
+ * 触发卡(定时统一入口:每天/一次/间隔 + 事件目录 datalist + 文件达标)→ 可增删排序的动作步骤卡
+ * (通知/跑 Agent/调工具;工具参数表单按目录 JSON schema 自动生成)→ 底部护栏行。
+ * 竖排线性链 + CSS 连接线,刻意不做自由画布(分支编排出现再升级)。
+ * 0 个步骤 = 旧语义「唤醒 Muse 整理为 TODO」(保存 actions:null);编辑旧式 agentSlug 规则时
+ * 自动转成一个 agent_run 步骤(保存即迁移到动作链模型)。
+ * 保存 = POST /agent/special/muse/triggers upsert(校验在引擎端与 manage_automation 工具同源;
+ * tool_call 只有这条 UI 通道能建=保存即人工预批)。
  */
 import React, { useMemo, useState } from 'react'
-import { Bot, Crosshair, Workflow, Zap } from 'lucide-react'
+import { ArrowDown, ArrowUp, Bell, Bot, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation } from '../../stores/automationStore'
 import { saveMuseTrigger } from '../../services/backendService'
 import { useI18n } from '../../i18n'
-import type { MuseTriggerInfo } from '../../types'
+import { BUILTIN_EVENTS, isFinishedTrigger, parseLocalDatetime } from './lib'
+import { listPluginAutomationEvents } from '../../amadeus/plugins/pluginStore'
+import type { AutomationActionCatalogItem, AutomationActionSpec, MuseTriggerInfo } from '../../types'
 
-type CondType = 'daily_at' | 'event_seen' | 'file_chars_gte'
+type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte'
+type TimerMode = 'daily_at' | 'at' | 'every'
+
+interface StepDraft {
+  key: number
+  type: 'notify' | 'agent_run' | 'tool_call'
+  title: string
+  body: string
+  agentSlug: string
+  prompt: string
+  tool: string
+  /** 工具参数原始输入(全字符串;boolean 存 'true'/'')。 */
+  argValues: Record<string, string>
+}
+
+let stepKey = 1
+const blankStep = (type: StepDraft['type']): StepDraft =>
+  ({ key: stepKey++, type, title: '', body: '', agentSlug: '', prompt: '', tool: '', argValues: {} })
+
+/** editing → 表单初值(旧式 agentSlug 规则转成一个 agent_run 步骤)。 */
+function stepsFrom(editing?: MuseTriggerInfo): StepDraft[] {
+  if (editing?.actions?.length) {
+    return editing.actions.map((a) => ({
+      ...blankStep(a.type),
+      title: a.type === 'notify' ? a.title : '',
+      body: a.type === 'notify' ? a.body || '' : '',
+      agentSlug: a.type === 'agent_run' ? a.agentSlug : '',
+      prompt: a.type === 'agent_run' ? a.prompt : '',
+      tool: a.type === 'tool_call' ? a.tool : '',
+      argValues: a.type === 'tool_call'
+        ? Object.fromEntries(Object.entries(a.args || {}).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))
+        : {},
+    }))
+  }
+  if (editing?.agentSlug) return [{ ...blankStep('agent_run'), agentSlug: editing.agentSlug, prompt: editing.prompt || '' }]
+  return []
+}
+
+/** 本地 datetime-local 初值:整点下一小时。 */
+function defaultDatetime(): string {
+  const d = new Date(Date.now() + 3600_000)
+  d.setMinutes(0, 0, 0)
+  const p = (x: number): string => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:00`
+}
+
+/** 参数原始输入 → 工具 args(按 schema 类型转换;空值省略;非原语字段尝试 JSON)。 */
+function buildToolArgs(cat: AutomationActionCatalogItem | undefined, vals: Record<string, string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  const props = cat?.parameters?.properties || {}
+  for (const [k, raw] of Object.entries(vals)) {
+    if (raw === undefined || raw === '') continue
+    const ty = props[k]?.type
+    if (ty === 'number') out[k] = Number(raw)
+    else if (ty === 'boolean') out[k] = raw === 'true'
+    else if (ty === 'string' || ty === undefined) out[k] = raw
+    else { try { out[k] = JSON.parse(raw) } catch { out[k] = raw } }
+  }
+  return out
+}
 
 export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ editing }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const agentDefs = useApp((s) => s.agentDefs)
   const st = useAutomation()
+  const catalog = st.actionsCatalog
 
   const [desc, setDesc] = useState(editing?.desc || '')
-  const [condType, setCondType] = useState<CondType>(editing?.cond.type || 'daily_at')
-  const [time, setTime] = useState(editing?.cond.type === 'daily_at' ? editing.cond.time : '09:00')
-  const [match, setMatch] = useState(editing?.cond.type === 'event_seen' ? editing.cond.match : '')
-  const [path, setPath] = useState(editing?.cond.type === 'file_chars_gte' ? editing.cond.path : '')
-  const [n, setN] = useState(editing?.cond.type === 'file_chars_gte' ? String(editing.cond.n) : '100')
-  const [agentSlug, setAgentSlug] = useState(editing?.agentSlug || '')
-  const [prompt, setPrompt] = useState(editing?.prompt || '')
-  const [cooldown, setCooldown] = useState(String(editing?.cooldownHours ?? 24))
+  const initCond = editing?.cond
+  const [kind, setKind] = useState<TriggerKind>(
+    !initCond ? 'timer'
+    : initCond.type === 'event_seen' ? 'event_seen'
+    : initCond.type === 'file_chars_gte' ? 'file_chars_gte'
+    : 'timer',
+  )
+  const [timerMode, setTimerMode] = useState<TimerMode>(
+    initCond?.type === 'at' ? 'at' : initCond?.type === 'every' ? 'every' : 'daily_at',
+  )
+  const [time, setTime] = useState(initCond?.type === 'daily_at' ? initCond.time : '09:00')
+  // 已结束的一次性规则(时刻过+已停用,与列表归档同判):重置为下一整点,编辑=改期重开(保存强制 enabled)。
+  // 仅"时刻刚过但仍 enabled"(引擎 tick 未至,提醒还欠着)不算——那时重置时间会静默吞掉待补发的提醒。
+  const expiredAt = !!editing && isFinishedTrigger(editing)
+  const [datetime, setDatetime] = useState(initCond?.type === 'at' && !expiredAt ? initCond.datetime.replace(' ', 'T') : defaultDatetime())
+  const initIvl = initCond?.type === 'every' ? /^(\d+)([mhd])$/.exec(initCond.interval) : null
+  const [ivlN, setIvlN] = useState(initIvl ? initIvl[1] : '1')
+  const [ivlUnit, setIvlUnit] = useState<'m' | 'h' | 'd'>(initIvl ? (initIvl[2] as 'm' | 'h' | 'd') : 'h')
+  const [match, setMatch] = useState(initCond?.type === 'event_seen' ? initCond.match : '')
+  const [path, setPath] = useState(initCond?.type === 'file_chars_gte' ? initCond.path : '')
+  const [n, setN] = useState(initCond?.type === 'file_chars_gte' ? String(initCond.n) : '100')
+  const [steps, setSteps] = useState<StepDraft[]>(() => stepsFrom(editing))
+  const [musePrompt, setMusePrompt] = useState(editing && !editing.actions?.length && !editing.agentSlug ? editing.prompt || '' : '')
+  const [cooldown, setCooldown] = useState(String(editing?.cooldownHours || 24))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const hasAgentStep = steps.some((s) => s.type === 'agent_run')
+  const patchStep = (key: number, patch: Partial<StepDraft>): void =>
+    setSteps((ss) => ss.map((s) => (s.key === key ? { ...s, ...patch } : s)))
+  const moveStep = (i: number, dir: -1 | 1): void =>
+    setSteps((ss) => {
+      const j = i + dir
+      if (j < 0 || j >= ss.length) return ss
+      const next = [...ss]
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+
+  const stepValid = (s: StepDraft): boolean => {
+    if (s.type === 'notify') return !!s.title.trim()
+    if (s.type === 'agent_run') return !!s.agentSlug && !!s.prompt.trim()
+    const cat = catalog.find((c) => c.name === s.tool)
+    if (!cat) return false
+    return (cat.parameters.required || []).every((k) => (s.argValues[k] || '').trim() !== '')
+  }
+
   const canSave = useMemo(() => {
     if (!desc.trim()) return false
-    if (condType === 'daily_at') return /^\d{1,2}:\d{2}$/.test(time)
-    if (condType === 'event_seen') return !!match.trim()
-    return !!path.trim() && Number(n) > 0
-  }, [desc, condType, time, match, path, n])
+    if (kind === 'timer') {
+      if (timerMode === 'daily_at' && !/^\d{1,2}:\d{2}$/.test(time)) return false
+      if (timerMode === 'at' && !datetime) return false
+      if (timerMode === 'every' && !(Number(ivlN) > 0)) return false
+    }
+    if (kind === 'event_seen' && !match.trim()) return false
+    if (kind === 'file_chars_gte' && (!path.trim() || !(Number(n) > 0))) return false
+    return steps.every(stepValid)
+  }, [desc, kind, timerMode, time, datetime, ivlN, match, path, n, steps, catalog])
 
   const save = async (): Promise<void> => {
+    const condType = kind === 'timer' ? timerMode : kind
+    // 预检:编辑器开久了 at 时刻悄悄过期(mount 时的 expiredAt 不会重算)——引擎同口径(5min 容忍)本地先拒
+    if (condType === 'at' && (parseLocalDatetime(datetime)?.getTime() ?? 0) < Date.now() - 5 * 60_000) {
+      setError(t('automation.builder.atPast'))
+      return
+    }
     setBusy(true)
     setError('')
+    const actions: AutomationActionSpec[] = steps.map((s) =>
+      s.type === 'notify' ? { type: 'notify', title: s.title.trim(), body: s.body.trim() || undefined }
+      : s.type === 'agent_run' ? { type: 'agent_run', agentSlug: s.agentSlug, prompt: s.prompt.trim() }
+      : { type: 'tool_call', tool: s.tool, args: buildToolArgs(catalog.find((c) => c.name === s.tool), s.argValues) })
     try {
       await saveMuseTrigger(cfg, {
         id: editing?.id,
         desc: desc.trim(),
         cond_type: condType,
         time: condType === 'daily_at' ? time : undefined,
+        datetime: condType === 'at' ? datetime : undefined,
+        interval: condType === 'every' ? `${Math.floor(Number(ivlN))}${ivlUnit}` : undefined,
         match: condType === 'event_seen' ? match.trim() : undefined,
         path: condType === 'file_chars_gte' ? path.trim() : undefined,
         n: condType === 'file_chars_gte' ? Number(n) : undefined,
-        prompt: prompt.trim() || undefined,
-        cooldown_hours: Number(cooldown) > 0 ? Number(cooldown) : undefined,
-        agent_slug: agentSlug || undefined,
-        enabled: editing?.enabled ?? true,
+        prompt: steps.length ? undefined : musePrompt.trim() || undefined,
+        cooldown_hours: kind === 'timer' ? undefined : Number(cooldown) > 0 ? Number(cooldown) : undefined,
+        // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
+        actions: steps.length ? actions : null,
+        enabled: expiredAt ? true : editing?.enabled ?? true,
       })
       st.bump()
       st.closeBuilder()
@@ -64,6 +185,9 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
       setBusy(false)
     }
   }
+
+  const stepIcon = (ty: StepDraft['type']): React.ReactNode =>
+    ty === 'notify' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} /> : <Wrench size={14} />
 
   return (
     <div className="auto-builder">
@@ -80,28 +204,59 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
         <div className="field">
           <label>{t('automation.builder.condType')}</label>
           <div className="auto-seg">
-            <button className={condType === 'daily_at' ? 'active' : ''} onClick={() => setCondType('daily_at')}>{t('automation.builder.condDaily')}</button>
-            <button className={condType === 'event_seen' ? 'active' : ''} onClick={() => setCondType('event_seen')}>{t('automation.builder.condEvent')}</button>
-            <button className={condType === 'file_chars_gte' ? 'active' : ''} onClick={() => setCondType('file_chars_gte')}>{t('automation.builder.condFile')}</button>
+            <button className={kind === 'timer' ? 'active' : ''} onClick={() => setKind('timer')}>{t('automation.builder.condTimer')}</button>
+            <button className={kind === 'event_seen' ? 'active' : ''} onClick={() => setKind('event_seen')}>{t('automation.builder.condEvent')}</button>
+            <button className={kind === 'file_chars_gte' ? 'active' : ''} onClick={() => setKind('file_chars_gte')}>{t('automation.builder.condFile')}</button>
           </div>
         </div>
-      </div>
-
-      <div className="auto-node">
-        <div className="auto-node-head"><span className="auto-ic"><Crosshair size={14} /></span>{t('automation.builder.target')}</div>
-        {condType === 'daily_at' && (
-          <div className="field">
-            <label>{t('automation.builder.time')}</label>
-            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
-          </div>
+        {kind === 'timer' && (
+          <>
+            <div className="field">
+              <label>{t('automation.builder.timerMode')}</label>
+              <div className="auto-seg">
+                <button className={timerMode === 'daily_at' ? 'active' : ''} onClick={() => setTimerMode('daily_at')}>{t('automation.builder.timerDaily')}</button>
+                <button className={timerMode === 'at' ? 'active' : ''} onClick={() => setTimerMode('at')}>{t('automation.builder.timerOnce')}</button>
+                <button className={timerMode === 'every' ? 'active' : ''} onClick={() => setTimerMode('every')}>{t('automation.builder.timerEvery')}</button>
+              </div>
+            </div>
+            {timerMode === 'daily_at' && (
+              <div className="field"><label>{t('automation.builder.time')}</label><input type="time" value={time} onChange={(e) => setTime(e.target.value)} /></div>
+            )}
+            {timerMode === 'at' && (
+              <div className="field">
+                <label>{t('automation.builder.datetime')}</label>
+                <input type="datetime-local" value={datetime} onChange={(e) => setDatetime(e.target.value)} />
+                <div className="auto-hint">{expiredAt ? t('automation.builder.expiredReset') : t('automation.builder.onceHint')}</div>
+              </div>
+            )}
+            {timerMode === 'every' && (
+              <div className="field">
+                <label>{t('automation.builder.interval')}</label>
+                <div className="auto-inline">
+                  <input type="number" value={ivlN} min={1} style={{ width: 90 }} onChange={(e) => setIvlN(e.target.value)} />
+                  <select value={ivlUnit} onChange={(e) => setIvlUnit(e.target.value as 'm' | 'h' | 'd')}>
+                    <option value="m">{t('automation.builder.unitM')}</option>
+                    <option value="h">{t('automation.builder.unitH')}</option>
+                    <option value="d">{t('automation.builder.unitD')}</option>
+                  </select>
+                </div>
+                <div className="auto-hint">{t('automation.builder.everyHint')}</div>
+              </div>
+            )}
+          </>
         )}
-        {condType === 'event_seen' && (
+        {kind === 'event_seen' && (
           <div className="field">
             <label>{t('automation.builder.match')}</label>
-            <input type="text" value={match} maxLength={120} placeholder={t('automation.builder.matchPh')} onChange={(e) => setMatch(e.target.value)} />
+            <input type="text" list="auto-event-catalog" value={match} maxLength={120} placeholder={t('automation.builder.matchPh')} onChange={(e) => setMatch(e.target.value)} />
+            <datalist id="auto-event-catalog">
+              {BUILTIN_EVENTS.map((ev) => <option key={ev} value={ev} />)}
+              {listPluginAutomationEvents().map((ev) => <option key={ev.name} value={ev.name} label={ev.label} />)}
+            </datalist>
+            <div className="auto-hint">{t('automation.builder.matchHint')}</div>
           </div>
         )}
-        {condType === 'file_chars_gte' && (
+        {kind === 'file_chars_gte' && (
           <>
             <div className="field">
               <label>{t('automation.builder.path')}</label>
@@ -115,29 +270,116 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
         )}
       </div>
 
-      <div className="auto-node">
-        <div className="auto-node-head"><span className="auto-ic"><Bot size={14} /></span>{t('automation.builder.action')}</div>
-        <div className="field">
-          <label>{t('automation.builder.runner')}</label>
-          <select value={agentSlug} onChange={(e) => setAgentSlug(e.target.value)}>
-            <option value="">{t('automation.builder.runnerMuse')}</option>
-            {agentDefs.filter((d) => d.slug !== 'muse').map((d) => (
-              <option key={d.slug} value={d.slug}>{d.name}</option>
-            ))}
-          </select>
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
-            {agentSlug ? t('automation.builder.runnerAgentHint') : t('automation.builder.runnerMuseHint')}
+      {steps.map((s, i) => {
+        const cat = s.type === 'tool_call' ? catalog.find((c) => c.name === s.tool) : undefined
+        return (
+          <div className="auto-node" key={s.key}>
+            <div className="auto-node-head">
+              <span className="auto-ic">{stepIcon(s.type)}</span>
+              {t('automation.builder.stepN', { n: String(i + 1) })} · {t(`automation.step.${s.type}`)}
+              <span className="auto-step-tools">
+                <button className="icon-btn" disabled={i === 0} title={t('automation.builder.moveUp')} onClick={() => moveStep(i, -1)}><ArrowUp size={12} /></button>
+                <button className="icon-btn" disabled={i === steps.length - 1} title={t('automation.builder.moveDown')} onClick={() => moveStep(i, 1)}><ArrowDown size={12} /></button>
+                <button className="icon-btn" title={t('common.delete')} onClick={() => setSteps((ss) => ss.filter((x) => x.key !== s.key))}><Trash2 size={12} /></button>
+              </span>
+            </div>
+            {s.type === 'notify' && (
+              <>
+                <div className="field">
+                  <label>{t('automation.builder.notifyTitle')}</label>
+                  <input type="text" value={s.title} maxLength={200} placeholder={t('automation.builder.notifyTitlePh')} onChange={(e) => patchStep(s.key, { title: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label>{t('automation.builder.notifyBody')}</label>
+                  <textarea value={s.body} maxLength={4000} onChange={(e) => patchStep(s.key, { body: e.target.value })} />
+                </div>
+                <div className="auto-hint">{t('automation.builder.notifyHint')}</div>
+              </>
+            )}
+            {s.type === 'agent_run' && (
+              <>
+                <div className="field">
+                  <label>{t('automation.builder.runner')}</label>
+                  <select value={s.agentSlug} onChange={(e) => patchStep(s.key, { agentSlug: e.target.value })}>
+                    <option value="">{t('automation.builder.runnerPick')}</option>
+                    {agentDefs.filter((d) => d.slug !== 'muse').map((d) => (
+                      <option key={d.slug} value={d.slug}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>{t('automation.builder.prompt')}</label>
+                  <textarea value={s.prompt} maxLength={500} placeholder={t('automation.builder.promptPh')} onChange={(e) => patchStep(s.key, { prompt: e.target.value })} />
+                </div>
+              </>
+            )}
+            {s.type === 'tool_call' && (
+              <>
+                <div className="field">
+                  <label>{t('automation.builder.tool')}</label>
+                  <select value={s.tool} onChange={(e) => patchStep(s.key, { tool: e.target.value, argValues: {} })}>
+                    <option value="">{t('automation.builder.toolPick')}</option>
+                    {catalog.map((c) => (
+                      <option key={c.name} value={c.name}>{c.name}{c.dangerous ? ' ⚠' : ''}</option>
+                    ))}
+                  </select>
+                  {cat && <div className="auto-hint">{cat.description}{cat.dangerous ? ` · ${t('automation.builder.dangerous')}` : ''}</div>}
+                </div>
+                {cat && Object.entries(cat.parameters.properties || {}).map(([pname, p]) => {
+                  const required = (cat.parameters.required || []).includes(pname)
+                  const label = `${pname}${required ? ' *' : ''}`
+                  const val = s.argValues[pname] || ''
+                  const setVal = (v: string): void => patchStep(s.key, { argValues: { ...s.argValues, [pname]: v } })
+                  return (
+                    <div className="field" key={pname}>
+                      <label title={p.description || ''}>{label}</label>
+                      {p.enum?.length ? (
+                        <select value={val} onChange={(e) => setVal(e.target.value)}>
+                          <option value=""></option>
+                          {p.enum.map((v) => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      ) : p.type === 'boolean' ? (
+                        <label className="auto-check"><input type="checkbox" checked={val === 'true'} onChange={(e) => setVal(e.target.checked ? 'true' : '')} /> {p.description || ''}</label>
+                      ) : p.type === 'number' ? (
+                        <input type="number" value={val} onChange={(e) => setVal(e.target.value)} />
+                      ) : p.type === 'string' ? (
+                        <textarea rows={2} value={val} placeholder={p.description || ''} onChange={(e) => setVal(e.target.value)} />
+                      ) : (
+                        <textarea rows={2} value={val} placeholder={`JSON — ${p.description || ''}`} onChange={(e) => setVal(e.target.value)} />
+                      )}
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        )
+      })}
+
+      {steps.length === 0 && (
+        <div className="auto-node auto-node-muse">
+          <div className="auto-node-head"><span className="auto-ic"><Sparkles size={14} /></span>{t('automation.builder.museFallback')}</div>
+          <div className="auto-hint">{t('automation.builder.museFallbackHint')}</div>
+          <div className="field">
+            <label>{t('automation.builder.prompt')}</label>
+            <textarea value={musePrompt} maxLength={500} placeholder={t('automation.builder.promptPh')} onChange={(e) => setMusePrompt(e.target.value)} />
           </div>
         </div>
-        <div className="field">
-          <label>{t('automation.builder.prompt')}</label>
-          <textarea value={prompt} maxLength={500} placeholder={t('automation.builder.promptPh')} onChange={(e) => setPrompt(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>{t('automation.builder.cooldown')}</label>
-          <input type="number" value={cooldown} min={agentSlug ? 1 : 0.1} step="1" onChange={(e) => setCooldown(e.target.value)} />
-        </div>
+      )}
+
+      <div className="auto-addstep">
+        <button onClick={() => setSteps((ss) => [...ss, blankStep('notify')])}><Bell size={12} /> {t('automation.step.notify')}</button>
+        <button onClick={() => setSteps((ss) => [...ss, blankStep('agent_run')])}><Bot size={12} /> {t('automation.step.agent_run')}</button>
+        <button disabled={!catalog.length} title={catalog.length ? '' : t('automation.builder.toolCatalogEmpty')} onClick={() => setSteps((ss) => [...ss, blankStep('tool_call')])}><Wrench size={12} /> {t('automation.step.tool_call')}</button>
       </div>
+
+      {kind !== 'timer' && (
+        <div className="auto-guard">
+          <label>{t('automation.builder.cooldown')}</label>
+          <input type="number" value={cooldown} min={hasAgentStep ? 1 : 0.25} step="1" onChange={(e) => setCooldown(e.target.value)} />
+          <span className="auto-hint">{hasAgentStep ? t('automation.builder.cooldownAgentHint') : t('automation.builder.cooldownHint')}</span>
+        </div>
+      )}
 
       {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 12, marginTop: 12 }}>{error}</div>}
       <div className="auto-builder-actions">

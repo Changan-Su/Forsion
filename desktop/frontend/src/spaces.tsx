@@ -1,7 +1,7 @@
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
-import { Bot, Inbox, NotebookText, CalendarDays, Code2, Workflow } from 'lucide-react'
+import { Bot, Inbox, NotebookText, CalendarDays, Code2, Workflow, Rocket } from 'lucide-react'
 import { registerSpace, addRibbonIcon, useSpaceStore, setActiveSpace, useWorkspace, deleteNamedLayout, clearLayout, label } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { useApp } from './stores/appStore'
@@ -11,6 +11,12 @@ import { installAmadeusCommands } from './amadeusCommands'
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
+
+/** 「启动时进入的 Space」设置(设置 → Spaces)。值 = Space id | LAST_EXIT_SPACE;缺省(未设)= PRODUCT.defaultSpace。
+ *  固定 Space 时冷启动进其干净默认布局(修复重启被上次退出布局覆盖);选 LAST_EXIT_SPACE 保留「恢复上次退出布局」旧行为。
+ *  实际启动决策见 bootstrapEngine.installEngine(仅主窗读取)。 */
+export const DEFAULT_SPACE_KEY = 'forsion_default_space'
+export const LAST_EXIT_SPACE = '__last__'
 
 /** Space 的 ribbon 顶部图标:复用 .rb-btn,当前空间加 .on 高亮(订阅 activeSpaceId 自动刷新)。
  *  导出供用户自定义 Space(userSpaces.tsx)复用同一观感。 */
@@ -186,6 +192,19 @@ const automationSpace: SpaceDefinition = {
   },
 }
 
+/** Public Space:管理已发布网站(Forsion Connect)+ 已公开发布/协作共享的笔记。单视图铺满主区。 */
+const PUBLIC_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = { left: [], right: [] }
+const publicSpace: SpaceDefinition = {
+  id: 'public',
+  name: () => app().tr('space.public'),
+  icon: Rocket,
+  sidebarDefaults: PUBLIC_SIDE_VIEWS,
+  build() {
+    ws().setSidebarDefaults(PUBLIC_SIDE_VIEWS)
+    ws().openView('public-view', {}, 'main')
+  },
+}
+
 /** 注册序 = ribbon 顶部默认序(在商店之上)。在 installEngine 内、商店图标注册之前调用。
  *  Amadeus 需 electron 的 window.amadeus 文件系统桥;Tangu Web(无 host)下不注册该 Space。
  *  2026-07-04 起对所有桌面用户开放(此前仅开发者模式 localStorage forsion_tangu_dev_mode='1');
@@ -203,6 +222,8 @@ const SPACES: SpaceDefinition[] = [
   ...(PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
   ...(PRODUCT.spaces.includes('automation') && window.tangu?.backendStatus ? [automationSpace] : []),
+  // Public:管理已发布网站/笔记。需 Connect 发布桥或 Amadeus 协作桥其一(Tangu Web 两者皆无 → 不注册)。
+  ...(PRODUCT.spaces.includes('public') && (window.tangu?.connectPublish || window.amadeusCollab) ? [publicSpace] : []),
 ]
 
 export function registerSpaces(): void {

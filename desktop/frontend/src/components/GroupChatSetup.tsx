@@ -6,7 +6,8 @@
 import React, { useMemo, useState } from 'react'
 import { Users, Check, X, Plus, Pencil, Trash2, UserPlus } from 'lucide-react'
 import { useI18n } from '../i18n'
-import type { ModelInfo, NormalAgentDef } from '../types'
+import { THINKING_LEVELS } from '../types'
+import type { ModelInfo, NormalAgentDef, ThinkingLevel } from '../types'
 
 type Intensity = 'relaxed' | 'medium' | 'intense' | 'custom'
 const PRESET_ROUNDS: Record<Exclude<Intensity, 'custom'>, number> = { relaxed: 3, medium: 7, intense: 15 }
@@ -24,9 +25,9 @@ type TempDraft = {
   description: string
   model: string
   systemPrompt: string
-  thinkingLevel: '' | 'off' | 'low' | 'medium' | 'high'
+  thinkingLevel: '' | ThinkingLevel
   maxIterations: string
-  approvalMode: '' | 'readonly' | 'auto-edit' | 'full-auto'
+  approvalMode: '' | 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
 }
 
 const emptyDraft = (): TempDraft => ({ name: '', description: '', model: '', systemPrompt: '', thinkingLevel: '', maxIterations: '', approvalMode: '' })
@@ -132,8 +133,7 @@ export const GroupChatSetup: React.FC<{
                 <label>{t('settings.agents.thinking')}</label>
                 <select value={editingTemp.thinkingLevel} onChange={(e) => setEditingTemp({ ...editingTemp, thinkingLevel: e.target.value as TempDraft['thinkingLevel'] })}>
                   <option value="">{t('settings.agents.inherit')}</option>
-                  <option value="off">off</option><option value="low">low</option>
-                  <option value="medium">medium</option><option value="high">high</option>
+                  {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{lv}</option>)}
                 </select>
               </div>
               <div className="field">
@@ -148,6 +148,7 @@ export const GroupChatSetup: React.FC<{
                   <option value="readonly">readonly</option>
                   <option value="auto-edit">auto-edit</option>
                   <option value="full-auto">full-auto</option>
+                  <option value="custom">custom</option>
                 </select>
               </div>
             </div>

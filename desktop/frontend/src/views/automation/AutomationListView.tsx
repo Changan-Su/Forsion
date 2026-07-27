@@ -3,17 +3,17 @@
  * 每项:触发摘要+执行者+启停 dot;点击 → 主区详情/右栏运行记录跟随(automationStore.sel)。
  * 系统项启停走 saveSpecialConfig,规则启停走 saveMuseTrigger upsert(enabled 翻转,其余字段原样)。
  */
-import React, { useEffect } from 'react'
-import { CalendarClock, History, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { CalendarClock, CheckCircle2, ChevronDown, ChevronRight, History, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
-import { deleteMuseTrigger, saveAgentScheduleEntry, saveMuseTrigger, saveSpecialConfig } from '../../services/backendService'
+import { deleteAgentScheduleEntry, deleteMuseTrigger, saveAgentScheduleEntry, saveMuseTrigger, saveSpecialConfig } from '../../services/backendService'
 import { useI18n } from '../../i18n'
-import { condText, runnerName } from './lib'
+import { actionsText, condText, fmtTime, isFinishedTrigger, parseLocalDatetime } from './lib'
 import type { AgentScheduleEntry, MuseTriggerInfo } from '../../types'
 import './automation.css'
 
-/** 规则 → upsert 全量入参(启停翻转时其余字段原样带回,upsert 语义要求全字段)。 */
+/** 规则 → upsert 全量入参(启停翻转时其余字段原样带回,upsert 语义要求全字段;actions 显式回传防抹链)。 */
 export function triggerToUpsert(t: MuseTriggerInfo): Parameters<typeof saveMuseTrigger>[1] {
   return {
     id: t.id,
@@ -23,10 +23,13 @@ export function triggerToUpsert(t: MuseTriggerInfo): Parameters<typeof saveMuseT
     n: t.cond.type === 'file_chars_gte' ? t.cond.n : undefined,
     match: t.cond.type === 'event_seen' ? t.cond.match : undefined,
     time: t.cond.type === 'daily_at' ? t.cond.time : undefined,
+    datetime: t.cond.type === 'at' ? t.cond.datetime : undefined,
+    interval: t.cond.type === 'every' ? t.cond.interval : undefined,
     prompt: t.prompt,
-    cooldown_hours: t.cooldownHours,
+    cooldown_hours: t.cooldownHours || undefined,
     agent_slug: t.agentSlug,
     enabled: t.enabled,
+    actions: t.actions?.length ? t.actions : null,
   }
 }
 
@@ -35,6 +38,8 @@ export const AutomationListView: React.FC = () => {
   const cfg = useApp((s) => s.cfg)
   const agentDefs = useApp((s) => s.agentDefs)
   const st = useAutomation()
+  const [showFinished, setShowFinished] = useState(false)
+  const oops = (e: any): void => useApp.getState().toast(String(e?.message || e), true)
 
   useEffect(() => {
     void useAutomation.getState().refresh(cfg)
@@ -53,7 +58,7 @@ export const AutomationListView: React.FC = () => {
     try {
       await saveSpecialConfig(cfg, { [which]: next } as any)
       st.bump()
-    } catch { /* 下轮轮询自愈 */ }
+    } catch (e) { oops(e) }
   }
 
   const toggleTrigger = async (tr: MuseTriggerInfo, e: React.MouseEvent): Promise<void> => {
@@ -61,7 +66,7 @@ export const AutomationListView: React.FC = () => {
     try {
       await saveMuseTrigger(cfg, { ...triggerToUpsert(tr), enabled: !tr.enabled })
       st.bump()
-    } catch { /* 下轮轮询自愈 */ }
+    } catch (e) { oops(e) }
   }
 
   const removeTrigger = async (tr: MuseTriggerInfo, e: React.MouseEvent): Promise<void> => {
@@ -69,7 +74,7 @@ export const AutomationListView: React.FC = () => {
     try {
       await deleteMuseTrigger(cfg, tr.id)
       st.bump()
-    } catch { /* 下轮轮询自愈 */ }
+    } catch (e) { oops(e) }
   }
 
   // 日程条目启停 = auto 翻转(upsert 全字段原样回传)。列表列「可自动化」条目(有 date+prompt),
@@ -82,7 +87,15 @@ export const AutomationListView: React.FC = () => {
         auto: !en.auto, prompt: en.prompt, description: en.description, todo: en.todo,
       })
       st.bump()
-    } catch { /* 下轮轮询自愈 */ }
+    } catch (e) { oops(e) }
+  }
+
+  const removeSchedule = async (slug: string, id: string, e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation()
+    try {
+      await deleteAgentScheduleEntry(cfg, slug, id)
+      st.bump()
+    } catch (e) { oops(e) }
   }
 
   const muse = st.specialCfg?.muse
@@ -122,39 +135,62 @@ export const AutomationListView: React.FC = () => {
         />
       </div>
 
-      <div className="auto-grouphead">{t('automation.group.watches')}</div>
-      {st.loaded && st.triggers.length === 0 && (
-        <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '4px 8px' }}>{t('automation.watches.empty')}</div>
-      )}
-      {st.triggers.map((tr) => (
-        <div
-          key={tr.id}
-          className={`auto-item ${selIs({ kind: 'trigger', triggerId: tr.id }) ? 'active' : ''}`}
-          onClick={() => st.setSel({ kind: 'trigger', triggerId: tr.id })}
-        >
-          <span className="auto-ic"><Zap size={15} /></span>
-          <div className="auto-item-main">
-            <div className="auto-item-title">{tr.desc}</div>
-            <div className="auto-item-sub">
-              {condText(t, tr.cond)} · {runnerName(agentDefs, tr.agentSlug)}
-            </div>
-          </div>
-          <button
-            className="icon-btn"
-            title={t('common.delete')}
-            style={{ opacity: 0.6 }}
-            onClick={(e) => void removeTrigger(tr, e)}
+      {(() => {
+        const active = st.triggers.filter((tr) => !isFinishedTrigger(tr))
+        const finished = st.triggers.filter(isFinishedTrigger)
+        const row = (tr: MuseTriggerInfo, done: boolean): React.ReactNode => (
+          <div
+            key={tr.id}
+            className={`auto-item ${done ? 'finished' : ''} ${selIs({ kind: 'trigger', triggerId: tr.id }) ? 'active' : ''}`}
+            onClick={() => st.setSel({ kind: 'trigger', triggerId: tr.id })}
           >
-            <Trash2 size={13} />
-          </button>
-          <span
-            className={`auto-dot ${tr.enabled ? 'on' : 'off'}`}
-            title={tr.enabled ? t('automation.enabled') : t('automation.disabled')}
-            onClick={(e) => void toggleTrigger(tr, e)}
-            style={{ cursor: 'pointer' }}
-          />
-        </div>
-      ))}
+            <span className="auto-ic">{done ? <CheckCircle2 size={15} /> : <Zap size={15} />}</span>
+            <div className="auto-item-main">
+              <div className="auto-item-title">{tr.desc}</div>
+              <div className="auto-item-sub">
+                {condText(t, tr.cond)} · {actionsText(t, agentDefs, tr)}
+                {!done && tr.enabled && tr.nextRunAt ? ` · ${t('automation.nextRun', { time: fmtTime(tr.nextRunAt) })}` : ''}
+              </div>
+            </div>
+            <button
+              className="icon-btn"
+              title={t('common.delete')}
+              style={{ opacity: 0.6 }}
+              onClick={(e) => void removeTrigger(tr, e)}
+            >
+              <Trash2 size={13} />
+            </button>
+            {done ? (
+              <span className="auto-badge-done">{t('automation.finished')}</span>
+            ) : (
+              <span
+                className={`auto-dot ${tr.enabled ? 'on' : 'off'}`}
+                title={tr.enabled ? t('automation.enabled') : t('automation.disabled')}
+                onClick={(e) => void toggleTrigger(tr, e)}
+                style={{ cursor: 'pointer' }}
+              />
+            )}
+          </div>
+        )
+        return (
+          <>
+            <div className="auto-grouphead">{t('automation.group.watches')}</div>
+            {st.loaded && active.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '4px 8px' }}>{t('automation.watches.empty')}</div>
+            )}
+            {active.map((tr) => row(tr, false))}
+            {finished.length > 0 && (
+              <>
+                <div className="auto-grouphead clickable" onClick={() => setShowFinished((v) => !v)}>
+                  {showFinished ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  {t('automation.group.finished', { n: String(finished.length) })}
+                </div>
+                {showFinished && finished.map((tr) => row(tr, true))}
+              </>
+            )}
+          </>
+        )
+      })()}
 
       {(() => {
         // Agent 日程组:各 agent SCHEDULE.db 里「可自动化」的条目(有 date+prompt;dot=auto 开关)。
@@ -164,28 +200,46 @@ export const AutomationListView: React.FC = () => {
         return (
           <>
             <div className="auto-grouphead">{t('automation.group.schedules')}</div>
-            {rows.map(({ slug, agentName, en }) => (
-              <div
-                key={`${slug}:${en.id}`}
-                className={`auto-item ${selIs({ kind: 'schedule', slug, rowId: en.id }) ? 'active' : ''}`}
-                onClick={() => st.setSel({ kind: 'schedule', slug, rowId: en.id })}
-              >
-                <span className="auto-ic"><CalendarClock size={15} /></span>
-                <div className="auto-item-main">
-                  <div className="auto-item-title">{en.name}</div>
-                  <div className="auto-item-sub">
-                    {en.date.split('/')[0].replace('T', ' ')}
-                    {en.repeat ? ` · ${t('automation.schedule.every', { ivl: en.repeat })}` : ''} · {agentName}
+            {rows.map(({ slug, agentName, en }) => {
+              // once 日程「本锚点」已跑过=不会再触发(lastRun>=start;旧 lastRun+改期未来=引擎会复活,不算完)
+              const start = parseLocalDatetime(en.date.split('/')[0]) || null
+              const done = !en.repeat && !!start && start.getTime() <= Date.now()
+                && !!en.lastRun && Date.parse(en.lastRun) >= start.getTime()
+              return (
+                <div
+                  key={`${slug}:${en.id}`}
+                  className={`auto-item ${done ? 'finished' : ''} ${selIs({ kind: 'schedule', slug, rowId: en.id }) ? 'active' : ''}`}
+                  onClick={() => st.setSel({ kind: 'schedule', slug, rowId: en.id })}
+                >
+                  <span className="auto-ic">{done ? <CheckCircle2 size={15} /> : <CalendarClock size={15} />}</span>
+                  <div className="auto-item-main">
+                    <div className="auto-item-title">{en.name}</div>
+                    <div className="auto-item-sub">
+                      {en.date.split('/')[0].replace('T', ' ')}
+                      {en.repeat ? ` · ${t('automation.schedule.every', { ivl: en.repeat })}` : ''} · {agentName}
+                    </div>
                   </div>
+                  <button
+                    className="icon-btn"
+                    title={t('common.delete')}
+                    style={{ opacity: 0.6 }}
+                    onClick={(e) => void removeSchedule(slug, en.id, e)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                  {done ? (
+                    <span className="auto-badge-done">{t('automation.finished')}</span>
+                  ) : (
+                    <span
+                      className={`auto-dot ${en.auto ? 'on' : 'off'}`}
+                      title={en.auto ? t('automation.enabled') : t('automation.disabled')}
+                      onClick={(e) => void toggleSchedule(slug, en, e)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  )}
                 </div>
-                <span
-                  className={`auto-dot ${en.auto ? 'on' : 'off'}`}
-                  title={en.auto ? t('automation.enabled') : t('automation.disabled')}
-                  onClick={(e) => void toggleSchedule(slug, en, e)}
-                  style={{ cursor: 'pointer' }}
-                />
-              </div>
-            ))}
+              )
+            })}
           </>
         )
       })()}

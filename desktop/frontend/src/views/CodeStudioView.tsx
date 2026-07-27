@@ -4,8 +4,9 @@
  *  Code:可编辑 CodeMirror,防抖写回(mtime CAS);右栏文件树点文件 → 进 Code 选中。
  *  实时跟随:Coding Agent 每写一个文件 → 刷新预览;首个 .html 自动设为入口。纯渲染端,host 缺失降级为占位。 */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Code2, Eye, RotateCw, Folder, FolderPlus, Loader2 } from 'lucide-react'
+import { Code2, Eye, RotateCw, Folder, FolderPlus, Globe, Loader2, ExternalLink } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
+import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { useI18n } from '../i18n'
@@ -162,6 +163,7 @@ export function CodeStudioView(_: ViewProps) {
 
   const [origin, setOrigin] = useState<string | null>(null)
   const [htmlFiles, setHtmlFiles] = useState<string[]>([])
+  const [showPublish, setShowPublish] = useState(false)
   const hasHost = !!window.tangu?.codePreviewServe
 
   // 首次解析项目根 ~/Forsion/Project。
@@ -295,6 +297,13 @@ export function CodeStudioView(_: ViewProps) {
               : <span className="csx-path">{codeFile ? (toRel(root, codeFile) ?? codeFile) : t('coding.noFile')}</span>}
         </div>
         {mode === 'preview' && !isStreaming && <button className="icon-btn" title={t('coding.reload')} onClick={() => reload()}><RotateCw size={15} /></button>}
+        {/* 在系统浏览器里调试:同一台本地预览服务器(window.forsion 同样可用,走桌面登录态) */}
+        {mode === 'preview' && !isStreaming && !!previewUrl && !!window.tangu?.openExternal && (
+          <button className="icon-btn" title={t('preview.openInBrowser')} onClick={() => void window.tangu!.openExternal!(previewUrl)}><ExternalLink size={15} /></button>
+        )}
+        {!!window.tangu?.connectPublish && (
+          <button className="icon-btn" title={t('coding.publish')} onClick={() => setShowPublish(true)}><Globe size={15} /></button>
+        )}
       </div>
       <div className="csx-body">
         {isStreaming
@@ -307,6 +316,12 @@ export function CodeStudioView(_: ViewProps) {
               ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={text} fileName={codeFile} editable onChange={onCode} /></Suspense>
               : <div className="csx-empty">{t('coding.pickFile')}</div>)}
       </div>
+      {showPublish && (
+        <ConnectPublishDialog
+          root={root} projectName={baseName(root)} entry={entry} htmlFiles={htmlFiles}
+          onClose={() => setShowPublish(false)}
+        />
+      )}
     </div>
   )
 }

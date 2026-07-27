@@ -10,6 +10,7 @@ import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useEntrySync, isSyncedEntry } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from './CloudSyncDialog'
+import { OverlayAt } from '@lcl/engine'
 import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
 import type { AmadeusPageShare, AmadeusCollabQuota } from '../types'
 
@@ -64,12 +65,9 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
     void p.then(() => { if (ok) toast(ok); refresh() }).catch((e) => err(e, fallback)).finally(() => setBusy(false))
   }
 
-  const left = Math.max(8, Math.min(anchor.x - 340, window.innerWidth - 372))
-  const top = Math.min(anchor.y + 6, window.innerHeight - 420)
-
   return (
     <div className="amxc-cardwrap" onClick={onClose}>
-      <div className="amxc-card" style={{ left, top }} onClick={(e) => e.stopPropagation()}>
+      <OverlayAt className="amxc-card" x={anchor.x - 340} y={anchor.y + 6} onClick={(e) => e.stopPropagation()}>
         <div className="amxc-tabs">
           <button className={tab === 'share' ? 'on' : ''} onClick={() => setTab('share')}>共享</button>
           <button className={tab === 'publish' ? 'on' : ''} onClick={() => setTab('publish')}>发布</button>
@@ -190,7 +188,7 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
           </div>
         )}
         <CloudSyncRow path={path} onClose={onClose} />
-      </div>
+      </OverlayAt>
     </div>
   )
 }
