@@ -17,7 +17,7 @@ import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
 import { amadeus } from '../api'
 import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../lib/fd'
-import { resolveFileName } from '../lib/vaultFiles'
+import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { track } from '../../achievements/store'
@@ -46,6 +46,63 @@ function locate(root: StackNode, id: BlockId): Loc | null {
     }
   }
   return null
+}
+
+/** 跨块 ↑↓ 的结构化落点(替代 flatOrder 顺序跳块):先同列上/下邻块;到列顶/底则去相邻行中
+ *  「goalX 所在列」的末/首块;整页顶/底 → null(留在原地)。两栏时列顶按 ↑ 不会横跳到另一列。 */
+function spatialFocusTarget(
+  root: StackNode,
+  id: BlockId,
+  dir: 'prev' | 'next',
+  goalX: number | undefined,
+): BlockId | null {
+  const loc = locate(root, id)
+  if (!loc) return null
+  const col = root.children[loc.rowIdx].columns[loc.colIdx]
+  if (dir === 'prev') {
+    if (loc.childIdx > 0) return col.children[loc.childIdx - 1].ref // 同列上一块
+    if (loc.rowIdx > 0) {
+      const prevRow = root.children[loc.rowIdx - 1]
+      const kids = prevRow.columns[columnByGoalX(prevRow, goalX)].children
+      return kids.length ? kids[kids.length - 1].ref : null // 上一行、goalX 所在列的末块
+    }
+    return null // 整页首块
+  }
+  if (loc.childIdx < col.children.length - 1) return col.children[loc.childIdx + 1].ref // 同列下一块
+  if (loc.rowIdx < root.children.length - 1) {
+    const nextRow = root.children[loc.rowIdx + 1]
+    const kids = nextRow.columns[columnByGoalX(nextRow, goalX)].children
+    return kids.length ? kids[0].ref : null // 下一行、goalX 所在列的首块
+  }
+  return null // 整页末块
+}
+
+/** 相邻行里哪一列水平盖住 goalX(取该列各块 DOM 的 union 横跨);单列/无 goalX → 0;都不盖住 → 最近列。
+ *  ponytail: 靠已挂载块的 DOM 几何判列。相邻行整行尚未分片挂载(大页 >24 行且恰在挂载前沿)时无几何 → 回退列 0;
+ *  极少见,后果仅「偶尔落错栏」。要更准可按 column.width 分数 + 行容器宽推算,但那行容器多半也未挂载,不值当。 */
+function columnByGoalX(row: RowNode, goalX: number | undefined): number {
+  if (row.columns.length <= 1 || goalX == null) return 0
+  let best = 0
+  let bestDist = Infinity
+  for (let c = 0; c < row.columns.length; c++) {
+    let left = Infinity
+    let right = -Infinity
+    for (const ref of row.columns[c].children) {
+      const el = document.querySelector(`.block-host[data-block-id="${CSS.escape(ref.ref)}"]`)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      left = Math.min(left, r.left)
+      right = Math.max(right, r.right)
+    }
+    if (right <= left) continue // 该列未挂载/无几何
+    if (goalX >= left && goalX <= right) return c
+    const d = Math.abs(goalX - (left + right) / 2)
+    if (d < bestDist) {
+      bestDist = d
+      best = c
+    }
+  }
+  return best
 }
 
 function findColumn(root: StackNode, colId: ColumnId): { row: RowNode; col: ColumnNode } | null {
@@ -153,7 +210,7 @@ interface PageState {
   status: Status
   error: string | null
   /** A pending request to move the caret into a specific block (after create/delete/nav). */
-  focusRequest: { id: BlockId; place: FocusPlace } | null
+  focusRequest: { id: BlockId; place: FocusPlace; goalX?: number } | null
   /** Transient drag state for drop-target feedback (the block being dragged / hovered). */
   dndActiveId: string | null
   dndOverId: string | null
@@ -213,10 +270,10 @@ interface PageState {
   /** Delete a folder and its contents; if the active page was inside, open another (or clear). */
   deleteFolder(folderPath: string): Promise<void>
 
-  requestFocus(id: BlockId, place: FocusPlace): void
+  requestFocus(id: BlockId, place: FocusPlace, goalX?: number): void
   consumeFocus(id: BlockId): void
   flatOrder(): BlockId[]
-  focusAdjacent(id: BlockId, dir: 'prev' | 'next'): void
+  focusAdjacent(id: BlockId, dir: 'prev' | 'next', goalX?: number): void
   deleteBlockFocusPrev(id: BlockId): void
   /** Merge a block's content into the previous block, then delete it (Backspace at start). */
   mergeWithPrev(id: BlockId): void
@@ -328,8 +385,8 @@ export const usePageStore = create<PageState>((set, get) => {
       set({ dndActiveId: activeId, dndOverId: overId })
     },
 
-    requestFocus(id, place) {
-      set({ focusRequest: { id, place } })
+    requestFocus(id, place, goalX) {
+      set({ focusRequest: { id, place, goalX } })
     },
     consumeFocus(id) {
       const fr = get().focusRequest
@@ -343,13 +400,12 @@ export const usePageStore = create<PageState>((set, get) => {
         for (const col of row.columns) for (const ref of col.children) out.push(ref.ref)
       return out
     },
-    focusAdjacent(id, dir) {
-      const order = get().flatOrder()
-      const i = order.indexOf(id)
-      if (i < 0) return
-      const j = dir === 'prev' ? i - 1 : i + 1
-      if (j < 0 || j >= order.length) return
-      get().requestFocus(order[j], dir === 'prev' ? 'end' : 'start')
+    focusAdjacent(id, dir, goalX) {
+      const m = get().manifest
+      if (!m) return
+      const target = spatialFocusTarget(m.root, id, dir, goalX)
+      if (!target) return // 真·顶/底边界 → 留在原地(列顶按 ↑ 不横跳邻列 = 直觉)
+      get().requestFocus(target, dir === 'prev' ? 'end' : 'start', goalX)
     },
     deleteBlockFocusPrev(id) {
       const order = get().flatOrder()
@@ -410,6 +466,10 @@ export const usePageStore = create<PageState>((set, get) => {
       const api = window.amadeusSync
       if (!api?.switchSide || get().vaultSide === side) return
       try {
+        // 切根前必须先把待存内容在【旧根】落盘并等掉在途写:保存走「相对路径 + 当前根」,
+        // 根先换会把旧库活动页原样写进新库(本地页凭空复制进云端库、再被在线同步推上服务器)
+        await get().flushSave().catch(() => {})
+        await inflightSave?.catch(() => {})
         const info = await api.switchSide(side)
         if (!info) return
         set({
@@ -420,6 +480,11 @@ export const usePageStore = create<PageState>((set, get) => {
           files: [],
           icons: {}, // 换库必清:图标是 path 键,跨库残留会张冠李戴
           error: null,
+          // 旧库编辑器状态即刻作废:switchSide 往返窗口里的输入不得再借任何 flush 写进新根
+          activePage: null,
+          pendingPage: null,
+          manifest: null,
+          blocks: {},
         })
         void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
         void amadeus.pageIcons?.().then((icons) => { if (get().vaultRoot === info.root) set({ icons }) }).catch(() => {})
@@ -606,6 +671,17 @@ export const usePageStore = create<PageState>((set, get) => {
       if (file) {
         if (/\.db$/i.test(file)) window.dispatchEvent(new CustomEvent('amadeus:open-db', { detail: { path: file } }))
         else void amadeus.openVaultFile?.(file)?.catch(() => {})
+        return
+      }
+      // 名字直接命中库里的一个**已存在文件**(插件声明的文件类型走这条:`[[图.mindmap.md]]`、
+      // 省 .md 的 `[[图.mindmap]]`、任何 `.<子类型>.md` 复合后缀)。必须赶在下面的「创建笔记」兜底
+      // 之前 —— newPage 会把这份已有文件覆盖成空笔记 = 毁档。
+      // 用 resolveVaultPath 而非上面的 resolveFileName:后者的 isFileRef 闸把一切 `.md` 结尾的名字
+      // 都挡掉,而这些类型的正典写法恰恰以 `.md` 结尾,过不了那道闸就永远解析不到。
+      // 事件解耦同 open-db:渲染层不 import 宿主的 openFile(无监听的宿主静默)。
+      const vaultHit = resolveVaultPath(raw, get().files, src) ?? resolveVaultPath(`${raw}.md`, get().files, src)
+      if (vaultHit) {
+        window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit } }))
         return
       }
       // 未解析:询问而非静默建根。源须是笔记(.db 独立视图等无 .fd 语义 → 走根兜底)。
@@ -936,15 +1012,22 @@ export const usePageStore = create<PageState>((set, get) => {
           /* backlink check is best-effort */
         }
       }
-      const root = clone(m.root)
+      // 二次读取:上面的 backlink 查询是 await,期间可能有别的结构操作改了 manifest / fmExtra;仍按最初
+      // 快照 m 提交会把那次改动(含 mindmap 关系 frontmatter)一并回滚(Codex)。改用 await 后的最新 manifest。
+      // 且必须**核对活动页**:块 id 是页内递增的(两页都有 `b1`),await 期间用户切了页就会删掉另一个
+      // 文件里的同名块 —— 有确认弹窗时这个窗口能有好几秒(Codex)。
+      if (get().activePage !== page) return
+      const cur = get().manifest
+      if (!cur) return
+      const root = clone(cur.root)
       const loc = locate(root, id)
       if (loc) root.children[loc.rowIdx].columns[loc.colIdx].children.splice(loc.childIdx, 1)
       cleanup(root)
       const blocks = { ...get().blocks }
       delete blocks[id]
-      const bm = { ...m.blocks }
+      const bm = { ...cur.blocks }
       delete bm[id]
-      get()._commit({ ...m, root, blocks: bm }, blocks)
+      get()._commit({ ...cur, root, blocks: bm }, blocks)
     },
 
     moveBlock(id, toColId, beforeId) {
@@ -1118,8 +1201,11 @@ export const usePageStore = create<PageState>((set, get) => {
           const toSave: PageManifest = { ...manifest, updatedAt: new Date().toISOString() }
           await amadeus.savePage(savedPath, toSave, contents)
           // 并行时代守卫:完成时若已导航去别页,绝不把旧页 manifest/status 盖回画面
+          // 保存期间(await savePage)若有结构操作改了 manifest(加删块 / setFmExtra),完成时绝不能把
+          // in-memory manifest 整个换回启动快照 toSave,否则那次改动被回滚、下一次防抖又把回滚态存盘 =
+          // 静默丢新块/关系(Codex)。只把这次写盘的 updatedAt 合并进【当前】manifest,保住期间的改动。
           set((s) => (s.activePage === savedPath
-            ? { manifest: toSave, status: 'ready' as const, linkGraphVersion: s.linkGraphVersion + 1 }
+            ? { manifest: s.manifest ? { ...s.manifest, updatedAt: toSave.updatedAt } : toSave, status: 'ready' as const, linkGraphVersion: s.linkGraphVersion + 1 }
             : { linkGraphVersion: s.linkGraphVersion + 1 }))
         } catch (e) {
           set((s) => (s.activePage === savedPath ? { status: 'ready' as const, error: String(e) } : { error: String(e) }))
@@ -1171,6 +1257,13 @@ export const usePageStore = create<PageState>((set, get) => {
     },
   }
 })
+
+// 外部改文件(agent 直接写盘 / Obsidian / 云端拉回)→ 回灌当前页。**必须模块级订阅**:
+// 曾挂在 AmadeusPagesView(左栏笔记树)的 effect 里,左栏切到「会话/文件」档或人在 Agent Desk、
+// Coding Space 时该组件根本没挂载 → 没人听 → 编辑器一直显示旧内容(要重开才刷新),
+// 且下一次敲键的防抖保存会把陈旧文档写回去、抹掉 agent 的改动。
+// drawingStore / dbAggregateStore 早就是模块级订阅,这里是漏网的一条。
+amadeus?.onExternalChange?.((p) => void usePageStore.getState().reconcileExternal(p))
 
 /** 笔记改名后的 .fd 跟随改名(pageStore.renamePage 与 noteViewStore.renameNote 共用)。
  *  renameFolder 内部自带 flushSave / activePage 重映射 / refreshStructure / 失败置 error。 */

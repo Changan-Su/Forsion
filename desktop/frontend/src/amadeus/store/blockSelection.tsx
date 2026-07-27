@@ -2,27 +2,35 @@
  *  键盘:Backspace/Delete 删(可多块)、Cmd+C 复制 md 源文、Cmd+X 剪切、Cmd+V 粘为新块、
  *  Cmd+D 复制块、Enter 回编辑、↑↓ 移动选中(单块)、Esc/点旁处/进入编辑 清除。
  *  多选仅由框选/拖拽产生;跨页残留由 loadPage 清。 */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { usePageStore } from './pageStore'
 import { useUiStore } from './uiStore'
 import { marqueeHits } from '../lib/marquee'
+import { isEmbedBlock, isWidgetBlock } from '../lib/blockKind'
+import { zoomOf } from '../lib/clampMenu'
 
 export const useBlockSelection = create<{
   ids: Set<string>
+  activeEmbed: string | null // 正在“二次选中/编辑源码”的嵌入块(![[...]]);同时至多一个
   select(id: string | null): void // 单选(替换)
   setMany(ids: string[]): void // 框选/拖拽多选
+  setActiveEmbed(id: string | null): void // 嵌入块进入/退出源码编辑
   clear(): void
 }>((set) => ({
   ids: new Set(),
-  select: (id) => set({ ids: id ? new Set([id]) : new Set() }),
-  setMany: (ids) => set({ ids: new Set(ids) }),
-  clear: () => set({ ids: new Set() }),
+  activeEmbed: null,
+  select: (id) => set({ ids: id ? new Set([id]) : new Set(), activeEmbed: null }),
+  setMany: (ids) => set({ ids: new Set(ids), activeEmbed: null }),
+  setActiveEmbed: (id) => set({ activeEmbed: id }),
+  clear: () => set({ ids: new Set(), activeEmbed: null }),
 }))
 
 // 换页清选中(残留 id 可能撞上新页顺序号块)。
 usePageStore.subscribe((s, prev) => {
-  if (s.activePage !== prev.activePage && useBlockSelection.getState().ids.size) useBlockSelection.getState().clear()
+  if (s.activePage === prev.activePage) return
+  const st = useBlockSelection.getState()
+  if (st.ids.size || st.activeEmbed) st.clear()
 })
 
 const isTypingTarget = (t: EventTarget | null): boolean => {
@@ -49,6 +57,7 @@ async function deleteSerial(ids: string[]): Promise<void> {
 /** 挂在 PageView:选中态键盘处理 + 点旁处清除 + 空白框选(渲染框选矩形)。 */
 export function BlockSelectionKeys() {
   const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const marqueeEl = useRef<HTMLDivElement>(null)
 
   // 键盘 + 点旁处清除
   useEffect(() => {
@@ -77,14 +86,27 @@ export function BlockSelectionKeys() {
         void deleteSerial(ids)
       } else if (e.key === 'Enter' && ids.length === 1) {
         stop()
-        useBlockSelection.getState().clear()
-        ps.requestFocus(id, 'end')
+        const content = ps.blocks[id]?.content ?? ''
+        if (isEmbedBlock(content)) {
+          useBlockSelection.getState().setActiveEmbed(id) // 只读嵌入块:回车进源码编辑(= 双击同款)
+        } else if (!isWidgetBlock(content)) {
+          useBlockSelection.getState().clear()
+          ps.requestFocus(id, 'end') // 文本块:回车回到编辑
+        } // 书签等其它 widget:自有改址入口,回车不动
       } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && ids.length === 1) {
         stop()
         const order = ps.flatOrder()
         const i = order.indexOf(id)
         const next = order[e.key === 'ArrowUp' ? i - 1 : i + 1]
-        if (next) useBlockSelection.getState().select(next)
+        if (next) {
+          // option A:相邻仍是只读块 → 继续选中穿过;是文本块 → 退出选中态、光标落进文本(首/末视觉行)。
+          if (isWidgetBlock(ps.blocks[next]?.content ?? '')) {
+            useBlockSelection.getState().select(next)
+          } else {
+            useBlockSelection.getState().clear()
+            ps.requestFocus(next, e.key === 'ArrowUp' ? 'end' : 'start')
+          }
+        }
       } else if (mod && (e.key === 'c' || e.key === 'C')) {
         stop()
         void navigator.clipboard.writeText(joined())
@@ -110,19 +132,61 @@ export function BlockSelectionKeys() {
       }
     }
     const onPointerDown = (e: PointerEvent): void => {
-      const ids = useBlockSelection.getState().ids
-      if (!ids.size) return
+      const st = useBlockSelection.getState()
+      if (!st.ids.size && !st.activeEmbed) return
       const el = e.target as HTMLElement | null
       if (el?.closest?.('.ctx-menu')) return
       const host = el?.closest?.('[data-block-id]') as HTMLElement | null
-      if (host && host.dataset.blockId && ids.has(host.dataset.blockId)) return // 点选中块自身:保留
-      useBlockSelection.getState().clear() // 框选会在移动时重新选中,纯点击则保持清除
+      const hid = host?.dataset.blockId
+      if (hid && (st.ids.has(hid) || st.activeEmbed === hid)) return // 点选中块 / 活动嵌入内:保留
+      st.clear() // 框选会在移动时重新选中,纯点击则保持清除
+    }
+    // shift+点击任意块 = 选中整块(拖拽手柄外的快捷选择),与点手柄同为单选替换。
+    // 正在编辑本块时放行,交给浏览器原生 shift+点击扩选文本;点手柄本身走其 onClick。
+    const onShiftMouseDown = (e: MouseEvent): void => {
+      if (!e.shiftKey || e.button !== 0) return
+      const el = e.target as HTMLElement | null
+      if (el?.closest?.('.block-gutter')) return
+      const host = el?.closest?.('[data-block-id]') as HTMLElement | null
+      const id = host?.dataset.blockId
+      if (!id || host!.contains(document.activeElement)) return
+      e.preventDefault() // 拦焦点转移 + 原生取词
+      ;(document.activeElement as HTMLElement | null)?.blur?.()
+      useBlockSelection.getState().select(id)
+      // 吞掉紧随的 click:否则 shift+点击嵌入里的「打开/展开」等按钮会既选中块、又触发其 onClick(Codex L3)。
+      const swallow = (ev: Event): void => {
+        ev.stopPropagation()
+        ev.preventDefault()
+        window.removeEventListener('click', swallow, true)
+      }
+      window.addEventListener('click', swallow, true)
+      setTimeout(() => window.removeEventListener('click', swallow, true), 0)
+    }
+    // 嵌入块“二次选中→编辑源码”:双击拖拽手柄,或 shift+双击嵌入本体 → 露出可编辑的 ![[…]] 源码行。
+    // 嵌入组件本体(画布/图片)的普通双击留给它自己,故本体触发需 shift。
+    const onDblClick = (e: MouseEvent): void => {
+      const el = e.target as HTMLElement | null
+      const host = el?.closest?.('[data-block-id][data-embed]') as HTMLElement | null
+      const id = host?.dataset.blockId
+      if (!id) return
+      const onHandle = !!el?.closest?.('.block-gutter')
+      if (!e.shiftKey && !onHandle) return
+      // 只有内容确是 ![[...]] 的真嵌入才进源码编辑:书签块也带 data-embed 但无 embedTarget,
+      // 否则会存下一个不显示任何 UI 的僵尸 activeEmbed(Codex L4)。
+      const content = (usePageStore.getState().blocks[id]?.content ?? '').trim()
+      if (!/^!\[\[[^\]\n]+\]\]$/.test(content)) return
+      e.preventDefault()
+      useBlockSelection.getState().setActiveEmbed(id)
     }
     window.addEventListener('keydown', onKey, true)
     window.addEventListener('pointerdown', onPointerDown, true)
+    window.addEventListener('mousedown', onShiftMouseDown, true)
+    window.addEventListener('dblclick', onDblClick, true)
     return () => {
       window.removeEventListener('keydown', onKey, true)
       window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('mousedown', onShiftMouseDown, true)
+      window.removeEventListener('dblclick', onDblClick, true)
     }
   }, [])
 
@@ -182,7 +246,10 @@ export function BlockSelectionKeys() {
     }
   }, [])
 
+  // rect 是视口 px;fixed 元素在 zoom 祖先里 left/top/宽高都会被再乘一遍 → 整体除掉(见 engine/menuAnchor)。
+  // ponytail: 首帧 ref 还是空 → z=1,但那一帧矩形恰好是 0×0(刚按下),看不见,不值得为它多一次 layout effect。
+  const z = zoomOf(marqueeEl.current)
   return rect ? (
-    <div className="amx-marquee" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} />
+    <div ref={marqueeEl} className="amx-marquee" style={{ left: rect.x / z, top: rect.y / z, width: rect.w / z, height: rect.h / z }} />
   ) : null
 }

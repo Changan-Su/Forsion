@@ -13,8 +13,11 @@ import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
 import { BUILTIN_PLUGINS } from './builtins'
 import { registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
+import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
+import { createBlockSurface } from './blockSurface'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import { act } from '../../activity/log'
+import { notifyApp } from '../../stores/notificationStore'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -38,6 +41,9 @@ const DISABLED_KEY = 'amadeus.plugins.disabled'
 interface Owned<T> {
   pluginId: string
   item: T
+  /** 状态条项专用:本次注册的实例牌(handle 只认牌不认 id)。disable→enable 后旧 handle
+   *  持的是旧牌,更新/摘除都打不中新实例(插件在飞的异步任务不会污染重启后的注册)。 */
+  token?: object
 }
 
 interface PluginState {
@@ -74,8 +80,11 @@ interface PluginState {
   scaffoldSample(): Promise<void>
 }
 
-function makeAppApi(): PluginAppApi {
-  return {
+/** 每个插件一份 app API。块表面是**可吊销**的(见 blockSurface.tsx 的信任边界说明):
+ *  teardown 时调 revoke,插件开的订阅/挂的 React root 一并收掉,之后它在飞的异步任务也改不动用户文件。 */
+function makeAppApi(pluginId: string): { api: PluginAppApi; revokeSurface: () => void } {
+  const surface = createBlockSurface(pluginId)
+  const api: PluginAppApi = {
     getActivePage: () => usePageStore.getState().activePage,
     getActivePageText: () =>
       Object.values(usePageStore.getState().blocks)
@@ -87,12 +96,14 @@ function makeAppApi(): PluginAppApi {
     setTheme: (t) => applyAccent(t),
     openSearch: () => useUiStore.getState().setPalette('search'),
     openSwitcher: () => useUiStore.getState().setPalette('switch'),
+    ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
     writeFile: (p, text) => amadeus.writeTextFile(p, text),
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
     openFile: (p) => { void import('../../amadeusNav').then((m) => m.openFile(p)) },
   }
+  return { api, revokeSurface: surface.revoke }
 }
 
 function injectThemeStyle(id: string, css: string): void {
@@ -124,6 +135,12 @@ function writeDisabled(ids: string[]): void {
   }
 }
 
+/** 读持久化的禁用插件 id(直读 localStorage,不依赖 store 是否已 init)。
+ *  供 userSpaces 在启动装载时过滤「被禁用插件的内嵌 Space」——那一刻插件宿主可能还没装配。 */
+export function readDisabledPluginIds(): string[] {
+  return readDisabled()
+}
+
 /** Wrap an external source as a plugin whose setup() evaluates its code with `ctx`. */
 function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
   return {
@@ -139,6 +156,8 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     changelog: src.changelog,
     onboarding: src.onboarding,
     blocked: src.blocked,
+    bundle: src.bundle,
+    events: src.events,
     setup: (ctx) => {
       const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
       const d = fn(ctx)
@@ -148,8 +167,14 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
 }
 
 export const usePluginStore = create<PluginState>((set, get) => {
-  const appApi = makeAppApi()
-  const makeContext = (pluginId: string): PluginContext => ({
+  // 每个插件一份 app API(块表面可吊销);teardown 时按 id 吊销。同 id 重新 enable 会覆盖成新的一份,
+  // 旧 facade 已在 teardown 里吊销 → 旧代码持有的引用是哑的。
+  const revokers: Record<string, (() => void) | undefined> = {}
+  const makeContext = (pluginId: string): PluginContext => {
+    revokers[pluginId]?.() // 防守:没经 teardown 就重建 context(setup 抛错后重试)也不留旧订阅
+    const { api: appApi, revokeSurface } = makeAppApi(pluginId)
+    revokers[pluginId] = revokeSurface
+    return {
     app: appApi,
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerCommand: (command) =>
@@ -159,10 +184,47 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ themes: [...s.themes, { pluginId, item: theme }] }))
     },
     registerPanel: (panel) => set((s) => ({ panels: [...s.panels, { pluginId, item: panel }] })),
-    registerStatusItem: (item) =>
-      set((s) => ({ statusItems: [...s.statusItems, { pluginId, item }] })),
+    // 全局状态栏项(2026-07-23 复活):同 id 重复注册即覆盖;返回 handle 供原位更新(外置插件轮询改 text)。
+    // 渲染在 pluginStatusBridge(id 命名空间 plugin:<pluginId>:<id>);teardown 随其余切片整体清理。
+    registerStatusItem: (item) => {
+      const token = {}
+      set((s) => ({
+        statusItems: [
+          ...s.statusItems.filter((o) => !(o.pluginId === pluginId && o.item.id === item.id)),
+          { pluginId, item, token },
+        ],
+      }))
+      return {
+        update: (patch: { text?: string; title?: string }) =>
+          set((s) => ({
+            statusItems: s.statusItems.map((o) => (o.token === token ? { ...o, item: { ...o.item, ...patch } } : o)),
+          })),
+        dispose: () => set((s) => ({ statusItems: s.statusItems.filter((o) => o.token !== token) })),
+      }
+    },
+    // 右上角通知(2026-07-23 起):来源自动标插件名;事件 plugin:<id>,用户可在设置里按插件静音。
+    notify: (message, opts) =>
+      notifyApp({
+        text: String(message ?? ''),
+        level: opts?.level,
+        title: opts?.title ? String(opts.title) : undefined,
+        sticky: typeof opts?.sticky === 'boolean' ? opts.sticky : undefined,
+        event: `plugin:${pluginId}`,
+        sourceLabel: get().plugins.find((p) => p.id === pluginId)?.name || pluginId,
+      }),
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
-    registerFileType: (def) => set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: def }] })),
+    // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType)。返回 false 让插件知道自己被内置取代了,
+    // 可以整体退让 —— 光靠 find* 那道闸拦不住插件继续贡献重复的「新建 X」右键项和斜杠项。
+    // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
+    registerFileType: (def) => {
+      const exts = Array.isArray(def?.extensions) ? def.extensions : []
+      if (exts.length && exts.every((e) => isBuiltinFileType(String(e)))) {
+        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领`)
+        return false
+      }
+      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: def }] }))
+      return true
+    },
     registerEmbedRenderer: (def) =>
       set((s) => ({ embedRenderers: [...s.embedRenderers, { pluginId, item: def }] })),
     registerFileCreator: (def) =>
@@ -183,7 +245,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     activity: {
       log: (event, detail) => act(`plugin:${pluginId}:${event}`, detail),
     },
-  })
+    }
+  }
 
   /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
   const teardown = (id: string): void => {
@@ -192,6 +255,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
     } catch (e) {
       console.error(`[amadeus] plugin "${id}" dispose failed`, e)
     }
+    // 块表面的订阅与 React root 不在插件自己的 disposer 里(插件可能压根没写),宿主统一收 ——
+    // 收完该插件的 API 整体变哑,它在飞的异步任务改不动用户文件了(codex)。
+    try {
+      revokers[id]?.()
+    } catch (e) {
+      console.error(`[amadeus] plugin "${id}" block-surface revoke failed`, e)
+    }
+    revokers[id] = undefined
     for (const o of get().themes) if (o.pluginId === id) removeThemeStyle(o.item.id)
     for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
     unregisterPluginAchievements(id)
@@ -336,11 +407,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
 // 组件要响应「插件加载后才注册」须自行订阅 usePluginStore((s) => s.fileTypes / s.embedRenderers) 再调 find*;
 // 非响应式调用(nav 路由、视图挂载那一刻)用下面读快照的 match*。
 
-/** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(纯函数,便于组件订阅列表后调用)。 */
+/** 在给定 fileTypes 列表里按路径后缀找命中的文件类型贡献(纯函数,便于组件订阅列表后调用)。
+ *  内置文件类型的后缀一律不放行(生态硬规则,见 isBuiltinFileType):遮蔽内置 = 用户打不开内置视图。 */
 export function findFileType(
   list: { item: FileTypeContribution }[],
   path: string,
 ): FileTypeContribution | undefined {
+  if (isBuiltinFileType(path)) return undefined
   const n = path.toLowerCase()
   return list.find((o) => o.item.extensions.some((ext) => n.endsWith(ext.toLowerCase())))?.item
 }
@@ -363,6 +436,10 @@ export function findEmbedRenderer(
   list: { item: EmbedRendererContribution }[],
   target: string,
 ): EmbedRendererContribution | undefined {
+  // 内置类型的嵌入由内置渲染,插件 match() 说了不算(同 findFileType)。**别名/宽度也要剥**:
+  // BlockHost 会先拿完整 target 问一次 matcher(`|`/`#` 可能是真文件名的一部分),
+  // `![[图.mindmap.md|300]]` 原样比后缀是不命中的 —— 不剥这一下插件就从别名语法绕过了这道闸(Codex)。
+  if (isBuiltinFileType(target) || isBuiltinFileType(target.split('|')[0].trim())) return undefined
   return list.find((o) => {
     try {
       return o.item.match(target)
@@ -375,4 +452,16 @@ export function findEmbedRenderer(
 /** 当前已注册嵌入渲染器里匹配 target 的那个(读快照,非响应式)。 */
 export function matchEmbedRenderer(target: string): EmbedRendererContribution | undefined {
   return findEmbedRenderer(usePluginStore.getState().embedRenderers, target)
+}
+
+/** 已启用插件声明的自动化事件(manifest `events`),完整名带 `plugin:<id>:` 前缀——自动化构建器事件目录用(读快照)。 */
+export function listPluginAutomationEvents(): { name: string; label?: string }[] {
+  const s = usePluginStore.getState()
+  const disabled = new Set(s.disabledIds)
+  const out: { name: string; label?: string }[] = []
+  for (const p of s.plugins) {
+    if (disabled.has(p.id) || p.blocked || !p.events?.length) continue
+    for (const ev of p.events) out.push({ name: `plugin:${p.id}:${ev.name}`, label: ev.label })
+  }
+  return out
 }

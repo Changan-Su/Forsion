@@ -8,6 +8,7 @@ import { fuzzyScore } from '../../lib/fuzzy'
 import { usePageStore } from '../../store/pageStore'
 import { CheckBoxCheckSolidIcon, LinkedPageIcon, TodayIcon } from '../../components/icons'
 import { registerPropertyType, type PropCellProps } from './propertyTypes'
+import { OverlayAt } from '../../lib/clampMenu'
 
 // ── todo:baseType=checkbox,渲染同勾选框 ──────────────────────────────────────
 function TodoCell({ value, onChange }: PropCellProps) {
@@ -72,10 +73,11 @@ export function CalDateFields({ value, onChange, autoFocus }: { value: string | 
 function CalendarDateCell({ value, onChange }: PropCellProps) {
   const raw = typeof value === 'string' ? value : ''
   const cur = parseCalDate(raw)
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const [pos, setPos] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
+  // 交按钮下沿 + 上沿,不预夹(预夹会让 OverlayAt 误判锚点再翻面,codex#2)
   const open = (e: ReactMouseEvent): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setPos({ x: Math.min(r.left, window.innerWidth - 300), y: Math.min(r.bottom + 4, window.innerHeight - 240) })
+    setPos({ x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
   return (
     <>
@@ -84,12 +86,12 @@ function CalendarDateCell({ value, onChange }: PropCellProps) {
       </button>
       {pos && (
         <div className="amx-db-popwrap" onMouseDown={() => setPos(null)}>
-          <div className="amx-db-pop amx-cal-pop" style={{ left: pos.x, top: pos.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <OverlayAt className="amx-db-pop amx-cal-pop" x={pos.x} y={pos.y} anchorTop={pos.anchorTop} onMouseDown={(e) => e.stopPropagation()}>
             <CalDateFields value={raw} onChange={onChange} autoFocus />
             {cur && (
               <button className="amx-db-opt amx-db-opt-clear" onClick={() => onChange(undefined)}>清空</button>
             )}
-          </div>
+          </OverlayAt>
         </div>
       )}
     </>
@@ -103,10 +105,10 @@ function RelationCell({ value, onChange }: PropCellProps) {
   const raw = typeof value === 'string' ? value.trim() : ''
   const inner = REL_RE.exec(raw)?.[1] ?? ''
   const label = (inner.split('|')[1] ?? inner.split('|')[0] ?? '').trim()
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+  const [pos, setPos] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const open = (e: ReactMouseEvent): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setPos({ x: Math.min(r.left, window.innerWidth - 260), y: Math.min(r.bottom + 4, window.innerHeight - 300) })
+    setPos({ x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
   return (
     <>
@@ -169,7 +171,7 @@ function RelationPicker({ x, y, onPick, onClose }: {
     (dupes.get(pageKey(base(p))) ?? 0) > 1 ? `${p.replace(/\\/g, '/').replace(/\.md$/i, '')}|${base(p)}` : base(p)
   return (
     <div className="amx-db-popwrap" onMouseDown={onClose}>
-      <div className="amx-db-pop" style={{ left: x, top: y }} onMouseDown={(e) => e.stopPropagation()}>
+      <OverlayAt className="amx-db-pop" x={x} y={y} onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="amx-db-pop-input"
           autoFocus
@@ -191,7 +193,7 @@ function RelationPicker({ x, y, onPick, onClose }: {
           {results.length === 0 && <div className="amx-db-blank">无匹配页面</div>}
         </div>
         <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>清空关联</button>
-      </div>
+      </OverlayAt>
     </div>
   )
 }

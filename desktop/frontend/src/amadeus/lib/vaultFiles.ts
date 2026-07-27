@@ -15,6 +15,13 @@ export function isFileRef(name: string): boolean {
 /** name → 命中的 vault 相对文件路径(files 原样返回,大小写不敏感比较)或 null。 */
 export function resolveFileName(name: string, files: string[], sourcePath?: string): string | null {
   if (!isFileRef(name)) return null
+  return resolveVaultPath(name, files, sourcePath)
+}
+
+/** resolveFileName 去掉「文件命名空间」闸的版本:调用方已经确定这是个文件引用时用。
+ *  复合后缀类型(内置的 `.excalidraw.md`、插件声明的 `.mindmap.md` 一类)非用不可 —— 它们以 `.md` 结尾,
+ *  被 isFileRef 一律挡在门外,过 resolveFileName 永远返回 null(Codex)。 */
+export function resolveVaultPath(name: string, files: string[], sourcePath?: string): string | null {
   const want = norm(name).toLowerCase()
   const key = (p: string): string => norm(p).toLowerCase()
   if (want.includes('/')) return files.find((f) => key(f) === want) ?? null

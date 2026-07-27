@@ -56,7 +56,7 @@ export interface ThemeContribution {
 }
 
 /** App actions exposed to plugins (no direct store access). */
-export interface PluginAppApi {
+export interface PluginAppApi extends BlockSurfaceApi {
   getActivePage(): string | null
   /** Concatenated text of the active page's blocks. */
   getActivePageText(): string
@@ -77,6 +77,65 @@ export interface PluginAppApi {
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void
+}
+
+/** A read-only view of the ACTIVE page's blocks. Amadeus is single-active-page (one page loaded at a
+ *  time, shared by the note editor and any file-type view) — plugins ride that same model rather than
+ *  getting a second page state that would save over the first. */
+export interface PageSnapshot {
+  /** Opaque identity of "the page these ids belong to". Pass it back to every mutator — block ids are
+   *  PER PAGE (both pages have a `b1`), so acting on a stale snapshot after the user switched pages
+   *  would insert into, or delete from, the wrong file. Mismatched token = the call is refused. */
+  token: string
+  /** Vault-relative path of the active page, or null when none is loaded. */
+  path: string | null
+  status: string
+  /** blockId → markdown source. Identity-stable between edits (compare by reference to skip work).
+   *  Frozen and shared between plugins — never mutate it. */
+  blocks: Readonly<Record<string, string>>
+  /** Block ids in document order (columns flattened). */
+  order: readonly string[]
+  /** Foreign frontmatter keys the page compiler round-trips verbatim — where a plugin stores its own
+   *  per-page data (the built-in mindmap keeps parent/position/relations here). */
+  fmExtra: string
+}
+
+export interface MountBlockOptions {
+  /** The `token` from the PageSnapshot these ids came from (see PageSnapshot.token). */
+  token: string
+  /** Which block to render. Must exist in the active page. */
+  blockId: string
+  /** Providing this declares "I own block structure": the note-shaped structural keys inside the block
+   *  (backspace-at-start merge, arrow-out, move up/down) are neutralised, and anything that would create
+   *  a following block (a `/database` scaffold, Shift+Enter in a non-empty block) is routed here instead.
+   *  Omit it and the block behaves exactly like one in the note editor. */
+  onInsertAfter?(blockId: string, content: string): void
+}
+
+/** The block surface: real Amadeus blocks, rendered by the host into DOM the plugin owns.
+ *  Exists so an external plugin can build a "nodes are real blocks" UI (the mindmap) without the host
+ *  having to ship it — built-in and external plugins get the same capabilities, the only difference
+ *  being that built-ins come pre-installed. */
+export interface BlockSurfaceApi {
+  /** Frozen snapshot — mutating it does nothing (it is shared between plugins). */
+  getPage(): Readonly<PageSnapshot>
+  /** Fires when the active page's blocks / order / foreign frontmatter change. Returns an unsubscribe. */
+  subscribePage(cb: (page: PageSnapshot) => void): () => void
+  /** Replace the foreign-frontmatter text wholesale (patch it surgically yourself — other plugins and
+   *  the user's own keys live in there too). Goes through the page's undo stack. */
+  setFmExtra(token: string, text: string): void
+  /** Insert a block after `afterId` (null = at the very start) and return its new id, or null if the
+   *  token was stale. */
+  insertBlockAfter(token: string, afterId: string | null, content: string): string | null
+  deleteBlock(token: string, id: string): Promise<void>
+  requestFocus(id: string, place?: 'start' | 'end'): void
+  consumeFocus(id: string): void
+  undo(token: string): void
+  redo(token: string): void
+  /** Modal text input. Electron has no `window.prompt` — use this, never the DOM one. */
+  prompt(title: string, initial?: string, opts?: { label?: string }): Promise<string | null>
+  /** Render a real, editable block into `el`. Returns a dispose function; call it when you drop the node. */
+  mountBlocks(el: HTMLElement, opts: MountBlockOptions): () => void
 }
 
 /** One achievement inside a plugin-registered series. Titles/descriptions are literal strings
@@ -109,11 +168,31 @@ export interface PanelContribution {
   component: ComponentType
 }
 
-/** An item a plugin contributes to the bottom status bar. (React component; built-in plugins.)
- *  @deprecated Dead since the LCL shell — no live consumer renders these. */
+/** An item a plugin contributes to the global bottom status bar.
+ *  (Revived 2026-07-23: the LCL shell now renders a global status bar — deprecation lifted.)
+ *  Two forms: `component` (React; built-in plugins) or data-driven `text`/`title`/`onClick`
+ *  (external plugins — no React needed; mutate via the handle returned by registerStatusItem).
+ *  The host namespaces the id as `plugin:<pluginId>:<id>` and lists it in
+ *  设置 → 通知与状态栏, where users can hide/reorder it. Cleared on plugin disable. */
 export interface StatusItemContribution {
   id: string
-  component: ComponentType
+  /** React form (built-ins). Takes precedence over the data-driven fields. */
+  component?: ComponentType
+  /** Data-driven form: the text shown in the bar. Update via handle.update(). */
+  text?: string
+  /** Hover tooltip. */
+  title?: string
+  /** Ordering segment — the bar renders right-aligned as one row; 'left' items come before
+   *  'right' items. Default 'right'. */
+  side?: 'left' | 'right'
+  /** Makes the item clickable (hover highlight). */
+  onClick?(): void
+}
+
+/** Returned by registerStatusItem — lets the plugin update its item in place. */
+export interface StatusItemHandle {
+  update(patch: { text?: string; title?: string }): void
+  dispose(): void
 }
 
 /** A workbench view a plugin can contribute (plain DOM mount — no React needed in the plugin).
@@ -206,13 +285,20 @@ export interface PluginContext {
   registerTheme(theme: ThemeContribution): void
   /** @deprecated No live render surface — use registerView. */
   registerPanel(panel: PanelContribution): void
-  /** @deprecated No live render surface. */
-  registerStatusItem(item: StatusItemContribution): void
+  /** Contribute an item to the global bottom status bar (host-namespaced `plugin:<pluginId>:<id>`;
+   *  user-manageable in 设置 → 通知与状态栏). Returns a handle for in-place updates.
+   *  Old hosts (< 2026-07-23) return void — call as `const h = ctx.registerStatusItem?.(…)`
+   *  and guard `h?.update(…)`. */
+  registerStatusItem(item: StatusItemContribution): StatusItemHandle | void
   /** Contribute a workbench view (registered as engine view type `plugin:<pluginId>:<id>`). */
   registerView(view: ViewContribution): void
   /** Contribute a custom file type: tree icon + dedicated editor view + click-to-open. Declare the same
    *  suffixes in manifest `fileExtensions`. See FileTypeContribution. */
-  registerFileType(def: FileTypeContribution): void
+  /** Returns false when EVERY declared suffix is already owned by a built-in file type — the host
+   *  refuses the registration (built-ins always win) and the plugin should stand down entirely
+   *  (skip its file creator / slash item too, or the user sees duplicate "New X" entries).
+   *  Older hosts return undefined, so test with `=== false`. */
+  registerFileType(def: FileTypeContribution): boolean | void
   /** Contribute an inline renderer for `![[…]]` embeds this plugin recognises (e.g. its own file type). */
   registerEmbedRenderer(def: EmbedRendererContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
@@ -220,6 +306,11 @@ export interface PluginContext {
   /** Open (or focus) one of this plugin's own registered views in the main area.
    *  No-op on hosts without a workbench (e.g. the standalone notes app). */
   openView(viewId: string): void
+  /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
+   *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
+   *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:
+   *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem. */
+  notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean }): void
   /** Declare a tunable setting (rendered on the plugin detail page; localStorage-backed). */
   registerSetting(def: SettingContribution): void
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
@@ -258,6 +349,10 @@ export interface AmadeusPlugin {
   onboarding?: PluginOnboardingSpec
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old. Never activated. */
   blocked?: 'api' | 'minApp'
+  /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */
+  bundle?: import('@amadeus-shared/ipc').PluginBundleInfo
+  /** 插件声明会发的活动事件(manifest `events`,宿主已消毒)——自动化构建器事件目录用。External plugins only. */
+  events?: import('@amadeus-shared/ipc').PluginEventDecl[]
   /** Wire up contributions; optionally return a disposer for teardown on disable. */
   setup(ctx: PluginContext): void | (() => void)
 }

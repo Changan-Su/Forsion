@@ -15,12 +15,12 @@ import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useAllDatabases, isDateCol, type AggDb } from '../amadeus/store/dbAggregateStore'
 import { useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
-import { calDisplayName } from './calendar/calDisplayName'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath, memberOf } from '../amadeus/store/calendarConfigStore'
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { openDb } from '../amadeusNav'
 import { MemberColPicker } from './calendar/MemberColPicker'
 import { WEEKDAYS, addDays, diffDays, fmtStamp, monthGridDays, monthLabel, startOfDay, toLocalDate } from './calendar/dateUtils'
+import { OverlayAt } from '@lcl/engine'
 
 export function CalendarConfigView() {
   return (
@@ -150,7 +150,15 @@ function ConfigList() {
               <span className="amx-calcfg-swatch" style={{ background: visible ? color : 'transparent', borderColor: color }}>
                 <input type="color" value={color} onChange={(e) => setColor(vault, db.path, e.target.value)} title="事件颜色" />
               </span>
-              <span className={`amx-calcfg-name${visible ? '' : ' off'}`} title={db.name}>{readonly ? (kind === 'agent' ? `⚙ ${db.name}` : db.name) : calDisplayName(db.name, activeLabel)}{!readonly && isDefault && ' ★'}</span>
+              <span className={`amx-calcfg-name${visible ? '' : ' off'}`} title={db.name}>
+                {kind === 'agent' ? `⚙ ${db.name}` : db.name}
+                {(() => {
+                  // Vault 归属后缀(淡显):agent 已用 ⚙ 标识不缀;other 用其所属侧名;其余=活动侧库,缀活动侧名。
+                  const vaultLabel = kind === 'agent' ? '' : kind === 'other' ? (db.vaultLabel || '') : activeLabel
+                  return vaultLabel ? <span className="amx-cal-vault"> · {vaultLabel}</span> : null
+                })()}
+                {!readonly && isDefault && ' ★'}
+              </span>
               <CheckboxInput
                 label="在日历中显示"
                 isLabelHidden
@@ -181,13 +189,13 @@ function ConfigList() {
 
       {menu && (
         <div className="amx-db-popwrap" onMouseDown={() => setMenu(null)}>
-          <div className="amx-db-pop amx-calcfg-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
+          <OverlayAt className="amx-db-pop amx-calcfg-menu" x={menu.x} y={menu.y} onMouseDown={(e) => e.stopPropagation()}>
             <button className="amx-db-opt" onClick={() => rename(menu.db)}>重命名</button>
             <button className="amx-db-opt" onClick={() => { setDefault(vault, menu.db.path); setMenu(null) }}>设为默认库</button>
             <button className="amx-db-opt" onClick={() => { openDb(menu.db.path); setMenu(null) }}>在新标签打开</button>
             <button className="amx-db-opt" onClick={() => { setEditing(menu.db); setMenu(null) }}>Calendar 设置(改列映射)</button>
             <button className="amx-db-opt amx-db-opt-danger" onClick={() => { removeMember(vault, menu.db.path); setMenu(null) }}>从日历移除</button>
-          </div>
+          </OverlayAt>
         </div>
       )}
 

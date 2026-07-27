@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFileRef, resolveFileName } from './vaultFiles'
+import { isFileRef, resolveFileName, resolveVaultPath } from './vaultFiles'
 
 const FILES = ['打卡记录.db', 'a/打卡记录.db', 'a/photo.PNG', 'b/photo.png', 'Diary.fd/清单.db']
 
@@ -30,5 +30,29 @@ describe('vaultFiles 文件命名空间解析', () => {
   it('非文件引用与未命中返回 null', () => {
     expect(resolveFileName('Note', FILES)).toBeNull()
     expect(resolveFileName('不存在.db', FILES)).toBeNull()
+  })
+})
+
+// resolveVaultPath = 去掉「文件命名空间」闸的解析。内置的复合后缀类型(.mindmap.md / .excalidraw.md)
+// 以 .md 结尾,被 isFileRef 一律挡下 → 只能走这条,否则 [[图.mindmap.md]] 永远解析不到(Codex)。
+describe('resolveVaultPath(复合 .md 后缀)', () => {
+  const FILES = ['Project.fd/脑图.mindmap.md', '别处/脑图.mindmap.md', 'a/打卡记录.db']
+
+  it('resolveFileName 挡下 .md 结尾的名字(这正是要绕开它的原因)', () => {
+    expect(resolveFileName('脑图.mindmap.md', FILES)).toBeNull()
+  })
+
+  it('裸名命中,且源同目录优先', () => {
+    expect(resolveVaultPath('脑图.mindmap.md', FILES, 'Project.md')).toBe('Project.fd/脑图.mindmap.md')
+    expect(resolveVaultPath('脑图.mindmap.md', FILES, '别处/x.md')).toBe('别处/脑图.mindmap.md')
+  })
+
+  it('带路径要精确匹配;未命中返回 null(调用方据此退回裸名)', () => {
+    expect(resolveVaultPath('Project.fd/脑图.mindmap.md', FILES)).toBe('Project.fd/脑图.mindmap.md')
+    expect(resolveVaultPath('无此.mindmap.md', FILES)).toBeNull()
+  })
+
+  it('普通文件引用行为与 resolveFileName 一致', () => {
+    expect(resolveVaultPath('a/打卡记录.db', FILES)).toBe('a/打卡记录.db')
   })
 })

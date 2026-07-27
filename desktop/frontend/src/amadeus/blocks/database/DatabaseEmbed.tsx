@@ -31,6 +31,7 @@ import { openDb } from '../../../amadeusNav'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
 import { MemberColPicker } from '../../../views/calendar/MemberColPicker'
 import { act, actDebounced, shortVal } from '../../../activity/log'
+import { OverlayAt } from '../../lib/clampMenu'
 import {
   CheckBoxCheckLinearIcon, DatabaseKanbanViewIcon, DatabaseListViewIcon, DatabaseTableViewIcon,
   DateTimeIcon, FilterIcon, FolderIcon, ImageIcon, LinkIcon, MultiSelectIcon, NumberIcon, PageIcon,
@@ -87,6 +88,8 @@ interface Pop {
   viewId?: string
   x: number
   y: number
+  /** 触发按钮的上沿:弹层在下方放不下时翻到它之上(见 engine/menuAnchor)。 */
+  anchorTop?: number
 }
 
 export function DatabaseEmbed({ target, pagePath, initialView, onViewChange }: {
@@ -310,10 +313,11 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     const s = Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v)
     return s.trim() || '未命名'
   }
-  /** 行编辑器弹层比通用弹层高(~440px),钳位单独放宽,免得底部卡片的编辑器跑出屏外。 */
+  /** 弹层落点 = 按钮下沿(放不下时 OverlayAt 自会翻到 anchorTop=按钮上沿之上)。
+   *  ⚠️别在这里按「估算高度」预夹 y:预夹过的 y 会被当成真锚点再翻一次面(codex#2)。 */
   const openRow = (e: ReactMouseEvent, rowId: string): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setPop({ kind: 'row', rowId, x: Math.min(r.left, window.innerWidth - 340), y: Math.min(r.bottom + 4, Math.max(12, window.innerHeight - 460)) })
+    setPop({ kind: 'row', rowId, x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
   /** 看板/日历引导:一键补齐可分组/可上历的列(笔记视图列 id = frontmatter 键,撞键则不动)。 */
   const addStatusCol = (): void =>
@@ -366,9 +370,9 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- kindOf/rowTitle 只依赖 db.columns(已在列)
   }, [baseRows, db.columns, sort, view.filters, q])
 
-  const openPop = (e: ReactMouseEvent, p: Omit<Pop, 'x' | 'y'>): void => {
+  const openPop = (e: ReactMouseEvent, p: Omit<Pop, 'x' | 'y' | 'anchorTop'>): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-    setPop({ ...p, x: Math.min(r.left, window.innerWidth - 250), y: Math.min(r.bottom + 4, window.innerHeight - 260) })
+    setPop({ ...p, x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
 
   /** title 提交(blur/Enter)→ 文件名跟随(renameDb:文件+内部name+全库引用+日历配置一起动)。
@@ -546,7 +550,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
       )}
 
       {pop && popCol && pop.kind === 'colmenu' && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <ColMenu
             col={popCol}
             sort={sort?.colId === popCol.id ? sort.dir : null}
@@ -562,12 +566,12 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         <OptionsPop x={pop.x} y={pop.y} col={popCol} row={popRow} setCell={setCell} createOption={createOption} onClose={() => setPop(null)} />
       )}
       {pop && pop.kind === 'folder' && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <FolderPopover current={noteFolder ?? ''} onPick={(f) => void setFolder(f)} />
         </PopShell>
       )}
       {pop && pop.kind === 'viewmenu' && popView && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <ViewMenu
             view={popView}
             columns={db.columns}
@@ -589,7 +593,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         </PopShell>
       )}
       {pop && pop.kind === 'calendar' && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <MemberColPicker
             dbName={db.name}
             columns={db.columns}
@@ -600,7 +604,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         </PopShell>
       )}
       {pop && pop.kind === 'filters' && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <FiltersPop
             view={view}
             columns={db.columns}
@@ -610,7 +614,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         </PopShell>
       )}
       {pop && popCol && pop.kind === 'stat' && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <div className="amx-db-pop-sec">页脚统计 · {popCol.name}</div>
           <div className="amx-db-pop-list">
             <button
@@ -635,7 +639,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         </PopShell>
       )}
       {pop && pop.kind === 'addview' && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <div className="amx-db-pop-sec">添加视图</div>
           <div className="amx-db-pop-list">
             {(Object.keys(VIEW_META) as DbViewType[]).map((t) => (
@@ -648,7 +652,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         </PopShell>
       )}
       {pop && pop.kind === 'row' && popRow && (
-        <PopShell x={pop.x} y={pop.y} onClose={() => setPop(null)}>
+        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <RowEditor
             db={db}
             row={popRow}
@@ -871,7 +875,7 @@ function Cell({
 
 // ── 弹层(fixed;点外关闭) ────────────────────────────────────────────────────
 
-function PopShell({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
+function PopShell({ x, y, anchorTop, onClose, children }: { x: number; y: number; anchorTop?: number; onClose: () => void; children: ReactNode }) {
   // 关闭前先 blur 聚焦元素:React 同步卸载会赶在浏览器焦点转移前,被卸载的 input 不派发 blur,
   // ColMenu 重命名这类「onBlur 提交」的草稿会静默丢失——手动 blur 让 focusout 在卸载前发出。
   const close = (): void => {
@@ -880,9 +884,9 @@ function PopShell({ x, y, onClose, children }: { x: number; y: number; onClose: 
   }
   return (
     <div className="amx-db-popwrap" onMouseDown={close}>
-      <div className="amx-db-pop" style={{ left: x, top: y }} onMouseDown={(e) => e.stopPropagation()}>
+      <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
         {children}
-      </div>
+      </OverlayAt>
     </div>
   )
 }

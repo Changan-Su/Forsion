@@ -598,6 +598,32 @@
   cursor: default;
 }
 
+/* 嵌入块“二次选中”(双击手柄 / shift+双击)时,预览上方浮出的可编辑源码行 ![[目标]]。 */
+.am-app .embed-src-line {
+  padding: 2px 0 4px;
+}
+/* 源码行(可编辑/只读)一律裸文本:无框、无底纹、无虚线(用户 2026-07-26 拍板)。
+   块选中的淡底也不铺到这行上 —— 见下面 .block-host[data-selected] 那条的 :not()。 */
+.am-app .embed-src-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 13px;
+  color: var(--primary);
+  background: none;
+  border: none;
+  padding: 3px 0;
+  outline: none;
+}
+/* 仅选中态(方向键选中/点手柄)露出的只读源码显示:回车才进上面的可编辑输入。 */
+.am-app .embed-src-readonly {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 13px;
+  color: color-mix(in srgb, var(--primary) 70%, var(--text));
+  padding: 3px 0;
+  user-select: none;
+}
+
 .am-app .drag-overlay {
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
@@ -820,7 +846,7 @@
 }
 /* 块选中(Notion 式):accent 描边 + 淡底,非编辑态。只圈正文(.block-body),
    手柄泳道在其左侧不进框(用户要求「选中框贴正文」)。 */
-.am-app .block-host[data-selected] > .block-body {
+.am-app .block-host[data-selected] > .block-body:not(.embed-src-line) {
   border-radius: 6px;
   background: color-mix(in srgb, var(--primary) 14%, transparent); /* 用户:只留淡底纹,不要描边框 */
 }
@@ -1223,16 +1249,131 @@ body.amx-marquee-active * {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  width: 252px;
-  max-height: 344px;
+  width: 248px;
+  max-height: 320px;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  /* AFFiNE 浮层规格:8px 圆角 + 0.5px 描边层 + 12px 弥散,入场统一 120ms */
-  border-radius: 8px;
-  box-shadow: 0 0 0 0.5px var(--border), 0 0 12px var(--shadow, rgba(66, 65, 73, 0.14));
-  padding: 6px;
+  /* 圆角/投影跟宿主浮层同一套 token(与 .am-app .ctx-menu 一致);此前写死 8px + 自定义阴影,
+     和四周的面板不是一个观感(用户 2026-07-26)。 */
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  padding: 5px;
   backdrop-filter: blur(20px) saturate(140%);
   animation: pop-in 120ms var(--ease-apple);
+}
+
+/* 行内格式工具栏(选中文字上浮,同 slash 用 fixed + coordsAtPos 内联坐标;锚点=选区中点上方)。 */
+.am-app .inline-toolbar {
+  position: fixed;
+  z-index: 55;
+  /* ⚠️别把摆位写成 transform:pop-in 动画也动 transform,会覆盖它 120ms(工具栏先出现在选区
+     右下再跳上去,用户实报)。落位交给 OverlayAt 的 prefer:'above' + center。 */
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(20px) saturate(140%);
+  animation: pop-in 120ms var(--ease-apple);
+  user-select: none;
+}
+.am-app .itb-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 4px;
+}
+.am-app .itb-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-sec);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-apple);
+}
+.am-app .itb-btn:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.am-app .itb-turn {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.am-app .itb-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 2px;
+  background: var(--border);
+}
+.am-app .itb-panel {
+  border-top: 1px solid var(--border);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.am-app .itb-menu-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text-sec);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.am-app .itb-menu-item:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.am-app .itb-color-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 6px 6px 3px;
+}
+.am-app .itb-swatches {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 2px;
+}
+.am-app .itb-swatch {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+.am-app .itb-swatch:hover {
+  border-color: var(--primary);
+}
+.am-app .itb-swatch-a {
+  font-size: 13px;
+  font-weight: 600;
+}
+.am-app .itb-swatch-bg {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* 自定义行内标记(marks.ts toDOM):文字色/背景色已内联 style;<mark> 无 bg 时给个强调色兜底。 */
+.am-app .ProseMirror mark {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 .am-app .slash-scroll {
   display: flex;
@@ -1241,29 +1382,30 @@ body.amx-marquee-active * {
   overflow-y: auto;
 }
 .am-app .slash-group + .slash-group {
-  margin-top: 4px;
+  margin-top: 3px;
 }
 .am-app .slash-group-label {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--text-muted);
-  padding: 6px 10px 3px;
+  padding: 4px 8px 2px;
 }
 .am-app .slash-item {
   display: grid;
-  grid-template-columns: 28px 1fr auto;
+  grid-template-columns: 22px 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
   text-align: left;
   border: none;
   background: transparent;
   color: var(--text-sec);
   border-radius: var(--radius-sm);
-  padding: 6px 10px;
+  padding: 3px 8px;
   font-size: 13px;
+  line-height: 1.35;
   transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app .slash-item[data-active] {
@@ -1273,10 +1415,10 @@ body.amx-marquee-active * {
 .am-app .slash-icon {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--surface);
   color: var(--text-sec);
   font-size: 11px;
@@ -1284,7 +1426,7 @@ body.amx-marquee-active * {
   font-family: var(--font-mono);
 }
 .am-app .slash-icon svg {
-  font-size: 17px; /* AFFiNE 图标 1em 随字号:盒内 11px 太小,单独放大 */
+  font-size: 14px; /* 图标 1em 随字号:盒内 11px 太小,单独放大(跟着 22px 图标盒收了一档) */
 }
 .am-app .slash-item[data-active] .slash-icon {
   background: var(--drop);
@@ -1312,10 +1454,10 @@ body.amx-marquee-active * {
 .am-app .slash-foot {
   display: flex;
   gap: 12px;
-  padding: 7px 10px 3px;
-  margin-top: 4px;
+  padding: 5px 8px 1px;
+  margin-top: 3px;
   border-top: 1px solid var(--border);
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--text-muted);
 }
 

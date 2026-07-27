@@ -6,7 +6,6 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { parseDb, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { cellText, firstDateCol, type AggDb } from '../amadeus/store/dbAggregateStore'
-import { calDisplayName } from '../views/calendar/calDisplayName'
 import { usePageStore } from '../amadeus/store/pageStore'
 
 interface OtherSideState {
@@ -34,7 +33,8 @@ export const useOtherSideCal = create<OtherSideState>((set) => ({
         const agg: AggDb = {
           // 合成唯一 path:避开活动侧 colorForDb/isHidden 按相对路径的键碰撞(两侧都有 Calendar.db),自动取调色板色。
           path: `otherside:${res.root}/${rel}`,
-          name: calDisplayName(df.name, res.vaultName),
+          name: df.name, // 原名不拼后缀;Vault 归属走 vaultLabel(图例淡显),rename/数据层不受污染
+          vaultLabel: res.vaultName,
           isNoteView: false,
           readonly: true,
           columns: df.columns as DbColumn[],

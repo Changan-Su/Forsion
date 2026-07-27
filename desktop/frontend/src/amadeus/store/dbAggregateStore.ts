@@ -31,6 +31,8 @@ export interface AggDb {
   rows: AggRow[]
   /** 只读源(如 agent 日程 `agent://…` 合成库):Calendar 不可拖拽/编辑,图例无默认库星标。 */
   readonly?: boolean
+  /** 所属 Vault 标签(纯展示):跨侧/多 Vault 汇总时图例淡显后缀,标注该日历归属。 */
+  vaultLabel?: string
 }
 
 /** 任意 cell → 展示文本(供名称列/其它列只读展示)。 */

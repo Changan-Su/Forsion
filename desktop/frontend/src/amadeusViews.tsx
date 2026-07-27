@@ -6,8 +6,8 @@ import { type ReactNode, type CSSProperties, type DragEvent as RDragEvent, type 
 import { create } from 'zustand'
 import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
-  ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown,
-  Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload,
+  ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
+  Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, Network,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -22,8 +22,9 @@ import { AmadeusPropertiesPanel } from './amadeusProperties'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import type { TrashEntry } from '@amadeus-shared/ipc'
 import type { AmadeusSyncStatus } from './types'
-import { openNote, openDb, openPdf, openDrawing, openFile, createDrawing, openSearch } from './amadeusNav'
+import { openNote, openDb, openPdf, openImage, openDrawing, openFile, createDrawing, openSearch } from './amadeusNav'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
+import { setChatRefDrag } from './views/chat2/chatDragRef'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
 import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
@@ -50,6 +51,7 @@ import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
 import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
+import { OverlayAt } from '@lcl/engine'
 
 const ps = () => usePageStore.getState()
 const baseName = (p: string): string => p.split(/[\\/]/).pop()!.replace(/\.md$/, '')
@@ -165,6 +167,7 @@ interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root'; path: string; x: num
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 const isDbPath = (p: string): boolean => /\.db$/i.test(p)
 const isPdfPath = (p: string): boolean => /\.pdf$/i.test(p)
+const isImagePath = (p: string): boolean => /\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(p)
 const dbBaseName = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.db$/i, '')
 
 /** 回收站(桌面端 .trash):树底入口 + 浮层(恢复/彻底删/清空)。缺 API 的端(web/mobile)不渲染。 */
@@ -552,12 +555,11 @@ export function AmadeusPagesView() {
   const [flash, setFlash] = useState<string | null>(null)
   const flashRef = useRef<HTMLElement | null>(null)
 
-  // 首次挂载装插件(builtins 子集 + 外部插件)+ 恢复上次 Vault + 订阅外部文件变更。
+  // 首次挂载装插件(builtins 子集 + 外部插件)+ 恢复上次 Vault。
+  // ⚠️外部变更订阅**不在这里**:本组件只在左栏「笔记」档挂载,挂在这儿等于左栏一切走就停止回灌。
+  // externalChange → pageStore 模块级;structureChange → dbAggregateStore 模块级。
   useEffect(() => {
     ensureAmadeusReady()
-    const offExt = amadeus.onExternalChange?.((p) => void ps().reconcileExternal(p))
-    const offStruct = amadeus.onStructureChange?.(() => void ps().refreshStructure())
-    return () => { offExt?.(); offStruct?.() }
   }, [])
   // 按条目云同步注册表:订阅一次 + 切库时重取(activeRoot 跟随主进程活动 vault)。
   useEffect(() => {
@@ -773,14 +775,14 @@ export function AmadeusPagesView() {
     const isNote = !isDraw && !ft && isNotePath(path)
     const ctxKind = isNote ? 'page' : 'asset'
     // 无 emoji 时的类型兜底图标(md 笔记也有 —— 用户要求)。尺寸由 CSS .t2s-lead-icon 定,勿传 size。
-    const LeadIcon = isDbPath(path) ? Database : isDraw ? PenTool : isNote ? FileText : Paperclip
+    const LeadIcon = isDbPath(path) ? Database : isDraw ? PenTool : isNote ? FileText : isImagePath(path) ? FileImage : Paperclip
     return (
     <button
       key={path}
       ref={(el) => { if (path === flash) flashRef.current = el }}
       className={`t2s-srow${path === (activeViewFile ?? activePage) ? ' active' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${merged && dragPath && dragOver === merged.fd ? ' amx-drop-into' : ''}`}
       style={{ paddingLeft: rowPadLeft(depth) }}
-      onClick={(e) => { ft ? openFile(path) : isNote ? void openNote(path, { newTab: e.metaKey || e.ctrlKey }) : isDraw ? openDrawing(path) : isDbPath(path) ? openDb(path) : isPdfPath(path) ? openPdf(path) : void amadeus.openVaultFile(path).catch(() => {}) }}
+      onClick={(e) => { ft ? openFile(path) : isNote ? void openNote(path, { newTab: e.metaKey || e.ctrlKey }) : isDraw ? openDrawing(path) : isDbPath(path) ? openDb(path) : isPdfPath(path) ? openPdf(path) : isImagePath(path) ? openImage(path) : void amadeus.openVaultFile(path).catch(() => {}) }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: ctxKind, path, x: e.clientX, y: e.clientY }) }}
       draggable={renaming !== path}
       onDragStart={(e) => {
@@ -788,6 +790,8 @@ export function AmadeusPagesView() {
         const r = e.currentTarget.getBoundingClientRect()
         e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
         e.dataTransfer.effectAllowed = 'move'
+        // 拖到聊天区 = 插入 [[笔记]] 引用(树内移动仍靠 dragPath 本地态,多带一个 MIME 不影响)。
+        setChatRefDrag(e.dataTransfer, [{ kind: 'note', path }])
         setDragPath(path)
       }}
       onDragEnd={() => { setDragPath(null); setDragOver(null) }}
@@ -1048,7 +1052,7 @@ export function AmadeusPagesView() {
       </aside>
 
       {menu?.kind === 'page' && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { void openNote(menu.path, { newTab: true }); setMenu(null) }}><Plus size={13} /> 在新标签页打开</button>
           <button onClick={() => { const p = menu.path; setMenu(null); newChild(p) }}><SquarePen size={13} /> 新建子笔记</button>
           <button onClick={() => startRename(menu.path)}><Pencil size={13} /> 重命名</button>
@@ -1064,10 +1068,10 @@ export function AmadeusPagesView() {
           )}
           <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); if (confirmedDelete('note', p)) { useRecentViews.getState().remove(`note:${p}`); void ps().deletePage(p) } }}><Trash2 size={13} /> 删除</button>
-        </div>
+        </OverlayAt>
       )}
       {menu?.kind === 'asset' && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           {isDbPath(menu.path) ? (
             <>
               <button onClick={() => { openDb(menu.path); setMenu(null) }}><Eye size={13} /> 打开</button>
@@ -1079,9 +1083,21 @@ export function AmadeusPagesView() {
               <button onClick={() => { openPdf(menu.path); setMenu(null) }}><Eye size={13} /> 打开(可批注)</button>
               <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><ExternalLink size={13} /> 用系统程序打开</button>
             </>
+          ) : isImagePath(menu.path) ? (
+            <>
+              <button onClick={() => { openImage(menu.path); setMenu(null) }}><Eye size={13} /> 打开</button>
+              <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><ExternalLink size={13} /> 用系统程序打开</button>
+            </>
           ) : isDrawingPath(menu.path) ? (
             <>
               <button onClick={() => { openDrawing(menu.path); setMenu(null) }}><Eye size={13} /> 打开白板</button>
+              <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><ExternalLink size={13} /> 用系统程序打开</button>
+            </>
+          ) : findFileType(pluginFileTypes, menu.path) ? (
+            // 插件声明的文件类型(如 .mindmap.md):在应用内开它自己的视图。掉到下面的兜底就等于
+            // 「用系统默认程序打开」——拿 TextEdit 打开一张思维导图。
+            <>
+              <button onClick={() => { openFile(menu.path); setMenu(null) }}><Eye size={13} /> 打开</button>
               <button onClick={() => { void amadeus.openVaultFile(menu.path).catch(() => {}); setMenu(null) }}><ExternalLink size={13} /> 用系统程序打开</button>
             </>
           ) : (
@@ -1089,10 +1105,10 @@ export function AmadeusPagesView() {
           )}
           <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); if (confirmedDelete('file', p)) void ps().deletePage(p) }}><Trash2 size={13} /> 删除</button>
-        </div>
+        </OverlayAt>
       )}
       {menu?.kind === 'folder' && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(menu.path)])); void ps().createPageInFolder(menu.path); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
           <button onClick={() => newFolder(menu.path)}><FolderPlus size={13} /> 新建子文件夹</button>
           <button onClick={() => newBase(menu.path)}><Database size={13} /> 新建 Base</button>
@@ -1121,10 +1137,10 @@ export function AmadeusPagesView() {
             }}><Share2 size={13} /> 发布此文件夹(公开链接)</button>
           )}
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> 删除</button>
-        </div>
+        </OverlayAt>
       )}
       {menu?.kind === 'root' && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { void ps().createPage(); setMenu(null) }}><SquarePen size={13} /> 新建笔记</button>
           <button onClick={() => newFolder('')}><FolderPlus size={13} /> 新建文件夹</button>
           <button onClick={() => newBase('')}><Database size={13} /> 新建 Base</button>
@@ -1134,7 +1150,7 @@ export function AmadeusPagesView() {
               <span style={{ display: 'inline-block', width: 13, textAlign: 'center', fontSize: 13 }}>{o.item.icon || '📄'}</span> {o.item.label}
             </button>
           ))}
-        </div>
+        </OverlayAt>
       )}
 
       {cloudPanel && <CloudVaultPanel onClose={() => setCloudPanel(false)} />}
@@ -1314,9 +1330,10 @@ function CoverPicker({ page, x, y, onClose }: { page: string; x: number; y: numb
   )
   return (
     <div className="amx-db-popwrap am-app" onMouseDown={onClose}>
-      <div
+      <OverlayAt
         className="amx-db-pop amx-coverpick"
-        style={{ left: Math.max(8, Math.min(x - 420, window.innerWidth - 428)), top: Math.max(8, Math.min(y, window.innerHeight - 308)) }}
+        x={x - 420}
+        y={y}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="amx-coverpick-tabs">
@@ -1350,7 +1367,7 @@ function CoverPicker({ page, x, y, onClose }: { page: string; x: number; y: numb
             <div className="amx-coverpick-hint">按「设置 → 笔记」的附件位置存入 vault。</div>
           </div>
         )}
-      </div>
+      </OverlayAt>
     </div>
   )
 }
@@ -1372,7 +1389,7 @@ function IconPicker({ x, y, current, onPick, onClose }: {
   const emojis = EMOJI_LIST
   return (
     <div className="amx-db-popwrap" onMouseDown={onClose}>
-      <div className="amx-db-pop amx-iconpick" style={{ left: Math.min(x, window.innerWidth - 300), top: Math.min(y, window.innerHeight - 320) }} onMouseDown={(e) => e.stopPropagation()}>
+      <OverlayAt className="amx-db-pop amx-iconpick" x={x} y={y} onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="amx-db-pop-input"
           autoFocus
@@ -1394,7 +1411,7 @@ function IconPicker({ x, y, current, onPick, onClose }: {
         {current && (
           <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>移除图标</button>
         )}
-      </div>
+      </OverlayAt>
     </div>
   )
 }
@@ -1527,19 +1544,8 @@ function SourceEditor() {
   )
 }
 
-/** 插件贡献的状态条项(如字数统计)→ 编辑器工具条(engine 无全局状态栏,就近呈现)。 */
-function PluginStatusItems() {
-  const items = usePluginStore((s) => s.statusItems)
-  if (!items.length) return null
-  return (
-    <span className="amx-status">
-      {items.map((o) => {
-        const C = o.item.component
-        return <C key={`${o.pluginId}:${o.item.id}`} />
-      })}
-    </span>
-  )
-}
+// 插件状态条项:2026-07-23 起渲染进全局状态栏(pluginStatusBridge)——engine 有全局状态栏了,
+// 原「就近呈现在编辑器工具条」的 PluginStatusItems shim 退役。
 
 // 多编辑器 tab 间「最近活动的编辑器」:侧栏点笔记时(焦点可能在侧栏,无 main tab 处于 active)由它认领。
 let lastActiveEditorLeafId: string | null = null
@@ -1547,6 +1553,8 @@ let lastActiveEditorLeafId: string | null = null
 export function AmadeusEditorView({ leaf }: ViewProps) {
   const activePage = usePageStore((s) => s.activePage)
   const vaultRoot = usePageStore((s) => s.vaultRoot) // 无笔记时的空态引导据此二态(未开 Vault / 已开待新建)
+  // 插件文件类型也占用全局 activePage(单活页模型)→ 认领时须能认出「这不是笔记」,见下面的 useEffect。
+  const pluginFileTypes = usePluginStore((s) => s.fileTypes)
   // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state。
   const mode = useUiOverlay((s) => s.editorMode)
   const [dragging, setDragging] = useState(false)
@@ -1617,7 +1625,9 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
       void ps().loadPage(notePath)
       return
     }
-    if (globalPage) {
+    // 插件文件类型(如 .mindmap.md)也走全局 pageStore(activePage 会变成那份文件),但它绝不是笔记 →
+    // 笔记编辑器不认领它,否则本 leaf 的 notePath 被改写成它,再激活就把导图当笔记用 PageView 渲染/编辑(Codex)。
+    if (globalPage && !findFileType(pluginFileTypes, globalPage)) {
       if (leaf.params.notePath !== globalPage) leaf.setParams({ ...leaf.params, notePath: globalPage })
       leaf.setTitle(baseName(globalPage))
     }
@@ -1689,8 +1699,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
         <div className="amx-toolbar">
           <Breadcrumb />
           {window.amadeusCollab && <ShareStatus path={activePage} refreshKey={shareVer} onOpen={(x, y) => setShareCard({ x, y })} />}
-          <PluginStatusItems />
-          {/* 置顶图钉(字数统计右侧):写 amadeusPrefs(每 vault localStorage),侧边栏「置顶」分区同步点亮。 */}
+          {/* 置顶图钉:写 amadeusPrefs(每 vault localStorage),侧边栏「置顶」分区同步点亮。 */}
           <button
             className={`amx-mode-btn amx-pin-btn${pinned ? ' amx-pin-on' : ''}`}
             title={pinned ? '取消置顶' : '置顶'}
@@ -1765,7 +1774,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
         </div>
       )}
       {noteMenu && activePage && (
-        <div className="ctx-menu" style={{ left: noteMenu.x, top: noteMenu.y }} onClick={(e) => e.stopPropagation()}>
+        <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> 导出为 PDF</button>
           <button onClick={() => { useAmadeusPrefs.getState().toggleStar(activePage); setNoteMenu(null) }}>
             <Star size={13} /> {starred ? '取消收藏' : '收藏'}
@@ -1774,7 +1783,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
           <button className="danger" onClick={() => { const p = activePage; setNoteMenu(null); if (confirmedDelete('note', p)) { useRecentViews.getState().remove(`note:${p}`); void ps().deletePage(p) } }}>
             <Trash2 size={13} /> 删除笔记
           </button>
-        </div>
+        </OverlayAt>
       )}
       {shareCard && activePage && (
         <ShareCard path={activePage} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />

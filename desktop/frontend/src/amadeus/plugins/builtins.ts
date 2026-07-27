@@ -3,7 +3,6 @@
 
 import type { AmadeusPlugin } from './types'
 import { OutlinePanel } from './components/OutlinePanel'
-import { WordCountStatus } from './components/WordCountStatus'
 
 export const coreCommands: AmadeusPlugin = {
   id: 'core-commands',
@@ -43,10 +42,11 @@ export const wordCount: AmadeusPlugin = {
   id: 'word-count',
   name: '字数统计',
   version: '1.0.0',
-  description: '状态栏实时字数 + 命令「统计字数」（含词数）。',
+  description: '命令「统计字数」（字数 + 词数）。',
   builtin: true,
   setup(ctx) {
-    ctx.registerStatusItem({ id: 'wc', component: WordCountStatus })
+    // 状态栏实时字数已迁入桌面壳的全局状态栏内置项(statusbar/items.tsx 的 editor.wordCount,
+    // 带编辑器视图 context 门控),此处不再注册 StatusItem,避免双份显示。
     ctx.registerCommand({
       id: 'count',
       title: '统计字数',

@@ -8,6 +8,7 @@ import { amadeus } from '../api'
 import { usePageStore } from '../store/pageStore'
 import { isFileRef } from '../lib/vaultFiles'
 import { PlainMarkdownEditor } from '../blocks/markdown/MarkdownBlock'
+import { OverlayAt } from '../lib/clampMenu'
 
 const SHOW_DELAY = 400
 const MAX_CHARS = 2500
@@ -100,9 +101,10 @@ export function WikiHoverPreview() {
 
   if (!show || md === null) return null
   return (
-    <div
+    <OverlayAt
       className="amx-hoverprev"
-      style={{ left: show.x, top: show.y }}
+      x={show.x}
+      y={show.y}
       onMouseEnter={() => {
         overCard.current = true
       }}
@@ -116,6 +118,6 @@ export function WikiHoverPreview() {
         {/* key 换页重建编辑器实例;readOnly 纯渲染 */}
         <PlainMarkdownEditor key={show.path} initial={md} onChange={() => {}} readOnly />
       </div>
-    </div>
+    </OverlayAt>
   )
 }

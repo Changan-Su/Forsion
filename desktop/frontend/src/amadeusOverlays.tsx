@@ -12,7 +12,7 @@ import { fdDirOf } from '@amadeus/lib/fd'
 import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { pageKey } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
-import { openDb, openDrawing, openNote, openPdf } from './amadeusNav'
+import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
 
 const baseName = (p: string): string => (p.split(/[\\/]/).pop() ?? p).replace(/\.md$/i, '')
@@ -65,6 +65,16 @@ export function AmadeusOverlays() {
     }
     window.addEventListener('amadeus:open-drawing', onOpenDrawing)
     return () => window.removeEventListener('amadeus:open-drawing', onOpenDrawing)
+  }, [])
+  // `[[图.mindmap.md]]` 之类:名字直接命中库里一份已存在的文件(插件声明的文件类型多为 `.<子类型>.md`,
+  // 页面列表里永远查不到)。openFile 会按内置 → 插件 → 系统默认程序依次路由。
+  useEffect(() => {
+    const onOpenFile = (e: Event): void => {
+      const p = (e as CustomEvent<{ path?: string }>).detail?.path
+      if (typeof p === 'string' && p) openFile(p)
+    }
+    window.addEventListener('amadeus:open-file', onOpenFile)
+    return () => window.removeEventListener('amadeus:open-file', onOpenFile)
   }, [])
   return (
     <>

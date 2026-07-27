@@ -289,7 +289,8 @@
 .tangu-lovable .grow { flex: 1; }
 .tangu-lovable .composer-mic { opacity: 0.4; }
 .tangu-lovable .composer-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.tangu-lovable .composer-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 5px 11px; border-radius: 9999px; border: 1px solid var(--border); background: var(--bg); color: var(--text-light); cursor: pointer; }
+/* 模型药丸:与 base.css 同款「无边框 + 底色填充」(轮廓高亮已被用户否掉),这里只调尺寸/字号。 */
+.tangu-lovable .composer-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 5px 11px; border-radius: 9999px; border: none; background: var(--overlay-light); color: var(--text-light); cursor: pointer; }
 .tangu-lovable .composer-ctx { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .tangu-lovable .tg-ctxbar { width: 52px; height: 5px; border-radius: 3px; background: var(--overlay-medium); overflow: hidden; }
 .tangu-lovable .tg-ctxbar > span { display: block; height: 100%; background: var(--accent); }

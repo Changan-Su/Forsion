@@ -1,4 +1,4 @@
-import { Suspense, lazy, memo, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Suspense, createContext, lazy, memo, useContext, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -12,6 +12,7 @@ import { ExcalidrawEmbed } from '../blocks/excalidraw/ExcalidrawEmbed'
 import { BookmarkCard } from './BookmarkCard'
 import { useBlockSelection } from '../store/blockSelection'
 import { useClampedMenu } from '../lib/clampMenu'
+import { OverlayPortal } from '../lib/overlayPortal'
 import { usePageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
 import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
@@ -23,6 +24,20 @@ import { resolveFileName } from '../lib/vaultFiles'
 const PdfEmbedViewer = lazy(() => import('../pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
 const noop = (): void => {}
+
+/** A host surface (e.g. the mindmap plugin's canvas) that OWNS block structure. When present, a block's
+ *  NOTE-structural editor commands are neutralized — backspace-merge / delete-empty at the edges,
+ *  move up/down, arrow-out to a flat-adjacent block — because in a mindmap those keystrokes would
+ *  silently create orphan roots / delete nodes / move content between unrelated nodes.
+ *  `insertAfter` is NOT neutralized but REROUTED: content that can't be merged into the current
+ *  block (a `/数据库` `![[x.db]]` scaffold, a code block, Shift+Enter) must still land somewhere —
+ *  the surface decides where (a mindmap makes it a child node). Dropping it on the floor is how a
+ *  `/数据库` in a non-empty node became "创建了文件但什么也没出现" (user-reported).
+ *  Content editing, the slash menu, embeds and wiki links always stay. */
+export interface BlockSurface {
+  insertAfter: (blockId: string, content: string) => void
+}
+export const BlockSurfaceContext = createContext<BlockSurface | null>(null)
 
 /** A block whose entire content is a single `![[ ]]` is a cross-note embed. */
 const EMBED_RE = /^!\[\[([^\]\n]+)\]\]$/
@@ -36,6 +51,67 @@ const DB_EXT_RE = /\.db$/i
 const PDF_EXT_RE = /\.pdf$/i
 const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i
 const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|flac)$/i
+
+/** 嵌入块“二次选中”时,预览上方浮出的可编辑源码行(![[目标]])。回车/失焦提交→重解析,Esc 取消。
+ *  刻意用原生 <input>(非 mini 编辑器):就一行链接文本,所见即所得改目标即可。 */
+function EmbedSourceLine({
+  content,
+  onCommit,
+  onDone,
+}: {
+  content: string
+  onCommit: (v: string) => void
+  onDone: () => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const valRef = useRef(content) // 追踪当前值,供卸载兜底提交(此时 DOM 可能已 detach)
+  const done = useRef(false)
+  // done 闩:Enter/Esc/blur/卸载 只认第一次。提交值取自 valRef,不依赖仍挂载的 DOM。
+  const finish = (commit: boolean): void => {
+    if (done.current) return
+    done.current = true
+    if (commit) {
+      const v = valRef.current.trim()
+      if (v && v !== content.trim()) onCommit(v)
+    }
+    onDone()
+  }
+  const finishRef = useRef(finish)
+  finishRef.current = finish
+  useEffect(() => {
+    const el = ref.current
+    if (el) {
+      el.focus()
+      el.select() // 刻意编辑触发(双击):全选待重打。被动 arrow-in 触发已押后,不会误全选覆盖
+    }
+    // 卸载兜底提交:外部点击清 activeEmbed 会直接卸载本组件,触控/笔/滚动条/程序化导航未必先触发 blur;
+    // 不在此提交则用户改的 ![[目标]] 被静默丢弃(Codex M5)。已 Enter/Esc/blur 过则 done 闩令其空转。
+    return () => finishRef.current(true)
+  }, [])
+  return (
+    <div className="block-body embed-src-line">
+      <input
+        ref={ref}
+        className="embed-src-input"
+        defaultValue={content}
+        spellCheck={false}
+        onChange={(e) => {
+          valRef.current = e.currentTarget.value
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            finish(true)
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            finish(false)
+          }
+        }}
+        onBlur={() => finish(true)}
+      />
+    </div>
+  )
+}
 
 /** Universal wrapper around any block: drag handle + actions + the resolved BlockType editor.
  *  A block whose content is just `![[note#id]]` renders the target read-only with a source link. */
@@ -60,12 +136,15 @@ export const BlockHost = memo(function BlockHost({
   const consumeFocus = usePageStore((s) => s.consumeFocus)
   const openWikiLink = usePageStore((s) => s.openWikiLink)
   const focusPlace = usePageStore((s) => (s.focusRequest?.id === blockId ? s.focusRequest.place : null))
+  const focusGoalX = usePageStore((s) => (s.focusRequest?.id === blockId ? s.focusRequest.goalX : undefined))
   const isDropTarget = usePageStore(
     (s) => s.dndOverId === blockId && s.dndActiveId !== null && s.dndActiveId !== blockId,
   )
   const pagePath = usePageStore((s) => s.activePage ?? '')
+  const surface = useContext(BlockSurfaceContext) // mindmap 等宿主:接管结构语义(见 context 注释)
   const embedRenderers = usePluginStore((s) => s.embedRenderers)
   const selected = useBlockSelection((s) => s.ids.has(blockId))
+  const isActiveEmbed = useBlockSelection((s) => s.activeEmbed === blockId)
   // linkGraphVersion 每次 save 都 bump;只有嵌入块(![[...]])需要跟着重解析。
   // 纯文本块订阅恒 0 → 不再「每次保存全页重渲染」(大页高频打字时的隐性卡源)。
   const linkVersion = usePageStore((s) =>
@@ -194,6 +273,17 @@ export const BlockHost = memo(function BlockHost({
   // 否则恰在 (0,0) 打开时 deps 不变、layout effect 不触发 → 菜单不量测(codex P3)。
   const menuPos = useClampedMenu(blockMenu?.x ?? -1, blockMenu?.y ?? -1)
 
+  // 只读控件块(嵌入/图片/db/画板/书签,无文本光标):方向键把 focusRequest 落到本块时,转成「选中整块」
+  // (高亮 + 露只读源码行),先 blur 掉来源编辑器,后续方向键交给 BlockSelectionKeys 继续穿过(option A)。
+  // 可编辑块由其自身编辑器的 focus effect 消费 focus 请求,不进此分支。
+  const isWidgetHost = !!embedTarget || !!bookmarkUrl
+  useEffect(() => {
+    if (focusPlace == null || !isWidgetHost) return
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    useBlockSelection.getState().select(blockId)
+    consumeFocus(blockId)
+  }, [focusPlace, isWidgetHost, blockId, consumeFocus])
+
   if (!block) return null
 
   const onCtxMenu = (e: ReactMouseEvent): void => {
@@ -201,6 +291,29 @@ export const BlockHost = memo(function BlockHost({
     e.stopPropagation()
     setBlockMenu({ x: e.clientX, y: e.clientY })
   }
+
+  // 焦点进入块 → 清块选中 / 退出嵌入源码编辑;但源码编辑器自身获焦除外(否则一聚焦就退出)。
+  const onBlockFocus = (e: ReactFocusEvent): void => {
+    if ((e.target as HTMLElement).closest?.('.embed-src-input')) return
+    const st = useBlockSelection.getState()
+    if (st.ids.size || st.activeEmbed) st.clear()
+  }
+
+  // 源码行(注入到手柄之后、预览之上;非嵌入块 embedTarget 为空恒不显示):
+  //  · 二次选中/编辑态(activeEmbed)→ 可编辑 EmbedSourceLine(双击/回车进入,自动聚焦)。
+  //  · 仅选中态(方向键选中/点手柄)→ 只读显示 ![[...]] 源码(option A:露原始内容但不抢焦点)。
+  const embedSrcLine =
+    isActiveEmbed && embedTarget ? (
+      <EmbedSourceLine
+        content={block.content}
+        onCommit={(v) => setBlockContent(blockId, v)}
+        onDone={() => useBlockSelection.getState().setActiveEmbed(null)}
+      />
+    ) : selected && embedTarget ? (
+      <div className="block-body embed-src-line embed-src-readonly" aria-hidden>
+        {`![[${embedTarget}]]`}
+      </div>
+    ) : null
 
   const gutter = (
     <div className="block-gutter">
@@ -234,22 +347,30 @@ export const BlockHost = memo(function BlockHost({
     </div>
   )
 
-  /** 块菜单(fixed .ctx-menu):普通块四个动作;嵌入块只有 移到新列/移除。 */
+  /** 块菜单(fixed .ctx-menu):普通块四个动作;嵌入块只有 移到新列/移除。
+   *  传送到最近的 .am-app:祖先有 transform(思维导图画布)时 fixed 会以它为包含块 → 菜单跑偏。 */
   const blockMenuNode = blockMenu && (
+    <OverlayPortal>
     <div ref={menuPos.ref} className="ctx-menu" style={menuPos.style} onClick={(e) => e.stopPropagation()}>
       {!embedTarget && (
         <button onClick={() => { void navigator.clipboard?.writeText(`![[${stripPageBasename(pagePath)}#${blockId}]]`); setBlockMenu(null) }}>
           ↪ 复制嵌入引用
         </button>
       )}
-      {!embedTarget && (
+      {/* 结构类动作在「宿主接管结构」的面(思维导图)上一律不出现:它们直接调 store,会绕过宿主的
+          关系图维护 —— 删除留下悬空的父子/关系线、复制出一个没有父级的游离节点、分栏更是笔记专属
+          排版。这些操作在导图里由节点自己的菜单负责(Codex)。 */}
+      {!embedTarget && !surface && (
         <button onClick={() => { duplicateBlock(blockId); setBlockMenu(null) }}>⎘ 复制块</button>
       )}
-      <button onClick={() => { splitToColumn(blockId, 'right'); setBlockMenu(null) }}>⫿ 移到新列</button>
-      <button className="danger" onClick={() => { setBlockMenu(null); deleteBlock(blockId) }}>
-        ✕ {embedTarget ? '移除嵌入' : '删除'}
-      </button>
+      {!surface && <button onClick={() => { splitToColumn(blockId, 'right'); setBlockMenu(null) }}>⫿ 移到新列</button>}
+      {!surface && (
+        <button className="danger" onClick={() => { setBlockMenu(null); deleteBlock(blockId) }}>
+          ✕ {embedTarget ? '移除嵌入' : '删除'}
+        </button>
+      )}
     </div>
+    </OverlayPortal>
   )
 
   // --- Image transclusion (`![[pic.png]]`) ---
@@ -265,11 +386,12 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body embed-image-body">
           <img
             className="embed-image"
@@ -297,11 +419,12 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body">
           <BookmarkCard url={bookmarkUrl} onChangeUrl={(next) => setBlockContent(blockId, next)} />
         </div>
@@ -323,11 +446,12 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body">
           <DatabaseEmbed
             target={embedDb.name}
@@ -354,11 +478,12 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body">
           <ExcalidrawEmbed target={embedDraw} pagePath={pagePath} />
         </div>
@@ -380,11 +505,12 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body">
           <PluginEmbed target={embedPlugin} pagePath={pagePath} />
         </div>
@@ -406,17 +532,23 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body">
           {embedFile.kind === 'other' ? (
             <button
               className="embed-file"
-              onClick={() => pagePath && void amadeus.openAttachment(pagePath, embedFile.name)}
-              title="用系统默认程序打开"
+              onClick={() => {
+                // 先试 wiki 解析:插件声明的文件类型(如 .mindmap.md)会在应用内开它自己的视图 ——
+                // 直接丢给系统默认程序等于用 TextEdit 打开一张思维导图。
+                if (/\.[a-z0-9]+\.md$/i.test(embedFile.name)) openWikiLink(embedFile.name, pagePath)
+                else if (pagePath) void amadeus.openAttachment(pagePath, embedFile.name)
+              }}
+              title={/\.[a-z0-9]+\.md$/i.test(embedFile.name) ? '在 Forsion 标签页中打开' : '用系统默认程序打开'}
             >
               <span className="embed-file-ic" aria-hidden>📄</span>
               <span className="embed-file-name">{embedFile.name}</span>
@@ -484,11 +616,12 @@ export const BlockHost = memo(function BlockHost({
         data-dragging={isDragging || undefined}
         style={{ transform: CSS.Translate.toString(transform), transition }}
         onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
       >
         {isDropTarget && <div className="drop-line" />}
         {blockEdges}
         {gutter}
+        {embedSrcLine}
         <div className="block-body embed-body">
           <div className="embed-head">
             <span className="embed-badge" title="跨笔记嵌入（只读）">
@@ -549,11 +682,12 @@ export const BlockHost = memo(function BlockHost({
       data-dragging={isDragging || undefined}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       onContextMenu={onCtxMenu}
-        onFocusCapture={() => { if (useBlockSelection.getState().ids.size) useBlockSelection.getState().clear() }}
+        onFocusCapture={onBlockFocus}
     >
       {isDropTarget && <div className="drop-line" />}
       {blockEdges /* 七个 embed 分支都有,唯独普通块(text)漏了 → text 块左右分栏从来没有落点(实报根因) */}
       {gutter}
+        {embedSrcLine}
       <div className="block-body">
         {Editor ? (
           <Editor
@@ -562,16 +696,19 @@ export const BlockHost = memo(function BlockHost({
             pagePath={pagePath}
             autoFocus={autoFocus}
             onChange={(c) => setBlockContent(blockId, c)}
-            onInsertAfter={(content) => insertBlockAfter(blockId, undefined, content)}
-            onDeleteEmpty={() => deleteBlockFocusPrev(blockId)}
-            onMergePrev={() => mergeWithPrev(blockId)}
-            onArrowOut={(dir) => focusAdjacent(blockId, dir)}
-            onMoveDir={(dir) => moveBlockDir(blockId, dir)}
+            onInsertAfter={surface ? (content) => surface.insertAfter(blockId, content ?? '') : (content) => insertBlockAfter(blockId, undefined, content)}
+            onDeleteEmpty={surface ? noop : () => deleteBlockFocusPrev(blockId)}
+            onMergePrev={surface ? noop : () => mergeWithPrev(blockId)}
+            onArrowOut={surface ? noop : (dir, goalX) => focusAdjacent(blockId, dir, goalX)}
+            onMoveDir={surface ? noop : (dir) => moveBlockDir(blockId, dir)}
             focusPlace={focusPlace}
+            focusGoalX={focusGoalX}
             onFocused={() => consumeFocus(blockId)}
             requestSelfFocus={(place) => requestFocus(blockId, place)}
             onOpenWiki={(name) => openWikiLink(name, pagePath)}
-            onInsertEmbed={(t) => usePageStore.getState().insertEmbed(t)}
+            // 宿主接管时,`/嵌入块引用` 也必须交给宿主:store.insertEmbed 会把嵌入块追加到页尾,
+            // 在导图里那是一个游离的新中心,而不是当前节点下的一条(Codex)。
+            onInsertEmbed={(t) => (surface ? surface.insertAfter(blockId, `![[${t}]]`) : usePageStore.getState().insertEmbed(t))}
             getPageNames={() => usePageStore.getState().pages}
           />
         ) : (

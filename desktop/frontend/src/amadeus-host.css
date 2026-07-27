@@ -29,6 +29,27 @@
 .amx-editor { padding: 0 0 40px; }
 /* 独立 .db 数据库视图(AmadeusDbView):.amx-pane 已管高度/滚动,这里只给表格四周留白。 */
 .amx-dbview { padding: 18px 24px 40px; }
+/* 独立图片视图(AmadeusImageView):内层 scroll 自管滚动/居中(故关掉 .amx-pane 的外层 overflow)。
+ * 默认适应窗口居中;点击切原始尺寸,大图溢出时 safe-center 保左上角可达可滚。 */
+.amx-imgview { overflow: hidden; }
+.amx-imgview-scroll {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  align-items: safe center;
+  justify-content: safe center;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.amx-imgview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+  user-select: none;
+  border-radius: var(--radius-sm, 6px);
+}
+.amx-imgview-scroll.actual .amx-imgview-img { max-width: none; max-height: none; cursor: zoom-out; }
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
 .amx-doc { max-width: 920px; margin: 0 auto; padding: 0 48px; }
@@ -871,6 +892,7 @@
 .amx-calcfg-swatch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; padding: 0; border: none; }
 .amx-calcfg-name { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .amx-calcfg-name.off { color: var(--text-faint, var(--text-muted)); }
+.amx-cal-vault { opacity: .5; font-weight: 400; } /* Vault 后缀淡显,主名不喧宾夺主 */
 .amx-calcfg-def { flex: none; border: none; background: transparent; color: var(--border); font-size: 13px; cursor: pointer; line-height: 1; padding: 2px; }
 .amx-calcfg-def.on { color: var(--accent, #6c5ce7); }
 .amx-calcfg-vis { flex: none; cursor: pointer; }

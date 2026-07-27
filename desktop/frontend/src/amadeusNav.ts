@@ -9,6 +9,7 @@ import { BLANK_SCENE_JSON, blankDrawing, isDrawingPath } from '@amadeus-shared/e
 import { matchFileType } from '@amadeus/plugins/pluginStore'
 import { act, actThrottled } from './activity/log'
 import { track } from './achievements/store'
+import { openLocalHtml } from './builtins'
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
@@ -18,7 +19,7 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
     openDrawing(path)
     return
   }
-  // 插件声明的文件类型(如 .mindmap.md)同理:磁盘是 .md 但绝不进笔记编辑器 → 改道其专属文件类型视图。
+  // 插件声明的文件类型同理:磁盘是 .md 但绝不进笔记编辑器 → 改道其专属文件类型视图。
   if (matchFileType(path)) {
     openFile(path)
     return
@@ -76,6 +77,19 @@ export function openPdf(pdfPath: string, page?: number): void {
   ws.openView('amadeus-pdf', page ? { pdfPath, page } : { pdfPath }, 'main')
 }
 
+/** 打开独立图片视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openPdf 的简版,无批注)。 */
+export function openImage(imagePath: string): void {
+  actThrottled('view.open', { f: imagePath }, `view.open|${imagePath}`)
+  const ws = useWorkspace.getState()
+  const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
+  const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-image' && p.params?.imagePath === imagePath)
+  if (hit) {
+    ws.activateLeaf(hit.id)
+    return
+  }
+  ws.openView('amadeus-image', { imagePath }, 'main')
+}
+
 /** 打开独立白板视图(.excalidraw.md 画布,兼容 Obsidian Excalidraw 插件):已有认领该文件的 tab → 激活;否则主区打开。 */
 export function openDrawing(drawingPath: string): void {
   actThrottled('view.open', { f: drawingPath }, `view.open|${drawingPath}`)
@@ -89,9 +103,21 @@ export function openDrawing(drawingPath: string): void {
   ws.openView('amadeus-drawing', { drawingPath }, 'main')
 }
 
-/** 打开一个「插件文件类型」文件(如 .mindmap.md)到通用 amadeus-plugin-file 视图:已有认领该文件的 tab
+/** 打开一个「插件文件类型」文件到通用 amadeus-plugin-file 视图:已有认领该文件的 tab
  *  → 激活;否则主区打开。新建后打开时该文件可能还没进结构 → 先刷新树再开。非插件文件类型回落系统默认程序。 */
 export function openFile(path: string): void {
+  // 内置文件类型先接管:插件的 ctx.app.openFile('x.excalidraw.md') 也落在这里,而 matchFileType 已经
+  // 拒绝内置后缀(内置优先),不特判的话它会掉到下面的「非插件文件类型 → 交给系统默认程序」。
+  if (isDrawingPath(path)) { openDrawing(path); return }
+  if (/\.db$/i.test(path)) { openDb(path); return }
+  if (/\.pdf$/i.test(path)) { openPdf(path); return }
+  if (/\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(path)) { openImage(path); return }
+  // 本地库里的 .html → 内置浏览器(云端库没有本机路径 / 内置浏览器关着 → 照旧交系统默认程序)。
+  if (/\.html?$/i.test(path)) {
+    const ps0 = usePageStore.getState()
+    const root = ps0.vaultSide === 'local' ? ps0.vaultRoot : null
+    if (root && openLocalHtml(`${root.replace(/\/+$/, '')}/${path.replace(/\\/g, '/').replace(/^\/+/, '')}`)) return
+  }
   if (!matchFileType(path)) {
     void amadeus.openVaultFile(path).catch(() => {})
     return

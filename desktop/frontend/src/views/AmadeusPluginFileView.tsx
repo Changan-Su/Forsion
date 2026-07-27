@@ -7,6 +7,8 @@ import type { ViewProps } from '@lcl/engine'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { usePluginStore, findFileType, fileTypeBaseName } from '../amadeus/plugins/pluginStore'
+import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
+import { openFile } from '../amadeusNav'
 
 export function AmadeusPluginFileView({ leaf }: ViewProps) {
   const filePath = typeof leaf.params.filePath === 'string' ? leaf.params.filePath : ''
@@ -23,6 +25,13 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
   useEffect(() => {
     if (filePath && ft) leaf.setTitle(fileTypeBaseName(filePath, ft.extensions) || ft.title || filePath)
   }, [filePath, ft]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 迁移旧标签页:某个文件类型被宿主收编成内置后(如 `.mindmap.md`),布局里存着的
+  // `{amadeus-plugin-file, filePath}` 标签页会因 findFileType 被内置闸拒绝而变成「没有已启用的插件能打开」。
+  // 认出内置类型就地导航到它自己的视图 —— 用户不该为一次内置化去手动关标签页(Codex)。
+  useEffect(() => {
+    if (filePath && isBuiltinFileType(filePath)) openFile(filePath)
+  }, [filePath])
 
   useEffect(() => {
     const el = hostRef.current

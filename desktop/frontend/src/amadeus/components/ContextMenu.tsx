@@ -38,8 +38,9 @@ export function ContextMenu({
     }
   }, [onClose])
 
-  // 量真实尺寸后夹进视口(纵向溢出上移、横向溢出收进屏幕),取代硬编码宽高的估算。
-  const { ref, style } = useClampedMenu(x, y, [items.length])
+  // 量真实尺寸后夹进视口(纵向放不下就翻到上方、横向溢出收进屏幕),取代硬编码宽高的估算。
+  // 条目数变化由 hook 内的 ResizeObserver 兜住,不必再传 deps。
+  const { ref, style } = useClampedMenu(x, y)
 
   return (
     <div

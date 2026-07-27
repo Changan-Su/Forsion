@@ -11,6 +11,7 @@ import { useUiOverlay } from './amadeusOverlayStore'
 import { addCommand, removeCommand } from '@lcl/engine'
 import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
+import { installPluginStatusBridge } from './pluginStatusBridge'
 import { nudgeOnboardingOnce } from './stores/pluginOnboardingStore'
 
 let installed = false
@@ -19,9 +20,16 @@ export function installAmadeusPlugins(): void {
   if (installed) return
   installed = true
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
+  installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
   const store = usePluginStore.getState()
   store.init([calloutBlocks, wordCount])
   void store.loadExternal().then(() => {
+    // 捆绑包内嵌的 Space 引用插件自己的视图,必须等插件装完(视图已注册)才过得了 parseSpaceJson 的
+    // isViewRegistered 闸 —— bootstrapEngine 那次 loadUserSpaces 跑在插件之前,注定被「未注册视图」跳过。
+    // 补跑一次:装了带 Space 的插件,ribbon 顶部(Space 区)末尾即自动出现,无需进设置页或重启。
+    // 动态 import:userSpaces → spaces.tsx 在模块顶层读 window,静态引会把它拖进 Composer2 的
+    // node 环境单测(ReferenceError: window is not defined)。这里只在真装载完时才需要它。
+    void import('./userSpaces').then((m) => m.loadUserSpaces())
     // 启动期自动激活的插件不弹就绪卡(不伏击),待引导的只投一次 Inbox 提醒;徽标常驻设置页。
     const s = usePluginStore.getState()
     for (const p of s.plugins) if (s.activeIds.includes(p.id)) nudgeOnboardingOnce(p)

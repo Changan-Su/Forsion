@@ -42,6 +42,34 @@ export function slashRange($from: ResolvedPos): { from: number; to: number } | n
   return { from: $from.start() + idx, to: $from.pos }
 }
 
+/** blockLabel 的入参:光标所在文本块**由内往外**的祖先链,attrs 必须**各自随各自的节点**走。 */
+export interface BlockNode {
+  name: string
+  /** heading 专用 */
+  level?: number
+  /** list_item 专用:非 null 即待办项(gfm 的 checked attr) */
+  checked?: boolean | null
+}
+
+/**
+ * 行内工具栏「转换为」按钮上显示的**当前**块类型名。链是内→外(如
+ * `[paragraph, list_item, bullet_list]`),故 list_item 先于它的列表被扫到:自己带 checked 就是待办,
+ * 否则继续外扫拿列表类型。此前这里写死「正文」,光标在标题/列表上也这么显示。
+ * ⚠️ checked 必须读**命中的那个 list_item 自己的**——嵌套列表里用一个全局 checked 会串味
+ * (待办里嵌普通列表被报成待办,反之亦然)。
+ */
+export function blockLabel(chain: BlockNode[]): string {
+  for (const n of chain) {
+    if (n.name === 'heading') return `标题 ${n.level ?? 1}`
+    if (n.name === 'code_block') return '代码'
+    if (n.name === 'list_item' && n.checked != null) return '待办'
+    if (n.name === 'ordered_list') return '有序列表'
+    if (n.name === 'bullet_list') return '无序列表'
+    if (n.name === 'blockquote') return '引用'
+  }
+  return '正文'
+}
+
 function findDepth($p: ResolvedPos, name: string): number | null {
   for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.name === name) return d
   return null

@@ -6,6 +6,7 @@
 // and Backspace fall through to ProseMirror so the in-document query keeps updating.
 
 import { useEffect, useState } from 'react'
+import { OverlayAt } from '../../lib/clampMenu'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { isFileRef } from '../../lib/vaultFiles'
 import { pageKey } from '@amadeus-shared/links'
@@ -16,6 +17,8 @@ interface Props {
   query: string
   left: number
   top: number
+  /** 光标行上沿:下方放不下时翻到上方展开(见 lib/clampMenu → engine menuAnchor)。 */
+  anchorTop?: number
   getPageNames: () => string[]
   /** vault 非笔记文件(.db/附件);缺 = 只补全页面(PlainMarkdownEditor)。 */
   getFiles?: () => string[]
@@ -50,7 +53,7 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, getPageNames, getFiles, onPick, onClose, allowCreate = true }: Props) {
+export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onClose, allowCreate = true }: Props) {
   const [active, setActive] = useState(0)
   const icons = usePageStore((s) => s.icons) // 页面 emoji(path 键);非 vault 候选池查不到 → 无图标,天然兼容
 
@@ -123,7 +126,7 @@ export function WikiSuggest({ query, left, top, getPageNames, getFiles, onPick, 
   if (total === 0) return null
 
   return (
-    <div className="wiki-suggest" style={{ left, top }} role="menu">
+    <OverlayAt className="wiki-suggest" x={left} y={top} anchorTop={anchorTop} role="menu">
       {results.map((c, i) => (
         <button
           key={(c.file ? 'f:' : 'p:') + c.path}
@@ -167,6 +170,6 @@ export function WikiSuggest({ query, left, top, getPageNames, getFiles, onPick, 
           新建链接 “{q}”
         </button>
       )}
-    </div>
+    </OverlayAt>
   )
 }

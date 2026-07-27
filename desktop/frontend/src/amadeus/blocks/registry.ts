@@ -26,12 +26,15 @@ export interface BlockEditorProps {
   onDeleteEmpty(): void
   /** Backspace at the start of a non-empty block → merge it into the previous block. */
   onMergePrev(): void
-  /** Caret tried to leave the top/bottom of the block → move focus to the neighbour. */
-  onArrowOut(dir: 'prev' | 'next'): void
+  /** Caret tried to leave the top/bottom of the block → move focus to the spatial neighbour.
+   *  goalX = the caret's viewport X so the neighbour can keep the same horizontal column. */
+  onArrowOut(dir: 'prev' | 'next', goalX?: number): void
   /** Mod+Shift+ArrowUp/Down → reorder this block within its column. */
   onMoveDir(dir: 'up' | 'down'): void
   /** A pending caret target for THIS block (after create/delete/nav), or null. */
   focusPlace: FocusPlace | null
+  /** When crossing in via ↑↓, the goal column (viewport X) to land on within the first/last line. */
+  focusGoalX?: number
   /** Notify that the caret has been placed (clears the pending request). */
   onFocused(): void
   /** Ask for the caret to (re)enter THIS block — e.g. after a slash transform. */
