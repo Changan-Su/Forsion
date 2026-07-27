@@ -107,6 +107,14 @@ export class VaultIndex {
       const b = e.blocks.find((x) => x.id === id)
       if (b) return { path: e.path, content: b.content, type: 'markdown' }
     }
+    // 整篇笔记转写:`![[笔记名]]` 无 `#` 块锚 → 按名(四级规则,同 `[[链接]]`)解析到笔记,返回整篇正文
+    // (`text` 已剥 frontmatter/marker → 干净 md,交前端 markdown 块只读渲染)。
+    // ponytail: 被嵌笔记里的 `![[db]]`/画板/二次嵌入只作源码行渲染(块级重解析在 BlockHost,不在本层)。
+    if (!target.includes('#')) {
+      const notePath = resolvePageName(target, [...this.entries.keys()].sort())
+      const e = notePath ? this.entries.get(notePath) : undefined
+      if (e) return { path: e.path, content: e.text, type: 'markdown' }
+    }
     return null
   }
 

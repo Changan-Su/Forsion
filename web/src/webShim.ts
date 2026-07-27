@@ -106,7 +106,7 @@ export function installWebShim(): boolean {
     cloudWeb: true,
     getConfig: async () => ({
       mode: 'external', backendUrl, token, modelId: '',
-      cloudUrl: backendUrl, cloudToken: token, sandbox: 'none',
+      cloudUrl: backendUrl, sandbox: 'none',
     }),
     authStatus,
     forsionLogin: async () => { gotoLogin() },
