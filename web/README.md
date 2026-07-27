@@ -98,11 +98,12 @@ docker run -d --name tangu_web -p 8090:80 \
 
 ---
 
-## 三个坑(已在配置里处理,排障时对照)
+## 四个坑(已在配置里处理,排障时对照)
 
 1. **build context** — 必须在 `Forsion-Genesis/` 下 build(见上)。`web/Dockerfile.dockerignore` 专门放行 `desktop/frontend`(根 `.dockerignore` 默认排除整个 `desktop`)。
 2. **nginx resolver** — 变量式 `proxy_pass` 需要 `resolver`。entrypoint 取容器**实际** `resolv.conf` 的 nameserver;硬编码 `127.0.0.11` 在默认桥接网会 `Connection refused` → `/api` 502。
 3. **React 单实例** — web 与 desktop 各有 `node_modules/react`,跨目录复用会加载两份 React → hooks 报 `Cannot read properties of null (reading 'useState')` + 白屏。`vite.config.ts` 里 `dedupe: ['react','react-dom']` 强制单实例。
+4. **⚠️ 被复用的 desktop 源新引入的依赖,必须同步进 `web/package.json`** — 镜像只在 `/app` 装 web 自己的依赖,**没有 `desktop/node_modules`**;本地 `npm run build` 能过纯属被它兜底,容器里直接 `Rollup failed to resolve import "X"`。哪怕是 `lazy(() => import(...))` 里的、web 端 `available()` 恒 false 永不加载的模块也一样 —— rollup 要**解析**才能产出 chunk。2026-07-27 的 `@xterm/xterm`(内置终端)就是这么把 build-web 打红的,现已随 `@xterm/addon-fit` 一并列进依赖(多一个永不下载的 lazy chunk,比造一套 stub 便宜)。
 
 ---
 

@@ -24,6 +24,8 @@
     "@milkdown/kit": "^7.21.2",
     "@milkdown/react": "^7.21.3",
     "@uiw/react-codemirror": "^4.25.2",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "diff2html": "^3.4.55",
     "dockview": "^7.0.2",
     "dockview-react": "^7.0.2",
