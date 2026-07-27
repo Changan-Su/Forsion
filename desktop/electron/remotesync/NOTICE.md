@@ -28,7 +28,8 @@
 | `types.ts`(RemoteFs 接口形状) | `src/fsAll.ts`、`src/baseTypes.ts`(Entity) |
 
 Forsion 自研(不含上游代码):`decide.ts`、`engine.ts`、`prevSync.ts`、`ignore.ts`、
-`fsLocal.ts` 及全部测试文件。
+`fsLocal.ts`、`fsPenzor.ts`、`fsDropbox.ts`(直连 Dropbox 公开 REST v2 API 实现,
+未使用、未参考上游任何 Dropbox 相关代码)及全部测试文件。
 
 ## 维护规则
 

@@ -4,32 +4,40 @@
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
 import { app, BrowserWindow, dialog, ipcMain, Menu, screen, globalShortcut, session, shell, nativeImage, Notification } from 'electron'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, join, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { execFile, spawn } from 'child_process'
 import { homedir } from 'os'
 import { BackendManager, bundledPythonBin, type BackendStatus } from './backendManager'
+import { startForsionMcp } from './mcpServer'
 import {
-  forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds,
+  forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
 } from './forsionAuth'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs } from './marketInstall'
-import { serveDir as codePreviewServe, stopCodePreview } from './codePreview'
+import { serveDir as codePreviewServe, servePathRoot, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
+import {
+  collectProjectFiles, readConnectMeta, writeConnectMeta, cloudJson, makePreviewProxy, type CloudCreds,
+} from './forsionConnect'
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
+import { computerUseLiveView } from './computerUse'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { registerRemoteSync } from './remotesyncIpc'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { KNOWN_APPS } from '../shared/knownApps'
+import { BROWSER_PARTITION } from '../shared/browser'
+import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, miniSizeFromWidth, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
@@ -85,8 +93,12 @@ async function readHomeConfig(): Promise<Record<string, any>> {
 }
 async function writeHomeConfig(c: Record<string, any>): Promise<void> {
   await mkdir(tanguHomeDir(), { recursive: true })
-  await writeFile(homeConfigPath(), JSON.stringify(c, null, 2), 'utf8')
-  await chmod(homeConfigPath(), 0o600).catch(() => {}) // 含 token/apiKey
+  // 临时文件 + rename 原子落位:config.json 是桌面/引擎/CLI 共读的唯一真源,
+  // 直接截断写遇 ENOSPC/中断会把整份配置(providers/browser/workspace…)清成半截 JSON。
+  const tmp = homeConfigPath() + '.tmp'
+  await writeFile(tmp, JSON.stringify(c, null, 2), 'utf8')
+  await chmod(tmp, 0o600).catch(() => {}) // 含 token/apiKey
+  await rename(tmp, homeConfigPath())
 }
 async function saveHomeSection(name: string, value: any): Promise<void> {
   const c = await readHomeConfig()
@@ -268,8 +280,10 @@ interface TanguStoredConfig {
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
   asrBackend: 'local' | 'cloud'
+  /** 上次用的审批档 / 思考档:渲染层新建会话时据此起步(纯 UI 记忆,不进 config.json 段)。 */
+  lastApprovalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
+  lastThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
-  cloudToken: string // managed:forsion_token(空则子进程回退 tangu login 凭证)
   sandbox: 'auto' | 'docker' | 'none'
   /** Python 来源:bundled=内置解释器(默认,免装/隔离);system=用系统已装 python。 */
   pythonMode: 'bundled' | 'system'
@@ -282,10 +296,6 @@ interface TanguStoredConfig {
   browserSearchEngine: 'duckduckgo' | 'bing' | 'google' | 'baidu'
   browserAllowPrivateUrls: boolean
   browserCommandTimeoutMs: number
-  wechatEnabled: boolean
-  wechatDefaultSessionId: string
-  wechatRemoteApprovalMode: 'readonly' | 'auto-edit' | 'full-auto'
-  wechatAllowedPeers: string[]
   /** 本地记忆/日志是否自动同步 Forsion Brain(默认 false=仅手动)。 */
   forsionSyncEnabled: boolean
   /** 上次成功同步时刻(epoch ms)。 */
@@ -308,6 +318,14 @@ interface TanguStoredConfig {
   ttsAutoSpeak: boolean
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
   activityLogEnabled: boolean
+  /** 对外 MCP 端点:开=主进程起本地 HTTP MCP server,外部 agent(Claude Code)可调桌面能力。默认关(信任边界,显式开启)。 */
+  mcpEnabled: boolean
+  /** Agent Desk 演出面板:聊天右侧 agent 展示区(编辑自动上台 + desk_present/desk_screenshot 工具)。
+   *  2026-07-26 转正,默认**开**——只有显式关过的人才有 false 落盘(saveConfig 只写 patch 里出现的键,
+   *  没碰过开关的装机读的是这里的默认值,改默认即生效,不需要迁移)。 */
+  agentDeskEnabled: boolean
+  /** 任务概览里点来源/产物文件时开在哪:新标签页(默认)或 Agent Desk 演出格。 */
+  summaryOpenIn: 'tab' | 'desk'
 }
 
 /**
@@ -325,8 +343,9 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   modelId: '',
   asrModelId: '',
   asrBackend: 'cloud',
+  lastApprovalMode: 'auto-edit',
+  lastThinkingLevel: '',
   cloudUrl: '',
-  cloudToken: '',
   sandbox: 'auto',
   pythonMode: 'bundled',
   mirror: 'default',
@@ -336,10 +355,6 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   browserSearchEngine: 'duckduckgo',
   browserAllowPrivateUrls: false,
   browserCommandTimeoutMs: 30000,
-  wechatEnabled: true,
-  wechatDefaultSessionId: '',
-  wechatRemoteApprovalMode: 'readonly',
-  wechatAllowedPeers: [],
   forsionSyncEnabled: false,
   forsionLastSyncedAt: 0,
   notesAttachmentMode: 'attachments',
@@ -351,6 +366,9 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsSpeed: 1,
   ttsAutoSpeak: false,
   activityLogEnabled: true,
+  mcpEnabled: false,
+  agentDeskEnabled: true,
+  summaryOpenIn: 'tab',
 }
 
 /** 默认工作区目录(配置未填时兜底):新用户 ~/Forsion(dev→~/Forsion-Dev);
@@ -369,9 +387,13 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
 // desktop-shell 专属键(留 userData/tangu-desktop-config.json):连哪个后端 + 同步开关。CLI 无此概念。
 // 其余键(cloud/sandbox/workspace/browser/wechat)以 ~/.tangu/config.json 各段为权威,落盘亦写那里。
 const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
-  'mode', 'backendUrl', 'token', 'wechatAllowedPeers', 'forsionSyncEnabled', 'forsionLastSyncedAt',
+  'mode', 'backendUrl', 'token', 'forsionSyncEnabled', 'forsionLastSyncedAt',
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
+  'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
+  'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
+  'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
+  'lastApprovalMode', 'lastThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI)
 ]
 const configPath = (): string => join(app.getPath('userData'), 'tangu-desktop-config.json')
 
@@ -405,21 +427,17 @@ async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
 async function loadConfig(): Promise<TanguStoredConfig> {
   const shell = await readShellConfig()
   const home = await readHomeConfig()
-  const cloud = home.cloud || {}, browser = home.browser || {}, wechat = home.wechat || {}, notes = home.notes || {}, tts = home.tts || {}, asr = home.asr || {}
+  const cloud = home.cloud || {}, browser = home.browser || {}, notes = home.notes || {}, tts = home.tts || {}, asr = home.asr || {}
   const merged: TanguStoredConfig = {
     ...DEFAULT_CONFIG,
     ...shell, // 旧 desktop 文件:既给 shell 键,也作未迁移段的回落
-    ...(home.cloud !== undefined ? { cloudUrl: cloud.url || '', cloudToken: cloud.token || '', modelId: cloud.defaultModel || '' } : {}),
+    ...(home.cloud !== undefined ? { cloudUrl: cloud.url || '', modelId: cloud.defaultModel || '' } : {}),
     ...(home.sandbox !== undefined ? { sandbox: home.sandbox } : {}),
     ...(home.workspace !== undefined ? { defaultWorkspaceDir: home.workspace } : {}),
     ...(home.browser !== undefined ? {
       browserEnabled: browser.enabled !== false, browserEngine: browser.engine || 'auto',
       browserSearchEngine: browser.searchEngine || 'duckduckgo', browserAllowPrivateUrls: !!browser.allowPrivateUrls,
       browserCommandTimeoutMs: browser.commandTimeoutMs || 30000,
-    } : {}),
-    ...(home.wechat !== undefined ? {
-      wechatEnabled: wechat.enabled !== false, wechatDefaultSessionId: wechat.defaultSessionId || '',
-      wechatRemoteApprovalMode: wechat.remoteApprovalMode || 'readonly',
     } : {}),
     ...(home.notes !== undefined ? {
       notesAttachmentMode: notes.mode || 'attachments',
@@ -457,10 +475,9 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   }
   // config-backed 键 → config.json 段
   const home = await readHomeConfig()
-  const cloud = { ...(home.cloud || {}) }, browser = { ...(home.browser || {}) }, wechat = { ...(home.wechat || {}) }, notes = { ...(home.notes || {}) }, tts = { ...(home.tts || {}) }, asr = { ...(home.asr || {}) }
-  let cT = false, bT = false, wT = false, oT = false, nT = false, tT = false, aT = false
+  const cloud = { ...(home.cloud || {}) }, browser = { ...(home.browser || {}) }, notes = { ...(home.notes || {}) }, tts = { ...(home.tts || {}) }, asr = { ...(home.asr || {}) }
+  let cT = false, bT = false, oT = false, nT = false, tT = false, aT = false
   if ('cloudUrl' in patch) { cloud.url = patch.cloudUrl; cT = true }
-  if ('cloudToken' in patch) { cloud.token = patch.cloudToken; cT = true }
   if ('modelId' in patch) { cloud.defaultModel = patch.modelId; cT = true }
   if ('asrModelId' in patch) { asr.modelId = patch.asrModelId; aT = true }
   if ('asrBackend' in patch) { asr.backend = patch.asrBackend; aT = true }
@@ -471,9 +488,6 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if ('browserSearchEngine' in patch) { browser.searchEngine = patch.browserSearchEngine; bT = true }
   if ('browserAllowPrivateUrls' in patch) { browser.allowPrivateUrls = patch.browserAllowPrivateUrls; bT = true }
   if ('browserCommandTimeoutMs' in patch) { browser.commandTimeoutMs = patch.browserCommandTimeoutMs; bT = true }
-  if ('wechatEnabled' in patch) { wechat.enabled = patch.wechatEnabled; wT = true }
-  if ('wechatDefaultSessionId' in patch) { wechat.defaultSessionId = patch.wechatDefaultSessionId; wT = true }
-  if ('wechatRemoteApprovalMode' in patch) { wechat.remoteApprovalMode = patch.wechatRemoteApprovalMode; wT = true }
   if ('notesAttachmentMode' in patch) { notes.mode = patch.notesAttachmentMode; nT = true }
   if ('notesAttachmentFolder' in patch) { notes.folder = patch.notesAttachmentFolder; nT = true }
   if ('notesImportPreview' in patch) { notes.preview = patch.notesImportPreview; nT = true }
@@ -484,12 +498,36 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if ('ttsAutoSpeak' in patch) { tts.autoSpeak = patch.ttsAutoSpeak; tT = true }
   if (cT) home.cloud = cloud
   if (bT) home.browser = browser
-  if (wT) home.wechat = wechat
   if (nT) home.notes = notes
   if (tT) home.tts = tts
   if (aT) home.asr = asr
-  if (cT || bT || wT || oT || nT || tT || aT) await writeHomeConfig(home)
+  if (cT || bT || oT || nT || tT || aT) await writeHomeConfig(home)
   return loadConfig()
+}
+
+/** 一次性迁移:历史第二真源的 cloud token(config.json cloud.token,以及更老版本残留在桌面 shell 配置
+ *  tangu-desktop-config.json 里的 cloudToken——readShellConfig 会整包继承旧目录,`...shell` 展开曾让它生效)
+ *  → 并入 auth.json 后从各处删除。此后登录凭证唯一真源 = auth.json。 */
+async function migrateCloudTokenToAuthJson(): Promise<void> {
+  try {
+    const home = await readHomeConfig()
+    const shell = (await readShellConfig()) as Record<string, any>
+    const legacy = home.cloud?.token || shell.cloudToken
+    if (!legacy) return
+    const creds = loadTanguCreds()
+    if (!creds.token) saveTanguCreds({ ...creds, token: String(legacy) })
+    if (home.cloud?.token) {
+      delete home.cloud.token
+      await writeHomeConfig(home)
+    }
+    if (shell.cloudToken) {
+      delete shell.cloudToken
+      await mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
+      await writeFile(configPath(), JSON.stringify(shell, null, 2), 'utf8')
+    }
+  } catch (e) {
+    console.error('[auth] cloud.token 迁移失败(忽略,登录态以 auth.json 为准):', e)
+  }
 }
 
 const backend = new BackendManager()
@@ -497,17 +535,48 @@ let mainWindow: BrowserWindow | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
 
+// 对外 MCP 端点(electron/mcpServer.ts):由设置「高级」开关起停。开=外部 agent 可调桌面能力。
+let mcpHandle: Awaited<ReturnType<typeof startForsionMcp>> | null = null
+async function applyForsionMcp(enabled: boolean): Promise<void> {
+  try {
+    if (enabled && !mcpHandle) {
+      mcpHandle = await startForsionMcp({
+        getEngine: () => ({ url: backend.getStatus().url, token: backend.getToken() }),
+        localSecret: backend.localSecret(),
+        homeDir: forsionHomeDir(),
+        log: (m) => console.log(m),
+      })
+    } else if (!enabled && mcpHandle) {
+      mcpHandle.close()
+      mcpHandle = null
+    }
+  } catch (e) {
+    console.error('[mcp] apply enabled failed:', e)
+  }
+}
+/** 渲染端「高级」页展示用:是否在跑 + 端点 + 守门密钥(供拼 `claude mcp add` 命令)。 */
+function forsionMcpStatus(): { running: boolean; url: string | null; token: string } {
+  return { running: !!mcpHandle, url: mcpHandle?.url ?? null, token: backend.localSecret() }
+}
+
 /** renderer 视角的有效配置:managed 就绪时 backendUrl/token 来自托管子进程。 */
-async function effectiveConfig(): Promise<TanguStoredConfig & { backendState: BackendStatus; homeDir: string }> {
+async function effectiveConfig(): Promise<
+  TanguStoredConfig & {
+    backendState: BackendStatus
+    homeDir: string
+    forsionMcp: { running: boolean; url: string | null; token: string }
+  }
+> {
   const stored = await loadConfig()
   const st = backend.getStatus()
   const homeDir = app.getPath('home')
+  const forsionMcp = forsionMcpStatus()
   // 默认工作区目录折算为有效绝对路径(并确保存在),renderer 用它建「Tangu 默认工作区」会话。
   const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
   if (stored.mode === 'managed' && st.state === 'ready' && st.url) {
-    return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir }
+    return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
   }
-  return { ...stored, backendState: st, homeDir, defaultWorkspaceDir }
+  return { ...stored, backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
 }
 
 // 串行化:连续 config:set(如先改 cloudUrl 再改 sandbox)触发的多次 ensureBackend
@@ -523,7 +592,6 @@ function ensureBackend(): Promise<void> {
     }
     await backend.start({
       cloudUrl: stored.cloudUrl,
-      cloudToken: stored.cloudToken,
       modelId: stored.modelId || undefined,
       sandbox: stored.sandbox,
       pythonMode: stored.pythonMode,
@@ -533,8 +601,6 @@ function ensureBackend(): Promise<void> {
       browserSearchEngine: stored.browserSearchEngine,
       browserAllowPrivateUrls: stored.browserAllowPrivateUrls,
       browserCommandTimeoutMs: stored.browserCommandTimeoutMs,
-      wechatEnabled: stored.wechatEnabled,
-      wechatRemoteApprovalMode: stored.wechatRemoteApprovalMode,
       defaultWorkspaceDir: await ensureDefaultWorkspaceDir(stored),
     })
   }).catch((e) => {
@@ -552,13 +618,43 @@ function satelliteWebPreferences(): Electron.WebPreferences {
     // sandbox:true 不支持 ESM preload(electron-vite 产出 .mjs);renderer 无 Node 能力,暴露面仅 contextBridge 最小 API。
     sandbox: false,
     plugins: true, // Chromium 内置 PDFium(blob pdf 预览)
+    webviewTag: true, // 内置浏览器(builtin:browser)用 <webview>;guest 的 preload/nodeIntegration 在 will-attach-webview 里强制剥掉
   }
 }
 
-/** 子窗口打开处理:http(s) 转系统浏览器,其余一律拒绝(不产生游离子窗口)。 */
-function denyExternal({ url }: { url: string }): { action: 'deny' } {
-  if (url.startsWith('https://') || url.startsWith('http://')) shell.openExternal(url)
-  return { action: 'deny' }
+/** 子窗口打开处理:http(s) 回投渲染层(它决定进内置浏览器还是系统浏览器),其余一律拒绝(不产生游离子窗口)。
+ *  回投而非主进程直接判:内置浏览器的开关/设置都住渲染层 localStorage,主进程不复制一份真源。
+ *  渲染层的 openUrlRouter 在**每种窗口**(主/独立/mini)都装,没有内置浏览器的窗口自己转 openExternal。 */
+function openUrlHandler(wc: Electron.WebContents) {
+  return ({ url }: { url: string }): { action: 'deny' } => {
+    if (isHttpUrl(url)) {
+      if (!wc.isDestroyed()) wc.send('app:open-url', url)
+      else shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  }
+}
+
+/** http(s) 判定:交给 URL 解析,不用正则(畸形串按正则可能误判)。 */
+export function isHttpUrl(url: unknown): boolean {
+  if (typeof url !== 'string') return false
+  try {
+    const p = new URL(url).protocol
+    return p === 'http:' || p === 'https:'
+  } catch { return false }
+}
+
+/** IPC 可信来源:必须是我们自己开的窗口的**顶层** WebContents。
+ *  webview guest / 子 frame / 已销毁的 sender 一律拒 —— 否则一旦 renderer 逃逸,
+ *  `pty:spawn` 就是白送一个登录 shell(Electron 安全须知 #17:校验每条 IPC 的 sender)。 */
+export function isTrustedSender(e: { sender: Electron.WebContents; senderFrame?: Electron.WebFrameMain | null }): boolean {
+  const wc = e.sender
+  if (!wc || wc.isDestroyed()) return false
+  if (wc.getType() === 'webview') return false
+  if (!BrowserWindow.fromWebContents(wc)) return false // 只认真实窗口的顶层 contents
+  const frame = e.senderFrame
+  if (frame && frame !== wc.mainFrame) return false // 子 frame 不算
+  return true
 }
 
 /** 拖入 OS 文件的默认导航会把 SPA 冲掉;SPA 自身从不整页导航到 file:,一律拦下
@@ -566,6 +662,38 @@ function denyExternal({ url }: { url: string }): { action: 'deny' } {
 function hardenNav(wc: Electron.WebContents): void {
   wc.on('will-navigate', (e, url) => { if (url.startsWith('file:')) e.preventDefault() })
 }
+
+// 内置浏览器 <webview> 的安全边界:guest 装的是**任意第三方网页**,不是我们的代码。
+//  - will-attach-webview:强制剥掉 preload / nodeIntegration / 套娃 webviewTag —— 渲染层就算写错
+//    属性也拿不到 window.tangu(否则等于把 PTY/文件读写送给任意站点);
+//  - did-attach-webview:站点里的 target=_blank 回投**宿主**渲染层 → 开成新的内置浏览器标签,不产生游离窗。
+// guest 不套 hardenNav:本地 .html 预览要允许 file: 内的相对跳转。
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-attach-webview', (_ev, webPreferences, params) => {
+    // 全部写死,不是「删掉危险的」——渲染层能塞进来的键太多(sandbox/webSecurity/…),
+    // 白名单式覆写才封得住;partition 也钉死,否则空 partition 会落回权限全放行的 defaultSession。
+    delete webPreferences.preload
+    webPreferences.nodeIntegration = false
+    webPreferences.nodeIntegrationInSubFrames = false
+    webPreferences.nodeIntegrationInWorker = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+    webPreferences.webSecurity = true
+    webPreferences.allowRunningInsecureContent = false
+    webPreferences.experimentalFeatures = false
+    webPreferences.webviewTag = false
+    ;(webPreferences as Record<string, unknown>).allowFileAccessFromFiles = false // 本地 .html 不许读同盘其它文件
+    webPreferences.partition = BROWSER_PARTITION
+    params.partition = BROWSER_PARTITION
+    delete params.nodeintegration
+    delete params.nodeintegrationinsubframes
+    delete params.disablewebsecurity
+    delete params.webpreferences
+  })
+  contents.on('did-attach-webview', (_ev, guest) => {
+    guest.setWindowOpenHandler(openUrlHandler(contents))
+  })
+})
 
 function createWindow(): void {
   // Windows/Linux 默认会渲染 File/Edit/View/Window 菜单条;macOS 菜单在系统栏(不在窗口内)。
@@ -588,7 +716,7 @@ function createWindow(): void {
     webPreferences: satelliteWebPreferences(),
   })
 
-  mainWindow.webContents.setWindowOpenHandler(denyExternal)
+  mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
@@ -686,7 +814,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     webPreferences: satelliteWebPreferences(),
   })
   detachedWindows.set(id, win)
-  win.webContents.setWindowOpenHandler(denyExternal)
+  win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   const persist = (): void => { if (!win.isDestroyed()) upsertDetachedBounds(id, win.getBounds()) }
   win.on('moved', persist)
@@ -738,7 +866,7 @@ function createMiniWindow(): void {
     webPreferences: satelliteWebPreferences(),
   })
   miniWindow.setAlwaysOnTop(true, 'floating')
-  miniWindow.webContents.setWindowOpenHandler(denyExternal)
+  miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.on('moved', onMiniMoved)
   miniWindow.on('closed', () => { console.log('[win] mini closed'); miniWindow = null; miniDock = null; stopMiniPoll() })
@@ -872,6 +1000,26 @@ app.whenReady().then(async () => {
   // 「未设 handler=全放行」的既有默认,不回归其他权限(通知等)。macOS 仍受系统隐私设置门控(拒了要去设置改)。
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
   session.defaultSession.setPermissionCheckHandler(() => true)
+  // 内置浏览器的 guest 走独立分区:上面那条「全放行」是为 App 自己的麦克风语音输入开的,
+  // 任意第三方站点不该白拿麦克风/摄像头/定位/通知 —— 该分区一律拒绝(且 cookie 与 App 隔离)。
+  try {
+    const bs = session.fromPartition(BROWSER_PARTITION)
+    bs.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+    bs.setPermissionCheckHandler(() => false)
+    bs.setDevicePermissionHandler(() => false) // HID/USB/串口不走上面那套权限检查,单独关
+    // 下载:**必须放行**——网页的「导出/下载文件」就是这条路,`blob:` 更是根本交不给系统浏览器
+    // (曾一律 preventDefault 转外部,等于把导出功能整个做废)。默认行为就是弹系统保存对话框:
+    // 用户自己选落点 = 不会有静默落盘,也不用自造下载管理 UI。取消对话框 = 取消下载,无副作用。
+    bs.on('will-download', (_e, item) => {
+      item.setSaveDialogOptions({ defaultPath: join(app.getPath('downloads'), item.getFilename()) })
+      item.once('done', (_ev, state) => {
+        if (state !== 'completed') return
+        try { new Notification({ title: item.getFilename(), body: '下载完成' }).show() } catch { /* 通知不可用 */ }
+      })
+    })
+  } catch (e) {
+    console.error('[main] 内置浏览器分区权限策略注册失败:', e)
+  }
   // 本机服务(ActivityWatch 等)通常不回 CORS 头——CSP connect-src 虽放行 localhost,浏览器 CORS 仍会
   // 挡死 renderer 直连(插件轮询/依赖应用 probe 全靠这条)。只补缺失的 ACAO,已有的不动(vite/引擎后端不受扰)。
   try {
@@ -891,6 +1039,7 @@ app.whenReady().then(async () => {
   migrateForsionHome() // 品牌迁移 ~/.tangu→~/.forsion + ~/Tangu→~/Forsion(改名+兼容软链;最早期,先于一切读盘)
   migrateEngineData() // 两层布局:顶层引擎条目 → ~/.forsion/tangu/ + ~/.tangu 软链改指(dev 家同法;须在 backend spawn/读盘之前)
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
+  await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
   if (PRODUCT.agentBackend) void ensureCliInstalled({
@@ -925,12 +1074,15 @@ app.whenReady().then(async () => {
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
     // 模式/托管参数变化 → 重启托管后端(切到 external 则停掉)。
     const managedKeys: Array<keyof TanguStoredConfig> = [
-      'mode', 'cloudUrl', 'cloudToken', 'sandbox', 'pythonMode', 'mirror',
+      'mode', 'cloudUrl', 'sandbox', 'pythonMode', 'mirror',
       'browserEnabled', 'browserEngine', 'browserSearchEngine', 'browserAllowPrivateUrls', 'browserCommandTimeoutMs',
-      'wechatEnabled', 'wechatRemoteApprovalMode',
     ]
     if (managedKeys.some((k) => patch[k] !== undefined && patch[k] !== before[k])) {
       void ensureBackend()
+    }
+    // 对外 MCP 端点开关变化 → 起停(await 完再返回,让 effectiveConfig 带上最新运行状态供 UI 展示连接信息)。
+    if (patch.mcpEnabled !== undefined && patch.mcpEnabled !== before.mcpEnabled) {
+      await applyForsionMcp(patch.mcpEnabled)
     }
     return effectiveConfig()
   })
@@ -944,6 +1096,34 @@ app.whenReady().then(async () => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('inbox:open')
     })
     n.show()
+  })
+  // 通用系统通知(应用内通知统一同步发,不止收件箱;点击仅聚焦窗口)。
+  ipcMain.handle('ui:notify', (_e, title: string, body: string) => {
+    if (!Notification.isSupported()) return
+    const n = new Notification({ title: String(title || '').slice(0, 200), body: String(body || '').slice(0, 200) })
+    n.on('click', () => showMainWindow())
+    n.show()
+  })
+  // Agent Desk 截屏(引擎 desk_screenshot 工具):渲染层给视口矩形,这里抓真实像素。
+  // 用 webContents.capturePage 而不是 html2canvas 那类 DOM 复刻——webview / canvas / 原生视图
+  // 都能抓到,复刻方案对这些一律是空白。矩形按 DIP,与 getBoundingClientRect 的视口坐标同系。
+  ipcMain.handle('ui:captureRect', async (e, rect: { x: number; y: number; width: number; height: number }) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win || win.isDestroyed()) return null
+    const int = (v: unknown): number => Math.max(0, Math.round(Number(v) || 0))
+    const r = { x: int(rect?.x), y: int(rect?.y), width: int(rect?.width), height: int(rect?.height) }
+    if (r.width < 16 || r.height < 16) return null
+    try {
+      const img = await win.webContents.capturePage(r)
+      if (img.isEmpty()) return null
+      // 控 token:最长边压到 1024(HiDPI 下原图是 2x,不压一张图能顶几千 token)
+      const { width, height } = img.getSize()
+      const max = Math.max(width, height)
+      const out = max > 1024 ? img.resize({ width: Math.round((width * 1024) / max), quality: 'good' }) : img
+      return out.toDataURL()
+    } catch {
+      return null
+    }
   })
   ipcMain.handle('inbox:badge', (_e, count: number) => {
     // setBadgeCount:mac dock 原生;Linux 仅 Unity;Windows 无角标概念(需 setOverlayIcon 自绘,v1 no-op)。
@@ -1032,6 +1212,87 @@ app.whenReady().then(async () => {
     return codePreviewServe(rootDir)
   })
   ipcMain.handle('codePreview:stop', () => { stopCodePreview(); return { ok: true } })
+  // 单文件 HTML 预览(wsfile / Agent Desk / 笔记内嵌):把该文件**所在目录**挂到一个不可猜的令牌根下。
+  // 为什么必须走真 http 源:srcdoc 的 iframe 会继承宿主 CSP(script-src 无外部源)且 sandbox 无
+  // allow-same-origin → CDN 脚本被拦、fetch('./model.glb') 被拦,three.js 这类页面必然空白。
+  ipcMain.handle('codePreview:servePath', async (e, filePath: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    if (!filePath || typeof filePath !== 'string') throw new Error('非法的预览路径')
+    const st = await stat(filePath).catch(() => null)
+    if (!st?.isFile()) throw new Error('预览目标不是文件')
+    const real = realpathSync(filePath) // 软链指到别处时按真实落点挂根,不给「链出去」的越权
+    const { base } = await servePathRoot(dirname(real))
+    return { url: `${base}/${encodeURIComponent(basename(real))}` }
+  })
+
+  // ── Forsion Connect:Coding Space 发布 + 预览态 AI 代理(token 只活在主进程)──
+  const resolveConnectCloud = async (): Promise<CloudCreds> => {
+    const cfg = await loadConfig()
+    return { base: (cfg.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: loadTanguCreds().token || '' }
+  }
+  setForsionPreviewHooks({ sdkJs: FORSION_CONNECT_LOCAL_SDK, proxy: makePreviewProxy(resolveConnectCloud) })
+
+  ipcMain.handle('connect:meta', (_e, dir: string) => (typeof dir === 'string' && dir ? readConnectMeta(dir) : {}))
+
+  ipcMain.handle('connect:list', async () => {
+    const c = await resolveConnectCloud()
+    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
+    try {
+      const { status, json } = await cloudJson(c, 'GET', '/api/connect/apps')
+      if (status === 401 || status === 403) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
+      if (status !== 200) return { ok: false, code: 'error', detail: json?.detail || `HTTP ${status}` }
+      return { ok: true, base: c.base, ...json }
+    } catch (e) {
+      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
+    }
+  })
+
+  ipcMain.handle('connect:publish', async (_e, p: { dir: string; name: string; slug: string; entry: string }) => {
+    if (!p || typeof p.dir !== 'string' || !p.dir || !p.name || !p.slug || !p.entry) {
+      return { ok: false, code: 'error', detail: '参数不完整' }
+    }
+    // 纵深防御：只能发布 Coding Space 项目根(~/Forsion/Project/<项目>)下、且 realpath 后仍在根内的目录
+    // （挡渲染层传任意路径 + 挡指向项目外的符号链接根）。
+    let realDir: string
+    try {
+      const projectsRoot = realpathSync(join(forsionWorkspaceDir(), 'Project'))
+      realDir = realpathSync(p.dir)
+      if (realDir !== projectsRoot && !realDir.startsWith(projectsRoot + sep)) {
+        return { ok: false, code: 'error', detail: '只能发布 Coding Space 项目目录' }
+      }
+    } catch {
+      return { ok: false, code: 'error', detail: '项目目录不存在或无法访问' }
+    }
+    const c = await resolveConnectCloud()
+    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
+    try {
+      const { files, totalBytes } = collectProjectFiles(realDir)
+      if (!files.some((f) => f.path === p.entry)) return { ok: false, code: 'error', detail: `入口文件不存在:${p.entry}` }
+      const { status, json } = await cloudJson(c, 'POST', '/api/connect/apps', { slug: p.slug, name: p.name, entry: p.entry, files }, 300_000)
+      if (status === 401) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
+      if (status !== 200) {
+        return { ok: false, code: json?.code || 'error', detail: json?.detail || `HTTP ${status}`, used: json?.used, limit: json?.limit }
+      }
+      writeConnectMeta(realDir, { slug: String(json.slug) })
+      return { ok: true, slug: json.slug, handle: json.handle, url: `${c.base}${json.url}`, totalBytes }
+    } catch (e) {
+      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
+    }
+  })
+
+  ipcMain.handle('connect:unpublish', async (_e, slug: string) => {
+    if (!slug || typeof slug !== 'string') return { ok: false, code: 'error', detail: '参数不完整' }
+    const c = await resolveConnectCloud()
+    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
+    try {
+      const { status, json } = await cloudJson(c, 'DELETE', `/api/connect/apps/${encodeURIComponent(slug)}`)
+      if (status === 401 || status === 403) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
+      if (status !== 200 && status !== 404) return { ok: false, code: 'error', detail: json?.detail || `HTTP ${status}` }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
+    }
+  })
   // Coding Space 的项目根目录 = ~/Forsion/Project(与 Amadeus 的 ~/Forsion/Amadeus 同级;dev=~/Forsion-Dev/Project),
   // 每个项目一个子文件夹。返回时确保存在(子文件夹经 fs:mkdir 的 safeName 校验创建)。
   ipcMain.handle('codeProjects:root', async () => {
@@ -1330,30 +1591,47 @@ app.whenReady().then(async () => {
   })
 
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;本地/自带-key,不经引擎/服务端)──
-  ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; language?: string }) => {
+  /** 转写一段音频。`timestamps` 不传 = 老行为(回字符串,语音输入用);传 true 回 { text, segments }。 */
+  const runTranscribe = async (audio: Buffer, req: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) => {
     const cfg = await loadConfig()
-    const audio = Buffer.from(req?.audioBase64 || '', 'base64')
     if (!audio.length) throw new Error('空音频')
     // 本地优先:选了本地且模型就绪 → 离线转写(不联网)。
     if (cfg.asrBackend === 'local' && localModelReady()) {
-      return transcribeLocal(audio)
+      return transcribeLocal(audio, { timestamps: req?.timestamps })
     }
     // 云端:自带 provider(<provider>/<model> 命中 providers.json)→ 主进程直连上游;否则走 Forsion 托管(计费)。
     const modelId = (req?.modelId || cfg.asrModelId || '').trim()
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
     if (provider) {
-      return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language })
+      return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
     }
     // 非自带 provider = Forsion 托管模型(或未选,让服务端用 app asr 默认)→ 直连 Forsion 服务端(token 不下发 renderer)。
     const creds = loadTanguCreds()
     const cloudUrl = cfg.cloudUrl || creds.cloudUrl || ''
-    const token = cfg.cloudToken || creds.token || ''
+    const token = creds.token || ''
     if (!cloudUrl || !token) throw new Error('未设置语音识别:选一个自带 provider 的语音识别模型 + key,或登录 Forsion 用云端,或下载本地语音模型。')
-    return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: req?.audioBase64 || '', mime: req?.mime || 'audio/wav', language: req?.language })
+    return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: audio.toString('base64'), mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
+  }
+
+  ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; language?: string; timestamps?: boolean }) =>
+    runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))
+
+  // 按路径转写:视频转录动辄几十 MB WAV,走 base64 过 IPC 既撑爆消息又白涨 33%(且 fs:readFile 有 50MB 闸)。
+  // 主进程直接读盘。路径由调用方给(与 fs:readFile 同口径,不额外设沙箱)。
+  ipcMain.handle('asr:transcribeFile', async (_e, filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) => {
+    if (!filePath || typeof filePath !== 'string') throw new Error('非法的音频路径')
+    const audio = await readFile(filePath)
+    const ext = (filePath.split('.').pop() || '').toLowerCase()
+    return runTranscribe(audio, { ...(req || {}), mime: req?.mime || (ext === 'wav' ? 'audio/wav' : ext === 'mp3' ? 'audio/mpeg' : ext === 'm4a' ? 'audio/mp4' : 'application/octet-stream') })
   })
 
   // ── 本地语音模型(SenseVoice)下载 / 状态 / 删除。下载进度经 'asr:localProgress' 推回发起窗口。──
+  // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
+  ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>
+    computerUseLiveView(opts || {}),
+  )
+
   ipcMain.handle('asr:localStatus', () => ({ ready: localModelReady(), sizeBytes: localModelSize() }))
   ipcMain.handle('asr:localDownload', async (e) => {
     const cfg = await loadConfig()
@@ -1368,23 +1646,55 @@ app.whenReady().then(async () => {
   const broadcast = (channel: string, payload: any): void => {
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload)
   }
+  // 登录态变更处理的去重锚:桌面登录/登出 IPC 与 auth.json watcher 都会触发「广播 + 重启后端」,
+  // 以「上次已处理的 token 值」判重,IPC 路径先行更新它 → watcher 随后触发时识别为已处理。
+  let lastAuthToken = loadTanguCreds().token || ''
 
   ipcMain.handle('auth:status', async () => {
     const stored = await loadConfig()
     const creds = loadTanguCreds()
     const cloudUrl = stored.cloudUrl || creds.cloudUrl || ''
-    const token = stored.cloudToken || creds.token || ''
+    const token = creds.token || ''
     const who = token ? await forsionWhoami(cloudUrl, token) : null
+    // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
+    // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
+    const backendState = PRODUCT.agentBackend && stored.mode === 'managed' ? backend.getStatus().state : null
+    if (who?.status === 'expired') {
+      // token 已被服务端吊销(账号中心「退出登录」按 jti 吊销桌面这枚也走到这)或自然过期:
+      // 就地转真登出——清 auth.json、后端重启丢弃旧 token、踢同步引擎,所有表面一致回「未登录」,
+      // 而不是挂着一个服务端早已不认的僵尸登录态。仅 401/403 走这里,离线(offline)绝不误清。
+      // 竞态防线:whoami 在途期间可能已并发登录换新凭证(auth.json 里已不是验失败的那枚)——绝不清新 token。
+      const nowTok = loadTanguCreds().token || ''
+      if (nowTok && nowTok !== token) {
+        return {
+          loggedIn: true, tokenValid: null, cloudUrl,
+          username: null, nickname: null, avatar: null, membershipTier: null,
+          tokenSource: 'tangu-login', backendState,
+        }
+      }
+      console.log('[auth] token 已失效(服务端 401/403),自动登出')
+      forsionLogout()
+      lastAuthToken = ''
+      if (stored.mode === 'managed') void ensureBackend()
+      restartAmadeusSync?.()
+      broadcast('auth:changed', { loggedIn: false })
+      return {
+        loggedIn: false, tokenValid: null, cloudUrl,
+        username: null, nickname: null, avatar: null, membershipTier: null,
+        tokenSource: null, backendState,
+      }
+    }
     return {
       loggedIn: !!token,
-      // null=未校验/离线(不确定);true=有效;false=已失效(401/403)。供前端检测「登录过期」用,离线不误判。
-      tokenValid: who ? (who.status === 'ok' ? true : who.status === 'expired' ? false : null) : null,
+      // null=未校验/离线(不确定);true=有效。失效(401/403)已在上面就地转登出,不再返回 false。
+      tokenValid: who ? (who.status === 'ok' ? true : null) : null,
       cloudUrl,
       username: who?.user?.username || null,
       nickname: who?.user?.nickname || null,
       avatar: who?.user?.avatar || null,
       membershipTier: who?.user?.membershipTier || null,
-      tokenSource: stored.cloudToken ? 'config' : creds.token ? 'tangu-login' : null,
+      tokenSource: token ? 'tangu-login' : null,
+      backendState,
     }
   })
 
@@ -1428,7 +1738,7 @@ app.whenReady().then(async () => {
     const stored = await loadConfig()
     const creds = loadTanguCreds()
     const cloudUrl = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    const token = stored.cloudToken || creds.token || ''
+    const token = creds.token || ''
     if (!cloudUrl) return { ok: false }
     const hash = section && /^[a-z0-9-]+$/i.test(section) ? `#${section}` : ''
     const url = `${cloudUrl}/account${token ? `?token=${encodeURIComponent(token)}` : ''}${hash}`
@@ -1534,14 +1844,35 @@ app.whenReady().then(async () => {
   })
 
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
+  // 另汇入 Forsion 插件捆绑包内嵌的 Space(plugins/<id>/spaces/<slug>/space.json,带 plugin=manifest id):
+  // 用户目录条目在前(同 spec id 先到先得,用户版本胜);渲染层按插件启停显隐、不提供单独删除。
   ipcMain.handle('spaces:list', async () => {
-    const out: Array<{ slug: string; json: string }> = []
+    const out: Array<{ slug: string; json: string; plugin?: string }> = []
     try {
       const base = join(tanguHomeDir(), 'spaces')
       for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
         try { out.push({ slug: e.name, json: await readFile(join(base, e.name, 'space.json'), 'utf8') }) } catch { /* 无 manifest 跳过 */ }
       }
     } catch { /* 目录不存在 = 空 */ }
+    try {
+      const proot = join(tanguHomeDir(), 'plugins')
+      const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
+      for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
+        let pid: string
+        try {
+          const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: string }
+          const cand = typeof m.id === 'string' && SAFE_PID.test(m.id) ? m.id : p.name
+          if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
+          pid = cand
+        } catch { continue } // 无 manifest.json = 非插件目录,跳过
+        try {
+          const sroot = join(proot, p.name, 'spaces')
+          for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
+            try { out.push({ slug: e.name, json: await readFile(join(sroot, e.name, 'space.json'), 'utf8'), plugin: pid }) } catch { /* 无 space.json 跳过 */ }
+          }
+        } catch { /* 无 spaces/ 子目录 */ }
+      }
+    } catch { /* plugins 目录不存在 = 无捆绑包 */ }
     return out
   })
   ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
@@ -1578,7 +1909,7 @@ app.whenReady().then(async () => {
     const stored = await loadConfig()
     const creds = loadTanguCreds()
     const cloudUrl = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    const token = stored.cloudToken || creds.token || ''
+    const token = creds.token || ''
     if (!cloudUrl || !token) return { ok: false, error: 'not-logged-in' }
     const description = (input?.description || '').trim()
     if (!description) return { ok: false, error: 'empty' }
@@ -1621,25 +1952,39 @@ app.whenReady().then(async () => {
     const stored = await loadConfig()
     const url = (cloudUrl || stored.cloudUrl || '').trim()
     const r = await forsionDeviceLogin(url, (info) => broadcast('auth:device', info))
-    // 登录成功:cloudUrl 记进配置;token 由 forsionDeviceLogin 写进 auth.json(managed 后端/getToken 回退读取)。
-    // ⚠️ config.cloud.token 优先级高于 auth.json(getToken/auth:status 均 `cloudToken || creds.token`)——
-    // 残留的旧 cloudToken 会遮蔽本次登录的新 token,故一并清掉,否则「登录了但 Tangu 仍用旧 token」。
-    await saveConfig({ cloudUrl: r.cloudUrl, ...(stored.cloudToken ? { cloudToken: '' } : {}) })
+    // 登录成功:cloudUrl 记进配置;token 由 forsionDeviceLogin 写进 auth.json(登录态唯一真源)。
+    lastAuthToken = r.token
+    // cloudUrl 记忆是锦上添花:写失败(磁盘满等)绝不能中断下面的传播(后端重启/广播),
+    // 否则 lastAuthToken 已更新会让 watcher 也跳过,后端就卡在旧 token 上。
+    try { await saveConfig({ cloudUrl: r.cloudUrl }) } catch (e) { console.error('[auth] cloudUrl 记忆写入失败(忽略):', e) }
     // 关键:await(非 void)等后端带新 token 重启就绪后才返回,这样渲染端登录后的 onReconnect/onAuthChange
     // 必命中「已就绪 + 已鉴权」的后端。否则后端尚在重启时渲染端就 connect → 失败,只能靠异步 ready 广播
     // 自愈(竞态;新用户引导里常表现为登录后一直「连接后端」、模型加载不出,得手动去设置重启)。
     if (stored.mode === 'managed') await ensureBackend()
     restartAmadeusSync?.() // 登录成功:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)
+    broadcast('auth:changed', { loggedIn: true }) // 其余窗口的账号卡也同步刷新
     return { ok: true, cloudUrl: r.cloudUrl }
   })
 
   ipcMain.handle('auth:logout', async () => {
-    forsionLogout()                 // 清 auth.json 的 token
+    // 先请求服务端吊销本机这一枚 token(jti 单枚吊销:网页独立会话/其他设备不受影响;
+    // 从本机跳转出去的账号中心页持有的同为这枚,一并失效)。
+    // 离线/失败不阻断本地登出——本地清了、服务端 token 还活着,靠 30d 自然过期兜底。
     const stored = await loadConfig()
-    // 也清 config.json 的 cloudToken:auth:status 等一律 `stored.cloudToken || creds.token` 优先读它,
-    // 不清则登出后仍判定已登录(本 bug 根因)。
-    if (stored.cloudToken) await saveConfig({ cloudToken: '' })
+    const creds = loadTanguCreds()
+    const base = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
+    if (base && creds.token) {
+      void fetch(`${base}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${creds.token}` },
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {})
+    }
+    forsionLogout()                 // 清 auth.json 的 token(唯一真源;config.json 不再存 token)
+    lastAuthToken = ''
     if (stored.mode === 'managed') void ensureBackend()
+    restartAmadeusSync?.() // 硬重启同步引擎丢弃旧账号 client:否则登出后仍拿旧 token 继续同步
+    broadcast('auth:changed', { loggedIn: false })
     return { ok: true }
   })
 
@@ -1684,6 +2029,32 @@ app.whenReady().then(async () => {
     }
   })
 
+  // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证
+  // 变化(终端 tangu login / logout、手工改文件)也走与桌面登录同一条传播链——广播渲染层 + managed
+  // 后端带新 token 重启(token 经 env 快照注入,重启是唯一传播手段)+ 踢 Amadeus 云同步。
+  // 桌面自己的登录/登出 IPC 已先行处理并更新 lastAuthToken,watcher 比对相同即跳过,不会二次重启。
+  let authWatchTimer: ReturnType<typeof setTimeout> | null = null
+  const onAuthFileMaybeChanged = (): void => {
+    if (authWatchTimer) clearTimeout(authWatchTimer)
+    authWatchTimer = setTimeout(() => {
+      void (async () => {
+        const tok = loadTanguCreds().token || ''
+        if (tok === lastAuthToken) return
+        lastAuthToken = tok
+        broadcast('auth:changed', { loggedIn: !!tok })
+        const stored = await loadConfig()
+        if (stored.mode === 'managed') void ensureBackend()
+        restartAmadeusSync?.()
+      })()
+    }, 300) // 防抖:登录流程对 auth.json 的连续写只触发一次
+  }
+  try {
+    mkdirSync(forsionHomeDir(), { recursive: true })
+    fsWatch(forsionHomeDir(), (_ev, fname) => { if (!fname || fname === 'auth.json') onAuthFileMaybeChanged() })
+  } catch (e) {
+    console.error('[auth] auth.json watcher 注册失败(外部登录变化需重启 App 才生效):', e)
+  }
+
   // ── 多窗口 IPC:独立窗 + mini 卡片 ──
   ipcMain.handle('window:detachedReady', (_e, id: string) => {
     const v = pendingDetachedViews.get(String(id)) || []
@@ -1697,6 +2068,13 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('window:openMini', () => toggleMiniWindow())
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),
+  // 别的 scheme 经 openExternal 等于让页面唤起任意本机协议处理器。scheme 用 URL 解析比对,
+  // 不靠正则(`https:/\evil` 之类畸形串别指望正则拿捏)。
+  ipcMain.handle('shell:openExternal', (e, url: string) => {
+    if (!isTrustedSender(e)) return
+    if (isHttpUrl(url)) void shell.openExternal(url)
+  })
   // 跨窗撕拽:实时坐标 → 命中窗口显落点预览、其余清除。
   ipcMain.on('window:dragUpdate', (e, p: { screenX: number; screenY: number; view: ViewDesc }) => {
     const src = BrowserWindow.fromWebContents(e.sender)
@@ -1727,6 +2105,11 @@ app.whenReady().then(async () => {
   try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
 
   void ensureBackend()
+  // 对外 MCP 端点:仅在设置「高级」已开启时随 App 启动(默认关);不依赖后端就绪,工具调用时现取引擎地址。
+  void loadConfig().then((c) => applyForsionMcp(c.mcpEnabled))
+  // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,
+  // 那时 handler 还没注册的话 IPC 直接「No handler registered」,视图落进已退出态且不会重试。
+  registerPtyIpc(isTrustedSender)
   createWindow()
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。

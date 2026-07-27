@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import type { OfflineRecognizer } from 'sherpa-onnx-node'
 import { forsionHomeDir } from './forsionHome'
 import { healMacQuarantine } from './macQuarantine'
+import { wavToSamples, splitOnSilence } from './asrAudio'
 
 // 自愈须早于 app ready / 引擎子进程 spawn;本模块被 main.ts 顶层 import,模块加载期即执行。
 healMacQuarantine()
@@ -113,44 +114,37 @@ function getRecognizer(): Promise<OfflineRecognizer> {
   return recognizerP
 }
 
-/**
- * WAV(PCM)→ V8 拥有的单声道 Float32Array + 采样率。
- * ⚠️不用 sherpa `readWave`:它返回 native 分配的 external buffer,而 Electron 禁止 external buffer,
- * 传给 acceptWaveform 会抛「External buffers are not allowed」(plain-node 不触发,只 Electron 触发)。
- * 自解析成普通 Float32Array 绕开。渲染端固定 16k 单声道 16-bit,但也兼容多声道(取首声道)/8·32-bit。
- */
-export function wavToSamples(buf: Buffer): { samples: Float32Array; sampleRate: number } {
-  let off = 12, sampleRate = 16000, channels = 1, bits = 16, dataOff = -1, dataLen = 0
-  if (buf.length >= 44 && buf.toString('ascii', 0, 4) === 'RIFF') {
-    while (off + 8 <= buf.length) {
-      const id = buf.toString('ascii', off, off + 4)
-      const sz = buf.readUInt32LE(off + 4)
-      if (id === 'fmt ') { channels = buf.readUInt16LE(off + 10); sampleRate = buf.readUInt32LE(off + 12); bits = buf.readUInt16LE(off + 22) }
-      else if (id === 'data') { dataOff = off + 8; dataLen = sz; break }
-      off += 8 + sz + (sz & 1)
-    }
-  }
-  if (dataOff < 0) { dataOff = 44; dataLen = Math.max(0, buf.length - 44) } // 兜底
-  const frameBytes = Math.max(1, bits >> 3) * Math.max(1, channels)
-  const n = Math.floor(Math.max(0, dataLen) / frameBytes)
-  const samples = new Float32Array(n) // V8 拥有(非 external)
-  for (let i = 0; i < n; i++) {
-    const p = dataOff + i * frameBytes // 取首声道
-    samples[i] = bits === 16 ? buf.readInt16LE(p) / 32768
-      : bits === 32 ? buf.readFloatLE(p)
-      : bits === 8 ? (buf.readUInt8(p) - 128) / 128
-      : 0
-  }
-  return { samples, sampleRate }
-}
-
-/** 本地离线转写:WAV 音频 → 文本(全在 V8 内存,不落临时文件、不经 sherpa readWave)。 */
-export async function transcribeLocal(wav: Buffer): Promise<string> {
-  if (!localModelReady()) throw new Error('本地语音模型未下载')
-  const rec = await getRecognizer()
-  const { samples, sampleRate } = wavToSamples(wav)
+/** 单段解码(SenseVoice 一次一句)。 */
+async function decodeSlice(rec: OfflineRecognizer, samples: Float32Array, sampleRate: number): Promise<string> {
   const stream = rec.createStream()
   stream.acceptWaveform({ samples, sampleRate })
   const result = await rec.decodeAsync(stream)
   return (result.text || '').trim()
+}
+
+/** 一条带时间的转写片段(秒);与 asr.ts 的 AsrSegment 同形(此处不 import,免主进程模块环)。 */
+export interface LocalSegment { start: number; end: number; text: string }
+
+export { wavToSamples, splitOnSilence } // 纯函数真身在 asrAudio.ts(那边可单测);此处转出,老调用点不改
+
+/**
+ * 本地离线转写:WAV → 文本(全在 V8 内存,不落临时文件、不经 sherpa readWave)。
+ * 不要时间戳且音频短(≤30s,语音输入的情形)→ 老路径原样一次解码。
+ * 要时间戳、或音频长 → 按静音切段逐段解码(长音频不切等于结果不可用)。
+ */
+export async function transcribeLocal(wav: Buffer, opts?: { timestamps?: boolean }): Promise<string | { text: string; segments?: LocalSegment[] }> {
+  if (!localModelReady()) throw new Error('本地语音模型未下载')
+  const rec = await getRecognizer()
+  const { samples, sampleRate } = wavToSamples(wav)
+  const short = samples.length <= sampleRate * 30
+  if (!opts?.timestamps && short) return decodeSlice(rec, samples, sampleRate)
+
+  const slices = splitOnSilence(samples, sampleRate)
+  const segments: LocalSegment[] = []
+  for (const s of slices) {
+    const text = await decodeSlice(rec, samples.subarray(s.from, s.to), sampleRate)
+    if (text) segments.push({ start: s.from / sampleRate, end: s.to / sampleRate, text })
+  }
+  const text = segments.map((s) => s.text).join(' ').trim()
+  return opts?.timestamps ? { text, segments: segments.length ? segments : undefined } : text
 }

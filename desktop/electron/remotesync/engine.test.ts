@@ -220,6 +220,53 @@ describe('remotesync engine 双设备', () => {
     expect(typeof seen[2].expectedId).toBe('string') // = v2 推送后的基线身份
   })
 
+  it('同步方式 push:仅上传,不拉取不传播删除,冲突以本地为准', async () => {
+    await write(rootA, 'doc.md', 'base')
+    await write(rootA, 'gone.md', 'g')
+    await syncA()
+    await syncB()
+    await write(rootB, 'remote-new.md', 'rn')
+    await write(rootB, 'doc.md', 'from-b')
+    await syncB()
+
+    await fs.rm(path.join(rootA, 'gone.md'))
+    await write(rootA, 'doc.md', 'from-a')
+    const r = await syncA({ direction: 'push' })
+    expect(r.ok).toBe(true)
+    expect(r.pulled).toBe(0)
+    expect(r.deletedRemote).toBe(0)
+    expect(r.deletedLocal).toBe(0)
+    expect(await exists(rootA, 'remote-new.md')).toBe(false) // 不拉取
+    const rw = await remote.walk()
+    expect(rw.find((e) => e.key === 'gone.md')).toBeTruthy() // 本地删除不上传
+    expect((await remote.readFile('doc.md')).toString()).toBe('from-a') // 冲突以本地为准
+  })
+
+  it('同步方式 pull:仅下载,不推送不传播删除,冲突出本地副本', async () => {
+    await write(rootA, 'doc.md', 'base')
+    await write(rootA, 'dead.md', 'd')
+    await syncA()
+    await syncB()
+
+    await write(rootA, 'doc.md', 'from-a')
+    await fs.rm(path.join(rootA, 'dead.md'))
+    await syncA() // 远端:doc=from-a,dead 已删
+
+    await write(rootB, 'doc.md', 'from-b')
+    await write(rootB, 'b-local.md', 'bl')
+    const r = await syncB({ direction: 'pull' })
+    expect(r.ok).toBe(true)
+    expect(r.pushed).toBe(0)
+    expect(r.deletedLocal).toBe(0)
+    expect(r.conflicts).toBe(1)
+    expect(await read(rootB, 'doc.md')).toBe('from-a')
+    expect(await exists(rootB, 'dead.md')).toBe(true) // 远端删除不落地
+    expect((await remote.walk()).find((e) => e.key === 'b-local.md')).toBeUndefined() // 不推送
+    const copy = (await list(rootB)).find((f) => f.includes('(conflict '))
+    expect(copy).toBeTruthy()
+    expect(await read(rootB, copy!)).toBe('from-b')
+  })
+
   it('忽略规则 + 首次合流不同内容出副本', async () => {
     await write(rootA, '.DS_Store', 'junk')
     await write(rootA, 'keep.md', 'A')

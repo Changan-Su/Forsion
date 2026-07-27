@@ -1,13 +1,13 @@
 {
   "name": "forsion-desktop",
-  "version": "2.6.9",
+  "version": "2.7.0",
   "description": "Forsion Desktop — AI 驱动的应用生态系统的桌面端(Electron):Tangu Agent 引擎 + LCL 可停靠工作区框架 + 可插拔功能空间(对话/笔记/日历/收件箱/编码),按产品档案裁出全家桶与单品发行版",
   "author": "Forsion",
   "private": true,
   "type": "module",
   "main": "out/main/main.js",
   "scripts": {
-    "postinstall": "node build/link-lcl.cjs && node build/copy-excalidraw-assets.cjs",
+    "postinstall": "node build/link-lcl.cjs && node build/copy-excalidraw-assets.cjs && node build/fix-pty-helper.cjs",
     "dev": "electron-vite dev --noSandbox",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
@@ -15,15 +15,31 @@
     "test": "vitest run",
     "e2e:editor": "node scripts/e2e-editor.cjs",
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",
+    "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
+    "e2e:mindmap": "node scripts/mindmap.e2e.cjs",
     "check:pillbar": "node scripts/pillbar-overflow.check.cjs",
+    "check:approval": "node scripts/approval-menu.check.cjs",
+    "check:caret": "node scripts/smooth-caret.check.cjs",
+    "check:overlay": "node scripts/overlay-zoom.check.cjs",
     "check:leadicon": "node scripts/t2s-lead-icon.check.cjs",
+    "check:tasksummary": "node scripts/task-summary.check.cjs",
+    "check:railjank": "node scripts/rail-jank.check.cjs",
+    "check:deskrail": "node scripts/desk-rail.check.cjs",
+    "check:ctxring": "node scripts/ctxring-hover.check.cjs",
+    "check:connect": "node scripts/connect-preview.check.cjs",
+    "check:modelmenu": "node scripts/model-menu.check.cjs",
+    "check:settingsui": "node scripts/settings-ui.check.cjs",
     "pack": "electron-builder --config electron-builder.config.cjs --dir",
     "dist": "electron-builder --config electron-builder.config.cjs",
     "fetch-python": "node build/fetch-python.cjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && node ../tangu-agent/scripts/sync-command-catalog.mjs --check",
     "dev:amadeus": "FORSION_PRODUCT=amadeus electron-vite dev --noSandbox",
     "build:amadeus": "FORSION_PRODUCT=amadeus electron-vite build",
-    "pack:amadeus": "FORSION_PRODUCT=amadeus npm run build:amadeus && FORSION_PRODUCT=amadeus electron-builder --config electron-builder.config.cjs --dir"
+    "pack:amadeus": "FORSION_PRODUCT=amadeus npm run build:amadeus && FORSION_PRODUCT=amadeus electron-builder --config electron-builder.config.cjs --dir",
+    "check:remount": "node scripts/main-remount.check.cjs",
+    "check:builtins": "node scripts/builtins.check.cjs",
+    "check:deskshot": "node scripts/desk-shot.check.cjs",
+    "check:splash": "node scripts/splash-loop.check.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",
@@ -39,8 +55,11 @@
     "@milkdown/plugin-math": "^7.5.9",
     "@milkdown/react": "^7.21.2",
     "@milkdown/theme-nord": "^7.21.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@stylexjs/stylex": "^0.18.3",
     "@uiw/react-codemirror": "^4.25.2",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "chokidar": "^5.0.0",
     "diff2html": "^3.4.55",
     "dockview": "^7.0.2",
@@ -95,5 +114,8 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0",
     "yaml": "^2.9.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

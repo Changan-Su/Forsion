@@ -47,6 +47,7 @@ export const IPC = {
   listPlugins: 'plugins:list',
   openPluginsFolder: 'plugins:open-folder',
   scaffoldPlugin: 'plugins:scaffold',
+  uninstallPlugin: 'plugins:uninstall-forsion',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
@@ -138,6 +139,43 @@ export function sanitizeOnboarding(raw: unknown): PluginOnboardingSpec | undefin
   return out.intro || out.steps || out.settings || out.recommends ? out : undefined
 }
 
+/** An activity event a plugin declares it emits (manifest `events`), for the automation builder's
+ *  event catalog. Names are relative — the host prefixes `plugin:<id>:` everywhere they surface. */
+export interface PluginEventDecl {
+  name: string
+  label?: string
+}
+
+/** Validate + cap a raw manifest `events` value. Malformed entries drop silently, never block the plugin. */
+export function sanitizeEvents(raw: unknown): PluginEventDecl[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: PluginEventDecl[] = []
+  for (const it of raw.slice(0, 16)) {
+    const o = it as Record<string, unknown>
+    const name = str(o?.name, 64)
+    // 与引擎活动行事件名正则同口径(允许 . _ - 与数字;冒号留给宿主前缀)
+    if (!name || !/^[a-z][a-z0-9._-]*$/.test(name)) continue
+    const label = str(o?.label, 80)
+    out.push(label ? { name, label } : { name })
+  }
+  return out.length ? out : undefined
+}
+
+/** Engine-side / cross-domain content embedded in a Forsion plugin folder (捆绑包 bundle)。
+ *  识别全靠标志文件(tangu-plugin.json / config.toml / SKILL.md / space.json),manifest 无新增字段。
+ *  引擎原地加载 tangu-plugins/ 与 skills/、播种 agents/(见 tangu-agent src/plugins/bundles.ts);
+ *  spaces/ 由主进程 spaces:list 汇入、渲染层随插件启停显隐。 */
+export interface PluginBundleInfo {
+  /** 内嵌引擎插件的 manifest id(tangu-plugins/<dir>/tangu-plugin.json;启停级联/引擎列表去重用)。 */
+  enginePlugins: string[]
+  /** 内嵌 agent slug(agents/<slug>/config.toml;引擎播种一次,卸载插件后保留)。 */
+  agents: string[]
+  /** 内嵌全局技能 slug(skills/<slug>/SKILL.md;引擎原地扫描)。 */
+  skills: string[]
+  /** 内嵌 Space slug(spaces/<slug>/space.json;随插件启停显隐,只读不可单独删)。 */
+  spaces: string[]
+}
+
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
@@ -158,12 +196,16 @@ export interface ExternalPluginSource {
   changelog?: string
   /** Declarative first-run setup card (manifest `onboarding`, sanitized by the main process). */
   onboarding?: PluginOnboardingSpec
+  /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */
+  events?: PluginEventDecl[]
   /** File suffixes this plugin claims as a custom file type (manifest `fileExtensions`, e.g. ['.mindmap.md']).
    *  The main process excludes these from the page list (listPages) so its compiler never rewrites them
    *  (= corruption); the renderer's registerFileType supplies the matching icon/view/embed behaviour. */
   fileExtensions?: string[]
   /** Present → listed but not loadable: 'api' = apiVersion mismatch, 'minApp' = app too old. */
   blocked?: 'api' | 'minApp'
+  /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
+  bundle?: PluginBundleInfo
 }
 
 /** Semver-ish comparator (copied from lcl/spaces/userSpaces.core.ts — main process has no @lcl alias). */
@@ -390,6 +432,8 @@ export interface AmadeusApi {
   openPluginsFolder(): Promise<void>
   /** Write a runnable sample plugin into the plugins folder. */
   scaffoldSamplePlugin(): Promise<void>
+  /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录整删;可选:桌面实现)。 */
+  uninstallPlugin?(id: string): Promise<void>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
   /** 解析 `![[xxx.db]]` 目标(basename 或页相对路径,与附件同一解析语义)并读取数据库。 */

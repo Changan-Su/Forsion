@@ -74,6 +74,7 @@ const api: AmadeusApi = {
   listPlugins: () => ipcRenderer.invoke(IPC.listPlugins),
   openPluginsFolder: () => ipcRenderer.invoke(IPC.openPluginsFolder),
   scaffoldSamplePlugin: () => ipcRenderer.invoke(IPC.scaffoldPlugin),
+  uninstallPlugin: (id) => ipcRenderer.invoke(IPC.uninstallPlugin, id),
   revealInFileManager: (targetPath) => ipcRenderer.invoke(IPC.revealInFileManager, targetPath),
   readDatabase: (pagePath, ref) => ipcRenderer.invoke(IPC.dbRead, pagePath, ref),
   writeDatabase: (dbPath, data) => ipcRenderer.invoke(IPC.dbWrite, dbPath, data),
@@ -135,8 +136,11 @@ contextBridge.exposeInMainWorld('amadeusCollab', {
   leaveShare: (id: string) => collabCall('leaveShare', id),
   inviteUrl: (token: string) => `${linkBase}/invite/${token}`,
   publishes: () => collabCall('publishes'),
+  listAllShares: () => collabCall('listAllShares'),
   createPublish: (mode: string, path: string) => collabCall('createPublish', mode, path),
   revokePublish: (token: string) => collabCall('revokePublish', token),
+  revokePublishIn: (vaultId: string, token: string) => collabCall('revokePublishIn', vaultId, token),
+  revokePageShareIn: (vaultId: string, id: string) => collabCall('revokePageShareIn', vaultId, id),
   publishUrl: (token: string) => `${linkBase}/share/${token}`,
   heartbeat: (page: string | null) => {
     void collabCall('heartbeat', page)

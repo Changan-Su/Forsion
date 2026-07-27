@@ -29,7 +29,12 @@ const api = {
   },
   // ── 收件箱:系统通知 + dock 角标(仅 mac)+ 通知点击回跳订阅 ──
   notifyInbox: (title: string, body: string): Promise<void> => ipcRenderer.invoke('inbox:notify', title, body),
+  /** 通用系统通知(所有应用内通知同步发;点击仅聚焦窗口,不强制回跳 Inbox)。 */
+  notify: (title: string, body: string): Promise<void> => ipcRenderer.invoke('ui:notify', title, body),
   setInboxBadge: (count: number): Promise<void> => ipcRenderer.invoke('inbox:badge', count),
+  /** 截当前窗口的一块视口矩形(Agent Desk 截屏);返回 data:image/png;base64,… ,失败 null。 */
+  captureRect: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> =>
+    ipcRenderer.invoke('ui:captureRect', rect),
   onInboxOpen: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('inbox:open', listener)
@@ -63,6 +68,12 @@ const api = {
     ipcRenderer.on('auth:device', listener)
     return () => ipcRenderer.removeListener('auth:device', listener)
   },
+  /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源都会触发)→ 刷新账号卡/重连。 */
+  onAuthChanged: (cb: (info: { loggedIn: boolean }) => void): (() => void) => {
+    const listener = (_e: unknown, info: { loggedIn: boolean }): void => cb(info)
+    ipcRenderer.on('auth:changed', listener)
+    return () => ipcRenderer.removeListener('auth:changed', listener)
+  },
   /** 本机模式工作目录选择;取消返回 null。 */
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory'),
   /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
@@ -88,8 +99,16 @@ const api = {
   /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 加载多文件 web app 预览)。 */
   codePreviewServe: (rootDir: string): Promise<{ origin: string }> => ipcRenderer.invoke('codePreview:serve', rootDir),
   codePreviewStop: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('codePreview:stop'),
+  /** 单文件 HTML 预览:挂其所在目录到令牌根,返回可直接进 iframe 的 http URL。 */
+  codePreviewServePath: (filePath: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:servePath', filePath),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
+  // ── Forsion Connect:Coding Space 项目发布到云端托管(token 留主进程) ──
+  connectMeta: (dir: string): Promise<{ slug?: string }> => ipcRenderer.invoke('connect:meta', dir),
+  connectList: (): Promise<any> => ipcRenderer.invoke('connect:list'),
+  connectPublish: (p: { dir: string; name: string; slug: string; entry: string }): Promise<any> =>
+    ipcRenderer.invoke('connect:publish', p),
+  connectUnpublish: (slug: string): Promise<any> => ipcRenderer.invoke('connect:unpublish', slug),
   /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict 不覆盖。 */
   writeHostFile: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }> =>
     ipcRenderer.invoke('fs:writeFile', filePath, content, expectedMtimeMs, createNew),
@@ -143,7 +162,7 @@ const api = {
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
   pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
-  spacesList: (): Promise<Array<{ slug: string; json: string }>> => ipcRenderer.invoke('spaces:list'),
+  spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
   spacesDelete: (slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:delete', slug),
   // ── 环境检测 + 引导安装(首启向导;run 仅认 check 登记的 opaque id)──
@@ -162,8 +181,26 @@ const api = {
   requestKnownAppInstall: (appId: string): Promise<{ installId: string; command: string } | null> =>
     ipcRenderer.invoke('plugin:request-install', appId),
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;主进程本地/自带-key,不经引擎)──
-  transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; language?: string }): Promise<string> =>
+  // timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要的分段时间戳)。
+  transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribe', req),
+  // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。
+  transcribeAudioFile: (filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
+    ipcRenderer.invoke('asr:transcribeFile', filePath, req),
+  // Computer Use 实时画面:最近被操控窗口的一帧(只读,helper 没跑就 active:false;见 electron/computerUse.ts)。
+  computerUseLiveView: (opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }): Promise<{
+    active: boolean
+    windowId?: number
+    pid?: number
+    app?: string
+    bundleId?: string
+    title?: string
+    width?: number
+    height?: number
+    jpegBase64?: string
+    ageMs?: number
+    error?: string
+  }> => ipcRenderer.invoke('computerUse:liveView', opts),
   // 本地语音模型(SenseVoice)下载 / 状态 / 删除 + 下载进度订阅。
   asrLocalStatus: (): Promise<{ ready: boolean; sizeBytes: number }> => ipcRenderer.invoke('asr:localStatus'),
   asrLocalDownload: (): Promise<{ ok: boolean; ready: boolean }> => ipcRenderer.invoke('asr:localDownload'),
@@ -195,14 +232,43 @@ const api = {
     ipcRenderer.on('window:dragPreview', listener)
     return () => ipcRenderer.removeListener('window:dragPreview', listener)
   },
+
+  // ── 内置浏览器 / 内置终端 ────────────────────────────────────────────────────
+  /** 用系统浏览器打开(主进程只放 http(s))。 */
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+  /** 主进程回投的外链(页面里的 target=_blank / webview guest 的弹窗):渲染层决定进内置浏览器还是系统浏览器。 */
+  onOpenUrl: (cb: (url: string) => void): (() => void) => {
+    const listener = (_e: unknown, url: string): void => cb(url)
+    ipcRenderer.on('app:open-url', listener)
+    return () => ipcRenderer.removeListener('app:open-url', listener)
+  },
+  /** 内置终端的 PTY:spawn 失败(原生模块未就绪)返回 {error},不抛。 */
+  pty: {
+    spawn: (opts: { cols?: number; rows?: number; cwd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>
+      ipcRenderer.invoke('pty:spawn', opts),
+    write: (id: string, data: string): void => ipcRenderer.send('pty:write', id, data),
+    resize: (id: string, cols: number, rows: number): void => ipcRenderer.send('pty:resize', id, cols, rows),
+    kill: (id: string): void => ipcRenderer.send('pty:kill', id),
+    onData: (id: string, cb: (data: string) => void): (() => void) => {
+      const listener = (_e: unknown, sid: string, data: string): void => { if (sid === id) cb(data) }
+      ipcRenderer.on('pty:data', listener)
+      return () => ipcRenderer.removeListener('pty:data', listener)
+    },
+    onExit: (id: string, cb: (code: number) => void): (() => void) => {
+      const listener = (_e: unknown, sid: string, code: number): void => { if (sid === id) cb(code) }
+      ipcRenderer.on('pty:exit', listener)
+      return () => ipcRenderer.removeListener('pty:exit', listener)
+    },
+  },
 }
 
 // ── 产品档案收缩暴露面 ─────────────────────────────────────────────────────────
 // 渲染端遍布 window.tangu?.X 能力门控:删掉键 = 对应功能(Inbox/市场/设置 agent tab/账号…)自动隐藏,UI 零改动。
 const AGENT_KEYS = [
   'backendStatus', 'backendLogs', 'backendRestart', 'onBackendStatus',
-  'notifyInbox', 'setInboxBadge', 'onInboxOpen',
-  'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice',
+  'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
+  'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',
+  'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
   'submitFeedback',
   'listProviders', 'saveProvider', 'deleteProvider',
   'readMcpConfig', 'writeMcpConfig',

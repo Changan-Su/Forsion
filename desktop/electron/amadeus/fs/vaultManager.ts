@@ -95,12 +95,16 @@ export class VaultManager {
    *  compiler 当页面解析,一存就把插件的载荷改写成 `<!-- a id -->` 块 + amadeus_* frontmatter
    *  —— 对 Obsidian 侧即毁档。页面侧的消费方(树/索引/搜索/反链/tags)全从这一个口取,挡这里就够。 */
   async listPages(): Promise<string[]> {
-    return this.collectFiles((n) => n.endsWith('.md') && !isDrawingPath(n) && !this.isPluginFile(n))
+    return this.collectFiles(
+      (n) => n.endsWith('.md') && !isDrawingPath(n) && !this.isPluginFile(n),
+    )
   }
 
-  /** All non-page files (attachments/.db/画板/插件文件类型/…), vault-relative — for the vault tree. */
+  /** All non-page files (attachments/.db/画板/思维导图/插件文件类型/…), vault-relative — for the vault tree. */
   async listFiles(): Promise<string[]> {
-    return this.collectFiles((n) => !n.endsWith('.md') || isDrawingPath(n) || this.isPluginFile(n))
+    return this.collectFiles(
+      (n) => !n.endsWith('.md') || isDrawingPath(n) || this.isPluginFile(n),
+    )
   }
 
   /** 由 listPlugins 注入插件声明的文件类型扩展名(见 pluginExts)。 */
@@ -233,9 +237,18 @@ export class VaultManager {
     return abs
   }
 
-  /** A collision-free filename inside `absDir` (adds "-1", "-2"… before the extension). */
+  /** A collision-free filename inside `absDir` (adds "-1", "-2"… before the extension).
+   *  复合后缀类型(内置的 `x.excalidraw.md`,以及插件声明的 `x.mindmap.md` 一类)必须整段视为扩展名:
+   *  按 path.extname 只认最后一段 `.md`,撞名会写出 `x.mindmap-1.md` —— 后缀一破就掉出该类型的判定、
+   *  混回笔记树被 page compiler 当普通笔记改写 = 毁档(Codex)。
+   *  插件声明的后缀走 pluginExts(listPlugins 注入),所以新插件的复合后缀自动受同一保护。 */
   private async uniqueName(absDir: string, name: string): Promise<string> {
-    const ext = path.extname(name)
+    const lower = name.toLowerCase()
+    // 最长匹配优先:`.excalidraw.md` 与 `.md` 同时命中时要取长的那个。
+    const composite = ['.excalidraw.md', ...this.pluginExts]
+      .filter((s) => lower.endsWith(s))
+      .sort((a, b) => b.length - a.length)[0]
+    const ext = composite ?? path.extname(name)
     const stem = name.slice(0, name.length - ext.length) || 'file'
     for (let i = 0; i < 1000; i++) {
       const candidate = i === 0 ? name : `${stem}-${i}${ext}`

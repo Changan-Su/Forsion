@@ -122,7 +122,12 @@ export async function forsionWhoami(cloudUrl: string, token: string): Promise<Wh
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(5000),
     })
-    if (r.status === 401 || r.status === 403) return { status: 'expired' }
+    if (r.status === 401 || r.status === 403) {
+      // 仅当 401/403 确为我们 API 的 JSON 响应才判「凭证失效」——代理/网关/CDN 产的 401 页
+      // (HTML/无类型)一律按离线,防基础设施抖动把还有效的 auth.json 误判(调用方会据此清凭证)。
+      const isApiResp = (r.headers.get('content-type') || '').includes('application/json')
+      return { status: isApiResp ? 'expired' : 'offline' }
+    }
     if (!r.ok) return { status: 'offline' } // 5xx 等:不确定凭证是否失效,按离线处理
     const u: any = await r.json()
     if (!u) return { status: 'offline' }

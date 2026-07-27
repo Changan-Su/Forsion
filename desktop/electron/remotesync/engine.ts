@@ -228,16 +228,29 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
     plan.push({ key, kind: d })
   }
 
+  // ── 方向过滤(remotely-save 式「同步方式」;单向 = 增量,绝不传播删除)──
+  //  push:conflict/join 改推本地版(备份语义本地为真源;CAS 后端仍会拦截远端并发写)
+  //  pull:conflict/join 保持原语义(拉远端,本地不同先出冲突副本)——本地数据不丢
+  const direction = opts.direction ?? 'both'
+  let directed = plan
+  if (direction === 'push') {
+    directed = plan
+      .filter((p) => p.kind === 'push' || p.kind === 'conflict' || p.kind === 'join')
+      .map((p) => (p.kind === 'push' ? p : { key: p.key, kind: 'push' as const }))
+  } else if (direction === 'pull') {
+    directed = plan.filter((p) => p.kind === 'pull' || p.kind === 'conflict' || p.kind === 'join')
+  }
+
   // ── 删除闸:挂起本轮全部删除,其余照常(tracked 只数未被忽略的基线,防忽略规则稀释比例闸)──
-  const delItems = plan.filter((p) => p.kind === 'deleteLocal' || p.kind === 'pushDelete')
+  const delItems = directed.filter((p) => p.kind === 'deleteLocal' || p.kind === 'pushDelete')
   const tracked = Object.keys(prev.entries).filter((k) => !ignored(k)).length
   const tripped = !opts.allowMassDelete && shouldTripMassDelete(delItems.length, tracked)
-  const executable = tripped ? plan.filter((p) => p.kind !== 'deleteLocal' && p.kind !== 'pushDelete') : plan
+  const executable = tripped ? directed.filter((p) => p.kind !== 'deleteLocal' && p.kind !== 'pushDelete') : directed
   if (tripped) report.pendingDeletions = delItems.length
 
   if (opts.dryRun) {
     for (const key of forgets) delete prev.entries[key]
-    report.plan = plan
+    report.plan = directed
     report.ok = true
     report.finishedAt = Date.now()
     return report
@@ -251,7 +264,8 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
     opts.onProgress?.(done, total, key)
   }
 
-  await runPool(executable, CONCURRENCY, async (item) => {
+  const concurrency = Math.min(16, Math.max(1, Math.floor(opts.concurrency ?? CONCURRENCY)))
+  await runPool(executable, concurrency, async (item) => {
     const { key, kind } = item
     const abs = absOf(key)
     try {

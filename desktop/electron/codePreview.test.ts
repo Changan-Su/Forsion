@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { resolveSafe, transpileForServe } from './codePreview'
+import { describe, it, expect, afterAll } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { get as httpGet } from 'node:http'
+import { resolveSafe, transpileForServe, servePathRoot, serveDir, setForsionPreviewHooks, stopCodePreview } from './codePreview'
 
 describe('codePreview transpileForServe (按需 JSX/TS 转译)', () => {
   it('transpiles .tsx → ESM,jsx-runtime 自动导入', () => {
@@ -38,5 +42,40 @@ describe('codePreview resolveSafe (穿越守卫)', () => {
   it('rejects NUL and bad encoding', () => {
     expect(resolveSafe(root, '/%00')).toBeNull()
     expect(resolveSafe(root, '/%')).toBeNull() // 非法 URI 编码
+  })
+})
+
+describe('Forsion Connect 端点在两种根都可达', () => {
+  afterAll(() => stopCodePreview())
+
+  /** 带 Host 头打真服务器(node fetch 不解析 *.localhost,用裸 http + Host 头模拟 Chromium 行为)。 */
+  const get = (port: string, path: string, host?: string): Promise<{ code: number; body: string }> =>
+    new Promise((res, rej) => {
+      httpGet({ host: '127.0.0.1', port, path, headers: host ? { host } : {} }, (r) => {
+        let b = ''
+        r.on('data', (c) => { b += c })
+        r.on('end', () => res({ code: r.statusCode || 0, body: b }))
+      }).on('error', rej)
+    })
+
+  it('令牌根(Agent Desk/wsfile/笔记预览)与 Coding Space 主根都供 SDK 与 __forsion 代理', async () => {
+    setForsionPreviewHooks({ sdkJs: 'window.__sdk=1', proxy: (_req, res) => { res.end('{"proxied":1}') } })
+    const dir = mkdtempSync(join(tmpdir(), 'fc-preview-'))
+    writeFileSync(join(dir, 'index.html'), 'hi')
+
+    // 令牌根:普通聊天里 agent 生成的 AI 页面走这条,漏了它 window.forsion 直接 404(tangu-session-9d1fa366)
+    const { origin, token } = await servePathRoot(dir)
+    const tPort = new URL(origin).port
+    const tHost = `${token}.localhost:${tPort}`
+    expect((await get(tPort, '/forsion-connect.js', tHost)).body).toContain('__sdk')
+    expect((await get(tPort, '/__forsion/config', tHost)).body).toContain('proxied')
+    expect((await get(tPort, '/index.html', tHost)).body).toBe('hi') // 正常静态服务不受影响
+    expect((await get(tPort, '/forsion-connect.js')).code).toBe(404) // 无有效 token 照旧 404
+
+    // Coding Space 主根(回归:重构抽 helper 后不能丢)
+    const { origin: mainOrigin } = await serveDir(dir)
+    const mPort = new URL(mainOrigin).port
+    expect((await get(mPort, '/forsion-connect.js')).body).toContain('__sdk')
+    expect((await get(mPort, '/__forsion/config')).body).toContain('proxied')
   })
 })

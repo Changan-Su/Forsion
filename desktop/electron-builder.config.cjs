@@ -41,9 +41,11 @@ module.exports = {
     '!node_modules/@types/**',
   ],
   // sherpa-onnx-node(本地语音识别)是原生插件:.node + onnxruntime 动态库不能从 asar 内加载,整体解包。
+  // node-pty(内置终端)同理,且它还要 **exec** spawn-helper / winpty-agent.exe —— asar 里的文件不能执行。
   asarUnpack: [
     '**/node_modules/sherpa-onnx-node/**',
     '**/node_modules/sherpa-onnx-{darwin,linux,win}-*/**',
+    '**/node_modules/node-pty/**',
   ],
   // ⚠️extraResources 只能有这一处(对象字面量重复键=后者静默覆盖前者,v2.6.8 曾因此丢 LICENSE)。
   extraResources: [

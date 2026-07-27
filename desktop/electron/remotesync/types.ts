@@ -88,6 +88,11 @@ export interface SyncOptions {
   maxFileSize?: number
   /** 删除闸确认:true = 本轮放行被挂起的批量删除。 */
   allowMassDelete?: boolean
+  /** 同步方式:both=双向(默认);push=仅上传(增量备份:不拉取、绝不动本地、不传播删除,
+   *  冲突以本地为准推送);pull=仅下载(增量还原:不推送、不传播删除,冲突仍出本地副本)。 */
+  direction?: 'both' | 'push' | 'pull'
+  /** 传输并发(1-16,默认 4)。 */
+  concurrency?: number
   /** 本地删除实现(宿主注入回收站);缺省 fs.rm。 */
   deleteLocalFile?: (absPath: string) => Promise<void>
   onProgress?: (done: number, total: number, current?: string) => void

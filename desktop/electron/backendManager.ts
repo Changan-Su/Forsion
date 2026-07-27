@@ -22,7 +22,6 @@ export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
 export interface ManagedBackendSettings {
   cloudUrl: string
-  cloudToken: string
   modelId?: string
   sandbox: 'auto' | 'docker' | 'none'
   browserEnabled?: boolean
@@ -30,9 +29,6 @@ export interface ManagedBackendSettings {
   browserSearchEngine?: 'duckduckgo' | 'bing' | 'google' | 'baidu'
   browserAllowPrivateUrls?: boolean
   browserCommandTimeoutMs?: number
-  wechatEnabled?: boolean
-  wechatRemoteApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto'
-  wechatStateDir?: string
   /** Forsion/Tangu 默认工作区目录(~/Tangu 或用户自定义);注入后端作微信远程会话的 cwd。 */
   defaultWorkspaceDir?: string
   /** Python 来源:bundled=内置解释器(默认,免装/与用户 python 隔离);system=用系统 PATH 里的 python。 */
@@ -81,7 +77,6 @@ export class BackendManager {
   private child: ChildProcess | null = null
   private state: BackendState = 'stopped'
   private port = 0
-  private token = ''
   private lastError: string | null = null
   private logs: string[] = []
   private restartCount = 0
@@ -117,12 +112,11 @@ export class BackendManager {
     }
   }
 
-  /** renderer 鉴权用的有效 token:显式配置 > ~/.tangu/auth.json(tangu login)> 本地回退令牌。
+  /** renderer 鉴权用的有效 token:~/.forsion/auth.json(登录态唯一真源)> 本地回退令牌。
    *  最后一档保证 **未登录 Forsion 也能独立运行**:standalone 后端 validate 强制要 token(没 token 直接
    *  exit),且本地端点用同一 token 鉴权。无 Forsion 凭证时回退一个持久化的本地随机令牌——后端照常启动、
    *  端点仍鉴权(不裸奔),云端调用会 401 但已优雅降级(/agent/models 只少了 forsion 模型,BYOK/订阅照常)。 */
   getToken(): string {
-    if (this.token) return this.token
     try {
       const creds = JSON.parse(readFileSync(join(forsionHomeDir(), 'auth.json'), 'utf8'))
       if (creds.token) return String(creds.token)
@@ -144,6 +138,12 @@ export class BackendManager {
     try { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, tok, 'utf8'); chmodSync(f, 0o600) } catch { /* best-effort */ }
     this.cachedLocalToken = tok
     return tok
+  }
+
+  /** Claude→MCP 端点守门用的稳定本地密钥(= 无 Forsion 凭证时的本地回退令牌;不随云登录轮换,
+   *  也不把云 token 递给外部 agent)。见 electron/mcpServer.ts。 */
+  localSecret(): string {
+    return this.localToken()
   }
 
   getLogs(): string[] {
@@ -176,7 +176,6 @@ export class BackendManager {
     }
     const s = this.settings!
     this.setState('starting', null)
-    this.token = s.cloudToken || ''
 
     for (let attempt = 0; attempt < 3; attempt++) {
       this.port = await freePort()
@@ -202,7 +201,7 @@ export class BackendManager {
       const env: NodeJS.ProcessEnv = { ...process.env }
       if (!useSystemNode) env.ELECTRON_RUN_AS_NODE = '1'
       else delete env.ELECTRON_RUN_AS_NODE
-      // 凭证走 env,不出现在 ps 输出。用 getToken()(config.cloudToken > auth.json > 本地回退令牌)——
+      // 凭证走 env,不出现在 ps 输出。用 getToken()(auth.json > 本地回退令牌)——
       // **始终非空**,保证后端 validate(强制要 token)通过、无 Forsion 登录也能独立启动(BYOK/订阅可用)。
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
       env.TANGU_TOKEN = this.getToken()
@@ -211,9 +210,8 @@ export class BackendManager {
       env.TANGU_BROWSER_SEARCH_ENGINE = s.browserSearchEngine || 'duckduckgo'
       env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = s.browserAllowPrivateUrls ? '1' : '0'
       env.TANGU_BROWSER_COMMAND_TIMEOUT_MS = String(s.browserCommandTimeoutMs || 30000)
-      env.TANGU_WECHAT_ENABLED = s.wechatEnabled === false ? '0' : '1'
-      env.TANGU_WECHAT_REMOTE_APPROVAL_MODE = s.wechatRemoteApprovalMode || 'readonly'
-      if (s.wechatStateDir) env.TANGU_WECHAT_STATE_DIR = s.wechatStateDir
+      // 通道(微信/Telegram/QQ)配置改由引擎直接读 config.json channels/wechat 段,不再经 env 注入
+      //(旧 TANGU_WECHAT_* env 会压过 config,新设置页写 /agent/channels 后热生效,无需重启后端)。
       // 让后端的微信远程会话落到桌面默认工作区(host 执行 cwd);兜底 ~/Tangu。
       env.TANGU_DEFAULT_WORKSPACE = s.defaultWorkspaceDir?.trim() || defaultWorkspaceDir()
       // agent 的 amadeus_* 工具直连磁盘读写。给它 amadeus-config.json 的路径,让它 **实时读** 桌面当前

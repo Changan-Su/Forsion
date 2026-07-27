@@ -16,6 +16,7 @@ import { hash8 } from './amadeus/sync/entryRegistry'
 import { forsionWhoami, loadTanguCreds } from './forsionAuth'
 import { isDevMode } from './forsionHome'
 import { runSync } from './remotesync/engine'
+import { createDropboxRemote, dropboxAuthUrl, dropboxExchangeCode, pkcePair } from './remotesync/fsDropbox'
 import { createDirRemote } from './remotesync/fsLocal'
 import { createPenzorRemote } from './remotesync/fsPenzor'
 import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
@@ -23,13 +24,20 @@ import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 
 export interface RemoteSyncConfig {
-  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor'
+  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox'
   /** 定时同步间隔(分钟);0 = 仅手动。 */
   intervalMin: number
   folder?: { path: string }
   s3?: S3Config
   webdav?: WebdavConfig
   penzor?: { vault?: string }
+  dropbox?: { appKey: string; refreshToken?: string; accountId?: string; email?: string; baseDir?: string }
+  /** 同步方式:both=双向(默认);push=仅上传(增量备份);pull=仅下载(增量还原)。 */
+  direction?: 'both' | 'push' | 'pull'
+  /** 启动后自动同步一次(15s 后)。 */
+  syncOnStart?: boolean
+  /** 传输并发(1-16,缺省 4)。 */
+  concurrency?: number
   /** 用户忽略规则(一行一条 glob)。 */
   ignore?: string[]
   /** 单文件上限(MB);0 = 不限。缺省 100。 */
@@ -42,6 +50,7 @@ const MIN_INTERVAL_MIN = 5
 let cache: RemoteSyncConfig | null = null
 let running = false
 let lastReport: SyncReport | null = null
+let progress: { done: number; total: number; key: string } | null = null
 let timer: NodeJS.Timeout | null = null
 
 const configFile = (): string =>
@@ -95,6 +104,15 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<{ remote: RemoteFs; f
     const wd = cfg.webdav
     if (!wd?.address) return { error: 'webdav config incomplete' }
     return { remote: createWebdavRemote(wd), fingerprint: `webdav:${wd.address}/${wd.baseDir ?? 'forsion-vault'}` }
+  }
+  if (cfg.backend === 'dropbox') {
+    const d = cfg.dropbox
+    if (!d?.appKey || !d.refreshToken) return { error: 'dropbox-not-connected' }
+    return {
+      remote: createDropboxRemote({ appKey: d.appKey, refreshToken: d.refreshToken, baseDir: d.baseDir }),
+      // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
+      fingerprint: `dropbox:${d.accountId || d.appKey}|${(d.baseDir ?? '').trim() || '/'}`,
+    }
   }
   if (cfg.backend === 'penzor') {
     const creds = loadTanguCreds()
@@ -156,7 +174,7 @@ async function entrySyncIgnores(root: string): Promise<string[]> {
 }
 
 function broadcast(): void {
-  const payload = { running, lastReport }
+  const payload = { running, lastReport, progress }
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('remotesync:status', payload)
   }
@@ -191,7 +209,9 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
   // 锁必须在任何 await 之前拿:定时器与手动点击并发穿过 config/root 解析会双跑同一基线
   if (running) return fail('already-running')
   running = true
+  progress = null
   broadcast()
+  let lastProgressAt = 0
   try {
     const cfg = await loadConfig()
     if (cfg.backend === 'off') return fail('backend-off')
@@ -215,10 +235,20 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       fingerprint: built.fingerprint,
       ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root))],
       maxFileSize: effectiveMaxFileSize(cfg),
+      direction: cfg.direction,
+      concurrency: cfg.concurrency,
       allowMassDelete: opts?.allowMassDelete,
       dryRun: opts?.dryRun,
       // 回收站失败不降级硬删:抛错 → 引擎记 errors 且保留基线,下轮重试
       deleteLocalFile: async (p) => shell.trashItem(p),
+      // 进度直播(状态栏/设置页):150ms 节流,末件必发
+      onProgress: (done, total, current) => {
+        progress = { done, total, key: current ?? '' }
+        const now = Date.now()
+        if (done < total && now - lastProgressAt < 150) return
+        lastProgressAt = now
+        broadcast()
+      },
     })
     if (!opts?.dryRun) {
       lastReport = report
@@ -227,6 +257,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     return report
   } finally {
     running = false
+    progress = null
     broadcast()
   }
 }
@@ -247,7 +278,7 @@ export function registerRemoteSync(): void {
   ipcMain.handle('remotesync:get', async () => {
     const cfg = await loadConfig()
     const rooted = await resolveRoot()
-    return { config: cfg, running, lastReport, root: 'root' in rooted ? rooted.root : null, rootError: 'error' in rooted ? rooted.error : null }
+    return { config: cfg, running, lastReport, progress, root: 'root' in rooted ? rooted.root : null, rootError: 'error' in rooted ? rooted.error : null }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {
     const next = await saveConfig(patch ?? {})
@@ -265,5 +296,41 @@ export function registerRemoteSync(): void {
       return { ok: false, error: String((e as Error)?.message || e) }
     }
   })
-  void loadConfig().then(resetTimer)
+
+  // Dropbox OAuth PKCE:start 开浏览器授权页(verifier 主进程暂存),finish 用回贴的
+  // 授权码换 refresh token 并落配置(连账号身份一起,fingerprint 绑账号)。
+  let dropboxVerifier: string | null = null
+  ipcMain.handle('remotesync:dropboxAuthStart', async (_e, appKey: string) => {
+    const key = (appKey ?? '').trim()
+    if (!key) return { ok: false, error: 'no-app-key' }
+    const { verifier, challenge } = pkcePair()
+    dropboxVerifier = verifier
+    await shell.openExternal(dropboxAuthUrl(key, challenge))
+    return { ok: true }
+  })
+  ipcMain.handle('remotesync:dropboxAuthFinish', async (_e, appKey: string, code: string) => {
+    const key = (appKey ?? '').trim()
+    if (!key || !dropboxVerifier) return { ok: false, error: 'auth-not-started' }
+    try {
+      const r = await dropboxExchangeCode(key, code ?? '', dropboxVerifier)
+      dropboxVerifier = null
+      const cur = (await loadConfig()).dropbox
+      const config = await saveConfig({
+        dropbox: { ...cur, appKey: key, refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
+      })
+      return { ok: true, email: r.email ?? r.name, config }
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message || e) }
+    }
+  })
+
+  void loadConfig().then((cfg) => {
+    resetTimer(cfg)
+    // 启动后自动同步一次(remotely-save 的 run-once-on-startup;15s 避开启动高峰)
+    if (cfg.syncOnStart && cfg.backend !== 'off') {
+      setTimeout(() => {
+        void runNow().catch(() => {})
+      }, 15_000)
+    }
+  })
 }

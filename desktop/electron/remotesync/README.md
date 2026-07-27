@@ -12,6 +12,12 @@
 | `folder` | 本地/外接目录(U 盘、NAS 挂载点);也是测试用假远端 |
 | `s3` | S3 兼容对象存储(AWS/阿里 OSS/腾讯 COS/MinIO/R2) |
 | `webdav` | WebDAV(坚果云/Nextcloud/自建) |
+| `penzor` | Forsion 云端(server microserver/remotesync;条件写 CAS) |
+| `dropbox` | Dropbox(自研直连 REST v2;OAuth PKCE + refresh token,rev 条件写 CAS) |
+
+同步方式(SyncOptions.direction,remotely-save 的 sync direction 对标):`both` 双向(默认);
+`push` 仅上传 = 增量备份(不拉取、不传播删除,冲突以本地为准);`pull` 仅下载 = 增量还原
+(不推送、不传播删除,冲突仍出本地副本)。单向模式绝不动被丢弃方向的基线,切回双向自然收敛。
 
 ## 同步语义(自研核心,见 NOTICE.md 合规边界)
 

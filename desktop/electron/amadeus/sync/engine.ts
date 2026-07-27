@@ -1030,6 +1030,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
     const creds = deps.loadCreds()
     if (!creds.cloudUrl || !creds.token) {
+      client = null // 丢弃旧账号的 client:登出后绝不能拿旧 token 继续同步
       setState('auth-required', '未登录 Forsion 账号')
       return
     }
@@ -1187,6 +1188,14 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     async setEnabled(on: boolean): Promise<SyncStatus> {
       const cfg = await readConfig()
       await writeConfig({ cloudSync: { ...(cfg.cloudSync ?? {}), enabled: on } })
+      await restart()
+      return getStatus()
+    },
+
+    /** 凭据/账号变更的传播入口:换代硬重启(重读 auth.json、重建云端 client)。
+     *  syncNow 只在停摆(auth-required/无 client)时才 restart——运行中换账号/登出必须走这里,
+     *  否则引擎拿旧账号的 client 继续同步。 */
+    async restart(): Promise<SyncStatus> {
       await restart()
       return getStatus()
     },

@@ -1,7 +1,7 @@
 import { promises as fs, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron'
-import { IPC, gatePluginManifest, sanitizeOnboarding, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps } from '@amadeus-shared/ipc'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
@@ -85,6 +85,24 @@ ctx.registerCommand({
   keywords: 'board view 视图 shili',
   run: () => ctx.openView('hello-board'),
 })
+// 通知 + 全局状态栏（2026-07-23 起；老宿主没有这两个 API——可选链让插件在老宿主静默降级）。
+// 通知：右上角卡片，来源自动标插件名，用户可在设置里按插件静音——当提示用，别当数据通道。
+ctx.registerCommand({
+  id: 'hello-amadeus-notify',
+  title: 'Hello：弹一条通知',
+  keywords: 'notify toast 通知 shili',
+  run: () => ctx.notify?.('来自示例插件的通知 ✶', { level: 'success' }),
+})
+// 状态栏项：数据驱动（无需 React）；返回 handle 可随时 update；禁用插件时宿主自动清理。
+const sbHandle = ctx.registerStatusItem?.({
+  id: 'hello',
+  side: 'right',
+  text: '✶ hello',
+  title: 'Hello Amadeus 示例状态项（点击打开示例视图）',
+  onClick: () => ctx.openView('hello-board'),
+})
+// 轮询类插件把持续状态写进状态栏（sbHandle?.update({ text: '…' })），瞬时事件才用 notify。
+void sbHandle
 return () => {}
 `
 
@@ -95,6 +113,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   const vault = new VaultManager()
   const index = new VaultIndex(vault)
   let structureTimer: ReturnType<typeof setTimeout> | null = null
+
+  // 文件变更回灌播给**所有**窗口:拖出的 detached 窗里同样有编辑器/画板/日历,
+  // 只发主窗 = 那些窗永远显示旧内容(getWindow() 恒为主窗)。
+  const notifyAll = (channel: string, payload?: unknown): void => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, payload)
+  }
 
   // 云镜像迁移到隐藏目录:必须早于任何引擎创建/启动(整目录 rename,保 shadow 一致)。
   migrateCloudMirrorDir()
@@ -335,7 +359,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     vault,
     (pagePath) => {
       void index.update(pagePath) // keep search/backlinks/embeds fresh on external edits
-      getWindow()?.webContents.send(IPC.externalChange, pagePath)
+      notifyAll(IPC.externalChange, pagePath)
     },
     () => {
       // External add/remove of pages or folders → debounce a reindex + notify the renderer.
@@ -343,12 +367,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       structureTimer = setTimeout(() => {
         structureTimer = null
         void index.build()
-        getWindow()?.webContents.send(IPC.structureChange)
+        notifyAll(IPC.structureChange)
       }, 300)
     },
     (dbPath) => {
       // 外部改 .db(如 agent 直连磁盘改日历)→ 通知渲染端热重载对应 dbStore 条目。
-      getWindow()?.webContents.send(IPC.dbChange, dbPath)
+      notifyAll(IPC.dbChange, dbPath)
     },
   )
 
@@ -384,12 +408,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   }))
   ipcMain.handle(SYNC_IPC.setEnabled, (_e, on: boolean) => sync.setEnabled(on))
   // 踢一遍所有同步引擎(主镜像 + 共享 + 按条目):auth-required/停摆的引擎会经 syncNow 内部转 restart
-  // 重读凭据并拉起双向同步。手动「立即同步」与「登录后自动拉起」(main.ts auth:forsionLogin)共用此函数。
+  // 重读凭据并拉起双向同步。手动「立即同步」用它。
   const kickAllSync = (): ReturnType<typeof sync.syncNow> => {
     void refreshSharedBindings() // 顺带发现新接受的共享
     for (const { engine } of sharedEngines.values()) void engine.syncNow()
     for (const { engine } of entryEngines.values()) void engine.syncNow()
     return sync.syncNow()
+  }
+  // 凭据变更专用(登录/登出/换账号,main.ts 经 restartSync 调):全体引擎硬重启(重读 auth.json、
+  // 重建云端 client)。syncNow 不够——运行中的引擎会拿旧账号的 client 继续同步(错账号读写)。
+  const restartAllSync = (): void => {
+    void refreshSharedBindings()
+    for (const { engine } of sharedEngines.values()) void engine.restart()
+    for (const { engine } of entryEngines.values()) void engine.restart()
+    void sync.restart()
   }
   ipcMain.handle(SYNC_IPC.syncNow, () => kickAllSync())
   // 删除保护放行:对所有引擎生效(有待确认删除的才会真正动作)。
@@ -545,12 +577,41 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       }
       case 'publishes':
         return collabMain.call('GET', `/vaults/${encodeURIComponent(await v())}/shares`)
+      case 'listAllShares': {
+        // Public View：跨全部 vault 汇总「我发布的公开链接 + 我创建的页面协作共享」。
+        // 现有 publishes/pageShare 都只覆盖 own vault；这里显式遍历 listVaults 做跨库聚合。
+        const vaults = (await collabMain.call<{ vaults: Array<{ id: string; name?: string }> }>('GET', '/vaults')).vaults || []
+        const myId = collabMain.myUserId()
+        const publishes: any[] = []
+        const pageShares: any[] = []
+        for (const vt of vaults) {
+          try {
+            const pr = await collabMain.call<{ shares?: any[] }>('GET', `/vaults/${encodeURIComponent(vt.id)}/shares`)
+            for (const s of pr.shares || []) publishes.push({ ...s, vaultId: vt.id, vaultName: vt.name || '' })
+          } catch (e) { console.warn('[connect] listAllShares publishes vault', vt.id, 'failed:', (e as Error)?.message) /* 某库不可达则跳过 */ }
+          try {
+            const ps = await collabMain.call<any>('GET', `/vaults/${encodeURIComponent(vt.id)}/page-shares`)
+            const list = ps?.shares || ps?.pageShares || (Array.isArray(ps) ? ps : [])
+            for (const s of list) {
+              const owner = s.created_by ?? s.createdBy
+              // 该端点已要求调用者是 vault owner → 缺 owner 字段时视为「我的」，别误丢（否则协作区恒空）。
+              if (!myId || !owner || owner === myId) pageShares.push({ ...s, vaultId: vt.id, vaultName: vt.name || '' })
+            }
+          } catch (e) { console.warn('[connect] listAllShares pageShares vault', vt.id, 'failed:', (e as Error)?.message) /* 某库不可达则跳过 */ }
+        }
+        return { publishes, pageShares, linkBase: await collabMain.linkBase() }
+      }
       case 'createPublish': {
         const r = await collabMain.call<{ token: string; mode: string; path: string }>('POST', `/vaults/${encodeURIComponent(await v())}/shares`, { mode: a(0), path: a(1) })
         return { ...r, url: `${await collabMain.linkBase()}/share/${r.token}` }
       }
       case 'revokePublish':
         return collabMain.call('DELETE', `/vaults/${encodeURIComponent(await v())}/shares/${encodeURIComponent(a(0))}`)
+      // Public View 跨库撤销：显式带 vaultId（默认 own-vault 变体会撤错库、零行更新还假成功）。
+      case 'revokePublishIn':
+        return collabMain.call('DELETE', `/vaults/${encodeURIComponent(a(0))}/shares/${encodeURIComponent(a(1))}`)
+      case 'revokePageShareIn':
+        return collabMain.call('DELETE', `/vaults/${encodeURIComponent(a(0))}/page-shares/${encodeURIComponent(a(1))}`)
       case 'myUserId':
         return collabMain.myUserId()
       case 'linkBase':
@@ -892,7 +953,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       if (next !== raw) {
         await vault.writeTextFile(p, next)
         await index.update(p)
-        getWindow()?.webContents.send(IPC.externalChange, p)
+        notifyAll(IPC.externalChange, p)
         rewrittenPages.push(p)
       }
     }
@@ -999,6 +1060,28 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // Amadeus 只是一个 Space,插件属于 Forsion 桌面本体,不属于某个 vault。
   const globalPluginsDir = (): string => path.join(forsionHomeDir(), 'plugins')
 
+  // 插件 id 统一门禁:manifest id 合法用它,否则回退目录名,两者皆非法 → 拒载。发现与卸载共用同一
+  // 规则,否则会出现「能列出/能运行、点卸载却被 id 校验拒绝」的卸不掉插件(codex P1-9);
+  // 该 id 还进 localStorage 键与 Space 归属,必须先掐住。
+  const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+  const pluginIdOf = (dirName: string, manifestId: unknown): string | null => {
+    if (typeof manifestId === 'string' && SAFE_PLUGIN_ID.test(manifestId)) return manifestId
+    return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
+  }
+
+  // 卸载墓碑:被卸载插件声明过的文件扩展名**永久**留在 listPages 排除集(毁档防线不随卸载失效——
+  // 库里的数据文件还在,掉回笔记被 compiler 改写=毁档,codex P1-1)。文件在共享域顶层,
+  // 用户确认迁移/清理数据后可手动删除。
+  const extTombstonesFile = (): string => path.join(forsionHomeDir(), 'plugins-ext-tombstones.json')
+  const readExtTombstones = (): string[] => {
+    try {
+      const v = JSON.parse(readFileSync(extTombstonesFile(), 'utf8')) as unknown
+      return Array.isArray(v) ? v.filter(isSafePluginExt) : []
+    } catch {
+      return []
+    }
+  }
+
   // 校验插件声明的文件类型扩展名是否「安全专用」:防 `.md`/`.txt` 这类通用后缀把整库笔记从 listPages 排空(Codex #11)。
   // .md 派生必须是复合(`.<子类型>.md`,如 `.mindmap.md`);其它扩展名普通校验。
   const isSafePluginExt = (ext: unknown): ext is string => {
@@ -1012,7 +1095,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 同步预扫插件目录的 manifest.json,收集并校验其 fileExtensions —— 只读 manifest,不依赖 main.js(插件坏了也保住
   // 扩展名保护,Codex #3);同步执行以便在任何 listPages 之前就绪,关掉「listPages 先于 listPlugins 注入」的启动竞态(Codex #2)。
   const collectPluginExts = (): string[] => {
-    const exts = new Set<string>()
+    const exts = new Set<string>(readExtTombstones()) // 已卸载插件的扩展名豁免持久生效
     let entries: import('node:fs').Dirent[]
     try {
       entries = readdirSync(globalPluginsDir(), { withFileTypes: true })
@@ -1032,6 +1115,43 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       }
     }
     return [...exts]
+  }
+
+  // 捆绑包(bundle)内嵌内容清点:标志文件识别,manifest 无新增字段。引擎插件取 tangu-plugin.json 的真 id
+  // (目录名可与 id 不同;启停级联/引擎列表去重都按 id 对齐),其余三类取目录名 slug。
+  const collectBundleInfo = async (pdir: string): Promise<PluginBundleInfo | undefined> => {
+    const subDirs = async (sub: string): Promise<string[]> => {
+      try {
+        return (await fs.readdir(path.join(pdir, sub), { withFileTypes: true }))
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+          .map((e) => e.name)
+      } catch {
+        return [] // 子目录不存在 = 该类内容为空
+      }
+    }
+    const withMarker = async (sub: string, marker: string): Promise<string[]> => {
+      const out: string[] = []
+      for (const name of await subDirs(sub)) {
+        try { await fs.access(path.join(pdir, sub, name, marker)); out.push(name) } catch { /* 无标志文件跳过 */ }
+      }
+      return out.sort()
+    }
+    const enginePlugins: string[] = []
+    for (const name of await subDirs('tangu-plugins')) {
+      try {
+        const m = JSON.parse(await fs.readFile(path.join(pdir, 'tangu-plugins', name, 'tangu-plugin.json'), 'utf8')) as { id?: string }
+        enginePlugins.push(m.id || name)
+      } catch { /* 无/坏 manifest 跳过(引擎侧同样不认) */ }
+    }
+    enginePlugins.sort()
+    const [agents, skills, spaces] = await Promise.all([
+      withMarker('agents', 'config.toml'),
+      withMarker('skills', 'SKILL.md'),
+      withMarker('spaces', 'space.json'),
+    ])
+    return enginePlugins.length || agents.length || skills.length || spaces.length
+      ? { enginePlugins, agents, skills, spaces }
+      : undefined
   }
 
   ipcMain.handle(IPC.listPlugins, async (): Promise<ExternalPluginSource[]> => {
@@ -1058,12 +1178,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           requiresApp?: string
           onboarding?: unknown
           fileExtensions?: unknown
+          events?: unknown
         }
-        const id = m.id || e.name
+        const id = pluginIdOf(e.name, m.id)
+        if (!id) {
+          console.warn(`[amadeus] 插件目录 "${e.name}" 的 manifest id 与目录名均非法(须 kebab-case),拒载`)
+          continue
+        }
         if (seen.has(id)) continue
         // 门禁:apiVersion 不匹配 / 应用太旧 → 列出但不可加载(blocked 徽章),code 不读不发。
         const blocked = gatePluginManifest(m, app.getVersion())
-        const code = blocked ? '' : await fs.readFile(path.join(pdir, m.main || 'main.js'), 'utf8')
+        const bundle = await collectBundleInfo(pdir)
+        // main.js 仅在「未显式声明 main 且确是捆绑包」时可省(空代码 no-op);显式声明的 main 读不到 /
+        // 非捆绑包缺 main 仍整体拒载——否则坏插件伪装成「已启用的空壳」,功能静默缺失(codex P2-2)。
+        let code = ''
+        if (!blocked) {
+          try {
+            code = await fs.readFile(path.join(pdir, m.main || 'main.js'), 'utf8')
+          } catch (err) {
+            if (m.main || !bundle) throw err
+          }
+        }
         // README 给设置详情页;blocked 也读(无害,帮用户了解这插件是什么)。CHANGELOG 同款,渲染成「更新日志」段。
         const [readme, changelog] = await Promise.all([
           fs.readFile(path.join(pdir, 'README.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
@@ -1082,10 +1217,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           readme,
           changelog,
           onboarding: sanitizeOnboarding(m.onboarding),
+          events: sanitizeEvents(m.events),
           fileExtensions: Array.isArray(m.fileExtensions)
             ? m.fileExtensions.filter((x): x is string => typeof x === 'string' && !!x).slice(0, 8)
             : undefined,
           blocked: blocked ?? undefined,
+          bundle,
         })
       } catch {
         /* skip malformed plugin */
@@ -1117,6 +1254,41 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     await fs.writeFile(path.join(pdir, 'main.js'), SAMPLE_MAIN, 'utf8')
   })
 
+  // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
+  // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
+  // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
+  ipcMain.handle(IPC.uninstallPlugin, async (_e, id: string) => {
+    if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('非法的插件标识')
+    const root = globalPluginsDir()
+    let target: string | null = null
+    let entries: import('node:fs').Dirent[] = []
+    try {
+      entries = await fs.readdir(root, { withFileTypes: true })
+    } catch { /* 目录不存在 → 下面按未找到报错 */ }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue
+      let manifestId: unknown
+      try {
+        manifestId = (JSON.parse(await fs.readFile(path.join(root, e.name, 'manifest.json'), 'utf8')) as { id?: string }).id
+      } catch { /* manifest 坏/缺:按目录名兜底 */ }
+      if (pluginIdOf(e.name, manifestId) === id) { target = path.join(root, e.name); break }
+    }
+    if (!target) throw new Error('插件不存在')
+    // 墓碑:声明过的扩展名永久保留豁免(库里数据文件还在,掉回笔记=毁档),再删目录。
+    try {
+      const m = JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { fileExtensions?: unknown }
+      const claimed = Array.isArray(m.fileExtensions)
+        ? m.fileExtensions.filter(isSafePluginExt).map((x) => x.trim().toLowerCase())
+        : []
+      if (claimed.length) {
+        const merged = [...new Set([...readExtTombstones(), ...claimed])].sort()
+        await fs.writeFile(extTombstonesFile(), JSON.stringify(merged, null, 2), 'utf8')
+      }
+    } catch { /* manifest 坏/缺 → 无可声明 */ }
+    await fs.rm(target, { recursive: true, force: true })
+    vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
+  })
+
   // 启动即同步预扫插件扩展名 → 早于渲染端 restoreVault→listPages,关掉「.mindmap.md 被当页面加载」的启动竞态(Codex #2)。
   vault.setPluginFileExtensions(collectPluginExts())
 
@@ -1127,6 +1299,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   return {
     getVaultRoot: () => vault.getRoot(),
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
-    restartSync: () => { void kickAllSync() },
+    restartSync: () => { restartAllSync() },
   }
 }
