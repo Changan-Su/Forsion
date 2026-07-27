@@ -1,7 +1,11 @@
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
- * 设置浮层(账号/登录)+ toast。刻意精简 desktop Root 的桌面专属浮层(更新横幅/引导/商店/Amadeus 浮层);
+ * 设置浮层(账号/登录)+ 通知。刻意精简 desktop Root 的桌面专属浮层(更新横幅/引导/商店/Amadeus 浮层);
  * 需要时按 state 门控逐个加回。
+ *
+ * ⚠️ 本文件消费的是 **desktop 的 appStore/组件**,而 vite build 不做类型检查 —— 桌面侧删个字段
+ * 或给组件加个必填 prop,这里不会报错,直接在真机上崩(2026-07-27 的 `a.toasts.map` 就是这么
+ * 把 v2.7.1 的安卓包整个打不开的)。**改 desktop 渲染层后请跑 `npm run typecheck`**(mobile 目录下)。
  */
 import { useEffect } from 'react'
 import { App as CapApp } from '@capacitor/app'
@@ -11,6 +15,7 @@ import { useBootstrap } from '@/stores/bootstrap'
 import { useInbox } from '@/stores/inboxStore'
 import { pullInbox } from '@/services/backendService'
 import { SettingsModal } from '@/components/SettingsModal'
+import { NotificationHost } from '@/components/NotificationHost'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
 import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
@@ -68,7 +73,6 @@ export function MobileRoot() {
     activeId: s.activeId,
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
-    toasts: s.toasts,
     cfg: s.cfg,
     closeSettings: s.closeSettings,
     patchConfig: s.patchConfig,
@@ -100,6 +104,7 @@ export function MobileRoot() {
               themeLang={theme.lang}
               themeSkin={theme.skin}
               themeMode={theme.mode}
+              themeModePref={theme.modePref}
               glassOn={theme.glass}
               flatOn={theme.flat}
               themeSeed={theme.seed}
@@ -116,11 +121,8 @@ export function MobileRoot() {
         )}
       </AnimatePresence>
 
-      <div className="toast-wrap" aria-live="polite" aria-atomic="true">
-        {a.toasts.map((toast) => (
-          <div key={toast.id} className={`toast${toast.error ? ' error' : ''}`}>{toast.text}</div>
-        ))}
-      </div>
+      {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}
+      <NotificationHost />
     </>
   )
 }

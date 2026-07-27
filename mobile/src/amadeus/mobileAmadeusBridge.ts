@@ -216,6 +216,14 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
     writeDrawing: async (drawingPath, source) => { await ensureVault(); await vault.writeTextFile(drawingPath, source) },
 
+    // ---- 插件自定义文件类型的纯文本读写(desktop ipc.ts readTextFile/writeTextFile 同款) ----
+    // 越界/不存在一律返回 null:absPath 走 resolveInVault(越界即抛),读不到也抛,catch 兜成 null。
+    readTextFile: async (p) => {
+      await ensureVault()
+      try { return await vault.readTextAbs(vault.absPath(p)) } catch { return null }
+    },
+    writeTextFile: async (p, text) => { await ensureVault(); await vault.writeTextFile(p, text) },
+
     // ---- 回收站(.trash 语义在 vaultManager;desktop 同款 trash 后全量重建索引) ----
     trashEntry: async (rel) => { await ensureVault(); await vault.trashEntry(rel); await index.build() },
     listTrash: async () => { await ensureVault(); return vault.listTrash() },

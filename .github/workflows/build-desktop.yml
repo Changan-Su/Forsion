@@ -140,12 +140,38 @@ jobs:
         working-directory: desktop
         run: npm install --no-audit --no-fund
 
-      - name: Build web bundle + cap sync
+      # ⚠️ 唯一覆盖 mobile/web shim 的类型闸。vite build 用 esbuild 剥类型、**完全不做类型检查**,
+      # 所以「desktop 删了个 store 字段 / 给组件加了必填 prop / 给 AmadeusApi 加了方法」这类改动
+      # 在 desktop 的 tsc 下全绿,却让移动端真机一开就白屏(v2.7.1 的 `appStore.toasts` 就是这么炸的)。
+      # mobile 的 tsconfig include 了 ../desktop/frontend/src,并经 @webamadeus 拽进 web/src/amadeus,
+      # 一条命令同时守住 mobile 与 web 两套 shim。放在 build 之前,红了就别浪费后面的 gradle。
+      - name: Typecheck mobile + web shims
         working-directory: mobile
         run: |
           npm install --no-audit --no-fund
+          npm run typecheck
+
+      - name: Build web bundle + cap sync
+        working-directory: mobile
+        run: |
           npm run build
           npx cap sync android
+
+      # 真把产物在 headless chrome 里跑一遍(登录闸已用假 token + 路由桩越过,否则只测到登录页)。
+      # typecheck 挡静态错,这台挡运行期才炸的:v2.7.1 那次三平台桌面包全绿、CI 全绿,
+      # 就是因为从没有任何一环真的把移动端跑起来过。
+      # 浏览器**显式解析并断言存在**:不靠"runner 应该自带 chrome"这种假设,缺了就当场说清楚,
+      # 免得将来 runner 镜像一换,这一步变成看不懂的失败(或更糟:被当成产品坏了)。
+      - name: Boot smoke (headless)
+        working-directory: mobile
+        run: |
+          EXE="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
+          if [ -z "$EXE" ]; then
+            echo "::error::runner 上找不到 chrome/chromium,移动端开机冒烟无法运行。请在本步骤前加装浏览器。"
+            exit 1
+          fi
+          echo "使用浏览器: $EXE"
+          CHROMIUM_EXE="$EXE" npm run e2e:boot
 
       - name: Build APK
         working-directory: mobile/android
