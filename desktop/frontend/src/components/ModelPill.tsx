@@ -1,21 +1,38 @@
 /**
- * 模型选择器 pill(参考 AionUI):圆角 pill(前导图标 + 模型名 + 下拉箭头,长名跑马灯;窄屏收成纯图标)+ 下拉菜单
- * (reasoning 组 + 模型组,分组标题吸顶,左勾号 + 高亮)+ 三态(只读「用引擎默认」/ 交互)。
+ * 模型选择器 pill:圆角 pill(机器人图标 + 模型名 + 下拉箭头,长名跑马灯;窄屏收成纯图标)+ 两级菜单
+ * (Codex 形:左面板「模型 / 思考」两行各显示当前值,点开某行 → 右侧贴出选项子面板,带 ✓)+
+ * 三态(只读「用引擎默认」/ 交互)。
  *
  * 数据源由调用方决定:Tangu 模式传 groups=按 provider 分组 + thinking;外部引擎模式传 groups=引擎模型单组、
  * 无 thinking、emptyLabel=「用引擎默认」。组件本身与数据来源无关。
  */
-import React, { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Cpu } from 'lucide-react'
-import { useI18n } from '../i18n'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, Bot } from 'lucide-react'
+import { zoomOf } from '@lcl/engine'
+import { registerMessages, useI18n } from '../i18n'
+import { THINKING_LEVELS } from '../types'
 import type { AgentConfig } from '../types'
+
+registerMessages({
+  'pill.rowModel': { zh: '模型', en: 'Model' },
+  'pill.rowEffort': { zh: '思考', en: 'Effort' },
+})
 
 export interface ModelPillOption { id: string; name: string; description?: string }
 export interface ModelPillGroup { label: string; options: ModelPillOption[] }
 type Thinking = NonNullable<AgentConfig['thinkingLevel']>
 
-const thinkingLabelKey = { off: 'input.thinking.off', low: 'input.thinking.low', medium: 'input.thinking.medium', high: 'input.thinking.high' } as const
-const thinkingShortKey = { off: 'input.thinkingShort.off', low: 'input.thinkingShort.low', medium: 'input.thinkingShort.medium', high: 'input.thinkingShort.high' } as const
+const thinkingLabelKey = (lv: Thinking): string => `input.thinking.${lv}`
+const thinkingShortKey = (lv: Thinking): string => `input.thinkingShort.${lv}`
+
+/**
+ * 子面板要不要翻到菜单左侧。
+ * ⚠️ anchorRight / vw 是**视口** px(rect、innerWidth),subW 是**未缩放**局部 px(offsetWidth):
+ * 跨坐标系比较必须先把 subW 乘上端级 zoom,否则 body zoom≠1 时判定必错(见 lcl/engine/menuAnchor 的同款坑)。
+ */
+export function subFlips(anchorRight: number, subW: number, zoom: number, vw: number, gap = 6, margin = 8): boolean {
+  return anchorRight + (gap + subW) * zoom > vw - margin
+}
 
 /** 仅当文本溢出才在 hover 时跑马灯(测 scrollWidth>clientWidth → 加 class,纯 CSS 平移)。 */
 const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
@@ -47,16 +64,27 @@ export const ModelPill: React.FC<{
 }> = ({ disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, emptyLabel, footnote, title }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const [pane, setPane] = useState<'model' | 'effort' | null>(null)
+  const [flip, setFlip] = useState(false)
   const wrapRef = useRef<HTMLSpanElement>(null)
+  const subRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!open) return
+    if (!open) { setPane(null); return }
     const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setOpen(false) }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
   }, [open])
+
+  // 子面板默认贴菜单右侧,右边放不下就翻到左侧。菜单 right:0 贴在 wrap 右缘,故菜单右缘 == wrap 右缘。
+  useLayoutEffect(() => {
+    const el = subRef.current
+    const wrap = wrapRef.current
+    if (!pane || !el || !wrap) return
+    setFlip(subFlips(wrap.getBoundingClientRect().right, el.offsetWidth, zoomOf(el), window.innerWidth))
+  }, [pane])
 
   const all = groups.flatMap((g) => g.options)
   const hasModels = all.length > 0
@@ -66,59 +94,81 @@ export const ModelPill: React.FC<{
   const label = current?.name || emptyLabel || t('input.selectModel')
   // 未显式设置 = 引擎默认思考·中(agentLoop 同款回退)——显示必须与实际执行一致。
   const effLevel: Thinking = thinkingLevel || 'medium'
-  const effort = effLevel !== 'off' ? ` · ${t(thinkingShortKey[effLevel])}` : ''
+  const effort = effLevel !== 'off' ? ` · ${t(thinkingShortKey(effLevel))}` : ''
 
   if (readonly) {
     return (
       <span className="composer-chip composer-chip--readonly" title={title}>
-        <Cpu size={13} />
+        <Bot size={13} />
         <MarqueeLabel text={label} />
       </span>
     )
   }
 
+  // 一级菜单点击才开(不抢焦点),二级子面板悬停即显示。
+  // 悬停只「切换到这一格」、从不在 mouseleave 关闭 —— 关了的话斜着往子面板走的路径会先掠过另一行/空白,
+  // 面板闪没,里面的选项就永远点不到(同 .t2c-ctxring-pop 那条透明桥治的是一个病)。
+  const showPane = (p: 'model' | 'effort') => (): void => setPane(p)
+
   return (
-    <span ref={wrapRef} style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-      <button className="composer-chip" title={title || t('input.modelChipTitle')} disabled={disabled} onClick={() => setOpen((o) => !o)}>
-        <Cpu size={13} />
+    <span ref={wrapRef} className={`model-pill-wrap${open ? ' is-open' : ''}`} data-cmenu>
+      <button
+        className={`composer-chip model-pill-btn${open ? ' is-open' : ''}`}
+        title={title || t('input.modelChipTitle')}
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Bot size={13} />
         <MarqueeLabel text={label + effort} />
         <ChevronDown size={10} />
       </button>
       {open && (
-        <div className="composer-menu right composer-menu--sticky">
+        <div className="composer-menu composer-menu--model">
+          <button className={`cm-row${pane === 'model' ? ' is-open' : ''}`} onMouseEnter={showPane('model')} onFocus={showPane('model')} onClick={showPane('model')}>
+            <span className="cm-row-k">{t('pill.rowModel')}</span>
+            <span className="cm-row-v">{label}</span>
+            <ChevronRight size={13} />
+          </button>
           {onThinkingChange && (
-            <>
-              <div className="menu-section sticky">{t('input.thinkingSection')}</div>
-              {(['off', 'low', 'medium', 'high'] as const).map((lv) => (
-                <button
-                  key={lv}
-                  className={`menu-item${effLevel === lv ? ' active' : ''}`}
-                  onClick={() => onThinkingChange(lv)}
-                >
-                  <span className="mi-check">{effLevel === lv ? '✓' : ''}</span>
-                  <span className="grow">{t(thinkingLabelKey[lv])}</span>
-                </button>
-              ))}
-            </>
+            <button className={`cm-row${pane === 'effort' ? ' is-open' : ''}`} onMouseEnter={showPane('effort')} onFocus={showPane('effort')} onClick={showPane('effort')}>
+              <span className="cm-row-k">{t('pill.rowEffort')}</span>
+              <span className="cm-row-v">{t(thinkingShortKey(effLevel))}</span>
+              <ChevronRight size={13} />
+            </button>
           )}
-          {groups.map((g) => (
-            <React.Fragment key={g.label}>
-              <div className="menu-section sticky">{g.label}</div>
-              {g.options.map((m) => (
-                <button
-                  key={m.id}
-                  className={`menu-item${m.id === modelId ? ' active' : ''}`}
-                  title={m.description}
-                  onClick={() => { onSelect(m.id); setOpen(false) }}
-                >
-                  <span className="mi-check">{m.id === modelId ? '✓' : ''}</span>
-                  <span className="grow">{m.name}</span>
-                </button>
-              ))}
-            </React.Fragment>
-          ))}
-          {!hasModels && !onThinkingChange && <div className="menu-section">{t('common.loading')}</div>}
-          {footnote && <div className="menu-section" style={{ whiteSpace: 'normal', letterSpacing: 0 }}>{footnote}</div>}
+          {footnote && <div className="menu-section cm-foot">{footnote}</div>}
+          {pane && (
+            <div ref={subRef} className={`cm-sub${flip ? ' flip' : ''}`} data-pane={pane}>
+              {pane === 'effort'
+                ? THINKING_LEVELS.map((lv) => (
+                    <button
+                      key={lv}
+                      className={`menu-item${effLevel === lv ? ' active' : ''}`}
+                      onClick={() => { onThinkingChange?.(lv); setOpen(false) }}
+                    >
+                      <span className="grow">{t(thinkingLabelKey(lv))}</span>
+                      <span className="mi-check">{effLevel === lv ? '✓' : ''}</span>
+                    </button>
+                  ))
+                : groups.map((g) => (
+                    <React.Fragment key={g.label}>
+                      <div className="menu-section">{g.label}</div>
+                      {g.options.map((m) => (
+                        <button
+                          key={m.id}
+                          className={`menu-item${m.id === modelId ? ' active' : ''}`}
+                          title={m.description}
+                          onClick={() => { onSelect(m.id); setOpen(false) }}
+                        >
+                          <span className="grow">{m.name}</span>
+                          <span className="mi-check">{m.id === modelId ? '✓' : ''}</span>
+                        </button>
+                      ))}
+                    </React.Fragment>
+                  ))}
+              {pane === 'model' && !hasModels && <div className="menu-section">{t('common.loading')}</div>}
+            </div>
+          )}
         </div>
       )}
     </span>

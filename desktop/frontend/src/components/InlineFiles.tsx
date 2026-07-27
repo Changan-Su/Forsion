@@ -20,10 +20,14 @@ function decodeDataUrl(u: string): PreviewData {
   return { mimeType: m?.[1] || 'application/octet-stream', bytes, size: bytes.length }
 }
 
-/** 把一个 DisplayFile 变成 WorkspaceFilePreview 能消费的 target(load 懒拉字节)。 */
-function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: string, execMode: ExecMode): PreviewTarget {
+/** 把一个 DisplayFile 变成 WorkspaceFilePreview 能消费的 target(load 懒拉字节)。
+ *  任务概览的产物/来源行也复用它(host 读主进程、沙箱读工作区、dataUrl 直接解),一处逻辑。 */
+export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: string, execMode: ExecMode): PreviewTarget {
   return {
     name: f.name,
+    // path 只在本机绝对路径时给:openWsFile 用它做「同路径聚焦 + 随布局持久化」,而恢复时是走
+    // hostTargetFor(readHostFile) 重建的 —— 沙箱的工作区相对路径喂进去必然读不到,只能走瞬态 target。
+    path: execMode === 'host' && f.path && /^([/~]|[A-Za-z]:[\\/])/.test(f.path) ? f.path : undefined,
     load: async () => {
       if (f.dataUrl) return decodeDataUrl(f.dataUrl)
       if (!f.path) return null

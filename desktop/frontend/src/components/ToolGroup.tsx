@@ -57,6 +57,11 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'run', verbKey: 'tool.verb.ran', target: 'python: ' + String(a.code ?? '').split('\n')[0], isFile: false }
     case 'read_file': case 'read_document': case 'read_log': case 'view_image': case 'display_file':
       return { kind: 'read', verbKey: 'tool.verb.read', target: baseName(path || String(a.name ?? a.file ?? '')), isFile: true }
+    case 'desk_present': {
+      const views = Array.isArray(a.views) ? a.views : []
+      const names = views.map((v: any) => baseName(String(v?.path || ''))).filter(Boolean).join(', ')
+      return { kind: 'read', verbKey: 'tool.verb.presented', target: names || 'Agent Desk', isFile: true }
+    }
     case 'list_dir': case 'list_files':
       return { kind: 'read', verbKey: 'tool.verb.listed', target: baseName(path || '.'), isFile: true }
     case 'search_files': case 'glob_files':
@@ -86,7 +91,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc }> = ({ ev, desc }) => {
   const [open, setOpen] = useState(false)
   const verb = desc.verbKey ? t(desc.verbKey) : ev.name
   return (
-    <div className={`tool-row${ev.isError ? ' err' : ''}`}>
+    <div className="tool-row">
       <button className="tool-row-head" onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span className="tool-row-verb">{verb}</span>
@@ -129,7 +134,7 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
   const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : events[curIdx].name) : ''
 
   return (
-    <div className={`tool-group${anyErr ? ' err' : ''}`}>
+    <div className="tool-group">
       <button className="tool-group-head" onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <Terminal size={12} className="tool-group-ic" />

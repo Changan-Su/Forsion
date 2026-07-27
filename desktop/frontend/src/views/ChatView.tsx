@@ -8,17 +8,25 @@ import { EnginePicker } from '../components/EnginePicker'
 import { AgentPicker } from '../components/AgentPicker'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
+import { targetFor } from '../components/InlineFiles'
+import { openWsFile } from './wsFileNav'
+import { resolveDeskPath } from '../stores/deskPlan'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
-import { useApp } from '../stores/appStore'
-import { useWorkspace } from '@lcl/engine'
+import { TaskSummary } from './chat2/TaskSummary'
+import { useApp, stickyDefaults } from '../stores/appStore'
+import { hasChatRef, readChatRefs, refsToText } from './chat2/chatDragRef'
+import { usePageStore } from '@amadeus/store/pageStore'
+import { useWorkspace, UI_MODE } from '@lcl/engine'
+import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
+import { zoomOf } from '@lcl/engine'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -52,6 +60,9 @@ export function ChatView({ leaf, params }: ViewProps) {
     newChatModel: state.newChatModel,
     pendingDraft: state.pendingDraft,
     setPendingDraft: state.setPendingDraft,
+    draftAppend: state.draftAppend,
+    appendDraft: state.appendDraft,
+    clearDraftAppend: state.clearDraftAppend,
     engines: state.engines,
     engineCaps: state.engineCaps,
     agentDefs: state.agentDefs,
@@ -98,6 +109,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [showJump, setShowJump] = useState(false)
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
   const [quotedText, setQuotedText] = useState('')
+  const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
+  const vaultRoot = usePageStore((st) => st.vaultRoot)
   const activeSession = s.activeSession
   const activeModel = (s.modelsResp?.models || []).find((m) => m.id === (activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || '')) || null
   const activeUsage = s.activeUsage
@@ -114,9 +127,11 @@ export function ChatView({ leaf, params }: ViewProps) {
         cwd: activeSession?.project_path || undefined,
         ...execConfig,
       })
+    // 空态:药丸显示的必须是这条消息**实际会用**的档位 —— 即 stickyDefaults(上次用的),
+    // 否则会出现「显示自动编辑、发出去却是全自动」的错位。
     : {
         execMode: s.newChatWs?.kind === 'cloud' ? 'sandbox' : 'host',
-        approvalMode: 'auto-edit',
+        ...stickyDefaults(s.desktopConfig, s.newChatWs?.kind !== 'cloud'),
         cwd: s.newChatWs?.kind === 'cloud' ? undefined : (s.newChatWs?.path || undefined),
         ...s.newChatCfg,
       }
@@ -244,7 +259,9 @@ export function ChatView({ leaf, params }: ViewProps) {
       if (!text || !el.contains(range.commonAncestorContainer)) { setQuoteButton(null); return }
       const rect = range.getBoundingClientRect()
       const bounds = host.getBoundingClientRect()
-      setQuoteButton({ x: rect.right - bounds.left, y: rect.bottom - bounds.top + 6, text })
+      // rect/bounds 是视口 px,而 absolute 的 left/top 是宿主内未缩放局部 px → 差值先除掉宿主缩放。
+      const z = zoomOf(host)
+      setQuoteButton({ x: (rect.right - bounds.left) / z, y: (rect.bottom - bounds.top) / z + 6, text })
     }
     const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setQuoteButton(null) }
     const clear = (): void => setQuoteButton(null)
@@ -273,9 +290,36 @@ export function ChatView({ leaf, params }: ViewProps) {
   const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
 
   const hasMessages = activeMessages.length > 0
+  // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
+  const deskEnabled = UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+
+  // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
+  // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
+  const onRefDragOver = (e: React.DragEvent): void => {
+    if (!hasChatRef(e.dataTransfer)) return
+    e.preventDefault() // 不 preventDefault 就不会有 drop 事件
+    e.dataTransfer.dropEffect = 'copy'
+    if (!refDrop) setRefDrop(true)
+  }
+  const onRefDrop = (e: React.DragEvent): void => {
+    setRefDrop(false)
+    if (!hasChatRef(e.dataTransfer)) return
+    e.preventDefault()
+    e.stopPropagation()
+    const text = refsToText(readChatRefs(e.dataTransfer), vaultRoot || '')
+    if (text) s.appendDraft(text)
+  }
 
   return (
-    <div className="t2-chat-view" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <div
+      className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row', minWidth: 0 }}
+      onDragOver={onRefDragOver}
+      // 只有真的离开整块才撤高亮(子元素间移动会连发 leave/enter)
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setRefDrop(false) }}
+      onDrop={onRefDrop}
+    >
+      <div className="t2-chat-col">
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body" ref={chatAreaRef}>
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={activeMessages.length} />}
@@ -407,7 +451,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           execConfig={mvCfg}
           models={visibleModels}
           modelId={mvModelId}
-          onModelChange={activeId ? (id) => s.setSessionModel(id, activeId) : (id) => s.setNewChatModel(id)}
+          onModelChange={(id) => s.setSessionModel(id, activeId)}
           engines={s.engines}
           engineId={mvCfg.engineId}
           engineModels={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.models ?? []) : undefined}
@@ -415,7 +459,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onEngineModelChange={activeId ? (id) => s.setSessionEngineModel(id, activeId) : (id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
           engineCommands={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.commands ?? []) : undefined}
           thinkingLevel={mvCfg.thinkingLevel}
-          onThinkingChange={activeId ? (lv) => s.setSessionThinking(lv, activeId) : (lv) => s.setNewChatCfg((c) => ({ ...c, thinkingLevel: lv }))}
+          onThinkingChange={(lv) => s.setSessionThinking(lv, activeId)}
           maxIterations={mvCfg.maxIterations}
           onMaxIterationsChange={activeId ? (n) => s.setSessionMaxIterations(n, activeId) : (n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
           planMode={mvCfg.planMode}
@@ -433,7 +477,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onNewSession={() => void s.newSession()}
           onBranch={activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
           onOpenSettings={() => s.openSettings('skills')}
-          onExecConfigChange={activeId ? (patch) => s.setExecConfig(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
+          onExecConfigChange={(patch) => s.setExecConfig(patch, activeId)}
           onSend={(text, attachments, workspaceFiles, skillIds, mentions) => s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)}
           onStop={() => s.stop(activeId)}
           quotedText={quotedText}
@@ -443,10 +487,51 @@ export function ChatView({ leaf, params }: ViewProps) {
           sessionTokens={activeUsage.base + activeUsage.live}
           onCompact={() => void s.compact(activeId)}
           seedText={s.pendingDraft}
+          appendText={s.draftAppend}
+          onAppendConsumed={s.clearDraftAppend}
           onSeedConsumed={() => s.setPendingDraft(null)}
           sentHistory={sentHistory}
         />
       </div>
+      {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——
+        * Desk 卡底缘与输入框底缘同一条线(都是列底 -16px);滚动条仍在最右缘
+        * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
+      <div className="t2-rail">
+        <TaskSummary
+          messages={activeMessages}
+          running={running}
+          cwd={mvCfg.cwd}
+          hostCwd={mvCfg.execMode === 'host' ? mvCfg.cwd : undefined}
+          extraRoots={mvCfg.extraRoots}
+          // 只有本机会话谈得上「加本机文件夹」;沙箱会话的工作区不在本机。
+          onAddRoot={mvCfg.execMode === 'host' && activeId ? () => {
+            void window.tangu?.pickDirectory?.().then((dir) => {
+              if (!dir) return
+              const cur = useApp.getState().configBySession[activeId]?.extraRoots || []
+              if (dir === mvCfg.cwd || cur.includes(dir)) return // 已是默认目录/已加过
+              useApp.getState().setExecConfig({ extraRoots: [...cur, dir] }, activeId)
+            })
+          } : undefined}
+          onRemoveRoot={mvCfg.execMode === 'host' && activeId ? (p) => {
+            const cur = useApp.getState().configBySession[activeId]?.extraRoots || []
+            useApp.getState().setExecConfig({ extraRoots: cur.filter((x) => x !== p) }, activeId)
+          } : undefined}
+          onJumpToAttention={() => scrollToBottom(true)}
+          onShowEditing={deskEnabled && activeId ? (p) => useApp.getState().deskShowFile(activeId, p) : undefined}
+          onOpenFile={(f) => {
+            // 设成「在 Agent Desk 展开」且 Desk 开着且这文件定位得到 → 上演出格;其余一律新标签页。
+            const abs = f.path ? resolveDeskPath(f.path, mvCfg.cwd) : null
+            if (deskEnabled && activeId && abs && s.desktopConfig?.summaryOpenIn === 'desk') {
+              useApp.getState().deskShowFile(activeId, abs)
+              return
+            }
+            openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
+          }}
+        />
+        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
+      </div>
+      </div>
+      {deskEnabled && activeId ? <AgentDesk sessionId={activeId} /> : null}
     </div>
   )
 }

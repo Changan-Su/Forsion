@@ -5,7 +5,7 @@
  */
 import { useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2 } from 'lucide-react'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
@@ -18,6 +18,18 @@ import { ApprovalCard } from '../../components/ApprovalCard'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { useI18n } from '../../i18n'
 import './chat2.css'
+
+/** 流式光标该落在哪一段:整条消息**最后一个真正渲染出来的**段的下标。
+ *  它若落在工具段上,正文分支就永远不匹配 → 一个光标都不显示 —— 工具组自己的转圈已经在表达「在忙」。
+ *  (旧行为是每个文字段都挂 streaming-caret,多次调工具时中间会留下一串闪烁块。)
+ *  空文字段 / ids 解析不到事件的工具段都渲染成 null,不能算末尾。 */
+export function caretSegIndex(segs: MsgSeg[], toolEvents?: ToolEvent[]): number {
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const s = segs[i]
+    if (s.t === 'text' ? !!s.text : s.ids.some((id) => toolEvents?.some((e) => e.id === id))) return i
+  }
+  return -1
+}
 
 /** 头像回退:无图时取昵称首字(支持 CJK/emoji),对齐 desktop1.0。 */
 function firstChar(s?: string): string {
@@ -127,10 +139,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           // 直播穿插:有顺序段(segments)则按发生顺序渲染文字段/工具段(连续工具已在归约期并块);
           // 无段(历史重载 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
+            const caretAt = msg.status === 'streaming' ? caretSegIndex(msg.segments, msg.toolEvents) : -1
             return msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
                 return seg.text
-                  ? <div key={i} className={`t2-content${msg.status === 'streaming' ? ' streaming-caret' : ''}`}><Markdown content={seg.text} anchorPrefix={`toc-${msg.id}`} /></div>
+                  ? <div key={i} className={`t2-content${i === caretAt ? ' streaming-caret' : ''}`}><Markdown content={seg.text} anchorPrefix={`toc-${msg.id}`} /></div>
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]

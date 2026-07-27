@@ -268,6 +268,20 @@
   background: var(--accent-ink);
   z-index: 3;
 }
+/* 下移:落点在目标整块之下 —— 收起态块 = 组头本身,展开态块的下沿 = 会话容器下沿。 */
+.t2s-group.drag-over.below::before { top: auto; bottom: -4px; }
+.t2s-group-sessions.drag-over-end { position: relative; }
+.t2s-group-sessions.drag-over-end::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: -2px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent-ink);
+  z-index: 3;
+}
 .t2s-group.dragging { opacity: 0.4; }
 .t2s-group-toggle {
   flex: 1;

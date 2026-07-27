@@ -11,18 +11,19 @@
   container-type: inline-size; /* 卡宽驱动底排药丸收窄(容器查询,不看视口) */
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
-  border-radius: 20px;
+  border-radius: var(--radius-chat-surface, 20px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
   padding: 12px 14px;
   transition: border-color var(--duration-fast, 0.15s);
 }
-.t2c-card:focus-within { border-color: color-mix(in srgb, var(--accent-ink) 55%, var(--border)); }
 .t2c-card.dragover { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 6%, var(--bg-card, var(--bg))); }
 
 .t2c-ta {
   width: 100%; border: none; outline: none; background: transparent; resize: none;
   color: var(--text); font-family: var(--font-ui); font-size: 14px; line-height: 1.6;
-  max-height: 200px; display: block;
+  /* min-height 保底一行:即便 autoGrow 在未布局时把内联 height 写小,也永远有一行可点可输入的区域
+     (根治「首启引导后输入区塌成 0、须刷新才有」)。 */
+  min-height: 1.6em; max-height: 200px; display: block;
 }
 .t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); }
 
@@ -100,12 +101,15 @@
 .t2c-ctxring-fill { fill: none; stroke: var(--accent-ink); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.35s var(--ease-out, ease); }
 .t2c-ctxring[data-warn] .t2c-ctxring-fill { stroke: var(--danger, #e0564b); }
 .t2c-ctxring-pop {
-  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 30;
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 30;
   display: none; flex-direction: column; gap: 3px; padding: 8px 11px; min-width: 150px;
   background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
   font-size: 11px; color: var(--text-muted); white-space: nowrap;
 }
+/* 圈与浮层之间那 8px 空隙谁都不占:鼠标往上走时 hover 断掉、浮层消失,里面的「压缩」就永远点不到。
+ * 铺一条透明桥补上(视觉不变)。仪器:npm run check:ctxring */
+.t2c-ctxring-pop::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
 .t2c-ctxring:hover .t2c-ctxring-pop { display: flex; }
 .t2c-ctxring-pct { font-weight: 600; color: var(--text); }
 .t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; }

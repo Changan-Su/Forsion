@@ -6,6 +6,14 @@
 
 /* ====== 聊天工具栏 + 流容器 ====== */
 .t2-chat-view { container-type: inline-size; overflow: hidden; }
+/* 从工作区拖会话/笔记/文件进来:整块聊天区都是落区 —— 高亮画在伪元素上(不动布局,
+   也不给根加 border 以免 container 尺寸抖动进而触发容器查询换档)。 */
+.t2-chat-view { position: relative; }
+.t2-chat-view.refdrop::after {
+  content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 20;
+  border: 2px dashed var(--accent-ink, var(--accent)); border-radius: var(--radius-lg, 12px);
+  background: color-mix(in srgb, var(--accent-ink, var(--accent)) 7%, transparent);
+}
 .t2-toolbar {
   min-height: 38px;
   flex-shrink: 0;
@@ -341,7 +349,7 @@
 .t2-composer {
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
-  border-radius: 20px;
+  border-radius: var(--radius-chat-surface, 20px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0,0,0,.08));
   padding: 12px 14px;
   display: flex; flex-direction: column; gap: 8px;
@@ -419,3 +427,336 @@
   text-decoration-style: dashed;
   cursor: default;
 }
+
+/* ====== 任务概览(固定摘要面板) ======
+ * 主区够宽才占位:窄了整块收成 0 宽,正文回全宽 —— 组件常挂着,靠 .show + 容器查询切,
+ * 才有进出过渡(display:none 没法过渡)。
+ * 阈值 760(2026-07-26 从 860 放宽,用户要求「再窄一点也要有」):1440 屏两侧栏全开
+ * = 1440 − ribbon 44 − 左栏 280 − 右栏 300 ≈ 816,860 时这档正好落空。届时正文列 ≈450px,
+ * 仍能读(曾定 1120,得关左栏才出来;860 得是 1512 屏)。再往下压正文就挤成条了,别再放。
+ * 面板宽只写 --tsum-w 一处:正文让位、输入框让位、「回到底部」让位共用,不许各写各的。
+ * 依据:WMOS《Forsion-Codex Claude 右侧卡片原型》§17.2 三档响应式的 shift 档。 */
+.t2-chat-view { --tsum-w: 296px; --tsum-gut: 16px; }
+/* 右侧车道:绝对定位叠在滚动区右缘 —— .t2-stream 保持通栏,滚动条因此落在最右边
+ * (卡片右侧空出 --tsum-gut,全局 8px thumb 正好住进缝里,不再夹在卡片与正文之间)。
+ * pointer-events 只开在卡片上:缝隙与空车道的点击/拖动穿透到底下的滚动条与正文。 */
+.t2-rail {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--tsum-w);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px var(--tsum-gut) 16px 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 5;
+}
+/* align-items:flex-start:车道定高后卡片仍 hug 内容(留白在车道里,不被 stretch 拉进卡内) */
+.t2-tsum { display: none; flex: 0 1 auto; min-height: 0; pointer-events: auto; align-items: flex-start; }
+.agent-desk-card { display: none; pointer-events: auto; }
+/* 进出场:整卡作为一个视觉层统一缩放+位移+渐隐,不做逐项 stagger。
+ * display 挂 allow-discrete 才有**离场**动画(否则收起是硬切);进场靠 @starting-style 起手。
+ * 用独立的 scale/translate 属性而非 transform:两者能各自过渡,也不会互相覆盖。 */
+.t2-tsum, .agent-desk-card {
+  opacity: 0;
+  scale: 0.8;
+  translate: 100% 0;
+  transform-origin: top right;
+  transition:
+    opacity var(--duration-fast, 0.15s) ease,
+    scale 0.3s var(--ease-spring, ease),
+    translate 0.3s var(--ease-spring, ease),
+    display 0.3s allow-discrete;
+}
+/* ⚠️正文/输入框给车道让的位**不加过渡**,且用连续函数随容器宽自适应 —— 见下方 --tsum-shift。
+ * 加过渡会让「让位」和右栏的 JS 补间(dockviewStore.tweenGroupWidth,200ms)各跑各的,
+ * 正文列宽先窄后宽地折返,滚动锚定追不上 → 聊天区上下抽动(实测最大帧间跳变 217px)。 */
+.t2-jump {
+  /* 带上 base.css `.jump-bottom` 原有的 hover 过渡 —— transition 是整属性覆盖,只写 right 会把悬停变硬切 */
+  transition:
+    color var(--duration-fast, 0.15s),
+    border-color var(--duration-fast, 0.15s);
+}
+@container (min-width: 760px) {
+  .t2-tsum.show { display: flex; }
+  .agent-desk-card { display: flex; }
+  .t2-tsum.show, .agent-desk-card { opacity: 1; scale: 1; translate: none; }
+  @starting-style {
+    .t2-tsum.show, .agent-desk-card { opacity: 0; scale: 0.8; translate: 100% 0; }
+  }
+  /* 两卡高度固定 50/50(用户定稿):概览卡撑满上半(内容内滚),Desk 卡固定下半;
+   * 概览不在场时 Desk 卡靠 margin-top:auto 仍钉在下半。.gone=展开侧板期间卡片隐身
+   * (元素常驻才有进出动画),此时概览拿回 hug 全高。 */
+  .t2-rail:has(.agent-desk-card:not(.gone)) .t2-tsum.show { flex: 0 0 calc(50% - 5px); align-items: stretch; }
+  .t2-rail:has(.agent-desk-card:not(.gone)) .t2-tsum.show .t2-tsum-in { height: 100%; }
+  .agent-desk-card { flex: 0 0 calc(50% - 5px); margin-top: auto; }
+}
+/* 正文被车道叠住的部分要让出来,输入框/「回到底部」同步让位,否则中线歪。
+ *
+ * ⚠️**卡片不在场时让位必须是 0**,否则正文在整个聊天区里不居中、右边空一条(用户裁定)。
+ * 所以让位与卡片同一个条件(容器查询 + :has),跟着卡片一起有/无 —— 二值,没有过渡段。
+ *
+ * ⚠️**故意不加 transition**。曾经这里挂着 250ms 过渡,而右栏是 JS 补间的
+ * (dockviewStore.tweenGroupWidth,200ms),两段动画各跑各的:实测**补间停了 padding 还在动
+ * 44px、拖到 350ms**,肉眼就是「面板停了字还在窜」。去掉过渡后让位与右栏同帧落位(滞后 0)。
+ *
+ * 已知代价(取舍,别当 bug 修):跨 760 阈值那一帧,正文列宽会一次性变化 —— 卡片本来就是
+ * 那一帧出现/消失的,让位跟着一起变才不会出现「卡片没了但位还让着」。曾试过用
+ * clamp(0,100cqi−564px,--tsum-w) 把让位做成连续函数消掉这一跳,代价是卡片退场后右侧
+ * 仍留一条收敛的空带 —— 用户看过实机后否了,居中优先。 */
+@container (min-width: 760px) {
+  /* ⚠️过渡**写在容器查询里**,这是本段的全部精髓 —— 它让让位分成两种情形,各走各的:
+   *
+   *   ① 卡片因**内容**出现/消失(会话开跑、任务概览有事实了):容器宽没变、别的东西都不动,
+   *      这条 transition 在场 → 正文与输入框平滑归位。用户要的「丝滑」是这一种。
+   *   ② 卡片因**宽度**跨 760(开/关右栏):容器查询整块失配,padding 规则与这条 transition
+   *      **同一帧一起消失** —— 按规范,过渡要看变更前的样式里有没有挂 transition,没有就是瞬时。
+   *      于是让位与右栏的 JS 补间(dockviewStore.tweenGroupWidth,200ms)同帧落位,不再各跑各的。
+   *
+   * 这个区分是必须的:曾经无差别挂 250ms 过渡,开右栏时正文列宽 820→564→820 折返,
+   * 补间停了 padding 还在动 44px —— 就是用户报的「面板停了字还在窜」。别把它挪出容器查询。
+   * 曲线取苹果那条低回弹 spring 的贝塞尔近似;比卡片自身的 0.3s 慢一档(布局比卡片重)。 */
+  .t2-stream, .composer-anchor, .t2-jump {
+    transition-property: padding-right, right;
+    transition-duration: 0.45s;
+    transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  /* .t2-jump 还带着 base.css 的 hover 过渡,单写 right 会把悬停变硬切 —— 补回来 */
+  .t2-jump {
+    transition-property: right, color, border-color;
+    transition-duration: 0.45s, var(--duration-fast, 0.15s), var(--duration-fast, 0.15s);
+  }
+  /* .gone(展开侧板期间)不算在场:否则侧板占位 + 车道让位双重挤压正文 */
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-stream { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .composer-anchor { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-jump { right: calc(var(--tsum-w) + 22px); }
+}
+/* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
+@container (max-width: 759.9px) {
+  .t2-tsum, .agent-desk-card { pointer-events: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t2-tsum, .agent-desk-card, .t2-jump, .t2-stream, .composer-anchor { transition: none; }
+  .t2-tsum, .agent-desk-card { scale: 1; translate: none; }
+}
+/* 一张 hug 内容的浮卡(对齐 Codex:不是通栏侧栏,而是贴右上角、高度随内容的卡)。 */
+.t2-tsum-in {
+  width: 100%; box-sizing: border-box;
+  max-height: 100%; overflow-y: auto;
+  padding: 14px 16px 16px;
+  /* 与并排浮着的输入框同族圆角(都是「聊天区外壳」),别各用各的 */
+  border-radius: var(--radius-chat-surface, 20px);
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  box-shadow: var(--card-shadow);
+  display: flex; flex-direction: column; gap: 8px;
+  font-size: 12.5px; color: var(--text);
+}
+.t2-tsum-state { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; }
+.t2-tsum-state.running { color: var(--accent-ink); }
+.t2-tsum-state.attention { color: var(--danger); }
+.t2-tsum-state.error { color: var(--danger); }
+.t2-tsum-state.stopped { color: var(--text-muted); }
+.t2-tsum-state-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-tsum-count {
+  margin-left: auto; flex-shrink: 0;
+  font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.1));
+  border-radius: 999px; padding: 1px 7px;
+}
+.t2-tsum-sub { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-tsum-sub.err { color: var(--danger); }
+.t2-tsum-attn {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; cursor: pointer;
+  border: var(--border-width, 1px) solid var(--danger); border-radius: var(--radius-md, 12px);
+  background: var(--danger-light, transparent); color: var(--danger);
+  padding: 8px 10px; font-size: 12px; font-weight: 600;
+}
+/* 分区 = 原生 <details>:折叠语义走原生,这里只负责去掉默认三角、把标题做成可点行、加展开动画。
+   分区之间不画线,靠间距分组。 */
+.t2-tsum-sec {
+  display: flex; flex-direction: column;
+  margin-top: 6px;
+  /* 高度 auto 的过渡需要显式开;设在分区上(可继承属性)而不是 :root,免得波及全应用 */
+  interpolate-size: allow-keywords;
+}
+.t2-tsum-sectitle {
+  display: flex; align-items: center; gap: 5px; margin-bottom: 3px;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  cursor: pointer; user-select: none; list-style: none; /* Firefox 的 ▸ */
+}
+.t2-tsum-sectitle::-webkit-details-marker { display: none; } /* Safari/旧 Chromium 的 ▸ */
+.t2-tsum-sectitle:hover { color: var(--accent, var(--text)); }
+/* chevron 贴右缘。有计数时计数自己带 margin-left:auto 已经顶到头,chevron 的 auto 必须清零
+   —— 两个 auto 会平分剩余空间,把计数推到中间。 */
+.t2-tsum-chev {
+  flex-shrink: 0; margin-left: auto; color: var(--text-faint, var(--text-muted));
+  transition: transform var(--duration-slow, .25s) var(--ease-spring, ease);
+}
+.t2-tsum-count + .t2-tsum-chev { margin-left: 0; }
+/* 分区标题右侧的小动作(如「＋ 添加工作文件夹」),挨着折叠箭头左边 */
+.t2-tsum-secact {
+  flex-shrink: 0; margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius-sm, 8px); color: var(--text-faint, var(--text-muted));
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.t2-tsum-secact:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+/* margin-left:auto 只能有一个,否则 flex 会平分剩余空间 —— 谁在最左谁吃 */
+.t2-tsum-count + .t2-tsum-secact,
+.t2-tsum-secact + .t2-tsum-chev { margin-left: 0; }
+.t2-tsum-sec[open] > .t2-tsum-sectitle > .t2-tsum-chev { transform: rotate(90deg); }
+/* 展开/收起动画:::details-content 是 <details> 内容区的 UA 伪元素,
+   高度从 0 过渡到 auto 靠上面的 interpolate-size;content-visibility 得 allow-discrete
+   才会等动画跑完再切,否则收起是硬闪。 */
+.t2-tsum-sec::details-content {
+  block-size: 0;
+  overflow: hidden;
+  transition:
+    block-size var(--duration-slow, .25s) var(--ease-spring, ease),
+    content-visibility var(--duration-slow, .25s) allow-discrete;
+}
+.t2-tsum-sec[open]::details-content { block-size: auto; }
+@media (prefers-reduced-motion: reduce) {
+  .t2-tsum-chev, .t2-tsum-sec::details-content { transition: none; }
+}
+/* 计划/来源/产物再长也不许把卡撑到没边 */
+.t2-tsum-scroll { max-height: 176px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+/* 默认只露 3 条,其余折在这后面(分区一收起就复位) */
+.t2-tsum-more {
+  align-self: flex-start; padding: 3px 6px; margin-left: -6px; border: none; background: transparent;
+  font: inherit; font-size: 11px; cursor: pointer; border-radius: var(--radius-sm, 8px);
+  color: var(--text-faint, var(--text-muted)); transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.t2-tsum-more:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+/* 与 .t2-tsum-row 同一节奏,免得「计划」比「来源/产物」挤一档 */
+.t2-tsum-todo { display: flex; gap: 9px; align-items: baseline; line-height: 1.5; padding: 4px 0; }
+.t2-tsum-todo-mark { width: 12px; flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+.t2-tsum-todo.completed { color: var(--text-muted); }
+.t2-tsum-todo.completed .t2-tsum-todo-mark { color: var(--green); }
+.t2-tsum-todo.in_progress { font-weight: 600; }
+.t2-tsum-todo.in_progress .t2-tsum-todo-mark { color: var(--accent-ink); }
+.t2-tsum-todo-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2-tsum-row {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  color: var(--text); border-radius: var(--radius-sm, 8px); padding: 6px 6px; margin-left: -6px;
+  /* 可点的产物行是 <button>(键盘可达),这里把按钮默认样式抹平回普通行 */
+  border: none; background: transparent; font: inherit;
+}
+.t2-tsum-row.act { cursor: pointer; text-decoration: none; }
+.t2-tsum-row.act:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.t2-tsum-row > svg { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+/* 同一来源访问多次:次数缀在行尾,不另起一行 */
+.t2-tsum-hits { flex-shrink: 0; font-size: 10px; color: var(--text-faint, var(--text-muted)); }
+.t2-tsum-row-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 工作范围:额外文件夹行的「移出」叉,悬停才露(常驻会把窄卡挤得很吵) */
+.t2-tsum-root .t2-tsum-x {
+  flex-shrink: 0; margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius-sm, 8px); color: var(--text-faint, var(--text-muted));
+  opacity: 0; transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
+}
+.t2-tsum-root:hover .t2-tsum-x,
+.t2-tsum-x:focus-visible { opacity: 1; } /* 键盘走到也要露,否则 Tab 用户点不到 */
+.t2-tsum-x:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--danger); }
+
+/* ── Agent Desk(实验):聊天右侧演出面板 ─────────────────────────────────
+   .t2-chat-view 变 row 容器后,聊天列收进 .t2-chat-col;col 自己也是 inline-size 容器,
+   原有 @container 规则(浮动目录/任务概览)自动改按聊天列宽度求值——Desk 打开时它们该收就收。
+   Desk 自身的窄屏隐藏规则则按外层 .t2-chat-view(整个 leaf 宽)求值。 */
+/* position:relative:.t2-rail 锚整列(含输入框区),Desk 卡底缘才能与输入框底缘同线(列底 -16px) */
+.t2-chat-col { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+/* 展开动画(Apple 风):侧板壳常驻(有内容即挂),open 才有宽度 —— flex-basis 0%→--desk-w
+ * 弹性生长;收起反向滑合。拖宽期间 .no-anim 关过渡,否则跟手感全无。 */
+.agent-desk {
+  position: relative; display: flex; min-width: 0; min-height: 0; overflow: hidden;
+  flex: 0 0 auto; flex-basis: 0%;
+  transition: flex-basis 0.45s var(--ease-spring, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.agent-desk.open { flex-basis: var(--desk-w, 46%); }
+@starting-style { .agent-desk.open { flex-basis: 0%; } }
+.agent-desk.no-anim { transition: none; }
+/* 展开侧板期间卡片隐身但常驻:借既有 scale/translate/display allow-discrete 机关做进出动画 */
+.agent-desk-card.gone { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
+@media (prefers-reduced-motion: reduce) { .agent-desk { transition: none; } }
+.agent-desk-grip { flex: 0 0 6px; margin-left: -3px; cursor: col-resize; z-index: 3; border-radius: 3px; }
+.agent-desk-grip:hover, .agent-desk-grip:active { background: var(--accent-ink); opacity: 0.3; }
+.agent-desk-inner { flex: 1; min-width: 0; display: flex; flex-direction: column; border-left: var(--border-width) solid var(--border); }
+.agent-desk-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 5px 6px 5px 12px; border-bottom: var(--border-width) solid var(--border);
+  font-size: 12px; color: var(--text-muted);
+}
+.agent-desk-spark { color: var(--accent-ink); flex-shrink: 0; }
+.agent-desk-title { flex-shrink: 0; font-weight: 600; color: var(--text); }
+.agent-desk-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-desk-head .icon-btn { flex-shrink: 0; }
+.agent-desk-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.agent-desk-pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+.agent-desk-pane + .agent-desk-pane { border-top: var(--border-width) solid var(--border); }
+/* WsFileView 根是 height:100%(Dockview 面板语境);在 flex 格里改用 flex 撑满,避免百分比高度歧义 */
+.agent-desk-pane > .wsfile-tab { height: auto; flex: 1 1 0; min-height: 0; }
+/* 原生格外壳(笔记/导图/白板/插件文件/.db/任意注册视图共用):flex 撑满并把唯一子元素拉满,
+   兼容 height:100%(amx-pane)与自适应高的视图根 */
+.agent-desk-pane > .desk-note-wrap { flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.agent-desk-pane > .desk-note-wrap > * { flex: 1 1 0; min-height: 0; min-width: 0; }
+/* 直播格(Cursor 式流式):头行 + 吸底 pre;完整高亮由落盘后的 WsFileView 接棒 */
+.agent-desk-livepane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.agent-desk-livehead {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 6px 12px; font-size: 12px; color: var(--text-muted);
+  border-bottom: var(--border-width) solid var(--border);
+}
+.agent-desk-livehead-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-desk-livebody {
+  flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 10px 12px;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-all; color: var(--text);
+}
+
+/* ====== Agent Desk 卡片态(默认态,住 .t2-rail,Pin Summary 下方) ======
+ * 正文是"只看不摸"的预览(pointer-events:none + 缩镜),点整卡放大成侧板;
+ * wsfile 工具行在迷你尺寸下只会挤成一团 → 藏掉,卡片自带头行。 */
+.agent-desk-card {
+  flex-direction: column; overflow: hidden; flex-shrink: 0;
+  border-radius: var(--radius-chat-surface, 20px);
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  box-shadow: var(--card-shadow);
+}
+.agent-desk-card.act { cursor: zoom-in; }
+.agent-desk-card.act:hover { border-color: color-mix(in srgb, var(--accent-ink) 45%, var(--border)); }
+.agent-desk-card-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 8px 8px 6px 12px; font-size: 12px; font-weight: 600; color: var(--text);
+}
+.agent-desk-card-head .icon-btn { flex-shrink: 0; }
+.agent-desk-card-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-desk-card-body {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  pointer-events: none;
+  zoom: 0.75; /* ponytail: 预览缩镜;正文不可交互,zoom 只影响视觉,不碰坐标补偿那套坑 */
+  border-top: var(--border-width, 1px) solid var(--border);
+}
+.agent-desk-card-body .wsfile-head { display: none; }
+/* 原生笔记编辑器在迷你卡里同理:顶栏(面包屑/分享等)挤成一团,藏掉只看纸面 */
+.agent-desk-card-body .amx-toolbar { display: none; }
+.agent-desk-card-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; color: var(--text-faint, var(--text-muted)); font-size: 12px;
+}
+
+/* 任务概览「正在编辑」入口:点击在 Agent Desk 展开该文件 */
+.t2-tsum-edit {
+  display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0;
+  border: none; background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--accent-ink);
+  border-radius: var(--radius-sm, 8px); padding: 4px 6px; font-size: 12px; cursor: pointer; text-align: left;
+}
+.t2-tsum-edit:hover { background: var(--overlay, rgba(127, 127, 127, 0.18)); }
+.t2-tsum-edit svg { flex-shrink: 0; }
+.t2-tsum-edit-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 聊天 leaf 整体太窄(相对外层 .t2-chat-view 容器)→ 整个面板隐藏,聊天列拿回全宽。
+ * 阈值与卡片的 760 对齐:错开会出现「侧板已藏、卡片又因 mode=open 不渲染」的内容消失带(Codex #3)。 */
+@container (max-width: 759.9px) { .agent-desk { display: none; } }

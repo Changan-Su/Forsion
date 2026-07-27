@@ -7,10 +7,11 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp, Square, Plus, Mic, ImagePlus, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Eye, PencilLine, Zap, MessageSquare, Loader2,
+  Hand, ShieldCheck, ShieldAlert, Settings2, MessageSquare, Loader2, type LucideIcon,
 } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
+import { THINKING_LEVELS } from '../../types'
 import type { AgentConfig, Attachment, ModelInfo, NormalAgentDef, SkillInfo } from '../../types'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { useI18n } from '../../i18n'
@@ -20,6 +21,9 @@ import { track } from '../../achievements/store'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { noteRefInsert } from '../../components/wikiChat'
+import { useApp } from '../../stores/appStore'
+import { commandsFor } from '../../commandCatalog'
+import { getCustomCommands, expandCustomCommand, type CustomCommandInfo } from '../../services/backendService'
 import './composer2.css'
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
@@ -30,7 +34,14 @@ type RefCand = { p: string; note?: true }
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
 const MAX_INPUT_CHARS = 150_000
 const MAX_WS_BYTES = 25 * 1024 * 1024
-const approvalLabelKey = { readonly: 'input.approval.readonly', 'auto-edit': 'input.approval.autoEdit', 'full-auto': 'input.approval.fullAuto' } as const
+/** 审批档位(Codex 形):图标 + 标题 + 一句说明。顺序 = 从最谨慎到最放手,自定义压轴。
+ *  full-auto 标 danger(菜单里染强调色)——这一档是把整台电脑交出去,不该和其余三档长得一样。 */
+const APPROVALS = [
+  { id: 'readonly', Icon: Hand, key: 'input.approval.readonly', desc: 'input.approval.readonlyDesc' },
+  { id: 'auto-edit', Icon: ShieldCheck, key: 'input.approval.autoEdit', desc: 'input.approval.autoEditDesc' },
+  { id: 'full-auto', Icon: ShieldAlert, key: 'input.approval.fullAuto', desc: 'input.approval.fullAutoDesc', danger: true },
+  { id: 'custom', Icon: Settings2, key: 'input.approval.custom', desc: 'input.approval.customDesc' },
+] as const satisfies ReadonlyArray<{ id: NonNullable<AgentConfig['approvalMode']>; Icon: LucideIcon; key: string; desc: string; danger?: boolean }>
 
 /** 历史召回的纯索引算术:hist=旧→新,pos 0=草稿、1..N=第 N 条最近发送。
  *  older=true(↑)由新到旧、false(↓)回到草稿。越界返回 null(不动)。 */
@@ -43,6 +54,16 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
   if (pos === 0) return null
   const next = pos - 1
   return { pos: next, val: next === 0 ? stash : hist[hist.length - next] }
+}
+
+/**
+ * 输入框 autosize 的目标 style.height。**scrollHeight ≤ 0 = 元素当前没被布局**
+ * (挂载时机处于 dockview 用 display:none 藏起的非激活面板 / 首启引导期隐藏的外壳里)——
+ * 此时**绝不能写成 `0px`**(会把输入区压没、且 autoGrow 只在 draft 变化才重算 → 不自愈,
+ * 直到 reload/切走再回来重挂才好)。量不到就留 `auto`(配合 `rows=1` + CSS `min-height` 保底一行)。
+ */
+export function composerAutoHeight(scrollHeight: number, maxPx = 200): string {
+  return scrollHeight > 0 ? `${Math.min(scrollHeight, maxPx)}px` : 'auto'
 }
 
 export const Composer2: React.FC<{
@@ -89,6 +110,9 @@ export const Composer2: React.FC<{
   /** 外部预填草稿(反馈诊断/对话建 agent 等 via-chat 入口);非空时 mount/变更即写入输入框并回调清空。 */
   seedText?: string | null
   onSeedConsumed?: () => void
+  /** 拖引用进聊天:**追加**到草稿末尾(seedText 是整体覆盖,两条通道语义不同别合并)。 */
+  appendText?: { text: string; seq: number } | null
+  onAppendConsumed?: () => void
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
   sentHistory?: string[]
 }> = ({
@@ -103,10 +127,12 @@ export const Composer2: React.FC<{
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
   contextWindow, ctxTokens, sessionTokens, onCompact,
-  seedText, onSeedConsumed, sentHistory,
+  seedText, onSeedConsumed, appendText, onAppendConsumed, sentHistory,
 }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [draft, setDraft] = useState('')
+  /** 自定义命令(~/.tangu/commands/*.md);拉不到就是空表,输入框照常可用。 */
+  const [customCommands, setCustomCommands] = useState<CustomCommandInfo[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [wsFiles, setWsFiles] = useState<Attachment[]>([])
   const [pinnedSkills, setPinnedSkills] = useState<SkillInfo[]>([])
@@ -130,6 +156,63 @@ export const Composer2: React.FC<{
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  /** 命令描述直接取 catalog 的 zh/en —— 不再另建一套 input.slash.* key(那正是两端文案漂移的来源)。 */
+  const describe = useMemo(() => {
+    const byName = new Map(commandsFor('desktop').map((c) => [c.name, c]))
+    return (name: string): string => {
+      const c = byName.get(name)
+      return c ? (locale === 'en' ? c.en : c.zh) : name
+    }
+  }, [locale])
+
+  useEffect(() => {
+    let alive = true
+    void getCustomCommands(useApp.getState().cfg).then((list) => { if (alive) setCustomCommands(list) })
+    return () => { alive = false }
+  }, [])
+
+  const copyLastReply = async (): Promise<void> => {
+    const st = useApp.getState()
+    const sid = st.activeId
+    const msgs = sid ? st.messagesBySession[sid] || [] : []
+    const last = [...msgs].reverse().find((m) => m.role === 'assistant')
+    const text = (last?.content || '').trim()
+    if (!text) { st.toast(t('input.slash.nothingToCopy'), true); return }
+    try {
+      await navigator.clipboard.writeText(text)
+      st.toast(t('input.slash.copied'))
+    } catch { st.toast(t('input.slash.nothingToCopy'), true) }
+  }
+
+  const retryLastMessage = async (): Promise<void> => {
+    const st = useApp.getState()
+    const sid = st.activeId
+    const msgs = sid ? st.messagesBySession[sid] || [] : []
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
+    if (!lastUser) { st.toast(t('input.slash.nothingToRetry'), true); return }
+    st.regenerate(lastUser.id, sid)
+  }
+
+  const exportSession = async (): Promise<void> => {
+    const st = useApp.getState()
+    const sid = st.activeId
+    const msgs = sid ? st.messagesBySession[sid] || [] : []
+    if (!msgs.length) { st.toast(t('input.slash.nothingToExport'), true); return }
+    const md = [`# Tangu ${st.sessions.find((x) => x.id === sid)?.title || ''}`.trim(), '']
+    for (const m of msgs) {
+      if (m.role !== 'user' && m.role !== 'assistant') continue
+      const body = (m.content || '').trim()
+      if (!body) continue
+      md.push(m.role === 'user' ? '## 我' : '## Tangu', '', body, '')
+    }
+    const blob = new Blob([md.join('\n')], { type: 'text/markdown' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `tangu-${String(sid || 'session').slice(0, 8)}.md`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
 
   // 桌面级共享语音输入 hook:转写文本追加进草稿(不绑聊天,Amadeus 等可复用同一 hook)。
   const voice = useVoiceInput((text) => {
@@ -170,7 +253,7 @@ export const Composer2: React.FC<{
     const ta = taRef.current
     if (!ta) return
     ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+    ta.style.height = composerAutoHeight(ta.scrollHeight)
   }
 
   // 草稿变化后同步高度(含发送清空后回缩):useLayoutEffect 在 React 把新值提交到 DOM 之后、绘制之前跑,
@@ -200,12 +283,87 @@ export const Composer2: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedText])
 
+  // 从工作区拖进来的引用:追加到草稿末尾(与语音转写同一套追加规则),消费后回调清空。
+  useEffect(() => {
+    if (!appendText?.text) return
+    setDraft((d) => (d ? d.replace(/\s+$/, '') + ' ' + appendText.text : appendText.text))
+    setHistPos(0) // 草稿被改过 → 退出 ↑ 历史召回,否则下次 ↓ 会把引用抹掉
+    onAppendConsumed?.()
+    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appendText?.seq])
+
   const slashItems = useMemo<SlashItem[]>(() => {
-    const items: SlashItem[] = []
     const close = () => { setDraft(''); setSlashSubMenu(null); requestAnimationFrame(autoGrow) }
-    if (running) items.push({ cmd: '/stop', desc: t('input.slash.stop'), run: () => { onStop(); close() } })
+    const app = useApp.getState
+    /** 命令名 → 本端实现。**没有条目 = 本端不露出该命令**(catalog 里声明了也不显示)。
+     *  加命令:先进 tangu-agent 的 core/commandCatalog(TUI 一起吃到),再在这里补 handler。 */
+    const handlers: Record<string, (() => void) | undefined> = {
+      '/stop': running ? () => { onStop(); close() } : undefined,
+      '/new': onNewSession ? () => { onNewSession(); close() } : undefined,
+      '/branch': onBranch ? () => { onBranch(); close() } : undefined,
+      '/compact': onCompact ? () => { onCompact(); close() } : undefined,
+      '/plan': onPlanModeChange ? () => { onPlanModeChange(!planMode); close() } : undefined,
+      '/voice': onVoiceModeChange ? () => { onVoiceModeChange(!voiceMode); close() } : undefined,
+      '/model': onModelChange && models?.length
+        ? () => { setDraft('/model '); setSlashSubMenu('model'); setSlashIndex(0) }
+        : undefined,
+      '/loop': onMaxIterationsChange
+        ? () => { setDraft('/loop '); setSlashIndex(0); requestAnimationFrame(autoGrow) }
+        : undefined,
+      '/think': onThinkingChange ? () => { setDraft('/think '); setSlashIndex(0); requestAnimationFrame(autoGrow) } : undefined,
+      '/approval': () => { setOpenMenu('mode'); close() },
+      // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
+      '/help': () => { app().openSettings('about'); close() },
+      '/skills': () => { app().openSettings('skills'); close() },
+      '/tools': () => { app().openSettings('agents'); close() },
+      '/agents': () => { app().openSettings('agents'); close() },
+      '/agent': () => { app().openSettings('agents'); close() },
+      '/mcp': () => { app().openSettings('mcp'); close() },
+      '/plugins': () => { app().openSettings('plugins'); close() },
+      '/memory': () => { app().openSettings('sync'); close() },
+      '/config': () => { app().openSettings('general'); close() },
+      '/login': () => { app().openSettings('connection'); close() },
+      // Historian / Muse 的桌面入口在「特殊 Agent」名册页(没有各自独立的视图)。
+      '/historian': () => { app().setActiveSpecial('agents'); close() },
+      '/muse': () => { app().setActiveSpecial('agents'); close() },
+      '/groupchat': onGroupChange ? () => { setGroupSetupOpen(true); close() } : undefined,
+      '/sessions': () => { app().setActiveId(null); close() },
+      '/cost': () => {
+        const st = app()
+        st.pushNotice(
+          `${(sessionTokens ?? 0).toLocaleString()} tokens · 上下文 ${(ctxTokens ?? 0).toLocaleString()}/${(contextWindow ?? 0).toLocaleString()}`,
+        )
+        close()
+      },
+      '/status': () => {
+        const st = app()
+        st.pushNotice(
+          [
+            `${t('input.slash.status')}`,
+            `model=${modelId || '-'}`,
+            `think=${thinkingLevel || 'medium'}`,
+            `approval=${execConfig.approvalMode || '-'}`,
+            `cwd=${execConfig.cwd || '-'}`,
+            `loop=${maxIterations || 90}`,
+            `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
+          ].join('\n  '),
+        )
+        close()
+      },
+      '/copy': () => { void copyLastReply(); close() },
+      '/retry': () => { void retryLastMessage(); close() },
+      '/export': () => { void exportSession(); close() },
+    }
+
+    const items: SlashItem[] = []
+    if (running) {
+      const stop = handlers['/stop']
+      if (stop) items.push({ cmd: '/stop', desc: describe('/stop'), run: stop })
+    }
+    // 外部引擎接管时:命令来自引擎自身(ACP),只保留 /new 免得两套语义打架。
     if (engineId) {
-      if (onNewSession) items.push({ cmd: '/new', desc: t('input.slash.new'), run: () => { onNewSession(); close() } })
+      if (onNewSession) items.push({ cmd: '/new', desc: describe('/new'), run: () => { onNewSession(); close() } })
       for (const c of engineCommands || []) {
         items.push({
           cmd: `/${c.name}`,
@@ -215,27 +373,30 @@ export const Composer2: React.FC<{
       }
       return items
     }
-    if (onPlanModeChange) {
-      items.push({ cmd: '/plan', desc: planMode ? t('input.slash.planOff') : t('input.slash.planOn'), run: () => { onPlanModeChange(!planMode); close() } })
-    }
-    if (onVoiceModeChange) {
-      items.push({ cmd: voiceMode ? '/text' : '/voice', desc: voiceMode ? t('input.slash.voiceOff') : t('input.slash.voiceOn'), run: () => { onVoiceModeChange(!voiceMode); close() } })
-    }
+    // 思考档位:每档一条,直接点选(比先 /think 再敲档位快)。
     if (onThinkingChange) {
-      for (const lv of ['off', 'low', 'medium', 'high'] as const) {
-        items.push({ cmd: `/think ${lv}`, desc: `${t('input.slash.thinkDesc', { level: lv })}${thinkingLevel === lv ? t('input.slash.current') : ''}`, run: () => { onThinkingChange(lv); close() } })
+      for (const lv of THINKING_LEVELS) {
+        items.push({
+          cmd: `/think ${lv}`,
+          desc: `${t('input.slash.thinkDesc', { level: lv })}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
+          run: () => { onThinkingChange(lv); close() },
+        })
       }
     }
-    if (onModelChange && models?.length) {
-      items.push({ cmd: '/model', desc: t('input.slash.model'), run: () => { setDraft('/model '); setSlashSubMenu('model'); setSlashIndex(0) } })
+    for (const c of commandsFor('desktop')) {
+      if (c.name === '/stop' || c.name === '/think') continue // 上面已单独处理
+      const run = handlers[c.name]
+      if (!run) continue
+      items.push({ cmd: c.arg ? `${c.name} ${c.arg}` : c.name, desc: describe(c.name), run })
     }
-    if (onMaxIterationsChange) {
-      items.push({ cmd: '/loop', desc: t('input.slash.loop', { current: maxIterations || 90 }), run: () => { setDraft('/loop '); setSlashIndex(0); requestAnimationFrame(autoGrow) } })
+    // 用户自定义命令(~/.tangu/commands/*.md):展开成普通消息发出去。
+    for (const c of customCommands) {
+      items.push({
+        cmd: c.argHint ? `/${c.name} ${c.argHint}` : `/${c.name}`,
+        desc: c.description,
+        run: () => { setDraft(`/${c.name} `); setSlashIndex(0); requestAnimationFrame(autoGrow) },
+      })
     }
-    if (onNewSession) items.push({ cmd: '/new', desc: t('input.slash.new'), run: () => { onNewSession(); close() } })
-    if (onBranch) items.push({ cmd: '/branch', desc: t('input.slash.branch'), run: () => { onBranch(); close() } })
-    if (onOpenSettings) items.push({ cmd: '/skills', desc: t('input.slash.skills'), run: () => { onOpenSettings(); close() } })
-    if (onCompact) items.push({ cmd: '/compact', desc: t('input.slash.compact'), run: () => { onCompact(); close() } })
     if (skills?.length) {
       for (const s of skills) {
         items.push({
@@ -247,7 +408,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, models, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onOpenSettings, onCompact, engineId, engineCommands])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow])
 
   const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
   const slashMatches = useMemo<SlashItem[]>(() => {
@@ -400,6 +561,32 @@ export const Composer2: React.FC<{
       requestAnimationFrame(autoGrow)
       return
     }
+    // /think|/effort <档位>:敲完回车直接生效(菜单点选之外的键盘路径)。
+    const thinkMatch = /^\/(?:think|effort)(?:\s+(\S+))?$/i.exec(text)
+    if (thinkMatch && onThinkingChange) {
+      const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
+      if (THINKING_LEVELS.includes(lv)) {
+        onThinkingChange(lv)
+        setHint(t('input.slash.thinkSet', { level: lv }))
+      } else {
+        setHint(t('input.slash.thinkUsage', { levels: THINKING_LEVELS.join('|') }))
+      }
+      setDraft('')
+      requestAnimationFrame(autoGrow)
+      return
+    }
+    // 用户自定义命令:服务端展开($ARGUMENTS/$1..$9)后当普通消息发出去。
+    const customMatch = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/i.exec(text)
+    if (customMatch && customCommands.some((c) => c.name === customMatch[1].toLowerCase())) {
+      const name = customMatch[1].toLowerCase()
+      const args = customMatch[2] || ''
+      setDraft('')
+      requestAnimationFrame(autoGrow)
+      void expandCustomCommand(useApp.getState().cfg, name, args)
+        .then((expanded) => onSend(expanded, [], [], undefined, undefined))
+        .catch((e: any) => setHint(String(e?.message || e)))
+      return
+    }
     if (disabled) return
     const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
     const outgoing = quoted + text
@@ -465,13 +652,14 @@ export const Composer2: React.FC<{
 
   const modelGroups = useMemo(() => groupModelsByProvider(models || []), [models])
   const groupActive = !!groupChat && (groupAgents?.length || 0) >= 2
+  const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })
-    : planMode ? t('input.planMode') : (isHost ? t(approvalLabelKey[approval]) : t('input.normal'))
+    : planMode ? t('input.planMode') : (isHost ? t(curApproval.key) : t('input.normal'))
   // 收窄时药丸只剩图标,故图标随当前模式变(群聊/计划/审批档位),窄屏也能一眼看出状态。
   const ModeIcon = groupActive ? Users
     : planMode ? ClipboardList
-    : isHost ? (approval === 'readonly' ? Eye : approval === 'full-auto' ? Zap : PencilLine)
+    : isHost ? curApproval.Icon
     : MessageSquare
   const showModeChip = !!onPlanModeChange || isHost || !!onGroupChange
   const currentEngine = (engines || []).find((e) => e.id === engineId)
@@ -728,7 +916,7 @@ export const Composer2: React.FC<{
                   <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
-                  <div className="composer-menu left">
+                  <div className="composer-menu composer-menu--mode left">
                     {onPlanModeChange && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>
@@ -752,10 +940,18 @@ export const Composer2: React.FC<{
                     {isHost && (
                       <>
                         <div className="menu-section">{t('input.approvalSection')}</div>
-                        {(['readonly', 'auto-edit', 'full-auto'] as const).map((m) => (
-                          <button key={m} className={`menu-item${approval === m ? ' active' : ''}`} onClick={() => setApproval(m)}>
-                            <span className="grow">{t(approvalLabelKey[m])}</span>
-                            {approval === m && <Check size={13} />}
+                        {APPROVALS.map(({ id, Icon, key, desc, ...a }) => (
+                          <button
+                            key={id}
+                            className={`menu-item approval-item${approval === id ? ' active' : ''}${'danger' in a ? ' danger' : ''}`}
+                            onClick={() => setApproval(id)}
+                          >
+                            <Icon size={15} className="approval-ic" />
+                            <span className="grow">
+                              <span className="approval-title">{t(key)}</span>
+                              <span className="approval-desc">{t(desc)}</span>
+                            </span>
+                            {approval === id && <Check size={13} className="approval-ck" />}
                           </button>
                         ))}
                       </>
