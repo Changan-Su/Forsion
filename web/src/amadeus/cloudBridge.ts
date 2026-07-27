@@ -999,6 +999,32 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         }
       }),
 
+    // ---- 插件自定义文件类型的纯文本读写(desktop ipc.ts readTextFile/writeTextFile 同款) ----
+    // 不存在返回 null(桌面语义);写走同一条 enqueue 串行队列,避免与笔记保存互相踩 seq。
+    readTextFile: async (p): Promise<string | null> => {
+      await ensureVault()
+      try {
+        return (await getFile(p)).content
+      } catch (e) {
+        if (is404(e)) return null
+        throw e
+      }
+    },
+    writeTextFile: (p, text) =>
+      enqueue([p], async () => {
+        await ensureVault()
+        try {
+          await putFile(p, text, await baseSeqFor(p))
+        } catch (e) {
+          // 409 = 预读 seq 后被别人抢先写了。纯文本没有 drawing 那种元素级可合并结构,
+          // 所以按桌面语义(本地原子写,后写胜)拉最新 seq 重写一次 —— 不能就这么抛给插件调用方,
+          // 那等于用户这次修改静默消失(插件未必展示错误、更未必重试)。
+          if (!is409(e)) throw e
+          const f = await getFile(p) // 顺带对齐 noteSeq
+          await putFile(p, text, f.seq, true)
+        }
+      }),
+
     // ---- 笔记视图(Bases) -------------------------------------------------------
     listPageProps: async (folder): Promise<PageProps[]> => {
       await ensureVault()
