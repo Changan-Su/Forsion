@@ -350,6 +350,46 @@ registerMessages({
     "zh": "停止",
     "en": "Stop"
   },
+  "input.slash.verifyUsage": {
+    "zh": "用法:/verify <命令>(收尾前自动跑,不绿不许收)· /verify off 关闭 · 当前:{current}",
+    "en": "Usage: /verify <command> (runs before the turn may end; must pass) · /verify off to clear · current: {current}"
+  },
+  "input.slash.verifyNone": {
+    "zh": "未配置",
+    "en": "not set"
+  },
+  "input.slash.verifySet": {
+    "zh": "验证命令已设:{cmd}(收尾前自动跑)",
+    "en": "Verify command set: {cmd} (runs before each turn ends)"
+  },
+  "input.slash.verifyCleared": {
+    "zh": "验证命令已关闭",
+    "en": "Verify command cleared"
+  },
+  "input.steer.waiting": {
+    "zh": "插话等待区",
+    "en": "Queued messages"
+  },
+  "input.steer.hint": {
+    "zh": "等 agent 到达可读取点后插入 · ↑ 取回编辑",
+    "en": "Delivered at the next boundary · ↑ to recall"
+  },
+  "input.steer.now": {
+    "zh": "立即插话",
+    "en": "Interrupt & send"
+  },
+  "input.steer.remove": {
+    "zh": "撤回(仍可在 ↑ 历史里找到)",
+    "en": "Remove (still in ↑ history)"
+  },
+  "plan.autoKickoff": {
+    "zh": "计划已批准,开始执行。",
+    "en": "The plan is approved — proceed with it now."
+  },
+  "msg.interrupted": {
+    "zh": "已在此处打断",
+    "en": "Interrupted here"
+  },
   "input.send": {
     "zh": "发送",
     "en": "Send"
@@ -922,6 +962,42 @@ registerMessages({
   "settings.asr.localRemove": {
     "zh": "删除",
     "en": "Remove"
+  },
+  "settings.aux.llmLabel": {
+    "zh": "辅助模型 · LLM",
+    "en": "Auxiliary model · LLM"
+  },
+  "settings.aux.llmHint": {
+    "zh": "后台/特殊 agent(Muse、Historian)用的模型,与主模型分开挑,便宜档就够。不选=跟随 Forsion 后台的默认。",
+    "en": "Model used by background agents (Muse, Historian). Picked separately from your main model — a cheap tier is plenty. Unset = follow the Forsion admin default."
+  },
+  "settings.aux.visionLabel": {
+    "zh": "辅助模型 · 图像识别",
+    "en": "Auxiliary model · Image recognition"
+  },
+  "settings.aux.visionHint": {
+    "zh": "主模型没有原生多模态时,图片先经它转成文字再交给主模型;非聊天场景(插件、自动化)要识图也直接调它。",
+    "en": "When your main model has no native image input, pictures are transcribed by this model first. Non-chat callers (plugins, automations) use it directly too."
+  },
+  "settings.aux.following": {
+    "zh": "当前跟随云端默认:{model}",
+    "en": "Currently following the cloud default: {model}"
+  },
+  "onboarding.aux.stepLabel": {
+    "zh": "辅助模型",
+    "en": "Auxiliary models"
+  },
+  "onboarding.aux.intro": {
+    "zh": "可选。留空即跟随 Forsion 后台的默认,之后在「设置 → 模型」随时可改。",
+    "en": "Optional. Leave unset to follow the Forsion admin defaults; you can change these any time in Settings → Models."
+  },
+  "settings.customProvider.noVisionLabel": {
+    "zh": "无多模态的模型(逗号分隔,可留空)",
+    "en": "Models without vision (comma-separated, optional)"
+  },
+  "settings.customProvider.noVisionHint": {
+    "zh": "默认认为该 provider 的模型都能看图。把已知纯文本的模型名填在这里,它们遇到图片会自动改走辅助的图像识别模型。",
+    "en": "Models here are assumed to accept images. List the known text-only ones — they will route pictures through the image-recognition auxiliary model instead."
   },
   "settings.asr.chooseLabel": {
     "zh": "语音输入用哪个模型",
@@ -1864,10 +1940,14 @@ registerMessages({
   "settings.remotesync.dbxReconnect": { "zh": "重新连接", "en": "Reconnect" },
   "settings.remotesync.dbxConnected": { "zh": "已连接:{who}", "en": "Connected: {who}" },
   "settings.remotesync.dbxOpened": { "zh": "已打开浏览器授权页;同意后把页面上的授权码粘贴到下方。", "en": "Browser opened; approve and paste the code shown back below." },
+  "settings.remotesync.dbxHintBuiltin": { "zh": "点「连接 Dropbox」在浏览器登录授权即可,授权完自动返回;文件同步到 Dropbox 的 应用/Forsion 目录下,凭据只存本机。", "en": "Click Connect Dropbox, sign in and approve in your browser — it returns automatically. Files live under Apps/Forsion in your Dropbox; credentials stay on this device." },
+  "settings.remotesync.dbxUseOwnApp": { "zh": "改用自建 Dropbox 应用", "en": "Use my own Dropbox app" },
+  "settings.remotesync.dbxOpenedAuto": { "zh": "已打开浏览器授权页;在浏览器里同意后会自动返回,无需手动复制。", "en": "Browser opened; approve there and the app picks it up automatically — no copy/paste." },
+  "settings.remotesync.dbxWaiting": { "zh": "等待浏览器完成授权…", "en": "Waiting for browser authorization…" },
   "settings.remotesync.dbxCodePlaceholder": { "zh": "粘贴授权码", "en": "Paste authorization code" },
   "settings.remotesync.dbxFinish": { "zh": "完成连接", "en": "Finish" },
   "settings.remotesync.dbxNeedKey": { "zh": "先填 App Key", "en": "Enter App Key first" },
-  "settings.remotesync.dbxHint": { "zh": "在 dropbox.com/developers 创建应用(Scoped access,权限勾 files.content.read/write),App Key 填这里;授权走浏览器,凭据只存本机。", "en": "Create an app at dropbox.com/developers (Scoped access with files.content.read/write), paste its App Key here; authorization happens in your browser and credentials stay on this device." },
+  "settings.remotesync.dbxHint": { "zh": "在 dropbox.com/developers 创建应用(Scoped access,权限勾 files.content.read/write),把 Redirect URI 登记为 http://localhost:53682/ ,App Key 填这里;点连接后在浏览器同意即自动完成,凭据只存本机。", "en": "Create an app at dropbox.com/developers (Scoped access with files.content.read/write), register http://localhost:53682/ as a Redirect URI, then paste its App Key here. Approving in the browser completes the connection automatically; credentials stay on this device." },
   "settings.remotesync.backendOff": { "zh": "关闭", "en": "Off" },
   "settings.remotesync.backendPenzor": { "zh": "Forsion 云端(条件写,推荐)", "en": "Forsion Cloud (conditional writes, recommended)" },
   "settings.remotesync.penzorVault": { "zh": "同步库名(默认 default)", "en": "Sync vault name (default: default)" },

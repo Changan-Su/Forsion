@@ -7,7 +7,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp, Square, Plus, Mic, ImagePlus, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, MessageSquare, Loader2, type LucideIcon,
+  Hand, ShieldCheck, ShieldAlert, Settings2, MessageSquare, Loader2, Clock, Zap, type LucideIcon,
 } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
@@ -83,6 +83,9 @@ export const Composer2: React.FC<{
   onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>) => void
   maxIterations?: number
   onMaxIterationsChange?: (n: number) => void
+  /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令;空=未配置。 */
+  verifyCommand?: string
+  onVerifyCommandChange?: (cmd: string) => void
   planMode?: boolean
   onPlanModeChange?: (on: boolean) => void
   voiceMode?: boolean
@@ -115,12 +118,21 @@ export const Composer2: React.FC<{
   onAppendConsumed?: () => void
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
   sentHistory?: string[]
+  /** steer 等待区:run 跑动中已发出、还没被引擎注入的消息(注入即从这里消失并上屏)。 */
+  pendingSteer?: Array<{ id: string; text: string }>
+  /** 删除一条等待中的插话(文本仍留在 ↑ 历史)。 */
+  onCancelSteer?: (msgId: string) => void
+  /** ↑ 撤回:取回最新一条等待中的插话放回输入框。返回文本;来不及则 null。 */
+  onWithdrawSteer?: (msgId: string) => Promise<string | null>
+  /** 「立即插话」:打断当前 run,把等待区消息强发。 */
+  onSteerNow?: () => void
 }> = ({
   disabled, running, execConfig,
   models, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
   maxIterations, onMaxIterationsChange,
+  verifyCommand, onVerifyCommandChange,
   planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
   groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
   agents, onNewSession, onBranch, onOpenSettings,
@@ -128,6 +140,7 @@ export const Composer2: React.FC<{
   quotedText, onClearQuote,
   contextWindow, ctxTokens, sessionTokens, onCompact,
   seedText, onSeedConsumed, appendText, onAppendConsumed, sentHistory,
+  pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
 }) => {
   const { t, locale } = useI18n()
   const [draft, setDraft] = useState('')
@@ -311,6 +324,10 @@ export const Composer2: React.FC<{
       '/loop': onMaxIterationsChange
         ? () => { setDraft('/loop '); setSlashIndex(0); requestAnimationFrame(autoGrow) }
         : undefined,
+      // 验证回路仅 host 会话(引擎在本机 cwd 跑命令;沙箱会话没有本机工作区)。
+      '/verify': isHost && onVerifyCommandChange
+        ? () => { setDraft('/verify '); setSlashIndex(0); requestAnimationFrame(autoGrow) }
+        : undefined,
       '/think': onThinkingChange ? () => { setDraft('/think '); setSlashIndex(0); requestAnimationFrame(autoGrow) } : undefined,
       '/approval': () => { setOpenMenu('mode'); close() },
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
@@ -346,6 +363,7 @@ export const Composer2: React.FC<{
             `approval=${execConfig.approvalMode || '-'}`,
             `cwd=${execConfig.cwd || '-'}`,
             `loop=${maxIterations || 90}`,
+            `verify=${verifyCommand || '-'}`,
             `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
           ].join('\n  '),
         )
@@ -408,7 +426,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow])
 
   const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
   const slashMatches = useMemo<SlashItem[]>(() => {
@@ -553,6 +571,23 @@ export const Composer2: React.FC<{
       requestAnimationFrame(autoGrow)
       return
     }
+    // /verify <命令|off>:设/清本会话验证命令(收尾闸门;引擎收尾前自动跑,不绿不许收)。
+    const verifyMatch = /^\/verify(?:\s+([\s\S]+))?$/i.exec(text)
+    if (verifyMatch && isHost && onVerifyCommandChange) {
+      const arg = (verifyMatch[1] || '').trim()
+      if (!arg) {
+        setHint(t('input.slash.verifyUsage', { current: verifyCommand || t('input.slash.verifyNone') }))
+      } else if (/^(off|clear|关闭)$/i.test(arg)) {
+        onVerifyCommandChange('')
+        setHint(t('input.slash.verifyCleared'))
+      } else {
+        onVerifyCommandChange(arg)
+        setHint(t('input.slash.verifySet', { cmd: arg }))
+      }
+      setDraft('')
+      requestAnimationFrame(autoGrow)
+      return
+    }
     if (onVoiceModeChange && /^\/(voice|text)$/i.test(text)) {
       const on = /^\/voice$/i.test(text)
       onVoiceModeChange(on)
@@ -690,6 +725,25 @@ export const Composer2: React.FC<{
         />
       )}
       <div className="t2c-inner">
+        {/* steer 等待区:run 跑动中发出的消息在这里排队,引擎注入(turn_boundary)即上屏。
+          * 每条可删(文本仍留在 ↑ 历史);「立即插话」=打断当前 run 强发;↑ 撤回最新一条回输入框。 */}
+        {!!pendingSteer?.length && (
+          <div className="t2c-steer" role="status" aria-label={t('input.steer.waiting')}>
+            {pendingSteer.map((p) => (
+              <div className="t2c-steer-item" key={p.id}>
+                <Clock size={12} className="t2c-steer-ic" />
+                <span className="t2c-steer-text" title={p.text}>{p.text}</span>
+                <button className="t2c-steer-x" title={t('input.steer.remove')} onClick={() => onCancelSteer?.(p.id)}><X size={12} /></button>
+              </div>
+            ))}
+            <div className="t2c-steer-foot">
+              <span className="t2c-steer-hint">{t('input.steer.hint')}</span>
+              {onSteerNow && (
+                <button className="t2c-steer-now" onClick={onSteerNow}><Zap size={11} /> {t('input.steer.now')}</button>
+              )}
+            </div>
+          </div>
+        )}
         <div
           className={`t2c-card${dragOver ? ' dragover' : ''}`}
           onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragOver(true) } }}
@@ -821,6 +875,24 @@ export const Composer2: React.FC<{
                 if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length); return }
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); slashMatches[Math.min(slashIndex, slashMatches.length - 1)]?.run(); return }
                 if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); setSlashSubMenu(null); return }
+              }
+              // steer 撤回优先于历史召回:等待区有货且未进召回态,空/首行 ↑ 先取回最新一条插话
+              // (prepend 进草稿,类 pi 的 Alt+Up;再按 ↑ 继续取更早的,取完自然落回历史召回)。
+              if (e.key === 'ArrowUp' && pendingSteer?.length && onWithdrawSteer && histPos === 0
+                && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
+                && draft.slice(0, e.currentTarget.selectionStart).indexOf('\n') === -1) {
+                e.preventDefault()
+                const last = pendingSteer[pendingSteer.length - 1]
+                void onWithdrawSteer(last.id).then((text) => {
+                  if (!text) return // 来不及(已注入/run 已收尾):等待区由事件流收拾,这里不动草稿
+                  setDraft((d) => (d.trim() ? `${text}\n\n${d}` : text))
+                  requestAnimationFrame(() => {
+                    const ta = taRef.current
+                    if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }
+                    autoGrow()
+                  })
+                })
+                return
               }
               // 历史召回:走到这里说明无浮层消费方向键(菜单激活时已 return)。空/首行 ↑ 取更旧、末行 ↓ 取更新。
               if (e.key === 'ArrowUp' && e.currentTarget.selectionStart === e.currentTarget.selectionEnd

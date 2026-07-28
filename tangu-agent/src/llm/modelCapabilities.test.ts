@@ -5,6 +5,7 @@ import {
   supportedThinkingLevels,
   normalizeThinkingLevel,
   applyThinking,
+  modelSupportsVision,
   type ThinkingLevel,
 } from './modelCapabilities.js';
 
@@ -204,5 +205,38 @@ describe('normalizeThinkingLevel — 旧值兼容', () => {
 
   it('可指定兜底档', () => {
     expect(normalizeThinkingLevel(undefined, 'off')).toBe('off');
+  });
+});
+
+describe('modelSupportsVision — 黑名单制', () => {
+  it('未登记的模型一律当作有视觉(默认放行,含未来新模型)', () => {
+    for (const id of ['gpt-5', 'claude-sonnet-5', 'gemini-3-pro', 'qwen3-max', 'openai/gpt-6-turbo', '', '某个还没出的模型']) {
+      expect(modelSupportsVision(id)).toBe(true);
+    }
+  });
+
+  it('已知纯文本族判为无视觉', () => {
+    for (const id of ['gpt-3.5-turbo', 'o1-mini', 'o1-preview', 'deepseek-chat', 'deepseek-reasoner', 'qwq-32b', 'text-embedding-3-large', 'whisper-1']) {
+      expect(modelSupportsVision(id)).toBe(false);
+    }
+  });
+
+  it('带 <providerId>/ 前缀的直连 id 同样命中(只拿裸模型名匹配)', () => {
+    expect(modelSupportsVision('siliconflow/deepseek-chat')).toBe(false);
+    expect(modelSupportsVision('ollama/qwq')).toBe(false);
+    // 只是名字里含 "text" 不算(锚点要求 text- 在段首)
+    expect(modelSupportsVision('my-text-model')).toBe(true);
+  });
+
+  it('⚠️providerId 段绝不参与匹配(误伤是最坏的方向)', () => {
+    // text-generation-webui 托的 LLaVA 是货真价实的视觉模型;匹配全串会被 `text-` 规则误杀
+    expect(modelSupportsVision('text-generation-webui/llava-v1.6-mistral-7b')).toBe(true);
+    expect(modelSupportsVision('openrouter/deepseek-ai/DeepSeek-R1')).toBe(false); // 裸名仍命中
+  });
+
+  it('显式 override 压过表(admin 标注 / provider noVisionModelIds)', () => {
+    expect(modelSupportsVision('gpt-5', false)).toBe(false);
+    expect(modelSupportsVision('deepseek-chat', true)).toBe(true);
+    expect(modelSupportsVision('deepseek-chat', null)).toBe(false); // null = 没标注 → 查表
   });
 });

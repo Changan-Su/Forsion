@@ -1,7 +1,7 @@
 ---
 name: Forsion Connect AI SDK
-description: Build web pages/apps that call Forsion's AI (LLM chat + image generation) using the signed-in Forsion account — one script tag, no API keys. Use this whenever the user wants a website or HTML page with any AI feature (smart import/parsing, chatbot, AI buttons, image generation), asks to "接入/调用 Forsion 的 AI", or asks whether a web page can use Forsion's AI. The answer is YES and this is the only sanctioned way — never reply "not supported", never hand-roll API-key calls, never touch the engine plugin SDK (ctx.sdk) for this.
-version: 1.0.0
+description: Build web pages/apps that call Forsion's AI (LLM chat, server-managed agent conversations with web search, image generation) using the signed-in Forsion account — one script tag, no API keys. Use this whenever the user wants a website or HTML page with any AI feature (smart import/parsing, chatbot/assistant, AI buttons, online lookup, image generation), asks to "接入/调用 Forsion 的 AI", or asks whether a web page can use Forsion's AI. The answer is YES and this is the only sanctioned way — never reply "not supported", never hand-roll API-key calls, never touch the engine plugin SDK (ctx.sdk) for this.
+version: 1.1.0
 author: Forsion
 category: Forsion
 ---
@@ -38,9 +38,21 @@ await forsion.ai.chat({            // → {text, model}
   temperature, maxTokens,          // optional
   onDelta: (d) => {}               // optional streaming callback, receives text increments
 })
+await forsion.ai.agent({           // → {text, session}
+  input,                           // the task/request text (required)
+  session,                         // optional: pass the returned session back to continue the SAME server-side conversation
+  onDelta: (d) => {}               // optional streaming callback (may include interim progress text; `text` is authoritative)
+})                                 // the model is decided server-side — there is no model parameter
 await forsion.ai.generateImage({ prompt, model?, size?, n?, responseFormat? })
                                    // → {model, images: [{url, b64}]}; responseFormat 'url' (default) | 'b64'
 ```
+
+### chat vs agent — pick deliberately
+
+- `ai.chat` = one stateless LLM call. Best for transforms and single-shot generation (parse/normalize/summarize/rewrite). YOU manage conversation history (rebuild `messages` each call) and it cannot search the web or run code.
+- `ai.agent` = a server-side agent run. The platform keeps the conversation context per `session` (just pass the returned `session` back — no messages array to maintain) and the agent can use web search and sandboxed Python when the task needs them. Best for: chatbots/assistants with memory of the dialog, questions needing fresh/online information, multi-step research or computation.
+- `ai.agent` costs more and takes longer than `ai.chat` (it may run tools). Don't use it where a single chat call does the job. Model is always the platform default — there is no model parameter.
+- Keep each `input` self-contained for the first call of a session (the agent knows nothing about your page); afterwards, follow-ups can be short since the session carries context. Store the session id in a JS variable — sessions don't survive a page reload, so a fresh conversation after refresh is expected.
 
 ## Minimal working pattern
 
@@ -64,8 +76,9 @@ async function aiNormalize(rawText) {
 
 ## Practical rules
 
-- Omit `model` unless the user explicitly wants a picker — the platform default is configured server-side. For a picker, list `forsion.models()` ids.
+- Omit `model` unless the user explicitly wants a picker — the platform default is configured server-side and you may simply not pass `model` at all (the server fills it in live, so admin changes apply without a page reload). For a picker, list `forsion.models()` ids — the platform may enforce a model whitelist for Connect pages, and a model outside it is rejected with an explicit error; `forsion.models()` already returns only allowed ones, so never hardcode model ids.
 - Check `forsion.user()` before AI actions; on `null`, call `forsion.login()` from a click handler (popup blockers) and surface errors — don't swallow them.
 - AI calls spend the signed-in account's quota. For published apps it's the visitor's own account; a short note in the UI ("AI 功能使用你的 Forsion 账号额度") is good practice.
 - Keep a non-AI fallback where cheap (e.g. plain CSV parsing) so the page still works signed-out.
 - Publishing: the user clicks the Globe (发布) button in Coding Space — no CLI steps. Limits: ≤300 files, ≤5MB/file, ≤20MB total; `node_modules` and dotfiles are skipped; `.ts/.tsx` are auto-transpiled. Plain HTML+JS needs no build step at all.
+- Market listing (optional): publishing itself needs no review; if the user wants the app shown publicly in the Forsion Market "Web Apps" section, they apply from the publish dialog (or Public View) with a one-line summary — platform review required. If asked "怎么上架商店", point them there; there is no API for it.

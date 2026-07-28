@@ -31,6 +31,8 @@ import { zoomOf } from '@lcl/engine'
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
 const EMPTY_USAGE = { ctx: 0, base: 0, live: 0 }
+const EMPTY_STEER: Array<{ id: string; text: string }> = []
+const EMPTY_STRS: string[] = []
 
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
@@ -63,6 +65,12 @@ export function ChatView({ leaf, params }: ViewProps) {
     draftAppend: state.draftAppend,
     appendDraft: state.appendDraft,
     clearDraftAppend: state.clearDraftAppend,
+    steerPending: (activeId && state.steerPendingBySession[activeId]) || EMPTY_STEER,
+    steerSent: (activeId && state.steerSentBySession[activeId]) || EMPTY_STRS,
+    steerRestore: (activeId && state.steerRestoreBySession[activeId]) || null,
+    withdrawSteer: state.withdrawSteer,
+    steerNow: state.steerNow,
+    clearSteerRestore: state.clearSteerRestore,
     engines: state.engines,
     engineCaps: state.engineCaps,
     agentDefs: state.agentDefs,
@@ -145,8 +153,13 @@ export function ChatView({ leaf, params }: ViewProps) {
   const availableEngines = s.engines.filter((e) => e.available)
   const curEngineId = activeId ? execConfig.engineId : s.newChatCfg.engineId
   const streamingId = useMemo(() => activeMessages.find((m) => m.status === 'streaming')?.id ?? null, [activeMessages])
-  // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)。
-  const sentHistory = useMemo(() => activeMessages.filter((m) => m.role === 'user').map((m) => m.content), [activeMessages])
+  // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
+  // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
+  const sentHistory = useMemo(() => {
+    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>')).map((m) => m.content)
+    const have = new Set(users)
+    return [...users, ...s.steerSent.filter((x) => !have.has(x))]
+  }, [activeMessages, s.steerSent])
 
   const chatAgentSlug = mvCfg.agentSlug || s.defaultAgentSlug
   const chatAgentAvatar = chatAgentSlug ? s.agentAvatars[chatAgentSlug] : undefined
@@ -462,6 +475,10 @@ export function ChatView({ leaf, params }: ViewProps) {
           onThinkingChange={(lv) => s.setSessionThinking(lv, activeId)}
           maxIterations={mvCfg.maxIterations}
           onMaxIterationsChange={activeId ? (n) => s.setSessionMaxIterations(n, activeId) : (n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
+          verifyCommand={mvCfg.verifyCommand}
+          onVerifyCommandChange={activeId
+            ? (cmd) => s.setExecConfig({ verifyCommand: cmd || undefined }, activeId)
+            : (cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
           planMode={mvCfg.planMode}
           onPlanModeChange={activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
           voiceMode={voiceOn}
@@ -486,11 +503,15 @@ export function ChatView({ leaf, params }: ViewProps) {
           ctxTokens={activeUsage.ctx}
           sessionTokens={activeUsage.base + activeUsage.live}
           onCompact={() => void s.compact(activeId)}
-          seedText={s.pendingDraft}
+          seedText={s.steerRestore ?? s.pendingDraft}
           appendText={s.draftAppend}
           onAppendConsumed={s.clearDraftAppend}
-          onSeedConsumed={() => s.setPendingDraft(null)}
+          onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else s.setPendingDraft(null) }}
           sentHistory={sentHistory}
+          pendingSteer={s.steerPending}
+          onCancelSteer={activeId ? (id) => { void s.withdrawSteer(activeId, id) } : undefined}
+          onWithdrawSteer={activeId ? (id) => s.withdrawSteer(activeId, id) : undefined}
+          onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
       </div>
       {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——

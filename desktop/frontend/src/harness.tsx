@@ -34,6 +34,8 @@ let nextId = 1
 function Harness() {
   // ?seed=<md> 种入首块内容,供 Playwright 验证「加载既有 markdown 的解析/往返」(如自定义 HTML 标记)。
   const seed = new URLSearchParams(location.search).get('seed') ?? ''
+  // ?anchor=<文本>:模拟「从源码模式切回来」带过来的光标锚点,验证落点(见 amadeus/lib/modeCursor)。
+  const anchor = new URLSearchParams(location.search).get('anchor') ?? undefined
   const [blocks, setBlocks] = useState<B[]>([{ id: 'b0', content: seed }])
   const [focus, setFocus] = useState<{ id: string; place: FocusPlace } | null>({ id: 'b0', place: 'end' })
   ;(window as unknown as { __harness: { blocks: B[] } }).__harness = { blocks }
@@ -68,7 +70,9 @@ function Harness() {
           onMergePrev={() => {}}
           onArrowOut={() => {}}
           onMoveDir={() => {}}
-          focusPlace={focus?.id === b.id ? focus.place : null}
+          // 带 anchor 时 place 固定 'start' —— 与生产的 requestFocusAt 一致(锚点找不到就停在块首)
+          focusPlace={focus?.id === b.id ? (anchor ? 'start' : focus.place) : null}
+          focusAnchor={focus?.id === b.id ? anchor : undefined}
           onFocused={() => setFocus(null)}
           requestSelfFocus={(place) => setFocus({ id: b.id, place })}
           onOpenWiki={() => {}}

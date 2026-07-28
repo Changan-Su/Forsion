@@ -1,14 +1,15 @@
 /**
  * Dropbox 后端(Forsion 自研:直连公开 REST v2 API;未使用、未参考 remotely-save 的
  * Dropbox 实现 —— 合规边界见 NOTICE.md):
- *  - OAuth PKCE + refresh token:授权流程由宿主完成(开浏览器 + 用户回贴授权码),
- *    本层拿长期 refresh token,access token 内存缓存、过期自动续期;
+ *  - OAuth PKCE + refresh token:授权流程由宿主完成(开浏览器;回环 redirect_uri 自动回填,
+ *    起不来时退回用户手贴授权码),本层拿长期 refresh token,access token 内存缓存、过期自动续期;
  *  - 条件写(CAS):writeFile 三态 mode(null→add / rev→update / undefined→overwrite),
  *    rm 带 parent_rev —— walk→push 窗口的并发写在 Dropbox 侧变 409,绝不静默覆盖;
  *  - Dropbox-API-Arg 头必须纯 ASCII:中文路径一律 \uXXXX 转义(asciiJson)。
  * 隔离约定:不 import electron/desktop;凭据由宿主(remotesyncIpc)注入。
  */
 import { createHash, randomBytes } from 'node:crypto'
+import http from 'node:http'
 import type { RemoteEntity, RemoteFs } from './types'
 
 export interface DropboxConfig {
@@ -22,6 +23,16 @@ export interface DropboxConfig {
 
 const API = 'https://api.dropboxapi.com'
 const CONTENT = 'https://content.dropboxapi.com'
+
+/**
+ * Forsion 官方 Dropbox 应用的 App Key —— 填了它,用户点「连接 Dropbox」直接登,不用自建应用。
+ * PKCE 公共客户端没有 secret,App Key 随包分发是官方认可的做法(remotely-save 等同款)。
+ * 空 = 尚未登记官方应用,UI 退回「用户自建应用 + 填 App Key」。
+ * 登记步骤:dropbox.com/developers → Create app → Scoped access → App folder →
+ * Permissions 勾 account_info.read / files.metadata.read+write / files.content.read+write →
+ * Settings → OAuth2 Redirect URIs 加 http://localhost:53682/ → 复制 App key 填到这里。
+ */
+export const FORSION_DROPBOX_APP_KEY = ''
 
 /** Dropbox-API-Arg 头要求纯 ASCII:非 ASCII 一律 \uXXXX 转义(中文文件名必踩)。 */
 export function asciiJson(v: unknown): string {
@@ -55,17 +66,85 @@ export function pkcePair(): { verifier: string; challenge: string } {
   return { verifier, challenge }
 }
 
-export function dropboxAuthUrl(appKey: string, challenge: string): string {
-  return `https://www.dropbox.com/oauth2/authorize?client_id=${encodeURIComponent(appKey)}&response_type=code&token_access_type=offline&code_challenge=${encodeURIComponent(challenge)}&code_challenge_method=S256`
+/** 带 redirectUri = 回环回调流(授权码自动回填);不带 = Dropbox 把授权码显示在页面上让用户手贴。 */
+export function dropboxAuthUrl(appKey: string, challenge: string, opts: { redirectUri?: string; state?: string } = {}): string {
+  const q = new URLSearchParams({
+    client_id: appKey,
+    response_type: 'code',
+    token_access_type: 'offline',
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+  })
+  if (opts.redirectUri) q.set('redirect_uri', opts.redirectUri)
+  if (opts.state) q.set('state', opts.state)
+  return `https://www.dropbox.com/oauth2/authorize?${q.toString()}`
 }
 
-/** 授权码 → refresh token + 账号身份(fingerprint 绑账号 / UI 显示用)。 */
+/** 回环回调请求 → 授权码。回环口本机任意进程都能打,state 不符一律拒(CSRF/串号)。
+ *  'no-code' = 浏览器顺带来的噪声请求(/favicon.ico 等),调用方应忽略而非终止等待。 */
+export function parseDropboxCallback(reqUrl: string, expectState: string): { code: string } | { error: string } {
+  let q: URLSearchParams
+  try {
+    q = new URL(reqUrl, 'http://localhost').searchParams
+  } catch {
+    return { error: 'bad-callback-url' }
+  }
+  if (!q.has('code') && !q.has('error')) return { error: 'no-code' }
+  if (q.get('state') !== expectState) return { error: 'state-mismatch' }
+  const err = q.get('error')
+  if (err) return { error: `${err}${q.get('error_description') ? `: ${q.get('error_description')}` : ''}` }
+  return { code: q.get('code') ?? '' }
+}
+
+const page = (msg: string): string =>
+  `<!doctype html><meta charset="utf-8"><title>Forsion</title><body style="font:16px system-ui;display:grid;place-items:center;height:90vh;margin:0"><p>${msg.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;'))}</p></body>`
+
+/** 回环回调服务器(RFC 8252 native app flow):只听 127.0.0.1,收到回调即 onResult 并自关。
+ *  端口起不来(被占/受限)→ null,调用方降级为手贴授权码。port=0 = 交系统选(测试用)。 */
+export function dropboxCallbackServer(
+  port: number,
+  state: string,
+  onResult: (r: { code: string } | { error: string }) => void,
+): Promise<{ port: number; close: () => void } | null> {
+  return new Promise((resolve) => {
+    let done = false
+    const srv = http.createServer((req, res) => {
+      const r = parseDropboxCallback(req.url ?? '', state)
+      if ('error' in r && r.error === 'no-code') {
+        res.writeHead(404).end() // 浏览器顺带来的噪声(/favicon.ico):不算授权结果,继续等
+        return
+      }
+      res.writeHead('code' in r ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(page('code' in r ? 'Forsion:授权成功,可以关闭此页面 / Authorized, you can close this tab.' : `Forsion: ${r.error}`))
+      if (done) return
+      done = true
+      srv.close()
+      onResult(r)
+    })
+    srv.on('error', () => resolve(null)) // EADDRINUSE 等
+    srv.listen(port, '127.0.0.1', () => {
+      srv.unref() // 别拖住 app 退出
+      resolve({
+        port: (srv.address() as { port: number }).port,
+        close: () => {
+          done = true
+          srv.close()
+        },
+      })
+    })
+  })
+}
+
+/** 授权码 → refresh token + 账号身份(fingerprint 绑账号 / UI 显示用)。
+ *  redirectUri 必须与授权请求逐字一致(OAuth2 要求),手贴流程则两边都不带。 */
 export async function dropboxExchangeCode(
   appKey: string,
   code: string,
   verifier: string,
+  redirectUri?: string,
 ): Promise<{ refreshToken: string; accountId: string; email?: string; name?: string }> {
   const body = new URLSearchParams({ grant_type: 'authorization_code', code: code.trim(), code_verifier: verifier, client_id: appKey })
+  if (redirectUri) body.set('redirect_uri', redirectUri)
   const rsp = await fetch(`${API}/oauth2/token`, { method: 'POST', body })
   if (!rsp.ok) throw new Error(`dropbox oauth ${rsp.status}: ${(await rsp.text().catch(() => '')).slice(0, 200)}`)
   const j = (await rsp.json()) as { refresh_token?: string; access_token?: string; account_id?: string }

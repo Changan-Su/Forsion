@@ -19,11 +19,11 @@ import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
 } from './forsionAuth'
 import { importMcp, importSkills, scanAll } from './discovery'
-import { checkForUpdates, downloadUpdate, installUpdate } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs } from './marketInstall'
-import { serveDir as codePreviewServe, servePathRoot, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { serveDir as codePreviewServe, servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
 import {
   collectProjectFiles, readConnectMeta, writeConnectMeta, cloudJson, makePreviewProxy, type CloudCreds,
@@ -36,7 +36,7 @@ import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { registerRemoteSync } from './remotesyncIpc'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { KNOWN_APPS } from '../shared/knownApps'
-import { BROWSER_PARTITION } from '../shared/browser'
+import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, miniSizeFromWidth, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
@@ -115,6 +115,8 @@ interface DirectProviderConfig {
   imageModelIds?: string[]
   ttsModelIds?: string[]
   asrModelIds?: string[]
+  /** 该 provider 里**没有**多模态的模型(黑名单;默认认为都能看图)。命中的模型遇图会转交辅助视觉模型。 */
+  noVisionModelIds?: string[]
 }
 
 async function readProvidersFile(): Promise<DirectProviderConfig[]> {
@@ -276,6 +278,10 @@ interface TanguStoredConfig {
   backendUrl: string // external 模式
   token: string // external 模式
   modelId: string
+  /** 辅助模型 · LLM(后台/特殊 agent 用;落 config.json models.background;缺省=跟随 app 级槽)。 */
+  backgroundModelId: string
+  /** 辅助模型 · 图像识别(主模型无原生视觉时的看图兜底 + 非聊天识图;落 config.json models.vision)。 */
+  visionModelId: string
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -341,6 +347,8 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   backendUrl: 'http://localhost:8787',
   token: '',
   modelId: '',
+  backgroundModelId: '',
+  visionModelId: '',
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
@@ -428,6 +436,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
   const shell = await readShellConfig()
   const home = await readHomeConfig()
   const cloud = home.cloud || {}, browser = home.browser || {}, notes = home.notes || {}, tts = home.tts || {}, asr = home.asr || {}
+  const auxModels = home.models || {} // 辅助模型段(引擎侧 specialAgentsConfig / visionService 读同一段)
   const merged: TanguStoredConfig = {
     ...DEFAULT_CONFIG,
     ...shell, // 旧 desktop 文件:既给 shell 键,也作未迁移段的回落
@@ -452,6 +461,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       ttsAutoSpeak: !!tts.autoSpeak,
     } : {}),
     ...(home.asr !== undefined ? { asrModelId: asr.modelId || '', asrBackend: asr.backend === 'local' ? 'local' : 'cloud' } : {}),
+    ...(home.models !== undefined ? { backgroundModelId: auxModels.background || '', visionModelId: auxModels.vision || '' } : {}),
   }
   // 环境变量兜底:TANGU_CLOUD_URL(managed/登录默认)、TANGU_BACKEND_URL(external 外部地址)。
   if (!merged.cloudUrl) {
@@ -476,11 +486,14 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   // config-backed 键 → config.json 段
   const home = await readHomeConfig()
   const cloud = { ...(home.cloud || {}) }, browser = { ...(home.browser || {}) }, notes = { ...(home.notes || {}) }, tts = { ...(home.tts || {}) }, asr = { ...(home.asr || {}) }
-  let cT = false, bT = false, oT = false, nT = false, tT = false, aT = false
+  const auxModels = { ...(home.models || {}) }
+  let cT = false, bT = false, oT = false, nT = false, tT = false, aT = false, mT = false
   if ('cloudUrl' in patch) { cloud.url = patch.cloudUrl; cT = true }
   if ('modelId' in patch) { cloud.defaultModel = patch.modelId; cT = true }
   if ('asrModelId' in patch) { asr.modelId = patch.asrModelId; aT = true }
   if ('asrBackend' in patch) { asr.backend = patch.asrBackend; aT = true }
+  if ('backgroundModelId' in patch) { auxModels.background = patch.backgroundModelId; mT = true }
+  if ('visionModelId' in patch) { auxModels.vision = patch.visionModelId; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
   if ('browserEnabled' in patch) { browser.enabled = patch.browserEnabled; bT = true }
@@ -501,7 +514,8 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if (nT) home.notes = notes
   if (tT) home.tts = tts
   if (aT) home.asr = asr
-  if (cT || bT || oT || nT || tT || aT) await writeHomeConfig(home)
+  if (mT) home.models = auxModels
+  if (cT || bT || oT || nT || tT || aT || mT) await writeHomeConfig(home)
   return loadConfig()
 }
 
@@ -1001,11 +1015,14 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
   session.defaultSession.setPermissionCheckHandler(() => true)
   // 内置浏览器的 guest 走独立分区:上面那条「全放行」是为 App 自己的麦克风语音输入开的,
-  // 任意第三方站点不该白拿麦克风/摄像头/定位/通知 —— 该分区一律拒绝(且 cookie 与 App 隔离)。
+  // 任意第三方站点不该白拿麦克风/摄像头/定位/通知 —— 该分区**默认全拒**(且 cookie 与 App 隔离),
+  // 只放行 GUEST_ALLOWED_PERMISSIONS(指针锁/全屏:必须有手势、Esc 可退、不泄露数据)。
+  // ⚠️别改回无差别 callback(false):那样任何 3D/FPS/地图网页都会 `requestPointerLock` 报权限拒绝。
   try {
     const bs = session.fromPartition(BROWSER_PARTITION)
-    bs.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
-    bs.setPermissionCheckHandler(() => false)
+    const allow = (p: string): boolean => GUEST_ALLOWED_PERMISSIONS.includes(p)
+    bs.setPermissionRequestHandler((_wc, permission, callback) => callback(allow(permission)))
+    bs.setPermissionCheckHandler((_wc, permission) => allow(permission))
     bs.setDevicePermissionHandler(() => false) // HID/USB/串口不走上面那套权限检查,单独关
     // 下载:**必须放行**——网页的「导出/下载文件」就是这条路,`blob:` 更是根本交不给系统浏览器
     // (曾一律 preventDefault 转外部,等于把导出功能整个做废)。默认行为就是弹系统保存对话框:
@@ -1225,6 +1242,15 @@ app.whenReady().then(async () => {
     return { url: `${base}/${encodeURIComponent(basename(real))}` }
   })
 
+  // 没有本机路径的 HTML(云沙箱文件 / 对话内联)——同样给真实源,不许退回 srcdoc。
+  ipcMain.handle('codePreview:serveHtml', async (e, html: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    if (typeof html !== 'string') throw new Error('非法的预览内容')
+    // 内联内容常驻主进程内存(没有落盘可回收),按字节数封顶——64 条 × 无上限单条 = 无上限内存。
+    if (Buffer.byteLength(html, 'utf8') > 8 * 1024 * 1024) throw new Error('预览内容过大(>8MB)')
+    return serveInlineHtml(html)
+  })
+
   // ── Forsion Connect:Coding Space 发布 + 预览态 AI 代理(token 只活在主进程)──
   const resolveConnectCloud = async (): Promise<CloudCreds> => {
     const cfg = await loadConfig()
@@ -1291,6 +1317,51 @@ app.whenReady().then(async () => {
       return { ok: true }
     } catch (e) {
       return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
+    }
+  })
+
+  // ── 商店上架(发布零审核;上架应用市场需审,审核在服务端 admin) ──
+
+  ipcMain.handle('connect:listingApply', async (_e, p: { slug: string; summary: string }) => {
+    if (!p || typeof p.slug !== 'string' || !p.slug || typeof p.summary !== 'string' || !p.summary.trim()) {
+      return { ok: false, code: 'error', detail: '参数不完整' }
+    }
+    const c = await resolveConnectCloud()
+    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
+    try {
+      const { status, json } = await cloudJson(c, 'PUT', `/api/connect/apps/${encodeURIComponent(p.slug)}/listing`, { summary: p.summary })
+      if (status === 401) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
+      if (status !== 200) return { ok: false, code: json?.code || 'error', detail: json?.detail || `HTTP ${status}` }
+      return { ok: true, status: json.status }
+    } catch (e) {
+      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
+    }
+  })
+
+  ipcMain.handle('connect:listingWithdraw', async (_e, slug: string) => {
+    if (!slug || typeof slug !== 'string') return { ok: false, code: 'error', detail: '参数不完整' }
+    const c = await resolveConnectCloud()
+    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
+    try {
+      // 404(没有申请可撤)视同成功 —— 撤回是幂等操作,与 unpublish 同口径。
+      const { status, json } = await cloudJson(c, 'DELETE', `/api/connect/apps/${encodeURIComponent(slug)}/listing`)
+      if (status === 401) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
+      if (status !== 200 && status !== 404) return { ok: false, code: 'error', detail: json?.detail || `HTTP ${status}` }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
+    }
+  })
+
+  // 应用市场「网站应用」公开列表(无需登录;有 token 也无妨,cloudJson 顺带附上)。
+  ipcMain.handle('connect:store', async () => {
+    const c = await resolveConnectCloud()
+    try {
+      const { status, json } = await cloudJson(c, 'GET', '/api/connect/store')
+      if (status !== 200) return { ok: false, detail: json?.detail || `HTTP ${status}` }
+      return { ok: true, base: c.base, items: Array.isArray(json.items) ? json.items : [] }
+    } catch (e) {
+      return { ok: false, detail: (e as Error)?.message || String(e) }
     }
   })
   // Coding Space 的项目根目录 = ~/Forsion/Project(与 Amadeus 的 ~/Forsion/Amadeus 同级;dev=~/Forsion-Dev/Project),
@@ -1702,6 +1773,13 @@ app.whenReady().then(async () => {
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
   ipcMain.handle('updater:check', () => checkForUpdates())
+  // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
+  ipcMain.handle('updater:getBeta', () => betaChannelOn())
+  ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
+    const c = await readHomeConfig()
+    await saveHomeSection('updater', { ...(c.updater || {}), beta: !!on })
+    return { ok: true }
+  })
   ipcMain.handle('updater:download', () => downloadUpdate())
   ipcMain.handle('updater:install', async () => {
     // 先优雅停后端 → 下方 before-quit 见 'stopped' 不再 preventDefault/app.exit(0),

@@ -17,6 +17,7 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { modelContextWindow } from '../services/contextBudget.js';
+import { modelSupportsVision } from '../llm/modelCapabilities.js';
 
 const router = Router();
 
@@ -25,13 +26,16 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     const profile = deps().profile;
     // contextWindow 供客户端「上下文占比」进度条用(per-model 覆盖 ?? 全局默认)。
     // modelType 区分大语言模型 / 生图模型 / 语音识别(后端已分类;桌面模型设置据此分区,generate_image 据此选模型,语音输入据此筛 ASR)。
-    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number }> = [];
+    // supportsVision:能不能直接「看」图。黑名单制(见 modelSupportsVision)——后端/provider 显式
+    // 标了就听标注,没标就默认能看。客户端据此提示「本模型没有多模态,已启用图像识别辅助模型」。
+    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; supportsVision: boolean }> = [];
 
     let forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null } = { status: 'ok', detail: null };
     let cloud: any[] = [];
     let projectDefaultModelId: string | null = null;
     let projectBackgroundModelId: string | null = null;
     let projectImageModelId: string | null = null;
+    let projectVisionModelId: string | null = null;
     try {
       // 优先按应用过滤(admin 的 project_model_configs);brain 未实现该可选方法 → 回退全局列表。
       const listForProject = deps().brain.models.listModelsForProject;
@@ -41,6 +45,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
         projectDefaultModelId = r?.defaultModelId ?? null;
         projectBackgroundModelId = r?.backgroundModelId ?? null;
         projectImageModelId = r?.imageModelId ?? null;
+        projectVisionModelId = r?.visionModelId ?? null;
       } else {
         cloud = (await deps().brain.models.listGlobalModels()) || [];
       }
@@ -51,7 +56,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     for (const m of cloud) {
       if (!m?.id) continue;
       // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm → 桌面把语音识别模型误当聊天模型(见 AsrModelChoice/ChatView 的 modelType 分流)。
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm', contextWindow: modelContextWindow(m.id, m) });
+      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm', contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, typeof m.supportsVision === 'boolean' ? m.supportsVision : undefined) });
     }
     if (forsion.status === 'ok' && cloud.length === 0) {
       // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。
@@ -71,11 +76,12 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     // 旧会话存的裸 id 仍由 registry 形式 2(modelIds 精确命中)照常解析。name 保留裸名供展示。
     const directProviders = deps().brain.models.listDirectProviders?.() ?? [];
     for (const p of directProviders) {
+      const noVision = new Set(p.noVisionModelIds ?? []);
       for (const mid of p.modelIds ?? []) {
-        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: modelContextWindow(mid) });
+        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: modelContextWindow(mid), supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined) });
       }
       for (const mid of p.imageModelIds ?? []) {
-        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0 });
+        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, supportsVision: false });
       }
     }
 
@@ -90,6 +96,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       defaultModelId: projectDefaultModelId || profile.defaultModelId || null,
       backgroundModelId: projectBackgroundModelId,
       imageModelId: projectImageModelId,
+      visionModelId: projectVisionModelId,
       forsion,
     });
   } catch (e: any) {

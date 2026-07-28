@@ -55,6 +55,9 @@ const api = {
   checkForUpdates: (): Promise<any> => ipcRenderer.invoke('updater:check'),
   downloadUpdate: (): Promise<void> => ipcRenderer.invoke('updater:download'),
   installUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:install'),
+  /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
+  getUpdateBeta: (): Promise<boolean> => ipcRenderer.invoke('updater:getBeta'),
+  setUpdateBeta: (on: boolean): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:setBeta', on),
   /** 应用内清空数据(卸载/重置);清完主进程会 relaunch。 */
   clearAppData: (opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('app:clearData', opts),
@@ -99,8 +102,10 @@ const api = {
   /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 加载多文件 web app 预览)。 */
   codePreviewServe: (rootDir: string): Promise<{ origin: string }> => ipcRenderer.invoke('codePreview:serve', rootDir),
   codePreviewStop: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('codePreview:stop'),
-  /** 单文件 HTML 预览:挂其所在目录到令牌根,返回可直接进 iframe 的 http URL。 */
+  /** 单文件 HTML 预览:挂其所在目录到令牌根,返回可直接加载的 http URL。 */
   codePreviewServePath: (filePath: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:servePath', filePath),
+  /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
+  codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
   // ── Forsion Connect:Coding Space 项目发布到云端托管(token 留主进程) ──
@@ -109,6 +114,9 @@ const api = {
   connectPublish: (p: { dir: string; name: string; slug: string; entry: string }): Promise<any> =>
     ipcRenderer.invoke('connect:publish', p),
   connectUnpublish: (slug: string): Promise<any> => ipcRenderer.invoke('connect:unpublish', slug),
+  connectListingApply: (p: { slug: string; summary: string }): Promise<any> => ipcRenderer.invoke('connect:listingApply', p),
+  connectListingWithdraw: (slug: string): Promise<any> => ipcRenderer.invoke('connect:listingWithdraw', slug),
+  connectStore: (): Promise<any> => ipcRenderer.invoke('connect:store'),
   /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict 不覆盖。 */
   writeHostFile: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }> =>
     ipcRenderer.invoke('fs:writeFile', filePath, content, expectedMtimeMs, createNew),
@@ -188,7 +196,7 @@ const api = {
   transcribeAudioFile: (filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribeFile', filePath, req),
   // Computer Use 实时画面:最近被操控窗口的一帧(只读,helper 没跑就 active:false;见 electron/computerUse.ts)。
-  computerUseLiveView: (opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }): Promise<{
+  computerUseLiveView: (opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<{
     active: boolean
     windowId?: number
     pid?: number
@@ -198,6 +206,8 @@ const api = {
     width?: number
     height?: number
     jpegBase64?: string
+    frameSeq?: string
+    unchanged?: boolean
     ageMs?: number
     error?: string
   }> => ipcRenderer.invoke('computerUse:liveView', opts),
@@ -269,6 +279,7 @@ const AGENT_KEYS = [
   'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
   'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',
   'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
+  'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
   'listProviders', 'saveProvider', 'deleteProvider',
   'readMcpConfig', 'writeMcpConfig',

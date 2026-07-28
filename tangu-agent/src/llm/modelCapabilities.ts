@@ -553,3 +553,37 @@ export function applyThinking(
 
   return result;
 }
+
+// ── 视觉(图像识别)能力 ──────────────────────────────────────────────────────
+/**
+ * **黑名单制**:2026 年的主流对话模型绝大多数原生多模态,所以默认当作**有视觉**,只登记已知的
+ * 纯文本族。误判方向是刻意选的——判错「有视觉」→ 图发过去 provider 直接报错(用户立刻看得见);
+ * 判错「无视觉」→ 白跑一次辅助模型、丢掉原图细节(静默劣化,最难发现)。宁可默认放行。
+ *
+ * 覆盖顺序:显式 override(托管面 admin 在模型上标 supportsVision=false / 直连 provider 的
+ * noVisionModelIds)> 本表。表刻意保持短:新模型不断出,靠标注比靠猜准。
+ */
+const NO_VISION_PATTERNS: readonly RegExp[] = [
+  /(^|[-_])(embedding|embed|rerank|reranker|tts|whisper|moderation)([-_.]|$)/i, // 非对话模型
+  /^gpt-3\.5/i,
+  /^o1-(mini|preview)/i,
+  /^(text|davinci|babbage|curie|ada)-/i,
+  /^deepseek-(chat|coder|reasoner|v3|r1)/i, // DeepSeek 官方线纯文本(VL 系不在官方 API)
+  /(^|[-_])qwq([-_.]|$)/i, // QwQ 推理模型纯文本
+];
+
+/**
+ * 模型是否能直接「看」图。override 来自后端标注(null/undefined = 没标注 → 查表)。
+ *
+ * ⚠️只拿**裸模型名**(最后一个 `/` 之后)去匹配,绝不匹配 providerId 段:
+ * `text-generation-webui/llava-v1.6-mistral-7b` 是个货真价实的视觉模型,匹配全串会被 `text-`
+ * 规则误杀(2026-07-27 Codex 评审实例)。反过来「命名里带分隔符的别名漏网」(`azure-gpt-3.5-turbo`)
+ * 是**刻意接受**的:漏网 → 图发过去 provider 报错,用户当场看得见;误伤 → 静默劣化。见上方误判方向。
+ */
+export function modelSupportsVision(modelId: string, override?: boolean | null): boolean {
+  if (typeof override === 'boolean') return override;
+  const id = (modelId || '').trim();
+  if (!id) return true; // 未知模型不拦(见上:默认放行)
+  const bare = id.slice(id.lastIndexOf('/') + 1);
+  return !NO_VISION_PATTERNS.some((re) => re.test(bare));
+}

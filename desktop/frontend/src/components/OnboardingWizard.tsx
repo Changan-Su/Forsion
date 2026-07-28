@@ -18,6 +18,7 @@ import { ThemeCard } from './ThemeCard'
 import { BrandLogo } from './BrandLogo'
 import { LocaleToggle } from './LocaleToggle'
 import { AsrModelChoice } from './AsrModelChoice'
+import { AuxModelChoice } from './AuxModelChoice'
 import { Markdown } from './Markdown'
 import { CHANGELOG } from '../changelog'
 import { track } from '../achievements/store'
@@ -610,6 +611,12 @@ export const OnboardingWizard: React.FC<{
                   </div>
                 )}
               </div>
+              {/* 辅助模型(可选):留空即跟随云端默认,不拦引导流程,所以不单开一步。 */}
+              <div className="field">
+                <label>{t('onboarding.aux.stepLabel')}</label>
+                <div className="hint">{t('onboarding.aux.intro')}</div>
+              </div>
+              <AuxModelChoice models={models} />
             </>
           )}
 

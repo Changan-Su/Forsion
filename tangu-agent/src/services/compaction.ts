@@ -14,9 +14,16 @@ import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 
+// 结构化交接(借 pi 的 checkpoint schema + Codex 的 handoff 框架):压缩摘要的消费者是「接手续做的
+// 下一个 LLM」,无结构的一段话最容易丢的恰是 In-progress / Next steps——丢了它们,压缩后模型就
+// 只会「总结成果」不会「接着干」,长任务在压缩点断头。
 const COMPACT_SYSTEM_PROMPT =
-  'Compress the entire conversation below into a concise, information-complete summary of key points, in the same language as the conversation, for use in continuing the conversation later. Cover: ' +
-  "the user's goals, key decisions/conclusions, what is done and what is pending, output file paths, and important facts. Output only the summary itself — no pleasantries, no lead-in.";
+  'You are performing a context checkpoint compaction: turn the conversation below into a handoff summary that another LLM will rely on to seamlessly CONTINUE the task (not just recall it). Write in the same language as the conversation. Structure:\n' +
+  '## Goal — what the user ultimately wants. Keep the full objective; never shrink the scope.\n' +
+  '## Done — completed steps, key decisions and conclusions (with exact file paths / identifiers / output locations).\n' +
+  '## In progress / Next steps — what is unfinished and the concrete next actions, in order. This section matters most; never leave it empty if work remains.\n' +
+  '## Facts & constraints — important facts, user preferences and corrections, pitfalls already discovered, exact names/paths/commands needed to continue.\n' +
+  'Be concise but information-complete. Output only the summary itself — no pleasantries, no lead-in.';
 
 const MAX_TRANSCRIPT_CHARS = 60_000; // 兜成本：超长历史只取尾部
 const SUMMARY_MAX_TOKENS = 1200;

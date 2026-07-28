@@ -2,7 +2,7 @@
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
  *  外壳直接用 Tangu token/类 → 与 Tangu Desktop 一致,并随其换肤/明暗同步。 */
-import { type ReactNode, type CSSProperties, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, type ClipboardEvent as RClipboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, type CSSProperties, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, type ClipboardEvent as RClipboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'zustand'
 import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
@@ -11,10 +11,12 @@ import {
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
-import { usePageStore } from '@amadeus/store/pageStore'
+import { activePageScope, disposePageScope, pageStoreFor, PageScopeCtx, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
+import { cursorFromSource, setModeCursor, sourceOffsetFor, takeModeCursor } from '@amadeus/lib/modeCursor'
+import { EMOJI_ALL, EMOJI_GROUPS, searchEmoji } from '@amadeus/lib/emoji'
 import { importToPage, importToFolder, pasteImagesToPage } from './amadeusImport'
 import { usePluginStore, findFileType, fileTypeBaseName } from '@amadeus/plugins/pluginStore'
 import { ensureAmadeusReady } from './amadeusPlugins'
@@ -106,16 +108,22 @@ const useAmadeusNav = create<{ locate: { path: string; n: number } | null; reque
 usePageStore.subscribe((state, prev) => {
   const p = state.activePage
   if (!p || p === prev.activePage) return
+  // ⚠️ 归属面板必须**在这里**定下来:门面订阅来自「当前活动面板」,也就是刚刚导航的那个。
+  // 放进 microtask 里再问 activeMainPanel(),用户手快切到另一半屏时这条历史就记到隔壁去了,
+  // 后退时也会把笔记退进隔壁(Codex 复审)。
+  const originScope = activePageScope()
   queueMicrotask(() => {
     const api = useWorkspace.getState().api
     const am = api ? activeMainPanel(api) : null
-    const leafId = am && ((am.params ?? {}) as { __type?: string }).__type === 'amadeus-editor' ? am.id : null
+    const leafId = am && ((am.params ?? {}) as { __type?: string }).__type === 'amadeus-editor' && am.id === originScope ? am.id : originScope
     recordNav(leafId, `amadeus:${p}`, () => {
       const w = useWorkspace.getState()
       const cur = leafId ? w.api?.getPanel(leafId) : null
       if (!cur) return
       if (((cur.params ?? {}) as { __type?: string }).__type !== 'amadeus-editor') w.navigateLeaf(leafId!, 'amadeus-editor', { notePath: p })
-      void usePageStore.getState().loadPage(p)
+      // 对着**这条历史所属的那个面板**装,不能用 usePageStore.getState()(那是「当前活动面板」)——
+      // 用户点后退时焦点完全可能已经在另外半屏,笔记就会退到隔壁去。
+      void pageStoreFor(leafId!).getState().loadPage(p)
     })
   })
   useRecentViews.getState().record({ key: `note:${p}`, kind: 'note', id: p, title: baseName(p) })
@@ -1372,12 +1380,10 @@ function CoverPicker({ page, x, y, onClose }: { page: string; x: number; y: numb
   )
 }
 
-/** 页面图标 picker:精选 emoji 网格 + 任意输入(系统 emoji 面板贴进来也行)。 */
-const EMOJI_SET =
-  '📄📝📚📖✏️🗂️📌📅🗓️✅☑️⭐🌟💡🔥🎯🎨🎵🎬📷🍀🌲🌸🌊☀️🌙⚡🧠💭💬🗨️❤️🧩🔧🔨⚙️🧪🔬💻🖥️📱🗄️📊📈📉💰🛒✈️🏠🏢🎁🎉🏃🧘🍎🍜☕🍵🚀🔭🧭🗺️🔒🔑🐞🌈'
-const EMOJI_LIST = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(EMOJI_SET)].map((x) => x.segment)
+/** 页面图标 picker:分组 emoji 网格 + 中英关键词搜索 + 任意输入(系统 emoji 面板贴进来也行)。
+ *  库在 amadeus/lib/emoji.ts —— 此前是这里硬编码的 66 个字符,只能看图找。 */
 /** Notion 行为:「添加图标」先随机给一个,再点可换。 */
-const randomEmoji = (): string => EMOJI_LIST[Math.floor(Math.random() * EMOJI_LIST.length)]
+const randomEmoji = (): string => EMOJI_ALL[Math.floor(Math.random() * EMOJI_ALL.length)]
 function IconPicker({ x, y, current, onPick, onClose }: {
   x: number
   y: number
@@ -1386,27 +1392,42 @@ function IconPicker({ x, y, current, onPick, onClose }: {
   onClose: () => void
 }) {
   const [draft, setDraft] = useState('')
-  const emojis = EMOJI_LIST
+  // 输入框一框两用:命中关键词 → 当搜索;一个字都搜不到(如直接粘贴 emoji)→ 回车按原样采用。
+  const hits = searchEmoji(draft)
   return (
     <div className="amx-db-popwrap" onMouseDown={onClose}>
       <OverlayAt className="amx-db-pop amx-iconpick" x={x} y={y} onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="amx-db-pop-input"
           autoFocus
-          placeholder="输入/粘贴任意 emoji 后回车…"
+          placeholder="搜索 emoji(中/英),或粘贴任意字符后回车…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && draft.trim()) onPick(draft.trim())
-            else if (e.key === 'Escape') onClose()
+            if (e.key === 'Escape') { onClose(); return }
+            if (e.key !== 'Enter' || !draft.trim()) return
+            // 有搜索结果 → 回车取第一个;没有 → 把输入本身当图标(保留「粘贴任意 emoji」的老用法)。
+            onPick(hits && hits.length ? hits[0] : draft.trim())
           }}
         />
         <div className="amx-iconpick-grid">
-          {emojis.map((em) => (
-            <button key={em} className={`amx-iconpick-item${current === em ? ' active' : ''}`} onClick={() => onPick(em)}>
-              {em}
-            </button>
-          ))}
+          {hits
+            ? hits.map((em) => (
+                <button key={em} className={`amx-iconpick-item${current === em ? ' active' : ''}`} onClick={() => onPick(em)}>
+                  {em}
+                </button>
+              ))
+            : EMOJI_GROUPS.map((g) => (
+                <Fragment key={g.name}>
+                  <div className="amx-iconpick-group">{g.name}</div>
+                  {g.items.map(([em, kw]) => (
+                    <button key={`${g.name}-${em}`} className={`amx-iconpick-item${current === em ? ' active' : ''}`} title={kw} onClick={() => onPick(em)}>
+                      {em}
+                    </button>
+                  ))}
+                </Fragment>
+              ))}
+          {hits && hits.length === 0 && <div className="amx-iconpick-empty">没有匹配的 emoji —— 回车可直接用你输入的字符</div>}
         </div>
         {current && (
           <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>移除图标</button>
@@ -1417,6 +1438,8 @@ function IconPicker({ x, y, current, onPick, onClose }: {
 }
 
 function NoteTitle() {
+  const store = useScopedPageStore() // 改名/设图标要作用在本面板这篇
+  const sps = (): ReturnType<typeof store.getState> => store.getState()
   const activePage = usePageStore((s) => s.activePage)
   const manifest = usePageStore((s) => s.manifest)
   const icon = usePageStore((s) => (activePage ? s.icons[activePage] ?? null : null))
@@ -1430,7 +1453,7 @@ function NoteTitle() {
   // 新建笔记:光标落标题栏(Notion 式先命名)。一次性,消费即清。
   // 不再全选文本:整行蓝色选区看着像标题被框了一圈(实报),改为光标落行尾。
   useEffect(() => {
-    const target = usePageStore.getState().focusTitleFor
+    const target = sps().focusTitleFor
     if (!target) return
     if (target === activePage) {
       const el = ref.current
@@ -1440,11 +1463,11 @@ function NoteTitle() {
         el.setSelectionRange(n, n)
       }
     }
-    usePageStore.getState().consumeTitleFocus()
+    sps().consumeTitleFocus()
   }, [activePage])
   const commit = (): void => {
     const next = val.trim()
-    if (next && next !== current) void ps().renamePage(next)
+    if (next && next !== current) void sps().renamePage(next)
     else setVal(shown)
   }
   const cover = useActiveCover()
@@ -1466,7 +1489,7 @@ function NoteTitle() {
       {activePage && (!icon || !cover) && (
         <div className="amx-title-actions">
           {!icon && (
-            <button onClick={() => void ps().setPageIcon(activePage, randomEmoji())}>☺ 添加图标</button>
+            <button onClick={() => void sps().setPageIcon(activePage, randomEmoji())}>☺ 添加图标</button>
           )}
           {!cover && (
             <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}>🖼 添加封面</button>
@@ -1488,7 +1511,7 @@ function NoteTitle() {
             if (e.key === 'Enter' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && atEnd)) {
               // 必须先 focusBody 再 blur:blur→commit→renamePage 会同步快照 manifest 并在返回时回填,
               // 顺序反了则空正文刚建的首块会被这次回填冲掉(光标也就无处可落)。
-              e.preventDefault(); focusBody(); el.blur()
+              e.preventDefault(); focusBody(store); el.blur()
             }
             if (e.key === 'Escape') { setVal(shown); el.blur() }
           }}
@@ -1500,7 +1523,7 @@ function NoteTitle() {
           y={pick.y}
           current={icon}
           onPick={(em) => {
-            void ps().setPageIcon(activePage, em)
+            void sps().setPageIcon(activePage, em)
             setPick(null)
           }}
           onClose={() => setPick(null)}
@@ -1511,26 +1534,66 @@ function NoteTitle() {
   )
 }
 
+/** 最近的可滚动祖先(源码模式的 textarea 自己撑全高,滚的是外层容器)。 */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight) return p
+  }
+  return null
+}
+
 /** 源码模式 = 真实 .md 文件:frontmatter(amadeus_page/schema/layout)+ `<!-- a id -->` 块标记 + 内容,
  *  经 compile() 呈现、parsePageSource() 往返(保留块与 2D 布局;标记只由 <!-- a id --> 切分)。
  *  失焦提交(仅在真正改动时);破坏 frontmatter 则退化为外部单块(优雅降级,不丢内容)。 */
 function SourceEditor() {
+  // 本面板那份 store。⚠️ commit() 挂在失焦上,而失焦最常见的原因就是**用户点了另一半屏** ——
+  // 用 usePageStore.getState()(=活动面板)会把源码模式的内容 _commit 进隔壁那篇笔记。
+  const store = useScopedPageStore()
+  const scope = usePageScope()
+  const sps = (): ReturnType<typeof store.getState> => store.getState()
   const readSrc = (): string => {
-    const m = ps().manifest
+    const m = sps().manifest
     if (!m) return ''
     const contents: Record<string, string> = {}
-    for (const [id, b] of Object.entries(ps().blocks)) contents[id] = b.content
+    for (const [id, b] of Object.entries(sps().blocks)) contents[id] = b.content
     return compile(m, contents)
   }
   const [src, setSrc] = useState(readSrc)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const grow = (): void => { const el = taRef.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` } }
   useEffect(grow, [src])
+
+  // 光标接力(见 amadeus/lib/modeCursor):
+  //  · 进来:把可视端交接的「块 + 锚点」翻译成本文本域的字符下标,落焦并滚到视野内;
+  //  · 出去:反向登记一份,PageView 挂载时把光标送回对应的块。
+  //  ⚠️ 登记写在卸载清理里,读的是 ref 里的最新值 —— 不能依赖 state 闭包(切换时那份已经过期)。
+  const srcRef = useRef(src)
+  srcRef.current = src
+  // 卸载时 taRef 可能已被 React 置空,拿不到选区 → 随手记一份最新的,清理函数只读这个 ref。
+  const caretRef = useRef(0)
+  useEffect(() => {
+    const el = taRef.current
+    const cur = takeModeCursor(scope)
+    if (el && cur) {
+      const at = sourceOffsetFor(srcRef.current, cur)
+      if (at >= 0) {
+        el.focus()
+        el.setSelectionRange(at, at)
+        caretRef.current = at
+        // textarea 被 grow() 撑成全高,真正滚动的是外层容器 → 按行号估 y,把那行带到视野中间。
+        const line = srcRef.current.slice(0, at).split('\n').length - 1
+        const lh = parseFloat(getComputedStyle(el).lineHeight) || 20
+        const sc = scrollParent(el)
+        if (sc) sc.scrollTop = Math.max(0, el.offsetTop + line * lh - sc.clientHeight / 2)
+      }
+    }
+    return () => setModeCursor(cursorFromSource(srcRef.current, caretRef.current), scope)
+  }, [])
   const commit = (): void => {
-    const page = ps().activePage
+    const page = sps().activePage
     if (!page || src === readSrc()) return
     const parsed = parsePageSource(page, src, new Date().toISOString())
-    ps()._commit(parsed.manifest, parsed.blocks)
+    sps()._commit(parsed.manifest, parsed.blocks)
   }
   return (
     <textarea
@@ -1538,7 +1601,8 @@ function SourceEditor() {
       className="amx-source"
       value={src}
       spellCheck={false}
-      onChange={(e) => setSrc(e.target.value)}
+      onChange={(e) => { caretRef.current = e.target.selectionStart; setSrc(e.target.value) }}
+      onSelect={(e) => { caretRef.current = e.currentTarget.selectionStart }}
       onBlur={commit}
     />
   )
@@ -1547,10 +1611,27 @@ function SourceEditor() {
 // 插件状态条项:2026-07-23 起渲染进全局状态栏(pluginStatusBridge)——engine 有全局状态栏了,
 // 原「就近呈现在编辑器工具条」的 PluginStatusItems shim 退役。
 
-// 多编辑器 tab 间「最近活动的编辑器」:侧栏点笔记时(焦点可能在侧栏,无 main tab 处于 active)由它认领。
-let lastActiveEditorLeafId: string | null = null
+// (原 lastActiveEditorLeafId 已随「单活文档」一起退役:现在「哪个面板认领这次导航」
+//  由 pageStore 的活动作用域决定,见 setActivePageScope。)
 
-export function AmadeusEditorView({ leaf }: ViewProps) {
+/**
+ * 分屏的地基:每个编辑器面板挂自己的文档作用域(scope = leaf id),里面所有 usePageStore(...)
+ * 都解析到**本面板**那份 store。此前是全局单例,两个面板并排必然显示同一篇,非活动的那个只能
+ * 渲染占位("stale") —— 那就是用户报的「不能分屏」。
+ * 拆成外壳 + Inner 是必须的:Provider 只影响**后代**,组件自己的 hook 调用在 Provider 之外。
+ */
+export function AmadeusEditorView(props: ViewProps) {
+  return (
+    <PageScopeCtx.Provider value={props.leaf.id}>
+      <AmadeusEditorViewInner {...props} />
+    </PageScopeCtx.Provider>
+  )
+}
+
+function AmadeusEditorViewInner({ leaf }: ViewProps) {
+  // 本面板自己的 store(静态取值用;hook 取值经 Provider 自动解析)。
+  const myStore = useScopedPageStore()
+  const myPs = (): ReturnType<typeof myStore.getState> => myStore.getState()
   const activePage = usePageStore((s) => s.activePage)
   const vaultRoot = usePageStore((s) => s.vaultRoot) // 无笔记时的空态引导据此二态(未开 Vault / 已开待新建)
   // 插件文件类型也占用全局 activePage(单活页模型)→ 认领时须能认出「这不是笔记」,见下面的 useEffect。
@@ -1571,7 +1652,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
   useEntrySync((s) => s.vaults) // 订阅注册表变更驱动重渲(isSyncedEntry 读 getState)
   useEffect(() => { ensureEntrySyncSubscribed() }, [])
   const canEntrySync = !!window.amadeusSync?.entrySyncEnable && vaultSide === 'local'
-  const synced = canEntrySync && !!activePage && isSyncedEntry(ps().vaultRoot, activePage)
+  const synced = canEntrySync && !!activePage && isSyncedEntry(myPs().vaultRoot, activePage)
   useEffect(() => {
     if (!noteMenu) return
     const close = (): void => setNoteMenu(null)
@@ -1583,7 +1664,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
   /** 导出 PDF:把本编辑器 DOM 克隆进 #amx-print-root(同文档 → amadeus-asset/KaTeX 字体照常可用),
    *  @media print 只呈现克隆并隐藏应用壳(见 amadeus-host.css),主进程 printToPDF 收尾。导出恒浅色。 */
   const exportPdf = async (): Promise<void> => {
-    const page = ps().activePage
+    const page = myPs().activePage
     const host = printHostRef.current
     if (!page || !host) return
     const wrap = document.createElement('div')
@@ -1608,33 +1689,31 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。
   useEffect(() => { if (notePath) leaf.setTitle(baseName(notePath)) }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 认领 / 激活(stage 1:单活文档,全局 pageStore):
-  //  - 切回本 tab(becameActive)且它认领的笔记 ≠ 当前全局笔记 → 加载它的笔记;
-  //  - 本 tab 为当前编辑器(active,或焦点在侧栏时的「最近活动编辑器」)期间发生导航 → 认领新笔记(写 params+标题)。
+  // ① 本面板认领的笔记 ≠ 本面板 store 里的笔记 → 装载它。**与是否活动无关** —— 这正是分屏的关键:
+  //    并排的两个面板各装各的,不再互相覆盖。
   useEffect(() => {
-    const becameActive = isActiveLeaf && !prevActiveRef.current
-    prevActiveRef.current = isActiveLeaf
-    if (isActiveLeaf) lastActiveEditorLeafId = leaf.id
-    // null 兜底只允许「唯一编辑器」的情形——多编辑器时会互相覆盖认领(恢复的分屏被同一笔记吞掉)。
-    const editorCount = ((useWorkspace.getState() as unknown as { api?: { panels: Array<{ params?: Record<string, unknown> }> } }).api?.panels
-      .filter((p) => p.params?.__type === 'amadeus-editor').length) ?? 1
-    const mine = isActiveLeaf || lastActiveEditorLeafId === leaf.id || (lastActiveEditorLeafId === null && editorCount <= 1)
-    if (!mine) return
-    const globalPage = ps().activePage
-    if (becameActive && notePath && notePath !== globalPage) {
-      void ps().loadPage(notePath)
-      return
-    }
-    // 插件文件类型(如 .mindmap.md)也走全局 pageStore(activePage 会变成那份文件),但它绝不是笔记 →
-    // 笔记编辑器不认领它,否则本 leaf 的 notePath 被改写成它,再激活就把导图当笔记用 PageView 渲染/编辑(Codex)。
-    if (globalPage && !findFileType(pluginFileTypes, globalPage)) {
-      if (leaf.params.notePath !== globalPage) leaf.setParams({ ...leaf.params, notePath: globalPage })
-      leaf.setTitle(baseName(globalPage))
-    }
-  }, [isActiveLeaf, activePage]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (notePath && notePath !== myPs().activePage) void myPs().loadPage(notePath)
+  }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // stage 1 局限:分屏同时可见的两个编辑器共享全局文档——认领了别的笔记的非活动编辑器渲染占位,不显示错误文档。
-  const stale = !!(notePath && activePage && notePath !== activePage)
+  // ② 活动面板跟随激活:侧栏/命令面板/快切这些编辑器**之外**的入口读的是「活动面板」那份 store,
+  //    所以点开一篇笔记会落进当前聚焦的这个面板,而不是隔壁。
+  useEffect(() => {
+    if (isActiveLeaf) setActivePageScope(leaf.id)
+    prevActiveRef.current = isActiveLeaf
+  }, [isActiveLeaf, leaf.id])
+
+  // ③ 本面板内发生导航(在活动状态下被 openNote 装了新笔记)→ 认领它(写回 params + 标题)。
+  //    插件文件类型(如 .mindmap.md)也会占用 activePage,但它绝不是笔记 → 不认领,
+  //    否则本 leaf 的 notePath 被改写成它,再激活就把导图当笔记用 PageView 渲染/编辑(Codex)。
+  useEffect(() => {
+    if (!activePage || activePage === notePath) return
+    if (findFileType(pluginFileTypes, activePage)) return
+    leaf.setParams({ ...leaf.params, notePath: activePage })
+    leaf.setTitle(baseName(activePage))
+  }, [activePage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ④ 面板关掉 → 回收它那份 store(内部先 flush 落盘,不带走没写完的改动)。
+  useEffect(() => () => disposePageScope(leaf.id), [leaf.id])
 
   // 拖入文件 → 按 Tangu 笔记设置存放(attachments/同目录/固定夹)→ 预览开则插 ![[base]],否则插 [名](相对路径)。
   const onDrop = async (e: RDragEvent<HTMLDivElement>): Promise<void> => {
@@ -1642,7 +1721,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
     if (!files.length) return
     e.preventDefault()
     setDragging(false)
-    const page = ps().activePage
+    const page = myPs().activePage
     if (!page) return
     await importToPage(files, page) // 存到配置的附件位置 + 插入嵌入/链接(本地/云端/web 统一;失败与超限走 toast)
   }
@@ -1661,7 +1740,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
     const href = a.getAttribute('href') || ''
     if (!href || /^(https?:|mailto:|amadeus-asset:|#)/i.test(href)) return
     e.preventDefault()
-    const page = ps().activePage
+    const page = myPs().activePage
     if (page) void amadeus.openAttachment(page, href)
   }
   // 粘贴图片(Cmd/Ctrl+V 截图)→ 存 .amadeus/ 并按页相对路径嵌入。标题/重命名输入框放行,
@@ -1675,22 +1754,12 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
       .filter((f): f is File => !!f)
     if (!imgs.length) return
     e.preventDefault()
-    const page = ps().activePage
+    const page = myPs().activePage
     if (page) void pasteImagesToPage(imgs, page)
   }
 
-  if (stale) {
-    return (
-      <EditorScope>
-        <div className="amx-empty">
-          <button className="amx-stale-btn" onClick={() => void ps().loadPage(notePath!)}>
-            点击加载「{baseName(notePath!)}」
-          </button>
-          <div className="hint" style={{ marginTop: 8 }}>另一个编辑器正在显示其它笔记(分屏下同一时刻只能编辑一篇)。</div>
-        </div>
-      </EditorScope>
-    )
-  }
+  // 原来这里有个 `stale` 分支:非活动的分屏面板渲染一个「点击加载」占位,因为全局只有一份文档。
+  // 每个面板自持一份之后没有这个概念了 —— 两边都是真的、都能编辑。
 
   return (
     <EditorScope dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
@@ -1755,7 +1824,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
             onChange={(e) => {
               const files = Array.from(e.currentTarget.files ?? [])
               e.currentTarget.value = ''
-              const page = ps().activePage
+              const page = myPs().activePage
               if (page && files.length) void importToPage(files, page)
             }}
           />
@@ -1780,7 +1849,7 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
             <Star size={13} /> {starred ? '取消收藏' : '收藏'}
           </button>
           <button onClick={() => { void amadeus.revealInFileManager(activePage); setNoteMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
-          <button className="danger" onClick={() => { const p = activePage; setNoteMenu(null); if (confirmedDelete('note', p)) { useRecentViews.getState().remove(`note:${p}`); void ps().deletePage(p) } }}>
+          <button className="danger" onClick={() => { const p = activePage; setNoteMenu(null); if (confirmedDelete('note', p)) { useRecentViews.getState().remove(`note:${p}`); void myPs().deletePage(p) } }}>
             <Trash2 size={13} /> 删除笔记
           </button>
         </OverlayAt>
@@ -1798,9 +1867,9 @@ export function AmadeusEditorView({ leaf }: ViewProps) {
           </p>
           <div className="amx-welcome-actions">
             {vaultRoot ? (
-              <button className="amx-welcome-btn" onClick={() => void ps().createPage()}><SquarePen size={16} /> 新建笔记</button>
+              <button className="amx-welcome-btn" onClick={() => void myPs().createPage()}><SquarePen size={16} /> 新建笔记</button>
             ) : (
-              <button className="amx-welcome-btn" onClick={() => void ps().openVault()}><FolderOpen size={16} /> 打开 Vault 文件夹</button>
+              <button className="amx-welcome-btn" onClick={() => void myPs().openVault()}><FolderOpen size={16} /> 打开 Vault 文件夹</button>
             )}
           </div>
           <ul className="amx-welcome-tips">

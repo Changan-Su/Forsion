@@ -52,6 +52,22 @@ function check(name, ok, detail) {
 }
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
+<script>
+  // 请求体见证(先于 SDK 挂):防「SDK 回归为客户端选模型」的假绿(codex 评审#5)——
+  // 响应出文本 ≠ 请求形态正确,必须直接看见 model_id 缺席。
+  window.__aiBodies = { chat: [], agent: [] };
+  (function () {
+    var f = window.fetch;
+    window.fetch = function (u, o) {
+      try {
+        var s = String(u);
+        if (o && o.body && s.indexOf('/__forsion/chat') === 0) window.__aiBodies.chat.push(JSON.parse(o.body));
+        if (o && o.body && s.indexOf('/__forsion/agent') === 0 && s.indexOf('agent-events') < 0) window.__aiBodies.agent.push(JSON.parse(o.body));
+      } catch (e) {}
+      return f.apply(this, arguments);
+    };
+  })();
+</script>
 <script src="/forsion-connect.js"></script>
 <script>
   // 报告对象在外层:任一步抛错只补 error 字段,**不抹掉已成功步骤的字段**——
@@ -84,6 +100,25 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
         if (chat.text && chat.text.trim()) break
       } catch (e) { r.tried.push(m + ': ' + String(e && e.message || e)) }
     }
+
+    // 不传 model:SDK 该把 model_id 整个省略,由服务端按 Connect 策略现填(chat.ts 新闸的活体验证)
+    try {
+      const df = await forsion.ai.chat({ prompt: 'Reply with exactly the single word: PONG', maxTokens: 16 })
+      r.defaultFill = { text: df.text, model: df.model }
+    } catch (e) { r.defaultFill = { error: String(e && e.message || e) } }
+    r.defaultFillBody = window.__aiBodies.chat[window.__aiBodies.chat.length - 1] || null
+
+    // agent 通道:云 fleet 派发。dev 常无 worker(503 NO_AGENT_WORKERS)→ 外层按环境 SKIP;
+    // 120s 兜底防 evaluate 永挂(agent run 真跑起来也不该超,这只是 PONG)。
+    try {
+      r.agentDeltas = 0
+      const ag = await Promise.race([
+        forsion.ai.agent({ input: 'Reply with exactly the single word: PONG', onDelta: () => { r.agentDeltas++ } }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('agent 超时(120s)')), 120000)),
+      ])
+      r.agent = { text: ag.text, session: ag.session }
+    } catch (e) { r.agent = { error: String(e && e.message || e) } }
+    r.agentBody = window.__aiBodies.agent[0] || null
     return r
   })().catch((e) => { r.error = String(e && e.message || e); return r })
 </script>
@@ -117,6 +152,24 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
     (typeof r.text === 'string' && r.text.trim() ? `[${r.model}] ${r.text.trim().slice(0, 60)}` : null) ||
     r.error || (r.tried && r.tried.length ? '全部候选模型失败: ' + r.tried.join(' ; ').slice(0, 300) : '无候选模型'))
   check('流式增量真的到了(onDelta > 0)', (r.deltas || 0) > 0, `deltas=${r.deltas}`)
+  check('chat 不传 model:请求体真无 model_id 且服务端代填出文本',
+    !!(r.defaultFill && (r.defaultFill.text || '').trim()) && !!r.defaultFillBody && !('model_id' in r.defaultFillBody),
+    r.defaultFill
+      ? (r.defaultFill.error ||
+        `[${r.defaultFill.model}] ${(r.defaultFill.text || '').trim().slice(0, 40)}${r.defaultFillBody && 'model_id' in r.defaultFillBody ? ' | 假绿:请求体带了 model_id!' : ''}`)
+      : '未执行')
+  // agent 请求形态:SDK 不许发 model_id(模型完全服务端决定)——POST 在 SKIP 场景也已发出,恒可断言
+  check('agent 请求体不含 model_id(模型服务端决定)',
+    !!(r.agentBody && r.agentBody.session_id && !('model_id' in r.agentBody)),
+    r.agentBody ? Object.keys(r.agentBody).join(',') : '未捕获到 agent 请求')
+  // agent 通道:无云端 worker 是环境状态不是链路故障 —— SKIP 不染红(有 worker 时才断言)
+  const agErr = (r.agent && r.agent.error) || ''
+  if (/NO_AGENT_WORKERS|暂无可用执行节点/.test(agErr)) {
+    console.log(`SKIP  agent 通道(dev 未登记云端 worker,发布态同链路)  | ${agErr.slice(0, 120)}`)
+  } else {
+    check('agent 通道出终稿(云 worker 托管上下文/工具)', !!(r.agent && (r.agent.text || '').trim()),
+      r.agent ? (r.agent.error || `[session=${String(r.agent.session || '').slice(0, 8)}] deltas=${r.agentDeltas} ${(r.agent.text || '').trim().slice(0, 60)}`) : '未执行')
+  }
 
   await browser.close()
   stopCodePreview()

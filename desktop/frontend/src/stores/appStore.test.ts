@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, UiMessage } from '../types'
-import { useApp, recordToUi } from './appStore'
+import { useApp, recordToUi, type AppState } from './appStore'
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
 // 否则只能回退到「会话默认 agent」(就是 Christina 被显示成默认 Tangu Arioso 的 bug)。
@@ -152,5 +152,75 @@ describe('appStore.reduceEvent', () => {
     useApp.getState().setSessionPlanMode(true, 's2')
     expect(useApp.getState().configBySession.s1.planMode).toBe(false)
     expect(useApp.getState().configBySession.s2.planMode).toBe(true)
+  })
+
+  // steer 等待区:入队不上屏,turn_boundary 注入才进对话;run 终结余量回填输入框。
+  it('turn_boundary 注入把等待区消息移入对话,附件随注入迁移(事件只带 id/content)', () => {
+    const att = [{ name: 'p.png', mimeType: 'image/png', data: 'x', size: 1 }]
+    useApp.setState({ steerPendingBySession: { s1: [{ id: 'u2', text: 'steer', attachments: att }] } })
+    const ref = { current: 'a1' }
+    useApp.getState().reduceEvent('s1', 'r1', ref, {
+      seq: 1, type: 'turn_boundary',
+      payload: { finalizedAssistantId: 'a1', finalizedContent: 'seg A', userMessages: [{ id: 'u2', content: 'steer' }], newAssistantId: 'a2' },
+    } as AgentRunEvent)
+    const st = useApp.getState()
+    expect(st.steerPendingBySession.s1).toHaveLength(0)
+    expect(st.messagesBySession.s1.find((m) => m.id === 'u2')).toMatchObject({ role: 'user', content: 'steer', attachments: att })
+  })
+
+  // Codex 评审 #1:turn_boundary(SSE)可能抢在 steer POST 响应前到达。
+  it('steerAcceptPatch:消息已上屏或 run 已易主 → 不进等待区;↑ 历史始终记', async () => {
+    const { steerAcceptPatch } = await import('./appStore')
+    const base = { runningBySession: { s1: 'r1' }, steerPendingBySession: {}, steerSentBySession: {} }
+    // 正常:进等待区 + 记历史
+    const ok = steerAcceptPatch({ ...base, messagesBySession: {} } as any, 's1', 'r1', { id: 'u9', text: 'hi' })
+    expect((ok.steerPendingBySession as any).s1).toHaveLength(1)
+    expect((ok.steerSentBySession as any).s1).toEqual(['hi'])
+    // 已上屏(注入抢先):只记历史
+    const raced = steerAcceptPatch({ ...base, messagesBySession: { s1: [{ id: 'u9', role: 'user', content: 'hi', status: 'done', timestamp: 1 } as any] } } as any, 's1', 'r1', { id: 'u9', text: 'hi' })
+    expect(raced.steerPendingBySession).toBeUndefined()
+    expect((raced.steerSentBySession as any).s1).toEqual(['hi'])
+    // run 已易主/终结:只记历史
+    const ended = steerAcceptPatch({ ...base, runningBySession: {}, messagesBySession: {} } as any, 's1', 'r1', { id: 'u9', text: 'hi' })
+    expect(ended.steerPendingBySession).toBeUndefined()
+  })
+
+  it('run 终结时未注入的插话回填输入框;迟到的旧 run 终结不碰新 run 的等待区', () => {
+    useApp.setState({ steerPendingBySession: { s1: [{ id: 'u9', text: '还没送达' }] } })
+    const ref = { current: 'a1' }
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type: 'error', payload: { error: 'aborted', aborted: true } } as AgentRunEvent)
+    let st = useApp.getState()
+    expect(st.steerPendingBySession.s1).toHaveLength(0)
+    expect(st.steerRestoreBySession.s1).toBe('还没送达')
+    // 新 run r2 活跃、等待区有 r2 的插话;旧 run r1 的终结事件迟到 → 守卫拦下,不许清 r2 的队列。
+    useApp.setState({ runningBySession: { s1: 'r2' }, steerPendingBySession: { s1: [{ id: 'u10', text: '新 run 的' }] }, steerRestoreBySession: {} })
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 2, type: 'error', payload: { error: 'aborted', aborted: true } } as AgentRunEvent)
+    st = useApp.getState()
+    expect(st.steerPendingBySession.s1).toHaveLength(1)
+    expect(st.steerRestoreBySession.s1).toBeUndefined()
+  })
+
+  it('plan_approved auto=true → 该 run done 后自动发起执行(合成用户消息)', () => {
+    const sendMock = vi.fn<AppState['send']>(async () => true)
+    useApp.setState({ send: sendMock })
+    const ref = { current: 'a1' }
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type: 'plan_approved', payload: { auto: true } } as AgentRunEvent)
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 2, type: 'done', payload: { content: '计划稿' } } as AgentRunEvent)
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock.mock.calls[0][0]).toBe('plan.autoKickoff') // tr 桩原样回 key
+    expect(sendMock.mock.calls[0][5]).toBe('s1')
+    // 不带 auto 的批准绝不自动开工
+    useApp.setState({ runningBySession: { s1: 'r3' }, messagesBySession: { s1: [assistant()] } })
+    useApp.getState().reduceEvent('s1', 'r3', ref, { seq: 3, type: 'plan_approved', payload: {} } as AgentRunEvent)
+    useApp.getState().reduceEvent('s1', 'r3', ref, { seq: 4, type: 'done', payload: { content: 'x' } } as AgentRunEvent)
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    // Codex 评审 #4:auto 标记按 runId 记——计划 run 被打断(error→endRun)后标记必须作废,
+    // 该会话后续无关 run 的 done 不许莫名「自动开始执行」。
+    useApp.setState({ runningBySession: { s1: 'r5' }, messagesBySession: { s1: [assistant()] } })
+    useApp.getState().reduceEvent('s1', 'r5', ref, { seq: 5, type: 'plan_approved', payload: { auto: true } } as AgentRunEvent)
+    useApp.getState().reduceEvent('s1', 'r5', ref, { seq: 6, type: 'error', payload: { error: 'aborted', aborted: true } } as AgentRunEvent)
+    useApp.setState({ runningBySession: { s1: 'r6' }, messagesBySession: { s1: [assistant()] } })
+    useApp.getState().reduceEvent('s1', 'r6', ref, { seq: 7, type: 'done', payload: { content: 'y' } } as AgentRunEvent)
+    expect(sendMock).toHaveBeenCalledTimes(1) // 仍是最初那一次,泄漏=会变 2
   })
 })

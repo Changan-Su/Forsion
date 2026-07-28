@@ -17,6 +17,8 @@ export interface TanguDesktopConfig {
   imageModelId?: string
   /** 默认语音识别模型 id(语音输入转写用;缺省=跟随 app 级 asr 默认)。 */
   asrModelId?: string
+  /** 辅助模型 · 图像识别 id(缺省=跟随 config.json models.vision → app 级槽)。 */
+  visionModelId?: string
 }
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
@@ -34,6 +36,10 @@ export interface CuLiveFrame {
   height?: number
   /** JPEG base64(不含 data: 前缀)。缺失 = 本次没取到画面,看 error。 */
   jpegBase64?: string
+  /** 这一帧的序号。带回给下次请求,画面没变时 helper 只回 unchanged、不重编 JPEG。 */
+  frameSeq?: string
+  /** true = 与你上次见到的那一帧相同,本次不含图。 */
+  unchanged?: boolean
   ageMs?: number
   error?: string
 }
@@ -299,6 +305,8 @@ export interface AgentConfig {
   workspaceProject?: string
   /** 默认生图模型 id(generate_image 缺省据此;来自全局设置 cfg.imageModelId,随 run 透传)。 */
   imageModelId?: string
+  /** 辅助模型 · 图像识别 id(主模型无原生视觉时用它把图转文字;来自全局设置 cfg.visionModelId)。 */
+  visionModelId?: string
   /** 激活的 Normal Agent slug(后端 agentLoop 解析注入人格/模型/工具)。 */
   agentSlug?: string
   /** 外部 agent 引擎 id(如 'claude-code'):设了就把整个 turn 委托给该 ACP 引擎而非 Tangu 自有 loop。host-only。 */
@@ -321,6 +329,8 @@ export interface AgentConfig {
    *  cwd 仍是默认目录 —— 相对路径只相对 cwd 解析,这些一律绝对路径引用。引擎侧封顶 8 个。 */
   extraRoots?: string[]
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
+  /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令,失败回灌逼修到绿才许收尾;空/缺省=关闭。 */
+  verifyCommand?: string
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */
   planMode?: boolean
   /** 群聊模式:≥2 个 Normal Agent 轮流发言、投票、可总结。host-only。 */
@@ -396,11 +406,13 @@ export interface ModelInfo {
   modelType?: 'llm' | 'image_gen' | 'asr'
   /** 模型上下文窗口(tokens);输入框「上下文占比」进度条用。后端缺省回退全局默认。 */
   contextWindow?: number
+  /** 能不能直接「看」图。黑名单制:缺省/true=能;false=遇图自动转交「辅助模型 · 图像识别」。 */
+  supportsVision?: boolean
 }
 
 export interface ModelsResponse {
   models: ModelInfo[]
-  directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; asrModelIds?: string[] }>
+  directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; asrModelIds?: string[]; noVisionModelIds?: string[] }>
   defaultModelId: string | null
   /** admin 的 app 级「后台 agent 默认」槽(Muse/Historian 未显式选模型时跟随;缺省回退 defaultModelId)。 */
   backgroundModelId?: string | null
@@ -408,6 +420,8 @@ export interface ModelsResponse {
   imageModelId?: string | null
   /** admin 的 app 级「语音识别默认」槽(语音输入未显式选择时跟随)。 */
   asrModelId?: string | null
+  /** admin 的 app 级「辅助模型 · 图像识别」槽(本端未显式选择时跟随)。 */
+  visionModelId?: string | null
   /** 云端托管面诊断:empty=可达但 admin 没配模型;error=不可达/未授权/未部署 brain-api。 */
   forsion?: { status: 'ok' | 'empty' | 'error'; detail: string | null }
 }
@@ -424,6 +438,8 @@ export interface DirectProviderConfig {
   ttsModelIds?: string[]
   /** 该 provider 的语音识别模型 id(OpenAI 兼容 /audio/transcriptions;语音输入用)。 */
   asrModelIds?: string[]
+  /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
+  noVisionModelIds?: string[]
 }
 
 export interface SkillInfo {
@@ -676,6 +692,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   ttsAutoSpeak?: boolean
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=Forsion 云端/自带 key。缺省 cloud。(就绪与否走 asrLocalStatus IPC,不落 config) */
   asrBackend?: 'local' | 'cloud'
+  /** 辅助模型 · LLM:后台/特殊 agent(Muse/Historian)用;空=跟随 app 级槽。 */
+  backgroundModelId?: string
+  /** 辅助模型 · 图像识别:主模型无原生视觉时的看图兜底 + 非聊天识图;空=跟随 app 级槽。 */
+  visionModelId?: string
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
@@ -728,6 +748,10 @@ declare global {
       checkForUpdates?(): Promise<UpdaterStatusInfo>
       downloadUpdate?(): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
+      /** 测试版通道开关(缺省关)。开了才收 x.y.z-beta.N;关着两层都隔离:
+       *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */
+      getUpdateBeta?(): Promise<boolean>
+      setUpdateBeta?(on: boolean): Promise<{ ok: boolean }>
       onUpdaterStatus?(cb: (st: UpdaterStatusInfo) => void): () => void
       /** 应用内清空数据(卸载/重置);清完主进程 relaunch。 */
       clearAppData?(opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }>
@@ -757,16 +781,21 @@ declare global {
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
-      /** 单文件 HTML 预览:挂其所在目录到不可猜的令牌根,返回可直接进 iframe 的 http URL。 */
+      /** 单文件 HTML 预览:挂其所在目录到不可猜的令牌根,返回可直接加载的 http URL。 */
       codePreviewServePath?(filePath: string): Promise<{ url: string }>
+      /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
+      codePreviewServeHtml?(html: string): Promise<{ url: string }>
       codePreviewStop?(): Promise<{ ok: boolean }>
       /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
       codeProjectsRoot?(): Promise<string>
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>
-      connectList?(): Promise<{ ok: boolean; code?: string; detail?: string; base?: string; handle?: string | null; apps?: Array<{ slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string }>; used?: number; limit?: number; tier?: string }>
+      connectList?(): Promise<{ ok: boolean; code?: string; detail?: string; base?: string; handle?: string | null; apps?: Array<{ slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string; listing_status?: string | null; listing_summary?: string | null; listing_note?: string | null }>; used?: number; limit?: number; tier?: string }>
       connectPublish?(p: { dir: string; name: string; slug: string; entry: string }): Promise<{ ok: boolean; code?: string; detail?: string; slug?: string; handle?: string; url?: string; used?: number; limit?: number }>
       connectUnpublish?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
+      connectListingApply?(p: { slug: string; summary: string }): Promise<{ ok: boolean; code?: string; detail?: string; status?: string }>
+      connectListingWithdraw?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
+      connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
       /** 本机工作区文件操作(host 模式)。 */
@@ -805,7 +834,7 @@ declare global {
       transcribeAudioFile?(filePath: string, req: { mime?: string; modelId?: string; language?: string; timestamps: true }): Promise<AsrTimedResult>
       /** Computer Use:最近被操控窗口的一帧画面。只读——helper 没跑就 active:false,绝不因此拉起它。
        *  仅 macOS(Windows helper 是 stdio 子进程,桌面够不着);拿不到图会带 error 而不是伪造画面。 */
-      computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }): Promise<CuLiveFrame>
+      computerUseLiveView?(opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean; sinceFrame?: string }): Promise<CuLiveFrame>
       /** 本地语音模型(SenseVoice)状态 / 下载 / 删除 + 下载进度订阅(返回取消函数)。 */
       asrLocalStatus?(): Promise<{ ready: boolean; sizeBytes: number }>
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>
@@ -932,8 +961,10 @@ declare global {
       set(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig>
       run(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): Promise<RemoteSyncReport>
       check(): Promise<{ ok: boolean; error?: string }>
-      dropboxAuthStart(appKey: string): Promise<{ ok: boolean; error?: string }>
+      /** mode:auto = 回环回调自动回填(结果走 onDropboxAuth);manual = 端口起不来,要用户手贴授权码。 */
+      dropboxAuthStart(appKey: string): Promise<{ ok: boolean; error?: string; mode?: 'auto' | 'manual'; redirectUri?: string }>
       dropboxAuthFinish(appKey: string, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }>
+      onDropboxAuth(cb: (r: { ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }) => void): () => void
       onStatus(cb: (s: { running: boolean; lastReport: RemoteSyncReport | null; progress: RemoteSyncProgress | null }) => void): () => void
     }
   }
@@ -990,6 +1021,8 @@ export interface RemoteSyncState {
   progress: RemoteSyncProgress | null
   root: string | null
   rootError: string | null
+  /** 装机自带 Forsion 官方 Dropbox 应用 → 无需用户填 App Key,点一下即登。 */
+  dropboxBuiltin?: boolean
 }
 
 /** 非活动侧日历只读快照(Calendar 汇总另一侧用)。root=另一侧磁盘根;vaultName=显示名(云端/文件夹名)。 */

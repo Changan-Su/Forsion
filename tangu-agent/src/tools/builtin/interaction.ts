@@ -89,12 +89,15 @@ export const interactionProvider: ToolProvider = {
           ctx.runId,
           {
             question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?',
-            options: ['批准,退出计划模式', '需要修改(在输入框写反馈)', '拒绝,保持计划模式'],
+            // 「自动开始」放首位(类 Codex 的 "Implement this plan?" 三选一):批准后由客户端在本 run
+            // 结束时自动发起执行消息(本轮工具集已冻结只读,执行必须是新 run,引擎侧无法就地开工)。
+            options: ['批准,自动开始执行', '批准,退出计划模式(手动开始)', '需要修改(在输入框写反馈)', '拒绝,保持计划模式'],
             allowFreeText: true,
           },
           ctx.signal,
         );
         if (answer.startsWith('批准')) {
+          const autoStart = answer.includes('自动开始');
           // 关掉会话的 planMode(读-改-写 agent_config;本轮 defs 已冻结仍只读,下一轮生效)
           try {
             const raw = await deps().state.getAgentConfig(ctx.sessionId);
@@ -118,12 +121,14 @@ export const interactionProvider: ToolProvider = {
           } catch {
             planFile = '';
           }
-          void publish(ctx.runId, 'plan_approved', planFile ? { file: planFile } : {});
+          // auto 标志让客户端在本 run 结束后自动发起执行消息(desktop 监听 plan_approved)。
+          void publish(ctx.runId, 'plan_approved', { ...(planFile ? { file: planFile } : {}), auto: autoStart });
           return (
             '用户已批准计划,计划模式已关闭。' +
             (planFile ? `计划已存档到 ${planFile}。` : '') +
             '现在请用 todo_write 把计划拆成任务清单(便于跟踪进度),并简要总结收尾;' +
-            '本轮工具集仍为只读,用户的下一条消息将开始执行。'
+            '本轮工具集仍为只读,' +
+            (autoStart ? '收尾后将自动开始执行(无需等用户确认)。' : '用户的下一条消息将开始执行。')
           );
         }
         return `用户未批准:${answer}\n请按反馈完善计划,再次调用 exit_plan_mode 提交。`;

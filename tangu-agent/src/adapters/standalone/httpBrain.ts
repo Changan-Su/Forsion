@@ -259,15 +259,16 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       listModelsForProject: async (projectId: string) => {
         try {
           const r = await getJson<any>(`/api/brain/models?projectId=${encodeURIComponent(projectId)}`);
-          if (Array.isArray(r)) return { models: r, defaultModelId: null, backgroundModelId: null, imageModelId: null };
+          if (Array.isArray(r)) return { models: r, defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null };
           return {
             models: Array.isArray(r?.models) ? r.models : [],
             defaultModelId: r?.defaultModelId ?? null,
             backgroundModelId: r?.backgroundModelId ?? null,
             imageModelId: r?.imageModelId ?? null,
+            visionModelId: r?.visionModelId ?? null,
           };
         } catch {
-          return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null };
+          return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null };
         }
       },
     },

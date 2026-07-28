@@ -23,7 +23,16 @@ export function RemoteSyncSection(): React.ReactElement | null {
   const [note, setNote] = useState<string | null>(null)
   const [svcNote, setSvcNote] = useState<string | null>(null)
   const [dbxCode, setDbxCode] = useState('')
-  const [dbxPending, setDbxPending] = useState(false)
+  const [dbxManual, setDbxManual] = useState(false) // 回环端口起不来时才露出手贴授权码
+  const [dbxWaiting, setDbxWaiting] = useState(false)
+  const [dbxBuiltin, setDbxBuiltin] = useState(false) // 有官方应用 = 不用填 App Key
+  const [dbxOwnApp, setDbxOwnApp] = useState(false) // 用户主动要用自建应用
+
+  /** 只吃回授权得来的凭据,不覆盖用户此刻未保存的 appKey/baseDir 输入。 */
+  const applyDbxCreds = (d?: RemoteSyncConfig['dropbox']): void =>
+    setCfg((c) =>
+      c ? { ...c, dropbox: { ...(c.dropbox ?? { appKey: '' }), refreshToken: d?.refreshToken, accountId: d?.accountId, email: d?.email } } : c,
+    )
 
   useEffect(() => {
     if (!api) return
@@ -34,13 +43,28 @@ export function RemoteSyncSection(): React.ReactElement | null {
       setRunning(s.running)
       setProgress(s.progress ?? null)
       setReport(s.lastReport)
+      setDbxBuiltin(!!s.dropboxBuiltin)
     })
-    return api.onStatus((s) => {
+    const offStatus = api.onStatus((s) => {
       setRunning(s.running)
       setProgress(s.progress ?? null)
       if (s.lastReport) setReport(s.lastReport)
     })
-  }, [api])
+    // 链接登录:浏览器授权完成后主进程回推结果
+    const offDbx = api.onDropboxAuth((r) => {
+      setDbxWaiting(false)
+      if (!r.ok) {
+        setSvcNote(r.error || 'error')
+        return
+      }
+      applyDbxCreds(r.config?.dropbox)
+      setSvcNote(t('settings.remotesync.dbxConnected', { who: r.email || 'Dropbox' }))
+    })
+    return () => {
+      offStatus()
+      offDbx()
+    }
+  }, [api, t])
 
   if (!api || !cfg) return null
   const patch = (p: Partial<RemoteSyncConfig>): void => {
@@ -94,7 +118,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
   }
   const dbxStart = (): void => {
     const key = (cfg.dropbox?.appKey ?? '').trim()
-    if (!key) {
+    if (!key && !dbxBuiltin) {
       setSvcNote(t('settings.remotesync.dbxNeedKey'))
       return
     }
@@ -102,10 +126,14 @@ export function RemoteSyncSection(): React.ReactElement | null {
     void api
       .dropboxAuthStart(key)
       .then((r) => {
-        if (r.ok) {
-          setDbxPending(true)
-          setSvcNote(t('settings.remotesync.dbxOpened'))
-        } else setSvcNote(r.error || 'error')
+        if (!r.ok) {
+          setSvcNote(r.error || 'error')
+          return
+        }
+        const manual = r.mode !== 'auto'
+        setDbxManual(manual)
+        setDbxWaiting(!manual)
+        setSvcNote(manual ? t('settings.remotesync.dbxOpened') : t('settings.remotesync.dbxOpenedAuto'))
       })
       .finally(() => setBusy(false))
   }
@@ -116,8 +144,8 @@ export function RemoteSyncSection(): React.ReactElement | null {
       .dropboxAuthFinish(key, dbxCode.trim())
       .then((r) => {
         if (r.ok) {
-          if (r.config) setCfg({ ...r.config, backend: cfg.backend })
-          setDbxPending(false)
+          applyDbxCreds(r.config?.dropbox)
+          setDbxManual(false)
           setDbxCode('')
           setSvcNote(t('settings.remotesync.dbxConnected', { who: r.email || 'Dropbox' }))
         } else setSvcNote(r.error || 'error')
@@ -159,12 +187,15 @@ export function RemoteSyncSection(): React.ReactElement | null {
 
         {cfg.backend === 'dropbox' && (
           <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
-            <input
-              type="text"
-              value={cfg.dropbox?.appKey ?? ''}
-              placeholder={t('settings.remotesync.dbxAppKey')}
-              onChange={(e) => patch({ dropbox: { ...(cfg.dropbox ?? {}), appKey: e.target.value } })}
-            />
+            {/* 有官方应用就别拿 App Key 拦人:只有自建应用才露这一栏 */}
+            {(!dbxBuiltin || dbxOwnApp || (cfg.dropbox?.appKey ?? '') !== '') && (
+              <input
+                type="text"
+                value={cfg.dropbox?.appKey ?? ''}
+                placeholder={t('settings.remotesync.dbxAppKey')}
+                onChange={(e) => patch({ dropbox: { ...(cfg.dropbox ?? {}), appKey: e.target.value } })}
+              />
+            )}
             <input
               type="text"
               value={cfg.dropbox?.baseDir ?? ''}
@@ -172,14 +203,15 @@ export function RemoteSyncSection(): React.ReactElement | null {
               onChange={(e) => patch({ dropbox: { ...(cfg.dropbox ?? { appKey: '' }), appKey: cfg.dropbox?.appKey ?? '', baseDir: e.target.value } })}
             />
             <div className="settings-inline-row">
-              <button className="btn ghost sm" disabled={busy} onClick={dbxStart}>
+              <button className="btn ghost sm" disabled={busy || dbxWaiting} onClick={dbxStart}>
                 {cfg.dropbox?.refreshToken ? t('settings.remotesync.dbxReconnect') : t('settings.remotesync.dbxConnect')}
               </button>
-              {cfg.dropbox?.refreshToken && !dbxPending && (
+              {dbxWaiting && <span className="hint">{t('settings.remotesync.dbxWaiting')}</span>}
+              {cfg.dropbox?.refreshToken && !dbxManual && !dbxWaiting && (
                 <span className="hint">{t('settings.remotesync.dbxConnected', { who: cfg.dropbox.email || cfg.dropbox.accountId || 'Dropbox' })}</span>
               )}
             </div>
-            {dbxPending && (
+            {dbxManual && (
               <div className="settings-inline-row">
                 <input
                   type="text"
@@ -192,7 +224,12 @@ export function RemoteSyncSection(): React.ReactElement | null {
                 </button>
               </div>
             )}
-            <div className="hint">{t('settings.remotesync.dbxHint')}</div>
+            <div className="hint">{t(dbxBuiltin && !dbxOwnApp ? 'settings.remotesync.dbxHintBuiltin' : 'settings.remotesync.dbxHint')}</div>
+            {dbxBuiltin && !dbxOwnApp && (cfg.dropbox?.appKey ?? '') === '' && (
+              <button className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => setDbxOwnApp(true)}>
+                {t('settings.remotesync.dbxUseOwnApp')}
+              </button>
+            )}
           </div>
         )}
 

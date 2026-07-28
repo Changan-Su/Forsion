@@ -22,6 +22,9 @@ export interface DirectProvider {
   modelIds?: string[]; // 可选:该 provider 的 LLM 模型白名单(支持不带前缀直接用)
   imageModelIds?: string[]; // 可选:该 provider 的生图模型白名单(generate_image 用;OpenAI 兼容 /images/generations)
   ttsModelIds?: string[]; // 可选:该 provider 的语音合成模型白名单(朗读用;OpenAI 兼容 /audio/speech)
+  // 可选:该 provider 里**没有**多模态视觉的模型(黑名单;默认认为都能看图,见 modelSupportsVision)。
+  // 命中的模型遇到图片会自动转交「辅助模型 · 图像识别」槽先转文字。
+  noVisionModelIds?: string[];
   protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切到原生端点
   accountId?: string; // Codex 订阅:chatgpt-account-id 头取值
 }

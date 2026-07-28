@@ -18,6 +18,13 @@ module.exports = {
   ...(product.id === 'forsion'
     ? { publish: { provider: 'github', owner: 'Changan-Su', repo: 'Forsion' } }
     : {}),
+  // ⚠️ 测试版通道的命门。electron-builder 按版本号里的 prerelease 后缀推导频道:
+  // `2.7.3` → 写 latest*.yml,`2.7.3-beta.1` → 写 beta*.yml。所以「beta 发出去但不推给正式版用户」
+  // 是**免费**的(正式版用户轮询的是 latest*.yml,根本看不见)。
+  // 但反过来那半边不免费:不开这个开关,**正式版只写 latest*.yml**,已经切到 beta 频道的用户
+  // 读的是 beta*.yml,于是**永远收不到后续正式版,卡在最后一个 beta 上**。
+  // 开了之后每次构建把所有频道的 yml 都写一遍(正式版的 beta.yml 也指向该正式版),两边都能往前走。
+  generateUpdatesFilesForAllChannels: true,
   artifactName: product.artifactPrefix + '-${version}-${arch}.${ext}',
   files: [
     'out/**/*',

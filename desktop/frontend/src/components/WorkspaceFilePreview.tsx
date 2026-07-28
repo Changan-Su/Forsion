@@ -44,22 +44,25 @@ export interface PreviewTarget {
  *  ② 别用 `<iframe>`:令牌根与宿主必然**跨源**,而 Chromium 对跨源子框架**硬禁 file picker**
  *     (`SecurityError: Cross origin sub frames aren't allowed to show a file picker`,任何用户手势
  *     都救不了)→ 页面的「导入文件」全废。`<webview>` 是独立**顶层文档**,不受这条限制。
- * 没有本机路径(云沙箱/对话内联的瞬态内容)才退回 srcdoc —— 那种内容本来也没有同目录资源可加载。
+ * 没有本机路径(云沙箱/对话内联的瞬态内容)也**不退回 srcdoc**:走 codePreviewServeHtml,把文本
+ * 挂进内存令牌根拿一个真实源 —— 否则同一份 agent 产物在本地文件里能跑、在云会话里空白。
+ * srcdoc 只剩**非 Electron 构建**(web/mobile 复用本渲染层,没有 window.tangu)这一条退路。
  */
 export const HtmlPreview: React.FC<{ path?: string; text: string; title: string; nonce: number }> = ({ path, text, title, nonce }) => {
-  // 能否挂根**同步**就能判定(有路径 + 宿主有这个桥)→ 退回 srcdoc 的情形一帧都不空。
-  const canServe = !!path && !!window.tangu?.codePreviewServePath
+  // 能否挂根**同步**就能判定 → 退回 srcdoc 的情形一帧都不空。
+  const canServe = !!(path ? window.tangu?.codePreviewServePath : window.tangu?.codePreviewServeHtml)
   const [base, setBase] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
     if (!canServe) return
     let cancel = false
     setFailed(false)
-    void window.tangu!.codePreviewServePath!(path!)
-      .then((r) => { if (!cancel) setBase(r.url) })
-      .catch(() => { if (!cancel) setFailed(true) })
+    setBase(null) // ⚠️不清空的话,换到另一份内容后 IPC 往返期间还在显示**上一份**预览
+    // 有路径 → 挂目录(兄弟资源可加载);无路径 → 挂这份文本本身。
+    const p = path ? window.tangu!.codePreviewServePath!(path) : window.tangu!.codePreviewServeHtml!(text)
+    void p.then((r) => { if (!cancel) setBase(r.url) }).catch(() => { if (!cancel) setFailed(true) })
     return () => { cancel = true }
-  }, [path, canServe]) // ⚠️不带 nonce:挂根只跟路径有关,重载不必再走一次 IPC(否则每次刷新都空白一下)
+  }, [path, canServe, path ? '' : text]) // ⚠️有路径时不带 nonce/text:挂根只跟路径有关,重载不必再走 IPC(否则每次刷新都空白一下)
 
   if (canServe && !failed) {
     // 首帧(IPC 往返中)给个占位;拿到 base 之后重载只换 key,不再回到占位态。
@@ -76,6 +79,7 @@ export const HtmlPreview: React.FC<{ path?: string; text: string; title: string;
       />
     )
   }
+  // webhost-ok: 仅 web/mobile 构建(无 window.tangu)会走到这里;Electron 里永远命中上面的令牌根。
   return <iframe key={nonce} className="wsfile-frame" srcDoc={text} sandbox="allow-scripts allow-popups allow-forms allow-modals" title={title} />
 }
 

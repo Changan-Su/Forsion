@@ -125,7 +125,12 @@ export function emptyDb(name: string): DbFile {
   return {
     version: DB_VERSION,
     name,
-    columns: [{ id: dbId(), name: '名称', type: 'text' }],
+    // 默认「标题 + 文本」两列:只给一列身份列的话,新建的表第一件事永远是手动加一列
+    // 才能记点东西。首列恒为身份列(columns[0]),第二列给正文。
+    columns: [
+      { id: dbId(), name: '标题', type: 'text' },
+      { id: dbId(), name: '文本', type: 'text' },
+    ],
     rows: [{ id: dbId(), cells: {} }],
   }
 }

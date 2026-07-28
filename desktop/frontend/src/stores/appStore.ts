@@ -12,7 +12,7 @@ import type {
 } from '../types'
 import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY } from '../types'
 import * as api from '../services/backendService'
-import { abortRun, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
+import { abortRun, cancelSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
@@ -145,6 +145,10 @@ function agentStamp(s: Pick<AppState, 'engines' | 'agentDefs' | 'defaultAgentSlu
 const runAborts = new Map<string, AbortController>()
 const subscribedRuns = new Set<string>()
 const stoppedRuns = new Set<string>()
+// 计划批准时选了「自动开始执行」的 **run**:该 run done 时消费、自动发起执行消息(engine plan_approved 带 auto)。
+// ⚠️ 按 runId 记而非 sessionId(Codex 评审 #4):按会话记的话,用户 stop 掉计划 run 后标记泄漏,
+// 该会话下一个无关 run 的 done 会莫名自动「开始执行」。所有终结路径统一在 endRun 清理。
+const planAutoStart = new Set<string>()
 // 卡死兜底:SSE 偶尔丢「终止帧」(后端 run 挂死/被 orphan janitor 标失败但事件没进流)→ 助手消息永远停在
 // streaming。看门狗周期性查:该 run 已不在后端活跃集 → 重载消息收尾(有内容标 done,无则 error),解除卡死。
 const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
@@ -229,6 +233,12 @@ export interface AppState {
   pendingDraft: string | null
   /** 拖引用进聊天:追加到草稿末尾(区别于 pendingDraft 的整体覆盖)。seq 让连拖同一条也能触发。 */
   draftAppend: { text: string; seq: number } | null
+  /** steer 等待区:run 跑动中发出的消息先等在这里,引擎 turn_boundary 注入后才进对话(id=引擎 userMessageId)。 */
+  steerPendingBySession: Record<string, Array<{ id: string; text: string; attachments?: Attachment[] }>>
+  /** ↑ 历史召回的补充池:steer 消息**入队即记**(类 pi addToHistory-on-enqueue),被删/被撤回后仍能从 ↑ 找回。 */
+  steerSentBySession: Record<string, string[]>
+  /** run 终结时未送达的插话回填输入框(per-session,防串会话;ChatView 并进 seedText 通道)。 */
+  steerRestoreBySession: Record<string, string | undefined>
   filePreview: PreviewTarget | null
   messagesBySession: Record<string, UiMessage[]>
   configBySession: Record<string, AgentConfig>
@@ -287,6 +297,10 @@ export interface AppState {
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
   removeWorkspace(ws: WorkspaceDescriptor): Promise<void>
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[] }, sessionId?: string | null): Promise<boolean>
+  /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
+  withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
+  /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
+  steerNow(sessionId?: string | null): Promise<void>
   stop(sessionId?: string | null): void
   truncateAndResend(fromIndex: number, text: string, attachments: Attachment[], sessionId?: string | null): Promise<void>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
@@ -306,7 +320,7 @@ export interface AppState {
   /** Agent Desk:用户主动点开某文件(TaskSummary「正在编辑」入口):解除静音并上台。 */
   deskShowFile(sessionId: string, path: string): void
   patchDesk(sessionId: string, patch: Partial<DeskState>): void
-  setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots'>, sessionId?: string | null): void
+  setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
   setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean): void
@@ -325,6 +339,8 @@ export interface AppState {
   setNewChatModel(id: string | null): void
   /** 预填聊天框草稿(外部 via-chat 入口的统一接缝);Composer2 消费后自行清空。 */
   setPendingDraft(text: string | null): void
+  /** Composer 消费掉「未送达插话」的回填后清位(per-session)。 */
+  clearSteerRestore(sessionId: string): void
   appendDraft(text: string): void
   clearDraftAppend(): void
   setFilePreview(p: PreviewTarget | null): void
@@ -397,6 +413,9 @@ export const useApp = create<AppState>((set, get) => ({
   newChatModel: null,
   pendingDraft: null,
   draftAppend: null,
+  steerPendingBySession: {},
+  steerSentBySession: {},
+  steerRestoreBySession: {},
   filePreview: null,
   messagesBySession: {},
   configBySession: {},
@@ -587,6 +606,8 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'plan_approved':
         set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...(s.configBySession[sessionId] || {}), planMode: false } } }))
+        // 「批准,自动开始执行」:本 run 收尾(done)后自动发起执行(本轮工具集已冻结只读,执行必须是新 run)。
+        if (pl.auto) planAutoStart.add(runId)
         if (pl.file) get().toast(t('app.planArchived', { file: pl.file }))
         break
       case 'group_speaker': {
@@ -658,6 +679,15 @@ export const useApp = create<AppState>((set, get) => ({
       case 'turn_boundary': {
         const newId = pl.newAssistantId
         const users: Array<{ id: string; content: string }> = Array.isArray(pl.userMessages) ? pl.userMessages : []
+        // 附件随注入迁移(Codex 评审 #2):turn_boundary 刻意只带 id/content(附件可达数 MB,不过 SSE),
+        // 附件从等待区条目上就地合并进新用户消息;引擎落库时存了 attachments,刷新后两边一致。
+        const pendAtt = new Map((get().steerPendingBySession[sessionId] || [])
+          .filter((p) => p.attachments?.length).map((p) => [p.id, p.attachments!] as const))
+        // 注入达成:这些消息离开 steer 等待区(下方 additions 负责把它们插进对话)。
+        if (users.length) {
+          const injected = new Set(users.map((u) => u.id))
+          set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => !injected.has(p.id)) } }))
+        }
         set((s) => {
           const list = s.messagesBySession[sessionId] || []
           const have = new Set(list.map((m) => m.id))
@@ -669,7 +699,7 @@ export const useApp = create<AppState>((set, get) => ({
             .map((m) => (m.id === finalizedId ? { ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const } : m))
             .filter((m) => !(m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length)))
           const additions: UiMessage[] = []
-          for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, status: 'done', timestamp: Date.now() })
+          for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
           if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName })
           return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...next, ...additions] } }
         })
@@ -701,7 +731,13 @@ export const useApp = create<AppState>((set, get) => ({
           if (!u) return s
           return { usageBySession: { ...s.usageBySession, [sessionId]: { ctx: u.ctx, base: u.base + u.live, live: 0 } } }
         })
-        endRun(set, get, sessionId, runId)
+        {
+          // 计划「批准并自动开始」:**先**消费本 run 的标记(endRun 会兜底清掉一切终结 run 的标记),
+          // 再 endRun 清 running,最后发 kickoff(此刻无活跃 run → 正常起新 run 而非误走 steer)。
+          const autoKick = planAutoStart.delete(runId)
+          endRun(set, get, sessionId, runId)
+          if (autoKick) void get().send(t('plan.autoKickoff'), [], undefined, undefined, undefined, sessionId)
+        }
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
         break
       case 'error':
@@ -712,7 +748,7 @@ export const useApp = create<AppState>((set, get) => ({
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
-        endRun(set, get, sessionId, runId)
+        endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
         if (!pl.aborted && get().authInfo?.loggedIn) {
@@ -1377,6 +1413,8 @@ export const useApp = create<AppState>((set, get) => ({
     if (mentions?.priorityAgent) agentConfig.priorityAgent = mentions.priorityAgent
     if (mentions?.mentionAgents?.length) agentConfig.mentionedAgentSlugs = mentions.mentionAgents
     if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
+    // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
+    if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
     try { if (localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1') agentConfig.debugSystemPrompt = true } catch { /* ignore */ }
     if (workspaceFiles?.length) {
       try {
@@ -1389,7 +1427,9 @@ export const useApp = create<AppState>((set, get) => ({
       try {
         const sr = await steerRun(get().cfg, activeRunId, { message: text, attachments })
         if (sr.ok) {
-          set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), { id: sr.userMessageId || `u-${Date.now()}`, role: 'user', content: text, attachments, status: 'done', timestamp: Date.now() }] } }))
+          // 不直接上屏:消息进「steer 等待区」,引擎在迭代边界注入并发 turn_boundary 后才进对话
+          // (此前的立即上屏是谎报——引擎此刻还没读到它)。入队即记 ↑ 历史(类 pi):删/撤回后仍可找回。
+          set((s) => steerAcceptPatch(s, sessionId, activeRunId, { id: sr.userMessageId || `u-${Date.now()}`, text, attachments }))
           return true
         }
       } catch (e: any) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
@@ -1415,6 +1455,44 @@ export const useApp = create<AppState>((set, get) => ({
       if (sess && (!sess.title || sess.title === 'New Chat')) void get().renameSession(sessionId, text.slice(0, 30))
       return true
     } catch (e: any) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
+  },
+
+  withdrawSteer: async (sessionId, msgId) => {
+    const item = (get().steerPendingBySession[sessionId] || []).find((p) => p.id === msgId)
+    if (!item) return null
+    const runId = get().runningBySession[sessionId]
+    if (runId) {
+      const r = await cancelSteer(get().cfg, runId, msgId).catch(() => ({ ok: false, gone: false }))
+      // 来不及(已注入/引擎已收尾):等待区的这条交给 turn_boundary 或 endRun 收拾,别在这里硬拔。
+      if (!r.ok) return null
+    }
+    set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== msgId) } }))
+    return item.text
+  },
+
+  steerNow: async (targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (!sid) return
+    const pending = (get().steerPendingBySession[sid] || []).slice()
+    if (!pending.length) return
+    // 先逐条撤销**引擎侧**队列再打断(Codex 评审 #3):否则 abort 落地前引擎可能恰好到迭代边界把
+    // 队列注入落库,重发就成了双份指令。撤不掉(gone=已注入/正在注入)或网络错的条目一律不重发
+    // ——宁可少发一条(文本仍在 ↑ 历史),不可让模型收到两遍。
+    const runId = get().runningBySession[sid]
+    const resend: typeof pending = []
+    for (const p of pending) {
+      if (!runId) { resend.push(p); continue }
+      const r = await cancelSteer(get().cfg, runId, p.id).catch(() => ({ ok: false }))
+      if (r.ok) resend.push(p)
+    }
+    // 清等待区再 stop:endRun 的「余量回填输入框」只兜真正没送出去的,这批要么马上强发要么已注入。
+    set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sid]: [] } }))
+    get().stop(sid)
+    // ponytail: 点「插话」=撤回成功的按原序冲出去(实际队列深度≈1)。第一条起新 run,后续几条在新
+    // run 上要么重新排进等待区、要么(新 run 尚未活跃)各自成排队 run——两种都保序,语义等价。
+    for (const p of resend) {
+      await get().send(p.text, p.attachments || [], undefined, undefined, undefined, sid)
+    }
   },
 
   stop: (targetSessionId) => {
@@ -1638,6 +1716,7 @@ export const useApp = create<AppState>((set, get) => ({
   setNewChatCfg: (fn) => set((s) => ({ newChatCfg: fn(s.newChatCfg) })),
   setNewChatModel: (id) => set({ newChatModel: id }),
   setPendingDraft: (text) => set({ pendingDraft: text }),
+  clearSteerRestore: (sessionId) => set((s) => ({ steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: undefined } })),
   appendDraft: (text) => set((s) => ({ draftAppend: { text, seq: (s.draftAppend?.seq || 0) + 1 } })),
   clearDraftAppend: () => set({ draftAppend: null }),
   // 预览改道:所有入口(文件面板/右栏工作区/对话内联)汇聚于此 —— 一律开主区标签页(wsfile 视图)。
@@ -1724,18 +1803,47 @@ export const useApp = create<AppState>((set, get) => ({
   setActiveSpecial: (k) => set({ activeSpecial: k }),
 }))
 
+/** steer 被引擎受理后的等待区落位(Codex 评审 #1):turn_boundary 走 SSE,可能抢在 POST 响应之前
+ *  到达——消息已上屏、或 run 已易主/终结时**不进等待区**(否则 chip 永久残留,run 终结还会把已
+ *  送达的消息错误回填输入框)。↑ 历史(steerSent)无条件记:「入队即记」是它的公约。 */
+export function steerAcceptPatch(
+  s: Pick<AppState, 'messagesBySession' | 'runningBySession' | 'steerPendingBySession' | 'steerSentBySession'>,
+  sessionId: string,
+  runId: string,
+  item: { id: string; text: string; attachments?: Attachment[] },
+): Partial<AppState> {
+  const sent = { steerSentBySession: { ...s.steerSentBySession, [sessionId]: [...(s.steerSentBySession[sessionId] || []), item.text] } }
+  const already = (s.messagesBySession[sessionId] || []).some((m) => m.id === item.id)
+  const stillRunning = s.runningBySession[sessionId] === runId
+  if (already || !stillRunning) return sent
+  return { ...sent, steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: [...(s.steerPendingBySession[sessionId] || []), item] } }
+}
+
 /** run 结束清理(对齐 App.tsx endRun):删句柄/订阅 + 清 running + 非活跃则标未读。 */
 function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () => AppState, sessionId: string, runId: string): void {
   runAborts.delete(runId)
   subscribedRuns.delete(runId)
   stoppedRuns.delete(runId)
+  // 计划自动开始的兜底清理:done 路径在调 endRun **之前**已消费;其余一切终结路径(stop/错误/看门狗)
+  // 在此作废,防止标记泄漏到该会话后续无关 run(Codex 评审 #4)。
+  planAutoStart.delete(runId)
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
   set((s) => {
+    // 迟到的旧 run 终结事件不碰任何状态(尤其不许动等待区——新 run 的插话还排着队)。
     if (s.runningBySession[sessionId] !== runId) return {}
     const next = { ...s.runningBySession }
     delete next[sessionId]
-    return { runningBySession: next }
+    // run 终结时还没被注入的插话:引擎侧队列已丢,回填该会话的输入框(类 pi「Esc=先取回队列再中止」)。
+    // 自然收尾(done)前引擎会把队列全量注入,这里有货基本只出现在中止/失败路径。
+    const leftover = s.steerPendingBySession[sessionId]
+    return {
+      runningBySession: next,
+      ...(leftover?.length ? {
+        steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: [] },
+        steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: leftover.map((p) => p.text).join('\n\n') },
+      } : {}),
+    }
   })
   if (get().activeId !== sessionId) {
     const next = new Set(get().unread)

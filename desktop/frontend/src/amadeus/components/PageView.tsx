@@ -19,6 +19,8 @@ import { usePageStore, type Status } from '../store/pageStore'
 import { findTotal, useFindStore } from '../blocks/markdown/findInPage'
 import { BlockSelectionKeys, useBlockSelection } from '../store/blockSelection'
 import { edgeBlock } from '../lib/blockEdges'
+import { takeModeCursor } from '../lib/modeCursor'
+import { activePageScope, pageStoreFor, usePageScope, useScopedPageStore, type PageStoreApi } from '../store/pageStore'
 import { Row } from './Row'
 import { BacklinksPanel } from './BacklinksPanel'
 
@@ -92,8 +94,10 @@ function RowGap({ index }: { index: number }) {
 
 /** 标题栏 → 正文:光标进正文第一块(空正文则建首块)。本组件 header 与桌面壳的 NoteTitle 共用。
  *  block id 跨改名稳定,focusRequest 会在块渲染时消费。 */
-export function focusBody(): void {
-  const st = usePageStore.getState()
+export function focusBody(store?: PageStoreApi): void {
+  // ⚠️ 分屏:不传 store 就落到「活动面板」。面板内的调用方必须把自己那份传进来,
+  // 否则点 B 面板的标题栏回车,光标/新块会落进 A 面板那篇(Codex 复审坐实)。
+  const st = (store ?? pageStoreFor(activePageScope())).getState()
   const first = st.manifest ? edgeBlock(st.manifest.root, 'first') : null
   if (first) st.requestFocus(first, 'start')
   else st.insertBlockAfter(null) // 自带 requestFocus
@@ -110,8 +114,8 @@ const pointerFirst: CollisionDetection = (args) => {
 
 /** 点正文下方空白(.page-tail)= Notion 式在末尾续写;末块已空就聚焦它,别叠一摞空块。
  *  块删完时这是唯一能点出块的地方(桌面 bare 模式没有 footer 的「＋ 新块」)。 */
-function appendAtEnd(): void {
-  const st = usePageStore.getState()
+function appendAtEnd(store: PageStoreApi): void {
+  const st = store.getState()
   const last = st.manifest ? edgeBlock(st.manifest.root, 'last') : null
   if (last && !st.blocks[last]?.content) st.requestFocus(last, 'end')
   else st.insertBlockAfter(null)
@@ -140,6 +144,18 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
   const renamePage = usePageStore((s) => s.renamePage)
   const setDnd = usePageStore((s) => s.setDnd)
 
+  // 本编辑器面板自己那份文档 store(分屏后每个面板一份)。**写操作一律走它**,
+  // 别用 usePageStore.getState() —— 那解析到「活动面板」,异步回调里会写到隔壁那篇去。
+  const scope = usePageScope()
+  const scoped = useScopedPageStore()
+
+  // 从源码模式切回来:把光标送回它离开时那个块(见 lib/modeCursor)。
+  // 只在挂载时取一次;普通的打开笔记不会有待交接的光标(takeModeCursor 返回 null),不受影响。
+  useEffect(() => {
+    const cur = takeModeCursor(scope)
+    if (cur) scoped.getState().requestFocusAt(cur.blockId, cur.anchor)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const [activeId, setActiveId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
@@ -156,8 +172,10 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
       if (k !== 'z' && k !== 'y') return
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      // 这是 window 级监听:分屏时**两个** PageView 都挂着一份,不认作用域就会一次撤销两篇。
+      if (activePageScope() !== scope) return
       e.preventDefault()
-      const st = usePageStore.getState()
+      const st = scoped.getState()
       if (k === 'y' || e.shiftKey) st.redo()
       else st.undo()
     }
@@ -248,7 +266,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
     if (overId.startsWith('bedge:')) {
       // 块级并排:只与目标那一块成两栏(Notion 语义)
       const [, targetBlock, side] = overId.split(':')
-      usePageStore.getState().pairBlocks(activeBlock, targetBlock, side === 'left' ? 'left' : 'right')
+      scoped.getState().pairBlocks(activeBlock, targetBlock, side === 'left' ? 'left' : 'right')
     } else if (overId.startsWith('edge:')) {
       const [, rowId, side] = overId.split(':')
       addColumnWithBlock(rowId, activeBlock, side === 'left' ? 'left' : 'right')
@@ -290,14 +308,14 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
               // 顺序反了则空正文刚建的首块会被冲掉。
               if (e.key === 'Enter') {
                 e.preventDefault()
-                focusBody()
+                focusBody(scoped)
                 void commitTitle()
               } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                 // 仅当光标在标题末尾(无选区)才跳正文,否则放行原生移动。
                 const el = e.currentTarget
                 if (el.selectionStart === el.value.length && el.selectionEnd === el.value.length) {
                   e.preventDefault()
-                  focusBody()
+                  focusBody(scoped)
                   void commitTitle()
                 }
               } else if (e.key === 'Escape') {
@@ -362,7 +380,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
       </DndContext>
 
       {/* 正文下方的续写区(点空白 = 末尾建块)。非 bare 有下面 footer 的「＋ 新块」,不需要。 */}
-      {bare && <div className="page-tail" onClick={appendAtEnd} />}
+      {bare && <div className="page-tail" onClick={() => appendAtEnd(scoped)} />}
 
       {!bare && (
         <div className="page-footer">

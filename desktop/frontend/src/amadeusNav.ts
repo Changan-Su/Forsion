@@ -1,7 +1,7 @@
 // Amadeus「打开笔记」的统一门面:搜索/标签/快切/反链等一律走这里,别直接调 loadPage。
 // 语义(类 Obsidian):已有认领该笔记的编辑器 tab → 激活它;newTab(⌘点击)→ 新开 tab;
 // 一个编辑器都没有(全被关掉)→ 带 notePath 新开;否则在当前(最近活动)编辑器里加载。
-import { usePageStore } from '@amadeus/store/pageStore'
+import { activePageScope, pageStoreFor, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { askString } from '@amadeus/components/askString'
@@ -41,11 +41,16 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
     return
   }
   // 焦点在非编辑器主 leaf(空白新标签等)→ 先把它就地切成编辑器,笔记才落进「聚焦的 tab」而非旧编辑器。
+  // 就地切换时**带上 notePath 即可**:新面板挂载后会自己把它装进自己那份 store(分屏后每个面板一份)。
+  // ⚠️ 这里不能再用 usePageStore.getState().loadPage() —— 那解析到「当前活动面板」,而 navigateLeaf
+  // 之后 React 还没提交、活动面板仍是旧的,笔记会落到隔壁那半屏去。要装就对着目标面板的 store 装。
   const focused = ws.api ? activeMainPanel(ws.api) : null
   if (focused && ((focused.params ?? {}) as { __type?: string }).__type !== 'amadeus-editor') {
     ws.navigateLeaf(focused.id, 'amadeus-editor', { notePath: path })
+    await waitForActive(path)
+    return
   }
-  await usePageStore.getState().loadPage(path)
+  await pageStoreFor(focused?.id ?? activePageScope()).getState().loadPage(path)
   await waitForActive(path)
 }
 

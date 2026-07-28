@@ -17,11 +17,8 @@ export const FORSION_CONNECT_LOCAL_SDK = `
     });
   }
 
-  var confP = null, modelCache = {};
-  function connectConfig() {
-    if (!confP) confP = fetch('/__forsion/config').then(function (r) { return r.ok ? r.json() : {}; }).catch(function () { return {}; });
-    return confP;
-  }
+  // 对话模型不在客户端解析:chat 不指名就不传,agent 一律不传,服务端按 Connect 策略现填。
+  var modelCache = {};
   function listModels(type) {
     var t = type === 'image' ? 'image_gen' : (type === 'asr' ? 'asr' : 'llm');
     if (!modelCache[t]) {
@@ -31,16 +28,6 @@ export const FORSION_CONNECT_LOCAL_SDK = `
       modelCache[t].catch(function () { modelCache[t] = null; });
     }
     return modelCache[t];
-  }
-  function pickChatModel(explicit) {
-    if (explicit) return Promise.resolve(explicit);
-    return connectConfig().then(function (c) {
-      if (c && c.defaultModel) return c.defaultModel;
-      return listModels('llm').then(function (ms) {
-        if (ms[0]) return ms[0].id;
-        throw new Error('平台未配置可用的对话模型');
-      });
-    });
   }
   function pickImageModel(explicit) {
     if (explicit) return Promise.resolve(explicit);
@@ -71,8 +58,11 @@ export const FORSION_CONNECT_LOCAL_SDK = `
       : opts.prompt ? [{ role: 'user', content: String(opts.prompt) }] : null;
     if (!messages || !messages.length) throw new Error('chat 需要 messages 或 prompt');
     if (opts.system) messages.unshift({ role: 'system', content: String(opts.system) });
-    var model = await pickChatModel(opts.model);
-    var body = { model_id: model, messages: messages, stream: true };
+    // 页面没指名模型就不传:服务端按 Connect 策略现查现填默认(admin 改默认即时生效,
+    // 不受本页加载时缓存的 config 影响);指名模型则原样透传,越白名单由服务端 403。
+    var model = opts.model || null;
+    var body = { messages: messages, stream: true };
+    if (model) body.model_id = model;
     if (typeof opts.temperature === 'number') body.temperature = opts.temperature;
     if (typeof opts.maxTokens === 'number') body.max_tokens = opts.maxTokens;
     var r = await fetch('/__forsion/chat', {
@@ -99,6 +89,7 @@ export const FORSION_CONNECT_LOCAL_SDK = `
         try {
           var j = JSON.parse(payload);
           if (j.error) throw new Error(typeof j.error === 'string' ? j.error : (j.error.message || 'AI 错误'));
+          if (j.model) model = j.model; // 服务端代填默认时,从流块里回读实际模型
           var d = j.choices && j.choices[0] && (j.choices[0].delta && j.choices[0].delta.content ||
             j.choices[0].message && j.choices[0].message.content) || '';
           if (d) { text += d; if (typeof opts.onDelta === 'function') try { opts.onDelta(d); } catch (e) {} }
@@ -111,6 +102,65 @@ export const FORSION_CONNECT_LOCAL_SDK = `
     // 服务端成功必发 data: [DONE];没见到 = 流被中断,判失败而非返回截断的部分结果。
     if (!sawDone) throw new Error('AI 响应中断（连接未正常结束）');
     return { text: text, model: model };
+  }
+
+  // ── Agent 通道(契约与发布态壳页 doAgent 一致):需求递给云端 worker,上下文/工具服务端托管 ──
+  function genSession() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    var a = new Uint8Array(16); crypto.getRandomValues(a);
+    return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+  }
+  async function agentRun(opts) {
+    opts = opts || {};
+    var input = opts.input != null ? String(opts.input) : '';
+    if (!input.trim()) throw new Error('agent 需要 input');
+    var session = typeof opts.session === 'string' && opts.session ? opts.session : genSession();
+    // 不发 model_id:模型完全由网关按 Connect 策略决定(app_id/agent_config/model 都由代理+网关钉死)
+    var r = await fetch('/__forsion/agent', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: session, message: input })
+    });
+    if (!r.ok) {
+      var eb = await r.json().catch(function () { return {}; });
+      throw new Error((eb && eb.detail) || ('HTTP ' + r.status));
+    }
+    var runId = (await r.json()).runId;
+    var er = await fetch('/__forsion/agent-events/' + encodeURIComponent(runId));
+    if (!er.ok) {
+      var eb2 = await er.json().catch(function () { return {}; });
+      throw new Error((eb2 && eb2.detail) || ('HTTP ' + er.status));
+    }
+    // 帧格式 data: {seq,type,payload}:token.delta=文本增量,done.content=权威终稿,error=失败;
+    // 代理中断会补 data: {error} 帧(无 type),同样判失败。
+    var reader = er.body.getReader();
+    var dec = new TextDecoder();
+    var buf = '', streamed = '', finalText = null, errMsg = null;
+    for (;;) {
+      var step = await reader.read();
+      if (step.done) break;
+      buf += dec.decode(step.value, { stream: true });
+      var lines = buf.split('\\n');
+      buf = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line || line.indexOf('data:') !== 0) continue;
+        var ev;
+        try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
+        if (ev.error && !ev.type) { errMsg = String(ev.error); continue; }
+        if (ev.type === 'token' && ev.payload && ev.payload.delta) {
+          streamed += ev.payload.delta;
+          if (typeof opts.onDelta === 'function') try { opts.onDelta(ev.payload.delta); } catch (e) {}
+        } else if (ev.type === 'done') {
+          // done.content 是权威终稿(哪怕为空串也照信);只有老 worker 缺字段才回退流累计
+          finalText = (ev.payload && typeof ev.payload.content === 'string') ? ev.payload.content : streamed;
+        } else if (ev.type === 'error') {
+          errMsg = (ev.payload && (ev.payload.detail || ev.payload.error)) || 'AI agent 执行失败';
+        }
+      }
+    }
+    if (errMsg) throw new Error(errMsg);
+    if (finalText == null) throw new Error('AI 响应中断（连接未正常结束）');
+    return { text: finalText, session: session };
   }
 
   async function generateImage(opts) {
@@ -141,7 +191,7 @@ export const FORSION_CONNECT_LOCAL_SDK = `
       });
     },
     models: function (type) { return listModels(type); },
-    ai: { chat: chat, generateImage: generateImage }
+    ai: { chat: chat, agent: agentRun, generateImage: generateImage }
   };
 })();
 `

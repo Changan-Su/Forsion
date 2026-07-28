@@ -16,13 +16,14 @@ export interface TodoItem {
 const MAX_ITEMS = 50;
 const MAX_CONTENT_CHARS = 500;
 
-function renderTodos(todos: TodoItem[]): string {
+export function renderTodos(todos: TodoItem[]): string {
   if (!todos.length) return '(empty todo list)';
   const mark = { pending: '[ ]', in_progress: '[~]', completed: '[x]' } as const;
   return todos.map((t, i) => `${i + 1}. ${mark[t.status]} ${t.content}`).join('\n');
 }
 
-async function loadTodos(sessionId: string): Promise<TodoItem[]> {
+/** 读会话 todo(agentLoop 的运行时现场注入/完成度审计也用;读失败调用方自兜)。 */
+export async function loadTodos(sessionId: string): Promise<TodoItem[]> {
   const raw = await deps().state.loadTodos(sessionId);
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
   return Array.isArray(parsed) ? parsed : [];

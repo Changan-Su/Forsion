@@ -31,6 +31,19 @@ export function responseStyleSection(channelSession?: boolean): string {
   );
 }
 
+/** 任务持久性契约(借 Codex「Autonomy and Persistence」+ Thread Goals continuation 的精华):
+ *  长任务中途松手 / 被打断后忘记继续,病根都是提示词没给「坚持到底」的压力(Codex 的 must keep going
+ *  是刻在基础提示里的;PI 靠把中止消息从上下文里剔除来「装作没停过」——我们落库半截消息,必须补压力)。
+ *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组(per-app 覆盖是整段替换,会被静默丢掉)。
+ *  计划模式不注入(「carry through implementation」与只读工具集直接矛盾)。 */
+export const PERSISTENCE_SECTION =
+  '## Task Persistence\n' +
+  '- Keep going until the user\'s request is fully resolved before ending your turn. Do not stop at analysis or a partial fix: carry the work through implementation and verification unless the user pauses or redirects you.\n' +
+  '- Before ending your turn, re-read your last paragraph: if it is a plan, a promise ("I will..."), or a list of next steps, do that work now instead of stopping.\n' +
+  '- For multi-step tasks, keep a running checklist with todo_write and keep it current; after each completed step, continue with the next item instead of yielding.\n' +
+  '- Do not quietly shrink the task to an easier subset. If the full goal cannot be finished this turn, make real progress toward it and say plainly what remains.\n' +
+  '- A `<turn_interrupted>` line in the conversation means that turn was cut short by the user and its task is likely unfinished. After handling the user\'s next message, check whether that task should continue: verify the current state with tools (aborted calls may have partially executed), then resume it — or state explicitly that you are leaving it unfinished.';
+
 /** 「记忆与日志」使用指引(用户记忆段之后、技能段之前)。 */
 export const MEMORY_LOG_GUIDANCE =
   '## Memory & Logs\n' +

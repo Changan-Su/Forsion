@@ -140,6 +140,30 @@ async function main() {
   })
   check('PTY spawn → write → onData 往返', !!pty && pty.ok === true, pty && (pty.error || pty.tail))
 
+  // ③.5 <webview> 换掉 <iframe> 后不能塌:两处预览宿体的 class 在 flex 容器里都得撑满
+  //     (webview 的 UA 默认 display 与 iframe 不同,漏了 display:flex 就是一片空白)
+  const sizes = await win.evaluate((classes) => {
+    const box = document.createElement('div')
+    box.style.cssText = 'position:fixed;left:-9999px;top:0;width:600px;height:400px;display:flex;flex-direction:column'
+    document.body.appendChild(box)
+    const out = {}
+    for (const c of classes) {
+      const w = document.createElement('webview')
+      w.className = c
+      w.style.display = 'flex'
+      w.src = 'about:blank'
+      box.appendChild(w)
+      const r = w.getBoundingClientRect()
+      out[c] = [Math.round(r.width), Math.round(r.height)]
+      w.remove()
+    }
+    box.remove()
+    return out
+  }, ['wsfile-frame', 'csx-frame'])
+  for (const [c, [w, h]] of Object.entries(sizes)) {
+    check(`.${c} 的 <webview> 撑满 600×400 容器`, w === 600 && h === 400, `${w}×${h}`)
+  }
+
   // ④ HTML 预览宿主:同目录写一个 html + 一个兄弟资源,断言预览页跑在 http 源上且 fetch 得到兄弟文件
   const previewDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-preview-'))
   fs.writeFileSync(path.join(previewDir, 'asset.json'), '{"ok":true}')
@@ -155,6 +179,12 @@ async function main() {
     '  try { await window.showOpenFilePicker(); r.picker = "opened" }',
     '  catch (e) { r.picker = /Cross origin sub frames/i.test(String(e.message)) ? "cross-origin-blocked" : "needs-gesture" }',
     '  document.title = "RES" + JSON.stringify(r);',
+    // 指针锁必须有真实手势 —— 主进程 sendInputEvent 打一次真点击进来触发这个 handler。
+    // 挂 window 不挂 body:这页 body 高度为 0,点在 (40,40) 命中的是 <html>,冒泡到不了 body。
+    '  window.addEventListener("click", async () => {',
+    '    let v; try { await document.documentElement.requestPointerLock(); v = "locked" } catch (e) { v = String(e && e.message || e) }',
+    '    document.title = "PLK" + JSON.stringify({ v });',
+    '  });',
     '})();',
     '</scr' + 'ipt>',
   ].join('\n'))
@@ -189,6 +219,23 @@ async function main() {
     check('预览页是顶层文档(跨源子框架会被硬禁 file picker)', !!res && res.top === true, res && JSON.stringify(res))
     check('预览页内 fetch 同目录资源成功(三维模型/贴图靠这条)', !!res && res.fetched === true, res && (res.err || ''))
     check('file picker 未被「跨源子框架」拦死(真人点击即可用)', !!res && res.picker !== 'cross-origin-blocked', res && res.picker)
+    // 指针锁:3D/FPS 类项目的命门。iframe sandbox 少 allow-pointer-lock 会硬禁;分区权限 handler
+    // 无差别 callback(false) 也会拒。打一次真实点击(sendInputEvent 带手势)看它到底锁不锁得上。
+    let plk = null
+    if (res && res.top === true) {
+      await app.evaluate(({ webContents }, u) => {
+        const g = webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().startsWith(new URL(u).origin))
+        if (!g) return
+        g.focus() // 指针锁要求文档处于聚焦态,离屏的 guest 默认没焦点
+        for (const type of ['mouseDown', 'mouseUp']) g.sendInputEvent({ type, x: 40, y: 40, button: 'left', clickCount: 1 })
+      }, url)
+      for (let i = 0; i < 40 && !plk; i++) {
+        const t = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map((c) => c.getTitle()).find((x) => x && x.startsWith('PLK')) || null)
+        if (t) { try { plk = JSON.parse(t.slice(3)) } catch { plk = { v: t } } }
+        else await new Promise((r) => setTimeout(r, 250))
+      }
+    }
+    check('预览页可 requestPointerLock(FPS/3D 项目命门)', !!plk && plk.v === 'locked', plk && plk.v)
     await win.evaluate(() => { const e = document.getElementById('__check_prev'); if (e) e.remove() })
     // 不带令牌主机名(裸 127.0.0.1:port)什么都拿不到
     const bare = await win.evaluate((u) => {
@@ -196,6 +243,31 @@ async function main() {
       return fetch(`http://127.0.0.1:${p}/`).then((r) => r.status).catch(() => 'blocked')
     }, url)
     check('裸 127.0.0.1:port(无令牌主机名)不吐内容', bare === 404 || bare === 'blocked', String(bare))
+    // 无本机路径的 HTML(云沙箱/对话内联)同样要拿到真实源 —— 退回 srcdoc 就继承宿主 CSP + 不透明源
+    const inline = await win.evaluate(async () => {
+      const serve = window.tangu && window.tangu.codePreviewServeHtml
+      if (!serve) return { error: 'codePreviewServeHtml 未暴露' }
+      const a = await serve('<!doctype html><title>INLINE_OK</title>')
+      const b = await serve('<!doctype html><title>INLINE_OK</title>') // 同内容应复用同一 token,不无限发放
+      // ⚠️别从宿主 fetch:令牌源与宿主跨源,且 main 只给 127.0.0.1/localhost 补 ACAO,子域名不在内。
+      // 用真实宿体(webview)加载,靠标题回报——和 HtmlPreview 的实际路径一致。
+      const w = document.createElement('webview')
+      w.id = '__check_inline'
+      w.style.cssText = 'position:fixed;left:-9999px;width:200px;height:120px;display:flex'
+      w.setAttribute('partition', 'persist:forsion-browser')
+      w.src = a.url
+      document.body.appendChild(w)
+      return { url: a.url, same: a.url === b.url }
+    })
+    check('无路径 HTML 也落在令牌源上(不退回 srcdoc)', !!inline && /^http:\/\/[0-9a-f]{32}\.localhost:\d+\/index\.html$/.test(inline.url || ''), inline && (inline.error || inline.url))
+    let inlineTitle = null
+    for (let i = 0; i < 40 && !inlineTitle; i++) {
+      inlineTitle = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map((c) => c.getTitle()).find((x) => x === 'INLINE_OK') || null)
+      if (!inlineTitle) await new Promise((r) => setTimeout(r, 250))
+    }
+    check('内联预览真的加载得出来且同内容复用同一令牌', inlineTitle === 'INLINE_OK' && !!inline && inline.same === true, `title=${inlineTitle} same=${inline && inline.same}`)
+    await win.evaluate(() => { const e = document.getElementById('__check_inline'); if (e) e.remove() })
+
     // 两个不同目录 → 两个不同源(否则两个预览之间可经 parent.frames[i] 互读 DOM / 共享 localStorage)
     const other = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-preview2-'))
     fs.writeFileSync(path.join(other, 'a.html'), '<!doctype html>b')

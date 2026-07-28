@@ -11,7 +11,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
-import { enqueueRun, abortRun, enqueueSteer } from '../services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, cancelSteer } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
 
 const router = Router();
@@ -223,6 +223,20 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
     res.json({ ok: true, userMessageId });
   } catch (err: any) {
     res.status(500).json({ detail: err?.message || 'Failed to steer run' });
+  }
+});
+
+// 撤回一条尚未注入的转向消息(前端「删除 / ↑撤回编辑」)。已注入或 run 已终结 → 404,
+// 前端据此判断「来不及了」(消息已进对话或已被丢弃)。
+router.delete('/agent/runs/:id/steer/:messageId', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const run = await getRunForUser(req.params.id, req.user!.userId);
+    if (!run) return res.status(404).json({ detail: 'Run not found' });
+    const ok = cancelSteer(req.params.id, req.params.messageId);
+    if (!ok) return res.status(404).json({ detail: 'steer message not queued', reason: 'not_queued' });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ detail: err?.message || 'Failed to cancel steer' });
   }
 });
 

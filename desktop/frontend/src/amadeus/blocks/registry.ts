@@ -35,6 +35,8 @@ export interface BlockEditorProps {
   focusPlace: FocusPlace | null
   /** When crossing in via ↑↓, the goal column (viewport X) to land on within the first/last line. */
   focusGoalX?: number
+  /** 源码模式切回时带来的「光标前文本」:块内按它找回落点,找不到就停在块首(见 lib/modeCursor)。 */
+  focusAnchor?: string
   /** Notify that the caret has been placed (clears the pending request). */
   onFocused(): void
   /** Ask for the caret to (re)enter THIS block — e.g. after a slash transform. */

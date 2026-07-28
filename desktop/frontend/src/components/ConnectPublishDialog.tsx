@@ -2,10 +2,13 @@
  *  真源在服务端(connect:list);项目根 .forsion-connect.json 记住 slug 供 republish 预填。
  *  登录态走桌面全局 Forsion 账号(auth.json),未登录时引导 device flow。 */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, ExternalLink, Globe, Loader2, X } from 'lucide-react'
+import { Check, Copy, ExternalLink, Globe, Loader2, Store, X } from 'lucide-react'
 import { useI18n } from '../i18n'
 
-interface ConnectApp { slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string }
+interface ConnectApp {
+  slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string
+  listing_status?: string | null; listing_summary?: string | null; listing_note?: string | null
+}
 interface ListResp { ok: boolean; code?: string; detail?: string; base?: string; apps?: ConnectApp[]; used?: number; limit?: number; tier?: string; handle?: string | null }
 
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{1,30})?[a-z0-9]$/
@@ -34,7 +37,7 @@ export function ConnectPublishDialog(props: {
   const { root, projectName, htmlFiles, onClose } = props
 
   const [phase, setPhase] = useState<'loading' | 'login' | 'form'>('loading')
-  const [busy, setBusy] = useState<'' | 'login' | 'publish' | 'unpublish'>('')
+  const [busy, setBusy] = useState<'' | 'login' | 'publish' | 'unpublish' | 'listing'>('')
   const [err, setErr] = useState('')
   const [base, setBase] = useState('')
   const [handle, setHandle] = useState<string | null>(null)
@@ -46,6 +49,8 @@ export function ConnectPublishDialog(props: {
   const [doneUrl, setDoneUrl] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
+  const [listingOpen, setListingOpen] = useState(false)
+  const [listingSummary, setListingSummary] = useState('')
   const [showTerms, setShowTerms] = useState(false)
   const [termsChecked, setTermsChecked] = useState(false)
   const initialized = useRef(false)
@@ -141,6 +146,32 @@ export function ConnectPublishDialog(props: {
       if (!r.ok) { setErr(r.detail || 'error'); return }
       setDoneUrl(null)
       setPublished(null)
+      await load()
+    } catch (e) {
+      setErr((e as Error)?.message || String(e))
+    } finally { setBusy('') }
+  }
+
+  // ── 商店上架（发布零审核；上架应用市场需审）──
+  const applyListing = async (): Promise<void> => {
+    if (!published || !window.tangu?.connectListingApply || !listingSummary.trim()) return
+    setBusy('listing'); setErr('')
+    try {
+      const r = await window.tangu.connectListingApply({ slug: published.slug, summary: listingSummary.trim() })
+      if (!r.ok) { setErr(r.detail || 'error'); return }
+      setListingOpen(false)
+      await load()
+    } catch (e) {
+      setErr((e as Error)?.message || String(e))
+    } finally { setBusy('') }
+  }
+
+  const withdrawListing = async (): Promise<void> => {
+    if (!published || !window.tangu?.connectListingWithdraw) return
+    setBusy('listing'); setErr('')
+    try {
+      const r = await window.tangu.connectListingWithdraw(published.slug)
+      if (!r.ok) { setErr(r.detail || 'error'); return }
       await load()
     } catch (e) {
       setErr((e as Error)?.message || String(e))
@@ -249,6 +280,60 @@ export function ConnectPublishDialog(props: {
                 </button>
               </div>
             )}
+
+            {published && (() => {
+              const ls = published.listing_status || null
+              const canListing = !!window.tangu?.connectListingApply
+              if (!canListing) return null
+              return (
+                <div className="csx-pub-listing">
+                  <div className="csx-pub-listing-row">
+                    <Store size={13} />
+                    <span className="csx-pub-listing-title">{t('coding.listingTitle')}</span>
+                    <span className={`csx-pub-lst csx-pub-lst-${ls || 'none'}`}>
+                      {ls === 'pending' ? t('coding.listingPending')
+                        : ls === 'approved' ? t('coding.listingApproved')
+                          : ls === 'rejected' ? t('coding.listingRejected') : t('coding.listingNone')}
+                    </span>
+                    <span className="csx-pub-spacer" />
+                    {!ls && !listingOpen && (
+                      <button className="csx-pub-ghost" disabled={!!busy} onClick={() => { setListingSummary(''); setListingOpen(true) }}>
+                        {t('coding.listingApply')}
+                      </button>
+                    )}
+                    {ls === 'rejected' && !listingOpen && (
+                      <button className="csx-pub-ghost" disabled={!!busy} onClick={() => { setListingSummary(published.listing_summary || ''); setListingOpen(true) }}>
+                        {t('coding.listingReapply')}
+                      </button>
+                    )}
+                    {(ls === 'pending' || ls === 'approved') && (
+                      <button className="csx-pub-ghost" disabled={!!busy} onClick={() => void withdrawListing()}>
+                        {busy === 'listing' ? <Loader2 size={12} className="csx-spin" /> : ls === 'approved' ? t('coding.listingDelist') : t('coding.listingWithdraw')}
+                      </button>
+                    )}
+                  </div>
+                  {ls === 'rejected' && published.listing_note && (
+                    <div className="csx-pub-hint csx-pub-warn">{t('coding.listingNoteLabel', { note: published.listing_note })}</div>
+                  )}
+                  {listingOpen ? (
+                    <div className="csx-pub-listing-form">
+                      <textarea
+                        className="csx-newinput" rows={2} maxLength={300} autoFocus
+                        placeholder={t('coding.listingSummaryPh')}
+                        value={listingSummary} onChange={(e) => setListingSummary(e.target.value)}
+                      />
+                      <div className="csx-pub-actions">
+                        <button className="csx-pub-ghost" onClick={() => setListingOpen(false)}>{t('coding.cancel')}</button>
+                        <span className="csx-pub-spacer" />
+                        <button className="csx-pub-primary" disabled={!listingSummary.trim() || !!busy} onClick={() => void applyListing()}>
+                          {busy === 'listing' ? <Loader2 size={13} className="csx-spin" /> : t('coding.listingSubmit')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : !ls && <div className="csx-pub-hint">{t('coding.listingHint')}</div>}
+                </div>
+              )
+            })()}
 
             {err && <div className="csx-pub-err">{err}</div>}
 

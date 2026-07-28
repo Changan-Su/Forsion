@@ -145,6 +145,7 @@ function InboxFileEmbed({ name }: { name: string }) {
             </Suspense>
           </div>
         ) : (
+          // webhost-ok: 固定已知嵌入(Chromium 内置 PDF 阅读器),无 sandbox 属性 → 不削能力
           <iframe className="embed-pdf" src={url} title={name} />
         ))}
         {kind === 'video' && <video className="embed-video" src={url} controls preload="metadata" />}

@@ -35,6 +35,7 @@ import { UpdateActions } from './UpdateActions'
 import { openChangelogTab } from '../views/ChangelogView'
 import { ModelGroupList } from './ModelGroupList'
 import { AsrModelChoice } from './AsrModelChoice'
+import { AuxModelChoice } from './AuxModelChoice'
 import { AgentsTab } from './AgentsTab'
 import { SpecialAgentsTab } from './SpecialAgentsTab'
 import { TtsVoiceStudio } from './TtsVoiceStudio'
@@ -166,6 +167,9 @@ export const SettingsModal: React.FC<{
   const setBgSeedValue = useTheme((s) => s.setBgSeedValue)
   // 应用内自动更新状态(经 window.tangu.onUpdaterStatus 广播驱动;mac 仅检测引导手动下载)。
   const [upd, setUpd] = useState<UpdaterStatusInfo>({ phase: 'idle' })
+  // 测试版通道(真源在主进程 config.json 的 updater.beta,这里只是它的镜像;开面板时拉一次)。
+  const [betaChannel, setBetaChannel] = useState(false)
+  useEffect(() => { void window.tangu?.getUpdateBeta?.().then((v) => setBetaChannel(!!v)) }, [])
   // 开发者模式:关于页连点版本号 10 次解锁(持久化);解锁后多出「开发者选项」tab。
   const [devMode, setDevMode] = useState<boolean>(() => {
     try { return localStorage.getItem(DEV_MODE_KEY) === '1' } catch { return false }
@@ -234,7 +238,7 @@ export const SettingsModal: React.FC<{
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   // 直连 provider 配置(~/.tangu/providers.json)
   const [customProviders, setCustomProviders] = useState<DirectProviderConfig[]>([])
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { modelsCsv: string; imageModelsCsv: string; ttsModelsCsv: string; asrModelsCsv: string }) | null>(null)
+  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { modelsCsv: string; imageModelsCsv: string; ttsModelsCsv: string; asrModelsCsv: string; noVisionCsv: string }) | null>(null)
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
   const [ttsSpeedText, setTtsSpeedText] = useState<string | null>(null)
   const [ttsTesting, setTtsTesting] = useState(false)
@@ -1335,6 +1339,8 @@ export const SettingsModal: React.FC<{
                       </div>
                     </div>
 
+                    {isDesktop && <AuxModelChoice models={models} />}
+
                     {isDesktop && <AsrModelChoice models={models} />}
 
                     {isDesktop && providers && providers.length > 0 && (
@@ -1385,7 +1391,7 @@ export const SettingsModal: React.FC<{
                                 className="icon-btn"
                                 title={t('settings.btn.edit')}
                                 onClick={() => {
-                                  setEditProvider({ ...cp, modelsCsv: (cp.modelIds || []).join(', '), imageModelsCsv: (cp.imageModelIds || []).join(', '), ttsModelsCsv: (cp.ttsModelIds || []).join(', '), asrModelsCsv: (cp.asrModelIds || []).join(', ') })
+                                  setEditProvider({ ...cp, modelsCsv: (cp.modelIds || []).join(', '), imageModelsCsv: (cp.imageModelIds || []).join(', '), ttsModelsCsv: (cp.ttsModelIds || []).join(', '), asrModelsCsv: (cp.asrModelIds || []).join(', '), noVisionCsv: (cp.noVisionModelIds || []).join(', ') })
                                   setProviderTestMsg('')
                                   setProviderSaveMsg('')
                                   setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
@@ -1414,7 +1420,7 @@ export const SettingsModal: React.FC<{
                         <button
                           className="btn ghost sm"
                           onClick={() => {
-                            setEditProvider({ providerId: '', baseUrl: '', apiKey: '', modelIds: [], modelsCsv: '', imageModelsCsv: '', ttsModelsCsv: '', asrModelsCsv: '' })
+                            setEditProvider({ providerId: '', baseUrl: '', apiKey: '', modelIds: [], modelsCsv: '', imageModelsCsv: '', ttsModelsCsv: '', asrModelsCsv: '', noVisionCsv: '' })
                             setProviderTestMsg('')
                             setProviderSaveMsg('')
                             setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('')
@@ -1496,6 +1502,17 @@ export const SettingsModal: React.FC<{
                               placeholder={t('settings.customProvider.asrModelsPlaceholder')}
                             />
                           </div>
+                          {/* 无多模态黑名单:默认认为都能看图,只需登记已知的纯文本模型。 */}
+                          <div className="field">
+                            <label>{t('settings.customProvider.noVisionLabel')}</label>
+                            <input
+                              type="text"
+                              value={editProvider.noVisionCsv}
+                              onChange={(e) => setEditProvider({ ...editProvider, noVisionCsv: e.target.value })}
+                              placeholder="deepseek-chat, qwq-32b"
+                            />
+                            <div className="hint">{t('settings.customProvider.noVisionHint')}</div>
+                          </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <button
@@ -1553,6 +1570,7 @@ export const SettingsModal: React.FC<{
                               const imageModelIds = editProvider.imageModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
                               const ttsModelIds = editProvider.ttsModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
                               const asrModelIds = editProvider.asrModelsCsv.split(',').map((s) => s.trim()).filter(Boolean)
+                              const noVisionModelIds = editProvider.noVisionCsv.split(',').map((s) => s.trim()).filter(Boolean)
                               void window.tangu!.saveProvider!({
                                 providerId: editProvider.providerId,
                                 baseUrl: editProvider.baseUrl.replace(/\/+$/, ''),
@@ -1561,6 +1579,7 @@ export const SettingsModal: React.FC<{
                                 imageModelIds: imageModelIds.length ? imageModelIds : undefined,
                                 ttsModelIds: ttsModelIds.length ? ttsModelIds : undefined,
                                 asrModelIds: asrModelIds.length ? asrModelIds : undefined,
+                                noVisionModelIds: noVisionModelIds.length ? noVisionModelIds : undefined,
                               }).then((list) => {
                                 setCustomProviders(list)
                                 setEditProvider(null)
@@ -2823,6 +2842,23 @@ export const SettingsModal: React.FC<{
                     )}
                     {upd.phase === 'error' && upd.error ? (
                       <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: upd.error })}</div></div>
+                    ) : null}
+                    {window.tangu?.setUpdateBeta ? (
+                      <div className="field">
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={betaChannel}
+                            onChange={(e) => {
+                              const on = e.target.checked
+                              setBetaChannel(on) // 先动 UI:落盘是异步的,等它回来勾选框会慢一拍
+                              void window.tangu?.setUpdateBeta?.(on).then(() => window.tangu?.checkForUpdates?.())
+                            }}
+                          />
+                          {t('about.update.beta')}
+                        </label>
+                        <div className="hint" style={{ marginTop: 4 }}>{t('about.update.betaHint')}</div>
+                      </div>
                     ) : null}
                     <div className="field">
                       <label>{t('about.changelogTitle')}</label>

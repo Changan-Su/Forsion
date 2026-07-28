@@ -18,7 +18,9 @@ import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from 
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
-import { TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
+import { PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
+import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
+import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession, refreshSessionWorkspace } from '../sandbox/sessionSandbox.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
@@ -33,6 +35,7 @@ import { applyAgentActivation } from './agentActivation.js';
 import { projectDocSection } from './projectDoc.js';
 import { onUserRunDone } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
+import { describeImages, mainModelSupportsVision, resolveVisionModelId } from './visionService.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
@@ -56,6 +59,11 @@ const getMemory = (userId: string) => deps().brain.memory.getMemory(userId);
 
 const abortControllers = new Map<string, AbortController>();
 
+// 中流断线恢复的整 run 上限:超过说明供应商在慢性抖动,续写只会反复烧 prompt token,转为报错交还用户。
+const MIDSTREAM_MAX_RESUMES = 3;
+// 验证回路整 run 最多跑几次(第一次收尾 + 一轮修复后复验);最后一次仍红 → 终稿如实标注,不无限修。
+const VERIFY_MAX_ROUNDS = 2;
+
 // 运行时转向(steer，类 Codex):用户在 run 跑动期间发来的消息按 runId 暂存，在「迭代边界」注入到
 // 当前 run（而非另起新 run，也不是等整个 run 跑完）。仅「活跃 run」(已注册 AbortController = 已进循环)
 // 接受注入；排队中的 run 还没 AC → 拒收（前端回退起新 run）。
@@ -76,6 +84,26 @@ function drainSteer(runId: string): SteerMsg[] {
   steerQueue.delete(runId);
   return q;
 }
+
+/** 撤回一条尚未注入的转向消息(供前端「删除/↑撤回编辑」)。已注入或未知 → false。 */
+export function cancelSteer(runId: string, msgId: string): boolean {
+  const q = steerQueue.get(runId);
+  if (!q) return false;
+  const i = q.findIndex((m) => m.id === msgId);
+  if (i < 0) return false;
+  q.splice(i, 1);
+  if (!q.length) steerQueue.delete(runId);
+  return true;
+}
+
+/** 打断标记(借 Codex <turn_aborted>):中止时作为 user 行落库,让后续 run 的模型知道上一轮是被
+ *  用户主动切断的、任务多半没完 —— 否则历史里只有一条无解释的半截助手消息,模型会当它已经收尾,
+ *  「打断之后忘记继续之前的任务」的病根就在这。措辞按 Codex 经验保持**告警式**(部分执行风险),
+ *  续任务的压力放在系统提示 PERSISTENCE_SECTION 里,标记本身不下指令。 */
+export const TURN_INTERRUPTED_MARKER =
+  '<turn_interrupted>\n' +
+  'The user interrupted this turn on purpose. Any tool calls that were aborted may have partially executed; the task above is likely unfinished.\n' +
+  '</turn_interrupted>';
 
 // 同会话 run 串行化：每个 session 同一时刻至多一个活跃 run，其余 FIFO 排队，活跃 run 跑完
 // （含 abort/失败）后由 advanceQueue 起下一个。保证共享的会话级 kernel/工作区不被并发 run
@@ -557,6 +585,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 3b) 引擎级契约段(失败恢复 + 输出风格):直接注入而非经 guidance——per-app promptGuidance
     //     覆盖是整段替换,放 guidance 会被自定义 app 静默丢掉(Codex 评审 #1)。所有 run 强制在场。
     systemParts.push(TOOL_FAILURE_SECTION, responseStyleSection(channelSession));
+    // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段)。
+    if (!planMode) systemParts.push(PERSISTENCE_SECTION);
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
     try {
       const userMd = readUserMd();
@@ -783,6 +813,29 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
     }
 
+    // 运行时现场注入(Codex/PI 式 grounding):todo 清单现状(有未完项才注) + git 状态(仅 host)。
+    // 拼进尾部 user 消息(与 /skill 指令同通道):不动 system 前缀字节,前缀缓存只失效最短尾巴;
+    // 不落库不上屏。配合 <turn_interrupted> 标记与 Persistence 段,「继续」类消息不再靠翻记录猜进度。
+    {
+      const rcTodos = await loadSessionTodos(sessionId).catch(() => [] as TodoItem[]);
+      const rc = formatRuntimeContext([
+        renderTodoState(rcTodos),
+        execMode === 'host' ? await collectGitState(cwd) : null,
+      ]);
+      if (rc) {
+        for (let i = workingMessages.length - 1; i >= 0; i--) {
+          const m = workingMessages[i];
+          if (m.role !== 'user') continue;
+          if (typeof m.content === 'string') {
+            workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${rc}` : rc };
+          } else if (Array.isArray(m.content)) {
+            workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: rc }] } as ChatMessage;
+          }
+          break;
+        }
+      }
+    }
+
     // 运行时转向的「回合切分」:把当前累积的助手段 A 落库 → 持久化注入的用户消息 U(们) → 清空累加器、
     // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
@@ -857,6 +910,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools, channelSession,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
+      visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
@@ -1052,6 +1106,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
+    let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
+    let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
+    let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
     const runCostLimit = runCostCeiling(); // TANGU_MAX_RUN_COST，<=0 关闭
@@ -1132,10 +1189,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
       // 有界重试:兜「首帧前的瞬时传输错」(fetch failed / 网关 502 / idle 504 等——托管面偶发抖动的主因)。
-      // 一旦本次尝试已向客户端吐过帧(emitted)就不重试,否则会重复流;用户 abort 与 4xx 也不重试(见 llm/retry.ts)。
+      // 已吐帧的中流断线走下面的「段切分续写」恢复,不走本重试(重放整流会重复);用户 abort 与 4xx 不重试。
       let res!: Awaited<ReturnType<typeof streamProviderCompletion>>;
+      let partialText = ''; // 本次尝试已流出的正文(中流断线恢复时回灌上下文用)
+      let resumedMidstream = false;
       for (let attempt = 0; ; attempt++) {
         let emitted = false;
+        partialText = '';
         const attemptStart = Date.now();
         try {
           res = await streamProviderCompletion({
@@ -1144,7 +1204,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             payload,
             provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
             signal: ac.signal,
-            onToken: (d) => { emitted = true; void publish(runId, 'token', { delta: d }); },
+            onToken: (d) => { emitted = true; partialText += d; void publish(runId, 'token', { delta: d }); },
             onReasoning: (d) => { emitted = true; void publish(runId, 'reasoning', { delta: d }); },
             onToolCallDelta: (info) => {
               emitted = true;
@@ -1162,6 +1222,38 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           });
           break;
         } catch (err) {
+          if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
+          // 中流断线恢复(借 pi 的 session 级重试思想):此前「吐过帧就整 run 报废」对长任务是灾难——
+          // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
+          // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
+          // 也允许:对长 run 而言「多等一轮再续」远好于「整 run 报废」。
+          if (emitted && midstreamResumes < MIDSTREAM_MAX_RESUMES && isRetryableLlmError(err)) {
+            midstreamResumes++;
+            if (partialText.trim()) {
+              appendFinal(partialText);
+              workingMessages.push({ role: 'assistant', content: partialText } as ChatMessage);
+            }
+            await applySteering([]); // 空注入=纯段切分:半截段收尾落库,客户端关旧段开新段(无用户气泡)
+            workingMessages.push({
+              role: 'user',
+              content:
+                '<stream_resume>\nYour previous message was cut off mid-stream by a transient network error. Anything you already produced was kept and shown to the user. Continue exactly where you left off — do not repeat content you already wrote; if a tool call was cut off, issue it again in full.\n</stream_resume>',
+            } as ChatMessage); // 不落库不上屏:harness 脚手架,只进本 run 上下文
+            const wait = MODEL_RETRY_BASE_MS * midstreamResumes;
+            console.warn(`[agent-core] run=${runId} 中流断线,${wait}ms 后续写 ${midstreamResumes}/${MIDSTREAM_MAX_RESUMES}: ${(err as any)?.message || err}`);
+            void publish(runId, 'status', {
+              phase: 'llm_retry', attempt: midstreamResumes, max: MIDSTREAM_MAX_RESUMES, waitMs: wait,
+              error: String((err as any)?.message || err).slice(0, 160), iteration,
+            });
+            await new Promise((r) => setTimeout(r, wait));
+            if (ac.signal.aborted) throw new AbortLikeError();
+            resumedMidstream = true;
+            // 续写不消耗迭代额度:同一 iteration 重进。否则在 lastIter(尤其 maxIterations=1)断线时,
+            // continue 直接把循环耗尽,run 以半截内容假 done,承诺的续写根本不会发生(Codex 评审 #5)。
+            // 无限循环由 MIDSTREAM_MAX_RESUMES 兜底。
+            iteration -= 1;
+            break; // 出尝试循环;下方检测到 resumedMidstream 即重进本迭代续写
+          }
           // 慢失败不重试:瞬时抖动(fetch failed / 网关 502 / 429)都是秒级就崩,重试便宜且有效;
           // 而「上游静默到 idle 看门狗超时」是分钟级慢失败——重试只是把用户的干等 ×4。
           // 服务端 180s idle 504 若照旧重试三次,最终失败要 4×180+9=729s,比不修好不了多少。
@@ -1182,6 +1274,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (ac.signal.aborted) throw new AbortLikeError();
         }
       }
+
+      if (resumedMidstream) continue; // 中流断线已段切分回灌:res 未产出,直接进下一迭代续写(steer 照常在迭代顶注入)
 
       lastRealPromptTokens = res.usage.prompt_tokens || 0;
       const cachedTokens = res.usage.cached_tokens || 0;
@@ -1263,6 +1357,57 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
           await applySteering([{ id: uuidv4(), content: stopV.blockReason }]);
           continue;
+        }
+        // —— 完成度审计(Codex Thread Goals 的 completion-audit 减配版):模型要收尾,但会话 todo 还有
+        //    未完项 → 回灌一条不落库的审计指令,逼它「要么现在继续干,要么明说为什么停 + 把清单改真实」。
+        //    整 run 只审一次(auditNudged),第二次收尾放行——审计的目的是拦「顺手忘了」,不是逼「永动」。
+        //    纯聊天(没用过工具)不审:带着旧清单问路的 run 不该被劫持。——
+        if (!auditNudged && usedTools && !planMode && !lastIter) {
+          const auditTodos = await loadSessionTodos(sessionId).catch(() => [] as TodoItem[]);
+          const openCount = auditTodos.filter((t) => t.status !== 'completed').length;
+          if (openCount > 0) {
+            auditNudged = true;
+            if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+            workingMessages.push({
+              role: 'user',
+              content:
+                '<completion_audit>\nYou are about to end your turn, but the session todo list still has unfinished items:\n' +
+                renderTodos(auditTodos) +
+                '\nEither continue working on the remaining items now, or — if stopping is genuinely right (blocked, needs user input, the user deferred them) — update the list with todo_write to reflect reality and tell the user plainly what remains and why you are stopping. Do not silently leave items unfinished.\n</completion_audit>',
+            } as ChatMessage); // 不落库不上屏:harness 脚手架
+            void publish(runId, 'status', { phase: 'completion_audit', iteration, open: openCount });
+            continue;
+          }
+        }
+        // —— 验证回路(收尾闸门,机械强制「跑绿才算完」):会话配了 /verify 命令且本 run 动过工具 →
+        //    收尾前跑一遍;失败把输出尾巴回灌(不落库)逼模型修完再收。顺序刻意在完成度审计之后:
+        //    先干完活(审计),再证明干对了(验证)。VERIFY_MAX_ROUNDS 兜底:最后一次仍红 → 在终稿
+        //    尾部如实标注,绝不无限修。host-only:命令是用户自己配的,与 hooks 同级信任,不过审批闸。——
+        const verifyCommand = execMode === 'host' && typeof agentConfig.verifyCommand === 'string'
+          ? String(agentConfig.verifyCommand).trim() : '';
+        if (verifyCommand && usedTools && !planMode && !lastIter && verifyRounds < VERIFY_MAX_ROUNDS) {
+          verifyRounds++;
+          void publish(runId, 'status', { phase: 'verifying', iteration, command: verifyCommand });
+          const v = await runVerifyCommand(verifyCommand, cwd, ac.signal);
+          // 验证期间用户打断:命令已被 signal 杀掉,这里必须走 abort 路径(落 <turn_interrupted> +
+          // 状态 aborted),否则 run 会带着「验证结果」假 done,与客户端已显示的「已停止」打架。
+          if (ac.signal.aborted) throw new AbortLikeError();
+          if (v.ok) {
+            void publish(runId, 'status', { phase: 'verify_passed', iteration });
+          } else if (verifyRounds >= VERIFY_MAX_ROUNDS) {
+            const notice = `⚠️ 验证命令未通过(exit ${v.code ?? '?'}):\`${verifyCommand}\`。已尝试 ${VERIFY_MAX_ROUNDS} 轮仍红,请人工检查。`;
+            finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n> ${notice}` : notice;
+            void publish(runId, 'status', { phase: 'verify_failed_final', iteration, code: v.code });
+          } else {
+            if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+            workingMessages.push({
+              role: 'user',
+              content:
+                `<verify_failed>\nThe session's verify command failed after your changes (exit ${v.code ?? 'null'}):\n  $ ${verifyCommand}\nOutput tail:\n${v.tail || '(no output)'}\nFix the underlying issues now, then finish — the command must pass before your turn can end.\n</verify_failed>`,
+            } as ChatMessage); // 不落库不上屏:harness 脚手架
+            void publish(runId, 'status', { phase: 'verify_failed', iteration, code: v.code });
+            continue;
+          }
         }
         if (!finalContent.trim() && !finalReasoning.trim()) {
           finalContent = looksLikeToolCallText(res.content)
@@ -1353,9 +1498,25 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 仅 in-memory(不落库):本 run 内多轮可见即可,避免历史每轮重发多 MB base64(对齐附件物化纪律)。
       if (pendingToolImages.length) {
         const imgs = pendingToolImages.splice(0);
+        // 主模型没有原生视觉 → 图直接塞过去只会被 provider 拒(或静默忽略)。先交给「辅助模型 ·
+        // 图像识别」转成文字再入上下文;没配槽/识别失败 → 退回原来的塞图行为(宁可让 provider
+        // 报错也不静默丢内容)。判定与转写都做过 60s 缓存/单次调用,不在热路径上放大开销。
+        // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
+        // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
+        let described = '';
+        if (!ac.signal.aborted && !(await mainModelSupportsVision(modelId, appId))) {
+          try {
+            const visionModelId = await resolveVisionModelId(toolCtx.visionModelId, appId);
+            described = await describeImages(imgs, { modelId: visionModelId, userId, appId, signal: ac.signal });
+          } catch (e: any) {
+            console.warn(`[agent-core] run=${runId} 图像识别降级失败(退回直接送图):`, e?.message || e);
+          }
+        }
         workingMessages.push({
           role: 'user',
-          content: toImageParts('(The images read by the tools above are shown below; analyze them accordingly)', imgs),
+          content: described
+            ? `(The images read by the tools above were transcribed by the vision assistant model, because the current model has no native image input. Description follows.)\n\n${described}`
+            : toImageParts('(The images read by the tools above are shown below; analyze them accordingly)', imgs),
         } as ChatMessage);
       }
       allToolResults.push(...toolResults);
@@ -1392,6 +1553,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await finalizeAssistantMessage(
         currentAssistantId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
       ).catch((e) => console.warn('[agent-core] persist partial on abort failed:', e));
+      // 用户主动打断 → 半截助手消息后面补一条打断标记(user 行)。没有它,后续 run 的模型把这条
+      // 半截消息当成已完成的收尾,任务就地蒸发;有了它,配合系统提示的 Task Persistence 段,
+      // 模型知道该核对现场并接着干。仅中止路径:普通失败(网络/配额)另有 error 语义,不标。
+      if (aborted) {
+        await deps().state.insertUserMessage({
+          id: uuidv4(), sessionId, content: TURN_INTERRUPTED_MARKER, modelId, attachments: null,
+        }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
+      }
     }
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
     await publish(runId, 'error', { error: msg, aborted, content: finalContent }).catch(() => {});

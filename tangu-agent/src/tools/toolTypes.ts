@@ -62,6 +62,8 @@ export interface ToolContext {
   modelId?: string;
   /** 默认生图模型 id(generate_image 缺省据此选模型;来自 agentConfig.imageModelId)。 */
   imageModelId?: string;
+  /** 辅助模型 · 图像识别 id(主模型无原生视觉时,collectImage 的图先经它转文字;来自 agentConfig.visionModelId)。 */
+  visionModelId?: string;
   /**
    * 工具产出图片的回流闸(view_image 用):工具把图片 data URL 交回 loop,
    * loop 在本轮工具执行完后把它物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。

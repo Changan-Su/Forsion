@@ -213,6 +213,9 @@
 
 /* ====== 系统行(分隔/提示) ====== */
 .t2-sys { text-align: center; font-size: 11px; color: var(--text-faint, var(--text-muted)); padding: 2px 0; }
+/* 打断标记(<turn_interrupted> 落库行):两侧细线的居中分隔,轻于正文。线走 overlay 勿硬色。 */
+.t2-interrupted { display: flex; align-items: center; gap: 10px; }
+.t2-interrupted::before, .t2-interrupted::after { content: ''; flex: 1; border-top: 1px dashed var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
 /* LLM 网络重试横幅:琥珀色示警但不是失败(失败是红色 t2-status-err);原始错误淡化拖尾。 */
 .t2-retry { color: #b8860b; }
 .t2-retry .t2-retry-err { opacity: 0.65; margin-left: 6px; }

@@ -131,3 +131,30 @@
   transition: background var(--duration-fast, 0.15s);
 }
 .t2c-voicestop:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
+
+/* steer 等待区:输入卡上方的「待注入」队列。刻意比正文轻(半透明底+虚线感),表达「还没进对话」;
+ * 注入(turn_boundary)即整块消失、消息在对话区出现。边线走 overlay(相对表面,勿硬色 --border)。 */
+.t2c-steer {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 10px; border-radius: var(--radius-md, 12px);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.07));
+  border: 1px dashed var(--overlay-medium, rgba(127, 127, 127, 0.16));
+  animation: t2c-steer-in 0.18s var(--ease-out, ease);
+}
+@keyframes t2c-steer-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .t2c-steer { animation: none; } }
+.t2c-steer-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 2px 0; }
+.t2c-steer-ic { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+.t2c-steer-text { flex: 1; min-width: 0; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-steer-x { flex-shrink: 0; background: none; border: none; cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 2px; line-height: 0; border-radius: 999px; }
+.t2c-steer-x:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.t2c-steer-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.t2c-steer-hint { flex: 1; min-width: 0; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-steer-now {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border: none; border-radius: 999px; cursor: pointer;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text);
+  font-size: 11px; font-family: var(--font-ui);
+  transition: background var(--duration-fast, 0.15s);
+}
+.t2c-steer-now:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }

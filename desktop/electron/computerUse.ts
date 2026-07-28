@@ -27,6 +27,10 @@ export interface CuLiveFrame {
   height?: number
   /** JPEG,base64(不含 data: 前缀)。缺失即本次没取到画面,看 error。 */
   jpegBase64?: string
+  /** 这一帧的序号(字符串,helper 侧是 64 位无符号,别用 number 接)。带回给下次请求即可跳过没变的帧。 */
+  frameSeq?: string
+  /** true = 画面与你上次见到的那一帧相同,本次不含图。保留正在显示的画面即可。 */
+  unchanged?: boolean
   /** 距最近一次观察/操作多久(毫秒)。 */
   ageMs?: number
   /** 机器可读的失败原因:unsupported_platform / helper_not_running / unsupported_helper / 或 helper 的错误码。 */
@@ -54,6 +58,8 @@ export function normalizeLiveView(raw: unknown): CuLiveFrame {
     width: num(r.width),
     height: num(r.height),
     jpegBase64: str(r.jpegBase64),
+    frameSeq: str(r.frameSeq),
+    unchanged: r.unchanged === true ? true : undefined,
     ageMs: num(r.ageMs),
     error: str(r.error),
   }
@@ -107,6 +113,8 @@ export interface LiveViewOptions {
   quality?: number
   activeWithinMs?: number
   image?: boolean
+  /** 上次拿到的 frameSeq。画面没变的话 helper 只回 unchanged,不再重编一遍 JPEG。 */
+  sinceFrame?: string
 }
 
 /**
@@ -121,6 +129,8 @@ export function clampLiveViewOptions(opts: LiveViewOptions): Required<LiveViewOp
     quality: Math.max(0.2, Math.min(0.95, num(opts.quality, 0.6))),
     activeWithinMs: Math.min(MAX_ACTIVE_WITHIN_MS, Math.max(1_000, Math.trunc(num(opts.activeWithinMs, 120_000)))),
     image: opts.image !== false,
+    // 纯回声值,但仍当不可信输入夹紧长度 —— 它会原样进 helper 的请求 JSON
+    sinceFrame: typeof opts.sinceFrame === 'string' ? opts.sinceFrame.slice(0, 32) : '',
   }
 }
 

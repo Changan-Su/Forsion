@@ -4,8 +4,9 @@
  *   3. Amadeus 协作共享的页面（同上 → pageShares）
  *  纯渲染端：每段独立加载，宿主能力缺失（Tangu Web 等）时降级为「不可用」占位，不崩。 */
 import { useCallback, useEffect, useState } from 'react'
-import { Rocket, Globe, FileText, Users, RotateCw, ExternalLink, Copy, Check, Trash2, Loader2 } from 'lucide-react'
+import { Rocket, Globe, FileText, Users, RotateCw, ExternalLink, Copy, Check, Trash2, Loader2, Store, CircleMinus } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
+import { askString } from '@amadeus/components/askString'
 import { useI18n } from '../i18n'
 
 interface Row {
@@ -15,6 +16,8 @@ interface Row {
   url: string | null
   disabled?: boolean
   onRemove?: () => Promise<void>
+  /** 商店上架状态（仅 Connect 站点行）：badge + 一个管理动作（申请上架/重新申请 或 撤回/下架）。 */
+  listing?: { label: string; action?: { title: string; kind: 'withdraw' | 'apply'; run: () => Promise<void> } }
 }
 
 function useCopied(): [string | null, (k: string, url: string) => void] {
@@ -43,6 +46,7 @@ function Section(props: {
   const { t } = useI18n()
   const [confirm, setConfirm] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [busyL, setBusyL] = useState<string | null>(null)
   const [rowErr, setRowErr] = useState<{ key: string; msg: string } | null>(null)
   return (
     <div className="pv-section">
@@ -65,10 +69,27 @@ function Section(props: {
                 {props.rows.map((r) => (
                   <div className="pv-row" key={r.key}>
                     <div className="pv-row-main">
-                      <div className="pv-row-title">{r.title}{r.disabled && <span className="pv-badge">{t('public.disabled')}</span>}</div>
+                      <div className="pv-row-title">
+                        {r.title}
+                        {r.disabled && <span className="pv-badge">{t('public.disabled')}</span>}
+                        {r.listing && <span className="pv-badge">{r.listing.label}</span>}
+                      </div>
                       <div className="pv-row-sub">{rowErr?.key === r.key ? <span className="pv-rowerr">{rowErr.msg}</span> : r.sub}</div>
                     </div>
                     <div className="pv-row-actions">
+                      {r.listing?.action && (
+                        <button
+                          className="icon-btn" disabled={busyL === r.key} title={r.listing.action.title}
+                          onClick={async () => {
+                            setBusyL(r.key); setRowErr((e) => (e?.key === r.key ? null : e))
+                            try { await r.listing!.action!.run() }
+                            catch (e) { setRowErr({ key: r.key, msg: (e as Error)?.message || '操作失败' }) }
+                            finally { setBusyL((b) => (b === r.key ? null : b)) }
+                          }}
+                        >
+                          {busyL === r.key ? <Loader2 size={14} className="pv-spin" /> : r.listing.action.kind === 'apply' ? <Store size={14} /> : <CircleMinus size={14} />}
+                        </button>
+                      )}
                       {r.url && <a className="icon-btn" href={r.url} target="_blank" rel="noreferrer" title={t('public.open')}><ExternalLink size={14} /></a>}
                       {r.url && (
                         <button className="icon-btn" title={t('public.copy')} onClick={() => props.onCopy(r.key, r.url!)}>
@@ -121,16 +142,51 @@ export function PublicView(_: ViewProps) {
       if (!r.ok) { if (r.code === 'not_logged_in') setNeedLogin(true); setSites([]); return }
       const base = r.base || ''
       const handle = r.handle || ''
-      setSites((r.apps || []).map((a) => ({
-        key: `site:${a.slug}`,
-        title: a.name || a.slug,
-        sub: `${handle}/${a.slug}`,
-        url: base && handle ? `${base}/apps/${handle}/${a.slug}/` : null,
-        disabled: a.status !== 'active',
-        onRemove: async () => { const rr = await window.tangu!.connectUnpublish?.(a.slug); if (rr && !rr.ok) throw new Error(rr.detail || '下架失败'); await loadSites() },
-      })))
+      // askString 的 Host 挂在 AmadeusOverlays 里，没有 window.amadeus 的宿主（Web/移动端）不给上架入口，免得弹窗永不返回。
+      const canList = !!window.tangu?.connectListingApply && !!window.amadeus
+      setSites((r.apps || []).map((a) => {
+        // 商店上架状态：未上架/已驳回 → 填简介申请（驳回时预填原简介）；审核中/已上架 → 撤回·下架。
+        const ls = a.listing_status || null
+        const listing: Row['listing'] = canList
+          ? {
+              label: ls === 'pending' ? t('coding.listingPending') : ls === 'approved' ? t('coding.listingApproved') : ls === 'rejected' ? t('coding.listingRejected') : t('coding.listingNone'),
+              action: ls === 'pending' || ls === 'approved'
+                ? {
+                    title: ls === 'approved' ? t('coding.listingDelist') : t('coding.listingWithdraw'), kind: 'withdraw',
+                    run: async () => {
+                      const rr = await window.tangu!.connectListingWithdraw?.(a.slug)
+                      if (rr && !rr.ok) throw new Error(rr.detail || '操作失败')
+                      await loadSites()
+                    },
+                  }
+                : {
+                    title: ls === 'rejected' ? t('coding.listingReapply') : t('coding.listingApply'), kind: 'apply',
+                    run: async () => {
+                      const summary = await askString(
+                        ls === 'rejected' ? t('coding.listingReapply') : t('coding.listingApply'),
+                        a.listing_summary || '',
+                        { label: t('coding.listingSummaryPh'), confirmLabel: t('coding.listingSubmit') },
+                      )
+                      if (!summary) return
+                      const rr = await window.tangu!.connectListingApply?.({ slug: a.slug, summary })
+                      if (rr && !rr.ok) throw new Error(rr.detail || '操作失败')
+                      await loadSites()
+                    },
+                  },
+            }
+          : undefined
+        return {
+          key: `site:${a.slug}`,
+          title: a.name || a.slug,
+          sub: ls === 'rejected' && a.listing_note ? `${handle}/${a.slug} · ${t('coding.listingNoteLabel', { note: a.listing_note })}` : `${handle}/${a.slug}`,
+          url: base && handle ? `${base}/apps/${handle}/${a.slug}/` : null,
+          disabled: a.status !== 'active',
+          listing,
+          onRemove: async () => { const rr = await window.tangu!.connectUnpublish?.(a.slug); if (rr && !rr.ok) throw new Error(rr.detail || '下架失败'); await loadSites() },
+        }
+      }))
     } catch { setSites([]) } finally { setSitesLoading(false) }
-  }, [])
+  }, [t])
 
   const loadCollab = useCallback(async () => {
     if (!window.amadeusCollab?.listAllShares) { setPubs([]); setShares([]); return }

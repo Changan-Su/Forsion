@@ -100,6 +100,11 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   }
 
   if (msg.role === 'user') {
+    // 打断标记(引擎中止时落库的 <turn_interrupted> user 行):给模型看的机器行,对人渲染成一条
+    // 轻分隔线,不摆成用户气泡(它不是用户「说」的话)。↑ 历史召回处已同规则滤除。
+    if (msg.content.startsWith('<turn_interrupted>')) {
+      return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
+    }
     const name = userName || t('chat.you')
     return (
       <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={msg.content}>

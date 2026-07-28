@@ -4,7 +4,7 @@
  * 浏览/安装全走主进程 IPC(marketService),token 不下发渲染层。
  */
 import { useEffect, useState, useCallback } from 'react'
-import { ArrowLeft, Download, Check, Loader2, ExternalLink, PackageOpen, RefreshCw, Settings } from 'lucide-react'
+import { ArrowLeft, Download, Check, Loader2, ExternalLink, PackageOpen, RefreshCw, Settings, Globe } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
@@ -16,12 +16,19 @@ import { installAmadeusPlugins } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding } from '../stores/pluginOnboardingStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
+import { openBrowser } from '../builtins'
 import type { MarketCard, MarketDetail } from '../types'
 
-type Tab = 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin' | 'updates' | 'submit'
+type Tab = 'skill' | 'agent' | 'plugin' | 'space' | 'theme' | 'amadeus-plugin' | 'webapp' | 'updates' | 'submit'
 const CONTENT_TABS: Tab[] = ['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin']
 // 笔记插件 tab 只在带 Amadeus 的产品档案里露出(与设置页同门禁);updates 扫描仍扫全类型,无害。
-const NAV_TABS: Tab[] = CONTENT_TABS.filter((tp) => tp !== 'amadeus-plugin' || !!window.amadeus)
+// 网站应用(用户上架的 Connect 网页 app)不装东西只打开,不进 CONTENT_TABS 的安装/更新机器。
+const NAV_TABS: Tab[] = [
+  ...CONTENT_TABS.filter((tp) => tp !== 'amadeus-plugin' || !!window.amadeus),
+  ...(window.tangu?.connectStore ? (['webapp'] as Tab[]) : []),
+]
+
+interface WebApp { name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }
 
 /** 最新版本是否比已装的新(仅数值 semver 比较;不可比/未知已装版本 → 不提示,避免误报)。 */
 function isNewer(latest: string | null | undefined, installed: string | null): boolean {
@@ -49,6 +56,7 @@ export function MarketModal() {
   const [detail, setDetail] = useState<MarketDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
+  const [webApps, setWebApps] = useState<{ base: string; items: WebApp[] } | null>(null)
 
   // 扫描可更新:拉已装版本 + 三类市场卡片,比对每个已装项的 manifest 版本 vs 市场最新版本。
   const scanUpdates = useCallback(async () => {
@@ -73,6 +81,17 @@ export function MarketModal() {
     setDetail(null)
     setErr('')
     setLoading(true)
+    if (tab === 'webapp') {
+      // 网站应用走 Connect 公开列表(主进程拉云端),与 market_items 管线无关。
+      window.tangu!.connectStore!()
+        .then((r) => {
+          if (!r.ok) throw new Error(r.detail || 'error')
+          setWebApps({ base: r.base || '', items: r.items || [] })
+        })
+        .catch((e) => setErr(t('market.loadFail', { e: e?.message || String(e) })))
+        .finally(() => setLoading(false))
+      return
+    }
     listMarket(tab)
       .then(setItems)
       .catch((e) => setErr(t('market.loadFail', { e: e?.message || String(e) })))
@@ -193,8 +212,16 @@ export function MarketModal() {
     space: t('market.tab.spaces'),
     theme: t('market.tab.themes'),
     'amadeus-plugin': t('market.tab.amadeusPlugins'),
+    webapp: t('market.tab.webapps'),
     updates: t('market.tab.updates'),
     submit: t('market.tab.submit'),
+  }
+
+  // 网站应用卡片:在内置浏览器打开(关着/mini 窗自动退回系统浏览器),并收起市场回到工作台。
+  const openWebApp = (w: WebApp): void => {
+    if (!webApps) return
+    openBrowser(webApps.base + w.url)
+    close()
   }
 
   return (
@@ -240,6 +267,32 @@ export function MarketModal() {
                   </div>
                 ))}
               </div>
+            )
+          ) : tab === 'webapp' ? (
+            loading ? (
+              <div className="mk-state"><Loader2 size={20} className="mk-spin" /></div>
+            ) : err ? (
+              <div className="mk-state mk-error">{err}</div>
+            ) : !webApps || webApps.items.length === 0 ? (
+              <div className="mk-state mk-muted">{t('market.empty')}</div>
+            ) : (
+              <>
+                <p className="mk-web-hint">{t('market.webHint')}</p>
+                <div className="mk-grid">
+                  {webApps.items.map((w) => (
+                    <div key={`${w.handle}/${w.slug}`} className="mk-card" onClick={() => openWebApp(w)}>
+                      <div className="mk-card-title">{w.name}</div>
+                      <div className="mk-card-summary">{w.summary || ''}</div>
+                      <div className="mk-card-foot">
+                        <span className="mk-card-meta">{t('market.author')} {w.handle}</span>
+                        <button className="btn sm primary" onClick={(e) => { e.stopPropagation(); openWebApp(w) }}>
+                          <Globe size={13} /> {t('market.webOpen')}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )
           ) : tab === 'submit' ? (
             <div className="mk-submit">

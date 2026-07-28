@@ -75,6 +75,21 @@ export async function steerRun(
   return { ok: true, userMessageId: j.userMessageId }
 }
 
+/** 撤回一条尚未注入的转向消息。gone=true:已注入或 run 已终结(来不及了,交给事件流收拾)。 */
+export async function cancelSteer(
+  cfg: TanguDesktopConfig,
+  runId: string,
+  messageId: string,
+): Promise<{ ok: boolean; gone?: boolean }> {
+  const r = await authFetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/steer/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+    headers: headers(cfg.token),
+  })
+  if (r.status === 404) return { ok: false, gone: true }
+  if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+  return { ok: true }
+}
+
 /** 列出某会话的在飞/最近 run(刷新恢复:重新挂 SSE)。 */
 export async function listActiveRuns(
   cfg: TanguDesktopConfig,

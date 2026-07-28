@@ -15,6 +15,17 @@
 | `penzor` | Forsion 云端(server microserver/remotesync;条件写 CAS) |
 | `dropbox` | Dropbox(自研直连 REST v2;OAuth PKCE + refresh token,rev 条件写 CAS) |
 
+Dropbox 授权 = 链接登录。App Key 来自 `fsDropbox.ts` 的 `FORSION_DROPBOX_APP_KEY`
+(Forsion 官方应用;PKCE 公共客户端无 secret,随包发是官方做法)——**填了它用户就不用建应用**,
+UI 收起 App Key 栏只留「连接 Dropbox」;为空则退回「用户自建应用 + 填 App Key」,
+UI 也留了「改用自建 Dropbox 应用」的出口。用户自建的 key 落配置,官方 key 不落
+(否则日后换 key 会被旧值盖住)。
+
+点「连接」开系统浏览器,回调打回本机回环口
+`http://localhost:53682/`(RFC 8252,端口写死因 Dropbox 要求 redirect_uri 与 App Console
+登记值逐字相等),授权码自动回填;回环口起不来(被占/受限)自动降级为「页面显示授权码 + 手贴」。
+state 校验必须保留——回环口本机任意进程都能打。
+
 同步方式(SyncOptions.direction,remotely-save 的 sync direction 对标):`both` 双向(默认);
 `push` 仅上传 = 增量备份(不拉取、不传播删除,冲突以本地为准);`pull` 仅下载 = 增量还原
 (不推送、不传播删除,冲突仍出本地副本)。单向模式绝不动被丢弃方向的基线,切回双向自然收敛。

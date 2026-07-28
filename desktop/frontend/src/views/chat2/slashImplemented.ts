@@ -17,6 +17,7 @@ export const DESKTOP_IMPLEMENTED: string[] = [
   '/voice',
   '/model',
   '/loop',
+  '/verify',
   '/think',
   '/approval',
   '/help',

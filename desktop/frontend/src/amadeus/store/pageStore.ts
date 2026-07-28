@@ -1,4 +1,5 @@
-import { create } from 'zustand'
+import { createContext, useContext } from 'react'
+import { create, useStore } from 'zustand'
 import { generateColumnId, generateRowId, nextBlockId, stripPageBasename } from '@amadeus-shared/compiler/names'
 import type {
   BlockEntry,
@@ -210,7 +211,8 @@ interface PageState {
   status: Status
   error: string | null
   /** A pending request to move the caret into a specific block (after create/delete/nav). */
-  focusRequest: { id: BlockId; place: FocusPlace; goalX?: number } | null
+  /** anchor:源码↔可视切换带过来的「光标前文本」,块内按它找回落点(见 lib/modeCursor)。 */
+  focusRequest: { id: BlockId; place: FocusPlace; goalX?: number; anchor?: string } | null
   /** Transient drag state for drop-target feedback (the block being dragged / hovered). */
   dndActiveId: string | null
   dndOverId: string | null
@@ -271,6 +273,8 @@ interface PageState {
   deleteFolder(folderPath: string): Promise<void>
 
   requestFocus(id: BlockId, place: FocusPlace, goalX?: number): void
+  /** 源码模式切回可视时把光标送回原块:落在 anchor 之后,找不到则块首。 */
+  requestFocusAt(id: BlockId, anchor: string): void
   consumeFocus(id: BlockId): void
   flatOrder(): BlockId[]
   focusAdjacent(id: BlockId, dir: 'prev' | 'next', goalX?: number): void
@@ -318,13 +322,6 @@ interface PageState {
   _commit(manifest: PageManifest, blocks?: Record<BlockId, BlockState>): void
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null
-let loadSeq = 0
-// 在途保存(save() 进行中):loadPage 并行化后,仅当目标 path 与在途写同文件时才需等待。
-// ponytail: 单槽记账——并发 save 罕见(防抖+flush 都走这里),槽被覆盖时最坏退回旧的「读到略旧内容」现状。
-let flushingPath: string | null = null
-let inflightSave: Promise<void> | null = null
-
 function hydrate(page: LoadedPage): {
   manifest: PageManifest
   blocks: Record<BlockId, BlockState>
@@ -336,10 +333,27 @@ function hydrate(page: LoadedPage): {
   return { manifest: page.manifest, blocks }
 }
 
-export const usePageStore = create<PageState>((set, get) => {
+/**
+ * 一份文档状态 = 一个 store 实例。**每个编辑器面板各持一份**,分屏才能同时编辑两篇不同笔记
+ * (此前是模块级单例,两个面板并排显示的必然是同一篇 —— 用户实报「不能分屏」)。
+ * ⚠️ 保存定时器 / 载入序号 / 在途写这几个可变量必须住在**实例闭包**里:留在模块级就会被另一个
+ * 面板清掉,表现为「一边打字另一边的保存被取消」。
+ */
+function makePageStore() {
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  let loadSeq = 0
+  // 在途保存(save() 进行中):loadPage 并行化后,仅当目标 path 与在途写同文件时才需等待。
+  // ponytail: 单槽记账——并发 save 罕见(防抖+flush 都走这里),槽被覆盖时最坏退回旧的「读到略旧内容」现状。
+  let flushingPath: string | null = null
+  let inflightSave: Promise<void> | null = null
+
+  return create<PageState>((set, get) => {
   const scheduleSave = (): void => {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(() => {
+      // ⚠️ 必须在这里清空:定时器烧掉后 saveTimer 仍留着旧句柄,flushSave() 会误以为「还有待写」
+      // 而再发一次 save —— 两次写盘并发,谁后完成谁说了算,先发的旧快照可能盖掉后发的新内容(Codex)。
+      saveTimer = null
       void get().save()
     }, 400)
   }
@@ -387,6 +401,9 @@ export const usePageStore = create<PageState>((set, get) => {
 
     requestFocus(id, place, goalX) {
       set({ focusRequest: { id, place, goalX } })
+    },
+    requestFocusAt(id, anchor) {
+      set({ focusRequest: { id, place: 'start', anchor } })
     },
     consumeFocus(id) {
       const fr = get().focusRequest
@@ -1188,6 +1205,10 @@ export const usePageStore = create<PageState>((set, get) => {
     },
 
     async save() {
+      // 串行化:同一份文档的写盘绝不并发。并发时两次写的先后由 IPC 回来的顺序决定,
+      // 先发的旧快照可能压在后发的新内容上。等前一次落完再读状态,后写的必然更新。
+      const prev = inflightSave
+      if (prev) await prev.catch(() => {})
       const { manifest, activePage, blocks } = get()
       if (!manifest || !activePage) return
       set({ status: 'saving' })
@@ -1256,14 +1277,135 @@ export const usePageStore = create<PageState>((set, get) => {
       scheduleSave()
     },
   }
+  })
+}
+
+export type PageStoreApi = ReturnType<typeof makePageStore>
+
+// ── 面板作用域(分屏)────────────────────────────────────────────────────────
+// scope = 编辑器面板的 leaf id。编辑器**子树内**经 PageScopeCtx 拿到自己那份;
+// 编辑器**之外**的一切(侧栏 / 命令面板 / 状态栏 / 日历 / 快切)读「当前活动面板」那份 ——
+// 那正是它们本来就想要的语义(「当前这篇笔记」)。
+const stores = new Map<string, PageStoreApi>()
+
+/** 默认作用域:没有分屏时就它一个,永不回收。 */
+export const MAIN_SCOPE = 'main'
+const useActiveScope = create<{ id: string }>(() => ({ id: MAIN_SCOPE }))
+export const activePageScope = (): string => useActiveScope.getState().id
+/** 活动面板跟随焦点。切换会把门面订阅整体改挂到新面板(见下面 attachFacade)。 */
+export function setActivePageScope(id: string): void {
+  if (useActiveScope.getState().id !== id) useActiveScope.setState({ id })
+}
+
+// 状态分两类:**文档级**(activePage/manifest/blocks/status/focusRequest…)每个面板各一份 —— 这才是分屏;
+// **仓库级**(vault 根、页面/文件/文件夹清单、页面图标)全局只有一份真相,必须在面板间镜像:
+// 新面板的 store 生下来是空的,不同步的话它里面的 [[ 补全没有候选、双链全判成未解析(红链)。
+const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'icons'] as const
+type VaultSlice = Pick<PageState, (typeof VAULT_KEYS)[number]>
+const vaultSlice = (s: PageState): VaultSlice =>
+  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, icons: s.icons })
+
+let mirroring = false // 防镜像回弹成无限循环
+function mirrorVault(src: PageStoreApi): void {
+  if (mirroring) return
+  mirroring = true
+  const patch = vaultSlice(src.getState())
+  for (const other of stores.values()) if (other !== src) other.setState(patch)
+  mirroring = false
+}
+
+export function pageStoreFor(scope: string): PageStoreApi {
+  let s = stores.get(scope)
+  if (!s) {
+    s = makePageStore()
+    const seed = stores.values().next().value // 任取一个已有的:仓库级字段在它们之间恒等
+    if (seed) s.setState(vaultSlice(seed.getState()))
+    stores.set(scope, s)
+    s.subscribe((n, p) => { if (VAULT_KEYS.some((k) => n[k] !== p[k])) mirrorVault(s!) })
+  }
+  return s
+}
+/** 面板关掉时回收(先落盘,别把没写完的改动带走)。'main' 是默认作用域,永不回收。 */
+export function disposePageStoreScope(scope: string): void {
+  if (scope === MAIN_SCOPE) return
+  const s = stores.get(scope)
+  if (!s) return
+  // 先落盘、落完再摘表。摘早了 pageStoreFor() 会在 flush 还在飞的时候凭空重建一个空 store,
+  // 那份空的一旦被写回就是把整篇笔记清掉。(真正的兜底仍是退出前的全局 flush,不在这一层。)
+  void s.getState().flushSave().finally(() => { if (stores.get(scope) === s) stores.delete(scope) })
+  // 关掉的正好是活动面板 → 活动指针必须改投,否则下一次 getState() 会**凭空重建一个空 store**:
+  // 侧栏/命令面板/状态栏立刻看到「没有活动笔记」,而剩下那半屏明明还开着。
+  if (activePageScope() === scope) setActivePageScope(stores.keys().next().value ?? MAIN_SCOPE)
+}
+export { disposePageStoreScope as disposePageScope }
+
+/** 编辑器子树用它声明「我属于哪个面板」;不在任何面板里(null)= 跟随活动面板。 */
+export const PageScopeCtx = createContext<string | null>(null)
+
+/** 组件当前该读哪份文档状态。 */
+export function usePageScope(): string {
+  const ctx = useContext(PageScopeCtx)
+  const active = useActiveScope((s) => s.id)
+  return ctx ?? active
+}
+/** 编辑器子树里做**写操作**时用它拿自己那份 store —— 别用 usePageStore.getState()。
+ *  后者解析到「活动面板」,异步回调(防抖保存 / await 后的斜杠动作)里就可能写到隔壁那篇去。 */
+export function useScopedPageStore(): PageStoreApi {
+  return pageStoreFor(usePageScope())
+}
+
+// 门面订阅:转挂到当前活动面板。切面板时补发一次通知 —— 对订阅者来说「当前文档」确实整体换了。
+type Listener = (s: PageState, prev: PageState) => void
+const facadeListeners = new Set<Listener>()
+let detachFacade: (() => void) | null = null
+function attachFacade(prev?: PageStoreApi): void {
+  detachFacade?.()
+  const cur = pageStoreFor(activePageScope())
+  detachFacade = cur.subscribe((s, p) => { for (const l of facadeListeners) l(s, p) })
+  if (prev) for (const l of facadeListeners) l(cur.getState(), prev.getState())
+}
+useActiveScope.subscribe((s, p) => {
+  if (s.id !== p.id) attachFacade(pageStoreFor(p.id))
 })
+
+/**
+ * 门面 hook + 静态访问器。153 处 `usePageStore(sel)` 一行不用改:
+ * 在编辑器子树里解析到本面板的 store,子树之外解析到活动面板的。
+ */
+export const usePageStore = Object.assign(
+  function usePageStoreHook<T>(selector: (s: PageState) => T): T {
+    return useStore(pageStoreFor(usePageScope()), selector)
+  },
+  {
+    getState: (): PageState => pageStoreFor(activePageScope()).getState(),
+    // 显式写 Partial:zustand v5 的 setState 是重载签名,Parameters<> 只会取到最后那条(整份替换),
+    // 于是所有「只塞几个字段」的调用点都会被判缺 60 多个属性。
+    setState: (partial: Partial<PageState> | ((s: PageState) => Partial<PageState>)): void => {
+      pageStoreFor(activePageScope()).setState(partial)
+    },
+    subscribe: (listener: Listener): (() => void) => {
+      facadeListeners.add(listener)
+      if (!detachFacade) attachFacade()
+      return () => {
+        facadeListeners.delete(listener)
+        if (!facadeListeners.size) { detachFacade?.(); detachFacade = null }
+      }
+    },
+  },
+)
 
 // 外部改文件(agent 直接写盘 / Obsidian / 云端拉回)→ 回灌当前页。**必须模块级订阅**:
 // 曾挂在 AmadeusPagesView(左栏笔记树)的 effect 里,左栏切到「会话/文件」档或人在 Agent Desk、
 // Coding Space 时该组件根本没挂载 → 没人听 → 编辑器一直显示旧内容(要重开才刷新),
 // 且下一次敲键的防抖保存会把陈旧文档写回去、抹掉 agent 的改动。
 // drawingStore / dbAggregateStore 早就是模块级订阅,这里是漏网的一条。
-amadeus?.onExternalChange?.((p) => void usePageStore.getState().reconcileExternal(p))
+// ⚠️ 分屏后必须**广播给每一个面板**,不能只喂活动的那个:另一半屏正显示被改的那篇时,
+// 它收不到就一直是旧内容,而它下一次防抖保存会把陈旧文档写回盘 —— 正是上面这段注释里
+// 已经翻过一次车的那个失败模式,只不过换成了「按面板」维度。reconcileExternal 自己会判
+// 「这条改动是不是我这篇」,喂多了不会误伤。
+amadeus?.onExternalChange?.((p) => {
+  for (const s of stores.values()) void s.getState().reconcileExternal(p)
+})
 
 /** 笔记改名后的 .fd 跟随改名(pageStore.renamePage 与 noteViewStore.renameNote 共用)。
  *  renameFolder 内部自带 flushSave / activePage 重映射 / refreshStructure / 失败置 error。 */

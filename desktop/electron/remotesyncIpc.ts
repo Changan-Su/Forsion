@@ -7,6 +7,7 @@
  *  - 按条目云同步(entrySync)绑定的路径自动加入忽略 —— 双引擎不许抢管辖同一批文件;
  *  - 本地删除注入系统回收站(shell.trashItem),兜底 fs.rm。
  */
+import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
@@ -16,7 +17,14 @@ import { hash8 } from './amadeus/sync/entryRegistry'
 import { forsionWhoami, loadTanguCreds } from './forsionAuth'
 import { isDevMode } from './forsionHome'
 import { runSync } from './remotesync/engine'
-import { createDropboxRemote, dropboxAuthUrl, dropboxExchangeCode, pkcePair } from './remotesync/fsDropbox'
+import {
+  FORSION_DROPBOX_APP_KEY,
+  createDropboxRemote,
+  dropboxAuthUrl,
+  dropboxCallbackServer,
+  dropboxExchangeCode,
+  pkcePair,
+} from './remotesync/fsDropbox'
 import { createDirRemote } from './remotesync/fsLocal'
 import { createPenzorRemote } from './remotesync/fsPenzor'
 import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
@@ -107,11 +115,12 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<{ remote: RemoteFs; f
   }
   if (cfg.backend === 'dropbox') {
     const d = cfg.dropbox
-    if (!d?.appKey || !d.refreshToken) return { error: 'dropbox-not-connected' }
+    const key = dbxAppKey(d)
+    if (!key || !d?.refreshToken) return { error: 'dropbox-not-connected' }
     return {
-      remote: createDropboxRemote({ appKey: d.appKey, refreshToken: d.refreshToken, baseDir: d.baseDir }),
+      remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir }),
       // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
-      fingerprint: `dropbox:${d.accountId || d.appKey}|${(d.baseDir ?? '').trim() || '/'}`,
+      fingerprint: `dropbox:${d.accountId || key}|${(d.baseDir ?? '').trim() || '/'}`,
     }
   }
   if (cfg.backend === 'penzor') {
@@ -173,11 +182,14 @@ async function entrySyncIgnores(root: string): Promise<string[]> {
   return out
 }
 
-function broadcast(): void {
-  const payload = { running, lastReport, progress }
+function sendAll(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('remotesync:status', payload)
+    if (!w.isDestroyed()) w.webContents.send(channel, payload)
   }
+}
+
+function broadcast(): void {
+  sendAll('remotesync:status', { running, lastReport, progress })
 }
 
 /** Penzor 服务端单文件上限(与 server REMOTESYNC_MAX_FILE_BYTES 对齐):客户端钳住,
@@ -274,11 +286,79 @@ function resetTimer(cfg: RemoteSyncConfig): void {
   }, min * 60_000)
 }
 
+// ── Dropbox 链接登录:回环回调(RFC 8252 native app flow)────────────────────────
+// 端口写死是硬约束:Dropbox 要求 redirect_uri 与 App Console 登记值逐字相等,不支持通配端口。
+// 53682 沿用 rclone 的惯例值(照它的文档建过应用的用户已经登记过这一条)。
+const DBX_PORT = 53682
+const DBX_REDIRECT_URI = `http://localhost:${DBX_PORT}/`
+const DBX_AUTH_TIMEOUT_MS = 5 * 60_000
+
+/** 生效 App Key:用户自建应用优先,否则用内置的 Forsion 官方应用(空 = 两者都没有)。 */
+const dbxAppKey = (d?: { appKey?: string }): string => (d?.appKey ?? '').trim() || FORSION_DROPBOX_APP_KEY
+
+let dbxPending: { appKey: string; custom: boolean; verifier: string; redirectUri?: string } | null = null
+let dbxServer: { close: () => void } | null = null
+let dbxTimer: NodeJS.Timeout | null = null
+
+function stopDbxServer(): void {
+  if (dbxTimer) clearTimeout(dbxTimer)
+  dbxTimer = null
+  dbxServer?.close()
+  dbxServer = null
+}
+
+/** 起回环回调服务器并接线到配置持久化;起不来 → false,调用方降级为手贴授权码。 */
+async function startDbxLoopback(state: string): Promise<boolean> {
+  stopDbxServer()
+  const srv = await dropboxCallbackServer(DBX_PORT, state, (r) => {
+    stopDbxServer()
+    if ('error' in r) {
+      dbxPending = null
+      sendAll('remotesync:dropboxAuth', { ok: false, error: r.error })
+    } else void finishDropboxAuth(r.code).then((out) => sendAll('remotesync:dropboxAuth', out))
+  })
+  if (!srv) return false
+  dbxServer = srv
+  dbxTimer = setTimeout(() => {
+    stopDbxServer()
+    dbxPending = null
+    sendAll('remotesync:dropboxAuth', { ok: false, error: 'auth-timeout' })
+  }, DBX_AUTH_TIMEOUT_MS)
+  return true
+}
+
+/** 授权码 → refresh token,落配置(账号身份一起存,fingerprint 绑账号)。 */
+async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
+  const pending = dbxPending
+  if (!pending) return { ok: false, error: 'auth-not-started' }
+  try {
+    const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri)
+    dbxPending = null
+    const cur = (await loadConfig()).dropbox
+    const config = await saveConfig({
+      // 内置官方应用的 key 不落配置:否则日后换 key,旧值会一直盖住内置值
+      dropbox: { ...cur, appKey: pending.custom ? pending.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
+    })
+    return { ok: true, email: r.email ?? r.name, config }
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message || e) }
+  }
+}
+
 export function registerRemoteSync(): void {
   ipcMain.handle('remotesync:get', async () => {
     const cfg = await loadConfig()
     const rooted = await resolveRoot()
-    return { config: cfg, running, lastReport, progress, root: 'root' in rooted ? rooted.root : null, rootError: 'error' in rooted ? rooted.error : null }
+    return {
+      config: cfg,
+      running,
+      lastReport,
+      progress,
+      root: 'root' in rooted ? rooted.root : null,
+      rootError: 'error' in rooted ? rooted.error : null,
+      // 有内置官方 Dropbox 应用 → UI 收起 App Key 那一栏,直接给「连接 Dropbox」
+      dropboxBuiltin: FORSION_DROPBOX_APP_KEY !== '',
+    }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {
     const next = await saveConfig(patch ?? {})
@@ -297,32 +377,22 @@ export function registerRemoteSync(): void {
     }
   })
 
-  // Dropbox OAuth PKCE:start 开浏览器授权页(verifier 主进程暂存),finish 用回贴的
-  // 授权码换 refresh token 并落配置(连账号身份一起,fingerprint 绑账号)。
-  let dropboxVerifier: string | null = null
+  // Dropbox OAuth PKCE:start 开浏览器授权页(verifier 主进程暂存)。回环回调服务器起得来
+  // 就自动回填授权码(mode:auto,结果经 remotesync:dropboxAuth 广播);起不来退回手贴(mode:manual)。
   ipcMain.handle('remotesync:dropboxAuthStart', async (_e, appKey: string) => {
-    const key = (appKey ?? '').trim()
+    const custom = (appKey ?? '').trim()
+    const key = custom || FORSION_DROPBOX_APP_KEY
     if (!key) return { ok: false, error: 'no-app-key' }
     const { verifier, challenge } = pkcePair()
-    dropboxVerifier = verifier
-    await shell.openExternal(dropboxAuthUrl(key, challenge))
-    return { ok: true }
+    const state = randomBytes(16).toString('hex')
+    const auto = await startDbxLoopback(state)
+    dbxPending = { appKey: key, custom: !!custom, verifier, redirectUri: auto ? DBX_REDIRECT_URI : undefined }
+    await shell.openExternal(dropboxAuthUrl(key, challenge, auto ? { redirectUri: DBX_REDIRECT_URI, state } : {}))
+    return { ok: true, mode: auto ? 'auto' : 'manual', redirectUri: DBX_REDIRECT_URI }
   })
-  ipcMain.handle('remotesync:dropboxAuthFinish', async (_e, appKey: string, code: string) => {
-    const key = (appKey ?? '').trim()
-    if (!key || !dropboxVerifier) return { ok: false, error: 'auth-not-started' }
-    try {
-      const r = await dropboxExchangeCode(key, code ?? '', dropboxVerifier)
-      dropboxVerifier = null
-      const cur = (await loadConfig()).dropbox
-      const config = await saveConfig({
-        dropbox: { ...cur, appKey: key, refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name },
-      })
-      return { ok: true, email: r.email ?? r.name, config }
-    } catch (e) {
-      return { ok: false, error: String((e as Error)?.message || e) }
-    }
-  })
+  ipcMain.handle('remotesync:dropboxAuthFinish', async (_e, _appKey: string, code: string) =>
+    finishDropboxAuth(code ?? ''),
+  )
 
   void loadConfig().then((cfg) => {
     resetTimer(cfg)

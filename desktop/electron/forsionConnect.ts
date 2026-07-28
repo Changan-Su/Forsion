@@ -78,7 +78,7 @@ export interface CloudCreds { base: string; token: string }
 export type CloudResolver = () => Promise<CloudCreds>
 
 export async function cloudJson(
-  c: CloudCreds, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, timeoutMs = 60_000,
+  c: CloudCreds, method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown, timeoutMs = 60_000,
 ): Promise<{ status: number; json: any }> {
   const r = await fetch(c.base + path, {
     method,
@@ -99,12 +99,27 @@ export async function cloudJson(
  * 这里只补 token 和 Origin 侧信任（本地服务器只绑 127.0.0.1）。SSE 流式直通。
  */
 export function makePreviewProxy(resolveCloud: CloudResolver): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const MAP: Record<string, { method: 'GET' | 'POST'; path: string; auth: boolean }> = {
+  type Route = { method: 'GET' | 'POST'; path: string; auth: boolean; timeoutMs?: number; agentRun?: boolean }
+  const MAP: Record<string, Route> = {
     '/__forsion/chat': { method: 'POST', path: '/api/chat/completions', auth: true },
     '/__forsion/images': { method: 'POST', path: '/api/images/generations', auth: true },
     '/__forsion/user': { method: 'GET', path: '/api/brain/users/me', auth: true },
     '/__forsion/models': { method: 'GET', path: '/api/models', auth: false },
     '/__forsion/config': { method: 'GET', path: '/api/connect/config', auth: false },
+    '/__forsion/agent': { method: 'POST', path: '/api/agent/runs', auth: true, agentRun: true },
+  }
+  /** agent-events 带动态 runId,静态 MAP 装不下;runId 白名单字符防路径拼接注入。
+   *  timeout 放宽到 15min:agent run(检索+沙箱)天然比一次 chat 长。 */
+  function resolveRoute(urlPath: string): Route | undefined {
+    if (MAP[urlPath]) return MAP[urlPath]
+    const P = '/__forsion/agent-events/'
+    if (urlPath.startsWith(P)) {
+      const runId = urlPath.slice(P.length)
+      if (/^[A-Za-z0-9-]{1,64}$/.test(runId)) {
+        return { method: 'GET', path: `/api/agent/runs/${runId}/events`, auth: true, timeoutMs: 900_000 }
+      }
+    }
+    return undefined
   }
   return async (req, res) => {
     const [urlPath, qs] = (req.url || '').split('?')
@@ -112,7 +127,7 @@ export function makePreviewProxy(resolveCloud: CloudResolver): (req: IncomingMes
       if (!res.headersSent) { res.statusCode = code; res.setHeader('Content-Type', 'application/json') }
       res.end(JSON.stringify({ detail }))
     }
-    const m = MAP[urlPath]
+    const m = resolveRoute(urlPath)
     if (!m) return fail(404, 'unknown connect endpoint')
     if ((req.method || 'GET') !== m.method) return fail(405, 'method not allowed')
     let base = ''; let token = ''
@@ -134,6 +149,23 @@ export function makePreviewProxy(resolveCloud: CloudResolver): (req: IncomingMes
       }
       body = Buffer.concat(chunks)
     }
+    // agent run 的转发体主进程重建:只放行 session_id/message——app_id/agent_config 钉死,
+    // **model_id 也不放行**(模型完全由网关按 Connect 策略决定;预览页是任意用户代码,
+    // 绕过 SDK 直 POST 也指不了模型/塞不了 execMode 之类的私货)。
+    if (m.agentRun) {
+      let j: any
+      try { j = JSON.parse((body || Buffer.alloc(0)).toString('utf8') || '{}') } catch { return fail(400, 'agent 请求体必须是 JSON') }
+      body = Buffer.from(JSON.stringify({
+        session_id: typeof j.session_id === 'string' ? j.session_id : '',
+        message: typeof j.message === 'string' ? j.message : '',
+        app_id: 'connect',
+        agent_config: {},
+      }))
+    }
+    // 超时 + 客户端断开双源 abort:预览页关掉后不再拖着上游 SSE 干挂(15min 泄漏,codex 评审#4)。
+    const ac = new AbortController()
+    const tm = setTimeout(() => ac.abort(new Error('proxy timeout')), m.timeoutMs ?? 300_000)
+    req.on('close', () => ac.abort())
     try {
       const upstream = await fetch(base + m.path + (qs ? `?${qs}` : ''), {
         method: m.method,
@@ -143,7 +175,7 @@ export function makePreviewProxy(resolveCloud: CloudResolver): (req: IncomingMes
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: body && body.length ? new Uint8Array(body) : undefined,
-        signal: AbortSignal.timeout(300_000),
+        signal: ac.signal,
       })
       res.statusCode = upstream.status
       res.setHeader('Content-Type', upstream.headers.get('content-type') || 'application/json')
@@ -162,6 +194,8 @@ export function makePreviewProxy(resolveCloud: CloudResolver): (req: IncomingMes
       } else {
         fail(502, msg)
       }
+    } finally {
+      clearTimeout(tm)
     }
   }
 }

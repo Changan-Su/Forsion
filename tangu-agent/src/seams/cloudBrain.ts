@@ -126,7 +126,7 @@ export interface ModelsBrain {
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
    */
-  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[] }>;
+  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[] }>;
   /**
    * modelId 是否命中本地直连 provider(`<providerId>/<模型>` 或 modelIds 精确匹配)。
    * 可选:仅 standalone 的 multiBrain 实现。agentLoop 据此在云端不可达(未登录 Forsion)时
@@ -137,7 +137,8 @@ export interface ModelsBrain {
    * 按应用过滤的模型列表(遵守 Forsion admin「应用模型配置」project_model_configs)。
    * 可选:旧版云端/brain 未实现 → 调用方回退 listGlobalModels。
    * 语义:project 无配置行 → 等价全局列表(优雅降级);有配置行 → 严格遵守。
-   * 附带 admin 的 app 级三槽默认(对话/后台 agent/生图;旧云端缺字段 → null,客户端按各自回退链降级)。
+   * 附带 admin 的 app 级槽默认(对话/辅助 LLM(background)/生图/图像识别;旧云端缺字段 → null,
+   * 客户端按各自回退链降级)。
    * 错误处理与 listGlobalModels 同款:httpBrain 对网络/旧契约降级全 null(TUI 依赖不抛;
    * 空列表真相由调用方探针补全),进程内实现可抛(调用方捕获)。
    */
@@ -146,6 +147,8 @@ export interface ModelsBrain {
     defaultModelId: string | null;
     backgroundModelId?: string | null;
     imageModelId?: string | null;
+    /** 辅助模型 · 图像识别槽(主模型无原生视觉时的兜底;空 = 不启用)。 */
+    visionModelId?: string | null;
   }>;
 }
 

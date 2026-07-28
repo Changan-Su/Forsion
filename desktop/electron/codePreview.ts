@@ -10,7 +10,7 @@
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createReadStream, statSync, readFileSync, realpathSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { resolve, join, sep, extname } from 'node:path'
 import { transform, type Transform } from 'sucrase'
 
@@ -88,6 +88,35 @@ export function previewToken(dir: string): string {
   tokenToRoot.set(token, abs)
   rootToToken.set(abs, token)
   return token
+}
+
+// 无本机路径的 HTML(云沙箱文件 / 对话内联的 agent 产物)也必须落在**真实源**上,否则只能退回
+// srcdoc —— 那条路继承宿主 CSP + 不透明源,three.js 空白、指针锁/文件选择器全废(整类问题的老巢)。
+// 内容进内存不落盘:这类页面本来就没有兄弟资源要加载,只需要一个源。按内容哈希 memo(同一份重复
+// 预览复用同一 token),LRU 淘汰,上限小得多——每条是整份 HTML 文本,不是一个路径串。
+const INLINE_CAP = 64
+const tokenToInline = new Map<string, string>()
+const inlineToToken = new Map<string, string>()
+
+/** 把一段 HTML 文本挂到一个令牌源下,返回可直接加载的 URL。 */
+export async function serveInlineHtml(html: string): Promise<{ url: string }> {
+  const port = await ensurePreviewServer()
+  const key = createHash('sha1').update(html).digest('hex')
+  let token = inlineToToken.get(key)
+  if (token) { tokenToInline.delete(token); tokenToInline.set(token, html) } // 命中刷到队尾(LRU)
+  else {
+    token = randomBytes(16).toString('hex')
+    if (tokenToInline.size >= INLINE_CAP) {
+      const oldest = tokenToInline.keys().next().value as string | undefined
+      if (oldest) {
+        for (const [k, v] of inlineToToken) if (v === oldest) { inlineToToken.delete(k); break }
+        tokenToInline.delete(oldest)
+      }
+    }
+    tokenToInline.set(token, html)
+    inlineToToken.set(key, token)
+  }
+  return { url: `http://${token}.localhost:${port}/index.html` }
 }
 
 /** Forsion Connect 预览挂钩：/forsion-connect.js（local SDK）与 /__forsion/*（主进程云代理）。由 main 注入。 */
@@ -168,6 +197,8 @@ function serveFrom(rootDir: string, urlPath: string, res: ServerResponse, deref 
  */
 let previewServer: Server | null = null
 let previewStarting: Promise<string> | null = null
+/** stop 代数:每次 stopCodePreview() +1,让「启动中」的服务器知道自己已经被作废了。 */
+let stopGen = 0
 
 /** Host 头 → token(`<token>.localhost:port`);形状不对返回 null。 */
 export function tokenFromHost(host: string | undefined): string | null {
@@ -185,12 +216,25 @@ function ensurePreviewServer(): Promise<string> {
     const srv = createServer((req, res) => {
       res.setHeader('Cache-Control', 'no-store')
       const token = tokenFromHost(req.headers.host)
+      const inline = token ? tokenToInline.get(token) : null
       const tRoot = token ? tokenToRoot.get(token) : null
-      if (!tRoot) { res.statusCode = 404; res.end('not found'); return }
-      if (serveForsionEndpoint((req.url || '/').split('?')[0], req, res)) return
-      serveFrom(tRoot, req.url || '/', res, true)
+      if (inline == null && !tRoot) { res.statusCode = 404; res.end('not found'); return }
+      const path = (req.url || '/').split('?')[0]
+      if (serveForsionEndpoint(path, req, res)) return // 内联页同样会用 window.forsion
+      if (inline != null) {
+        // 内联根只有这一份文档,没有兄弟资源可供;其余路径一律 404,别让它看起来像个目录。
+        if (path !== '/' && path !== '/index.html') { res.statusCode = 404; res.end('not found'); return }
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.end(inline)
+        return
+      }
+      serveFrom(tRoot!, req.url || '/', res, true)
     })
+    const gen = stopGen
     await new Promise<void>((r, j) => { srv.once('error', j); srv.listen(0, '127.0.0.1', () => r()) })
+    // 启动期间有人调过 stopCodePreview:那次 stop 看到的 previewServer 还是 null,什么都没关掉。
+    // 这里补关,别把一台服务器连同它的令牌留在身后(codex Low-8)。
+    if (gen !== stopGen) { srv.close(); throw new Error('preview server stopped') }
     previewServer = srv
     const addr = srv.address()
     return `${typeof addr === 'object' && addr ? addr.port : 0}`
@@ -225,7 +269,9 @@ async function ensureListening(): Promise<string> {
       if (!root) { res.statusCode = 503; res.end('no root'); return }
       serveFrom(root, req.url || '/', res)
     })
+    const gen = stopGen
     await new Promise<void>((r, j) => { srv.once('error', j); srv.listen(0, '127.0.0.1', () => r()) })
+    if (gen !== stopGen) { srv.close(); throw new Error('preview server stopped') } // 同令牌根:启动期间被 stop 过 → 补关
     server = srv
     const addr = srv.address()
     return `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
@@ -234,6 +280,7 @@ async function ensureListening(): Promise<string> {
 }
 
 export function stopCodePreview(): void {
+  stopGen++
   server?.close()
   server = null
   starting = null
@@ -243,4 +290,6 @@ export function stopCodePreview(): void {
   previewStarting = null
   tokenToRoot.clear()
   rootToToken.clear()
+  tokenToInline.clear()
+  inlineToToken.clear()
 }

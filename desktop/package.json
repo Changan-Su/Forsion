@@ -38,6 +38,7 @@
     "pack:amadeus": "FORSION_PRODUCT=amadeus npm run build:amadeus && FORSION_PRODUCT=amadeus electron-builder --config electron-builder.config.cjs --dir",
     "check:remount": "node scripts/main-remount.check.cjs",
     "check:builtins": "node scripts/builtins.check.cjs",
+    "check:hooks": "eslint --config build/eslint.hooks.mjs \"frontend/src/**/*.{ts,tsx}\"",
     "check:deskshot": "node scripts/desk-shot.check.cjs",
     "check:splash": "node scripts/splash-loop.check.cjs"
   },
@@ -108,10 +109,13 @@
     "electron": "^40.8.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "gray-matter": "^4.0.3",
     "happy-dom": "^20.10.6",
     "playwright-core": "^1.61.1",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.65.0",
     "vitest": "^3.0.0",
     "yaml": "^2.9.0"
   },

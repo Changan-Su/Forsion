@@ -16,8 +16,12 @@ export type ToolbarAction =
   | 'h1'
   | 'h2'
   | 'h3'
+  | 'h4'
+  | 'h5'
+  | 'h6'
   | 'bullet'
   | 'ordered'
+  | 'todo'
   | 'quote'
 
 // 调色板(参考 AFFiNE 命名色;十六进制,后续可换 LCL token)。'' = 清除该颜色。
@@ -48,8 +52,12 @@ const TURN_INTO: Array<{ k: ToolbarAction; label: string }> = [
   { k: 'h1', label: '标题 1' },
   { k: 'h2', label: '标题 2' },
   { k: 'h3', label: '标题 3' },
+  { k: 'h4', label: '标题 4' },
+  { k: 'h5', label: '标题 5' },
+  { k: 'h6', label: '标题 6' },
   { k: 'bullet', label: '无序列表' },
   { k: 'ordered', label: '有序列表' },
+  { k: 'todo', label: '待办' },
   { k: 'quote', label: '引用' },
 ]
 

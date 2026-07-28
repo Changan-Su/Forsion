@@ -1,7 +1,7 @@
 /** fsDropbox 协议形状测试(mock fetch):分页 walk / 三态条件写 / ASCII 头转义 /
  *  not_found 幂等 / token 缓存 / 下载 size 校验。 */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { asciiJson, createDropboxRemote, normBaseDir } from './fsDropbox'
+import { asciiJson, createDropboxRemote, dropboxAuthUrl, dropboxCallbackServer, normBaseDir, parseDropboxCallback } from './fsDropbox'
 
 type Call = { url: string; init?: RequestInit }
 const calls: Call[] = []
@@ -36,6 +36,43 @@ describe('fsDropbox', () => {
     expect(normBaseDir(undefined)).toBe('')
     expect(normBaseDir(' /a/b/ ')).toBe('/a/b')
     expect(normBaseDir('a\\b')).toBe('/a/b')
+  })
+
+  it('链接登录:授权 URL 带 redirect_uri/state,手贴流程则两者都不带', () => {
+    const auto = new URL(dropboxAuthUrl('k', 'CH', { redirectUri: 'http://localhost:53682/', state: 'S' }))
+    expect(auto.searchParams.get('redirect_uri')).toBe('http://localhost:53682/')
+    expect(auto.searchParams.get('state')).toBe('S')
+    expect(auto.searchParams.get('code_challenge')).toBe('CH')
+    expect(auto.searchParams.get('token_access_type')).toBe('offline')
+    const manual = new URL(dropboxAuthUrl('k', 'CH'))
+    expect(manual.searchParams.has('redirect_uri')).toBe(false)
+    expect(manual.searchParams.has('state')).toBe(false)
+  })
+
+  it('回环回调:state 必须相符;噪声请求报 no-code;拒绝授权带出错因', () => {
+    expect(parseDropboxCallback('/?code=C&state=S', 'S')).toEqual({ code: 'C' })
+    expect(parseDropboxCallback('/?code=C&state=EVIL', 'S')).toEqual({ error: 'state-mismatch' })
+    expect(parseDropboxCallback('/?code=C', 'S')).toEqual({ error: 'state-mismatch' })
+    expect(parseDropboxCallback('/favicon.ico', 'S')).toEqual({ error: 'no-code' })
+    expect(parseDropboxCallback('/?error=access_denied&error_description=no&state=S', 'S')).toEqual({ error: 'access_denied: no' })
+  })
+
+  it('回环回调服务器:噪声请求不打断、拿到授权码后自关;端口被占则返回 null(降级手贴)', async () => {
+    const got: unknown[] = []
+    const srv = await dropboxCallbackServer(0, 'S', (r) => got.push(r))
+    expect(srv).not.toBeNull()
+    const base = `http://127.0.0.1:${srv!.port}`
+    // 真 fetch(前面的用例 stub 过 fetch,这里已被 afterEach 还原)
+    expect((await fetch(`${base}/favicon.ico`)).status).toBe(404)
+    expect(got).toEqual([]) // 噪声不算结果
+    expect((await fetch(`${base}/?code=C1&state=S`)).status).toBe(200)
+    expect(got).toEqual([{ code: 'C1' }])
+    await expect(fetch(`${base}/?code=C2&state=S`)).rejects.toThrow() // 已自关
+
+    const a = await dropboxCallbackServer(0, 'S', () => {})
+    const b = await dropboxCallbackServer(a!.port, 'S', () => {})
+    expect(b).toBeNull()
+    a!.close()
   })
 
   it('walk:分页合并、folder 过滤、base 前缀剥离(中文);token 只刷一次', async () => {

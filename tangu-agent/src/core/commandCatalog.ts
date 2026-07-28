@@ -68,6 +68,7 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   },
   { name: '/approval', key: 'approval', arg: '<档位>', zh: '切换审批档：readonly|auto-edit|full-auto', en: 'Switch approval mode: readonly|auto-edit|full-auto', surfaces: ['tui', 'desktop'] },
   { name: '/loop', key: 'loop', arg: '<1-200>', zh: '最大循环轮数（默认 90；耗尽会提示）', en: 'Max loop iterations (default 90; you get a prompt when exhausted)', surfaces: ['tui', 'desktop'] },
+  { name: '/verify', key: 'verify', arg: '<命令|off>', zh: '本会话验证命令：收尾前自动跑，不绿不许收（off 关闭）', en: 'Session verify command — runs before the turn may end; must pass (off to clear)', surfaces: ['desktop'] },
   { name: '/plan', key: 'plan', zh: '切换计划模式：只读调研 → 提交计划求批准', en: 'Toggle plan mode: read-only research, then submit a plan for approval', surfaces: ['tui', 'desktop'] },
   { name: '/voice', key: 'voice', zh: '切到语音消息（该 Agent 回复变语音）', en: 'Switch to voice messages (this agent replies as voice)', surfaces: ['desktop'] },
   { name: '/cwd', key: 'cwd', arg: '[path]', zh: '查看或切换工作目录', en: 'Show or change the working directory', surfaces: ['tui'] },

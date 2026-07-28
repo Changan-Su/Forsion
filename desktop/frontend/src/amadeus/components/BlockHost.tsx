@@ -13,7 +13,7 @@ import { BookmarkCard } from './BookmarkCard'
 import { useBlockSelection } from '../store/blockSelection'
 import { useClampedMenu } from '../lib/clampMenu'
 import { OverlayPortal } from '../lib/overlayPortal'
-import { usePageStore } from '../store/pageStore'
+import { usePageStore, useScopedPageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
 import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
 import { amadeus } from '../api'
@@ -122,6 +122,7 @@ export const BlockHost = memo(function BlockHost({
   blockId: string
   autoFocus?: boolean
 }) {
+  const ps = useScopedPageStore() // 本面板那份文档 store:写操作绝不能落到隔壁半屏那篇去
   const block = usePageStore((s) => s.blocks[blockId])
   const setBlockContent = usePageStore((s) => s.setBlockContent)
   const insertBlockAfter = usePageStore((s) => s.insertBlockAfter)
@@ -137,6 +138,7 @@ export const BlockHost = memo(function BlockHost({
   const openWikiLink = usePageStore((s) => s.openWikiLink)
   const focusPlace = usePageStore((s) => (s.focusRequest?.id === blockId ? s.focusRequest.place : null))
   const focusGoalX = usePageStore((s) => (s.focusRequest?.id === blockId ? s.focusRequest.goalX : undefined))
+  const focusAnchor = usePageStore((s) => (s.focusRequest?.id === blockId ? s.focusRequest.anchor : undefined))
   const isDropTarget = usePageStore(
     (s) => s.dndOverId === blockId && s.dndActiveId !== null && s.dndActiveId !== blockId,
   )
@@ -584,6 +586,7 @@ export const BlockHost = memo(function BlockHost({
                     </Suspense>
                   </div>
                 ) : (
+                  // webhost-ok: 固定已知嵌入(Chromium 内置 PDF 阅读器),无 sandbox 属性 → 不削能力
                   <iframe className="embed-pdf" src={embedFile.url} title={embedFile.name} />
                 )
               )}
@@ -630,7 +633,7 @@ export const BlockHost = memo(function BlockHost({
             {embed && embed !== 'loading' && (
               <button
                 className="embed-src"
-                onClick={() => void usePageStore.getState().loadPage(embed.owner)} // 已持有全路径,不走 basename 往返(重名会开错)
+                onClick={() => void ps.getState().loadPage(embed.owner)} // 已持有全路径,不走 basename 往返(重名会开错)
                 title="去源头编辑"
               >
                 {stripPageBasename(embed.owner)} ↗
@@ -655,7 +658,7 @@ export const BlockHost = memo(function BlockHost({
               onFocused={noop}
               requestSelfFocus={noop}
               onOpenWiki={(name) => openWikiLink(name, embed.owner)} // 嵌入内容里的链接按其所有者解析
-              getPageNames={() => usePageStore.getState().pages}
+              getPageNames={() => ps.getState().pages}
             />
           ) : (
             <div className="embed-missing">
@@ -703,13 +706,14 @@ export const BlockHost = memo(function BlockHost({
             onMoveDir={surface ? noop : (dir) => moveBlockDir(blockId, dir)}
             focusPlace={focusPlace}
             focusGoalX={focusGoalX}
+            focusAnchor={focusAnchor}
             onFocused={() => consumeFocus(blockId)}
             requestSelfFocus={(place) => requestFocus(blockId, place)}
             onOpenWiki={(name) => openWikiLink(name, pagePath)}
             // 宿主接管时,`/嵌入块引用` 也必须交给宿主:store.insertEmbed 会把嵌入块追加到页尾,
             // 在导图里那是一个游离的新中心,而不是当前节点下的一条(Codex)。
-            onInsertEmbed={(t) => (surface ? surface.insertAfter(blockId, `![[${t}]]`) : usePageStore.getState().insertEmbed(t))}
-            getPageNames={() => usePageStore.getState().pages}
+            onInsertEmbed={(t) => (surface ? surface.insertAfter(blockId, `![[${t}]]`) : ps.getState().insertEmbed(t))}
+            getPageNames={() => ps.getState().pages}
           />
         ) : (
           <div className="block-unknown">未知块类型：{block.type}</div>

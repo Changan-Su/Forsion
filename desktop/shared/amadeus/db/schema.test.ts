@@ -33,12 +33,14 @@ describe('db schema', () => {
     }
   })
 
-  it('emptyDb 种子:1 文本列 + 1 空行,当前版本号', () => {
+  it('emptyDb 种子:标题 + 文本两列 + 1 空行,当前版本号', () => {
     const db = emptyDb('未命名数据库')
     expect(db.version).toBe(DB_VERSION)
     expect(db.name).toBe('未命名数据库')
-    expect(db.columns).toHaveLength(1)
-    expect(db.columns[0].type).toBe('text')
+    // 只给一列身份列时,新建表的第一件事永远是手动加一列才能记东西 → 默认给到两列。
+    expect(db.columns.map((c) => c.name)).toEqual(['标题', '文本'])
+    expect(db.columns.every((c) => c.type === 'text')).toBe(true)
+    expect(new Set(db.columns.map((c) => c.id)).size).toBe(2) // 列 id 必须各不相同
     expect(db.rows).toHaveLength(1)
     expect(parseDb(serializeDb(db)).ok).toBe(true)
   })

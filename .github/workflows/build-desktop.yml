@@ -221,6 +221,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
+          # tag 带 `-`(如 v2.7.3-beta.1)= 预发布。标 --prerelease 有两个作用:
+          #   1. GitHub 页面上标注清楚,不会被人当正式版下载;
+          #   2. **mac 的更新检查走 /releases/latest,该端点按定义排除 prerelease** —— 于是
+          #      正式版用户自动看不到 beta,不需要客户端做任何判断。
+          # (Win/Linux 那边的隔离由 electron-builder 的 beta*.yml / latest*.yml 分流承担。)
+          case "$TAG" in *-*) PRE=--prerelease ;; *) PRE= ;; esac
           # 已存在则补传并覆盖资产(支持重跑);不存在则新建(自动生成发布说明)。
-          gh release create "$TAG" artifacts/* --title "Forsion $TAG" --generate-notes \
+          gh release create "$TAG" artifacts/* --title "Forsion $TAG" --generate-notes $PRE \
             || gh release upload "$TAG" artifacts/* --clobber

@@ -24,7 +24,7 @@ import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { useDbStore } from '../../store/dbStore'
 import { renameDb } from '../../lib/dbFileOps'
 import { useNoteViewStore } from '../../store/noteViewStore'
-import { usePageStore } from '../../store/pageStore'
+import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
 import { Settings2, ExternalLink, Plus } from 'lucide-react'
 import { openDb } from '../../../amadeusNav'
@@ -32,6 +32,7 @@ import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
 import { MemberColPicker } from '../../../views/calendar/MemberColPicker'
 import { act, actDebounced, shortVal } from '../../../activity/log'
 import { OverlayAt } from '../../lib/clampMenu'
+import { dropAfter, moveRow } from './rowOrder'
 import {
   CheckBoxCheckLinearIcon, DatabaseKanbanViewIcon, DatabaseListViewIcon, DatabaseTableViewIcon,
   DateTimeIcon, FilterIcon, FolderIcon, ImageIcon, LinkIcon, MultiSelectIcon, NumberIcon, PageIcon,
@@ -255,6 +256,13 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     }
     m((d) => ({ ...d, rows: [...d.rows, { id: dbId(), cells: initial ?? {} }] }))
   }
+  /** 拖拽重排:把 dragId 挪到 targetId 之前/之后。顺序就是 db.rows 的数组序,直接落盘。 */
+  const reorderRow = (dragId: string, targetId: string, after: boolean): void => {
+    m((d) => {
+      const rows = moveRow(d.rows, dragId, targetId, after)
+      return rows === d.rows ? d : { ...d, rows } // 引用没变 = 没动 → 不产生保存/撤销点
+    })
+  }
   const delRow = (rowId: string): void => {
     if (isNoteView) {
       if (window.confirm('删除此行会一并删除对应的笔记文件,确定?')) void nv().deleteNote(noteFolder as string, rowId)
@@ -345,6 +353,12 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     patchView(view.id, { sort: dir === null ? undefined : { colId, dir } })
 
   // 行管道:每视图筛选 → 每视图排序(都存在视图配置里;不动文件 rows 顺序)。
+  // 行拖拽重排。⚠️ 只在「无排序、无筛选/搜索」时开放:呈现出来的 rows 是合成结果,
+  // 它的相邻关系和 db.rows 的数组序对不上,拿屏幕上的落点去改数组只会把顺序改乱。
+  // 笔记视图的行是文件夹里的笔记,没有数组序可言,一并排除。
+  const [drag, setDrag] = useState<{ id: string; overId: string; after: boolean } | null>(null)
+  const canReorder = !isNoteView && !sort && !q.trim() && !(view.filters ?? []).length
+
   const rows = useMemo(() => {
     const af = applyFilters(baseRows, view.filters, kindOf)
     const needle = q.trim().toLowerCase()
@@ -514,8 +528,39 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
           </div>
 
           {rows.map((row) => (
-            <div className="amx-db-row" key={row.id} style={{ gridTemplateColumns: gridCols }}>
-              <button className="amx-db-rowdel" onClick={() => delRow(row.id)} title="删除行" aria-label="delete row">✕</button>
+            <div
+              className="amx-db-row"
+              key={row.id}
+              style={{ gridTemplateColumns: gridCols }}
+              data-drop={drag?.overId === row.id ? (drag.after ? 'below' : 'above') : undefined}
+              onDragOver={canReorder ? (e) => {
+                if (!drag) return
+                e.preventDefault()
+                const r = e.currentTarget.getBoundingClientRect()
+                const after = dropAfter(e.clientY, r)
+                if (drag.overId !== row.id || drag.after !== after) setDrag({ ...drag, overId: row.id, after })
+              } : undefined}
+              onDrop={canReorder ? (e) => {
+                e.preventDefault()
+                if (drag) reorderRow(drag.id, row.id, drag.after)
+                setDrag(null)
+              } : undefined}
+            >
+              {/* 手柄和删除同处**一个**网格单元(首列 28px):行首必须只有一个子元素,
+                  否则表头/统计行(各自只放一个占位 div)与数据行的列就错开了。
+                  手柄单独 draggable、整行不 draggable —— 整行可拖会让单元格里的文字选不中。 */}
+              <div className="amx-db-rowgutter">
+                <div
+                  className="amx-db-rowdrag"
+                  draggable={canReorder}
+                  title={canReorder ? '拖拽调整行顺序' : '有排序/筛选/搜索时不能手动调顺序 —— 先清掉'}
+                  onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', row.id); setDrag({ id: row.id, overId: row.id, after: false }) }}
+                  onDragEnd={() => setDrag(null)}
+                >
+                  ⠿
+                </div>
+                <button className="amx-db-rowdel" onClick={() => delRow(row.id)} title="删除行" aria-label="delete row">✕</button>
+              </div>
               {visCols.map((col) => (
                 <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)}>
                   <Cell row={row} col={col} pagePath={pagePath} setCell={setCell} openOptions={(e) => openPop(e, { kind: 'options', colId: col.id, rowId: row.id })} />
@@ -685,6 +730,7 @@ function Cell({
   openOptions: (e: ReactMouseEvent) => void
 }) {
   const [editing, setEditing] = useState(false) // text 含 [[ ]] 时的展示/编辑切换 + url 编辑态
+  const ps = useScopedPageStore() // 单元格里点双链要落在自己这半屏
   const cancelRef = useRef(false)
   const custom = getPropertyType(col.type)
   const v = coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))
@@ -694,7 +740,7 @@ function Cell({
    *  (.db 落给 openWikiLink 的文件分支 → 应用内 db tab,不再被系统程序打开原始 JSON)。 */
   const openLink = (raw: string): void => {
     const t = linkTarget(raw)
-    const st = usePageStore.getState()
+    const st = ps.getState()
     if (resolvePageName(t, st.pages, pagePath)) return void st.openWikiLink(t.replace(/\.md$/i, ''), pagePath)
     if (/\.[a-z0-9]{1,8}$/i.test(t) && !/\.(md|db)$/i.test(t)) return void amadeus.openAttachment(pagePath, t)
     st.openWikiLink(t.replace(/\.md$/i, ''), pagePath) // 未解析 → 询问创建(源 = 本 .db 所在处)
@@ -854,7 +900,7 @@ function Cell({
       }
       return (
         <div className="amx-db-urlcell">
-          <button className="amx-db-wikilink amx-db-pagename" onClick={() => void usePageStore.getState().loadPage(row.id)} title={`打开 ${s}`}>
+          <button className="amx-db-wikilink amx-db-pagename" onClick={() => void ps.getState().loadPage(row.id)} title={`打开 ${s}`}>
             {s || '未命名'}
           </button>
           <button className="amx-db-edit" onClick={() => setEditing(true)} title="重命名笔记" aria-label="rename note">✎</button>

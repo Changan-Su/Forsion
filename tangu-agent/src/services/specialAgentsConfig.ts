@@ -183,13 +183,17 @@ export function saveSpecialAgentsConfig(patch: Partial<SpecialAgentsConfig>): Sp
 }
 
 /**
- * 后台 agent（Historian/Muse）模型解析:用户显式配置 > admin 的 app 级「后台 agent 默认」槽 >
- * app 级对话默认 > profile 静态默认。用户没手动选模型时跟随云端(admin 改了下次解析即生效);
- * 选过即脱离跟随。60s 缓存(Historian 每轮触发,避免连环拉模型列表)。
+ * 后台 agent（Historian/Muse）模型解析,也就是产品里说的「辅助模型 · LLM」槽:
+ * 用户显式配置 > 本地 `~/.tangu/config.json` 的 `models.background`(桌面设置/引导写) >
+ * admin 的 app 级「辅助模型」槽 > app 级对话默认 > profile 静态默认。
+ * 用户没手动选模型时跟随云端(admin 改了下次解析即生效);选过即脱离跟随。
+ * 60s 缓存(Historian 每轮触发,避免连环拉模型列表)。
  */
 let bgSlotCache: { at: number; bg: string; def: string } | null = null;
 export async function resolveBackgroundModelId(explicit: string): Promise<string> {
   if (explicit) return explicit;
+  const local = String((getRawSection('models') as any)?.background || '').trim();
+  if (local) return local;
   const now = Date.now();
   if (!bgSlotCache || now - bgSlotCache.at > 60_000) {
     let bg = '';

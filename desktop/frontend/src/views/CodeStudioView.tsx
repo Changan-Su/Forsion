@@ -1,11 +1,16 @@
 /** Coding Space 主界面 —— 模仿 Google AI Studio 的 Code | Preview 双切换工作台。
  *  项目:`~/Forsion/Project/<项目>`,每个项目一个子文件夹。activeProject 为空 → 显示项目选择器(列已有 + 新建)。
- *  选/建项目即绑定一个 Coding 会话(cwd=项目);主区把项目目录挂本地静态服务器,iframe 加载 entry(多文件真解析)。
+ *  选/建项目即绑定一个 Coding 会话(cwd=项目);主区把项目目录挂本地静态服务器,<webview> 加载 entry(多文件真解析)。
+ *  ⚠️宿体必须是 <webview>,别改回 <iframe sandbox>:sandbox 缺一个 token 就静默废掉一整类网页能力
+ *  (实报:`Blocked pointer lock … 'allow-pointer-lock' permission is not set` —— FPS 项目直接不能玩),
+ *  且跨源子框架被 Chromium 硬禁 file picker(「导入文件」全废)。与 wsfile / Agent Desk 的 HtmlPreview 同宿体同分区。
  *  Code:可编辑 CodeMirror,防抖写回(mtime CAS);右栏文件树点文件 → 进 Code 选中。
  *  实时跟随:Coding Agent 每写一个文件 → 刷新预览;首个 .html 自动设为入口。纯渲染端,host 缺失降级为占位。 */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Code2, Eye, RotateCw, Folder, FolderPlus, Globe, Loader2, ExternalLink } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
+import { BROWSER_PARTITION } from '../../../shared/browser'
+import { Webview } from '../builtins/browserView'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
 import { useCodeStudio } from '../stores/codeStudioStore'
@@ -87,6 +92,27 @@ const pickEntry = (list: string[]): string | null =>
   list.find((f) => f === 'index.html' || f.endsWith('/index.html')) || list[0] || null
 
 // ── 项目选择器(activeProject 为空时的空态)──
+/** 预览宿体。重载脉冲走 `reload()`,不靠换 key 重挂:`<webview>` 是**独立进程**,每次保存/写盘
+ *  重开一个进程是实打实的开销(iframe 时代换 key 无所谓)。URL 变了才重挂——那本来就是全新加载。
+ *  ⚠️必须是**独立组件**:CodeStudioView 里 `if (!root) return <ProjectPicker/>` 在前,把这几个
+ *  hook 写在它后面 = Hooks 顺序违规,选项目那一下必崩(codex High-1 实报)。 */
+function PreviewFrame({ url, nonce }: { url: string; nonce: number }) {
+  const frame = useRef<HTMLElement | null>(null)
+  const seen = useRef({ url, nonce })
+  useEffect(() => {
+    const prev = seen.current
+    seen.current = { url, nonce }
+    if (prev.url !== url || prev.nonce === nonce) return
+    try { (frame.current as unknown as { reload(): void } | null)?.reload() } catch { /* 尚未附着 */ }
+  }, [url, nonce])
+  return (
+    <Webview
+      ref={frame} key={url} className="csx-frame" src={url}
+      partition={BROWSER_PARTITION} allowpopups="true" style={{ display: 'flex' }}
+    />
+  )
+}
+
 function ProjectPicker({ root }: { root: string | null }) {
   const { t } = useI18n()
   const openProject = useCodeStudio((s) => s.openProject)
@@ -310,7 +336,7 @@ export function CodeStudioView(_: ViewProps) {
           ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={streaming!.content} fileName={streaming!.abs || streaming!.rel || 'file.txt'} autoScroll /></Suspense>
           : mode === 'preview'
             ? (previewUrl
-              ? <iframe key={reloadNonce} className="csx-frame" src={previewUrl} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" title="preview" />
+              ? <PreviewFrame url={previewUrl} nonce={reloadNonce} />
               : <div className="csx-empty">{t('coding.emptyPreview')}</div>)
             : (codeFile
               ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={text} fileName={codeFile} editable onChange={onCode} /></Suspense>

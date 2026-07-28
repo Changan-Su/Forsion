@@ -633,6 +633,173 @@ async function main() {
     await p2.close()
   })
 
+  // ─── F5:2026-07-27 那批(切块 / 行样式 / 行首退格 / 单 \n 落盘 / 带 checkbox 复制 / H4-H6)───
+
+  // T26:Shift+Enter = 切块。光标后有内容就切走,块尾才是新建空块。
+  await tryTest('T26', async () => {
+    const p = await freshPage()
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.type('abcdef', { delay: 30 })
+    await p.waitForTimeout(400)
+    for (let i = 0; i < 3; i++) { await p.keyboard.press('ArrowLeft'); await p.waitForTimeout(60) }
+    await p.keyboard.press('Shift+Enter')
+    await p.waitForTimeout(700)
+    const all = await p.evaluate(() => window.__harness.blocks.map((b) => b.content.trim()))
+    check('T26 行中 Shift+Enter 把光标后内容切到新块', JSON.stringify(all) === '["abc","def"]', `blocks=${JSON.stringify(all)}`)
+    await p.close()
+
+    // 块尾:仍然是「新建空块」,不是切出个空壳
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.type('abc', { delay: 30 })
+    await q.waitForTimeout(400)
+    await q.keyboard.press('Shift+Enter')
+    await q.waitForTimeout(700)
+    const b2 = await q.evaluate(() => window.__harness.blocks.map((b) => b.content.trim()))
+    check('T26 块尾 Shift+Enter 仍是新建空块', JSON.stringify(b2) === '["abc",""]', `blocks=${JSON.stringify(b2)}`)
+    await q.close()
+
+    // 尾随空格前按下:tail 只有一个空格 —— remark 会把它写成 `&#x20;`(非空),
+    // 靠序列化结果判空会切出 `# &#x20;` 垃圾块(2026-07-27 实测踩到,故钉死)。
+    const r = await freshPage()
+    await r.locator('.md-block .ProseMirror').first().click()
+    await r.keyboard.type('# abc ', { delay: 40 })
+    await r.waitForTimeout(500)
+    await r.keyboard.press('Meta+ArrowRight')
+    await r.keyboard.press('Shift+Enter')
+    await r.waitForTimeout(700)
+    const b3 = await r.evaluate(() => window.__harness.blocks.map((b) => b.content))
+    check('T26 尾随空格不产出 &#x20; 垃圾块', !b3.some((c) => c.includes('&#x20;')), `blocks=${JSON.stringify(b3)}`)
+    await r.close()
+  })
+
+  // T27:待办上切行样式(此前 list_item 的 `paragraph block*` 把标题挡在门外、转正文是空操作)
+  await tryTest('T27', async () => {
+    const turn = async (to) => {
+      const p = await freshPage('- [ ] hello world')
+      await p.locator('.md-block .ProseMirror').first().click()
+      await p.waitForTimeout(200)
+      await p.keyboard.press('End')
+      for (let i = 0; i < 5; i++) await p.keyboard.press('Shift+ArrowLeft')
+      await p.waitForTimeout(400)
+      await p.locator('.inline-toolbar .itb-turn').dispatchEvent('mousedown')
+      await p.waitForTimeout(250)
+      await p.locator('.itb-panel .itb-menu-item', { hasText: to }).first().dispatchEvent('mousedown')
+      await p.waitForTimeout(700)
+      const md = (await mdOf(p)).trim()
+      await p.close()
+      return md
+    }
+    const h1 = await turn('标题 1')
+    const txt = await turn('正文')
+    const todo = await turn('待办')
+    check('T27 待办 → 标题 1', h1 === '# hello world', `md=${JSON.stringify(h1)}`)
+    check('T27 待办 → 正文', txt === 'hello world', `md=${JSON.stringify(txt)}`)
+    check('T27 待办 → 待办(幂等)', /^[-*] \[ \] hello world$/.test(todo), `md=${JSON.stringify(todo)}`)
+  })
+
+  // T28:行首退格先脱列表壳。首块没有「上一块」,不脱壳的话那个 checkbox 永远删不掉。
+  await tryTest('T28', async () => {
+    const p = await freshPage('- [ ] abc')
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.waitForTimeout(200) // 点完要给编辑器一拍落焦,否则 Home 打空(第一版就这么假红的)
+    await p.keyboard.press('Home')
+    await p.waitForTimeout(150)
+    await p.keyboard.press('Backspace')
+    await p.waitForTimeout(700)
+    check('T28 首块待办行首退格 → 脱成正文(checkbox 删得掉)', (await mdOf(p)).trim() === 'abc', `md=${JSON.stringify(await mdOf(p))}`)
+    await p.close()
+  })
+
+  // T29:块内换行落盘 = 单个 '\n'(Obsidian 语义),且往返闭合。
+  await tryTest('T29', async () => {
+    const p = await freshPage()
+    await p.locator('.md-block .ProseMirror').first().click()
+    for (const s of ['一', '二', '三']) { await p.keyboard.type(s, { delay: 30 }); await p.keyboard.press('Enter'); await p.waitForTimeout(150) }
+    await p.waitForTimeout(700)
+    const md = await mdOf(p)
+    check('T29 三行落盘无空行(单 \\n 分行)', md.trim() === '一\n二\n三', `md=${JSON.stringify(md)}`)
+    await p.close()
+
+    const q = await freshPage(md)
+    const back = await q.evaluate(() => document.querySelector('.md-block .ProseMirror').innerHTML)
+    check('T29 读回仍是三行(解析侧拆段生效,否则塌成一个多行块)', (back.match(/<p>/g) || []).length === 3, `html=${back}`)
+    check('T29 往返不变', (await mdOf(q)) === md, `md2=${JSON.stringify(await mdOf(q))}`)
+    await q.close()
+
+    // 中间的空行(敲两次回车)必须留住 —— 过滤空段会让它每次重开少一个
+    const r = await freshPage('a\n<br />\nb')
+    const h = await r.evaluate(() => document.querySelector('.md-block .ProseMirror').innerHTML)
+    check('T29 块内空行往返保留', (h.match(/<p>/g) || []).length === 3, `html=${h}`)
+    await r.close()
+  })
+
+  // T30:复制。整行待办要带 `- [ ]`(checkbox 是 CSS ::before,不在文档里);只选几个字仍是纯文本。
+  await tryTest('T30', async () => {
+    const ctx2 = await browser.newContext()
+    // 本文件顶上的 `const URL` 遮住了全局的 URL 构造器,别用 new URL() —— 手拼源即可。
+    await ctx2.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL.split('/').slice(0, 3).join('/') })
+    const copy = async (seed, keys) => {
+      const p = await ctx2.newPage()
+      await p.goto(`${URL}?seed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+      await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
+      await p.waitForTimeout(400)
+      await p.locator('.md-block .ProseMirror').first().click()
+      for (const k of keys) { await p.keyboard.press(k); await p.waitForTimeout(120) }
+      await p.keyboard.press('Meta+c')
+      await p.waitForTimeout(300)
+      const t = await p.evaluate(() => navigator.clipboard.readText().catch(() => '(读不到)'))
+      await p.close()
+      return t
+    }
+    check('T30 整行待办复制带 checkbox', /^[-*] \[ \] 买牛奶$/.test((await copy('- [ ] 买牛奶', ['Home', 'Shift+End'])).trim()), `got=${JSON.stringify(await copy('- [ ] 买牛奶', ['Home', 'Shift+End']))}`)
+    check('T30 只选几个字仍是纯文本(不带行前缀)', (await copy('- [ ] 买牛奶', ['End', 'Shift+ArrowLeft', 'Shift+ArrowLeft'])).trim() === '牛奶')
+    check('T30 普通段落全选是纯文本', (await copy('普通一行', ['Meta+a'])).trim() === '普通一行')
+    // 跨块选中(段落 + 待办):只看首块类型会退回纯文本、把后面那条的 `- [ ]` 丢掉(Codex 复审)
+    const multi = await copy('普通行\n\n- [ ] 待办', ['Meta+a'])
+    check('T30 段落+待办跨块复制不丢 checkbox', /\[ \] 待办/.test(multi), `got=${JSON.stringify(multi)}`)
+    await ctx2.close()
+  })
+
+  // T31:H4-H6(此前 UI 只给到 H3)。顺带钉图标不许把数字漏进 textContent。
+  await tryTest('T31', async () => {
+    const p = await freshPage()
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.type('##### ', { delay: 40 })
+    await p.keyboard.type('五级', { delay: 30 })
+    await p.waitForTimeout(600)
+    check('T31 "##### " → H5', (await p.locator('.md-block .ProseMirror h5').count()) === 1, `md=${JSON.stringify(await mdOf(p))}`)
+    await p.close()
+
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.type('/', { delay: 40 })
+    await q.waitForTimeout(400)
+    const items = await q.locator('.slash-item').allTextContents()
+    check('T31 斜杠菜单有标题 4/5/6', ['标题 4', '标题 5', '标题 6'].every((l) => items.some((t) => t.includes(l))), `items=${JSON.stringify(items.slice(0, 8))}`)
+    check('T31 图标不把数字漏进文本(选择器不被污染)', !items.some((t) => /^\d/.test(t)), `items=${JSON.stringify(items.slice(0, 8))}`)
+    await q.close()
+  })
+
+  // T32:源码↔可视 切换的光标接力,块内落点靠「光标前文本」锚回来(见 amadeus/lib/modeCursor)。
+  // 纯映射由 modeCursor.test.ts 钉;这里钉的是最后一公里 —— 锚点在 ProseMirror 文档里的换算。
+  await tryTest('T32', async () => {
+    // 光标落点看不见 → 打一个 '|' 当探针,看它插在哪。
+    const type = async (seed, anchor) => {
+      const p = await browser.newPage()
+      await p.goto(`${URL}?seed=${encodeURIComponent(seed)}&anchor=${encodeURIComponent(anchor)}`, { waitUntil: 'domcontentloaded' })
+      await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
+      await p.waitForTimeout(700)
+      await p.keyboard.type('|', { delay: 30 })
+      await p.waitForTimeout(500)
+      const t = await p.evaluate(() => document.querySelector('.md-block .ProseMirror').textContent)
+      await p.close()
+      return t
+    }
+    check('T32 锚点命中 → 光标落在锚点之后', (await type('一二三四五', '一二三')) === '一二三|四五', `got=${JSON.stringify(await type('一二三四五', '一二三'))}`)
+    check('T32 锚点找不到 → 停在块首(绝不乱跳)', (await type('一二三四五', '不存在')) === '|一二三四五')
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

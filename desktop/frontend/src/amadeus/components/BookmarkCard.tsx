@@ -113,6 +113,7 @@ export function BookmarkCard({ url, onChangeUrl }: { url: string; onChangeUrl: (
   if (yt) {
     return (
       <div className="amx-bm amx-bm-video">
+        {/* webhost-ok: 固定已知嵌入(YouTube 播放器),需要的能力就这几个,已在 allow= 里写全 */}
         <iframe
           className="amx-bm-iframe"
           src={`https://www.youtube-nocookie.com/embed/${yt}`}
