@@ -1,11 +1,11 @@
 <div align="center">
 
-# Forsion Genesis
+# Forsion
 
-**Your evolvable second-brain system.**
+**An evolvable, local-first AI workbench.**
 
-For ideas, knowledge, planning and vibe coding.<br>
-A local-first, freely reshapable workbench where Agents and your work are truly connected.
+Agents, knowledge, and everyday work — together in a second brain you own.<br>
+For ideas, notes, planning, coding, and the workflows that connect them.
 
 **English** · [简体中文](./README.zh-CN.md)
 
@@ -15,11 +15,13 @@ A local-first, freely reshapable workbench where Agents and your work are truly 
 ![Platforms](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555)
 [![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
 
-[Download & Install](#download--install) · [Core Capabilities](#core-capabilities) · [Local Development](#local-development) · [Architecture](#architecture) · [Contributing](#contributing)
+[Website](https://forsion.net) · [Download](https://github.com/Changan-Su/Forsion/releases) · [Documentation](./docs/README.md) · [Core Capabilities](#core-capabilities) · [Contributing](#contributing)
 
 </div>
 
----
+<p align="center">
+  <img src="./.github/assets/readme-fusang-tree.jpg" alt="Forsion connects Agents, knowledge, tools and workflows into an evolvable second brain" width="100%" />
+</p>
 
 ## From a Single Thought to a System That Keeps Working
 
@@ -59,6 +61,12 @@ Forsion is more than an AI chat client. It treats the AI Agent as a foundational
 - **Driven by product profiles**: the same source can combine different Spaces, branding and backend capabilities to build a complete workbench or a product focused on a single scenario.
 
 ## Core Capabilities
+
+<p align="center">
+  <img src="./.github/assets/readme-connected-workbench.jpg" alt="A connected Forsion workbench composed of Agent, notes, calendar, coding, inbox and automation Spaces" width="100%" />
+</p>
+
+Every Space is focused, but none is isolated. They share the same workbench, files, search, context and Agent capabilities, so a piece of work can move forward without being repeatedly copied between apps.
 
 ### Six Built-in Spaces
 
@@ -306,6 +314,6 @@ Please read the full license text before using, distributing or offering service
 
 <div align="center">
 
-**Forsion Genesis — bring Agents into your workflow, not just into a chat box.**
+**Forsion — bring Agents into your workflow, not just into a chat box.**
 
 </div>

@@ -1,11 +1,11 @@
 <div align="center">
 
-# Forsion Genesis
+# Forsion
 
-**你的可进化第二大脑系统。**
+**一个可进化、本地优先的 AI 工作台。**
 
-用于想法、知识、计划与 Vibe Coding。<br>
-在一个本地优先、可以由你自由塑造的工作台里，让 Agent 与你的工作真正连接起来。
+让 Agent、知识与日常工作汇入一套真正属于你的第二大脑。<br>
+用于想法、笔记、计划、编码，以及连接它们的每一种工作流。
 
 [English](./README.md) · **简体中文**
 
@@ -15,11 +15,13 @@
 ![Platforms](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555)
 [![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
 
-[下载与安装](#下载与安装) · [核心能力](#核心能力) · [本地开发](#本地开发) · [架构](#架构) · [参与贡献](#参与贡献)
+[官方网站](https://forsion.net) · [立即下载](https://github.com/Changan-Su/Forsion/releases) · [使用文档](./docs/README.md) · [核心能力](#核心能力) · [参与贡献](#参与贡献)
 
 </div>
 
----
+<p align="center">
+  <img src="./.github/assets/readme-fusang-tree.jpg" alt="Forsion 将 Agent、知识、工具与工作流连接成一套可进化的第二大脑" width="100%" />
+</p>
 
 ## 从一个念头，到一套能持续工作的系统
 
@@ -59,6 +61,12 @@ Forsion 不只是一个 AI 对话客户端。它把 AI Agent 作为工作台中�
 - **产品档案驱动**：同一源码可以组合不同 Space、品牌和后端能力，构建完整工作台或聚焦单一场景的产品。
 
 ## 核心能力
+
+<p align="center">
+  <img src="./.github/assets/readme-connected-workbench.jpg" alt="由 Agent、笔记、日历、编码、收件箱与自动化 Space 共同组成的 Forsion 工作台" width="100%" />
+</p>
+
+每个 Space 各有重点，却彼此并不割裂。它们共享同一套工作台、文件、搜索、上下文与 Agent 能力，让一项工作可以持续向前，而不必在多个应用之间反复复制。
 
 ### 六个内置 Space
 
@@ -306,6 +314,6 @@ Forsion Genesis 使用 [Modified Apache License 2.0](./LICENSE)。它以 Apache 
 
 <div align="center">
 
-**Forsion Genesis — 让 Agent 进入工作流，而不只是进入聊天框。**
+**Forsion — 让 Agent 进入工作流，而不只是进入聊天框。**
 
 </div>
