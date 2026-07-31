@@ -78,8 +78,13 @@ const measure = () => {
   const tsum = document.getElementById('tsum')
   const shown = getComputedStyle(tsum).display !== 'none'
   const cardShown = getComputedStyle(document.getElementById('card')).display !== 'none'
+  const rs = getComputedStyle(document.getElementById('rail'))
   return {
     railH: rail.height, railBottom: rail.bottom, colBottom: col.bottom,
+    // 车道上下内边距实测而非写死:改 .t2-rail padding 时这条断言该跟着走,不该变成假红。
+    railPadY: parseFloat(rs.paddingTop) + parseFloat(rs.paddingBottom),
+    railPadTop: parseFloat(rs.paddingTop),
+    railPadBottom: parseFloat(rs.paddingBottom),
     cardShown, cardTop: card.top, cardBottom: card.bottom, cardH: card.height,
     tsumShown: shown, tsumH: shown ? r('tsum').height : 0, tsumBottom: shown ? r('tsum').bottom : 0, tsumInH: shown ? r('tsumin').height : 0,
     marginTop: getComputedStyle(document.getElementById('card')).marginTop,
@@ -103,7 +108,11 @@ async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
 
   // ① 概览在场:两卡高度固定 50/50(概览卡撑满上半、内容内滚);Desk 卡底缘=列底-16=输入框底线
   const both = await at(p, 1400, 't2-tsum show')
-  const half = (both.railH - 32 - 10) / 2 // (车道内容高 − gap) / 2
+  // 用户口径:概览卡顶到聊天区上缘 == Desk 卡底到聊天区下缘。两者就是车道的上下内边距,必须同值。
+  // 我自己在 2026-07-30 把顶部单独调成 4 过一次,肉眼看不出来,靠这条钉住。
+  check('⚠️车道上下留白同值(两卡到聊天区上/下缘等距)', both.railPadTop === both.railPadBottom,
+    `上=${both.railPadTop} 下=${both.railPadBottom}`)
+  const half = (both.railH - both.railPadY - 10) / 2 // (车道内容高 − gap) / 2
   check('⚠️两卡高度固定各半', Math.abs(both.tsumH - half) <= 2 && Math.abs(both.cardH - half) <= 2,
     `tsum=${both.tsumH.toFixed(1)} card=${both.cardH.toFixed(1)} 期望=${half.toFixed(1)}`)
   check('⚠️概览卡撑满上半(stretch,非 hug)', Math.abs(both.tsumInH - both.tsumH) <= 2,

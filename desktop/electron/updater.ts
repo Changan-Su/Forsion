@@ -165,11 +165,13 @@ export async function downloadUpdate(): Promise<void> {
 }
 
 /**
- * Win/Linux:退出并安装(isSilent=false 显示安装器,isForceRunAfter=true 装完重启 app)。
+ * Win/Linux:退出并安装。**一条龙**:isSilent=true(不露安装器界面)+ isForceRunAfter=true(装完自拉起)——
+ * 用户在应用内点的是「更新」,不该再被丢回安装向导走一遍(首次安装照旧走正常向导,不受影响)。
+ * 更新途中旧卸载器的「是否保留数据」也一并闭嘴,见 build/installer.nsh 的 ${isUpdated} 闸。
  * 调用方(main 的 updater:install 处理器)须先优雅停后端,避免 before-quit 的 app.exit(0)
  * 截断 electron-updater 的退出安装路径。
  */
 export function installUpdate(): void {
   if (unsupported() || process.platform === 'darwin') return
-  autoUpdater.quitAndInstall(false, true)
+  autoUpdater.quitAndInstall(true, true)
 }

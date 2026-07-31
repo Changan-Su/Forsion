@@ -1826,7 +1826,7 @@ registerMessages({
   "onboarding.connect.benefitFreeQuota": { "zh": "每日免费 AI 额度 —— 注册即送,无需付费即可开始", "en": "Free daily AI quota — included on sign-up, start without paying" },
   "onboarding.connect.modeSub": { "zh": "订阅登录", "en": "Subscription" },
   "onboarding.connect.subDesc": { "zh": "用你的 Claude / ChatGPT / xAI 订阅账号直连,跑各自的订阅额度(不计 Forsion 额度)。", "en": "Connect with your Claude / ChatGPT / xAI subscription account and run on its own quota (doesn't count against Forsion quota)." },
-  "onboarding.connect.subHint": { "zh": "OAuth 浏览器登录,凭证只存本机 ~/.forsion/provider-auth.json;登录后用 provider/model(如 claude/claude-opus-4-8)选模型。", "en": "OAuth browser login; credentials stay on your machine in ~/.forsion/provider-auth.json. After login, pick a model with provider/model (e.g. claude/claude-opus-4-8)." },
+  "onboarding.connect.subHint": { "zh": "OAuth 浏览器登录,凭证只存本机 ~/.forsion/provider-auth.json;登录后用 provider/model(如 codex/gpt-5.6-sol)选模型。想用 Claude 订阅请在新会话选「运行引擎 · Claude Code」。", "en": "OAuth browser login; credentials stay on your machine in ~/.forsion/provider-auth.json. After login, pick a model with provider/model (e.g. codex/gpt-5.6-sol). To use a Claude subscription, pick the Claude Code engine when starting a new chat." },
   "onboarding.connect.subUnavailable": { "zh": "当前环境不支持订阅登录(仅桌面端)。", "en": "Subscription login isn't available here (desktop only)." },
   "onboarding.connect.subLoginOk": { "zh": "订阅账号已连接", "en": "Subscription account connected" },
 })

@@ -10,6 +10,7 @@
  */
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
 import type { ToolProvider } from './toolRegistry.js';
@@ -50,10 +51,20 @@ function relDisplay(ctx: ToolContext, abs: string): string {
   return rel && !rel.startsWith('..') ? rel : abs;
 }
 
+// 全局单链写锁(Codex 评审 07-30 #1):并行子代理各自串行执行工具,但两个子代理可同时进写类工具;
+// edit/multi_edit/apply_patch 是「读-改-写」,交叠会静默丢更新。写操作毫秒级,单链无争用痛点。
+// ponytail: 全局一条链,真出现写吞吐瓶颈再按路径分锁。
+let writeChain: Promise<unknown> = Promise.resolve();
+export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const r = writeChain.then(fn, fn);
+  writeChain = r.then(() => undefined, () => undefined);
+  return r;
+}
+
 /** cat -n 风格按行分页(host read_file):每行前缀「右对齐行号 + Tab」(1-based),带 [lines a-b of N] 头。
  *  行号给模型定位坐标、并逼它精确复制缩进,从而命中 edit_file/multi_edit 的唯一 old_string —— 这是模型
  *  敢做「局部编辑」而非「整文件覆写」的关键。offset 仍是 0-based 入参(向后兼容),显示行号一律 1-based。 */
-export function paginate(text: string, offset?: number, limit?: number): string {
+export function paginate(text: string, offset?: number, limit?: number, pathHint?: string): string {
   const lines = text.split('\n');
   const total = lines.length;
   const start = Math.min(Math.max(0, offset ?? 0), total);
@@ -62,7 +73,14 @@ export function paginate(text: string, offset?: number, limit?: number): string 
   let body = lines.slice(start, end).map((l, i) => String(start + i + 1).padStart(6) + '\t' + l).join('\n');
   let trimmed = false;
   if (body.length > READ_MAX_CHARS) { body = body.slice(0, READ_MAX_CHARS); trimmed = true; }
-  const more = trimmed ? '\n…[truncated; narrow your limit]'
+  // 截断消息即导航指令(借 pi):不只报「截了」,给出能一次命中的下一步参数。
+  // trimmed 时末行可能被腰斩,续读从「保住的最后一行」重新开始(kept-1 = 该行的 0-based 行号)。
+  // 单行独超上限时「同 offset 更小 limit」会永远原地打转(Codex 评审 #10)→ 指路 shell 逃生舱。
+  const kept = trimmed ? body.split('\n').length : 0;
+  const more = trimmed
+    ? (kept <= 1
+        ? `\n…[line ${start + 1} alone exceeds ${READ_MAX_CHARS} chars; read it in slices with run_bash: sed -n '${start + 1}p' ${pathHint || '<file>'} | cut -c1-2000]`
+        : `\n…[truncated at ${READ_MAX_CHARS} chars; continue with offset:${start + kept - 1} and a smaller limit]`)
     : end < total ? `\n…[${total - end} more line(s) below; read with offset:${end}]` : '';
   return `[lines ${start + 1}-${end} of ${total}]\n` + body + more;
 }
@@ -71,7 +89,23 @@ export function paginate(text: string, offset?: number, limit?: number): string 
 function truncateOutput(text: string, head = 4000, tail = 1500): string {
   if (text.length <= head + tail) return text;
   const omitted = text.length - head - tail;
-  return text.slice(0, head) + `\n…[省略 ${omitted} 字符]…\n` + text.slice(-tail);
+  return text.slice(0, head) + `\n…[${omitted} chars omitted]…\n` + text.slice(-tail);
+}
+
+/** bash 输出截断(借 pi,07-30 归因轮):截断不再是信息湮灭——全量落盘临时文件、路径回传,
+ *  模型可回头 grep/read;并标注总行数帮模型判断要不要换更窄的命令重看(借 Codex 截断元数据)。
+ *  落盘失败(只读 tmp 等)退化为纯截断,绝不因此报错。 */
+export async function truncateBashOutput(text: string, head = 4000, tail = 1500): Promise<string> {
+  if (text.length <= head + tail) return text;
+  const totalLines = text.split('\n').length;
+  let saved = '';
+  try {
+    const p = path.join(os.tmpdir(), `tangu-bash-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}.log`);
+    await fs.writeFile(p, text, 'utf-8');
+    saved = ` captured output saved to ${p} — read/grep that file if you need the omitted part;`;
+  } catch { /* 落盘失败退化为纯截断 */ }
+  const omitted = text.length - head - tail;
+  return text.slice(0, head) + `\n…[${omitted} chars omitted (${totalLines} lines total);${saved} showing head+tail]…\n` + text.slice(-tail);
 }
 
 function runBash(
@@ -148,8 +182,10 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       function: {
         name: 'run_bash',
         description:
-          'Run a single shell command (/bin/sh -c) on the user\'s machine, with the current session cwd as working directory; returns stdout/stderr/exit_code. ' +
-          'Use for running builds/tests, listing directories, git operations, etc. Destructive commands may require user approval.',
+          'Run a single shell command (/bin/sh -c) on the user\'s machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. ' +
+          'To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. ' +
+          'Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. ' +
+          'For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.',
         parameters: {
           type: 'object',
           properties: {
@@ -165,19 +201,25 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (!command) return 'Error: command is required';
       const cwd = ctx.cwd || process.cwd();
       const timeout = Number.isFinite(Number(args.timeout_ms)) && Number(args.timeout_ms) > 0 ? Number(args.timeout_ms) : BASH_TIMEOUT_MS;
+      const started = Date.now();
       const r = await runBash(command, cwd, ctx.signal, timeout);
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
       if (r.stderr) out += `stderr:\n${r.stderr}\n`;
-      out += `exit_code: ${r.code}`;
+      // 单流捕获顶到上限时明说(否则模型以为输出到此为止)——检测阈值即上限本身:
+      // 累积守卫是「未达上限才追加」,最后一块可越过上限,>= 即触顶。
+      if (r.stdout.length >= BASH_OUTPUT_CAP || r.stderr.length >= BASH_OUTPUT_CAP) {
+        out += `[stream capture capped at ${BASH_OUTPUT_CAP} chars per stream]\n`;
+      }
+      out += `exit_code: ${r.code} | wall_time: ${((Date.now() - started) / 1000).toFixed(1)}s`;
       if (r.timedOut) {
-        out += ` (timed out after ${timeout}ms, 进程组已终止)`;
-        out += '\n提示:这条命令未在超时内返回。常驻/长跑命令(dev server、watch、http.server 等)请改用 ' +
-          'run_background 启动,再用 read_process_output / list_processes 查看,避免阻塞。';
+        out += ` (timed out after ${timeout}ms; process group killed)`;
+        out += '\nNote: the command did not return within the timeout. For long-running/persistent commands (dev server, watch, http.server, …) ' +
+          'start them with run_background instead, then inspect via read_process_output / list_processes — do not block on them here.';
       } else if (r.aborted) {
         out += ' (aborted)';
       }
-      return truncateOutput(out.trim() || '(no output)');
+      return truncateBashOutput(out.trim() || '(no output)');
     },
   },
 
@@ -187,7 +229,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       type: 'function',
       function: {
         name: 'read_file',
-        description: 'Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. ' +
+        description: 'Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. ' +
           'Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that "<number>\\t" prefix — old_string must match the file\'s RAW text, not the numbered view.',
         parameters: {
           type: 'object',
@@ -205,8 +247,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       // 图片文件文本读取没有意义(会吐二进制乱码)——引导模型改用 view_image「看」图。
       const imgMime = imageMimeForPath(abs);
       if (imgMime) {
-        return `「${relDisplay(ctx, abs)}」是图片文件(${imgMime})。read_file 只返回文本;` +
-          '要查看/识别图像内容,请按同一路径调用 view_image 工具。';
+        return `${relDisplay(ctx, abs)} is an image file (${imgMime}); read_file returns text only. ` +
+          'To view/recognize the image, call view_image with the same path.';
       }
       const offset = Number.isFinite(Number(args.offset)) && Number(args.offset) >= 0 ? Number(args.offset) : undefined;
       const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Number(args.limit) : undefined;
@@ -214,9 +256,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       try {
         buf = await fs.readFile(abs);
       } catch {
-        return `Error: file not found: ${args.path}`;
+        return `Error: file not found: ${args.path} (check the path with list_dir or glob_files)`;
       }
-      return paginate(buf.toString('utf-8'), offset, limit);
+      return paginate(buf.toString('utf-8'), offset, limit, relDisplay(ctx, abs));
     },
   },
 
@@ -238,7 +280,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         },
       },
     },
-    execute: async (args, ctx): Promise<string> => {
+    execute: (args, ctx): Promise<string> => withWriteLock(async () => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
       const guard = checkWritePath(ctx, abs);
       if (guard.hardDeny) return `Error: ${guard.reason}`;
@@ -250,7 +292,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         return `Error: ${e?.message || e}`;
       }
       return `wrote ${relDisplay(ctx, abs)} (${content.length} chars)`;
-    },
+    }),
   },
 
   edit_file: {
@@ -262,8 +304,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         description:
           'Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). ' +
           'old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. ' +
-          'Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. ' +
-          'old_string matches the RAW file text — do NOT include the leading "<number>\\t" prefix that read_file shows. To create a new file, use write_file.',
+          'Keep old_string as small as possible while still unique — do not pad it with large unchanged regions. ' +
+          'Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. For several regions of one file use multi_edit; to create a new file, use write_file. ' +
+          'old_string matches the RAW file text — do NOT include the leading "<number>\\t" prefix that read_file shows.',
         parameters: {
           type: 'object',
           properties: {
@@ -275,23 +318,26 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         },
       },
     },
-    execute: async (args, ctx): Promise<string> => {
+    execute: (args, ctx): Promise<string> => withWriteLock(async () => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
       const guard = checkWritePath(ctx, abs);
       if (guard.hardDeny) return `Error: ${guard.reason}`;
       const oldStr = String(args.old_string ?? '');
       const newStr = String(args.new_string ?? '');
-      if (!oldStr) return 'Error: old_string is required (新建文件请用 write_file)';
+      if (!oldStr) return 'Error: old_string is required (to create a new file, use write_file)';
       let text: string;
       try {
         text = await fs.readFile(abs, 'utf-8');
       } catch {
-        return `Error: file not found: ${args.path}`;
+        return `Error: file not found: ${args.path} (check the path with list_dir, or use write_file to create it)`;
       }
       const first = text.indexOf(oldStr);
-      if (first === -1) return 'Error: old_string 未在文件中找到（注意空白/缩进须完全一致）';
+      if (first === -1) {
+        return 'Error: old_string not found in the file. It must match the RAW text exactly — including whitespace/indentation, and without the "<number>\\t" line-number prefix that read_file shows. Re-read the exact region and retry with a smaller unique snippet.';
+      }
       if (text.indexOf(oldStr, first + oldStr.length) !== -1) {
-        return 'Error: old_string 在文件中出现多次，请补足上下文使其唯一匹配';
+        const count = text.split(oldStr).length - 1;
+        return `Error: old_string matches ${count} places in the file — add surrounding lines to make it unique, or use multi_edit for several regions.`;
       }
       const next = text.slice(0, first) + newStr + text.slice(first + oldStr.length);
       try {
@@ -300,7 +346,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         return `Error: ${e?.message || e}`;
       }
       return `edited ${relDisplay(ctx, abs)}`;
-    },
+    }),
   },
 
   list_dir: {
@@ -351,6 +397,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         description:
           'Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). ' +
           'Each edit\'s old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file\'s "<number>\\t" line prefix). ' +
+          'Keep each old_string minimal but unique; merge overlapping or adjacent changes into one edit instead of emitting edits whose regions touch. ' +
           'Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.',
         parameters: {
           type: 'object',
@@ -373,28 +420,28 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         },
       },
     },
-    execute: async (args, ctx): Promise<string> => {
+    execute: (args, ctx): Promise<string> => withWriteLock(async () => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
       const guard = checkWritePath(ctx, abs);
       if (guard.hardDeny) return `Error: ${guard.reason}`;
       const edits = Array.isArray(args.edits) ? args.edits : null;
-      if (!edits?.length) return 'Error: edits 必须是非空数组';
+      if (!edits?.length) return 'Error: edits must be a non-empty array';
       let text: string;
       try {
         text = await fs.readFile(abs, 'utf-8');
       } catch {
-        return `Error: file not found: ${args.path}`;
+        return `Error: file not found: ${args.path} (check the path with list_dir, or use write_file to create it)`;
       }
       // 先在内存里全部应用,任一失败整体放弃(原子性)
       let next = text;
       for (let i = 0; i < edits.length; i++) {
         const oldStr = String(edits[i]?.old_string ?? '');
         const newStr = String(edits[i]?.new_string ?? '');
-        if (!oldStr) return `Error: edits[${i}].old_string 为空`;
+        if (!oldStr) return `Error: edits[${i}].old_string is empty; file unchanged`;
         const first = next.indexOf(oldStr);
-        if (first === -1) return `Error: edits[${i}].old_string 未找到(注意前序 edit 已生效;空白/缩进须完全一致),整文件未改动`;
+        if (first === -1) return `Error: edits[${i}].old_string not found (note: earlier edits in this batch were already applied to the working text; whitespace/indentation must match exactly, without read_file's line-number prefix). File unchanged — re-read the region and retry.`;
         if (next.indexOf(oldStr, first + oldStr.length) !== -1) {
-          return `Error: edits[${i}].old_string 出现多次,请补足上下文使其唯一,整文件未改动`;
+          return `Error: edits[${i}].old_string matches multiple places — add surrounding lines to make it unique. File unchanged.`;
         }
         next = next.slice(0, first) + newStr + next.slice(first + oldStr.length);
       }
@@ -404,7 +451,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         return `Error: ${e?.message || e}`;
       }
       return `applied ${edits.length} edit(s) to ${relDisplay(ctx, abs)}`;
-    },
+    }),
   },
 
   // 注册序末尾追加(append-only):新增工具不打乱既有 host 工具定义顺序,旧会话前缀缓存只在部署边界失效一次。
@@ -433,7 +480,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const abs = resolvePath(ctx, rawPath);
       const mime = imageMimeForPath(abs);
       if (!mime) {
-        return `Error: 不支持的图片格式(仅 png/jpg/jpeg/gif/webp/bmp):${rawPath}`;
+        return `Error: unsupported image format (only png/jpg/jpeg/gif/webp/bmp): ${rawPath}`;
       }
       let buf: Buffer;
       try {
@@ -442,14 +489,14 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         return `Error: file not found: ${rawPath}`;
       }
       if (buf.length > VIEW_IMAGE_MAX_BYTES) {
-        return `Error: 图片过大(${(buf.length / 1024 / 1024).toFixed(1)}MB,上限 ${Math.round(VIEW_IMAGE_MAX_BYTES / 1024 / 1024)}MB)。请压缩或裁剪后再查看。`;
+        return `Error: image too large (${(buf.length / 1024 / 1024).toFixed(1)}MB, limit ${Math.round(VIEW_IMAGE_MAX_BYTES / 1024 / 1024)}MB). Compress or crop it first (e.g. with sips/ImageMagick via run_bash), then view the smaller copy.`;
       }
       if (!ctx.collectImage) {
-        return 'Error: 当前运行环境不支持图像查看(缺少图像回流通道)。';
+        return 'Error: this runtime cannot display images (no image return channel).';
       }
       ctx.collectImage({ url: `data:${mime};base64,${buf.toString('base64')}`, name: path.basename(abs) });
-      return `已加载图片 ${relDisplay(ctx, abs)} (${mime}, ${(buf.length / 1024).toFixed(0)} KB)。` +
-        '图像已作为内容提供给你,请直接根据图像本身回答,不要再尝试用 read_file 读取它。';
+      return `Loaded image ${relDisplay(ctx, abs)} (${mime}, ${(buf.length / 1024).toFixed(0)} KB). ` +
+        'The image itself has been provided to you as content — answer from it directly; do not try to read_file it.';
     },
   },
 
@@ -482,7 +529,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (!rawPath) return 'Error: path is required';
       const abs = resolvePath(ctx, rawPath);
       if (imageMimeForPath(abs)) {
-        return `「${relDisplay(ctx, abs)}」是图片,请用 view_image 查看;read_document 用于 PDF/Office 文档。`;
+        return `${relDisplay(ctx, abs)} is an image — use view_image to see it; read_document is for PDF/Office documents.`;
       }
       let size: number;
       try {
@@ -491,25 +538,25 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         return `Error: file not found: ${rawPath}`;
       }
       if (size > READ_DOC_MAX_BYTES) {
-        return `Error: 文档过大(${(size / 1024 / 1024).toFixed(1)}MB,上限 ${Math.round(READ_DOC_MAX_BYTES / 1024 / 1024)}MB)。`;
+        return `Error: document too large (${(size / 1024 / 1024).toFixed(1)}MB, limit ${Math.round(READ_DOC_MAX_BYTES / 1024 / 1024)}MB).`;
       }
       let LiteParse: any;
       try {
         ({ LiteParse } = await import('@llamaindex/liteparse'));
       } catch {
-        return 'Error: 未安装文档解析依赖 @llamaindex/liteparse。请在 Tangu-Agent 包内 `npm i @llamaindex/liteparse` 后重启。';
+        return 'Error: document parsing dependency @llamaindex/liteparse is not installed. Run `npm i @llamaindex/liteparse` inside the Tangu-Agent package and restart.';
       }
       try {
         const parser = new LiteParse({ outputFormat: 'markdown', ocrEnabled: args.ocr === true });
         const result = await parser.parse(abs);
         const md = String(typeof result === 'string' ? result : result?.text ?? result?.markdown ?? '').trim();
         if (!md) {
-          return `解析成功但未提取到文本:${relDisplay(ctx, abs)} 可能是扫描件/图片型 PDF。` +
-            (args.ocr === true ? '(已开启 OCR 仍为空)' : ' 重试时设 ocr:true 走 OCR。');
+          return `Parsed but no text extracted: ${relDisplay(ctx, abs)} may be a scanned/image-only PDF.` +
+            (args.ocr === true ? ' (still empty with OCR enabled)' : ' Retry with ocr:true to run OCR.');
         }
         return `# ${path.basename(abs)}\n\n` + truncateOutput(md);
       } catch (e: any) {
-        return `Error: 文档解析失败(${e?.message || e})。docx/xlsx/pptx 需本机装有 LibreOffice。`;
+        return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
       }
     },
   },

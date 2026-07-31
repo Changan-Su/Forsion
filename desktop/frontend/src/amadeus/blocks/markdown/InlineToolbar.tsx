@@ -23,6 +23,7 @@ export type ToolbarAction =
   | 'ordered'
   | 'todo'
   | 'quote'
+  | 'fold'
 
 // 调色板(参考 AFFiNE 命名色;十六进制,后续可换 LCL token)。'' = 清除该颜色。
 const TEXT_COLORS: Array<{ name: string; v: string }> = [
@@ -59,6 +60,7 @@ const TURN_INTO: Array<{ k: ToolbarAction; label: string }> = [
   { k: 'ordered', label: '有序列表' },
   { k: 'todo', label: '待办' },
   { k: 'quote', label: '引用' },
+  { k: 'fold', label: '折叠' },
 ]
 
 export function InlineToolbar({

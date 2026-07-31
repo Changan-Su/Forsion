@@ -685,9 +685,7 @@
 .am-app .milkdown .ProseMirror > *:last-child {
   margin-bottom: 0;
 }
-.am-app .milkdown .ProseMirror h1,
-.am-app .milkdown .ProseMirror h2,
-.am-app .milkdown .ProseMirror h3 {
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
   font-weight: 700;
   line-height: 1.3;
   margin: 0.4em 0 0.3em;
@@ -700,6 +698,20 @@
 }
 .am-app .milkdown .ProseMirror h3 {
   font-size: 1.15em;
+}
+/* 四级往后字号已经压到正文附近,靠**字色**继续拉开层级(纯字号的话 h5/h6 与正文肉眼无差别 ——
+   用户实报「四级标题之后依旧没有显示」:标题本身生效了,只是长得和正文一模一样)。 */
+.am-app .milkdown .ProseMirror h4 {
+  font-size: 1.05em;
+}
+.am-app .milkdown .ProseMirror h5 {
+  font-size: 1em;
+  color: var(--text-sec, var(--text-muted));
+}
+.am-app .milkdown .ProseMirror h6 {
+  font-size: 0.95em;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
 }
 .am-app .milkdown .ProseMirror p {
   margin: 0.3em 0;
@@ -1049,26 +1061,48 @@ body.amx-marquee-active * {
   margin-left: auto;
   opacity: 1;
 }
-/* callout 折叠([!x]-):收起只留首段;chevron 徽章旁,折叠时不旋转 */
-.am-app .callout-fold {
+/* callout 折叠([!x]-):收起只留首段;chevron 紧跟标题文字之后,折叠时不旋转 */
+.am-app .callout-chevron {
   border: none;
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
   line-height: 1;
-  padding: 0 4px;
-  margin-left: 2px;
+  /* 定宽 + 居中:rotate 会改字形包围盒,不定宽的话每次折叠箭头都横向挪一点 */
+  width: 14px;
+  padding: 0;
+  margin-left: 5px;
+  text-align: center;
   cursor: pointer;
   display: inline-block;
   transform: rotate(90deg);
   transition: transform 0.15s ease;
   vertical-align: -1px;
 }
-.am-app .callout-fold.collapsed {
+.am-app .callout-chevron.collapsed {
   transform: rotate(0deg);
 }
+/* 折叠/展开的高度过渡。⚠️ 不能用 display:none —— 那个切不出动画。
+   `interpolate-size: allow-keywords` 让 `height: auto ↔ 0` 可插值(Chromium 129+);
+   不支持的环境自动退化成瞬切,不会坏。高度 0 + overflow:hidden 的效果与原来一致:
+   量得到的高度仍是 0(折叠区光标不可达那条守卫按「宿主高度 > 0」判定,照旧成立)。 */
+.am-app .callout > *:not(:first-child) {
+  interpolate-size: allow-keywords;
+  height: auto;
+  overflow: hidden;
+  transition:
+    height 0.2s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.16s ease,
+    margin-block 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
 .am-app .callout.callout-collapsed > *:not(:first-child) {
-  display: none;
+  height: 0;
+  opacity: 0;
+  margin-block: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .callout > *:not(:first-child) { transition: none; }
 }
 /* 标题小节折叠:chevron 悬停浮现于行左缘;折叠时常显 + 行数徽章 */
 .amx-hfold-wrap {
@@ -1127,6 +1161,13 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   display: block;
   margin: 0.4em 0;
+}
+/* ⚠️ 当一个 textblock **以 widget 结尾**时(callout 标题行末尾的折叠箭头就是),ProseMirror 会
+   在后面补一个 `img.ProseMirror-separator`。被上面那条 `display:block` 命中 → 它自成一行,
+   整行凭空高一倍。PM 自带的 inline 规则压不住这条选择器,只能在这儿显式让开。 */
+.am-app .milkdown .ProseMirror img.ProseMirror-separator {
+  display: inline;
+  margin: 0;
 }
 .am-app .milkdown .ProseMirror .wikilink {
   color: var(--primary);
@@ -1807,15 +1848,26 @@ body.amx-marquee-active * {
 .am-app ::-webkit-scrollbar-track {
   background: transparent;
 }
+/* 静止透明 / 滚动或悬停显形 —— 同 base.css 的 `[data-scrolling]` 机制(scrollFade.ts 打标记)。
+   ⚠️ 标记打在滚动元素自身,所以 `.am-app` 自己就是滚动容器时要 `.am-app[data-scrolling]`,
+   内层容器滚动时要 `.am-app [data-scrolling]` —— 两个选择器都得写,少一个就有一半滚动区不显形。 */
 .am-app ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: transparent;
   border-radius: 10px;
   border: 3px solid transparent;
   background-clip: content-box;
+  transition: background-color 0.35s ease;
+}
+.am-app[data-scrolling]::-webkit-scrollbar-thumb,
+.am-app [data-scrolling]::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  background-clip: content-box;
+  transition-duration: 0.12s;
 }
 .am-app ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
   background-clip: content-box;
+  transition-duration: 0.12s;
 }
 
 /* Keyboard focus rings (mouse clicks stay clean;注意文本输入框按规范点击聚焦也算 :focus-visible,须逐个豁免) */
@@ -2454,6 +2506,15 @@ body.amx-marquee-active * {
 .math-src-hidden { display: none; }
 /* 双链实况(见 blocks/markdown/wikilink.ts):离行时隐藏 [[ ]] 源码、就地渲染成链接;在行时露源码可编辑。 */
 .wikilink-src-hidden { display: none; }
+/* 行内 `![[pic.png]]`:混在文字里的图片嵌入(整块只有它一条时走块级 embed,见 BlockHost)。
+   照 Obsidian 的观感:原尺寸随行排版、只限宽不限高;`|200` 写死的宽度由 inline style 接管。 */
+.wiki-inline-img {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+  height: auto;
+  border-radius: 3px;
+}
 .math-rendered { cursor: pointer; }
 /* 任务3:$$…$$ 块公式水平居中(整块占满一行、内容居中;顺带压平 katex-display 默认外边距) */
 .math-rendered--block { display: block; width: 100%; text-align: center; margin: 6px 0; }
@@ -2477,3 +2538,54 @@ body.amx-marquee-active * {
 .am-app .block-host:focus-within { background: transparent; }
 /* 注:笔记顶栏(去玻璃)改在 amadeus-host.css 的 .amx-toolbar —— 真正被渲染的是它,
  * NotesView 的 .chat-header/.ts-header 已不再挂载,原先针对它们的样式已删。 */
+
+
+/* ── 「按钮」块(```forsion-button):点一下跑一条 manual 自动化 ────────────────────
+ * ⚠️ 配色只准用 **Amadeus 自己那套 token**(theme/themes/*/theme.css 里成对定义、明暗两套都有):
+ *   --primary / --primary-2(hover)/ --on-primary / --primary-soft / --surface-2
+ *   --text / --text-sec / --text-muted / --border / --border-strong / --radius-sm
+ * 别用 --accent / --on-accent / --text-faint / --overlay-* —— 那是 Tangu 外壳的词汇表,
+ * 在 Amadeus 作用域里多数主题根本没定义:`var(--on-accent, #fff)` 会静默退成白字,
+ * 撞上浅色强调主题(origin 暗色 --primary: #ece7dd)就是白底白字。 */
+.amx-btnblock { display: flex; flex-direction: column; gap: 4px; padding: 2px 0; }
+.amx-btnblock-row { display: flex; align-items: center; gap: 6px; }
+.amx-btnblock-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 14px; font-size: 13px; line-height: 1.4; cursor: pointer;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--primary);
+  background: var(--primary); color: var(--on-primary);
+  transition: background var(--dur-fast, 180ms) var(--ease-apple, ease), opacity var(--dur-fast, 180ms) var(--ease-apple, ease);
+}
+/* hover 用主题成对给的 --primary-2(明色主题它更深、暗色主题它更亮);
+ * 不用 filter: brightness ——暗色主题的 --primary 已接近纯白,提亮等于没动。 */
+.amx-btnblock-btn:hover:not(:disabled) { background: var(--primary-2, var(--primary)); border-color: var(--primary-2, var(--primary)); }
+.amx-btnblock-btn:disabled { opacity: 0.55; cursor: default; }
+/* 未配置:虚线幽灵态 —— 别让一个还没接线的按钮长得像可以点的主操作 */
+.amx-btnblock-btn[data-blank] {
+  background: transparent; color: var(--text-muted);
+  border-color: var(--border-strong); border-style: dashed;
+}
+.amx-btnblock-btn[data-blank]:hover:not(:disabled) { background: var(--primary-soft, transparent); color: var(--text); border-color: var(--primary); }
+/* 二次确认:就地变态(不弹模态)。红底恒配白字 —— 与 .dialog-btn[data-danger] 同款处理。 */
+.amx-btnblock-btn[data-confirm],
+.amx-btnblock-btn[data-confirm]:hover:not(:disabled) {
+  background: var(--danger, #e5484d); border-color: var(--danger, #e5484d); color: #fff;
+}
+.amx-btnblock-cancel, .amx-btnblock-gear {
+  border: none; background: transparent; cursor: pointer; font-size: 12px;
+  padding: 3px 6px; border-radius: var(--radius-sm, 6px); color: var(--text-muted);
+}
+.amx-btnblock-gear { opacity: 0; transition: opacity var(--dur-fast, 180ms) var(--ease-apple, ease); }
+.block-host:hover .amx-btnblock-gear, .block-host[data-selected] .amx-btnblock-gear { opacity: 1; }
+.amx-btnblock-cancel:hover, .amx-btnblock-gear:hover { background: var(--surface-2); color: var(--text); }
+.amx-btnblock-status { font-size: 11.5px; padding-left: 2px; }
+.amx-btnblock-status.ok { color: var(--text-muted); }
+.amx-btnblock-status.warn { color: var(--danger, #e5484d); }
+/* 配置弹层里的外观字段 */
+.amx-btnblock-fields { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.amx-btnblock-fields label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-sec); }
+.amx-btnblock-fields .dialog-input { flex: 1; min-width: 0; }
+.amx-btnblock-fields .dialog-input.icon { flex: 0 0 76px; }
+/* 内嵌构建器的弹层:比默认 dialog 宽、可滚(动作链能排到十步) */
+.amx-btnblock-dialog { width: min(560px, 92vw); max-height: 82vh; overflow: auto; }

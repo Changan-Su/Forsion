@@ -10,6 +10,7 @@ import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
+import { attachSourceButton } from './sourceToggle'
 
 export interface MathSpan { from: number; to: number; latex: string; display: boolean }
 
@@ -114,6 +115,7 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
   el.className = display ? 'math-rendered math-rendered--block' : 'math-rendered'
   el.contentEditable = 'false'
   katexInto(el, latex, display)
+  attachSourceButton(el, view, srcFrom, !display) // 悬停浮现的 `</>`:点它进源码(点公式本身同样进,这只是看得见的入口)
   // 点渲染结果 → 把光标塞进源码(srcFrom+1,即开 `$` 之后)并置焦,该行随即露出源码可编辑。
   el.addEventListener('mousedown', (e) => {
     if (!view.editable) return // 只读视图:点公式不进入编辑态(否则会闪出源码)

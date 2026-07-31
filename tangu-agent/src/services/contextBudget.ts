@@ -38,6 +38,20 @@ export const COMPACT_TRIGGER_RATIO = 0.5;
 export const FORCE_COMPACT_RATIO = 0.95;
 
 /**
+ * 已知模型族的窗口兜底(input 预算口径,保守值):模型对象没带 context_window 时按 id 匹配。
+ * 128k 全局默认对 400k 族(gpt-5 等)意味着 64k 就触发机械折叠——绞碎上下文+打断前缀缓存
+ * (WB-Bench 取证:44 次中途缓存整体断裂,约占 uncached 输入 28%)。
+ * ponytail: 手写小表只收录确定安全的族;不认识 → 维持 128k 默认。
+ */
+const FAMILY_WINDOWS: Array<[RegExp, number]> = [
+  [/codex-mini/i, 200_000], // 先于 gpt-5|codex:codex-mini 是 o4-mini 底,272k 会溢出
+  [/gpt-5|codex/i, 272_000], // GPT-5 家族 400k 总窗,input 上限 272k(codex 模型目录同值)
+  [/gpt-4\.1/i, 1_000_000],
+  [/claude|sonnet|opus|haiku/i, 200_000],
+  [/gemini-[23]/i, 1_000_000], // 只认主线 2.x/3 聊天族;其余 gemini 变体窗口不一,留 128k 保守值
+];
+
+/**
  * per-model 上下文窗口覆盖表(env `TANGU_MODEL_CONTEXT_WINDOWS` = {modelId: tokens} JSON;解析一次)。
  * 模型库暂无 window 字段——这是把「每个模型窗口」喂给客户端进度条的最小接缝。
  */
@@ -57,11 +71,14 @@ const MODEL_WINDOW_OVERRIDES: Record<string, number> = (() => {
   }
 })();
 
-/** 解析某模型的上下文窗口:覆盖表 > 模型对象自带(context_window/contextWindow) > 全局默认。 */
+/** 解析某模型的上下文窗口:覆盖表 > 模型对象自带(context_window/contextWindow) > 族兜底 > 全局默认。 */
 export function modelContextWindow(modelId?: string | null, modelObj?: any): number {
   if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return MODEL_WINDOW_OVERRIDES[modelId];
   const fromObj = Number(modelObj?.context_window ?? modelObj?.contextWindow);
   if (Number.isFinite(fromObj) && fromObj >= 4_000) return Math.floor(fromObj);
+  if (modelId) {
+    for (const [re, win] of FAMILY_WINDOWS) if (re.test(modelId)) return win;
+  }
   return CONTEXT_WINDOW_TOKENS;
 }
 
@@ -69,6 +86,7 @@ const PROTECT_FIRST = 3; // system 之后的前 N 条不折叠(任务定义锚�
 const PROTECT_LAST = 20; // 最近 N 条不折叠(模型工作记忆)
 const TOOL_FOLD_THRESHOLD = 600; // 中段 tool 消息超此长度折叠
 const TOOL_FOLD_HEAD = 300;
+const TOOL_FOLD_TAIL = 150; // 尾部必须保留:命令输出的错误/测试汇总/最终状态几乎都在结尾(Codex 评审)
 const MSG_TRUNC_THRESHOLD = 8_000; // 中段 user/assistant 消息超此长度截断
 const MSG_TRUNC_HEAD = 2_000;
 const MSG_TRUNC_TAIL = 500;
@@ -102,6 +120,11 @@ export function estimateMessageTokens(m: any): number {
   }
   if (Array.isArray(m?.tool_calls)) {
     for (const t of m.tool_calls) n += estimateTokensRough(String(t?.function?.arguments ?? ''));
+  }
+  // Responses replay 态(encrypted reasoning 等原始 items):上轮 usage 与文本估算都看不见它,
+  // 不计会让预算低估、小窗口模型撞 overflow(Codex 评审二轮 #3)。粗按序列化长度 /4。
+  if (Array.isArray(m?.providerItems) && m.providerItems.length) {
+    try { n += Math.ceil(JSON.stringify(m.providerItems).length / 4); } catch { /* ignore */ }
   }
   return n;
 }
@@ -146,7 +169,8 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
     if (m.role === 'tool' && len > TOOL_FOLD_THRESHOLD) {
       m.content =
         m.content.slice(0, TOOL_FOLD_HEAD) +
-        `\n…[context compacted: tool output folded, was ${len} chars]`;
+        `\n…[context compacted: tool output folded, was ${len} chars]…\n` +
+        m.content.slice(-TOOL_FOLD_TAIL);
       savedChars += len - m.content.length;
     } else if ((m.role === 'user' || m.role === 'assistant') && len > MSG_TRUNC_THRESHOLD) {
       m.content =
@@ -154,6 +178,9 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
         `\n…[context compacted: omitted ${len - MSG_TRUNC_HEAD - MSG_TRUNC_TAIL} chars]…\n` +
         m.content.slice(-MSG_TRUNC_TAIL);
       savedChars += len - m.content.length;
+      // 折叠改写了正文 → 挂着的 Responses 原始 items(含旧全文)不再对应,退回文本重建,防止把
+      // 被折叠掉的内容原样回灌(providerItems 仅 in-memory,删除只影响本 run 的续轮)。
+      delete (m as any).providerItems;
     }
   }
   return { changed: savedChars > 0, savedChars, breakdown };

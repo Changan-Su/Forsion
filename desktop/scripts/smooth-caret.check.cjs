@@ -197,6 +197,79 @@ async function main() {
     !!home && Math.abs(home.relLeft - truth0.relLeft) <= 1.5 && Math.abs(home.relTop - truth0.relTop) <= 1.5,
     home ? `清空前 (${beforeClear.relLeft.toFixed(1)}, ${beforeClear.relTop.toFixed(1)}) → 清空后 (${home.relLeft.toFixed(1)}, ${home.relTop.toFixed(1)}),真值 (${truth0.relLeft.toFixed(1)}, ${truth0.relTop.toFixed(1)})` : '覆盖层没画出来')
 
+  // 发送后输入框被禁用(agent 开跑,React 的 disabled={disabled} 落到 DOM):
+  // Chromium 对「禁用即失焦」**不发 blur/focusout**,轮询的签名又变成空串 —— 所有唤醒路径同时哑火,
+  // 覆盖层钉死在原文末尾(用户实报「发完消息光标没复位」)。上一条用例不触发这条路径:它保持聚焦。
+  await page.evaluate(() => {
+    const ta = document.getElementById('ta')
+    ta.disabled = false
+    ta.value = 'chat input line one, long enough to wrap somewhere around here\nline two'
+  })
+  await taCase(70)
+  await page.waitForTimeout(180)
+  const beforeSend = await drawn('textarea.t2c-ta')
+  const blurEvents = await page.evaluate(() => {
+    const ta = document.getElementById('ta')
+    let n = 0
+    const bump = () => { n += 1 }
+    ta.addEventListener('blur', bump)
+    window.addEventListener('focusout', bump)
+    ta.value = ''
+    ta.disabled = true
+    return new Promise((r) => setTimeout(() => r(n), 60))
+  })
+  await page.waitForTimeout(400) // 轮询 100ms
+  const afterSend = await drawn('textarea.t2c-ta')
+  check('聊天框 发送后输入框禁用:覆盖层必须收起', afterSend === null,
+    `禁用发出的 blur/focusout 数=${blurEvents};发送前 ${beforeSend ? `(${beforeSend.relLeft.toFixed(1)}, ${beforeSend.relTop.toFixed(1)})` : 'n/a'} → ${afterSend ? `仍画在 (${afterSend.relLeft.toFixed(1)}, ${afterSend.relTop.toFixed(1)})` : '已收起'}`)
+
+  // 聚焦的输入框被**从 DOM 摘掉**(React 重挂 —— 新会话首条消息发出后 activeId 变、组件按 key 重建):
+  // Chromium 此时把焦点静默移回 body,**不发 blur/focusout**(与上面的 disabled 不同,那个是发的)。
+  // 事件路径全哑,只剩轮询;而轮询在签名变空时直接 return,覆盖层就永远钉在原文末尾。
+  await page.evaluate(() => {
+    const old = document.getElementById('ta')
+    const ta = old.cloneNode(true)
+    ta.value = 'chat input line one, long enough to wrap somewhere around here\nline two'
+    ta.disabled = false
+    old.replaceWith(ta)
+  })
+  await taCase(70)
+  await page.waitForTimeout(180)
+  const beforeRemount = await drawn('textarea.t2c-ta')
+  const remountEvents = await page.evaluate(() => {
+    const ta = document.getElementById('ta')
+    let n = 0
+    const bump = () => { n += 1 }
+    ta.addEventListener('blur', bump)
+    window.addEventListener('focusout', bump)
+    const fresh = ta.cloneNode(true)
+    fresh.value = ''
+    ta.replaceWith(fresh) // 摘掉聚焦节点 = React 重挂
+    return new Promise((r) => setTimeout(() => r(n), 60))
+  })
+  await page.waitForTimeout(400) // 轮询 100ms
+  const afterRemount = await drawn('textarea.t2c-ta')
+  check('聊天框 发送后组件重挂:覆盖层必须收起', afterRemount === null,
+    `摘节点发出的 blur/focusout 数=${remountEvents};重挂前 ${beforeRemount ? `(${beforeRemount.relLeft.toFixed(1)}, ${beforeRemount.relTop.toFixed(1)})` : 'n/a'} → ${afterRemount ? `仍画在 (${afterRemount.relLeft.toFixed(1)}, ${afterRemount.relTop.toFixed(1)})` : '已收起'}`)
+
+  // 输入框自己位移而文本签名不变(发送后 autoGrow 回缩 → 贴底的聊天框整体下移;不发任何事件):
+  // 覆盖层必须跟着走,否则相对输入框的偏移就错了。
+  await page.evaluate(() => {
+    const ta = document.getElementById('ta')
+    ta.disabled = false
+    ta.style.marginTop = '30px'
+    ta.value = 'chat input line one, long enough to wrap somewhere around here\nline two'
+  })
+  await taCase(70)
+  await page.waitForTimeout(180)
+  const beforeShift = await drawn('textarea.t2c-ta')
+  await page.evaluate(() => { document.getElementById('ta').style.marginTop = '90px' })
+  await page.waitForTimeout(400) // 轮询 100ms + 过渡
+  const afterShift = await drawn('textarea.t2c-ta')
+  check('聊天框 框体位移后覆盖层跟随(文本签名不变)',
+    !!afterShift && Math.abs(afterShift.relLeft - beforeShift.relLeft) <= 1.5 && Math.abs(afterShift.relTop - beforeShift.relTop) <= 1.5,
+    afterShift ? `位移前 rel(${beforeShift.relLeft.toFixed(1)}, ${beforeShift.relTop.toFixed(1)}) → 位移后 rel(${afterShift.relLeft.toFixed(1)}, ${afterShift.relTop.toFixed(1)})` : '覆盖层没画出来')
+
   await browser.close()
   const failed = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - failed}/${results.length} 通过`)

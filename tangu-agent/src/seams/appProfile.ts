@@ -15,6 +15,8 @@ export interface PromptSectionCtx {
   extraRoots?: string[];
   /** 本会话是否经消息通道(微信等)转发——通道端只渲染纯文本,回复风格段据此分裁。 */
   channelSession?: boolean;
+  /** 工作预设:'coding' 时陪伴式指引(记忆日志/浏览器/笔记)退场,与工具面的 deferred 收敛保持一致。 */
+  preset?: 'coding';
 }
 
 /**

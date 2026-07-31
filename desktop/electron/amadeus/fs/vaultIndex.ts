@@ -287,6 +287,36 @@ export class VaultIndex {
     return out
   }
 
+  /**
+   * 该笔记引用、且**全库没有第二篇笔记引用**的附件(vault 相对路径)。删除笔记时可一并清理。
+   *
+   * 判据刻意保守 —— 只要别的笔记提到同名文件就算共享,宁可留孤儿也绝不误删别人的图
+   * (毁档防线)。索引里的 text 是「去 frontmatter/去标记注释」的原文,`![[x]]`、`[[x]]`、
+   * `![](x)` 三种写法都还在,足够抽引用;.md(含画板/思维导图)一律不算附件,不参与删除。
+   * ponytail: O(笔记数×引用数) 朴素扫,只在用户按删除时跑一次。
+   */
+  async exclusiveAssets(pagePath: string): Promise<string[]> {
+    const self = this.entries.get(pagePath)
+    const root = this.vault.getRoot()
+    if (!self || !root) return []
+    const mine = assetRefs(self.text)
+    if (!mine.length) return []
+    const shared = new Set<string>()
+    for (const e of this.entries.values()) {
+      if (e.path === pagePath) continue
+      for (const r of assetRefs(e.text)) shared.add(assetKey(r))
+    }
+    const out: string[] = []
+    for (const ref of mine) {
+      if (shared.has(assetKey(ref))) continue
+      const abs = await this.vault.resolveAttachment(pagePath, ref)
+      if (!abs) continue
+      const rel = path.relative(root, abs)
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && !out.includes(rel)) out.push(rel)
+    }
+    return out.sort()
+  }
+
   listTags(): TagCount[] {
     const counts = new Map<string, TagCount>()
     for (const e of this.entries.values()) {
@@ -308,6 +338,29 @@ export class VaultIndex {
     }
     return out.sort()
   }
+}
+
+/** `![[x|200]]` / `[[x#锚]]` / `![](x)` / `[名](x)` 里的**附件**引用(非 .md、非外链、带扩展名)。 */
+function assetRefs(text: string): string[] {
+  const out: string[] = []
+  const add = (raw: string): void => {
+    const r = raw.split('|')[0].split('#')[0].trim().replace(/^<|>$/g, '')
+    if (!r || /^[a-z][a-z0-9+.-]*:/i.test(r)) return // http(s)/data/amadeus-asset… 一律不是 vault 附件
+    if (!/\.[a-z0-9]{1,12}$/i.test(r) || /\.md$/i.test(r)) return // 无扩展名 = 笔记名;.md = 笔记/画板,不删
+    if (!out.includes(r)) out.push(r)
+  }
+  for (const m of text.matchAll(/!?\[\[([^\]\n]+)\]\]/g)) add(m[1])
+  for (const m of text.matchAll(/!?\[[^\]\n]*\]\(([^)\s]+)/g)) add(decodeSafe(m[1]))
+  return out
+}
+
+/** 共享判定只认文件名(小写):同名不同目录也当共享 —— 宁可少删。 */
+function assetKey(ref: string): string {
+  return (ref.split(/[\\/]/).pop() ?? ref).toLowerCase()
+}
+
+function decodeSafe(s: string): string {
+  try { return decodeURIComponent(s) } catch { return s }
 }
 
 function countNewlines(s: string, end: number): number {

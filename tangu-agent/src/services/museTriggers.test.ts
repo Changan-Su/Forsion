@@ -202,4 +202,17 @@ describe('validateTriggerInput', () => {
     expect(validateTriggerInput({ ...base, actions: [{ type: 'tool_call', tool: 'run_bash', args: {} }] }).ok).toBe(false); // 工具通道禁 tool_call
     expect(validateTriggerInput({ ...base, actions: [{ type: 'tool_call', tool: 'run_bash', args: {} }] }, { allowToolCall: true }).ok).toBe(true);
   });
+
+  it('manual:巡检永不命中、无下次时刻、cooldown 强制 0(含 agent_run 也是)', async () => {
+    // 按钮类规则的全部执行入口是 fire 端点。巡检若命中它,笔记里的按钮就变成了后台定时任务。
+    const t = rule({ cond: { type: 'manual' }, cooldownHours: 0 });
+    expect(await evaluateTriggers([t], { now: NOW, activityLines: ['202607111200 anything'] })).toHaveLength(0);
+    expect(nextRunAt(t, NOW)).toBeNull();
+    // 冷却必须是 0:1h 下限会把用户第二次点击静默吞成「没反应」(防重入靠服务端单飞锁)。
+    const v = validateTriggerInput({
+      desc: '一键整理', cond_type: 'manual', cooldown_hours: 24,
+      actions: [{ type: 'agent_run', agentSlug: 'coder', prompt: 'tidy' }],
+    });
+    expect(v.ok && v.value.cooldownHours).toBe(0);
+  });
 });

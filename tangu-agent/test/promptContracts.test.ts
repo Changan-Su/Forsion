@@ -30,6 +30,11 @@ describe('responseStyleSection', () => {
     }
   });
 
+  it('进度播报指引只进气泡变体(通道纯文本会话不鼓励碎片旁白)', () => {
+    expect(responseStyleSection(false)).toContain('say in one short sentence what you are about to do');
+    expect(responseStyleSection(true)).not.toContain('say in one short sentence what you are about to do');
+  });
+
   it('契约段不进可覆盖的 guidance(per-app 整段替换不得丢契约,由 agentLoop 直接注入)', () => {
     const sec = defaultPromptSections({ execMode: 'host', cwd: '/tmp' });
     const joined = sec.guidance.join('\n');
@@ -97,5 +102,15 @@ describe('额外工作文件夹(工作范围)', () => {
   it('sandbox 会话不受影响(压根没有本机目录段)', () => {
     const s = defaultPromptSections({ execMode: 'sandbox', extraRoots: ['/other/docs'] }).environment.join('\n');
     expect(s).not.toMatch(/additional working folders/i);
+  });
+});
+
+describe('responseStyleSection × noPreamble(coding 预设:旁白并入终稿与终稿定标冲突)', () => {
+  it('noPreamble:true 去掉进度播报行,其余骨架不变', async () => {
+    const { responseStyleSection } = await import('../src/profiles/promptSections.js');
+    const s = responseStyleSection(false, { noPreamble: true });
+    expect(s).not.toContain('say in one short sentence what you are about to do');
+    expect(s).toContain('Lead with the answer');
+    expect(s).toContain('GitHub-flavored');
   });
 });

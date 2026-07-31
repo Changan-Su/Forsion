@@ -30,7 +30,7 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['Claude 预算', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-sonnet-4-20250514' }, 'anthropic-budget'],
     ['Claude 旧款', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-3-5-haiku' }, 'anthropic-legacy'],
     ['Codex 订阅', { protocol: 'openai-responses', modelId: 'gpt-5.6-codex' }, 'codex-subscription'],
-    ['Claude 订阅', { protocol: 'anthropic-messages', modelId: 'claude-sonnet-5' }, 'claude-subscription'],
+    ['Anthropic API key', { protocol: 'anthropic-messages', modelId: 'claude-sonnet-5' }, 'anthropic-messages'],
     ['Gemini 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-2.5-flash' }, 'gemini-openai-compat'],
     ['Gemini 托管 pro', { provider: 'gemini', modelId: 'gemini-2.5-pro' }, 'gemini-native-pro'],
     ['DeepSeek reasoner', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-reasoner' }, 'deepseek-reasoner'],

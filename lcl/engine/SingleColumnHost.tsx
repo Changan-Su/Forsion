@@ -16,6 +16,13 @@ import { getView } from './viewRegistry'
 import { label } from './types'
 import { useWorkspace } from './singleColumnStore'
 import './singleColumn.css'
+// ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
+// `import './engine.css'` 原本挂在 Shell 上 —— 外壳一换,`.cmd-overlay/.cmd-panel` 这套命令浮层
+// 样式在移动端就整个没了(CommandPalette 与 Amadeus 的 QuickSwitcher/TemplatePicker 三家共用)。
+// 缺了它浮层不是不显示,而是**落进普通文档流**:没有 position:fixed / z-index,盖不住单列壳。
+// 直接借整份而不是抽 .cmd-* 出来:engine.css 通篇是类选择器(.rb-/.dv-/.wb-/.cmd-),无 :root/html/body
+// 全局规则,单列壳的 .mb-* 与之零交集 —— 不匹配的规则是惰性的,抽文件反而要动别的会话正在改的 engine.css。
+import './engine.css'
 
 export function LeafHost() {
   // 只订阅基本类型(active 的 id 与 type)。leaf 的标题/参数变化**不**重渲染宿主——否则视图渲染期

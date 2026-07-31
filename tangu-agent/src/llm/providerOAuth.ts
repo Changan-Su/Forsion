@@ -42,21 +42,12 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     redirectPath: '/callback',
     baseUrl: 'https://api.x.ai/v1',
   },
-  // Claude 订阅(Claude Pro/Max → Claude Code 额度)。原生 Messages API,非 OpenAI 兼容。
-  // ⚠️ 私有契约,可能随官方变动——登录失败先核对:clientId、redirect 是否准回环、token 端点是否要 JSON。
-  claude: {
-    id: 'claude',
-    clientId: '9d1c250a-e61b-44d9-88ed-5944d1962f5e', // Claude Code 公开 desktop client
-    scope: 'org:create_api_key user:profile user:inference',
-    authorizationEndpoint: 'https://claude.ai/oauth/authorize',
-    tokenEndpoint: 'https://console.anthropic.com/v1/oauth/token',
-    redirectHost: '127.0.0.1',
-    redirectPort: 56122, // 避开 xAI 的 56121
-    redirectPath: '/callback',
-    baseUrl: 'https://api.anthropic.com',
-    protocol: 'anthropic-messages',
-    modelIds: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'], // 提示;首次真实登录再核对订阅支持的 slug
-  },
+  // ⛔ 这里**没有** claude 条目,是有意的(2026-07-31 删除,勿再加回)。
+  //    那条走的是拿 Claude Code 的 client_id + 强制注入「You are Claude Code…」身份串冒充官方 CLI,
+  //    去消费用户的 Claude 订阅额度;`Redirect URI … is not supported by client` 正是该客户端的
+  //    准入控制在正常工作。要在 Tangu 里用 Claude 订阅,已有干净且更稳的路子:
+  //      · `src/engines/`(ACP)—— 直接把真的 Claude Code 当子进程跑,鉴权是它自己的,不受私有契约变动影响
+  //      · 用户自有 Anthropic API key —— DirectProvider protocol:'anthropic-messages'(见 anthropicMessages.ts)
   // Codex 订阅(ChatGPT Plus/Pro → Codex 额度)。原生 Responses API(chatgpt.com 后端),非 OpenAI 兼容。
   // ⚠️ 私有契约:固定回环 1455/auth/callback、需 id_token_add_organizations 才拿到 account_id。失效先核对此处。
   codex: {
@@ -127,7 +118,7 @@ function extractChatgptAccountId(tok: any): string | undefined {
 
 /**
  * 登录后问 provider 的 `/models` 端点拿真实可用模型列表,免得硬编 slug 过时。
- * Claude=`/v1/models`(Bearer+beta);Codex/OpenAI 兼容=`{base}/models`(Codex MODELS_ENDPOINT 即 /models)。
+ * Codex/OpenAI 兼容=`{base}/models`(Codex MODELS_ENDPOINT 即 /models)。
  * 失败/离线返回 null,调用方回退到 OAUTH_PROVIDERS 里的硬编提示。
  */
 export async function fetchProviderModels(p: OAuthProvider, accessToken: string, accountId?: string): Promise<string[] | null> {
@@ -135,11 +126,7 @@ export async function fetchProviderModels(p: OAuthProvider, accessToken: string,
     const base = p.baseUrl.replace(/\/+$/, '');
     const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
     let url: string;
-    if (p.protocol === 'anthropic-messages') {
-      url = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
-      headers['anthropic-version'] = '2023-06-01';
-      headers['anthropic-beta'] = 'oauth-2025-04-20';
-    } else if (p.protocol === 'openai-responses') {
+    if (p.protocol === 'openai-responses') {
       // Codex 后端强制要求 client_version query(缺=400),后端还按它 gate 新模型——太老的版本号看不到新 slug。
       url = `${base}/models?client_version=0.150.0`;
       if (accountId) headers['chatgpt-account-id'] = accountId;
@@ -258,16 +245,20 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
   const store = loadProviderCreds();
   const out: DirectProvider[] = [];
   for (const [id, t] of Object.entries(store)) {
+    const cfg = OAUTH_PROVIDERS[id];
+    // 认不出的 provider 一律跳过(**不删凭证,只是不装载**)。protocol 只存在于 cfg 里,凭证文件里没有 ——
+    // 少了 cfg 就会默默按 'openai' 兼容协议去打人家的原生端点,变成一个「在模型列表里、点了就 404」的
+    // 幽灵 provider。删掉的 claude 条目要靠这一步才真正对老装机生效。
+    if (!cfg) continue;
     let tok = t;
     if (tok.expires_at && tok.expires_at < Date.now() + 120_000) {
       tok = await refresh(tok);
       saveProviderCred(id, tok);
     }
-    const cfg = OAUTH_PROVIDERS[id];
     // 模型列表懒刷:缓存为空或超过 24h(provider 会上新模型,冻结的缓存=用户「看不到最新模型」)→
     // 拉一次回写;失败保留旧缓存下次再试。
     const stale = !tok.modelIds?.length || (tok.modelIdsAt ?? 0) < Date.now() - 24 * 3600_000;
-    if (stale && cfg) {
+    if (stale) {
       const models = await fetchProviderModels(cfg, tok.access_token, tok.account_id);
       if (models) {
         tok = { ...tok, modelIds: models, modelIdsAt: Date.now() };
@@ -278,9 +269,9 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
       providerId: id,
       baseUrl: tok.baseUrl,
       apiKey: tok.access_token,
-      protocol: cfg?.protocol,
+      protocol: cfg.protocol,
       accountId: tok.account_id,
-      modelIds: tok.modelIds && tok.modelIds.length ? tok.modelIds : cfg?.modelIds, // 实拉优先,回退提示
+      modelIds: tok.modelIds && tok.modelIds.length ? tok.modelIds : cfg.modelIds, // 实拉优先,回退提示
     });
   }
   return out;

@@ -2,7 +2,7 @@
  *  分区:最近使用(会话/笔记/文件/视图)→ Forsion 原生 → 每个插件一组(按视图来源分类,不再按主/侧区)。
  *  卡片单击=在其默认位置打开(多数主区 Tab;侧栏类视图在侧栏);可拖入 tab bar / side bar「落点即开」。 */
 import { type ReactNode } from 'react'
-import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare } from 'lucide-react'
+import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { openSpecial } from './SpecialViews'
@@ -10,8 +10,9 @@ import { useWorkspace, useSpaceStore, getActiveSpace, getView, label, startOpenD
 import { AMADEUS_ENABLED } from '../spaces'
 import { useRecentViews, type RecentView } from '../recentViews'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { resolveIcon } from '@amadeus/components/icons'
 import { usePageStore } from '@amadeus/store/pageStore'
-import { openNote, openDb, openPdf, openDrawing, openImage, openFile, createDrawing } from '../amadeusNav'
+import { openNote, openDb, openPdf, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
 import { openDailyNote } from '../amadeusTemplates'
 import { useI18n } from '../i18n'
 import { openBrowser, openTerminal } from '../builtins'
@@ -69,6 +70,7 @@ export function NewTabView({ leaf }: ViewProps) {
     // 这些视图都靠 params 认领具体文件,没有「裸开一个空视图」的形态,所以只能以动作卡出现、
     // 不带 drag(拖进去会开出一个没有文件的空视图)。插件声明的创建器同理,见下面 pluginGroups。
     { key: 'new-drawing', icon: <PenTool size={20} />, label: zh ? '新建白板' : 'New whiteboard', run: () => { void createDrawing('') }, show: amadeusOn && !!vaultRoot },
+    { key: 'new-dashboard', icon: <LayoutDashboard size={20} />, label: zh ? '新建仪表盘' : 'New dashboard', run: () => { void createDashboard('') }, show: amadeusOn && !!vaultRoot },
     { key: 'calendar', icon: <CalendarDays size={20} />, label: t('view.calendar'), run: () => ws().openView('calendar', {}, 'main'), show: amadeusOn, drag: { type: 'calendar' } },
     { key: 'todo-list', icon: <ListTodo size={20} />, label: t('view.todo'), run: () => ws().openView('todo-list', {}, 'main'), show: amadeusOn, drag: { type: 'todo-list' } },
     { key: 'inbox', icon: <Mail size={20} />, label: t('inbox.reader'), run: () => ws().openView('inbox-reader', {}, 'main'), show: hasBackend, drag: { type: 'inbox-reader' } },
@@ -129,7 +131,7 @@ export function NewTabView({ leaf }: ViewProps) {
   for (const o of pluginCreators) {
     groupFor(o.pluginId).items.push({
       key: `creator:${o.pluginId}:${o.item.id}`,
-      icon: <span style={{ fontSize: 18, lineHeight: '20px' }}>{o.item.icon || '＋'}</span>,
+      icon: <span style={{ fontSize: 20, lineHeight: '20px', display: 'inline-flex' }}>{resolveIcon(o.item.icon, '＋')}</span>,
       label: o.item.label,
       run: () => { void Promise.resolve(o.item.run('')).catch((e) => console.error('[amadeus] 插件新建失败', e)) },
       show: amadeusOn && !!vaultRoot,
@@ -145,6 +147,7 @@ export function NewTabView({ leaf }: ViewProps) {
         case 'amadeus-db': openDb(r.id); break
         case 'amadeus-pdf': openPdf(r.id); break
         case 'amadeus-drawing': openDrawing(r.id); break
+        case 'amadeus-dashboard': openDashboard(r.id); break
         case 'amadeus-image': openImage(r.id); break
         case 'wsfile': ws().openView('wsfile', { path: r.id, name: r.title }, 'main', { newTab: true }); break // 同布局恢复重建 wsfile 面板的路径(bare path,不需 openWsFile 的 load 闭包)
         default: openFile(r.id)

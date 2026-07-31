@@ -105,10 +105,16 @@ export async function loadSkillLoadout(
     const lines = deferredSkills
       .map((s) => `- ${s.name} (id: \`${s.id}\`)${s.description ? ` — ${s.description}` : ''}`)
       .join('\n');
+    // coding 预设加一行降位提示:WB-Bench 实测 80/80 题反射式装载技能(每题 ≈1 个纯管理往返),
+    // Codex 对谈定性为「错误路由策略」。非 coding 文本逐字节零变化(回归防线同本文件其余段)。
+    const codingHint = agentConfig?.preset === 'coding'
+      ? 'Most repository coding tasks need no skill at all — treat this catalog as a last resort, not an opening move.\n'
+      : '';
     sections.push(
       '## Available Skills (load on demand)\n' +
         'The following skills are large and not expanded here. When a task matches a skill, **first call the `use_skill` tool (passing its id) to obtain the full instructions, then act**; ' +
-        'do not assume its details. No need to call it for unrelated simple questions.\n\n' +
+        'do not assume its details. No need to call it for unrelated simple questions.\n' +
+        codingHint + '\n' +
         lines,
     );
   }

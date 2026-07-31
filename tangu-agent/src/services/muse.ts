@@ -25,7 +25,10 @@ import { MUSE_AGENT_SLUG, ensureMuseAgent, listAgents, resolveMemorySlug } from 
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { readActivityLines } from './userActivity.js';
-import { loadTriggers, evaluateTriggers, markTriggersFired, buildTriggerKickoff, type MuseTrigger, type EventCursor } from './museTriggers.js';
+import { loadTriggers, evaluateTriggers, markTriggersFired, buildTriggerKickoff, type MuseTrigger, type EventCursor, type TriggerContext } from './museTriggers.js';
+import { loadCursors, setCursors, pruneCursors, type DbCursor } from './dbCursors.js';
+import { readDb } from './amadeusDb.js';
+import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { launchAutomationTriggers, launchDueSchedules } from './automation.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -307,16 +310,52 @@ async function tick(): Promise<void> {
       const triggers = await loadTriggers();
       if (triggers.length) {
         const activityLines = await readActivityLines({ hours: 24, limit: 500 });
-        const fired = await evaluateTriggers(triggers, { activityLines, outCursors: trigCursors });
+        // db_changed 的快照游标单独存文件(不进 triggers.json——那是全表规模的派生数据)。
+        const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
+        const dbCursors = hasDb ? await loadCursors() : {};
+        const outDbCursors: Record<string, DbCursor> = {};
+        const contexts: Record<string, TriggerContext> = {};
+        const fired = await evaluateTriggers(triggers, {
+          activityLines,
+          outCursors: trigCursors,
+          outContexts: contexts,
+          ...(hasDb ? {
+            currentVault: amadeusVaultPath(),
+            dbCursors,
+            outDbCursors,
+            readDbFile: async (rel: string) => readDb(rel).then((r) => r.db).catch(() => null),
+          } : {}),
+        });
+        // 游标提交时机是有讲究的(codex 抓的 S0):
+        //  · **没命中**的规则 → 立刻提交(纯基线推进,包括「变了但 equals 不匹配」那一轮的新值——
+        //    不提交的话下一轮还拿更旧的快照去比,结论必错);
+        //  · **命中**的规则 → 必须等动作被**接受**(launcher 真起跑 / Muse 那路已 mark)才提交。
+        //    否则让位、单飞 busy、无模型这些「本轮没跑成」的路径会把事件当成已消费,
+        //    下一轮 diff 为空 —— 「下轮重试」对 db_changed 是假的,事件永久丢。
+        const firedIds = new Set(fired.map((t) => t.id));
+        const baselineCursors: Record<string, DbCursor> = {};
+        const pendingCursors: Record<string, DbCursor> = {};
+        for (const [id, cur] of Object.entries(outDbCursors)) {
+          (firedIds.has(id) ? pendingCursors : baselineCursors)[id] = cur;
+        }
+        if (Object.keys(baselineCursors).length) await setCursors(baselineCursors);
+        if (hasDb) await pruneCursors(triggers.map((t) => t.id)).catch(() => {});
         // 动作链规则与旧式 agentSlug 规则都走 automation launcher;两者皆无 → 老路唤醒 Muse。
         const agentFired = fired.filter((t) => (t.actions && t.actions.length) || (t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG));
         museFired = fired.filter((t) => !agentFired.includes(t));
+        const ackIds: string[] = [];
         if (agentFired.length) {
           log(`agent 自动化命中 ${agentFired.length} 条:${agentFired.map((t) => t.id).join(', ')}`);
           // launcher 自带让位/防重入/模型守卫;只对**实际起跑**的规则烧 cooldown(与 Muse 老路同语义)。
-          const launched = await launchAutomationTriggers(agentFired);
+          const launched = await launchAutomationTriggers(agentFired, contexts);
           if (launched.length) await markTriggersFired(launched, undefined, trigCursors);
+          ackIds.push(...launched);
         }
+        // museFired 在本函数末尾无条件 markTriggersFired,那条路视同已接受。
+        ackIds.push(...museFired.map((t) => t.id));
+        const ackCursors: Record<string, DbCursor> = {};
+        for (const id of ackIds) if (pendingCursors[id]) ackCursors[id] = pendingCursors[id];
+        if (Object.keys(ackCursors).length) await setCursors(ackCursors);
       }
     } catch (e: any) {
       log(`盯任务评估失败:${e?.message || e}`);

@@ -13,19 +13,19 @@ import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
-import { agentsDir, readUserMd } from '../core/tanguHome.js';
+import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
-import { PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
+import { AUTONOMY_SECTION, CODING_CONTRACT_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession, refreshSessionWorkspace } from '../sandbox/sessionSandbox.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
-  CONTEXT_WINDOW_TOKENS, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
+  modelContextWindow, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
 } from './contextBudget.js';
 import { getLatestSummary, compactSession, foldWorkingWithSummary } from './compaction.js';
@@ -104,6 +104,19 @@ export const TURN_INTERRUPTED_MARKER =
   '<turn_interrupted>\n' +
   'The user interrupted this turn on purpose. Any tool calls that were aborted may have partially executed; the task above is likely unfinished.\n' +
   '</turn_interrupted>';
+
+/** 本轮 response → assistant 历史消息。凡是**还会发起下一次请求**的分支(工具轮/审计/verify/
+ *  steer/Stop-hook 续跑/文本工具调用纠正)都必须经此构造:providerItems(Responses 原始 items,
+ *  含 encrypted reasoning)一并挂上,否则续跑轮把 reasoning 延续性弄丢(Codex 评审二轮 #2)。
+ *  真·收尾(不再续轮)不需要。仅 in-memory,finalize 落库走显式字段,不入 DB。 */
+function assistantTurnOf(res: { outputItems?: any[] }, content: string, toolCalls?: ToolCall[]): ChatMessage {
+  return {
+    role: 'assistant',
+    content,
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    ...(Array.isArray(res.outputItems) && res.outputItems.length ? { providerItems: res.outputItems } : {}),
+  } as ChatMessage;
+}
 
 // 同会话 run 串行化：每个 session 同一时刻至多一个活跃 run，其余 FIFO 排队，活跃 run 跑完
 // （含 abort/失败）后由 advanceQueue 起下一个。保证共享的会话级 kernel/工作区不被并发 run
@@ -428,6 +441,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 能力闸门(红线②/④):未声明 hostExec 的 profile(云端形态)一律强制回 sandbox,杜绝云端拿到真实 FS/shell。
   const execMode: 'sandbox' | 'host' =
     agentConfig.execMode === 'host' && profile.capabilities.hostExec ? 'host' : 'sandbox';
+  // 工作预设(显式传入,不从 cwd 推断):'coding' → 编码契约替代陪伴人格、产品面工具转 deferred。
+  // 入口:bench 适配器 / 桌面 Coding Space / CLI 项目模式。缺省 undefined = 行为零变化。
+  const preset: 'coding' | undefined = agentConfig.preset === 'coding' ? 'coding' : undefined;
   const cwd: string | undefined =
     typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
@@ -523,25 +539,28 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     const { model, apiKey, baseUrl, apiModelId } = await resolveModelAndKey(modelId);
+    // 本 run 的上下文预算基数:真实模型窗口(覆盖表/模型对象/族兜底),不再用 128k 全局常量——
+    // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
+    const ctxWindowTokens = modelContextWindow(modelId, model);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
     if (input.message) {
       const inputTokens = estimateTokensRough(String(input.message));
-      if (inputTokens > CONTEXT_WINDOW_TOKENS * INPUT_HARD_RATIO) {
+      if (inputTokens > ctxWindowTokens * INPUT_HARD_RATIO) {
         const msg =
-          `输入过大:约 ${inputTokens.toLocaleString()} tokens,超过上下文窗口(${CONTEXT_WINDOW_TOKENS.toLocaleString()})的 ${Math.round(INPUT_HARD_RATIO * 100)}%。` +
+          `输入过大:约 ${inputTokens.toLocaleString()} tokens,超过上下文窗口(${ctxWindowTokens.toLocaleString()})的 ${Math.round(INPUT_HARD_RATIO * 100)}%。` +
           '请把大段材料保存为文件后让 agent 用工具读取,不要整段粘贴。';
         await publish(runId, 'error', { error: 'input_too_large', detail: msg });
         await drain(runId);
         await updateRunStatus(runId, 'failed', { error: 'input_too_large' });
         return;
       }
-      if (inputTokens > CONTEXT_WINDOW_TOKENS * INPUT_WARN_RATIO) {
+      if (inputTokens > ctxWindowTokens * INPUT_WARN_RATIO) {
         await publish(runId, 'status', {
           warning: 'large_input',
           estTokens: inputTokens,
-          detail: `输入约 ${inputTokens.toLocaleString()} tokens(窗口的 ${Math.round((inputTokens / CONTEXT_WINDOW_TOKENS) * 100)}%),每轮迭代都会全量重发,建议改用文件。`,
+          detail: `输入约 ${inputTokens.toLocaleString()} tokens(窗口的 ${Math.round((inputTokens / ctxWindowTokens) * 100)}%),每轮迭代都会全量重发,建议改用文件。`,
         });
       }
     }
@@ -572,19 +591,25 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? await channelHub.isChannelSession(userId, sessionId)
       : false;
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
-    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession });
+    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset });
+    // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
+    // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
+    // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
+    const suppressCompanionPersona = preset === 'coding' && activeAgentSlug === DEFAULT_AGENT_SLUG;
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
-    if (agentConfig.systemPrompt) systemParts.push(String(agentConfig.systemPrompt));
+    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
     // 2) SOUL.md 人格(身份/稳定)
-    if (agentConfig.soul && String(agentConfig.soul).trim()) {
+    if (agentConfig.soul && String(agentConfig.soul).trim() && !suppressCompanionPersona) {
       systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + String(agentConfig.soul).trim());
     }
+    // 2b) 编码契约(preset:'coding';引擎级契约,不进 guidance——同 PERSISTENCE_SECTION 的理由)
+    if (preset === 'coding') systemParts.push(CODING_CONTRACT_SECTION);
     // 3) 静态指引(记忆与日志用法),置于记忆块之前以稳定前缀
     systemParts.push(...promptSections.guidance);
-    // 3b) 引擎级契约段(失败恢复 + 输出风格):直接注入而非经 guidance——per-app promptGuidance
+    // 3b) 引擎级契约段(失败恢复 + 自治校准 + 输出风格):直接注入而非经 guidance——per-app promptGuidance
     //     覆盖是整段替换,放 guidance 会被自定义 app 静默丢掉(Codex 评审 #1)。所有 run 强制在场。
-    systemParts.push(TOOL_FAILURE_SECTION, responseStyleSection(channelSession));
+    systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, preset === 'coding' ? { noPreamble: true } : undefined));
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段)。
     if (!planMode) systemParts.push(PERSISTENCE_SECTION);
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
@@ -603,7 +628,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
-    if (execMode === 'host') {
+    //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
+    if (execMode === 'host' && preset !== 'coding') {
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
       let folderBlock =
@@ -661,7 +687,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const deferredCatalog = deferBypass
       ? []
       : listDeferredTools({
-          userId, sessionId, appId, profile, execMode, cwd, planMode, toolsMode, toolsList,
+          userId, sessionId, appId, profile, execMode, cwd, planMode, toolsMode, toolsList, preset,
         });
     const unlockedTools = new Set<string>();
     if (deferredCatalog.length) {
@@ -688,8 +714,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     // 8c) host:注入该 agent 的近期日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具维护)。
     //     放易变区(8b 之后)防打穿前缀缓存;文本刻意不含相对时间/lastRun——只在条目集变化或跨天时变。
-    //     sandbox/云端不注入(SCHEDULE.db 不进 agentFileSync,云端读不到)。
-    if (execMode === 'host') {
+    //     sandbox/云端不注入(SCHEDULE.db 不进 agentFileSync,云端读不到);coding 预设同样不注入。
+    if (execMode === 'host' && preset !== 'coding') {
       try {
         const schedDb = await loadSchedule(activeAgentSlug);
         const upcoming = schedDb ? upcomingScheduleLines(entriesOf(schedDb)) : [];
@@ -745,7 +771,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           '1. Research thoroughly using read-only tools (read_file/search_files/glob_files/browser_search/web_search, etc.)\n' +
           '2. When requirements are ambiguous or trade-offs are needed, use ask_user to clarify\n' +
           '3. Produce a complete implementation plan (goals/steps/files involved/how to verify), then call exit_plan_mode to submit for approval\n' +
-          '4. Do not claim any change is "done" before the user approves; if asked to revise, refine the plan and resubmit',
+          '4. Do not claim any change is "done" before the user approves; if asked to revise, refine the plan and resubmit\n' +
+          // 计划质量锚点(借 Codex 5.1 Planning 正反例教学:格式类要求光说标准没用,负样本划出下界)
+          'A good plan names concrete files and verifiable steps (e.g. "add retry with backoff to fetchUser() in src/api/user.ts; verify via test/api.test.ts") — not a restatement of the task ("implement the feature, then test it").',
       );
     }
 
@@ -907,7 +935,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // load_tools 解锁 → 置脏,下一迭代重算 defs(解锁那一刻打一次前缀缓存,之后稳定)。
     let toolDefsDirty = false;
     const toolCtx: ToolContext = {
-      userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools, channelSession,
+      userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools, channelSession, preset,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
@@ -941,6 +969,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'desk_present', spec);
         }
       },
+      // self_brainstorm 的共享前缀真源:执行时取 workingMessages 当刻浅拷贝(逐消息拷,防分身侧误改)。
+      getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
+      thinkingLevel,
     };
     let toolDefs = getToolDefinitions(toolCtx);
 
@@ -1136,14 +1167,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       //   ≥95%(FORCE_COMPACT_RATIO):满载兜底——持久化一个总结检查点(下个 run 起步即精简)+ 把当前
       //     run 的内存数组按摘要折叠(立刻把本轮压下去)。总结失败则退回机械折叠。
       //   ≥50%(COMPACT_TRIGGER_RATIO):机械批量折叠中段(运行内、不落库),缓存 miss 摊薄成偶发。
-      const estPrompt = lastRealPromptTokens || estimateMessagesTokens(workingMessages);
+      // 取「上一轮真实用量」与「当前粗估」的较大者:真实值准但滞后一轮——上一轮之后刚追加的大工具
+      // 结果它看不见,小窗口模型会在下一次压缩机会到来前先撞 context overflow(Codex 评审盲点 3.4)。
+      const estPrompt = Math.max(lastRealPromptTokens, estimateMessagesTokens(workingMessages));
       // —— PreCompact hook：压缩将触发时先问 hook（continue:false → 跳过本次压缩；host-only，云端 no-op）——
       let skipCompact = false;
-      if (modelId && estPrompt > CONTEXT_WINDOW_TOKENS * COMPACT_TRIGGER_RATIO) {
+      if (modelId && estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
         const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
         skipCompact = !!pcV.stop;
       }
-      if (!skipCompact && modelId && estPrompt > CONTEXT_WINDOW_TOKENS * FORCE_COMPACT_RATIO) {
+      if (!skipCompact && modelId && estPrompt > ctxWindowTokens * FORCE_COMPACT_RATIO) {
         void publish(runId, 'status', { phase: 'compacting', forced: true, iteration });
         const cr = await compactSession(sessionId, modelId, appId);
         if (cr.ok && cr.summary) {
@@ -1155,7 +1188,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (r.changed) lastRealPromptTokens = 0;
           void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, iteration });
         }
-      } else if (estPrompt > CONTEXT_WINDOW_TOKENS * COMPACT_TRIGGER_RATIO) {
+      } else if (estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
         const r = compactContext(workingMessages);
         if (r.changed) {
           lastRealPromptTokens = 0; // 折叠后旧用量失效,下轮重新以真实值为准
@@ -1185,6 +1218,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         thinkingLevel,
         stream: true,
         cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
+        // coding 预设:可见正文 verbosity=low(对齐 codex 模型默认,削输出);headless 调用方
+        // (bench/自动化)可经 agentConfig.reasoningSummary='none' 关思考摘要。仅 Responses 直连上 wire。
+        ...(preset === 'coding' ? { verbosity: 'low' as const } : {}),
+        ...(agentConfig.reasoningSummary === 'none' ? { reasoningSummary: 'none' as const } : {}),
       });
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
@@ -1286,6 +1323,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         prompt: res.usage.prompt_tokens || 0,
         completion: res.usage.completion_tokens || 0,
         cached: cachedTokens,
+        // 隐藏思考量单列(Responses 上报;计量拆账——output 到底花在推理还是正文,没有它无从谈优化)
+        ...(res.usage.reasoning_tokens ? { reasoning: res.usage.reasoning_tokens } : {}),
         total: tokensTotal,
         cost,
         iteration,
@@ -1320,7 +1359,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           looksLikeToolCallText(res.content)
         ) {
           toolCallRecoveryUsed++;
-          workingMessages.push({ role: 'assistant', content: res.content || '' } as ChatMessage);
+          workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({
             role: 'user',
             content:
@@ -1344,7 +1383,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 全量灌 finalContent 会在模型上下文里重复),再切回合注入 U,continue 让下一迭代带着 U 继续。
         const steeredAtFinish = drainSteer(runId);
         if (steeredAtFinish.length && !lastIter) {
-          if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           await applySteering(steeredAtFinish);
           continue;
         }
@@ -1354,7 +1393,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: 'end_turn',
         }, hookCtx());
         if (stopV.block && stopV.blockReason && !lastIter) {
-          if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           await applySteering([{ id: uuidv4(), content: stopV.blockReason }]);
           continue;
         }
@@ -1367,13 +1406,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           const openCount = auditTodos.filter((t) => t.status !== 'completed').length;
           if (openCount > 0) {
             auditNudged = true;
-            if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+            if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
             workingMessages.push({
               role: 'user',
               content:
                 '<completion_audit>\nYou are about to end your turn, but the session todo list still has unfinished items:\n' +
                 renderTodos(auditTodos) +
-                '\nEither continue working on the remaining items now, or — if stopping is genuinely right (blocked, needs user input, the user deferred them) — update the list with todo_write to reflect reality and tell the user plainly what remains and why you are stopping. Do not silently leave items unfinished.\n</completion_audit>',
+                '\nEither continue working on the remaining items now, or — if stopping is genuinely right (blocked, needs user input, the user deferred them) — update the list with todo_write to reflect reality and tell the user plainly what remains and why you are stopping. Do not silently leave items unfinished. Treat completion as unproven until verified: mark an item completed only when you have positively confirmed the result, not merely failed to notice remaining work.\n</completion_audit>',
             } as ChatMessage); // 不落库不上屏:harness 脚手架
             void publish(runId, 'status', { phase: 'completion_audit', iteration, open: openCount });
             continue;
@@ -1399,7 +1438,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n> ${notice}` : notice;
             void publish(runId, 'status', { phase: 'verify_failed_final', iteration, code: v.code });
           } else {
-            if (res.content) workingMessages.push({ role: 'assistant', content: res.content } as ChatMessage);
+            if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
             workingMessages.push({
               role: 'user',
               content:
@@ -1442,11 +1481,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (write_file 写半个文件)。全部置错回喂、一个不执行,让模型用更短参数重发(大写入拆多次 edit)。
       if (res.finishReason === 'length') {
         if (res.content && !looksLikeToolCallText(res.content)) appendFinal(res.content);
-        workingMessages.push({
-          role: 'assistant',
-          content: res.content || '',
-          tool_calls: res.toolCalls,
-        } as ChatMessage);
+        workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
         allToolCalls.push(...res.toolCalls);
         usedTools = true;
         const truncatedResults: any[] = [];
@@ -1485,11 +1520,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 中间迭代的 preamble 正文累积进终稿(工具标记样式的杂文除外,那是待纠正的假工具调用)。
       if (res.content && !looksLikeToolCallText(res.content)) appendFinal(res.content);
 
-      workingMessages.push({
-        role: 'assistant',
-        content: res.content || '',
-        tool_calls: res.toolCalls,
-      } as ChatMessage);
+      workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
       allToolCalls.push(...res.toolCalls);
       usedTools = true; // 到达本行说明这一轮在调工具并继续循环;若后续顶到 lastIter 即为真·循环耗尽
 

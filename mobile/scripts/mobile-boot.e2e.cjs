@@ -122,7 +122,32 @@ async function main() {
       fails.push(`渲染出了错误边界:\n${detail.slice(0, 600)}`)
     }
     // 正向断言:外壳真的挂上了(只查"没报错"会把白屏放过去)。
-    if ((await page.locator('.shell-host').count()) === 0) fails.push('.shell-host 没挂上(白屏)')
+    const shellUp = (await page.locator('.shell-host').count()) > 0
+    if (!shellUp) fails.push('.shell-host 没挂上(白屏)')
+
+    // Amadeus 对话框宿主还活着吗。AmadeusOverlays 名字像"快速切换器",实为 AskStringHost /
+    // DeleteAssetsHost / NewDrawingHost / ConfirmDialog / AutomationBuilderHost 的宿主 —— 不挂它,
+    // 移动端 20 处 askString()(新建文件夹、添加属性、存为集合…)的 promise 永不 resolve:
+    // 点了没反应、不报错、不崩。pageerror 抓不到,typecheck 抓不到,连 .shell-host 断言也照样绿。
+    // 探法:发它自己监听的 `amadeus:toast` window 事件 → 断言它自己渲染的 .amx-toast 挂出来。
+    // 这一发同时证明「effect 注册过(组件挂载了)」与「渲染树是活的」,且不用往产品代码塞测试接缝。
+    // 判 attached 不判 visible:要证的是挂载,别让某条入场动画的 opacity 把它变成假红。
+    // 按**文本**定位而非光看 .amx-toast 存在:后者可能是别处(插件 notify / 字数统计)留下的旧吐司,
+    // 那样 dispatch handler 已经坏了也照样绿。
+    //
+    // ⚠️ 这条探针的边界(codex 评审点明,别高估它):它证明的是「整棵 Overlays 挂载了 + 事件监听注册了 +
+    // store→渲染这条链是活的」。它**不能**反推出 AskStringHost / DeleteAssetsHost 各自的请求态与
+    // 对话框路径可用 —— 单独删掉 <AskStringHost /> 而留着 toast 支路,这条依然绿。
+    // 真要守住那些,得各自开一次弹窗并断言 settle;目前没做,因为触发 askString 需要往产品代码塞接缝。
+    if (shellUp) {
+      await page.evaluate(() => {
+        window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: 'e2e-overlays-alive' } }))
+      })
+      const alive = await page.locator('.amx-toast', { hasText: 'e2e-overlays-alive' })
+        .first().waitFor({ state: 'attached', timeout: 2000 }) // .amx-toast 2.6s 自动消失,等待须短于它
+        .then(() => true).catch(() => false)
+      if (!alive) fails.push('AmadeusOverlays 没挂载/没在渲染 —— 移动端 askString 与各确认弹窗会永远不响应')
+    }
   } finally {
     // 浏览器起不来(找不到 chrome / 启动失败)也必须收掉 preview —— 原来 launch 在 try 之外,
     // 这条路径会把 preview 漏在后台。
@@ -135,7 +160,7 @@ async function main() {
     for (const f of fails) console.error('  - ' + f)
     process.exit(1)
   }
-  console.log('✓ 移动端开机冒烟通过(无未捕获异常 / 无错误边界 / 外壳已挂载)')
+  console.log('✓ 移动端开机冒烟通过(无未捕获异常 / 无错误边界 / 外壳已挂载 / Amadeus 对话框宿主在线)')
 }
 
 main().catch((e) => { console.error('✗ ' + (e && e.message)); process.exit(1) })

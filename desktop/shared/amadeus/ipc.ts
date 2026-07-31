@@ -23,6 +23,7 @@ export const IPC = {
   externalChange: 'page:external-change',
   search: 'vault:search',
   backlinks: 'vault:backlinks',
+  exclusiveAssets: 'vault:exclusive-assets',
   reindex: 'vault:reindex',
   listTags: 'vault:tags',
   pagesByTag: 'vault:tag-pages',
@@ -51,6 +52,7 @@ export const IPC = {
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
+  dbWriteCas: 'db:write-cas',
   dbChange: 'db:external-change',
   drawingRead: 'drawing:read',
   drawingWrite: 'drawing:write',
@@ -268,8 +270,11 @@ export interface EmbedResolved {
 }
 
 /** `db:read` 的结果:错误是数据不是异常(前端按 status 分支渲染,不用 try/catch 猜原因)。 */
+/** 写回票据:文件内容的短哈希。渲染端把它随 dbWriteCas 带回,主进程比对不上就拒写 ——
+ *  防的是「渲染端 500ms 防抖里握着旧快照,期间引擎/自动化改了同一张表,防抖一落盘把人家整行抹掉」。
+ *  云端/移动端桥不提供 version(也没有 dbWriteCas),渲染端据此退回无条件写,行为与从前一致。 */
 export type DbReadResult =
-  | { status: 'ok'; path: string; data: DbFile } // path = 解析后的 vault 相对路径,后续写回用它
+  | { status: 'ok'; path: string; data: DbFile; version?: string } // path = 解析后的 vault 相对路径,后续写回用它
   | { status: 'missing' }
   | { status: 'corrupt'; path: string; message: string }
 
@@ -382,6 +387,8 @@ export interface AmadeusApi {
   search(query: string): Promise<SearchHit[]>
   /** Notes that link to `pagePath` via a [[wikilink]]. */
   backlinks(pagePath: string): Promise<BacklinkRef[]>
+  /** 只被 `pagePath` 引用的附件(vault 相对路径),删除笔记时可一并清理;缺 = 该端不支持(云端/旧 preload)。 */
+  exclusiveAssets?(pagePath: string): Promise<string[]>
   /** Force a full rebuild of the vault index. */
   reindex(): Promise<void>
   /** All tags in the vault with their note counts. */
@@ -440,6 +447,9 @@ export interface AmadeusApi {
   readDatabase(pagePath: string, ref: string): Promise<DbReadResult>
   /** 按 `db:read` 返回的确切 vault 相对路径原子写回(主进程 schema 校验,坏数据拒写)。 */
   writeDatabase(dbPath: string, data: DbFile): Promise<void>
+  /** 比对交换写(仅本地 vault 宿主提供;缺席=该宿主没有并发写者,渲染端退回 writeDatabase)。
+   *  baseVersion 与磁盘现状不符 → 不写,回 { ok:false } 与磁盘最新 version,由调用方重载+重放。 */
+  writeDatabaseCas?(dbPath: string, data: DbFile, baseVersion: string): Promise<{ ok: boolean; version: string }>
   /** Excalidraw 画板(`.excalidraw.md` / 裸 `.excalidraw`)读原文;ref 与附件同一 basename 语义。 */
   readDrawing(pagePath: string, ref: string): Promise<DrawingReadResult>
   /** 按 `drawing:read` 返回的确切 vault 相对路径原子写回(记自写账本,watcher 不把自己的写当外部改动)。 */

@@ -39,15 +39,24 @@ export interface BuildPayloadOpts {
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
   cacheKey?: string;
+  /** GPT-5 系可见正文详略(Responses 直连才上 wire;coding 预设传 'low' 对齐 codex 模型默认)。 */
+  verbosity?: 'low' | 'medium' | 'high';
+  /** 思考摘要开关(Responses 直连):'none'=不生成摘要(headless/bench 省输出;UI 将看不到思考过程)。缺省=auto。 */
+  reasoningSummary?: 'none';
 }
 
 export interface StreamResult {
   content: string;
   reasoning: string;
   toolCalls: ToolCall[];
-  /** cached_tokens/cache_write_tokens:prompt 缓存命中/写入量(provider 上报,brain 归一化;未上报为 0/缺省)。 */
-  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number };
+  /** cached_tokens/cache_write_tokens:prompt 缓存命中/写入量(provider 上报,brain 归一化;未上报为 0/缺省)。
+   *  reasoning_tokens:completion 里的隐藏思考量(Responses output_tokens_details;计量拆账用)。 */
+  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number };
   finishReason?: string;
+  /** Responses 协议的原始 output items(reasoning/message/function_call,按输出序):agentLoop 把它挂到
+   *  该轮 assistant 消息(仅 in-memory),下一轮原样回灌以维持 reasoning 延续性(OpenAI:函数调用续轮
+   *  必须带回 reasoning items,store:false 时靠 encrypted_content)。其他协议缺省 undefined。 */
+  outputItems?: any[];
 }
 
 export interface StreamOpts {

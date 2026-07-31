@@ -10,6 +10,8 @@ import { getBlockType } from '../blocks/registry'
 import { DatabaseEmbed } from '../blocks/database/DatabaseEmbed'
 import { ExcalidrawEmbed } from '../blocks/excalidraw/ExcalidrawEmbed'
 import { BookmarkCard } from './BookmarkCard'
+import { ButtonBlock } from '../blocks/button/ButtonBlock'
+import { parseButtonBlock, serializeButtonBlock } from '../blocks/button/format'
 import { useBlockSelection } from '../store/blockSelection'
 import { useClampedMenu } from '../lib/clampMenu'
 import { OverlayPortal } from '../lib/overlayPortal'
@@ -118,9 +120,12 @@ function EmbedSourceLine({
 export const BlockHost = memo(function BlockHost({
   blockId,
   autoFocus,
+  readOnly,
 }: {
   blockId: string
   autoFocus?: boolean
+  /** 只读呈现(Dashboard 的「编辑锁定」浏览态):文字不可改、无斜杠菜单,但双链可点、嵌入照常活。 */
+  readOnly?: boolean
 }) {
   const ps = useScopedPageStore() // 本面板那份文档 store:写操作绝不能落到隔壁半屏那篇去
   const block = usePageStore((s) => s.blocks[blockId])
@@ -221,6 +226,13 @@ export const BlockHost = memo(function BlockHost({
     return !embedTarget && /^https?:\/\/\S+$/i.test(t) ? t : null
   }, [block?.content, embedTarget])
 
+  // 整块恰是一个 ```forsion-button 围栏 → 「按钮」块(点一下跑一条 manual 自动化)。
+  // JSON 坏了 parse 返回 null → 自动回落成普通代码块,源码原样可见可改(绝不代用户重写)。
+  const buttonSpec = useMemo(
+    () => (embedTarget || bookmarkUrl ? null : parseButtonBlock(block?.content ?? '')),
+    [block?.content, embedTarget, bookmarkUrl],
+  )
+
   // Resolve a cross-note embed; re-resolve when the link graph changes (source edited externally).
   const [embed, setEmbed] = useState<EmbedResolved | null | 'loading'>('loading')
   useEffect(() => {
@@ -278,7 +290,7 @@ export const BlockHost = memo(function BlockHost({
   // 只读控件块(嵌入/图片/db/画板/书签,无文本光标):方向键把 focusRequest 落到本块时,转成「选中整块」
   // (高亮 + 露只读源码行),先 blur 掉来源编辑器,后续方向键交给 BlockSelectionKeys 继续穿过(option A)。
   // 可编辑块由其自身编辑器的 focus effect 消费 focus 请求,不进此分支。
-  const isWidgetHost = !!embedTarget || !!bookmarkUrl
+  const isWidgetHost = !!embedTarget || !!bookmarkUrl || !!buttonSpec
   useEffect(() => {
     if (focusPlace == null || !isWidgetHost) return
     ;(document.activeElement as HTMLElement | null)?.blur?.()
@@ -289,6 +301,10 @@ export const BlockHost = memo(function BlockHost({
   if (!block) return null
 
   const onCtxMenu = (e: ReactMouseEvent): void => {
+    // ⚠️ readOnly 不只是「文字打不进去」:块菜单里有 删除 / 复制块 / 移到新列 —— 全是结构写操作。
+    // Dashboard 的「编辑锁定」此前只把 .block-gutter 用 CSS 藏了,右键照样能删卡片(Codex 评审实证,
+    // 而 check:dashboard 只断言了 contenteditable=false,是假绿)。真只读必须连菜单一起关。
+    if (readOnly) return
     e.preventDefault()
     e.stopPropagation()
     setBlockMenu({ x: e.clientX, y: e.clientY })
@@ -304,18 +320,38 @@ export const BlockHost = memo(function BlockHost({
   // 源码行(注入到手柄之后、预览之上;非嵌入块 embedTarget 为空恒不显示):
   //  · 二次选中/编辑态(activeEmbed)→ 可编辑 EmbedSourceLine(双击/回车进入,自动聚焦)。
   //  · 仅选中态(方向键选中/点手柄)→ 只读显示 ![[...]] 源码(option A:露原始内容但不抢焦点)。
-  const embedSrcLine =
-    isActiveEmbed && embedTarget ? (
-      <EmbedSourceLine
-        content={block.content}
-        onCommit={(v) => setBlockContent(blockId, v)}
-        onDone={() => useBlockSelection.getState().setActiveEmbed(null)}
-      />
-    ) : selected && embedTarget ? (
-      <div className="block-body embed-src-line embed-src-readonly" aria-hidden>
-        {`![[${embedTarget}]]`}
-      </div>
-    ) : null
+  // 嵌入块的源码行 + 悬停浮现的 `</>` 入口。两者同住一个片段:所有嵌入分支(图片/PDF/文件/画板/
+  // 多维表/插件)都已经在渲染 {embedSrcLine},挂这儿就等于一次接入全部,不用逐个分支去加。
+  // 源码编辑本来就有(双击 / 选中回车),EmbedSourceLine 失焦即提交并复渲染 —— `</>` 只是看得见的入口。
+  const embedSrcLine = (
+    <>
+      {embedTarget && !isActiveEmbed && (
+        <button
+          className="amx-src-btn amx-src-btn--block"
+          title="查看源码"
+          aria-label="查看源码"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation()
+            useBlockSelection.getState().setActiveEmbed(blockId)
+          }}
+        >
+          {'</>'}
+        </button>
+      )}
+      {isActiveEmbed && embedTarget ? (
+        <EmbedSourceLine
+          content={block.content}
+          onCommit={(v) => setBlockContent(blockId, v)}
+          onDone={() => useBlockSelection.getState().setActiveEmbed(null)}
+        />
+      ) : selected && embedTarget ? (
+        <div className="block-body embed-src-line embed-src-readonly" aria-hidden>
+          {`![[${embedTarget}]]`}
+        </div>
+      ) : null}
+    </>
+  )
 
   const gutter = (
     <div className="block-gutter">
@@ -351,7 +387,7 @@ export const BlockHost = memo(function BlockHost({
 
   /** 块菜单(fixed .ctx-menu):普通块四个动作;嵌入块只有 移到新列/移除。
    *  传送到最近的 .am-app:祖先有 transform(思维导图画布)时 fixed 会以它为包含块 → 菜单跑偏。 */
-  const blockMenuNode = blockMenu && (
+  const blockMenuNode = blockMenu && !readOnly && (
     <OverlayPortal>
     <div ref={menuPos.ref} className="ctx-menu" style={menuPos.style} onClick={(e) => e.stopPropagation()}>
       {!embedTarget && (
@@ -429,6 +465,32 @@ export const BlockHost = memo(function BlockHost({
         {embedSrcLine}
         <div className="block-body">
           <BookmarkCard url={bookmarkUrl} onChangeUrl={(next) => setBlockContent(blockId, next)} />
+        </div>
+        {blockMenuNode}
+      </div>
+    )
+  }
+
+  // --- 「按钮」块(```forsion-button)→ 点一下跑一条 manual 自动化 ---
+  if (buttonSpec) {
+    return (
+      <div
+        ref={setNodeRef}
+        className="block-host"
+        data-block-id={blockId}
+        data-selected={selected || undefined}
+        data-embed
+        data-menu={blockMenu ? '' : undefined}
+        data-dragging={isDragging || undefined}
+        style={{ transform: CSS.Translate.toString(transform), transition }}
+        onContextMenu={onCtxMenu}
+        onFocusCapture={onBlockFocus}
+      >
+        {isDropTarget && <div className="drop-line" />}
+        {blockEdges}
+        {gutter}
+        <div className="block-body">
+          <ButtonBlock spec={buttonSpec} onChange={(next) => setBlockContent(blockId, serializeButtonBlock(next))} />
         </div>
         {blockMenuNode}
       </div>
@@ -514,7 +576,7 @@ export const BlockHost = memo(function BlockHost({
         {gutter}
         {embedSrcLine}
         <div className="block-body">
-          <PluginEmbed target={embedPlugin} pagePath={pagePath} />
+          <PluginEmbed target={embedPlugin} pagePath={pagePath} blockId={blockId} />
         </div>
         {blockMenuNode}
       </div>
@@ -698,6 +760,7 @@ export const BlockHost = memo(function BlockHost({
             content={block.content}
             pagePath={pagePath}
             autoFocus={autoFocus}
+            readOnly={readOnly}
             onChange={(c) => setBlockContent(blockId, c)}
             onInsertAfter={surface ? (content) => surface.insertAfter(blockId, content ?? '') : (content) => insertBlockAfter(blockId, undefined, content)}
             onDeleteEmpty={surface ? noop : () => deleteBlockFocusPrev(blockId)}

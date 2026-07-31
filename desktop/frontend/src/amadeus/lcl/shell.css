@@ -61,12 +61,17 @@
 
 /* ── content typography = LCL #/amadeus scale (heading→am-h · body→ts-text · list→am-ul) ── */
 .am-app .milkdown .ProseMirror { font-size: 14px; line-height: 1.66; color: var(--text); }
-.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4) { font-weight: 700; letter-spacing: -0.2px; line-height: 1.3; margin: 0 0 6px; }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6) { font-weight: 700; letter-spacing: -0.2px; line-height: 1.3; margin: 0 0 6px; }
 .am-app .milkdown .ProseMirror h1 { font-size: 17px; }
 .am-app .milkdown .ProseMirror h2 { font-size: 15.5px; }
-.am-app .milkdown .ProseMirror :is(h3, h4) { font-size: 14.5px; }
+.am-app .milkdown .ProseMirror h3 { font-size: 14.5px; }
+/* 正文 14px,四级往后字号已无处可让 —— 靠**字色**继续拉开层级。h4 曾与 h3 同字号、h5/h6 干脆没规则,
+   于是四级之后长得和正文一模一样(用户实报「四级标题之后依旧没有显示」)。 */
+.am-app .milkdown .ProseMirror h4 { font-size: 14px; }
+.am-app .milkdown .ProseMirror h5 { font-size: 13.5px; letter-spacing: 0; color: var(--text-sec); }
+.am-app .milkdown .ProseMirror h6 { font-size: 13px; letter-spacing: 0.04em; color: var(--text-muted); }
 .am-app .milkdown .ProseMirror p { font-size: 14px; line-height: 1.66; margin: 0; color: var(--text); }
-.am-app .milkdown .ProseMirror p + :is(p, ul, ol, blockquote, h1, h2, h3) { margin-top: 6px; }
+.am-app .milkdown .ProseMirror p + :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) { margin-top: 6px; }
 .am-app .milkdown .ProseMirror :is(ul, ol) { margin: 6px 0 0; padding-left: 20px; font-size: 13.5px; line-height: 1.6; color: var(--text-sec); }
 .am-app .milkdown .ProseMirror li { margin: 4px 0 0; }
 .am-app .milkdown .ProseMirror li:first-child { margin-top: 0; }

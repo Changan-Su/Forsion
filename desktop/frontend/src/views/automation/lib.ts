@@ -11,6 +11,12 @@ export function condText(t: T, cond: MuseTriggerInfo['cond']): string {
   if (cond.type === 'at') return t('automation.cond.at', { time: String(cond.datetime || '').replace('T', ' ') })
   if (cond.type === 'every') return t('automation.cond.every', { ivl: cond.interval })
   if (cond.type === 'file_chars_gte') return t('automation.cond.file', { path: shortPath(cond.path), n: String(cond.n) })
+  if (cond.type === 'manual') return t('automation.cond.manual')
+  if (cond.type === 'db_changed') {
+    return cond.event === 'row_added'
+      ? t('automation.cond.dbRow', { path: shortPath(cond.path) })
+      : t('automation.cond.dbCell', { path: shortPath(cond.path) })
+  }
   return String((cond as any).type || '—')
 }
 
@@ -21,6 +27,7 @@ export function actionsText(t: T, defs: NormalAgentDef[], tr: MuseTriggerInfo): 
       .map((a) =>
         a.type === 'notify' ? t('automation.step.notify')
         : a.type === 'agent_run' ? runnerName(defs, a.agentSlug)
+        : a.type === 'db_row_add' || a.type === 'db_row_edit' ? `${a.type === 'db_row_add' ? '＋' : '✎'} ${shortPath(a.path)}`
         : (a as any).tool || 'tool')
       .join(' → ')
   }

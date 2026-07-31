@@ -1,0 +1,35 @@
+name: parity
+
+# 三端功能同步闸的**日常**防线。
+#
+# build-desktop.yml 里也有同一条检查，但那个 workflow 只在打 v* tag / 手动触发时跑 —— 那是发布门禁，
+# 拦得住「发出一个移动端悄悄少功能的版本」，拦不住「这个漏洞在 main 上躺了两周」。
+# 本 workflow 补的是后者：改到相关文件就跑，红了当场知道。
+#
+# 纯 fs 读文件，不装任何依赖，跑完通常几秒。
+
+on:
+  pull_request:
+    paths: &parity_paths
+      - 'desktop/frontend/src/main.tsx'
+      - 'desktop/frontend/src/Root.tsx'
+      - 'desktop/frontend/src/bootstrapEngine.tsx'
+      - 'mobile/src/**'
+      - 'lcl/engine/Shell.tsx'
+      - 'lcl/engine/SingleColumnHost.tsx'
+      - 'desktop/scripts/platform-parity.check.cjs'
+      - '.github/workflows/parity.yml'
+  push:
+    paths: *parity_paths
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Platform parity (desktop ↔ mobile)
+        working-directory: desktop
+        run: node scripts/platform-parity.check.cjs

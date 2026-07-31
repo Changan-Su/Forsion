@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { pickRecall, composerAutoHeight } from './Composer2'
+import { pickRecall, composerAutoHeight, slashTokenAt } from './Composer2'
+
+// slash 菜单的触发点:任意位置的 `/` 都算,但必须在行首或空白之后。
+describe('slashTokenAt', () => {
+  it('开头、句中、换行后都能触发', () => {
+    expect(slashTokenAt('/mo', 3)).toEqual({ start: 0, token: '/mo' })
+    expect(slashTokenAt('帮我看看 /comp', 10)).toEqual({ start: 5, token: '/comp' })
+    expect(slashTokenAt('第一行\n/new', 8)).toEqual({ start: 4, token: '/new' })
+  })
+  it('词中间的斜杠不触发(路径、URL、除法)', () => {
+    expect(slashTokenAt('http://x', 8)).toBeNull()
+    expect(slashTokenAt('src/foo', 7)).toBeNull()
+    expect(slashTokenAt('/Users/me/x', 11)).toEqual({ start: 0, token: '/Users/me/x' }) // 词仍在,但一条也匹配不上 → 菜单不弹
+  })
+  it('只看光标之前,且空格后即失效', () => {
+    expect(slashTokenAt('/new 已经带参数', 5)).toBeNull()
+    expect(slashTokenAt('/new', 2)).toEqual({ start: 0, token: '/n' })
+  })
+})
 
 // autosize 高度:未布局(scrollHeight 0)时留 auto,绝不塌成 0px(治「首启引导后输入区消失」)。
 describe('composerAutoHeight', () => {

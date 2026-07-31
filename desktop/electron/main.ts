@@ -314,6 +314,8 @@ interface TanguStoredConfig {
   notesImportPreview: boolean
   /** 日记(每日笔记)所在 vault 相对文件夹;'' = vault 根。 */
   notesDailyFolder: string
+  /** `[[ ]]` 补全是否收录附件与数据库;关=只补全笔记。默认开。 */
+  notesWikiIncludeFiles: boolean
   /** 朗读(TTS)模型 id(<providerId>/<model> 或某 provider ttsModelIds 命中);'' = 未启用,聊天不显示朗读按钮。 */
   ttsModelId: string
   /** 朗读音色 id(provider 特定,如 'alloy');'' = 不传该参数(OpenAI 等部分服务必填音色)。 */
@@ -369,6 +371,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   notesAttachmentFolder: 'assets',
   notesImportPreview: true,
   notesDailyFolder: '',
+  notesWikiIncludeFiles: true,
   ttsModelId: '',
   ttsVoice: '',
   ttsSpeed: 1,
@@ -453,6 +456,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       notesAttachmentFolder: notes.folder || 'assets',
       notesImportPreview: notes.preview !== false,
       notesDailyFolder: notes.dailyFolder || '',
+      notesWikiIncludeFiles: notes.wikiIncludeFiles !== false,
     } : {}),
     ...(home.tts !== undefined ? {
       ttsModelId: tts.modelId || '',
@@ -505,6 +509,7 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if ('notesAttachmentFolder' in patch) { notes.folder = patch.notesAttachmentFolder; nT = true }
   if ('notesImportPreview' in patch) { notes.preview = patch.notesImportPreview; nT = true }
   if ('notesDailyFolder' in patch) { notes.dailyFolder = patch.notesDailyFolder; nT = true }
+  if ('notesWikiIncludeFiles' in patch) { notes.wikiIncludeFiles = patch.notesWikiIncludeFiles; nT = true }
   if ('ttsModelId' in patch) { tts.modelId = patch.ttsModelId; tT = true }
   if ('ttsVoice' in patch) { tts.voice = patch.ttsVoice; tT = true }
   if ('ttsSpeed' in patch) { tts.speed = patch.ttsSpeed; tT = true }

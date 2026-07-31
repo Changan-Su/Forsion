@@ -1,4 +1,5 @@
 import { promises as fs, readdirSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps, type PluginBundleInfo } from '@amadeus-shared/ipc'
@@ -11,6 +12,7 @@ import type { PageManifest } from '@amadeus-shared/compiler'
 import { VaultManager } from './fs/vaultManager'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
+import { withDbLock } from './fs/dbLock'
 import { readConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir } from '../forsionHome'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -105,6 +107,11 @@ const sbHandle = ctx.registerStatusItem?.({
 void sbHandle
 return () => {}
 `
+
+/** .db 写回票据 = 文件内容短哈希。用内容而非 mtime:程序化连写可能落在同一毫秒里。 */
+function dbVersion(text: string): string {
+  return createHash('sha1').update(text).digest('hex').slice(0, 16)
+}
 
 export function registerIpc(getWindow: () => BrowserWindow | null): {
   getVaultRoot: () => string | null
@@ -831,13 +838,42 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     }
     const r = parseDb(text)
     return r.ok
-      ? { status: 'ok', path: rel, data: r.data }
+      ? { status: 'ok', path: rel, data: r.data, version: dbVersion(text) }
       : { status: 'corrupt', path: rel, message: r.error }
   })
 
   ipcMain.handle(IPC.dbWrite, async (_e, dbPath: string, data: unknown) => {
     const parsed = dbFileSchema.parse(data) // 防御性校验:坏数据拒写,绝不落半截文件
     await vault.writeTextFile(dbPath, serializeDb(parsed))
+  })
+
+  // 比对交换写:baseVersion 与磁盘现状不符就**不写**,把最新 version 回给渲染端去重载+重放。
+  // 目标是那条真实竞态 —— 渲染端 500ms 防抖握着旧快照落盘,把这期间引擎/自动化加的行整个抹掉
+  // (反向亦然:引擎读改写覆盖用户刚敲的格子)。写本身仍走 vault 的原子 tmp+rename。
+  //
+  // 「读→比对→写」这三步**在本进程内**是原子的(单线程,中间没有 await 让给别的 handler),
+  // 但引擎是另一个进程 —— 它完全可以插在比对与写之间。所以整段再裹一层跨进程锁,
+  // 与引擎 `mutateDb` 用的是同一个锁文件(见 dbLock.ts 里的路径约定)。
+  ipcMain.handle(IPC.dbWriteCas, async (_e, dbPath: string, data: unknown, baseVersion: string) => {
+    const parsed = dbFileSchema.parse(data)
+    try {
+      return await withDbLock(vault.absPath(dbPath), async () => {
+        let cur = ''
+        try { cur = Buffer.from(await vault.readVaultBytes(dbPath)).toString('utf8') } catch { cur = '' } // 文件不在=新建,视为无冲突
+        const curVersion = cur ? dbVersion(cur) : ''
+        if (cur && curVersion !== baseVersion) return { ok: false, version: curVersion }
+        const text = serializeDb(parsed)
+        await vault.writeTextFile(dbPath, text)
+        return { ok: true, version: dbVersion(text) }
+      })
+    } catch (e) {
+      // 拿不到锁(对方持锁超过 5s)= 当作一次冲突回给渲染端:它会重读磁盘、重放 pendingOps、再写。
+      // 这正是既有的冲突通道,不必新开一条错误路径;**绝不能**因为锁没拿到就直接写下去。
+      console.warn('[amadeus] db:write-cas 未能取得跨进程锁,按冲突处理:', (e as Error)?.message)
+      let cur = ''
+      try { cur = Buffer.from(await vault.readVaultBytes(dbPath)).toString('utf8') } catch { cur = '' }
+      return { ok: false, version: cur ? dbVersion(cur) : '' }
+    }
   })
 
   // Excalidraw 画板(`.excalidraw.md`,Obsidian 插件同款格式;裸 `.excalidraw` 也认)。
@@ -962,6 +998,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   ipcMain.handle(IPC.search, (_e, query: string) => index.search(query))
   ipcMain.handle(IPC.backlinks, (_e, pagePath: string) => index.backlinks(pagePath))
+  ipcMain.handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
   ipcMain.handle(IPC.reindex, () => index.build())
   ipcMain.handle(IPC.listTags, () => index.listTags())
   ipcMain.handle(IPC.pagesByTag, (_e, tag: string) => index.pagesByTag(tag))

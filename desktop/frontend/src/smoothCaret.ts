@@ -179,6 +179,9 @@ export function installSmoothCaret(): void {
   document.addEventListener('input', () => schedule(), true) // 排版变化(autoGrow 等)可能不触发 selectionchange
   document.addEventListener('scroll', () => schedule(false), { capture: true, passive: true })
   window.addEventListener('resize', () => schedule(false))
+  // 移动端软键盘弹起/收起改的是 visualViewport,window 的 resize 未必发(Android 的 overlays-content 模式)。
+  window.visualViewport?.addEventListener('resize', () => schedule(false))
+  window.visualViewport?.addEventListener('scroll', () => schedule(false))
   window.addEventListener('focusin', () => schedule(false))
   window.addEventListener('focusout', () => schedule(false))
   window.addEventListener('blur', hide)
@@ -191,11 +194,15 @@ export function installSmoothCaret(): void {
   clearInterval(W.__scPoll) // dev 热替换:旧实例的轮询会复活它自己的覆盖层(双光标)
   W.__scPoll = setInterval(() => {
     const ae = document.activeElement
+    // 签名里带上输入框自己的位置:发送后 autoGrow 回缩,聊天框贴底 → 整个框往下挪,光标绝对坐标随之变,
+    // 而「长度:选区」可能一模一样(例:发完又粘回等长文本)。只比文本会漏掉这类纯位移。
     const sig = ae instanceof HTMLTextAreaElement && ae.classList.contains('t2c-ta')
-      ? `${ae.value.length}:${ae.selectionStart ?? 0}` : ''
+      ? `${ae.value.length}:${ae.selectionStart ?? 0}:${Math.round(ae.getBoundingClientRect().top)}` : ''
     if (sig === lastTaSig) return
     lastTaSig = sig
-    if (enabled && sig) schedule()
+    // ⚠️ 签名**变空**(焦点离开输入框)也必须 schedule —— 那正是该 hide() 的时刻。
+    // 原来这里 `&& sig` 会在「不发 blur 的失焦路径」上让覆盖层永远钉在原处。
+    if (enabled) schedule()
   }, 100)
 }
 

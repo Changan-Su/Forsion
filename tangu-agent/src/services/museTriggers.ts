@@ -17,6 +17,7 @@ import path, { join } from 'node:path';
 import os from 'node:os';
 import { agentsDir } from '../core/tanguHome.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
+import type { DbCursor } from './dbCursors.js';
 
 export type MuseTriggerCond =
   | { type: 'file_chars_gte'; path: string; n: number }
@@ -25,7 +26,41 @@ export type MuseTriggerCond =
   /** 一次性定时(本地 'YYYY-MM-DDTHH:mm');触发后 markTriggersFired 自动 enabled=false,改期再启用即复用。 */
   | { type: 'at'; datetime: string }
   /** 周期定时(`\d+[mhd]`,锚=createdAt,复用日程「只补最近一次」语义;首触=锚+1 个间隔)。 */
-  | { type: 'every'; interval: string };
+  | { type: 'every'; interval: string }
+  /**
+   * 手动:**永不自动触发**,只能被 fire 端点点起来(Amadeus 按钮块 / 面板试跑)。
+   * 存在的意义是信任模型:笔记里的按钮块只存 triggerId,不存可执行的动作——
+   * 内联 actions 等于「一篇同步来的笔记可以凭内容发明一个 full-auto agent 的启动权」。
+   * 规则本体必须先经人工在构建器里保存(=预批准),按钮只能引用它。
+   */
+  | { type: 'manual' }
+  /**
+   * Amadeus 多维表变化(对标 Notion 的 database automation)。
+   * `vault` 是**当时那个 vault 的绝对路径**:规则文件是全局的,而 `path` 是库内相对路径,
+   * 不钉住 vault 的话切库之后同一条规则会静默作用到另一个库里同名的表(codex 抓的)。
+   * `columnId` 存**列 id 不存列名** —— 列名既不唯一也随时能改。
+   * 语义诚实:靠巡检比对快照,所以「加完又删」「改走又改回」这两种在两次检查之间自己抵消掉的变化,
+   * 是看不见的。要真正的逐次变更需要结构化变更流水,那是另一件事。
+   */
+  | {
+      type: 'db_changed';
+      /** vault 相对路径,如 `任务.db`。 */
+      path: string;
+      /** 建规则时的 vault 根绝对路径;与当前 vault 不符 → 不评估(见 evaluate)。 */
+      vault: string;
+      event: 'row_added' | 'cell_changed';
+      /** cell_changed 必填:被盯那列的 id。 */
+      columnId?: string;
+      /** cell_changed 可选:只有变成这个值才算数(空=任意变化都算)。 */
+      equals?: string;
+    };
+
+/** vault 相对路径归一:反斜杠→斜杠、去首尾斜杠、压掉 `./` 与重复斜杠。
+ *  自激防线按路径**字符串**比对规则与动作,`Tasks.db` 与 `./Tasks.db` 指同一文件却比不上 → 防线失效。 */
+export function normalizeVaultRel(raw: string): string {
+  const parts = String(raw || '').trim().replace(/\\/g, '/').split('/');
+  return parts.filter((seg) => seg !== '' && seg !== '.').join('/');
+}
 
 const EVERY_RE = /^(\d+)([mhd])$/;
 const EVERY_UNIT_MS = { m: 60_000, h: 3600_000, d: 86_400_000 } as const;
@@ -55,7 +90,15 @@ export function parseLocalMinute(raw: string): Date | null {
 export type ActionSpec =
   | { type: 'notify'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
-  | { type: 'tool_call'; tool: string; args: Record<string, unknown> };
+  | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
+  /**
+   * Amadeus 多维表写入(对标 Notion 的 Add page to… / Edit property…)。
+   * `cells` 的键 = 列 id(优先)或列名,值 = 模板字符串(`{{row.X}}` 允许插值 —— 白名单里只有
+   * notify 文本与这里的单元格值)。`rowId` 缺省 = 触发上下文里那一行(cell_changed/row_added 命中的行)。
+   * 列找不到 = **失败即停**,绝不"报成功但什么也没改"(setNamedProps 那种静默跳过在自动化里是数据事故)。
+   */
+  | { type: 'db_row_add'; path: string; cells: Record<string, string> }
+  | { type: 'db_row_edit'; path: string; rowId?: string; cells: Record<string, string> };
 
 export const MAX_ACTIONS = 10;
 
@@ -89,8 +132,22 @@ function parseActionsInput(raw: unknown, allowToolCall: boolean):
       try { size = JSON.stringify(args).length; } catch { return { ok: false, error: 'tool_call 参数必须可 JSON 序列化' }; }
       if (size > 4096) return { ok: false, error: 'tool_call 参数过大(≤4KB)' };
       out.push({ type: 'tool_call', tool, args });
+    } else if (type === 'db_row_add' || type === 'db_row_edit') {
+      const p = normalizeVaultRel(String(a.path || ''));
+      if (!p || !/\.db$/i.test(p) || p.split('/').includes('..')) return { ok: false, error: `${type} 需要 path(vault 相对的 .db 文件)` };
+      const raw = a.cells;
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: `${type} 需要 cells 对象(列 id/列名 → 值)` };
+      const cells: Record<string, string> = {};
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        const key = String(k).trim();
+        if (!key) continue;
+        cells[key] = String(v ?? '').slice(0, 2000);
+      }
+      if (!Object.keys(cells).length) return { ok: false, error: `${type} 的 cells 不能为空` };
+      if (type === 'db_row_add') out.push({ type: 'db_row_add', path: p, cells });
+      else out.push({ type: 'db_row_edit', path: p, rowId: String(a.rowId || '').trim() || undefined, cells });
     } else {
-      return { ok: false, error: 'action.type 须为 notify/agent_run/tool_call' };
+      return { ok: false, error: 'action.type 须为 notify/agent_run/tool_call/db_row_add/db_row_edit' };
     }
   }
   return { ok: true, value: out };
@@ -202,6 +259,10 @@ export interface TriggerInput {
   time?: unknown;
   datetime?: unknown;
   interval?: unknown;
+  event?: unknown;
+  vault?: unknown;
+  column_id?: unknown;
+  equals?: unknown;
   prompt?: unknown;
   cooldown_hours?: unknown;
   agent_slug?: unknown;
@@ -225,7 +286,7 @@ export interface ValidatedTrigger {
  * agentSlug 规则 cooldown 下限 1h:agent 自动运行会写 agent.edit 活动行,event_seen 匹配到
  * 自己改的文件会形成自激回路,冷却是唯一护栏。
  */
-export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; allowToolCall?: boolean } = {}):
+export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; allowToolCall?: boolean; vaultPath?: string } = {}):
   | { ok: true; value: ValidatedTrigger }
   | { ok: false; error: string } {
   const desc = String(input.desc || '').trim().slice(0, 200);
@@ -256,8 +317,26 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
     const interval = String(input.interval || '').trim();
     if (!parseEveryInterval(interval)) return { ok: false, error: 'every 需要 interval 如 "30m"/"2h"/"1d"(≥15m ≤365d)' };
     cond = { type: 'every', interval };
+  } else if (condType === 'manual') {
+    cond = { type: 'manual' };
+  } else if (condType === 'db_changed') {
+    const p = normalizeVaultRel(String(input.path || ''));
+    if (!p || !/\.db$/i.test(p)) return { ok: false, error: 'db_changed 需要 path(vault 相对的 .db 文件)' };
+    if (p.split('/').includes('..')) return { ok: false, error: 'db_changed 的 path 不能越出 vault' };
+    const event = String(input.event || '');
+    if (event !== 'row_added' && event !== 'cell_changed') return { ok: false, error: 'db_changed 的 event 须为 row_added/cell_changed' };
+    const vault = String(input.vault || '').trim() || opts.vaultPath || '';
+    if (!vault) return { ok: false, error: 'db_changed 需要 vault(建规则时的库根路径)' };
+    if (event === 'cell_changed') {
+      const columnId = String(input.column_id || '').trim();
+      if (!columnId) return { ok: false, error: 'cell_changed 需要 column_id(列 id,不是列名——列随时能改名)' };
+      const equals = String(input.equals ?? '').trim().slice(0, 200);
+      cond = { type: 'db_changed', path: p, vault, event, columnId, equals: equals || undefined };
+    } else {
+      cond = { type: 'db_changed', path: p, vault, event };
+    }
   } else {
-    return { ok: false, error: 'cond_type 须为 file_chars_gte/event_seen/daily_at/at/every' };
+    return { ok: false, error: 'cond_type 须为 file_chars_gte/event_seen/daily_at/at/every/manual/db_changed' };
   }
   let agentSlug = String(input.agent_slug || '').trim() || undefined;
   if (agentSlug === MUSE_AGENT_SLUG) agentSlug = undefined; // 'muse' 归一为缺省=老路
@@ -272,7 +351,10 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   let cooldownHours = Number.isFinite(rawCd) && rawCd > 0 ? Math.min(24 * 30, rawCd) : 24;
   if (hasLLM) cooldownHours = Math.max(1, cooldownHours);
   else if (actions?.length) cooldownHours = Math.max(0.25, cooldownHours);
-  if (cond.type === 'at' || cond.type === 'every' || cond.type === 'daily_at') {
+  if (cond.type === 'manual') {
+    // 用户点一次跑一次;冷却会把第二次点击静默吞成「没反应」。防重入由服务端单飞锁负责,不是冷却。
+    cooldownHours = 0;
+  } else if (cond.type === 'at' || cond.type === 'every' || cond.type === 'daily_at') {
     // 定时类自带节奏(at 一次性/every 锚点算术/daily_at 每日钉锚),cooldown 反而会吞触发
     // (如 every 30m × cooldown 24h;daily_at × 24h 会把"每天"吞成隔天)。evaluate 侧同款豁免兜存量。
     cooldownHours = 0;
@@ -353,6 +435,16 @@ export async function disableTrigger(id: string): Promise<void> {
   });
 }
 
+/**
+ * 命中时带出的上下文(目前只有 db_changed 产出)。给动作里的模板变量用:
+ * `{{row.名称}}` / `{{row.<列 id>}}` —— 两种键都放进 cells,列改名不至于当场失效。
+ * **只服务 notify 文本与 db 单元格值**;tool_call 参数与 agent_run 提示词一律不做插值(见 runActions)。
+ */
+export interface TriggerContext {
+  dbPath?: string;
+  row?: { id: string; cells: Record<string, string> };
+}
+
 export interface EvaluateEnv {
   now?: Date;
   /** 活动日志行(event_seen 数据源;调用方给近窗口行,规则内再按 lastFiredAt 过滤)。 */
@@ -361,6 +453,41 @@ export interface EvaluateEnv {
   readFileChars?: (path: string) => Promise<number | null>;
   /** 出参:event_seen 命中规则的新消费游标(调用方随 markTriggersFired 写回)。 */
   outCursors?: Record<string, EventCursor>;
+  /** db_changed:当前 vault 根(与规则里钉的 vault 不一致就整条跳过)。 */
+  currentVault?: string;
+  /** db_changed:读一张表;不存在/坏了 → null。测试注入假表。 */
+  readDbFile?: (vaultRelPath: string) => Promise<DbLike | null>;
+  /** db_changed:入参游标表(triggerId → 游标)。 */
+  dbCursors?: Record<string, DbCursor>;
+  /** db_changed 出参:**无论是否命中**都要写回的新游标(不写回=下一轮拿旧快照重复比对)。 */
+  outDbCursors?: Record<string, DbCursor>;
+  /** 出参:命中规则的上下文(模板变量数据源)。 */
+  outContexts?: Record<string, TriggerContext>;
+}
+
+/** 评估只需要表的这一点结构(避免 museTriggers 依赖引擎的 db 模块,单测好注入)。 */
+export interface DbLike {
+  source?: { folder: string };
+  columns: { id: string; name: string }[];
+  rows: { id: string; cells: Record<string, unknown> }[];
+}
+
+/** 单元格值 → 稳定比对串(数组按序 join;null/undefined 一律空串)。 */
+function cellKeyOf(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.join('');
+  return String(v);
+}
+
+/** 行 → 模板变量可读映射(列 id 与列名两种键都放)。 */
+function rowVars(db: DbLike, row: { id: string; cells: Record<string, unknown> }): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const c of db.columns) {
+    const v = cellKeyOf(row.cells?.[c.id]);
+    out[c.id] = v;
+    if (c.name) out[c.name] = v;
+  }
+  return out;
 }
 
 /** 行内容 hash(游标用;截 12 位够区分同分钟内的不同行)。 */
@@ -398,6 +525,7 @@ export async function evaluateTriggers(triggers: MuseTrigger[], env: EvaluateEnv
     if (!t.enabled) continue;
     const lastMs = t.lastFiredAt ? Date.parse(t.lastFiredAt) : 0;
     const c = t.cond;
+    if (c.type === 'manual') continue; // 手动类只由 fire 端点起跑,巡检永不命中
     // cooldown 只约束事件/文件类;定时类自带时刻语义,gate 会吞触发
     // (存量规则可能带 cooldown=24 的 daily_at——validate 已改强制 0,这里兜旧数据)。
     const timed = c.type === 'daily_at' || c.type === 'at' || c.type === 'every';
@@ -439,6 +567,60 @@ export async function evaluateTriggers(triggers: MuseTrigger[], env: EvaluateEnv
         const due = parseLocalMinute(c.datetime);
         // 一次性:过点且从未在点后触过(markTriggersFired 会顺手 enabled=false,这里的 lastMs 判断兜双保险)。
         if (due && now.getTime() >= due.getTime() && lastMs < due.getTime()) fired.push(t);
+      } else if (c.type === 'db_changed') {
+        // 切库保护:规则文件是全局的,path 却是库内相对路径——不钉 vault 就会静默作用到另一个库
+        // 里同名的表。不一致时整条跳过(不评估、不推游标),换回原库即照常工作。
+        if (env.currentVault && c.vault && env.currentVault !== c.vault) continue;
+        const db = env.readDbFile ? await env.readDbFile(c.path) : null;
+        if (!db || db.source) continue; // 表没了 / 是「笔记视图」(行是笔记不是 JSON 行)
+        const cur = env.dbCursors?.[t.id];
+        if (c.event === 'row_added') {
+          const ids = db.rows.map((r) => r.id);
+          if (!cur?.rowIds) {
+            // 首次见到这条规则:只播种,绝不把满表现有行当成"刚加的"
+            if (env.outDbCursors) env.outDbCursors[t.id] = { v: 1, rowIds: ids };
+            continue;
+          }
+          const known = new Set(cur.rowIds);
+          const added = db.rows.filter((r) => !known.has(r.id));
+          if (!added.length) {
+            // 没有新增(可能有删除)→ 基线跟上当前表,免得删掉的行 id 永远挂在游标里
+            if (env.outDbCursors) env.outDbCursors[t.id] = { v: 1, rowIds: ids };
+            continue;
+          }
+          // ⚠️ 一次动作链只处理一行(runActions 一次一条)。**只把这一行标记为已消费**,
+          // 其余新增行留在游标外,下一轮继续触发 —— 从前的写法是「记下全表、只跑第一行」,
+          // 剩下的行被永久吞掉(codex 抓的 S1)。
+          const take = added[0];
+          fired.push(t);
+          if (env.outDbCursors) env.outDbCursors[t.id] = { v: 1, rowIds: [...cur.rowIds.filter((id) => ids.includes(id)), take.id] };
+          if (env.outContexts) env.outContexts[t.id] = { dbPath: c.path, row: { id: take.id, cells: rowVars(db, take) } };
+        } else {
+          const colId = String(c.columnId || '');
+          if (!colId || !db.columns.some((x) => x.id === colId)) continue; // 列被删 → 静默不触发(面板另有提示)
+          const cells: Record<string, string> = {};
+          for (const r of db.rows) cells[r.id] = cellKeyOf(r.cells?.[colId]);
+          if (!cur?.cells) { // 同上:首次只播种
+            if (env.outDbCursors) env.outDbCursors[t.id] = { v: 1, cells };
+            continue;
+          }
+          const hit = db.rows.find((r) => {
+            const now2 = cells[r.id];
+            const was = cur.cells?.[r.id];
+            if (was === undefined) return false; // 新行归 row_added 管,不在这儿重复报
+            if (now2 === was) return false;
+            return c.equals ? now2 === c.equals : true;
+          });
+          if (!hit) {
+            // 没命中:整表基线跟上(含「变了但 equals 不匹配」的新值)
+            if (env.outDbCursors) env.outDbCursors[t.id] = { v: 1, cells };
+            continue;
+          }
+          fired.push(t);
+          // 同 row_added:**只消费本轮真正处理的那一行**,其它变了的行留到下一轮。
+          if (env.outDbCursors) env.outDbCursors[t.id] = { v: 1, cells: { ...cur.cells, [hit.id]: cells[hit.id] } };
+          if (env.outContexts) env.outContexts[t.id] = { dbPath: c.path, row: { id: hit.id, cells: rowVars(db, hit) } };
+        }
       } else if (c.type === 'every') {
         const ivl = parseEveryInterval(c.interval);
         const anchor = Date.parse(t.createdAt || '');
@@ -462,6 +644,11 @@ export function condSummary(c: MuseTriggerCond): string {
     case 'daily_at': return `daily at ${c.time}`;
     case 'at': return `at ${c.datetime.replace('T', ' ')}`;
     case 'every': return `every ${c.interval}`;
+    case 'manual': return 'manual (clicked by the user)';
+    case 'db_changed':
+      return c.event === 'row_added'
+        ? `a row was added to ${c.path}`
+        : `column ${c.columnId} changed${c.equals ? ` to "${c.equals}"` : ''} in ${c.path}`;
     default: return 'unknown condition';
   }
 }

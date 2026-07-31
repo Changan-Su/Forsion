@@ -2,7 +2,7 @@
  *  经脚本静态渲染转为本地 React 组件:统一 24×24 viewBox、currentColor、1em 随字号。
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
-import type { ReactElement, SVGProps } from 'react'
+import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -32,6 +32,8 @@ export const NumberedListIcon = I(<><path fill="currentColor" fillRule="evenodd"
 export const CheckBoxCheckLinearIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M6 3.25A2.75 2.75 0 0 0 3.25 6v12A2.75 2.75 0 0 0 6 20.75h12A2.75 2.75 0 0 0 20.75 18V6A2.75 2.75 0 0 0 18 3.25zM4.75 6c0-.69.56-1.25 1.25-1.25h12c.69 0 1.25.56 1.25 1.25v12c0 .69-.56 1.25-1.25 1.25H6c-.69 0-1.25-.56-1.25-1.25zm11.78 3.53a.75.75 0 0 0-1.06-1.06l-4.97 4.97-1.47-1.47a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0z" clipRule="evenodd"/></>)
 export const CheckBoxCheckSolidIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M3.25 6A2.75 2.75 0 0 1 6 3.25h12A2.75 2.75 0 0 1 20.75 6v12A2.75 2.75 0 0 1 18 20.75H6A2.75 2.75 0 0 1 3.25 18zm13.28 3.53a.75.75 0 0 0-1.06-1.06l-4.97 4.97-1.47-1.47a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0z" clipRule="evenodd"/></>)
 export const QuoteIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M5 10.966v4.095c0 .565.458 1.024 1.024 1.024h4.095c.566 0 1.024-.459 1.024-1.024v-4.095c0-.566-.459-1.024-1.024-1.024H6.704A3.35 3.35 0 0 1 9.845 7.75v-1.5A4.845 4.845 0 0 0 5 10.966m8 0v4.095c0 .565.458 1.024 1.024 1.024h4.095c.566 0 1.024-.459 1.024-1.024v-4.095c0-.566-.459-1.024-1.024-1.024h-3.415a3.35 3.35 0 0 1 3.141-2.192v-1.5A4.845 4.845 0 0 0 13 10.966" clipRule="evenodd"/></>)
+/** 折叠块:展开的 chevron + 两条内容行(与 callout `[!fold]-` 一套语义)。 */
+export const FoldIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M4.47 7.47a.75.75 0 0 1 1.06 0L7.75 9.69l2.22-2.22a.75.75 0 1 1 1.06 1.06l-2.75 2.75a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06M13 8.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5zm-4 6a.75.75 0 0 0 0 1.5h11a.75.75 0 0 0 0-1.5zm0 4a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5z" clipRule="evenodd"/></>)
 export const CodeBlockIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M2.25 6A2.75 2.75 0 0 1 5 3.25h14A2.75 2.75 0 0 1 21.75 6v12A2.75 2.75 0 0 1 19 20.75H5A2.75 2.75 0 0 1 2.25 18zM5 4.75c-.69 0-1.25.56-1.25 1.25v12c0 .69.56 1.25 1.25 1.25h14c.69 0 1.25-.56 1.25-1.25V6c0-.69-.56-1.25-1.25-1.25zm5.53 4.62a.75.75 0 0 1 0 1.06l-1.59 1.591 1.59 1.591a.75.75 0 0 1-1.06 1.06l-2.122-2.12a.75.75 0 0 1 0-1.061L9.47 9.37a.75.75 0 0 1 1.06 0m2.94 1.06a.75.75 0 1 1 1.06-1.06l2.122 2.12a.75.75 0 0 1 0 1.062l-2.122 2.12a.75.75 0 1 1-1.06-1.06l1.59-1.59z" clipRule="evenodd"/></>)
 export const TableIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M2.25 6A2.75 2.75 0 0 1 5 3.25h14A2.75 2.75 0 0 1 21.75 6v12A2.75 2.75 0 0 1 19 20.75H5A2.75 2.75 0 0 1 2.25 18zM5 4.75c-.69 0-1.25.56-1.25 1.25v2.25h4.5v-3.5zm-1.25 5h4.5v3.5h-4.5zm6 0v3.5h4.5v-3.5zm6 0v3.5h4.5v-3.5zm-1.5 5h-4.5v4.5h4.5zm1.5 4.5v-4.5h4.5V18c0 .69-.56 1.25-1.25 1.25zm0-11v-3.5H19c.69 0 1.25.56 1.25 1.25v2.25zm-1.5-3.5v3.5h-4.5v-3.5zm-10.5 10h4.5v4.5H5c-.69 0-1.25-.56-1.25-1.25z" clipRule="evenodd"/></>)
 export const DividerIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M4 4.25a.75.75 0 0 1 .75.75v1c0 .69.56 1.25 1.25 1.25h12c.69 0 1.25-.56 1.25-1.25V5a.75.75 0 0 1 1.5 0v1A2.75 2.75 0 0 1 18 8.75H6A2.75 2.75 0 0 1 3.25 6V5A.75.75 0 0 1 4 4.25m0 15.5a.75.75 0 0 0 .75-.75v-1c0-.69.56-1.25 1.25-1.25h12c.69 0 1.25.56 1.25 1.25v1a.75.75 0 0 0 1.5 0v-1A2.75 2.75 0 0 0 18 15.25H6A2.75 2.75 0 0 0 3.25 18v1c0 .414.336.75.75.75m-1-8.5a.75.75 0 0 0 0 1.5h1.2a.75.75 0 0 0 0-1.5H3m3.45.75a.75.75 0 0 1 .75-.75h1.2a.75.75 0 0 1 0 1.5H7.2a.75.75 0 0 1-.75-.75m4.95-.75a.75.75 0 0 0 0 1.5h1.2a.75.75 0 0 0 0-1.5h-1.2m3.45.75a.75.75 0 0 1 .75-.75h1.2a.75.75 0 0 1 0 1.5h-1.2a.75.75 0 0 1-.75-.75m4.95-.75a.75.75 0 0 0 0 1.5H21a.75.75 0 0 0 0-1.5h-1.2" clipRule="evenodd"/></>)
@@ -61,3 +63,82 @@ export const MoreHorizontalIcon = I(<><path fill="currentColor" fillRule="evenod
 export const AttachmentIcon = I(<><path fill="currentColor" fillRule="evenodd" d="m12.218 5.608-6.04 6.04a4.65 4.65 0 0 0 0 6.704c1.913 1.864 5.025 1.864 6.939 0l5.89-5.723a.75.75 0 1 1 1.045 1.076l-5.889 5.721c-2.496 2.432-6.536 2.432-9.032 0a6.15 6.15 0 0 1-.004-8.849l6.04-6.04c1.762-1.716 4.61-1.716 6.371 0a4.35 4.35 0 0 1 .004 6.256l-6.04 6.04c-1.027 1-2.683 1-3.71 0a2.55 2.55 0 0 1 0-3.667l6.2-6.037a.75.75 0 0 1 1.046 1.075l-6.199 6.037a1.05 1.05 0 0 0 0 1.518 1.17 1.17 0 0 0 1.613.003l6.04-6.04a2.85 2.85 0 0 0 0-4.11 3.086 3.086 0 0 0-4.275-.004" clipRule="evenodd"/></>)
 export const FilterIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M3.75 12a8.25 8.25 0 1 1 16.5 0 8.25 8.25 0 0 1-16.5 0M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25m-4 6.5a.75.75 0 0 0 0 1.5h8a.75.75 0 0 0 0-1.5zm.25 3.75a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 0 1.5H9a.75.75 0 0 1-.75-.75M11 14.75a.75.75 0 0 0 0 1.5h2a.75.75 0 0 0 0-1.5z" clipRule="evenodd"/></>)
 export const BookmarkIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M5 3.25A2.75 2.75 0 0 0 2.25 6v7a.75.75 0 0 0 1.5 0V6c0-.69.56-1.25 1.25-1.25h14c.69 0 1.25.56 1.25 1.25v12c0 .69-.56 1.25-1.25 1.25h-7a.75.75 0 0 0 0 1.5h7A2.75 2.75 0 0 0 21.75 18V6A2.75 2.75 0 0 0 19 3.25zm4.116 9.866a1.25 1.25 0 0 1 1.768 1.768l-2 2a1.25 1.25 0 0 1-1.768 0 .75.75 0 0 0-1.06 1.06 2.75 2.75 0 0 0 3.889 0l2-2a2.75 2.75 0 1 0-3.89-3.889l-.55.55a.75.75 0 1 0 1.061 1.06zm-3 3a1.25 1.25 0 0 1 1.768 0 .75.75 0 0 0 1.06-1.06 2.75 2.75 0 0 0-3.889 0l-2 2a2.75 2.75 0 1 0 3.89 3.889l.55-.551a.75.75 0 0 0-1.06-1.06l-.551.55a1.25 1.25 0 0 1-1.768-1.768z" clipRule="evenodd"/></>)
+export const EditIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M18.303 4.498a.85.85 0 0 1 1.2 0c.33.33.33.863 0 1.192l-.43.428-1.196-1.195zm-1.488 1.485 1.197 1.195-7.086 7.072H9.75v-1.216zm3.747-2.547a2.35 2.35 0 0 0-3.318 0L8.47 12.192a.75.75 0 0 0-.22.531V15c0 .414.336.75.75.75h2.236a.75.75 0 0 0 .53-.22l8.796-8.778c.917-.915.917-2.4 0-3.316M4.75 6c0-.69.56-1.25 1.25-1.25h6a.75.75 0 0 0 0-1.5H6A2.75 2.75 0 0 0 3.25 6v12A2.75 2.75 0 0 0 6 20.75h12A2.75 2.75 0 0 0 20.75 18v-6a.75.75 0 0 0-1.5 0v6c0 .69-.56 1.25-1.25 1.25H6c-.69 0-1.25-.56-1.25-1.25z" clipRule="evenodd"/></>)
+export const InformationIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M3.75 12a8.25 8.25 0 1 1 16.5 0 8.25 8.25 0 0 1-16.5 0M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25M13 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-1 2.75a.75.75 0 0 1 .75.75v5a.75.75 0 0 1-1.5 0v-5a.75.75 0 0 1 .75-.75" clipRule="evenodd"/></>)
+export const WarningIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M12 4.75a7.25 7.25 0 1 0 0 14.5 7.25 7.25 0 0 0 0-14.5M3.25 12a8.75 8.75 0 1 1 17.5 0 8.75 8.75 0 0 1-17.5 0M12 7.694a.75.75 0 0 1 .75.75V12a.75.75 0 0 1-1.5 0V8.444a.75.75 0 0 1 .75-.75m-.75 7.862a.75.75 0 0 1 .75-.75h.009a.75.75 0 1 1 0 1.5H12a.75.75 0 0 1-.75-.75" clipRule="evenodd"/></>)
+export const PinIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M13.591 3.692a2.75 2.75 0 0 1 3.89 0l2.827 2.828a2.75 2.75 0 0 1 0 3.889l-5.328 5.329.884.884a.75.75 0 0 1-1.06 1.06L11.09 13.97l-4.925 4.924a.75.75 0 0 1-1.06-1.06l4.924-4.925-3.712-3.712a.75.75 0 0 1 1.06-1.06l.884.883zM9.323 10.08l4.596 4.596 5.329-5.329a1.25 1.25 0 0 0 0-1.767l-2.829-2.829a1.25 1.25 0 0 0-1.767 0z" clipRule="evenodd"/></>)
+/** 上游名字是 SelectIcon(edgeless 的选择工具)——一枚光标箭头。这里当「可点击」用:按钮块的图标。 */
+export const SelectIcon = I(<><path fill="currentColor" fillRule="evenodd" d="M4.012 4.35c-.17-1.5 1.514-2.496 2.748-1.625l13.222 9.336c1.383.976.712 3.15-.98 3.179l-6.661.11a.25.25 0 0 0-.213.127L9.066 20.88c-.836 1.475-3.071 1.019-3.261-.666zm1.883-.4a.25.25 0 0 0-.393.232l1.793 15.863a.25.25 0 0 0 .466.095l3.061-5.403a1.75 1.75 0 0 1 1.494-.887l6.66-.11a.25.25 0 0 0 .141-.454z" clipRule="evenodd"/></>)
+
+/**
+ * **插件图标词表** —— 公开契约。插件写 `icon: 'callout-warning'`,宿主查表画出上面那枚 SVG,
+ * 于是插件项和内置项在 slash 菜单里是**同一套视觉**,而不是各自塞一个 emoji。
+ *
+ * 键是**语义名**不是组件名(组件名会随上游 @blocksuite/icons 改,语义名不会)。
+ * 词表**只增不改不删**:名字一旦发布,外面的插件就照着写了,改掉等于让别人的插件掉图标。
+ * 名字清单同步进 `docs/Function/生态内容制作指南.md`。
+ */
+export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
+  text: TextIcon,
+  'heading-1': Heading1Icon,
+  'heading-2': Heading2Icon,
+  'heading-3': Heading3Icon,
+  'heading-4': Heading4Icon,
+  'heading-5': Heading5Icon,
+  'heading-6': Heading6Icon,
+  'bulleted-list': BulletedListIcon,
+  'numbered-list': NumberedListIcon,
+  todo: CheckBoxCheckLinearIcon,
+  'todo-done': CheckBoxCheckSolidIcon,
+  quote: QuoteIcon,
+  fold: FoldIcon,
+  code: CodeBlockIcon,
+  table: TableIcon,
+  divider: DividerIcon,
+  math: TeXIcon,
+  'link-page': LinkedPageIcon,
+  image: ImageIcon,
+  pen: PenIcon,
+  mindmap: MindmapIcon,
+  layout: LayoutIcon,
+  'new-page': NewPageIcon,
+  page: PageIcon,
+  database: DatabaseTableViewIcon,
+  kanban: DatabaseKanbanViewIcon,
+  'list-view': DatabaseListViewIcon,
+  template: TemplateIcon,
+  embed: EmbedIcon,
+  number: NumberIcon,
+  date: DateTimeIcon,
+  'single-select': SingleSelectIcon,
+  'multi-select': MultiSelectIcon,
+  link: LinkIcon,
+  today: TodayIcon,
+  folder: FolderIcon,
+  plus: PlusIcon,
+  more: MoreHorizontalIcon,
+  attachment: AttachmentIcon,
+  filter: FilterIcon,
+  bookmark: BookmarkIcon,
+  edit: EditIcon,
+  'callout-note': EditIcon,
+  info: InformationIcon,
+  'callout-info': InformationIcon,
+  warning: WarningIcon,
+  'callout-warning': WarningIcon,
+  pin: PinIcon,
+  cursor: SelectIcon,
+  button: SelectIcon,
+}
+
+/**
+ * 插件的 `icon` 字段 → 可渲染节点:命中词表就画 SVG,没命中就原样当字形。
+ *
+ * 兼容是**刻意**的:词表键全是 `[a-z0-9-]`,emoji / `✎` / `·` 永远命不中,于是
+ * 已发布的老插件一行不改照跑(只是仍旧显示它自己的字形)。新插件写名字就能对齐视觉。
+ */
+export function resolveIcon(icon: string | undefined, fallback: ReactNode = null): ReactNode {
+  if (!icon) return fallback
+  const Icon = PLUGIN_ICONS[icon]
+  return Icon ? <Icon /> : icon
+}

@@ -199,8 +199,8 @@ const RULES: Rule[] = [
     cap: { format: 'openai-effort', levels: EFFORT_CODEX, maxTokensField: 'max_completion_tokens', dropTemperature: true },
   },
   {
-    // Claude 订阅(Claude Code 额度)走原生 /v1/messages。此前**完全没有** thinking 字段。
-    id: 'claude-subscription',
+    // Anthropic 原生 /v1/messages(用户自有 API key)。此前**完全没有** thinking 字段。
+    id: 'anthropic-messages',
     protocol: /^anthropic-messages$/,
     cap: { format: 'anthropic-budget', levels: CLAUDE_BUDGETS, maxTokensField: 'max_tokens' },
   },

@@ -59,11 +59,22 @@ function printEffectiveConfig(cfg: StandaloneConfig): void {
   process.stdout.write(JSON.stringify(out, null, 2) + '\n');
 }
 
+/** 引擎版本标识:优先构建注入的 TANGU_WORKER_VERSION(git sha / build id,见 Dockerfile.standalone),
+ *  回退 package.json 版本(发版随产品同步 bump,「引擎桌面同版发」)。/health 与 --version 共用。 */
+function engineVersion(): string {
+  let version = process.env.TANGU_WORKER_VERSION || '';
+  if (!version) try {
+    version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version || '';
+  } catch { /* dist 布局异常时留空 */ }
+  return version;
+}
+
 async function main(): Promise<void> {
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig
   const cfg = parseConfig(process.argv.slice(2));
   if (cfg.showHelp) { process.stdout.write(HELP); return; }
+  if (cfg.showVersion) { process.stdout.write(`tangu-server ${engineVersion() || 'unknown'}\n`); return; }
   if (cfg.printConfig) { printEffectiveConfig(cfg); return; }
   // 未显式给 token / cloud-url → 复用 `tangu-chat login` 存的凭证。
   const creds = loadCreds();
@@ -129,12 +140,7 @@ async function main(): Promise<void> {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
-  // 版本标识:优先构建注入的 TANGU_WORKER_VERSION(git sha / build id,见 Dockerfile.standalone),
-  // 回退 package.json 版本。admin panel / Tangu Manager 据此显示「跑的是哪个 build」。
-  let version = process.env.TANGU_WORKER_VERSION || '';
-  if (!version) try {
-    version = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version || '';
-  } catch { /* dist 布局异常时留空 */ }
+  const version = engineVersion();
   const startedAt = new Date().toISOString();
   app.get('/health', (_req, res) =>
     res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt }));

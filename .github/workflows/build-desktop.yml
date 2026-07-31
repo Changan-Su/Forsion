@@ -33,6 +33,23 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      # 三端功能同步闸:mobile 重写了一份 desktop 的 main.tsx/Root.tsx,desktop 那边新加一行
+      # 移动端不会自动跟上(typecheck 与 boot smoke 都抓不到——不是类型错、也不崩,只是静默少功能)。
+      # 纯 fs 读文件,不需要 npm install,所以放在最前的 test 门禁里。
+      - name: Platform parity (desktop ↔ mobile)
+        working-directory: desktop
+        run: node scripts/platform-parity.check.cjs
+
+      # desktop 的单测此前**一个都不在 CI 里**(本 job 的 working-directory 是 tangu-agent),
+      # 于是渲染层 + electron main 的九百多个用例只在本地跑过。纯 vitest,不需要浏览器。
+      # `check:*` 那批不在这儿:它们要真 Electron / Chromium(scrollfade 那支在无头 chromium 上
+      # 必然假红 —— overlay 滚动条,gutter 恒为 0),留在本地跑。
+      - name: Desktop unit tests
+        working-directory: desktop
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+
   build:
     needs: test
     name: ${{ matrix.os }}
@@ -99,11 +116,36 @@ jobs:
       # electron-builder 在有 publish 配置时随包产出更新 feed 清单(Win=latest.yml / Linux=latest-linux.yml);
       # 缺失则应用内更新形同虚设 → 这里硬失败,避免发出一个装不了更新的版本。
       # macOS 走 GitHub API 检测(未签名不自装),不依赖该 feed,故跳过校验。
+      #
+      # ⚠️ 文件名随通道变:electron-builder 的 detectUpdateChannel(默认开)从版本号的 prerelease 段取通道名,
+      # 于是 2.7.4-beta.1 产出的是 beta.yml / beta-linux.yml,**根本没有 latest*.yml**。写死 latest 会把
+      # 每个 beta 版当场判死。(配置里的 generateUpdatesFilesForAllChannels 救不了:computeChannelNames 对
+      # provider==='github' 直接返回单通道,该开关只对 generic 服务器生效。)
       - name: Verify update manifests
         if: runner.os != 'macOS'
         working-directory: desktop
         shell: bash
-        run: ls -1 dist/latest*.yml || { echo "::error::缺少 latest*.yml — 应用内更新 feed 未生成,请改用 --publish always(见 build.publish 配置)"; exit 1; }
+        run: |
+          # 不用管道(runner 的 bash 带 -o pipefail,grep -q 命中即关管道会把上游打成 SIGPIPE 判负)
+          found=$(ls -1 dist/latest*.yml dist/beta*.yml 2>/dev/null || true)
+          test -n "$found" || { echo "::error::缺少 latest*.yml / beta*.yml — 应用内更新 feed 未生成,请改用 --publish always(见 build.publish 配置)"; exit 1; }
+          echo "$found"
+
+      # beta 用户怎么回到正式版:他们的 electron-updater 读的是 beta*.yml,而正式版构建只写 latest*.yml
+      # → 不管的话,凡是装过 beta 的人**永远停在最后一个 beta**(GitHub provider 下 electron-builder 的
+      # generateUpdatesFilesForAllChannels 是空转的,见 electron-builder.config.cjs 里的实证注释)。
+      # 正式 tag 时把 latest*.yml 原样复制一份成 beta*.yml:版本号更高,beta 频道自然升上来。
+      # (反向不做:beta 构建只写 beta*.yml,正式版用户读 latest*.yml,天然看不见测试版。)
+      - name: Mirror stable feed to beta channel
+        if: runner.os != 'macOS' && !contains(github.ref_name, '-')
+        working-directory: desktop
+        shell: bash
+        run: |
+          for f in dist/latest*.yml; do
+            [ -e "$f" ] || continue
+            cp "$f" "${f/latest/beta}"
+            echo "$f → ${f/latest/beta}"
+          done
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -114,6 +156,7 @@ jobs:
             desktop/dist/*.dmg
             desktop/dist/*.exe
             desktop/dist/latest*.yml
+            desktop/dist/beta*.yml
             desktop/dist/*.blockmap
           if-no-files-found: ignore
 

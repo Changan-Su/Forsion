@@ -19,12 +19,18 @@ export function triggerToUpsert(t: MuseTriggerInfo): Parameters<typeof saveMuseT
     id: t.id,
     desc: t.desc,
     cond_type: t.cond.type,
-    path: t.cond.type === 'file_chars_gte' ? t.cond.path : undefined,
+    // ⚠️ cond 的每个字段都必须原样带回:upsert 是**整量**语义,漏一个后端就 400。
+    // db_changed 的 path/event/vault/column_id 漏掉过一次——表现是「DB 规则的启停开关点不动」。
+    path: t.cond.type === 'file_chars_gte' || t.cond.type === 'db_changed' ? t.cond.path : undefined,
     n: t.cond.type === 'file_chars_gte' ? t.cond.n : undefined,
     match: t.cond.type === 'event_seen' ? t.cond.match : undefined,
     time: t.cond.type === 'daily_at' ? t.cond.time : undefined,
     datetime: t.cond.type === 'at' ? t.cond.datetime : undefined,
     interval: t.cond.type === 'every' ? t.cond.interval : undefined,
+    event: t.cond.type === 'db_changed' ? t.cond.event : undefined,
+    vault: t.cond.type === 'db_changed' ? t.cond.vault : undefined,
+    column_id: t.cond.type === 'db_changed' ? t.cond.columnId : undefined,
+    equals: t.cond.type === 'db_changed' ? t.cond.equals : undefined,
     prompt: t.prompt,
     cooldown_hours: t.cooldownHours || undefined,
     agent_slug: t.agentSlug,
@@ -136,8 +142,10 @@ export const AutomationListView: React.FC = () => {
       </div>
 
       {(() => {
-        const active = st.triggers.filter((tr) => !isFinishedTrigger(tr))
-        const finished = st.triggers.filter(isFinishedTrigger)
+        // 手动类单列一组:它们不是「盯任务」(永不自动触发),混在一起会让人以为按钮也在后台跑。
+        const manual = st.triggers.filter((tr) => tr.cond?.type === 'manual')
+        const active = st.triggers.filter((tr) => tr.cond?.type !== 'manual' && !isFinishedTrigger(tr))
+        const finished = st.triggers.filter((tr) => tr.cond?.type !== 'manual' && isFinishedTrigger(tr))
         const row = (tr: MuseTriggerInfo, done: boolean): React.ReactNode => (
           <div
             key={tr.id}
@@ -174,6 +182,12 @@ export const AutomationListView: React.FC = () => {
         )
         return (
           <>
+            {manual.length > 0 && (
+              <>
+                <div className="auto-grouphead">{t('automation.group.buttons')}</div>
+                {manual.map((tr) => row(tr, false))}
+              </>
+            )}
             <div className="auto-grouphead">{t('automation.group.watches')}</div>
             {st.loaded && active.length === 0 && (
               <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '4px 8px' }}>{t('automation.watches.empty')}</div>

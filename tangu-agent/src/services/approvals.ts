@@ -98,8 +98,26 @@ export function approvalPreview(call: ToolCall): string {
   return `${name} ${JSON.stringify(args).slice(0, 200)}`;
 }
 
-/** 登记一次审批请求：发事件 + await 决定。中止信号触发时按拒绝兑现（loop 随后会抛 AbortError）。 */
+// 同 run 审批串行化(Codex 评审 07-30 #2):TUI 的审批 UI 是单槽,通道端收到首个决定即退订——
+// 并行子代理同时弹审批会互相顶掉,后到的一直挂到超时。同 run 的请求排队逐个发布。
+const approvalQueues = new Map<string, Promise<unknown>>(); // runId -> 队尾
+
+/** 登记一次审批请求:同 run 内排队逐个发布(发事件 + await 决定)。中止信号触发时按拒绝兑现。 */
 export function requestApproval(
+  runId: string,
+  call: ToolCall,
+  preview: string,
+  signal?: AbortSignal,
+): Promise<ApprovalDecision> {
+  const tail = approvalQueues.get(runId) || Promise.resolve();
+  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal));
+  const entry = mine.then(() => undefined, () => undefined);
+  approvalQueues.set(runId, entry);
+  void entry.then(() => { if (approvalQueues.get(runId) === entry) approvalQueues.delete(runId); });
+  return mine;
+}
+
+function requestApprovalNow(
   runId: string,
   call: ToolCall,
   preview: string,

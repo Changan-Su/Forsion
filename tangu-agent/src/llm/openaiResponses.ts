@@ -10,7 +10,7 @@
  *
  * ⚠️ 私有契约,随官方变动易碎。account_id 缺失会 401(登录时从 id_token JWT 解出,见 providerOAuth)。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
 import { ACCOUNT_MARK } from './openaiCompat.js';
@@ -19,6 +19,15 @@ import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 // —— 逆向所得常量(易碎,集中于此)——
 const BETA_HEADER = 'responses=experimental';
 const ORIGINATOR = 'codex_cli_rs';
+
+/** 会话级稳定 session UUID:cacheKey 本身是 UUID 就直用;否则 md5 → UUID 形状;没有则回退随机。 */
+export function stableSessionUuid(cacheKey?: unknown): string {
+  const k = typeof cacheKey === 'string' ? cacheKey.trim() : '';
+  if (!k) return randomUUID();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) return k.toLowerCase();
+  const h = createHash('md5').update(k).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 
 function contentToText(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -45,6 +54,14 @@ export function openaiToResponsesBody(payload: any): any {
       continue;
     }
     if (m.role === 'assistant') {
+      // reasoning 延续性:本 run 内产生的 assistant 轮挂着原始 output items(reasoning/message/
+      // function_call,含 encrypted_content)→ 原样回灌,不再由文本重建。OpenAI 契约:函数调用续轮
+      // 必须带回 reasoning items,否则模型每轮从零重推理(官方口径 SWE-bench ~3% 差距,输出token也涨)。
+      // 跨 run 水合的历史没有 items → 走下面的文本重建,优雅降级。
+      if (Array.isArray(m.providerItems) && m.providerItems.length) {
+        input.push(...m.providerItems);
+        continue;
+      }
       const text = typeof m.content === 'string' ? m.content : contentToText(m.content);
       if (text) input.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
       for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
@@ -64,16 +81,29 @@ export function openaiToResponsesBody(payload: any): any {
     input,
     stream: true,
     store: false,
+    // store:false 下要拿回可回灌的思考态,必须显式要 encrypted_content。**无条件发**(codex-rs 同款):
+    // 缺省 effort 时服务端仍可能按模型默认思考,按档位门控会让延续性静默失效(Codex 评审二轮 #1);
+    // 非思考响应只是没有该 item,include 本身零成本。本路径只通官方 OpenAI / Codex 订阅端点。
+    include: ['reasoning.encrypted_content'],
   };
   // 思考档由 tuneOpenAiDirectPayload 按能力表写进 payload.reasoning_effort(官方直连与 Codex 订阅都走这里)。
   // summary:'auto' 让思考过程以 reasoning delta 流回(否则 UI 只见沉默);effort 'none' 时不发 summary
-  // ——「不思考」与「要思考摘要」互斥,同发会被拒。
+  // ——「不思考」与「要思考摘要」互斥,同发会被拒。headless 场景(bench/自动化)可经
+  // payload.reasoning_summary='none' 关摘要省输出(codex 模型目录默认即 none;UI 会看不到思考过程)。
   if (payload.reasoning_effort) {
     body.reasoning =
-      payload.reasoning_effort === 'none' ? { effort: 'none' } : { effort: payload.reasoning_effort, summary: 'auto' };
+      payload.reasoning_effort === 'none'
+        ? { effort: 'none' }
+        : { effort: payload.reasoning_effort, ...(payload.reasoning_summary === 'none' ? {} : { summary: 'auto' }) };
   }
+  // GPT-5 系 verbosity(coding 预设下发 low,对齐 codex 模型默认;省可见正文的输出量)。
+  if (payload.text_verbosity) body.text = { verbosity: payload.text_verbosity };
+  // 官方 Responses(BYOK)支持 max_output_tokens;**订阅私有端点直接 400 拒**("Unsupported parameter")
+  // ——未知端点绝不发未知字段。实证:self_brainstorm 真机首跑三席全灭、compaction 传 maxTokens 同病(07-31)。
   const cap = payload.max_completion_tokens ?? payload.max_tokens;
-  if (cap) body.max_output_tokens = cap;
+  if (cap && !payload[ACCOUNT_MARK]) body.max_output_tokens = cap;
+  // 官方 Responses(BYOK,无 accountId)支持 body 级 prompt_cache_key;订阅私有端点不发未知字段。
+  if (payload.prompt_cache_key && !payload[ACCOUNT_MARK]) body.prompt_cache_key = payload.prompt_cache_key;
   const instructions = sysTexts.join('\n\n');
   if (instructions) body.instructions = instructions;
   if (Array.isArray(payload.tools) && payload.tools.length) {
@@ -111,7 +141,9 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   if (accountId) {
     headers['OpenAI-Beta'] = BETA_HEADER;
     headers.originator = ORIGINATOR;
-    headers.session_id = randomUUID();
+    // session_id 按会话粘住(codex-rs 用整场会话同一 conversation UUID):每请求随机会打散
+    // 服务端的缓存/路由粘性。cacheKey(=sessionId)非 UUID 形状时降级为哈希出的稳定 UUID。
+    headers.session_id = stableSessionUuid((payload as any)?.prompt_cache_key);
     headers['chatgpt-account-id'] = String(accountId);
   }
 
@@ -136,7 +168,10 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   let reasoning = '';
   let finishReason: string | undefined;
   let incomplete = false; // response.incomplete(max_output_tokens 等):输出被截断,工具参数不可信
-  const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0 };
+  const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
+  // 完整 output items(reasoning/message/function_call,按 output_item.done 到达序):回给 loop 挂到
+  // assistant 消息上,续轮原样回灌(reasoning 延续性)。截断响应(incomplete)不回——半截参数不可信。
+  const outputItems: any[] = [];
   // function_call:按 item_id 累积,order 保留输出顺序
   const fnCalls = new Map<string, { id: string; name: string; arguments: string }>();
   const order: string[] = [];
@@ -188,6 +223,9 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           reasoning += ev.delta;
           onReasoning?.(ev.delta);
         }
+      } else if (type === 'response.output_item.done' && ev.item && typeof ev.item === 'object') {
+        // 记 output_index 供收尾排序:正常 SSE 有序,但代理重排/实现差异下按 index 恢复原始输出序(防御)。
+        outputItems.push({ __idx: typeof ev.output_index === 'number' ? ev.output_index : outputItems.length, item: ev.item });
       } else if (type === 'response.completed' || type === 'response.incomplete') {
         // incomplete=响应被截断(常见 max_output_tokens;content_filter 等其他原因的半截参数同样不可信)
         // → 统一归一化为 finishReason:'length',让 agentLoop 的截断硬化把工具调用全部置错不执行。
@@ -198,6 +236,8 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           usage.completion_tokens = u.output_tokens || usage.completion_tokens;
           const cached = u.input_tokens_details?.cached_tokens;
           if (typeof cached === 'number' && cached > 0) usage.cached_tokens = cached;
+          const rt = u.output_tokens_details?.reasoning_tokens;
+          if (typeof rt === 'number' && rt > 0) usage.reasoning_tokens = rt;
         }
       } else if (type === 'response.failed' || type === 'error') {
         throw new LlmError(502, ev.response?.error?.message || ev.error?.message || 'Codex stream error');
@@ -213,5 +253,6 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   finishReason = incomplete ? 'length' : toolCalls.length ? 'tool_calls' : 'stop';
   if (usage.completion_tokens === 0 && content) usage.completion_tokens = Math.ceil(content.length / 4);
 
-  return { content, reasoning, toolCalls, usage, finishReason };
+  const orderedItems = outputItems.sort((a, b) => a.__idx - b.__idx).map((o) => o.item);
+  return { content, reasoning, toolCalls, usage, finishReason, ...(incomplete || !orderedItems.length ? {} : { outputItems: orderedItems }) };
 }

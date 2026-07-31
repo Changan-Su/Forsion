@@ -9,7 +9,18 @@ import { Selection, type Transaction } from '@milkdown/kit/prose/state'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
 
-export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote'
+export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold'
+
+/**
+ * 折叠块的落盘形态 = Obsidian 折叠 callout(`> [!fold]- 标题` + 内容行同样带 `> ` 前缀)。
+ * 选它而不是 `<details>` / 私有块属性:Obsidian 里原生就能折叠、GitHub 上退化成引用块也能读,
+ * 且**老笔记里的裸 `>` 语义不变**(仍是普通引用)—— 变的只是「键盘上敲 `>` 得到什么」。
+ * 渲染/折叠开关复用已有的 callout.ts 装饰层(状态就写在 md 里的 +/- 字符,跨端一致)。
+ */
+// 令牌**不带尾随空格**:contenteditable 会把行尾空格吃掉(实测),留着只会得到一个「有时有有时没有」
+// 的落盘形态。标题紧跟在 `-` 后面 Obsidian 照样认,渲染层靠 CSS 给出间距。
+export const FOLD_TOKEN = '[!fold]-'
+const CALLOUT_HEAD_RE = /^\[!\w+\]/
 
 export interface Trigger {
   kind: TriggerKind
@@ -31,7 +42,9 @@ export function matchTrigger(before: string): Trigger | null {
   if (/^[-*+]$/.test(b)) return { kind: 'bullet' }
   if ((m = /^(\d{1,9})\.$/.exec(b))) return { kind: 'ordered', order: Number(m[1]) }
   if ((m = /^\[( |x)?\]$/i.exec(b))) return { kind: 'task', checked: (m[1] ?? '').toLowerCase() === 'x' }
-  if (b === '>') return { kind: 'quote' }
+  // `|` = 引用,`>` = 折叠(Notion 手感;用户 2026-07-29 定的键位)。落盘两者都还是 `>` 开头的合法 md。
+  if (b === '|') return { kind: 'quote' }
+  if (b === '>') return { kind: 'fold' }
   return null
 }
 
@@ -240,7 +253,7 @@ export function applyTrigger(
     return true
   }
 
-  if (trig.kind === 'quote') {
+  if (trig.kind === 'quote' || trig.kind === 'fold') {
     if (!blockquote) return false
     if (findDepth($blk, 'blockquote') === null) {
       // 列表项里转引用:先出列表(Notion 语义,引用不留在待办的框里),再包。只提 list_item,
@@ -258,8 +271,17 @@ export function applyTrigger(
       const range = $blk.blockRange()
       const wrap = range && findWrapping(range, blockquote)
       if (!wrap) return false
+      const n = tr.steps.length
       tr.wrap(range, wrap)
+      pos = tr.mapping.slice(n).map(pos) // wrap 插了容器开标签,位置整体后移
+      $blk = tr.doc.resolve(pos)
     } // 已在引用内:幂等,只消费触发符。
+    // 折叠:在首行行首补 `[!fold]- ` 令牌(已经是 callout 就不重复补,重打幂等)。
+    if (trig.kind === 'fold' && !CALLOUT_HEAD_RE.test($blk.parent.textContent)) {
+      const at = $blk.start()
+      tr.insertText(FOLD_TOKEN, at)
+      tr.setSelection(Selection.near(tr.doc.resolve(at + FOLD_TOKEN.length)))
+    }
     view.dispatch(tr.scrollIntoView())
     return true
   }

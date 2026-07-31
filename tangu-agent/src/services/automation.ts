@@ -23,7 +23,11 @@ import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { getAgent, listAgents, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { resolveBackgroundModelId } from './specialAgentsConfig.js';
-import { condSummary, disableTrigger, type MuseTrigger, type ActionSpec } from './museTriggers.js';
+import { condSummary, disableTrigger, loadTriggers, type MuseTrigger, type ActionSpec, type TriggerContext } from './museTriggers.js';
+import { mutateDb, readDb, resolveColumn, coerceCell, dbRowId, cellKey } from './amadeusDb.js';
+import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { setCursors, type DbCursor } from './dbCursors.js';
+import { expandTemplate, expandCells } from './automationTemplate.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
 import { executeTool } from '../tools/registry.js';
 import { declaredAutomationSafe } from '../tools/toolRegistry.js';
@@ -108,7 +112,7 @@ async function anyUserRunActive(): Promise<boolean> {
 export function automationMessage(t: MuseTrigger, prompt?: string): string {
   return (
     `[Automation] Watch rule "${t.desc}" fired (${condSummary(t.cond)}). ` +
-    'You are running unattended — do not ask the user questions; finish the task and summarize what you did.\n\n' +
+    'You are running unattended — do not ask the user questions; finish the task, verify the outcome before reporting it done, and summarize what you did.\n\n' +
     `Task: ${prompt || t.prompt || t.desc}`
   );
 }
@@ -168,6 +172,21 @@ export function isAutomationTool(name: string): boolean {
 
 export interface ExecStepRecord { type: string; tool?: string; ok: boolean; summary: string }
 
+/**
+ * 动作链来源。账本里据此区分谁点的:
+ *   auto   —— 巡检命中(定时/事件/文件);
+ *   manual —— 面板试跑(允许对已停用规则跑,用来调试);
+ *   button —— Amadeus 按钮块点击(明确的用户操作;要求规则存在且启用)。
+ */
+export type ActionOrigin = 'auto' | 'manual' | 'button';
+
+/**
+ * 单飞:同一规则的动作链同一时刻只跑一条。
+ * 没有它,双击按钮 / 两个窗口同时点 / HTTP 超时后重试都会重复执行 notify 等**不可回滚的副作用**;
+ * 巡检侧的 `isRunning` 只保护 agent_run 那条会话路径,notify/tool_call 链完全没有保护。
+ */
+const inFlight = new Set<string>();
+
 export interface ExecutionRow {
   id: string;
   trigger_id: string;
@@ -202,20 +221,40 @@ export async function listExecutions(triggerId?: string, limit = 50): Promise<Ex
 /**
  * 顺序执行规则的动作链,失败即停。**开跑即视为已触发**(调用方 mark):notify 等副作用不可重放,
  * 步骤失败后整链重试会重复打扰用户;失败细节进账本,tool_call 目标不可用则停用规则+通知。
- * origin='manual'(试跑)走同一条路,只是账本标记不同、调用方不 mark。
+ * origin='manual'(试跑)/'button'(按钮点击)走同一条路,只是账本标记不同、调用方不 mark。
+ *
+ * ⚠️ `agent_run` 步骤只等到「排队成功」,不等 agent 跑完 —— 后续步骤**不能**依赖它的结果,
+ * 调用方展示时也别说成「已完成」。
  */
-export async function runActions(t: MuseTrigger, origin: 'auto' | 'manual'): Promise<{ execId: string; status: 'done' | 'failed'; steps: ExecStepRecord[] }> {
+export async function runActions(t: MuseTrigger, origin: ActionOrigin, ctx?: TriggerContext): Promise<{ execId: string; status: 'done' | 'failed' | 'busy'; steps: ExecStepRecord[] }> {
+  if (inFlight.has(t.id)) {
+    log(`规则 ${t.id} 上一次动作链仍在执行,本次忽略(单飞)`);
+    return { execId: '', status: 'busy', steps: [] };
+  }
+  inFlight.add(t.id);
+  try {
+    return await runActionsInner(t, origin, ctx);
+  } finally {
+    inFlight.delete(t.id);
+  }
+}
+
+async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: TriggerContext): Promise<{ execId: string; status: 'done' | 'failed'; steps: ExecStepRecord[] }> {
   const userId = automationUserId();
   const actions: ActionSpec[] = t.actions || [];
   const firstAgent = actions.find((a): a is Extract<ActionSpec, { type: 'agent_run' }> => a.type === 'agent_run');
   const sessionId = await ensureAutomationSession(t.id, firstAgent?.agentSlug || '', String(t.desc), '');
   const steps: ExecStepRecord[] = [];
+  const touchedDbs = new Set<string>();
   let error: string | undefined;
   for (const a of actions) {
     try {
       if (a.type === 'notify') {
-        const r = await sendInboxMessage(userId, { title: a.title, body: a.body, senderId: `automation:${t.id}` });
-        steps.push({ type: 'notify', ok: r.ok, summary: r.ok ? `notified: ${a.title}` : String(r.error || 'failed').slice(0, 300) });
+        // 模板白名单之一:通知文本。展开在 automationTemplate 里做了消毒(块标记打断、单值截断)。
+        const title = expandTemplate(a.title, tctx);
+        const body = a.body ? expandTemplate(a.body, tctx) : undefined;
+        const r = await sendInboxMessage(userId, { title, body, senderId: `automation:${t.id}` });
+        steps.push({ type: 'notify', ok: r.ok, summary: r.ok ? `notified: ${title}` : String(r.error || 'failed').slice(0, 300) });
         if (!r.ok) { error = r.error || 'notify failed'; break; }
       } else if (a.type === 'agent_run') {
         const ok = await launchUnattendedRun({ agentSlug: a.agentSlug, triggerKey: t.id, title: String(t.desc), message: automationMessage(t, a.prompt) });
@@ -242,6 +281,10 @@ export async function runActions(t: MuseTrigger, origin: 'auto' | 'manual'): Pro
         const failed = res.isError || String(res.result).startsWith('Error');
         steps.push({ type: 'tool_call', tool: a.tool, ok: !failed, summary: String(res.result).slice(0, 300) });
         if (failed) { error = String(res.result).slice(0, 300); break; }
+      } else if (a.type === 'db_row_add' || a.type === 'db_row_edit') {
+        const summary = await runDbAction(a, tctx, origin);
+        steps.push({ type: a.type, ok: true, summary });
+        touchedDbs.add(a.path);
       }
     } catch (e: any) {
       steps.push({ type: a.type, ok: false, summary: String(e?.message || e).slice(0, 300) });
@@ -249,6 +292,13 @@ export async function runActions(t: MuseTrigger, origin: 'auto' | 'manual'): Pro
       break;
     }
   }
+  // 自激防线:巡检触发的动作改了表 → 把**所有**盯这张表的 db_changed 游标推到写后状态,
+  // 这次写入对它们就是隐形的。只推自己那条不够 —— 规则 A 写表、规则 B 盯同一张表照样成环。
+  // origin='button'/'manual' 是明确的用户操作,按 Notion 的规矩**允许**继续触发,故不推。
+  if (origin === 'auto' && touchedDbs.size) {
+    await advanceDbCursors([...touchedDbs]).catch((e: any) => log(`游标推进失败:${e?.message || e}`));
+  }
+
   const status: 'done' | 'failed' = error ? 'failed' : 'done';
   const execId = uuidv4();
   await query(
@@ -261,11 +311,86 @@ export async function runActions(t: MuseTrigger, origin: 'auto' | 'manual'): Pro
   await query(
     `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error)
      VALUES (?, ?, 'model', ?, ?, NULL, ?)`,
-    [uuidv4(), sessionId, `[Automation${origin === 'manual' ? ' · test-run' : ''}] ${t.desc} (${condSummary(t.cond)})\n${lines.join('\n') || '(no steps)'}`, Date.now(), status === 'failed'],
+    [uuidv4(), sessionId, `[Automation${origin === 'manual' ? ' · test-run' : origin === 'button' ? ' · button' : ''}] ${t.desc} (${condSummary(t.cond)})\n${lines.join('\n') || '(no steps)'}`, Date.now(), status === 'failed'],
   ).catch((e: any) => log(`transcript 投影写入失败:${e?.message || e}`));
   await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionId]).catch(() => {});
   log(`规则 ${t.id} 动作链执行完毕(${origin}):${status}${error ? ` — ${error}` : ''}`);
   return { execId, status, steps };
+}
+
+
+// ── DB 动作(对标 Notion 的 Add page to… / Edit property…)────────────────────────
+
+/**
+ * 执行一条 DB 动作。写入走 amadeusDb.mutateDb:**每路径串行 + 写前重读 + 原子落位**
+ * (渲染端那一半的护栏是 desktop 的 db:write-cas 比对交换 + 冲突重放,两边合起来才闭合)。
+ * 列找不到/类型不符 → 抛错 → 动作链失败即停并进账本。**绝不"报成功但什么都没改"**。
+ */
+async function runDbAction(
+  a: Extract<ActionSpec, { type: 'db_row_add' } | { type: 'db_row_edit' }>,
+  tctx: TriggerContext | undefined,
+  origin: ActionOrigin,
+): Promise<string> {
+  const cells = expandCells(a.cells, tctx); // 模板白名单之二:单元格值(路径/rowId 一律不插值)
+  let summary = '';
+  await mutateDb(a.path, (db) => {
+    if (a.type === 'db_row_add') {
+      const row = { id: dbRowId(), cells: {} as Record<string, ReturnType<typeof coerceCell>> };
+      for (const [key, raw] of Object.entries(cells)) {
+        const col = resolveColumn(db, key); // 找不到即抛
+        row.cells[col.id] = coerceCell(col, raw);
+      }
+      db.rows.push(row);
+      summary = `added row to ${a.path} (${Object.keys(cells).length} field(s))`;
+      return true;
+    }
+    // edit:目标行 = 显式 rowId,否则触发上下文命中的那一行
+    const rowId = a.rowId || tctx?.row?.id;
+    if (!rowId) throw new Error('db_row_edit needs rowId (or a trigger that provides the changed row)');
+    const row = db.rows.find((r) => r.id === rowId);
+    if (!row) throw new Error(`row ${rowId} not found in ${a.path}`);
+    for (const [key, raw] of Object.entries(cells)) {
+      const col = resolveColumn(db, key);
+      row.cells[col.id] = coerceCell(col, raw);
+    }
+    summary = `edited row ${rowId} in ${a.path} (${Object.keys(cells).length} field(s))`;
+    return true;
+  });
+  return `${summary}${origin === 'auto' ? '' : ` [${origin}]`}`;
+}
+
+/**
+ * 把盯着这些表的**全部** db_changed 规则的游标推到写后状态 —— 自动化自己造成的改动对自动化隐形。
+ * 只推「本规则」不够:规则 A 写表 → 规则 B 盯同一张表 → B 的动作又写回去,照样成环。
+ *
+ * ⚠️ 边界说清楚:这只覆盖**官方 DB 动作**。full-auto 的 agent_run 若用 run_bash 直接改被盯的
+ * .db,这里看不见,那条环只能靠 cooldown 与起跑帽减灾 —— 那是减灾,不是正确语义。
+ */
+async function advanceDbCursors(paths: string[]): Promise<void> {
+  const vault = amadeusVaultPath();
+  const list = await loadTriggers();
+  const targets = list.filter(
+    (t) => t.cond?.type === 'db_changed' && paths.includes(t.cond.path) && (!t.cond.vault || t.cond.vault === vault),
+  );
+  if (!targets.length) return;
+  const patch: Record<string, DbCursor> = {};
+  const cache = new Map<string, Awaited<ReturnType<typeof readDb>>['db'] | null>();
+  for (const t of targets) {
+    const c = t.cond as Extract<typeof t.cond, { type: 'db_changed' }>;
+    let db = cache.get(c.path);
+    if (db === undefined) {
+      db = await readDb(c.path).then((r) => r.db).catch(() => null);
+      cache.set(c.path, db);
+    }
+    if (!db) continue;
+    if (c.event === 'row_added') patch[t.id] = { v: 1, rowIds: db.rows.map((r) => r.id) };
+    else if (c.columnId) {
+      const cells: Record<string, string> = {};
+      for (const r of db.rows) cells[r.id] = cellKey(r.cells?.[c.columnId] as any);
+      patch[t.id] = { v: 1, cells };
+    }
+  }
+  await setCursors(patch);
 }
 
 /**
@@ -273,7 +398,7 @@ export async function runActions(t: MuseTrigger, origin: 'auto' | 'manual'): Pro
  *   动作链规则 → runActions 开跑即算(部分失败也 mark,防副作用重放);
  *   旧式 agentSlug 规则 → 实际起跑才算(让位/在跑/无模型不烧 cooldown,下轮重试)。
  */
-export async function launchAutomationTriggers(fired: MuseTrigger[]): Promise<string[]> {
+export async function launchAutomationTriggers(fired: MuseTrigger[], contexts: Record<string, TriggerContext> = {}): Promise<string[]> {
   const launched: string[] = [];
   if (!fired.length) return launched;
   try {
@@ -282,8 +407,9 @@ export async function launchAutomationTriggers(fired: MuseTrigger[]): Promise<st
   for (const t of fired) {
     try {
       if (t.actions?.length) {
-        await runActions(t, 'auto');
-        launched.push(t.id);
+        const r = await runActions(t, 'auto', contexts[t.id]);
+        // busy=上一次还在跑(单飞挡下):不烧 cooldown,下轮重试——否则这次命中被静默吞掉。
+        if (r.status !== 'busy') launched.push(t.id);
       } else {
         const ok = await launchUnattendedRun({
           agentSlug: String(t.agentSlug || ''),
@@ -304,7 +430,7 @@ function scheduleMessage(e: ScheduleEntry): string {
   const when = e.repeat ? `${e.date}, repeating every ${e.repeat}` : e.date;
   return (
     `[Automation] Scheduled task "${e.name}" is due (${when}). ` +
-    'You are running unattended — do not ask the user questions; finish the task and summarize what you did.\n\n' +
+    'You are running unattended — do not ask the user questions; finish the task, verify the outcome before reporting it done, and summarize what you did.\n\n' +
     `Task: ${e.prompt || e.name}` +
     (e.description ? `\n\nContext: ${e.description}` : '')
   );

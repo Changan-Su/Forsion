@@ -1,5 +1,5 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2, Database, PenTool, Trophy, Activity, Workflow, Network, Rocket } from 'lucide-react'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2, Database, PenTool, Trophy, Activity, Workflow, Network, Rocket, LayoutDashboard } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, clearLayout, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE } from '@lcl/engine'
 import { windowKind } from './windowKind'
 import { askString } from '@amadeus/components/askString'
@@ -23,6 +23,7 @@ import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/Spe
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
 import { AmadeusDbView } from './views/AmadeusDbView'
 import { AmadeusDrawingView } from './views/AmadeusDrawingView'
+import { AmadeusDashboardView } from './views/AmadeusDashboardView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { AmadeusPdfView } from './views/AmadeusPdfView'
 import { AmadeusImageView } from './views/AmadeusImageView'
@@ -131,6 +132,9 @@ export function installEngine(): void {
     registerView({ type: 'amadeus-db', displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} /> })
     // 独立白板视图(多实例,params.drawingPath 认领文件;树上点 .excalidraw.md / 笔记里点 [[X.excalidraw]] 打开,见 amadeusNav.openDrawing)。
     registerView({ type: 'amadeus-drawing', displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} /> })
+    // 独立仪表盘视图(多实例,params.dashPath 认领文件;树上点 .dashboard.md 打开,见 amadeusNav.openDashboard)。
+    // 文件本身是一份合法笔记(布局记在外来 frontmatter 键),掉进笔记编辑器也不会坏 —— 见 shared/amadeus/dashboard.ts。
+    registerView({ type: 'amadeus-dashboard', displayName: () => (document.documentElement.lang.startsWith('zh') ? '仪表盘' : 'Dashboard'), icon: LayoutDashboard, factory: (props) => <AmadeusDashboardView {...props} /> })
     // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf)。
     registerView({ type: 'amadeus-pdf', displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} /> })
     // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。
@@ -221,7 +225,7 @@ export function installEngine(): void {
   // ponytail: 只认 mainTabs 引用变化 → 活动文件「就地改名」(params 原地改、mainTabs 引用不变)不会即时补记,
   //   旧路径条目滞留到下次切标签才自愈;无损(点了顶多开个空视图),不值为它给活动面板打身份指纹。
   const RECENT_FILE_PARAM: Record<string, string> = {
-    'amadeus-db': 'dbPath', 'amadeus-pdf': 'pdfPath', 'amadeus-drawing': 'drawingPath', 'amadeus-image': 'imagePath', 'amadeus-plugin-file': 'filePath',
+    'amadeus-db': 'dbPath', 'amadeus-pdf': 'pdfPath', 'amadeus-drawing': 'drawingPath', 'amadeus-dashboard': 'dashPath', 'amadeus-image': 'imagePath', 'amadeus-plugin-file': 'filePath',
     'wsfile': 'path', // 工作区文件预览:只记有 path 的(tkey 瞬态目标无 path → 天然排除,重开不了)
   }
   const RECENT_VIEW_TYPES = new Set(['calendar', 'todo-list', 'inbox-reader', 'agents-detail', 'code-studio', 'automation-detail'])

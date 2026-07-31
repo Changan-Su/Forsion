@@ -12,6 +12,7 @@ import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
+import { AmadeusDashboardView } from './views/AmadeusDashboardView'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
 import { Square } from 'lucide-react'
 import './i18n.generated'
@@ -24,6 +25,11 @@ import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore } from './amadeus/store/pageStore'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
+import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
+import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
+
+// ExcalidrawEmbed 平时干这件事;harness 直挂画布,得自己设(否则字体去 CDN 拉,CSP 拦)。
+;(window as unknown as { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = new URL('excalidraw/', document.baseURI).href
 
 type B = { id: string; content: string }
 let nextId = 1
@@ -37,7 +43,7 @@ function Harness() {
   // ?anchor=<文本>:模拟「从源码模式切回来」带过来的光标锚点,验证落点(见 amadeus/lib/modeCursor)。
   const anchor = new URLSearchParams(location.search).get('anchor') ?? undefined
   const [blocks, setBlocks] = useState<B[]>([{ id: 'b0', content: seed }])
-  const [focus, setFocus] = useState<{ id: string; place: FocusPlace } | null>({ id: 'b0', place: 'end' })
+  const [focus, setFocus] = useState<{ id: string; place: FocusPlace; anchor?: string } | null>({ id: 'b0', place: 'end' })
   ;(window as unknown as { __harness: { blocks: B[] } }).__harness = { blocks }
 
   const patch = (id: string, content: string): void =>
@@ -53,6 +59,19 @@ function Harness() {
     setFocus({ id: nb.id, place: 'end' })
   }
   const remove = (id: string): void => setBlocks((bs) => (bs.length > 1 ? bs.filter((b) => b.id !== id) : bs))
+  // 与 pageStore.mergeWithPrev 同形:内容并进前一块(相邻两行)、删掉自己、焦点落前一块末尾。
+  // 丝滑光标的「合并后光标留在原地」实报只能在这条路径上量到(scripts/caret-merge.check.cjs)。
+  const mergePrev = (id: string): void =>
+    setBlocks((bs) => {
+      const i = bs.findIndex((b) => b.id === id)
+      if (i <= 0) return bs
+      const prev = bs[i - 1]
+      const merged = prev.content && bs[i].content ? `${prev.content}\n${bs[i].content}` : prev.content + bs[i].content
+      // 与 store 同形:落在接缝处(前块原内容之后),不是合并后整块末尾。
+      if (prev.content && bs[i].content) setFocus({ id: prev.id, place: 'start', anchor: prev.content.slice(-40) })
+      else setFocus({ id: prev.id, place: 'end' })
+      return bs.map((b) => (b.id === prev.id ? { ...b, content: merged } : b)).filter((b) => b.id !== id)
+    })
 
   return (
     /* am-app 是 Amadeus 视图根:少了它 `.am-app .slash-menu` 那套作用域样式(含 position:fixed)
@@ -67,12 +86,12 @@ function Harness() {
           onChange={(md) => patch(b.id, md)}
           onInsertAfter={(md) => insertAfter(b.id, md ?? '')}
           onDeleteEmpty={() => remove(b.id)}
-          onMergePrev={() => {}}
+          onMergePrev={() => mergePrev(b.id)}
           onArrowOut={() => {}}
           onMoveDir={() => {}}
           // 带 anchor 时 place 固定 'start' —— 与生产的 requestFocusAt 一致(锚点找不到就停在块首)
-          focusPlace={focus?.id === b.id ? (anchor ? 'start' : focus.place) : null}
-          focusAnchor={focus?.id === b.id ? anchor : undefined}
+          focusPlace={focus?.id === b.id ? (anchor || focus.anchor ? 'start' : focus.place) : null}
+          focusAnchor={focus?.id === b.id ? (focus.anchor ?? anchor) : undefined}
           onFocused={() => setFocus(null)}
           requestSelfFocus={(place) => setFocus({ id: b.id, place })}
           onOpenWiki={() => {}}
@@ -116,6 +135,54 @@ function MindmapHarness() {
   )
 }
 
+// ── ?dashboard 模式:真 AmadeusDashboardView + 真 pageStore + 真 BlockHost,种一张 3 卡片的仪表盘。
+//    纯逻辑(格子几何 / frontmatter 编解码 / 冲突判定)已由 shared/amadeus/dashboard.test.ts 钉死;
+//    这里钉的是**单测看不见的那一层**:CSS Grid 把 [x,y,w,h] 摆到哪里、指针位移换算成几格、
+//    「压到别人就回弹」在真 DOM 上成不成立、锁定态到底锁没锁住编辑。见 scripts/dashboard.check.cjs。
+const DASH_FILE = 'Harness.dashboard.md'
+
+function DashHarness() {
+  // leaf.id 必须是 MAIN_SCOPE('main'):视图子树经 PageScopeCtx 取自己那份 store,给别的 id
+  // 会拿到一个**空的新 store**,harness 种下去的 manifest 根本不在里面。
+  const [params, setParams] = useState<Record<string, unknown>>({ dashPath: DASH_FILE, locked: true })
+  const leaf = { id: 'main', params, setTitle: () => {}, setParams: (p: Record<string, unknown>) => setParams(p) }
+  return (
+    <div className="amadeus-root am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0 }}>
+      <AmadeusDashboardView {...({ leaf, params } as unknown as ViewProps)} />
+    </div>
+  )
+}
+
+// ── ?board 模式:真 <Excalidraw> + 真的纸张/网格层。合成页复刻不出的三件事只有这里量得到:
+//    ① 两层到底有没有挂进 .excalidraw(它首帧渲染的是 LoadingMessage,挂载时机是个真坑);
+//    ② 指针落点与场景坐标对不对得上(光标偏移);③ 纸张钳制在真视口上的行为。
+//    纯逻辑归 shared/amadeus/excalidraw/board.test.ts,CSS 契约归 scripts/board-paper.check.cjs。
+function BoardHarness() {
+  const [settings, setSettings] = useState<BoardSettings>({ ...DEFAULT_BOARD })
+  useEffect(() => {
+    // 合并式:仪器只传改动的字段,别因为漏写新字段把设置打成 undefined
+    ;(window as unknown as { __board: unknown }).__board = {
+      setSettings: (patch: Partial<BoardSettings>) => setSettings((s) => ({ ...s, ...patch })),
+    }
+  }, [])
+  return (
+    <div className="am-app tangu-lovable amx-pane amx-drawview" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+      <div className="amx-draw">
+        <ExcalidrawCanvas
+          initialData={{ elements: [], appState: { viewBackgroundColor: '#ffffff' } }}
+          theme="light"
+          langCode="en"
+          settings={settings}
+          onSettings={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+          onSceneChange={(json: string) => {
+            ;(window as unknown as { __scene: unknown }).__scene = JSON.parse(json)
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ── ?ribbon 模式:真 Ribbon + 真 ribbonRegistry,上下两区各种几个图标,供 Playwright 驱动真 HTML5
 //    拖拽验证落点(scripts/ribbon-dnd.e2e.cjs)。落点数学是纯函数(lcl slotIndexAt,单测已钉),
 //    这里钉的是**DOM 接线**:组级 dragover 算出的下标 → 让位预览 → drop 提交,三者是不是同一个。
@@ -137,6 +204,11 @@ function DockHarness() {
       <WorkspaceHost dark={false} soft={false} buildDefault={() => useWorkspace.getState().openView('mainv', {}, 'main')} />
     </div>
   )
+}
+
+// ?caret:装真的丝滑光标覆盖层(默认不装 —— 别的断言不需要它,装了徒增噪音)。
+if (new URLSearchParams(location.search).has('caret')) {
+  void import('./smoothCaret').then((m) => m.installSmoothCaret())
 }
 
 if (new URLSearchParams(location.search).has('dock')) {
@@ -193,6 +265,36 @@ if (new URLSearchParams(location.search).has('dock')) {
     )
   }
   createRoot(document.getElementById('root')!).render(<PillHarness />)
+} else if (new URLSearchParams(location.search).has('dashboard')) {
+  const iso = new Date().toISOString()
+  usePageStore.setState({
+    activePage: DASH_FILE,
+    vaultRoot: '/harness',
+    status: 'ready',
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-dash',
+      title: 'Dash Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: {
+        type: 'stack',
+        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: '1' }, { ref: '2' }, { ref: '3' }] }] }],
+      },
+      blocks: { 1: { type: 'markdown' }, 2: { type: 'markdown' }, 3: { type: 'markdown' } },
+      // 天气卡片要联网,harness 里不放(网络断言不是这支仪器的活儿)。
+      fmExtra: ['tags: [harness]', 'dashboard:', '  "1": [0, 0, 8, 6]', '  "2": [8, 0, 5, 4]', '  "3": [0, 6, 6, 4]'].join('\n'),
+    },
+    blocks: {
+      1: { id: '1', type: 'markdown', content: '第一张卡片' },
+      2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
+      3: { id: '3', type: 'markdown', content: '第三张卡片' },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(<DashHarness />)
+} else if (new URLSearchParams(location.search).has('board')) {
+  createRoot(document.getElementById('root')!).render(<BoardHarness />)
 } else if (new URLSearchParams(location.search).has('mindmap')) {
   const iso = new Date().toISOString()
   const mm = JSON.stringify({ b2: { p: 'b1' }, b3: { p: 'b1' } }) // b2/b3 是 b1 的子节点
@@ -241,6 +343,37 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   }
   createRoot(document.getElementById('root')!).render(<MindmapHarness />)
+} else if (new URLSearchParams(location.search).has('embed')) {
+  // ── ?embed 模式:真 PageView + 真 BlockHost,种几个嵌入块(图片 / PDF / 未知文件)。
+  //    验的是块级「查看源码」`</>`:悬停浮现 → 点击进 EmbedSourceLine → 失焦复渲染。
+  //    行内那半(公式 / 行内图片)在默认 harness 里验。见 scripts/source-toggle.check.cjs。
+  const iso = new Date().toISOString()
+  usePageStore.setState({
+    activePage: 'Harness.md',
+    vaultRoot: '/harness',
+    status: 'ready',
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-embed',
+      title: 'Embed Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: {
+        type: 'stack',
+        children: [
+          { type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: 'e1' }, { ref: 'e2' }, { ref: 'e3' }] }] },
+        ],
+      },
+      blocks: { e1: { type: 'markdown' }, e2: { type: 'markdown' }, e3: { type: 'markdown' } },
+    },
+    blocks: {
+      e1: { id: 'e1', type: 'markdown', content: '![[pic.png]]' },
+      e2: { id: 'e2', type: 'markdown', content: '![[report.pdf]]' },
+      e3: { id: 'e3', type: 'markdown', content: '普通文字块(不该有 </> 按钮)' },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(<DndHarness />)
 } else if (new URLSearchParams(location.search).has('dnd')) {
   const iso = new Date().toISOString()
   usePageStore.setState({

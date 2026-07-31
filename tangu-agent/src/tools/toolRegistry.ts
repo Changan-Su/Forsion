@@ -44,6 +44,7 @@ const PLAN_MODE_TOOLS = new Set([
   'read_log', 'use_skill', 'todo_write', 'todo_read',
   'list_processes', 'read_process_output',
   'delegate', 'ask_user', 'exit_plan_mode',
+  'self_brainstorm', // 纯推理无副作用(分身无工具),计划阶段的方案压力测试正是其主场
   'load_tools', // 纯解锁无副作用;planMode 下 deferred 白名单工具(calculator 等)须经它可达
 
   'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)

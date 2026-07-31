@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { OverlayAt } from '../../lib/clampMenu'
-import { fuzzyScore } from '../../lib/fuzzy'
+import { pickWikiResults, type Cand } from './wikiRank'
 import { isFileRef } from '../../lib/vaultFiles'
 import { pageKey } from '@amadeus-shared/links'
 import { AttachmentIcon, DatabaseTableViewIcon } from '../../components/icons'
@@ -27,13 +27,6 @@ interface Props {
   onClose: () => void
   /** false = 不提供「新建链接」行(@ 提及场景:无匹配即整体消失,不劫持 Enter)。 */
   allowCreate?: boolean
-}
-
-interface Cand {
-  path: string
-  base: string
-  /** 文件候选(保留扩展名);页面候选为 false。 */
-  file: boolean
 }
 
 function baseName(p: string): string {
@@ -63,16 +56,8 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   ]
   const dupes = new Map<string, number>()
   for (const c of cands) dupes.set(candKey(c), (dupes.get(candKey(c)) ?? 0) + 1)
-  // 名字命中优先(+1000)、仅路径命中垫底;sort 稳定 → 同分保持入参顺序(@ 提及 recents-first 不乱,页面先于文件)。
-  const scored = cands
-    .map((c) => {
-      const sName = fuzzyScore(query, c.base)
-      const s = sName !== null ? sName + 1000 : fuzzyScore(query, c.path)
-      return s === null ? null : { c, s }
-    })
-    .filter((x): x is { c: Cand; s: number } => x !== null)
-  scored.sort((a, b) => b.s - a.s)
-  const results = scored.slice(0, 8).map((x) => x.c)
+  // 排序 + 文件保底名额见 ./wikiRank(附件/数据库曾被页面整页挤掉,单测钉在 wikiRank.test.ts)。
+  const results = pickWikiResults(cands, query)
   const q = query.trim()
   // 查询串本身像文件名([[xxx.db]])时不给「新建链接」:createWikiPage 会造出 xxx.db.md 怪胎。
   const showCreate =

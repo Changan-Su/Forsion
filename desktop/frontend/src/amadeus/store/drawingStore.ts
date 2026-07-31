@@ -11,6 +11,7 @@
 import { create } from 'zustand'
 import type { ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types'
 import { parseDrawing, withSceneJson, isDrawingPath } from '@amadeus-shared/excalidraw/format'
+import { readBoard, writeBoard, DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
 import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
 import { amadeus } from '../api'
 
@@ -24,6 +25,8 @@ export interface DrawEntry {
    *  已挂载的画布自持编辑态不看它,但**下一次挂载**全靠它 —— 不跟进就是「白板关掉重开回到旧内容」
    *  (load 对 ok 态幂等跳过),旧种子上再画一笔还会把磁盘上的新内容盖回去。 */
   scene: ExcalidrawInitialDataState | null
+  /** 纸张 + 网格,来自 frontmatter(见 shared/amadeus/excalidraw/board)。每次 source 推进都跟着重读。 */
+  settings: BoardSettings
 }
 
 interface DrawStoreState {
@@ -39,6 +42,10 @@ interface DrawStoreState {
   /** 立即冲刷单个画板(画布卸载时调):清防抖计时器,pending 场景即刻落盘。 */
   flush(ref: string): Promise<void>
   flushAll(): Promise<void>
+  /** 改纸张/网格:写 frontmatter,**不碰 Drawing 段**。
+   *  收的是**增量**而不是整份快照:面板连点两下(先改纸张、紧接着开网格)时,第二下手里的 settings
+   *  还是没落盘的旧值,传整份就会把第一下带回去。增量落在「刚读到的盘面」上合并,两下都留得住。 */
+  setSettings(ref: string, patch: Partial<BoardSettings>): Promise<void>
 }
 
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -111,7 +118,7 @@ async function applyExternal(rawPath: string): Promise<void> {
       useDrawStore.setState((st) => {
         const cur = st.entries[ref]
         return cur
-          ? { entries: { ...st.entries, [ref]: { ...cur, source: r.source, scene: merged as ExcalidrawInitialDataState } } }
+          ? { entries: { ...st.entries, [ref]: { ...cur, source: r.source, scene: merged as ExcalidrawInitialDataState, settings: readBoard(r.source) } } }
           : st
       })
       fanoutRemote(ref, remote)
@@ -121,7 +128,27 @@ async function applyExternal(rawPath: string): Promise<void> {
   }
 }
 
-async function persist(ref: string): Promise<void> {
+/** 同一份文件的写必须排队。防抖 persist 与 setSettings 是两条独立的「读-改-写」:计时器已清、
+ *  pendingScene 已被取走之后,flush() 察觉不到「有一次 persist 正在飞」,两边各自基于旧原文整文件写回
+ *  → 后落地的那次把对方抹掉(丢笔画或丢设置)。
+ *  按**解析出的 path** 排队而非 ref:同一份画板可能被独立视图(全路径)与笔记内嵌(`![[X]]` 原文)
+ *  两个 ref 同时打开。ponytail: 进程内串行足够(写的是本机文件);跨进程/跨端的竞态仍靠 persist 的读-合并-写。 */
+const writeChain = new Map<string, Promise<unknown>>()
+function serialize<T>(ref: string, fn: () => Promise<T>): Promise<T> {
+  const key = useDrawStore.getState().entries[ref]?.path ?? ref
+  const prev = writeChain.get(key) ?? Promise.resolve()
+  const run = prev.then(fn, fn) // 前一次失败也接着跑,别把队列卡死
+  const tail = run.catch(() => {})
+  writeChain.set(key, tail)
+  void tail.then(() => {
+    if (writeChain.get(key) === tail) writeChain.delete(key)
+  })
+  return run
+}
+
+const persist = (ref: string): Promise<void> => serialize(ref, () => persistNow(ref))
+
+async function persistNow(ref: string): Promise<void> {
   const queued = pendingScene.get(ref)
   pendingScene.delete(ref)
   const e = useDrawStore.getState().entries[ref]
@@ -157,7 +184,7 @@ async function persist(ref: string): Promise<void> {
     useDrawStore.setState((s) => {
       const cur = s.entries[ref]
       return cur
-        ? { entries: { ...s.entries, [ref]: { ...cur, source: next, scene: (scene as ExcalidrawInitialDataState | null) ?? cur.scene } } }
+        ? { entries: { ...s.entries, [ref]: { ...cur, source: next, scene: (scene as ExcalidrawInitialDataState | null) ?? cur.scene, settings: readBoard(next) } } }
         : s
     })
   } catch {
@@ -175,8 +202,8 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
   },
 
   async reload(pagePath, ref) {
-    set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, source: null, scene: null } } }))
-    let entry: DrawEntry = { status: 'missing', path: null, source: null, scene: null }
+    set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, source: null, scene: null, settings: DEFAULT_BOARD } } }))
+    let entry: DrawEntry = { status: 'missing', path: null, source: null, scene: null, settings: DEFAULT_BOARD }
     lastSceneJson.delete(ref)
     try {
       const r = await amadeus.readDrawing(pagePath, ref)
@@ -184,9 +211,10 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
         const parsed = parseDrawing(r.source)
         // 段能定位 ≠ 里面是合法 JSON(手改坏的、被别的工具截断的)→ 一并算 corrupt,只读保护。
         const scene = parsed ? (tryParseScene(parsed.sceneJson) as ExcalidrawInitialDataState | null) : null
+        const settings = readBoard(r.source)
         entry = scene
-          ? { status: 'ok', path: r.path, source: r.source, scene }
-          : { status: 'corrupt', path: r.path, source: r.source, scene: null }
+          ? { status: 'ok', path: r.path, source: r.source, scene, settings }
+          : { status: 'corrupt', path: r.path, source: r.source, scene: null, settings }
         if (scene && parsed) lastSceneJson.set(ref, parsed.sceneJson)
       }
     } catch {
@@ -233,6 +261,33 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
     for (const t of saveTimers.values()) clearTimeout(t)
     saveTimers.clear()
     await Promise.all(refs.map((r) => persist(r)))
+  },
+
+  async setSettings(ref, patch) {
+    await get().flush(ref) // 待写的场景先落盘:下面这次写基于 flush 后的原文,不会把笔画倒回去
+    return serialize(ref, async () => {
+      const e = get().entries[ref]
+      if (!e || e.status !== 'ok' || !e.path || !e.source) return
+      let base = e.source
+      try {
+        const fresh = await amadeus.readDrawing(e.path, e.path)
+        if (fresh.status === 'ok') base = fresh.source // 与 persist 同款预读:别盲盖别的端的改动
+      } catch {
+        /* 预读失败:按内存原文写 */
+      }
+      // 增量合到**刚读到的盘面**上,而不是调用方手里那份可能已过期的快照
+      const src = writeBoard(base, { ...readBoard(base), ...patch })
+      if (src === base) return // 值没变 / 源没有 frontmatter(writeBoard 原样返回)→ 无可写
+      try {
+        await amadeus.writeDrawing(e.path, src)
+        set((s) => {
+          const cur = s.entries[ref]
+          return cur ? { entries: { ...s.entries, [ref]: { ...cur, source: src, settings: readBoard(src) } } } : s
+        })
+      } catch {
+        /* 磁盘错误:内存态保留,面板上再点一次即重试 */
+      }
+    })
   },
 }))
 

@@ -141,6 +141,39 @@ describe('registry 级:defer 过滤与解锁', () => {
   });
 });
 
+describe('registry 级:preset=coding 产品面工具转 deferred(WB-Bench 收敛)', () => {
+  const base: ToolContext = { userId: 'u1', sessionId: 's1', appId: 'tangu', profile, execMode: 'host', cwd: '/tmp', preset: 'coding' };
+
+  it('coding:浏览器/笔记/web/记忆面离场,核心编码面常驻,load_tools 可解锁', () => {
+    configureTangu({ host: stub, brain: stub, billing: stub, profile });
+    const got = names({ ...base, unlockTools: () => {} });
+    for (const n of ['browser_search', 'browser_navigate', 'browser_snapshot', 'web_search', 'web_fetch',
+      'amadeus_list_notes', 'amadeus_create_event', 'inbox_send', 'display_file', 'read_session',
+      'remember', 'log_event', 'read_log', 'read_document']) {
+      expect(got, `${n} 应被 coding 预设 defer`).not.toContain(n);
+    }
+    for (const n of ['run_bash', 'read_file', 'write_file', 'edit_file', 'multi_edit', 'apply_patch',
+      'list_dir', 'search_files', 'glob_files', 'todo_write', 'run_background', 'delegate', 'ask_user']) {
+      expect(got, `${n} 是编码核心面`).toContain(n);
+    }
+    expect(got).toContain('load_tools');
+    // 目录仍列全量可解锁项(可发现性);解锁后回到 defs
+    const catalog = listDeferredTools(base).map((d) => d.name);
+    expect(catalog).toContain('web_fetch');
+    expect(catalog).toContain('browser_search');
+    const unlocked = names({ ...base, unlockTools: () => {}, unlockedTools: new Set(['web_fetch']) });
+    expect(unlocked).toContain('web_fetch');
+  });
+
+  it('无 preset:行为零变化(web/browser/amadeus 常驻)', () => {
+    configureTangu({ host: stub, brain: stub, billing: stub, profile });
+    const got = names({ userId: 'u1', sessionId: 's1', appId: 'tangu', profile, execMode: 'host', cwd: '/tmp', unlockTools: () => {} });
+    for (const n of ['browser_search', 'web_fetch', 'amadeus_list_notes', 'log_event', 'remember']) {
+      expect(got, `${n} 非 coding 预设应常驻`).toContain(n);
+    }
+  });
+});
+
 describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () => {
   it('首轮无 manage_automation 有 load_tools;解锁后第二轮 tools 含 manage_automation', async () => {
     const { home, llmPayloads } = await setupLoop((call) => {

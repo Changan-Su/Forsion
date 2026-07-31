@@ -26,6 +26,7 @@ import type {
 } from '../types'
 import { SHOW_SYSTEM_PROMPT_KEY, SMOOTH_CARET_KEY } from '../types'
 import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
+import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
 import { RemoteSyncSection } from './RemoteSyncSection'
@@ -54,12 +55,26 @@ import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
+import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
+import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Obsidian 式一级入口)。
 export type Tab = StaticTab | `plugin:${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+
+// 字体预设(datalist:选也行、手输任意 font-family 也行)。`system-ui` / `ui-monospace` 是 CSS 原生的
+// 系统字体关键字 —— 「系统默认」不用自己拼一长串栈。
+const SANS_FONTS = [
+  'system-ui', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Source Han Sans SC',
+  'Noto Sans SC', 'HarmonyOS Sans SC', 'LXGW WenKai', 'Songti SC',
+  'Inter', 'Hanken Grotesk', 'Helvetica Neue', 'Georgia',
+]
+const MONO_FONTS = [
+  'ui-monospace', 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
+  'Sarasa Mono SC', 'Menlo', 'Consolas',
+]
 
 // 侧栏项图标(固定 tab 全配;外置 agent 插件的动态 plugin:<id> 项刻意无图标)。
 const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
@@ -181,6 +196,15 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认开;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
+  const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
+    ui: readFont('ui'), body: readFont('body'), mono: readFont('mono'),
+  }))
+  const setFont = (slot: FontSlot, v: string): void => {
+    setFonts((f) => ({ ...f, [slot]: v }))
+    writeFont(slot, v)
+    applyUiFonts()
+  }
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
@@ -1152,6 +1176,36 @@ export const SettingsModal: React.FC<{
                         {t('settings.notes.previewLabel')}
                       </label>
                       <div className="hint">{t('settings.notes.previewHint')}</div>
+                    </div>
+                    <div className="field">
+                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={stored.notesWikiIncludeFiles !== false}
+                          onChange={(e) => {
+                            setWikiFilesEnabled(e.target.checked) // 编辑器同步读缓存,不等下次 getConfig
+                            void window.tangu!.setConfig({ notesWikiIncludeFiles: e.target.checked }).then(setStored)
+                          }}
+                        />
+                        {t('settings.notes.wikiFilesLabel')}
+                      </label>
+                      <div className="hint">{t('settings.notes.wikiFilesHint')}</div>
+                    </div>
+                    {/* 「删除笔记时连带删独占附件」的记忆闸:每次询问 / 记住的选择。弹窗勾了「下次不再问」才会落到这里。 */}
+                    <div className="field">
+                      <label>{t('settings.notes.deleteAssetsLabel')}</label>
+                      <select
+                        value={deleteAssetsPref() === null ? 'ask' : deleteAssetsPref() ? 'yes' : 'no'}
+                        onChange={(e) => {
+                          setDeleteAssetsPref(e.target.value === 'ask' ? null : e.target.value === 'yes')
+                          setStored({ ...stored }) // 本地闩锁不在 config 里,靠这一下重渲染
+                        }}
+                      >
+                        <option value="ask">{t('settings.notes.deleteAssetsAsk')}</option>
+                        <option value="yes">{t('settings.notes.deleteAssetsYes')}</option>
+                        <option value="no">{t('settings.notes.deleteAssetsNo')}</option>
+                      </select>
+                      <div className="hint">{t('settings.notes.deleteAssetsHint')}</div>
                     </div>
                     <div className="field">
                       <label>{t('settings.notes.dailyLabel')}</label>
@@ -2297,6 +2351,30 @@ export const SettingsModal: React.FC<{
                       </label>
                       <div className="hint">{t('settings.theme.smoothCaretHint')}</div>
                     </div>
+                    {/* 字体三档:留空 = 跟随主题(主题自己可能就写的系统字体)。预设可选,也可直接敲任意 font-family。 */}
+                    {([
+                      ['ui', 'settings.theme.fontUi', SANS_FONTS],
+                      ['body', 'settings.theme.fontBody', SANS_FONTS],
+                      ['mono', 'settings.theme.fontMono', MONO_FONTS],
+                    ] as const).map(([slot, labelKey, list]) => (
+                      <div className="field" key={slot}>
+                        <label htmlFor={`font-${slot}`}>{t(labelKey)}</label>
+                        <input
+                          id={`font-${slot}`}
+                          list={`font-list-${slot}`}
+                          value={fonts[slot]}
+                          placeholder={t('settings.theme.fontFollow')}
+                          onChange={(e) => setFont(slot, e.target.value)}
+                          style={{ fontFamily: fonts[slot] || undefined }}
+                        />
+                        <datalist id={`font-list-${slot}`}>
+                          {list.map((f) => (
+                            <option key={f} value={f}>{f === 'system-ui' || f === 'ui-monospace' ? t('settings.theme.fontSystem') : f}</option>
+                          ))}
+                        </datalist>
+                      </div>
+                    ))}
+                    <div className="hint" style={{ marginTop: -4 }}>{t('settings.theme.fontHint')}</div>
                   </>
                 )}
 

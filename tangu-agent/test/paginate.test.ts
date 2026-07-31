@@ -30,3 +30,22 @@ describe('paginate (cat -n read_file output)', () => {
     expect(out).toContain('read with offset:5'); // 5 more lines below, continue from line index 5
   });
 });
+
+describe('paginate 字符截断续读指针(07-30 二轮:截断消息即导航指令)', () => {
+  it('窗口超 char 上限被腰斩:给出能续读的 offset(= 保住的最后一行,可能不完整故重读)', () => {
+    // 每行 ~1000 字符 × 200 行 >> 100k 上限 → trimmed 分支
+    const big = Array.from({ length: 200 }, (_, i) => `L${i} ` + 'x'.repeat(1000)).join('\n');
+    const out = paginate(big);
+    const m = out.match(/truncated at \d+ chars; continue with offset:(\d+) and a smaller limit/);
+    expect(m).toBeTruthy();
+    const next = Number(m![1]);
+    // 续读点必须落在已展示窗口内的最后一行(0-based),且小于总行数
+    expect(next).toBeGreaterThan(0);
+    expect(next).toBeLessThan(200);
+    // 从该 offset 续读的第一行,是截断输出里最后出现的那一行(内容完整版)
+    const lastShownLineNo = next + 1; // 显示行号 1-based
+    expect(out).toContain(`\n${String(lastShownLineNo).padStart(6)}\t`);
+    const cont = paginate(big, next, 1);
+    expect(cont).toContain(`L${next} `);
+  });
+});

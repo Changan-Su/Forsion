@@ -30,6 +30,17 @@ describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
   it('ignores sub-4k garbage windows', () => {
     expect(modelContextWindow('m', { context_window: 100 })).toBe(CONTEXT_WINDOW_TOKENS);
   });
+  it('falls back to family window when the model object has none (WB-Bench 64k premature-compaction fix)', () => {
+    expect(modelContextWindow('codex/gpt-5.6-terra')).toBe(272_000);
+    expect(modelContextWindow('gpt-5')).toBe(272_000);
+    expect(modelContextWindow('codex-mini-latest')).toBe(200_000); // o4-mini 底,272k 会溢出
+    expect(modelContextWindow('claude-sonnet-4-5')).toBe(200_000);
+    expect(modelContextWindow('gemini-2.5-pro')).toBe(1_000_000);
+    expect(modelContextWindow('gemini-embedding-001')).toBe(CONTEXT_WINDOW_TOKENS); // 非主线 gemini 变体保守
+    expect(modelContextWindow('deepseek-chat')).toBe(CONTEXT_WINDOW_TOKENS); // 未收录族维持默认
+    // 模型对象自带值仍然优先于族兜底
+    expect(modelContextWindow('gpt-5', { context_window: 64_000 })).toBe(64_000);
+  });
 });
 
 describe('contextBudget constants', () => {
@@ -73,6 +84,14 @@ describe('estimateMessageTokens / estimateMessagesTokens', () => {
   it('includes tool_calls arguments', () => {
     expect(estimateMessageTokens({ role: 'assistant', tool_calls: [{ function: { arguments: 'abcd' } }] })).toBe(9);
   });
+  it('counts providerItems replay state(encrypted reasoning 不计会低估预算→小窗口撞 overflow)', () => {
+    const bare = estimateMessageTokens({ role: 'assistant', content: 'abcd' });
+    const withItems = estimateMessageTokens({
+      role: 'assistant', content: 'abcd',
+      providerItems: [{ type: 'reasoning', encrypted_content: 'E'.repeat(400) }],
+    });
+    expect(withItems).toBeGreaterThan(bare + 90); // ≥ 序列化长度/4 量级
+  });
   it('sums across messages', () => {
     const msgs = [
       { role: 'user', content: 'abcd' },
@@ -108,6 +127,17 @@ describe('compactContext', () => {
     // middle folded/truncated
     expect(msgs[10].content).toContain('tool output folded');
     expect(msgs[15].content).toContain('context compacted: omitted');
+  });
+
+  it('tool fold keeps the tail(错误/测试汇总几乎都在结尾)且 assistant 折叠丢弃 providerItems', () => {
+    const msgs = buildMsgs();
+    const toolBody = 'H'.repeat(500) + 'MIDDLE'.repeat(100) + 'TAIL_ERROR_SUMMARY';
+    (msgs[10] as any).content = toolBody;
+    (msgs[15] as any).providerItems = [{ type: 'reasoning', id: 'rs', encrypted_content: 'E' }];
+    compactContext(msgs);
+    expect(msgs[10].content.endsWith('TAIL_ERROR_SUMMARY')).toBe(true); // 尾部保留
+    expect(msgs[10].content.length).toBeLessThan(toolBody.length);
+    expect((msgs[15] as any).providerItems).toBeUndefined(); // 折叠改写正文 → 原始 items 一并作废
   });
 
   it('is idempotent (second pass is a no-op)', () => {

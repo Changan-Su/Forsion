@@ -22,11 +22,93 @@ const COMPACT_SYSTEM_PROMPT =
   '## Goal — what the user ultimately wants. Keep the full objective; never shrink the scope.\n' +
   '## Done — completed steps, key decisions and conclusions (with exact file paths / identifiers / output locations).\n' +
   '## In progress / Next steps — what is unfinished and the concrete next actions, in order. This section matters most; never leave it empty if work remains.\n' +
-  '## Facts & constraints — important facts, user preferences and corrections, pitfalls already discovered, exact names/paths/commands needed to continue.\n' +
+  '## Facts & constraints — important facts, user preferences and corrections, pitfalls already discovered, exact names/paths/commands/error messages needed to continue.\n' +
   'Be concise but information-complete. Output only the summary itself — no pleasantries, no lead-in.';
+
+// 增量压缩指令(借 pi 的 PRESERVE/UPDATE 变体):没有它,摘要模型面对 [Existing Summary] 最常见的
+// 病是「重写一份更短的」——上一检查点里仍相关的路径/约束/未完项被静默蒸发,跨两次压缩后断头。
+const COMPACT_INCREMENTAL_NOTE =
+  '\nAn [Existing Summary] block precedes the new conversation: it is the previous checkpoint. UPDATE it instead of restarting — preserve every still-relevant fact, path, constraint and pending item from it; move items between sections as the new conversation completes or unblocks them; drop nothing merely to save space.';
+
+/** 压缩系统提示(增量压缩时附 PRESERVE/UPDATE 指令)。导出仅为测试。 */
+export function compactSystemPrompt(hasPrevSummary: boolean): string {
+  return hasPrevSummary ? COMPACT_SYSTEM_PROMPT + COMPACT_INCREMENTAL_NOTE : COMPACT_SYSTEM_PROMPT;
+}
 
 const MAX_TRANSCRIPT_CHARS = 60_000; // 兜成本：超长历史只取尾部
 const SUMMARY_MAX_TOKENS = 1200;
+
+/** 组装喂给摘要模型的转写:上一检查点块**永不被截**——旧实现整体 slice(-MAX) 会在新对话超长时
+ *  把头部的 [Existing Summary] 切掉,增量压缩静默丢失既有目标/约束/未完项(Codex 评审 07-30 #7)。
+ *  预算只截新对话尾部;检查点块自身有 SUMMARY_MAX_TOKENS+FILE_OPS_CAP 兜底,天然远小于预算。导出仅为测试。 */
+export function buildCompactTranscript(prevSummaryBody: string, convo: string): string {
+  const prevBlock = prevSummaryBody.trim()
+    ? `[Existing Summary]\n${prevSummaryBody.trim()}\n\n[New Conversation]\n`
+    : '';
+  const room = Math.max(MAX_TRANSCRIPT_CHARS - prevBlock.length, 10_000);
+  return prevBlock + (convo.length > room ? convo.slice(-room) : convo);
+}
+
+// ── 文件操作机械追踪(借 pi compaction,07-30 归因轮 P2)────────────────────────
+// 摘要模型会抄丢文件清单;这里与 LLM 摘要**并联**一条确定性通道:从被压缩窗口的 tool_calls
+// 机械提取 read/modified 两个集合,以固定 XML 块附加在摘要尾部;下次增量压缩先解析上一块
+// 继承、再叠加新窗口——跨任意多次压缩单调累积,清单正确性与摘要模型脱钩(pi 五件套)。
+// 工具名→路径参数映射表:新增文件类工具时在此登记(amadeus 云端笔记工具也走 path)。
+const FILE_READ_TOOLS: Record<string, string> = { read_file: 'path', read_document: 'path', view_image: 'path', amadeus_read_note: 'path' };
+const FILE_WRITE_TOOLS: Record<string, string> = { write_file: 'path', edit_file: 'path', multi_edit: 'path', amadeus_write_note: 'path' };
+const FILE_OPS_CAP = 200; // 每清单封顶,防跨多次压缩无界膨胀
+
+export interface FileOps { read: Set<string>; modified: Set<string> }
+
+/** 从一条消息的 tool_calls(JSONB 对象或 JSON 字符串)机械提取文件操作,累加进 into。绝不抛。 */
+export function extractFileOps(toolCalls: unknown, into: FileOps): void {
+  let calls: any = toolCalls;
+  if (typeof calls === 'string') { try { calls = JSON.parse(calls); } catch { return; } }
+  if (!Array.isArray(calls)) return;
+  for (const c of calls) {
+    const name = c?.function?.name;
+    if (!name) continue;
+    let args: any = c.function.arguments;
+    if (typeof args === 'string') { try { args = JSON.parse(args); } catch { continue; } }
+    if (name === 'apply_patch') {
+      const patch = String(args?.patch ?? args?.input ?? '');
+      for (const m of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) into.modified.add(m[1].trim());
+      for (const m of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) into.modified.add(m[1].trim());
+      continue;
+    }
+    const readArg = FILE_READ_TOOLS[name];
+    if (readArg && args?.[readArg]) into.read.add(String(args[readArg]));
+    const writeArg = FILE_WRITE_TOOLS[name];
+    if (writeArg && args?.[writeArg]) into.modified.add(String(args[writeArg]));
+  }
+}
+
+/** 集合 → 摘要尾部 XML 块(readOnly = read − modified,排序 + 封顶);两清单皆空返回 ''。 */
+export function formatFileOps(ops: FileOps): string {
+  const modified = [...ops.modified].sort().slice(0, FILE_OPS_CAP);
+  const readOnly = [...ops.read].filter((p) => !ops.modified.has(p)).sort().slice(0, FILE_OPS_CAP);
+  if (!modified.length && !readOnly.length) return '';
+  const block = (tag: string, items: string[]) => (items.length ? `<${tag}>\n${items.join('\n')}\n</${tag}>` : '');
+  return (
+    '\n\n<file-operations>\n' +
+    [block('modified-files', modified), block('read-files', readOnly)].filter(Boolean).join('\n') +
+    '\n</file-operations>'
+  );
+}
+
+/** 从上一份摘要解析出文件操作块(继承用),并返回剥掉该块的摘要正文(防摘要模型看到后复述/篡改)。 */
+export function parseFileOps(summary: string): { ops: FileOps; stripped: string } {
+  const ops: FileOps = { read: new Set(), modified: new Set() };
+  const m = summary.match(/\n*<file-operations>[\s\S]*?<\/file-operations>/);
+  if (!m) return { ops, stripped: summary };
+  const grab = (tag: string): string[] => {
+    const mm = m[0].match(new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`));
+    return mm ? mm[1].split('\n').filter(Boolean) : [];
+  };
+  for (const p of grab('read-files')) ops.read.add(p);
+  for (const p of grab('modified-files')) ops.modified.add(p);
+  return { ops, stripped: summary.replace(m[0], '') };
+}
 
 export interface CompactResultPersisted {
   ok: boolean;
@@ -65,7 +147,7 @@ export async function compactSession(sessionId: string, modelId: string, appId =
   let rows: any[];
   try {
     rows = await query<any[]>(
-      `SELECT role, content, timestamp FROM chat_messages WHERE session_id = ? ORDER BY timestamp ASC`,
+      `SELECT role, content, timestamp, tool_calls FROM chat_messages WHERE session_id = ? ORDER BY timestamp ASC`,
       [sessionId],
     );
   } catch (e: any) {
@@ -74,11 +156,15 @@ export async function compactSession(sessionId: string, modelId: string, appId =
 
   const prev = await getLatestSummary(sessionId);
   const prevThrough = prev?.throughTimestamp || 0;
+  // 文件操作机械追踪:先从上一份摘要继承(单调累积),再叠加本窗口 tool_calls;
+  // 喂给摘要模型的 [Existing Summary] 用剥掉该块的正文(块由本函数尾部机械重建,不劳模型抄)。
+  const { ops: fileOps, stripped: prevSummaryBody } = parseFileOps(prev?.summary || '');
   const lines: string[] = [];
   let maxTs = prevThrough;
   for (const m of rows) {
     const ts = Number(m.timestamp) || 0;
     if (ts <= prevThrough) continue; // 增量：跳过已被前一检查点覆盖的消息
+    extractFileOps(m.tool_calls, fileOps);
     const role = m.role === 'model' ? 'assistant' : m.role;
     if (role !== 'user' && role !== 'assistant') continue;
     const content = String(m.content || '').trim();
@@ -87,9 +173,7 @@ export async function compactSession(sessionId: string, modelId: string, appId =
   }
   if (lines.length < 2) return { ok: false, reason: 'nothing to compact' };
 
-  let transcript = lines.join('\n');
-  if (prev?.summary) transcript = `[Existing Summary]\n${prev.summary}\n\n[New Conversation]\n${transcript}`;
-  if (transcript.length > MAX_TRANSCRIPT_CHARS) transcript = transcript.slice(-MAX_TRANSCRIPT_CHARS);
+  const transcript = buildCompactTranscript(prevSummaryBody, lines.join('\n'));
 
   let summary = '';
   try {
@@ -98,7 +182,7 @@ export async function compactSession(sessionId: string, modelId: string, appId =
       model,
       apiModelId,
       messages: [
-        { role: 'system', content: COMPACT_SYSTEM_PROMPT },
+        { role: 'system', content: compactSystemPrompt(!!prevSummaryBody.trim()) },
         { role: 'user', content: transcript },
       ] as ChatMessage[],
       projectSource: '', // 不叠项目层提示词
@@ -113,6 +197,8 @@ export async function compactSession(sessionId: string, modelId: string, appId =
     return { ok: false, reason: e?.message || 'summary generation failed' };
   }
   if (!summary || summary.length < 8) return { ok: false, reason: 'empty summary' };
+  // 机械附加文件操作块(LLM 输出之后、落库之前;摘要模型抄没抄对不影响清单正确性)。
+  summary += formatFileOps(fileOps);
 
   try {
     await query(
@@ -136,6 +222,14 @@ export function foldWorkingWithSummary(msgs: ChatMessage[], summary: string, tai
   let cut = msgs.length - tail;
   while (cut > head && (msgs[cut] as any).role === 'tool') cut--;
   if (cut - head < 1) return; // 边界一路退到头:没有可折叠的前缀
-  const summaryMsg = { role: 'system', content: '## Compacted Summary of Earlier Conversation\n' + summary } as ChatMessage;
+  // 连续性契约(借 Codex compact 框架语):压缩点最常见的病是模型把摘要当「回忆」而非「已完成的工作」,
+  // 从头重做已完成步骤。消费侧一句话点破。
+  const summaryMsg = {
+    role: 'system',
+    content:
+      '## Compacted Summary of Earlier Conversation\n' +
+      'This summarizes work already completed earlier in this conversation. Continue from it — do not restart the task or redo finished work.\n' +
+      summary,
+  } as ChatMessage;
   msgs.splice(head, cut - head, summaryMsg);
 }

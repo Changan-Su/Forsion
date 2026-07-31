@@ -7,7 +7,10 @@ import { useUiStore } from '@amadeus/store/uiStore'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
 import { WikiHoverPreview } from '@amadeus/components/WikiHoverPreview'
 import { AskStringHost } from '@amadeus/components/askString'
+import { DeleteAssetsHost } from '@amadeus/components/askDeleteAssets'
+import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
+import { AutomationBuilderHost } from './amadeusAutomation'
 import { fdDirOf } from '@amadeus/lib/fd'
 import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
 import { pageKey } from '@amadeus-shared/links'
@@ -83,7 +86,10 @@ export function AmadeusOverlays() {
       <WikiCreateConfirm />
       <WikiHoverPreview />
       <AskStringHost />
+      <DeleteAssetsHost />
+      <NewDrawingHost />
       <CloudSyncDialogHost />
+      <AutomationBuilderHost />
       {toast && <div className="amx-toast">{toast}</div>}
     </>
   )

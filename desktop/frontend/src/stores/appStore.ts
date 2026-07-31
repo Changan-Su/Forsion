@@ -14,6 +14,7 @@ import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTE
 import * as api from '../services/backendService'
 import { abortRun, cancelSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
+import { splitSuggestions } from '../views/chat2/suggest'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
 import type { Tab as SettingsTab } from '../components/SettingsModal'
@@ -246,6 +247,8 @@ export interface AppState {
   groupVoting: Record<string, boolean>
   /** LLM 瞬时失败重试中(引擎 status/llm_retry 事件):渲染「第 N/M 次重试,Xs 后」。任何后续非 status 事件即清除。 */
   llmRetryBySession: Record<string, { attempt: number; max: number; waitMs: number; error?: string } | undefined>
+  /** 手动 Compact 进度 0-100(undefined = 未在压缩)。ponytail: 客户端估算,compact 接口一次性返回没有进度信号。 */
+  compactingBySession: Record<string, number | undefined>
   subChatsBySession: Record<string, SubChat[]>
   usageBySession: Record<string, { ctx: number; base: number; live: number }>
   /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
@@ -425,6 +428,7 @@ export const useApp = create<AppState>((set, get) => ({
   runningBySession: {},
   groupVoting: {},
   llmRetryBySession: {},
+  compactingBySession: {},
   subChatsBySession: {},
   usageBySession: {},
   unread: loadUnread(),
@@ -719,8 +723,11 @@ export const useApp = create<AppState>((set, get) => ({
             if (!dc?.ttsAutoSpeak || !dc?.ttsModelId) return
             const st = get()
             const msg = (st.messagesBySession[sessionId] || []).find((m) => m.id === assistantId)
-            if (msg?.content?.trim()) {
-              speakMessage(st.cfg, dc, assistantId, msg.content).catch((e: any) => {
+            // 摘掉自动化建议围栏再念:手动朗读走的是 EditorialMessage 传来的 body,这里不摘就会
+            // 把「forsion-suggest」和反引号念出来 —— 同一条消息两个入口读出两样东西。
+            const spoken = msg?.content ? splitSuggestions(msg.content).text : ''
+            if (spoken.trim()) {
+              speakMessage(st.cfg, dc, assistantId, spoken).catch((e: any) => {
                 if (e?.message !== 'EMPTY') get().toast(get().tr('tts.failed', { e: e?.message || e }), true)
               })
             }
@@ -1574,12 +1581,26 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
+    if (get().compactingBySession[sid] !== undefined) return // 压缩中,别叠第二次
     const modelId = get().sessions.find((s) => s.id === sid)?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || ''
-    get().toast(t('input.compacting'))
+    const setPct = (pct: number | undefined) =>
+      set((st) => ({ compactingBySession: { ...st.compactingBySession, [sid]: pct } }))
+    // ponytail: 百分比是客户端估算 —— compact 是一次性 POST,服务端不吐进度。缓动 1-e^(-t/8s) 逼近
+    // 90%,响应到达才冲 100%。要真实百分比得把该接口改成 SSE(阶段 + 已生成 token/上限),暂不值得。
+    setPct(0)
+    const t0 = Date.now()
+    const timer = setInterval(() => setPct(Math.round(90 * (1 - Math.exp(-(Date.now() - t0) / 8000)))), 120)
     try {
       const r = await api.compactSession(get().cfg, sid, modelId)
       get().pushNotice(r.ok ? t('input.compactDone', { n: r.summarizedCount || 0 }) : t('input.compactSkip', { reason: r.reason || '' }))
     } catch (e: any) { get().toast(t('input.compactFail', { e: e?.message || e }), true) }
+    finally {
+      clearInterval(timer)
+      setPct(100) // 满格停一拍再撤,别让进度条在半途消失
+      setTimeout(() => set((st) => (st.compactingBySession[sid] === 100
+        ? { compactingBySession: { ...st.compactingBySession, [sid]: undefined } }
+        : {})), 700)
+    }
   },
 
   decideApproval: async (messageId, approvalId, action, argsOverride, targetSessionId) => {

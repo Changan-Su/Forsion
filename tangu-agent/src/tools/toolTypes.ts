@@ -52,6 +52,9 @@ export interface ToolContext {
   toolsList?: string[];
   /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。 */
   channelSession?: boolean;
+  /** 工作预设:'coding'=编码任务形态(Coding Space / bench / CLI 项目模式显式传入)。
+   *  产品面工具(浏览器/笔记/收件箱等)转 deferred,提示词换 coding 契约——见 registry CODING_PRESET_DEFERRED。 */
+  preset?: 'coding';
   /** 已解锁的 deferred 工具名(P0-2):**严格 run-local**,每 run 从空集起步、本 run 内经 load_tools 增量;
    *  不从历史恢复(hydrate 不带 tool_calls)。 */
   unlockedTools?: ReadonlySet<string>;
@@ -83,6 +86,15 @@ export interface ToolContext {
    * 缺省(TUI/纯云等未装配此闸的运行环境)时工具应优雅降级,不要假定一定可用。
    */
   presentDesk?: (spec: DeskPresentSpec) => void;
+  /** 父 run 的思考档(self_brainstorm 分身须同档:无原生思考的模型档位是注进 system 的文本,档不同=前缀不同)。 */
+  thinkingLevel?: string;
+  /**
+   * 当前 run 的在存工作消息数组冻结快照(self_brainstorm 用):返回主 loop workingMessages 的浅拷贝。
+   * 分身补全的共享前缀**必须**取自这里而非 DB 重建——脚手架消息不落库、运行内折叠、pin 锚定都会让
+   * 重建序列字节不一致,provider 前缀缓存全 miss(这是该工具「命中缓存」承诺的唯一真源)。
+   * 仅主 agentLoop 装配;子代理/群聊等旁路 loop 不装配,消费方须优雅降级。
+   */
+  getWorkingMessages?: () => any[];
 }
 
 /** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);

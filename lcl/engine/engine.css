@@ -351,7 +351,10 @@
 
 /* ===== Dockview 的 LCL 皮肤:把 --dv-* 别名到 LCL token(叠在 dockview-theme-light|dark 之上) ===== */
 .dockview-theme-lcl {
-  --dv-tabs-and-actions-container-height: 36px;
+  /* 32 而非 36:tab 胶囊本身 29.2px,36 时上下各余 3.4px,再叠主区纸卡的 8px 顶边距,主区上边界要掉到
+     44px —— 比 ribbon 第一个按钮(mac 交通灯避让后 30px)低 14px,就是用户实报的「tab 与 main view
+     之间有一块空白」。32 + 纸卡贴顶 → 主区上边界 32,与 ribbon 只差 2px。真机实测见开发日志。 */
+  --dv-tabs-and-actions-container-height: 32px;
   /* 2026-07-10:侧栏去掉「第二层纸面底」——组底/空区一律 --sidebar-bg 与 ribbon/tab 栏连成统一 chrome,
      纸面(--bg)只由中心主区的 .dv-react-part 圆角卡自己画(见下方主区卡片规则)。 */
   --dv-background-color: var(--sidebar-bg);
@@ -390,7 +393,9 @@
   /* 底部额外让 --sb-h:圆角纸卡底边整体上移,在纸卡**下方**(圆角外)腾出状态栏的位置(状态栏落纸卡外);
      纸卡底与状态栏之间留 4px 间距。--sb-h 由 DesktopStatusBar mount 时设;未设(非主窗/关闭状态栏)=0
      → 底部回 4px(比其他三边窄 4px,可忽略),零副作用。 */
-  padding: 8px 8px calc(4px + var(--sb-h, 0px));
+  /* 顶边距 0:纸卡直接吊在 tab 栏下沿(tab 与其内容归属更明确,也把主区上边界从 44 提到 32)。
+     左右/底部仍留 8px —— 浮卡观感靠这三边 + 圆角维持。 */
+  padding: 0 8px calc(4px + var(--sb-h, 0px));
 }
 .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part {
   border-radius: var(--radius-lg, 14px);
@@ -465,8 +470,8 @@
 .dockview-theme-lcl .dv-tabs-and-actions-container {
   font-family: var(--font-ui);
   font-size: 12px;
-  height: 36px;
-  min-height: 36px;
+  height: 32px;
+  min-height: 32px;
   align-items: center;
   padding: 0 4px;
 }

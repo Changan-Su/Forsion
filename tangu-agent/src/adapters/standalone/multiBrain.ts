@@ -11,7 +11,7 @@ import type { CloudBrainServices, BuildPayloadOpts, StreamOpts, ImageGenRequest,
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
-import { streamAnthropicOAuth } from '../../llm/anthropicMessages.js';
+import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
@@ -239,7 +239,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         const p = opts.payload as any;
         if (p?.[DIRECT_MARK]) {
           // 订阅登录的原生端点据协议再分发;缺省 OpenAI 兼容。
-          if (p[PROTOCOL_MARK] === 'anthropic-messages') return streamAnthropicOAuth(opts);
+          if (p[PROTOCOL_MARK] === 'anthropic-messages') return streamAnthropicMessages(opts);
           if (p[PROTOCOL_MARK] === 'openai-responses') return streamOpenAiResponses(opts);
           return streamOpenAiCompat(opts);
         }

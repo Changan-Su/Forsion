@@ -141,6 +141,7 @@
 .t2-asst-col > .plan-card,
 .t2-asst-col > .approval-card,
 .t2-asst-col > .inquiry-card,
+.t2-asst-col > .t2-suggest,
 .t2-asst-col > .thinking-block { max-width: 700px; width: 100%; box-sizing: border-box; }
 .t2-name {
   font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
@@ -219,6 +220,14 @@
 /* LLM 网络重试横幅:琥珀色示警但不是失败(失败是红色 t2-status-err);原始错误淡化拖尾。 */
 .t2-retry { color: #b8860b; }
 .t2-retry .t2-retry-err { opacity: 0.65; margin-left: 6px; }
+/* Compact 进度条:轨道语汇沿用 .rsync-progress-*(4px 轨 + accent 填充);百分比 tabular-nums 防跳字,
+   宽度过渡吃掉 120ms 采样的台阶。淡入避免它在流末尾硬弹出来。 */
+.t2-compact { max-width: 380px; margin: 6px auto 2px; display: flex; flex-direction: column; gap: 5px; animation: t2-compact-in 0.24s ease-out; }
+.t2-compact-head { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--text-faint, var(--text-muted)); }
+.t2-compact-pct { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--accent-ink); }
+.t2-compact-track { height: 3px; border-radius: 2px; background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); overflow: hidden; }
+.t2-compact-fill { height: 100%; border-radius: 2px; background: var(--accent-ink); transition: width 0.32s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes t2-compact-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 /* ====== 思考块 ====== */
 .t2-think { border-left: 2px solid color-mix(in srgb, var(--accent-ink) 35%, transparent); padding-left: 12px; }
@@ -246,6 +255,23 @@
   background: var(--overlay-light, rgba(127,127,127,.1));
   border-radius: 999px; padding: 2px 8px; white-space: nowrap;
 }
+/* ====== 自动化建议芯片(助手提议,点了才作为用户消息发出) ====== */
+.t2-suggest { display: flex; flex-wrap: wrap; gap: 8px; }
+.t2-suggest-chip {
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui); font-size: 12.5px;
+  padding: 6px 14px 6px 11px;
+  display: inline-flex; align-items: center; gap: 7px;
+  max-width: 100%; text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s);
+}
+.t2-suggest-chip > svg { color: var(--accent-ink); flex: none; }
+.t2-suggest-chip:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+
 .t2-status-ok { color: var(--accent-ink); }
 .t2-status-err { color: #e0564b; }
 
@@ -450,6 +476,9 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* 上下必须**同值**(用户口径:概览卡顶到聊天区上缘 = Desk 卡底到聊天区下缘)。
+     底部这 16 背着硬约束 —— Desk 卡底缘与输入框底线同线,所以是顶部服从底部,不是反过来。
+     改一个就得改另一个;desk-rail.check 里有一条专门钉这个对称。 */
   padding: 16px var(--tsum-gut) 16px 0;
   box-sizing: border-box;
   pointer-events: none;

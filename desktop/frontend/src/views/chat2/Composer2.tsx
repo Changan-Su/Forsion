@@ -66,6 +66,16 @@ export function composerAutoHeight(scrollHeight: number, maxPx = 200): string {
   return scrollHeight > 0 ? `${Math.min(scrollHeight, maxPx)}px` : 'auto'
 }
 
+/**
+ * 光标处的 slash 命令词:**行首或空白之后**的那个 `/…`(到光标为止),否则 null。
+ * 菜单不再只认「草稿以 / 开头」,正文中途也能唤出 —— 但边界规则得跟 @ 提及一致,
+ * 否则 `http://`、`src/foo`、除法算式里的斜杠全都会弹菜单。
+ */
+export function slashTokenAt(text: string, cursor: number): { start: number; token: string } | null {
+  const m = /(?:^|\s)(\/\S*)$/.exec(text.slice(0, cursor))
+  return m ? { start: cursor - m[1].length, token: m[1] } : null
+}
+
 export const Composer2: React.FC<{
   disabled: boolean
   running: boolean
@@ -151,8 +161,12 @@ export const Composer2: React.FC<{
   const [pinnedSkills, setPinnedSkills] = useState<SkillInfo[]>([])
   const [hint, setHint] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
-  const [slashSubMenu, setSlashSubMenu] = useState<'model' | null>(null)
+  /** /model 子菜单(模型清单)。存锚点是因为它的「词」里有空格,slashTokenAt 那条正则跟不到。 */
+  const [slashSubMenu, setSlashSubMenu] = useState<{ start: number } | null>(null)
   const [slashDismissed, setSlashDismissed] = useState(false)
+  /** 当前命令词在草稿里的区间。slashItems 是带缓存的 memo,里面的 run() 捕获的是旧渲染的闭包,
+   *  替换范围只能从 ref 读实时值(直接闭包会用上一次的 start,插到错位置)。 */
+  const slashSpan = useRef<{ start: number; end: number } | null>(null)
   const [openMenu, setOpenMenu] = useState<OpenMenu>(null)
   const [groupSetupOpen, setGroupSetupOpen] = useState(false)
   const [cursorPos, setCursorPos] = useState(0)
@@ -306,8 +320,24 @@ export const Composer2: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appendText?.seq])
 
+  /** 把光标处那个命令词换成 text(空串=删掉),返回它的起点。
+   *  命令项一律走它 —— 斜杠不再必然在开头,直接 setDraft('') 会连带抹掉用户已写好的正文。 */
+  const replaceSlash = (text: string): number => {
+    const span = slashSpan.current
+    const start = span?.start ?? 0
+    const end = span?.end ?? Infinity // 无 span(理论上不会有):退回旧行为,整份换掉
+    setDraft((d) => d.slice(0, start) + text + d.slice(end))
+    const caret = start + text.length
+    requestAnimationFrame(() => {
+      const ta = taRef.current
+      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
+      autoGrow()
+    })
+    return start
+  }
+
   const slashItems = useMemo<SlashItem[]>(() => {
-    const close = () => { setDraft(''); setSlashSubMenu(null); requestAnimationFrame(autoGrow) }
+    const close = () => { replaceSlash(''); setSlashSubMenu(null) }
     const app = useApp.getState
     /** 命令名 → 本端实现。**没有条目 = 本端不露出该命令**(catalog 里声明了也不显示)。
      *  加命令:先进 tangu-agent 的 core/commandCatalog(TUI 一起吃到),再在这里补 handler。 */
@@ -319,16 +349,16 @@ export const Composer2: React.FC<{
       '/plan': onPlanModeChange ? () => { onPlanModeChange(!planMode); close() } : undefined,
       '/voice': onVoiceModeChange ? () => { onVoiceModeChange(!voiceMode); close() } : undefined,
       '/model': onModelChange && models?.length
-        ? () => { setDraft('/model '); setSlashSubMenu('model'); setSlashIndex(0) }
+        ? () => { setSlashSubMenu({ start: replaceSlash('/model ') }); setSlashIndex(0) }
         : undefined,
       '/loop': onMaxIterationsChange
-        ? () => { setDraft('/loop '); setSlashIndex(0); requestAnimationFrame(autoGrow) }
+        ? () => { replaceSlash('/loop '); setSlashIndex(0) }
         : undefined,
       // 验证回路仅 host 会话(引擎在本机 cwd 跑命令;沙箱会话没有本机工作区)。
       '/verify': isHost && onVerifyCommandChange
-        ? () => { setDraft('/verify '); setSlashIndex(0); requestAnimationFrame(autoGrow) }
+        ? () => { replaceSlash('/verify '); setSlashIndex(0) }
         : undefined,
-      '/think': onThinkingChange ? () => { setDraft('/think '); setSlashIndex(0); requestAnimationFrame(autoGrow) } : undefined,
+      '/think': onThinkingChange ? () => { replaceSlash('/think '); setSlashIndex(0) } : undefined,
       '/approval': () => { setOpenMenu('mode'); close() },
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
       '/help': () => { app().openSettings('about'); close() },
@@ -386,7 +416,7 @@ export const Composer2: React.FC<{
         items.push({
           cmd: `/${c.name}`,
           desc: c.hint ? `${c.description} · ${c.hint}` : c.description,
-          run: () => { setDraft(`/${c.name} `); setSlashIndex(0); requestAnimationFrame(autoGrow) },
+          run: () => { replaceSlash(`/${c.name} `); setSlashIndex(0) },
         })
       }
       return items
@@ -412,7 +442,7 @@ export const Composer2: React.FC<{
       items.push({
         cmd: c.argHint ? `/${c.name} ${c.argHint}` : `/${c.name}`,
         desc: c.description,
-        run: () => { setDraft(`/${c.name} `); setSlashIndex(0); requestAnimationFrame(autoGrow) },
+        run: () => { replaceSlash(`/${c.name} `); setSlashIndex(0) },
       })
     }
     if (skills?.length) {
@@ -428,24 +458,40 @@ export const Composer2: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow])
 
-  const slashActive = draft.startsWith('/') && !draft.includes('\n') && !disabled && !slashDismissed
+  const slash = useMemo(() => {
+    if (disabled || slashDismissed) return null
+    const before = draft.slice(0, cursorPos)
+    // 子菜单开着 → 词从锚点算起(带得动空格和参数);锚点上的字没了就自动落回普通命令词。
+    if (slashSubMenu && before.startsWith('/model ', slashSubMenu.start)) {
+      return { start: slashSubMenu.start, token: before.slice(slashSubMenu.start), sub: 'model' as const }
+    }
+    const m = slashTokenAt(draft, cursorPos)
+    return m ? { ...m, sub: null } : null
+  }, [draft, cursorPos, disabled, slashDismissed, slashSubMenu])
+  slashSpan.current = slash ? { start: slash.start, end: cursorPos } : null
+
   const slashMatches = useMemo<SlashItem[]>(() => {
-    if (!slashActive) return []
-    if (slashSubMenu === 'model') {
-      const filter = draft.slice('/model '.length).toLowerCase()
+    if (!slash) return []
+    if (slash.sub === 'model') {
+      const filter = slash.token.slice('/model '.length).toLowerCase()
       return (models || [])
         .filter((m) => !filter || m.id.toLowerCase().includes(filter) || m.name.toLowerCase().includes(filter))
         .slice(0, 12)
         .map((m) => ({
           cmd: m.id === modelId ? `● ${m.name}` : m.name,
           desc: `${m.source === 'direct' ? t('input.directPrefix') : ''}${m.provider} · ${m.id}`,
-          run: () => { onModelChange?.(m.id); setDraft(''); setSlashSubMenu(null); requestAnimationFrame(autoGrow) },
+          run: () => { onModelChange?.(m.id); replaceSlash(''); setSlashSubMenu(null) },
         }))
     }
-    const q = draft.toLowerCase()
+    const q = slash.token.toLowerCase()
     return slashItems.filter((it) => it.cmd.toLowerCase().startsWith(q) || (q.length > 1 && it.desc.toLowerCase().includes(q.slice(1)))).slice(0, 10)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slashActive, slashSubMenu, draft, slashItems, models, modelId])
+  }, [slash, slashItems, models, modelId])
+  // 只有真弹出来的菜单才压住 @ / [[ ——「有个斜杠词」还不够:敲 `/Users/me/[[` 时命令词一直在,
+  // 但一条都匹配不上,此时该让文件引用菜单出来。
+  const slashOpen = !!slash && slashMatches.length > 0
+  // 换了个命令词(或改了过滤词)→ 高亮回第一条,与 @ 提及同规矩;光标挪到别处的 `/` 上也不会带着旧下标。
+  useEffect(() => { setSlashIndex(0) }, [slash?.start, slash?.token])
 
   const inGroup = !!groupChat && (groupAgents?.length || 0) >= 2
   const mentionPool = useMemo<NormalAgentDef[]>(() => {
@@ -455,10 +501,10 @@ export const Composer2: React.FC<{
     return [...saved, ...(groupTempAgents || []).filter((a) => !seen.has(a.slug))]
   }, [inGroup, agents, groupAgents, groupTempAgents])
   const mention = useMemo(() => {
-    if (disabled || slashActive || mentionDismissed) return null
+    if (disabled || slashOpen || mentionDismissed) return null
     const m = /(?:^|\s)@([^\s@]*)$/.exec(draft.slice(0, cursorPos))
     return m ? { query: m[1], start: cursorPos - m[1].length - 1 } : null
-  }, [draft, cursorPos, disabled, slashActive, mentionDismissed])
+  }, [draft, cursorPos, disabled, slashOpen, mentionDismissed])
   const mentionMatches = useMemo<NormalAgentDef[]>(() => {
     if (!mention) return []
     const q = mention.query.toLowerCase()
@@ -486,10 +532,10 @@ export const Composer2: React.FC<{
   // ── [[ 引用:工作区文件(插入相对路径,与拖放/粘贴同契约)+ Amadeus 笔记(插入 [[绝对路径|名字]],
   //    气泡显示名字、agent 读到路径)。仅 host 会话(云端/沙箱读不到本机路径)。文件候选 = listDir 惰性 BFS。
   const fileRefCtx = useMemo(() => {
-    if (disabled || slashActive || refDismissed || !isHost) return null
+    if (disabled || slashOpen || refDismissed || !isHost) return null
     const m = /\[\[([^\]\n]*)$/.exec(draft.slice(0, cursorPos))
     return m ? { query: m[1], start: cursorPos - m[1].length - 2 } : null
-  }, [draft, cursorPos, disabled, slashActive, refDismissed, isHost])
+  }, [draft, cursorPos, disabled, slashOpen, refDismissed, isHost])
   useEffect(() => {
     if (!fileRefCtx) return
     if (window.amadeus) ensureAmadeusReady() // 懒引导 vault(幂等):聊天先于 Amadeus 打开时,笔记候选也在
@@ -870,7 +916,7 @@ export const Composer2: React.FC<{
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); pickMention(mentionMatches[Math.min(mentionIndex, mentionMatches.length - 1)]); return }
                 if (e.key === 'Escape') { e.preventDefault(); setMentionDismissed(true); return }
               }
-              if (slashActive && slashMatches.length) {
+              if (slashOpen) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex((i) => (i + 1) % slashMatches.length); return }
                 if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length); return }
                 if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing) { e.preventDefault(); slashMatches[Math.min(slashIndex, slashMatches.length - 1)]?.run(); return }
@@ -906,7 +952,7 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          {slashActive && slashMatches.length > 0 && (
+          {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (
                 <button

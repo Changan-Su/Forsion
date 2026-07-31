@@ -6,6 +6,7 @@ import { useDrawStore, registerDrawingApplier } from '../../store/drawingStore'
 import { useTheme } from '../../../stores/themeStore'
 import { useI18n } from '../../../i18n'
 import { amadeus } from '../../api'
+import type { BoardSettings } from '@amadeus-shared/excalidraw/board'
 
 // 必须在 @excalidraw/excalidraw 的模块体执行之前设好这两个全局:
 // - ASSET_PATH:它默认去 CDN(esm.sh)现拉字体 —— 本 App 的 CSP 是 default-src 'self',且桌面端要能离线用
@@ -58,13 +59,13 @@ export function ExcalidrawEmbed({ target, pagePath }: { target: string; pagePath
       </div>
     )
   }
-  return <Board target={target} />
+  return <Board target={target} settings={entry.settings} />
 }
 
 /** 只在 entry 成 ok 后挂载,好把 initialData 一次性定种:<Excalidraw> 挂载后自持编辑态,
  *  initialData 之后再变它也不看。种子必须取 seedFor(最新落盘态,含防抖窗内的 pending)——
  *  取初次载入的旧 scene 就是「白板关掉重开回到旧内容」,旧种子再画一笔还会盖掉磁盘新内容。 */
-function Board({ target }: { target: string }): React.JSX.Element {
+function Board({ target, settings }: { target: string; settings: BoardSettings }): React.JSX.Element {
   const [seed] = useState(() => useDrawStore.getState().seedFor(target) ?? {})
   // 卸载即冲刷:防抖里的最后一笔立即落盘,scene 种子随之推进,下次挂载才拿得到最新内容。
   useEffect(() => () => { void useDrawStore.getState().flush(target) }, [target])
@@ -79,6 +80,8 @@ function Board({ target }: { target: string }): React.JSX.Element {
           // ⚠️ 画布加载语言包时会伸手改 `document.documentElement` 的 lang 与 dir(它自己的全局约定)。
           // 而本 App 的 i18n(i18n.tsx:1910)也在写 html[lang] —— 必须喂同一个 locale,两边才不打架。
           langCode={locale === 'zh' ? 'zh-CN' : 'en'}
+          settings={settings}
+          onSettings={(patch) => void useDrawStore.getState().setSettings(target, patch)}
           onSceneChange={(sceneJson) => useDrawStore.getState().save(target, sceneJson)}
           registerApplier={(fn) => registerDrawingApplier(target, fn)}
         />

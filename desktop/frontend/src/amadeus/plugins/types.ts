@@ -17,7 +17,12 @@ export interface SlashContribution {
   id: string
   label: string
   hint?: string
-  /** Short mono glyph shown in the menu badge. */
+  /**
+   * 图标。**首选写宿主图标词表里的名字**(`'template'` / `'callout-warning'` / `'pin'` …,
+   * 全表见 components/icons 的 PLUGIN_ICONS 与 docs/Function/生态内容制作指南.md)——
+   * 宿主会画出和内置项完全同一套 SVG,你的插件项在 slash 菜单里不再是一枚孤零零的 emoji。
+   * 名字没命中就按字面当字形画(emoji / `✎` 等),老插件因此零改动照跑,但视觉不统一。
+   */
   icon?: string
   /** Section label; defaults to "插件". */
   group?: string
@@ -224,7 +229,8 @@ export interface FileTypeContribution {
   /** File suffixes this type claims, e.g. ['.mindmap.md']. Case-insensitive suffix match; keep in sync
    *  with the plugin's manifest `fileExtensions`. */
   extensions: string[]
-  /** Emoji / short glyph shown as the file's tree icon (rendered like a frontmatter `icon:`). */
+  /** 文件树上的图标。同 SlashContribution.icon:优先写图标词表里的名字(画 SVG),
+   *  没命中就当字形(emoji,渲染方式同 frontmatter 的 `icon:`)。 */
   icon?: string
   /** Optional display label for the type. The file view titles its tab by the file's basename; this is a
    *  fallback (used when the basename is empty). */
@@ -244,7 +250,7 @@ export interface FileCreatorContribution {
   id: string
   /** Menu label, e.g. '新建思维导图'. */
   label: string
-  /** Emoji / short glyph shown before the label (rendered like the file-type tree icon). */
+  /** 标签前的图标。同 SlashContribution.icon:优先写图标词表里的名字,没命中就当字形。 */
   icon?: string
   /** Create the file inside `parentFolder` (vault-relative, '' = root) and open it. Invoked on menu click.
    *  Return the promise when the work is async — the host awaits it and toasts on failure; a bare `void`
@@ -260,8 +266,15 @@ export interface EmbedRendererContribution {
   id: string
   /** True if this renderer handles the embed target (the inside of `![[…]]`; pipe/anchor already split off). */
   match(target: string): boolean
-  /** Render the embed (read-only preview) into the host element; return a cleanup. */
-  mount(el: HTMLElement, embed: { target: string; pagePath: string }): (() => void) | void
+  /** Render the embed (read-only preview) into the host element; return a cleanup.
+   *  `showSource()` flips this block into its raw `![[…]]` source line for editing; it re-renders
+   *  once the caret leaves. The host already draws a hover `</>` button for every embed block —
+   *  call this only if you want a second entry point inside your own UI (a menu item, a hotkey).
+   *  Optional: older hosts don't pass it, so always call as `embed.showSource?.()`. */
+  mount(
+    el: HTMLElement,
+    embed: { target: string; pagePath: string; showSource?: () => void },
+  ): (() => void) | void
 }
 
 /** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail

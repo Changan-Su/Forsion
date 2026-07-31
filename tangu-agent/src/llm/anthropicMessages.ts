@@ -1,30 +1,28 @@
 /**
- * Anthropic 原生 Messages API 客户端 —— 订阅登录(Claude Code 额度)的推理通道。
+ * Anthropic 原生 Messages API 客户端 —— 用户自有 API key(`sk-ant-api…`)的直连推理通道。
  *
- * 与 openaiCompat 并列的第二条直连面:OAuth 订阅登录拿到的不是 API key,而是 Claude Code 的
- * Bearer access_token,且端点是 /v1/messages(非 OpenAI 兼容 /chat/completions)。multiBrain
- * 据 payload 上的 PROTOCOL_MARK='anthropic-messages' 把流分发到这里。
+ * 与 openaiCompat 并列的第二条直连面:端点是 /v1/messages(非 OpenAI 兼容 /chat/completions)。
+ * multiBrain 据 payload 上的 PROTOCOL_MARK='anthropic-messages' 把流分发到这里。
  *
  * 两件事:
  *   1. openaiToAnthropicBody —— 把 buildOpenAiCompatPayload 产出的 OpenAI 形态 payload(system 进
  *      messages[0]、assistant.tool_calls、role:'tool'、OpenAI tools)翻译成严格 Messages 请求体:
- *      system 提升到顶层 + 强制首块为 Claude Code 身份串、tool_calls→tool_use、role:'tool'→tool_result
- *      (相邻合并)、OpenAI tools→{name,description,input_schema}。
- *   2. streamAnthropicOAuth —— Bearer + anthropic-beta:oauth-2025-04-20 头直连 /v1/messages,SSE 解析
- *      搬自 server/src/services/anthropicStream.ts,归一回 OpenAI 形态 StreamResult(loop 零改动)。
+ *      system 提升到顶层、tool_calls→tool_use、role:'tool'→tool_result(相邻合并)、
+ *      OpenAI tools→{name,description,input_schema}。
+ *   2. streamAnthropicMessages —— x-api-key 直连 /v1/messages,SSE 解析搬自
+ *      server/src/services/anthropicStream.ts,归一回 OpenAI 形态 StreamResult(loop 零改动)。
  *
- * ⚠️ 订阅路径强制:首个 system 块必须正好是 CLAUDE_CODE_SYSTEM,否则 Anthropic 拒。该串及 beta 头是
- *    私有契约,可能随官方变动——失效先核对这两处。
+ * ⛔ 这里**没有**订阅 OAuth 分支,是有意的(2026-07-31 随 OAUTH_PROVIDERS.claude 一并删,勿再加回)。
+ *    那条要求首个 system 块必须正好是「You are Claude Code, Anthropic's official CLI for Claude.」
+ *    才不被官方拒 —— 即拿 Claude Code 的身份去消费订阅额度。要用订阅走 `src/engines/`(ACP,直接
+ *    跑真的 Claude Code,鉴权是它自己的)。
  */
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 
 const ANTHROPIC_VERSION = '2023-06-01';
-const OAUTH_BETA = 'oauth-2025-04-20';
 const DEFAULT_MAX_TOKENS = 8192;
-/** 订阅路径强制的首个 system 块——少了它官方直接拒。 */
-const CLAUDE_CODE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /** {baseUrl}(可能带或不带 /v1)→ /v1/messages 完整端点。 */
 export function anthropicMessagesUrl(baseUrl: string): string {
@@ -101,7 +99,7 @@ function convertTools(tools: any[]): any[] | undefined {
 
 /**
  * OpenAI 形态 payload → 严格 Anthropic Messages 请求体。
- * 关键:role:'system' 提升顶层(强制首块 = Claude Code 身份);assistant.tool_calls→tool_use;
+ * 关键:role:'system' 提升顶层;assistant.tool_calls→tool_use;
  * 相邻 role:'tool' 合并成一条 user(tool_result 块);OpenAI tools→input_schema。
  */
 export function openaiToAnthropicBody(payload: any): any {
@@ -144,8 +142,7 @@ export function openaiToAnthropicBody(payload: any): any {
   }
   flush();
 
-  // 强制首块身份串 + 真正的系统提示跟其后
-  const system: any[] = [{ type: 'text', text: CLAUDE_CODE_SYSTEM }];
+  const system: any[] = [];
   const joined = sysTexts.join('\n\n');
   if (joined) system.push({ type: 'text', text: joined });
 
@@ -153,9 +150,10 @@ export function openaiToAnthropicBody(payload: any): any {
     model: payload.model,
     max_tokens: typeof payload.max_tokens === 'number' && payload.max_tokens > 0 ? payload.max_tokens : DEFAULT_MAX_TOKENS,
     stream: true,
-    system,
     messages,
   };
+  if (system.length) body.system = system; // 无系统提示 → 整个字段不发,别塞空数组
+
   const tools = convertTools(payload.tools);
   if (tools) body.tools = tools;
   const tc = payload.tool_choice;
@@ -178,12 +176,12 @@ export function openaiToAnthropicBody(payload: any): any {
   return body;
 }
 
-/** 原生 Messages 流式调用(OAuth Bearer);签名/回调与 streamOpenAiCompat 一致,归一回 OpenAI 形态。 */
-export async function streamAnthropicOAuth(opts: StreamOpts): Promise<StreamResult> {
-  return withStreamIdle(opts.signal, (guard) => runAnthropicOAuthStream(opts, guard));
+/** 原生 Messages 流式调用;签名/回调与 streamOpenAiCompat 一致,归一回 OpenAI 形态。 */
+export async function streamAnthropicMessages(opts: StreamOpts): Promise<StreamResult> {
+  return withStreamIdle(opts.signal, (guard) => runAnthropicStream(opts, guard));
 }
 
-async function runAnthropicOAuthStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
+async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
   const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta } = opts;
   const body = openaiToAnthropicBody(payload);
 
@@ -191,9 +189,8 @@ async function runAnthropicOAuthStream(opts: StreamOpts, guard: StreamIdleGuard)
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`, // 订阅 OAuth:Bearer,非 x-api-key
       'anthropic-version': ANTHROPIC_VERSION,
-      'anthropic-beta': OAUTH_BETA,
+      'x-api-key': apiKey,
     },
     body: JSON.stringify(body),
     signal: guard.signal,

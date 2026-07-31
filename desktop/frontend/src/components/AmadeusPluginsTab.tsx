@@ -82,11 +82,8 @@ const BundleChips: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
 }
 
 const badge: React.CSSProperties = {
-  fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)',
+  fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))',
   borderRadius: 4, padding: '0 4px', whiteSpace: 'nowrap',
-}
-const card: React.CSSProperties = {
-  border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12,
 }
 
 /** 插件声明的设置项(registerSetting)表单行:值存 localStorage `plugin.<id>.<key>`(全存字符串,
@@ -187,7 +184,7 @@ const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
     : t('settings.amadeusPlugins.depMissing')
 
   return (
-    <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ width: 8, height: 8, borderRadius: 4, background: dot, flexShrink: 0 }} />
         <b style={{ fontSize: 12.5 }}>{app.name}</b>
@@ -295,7 +292,7 @@ const PluginDetail: React.FC<{
       {p.bundle && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.bundleTitle')}</div>
-          <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+          <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
             {p.bundle.enginePlugins.length > 0 && <div>{t('settings.amadeusPlugins.bundleEngineList', { list: p.bundle.enginePlugins.join(', ') })}</div>}
             {p.bundle.agents.length > 0 && <div>{t('settings.amadeusPlugins.bundleAgentsList', { list: p.bundle.agents.join(', ') })}</div>}
             {p.bundle.skills.length > 0 && <div>{t('settings.amadeusPlugins.bundleSkillsList', { list: p.bundle.skills.join(', ') })}</div>}
@@ -325,20 +322,22 @@ const PluginDetail: React.FC<{
       {settings.length > 0 && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.settings')}</div>
-          <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {settings.map((o) => <SettingRow key={o.item.key} pluginId={p.id} def={o.item} />)}
           </div>
         </>
       )}
+      {/* README / 更新日志:必须套 .md-body —— 裸 <Markdown> 吃的是浏览器默认样式(h1 2em、1em 段距),
+          和设置页其余部分的行距对不上,观感就是「排版很乱」。同一个类也管着关于页的更新日志。 */}
       {p.readme && (
-        <div style={{ borderTop: 'var(--border-width) solid var(--border)', paddingTop: 12 }}>
+        <div className="md-body" style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))', paddingTop: 12 }}>
           <Markdown content={p.readme} />
         </div>
       )}
       {p.changelog && (
-        <details style={{ borderTop: 'var(--border-width) solid var(--border)', paddingTop: 12 }}>
-          <summary style={{ cursor: 'pointer', fontWeight: 600, userSelect: 'none' }}>更新日志</summary>
-          <div style={{ paddingTop: 8 }}><Markdown content={p.changelog} /></div>
+        <details style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))', paddingTop: 12 }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 12.5, userSelect: 'none' }}>{t('settings.amadeusPlugins.changelog')}</summary>
+          <div className="md-body" style={{ paddingTop: 8 }}><Markdown content={p.changelog} /></div>
         </details>
       )}
     </div>
@@ -369,53 +368,65 @@ export const AmadeusPluginsTab: React.FC<{
   const detailPlugin = detail ? plugins.find((p) => p.id === detail) : undefined
   if (detailPlugin) return <PluginDetail plugin={detailPlugin} onBack={() => setDetail(null)} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
 
+  // 内置 vs 外置分两区:Callout 标注/字数统计 是 builtin,过去和外置插件混在同一串里,
+  // 而浏览器/终端(宿主原生)又单挂在最上面 —— 同样是「内置」却分三处,用户实报看不出章法。
+  const builtins = plugins.filter((p) => p.builtin)
+  const externals = plugins.filter((p) => !p.builtin)
+
+  /** 一张插件卡:内置区与外置区同款(区标题已说明归属,卡上不再重复挂「内置/外置」小标签)。 */
+  const renderCard = (p: AmadeusPlugin): React.ReactNode => {
+    const on = activeIds.includes(p.id)
+    return (
+      <div
+        key={p.id}
+        className={`plugin-card plugin-card--link${p.blocked ? ' plugin-card--blocked' : ''}`}
+        onClick={() => setDetail(p.id)}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <b style={{ fontSize: 13 }}>{p.name}</b>
+              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
+              {p.blocked && (
+                <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
+              )}
+              {needsOnboarding(p) && (
+                <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
+              )}
+              <BundleChips p={p} />
+            </div>
+            {p.description && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{p.description}</div>}
+          </div>
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={!!p.blocked}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
+            style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {/* 内置插件(浏览器/终端):随 App 发行、默认开;放最上面因为它们是默认在场的能力。 */}
+      <div className="settings-sec">{t('settings.amadeusPlugins.builtinTitle')}</div>
+      <div className="hint">{t('settings.amadeusPlugins.builtinHint')}</div>
+      {/* 宿主原生能力(浏览器/终端)与编辑器内置插件排同一列 —— 来源不同,对用户是一回事。 */}
       <BuiltinPluginsSection />
-      <div className="hint" style={{ marginTop: 6 }}>{t('settings.amadeusPlugins.hint')}</div>
+      {builtins.map(renderCard)}
+
+      <div className="settings-sec settings-sec--gap">{t('settings.amadeusPlugins.externalTitle')}</div>
+      <div className="hint">{t('settings.amadeusPlugins.hint')}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>
         <button className="btn ghost sm" onClick={() => void reload().then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
         <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>
       </div>
-      {plugins.length === 0 && <div className="hint">{t('settings.amadeusPlugins.empty')}</div>}
-      {plugins.map((p) => {
-        const on = activeIds.includes(p.id)
-        return (
-          <div
-            key={p.id}
-            onClick={() => setDetail(p.id)}
-            style={{ ...card, opacity: p.blocked ? 0.6 : 1, cursor: 'pointer' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <b style={{ fontSize: 13 }}>{p.name}</b>
-                  <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
-                  <span style={badge}>{p.builtin ? t('settings.amadeusPlugins.builtin') : t('settings.amadeusPlugins.external')}</span>
-                  {p.blocked && (
-                    <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
-                  )}
-                  {needsOnboarding(p) && (
-                    <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
-                  )}
-                  <BundleChips p={p} />
-                </div>
-                {p.description && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{p.description}</div>}
-              </div>
-              <input
-                type="checkbox"
-                checked={on}
-                disabled={!!p.blocked}
-                onClick={(e) => e.stopPropagation()}
-                onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
-                style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
-              />
-            </div>
-          </div>
-        )
-      })}
+      {externals.length === 0 && <div className="hint">{t('settings.amadeusPlugins.empty')}</div>}
+      {externals.map(renderCard)}
     </div>
   )
 }

@@ -161,7 +161,11 @@ const localBackend: AmadeusBackend = {
   write: async (rel, content) => {
     const abs = inVault(rel);
     await fs.mkdir(path.dirname(abs), { recursive: true });
-    await fs.writeFile(abs, content, 'utf8');
+    // 原子写(tmp+rename):vault 同时还有渲染端与桌面 main 两个写者/读者,直接 writeFile 会让
+    // 别人读到半截 JSON —— 桌面 main 的 writeTextFile 早就是原子的,这边一直是漏的。
+    const tmp = `${abs}.tmp-${process.pid}-${Date.now()}`;
+    await fs.writeFile(tmp, content, 'utf8');
+    await fs.rename(tmp, abs);
   },
 };
 

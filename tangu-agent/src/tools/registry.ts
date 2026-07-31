@@ -20,6 +20,7 @@ import { browserToolsProvider } from './builtin/browserTools.js';
 import { todoProvider } from './builtin/todo.js';
 import { hostProcessProvider } from './builtin/hostProcess.js';
 import { delegateProvider } from './builtin/delegate.js';
+import { brainstormProvider } from './builtin/brainstorm.js';
 import { interactionProvider } from './builtin/interaction.js';
 import { manageAgentProvider } from './builtin/manageAgent.js';
 import { manageSkillProvider } from './builtin/manageSkill.js';
@@ -70,6 +71,11 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   list_processes: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 10_000 },
   read_process_output: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 10_000 },
   todo_read: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 10_000 },
+  // 子代理可并发(借 Codex spawn 并行模式:一轮多 delegate 同时跑,批宽由 MAX_PARALLEL_TOOL_CALLS 管)。
+  // 子代理内部的工具串行执行且审批闸门照走,父层并发不叠加写冲突面;写作用域不重叠由委派方(模型)划分。
+  delegate: { sideEffect: 'unknown', parallel: true, defaultTimeoutMs: 600_000 },
+  // 纯推理无副作用,但 N 席×2 轮很贵且自身已内部并行 → 不再与其它工具并跑;超时同 delegate。
+  self_brainstorm: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 600_000 },
 };
 
 const SERIAL_TOOL_CAPABILITIES: ToolCapabilities = {
@@ -143,6 +149,7 @@ registerToolProvider(manageScheduleProvider); // 本地限定:每-agent 日程 S
 registerToolProvider(loadToolsProvider); // both:load_tools 解锁 deferred 工具定义(P0-2;仅有未解锁项且调用方支持时可见)
 registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面聊天旁的 Agent Desk 演出面板展示文件(实验;append 末尾,保前缀缓存)
 registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)
+registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -159,6 +166,24 @@ function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext,
   appendActivityLine('agent.edit', { tool: name, agent: ctx.agentSlug, f: f || undefined, o: ctx.automationOrigin || undefined });
 }
 
+/** coding 预设下追加转 deferred 的产品面工具(仍在「Additional Tools」目录里,load_tools 可解锁):
+ *  WB-Bench 取证——48 工具全暴露时,封闭 bench 里模型调了 107 次 web、80 次 log_event、139 次
+ *  use_skill,纯烧迭代/带偏任务。coding 任务的常驻面只留文件/shell/进程/todo/委派。 */
+const CODING_PRESET_DEFERRED = new Set([
+  'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type',
+  'browser_scroll', 'browser_back', 'browser_press', 'browser_console', 'browser_screenshot',
+  'browser_task', 'web_search', 'web_fetch',
+  'amadeus_list_notes', 'amadeus_list_calendars', 'amadeus_list_events',
+  'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
+  'inbox_send', 'display_file', 'read_session', 'read_document',
+  'remember', 'log_event', 'read_log',
+]);
+
+/** 工具在本 ctx 下是否按 deferred 处理:静态标记 ∪ coding 预设的产品面集合。 */
+function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean): boolean {
+  return !!deferred || (ctx.preset === 'coding' && CODING_PRESET_DEFERRED.has(name));
+}
+
 /** 返回喂给 LLM 的工具定义（OpenAI function 格式）：按模式/profile 过滤的内置 + 本 run 的自定义工具 + MCP 工具（按名去重，内置 > 自定义 > MCP）。 */
 export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const hasSkills = !!(ctx.enabledSkillIds && ctx.enabledSkillIds.length);
@@ -171,14 +196,14 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const unlocked = ctx.unlockedTools;
   let lockedCount = 0;
   if (!deferBypass) {
-    for (const t of tools.values()) if (t.deferred && !unlocked?.has(t.name)) lockedCount++;
+    for (const t of tools.values()) if (isDeferredIn(ctx, t.name, t.deferred) && !unlocked?.has(t.name)) lockedCount++;
   }
   const defs: Tool[] = [];
   const unlockedDeferred: Tool[] = [];
   for (const [name, t] of tools) {
     if (name === 'use_skill' && !hasSkills) continue; // 无启用技能时不暴露 use_skill
     if (name === 'load_tools' && (lockedCount === 0 || !ctx.unlockTools)) continue; // 无可解锁项/不支持解锁时不暴露
-    if (t.deferred && !deferBypass) {
+    if (isDeferredIn(ctx, name, t.deferred) && !deferBypass) {
       if (unlocked?.has(name)) unlockedDeferred.push(t.definition);
       continue;
     }
@@ -209,7 +234,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
 export function listDeferredTools(ctx: ToolContext): { name: string; hint: string; group?: string }[] {
   const out: { name: string; hint: string; group?: string }[] = [];
   for (const [name, t] of resolveTools(currentProfile(ctx), ctx)) {
-    if (!t.deferred) continue;
+    if (!isDeferredIn(ctx, name, t.deferred)) continue;
     const hint = t.deferHint || String(t.definition?.function?.description || '').split('\n')[0].slice(0, 120);
     out.push({ name, hint, ...(t.deferGroup ? { group: t.deferGroup } : {}) });
   }
@@ -277,7 +302,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   // 没有 load_tools,瞎指会把「出路」变成第二次失败——Codex 评审 #4);plan 模式下 custom/MCP 工具
   // 根本不进 ctx、无法逐名识别 → 补一句模式级说明兜底(Codex 评审 #3)。
   const canLoad = !!ctx.unlockTools && !ctx.muse && !ctx.automationOrigin &&
-    [...resolveTools(currentProfile(ctx), ctx).values()].some((t) => t.deferred && !ctx.unlockedTools?.has(t.name));
+    [...resolveTools(currentProfile(ctx), ctx).values()].some((t) => isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name));
   const planNote = ctx.planMode ? ' Note: plan mode is active — custom/external tools are disabled until the plan is approved.' : '';
   return {
     toolCallId: call.id, name,

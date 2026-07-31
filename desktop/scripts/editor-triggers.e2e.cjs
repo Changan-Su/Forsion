@@ -800,6 +800,81 @@ async function main() {
     check('T32 锚点找不到 → 停在块首(绝不乱跳)', (await type('一二三四五', '不存在')) === '|一二三四五')
   })
 
+  // T33:`<br…>` 变体不得以字面量出现在正文里(用户实报「云端笔记有时候莫名会出现 <br />」)。
+  // Milkdown 的 preserve-empty-line 只认四种精确写法,`<BR>` / `<br  />` / 带属性 / 后面紧跟文本的
+  // 一律留成 contenteditable=false 的原子 html 块 —— 云端笔记多由 AI 写,正是这些口味。
+  await tryTest('T33', async () => {
+    const render = async (seed) => {
+      const p = await freshPage(seed)
+      const r = await p.evaluate(() => {
+        const pm = document.querySelector('.md-block .ProseMirror')
+        return { text: pm.textContent, paras: (pm.innerHTML.match(/<p[ >]/g) || []).length }
+      })
+      await p.close()
+      return r
+    }
+    for (const [label, seed] of [
+      ['大写 BR', 'a<BR>b'],
+      ['多空格', 'a<br  />b'],
+      ['带属性', 'a<br class="x">b'],
+      ['块级紧邻文本', 'a\n\n<br />\nx\n\nb'],
+    ]) {
+      const r = await render(seed)
+      check(`T33 ${label}:不显示字面量 <br`, !/<br/i.test(r.text), `text=${JSON.stringify(r.text)}`)
+    }
+    check('T33 br 换成了真换行(a/b 成两段)', (await render('a<BR>b')).paras === 2, `paras=${(await render('a<BR>b')).paras}`)
+    // 用户写的真 HTML 别乱解释:`<div>` 仍原样保留。
+    const div = await render('a\n\n<div>x</div>\n\nb')
+    check('T33 非 br 的 HTML 不动', div.text.includes('<div>x</div>'), `text=${JSON.stringify(div.text)}`)
+  })
+
+  // T34:`|` = 引用,`>` = 折叠(2026-07-29 换键位)。折叠落盘 = Obsidian 折叠 callout。
+  await tryTest('T34', async () => {
+    const typed = async (prefix, body) => {
+      const p = await freshPage()
+      await p.click('.md-block .ProseMirror')
+      await p.keyboard.type(prefix, { delay: 40 })
+      await p.waitForTimeout(300)
+      await p.keyboard.type(body, { delay: 40 })
+      await p.waitForTimeout(500)
+      const md = (await mdOf(p)).trim()
+      const cls = await p.evaluate(() => {
+        const bq = document.querySelector('.md-block .ProseMirror blockquote')
+        return bq ? bq.className : ''
+      })
+      await p.close()
+      return { md, cls }
+    }
+    const q = await typed('| ', '引用内容')
+    check('T34 `|` + 空格 = 普通引用(落盘仍是标准 `> `)', q.md === '> 引用内容', `md=${JSON.stringify(q.md)}`)
+    check('T34 普通引用不被当成 callout', !/callout/.test(q.cls), `class=${JSON.stringify(q.cls)}`)
+    const f = await typed('> ', '这是标题')
+    // 令牌不带尾随空格(contenteditable 会吃掉行尾空格);`[` 也不许被转义成 `\[`,否则 Obsidian 不认。
+    check('T34 `>` + 空格 = 折叠块(Obsidian 折叠 callout)', f.md === '> [!fold]-这是标题', `md=${JSON.stringify(f.md)}`)
+    check('T34 折叠块渲染成 callout-fold', /callout-fold/.test(f.cls), `class=${JSON.stringify(f.cls)}`)
+    // callout 往返:`[!x]` 不得被转义,且必须真的渲染成 callout(这条正则漏 `]` 时整个功能是死的)。
+    const cq = await freshPage('> [!note]- 标题\n> 内容')
+    const cqCls = await cq.evaluate(() => document.querySelector('.md-block .ProseMirror blockquote').className)
+    await cq.click('.md-block .ProseMirror')
+    await cq.keyboard.press('End')
+    await cq.keyboard.type('Z', { delay: 40 })
+    await cq.waitForTimeout(250)
+    await cq.keyboard.press('Backspace')
+    await cq.waitForTimeout(450)
+    const cqMd = await mdOf(cq)
+    await cq.close()
+    check('T34 已有 callout 渲染成标注块', /callout-note/.test(cqCls), `class=${JSON.stringify(cqCls)}`)
+    check('T34 callout 往返不被转义成 \\[!note]', !cqMd.includes('\\['), `md=${JSON.stringify(cqMd)}`)
+    // 老笔记里的裸 `>` 语义不变 —— 变的只是键盘上敲 `>` 得到什么。
+    const legacy = await freshPage('> 老引用')
+    const legacyCls = await legacy.evaluate(() => {
+      const bq = document.querySelector('.md-block .ProseMirror blockquote')
+      return bq ? bq.className : 'NO-BLOCKQUOTE'
+    })
+    await legacy.close()
+    check('T34 老笔记的裸 `>` 仍是普通引用', legacyCls === '', `class=${JSON.stringify(legacyCls)}`)
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

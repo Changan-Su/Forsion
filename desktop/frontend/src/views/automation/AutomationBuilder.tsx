@@ -18,8 +18,18 @@ import { BUILTIN_EVENTS, isFinishedTrigger, parseLocalDatetime } from './lib'
 import { listPluginAutomationEvents } from '../../amadeus/plugins/pluginStore'
 import type { AutomationActionCatalogItem, AutomationActionSpec, MuseTriggerInfo } from '../../types'
 
-type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte'
+type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual'
 type TimerMode = 'daily_at' | 'at' | 'every'
+
+/** 嵌入用法(Amadeus 按钮块的配置弹层):固定手动触发 + 保存后把规则交回调用方,不碰自动化 Space 的选中态。 */
+export interface AutomationBuilderProps {
+  editing?: MuseTriggerInfo
+  /** true=锁死「手动(按钮)」触发,隐藏触发类型选择器。 */
+  fixedManual?: boolean
+  /** 给了就用它取代默认的「关闭构建器 + 选中该规则」收尾。 */
+  onSaved?: (trigger: MuseTriggerInfo) => void
+  onCancel?: () => void
+}
 
 interface StepDraft {
   key: number
@@ -33,6 +43,18 @@ interface StepDraft {
   argValues: Record<string, string>
 }
 
+/** 本版构建器能编辑的步骤类型。DB 动作(db_row_add/db_row_edit)暂只由 manage_automation 工具创建 ——
+ *  这里**不静默降级**成别的步骤:那等于用户点开看一眼、按保存就把动作抹了。 */
+function isEditableStep(a: AutomationActionSpec): a is Extract<AutomationActionSpec, { type: 'notify' | 'agent_run' | 'tool_call' }> {
+  return a.type === 'notify' || a.type === 'agent_run' || a.type === 'tool_call'
+}
+
+/** 这条规则里有本版构建器还不认识的部分吗(DB 触发 / DB 动作)。 */
+export function hasUnsupportedParts(t?: MuseTriggerInfo): boolean {
+  if (!t) return false
+  return t.cond?.type === 'db_changed' || !!t.actions?.some((a) => !isEditableStep(a))
+}
+
 let stepKey = 1
 const blankStep = (type: StepDraft['type']): StepDraft =>
   ({ key: stepKey++, type, title: '', body: '', agentSlug: '', prompt: '', tool: '', argValues: {} })
@@ -40,7 +62,7 @@ const blankStep = (type: StepDraft['type']): StepDraft =>
 /** editing → 表单初值(旧式 agentSlug 规则转成一个 agent_run 步骤)。 */
 function stepsFrom(editing?: MuseTriggerInfo): StepDraft[] {
   if (editing?.actions?.length) {
-    return editing.actions.map((a) => ({
+    return editing.actions.filter(isEditableStep).map((a) => ({
       ...blankStep(a.type),
       title: a.type === 'notify' ? a.title : '',
       body: a.type === 'notify' ? a.body || '' : '',
@@ -79,7 +101,7 @@ function buildToolArgs(cat: AutomationActionCatalogItem | undefined, vals: Recor
   return out
 }
 
-export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ editing }) => {
+export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, fixedManual, onSaved, onCancel }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const agentDefs = useApp((s) => s.agentDefs)
@@ -89,9 +111,10 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
   const [desc, setDesc] = useState(editing?.desc || '')
   const initCond = editing?.cond
   const [kind, setKind] = useState<TriggerKind>(
-    !initCond ? 'timer'
+    !initCond ? (fixedManual ? 'manual' : 'timer')
     : initCond.type === 'event_seen' ? 'event_seen'
     : initCond.type === 'file_chars_gte' ? 'file_chars_gte'
+    : initCond.type === 'manual' ? 'manual'
     : 'timer',
   )
   const [timerMode, setTimerMode] = useState<TimerMode>(
@@ -126,6 +149,22 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
       return next
     })
 
+  // 含 DB 触发/动作的规则:本版表单表达不了它,渲染出来就会在保存时把那部分抹掉。
+  // 明说 + 不给保存,比"看着能编辑其实会毁配置"强(codex 抓的)。
+  if (hasUnsupportedParts(editing)) {
+    return (
+      <div className="auto-builder">
+        <div className="auto-builder-title"><Workflow size={17} /> {t('automation.builder.editTitle')}</div>
+        <div className="auto-node">
+          <div className="auto-hint">{t('automation.builder.unsupported')}</div>
+        </div>
+        <div className="auto-builder-actions">
+          <button className="btn ghost" onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
+        </div>
+      </div>
+    )
+  }
+
   const stepValid = (s: StepDraft): boolean => {
     if (s.type === 'notify') return !!s.title.trim()
     if (s.type === 'agent_run') return !!s.agentSlug && !!s.prompt.trim()
@@ -143,6 +182,8 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
     }
     if (kind === 'event_seen' && !match.trim()) return false
     if (kind === 'file_chars_gte' && (!path.trim() || !(Number(n) > 0))) return false
+    // 手动类没有 Muse 兜底语义:0 步骤的按钮点了什么也不会发生,直接不让存。
+    if (kind === 'manual' && !steps.length) return false
     return steps.every(stepValid)
   }, [desc, kind, timerMode, time, datetime, ivlN, match, path, n, steps, catalog])
 
@@ -160,7 +201,7 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
       : s.type === 'agent_run' ? { type: 'agent_run', agentSlug: s.agentSlug, prompt: s.prompt.trim() }
       : { type: 'tool_call', tool: s.tool, args: buildToolArgs(catalog.find((c) => c.name === s.tool), s.argValues) })
     try {
-      await saveMuseTrigger(cfg, {
+      const saved = await saveMuseTrigger(cfg, {
         id: editing?.id,
         desc: desc.trim(),
         cond_type: condType,
@@ -171,12 +212,13 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
         path: condType === 'file_chars_gte' ? path.trim() : undefined,
         n: condType === 'file_chars_gte' ? Number(n) : undefined,
         prompt: steps.length ? undefined : musePrompt.trim() || undefined,
-        cooldown_hours: kind === 'timer' ? undefined : Number(cooldown) > 0 ? Number(cooldown) : undefined,
+        cooldown_hours: kind === 'timer' || kind === 'manual' ? undefined : Number(cooldown) > 0 ? Number(cooldown) : undefined,
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
         actions: steps.length ? actions : null,
         enabled: expiredAt ? true : editing?.enabled ?? true,
       })
       st.bump()
+      if (onSaved) { onSaved(saved); return } // 嵌入用法(Amadeus 按钮块):由调用方决定收尾
       st.closeBuilder()
       if (editing) st.setSel({ kind: 'trigger', triggerId: editing.id })
     } catch (e: any) {
@@ -201,14 +243,18 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
           <label>{t('automation.builder.desc')}</label>
           <input type="text" value={desc} maxLength={200} placeholder={t('automation.builder.descPh')} onChange={(e) => setDesc(e.target.value)} />
         </div>
-        <div className="field">
-          <label>{t('automation.builder.condType')}</label>
-          <div className="auto-seg">
-            <button className={kind === 'timer' ? 'active' : ''} onClick={() => setKind('timer')}>{t('automation.builder.condTimer')}</button>
-            <button className={kind === 'event_seen' ? 'active' : ''} onClick={() => setKind('event_seen')}>{t('automation.builder.condEvent')}</button>
-            <button className={kind === 'file_chars_gte' ? 'active' : ''} onClick={() => setKind('file_chars_gte')}>{t('automation.builder.condFile')}</button>
+        {!fixedManual && (
+          <div className="field">
+            <label>{t('automation.builder.condType')}</label>
+            <div className="auto-seg">
+              <button className={kind === 'timer' ? 'active' : ''} onClick={() => setKind('timer')}>{t('automation.builder.condTimer')}</button>
+              <button className={kind === 'event_seen' ? 'active' : ''} onClick={() => setKind('event_seen')}>{t('automation.builder.condEvent')}</button>
+              <button className={kind === 'file_chars_gte' ? 'active' : ''} onClick={() => setKind('file_chars_gte')}>{t('automation.builder.condFile')}</button>
+              <button className={kind === 'manual' ? 'active' : ''} onClick={() => setKind('manual')}>{t('automation.builder.condManual')}</button>
+            </div>
           </div>
-        </div>
+        )}
+        {kind === 'manual' && <div className="auto-hint">{t('automation.builder.manualHint')}</div>}
         {kind === 'timer' && (
           <>
             <div className="field">
@@ -356,7 +402,7 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
         )
       })}
 
-      {steps.length === 0 && (
+      {steps.length === 0 && kind !== 'manual' && (
         <div className="auto-node auto-node-muse">
           <div className="auto-node-head"><span className="auto-ic"><Sparkles size={14} /></span>{t('automation.builder.museFallback')}</div>
           <div className="auto-hint">{t('automation.builder.museFallbackHint')}</div>
@@ -373,7 +419,7 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
         <button disabled={!catalog.length} title={catalog.length ? '' : t('automation.builder.toolCatalogEmpty')} onClick={() => setSteps((ss) => [...ss, blankStep('tool_call')])}><Wrench size={12} /> {t('automation.step.tool_call')}</button>
       </div>
 
-      {kind !== 'timer' && (
+      {kind !== 'timer' && kind !== 'manual' && (
         <div className="auto-guard">
           <label>{t('automation.builder.cooldown')}</label>
           <input type="number" value={cooldown} min={hasAgentStep ? 1 : 0.25} step="1" onChange={(e) => setCooldown(e.target.value)} />
@@ -383,7 +429,7 @@ export const AutomationBuilder: React.FC<{ editing?: MuseTriggerInfo }> = ({ edi
 
       {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 12, marginTop: 12 }}>{error}</div>}
       <div className="auto-builder-actions">
-        <button className="btn ghost" onClick={() => st.closeBuilder()}>{t('common.cancel')}</button>
+        <button className="btn ghost" onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
         <button className="btn" disabled={!canSave || busy} onClick={() => void save()}>
           {busy ? '…' : t('common.save')}
         </button>

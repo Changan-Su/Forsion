@@ -9,8 +9,9 @@
 //    不做这一步,重新打开笔记后整块会塌成**一个**多行 textblock,行首触发符(`# ` / `- ` / `> `)
 //    从第 2 行起全部失效 —— 症状是「刚打的时候好好的,重开就不灵了」。
 //
-// 代价(有意接受):外部写的 `a\n\nb`(真空行分段)在本编辑器里保存后收敛成 `a\nb`。
-// Amadeus 的块模型本来就把「段落」呈现为「行」,两者渲染完全一致;想要真空行敲两次回车留一个空段落。
+// 空行(空段落)落盘 = 一条**真**空行,不再是 `<br />` 记号:写端 stripEmptyLineBr 抹平,
+// 读端 expand 按 mdast 的 position 行距把空段落还原回来。外部 `a\n\nb` 因此原样往返(此前会收敛成
+// `a\nb`)。只在 paragraph↔paragraph 之间还原 —— 标题/列表与正文之间的空行是 markdown 常态,不是空段落。
 //
 // ⚠️ 只拆 paragraph 的**直接** children。`<u>a\nb</u>` 这类换行被夹在 mark 节点内部的,'\n' 原样留在
 // 文本里 —— ProseMirror 的 white-space:pre-wrap 照样渲染成换行,只是不拆成独立段落。刻意不递归:
@@ -25,12 +26,42 @@ type MdNode = any
 const isBreak = (n: MdNode): boolean => n?.type === 'break'
 
 /**
+ * `<br…>` 开头的 html 节点 = 换行(而不是要显示出来的字)。
+ *
+ * Milkdown 的 preserve-empty-line 只认**四种精确写法**(`<br />` `<br>` `<br >` `<br/>`),别的一律当
+ * 原始 HTML 留着 —— 而 Milkdown 把 html 节点渲染成 contenteditable=false 的原子块,于是
+ * `<BR>` / `<br  />` / `<br class="x">` / 后面紧跟文本的 `<br />` 会**原样以字面量出现在正文里**。
+ * 云端笔记多由 AI 写,这些变体正是模型的常见口味(用户实报「云端笔记有时候莫名会出现 <br />」)。
+ * 取证见 softBreak.test.ts 的「br 变体」组 + editor-triggers e2e T33。
+ */
+const BR_LEAD_RE = /^(?:\s*<br\b[^>]*>)+/i
+
+interface BrLead {
+  /** 开头连着几个 `<br…>`;0 = 该节点不是 br 打头,别动它。 */
+  count: number
+  /** 去掉这些标签之后剩下的原文。 */
+  rest: string
+}
+function brLead(n: MdNode): BrLead {
+  if (n?.type !== 'html' || typeof n.value !== 'string') return { count: 0, rest: '' }
+  const m = BR_LEAD_RE.exec(n.value)
+  if (!m) return { count: 0, rest: '' }
+  return { count: (m[0].match(/<br\b/gi) ?? []).length, rest: n.value.slice(m[0].length) }
+}
+/** 剩余原文里没有尖括号 = 纯文本,可以安全地当正文接回去;含标签的一律保持 html 原样(别乱解释用户写的 HTML)。 */
+const restAsText = (rest: string): string | null => {
+  const t = rest.replace(/^\n+/, '')
+  return t && !t.includes('<') ? t : null
+}
+
+/**
  * 把一个 paragraph 按行拆成若干 paragraph。没有换行 → 返回 [原节点](不复制,零开销)。
  * text 节点里的 '\n' 与 break 节点都算换行;拆完丢掉空段(remark 不会产出,纯防御)。
  */
 export function splitParagraph(p: MdNode): MdNode[] {
   const kids: MdNode[] = Array.isArray(p?.children) ? p.children : []
-  const hasNl = kids.some((k) => isBreak(k) || (k?.type === 'text' && typeof k.value === 'string' && k.value.includes('\n')))
+  const hasNl = kids.some((k) =>
+    isBreak(k) || brLead(k).count > 0 || (k?.type === 'text' && typeof k.value === 'string' && k.value.includes('\n')))
   if (!hasNl) return [p]
 
   const lines: MdNode[][] = [[]]
@@ -38,6 +69,15 @@ export function splitParagraph(p: MdNode): MdNode[] {
   for (const k of kids) {
     if (isBreak(k)) {
       lines.push([])
+      continue
+    }
+    // 行内 `<br…>`:一个标签 = 一次换行(HTML 语义,也是 Obsidian 的渲染)。
+    const br = brLead(k)
+    if (br.count > 0) {
+      for (let i = 0; i < br.count; i++) lines.push([])
+      const t = restAsText(br.rest)
+      if (t) push({ type: 'text', value: t })
+      else if (br.rest.trim()) push({ ...k, value: br.rest })
       continue
     }
     if (k?.type === 'text' && typeof k.value === 'string' && k.value.includes('\n')) {
@@ -58,16 +98,70 @@ export function splitParagraph(p: MdNode): MdNode[] {
   return lines.map((children) => ({ ...p, children }))
 }
 
-/** 递归:把树里每个含 paragraph 的 children 数组就地展开。 */
-function expand(node: MdNode): void {
+/**
+ * 落盘前抹掉「整行只有 `<br />`」的行,还原成一条真正的空行。
+ *
+ * Milkdown 的 preserve-empty-line 把空段落序列化成 `<br />`(preset-commonmark/node/paragraph.ts),
+ * 于是文件里到处是莫名其妙的 `<br />` —— 在 Obsidian / 任何别的编辑器里都看得见(用户实报)。
+ * 空行本身要留住:读回时按**行距**重建空段落(见 expand 里的 blankGap),不再靠 `<br />` 当记号。
+ * 围栏内的 `<br />` 是代码不是排版,一律不动;行内的 `<br />`(`a<br />b`)也不动(brLead 认它)。
+ */
+export function stripEmptyLineBr(md: string): string {
+  if (!md.includes('<br')) return md
+  const lines = md.split('\n')
+  let fence: '`' | '~' | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
+    if (f) {
+      const mark = f[1][0] as '`' | '~'
+      if (!fence) fence = mark
+      else if (mark === fence) fence = null
+      continue
+    }
+    if (fence) continue
+    // 空段落也可能长在列表项 / 引用里(列表中连按两次回车就是),那时整行是 `* <br />` / `> <br />`。
+    // 留下前缀本身(`*` = 空列表项,`>` = 空引用行)——那才是这行原本的意思。
+    const m = /^(\s*(?:(?:[-*+]|\d+[.)])\s+|>\s?)*)<br\s*\/?>\s*$/i.exec(lines[i])
+    if (m) lines[i] = m[1].replace(/\s+$/, '')
+  }
+  return lines.join('\n')
+}
+
+/** 相邻两个 paragraph 之间的真空行条数(mdast 的 position 行号差 - 1);拿不到位置信息 → 0。 */
+function blankGap(prev: MdNode, next: MdNode): number {
+  if (prev?.type !== 'paragraph' || next?.type !== 'paragraph') return 0
+  const end = prev.position?.end?.line
+  const start = next.position?.start?.line
+  if (typeof end !== 'number' || typeof start !== 'number') return 0
+  return Math.max(0, start - end - 1)
+}
+
+/** 递归:把树里每个含 paragraph 的 children 数组就地展开(导出仅供单测,生产入口是 softBreakRemark)。 */
+export function expand(node: MdNode): void {
   if (!Array.isArray(node?.children)) return
   const out: MdNode[] = []
+  let prev: MdNode | null = null
   for (const child of node.children) {
-    if (child?.type === 'paragraph') out.push(...splitParagraph(child))
-    else {
-      expand(child)
-      out.push(child)
+    // 两个 paragraph 之间的空行 = 用户敲出来的空段落。序列化时相邻 paragraph 只隔一个 '\n'
+    // (softBreakJoin),所以文件里多出来的那条空行**只可能**是空段落 —— 不还原的话「a⏎⏎b」
+    // 重开就贴到一起了(旧实现靠落盘 `<br />` 当记号,那记号现在不写了,见 stripEmptyLineBr)。
+    for (let i = 0; i < blankGap(prev, child); i++) out.push({ type: 'paragraph', children: [] })
+    prev = child
+    if (child?.type === 'paragraph') {
+      out.push(...splitParagraph(child))
+      continue
     }
+    // 块级 `<br…>`(自成一行):等价于一个空段落 = 一条空行,与 Milkdown 对四种精确写法的处理对齐。
+    const br = brLead(child)
+    if (br.count > 0) {
+      for (let i = 0; i < br.count; i++) out.push({ type: 'paragraph', children: [] })
+      const t = restAsText(br.rest)
+      if (t) out.push({ type: 'paragraph', children: [{ type: 'text', value: t }] })
+      else if (br.rest.trim()) out.push({ ...child, value: br.rest })
+      continue
+    }
+    expand(child)
+    out.push(child)
   }
   node.children = out
 }

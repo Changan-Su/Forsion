@@ -47,6 +47,7 @@ export function toVaultRel(serverPath: string, folder: string): string {
 export function isIgnoredName(baseName: string): boolean {
   if (baseName === '.DS_Store' || baseName === 'Icon\r') return true
   if (/\.tmp-\d+-\d+-\d+$/.test(baseName)) return true // vaultManager/引擎的原子写临时文件
+  if (/^\..+\.lock$/.test(baseName)) return true // `.<表名>.db.lock` = 跨进程写锁,活不过几毫秒(见 fs/dbLock.ts)
   return false
 }
 

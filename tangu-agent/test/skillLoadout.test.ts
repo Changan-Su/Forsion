@@ -101,3 +101,14 @@ describe('loadSkillLoadout — 技能段不因单轮配置不完整而消失(hos
     expect(enabledSkillIds).toEqual(['local:foo']);
   });
 });
+
+describe('loadSkillLoadout — coding 预设技能目录降位(07-30:WB-Bench 80/80 反射式装载=错误路由)', () => {
+  it('coding:目录带「last resort」降位行;非 coding 文本逐字节零变化', async () => {
+    const coding = await loadSkillLoadout('u', 'tangu', { execMode: 'host', preset: 'coding' });
+    expect(coding.sections.join('\n')).toContain('last resort');
+    const normal = await loadSkillLoadout('u', 'tangu', { execMode: 'host' });
+    expect(normal.sections.join('\n')).not.toContain('last resort');
+    // 非 coding 的目录段与降位行无关的部分保持原措辞(回归防线)
+    expect(normal.sections.join('\n')).toContain('No need to call it for unrelated simple questions.');
+  });
+});

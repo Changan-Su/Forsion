@@ -22,6 +22,7 @@ export interface StandaloneConfig {
   /** OAuth 登录派生的 provider(main 启动时注入;合并优先级最低——显式配置覆盖订阅登录)。 */
   oauthProviders?: DirectProvider[];
   showHelp: boolean;
+  showVersion: boolean; // -v/--version:打印引擎版本后退出(bench/运维据此区分 build)
   printConfig: boolean; // --print-config:打印当前生效配置后退出
 }
 
@@ -62,6 +63,7 @@ export function parseConfig(argv: string[]): StandaloneConfig {
     providers: [],
     providersFile: process.env.TANGU_PROVIDERS_FILE || undefined,
     showHelp: false,
+    showVersion: false,
     printConfig: false,
   };
   // inline 单 provider(env 为起点,CLI 可覆盖;providerId+baseUrl 齐全才算数)
@@ -95,6 +97,7 @@ export function parseConfig(argv: string[]): StandaloneConfig {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-h' || a === '--help') { cfg.showHelp = true; continue; }
+    if (a === '-v' || a === '--version') { cfg.showVersion = true; continue; }
     if (a === '--print-config') { cfg.printConfig = true; continue; }
     if (!a.startsWith('--')) continue;
     if (a.includes('=')) set(a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1));
@@ -127,6 +130,7 @@ export const HELP = `Tangu Agent — standalone(云端大脑客户端，HTTP/SSE
   --user-id <id>      本地单用户 id(默认 local),env TANGU_USER_ID
   --sandbox <mode>    docker|none|auto(默认 auto:docker 可用即开),env TANGU_SANDBOX
   --print-config      打印当前生效配置(含 ~/.tangu/config.json + env 叠加)后退出
+  -v, --version       打印引擎版本后退出
   -h, --help          显示帮助
 
 LLM 多 provider(直连用户自有 provider;未配则 LLM 全走 Forsion 托管面):

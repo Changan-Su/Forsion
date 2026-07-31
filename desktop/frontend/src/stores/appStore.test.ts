@@ -224,3 +224,62 @@ describe('appStore.reduceEvent', () => {
     expect(sendMock).toHaveBeenCalledTimes(1) // 仍是最初那一次,泄漏=会变 2
   })
 })
+
+// /compact 进度条:百分比是客户端估算(接口一次性返回),所以真正会坏的是生命周期——
+// 起步不为 0、自己走到 100 骗人、完成后不撤(条子永远挂在流末尾)、失败路径漏掉收尾。
+const compactMock = vi.hoisted(() => vi.fn())
+vi.mock('../services/backendService', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  compactSession: (...a: unknown[]) => compactMock(...a),
+}))
+
+describe('appStore.compact 进度', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    useApp.setState(initial, true)
+    useApp.setState({ tr: ((k: string) => k) as AppState['tr'], activeId: 's1' })
+    compactMock.mockReset()
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const pct = () => useApp.getState().compactingBySession.s1
+
+  it('0 起步 → 缓动但永不自行到 100 → 完成冲 100 → 停一拍后撤', async () => {
+    let finish: (v: unknown) => void = () => {}
+    compactMock.mockReturnValue(new Promise((r) => { finish = r }))
+
+    const p = useApp.getState().compact('s1')
+    expect(pct()).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    const mid = pct()!
+    expect(mid).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(50_000)
+    expect(pct()!).toBeGreaterThan(mid) // 单调推进
+    expect(pct()!).toBeLessThanOrEqual(90) // 上界:没拿到响应就绝不满格
+
+    finish({ ok: true, summarizedCount: 3 })
+    await p
+    expect(pct()).toBe(100)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(pct()).toBeUndefined() // 撤干净,否则条子永久挂在流末尾
+  })
+
+  it('压缩中重复触发不叠第二次', async () => {
+    let finish: (v: unknown) => void = () => {}
+    compactMock.mockReturnValue(new Promise((r) => { finish = r }))
+    const p = useApp.getState().compact('s1')
+    await useApp.getState().compact('s1')
+    expect(compactMock).toHaveBeenCalledTimes(1)
+    finish({ ok: true })
+    await p
+  })
+
+  it('接口抛错也把进度收干净', async () => {
+    compactMock.mockRejectedValue(new Error('boom'))
+    await useApp.getState().compact('s1')
+    expect(pct()).toBe(100)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(pct()).toBeUndefined()
+  })
+})

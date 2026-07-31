@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react'
 
-function useEscape(onClose: () => void): void {
+export function useEscape(onClose: () => void): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()

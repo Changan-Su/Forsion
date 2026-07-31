@@ -7,7 +7,8 @@
  *   POST     /agent/special/muse/todos/inject { todoIds, sessionId }  注入选中 TODO 到会话并起 run
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
  *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
- *   POST     /agent/special/automation/triggers/:id/fire  试跑(同执行器,origin=manual,不动 lastFiredAt)
+ *   POST     /agent/special/automation/triggers/:id/fire  立即执行(origin=manual 试跑 / button 按钮点击,不动 lastFiredAt)
+ *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s)
  *   GET      /agent/special/automation/actions          tool_call 动作目录(白名单+automationSafe)
  *   GET      /agent/special/automation/executions       动作链执行账本(?triggerId=&limit=)
  *   POST     /agent/special/muse/triggers              upsert 规则(带 id 改/无 id 建;桌面「自动化」构建器)
@@ -30,6 +31,8 @@ import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt } from '../services/specialAgentsConfig.js';
 import { museStatus, kickMuse } from '../services/muse.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt } from '../services/museTriggers.js';
+import { dropCursors } from '../services/dbCursors.js';
+import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { listAutomationSessions, runActions, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
 import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -225,8 +228,10 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
 router.delete('/agent/special/muse/triggers/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const ok = await removeTrigger(String(req.params.id || ''));
+    const id = String(req.params.id || '');
+    const ok = await removeTrigger(id);
     if (!ok) return res.status(404).json({ detail: 'trigger not found' });
+    await dropCursors([id]).catch(() => {}); // 派生游标随规则一起走,否则 id 复用会捡到别人的快照
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete trigger failed' });
@@ -239,7 +244,7 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
   if (!ensureLocal(res)) return;
   try {
     const body = req.body || {};
-    const v = validateTriggerInput(body, { allowToolCall: true });
+    const v = validateTriggerInput(body, { allowToolCall: true, vaultPath: amadeusVaultPath() });
     if (!v.ok) return res.status(400).json({ detail: v.error });
     if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
       return res.status(400).json({ detail: `agent "${v.value.agentSlug}" 不存在` });
@@ -253,8 +258,12 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
       }
     }
     const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : undefined;
+    // cond 换了(换表/换列/换事件)→ 旧的 db 快照必须一起作废,否则下一轮拿 A 表的基线去比 B 表,
+    // 满表现有行会被当成「刚加的」当场误触发。upsertTrigger 只管 triggers.json 里的 lastEventCursor。
+    const prevCond = id ? (await loadTriggers()).find((t) => t.id === id)?.cond : undefined;
     const r = await upsertTrigger(v.value, id);
     if (!r.ok) return res.status(id ? 404 : 400).json({ detail: r.error });
+    if (id && JSON.stringify(prevCond) !== JSON.stringify(v.value.cond)) await dropCursors([id]).catch(() => {});
     kickMuse(); // 新/改规则尽快被下一次巡检评估
     res.json({ trigger: r.trigger, created: r.created });
   } catch (e: any) {
@@ -262,16 +271,27 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
   }
 });
 
-// 试跑:绕过 cond/cooldown 立即执行动作链(同一执行器,origin='manual',不动 lastFiredAt/enabled)。
+// 立即执行动作链(同一执行器,不动 lastFiredAt/enabled)。两种来源,闸不同:
+//   origin='manual'(默认,面板试跑)—— 任意规则,**允许对已停用规则跑**(调试用);
+//   origin='button'(Amadeus 按钮块点击)—— 只许 cond.type==='manual' 且 enabled 的规则。
+// button 的两道闸是信任模型的一部分:笔记里的按钮只存 triggerId,若能点任意规则,按钮块就成了
+// 「笔记内容可远程调用任意已存在自动化」的 RPC 面;限定 manual 类=只能点用户为按钮专门建的那种。
 // 旧式 agentSlug 规则=直接起一次无人值守 run;Muse 唤醒类无独立动作,不支持。
 router.post('/agent/special/automation/triggers/:id/fire', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     const id = String(req.params.id || '');
+    const origin = req.body?.origin === 'button' ? 'button' : 'manual';
     const t = (await loadTriggers()).find((x) => x.id === id);
     if (!t) return res.status(404).json({ detail: 'trigger not found' });
+    if (origin === 'button') {
+      if (t.cond?.type !== 'manual') return res.status(400).json({ detail: '按钮只能触发「手动」类型的自动化' });
+      if (!t.enabled) return res.status(409).json({ detail: '该自动化已停用' });
+    }
     if (t.actions?.length) {
-      const r = await runActions(t, 'manual');
+      const r = await runActions(t, origin);
+      // busy=上一次点击还在跑(单飞);409 让前端显示「正在执行」而不是伪装成失败。
+      if (r.status === 'busy') return res.status(409).json({ detail: '上一次执行还没结束', status: 'busy' });
       return res.json({ ok: r.status === 'done', execId: r.execId, status: r.status, steps: r.steps });
     }
     if (t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) {
@@ -282,6 +302,17 @@ router.post('/agent/special/automation/triggers/:id/fire', authMiddleware, async
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'fire failed' });
   }
+});
+
+/**
+ * 唤醒巡检 —— 桌面写完一张 `.db` 后踢一下,让 db_changed 从「最多等 5 分钟」变成「约 2 秒」。
+ * 刻意不收任何业务 payload:唤醒之后仍由引擎自己重读磁盘做权威判定,绝不信客户端传来的行内容
+ * (否则「谁能发这个请求」就变成了「谁能伪造表格变化」)。调用方自己节流。
+ */
+router.post('/agent/special/automation/kick', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  kickMuse();
+  res.json({ ok: true });
 });
 
 // 动作目录:tool_call 步骤选择器的数据源(白名单内置 + automationSafe 插件工具;参数 JSON schema 供表单生成)。

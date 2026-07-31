@@ -29,7 +29,7 @@ export function installNotificationWiring(): void {
         dedupeKey: `sync.error:${key}`,
       })
     } else if (prev === 'syncing' && s.state === 'idle') {
-      notifyApp({ event: 'sync.done', level: 'success', text: tr('ntf.syncDone'), dedupeKey: 'sync.done' })
+      notifyApp({ event: 'sync.doneOnline', level: 'success', text: tr('ntf.syncDone'), dedupeKey: 'sync.done' })
     }
   })
 

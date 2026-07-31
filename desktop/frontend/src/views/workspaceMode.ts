@@ -3,7 +3,7 @@ export type WorkspaceMode = 'sessions' | 'files' | 'notes'
 
 /** 从笔记树点开的 Amadeus 文档 —— 主区 focus 它们时左栏一律回笔记树,**不分 Space**
  *  (在 Tangu Space 里点开一张图/一个 PDF 也该看见它在笔记树里的位置)。 */
-const NOTE_DOC_VIEWS = new Set(['amadeus-editor', 'amadeus-drawing', 'amadeus-db', 'amadeus-pdf'])
+const NOTE_DOC_VIEWS = new Set(['amadeus-editor', 'amadeus-drawing', 'amadeus-dashboard', 'amadeus-db', 'amadeus-pdf'])
 
 /**
  * 自动模式 = f(所在侧, 活动主视图类型, 本 Space 默认档)。

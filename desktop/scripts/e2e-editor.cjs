@@ -1,5 +1,12 @@
 // 一键跑编辑器触发层 e2e:自起 vite(frontend web 模式)→ 等 harness 就绪 → 跑断言 → 收尾。
 // 5173 已有人服务 harness 时直接复用(不杀别人的进程)。用法:npm run e2e:editor
+//
+// ⚠️ **跑的时候别让别人写 frontend/src** —— vite 在 dev 模式watch 整棵源码树,任何一次写盘都会
+//    HMR 重载 harness 页;正跑到一半的用例于是查不到块,报出来是 `kind=undefined` 那种「块凭空没了」,
+//    **是假红**。2026-07-30 踩过:并行会话在改 AmadeusDashboardView.tsx,T7 连红两次,
+//    隔离出来单跑(git worktree 镜像同一份源码 + HARNESS_URL 指到另一个端口)连过五次。
+//    怀疑某处改动导致红时,先照这个法子隔离,别先动代码。
+// `--check=<名>` 换跑同目录下的 <名>.check.cjs(共用这套起停;如 npm run check:br)。
 const http = require('http')
 const path = require('path')
 const { spawn } = require('child_process')
@@ -38,7 +45,9 @@ async function main() {
       process.exit(1)
     }
   }
-  const e2e = spawn('node', [path.join(__dirname, 'editor-triggers.e2e.cjs')], { stdio: 'inherit' })
+  const only = (process.argv.find((a) => a.startsWith('--check=')) || '').slice('--check='.length)
+  const script = only ? `${only}.check.cjs` : 'editor-triggers.e2e.cjs'
+  const e2e = spawn('node', [path.join(__dirname, script)], { stdio: 'inherit' })
   e2e.on('exit', (code) => {
     if (vite) vite.kill()
     process.exit(code ?? 1)

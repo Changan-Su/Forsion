@@ -3,8 +3,9 @@
  *  mount(el, { target, pagePath })。与 ExcalidrawEmbed 同一角色(BlockHost 的 embedPlugin 分支渲染它)。 */
 import { useEffect, useRef } from 'react'
 import { usePluginStore, findEmbedRenderer } from '../../plugins/pluginStore'
+import { useBlockSelection } from '../../store/blockSelection'
 
-export function PluginEmbed({ target, pagePath }: { target: string; pagePath: string }) {
+export function PluginEmbed({ target, pagePath, blockId }: { target: string; pagePath: string; blockId?: string }) {
   // 订阅 embedRenderers:插件加载后新注册的渲染器会触发重渲染 → 从「无人能预览」变为正常挂载。
   const renderers = usePluginStore((s) => s.embedRenderers)
   const r = findEmbedRenderer(renderers, target)
@@ -16,7 +17,9 @@ export function PluginEmbed({ target, pagePath }: { target: string; pagePath: st
     el.textContent = ''
     let cleanup: (() => void) | void
     try {
-      cleanup = r.mount(el, { target, pagePath })
+      // showSource:插件想在自己的 UI 里再开一个「看源码」入口时用(宿主已经在块右上角画了 `</>`)。
+      const showSource = blockId ? () => useBlockSelection.getState().setActiveEmbed(blockId) : undefined
+      cleanup = r.mount(el, { target, pagePath, showSource })
     } catch (e) {
       console.error('[amadeus] 插件嵌入块挂载失败', e)
     }
@@ -27,7 +30,7 @@ export function PluginEmbed({ target, pagePath }: { target: string; pagePath: st
         /* ignore */
       }
     }
-  }, [r, target, pagePath])
+  }, [r, target, pagePath, blockId])
 
   if (!r) return <div className="embed-missing">没有已启用的插件能预览「{target}」</div>
   return <div className="amx-plugin-embed" ref={hostRef} />

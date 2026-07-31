@@ -553,11 +553,22 @@ export const getAutomationRuns = (cfg: TanguDesktopConfig, sessionId: string, li
     cfg, `/agent/special/automation/runs?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`,
   ).then((r) => r.runs)
 
-/** 试跑:同一执行器立即跑动作链(origin=manual,不动 lastFiredAt/enabled)。 */
-export const fireAutomationTrigger = (cfg: TanguDesktopConfig, id: string) =>
+/**
+ * 立即跑动作链(不动 lastFiredAt/enabled)。
+ *   origin='manual'(默认)= 面板试跑,任意规则、允许已停用;
+ *   origin='button'      = Amadeus 按钮块点击,引擎侧只放行 cond=manual 且启用的规则。
+ * 并发同一规则 → 引擎单飞锁 409(前端应显示「正在执行」而非失败)。
+ */
+export const fireAutomationTrigger = (cfg: TanguDesktopConfig, id: string, origin: 'manual' | 'button' = 'manual') =>
   request<{ ok: boolean; execId?: string; status: string; steps?: AutomationExecutionInfo['steps'] }>(
-    cfg, `/agent/special/automation/triggers/${encodeURIComponent(id)}/fire`, { method: 'POST' },
+    cfg, `/agent/special/automation/triggers/${encodeURIComponent(id)}/fire`,
+    { method: 'POST', body: JSON.stringify({ origin }) },
   )
+
+/** 踢一次巡检:桌面写完一张 .db 后调用,让 db_changed 触发从「最多等一个巡检周期」降到 ~2s。
+ *  无 payload —— 引擎唤醒后自己重读磁盘判定,不信客户端报的内容。调用方自己节流(见 dbStore)。 */
+export const kickAutomation = (cfg: TanguDesktopConfig) =>
+  request<{ ok: boolean }>(cfg, '/agent/special/automation/kick', { method: 'POST' })
 
 /** tool_call 动作目录(白名单内置 + automationSafe 插件工具,含参数 JSON schema)。 */
 export const getAutomationActions = (cfg: TanguDesktopConfig) =>

@@ -281,11 +281,15 @@
 /* ── Callout 标注(> [!note] …,Obsidian 语法;纯装饰,序列化零影响) ── */
 .am-app .milkdown .ProseMirror blockquote.callout {
   --callout-color: #448aff;
-  border-left: 3px solid var(--callout-color);
   background: color-mix(in srgb, var(--callout-color) 8%, transparent);
   border-radius: 8px;
   padding: 10px 14px;
   margin-inline: 0;
+}
+/* callout 左边一条竖线都不留(平铺色块);普通 `>` 引用的细竖条照旧 —— 那条是 styles.css 的
+   `blockquote::before`,这里只对 callout 关掉,别去动通用规则。 */
+.am-app .milkdown .ProseMirror blockquote.callout::before {
+  content: none;
 }
 .am-app .milkdown .ProseMirror blockquote.callout-info { --callout-color: #00b8d4; }
 .am-app .milkdown .ProseMirror blockquote.callout-tip,
@@ -301,6 +305,105 @@
   color: var(--callout-color, #448aff);
   background: color-mix(in srgb, var(--callout-color, #448aff) 14%, transparent);
   border-radius: 5px; padding: 0 5px; font-weight: 600; font-size: 0.85em;
+  /* 等宽:它是语法令牌,而且 `+`/`-` 在比例字体里不等宽 —— 切折叠时会把后面的
+     标题和箭头推着挪 2px。等宽字体下切换零位移。 */
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* ── 语法字符(`[!note]-` 令牌、标题里的 `## `/`- `)只在光标不在标题行时隐藏 ──
+   Obsidian Live Preview 手感。⚠️ 用 font-size:0 而不是 display:none:span 还在,
+   项目符号那条要靠它的 ::before 变出 `•`;而且光标一进这行就整段浮现,不存在
+   「方向键在看不见的字里空走」(这是原先不敢藏令牌的唯一顾虑)。 */
+.am-app .milkdown .ProseMirror .callout-syntax { font-size: 0; }
+/* ⚠️ 特异性要压得住 `.callout-fold .callout-token`(那条给 fold 的令牌单独定了 0.7em),
+   否则折叠块的 `[!fold]-` 藏不掉 —— 真机截图取证过。 */
+.am-app .milkdown .ProseMirror blockquote.callout .callout-token.callout-syntax {
+  font-size: 0;
+  padding: 0;
+  background: transparent;
+}
+.am-app .milkdown .ProseMirror .callout-syntax-bullet::before {
+  content: '•';
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-right: 7px;
+}
+/* 标题排版:`> [!fold]- ## 今日总结` 的标题按 H2 走。恒定生效(不随光标进出改字号,否则整行跳) */
+.am-app .milkdown .ProseMirror .callout-title-h1,
+.am-app .milkdown .ProseMirror .callout-title-h2,
+.am-app .milkdown .ProseMirror .callout-title-h3,
+.am-app .milkdown .ProseMirror .callout-title-h4,
+.am-app .milkdown .ProseMirror .callout-title-h5,
+.am-app .milkdown .ProseMirror .callout-title-h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+}
+.am-app .milkdown .ProseMirror .callout-title-h1 { font-size: 1.6em; }
+.am-app .milkdown .ProseMirror .callout-title-h2 { font-size: 1.35em; }
+.am-app .milkdown .ProseMirror .callout-title-h3 { font-size: 1.18em; }
+.am-app .milkdown .ProseMirror .callout-title-h4 { font-size: 1.06em; }
+.am-app .milkdown .ProseMirror .callout-title-h5 { font-size: 1em; }
+.am-app .milkdown .ProseMirror .callout-title-h6 { font-size: 0.94em; opacity: 0.85; }
+
+/* ── 「查看源码」`</>` 按钮:悬停浮现在渲染块右上角(Obsidian 同款) ──
+   行内(公式 / 图片嵌入)由 sourceToggle.ts 挂;块级(图片/PDF/文件/画板/多维表/插件)由 BlockHost
+   随 embedSrcLine 一起渲染。点它 = 露出该处的字面源码,光标离开即复渲染。 */
+.am-app .amx-has-src-btn { position: relative; }
+.am-app .amx-src-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 5px;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none; /* 不浮现时别抢走下面内容的点击 */
+  transition: opacity var(--duration-fast, 0.14s) ease, background var(--duration-fast, 0.14s) ease;
+}
+.am-app .amx-has-src-btn:hover > .amx-src-btn,
+.am-app .block-host[data-embed]:hover > .amx-src-btn,
+.am-app .amx-src-btn:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.am-app .amx-src-btn:hover { background: var(--overlay-med, rgba(127, 127, 127, 0.2)); color: var(--text); }
+/* 行内公式常常只有一两个字高,按钮压上去会盖住 —— 缩小并挪到右上角外沿 */
+.am-app .amx-src-btn--inline { top: -9px; right: -4px; height: 16px; padding: 0 4px; font-size: 10px; }
+.am-app .amx-src-btn--block { top: 6px; right: 6px; }
+
+/* 行内图片嵌入的包裹层(为了给 `</>` 一个定位父级);图片本身的尺寸样式仍在 .wiki-inline-img */
+.am-app .wiki-inline-img-wrap { position: relative; display: inline-block; line-height: 0; }
+
+/* 折叠块 `[!fold]`(`>` 空格触发):Notion 手感 —— 不做成有色标注框,只留 chevron + 标题,
+   内容左缩进一个层级。落盘仍是标准的 Obsidian 折叠 callout,Obsidian 里能原生折叠。 */
+.am-app .milkdown .ProseMirror blockquote.callout-fold {
+  --callout-color: var(--text-muted);
+  background: transparent;
+  border-radius: 0;
+  padding: 2px 0 2px 4px;
+}
+.am-app .milkdown .ProseMirror blockquote.callout-fold > *:not(:first-child) {
+  margin-left: 18px; /* = Notion 的「tab 一下」:折叠内内容比标题缩进一级 */
+}
+.am-app .milkdown .ProseMirror blockquote.callout-fold .callout-token {
+  background: transparent;
+  color: var(--text-faint, var(--text-muted));
+  font-size: 0.7em;
+  font-weight: 400;
+  opacity: 0.55;
+  padding: 0 2px 0 0;
 }
 
 /* ── 属性面板(标题下方,Notion properties 式):折叠 chip + 行式键值编辑 ── */
@@ -486,6 +589,100 @@
 .amx-drawview .amx-draw { height: 100%; border: none; border-radius: 0; }
 .amx-drawview .amx-draw.amx-draw-state { height: auto; }
 
+/* ── 白板:纸张 + 网格两层 ──────────────────────────────────────────────────
+   两层都 portal 进 <Excalidraw> 内部,z-index 3 压过两张画布(1/2),DOM 靠前让位给 wysiwyg(3)/UI(4)。
+   - .amx-grid 走 mix-blend-mode:浅色 multiply(白底 × 灰线 = 灰线;黑笔画 × 任何值 = 黑笔画),
+     深色 screen(暗底 + 微亮线 = 亮线;白笔画不受影响)—— 视觉上网格永远在内容之下,而**文件一个字节
+     没动**(不必把 viewBackgroundColor 改成 transparent,Obsidian 那边观感不变)。
+     ⚠️ 它必须与画布同处一个层叠上下文:别拿带 z-index / opacity / transform 的容器包它,
+     否则混合只发生在容器内部,网格立刻退化成一层灰蒙。
+   - .amx-matte 用 clip-path 的 evenodd 挖出纸张那块洞:洞被裁掉 → 不参与命中测试,事件穿到画布;
+     洞外保留 → 事件被它吃掉 = 「越界不可画」(滚轮由 forwardWheel 转投,不至于连缩放都死)。 */
+.amx-boardhost { position: relative; height: 100%; }
+.amx-boardhost .excalidraw { --amx-grid-line: #d3d3d9; --amx-matte: #e9e9ee; }
+.amx-boardhost .excalidraw.theme--dark { --amx-grid-line: #3a3a44; --amx-matte: #0b0b0e; }
+.amx-grid {
+  position: absolute; z-index: 3; pointer-events: none;
+  mix-blend-mode: multiply;
+  box-shadow: 0 0 0 1px var(--amx-grid-line); /* 有纸张时这圈就是纸边 */
+}
+.excalidraw.theme--dark .amx-grid { mix-blend-mode: screen; }
+.amx-matte { position: absolute; inset: 0; z-index: 3; background: var(--amx-matte); }
+/* 页带两端的「新建页面」。必须画在遮罩之后(DOM 顺序)才点得到 —— 遮罩是吃指针事件的。 */
+.amx-pageadd {
+  position: absolute; z-index: 3; transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 4px; white-space: nowrap;
+}
+.amx-pageadd button {
+  font: inherit; font-size: 12px; line-height: 1; padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px dashed var(--amx-grid-line); background: var(--island-bg-color, #fff); color: var(--color-on-surface, inherit);
+  opacity: 0.65; transition: opacity 0.12s ease;
+}
+.amx-pageadd:hover button { opacity: 1; }
+.amx-pageadd .amx-pageadd-del { padding: 5px 8px; }
+/* 左右排布时按钮立起来:横躺着要占掉一大条页外空间,竖起来只占十几像素,正好塞进页间的余量。
+   两端各转一边,文字都朝着背离纸的方向读(右侧自上而下、左侧自下而上,竖排标签的惯例)。 */
+.amx-pageadd[data-flow='h'][data-end='after'] { transform: translate(-50%, -50%) rotate(90deg); }
+.amx-pageadd[data-flow='h'][data-end='before'] { transform: translate(-50%, -50%) rotate(-90deg); }
+
+/* 紧凑模式(对标 obsidian-excalidraw 的 stylesPanelMode: 'compact')。
+   ⚠️ 上游 @excalidraw/excalidraw 里**没有**这个模式:compact/tray 是 zsviczian fork 新写的
+   CompactShapeActions / TrayMenu,吃的是 actionManager.renderAction、appState.openPopup 这些
+   没导出的内部件。所以这里照他同一条原则办 —— **控件一个不重写,只换布局**(他的 TrayMenu 也是
+   原样复用 SelectedShapeActions):把左侧那根 200px 竖条压成底部一条横排、隐掉文字标签。
+   与 fork 的差距只剩「分组折叠进弹层」那一层(⚙样式▼/箭头▼/Aa▼),那部分非 fork 不可。
+   全局偏好(localStorage amx.boardCompact),多个白板同开一起变。
+
+   几何来自真 DOM(scripts/_traydump 量过):.Island.App-menu__left 是 position:absolute,
+   包含块 = .FixedSideContainer_side_top(画布内缩 16px)。底部 3.5rem 让开 excalidraw 自己的
+   缩放条(.App-menu_bottom{bottom:1rem});max-height 是内联的,必须 !important 才压得住。 */
+.amx-compact .excalidraw .App-menu__left {
+  top: auto;
+  left: 0;
+  right: 0;
+  bottom: 3.5rem;
+  width: auto;
+  max-height: 40vh !important;
+  padding: 0.5rem 0.75rem;
+}
+.amx-compact .excalidraw .App-menu__left .panelColumn {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.85rem;
+  row-gap: 0.4rem;
+}
+/* compact 只留色板与图标,文字标题一概不显示 */
+.amx-compact .excalidraw .App-menu__left h3,
+.amx-compact .excalidraw .App-menu__left legend { display: none; }
+.amx-compact .excalidraw .App-menu__left fieldset,
+.amx-compact .excalidraw .App-menu__left .control-label { margin: 0; }
+.amx-compact .excalidraw .App-menu__left .buttonList { flex-wrap: nowrap; column-gap: 0.25rem; }
+
+/* 汉堡菜单里的纸张/网格面板。取色一律用 excalidraw 自己的 token,免得和它的菜单两张皮。 */
+.amx-bs { display: flex; flex-direction: column; gap: 6px; padding: 6px 4px 2px; font-size: 12px; color: var(--color-on-surface); }
+.amx-bs-h { font-size: 11px; opacity: 0.65; letter-spacing: 0.02em; }
+.amx-bs-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.amx-bs-chip {
+  border: 1px solid var(--input-border-color, rgba(127, 127, 127, 0.35)); background: transparent;
+  color: inherit; font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+}
+.amx-bs-chip:hover { background: var(--button-hover-bg, rgba(127, 127, 127, 0.12)); }
+/* --color-* 是 excalidraw 的 token;askNewDrawing 的弹窗不在它作用域内 → 回落到 LCL 的 --primary。 */
+.amx-bs-chip[data-on] {
+  border-color: var(--color-primary, var(--primary, #635bff));
+  color: var(--color-primary, var(--primary, #635bff));
+  background: var(--color-primary-light, var(--overlay-light, rgba(127, 127, 127, 0.1)));
+}
+.amx-bs-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.amx-bs-check input[type='checkbox'] { margin: 0; }
+.amx-bs-lbl { flex: 1; }
+.amx-bs-num { width: 3.5rem; font: inherit; font-size: 11px; padding: 1px 4px; border-radius: 5px; border: 1px solid var(--input-border-color, rgba(127, 127, 127, 0.35)); background: transparent; color: inherit; }
+.amx-bs-num:disabled { opacity: 0.4; }
+.amx-bs-range { flex: 1; min-width: 0; max-width: 6rem; accent-color: var(--color-primary, var(--primary, #635bff)); }
+.amx-bs-range:disabled { opacity: 0.4; }
+.amx-bs-note { font-size: 10px; opacity: 0.55; }
+
 /* ── Database 多视图(2.6.0):AFFiNE 图标 / 视图 tab 栏 / 看板 / 日历 / 画廊 / 行编辑器 ── */
 .amx-db-headicon { display: inline-flex; color: var(--text-muted); font-size: 16px; }
 .amx-db-linkbtn svg { font-size: 13px; vertical-align: -2px; }
@@ -582,6 +779,9 @@
 .amx-title-icon-empty { opacity: 0; filter: grayscale(1); font-size: 16px; }
 .amx-title-row:hover .amx-title-icon-empty, .amx-title-icon-empty:focus-visible { opacity: 0.45; }
 .amx-page-emoji { margin-right: 5px; font-size: 13px; }
+/* 槽里放的可能不是 emoji 而是插件按名点的 SVG(resolveIcon)。SVG 是 1em 见方的 inline 元素,
+   不 block 化会带上基线下沉那几 px,和隔壁兜底图标错开一线。 */
+.amx-page-emoji > svg { display: block; width: 1em; height: 1em; }
 /* 页面 emoji 占前导槽时:尺寸跟槽的 --t2s-icon(1em),与兜底图标严格同大。槽本体在 sidebar2.css。 */
 .t2s-lead .amx-page-emoji { margin: 0; line-height: 1; font-size: 1em; transition: opacity var(--duration-fast, 0.15s); }
 .amx-iconpick { width: 288px; max-height: 320px; }
@@ -1120,3 +1320,104 @@
 /* 分区头布局:纯文字标题 + 折叠箭头紧跟其后(压过 sidebar2 的 label flex:1),计数/状态点靠行尾 */
 .amx-sec-head .t2s-group-label { flex: 0 1 auto; }
 .amx-sec-head .t2s-chev { margin-right: auto; }
+
+/* ─────────────────────────── Dashboard 视图(.dashboard.md) ───────────────────────────
+ * 24 列固定网格、行高固定、高度向下长(见 shared/amadeus/dashboard.ts:DASH_COLS/DASH_ROW_PX/DASH_GAP_PX,
+ * 三个常数与这里的 grid 定义**必须一致**,拖动的像素↔格数换算就是按它算的)。
+ * 窗宽变化只改格子像素宽 → 相对布局恒定、永不横向滚动。 */
+.amx-dashview { padding: 0 0 40px; }
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  padding: 4px 18px 24px;
+  align-items: stretch;
+}
+.dash-card {
+  position: relative;
+  display: flex; flex-direction: column;
+  min-width: 0; min-height: 0;
+  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-card, var(--bg));
+  overflow: hidden;
+}
+/* 拖动中的那张:浮起并半透明,让人看清底下压没压到别人;压到了 → 危险色描边(落手即回弹)。 */
+.dash-card[data-dragging] { z-index: 5; opacity: 0.9; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
+.dash-card[data-bad] { border-color: var(--danger, #e5484d); }
+/* 卡片顶栏:只在解锁态出现(锁上时卡片是纯内容,没有任何操作面)。 */
+.dash-card-bar {
+  display: flex; align-items: center; gap: 4px;
+  height: 20px; flex: none; padding: 0 4px;
+  color: var(--text-faint, var(--text-muted));
+  background: var(--overlay-light, rgba(127, 127, 127, 0.06));
+  cursor: grab;
+  touch-action: none; /* 触屏拖动:否则浏览器先把手势判成滚动 */
+}
+.dash-card[data-dragging] .dash-card-bar { cursor: grabbing; }
+.dash-card-del { margin-left: auto; border: none; background: transparent; color: inherit; cursor: pointer; padding: 1px 3px; border-radius: 4px; display: inline-flex; }
+.dash-card-del:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--danger, #e5484d); }
+.dash-card-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* 右下角缩放把手(解锁态)。 */
+.dash-card-resize {
+  position: absolute; right: 0; bottom: 0; width: 14px; height: 14px;
+  cursor: nwse-resize; touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, var(--overlay-medium, rgba(127, 127, 127, 0.35)) 50%);
+}
+/* 卡片里的块:去掉笔记正文那套页边距/拖拽槽,内容铺满卡片。⠿ 手柄在这里没有意义(卡片自带拖动条)。 */
+.dash-card .block-host { padding: 0; }
+.dash-card .block-gutter { display: none; }
+.dash-card .block-body { padding: 8px 10px; }
+.dash-card .block-edge, .dash-card .edge-zone, .dash-card .drop-line { display: none; }
+
+/* ＋ 添加卡片 / ⋮ 更多 的下拉 */
+.dash-add-wrap { position: relative; display: inline-flex; }
+.dash-menu-scrim { position: fixed; inset: 0; z-index: 40; }
+.dash-add-menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 41;
+  min-width: 148px; padding: 4px;
+  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-card, var(--bg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.dash-add-menu button {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  border: none; background: transparent; color: var(--text);
+  font: inherit; font-size: 12.5px; text-align: left;
+  padding: 5px 8px; border-radius: 6px; cursor: pointer;
+}
+.dash-add-menu button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.dash-add-menu button.dash-danger:hover { color: var(--danger, #e5484d); }
+
+/* ── 功能卡片 ── */
+.dash-widget { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 8px; text-align: center; }
+.dash-widget-note { font-size: 11.5px; color: var(--text-muted); padding: 6px; }
+.dash-clock-time { font-variant-numeric: tabular-nums; font-weight: 600; line-height: 1.05; font-size: clamp(20px, 3.4cqw, 44px); }
+.dash-clock-sub { font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+.dash-clock-tz { padding: 0 5px; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+.dash-weather-main { display: flex; align-items: baseline; gap: 6px; }
+.dash-weather-icon { font-size: clamp(18px, 2.6cqw, 34px); }
+.dash-weather-temp { font-variant-numeric: tabular-nums; font-weight: 600; font-size: clamp(20px, 3.4cqw, 44px); }
+/* 时钟/天气按卡片自身宽度缩放字号(cqw),不跟着窗口走 */
+.dash-card[data-widget='clock'] .dash-card-body,
+.dash-card[data-widget='weather'] .dash-card-body { container-type: inline-size; overflow: hidden; }
+.dash-card[data-widget='webview'] .dash-card-body { overflow: hidden; }
+.dash-webview { width: 100%; height: 100%; display: flex; border: none; }
+/* 仪表盘顶部提示条:frontmatter 读不懂 / 布局与块 id 对不上 —— 两种情况都**停止一切自动写入**,
+   宁可画面不好看也不能把用户的布局覆盖掉,所以必须明说,不能默默降级。 */
+.dash-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 4px 18px 0; padding: 7px 10px;
+  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  border-radius: var(--radius-md, 10px);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.06));
+  color: var(--text-muted); font-size: 12px; line-height: 1.5;
+}
+.dash-banner-warn { border-color: var(--danger, #e5484d); color: var(--danger, #e5484d); }
+.dash-banner button {
+  margin-left: auto; flex: none;
+  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  background: transparent; color: var(--text); font: inherit;
+  padding: 3px 9px; border-radius: 6px; cursor: pointer;
+}
+.dash-banner button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }

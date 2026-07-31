@@ -18,10 +18,15 @@ import {
   type MuseTrigger,
 } from '../../services/museTriggers.js';
 import { getAgent } from '../../agents/agentRegistry.js';
+import { amadeusVaultPath } from './amadeus.js';
 
 function fmt(t: MuseTrigger): string {
   const act = t.actions?.length
-    ? `, actions: ${t.actions.map((a) => (a.type === 'tool_call' ? `tool_call(${a.tool})` : a.type === 'agent_run' ? `agent_run(${a.agentSlug})` : 'notify')).join(' → ')}`
+    ? `, actions: ${t.actions.map((a) =>
+        a.type === 'tool_call' ? `tool_call(${a.tool})`
+        : a.type === 'agent_run' ? `agent_run(${a.agentSlug})`
+        : a.type === 'db_row_add' || a.type === 'db_row_edit' ? `${a.type}(${a.path})`
+        : 'notify').join(' → ')}`
     : t.agentSlug ? `, runs agent "${t.agentSlug}"` : '';
   const cd = t.cooldownHours ? `, cooldown ${t.cooldownHours}h` : '';
   return `${t.id}${t.enabled ? '' : ' (disabled)'} — ${t.desc} [${condSummary(t.cond)}]${act}${cd}, last fired ${t.lastFiredAt || 'never'}`;
@@ -44,7 +49,9 @@ export const manageAutomationProvider: ToolProvider = {
             'Manage automation rules (trigger + actions). Use when the user asks to be reminded at/every some time, ' +
             'or to watch for something ("remind me at 9am tomorrow", "every 2h tell me to stretch", "keep an eye on xxx.md"). ' +
             'Triggers: at (one-time local datetime), every (recurring interval like "30m"/"2h"/"1d"), daily_at (once a day after HH:MM), ' +
-            'event_seen (a new in-app activity line contains `match`), file_chars_gte (file reaches n non-whitespace chars). ' +
+            'event_seen (a new in-app activity line contains `match`), file_chars_gte (file reaches n non-whitespace chars), ' +
+            'manual (never fires on its own — the user runs it by clicking a button block in a note; use this when asked for "a button that does X"), ' +
+            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event). ' +
             'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
             'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
             'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.',
@@ -54,24 +61,37 @@ export const manageAutomationProvider: ToolProvider = {
               action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update a rule, list=show rules, remove=delete by id' },
               id: { type: 'string', description: 'set: update this rule instead of creating; remove: rule id (from list)' },
               desc: { type: 'string', description: 'set: human-readable description of the rule (shown to the user)' },
-              cond_type: { type: 'string', enum: ['at', 'every', 'daily_at', 'event_seen', 'file_chars_gte'], description: 'set: trigger type' },
+              cond_type: { type: 'string', enum: ['at', 'every', 'daily_at', 'event_seen', 'file_chars_gte', 'manual', 'db_changed'], description: 'set: trigger type' },
+              event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
+              column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
+              equals: { type: 'string', description: 'set(db_changed + cell_changed): only fire when the cell becomes exactly this value (omit = any change)' },
               datetime: { type: 'string', description: 'set(at): one-time local datetime "YYYY-MM-DD HH:mm"' },
               interval: { type: 'string', description: 'set(every): interval like "30m"/"2h"/"1d" (min 15m; min 1h when any agent runs)' },
               time: { type: 'string', description: 'set(daily_at): local time "HH:MM"' },
               match: { type: 'string', description: 'set(event_seen): substring to look for in new activity lines (e.g. a file name, "note.edit", "run.done agent=historian", or a plugin event like "plugin:activitywatch:focus")' },
-              path: { type: 'string', description: 'set(file_chars_gte): file path (absolute, or relative to the current workspace)' },
+              path: { type: 'string', description: 'set(file_chars_gte): file path (absolute, or relative to the current workspace). set(db_changed): vault-relative .db path, e.g. "Tasks.db"' },
               n: { type: 'number', description: 'set(file_chars_gte): non-whitespace character threshold' },
               actions: {
                 type: 'array',
-                description: 'set: ordered action steps. Each item: {type:"notify", title, body?} or {type:"agent_run", agentSlug, prompt}. Max 10.',
+                description:
+                  'set: ordered action steps. Max 10. Each item is one of: ' +
+                  '{type:"notify", title, body?} — inbox message; ' +
+                  '{type:"agent_run", agentSlug, prompt} — run that agent unattended; ' +
+                  '{type:"db_row_add", path, cells} — append a row to an Amadeus database; ' +
+                  '{type:"db_row_edit", path, cells, rowId?} — update a row (rowId defaults to the row the trigger matched). ' +
+                  'cells maps a column ID (or name) to a value. Values may use {{row.<column>}} / {{now}} / {{today}} templates; ' +
+                  'templates are ONLY expanded in notify text and db cell values — never in prompts, paths or tool arguments.',
                 items: {
                   type: 'object',
                   properties: {
-                    type: { type: 'string', enum: ['notify', 'agent_run'] },
+                    type: { type: 'string', enum: ['notify', 'agent_run', 'db_row_add', 'db_row_edit'] },
                     title: { type: 'string', description: 'notify: inbox message title' },
                     body: { type: 'string', description: 'notify: optional message body' },
                     agentSlug: { type: 'string', description: 'agent_run: agent to run unattended' },
                     prompt: { type: 'string', description: 'agent_run: task prompt for the agent' },
+                    path: { type: 'string', description: 'db_row_add/db_row_edit: vault-relative .db path' },
+                    rowId: { type: 'string', description: 'db_row_edit: target row id (omit = the row the trigger matched)' },
+                    cells: { type: 'object', description: 'db_row_add/db_row_edit: column ID (or name) → value' },
                   },
                   required: ['type'],
                 },
@@ -98,7 +118,7 @@ export const manageAutomationProvider: ToolProvider = {
         if (action !== 'set') return 'Error: action 须为 set/list/remove';
 
         // 工具参数名是 agent(对模型友好),校验层键是 agent_slug——这里显式映射(修 muse_watch 时代静默掉落的 bug)。
-        const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd });
+        const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: amadeusVaultPath() });
         if (!v.ok) return `Error: ${v.error}`;
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
           return `Error: agent "${v.value.agentSlug}" 不存在(先用 manage_agent 查看可用 agent)`;
@@ -112,7 +132,9 @@ export const manageAutomationProvider: ToolProvider = {
         const r = await upsertTrigger(v.value, id);
         if (!r.ok) return `Error: ${r.error}`;
         const c = v.value.cond;
-        const note = v.value.actions?.length
+        const note = c.type === 'manual'
+          ? '(不会自动触发;在笔记里插入按钮块并选中这条规则,由用户点击执行)'
+          : v.value.actions?.length
           ? '(supervisor 巡检约每 5 分钟评估一次,命中即按动作链执行)'
           : v.value.agentSlug
             ? `(命中后由 agent "${v.value.agentSlug}" 全自动执行;巡检约每 5 分钟评估一次)`

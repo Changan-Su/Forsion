@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { openaiToResponsesBody, streamOpenAiResponses } from './openaiResponses.js';
+import { openaiToResponsesBody, streamOpenAiResponses, stableSessionUuid } from './openaiResponses.js';
 import { ACCOUNT_MARK } from './openaiCompat.js';
 
 describe('openaiToResponsesBody', () => {
@@ -31,6 +31,79 @@ describe('openaiToResponsesBody', () => {
     const plain = openaiToResponsesBody({ model: 'gpt-5-codex', messages: [] });
     expect(plain.reasoning).toBeUndefined(); // Codex 订阅路径不带 → 逆向契约不动
   });
+
+  it('include encrypted reasoning 无条件发(codex-rs 同款):缺省 effort 服务端仍可能按模型默认思考,门控会让延续性静默失效', () => {
+    for (const payload of [
+      { model: 'm', messages: [], reasoning_effort: 'high' },
+      { model: 'm', messages: [], reasoning_effort: 'none' },
+      { model: 'm', messages: [] },
+    ]) {
+      expect(openaiToResponsesBody(payload).include).toEqual(['reasoning.encrypted_content']);
+    }
+  });
+
+  it('reasoning_summary=none 关摘要(headless 省输出);verbosity 经 text_verbosity → body.text', () => {
+    const noSum = openaiToResponsesBody({ model: 'm', messages: [], reasoning_effort: 'high', reasoning_summary: 'none' });
+    expect(noSum.reasoning).toEqual({ effort: 'high' }); // summary 键整个不出现
+    const low = openaiToResponsesBody({ model: 'm', messages: [], text_verbosity: 'low' });
+    expect(low.text).toEqual({ verbosity: 'low' });
+    const plain = openaiToResponsesBody({ model: 'm', messages: [] });
+    expect(plain.text).toBeUndefined();
+  });
+
+  it('reasoning 延续性:assistant 带 providerItems → 原样回灌,不再由文本重建', () => {
+    const items = [
+      { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'ENC' },
+      { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'read_file', arguments: '{"path":"a"}' },
+    ];
+    const body = openaiToResponsesBody({
+      model: 'm',
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'reading', tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }], providerItems: items },
+        { role: 'tool', tool_call_id: 'call_1', content: 'DATA' },
+      ],
+    });
+    expect(body.input[1]).toEqual(items[0]); // reasoning item 原样在位
+    expect(body.input[2]).toEqual(items[1]);
+    expect(body.input[3]).toEqual({ type: 'function_call_output', call_id: 'call_1', output: 'DATA' });
+    // 不应再出现由文本重建的 assistant message / function_call(会与 items 重复)
+    expect(body.input.filter((i: any) => i.type === 'function_call')).toHaveLength(1);
+    expect(body.input.some((i: any) => i.type === 'message' && i.role === 'assistant')).toBe(false);
+  });
+
+  it('无 providerItems(跨 run 水合的历史)→ 文本重建,优雅降级', () => {
+    const body = openaiToResponsesBody({
+      model: 'm',
+      messages: [{ role: 'assistant', content: 'done', tool_calls: [] }],
+    });
+    expect(body.input[0]).toEqual({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] });
+  });
+
+  it('官方 BYOK(无 accountId)带 body 级 prompt_cache_key;订阅路径不发', () => {
+    const byok = openaiToResponsesBody({ model: 'm', messages: [], prompt_cache_key: 'sess-1' });
+    expect(byok.prompt_cache_key).toBe('sess-1');
+    const sub = openaiToResponsesBody({ model: 'm', messages: [], prompt_cache_key: 'sess-1', [ACCOUNT_MARK]: 'acct' });
+    expect(sub.prompt_cache_key).toBeUndefined();
+  });
+
+  it('订阅路径不发 max_output_tokens(私有端点 400 "Unsupported parameter"——self_brainstorm 真机首跑三席全灭实证 07-31)', () => {
+    const sub = openaiToResponsesBody({ model: 'm', messages: [], max_tokens: 2000, [ACCOUNT_MARK]: 'acct' });
+    expect(sub.max_output_tokens).toBeUndefined();
+    // 官方 BYOK 不受影响(上方既有用例已断言 1200 在场,这里只守订阅分支)
+  });
+});
+
+describe('stableSessionUuid(缓存/路由粘性:同会话稳定,不再每请求随机)', () => {
+  it('UUID 形状直用(小写化);非 UUID 稳定哈希;空值回退随机', () => {
+    const u = '018FAAC3-D278-7DC1-AFD0-C7BEA738F73C';
+    expect(stableSessionUuid(u)).toBe(u.toLowerCase());
+    const a = stableSessionUuid('sess_abc');
+    expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(stableSessionUuid('sess_abc')).toBe(a); // 稳定
+    expect(stableSessionUuid('sess_xyz')).not.toBe(a);
+    expect(stableSessionUuid(undefined)).toMatch(/^[0-9a-f-]{36}$/);
+  });
 });
 
 describe('streamOpenAiResponses SSE parse', () => {
@@ -42,8 +115,10 @@ describe('streamOpenAiResponses SSE parse', () => {
       ev({ type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc_1', call_id: 'call_abc', name: 'read_file', arguments: '' } }),
       ev({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"path":' }),
       ev({ type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '"a.txt"}' }),
+      ev({ type: 'response.output_item.done', item: { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'ENC' } }),
+      ev({ type: 'response.output_item.done', item: { type: 'function_call', id: 'fc_1', call_id: 'call_abc', name: 'read_file', arguments: '{"path":"a.txt"}' } }),
       ev({ type: 'response.output_text.delta', delta: 'hello' }),
-      ev({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 } } }),
+      ev({ type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5, output_tokens_details: { reasoning_tokens: 3 } } } }),
     ].join('');
     vi.stubGlobal('fetch', () =>
       Promise.resolve({
@@ -66,7 +141,11 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(res.content).toBe('hello');
     expect(res.toolCalls).toEqual([{ id: 'call_abc', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }]);
     expect(res.usage.prompt_tokens).toBe(10);
+    expect(res.usage.reasoning_tokens).toBe(3); // 隐藏思考量拆账
     expect(res.finishReason).toBe('tool_calls');
+    // 原始 output items 完整带回(reasoning 延续性的原料),顺序保持
+    expect(res.outputItems?.map((i: any) => i.type)).toEqual(['reasoning', 'function_call']);
+    expect(res.outputItems?.[0].encrypted_content).toBe('ENC');
   });
 
   it('Codex 逆向头只在订阅路径(accountId)发;官方 BYOK 纯 Bearer——OpenAI-Beta 头会静默压掉 reasoning summary(实测 0 vs 160 条)', async () => {

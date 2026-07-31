@@ -143,6 +143,9 @@ export type AutomationActionSpec =
   | { type: 'notify'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
+  /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} 模板)。rowId 缺省=触发命中的那一行。 */
+  | { type: 'db_row_add'; path: string; cells: Record<string, string> }
+  | { type: 'db_row_edit'; path: string; rowId?: string; cells: Record<string, string> }
 /** 自动化规则(manage_automation 工具/构建器写入 agents/muse/triggers.json)。 */
 export interface MuseTriggerInfo {
   id: string
@@ -153,6 +156,10 @@ export interface MuseTriggerInfo {
     | { type: 'daily_at'; time: string }
     | { type: 'at'; datetime: string }
     | { type: 'every'; interval: string }
+    /** 手动:巡检永不命中,只能由 Amadeus 按钮块点击(origin=button)或面板试跑起跑。 */
+    | { type: 'manual' }
+    /** Amadeus 多维表变化(vault 钉住建规则时那个库;columnId 存列 id——列名不唯一也会改)。 */
+    | { type: 'db_changed'; path: string; vault: string; event: 'row_added' | 'cell_changed'; columnId?: string; equals?: string }
   prompt?: string
   cooldownHours: number
   lastFiredAt: string | null
@@ -170,13 +177,17 @@ export interface MuseTriggerInfo {
 export interface MuseTriggerUpsert {
   id?: string
   desc: string
-  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every'
+  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every' | 'manual' | 'db_changed'
   path?: string
   n?: number
   match?: string
   time?: string
   datetime?: string
   interval?: string
+  event?: 'row_added' | 'cell_changed'
+  vault?: string
+  column_id?: string
+  equals?: string
   prompt?: string
   cooldown_hours?: number
   agent_slug?: string
@@ -264,6 +275,11 @@ export const SHOW_SYSTEM_PROMPT_KEY = 'forsion_tangu_show_system_prompt'
 
 /** 丝滑光标开关(localStorage,**缺席=开**;smoothCaret.ts 全局模块 + 设置→外观)。 */
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
+
+/** 界面字体三档(localStorage,**缺席=跟随主题**;uiFont.ts + 设置→外观)。 */
+export const FONT_UI_KEY = 'forsion_tangu_font_ui'
+export const FONT_BODY_KEY = 'forsion_tangu_font_body'
+export const FONT_MONO_KEY = 'forsion_tangu_font_mono'
 
 /** Agent 列表的全局 meta:展示顺序 + 用户选定的默认 agent。 */
 export interface AgentsMeta { order: string[]; defaultSlug: string }
@@ -670,6 +686,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   notesImportPreview?: boolean
   /** 日记(每日笔记)所在 vault 相对文件夹;'' = vault 根。 */
   notesDailyFolder?: string
+  /** `[[ ]]` 补全是否收录附件与数据库(undefined 视为 true=默认开;关掉则只补全笔记)。 */
+  notesWikiIncludeFiles?: boolean
+  /** 删除笔记时是否连带删除「只被它引用」的附件:true/false=记住的选择,undefined=每次询问。 */
+  notesDeleteAssets?: boolean
   /** 收件箱新消息系统通知(undefined 视为 true=默认开;ribbon/dock 角标不受此控)。 */
   inboxNotifyEnabled?: boolean
   /** 记录应用内活动日志(undefined 视为 true=默认开;喂后台 Muse + 可导出排查 bug)。 */

@@ -43,7 +43,10 @@ export interface AppNotification {
 export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boolean }> = [
   { id: 'system.generic', labelKey: 'ntf.event.system', defaultOn: true },
   { id: 'sync.error', labelKey: 'ntf.event.syncError', defaultOn: true },
-  { id: 'sync.done', labelKey: 'ntf.event.syncDone', defaultOn: true }, // 用户方向:默认开(dedupeKey 合并防轰炸)
+  { id: 'sync.done', labelKey: 'ntf.event.syncDone', defaultOn: true }, // 远程同步一轮报告(带变更条数),默认开
+  // Amadeus 在线同步每轮完成:后台自动跑、一天几十轮且没有信息量,**默认关**(用户实报「太烦」)。
+  // 独立事件 id 而非复用 sync.done —— 否则想关它就得把有用的远程同步报告一起关掉。
+  { id: 'sync.doneOnline', labelKey: 'ntf.event.syncDoneOnline', defaultOn: false },
   { id: 'agent.done', labelKey: 'ntf.event.agentDone', defaultOn: true },
   { id: 'inbox.message', labelKey: 'ntf.event.inbox', defaultOn: true },
 ]

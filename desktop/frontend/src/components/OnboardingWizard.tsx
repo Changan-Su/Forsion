@@ -43,7 +43,8 @@ const STEP_ORDER: Step[] = PRODUCT.agentBackend
   : ['welcome', 'theme', 'done'] // 无 agent 后端的单品变体:只留通用步(connect/model/agents/workspace/env 均属 agent)
 
 /** 订阅 provider 的友好名(id 见 src/llm/providerOAuth.ts OAUTH_PROVIDERS);未知 id 回退原值。 */
-const SUB_PROVIDER_LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex', xai: 'xAI · Grok' }
+// Claude 不在此列:订阅登录已删,走「运行引擎」直接跑本机 Claude Code(见 tangu-agent/src/engines/)。
+const SUB_PROVIDER_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI · Grok' }
 
 export const OnboardingWizard: React.FC<{
   /** 当前主题/明暗(与 App 同步;主题步骤即时应用 + 持久化)。 */

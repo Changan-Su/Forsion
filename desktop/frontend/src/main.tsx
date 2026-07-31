@@ -15,6 +15,8 @@ import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'
 import { installMultiWindow } from './multiWindow'
 import { installSmoothCaret } from './smoothCaret'
+import { applyUiFonts } from './uiFont'
+import { installScrollFade } from './scrollFade'
 
 // 全局错误兜底:ErrorBoundary 只接 React 渲染期异常,接不到事件回调/异步里的未捕获错误,
 // 也接不到渲染进程级崩溃。这里至少把它们记到 console(配合主进程崩溃自愈),便于诊断白屏。
@@ -54,6 +56,10 @@ try {
   installMultiWindow()
   // 丝滑光标(默认开;设置→外观开关)。
   installSmoothCaret()
+  // 界面字体覆盖(设置→外观;缺席=跟随主题,不注入任何声明)。
+  applyUiFonts()
+  // 滚动条自动隐现:静止透明,滚动中/悬停才显形(样式在 base.css 与 amadeus/styles.css)。
+  installScrollFade()
 } catch (err) {
   console.error('[tangu] init failed, continue to mount:', err)
 }

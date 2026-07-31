@@ -22,8 +22,8 @@ const BrowserView = lazy(() => import('./browserView').then((m) => ({ default: m
 const TerminalView = lazy(() => import('./terminalView').then((m) => ({ default: m.TerminalView })))
 
 registerMessages({
-  'builtin.section': { zh: '内置', en: 'Built-in' },
-  'builtin.hint': { zh: '随 App 发行的内置能力,默认开启;关闭即从工作台与命令面板移除。', en: 'Ships with the app and is on by default; turning it off removes it from the workbench and command palette.' },
+  // 小节标题与说明已上移到插件页统一的「内置插件」区(settings.amadeusPlugins.builtinTitle/builtinHint),
+  // 那一区同时管宿主原生能力和编辑器内置插件,不能只说宿主这一半。
   'browser.title': { zh: '浏览器', en: 'Browser' },
   'browser.desc': { zh: '在应用内打开网页与本地 HTML,不用切出去。', en: 'Open web pages and local HTML inside the app.' },
   'browser.open': { zh: '打开浏览器', en: 'Open browser' },
@@ -213,11 +213,10 @@ export function installBuiltins(): void {
   for (const def of BUILTINS) if (enabled[def.id] && def.available()) def.install()
 }
 
-// ── 设置 → Forsion 插件 顶部的「内置」区 ────────────────────────────────────
-const card: React.CSSProperties = {
-  border: 'var(--border-width, 1px) solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--bg-card, var(--bg))',
-}
-
+// ── 设置 → Forsion 插件「内置」区里的宿主原生那几张卡 ──────────────────────
+// 只吐卡片、不带外层容器与小节标题:调用方(AmadeusPluginsTab)把这几张和编辑器内置插件
+// (Callout/字数统计)排进**同一列**,用户看到的是一个「内置」区而不是两处零件。
+// 卡片样式一律走 .plugin-card,与外置插件同款 —— 别再在这里写 inline style。
 export const BuiltinPluginsSection: React.FC = () => {
   const { t } = useI18n()
   const enabled = useBuiltins((s) => s.enabled)
@@ -225,21 +224,15 @@ export const BuiltinPluginsSection: React.FC = () => {
   const toggle = useBuiltins((s) => s.toggle)
   const setInAppLinks = useBuiltins((s) => s.setInAppLinks)
   const list = BUILTINS.filter((b) => b.available())
-  if (!list.length) return null // web/移动端没有 webview/PTY,不渲染这一区
+  if (!list.length) return null // web/移动端没有 webview/PTY,这几张卡整个不出现
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div className="hint">{t('builtin.hint')}</div>
+    <>
       {list.map((b) => (
-        <div key={b.id} style={card}>
+        <div key={b.id} className="plugin-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <b style={{ fontSize: 13 }}>{b.name()}</b>
-                <span style={{ fontSize: 11, color: 'var(--text-faint)', border: 'var(--border-width, 1px) solid var(--border)', borderRadius: 4, padding: '0 5px' }}>
-                  {t('builtin.section')}
-                </span>
-              </div>
+              <b style={{ fontSize: 13 }}>{b.name()}</b>
               <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>
             </div>
             <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
@@ -252,6 +245,6 @@ export const BuiltinPluginsSection: React.FC = () => {
           )}
         </div>
       ))}
-    </div>
+    </>
   )
 }

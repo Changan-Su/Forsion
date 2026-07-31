@@ -8,7 +8,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parsePatch, applyHunksToContent } from '../applyPatch.js';
-import { resolvePath } from '../hostExec.js';
+import { resolvePath, withWriteLock } from '../hostExec.js';
 import { checkWritePath } from '../fsPolicy.js';
 import { getSessionDir, markSessionDirty } from '../../sandbox/sessionSandbox.js';
 import { readFileRawLocal, writeFileLocal, writeFile, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
@@ -79,7 +79,8 @@ export const applyPatchProvider: ToolProvider = {
           },
         },
       },
-      execute: async (args, ctx): Promise<string> => {
+      // 写锁与 hostExec 写工具同链:apply_patch 的读-改-写与并行子代理的 edit 交叠会静默丢更新(Codex 评审 07-30 #1)
+      execute: (args, ctx): Promise<string> => withWriteLock(async () => {
         const patchText = String(args.patch ?? args.input ?? '');
         if (!patchText.trim()) return 'Error: patch is required';
 
@@ -147,7 +148,7 @@ export const applyPatchProvider: ToolProvider = {
           return `Error: 写入失败:${e?.message || e}`;
         }
         return `applied patch: ${writes.size + deletes.size} file(s) [${summary.join('; ')}]`;
-      },
+      }),
     },
   ],
 };

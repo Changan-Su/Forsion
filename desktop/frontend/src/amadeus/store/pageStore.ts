@@ -442,17 +442,31 @@ function makePageStore() {
       const blocks = get().blocks
       const prevContent = blocks[prevId]?.content ?? ''
       const curContent = blocks[id]?.content ?? ''
-      const merged = prevContent && curContent ? `${prevContent}\n\n${curContent}` : prevContent + curContent
+      // 合并进同一个块 = 变成相邻两行(单个 '\n' 就是一次换行,见 softBreak.ts)。空行是用户敲出来的
+      // 东西,合并不该凭空造一个 —— 从前用 '\n\n' 无妨(读端会把空段落吃掉),现在空行会如实还原。
+      // ⚠️ 前块末行是列表/引用/表格时仍留空行:markdown 的 lazy continuation 会把后文吸进那个列表项。
+      const lastLine = prevContent.split('\n').pop() ?? ''
+      const lazyRisk = /^\s*(?:[-*+]\s|\d+[.)]\s|>|\||#{1,6}\s|```|~~~)/.test(lastLine)
+      const sep = lazyRisk ? '\n\n' : '\n'
+      const merged = prevContent && curContent ? `${prevContent}${sep}${curContent}` : prevContent + curContent
       pushUndo('struct') // 快照清白的合并前状态;下面 deleteBlock→_commit 的 struct 快照会被 500ms 同类合并掉
       set((s) => ({ blocks: { ...s.blocks, [prevId]: { ...s.blocks[prevId], content: merged } } }))
       get().deleteBlock(id) // commits manifest + schedules a save that persists merged content
-      get().requestFocus(prevId, 'end')
+      // 光标落**接缝处**(= 前块原内容之后),不是合并后整块的末尾:后者会把光标留在被并上来的
+      // 那段文字尾巴上,用户看到的就是「内容上去了,光标还留在第二行」(实报)。
+      // anchor 匹配纯文本;前块末尾含 markdown 语法时优雅退化到块首(见 lib/modeCursor)。
+      if (prevContent && curContent) get().requestFocusAt(prevId, prevContent.slice(-40))
+      else get().requestFocus(prevId, 'end')
     },
 
     async openVault() {
       try {
+        // 与 switchVaultSide 同理:换根前先把各面板的待存内容写回【旧根】。
+        // 这里的 flush 放在弹目录选择框之前,用户取消了也无害(本来就该落盘)。
+        await flushAllScopes()
         const info = await amadeus.openVault()
         if (!info) return
+        resetAllScopeDocs()
         // files 先清空再异步补齐;迟到的结果只在 vault 未再切换时落盘(防旧库文件列表污染新库的树)。
         // 用户手选文件夹 = 本地侧(主进程同步记 localVault)。
         set({ vaultRoot: info.root, vaultSide: 'local', pages: info.pages, folders: info.folders ?? [], files: [], error: null })
@@ -484,8 +498,9 @@ function makePageStore() {
       if (!api?.switchSide || get().vaultSide === side) return
       try {
         // 切根前必须先把待存内容在【旧根】落盘并等掉在途写:保存走「相对路径 + 当前根」,
-        // 根先换会把旧库活动页原样写进新库(本地页凭空复制进云端库、再被在线同步推上服务器)
-        await get().flushSave().catch(() => {})
+        // 根先换会把旧库活动页原样写进新库(本地页凭空复制进云端库、再被在线同步推上服务器)。
+        // **所有面板**都要 flush —— 分屏后隔壁面板各有一份 store 和一个防抖定时器。
+        await flushAllScopes()
         await inflightSave?.catch(() => {})
         const info = await api.switchSide(side)
         if (!info) return
@@ -503,6 +518,7 @@ function makePageStore() {
           manifest: null,
           blocks: {},
         })
+        resetAllScopeDocs() // 隔壁面板也一起作废,否则它那份旧库笔记随时会写进新根
         void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
         void amadeus.pageIcons?.().then((icons) => { if (get().vaultRoot === info.root) set({ icons }) }).catch(() => {})
         const target = info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
@@ -1304,6 +1320,27 @@ const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'icon
 type VaultSlice = Pick<PageState, (typeof VAULT_KEYS)[number]>
 const vaultSlice = (s: PageState): VaultSlice =>
   ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, icons: s.icons })
+
+/**
+ * 换库(切本地/云端、换根)前:**所有面板**的待存内容先在旧根落盘。
+ * 保存走「相对路径 + 当前根」,只 flush 自己那份的话,隔壁面板揣着的旧库活动页会在根换掉之后才写出去 ——
+ * 表现就是「切换本地/云端后,本地库里凭空多出一篇云端的笔记」(用户实报)。分屏之前只有一份 store,
+ * 所以这条链是分屏引入的:switchVaultSide 里的单份 flush + 作废,分屏后只护住了当前面板。
+ */
+export async function flushAllScopes(): Promise<void> {
+  await Promise.all([...stores.values()].map((s) => s.getState().flushSave().catch(() => {})))
+}
+
+/**
+ * 换库后:**所有面板**的编辑器状态即刻作废。save() 见 activePage=null 就直接 return,
+ * 于是旧库那份内容再没有任何路径能写进新根(挂着的防抖定时器烧掉也只是空转)。
+ * 发起切换的那个面板紧接着会 loadPage 新库的目标页,重新填回来。
+ */
+export function resetAllScopeDocs(): void {
+  for (const s of stores.values()) {
+    s.setState({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle', error: null })
+  }
+}
 
 let mirroring = false // 防镜像回弹成无限循环
 function mirrorVault(src: PageStoreApi): void {

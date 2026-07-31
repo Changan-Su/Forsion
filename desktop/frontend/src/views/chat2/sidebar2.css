@@ -42,7 +42,7 @@
   display: flex;
   align-items: center;
   gap: 5.5px;
-  margin: 9px 7.5px 6px;
+  margin: 4px 7.5px 6px; /* 同 .t2s-vaultseg:与主区纸卡 32 对齐,首元素落 36 */
   padding: 5.5px 8.5px;
   border-radius: 999px;
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
@@ -115,7 +115,8 @@
   position: relative;
   display: flex;
   height: 26px;
-  margin: 12px 10px 8px;
+  /* 顶 4:主区纸卡上边界已提到 32(见 engine.css tab 栏 32 + 纸卡贴顶),12 会让侧栏首元素掉到 44 显得矮一截。 */
+  margin: 4px 10px 8px;
   padding: 2px;
   border-radius: 999px;
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));

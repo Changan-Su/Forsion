@@ -17,7 +17,9 @@ describe('matchTrigger(光标前文本 → 块触发)', () => {
     expect(matchTrigger('[ ]')).toEqual({ kind: 'task', checked: false })
     expect(matchTrigger('[x]')).toEqual({ kind: 'task', checked: true })
     expect(matchTrigger('[X]')).toEqual({ kind: 'task', checked: true })
-    expect(matchTrigger('>')).toEqual({ kind: 'quote' })
+    // 2026-07-29 换键位:`|` = 引用,`>` = 折叠(Notion 手感)。落盘两者仍都是 `>` 开头的合法 md。
+    expect(matchTrigger('|')).toEqual({ kind: 'quote' })
+    expect(matchTrigger('>')).toEqual({ kind: 'fold' })
   })
   it('nbsp 空格("[ ]" 在 contenteditable 里的真实形态)也识别', () => {
     expect(matchTrigger('[ ]')).toEqual({ kind: 'task', checked: false })

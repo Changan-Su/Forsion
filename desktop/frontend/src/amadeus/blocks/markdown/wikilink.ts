@@ -7,7 +7,21 @@ import { Plugin, PluginKey, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner } from '@amadeus-shared/pdfLink'
+import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
+import { attachSourceButton } from './sourceToggle'
+
+const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
+
+/** `![[pic.png|200]]` 的图片形态(前面必须紧挨着 `!`);不是图片嵌入 → null。 */
+function imageEmbed(inner: string, bang: boolean): { url: string; width?: number; name: string } | null {
+  if (!bang) return null
+  const [rawPath, size] = inner.split('|')
+  const p = rawPath.trim()
+  if (!IMG_EXT_RE.test(p)) return null
+  const w = size?.trim()
+  return { url: toAssetUrl(p), width: w && /^\d+$/.test(w) ? Number(w) : undefined, name: p }
+}
 
 const wikiKey = new PluginKey<{ focus: boolean }>('amadeus-wikilink-live')
 
@@ -47,12 +61,41 @@ function buildDecorations(
     WIKILINK_RE.lastIndex = 0
     let m: RegExpExecArray | null
     while ((m = WIKILINK_RE.exec(s))) {
-      const spFrom = m.index
+      // `![[pic.png]]`(行内图片嵌入):把 `!` 一起圈进来。整块只有它一条时走块级 embed 渲染
+      // (BlockHost),这里管的是**混在文字里**那种 —— 此前只当普通双链渲染,图片压根不显示,
+      // 用户只好把每张图单独放一个块(实报)。
+      const bang = m.index > 0 && s[m.index - 1] === '!'
+      const img = imageEmbed(m[1], bang)
+      const spFrom = img ? m.index - 1 : m.index
       const spTo = m.index + m[0].length
       const onActiveLine = lineFrom !== -1 && spFrom < lineTo && spTo > lineFrom
       if (onActiveLine) continue // 本行 → 露源码可编辑,不渲染、点它不跳转
       const from = cs + spFrom
       const to = cs + spTo
+      if (img) {
+        decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
+        decos.push(
+          Decoration.widget(
+            from,
+            (view) => {
+              // 包一层 span:`<img>` 是空元素,挂不了「查看源码」按钮(按钮须是子节点才好定位)。
+              const wrap = document.createElement('span')
+              wrap.className = 'wiki-inline-img-wrap'
+              wrap.contentEditable = 'false'
+              const el = document.createElement('img')
+              el.className = 'wiki-inline-img'
+              el.src = img.url
+              el.alt = img.name
+              if (img.width) el.style.width = `${img.width}px`
+              wrap.appendChild(el)
+              attachSourceButton(wrap, view, from) // 悬停 `</>` → 光标进 `![[…]]` 源码
+              return wrap
+            },
+            { side: -1, ignoreSelection: true, key: `i${from}:${m![0]}` },
+          ),
+        )
+        continue
+      }
       const target = linkTarget(m[1])
       const label = displayLabel(m[1])
       const ok = isResolved(target)

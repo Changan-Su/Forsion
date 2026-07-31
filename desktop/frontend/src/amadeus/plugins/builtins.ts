@@ -79,10 +79,12 @@ export const calloutBlocks: AmadeusPlugin = {
   description: '在 slash 菜单加入提示/信息/警告标注（Obsidian callout 语法，可被 Obsidian 渲染）。',
   builtin: true,
   setup(ctx) {
+    // icon 一律写图标词表里的名字(不是 emoji):插件项和内置项在 slash 菜单里同一套 SVG。
+    // 这三条也是新契约的样板 —— 外面照着写的人先看到的就是它们。
     ctx.registerSlashItem({
       id: 'callout-note',
       label: '提示标注',
-      icon: '✎',
+      icon: 'callout-note',
       group: '标注',
       scaffold: '> [!note] ',
       keywords: 'callout note 提示 标注 biaozhu',
@@ -90,7 +92,7 @@ export const calloutBlocks: AmadeusPlugin = {
     ctx.registerSlashItem({
       id: 'callout-info',
       label: '信息标注',
-      icon: 'ℹ',
+      icon: 'callout-info',
       group: '标注',
       scaffold: '> [!info] ',
       keywords: 'callout info 信息 xinxi',
@@ -98,7 +100,7 @@ export const calloutBlocks: AmadeusPlugin = {
     ctx.registerSlashItem({
       id: 'callout-warn',
       label: '警告标注',
-      icon: '⚠',
+      icon: 'callout-warning',
       group: '标注',
       scaffold: '> [!warning] ',
       keywords: 'callout warning 警告 jinggao',

@@ -73,14 +73,21 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
     if (toolChoice) payload.tool_choice = toolChoice;
   }
   // OpenAI 官方 API 直连:prompt_cache_key 按会话粘机提升前缀缓存命中(其他 provider 不发,
-  // 防严格网关拒未知字段)。
-  if (cacheKey && (opts.model as any)?.provider === 'openai') {
+  // 防严格网关拒未知字段)。Responses 协议(Codex 订阅)也带上——它不进 wire body
+  // (openaiToResponsesBody 白名单重建),只喂 session_id 头的稳定化(缓存/路由粘性)。
+  if (cacheKey && ((opts.model as any)?.provider === 'openai' || (opts.model as any)?.[PROTOCOL_MARK] === 'openai-responses')) {
     payload.prompt_cache_key = cacheKey;
   }
   // 透传直连协议/账号标记,供 streamProviderCompletion 分发到原生订阅客户端。
   const dm = opts.model as any;
   if (dm?.[PROTOCOL_MARK]) payload[PROTOCOL_MARK] = dm[PROTOCOL_MARK];
   if (dm?.[ACCOUNT_MARK]) payload[ACCOUNT_MARK] = dm[ACCOUNT_MARK];
+  // verbosity / 思考摘要:只打在 Responses 协议 payload 上(openaiToResponsesBody 消费);
+  // 绝不落 chat-completions wire(严格网关见未知字段会 400)。
+  if (dm?.[PROTOCOL_MARK] === 'openai-responses') {
+    if (opts.verbosity) payload.text_verbosity = opts.verbosity;
+    if (opts.reasoningSummary) payload.reasoning_summary = opts.reasoningSummary;
+  }
   return payload;
 }
 

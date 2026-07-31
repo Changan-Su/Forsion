@@ -156,6 +156,28 @@ describe('完成度审计', () => {
     expect(rows.some((r) => String(r.content).includes('<completion_audit>'))).toBe(false);
   }, 20_000);
 
+  it('纯 reasoning 收尾企图被审计拦下续跑:providerItems(replay 态)不丢(Codex 终审 #2)', async () => {
+    script = [
+      todoWriteStep([{ content: '任务A', status: 'pending' }]),
+      // 收尾企图:正文为空、只有 reasoning items(Responses 纯思考轮)→ 审计续跑时必须保住 replay 态
+      () => ({
+        content: '', reasoning: '', toolCalls: [],
+        usage: { prompt_tokens: 10, completion_tokens: 5 }, finishReason: 'stop',
+        outputItems: [{ type: 'reasoning', id: 'rs_x', encrypted_content: 'ENC' }],
+      }),
+      finalStep('处理完了。'),
+    ];
+    const r = await runToSettled();
+    expect(r.status).toBe('done');
+    expect(llmPayloads.length).toBe(3);
+    expect(userTexts(llmPayloads[2])).toContain('<completion_audit>'); // 确认走的是审计续跑路径
+    const replayed = (llmPayloads[2].messages as any[]).find(
+      (m) => m.role === 'assistant' && Array.isArray(m.providerItems) && m.providerItems.length,
+    );
+    expect(replayed, '续跑轮必须带回 reasoning replay 态').toBeTruthy();
+    expect(replayed.providerItems[0].encrypted_content).toBe('ENC');
+  });
+
   it('todo 全完成 → 不审计,直接收尾', async () => {
     script = [
       todoWriteStep([{ content: '任务A', status: 'completed' }]),

@@ -9,7 +9,8 @@ import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
 import { openDailyNote } from './amadeusTemplates'
 import { useAmadeusPrefs } from './amadeusPrefs'
-import { createDrawing } from './amadeusNav'
+import { createDashboard, createDrawing } from './amadeusNav'
+import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 
 const ps = () => usePageStore.getState()
 const ws = () => useWorkspace.getState()
@@ -18,6 +19,7 @@ const cs = () => useCommandStore.getState()
 const CMDS: Command[] = [
   { id: 'amadeus-new-note', title: '新建笔记', keywords: 'new note create 新建 笔记', hotkey: 'mod+n', run: () => { if (ps().vaultRoot) void ps().createPage() } },
   { id: 'amadeus-new-drawing', title: '新建白板', keywords: 'new drawing whiteboard canvas excalidraw 新建 白板 画板 baiban', run: () => { if (ps().vaultRoot) void createDrawing('') } },
+  { id: 'amadeus-new-dashboard', title: '新建仪表盘', keywords: 'new dashboard canvas grid widget 新建 仪表盘 面板 看板 yibiaopan', run: () => { if (ps().vaultRoot) void createDashboard('') } },
   { id: 'amadeus-quick-switcher', title: '快速切换笔记', keywords: 'quick switcher open jump 快速 切换 跳转', hotkey: 'mod+p', run: () => useUiOverlay.getState().open('switcher') },
   { id: 'amadeus-search', title: '搜索笔记(全文)', keywords: 'search full text 搜索 全文', hotkey: 'mod+shift+f', run: () => openSearchView() },
   { id: 'amadeus-daily-note', title: '打开今天的日记', keywords: 'daily note today journal 日记 今天 riji', run: () => void openDailyNote() },
@@ -26,6 +28,17 @@ const CMDS: Command[] = [
   { id: 'amadeus-open-vault', title: '打开 Vault…', keywords: 'vault open folder 打开 仓库 文件夹', run: () => void ps().openVault() },
   { id: 'amadeus-reveal', title: '在文件管理器中显示当前笔记', keywords: 'reveal finder explorer 文件管理器 显示', run: () => { const p = ps().activePage; if (p) void amadeus.revealInFileManager(p) } },
   { id: 'amadeus-reindex', title: '重建全文索引', keywords: 'reindex search index 索引 重建', run: () => void amadeus.reindex() },
+  {
+    id: 'amadeus-toggle-wiki-files',
+    title: '切换 双链补全是否包含附件与数据库',
+    keywords: 'wikilink attachment database toggle 双链 附件 数据库 补全 切换 fujian shujuku',
+    run: () => {
+      const next = !wikiFilesEnabled()
+      setWikiFilesEnabled(next) // 先就地生效,再落盘(设置页读的是 config)
+      void window.tangu?.setConfig?.({ notesWikiIncludeFiles: next })
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: next ? '双链补全已包含附件与数据库' : '双链补全只包含笔记' } }))
+    },
+  },
 ]
 
 /** 打开(或聚焦)左栏全文搜索:showSideView 只会激活「已存在」的面板——用户右键关掉过该 tab 时要重开。 */

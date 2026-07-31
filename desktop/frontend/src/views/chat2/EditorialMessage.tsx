@@ -4,7 +4,7 @@
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2 } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, Zap } from 'lucide-react'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
@@ -17,6 +17,7 @@ import { ToolGroup } from '../../components/ToolGroup'
 import { ApprovalCard } from '../../components/ApprovalCard'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { useI18n } from '../../i18n'
+import { splitSuggestions, type SuggestState } from './suggest'
 import './chat2.css'
 
 /** 流式光标该落在哪一段:整条消息**最后一个真正渲染出来的**段的下标。
@@ -80,14 +81,18 @@ export interface MessageHandlers {
   onRegenerate?: () => void
   onBranch?: () => void
   onEdit?: () => void
-  /** 朗读本条(再次点击=停止);未配置 TTS 时不传 → 按钮不渲染。 */
-  onSpeak?: () => void
+  /** 朗读本条(再次点击=停止);未配置 TTS 时不传 → 按钮不渲染。text = 摘掉建议围栏的正文。 */
+  onSpeak?: (text: string) => void
+  /** 点了自动化建议芯片:把这句话当作用户自己发的消息送出去(建议本身不建规则)。 */
+  onSuggest?: (text: string) => void
   onApproval?: (approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, unknown>) => void
   onInquiry?: (inquiryId: string, answer: string) => void
 }
 
 export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null } }) {
   const { t } = useI18n()
+  // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
+  const [suggestSent, setSuggestSent] = useState(false)
   if (msg.role === 'system') {
     if (msg.groupVote) {
       const v = msg.groupVote
@@ -132,6 +137,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     )
   }
 
+  // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
+  const streaming = msg.status === 'streaming'
+  const { text: body, items: suggestions } = splitSuggestions(msg.content, { streaming })
+
   return (
     <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
@@ -145,10 +154,15 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           // 无段(历史重载 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
             const caretAt = msg.status === 'streaming' ? caretSegIndex(msg.segments, msg.toolEvents) : -1
+            // 一道围栏可能被中间的工具块切成两段 —— 状态要续读,否则后半段的建议原文会漏进正文。
+            let fenceState: SuggestState | undefined
             return msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
-                return seg.text
-                  ? <div key={i} className={`t2-content${i === caretAt ? ' streaming-caret' : ''}`}><Markdown content={seg.text} anchorPrefix={`toc-${msg.id}`} /></div>
+                const parsed = splitSuggestions(seg.text, { streaming, state: fenceState })
+                fenceState = parsed.state
+                const segBody = parsed.text
+                return segBody
+                  ? <div key={i} className={`t2-content${i === caretAt ? ' streaming-caret' : ''}`}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} /></div>
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
@@ -158,17 +172,35 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           return (
             <>
               {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} />}
-              {msg.content && (
+              {body && (
                 voiceMode
-                  ? <VoiceBubble text={msg.content} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className={`t2-content${msg.status === 'streaming' ? ' streaming-caret' : ''}`}><Markdown content={msg.content} anchorPrefix={`toc-${msg.id}`} /></div>
+                  ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
+                  : <div className={`t2-content${msg.status === 'streaming' ? ' streaming-caret' : ''}`}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} /></div>
               )}
             </>
           )
         })()}
+        {/* 建议只是「可以做成什么」,点了才把这句话当用户消息发出去。
+            只在 done 上渲染:中止/出错的回复里那半句建议还没写完,不该给出可发送的按钮。 */}
+        {!!suggestions.length && msg.status === 'done' && (
+          <div className="t2-suggest">
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                className="t2-suggest-chip"
+                disabled={suggestSent}
+                onClick={() => { setSuggestSent(true); handlers?.onSuggest?.(s) }}
+              >
+                <Zap size={13} /> {s}
+              </button>
+            ))}
+          </div>
+        )}
         {msg.planProposal && <PlanCard plan={msg.planProposal} />}
         {!!msg.todos?.length && <TodoList todos={msg.todos} />}
-        {!msg.content && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && <div className="t2-dim streaming-caret">{t('chat.thinking')}</div>}
+        {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
+            看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
+        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && <div className="t2-dim streaming-caret">{t('chat.thinking')}</div>}
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
@@ -178,9 +210,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
         {(msg.status === 'done' || msg.status === 'stopped') && (
           <div className="t2-actions">
-            <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
-            {handlers?.onSpeak && !!msg.content && (
-              <button className="t2-iconbtn" title={t(speakState ? 'chat.action.stopSpeak' : 'chat.action.speak')} onClick={() => handlers.onSpeak?.()}>
+            <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(body)}><Copy size={14} /></button>
+            {handlers?.onSpeak && !!body && (
+              <button className="t2-iconbtn" title={t(speakState ? 'chat.action.stopSpeak' : 'chat.action.speak')} onClick={() => handlers.onSpeak?.(body)}>
                 {speakState === 'loading' ? <Loader2 size={14} className="spin" /> : speakState === 'playing' ? <Square size={14} /> : <Volume2 size={14} />}
               </button>
             )}

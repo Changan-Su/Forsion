@@ -254,7 +254,10 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
       })
       return
     }
-    m((d) => ({ ...d, rows: [...d.rows, { id: dbId(), cells: initial ?? {} }] }))
+    // ⚠️ id 必须在回调**外**定下:冲突重放会重跑这个回调(见 dbStore 的 pendingOps),
+    // 回调内生成 = 每次重放换一个新 id,后续那条「往这行填内容」的 op 就找不到目标了。
+    const rowId = dbId()
+    m((d) => ({ ...d, rows: [...d.rows, { id: rowId, cells: initial ?? {} }] }))
   }
   /** 拖拽重排:把 dragId 挪到 targetId 之前/之后。顺序就是 db.rows 的数组序,直接落盘。 */
   const reorderRow = (dragId: string, targetId: string, after: boolean): void => {
@@ -270,16 +273,18 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     }
     m((d) => ({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }))
   }
-  const addCol = (): void =>
+  const addCol = (): void => {
+    const newId = dbId() // 同 addRow:回调外定 id,重放才是确定的
     m((d) => {
       // 笔记视图:新列 id = frontmatter 键(取唯一默认键);普通表:随机 id + 显示名。
-      if (!isNoteView) return { ...d, columns: [...d.columns, { id: dbId(), name: `列 ${d.columns.length + 1}`, type: 'text' }] }
+      if (!isNoteView) return { ...d, columns: [...d.columns, { id: newId, name: `列 ${d.columns.length + 1}`, type: 'text' }] }
       const have = new Set(d.columns.map((c) => c.id))
       let id = '属性'
       let i = 1
       while (have.has(id)) id = `属性${++i}`
       return { ...d, columns: [...d.columns, { id, name: id, type: 'text' }] }
     })
+  }
   const patchCol = (colId: string, patch: Partial<DbColumn>): void =>
     m((d) => ({ ...d, columns: d.columns.map((c) => (c.id === colId ? { ...c, ...patch } : c)) }))
   // 列改名:笔记视图的属性列 → 跨该文件夹所有笔记重写 frontmatter 键(列 id = 键);其余仅改显示名。
@@ -328,18 +333,22 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     setPop({ kind: 'row', rowId, x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
   /** 看板/日历引导:一键补齐可分组/可上历的列(笔记视图列 id = frontmatter 键,撞键则不动)。 */
-  const addStatusCol = (): void =>
+  const addStatusCol = (): void => {
+    const rid = dbId()
     m((d) => {
-      const id = isNoteView ? '状态' : dbId()
+      const id = isNoteView ? '状态' : rid
       if (isNoteView && d.columns.some((c) => c.id === id)) return d
       return { ...d, columns: [...d.columns, { id, name: '状态', type: 'select', options: ['待办', '进行中', '完成'] }] }
     })
-  const addDateCol = (): void =>
+  }
+  const addDateCol = (): void => {
+    const rid = dbId()
     m((d) => {
-      const id = isNoteView ? '日期' : dbId()
+      const id = isNoteView ? '日期' : rid
       if (isNoteView && d.columns.some((c) => c.id === id)) return d
       return { ...d, columns: [...d.columns, { id, name: '日期', type: 'calendarDate' }] }
     })
+  }
 
   // 笔记视图:切换数据来源文件夹 → 并集推导列(导入该文件夹笔记的 frontmatter 键)。
   const setFolder = async (folder: string): Promise<void> => {

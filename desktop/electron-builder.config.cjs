@@ -23,7 +23,12 @@ module.exports = {
   // 是**免费**的(正式版用户轮询的是 latest*.yml,根本看不见)。
   // 但反过来那半边不免费:不开这个开关,**正式版只写 latest*.yml**,已经切到 beta 频道的用户
   // 读的是 beta*.yml,于是**永远收不到后续正式版,卡在最后一个 beta 上**。
-  // 开了之后每次构建把所有频道的 yml 都写一遍(正式版的 beta.yml 也指向该正式版),两边都能往前走。
+  // ⚠️ **这个开关对 github provider 是空转的**(2026-07-31 读 app-builder-lib 源码实证):
+  // `publish/updateInfoBuilder.js` 的 `computeChannelNames()` 第一行就是
+  // `if (currentChannel === 'alpha' || publishConfig.provider === 'github' || !开关) return [currentChannel]`
+  // —— 我们正是 github,所以永远只写当前频道那一份。留着它是为了换 generic 服务器时不必重想,
+  // 但**别再指望它兜上面那半边**:beta 用户回正式版这条路由 `build-desktop.yml` 的
+  // 「Mirror stable feed to beta channel」步骤(正式 tag 时把 latest*.yml 复制一份成 beta*.yml)承担。
   generateUpdatesFilesForAllChannels: true,
   artifactName: product.artifactPrefix + '-${version}-${arch}.${ext}',
   files: [

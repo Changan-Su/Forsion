@@ -53,6 +53,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     activeUsage: (activeId && state.usageBySession[activeId]) || EMPTY_USAGE,
     isGroupVoting: !!(activeId && state.groupVoting[activeId]),
     llmRetry: (activeId && state.llmRetryBySession[activeId]) || null,
+    compacting: activeId ? state.compactingBySession[activeId] : undefined,
     cfg: state.cfg,
     authInfo: state.authInfo,
     desktopConfig: state.desktopConfig,
@@ -243,10 +244,11 @@ export function ChatView({ leaf, params }: ViewProps) {
     return () => ro.disconnect()
   }, [streamingId, activeId])
 
-  // 非流式插入新消息时做一次吸底。
+  // 非流式插入新消息时做一次吸底（Compact 进度条进出场同样改高度，一并跟）。
+  const compactingOn = s.compacting !== undefined
   useEffect(() => {
     if (!streamingId && stickToBottom.current) scrollToBottom()
-  }, [activeMessages, streamingId, scrollToBottom])
+  }, [activeMessages, streamingId, scrollToBottom, compactingOn])
 
   // 审批/询问属于必须看到的操作，首次出现时强制定位到底部。
   useEffect(() => {
@@ -382,7 +384,9 @@ export function ChatView({ leaf, params }: ViewProps) {
                       onEdit: () => startEdit(m.id, m.content),
                       onApproval: (aid, action, args) => void s.decideApproval(m.id, aid, action, args, activeId),
                       onInquiry: (iid, ans) => void s.answerInquiry(m.id, iid, ans, activeId),
-                      ...(ttsEnabled ? { onSpeak: () => speak(m.id, m.content) } : {}),
+                      // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
+                      onSuggest: (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
+                      ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
                     }}
                   />
                 )
@@ -393,6 +397,15 @@ export function ChatView({ leaf, params }: ViewProps) {
               <div className="t2-sys t2-retry" title={s.llmRetry.error}>
                 ⟳ {t('chat.llmRetrying', { s: (s.llmRetry.waitMs / 1000).toFixed(1), n: s.llmRetry.attempt, max: s.llmRetry.max || '?' })}
                 {s.llmRetry.error ? <span className="t2-retry-err">{s.llmRetry.error}</span> : null}
+              </div>
+            )}
+            {s.compacting !== undefined && (
+              <div className="t2-compact" role="status" aria-live="polite">
+                <div className="t2-compact-head">
+                  <span>{t('input.compacting')}</span>
+                  <span className="t2-compact-pct">{s.compacting}%</span>
+                </div>
+                <div className="t2-compact-track"><div className="t2-compact-fill" style={{ width: `${s.compacting}%` }} /></div>
               </div>
             )}
             </div>

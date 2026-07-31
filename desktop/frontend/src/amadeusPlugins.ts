@@ -13,6 +13,7 @@ import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
 import { installPluginStatusBridge } from './pluginStatusBridge'
 import { nudgeOnboardingOnce } from './stores/pluginOnboardingStore'
+import { installAmadeusAutomationBridge } from './amadeusAutomation'
 
 let installed = false
 
@@ -21,6 +22,7 @@ export function installAmadeusPlugins(): void {
   installed = true
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
   installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
+  installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
   const store = usePluginStore.getState()
   store.init([calloutBlocks, wordCount])
   void store.loadExternal().then(() => {

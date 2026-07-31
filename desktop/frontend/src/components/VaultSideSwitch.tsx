@@ -25,19 +25,26 @@ export function VaultSideSwitch(): React.ReactElement | null {
     return api.onStatus(setSync)
   }, [initSide])
 
-  // 移动端(无同步引擎;本地/云端 = 两个独立 bridge,reload 制切换):window.amadeusVaultMode 解闸。
+  // 移动端(无同步引擎;本地/云端 = 两个独立 bridge,运行时换桥):window.amadeusVaultMode 解闸。
   // 登录已由 mobileShim 前置(未登录不挂载),无需 needLogin 分支。
+  // ⚠️ 选中态读 `side`(pageStore)而**不是** mobileMode.side —— 后者是普通对象属性,变了不会触发重渲染。
+  // 切换不再整页 reload,组件活着,必须靠订阅才动。
   const mobileMode = (window as unknown as {
-    amadeusVaultMode?: { side: 'local' | 'cloud'; switch(next: 'local' | 'cloud'): void }
+    amadeusVaultMode?: { side: 'local' | 'cloud'; switch(next: 'local' | 'cloud'): void | Promise<void> }
   }).amadeusVaultMode
   if (!window.amadeusSync && mobileMode) {
+    const pickMobile = (next: 'local' | 'cloud'): void => {
+      if (busy || next === side) return
+      setBusy(true)
+      void Promise.resolve(mobileMode.switch(next)).finally(() => setBusy(false))
+    }
     return (
-      <div className="t2s-vaultseg" role="tablist" aria-label="vault side">
-        <div className="t2s-vaultseg-thumb" data-side={mobileMode.side} />
-        <button role="tab" aria-selected={mobileMode.side === 'local'} className={mobileMode.side === 'local' ? 'on' : ''} onClick={() => mobileMode.switch('local')}>
+      <div className="t2s-vaultseg" role="tablist" aria-label="vault side" data-busy={busy || undefined}>
+        <div className="t2s-vaultseg-thumb" data-side={side} />
+        <button role="tab" aria-selected={side === 'local'} className={side === 'local' ? 'on' : ''} onClick={() => pickMobile('local')}>
           {t('notes.cloud.local')}
         </button>
-        <button role="tab" aria-selected={mobileMode.side === 'cloud'} className={mobileMode.side === 'cloud' ? 'on' : ''} onClick={() => mobileMode.switch('cloud')}>
+        <button role="tab" aria-selected={side === 'cloud'} className={side === 'cloud' ? 'on' : ''} onClick={() => pickMobile('cloud')}>
           {t('notes.cloud.cloud')}
         </button>
       </div>

@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { openaiToAnthropicBody } from './anthropicMessages.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { openaiToAnthropicBody, streamAnthropicMessages } from './anthropicMessages.js';
 
 describe('openaiToAnthropicBody', () => {
-  it('forces the Claude Code system block first, real system after', () => {
+  it('lifts role:system to the top level verbatim — no injected client identity block', () => {
     const body = openaiToAnthropicBody({
       model: 'claude-x',
       messages: [
@@ -10,8 +10,9 @@ describe('openaiToAnthropicBody', () => {
         { role: 'user', content: 'hi' },
       ],
     });
-    expect(body.system[0]).toEqual({ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." });
-    expect(body.system[1]).toEqual({ type: 'text', text: 'BE NICE' });
+    // 回归闸:订阅 OAuth 分支(强制首块「You are Claude Code…」冒充官方 CLI)已于 2026-07-31 删除。
+    // 这条断言的作用是让它加回来时立刻红,而不是悄悄多一块 system。
+    expect(body.system).toEqual([{ type: 'text', text: 'BE NICE' }]);
     expect(body.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]);
   });
 
@@ -47,5 +48,31 @@ describe('openaiToAnthropicBody', () => {
     });
     expect(body.tools).toEqual([{ name: 'f', description: 'd', input_schema: { type: 'object', properties: { x: { type: 'string' } } } }]);
     expect(body.tool_choice).toEqual({ type: 'auto' });
+  });
+});
+
+describe('用户自有 API key 路径', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('无系统提示时整个 system 字段不发(别塞空数组)', () => {
+    const bare = openaiToAnthropicBody({ model: 'claude-x', messages: [{ role: 'user', content: 'hi' }] });
+    expect(bare.system).toBeUndefined();
+  });
+
+  it('走 x-api-key;不发 Authorization、不发 oauth beta 头', async () => {
+    let seen: any = null;
+    vi.stubGlobal('fetch', (_u: string, init: any) => {
+      seen = init.headers;
+      return Promise.resolve({ ok: false, status: 401, body: null, json: () => Promise.resolve({ error: { message: 'x' } }) });
+    });
+    await streamAnthropicMessages({
+      apiKey: 'sk-ant-api03-xxx',
+      baseUrl: 'https://api.anthropic.com',
+      payload: { model: 'claude-x', messages: [] },
+    } as any).catch(() => {});
+    expect(seen['x-api-key']).toBe('sk-ant-api03-xxx');
+    // 同上,这两条是删除订阅 OAuth 分支的回归闸。
+    expect(seen.Authorization).toBeUndefined();
+    expect(seen['anthropic-beta']).toBeUndefined();
   });
 });

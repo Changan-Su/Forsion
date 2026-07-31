@@ -2195,7 +2195,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2206,6 +2206,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -2563,6 +2567,50 @@
           },
           "required": [
             "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
           ]
         }
       }
@@ -2913,7 +2961,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2924,6 +2972,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -3284,6 +3336,50 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
+          ]
+        }
+      }
     }
   ],
   "tangu-docker:host": [
@@ -3381,7 +3477,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine, with the current session cwd as working directory; returns stdout/stderr/exit_code. Use for running builds/tests, listing directories, git operations, etc. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3404,7 +3500,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3455,7 +3551,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Keep old_string as small as possible while still unique — do not pad it with large unchanged regions. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. For several regions of one file use multi_edit; to create a new file, use write_file. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3501,7 +3597,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Keep each old_string minimal but unique; merge overlapping or adjacent changes into one edit instead of emitting edits whose regions touch. Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4013,7 +4109,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4024,6 +4120,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -4432,6 +4532,50 @@
           },
           "required": [
             "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
           ]
         }
       }
@@ -4551,7 +4695,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine, with the current session cwd as working directory; returns stdout/stderr/exit_code. Use for running builds/tests, listing directories, git operations, etc. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4574,7 +4718,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4625,7 +4769,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Keep old_string as small as possible while still unique — do not pad it with large unchanged regions. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. For several regions of one file use multi_edit; to create a new file, use write_file. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4671,7 +4815,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Keep each old_string minimal but unique; merge overlapping or adjacent changes into one edit instead of emitting edits whose regions touch. Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5183,7 +5327,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5194,6 +5338,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -5602,6 +5750,50 @@
           },
           "required": [
             "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
           ]
         }
       }
@@ -5892,7 +6084,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5903,6 +6095,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -6260,6 +6456,50 @@
           },
           "required": [
             "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
           ]
         }
       }
@@ -6569,7 +6809,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6580,6 +6820,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -6940,6 +7184,50 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:host": [
@@ -7037,7 +7325,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine, with the current session cwd as working directory; returns stdout/stderr/exit_code. Use for running builds/tests, listing directories, git operations, etc. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7060,7 +7348,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7111,7 +7399,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Keep old_string as small as possible while still unique — do not pad it with large unchanged regions. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. For several regions of one file use multi_edit; to create a new file, use write_file. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7157,7 +7445,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Keep each old_string minimal but unique; merge overlapping or adjacent changes into one edit instead of emitting edits whose regions touch. Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7669,7 +7957,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7680,6 +7968,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -8088,6 +8380,50 @@
           },
           "required": [
             "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
           ]
         }
       }
@@ -8207,7 +8543,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine, with the current session cwd as working directory; returns stdout/stderr/exit_code. Use for running builds/tests, listing directories, git operations, etc. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8230,7 +8566,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory). For large files, paginate by line with offset/limit. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8281,7 +8617,7 @@
       "type": "function",
       "function": {
         "name": "edit_file",
-        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows. To create a new file, use write_file.",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Keep old_string as small as possible while still unique — do not pad it with large unchanged regions. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. For several regions of one file use multi_edit; to create a new file, use write_file. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8327,7 +8663,7 @@
       "type": "function",
       "function": {
         "name": "multi_edit",
-        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Keep each old_string minimal but unique; merge overlapping or adjacent changes into one edit instead of emitting edits whose regions touch. Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8839,7 +9175,7 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (the subagent cannot see the current conversation).",
+        "description": "Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). Pass agentSlug to run a specific named agent as the subagent (it takes on that agent's persona/model) — e.g. an agent the user @-mentioned. Or pass instructions to spin up an ad-hoc subagent with custom instructions you write on the fly (no saved agent needed). The subtask description must be self-contained (by default the subagent cannot see the current conversation; set forkContext:true to hand it a filtered transcript instead of re-typing background).",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8850,6 +9186,10 @@
             "context": {
               "type": "string",
               "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
             },
             "agentSlug": {
               "type": "string",
@@ -9258,6 +9598,50 @@
           },
           "required": [
             "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "self_brainstorm",
+        "description": "Fork yourself into 2-4 parallel perspectives over the CURRENT conversation context to stress-test a decision before committing: independent takes, then cross-critique, then you synthesize the conclusion. Use only for genuinely open design choices, tradeoffs, or plans where being wrong is expensive — not for factual lookups, mechanical tasks, or anything a single pass answers; a request for thoroughness alone does not justify forking. Each perspective is a task contract (what it examines and what it must produce — a failure scenario, an alternative, a cost estimate), not a personality; an adversarial Challenger seat is always included. The forks see the whole conversation so far, have no tools, and debate in the side chat; you receive a digest of their final positions — the synthesis you then write is the deliverable, so weigh arguments rather than counting seats.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "type": "string",
+              "description": "The specific question or decision to stress-test, stated neutrally (do not bake in your current lean)."
+            },
+            "perspectives": {
+              "type": "array",
+              "description": "Optional 1-3 custom seats tailored to this problem. Prefer problem-specific axes (e.g. \"migration cost\" vs \"query performance\") over generic personas. A Challenger seat is auto-added unless one of yours is adversarial. Omit to use the default trio (Challenger / Steelman Builder / Alternative Seeker).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Short seat name"
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "Task contract: what this seat examines and what it MUST produce."
+                  }
+                },
+                "required": [
+                  "name",
+                  "brief"
+                ]
+              }
+            },
+            "rounds": {
+              "type": "number",
+              "description": "1 = independent takes only; 2 (default) = takes + one cross-critique round."
+            }
+          },
+          "required": [
+            "topic"
           ]
         }
       }
