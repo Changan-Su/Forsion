@@ -117,10 +117,9 @@ jobs:
       # 缺失则应用内更新形同虚设 → 这里硬失败,避免发出一个装不了更新的版本。
       # macOS 走 GitHub API 检测(未签名不自装),不依赖该 feed,故跳过校验。
       #
-      # ⚠️ 文件名随通道变:electron-builder 的 detectUpdateChannel(默认开)从版本号的 prerelease 段取通道名,
-      # 于是 2.7.4-beta.1 产出的是 beta.yml / beta-linux.yml,**根本没有 latest*.yml**。写死 latest 会把
-      # 每个 beta 版当场判死。(配置里的 generateUpdatesFilesForAllChannels 救不了:computeChannelNames 对
-      # provider==='github' 直接返回单通道,该开关只对 generic 服务器生效。)
+      # 也认 beta*.yml:**现在的配置下不会产生它**(github provider 恒写 latest*.yml,连 beta 版也是,
+      # 三段机制见 electron-builder.config.cjs 的实证注释),但一旦换 generic 更新服务器、或显式设了
+      # publish.channel,产物就会改名 —— 那时这道闸不该报一句「缺少 latest*.yml」把人带偏。
       - name: Verify update manifests
         if: runner.os != 'macOS'
         working-directory: desktop
@@ -130,22 +129,6 @@ jobs:
           found=$(ls -1 dist/latest*.yml dist/beta*.yml 2>/dev/null || true)
           test -n "$found" || { echo "::error::缺少 latest*.yml / beta*.yml — 应用内更新 feed 未生成,请改用 --publish always(见 build.publish 配置)"; exit 1; }
           echo "$found"
-
-      # beta 用户怎么回到正式版:他们的 electron-updater 读的是 beta*.yml,而正式版构建只写 latest*.yml
-      # → 不管的话,凡是装过 beta 的人**永远停在最后一个 beta**(GitHub provider 下 electron-builder 的
-      # generateUpdatesFilesForAllChannels 是空转的,见 electron-builder.config.cjs 里的实证注释)。
-      # 正式 tag 时把 latest*.yml 原样复制一份成 beta*.yml:版本号更高,beta 频道自然升上来。
-      # (反向不做:beta 构建只写 beta*.yml,正式版用户读 latest*.yml,天然看不见测试版。)
-      - name: Mirror stable feed to beta channel
-        if: runner.os != 'macOS' && !contains(github.ref_name, '-')
-        working-directory: desktop
-        shell: bash
-        run: |
-          for f in dist/latest*.yml; do
-            [ -e "$f" ] || continue
-            cp "$f" "${f/latest/beta}"
-            echo "$f → ${f/latest/beta}"
-          done
 
       - name: Upload installers
         uses: actions/upload-artifact@v4

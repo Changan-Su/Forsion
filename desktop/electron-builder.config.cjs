@@ -18,17 +18,19 @@ module.exports = {
   ...(product.id === 'forsion'
     ? { publish: { provider: 'github', owner: 'Changan-Su', repo: 'Forsion' } }
     : {}),
-  // ⚠️ 测试版通道的命门。electron-builder 按版本号里的 prerelease 后缀推导频道:
-  // `2.7.3` → 写 latest*.yml,`2.7.3-beta.1` → 写 beta*.yml。所以「beta 发出去但不推给正式版用户」
-  // 是**免费**的(正式版用户轮询的是 latest*.yml,根本看不见)。
-  // 但反过来那半边不免费:不开这个开关,**正式版只写 latest*.yml**,已经切到 beta 频道的用户
-  // 读的是 beta*.yml,于是**永远收不到后续正式版,卡在最后一个 beta 上**。
-  // ⚠️ **这个开关对 github provider 是空转的**(2026-07-31 读 app-builder-lib 源码实证):
-  // `publish/updateInfoBuilder.js` 的 `computeChannelNames()` 第一行就是
-  // `if (currentChannel === 'alpha' || publishConfig.provider === 'github' || !开关) return [currentChannel]`
-  // —— 我们正是 github,所以永远只写当前频道那一份。留着它是为了换 generic 服务器时不必重想,
-  // 但**别再指望它兜上面那半边**:beta 用户回正式版这条路由 `build-desktop.yml` 的
-  // 「Mirror stable feed to beta channel」步骤(正式 tag 时把 latest*.yml 复制一份成 beta*.yml)承担。
+  // ⚠️ 这里**完全不产生 beta*.yml**,而且这是对的 —— 别照着「版本号带 -beta.1 就该写 beta.yml」去改。
+  // 2026-07-31 发 v2.7.4-beta.1 时读源码 + 看真实产物实证的三段机制:
+  //  ① electron-builder:`detectUpdateChannel`(默认开)确实从版本号 prerelease 段算出 'beta',但
+  //     `PublishManager.getResolvedPublishConfig()` **只把它写回 generic(与暴露 checkAndResolveOptions 的
+  //     provider)的 options.channel**;github 那条分支直接 return,`options.channel` 始终 undefined
+  //     → `computeChannelNames()` 拿到 'latest' → **无论正式版还是 beta,产物都是 latest*.yml**。
+  //  ② 客户端 electron-updater 自己补上:beta 用户(allowPrerelease=true)遇到 prerelease tag 会先试
+  //     `beta.yml`,404 之后有一条显式回退到 `latest.yml`(GitHubProvider.js 里的注释原文
+  //     "Allow fallback to `latest.yml`")。所以 beta 包照样装得上,也照样能升到后续正式版。
+  //  ③ 正式版用户看不见 beta,靠的**不是**清单文件分流,而是 allowPrerelease=false 时走
+  //     `getLatestTagName()` → GitHub 的 `/releases/latest` 端点按定义排除 prerelease。
+  // 于是本开关对我们是空转的(`computeChannelNames()` 第一行就对 provider==='github' 返回单通道),
+  // 留着只是为了将来换 generic 更新服务器时不必重想。
   generateUpdatesFilesForAllChannels: true,
   artifactName: product.artifactPrefix + '-${version}-${arch}.${ext}',
   files: [
