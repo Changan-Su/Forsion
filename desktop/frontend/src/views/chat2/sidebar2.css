@@ -85,12 +85,17 @@
   transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s) var(--ease-out, ease);
 }
 /* 箭头默认恒隐;hover 可展开行才现、图标让位(:has 保证不可展开的行图标恒亮)。
- * 展开态旋转沿用 .t2s-chev.open;文件夹的「展开了没」靠 FolderOpen/Folder 表达,不靠常驻箭头。 */
+ * 展开态旋转沿用 .t2s-chev.open;文件夹的「展开了没」靠 FolderOpen/Folder 表达,不靠常驻箭头。
+ * ⚠️ 交换规则必须锁在 (hover: hover) 里:触屏没有真悬停,tap 之后 :hover 会**驻留**在那一行,
+ *    图标被永久 opacity:0 —— 即「移动端文件夹/带子笔记的 md 行,点过之后图标莫名消失,刷新才回来」
+ *    (2026-08-05 用户实报)。触屏上箭头恒不现、图标恒亮,展开照旧靠点击。 */
 .t2s-side .t2s-lead .t2s-lead-chev { opacity: 0; }
-.t2s-side .t2s-srow:hover .t2s-lead-chev,
-.t2s-side .t2s-folder-row:hover .t2s-lead-chev { opacity: 0.7; }
-.t2s-side .t2s-srow:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev),
-.t2s-side .t2s-folder-row:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev) { opacity: 0; }
+@media (hover: hover) {
+  .t2s-side .t2s-srow:hover .t2s-lead-chev,
+  .t2s-side .t2s-folder-row:hover .t2s-lead-chev { opacity: 0.7; }
+  .t2s-side .t2s-srow:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev),
+  .t2s-side .t2s-folder-row:hover .t2s-lead:has(.t2s-lead-chev) > :not(.t2s-lead-chev) { opacity: 0; }
+}
 .t2s-side .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
 .t2s-side .t2s-chev.open { transform: rotate(90deg); }
 /* 树的「文件夹/工作区」组头:去掉 .t2s-group-toggle 那套「分区标题」装(11.5px/全大写/字间距)——

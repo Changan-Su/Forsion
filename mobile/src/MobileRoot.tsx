@@ -49,12 +49,18 @@ function useInboxAutoPull(): void {
   }, [])
 }
 
-/** Android 系统返回(实体键/全面屏侧滑手势)接管:浮层→抽屉→tab 内后退→关视图→挂起。
- *  此前无人监听 backButton,返回手势直接把 app 退到后台——「侧滑返回没反应」的根因。 */
+/** Android 系统返回(实体键/全面屏侧滑手势)接管:壳内 sheet→浮层→抽屉→tab 内后退→关视图→挂起。
+ *  此前无人监听 backButton,返回手势直接把 app 退到后台——「侧滑返回没反应」的根因。
+ *  Manifest 已开 enableOnBackInvokedCallback(Capacitor App 插件走 androidx OnBackPressedDispatcher,
+ *  自动桥到新 API):系统预测性返回动画只在链底「挂起 app」那档出现,链上各档照旧被我们拦截。 */
 function useAndroidBack(): void {
   useEffect(() => {
     if (!window.tangu?.mobile) return // 仅原生壳;浏览器无此事件
     const sub = CapApp.addListener('backButton', () => {
+      // 最上层先问壳:标签页 sheet /「⋯」菜单开着 → 由 SingleColumnHost 接管关闭(可取消事件)。
+      const shellEv = new Event('forsion:mobile-back', { cancelable: true })
+      window.dispatchEvent(shellEv)
+      if (shellEv.defaultPrevented) return
       const app = useApp.getState()
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()

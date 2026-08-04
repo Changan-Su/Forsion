@@ -373,6 +373,18 @@ function makePageStore() {
   }
   const pushUndo = (kind: 'edit' | 'struct'): void => history.push(snapNow(), kind, Date.now())
 
+  /** 拉全库页面 emoji 图标(带重试)。此前失败被 `.catch(() => {})` 静默吞掉 → icons 永远空表:
+   *  列表 emoji 与笔记标题大图标(都读这张表)一起消失,要手动刷新/切库才恢复(2026-08-05 用户实报
+   *  「图标莫名不显示」)。移动端弱网/后台唤醒期一次失败很常见 → 3s/12s 各补一枪;
+   *  root 已变(切库)立即放弃,由新根自己的流程拉,同原 root 守卫语义。 */
+  const fetchIcons = (root: string | null, attempt = 0): void => {
+    void amadeus.pageIcons?.()
+      .then((icons) => { if (get().vaultRoot === root) set({ icons }) })
+      .catch(() => {
+        if (attempt < 2 && get().vaultRoot === root) setTimeout(() => fetchIcons(root, attempt + 1), attempt === 0 ? 3000 : 12_000)
+      })
+  }
+
   return {
     vaultRoot: null,
     vaultSide: 'local',
@@ -474,7 +486,7 @@ function makePageStore() {
         // 用户手选文件夹 = 本地侧(主进程同步记 localVault)。
         set({ vaultRoot: info.root, vaultSide: 'local', pages: info.pages, folders: info.folders ?? [], files: [], error: null })
         void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
-        void amadeus.pageIcons?.().then((icons) => { if (get().vaultRoot === info.root) set({ icons }) }).catch(() => {})
+        fetchIcons(info.root)
         if (info.pages.length > 0) await get().loadPage(info.pages[0])
       } catch (e) {
         set({ error: String(e) })
@@ -488,7 +500,7 @@ function makePageStore() {
         if (!info) return
         set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], error: null })
         void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
-        void amadeus.pageIcons?.().then((icons) => { if (get().vaultRoot === info.root) set({ icons }) }).catch(() => {})
+        fetchIcons(info.root)
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)
@@ -526,7 +538,7 @@ function makePageStore() {
         })
         resetAllScopeDocs() // 隔壁面板也一起作废,否则它那份旧库笔记随时会写进新根
         void amadeus.listFiles?.().then((files) => { if (get().vaultRoot === info.root) set({ files }) }).catch(() => {})
-        void amadeus.pageIcons?.().then((icons) => { if (get().vaultRoot === info.root) set({ icons }) }).catch(() => {})
+        fetchIcons(info.root)
         const target = info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)
         else set({ activePage: null, pendingPage: null, manifest: null, blocks: {} }) // 空库(如未登录的云侧):清编辑器,防旧库笔记误存新根
@@ -827,7 +839,7 @@ function makePageStore() {
         amadeus.listFiles?.() ?? [], // 旧 preload(无 listFiles)下优雅降级为空
       ])
       set({ pages, folders, files })
-      void amadeus.pageIcons?.().then((icons) => set({ icons })).catch(() => {})
+      fetchIcons(get().vaultRoot)
     },
 
     async deletePage(pagePath) {

@@ -8,6 +8,7 @@ import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, Network, LayoutDashboard,
+  SquareSlash, Undo2, Redo2, ChevronsDown,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -42,7 +43,8 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf } from '@lcl/engine'
+import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
 import { CloudVaultPanel } from './components/CloudVaultPanel'
@@ -147,9 +149,11 @@ usePageStore.subscribe((state, prev) => {
     const leafId = am && ((am.params ?? {}) as { __type?: string }).__type === 'amadeus-editor' && am.id === originScope ? am.id : originScope
     recordNav(leafId, `amadeus:${p}`, () => {
       const w = useWorkspace.getState()
-      const cur = leafId ? w.api?.getPanel(leafId) : null
+      // ⚠️ 用跨端的 leafById,别用 w.api?.getPanel —— 移动单列壳 api 恒 null,那样写恒 return,
+      //    安卓返回键消耗一条历史却什么都不发生(2026-08-05 修)。
+      const cur = leafId ? w.leafById(leafId) : null
       if (!cur) return
-      if (((cur.params ?? {}) as { __type?: string }).__type !== 'amadeus-editor') w.navigateLeaf(leafId!, 'amadeus-editor', { notePath: p })
+      if (cur.type !== 'amadeus-editor') w.navigateLeaf(leafId!, 'amadeus-editor', { notePath: p })
       // 对着**这条历史所属的那个面板**装,不能用 usePageStore.getState()(那是「当前活动面板」)——
       // 用户点后退时焦点完全可能已经在另外半屏,笔记就会退到隔壁去。
       void pageStoreFor(leafId!).getState().loadPage(p)
@@ -1211,6 +1215,39 @@ export function AmadeusPagesView() {
 // ─────────────────────────────── 主:编辑器(Amadeus 内核 + Tangu 排版) ───────────────────────────────
 
 /** 编辑器需 Amadeus 契约 token → 包 .am-app.tangu-lovable + 镜像 Tangu mode/flat,经 bridge 取色。 */
+/** 移动端编辑工具栏(触屏才渲染):常驻编辑面底部。
+ *  - 安卓 APK(adjustResize):键盘弹起时 WebView 布局同步变矮,本栏作为面板尾行天然贴在键盘正上方;
+ *  - 手机浏览器(键盘只压 visual viewport):用 visualViewport 差值 translateY 顶上去(APK 上差值≈0)。
+ *    差值是视口 px,元素在 body zoom 里 → 须除以 zoomOf 反补偿(端级 zoom × fixed 坐标的老坑)。
+ *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
+ *  - 「/」= 把字符插进聚焦中的编辑器(execCommand),原生 slash 菜单自然弹出 —— 不另造菜单,
+ *    与键盘打「/」完全同一条路;未聚焦时按钮无事发生(slash 本就需要落点)。 */
+function AmxMobileBar({ onUpload, undo, redo }: { onUpload: () => void; undo: () => void; redo: () => void }) {
+  const [lift, setLift] = useState(0)
+  const barRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const on = (): void => setLift(Math.max(0, window.innerHeight - vv.height - vv.offsetTop))
+    on()
+    vv.addEventListener('resize', on)
+    vv.addEventListener('scroll', on)
+    return () => { vv.removeEventListener('resize', on); vv.removeEventListener('scroll', on) }
+  }, [])
+  const keep = (e: React.PointerEvent): void => e.preventDefault()
+  const z = barRef.current ? zoomOf(barRef.current) : 1
+  return (
+    <div ref={barRef} className="amx-mbar" style={lift ? { transform: `translateY(-${Math.round(lift / z)}px)` } : undefined}>
+      <button onPointerDown={keep} onClick={() => document.execCommand('insertText', false, '/')} title="插入(slash 菜单)"><SquareSlash size={19} /></button>
+      <button onPointerDown={keep} onClick={onUpload} title="上传文件到本页"><Upload size={19} /></button>
+      <button onPointerDown={keep} onClick={undo} title="撤销"><Undo2 size={19} /></button>
+      <button onPointerDown={keep} onClick={redo} title="重做"><Redo2 size={19} /></button>
+      <span className="amx-mbar-gap" />
+      <button onClick={() => (document.activeElement as HTMLElement | null)?.blur?.()} title="收起键盘"><ChevronsDown size={19} /></button>
+    </div>
+  )
+}
+
 function EditorScope({
   children, dragging, onDrop, onDragOver, onDragLeave, onClick, onPaste,
 }: {
@@ -1809,6 +1846,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 每个面板自持一份之后没有这个概念了 —— 两边都是真的、都能编辑。
 
   return (
+    <>
     <EditorScope dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
       {activePage && (
         // 顶栏与编辑器融为一体:透明浮在纸面上,不是独立的一层(无底色/无分割线;滚动穿过靠 blur,见 CSS)。
@@ -1947,6 +1985,12 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         </>
       )}
     </EditorScope>
+    {/* 移动端底部编辑工具栏:EditorScope(.amx-pane)自身是滚动容器,栏必须做它的**兄弟**
+        (mb-view 是 flex 列)才能常驻底部不随滚动;触屏媒体块里有配套的 flex 尺寸覆盖。 */}
+    {isCoarsePointer() && activePage && mode !== 'source' && !loadingNote && (
+      <AmxMobileBar onUpload={() => uploadInputRef.current?.click()} undo={() => myPs().undo()} redo={() => myPs().redo()} />
+    )}
+    </>
   )
 }
 

@@ -747,6 +747,45 @@
 /* 图标叠到封面下缘(Notion 观感):负 margin 上提;须 position+z-index 抬到封面之上,
  * 否则封面是 position:relative(定位元素)会盖过静态的图标 → 图标被封面挡住(实报)。 */
 .amx-cover + .amx-doc .amx-title-bigicon { margin-top: -30px; position: relative; z-index: 1; }
+/* ── 移动端(触屏窄幅,与 singleColumn.css 的 body zoom 同一条媒体查询):
+ *    封面通铺到屏幕边(去留白去圆角),正文左右空隙 48px 减半到 24px(用户拍板 2026-08-05)。
+ *    工具钮触屏没有 hover → 常显。 ── */
+@media (pointer: coarse) and (max-width: 820px) {
+  .amx-cover { width: 100%; max-width: none; border-radius: 0; }
+  .amx-doc { padding: 0 24px; }
+  .am-app .page-view { padding-left: 24px; padding-right: 24px; }
+  .amx-cover-tools { opacity: 1; }
+  /* 底部编辑工具栏(AmxMobileBar)是 .amx-pane 的兄弟(mb-view flex 列):
+     pane 从 height:100% 改弹性占满剩余,否则 100% + 工具栏高度会把栏挤出屏。 */
+  .am-app.amx-pane.amx-editor { height: auto; flex: 1 1 auto; min-height: 0; }
+}
+
+/* 移动端底部编辑工具栏(触屏才渲染,见 amadeusViews.AmxMobileBar;键盘贴合与 zoom 反补偿在组件内)。 */
+.amx-mbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-card, var(--bg));
+  z-index: 5;
+}
+.amx-mbar button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.amx-mbar button:active { background: var(--bg-hover, rgba(127, 127, 127, 0.1)); color: var(--text); }
+.amx-mbar-gap { flex: 1 1 auto; }
 .amx-title-actions { display: flex; gap: 6px; height: 24px; opacity: 0; transition: opacity 0.15s ease; }
 .amx-title-wrap:hover .amx-title-actions, .amx-title-actions:focus-within { opacity: 1; }
 .amx-title-actions button { border: none; background: transparent; color: var(--text-faint, var(--text-muted)); font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; cursor: pointer; }

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- enableOnBackInvokedCallback:Android 13+ 预测性返回。@capacitor/app 走 androidx
+         OnBackPressedDispatcher(会自动桥接新 API),JS 侧 backButton 链不受影响;
+         系统返回预览动画只出现在链底「挂起 app」那一档(MobileRoot.useAndroidBack)。 -->
     <application
         android:allowBackup="true"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

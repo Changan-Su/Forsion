@@ -9,6 +9,7 @@
  *
  * 其余 host 能力(文件系统/providers/mcp/market/更新…)缺省 → 共享组件 `window.tangu?.X` 可选链自然隐藏。
  */
+import { Browser } from '@capacitor/browser'
 import { isNative, apiBase, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth } from './capacitorAuth'
 
 const TOKEN_KEY = 'forsion_token'
@@ -33,7 +34,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       if (r.status === 401 || r.status === 403) return { ...base, loggedIn: false, tokenValid: false, username: null }
       if (!r.ok) return { ...base, loggedIn: true, tokenValid: null, username: null }
       const u = await r.json().catch(() => ({} as Record<string, unknown>))
-      return { ...base, loggedIn: true, tokenValid: true, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: null }
+      return { ...base, loggedIn: true, tokenValid: true, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: (u as { membershipTier?: unknown }).membershipTier ?? null }
     } catch {
       return { ...base, loggedIn: true, tokenValid: null, username: null }
     }
@@ -46,6 +47,28 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     await login()
   }
 
+  // 外开页面:native 走系统浏览器(Capacitor Browser),web 新标签。带 token 是账号中心的登录交接方式(桌面同款)。
+  const openExternal = async (url: string): Promise<{ ok: boolean }> => {
+    if (native) { try { await Browser.open({ url }) } catch { /* ignore */ } }
+    else window.open(url, '_blank', 'noopener')
+    return { ok: true }
+  }
+  // 账号菜单的云端调用(电文形状对齐 electron 的 account:quota / account:useResetCard —— AccountCard 靠
+  // `window.tangu?.accountQuota` 探测本能力,此前移动端缺席 → 点头像走 openAccountCenter 也缺席 = 点了没反应)。
+  const cloudJson = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
+    if (!token) return { status: 401, json: null }
+    try {
+      const r = await origFetch(`${backendUrl}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
+      return { status: r.status, json: await r.json().catch(() => null) }
+    } catch (e) {
+      return { status: 0, json: { detail: String((e as Error)?.message || e) } }
+    }
+  }
+
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
@@ -56,6 +79,19 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     authStatus,
     forsionLogin: login,
     forsionLogout: logout,
+    accountQuota: () => cloudJson('GET', '/api/token-quota/my'),
+    accountUseResetCard: (type?: string) => {
+      if (type !== undefined && type !== 'both' && type !== 'weekly') {
+        return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
+      }
+      return cloudJson('POST', '/api/token-quota/reset-card/use', { type: type ?? 'both' })
+    },
+    openAccountCenter: (section?: string) => {
+      const hash = section && /^[a-z0-9-]+$/i.test(section) ? `#${section}` : ''
+      return openExternal(`${backendUrl}/account${token ? `?token=${encodeURIComponent(token)}` : ''}${hash}`)
+    },
+    openPayCenter: () =>
+      openExternal(`${backendUrl}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${backendUrl}/account`)}`),
   }
 
   // 401 兜底:/api/agent/* 鉴权失败 → 清 token 重新登录。

@@ -9,6 +9,13 @@
   background: var(--bg, #fff);
   color: var(--text, #111);
   overflow: hidden;
+  /* iOS 手感缓动(UIKit 系统面板曲线)+ 时长,全壳过渡统一从这两枚取。 */
+  --mb-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --mb-dur: 0.34s;
+  /* push 抽屉宽度:面板滑入多少,main 就被推走多少(main 原尺寸,右缘滑出屏外)。
+     ⚠️ 必须除以端级 zoom(--uiz,uiZoom.ts 维护):vw 不吃 body zoom,但面板作为 body 后代
+     渲染宽度会被 zoom 放大 —— 不补偿的话 86vw×1.15 ≈ 全屏,main 的「露边」整个消失。 */
+  --mb-panelw: calc(min(86vw, 380px) / var(--uiz, 1));
 }
 
 .mb-topbar {
@@ -21,104 +28,19 @@
   border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   background: var(--bg-card, var(--bg, #fff));
 }
-.mb-titlewrap {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  line-height: 1.15;
-}
-.mb-title {
-  max-width: 100%;
-  font-size: 15px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* 主视图 tab 下拉:顶栏触发钮(当前 tab 具体名 + ▾)+ 点开的下拉浮层(tab 列表 + ＋新建)。 */
-.mb-tabmenu { position: relative; display: flex; justify-content: center; max-width: 100%; min-width: 0; }
-.mb-tabmenu-trigger {
+.mb-topbar-spacer { flex: 1 1 auto; min-width: 0; }
+/* 标签页切换钮:圆角方框里画 tab 计数(手机浏览器惯例),一眼即知是标签页。 */
+.mb-tabcount {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  max-width: 100%;
-  min-width: 0;
-  padding: 3px 6px 3px 8px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text, #111);
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.mb-tabmenu-trigger:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); }
-.mb-tabmenu-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mb-tabmenu-caret { flex: 0 0 auto; opacity: 0.55; }
-
-/* 下拉浮层:全屏透明 scrim 接外部点击 + 顶栏下方居中的菜单卡(fixed,预览态经 .sc-device transform 收进框)。 */
-.mb-tabmenu-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 26;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: calc(env(safe-area-inset-top) + 54px) 12px 12px;
-}
-.mb-tabmenu-pop {
-  width: min(94%, 340px);
-  max-height: 72%;
-  overflow-y: auto;
-  padding: 6px;
-  background: var(--bg-card, var(--bg, #fff));
-  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
-  border-radius: 14px;
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.24);
-  animation: mb-pop-in 0.16s var(--ease-out, ease-out);
-}
-@keyframes mb-pop-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-.mb-tabmenu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 10px;
-  font-size: 14px;
-  color: var(--text, #111);
-  cursor: pointer;
-}
-.mb-tabmenu-item:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); }
-.mb-tabmenu-item.on { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); font-weight: 600; }
-.mb-tabmenu-item-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mb-tabmenu-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 2px; border-radius: 6px; opacity: 0.5; }
-.mb-tabmenu-x:active { opacity: 1; background: var(--bg-active, rgba(0, 0, 0, 0.12)); }
-.mb-tabmenu-new {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  margin-top: 4px;
-  padding: 11px 10px;
-  border: none;
-  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  background: transparent;
-  color: var(--accent, #4d8794);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.mb-tabmenu-new:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); }
-.mb-subtitle {
-  max-width: 100%;
-  font-size: 11px;
-  color: var(--text-muted, rgba(0, 0, 0, 0.5));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  border: 1.8px solid currentColor;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
 }
 .mb-icon-btn {
   flex: 0 0 auto;
@@ -154,40 +76,43 @@
 }
 @keyframes mb-view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .mb-view, .mb-drawer, .mb-drawer-scrim, .mb-sheet, .mb-sheet-scrim, .mb-tabmenu-pop { animation: none; }
+  .mb-view, .mb-sheet, .mb-sheet-scrim { animation: none; }
+  .mb-drawer, .mb-main, .mb-push-dim { transition: none !important; }
 }
 
-/* 侧滑抽屉 */
-.mb-drawer-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  animation: mb-fade-in 0.16s ease-out;
-}
-@keyframes mb-fade-in { from { opacity: 0; } to { opacity: 1; } }
+/* ── push 连贯式抽屉(2026-08-05 Obsidian 式改版):面板是 .mb-body 内的绝对定位列,
+   开侧时自己滑入、main 被**原尺寸**推向另一边(.mb-body 的 push-* 类给 main translate 同一宽度)。
+   容器恒挂载(开合都有过渡);关合后 visibility 延迟隐藏,免得藏着的面板还能被焦点摸到。 ── */
 .mb-drawer {
-  position: relative;
-  width: min(86vw, 380px);
-  height: 100%;
-  /* 抽屉是 fixed 全高浮层,不吃 .mb-shell 的 safe-area padding → 自己避开状态栏(非刘海设备 env=0)。 */
-  padding-top: env(safe-area-inset-top);
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--mb-panelw);
+  z-index: 3;
   background: var(--bg, #fff);
   color: var(--text, #111);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.25);
-  animation: mb-slide-in 0.2s var(--ease-out, ease-out);
+  visibility: hidden;
+  transition: transform var(--mb-dur) var(--mb-ease), visibility 0s linear var(--mb-dur);
 }
-/* 竖屏(窄比):抽屉=全屏接管(用户拍板);宽屏(≥4:3)左栏走 docked 并排、右栏保持 380px 浮层。 */
-@media (max-aspect-ratio: 4/3) {
-  .mb-drawer { width: 100%; }
+.mb-drawer--left { left: 0; transform: translateX(-102%); box-shadow: 6px 0 24px rgba(0, 0, 0, 0.1); }
+.mb-drawer--right { right: 0; transform: translateX(102%); box-shadow: -6px 0 24px rgba(0, 0, 0, 0.1); }
+.mb-drawer.open { transform: none; visibility: visible; transition: transform var(--mb-dur) var(--mb-ease); }
+.mb-main { transition: transform var(--mb-dur) var(--mb-ease); }
+.mb-body.push-left .mb-main { transform: translateX(var(--mb-panelw)); }
+.mb-body.push-right .mb-main { transform: translateX(calc(-1 * var(--mb-panelw))); }
+/* 被推开的 main 上的轻遮罩:点击/反向横滑收抽屉;透明度渐变与面板同步。 */
+.mb-push-dim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--mb-dur) var(--mb-ease);
 }
-.mb-drawer--left { margin-right: auto; }
-.mb-drawer--right { margin-left: auto; }
-@keyframes mb-slide-in { from { transform: translateX(var(--mb-from, -8%)); opacity: 0.6; } to { transform: none; opacity: 1; } }
-.mb-drawer--right { --mb-from: 8%; }
+.mb-push-dim.on { opacity: 1; pointer-events: auto; }
 .mb-drawer-bar { height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 6px; border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08)); }
 .mb-drawer-select {
   flex: 1 1 auto;
@@ -225,9 +150,10 @@
   max-height: 72%;
   overflow-y: auto;
   box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.22);
-  animation: mb-sheet-up 0.22s var(--ease-out, ease-out);
+  animation: mb-sheet-up var(--mb-dur, 0.3s) var(--mb-ease, ease-out);
 }
 @keyframes mb-sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes mb-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .mb-sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--border, rgba(0, 0, 0, 0.18)); margin: 6px auto 10px; }
 .mb-sheet-row {
   display: flex;
@@ -247,13 +173,20 @@
 .mb-sheet-row:active { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); }
 .mb-sheet-card { padding: 4px 2px; }
 
-/* 底部 Space 切换栏 */
-.mb-bottomnav {
+/* ── 标签页切换 sheet 的行(骑 .mb-sheet-row 壳) ── */
+.mb-tabrow.on { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); font-weight: 600; }
+.mb-tabrow-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mb-tabrow-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px; border-radius: 8px; opacity: 0.5; }
+.mb-tabrow-x:active { opacity: 1; background: var(--bg-active, rgba(0, 0, 0, 0.12)); }
+.mb-tabrow-new { color: var(--accent, #4d8794); font-weight: 600; }
+
+/* ── 左抽屉底部常驻区:Space 切换条 + 账号卡/设置(原全局底栏移入,2026-08-05) ── */
+.mb-drawer-foot {
   flex: 0 0 auto;
-  display: flex;
   border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   background: var(--bg-card, var(--bg, #fff));
 }
+.mb-spacebar { display: flex; }
 .mb-tab {
   flex: 1 1 0;
   min-width: 0;
@@ -261,7 +194,7 @@
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 9px 4px;
+  padding: 8px 4px 7px;
   border: none;
   background: transparent;
   color: var(--text-muted, rgba(0, 0, 0, 0.5));
@@ -271,6 +204,16 @@
 .mb-tab:active { transform: scale(0.94); }
 .mb-tab.on { color: var(--accent, #4d8794); }
 .mb-tab-label { font-size: 11px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.mb-foot-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 6px 6px;
+  border-top: 1px solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.08)) 60%, transparent);
+}
+/* 账号卡吃满左侧;卡本身是 feature 层的 .account-card(自带头像/昵称/徽章样式)。 */
+.mb-foot-account { flex: 1 1 auto; min-width: 0; }
+.mb-foot-account .account-card { width: 100%; }
 
 /* ── 桌面/web 预览:居中「手机框」chrome + 尺寸预设条。真机不经 Shell 分支(emptyHost),不受影响。 ── */
 .sc-frame {
@@ -355,16 +298,7 @@
 .mini-shell .mb-topbar { height: 38px; gap: 2px; padding: 0 3px; }
 .mini-shell .mb-icon-btn { width: 30px; height: 30px; border-radius: 8px; }
 .mini-shell .mb-icon-btn svg { width: 17px; height: 17px; }
-.mini-shell .mb-title { font-size: 13px; }
-.mini-shell .mb-tabmenu-trigger { font-size: 13px; padding: 2px 4px 2px 6px; }
-.mini-shell .mb-tabmenu-caret { width: 12px; height: 12px; }
-.mini-shell .mb-subtitle { font-size: 10px; }
-
-/* tab 下拉:顶部 chrome 变矮(ribbon 30 + topbar 38 = 68),菜单落点上移贴近 */
-.mini-shell .mb-tabmenu-scrim { padding: 70px 8px 8px; }
-.mini-shell .mb-tabmenu-pop { padding: 4px; border-radius: 11px; }
-.mini-shell .mb-tabmenu-item { font-size: 12px; padding: 7px 8px; }
-.mini-shell .mb-tabmenu-new { font-size: 12px; padding: 8px; }
+.mini-shell .mb-tabcount { width: 16px; height: 16px; border-width: 1.5px; border-radius: 5px; font-size: 9.5px; }
 
 /* 左右抽屉 */
 .mini-shell .mb-drawer-bar { height: 36px; }
@@ -377,8 +311,8 @@
 .mini-shell .mb-sheet-row { padding: 9px 10px; gap: 9px; font-size: 13px; }
 .mini-shell .mb-sheet-row svg { width: 17px; height: 17px; }
 
-/* ── 宽屏(>4:3)左栏并排(SingleColumnHost docked 形态;右栏仍抽屉) ───────────── */
-.mb-body { display: flex; flex: 1 1 auto; min-height: 0; }
+/* ── 主体行:宽屏左栏并排(docked sidecol);push 抽屉与 dim 都以它为定位容器 ───────────── */
+.mb-body { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .mb-body .mb-main { flex: 1 1 auto; min-width: 0; }
 .mb-sidecol {
   width: min(320px, 38vw);
