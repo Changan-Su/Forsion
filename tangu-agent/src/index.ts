@@ -188,6 +188,10 @@ export type { AppProfile, AppProfileOverride, PromptSectionCtx, PromptSections }
 export { resolveProfile } from './seams/appProfile.js';
 export { createAiStudioProfile, createTanguProfile } from './profiles/index.js';
 export { createProfileStore } from './profiles/profileStore.js';
+// checked-in 中央文件层。宿主(server agent-core)自己也有一层 manifest 覆盖,**必须与本表合并
+// 而不是替换** —— 替换掉就等于该宿主不认识本表里的 app,而 worker 认识(它用默认值),
+// 于是同一个 app_id 在网关和 worker 上一个 400 一个正常。2026-08-04 实翻,见 docs/Log。
+export { APP_PROFILE_OVERRIDES } from './profiles/appProfiles.config.js';
 export type { ProfileStore, ProfileEntry, ProfileView } from './profiles/profileStore.js';
 export { getKnownToolNames } from './profiles/mergeProfile.js';
 

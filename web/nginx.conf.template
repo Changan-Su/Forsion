@@ -60,8 +60,18 @@ server {
     }
 
     # SPA fallback —— 其余路由交给 Tangu Web 自己。
+    # ⚠️ 入口页必须每次回源校验。它引的是**内容哈希**文件名,所以它自己一旦被缓存住,
+    #    整个应用就永远停在旧版本 —— 用户不 Cmd+Shift+R 就再也看不到新版(2026-08-04 实翻:
+    //   线上 index.html 一个 Cache-Control 都没有,浏览器于是走启发式缓存[按距 Last-Modified
+    //   的 10% 估有效期],部署完全白做)。
+    #    用 `expires -1`(= 发 `Cache-Control: no-cache`)而不是 `add_header`:nginx 里
+    #    **同一 location 只要出现一条 add_header,父级的 add_header 就整组不继承** ——
+    #    那样会顺手弄丢 server 块里的 X-Frame-Options / X-Content-Type-Options。
+    #    no-cache ≠ 不缓存,是「用之前必须 revalidate」,配上已有的 etag 就是一次 304。
+    #    /assets/ 那条的 1y+immutable 不受影响,该走缓存的照走。
     location / {
         try_files $uri $uri/ /index.html;
+        expires -1;
     }
 
     error_page 500 502 503 504 /50x.html;
