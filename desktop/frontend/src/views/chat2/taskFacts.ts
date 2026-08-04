@@ -86,10 +86,11 @@ export interface TaskFacts {
   todos: TodoItem[]
   /** 当前动作 = 最后一个未结束的工具调用;由渲染层转成「动词 + 对象」。跑完即无。 */
   action: ToolEvent | null
-  /** 来源:agent 读过的文件/目录、搜过的查询、取过的网页,按身份归并。 */
+  /** 来源:agent 读过的文件/目录、搜过的查询、取过的网页,按身份归并;**最近使用的在最前**。 */
   sources: TaskSource[]
   /** 产物:agent 展示的文件(display_file/生图)+ 写盘工具改过的文件,按 path‖name 归并
-   *  (§17.3 身份优先于显示文本)。脚本(run_python/run_bash)造的文件覆盖不到,见 WRITE_TOOLS。 */
+   *  (§17.3 身份优先于显示文本);同 sources,**最近产出的在最前**。
+   *  脚本(run_python/run_bash)造的文件覆盖不到,见 WRITE_TOOLS。 */
   outputs: DisplayFile[]
   /** 本轮起点(最后一条用户消息),用于「已运行」。 */
   startedAt: number | null
@@ -117,16 +118,23 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
     for (const q of m.inquiries || []) if (q.status === 'pending') attention.push({ kind: 'inquiry', text: q.question })
     // 判存在而非判长度:`todo_write([])` 是合法的「清空清单」,用 ?.length 会把它当没发生、继续显示旧计划。
     if (m.todos) todos = m.todos
-    for (const f of m.displayFiles || []) outputs.set(f.path || f.name, f)
+    // 同一路径重新登记 = 又产出了一次:值取新的,位置挪到队尾(和 sources 同一套 LRU)。
+    for (const f of m.displayFiles || []) { const k = f.path || f.name; outputs.delete(k); outputs.set(k, f) }
     for (const ev of m.toolEvents || []) {
       if (!ev.done) action = ev
-      // 写盘产物:display_file 那条(带 mime/dataUrl)更权威,已经登记过就不覆盖。
-      for (const p of writesOf(ev, cwd)) if (!outputs.has(p)) outputs.set(p, { name: lastSeg(p), path: p })
+      // 写盘产物:display_file 那条(带 mime/dataUrl)更权威,已经登记过就只挪位置、不覆盖值。
+      for (const p of writesOf(ev, cwd)) {
+        const prev = outputs.get(p)
+        outputs.delete(p)
+        outputs.set(p, prev || { name: lastSeg(p), path: p })
+      }
       const src = sourceOf(ev, cwd)
       if (!src) continue
-      const cur = sources.get(`${src.kind}:${src.id}`)
-      if (cur) cur.hits++
-      else sources.set(`${src.kind}:${src.id}`, src)
+      const key = `${src.kind}:${src.id}`
+      const cur = sources.get(key)
+      // 再次命中 = 又用了一次:先 delete 再 set,把它重新排到 Map 队尾(下面整体倒序 → 顶回最上面)。
+      if (cur) { cur.hits++; sources.delete(key) }
+      sources.set(key, cur || src)
     }
     if (m.role === 'assistant') {
       error = m.status === 'error' ? (m.error || '') : null
@@ -145,8 +153,9 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
     todos,
     // 停止/失败后残留的未结束工具不是「正在做」,不许继续显示成当前动作。
     action: running ? action : null,
-    sources: [...sources.values()],
-    outputs: [...outputs.values()],
+    // Map 是「最近使用在队尾」,倒过来给渲染层 —— 顶上永远是刚用过的那个(CAP 截断也先保它)。
+    sources: [...sources.values()].reverse(),
+    outputs: [...outputs.values()].reverse(),
     startedAt,
     error,
   }

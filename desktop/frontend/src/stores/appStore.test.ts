@@ -228,10 +228,67 @@ describe('appStore.reduceEvent', () => {
 // /compact 进度条:百分比是客户端估算(接口一次性返回),所以真正会坏的是生命周期——
 // 起步不为 0、自己走到 100 骗人、完成后不撤(条子永远挂在流末尾)、失败路径漏掉收尾。
 const compactMock = vi.hoisted(() => vi.fn())
+const createSessionMock = vi.hoisted(() => vi.fn())
+const startRunMock = vi.hoisted(() => vi.fn())
 vi.mock('../services/backendService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   compactSession: (...a: unknown[]) => compactMock(...a),
+  createSession: (...a: unknown[]) => createSessionMock(...a),
+  putSessionConfig: () => Promise.resolve({}),
+  updateSession: () => Promise.resolve({}),
 }))
+vi.mock('../services/agentRunService', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  startRun: (...a: unknown[]) => startRunMock(...a),
+}))
+
+// 新会话必须**当场把模型写进会话**,而不是等用户显式选了才写:用户靠的是「上次用哪个下次还用哪个」
+// (cfg.modelId),此时 newChatModel 是空的。不写进去 → 引擎按 profile.defaultModelId 建库 →
+// 发送后药丸跳回默认模型,且第二轮真的换成默认模型跑(第二轮读会话自己的 model_id)。
+describe('appStore.send 新会话固化模型', () => {
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({
+      tr: ((k: string) => k) as AppState['tr'],
+      activeId: null,
+      newChatModel: null, // 本次没有显式选 —— 全靠记忆
+      cfg: { ...useApp.getState().cfg, modelId: 'remembered-model' },
+      modelsResp: { models: [], defaultModelId: 'backend-default' } as unknown as AppState['modelsResp'],
+    })
+    createSessionMock.mockReset()
+    startRunMock.mockReset()
+    // 建会话之后就够断言了;让 startRun 抛错在此收尾,免得拖进 SSE 订阅。
+    startRunMock.mockRejectedValue(new Error('stop here'))
+  })
+
+  const created = (id: string, modelId: string | null) =>
+    ({ id, title: 'New Chat', model_id: modelId, created_at: '', updated_at: '' })
+
+  it('没显式选模型时,建会话带上记忆的 cfg.modelId(而非留给引擎默认)', async () => {
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string }) =>
+      Promise.resolve(created('s-new', init?.model_id ?? 'backend-default')))
+
+    await useApp.getState().send('你好', [])
+
+    expect(createSessionMock).toHaveBeenCalledTimes(1)
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ model_id: 'remembered-model' })
+    // 会话记录随之带上它 → 输入栏药丸(读 activeSession.model_id)不会跳回默认
+    expect(useApp.getState().sessions.find((s) => s.id === 's-new')?.model_id).toBe('remembered-model')
+    // 本轮真正发出去的也是同一个,三处同源
+    expect(startRunMock.mock.calls[0]?.[1]).toMatchObject({ modelId: 'remembered-model' })
+  })
+
+  it('空态显式选过模型时以它为准(优先于记忆)', async () => {
+    useApp.setState({ newChatModel: 'picked-model' })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string }) =>
+      Promise.resolve(created('s-new', init?.model_id ?? 'backend-default')))
+
+    await useApp.getState().send('你好', [])
+
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ model_id: 'picked-model' })
+    expect(startRunMock.mock.calls[0]?.[1]).toMatchObject({ modelId: 'picked-model' })
+  })
+})
 
 describe('appStore.compact 进度', () => {
   beforeEach(() => {

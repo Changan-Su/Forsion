@@ -587,13 +587,17 @@ export function applyThinking(
  *
  * 覆盖顺序:显式 override(托管面 admin 在模型上标 supportsVision=false / 直连 provider 的
  * noVisionModelIds)> 本表。表刻意保持短:新模型不断出,靠标注比靠猜准。
+ *
+ * ⚠️**同族规则不要钉版本号**。原来写 `deepseek-(chat|coder|reasoner|v3|r1)`,DeepSeek-V4-Pro
+ * 一出就漏网,被判成能看图 → 整 run 以「The model is not a VLM」报废(2026-08-04 实例)。
+ * 一整族都没视觉的,按族写 + 反查排除已知的视觉分支,别按型号枚举。
  */
 const NO_VISION_PATTERNS: readonly RegExp[] = [
   /(^|[-_])(embedding|embed|rerank|reranker|tts|whisper|moderation)([-_.]|$)/i, // 非对话模型
   /^gpt-3\.5/i,
   /^o1-(mini|preview)/i,
   /^(text|davinci|babbage|curie|ada)-/i,
-  /^deepseek-(chat|coder|reasoner|v3|r1)/i, // DeepSeek 官方线纯文本(VL 系不在官方 API)
+  /^deepseek-(?!vl)/i, // DeepSeek 官方线整族纯文本;唯一的视觉分支是 deepseek-vl*(不在官方 API)
   /(^|[-_])qwq([-_.]|$)/i, // QwQ 推理模型纯文本
 ];
 

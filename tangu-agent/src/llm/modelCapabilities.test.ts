@@ -239,6 +239,15 @@ describe('modelSupportsVision — 黑名单制', () => {
     }
   });
 
+  // 2026-08-04 实例:表里写 `deepseek-(chat|coder|reasoner|v3|r1)`,DeepSeek-V4-Pro 一出就漏网,
+  // 被判成能看图 → 图原样发过去 → 整 run 以「The model is not a VLM」报废。同族规则不许钉版本号。
+  it('⚠️DeepSeek 整族无视觉,不按型号枚举(新版本不许漏网)', () => {
+    for (const id of ['DeepSeek-V4-Pro', 'deepseek-v4-flash', 'deepseek-v5', 'deepseek-r2', 'deepseek-chat']) {
+      expect(modelSupportsVision(id)).toBe(false);
+    }
+    expect(modelSupportsVision('deepseek-vl2')).toBe(true); // 唯一的视觉分支不能被族规则吞掉
+  });
+
   it('带 <providerId>/ 前缀的直连 id 同样命中(只拿裸模型名匹配)', () => {
     expect(modelSupportsVision('siliconflow/deepseek-chat')).toBe(false);
     expect(modelSupportsVision('ollama/qwq')).toBe(false);

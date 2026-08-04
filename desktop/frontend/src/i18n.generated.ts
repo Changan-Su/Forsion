@@ -1071,6 +1071,30 @@ registerMessages({
     "zh": "搜索源",
     "en": "Provider"
   },
+  "settings.websearch.zhipuEngineLabel": {
+    "zh": "智谱引擎档位",
+    "en": "Zhipu engine"
+  },
+  "settings.websearch.zhipuEngineHint": {
+    "zh": "仅 provider 为智谱(或 auto 落到智谱)时生效",
+    "en": "Only applies when the effective provider is Zhipu"
+  },
+  "settings.websearch.zhipuEngine.quark": {
+    "zh": "夸克 search_pro_quark(¥0.05/次,真引擎索引,默认)",
+    "en": "Quark search_pro_quark (¥0.05/call, real engine index, default)"
+  },
+  "settings.websearch.zhipuEngine.sogou": {
+    "zh": "搜狗 search_pro_sogou(¥0.05/次,腾讯生态+知乎)",
+    "en": "Sogou search_pro_sogou (¥0.05/call, Tencent ecosystem + Zhihu)"
+  },
+  "settings.websearch.zhipuEngine.pro": {
+    "zh": "search_pro(¥0.03/次,智谱自研多引擎)",
+    "en": "search_pro (¥0.03/call, Zhipu multi-engine)"
+  },
+  "settings.websearch.zhipuEngine.std": {
+    "zh": "search_std(¥0.01/次,基础版,长尾专名易糊)",
+    "en": "search_std (¥0.01/call, basic; weak on rare names)"
+  },
   "settings.websearch.provider.auto": {
     "zh": "auto(按已配 Key 自动选)",
     "en": "auto (pick by configured key)"

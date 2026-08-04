@@ -41,8 +41,9 @@ describe('summarizeTask', () => {
           tool('web_fetch', { url: 'https://www.example.com/a/b?x=1' }),
         ],
       })], false)
+      // 最近使用的排最上面 → 和调用顺序相反
       expect(f.sources.map((s) => [s.kind, s.label])).toEqual([
-        ['file', 'a.md'], ['dir', 'src'], ['search', 'codex pinned summary'], ['web', 'example.com'],
+        ['web', 'example.com'], ['search', 'codex pinned summary'], ['dir', 'src'], ['file', 'a.md'],
       ])
     })
 
@@ -51,6 +52,18 @@ describe('summarizeTask', () => {
         toolEvents: [tool('read_file', { path: '/w/a.md' }), tool('read_file', { path: '/w/a.md' }, { id: 'x2' })],
       })], false)
       expect(f.sources).toHaveLength(1)
+      expect(f.sources[0].hits).toBe(2)
+    })
+
+    it('重复命中按「最近使用」顶回最上面,不是停在首次出现的位置', () => {
+      const f = summarizeTask([msg({
+        toolEvents: [
+          tool('read_file', { path: '/w/a.md' }),
+          tool('read_file', { path: '/w/b.md' }),
+          tool('read_file', { path: '/w/a.md' }, { id: 'a2' }), // a 又用了一次
+        ],
+      })], false)
+      expect(f.sources.map((s) => s.label)).toEqual(['a.md', 'b.md'])
       expect(f.sources[0].hits).toBe(2)
     })
 
@@ -77,7 +90,7 @@ describe('summarizeTask', () => {
       msg({ id: '1', displayFiles: [{ name: '旧名', path: '/w/a.md' }] }),
       msg({ id: '2', displayFiles: [{ name: '新名', path: '/w/a.md' }, { name: 'b.png', path: '/w/b.png' }] }),
     ], false)
-    expect(f.outputs.map((o) => o.name)).toEqual(['新名', 'b.png'])
+    expect(f.outputs.map((o) => o.name)).toEqual(['b.png', '新名']) // 最近产出在前
   })
 
   describe('产物', () => {
@@ -89,14 +102,25 @@ describe('summarizeTask', () => {
           tool('multi_edit', { path: '/w/multi.ts', edits: [] }),
         ],
       })], false)
-      expect(f.outputs.map((o) => o.path)).toEqual(['/w/new.ts', '/w/old.ts', '/w/multi.ts'])
-      expect(f.outputs[0].name).toBe('new.ts')
+      expect(f.outputs.map((o) => o.path)).toEqual(['/w/multi.ts', '/w/old.ts', '/w/new.ts'])
+      expect(f.outputs.at(-1)!.name).toBe('new.ts')
+    })
+
+    it('再写一次同一文件会顶回最上面(值仍取更权威的那条)', () => {
+      const f = summarizeTask([msg({
+        toolEvents: [
+          tool('write_file', { path: '/w/a.ts' }),
+          tool('write_file', { path: '/w/b.ts' }),
+          tool('write_file', { path: '/w/a.ts' }, { id: 'a2' }),
+        ],
+      })], false)
+      expect(f.outputs.map((o) => o.path)).toEqual(['/w/a.ts', '/w/b.ts'])
     })
 
     it('apply_patch 从 patch 正文里取路径,Delete 不算产物', () => {
       const patch = '*** Begin Patch\n*** Add File: a.ts\n+x\n*** Update File: sub/b.ts\n x\n*** Delete File: gone.ts\n*** End Patch'
       const f = summarizeTask([msg({ toolEvents: [tool('apply_patch', { patch })] })], false, '/w')
-      expect(f.outputs.map((o) => o.path)).toEqual(['/w/a.ts', '/w/sub/b.ts'])
+      expect(f.outputs.map((o) => o.path)).toEqual(['/w/sub/b.ts', '/w/a.ts'])
     })
 
     it('相对路径拼 cwd,和 display_file 的绝对路径归并成一行', () => {

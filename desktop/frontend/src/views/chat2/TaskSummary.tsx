@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, Loader2, Pencil, Plus, Search, X, XCircle } from 'lucide-react'
 import { describeTool } from '../../components/ToolGroup'
+import { humanizeRunError } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
 import type { DisplayFile, UiMessage } from '../../types'
 import { findLiveEdit } from '../../stores/deskPlan'
@@ -167,7 +168,7 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
             <span className="t2-tsum-edit-tx">{t('tsum.editing')} {editing.name}</span>
           </button>
         )}
-        {f.state === 'error' && f.error && <div className="t2-tsum-sub err" title={f.error}>{f.error}</div>}
+        {f.state === 'error' && f.error && <div className="t2-tsum-sub err" title={f.error}>{humanizeRunError(f.error, t)}</div>}
 
         {f.attention.length > 0 && (
           <button className="t2-tsum-attn" onClick={onJumpToAttention}>

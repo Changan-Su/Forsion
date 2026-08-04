@@ -150,6 +150,30 @@ const stoppedRuns = new Set<string>()
 // ⚠️ 按 runId 记而非 sessionId(Codex 评审 #4):按会话记的话,用户 stop 掉计划 run 后标记泄漏,
 // 该会话下一个无关 run 的 done 会莫名自动「开始执行」。所有终结路径统一在 endRun 清理。
 const planAutoStart = new Set<string>()
+// run 级预支:撞限的 run 服务端放行到跑完,跑完这里立刻查一次额度并提示「已用尽」。
+// 判定用 remaining<=0 而非取整后的 percent(99.5% 会被四舍五入成 100 误报,codex2#9);
+// 只在「未耗尽→耗尽」的状态迁移上弹一次(时间节流会吞真通知又重复旧通知,codex2#10);
+// busy 闸防并发 done 重复请求。直连 key 的 run 不消耗托管额度,查询本身无副作用。
+let quotaCheckBusy = false
+let lastQuotaExhaustState = ''
+function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: string) => string): void {
+  if (typeof window === 'undefined' || !window.tangu?.accountQuota) return
+  if (quotaCheckBusy) return
+  quotaCheckBusy = true
+  void window.tangu.accountQuota().then((r) => {
+    const j = r?.status === 200 ? r.json : null
+    if (!j) return
+    const weekly = j.weeklyLimit >= 0 && Number(j.weeklyRemaining) <= 0
+    const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
+    const state = weekly ? 'weekly' : daily ? 'daily' : ''
+    if (state && state !== lastQuotaExhaustState) {
+      // 积分自动抵扣开着:额度虽尽但会自动扣积分续用,提示口径不同(且不算错误)
+      if (j.pointsAutoDeduct) toast(tr('quota.exhausted.autoDeduct'))
+      else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+    }
+    lastQuotaExhaustState = state
+  }).catch(() => {}).finally(() => { quotaCheckBusy = false })
+}
 // 卡死兜底:SSE 偶尔丢「终止帧」(后端 run 挂死/被 orphan janitor 标失败但事件没进流)→ 助手消息永远停在
 // streaming。看门狗周期性查:该 run 已不在后端活跃集 → 重载消息收尾(有内容标 done,无则 error),解除卡死。
 const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
@@ -165,6 +189,15 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean): P
   if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
   if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
   return out
+}
+/** 新会话「这条消息实际会用哪个模型」的**唯一**回退链:本次空态显式选的 → 全局记忆
+ *  (cfg.modelId 就是「新会话用哪个模型」的真源,在会话里换模型也会写它)→ 后端默认。
+ *  ⚠️ 输入栏药丸(ChatView)、建会话时落库、startRun 三处必须同源。三份各写各的时出过的 bug:
+ *  建会话不传 model_id → 引擎按 profile.defaultModelId 落库(tangu-agent routes/sessions.ts),
+ *  而药丸显示的是 cfg.modelId → 发出去药丸当场跳回默认,第二轮还真的换成默认模型跑
+ *  (第二轮读的是会话自己的 model_id)。仪器:appStore.test.ts 的「新会话固化模型」。 */
+export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'>): string | undefined {
+  return s.newChatModel || s.cfg.modelId || s.modelsResp?.defaultModelId || undefined
 }
 /** 记住「上次用的」审批档/思考档:**新会话据此起步**。先落内存(web/mobile 无 window.tangu,
  *  至少本次会期内粘住),再异步写盘(桌面跨重启)。 */
@@ -748,6 +781,7 @@ export const useApp = create<AppState>((set, get) => ({
           endRun(set, get, sessionId, runId)
           if (autoKick) void get().send(t('plan.autoKickoff'), [], undefined, undefined, undefined, sessionId)
         }
+        checkQuotaExhausted(get().toast, get().tr)
         setTimeout(() => { void get().refreshSessions(get().cfg).catch(() => {}) }, 6000)
         break
       case 'error':
@@ -1387,9 +1421,15 @@ export const useApp = create<AppState>((set, get) => ({
         : (get().desktopMode === 'managed' ? (get().defaultWsDir || get().homeDir || null) : null)
       // 云沙箱新会话一律落云端 Project(选择器未选 = 默认 Tangu 项目):文件跨会话共享且 Penzor 可见。
       const cloudProject = path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
-      const s = await api.createSession(get().cfg, path
-        ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
-        : { project_name: cloudProject! }).catch(() => null)
+      // 模型**当场固化**(记忆兜底也算,同下面的 agentSlug):不传的话引擎按 profile.defaultModelId
+      // 落库,而输入栏显示的是 newChatModelId() —— 两边一错开就是「发送后药丸跳回默认模型」。
+      const model_id = newChatModelId(get())
+      const s = await api.createSession(get().cfg, {
+        ...(path
+          ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
+          : { project_name: cloudProject! }),
+        ...(model_id ? { model_id } : {}),
+      }).catch(() => null)
       if (!s) { get().toast(t('app.cannotCreateSession'), true); return false }
       set((st) => ({ sessions: [s, ...st.sessions] }))
       // 必须先标记再 setActiveId:setActiveId 内部会 void loadSessionHistory,新会话此刻服务端
@@ -1407,11 +1447,6 @@ export const useApp = create<AppState>((set, get) => ({
       if (!implicitInit.agentSlug && get().defaultAgentSlug) implicitInit.agentSlug = get().defaultAgentSlug
       set((st) => ({ configBySession: { ...st.configBySession, [s.id]: implicitInit! } }))
       void api.putSessionConfig(get().cfg, s.id, implicitInit).catch(() => {})
-      if (get().newChatModel) {
-        const m = get().newChatModel!
-        set((st) => ({ sessions: st.sessions.map((x) => (x.id === s.id ? { ...x, model_id: m } : x)) }))
-        void api.updateSession(get().cfg, s.id, { model_id: m }).catch(() => {})
-      }
     }
     const sessionId = sid
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
@@ -1455,10 +1490,9 @@ export const useApp = create<AppState>((set, get) => ({
     }
     // 与输入栏「显示的模型」(mvModelId)同一回退链:newChat/会话模型 → 全局 cfg.modelId → 后端默认模型。
     // 否则新会话(未显式选模型、cloud.defaultModel 又空)会发出空 model_id → 后端 400「model_id required」。
-    const fallbackModel = get().cfg.modelId || get().modelsResp?.defaultModelId || undefined
     const sessionModelId = wasNewChat
-      ? (get().newChatModel || fallbackModel)
-      : (get().sessions.find((s) => s.id === sessionId)?.model_id || fallbackModel)
+      ? newChatModelId(get())
+      : (get().sessions.find((s) => s.id === sessionId)?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || undefined)
     try {
       const r = await startRun(get().cfg, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。

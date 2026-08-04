@@ -270,6 +270,48 @@ async function main() {
     !!afterShift && Math.abs(afterShift.relLeft - beforeShift.relLeft) <= 1.5 && Math.abs(afterShift.relTop - beforeShift.relTop) <= 1.5,
     afterShift ? `位移前 rel(${beforeShift.relLeft.toFixed(1)}, ${beforeShift.relTop.toFixed(1)}) → 位移后 rel(${afterShift.relLeft.toFixed(1)}, ${afterShift.relTop.toFixed(1)})` : '覆盖层没画出来')
 
+  // 输入框**变窄 + 横向位移**(Agent Desk 打开:`.composer-anchor` 加 padding-right:296px,
+  // 居中的 .t2c-inner 随之左移并收窄 → 文本重新折行)。上一条用例只动纵向,而纵向恰好是
+  // 轮询签名里唯一带的几何量(round(top));横向位移与折行**一个事件都不发**(没有 input /
+  // selectionchange / window resize / scroll),覆盖层就钉在原处 —— 用户看到的是「输入框末尾
+  // 多出来一格,不是空格、删不掉,退格删的是前面的字」(原生 caret 已被 caret-color:transparent 藏了)。
+  await page.evaluate(() => {
+    const ta = document.getElementById('ta')
+    ta.style.marginTop = '30px'
+    ta.style.width = '420px'
+    ta.style.marginLeft = '0px'
+    document.getElementById('truth').style.width = '420px'
+    ta.value = 'chat input line one, long enough to wrap somewhere around here\nline two'
+  })
+  await taCase(45)
+  await page.waitForTimeout(180)
+  const beforeNarrow = await drawn('textarea.t2c-ta')
+  // 真值:只量 #truth 里的 range,**不聚焦、不派事件** —— 一派事件就把覆盖层唤醒了,病灶正好被掩盖。
+  const truthAt = (at) =>
+    page.evaluate((at) => {
+      const ce = document.getElementById('truth')
+      const r = document.createRange()
+      r.setStart(ce.firstChild, at)
+      r.collapse(true)
+      const b = r.getBoundingClientRect()
+      const cr = ce.getBoundingClientRect()
+      return { relLeft: b.left - cr.left, relTop: b.top - cr.top }
+    }, at)
+  await page.evaluate(() => {
+    for (const el of [document.getElementById('ta'), document.getElementById('truth')]) {
+      el.style.width = '260px' // 让位 desk:变窄
+      el.style.marginLeft = '60px' // 居中卡随之左右挪
+    }
+  })
+  await page.waitForTimeout(400) // 轮询 100ms + transform 过渡
+  const truthNarrow = await truthAt(45)
+  const afterNarrow = await drawn('textarea.t2c-ta')
+  check('聊天框 变窄+横移后覆盖层跟随(Agent Desk 让位;不发任何事件)',
+    !!afterNarrow && Math.abs(afterNarrow.relLeft - truthNarrow.relLeft) <= 1.5 && Math.abs(afterNarrow.relTop - truthNarrow.relTop) <= 1.5,
+    afterNarrow
+      ? `让位前 rel(${beforeNarrow.relLeft.toFixed(1)}, ${beforeNarrow.relTop.toFixed(1)}) → 让位后 rel(${afterNarrow.relLeft.toFixed(1)}, ${afterNarrow.relTop.toFixed(1)}),真值 rel(${truthNarrow.relLeft.toFixed(1)}, ${truthNarrow.relTop.toFixed(1)})`
+      : '覆盖层没画出来')
+
   await browser.close()
   const failed = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - failed}/${results.length} 通过`)

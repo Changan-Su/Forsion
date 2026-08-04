@@ -16,11 +16,18 @@ import { getRawSection } from '../../core/config.js';
 
 export type LocalSearchProvider = 'auto' | 'bocha' | 'tavily' | 'zhipu' | 'duckduckgo';
 
+/** 智谱引擎档位(与 server webSearchService 同表):std ¥0.01 基础(长尾专名易糊)/
+ *  pro ¥0.03 自研多引擎 / sogou ¥0.05 搜狗 / quark ¥0.05 夸克(默认,真引擎索引)。 */
+export type ZhipuEngine = 'search_std' | 'search_pro' | 'search_pro_sogou' | 'search_pro_quark';
+export const ZHIPU_ENGINES: ZhipuEngine[] = ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'];
+const DEFAULT_ZHIPU_ENGINE: ZhipuEngine = 'search_pro_quark';
+
 export interface LocalWebSearchConfig {
   provider: LocalSearchProvider;
   bochaApiKey: string | null;
   tavilyApiKey: string | null;
   zhipuApiKey: string | null;
+  zhipuEngine: ZhipuEngine;
 }
 
 export type SearchHit = { title: string; url?: string; snippet?: string };
@@ -40,6 +47,7 @@ export function loadLocalWebSearchConfig(): LocalWebSearchConfig {
     bochaApiKey: str(o.bochaApiKey),
     tavilyApiKey: str(o.tavilyApiKey),
     zhipuApiKey: str(o.zhipuApiKey),
+    zhipuEngine: ZHIPU_ENGINES.includes(o.zhipuEngine as ZhipuEngine) ? (o.zhipuEngine as ZhipuEngine) : DEFAULT_ZHIPU_ENGINE,
   };
 }
 
@@ -102,12 +110,12 @@ async function searchTavily(query: string, maxResults: number, apiKey: string): 
   return { provider: 'tavily', text: parts.length ? parts.join('\n\n') : 'No results found.', results };
 }
 
-async function searchZhipu(query: string, maxResults: number, apiKey: string): Promise<SearchOk> {
+async function searchZhipu(query: string, maxResults: number, apiKey: string, engine: ZhipuEngine): Promise<SearchOk> {
   const r = await fetch('https://open.bigmodel.cn/api/paas/v4/web_search', {
     method: 'POST',
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ search_query: query, search_engine: 'search-std', count: maxResults }),
+    body: JSON.stringify({ search_query: query, search_engine: engine, count: maxResults }),
   });
   if (!r.ok) throw new Error(`Zhipu HTTP ${r.status} — ${(await r.text().catch(() => '')).slice(0, 200)}`);
   const j: any = await r.json();
@@ -215,7 +223,7 @@ async function runProvider(which: Exclude<LocalSearchProvider, 'auto'>, cfg: Loc
       return searchTavily(query, maxResults, cfg.tavilyApiKey);
     case 'zhipu':
       if (!cfg.zhipuApiKey) throw new Error('Zhipu selected but no API key configured');
-      return searchZhipu(query, maxResults, cfg.zhipuApiKey);
+      return searchZhipu(query, maxResults, cfg.zhipuApiKey, cfg.zhipuEngine);
     default:
       return searchDuckDuckGo(query, maxResults);
   }
@@ -240,7 +248,7 @@ export async function runLocalSearch(query: string, maxResults: number, cfgOverr
 }
 
 /** 设置页「连通性测试」:只测指定 provider,不降级、不落盘。apiKey 传 '__keep__' 用已存 key。 */
-export async function testLocalSearch(input: { provider: LocalSearchProvider; apiKey?: string }): Promise<{
+export async function testLocalSearch(input: { provider: LocalSearchProvider; apiKey?: string; zhipuEngine?: string }): Promise<{
   ok: boolean; provider: string; latencyMs: number; resultCount?: number; sampleTitle?: string; error?: string;
 }> {
   const stored = loadLocalWebSearchConfig();
@@ -251,6 +259,7 @@ export async function testLocalSearch(input: { provider: LocalSearchProvider; ap
     ...(input.provider === 'bocha' && key !== undefined ? { bochaApiKey: key } : {}),
     ...(input.provider === 'tavily' && key !== undefined ? { tavilyApiKey: key } : {}),
     ...(input.provider === 'zhipu' && key !== undefined ? { zhipuApiKey: key } : {}),
+    ...(ZHIPU_ENGINES.includes(input.zhipuEngine as ZhipuEngine) ? { zhipuEngine: input.zhipuEngine as ZhipuEngine } : {}),
   };
   const which = input.provider === 'auto' ? pickProvider(cfg) : input.provider;
   const start = Date.now();
@@ -264,7 +273,7 @@ export async function testLocalSearch(input: { provider: LocalSearchProvider; ap
 
 /** 设置页 GET 用:key 只回 hasKey 布尔,永不回明文。 */
 export function redactedLocalConfig(): {
-  provider: LocalSearchProvider; bochaHasKey: boolean; tavilyHasKey: boolean; zhipuHasKey: boolean; effectiveProvider: string; configured: boolean;
+  provider: LocalSearchProvider; bochaHasKey: boolean; tavilyHasKey: boolean; zhipuHasKey: boolean; zhipuEngine: ZhipuEngine; effectiveProvider: string; configured: boolean;
 } {
   const cfg = loadLocalWebSearchConfig();
   return {
@@ -272,6 +281,7 @@ export function redactedLocalConfig(): {
     bochaHasKey: !!cfg.bochaApiKey,
     tavilyHasKey: !!cfg.tavilyApiKey,
     zhipuHasKey: !!cfg.zhipuApiKey,
+    zhipuEngine: cfg.zhipuEngine,
     effectiveProvider: pickProvider(cfg),
     configured: hasLocalSearchProvider(cfg),
   };

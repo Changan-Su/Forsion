@@ -776,6 +776,12 @@ declare global {
       authProviders?(): Promise<Array<{ id: string; loggedIn: boolean }>>
       providerLogin?(id: string): Promise<{ ok: boolean; id: string }>
       openAccountCenter?(section?: string): Promise<{ ok: boolean }>
+      /** 打开会员购买页({cloudUrl}/pay?tab=membership,token 主进程拼接)。 */
+      openPayCenter?(): Promise<{ ok: boolean }>
+      /** 头像菜单额度视图(GET /api/token-quota/my 透传,含 resetCards)。 */
+      accountQuota?(): Promise<{ status: number; json: any }>
+      /** 用掉一张限额重置卡(今日+本周已用清零)。 */
+      accountUseResetCard?(type?: 'both' | 'weekly'): Promise<{ status: number; json: any }>
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>

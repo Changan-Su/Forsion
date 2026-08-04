@@ -2741,6 +2741,66 @@ html.dark .brand-logo--dark { display: inline-block; }
 .ctx-item.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .ctx-item svg { flex-shrink: 0; opacity: 0.8; }
 
+/* 头像账号菜单(AccountCard):额度剩余/重置卡/升级/邀请/用户中心/登出 */
+.account-pop {
+  position: fixed;
+  z-index: 100;
+  min-width: 232px;
+  padding: 5px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+  animation: fade-up var(--duration-fast) var(--ease-out);
+}
+.account-pop .ap-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px 9px;
+  border-bottom: var(--border-width) solid var(--border);
+  margin-bottom: 4px;
+}
+.account-pop .ap-head .account-avatar { width: 26px; height: 26px; font-size: 12px; }
+.account-pop .ap-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.account-pop .ap-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.account-pop .ap-item:hover { background: var(--overlay-light); }
+.account-pop .ap-item:disabled { opacity: 0.55; cursor: default; }
+.account-pop .ap-item svg { flex-shrink: 0; opacity: 0.8; }
+.account-pop .ap-danger { color: var(--danger); }
+.account-pop .ap-danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.account-pop .ap-usage { padding: 0 0 3px; }
+.account-pop .ap-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 32px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.account-pop .ap-row b { font-weight: 600; }
+.account-pop .ap-sub-item { padding-left: 32px; }
+.account-pop .ap-dim { color: var(--text-muted); font-size: 11.5px; }
+
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }
 .file-row.drop-target { background: var(--accent-light); box-shadow: inset 0 0 0 1px var(--accent-ink); }
@@ -2852,6 +2912,7 @@ html.dark .brand-logo--dark { display: inline-block; }
 .memv-modal,
 .u-backdrop,
 .ctx-menu,
+.account-pop,
 .update-banner { -webkit-app-region: no-drag; }
 /* 设置/市场页顶部标题行补回拖窗条(交互子元素抠回,防止重蹈本 bug)。 */
 .settings-main-head { -webkit-app-region: drag; }

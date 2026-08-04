@@ -41,6 +41,12 @@ function firstChar(s?: string): string {
 /** 运行错误人话化:undici 的 "fetch failed"/"terminated" 这类短语对用户零信息量,
  *  按特征映射成可行动的说明,原文保留在括号里供排查。未命中的原样透出。 */
 const ERR_RULES: Array<[RegExp, string]> = [
+  // 引擎自家错误码(agentLoop publish 的 error 字段是裸码):精确规则放前面
+  [/token_quota_exceeded/i, 'chat.err.quota'],
+  [/run_cost_exceeded/i, 'chat.err.runCost'],
+  [/input_too_large/i, 'chat.err.inputTooLarge'],
+  [/group_needs_2_agents/i, 'chat.err.groupAgents'],
+  [/^orphaned$|stale: process restarted/i, 'chat.err.orphaned'], // 真实产生方写 'stale: process restarted'(sqlStateStore.failStaleRuns)
   [/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i, 'chat.err.network'],
   [/terminated|ECONNRESET|socket hang up|premature close/i, 'chat.err.dropped'],
   [/ETIMEDOUT|timed? ?out/i, 'chat.err.timeout'],

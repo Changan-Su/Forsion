@@ -167,6 +167,9 @@ router.put('/agent/websearch', authMiddleware, async (req, res) => {
       bochaApiKey: mergeKey(b.bochaApiKey, cur.bochaApiKey),
       tavilyApiKey: mergeKey(b.tavilyApiKey, cur.tavilyApiKey),
       zhipuApiKey: mergeKey(b.zhipuApiKey, cur.zhipuApiKey),
+      zhipuEngine: ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'].includes(String(b.zhipuEngine))
+        ? String(b.zhipuEngine)
+        : cur.zhipuEngine,
     });
     res.json({ success: true, config: redactedLocalConfig() });
   } catch (e: any) {
@@ -179,7 +182,7 @@ router.post('/agent/websearch/test', authMiddleware, async (req, res) => {
   try {
     const provider = String(req.body?.provider ?? 'auto');
     // 始终 200,调用方看 result.ok(与 server 端 test 同约定)。
-    res.json(await testLocalSearch({ provider: provider as any, apiKey: req.body?.apiKey }));
+    res.json(await testLocalSearch({ provider: provider as any, apiKey: req.body?.apiKey, zhipuEngine: req.body?.zhipuEngine }));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'websearch test failed' });
   }

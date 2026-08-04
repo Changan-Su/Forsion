@@ -276,6 +276,7 @@ export const SettingsModal: React.FC<{
   // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
   const [wsProvider, setWsProvider] = useState('auto')
+  const [wsZhipuEngine, setWsZhipuEngine] = useState('search_pro_quark')
   const [wsKeys, setWsKeys] = useState({ bocha: '', tavily: '', zhipu: '' }) // 输入草稿:'' 且未点清除 = 不变
   const [wsClear, setWsClear] = useState({ bocha: false, tavily: false, zhipu: false })
   const [wsMsg, setWsMsg] = useState('')
@@ -358,6 +359,7 @@ export const SettingsModal: React.FC<{
       .then((r) => {
         setWsRed(r)
         setWsProvider(r.provider)
+        setWsZhipuEngine(r.zhipuEngine || 'search_pro_quark')
         setWsKeys({ bocha: '', tavily: '', zhipu: '' })
         setWsClear({ bocha: false, tavily: false, zhipu: false })
         setWsMsg('')
@@ -1691,6 +1693,15 @@ export const SettingsModal: React.FC<{
                               </select>
                             </div>
                             <div className="field">
+                              <label>{t('settings.websearch.zhipuEngineLabel')}</label>
+                              <select value={wsZhipuEngine} onChange={(e) => setWsZhipuEngine(e.target.value)} title={t('settings.websearch.zhipuEngineHint')}>
+                                <option value="search_pro_quark">{t('settings.websearch.zhipuEngine.quark')}</option>
+                                <option value="search_pro_sogou">{t('settings.websearch.zhipuEngine.sogou')}</option>
+                                <option value="search_pro">{t('settings.websearch.zhipuEngine.pro')}</option>
+                                <option value="search_std">{t('settings.websearch.zhipuEngine.std')}</option>
+                              </select>
+                            </div>
+                            <div className="field">
                               <label>{t('settings.websearch.effectiveLabel')}</label>
                               <div className="hint" style={{ paddingTop: 8 }}>
                                 {wsRed.configured
@@ -1742,6 +1753,7 @@ export const SettingsModal: React.FC<{
                                   bochaApiKey: keyOut('bocha'),
                                   tavilyApiKey: keyOut('tavily'),
                                   zhipuApiKey: keyOut('zhipu'),
+                                  zhipuEngine: wsZhipuEngine,
                                 }).then((r) => {
                                   setWsRed(r.config)
                                   setWsKeys({ bocha: '', tavily: '', zhipu: '' })
@@ -1760,7 +1772,7 @@ export const SettingsModal: React.FC<{
                                 const k = wsProvider as 'bocha' | 'tavily' | 'zhipu'
                                 const draft = (wsProvider === 'bocha' || wsProvider === 'tavily' || wsProvider === 'zhipu') ? wsKeys[k] : ''
                                 setWsBusy(true); setWsMsg(t('settings.websearch.testing'))
-                                void testLocalWebSearch(p.cfg, { provider: wsProvider, apiKey: draft || '__keep__' })
+                                void testLocalWebSearch(p.cfg, { provider: wsProvider, apiKey: draft || '__keep__', zhipuEngine: wsZhipuEngine })
                                   .then((r) => setWsMsg(r.ok
                                     ? `✓ ${r.provider} · ${r.latencyMs}ms · ${r.resultCount ?? 0}${r.sampleTitle ? ` · ${String(r.sampleTitle).slice(0, 30)}` : ''}`
                                     : `✗ ${r.provider}: ${r.error || 'failed'}`))

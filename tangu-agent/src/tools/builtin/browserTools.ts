@@ -247,7 +247,7 @@ export const browserToolsProvider: ToolProvider = {
         function: {
           name: 'browser_search',
           description:
-            'Open a search engine in the local lightweight browser and return a page snapshot. Prefer this for real-time web search; the @eN refs in the results can be used with browser_click/browser_type to interact further.',
+            'Open a search engine in the local lightweight browser and return a page snapshot. Use this as a fallback when web_search is unavailable or you need to interact with the results page — it is slower and may hit captchas. The @eN refs in the results can be used with browser_click/browser_type to interact further.',
           parameters: {
             type: 'object',
             properties: {

@@ -16,7 +16,7 @@ import { EditorialMessage } from './chat2/EditorialMessage'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults } from '../stores/appStore'
+import { useApp, stickyDefaults, newChatModelId } from '../stores/appStore'
 import { hasChatRef, readChatRefs, refsToText } from './chat2/chatDragRef'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
@@ -148,7 +148,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       }
   const mvModelId = activeId
     ? (activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || '')
-    : (s.newChatModel || s.cfg.modelId || s.modelsResp?.defaultModelId || '')
+    : (newChatModelId(s) || '') // 与建会话落库、startRun 同源,勿就地展开回退链
   const isCloudSession = mvCfg.execMode === 'sandbox'
   const visibleModels = !s.modelsResp?.models
     ? null

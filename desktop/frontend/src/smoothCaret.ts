@@ -194,10 +194,20 @@ export function installSmoothCaret(): void {
   clearInterval(W.__scPoll) // dev 热替换:旧实例的轮询会复活它自己的覆盖层(双光标)
   W.__scPoll = setInterval(() => {
     const ae = document.activeElement
-    // 签名里带上输入框自己的位置:发送后 autoGrow 回缩,聊天框贴底 → 整个框往下挪,光标绝对坐标随之变,
-    // 而「长度:选区」可能一模一样(例:发完又粘回等长文本)。只比文本会漏掉这类纯位移。
-    const sig = ae instanceof HTMLTextAreaElement && ae.classList.contains('t2c-ta')
-      ? `${ae.value.length}:${ae.selectionStart ?? 0}:${Math.round(ae.getBoundingClientRect().top)}` : ''
+    const ta = ae instanceof HTMLTextAreaElement && ae.classList.contains('t2c-ta') ? ae : null
+    // ⚠️ 签名必须带上**宿主的整个视口矩形**(top/left/宽),不能只带文本与 top:
+    //  · top:发送后 autoGrow 回缩,聊天框贴底 → 整个框往下挪,而「长度:选区」可能一模一样
+    //    (例:发完又粘回等长文本)。
+    //  · left/宽:纯横向布局变化——Agent Desk 打开只给 `.composer-anchor` 加 padding-right,
+    //    居中的输入卡随之左移+收窄、文本重新折行,而 input / selectionchange / window resize /
+    //    scroll **一个都不发**。漏掉它,覆盖层就钉死在原处 = 用户看到「输入框行尾多出来一格,
+    //    不是空格、删不掉,退格删的是前面的字」(原生 caret 已被 caret-color:transparent 藏起来了)。
+    // 编辑器分支同理纳入(desk 让位/侧栏开合同样会挪动笔记纸面)。仪器:npm run check:caret。
+    const host = ta ?? (ae instanceof Element ? ae.closest('.milkdown .ProseMirror') : null)
+    const r = host?.getBoundingClientRect()
+    const sig = r
+      ? `${ta ? `${ta.value.length}:${ta.selectionStart ?? 0}` : 'ed'}:${Math.round(r.top)}:${Math.round(r.left)}:${Math.round(r.width)}`
+      : ''
     if (sig === lastTaSig) return
     lastTaSig = sig
     // ⚠️ 签名**变空**(焦点离开输入框)也必须 schedule —— 那正是该 hide() 的时刻。

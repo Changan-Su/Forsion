@@ -1869,6 +1869,40 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
+  // 打开会员购买页({cloudUrl}/pay 是独立静态页,只认 ?tab=,与 /account 的 #section 两套寻址)。
+  ipcMain.handle('auth:openPayCenter', async () => {
+    const stored = await loadConfig()
+    const creds = loadTanguCreds()
+    const cloudUrl = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
+    const token = creds.token || ''
+    if (!cloudUrl) return { ok: false }
+    const url = `${cloudUrl}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${cloudUrl}/account`)}`
+    await shell.openExternal(url)
+    return { ok: true }
+  })
+
+  // 头像菜单数据面:额度视图 + 重置卡使用。token 全留主进程,渲染层只拿结果。
+  const accountCloud = async (): Promise<CloudCreds> => {
+    const stored = await loadConfig()
+    const creds = loadTanguCreds()
+    return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
+  }
+  ipcMain.handle('account:quota', async () => {
+    const c = await accountCloud()
+    if (!c.token) return { status: 401, json: null }
+    try { return await cloudJson(c, 'GET', '/api/token-quota/my', undefined, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
+  })
+  ipcMain.handle('account:useResetCard', async (_e, type?: string) => {
+    const c = await accountCloud()
+    if (!c.token) return { status: 401, json: null }
+    // 缺省(旧渲染层)= both;给了但不合法就拒,别把打错的 type 静默当全额卡烧掉(codex3#7)
+    if (type !== undefined && type !== 'both' && type !== 'weekly') {
+      return { status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } }
+    }
+    const scope = type ?? 'both'
+    try { return await cloudJson(c, 'POST', '/api/token-quota/reset-card/use', { type: scope }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
+  })
+
   // ── Forsion Market ──
   // 浏览/详情/安装全在主进程:有 cloudUrl + 文件系统 + 免 CORS。浏览端点公开(无需 token)。
   const marketBase = async (): Promise<string> => {

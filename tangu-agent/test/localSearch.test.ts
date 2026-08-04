@@ -50,7 +50,7 @@ afterEach(() => {
 describe('配置读取与归一化', () => {
   it('段缺失 → auto 全空,未视作已配置', () => {
     const cfg = loadLocalWebSearchConfig();
-    expect(cfg).toEqual({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null });
+    expect(cfg).toEqual({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, zhipuEngine: 'search_pro_quark' });
     expect(hasLocalSearchProvider(cfg)).toBe(false);
   });
 
@@ -68,19 +68,40 @@ describe('配置读取与归一化', () => {
     const red = redactedLocalConfig();
     expect(red).toEqual({
       provider: 'auto', bochaHasKey: false, tavilyHasKey: true, zhipuHasKey: false,
-      effectiveProvider: 'tavily', configured: true,
+      zhipuEngine: 'search_pro_quark', effectiveProvider: 'tavily', configured: true,
     });
     expect(JSON.stringify(red)).not.toContain('tvly-secret');
   });
 });
 
+describe('zhipuEngine 档位', () => {
+  it('缺失/非法归一为默认 quark,合法值原样保留', () => {
+    writeWebSearchSection({ provider: 'zhipu', zhipuApiKey: 'z' });
+    expect(loadLocalWebSearchConfig().zhipuEngine).toBe('search_pro_quark');
+    writeWebSearchSection({ provider: 'zhipu', zhipuApiKey: 'z', zhipuEngine: 'search-std' }); // 旧连字符形式=非法
+    expect(loadLocalWebSearchConfig().zhipuEngine).toBe('search_pro_quark');
+    writeWebSearchSection({ provider: 'zhipu', zhipuApiKey: 'z', zhipuEngine: 'search_pro_sogou' });
+    expect(loadLocalWebSearchConfig().zhipuEngine).toBe('search_pro_sogou');
+  });
+
+  it('搜索请求体携带配置的 search_engine', async () => {
+    writeWebSearchSection({ provider: 'zhipu', zhipuApiKey: 'z', zhipuEngine: 'search_pro_sogou' });
+    const f = stubFetch([
+      ['https://open.bigmodel.cn', () => jsonRes(200, { search_result: [{ title: 'T', link: 'https://x.co', content: 'c' }] })],
+    ]);
+    await runLocalSearch('q', 3);
+    const body = JSON.parse(String((f.mock.calls[0]![1] as any).body));
+    expect(body.search_engine).toBe('search_pro_sogou');
+  });
+});
+
 describe('candidateOrder 降级顺序', () => {
   it('显式 provider 打头,其余已配 key 随后,DDG 垫底', () => {
-    expect(candidateOrder({ provider: 'tavily', bochaApiKey: 'b', tavilyApiKey: 't', zhipuApiKey: null }))
+    expect(candidateOrder({ provider: 'tavily', bochaApiKey: 'b', tavilyApiKey: 't', zhipuApiKey: null, zhipuEngine: 'search_pro_quark' }))
       .toEqual(['tavily', 'bocha', 'duckduckgo']);
-    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: 'z' }))
+    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: 'z', zhipuEngine: 'search_pro_quark' }))
       .toEqual(['zhipu', 'duckduckgo']);
-    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null }))
+    expect(candidateOrder({ provider: 'auto', bochaApiKey: null, tavilyApiKey: null, zhipuApiKey: null, zhipuEngine: 'search_pro_quark' }))
       .toEqual(['duckduckgo']);
   });
 });

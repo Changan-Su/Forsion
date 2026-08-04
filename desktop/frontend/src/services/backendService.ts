@@ -206,6 +206,7 @@ export interface LocalWebSearchRedacted {
   bochaHasKey: boolean
   tavilyHasKey: boolean
   zhipuHasKey: boolean
+  zhipuEngine: string
   effectiveProvider: string
   configured: boolean
 }
@@ -215,7 +216,7 @@ export const getLocalWebSearch = (cfg: TanguDesktopConfig) =>
 
 export const saveLocalWebSearch = (
   cfg: TanguDesktopConfig,
-  body: { provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string },
+  body: { provider: string; bochaApiKey: string; tavilyApiKey: string; zhipuApiKey: string; zhipuEngine: string },
 ) =>
   request<{ success: boolean; config: LocalWebSearchRedacted }>(cfg, '/agent/websearch', {
     method: 'PUT',
@@ -224,7 +225,7 @@ export const saveLocalWebSearch = (
 
 export const testLocalWebSearch = (
   cfg: TanguDesktopConfig,
-  body: { provider: string; apiKey?: string },
+  body: { provider: string; apiKey?: string; zhipuEngine?: string },
   signal?: AbortSignal,
 ) =>
   request<{ ok: boolean; provider: string; latencyMs: number; resultCount?: number; sampleTitle?: string; error?: string }>(
