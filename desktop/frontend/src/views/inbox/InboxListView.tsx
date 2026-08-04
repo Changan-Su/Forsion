@@ -138,6 +138,9 @@ export function InboxListView() {
                     <span className="ibx-time">{timeAgo(m.created_at, t)}</span>
                   </span>
                   <span className="ibx-l2">
+                    {m.attachments && m.attachments.items.length > 0 && (
+                      <span className="ibx-item-gift" title={t('inbox.attach.title')} aria-hidden>🎁</span>
+                    )}
                     <span className="ibx-title">{m.title}</span>
                     {m.body && <span className="ibx-snippet"> — {snippet(m.body)}</span>}
                   </span>

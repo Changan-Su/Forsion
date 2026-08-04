@@ -8,7 +8,7 @@ import { setActiveSpace } from '@lcl/engine'
 import { useApp } from './appStore'
 import { notifyApp } from './notificationStore'
 import {
-  listInbox, getInboxUnreadCount, patchInboxMessage, readAllInbox, deleteInboxMessage, pullInbox,
+  listInbox, getInboxUnreadCount, patchInboxMessage, readAllInbox, deleteInboxMessage, pullInbox, claimInboxAttachment,
   type InboxMessage, type InboxFilter,
 } from '../services/backendService'
 
@@ -50,6 +50,8 @@ interface InboxState {
   markArchived(id: string, archived: boolean): void
   readAll(): void
   remove(id: string): void
+  claim(id: string): Promise<void>
+  claiming: string | null
   pull(): Promise<void>
   startPolling(): void
   stopPolling(): void
@@ -163,6 +165,28 @@ export const useInbox = create<InboxState>((set, get) => ({
     }))
     setBadge(get().unreadCount)
     void deleteInboxMessage(cfg(), id).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
+  },
+
+  claiming: null,
+
+  // 领取广播附件:非乐观(入账是服务端事实,等响应再翻 claimed);成功/已领过都置 claimed。
+  claim: async (id) => {
+    if (get().claiming) return
+    const t = useApp.getState().tr
+    set({ claiming: id })
+    try {
+      const r = await claimInboxAttachment(cfg(), id)
+      set((s) => ({
+        messages: s.messages.map((x) =>
+          x.id === id && x.attachments ? { ...x, attachments: { ...x.attachments, claimed: true } } : x),
+      }))
+      useApp.getState().toast(r.alreadyClaimed ? t('inbox.claim.already') : t('inbox.claim.ok'))
+    } catch (e: any) {
+      useApp.getState().toast(e?.message || t('inbox.claim.fail'), true)
+      void get().refreshList() // 过期/已领等由服务端裁决,刷新拿真相
+    } finally {
+      set({ claiming: null })
+    }
   },
 
   pull: async () => {

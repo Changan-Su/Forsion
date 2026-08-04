@@ -10,6 +10,7 @@ import { Check, ChevronDown, Search } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
 import { groupModelsByProvider } from './ModelGroupList'
 import { registerMessages, useI18n } from '../i18n'
+import { isCoarsePointer } from '../touch'
 import type { ModelInfo } from '../types'
 
 registerMessages({
@@ -80,7 +81,8 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
           {models.length >= SEARCH_THRESHOLD && (
             <span className="model-search">
               <Search size={12} />
-              <input autoFocus value={query} placeholder={t('model.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />
+              {/* 触屏不自动聚焦:软键盘会把浮层挤走,点条目那一下就落空(见 ../touch.ts)。 */}
+              <input autoFocus={!isCoarsePointer()} value={query} placeholder={t('model.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />
             </span>
           )}
           {/* 留空 = 回到跟随云端默认;没有这一项就只能选、不能撤销。 */}

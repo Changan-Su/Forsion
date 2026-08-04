@@ -170,12 +170,25 @@ export async function runMigration(): Promise<void> {
       read_at TIMESTAMP,
       archived_at TIMESTAMP,
       deleted_at TIMESTAMP,
+      attachments TEXT,
+      expires_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_inbox_messages_user ON inbox_messages(user_id, archived_at, created_at)`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_messages_broadcast
     ON inbox_messages(user_id, origin_broadcast_id) WHERE origin_broadcast_id IS NOT NULL`);
+  // 存量库补列(SQLite 无 ADD COLUMN IF NOT EXISTS → 吞「重复列」错,两方言同法幂等):
+  // attachments = 广播物品 JSON {items:[...], claimed:bool};expires_at = 过期后读端自动归档、附件不可领。
+  // 只吞 duplicate column(SQLite 报文)/ 42701(PG code)——权限/锁/IO 失败必须炸,否则启动装成功、首查爆列缺失。
+  for (const col of ['attachments TEXT', 'expires_at TIMESTAMP']) {
+    try {
+      await query(`ALTER TABLE inbox_messages ADD COLUMN ${col}`);
+    } catch (e: any) {
+      if (e?.code === '42701' || /duplicate column/i.test(String(e?.message || ''))) continue;
+      throw e;
+    }
+  }
 
   // 自动化动作链执行账本(本地特性,同 inbox 纪律直连 query())。真源在此;常驻 automation 会话里的
   // role='model' 合成消息只是它的人读投影。steps=JSON 数组 [{type,tool?,ok,summary}](TEXT,方言无关)。

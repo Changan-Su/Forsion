@@ -57,12 +57,26 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
         [userId, b.id],
       );
       if (dup?.length) continue;
+      // 附件物品:服务端 JSON 原文包一层 {items, claimed}(claimed 之后由 claim 路由本地翻真);脏 JSON 按无附件。
+      let attachments: string | null = null;
+      if (b.attachments) {
+        try { attachments = JSON.stringify({ items: JSON.parse(String(b.attachments)), claimed: !!b.claimed }); }
+        catch { /* 脏行防御 */ }
+      }
       // 无 conflict target 的 ON CONFLICT DO NOTHING:SQLite/PGlite/PG 同一写法合法,兜并发重复。
+      const rowId = uuidv4();
       await query(
-        `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, created_at)
-         VALUES (?, ?, ?, ?, 'server', 'forsion', ?, ?) ON CONFLICT DO NOTHING`,
-        [uuidv4(), userId, String(b.title || '').slice(0, 500), String(b.body || ''), b.id, String(b.created_at)],
+        `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, attachments, expires_at, created_at)
+         VALUES (?, ?, ?, ?, 'server', 'forsion', ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        [rowId, userId, String(b.title || '').slice(0, 500), String(b.body || ''), b.id, attachments, b.expires_at ? String(b.expires_at) : null, String(b.created_at)],
       );
+      // codex#12:定时 tick 与手动 pull 并发时两边都过了前置 dup 查——落库赢家才计数/转发,
+      // 输家的 ON CONFLICT 静默吞掉,不能再 added++/二次推通道。
+      const won = await query<any[]>(
+        `SELECT 1 AS x FROM inbox_messages WHERE id = ? LIMIT 1`,
+        [rowId],
+      );
+      if (!won?.length) continue;
       added++;
       // 通道转发:首拉基准(整轮,含后续分页)不转发,防历史广播轰炸;之后的增量轮才推。
       if (!baselinePull) {

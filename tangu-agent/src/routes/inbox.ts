@@ -37,9 +37,17 @@ const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', 
 const ts = (v: any): string | null =>
   v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : String(v).slice(0, 19);
 
-const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, created_at';
+const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, created_at';
 
 function serialize(r: any) {
+  // attachments 落库形态 {items:[...], claimed:bool}(inboxPull 包装);脏 JSON 按无附件。
+  let attachments: { items: any[]; claimed: boolean } | null = null;
+  if (r.attachments) {
+    try {
+      const p = JSON.parse(String(r.attachments));
+      if (Array.isArray(p?.items) && p.items.length) attachments = { items: p.items, claimed: !!p.claimed };
+    } catch { /* 脏行防御 */ }
+  }
   return {
     id: r.id,
     title: r.title,
@@ -49,8 +57,20 @@ function serialize(r: any) {
     origin_broadcast_id: r.origin_broadcast_id ?? null,
     read_at: ts(r.read_at),
     archived_at: ts(r.archived_at),
+    attachments,
+    expires_at: ts(r.expires_at),
     created_at: ts(r.created_at),
   };
+}
+
+/** 惰性过期归档:到期的消息在读端顺手归档(无定时器)。归档后仍可在 archived 里翻到,附件不可再领(服务端也拒)。 */
+async function archiveExpired(userId: string, now: string): Promise<void> {
+  await query(
+    `UPDATE inbox_messages SET archived_at = ?
+     WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL
+       AND expires_at IS NOT NULL AND expires_at <= ?`,
+    [now, userId, now],
+  );
 }
 
 router.get('/agent/inbox', authMiddleware, async (req: AuthRequest, res) => {
@@ -61,6 +81,7 @@ router.get('/agent/inbox', authMiddleware, async (req: AuthRequest, res) => {
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 50), 200));
     const offset = Math.floor(Math.max(0, Number(req.query.offset) || 0));
     const now = nowUtc();
+    await archiveExpired(userId, now);
     let where: string;
     let order: string;
     let params: any[];
@@ -90,6 +111,7 @@ router.get('/agent/inbox/unread-count', authMiddleware, async (req: AuthRequest,
   try {
     const userId = req.user!.userId;
     const now = nowUtc();
+    await archiveExpired(userId, now); // 15s 轮询顺手扫:过期件不用等用户开列表就消失于未读
     const visible = `user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND (deliver_at IS NULL OR deliver_at <= ?)`;
     const cntRows = await query<any[]>(
       `SELECT COUNT(*) AS n FROM inbox_messages WHERE ${visible} AND read_at IS NULL`,
@@ -190,6 +212,46 @@ router.delete('/agent/inbox/:id', authMiddleware, async (req: AuthRequest, res) 
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'inbox delete failed' });
+  }
+});
+
+// 领取广播附件:发放/资格/过期/幂等全在服务端(brain seam 转发);本地只把 attachments.claimed 翻真。
+// 过期本地先拒一道(410),但真正的闸在服务端(本地钟不可信)。
+router.post('/agent/inbox/:id/claim', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const userId = req.user!.userId;
+    const rows = await query<any[]>(
+      `SELECT id, origin_broadcast_id, attachments, expires_at FROM inbox_messages
+       WHERE id = ? AND user_id = ? AND deleted_at IS NULL LIMIT 1`,
+      [req.params.id, userId],
+    );
+    const m = rows?.[0];
+    if (!m) return res.status(404).json({ detail: 'message not found' });
+    if (!m.origin_broadcast_id || !m.attachments) return res.status(400).json({ detail: '该消息没有可领取的物品' });
+    const exp = ts(m.expires_at);
+    if (exp && exp <= nowUtc()) return res.status(410).json({ error: 'broadcast_expired', detail: '已过期,物品无法领取' });
+    const seam = deps().brain.inbox;
+    if (!seam?.claimBroadcast) return res.status(501).json({ detail: '未配置云端连接,无法领取' });
+    let r: { claimed: boolean; alreadyClaimed?: boolean };
+    try {
+      r = await seam.claimBroadcast(m.origin_broadcast_id);
+    } catch (e: any) {
+      // httpBrain 抛 LlmError(status, detail);detail 是服务端 JSON 文本({error, detail}),解析透传
+      const status = Number(e?.status);
+      let detail = e?.message || 'claim failed';
+      let code: string | undefined;
+      try { const j = JSON.parse(String(e?.message || '')); detail = j.detail || detail; code = j.error; } catch { /* 非 JSON 原样透传 */ }
+      return res.status(status >= 400 && status < 600 ? status : 502).json({ error: code, detail });
+    }
+    try {
+      const parsed = JSON.parse(String(m.attachments));
+      parsed.claimed = true;
+      await query(`UPDATE inbox_messages SET attachments = ? WHERE id = ? AND user_id = ?`, [JSON.stringify(parsed), req.params.id, userId]);
+    } catch { /* 脏 JSON:本地态放弃,服务端已入账 */ }
+    res.json({ ok: true, alreadyClaimed: !!r.alreadyClaimed });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'claim failed' });
   }
 });
 

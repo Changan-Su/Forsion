@@ -290,11 +290,19 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // created_at 是服务端 to_char 微秒原文,原样返回给调用方做游标,不做任何时区换算。
     inbox: {
       listBroadcasts: async (since?: string) => {
-        const r = await getJson<{ broadcasts: Array<{ id: string; title: string; body: string | null; created_at: string }> }>(
+        const r = await getJson<{ broadcasts: Array<{
+          id: string; title: string; body: string | null; created_at: string;
+          attachments?: string | null; expires_at?: string | null; claimed?: boolean;
+        }> }>(
           `/api/brain/inbox/broadcasts${since ? `?since=${encodeURIComponent(since)}` : ''}`,
         );
         return r?.broadcasts ?? [];
       },
+      // 领取附件:postJson 失败抛 LlmError(status, detail),claim 路由按 status 透传(410=过期等)。
+      claimBroadcast: (broadcastId: string) =>
+        postJson<{ claimed: boolean; alreadyClaimed?: boolean }>(
+          `/api/brain/inbox/broadcasts/${encodeURIComponent(broadcastId)}/claim`, {},
+        ),
     },
     storage: {
       // 分离式 worker:经云端 /api/brain/storage/*(对端 routes.ts)把 agent 工作区文件回写 Penzor。

@@ -693,6 +693,12 @@ export const deleteWorkspaceFile = (cfg: TanguDesktopConfig, sessionId: string, 
 
 // ── Inbox(收件箱)──
 // 时间字段为 UTC 'YYYY-MM-DD HH:MM:SS' 无时区后缀,前端解析统一 new Date(s.replace(' ','T')+'Z')。
+/** 广播附件物品:label 双语在服务端发送时冻结;kind 未知时前端用兜底图标+label 渲染(类型扩展零改动)。 */
+export interface InboxAttachmentItem {
+  kind: string
+  label?: { zh?: string; en?: string }
+  [k: string]: unknown
+}
 export interface InboxMessage {
   id: string
   title: string
@@ -702,6 +708,8 @@ export interface InboxMessage {
   origin_broadcast_id: string | null
   read_at: string | null
   archived_at: string | null
+  attachments?: { items: InboxAttachmentItem[]; claimed: boolean } | null
+  expires_at?: string | null
   created_at: string | null
 }
 export type InboxFilter = 'all' | 'unread' | 'archived'
@@ -736,6 +744,12 @@ export const pullInbox = (cfg: TanguDesktopConfig) =>
   window.tangu?.mobile
     ? localInbox.pull(cfg)
     : request<{ pulled: boolean; added: number; detail?: string }>(cfg, '/agent/inbox/pull', { method: 'POST' })
+
+/** 领取广播附件(发放全在服务端)。移动端本地收件箱无广播,不承载。 */
+export const claimInboxAttachment = (cfg: TanguDesktopConfig, id: string) =>
+  window.tangu?.mobile
+    ? Promise.reject(new Error('not supported on mobile'))
+    : request<{ ok: boolean; alreadyClaimed: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST' })
 
 /** 本地系统消息(sender_kind='system';壳自用:插件引导提醒等)。移动端本地收件箱不承载,静默 no-op。 */
 export const postInboxMessage = (cfg: TanguDesktopConfig, msg: { title: string; body?: string; sender_id?: string }) =>

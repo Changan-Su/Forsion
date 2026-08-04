@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Folder, Cloud, ChevronDown, Check, Search, FolderPlus } from 'lucide-react'
 import type { WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
+import { isCoarsePointer } from '../touch'
 
 export const ProjectSelector: React.FC<{
   workspaces: WorkspaceDescriptor[]
@@ -47,7 +48,9 @@ export const ProjectSelector: React.FC<{
         <div className="project-menu">
           <div className="project-menu-search">
             <Search size={13} />
-            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('input.project.search')} />
+            {/* ⚠️触屏不自动聚焦:软键盘一弹,向上开的菜单整块移位,点条目那一下 click 落不到条目上
+                (「移动端点工作区没反应、长按才行」的真身)。想搜就自己点这个框。见 ../touch.ts。 */}
+            <input autoFocus={!isCoarsePointer()} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('input.project.search')} />
           </div>
           <div className="project-menu-list">
             {list.map((w) => (
