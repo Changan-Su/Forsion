@@ -5,6 +5,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
+import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { loadPage, newPage, pageFileName, savePage } from '@amadeus-shared/compiler'
@@ -768,6 +769,39 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     },
   )
 
+  /** 改名/移动后的全库引用重写(renameDbFile 同款先例):快照「操作前」页面表,物理移动完成后
+   *  逐页跑纯函数 rewriteNoteRefs,判定「解析目标变了」才动笔;改动页原子写 + 更索引 +
+   *  externalChange 回灌(打开着的编辑器由既有回灌机制接住)。
+   *  ponytail: 朴素全库读扫,与 backlinks 同一量级,个人 vault 规模足够。 */
+  const propagateRenames = async (pairsIn: Record<string, string>, pagesBefore: string[]): Promise<void> => {
+    const pairs = new Map(Object.entries(pairsIn))
+    if (!pairs.size) return
+    const backMap = new Map([...pairs].map(([o, n]) => [n, o]))
+    const before = [...pagesBefore].sort()
+    const after = before.map((p) => pairs.get(p) ?? p).sort()
+    for (const p of after) {
+      let raw: string
+      try {
+        raw = await fs.readFile(vault.absPath(p), 'utf8')
+      } catch {
+        continue
+      }
+      const next = rewriteNoteRefs(raw, backMap.get(p) ?? p, p, { pairs, pagesBefore: before, pagesAfter: after })
+      if (next === raw) continue
+      await vault.writeTextFile(p, next)
+      await index.update(p)
+      notifyAll(IPC.externalChange, p)
+    }
+  }
+
+  /** 文件夹改名/移动 → 树下每一页一对 old→new(引用重写按页粒度进行)。 */
+  const folderPairs = (pages: string[], oldFolder: string, newFolder: string): Record<string, string> => {
+    const pre = `${oldFolder}/`
+    const out: Record<string, string> = {}
+    for (const p of pages) if (p.startsWith(pre)) out[p] = `${newFolder}/${p.slice(pre.length)}`
+    return out
+  }
+
   ipcMain.handle(
     IPC.renamePage,
     async (
@@ -788,10 +822,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       }
       if (await vault.pathExists(newPath)) throw new Error('目标页面已存在')
       // v3 is single-file: persist in-flight edits, then move the one .md.
+      const pagesBefore = await vault.listPages() // 引用重写要的「操作前」快照,须在移动前取
       await savePage(vault.pageIO(oldPath), oldPath, manifest, { contents })
       await vault.moveEntry(oldPath, newPath)
       await index.rename(oldPath, newPath)
       await rememberPage(newPath)
+      await propagateRenames({ [oldPath]: newPath }, pagesBefore) // 先重写再 loadPage:自链接也进返回值
       const page = await loadPage(vault.pageIO(newPath), newPath, nowIso())
       return { newPath, page }
     },
@@ -988,9 +1024,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     const newPath = dir === '.' ? `${base}.md` : `${dir}/${base}.md`
     if (newPath === oldPath) return oldPath
     if (await vault.pathExists(newPath)) throw new Error('目标笔记已存在')
+    const pagesBefore = await vault.listPages()
     await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
     index.remove(oldPath)
     await index.update(newPath)
+    await propagateRenames({ [oldPath]: newPath }, pagesBefore)
     return newPath
   })
 
@@ -1060,12 +1098,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
     if (newPath === pagePath) return pagePath
     if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件')
+    const pagesBefore = newPath.endsWith('.md') ? await vault.listPages() : []
     await vault.moveEntry(pagePath, newPath)
     // 树里的附件(非 .md)也走本通道移动:不进索引(index.update 会把二进制按 utf8 读成巨串)、不记 lastPage。
     if (newPath.endsWith('.md')) {
       index.remove(pagePath)
       await index.update(newPath)
       await rememberPage(newPath)
+      await propagateRenames({ [pagePath]: newPath }, pagesBefore)
     }
     return newPath
   })
@@ -1088,8 +1128,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     const newPath = parentRel ? `${parentRel}/${clean}` : clean
     if (newPath === folderPath) return folderPath
     if (await vault.pathExists(newPath)) throw new Error('同名文件夹已存在')
+    const pagesBefore = await vault.listPages()
     await vault.moveEntry(folderPath, newPath)
     await index.build()
+    await propagateRenames(folderPairs(pagesBefore, folderPath, newPath), pagesBefore)
     return newPath
   })
 
@@ -1107,8 +1149,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     if (newPath === src) return src
     if (dst === src || dst.startsWith(`${src}/`)) throw new Error('不能移动到自身内部')
     if (await vault.pathExists(newPath)) throw new Error('目标位置已存在同名文件夹')
+    const pagesBefore = await vault.listPages()
     await vault.moveEntry(src, newPath)
     await index.build()
+    await propagateRenames(folderPairs(pagesBefore, src, newPath), pagesBefore)
     return newPath
   })
 
