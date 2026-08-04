@@ -1,4 +1,6 @@
-import { Suspense, createContext, lazy, memo, useContext, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { Suspense, createContext, memo, useContext, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazyRetry } from '../../lazyRetry'
+import { Maximize2 } from 'lucide-react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -23,7 +25,7 @@ import { resolveFileName } from '../lib/vaultFiles'
 
 // PDF 预览用自家可批注阅读器的只读形态(Chromium 内置 iframe 阅读器观感突兀且不认主题)。
 // 懒加载:pdf.js viewer 较重,chunk 与独立 PDF 视图共用,笔记里真有 PDF 块才拉。
-const PdfEmbedViewer = lazy(() => import('../pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
+const PdfEmbedViewer = lazyRetry(() => import('../pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
 const noop = (): void => {}
 
@@ -326,18 +328,36 @@ export const BlockHost = memo(function BlockHost({
   const embedSrcLine = (
     <>
       {embedTarget && !isActiveEmbed && (
-        <button
-          className="amx-src-btn amx-src-btn--block"
-          title="查看源码"
-          aria-label="查看源码"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.stopPropagation()
-            useBlockSelection.getState().setActiveEmbed(blockId)
-          }}
-        >
-          {'</>'}
-        </button>
+        <>
+          {/* 打开被引用的内容:点击=当前页打开,Cmd/Ctrl+点击=新标签页。
+              新标签走事件解耦(同 amadeus:open-db):amadeus/ 是可移植层,不 import 宿主的 openNote。 */}
+          <button
+            className="amx-src-btn amx-src-btn--block amx-open-btn"
+            title="打开(⌘/Ctrl+点击在新标签页打开)"
+            aria-label="打开引用的内容"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (e.metaKey || e.ctrlKey) {
+                window.dispatchEvent(new CustomEvent('amadeus:open-note', { detail: { name: embedTarget, sourcePath: pagePath, newTab: true } }))
+              } else openWikiLink(embedTarget)
+            }}
+          >
+            <Maximize2 size={13} />
+          </button>
+          <button
+            className="amx-src-btn amx-src-btn--block"
+            title="查看源码"
+            aria-label="查看源码"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation()
+              useBlockSelection.getState().setActiveEmbed(blockId)
+            }}
+          >
+            {'</>'}
+          </button>
+        </>
       )}
       {isActiveEmbed && embedTarget ? (
         <EmbedSourceLine

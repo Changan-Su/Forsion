@@ -9,6 +9,7 @@
  *     }
  * forsion 部分经 deps().brain.models(microserver 进程内直连 / standalone 走 brain-api);
  * 优先 listModelsForProject(profile.appId) 遵守 admin「应用模型配置」,旧 brain 回退 listGlobalModels。
+ * profile 按查询参数 `app_id` 解析(与 run 的 resolveProfile 同源),缺省才回退本进程基线。
  * direct 部分仅 standalone 的 multiBrain 实现(listDirectProviders 可选方法),云端自动跳过。
  * 诊断:httpBrain.listGlobalModels 对错误降级 [](TUI 依赖此行为),这里用 users/me 探针
  * 区分「云端可达但 admin 没配模型(empty)」与「云端不可达/未授权/未部署 brain-api(error)」。
@@ -23,7 +24,19 @@ const router = Router();
 
 router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const profile = deps().profile;
+    // 本请求所属 app 的 profile(照 /agent/tools 先例;app_id / appId 两种写法都收)。
+    // ⚠️ 不能用 deps().profile:云端一个 worker 服务多 app,那只是**基线**(TANGU_APP_ID,缺省
+    // 'ai-studio')。用它会让 Tangu Web 的模型列表/五槽默认全按 ai-studio 的「应用模型配置」解析,
+    // 而 run 的用量按 run.app_id='tangu' 记账 —— 就是「用量显示 Tangu、模型配置却走 AI Studio」。
+    // 显式传了却解析不出(未知/被 admin 禁用)→ 400,照 /agent/runs 先例。这里**不能**静默回退基线:
+    // 那正是本次要修的失败模式(客户端拼错 app_id 就又悄悄拿到 ai-studio 的列表)。不传才回退。
+    // 不传也要走 profileStore(resolve(null) = 基线的**生效** profile),否则 admin 的 DB 覆盖与
+    // enabled:false 在这条路径上全被绕过 —— 会出现「显式传 app 被 400、省略参数反而读得到」。
+    // 末尾 ?? deps().profile 只兜「基线自身被禁用」这一种极端,保住老客户端不硬失败。
+    const appIdQ = String(req.query.app_id || req.query.appId || '') || null;
+    const store = deps().profileStore;
+    const profile = appIdQ ? store.resolve(appIdQ) : (store.resolve(null) ?? deps().profile);
+    if (!profile) return res.status(400).json({ detail: `unknown app_id: ${appIdQ}` });
     // contextWindow 供客户端「上下文占比」进度条用(per-model 覆盖 ?? 全局默认)。
     // modelType 区分大语言模型 / 生图模型 / 语音识别(后端已分类;桌面模型设置据此分区,generate_image 据此选模型,语音输入据此筛 ASR)。
     // supportsVision:能不能直接「看」图。黑名单制(见 modelSupportsVision)——后端/provider 显式

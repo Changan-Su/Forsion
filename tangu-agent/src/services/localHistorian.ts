@@ -2,18 +2,24 @@
  * 本地 Historian（Special Agent）—— 按「轮」触发，区别于云端 historian.ts 的空闲扫描。
  *
  * 一应一和 = 1 轮（= 1 个 done run）。每个用户会话 run 完成后（agentLoop done 钩子）：
- *   - 每 everyRounds 轮（周期合一,标题与 LOG/memory 同一节奏）：总结并更新会话标题 +
- *     判断是否更新用户 LOG/memory（经 brain.memory），有则写入；
+ *   - 每 everyRounds 轮（周期合一,标题/摘要与 LOG/memory 同一节奏）：总结并更新会话标题+会话摘要
+ *     (chat_sessions.summary,人读:列表预览 / [[session:]] 引用第一跳) + 判断是否更新用户
+ *     LOG/memory（经 brain.memory），有则写入；
  *   - 首轮（roundN===1 且 firstRoundTrigger）必触发。
  *
- * 两种工作模式（cfg.mode）：
- *   - independent（默认）：Historian 自己结构化判断并写 title/LOG；memory 走两阶段(借 Codex 记忆
- *     流水线):按轮只**采集候选**(带 No-op 门)进 <agent>/.memory-raw.md,攒够一批才跑**整固**
+ * 三种工作模式（cfg.mode）：
+ *   - independent（默认）：Historian 自己结构化判断并写 title/summary/LOG；memory 走两阶段(借 Codex
+ *     记忆流水线):按轮只**采集候选**(带 No-op 门)进 <agent>/.memory-raw.md,攒够一批才跑**整固**
  *     (与正典 MEMORY 统一去重/合并/淘汰后全文改写,含缩水守卫)——见 maybeConsolidate。
- *   - assist（辅助）：标题仍独立维护；LOG/memory 到点时改为 branch 出隐藏讨论会话（kind='discussion'，
+ *   - assist（辅助）：标题/摘要仍独立维护；LOG/memory 到点时改为 branch 出隐藏讨论会话（kind='discussion'，
  *     继承最近 30 条），与主 Agent 开一场无主持人的简短群聊（Historian 临时人格先评估，主 Agent 定夺并
  *     自己调 log_event/remember 写入自己的记忆域）。首轮始终 independent。此模式下 memory 为追加式
  *     （remember），整文修订仅 independent 模式做。
+ *   - fork（分身判官）：judge 原文改由「尾部分叉补全」产出——agentLoop 主路径 run done 时传入
+ *     workingMessages 快照(HistorianForkSeed),用**会话模型**在全量在存上下文尾部追加一条判官指令做
+ *     一次补全(cacheKey=sessionId + 同工具面 + 同思考档 → provider 前缀缓存可命中;借 self_brainstorm
+ *     的缓存对齐管线,禁工具靠指令+结果侧丢弃)。相比 independent 的「DB 最近 30 条/8000 字」,判断者
+ *     看到完整上下文;解析/落地与 independent 完全同路,快照缺席/超窗/失败自动回落 independent。
  * 配置见 special-agents.json（enabled 默认关、需选 modelId）。活动写 special_agent_log（隔离记录，
  * 驱动 Historian 工作视图），不进用户会话列表。本地特性：仅 host-exec profile 形态启用，云端 no-op。
  *
@@ -31,6 +37,8 @@ import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
 import { DEFAULT_AGENT_SLUG, agentsDir } from '../core/tanguHome.js';
+import { buildSharedPrefix } from './selfBrainstorm.js';
+import { modelContextWindow, estimateMessageTokens } from './contextBudget.js';
 
 const MAX_TRANSCRIPT_CHARS = 8000;
 const CHARGE_USER = false;
@@ -51,22 +59,30 @@ const CONSOLIDATE_MAX_TOKENS = 8000; // 须容得下整份 20K 字符记忆(中�
 const consolidatingSlugs = new Set<string>();
 const shrinkBackoffUntil = new Map<string, number>();
 const SHRINK_BACKOFF_MS = 86_400_000;
+// 会话级 Historian 互斥(Codex 评审 08-03 Critical):onUserRunDone 是 fire-and-forget,下一 run 的
+// done 可能在上一轮维护(judge/fork/整固)还在飞时到来——everyRounds=1 时必然。并发双跑会重复追加
+// LOG/候选、竞态覆盖标题/摘要。锁忙=直接跳过本轮(维护是尽力而为,下个到点轮自然补),绝不能把
+// 「锁忙」当 fork 失败再并发启动 independent。
+const historianBusySessions = new Set<string>();
 
-/** 测试用:清空整固互斥/退避状态(模块级,跨用例会串)。 */
+/** 测试用:清空整固互斥/退避/会话互斥状态(模块级,跨用例会串)。 */
 export function resetHistorianConsolidationState(): void {
   consolidatingSlugs.clear();
   shrinkBackoffUntil.clear();
+  historianBusySessions.clear();
 }
 
-/**
- * 构造 Historian 的结构化判断 system prompt:一次调用、输出 JSON,title/log/memory 各自独立判断。
- * customPrompt = 用户可配的「判断哲学」(留空用默认);代码强制 JSON 输出格式 + 仅含到期字段。
- * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
- * 不得相同;memory 要克制,多数对话应为空。
- */
-function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean): string {
+/** judge JSON 的字段规格+示例(独立模式 system prompt 与 fork 判官指令共用同一契约)。 */
+function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean): { fields: string[]; example: string } {
   const fields: string[] = [];
   if (wantTitle) fields.push('"title": a phrase of ≤16 characters in the user\'s language summarizing this conversation\'s topic, used as the session title (always provide it)');
+  if (wantSummary) {
+    fields.push(
+      '"summary": an updated summary of this session, 1-3 sentences in the user\'s language, written for a human skimming their session list: ' +
+      'what it is about, key decisions/outcomes, current state. If a [Previous summary] is provided, revise it to cover the new content ' +
+      '(keep still-true parts, drop obsolete ones); give "" if it still fits as-is.',
+    );
+  }
   if (wantLog) fields.push('"log": if this conversation has an event/progress/output "worth noting for the day", write one short sentence in the user\'s language; otherwise give an empty string ""');
   if (wantMemory) {
     fields.push(
@@ -78,11 +94,41 @@ function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boo
       'At most 5 entries — pick the highest-value ones. When in doubt, leave it out — an empty array is the normal outcome.',
     );
   }
+  const example =
+    `{"title":"Gradient visualization"${wantSummary ? ',"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open."' : ''}` +
+    `,"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}}`;
+  return { fields, example };
+}
+
+/**
+ * 构造 Historian 的结构化判断 system prompt:一次调用、输出 JSON,title/summary/log/memory 各自独立判断。
+ * customPrompt = 用户可配的「判断哲学」(留空用默认);代码强制 JSON 输出格式 + 仅含到期字段。
+ * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
+ * 不得相同;memory 要克制,多数对话应为空。
+ */
+function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary);
   return [
     (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
     '\nRead the conversation below and judge; output **a single JSON object** only, with the following fields:',
     '- ' + fields.join('\n- '),
-    `Example: {"title":"Gradient visualization","log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}}`,
+    `Example: ${example}`,
+    'Give an empty string (or empty array) for fields that need no update. Output JSON only — no code fences, no extra text.',
+  ].filter(Boolean).join('\n');
+}
+
+/** fork 判官的追加指令(user 消息,分叉尾部):上下文=上方完整对话,无需另拼 transcript。 */
+function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, prevSummary: string): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary);
+  return [
+    '## Historian fork (tail-fork judge)',
+    'You are a tail-fork of the assistant above, acting as the background Historian for this conversation. ' +
+    'Ignore any pending tool activity; any tool call you emit will be DISCARDED — reply with the JSON object only.',
+    (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
+    'Judge the FULL conversation above and output **a single JSON object** with the following fields:',
+    '- ' + fields.join('\n- '),
+    prevSummary ? `[Previous summary]\n${prevSummary}` : '',
+    `Example: ${example}`,
     'Give an empty string (or empty array) for fields that need no update. Output JSON only — no code fences, no extra text.',
   ].filter(Boolean).join('\n');
 }
@@ -222,7 +268,7 @@ async function maybeConsolidate(userId: string, slug: string | undefined, modelI
 }
 
 /** 从模型输出里提取首个 JSON 对象(容忍代码围栏 / 前后噪声)。失败 → null。 */
-function parseJudgement(raw: string): { title?: string; log?: string; memory?: string } | null {
+function parseJudgement(raw: string): { title?: string; summary?: string; log?: string; memory?: string } | null {
   let s = String(raw || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
   const i = s.indexOf('{');
   const j = s.lastIndexOf('}');
@@ -298,21 +344,87 @@ async function complete(label: string, modelId: string, system: string, transcri
       provider: (model as any)?.provider,
     } as any);
     const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });
-    try {
-      const cost = await deps().billing.calculateCost(modelId, res.usage?.prompt_tokens || 0, res.usage?.completion_tokens || 0);
-      const u = await deps().brain.users.getUserById(userId);
-      await (deps().billing.logApiUsage as any)(
-        u?.username || userId, modelId, model.name, model.provider,
-        res.usage?.prompt_tokens || 0, res.usage?.completion_tokens || 0, true, undefined, 'tangu-historian', cost,
-      );
-      if (CHARGE_USER) await deps().billing.consumeTokenPoints(userId, cost).catch(() => {});
-    } catch { /* 记账失败不阻断 */ }
+    await recordJudgeUsage(userId, modelId, model, res);
     const out = String(res?.content || '').trim();
     if (!out) log(`${label} 模型返回空内容(model=${modelId})`);
     return { content: out, finishReason: (res as any)?.finishReason };
   } catch (e: any) {
     log(`${label} 模型调用失败(model=${modelId}): ${e?.message || e}`);
     return { content: '' };
+  }
+}
+
+/** Historian 侧模型调用统一记账(usage 归 tangu-historian,默认不扣配额)。绝不抛。 */
+async function recordJudgeUsage(userId: string, modelId: string, model: any, res: any): Promise<void> {
+  try {
+    const cost = await deps().billing.calculateCost(modelId, res?.usage?.prompt_tokens || 0, res?.usage?.completion_tokens || 0);
+    const u = await deps().brain.users.getUserById(userId);
+    await (deps().billing.logApiUsage as any)(
+      u?.username || userId, modelId, model.name, model.provider,
+      res?.usage?.prompt_tokens || 0, res?.usage?.completion_tokens || 0, true, undefined, 'tangu-historian', cost,
+    );
+    if (CHARGE_USER) await deps().billing.consumeTokenPoints(userId, cost).catch(() => {});
+  } catch { /* 记账失败不阻断 */ }
+}
+
+// ── fork 判官(mode='fork'):尾部分叉一次补全,借 self_brainstorm 的缓存对齐管线 ───────────────
+const FORK_JUDGE_MAX_TOKENS = 1600;
+const FORK_CONTEXT_HEADROOM = 0.75; // 与 self_brainstorm 同款护栏:前缀估算超模型窗口此比例即回落
+// fork 无自己的互斥:onUserRunDone 顶部的 historianBusySessions 会话锁已保证同会话单飞。
+
+/** agentLoop 主路径 run done 时传入的快照接缝(群聊/外部引擎/hook 否决路径不传 → 回落 independent)。 */
+export interface HistorianForkSeed {
+  /** workingMessages 惰性快照(逐消息浅拷贝,含收尾正文;非 fork 模式零拷贝开销)。 */
+  getMessages: () => ChatMessage[];
+  /** 本 run 的工具 schema:参与 provider 前缀缓存,fork 请求必须带同款,禁执行靠指令+结果侧丢弃。 */
+  tools: unknown[];
+  thinkingLevel?: string;
+  /** 会话模型:fork 必须用它——换模型则前缀缓存不共享,「同人格顺手判断」也不成立。 */
+  modelId: string;
+}
+
+/** 一次 fork 判官补全。超窗/失败/空产出/截断 → 返回 ''(调用方回落 independent 判断)。 */
+async function forkJudge(
+  sessionId: string, userId: string, appId: string, seed: HistorianForkSeed, judgeMessage: string,
+): Promise<string> {
+  try {
+    const prefix = buildSharedPrefix(seed.getMessages());
+    if (!prefix.length) return '';
+    const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(seed.modelId);
+    const est = prefix.reduce((n, m) => n + estimateMessageTokens(m), 0);
+    const win = modelContextWindow(seed.modelId, model);
+    if (est > win * FORK_CONTEXT_HEADROOM) {
+      log(`fork 判官:上下文超窗(~${est} > ${Math.floor(win * FORK_CONTEXT_HEADROOM)}/${win}),回落独立判断`);
+      return '';
+    }
+    const payload = await deps().brain.llm.buildProviderPayload({
+      model, apiModelId,
+      // 逐请求深拷贝:构建器会原地改消息(openaiCompat 的 prefix-thinking 注 system),会污染快照(brainstorm 同款教训)。
+      messages: structuredClone([...prefix, { role: 'user', content: judgeMessage } as ChatMessage]),
+      projectSource: appId,
+      usageSource: 'tangu',
+      temperature: 0.3,
+      // 与父 run 同档:无原生思考的模型档位是注进 system 的文本,档不同=前缀不同。
+      thinkingLevel: (seed.thinkingLevel as any) || 'medium',
+      tools: seed.tools,
+      toolChoice: 'auto',
+      attachments: [],
+      stream: true,
+      maxTokens: FORK_JUDGE_MAX_TOKENS,
+      cacheKey: sessionId, // 与主 loop 同键:同前缀必须同键(delegate 的 per-subId 分键方向相反)
+    } as any);
+    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });
+    await recordJudgeUsage(userId, seed.modelId, model, res);
+    const out = String(res?.content || '').trim();
+    if (!out) {
+      log(res?.toolCalls?.length ? 'fork 判官只回了工具调用(已丢弃),回落独立判断' : 'fork 判官返回空内容,回落独立判断');
+      return '';
+    }
+    if ((res as any)?.finishReason === 'length') { log('fork 判官产出被截断,回落独立判断'); return ''; }
+    return out;
+  } catch (e: any) {
+    log(`fork 判官失败,回落独立判断: ${e?.message || e}`);
+    return '';
   }
 }
 
@@ -341,8 +453,20 @@ function isLocal(): boolean {
  * memScopeSlug = 记忆域 slug（runLoop 已折叠 shareDefaultMemory），Historian 的 MEMORY/LOG
  * 读写必须与 run 内 remember/log_event 落同一文件夹。
  */
-export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string): Promise<void> {
+export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed): Promise<void> {
   if (!isLocal()) return;
+  // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
+  // 加锁在首个 await 之前,并发 done 只有一个能进。
+  if (historianBusySessions.has(sessionId)) { log(`会话 ${sessionId.slice(0, 8)} 上一轮维护尚在进行,跳过本轮`); return; }
+  historianBusySessions.add(sessionId);
+  try {
+    await runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed);
+  } finally {
+    historianBusySessions.delete(sessionId);
+  }
+}
+
+async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed): Promise<void> {
   // 解析本 run 的记忆域:优先传入的 memScopeSlug;否则(外部引擎等未做激活的路径)从会话 agent_config.agentSlug
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
@@ -370,7 +494,7 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
   try {
     // 仅用户会话；并发安全：roundN 由 done run 计数推出（幂等）。app_id/model_id/agent_config 供辅助模式讨论用。
     const skRows = await query<any[]>(
-      `SELECT kind, title, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
+      `SELECT kind, title, summary, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
       [sessionId],
     );
     const sk = skRows[0];
@@ -390,6 +514,7 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
     const titleDue = due;
     const memoryDue = due;
     const logDue = due;
+    const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
     if (!(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
@@ -398,18 +523,37 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
     // 标题仍由 Historian 独立维护(主 Agent 没有改标题的工具,标题也非记忆资产)。
     // 首轮(roundN===1)始终走独立模式:首轮要立即出标题+初始日志,也没有可供讨论的积累。
     const assistMode = cfg.mode === 'assist' && roundN > 1;
+    // fork 模式:快照缺席(群聊/外部引擎/hook 否决路径不传 seed)→ 自动回落 independent 判断。
+    const forkMode = cfg.mode === 'fork' && !!forkSeed;
     const judgeLog = logDue && !assistMode;
     const judgeMemory = memoryDue && !assistMode;
-    log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : ''}模型 ${cfg.modelId})`);
+    log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
 
     const transcript = await recentTranscript(sessionId);
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
 
     if (titleDue || judgeLog || judgeMemory) {
-      // 一次结构化判断:title / log / memory_candidates 各自独立(到期才要、不需要则空)。
+      // 一次结构化判断:title / summary / log / memory_candidates 各自独立(到期才要、不需要则空)。
       // 采集刻意不看现有记忆(与 Codex Phase 1 同构:采集盲写、去重归整固),省下每轮 ~20K 字输入。
-      const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory);
-      const raw = (await complete('判断', cfg.modelId, sys, transcript, userId, 1200)).content;
+      const prevSummary = String((sk as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+      // fork:先试尾部分叉判官(全上下文+缓存对齐,用会话模型);失败/超窗回落下面的 independent 路。
+      let raw = forkMode
+        ? await forkJudge(
+            sessionId, userId, String(sk.app_id || deps().profile.appId), forkSeed!,
+            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, prevSummary),
+          )
+        : '';
+      // fork 产出非空但解析不出 JSON(判官跑偏成长文)= 判官失败,同样回落 independent——
+      // 否则本轮标题/摘要/LOG/候选全部凭空丢失(Codex 评审 08-03 Major)。
+      if (raw && !parseJudgement(raw)) {
+        log(`fork 判官产出无法解析为 JSON: "${raw.slice(0, 80)}",回落独立判断`);
+        raw = '';
+      }
+      if (!raw) {
+        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue);
+        const input = prevSummary ? `${transcript}\n\n[Previous summary]\n${prevSummary}` : transcript;
+        raw = (await complete('判断', cfg.modelId, sys, input, userId, 1600)).content;
+      }
       const j = parseJudgement(raw);
       if (!j) {
         log(`判断输出无法解析为 JSON: "${raw.slice(0, 80)}"`); // 不 return:辅助讨论仍应发起
@@ -434,6 +578,18 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
           await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [title, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
           await logActivity(userId, 'title_updated', title, sessionId);
           log(`已更新标题: ${title}`);
+        }
+        // 会话摘要(人读,chat_sessions.summary):空串=模型裁定旧摘要仍适用,不动。
+        // 活动日志只在 UPDATE 真成功后写,否则工作视图会报告不存在的更新(Codex 评审 08-03 Minor)。
+        const summaryText = String((j as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+        if (summaryDue && summaryText.length >= 8 && summaryText.toUpperCase() !== 'NOTHING') {
+          const ok = await query(`UPDATE chat_sessions SET summary = ? WHERE id = ?`, [summaryText, sessionId])
+            .then(() => true)
+            .catch((e: any) => { log(`更新摘要失败: ${e?.message || e}`); return false; });
+          if (ok) {
+            await logActivity(userId, 'summary_updated', summaryText, sessionId);
+            log('已更新会话摘要');
+          }
         }
         if (judgeLog && okShort(logText)) {
           // LOG = 当天流水(append-only)。共享 LOG 经 brain(云端)。

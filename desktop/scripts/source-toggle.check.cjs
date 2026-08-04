@@ -96,20 +96,20 @@ async function main() {
   const blocks = await p.evaluate(() =>
     [...document.querySelectorAll('.block-host')].map((h) => ({
       embed: h.hasAttribute('data-embed'),
-      btn: !!h.querySelector(':scope > .amx-src-btn'),
+      btn: !!h.querySelector(':scope > .amx-src-btn:not(.amx-open-btn)'),
     }))
   )
   check('S5 嵌入块都有 `</>`,普通文字块没有', blocks.length >= 3 && blocks.filter((x) => x.embed).every((x) => x.btn) && blocks.filter((x) => !x.embed).every((x) => !x.btn), JSON.stringify(blocks))
   const first = '.block-host[data-embed]'
-  b = await btnState(p, `${first} > .amx-src-btn`)
+  b = await btnState(p, `${first} > .amx-src-btn:not(.amx-open-btn)`)
   check('S5 不悬停时透明且不吃点击', !!b && b.opacity === 0 && b.pe === 'none', JSON.stringify(b))
   await p.hover(first)
   await p.waitForTimeout(300)
-  b = await btnState(p, `${first} > .amx-src-btn`)
+  b = await btnState(p, `${first} > .amx-src-btn:not(.amx-open-btn)`)
   check('S5 悬停后浮现(.block-host[data-embed]:hover 选择器真的命中)', !!b && b.opacity === 1 && b.pe === 'auto', JSON.stringify(b))
 
   // 点它 → 进源码行(可编辑 input),失焦 → 退出
-  await p.click(`${first} > .amx-src-btn`)
+  await p.click(`${first} > .amx-src-btn:not(.amx-open-btn)`)
   await p.waitForTimeout(350)
   check('S6 点 `</>` 进源码编辑行', (await p.locator('.embed-src-input').count()) === 1, `count=${await p.locator('.embed-src-input').count()}`)
   const val = await p.locator('.embed-src-input').inputValue()

@@ -38,6 +38,10 @@ describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
     expect(modelContextWindow('gemini-2.5-pro')).toBe(1_000_000);
     expect(modelContextWindow('gemini-embedding-001')).toBe(CONTEXT_WINDOW_TOKENS); // 非主线 gemini 变体保守
     expect(modelContextWindow('deepseek-chat')).toBe(CONTEXT_WINDOW_TOKENS); // 未收录族维持默认
+    expect(modelContextWindow('deepseek-v4-flash')).toBe(1_000_000);
+    // 网关转售的 V4 也该拿 1M —— 这条族规则**刻意不锚 ^**(与能力表的 host 限定规则不同口径)
+    expect(modelContextWindow('deepseek-ai/DeepSeek-V4-Pro')).toBe(1_000_000);
+    expect(modelContextWindow('myv4legacy')).toBe(CONTEXT_WINDOW_TOKENS); // 只认 deepseek-v4 字面,不认裸 v4
     // 模型对象自带值仍然优先于族兜底
     expect(modelContextWindow('gpt-5', { context_window: 64_000 })).toBe(64_000);
   });

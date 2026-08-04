@@ -1,7 +1,8 @@
 /** `![[画板.excalidraw]]` → 可编辑的 Excalidraw 画布(照 DatabaseEmbed 的 `![[x.db]]` 先例)。
  *  文件是 Obsidian Excalidraw 插件(zsviczian)同款的 `.excalidraw.md`,同一个库两边可互开
  *  —— 格式细节见 shared/amadeus/excalidraw/format。 */
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import { lazyRetry } from '../../../lazyRetry'
 import { useDrawStore, registerDrawingApplier } from '../../store/drawingStore'
 import { useTheme } from '../../../stores/themeStore'
 import { useI18n } from '../../../i18n'
@@ -27,7 +28,7 @@ if (typeof window !== 'undefined') {
   window.EXCALIDRAW_EXPORT_SOURCE = 'Forsion Amadeus'
 }
 
-const ExcalidrawCanvas = lazy(() => import('./ExcalidrawCanvas'))
+const ExcalidrawCanvas = lazyRetry(() => import('./ExcalidrawCanvas'))
 
 export function ExcalidrawEmbed({ target, pagePath }: { target: string; pagePath: string }): React.JSX.Element {
   const entry = useDrawStore((s) => s.entries[target])

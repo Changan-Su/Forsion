@@ -59,6 +59,7 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
   if (!conf) return <div className="hint">{t('common.loading')}</div>
   const h = conf.historian
   const m = conf.muse
+  const hMode = h.mode === 'assist' || h.mode === 'fork' ? h.mode : 'independent'
 
   const modelSelect = (value: string, onChange: (v: string) => void) => (
     <select value={value} onChange={(e) => onChange(e.target.value)}>
@@ -88,18 +89,24 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
             onLabel={t('settings.special.on')} offLabel={t('settings.special.off')} />
         </div>
         <p className="ac-desc">{t('settings.special.historianDesc')}{!h.modelId && !slotDefault && ` · ${t('settings.special.pickModelFirst')}`}</p>
-        <div className="field"><label>{t('settings.special.model')}</label>{modelSelect(h.modelId, (v) => saveHistorian({ modelId: v }))}</div>
+        {/* fork 模式判官用会话模型,此模型仍被回落判断与记忆整固消费,故不藏只改名 */}
+        <div className="field"><label>{hMode === 'fork' ? t('settings.special.h.fallbackModel') : t('settings.special.model')}</label>{modelSelect(h.modelId, (v) => saveHistorian({ modelId: v }))}</div>
         <div className="field">
           <label>{t('settings.special.h.mode')}</label>
           <div className="seg seg-sm">
-            <button type="button" className={h.mode !== 'assist' ? 'active' : ''} onClick={() => saveHistorian({ mode: 'independent' })}>
+            <button type="button" className={hMode === 'independent' ? 'active' : ''} onClick={() => saveHistorian({ mode: 'independent' })}>
               {t('settings.special.h.modeIndependent')}
             </button>
-            <button type="button" className={h.mode === 'assist' ? 'active' : ''} onClick={() => saveHistorian({ mode: 'assist' })}>
+            <button type="button" className={hMode === 'assist' ? 'active' : ''} onClick={() => saveHistorian({ mode: 'assist' })}>
               {t('settings.special.h.modeAssist')}
             </button>
+            <button type="button" className={hMode === 'fork' ? 'active' : ''} onClick={() => saveHistorian({ mode: 'fork' })}>
+              {t('settings.special.h.modeFork')}
+            </button>
           </div>
-          <div className="hint" style={{ marginTop: 4 }}>{t('settings.special.h.modeHint')}</div>
+          <div className="hint" style={{ marginTop: 4 }}>
+            {t(hMode === 'assist' ? 'settings.special.h.modeHintAssist' : hMode === 'fork' ? 'settings.special.h.modeHintFork' : 'settings.special.h.modeHintIndependent')}
+          </div>
         </div>
         <div className="field-row">
           {numField(t('settings.special.h.rounds'), h.everyRounds, (n) => saveHistorian({ everyRounds: n }), 1, 100)}

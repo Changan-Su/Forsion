@@ -25,6 +25,7 @@ import {
   type PageManifest,
 } from '@amadeus-shared/compiler'
 import { joinRel } from '@amadeus-shared/assets'
+import { cloudVaultNamesFrom } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
 import { parseDrawing, withSceneJson } from '@amadeus-shared/excalidraw/format'
 import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
@@ -271,14 +272,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     activePage: () => lastLoadedPage,
   })
 
-  // 「同步 Vault 分区」识别:桌面开启按条目云同步时会在云端 vault 根写 <名>/.forsion-vault 标记,
-  // web 据此把这些根级文件夹提升为侧边栏分区(与桌面云端侧的注册表分区对齐)。
+  // 「同步 Vault 分区」识别:桌面开启按条目云同步时会在云端 vault 根写标记文件(见 CLOUD_VAULT_MARKER),
+  // web/移动端据此把这些根级文件夹提升为侧边栏分区(与桌面云端侧的注册表分区对齐)。
+  // 标记是 .md → 落在 tree 的 pages 里;files 也扫一遍,兼容将来换扩展名。
   ;(window as unknown as { amadeusCloudVaults?: () => Promise<string[]> }).amadeusCloudVaults = async () => {
     const t = await fetchTree()
-    return t.files
-      .map((f) => /^([^/]+)\/\.forsion-vault$/.exec(f.path)?.[1])
-      .filter((x): x is string => !!x)
-      .sort()
+    return cloudVaultNamesFrom([...t.pages, ...t.files.map((f) => f.path)])
   }
 
   // ---- SSE ------------------------------------------------------------------
@@ -451,11 +450,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     const [tree] = await Promise.all([fetchTree(true), refreshAssetToken()])
     startEvents(v)
     const lp = readLastPage()
+    // 与 listPages/listFolders 同一把 visiblePath 尺子:首屏这份载荷直接进 pageStore.pages,
+    // 不滤的话 .trash/ 里的笔记与库标记会当成真笔记出现在树里(桌面主进程那侧本就滤)。
+    const pages = tree.pages.filter(visiblePath)
     return {
       root: `cloud://${v}`,
-      pages: tree.pages,
-      folders: tree.folders,
-      lastPage: lp && tree.pages.includes(lp) ? lp : undefined,
+      pages,
+      folders: tree.folders.filter(visiblePath),
+      lastPage: lp && pages.includes(lp) ? lp : undefined,
     }
   }
 
@@ -642,7 +644,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     // ---- 派生索引(服务端计算) ------------------------------------------------
     search: async (query) => {
       await ensureVault()
-      return http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q: query })
+      // 服务端按 path ILIKE 也算命中 → 点开头路径(.trash/、库标记)会漏进结果;与树同一把 visiblePath 尺子。
+      const hits = await http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q: query })
+      return hits.filter((h) => visiblePath(h.path))
     },
     backlinks: async (pagePath) => {
       await ensureVault()

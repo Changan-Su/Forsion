@@ -11,9 +11,10 @@ import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { privateHostReason } from './netGuard'
 import { execFile, spawn } from 'child_process'
 import { homedir } from 'os'
-import { BackendManager, bundledPythonBin, type BackendStatus } from './backendManager'
+import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
 import { startForsionMcp } from './mcpServer'
 import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
@@ -33,6 +34,7 @@ import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, 
 import { computerUseLiveView } from './computerUse'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
+import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { registerRemoteSync } from './remotesyncIpc'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { KNOWN_APPS } from '../shared/knownApps'
@@ -259,6 +261,20 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     const entry: EnvProbe = { tool: 'python3', found: true, version: `${v || 'Python'} · bundled`, installId: null, installCommand: null }
     if (idx >= 0) out[idx] = entry; else out.push(entry)
   }
+  // 内置 Node:系统没装时 agent 的 PATH 里仍有这份内置 node/npm(backendManager 追加在 PATH 末尾),
+  // 所以「未检测到」是谎报。系统装了就照旧显示系统那份 —— 内置只是兜底,不抢版本。
+  const nodeRt = resolveBundledNode()
+  if (nodeRt) {
+    /** 系统那份没探到才用内置顶上(系统已有 → 保留它的版本号,内置只是兜底)。 */
+    const useBundled = async (tool: string, bin: string): Promise<void> => {
+      const idx = out.findIndex((o) => o.tool === tool)
+      if (idx < 0 || out[idx].found || !existsSync(bin)) return
+      const v = await probeVersion(bin, ['--version'])
+      out[idx] = { tool, found: true, version: `${v || tool} · bundled`, installId: null, installCommand: null }
+    }
+    await useBundled('node', nodeRt.nodeBin)
+    await useBundled('npm', nodeRt.npmBin)
+  }
   // tangu CLI:App 启动时自装的终端命令(report-only,无安装按钮——ensureCliInstalled 每次启动自愈)。
   const shim = join(tanguHomeDir(), 'bin', process.platform === 'win32' ? 'tangu.cmd' : 'tangu')
   out.push({
@@ -282,6 +298,8 @@ interface TanguStoredConfig {
   backgroundModelId: string
   /** 辅助模型 · 图像识别(主模型无原生视觉时的看图兜底 + 非聊天识图;落 config.json models.vision)。 */
   visionModelId: string
+  /** 图像识别何时介入:auto(仅主模型无视觉)/ always(所有图先转文字)/ off。落 config.json models.visionMode。 */
+  visionMode: 'auto' | 'always' | 'off'
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -351,6 +369,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   modelId: '',
   backgroundModelId: '',
   visionModelId: '',
+  visionMode: 'auto',
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
@@ -382,10 +401,17 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   summaryOpenIn: 'tab',
 }
 
-/** 默认工作区目录(配置未填时兜底):新用户 ~/Forsion(dev→~/Forsion-Dev);
- *  仅当存在**真实** ~/Tangu 目录(老用户,迁移软链不算)才沿用 ~/Tangu。best-effort 创建。 */
+/** 默认工作区目录(配置未填时兜底):优先落在本地笔记库(Vault)内的 Sessions/ ——
+ *  会话工作区与笔记同库,agent 产物可直接被笔记引用(2026-08-03 起)。没有本地库时维持旧口径:
+ *  新用户 ~/Forsion(dev→~/Forsion-Dev),仅当存在**真实** ~/Tangu 目录(老用户,迁移软链不算)
+ *  才沿用 ~/Tangu。best-effort 创建。 */
 async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<string> {
   let dir = stored.defaultWorkspaceDir?.trim()
+  if (!dir) {
+    // 取 localVault 而非 lastVault:活动侧可能是云镜像,Sessions 落进去会整个被当笔记同步上云。
+    const vault = (await readAmadeusConfig()).localVault
+    if (vault && (await stat(vault).then((s) => s.isDirectory()).catch(() => false))) dir = join(vault, 'Sessions')
+  }
   if (!dir) {
     const legacy = join(app.getPath('home'), 'Tangu')
     const isRealLegacyDir = await lstat(legacy).then((s) => s.isDirectory() && !s.isSymbolicLink()).catch(() => false)
@@ -465,7 +491,11 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       ttsAutoSpeak: !!tts.autoSpeak,
     } : {}),
     ...(home.asr !== undefined ? { asrModelId: asr.modelId || '', asrBackend: asr.backend === 'local' ? 'local' : 'cloud' } : {}),
-    ...(home.models !== undefined ? { backgroundModelId: auxModels.background || '', visionModelId: auxModels.vision || '' } : {}),
+    ...(home.models !== undefined ? {
+      backgroundModelId: auxModels.background || '',
+      visionModelId: auxModels.vision || '',
+      visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
+    } : {}),
   }
   // 环境变量兜底:TANGU_CLOUD_URL(managed/登录默认)、TANGU_BACKEND_URL(external 外部地址)。
   if (!merged.cloudUrl) {
@@ -498,6 +528,7 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if ('asrBackend' in patch) { asr.backend = patch.asrBackend; aT = true }
   if ('backgroundModelId' in patch) { auxModels.background = patch.backgroundModelId; mT = true }
   if ('visionModelId' in patch) { auxModels.vision = patch.visionModelId; mT = true }
+  if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
   if ('browserEnabled' in patch) { browser.enabled = patch.browserEnabled; bT = true }
@@ -679,7 +710,16 @@ export function isTrustedSender(e: { sender: Electron.WebContents; senderFrame?:
 /** 拖入 OS 文件的默认导航会把 SPA 冲掉;SPA 自身从不整页导航到 file:,一律拦下
  *  (渲染层 fileDropGuard 已兜底,这里主进程各窗再加一道)。 */
 function hardenNav(wc: Electron.WebContents): void {
-  wc.on('will-navigate', (e, url) => { if (url.startsWith('file:')) e.preventDefault() })
+  wc.on('will-navigate', (e, url) => {
+    if (url.startsWith('file:')) e.preventDefault()
+    // 外站 http(s) 也一律拦下并改走外链路由。SPA 自己从不整页导航到别的源,能走到这儿的
+    // 只有「渲染出来的 <a href> 被点了」——markdown 里随便一条链接(聊天回复、远端拉来的
+    // 更新说明)就能把整个应用页面替换成第三方网页,而那个 BrowserWindow 上挂着 preload。
+    else if (/^https?:/i.test(url) && new URL(url).origin !== new URL(wc.getURL() || 'about:blank').origin) {
+      e.preventDefault()
+      if (!wc.isDestroyed()) wc.send('app:open-url', url)
+    }
+  })
 }
 
 // 内置浏览器 <webview> 的安全边界:guest 装的是**任意第三方网页**,不是我们的代码。
@@ -2157,6 +2197,52 @@ app.whenReady().then(async () => {
   ipcMain.handle('shell:openExternal', (e, url: string) => {
     if (!isTrustedSender(e)) return
     if (isHttpUrl(url)) void shell.openExternal(url)
+  })
+  // 外部日历订阅(.ics)必须在主进程拉:Google / Outlook / Apple 的订阅地址都不发 CORS 头,
+  // 渲染层直接 fetch 一律被浏览器拦下。`webcal://` 是历史别名,等价 https。
+  //
+  // ⚠️ 这是一条「渲染层给什么地址,主进程就去请求什么地址」的通道 —— 不设防就是现成的 SSRF:
+  // 订阅 `http://127.0.0.1:<端口>/…` 能探测本机服务,`169.254.169.254` 是云元数据端点。所以
+  //  · 逐跳自己跟重定向(redirect:'manual'),**每一跳都重新校验**(只校验首个地址等于没校验);
+  //  · 每跳都把主机名解析成 IP 再比对,挡住回环/私网/链路本地/保留段(以及解析到私网的公网域名);
+  //  · 流式累计字节,超限当场断开 —— 先 arrayBuffer() 再判大小的话,内存早就吃完了。
+  ipcMain.handle('calendar:fetchIcs', async (e, url: string) => {
+    if (!isTrustedSender(e)) return { ok: false, error: 'untrusted sender' }
+    let target = typeof url === 'string' ? url.trim().replace(/^webcal:\/\//i, 'https://') : ''
+    if (!isHttpUrl(target)) return { ok: false, error: '只支持 http(s):// 或 webcal:// 地址' }
+    const MAX = 8 * 1024 * 1024
+    try {
+      let res: Response | null = null
+      for (let hop = 0; hop < 5; hop++) {
+        const bad = await privateHostReason(new URL(target).hostname)
+        if (bad) return { ok: false, error: bad }
+        res = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(20_000) })
+        if (res.status < 300 || res.status >= 400) break
+        const loc = res.headers.get('location')
+        if (!loc) break
+        void res.body?.cancel()
+        target = new URL(loc, target).toString()
+        if (!isHttpUrl(target)) return { ok: false, error: '重定向到了不支持的地址' }
+        res = null
+      }
+      if (!res) return { ok: false, error: '重定向次数过多' }
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+      const chunks: Buffer[] = []
+      let n = 0
+      const reader = res.body?.getReader()
+      if (reader) {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          n += value.byteLength
+          if (n > MAX) { void reader.cancel(); return { ok: false, error: '日历文件过大(> 8MB)' } }
+          chunks.push(Buffer.from(value))
+        }
+      }
+      return { ok: true, text: Buffer.concat(chunks).toString('utf8') }
+    } catch (err: unknown) {
+      return { ok: false, error: (err as Error)?.message || String(err) }
+    }
   })
   // 跨窗撕拽:实时坐标 → 命中窗口显落点预览、其余清除。
   ipcMain.on('window:dragUpdate', (e, p: { screenX: number; screenY: number; view: ViewDesc }) => {

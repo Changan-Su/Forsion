@@ -30,6 +30,7 @@ import {
   validateCloudName,
   type ScopeSet,
 } from './sync/entryRegistry'
+import { cloudVaultMarkerPath, coversPath, rewritePathList } from '@amadeus-shared/entrySync'
 import { deleteShadowFile } from './sync/shadow'
 import type { CloudChange } from './sync/cloudClient'
 
@@ -53,7 +54,11 @@ ctx.registerCommand({
   id: 'hello-amadeus-greet',
   title: 'Hello：打个招呼',
   keywords: 'hello hi 你好 shili',
-  run: () => ctx.app.notify('你好，来自示例插件 👋'),
+  run: async () => {
+    ctx.app.notify('你好，来自示例插件 👋')
+    // 插件产出的文件写进自己的「工作文件夹」（设置页每个插件自动有一条，默认=插件名；整库可读写、越界被拒）
+    if (ctx.app.workFolder) await ctx.app.writeFile(ctx.app.workFolder() + '/你好.md', '# 你好\\n\\n由示例插件写入。\\n')
+  },
 })
 ctx.registerSlashItem({
   id: 'hello-amadeus-signature',
@@ -226,16 +231,16 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       const cfg = await readConfig()
       const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === vaultRoot)
       if (!v) return
-      const r = applyRemoteOpToEntries(
-        v.entries,
-        ev.op as 'move' | 'rename-folder' | 'move-folder' | 'delete' | 'delete-folder',
-        rel,
-        strip(ev.newPath),
-      )
-      if (!r.changed) return
+      const op = ev.op as 'move' | 'rename-folder' | 'move-folder' | 'delete' | 'delete-folder'
+      const newRel = strip(ev.newPath)
+      const r = applyRemoteOpToEntries(v.entries, op, rel, newRel)
+      // exclude 也要跟着改名,否则被排除的子页面一改名就悄悄回到同步范围。
+      const x = newRel ? rewritePathList(v.exclude ?? [], rel, newRel) : { changed: false, next: v.exclude ?? [] }
+      if (!r.changed && !x.changed) return
       v.entries = r.next
+      if (x.changed) v.exclude = x.next
       await writeConfig({ entrySync: cfg.entrySync })
-      rec.scope.current = buildScope(v.entries)
+      rec.scope.current = buildScope(v.entries, v.exclude ?? [])
       emitEntryChange()
     })()
   }
@@ -264,10 +269,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     for (const v of list) {
       const existing = entryEngines.get(v.vaultRoot)
       if (existing) {
-        existing.scope.current = buildScope(v.entries)
+        existing.scope.current = buildScope(v.entries, v.exclude ?? [])
         continue
       }
-      const scope = { current: buildScope(v.entries) }
+      const scope = { current: buildScope(v.entries, v.exclude ?? []) }
       const cloudName = v.cloudName
       const engine = createSyncEngine(entryEngineDeps(v.vaultRoot), {
         localRoot: v.vaultRoot,
@@ -286,16 +291,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       entryEngines.set(v.vaultRoot, { engine, scope, cloudName })
       engine.start()
     }
-    // 旧库标记补写:<云名>/.forsion-vault 是 web 端识别「同步 Vault 分区」的标记,标记机制
+    // 旧库标记补写:<云名>/.forsion-vault.md 是 web/移动端识别「同步 Vault 分区」的标记,标记机制
     // 之前开启的库没有。幂等(已存在=409 吞),每进程每云名只试一次;失败(离线)下次进程再试。
     for (const v of list) {
       if (entryMarkersEnsured.has(v.cloudName)) continue
-      entryMarkersEnsured.add(v.cloudName)
       void (async () => {
         try {
           const vid = await collabMain.ensureOwnVault()
-          await collabMain.call('PUT', `/vaults/${encodeURIComponent(vid)}/file`, { path: `${v.cloudName}/.forsion-vault`, content: '', baseSeq: 0 })
-        } catch { /* 已存在/离线:无害 */ }
+          await collabMain.call('PUT', `/vaults/${encodeURIComponent(vid)}/file`, { path: cloudVaultMarkerPath(v.cloudName), content: '', baseSeq: 0 })
+          entryMarkersEnsured.add(v.cloudName)
+        } catch (e) {
+          // 409=已存在,同样算就位;其余(离线/500)不落标记,下次 refresh 再试(别在发请求前就置位)。
+          if ((e as { status?: number })?.status === 409) entryMarkersEnsured.add(v.cloudName)
+        }
       })()
     }
   }
@@ -311,18 +319,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       return
     }
     const r = rewriteEntriesForMove(v.entries, from, to)
-    if (!r.changed) {
+    const x = rewritePathList(v.exclude ?? [], from, to)
+    if (!r.changed && !x.changed) {
       rec.engine.notifyLocalMove(from, to)
       return
     }
-    rec.scope.current = buildScope([...v.entries, ...r.next])
+    // 排除项取新旧并集:过渡期两端都不许过闸(否则改名瞬间被排除的子页面会被推上云)。
+    rec.scope.current = buildScope([...v.entries, ...r.next], [...(v.exclude ?? []), ...x.next])
     rec.engine.notifyLocalMove(from, to)
     v.entries = r.next
+    v.exclude = x.next
     await writeConfig({ entrySync: cfg.entrySync })
     emitEntryChange()
     setTimeout(() => {
       const cur = entryEngines.get(root)
-      if (cur === rec) cur.scope.current = buildScope(v.entries)
+      if (cur === rec) cur.scope.current = buildScope(v.entries, v.exclude ?? [])
     }, 10_000)
   }
   /** 按路径把应用内写事件路由到对应引擎(与我共享/<slug>/** → 该共享绑定;其余 → own)。 */
@@ -483,7 +494,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   })
   ipcMain.handle(
     SYNC_IPC.entryEnable,
-    async (_e, payload: { entries: Array<{ path: string; kind: 'page' | 'folder' | 'asset' }>; cloudName?: string; merge?: boolean }) => {
+    async (
+      _e,
+      payload: {
+        entries: Array<{ path: string; kind: 'page' | 'folder' | 'asset' }>
+        /** 弹窗里取消勾选的子页面(被条目覆盖但不要同步)。 */
+        exclude?: string[]
+        /** 弹窗里勾上的子页面:显式解除历史排除(不送的话上次剔除的会一直排除着)。 */
+        include?: string[]
+        cloudName?: string
+        merge?: boolean
+      },
+    ) => {
       const root = vault.getRoot()
       if (!root || onCloudSide()) return { error: '仅本地 vault 可开启云同步' }
       const cfg = await readConfig()
@@ -516,15 +538,27 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         void (async () => {
           try {
             const vid = await collabMain.ensureOwnVault()
-            await collabMain.call('PUT', `/vaults/${encodeURIComponent(vid)}/file`, { path: `${v!.cloudName}/.forsion-vault`, content: '', baseSeq: 0 })
+            await collabMain.call('PUT', `/vaults/${encodeURIComponent(vid)}/file`, { path: cloudVaultMarkerPath(v!.cloudName), content: '', baseSeq: 0 })
           } catch { /* ignore */ }
         })()
       }
+      const norm = (p: unknown): string => String(p ?? '').replace(/\\/g, '/').normalize('NFC')
+      const added = new Set<string>()
       for (const en of payload.entries ?? []) {
-        const p = String(en.path ?? '').replace(/\\/g, '/').normalize('NFC')
-        if (!p || v.entries.some((x) => x.path === p)) continue
+        const p = norm(en.path)
+        if (!p) continue
+        added.add(p)
+        if (v.entries.some((x) => x.path === p)) continue
         v.entries.push({ path: p, kind: en.kind === 'folder' || en.kind === 'asset' ? en.kind : 'page' })
       }
+      // 本次显式开启的路径 + 勾上的子页面退出排除名单;取消勾选的子页面进名单。
+      const excl = (payload.exclude ?? []).map(norm).filter(Boolean)
+      const inc = new Set([...added, ...(payload.include ?? []).map(norm).filter(Boolean)])
+      v.exclude = [...new Set([...(v.exclude ?? []).filter((p) => !inc.has(p)), ...excl])]
+      // 取消勾选的若本身还是显式条目,必须一并摘掉 —— coversPath 里精确条目压过 exclude,
+      // 留着它 = 用户取消了勾选却照传不误。
+      const exclSet = new Set(excl)
+      v.entries = v.entries.filter((e) => !exclSet.has(e.path))
       await writeConfig({ entrySync: list })
       await refreshEntryBindings()
       void entryEngines.get(root)?.engine.syncNow()
@@ -540,7 +574,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     const norm = String(p ?? '').replace(/\\/g, '/').normalize('NFC')
     const before = v.entries.length
     v.entries = v.entries.filter((x) => x.path !== norm)
-    if (v.entries.length === before) return { ok: false }
+    // 仍被上级条目覆盖(子页面/文件夹子树)→ 记进 exclude,否则在子页面上点「关闭云同步」毫无反应。
+    if (coversPath(v.entries, v.exclude, norm)) v.exclude = [...new Set([...(v.exclude ?? []), norm])]
+    else if (v.entries.length === before) return { ok: false }
     await writeConfig({ entrySync: cfg.entrySync })
     await refreshEntryBindings() // scope 缩小=dropShadow 干净解绑;云端/镜像副本保留(撤共享同款纪律)
     emitEntryChange()

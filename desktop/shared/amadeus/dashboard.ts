@@ -198,7 +198,10 @@ export function setDashInFm(fmExtra: string, layout: DashLayout): string | null 
 // 都降级成一段普通代码块(Obsidian 打开不会看到乱码、更不会毁档),而且块内容就是纯文本、
 // 天然进搜索。刻意只在 Dashboard 视图里活化 —— 普通笔记里它就是一段代码块,这是设计,不是遗漏。
 
-export const DASH_WIDGETS = ['clock', 'weather', 'webview'] as const
+// 'view' = 把宿主**任意已注册视图**(日历/待办/收件箱/活动日志/插件视图……)活化成一张卡片,
+// opts.type 记视图注册键、其余键即该视图的 params。活化逻辑在 AmadeusDashboardView(要宿主的
+// 视图注册表),不放进这层可移植的 amadeus 代码 —— 这里只管它的文本表示。
+export const DASH_WIDGETS = ['clock', 'weather', 'webview', 'view'] as const
 export type WidgetKind = (typeof DASH_WIDGETS)[number]
 export interface Widget {
   kind: WidgetKind

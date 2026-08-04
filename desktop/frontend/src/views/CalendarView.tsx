@@ -36,6 +36,7 @@ import { useCalendarConfig, colorForDb, isHidden, defaultDbPath } from '../amade
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { useAgentSchedules, useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
+import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useApp } from '../stores/appStore'
 import { EventCard, type Anchor } from './calendar/EventCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
@@ -121,6 +122,7 @@ export function CalendarView() {
   const members = useCalendarMembers()
   const agentDbs = useAgentCalDbs()
   const otherDbs = useOtherVaultCalDbs() // 非活动侧(Local↔Cloud 另一侧)只读日历,汇总两侧(任务1)
+  const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics):同为只读叠加源
   const cfg = useApp((s) => s.cfg)
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const byVault = useCalendarConfig((s) => s.byVault)
@@ -154,9 +156,9 @@ export function CalendarView() {
   const entries = useMemo<CalEntry[]>(
     () => [
       ...members.map((m) => ({ db: m.db, dateCol: m.dateCol })),
-      ...[...agentDbs, ...otherDbs].map((db) => ({ db, dateCol: firstDateCol(db)?.id })).filter((x): x is CalEntry => !!x.dateCol),
+      ...[...agentDbs, ...otherDbs, ...icsDbs].map((db) => ({ db, dateCol: firstDateCol(db)?.id })).filter((x): x is CalEntry => !!x.dateCol),
     ],
-    [members, agentDbs, otherDbs],
+    [members, agentDbs, otherDbs, icsDbs],
   )
   const events = useMemo(() => buildEvents(entries, vault, byVault), [entries, vault, byVault])
   // 无名事件不上网格,但仍留在 events 里:编辑卡清空名字时卡片会话不许闪关(选中走全量查找)。

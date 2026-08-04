@@ -24,3 +24,27 @@ export function autoWorkspaceMode(
   if (mainType === 'code-studio') return 'files' // Coding Space:侧栏恒为工作区文件树(点文件 → 主区代码)
   return loc === 'right' ? 'files' : spaceDefault
 }
+
+/**
+ * 路径落在哪个工作区里 —— 文件面板据此把「当前打开文件所在的工作区」置顶。
+ *
+ * 取**最长匹配**:工作区允许嵌套(同时加了 `~/code` 与 `~/code/forsion`),文件属于更具体的那个。
+ * 分隔符两边都归一成 `/` 并要求边界对齐 —— `/a/bcd` 不算落在 `/a/bc` 里。
+ * ponytail: 大小写敏感比较。Windows 上盘符/路径大小写不一致会认不出 → 退回不置顶,不是错行为;
+ * 真碰上了再按平台归一。
+ */
+export function workspaceKeyForPath(
+  workspaces: Array<{ key: string; path?: string | null }>,
+  filePath: string | null | undefined,
+): string | null {
+  if (!filePath) return null
+  const norm = (s: string): string => s.replace(/\\/g, '/').replace(/\/+$/, '')
+  const f = norm(filePath)
+  let best: { key: string; len: number } | null = null
+  for (const w of workspaces) {
+    const root = w.path ? norm(w.path) : ''
+    if (!root || (f !== root && !f.startsWith(`${root}/`))) continue
+    if (!best || root.length > best.len) best = { key: w.key, len: root.length }
+  }
+  return best?.key ?? null
+}

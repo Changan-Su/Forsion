@@ -120,7 +120,7 @@ async function main() {
   {
     const page = await open(browser, true)
     const n = await page.locator('.dash-card').count()
-    check('D1 三张卡片都渲染出来了', n === 3, `cards=${n}`)
+    check('D1 四张卡片都渲染出来了', n === 4, `cards=${n}`)
     const s = await steps(page)
     const [c1, c2, c3] = [await cardRect(page, 0), await cardRect(page, 1), await cardRect(page, 2)]
     const near = (a, b, tol = 2) => Math.abs(a - b) <= tol
@@ -156,7 +156,7 @@ async function main() {
   // 解锁态:D3 反面 + D4/D5/D6
   {
     const page = await open(browser, false)
-    check('D3 解锁态出现拖动条/把手', (await page.locator('.dash-card-bar').count()) === 3 && (await page.locator('.dash-card-resize').count()) === 3)
+    check('D3 解锁态出现拖动条/把手', (await page.locator('.dash-card-bar').count()) === 4 && (await page.locator('.dash-card-resize').count()) === 4)
     // 反面:解锁态菜单必须还在(否则「锁定态没菜单」可能只是把功能整个删了)
     check('D3 解锁态块菜单仍在(别一刀切死)', await ctxMenuOpens(page))
     const editable2 = await page.evaluate(() => document.querySelector('.dash-card .ProseMirror')?.getAttribute('contenteditable'))
@@ -199,6 +199,22 @@ async function main() {
       const r2 = rectOf(await fm(page), 2)
       check('D6 缩放改的是 w/h', !!r2 && r2.w === 7 && r2.h === 6, JSON.stringify(r2))
       check('D6 缩放不动 x/y', !!r2 && r2.x === 8 && r2.y === 0, JSON.stringify(r2))
+    }
+
+    // D7 view 卡片:任意已注册视图能活在格子里,且视图里的 setParams 会写回卡片源码。
+    // 单测测不到这条链 —— 它跨了「合成 Leaf → 视图工厂 → 回写块内容」三层真运行时。
+    {
+      const probe = page.locator('.dash-card [data-tag="dashv"]')
+      check('D7 view 卡片渲染出注册视图', (await probe.count()) === 1)
+      const p0 = await probe.getAttribute('data-params')
+      check('D7 视图拿到卡片源码里的 params(不含 type)', p0 === '{"n":"1"}', p0)
+      // 视图自己改 params → 必须落进块内容(重启还原就靠它);且仍是一段合法的 ```view 围栏。
+      await page.locator('.dash-card [data-act="bump"]').click()
+      await page.waitForTimeout(250)
+      const src = await page.evaluate(() => window.__pageStore.getState().blocks['4'].content)
+      check('D7 setParams 写回卡片源码', src === '```view\ntype: dashv\nn: 2\n```', JSON.stringify(src))
+      const p1 = await probe.getAttribute('data-params')
+      check('D7 写回后视图看到的是新值', p1 === '{"n":"2"}', p1)
     }
     await page.close()
   }

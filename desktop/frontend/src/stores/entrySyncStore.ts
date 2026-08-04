@@ -1,6 +1,7 @@
 /** 按条目云同步的渲染端状态:注册表镜像 + 每绑定最新引擎状态(status 事件按 binding 键分存)。
  *  数据源 = window.amadeusSync.entrySync*(仅桌面;web/mobile 缺位时一切 UI 优雅隐藏)。 */
 import { create } from 'zustand'
+import { coversPath, nfcRel } from '@amadeus-shared/entrySync'
 import type { AmadeusEntrySyncVault, AmadeusSyncStatus } from '../types'
 
 interface EntrySyncStore {
@@ -41,10 +42,22 @@ export function ensureEntrySyncSubscribed(): void {
   })
 }
 
-/** path 是否已是当前 vault 的显式同步条目(精确匹配;子树覆盖不算)。 */
+/** path 是否在当前 vault 的同步范围内 —— 显式条目**或**被覆盖(文件夹子树 / 页面 .fd 子页面),
+ *  减去 exclude。判据与主进程引擎 scope 同源(@amadeus-shared/entrySync),否则子页面明明在同步、
+ *  UI 却显示「未同步」。 */
 export function isSyncedEntry(vaultRoot: string | null, path: string): boolean {
   if (!vaultRoot) return false
   const rec = useEntrySync.getState().vaults.find((v) => v.vaultRoot === vaultRoot)
-  const p = path.replace(/\\/g, '/').normalize('NFC')
-  return !!rec?.entries.some((e) => e.path === p)
+  return !!rec && coversPath(rec.entries, rec.exclude, path)
+}
+
+/** path 是否落在某条排除项的子树里(开启弹窗据此把上次剔除的子页面显示成未勾选,而不是一律全勾)。 */
+export function isExcludedPath(vaultRoot: string | null, path: string): boolean {
+  const rec = vaultRoot ? useEntrySync.getState().vaults.find((v) => v.vaultRoot === vaultRoot) : null
+  if (!rec?.exclude?.length) return false
+  const p = nfcRel(path)
+  return rec.exclude.some((exRaw) => {
+    const x = nfcRel(exRaw)
+    return !!x && (p === x || p.startsWith(`${x}/`) || p.startsWith(`${x.replace(/\.md$/i, '')}.fd/`))
+  })
 }

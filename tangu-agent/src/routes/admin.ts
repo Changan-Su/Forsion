@@ -7,6 +7,7 @@
  *   POST /sessions/:sid/abort    终止该 session 全部在飞 run
  *   POST /runs/:id/abort         终止单个 run
  *   GET  /stats                  概览统计（按 session）
+ *   GET  /client-stats           客户端面统计（runs 按 input.client 分组:desktop/web/mobile×版本）
  *   GET  /resources              活跃沙箱容器真实 CPU/内存（docker stats 快照，尽力而为）
  *   GET  /runs                   扁平 run 列表（兼容/调试）
  */
@@ -185,6 +186,33 @@ router.get('/stats', async (_req, res) => {
       activeRuns: Number(r.active_runs) || 0,
       activeTokens: Number(r.active_tokens) || 0,
       activeSandboxes: Number(r.active_sandboxes) || 0,
+    });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'failed' });
+  }
+});
+
+// ── 客户端面统计:runs 按 (app_id × input.client) 分组。client='desktop/2.7.4' 等,客户端自报、
+// runs.ts 白名单校验;与 app_id 正交(身份层恒 'tangu',**版本/端绝不进 app_id** —— 那会让
+// profile 解析/模型配置/记忆分区/workspace 路径全按版本碎裂)。`id` 给拼好的展示串
+// `tangu/desktop/2.7.4` —— 拼接放展示层,身份层各存各的。
+// '(untagged)' = server 自起的 run(automation/channels/special)或未升级的旧客户端/其它 app。
+router.get('/client-stats', async (_req, res) => {
+  try {
+    const expr = deps().host.getDbType() === 'sqlite' ? `json_extract(input, '$.client')` : `input->>'client'`;
+    const rows = await query<any[]>(
+      `SELECT app_id, COALESCE(${expr}, '(untagged)') AS client,
+              COUNT(*) AS runs, COUNT(DISTINCT user_id) AS users,
+              COALESCE(SUM(tokens_total),0) AS tokens, MAX(created_at) AS last_at
+       FROM agent_runs GROUP BY 1, 2 ORDER BY runs DESC`,
+    );
+    res.json({
+      clients: rows.map((r) => ({
+        id: `${r.app_id}/${r.client}`,
+        appId: String(r.app_id), client: String(r.client),
+        runs: Number(r.runs) || 0, users: Number(r.users) || 0,
+        tokens: Number(r.tokens) || 0, lastAt: r.last_at ?? null,
+      })),
     });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'failed' });

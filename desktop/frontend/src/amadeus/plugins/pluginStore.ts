@@ -80,9 +80,15 @@ interface PluginState {
   scaffoldSample(): Promise<void>
 }
 
+/** 文件夹名消毒:插件显示名可能含路径非法字符;清完为空则退回 fallback(插件 id,天然合法)。 */
+function sanitizeFolderName(name: string, fallback: string): string {
+  const s = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim()
+  return s || fallback
+}
+
 /** 每个插件一份 app API。块表面是**可吊销**的(见 blockSurface.tsx 的信任边界说明):
  *  teardown 时调 revoke,插件开的订阅/挂的 React root 一并收掉,之后它在飞的异步任务也改不动用户文件。 */
-function makeAppApi(pluginId: string): { api: PluginAppApi; revokeSurface: () => void } {
+function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
   const surface = createBlockSurface(pluginId)
   const api: PluginAppApi = {
     getActivePage: () => usePageStore.getState().activePage,
@@ -100,6 +106,14 @@ function makeAppApi(pluginId: string): { api: PluginAppApi; revokeSurface: () =>
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
     writeFile: (p, text) => amadeus.writeTextFile(p, text),
+    // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ 插件显示名。
+    workFolder: () => {
+      let v = ''
+      try { v = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* ignore */ }
+      v = v.trim().replace(/^\/+|\/+$/g, '')
+      const bad = !v || v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
+      return bad ? sanitizeFolderName(getName(), pluginId) : v
+    },
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
     openFile: (p) => { void import('../../amadeusNav').then((m) => m.openFile(p)) },
   }
@@ -172,7 +186,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
   const revokers: Record<string, (() => void) | undefined> = {}
   const makeContext = (pluginId: string): PluginContext => {
     revokers[pluginId]?.() // 防守:没经 teardown 就重建 context(setup 抛错后重试)也不留旧订阅
-    const { api: appApi, revokeSurface } = makeAppApi(pluginId)
+    const { api: appApi, revokeSurface } = makeAppApi(pluginId, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId)
     revokers[pluginId] = revokeSurface
     return {
     app: appApi,
@@ -231,7 +245,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`),
-    registerSetting: (def) => set((s) => ({ settings: [...s.settings, { pluginId, item: def }] })),
+    // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
+    registerSetting: (def) =>
+      set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
     registerPropertyType: (def) => {
       registerPropType(def)
       set((s) => ({ propertyTypes: [...s.propertyTypes, { pluginId, item: def }] }))
@@ -321,6 +337,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (!plugin) return
       if (plugin.blocked) return // 门禁挡下的插件(apiVersion/minAppVersion 不符)任何路径都不得激活
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
+      // 标准设置行:每个插件自动获得「工作文件夹」(ctx.app.workFolder() 的数据源;
+      // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。teardown/失败清理按 pluginId 一并收走。
+      set((s) => ({
+        settings: [...s.settings, { pluginId: id, item: {
+          key: 'workFolder', label: '工作文件夹', type: 'text' as const,
+          default: sanitizeFolderName(plugin.name, id),
+          description: '本插件在笔记库内读写文件的文件夹(相对库根;留空恢复默认=插件名)',
+        } }],
+      }))
       let dispose: (() => void) | undefined
       try {
         const r = plugin.setup(makeContext(id))

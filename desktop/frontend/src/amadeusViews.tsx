@@ -42,7 +42,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
 import { CloudVaultPanel } from './components/CloudVaultPanel'
@@ -574,6 +574,7 @@ export function AmadeusPagesView() {
   const activePage = usePageStore((s) => s.pendingPage ?? s.activePage)
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
+  const vaultLoading = usePageStore((s) => s.vaultLoading)
   // 云端笔记库入口:web(无 amadeusSync)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
   const cloudLib = !window.amadeusSync || vaultSide === 'cloud'
 
@@ -1023,7 +1024,8 @@ export function AmadeusPagesView() {
                 {/* 「今天」已移除;「Vault」入口移到底部 footer(回收站下方)。 */}
               </div>
 
-              {!vaultRoot && <div className="t2s-hint">打开一个 Vault 文件夹开始。</div>}
+              {/* 恢复 Vault 在途(云端首开 GET /vaults+/tree)→ 列表骨架;真没库才提示「打开 Vault」。 */}
+              {!vaultRoot && (vaultLoading ? <Skeleton variant="list" /> : <div className="t2s-hint">打开一个 Vault 文件夹开始。</div>)}
               <PinnedSection row={row} dragPath={dragPath} />
               {vaultSide === 'local' && <CloudSyncSection dragPath={dragPath} />}
               <SharedWithMeSection />
@@ -1674,6 +1676,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const myPs = (): ReturnType<typeof myStore.getState> => myStore.getState()
   const activePage = usePageStore((s) => s.activePage)
   const vaultRoot = usePageStore((s) => s.vaultRoot) // 无笔记时的空态引导据此二态(未开 Vault / 已开待新建)
+  const pendingPage = usePageStore((s) => s.pendingPage)
+  const loadError = usePageStore((s) => s.error)
   // 插件文件类型也占用全局 activePage(单活页模型)→ 认领时须能认出「这不是笔记」,见下面的 useEffect。
   const pluginFileTypes = usePluginStore((s) => s.fileTypes)
   // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state。
@@ -1725,6 +1729,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const isActiveLeaf = useWorkspace((s) => s.mainTabs.find((t) => t.id === leaf.id)?.active ?? false)
   const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
   const prevActiveRef = useRef(false)
+  // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
+  // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
+  const loadingNote = (!!pendingPage && pendingPage !== activePage) || (!!notePath && !loadError && notePath !== activePage)
 
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。
   useEffect(() => { if (notePath) leaf.setTitle(baseName(notePath)) }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1897,7 +1904,18 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {shareCard && activePage && (
         <ShareCard path={activePage} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
       )}
-      {!activePage ? (
+      {loadingNote ? (
+        <Skeleton variant="document" />
+      ) : !activePage ? (
+        notePath && loadError ? (
+          <div className="amx-welcome">
+            <div className="amx-welcome-title">📓 笔记加载失败</div>
+            <p className="amx-welcome-sub">{loadError}</p>
+            <div className="amx-welcome-actions">
+              <button className="amx-welcome-btn" onClick={() => { if (notePath) void myPs().loadPage(notePath) }}>重试</button>
+            </div>
+          </div>
+        ) : (
         <div className="amx-welcome">
           <div className="amx-welcome-title">📓 Amadeus 笔记</div>
           <p className="amx-welcome-sub">
@@ -1918,6 +1936,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
             <li><Code2 size={13} /> 顶栏切「可视 / 源码」,右上角 ⋮ 可导出 PDF</li>
           </ul>
         </div>
+        )
       ) : mode === 'source' ? (
         <SourceEditor key={activePage} />
       ) : (

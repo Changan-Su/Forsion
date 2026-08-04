@@ -9,6 +9,14 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
+/**
+ * 「辅助模型 · 图像识别」何时介入:
+ *   auto   —— 只在主模型被判定为无原生视觉时(黑名单制,见引擎 modelCapabilities)
+ *   always —— 所有图先转文字再入上下文(黑名单猜不准时的确定性出路)
+ *   off    —— 从不转写,图原样发给主模型
+ */
+export type VisionMode = 'auto' | 'always' | 'off'
+
 export interface TanguDesktopConfig {
   backendUrl: string
   token: string
@@ -19,6 +27,8 @@ export interface TanguDesktopConfig {
   asrModelId?: string
   /** 辅助模型 · 图像识别 id(缺省=跟随 config.json models.vision → app 级槽)。 */
   visionModelId?: string
+  /** 图像识别何时介入(落 config.json models.visionMode;缺省 auto)。 */
+  visionMode?: VisionMode
 }
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
@@ -78,6 +88,8 @@ export interface SubChat {
 export interface SessionRecord {
   id: string
   title: string | null
+  /** Historian 会话摘要(人读:列表悬停预览 / [[ 引用候选副标题)。 */
+  summary?: string | null
   model_id: string | null
   archived: boolean
   emoji: string | null
@@ -96,8 +108,9 @@ export interface HistorianConfig {
   /** 每 x 轮触发一次维护(标题 + 日志/记忆同一节奏)。 */
   everyRounds: number
   firstRoundTrigger: boolean
-  /** independent=自己判断并写日志/记忆(默认);assist=分支出后台讨论,由主 Agent 自己定夺并写入(首轮始终 independent)。 */
-  mode: 'independent' | 'assist'
+  /** independent=自己判断并写日志/记忆(默认);assist=分支出后台讨论,由主 Agent 自己定夺并写入(首轮始终 independent);
+   *  fork=尾部分叉判官:用会话模型在全量上下文快照上一次补全出判断(缓存对齐),失败自动回落 independent。 */
+  mode: 'independent' | 'assist' | 'fork'
   prompt: string
 }
 export interface MuseConfig {
@@ -323,6 +336,8 @@ export interface AgentConfig {
   imageModelId?: string
   /** 辅助模型 · 图像识别 id(主模型无原生视觉时用它把图转文字;来自全局设置 cfg.visionModelId)。 */
   visionModelId?: string
+  /** 图像识别何时介入(来自 cfg.visionMode;云端会话的引擎读不到本机 config.json,只能随 run 带)。 */
+  visionMode?: VisionMode
   /** 激活的 Normal Agent slug(后端 agentLoop 解析注入人格/模型/工具)。 */
   agentSlug?: string
   /** 外部 agent 引擎 id(如 'claude-code'):设了就把整个 turn 委托给该 ACP 引擎而非 Tangu 自有 loop。host-only。 */
@@ -831,6 +846,8 @@ declare global {
       // ── 内置浏览器 / 内置终端(builtins/)──
       /** 用系统浏览器打开(主进程只放 http(s))。 */
       openExternal?(url: string): Promise<void>
+      /** 拉外部日历订阅(.ics);走主进程绕开 CORS(订阅地址一律不发 CORS 头)。 */
+      fetchIcs?(url: string): Promise<{ ok: boolean; text?: string; error?: string }>
       /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。返回取消订阅。 */
       onOpenUrl?(cb: (url: string) => void): () => void
       /** 内置终端 PTY;spawn 失败(原生模块未就绪)返回 { error } 而非抛。 */
@@ -965,12 +982,16 @@ declare global {
       entrySyncGet?(): Promise<AmadeusEntrySyncState>
       entrySyncEnable?(payload: {
         entries: Array<{ path: string; kind: 'page' | 'folder' | 'asset' }>
+        /** 取消勾选的子页面(被条目覆盖但不同步)。 */
+        exclude?: string[]
+        /** 勾上的子页面:显式解除历史排除。 */
+        include?: string[]
         cloudName?: string
         merge?: boolean
       }): Promise<{ ok?: boolean; cloudName?: string; conflict?: string; error?: string }>
       entrySyncDisable?(path: string): Promise<{ ok: boolean }>
-      /** 递归关联闭包(开启弹窗数据源):种子范围外的关联笔记+附件。 */
-      entrySyncClosure?(rootRel: string, kind: 'page' | 'folder'): Promise<{ pages: string[]; files: string[] }>
+      /** 递归关联闭包(开启弹窗数据源):种子范围外的关联笔记+附件,外加种子页的子页面。 */
+      entrySyncClosure?(rootRel: string, kind: 'page' | 'folder'): Promise<{ pages: string[]; files: string[]; subPages: string[] }>
       onEntrySyncChange?(cb: () => void): () => void
       /** 非活动侧(Local↔Cloud 另一侧)的 .db 只读快照,供 Calendar 汇总两侧日历。null = 无另一侧。 */
       otherSideCalDbs?(): Promise<AmadeusOtherSideDbs | null>
@@ -1057,6 +1078,8 @@ export interface AmadeusEntrySyncVault {
   vaultRoot: string
   cloudName: string
   entries: Array<{ path: string; kind: 'page' | 'folder' | 'asset' }>
+  /** 被条目覆盖但用户剔除的路径(子树语义)。 */
+  exclude?: string[]
 }
 
 export interface AmadeusEntrySyncState {

@@ -12,7 +12,7 @@ import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/in
 import { useWorkspace } from '@lcl/engine'
 import '../chat2/sidebar2.css'
 import './inbox.css'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, Skeleton } from '@lcl/engine'
 
 /** 相对时间(仓内无现成 helper);>7 天转日期。 */
 function timeAgo(iso: string | null, t: (k: string, v?: Record<string, string | number>) => string): string {
@@ -44,7 +44,7 @@ const FILTERS = ['all', 'unread', 'archived'] as const
 
 export function InboxListView() {
   const { t } = useI18n()
-  const { messages, filter, selectedId, unreadCount, setFilter, select, markRead, markArchived, readAll, remove, pull, refreshList, refreshUnread } = useInbox()
+  const { messages, loading, filter, selectedId, unreadCount, setFilter, select, markRead, markArchived, readAll, remove, pull, refreshList, refreshUnread } = useInbox()
   const [query, setQuery] = useState('')
   const [pulling, setPulling] = useState(false)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
@@ -113,7 +113,11 @@ export function InboxListView() {
 
       <div className="t2s-scroll">
         {filtered.length === 0 ? (
-          <div className="ibx-empty"><Inbox size={20} />{t(emptyKey)}</div>
+          loading && messages.length === 0 ? (
+            <Skeleton variant="list" />
+          ) : (
+            <div className="ibx-empty"><Inbox size={20} />{t(emptyKey)}</div>
+          )
         ) : (
           filtered.map((m) => {
             const unread = !m.read_at

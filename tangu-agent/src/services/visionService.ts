@@ -74,6 +74,32 @@ export async function resolveVisionModelId(explicit?: string, appId?: string): P
   return (await loadSlots(appId)).visionId;
 }
 
+export type VisionMode = 'auto' | 'always' | 'off';
+
+/**
+ * 「图像识别何时介入」:run 显式 > 本地 config.json `models.visionMode` > auto。
+ *
+ * 存在的理由:auto 靠 modelSupportsVision 那份**黑名单**猜主模型有没有视觉,名单外的纯文本模型
+ * (本地 Ollama、各家 -instruct)一律被当成能看图 → 兜底不触发 → 图原样发过去,模型要么报错
+ * 要么装作看见了瞎编。黑名单永远追不上模型发布速度,所以给用户一个「总是转写」的确定性出路
+ * (2026-08-03)。
+ */
+export function resolveVisionMode(explicit?: string): VisionMode {
+  const pick = (v: unknown): VisionMode | null =>
+    v === 'always' || v === 'off' || v === 'auto' ? v : null;
+  return pick((explicit || '').trim())
+    ?? pick((getRawSection('models') as any)?.visionMode)
+    ?? 'auto';
+}
+
+/** 这批图要不要先转成文字。auto 档才去问主模型能力(那次查询有 60s 缓存 + 可能的云请求)。 */
+export async function shouldDescribeImages(modelId: string, appId?: string, explicitMode?: string): Promise<boolean> {
+  const mode = resolveVisionMode(explicitMode);
+  if (mode === 'off') return false;
+  if (mode === 'always') return true;
+  return !(await mainModelSupportsVision(modelId, appId));
+}
+
 /**
  * 主模型能不能直接看图。判定源(优先级从高到低):
  *   1. admin 在托管模型上标注的 supportsVision=false

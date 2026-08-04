@@ -1,12 +1,14 @@
 /** 独立 PDF 视图:树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 在应用内打开可批注阅读器。
  *  多实例(params.pdfPath 认领文件、随布局持久化);批注写进 PDF 本身,见 PdfAnnotator。
  *  PdfAnnotator 懒加载 —— pdf.js viewer 较重,只在真的打开 PDF 时才拉那块 chunk(不进主包)。 */
-import { Suspense, lazy, useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
+import { Skeleton } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
+import { lazyRetry } from '../lazyRetry'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 
-const PdfAnnotator = lazy(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
+const PdfAnnotator = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
 const pdfBase = (p: string): string => p.split(/[\\/]/).pop() || p
 
@@ -27,7 +29,7 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
     // 内联 height 兜底:懒加载 fallback 阶段 pdfAnnotator.css 尚未到,先保证外壳撑满面板。
     <div className="am-app tangu-lovable amx-pane amx-pdfview" data-mode={mode} data-flat={flat ? '1' : '0'} style={{ height: '100%' }}>
       {vaultReady ? (
-        <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-muted, #888)' }}>加载中…</div>}>
+        <Suspense fallback={<Skeleton variant="document" />}>
           <PdfAnnotator pdfPath={pdfPath} initialPage={page} />
         </Suspense>
       ) : (

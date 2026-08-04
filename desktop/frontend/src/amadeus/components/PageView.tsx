@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useState } from 'react'
-import { create } from 'zustand'
 import {
   DndContext,
   DragOverlay,
@@ -21,6 +20,7 @@ import { BlockSelectionKeys, useBlockSelection } from '../store/blockSelection'
 import { edgeBlock } from '../lib/blockEdges'
 import { takeModeCursor } from '../lib/modeCursor'
 import { activePageScope, pageStoreFor, usePageScope, useScopedPageStore, type PageStoreApi } from '../store/pageStore'
+import { foldedSet, headingLevel, useHeadingFold } from '../store/headingFoldStore'
 import { Row } from './Row'
 import { BacklinksPanel } from './BacklinksPanel'
 
@@ -57,24 +57,6 @@ function FindBar() {
       <button onClick={() => useFindStore.getState().close()} title="关闭(Esc)" aria-label="close find">✕</button>
     </div>
   )
-}
-
-/** 标题小节折叠(Obsidian 式):key = 标题块 id(页内唯一),会话态不落盘;
- *  跨页残留无害(别页的 id 撞不上)。折叠 = 隐藏其后连续的行,直到下一个同级或更高级标题行。 */
-const useHeadFolds = create<{ folds: Record<string, true>; toggle(id: string): void }>((set) => ({
-  folds: {},
-  toggle: (id) =>
-    set((s) => {
-      const folds = { ...s.folds }
-      if (folds[id]) delete folds[id]
-      else folds[id] = true
-      return { folds }
-    }),
-}))
-
-const headingLevel = (content: string | undefined): number => {
-  const m = content ? /^(#{1,6})\s/.exec(content) : null
-  return m ? m[1].length : 0
 }
 
 function statusLabel(s: Status): string {
@@ -160,7 +142,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
-  const folds = useHeadFolds((s) => s.folds)
+  const foldsByPage = useHeadingFold((s) => s.byPage)
   const findOpen = useFindStore((s) => s.open)
 
   // 兜底:焦点不在块编辑器里(块选中态/空白处)时的 Cmd+Z / Cmd+Shift+Z / Cmd+Y → 文档级撤销。
@@ -211,11 +193,12 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
     }
     return c
   }
+  const folds = foldedSet(foldsByPage, activePage ?? '')
   const hiddenRows = new Set<number>()
   if (!activeId) {
     for (let i = 0; i < rowMeta.length; i++) {
       const m = rowMeta[i]
-      if (!m.level || !m.firstId || !folds[m.firstId]) continue
+      if (!m.level || !m.firstId || !folds.has(m.firstId)) continue
       for (let j = i + 1; j <= i + sectionSpan(i); j++) hiddenRows.add(j)
     }
   }
@@ -351,24 +334,29 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
             if (hiddenRows.has(i)) return null
             const meta = rowMeta[i]
             const span = meta.level > 0 ? sectionSpan(i) : 0
-            const folded = !!(meta.firstId && folds[meta.firstId])
+            const folded = !!(meta.firstId && folds.has(meta.firstId))
             return (
               <Fragment key={row.id}>
-                {span > 0 && meta.firstId ? (
-                  <div className="amx-hfold-wrap">
+                {/* ⚠️ 外壳 <div.amx-hfold-wrap> **必须恒定存在**,只在里面按条件放折叠箭头。
+                    别改回「有小节才包一层 div、没有就裸渲染 Row」的三元:那样一行从标题变成正文时
+                    (行首退格把 `# x` 降级),这个位置的元素类型就变了,React 会把整棵子树卸载重建
+                    —— 连同里面的 ProseMirror 编辑器,焦点当场掉回 body,于是「块首退格」在标题块上
+                    只生效一次、再按毫无反应、永远并不进上一块(用户实报;取证栈:commitDeletionEffects
+                    → removeChild(DIV.amx-hfold-wrap) → focusout)。壳只有 position:relative,常驻无副作用。
+                    仪器:npm run check:bsfocus */}
+                <div className="amx-hfold-wrap">
+                  {span > 0 && meta.firstId && (
                     <button
                       className={`amx-hfold${folded ? ' folded' : ''}`}
                       title={folded ? `展开小节(${span} 行)` : '折叠小节'}
-                      onClick={() => useHeadFolds.getState().toggle(meta.firstId!)}
+                      onClick={() => useHeadingFold.getState().toggle(activePage ?? '', meta.firstId!)}
                     >
                       ›
                     </button>
-                    {folded && <span className="amx-hfold-count">{span}</span>}
-                    <Row row={row} />
-                  </div>
-                ) : (
+                  )}
+                  {folded && span > 0 && <span className="amx-hfold-count">{span}</span>}
                   <Row row={row} />
-                )}
+                </div>
                 <RowGap index={i} />
               </Fragment>
             )

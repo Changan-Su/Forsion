@@ -62,6 +62,27 @@ export function bundledPythonBin(): string | null {
   return resolveBundledPython()?.pythonBin ?? null
 }
 
+/** 内置 Node 目录:打包=resources/node;dev=desktop/build/node(手动 `npm run fetch-node` 后才有)。 */
+function bundledNodeDir(): string | null {
+  const dir = app.isPackaged
+    ? join(process.resourcesPath, 'node')
+    : join(__dirname, '..', '..', 'build', 'node')
+  return existsSync(dir) ? dir : null
+}
+
+/** 内置 Node 的 PATH 目录 + node/npm 绝对路径;缺失内置 → null(回落系统 Node)。
+ *  Windows 官方 zip 是平铺(node.exe / npm.cmd 都在根),类 Unix 在 bin/。 */
+export function resolveBundledNode(): { pathDirs: string[]; nodeBin: string; npmBin: string } | null {
+  const dir = bundledNodeDir()
+  if (!dir) return null
+  if (process.platform === 'win32') {
+    const bin = join(dir, 'node.exe')
+    return existsSync(bin) ? { pathDirs: [dir], nodeBin: bin, npmBin: join(dir, 'npm.cmd') } : null
+  }
+  const bin = join(dir, 'bin', 'node')
+  return existsSync(bin) ? { pathDirs: [join(dir, 'bin')], nodeBin: bin, npmBin: join(dir, 'bin', 'npm') } : null
+}
+
 export interface BackendStatus {
   state: BackendState
   url: string | null
@@ -229,6 +250,16 @@ export class BackendManager {
           env[pathKey] = [...py.pathDirs, env[pathKey] || ''].filter(Boolean).join(sep)
           env.TANGU_PYTHON_BIN = py.pythonBin
         }
+      }
+
+      // 内置 Node/npm:**追加**到 PATH 末尾而非前置 —— 与 Python 相反是刻意的。目的只是「用户没装
+      // 也能用」,不是接管:用户自己的 nvm/volta/系统 node 常绑着项目要求的版本与全局包,抢在前面
+      // 会让 run_bash 里的 node 悄悄换版本。系统有 node 就用系统的,没有才落到内置这份。
+      const nodeRt = resolveBundledNode()
+      if (nodeRt) {
+        const sep = process.platform === 'win32' ? ';' : ':'
+        const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH'
+        env[pathKey] = [env[pathKey] || '', ...nodeRt.pathDirs].filter(Boolean).join(sep)
       }
 
       // 中国大陆镜像(可逆:仅注入子进程 env,不改用户全局 dotfile;关掉即恢复直连)。pip/npm/git 子进程继承之。

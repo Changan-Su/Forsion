@@ -152,6 +152,14 @@ const QWEN_BUDGETS: LevelMap = {
   off: false, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 38912,
 };
 
+/**
+ * DeepSeek V4:`thinking:{type}` 开关 + `reasoning_effort`,官方只认 low/high/max
+ * (v4-flash 三档齐全;v4-pro 目前把 low 当 high、xhigh 当 max —— 发 low 安全,不会 400)。
+ */
+const DEEPSEEK_EFFORT: LevelMap = {
+  off: false, minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: 'max', max: 'max',
+};
+
 /** 全档不可调(模型自带思考)。 */
 const FIXED: LevelMap = {
   off: null, minimal: true, low: true, medium: true, high: true, xhigh: true, max: true,
@@ -279,6 +287,18 @@ const RULES: Rule[] = [
   },
 
   // ── 中国厂商直连 ───────────────────────────────────────────────────────
+  {
+    // DeepSeek V4(deepseek-v4-flash / deepseek-v4-pro):思考默认开,可用 thinking:{type} 关,
+    // 深度用 reasoning_effort 调 —— 不再是「reasoner 系不可调 / chat 系只有开关」的老形态。
+    // 老 id deepseek-chat / deepseek-reasoner 仍指向 v4-flash 的非思考 / 思考模式(官方标注下线),
+    // 但它们**用模型名选模式**,故仍按下面两条老规则走,不套 effort。
+    // 锚定 `deepseek-v4` 前缀而非裸 /v4/:后者在本 host 上会误吞 `myv4legacy` 这类自定义 id
+    // (2026-08-03 Codex 评审)。留开放后缀是有意的——官方带日期/别名的 v4-* 变体应继续命中本规则。
+    id: 'deepseek-v4',
+    host: /(^|\.)deepseek\.com$/,
+    model: /^deepseek-v4/i,
+    cap: { format: 'deepseek', levels: DEEPSEEK_EFFORT, maxTokensField: 'max_tokens' },
+  },
   {
     id: 'deepseek-reasoner',
     host: /(^|\.)deepseek\.com$/,
@@ -546,8 +566,13 @@ export function applyThinking(
       break;
 
     case 'zai':
+      payload.thinking = { type: on ? 'enabled' : 'disabled' };
+      break;
+
     case 'deepseek':
       payload.thinking = { type: on ? 'enabled' : 'disabled' };
+      // V4 起深度可调(levels 给字符串档);老 chat 线 levels 是布尔 → 只发开关,不发未知字段。
+      if (on && typeof wire === 'string') payload.reasoning_effort = wire;
       break;
   }
 

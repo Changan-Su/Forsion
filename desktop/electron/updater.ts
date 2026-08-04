@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import electronUpdater from 'electron-updater'
 import { forsionHomeDir } from './forsionHome'
-import { isNewer, notesToString } from './updaterUtil'
+import { changelogSection, isNewer, notesToString } from './updaterUtil'
 
 // electron-updater 是 CJS 默认导出对象;ESM 下解构取 autoUpdater 最稳。
 const { autoUpdater } = electronUpdater
@@ -48,6 +48,45 @@ function unsupported(): boolean {
   return !app.isPackaged
 }
 
+// ── 更新说明的真源:仓库里的 CHANGELOG.md ─────────────────────────────────────
+/**
+ * 拉目标版本 tag 上的 `desktop/CHANGELOG.md`,抠出那一节当更新说明。
+ *
+ * ⚠️ 为什么不能用现成的:
+ *  · **mac** 走 GitHub Release 的 `body` —— 而发版脚本用的是 `gh release create --generate-notes`,
+ *    那是 GitHub 按提交/PR 自动拼的清单,不是写给用户看的更新日志。
+ *  · **Win/Linux** 走 electron-updater 的 `info.releaseNotes` —— latest.yml 默认压根不带这个字段,
+ *    弹窗里恒为空。
+ *  两条路都答不出「这个新版本到底更新了什么」,只能回源 CHANGELOG.md。
+ *  按 **tag** 取(不是 main):tag 上那份必然含该版本那一节,也不会被后续提交改动影响。
+ */
+async function notesFromChangelog(version: string): Promise<string | undefined> {
+  const url = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/v${version}/desktop/CHANGELOG.md`
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return undefined
+    return changelogSection(await res.text(), version)
+  } catch {
+    return undefined // 断网 / 私有仓 / tag 不存在:退回原来的说明,不影响升级本身
+  }
+}
+
+/**
+ * 播报「有新版本」:先用手头的说明立刻上屏(UI 不等网),再去拉 CHANGELOG 那一节补上去。
+ *
+ * ⚠️ 补的时候**只改 releaseNotes 一格**,phase 保持当前值 —— 用户完全可能在拉取回来之前
+ * 就点了下载(phase 已是 downloading/downloaded),硬广播 `available` 会把进度条打回去,
+ * 而「phase 变了就放弃」又会让下载态永远没有更新说明。版本对不上才丢弃。
+ */
+function announceAvailable(version: string, fallback?: string): void {
+  broadcast({ phase: 'available', version, releaseNotes: fallback })
+  void notesFromChangelog(version).then((md) => {
+    if (!md || md === lastStatus.releaseNotes) return
+    if (lastStatus.version !== version) return // 已经在说另一个版本了
+    broadcast({ ...lastStatus, releaseNotes: md })
+  })
+}
+
 // ── 测试版通道 ──────────────────────────────────────────────────────────────
 /**
  * 偏好落 `~/.forsion/config.json` 的 `updater.beta`(与 providers/browser 等段同一份真源)。
@@ -80,12 +119,14 @@ function ensureWired(): void {
   autoUpdater.autoInstallOnAppQuit = false // 全程手动:下完不主动在退出时装
   autoUpdater.on('checking-for-update', () => broadcast({ phase: 'checking' }))
   autoUpdater.on('update-available', (info) =>
-    broadcast({ phase: 'available', version: info.version, releaseNotes: notesToString(info.releaseNotes) }))
+    announceAvailable(info.version, notesToString(info.releaseNotes)))
   autoUpdater.on('update-not-available', () => broadcast({ phase: 'not-available' }))
+  // 下载中/下载完仍要带着版本号与更新说明:UI 的「更新内容」区在 available/downloaded 两态都渲染,
+  // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
   autoUpdater.on('download-progress', (p) =>
-    broadcast({ phase: 'downloading', percent: Math.round(p.percent) }))
+    broadcast({ ...lastStatus, phase: 'downloading', percent: Math.round(p.percent) }))
   autoUpdater.on('update-downloaded', (info) =>
-    broadcast({ phase: 'downloaded', version: info.version }))
+    broadcast({ ...lastStatus, phase: 'downloaded', version: info.version }))
   autoUpdater.on('error', (err) =>
     broadcast({ phase: 'error', error: err?.message || String(err) }))
 }
@@ -123,7 +164,7 @@ async function checkMac(): Promise<UpdaterStatus> {
     const top = pick()
     const remote = top?.tag || ''
     if (remote && isNewer(remote, app.getVersion())) {
-      broadcast({ phase: 'available', version: remote, releaseNotes: typeof top?.body === 'string' ? top.body : undefined })
+      announceAvailable(remote, typeof top?.body === 'string' ? top.body : undefined)
     } else {
       broadcast({ phase: 'not-available' })
     }

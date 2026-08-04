@@ -19,7 +19,7 @@ import { TaskSummary } from './chat2/TaskSummary'
 import { useApp, stickyDefaults } from '../stores/appStore'
 import { hasChatRef, readChatRefs, refsToText } from './chat2/chatDragRef'
 import { usePageStore } from '@amadeus/store/pageStore'
-import { useWorkspace, UI_MODE } from '@lcl/engine'
+import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -45,6 +45,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const followActive = params.followActive !== false
   const pinnedSessionId = typeof params.sessionId === 'string' ? params.sessionId : null
   const activeId = followActive ? globalActiveId : pinnedSessionId
+  // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
+  const historyLoading = useApp((state) => !!(activeId && state.historyLoading[activeId]))
   const s = useApp(useShallow((state) => ({
     activeSession: state.sessions.find((x) => x.id === activeId) || state.archivedSessions.find((x) => x.id === activeId) || null,
     activeMessages: (activeId && state.messagesBySession[activeId]) || EMPTY_MESSAGES,
@@ -341,7 +343,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           <div className="t2-stream" ref={registerChatScroll}>
             <div className="t2-stream-inner">
             {!hasMessages ? (
-              <EmptyState2 />
+              historyLoading ? <Skeleton variant="chat" /> : <EmptyState2 />
             ) : (
               activeMessages.map((m) => {
                 if (m.role === 'user' && m.id === editingId) {

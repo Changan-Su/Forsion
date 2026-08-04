@@ -9,6 +9,7 @@ import './styles/base.css'
 import './amadeus-host.css'
 import './amadeus/styles.css'
 import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
+import { AskStringHost } from './amadeus/components/askString'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
@@ -101,6 +102,8 @@ function Harness() {
       <pre data-harness-dump style={{ fontSize: 11, opacity: 0.6, whiteSpace: 'pre-wrap' }}>
         {JSON.stringify(blocks, null, 1)}
       </pre>
+      {/* 行内工具栏的「链接」按钮要弹 askString 输入框,宿主没挂这个 Host 就永远看不到弹窗。 */}
+      <AskStringHost />
     </div>
   )
 }
@@ -140,6 +143,17 @@ function MindmapHarness() {
 //    这里钉的是**单测看不见的那一层**:CSS Grid 把 [x,y,w,h] 摆到哪里、指针位移换算成几格、
 //    「压到别人就回弹」在真 DOM 上成不成立、锁定态到底锁没锁住编辑。见 scripts/dashboard.check.cjs。
 const DASH_FILE = 'Harness.dashboard.md'
+
+/** ?dashboard 里那张 view 卡片装的东西:一个真·注册视图。露出拿到的 leaf.params,并提供一个
+ *  会调 leaf.setParams 的按钮 —— 仪器据此验「视图改了 params 会不会写回卡片源码」。 */
+function DashViewProbe({ leaf }: ViewProps) {
+  const n = Number(leaf.params.n ?? 0)
+  return (
+    <div data-tag="dashv" data-params={JSON.stringify(leaf.params)} data-leaf={leaf.id} style={{ padding: 12 }}>
+      <button data-act="bump" onClick={() => leaf.setParams({ ...leaf.params, n: n + 1 })}>bump {n}</button>
+    </div>
+  )
+}
 
 function DashHarness() {
   // leaf.id 必须是 MAIN_SCOPE('main'):视图子树经 PageScopeCtx 取自己那份 store,给别的 id
@@ -267,6 +281,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   createRoot(document.getElementById('root')!).render(<PillHarness />)
 } else if (new URLSearchParams(location.search).has('dashboard')) {
   const iso = new Date().toISOString()
+  registerView({ type: 'dashv', displayName: 'Dash Probe', icon: Square, factory: (p) => <DashViewProbe {...p} /> })
   usePageStore.setState({
     activePage: DASH_FILE,
     vaultRoot: '/harness',
@@ -280,16 +295,18 @@ if (new URLSearchParams(location.search).has('dock')) {
       compiler: { version: 'harness' },
       root: {
         type: 'stack',
-        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: '1' }, { ref: '2' }, { ref: '3' }] }] }],
+        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: '1' }, { ref: '2' }, { ref: '3' }, { ref: '4' }] }] }],
       },
-      blocks: { 1: { type: 'markdown' }, 2: { type: 'markdown' }, 3: { type: 'markdown' } },
+      blocks: { 1: { type: 'markdown' }, 2: { type: 'markdown' }, 3: { type: 'markdown' }, 4: { type: 'markdown' } },
       // 天气卡片要联网,harness 里不放(网络断言不是这支仪器的活儿)。
-      fmExtra: ['tags: [harness]', 'dashboard:', '  "1": [0, 0, 8, 6]', '  "2": [8, 0, 5, 4]', '  "3": [0, 6, 6, 4]'].join('\n'),
+      // 卡片4(view)刻意摆在最右下角:D4/D6 会把卡片2/3 挪来挪去,压上就成了「回弹」而不是被测行为。
+      fmExtra: ['tags: [harness]', 'dashboard:', '  "1": [0, 0, 8, 6]', '  "2": [8, 0, 5, 4]', '  "3": [0, 6, 6, 4]', '  "4": [16, 6, 6, 4]'].join('\n'),
     },
     blocks: {
       1: { id: '1', type: 'markdown', content: '第一张卡片' },
       2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
       3: { id: '3', type: 'markdown', content: '第三张卡片' },
+      4: { id: '4', type: 'markdown', content: '```view\ntype: dashv\nn: 1\n```' },
     },
   })
   createRoot(document.getElementById('root')!).render(<DashHarness />)
@@ -371,6 +388,44 @@ if (new URLSearchParams(location.search).has('dock')) {
       e1: { id: 'e1', type: 'markdown', content: '![[pic.png]]' },
       e2: { id: 'e2', type: 'markdown', content: '![[report.pdf]]' },
       e3: { id: 'e3', type: 'markdown', content: '普通文字块(不该有 </> 按钮)' },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(<DndHarness />)
+} else if (new URLSearchParams(location.search).has('fold')) {
+  // ── ?fold 模式:真 PageView,种「H1 / 正文 / H2 / 正文 / H1」五块。
+  //    ⚠️ 每块**各自一行** —— 标题折叠是**行级**的(PageView 按 root.children 逐行判定,
+  //    取每行首块的标题级别),全塞进一行只会得到一行、零个折叠箭头。
+  //    验的是:标题行才有箭头;折 H1 吃到下一个 H1 前;折 H2 只吃它自己那段;状态落 localStorage。
+  //    见 scripts/editor-triggers.e2e.cjs 的 T37。
+  const iso = new Date().toISOString()
+  const refs = ['f1', 'f2', 'f3', 'f4', 'f5']
+  usePageStore.setState({
+    activePage: 'Harness.md',
+    vaultRoot: '/harness',
+    status: 'ready',
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-fold',
+      title: 'Fold Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: {
+        type: 'stack',
+        children: refs.map((ref, i) => ({
+          type: 'row' as const,
+          id: `r${i + 1}`,
+          columns: [{ id: `c${i + 1}`, width: 1, children: [{ ref }] }],
+        })),
+      },
+      blocks: Object.fromEntries(refs.map((r) => [r, { type: 'markdown' as const }])),
+    },
+    blocks: {
+      f1: { id: 'f1', type: 'markdown', content: '# 一级标题' },
+      f2: { id: 'f2', type: 'markdown', content: '一级下的正文' },
+      f3: { id: 'f3', type: 'markdown', content: '## 二级标题' },
+      f4: { id: 'f4', type: 'markdown', content: '二级下的正文' },
+      f5: { id: 'f5', type: 'markdown', content: '# 另一个一级标题' },
     },
   })
   createRoot(document.getElementById('root')!).render(<DndHarness />)

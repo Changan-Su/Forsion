@@ -210,6 +210,8 @@ interface PageState {
   blocks: Record<BlockId, BlockState>
   status: Status
   error: string | null
+  /** 启动恢复 Vault 在途(云端首开 GET /vaults+/tree):侧栏树据此显示骨架屏,别把加载态当「未开 Vault」空态。 */
+  vaultLoading: boolean
   /** A pending request to move the caret into a specific block (after create/delete/nav). */
   /** anchor:源码↔可视切换带过来的「光标前文本」,块内按它找回落点(见 lib/modeCursor)。 */
   focusRequest: { id: BlockId; place: FocusPlace; goalX?: number; anchor?: string } | null
@@ -384,6 +386,7 @@ function makePageStore() {
     blocks: {},
     status: 'idle',
     error: null,
+    vaultLoading: false,
     focusRequest: null,
     dndActiveId: null,
     dndOverId: null,
@@ -479,6 +482,7 @@ function makePageStore() {
     },
 
     async restoreVault() {
+      set({ vaultLoading: true })
       try {
         const info = await amadeus.restoreVault()
         if (!info) return
@@ -490,6 +494,8 @@ function makePageStore() {
         if (target) await get().loadPage(target)
       } catch (e) {
         set({ error: String(e) })
+      } finally {
+        set({ vaultLoading: false })
       }
     },
 

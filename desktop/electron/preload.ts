@@ -246,6 +246,9 @@ const api = {
   // ── 内置浏览器 / 内置终端 ────────────────────────────────────────────────────
   /** 用系统浏览器打开(主进程只放 http(s))。 */
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+  /** 拉一份外部日历订阅(.ics)。走主进程绕开 CORS —— 订阅地址一律不发 CORS 头。 */
+  fetchIcs: (url: string): Promise<{ ok: boolean; text?: string; error?: string }> =>
+    ipcRenderer.invoke('calendar:fetchIcs', url),
   /** 主进程回投的外链(页面里的 target=_blank / webview guest 的弹窗):渲染层决定进内置浏览器还是系统浏览器。 */
   onOpenUrl: (cb: (url: string) => void): (() => void) => {
     const listener = (_e: unknown, url: string): void => cb(url)

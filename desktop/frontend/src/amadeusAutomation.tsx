@@ -8,7 +8,8 @@
  * + 一个挂在 AmadeusOverlays 里的 Host 组件。构建器本体懒加载 —— 它属于「自动化」Space,
  * 不该被拖进笔记视图的首屏 chunk。
  */
-import { Suspense, lazy } from 'react'
+import { Suspense } from 'react'
+import { lazyRetry } from './lazyRetry'
 import { create } from 'zustand'
 import { setAutomationBridge, type AutomationRuleInfo } from '@amadeus/blocks/button/automationBridge'
 import { setAutomationKick } from '@amadeus/store/automationKick'
@@ -17,7 +18,7 @@ import { useAutomation } from './stores/automationStore'
 import { fireAutomationTrigger, getMuseTriggers, kickAutomation } from './services/backendService'
 import type { MuseTriggerInfo } from './types'
 
-const AutomationBuilder = lazy(() =>
+const AutomationBuilder = lazyRetry(() =>
   import('./views/automation/AutomationBuilder').then((m) => ({ default: m.AutomationBuilder })),
 )
 

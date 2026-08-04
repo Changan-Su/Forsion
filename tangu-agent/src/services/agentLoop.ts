@@ -33,9 +33,9 @@ import { getAgent } from '../agents/agentRegistry.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { applyAgentActivation } from './agentActivation.js';
 import { projectDocSection } from './projectDoc.js';
-import { onUserRunDone } from './localHistorian.js';
+import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
-import { describeImages, mainModelSupportsVision, resolveVisionModelId } from './visionService.js';
+import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
@@ -318,8 +318,13 @@ const HYDRATE_BLOCK = 10; // 窗口起点按块对齐:跨 run 前缀仅每 ~5 �
  *  - 单条超长内容确定性截断(防被巨型消息毒化的会话永久不可用;同一条消息每次截出相同字节);
  *  - 仅**最新带图的 user 消息**把 content 重建成 [text, image_url...] parts(对齐 Hermes 的
  *    strip_historical_media:旧图不重发,避免多 MB base64 每轮搭车),loop 不再单独注入附件。
+ *  - `describe` 在场时,那批图先交给它转成文字(主模型无原生视觉 / 用户选了「总是转写」)。
  */
-async function hydrateHistory(sessionId: string, excludeMessageId: string): Promise<ChatMessage[]> {
+async function hydrateHistory(
+  sessionId: string,
+  excludeMessageId: string,
+  describe?: (images: ReturnType<typeof normalizeImageAttachments>) => Promise<string | null>,
+): Promise<ChatMessage[]> {
   const n = await deps().state.countSessionMessages(sessionId);
   const start = n > HYDRATE_MAX ? Math.ceil((n - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK : 0;
   // 显式 LIMIT(=窗口剩余条数)而非裸 OFFSET:SQLite 不允许无 LIMIT 的 OFFSET(PG 允许);
@@ -351,7 +356,11 @@ async function hydrateHistory(sessionId: string, excludeMessageId: string): Prom
   }
   if (lastUserWithImages >= 0) {
     const m = out[lastUserWithImages] as any;
-    m.content = toImageParts(m.content, lastUserImages);
+    // 转写失败 / 未配槽 → 退回原样送图(宁可让 provider 报错也不静默丢内容,同工具产图那条路)。
+    const described = describe ? await describe(lastUserImages) : null;
+    m.content = described
+      ? `${m.content}\n\n(The image(s) attached to this message were transcribed by the vision assistant model, because the current model has no native image input. Description follows.)\n\n${described}`
+      : toImageParts(m.content, lastUserImages);
   }
   // 图片物化在前(用 out 内下标)、摘要 unshift 在后,避免下标错位。
   if (checkpoint && through > 0) {
@@ -499,6 +508,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 累加器提到 try 外:abort/失败时 catch 仍能看见,用于把「已停止」的部分助手轮次落库(否则整轮丢失,
   // 用户聊天记录里凭空消失,后续 run 也读不到)。运行时转向(steer)也复用它们做迭代边界的回合切分。
   let finalContent = '';
+  // 收尾那一轮的正文(不含中间 preamble——那些已作为 assistant 轮进了 workingMessages;而收尾轮
+  // 正文只进 finalContent 不进数组)。Historian fork 判官快照靠它补上「最后的回答」,不重复 preamble。
+  let finalTurnText = '';
   let finalReasoning = '';
   /** 把一段正文追加进终稿(空段 no-op)。finalize 只写 finalContent —— 中间迭代的 preamble
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
@@ -578,7 +590,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       });
     }
 
-    const history = await hydrateHistory(sessionId, run.assistant_message_id || '');
+    // 聊天框里贴的图也走「辅助模型 · 图像识别」—— 在此之前只有工具产出的图(view_image/截图)走,
+    // 用户手贴的图恒定原样发给主模型:主模型没视觉时要么被 provider 拒、要么装作看见了瞎编。
+    // 这就是「辅助模型-图像识别没有正常工作」的真身(2026-08-03)。
+    const history = await hydrateHistory(sessionId, run.assistant_message_id || '', async (imgs) => {
+      if (ac.signal.aborted || !imgs.length) return null;
+      try {
+        if (!(await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined))) return null;
+        const visionModelId = await resolveVisionModelId(
+          typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
+          appId,
+        );
+        return await describeImages(imgs, { modelId: visionModelId, userId, appId, signal: ac.signal });
+      } catch (e: any) {
+        console.warn(`[agent-core] run=${runId} 附件图像识别降级失败(退回直接送图):`, e?.message || e);
+        return null;
+      }
+    });
 
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
     const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig);
@@ -1448,6 +1476,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             continue;
           }
         }
+        // 到达此处 = steer/Stop hook/审计/验证四道续跑闸门全部放行,本轮正文就是真收尾正文。
+        // 绝不能在闸门之前赋值:续跑路径会把本轮正文 push 进 workingMessages,提前赋值会让
+        // Historian fork 快照在配额/截断等异常出口重复追加同一段(Codex 评审 08-03 Major)。
+        finalTurnText = String(res.content || '');
         if (!finalContent.trim() && !finalReasoning.trim()) {
           finalContent = looksLikeToolCallText(res.content)
             ? '(本轮达到最大工具调用次数或工具调用格式异常,已停止。发送"继续"可让我接着操作。)'
@@ -1535,7 +1567,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
         // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
         let described = '';
-        if (!ac.signal.aborted && !(await mainModelSupportsVision(modelId, appId))) {
+        if (!ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined))) {
           try {
             const visionModelId = await resolveVisionModelId(toolCtx.visionModelId, appId);
             described = await describeImages(imgs, { modelId: visionModelId, userId, appId, signal: ac.signal });
@@ -1572,7 +1604,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // fire-and-forget，绝不阻断/影响 run；非本地形态或未启用时内部 no-op。
     // 传 memScopeSlug(记忆域,shareDefaultMemory 已折叠)而非 activeAgentSlug:Historian 读写的
     // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
-    void onUserRunDone(sessionId, userId, memScopeSlug).finally(() => scheduleAgentFilesSync(userId, memScopeSlug));
+    // forkSeed:fork 判官模式的快照接缝(惰性 getter,非 fork 模式零拷贝)。收尾轮正文不在
+    // workingMessages 里(只进 finalContent),用 finalTurnText 补上——纯聊天 run 整条回复都靠它;
+    // 配额/截断等异常出口 finalTurnText 为空,快照就不补尾(那些收尾语不是模型正文)。
+    // ponytail: 循环耗尽(lastIter)那一发父请求不带 tools 而 seed 恒带,极端场景损失末次前缀命中,不影响正确性。
+    const historianSeed: HistorianForkSeed = {
+      getMessages: () => {
+        const msgs = workingMessages.map((m) => ({ ...m }));
+        const tail = String(finalTurnText || '').trim();
+        if (tail) msgs.push({ role: 'assistant', content: tail } as ChatMessage);
+        return msgs;
+      },
+      tools: toolDefs,
+      thinkingLevel,
+      modelId,
+    };
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => scheduleAgentFilesSync(userId, memScopeSlug));
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || err instanceof AbortLikeError;
     const status = aborted ? 'aborted' : 'failed';

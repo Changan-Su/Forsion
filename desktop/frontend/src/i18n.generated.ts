@@ -828,16 +828,16 @@ registerMessages({
     "en": "Tangu default workspace directory"
   },
   "settings.workspace.placeholder": {
-    "zh": "~/Forsion(默认,首启自动创建)",
-    "en": "~/Forsion (default, created on first launch)"
+    "zh": "笔记库内 Sessions(默认,自动创建)",
+    "en": "Sessions inside your notes library (default, auto-created)"
   },
   "settings.workspace.pick": {
     "zh": "选择…",
     "en": "Choose…"
   },
   "settings.workspace.hint": {
-    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录;留空用 ~/Forsion。改后关闭设置即刷新侧栏工作区。",
-    "en": "Local directory used by the sidebar \"Tangu default workspace\" for new sessions; leave empty to use ~/Forsion. After changing, close Settings to refresh the sidebar workspace."
+    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录;留空默认用笔记库内的 Sessions 文件夹(无笔记库时 ~/Forsion)。改后关闭设置即刷新侧栏工作区。",
+    "en": "Local directory used by the sidebar \"Tangu default workspace\" for new sessions; leave empty to use the Sessions folder inside your notes library (or ~/Forsion without one). After changing, close Settings to refresh the sidebar workspace."
   },
   "settings.token.label": {
     "zh": "手动 token(高级,可选;覆盖登录凭证)",
@@ -1835,7 +1835,7 @@ registerMessages({
 registerMessages({
   "sidebar.emptyTitle": { "zh": "空侧栏", "en": "Empty sidebar" },
   "sidebar.empty": { "zh": "这个侧栏是空的,把标签页拖进来试试。", "en": "This sidebar is empty, try dragging a tab here." },
-  "input.fileref.note": { "zh": "引用笔记 / 工作区文件", "en": "Reference a note / workspace file" },
+  "input.fileref.note": { "zh": "引用笔记 / 文件 / 会话", "en": "Reference a note / file / session" },
   "command.navBack": { "zh": "后退(本标签页)", "en": "Back (this tab)" },
   "command.navForward": { "zh": "前进(本标签页)", "en": "Forward (this tab)" },
   "view.workspace": { "zh": "工作区", "en": "Workspace" },

@@ -8,18 +8,19 @@
  * 关闭 = 先关掉工作台里该类型的全部实例,再反注册视图与命令(Dockview 的 components map
  * 收缩时不能留活面板,与 pluginViews.tsx 同款纪律)。
  */
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense } from 'react'
 import { create } from 'zustand'
 import { Globe, TerminalSquare } from 'lucide-react'
-import { registerView, unregisterView, addCommand, removeCommand, useWorkspace, getView } from '@lcl/engine'
+import { registerView, unregisterView, addCommand, removeCommand, useWorkspace, getView, Skeleton } from '@lcl/engine'
+import { lazyRetry } from '../lazyRetry'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { windowKind } from '../windowKind'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
 // (xterm 的 UMD 包在模块顶层就摸 `self`)。
-const BrowserView = lazy(() => import('./browserView').then((m) => ({ default: m.BrowserView })))
-const TerminalView = lazy(() => import('./terminalView').then((m) => ({ default: m.TerminalView })))
+const BrowserView = lazyRetry(() => import('./browserView').then((m) => ({ default: m.BrowserView })))
+const TerminalView = lazyRetry(() => import('./terminalView').then((m) => ({ default: m.TerminalView })))
 
 registerMessages({
   // 小节标题与说明已上移到插件页统一的「内置插件」区(settings.amadeusPlugins.builtinTitle/builtinHint),
@@ -96,7 +97,7 @@ export const BUILTINS: BuiltinDef[] = [
     description: () => tr('browser.desc'),
     available: () => !!window.tangu, // Electron preload 在场 = <webview> 可用
     install() {
-      registerView({ type: 'browser', displayName: () => tr('browser.title'), icon: Globe, factory: (props) => <Suspense fallback={null}><BrowserView {...props} /></Suspense>, closable: true, singleton: false })
+      registerView({ type: 'browser', displayName: () => tr('browser.title'), icon: Globe, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><BrowserView {...props} /></Suspense>, closable: true, singleton: false })
       addCommand({ id: 'builtin-browser-open', title: () => tr('browser.open'), icon: Globe, keywords: 'browser web url 浏览器 网页', run: () => openBrowser() })
     },
   },
@@ -107,7 +108,7 @@ export const BUILTINS: BuiltinDef[] = [
     description: () => tr('terminal.desc'),
     available: () => !!window.tangu?.pty,
     install() {
-      registerView({ type: 'terminal', displayName: () => tr('terminal.title'), icon: TerminalSquare, factory: (props) => <Suspense fallback={null}><TerminalView {...props} /></Suspense>, closable: true, singleton: false })
+      registerView({ type: 'terminal', displayName: () => tr('terminal.title'), icon: TerminalSquare, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><TerminalView {...props} /></Suspense>, closable: true, singleton: false })
       addCommand({ id: 'builtin-terminal-open', title: () => tr('terminal.open'), icon: TerminalSquare, keywords: 'terminal shell console 终端 命令行', run: () => openTerminal() })
     },
   },

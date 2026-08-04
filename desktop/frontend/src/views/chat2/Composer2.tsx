@@ -12,7 +12,7 @@ import {
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
-import type { AgentConfig, Attachment, ModelInfo, NormalAgentDef, SkillInfo } from '../../types'
+import type { AgentConfig, Attachment, MessageRecord, ModelInfo, NormalAgentDef, SkillInfo } from '../../types'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { useI18n } from '../../i18n'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
@@ -21,15 +21,17 @@ import { track } from '../../achievements/store'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { noteRefInsert } from '../../components/wikiChat'
+import { refToText } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { commandsFor } from '../../commandCatalog'
-import { getCustomCommands, expandCustomCommand, type CustomCommandInfo } from '../../services/backendService'
+import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import './composer2.css'
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
 type OpenMenu = 'add' | 'mode' | null
-/** [[ 引用候选:note=vault 笔记(p=vault 相对 .md 路径),否则工作区文件(p=cwd 相对路径)。 */
-type RefCand = { p: string; note?: true }
+/** [[ 引用候选:note=vault 笔记(p=vault 相对 .md 路径);session=历史会话(p=标题,供打分);
+ *  否则工作区文件(p=cwd 相对路径)。 */
+type RefCand = { p: string; note?: true; session?: { id: string; title: string; summary?: string | null } }
 
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
 const MAX_INPUT_CHARS = 150_000
@@ -221,22 +223,64 @@ export const Composer2: React.FC<{
     st.regenerate(lastUser.id, sid)
   }
 
+  // /export 高保真:经 REST 拉全量消息(含 tool_calls;内存 messagesBySession 只是渲染态切片),
+  // frontmatter 元数据(标题/摘要/模型)+ 逐消息正文 + 工具调用一行摘要。接口失败回落内存切片。
   const exportSession = async (): Promise<void> => {
     const st = useApp.getState()
     const sid = st.activeId
-    const msgs = sid ? st.messagesBySession[sid] || [] : []
+    if (!sid) { st.toast(t('input.slash.nothingToExport'), true); return }
+    const sess = st.sessions.find((x) => x.id === sid)
+    let msgs: Array<Pick<MessageRecord, 'role' | 'content' | 'tool_calls' | 'attachments'> & { timestamp?: number }> = []
+    try {
+      // 服务端单页硬限 500 且只回最近一页 —— 长会话必须用 before 游标向前翻页,否则早期内容静默丢失。
+      let before = 0
+      for (let page = 0; page < 20; page++) { // 防御上限 1 万条
+        const batch = await listMessages(st.cfg, sid, 500, before || undefined)
+        if (!batch.length) break
+        msgs = [...batch, ...msgs]
+        if (batch.length < 500) break
+        before = Number(batch[0]?.timestamp) || 0
+        if (!before) break
+      }
+    } catch { /* 离线/云端不可达 → 退回内存切片 */ }
+    if (!msgs.length) msgs = (st.messagesBySession[sid] || []) as any
     if (!msgs.length) { st.toast(t('input.slash.nothingToExport'), true); return }
-    const md = [`# Tangu ${st.sessions.find((x) => x.id === sid)?.title || ''}`.trim(), '']
+    const title = sess?.title || 'Tangu Session'
+    const md = [
+      '---',
+      `id: ${sid}`,
+      `title: ${JSON.stringify(title)}`,
+      ...(sess?.summary ? [`summary: ${JSON.stringify(sess.summary)}`] : []),
+      ...(sess?.model_id ? [`model: ${sess.model_id}`] : []),
+      `exported_at: ${new Date().toISOString()}`,
+      '---',
+      '',
+      `# ${title}`,
+      '',
+    ]
     for (const m of msgs) {
-      if (m.role !== 'user' && m.role !== 'assistant') continue
+      const role = m.role === 'model' ? 'assistant' : m.role
+      if (role !== 'user' && role !== 'assistant') continue
       const body = (m.content || '').trim()
-      if (!body) continue
-      md.push(m.role === 'user' ? '## 我' : '## Tangu', '', body, '')
+      const calls = Array.isArray(m.tool_calls) ? m.tool_calls : []
+      if (!body && !calls.length) continue
+      md.push(role === 'user' ? '## 我' : '## Tangu', '')
+      if (body) md.push(body, '')
+      for (const c of calls) {
+        const name = c?.function?.name || (c as any)?.name || 'tool'
+        let args = ''
+        try { args = String(typeof c?.function?.arguments === 'string' ? c.function.arguments : JSON.stringify(c?.function?.arguments ?? '')) } catch { args = '' }
+        args = args.replace(/\s+/g, ' ').trim()
+        md.push(`> 🔧 \`${name}\`${args && args !== '{}' ? ` ${args.length > 200 ? args.slice(0, 200) + '…' : args}` : ''}`)
+      }
+      if (calls.length) md.push('')
+      const atts = Array.isArray((m as any).attachments) ? (m as any).attachments : []
+      if (atts.length) md.push(`> 📎 ${atts.length} attachment(s)`, '')
     }
     const blob = new Blob([md.join('\n')], { type: 'text/markdown' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `tangu-${String(sid || 'session').slice(0, 8)}.md`
+    a.download = `tangu-${String(sid).slice(0, 8)}.md`
     a.click()
     setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
@@ -530,14 +574,16 @@ export const Composer2: React.FC<{
   }
 
   // ── [[ 引用:工作区文件(插入相对路径,与拖放/粘贴同契约)+ Amadeus 笔记(插入 [[绝对路径|名字]],
-  //    气泡显示名字、agent 读到路径)。仅 host 会话(云端/沙箱读不到本机路径)。文件候选 = listDir 惰性 BFS。
+  //    气泡显示名字、agent 读到路径)+ 历史会话([[session:id|标题]],read_session 读)。
+  //    门控拆分:菜单本身全模式可用(会话引用 host/cloud 通吃);笔记/文件候选仅 host 会话
+  //    (云端/沙箱读不到本机路径)。文件候选 = listDir 惰性 BFS。
   const fileRefCtx = useMemo(() => {
-    if (disabled || slashOpen || refDismissed || !isHost) return null
+    if (disabled || slashOpen || refDismissed) return null
     const m = /\[\[([^\]\n]*)$/.exec(draft.slice(0, cursorPos))
     return m ? { query: m[1], start: cursorPos - m[1].length - 2 } : null
-  }, [draft, cursorPos, disabled, slashOpen, refDismissed, isHost])
+  }, [draft, cursorPos, disabled, slashOpen, refDismissed])
   useEffect(() => {
-    if (!fileRefCtx) return
+    if (!fileRefCtx || !isHost) return // 本地文件/笔记候选仅 host;云端会话只出会话候选
     if (window.amadeus) ensureAmadeusReady() // 懒引导 vault(幂等):聊天先于 Amadeus 打开时,笔记候选也在
     const root = execConfig.cwd
     // 只认 refFilesFor(已发射标记):打字使 fileRefCtx 每键变化,若依赖 refFiles 是否就绪,
@@ -562,17 +608,25 @@ export const Composer2: React.FC<{
       return found
     }
     void run().then((list) => { if (refFilesFor.current === root) setRefFiles(list) }).catch(() => {})
-  }, [fileRefCtx, execConfig.cwd])
+  }, [fileRefCtx, execConfig.cwd, isHost])
   const vaultPages = usePageStore((s) => s.pages)
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
+  const chatSessions = useApp((s) => s.sessions)
+  const activeSessionId = useApp((s) => s.activeId)
   const refMatches = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
     const q = fileRefCtx.query.toLowerCase()
-    // 笔记在前(sort 稳定 → 同分保持此序),工作区文件在后;无 vault / 无 cwd 各自自然缺席。
+    // 笔记在前(sort 稳定 → 同分保持此序),工作区文件次之,历史会话最后(与拖拽引用同契约,
+    // agent 经 read_session 读)。笔记/文件仅 host(云端读不到本机路径);会话候选全模式可用。
+    // 当前会话不列(引用自己无意义)。
     const cands: RefCand[] = [
-      ...vaultPages.map((p) => ({ p, note: true as const })),
-      ...(refFiles ?? []).map((p) => ({ p })),
+      ...(isHost ? vaultPages.map((p) => ({ p, note: true as const })) : []),
+      ...(isHost ? (refFiles ?? []).map((p) => ({ p })) : []),
+      ...chatSessions
+        .filter((s) => s.id !== activeSessionId)
+        .slice(0, 300)
+        .map((s) => ({ p: s.title || 'New Chat', session: { id: s.id, title: s.title || 'New Chat', summary: s.summary } })),
     ]
     const pool = q ? cands.filter((c) => c.p.toLowerCase().includes(q)) : cands
     // 文件名前缀命中 > 文件名包含 > 仅路径包含;同档路径短者先。
@@ -581,14 +635,16 @@ export const Composer2: React.FC<{
       return (base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + c.p.length
     }
     return [...pool].sort((a, b) => score(a) - score(b)).slice(0, 10)
-  }, [fileRefCtx, refFiles, vaultPages])
+  }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost])
   const refActive = !!fileRefCtx && refMatches.length > 0
   useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])
 
   const pickRef = (c: RefCand) => {
     if (!fileRefCtx) return
     const before = draft.slice(0, fileRefCtx.start)
-    const insert = c.note && vaultRoot
+    const insert = c.session
+      ? refToText({ kind: 'session', id: c.session.id, title: c.session.title }, vaultRoot || '') // [[session:id|标题]]:与拖拽同契约(session 分支不用 vaultRoot)
+      : c.note && vaultRoot
       ? noteRefInsert(vaultRoot, c.p) // [[绝对路径|名字]]:气泡渲染名字,agent 读到路径
       : `${/\s/.test(c.p) ? `"${c.p}"` : c.p} ` // 含空格加引号,与粘贴本机路径一致
     const next = before + insert + draft.slice(cursorPos)
@@ -990,18 +1046,20 @@ export const Composer2: React.FC<{
               <div className="t2c-menu-sec">{t('input.fileref.note')}</div>
               {refMatches.map((c, i) => (
                 <button
-                  key={(c.note ? 'n:' : 'f:') + c.p}
+                  key={c.session ? `s:${c.session.id}` : (c.note ? 'n:' : 'f:') + c.p}
                   className="t2c-menu-item"
                   data-active={i === Math.min(refIndex, refMatches.length - 1) || undefined}
                   onMouseEnter={() => setRefIndex(i)}
                   onClick={() => pickRef(c)}
                 >
                   <span className="t2c-menu-cmd">
-                    {c.note
+                    {c.session
+                      ? `💬 ${c.session.title}`
+                      : c.note
                       ? `${pageIcons[c.p] ? `${pageIcons[c.p]} ` : ''}${c.p.split('/').pop()!.replace(/\.md$/i, '')}`
                       : c.p.split('/').pop()}
                   </span>
-                  <span className="t2c-menu-desc">{c.p}</span>
+                  <span className="t2c-menu-desc">{c.session ? (c.session.summary || t('input.fileref.session')) : c.p}</span>
                 </button>
               ))}
             </div>

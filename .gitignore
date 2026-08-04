@@ -9,8 +9,9 @@ dist/
 out/
 desktop/out/
 desktop/dist/
-# 打包前 beforeBuild 下载的内置 Python(体积大、按平台/arch 拉取,不入库)
+# 打包前 beforeBuild 下载的内置 Python / Node(体积大、按平台/arch 拉取,不入库)
 desktop/build/python/
+desktop/build/node/
 # postinstall 从 node_modules 拷出的 excalidraw 自托管字体(13M,可再生,不入库)
 desktop/frontend/public/excalidraw/
 

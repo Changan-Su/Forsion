@@ -65,7 +65,7 @@ export const readSessionProvider: ToolProvider = {
 
         if (sid === ctx.sessionId) return 'read_session: that is the current session — its history is already in context.';
         const sess = await query<any[]>(
-          `SELECT id, title FROM chat_sessions WHERE id = ? AND user_id = ? AND app_id = ?`,
+          `SELECT id, title, summary FROM chat_sessions WHERE id = ? AND user_id = ? AND app_id = ?`,
           [sid, ctx.userId, ctx.appId],
         );
         if (!sess.length) return `read_session: no session ${sid} (it may belong to someone else, or have been deleted).`;
@@ -77,9 +77,12 @@ export const readSessionProvider: ToolProvider = {
           [sid],
         )).slice().reverse();
         const title = sess[0].title || '(untitled)';
-        if (!rows.length) return `Session "${title}" (${sid}) has no messages.`;
+        // Historian 摘要放头部:引用消费的第一跳先看摘要,再决定要不要细读逐条消息。
+        const summary = String(sess[0].summary || '').trim();
+        const summaryLine = summary ? `\nSummary: ${summary}` : '';
+        if (!rows.length) return `Session "${title}" (${sid}) has no messages.${summaryLine}`;
         const head = `Session "${title}" (${sid}) — ${rows.length} message(s), oldest first${rows.length >= limit ? ' (truncated to the most recent)' : ''}:`;
-        return `${head}\n${rows.map((r: any) => formatSessionRow(r, perMsg)).join('\n')}`;
+        return `${head}${summaryLine}\n${rows.map((r: any) => formatSessionRow(r, perMsg)).join('\n')}`;
       },
     },
   ],

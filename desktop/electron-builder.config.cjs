@@ -76,6 +76,7 @@ module.exports = {
           { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
           { from: 'build/python', to: 'python' },
+          { from: 'build/node', to: 'node' },
         ]
       : []),
   ],

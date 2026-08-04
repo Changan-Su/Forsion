@@ -8,6 +8,7 @@ import type {
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
 } from '../types'
 import { authFetch } from './http'
+import { AGENT_APP_ID } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 
 function headers(token: string): Record<string, string> {
@@ -64,8 +65,10 @@ export const deleteTtsVoice = (cfg: TanguDesktopConfig, body: { baseUrl: string;
   request<{ ok: boolean }>(cfg, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
 
 // ── 会话 ──
+// list/create 与 run 同源显式带 app_id:此前不带,云端落 worker 基线(ai-studio)→ 会话归属
+// 与 run/用量(tangu)分叉。存量误标行由引擎 runMigration 按 run 证据归位(db/migrate.ts)。
 export const listSessions = (cfg: TanguDesktopConfig, archived = false) =>
-  request<{ sessions: SessionRecord[] }>(cfg, `/agent/sessions?archived=${archived}`).then((r) => r.sessions)
+  request<{ sessions: SessionRecord[] }>(cfg, `/agent/sessions?archived=${archived}&app_id=${encodeURIComponent(AGENT_APP_ID)}`).then((r) => r.sessions)
 
 export const createSession = (
   cfg: TanguDesktopConfig,
@@ -73,7 +76,7 @@ export const createSession = (
 ) =>
   request<{ session: SessionRecord }>(cfg, '/agent/sessions', {
     method: 'POST',
-    body: JSON.stringify(init || {}),
+    body: JSON.stringify({ app_id: AGENT_APP_ID, ...(init || {}) }),
   }).then((r) => r.session)
 
 export const updateSession = (
@@ -113,9 +116,9 @@ export const getBackgroundSessions = (cfg: TanguDesktopConfig, sessionId: string
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/background`,
   ).then((r) => r.background)
 
-export const listMessages = (cfg: TanguDesktopConfig, sessionId: string, limit = 200) =>
+export const listMessages = (cfg: TanguDesktopConfig, sessionId: string, limit = 200, before?: number) =>
   request<{ messages: MessageRecord[] }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
+    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
   ).then((r) => r.messages)
 
 /** 按精确 id 列表删除会话内消息(编辑重发 / 重新生成前截断该点及之后的消息)。 */
@@ -149,7 +152,10 @@ export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, model
   )
 
 // ── 模型 / 技能 / 工具 ──
-export const listModels = (cfg: TanguDesktopConfig) => request<ModelsResponse>(cfg, '/agent/models')
+// 带 app_id:云端 worker 服务多 app,不带就按 worker 基线(ai-studio)解析「应用模型配置」→
+// 列表/默认模型与 run 的记账 app 对不上(见 tangu-agent routes/models.ts)。
+export const listModels = (cfg: TanguDesktopConfig) =>
+  request<ModelsResponse>(cfg, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`)
 
 /** host 端外部 agent 引擎清单(含 available 检测 + 每引擎默认模型;云端/非 host → 抛或空 → 调用方回退 [])。 */
 export const listEngines = (cfg: TanguDesktopConfig) =>
@@ -265,7 +271,9 @@ export const uploadSkillToCloud = (cfg: TanguDesktopConfig, localId: string) =>
 export const deleteUserCloudSkill = (cfg: TanguDesktopConfig, id: string) =>
   request<{ ok: boolean }>(cfg, `/agent/skills/user/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
-export const listTools = (cfg: TanguDesktopConfig) => request<ToolsResponse>(cfg, '/agent/tools')
+// 服务端 assets.ts 只认 camelCase appId(与 sessions 的 app_id 不同拼法,历史造成)。
+export const listTools = (cfg: TanguDesktopConfig) =>
+  request<ToolsResponse>(cfg, `/agent/tools?appId=${encodeURIComponent(AGENT_APP_ID)}`)
 
 // ── WeChat Remote（本地后端）──
 export interface WechatStatusResponse {

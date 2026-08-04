@@ -1752,6 +1752,8 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
+/* 品牌名当小类标题时不跟着 uppercase(「TANGU」是在喊人);中文标签看不出这条规则,拉丁字才露馅。 */
+.settings-nav-grouphead.brand { text-transform: none; letter-spacing: 0.02em; }
 /* 两级分类:大类(Forsion/Tangu)标题醒目,小类沿用 grouphead;项带图标 */
 .settings-nav-section { display: flex; flex-direction: column; }
 .settings-nav-section + .settings-nav-section { margin-top: 22px; }
@@ -2217,6 +2219,23 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
 .model-group-tag { font-size: 10.5px; color: var(--accent-hover); background: var(--accent-light); padding: 1px 6px; border-radius: 999px; }
 .model-group-count { font-size: 11px; color: var(--text-faint); }
 .model-group-body { display: flex; flex-direction: column; gap: 1px; padding-left: 16px; }
+
+/* 紧凑模型选择器(ModelSelect):按钮长得像输入框,菜单沿用 .composer-menu 但往下弹。 */
+.model-select { position: relative; }
+.model-select-btn {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 6px 9px; color: var(--text); font-size: 12.5px; text-align: left; cursor: pointer;
+  background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md);
+}
+.model-select-btn:hover, .model-select-btn.is-open { border-color: var(--accent); }
+.model-select-btn .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-select-btn svg { flex-shrink: 0; color: var(--text-muted); }
+/* ⚠️ 通用 .composer-menu 是 bottom:100%(输入框在页面底部,只能向上弹);设置页的字段上方就是
+   标题,向上弹会盖住自己的 label —— 这个变体把它翻下来。 */
+.composer-menu--down { top: 100%; bottom: auto; margin-top: 6px; margin-bottom: 0; left: 0; right: 0; max-width: none; transform-origin: top; }
+/* 下方放不下时翻上去(基类本就是 bottom:100%,这里只补左右拉满)。 */
+.composer-menu--up { left: 0; right: 0; max-width: none; margin-bottom: 6px; }
+.composer-menu--down .model-search, .composer-menu--up .model-search { margin-bottom: 4px; }
 
 /* ===== Markdown 正文统一排版(.md-body)=====
  * 凡是用 <Markdown>(react-markdown)渲染的地方都套这个类:插件 README/更新日志、关于页更新日志、

@@ -1,0 +1,96 @@
+/**
+ * 骨架屏(Skeleton + Shimmer)。
+ * 颜色:块底 = 主题强调色低透明度(--accent-rgb 随明暗/配色换值 → 深浅色与主题色自动适配);
+ * 流光高光亮暗各一档。出现延迟 150ms:本地/缓存命中的快加载整个骨架不闪一下。
+ * Shimmer 用 transform 合成层动画,不回流;reduced-motion 下全部静止。
+ */
+.sk {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 28px 24px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  opacity: 0;
+  animation: sk-appear 0.2s ease 0.15s forwards;
+  --sk-base: rgba(var(--accent-rgb, 28, 28, 28), 0.07);
+  --sk-hi: rgba(255, 255, 255, 0.55);
+}
+:root.dark .sk {
+  --sk-base: rgba(var(--accent-rgb, 248, 247, 246), 0.08);
+  --sk-hi: rgba(255, 255, 255, 0.06);
+}
+@keyframes sk-appear { to { opacity: 1; } }
+
+.sk-b {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--sk-base);
+  height: 12px;
+  flex: none;
+}
+.sk-b::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent 20%, var(--sk-hi) 50%, transparent 80%);
+  animation: sk-shimmer 1.5s ease-in-out infinite;
+}
+@keyframes sk-shimmer { to { transform: translateX(100%); } }
+
+.sk-title { height: 26px; border-radius: 8px; margin-bottom: 8px; }
+.sk-thin { height: 9px; }
+.sk-gap { height: 10px; flex: none; }
+.sk-dot { width: 26px; height: 26px; border-radius: 50%; }
+.sk-ava { width: 30px; height: 30px; border-radius: 50%; }
+.sk-row { display: flex; align-items: center; gap: 10px; flex: none; }
+.sk-col { display: flex; flex-direction: column; gap: 7px; flex: 1; min-width: 0; }
+.sk-list { gap: 16px; padding: 16px 14px; }
+.sk-chat { gap: 22px; padding: 28px 20px; max-width: 760px; margin: 0 auto; }
+.sk-msg { display: flex; gap: 10px; align-items: flex-start; flex: none; }
+.sk-msg .sk-col { padding-top: 4px; }
+.sk-msg-user { justify-content: flex-end; }
+.sk-bubble { height: 34px; border-radius: 14px; }
+.sk-document { max-width: 720px; margin: 0 auto; }
+
+/* 数据就绪后的渐显替换:骨架分支卸载、真实内容分支挂载时,内容根挂这个类平滑淡入。 */
+.sk-fade-in { animation: sk-fade-in 0.2s ease; }
+@keyframes sk-fade-in { from { opacity: 0; } }
+
+/* 面板级错误面(视图渲染/懒 chunk 失败,可重试) */
+.sk-error {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+.sk-error-title { font-size: 14px; font-weight: 600; color: var(--text, #333); }
+.sk-error-msg { font-size: 12px; color: var(--text-muted, #888); max-width: 420px; word-break: break-all; }
+.sk-error-btn {
+  margin-top: 6px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #ddd);
+  background: var(--bg-card, #fff);
+  color: var(--text, #333);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sk-error-btn:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .sk { opacity: 1; animation: none; }
+  .sk-b::after { animation: none; opacity: 0; }
+  .sk-fade-in { animation: none; }
+}

@@ -3,7 +3,8 @@
  *  其余块仍走现成 <Markdown/>(gfm/math/高亮,与聊天一致)。嵌入必须包一层 .am-app tangu-lovable ——
  *  收件箱是独立 leaf,不在编辑器 .am-app 作用域内,而块样式(.embed-body/.md-block/.block-body)全挂在 .am-app 下。
  *  分类顺序与门禁与 BlockHost 一致(图片→db→画板→插件→文件→跨笔记),避免文件卡吃掉 db/画板/插件。 */
-import { Suspense, lazy, useEffect, useId, useMemo, useState } from 'react'
+import { Suspense, useEffect, useId, useMemo, useState } from 'react'
+import { lazyRetry } from '../../lazyRetry'
 import { splitIntoBlocks } from '@amadeus-shared/compiler/split'
 import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { toAssetUrl } from '@amadeus-shared/assets'
@@ -20,7 +21,7 @@ import { resolveFileName, resolveVaultPath } from '@amadeus/lib/vaultFiles'
 import { Markdown } from '../../components/Markdown'
 import { openFile, openNote } from '../../amadeusNav'
 
-const PdfEmbedViewer = lazy(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
+const PdfEmbedViewer = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
 const EMBED_RE = /^!\[\[([^\]\n]+)\]\]$/
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i

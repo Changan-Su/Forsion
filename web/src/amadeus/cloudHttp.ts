@@ -53,7 +53,21 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       headers['Content-Type'] = 'application/json'
       body = JSON.stringify(opts.json)
     }
-    const res = await fetch(`${cfg.apiBase}${path}${qs}`, { method, headers, body })
+    // 超时闸:无超时的 fetch 一旦挂死,页面 loading 态永不落地(移动端弱网实报「卡很久」根因之一)。
+    // 上传(multipart form)放宽到 120s;普通请求 30s。
+    const timeoutMs = opts?.form ? 120_000 : 30_000
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+    let res: Response
+    try {
+      res = await fetch(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
+    } catch (e) {
+      throw new HttpError(0, null, ctrl.signal.aborted
+        ? `请求超时(${timeoutMs / 1000}s),请检查网络后重试`
+        : `网络错误:${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      clearTimeout(timer)
+    }
     if (res.status === 401) {
       cfg.onUnauthorized()
       throw new HttpError(401, null)

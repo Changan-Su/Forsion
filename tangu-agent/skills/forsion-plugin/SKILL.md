@@ -1,7 +1,7 @@
 ---
 name: Forsion 扩展开发
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.4.0
+version: 1.5.0
 author: Forsion
 category: Forsion
 ---
@@ -71,6 +71,17 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 ```
 
 两种生命周期,发包前必须分清:**随包**(引擎插件、Space —— 父插件禁用即级联关闭/收起,卸载一并消失)与**播种一次**(Agent —— 首次发现拷入引擎成为活体,升级不覆盖、卸载保留)。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
+
+## 插件文件读写与「工作文件夹」(2026-08-03 起)
+
+桌面插件的文件面 = 活动笔记库(vault):`ctx.app.readFile/writeFile` 走 vault 相对路径,**整库可读写**,宿主钳死越界(路径逃逸抛错);写入原子落盘、父目录自动创建。落盘位置约定:**每个插件在设置详情页自动获得一条「工作文件夹」**(key `workFolder`,默认=插件显示名),产出一律写 `${ctx.app.workFolder()}/…`,别自造存储夹设置;给用户的产物存 **markdown**(可引用可检索),机器数据放点开头隐藏 sidecar。旧宿主没有 `workFolder`,兼容写法同 `ctx.notify`:
+
+```js
+const folder = ctx.app.workFolder ? ctx.app.workFolder() : '<插件名>'
+await ctx.app.writeFile(`${folder}/笔记.md`, markdown)
+```
+
+要自定义这条设置的 label/描述,setup 里自注册同 key 的 setting(同 key 重注册即覆盖标准行);用户改文件夹不迁移旧文件,读端自己做旧夹兜底。范例:`bluebird` 1.3.0(分析完自动保存 + 旧夹兜底 + check.mjs 迁移断言)。Session 同款约定:Tangu 会话默认工作区在笔记库 `Sessions/`——插件产物与会话产物同库,都能被笔记引用。
 
 ## 块表面:让插件的界面里放**真 Amadeus 块**(2026-07-26 起)
 

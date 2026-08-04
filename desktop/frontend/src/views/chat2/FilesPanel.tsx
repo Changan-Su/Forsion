@@ -1,11 +1,13 @@
 /** 文件面板(右侧栏):镜像会话侧栏结构 —— 列所有本地工作区文件夹(手风琴:展开一个,收起其余),
  *  展开后用 Electron listDir 列真实磁盘目录,子文件夹可逐级展开。
+ *  **只有一个工作区常驻可见**(pinnedKey,通常 = 当前打开文件所在的那个),其余全部收进底部
+ *  「显示全部工作区」折叠区 —— 手上这个文件夹永远在顶上,不用在一长串工作区里找。
  *  交互(与旧 RightPanel 工作区树对齐,复用同一套 fs IPC):单击选中,双击在主区开预览标签页;
  *  右键菜单(打开/系统默认打开/新建文件/文件夹/重命名/复制路径/文件管理器显示/回收站);
  *  行拖进文件夹=移动、Alt+拖=原生拖出、OS 文件拖入=复制;行内重命名/新建。
  *  云端 Project 工作区(kind='cloud',无磁盘路径)走 workspace API 按 project 取数(CloudGroup):
  *  只读呈现(预览/下载/删除),web/移动云端无 fs IPC 也可用;run 结束自动刷新。 */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ChevronRight, Folder, FolderOpen, RefreshCw, Download,
   Eye, ExternalLink, FilePlus2, FolderPlus, Pencil, Copy, FolderSearch, Trash2,
@@ -13,7 +15,7 @@ import {
 import type { WorkspaceDescriptor, WorkspaceFileMeta } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { ContextMenu, menuPos, type CtxItem, type CtxMenu } from '../../components/RightPanel'
-import { useI18n } from '../../i18n'
+import { registerMessages, useI18n } from '../../i18n'
 import { iconForFile, mimeForExt, fmtSize, b64ToBytes } from '../../services/fileKinds'
 import { listWorkspace, readWorkspaceFile, downloadWorkspaceFile, deleteWorkspaceFile } from '../../services/backendService'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
@@ -22,6 +24,10 @@ import { hostTargetFor } from '../wsFileNav'
 import { tipProps, fsTipLines } from '../../hoverTip'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import './sidebar2.css'
+
+registerMessages({
+  'panel.files.showAllWs': { zh: '显示全部工作区', en: 'Show all workspaces' },
+})
 
 interface Entry { name: string; isDir: boolean; size: number; path: string }
 
@@ -263,7 +269,7 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview }: {
   )
 }
 
-export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEnterWorkspace, expandToPath }: {
+export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEnterWorkspace, expandToPath, pinnedWorkspaceKey }: {
   workspaces: WorkspaceDescriptor[]
   onOpenPreview: (t: PreviewTarget) => void
   /** 共享「进入的工作区」key(与会话面板手风琴同步)。 */
@@ -271,6 +277,8 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   onEnterWorkspace?: (key: string | null) => void
   /** 自动展开到某绝对目录(统一工作区视图定位笔记所在目录;仅作用于当前展开的工作区)。 */
   expandToPath?: string | null
+  /** 置顶(常驻可见)的工作区;缺席/认不出 → 退回「进入的工作区」,再退回第一个。 */
+  pinnedWorkspaceKey?: string | null
 }) {
   const { t } = useI18n()
   const running = useApp((s) => Object.keys(s.runningBySession).length > 0)
@@ -282,6 +290,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   const [creating, setCreating] = useState<{ dir: string; kind: 'file' | 'folder' } | null>(null)
   const [menu, setMenu] = useState<CtxMenu>(null)
   const [dropDir, setDropDir] = useState<string | null>(null)
+  const [showAll, setShowAll] = useState(false)
   const draggingRef = useRef<string[] | null>(null)
 
   const toast = (m: string, err?: boolean): void => useApp.getState().toast(m, err)
@@ -433,6 +442,12 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     onEnterWorkspace?.(activeWorkspaceKey === ws.key ? null : ws.key)
   }
 
+  // 别人(会话面板/Coding Space)把手风琴切到了折叠区里的工作区 → 自动摊开折叠区,
+  // 否则用户看见的是「点了没反应」。
+  useEffect(() => {
+    if (activeWorkspaceKey && activeWorkspaceKey !== pinnedWorkspaceKey) setShowAll(true)
+  }, [activeWorkspaceKey, pinnedWorkspaceKey])
+
   // 当前进入的本地工作区首次展开时加载磁盘根目录。
   useEffect(() => {
     if (!activeWorkspaceKey) return
@@ -442,22 +457,21 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
 
   if (!locals.length && !clouds.length) return <div className="t2s-hint" style={{ padding: '18px 12px' }}>{t('panel.files.noLocalWs')}</div>
 
-  return (
-    <aside className="t2s-side">
-      <div className="t2s-scroll" onClick={(e) => { if (e.target === e.currentTarget) setSelected(null) }}>
-        {clouds.map((ws) => (
-          <CloudGroup
-            key={ws.key}
-            ws={ws}
-            open={activeWorkspaceKey === ws.key}
-            onToggle={() => toggleWs(ws)}
-            onOpenPreview={onOpenPreview}
-          />
-        ))}
-        {locals.map((ws) => {
-          const open = activeWorkspaceKey === ws.key
-          const roots = rootsByKey[ws.key]
-          return (
+  const renderWs = (ws: WorkspaceDescriptor): ReactNode => {
+    if (ws.kind === 'cloud') {
+      return (
+        <CloudGroup
+          key={ws.key}
+          ws={ws}
+          open={activeWorkspaceKey === ws.key}
+          onToggle={() => toggleWs(ws)}
+          onOpenPreview={onOpenPreview}
+        />
+      )
+    }
+    const open = activeWorkspaceKey === ws.key
+    const roots = rootsByKey[ws.key]
+    return (
             <div key={ws.key}>
               <div
                 className={`t2s-group${dropDir === ws.path ? ' drop' : ''}`}
@@ -497,8 +511,29 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
                 </div>
               </AnimatedCollapse>
             </div>
-          )
-        })}
+    )
+  }
+
+  // 置顶谁:当前打开文件所在的工作区 → 进入的工作区 → 第一个(保证顶上永远有一个可见的)。
+  const ordered = [...clouds, ...locals]
+  const pinKey = [pinnedWorkspaceKey, activeWorkspaceKey, ordered[0]?.key]
+    .find((k) => k && ordered.some((w) => w.key === k)) ?? null
+  const rest = ordered.filter((w) => w.key !== pinKey)
+
+  return (
+    <aside className="t2s-side">
+      <div className="t2s-scroll" onClick={(e) => { if (e.target === e.currentTarget) setSelected(null) }}>
+        {ordered.filter((w) => w.key === pinKey).map(renderWs)}
+        {rest.length > 0 && (
+          <>
+            <button className="t2sf-showall" onClick={() => setShowAll((v) => !v)}>
+              <span className={`t2s-chev${showAll ? ' open' : ''}`}><ChevronRight size={12} /></span>
+              {t('panel.files.showAllWs')}
+              <span className="t2sf-showall-n">{rest.length}</span>
+            </button>
+            <AnimatedCollapse open={showAll}>{rest.map(renderWs)}</AnimatedCollapse>
+          </>
+        )}
       </div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </aside>

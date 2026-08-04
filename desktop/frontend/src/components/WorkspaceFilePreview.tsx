@@ -5,7 +5,8 @@
  * 数据由 RightPanel 以 loader thunk 注入,与「云沙箱 / 本机」模式无关。
  * 重库(CodeMirror / docx-preview / diff2html / xlsx / jszip)一律懒加载,主 bundle 不膨胀。
  */
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { lazyRetry } from '../lazyRetry'
 import { motion } from 'framer-motion'
 import {
   Download, X, Maximize2, Minimize2, FileWarning, Loader2, RefreshCw,
@@ -24,7 +25,7 @@ import 'diff2html/bundles/css/diff2html.min.css'
 // ⚠️legacy 构建:pdf.js 5.7 用了 Map.prototype.getOrInsertComputed,Electron 40 V8 没有(见 PdfAnnotator)。
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
-const CodeView = lazy(() => import('./CodeView'))
+const CodeView = lazyRetry(() => import('./CodeView'))
 
 export interface PreviewData { mimeType: string; bytes: Uint8Array; size: number; mtimeMs?: number }
 /** name=显示名(文件名/相对路径);load=拉取字节(或超限);download=可选下载;

@@ -19,7 +19,7 @@ import { branchSession } from '../services/sessionBranch.js';
 
 const router = Router();
 
-const SESSION_COLS = 'id, title, model_id, archived, emoji, agent_config, project_path, project_name, created_at, updated_at';
+const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, created_at, updated_at';
 
 function parseMaybeJson(v: any): any {
   if (v == null) return null;

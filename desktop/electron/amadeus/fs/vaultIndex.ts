@@ -127,9 +127,13 @@ export class VaultIndex {
   /**
    * 「开启云同步」弹窗的递归关联闭包:从条目出发,沿 [[出链]]/![[嵌入]]/markdown 图片
    * 一路收集关联笔记与附件(visited 防环),只返回**种子范围之外**的部分
-   * (范围内的东西 scope 本来就带,不需要用户勾选)。
+   * (范围内的东西 scope 本来就带)。另外单列 subPages = 种子页的 `<stem>.fd/` 子笔记树:
+   * scope 本来就带,但用户要能看见并剔除(取消勾选 → entrySync 的 exclude)。
    */
-  async relatedClosure(rootRel: string, kind: 'page' | 'folder'): Promise<{ pages: string[]; files: string[] }> {
+  async relatedClosure(
+    rootRel: string,
+    kind: 'page' | 'folder',
+  ): Promise<{ pages: string[]; files: string[]; subPages: string[] }> {
     const nfc = (s: string): string => s.replace(/\\/g, '/').normalize('NFC')
     const root = nfc(rootRel)
     const allPages = [...this.entries.keys()].sort()
@@ -192,6 +196,8 @@ export class VaultIndex {
     return {
       pages: [...visited].filter((p) => !inSeedScope(p)).sort(),
       files: [...files].filter((f) => !inSeedScope(f)).sort(),
+      // 文件夹条目的「子页面」= 整棵子树,列出来只是噪音(勾选粒度按文件夹走),故仅页面条目给。
+      subPages: kind === 'page' ? seeds.filter((p) => nfc(p) !== root).sort() : [],
     }
   }
 

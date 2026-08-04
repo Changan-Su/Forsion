@@ -11,8 +11,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { DndContext, useSensors } from '@dnd-kit/core'
-import { Cloud, Clock, CloudSun, Globe, GripHorizontal, Lock, MoreHorizontal, Pin, Plus, Share2, Trash2, Type, Unlock } from 'lucide-react'
-import type { ViewProps } from '@lcl/engine'
+import { Cloud, Clock, CloudSun, Globe, GripHorizontal, LayoutGrid, Lock, MoreHorizontal, Pin, Plus, Share2, Trash2, Type, Unlock } from 'lucide-react'
+import type { Leaf, ViewProps } from '@lcl/engine'
 import {
   DASH_COLS,
   DASH_GAP_PX,
@@ -39,7 +39,7 @@ import { BlockHost } from '@amadeus/components/BlockHost'
 import { askString } from '@amadeus/components/askString'
 import { useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
-import { useWorkspace } from '@lcl/engine'
+import { allViews, getView, label, subscribeViews, useWorkspace } from '@lcl/engine'
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from '../components/CloudSyncDialog'
@@ -65,6 +65,13 @@ const ADD_MENU = [
   { key: 'weather', label: '天气', icon: CloudSun, w: 5, h: 4 },
   { key: 'webview', label: '网页', icon: Globe, w: 10, h: 10 },
 ] as const
+
+/** 视图卡片的出生尺寸(格):视图普遍要一块能读的地方,给得比功能卡片大。 */
+const VIEW_CARD_SIZE = { w: 10, h: 12 }
+/** 不进「添加视图」清单的注册键。刻意只排三个:
+ *  仪表盘自己(套娃)、侧栏空态与主区空态(它们是布局占位,不是内容)。其余一律自动列出 ——
+ *  新注册的视图(含插件视图)不用回来改这里。 */
+const VIEW_MENU_SKIP = new Set(['amadeus-dashboard', 'sidebar-empty', 'home'])
 
 function DashboardInner({ leaf }: ViewProps) {
   const store = useScopedPageStore()
@@ -195,6 +202,17 @@ function DashboardInner({ leaf }: ViewProps) {
     window.addEventListener('blur', onCancel)
   }
 
+  /** 插一张已排好位的卡片。返回块 id(插不进 → null)。 */
+  const insertCard = (content: string, w: number, h: number): string | null => {
+    const st = store.getState()
+    if (st.activePage !== dashPath) return null // 换页/已删 → 绝不往别人的笔记里插块
+    const id = st.insertBlockAfter(null, undefined, content)
+    if (!id) return null
+    const fresh = readDashLayout(store.getState().manifest?.fmExtra ?? '')
+    if (fresh.ok) applyLayout({ ...fresh.layout, [id]: findSlot(fresh.layout, w, h) })
+    return id
+  }
+
   const addCard = (kind: (typeof ADD_MENU)[number]['key']): void => {
     setAddMenu(false)
     void (async () => {
@@ -215,15 +233,24 @@ function DashboardInner({ leaf }: ViewProps) {
         }
         content = widgetSource('webview', { url: url.trim() })
       }
-      const st = store.getState()
-      if (st.activePage !== dashPath) return // 换页/已删 → 绝不往别人的笔记里插块
-      const id = st.insertBlockAfter(null, undefined, content)
-      if (!id) return
-      const fresh = readDashLayout(store.getState().manifest?.fmExtra ?? '')
-      if (!fresh.ok) return
       const spec = ADD_MENU.find((a) => a.key === kind)!
-      applyLayout({ ...fresh.layout, [id]: findSlot(fresh.layout, spec.w, spec.h) })
+      insertCard(content, spec.w, spec.h)
     })()
+  }
+
+  /** ＋ 菜单的「视图」区:直接读视图注册表 —— 谁注册了谁就在这儿,不维护白名单。
+   *  菜单开合时重算一次即可(插件运行期注册的视图,下次开菜单就在)。 */
+  const viewItems = useMemo(
+    () => allViews()
+      .filter((v) => !VIEW_MENU_SKIP.has(v.type))
+      .map((v) => ({ type: v.type, name: label(v.displayName), Icon: v.icon ?? LayoutGrid }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [addMenu],
+  )
+
+  const addViewCard = (type: string): void => {
+    setAddMenu(false)
+    insertCard(widgetSource('view', { type }), VIEW_CARD_SIZE.w, VIEW_CARD_SIZE.h)
   }
 
   /** 删卡片 = 删块。**不手动摘布局键** —— deleteBlock 是 async 且带反链二次确认,
@@ -323,6 +350,12 @@ function DashboardInner({ leaf }: ViewProps) {
                       <a.icon size={13} /> {a.label}
                     </button>
                   ))}
+                  <div className="dash-menu-sep">视图</div>
+                  {viewItems.map((v) => (
+                    <button key={v.type} onClick={() => addViewCard(v.type)} title={v.type}>
+                      <v.Icon size={13} /> {v.name}
+                    </button>
+                  ))}
                 </div>
               </>
             )}
@@ -389,7 +422,10 @@ function DashboardInner({ leaf }: ViewProps) {
                   </div>
                 )}
                 <div className="dash-card-body">
-                  {widget ? <WidgetCard widget={widget} /> : <BlockHost blockId={id} readOnly={locked} />}
+                  {widget?.kind === 'view'
+                    ? <ViewCard dashLeafId={leaf.id} dashPath={dashPath} blockId={id} opts={widget.opts} onClose={() => removeCard(id)} />
+                    : widget ? <WidgetCard widget={widget} />
+                    : <BlockHost blockId={id} readOnly={locked} />}
                 </div>
                 {!locked && <div className="dash-card-resize" onPointerDown={(e) => startPointer(e, id, 'resize')} title="缩放" />}
               </div>
@@ -442,4 +478,64 @@ function DashboardInner({ leaf }: ViewProps) {
       {shareCard && <ShareCard path={dashPath} anchor={shareCard} onClose={() => setShareCard(null)} />}
     </div>
   )
+}
+
+/** 视图卡片:把**任意已注册视图**(日历 / 待办 / 收件箱 / 活动日志 / 插件视图……)活化在格子里。
+ *  卡片源码 = ```view 围栏,`type:` 记注册键,其余键即该视图的 params。
+ *
+ *  做法是合成一个 Leaf 句柄喂给视图工厂 —— 视图不知道自己在仪表盘里,照常按 leaf.id 建作用域、
+ *  按 leaf.params 重建状态。三条刻意的取舍:
+ *  · leaf.id 不在 mainTabs 里:视图里那些「我是不是当前活动 tab」的判定一律得 false。这是对的 ——
+ *    卡片不是 tab,不该去抢活动作用域(如 setActivePageScope)、也不该被当成导航目标。
+ *  · setParams 写回卡片源码 → 随笔记落盘、重启还原;**只落标量**(源码是给人读的纯文本)。
+ *  · 不认 singleton:那是「开 tab」的约束;一份仪表盘里放两张日历是合理需求。 */
+function ViewCard({ dashLeafId, dashPath, blockId, opts, onClose }: {
+  dashLeafId: string
+  dashPath: string
+  blockId: string
+  opts: Record<string, string>
+  onClose: () => void
+}) {
+  const store = useScopedPageStore()
+  const type = opts.type ?? ''
+  const [, force] = useState(0)
+  // 插件视图可能晚于本卡片注册(插件在运行期 registerView)→ 订阅注册表,否则永远停在「不可用」。
+  useEffect(() => subscribeViews(() => force((n) => n + 1)), [])
+  // onClose 每帧新身份 → 走 ref,免得 leaf 跟着换身份(视图里以 leaf 为依赖的 effect 会空转)。
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  // parseWidget 每次都产新对象,同样不能直接当依赖 —— 用序列化值(opts 全是字符串,round-trip 安全)。
+  const optsKey = JSON.stringify(opts)
+  const params = useMemo(() => {
+    const { type: _t, ...rest } = JSON.parse(optsKey) as Record<string, string>
+    return rest as Record<string, unknown>
+  }, [optsKey])
+
+  const leaf = useMemo<Leaf>(() => ({
+    id: `${dashLeafId}::${blockId}`,
+    type,
+    loc: 'main',
+    params,
+    setTitle: () => {}, // 卡片没有标题栏可写
+    setParams: (p) => {
+      const st = store.getState()
+      if (st.activePage !== dashPath) return // 换页/已删 → 绝不写进别人的笔记
+      const next: Record<string, string> = { type }
+      for (const [k, v] of Object.entries(p)) {
+        // ponytail: 只落标量。视图想存复杂状态自己找地方(它本来就有自己的 store)。
+        if (k !== 'type' && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) next[k] = String(v)
+      }
+      const src = widgetSource('view', next)
+      if ((st.blocks[blockId]?.content ?? '').trim() === src) return // 没变就不写(堵住写盘自激)
+      st.setBlockContent(blockId, src)
+    },
+    close: () => closeRef.current(),
+  }), [dashLeafId, dashPath, blockId, type, params, store])
+
+  if (!type) return <div className="dash-widget"><div className="dash-widget-note">卡片源码里缺 `type:`(视图注册键)</div></div>
+  const def = getView(type)
+  if (!def) return <div className="dash-widget"><div className="dash-widget-note">视图「{type}」不可用 —— 可能来自未启用的插件</div></div>
+  // 复用引擎的 .wb-view(满高 flex 列 + 自身滚动):视图在卡片里拿到的尺寸语义与在 tab 里一致。
+  return <div className="wb-view dash-viewcard">{def.factory({ leaf, params })}</div>
 }

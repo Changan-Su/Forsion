@@ -80,6 +80,9 @@ void installMobileShim().then(async (ok) => {
         // ① 待存内容先在【旧桥】落盘 —— 换完桥再写就是写进另一个库(桌面同款泄漏,见 pageStore 注释)。
         await ps.flushAllScopes()
         impl = makeBridge(next)
+        // amadeusCloudVaults 由云桥挂在 window 上(侧栏据它判「这是云端库」并切分同步 Vault 分区)。
+        // 切回本地必须撤掉,否则本地树会被当云端树渲染出幽灵分区。切回云端时 makeBridge 会重挂。
+        if (next === 'local') delete (window as unknown as { amadeusCloudVaults?: unknown }).amadeusCloudVaults
         side = next
         try {
           localStorage.setItem(VAULT_MODE_KEY, next)

@@ -3,7 +3,7 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom } from 'lucide-react'
+import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
@@ -35,6 +35,7 @@ import { Markdown } from './Markdown'
 import { UpdateActions } from './UpdateActions'
 import { openChangelogTab } from '../views/ChangelogView'
 import { ModelGroupList } from './ModelGroupList'
+import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
 import { AuxModelChoice } from './AuxModelChoice'
 import { AgentsTab } from './AgentsTab'
@@ -51,6 +52,7 @@ import { PluginSettingsPage } from './PluginSettingsPage'
 import { AgentClisTab } from './AgentClisTab'
 import { QrImage } from './QrImage'
 import { likelyMainlandChina } from './OnboardingWizard'
+import { EnvProbeSection } from './EnvProbeSection'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -735,18 +737,17 @@ export const SettingsModal: React.FC<{
     setSub(k)
   }
 
-  // 分类导航(两域两级,与数据目录两层布局同构):大类=Forsion(桌面壳,含笔记等内置 views)/Tangu(引擎),
-  // 组内再分小类。品牌名作大类名,不进 i18n。只渲染 tabItems 里实际存在的项(沿用 desktop/devMode 过滤)。
+  // 分类导航(两级):大类只剩 Forsion(品牌名,不进 i18n),Tangu 降为它下面的一个小类,
+  // 与「选项 / 社区插件 / 系统」平级并排在选项之后 —— 引擎是 Forsion 的一部分,不是并列的另一个品牌。
+  // Tangu 原先的「AI / 工具」两组合并成一组:分完只有两三项,两个组头比它们管的条目还多。
   // Amadeus 不设组——它只是一个 Space(views 组合),笔记设置归「选项」,插件只有 Forsion/Tangu 两种。
-  const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[] }> }> = [
+  // brand:小类标题默认 uppercase(中文标签看不出来),品牌名不该被喊成「TANGU」。
+  const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[]; brand?: boolean }> }> = [
     { key: 'forsion', label: 'Forsion', groups: [
       { key: 'options', label: t('settings.group.options'), tabs: ['general', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'notes', 'sync'] },
+      { key: 'tangu', label: 'Tangu', brand: true, tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'fplugins', label: t('settings.group.communityPlugins'), tabs: ['amadeus-plugins'] },
       { key: 'system', label: t('settings.group.system'), tabs: ['advanced', 'developer', 'about'] },
-    ] },
-    { key: 'tangu', label: 'Tangu', groups: [
-      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks'] },
-      { key: 'tools', label: t('settings.group.tools'), tabs: ['channels', 'browser'] },
     ] },
   ]
 
@@ -785,7 +786,7 @@ export const SettingsModal: React.FC<{
                 const items = secHit || grp.label.toLowerCase().includes(ql)
                   ? all
                   : all.filter(([, label]) => label.toLowerCase().includes(ql))
-                return { key: grp.key, label: grp.label, items }
+                return { key: grp.key, label: grp.label, brand: grp.brand, items }
               })
               .filter((g) => g.items.length > 0)
             if (groups.length === 0) return null
@@ -794,7 +795,7 @@ export const SettingsModal: React.FC<{
                 <div className="settings-nav-sectionhead">{sec.label}</div>
                 {groups.map((grp) => (
                   <div key={grp.key} className="settings-nav-group">
-                    <div className="settings-nav-grouphead">{grp.label}</div>
+                    <div className={`settings-nav-grouphead${grp.brand ? ' brand' : ''}`}>{grp.label}</div>
                     {grp.items.map(([id, label]) => (
                       <button key={id} className={tab === id ? 'active' : ''} onClick={() => goTab(id)}>
                         {TAB_ICONS[id]}{label}
@@ -965,6 +966,8 @@ export const SettingsModal: React.FC<{
                             {t('settings.backend.staleDist')}
                           </div>
                         )}
+                        {/* 环境检测(与首启向导第③步同一个组件):事后回来补装 node/git 的地方。 */}
+                        <EnvProbeSection onLeave={() => useApp.getState().closeSettings()} />
                         <div className="field">
                           <button
                             className="btn ghost sm"
@@ -1308,26 +1311,12 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'model' && activeSub === 'm-models' && (
                   <>
-                    <div className="field">
-                      <label>{t('settings.model.defaultLabel')}</label>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <input
-                          type="text"
-                          value={draft.modelId}
-                          onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}
-                          placeholder={t('settings.model.defaultPlaceholder')}
-                        />
-                        <button className="btn ghost sm" onClick={() => p.onConfigChange({ modelId: draft.modelId })}>
-                          {t('settings.btn.save')}
-                        </button>
-                      </div>
-                      <div className="hint">
-                        {t('settings.model.defaultHintPrefix')}<code>&lt;providerId&gt;/&lt;model&gt;</code>{t('settings.model.defaultHintSuffix')}
-                      </div>
-                    </div>
+                    {/* 「默认模型」= 这个分组列表本身(点一下即写 modelId)。原先它上面还有一个手填
+                        `<providerId>/<model>` 的输入框,和列表写同一个值 —— 用户当然会问「怎么是手填的」。
+                        删掉输入框、把列表的标题从「可用模型」改成「默认模型」,一个入口。 */}
                     <div className="field">
                       <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {t('settings.model.availableLabel')}
+                        {t('settings.model.defaultLabel')}
                         <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={loadModels}>
                           <RefreshCw size={12} className={modelsLoading ? 'spin' : ''} />
                         </button>
@@ -1357,40 +1346,23 @@ export const SettingsModal: React.FC<{
                       ) : null}
                     </div>
 
-                    {/* 生图模型(generate_image 用):选中即设为默认,再点取消=跟随云端生图默认;无则给配置指引。 */}
+                    {/* 生图模型(generate_image 用):留空=跟随云端生图默认;无可用模型则给配置指引。 */}
                     <div className="field">
                       <label>{t('settings.model.imageModelsLabel')}</label>
                       {(() => {
                         const imgs = (models?.models || []).filter((m) => m.modelType === 'image_gen')
                         if (!imgs.length) return <div className="hint">{modelsLoading ? t('common.loading') : t('settings.model.imageEmpty')}</div>
-                        const cloudImageDefault = models?.imageModelId || ''
                         return (
-                          <div className="model-group-body">
-                            {imgs.map((m) => {
-                              const selected = (draft.imageModelId || '') === m.id
-                              return (
-                                <button
-                                  key={`${m.source}-${m.id}`}
-                                  className={`file-row${selected ? ' active' : ''}`}
-                                  onClick={() => { const v = selected ? '' : m.id; setDraft({ ...draft, imageModelId: v }); p.onConfigChange({ imageModelId: v }) }}
-                                >
-                                  <span className="file-name" style={{ color: selected ? 'var(--accent-ink)' : undefined }}>{m.name}</span>
-                                  {m.source === 'direct' && <span className="model-group-tag">{t('model.group.direct')}</span>}
-                                  {!draft.imageModelId && m.id === cloudImageDefault && (
-                                    <span className="model-group-tag">{t('settings.model.imageCloudDefaultTag')}</span>
-                                  )}
-                                  {selected && <Check size={12} style={{ color: 'var(--accent-ink)' }} />}
-                                </button>
-                              )
-                            })}
-                          </div>
+                          <ModelSelect
+                            models={imgs}
+                            value={draft.imageModelId || ''}
+                            cloudDefaultId={models?.imageModelId}
+                            icon={<ImageIcon size={13} />}
+                            onChange={(v: string) => { setDraft({ ...draft, imageModelId: v }); p.onConfigChange({ imageModelId: v }) }}
+                          />
                         )
                       })()}
-                      <div className="hint" style={{ marginTop: 4 }}>
-                        {!draft.imageModelId && models?.imageModelId
-                          ? t('settings.model.imageFollowingDefault', { model: (models.models || []).find((m) => m.id === models.imageModelId)?.name || models.imageModelId })
-                          : t('settings.model.imageHelp')}
-                      </div>
+                      <div className="hint" style={{ marginTop: 4 }}>{t('settings.model.imageHelp')}</div>
                     </div>
 
                     {isDesktop && <AuxModelChoice models={models} />}
@@ -2913,8 +2885,12 @@ export const SettingsModal: React.FC<{
                     {(upd.phase === 'available' || upd.phase === 'downloaded') && (
                       <div className="field">
                         <div style={{ fontWeight: 600 }}>{t('about.update.available', { version: upd.version || '' })}</div>
+                        {/* 更新说明来自仓库 CHANGELOG.md 那一节(见 electron/updater.ts),是 markdown ——
+                            按 .md-body 正典渲染,别再当纯文本 pre-wrap 摊开。 */}
                         {upd.releaseNotes ? (
-                          <div className="hint" style={{ marginTop: 4, whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{upd.releaseNotes}</div>
+                          <div className="md-body" style={{ marginTop: 4, maxHeight: 260, overflow: 'auto' }}>
+                            <Markdown content={upd.releaseNotes} />
+                          </div>
                         ) : null}
                       </div>
                     )}

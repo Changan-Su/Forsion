@@ -8,13 +8,14 @@
  *   只读引擎 ribbon 注册表(useRibbonStore),动作是 feature 层注册进来的,引擎不 import feature 代码。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { PanelLeft, PanelRight, X, MoreHorizontal, ChevronDown, Plus } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { getView } from './viewRegistry'
 import { label } from './types'
 import { useWorkspace } from './singleColumnStore'
+import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 // ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
 // `import './engine.css'` 原本挂在 Shell 上 —— 外壳一换,`.cmd-overlay/.cmd-panel` 这套命令浮层
@@ -33,7 +34,16 @@ export function LeafHost() {
   const active = useWorkspace.getState().getActiveLeaf()
   const def = active ? getView(active.type) : null
   if (!active || !def) return null
-  return <div className="mb-view" key={`${active.id}:${active.type}`}>{def.factory({ leaf: active, params: active.params })}</div>
+  // 面板级兜底(与 desktop WorkspaceHost 同款):懒视图挂起 → 骨架屏;失败 → 本视图错误面可重试。
+  return (
+    <div className="mb-view" key={`${active.id}:${active.type}`}>
+      <ViewErrorBoundary>
+        <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
+          {def.factory({ leaf: active, params: active.params })}
+        </Suspense>
+      </ViewErrorBoundary>
+    </div>
+  )
 }
 
 function Drawer({ side, docked }: { side: 'left' | 'right'; docked?: boolean }) {
@@ -72,7 +82,15 @@ function Drawer({ side, docked }: { side: 'left' | 'right'; docked?: boolean }) 
         <button className="mb-icon-btn" onClick={close} aria-label="close"><X size={20} /></button>
       </div>
       <div className="mb-drawer-body">
-        {def && active ? <div className="mb-view" key={`${active.id}:${active.type}`}>{def.factory({ leaf: active, params: active.params })}</div> : null}
+        {def && active ? (
+          <div className="mb-view" key={`${active.id}:${active.type}`}>
+            <ViewErrorBoundary>
+              <Suspense fallback={<Skeleton variant="list" />}>
+                {def.factory({ leaf: active, params: active.params })}
+              </Suspense>
+            </ViewErrorBoundary>
+          </div>
+        ) : null}
       </div>
     </>
   )

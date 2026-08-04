@@ -4,11 +4,32 @@
  * 复刻 apps/Forsion-AI-Studio/client/services/cloudAgentService.ts 的成熟模式。
  */
 import type { AgentConfig, AgentRunEvent, Attachment, StartRunResult, TanguDesktopConfig } from '../types'
+import { CHANGELOG } from '../changelog'
 import { authFetch } from './http'
 
 function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 }
+
+/**
+ * 本客户端(桌面 / web / mobile)全端共用的 app id。桌面 standalone 基线本就应答它,云端 worker 经
+ * appProfiles.config 文件层覆盖同样认它(2026-07-17 弃用独立 'tangu-web')。
+ * 任何要按 app 解析配置的端点(run / models / …)都得带上,否则云端会落到 worker 基线 'ai-studio'。
+ */
+export const AGENT_APP_ID = 'tangu'
+
+/**
+ * 客户端面标识(统计维度,与 app_id **正交** —— 归属恒为 'tangu',在哪个端调的用这个分):
+ * `desktop|web|mobile / 渲染层版本`。随 run 体上报,落 agent_runs.input.client,
+ * admin 的 /client-stats 按它分组。模块求值时三端垫片均已挂好 window.tangu(web/mobile 的
+ * entry 都是先装垫片再动态 import 渲染层)。
+ */
+export const CLIENT_ID = `${
+  typeof window === 'undefined' ? 'desktop' // node 环境(vitest)兜底,浏览器里恒有 window
+  : window.tangu?.mobile ? 'mobile'
+  : window.tangu?.cloudWeb ? 'web'
+  : 'desktop'
+}/${CHANGELOG[0]?.version || '0'}`
 
 export async function testConnection(cfg: TanguDesktopConfig): Promise<{ ok: boolean; message: string }> {
   try {
@@ -39,9 +60,8 @@ export async function startRun(
     body: JSON.stringify({
       session_id: params.sessionId,
       model_id: params.modelId || cfg.modelId || undefined,
-      // 全端共用 'tangu':桌面 standalone 基线本就应答它,云端 worker 经 appProfiles.config 文件层
-      // 覆盖同样认它(2026-07-17 弃用独立 'tangu-web',web/桌面云会话与 admin 模型配置统一一份)。
-      app_id: 'tangu',
+      app_id: AGENT_APP_ID,
+      client: CLIENT_ID,
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

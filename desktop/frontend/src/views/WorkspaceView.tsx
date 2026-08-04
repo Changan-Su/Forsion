@@ -21,7 +21,7 @@ import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { AmadeusPagesView, AmadeusOutlineView } from '../amadeusViews'
 import { usePageStore } from '@amadeus/store/pageStore'
 import type { WorkspaceDescriptor } from '../types'
-import { autoWorkspaceMode, type WorkspaceMode } from './workspaceMode'
+import { autoWorkspaceMode, workspaceKeyForPath, type WorkspaceMode } from './workspaceMode'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { VaultSideSwitch } from '../components/VaultSideSwitch'
 
@@ -31,6 +31,20 @@ function useActiveMainType(): string | null {
   const api = useWorkspace.getState().api
   const am = api ? activeMainPanel(api) : null
   return am ? (((am.params ?? {}) as { __type?: string }).__type ?? null) : null
+}
+
+/** 当前主区打开的文件绝对路径 —— 文件面板据此把它所在的工作区置顶。
+ *  两个来源就够:文件预览标签页(params.path)与 Coding Space 当前文件。
+ *  Amadeus 文档族不走这里:它们由 vaultCtx 合成 vault 工作区并已在顶上(见 FilesBody)。
+ *  ponytail: 认不出来就 null,面板自己退回「进入的工作区」,不做视图类型穷举。 */
+function useCurrentFilePath(): string | null {
+  useWorkspace((s) => s.mainTabs)
+  const api = useWorkspace.getState().api
+  const am = api ? activeMainPanel(api) : null
+  const p = (am?.params ?? {}) as { path?: unknown }
+  const codeFile = useCodeStudio((s) => s.activeFile)
+  if (typeof p.path === 'string' && p.path) return p.path
+  return codeFile ?? null
 }
 
 /** 文件模式体:appStore 接线(≈ 原 FilesView),编辑器场景注入合成的 vault 工作区并定位笔记目录。
@@ -66,6 +80,9 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
   const onOpenPreview = mainType === 'code-studio'
     ? (target: PreviewTarget): void => { if (target.path) useCodeStudio.getState().openFile(target.path) }
     : s.setFilePreview
+  // 置顶「当前打开文件所在的工作区」;编辑器场景的 vault 工作区本来就排在首位,直接用它。
+  const curFile = useCurrentFilePath()
+  const pinnedWorkspaceKey = vaultKey ?? workspaceKeyForPath(workspaces, curFile)
   return (
     <FilesPanel
       workspaces={workspaces}
@@ -73,6 +90,7 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
       activeWorkspaceKey={vaultCtx ? localKey : s.activeWorkspaceKey}
       onEnterWorkspace={(key) => (vaultCtx ? setLocalKey(key) : s.setActiveWorkspaceKey(key))}
       expandToPath={vaultCtx?.noteDir ?? null}
+      pinnedWorkspaceKey={pinnedWorkspaceKey}
     />
   )
 }

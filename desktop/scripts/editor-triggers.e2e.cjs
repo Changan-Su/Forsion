@@ -53,11 +53,16 @@ async function main() {
         return t
       })
     )
+  // ⚠️ 剥掉 `.heading-hash`:光标在标题行时 headingSource 会画一个 `# ` widget 装饰,
+  // 它是装饰不是文档内容(不进选区、不进序列化)。断言问的是「文档里有什么」,不该看见它。
   const texts = () =>
     page.evaluate(() =>
       [...document.querySelectorAll('.md-block')].map((b) => {
         const pm = b.querySelector('.ProseMirror')
-        return pm ? pm.textContent : null
+        if (!pm) return null
+        const c = pm.cloneNode(true)
+        c.querySelectorAll('.heading-hash').forEach((n) => n.remove())
+        return c.textContent
       })
     )
 
@@ -873,6 +878,163 @@ async function main() {
     })
     await legacy.close()
     check('T34 老笔记的裸 `>` 仍是普通引用', legacyCls === '', `class=${JSON.stringify(legacyCls)}`)
+  })
+
+  // ─── F6:2026-08-03 那批(标题源码行 / 行内链接 / 标题折叠)───
+
+  // T35:光标进标题行 → 露字面 `#` 并降回正文排版;离开 → 收回,变回大标题。
+  await tryTest('T35', async () => {
+    const p = await freshPage('## 二级标题')
+    const probe = () => p.evaluate(() => {
+      const h = document.querySelector('.md-block .ProseMirror :is(h1,h2,h3,h4,h5,h6)')
+      const hash = h && h.querySelector('.heading-hash')
+      const body = document.querySelector('.md-block .ProseMirror')
+      return {
+        hash: hash ? hash.textContent : null,
+        src: !!(h && h.classList.contains('heading-src')),
+        fs: h ? parseFloat(getComputedStyle(h).fontSize) : 0,
+        base: body ? parseFloat(getComputedStyle(body).fontSize) : 0,
+        tag: h ? h.tagName : null,
+      }
+    })
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.waitForTimeout(300)
+    const on = await probe()
+    check('T35 光标在标题行 → 露出字面 "## "', on.hash === '## ', `hash=${JSON.stringify(on.hash)}`)
+    // ⚠️ 露源码时**必须仍是标题字号**。曾经降回正文,结果「敲 `# ` 触发已生效」与
+    // 「触发压根没生效」在屏幕上一模一样(用户实报「输入 # 什么也没发生」)。
+    check('T35 露源码时仍是标题字号(绝不降回正文)', !on.src && on.fs > on.base + 2, JSON.stringify(on))
+    check('T35 节点是 h2', on.tag === 'H2', `tag=${on.tag}`)
+    // 井号是装饰而非文本:落盘必须还是 `## 二级标题`,不能变成 `## ## 二级标题`
+    check('T35 井号不进文档(往返不变)', (await mdOf(p)).trim() === '## 二级标题', `md=${JSON.stringify(await mdOf(p))}`)
+    await p.evaluate(() => document.activeElement.blur())
+    await p.waitForTimeout(300)
+    const off = await probe()
+    check('T35 失焦 → 井号收回,字号照旧是标题', off.hash === null && off.fs > off.base + 2, JSON.stringify(off))
+
+    // 用户实报的那条:空块里敲 `# ` 必须**当场**变成 H1 字号(而不是「看着什么也没发生」)。
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    const body = await q.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.md-block .ProseMirror')).fontSize))
+    await q.keyboard.type('# 标题', { delay: 40 })
+    await q.waitForTimeout(500)
+    const live = await q.evaluate(() => {
+      const h = document.querySelector('.md-block .ProseMirror h1')
+      return h ? { fs: parseFloat(getComputedStyle(h).fontSize), hash: h.querySelector('.heading-hash')?.textContent ?? null } : null
+    })
+    check('T35 敲 "# " 当场变 H1 字号(不能看着像没生效)', !!live && live.fs > body + 2, JSON.stringify({ ...live, body }))
+    check('T35 同时露出字面 "# "', live?.hash === '# ', `hash=${JSON.stringify(live?.hash)}`)
+    check('T35 井号不进文档(落盘仍是 `# 标题`)', (await mdOf(q)).trim() === '# 标题', `md=${JSON.stringify(await mdOf(q))}`)
+    await q.close()
+    await p.close()
+  })
+
+  // T36:行内工具栏「链接」按钮。此前它调 toggleLinkCommand 不带 payload,link schema 的 href
+  //      是必填 string → mark.create 直接抛,按钮点了完全没反应(用户实报)。
+  await tryTest('T36', async () => {
+    const p = await freshPage('点这里')
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('End')
+    for (let i = 0; i < 3; i++) await p.keyboard.press('Shift+ArrowLeft')
+    await p.waitForTimeout(400)
+    await p.locator('.inline-toolbar [data-act="link"]').dispatchEvent('mousedown')
+    await p.waitForTimeout(300)
+    check('T36 点链接按钮弹出地址输入框', (await p.locator('.dialog-input').count()) === 1)
+    await p.locator('.dialog-input').fill('forsion.net/docs')
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(700)
+    const md = (await mdOf(p)).trim()
+    check('T36 裸域名自动补 https:// 并写成 markdown 链接', md === '[点这里](https://forsion.net/docs)', `md=${JSON.stringify(md)}`)
+    check('T36 渲染成可点的 <a>', (await p.locator('.md-block .ProseMirror a[href="https://forsion.net/docs"]').count()) === 1)
+    // 再点一次 = 取消链接(空输入等同取消,拿不到「确认了但留空」,故去链接走无弹窗路径)
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('End')
+    for (let i = 0; i < 3; i++) await p.keyboard.press('Shift+ArrowLeft')
+    await p.waitForTimeout(400)
+    await p.locator('.inline-toolbar [data-act="link"]').dispatchEvent('mousedown')
+    await p.waitForTimeout(600)
+    check('T36 已是链接时再点 = 去链接(不再弹框)', (await p.locator('.dialog-input').count()) === 0)
+    check('T36 去链接后回到纯文本', (await mdOf(p)).trim() === '点这里', `md=${JSON.stringify(await mdOf(p))}`)
+    await p.close()
+
+    // javascript: 一律拒绝 —— 笔记会被分享页独立渲染,这是个真 XSS 面。
+    const q = await freshPage('危险')
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.press('End')
+    for (let i = 0; i < 2; i++) await q.keyboard.press('Shift+ArrowLeft')
+    await q.waitForTimeout(400)
+    await q.locator('.inline-toolbar [data-act="link"]').dispatchEvent('mousedown')
+    await q.waitForTimeout(300)
+    await q.locator('.dialog-input').fill('javascript:alert(1)')
+    await q.keyboard.press('Enter')
+    await q.waitForTimeout(700)
+    check('T36 javascript: 地址被拒(不落盘成链接)', (await mdOf(q)).trim() === '危险', `md=${JSON.stringify(await mdOf(q))}`)
+    await q.close()
+  })
+
+  // T37:标题折叠(?fold harness:真 PageView,H1/正文/H2/正文/H1 各占一行)。
+  //     折叠 UI 本来就有(PageView 的 .amx-hfold),本轮补的是**持久化 + 按笔记分桶**。
+  await tryTest('T37', async () => {
+    const p = await browser.newPage()
+    p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await p.goto(`${URL}?fold`, { waitUntil: 'domcontentloaded' })
+    await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
+    await p.waitForTimeout(700)
+    const shown = () => p.evaluate(() => [...document.querySelectorAll('.md-block .ProseMirror')].map((e) => e.textContent.trim()))
+    check('T37 只有「其下还有行」的标题行才有折叠箭头(H1/H2 各一,末尾 H1 无下文)',
+      (await p.locator('.amx-hfold').count()) === 2, `arrows=${await p.locator('.amx-hfold').count()}`)
+    check('T37 初始五块全在', (await shown()).length === 5, JSON.stringify(await shown()))
+
+    await p.locator('.amx-hfold').first().click() // 折起第一个 H1
+    await p.waitForTimeout(400)
+    check('T37 折 H1 → 吃到下一个 H1 之前', JSON.stringify(await shown()) === '["一级标题","另一个一级标题"]', JSON.stringify(await shown()))
+    check('T37 折起有 folded 态记号', (await p.locator('.amx-hfold.folded').count()) === 1)
+
+    await p.locator('.amx-hfold').first().click() // 展开
+    await p.waitForTimeout(400)
+    check('T37 再点展开 → 五块全回来', (await shown()).length === 5, JSON.stringify(await shown()))
+
+    await p.locator('.amx-hfold').nth(1).click() // 折起 H2
+    await p.waitForTimeout(400)
+    check('T37 折 H2 只吃它自己那段', JSON.stringify(await shown()) === '["一级标题","一级下的正文","二级标题","另一个一级标题"]', JSON.stringify(await shown()))
+
+    // 折叠态落 localStorage 且**按笔记路径分桶**(块 id 是每份文件的小整数,不分桶必跨笔记串档)
+    const persisted = await p.evaluate(() => localStorage.getItem('amadeus.heading.fold'))
+    check('T37 折叠态按笔记分桶存 localStorage', persisted === '{"Harness.md":["f3"]}', `ls=${persisted}`)
+    const contents = await p.evaluate(() => Object.values(window.__pageStore.getState().blocks).map((b) => b.content))
+    check('T37 折叠不改笔记内容(绝不写进 .md)', !contents.join('|').includes('fold'), JSON.stringify(contents))
+
+    // 重新载入 = 重开笔记:折叠必须还在(本轮要修的正是这条)
+    await p.reload({ waitUntil: 'domcontentloaded' })
+    await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
+    await p.waitForTimeout(700)
+    check('T37 重开后折叠仍在(记忆保存)', JSON.stringify(await shown()) === '["一级标题","一级下的正文","二级标题","另一个一级标题"]', JSON.stringify(await shown()))
+    await p.close()
+  })
+
+  // T38:`[[` 补全的两面 —— 光标**路过**已写完的双链不弹(否则面板吃掉 ↑/↓ 把光标困死),
+  //      但在里面**打字**改目标名时必须照常弹(否则改不了已有链接的目标,是 UX 回归)。
+  await tryTest('T38', async () => {
+    const p = await freshPage('看 [[某笔记]] 这里')
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('Home')
+    for (let i = 0; i < 4; i++) await p.keyboard.press('ArrowRight') // 光标移进 [[…]] 内部
+    await p.waitForTimeout(400)
+    check('T38 光标路过已闭合的双链 → 不弹补全', (await p.locator('.wiki-suggest').count()) === 0)
+    await p.keyboard.type('X', { delay: 40 }) // 在链接里打字 = 正在改目标名
+    await p.waitForTimeout(400)
+    check('T38 在已有双链里打字 → 照常弹补全(别为了修陷阱把改目标名一起废掉)', (await p.locator('.wiki-suggest').count()) === 1)
+    await p.keyboard.press('Escape')
+    await p.waitForTimeout(200)
+    await p.close()
+
+    // 新写一条链接:全程该弹
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.type('看 [[新笔', { delay: 40 })
+    await q.waitForTimeout(400)
+    check('T38 新写 `[[` 未闭合 → 照常弹', (await q.locator('.wiki-suggest').count()) === 1)
+    await q.close()
   })
 
   const fails = results.filter((r) => !r.ok).length

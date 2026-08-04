@@ -227,6 +227,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     <button
       key={s.id}
       className={`t2s-srow${s.id === p.activeId ? ' active' : ''}`}
+      // Historian 会话摘要 → 悬停预览(无摘要回落标题本身,长标题被截断时仍可读全)。
+      title={s.summary || s.title || undefined}
       // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts。
       style={{ paddingLeft: rowPadLeft(1) }}
       onClick={() => { p.onSelect(s.id); accordion(sessionWorkspaceKey(s)) }}

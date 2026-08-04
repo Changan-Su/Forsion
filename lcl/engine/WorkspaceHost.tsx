@@ -3,7 +3,7 @@
  * 从 panel props 造 Leaf 再调 def.factory)。onReady 恢复上次布局,否则调 buildDefault;
  * 布局变更持久化。主题叠 dockview-theme-light|dark + .dockview-theme-lcl(--dv-* → LCL token)。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DockviewReact,
   type DockviewReadyEvent,
@@ -24,6 +24,7 @@ import { getActiveSpace } from './spaceRegistry'
 import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
+import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 
 /** 从 Dockview panel.params 造可跨窗重建的 ViewRef({type, 用户 params});剥引擎私有 __loc/__type。 */
 function viewRefFromParams(params: Record<string, unknown> | undefined, component?: string): ViewRef | null {
@@ -65,7 +66,16 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       lastMainViewType = def.type
       return changed
     })
-    return <div className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}>{def.factory({ leaf, params: leaf.params })}</div>
+    // 面板级兜底:懒视图挂起 → 骨架屏(替代空白);渲染/chunk 失败 → 本面板错误面,不再冒到根边界。
+    return (
+      <div className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}>
+        <ViewErrorBoundary>
+          <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
+            {def.factory({ leaf, params: leaf.params })}
+          </Suspense>
+        </ViewErrorBoundary>
+      </div>
+    )
   }
 }
 

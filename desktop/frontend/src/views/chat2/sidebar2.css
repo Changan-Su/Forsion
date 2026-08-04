@@ -202,6 +202,16 @@
 .t2sf-loading { font-size: 12.5px; color: var(--text-faint, var(--text-muted)); padding: 2.5px 6px; }
 /* 左 30px 不是间距而是对齐常量(= 缩进基准 14 + 图标列偏移 16),与同槽 .t2sf-loading 的内联值一致。 */
 .t2sf-empty { font-size: 12.5px; color: var(--text-faint, var(--text-muted)); padding: 3px 6px 3px 30px; }
+/* 「显示全部工作区」:非置顶的工作区都收在它下面。做成弱化的普通行,别抢置顶那棵树的注意力。 */
+.t2sf-showall {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  margin-top: 6px; padding: 3.5px 6px;
+  border: none; background: transparent; cursor: pointer;
+  font: inherit; font-size: 12.5px; text-align: left;
+  color: var(--text-faint, var(--text-muted)); border-radius: 8px;
+}
+.t2sf-showall:hover { background: var(--overlay-light); color: var(--text); }
+.t2sf-showall-n { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; }
 .t2sf-row.sel { background: var(--overlay-medium); }
 .t2sf-row.drop, .t2s-group.drop { background: var(--accent-light); box-shadow: inset 0 0 0 1px var(--accent-ink); border-radius: var(--radius-sm, 8px); }
 .t2sf-input {

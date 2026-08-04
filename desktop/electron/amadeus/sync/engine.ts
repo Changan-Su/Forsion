@@ -716,6 +716,13 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   /** 本地触发的单路径对账(远端视角用 shadow 基线近似;真变更由 PUT 409 兜住)。 */
   const reconcileLocal = async (serverPath: string): Promise<void> => {
     if (!shadow) return
+    // scope 缩小(按条目同步剔除子页面/关闭条目)后 shadow 里还留着旧路径,而 scanJob 会按 shadow
+    // 键补队到这里 —— 不复查范围的话:本地改过=push 把已排除内容推上云,本地删了=pushDelete 抹掉
+    // 云端副本。范围外一律只丢基线(与 fullReconcile 对同一情形的 dropShadow 同结论)。
+    if (!scoped(serverPath, kindForServerPath(serverPath))) {
+      dropShadowEntry(serverPath)
+      return
+    }
     if (!(await rootAlive())) return
     const local = await localHashOf(serverPath)
     const entry = shadow.files[serverPath] ?? null

@@ -16,11 +16,24 @@ import { subscribe, type AgentEvent } from '../services/eventBus.js';
 
 const router = Router();
 
+/**
+ * 客户端面标识白名单(信任边界:值来自客户端,会进 admin 统计的 group-by 与展示)。
+ * 锁死 `<平台>/<版本>` 形态且平台只认自家客户端(cli/tui 预留)——不只挡脏字符,还挡任意串:
+ * 认证用户能造高基数标签污染无分页的统计分组(2026-08-03 Codex 评审)。不合法 → undefined。
+ */
+const CLIENT_TAG_RE = /^(desktop|web|mobile|cli|tui)\/[A-Za-z0-9._-]{1,32}$/;
+export function normalizeClientTag(v: unknown): string | undefined {
+  return typeof v === 'string' && CLIENT_TAG_RE.test(v) ? v : undefined;
+}
+
 // 起一个 run
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client } = req.body || {};
+    // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
+    // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
+    const clientTag = normalizeClientTag(client);
     // 接缝①(G1):app_id 经请求流入(缺省=本进程装配的 profile);未知 app_id 拒绝。
     const profile = resolveProfile(app_id);
     if (!profile) {
@@ -64,7 +77,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       appId: profile.appId,
       modelId,
       assistantMessageId,
-      input: { message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {} },
+      input: { message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {}, ...(clientTag ? { client: clientTag } : {}) },
     });
 
     enqueueRun(session_id, runId); // 同会话已有在飞 run 则排队，否则立刻起；均不 await

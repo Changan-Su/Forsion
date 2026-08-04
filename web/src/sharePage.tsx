@@ -101,7 +101,10 @@ function ShareApp({ token }: { token: string }): React.ReactElement {
       if (m.mode === 'subtree') {
         const tr = await fetch(`${base}/tree`)
         if (tr.ok) {
-          const t = (await tr.json()) as ShareTree
+          const raw = (await tr.json()) as ShareTree
+          // 点开头路径段=内部件(库标记 .forsion-vault.md、.trash…),对外一律隐身,与三端树同尺子。
+          const vis = (p: string): boolean => !p.split('/').some((seg) => seg.startsWith('.'))
+          const t: ShareTree = { ...raw, pages: raw.pages.filter(vis), folders: raw.folders.filter(vis) }
           setTree(t)
           const first = location.hash.slice(1) ? decodeURIComponent(location.hash.slice(1)) : t.pages[0]
           setCurrent(first ?? null)

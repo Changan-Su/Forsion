@@ -78,9 +78,13 @@
 /* 顶部工具条(sticky,随滚动常驻顶部):左 前进后退 + 路径面包屑 / 右 模式切换钮。
  * 与编辑器融为一体:实色纸面底(var(--bg),同 dockview 纸面),不玻璃、不分割线、不投影;
  * 滚动时正文从其后穿过被实色底遮住,无毛玻璃、无接缝(此前 backdrop blur 已去除)。 */
+/* 标题(面包屑末段)要居中于**整个 view**,不是「居中于按钮左边那段空间」。
+   原来 .amx-crumbs 是 flex:1 的普通项 + justify-content:center —— 它只在
+   [0, 宽度-按钮组宽] 这段里居中,于是标题永远偏左半个按钮组的距离。改成绝对定位按视口中线摆,
+   按钮组靠 justify-content:flex-end 留在右侧。max-width 兜住长标题,免得压到按钮上。 */
 .amx-toolbar {
   position: sticky; top: 0; z-index: 3;
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
   padding: 6px 10px 2px;
   background: var(--bg);
 }
@@ -93,7 +97,7 @@
  * 悬停标题栏(整条 amx-toolbar)时父级路径展开——宽度走 grid 0fr→1fr(布局插值,标题被
  * 平滑推向右,且始终是同一个元素),段的文字逐级淡入(--d stagger,靠标题近的先出);
  * 移出反向:段同步淡出、容器收拢、标题回中。右侧字数/按钮不参与(crumbs flex:1 吸收全部变化)。 */
-.amx-crumbs { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; flex: 1 1 auto; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12.5px; }
+.amx-crumbs { position: absolute; left: 50%; transform: translateX(-50%); max-width: 58%; display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12.5px; }
 .amx-crumbs-parents { display: grid; grid-template-columns: 0fr; flex: 0 999 auto; min-width: 0; transition: grid-template-columns 0.24s var(--ease-out, cubic-bezier(0.2, 0.8, 0.3, 1)); }
 .amx-crumbs-parents-in { overflow: hidden; min-width: 0; display: flex; align-items: center; white-space: nowrap; }
 .amx-toolbar:hover .amx-crumbs-parents,
@@ -382,6 +386,8 @@
 /* 行内公式常常只有一两个字高,按钮压上去会盖住 —— 缩小并挪到右上角外沿 */
 .am-app .amx-src-btn--inline { top: -9px; right: -4px; height: 16px; padding: 0 4px; font-size: 10px; }
 .am-app .amx-src-btn--block { top: 6px; right: 6px; }
+/* 「打开」按钮排在 `</>` 左边(两颗都绝对定位在块右上角,给它右移一个按钮宽 + 间距)。 */
+.am-app .amx-src-btn--block.amx-open-btn { right: 40px; display: inline-flex; align-items: center; justify-content: center; }
 
 /* 行内图片嵌入的包裹层(为了给 `</>` 一个定位父级);图片本身的尺寸样式仍在 .wiki-inline-img */
 .am-app .wiki-inline-img-wrap { position: relative; display: inline-block; line-height: 0; }
@@ -1303,7 +1309,8 @@
 .amx-sec-hint.amx-cs-warn { color: var(--danger, #e5484d); cursor: help; }
 
 /* 开启云同步弹窗:关联勾选组 */
-.am-app .dialog.amx-csd { width: min(440px, calc(100vw - 48px)); }
+/* 三组勾选(子页面/关联笔记/附件)叠起来能顶穿视口,而弹窗居中且外层不滚 → 按钮会够不着。 */
+.am-app .dialog.amx-csd { width: min(440px, calc(100vw - 48px)); max-height: min(78vh, 720px); overflow: auto; }
 .amx-csd-group { margin: 8px 0 2px; }
 .amx-csd-head { display: flex; align-items: center; gap: 6px; font: 600 12px var(--font-ui); opacity: .85; padding: 2px 0 4px; }
 .amx-csd-all { margin-left: auto; border: none; background: none; color: var(--accent-ink, var(--accent)); font-size: 11.5px; cursor: pointer; padding: 0 2px; }
@@ -1388,6 +1395,13 @@
 }
 .dash-add-menu button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .dash-add-menu button.dash-danger:hover { color: var(--danger, #e5484d); }
+/* 「视图」区是注册表全量(几十条,还会随插件长)→ 菜单必须能滚,不能顶穿窗口。 */
+.dash-add-menu { max-height: min(62vh, 460px); overflow-y: auto; }
+.dash-menu-sep {
+  margin: 4px 2px 2px; padding: 3px 6px 2px;
+  border-top: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  font-size: 11px; color: var(--text-muted);
+}
 
 /* ── 功能卡片 ── */
 .dash-widget { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 8px; text-align: center; }
@@ -1402,6 +1416,9 @@
 .dash-card[data-widget='clock'] .dash-card-body,
 .dash-card[data-widget='weather'] .dash-card-body { container-type: inline-size; overflow: hidden; }
 .dash-card[data-widget='webview'] .dash-card-body { overflow: hidden; }
+/* 视图卡片:滚动交给视图自己(.wb-view 已是满高 flex 列 + overflow auto),外层别再套一层滚动条。 */
+.dash-card[data-widget='view'] .dash-card-body { overflow: hidden; }
+.dash-viewcard { font-size: 13px; }
 .dash-webview { width: 100%; height: 100%; display: flex; border: none; }
 /* 仪表盘顶部提示条:frontmatter 读不懂 / 布局与块 id 对不上 —— 两种情况都**停止一切自动写入**,
    宁可画面不好看也不能把用户的布局覆盖掉,所以必须明说,不能默默降级。 */

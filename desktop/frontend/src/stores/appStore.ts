@@ -285,6 +285,8 @@ export interface AppState {
   mergeBackgroundSubChats(sessionId: string, items: Array<{ runId: string; title: string; status: string }>): void
   boot(): Promise<void>
   refreshAgents(): void
+  /** 历史拉取在途(按会话):ChatView 据此显示会话骨架屏而非空状态(module 级 loadedHistory 不响应式)。 */
+  historyLoading: Record<string, boolean>
   loadSessionHistory(sessionId: string): Promise<void>
   pollSession(sessionId: string): Promise<void>
   setActiveId(id: string | null): void
@@ -421,6 +423,7 @@ export const useApp = create<AppState>((set, get) => ({
   steerRestoreBySession: {},
   filePreview: null,
   messagesBySession: {},
+  historyLoading: {},
   configBySession: {},
   // 上次各会话展示的内容随快照复活("上次展示的东西还展示着");直播格是瞬态,不在快照里
   deskBySession: typeof localStorage !== 'undefined' ? unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY)) : {},
@@ -982,6 +985,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (loadedHistory.has(sessionId)) return
     loadedHistory.add(sessionId)
+    set((s) => ({ historyLoading: { ...s.historyLoading, [sessionId]: true } }))
     try {
       const c = get().cfg
       const [records, config, active] = await Promise.all([
@@ -1028,6 +1032,12 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e: any) {
       loadedHistory.delete(sessionId)
       get().toast(t('app.historyLoadFail', { e: e?.message || e }), true)
+    } finally {
+      set((s) => {
+        const historyLoading = { ...s.historyLoading }
+        delete historyLoading[sessionId]
+        return { historyLoading }
+      })
     }
   },
 
@@ -1422,6 +1432,8 @@ export const useApp = create<AppState>((set, get) => ({
     if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
     if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
+    // 同理带上「何时转写」档:云端会话的引擎读不到本机 config.json,不带就永远按 auto 跑。
+    if (!agentConfig.visionMode && get().cfg.visionMode) agentConfig.visionMode = get().cfg.visionMode
     try { if (localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1') agentConfig.debugSystemPrompt = true } catch { /* ignore */ }
     if (workspaceFiles?.length) {
       try {

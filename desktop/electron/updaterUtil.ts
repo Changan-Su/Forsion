@@ -14,6 +14,30 @@ export function notesToString(notes: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * 从 CHANGELOG.md 里抠出某个版本那一节的正文(不含 `## x.y.z (日期)` 标题行本身)。
+ * 找不到该节 → undefined。
+ *
+ * 为什么要这个:发版流程用的是 `gh release create --generate-notes`,Release 正文是 GitHub
+ * 按提交/PR 自动拼的清单,**不是**我们写给用户的更新日志;而 Win/Linux 的 latest.yml 干脆
+ * 不带 releaseNotes。两条路都拿不到「2.7.4 到底更新了什么」——只能回源 CHANGELOG.md。
+ */
+export function changelogSection(md: string, version: string): string | undefined {
+  const want = version.trim().replace(/^v/i, '')
+  const lines = md.split('\n')
+  let start = -1
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^##\s+v?([0-9][^\s(]*)/.exec(lines[i])
+    if (!m) continue
+    if (start === -1) {
+      if (m[1] === want) start = i + 1
+    } else {
+      return lines.slice(start, i).join('\n').trim() || undefined
+    }
+  }
+  return start === -1 ? undefined : lines.slice(start).join('\n').trim() || undefined
+}
+
 /** 版本串拆成 { 主版本三段, prerelease 标识数组 };忽略 build 元数据(+xxx,semver 规定不参与比较)。 */
 function parse(v: string): { main: number[]; pre: Array<string | number> } {
   const clean = v.trim().replace(/^v/i, '').split('+')[0]

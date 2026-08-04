@@ -713,6 +713,16 @@
   letter-spacing: 0.04em;
   color: var(--text-muted);
 }
+/* 标题源码行(headingSource.ts):光标进了这行,行首露出字面井号。
+   ⚠️ **绝不要再把这一行降回正文排版**。栽过一次:降回正文之后,用户敲 `# ` 时触发其实已经生效
+   (节点真的变成了 h1),但看上去字号纹丝不动、行首还杵着一个 `#` —— 与「触发压根没生效」
+   完全无法区分(用户实报「输入 # 什么也没发生」)。Obsidian 的行为也是井号可见 + 标题照常大。 */
+.am-app .milkdown .ProseMirror .heading-hash {
+  color: var(--text-muted);
+  font-weight: 400;
+  opacity: 0.55;
+  user-select: none;
+}
 .am-app .milkdown .ProseMirror p {
   margin: 0.3em 0;
 }

@@ -6,7 +6,8 @@
  *  且跨源子框架被 Chromium 硬禁 file picker(「导入文件」全废)。与 wsfile / Agent Desk 的 HtmlPreview 同宿体同分区。
  *  Code:可编辑 CodeMirror,防抖写回(mtime CAS);右栏文件树点文件 → 进 Code 选中。
  *  实时跟随:Coding Agent 每写一个文件 → 刷新预览;首个 .html 自动设为入口。纯渲染端,host 缺失降级为占位。 */
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazyRetry } from '../lazyRetry'
 import { Code2, Eye, RotateCw, Folder, FolderPlus, Globe, Loader2, ExternalLink } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { BROWSER_PARTITION } from '../../../shared/browser'
@@ -19,7 +20,7 @@ import { b64ToBytes } from '../services/fileKinds'
 import { parseStreamingWrite } from './streamingWrite'
 import type { UiMessage, ToolEvent } from '../types'
 
-const CodeView = lazy(() => import('../components/CodeView'))
+const CodeView = lazyRetry(() => import('../components/CodeView'))
 
 /** 节流:限制值更新频率(流式代码喂给 CodeMirror ~15fps,避免每 token 全量重渲。 */
 function useThrottledValue<T>(value: T, ms: number): T {

@@ -42,6 +42,7 @@
     "pack": "electron-builder --config electron-builder.config.cjs --dir",
     "dist": "electron-builder --config electron-builder.config.cjs",
     "fetch-python": "node build/fetch-python.cjs",
+    "fetch-node": "node build/fetch-node.cjs",
     "typecheck": "tsc --noEmit && node ../tangu-agent/scripts/sync-command-catalog.mjs --check",
     "dev:amadeus": "FORSION_PRODUCT=amadeus electron-vite dev --noSandbox",
     "build:amadeus": "FORSION_PRODUCT=amadeus electron-vite build",
@@ -52,7 +53,10 @@
     "check:hooks": "eslint --config build/eslint.hooks.mjs \"frontend/src/**/*.{ts,tsx}\"",
     "check:deskshot": "node scripts/desk-shot.check.cjs",
     "check:splash": "node scripts/splash-loop.check.cjs",
-    "check:parity": "node scripts/platform-parity.check.cjs"
+    "check:parity": "node scripts/platform-parity.check.cjs",
+    "test:ics-tz": "for tz in Europe/London America/New_York Asia/Shanghai Australia/Lord_Howe UTC; do echo \"== $tz\"; TZ=$tz vitest run frontend/src/views/calendar/ics.test.ts || exit 1; done",
+    "check:arrowtrap": "node scripts/arrow-trap.check.cjs",
+    "check:bsfocus": "node scripts/backspace-focus.check.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

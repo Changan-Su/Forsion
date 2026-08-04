@@ -79,6 +79,12 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Atomically write a vault file's UTF-8 text by its exact vault-relative path (self-write ledger →
    *  the app's own saves don't bounce back as external changes). Creates the file if absent. */
   writeFile(path: string, text: string): Promise<void>
+  /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
+   *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
+   *  this returns that value, defaulting to the plugin's display name. Use it as the base for
+   *  readFile/writeFile paths (`${ctx.app.workFolder()}/note.md`) — folders spring into existence
+   *  on first write. Older hosts lack this method: feature-check `ctx.app.workFolder` first. */
+  workFolder(): string
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void

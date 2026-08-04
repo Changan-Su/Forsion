@@ -5,7 +5,7 @@
  *  重命名/设默认/新标签打开/改列映射/移出日历;底部「+ 添加 Forsion database」搜库入历。 */
 import { useEffect, useMemo, useState } from 'react'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
-import { Plus, Search, Database } from 'lucide-react'
+import { Plus, Search, Database, Globe, Upload } from 'lucide-react'
 import { CheckboxInput } from '@astryxdesign/core/CheckboxInput'
 import { AstryxScope } from '../theme/astryxBridge'
 import { askString } from '@amadeus/components/askString'
@@ -15,6 +15,8 @@ import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useAllDatabases, isDateCol, type AggDb } from '../amadeus/store/dbAggregateStore'
 import { useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
+import { MAX_IMPORT_BYTES, useIcsCalDbs, useIcsCalendars } from '../stores/icsCalendarStore'
+import { icsCalendarName } from './calendar/ics'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath, memberOf } from '../amadeus/store/calendarConfigStore'
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { openDb } from '../amadeusNav'
@@ -109,6 +111,8 @@ function ConfigList() {
   const members = useCalendarMembers()
   const agentDbs = useAgentCalDbs() // agent 日程只读源:进图例(调色/显隐可用,无 ★/⋯)
   const otherDbs = useOtherVaultCalDbs() // 非活动侧只读日历(任务1:汇总两侧,名字已带 Vault 后缀)
+  const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics)
+  const icsErrors = useIcsCalendars((s) => s.errors)
   const byVault = useCalendarConfig((s) => s.byVault)
   const setColor = useCalendarConfig((s) => s.setColor)
   const toggleHidden = useCalendarConfig((s) => s.toggleHidden)
@@ -117,14 +121,16 @@ function ConfigList() {
   const removeMember = useCalendarConfig((s) => s.removeMember)
 
   const [showAdd, setShowAdd] = useState(false)
-  const [menu, setMenu] = useState<{ db: AggDb; x: number; y: number } | null>(null)
+  const [importErr, setImportErr] = useState<string | null>(null)
+  const [menu, setMenu] = useState<{ db: AggDb; ics?: boolean; x: number; y: number } | null>(null)
   const [editing, setEditing] = useState<AggDb | null>(null) // 「Calendar 设置」改列映射
 
   const memberPaths = useMemo(() => new Set(members.map((m) => m.db.path)), [members])
-  const dbs: Array<{ db: AggDb; readonly?: boolean; kind?: 'agent' | 'other' }> = [
+  const dbs: Array<{ db: AggDb; readonly?: boolean; kind?: 'agent' | 'other' | 'ics' }> = [
     ...members.map((m) => ({ db: m.db })),
     ...agentDbs.map((db) => ({ db, readonly: true, kind: 'agent' as const })),
     ...otherDbs.map((db) => ({ db, readonly: true, kind: 'other' as const })),
+    ...icsDbs.map((db) => ({ db, readonly: true, kind: 'ics' as const })),
   ]
   const def = defaultDbPath(vault, byVault)
 
@@ -134,6 +140,38 @@ function ConfigList() {
       const name = n?.trim()
       if (name && name !== db.name) useDbStore.getState().mutate(db.path, (d) => ({ ...d, name }))
     })
+  }
+
+  // ── 外部日历订阅(.ics)──────────────────────────────────────────────────
+  const icsId = (path: string): string => path.slice('ics://'.length)
+  const icsError = (path: string): string | undefined => icsErrors[icsId(path)]
+  const subscribe = (): void => {
+    void askString('订阅外部日历', '', { label: '粘贴 .ics 订阅地址(Google / Outlook / Apple 日历「密钥地址」都行)' }).then((url) => {
+      const u = url?.trim()
+      if (!u) return
+      useIcsCalendars.getState().add(u) // 名字先占位;首轮拉取拿到 X-WR-CALNAME 自动替换
+    })
+  }
+  const importFile = (): void => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.ics,text/calendar'
+    input.onchange = () => {
+      const f = input.files?.[0]
+      if (!f) return
+      // 解析是同步的:大文件不设闸会把渲染进程冻住(用户误选一个几百 MB 的文件不是稀奇事)。
+      if (f.size > MAX_IMPORT_BYTES) { setImportErr(`文件过大(> ${MAX_IMPORT_BYTES / 1024 / 1024}MB)`); return }
+      setImportErr(null)
+      void f
+        .text()
+        .then((text) => {
+          if (!useIcsCalendars.getState().importText(icsCalendarName(text) || f.name.replace(/\.ics$/i, ''), text)) {
+            setImportErr('这不是一个 .ics 日历文件')
+          }
+        })
+        .catch((e: unknown) => setImportErr(`读取失败:${(e as Error)?.message || String(e)}`))
+    }
+    input.click()
   }
 
   return (
@@ -150,8 +188,9 @@ function ConfigList() {
               <span className="amx-calcfg-swatch" style={{ background: visible ? color : 'transparent', borderColor: color }}>
                 <input type="color" value={color} onChange={(e) => setColor(vault, db.path, e.target.value)} title="事件颜色" />
               </span>
-              <span className={`amx-calcfg-name${visible ? '' : ' off'}`} title={db.name}>
-                {kind === 'agent' ? `⚙ ${db.name}` : db.name}
+              <span className={`amx-calcfg-name${visible ? '' : ' off'}`} title={icsError(db.path) || db.name}>
+                {kind === 'agent' ? `⚙ ${db.name}` : kind === 'ics' ? `🌐 ${db.name}` : db.name}
+                {kind === 'ics' && icsError(db.path) && <span className="amx-cal-vault"> · 拉取失败</span>}
                 {(() => {
                   // Vault 归属后缀(淡显):agent 已用 ⚙ 标识不缀;other 用其所属侧名;其余=活动侧库,缀活动侧名。
                   const vaultLabel = kind === 'agent' ? '' : kind === 'other' ? (db.vaultLabel || '') : activeLabel
@@ -166,13 +205,13 @@ function ConfigList() {
                 value={visible}
                 onChange={() => toggleHidden(vault, db.path)}
               />
-              {!readonly && (
+              {(!readonly || kind === 'ics') && (
                 <button
                   className="amx-calcfg-more"
                   title="更多"
                   onClick={(e) => {
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                    setMenu({ db, x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 })
+                    setMenu({ db, ics: kind === 'ics', x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 })
                   }}
                 >
                   ⋯
@@ -185,16 +224,45 @@ function ConfigList() {
       <button className="amx-calcfg-add" onClick={() => setShowAdd(true)}>
         <Plus size={14} /> 添加 Forsion database
       </button>
+      <button className="amx-calcfg-add" onClick={subscribe}>
+        <Globe size={14} /> 订阅外部日历(.ics)
+      </button>
+      <button className="amx-calcfg-add" onClick={importFile}>
+        <Upload size={14} /> 导入 .ics 文件
+      </button>
+      {importErr && <div className="amx-calcfg-hint" style={{ color: 'var(--danger)' }}>{importErr}</div>}
       {dbs.length > 0 && <div className="amx-calcfg-hint">★=新建默认库 · 勾选=是否显示 · 点色块改颜色 · ⋯ 更多</div>}
 
       {menu && (
         <div className="amx-db-popwrap" onMouseDown={() => setMenu(null)}>
           <OverlayAt className="amx-db-pop amx-calcfg-menu" x={menu.x} y={menu.y} onMouseDown={(e) => e.stopPropagation()}>
+            {menu.ics ? (
+              <>
+                {!!useIcsCalendars.getState().subs.find((x) => x.id === icsId(menu.db.path))?.url && (
+                  <button className="amx-db-opt" onClick={() => { void useIcsCalendars.getState().refresh(icsId(menu.db.path)); setMenu(null) }}>立即刷新</button>
+                )}
+                <button
+                  className="amx-db-opt"
+                  onClick={() => {
+                    const id = icsId(menu.db.path)
+                    const cur = menu.db.name
+                    setMenu(null)
+                    void askString('重命名订阅', cur).then((n) => { if (n?.trim()) useIcsCalendars.getState().rename(id, n.trim()) })
+                  }}
+                >
+                  重命名
+                </button>
+                <button className="amx-db-opt amx-db-opt-danger" onClick={() => { useIcsCalendars.getState().remove(icsId(menu.db.path)); setMenu(null) }}>取消订阅</button>
+              </>
+            ) : (
+              <>
             <button className="amx-db-opt" onClick={() => rename(menu.db)}>重命名</button>
             <button className="amx-db-opt" onClick={() => { setDefault(vault, menu.db.path); setMenu(null) }}>设为默认库</button>
             <button className="amx-db-opt" onClick={() => { openDb(menu.db.path); setMenu(null) }}>在新标签打开</button>
             <button className="amx-db-opt" onClick={() => { setEditing(menu.db); setMenu(null) }}>Calendar 设置(改列映射)</button>
             <button className="amx-db-opt amx-db-opt-danger" onClick={() => { removeMember(vault, menu.db.path); setMenu(null) }}>从日历移除</button>
+              </>
+            )}
           </OverlayAt>
         </div>
       )}

@@ -67,6 +67,18 @@ describe('buildScope + scopeMatches', () => {
     const empty = buildScope([])
     expect(scopeMatches(empty, 'Notes/Plan.md')).toBe(false)
   })
+
+  it('exclude:被剔除的子页面(含其冲突副本与子树)不过闸,同侪不受影响', () => {
+    const s = buildScope(entries, ['Notes/Plan.fd/私密.md', 'Projects/Alpha/草稿'])
+    expect(scopeMatches(s, 'Notes/Plan.fd/私密.md')).toBe(false)
+    expect(scopeMatches(s, 'Notes/Plan.fd/私密.fd/更深.md')).toBe(false)
+    expect(scopeMatches(s, conflictCopyPath('Notes/Plan.fd/私密.md', new Date(2026, 6, 16, 3, 12)))).toBe(false)
+    expect(scopeMatches(s, 'Notes/Plan.fd/公开.md')).toBe(true)
+    expect(scopeMatches(s, 'Projects/Alpha/草稿/x.md')).toBe(false)
+    expect(scopeMatches(s, 'Projects/Alpha/正式/x.md')).toBe(true)
+    // 祖先目录仍放行:folder move/mkdir 事件不能因为里面有排除项就被挡死。
+    expect(scopeMatches(s, 'Notes')).toBe(true)
+  })
 })
 
 describe('rewriteEntriesForMove', () => {

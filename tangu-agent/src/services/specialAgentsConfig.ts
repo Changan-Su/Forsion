@@ -23,10 +23,13 @@ export interface HistorianConfig {
   /**
    * 工作模式:independent=Historian 自己判断并写 LOG/memory(默认);
    * assist=触发后分支出简短后台讨论(branch+群聊,无主持人总结),与该会话的主 Agent 商议,
-   * 由主 Agent 自己经 log_event/remember 写入。标题两种模式都由 Historian 独立维护;
-   * 首轮(roundN===1)始终走 independent。
+   * 由主 Agent 自己经 log_event/remember 写入。标题/摘要各模式都由 Historian 独立维护;
+   * assist 首轮(roundN===1)始终走 independent。
+   * fork=尾部分叉判官:用会话模型在主 loop workingMessages 快照上追加一条判官指令做一次补全
+   * (cacheKey=sessionId,同工具面+同思考档 → 前缀缓存可命中;借 self_brainstorm 管线),产出与
+   * independent 同形的 judge JSON,下游候选/整固管线一字不动;快照缺席/超窗/失败自动回落 independent。
    */
-  mode: 'independent' | 'assist';
+  mode: 'independent' | 'assist' | 'fork';
   /** memory 判断提示词（空=用默认）。标题总结用固定内部提示。 */
   prompt: string;
 }
@@ -125,7 +128,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       // (它是用户感知的「多久维护一次」高频值;旧 everyMemoryRounds 的低频含义已废弃)。
       everyRounds: clampInt(h.everyRounds ?? h.everyTitleRounds, d.historian.everyRounds, 1, 100),
       firstRoundTrigger: asBool(h.firstRoundTrigger, d.historian.firstRoundTrigger),
-      mode: h.mode === 'assist' ? 'assist' : d.historian.mode,
+      mode: h.mode === 'assist' || h.mode === 'fork' ? h.mode : d.historian.mode,
       prompt: asStr(h.prompt, d.historian.prompt),
     },
     muse: {

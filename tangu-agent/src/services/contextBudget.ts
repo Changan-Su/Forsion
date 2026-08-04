@@ -49,6 +49,7 @@ const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/gpt-4\.1/i, 1_000_000],
   [/claude|sonnet|opus|haiku/i, 200_000],
   [/gemini-[23]/i, 1_000_000], // 只认主线 2.x/3 聊天族;其余 gemini 变体窗口不一,留 128k 保守值
+  [/deepseek-v4/i, 1_000_000], // V4 flash/pro 都是 1M;老 chat/reasoner 线窗口小得多,不收
 ];
 
 /**

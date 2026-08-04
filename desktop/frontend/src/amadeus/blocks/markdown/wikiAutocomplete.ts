@@ -26,7 +26,7 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
     () =>
       new Plugin({
         view: () => ({
-          update(view) {
+          update(view, prevState) {
             const { selection } = view.state
             if (!selection.empty) return report(null)
             const $head = selection.$head
@@ -36,6 +36,19 @@ export function wikiSuggestPlugin(report: (q: WikiQuery | null) => void) {
             if (open < 0) return report(null)
             const q = before.slice(open + 2)
             if (/[\]\n]/.test(q)) return report(null) // the [[ was closed or aborted
+            // ⚠️ 光标**后面**已经有配对的 `]]` = 这条双链早就写完了。这种情况下**只有用户真的在里面
+            // 打字才补全,单纯移动光标不弹**:
+            //  · 不加这道闸 → 「↑ 从下一行走进 [[某笔记]] 那一行」会当场弹出候选面板,而面板要吃掉
+            //    ↑/↓ 做菜单选择,光标从此困死在这一行(用户实报「双链引用行上不去」)。
+            //  · 只按「闭合就不弹」一刀切 → 用户想改已有链接的目标名时再也拿不到候选(Codex 评审指出的
+            //    UX 回归)。所以判据是「文档有没有变」而不是「链接闭没闭合」。
+            // 仪器:scripts/arrow-trap.check.cjs(路过不弹) + editor-triggers 的 T38(打字仍弹)。
+            const after = $head.parent.textBetween($head.parentOffset, $head.parent.content.size, undefined, '￼')
+            const line = after.split('\n', 1)[0]
+            const close = line.indexOf(']]')
+            const nextOpen = line.indexOf('[[')
+            const closed = close >= 0 && (nextOpen < 0 || close < nextOpen)
+            if (closed && (!prevState || prevState.doc.eq(view.state.doc))) return report(null)
             const from = $head.start() + open + 2
             const to = selection.head
             let coords: { left: number; top: number; bottom: number }

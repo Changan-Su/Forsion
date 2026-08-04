@@ -210,6 +210,8 @@ export async function runMigration(): Promise<void> {
       // Background Session 父链接:@讨论 / Historian 辅助讨论等隐藏子会话指回其来源会话,
       // 供 GET /agent/sessions/:id/background(右栏「子聊天」)持久列出。
       `ALTER TABLE chat_sessions ADD COLUMN parent_session_id VARCHAR(36)`,
+      // Historian 会话摘要(人读:列表预览 / [[session:]] 引用第一跳 / 整固上下文)。
+      `ALTER TABLE chat_sessions ADD COLUMN summary TEXT`,
       // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
       `ALTER TABLE tangu_wechat_accounts ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`,
       `ALTER TABLE tangu_wechat_bindings ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`,
@@ -256,6 +258,13 @@ export async function runMigration(): Promise<void> {
     await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'user'`);
   } catch (e: any) {
     console.warn('[agent-core] chat_sessions.kind 列迁移失败：', e?.message || e);
+  }
+
+  // Historian 会话摘要(人读;区别于 session_summaries 的压缩检查点=给模型的交接件)。幂等。
+  try {
+    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT`);
+  } catch (e: any) {
+    console.warn('[agent-core] chat_sessions.summary 列迁移失败：', e?.message || e);
   }
 
   // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。幂等。
@@ -307,6 +316,24 @@ export async function runMigration(): Promise<void> {
     await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS agent_slug VARCHAR(64)`);
   } catch (e: any) {
     console.warn('[agent-core] chat_messages.attachments/display_files/agent_slug 列迁移失败：', e?.message || e);
+  }
+
+  // 会话 app_id 归位(2026-08-03,幂等):客户端此前 list/create 不带 app_id,Tangu 面(Web/桌面云)
+  // 的会话被服务端兜底写成 'ai-studio',而它们的 run 一直显式带 'tangu'(agentRunService)——
+  // 用 run 表当证据把纯 Tangu 会话迁回来。**只迁 run 全为 tangu 的**:混用会话(在 AI Studio 里
+  // 也跑过的)留在 ai-studio,宁可 Tangu 列表少见一条,不让 AI Studio 的会话凭空消失。
+  // 无 run 的空会话无证据,不迁。standalone(SQLite)由 fixLegacyAppIds 无条件迁,不走此分支。
+  try {
+    const r = await query<any[]>(
+      `UPDATE chat_sessions SET app_id = 'tangu'
+       WHERE app_id = 'ai-studio'
+         AND id IN (SELECT session_id FROM agent_runs WHERE app_id = 'tangu' AND session_id IS NOT NULL)
+         AND id NOT IN (SELECT session_id FROM agent_runs WHERE app_id <> 'tangu' AND session_id IS NOT NULL)
+       RETURNING id`,
+    );
+    if (r?.length) console.log(`✅ [agent-core] 会话 app_id 归位:${r.length} 条 ai-studio → tangu(按 run 证据)`);
+  } catch (e: any) {
+    console.warn('[agent-core] 会话 app_id 归位失败(下次启动重试):', e?.message || e);
   }
 
   console.log('✅ [agent-core] migrations done (agent_runs/agent_steps/agent_run_events)');

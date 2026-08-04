@@ -12,8 +12,10 @@ import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
 import { AutomationBuilderHost } from './amadeusAutomation'
 import { fdDirOf } from '@amadeus/lib/fd'
+import { resolveFileName } from '@amadeus/lib/vaultFiles'
+import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
 import { useUiOverlay, type TemplateCtx } from './amadeusOverlayStore'
-import { pageKey } from '@amadeus-shared/links'
+import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
@@ -50,6 +52,33 @@ export function AmadeusOverlays() {
     }
     window.addEventListener('amadeus:open-db', onOpenDb)
     return () => window.removeEventListener('amadeus:open-db', onOpenDb)
+  }, [])
+  // 引用块的「打开」按钮 ⌘/Ctrl+点击 → 新标签页打开被引用的内容(同 open-db 的事件解耦模式)。
+  // ⚠️ 目标名先经 linkTarget() 剥掉 `|别名`/`|120` 与 `#锚点`:嵌入写法里 `![[pic.png|120]]`、
+  //    `![[看板.db|宽表]]`、`![[笔记|别名]]` 都很常见,原样拿去解析一律 miss,还会掉进
+  //    openWikiLink 的「创建笔记」兜底,弹出「要不要新建 pic.png|120」(Codex 评审实证)。
+  // ⚠️ 按钮挂在**所有**嵌入块上(笔记/图片/PDF/DB/画板/插件文件),所以按目标类型分流,
+  //    别一律走 openNote —— 否则 .db/.pdf 的 newTab 会被兜底路径静默丢掉,与按钮提示不符。
+  useEffect(() => {
+    const onOpenNote = (e: Event): void => {
+      const d = (e as CustomEvent<{ name?: string; sourcePath?: string; newTab?: boolean }>).detail
+      const inner = (d?.name || '').trim()
+      const raw = linkTarget(inner)
+      if (!raw) return
+      const st = usePageStore.getState()
+      const src = d?.sourcePath ?? st.activePage ?? undefined
+      const newTab = !!d?.newTab
+      const page = resolvePageName(raw, st.pages, src)
+      if (page) { void openNote(page, { newTab }); return }
+      const file = resolveFileName(raw, st.files, src)
+      if (file && /\.db$/i.test(file)) { openDb(file, { newTab }); return }
+      if (file && /\.pdf$/i.test(file)) { openPdf(file, parsePdfLinkInner(inner)?.loc?.page, { newTab }); return }
+      // 画板 / 插件文件类型 / 其余附件:openNote 内部按扩展名改道对应视图(不支持 newTab 的那几种就地开)。
+      if (file) { void openNote(file, { newTab }); return }
+      st.openWikiLink(inner, d?.sourcePath) // 完全解析不到 → 老路径(含「要不要创建」确认)
+    }
+    window.addEventListener('amadeus:open-note', onOpenNote)
+    return () => window.removeEventListener('amadeus:open-note', onOpenNote)
   }, [])
   // [[xxx.pdf#page=N]] 点击应用内开可批注 PDF tab(pageStore 发事件解耦,同 open-db 模式)。
   useEffect(() => {

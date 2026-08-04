@@ -3,13 +3,14 @@
  * 给平台安装命令,用户确认后内置日志面板执行——绝不静默自动装)→ ④ 完成(指路导入/设置)。
  * 触发条件见 App.tsx(managed 从未配置:无 cloudUrl/token/provider);「跳过」永久记 localStorage。
  */
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   ArrowRight, ArrowLeft, Bot, Check, Cloud, History, KeyRound, Loader2, LogIn, ExternalLink,
-  MonitorCheck, MonitorCog, Play, Plus, SkipForward, Sparkles, Palette, FolderOpen, Sun, Moon, X, FileText, RefreshCw,
+  MonitorCog, Plus, SkipForward, Sparkles, Palette, FolderOpen, Sun, Moon, X, FileText, RefreshCw,
 } from 'lucide-react'
 import { listModels, testProviderConnection, listAgents, saveAgentDef, getSpecialConfig, saveSpecialConfig } from '../services/backendService'
-import type { EnvProbeResult, MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
+import { EnvProbeSection } from './EnvProbeSection'
+import type { MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
 import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
@@ -255,68 +256,11 @@ export const OnboardingWizard: React.FC<{
   useEffect(() => {
     if (step === 'model') loadStepModels()
     if (step === 'agents') loadAgentsStep()
-    if (step === 'env') void doEnvCheck()
+    // env 步的检测由 EnvProbeSection 自己 mount 时跑(它只在该步渲染)。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step])
 
-  // ── ③ 环境检测 ──
-  const [probes, setProbes] = useState<EnvProbeResult[] | null>(null)
-  const [envChecking, setEnvChecking] = useState(false)
-  const [runningInstall, setRunningInstall] = useState<string | null>(null)
-  const [installLog, setInstallLog] = useState<string[]>([])
-  /** 最近一次「安装」的结果(行内反馈):ok=装上且复检到;missing=命令成功但复检仍缺;fail=exit≠0。 */
-  const [installResult, setInstallResult] = useState<{ tool: string; state: 'ok' | 'missing' | 'fail'; version: string | null; exitCode: number } | null>(null)
-  const logRef = useRef<HTMLPreElement>(null)
-
-  const doEnvCheck = async (): Promise<EnvProbeResult[] | null> => {
-    if (!window.tangu?.envCheck) return null
-    setEnvChecking(true)
-    try {
-      const r = await window.tangu.envCheck()
-      setProbes(r)
-      return r
-    } finally {
-      setEnvChecking(false)
-    }
-  }
-
-  useEffect(() => {
-    const off = window.tangu?.onEnvOutput?.((ev) => {
-      setInstallLog((prev) => [...prev.slice(-400), ...ev.line.split('\n').filter(Boolean)])
-      requestAnimationFrame(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight))
-    })
-    return () => off?.()
-  }, [])
-
-  const needsSudo = (p: EnvProbeResult): boolean => /^sudo\b/.test(p.installCommand || '')
-
-  const runInstall = async (p: EnvProbeResult): Promise<void> => {
-    if (!p.installId || !window.tangu?.envRun) return
-    // sudo 命令需要 TTY 输密码,GUI 子进程里必然卡死/失败 → 改为复制命令请用户去终端执行。
-    if (needsSudo(p)) {
-      try { await navigator.clipboard.writeText(p.installCommand || '') } catch { /* ignore */ }
-      setInstallLog((prev) => [...prev, t('onboarding.env.copied', { command: p.installCommand })])
-      return
-    }
-    if (!window.confirm(t('onboarding.env.installConfirm', { command: p.installCommand }))) return
-    setRunningInstall(p.installId)
-    setInstallLog([])
-    setInstallResult(null)
-    try {
-      const r = await window.tangu.envRun(p.installId)
-      const after = await doEnvCheck() // 装完自动重测
-      const probe = after?.find((x) => x.tool === p.tool)
-      // 三态明示结果:exit 码 + 复检对比(exit 0 但复检仍缺 = PATH 未刷新/需重启,不能谎报成功)。
-      setInstallResult({
-        tool: p.tool,
-        state: r.exitCode !== 0 ? 'fail' : probe?.found ? 'ok' : 'missing',
-        version: probe?.version ?? null,
-        exitCode: r.exitCode,
-      })
-    } finally {
-      setRunningInstall(null)
-    }
-  }
+  // ── ③ 环境检测:整块搬进 EnvProbeSection(设置页共用) ──
 
   const finish = (): void => {
     try {
@@ -812,75 +756,9 @@ export const OnboardingWizard: React.FC<{
                   ))}
                 </div>
               </div>
-              <div className="field">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <MonitorCheck size={13} /> {t('onboarding.env.stepLabel')}
-                  <span className="grow" />
-                  <button
-                    className="btn ghost sm"
-                    disabled={envChecking || runningInstall !== null}
-                    onClick={() => void doEnvCheck()}
-                  >
-                    <RefreshCw size={12} className={envChecking ? 'spin' : ''} /> {t('onboarding.env.recheck')}
-                  </button>
-                </label>
-                {envChecking && <div className="hint">{t('onboarding.env.checking')}</div>}
-                {probes?.map((pr) => (
-                  <React.Fragment key={pr.tool}>
-                    <div className="file-row" style={{ cursor: 'default' }}>
-                      <span className="file-name">
-                        {pr.found ? '✅' : '⚠️'} <b>{pr.tool}</b>
-                        <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
-                          {pr.found ? pr.version : pr.tool === 'docker' ? t('onboarding.env.missingDocker') : pr.tool === 'npm' ? t('onboarding.env.missingNpm') : t('onboarding.env.missing')}
-                        </span>
-                      </span>
-                      {!pr.found && pr.installId && (
-                        <button
-                          className="btn ghost sm"
-                          disabled={runningInstall !== null}
-                          title={pr.installCommand || ''}
-                          onClick={() => void runInstall(pr)}
-                        >
-                          {runningInstall === pr.installId ? <Loader2 size={12} className="spin" /> : <Play size={12} />}{' '}
-                          {needsSudo(pr) ? t('onboarding.env.copyCmd') : t('onboarding.env.install')}
-                        </button>
-                      )}
-                    </div>
-                    {/* 安装结果三态行内反馈:成功(复检到)/命令成功但复检仍缺(PATH 未刷新)/失败(exit≠0)。 */}
-                    {installResult?.tool === pr.tool && (
-                      <div
-                        className="hint"
-                        style={{
-                          margin: '2px 0 6px', display: 'flex', alignItems: 'center', gap: 6,
-                          color: installResult.state === 'ok' ? 'var(--success, #22a06b)'
-                            : installResult.state === 'fail' ? 'var(--danger, #e5484d)' : 'var(--text-muted)',
-                        }}
-                      >
-                        {installResult.state === 'ok' ? <Check size={12} /> : installResult.state === 'fail' ? <X size={12} /> : <RefreshCw size={12} />}
-                        {installResult.state === 'ok' && t('onboarding.env.installOk', { tool: installResult.tool, version: installResult.version || '' })}
-                        {installResult.state === 'missing' && t('onboarding.env.installedButMissing', { tool: installResult.tool })}
-                        {installResult.state === 'fail' && t('onboarding.env.installFail', { tool: installResult.tool, code: installResult.exitCode })}
-                      </div>
-                    )}
-                  </React.Fragment>
-                ))}
-                {installLog.length > 0 && (
-                  <pre
-                    ref={logRef}
-                    style={{
-                      marginTop: 8, fontSize: 11, fontFamily: 'var(--font-mono)', maxHeight: 160,
-                      overflowY: 'auto', background: 'var(--bg-card)', padding: 8,
-                      border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm)',
-                      whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                    }}
-                  >
-                    {installLog.join('\n')}
-                  </pre>
-                )}
-                <div className="hint" style={{ marginTop: 6 }}>
-                  {t('onboarding.env.hint')}
-                </div>
-              </div>
+              {/* 交给 Tangu 装 = 开新会话并自动发送 → 得先离开向导才看得见对话。走 finish 而非裸
+                  onFinish:env 之后只剩「完成」页,记下已引导免得下次启动又弹一遍。 */}
+              <EnvProbeSection onLeave={finish} />
             </>
           )}
 

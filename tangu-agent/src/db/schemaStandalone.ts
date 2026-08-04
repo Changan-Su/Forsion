@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   user_id VARCHAR(36) NOT NULL,
   app_id VARCHAR(50) NOT NULL DEFAULT 'tangu',
   title TEXT,
+  summary TEXT,
   model_id VARCHAR(128),
   archived BOOLEAN NOT NULL DEFAULT FALSE,
   emoji VARCHAR(32),

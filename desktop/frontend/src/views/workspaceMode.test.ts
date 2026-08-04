@@ -1,6 +1,6 @@
 /** 统一工作区视图的自动模式规则 + 布局迁移(退役视图改名/主区 frame 化)。 */
 import { describe, it, expect } from 'vitest'
-import { autoWorkspaceMode } from './workspaceMode'
+import { autoWorkspaceMode, workspaceKeyForPath } from './workspaceMode'
 import { migrateLayoutBlob } from '@lcl/engine/dockviewStore'
 
 describe('autoWorkspaceMode', () => {
@@ -34,6 +34,31 @@ describe('autoWorkspaceMode', () => {
   it('⚠️右栏恒为文件:Space 默认档改不动它(右栏 = 参考/附件栏)', () => {
     expect(autoWorkspaceMode('right', 'launcher', 'notes')).toBe('files')
     expect(autoWorkspaceMode('right', null, 'notes')).toBe('files')
+  })
+})
+
+describe('workspaceKeyForPath', () => {
+  const ws = [
+    { key: 'a', path: '/home/me/code' },
+    { key: 'b', path: '/home/me/code/forsion' }, // 嵌套在 a 里
+    { key: 'c', path: '/home/me/docs/' }, // 尾斜杠
+    { key: 'cloud', path: null }, // 云端 Project 没有磁盘路径
+  ]
+  it('嵌套工作区取最长匹配', () => {
+    expect(workspaceKeyForPath(ws, '/home/me/code/forsion/src/x.ts')).toBe('b')
+    expect(workspaceKeyForPath(ws, '/home/me/code/other/x.ts')).toBe('a')
+  })
+  it('⚠️边界必须对齐:/a/bcd 不算落在 /a/bc 里', () => {
+    expect(workspaceKeyForPath([{ key: 'x', path: '/a/bc' }], '/a/bcd/f.ts')).toBeNull()
+  })
+  it('工作区根目录自身算命中;尾斜杠与反斜杠都归一', () => {
+    expect(workspaceKeyForPath(ws, '/home/me/code')).toBe('a')
+    expect(workspaceKeyForPath(ws, '/home/me/docs/n.md')).toBe('c')
+    expect(workspaceKeyForPath([{ key: 'w', path: 'C:\\p\\ws' }], 'C:\\p\\ws\\a\\b.txt')).toBe('w')
+  })
+  it('认不出来 → null(面板退回按「进入的工作区」置顶)', () => {
+    expect(workspaceKeyForPath(ws, '/tmp/x.ts')).toBeNull()
+    expect(workspaceKeyForPath(ws, null)).toBeNull()
   })
 })
 

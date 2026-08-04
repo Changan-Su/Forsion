@@ -3,9 +3,9 @@
  *  Host 挂 AmadeusOverlays(askString 同款模式);数据面 = window.amadeusSync.entrySync*。 */
 import { useEffect, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
-import { Cloud, FileText, Paperclip } from 'lucide-react'
+import { Cloud, FileText, ListTree, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
-import { useEntrySync } from '../stores/entrySyncStore'
+import { isExcludedPath, useEntrySync } from '../stores/entrySyncStore'
 
 interface Req {
   path: string
@@ -35,9 +35,10 @@ export function CloudSyncDialogHost() {
 }
 
 function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
-  const [closure, setClosure] = useState<{ pages: string[]; files: string[] } | null>(null)
+  const [closure, setClosure] = useState<{ pages: string[]; files: string[]; subPages: string[] } | null>(null)
   const [pagesOn, setPagesOn] = useState<Set<string>>(new Set())
   const [filesOn, setFilesOn] = useState<Set<string>>(new Set())
+  const [subOn, setSubOn] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState<string | null>(null)
   const [nameDraft, setNameDraft] = useState('')
@@ -45,18 +46,21 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
   useEffect(() => {
     let alive = true
     if (req.kind === 'asset') {
-      setClosure({ pages: [], files: [] }) // 附件无出链,闭包恒空(entrySyncClosure 只吃 page|folder)
+      setClosure({ pages: [], files: [], subPages: [] }) // 附件无出链,闭包恒空(entrySyncClosure 只吃 page|folder)
       return
     }
     void window.amadeusSync
       ?.entrySyncClosure?.(req.path, req.kind)
       .then((r) => {
         if (!alive) return
-        setClosure(r)
+        setClosure({ ...r, subPages: r.subPages ?? [] }) // subPages:旧主进程构建没有 → 当空
         setPagesOn(new Set(r.pages)) // 默认全选:用户要的是「保留相对位置的完整同步」,少勾是例外
         setFilesOn(new Set(r.files))
+        // 子页面同样默认全选,但上次剔除过的保持未勾选 —— 否则重开弹窗会显示「全含」而实际仍排除。
+        const root = useEntrySync.getState().activeRoot
+        setSubOn(new Set((r.subPages ?? []).filter((p) => !isExcludedPath(root, p))))
       })
-      .catch(() => alive && setClosure({ pages: [], files: [] }))
+      .catch(() => alive && setClosure({ pages: [], files: [], subPages: [] }))
     return () => {
       alive = false
     }
@@ -71,8 +75,12 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
       ...[...pagesOn].map((p) => ({ path: p, kind: 'page' as const })),
       ...[...filesOn].map((p) => ({ path: p, kind: 'asset' as const })),
     ]
+    // 子页面本来就随页进 scope:取消勾选的显式剔除,勾上的显式解除剔除(可能是上次剔的,不送就一直排除着)。
+    const subPages = closure?.subPages ?? []
+    const exclude = subPages.filter((p) => !subOn.has(p))
+    const include = subPages.filter((p) => subOn.has(p))
     type EnableResp = { ok?: boolean; cloudName?: string; conflict?: string; error?: string }
-    const r: EnableResp = await api.entrySyncEnable({ entries, ...opts }).catch((e: unknown) => ({ error: String(e) }))
+    const r: EnableResp = await api.entrySyncEnable({ entries, exclude, include, ...opts }).catch((e: unknown) => ({ error: String(e) }))
     setBusy(false)
     if (r?.conflict) {
       setConflict(r.conflict)
@@ -87,6 +95,33 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
     void useEntrySync.getState().refresh()
     onClose()
   }
+
+  /** `A.fd/B.fd/C.md` 的上级子页面链(近→远:A.fd/B.md、A.md);种子页不在 subPages 里,自然被滤掉。 */
+  const subAncestors = (p: string): string[] => {
+    const out: string[] = []
+    for (let cur = p; ; ) {
+      const i = cur.lastIndexOf('.fd/')
+      if (i < 0) return out
+      cur = `${cur.slice(0, i)}.md`
+      out.push(cur)
+    }
+  }
+
+  /** 子页面勾选级联:exclude 是子树语义 —— 取消勾选连带子树(父级排除了孩子留着勾也没用),
+   *  勾上则连带上级(祖先还排除着,单独勾孩子同样不生效)。不级联的话界面会撒谎。 */
+  const toggleSub = (p: string): void =>
+    setSubOn((s) => {
+      const on = !s.has(p)
+      const all = closure?.subPages ?? []
+      const sub = `${p.replace(/\.md$/i, '')}.fd/`
+      const n = new Set(s)
+      for (const k of all) {
+        if (k !== p && !k.startsWith(sub)) continue
+        on ? n.add(k) : n.delete(k)
+      }
+      if (on) for (const a of subAncestors(p)) if (all.includes(a)) n.add(a)
+      return n
+    })
 
   const toggleIn = (set0: Set<string>, p: string): Set<string> => {
     const n = new Set(set0)
@@ -161,16 +196,18 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
         ) : (
           <>
             <div className="dialog-msg">
-              「{base(req.path)}」将带完整相对路径同步到云端工作区(双向)。库内关联可一并纳入,保留 Vault 里的相对位置:
+              「{base(req.path)}」将带完整相对路径同步到云端工作区(双向)。子页面与库内关联默认一并纳入,
+              保留 Vault 里的相对位置;取消勾选即不同步:
             </div>
             {closure === null ? (
               <div className="dialog-msg">正在分析关联…</div>
             ) : (
               <>
+                {group(<ListTree size={12} />, '子页面', closure.subPages, subOn, toggleSub, (all) => setSubOn(all ? new Set(closure.subPages) : new Set()))}
                 {group(<FileText size={12} />, '关联笔记', closure.pages, pagesOn, (p) => setPagesOn((s) => toggleIn(s, p)), (all) => setPagesOn(all ? new Set(closure.pages) : new Set()))}
                 {group(<Paperclip size={12} />, '附件', closure.files, filesOn, (p) => setFilesOn((s) => toggleIn(s, p)), (all) => setFilesOn(all ? new Set(closure.files) : new Set()))}
-                {!closure.pages.length && !closure.files.length && (
-                  <div className="dialog-msg" style={{ opacity: 0.6 }}>没有库内关联,仅同步此条目。</div>
+                {!closure.pages.length && !closure.files.length && !closure.subPages.length && (
+                  <div className="dialog-msg" style={{ opacity: 0.6 }}>没有子页面与库内关联,仅同步此条目。</div>
                 )}
               </>
             )}

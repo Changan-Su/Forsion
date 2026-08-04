@@ -5,7 +5,7 @@
  * 于是切到测试版的人永远卡在最后一个 beta 上。这条钉死。
  */
 import { describe, it, expect } from 'vitest'
-import { isNewer, isPrerelease } from './updaterUtil'
+import { changelogSection, isNewer, isPrerelease } from './updaterUtil'
 
 describe('isNewer', () => {
   it('正常三段比较', () => {
@@ -50,5 +50,47 @@ describe('isPrerelease', () => {
     expect(isPrerelease('v2.7.3-rc.1')).toBe(true)
     expect(isPrerelease('2.7.3')).toBe(false)
     expect(isPrerelease('2.7.3+build.1')).toBe(false) // build 元数据不是 prerelease
+  })
+})
+
+describe('changelogSection', () => {
+  const md = [
+    '# Forsion 更新日志',
+    '',
+    '## 2.7.4 (2026-07-31)',
+    '',
+    '- 新功能 A',
+    '- 新功能 B',
+    '',
+    '## 2.7.3 (2026-07-28)',
+    '',
+    '- 老功能',
+    '',
+    '## 2.7.2 (2026-07-20)',
+    '',
+    '- 更老',
+  ].join('\n')
+
+  it('取到指定版本那一节(不含标题行、不含下一节)', () => {
+    expect(changelogSection(md, '2.7.4')).toBe('- 新功能 A\n- 新功能 B')
+    expect(changelogSection(md, '2.7.3')).toBe('- 老功能')
+  })
+
+  it('最后一节取到文末', () => {
+    expect(changelogSection(md, '2.7.2')).toBe('- 更老')
+  })
+
+  it('v 前缀等价', () => {
+    expect(changelogSection(md, 'v2.7.4')).toBe('- 新功能 A\n- 新功能 B')
+  })
+
+  it('没有该版本 / 空节 → undefined', () => {
+    expect(changelogSection(md, '9.9.9')).toBeUndefined()
+    expect(changelogSection('## 1.0.0 (x)\n\n## 0.9.0 (y)\n\n- a', '1.0.0')).toBeUndefined()
+  })
+
+  it('prerelease 版本号照样能命中', () => {
+    const beta = '## 2.7.4-beta.1 (2026-07-30)\n\n- beta 内容\n\n## 2.7.3 (x)\n\n- 老'
+    expect(changelogSection(beta, '2.7.4-beta.1')).toBe('- beta 内容')
   })
 })

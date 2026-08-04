@@ -8,13 +8,15 @@
  * 都不打 → 安装版启动即 ERR_MODULE_NOT_FOUND(v2.3.3~v2.6.0 三平台全部中招)。
  */
 const { fetchPython } = require('./fetch-python.cjs');
+const { fetchNode } = require('./fetch-node.cjs');
 
 exports.default = async function beforeBuild(context) {
   const productId = process.env.FORSION_PRODUCT || 'forsion';
   const product = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'products', `${productId}.json`), 'utf8'));
-  if (!product.agentBackend) return true; // 本变体不捆后端 → 不拉内置 Python;true=保留默认依赖处理
+  if (!product.agentBackend) return true; // 本变体不捆后端 → 不拉内置运行时;true=保留默认依赖处理
   const platformName = context.platform.nodeName; // 'darwin' | 'win32' | 'linux'
   const archName = context.arch;                   // 'x64' | 'arm64' | 'armv7l'
   await fetchPython({ platformName, archName });
+  await fetchNode({ platformName, archName });
   return true; // 保留 electron-builder 默认依赖安装/打包(见文件头警告)
 };

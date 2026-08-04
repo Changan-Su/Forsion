@@ -39,7 +39,9 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const editors = api?.panels.filter((p) => p.params?.__type === 'amadeus-editor') ?? []
   const hit = editors.find((p) => p.params?.notePath === path)
-  if (hit) {
+  // ⚠️ newTab 要**先于**「已开着就激活」判定:⌘/Ctrl 点击的语义是「再开一个标签」,
+  //    目标恰好已经开着时如果只是切过去,用户按了修饰键却什么新东西都没得到(Codex 评审实证)。
+  if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id) // 激活触发该 leaf 的 activate 效果异步加载
     await waitForActive(path)
     return
@@ -65,31 +67,31 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
 }
 
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
-export function openDb(dbPath: string): void {
+export function openDb(dbPath: string, opts?: { newTab?: boolean }): void {
   actThrottled('view.open', { f: dbPath }, `view.open|${dbPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-db' && p.params?.dbPath === dbPath)
-  if (hit) {
+  if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-db', { dbPath }, 'main')
+  ws.openView('amadeus-db', { dbPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 打开独立 PDF 视图(可批注):已有认领该文件的 tab → 激活(带页号则广播跳页);否则主区打开。page = 1-based。 */
-export function openPdf(pdfPath: string, page?: number): void {
+export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolean }): void {
   actThrottled('view.open', { f: pdfPath }, `view.open|${pdfPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-pdf' && p.params?.pdfPath === pdfPath)
-  if (hit) {
+  if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     // 已开着 → 广播跳页(PdfAnnotator 听 amadeus:pdf-goto,避免 navigateLeaf remount 重下 PDF)。
     if (page && page >= 1) window.dispatchEvent(new CustomEvent('amadeus:pdf-goto', { detail: { pdfPath, page } }))
     return
   }
-  ws.openView('amadeus-pdf', page ? { pdfPath, page } : { pdfPath }, 'main')
+  ws.openView('amadeus-pdf', page ? { pdfPath, page } : { pdfPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 打开独立图片视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openPdf 的简版,无批注)。 */
@@ -228,8 +230,10 @@ export function openFile(path: string): void {
     }
     ws.openView('amadeus-plugin-file', { filePath: path }, 'main')
   }
-  if (known) go()
-  else void ps.refreshStructure().then(go)
+  // 先跳转后加载:面板立即开(视图按 filePath 自行拉内容),树刷新在后台补 ——
+  // 弱网下不再让 GET /tree 挡住跳转(此前「文件还没进缓存清单」要先等整棵树才开面板)。
+  go()
+  if (!known) void ps.refreshStructure().catch(() => {})
 }
 
 /** 新建白板(.excalidraw.md),建成即打开;返回 vault 相对路径(取消/失败 null)。

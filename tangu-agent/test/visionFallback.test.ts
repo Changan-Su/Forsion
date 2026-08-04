@@ -7,9 +7,16 @@
  * 缺省 = 有视觉(黑名单制)。云端不可达时也必须缺省放行,不能因为拉不到目录就把图全拦下来。
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createAiStudioProfile } from '../src/profiles/aiStudio.js';
-import { describeImages, mainModelSupportsVision, __resetVisionSlotCacheForTests } from '../src/services/visionService.js';
+import { describeImages, mainModelSupportsVision, resolveVisionMode, shouldDescribeImages, __resetVisionSlotCacheForTests } from '../src/services/visionService.js';
+
+// visionMode 会去读 config.json 的 models 段 —— 指向空临时目录,免得开发机上真实的
+// ~/.tangu/config.json 把「缺省 auto」那几条断言染成别的档。
+process.env.TANGU_HOME = mkdtempSync(join(tmpdir(), 'tangu-vision-test-'));
 
 const fakeHost: any = { query: async () => [], authMiddleware: (_q: any, _r: any, n: any) => n(), adminMiddleware: (_q: any, _r: any, n: any) => n() };
 const fakeBilling: any = { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} };
@@ -85,6 +92,27 @@ describe('mainModelSupportsVision', () => {
     await expect(mainModelSupportsVision('m', 'app-a')).resolves.toBe(false);
     await expect(mainModelSupportsVision('m', 'app-b')).resolves.toBe(true);
     expect(seen).toEqual(['app-a', 'app-b']); // 两个桶各拉各的,没互相顶掉
+  });
+});
+
+describe('visionMode — 黑名单猜不准时的确定性出路', () => {
+  it('always:不问主模型能力,一律转写(黑名单外的纯文本模型靠这个救)', async () => {
+    await expect(shouldDescribeImages('gpt-5', undefined, 'always')).resolves.toBe(true);
+  });
+
+  it('off:哪怕主模型确实没视觉也不转写(图原样送,用户自己要的)', async () => {
+    await expect(shouldDescribeImages('deepseek-reasoner', undefined, 'off')).resolves.toBe(false);
+  });
+
+  it('auto(缺省):跟着能力判定走', async () => {
+    await expect(shouldDescribeImages('deepseek-reasoner')).resolves.toBe(true);
+    await expect(shouldDescribeImages('gpt-5')).resolves.toBe(false);
+  });
+
+  it('非法值不生效,回落 auto(旧配置/手改 config.json 写错不该变成静默关闭)', () => {
+    expect(resolveVisionMode('ALWAYS')).toBe('auto');
+    expect(resolveVisionMode('')).toBe('auto');
+    expect(resolveVisionMode(undefined)).toBe('auto');
   });
 });
 

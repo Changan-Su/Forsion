@@ -33,6 +33,11 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['Anthropic API key', { protocol: 'anthropic-messages', modelId: 'claude-sonnet-5' }, 'anthropic-messages'],
     ['Gemini 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-2.5-flash' }, 'gemini-openai-compat'],
     ['Gemini 托管 pro', { provider: 'gemini', modelId: 'gemini-2.5-pro' }, 'gemini-native-pro'],
+    ['DeepSeek V4 flash', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-v4-flash' }, 'deepseek-v4'],
+    ['DeepSeek V4 pro', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-v4-pro' }, 'deepseek-v4'],
+    // 反例:v4 规则必须锚在 `deepseek-v4` 前缀,别把同 host 上的自定义 id 一起吞了。
+    ['DeepSeek 自定义含 v4', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'myv4legacy' }, 'deepseek-chat'],
+    ['假冒 deepseek 域名', { baseUrl: 'https://notdeepseek.com/v1', modelId: 'deepseek-v4-flash' }, 'default'],
     ['DeepSeek reasoner', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-reasoner' }, 'deepseek-reasoner'],
     ['DeepSeek chat', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-chat' }, 'deepseek-chat'],
     ['智谱 GLM', { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', modelId: 'glm-4.6' }, 'zhipu-glm'],
@@ -147,6 +152,19 @@ describe('applyThinking — 各家线上形态', () => {
       .toEqual({ type: 'enabled' });
     expect(apply({ baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-chat' }, 'off').payload.thinking)
       .toEqual({ type: 'disabled' });
+  });
+
+  it('DeepSeek V4:thinking:{type} + reasoning_effort(只发 low/high/max)', () => {
+    const ds = (m: string, lv: Parameters<typeof apply>[1]) =>
+      apply({ baseUrl: 'https://api.deepseek.com/v1', modelId: m }, lv).payload;
+    expect(ds('deepseek-v4-flash', 'low')).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low' });
+    expect(ds('deepseek-v4-pro', 'max')).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' });
+    // 'medium' 不是官方档位 → 必须落到 high,绝不原样上 wire。
+    expect(ds('deepseek-v4-flash', 'medium').reasoning_effort).toBe('high');
+    // 关思考时不带 effort(DeepSeek 非思考模式不认它)。
+    expect(ds('deepseek-v4-flash', 'off')).toEqual({ thinking: { type: 'disabled' } });
+    // 老 chat 线仍是纯开关,不许因本次改动多出 reasoning_effort。
+    expect(ds('deepseek-chat', 'high')).toEqual({ thinking: { type: 'enabled' } });
   });
 
   it('OpenRouter:reasoning:{effort}', () => {
