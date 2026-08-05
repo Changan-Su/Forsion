@@ -34,13 +34,15 @@ export function rewriteNoteRefs(source: string, srcBefore: string, srcAfter: str
   const before = plan.pagesBefore as string[]
   const after = plan.pagesAfter as string[]
   const lines = source.split('\n')
-  let fence: '`' | '~' | null = null
+  // 围栏须记「字符 + 开栏长度」:闭栏必须同字符且 ≥ 开栏长度(CommonMark)——
+  // 否则 ```` 四反引号块里的 ``` 行会被当闭栏,块内 [[链接]] 被误改(Codex 评审 P1)。
+  let fence: { mark: '`' | '~'; len: number } | null = null
   for (let i = 0; i < lines.length; i++) {
     const fm = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
     if (fm) {
       const mark = fm[1][0] as '`' | '~'
-      if (!fence) fence = mark
-      else if (mark === fence) fence = null
+      if (!fence) fence = { mark, len: fm[1].length }
+      else if (mark === fence.mark && fm[1].length >= fence.len) fence = null
       continue
     }
     if (fence) continue

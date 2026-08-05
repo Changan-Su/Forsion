@@ -7,7 +7,7 @@ import type { PageProps } from '@amadeus-shared/ipc'
 import { cellToFmValue } from '@amadeus-shared/db/pageFrontmatter'
 import type { CellValue, ColumnType } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
-import { cascadeFdAfterRename } from './pageStore'
+import { cascadeFdAfterRename, flushAllScopes, remapScopePaths } from './pageStore'
 
 export interface FolderView {
   status: 'loading' | 'ok' | 'error'
@@ -108,8 +108,13 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
   async renameNote(folder, notePath, newTitle) {
     if (!newTitle.trim()) return
     try {
+      // 改名触发全库引用重写:所有编辑器面板先落盘,防待存旧文本盖掉重写结果(Codex 评审 P1)。
+      await flushAllScopes()
       const newPath = await amadeus.renamePageFile(notePath, newTitle.trim())
-      if (newPath !== notePath) await cascadeFdAfterRename(notePath, newPath) // .fd 子页面文件夹跟随改名
+      if (newPath !== notePath) {
+        remapScopePaths(notePath, newPath, 'file') // 开着这页的面板跟着换路径,防旧路径被写活
+        await cascadeFdAfterRename(notePath, newPath) // .fd 子页面文件夹跟随改名
+      }
     } catch {
       /* 撞名/非法名:忽略,refresh 会还原显示 */
     }

@@ -32,6 +32,11 @@ describe('rewriteNoteRefs — 改名', () => {
     expect(rewriteNoteRefs(src, 'S.md', 'S.md', P)).toBe('[[Bar]]\n```\n[[Foo]]\n```\n[[Bar]]')
   })
 
+  it('四反引号块里的三反引号行不当闭栏(闭栏须 ≥ 开栏长度)', () => {
+    const src = '````md\n```\n[[Foo]]\n```\n````\n[[Foo]]'
+    expect(rewriteNoteRefs(src, 'S.md', 'S.md', P)).toBe('````md\n```\n[[Foo]]\n```\n````\n[[Bar]]')
+  })
+
   it('被改名页自己的自链接也跟随(srcBefore=旧路径,srcAfter=新路径)', () => {
     expect(rewriteNoteRefs('自引 [[Foo]]', 'Foo.md', 'Bar.md', P)).toBe('自引 [[Bar]]')
   })

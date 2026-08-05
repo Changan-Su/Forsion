@@ -94,11 +94,13 @@
   display: flex;
   flex-direction: column;
   visibility: hidden;
+  /* 关合中(退场过渡期)不吃指针:visibility 是延迟隐藏的,不禁的话滑出中的面板还会吞触摸(Codex 评审 P2)。 */
+  pointer-events: none;
   transition: transform var(--mb-dur) var(--mb-ease), visibility 0s linear var(--mb-dur);
 }
 .mb-drawer--left { left: 0; transform: translateX(-102%); box-shadow: 6px 0 24px rgba(0, 0, 0, 0.1); }
 .mb-drawer--right { right: 0; transform: translateX(102%); box-shadow: -6px 0 24px rgba(0, 0, 0, 0.1); }
-.mb-drawer.open { transform: none; visibility: visible; transition: transform var(--mb-dur) var(--mb-ease); }
+.mb-drawer.open { transform: none; visibility: visible; pointer-events: auto; transition: transform var(--mb-dur) var(--mb-ease); }
 .mb-main { transition: transform var(--mb-dur) var(--mb-ease); }
 .mb-body.push-left .mb-main { transform: translateX(var(--mb-panelw)); }
 .mb-body.push-right .mb-main { transform: translateX(calc(-1 * var(--mb-panelw))); }

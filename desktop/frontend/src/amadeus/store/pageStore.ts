@@ -637,11 +637,16 @@ function makePageStore() {
         clearTimeout(saveTimer) // cancel a pending save aimed at the OLD filename
         saveTimer = null
       }
+      // 改名会触发主进程全库引用重写(propagateRenames):**所有面板**先落盘 ——
+      // 别的面板 400ms 待存的旧文本会在重写完成后写回、把改好的 [[链接]] 盖掉;
+      // 本面板更早发出的在途写也要等(旧路径写盘晚于移动 = 旧文件复活)。(Codex 评审 P1)
+      await flushAllScopes()
       const contents: Record<string, string> = {}
       for (const [id, b] of Object.entries(blocks)) contents[id] = b.content
       try {
         const { newPath, page } = await amadeus.renamePage(activePage, newName, manifest, contents)
         set({ activePage: newPath, pendingPage: null, ...hydrate(page), status: 'ready', error: null })
+        remapScopePaths(activePage, newPath, 'file') // 分屏里同页的其他面板跟着换路径,防旧路径被写活
         if (hasFd && newPath !== activePage) await cascadeFdAfterRename(activePage, newPath)
         await get().refreshStructure() // 级联可能动了文件夹,pages+folders 一起刷
         return true
@@ -901,14 +906,17 @@ function makePageStore() {
       const active = get().activePage
       const wasActive = active === pagePath
       const activeInFd = !!active && hasFd && active.startsWith(`${fd}/`)
-      if (wasActive || activeInFd) await get().flushSave() // persist before the files relocate
+      // 移动会触发全库引用重写:所有面板先落盘(不止本面板;理由同 renamePage,Codex 评审 P1)。
+      await flushAllScopes()
       try {
         const newPath = await amadeus.movePage(pagePath, dst)
         if (wasActive) set({ activePage: newPath, pendingPage: null })
+        remapScopePaths(pagePath, newPath, 'file')
         if (hasFd) {
           try {
             const newFd = await amadeus.moveFolder(fd, dst)
             if (activeInFd) set({ activePage: newFd + active.slice(fd.length) })
+            remapScopePaths(fd, newFd, 'prefix')
           } catch (e) {
             set({ error: `子页面文件夹未跟随移动:${String(e)}` })
           }
@@ -933,12 +941,14 @@ function makePageStore() {
 
     async renameFolder(folderPath, newName) {
       const active = get().activePage
-      await get().flushSave()
+      // 文件夹改名触发树下全部页面的引用重写:所有面板先落盘(理由同 renamePage,Codex 评审 P1)。
+      await flushAllScopes()
       try {
         const newFolder = await amadeus.renameFolder(folderPath, newName)
         if (active && (active === folderPath || active.startsWith(folderPath + '/'))) {
           set({ activePage: newFolder + active.slice(folderPath.length) })
         }
+        remapScopePaths(folderPath, newFolder, 'prefix')
       } catch (e) {
         set({ error: String(e) })
         return
@@ -1273,10 +1283,15 @@ function makePageStore() {
     },
 
     async flushSave() {
-      if (!saveTimer) return
-      clearTimeout(saveTimer)
-      saveTimer = null
-      await get().save()
+      if (saveTimer) {
+        clearTimeout(saveTimer)
+        saveTimer = null
+        await get().save() // save() 自己会先等在途写
+        return
+      }
+      // 没有待发的防抖 ≠ 没有在途写:更早发出的 save 可能仍在飞。路径操作(改名/移动/重写)
+      // 必须等它落地,否则旧路径的写盘在移动之后完成 = 旧文件复活(Codex 评审 P1)。
+      await inflightSave?.catch(() => {})
     },
 
     async reconcileExternal(path) {
@@ -1347,6 +1362,22 @@ const vaultSlice = (s: PageState): VaultSlice =>
  */
 export async function flushAllScopes(): Promise<void> {
   await Promise.all([...stores.values()].map((s) => s.getState().flushSave().catch(() => {})))
+}
+
+/**
+ * 改名/移动后把 old→new 广播给**所有**面板 scope。分屏里别的面板还握着旧 activePage 的话,
+ * 它的下一次防抖保存会把旧路径整个写回来 —— 旧文件复活、且内容是移动前的快照(Codex 评审 P1)。
+ * kind='file' 精确匹配一页;kind='prefix' 匹配整棵子树(文件夹改名/移动、.fd 级联)。
+ * 发起操作的面板自己已 set 过新路径 → 等值判定天然跳过,重复调用无害。
+ */
+export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'prefix'): void {
+  for (const s of stores.values()) {
+    const a = s.getState().activePage
+    if (!a) continue
+    if (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`)) {
+      s.setState({ activePage: kind === 'file' ? newP : newP + a.slice(oldP.length) })
+    }
+  }
 }
 
 /**

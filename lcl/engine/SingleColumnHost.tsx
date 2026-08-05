@@ -54,7 +54,7 @@ export function LeafHost() {
   )
 }
 
-function Drawer({ side, docked }: { side: 'left' | 'right'; docked?: boolean }) {
+function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: boolean; showFoot?: boolean }) {
   const visible = useWorkspace((s) => (side === 'left' ? s.leftVisible : s.rightVisible))
   // 只订阅稳定量:该侧 leaf 的 id 签名(增删触发)+ active id(切换触发)。**不**订阅 title,
   // 否则视图渲染期调 leaf.setTitle → 宿主重渲染 → 再 setTitle 的无限循环(React #185)。
@@ -101,12 +101,14 @@ function Drawer({ side, docked }: { side: 'left' | 'right'; docked?: boolean }) 
           </div>
         ) : null}
       </div>
-      {/* 左栏底部常驻:Space 切换 + 账号卡 + 设置(用户拍板 2026-08-05;docked 宽屏形态同样带)。 */}
-      {side === 'left' && <DrawerFoot />}
+      {/* 左栏底部常驻:Space 切换 + 账号卡 + 设置(用户拍板 2026-08-05;docked 宽屏形态同样带)。
+          mini 变体不带(顶部 MiniRibbon 已是 Space 入口,mini 契约=无底部 Space 栏)。 */}
+      {side === 'left' && showFoot && <DrawerFoot />}
     </>
   )
   // 宽屏(>4:3)并排形态:与 main 同排的常驻列(仅左栏用;见 SingleColumnHost)。
-  if (docked) return leaves.length === 0 ? null : <aside className="mb-sidecol">{inner}</aside>
+  // docked 也要认 visible(顶栏钮/返回键关左栏后不能还杵在那,Codex 评审 P2)。
+  if (docked) return !visible || leaves.length === 0 ? null : <aside className="mb-sidecol">{inner}</aside>
   return (
     <div
       className={`mb-drawer mb-drawer--${side}${visible && leaves.length > 0 ? ' open' : ''}`}
@@ -389,7 +391,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
       <div className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
-        <Drawer side="left" docked={wide} />
+        <Drawer side="left" docked={wide} showFoot={!mini} />
         <main className="mb-main" onTouchStart={mini ? undefined : swipeStart} onTouchEnd={mini ? undefined : swipeEnd}>
           <LeafHost />
         </main>
