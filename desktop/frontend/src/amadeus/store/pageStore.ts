@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import { create, useStore } from 'zustand'
-import { generateColumnId, generateRowId, nextBlockId, stripPageBasename } from '@amadeus-shared/compiler/names'
+import { bumpNextId, generateColumnId, generateRowId, nextBlockId, stripPageBasename } from '@amadeus-shared/compiler/names'
 import type {
   BlockEntry,
   BlockId,
@@ -992,7 +992,7 @@ function makePageStore() {
       const m = get().manifest
       const page = get().activePage
       if (!m || !page) return ''
-      const newId = nextBlockId(Object.keys(m.blocks))
+      const newId = nextBlockId(Object.keys(m.blocks), m.nextId)
       const root = clone(m.root)
 
       if (afterId) {
@@ -1012,7 +1012,7 @@ function makePageStore() {
         ...get().blocks,
         [newId]: { id: newId, type: 'markdown', content: initialContent },
       }
-      get()._commit({ ...m, root, blocks: { ...m.blocks, [newId]: entry } }, blocks)
+      get()._commit({ ...m, root, blocks: { ...m.blocks, [newId]: entry }, nextId: bumpNextId(m.nextId, newId) }, blocks)
       get().requestFocus(newId, initialContent ? 'end' : 'start')
       return newId
     },
@@ -1025,7 +1025,7 @@ function makePageStore() {
       const ids: BlockId[] = []
       let known = Object.keys(m.blocks)
       for (let i = 0; i < contents.length; i++) {
-        const id = nextBlockId(known)
+        const id = nextBlockId(known, m.nextId)
         ids.push(id)
         known = [...known, id]
       }
@@ -1038,7 +1038,7 @@ function makePageStore() {
         bm[id] = { type: 'markdown' }
         blocks[id] = { id, type: 'markdown', content: contents[i] }
       })
-      get()._commit({ ...m, root, blocks: bm }, blocks)
+      get()._commit({ ...m, root, blocks: bm, nextId: ids.reduce(bumpNextId, m.nextId) }, blocks)
       get().requestFocus(ids[ids.length - 1], 'end')
     },
 
@@ -1088,7 +1088,8 @@ function makePageStore() {
       delete blocks[id]
       const bm = { ...cur.blocks }
       delete bm[id]
-      get()._commit({ ...cur, root, blocks: bm }, blocks)
+      // 删除也要抬高水位:干净的 1,2 笔记没有存量 floor,删 2 后必须记 3,否则下次插入原地复用 2。
+      get()._commit({ ...cur, root, blocks: bm, nextId: bumpNextId(cur.nextId, id) }, blocks)
     },
 
     moveBlock(id, toColId, beforeId) {
@@ -1137,7 +1138,7 @@ function makePageStore() {
       if (rowIdx === null) return
       const row = root.children[rowIdx]
       if (row.columns.length >= 4) return // ponytail: 4 列封顶,再多没法读
-      const newId = nextBlockId(Object.keys(m.blocks))
+      const newId = nextBlockId(Object.keys(m.blocks), m.nextId)
       const col: ColumnNode = { id: generateColumnId(), width: 1, children: [{ ref: newId }] }
       if (side === 'left') row.columns.unshift(col)
       else row.columns.push(col)
@@ -1145,7 +1146,7 @@ function makePageStore() {
       row.columns.forEach((c) => (c.width = w))
       const entry: BlockEntry = { type: 'markdown' }
       const blocks = { ...get().blocks, [newId]: { id: newId, type: 'markdown', content: '' } }
-      get()._commit({ ...m, root, blocks: { ...m.blocks, [newId]: entry } }, blocks)
+      get()._commit({ ...m, root, blocks: { ...m.blocks, [newId]: entry }, nextId: bumpNextId(m.nextId, newId) }, blocks)
       get().requestFocus(newId, 'start')
     },
 

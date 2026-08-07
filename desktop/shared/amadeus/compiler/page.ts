@@ -48,6 +48,15 @@ export interface SavePageOptions {
 
 const EMPTY_STACK: StackNode = { type: 'stack', children: [] }
 
+/** Major version this compiler understands (from PAGE_SCHEMA 'amadeus.page/3'). */
+const SCHEMA_MAJOR = 3
+
+function schemaMajorOf(fm: Record<string, string>): number | null {
+  // 容忍 YAML 引号:parseSimpleYaml 取整行原文,"amadeus.page/4" 带引号也必须被闸认出(Codex)。
+  const m = /^["']?amadeus\.page\/(\d+)\b/.exec(fm.amadeus_schema ?? '')
+  return m ? Number.parseInt(m[1], 10) : null
+}
+
 function normalizeWidths(cols: ColumnNode[]): ColumnNode[] {
   const sum = cols.reduce((s, c) => s + (c.width > 0 ? c.width : 0), 0)
   if (sum <= 0) {
@@ -127,6 +136,7 @@ function buildPage(
   createdAt: string,
   now: string,
   fmExtra?: string,
+  nextId?: number,
 ): LoadedPage {
   const present = new Set(Object.keys(blockTypes))
   const manifest: PageManifest = {
@@ -139,6 +149,7 @@ function buildPage(
     root: reconcileRoot(layout, present),
     blocks: Object.fromEntries(Object.entries(blockTypes).map(([bid, t]) => [bid, { type: t }])),
     ...(fmExtra ? { fmExtra } : {}),
+    ...(nextId && nextId > 0 ? { nextId } : {}),
   }
   return { manifest, blocks: hydrate(manifest, contents) }
 }
@@ -171,6 +182,21 @@ function importForeign(pagePath: string, raw: string, now: string): LoadedPage {
   return buildPage(pagePath, generatePageId(), EMPTY_STACK, { [id]: 'markdown' }, { [id]: body }, now, now, extractFrontmatterExtra(raw))
 }
 
+/** A note whose `amadeus_schema` major is newer than this compiler: load it VERBATIM as a
+ *  single read-only-ish block and flag it — compile() refuses to write flagged pages, so an
+ *  old client can never "repair" (renumber + rewrite) a future-format note into v3. */
+function futureSchemaPage(
+  pagePath: string,
+  raw: string,
+  fm: Record<string, string>,
+  now: string,
+): LoadedPage {
+  const page = importForeign(pagePath, raw, now)
+  page.manifest.id = fm.amadeus_page
+  page.manifest.schemaTooNew = true
+  return page
+}
+
 /** Parse a v3 note: frontmatter (id + layout) + inline marker-delimited block content.
  *  `renumbered` is true when legacy/non-numeric ids were found and rewritten to clean
  *  integers — loadPage persists that one-time cleanup. */
@@ -183,6 +209,8 @@ function parseV3(
   const parsed = parseBody(stripFrontmatter(raw))
   const layout = parseLayout(fm.amadeus_layout)
   const fmExtra = extractFrontmatterExtra(raw)
+  const fmNextId = Number.parseInt(fm.amadeus_next_id ?? '', 10)
+  const nextId = Number.isInteger(fmNextId) && fmNextId > 0 ? fmNextId : undefined
   const isCleanId = (id: BlockId | null): boolean => id != null && /^\d+$/.test(id)
   const blockTypes: Record<BlockId, string> = {}
   const contents: Record<BlockId, string> = {}
@@ -198,7 +226,10 @@ function parseV3(
       contents[id] = b.content
       if (b.id != null) remap.set(b.id, id)
     })
-    const page = buildPage(pagePath, fm.amadeus_page, remapLayout(layout, remap), blockTypes, contents, now, now, fmExtra)
+    // 重编号也保留高水位(取两者较大):否则一个夹带非数字 id 的标记就把 floor 归零,
+    // 已退役的号段重新可分配,外部 `![[note#N]]` 静默错绑(Codex)。
+    const renumFloor = Math.max(nextId ?? 0, parsed.length + 1) || undefined
+    const page = buildPage(pagePath, fm.amadeus_page, remapLayout(layout, remap), blockTypes, contents, now, now, fmExtra, renumFloor)
     return { page, renumbered: true }
   }
 
@@ -207,7 +238,7 @@ function parseV3(
     blockTypes[id] = 'markdown'
     contents[id] = b.content
   }
-  return { page: buildPage(pagePath, fm.amadeus_page, layout, blockTypes, contents, now, now, fmExtra), renumbered: false }
+  return { page: buildPage(pagePath, fm.amadeus_page, layout, blockTypes, contents, now, now, fmExtra, nextId), renumbered: false }
 }
 
 /** Open a note: migrate v1/v2 if present, else parse v3, else adopt a foreign note, else create new. */
@@ -215,11 +246,21 @@ export async function loadPage(io: CompilerIO, pagePath: string, now: string): P
   const base = stripPageBasename(pagePath)
   const pageFile = pageFileName(pagePath)
 
+  // 版本闸必须先于 v1/v2 迁移:残留的旧 sidecar/bundle 会让 migrate 直接重写 main.md,
+  // 未来格式的笔记就这样被「修复」回 v3(Codex)。
+  const raw = (await io.exists(pageFile)) ? await io.readFile(pageFile) : null
+  if (raw != null) {
+    const fm = parseFrontmatter(raw)
+    const major = schemaMajorOf(fm)
+    if (fm.amadeus_page && major != null && major > SCHEMA_MAJOR) {
+      return futureSchemaPage(pagePath, raw, fm, now)
+    }
+  }
+
   if (await io.exists(`.${base}.amadeus.json`)) return migrateV1(io, pagePath, now)
   if (await io.exists(`${base}.amadeus/index.json`)) return migrateV2(io, pagePath, now)
-  if (!(await io.exists(pageFile))) return newPage(io, pagePath, now)
+  if (raw == null) return newPage(io, pagePath, now)
 
-  const raw = await io.readFile(pageFile)
   const fm = parseFrontmatter(raw)
   if (!fm.amadeus_page) return importForeign(pagePath, raw, now)
 
@@ -239,6 +280,8 @@ export async function loadPage(io: CompilerIO, pagePath: string, now: string): P
 export function parsePageSource(pagePath: string, raw: string, now: string): LoadedPage {
   const fm = parseFrontmatter(raw)
   if (!fm.amadeus_page) return importForeign(pagePath, raw, now)
+  const major = schemaMajorOf(fm)
+  if (major != null && major > SCHEMA_MAJOR) return futureSchemaPage(pagePath, raw, fm, now)
   return parseV3(pagePath, raw, fm, now).page
 }
 

@@ -10,7 +10,7 @@
  * 其余 host 能力(文件系统/providers/mcp/market/更新…)缺省 → 共享组件 `window.tangu?.X` 可选链自然隐藏。
  */
 import { Browser } from '@capacitor/browser'
-import { isNative, apiBase, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth } from './capacitorAuth'
+import { isNative, apiBase, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 
 const TOKEN_KEY = 'forsion_token'
 
@@ -44,6 +44,12 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   const logout = async (): Promise<void> => {
     if (native) await clearStoredToken()
     else { try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ } }
+    // 云端痕迹一并清(与 webShim.forsionLogout 同款;树快照是全局键,换号会看到上一位用户的树)。
+    try {
+      localStorage.removeItem('amadeus_tree_snap')
+      localStorage.removeItem('amadeus.cloudVaultId')
+      for (const k of Object.keys(localStorage)) if (k.startsWith('amadeus_last_page:')) localStorage.removeItem(k)
+    } catch { /* ignore */ }
     await login()
   }
 
@@ -112,6 +118,8 @@ export async function installMobileShim(): Promise<boolean> {
     bindDeepLinkAuth(() => { location.reload() })
     const token = await getStoredToken()
     if (!token) { await startNativeLogin(); return false }
+    // 滑动续期(2 周窗口):不阻塞启动——本次仍用手上这枚(还有效,续期不吊销旧的),换来的下次启动吃到。
+    void refreshStoredToken()
     setWindowTangu(apiBase(), token, true)
     return true
   }

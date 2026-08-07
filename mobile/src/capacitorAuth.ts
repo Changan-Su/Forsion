@@ -46,6 +46,28 @@ export function forsionWebOrigin(): string {
   return apiOrigin()
 }
 
+/**
+ * 滑动续期:拿存着的 token 换一枚新的(有效期重新计满 14 天)。「离上次打开 App 不满 2 周就不必重登」
+ * 全靠它——登录页发的是 7d 网页 token,首次启动即被换成 14d 会话 token;此后每次启动再续。
+ * 服务端 jti 沿用,单枚吊销 / 退出所有设备语义不变。
+ * 失败一律静默(离线 / 老版本 server 没这端点 / 这枚已失效),绝不在这里清凭证——401 兜底在 mobileShim。
+ */
+export async function refreshStoredToken(): Promise<void> {
+  const token = await getStoredToken()
+  if (!token) return
+  try {
+    const r = await fetch(`${apiBase()}/auth/refresh`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!r.ok) return
+    const j = await r.json().catch(() => null)
+    const fresh = typeof j?.token === 'string' ? j.token : ''
+    // 竞态防线:换新在途期间深链可能已存进另一枚(换号登录)——绝不拿旧链条换来的盖掉新的。
+    if (fresh && fresh !== token && (await getStoredToken()) === token) await storeToken(fresh)
+  } catch { /* 离线:下次启动再说 */ }
+}
+
 let bound = false
 /** 绑定深链处理(全局一次):收到 tangu://auth-callback?token=… → 存 token → 关浏览器 → 回调。 */
 export function bindDeepLinkAuth(onToken: (t: string) => void): void {

@@ -17,6 +17,8 @@
       "@amadeus-shared/*": ["../desktop/shared/amadeus/*"],
       "@lcl/*": ["../lcl/*"],
       "@web/*": ["./src/*"],
+      "@mobile/*": ["../mobile/src/*"],
+      "@capacitor/app": ["./src/capacitorAppStub.ts"],
       "react": ["./node_modules/@types/react"],
       "react-dom": ["./node_modules/@types/react-dom"]
     },

@@ -1,6 +1,6 @@
 import { Suspense, createContext, memo, useContext, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { lazyRetry } from '../../lazyRetry'
-import { Maximize2 } from 'lucide-react'
+import { Columns2, Copy, Link2, Maximize2, Trash2 } from 'lucide-react'
 import { useDroppable } from '@dnd-kit/core'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -15,7 +15,7 @@ import { BookmarkCard } from './BookmarkCard'
 import { ButtonBlock } from '../blocks/button/ButtonBlock'
 import { parseButtonBlock, serializeButtonBlock } from '../blocks/button/format'
 import { useBlockSelection } from '../store/blockSelection'
-import { useClampedMenu } from '../lib/clampMenu'
+import { OverlayAt } from '../lib/clampMenu'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { usePageStore, useScopedPageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
@@ -285,9 +285,9 @@ export const BlockHost = memo(function BlockHost({
       window.removeEventListener('contextmenu', close, { capture: true })
     }
   }, [blockMenu])
-  // 菜单量真实尺寸后夹进视口(纵向溢出上移、横向溢出收进屏幕)。关闭态哨兵用 -1(非 0),
-  // 否则恰在 (0,0) 打开时 deps 不变、layout effect 不触发 → 菜单不量测(codex P3)。
-  const menuPos = useClampedMenu(blockMenu?.x ?? -1, blockMenu?.y ?? -1)
+  // 定位统一走 OverlayAt(菜单节点自己量测夹取):不能在这里 useClampedMenu —— OverlayPortal 的宿主
+  // 在被动 effect 里才解析,外层 hook 的 layout effect 跑在菜单 DOM 存在之前,量测早退、哨兵坐标
+  // 直接上屏 = 菜单永远钉在视口左上角(2026-08-06 实案)。
 
   // 只读控件块(嵌入/图片/db/画板/书签,无文本光标):方向键把 focusRequest 落到本块时,转成「选中整块」
   // (高亮 + 露只读源码行),先 blur 掉来源编辑器,后续方向键交给 BlockSelectionKeys 继续穿过(option A)。
@@ -409,25 +409,25 @@ export const BlockHost = memo(function BlockHost({
    *  传送到最近的 .am-app:祖先有 transform(思维导图画布)时 fixed 会以它为包含块 → 菜单跑偏。 */
   const blockMenuNode = blockMenu && !readOnly && (
     <OverlayPortal>
-    <div ref={menuPos.ref} className="ctx-menu" style={menuPos.style} onClick={(e) => e.stopPropagation()}>
+    <OverlayAt x={blockMenu.x} y={blockMenu.y} className="ctx-menu" onClick={(e) => e.stopPropagation()}>
       {!embedTarget && (
         <button onClick={() => { void navigator.clipboard?.writeText(`![[${stripPageBasename(pagePath)}#${blockId}]]`); setBlockMenu(null) }}>
-          ↪ 复制嵌入引用
+          <Link2 size={13} /> 复制嵌入引用
         </button>
       )}
       {/* 结构类动作在「宿主接管结构」的面(思维导图)上一律不出现:它们直接调 store,会绕过宿主的
           关系图维护 —— 删除留下悬空的父子/关系线、复制出一个没有父级的游离节点、分栏更是笔记专属
           排版。这些操作在导图里由节点自己的菜单负责(Codex)。 */}
       {!embedTarget && !surface && (
-        <button onClick={() => { duplicateBlock(blockId); setBlockMenu(null) }}>⎘ 复制块</button>
+        <button onClick={() => { duplicateBlock(blockId); setBlockMenu(null) }}><Copy size={13} /> 复制块</button>
       )}
-      {!surface && <button onClick={() => { splitToColumn(blockId, 'right'); setBlockMenu(null) }}>⫿ 移到新列</button>}
+      {!surface && <button onClick={() => { splitToColumn(blockId, 'right'); setBlockMenu(null) }}><Columns2 size={13} /> 移到新列</button>}
       {!surface && (
         <button className="danger" onClick={() => { setBlockMenu(null); deleteBlock(blockId) }}>
-          ✕ {embedTarget ? '移除嵌入' : '删除'}
+          <Trash2 size={13} /> {embedTarget ? '移除嵌入' : '删除'}
         </button>
       )}
-    </div>
+    </OverlayAt>
     </OverlayPortal>
   )
 

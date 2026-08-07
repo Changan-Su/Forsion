@@ -21,6 +21,7 @@ import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, legacyCloudVaultDir, migrateCloudMirrorDir, createSyncEngine } from './sync/engine'
 import { createCollabMain, planOf, type SharedBindingPlan } from './sync/collabMain'
+import { mirrorVaultNames } from './sync/mirrorVaults'
 import { SYNC_IPC } from './sync/ipcKeys'
 import {
   applyRemoteOpToEntries,
@@ -454,7 +455,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // ── 按条目云同步 IPC 面 ────────────────────────────────────────────────────
   ipcMain.handle(SYNC_IPC.entryGet, async () => {
     const cfg = await readConfig()
-    return { vaults: cfg.entrySync ?? [], activeRoot: vault.getRoot(), cloudRoot: cloudVaultDir() }
+    const cloudRoot = cloudVaultDir()
+    // mirrorVaults:注册表是每机本地配置,换台设备恒为空 → 分区名还得从镜像里的标记文件推(与 web 同判据)。
+    return { vaults: cfg.entrySync ?? [], activeRoot: vault.getRoot(), cloudRoot, mirrorVaults: await mirrorVaultNames(cloudRoot) }
   })
   // 非活动侧(Local↔Cloud 另一侧)的日历只读快照:递归读该侧根下所有 .db 源文本,供 Calendar 汇总两侧。
   // 只读(不建 watcher/不写回);另一侧的编辑仍须切到那一侧。两侧物理是分开的两个磁盘根。

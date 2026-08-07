@@ -110,7 +110,17 @@ export function installWebShim(): boolean {
     }),
     authStatus,
     forsionLogin: async () => { gotoLogin() },
-    forsionLogout: async () => { try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ } gotoLogin() },
+    forsionLogout: async () => {
+      try {
+        localStorage.removeItem(TOKEN_KEY)
+        // 云端痕迹一并清(评审 P1:树快照是全局键,换号登录会先看到上一位用户的笔记树)。
+        // 键名与 cloudBridge 的 TREE_SNAP_KEY / ACTIVE_VAULT_KEY / lastPageKey 对应。
+        localStorage.removeItem('amadeus_tree_snap')
+        localStorage.removeItem('amadeus.cloudVaultId')
+        for (const k of Object.keys(localStorage)) if (k.startsWith('amadeus_last_page:')) localStorage.removeItem(k)
+      } catch { /* ignore */ }
+      gotoLogin()
+    },
     openAccountCenter: () => { window.open('/account/', '_blank', 'noopener') },
   }
 

@@ -39,6 +39,69 @@ export function forsionLogout(): void {
   saveTanguCreds(c)
 }
 
+// ── 滑动续期(「离上次进入软件不满 2 周就不必重登」)──────────────────────────────
+// 服务端 token 有效期 14 天且不再是硬顶:客户端每次启动拿旧的换一枚新的(/api/auth/refresh,
+// jti 沿用 → 单枚吊销语义不变),于是只要 2 周内开过就永远续得上;超过 2 周没开,这枚自然过期,
+// 既有 whoami 401 → 就地转真登出的链路会把用户领回登录页。
+
+/** 只解 JWT payload、不验签(验签是服务端的事,这里只为判断该不该续期)。坏串 → null。 */
+function tokenClaims(token: string): { iat?: number; exp?: number } | null {
+  try {
+    const seg = token.split('.')[1]
+    if (!seg) return null
+    const j = JSON.parse(Buffer.from(seg, 'base64url').toString('utf8'))
+    return j && typeof j === 'object' ? j : null
+  } catch {
+    return null
+  }
+}
+
+/** 签发至今多久(ms)。无 iat / 坏串 → Infinity:当作很老的老 token,该换就换。 */
+export function tokenAgeMs(token: string, now = Date.now()): number {
+  const iat = tokenClaims(token)?.iat
+  return typeof iat === 'number' ? now - iat * 1000 : Infinity
+}
+
+/** 还剩多久过期(ms)。无 exp / 坏串 → Infinity:当作不急,别为它拖慢启动。 */
+export function tokenRemainingMs(token: string, now = Date.now()): number {
+  const exp = tokenClaims(token)?.exp
+  return typeof exp === 'number' ? exp * 1000 - now : Infinity
+}
+
+/** 1h 内已换过就跳过:连续重启不必每次都打接口(代价是「闲置多久重登」有 ≤1h 的偏差)。 */
+const REFRESH_MIN_AGE_MS = 3600_000
+
+export function shouldRefreshToken(token: string, now = Date.now()): boolean {
+  return !!token && tokenAgeMs(token, now) >= REFRESH_MIN_AGE_MS
+}
+
+/**
+ * 拿当前 token 换一枚新的。返回新 token;**任何不确定的情况一律 null = 什么都不做**:
+ * 401/403(这枚已失效,交给 auth:status 既有的转登出链路)、404(老版本 server 没这端点)、
+ * 5xx / 离线 / 超时(下次启动再说)。绝不在这里清凭证。
+ */
+export async function forsionRefreshToken(
+  cloudUrl: string,
+  token: string,
+  timeoutMs = 8000,
+): Promise<string | null> {
+  if (!cloudUrl || !token) return null
+  const base = cloudUrl.replace(/\/+$/, '')
+  try {
+    const r = await fetch(`${base}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    if (!r.ok) return null
+    const j: any = await r.json().catch(() => null)
+    const fresh = typeof j?.token === 'string' ? j.token : ''
+    return fresh && fresh !== token ? fresh : null
+  } catch {
+    return null
+  }
+}
+
 export interface DeviceLoginStart {
   url: string
   userCode: string

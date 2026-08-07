@@ -1092,6 +1092,8 @@ export interface AmadeusEntrySyncState {
   vaults: AmadeusEntrySyncVault[]
   activeRoot: string | null
   cloudRoot: string
+  /** 云镜像里带 `.forsion-vault.md` 标记的根级文件夹名(换设备时注册表为空,分区名只能靠它)。 */
+  mirrorVaults?: string[]
 }
 
 /** 页面级同步共享(分享卡片数据源)。 */

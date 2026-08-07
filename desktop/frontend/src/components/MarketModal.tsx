@@ -5,6 +5,7 @@
  */
 import { useEffect, useState, useCallback } from 'react'
 import { ArrowLeft, Download, Check, Loader2, ExternalLink, PackageOpen, RefreshCw, Settings, Globe } from 'lucide-react'
+import { Skeleton } from '@lcl/engine'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
@@ -58,6 +59,8 @@ export function MarketModal() {
   const [installing, setInstalling] = useState<string | null>(null)
   const [webApps, setWebApps] = useState<{ base: string; items: WebApp[] } | null>(null)
 
+  const [scanning, setScanning] = useState(true)
+
   // 扫描可更新:拉已装版本 + 三类市场卡片,比对每个已装项的 manifest 版本 vs 市场最新版本。
   const scanUpdates = useCallback(async () => {
     const inst = await listInstalled().catch(() => ({} as Record<string, InstalledItem[]>))
@@ -72,6 +75,7 @@ export function MarketModal() {
       return !!e && isNewer(c.latestVersion, e.version)
     })
     setUpdatable(ups)
+    setScanning(false)
   }, [])
 
   useEffect(() => { void scanUpdates() }, [scanUpdates])
@@ -252,7 +256,9 @@ export function MarketModal() {
         </div>
         <div className="settings-body">
           {tab === 'updates' ? (
-            updatable.length === 0 ? (
+            scanning ? (
+              <Skeleton variant="list" /> // 扫描未完不许闪「全部最新」假答案
+            ) : updatable.length === 0 ? (
               <div className="mk-state mk-muted">{t('market.allUpToDate')}</div>
             ) : (
               <div className="mk-grid">
@@ -270,7 +276,7 @@ export function MarketModal() {
             )
           ) : tab === 'webapp' ? (
             loading ? (
-              <div className="mk-state"><Loader2 size={20} className="mk-spin" /></div>
+              <Skeleton variant="list" />
             ) : err ? (
               <div className="mk-state mk-error">{err}</div>
             ) : !webApps || webApps.items.length === 0 ? (
@@ -333,7 +339,7 @@ export function MarketModal() {
               </div>
             </div>
           ) : loading || detailLoading ? (
-            <div className="mk-state"><Loader2 size={20} className="mk-spin" /></div>
+            <Skeleton variant={detailLoading ? 'document' : 'list'} />
           ) : err ? (
             <div className="mk-state mk-error">{err}</div>
           ) : items.length === 0 ? (

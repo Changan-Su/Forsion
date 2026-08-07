@@ -59,7 +59,7 @@ function inVault(rel: string): string {
 
 // ── 笔记格式助手 ──────────────────────────────────────────────────────────
 const FM_RE = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
-const BLOCK_MARKER_RE = /^<!--\s*a\s+[A-Za-z0-9_]+\s*-->\s*$/;
+const BLOCK_MARKER_RE = /^<!--\s*a\s+[A-Za-z0-9_-]+\s*-->\s*$/;
 function toCleanMarkdown(md: string): string {
   const body = md.replace(FM_RE, '');
   return body

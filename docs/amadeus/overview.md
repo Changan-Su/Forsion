@@ -1,6 +1,6 @@
 ---
 title: Amadeus 总览
-description: 本地优先的笔记系统:纯 Markdown 文件、Obsidian 兼容、白板与多维表一等公民。
+description: 本地优先的笔记系统:纯 Markdown 文件、Obsidian 兼容,笔记、白板、多维表、仪表盘同住一库。
 ---
 
 # Amadeus 总览
@@ -16,15 +16,23 @@ Amadeus 是 Forsion 内置的笔记空间。它的第一原则:**你的笔记是
 
 ## 不只是文字
 
-Amadeus 里这些内容都是"一等公民",各有专门的编辑体验:
+库里的内容有好几种形态,各有专门的编辑体验:
 
 | 内容 | 说明 |
 |------|------|
-| [笔记](editor.md) | 块式编辑器,Markdown 快捷输入 |
+| [笔记](editor.md) | 块式编辑器,Markdown 快捷输入、小节折叠、标注 |
 | [多维表](databases.md) | 类 Notion 的表格数据库,多视图 |
-| [白板](whiteboard.md) | Excalidraw 兼容的无限画布 |
+| [白板](whiteboard.md) | Excalidraw 兼容的无限画布,可选有限纸张与多页文档 |
+| [仪表盘](dashboard.md) | 24 列网格里自由摆卡片:正文、图片、嵌入的笔记 / 多维表 / 白板,外加时钟、天气、网页卡 |
 | [PDF](pdf-annotation.md) | 原生批注,写进 PDF 文件本身 |
-| [日历](calendar.md) | 聚合表格、待办与 Agent 日程 |
+| [日历](calendar.md) | 聚合多维表、待办与 Agent 日程,也能订阅外部日历 |
+| 思维导图 | 由[插件](../customization/plugins.md)提供,装上就和其他形态并列出现 |
+
+形态不同,身份一样:它们都是库里的普通文件,搜索、双链、同步、用 Obsidian 打开全部照常。
+
+## 外部改动会实时跟进
+
+同一篇笔记不只有你在应用里动它——Obsidian、命令行工具、对话中的 Tangu 都可能写同一个文件。正打开的那篇会跟着外部改动实时刷新,不必关掉重开,你手里正在输入的内容也不会把对方刚写入的部分覆盖掉。拖出来的独立窗口同样跟进。
 
 ## 与 AI 的联动
 
@@ -40,9 +48,10 @@ Amadeus 里这些内容都是"一等公民",各有专门的编辑体验:
 
 ## 本地库与云端库
 
-默认一切都在本地。登录后可以启用**云端库**,或把本地某个目录挂到云上双向同步——详见[云同步与共享](cloud-and-sharing.md)。
+默认一切都在本地。登录后可以启用**云端库**,或把本地的某个目录、某篇笔记挂到云上——详见[在线同步与共享](cloud-and-sharing.md)。
 
-## 相关页面
+## 下一步
 
-- [编辑器](editor.md)
-- [双链与属性](links-and-properties.md)
+- [编辑器](editor.md) — 块编辑、斜杠菜单、折叠与源码开关
+- [双链与属性](links-and-properties.md) — `[[链接]]`、子笔记、改名自动跟随
+- [在线同步与共享](cloud-and-sharing.md) — 云端库、第三方网盘、分享链接

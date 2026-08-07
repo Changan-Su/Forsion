@@ -31,6 +31,10 @@ export default defineConfig(({ mode }) => {
         '@amadeus': resolve(DESKTOP_SRC, 'amadeus'),
         '@': DESKTOP_SRC,
         '@web': resolve(__dirname, 'src'),
+        // 手机视口装载 Mobile 壳(mobileEntry/MobileRoot),与移动 App 同一套源码(镜像 mobile 侧
+        // @webamadeus → web/src/amadeus 的既有先例)。@capacitor/app 用浏览器桩顶掉,零原生依赖。
+        '@mobile': resolve(__dirname, '../mobile/src'),
+        '@capacitor/app': resolve(__dirname, 'src/capacitorAppStub.ts'),
       },
       // 关键:web 与 desktop 各有 node_modules/react,跨文件夹复用会加载两份 React →
       // hooks 报 "Cannot read properties of null (reading 'useState')" + 白屏。强制单实例。

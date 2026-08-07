@@ -29,6 +29,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # 引擎版本=产品版本(07-29 定案)。v2.7.5-v2.7.7 曾三连漏 bump 引擎版本戳,
+      # /health 与 tangu-server -v 因此失真两个版本。纯 node 断言,不需要依赖。
+      - name: Engine/desktop version parity
+        working-directory: .
+        run: |
+          node -e '
+            const d = require("./desktop/package.json").version;
+            const e = require("./tangu-agent/package.json").version;
+            if (d !== e) { console.error(`desktop ${d} != tangu-agent ${e} — forsion-release skill 第 1 步要求两包同号 bump`); process.exit(1); }
+            console.log(`version parity OK: ${d}`);
+          '
+
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test

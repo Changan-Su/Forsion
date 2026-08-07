@@ -18,6 +18,7 @@ import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatu
 import { startForsionMcp } from './mcpServer'
 import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
+  forsionRefreshToken, shouldRefreshToken, tokenRemainingMs,
 } from './forsionAuth'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
@@ -1766,6 +1767,29 @@ app.whenReady().then(async () => {
   // 以「上次已处理的 token 值」判重,IPC 路径先行更新它 → watcher 随后触发时识别为已处理。
   let lastAuthToken = loadTanguCreds().token || ''
 
+  /**
+   * 登录态滑动续期:启动时(及运行中每 24h)拿旧 token 静默换一枚新的 → 「离上次进入软件不满
+   * 2 周」永远不必重登;超过 2 周没开,服务端那枚自然过期,auth:status 的 401 链路负责领回登录页。
+   * 失败一律静默(离线/老版本 server/已失效),绝不在这里清凭证。
+   */
+  const refreshAuthSliding = async (timeoutMs?: number): Promise<void> => {
+    const creds = loadTanguCreds()
+    const token = creds.token || ''
+    if (!shouldRefreshToken(token)) return
+    const stored = await loadConfig()
+    const base = stored.cloudUrl || creds.cloudUrl || ''
+    const fresh = await forsionRefreshToken(base, token, timeoutMs)
+    // 留痕:日后「又被登出了」的第一个排查问题就是「续期到底跑没跑」,没日志只能靠猜。
+    if (!fresh) { console.log('[auth] 滑动续期未成功(离线/老版本 server/这枚已失效),继续用旧 token'); return }
+    // 竞态防线:换新在途期间可能已并发登录/登出换了凭证——绝不拿旧链条换来的 token 盖掉新的。
+    if ((loadTanguCreds().token || '') !== token) return
+    lastAuthToken = fresh // 先更新去重锚:watcher 随后比对相同即跳过,不会白重启一次后端
+    saveTanguCreds({ ...loadTanguCreds(), token: fresh })
+    console.log('[auth] 登录态已滑动续期(有效期重新计满 2 周)')
+    // ponytail: 只写文件,不重启 managed 后端 / 同步引擎——它们手上那枚(env 快照)还有效,下次启动
+    // 自然吃到新的;代价是连续运行 >14d 不重启的极端情形里 env 那枚会过期,重启即自愈。
+  }
+
   ipcMain.handle('auth:status', async () => {
     const stored = await loadConfig()
     const creds = loadTanguCreds()
@@ -2307,6 +2331,11 @@ app.whenReady().then(async () => {
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
 
+  // 启动即续期(2 周滑动窗口)。平时不阻塞启动;只有剩余不足 1 天才等它换完再拉后端——后端 token
+  // 走 env 快照,拿一枚马上过期的会中途 401。等的那条也最多 4s(离线时不能把开窗一起拖住)。
+  if (tokenRemainingMs(loadTanguCreds().token || '') < 24 * 3600_000) await refreshAuthSliding(4000)
+  else void refreshAuthSliding()
+  setInterval(() => { void refreshAuthSliding() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
   void ensureBackend()
   // 对外 MCP 端点:仅在设置「高级」已开启时随 App 启动(默认关);不依赖后端就绪,工具调用时现取引擎地址。
   void loadConfig().then((c) => applyForsionMcp(c.mcpEnabled))

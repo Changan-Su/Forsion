@@ -29,7 +29,7 @@ import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
 import { askDeleteAssets, deleteAssetsPref } from '@amadeus/components/askDeleteAssets'
@@ -43,7 +43,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
@@ -306,7 +306,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
   const section = (label: string, items: string[], open: boolean, toggle: () => void): ReactNode => (
     items.length > 0 && (
       <div className="amx-prefs-group">
-        <button className="t2s-group-toggle" onClick={toggle}>
+        <button className="t2s-group-toggle amx-sec-grab" onClick={toggle}>
           <span className="t2s-group-name amx-sec-head">
             <span className="t2s-group-label">{label}</span>
             <span className={`t2s-chev${open ? ' open' : ''}`}><ChevronRight size={12} /></span>
@@ -323,7 +323,7 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
       {/* 「最近」分区已按用户要求移除(收藏/集合保留)。 */}
       {collections.length > 0 && (
         <div className="amx-prefs-group">
-          <button className="t2s-group-toggle" onClick={toggleColl}>
+          <button className="t2s-group-toggle amx-sec-grab" onClick={toggleColl}>
             <span className="t2s-group-name amx-sec-head">
               <span className="t2s-group-label">集合</span>
               <span className={`t2s-chev${openColl ? ' open' : ''}`}><ChevronRight size={12} /></span>
@@ -374,7 +374,7 @@ function SharedWithMeSection() {
   if (!collab || items.length === 0) return null
   return (
     <div className="t2s-special-group" style={{ marginTop: 6 }}>
-      <div className="t2s-hint" style={{ padding: '2px 10px 2px', fontSize: 11.5 }}>与我共享</div>
+      <div className="t2s-hint amx-sec-grab" style={{ padding: '2px 10px 2px', fontSize: 11.5 }}>与我共享</div>
       {items.map((s) => (
         <button
           key={`${s.vaultId}:${s.path}`}
@@ -413,7 +413,7 @@ function SideSection({ id, defaultOpen, label, count, extra, dropProps, dropActi
   const [open, toggle] = useSectionOpen(id, defaultOpen)
   return (
     <div className={`amx-prefs-group${dropActive ? ' amx-drop-into' : ''}`} {...dropProps}>
-      <button className="t2s-group-toggle" onClick={toggle}>
+      <button className="t2s-group-toggle amx-sec-grab" onClick={toggle}>
         <span className="t2s-group-name amx-sec-head">
           <span className="t2s-group-label">{label}</span>
           <span className={`t2s-chev${open ? ' open' : ''}`}><ChevronRight size={12} /></span>
@@ -587,6 +587,80 @@ export function AmadeusPagesView() {
   const [cloudPanel, setCloudPanel] = useState(false) // web:云端库面板(切换/成员/分享)
   const [dragPath, setDragPath] = useState<string | null>(null) // 正在拖动的笔记
   const [dragOver, setDragOver] = useState<string | null>(null) // 悬停的目标文件夹('' = 根)
+
+  // 侧栏分区(置顶/云同步/与我共享/收藏集合/笔记树)拖拽排序:抓分区头拖整块,顺序持久化。
+  // ponytail: 云端侧的多个 vault 分区随「tree」整体挪,不支持分区内再排 —— 需要时再细分。
+  const [secOrder, setSecOrder] = useState<string[]>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('amx.sec.order') || '[]')
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+    } catch { return [] }
+  })
+  const [secArm, setSecArm] = useState<string | null>(null) // 分区头被按住 → 该分区可拖
+  const [secDrag, setSecDrag] = useState<string | null>(null)
+  const [secOver, setSecOver] = useState<string | null>(null)
+  useEffect(() => {
+    // 松手(未成拖)即撤销 draggable:分区体内还有笔记行拖拽/重命名输入框,常驻 draggable 会吞它们。
+    if (!secArm) return
+    const clear = (): void => setSecArm(null)
+    window.addEventListener('pointerup', clear)
+    window.addEventListener('pointercancel', clear)
+    return () => { window.removeEventListener('pointerup', clear); window.removeEventListener('pointercancel', clear) }
+  }, [secArm])
+  const BASE_SEC_IDS = ['pinned', 'cloudsync', 'shared', 'prefs', 'tree']
+  const secPos = new Map(secOrder.map((sid, i) => [sid, i]))
+  // 已存顺序里没有的分区(未来新增)排到末尾,相对次序保持默认(稳定排序)。
+  const orderedSecIds = secOrder.length ? [...BASE_SEC_IDS].sort((a, b) => (secPos.get(a) ?? secOrder.length) - (secPos.get(b) ?? secOrder.length)) : BASE_SEC_IDS
+  const moveSec = (from: string, to: string, after: boolean): void => {
+    const ids = orderedSecIds.filter((x) => x !== from)
+    const i = ids.indexOf(to)
+    ids.splice(i < 0 ? ids.length : after ? i + 1 : i, 0, from)
+    setSecOrder(ids)
+    try { localStorage.setItem('amx.sec.order', JSON.stringify(ids)) } catch { /* 私有模式:仅本会话生效 */ }
+  }
+  /** 分区包装:头(.t2s-group-toggle / .amx-sec-grab)按住才可拖;笔记行拖拽走 secDrag 门禁互不干扰。 */
+  const secWrap = (id: string, node: ReactNode): ReactNode => (
+    <div
+      key={id}
+      className={`amx-sec-wrap${secOver === id && secDrag && secDrag !== id ? ' amx-sec-over' : ''}`}
+      draggable={secArm === id}
+      onPointerDown={(e) => {
+        if (e.pointerType !== 'mouse' || e.button !== 0) return
+        // 只认专有抓手类 .amx-sec-grab:.t2s-group-toggle 被笔记树的文件夹展开按钮复用,
+        // 按它会沿祖先链把整个分区 wrap 当拖拽源,触控板轻微位移即误拖整棵树(评审 P1)。
+        if ((e.target as HTMLElement).closest('.amx-sec-grab')) setSecArm(id)
+      }}
+      onDragStart={(e) => {
+        if (secArm !== id) return // 分区体内的笔记行自己的拖拽冒泡上来:放行
+        e.stopPropagation()
+        e.dataTransfer.effectAllowed = 'move'
+        try { e.dataTransfer.setData('application/x-amx-section', id) } catch { /* 标识而已,真源是 secDrag */ }
+        setSecDrag(id)
+      }}
+      onDragEnd={() => { setSecDrag(null); setSecOver(null); setSecArm(null) }}
+      onDragOver={(e) => {
+        if (!secDrag || secDrag === id) return
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = 'move'
+        if (secOver !== id) setSecOver(id)
+      }}
+      onDragLeave={(e) => {
+        if (secOver === id && !e.currentTarget.contains(e.relatedTarget as Node)) setSecOver(null)
+      }}
+      onDrop={(e) => {
+        if (!secDrag || secDrag === id) return
+        e.preventDefault()
+        e.stopPropagation()
+        const r = e.currentTarget.getBoundingClientRect()
+        moveSec(secDrag, id, e.clientY > r.top + r.height / 2)
+        setSecDrag(null)
+        setSecOver(null)
+      }}
+    >
+      {node}
+    </div>
+  )
   const [menu, setMenu] = useState<Ctx | null>(null)
   // 本地侧 <Vault名> 分区:树就在里面 → **唯一默认展开**的分区(用户点名);手动折叠仍会被记住。
   const [vaultOpen, toggleVault] = useSectionOpen('vault', true)
@@ -603,12 +677,14 @@ export function AmadeusPagesView() {
   useEffect(() => {
     ensureAmadeusReady()
   }, [])
-  // 按条目云同步注册表:订阅一次 + 切库时重取(activeRoot 跟随主进程活动 vault)。
+  // 按条目云同步注册表:订阅一次 + 切库/树刷新时重取(activeRoot 跟随主进程活动 vault;
+  // mirrorVaults 随镜像逐步物化,所以要跟着树一起重推,不能只在切库时取一次)。
   useEffect(() => {
     ensureEntrySyncSubscribed()
     void useEntrySync.getState().refresh()
-  }, [vaultRoot])
+  }, [vaultRoot, pages, folders])
   const entryVaults = useEntrySync((s) => s.vaults)
+  const mirrorVaults = useEntrySync((s) => s.mirrorVaults)
   useEffect(() => { if (renaming) renameRef.current?.select() }, [renaming])
   useEffect(() => {
     if (!menu) return
@@ -647,19 +723,22 @@ export function AmadeusPagesView() {
     return () => { alive = false }
   }, [pages, folders]) // 树刷新时重推导(标记文件出现/消失)
   // 云端侧:根节点按「同步 Vault 文件夹」切分——桌面=注册表云名(恒显,镜像未拉到时 node=null
-  // 显示等待文案);web=标记推导。其余节点归「Cloud工作区」。
+  // 显示等待文案)**并上镜像里的标记推导**;web=标记推导。其余节点归「Cloud工作区」。
+  // ⚠️并集不是冗余:注册表只认本机开过的(换台设备恒空),标记只认已拉到镜像的(刚开启时还没有)。
   const cloudSections = useMemo(() => {
     const isDesktopCloud = !!window.amadeusSync && vaultSide === 'cloud'
     // web(库本身在云端)恒走云端样式——落进下面的本地分支会把 vault UUID 当 <Vault名> 显示。
     const isWebCloud = !window.amadeusSync && !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults
     if (!isDesktopCloud && !isWebCloud) return null
-    const names = isDesktopCloud ? [...new Set(entryVaults.map((v) => v.cloudName))].sort() : webVaultNames
+    const names = isDesktopCloud
+      ? [...new Set([...entryVaults.map((v) => v.cloudName), ...mirrorVaults])].sort()
+      : webVaultNames
     const nodeOf = new Map(tree.children.filter((n) => n.kind === 'folder').map((n) => [n.path, n]))
     const vaultSecs = names.map((name) => ({ name, node: nodeOf.get(name) ?? null }))
     const nameSet = new Set(names)
     const rest = tree.children.filter((n) => !(n.kind === 'folder' && nameSet.has(n.path)))
     return { vaultSecs, rest }
-  }, [tree, entryVaults, vaultSide, webVaultNames])
+  }, [tree, entryVaults, mirrorVaults, vaultSide, webVaultNames])
 
   // 白板/PDF/.db 开在各自的独立视图、不写 activePage → 树行永远不亮。聚焦主 tab 是这类视图时
   // 按其文件参数点亮对应行(编辑器/其他视图聚焦时回落 activePage,原行为)。mainTabs 随激活变化刷新。
@@ -977,6 +1056,60 @@ export function AmadeusPagesView() {
     )
   }
 
+  // 尾部「笔记树」分区(云端多分区 / 本地 Vault 分区 / 无 Vault 裸树):整体作为一个可排序单元(见 secWrap)。
+  const secTreeNode: ReactNode = cloudSections ? (
+    <>
+      {/* 云端侧:Cloud工作区(非同步Vault部分)+ 每个同步 Vault 一个分区(镜像内容,双向可编辑;
+          注册表有名字但镜像还没拉到时也占位显示)。 */}
+      <CloudSkipWarn />
+      <SideSection id="cloud-ws" defaultOpen label="Cloud工作区">
+        {cloudSections.rest.length ? cloudSections.rest.map((n) => renderNode(n, 0)) : <div className="t2s-hint amx-sec-hint">空</div>}
+      </SideSection>
+      {cloudSections.vaultSecs.map(({ name, node }) => (
+        <SideSection key={name} id={`vault:${name}`} defaultOpen label={name}>
+          {node && node.children.length
+            ? node.children.map((c) => renderNode(c, 0))
+            : <div className="t2s-hint amx-sec-hint">{node ? '空' : '同步内容尚未到达'}</div>}
+        </SideSection>
+      ))}
+    </>
+  ) : vaultRoot ? (
+    // 本地侧:<Vault名> 分区,现有树整体挂其下;分区内空白区保留「拖回根目录」落点。
+    <div className="amx-prefs-group">
+      <button className="t2s-group-toggle amx-sec-grab" onClick={toggleVault}>
+        <span className="t2s-group-name amx-sec-head">
+          <span className="t2s-group-label">{baseName(vaultRoot)}</span>
+          <span className={`t2s-chev${vaultOpen ? ' open' : ''}`}><ChevronRight size={12} /></span>
+        </span>
+      </button>
+      {vaultOpen && (
+        <div
+          className={`t2s-group-sessions${dragPath && dragOver === '' ? ' amx-drop-root' : ''}`}
+          onDragOver={(e) => {
+            if (rootFilesOver(e, '.t2s-srow, .t2s-group')) return
+            // 根目录落点:分区内真空白(行/文件夹自己的 handler 已 stopPropagation)。
+            if (!dragPath || parentOf(dragPath) === '' || q) return
+            if ((e.target as HTMLElement).closest('.t2s-srow, .t2s-group')) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            if (dragOver !== '') setDragOver('')
+          }}
+          onDragLeave={() => { if (dragOver === '') setDragOver(null) }}
+          onDrop={(e) => {
+            if (rootFilesDrop(e, '.t2s-srow, .t2s-group')) return
+            if ((e.target as HTMLElement).closest('.t2s-srow, .t2s-group')) return
+            e.preventDefault()
+            dropTo('')
+          }}
+        >
+          {tree.children.map((n) => renderNode(n, 0))}
+        </div>
+      )}
+    </div>
+  ) : (
+    <>{tree.children.map((n) => renderNode(n, 0))}</>
+  )
+
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
       <aside className="t2s-side amx-tree">
@@ -1030,62 +1163,17 @@ export function AmadeusPagesView() {
 
               {/* 恢复 Vault 在途(云端首开 GET /vaults+/tree)→ 列表骨架;真没库才提示「打开 Vault」。 */}
               {!vaultRoot && (vaultLoading ? <Skeleton variant="list" /> : <div className="t2s-hint">打开一个 Vault 文件夹开始。</div>)}
-              <PinnedSection row={row} dragPath={dragPath} />
-              {vaultSide === 'local' && <CloudSyncSection dragPath={dragPath} />}
-              <SharedWithMeSection />
-              <PrefsSections row={row} pages={pages} />
-              {cloudSections ? (
-                <>
-                  {/* 云端侧:Cloud工作区(非同步Vault部分)+ 每个同步 Vault 一个分区(镜像内容,双向可编辑;
-                      注册表有名字但镜像还没拉到时也占位显示)。 */}
-                  <CloudSkipWarn />
-                  <SideSection id="cloud-ws" defaultOpen label="Cloud工作区">
-                    {cloudSections.rest.length ? cloudSections.rest.map((n) => renderNode(n, 0)) : <div className="t2s-hint amx-sec-hint">空</div>}
-                  </SideSection>
-                  {cloudSections.vaultSecs.map(({ name, node }) => (
-                    <SideSection key={name} id={`vault:${name}`} defaultOpen label={name}>
-                      {node && node.children.length
-                        ? node.children.map((c) => renderNode(c, 0))
-                        : <div className="t2s-hint amx-sec-hint">{node ? '空' : '同步内容尚未到达'}</div>}
-                    </SideSection>
-                  ))}
-                </>
-              ) : vaultRoot ? (
-                // 本地侧:<Vault名> 分区,现有树整体挂其下;分区内空白区保留「拖回根目录」落点。
-                <div className="amx-prefs-group">
-                  <button className="t2s-group-toggle" onClick={toggleVault}>
-                    <span className="t2s-group-name amx-sec-head">
-                      <span className="t2s-group-label">{baseName(vaultRoot)}</span>
-                      <span className={`t2s-chev${vaultOpen ? ' open' : ''}`}><ChevronRight size={12} /></span>
-                    </span>
-                  </button>
-                  {vaultOpen && (
-                    <div
-                      className={`t2s-group-sessions${dragPath && dragOver === '' ? ' amx-drop-root' : ''}`}
-                      onDragOver={(e) => {
-                        if (rootFilesOver(e, '.t2s-srow, .t2s-group')) return
-                        // 根目录落点:分区内真空白(行/文件夹自己的 handler 已 stopPropagation)。
-                        if (!dragPath || parentOf(dragPath) === '' || q) return
-                        if ((e.target as HTMLElement).closest('.t2s-srow, .t2s-group')) return
-                        e.preventDefault()
-                        e.dataTransfer.dropEffect = 'move'
-                        if (dragOver !== '') setDragOver('')
-                      }}
-                      onDragLeave={() => { if (dragOver === '') setDragOver(null) }}
-                      onDrop={(e) => {
-                        if (rootFilesDrop(e, '.t2s-srow, .t2s-group')) return
-                        if ((e.target as HTMLElement).closest('.t2s-srow, .t2s-group')) return
-                        e.preventDefault()
-                        dropTo('')
-                      }}
-                    >
-                      {tree.children.map((n) => renderNode(n, 0))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                tree.children.map((n) => renderNode(n, 0))
-              )}
+              {(() => {
+                // 分区节点表:顺序由 orderedSecIds(持久化)决定,包装层提供拖拽排序。
+                const secNodes: Record<string, ReactNode> = {
+                  pinned: <PinnedSection row={row} dragPath={dragPath} />,
+                  cloudsync: vaultSide === 'local' ? <CloudSyncSection dragPath={dragPath} /> : null,
+                  shared: <SharedWithMeSection />,
+                  prefs: <PrefsSections row={row} pages={pages} />,
+                  tree: secTreeNode,
+                }
+                return orderedSecIds.map((sid) => (secNodes[sid] == null ? null : secWrap(sid, secNodes[sid])))
+              })()}
             </>
           )}
         </div>
@@ -1773,6 +1861,31 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。
   useEffect(() => { if (notePath) leaf.setTitle(baseName(notePath)) }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⓪ 移动端「Space 记住上次打开的页面」:单列壳切 Space 走 resetLayout 重建(无布局持久化),
+  //    notePath 随布局一起被清 → 用下面 useEffect 落的「每库最后一次打开的笔记」回填。
+  //    桌面端 dockview 布局自带 notePath 还原,不掺和(空参编辑器 = 刻意的欢迎页)。
+  useEffect(() => {
+    if (UI_MODE !== 'mobile' || notePath) return
+    const tryRestore = (): boolean => {
+      const st = myPs()
+      if (!st.vaultRoot) return false // vault 未就绪(启动预热在途)→ 订阅等它
+      let last: string | null = null
+      try { last = localStorage.getItem(`amx.lastNote:${st.vaultRoot}`) } catch { /* ignore */ }
+      if (last && st.pages.includes(last)) leaf.setParams({ ...leaf.params, notePath: last })
+      return true // vault 就绪即完结(没有可还原目标也算完,停在欢迎页)
+    }
+    if (tryRestore()) return
+    const unsub = myStore.subscribe((s) => { if (s.vaultRoot && tryRestore()) unsub() })
+    return unsub
+  }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 记住每库最后打开的笔记(移动端 Space 重建后回填的数据源;桌面端只写不读)。
+  useEffect(() => {
+    if (!notePath) return
+    const vr = myPs().vaultRoot
+    if (vr) { try { localStorage.setItem(`amx.lastNote:${vr}`, notePath) } catch { /* ignore */ } }
+  }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ① 本面板认领的笔记 ≠ 本面板 store 里的笔记 → 装载它。**与是否活动无关** —— 这正是分屏的关键:
   //    并排的两个面板各装各的,不再互相覆盖。
   useEffect(() => {
@@ -1799,8 +1912,27 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // ④ 面板关掉 → 回收它那份 store(内部先 flush 落盘,不带走没写完的改动)。
   useEffect(() => () => disposePageScope(leaf.id), [leaf.id])
 
+  // 侧栏笔记行拖进编辑器 → 追加 [[链接]] 块。链接一律路径限定形态([[dir/Name|Name]]):
+  // resolvePageName 对带路径名不做同名回退,重名笔记也指向唯一目标;根目录笔记只能裸名(天花板:
+  // 与当前页同夹的同名笔记会优先命中,极罕见)。会话/工作区文件引用与笔记语义不兼容,编辑器不收。
+  const noteWikiInner = (rel: string): string => {
+    const link = rel.replace(/\.md$/i, '')
+    const base = link.split(/[\\/]/).pop() || link
+    return link === base ? link : `${link}|${base}`
+  }
   // 拖入文件 → 按 Tangu 笔记设置存放(attachments/同目录/固定夹)→ 预览开则插 ![[base]],否则插 [名](相对路径)。
   const onDrop = async (e: RDragEvent<HTMLDivElement>): Promise<void> => {
+    // 树行拖源对一切叶子(含图片/PDF/.db 附件)都打 kind:'note' —— 按真实类型分流:
+    // .md → [[链接]];非笔记 → ![[嵌入]](与 OS 文件拖入 importToPage 的语义一致,评审 P1)。
+    const treeRefs = readChatRefs(e.dataTransfer).filter((r) => r.kind === 'note')
+    if (treeRefs.length) {
+      e.preventDefault()
+      setDragging(false)
+      const ps = myPs()
+      if (!ps.activePage) return
+      ps.insertBlocksAfter(null, treeRefs.map((r) => (isNotePath(r.path) ? `[[${noteWikiInner(r.path)}]]` : `![[${r.path}]]`)))
+      return
+    }
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (!files.length) return
     e.preventDefault()
@@ -1810,8 +1942,12 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     await importToPage(files, page) // 存到配置的附件位置 + 插入嵌入/链接(本地/云端/web 统一;失败与超限走 toast)
   }
   const onDragOver = (e: RDragEvent<HTMLDivElement>): void => {
-    if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return
+    const types = Array.from(e.dataTransfer?.types ?? [])
+    // 只认 REF_MIME(笔记/会话引用),不吃 PATHS_MIME:工作区文件的绝对路径写进笔记没有意义。
+    const refDrag = types.includes(REF_MIME)
+    if (!types.includes('Files') && !refDrag) return
     e.preventDefault()
+    if (refDrag && e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
     if (!dragging) setDragging(true)
   }
   const onDragLeave = (e: RDragEvent<HTMLDivElement>): void => {

@@ -12,14 +12,27 @@ const nano = customAlphabet(ALPHABET, 8)
  *  Block ids are local to one file and only delimit ranges (the meaning is in the layout),
  *  so a number suffices. They are assigned-and-kept (never renumbered), so a cross-note
  *  `![[note#3]]` keeps pointing at the same block across edits. */
-export function nextBlockId(existing: Iterable<BlockId>): BlockId {
+/** `floor` = the note's persisted high-water mark (manifest.nextId): ids at/above it were
+ *  never handed out twice even if the highest block was deleted — without it, max+1 reuses
+ *  a freshly-deleted id and external `![[note#N]]` silently rebinds to new content. */
+export function nextBlockId(existing: Iterable<BlockId>, floor = 1): BlockId {
   let max = 0
   for (const id of existing) {
     const n = Number.parseInt(String(id), 10)
     if (Number.isInteger(n) && String(n) === String(id) && n > max) max = n
   }
-  return String(max + 1)
+  return String(Math.max(max + 1, floor))
 }
+/** Advance the high-water mark past `id` (numeric ids only). MUST be called both when an id
+ *  is allocated and when its block is deleted: allocation alone isn't enough (allocate 7 at
+ *  floor 7 → delete 7 → floor still 7 → reuse), deletion alone isn't enough either (a clean
+ *  1,2 note has no stored floor, deleting 2 must raise it to 3 before the next insert). */
+export function bumpNextId(current: number | undefined, id: BlockId): number | undefined {
+  const n = Number.parseInt(String(id), 10)
+  if (!Number.isInteger(n) || String(n) !== String(id)) return current
+  return Math.max(current ?? 0, n + 1)
+}
+
 export function generatePageId(): string {
   return `pg_${nano()}`
 }

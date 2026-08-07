@@ -50,6 +50,14 @@
           var mq = matchMedia('(pointer: coarse) and (max-width: 820px)');
           if (mq.matches) auto();
           mq.addEventListener('change', function (e) { if (e.matches && auto()) location.reload(); });
+          // 最终生效移动布局时对齐 Mobile App 的 viewport(锁缩放 + viewport-fit=cover,否则
+          // safe-area-inset 全为 0,单列壳的刘海/手势条留白失效)。桌面布局不动,保留浏览器缩放。
+          var eff = null;
+          try { eff = new URLSearchParams(location.search).get('ui') || localStorage.getItem(KEY); } catch (e2) { /* ignore */ }
+          if (eff === 'mobile') {
+            var vp = document.querySelector('meta[name="viewport"]');
+            if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
+          }
         } catch (e) { /* private mode */ }
       })();
     </script>

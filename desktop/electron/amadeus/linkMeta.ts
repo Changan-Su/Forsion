@@ -1,6 +1,7 @@
 /** 书签卡的链接元数据抓取(主进程,免 CORS):og 标签正则抠取,不整套解析 HTML。
  *  6s 超时 + 300KB 截断 + 进程内缓存;失败/非 HTML 一律 null(渲染端降级纯链接卡)。 */
 import type { LinkMeta } from '@amadeus-shared/ipc'
+import { privateHostReason } from '../netGuard'
 
 const cache = new Map<string, LinkMeta | null>()
 
@@ -51,20 +52,48 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
   const hit = cache.get(url)
   if (hit !== undefined) return hit
   try {
-    const ctrl = new AbortController()
-    const t = setTimeout(() => ctrl.abort(), 6000)
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: 'follow',
-      headers: { 'user-agent': 'Mozilla/5.0 (compatible; ForsionAmadeus/1.0; bookmark-preview)', accept: 'text/html,*/*;q=0.5' },
-    })
-    clearTimeout(t)
+    // SSRF 闸:书签 URL 来自笔记内容(agent/云同步可写入),属半受控输入。逐跳解析成 IP 再判,
+    // redirect 自己跟 —— 只校验首跳等于没校验(公网域名可 302 到内网)。calendar:fetchIcs 同款正典。
+    let target = url
+    let res: Response | null = null
+    const deadline = Date.now() + 6000 // 端到端硬时限:重定向链共用,不是每跳重新计时
+    for (let hop = 0; hop < 5; hop++) {
+      if (await privateHostReason(new URL(target).hostname)) { cache.set(url, null); return null }
+      res = await fetch(target, {
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+        redirect: 'manual',
+        headers: { 'user-agent': 'Mozilla/5.0 (compatible; ForsionAmadeus/1.0; bookmark-preview)', accept: 'text/html,*/*;q=0.5' },
+      })
+      if (res.status < 300 || res.status >= 400) break
+      const loc = res.headers.get('location')
+      if (!loc) break
+      void res.body?.cancel()
+      target = new URL(loc, target).toString()
+      if (!/^https?:\/\//i.test(target)) { cache.set(url, null); return null }
+      res = null
+    }
+    if (!res) { cache.set(url, null); return null } // 重定向次数过多
     const ct = res.headers.get('content-type') ?? ''
     if (!res.ok || !ct.includes('text/html')) {
       cache.set(url, null)
       return null
     }
-    const html = (await res.text()).slice(0, 300_000)
+    const baseUrl = res.url || target
+    // 流式累计至 300KB 即断开:res.text() 会先整体读进内存,截断就不是上限了
+    const chunks: Uint8Array[] = []
+    let n = 0
+    const reader = res.body?.getReader()
+    if (reader) {
+      for (;;) {
+        if (Date.now() > deadline) { void reader.cancel(); break }
+        const { done, value } = await reader.read()
+        if (done) break
+        n += value.byteLength
+        chunks.push(value)
+        if (n >= 300_000) { void reader.cancel(); break }
+      }
+    }
+    const html = Buffer.concat(chunks).toString('utf8').slice(0, 300_000)
     const pick = (re: RegExp): string | undefined => re.exec(html)?.[1]?.trim() || undefined
     const meta = (name: string): string | undefined =>
       pick(new RegExp(`<meta[^>]+(?:property|name)=["']${name}["'][^>]*content=["']([^"']+)`, 'i')) ??
@@ -72,7 +101,7 @@ export async function fetchLinkMeta(url: string): Promise<LinkMeta | null> {
     const abs = (href: string | undefined): string | undefined => {
       if (!href) return undefined
       try {
-        return new URL(href, res.url || url).href
+        return new URL(href, baseUrl).href
       } catch {
         return undefined
       }

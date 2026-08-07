@@ -12,6 +12,7 @@ import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
+import { buildTree, mergeFdNotes, pathTo, subtreeAt, type TreeNode } from '@amadeus/lib/pageTree'
 import { getApiBase } from './webShim'
 import { ShareDbEmbed } from './shareDb'
 
@@ -31,7 +32,7 @@ body { margin: 0; }
 .shv-side button { display: block; width: 100%; text-align: left; padding: 5px 10px; border: 0; background: none; border-radius: 8px; font: 13px/1.5 inherit; color: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shv-side button:hover { background: rgba(127,127,127,.1); }
 .shv-side button.on { background: rgba(76,110,245,.12); color: #4c6ef5; }
-.shv-side .dir { opacity: .55; font-size: 11.5px; margin: 10px 10px 2px; text-transform: none; }
+.shv-side .cr { display: inline-block; width: 14px; margin-right: 2px; font-size: 9px; opacity: .5; vertical-align: 1px; }
 .shv-main { flex: 1; min-width: 0; padding: 48px 24px 96px; }
 .shv-doc { max-width: 760px; margin: 0 auto; }
 .shv-doc h1.shv-title { font-size: 30px; line-height: 1.3; margin: 0 0 24px; }
@@ -68,7 +69,7 @@ function preprocess(raw: string, opts: { assetUrl: (ref: string) => string; page
   let s = raw.replace(/^---\n[\s\S]*?\n---\n?/, '')
   // Amadeus 块锚点标记(<!-- a <id> -->,见 compiler/markers.ts BLOCK_MARKER_RE):仅用于存储切块,
   // 读者不该看到。react-markdown 无 rehype-raw 会把这些 HTML 注释漏成可见文本,故在此整行剥除。
-  s = s.replace(/^[ \t]*<!--\s*a\s+[A-Za-z0-9_]+\s*-->[ \t]*(?:\r?\n|$)/gm, '')
+  s = s.replace(/^[ \t]*<!--\s*a\s+[A-Za-z0-9_-]+\s*-->[ \t]*(?:\r?\n|$)/gm, '')
   s = s.replace(/!\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g, (_m, ref: string, _alias?: string) => {
     const r = ref.trim()
     if (IMG_EXT.test(r)) return `![](${opts.assetUrl(r)})`
@@ -91,6 +92,7 @@ function ShareApp({ token }: { token: string }): React.ReactElement {
   const [current, setCurrent] = useState<string | null>(null)
   const [content, setContent] = useState<string>('')
   const [err, setErr] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     void (async () => {
@@ -114,6 +116,20 @@ function ShareApp({ token }: { token: string }): React.ReactElement {
       setCurrent(m.path)
     })().catch(() => setErr('加载失败'))
   }, [base])
+
+  // 侧栏折叠树:与桌面端同一套 buildTree/mergeFdNotes,再把分享根当顶层(不显示根这一行)。
+  const treeRoot = useMemo(
+    () => (tree ? subtreeAt(mergeFdNotes(buildTree(tree.pages, tree.folders)), tree.root) : null),
+    [tree],
+  )
+
+  // 落到新页面就展开它的祖先。ponytail: 不持久化,手动开合只活在本次会话。
+  useEffect(() => {
+    if (!treeRoot || !current) return
+    const chain = pathTo(treeRoot, current)
+    if (!chain?.length) return
+    setExpanded((prev) => (chain.every((p) => prev.has(p)) ? prev : new Set([...prev, ...chain])))
+  }, [treeRoot, current])
 
   useEffect(() => {
     if (!current) return
@@ -170,20 +186,42 @@ function ShareApp({ token }: { token: string }): React.ReactElement {
 
   if (err && !meta) return <div className="shv"><div className="shv-center">{err}</div></div>
 
-  const stripRoot = (p: string): string => (tree && p.startsWith(`${tree.root}/`) ? p.slice(tree.root.length + 1) : p)
   const title = current ? (current.split('/').pop() ?? '').replace(/\.md$/i, '') : meta?.title ?? ''
+
+  const toggle = (path: string): void => setExpanded((prev) => {
+    const next = new Set(prev)
+    if (!next.delete(path)) next.add(path)
+    return next
+  })
+
+  // 整行:文件夹→开合,文件→跳转;有孩子的行前面那个三角单独可点(.fd 容器笔记既能开也能读)。
+  const renderRow = (n: TreeNode, depth: number): React.ReactElement => {
+    const open = expanded.has(n.path)
+    const foldable = n.children.length > 0
+    return (
+      <React.Fragment key={n.path}>
+        <button
+          className={n.path === current ? 'on' : ''}
+          style={{ paddingLeft: 10 + depth * 12 }}
+          onClick={() => {
+            if (n.kind !== 'file') { toggle(n.path); return }
+            location.hash = encodeURIComponent(n.path)
+            setCurrent(n.path)
+          }}
+        >
+          <span className="cr" onClick={foldable ? (e) => { e.stopPropagation(); toggle(n.path) } : undefined}>
+            {foldable ? (open ? '▾' : '▸') : ''}
+          </span>
+          {n.name.replace(/\.md$/i, '')}
+        </button>
+        {open && n.children.map((c) => renderRow(c, depth + 1))}
+      </React.Fragment>
+    )
+  }
 
   return (
     <div className="shv">
-      {tree && (
-        <nav className="shv-side">
-          {tree.pages.map((p) => (
-            <button key={p} className={p === current ? 'on' : ''} onClick={() => { location.hash = encodeURIComponent(p); setCurrent(p) }}>
-              {stripRoot(p).replace(/\.md$/i, '')}
-            </button>
-          ))}
-        </nav>
-      )}
+      {treeRoot && <nav className="shv-side">{treeRoot.children.map((n) => renderRow(n, 0))}</nav>}
       <main className="shv-main">
         <article className="shv-doc">
           <h1 className="shv-title">{title}</h1>

@@ -33,13 +33,20 @@ if (path.startsWith('/share/')) {
   // P2/P3 协同与分享面(web 专属;共享 UI 据 window.amadeusCollab 解闸)。
   installCloudCollab({ apiBase: getApiBase(), getToken })
 
-  // window.tangu / window.amadeus 就位后再加载桌面端启动模块(@ → ../desktop/frontend/src)。
-  void import('@/main')
-    .then(() => import('@/stores/appStore'))
-    .then(({ useApp }) => {
+  // window.tangu / window.amadeus 就位后再加载启动模块。手机单列(lcl.uiMode=mobile,index.html
+  // 内联脚本在模块求值前已写好键)装载 Mobile 壳(@mobile/mobileEntry,与移动 App 同源码 —— 显示
+  // 与 Mobile 全量对齐);桌面视口照旧走 desktop 启动(@ → ../desktop/frontend/src)。
+  const wireToast = (): Promise<void> =>
+    import('@/stores/appStore').then(({ useApp }) => {
       // 云端桥的提示(保存冲突/仅桌面可用…)接到应用 toast。
       setCloudNotify((text, isError) => useApp.getState().toast(text, isError))
     })
+  let uiMobile = false
+  try {
+    uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
+  } catch { /* private mode → 桌面布局 */ }
+  void (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
+    .then(wireToast)
     .catch((e) => console.error('[tangu-web] bootstrap failed:', e))
 }
 // 未登录:installWebShim 已 location.replace 跳登录,不挂载。

@@ -81,7 +81,7 @@ function parseFmObjectFixture(md: string): string {
   if (!m) return ''
   return m[1]
     .split('\n')
-    .filter((l) => !/^(amadeus_page|amadeus_schema|amadeus_layout):/.test(l))
+    .filter((l) => !/^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_next_id):/.test(l))
     .join('\n')
 }
 

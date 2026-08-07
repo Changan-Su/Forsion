@@ -63,7 +63,7 @@ export function parseFrontmatter(markdown: string): Record<string, string> {
 }
 
 /** Reserved single-line keys we own; everything else in the frontmatter is the user's. */
-export const AMADEUS_FM_KEY = /^(amadeus_page|amadeus_schema|amadeus_layout):/
+export const AMADEUS_FM_KEY = /^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_next_id):/
 
 /** Foreign frontmatter lines (everything except the amadeus_* keys), verbatim — multi-line
  *  values, comments and ordering preserved. '' when the note has no foreign frontmatter. */

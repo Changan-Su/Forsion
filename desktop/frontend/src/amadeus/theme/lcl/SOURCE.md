@@ -1,24 +1,14 @@
-# Vendored from Forsion-LCL — DO NOT hand-edit the token/theme parts here
+# Historical vendored layer — upstream is ARCHIVED, do not re-sync
 
-These files are the **shared design-language layer**, copied verbatim from Forsion-LCL.
-LCL is the **single source of truth**. If you change the design language, change it in LCL
-first, then re-copy here. (When Tangu Desktop also adopts this, we extract a real shared
-package + workspace; until then, vendoring keeps Amadeus standalone-buildable.)
+These css files were copied from the repo-root `Forsion-LCL` spike (now abandoned; see
+`apps/Archived/`). That upstream no longer exists as a source of truth — **this copy is
+the live code now**, maintained in place like any other file here.
 
-| here | ← source in Forsion-LCL |
+| here | original source (historical) |
 |---|---|
-| `tangu.css` | `src/tangu/tangu.css` — `.tangu-lovable` token layer + skins (lovable/echo/qbird/custom) |
-| `tanguSoft.css` | `src/tanguSoft/tanguSoft.css` — `.tangu-soft` token layer + themes (soft/qbird/custom) |
-| `recipes.css` | `src/amadeus/amadeus.css` — the shared `.am-*` recipes (per-base). **Amadeus extends this** with shell recipes (`recipes.ext.css`), NOT by editing this file. |
-| `lovableData.ts` | `src/tangu/tanguData.ts` — `SKINS` + `customSkinVars(seed,dark)` |
-| `softData.ts` | `src/tanguSoft/tanguSoftData.ts` — `THEMES` + `customVars(seed,dark)` |
+| `tangu.css` | `Forsion-LCL/src/tangu/tangu.css` — `.tangu-lovable` token layer + skins |
+| `tanguSoft.css` | `Forsion-LCL/src/tanguSoft/tanguSoft.css` — `.tangu-soft` token layer + themes |
+| `recipes.css` | `Forsion-LCL/src/amadeus/amadeus.css` — shared `.am-*` recipes(shell 扩展写 `recipes.ext.css`,不改本文件) |
 
-Re-sync command (from repo root):
-```
-LCL=Forsion-LCL/src; DEST=apps/Amadeus/src/renderer/theme/lcl
-cp $LCL/tangu/tangu.css $DEST/tangu.css
-cp $LCL/tanguSoft/tanguSoft.css $DEST/tanguSoft.css
-cp $LCL/amadeus/amadeus.css $DEST/recipes.css
-cp $LCL/tangu/tanguData.ts $DEST/lovableData.ts
-cp $LCL/tanguSoft/tanguSoftData.ts $DEST/softData.ts
-```
+`lovableData.ts` / `softData.ts` 曾在此目录,2026-08-06 死码清理已删除
+(活的版本在 `frontend/src/theme/lcl/`,勿按旧同步命令复制回来)。

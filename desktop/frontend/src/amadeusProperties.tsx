@@ -36,9 +36,9 @@ export function AmadeusPropertiesPanel() {
     const obj: Record<string, unknown> = {}
     for (const e of entries) {
       const k = e.key.trim()
-      // 只滤编译器的三个精确保留键(与 split.ts AMADEUS_FM_KEY 一致)——
+      // 只滤编译器的四个精确保留键(与 split.ts AMADEUS_FM_KEY 一致)——
       // 外来工具的 amadeus_created 之类前缀键属于用户数据,不能顺手删掉。
-      if (!k || /^(amadeus_page|amadeus_schema|amadeus_layout)$/.test(k)) continue
+      if (!k || /^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_next_id)$/.test(k)) continue
       obj[k] = e.value
     }
     ps().setFmExtra(Object.keys(obj).length ? stringifyYaml(obj).trimEnd() : '')
@@ -74,7 +74,7 @@ export function AmadeusPropertiesPanel() {
                 onBlur={(ev) => {
                   const k = ev.target.value.trim()
                   // 改成保留键或撞已有键 → 拒绝并回显原名(否则 commit 会静默删值/合并覆盖)。
-                  const invalid = /^(amadeus_page|amadeus_schema|amadeus_layout)$/.test(k)
+                  const invalid = /^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_next_id)$/.test(k)
                     || parsed.entries.some((x, j) => j !== i && x.key === k)
                   if (!k || k === e.key || invalid) { ev.target.value = e.key; return }
                   commit(parsed.entries.map((x, j) => (j === i ? { ...x, key: k } : x)))

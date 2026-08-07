@@ -1037,6 +1037,24 @@ async function main() {
     await q.close()
   })
 
+  // T39:块菜单定位 —— 点 ⠿ 手柄弹出的 .ctx-menu 必须贴着手柄,不许钉在视口左上角。
+  //     (回归 2026-08-06:OverlayPortal 宿主在被动 effect 里才挂载,外层 useClampedMenu 的
+  //      量测 layout effect 跑在菜单 DOM 存在之前 → 早退,-1,-1 哨兵坐标直接上屏。
+  //      修法=菜单节点自己用 OverlayAt 量测;本仪器钉死「菜单坐标 ≈ 手柄坐标」。)
+  await tryTest('T39', async () => {
+    const p = await dndPage() // 真 PageView(含 BlockHost 手柄);默认 harness 模式不渲染 gutter
+    await p.locator('.block-host').first().hover()
+    const h = p.locator('.block-host .drag-handle').first()
+    await h.click({ force: true })
+    await p.waitForTimeout(250)
+    check('T39 块菜单打开', (await p.locator('.ctx-menu').count()) === 1)
+    const mb = await p.locator('.ctx-menu').boundingBox()
+    const hb = await h.boundingBox()
+    const near = !!mb && !!hb && mb.y >= hb.y - 8 && mb.y <= hb.y + 160 && Math.abs(mb.x - hb.x) <= 280
+    check('T39 菜单贴手柄弹出(不在视口左上角)', near, `menu=${JSON.stringify(mb)} handle=${JSON.stringify(hb)}`)
+    await p.close()
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

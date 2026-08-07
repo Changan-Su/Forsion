@@ -65,6 +65,13 @@ export interface PageManifest {
   /** Foreign frontmatter lines (everything but the amadeus_* keys), verbatim — preserved
    *  across load→save so Obsidian properties (tags 等) survive Amadeus edits. */
   fmExtra?: string
+  /** Block-id high-water mark (`amadeus_next_id`): the smallest id safe to allocate. Persisted
+   *  only when it exceeds max(present)+1, i.e. after the highest block was deleted — keeps ids
+   *  from ever being reused so external `![[note#N]]` can't rebind. */
+  nextId?: number
+  /** Set (in memory only) when `amadeus_schema` declares a major newer than this compiler.
+   *  compile() refuses to run — old clients must never "repair" a future-format note. */
+  schemaTooNew?: boolean
 }
 
 /** A block whose inline content has been parsed from the note. */

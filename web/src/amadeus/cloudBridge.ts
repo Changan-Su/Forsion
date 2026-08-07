@@ -207,11 +207,30 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     }
     treeState = entry
     entry.promise.then(
-      () => { entry.settled = true },
+      (t) => { entry.settled = true; saveTreeSnap(v, t) }, // 顺手落快照:冷启动 SWR 的数据源
       () => { if (treeState === entry) treeState = null }, // 失败不缓存
     )
     return entry.promise
   }
+  // ---- 树的 localStorage 快照(冷启动 SWR:先渲染上次的树,真启动后台跑) ----------
+  // 单 blob 含 vault id;每次 fetchTree 成功即覆盖。陈旧窗口=到 revalidate 完成的几秒;
+  // 期间点开远端已删的笔记会 create-on-open 复活它(与 wikilink 点击建页同语义,接受的天花板)。
+  const TREE_SNAP_KEY = 'amadeus_tree_snap'
+  const saveTreeSnap = (v: string, tree: TreeDto): void => {
+    try { localStorage.setItem(TREE_SNAP_KEY, JSON.stringify({ v, tree })) } catch { /* 配额/私有模式 */ }
+  }
+  const readTreeSnap = (): { v: string; tree: TreeDto } | null => {
+    try {
+      const raw = localStorage.getItem(TREE_SNAP_KEY)
+      if (!raw) return null
+      const blob = JSON.parse(raw) as { v?: unknown; tree?: { pages?: unknown; files?: unknown; folders?: unknown } }
+      if (typeof blob.v !== 'string' || !blob.tree || !Array.isArray(blob.tree.pages) || !Array.isArray(blob.tree.files) || !Array.isArray(blob.tree.folders)) return null
+      const want = localStorage.getItem(ACTIVE_VAULT_KEY)
+      if (want && want !== blob.v) return null // 刚切过库:旧库快照不认
+      return blob as { v: string; tree: TreeDto }
+    } catch { return null }
+  }
+
   const allTreePaths = (t: TreeDto): string[] => [...t.pages, ...t.files.map((f) => f.path)]
   /** 点开头路径段(.amadeus/.trash/.forsion-vault…)对树/搜索隐身 —— 镜像桌面主进程扫描
    *  「点目录天然跳过」语义。只滤 list* 出口;原始 tree(fetchTree)不滤,ref 解析/回收站仍可寻址。 */
@@ -444,6 +463,41 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   let assetCounter = 0
   let iconsCache: { seq: number; icons: Record<string, string> } | null = null
   const openCloud = async (): Promise<VaultInfo> => {
+    // 冷启动 SWR:有上次的树快照就立即上屏(高 RTT 下工作区秒开,「加载半天」的正解),
+    // 真启动(vault 解析/强刷树/asset token/SSE)后台原序照跑,fireStructure 把新树推给
+    // pageStore.refreshStructure 刷新。天花板:ACTIVE_VAULT_KEY 指向的共享库被吊销时,
+    // 后台会回落自有库而快照 root 停留旧库,刷新页面即自愈 —— 不为罕见路径加状态机。
+    const snap = readTreeSnap()
+    if (snap) {
+      // asset token 仍须赶在首屏 <img> 前就位(embedImage 的 URL memo 不随 token 自愈,评审 P1):
+      // await 它(内部 ensureVault + POST,永不 reject)。树拉取/SSE 留在后台 —— 快照路径省的是树。
+      await refreshAssetToken()
+      void (async () => {
+        // startEvents 全会话只有这一次机会(restoreVault 被 amadeusBooted 门闩住)→ 失败必须重试,
+        // 三次退避仍失败才 toast(评审 P2:此前静默吞错=实时同步整会话失联且用户无感知)。
+        for (let attempt = 0; ; attempt++) {
+          try {
+            const v = await ensureVault()
+            await fetchTree(true)
+            startEvents(v)
+            fireStructure()
+            return
+          } catch {
+            if (attempt >= 2) { notify('云端连接失败,内容可能不是最新 —— 请刷新页面', true); return }
+            await new Promise((r) => setTimeout(r, [3000, 10000][attempt]))
+          }
+        }
+      })()
+      let lp: string | undefined
+      try { lp = localStorage.getItem(`amadeus_last_page:${snap.v}`) || undefined } catch { /* ignore */ }
+      const pages = snap.tree.pages.filter(visiblePath)
+      return {
+        root: `cloud://${snap.v}`,
+        pages,
+        folders: snap.tree.folders.filter(visiblePath),
+        lastPage: lp && pages.includes(lp) ? lp : undefined,
+      }
+    }
     const v = await ensureVault()
     // asset token 必须赶在首屏 <img> 渲染前就位:fire-and-forget 会让早期图片 URL 缺 ?at=
     // → 401 且 <img> 不自愈。refreshAssetToken 内部全捕获永不 reject,await 无新错误路径。

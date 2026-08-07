@@ -6,8 +6,11 @@
 
 import type { BlockId } from './types'
 
-/** One line: `<!-- a 3 -->` (allow surrounding whitespace; id is a short token). */
-export const BLOCK_MARKER_RE = /^<!--\s*a\s+([A-Za-z0-9_]+)\s*-->\s*$/
+/** One line: `<!-- a 3 -->` (allow surrounding whitespace; id is a short token).
+ *  Charset includes `-`: agents write ids like `ai-root`; before 2026-08-05 those fell
+ *  through as content and a 44-marker note silently collapsed into ONE block. Accepting
+ *  them here lets parseV3's renumber pass heal such files to clean numeric ids. */
+export const BLOCK_MARKER_RE = /^<!--\s*a\s+([A-Za-z0-9_-]+)\s*-->\s*$/
 
 export function blockMarker(id: BlockId): string {
   return `<!-- a ${id} -->`

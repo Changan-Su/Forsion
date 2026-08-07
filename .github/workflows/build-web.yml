@@ -16,7 +16,32 @@ permissions:
   packages: write
 
 jobs:
+  # 部署前类型闸(2026-08-06 评审 Q4):vite build 用 esbuild 剥类型、完全不做类型检查,
+  # sharePage/invitePage 等 web 根文件此前在任何地方都不被 tsc 覆盖(build-desktop 的闸只经
+  # @webamadeus 盖到 web/src/amadeus),生产页面「带病出厂」全靠用户发现。红了不出镜像。
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # web 经 vite/tsconfig paths 复用 desktop 渲染层与 lcl,aliased 源码的三方类型
+      # 从 desktop/node_modules 解析 → 必须先装 desktop 依赖(同 build-desktop 的 android 模式)。
+      # 已知局限(Codex 评审 2026-08-06):typecheck 的依赖解析面(desktop lock)与 Docker 镜像
+      # 运行时(web lock)并非同一份,共享库版本漂移时可能对未发布 API 给绿灯 —— 与 build-desktop
+      # 的 mobile typecheck 同一性质;根治=两端锁版本对齐,记录在评审报告 P2。
+      - name: Install desktop deps (aliased renderer)
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+      - name: Typecheck web
+        working-directory: web
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+
   build:
+    needs: typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -7,6 +7,8 @@ import type { AmadeusEntrySyncVault, AmadeusSyncStatus } from '../types'
 interface EntrySyncStore {
   vaults: AmadeusEntrySyncVault[]
   activeRoot: string | null
+  /** 云镜像里已成型的「同步 Vault 文件夹」名。注册表是每机本地的,换设备后只剩这一个来源。 */
+  mirrorVaults: string[]
   /** binding(vault 根绝对路径)→ 该条目绑定引擎的最新状态。 */
   status: Record<string, AmadeusSyncStatus>
   refresh(): Promise<void>
@@ -15,13 +17,14 @@ interface EntrySyncStore {
 export const useEntrySync = create<EntrySyncStore>((set) => ({
   vaults: [],
   activeRoot: null,
+  mirrorVaults: [],
   status: {},
   async refresh() {
     const api = window.amadeusSync
     if (!api?.entrySyncGet) return
     try {
       const st = await api.entrySyncGet()
-      set({ vaults: st.vaults, activeRoot: st.activeRoot })
+      set({ vaults: st.vaults, activeRoot: st.activeRoot, mirrorVaults: st.mirrorVaults ?? [] })
     } catch {
       /* 旧主进程构建无此接口:保持空 */
     }

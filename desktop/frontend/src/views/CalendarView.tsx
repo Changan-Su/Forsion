@@ -98,7 +98,7 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
         db,
         row: r,
         colId: dateCol,
-        title: r.name, // 真实名(可空):无名事件不进网格(见 visible 过滤),编辑卡显示空而非编码
+        title: r.name, // 真实名(可空):网格层给「未命名」占位(见 visible),编辑卡显示空而非编码
         raw,
         start: toLocalDate(cd.start),
         end: cd.end ? toLocalDate(cd.end) : null,
@@ -161,8 +161,8 @@ export function CalendarView() {
     [members, agentDbs, otherDbs, icsDbs],
   )
   const events = useMemo(() => buildEvents(entries, vault, byVault), [entries, vault, byVault])
-  // 无名事件不上网格,但仍留在 events 里:编辑卡清空名字时卡片会话不许闪关(选中走全量查找)。
-  const visible = useMemo(() => events.filter((e) => e.title), [events])
+  // 无名事件以「未命名」占位上网格(清空名字时事件块不许消失);编辑卡走 events 原值,输入框保持真实空值。
+  const visible = useMemo(() => events.map((e) => (e.title ? e : { ...e, title: '未命名' })), [events])
   const selected = card ? events.find((e) => e.key === card.key) ?? null : null
   selRef.current = selected
   const openCard = (key: string, at: Anchor): void => setCard({ key, at })

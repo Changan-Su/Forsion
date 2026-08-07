@@ -22,6 +22,7 @@ import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
 import { QuickFind } from '@/quickFind'
 import { installNotificationWiring } from '@/stores/notificationWiring'
+import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
 import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
@@ -86,6 +87,14 @@ export function MobileRoot() {
   // C:后台会话跑完 → 右上角通知。此前只挂了 NotificationHost 外壳没接线,设置里的「通知」页
   // 一直在管一个永不触发的东西。desktop 在 Root 里装,移动端走本文件 → 必须自己装一份。
   useEffect(() => { installNotificationWiring() }, [])
+  // 工作区预热:restoreVault 原本迟到「首次打开工作区抽屉」才发起(ensureAmadeusReady 只挂在
+  // 抽屉里的 AmadeusPagesView)→ 用户体感「打开工作区加载半天」。启动空闲后先拉起 vault
+  // (云端树快照命中时立即有内容,随后后台 revalidate),main view 不受阻。
+  useEffect(() => {
+    if (!window.amadeus) return
+    const t = window.setTimeout(() => { ensureAmadeusReady() }, 1200)
+    return () => window.clearTimeout(t)
+  }, [])
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
     sessions: s.sessions,
