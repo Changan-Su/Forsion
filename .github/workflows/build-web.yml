@@ -34,6 +34,12 @@ jobs:
       - name: Install desktop deps (aliased renderer)
         working-directory: desktop
         run: npm install --no-audit --no-fund
+      # web 手机视口装载 @mobile 壳(mobile/src/**),tsc 从 mobile/src 向上找 node_modules —— 走的是
+      # mobile 自己那份,不是 web/desktop 的。不装它:framer-motion/zustand/react 全报 TS2307。
+      # (镜像里无此问题:依赖装在公共祖先 /app,mobile/src 向上就能命中。)
+      - name: Install mobile deps (@mobile shell)
+        working-directory: mobile
+        run: npm install --no-audit --no-fund
       - name: Typecheck web
         working-directory: web
         run: |

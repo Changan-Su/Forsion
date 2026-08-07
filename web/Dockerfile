@@ -20,6 +20,9 @@ RUN npm ci
 COPY desktop/frontend ./desktop/frontend
 COPY desktop/shared ./desktop/shared
 COPY lcl ./lcl
+# 手机视口经 `@mobile` 别名装载 Mobile 壳(web/src/main.tsx 动态 import),源码必须在场;
+# 其裸依赖(framer-motion/zustand/react…)同样从 /app/node_modules 解析,已在 web 的 lock 里。
+COPY mobile/src ./mobile/src
 # changelog.ts 经 `?raw` 内联 desktop 根的 CHANGELOG.md(关于页用),frontend/ 之外唯一外部引用。
 COPY desktop/CHANGELOG.md ./desktop/CHANGELOG.md
 COPY web ./web
