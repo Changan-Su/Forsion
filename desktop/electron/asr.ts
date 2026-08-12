@@ -8,6 +8,8 @@
  * 要才回 { text, segments }。上游给不了分段时(比如托管端未支持)照实只回 text,不编时间点。
  */
 
+import { app } from 'electron'
+
 /** 一条带时间的转写片段(秒)。 */
 export interface AsrSegment { start: number; end: number; text: string }
 /** 要时间戳时的返回;segments 缺席 = 上游确实给不了,不是空数组。 */
@@ -87,7 +89,9 @@ export async function transcribeViaForsion(o: {
   const res = await fetch(`${o.cloudUrl.replace(/\/+$/, '')}/api/brain/transcribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${o.token}` },
-    body: JSON.stringify({ modelId: o.modelId || undefined, audioBase64: o.audioB64, mime: o.mime, language: o.language, timestamps: o.timestamps || undefined, projectSource: 'tangu' }),
+    // client:api_usage_logs 的端×版本维度(admin「API 用量」那一列)。这里是主进程,拿不到渲染层的
+    // CLIENT_ID —— 用 app.getVersion() 自己拼,与渲染层同值(CHANGELOG 顶节与 package.json 版本同步发布)。
+    body: JSON.stringify({ modelId: o.modelId || undefined, audioBase64: o.audioB64, mime: o.mime, language: o.language, timestamps: o.timestamps || undefined, projectSource: 'tangu', client: `desktop/${app.getVersion()}` }),
   })
   const data = (await res.json().catch(() => ({}))) as { text?: string; detail?: string }
   if (!res.ok) throw new Error(data.detail || `Forsion 转写失败 ${res.status}`)

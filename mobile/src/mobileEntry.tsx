@@ -35,7 +35,7 @@ try {
   void useTheme.getState().initThemes(persistedLang)
   installEngine()
   // 丝滑光标:desktop 在 main.tsx 装,移动端走的是本模块 —— 漏装过一轮(用户实报「移动端没生效」)。
-  // 缺席即开;软键盘的重定位在 smoothCaret 里接 visualViewport。
+  // 缺席即关(设置→外观里开);软键盘的重定位与偏移补偿在 smoothCaret 里接 visualViewport。
   // (旧注释写的「移动端没有设置开关」是错的:不列的只有「常规」页,「外观」页是共用的,
   //  丝滑光标与字体三档的开关在移动端照样渲染 —— 见 SettingsModal 的 theme tab。)
   installSmoothCaret()

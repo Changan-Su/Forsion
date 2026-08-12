@@ -29,5 +29,7 @@ export interface BillingServices {
     projectSource?: string,
     pointsCost?: number,
     tokensCachedInput?: number,
+    /** 客户端面标识(desktop/2.7.9),来自 run 的 input.client;in-process microserver 面用。 */
+    client?: string,
   ): Promise<void>;
 }

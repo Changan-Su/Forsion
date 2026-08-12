@@ -20,7 +20,7 @@ import { BlockSelectionKeys, useBlockSelection } from '../store/blockSelection'
 import { edgeBlock } from '../lib/blockEdges'
 import { takeModeCursor } from '../lib/modeCursor'
 import { activePageScope, pageStoreFor, usePageScope, useScopedPageStore, type PageStoreApi } from '../store/pageStore'
-import { foldedSet, headingLevel, useHeadingFold } from '../store/headingFoldStore'
+import { foldedSet, headingLevel, sectionBoundaryLevel, useHeadingFold } from '../store/headingFoldStore'
 import { Row } from './Row'
 import { BacklinksPanel } from './BacklinksPanel'
 
@@ -181,14 +181,36 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
   const root = manifest.root
 
   // 标题小节折叠:每行取首块的标题级别;被某个折叠标题覆盖的行整行隐藏(拖拽中临时全展开,防拖进黑洞)。
+  const afterFirstLine = (s: string | undefined): string => {
+    const i = (s ?? '').indexOf('\n')
+    return i < 0 ? '' : (s ?? '').slice(i + 1)
+  }
   const rowMeta = root.children.map((row) => {
     const firstId = row.columns[0]?.children[0]?.ref
-    return { firstId, level: headingLevel(firstId ? blocks[firstId]?.content : undefined) }
+    // 自身级别只看首块首行(决定这行配不配折叠箭头);**边界**要扫整行每个块的每一行 ——
+    // 块内标题同样是小节边界,漏检就一折到底(见 headingFoldStore.sectionBoundaryLevel)。
+    // self = 本行首行**之后**还藏着的边界(块内第二个标题 / 同行第二个块里的标题)。这一行自己就跨了
+    // 小节,行级折叠切不开它 —— 直接不给箭头,免得折下去把不属于它的内容一起吞掉(评审 P1)。
+    let bound = 0
+    let self = 0
+    for (const col of row.columns) {
+      for (const ch of col.children) {
+        const content = blocks[ch.ref]?.content
+        const lv = sectionBoundaryLevel(content)
+        if (lv && (!bound || lv < bound)) bound = lv
+        const rest = ch.ref === firstId ? sectionBoundaryLevel(afterFirstLine(content)) : lv
+        if (rest && (!self || rest < self)) self = rest
+      }
+    }
+    return { firstId, level: headingLevel(firstId ? blocks[firstId]?.content : undefined), bound, self }
   })
+  /** 这一行能折起后面多少行;0 = 不给折叠箭头。 */
   const sectionSpan = (i: number): number => {
+    const m = rowMeta[i]
+    if (!m.level || (m.self && m.self <= m.level)) return 0
     let c = 0
     for (let j = i + 1; j < rowMeta.length; j++) {
-      if (rowMeta[j].level && rowMeta[j].level <= rowMeta[i].level) break
+      if (rowMeta[j].bound && rowMeta[j].bound <= m.level) break
       c++
     }
     return c
@@ -333,7 +355,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
             if (i >= mountedRows) return null // 分片:后续行在空闲帧逐批补挂
             if (hiddenRows.has(i)) return null
             const meta = rowMeta[i]
-            const span = meta.level > 0 ? sectionSpan(i) : 0
+            const span = sectionSpan(i) // 自带「本行自己就跨小节 → 不给箭头」的闸
             const folded = !!(meta.firstId && folds.has(meta.firstId))
             return (
               <Fragment key={row.id}>
@@ -344,18 +366,27 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
                     只生效一次、再按毫无反应、永远并不进上一块(用户实报;取证栈:commitDeletionEffects
                     → removeChild(DIV.amx-hfold-wrap) → focusout)。壳只有 position:relative,常驻无副作用。
                     仪器:npm run check:bsfocus */}
-                <div className="amx-hfold-wrap">
-                  {span > 0 && meta.firstId && (
-                    <button
-                      className={`amx-hfold${folded ? ' folded' : ''}`}
-                      title={folded ? `展开小节(${span} 行)` : '折叠小节'}
-                      onClick={() => useHeadingFold.getState().toggle(activePage ?? '', meta.firstId!)}
-                    >
-                      ›
-                    </button>
-                  )}
+                <div className={`amx-hfold-wrap${span > 0 && meta.firstId ? ' has-fold' : ''}`}>
                   {folded && span > 0 && <span className="amx-hfold-count">{span}</span>}
-                  <Row row={row} />
+                  {/* 折叠箭头交给 BlockHost 摆进 .block-gutter(⠿ 旁边)——行壳与块的左缘差着一个
+                      .edge-zone,在这里绝对定位必压手柄。仪器:e2e:editor T40 */}
+                  <Row
+                    row={row}
+                    gutterLead={
+                      span > 0 && meta.firstId ? (
+                        <button
+                          className={`amx-hfold${folded ? ' folded' : ''}`}
+                          title={folded ? `展开小节(${span} 行)` : '折叠小节'}
+                          onClick={(e) => {
+                            e.stopPropagation() // 手柄同族:别顺带触发块选中
+                            useHeadingFold.getState().toggle(activePage ?? '', meta.firstId!)
+                          }}
+                        >
+                          ›
+                        </button>
+                      ) : undefined
+                    }
+                  />
                 </div>
                 <RowGap index={i} />
               </Fragment>

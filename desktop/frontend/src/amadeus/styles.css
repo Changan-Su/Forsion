@@ -1118,13 +1118,14 @@ body.amx-marquee-active * {
 .amx-hfold-wrap {
   position: relative;
 }
+/* ⚠️ 折叠箭头是 `.block-gutter` 这条 flex 的一员(BlockHost 的 gutterLead),不是行壳里的绝对定位元素:
+   行壳 `.amx-hfold-wrap` 与块左缘差着一个 `.edge-zone`(14px,且「大杂烩行」不渲染 → 差值不是常数),
+   在行壳里怎么算都会压到 ⠿ 上 —— 老代码写死 `left:-46px` 正好压中,标题块从此拖不动、点手柄变成折叠
+   (用户实报)。左边距只有 48px(移动端 24),装不下三个,所以有箭头的行让出 ＋(见下面 .has-fold)。 */
 .amx-hfold {
-  position: absolute;
-  left: -46px;
-  top: 0.55em;
-  z-index: 3;
   width: 18px;
   height: 18px;
+  flex: none;
   border: none;
   border-radius: 5px;
   background: transparent;
@@ -1150,9 +1151,15 @@ body.amx-marquee-active * {
   opacity: 1;
   transform: rotate(0deg);
 }
+/* 有折叠箭头的行让出 ＋ 槽位(48px 边距塞不下 ⠿+＋+箭头三个)。
+   ponytail: 标题行少个「下方插入块」,回车/块菜单/栏尾「＋ 块」都还在,不值当为它再挤 20px 页边距。 */
+.amx-hfold-wrap.has-fold .block-add {
+  display: none;
+}
+/* 折起后的行数徽标改挂行尾 —— 左边只剩两个槽,再塞就又打架了。 */
 .amx-hfold-count {
   position: absolute;
-  left: -74px;
+  right: 6px;
   top: 0.62em;
   z-index: 3;
   font-size: 10px;

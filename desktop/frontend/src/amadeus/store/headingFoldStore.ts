@@ -20,6 +20,31 @@ export function headingLevel(content: string | undefined): number {
   return m ? m[1].length : 0
 }
 
+/** 块**任意一行**上出现的最小标题级别(整块没有标题 → 0)—— 小节边界只能按它判。
+ *
+ *  ⚠️ 块只由 `<!-- a id -->` 切分,**不按段落/空行拆**(编辑器里 Enter 是块内换行,Shift+Enter 才切块;
+ *  外来 .md 更是整篇进一个块)。所以「## 二」经常躺在上一个块的**中间**,只看首行的 headingLevel()
+ *  完全看不见它 —— 折叠就一路吞到文末(用户实报「直接把后面所有内容都折叠了」)。
+ *  ponytail: 行级折叠切不开块,所以含边界标题的那一行整行留下(宁可少折,不吞掉下一节)。 */
+export function sectionBoundaryLevel(content: string | undefined): number {
+  const s = content ?? ''
+  if (!s.includes('#')) return 0 // 绝大多数块没有 '#':先短路,别在每次按键都扫全文
+  let best = 0
+  let fence = false
+  for (const line of s.split('\n')) {
+    if (/^ {0,3}(```|~~~)/.test(line)) {
+      fence = !fence // 代码块里的 `# 注释` 不是标题
+      continue
+    }
+    if (fence) continue
+    const m = /^ {0,3}(#{1,6})\s/.exec(line)
+    if (!m) continue
+    if (!best || m[1].length < best) best = m[1].length
+    if (best === 1) break
+  }
+  return best
+}
+
 const load = (): Record<string, string[]> => {
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || '{}') as Record<string, string[]>

@@ -7,7 +7,7 @@
  * deferGroup 连坐:解锁组内任一成员即整组解锁(如 start/wait_discussion),防"解锁了开头没解锁收尾"。
  */
 import type { ToolProvider, ToolDef } from '../toolRegistry.js';
-import { resolveTools } from '../toolRegistry.js';
+import { resolveTools, isDeferredIn } from '../toolRegistry.js';
 import { deps } from '../../seams/runtime.js';
 
 export const loadToolsProvider: ToolProvider = {
@@ -40,8 +40,10 @@ export const loadToolsProvider: ToolProvider = {
         if (!names.length) return 'Error: names is required — pass the tool names to load, e.g. {"names":["manage_automation"]}';
         if (!ctx.unlockTools) return 'Error: load_tools is not available in this context.';
         const profile = ctx.profile ?? deps().profile;
+        // 可解锁集合必须与目录/defs 过滤同一判定(isDeferredIn=静态标记∪coding 情境集),
+        // 只认 t.deferred 会让 coding 预设目录里的工具永远 "Unknown/not loadable"。
         const available = new Map<string, ToolDef>();
-        for (const [n, t] of resolveTools(profile, ctx)) if (t.deferred) available.set(n, t);
+        for (const [n, t] of resolveTools(profile, ctx)) if (isDeferredIn(ctx, n, t.deferred)) available.set(n, t);
         const toUnlock = new Set<string>();
         const unknown: string[] = [];
         for (const n of names) {

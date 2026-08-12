@@ -101,6 +101,36 @@ export function installWebShim(): boolean {
     }
   }
 
+  /** `?token=…` / `&token=…`(无 token 则空串)。跨域 302 之后靠它交接登录态。 */
+  const tokenQuery = (sep = '?'): string => {
+    const tok = readToken()
+    return tok ? `${sep}token=${encodeURIComponent(tok)}` : ''
+  }
+
+  /** 站点内页(账号中心/购买页):桌面开新标签,移动布局同标签跳(见 openAccountCenter 上的注释)。 */
+  const openPage = (url: string): void => {
+    let mobile = false
+    try { mobile = localStorage.getItem('lcl.uiMode') === 'mobile' } catch { /* private mode */ }
+    if (mobile) location.href = url
+    else window.open(url, '_blank', 'noopener')
+  }
+
+  /** 同源云调用(token 走本端 localStorage);返回 {status,json},与 electron IPC 同形。 */
+  const cloudJson = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
+    const tok = readToken()
+    if (!tok) return { status: 401, json: null }
+    try {
+      const r = await origFetch(`${backendUrl}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${tok}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
+      return { status: r.status, json: await r.json().catch(() => null) }
+    } catch (e) {
+      return { status: 0, json: { detail: String((e as Error)?.message || e) } }
+    }
+  }
+
   // 3) host 垫片:getConfig + cloudWeb + 账号能力(登录/登出/账号中心跳 Forsion 页,复用共享 token)。
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
@@ -121,7 +151,32 @@ export function installWebShim(): boolean {
       } catch { /* ignore */ }
       gotoLogin()
     },
-    openAccountCenter: () => { window.open('/account/', '_blank', 'noopener') },
+    // ⚠️ 手机壳(@mobile/mobileEntry)装的也是本垫片,不是 mobileShim —— 手机上没有「新标签」这回事,
+    //    `_blank` 还常被拦掉,于是点头像/个人中心「毫无反应」(用户实报)。移动布局下同标签跳走,
+    //    返回键能回来。section 此前被整个丢掉,积分兑换/投稿两个入口都落错页,一并接上。
+    // ⚠️ 必须带 ?token=:生产的 /account 是 **302 跨域**到 account.forsion.net(实测),同源
+    //    localStorage 里那枚 token 过不去,不带就变成「跳过去要求重新登录」。query 必须排在 hash
+    //    之前 —— server 的 302 只透传 `?` 之后的部分,fragment 由浏览器自己补回(已 curl 验证)。
+    openAccountCenter: async (section?: string) => {
+      const hash = section && /^[a-z0-9-]+$/i.test(section) ? `#${section}` : ''
+      openPage(`/account/${tokenQuery()}${hash}`)
+      return { ok: true }
+    },
+    openPayCenter: async () => {
+      const back = encodeURIComponent(location.origin + '/account/')
+      openPage(`/pay/?tab=membership${tokenQuery('&')}&redirect=${back}`)
+      return { ok: true }
+    },
+    // 额度视图与重置卡:同源直连(token 就在本端 localStorage),电文形状对齐 electron 的
+    // account:quota / account:useResetCard —— AccountCard 靠 accountQuota 是否存在决定
+    // 点头像是弹菜单还是直接跳走,缺席=手机端连额度都看不到。
+    accountQuota: () => cloudJson('GET', '/token-quota/my'),
+    accountUseResetCard: (type?: string) => {
+      if (type !== undefined && type !== 'both' && type !== 'weekly') {
+        return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
+      }
+      return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both' })
+    },
   }
 
   // 4) 401 兜底:任一 /api/agent/* 或 /api/amadeus/*(Amadeus 云端桥)鉴权失败 → 清 token 重新登录。

@@ -6,7 +6,7 @@
 import type { Tool, ToolCall } from '../core/types.js';
 import { deps } from '../seams/runtime.js';
 import { executeCustomTool } from './customTools.js';
-import { registerToolProvider, resolveTools, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, resolveTools, isDeferredIn, type ToolDef } from './toolRegistry.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
 import { webSearchProvider } from './builtin/webSearch.js';
@@ -36,6 +36,7 @@ import { browserUseProvider } from './builtin/browserUse.js';
 import { amadeusProvider } from './builtin/amadeus.js';
 import { readActivityProvider } from './builtin/readActivity.js';
 import { readSessionProvider } from './builtin/readSession.js';
+import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
@@ -150,6 +151,7 @@ registerToolProvider(loadToolsProvider); // both:load_tools 解锁 deferred 工�
 registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面聊天旁的 Agent Desk 演出面板展示文件(实验;append 末尾,保前缀缓存)
 registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
+registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -166,23 +168,8 @@ function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext,
   appendActivityLine('agent.edit', { tool: name, agent: ctx.agentSlug, f: f || undefined, o: ctx.automationOrigin || undefined });
 }
 
-/** coding 预设下追加转 deferred 的产品面工具(仍在「Additional Tools」目录里,load_tools 可解锁):
- *  WB-Bench 取证——48 工具全暴露时,封闭 bench 里模型调了 107 次 web、80 次 log_event、139 次
- *  use_skill,纯烧迭代/带偏任务。coding 任务的常驻面只留文件/shell/进程/todo/委派。 */
-const CODING_PRESET_DEFERRED = new Set([
-  'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type',
-  'browser_scroll', 'browser_back', 'browser_press', 'browser_console', 'browser_screenshot',
-  'browser_task', 'web_search', 'web_fetch',
-  'amadeus_list_notes', 'amadeus_list_calendars', 'amadeus_list_events',
-  'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
-  'inbox_send', 'display_file', 'read_session', 'read_document',
-  'remember', 'log_event', 'read_log',
-]);
-
-/** 工具在本 ctx 下是否按 deferred 处理:静态标记 ∪ coding 预设的产品面集合。 */
-function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean): boolean {
-  return !!deferred || (ctx.preset === 'coding' && CODING_PRESET_DEFERRED.has(name));
-}
+// CODING_PRESET_DEFERRED / isDeferredIn 已迁 toolRegistry.ts(load_tools 也要用同一判定,留在
+// 本文件会成环:registry → loadTools → registry)。
 
 /** 返回喂给 LLM 的工具定义（OpenAI function 格式）：按模式/profile 过滤的内置 + 本 run 的自定义工具 + MCP 工具（按名去重，内置 > 自定义 > MCP）。 */
 export function getToolDefinitions(ctx: ToolContext): Tool[] {

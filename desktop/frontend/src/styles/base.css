@@ -957,7 +957,7 @@ a:hover { color: var(--accent-hover); }
   animation: pulse-soft 1s infinite;
 }
 
-/* 丝滑光标(默认开;smoothCaret.ts):隐藏原生 caret,自绘覆盖层平滑跟随 */
+/* 丝滑光标(默认关;smoothCaret.ts):隐藏原生 caret,自绘覆盖层平滑跟随 */
 html.sc-on .milkdown .ProseMirror,
 html.sc-on textarea.t2c-ta { caret-color: transparent; }
 .sc-caret {

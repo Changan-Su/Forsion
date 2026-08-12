@@ -21,6 +21,7 @@ import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../li
 import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
+import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 
@@ -37,6 +38,9 @@ interface Loc {
 }
 
 const clone = <T>(x: T): T => structuredClone(x)
+
+// 外部回灌不许打断正在敲的那一下(输入法 + 尚未落进 store 的最新输入),见 typingGuard.ts。
+if (typeof document !== 'undefined') installTypingGuard(document)
 
 function locate(root: StackNode, id: BlockId): Loc | null {
   for (let r = 0; r < root.children.length; r++) {
@@ -348,6 +352,11 @@ function makePageStore() {
   // ponytail: 单槽记账——并发 save 罕见(防抖+flush 都走这里),槽被覆盖时最坏退回旧的「读到略旧内容」现状。
   let flushingPath: string | null = null
   let inflightSave: Promise<void> | null = null
+  // 外部回灌的合流闸(每面板一份):打字静默期内押后,期间来的事件排进待办集合逐个补做。
+  // ⚠️ reconcileGate 不只是记账 —— save() 必须等它,见 save() 顶部那段(评审 P0)。
+  const reconcilePending = new Set<string>()
+  let reconcileBusy = false
+  let reconcileGate: Promise<void> | null = null
 
   return create<PageState>((set, get) => {
   const scheduleSave = (): void => {
@@ -983,6 +992,7 @@ function makePageStore() {
     },
 
     setBlockContent(id, content) {
+      noteLocalEdit()
       pushUndo('edit')
       set((s) => ({ blocks: { ...s.blocks, [id]: { ...s.blocks[id], content } } }))
       scheduleSave()
@@ -1250,6 +1260,11 @@ function makePageStore() {
     },
 
     async save() {
+      // ⚠️ 有外部回灌在等静默 / 在途 → 先让它落地再写。押后闸只推迟了回灌**没推迟保存**,而防抖保存
+      // 400ms 恒早于静默窗 700ms(两者都由 setBlockContent 同一 tick 起算)—— 那发写会带着**未合并**的
+      // 本地内容盖掉对端 / agent 的整段改动,且悄无声息:云端 seq 已被 409 学新 → PUT 直接 200;桌面
+      // savePage 是整文件覆写,连冲突都没有。正是 externalChange 注释里已经翻过一次车的失败模式。评审 P0。
+      if (reconcileGate) await reconcileGate.catch(() => {})
       // 串行化:同一份文档的写盘绝不并发。并发时两次写的先后由 IPC 回来的顺序决定,
       // 先发的旧快照可能压在后发的新内容上。等前一次落完再读状态,后写的必然更新。
       const prev = inflightSave
@@ -1296,15 +1311,39 @@ function makePageStore() {
     },
 
     async reconcileExternal(path) {
-      const { manifest, blocks, activePage } = get()
-      if (!manifest || path !== activePage) return
-      const contents: Record<string, string> = {}
-      for (const [id, b] of Object.entries(blocks)) contents[id] = b.content
+      if (!get().manifest || path !== get().activePage) return
+      // 正在打字就先押后:hydrate 换内容会让编辑器整只重挂(MarkdownBlock 渲染期换 key),
+      // 输入法当场被关、防抖里那截字一起没。多设备同编时这条 SSE 是密集的。见 typingGuard.ts。
+      // ⚠️ 待办用**集合**不用布尔量:单次失败/切页要 `continue` 掉这一条,不能连带把合并进来的
+      // 别的事件一起丢(丢了就再没人补,面板停在陈旧内容,下一发防抖保存把它写回盘)。评审 P1。
+      reconcilePending.add(path)
+      if (reconcileBusy) return
+      reconcileBusy = true
+      // 闸必须在**第一个 await 之前**同步立起来,否则 save() 抢在这一拍里就绕过去了。
+      let release = (): void => {}
+      reconcileGate = new Promise<void>((r) => { release = r })
       try {
-        const page = await amadeus.reconcilePage(path, manifest, contents)
-        set((s) => ({ ...hydrate(page), linkGraphVersion: s.linkGraphVersion + 1 }))
-      } catch (e) {
-        set({ error: String(e) })
+        while (reconcilePending.size) {
+          const p = reconcilePending.values().next().value as string
+          reconcilePending.delete(p)
+          if (get().activePage !== p) continue // 押后期间切页/关页了
+          await awaitTypingQuiet()
+          const { manifest, blocks, activePage } = get()
+          if (!manifest || activePage !== p) continue
+          const contents: Record<string, string> = {}
+          for (const [id, b] of Object.entries(blocks)) contents[id] = b.content
+          try {
+            const page = await amadeus.reconcilePage(p, manifest, contents)
+            if (get().activePage !== p) continue // 在途期间切走 → 别把这篇的内容灌进另一篇
+            set((s) => ({ ...hydrate(page), linkGraphVersion: s.linkGraphVersion + 1 }))
+          } catch (e) {
+            set({ error: String(e) }) // 这一条失败不影响待办里的其余条目
+          }
+        }
+      } finally {
+        reconcileBusy = false
+        reconcileGate = null
+        release()
       }
     },
 

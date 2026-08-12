@@ -26,6 +26,12 @@ describe('defaultPromptSections × preset=coding', () => {
     expect(s.environment[0]).toContain('browser_search');
   });
 
+  it('MEMORY_LOG_GUIDANCE 覆盖三层召回:记忆 / 日志 / 过去会话(2026-08-09 补第三层,防回退)', () => {
+    for (const t of ['remember', 'log_event', 'read_log', 'search_sessions', 'read_session']) {
+      expect(MEMORY_LOG_GUIDANCE).toContain(`\`${t}\``);
+    }
+  });
+
   it('hostEnvSection 默认文本与 coding 文本仅差浏览器行(其余逐字节一致)', () => {
     const normal = hostEnvSection('/w', []);
     const coding = hostEnvSection('/w', [], { coding: true });

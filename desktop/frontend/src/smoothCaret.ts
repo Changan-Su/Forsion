@@ -1,19 +1,20 @@
 /**
- * 丝滑光标(默认开):隐藏原生 caret,用自绘覆盖层 + CSS transition 平滑跟随(Word 手感)。
+ * 丝滑光标(默认关):隐藏原生 caret,用自绘覆盖层 + CSS transition 平滑跟随(Word 手感)。
  * 作用范围:Amadeus 编辑器(.milkdown .ProseMirror)+ Tangu 聊天输入框(textarea.t2c-ta)。
  * 开关:设置 → 外观(localStorage SMOOTH_CARET_KEY);样式在 styles/base.css 的 .sc-caret / html.sc-on。
  */
 import { SMOOTH_CARET_KEY } from './types'
 
 /**
- * 开关的唯一读法。**没存过 = 开**(默认开),只有显式存 '0' 才关 —— 三个读点(本模块启动、
- * 设置勾选框初值、命令面板取反)必须同一套判定,否则默认开之后命令面板第一次按会「切了没反应」。
+ * 开关的唯一读法。**没存过 = 关**(默认关),只有显式存 '1' 才开 —— 三个读点(本模块启动、
+ * 设置勾选框初值、命令面板取反)必须同一套判定,否则命令面板第一次按会「开了没反应」
+ * (漏改的读点算出 true,取反又得到 false=已经是的状态)。
  */
 export function isSmoothCaretOn(): boolean {
-  try { return localStorage.getItem(SMOOTH_CARET_KEY) !== '0' } catch { return true }
+  try { return localStorage.getItem(SMOOTH_CARET_KEY) === '1' } catch { return false }
 }
 
-let enabled = true
+let enabled = false
 let overlay: HTMLDivElement | null = null
 let raf = 0
 let animateNext = true
@@ -120,6 +121,15 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
   return { x: r.left, y: r.top, h, host }
 }
 
+/** 触屏设备上软键盘是否正占着屏(视觉视口比布局视口矮一大截)。桌面/无 visualViewport 恒 false。
+ *  ⚠️ 让位必须**连 `sc-on` 一起摘**:`html.sc-on` 把宿主的 caret-color 置成了 transparent,
+ *  只 hide() 覆盖层的话用户会一个光标都看不见。 */
+function softKeyboardUp(): boolean {
+  const vv = window.visualViewport
+  if (!vv || !window.matchMedia?.('(pointer: coarse)').matches) return false
+  return window.innerHeight - vv.height > 120
+}
+
 function update(): void {
   if (!enabled || !document.hasFocus()) return hide()
   const info = caretInfo()
@@ -131,6 +141,13 @@ function update(): void {
   // 颜色跟宿主:主题 --primary 优先,退回文字色(原生 caret 已被置 transparent,读不到)
   const cs = getComputedStyle(info.host)
   el.style.background = cs.getPropertyValue('--primary').trim() || cs.color
+  // ⚠️ 别在这里拿 `visualViewport.offsetTop/Left` 做「补偿」:info 来自 getBoundingClientRect、覆盖层
+  // 是 position:fixed,两者**本就同在布局视口**,加 offset 只会把光标反向推开一个键盘滚动量。
+  // (2026-08-08 试过这个方向,评审按规范逐条驳回;也别拿 AmxMobileBar 的 lift 当反证 —— 贴底工具栏
+  // 要跟住**视觉视口**所以需要 offset,光标要跟住**内容**所以不需要,两者需求相反。)
+  // iOS 上光标错位的真因还没量到,所以走保守路线:软键盘占屏时整个让位给系统原生光标,见 softKeyboardUp()。
+  document.documentElement.classList.toggle('sc-on', !softKeyboardUp())
+  if (softKeyboardUp()) return hide()
   const x = Math.round(info.x)
   const y = Math.round(info.y)
   const moved = x !== lastX || y !== lastY

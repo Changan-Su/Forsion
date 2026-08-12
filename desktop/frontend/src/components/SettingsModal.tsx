@@ -196,7 +196,7 @@ export const SettingsModal: React.FC<{
   const [showSysPrompt, setShowSysPrompt] = useState<boolean>(() => {
     try { return localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1' } catch { return false }
   })
-  // 丝滑光标(默认开;localStorage,smoothCaret.ts 全局模块即时生效)。
+  // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({

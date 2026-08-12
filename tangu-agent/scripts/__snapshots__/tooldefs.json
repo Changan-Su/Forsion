@@ -590,7 +590,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -610,6 +610,35 @@
           "required": [
             "session_id"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -1224,7 +1253,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1244,6 +1273,35 @@
           "required": [
             "session_id"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -1525,7 +1583,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1545,6 +1603,35 @@
           "required": [
             "session_id"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -1845,7 +1932,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1865,6 +1952,35 @@
           "required": [
             "session_id"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -2548,7 +2664,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2612,6 +2728,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -3314,7 +3459,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3378,6 +3523,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -4513,7 +4687,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4577,6 +4751,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -5731,7 +5934,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5795,6 +5998,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -6437,7 +6669,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6501,6 +6733,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -7162,7 +7423,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7226,6 +7487,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -8361,7 +8651,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8425,6 +8715,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }
@@ -9579,7 +9898,7 @@
       "type": "function",
       "function": {
         "name": "read_session",
-        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable.",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9643,6 +9962,35 @@
           "required": [
             "topic"
           ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
         }
       }
     }

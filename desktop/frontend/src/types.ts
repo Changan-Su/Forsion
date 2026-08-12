@@ -286,7 +286,7 @@ export const DEFAULT_AGENT_SLUG = 'xyra'
 /** 开发者「回复前显示 system prompt」开关(localStorage;仅 dev 模式可见,App.send 据此带 debugSystemPrompt)。 */
 export const SHOW_SYSTEM_PROMPT_KEY = 'forsion_tangu_show_system_prompt'
 
-/** 丝滑光标开关(localStorage,**缺席=开**;smoothCaret.ts 全局模块 + 设置→外观)。 */
+/** 丝滑光标开关(localStorage,**缺席=关**;smoothCaret.ts 全局模块 + 设置→外观)。 */
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
 
 /** 界面字体三档(localStorage,**缺席=跟随主题**;uiFont.ts + 设置→外观)。 */

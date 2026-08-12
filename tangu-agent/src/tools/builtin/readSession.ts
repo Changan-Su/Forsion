@@ -45,7 +45,8 @@ export const readSessionProvider: ToolProvider = {
             + "When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past "
             + 'conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. '
             + 'Returns the session title plus messages oldest-first, one per line, with long bodies truncated. '
-            + 'Only the current user\'s own sessions are reachable.',
+            + 'Only the current user\'s own sessions are reachable. '
+            + 'If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.',
           parameters: {
             type: 'object',
             properties: {
@@ -60,8 +61,9 @@ export const readSessionProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const sid = String(args.session_id || '').trim();
         if (!sid) return 'read_session: session_id is required.';
-        const limit = Math.min(Math.max(1, Number(args.limit) || 60), 300);
-        const perMsg = Math.min(Math.max(80, Number(args.chars_per_message) || 600), 4000);
+        // floor:小数会被原样内插进 SQL 的 LIMIT / 传给 slice,先取整
+        const limit = Math.min(Math.max(1, Math.floor(Number(args.limit) || 60)), 300);
+        const perMsg = Math.min(Math.max(80, Math.floor(Number(args.chars_per_message) || 600)), 4000);
 
         if (sid === ctx.sessionId) return 'read_session: that is the current session — its history is already in context.';
         const sess = await query<any[]>(

@@ -28,6 +28,27 @@ export interface ToolProvider {
   tools(): ToolDef[];
 }
 
+/** coding 预设下追加转 deferred 的产品面工具(仍在「Additional Tools」目录里,load_tools 可解锁):
+ *  WB-Bench 取证——48 工具全暴露时,封闭 bench 里模型调了 107 次 web、80 次 log_event、139 次
+ *  use_skill,纯烧迭代/带偏任务。coding 任务的常驻面只留文件/shell/进程/todo/委派。 */
+export const CODING_PRESET_DEFERRED = new Set([
+  'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type',
+  'browser_scroll', 'browser_back', 'browser_press', 'browser_console', 'browser_screenshot',
+  'browser_task', 'web_search', 'web_fetch',
+  'amadeus_list_notes', 'amadeus_list_calendars', 'amadeus_list_events',
+  'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
+  'inbox_send', 'display_file', 'read_session', 'search_sessions', 'read_document',
+  'remember', 'log_event', 'read_log',
+]);
+
+/** 工具在本 ctx 下是否按 deferred 处理:静态标记 ∪ coding 预设的产品面集合。
+ *  目录(listDeferredTools)、defs 过滤(getToolDefinitions)、解锁(load_tools)三处必须
+ *  共用本判定——2026-08-09 前 load_tools 只认静态 deferred:true,coding 预设的情境 deferred
+ *  工具在目录里被广而告之却解锁不了("Unknown/not loadable"),Codex 评审抓到的存量 bug。 */
+export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean): boolean {
+  return !!deferred || (ctx.preset === 'coding' && CODING_PRESET_DEFERRED.has(name));
+}
+
 // ── 全局(内置)provider 注册表。注册顺序即工具喂给 LLM 的顺序——不可随意调换。──
 const providers: ToolProvider[] = [];
 const providerIndex = new Map<string, number>();
@@ -42,6 +63,8 @@ const PLAN_MODE_TOOLS = new Set([
   'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_screenshot',
   'search_files', 'glob_files', 'list_files', 'read_file', 'list_dir', 'view_image',
   'read_log', 'use_skill', 'todo_write', 'todo_read',
+  'read_session', 'search_sessions', // 只读回看过去会话;规划「继续上次讨论」类任务离不开
+
   'list_processes', 'read_process_output',
   'delegate', 'ask_user', 'exit_plan_mode',
   'self_brainstorm', // 纯推理无副作用(分身无工具),计划阶段的方案压力测试正是其主场

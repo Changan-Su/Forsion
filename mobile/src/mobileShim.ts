@@ -10,7 +10,7 @@
  * 其余 host 能力(文件系统/providers/mcp/market/更新…)缺省 → 共享组件 `window.tangu?.X` 可选链自然隐藏。
  */
 import { Browser } from '@capacitor/browser'
-import { isNative, apiBase, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
+import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 
 const TOKEN_KEY = 'forsion_token'
 
@@ -53,6 +53,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     await login()
   }
 
+  // /account 与 /pay 是 Forsion 站点的**网页**(与登录页 /auth 同一处),不在 `/api` 下 ——
+  // 拿 backendUrl 拼会得到 /api/account = 404 =「个人中心无法跳转」。用网页源。
+  const webOrigin = forsionWebOrigin()
   // 外开页面:native 走系统浏览器(Capacitor Browser),web 新标签。带 token 是账号中心的登录交接方式(桌面同款)。
   const openExternal = async (url: string): Promise<{ ok: boolean }> => {
     if (native) { try { await Browser.open({ url }) } catch { /* ignore */ } }
@@ -61,6 +64,8 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
   // 账号菜单的云端调用(电文形状对齐 electron 的 account:quota / account:useResetCard —— AccountCard 靠
   // `window.tangu?.accountQuota` 探测本能力,此前移动端缺席 → 点头像走 openAccountCenter 也缺席 = 点了没反应)。
+  // ⚠️ backendUrl 已经含 `/api`(= apiBase()),path 一律从 `/api` **之后**写起。
+  //    写成 '/api/token-quota/my' 会拼出 /api/api/… = 404 =「额度加载失败」(2026-08-08 实翻)。
   const cloudJson = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
     if (!token) return { status: 401, json: null }
     try {
@@ -85,19 +90,19 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     authStatus,
     forsionLogin: login,
     forsionLogout: logout,
-    accountQuota: () => cloudJson('GET', '/api/token-quota/my'),
+    accountQuota: () => cloudJson('GET', '/token-quota/my'),
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
       }
-      return cloudJson('POST', '/api/token-quota/reset-card/use', { type: type ?? 'both' })
+      return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both' })
     },
     openAccountCenter: (section?: string) => {
       const hash = section && /^[a-z0-9-]+$/i.test(section) ? `#${section}` : ''
-      return openExternal(`${backendUrl}/account${token ? `?token=${encodeURIComponent(token)}` : ''}${hash}`)
+      return openExternal(`${webOrigin}/account${token ? `?token=${encodeURIComponent(token)}` : ''}${hash}`)
     },
     openPayCenter: () =>
-      openExternal(`${backendUrl}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${backendUrl}/account`)}`),
+      openExternal(`${webOrigin}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${webOrigin}/account`)}`),
   }
 
   // 401 兜底:/api/agent/* 鉴权失败 → 清 token 重新登录。

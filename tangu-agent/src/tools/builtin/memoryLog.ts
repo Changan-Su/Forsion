@@ -83,7 +83,11 @@ export const memoryLogProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const date = String(args.date ?? '').trim() || undefined;
         const r = await getLog(ctx.userId, date);
-        return r.content?.trim() ? r.content : `（${r.date} 暂无日志）`;
+        // 空结果给出路:日志记「做了什么」,不含对话原文——找当时说了什么该走 search_sessions
+        // (真实失败样本里模型正是从 read_log 空手而归后宣布「无历史可查」)。
+        return r.content?.trim()
+          ? r.content
+          : `（${r.date} 暂无日志）\nNote: the log records what was DONE, not what was said. For past conversation content, use \`search_sessions\`.`;
       },
     },
   ],

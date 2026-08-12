@@ -221,8 +221,9 @@ function DockHarness() {
 }
 
 // ?caret:装真的丝滑光标覆盖层(默认不装 —— 别的断言不需要它,装了徒增噪音)。
+// 产品默认已翻成「关」,故仪器必须**显式开**,否则 check:caretmerge 量不到覆盖层。
 if (new URLSearchParams(location.search).has('caret')) {
-  void import('./smoothCaret').then((m) => m.installSmoothCaret())
+  void import('./smoothCaret').then((m) => { m.installSmoothCaret(); m.setSmoothCaretEnabled(true) })
 }
 
 if (new URLSearchParams(location.search).has('dock')) {

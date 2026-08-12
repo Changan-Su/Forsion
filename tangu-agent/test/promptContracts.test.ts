@@ -38,7 +38,7 @@ describe('responseStyleSection', () => {
   it('契约段不进可覆盖的 guidance(per-app 整段替换不得丢契约,由 agentLoop 直接注入)', () => {
     const sec = defaultPromptSections({ execMode: 'host', cwd: '/tmp' });
     const joined = sec.guidance.join('\n');
-    expect(joined).toContain('## Memory & Logs');
+    expect(joined).toContain('## Memory, Logs & Past Sessions');
     expect(joined).not.toContain('## When a Tool Call Fails');
     expect(joined).not.toContain('## Response Style');
     expect(TOOL_FAILURE_SECTION).toContain('unattended'); // 无人值守 run 以失败报告收尾,不问用户

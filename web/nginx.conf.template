@@ -48,8 +48,10 @@ server {
         chunked_transfer_encoding on;
     }
 
-    # Forsion 登录页 + 其静态依赖(都转发到后端);供 webShim 跳转登录用。
-    location ~ ^/(auth|account|shared|oauth)(/|$) {
+    # Forsion 登录页 + 账号中心 + 购买页 + 其静态依赖(都转发到后端);供 webShim 跳转用。
+    # ⚠️ 漏了 pay 的话它会掉进下面的 SPA fallback:点「升级会员」返回的是 Tangu Web 自己的外壳
+    # (实测 26KB 应用壳 vs 16KB 支付页),表现为「点了只是把应用重载一遍」。加了要重出 web 镜像才生效。
+    location ~ ^/(auth|account|shared|oauth|pay)(/|$) {
         set $backend ${BACKEND_URL};
         proxy_pass $backend;
         proxy_http_version 1.1;

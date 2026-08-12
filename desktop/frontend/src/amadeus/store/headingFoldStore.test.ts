@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { foldedSet, headingLevel, useHeadingFold } from './headingFoldStore'
+import { foldedSet, headingLevel, sectionBoundaryLevel, useHeadingFold } from './headingFoldStore'
 
 describe('headingLevel', () => {
   it('识别 # ~ ######', () => {
@@ -17,6 +17,28 @@ describe('headingLevel', () => {
     expect(headingLevel('> # 引用里的标题')).toBe(0)
     expect(headingLevel('')).toBe(0)
     expect(headingLevel(undefined)).toBe(0)
+  })
+})
+
+describe('sectionBoundaryLevel(小节边界:块内标题也算)', () => {
+  it('取块内所有行里最小的标题级别', () => {
+    expect(sectionBoundaryLevel('正文\n## 二\n正文\n# 一')).toBe(1)
+    expect(sectionBoundaryLevel('正文\n### 三\n正文\n## 二')).toBe(2)
+  })
+  it('⚠️回归:块中间的标题不能漏检(漏了就一折到底)', () => {
+    // headingLevel 只看首行 —— 这正是 2026-08-08 那个「折叠吞掉整篇」的根因
+    expect(headingLevel('正文A\n## 二\n正文B')).toBe(0)
+    expect(sectionBoundaryLevel('正文A\n## 二\n正文B')).toBe(2)
+  })
+  it('代码块里的 # 注释不是标题', () => {
+    expect(sectionBoundaryLevel('```sh\n# 这是注释\necho hi\n```')).toBe(0)
+    expect(sectionBoundaryLevel('```\n# 注释\n```\n## 真标题')).toBe(2)
+  })
+  it('整块无标题 → 0', () => {
+    expect(sectionBoundaryLevel('纯正文\n第二行')).toBe(0)
+    expect(sectionBoundaryLevel('a #b #c')).toBe(0)
+    expect(sectionBoundaryLevel('')).toBe(0)
+    expect(sectionBoundaryLevel(undefined)).toBe(0)
   })
 })
 

@@ -391,6 +391,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = input.agentConfig || {};
+  // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
+  // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
+  const clientTag = typeof input.client === 'string' ? input.client : undefined;
   // standalone/desktop host 的 Agent 文件必须先与云端镜像对齐，再从本地激活。headless worker 没有
   // 桌面设置页去触发 /agent/sync；若跳过此步，云端人格虽可经 brain.agents 兜底加载，Library/ 却仍为空。
   // 同步器按 manifest mtime 幂等，未变化时只做清单比较；失败软降级，不阻断对话。
@@ -1237,6 +1240,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         apiModelId,
         messages: workingMessages,
         projectSource: appId,
+        client: clientTag,
         temperature: 0.7,
         // 最后一轮不发 tools(而非 toolChoice:'none'):部分思考模式渠道(DeepSeek 等)
         // 会以 "Thinking mode does not support this tool_choice" 拒绝显式 tool_choice。
@@ -1361,7 +1365,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await logApiUsage(
         user.username, modelId, model.name, model.provider,
         res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, appId, cost,
-        cachedTokens,
+        cachedTokens, clientTag,
       ).catch(() => {});
 
       // 每-run 累计成本硬上限(多轮累计失控的护栏;入站闸门只挡单条入站)。越限即终止本 run，

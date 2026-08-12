@@ -54,7 +54,7 @@ try {
   installEngine()
   // 多窗接线:把引擎 detach 缝接到 window.tangu(桌面);web/移动 no-op。须在任何 WbTab 渲染前设好缝。
   installMultiWindow()
-  // 丝滑光标(默认开;设置→外观开关)。
+  // 丝滑光标(默认关;设置→外观开关)。
   installSmoothCaret()
   // 界面字体覆盖(设置→外观;缺席=跟随主题,不注入任何声明)。
   applyUiFonts()

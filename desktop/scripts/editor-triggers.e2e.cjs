@@ -1055,6 +1055,78 @@ async function main() {
     await p.close()
   })
 
+  // T40:标题小节折叠 —— ① 边界必须认「块中间的标题」;② 折叠箭头不许压在 ⠿ 手柄上。
+  //     (回归 2026-08-08:块只由 <!-- a id --> 切分、不按段落拆,`## 二`/`# 三` 常躺在块中间;
+  //      headingLevel 只看首行 → 边界漏检 → 折一次吞到文末。箭头则写死 left:-46px 正压手柄,
+  //      标题块从此拖不动。反向验过:把 bound 换回 level、把箭头挪回 -46px,这两条即刻转红。)
+  await tryTest('T40', async () => {
+    const p = await dndPage()
+    await p.evaluate(() => {
+      const ps = window.__pageStore, cur = ps.getState().manifest
+      const row = (id, ref) => ({ type: 'row', id, columns: [{ id: 'c' + id, width: 1, children: [{ ref }] }] })
+      ps.setState({
+        manifest: {
+          ...cur,
+          root: { type: 'stack', children: [row('r1', 'A'), row('r2', 'B'), row('r3', 'C'), row('r4', 'D')] },
+          blocks: { A: { type: 'markdown' }, B: { type: 'markdown' }, C: { type: 'markdown' }, D: { type: 'markdown' } },
+        },
+        blocks: {
+          A: { id: 'A', type: 'markdown', content: '# 一' },
+          B: { id: 'B', type: 'markdown', content: '正文A\n## 二\n正文B' }, // 子小节:该跟着折
+          C: { id: 'C', type: 'markdown', content: '正文C' },
+          D: { id: 'D', type: 'markdown', content: '正文D\n# 三\n正文E' }, // ⚠️边界标题在块中间
+        },
+      })
+    })
+    await p.waitForTimeout(400)
+    const hosts = () => p.locator('.block-host[data-block-id]').count()
+    check('T40 起始四块都在', (await hosts()) === 4)
+    const wrap = p.locator('.amx-hfold-wrap').first()
+    await wrap.hover()
+    const arrow = p.locator('.amx-hfold').first()
+    check('T40 标题行有折叠箭头', (await arrow.count()) === 1)
+    // ② 几何:箭头与本行 ⠿ 手柄不许有交集
+    const ab = await arrow.boundingBox()
+    const hb = await p.locator('.block-host[data-block-id="A"] .drag-handle').boundingBox()
+    const overlap = !!ab && !!hb && ab.x < hb.x + hb.width && hb.x < ab.x + ab.width && ab.y < hb.y + hb.height && hb.y < ab.y + ab.height
+    check('T40 折叠箭头不压 ⠿ 手柄', !overlap, `arrow=${JSON.stringify(ab)} handle=${JSON.stringify(hb)}`)
+    check('T40 有箭头的行让出 ＋ 槽位', !(await p.locator('.amx-hfold-wrap.has-fold .block-add').first().isVisible()))
+    // ① 语义:折 `# 一` 吞掉 B(子小节)与 C(正文),停在块中间那个 `# 三` 之前
+    await arrow.click({ force: true })
+    await p.waitForTimeout(300)
+    check('T40 折起后只剩标题行与 `# 三` 所在行', (await hosts()) === 2, `hosts=${await hosts()}`)
+    check('T40 边界行(块内标题)没被吞', (await p.locator('.block-host[data-block-id="D"]').count()) === 1)
+    check('T40 子小节被折起', (await p.locator('.block-host[data-block-id="B"]').count()) === 0)
+    await p.close()
+  })
+
+  // T41:边界标题藏在**标题行自己那一块**里 → 这一行自己就跨了小节,行级折叠切不开它,不许给箭头。
+  //     (评审 P1:第一版只让「后面的行」参与边界判定,`# 一\n正文\n# 二` 同块时照样一折到底;
+  //      真实 vault 里已实测命中。反向验:去掉 rowMeta.self 这一闸即刻转红。)
+  await tryTest('T41', async () => {
+    const p = await dndPage()
+    await p.evaluate(() => {
+      const ps = window.__pageStore, cur = ps.getState().manifest
+      const row = (id, ref) => ({ type: 'row', id, columns: [{ id: 'c' + id, width: 1, children: [{ ref }] }] })
+      ps.setState({
+        manifest: {
+          ...cur,
+          root: { type: 'stack', children: [row('r1', 'A'), row('r2', 'B')] },
+          blocks: { A: { type: 'markdown' }, B: { type: 'markdown' } },
+        },
+        blocks: {
+          A: { id: 'A', type: 'markdown', content: '# 一\n正文1\n# 二' }, // 同块两个标题
+          B: { id: 'B', type: 'markdown', content: '这段属于「二」' },
+        },
+      })
+    })
+    await p.waitForTimeout(400)
+    await p.locator('.amx-hfold-wrap').first().hover()
+    check('T41 跨小节的行不给折叠箭头', (await p.locator('.amx-hfold').count()) === 0)
+    check('T41 后续行照常显示', (await p.locator('.block-host[data-block-id="B"]').count()) === 1)
+    await p.close()
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

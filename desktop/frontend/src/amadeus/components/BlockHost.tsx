@@ -1,4 +1,4 @@
-import { Suspense, createContext, memo, useContext, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { Suspense, createContext, memo, useContext, useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { lazyRetry } from '../../lazyRetry'
 import { Columns2, Copy, Link2, Maximize2, Trash2 } from 'lucide-react'
 import { useDroppable } from '@dnd-kit/core'
@@ -123,11 +123,16 @@ export const BlockHost = memo(function BlockHost({
   blockId,
   autoFocus,
   readOnly,
+  gutterLead,
 }: {
   blockId: string
   autoFocus?: boolean
   /** 只读呈现(Dashboard 的「编辑锁定」浏览态):文字不可改、无斜杠菜单,但双链可点、嵌入照常活。 */
   readOnly?: boolean
+  /** 塞进左侧手柄槽的额外按钮(现只有标题折叠箭头)。⚠️必须进 .block-gutter 这条 flex ——
+   *  行壳(.amx-hfold-wrap)与块的左缘差着一个 .edge-zone(14px,且「大杂烩行」还不渲染),
+   *  在行壳里绝对定位怎么算都会压到 ⠿ 上(2026-08-08 实测)。 */
+  gutterLead?: ReactNode
 }) {
   const ps = useScopedPageStore() // 本面板那份文档 store:写操作绝不能落到隔壁半屏那篇去
   const block = usePageStore((s) => s.blocks[blockId])
@@ -391,6 +396,7 @@ export const BlockHost = memo(function BlockHost({
       >
         ⠿
       </button>
+      {gutterLead}
       <button
         className="block-add"
         onClick={(e) => {
