@@ -100,7 +100,14 @@ describe('tsDate', () => {
 // @ts-ignore 仓内 @types/node 尚无 node:sqlite 声明(需 ≥22.5);运行时 catch 已兜底老 Node
 const sqliteMod: any = await import('node:sqlite').catch(() => null);
 
-describe.skipIf(!sqliteMod)('search_sessions execute × 真 sqlite', async () => {
+// ⚠️ 不能用 `describe.skipIf(!sqliteMod)` —— 被跳过的 suite,其工厂函数照样在**收集期执行**
+//    (已实测),下面第一行 `new sqliteMod.DatabaseSync` 当场 TypeError,整份 suite 判红。
+//    v2.7.9 的 tag 构建就是这么挂的(本机 node22 有 node:sqlite,CI node20 没有 → 只在 CI 红)。
+//    正解=老 Node 上根本不定义这个 suite,另挂一条显式 skip 占位,免得静默少跑 23 个用例。
+if (!sqliteMod) describe.skip('search_sessions execute × 真 sqlite(需 Node ≥22.5,本环境跳过)', () => {
+  it('node:sqlite 不可用', () => {});
+});
+else describe('search_sessions execute × 真 sqlite', async () => {
   const { configureTangu } = await import('../../seams/runtime.js');
   const { searchSessionsProvider } = await import('./searchSessions.js');
   const db = new sqliteMod.DatabaseSync(':memory:');
