@@ -33,12 +33,14 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { loadSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, resolveBackgroundModelId, type HistorianConfig } from './specialAgentsConfig.js';
 import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
-import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { getAgent, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
 import { DEFAULT_AGENT_SLUG, agentsDir } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { modelContextWindow, estimateMessageTokens } from './contextBudget.js';
+import { redactSecrets } from '../core/redact.js';
+import { appendHarnessCandidates } from '../agents/harnessStore.js';
 
 const MAX_TRANSCRIPT_CHARS = 8000;
 const CHARGE_USER = false;
@@ -53,6 +55,7 @@ const RAW_FILE = '.memory-raw.md';
 const RAW_CONSOLIDATE_MIN = 5;
 const RAW_MAX_AGE_DAYS = 7;
 const RAW_MAX_PER_ROUND = 5; // 单轮最多采集条数(judge 提示词同步声明此上限)
+const HARNESS_RAW_MAX_PER_ROUND = 3; // 工作笔记候选更克制(judge 提示词同步声明)
 const CONSOLIDATE_MAX_TOKENS = 8000; // 须容得下整份 20K 字符记忆(中文 ≈1 字/token 也要够大半;截断另有 finishReason 闸)
 // 并发/退避护栏(Codex 评审 #2/#6):同 agent 整固互斥(进程内锁,localHistorian 本就 host 单进程);
 // 缩水守卫拒绝后按 slug 退避一天,防「合法瘦身永远被拒 + 每轮白烧一次模型调用」的活锁。
@@ -73,7 +76,7 @@ export function resetHistorianConsolidationState(): void {
 }
 
 /** judge JSON 的字段规格+示例(独立模式 system prompt 与 fork 判官指令共用同一契约)。 */
-function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean): { fields: string[]; example: string } {
+function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean): { fields: string[]; example: string } {
   const fields: string[] = [];
   if (wantTitle) fields.push('"title": a phrase of ≤16 characters in the user\'s language summarizing this conversation\'s topic, used as the session title (always provide it)');
   if (wantSummary) {
@@ -94,9 +97,20 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
       'At most 5 entries — pick the highest-value ones. When in doubt, leave it out — an empty array is the normal outcome.',
     );
   }
+  if (wantHarness) {
+    // 反模式清单抄 hermes skill-review 的负面门(环境失败/负面断言/一次性叙事会硬化成日后反噬的拒绝理由)。
+    fields.push(
+      '"harness_candidates": an array of NEW working-method lessons for the agent\'s own working notes (usually empty). ' +
+      'Qualifying: a durable, transferable lesson about HOW this agent should work — a workflow correction the user made, ' +
+      'a delegation pattern that worked well, a procedural landmine and how to avoid it. ' +
+      'Never include: environment/setup hiccups, transient errors, negative claims like "tool X is broken" (they harden into refusals that bite the agent later), ' +
+      'one-off task narratives, or facts about the user (those belong in memory_candidates). ' +
+      'One short self-contained sentence per entry, in English. At most 3 entries; an empty array is the normal outcome.',
+    );
+  }
   const example =
     `{"title":"Gradient visualization"${wantSummary ? ',"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open."' : ''}` +
-    `,"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}}`;
+    `,"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}${wantHarness ? ',"harness_candidates":[]' : ''}}`;
   return { fields, example };
 }
 
@@ -106,8 +120,8 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
  * 关键:LOG(当天流水:发生了什么)与 memory(长期稳定事实/偏好,跨会话有用、绝非流水账)是**两类不同内容**,
  * 不得相同;memory 要克制,多数对话应为空。
  */
-function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean): string {
-  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary);
+function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness);
   return [
     (customPrompt && customPrompt.trim()) || DEFAULT_HISTORIAN_PROMPT,
     '\nRead the conversation below and judge; output **a single JSON object** only, with the following fields:',
@@ -118,8 +132,8 @@ function buildJudgeSystem(customPrompt: string, wantTitle: boolean, wantLog: boo
 }
 
 /** fork 判官的追加指令(user 消息,分叉尾部):上下文=上方完整对话,无需另拼 transcript。 */
-function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, prevSummary: string): string {
-  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary);
+function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog: boolean, wantMemory: boolean, wantSummary: boolean, wantHarness: boolean, prevSummary: string): string {
+  const { fields, example } = judgeFieldSpecs(wantTitle, wantLog, wantMemory, wantSummary, wantHarness);
   return [
     '## Historian fork (tail-fork judge)',
     'You are a tail-fork of the assistant above, acting as the background Historian for this conversation. ' +
@@ -133,17 +147,7 @@ function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog
   ].filter(Boolean).join('\n');
 }
 
-/** 机械脱敏兜底(提示词也要求,双保险):常见 token/key 形状一律替换。
- *  hex 阈值取 48:不误伤 40 位 git SHA(记忆里常见且有用),仍盖住 64 位 hex 密钥。 */
-export function redactSecrets(s: string): string {
-  return s
-    .replace(/\b(sk|pk|rk)-[A-Za-z0-9_-]{16,}\b/g, '[REDACTED]')
-    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '[REDACTED]')
-    .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED]')
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '[REDACTED]')
-    .replace(/\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED]')
-    .replace(/\b[A-Fa-f0-9]{48,}\b/g, '[REDACTED]');
-}
+export { redactSecrets }; // 实现已挪 core/redact.ts(harnessStore 共用,免拖依赖树);此处 re-export 保住旧引用面
 
 // ── raw 层文件 IO(host-only,与该 agent 的 MEMORY.md 同文件夹)────────────────
 // 兜底链与 localMemoryBrain 的域解析一致(currentAgentSlug() || DEFAULT):保证 raw 文件
@@ -527,6 +531,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const forkMode = cfg.mode === 'fork' && !!forkSeed;
     const judgeLog = logDue && !assistMode;
     const judgeMemory = memoryDue && !assistMode;
+    // 自进化自动档(默认关):judge 额外提名工作笔记候选 → 展示身份 slug 的 .harness-raw.md 收件箱。
+    const judgeHarness = due && !assistMode && cfg.harnessCandidates;
     log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
 
     const transcript = await recentTranscript(sessionId);
@@ -540,7 +546,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       let raw = forkMode
         ? await forkJudge(
             sessionId, userId, String(sk.app_id || deps().profile.appId), forkSeed!,
-            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, prevSummary),
+            buildForkJudgeMessage(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness, prevSummary),
           )
         : '';
       // fork 产出非空但解析不出 JSON(判官跑偏成长文)= 判官失败,同样回落 independent——
@@ -550,7 +556,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         raw = '';
       }
       if (!raw) {
-        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue);
+        const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness);
         const input = prevSummary ? `${transcript}\n\n[Previous summary]\n${prevSummary}` : transcript;
         raw = (await complete('判断', cfg.modelId, sys, input, userId, 1600)).content;
       }
@@ -602,6 +608,41 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           if (n) {
             await logActivity(userId, 'memory_candidates', candidates.join(' | ').slice(0, 300), sessionId);
             log(`已采集 ${n} 条记忆候选进 raw 层`);
+          }
+        }
+        if (judgeHarness) {
+          const rawHc: unknown[] = Array.isArray((j as any).harness_candidates) ? (j as any).harness_candidates : [];
+          const hCands = rawHc
+            .map((c) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, 300))
+            .filter((c) => c.length >= 4 && c.toUpperCase() !== 'NOTHING')
+            .slice(0, HARNESS_RAW_MAX_PER_ROUND);
+          if (hCands.length) {
+            // 归桶=展示身份(HARNESS.md 按 agent 本体,不折叠 shareDefaultMemory,与注入槽同源);
+            // effectiveSlug/ALS 此刻都是折叠后的记忆域,不可用——从会话 agent_config 取 active slug。
+            // 存储值必须过合法性闸(会话配置可塞任意串,'..' 会逃出 agentsDir——Codex P2/P3 评审 Major #1);
+            // 非法/已删 agent 的候选直接丢弃,宁可丢也不错桶进默认 agent 的收件箱。
+            let displaySlug = DEFAULT_AGENT_SLUG;
+            let slugOk = true;
+            try {
+              const c0 = typeof sk.agent_config === 'string' ? JSON.parse(sk.agent_config) : sk.agent_config;
+              const s = c0?.agentSlug ? String(c0.agentSlug) : '';
+              if (s && s !== DEFAULT_AGENT_SLUG) {
+                if (isValidSlug(s) && (await getAgent(s).catch(() => null))) displaySlug = s;
+                else slugOk = false;
+              }
+            } catch { /* ignore */ }
+            if (slugOk) {
+              const n = await appendHarnessCandidates(displaySlug, sessionId, hCands).catch((e: any) => {
+                log(`写工作笔记候选收件箱失败: ${e?.message || e}`);
+                return 0;
+              });
+              if (n) {
+                await logActivity(userId, 'harness_candidates', hCands.join(' | ').slice(0, 300), sessionId);
+                log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug})`);
+              }
+            } else {
+              log('会话 agent_config.agentSlug 非法或 agent 已删,丢弃本轮工作笔记候选');
+            }
           }
         }
       }

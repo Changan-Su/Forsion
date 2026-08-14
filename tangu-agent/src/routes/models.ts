@@ -18,7 +18,7 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { modelContextWindow } from '../services/contextBudget.js';
-import { modelSupportsVision } from '../llm/modelCapabilities.js';
+import { modelSupportsVision, resolveModelCapability, supportedThinkingLevels, type ThinkingLevel } from '../llm/modelCapabilities.js';
 
 const router = Router();
 
@@ -41,7 +41,13 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     // modelType 区分大语言模型 / 生图模型 / 语音识别(后端已分类;桌面模型设置据此分区,generate_image 据此选模型,语音输入据此筛 ASR)。
     // supportsVision:能不能直接「看」图。黑名单制(见 modelSupportsVision)——后端/provider 显式
     // 标了就听标注,没标就默认能看。客户端据此提示「本模型没有多模态,已启用图像识别辅助模型」。
-    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; supportsVision: boolean }> = [];
+    // thinkingLevels:该模型真正支持的思考档(能力表 supportedThinkingLevels;H6 思考档可见)。
+    // 客户端据此把不支持的档位标灰——此前 /think 菜单全档可选,选了不支持的静默降档零提示。
+    // ⚠️ baseUrl 必须带上:能力表大半规则按 host 键(xai/dashscope/moonshot…),丢了它会退到
+    // provider/model 兜底,标灰方向两头都能错(评审实证:grok off 不该亮/qwen off 不该灰)。
+    const thinkLv = (provider: string | undefined, modelId: string, baseUrl?: string): ThinkingLevel[] =>
+      supportedThinkingLevels(resolveModelCapability({ provider, modelId, baseUrl }));
+    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; supportsVision: boolean; thinkingLevels?: ThinkingLevel[] }> = [];
 
     let forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null } = { status: 'ok', detail: null };
     let cloud: any[] = [];
@@ -69,7 +75,8 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     for (const m of cloud) {
       if (!m?.id) continue;
       // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm → 桌面把语音识别模型误当聊天模型(见 AsrModelChoice/ChatView 的 modelType 分流)。
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm', contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, typeof m.supportsVision === 'boolean' ? m.supportsVision : undefined) });
+      const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
+      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, typeof m.supportsVision === 'boolean' ? m.supportsVision : undefined), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
     }
     if (forsion.status === 'ok' && cloud.length === 0) {
       // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。
@@ -91,7 +98,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     for (const p of directProviders) {
       const noVision = new Set(p.noVisionModelIds ?? []);
       for (const mid of p.modelIds ?? []) {
-        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: modelContextWindow(mid), supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined) });
+        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: modelContextWindow(mid), supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl) });
       }
       for (const mid of p.imageModelIds ?? []) {
         models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, supportsVision: false });

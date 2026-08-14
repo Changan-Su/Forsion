@@ -65,7 +65,9 @@ export interface GroupChatParams {
 export interface TranscriptEntry { round: number; slug: string; name: string; text: string }
 
 /** 本次群聊 run 的真实 token 累计(usage 事件的 total + 终态 tokens_total 用)。 */
-interface Meter { tokens: number }
+// cost/limit 挂在 meter 上随处可达:usage 事件要带「本 run 累计成本+上限」(H3 成本闸可见,与 agentLoop 同口径)。
+// meter.cost 计入 host 总结轮,与 round 级 costTotal(执法口径)最多差最后一轮总结——展示口径,可接受。
+interface Meter { tokens: number; cost: number; limit: number }
 
 /**
  * 群聊主编排。由 agentLoop.runLoop 在 try 内调用(hostExec 闸门已把守),return 后 runLoop 的 finally
@@ -139,8 +141,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     ];
 
     let costTotal = 0;
-    const meter: Meter = { tokens: 0 };
     const runCostLimit = runCostCeiling();
+    const meter: Meter = { tokens: 0, cost: 0, limit: runCostLimit };
     let stopReason = 'max_rounds';
     let roundsRun = 0;
 
@@ -406,7 +408,8 @@ async function account(p: GroupChatParams, res: StreamResult, effModelId: string
   meter.tokens += promptT + compT;
   const cost = await deps().billing.calculateCost(effModelId, promptT, compT, model, cached).catch(() => 0);
   await deps().billing.consumeTokenPoints(p.userId, cost).catch(() => ({ ok: true } as any));
-  await publish(p.runId, 'usage', { prompt: promptT, completion: compT, cached, cost, total: meter.tokens, agentId: agentSlug }).catch(() => {});
+  meter.cost += cost;
+  await publish(p.runId, 'usage', { prompt: promptT, completion: compT, cached, cost, total: meter.tokens, costTotal: meter.cost, costLimit: meter.limit, agentId: agentSlug }).catch(() => {});
   return cost;
 }
 

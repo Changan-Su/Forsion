@@ -23,6 +23,7 @@ import { agentsDir, readUserMd, writeUserMd } from '../core/tanguHome.js';
 import { listLoadoutTools } from '../tools/toolRegistry.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
+import { loadHarness, readJournal, applyHarnessEdit } from '../agents/harnessStore.js';
 
 const router = Router();
 
@@ -328,6 +329,30 @@ router.delete('/agent/agents/:slug/library/file', authMiddleware, async (req: Au
     res.json({ ok: true });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'delete library file failed' });
+  }
+});
+
+// ── 工作笔记进化史(P2):当前 HARNESS 条目 + 本机编辑史(journal 是 dot-file 不同步,设备本地视角)。
+router.get('/agent/agents/:slug/harness', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
+    // journal 只回尾部 200 行:文件按次追加无上限,整份回传/渲染会随年头无界增长(Codex 评审 Minor)。
+    res.json({ entries: await loadHarness(req.params.slug), journal: (await readJournal(req.params.slug)).slice(-200) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'read harness failed' });
+  }
+});
+
+// 条目级回滚(恢复该条上一次改动前的状态;走 applyHarnessEdit 唯一写点,journal 照常留快照)。
+router.post('/agent/agents/:slug/harness/rollback', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
+    const { entry } = await applyHarnessEdit(req.params.slug, { action: 'rollback', id: String(req.body?.id || '') });
+    res.json({ ok: true, entry });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'rollback failed' }); // 「没有可回滚历史/会超上限」等业务错误原样回给 UI
   }
 });
 

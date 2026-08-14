@@ -73,14 +73,23 @@ const MODEL_WINDOW_OVERRIDES: Record<string, number> = (() => {
 })();
 
 /** 解析某模型的上下文窗口:覆盖表 > 模型对象自带(context_window/contextWindow) > 族兜底 > 全局默认。 */
-export function modelContextWindow(modelId?: string | null, modelObj?: any): number {
-  if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return MODEL_WINDOW_OVERRIDES[modelId];
+/** 窗口值的来源:override=env 覆盖表 / model=模型元数据 / family=按模型族推断 / default=128k 兜底。
+ *  后两档是「猜的」——context 视图据此提示用户该窗口并非模型自报(H5)。 */
+export type CtxWindowSource = 'override' | 'model' | 'family' | 'default';
+
+/** modelContextWindow 的带来源版本:值与来源一起给,供 context 视图如实标注。 */
+export function modelContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource } {
+  if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return { tokens: MODEL_WINDOW_OVERRIDES[modelId], source: 'override' };
   const fromObj = Number(modelObj?.context_window ?? modelObj?.contextWindow);
-  if (Number.isFinite(fromObj) && fromObj >= 4_000) return Math.floor(fromObj);
+  if (Number.isFinite(fromObj) && fromObj >= 4_000) return { tokens: Math.floor(fromObj), source: 'model' };
   if (modelId) {
-    for (const [re, win] of FAMILY_WINDOWS) if (re.test(modelId)) return win;
+    for (const [re, win] of FAMILY_WINDOWS) if (re.test(modelId)) return { tokens: win, source: 'family' };
   }
-  return CONTEXT_WINDOW_TOKENS;
+  return { tokens: CONTEXT_WINDOW_TOKENS, source: 'default' };
+}
+
+export function modelContextWindow(modelId?: string | null, modelObj?: any): number {
+  return modelContextWindowInfo(modelId, modelObj).tokens;
 }
 
 const PROTECT_FIRST = 3; // system 之后的前 N 条不折叠(任务定义锚点)

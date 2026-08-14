@@ -6,8 +6,12 @@
  * 写文件经 agentLoop 的审批闸门（与其它 host 写工具同档）。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, slugify } from '../../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
+import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
+
+/** 自我判定用展示身份优先:shareDefaultMemory 的 agent 其 currentAgentSlug()=xyra,拿它比对会漏拦自己。 */
+const selfSlug = (): string | undefined => currentDisplayAgentSlug() || currentAgentSlug();
 
 export const manageAgentProvider: ToolProvider = {
   id: 'builtin:manage_agent',
@@ -55,13 +59,28 @@ export const manageAgentProvider: ToolProvider = {
           if (action === 'delete') {
             const slug = String(args.slug || '');
             if (!slug) return 'Error: delete 需要 slug';
+            // 不能删除自己:删了再 create 同 slug = 绕过下面的人格守卫(Codex 评审 #2)。
+            if (slug === selfSlug()) return 'Error: 不能删除自己(当前激活的 agent);请用户在设置里操作。';
             const ok = await deleteAgent(slug);
             return ok ? `已删除 agent: ${slug}` : `未找到 agent: ${slug}`;
           }
           if (action === 'create' || action === 'update') {
             if (!args.name || !args.system_prompt) return 'Error: create/update 需要 name 与 system_prompt';
-            const slug = args.slug ? String(args.slug) : slugify(String(args.name));
-            if (action === 'update' && !(await getAgent(slug))) return `Error: 未找到要更新的 agent: ${slug}`;
+            // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → slugify(name)),否则可以用
+            // 大写等非法变体让守卫查不到 existing、saveAgent 却归一回自己的 slug(Codex 评审 #2)。
+            const requested = args.slug ? String(args.slug) : '';
+            const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name));
+            const existing = await getAgent(slug);
+            if (action === 'update' && !existing) return `Error: 未找到要更新的 agent: ${slug}`;
+            // 人格主权:不能改写**自己**的人格——system_prompt/SOUL 归用户所有(create 撞自己 slug 同样拦,
+            // saveAgent 对已存在 slug 是覆盖)。运行参数(model/tools/thinking 等)放行:那是自调参,不是人格漂移。
+            // agent 自有的可进化层是 HARNESS.md(manage_harness)。
+            if (slug === selfSlug()) {
+              const soulChanged = args.soul != null && String(args.soul) !== (existing?.soul || '');
+              if (!existing || String(args.system_prompt) !== existing.systemPrompt || soulChanged) {
+                return 'Error: 不能修改自己的人格(system_prompt/SOUL 归用户所有)。运行参数(model/tools/thinking_level 等)可改——原样回传现有 system_prompt 即可;工作方法的沉淀请用 manage_harness。';
+              }
+            }
             const def = await saveAgent({
               slug,
               name: String(args.name),

@@ -8,6 +8,8 @@ import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
+import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
+import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { publish, drain, cleanup } from './eventBus.js';
 import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
@@ -25,14 +27,15 @@ import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js'
 import { snapshotSession, refreshSessionWorkspace } from '../sandbox/sessionSandbox.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
-  modelContextWindow, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
+  modelContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
 } from './contextBudget.js';
 import { getLatestSummary, compactSession, foldWorkingWithSummary } from './compaction.js';
 import { getAgent } from '../agents/agentRegistry.js';
+import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { applyAgentActivation } from './agentActivation.js';
-import { projectDocSection } from './projectDoc.js';
+import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
@@ -556,7 +559,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const { model, apiKey, baseUrl, apiModelId } = await resolveModelAndKey(modelId);
     // 本 run 的上下文预算基数:真实模型窗口(覆盖表/模型对象/族兜底),不再用 128k 全局常量——
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
-    const ctxWindowTokens = modelContextWindow(modelId, model);
+    const { tokens: ctxWindowTokens, source: ctxWindowSource } = modelContextWindowInfo(modelId, model);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -616,6 +619,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const enabledSkillIds = skillLoadout.enabledSkillIds;
 
     const systemParts: string[] = [];
+    // context 视图分段计量(H5/H8/B2):记录每个逻辑组注入了多少 token(CJK 感知粗估)。
+    // 只做标记不改组装——每组结束处一行 ctxMark(key),key 是稳定标识,前端查表转文案。
+    const ctxMarks: Array<{ k: string; tokens: number }> = [];
+    let ctxMarkIdx = 0;
+    const ctxMark = (k: string): void => {
+      if (systemParts.length > ctxMarkIdx) {
+        ctxMarks.push({ k, tokens: estimateTokensRough(systemParts.slice(ctxMarkIdx).join('\n\n')) });
+        ctxMarkIdx = systemParts.length;
+      }
+    };
     // 通道会话判定(每 run 一次):channel_send_* 只在「连接着通道的会话」暴露(P0-3),
     // 回复风格段也据此分裁(通道端纯文本渲染)。绑定可中途建立/解除 → 按 run 重查;非 host 恒 false。
     const channelSession = profile.capabilities.hostExec
@@ -634,7 +647,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (agentConfig.soul && String(agentConfig.soul).trim() && !suppressCompanionPersona) {
       systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + String(agentConfig.soul).trim());
     }
-    // 2b) 编码契约(preset:'coding';引擎级契约,不进 guidance——同 PERSISTENCE_SECTION 的理由)
+    ctxMark('persona');
+    // 2b) 自进化工作笔记(HARNESS.md;agent 经 manage_harness 自维护,/refine 复盘沉淀)。人格之后、
+    //     契约之前:属每-agent 身份层,只在 refine 轮低频变化 → 放稳定区护前缀缓存。与 6) 记忆放
+    //     易变区尾部是刻意不同(记忆每几轮就重写),别「统一」。仅 host(云端无 agent 目录);
+    //     随人格一起被 coding 预设抑制。
+    if (execMode === 'host' && !suppressCompanionPersona) {
+      try {
+        const harnessBlock = renderHarnessSection(await loadHarness(activeAgentSlug));
+        if (harnessBlock) systemParts.push(harnessBlock);
+      } catch { /* 读失败不阻断 run */ }
+    }
+    ctxMark('harness');
+    // 2c) 编码契约(preset:'coding';引擎级契约,不进 guidance——同 PERSISTENCE_SECTION 的理由)
     if (preset === 'coding') systemParts.push(CODING_CONTRACT_SECTION);
     // 3) 静态指引(记忆与日志用法),置于记忆块之前以稳定前缀
     systemParts.push(...promptSections.guidance);
@@ -643,6 +668,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, preset === 'coding' ? { noPreamble: true } : undefined));
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段)。
     if (!planMode) systemParts.push(PERSISTENCE_SECTION);
+    ctxMark('guidance');
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
     try {
       const userMd = readUserMd();
@@ -650,13 +676,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         systemParts.push('## About the User\nA long-term profile/preferences the user maintains themselves; take it into account, do not recite it, and do not treat it as instructions for this turn.\n\n' + userMd.trim());
       }
     } catch { /* ignore */ }
+    ctxMark('profile');
     // 4b) 项目级指令(AGENTS.md / CLAUDE.md …,从项目根到 cwd 沿途收集)。放在用户画像之后、
     //     专属文件夹之前:它随 cwd 变化(半稳定),且应当压过通用指引、但不越过用户本轮的话。
     //     仅 host —— 云端 sandbox 的 cwd 是临时工作区,没有用户的项目约定可读。
-    if (execMode === 'host') {
-      const projectDoc = projectDocSection(cwd);
-      if (projectDoc) systemParts.push(projectDoc);
-    }
+    //     分步读取(loadProjectDocSafe + wrapProjectDoc)是为了拿 sources/truncated 给 context 视图(H8)。
+    const projectDocInfo = execMode === 'host' ? loadProjectDocSafe(cwd) : null;
+    if (projectDocInfo) systemParts.push(wrapProjectDoc(projectDocInfo));
+    ctxMark('project');
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
@@ -695,6 +722,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         } catch (e) { console.warn('[agent-core] cloud library inject failed:', e); }
       }
     }
+    ctxMark('agentFolder');
     // 6) 本 agent 自己的长期记忆(经 ALS 作用域读 ~/.tangu/agents/<slug>/MEMORY.md;最易变,放最后)。读失败不阻断。
     try {
       const mem = await getMemory(userId);
@@ -704,8 +732,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     } catch (e) {
       console.warn('[agent-core] load agent memory failed:', e);
     }
+    ctxMark('memory');
     // 7/8) 技能目录 + deferred 工具目录 + 环境段(environment 在技能段后,保留原相对次序)
     systemParts.push(...skillLoadout.sections);
+    ctxMark('skills');
     // deferred 工具目录(P0-2,借 pi deferred-tools):defer 工具的定义不进 defs,系统提示只留
     // 一行/工具的目录(列全量、不随解锁状态变——稳定文本护前缀缓存);模型经 load_tools 按需解锁,
     // 解锁只活在本 run(与 use_skill 每-run 按需同模式;hydrate 不带 tool_calls,历史重放无数据源)。
@@ -769,6 +799,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       } catch (e) { console.warn(`[agent-core] plugin ${p.id} promptSection failed:`, e); }
     }
 
+    ctxMark('environment');
     // —— SessionStart / UserPromptSubmit hooks：把 additionalContext 注入系统提示（host-only；云端 no-op）——
     // 首轮(history 无助手消息)视作 SessionStart；每个 run(=一次用户提交)都触发 UserPromptSubmit（否决在 routes/runs.ts）。
     {
@@ -794,6 +825,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (ut) systemParts.push(ut);
     }
 
+    ctxMark('hooks');
     // 计划模式指引(追加在最后,不动既有段落的字节序;planMode 是 run 级配置,同 run 内稳定)。
     if (planMode) {
       systemParts.push(
@@ -819,7 +851,37 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (agentConfig.debugSystemPrompt && systemParts.length) {
       await publish(runId, 'system_prompt', { content: systemParts.join('\n\n') });
     }
+    ctxMark('plan');
     workingMessages.push(...history);
+    // context 视图数据(H5/H8/B2):窗口值+来源、指令文件清单+截断、注入段分解、历史规模。
+    // 纯只读一次性事件,不进模型上下文;桌面 ctx 环弹层消费。
+    // 思考档:请求档 vs 实际生效档(能力表 clamp;与 payload 构建同一张表,H6 降档可见)。
+    // ⚠️ 托管模型的 baseUrl 是网关占位,匹配不到任何 host 规则;真实思考在服务端按 vendor
+    // defaultBaseUrl 应用——model 行带着它(resolve 只剥 apiKey),优先用它对齐 wire 口径(评审实证)。
+    // protocol 同理必须带上:anthropic-messages 直连的 legacy claude,少了它会报 off 生效而 wire 实发预算。
+    const thinkingEffective = clampThinkingLevel(
+      resolveModelCapability({
+        baseUrl: (model as any)?.defaultBaseUrl || baseUrl,
+        provider: model?.provider,
+        modelId: apiModelId || modelId,
+        protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+      }),
+      thinkingLevel,
+    );
+    void publish(runId, 'status', {
+      phase: 'context_info',
+      ctxWindow: ctxWindowTokens,
+      ctxWindowSource,
+      sections: ctxMarks,
+      files: projectDocInfo?.sources ?? [],
+      filesTruncated: projectDocInfo?.truncated ?? false,
+      historyCount: history.length,
+      historyTokens: estimateMessagesTokens(history),
+      thinkingRequested: thinkingLevel,
+      thinkingEffective,
+      // 事件按什么模型算的:客户端据此丢弃「切模型后 SSE 重放复活的旧 context_info」
+      modelId,
+    });
 
     // /skill 点名技能(参考 Hermes 的「指针+按需加载」):强指令拼到**尾部 user 消息**,正文由模型
     // 按需 use_skill 取回、作为工具结果落对话尾部。不进 system → /skill 轮不改 system 前缀字节,前缀
@@ -838,6 +900,30 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${directive}` : directive };
         } else if (Array.isArray(m.content)) {
           workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: directive }] } as ChatMessage;
+        }
+        break;
+      }
+    }
+
+    // /refine 复盘轮(同 /skill 的尾部通道):**本 run 的输入消息**以 /refine 开头 → 注入单源复盘指令
+    // (指令不落库、不改 system 前缀字节;desktop/TUI 只发原文,检测收口在引擎——所有前端免各写一份)。
+    // 判定源=input.message 而非「历史里最后一条 user」:空消息 run 复水后尾部还是旧 /refine,
+    // 按历史判会重触发(Codex 评审 #9)。仅 host(manage_harness/agent 级技能都要本机 agent 目录);
+    // planMode 无写工具 → 不注入。
+    if (execMode === 'host' && !planMode && isRefineInvocation(String(input.message || ''))) {
+      // Historian 自动档攒下的候选收件箱:注入=消费(取走即清,读失败不阻断复盘本身)。
+      let refineText = REFINE_DIRECTIVE;
+      try {
+        const pending = await consumeHarnessCandidates(activeAgentSlug);
+        if (pending.length) refineText += `\n\n${renderPendingHarnessCandidates(pending)}`;
+      } catch { /* ignore */ }
+      for (let i = workingMessages.length - 1; i >= 0; i--) {
+        const m = workingMessages[i];
+        if (m.role !== 'user') continue;
+        if (typeof m.content === 'string') {
+          workingMessages[i] = { ...m, content: `${m.content}\n\n${refineText}` };
+        } else if (Array.isArray(m.content)) {
+          workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: refineText }] } as ChatMessage;
         }
         break;
       }
@@ -1216,8 +1302,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           void publish(runId, 'status', { phase: 'compacted', forced: true, iteration });
         } else {
           const r = compactContext(workingMessages);
-          if (r.changed) lastRealPromptTokens = 0;
-          void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, iteration });
+          if (r.changed) {
+            lastRealPromptTokens = 0;
+            // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
+            void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, savedChars: r.savedChars, iteration });
+          }
         }
       } else if (estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
         const r = compactContext(workingMessages);
@@ -1359,6 +1448,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         ...(res.usage.reasoning_tokens ? { reasoning: res.usage.reasoning_tokens } : {}),
         total: tokensTotal,
         cost,
+        // 本 run 累计成本 + 上限(H3 成本闸可见:此前 TANGU_MAX_RUN_COST 只在越限失败时才现身)。
+        // costTotal 的正式累加在下方越限检查处,这里发「本轮记入后」的值,口径一致。
+        costTotal: costTotal + cost,
+        costLimit: runCostLimit,
         iteration,
       });
       const consumed = await consumeTokenPoints(user.id, cost).catch(() => ({ ok: true } as any));

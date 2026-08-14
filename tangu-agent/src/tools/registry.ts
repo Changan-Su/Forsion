@@ -37,6 +37,7 @@ import { amadeusProvider } from './builtin/amadeus.js';
 import { readActivityProvider } from './builtin/readActivity.js';
 import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
+import { manageHarnessProvider } from './builtin/manageHarness.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
@@ -152,6 +153,7 @@ registerToolProvider(deskPresentProvider); // host-only:desk_present 在桌面�
 registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一个会话的记录(工作区拖会话进聊天的 [[session:id]] 引用靠它落地;append 末尾,保前缀缓存)
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
+registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

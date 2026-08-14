@@ -32,6 +32,11 @@ export interface HistorianConfig {
   mode: 'independent' | 'assist' | 'fork';
   /** memory 判断提示词（空=用默认）。标题总结用固定内部提示。 */
   prompt: string;
+  /**
+   * 自进化自动档(默认关):judge 额外提名「工作笔记候选」→ 该 agent 的 .harness-raw.md 收件箱,
+   * 仅在下次 /refine 时注入供审阅,经 manage_harness(审批)采纳才落 HARNESS.md——自动采集、人工采纳。
+   */
+  harnessCandidates: boolean;
 }
 
 export interface MuseConfig {
@@ -85,6 +90,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     firstRoundTrigger: true,
     mode: 'independent',
     prompt: '',
+    harnessCandidates: false,
   },
   muse: {
     enabled: false,
@@ -130,6 +136,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       firstRoundTrigger: asBool(h.firstRoundTrigger, d.historian.firstRoundTrigger),
       mode: h.mode === 'assist' || h.mode === 'fork' ? h.mode : d.historian.mode,
       prompt: asStr(h.prompt, d.historian.prompt),
+      harnessCandidates: asBool(h.harnessCandidates, d.historian.harnessCandidates),
     },
     muse: {
       enabled: asBool(m.enabled, d.muse.enabled),

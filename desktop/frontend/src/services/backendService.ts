@@ -467,6 +467,14 @@ export const putAgentLibraryFile = (cfg: TanguDesktopConfig, slug: string, name:
 export const deleteAgentLibraryFile = (cfg: TanguDesktopConfig, slug: string, name: string) =>
   request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/library/file?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
 
+// 某 agent 的工作笔记进化史(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
+export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number }
+export type HarnessJournalLine = { ts: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null }
+export const getAgentHarness = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[] }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/harness`)
+export const rollbackHarnessEntry = (cfg: TanguDesktopConfig, slug: string, id: string) =>
+  request<{ ok: boolean; entry: HarnessEntry | null }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id }) })
+
 // 全局用户画像 USER.md。
 export const getUserProfile = (cfg: TanguDesktopConfig) =>
   request<{ content: string }>(cfg, '/agent/user-profile').then((r) => r.content).catch(() => '')

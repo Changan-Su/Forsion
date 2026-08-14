@@ -40,11 +40,13 @@ function categoryOf(relPath: string): Category {
 function isBinaryPath(relPath: string): boolean {
   return !TEXT_EXTS.has(extname(relPath).toLowerCase());
 }
-/** 仅同步这些:config.toml / SOUL.md / MEMORY.md / LOG/<date>.md / Library/**(排除点文件/同步元数据)。 */
+/** 仅同步这些:config.toml / SOUL.md / HARNESS.md / MEMORY.md / LOG/<date>.md / Library/**
+ *  (排除点文件/同步元数据;HARNESS 的快照史 .harness-refinements.jsonl 是点文件 → 只留本机)。 */
 function isSyncable(relPath: string): boolean {
   if (relPath.split('/').some((seg) => seg.startsWith('.'))) return false;
   return (
     relPath === 'config.toml' || relPath === 'SOUL.md' || relPath === 'MEMORY.md' ||
+    relPath === 'HARNESS.md' ||
     (relPath.startsWith('LOG/') && relPath.endsWith('.md')) ||
     relPath.startsWith('Library/')
   );

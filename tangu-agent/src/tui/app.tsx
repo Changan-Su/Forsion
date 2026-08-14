@@ -24,7 +24,7 @@ import { listCustomCommands, getCustomCommand, expandCustomCommand, commandsDir 
 import type { ThinkingLevel } from '../core/types.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { saveModel } from '../standalone/credStore.js';
-import { getToolDefinitions } from '../tools/registry.js';
+import { getToolDefinitions, listDeferredTools } from '../tools/registry.js';
 import { reducer, initialState } from './events.js';
 import { listSessions, loadSessionItems, type SessionRow } from './sessions.js';
 import { COMMANDS, copyToClipboardOSC52 } from './commands.js';
@@ -37,7 +37,7 @@ import { InquiryPrompt } from './components/InquiryPrompt.js';
 import type { TuiConfig } from './config.js';
 import type { ApprovalMode } from './types.js';
 
-const RUN_AFFECTING = new Set(['/new', '/resume', '/retry', '/compact', '/branch', '/edit', '/delete']);
+const RUN_AFFECTING = new Set(['/new', '/resume', '/retry', '/compact', '/branch', '/edit', '/delete', '/refine']);
 
 /** 群聊结束原因 → 中文。 */
 function groupReason(r: string): string {
@@ -209,6 +209,9 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         dispatch({ type: 'USAGE', tokens: (p.prompt || 0) + (p.completion || 0), cost: p.cost || 0, cached: p.cached || 0, iteration: p.iteration || 0, prompt: p.prompt || 0 });
         break;
       case 'status':
+        // context_info 是一次性数据事件(桌面 ctx 视图消费),不是活动阶段——STATUS reducer 的 phase
+        // 是粘性的,放进去会让状态栏整个 run 显示「running context_info」。TUI 暂不消费,跳过。
+        if (p.phase === 'context_info') break;
         dispatch({ type: 'STATUS', state: p.state, iteration: p.iteration, phase: p.phase });
         break;
       case 'approval_request':
@@ -289,6 +292,10 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     if (c.maxIterations) agentConfig.maxIterations = c.maxIterations;
     if (c.planMode) agentConfig.planMode = true;
     if (c.enabledSkillIds?.length) agentConfig.enabledSkillIds = c.enabledSkillIds;
+    // 激活的 Normal Agent 身份必须随 run 下发:少了它,引擎把身份解析成默认 agent(xyra)——
+    // 记忆/HARNESS/agent 级技能全落错文件夹,manage_agent 的「不能改自己人格」守卫也拦不住自己
+    // (Codex 复核 #2)。persona/model 等 TUI 已显式带上,引擎激活 only-if-unset 不会双重注入。
+    if (c.activeAgentSlug) agentConfig.agentSlug = c.activeAgentSlug;
     // 群聊就绪 → 本条消息走多 Agent 群聊(agentLoop 据 groupChat+capabilities.groupChat 分流到 runGroupChat)。
     if (groupAgentsRef.current && groupAgentsRef.current.length >= 2) {
       agentConfig.groupChat = true;
@@ -737,10 +744,36 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         setCfg((c) => ({ ...c, enabledSkillIds: [...cur] }));
         return;
       }
+      case '/refine': {
+        // 复盘轮:当普通消息发出,引擎检测 /refine 前缀注入单源复盘指令(agentLoop;与 /skill 同尾部通道)。
+        // 发归一化文本而非原 line:引擎检测大小写敏感,用户敲 /REFINE 会静默不触发(Codex 评审 #10)。
+        if (cfgRef.current.execMode !== 'host') {
+          notice('/refine 仅本机(host)会话可用(工作笔记写在本机 agent 目录)', 'warn');
+          return;
+        }
+        const outgoing = '/refine' + (rest ? ` ${rest}` : '');
+        dispatch({ type: 'ADD_USER', text: outgoing });
+        startRun(outgoing);
+        return;
+      }
       case '/tools': {
-        const ctx: any = { userId, sessionId: sessionIdRef.current, appId: 'tangu', execMode: cfgRef.current.execMode, enabledSkillIds: [] };
+        // 口径对齐 agentLoop 真实 toolCtx:planMode / per-agent allow-deny / profile 都参与筛选,
+        // deferred 工具单列(目录态,经 load_tools 解锁)。旧版手拼 ctx 报的不是这一局的真实工具面。
+        const c = cfgRef.current;
+        const agentDef = c.activeAgentSlug ? await getAgent(c.activeAgentSlug) : null;
+        const ctx: any = {
+          userId, sessionId: sessionIdRef.current, appId: 'tangu', profile: deps().profile,
+          execMode: c.execMode, cwd: c.cwd, planMode: !!c.planMode,
+          enabledSkillIds: c.enabledSkillIds || [], // /skill 开过的技能会解锁 use_skill,别写死空数组
+          toolsMode: agentDef?.toolsMode, toolsList: agentDef?.toolsList,
+          unlockedTools: new Set<string>(), unlockTools: () => {}, // load_tools 真实在场(registry 按 unlockTools 有无判定)
+        };
         const names = getToolDefinitions(ctx).map((d) => d.function.name);
-        notice(`当前可用工具（${cfgRef.current.execMode}）：\n  ${names.join(', ')}`);
+        const deferred = listDeferredTools(ctx).map((d) => d.name);
+        notice(
+          `当前可用工具（${c.execMode}${c.planMode ? ' · 计划模式' : ''}${c.activeAgentSlug ? ` · agent:${c.activeAgentSlug}` : ''}）：\n  ${names.join(', ')}` +
+            (deferred.length ? `\n按需加载（load_tools 解锁后可用）：\n  ${deferred.join(', ')}` : ''),
+        );
         return;
       }
       case '/status': {

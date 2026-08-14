@@ -86,6 +86,7 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   { name: '/historian', key: 'historian', zh: 'Historian 状态/活动；/historian on|off 开关', en: 'Historian status/activity; /historian on|off to toggle', surfaces: ['tui', 'desktop'] },
   { name: '/muse', key: 'muse', zh: 'Muse 状态/TODO；/muse on|off 开关', en: 'Muse status/TODOs; /muse on|off to toggle', surfaces: ['tui', 'desktop'] },
   { name: '/memory', key: 'memory', arg: '[edit]', zh: '查看/编辑长期记忆', en: 'View or edit long-term memory', surfaces: ['tui', 'desktop'] },
+  { name: '/refine', key: 'refine', arg: '[focus]', zh: '复盘本会话，沉淀 Agent 的工作笔记（可回滚）', en: "Reflect on this conversation and refine the agent's working notes (reversible)", surfaces: ['tui', 'desktop'] },
   { name: '/log', key: 'log', arg: '[YYYY-MM-DD]', zh: '查看每日日志', en: 'View the daily log', surfaces: ['tui'] },
   { name: '/mcp', key: 'mcp', zh: '列出 MCP server 状态', en: 'List MCP server status', surfaces: ['tui', 'desktop'] },
   { name: '/plugins', key: 'plugins', zh: '列出已发现插件', en: 'List discovered plugins', surfaces: ['tui', 'desktop'] },

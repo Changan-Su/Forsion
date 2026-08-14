@@ -117,6 +117,12 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
           </div>
         </div>
         <div className="field">
+          <label>{t('settings.special.h.harnessCandidates')}</label>
+          <Seg value={!!h.harnessCandidates} onChange={(v) => saveHistorian({ harnessCandidates: v })}
+            onLabel={t('settings.special.on')} offLabel={t('settings.special.off')} />
+          <div className="hint" style={{ marginTop: 4 }}>{t('settings.special.h.harnessCandidatesHint')}</div>
+        </div>
+        <div className="field">
           <label>{t('settings.special.h.prompt')}</label>
           <textarea rows={3} value={h.prompt || defaults.historianPrompt}
             onChange={(e) => saveHistorian({ prompt: e.target.value === defaults.historianPrompt ? '' : e.target.value })} />

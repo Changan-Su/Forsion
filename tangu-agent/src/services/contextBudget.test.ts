@@ -6,6 +6,7 @@ import {
   COMPACT_TRIGGER_RATIO,
   FORCE_COMPACT_RATIO,
   modelContextWindow,
+  modelContextWindowInfo,
   estimateTokensRough,
   estimateMessageTokens,
   estimateMessagesTokens,
@@ -13,6 +14,16 @@ import {
   capToolResult,
   capHistoryContent,
 } from './contextBudget.js';
+
+describe('modelContextWindowInfo 来源标注', () => {
+  it('model 元数据 / family 族表 / default 兜底 三档来源正确', () => {
+    expect(modelContextWindowInfo('m', { context_window: 200000 })).toEqual({ tokens: 200000, source: 'model' })
+    expect(modelContextWindowInfo('claude-opus-5')).toEqual({ tokens: 200_000, source: 'family' })
+    expect(modelContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
+    // 无效元数据(<4k)不算 model 档,落到后续档位
+    expect(modelContextWindowInfo('whatever', { context_window: 100 }).source).toBe('default')
+  })
+})
 
 describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
   it('FORCE_COMPACT_RATIO is 0.95 and above COMPACT_TRIGGER_RATIO', () => {
