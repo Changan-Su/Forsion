@@ -10,6 +10,7 @@ import { compile } from './compile'
 import { parseLayout } from './manifest'
 import { parseBody } from './markers'
 import {
+  bumpNextId,
   generateColumnId,
   generatePageId,
   generateRowId,
@@ -17,7 +18,7 @@ import {
   pageFileName,
   stripPageBasename,
 } from './names'
-import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from './split'
+import { extractFrontmatterExtra, parseFrontmatter, schemaMajorOf, stripFrontmatter } from './split'
 import {
   COMPILER_VERSION,
   PAGE_SCHEMA,
@@ -50,12 +51,6 @@ const EMPTY_STACK: StackNode = { type: 'stack', children: [] }
 
 /** Major version this compiler understands (from PAGE_SCHEMA 'amadeus.page/3'). */
 const SCHEMA_MAJOR = 3
-
-function schemaMajorOf(fm: Record<string, string>): number | null {
-  // 容忍 YAML 引号:parseSimpleYaml 取整行原文,"amadeus.page/4" 带引号也必须被闸认出(Codex)。
-  const m = /^["']?amadeus\.page\/(\d+)\b/.exec(fm.amadeus_schema ?? '')
-  return m ? Number.parseInt(m[1], 10) : null
-}
 
 function normalizeWidths(cols: ColumnNode[]): ColumnNode[] {
   const sum = cols.reduce((s, c) => s + (c.width > 0 ? c.width : 0), 0)
@@ -137,8 +132,11 @@ function buildPage(
   now: string,
   fmExtra?: string,
   nextId?: number,
+  order?: BlockId[],
 ): LoadedPage {
-  const present = new Set(Object.keys(blockTypes))
+  // order = 源文档序。Object.keys 会把整数形键按数值升序枚举(JS 语义),缺布局时未放置块
+  // 若按键序接尾行,正文顺序被静默重排(Codex #6)——调用方能给源序就给。
+  const present = new Set(order ?? Object.keys(blockTypes))
   const manifest: PageManifest = {
     schema: PAGE_SCHEMA,
     id,
@@ -198,8 +196,11 @@ function futureSchemaPage(
 }
 
 /** Parse a v3 note: frontmatter (id + layout) + inline marker-delimited block content.
- *  `renumbered` is true when legacy/non-numeric ids were found and rewritten to clean
- *  integers — loadPage persists that one-time cleanup. */
+ *  `renumbered` is true when pathological blocks were healed — loadPage persists that
+ *  one-time cleanup. 病理只有两类:无标记内容(id=null 的前导/游离段)与重复 id(不补号则
+ *  后者静默覆盖前者,内容丢失)。合法且唯一的 id——含 agent/mindmap 插件写的字母 id——
+ *  一律保号:layout 之外 frontmatter 里还有块 id 树(mindmap:/dashboard 键),那条链不在
+ *  compiler 手里,重编号会把它们悄悄剪断(2026-08-13 前这里对任何非数字 id 全篇重编号)。 */
 function parseV3(
   pagePath: string,
   raw: string,
@@ -210,35 +211,43 @@ function parseV3(
   const layout = parseLayout(fm.amadeus_layout)
   const fmExtra = extractFrontmatterExtra(raw)
   const fmNextId = Number.parseInt(fm.amadeus_next_id ?? '', 10)
-  const nextId = Number.isInteger(fmNextId) && fmNextId > 0 ? fmNextId : undefined
-  const isCleanId = (id: BlockId | null): boolean => id != null && /^\d+$/.test(id)
+
+  // 补号的分配池必须先装入全部现存 id(而非边扫边加):否则给前导内容补的号可能撞上
+  // 文档后部尚未扫到的数字 id,把无辜块挤成「重复」。
+  const present = new Set<BlockId>()
+  for (const b of parsed) if (b.id != null) present.add(b.id)
+
+  // 高水位超出安全整数按不存在处理:以它当 floor 分配会因浮点 +1 不动而撞号。
+  let nextId: number | undefined = Number.isSafeInteger(fmNextId) && fmNextId > 0 ? fmNextId : undefined
+  let healed = false
+  const seenOnce = new Set<BlockId>()
   const blockTypes: Record<BlockId, string> = {}
   const contents: Record<BlockId, string> = {}
-
-  // Any non-numeric (legacy nanoid) or markerless id → renumber the whole note 1..N by
-  // document order, remapping the layout refs. Already-numeric notes are left untouched
-  // (ids stay stable, gaps and all), so cross-note `![[note#N]]` keeps resolving.
-  if (parsed.some((b) => !isCleanId(b.id))) {
-    const remap = new Map<string, string>()
-    parsed.forEach((b, i) => {
-      const id = String(i + 1)
-      blockTypes[id] = 'markdown'
-      contents[id] = b.content
-      if (b.id != null) remap.set(b.id, id)
-    })
-    // 重编号也保留高水位(取两者较大):否则一个夹带非数字 id 的标记就把 floor 归零,
-    // 已退役的号段重新可分配,外部 `![[note#N]]` 静默错绑(Codex)。
-    const renumFloor = Math.max(nextId ?? 0, parsed.length + 1) || undefined
-    const page = buildPage(pagePath, fm.amadeus_page, remapLayout(layout, remap), blockTypes, contents, now, now, fmExtra, renumFloor)
-    return { page, renumbered: true }
-  }
-
+  const order: BlockId[] = []
   for (const b of parsed) {
-    const id = b.id as BlockId
+    let id: BlockId
+    // `__proto__` 是普通对象上的原型访问器:赋值不产生自有键,Object.keys 看不见,整块内容
+    // 会从解析结果里消失(Codex #1)——按病理块补号,不保留。
+    if (b.id != null && b.id !== '__proto__' && !seenOnce.has(b.id)) {
+      seenOnce.add(b.id)
+      id = b.id
+    } else {
+      // 补号同样尊重并推进高水位:绝不复用已退役号段(外部 `![[note#N]]` 会静默错绑)。
+      id = nextBlockId(present, nextId)
+      // 兜底闸:任何路径算出的「新」号若与现存同号,退回带后缀的字母 id(合法字符集,
+      // 永不重编号)——补号绝不允许覆盖既有内容。
+      for (let i = 2; present.has(id); i++) id = `${nextBlockId(present, nextId)}-${i}`
+      present.add(id)
+      nextId = bumpNextId(nextId, id)
+      healed = true
+    }
     blockTypes[id] = 'markdown'
     contents[id] = b.content
+    order.push(id)
   }
-  return { page: buildPage(pagePath, fm.amadeus_page, layout, blockTypes, contents, now, now, fmExtra, nextId), renumbered: false }
+  // 重复 id 的 layout ref 天然归首个保号块;补号块无 ref → buildPage 的 reconcileRoot
+  // 把它们按源序接到尾部整宽行。
+  return { page: buildPage(pagePath, fm.amadeus_page, layout, blockTypes, contents, now, now, fmExtra, nextId, order), renumbered: healed }
 }
 
 /** Open a note: migrate v1/v2 if present, else parse v3, else adopt a foreign note, else create new. */

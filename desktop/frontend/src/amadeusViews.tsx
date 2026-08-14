@@ -2,22 +2,25 @@
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
  *  外壳直接用 Tangu token/类 → 与 Tangu Desktop 一致,并随其换肤/明暗同步。 */
-import { Fragment, type ReactNode, type CSSProperties, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, type ClipboardEvent as RClipboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, type CSSProperties, type RefObject, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, type ClipboardEvent as RClipboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'zustand'
 import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
-  Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, Network, LayoutDashboard,
-  SquareSlash, Undo2, Redo2, ChevronsDown,
+  Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
+  Undo2, Redo2, ChevronsDown,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
-import { activePageScope, disposePageScope, pageStoreFor, PageScopeCtx, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, cascadeFdAfterRename, disposePageScope, flushAllScopes, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
-import { getAttachmentPrefs } from '@amadeus/lib/attachments'
+import { UnifiedPage } from '@amadeus/unified/UnifiedPage'
+import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
+import { routeNote, type RouteDecision } from '@amadeus/unified/router'
+import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { cursorFromSource, setModeCursor, sourceOffsetFor, takeModeCursor } from '@amadeus/lib/modeCursor'
-import { EMOJI_ALL, EMOJI_GROUPS, searchEmoji } from '@amadeus/lib/emoji'
 import { importToPage, importToFolder, pasteImagesToPage } from './amadeusImport'
 import { usePluginStore, findFileType, fileTypeBaseName } from '@amadeus/plugins/pluginStore'
 import { resolveIcon } from '@amadeus/components/icons'
@@ -30,11 +33,10 @@ import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openF
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { REF_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
+import { useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
 import { askDeleteAssets, deleteAssetsPref } from '@amadeus/components/askDeleteAssets'
-import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
-import { joinRel, toAssetUrl } from '@amadeus-shared/assets'
 import { renameDb } from '@amadeus/lib/dbFileOps'
 import { emptyDb, serializeDb } from '@amadeus-shared/db/schema'
 import { useRecentViews } from './recentViews'
@@ -47,6 +49,8 @@ import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } f
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
+// 移动端块面板的清单与落点(与桌面 slash 菜单同一份真源,见 MarkdownBlock)。
+import { useAllSlashItems, getFocusedBlockApply, type SlashItem } from '@amadeus/blocks/markdown/MarkdownBlock'
 import { CloudVaultPanel } from './components/CloudVaultPanel'
 import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
@@ -74,10 +78,40 @@ const prefixesOf = (p: string): string[] => {
   return out
 }
 
-/** 把某页改名:renamePage 作用于当前活动页,故先 loadPage 再改名(修复非活动页改名失效)。 */
+/** 把某页改名:纯路径链(flush → renamePageFile 物理移动+全库引用重写 → 各面板跟队 → .fd 级联)。
+ *  ⚠️ 不许走「loadPage + renamePage」老路(Codex P0):loadPage 会把 v4/外来 md 灌进 v3 编译管线,
+ *  renamePage 落盘时就把它改写成 v3 格式(注 amadeus_page+块标记)= 毁档;纯移动对 v3 同样正确
+ *  (noteViewStore.renameNote 就是这条链)。 */
+/** 改名后重定向所有开着旧路径的编辑器 leaf(Codex 终审 P1):unified 实例已被退休,
+ *  不换 leaf 参数的话那个标签就永远卡在不存在的旧路径上、输入不再保存。
+ *  移动端单列壳 api 恒 null → 跳过(单 leaf 场景由 onRenamed/自身导航兜)。 */
+function retargetEditorLeaves(oldPath: string, newPath: string): void {
+  const w = useWorkspace.getState()
+  for (const p of w.api?.panels ?? []) {
+    const params = (p.params ?? {}) as { __type?: string; notePath?: string }
+    if (params.__type === 'amadeus-editor' && params.notePath === oldPath) {
+      w.navigateLeaf(p.id, 'amadeus-editor', { ...params, notePath: newPath })
+    }
+  }
+}
+
 async function renameAt(path: string, newName: string): Promise<void> {
-  if (ps().activePage !== path) await ps().loadPage(path)
-  await ps().renamePage(newName)
+  try {
+    await flushAllScopes()
+    const newPath = await amadeus.renamePageFile(path, newName)
+    if (newPath !== path) {
+      retireUnifiedPath(path) // 开着这页的 unified 实例停写旧路径(防幽灵文件)
+      remapScopePaths(path, newPath, 'file')
+      await cascadeFdAfterRename(path, newPath)
+      retargetEditorLeaves(path, newPath)
+      // 某个面板正开着这页(v3):remap 换了 activePage 但 manifest.title 还是旧名 → 重载对齐。
+      const st = ps()
+      if (st.activePage === newPath) void st.loadPage(newPath)
+    }
+  } catch (e) {
+    window.alert(`重命名失败:${e instanceof Error ? e.message : String(e)}`)
+  }
+  await ps().refreshStructure()
 }
 
 /** 有回收站(桌面端)→ 删除免确认(可恢复);无 → 弹原確认。 */
@@ -166,9 +200,10 @@ usePageStore.subscribe((state, prev) => {
  *  逐级展开淡入(宽度 0fr→1fr + 段级 stagger,见 amadeus-host.css),移出反向收拢。
  *  当前标题自始至终是同一个元素,由父级展开的布局变化推它右移(无双文字交叉闪烁)。
  *  父级超过 3 段压缩为「首2 + … + 末1」,当前标题永远完整。点任意段在左栏定位高亮。 */
-export function Breadcrumb() {
-  const activePage = usePageStore((s) => s.activePage)
+export function Breadcrumb({ path }: { path?: string } = {}) {
+  const storePage = usePageStore((s) => s.activePage)
   const requestLocate = useAmadeusNav((s) => s.requestLocate)
+  const activePage = path ?? storePage // unified 笔记不设 activePage,显式传路径
   if (!activePage) return null
   const segs = activePage.replace(/(\.dashboard)?\.md$/i, '').split('/')
   const leaf = segs[segs.length - 1]
@@ -203,7 +238,8 @@ export function Breadcrumb() {
 
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
 
-interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root'; path: string; x: number; y: number }
+/** 右键菜单目标;kind='multi' = 作用于整批选中(paths)。 */
+interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi'; path: string; paths?: string[]; x: number; y: number }
 
 const isNotePath = (p: string): boolean => /\.md$/i.test(p)
 const isDbPath = (p: string): boolean => /\.db$/i.test(p)
@@ -587,6 +623,9 @@ export function AmadeusPagesView() {
   const [cloudPanel, setCloudPanel] = useState(false) // web:云端库面板(切换/成员/分享)
   const [dragPath, setDragPath] = useState<string | null>(null) // 正在拖动的笔记
   const [dragOver, setDragOver] = useState<string | null>(null) // 悬停的目标文件夹('' = 根)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // 行多选:判据与会话列表/文件树同源(views/itemSelect);范围选按 DOM 顺序 → 要容器 ref。
+  const sel = useItemSelect(scrollRef)
 
   // 侧栏分区(置顶/云同步/与我共享/收藏集合/笔记树)拖拽排序:抓分区头拖整块,顺序持久化。
   // ponytail: 云端侧的多个 vault 分区随「tree」整体挪,不支持分区内再排 —— 需要时再细分。
@@ -773,7 +812,16 @@ export function AmadeusPagesView() {
   })
   /** 拖笔记进文件夹 / 拖回根目录(复用会话列表的 HTML5 drag 模式)。 */
   const dropTo = (folder: string): void => {
-    if (dragPath && parentOf(dragPath) !== folder) void ps().movePage(dragPath, folder)
+    // 拖的是已选中的行 → 整批搬。守卫逐项复核:单拖时 mergedDragOver 已挡过,但整批里
+    // 可能只有其中一项非法(如把笔记拖进它自己的 .fd 子树),不能一票放行也不能一票否决。
+    for (const p of dragPath ? sel.batch(dragPath) : []) {
+      if (parentOf(p) === folder) continue
+      if (isNoteMd(p)) {
+        const dfd = fdDirOf(p)
+        if (folder === dfd || folder.startsWith(`${dfd}/`)) continue
+      }
+      void ps().movePage(p, folder)
+    }
     setDragPath(null)
     setDragOver(null)
   }
@@ -895,6 +943,23 @@ export function AmadeusPagesView() {
     })
   }
 
+  /** 按路径类型打开对的视图。**判定顺序是毁档防线**:白板(.excalidraw.md)/仪表盘(.dashboard.md)/
+   *  插件文件类型(如 .mindmap.md)磁盘上也是 .md,进了 openNote 会被 compiler 当页面改写 = 毁档,
+   *  所以必须先于「.md = 笔记」判。行点击与多选菜单共用这一份,别再各写一条链。 */
+  const openEntry = (path: string, nt?: { newTab?: boolean }): void => {
+    const isDraw = isDrawingPath(path)
+    const isDash = !isDraw && isDashboardPath(path)
+    const ft = !isDraw && !isDash ? findFileType(pluginFileTypes, path) : undefined
+    if (ft) openFile(path, nt)
+    else if (isDash) openDashboard(path, nt)
+    else if (isDraw) openDrawing(path, nt)
+    else if (isNotePath(path)) void openNote(path, nt)
+    else if (isDbPath(path)) openDb(path, nt)
+    else if (isPdfPath(path)) openPdf(path, undefined, nt)
+    else if (isImagePath(path)) openImage(path, nt)
+    else void amadeus.openVaultFile(path).catch(() => {})
+  }
+
   const row = (path: string, depth = 0, merged?: { fd: string; open: boolean; count: number }): ReactNode => {
     // 白板(.excalidraw.md)磁盘上也是 .md,必须先于「笔记」判定:进了 openNote 会被 compiler 当页面改写=毁档。
     const isDraw = isDrawingPath(path)
@@ -910,10 +975,22 @@ export function AmadeusPagesView() {
     <button
       key={path}
       ref={(el) => { if (path === flash) flashRef.current = el }}
-      className={`t2s-srow${path === (activeViewFile ?? activePage) ? ' active' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${merged && dragPath && dragOver === merged.fd ? ' amx-drop-into' : ''}`}
+      className={`t2s-srow${path === (activeViewFile ?? activePage) ? ' active' : ''}${sel.has(path) ? ' sel' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${merged && dragPath && dragOver === merged.fd ? ' amx-drop-into' : ''}`}
+      data-sel-id={path}
       style={{ paddingLeft: rowPadLeft(depth) }}
-      onClick={(e) => { ft ? openFile(path) : isDash ? openDashboard(path) : isNote ? void openNote(path, { newTab: e.metaKey || e.ctrlKey }) : isDraw ? openDrawing(path) : isDbPath(path) ? openDb(path) : isPdfPath(path) ? openPdf(path) : isImagePath(path) ? openImage(path) : void amadeus.openVaultFile(path).catch(() => {}) }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: ctxKind, path, x: e.clientX, y: e.clientY }) }}
+      // 统一点击语义(见 views/itemSelect):裸击开、⌘ 开新标签、shift/option 只动选中态。
+      onClick={(e) => {
+        const act = sel.click(path, e)
+        if (act.open === 'none') return
+        openEntry(path, act.open === 'new' ? { newTab: true } : undefined)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault(); e.stopPropagation()
+        // 右键落在已选中的行上 → 菜单对整批生效;否则改成只选它。
+        const ids = sel.batch(path)
+        if (ids.length === 1) sel.only(path)
+        setMenu(ids.length > 1 ? { kind: 'multi', path, paths: ids, x: e.clientX, y: e.clientY } : { kind: ctxKind, path, x: e.clientX, y: e.clientY })
+      }}
       draggable={renaming !== path}
       onDragStart={(e) => {
         // 用元素自身作拖影并按抓取点对齐光标(同会话列表:默认拖影/setState 重渲会让内容与光标错位)。
@@ -921,7 +998,8 @@ export function AmadeusPagesView() {
         e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
         e.dataTransfer.effectAllowed = 'move'
         // 拖到聊天区 = 插入 [[笔记]] 引用(树内移动仍靠 dragPath 本地态,多带一个 MIME 不影响)。
-        setChatRefDrag(e.dataTransfer, [{ kind: 'note', path }])
+        // 拖已选中的行 = 整批(引用与树内移动都按整批走,见 dropTo)。
+        setChatRefDrag(e.dataTransfer, sel.batch(path).map((p) => ({ kind: 'note' as const, path: p })))
         setDragPath(path)
       }}
       onDragEnd={() => { setDragPath(null); setDragOver(null) }}
@@ -1119,7 +1197,9 @@ export function AmadeusPagesView() {
         </div>
 
         <div
+          ref={scrollRef}
           className={`t2s-scroll${dragPath && dragOver === '' ? ' amx-drop-root' : ''}`}
+          onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }} // 点空白 = 清选中
           onContextMenu={(e) => {
             // 空白处右键 = 根目录新建。行/文件夹头/顶部特殊按钮各有自己的右键菜单(已 stopPropagation),这里只兜真空白。
             if ((e.target as HTMLElement).closest('.t2s-srow, .t2s-group, .t2s-special-group')) return
@@ -1190,6 +1270,30 @@ export function AmadeusPagesView() {
           </button>
         </div>
       </aside>
+
+      {/* 多选菜单:只放对整批说得通的两件事。删除逐个走各自的既有流程(笔记要问独占附件,
+          附件/其它文件是直接删)—— 别在这儿另写一套删除,那是毁档最容易出事的地方。 */}
+      {menu?.kind === 'multi' && (
+        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => {
+            const ps0 = menu.paths ?? []
+            setMenu(null)
+            for (const p of ps0) openEntry(p, { newTab: true })
+          }}><Plus size={13} /> 在新标签页打开 {menu.paths?.length} 项</button>
+          <button className="danger" onClick={() => {
+            const ps0 = menu.paths ?? []
+            setMenu(null)
+            if (!window.confirm(`删除选中的 ${ps0.length} 项?`)) return
+            void (async () => {
+              for (const p of ps0) {
+                if (isNotePath(p) && !isDrawingPath(p)) await deleteNoteFlow(p)
+                else await ps().deletePage(p)
+              }
+              sel.clear()
+            })()
+          }}><Trash2 size={13} /> 删除 {menu.paths?.length} 项</button>
+        </OverlayAt>
+      )}
 
       {menu?.kind === 'page' && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
@@ -1303,44 +1407,151 @@ export function AmadeusPagesView() {
 // ─────────────────────────────── 主:编辑器(Amadeus 内核 + Tangu 排版) ───────────────────────────────
 
 /** 编辑器需 Amadeus 契约 token → 包 .am-app.tangu-lovable + 镜像 Tangu mode/flat,经 bridge 取色。 */
-/** 移动端编辑工具栏(触屏才渲染):常驻编辑面底部。
- *  - 安卓 APK(adjustResize):键盘弹起时 WebView 布局同步变矮,本栏作为面板尾行天然贴在键盘正上方;
- *  - 手机浏览器(键盘只压 visual viewport):用 visualViewport 差值 translateY 顶上去(APK 上差值≈0)。
- *    差值是视口 px,元素在 body zoom 里 → 须除以 zoomOf 反补偿(端级 zoom × fixed 坐标的老坑)。
- *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
- *  - 「/」= 把字符插进聚焦中的编辑器(execCommand),原生 slash 菜单自然弹出 —— 不另造菜单,
- *    与键盘打「/」完全同一条路;未聚焦时按钮无事发生(slash 本就需要落点)。 */
-function AmxMobileBar({ onUpload, undo, redo }: { onUpload: () => void; undo: () => void; redo: () => void }) {
+/** 底部 sheet 里的一条动作(移动端把原顶栏那排 + 「更多操作」菜单全并到这里)。 */
+interface AmxAction { id: string; icon: ReactNode; label: string; on?: boolean; danger?: boolean; run: () => void }
+
+/** 软键盘度量:`lift` = 浏览器里被键盘压掉的 visual viewport 高度;`kbHeight()` = 最近一次量到的
+ *  键盘高度(键盘收起后仍记着,块面板按它开高,才能「占住键盘的位置」)。
+ *  两种环境的键盘表现不同,必须都认:
+ *   · 手机浏览器:布局视口不变,只有 visualViewport 变矮 → 差值就是键盘高;
+ *   · 安卓 APK(adjustResize):WebView 布局自己变矮,visualViewport 差值≈0 → 只能拿 innerHeight 的
+ *     回落量。基线按**屏宽**记,旋转换向时重置,免得横屏被当成「键盘弹起」。 */
+function useKeyboardMetrics(): { lift: number; kbHeight: () => number } {
   const [lift, setLift] = useState(0)
-  const barRef = useRef<HTMLDivElement>(null)
+  const kbRef = useRef(0)
+  const baseRef = useRef({ w: 0, h: 0 })
   useEffect(() => {
-    const vv = window.visualViewport
-    if (!vv) return
-    const on = (): void => setLift(Math.max(0, window.innerHeight - vv.height - vv.offsetTop))
+    const on = (): void => {
+      const b = baseRef.current
+      if (b.w !== window.innerWidth) baseRef.current = { w: window.innerWidth, h: window.innerHeight }
+      else if (window.innerHeight > b.h) b.h = window.innerHeight
+      const vv = window.visualViewport
+      const vvLift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0
+      const kb = Math.max(vvLift, Math.max(0, baseRef.current.h - window.innerHeight))
+      if (kb > 120) kbRef.current = kb // 120 以下是地址栏/手势条之类的抖动,不是键盘
+      setLift(vvLift)
+    }
     on()
-    vv.addEventListener('resize', on)
-    vv.addEventListener('scroll', on)
-    return () => { vv.removeEventListener('resize', on); vv.removeEventListener('scroll', on) }
+    window.visualViewport?.addEventListener('resize', on)
+    window.visualViewport?.addEventListener('scroll', on)
+    window.addEventListener('resize', on)
+    return () => {
+      window.visualViewport?.removeEventListener('resize', on)
+      window.visualViewport?.removeEventListener('scroll', on)
+      window.removeEventListener('resize', on)
+    }
   }, [])
-  const keep = (e: React.PointerEvent): void => e.preventDefault()
-  const z = barRef.current ? zoomOf(barRef.current) : 1
+  // 从没弹过键盘(一进来就点「+」)→ 按屏高估一个,夹在常见键盘高度区间内。
+  const kbHeight = (): number => kbRef.current || Math.min(380, Math.max(240, Math.round(window.innerHeight * 0.42)))
+  return { lift, kbHeight }
+}
+
+/** 双列块面板:占掉软键盘的位置(Notion 式)。清单 = useAllSlashItems(),与桌面 slash 菜单同一份真源,
+ *  插件注册的项自动出现在这里。选中不走「往正文打 /」,直接调最后聚焦那个块的 applySlash —— 因此
+ *  模板/图片/数据库/画板那些 sentinel 分支、插件 run() 的返回值校验全都照旧生效。 */
+function AmxBlockPicker({ height, onClose }: { height: number; onClose: () => void }) {
+  const items = useAllSlashItems()
+  const groups = useMemo(() => {
+    const m = new Map<string, SlashItem[]>()
+    for (const it of items) (m.get(it.group) ?? m.set(it.group, []).get(it.group)!).push(it)
+    return [...m]
+  }, [items])
   return (
-    <div ref={barRef} className="amx-mbar" style={lift ? { transform: `translateY(-${Math.round(lift / z)}px)` } : undefined}>
-      <button onPointerDown={keep} onClick={() => document.execCommand('insertText', false, '/')} title="插入(slash 菜单)"><SquareSlash size={19} /></button>
-      <button onPointerDown={keep} onClick={onUpload} title="上传文件到本页"><Upload size={19} /></button>
-      <button onPointerDown={keep} onClick={undo} title="撤销"><Undo2 size={19} /></button>
-      <button onPointerDown={keep} onClick={redo} title="重做"><Redo2 size={19} /></button>
-      <span className="amx-mbar-gap" />
-      <button onClick={() => (document.activeElement as HTMLElement | null)?.blur?.()} title="收起键盘"><ChevronsDown size={19} /></button>
+    <div className="amx-bpick" style={{ height }}>
+      <div className="amx-bpick-scroll">
+        {groups.map(([g, list]) => (
+          <Fragment key={g}>
+            <div className="amx-bpick-label">{g}</div>
+            <div className="amx-bpick-grid">
+              {list.map((it) => (
+                <button
+                  key={it.key}
+                  className="amx-bpick-item"
+                  onClick={() => { getFocusedBlockApply()?.(it); onClose() }}
+                >
+                  <span className="amx-bpick-icon">{it.icon}</span>
+                  <span className="amx-bpick-name">{it.label}</span>
+                </button>
+              ))}
+            </div>
+          </Fragment>
+        ))}
+      </div>
     </div>
   )
 }
 
+/** 移动端编辑工具栏(触屏才渲染)—— 悬浮胶囊(2026-08-13 用户拍板,Obsidian 式),不再是贴底整条。
+ *  - 贴键盘:APK 的 WebView 会自己变矮,胶囊 bottom 天然落在键盘上方;浏览器只压 visual viewport,
+ *    故用差值 translateY 顶上去。差值是视口 px,元素在 body zoom 里 → 除以 zoomOf 反补偿(老坑)。
+ *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
+ *  - 「+」:先记下键盘高度再收键盘,块面板正好补上键盘让出的那块地。 */
+function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus }: {
+  actions: AmxAction[]
+  onUpload: () => void
+  undo: () => void
+  redo: () => void
+  sourceMode: boolean
+  onNeedFocus: () => void
+}) {
+  const { lift, kbHeight } = useKeyboardMetrics()
+  const [sheet, setSheet] = useState(false)
+  const [pick, setPick] = useState(0) // 0 = 关;>0 = 面板高度(= 收键盘前量到的键盘高度)
+  const barRef = useRef<HTMLDivElement>(null)
+  const keep = (e: React.PointerEvent): void => e.preventDefault()
+  // lift / pick 都是**视口 px**,而元素活在 body zoom(触屏 1.15)里,写回样式前一律除以 zoom 反补偿。
+  const z = barRef.current ? zoomOf(barRef.current) : 1
+  const pickLocal = pick ? Math.round(pick / z) : 0
+  // 面板开着时键盘已收(lift=0),胶囊改为坐在面板上沿。
+  const shift = pickLocal || Math.round(lift / z)
+  const openPick = (): void => {
+    if (!getFocusedBlockApply()) onNeedFocus() // 还没点进正文过 → 先给个落点,否则选中无处可插
+    const h = kbHeight()
+    ;(document.activeElement as HTMLElement | null)?.blur?.() // 收键盘,把位置让给面板
+    setPick(h)
+  }
+  return (
+    <>
+      <div ref={barRef} className="amx-mbar" style={shift ? { transform: `translateY(-${shift}px)` } : undefined}>
+        {!sourceMode && (
+          <button onPointerDown={keep} onClick={() => (pick ? setPick(0) : openPick())} className={pick ? 'on' : undefined} title="插入块"><Plus size={19} /></button>
+        )}
+        {!sourceMode && <button onPointerDown={keep} onClick={onUpload} title="上传文件到本页"><Upload size={19} /></button>}
+        {!sourceMode && <button onPointerDown={keep} onClick={undo} title="撤销"><Undo2 size={19} /></button>}
+        {!sourceMode && <button onPointerDown={keep} onClick={redo} title="重做"><Redo2 size={19} /></button>}
+        <button onPointerDown={keep} onClick={() => setSheet(true)} title="更多操作"><MoreHorizontal size={19} /></button>
+        <button onClick={() => { setPick(0); (document.activeElement as HTMLElement | null)?.blur?.() }} title="收起键盘"><ChevronsDown size={19} /></button>
+      </div>
+      {pickLocal > 0 && <AmxBlockPicker height={pickLocal} onClose={() => setPick(0)} />}
+      {sheet && (
+        <div className="mb-sheet-scrim" onClick={() => setSheet(false)}>
+          <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+            <div className="mb-sheet-grip" />
+            {actions.map((a) => (
+              <button
+                key={a.id}
+                className={`mb-sheet-row${a.danger ? ' danger' : ''}${a.on ? ' on' : ''}`}
+                onClick={() => { setSheet(false); a.run() }}
+              >
+                {a.icon}
+                <span>{a.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 function EditorScope({
-  children, dragging, onDrop, onDragOver, onDragLeave, onClick, onPaste,
+  children, dragging, rootRef, onDrop, onDragOver, onDragLeave, onClick, onPaste,
 }: {
   children: ReactNode
   dragging?: boolean
+  /** 导出 PDF 要克隆的宿主。**必须是真 ref**:此前靠「更多」按钮 onClick 里 `closest('.amx-editor')`
+   *  现取,一旦按钮搬出编辑器(移动端底栏胶囊就是),closest 返回 null → exportPdf 静默不干活。 */
+  rootRef?: RefObject<HTMLElement | null>
   onDrop?: (e: RDragEvent<HTMLDivElement>) => void
   onDragOver?: (e: RDragEvent<HTMLDivElement>) => void
   onDragLeave?: (e: RDragEvent<HTMLDivElement>) => void
@@ -1351,6 +1562,7 @@ function EditorScope({
   const flat = useTheme((s) => s.flat)
   return (
     <div
+      ref={(el) => { if (rootRef) rootRef.current = el }}
       className={`am-app tangu-lovable amx-pane amx-editor${dragging ? ' amx-dragover' : ''}`}
       data-mode={mode}
       data-flat={flat ? '1' : '0'}
@@ -1367,243 +1579,8 @@ function EditorScope({
 
 /** 未命名笔记的文件名 sentinel(createPageInFolder=untitled[-N] / createChildNote=未命名[-N]):
  *  标题栏对这些显示为空 + 「New Page」占位(Notion 式),不显示字面「未命名」。 */
-const UNTITLED_RE = /^(未命名|untitled)(-\d+)?$/i
-
-/** 可编辑笔记标题 = 文件名(manifest.title 恒取 basename),提交即 renamePage。在编辑器内联改标题。 */
-/** 活动页 fm 的 cover 值(http URL 或 vault 相对路径);无 = null。 */
-function useActiveCover(): string | null {
-  const fmExtra = usePageStore((s) => s.manifest?.fmExtra ?? '')
-  return useMemo(() => {
-    const v = parseFmObject(fmExtra).cover
-    return typeof v === 'string' && v.trim() ? v.trim() : null
-  }, [fmExtra])
-}
-
-/** 活动页封面纵向焦点(fm cover_y,0-100);缺省 50(居中)。 */
-function useActiveCoverY(): number {
-  const fmExtra = usePageStore((s) => s.manifest?.fmExtra ?? '')
-  return useMemo(() => {
-    const v = parseFmObject(fmExtra).cover_y
-    const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN
-    return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 50
-  }, [fmExtra])
-}
-
-/** Notion/pixel-banner 式封面横幅:收进正文区、四角圆角裁切;上下拖动图片调纵向焦点(存 fm cover_y);
- *  底部柔和渐变逐渐融入页面背景色,与正文自然过渡;悬停出「更换/移除」。 */
-function NoteCover() {
-  const activePage = usePageStore((s) => s.activePage)
-  const cover = useActiveCover()
-  const savedY = useActiveCoverY()
-  const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
-  const [dragY, setDragY] = useState<number | null>(null)
-  const [reposition, setReposition] = useState(false) // 「调整位置」模式:默认图片锁定,点按钮才解锁可拖
-  const posY = dragY ?? savedY
-  if (!activePage || !cover) return null
-  const src = /^https?:\/\//i.test(cover) ? cover : toAssetUrl(cover)
-  return (
-    <div className={`amx-cover${reposition ? ' amx-cover-repo' : ''}`}>
-      <img
-        src={src}
-        alt=""
-        draggable={false}
-        style={{ objectPosition: `50% ${posY}%` }}
-        onMouseDown={(e) => {
-          // 仅「调整位置」模式解锁拖拽:鼠标下移 → object-position Y 增大;松手落 fm cover_y。
-          if (!reposition || e.button !== 0) return
-          e.preventDefault()
-          const startClientY = e.clientY
-          const h = (e.currentTarget as HTMLElement).offsetHeight || 210
-          const base = posY
-          const onMove = (ev: MouseEvent): void => setDragY(Math.max(0, Math.min(100, base + ((ev.clientY - startClientY) / h) * 100)))
-          const onUp = (): void => {
-            window.removeEventListener('mousemove', onMove)
-            window.removeEventListener('mouseup', onUp)
-            setDragY((cur) => { if (cur != null) void ps().setPageCoverY(activePage, Math.round(cur)); return null })
-          }
-          window.addEventListener('mousemove', onMove)
-          window.addEventListener('mouseup', onUp)
-        }}
-        onError={(e) => { (e.target as HTMLElement).style.opacity = '0.15' }}
-      />
-      <div className="amx-cover-grad" />
-      {reposition && <div className="amx-cover-hint">上下拖动图片调整位置</div>}
-      <div className="amx-cover-tools">
-        {reposition ? (
-          <button onClick={() => setReposition(false)}>完成</button>
-        ) : (
-          <>
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>更换封面</button>
-            <button onClick={() => setReposition(true)}>调整位置</button>
-            <button onClick={() => void ps().setPageCover(activePage, null)}>移除</button>
-          </>
-        )}
-      </div>
-      {pick && <CoverPicker page={activePage} x={pick.x} y={pick.y} onClose={() => setPick(null)} />}
-    </div>
-  )
-}
-
-/** 无关键词时的默认精选封面(Notion 式):picsum 固定 seed 免 key、图随 seed 稳定,
- *  纯 <img> 直载不走主进程(须 index.html CSP img-src 放行 https:),故三端(含 web)都可用。 */
-const FEATURED_COVERS: Array<{ thumb: string; full: string; author?: string; source?: string }> = [
-  'aurora', 'forest', 'ocean', 'alpine', 'metro', 'night', 'coast', 'mist', 'valley', 'dune', 'lake', 'bloom',
-].map((s) => ({ thumb: `https://picsum.photos/seed/${s}/320/180`, full: `https://picsum.photos/seed/${s}/1600/900`, source: 'Picsum' }))
-
-/** 封面选择器:锚定 popover(骑 amx-db-pop 壳,融入页面非全屏模态)。
- *  tab = 图库(打开即精选,可搜 Openverse)/ 链接 / 上传;点缩略图即换封面但**不关闭**(可连选),点浮层外关闭。 */
-function CoverPicker({ page, x, y, onClose }: { page: string; x: number; y: number; onClose: () => void }) {
-  const hasSearch = !!amadeus.searchImages
-  const [tab, setTab] = useState<'gallery' | 'url' | 'upload'>('gallery')
-  const [q, setQ] = useState('')
-  const [hits, setHits] = useState<Array<{ thumb: string; full: string; author?: string }> | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(false)
-  const [url, setUrl] = useState('')
-  const apply = (cover: string): void => {
-    void ps().setPageCover(page, cover) // 不自动关闭:用户可连选换图,点浮层外才关
-  }
-  const search = (): void => {
-    const query = q.trim()
-    if (!query || !amadeus.searchImages) return
-    setBusy(true)
-    setErr(false)
-    void amadeus.searchImages(query)
-      .then((r) => { setHits(r); setBusy(false) })
-      .catch(() => { setHits(null); setErr(true); setBusy(false) }) // 失败显式提示,不静默
-  }
-  const upload = (): void => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    input.onchange = () => {
-      const f = input.files?.[0]
-      if (!f) return
-      void (async () => {
-        try {
-          const bytes = new Uint8Array(await f.arrayBuffer())
-          const { opts } = await getAttachmentPrefs()
-          const { pageRel } = await amadeus.saveAttachment(page, f.name || 'cover.png', bytes, opts)
-          apply(joinRel(page.split('/').slice(0, -1).join('/'), pageRel))
-        } catch { /* 保存失败静默 */ }
-      })()
-    }
-    input.click()
-  }
-  // 缩略图网格:统一 3:2 比例 + 小圆角,图下方一行作者/来源;点击即用即关。
-  const grid = (items: Array<{ thumb: string; full: string; author?: string; source?: string }>) => (
-    <div className="amx-coverpick-grid">
-      {items.map((h) => (
-        <button key={h.full} className="amx-coverpick-item" onClick={() => apply(h.full)}>
-          <span className="amx-coverpick-thumb">
-            <img src={h.thumb} alt="" loading="lazy" onError={(e) => { const b = e.currentTarget.closest('.amx-coverpick-item') as HTMLElement | null; if (b) b.style.display = 'none' }} />
-          </span>
-          <span className="amx-coverpick-cap">{h.author ? `by ${h.author}` : (h.source ?? '')}</span>
-        </button>
-      ))}
-    </div>
-  )
-  return (
-    <div className="amx-db-popwrap am-app" onMouseDown={onClose}>
-      <OverlayAt
-        className="amx-db-pop amx-coverpick"
-        x={x - 420}
-        y={y}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="amx-coverpick-tabs">
-          <button data-on={tab === 'gallery' || undefined} onClick={() => setTab('gallery')}>图库</button>
-          <button data-on={tab === 'url' || undefined} onClick={() => setTab('url')}>链接</button>
-          <button data-on={tab === 'upload' || undefined} onClick={() => setTab('upload')}>上传</button>
-        </div>
-        {tab === 'gallery' && (
-          <div className="amx-coverpick-body">
-            {hasSearch && (
-              <div className="amx-coverpick-search">
-                <Search size={13} className="t2s-dim" />
-                <input autoFocus placeholder="搜索在线图库(Openverse),或从下方精选挑…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
-                <button className="amx-coverpick-go" onClick={search}>{busy ? '…' : '搜索'}</button>
-              </div>
-            )}
-            {grid(hits && hits.length > 0 ? hits : FEATURED_COVERS)}
-            {!busy && err && <div className="amx-coverpick-hint">图库接口暂不可达,可从上方精选挑,或用「链接/上传」。</div>}
-            {!busy && !err && hits?.length === 0 && <div className="amx-coverpick-hint">没搜到结果,上方为精选封面。</div>}
-          </div>
-        )}
-        {tab === 'url' && (
-          <div className="amx-coverpick-body amx-coverpick-url">
-            <input autoFocus placeholder="粘贴图片地址(https://…)" value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && /^https?:\/\//i.test(url.trim())) apply(url.trim()) }} />
-            <button className="amx-coverpick-go" onClick={() => { if (/^https?:\/\//i.test(url.trim())) apply(url.trim()) }}>设为封面</button>
-          </div>
-        )}
-        {tab === 'upload' && (
-          <div className="amx-coverpick-body">
-            <button className="amx-coverpick-go amx-coverpick-upload" onClick={upload}>选择本地图片…</button>
-            <div className="amx-coverpick-hint">按「设置 → 笔记」的附件位置存入 vault。</div>
-          </div>
-        )}
-      </OverlayAt>
-    </div>
-  )
-}
-
-/** 页面图标 picker:分组 emoji 网格 + 中英关键词搜索 + 任意输入(系统 emoji 面板贴进来也行)。
- *  库在 amadeus/lib/emoji.ts —— 此前是这里硬编码的 66 个字符,只能看图找。 */
-/** Notion 行为:「添加图标」先随机给一个,再点可换。 */
-const randomEmoji = (): string => EMOJI_ALL[Math.floor(Math.random() * EMOJI_ALL.length)]
-function IconPicker({ x, y, current, onPick, onClose }: {
-  x: number
-  y: number
-  current: string | null
-  onPick: (icon: string | null) => void
-  onClose: () => void
-}) {
-  const [draft, setDraft] = useState('')
-  // 输入框一框两用:命中关键词 → 当搜索;一个字都搜不到(如直接粘贴 emoji)→ 回车按原样采用。
-  const hits = searchEmoji(draft)
-  return (
-    <div className="amx-db-popwrap" onMouseDown={onClose}>
-      <OverlayAt className="amx-db-pop amx-iconpick" x={x} y={y} onMouseDown={(e) => e.stopPropagation()}>
-        <input
-          className="amx-db-pop-input"
-          autoFocus
-          placeholder="搜索 emoji(中/英),或粘贴任意字符后回车…"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') { onClose(); return }
-            if (e.key !== 'Enter' || !draft.trim()) return
-            // 有搜索结果 → 回车取第一个;没有 → 把输入本身当图标(保留「粘贴任意 emoji」的老用法)。
-            onPick(hits && hits.length ? hits[0] : draft.trim())
-          }}
-        />
-        <div className="amx-iconpick-grid">
-          {hits
-            ? hits.map((em) => (
-                <button key={em} className={`amx-iconpick-item${current === em ? ' active' : ''}`} onClick={() => onPick(em)}>
-                  {em}
-                </button>
-              ))
-            : EMOJI_GROUPS.map((g) => (
-                <Fragment key={g.name}>
-                  <div className="amx-iconpick-group">{g.name}</div>
-                  {g.items.map(([em, kw]) => (
-                    <button key={`${g.name}-${em}`} className={`amx-iconpick-item${current === em ? ' active' : ''}`} title={kw} onClick={() => onPick(em)}>
-                      {em}
-                    </button>
-                  ))}
-                </Fragment>
-              ))}
-          {hits && hits.length === 0 && <div className="amx-iconpick-empty">没有匹配的 emoji —— 回车可直接用你输入的字符</div>}
-        </div>
-        {current && (
-          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>移除图标</button>
-        )}
-      </OverlayAt>
-    </div>
-  )
-}
-
+/** 可编辑笔记标题 = 文件名(manifest.title 恒取 basename),提交即 renamePage。在编辑器内联改标题。
+ *  (封面/图标 chrome 组件 2026-08-13 搬去 @amadeus/chrome/pageChrome:UnifiedPage 也要用,留此即模块环。) */
 function NoteTitle() {
   const store = useScopedPageStore() // 改名/设图标要作用在本面板这篇
   const sps = (): ReturnType<typeof store.getState> => store.getState()
@@ -1808,20 +1785,28 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state。
   const mode = useUiOverlay((s) => s.editorMode)
   const [dragging, setDragging] = useState(false)
+  // 兜底收虚线框:拖拽在别处松手 / Esc 取消 / 拖出窗口,本容器的 dragleave 未必来得及。
+  useEffect(() => {
+    if (!dragging) return
+    const clear = (): void => setDragging(false)
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => { window.removeEventListener('dragend', clear); window.removeEventListener('drop', clear) }
+  }, [dragging])
   // 笔记多功能菜单(Obsidian 式右上角 ⋮):导出/收藏/定位/删除。
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
   const uploadInputRef = useRef<HTMLInputElement>(null) // 「上传文件」按钮的隐藏 <input type=file>
-  const starred = useAmadeusPrefs((s) => !!activePage && s.starred.includes(activePage))
-  const pinned = useAmadeusPrefs((s) => !!activePage && s.pins.includes(activePage))
+  // 订阅整个数组:star/pin 的判定路径要等 barPath(unified 笔记不设 activePage)在下面算出来。
+  const starredArr = useAmadeusPrefs((s) => s.starred)
+  const pinsArr = useAmadeusPrefs((s) => s.pins)
   // 云同步按钮(图钉右侧,仅桌面本地侧):点亮=本笔记已是显式同步条目;点击开启走关联勾选弹窗,再点关闭。
   const vaultSide = usePageStore((s) => s.vaultSide)
   useEntrySync((s) => s.vaults) // 订阅注册表变更驱动重渲(isSyncedEntry 读 getState)
   useEffect(() => { ensureEntrySyncSubscribed() }, [])
   const canEntrySync = !!window.amadeusSync?.entrySyncEnable && vaultSide === 'local'
-  const synced = canEntrySync && !!activePage && isSyncedEntry(myPs().vaultRoot, activePage)
   useEffect(() => {
     if (!noteMenu) return
     const close = (): void => setNoteMenu(null)
@@ -1833,7 +1818,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   /** 导出 PDF:把本编辑器 DOM 克隆进 #amx-print-root(同文档 → amadeus-asset/KaTeX 字体照常可用),
    *  @media print 只呈现克隆并隐藏应用壳(见 amadeus-host.css),主进程 printToPDF 收尾。导出恒浅色。 */
   const exportPdf = async (): Promise<void> => {
-    const page = myPs().activePage
+    const page = myPs().activePage ?? barPath // unified 笔记 activePage 恒空,文件名取 barPath
     const host = printHostRef.current
     if (!page || !host) return
     const wrap = document.createElement('div')
@@ -1857,6 +1842,39 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
   // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
   const loadingNote = (!!pendingPage && pendingPage !== activePage) || (!!notePath && !loadError && notePath !== activePage)
+
+  // ── v4 绞杀者路由(spec §9 step 3 Phase A):先读原文按 fm 分类,素文件/外来 md/v4 →
+  // UnifiedPage(统一实例),v3 标记文件 → 下面的 PageView 老路。分类必须**先于** effect ①:
+  // 外来 md 一旦进了 pageStore,首次防抖保存就会把它改写成 v3(注 amadeus_page+标记)= 毁档类。
+  // route 以 forPath 配对防陈旧:快速切换笔记时,旧文件的分类绝不套在新路径上。
+  const [route, setRoute] = useState<{ forPath: string; decision: RouteDecision } | null>(null)
+  useEffect(() => {
+    if (!notePath) {
+      setRoute(null)
+      return
+    }
+    let alive = true
+    void (async () => {
+      const raw = await amadeus.readTextFile(notePath).catch(() => null)
+      if (!alive) return
+      setRoute({ forPath: notePath, decision: routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString()) })
+    })()
+    return () => { alive = false }
+  }, [notePath])
+  const routed = route && route.forPath === notePath ? route.decision : null
+  const unifiedRoute = routed?.editor === 'unified' ? routed : null
+
+  // 顶栏/菜单/移动端胶囊的「当前笔记」:v3 = activePage;unified 不设 activePage,用 leaf 认领的路径。
+  const barPath = activePage ?? (unifiedRoute && notePath ? notePath : null)
+  const starred = !!barPath && starredArr.includes(barPath)
+  const pinned = !!barPath && pinsArr.includes(barPath)
+  const synced = canEntrySync && !!barPath && isSyncedEntry(myPs().vaultRoot, barPath)
+
+  // unified 接管 → 让 pageStore 交出本文件的快照(新建流/装载残留):陈旧快照×reconcile 回写
+  // =延时毁档链,见 pageStore.releasePage 注释。
+  useEffect(() => {
+    if (unifiedRoute && notePath) void myPs().releasePage(notePath)
+  }, [unifiedRoute, notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。
   useEffect(() => { if (notePath) leaf.setTitle(baseName(notePath)) }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1888,9 +1906,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
 
   // ① 本面板认领的笔记 ≠ 本面板 store 里的笔记 → 装载它。**与是否活动无关** —— 这正是分屏的关键:
   //    并排的两个面板各装各的,不再互相覆盖。
+  //    ⚠️ 严格等分类落定且判为 'block' 才装(routed 为 null=分类在途也不装):unified 文件
+  //    绝不进 v3 编译管线,分类不明时宁可多等一帧骨架屏(数据安全>首帧)。
   useEffect(() => {
-    if (notePath && notePath !== myPs().activePage) void myPs().loadPage(notePath)
-  }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (notePath && routed?.editor === 'block' && notePath !== myPs().activePage) void myPs().loadPage(notePath)
+  }, [notePath, routed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ② 活动面板跟随激活:侧栏/命令面板/快切这些编辑器**之外**的入口读的是「活动面板」那份 store,
   //    所以点开一篇笔记会落进当前聚焦的这个面板,而不是隔壁。
@@ -1922,12 +1942,12 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   }
   // 拖入文件 → 按 Tangu 笔记设置存放(attachments/同目录/固定夹)→ 预览开则插 ![[base]],否则插 [名](相对路径)。
   const onDrop = async (e: RDragEvent<HTMLDivElement>): Promise<void> => {
+    setDragging(false) // ⚠️必须在任何 early return 之前:落个不认识的东西也得把虚线框收掉
     // 树行拖源对一切叶子(含图片/PDF/.db 附件)都打 kind:'note' —— 按真实类型分流:
     // .md → [[链接]];非笔记 → ![[嵌入]](与 OS 文件拖入 importToPage 的语义一致,评审 P1)。
     const treeRefs = readChatRefs(e.dataTransfer).filter((r) => r.kind === 'note')
     if (treeRefs.length) {
       e.preventDefault()
-      setDragging(false)
       const ps = myPs()
       if (!ps.activePage) return
       ps.insertBlocksAfter(null, treeRefs.map((r) => (isNotePath(r.path) ? `[[${noteWikiInner(r.path)}]]` : `![[${r.path}]]`)))
@@ -1936,7 +1956,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (!files.length) return
     e.preventDefault()
-    setDragging(false)
+    // unified 笔记不走 pageStore:文件经 lifecycle 递给 UnifiedPage(存附件+光标处插 ![[base]];
+    // 此前事件被 preventDefault 后静默吞掉,Codex 终审 P1)。
+    if (unifiedRoute && notePath && insertFilesForPath(notePath, files)) return
     const page = myPs().activePage
     if (!page) return
     await importToPage(files, page) // 存到配置的附件位置 + 插入嵌入/链接(本地/云端/web 统一;失败与超限走 toast)
@@ -1950,8 +1972,10 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (refDrag && e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
     if (!dragging) setDragging(true)
   }
+  /** ⚠️ 判据必须是「指针去了本容器之外」而不是「事件打在容器本身」:后者在指针从子元素
+   *  (块、图片、表格)离开时压根不触发 → 虚线框留在屏幕上不走,就是用户报的「莫名其妙的一圈虚线」。 */
   const onDragLeave = (e: RDragEvent<HTMLDivElement>): void => {
-    if (e.currentTarget === e.target) setDragging(false)
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
   }
   // 关预览的附件是 [名](相对路径);点击其渲染的 <a>(href=原始相对路径)在系统默认程序打开。
   const onClick = (e: RMouseEvent<HTMLDivElement>): void => {
@@ -1960,7 +1984,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     const href = a.getAttribute('href') || ''
     if (!href || /^(https?:|mailto:|amadeus-asset:|#)/i.test(href)) return
     e.preventDefault()
-    const page = myPs().activePage
+    const page = myPs().activePage ?? barPath // unified 笔记 activePage 恒空(审计:附件点击死路)
     if (page) void amadeus.openAttachment(page, href)
   }
   // 粘贴图片(Cmd/Ctrl+V 截图)→ 存 .amadeus/ 并按页相对路径嵌入。标题/重命名输入框放行,
@@ -1983,17 +2007,36 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
 
   return (
     <>
-    <EditorScope dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
-      {activePage && (
-        // 顶栏与编辑器融为一体:透明浮在纸面上,不是独立的一层(无底色/无分割线;滚动穿过靠 blur,见 CSS)。
+    <EditorScope rootRef={printHostRef} dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
+      {/* ⚠️ 上传用的隐藏 input **必须住在顶栏外面**:移动端整条顶栏不渲染,而底栏胶囊的「上传」
+          仍旧 uploadInputRef.current?.click() —— 留在顶栏里 = 手机上 ref 恒 null,上传静默失效。 */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const files = Array.from(e.currentTarget.files ?? [])
+          e.currentTarget.value = ''
+          if (!files.length) return
+          if (unifiedRoute && notePath && insertFilesForPath(notePath, files)) return // unified:经 lifecycle 递入
+          const page = myPs().activePage
+          if (page) void importToPage(files, page)
+        }}
+      />
+      {/* 顶栏(路径 + 右侧动作)只在桌面渲染。移动端整行隐去,动作全并进底栏胶囊的「⋯」
+          (用户拍板 2026-08-13)。这里用 JSX 门而不是 CSS media:`.amx-toolbar` 还被
+          AmadeusDashboardView 用着,CSS 一刀切会连仪表盘的顶栏(含「解锁编辑」)一起藏掉。 */}
+      {barPath && !isCoarsePointer() && (
+        // 顶栏与编辑器融为一体:实色纸面底(var(--bg)),滚动时正文从其后穿过被遮住(见 CSS)。
         <div className="amx-toolbar">
-          <Breadcrumb />
-          {window.amadeusCollab && <ShareStatus path={activePage} refreshKey={shareVer} onOpen={(x, y) => setShareCard({ x, y })} />}
+          <Breadcrumb path={barPath} />
+          {window.amadeusCollab && <ShareStatus path={barPath} refreshKey={shareVer} onOpen={(x, y) => setShareCard({ x, y })} />}
           {/* 置顶图钉:写 amadeusPrefs(每 vault localStorage),侧边栏「置顶」分区同步点亮。 */}
           <button
             className={`amx-mode-btn amx-pin-btn${pinned ? ' amx-pin-on' : ''}`}
             title={pinned ? '取消置顶' : '置顶'}
-            onClick={() => useAmadeusPrefs.getState().togglePin(activePage)}
+            onClick={() => useAmadeusPrefs.getState().togglePin(barPath)}
           >
             <Pin size={14} />
           </button>
@@ -2002,8 +2045,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
               className={`amx-mode-btn amx-pin-btn${synced ? ' amx-pin-on' : ''}`}
               title={synced ? '关闭云同步(云端副本保留)' : '开启云同步'}
               onClick={() => {
-                if (synced) void window.amadeusSync?.entrySyncDisable?.(activePage)
-                else openCloudSyncDialog(activePage, 'page')
+                if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath)
+                else openCloudSyncDialog(barPath, 'page')
               }}
             >
               <Cloud size={14} />
@@ -2030,31 +2073,20 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           >
             {mode === 'source' ? <Eye size={14} /> : <Code2 size={14} />}
           </button>
-          <button
-            className="amx-mode-btn"
-            title="上传文件到本页"
-            onClick={() => uploadInputRef.current?.click()}
-          >
-            <Upload size={14} />
-          </button>
-          <input
-            ref={uploadInputRef}
-            type="file"
-            multiple
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const files = Array.from(e.currentTarget.files ?? [])
-              e.currentTarget.value = ''
-              const page = myPs().activePage
-              if (page && files.length) void importToPage(files, page)
-            }}
-          />
+          {activePage && (
+            <button
+              className="amx-mode-btn"
+              title="上传文件到本页"
+              onClick={() => uploadInputRef.current?.click()}
+            >
+              <Upload size={14} />
+            </button>
+          )}
           <button
             className="amx-mode-btn amx-more-btn"
             title="更多操作"
             onClick={(e) => {
               e.stopPropagation()
-              printHostRef.current = (e.currentTarget as HTMLElement).closest('.amx-editor')
               const r = e.currentTarget.getBoundingClientRect()
               setNoteMenu({ x: Math.max(8, Math.min(r.right - 180, window.innerWidth - 196)), y: r.bottom + 4 })
             }}
@@ -2063,22 +2095,36 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           </button>
         </div>
       )}
-      {noteMenu && activePage && (
+      {noteMenu && barPath && (
         <OverlayAt className="ctx-menu" x={noteMenu.x} y={noteMenu.y} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { setNoteMenu(null); void exportPdf() }}><FileDown size={13} /> 导出为 PDF</button>
-          <button onClick={() => { useAmadeusPrefs.getState().toggleStar(activePage); setNoteMenu(null) }}>
+          <button onClick={() => { useAmadeusPrefs.getState().toggleStar(barPath); setNoteMenu(null) }}>
             <Star size={13} /> {starred ? '取消收藏' : '收藏'}
           </button>
-          <button onClick={() => { void amadeus.revealInFileManager(activePage); setNoteMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
-          <button className="danger" onClick={() => { const p = activePage; setNoteMenu(null); void deleteNoteFlow(p, myPs) }}>
+          <button onClick={() => { void amadeus.revealInFileManager(barPath); setNoteMenu(null) }}><FolderOpen size={13} /> 在文件管理器中显示</button>
+          <button className="danger" onClick={() => { const p = barPath; setNoteMenu(null); void deleteNoteFlow(p, myPs) }}>
             <Trash2 size={13} /> 删除笔记
           </button>
         </OverlayAt>
       )}
-      {shareCard && activePage && (
-        <ShareCard path={activePage} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
+      {shareCard && barPath && (
+        <ShareCard path={barPath} anchor={shareCard} onClose={() => { setShareCard(null); setShareVer((v) => v + 1) }} />
       )}
-      {loadingNote ? (
+      {unifiedRoute && notePath ? (
+        /* v4 统一实例编辑器:不碰 pageStore(activePage 不设),故必须排在骨架屏判定之前。
+           页面 chrome(封面/图标/标题/属性)在 UnifiedPage 内部;顶栏/菜单走上面的 barPath 门。 */
+        <UnifiedPage
+          key={notePath}
+          path={notePath}
+          initial={unifiedRoute.initial}
+          diskRaw={unifiedRoute.diskRaw}
+          onRenamed={(np) => {
+            leaf.setParams({ ...leaf.params, notePath: np })
+            leaf.setTitle(baseName(np))
+            retargetEditorLeaves(notePath, np) // 其他标签开着同一篇:一并换参(它们的实例已被退休)
+          }}
+        />
+      ) : loadingNote ? (
         <Skeleton variant="document" />
       ) : !activePage ? (
         notePath && loadError ? (
@@ -2121,10 +2167,29 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         </>
       )}
     </EditorScope>
-    {/* 移动端底部编辑工具栏:EditorScope(.amx-pane)自身是滚动容器,栏必须做它的**兄弟**
-        (mb-view 是 flex 列)才能常驻底部不随滚动;触屏媒体块里有配套的 flex 尺寸覆盖。 */}
-    {isCoarsePointer() && activePage && mode !== 'source' && !loadingNote && (
-      <AmxMobileBar onUpload={() => uploadInputRef.current?.click()} undo={() => myPs().undo()} redo={() => myPs().redo()} />
+    {/* 移动端底部编辑胶囊 + 块面板 + 动作 sheet:EditorScope(.amx-pane)自身是滚动容器,
+        这些必须做它的**兄弟**(mb-view 是 flex 列)才不会跟着正文滚。
+        ⚠️ 门里**没有** `mode !== 'source'`:顶栏在移动端整行隐掉后,「切回可视编辑」只剩这条胶囊
+        的「⋯」一个出口,源码模式下再把胶囊也撤了 = 用户永远回不去(只能靠命令面板)。 */}
+    {isCoarsePointer() && barPath && !loadingNote && (
+      <AmxMobileBar
+        sourceMode={mode === 'source'}
+        onUpload={() => uploadInputRef.current?.click()}
+        undo={() => { if (activePage) myPs().undo() }}
+        redo={() => { if (activePage) myPs().redo() }}
+        onNeedFocus={() => { if (activePage) focusBody(myStore) }}
+        actions={[
+          { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? '切换到可视编辑' : '切换到源码 Markdown', run: () => useUiOverlay.getState().toggleEditorMode() },
+          ...(activePage ? [{ id: 'upload', icon: <Upload size={16} />, label: '上传文件到本页', run: () => uploadInputRef.current?.click() }] : []),
+          { id: 'pin', icon: <Pin size={16} />, label: pinned ? '取消置顶' : '置顶', on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
+          { id: 'star', icon: <Star size={16} />, label: starred ? '取消收藏' : '收藏', on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
+          ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? '关闭云同步(云端副本保留)' : '开启云同步', on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),
+          ...(window.amadeusCollab ? [{ id: 'share', icon: <Share2 size={16} />, label: '共享 / 发布', run: () => setShareCard({ x: window.innerWidth / 2, y: window.innerHeight / 2 }) }] : []),
+          { id: 'pdf', icon: <FileDown size={16} />, label: '导出为 PDF', run: () => void exportPdf() },
+          { id: 'reveal', icon: <FolderOpen size={16} />, label: '在文件管理器中显示', run: () => void amadeus.revealInFileManager(barPath!) },
+          { id: 'delete', icon: <Trash2 size={16} />, label: '删除笔记', danger: true, run: () => void deleteNoteFlow(barPath!, myPs) },
+        ]}
+      />
     )}
     </>
   )

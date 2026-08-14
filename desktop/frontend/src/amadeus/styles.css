@@ -1432,7 +1432,32 @@ body.amx-marquee-active * {
   background: color-mix(in srgb, var(--primary) 18%, transparent);
   border-radius: 2px;
   padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
+/* 高亮暗色对齐 AFFiNE **v1** 编辑器真值(--affine-text-highlight-* 的 [data-theme=dark] 段;
+   2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
+   in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
+   色值与 InlineToolbar/marks.ts 同源;品红/粉为本产品扩展,取同族明度自配。 */
+[data-mode='dark'] .am-app mark[data-hl='red'], .am-app[data-mode='dark'] mark[data-hl='red'] { background: #6c2727 !important; }
+[data-mode='dark'] .am-app mark[data-hl='orange'], .am-app[data-mode='dark'] mark[data-hl='orange'] { background: #703a15 !important; }
+[data-mode='dark'] .am-app mark[data-hl='yellow'], .am-app[data-mode='dark'] mark[data-hl='yellow'] { background: #6a540f !important; }
+[data-mode='dark'] .am-app mark[data-hl='green'], .am-app[data-mode='dark'] mark[data-hl='green'] { background: #1a5b32 !important; }
+[data-mode='dark'] .am-app mark[data-hl='teal'], .am-app[data-mode='dark'] mark[data-hl='teal'] { background: #0e5561 !important; }
+[data-mode='dark'] .am-app mark[data-hl='blue'], .am-app[data-mode='dark'] mark[data-hl='blue'] { background: #384b7a !important; }
+[data-mode='dark'] .am-app mark[data-hl='purple'], .am-app[data-mode='dark'] mark[data-hl='purple'] { background: #502e6f !important; }
+[data-mode='dark'] .am-app mark[data-hl='magenta'], .am-app[data-mode='dark'] mark[data-hl='magenta'] { background: #7f5d5d !important; }
+[data-mode='dark'] .am-app mark[data-hl='grey'], .am-app[data-mode='dark'] mark[data-hl='grey'] { background: #40434a !important; }
+[data-mode='dark'] .am-app mark[data-hl] { color: inherit; }
+[data-mode='dark'] .am-app span[data-hlc='red'], .am-app[data-mode='dark'] span[data-hlc='red'] { color: #f98d8d !important; }
+[data-mode='dark'] .am-app span[data-hlc='orange'], .am-app[data-mode='dark'] span[data-hlc='orange'] { color: #fca863 !important; }
+[data-mode='dark'] .am-app span[data-hlc='yellow'], .am-app[data-mode='dark'] span[data-hlc='yellow'] { color: #fbd644 !important; }
+[data-mode='dark'] .am-app span[data-hlc='green'], .am-app[data-mode='dark'] span[data-hlc='green'] { color: #6ee599 !important; }
+[data-mode='dark'] .am-app span[data-hlc='teal'], .am-app[data-mode='dark'] span[data-hlc='teal'] { color: #57ddcc !important; }
+[data-mode='dark'] .am-app span[data-hlc='blue'], .am-app[data-mode='dark'] span[data-hlc='blue'] { color: #80b7fb !important; }
+[data-mode='dark'] .am-app span[data-hlc='purple'], .am-app[data-mode='dark'] span[data-hlc='purple'] { color: #cd9dfd !important; }
+[data-mode='dark'] .am-app span[data-hlc='magenta'], .am-app[data-mode='dark'] span[data-hlc='magenta'] { color: #f98dbb !important; }
+[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'] { color: #565656 !important; }
 .am-app .slash-scroll {
   display: flex;
   flex-direction: column;
@@ -1857,46 +1882,23 @@ body.amx-marquee-active * {
   }
 }
 
-/* Custom scrollbars (Electron / WebKit) */
-.am-app ::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
-}
-.am-app ::-webkit-scrollbar-track {
-  background: transparent;
-}
-/* 静止透明 / 滚动或悬停显形 —— 同 base.css 的 `[data-scrolling]` 机制(scrollFade.ts 打标记)。
-   ⚠️ 标记打在滚动元素自身,所以 `.am-app` 自己就是滚动容器时要 `.am-app[data-scrolling]`,
-   内层容器滚动时要 `.am-app [data-scrolling]` —— 两个选择器都得写,少一个就有一半滚动区不显形。 */
-.am-app ::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 10px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-  transition: background-color 0.35s ease;
-}
-.am-app[data-scrolling]::-webkit-scrollbar-thumb,
-.am-app [data-scrolling]::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  background-clip: content-box;
-  transition-duration: 0.12s;
-}
-.am-app ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-  background-clip: content-box;
-  transition-duration: 0.12s;
-}
+/* 滚动条:交还系统 overlay,这里**刻意不写** `::-webkit-scrollbar`(写了就变 custom scrollbar,
+   恒占 11px 布局宽 —— 笔记正文右边那条空槽就是它)。理由与仪器见 styles/base.css 同名注释。 */
 
 /* Keyboard focus rings (mouse clicks stay clean;注意文本输入框按规范点击聚焦也算 :focus-visible,须逐个豁免) */
 .am-app :focus-visible {
-  outline: 2px solid var(--primary);
+  /* 线宽走 --focus-ring(base.css :root,当前 1px):这条是全局兜底圈,截图里图库搜索框那圈就是它。 */
+  outline: var(--focus-ring, 1px) solid var(--primary);
   outline-offset: 1px;
   border-radius: var(--radius-xs);
 }
 .am-app .cmd-input:focus-visible,
 .am-app .page-rename:focus-visible,
 .am-app .page-title-edit:focus-visible,
-.am-app .amx-title-input:focus-visible {
+.am-app .amx-title-input:focus-visible,
+/* 多维表单元格:这圈 2px 实心 --primary 在暗色主题(--accent 近白)下就是一圈刺眼白框。
+   它自己有替代聚焦态(主题色淡描边+淡填充+柔和阴影,见 amadeus-host.css)。 */
+.am-app .amx-db-input:focus-visible {
   outline: none;
 }
 
@@ -2193,7 +2195,8 @@ body.amx-marquee-active * {
   transform: scale(1.12);
 }
 .am-app .swatch[data-active] {
-  box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 3px var(--text-sec);
+  /* 内圈是「留白」不是线,只有外面那 1px 是描边 —— 减半只减线宽:总半径 3px→2px,留白仍 1px。 */
+  box-shadow: 0 0 0 1px var(--surface-2), 0 0 0 calc(1px + var(--focus-ring, 1px)) var(--text-sec);
 }
 
 /* ── Settings dialog ─────────────────────────────────────── */
@@ -2606,3 +2609,267 @@ body.amx-marquee-active * {
 .amx-btnblock-fields .dialog-input.icon { flex: 0 0 76px; }
 /* 内嵌构建器的弹层:比默认 dialog 宽、可滚(动作链能排到十步) */
 .amx-btnblock-dialog { width: min(560px, 92vw); max-height: 82vh; overflow: auto; }
+
+/* ── v4 统一编辑器块交互层(unified/blockLayer.ts,2026-08-13)────────────────────
+   浮动 ⠿/＋ 把手(floating-ui absolute 定位,基准=.milkdown 容器)+ 落点指示线 + 块选中。
+   把手按钮骑上面 .drag-handle/.block-add 的基类拿同款外观;基类的 opacity:0 是
+   .block-host:hover 的显隐逻辑,这里由 [data-show] 整体控制,故局部覆回 1。 */
+.am-app .unified-body { position: relative; }
+.am-app .unified-body .milkdown { position: relative; }
+.am-app .unified-gutter {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  transition: opacity var(--dur-fast) var(--ease-apple);
+}
+.am-app .unified-gutter[data-show='false'] {
+  opacity: 0;
+  pointer-events: none;
+}
+.am-app .unified-gutter .drag-handle,
+.am-app .unified-gutter .block-add {
+  opacity: 1;
+}
+.am-app .unified-gutter .drag-handle:hover,
+.am-app .unified-gutter .block-add:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.am-app .unified-drop-line {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--primary);
+  z-index: 50;
+  pointer-events: none;
+  animation: amx-dropline-in 100ms cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: left center;
+}
+/* 块选中 = 选区色板同款淡底(v3 [data-selected] 的口径:只染内容不加描边)。 */
+.am-app .unified-body .ProseMirror-selectednode {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  outline: none;
+}
+/* 多块选中(AFFiNE 对齐):整块淡底,原生那道参差的文字高亮让位。选区语义仍是 TextSelection,
+   装饰由 blockLayer 的 blockSelDeco 给;data-blocksel 只在跨块时挂上,块内选字不受影响。 */
+.am-app .unified-body .ProseMirror .amx-block-selected {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.am-app .unified-body .ProseMirror[data-blocksel='true']::selection,
+.am-app .unified-body .ProseMirror[data-blocksel='true'] *::selection {
+  background: transparent;
+}
+/* 拖拽中:源块淡显(AFFiNE 值)。 */
+.am-app .unified-body .ProseMirror[data-dragging='true'] .ProseMirror-selectednode {
+  opacity: 0.7;
+}
+/* 把手菜单的小节标签/分隔线(菜单壳与按钮吃 .ctx-menu 现成样式)。 */
+.am-app /* 分栏(v4 单实例列节点,columns.ts):行=flex,列宽走 flex-grow(cell attrs.width)。
+   列缝背景属于行元素本身 → 行上给 col-resize 光标 = 只在缝里生效(cell 覆盖自己的区域)。 */
+.unified-body .amx-ucolrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  cursor: col-resize;
+}
+.unified-body .amx-ucolcell {
+  flex: 1 1 0;
+  min-width: 0;
+  cursor: auto;
+}
+/* 块级嵌入(embedLayer.tsx 装饰 widget):widget 顶满段落宽;源码由 wikilink-src-hidden 藏。 */
+.unified-body .unified-embed {
+  display: block;
+  max-width: 100%;
+}
+/* 段落独占一条 ![[图片]] → 升级成块级观感(渲染仍是 wikilink 行内 widget,只放大呈现)。 */
+.unified-body p > .wiki-inline-img-wrap:only-child > .wiki-inline-img {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  border-radius: 6px;
+}
+
+/* 标题小节折叠(unified,会话内纯装饰,headingFold.ts):隐藏块 + 折叠标题的常驻展开钮。 */
+.unified-body .amx-fold-hidden { display: none; }
+.am-app .amx-fold-caret {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-right: 4px; padding: 0;
+  border: none; border-radius: 4px; background: transparent;
+  color: var(--text-muted); cursor: pointer; font-size: 11px; vertical-align: baseline;
+}
+.am-app .amx-fold-caret:hover { background: var(--surface-2); color: var(--text); }
+.unified-body .amx-heading-folded { opacity: 0.85; }
+
+/* 分栏配对竖直指示线(拖至块左右缘;与 .unified-drop-line 同族,fixed + zoomOf 反补偿)。 */
+.am-app .unified-drop-vline {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--primary);
+  pointer-events: none;
+  z-index: 40;
+}
+
+.ubm-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 4px 8px 2px;
+}
+.am-app .ubm-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 4px;
+}
+
+/* 列表项折叠(unified/listFold.ts,会话态):折起时子列表整只藏起,项上留一个常驻展开箭头。
+   复用 .amx-fold-hidden / .amx-fold-caret —— 与标题小节折叠同一套视觉,用户不必学两遍。 */
+.am-app .unified-body .ProseMirror li.amx-listitem-folded > p::after {
+  content: '…';
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* 把手 hover 拉长(AFFiNE:12px 短条 → 撑成整块高,上下各留 8px)。整块高度由 blockLayer 在
+   定位时写进 --amx-block-h;非 hover 保持短条,免得每一行都挂一条长杠。 */
+.am-app .unified-gutter .drag-handle {
+  transition: height 0.25s var(--ease-apple, cubic-bezier(0.4, 0, 0.2, 1));
+}
+.am-app .unified-gutter:hover .drag-handle {
+  height: max(24px, calc(var(--amx-block-h, 24px) - 16px));
+}
+/* 按下把手(还没开拖)= 块上盖一层外扩 4px 的圆角高亮;多块选中时是整个选区的并集矩形。 */
+.am-app .unified-press-rect {
+  position: absolute;
+  display: none;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  animation: amx-press-in 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes amx-press-in {
+  from { opacity: 0; transform-origin: center; }
+  to { opacity: 1; }
+}
+
+/* 代码块两个新视图态(会话态,不进 md):行号 与 折叠八行渐隐。
+   行号用 CSS 计数器画在左槽 —— 折行时软换行没有自己的号,故与折行互斥(按钮直接置灰)。 */
+.am-app .ProseMirror .amx-code.amx-code-lineno {
+  padding-left: 3.2em;
+  position: relative;
+}
+.am-app .ProseMirror .amx-code.amx-code-lineno .amx-code-nums {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2.6em;
+  padding: inherit;
+  text-align: right;
+  white-space: pre;
+  user-select: none;
+  pointer-events: none;
+  color: var(--text-muted);
+  opacity: 0.7;
+  border-right: 1px solid var(--border);
+}
+.am-app .ProseMirror .amx-code.amx-code-collapsed {
+  /* 8 行 + 上下内边距的近似值(pre 的行高由主题定,这里取常见 1.5em) */
+  max-height: calc(8 * 1.5em + 1.6em);
+  overflow: hidden;
+  position: relative;
+}
+.am-app .ProseMirror .amx-code.amx-code-collapsed::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 80px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--code-bg, var(--bg-secondary, #f6f8fa)));
+}
+
+/* 双击图片开大图(AFFiNE peek view 对位):全屏浮层,点任意处/Esc 关。 */
+.am-app .amx-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in srgb, #000 62%, transparent);
+  cursor: zoom-out;
+  animation: amx-press-in 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.am-app .amx-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgb(0 0 0 / 45%);
+}
+
+/* 链接悬停卡片(500ms 出 / 250ms 收)与双框编辑面板。 */
+.am-app .amx-linkcard {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  font-size: 12px;
+}
+.am-app .amx-linkcard button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.am-app .amx-linkcard button:hover { background: var(--bg-hover, rgb(0 0 0 / 6%)); }
+.am-app .amx-linkcard button.danger { color: var(--danger, #d33); }
+.am-app .amx-linkcard-host { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--primary); }
+.am-app .amx-linkcard-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
+.am-app .amx-linkedit-backdrop { position: fixed; inset: 0; z-index: 119; }
+.am-app .amx-linkedit {
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 320px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 26%);
+}
+.am-app .amx-linkedit label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.am-app .amx-linkedit input {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.am-app .amx-linkedit-row { display: flex; justify-content: flex-end; gap: 8px; }
+.am-app .amx-linkedit-row button { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
+.am-app .amx-linkedit-row button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.am-app .amx-linkedit-row button:disabled { opacity: 0.5; cursor: not-allowed; }

@@ -24,8 +24,9 @@ import { foldedSet, headingLevel, sectionBoundaryLevel, useHeadingFold } from '.
 import { Row } from './Row'
 import { BacklinksPanel } from './BacklinksPanel'
 
-/** 页内查找浮条(Cmd/Ctrl+F 在编辑器内呼出):输入 / x/y 计数 / 上下条 / 关闭。 */
-function FindBar() {
+/** 页内查找浮条(Cmd/Ctrl+F 在编辑器内呼出):输入 / x/y 计数 / 上下条 / 关闭。
+ *  v4 统一页(UnifiedPage)不经 PageView,自己渲染这一份 —— 别再造第二个查找条。 */
+export function FindBar() {
   const query = useFindStore((s) => s.query)
   const active = useFindStore((s) => s.active)
   const counts = useFindStore((s) => s.counts)
@@ -154,6 +155,9 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
       if (k !== 'z' && k !== 'y') return
       const t = e.target as HTMLElement | null
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      // 别人已处理的键不再兜底:画布/导图插件视图自己 preventDefault 后撤销**自己 scope** 的历史,
+      // 这里若继续,一次 Cmd-Z 会把后台普通笔记也回退一步(评审 P1,2026-08-14)。
+      if (e.defaultPrevented) return
       // 这是 window 级监听:分屏时**两个** PageView 都挂着一份,不认作用域就会一次撤销两篇。
       if (activePageScope() !== scope) return
       e.preventDefault()

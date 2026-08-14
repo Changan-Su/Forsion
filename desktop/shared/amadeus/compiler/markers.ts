@@ -7,9 +7,10 @@
 import type { BlockId } from './types'
 
 /** One line: `<!-- a 3 -->` (allow surrounding whitespace; id is a short token).
- *  Charset includes `-`: agents write ids like `ai-root`; before 2026-08-05 those fell
- *  through as content and a 44-marker note silently collapsed into ONE block. Accepting
- *  them here lets parseV3's renumber pass heal such files to clean numeric ids. */
+ *  Charset includes `-`: agents/plugins write ids like `ai-root`; before 2026-08-05 those
+ *  fell through as content and a 44-marker note silently collapsed into ONE block. Valid
+ *  unique ids are kept verbatim (never renumbered): frontmatter id-trees outside the layout
+ *  (mindmap:/dashboard keys) reference them, and renumbering would sever those. */
 export const BLOCK_MARKER_RE = /^<!--\s*a\s+([A-Za-z0-9_-]+)\s*-->\s*$/
 
 export function blockMarker(id: BlockId): string {

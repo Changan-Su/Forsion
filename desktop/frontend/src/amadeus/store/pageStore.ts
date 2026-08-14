@@ -22,6 +22,7 @@ import { resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
+import { flushUnifiedScopes, retireUnifiedPath } from '../unified/lifecycle'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 
@@ -212,6 +213,10 @@ interface PageState {
   pendingPage: string | null
   manifest: PageManifest | null
   blocks: Record<BlockId, BlockState>
+  /** 整页装载身份:每次整页 hydrate(loadPage/改名/新建/外部回灌)换一个新对象。跨 await 的
+   *  破坏性操作(deleteBlock 的反链确认)必须比对它 —— 只比 activePage 路径,A→B→A 往返后
+   *  路径相同但块 id 已易主,会删掉新页里的同名块(Codex P0,2026-08-14)。 */
+  loadNonce: object
   status: Status
   error: string | null
   /** 启动恢复 Vault 在途(云端首开 GET /vaults+/tree):侧栏树据此显示骨架屏,别把加载态当「未开 Vault」空态。 */
@@ -236,6 +241,8 @@ interface PageState {
   createPage(): Promise<void>
   /** Create a new untitled page inside `folder` (vault-relative; '' = vault root) and open it. */
   createPageInFolder(folder: string): Promise<void>
+  /** 统一实例编辑器接管 path:flush 后清空本 scope 快照(防陈旧快照经 reconcile 回写)。 */
+  releasePage(path: string): Promise<void>
   /** 打开某路径的笔记;不存在则先创建(日记等「打开或新建」语义)。 */
   openOrCreate(path: string): Promise<void>
   renamePage(newName: string): Promise<boolean>
@@ -331,12 +338,13 @@ interface PageState {
 function hydrate(page: LoadedPage): {
   manifest: PageManifest
   blocks: Record<BlockId, BlockState>
+  loadNonce: object
 } {
   const blocks: Record<BlockId, BlockState> = {}
   for (const [id, b] of Object.entries(page.blocks)) {
     blocks[id] = { id, type: b.type, content: b.content }
   }
-  return { manifest: page.manifest, blocks }
+  return { manifest: page.manifest, blocks, loadNonce: {} }
 }
 
 /**
@@ -405,6 +413,7 @@ function makePageStore() {
     pendingPage: null,
     manifest: null,
     blocks: {},
+    loadNonce: {},
     status: 'idle',
     error: null,
     vaultLoading: false,
@@ -617,10 +626,26 @@ function makePageStore() {
         base = `untitled-${n}.md`
       }
       const path = join(base)
-      const page = await amadeus.newPage(path)
+      // v4(2026-08-13):新建笔记以**素文件**出生(空纯 md,零 frontmatter 零标记)——
+      // amadeusViews 的绞杀者路由把它送进统一实例编辑器,不再用 newPage 造 v3(amadeus_page+标记)。
+      // 素文件对旧端=外来 md(照常可编辑,混装矩阵见 spec §5.2),不受「手机闸」限制。
+      await amadeus.writeTextFile(path, '')
       track('note.create'); act('note.create', { f: path })
       await get().refreshPages()
-      set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready', focusTitleFor: path })
+      // loadPage 对已存在的素文件走 importForeign(纯读不回写):店内快照一致 + effect③ 认领;
+      // 视图层路由判为 unified 后会调 releasePage 把这份快照交出去。
+      await get().loadPage(path)
+      set({ focusTitleFor: path })
+    },
+
+    async releasePage(path) {
+      // 统一实例编辑器(UnifiedPage)接管的文件:本 scope 的 v3 快照必须交出去。留着的话,
+      // 它订阅的 reconcileExternal 会拿**陈旧内容**跟磁盘做合并回写 —— unified 的保存走
+      // 自写账本不进 store,快照只会越来越旧,这条链等于延时毁档。flush 在先防丢待写。
+      if (get().activePage !== path) return
+      await get().flushSave()
+      if (get().activePage !== path) return // flush 间隙已切走
+      set({ activePage: null, pendingPage: null, manifest: null, blocks: {} })
     },
 
     async renamePage(newName) {
@@ -867,6 +892,10 @@ function makePageStore() {
         clearTimeout(saveTimer) // don't let a pending save resurrect the deleted page
         saveTimer = null
       }
+      // unified(v4)实例:先冲洗在途写,**删除成功后**才退休 —— 先退休再删,一旦删除 IPC 失败,
+      // 文件还在而编辑器已永久只读,后续输入全部静默丢失(Codex 终审 P0)。删除 IPC 窗口里新排的
+      // 防抖写 ≥800ms,晚于紧随其后的退休,复活窗口可忽略。
+      await flushUnifiedScopes()
       // 桌面端优先移入回收站(.trash,可恢复);缺 trash API 的端保持硬删。
       const trash = amadeus.trashEntry?.bind(amadeus)
       try {
@@ -876,6 +905,8 @@ function makePageStore() {
         set({ error: String(e) })
         return
       }
+      retireUnifiedPath(pagePath)
+      if (hasFd && fd) retireUnifiedPath(fd, 'prefix')
       if (hasFd) {
         try {
           if (trash) await trash(fd)
@@ -919,11 +950,14 @@ function makePageStore() {
       await flushAllScopes()
       try {
         const newPath = await amadeus.movePage(pagePath, dst)
+        // unified 实例握着旧路径,后续编辑会把旧文件写回来(remap 只认 v3 scope;Codex P0)。
+        retireUnifiedPath(pagePath)
         if (wasActive) set({ activePage: newPath, pendingPage: null })
         remapScopePaths(pagePath, newPath, 'file')
         if (hasFd) {
           try {
             const newFd = await amadeus.moveFolder(fd, dst)
+            retireUnifiedPath(fd, 'prefix')
             if (activeInFd) set({ activePage: newFd + active.slice(fd.length) })
             remapScopePaths(fd, newFd, 'prefix')
           } catch (e) {
@@ -954,6 +988,7 @@ function makePageStore() {
       await flushAllScopes()
       try {
         const newFolder = await amadeus.renameFolder(folderPath, newName)
+        retireUnifiedPath(folderPath, 'prefix') // unified 实例不吃 remap,退休防旧路径复活(Codex P0)
         if (active && (active === folderPath || active.startsWith(folderPath + '/'))) {
           set({ activePage: newFolder + active.slice(folderPath.length) })
         }
@@ -972,6 +1007,8 @@ function makePageStore() {
         clearTimeout(saveTimer)
         saveTimer = null
       }
+      // 同 deletePage:先冲洗,删除成功后才退休(删失败不许把树下 unified 实例变永久只读,Codex 终审 P0)。
+      await flushUnifiedScopes()
       try {
         if (amadeus.trashEntry) {
           await amadeus.trashEntry(folderPath)
@@ -983,6 +1020,7 @@ function makePageStore() {
         set({ error: String(e) })
         return
       }
+      retireUnifiedPath(folderPath, 'prefix') // 树下 unified 实例的防抖写会复活刚删的文件(Codex P0)
       await get().refreshStructure()
       if (activeInside) {
         const next = get().pages[0] ?? null
@@ -1067,6 +1105,7 @@ function makePageStore() {
     async deleteBlock(id) {
       const m = get().manifest
       const page = get().activePage
+      const nonce = get().loadNonce
       if (!m) return
       // Embedded elsewhere? Warn before its content is removed. Block ids are note-local,
       // so the backlink query is scoped by the active note.
@@ -1085,9 +1124,10 @@ function makePageStore() {
       }
       // 二次读取:上面的 backlink 查询是 await,期间可能有别的结构操作改了 manifest / fmExtra;仍按最初
       // 快照 m 提交会把那次改动(含 mindmap 关系 frontmatter)一并回滚(Codex)。改用 await 后的最新 manifest。
-      // 且必须**核对活动页**:块 id 是页内递增的(两页都有 `b1`),await 期间用户切了页就会删掉另一个
-      // 文件里的同名块 —— 有确认弹窗时这个窗口能有好几秒(Codex)。
-      if (get().activePage !== page) return
+      // 且必须**核对活动页 + 装载身份**:块 id 是页内递增的(两页都有 `b1`),await 期间用户切了页就会
+      // 删掉另一个文件里的同名块;只比路径不够 —— A→B→A 往返后路径相同但页已重装、id 已易主,
+      // loadNonce 每次整页 hydrate 都换新对象,比它才关得死(Codex P0,2026-08-14)。
+      if (get().activePage !== page || get().loadNonce !== nonce) return
       const cur = get().manifest
       if (!cur) return
       const root = clone(cur.root)
@@ -1401,7 +1441,11 @@ const vaultSlice = (s: PageState): VaultSlice =>
  * 所以这条链是分屏引入的:switchVaultSide 里的单份 flush + 作废,分屏后只护住了当前面板。
  */
 export async function flushAllScopes(): Promise<void> {
-  await Promise.all([...stores.values()].map((s) => s.getState().flushSave().catch(() => {})))
+  await Promise.all([
+    ...[...stores.values()].map((s) => s.getState().flushSave().catch(() => {})),
+    // unified(v4)实例的写盘管线不在 scope store 里,经登记处一起落盘(Codex P0:换库竞态)。
+    flushUnifiedScopes(),
+  ])
 }
 
 /**
@@ -1440,15 +1484,24 @@ function mirrorVault(src: PageStoreApi): void {
   mirroring = false
 }
 
+// 摘表在途标记(scope → 本次 dispose 的身份):dispose 的 stores.delete 挂在 flushSave().finally
+// (至少一个微任务)之后,而 React 对同一 effect 的 cleanup→setup 同步连跑 —— 同名 scope 立即重建
+// 会拿回同一个 store,随后旧 finalizer 的 `stores.get(scope)===s` 恰因同实例而通过,把**新主人正在用
+// 的 store** 摘成孤儿:逃逸 flushAllScopes/resetAllScopeDocs/外部回灌广播,切库时旧内容可写进新库
+// (评审 P0,2026-08-14)。修法 = 重领养即取消:pageStoreFor 命中已有实例就清掉在途摘表标记。
+const pendingDispose = new Map<string, object>()
+
 export function pageStoreFor(scope: string): PageStoreApi {
   let s = stores.get(scope)
-  if (!s) {
-    s = makePageStore()
-    const seed = stores.values().next().value // 任取一个已有的:仓库级字段在它们之间恒等
-    if (seed) s.setState(vaultSlice(seed.getState()))
-    stores.set(scope, s)
-    s.subscribe((n, p) => { if (VAULT_KEYS.some((k) => n[k] !== p[k])) mirrorVault(s!) })
+  if (s) {
+    pendingDispose.delete(scope) // 重领养:取消在途摘表,旧 finalizer 作废
+    return s
   }
+  s = makePageStore()
+  const seed = stores.values().next().value // 任取一个已有的:仓库级字段在它们之间恒等
+  if (seed) s.setState(vaultSlice(seed.getState()))
+  stores.set(scope, s)
+  s.subscribe((n, p) => { if (VAULT_KEYS.some((k) => n[k] !== p[k])) mirrorVault(s!) })
   return s
 }
 /** 面板关掉时回收(先落盘,别把没写完的改动带走)。'main' 是默认作用域,永不回收。 */
@@ -1458,7 +1511,14 @@ export function disposePageStoreScope(scope: string): void {
   if (!s) return
   // 先落盘、落完再摘表。摘早了 pageStoreFor() 会在 flush 还在飞的时候凭空重建一个空 store,
   // 那份空的一旦被写回就是把整篇笔记清掉。(真正的兜底仍是退出前的全局 flush,不在这一层。)
-  void s.getState().flushSave().finally(() => { if (stores.get(scope) === s) stores.delete(scope) })
+  // 摘表还须核对在途标记:期间有人 pageStoreFor 重领养过,这次摘表整体作废(见 pendingDispose)。
+  const token = {}
+  pendingDispose.set(scope, token)
+  void s.getState().flushSave().finally(() => {
+    if (pendingDispose.get(scope) !== token) return // 已被重领养,别摘新主人的店
+    pendingDispose.delete(scope)
+    if (stores.get(scope) === s) stores.delete(scope)
+  })
   // 关掉的正好是活动面板 → 活动指针必须改投,否则下一次 getState() 会**凭空重建一个空 store**:
   // 侧栏/命令面板/状态栏立刻看到「没有活动笔记」,而剩下那半屏明明还开着。
   if (activePageScope() === scope) setActivePageScope(stores.keys().next().value ?? MAIN_SCOPE)

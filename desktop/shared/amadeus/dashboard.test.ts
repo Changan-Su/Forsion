@@ -222,12 +222,13 @@ describe('过真编译器往返(零内核改动的证明)', () => {
     expect(parseFmObject(back.manifest.fmExtra ?? '').tags).toEqual(['看板'])
   })
 
-  // Codex 评审 #6:非数字块 id(把旧笔记改名成 .dashboard.md、或源码里有 markerless 首段)会让
-  // parseV3 把全篇重编号成 1..N,而它只 remap amadeus_layout —— 外来的 dashboard 键仍指向旧 id。
-  // 这条链**没有**在 compiler 里补(补它要让编译内核认识这个外来键);防线是「认出来并停手」。
-  it('legacy-id 重编号会让 dashboard 键与块 id 脱钩 —— 必须被 layoutIsStale 认出来', () => {
+  // Codex 评审 #6 原题:非数字块 id 会让 parseV3 全篇重编号成 1..N 而只 remap amadeus_layout,
+  // 外来的 dashboard 键仍指旧 id → 脱钩。2026-08-13 起合法唯一 id 一律保号,这条引信已拆
+  // (下面第一段断言);但外部写手(agent 覆盖写正文换掉 id)仍可能脱钩,防线不变:
+  // 「认出来并停手」,不自动重排 —— 这条链依旧**不在** compiler 里补。
+  it('合法字母 id 不再被重编号(dashboard 键保持绑定);真脱钩仍被 layoutIsStale 认出来', () => {
     const layout = { old_a: { x: 0, y: 0, w: 8, h: 6 }, old_b: { x: 8, y: 0, w: 8, h: 6 } }
-    const src = [
+    const mk = (ids: [string, string]) => [
       '---',
       'amadeus_page: pg_legacy01',
       'amadeus_schema: amadeus.page/3',
@@ -235,22 +236,30 @@ describe('过真编译器往返(零内核改动的证明)', () => {
       setDashInFm('', layout)!,
       '---',
       '',
-      '<!-- a old_a -->',
+      `<!-- a ${ids[0]} -->`,
       '',
       '甲',
       '',
-      '<!-- a old_b -->',
+      `<!-- a ${ids[1]} -->`,
       '',
       '乙',
       '',
     ].join('\n')
-    const page = parsePageSource('Legacy.dashboard.md', src, '2026-07-30T00:00:00.000Z')
-    const ids = Object.keys(page.blocks).sort()
-    expect(ids).toEqual(['1', '2']) // 真的被重编号了
-    const back = readDashLayout(page.manifest.fmExtra ?? '')
-    expect(back.ok).toBe(true)
-    expect(back.ok && Object.keys(back.layout).sort()).toEqual(['old_a', 'old_b']) // 布局仍是旧键
-    expect(layoutIsStale(back.ok ? back.layout : {}, ids)).toBe(true) // → 停手,别自动重排
+
+    // 引信已拆:字母 id 原样保留,dashboard 键仍指向在场的块 → 不 stale,不再脱钩。
+    const kept = parsePageSource('Legacy.dashboard.md', mk(['old_a', 'old_b']), '2026-07-30T00:00:00.000Z')
+    const keptIds = Object.keys(kept.blocks).sort()
+    expect(keptIds).toEqual(['old_a', 'old_b'])
+    const keptBack = readDashLayout(kept.manifest.fmExtra ?? '')
+    expect(keptBack.ok).toBe(true)
+    expect(keptBack.ok && layoutIsStale(keptBack.layout, keptIds)).toBe(false)
+
+    // 残余脱钩类(外部写手换掉全部块 id,fm 布局原样):必须被认出来并停手。
+    const severed = parsePageSource('Legacy.dashboard.md', mk(['n1', 'n2']), '2026-07-30T00:00:00.000Z')
+    const severedIds = Object.keys(severed.blocks).sort()
+    expect(severedIds).toEqual(['n1', 'n2'])
+    const severedBack = readDashLayout(severed.manifest.fmExtra ?? '')
+    expect(severedBack.ok && layoutIsStale(severedBack.layout, severedIds)).toBe(true)
   })
   it('layoutIsStale 只在「一个都对不上」时为真(部分新块不算)', () => {
     const l = { '1': { x: 0, y: 0, w: 4, h: 4 } }

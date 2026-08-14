@@ -648,6 +648,8 @@ const zh: Dict = {
   'settings.notes.folderHint': '相对 Vault 根目录,如 assets。所有附件集中存放于此(需在 Vault 内才能内联预览)。',
   'settings.notes.previewLabel': '导入文件默认开启预览',
   'settings.notes.previewHint': '开启:插入 ![[文件]] 预览块(图片内联,其它显示可点开的文件卡片)。关闭:插入 [文件名](相对路径) 链接。',
+  'settings.notes.upgradeV4Label': '打开旧笔记时升级为 v4 纯 Markdown 格式',
+  'settings.notes.upgradeV4Hint': '默认开启:v3 块标记笔记在编辑时转为纯 Markdown(无标记、标准分段)。升级仅在你真正编辑后落盘;若还有设备停留在 2.7.8 以前,可暂时关闭。',
   'settings.notes.dailyLabel': '日记文件夹',
   'settings.notes.dailyPlaceholder': '留空 = Vault 根目录',
   'settings.notes.dailyHint': '「打开今天的日记」创建 YYYY-MM-DD.md 的位置(Vault 相对路径);若存在 templates/daily.md 会自动套用为模板。',
@@ -918,6 +920,29 @@ const zh: Dict = {
   // 上下文占比 + 会话消耗 + 压缩
   'input.ctxLabel': '上下文',
   'input.sessionTokens': '本会话 {n} tokens',
+  'input.runCost': '本 run 成本 {used}/{limit} 点',
+  'cost.nearCap': '⚠ 本 run 成本已达 {used} 点（上限 {limit}，TANGU_MAX_RUN_COST 可调），越过上限将自动停止',
+  'ctx.compacted.auto': '上下文已自动压缩（节省约 {saved} 字符）',
+  'ctx.compacted.forced': '上下文接近满载，已生成摘要压缩',
+  'ctx.windowSource.override': '窗口值：手动覆盖表',
+  'ctx.windowSource.model': '窗口值：模型自报',
+  'ctx.windowSource.family': '窗口值：按模型族推断（非模型自报）',
+  'ctx.windowSource.default': '窗口值：128k 默认兜底（未知模型，可能偏小）',
+  'ctx.sec.persona': '人格/指令',
+  'ctx.sec.harness': '自进化笔记',
+  'ctx.sec.guidance': '基础指引/契约',
+  'ctx.sec.profile': '用户画像',
+  'ctx.sec.project': '项目指令',
+  'ctx.sec.agentFolder': '专属文件夹/资料',
+  'ctx.sec.memory': '长期记忆',
+  'ctx.sec.skills': '技能目录',
+  'ctx.sec.environment': '环境/工具目录',
+  'ctx.sec.hooks': 'Hooks 注入',
+  'ctx.sec.plan': '计划模式',
+  'ctx.sec.history': '历史消息（{n} 条）',
+  'ctx.files.label': '本局装载的指令文件',
+  'ctx.files.truncated': '⚠ 超 32KB 已截断',
+  'pill.thinkUnsupported': '（本模型不支持，将自动降档）',
   'input.compact': '压缩上下文',
   'input.compacting': '正在压缩上下文…',
   'input.compactDone': '已压缩上下文（折叠 {n} 条消息为摘要，后续从此精简续接）',
@@ -1053,6 +1078,18 @@ const zh: Dict = {
   'settings.agents.libraryTooLarge': '文件超过 5MB',
   'settings.agents.userProfile': '用户画像（USER.md，所有 Agent 可见）',
   'settings.agents.userProfileHint': '记录你的名字、偏好、水平、长期需求;所有 Agent 都会读到。',
+  'settings.agents.tabHarness': '进化史',
+  'settings.agents.harnessHint': '工作笔记由 Agent 通过 manage_harness 自我沉淀（经审批）;此处的编辑历史只记录本机改动，不跨设备同步。',
+  'settings.agents.harnessEmpty': '还没有工作笔记。在该 Agent 的会话里输入 /refine 可让它复盘沉淀。',
+  'settings.agents.harnessEvidence': '证据',
+  'settings.agents.harnessHistory': '编辑历史（本机）',
+  'settings.agents.harnessRollback': '撤销最近一次改动',
+  'settings.agents.harnessRestore': '恢复',
+  'settings.agents.harnessRollbackConfirm': '撤销「{title}」的最近一次改动？（再次撤销可还原）',
+  'settings.agents.harnessActCreate': '新建',
+  'settings.agents.harnessActUpdate': '修改',
+  'settings.agents.harnessActDelete': '删除',
+  'settings.agents.harnessActRollback': '回滚',
   'agent.pickTitle': '选择 Agent',
 
   // 设置 - Special Agents（Historian / Muse）
@@ -1071,6 +1108,8 @@ const zh: Dict = {
   'settings.special.museDesc': '后台常驻思考「能为你做点什么」，产出 TODO（唯一写权限）。',
   'settings.special.h.rounds': '每几轮维护(标题+记忆)',
   'settings.special.h.firstRound': '首轮必触发',
+  'settings.special.h.harnessCandidates': '自进化自动档',
+  'settings.special.h.harnessCandidatesHint': '判官额外提名「工作笔记候选」存入各 Agent 的收件箱;仅在你输入 /refine 时供其审阅,经审批采纳,不会自动写入。',
   'settings.special.h.prompt': '记忆判断提示词（留空=默认）',
   'settings.special.m.restartWindow': '重启窗口（小时）',
   'settings.special.m.maxRestarts': '每窗口最多重启',
@@ -1899,6 +1938,8 @@ const en: Dict = {
   'settings.notes.folderHint': 'Relative to the vault root, e.g. assets. All attachments live here (must be inside the vault for inline preview).',
   'settings.notes.previewLabel': 'Preview imported files by default',
   'settings.notes.previewHint': 'On: insert an ![[file]] preview block (images inline, others as a clickable file card). Off: insert a [name](path) link.',
+  'settings.notes.upgradeV4Label': 'Upgrade legacy notes to v4 plain Markdown on open',
+  'settings.notes.upgradeV4Hint': 'On by default: v3 marker-based notes convert to plain Markdown when you edit them. The upgrade is written only after a real edit; turn this off temporarily if some device still runs a version older than 2.7.8.',
   'settings.notes.dailyLabel': 'Daily notes folder',
   'settings.notes.dailyPlaceholder': 'Empty = vault root',
   'settings.notes.dailyHint': 'Where "Open today\'s daily note" creates YYYY-MM-DD.md (vault-relative); templates/daily.md is applied automatically if present.',
@@ -2168,6 +2209,29 @@ const en: Dict = {
 
   'input.ctxLabel': 'Context',
   'input.sessionTokens': 'Session {n} tokens',
+  'input.runCost': 'Run cost {used}/{limit} pts',
+  'cost.nearCap': '⚠ Run cost reached {used} pts (limit {limit}, tune TANGU_MAX_RUN_COST); the run stops once the cap is exceeded',
+  'ctx.compacted.auto': 'Context auto-compacted (~{saved} chars saved)',
+  'ctx.compacted.forced': 'Context near limit; summarized and compacted',
+  'ctx.windowSource.override': 'Window: manual override table',
+  'ctx.windowSource.model': 'Window: model-reported',
+  'ctx.windowSource.family': 'Window: inferred from model family (not model-reported)',
+  'ctx.windowSource.default': 'Window: 128k default fallback (unknown model, may be low)',
+  'ctx.sec.persona': 'Persona/instructions',
+  'ctx.sec.harness': 'Self-evolution notes',
+  'ctx.sec.guidance': 'Base guidance/contracts',
+  'ctx.sec.profile': 'User profile',
+  'ctx.sec.project': 'Project instructions',
+  'ctx.sec.agentFolder': 'Agent folder/library',
+  'ctx.sec.memory': 'Long-term memory',
+  'ctx.sec.skills': 'Skill catalog',
+  'ctx.sec.environment': 'Environment/tool catalog',
+  'ctx.sec.hooks': 'Hooks context',
+  'ctx.sec.plan': 'Plan mode',
+  'ctx.sec.history': 'History ({n} messages)',
+  'ctx.files.label': 'Instruction files loaded this run',
+  'ctx.files.truncated': '⚠ truncated over 32KB',
+  'pill.thinkUnsupported': '(unsupported by this model, auto-downgrades)',
   'input.compact': 'Compact context',
   'input.compacting': 'Compacting context…',
   'input.compactDone': 'Context compacted ({n} messages folded into a summary; continues compactly)',
@@ -2299,6 +2363,18 @@ const en: Dict = {
   'settings.agents.libraryTooLarge': 'File exceeds 5MB',
   'settings.agents.userProfile': 'User profile (USER.md, visible to all agents)',
   'settings.agents.userProfileHint': 'Your name, preferences, level, long-term needs; every agent reads it.',
+  'settings.agents.tabHarness': 'Evolution',
+  'settings.agents.harnessHint': 'Working notes are self-curated by the agent via manage_harness (with approval); this edit history records local changes only and does not sync across devices.',
+  'settings.agents.harnessEmpty': 'No working notes yet. Type /refine in a session with this agent to let it distill lessons.',
+  'settings.agents.harnessEvidence': 'evidence',
+  'settings.agents.harnessHistory': 'Edit history (this device)',
+  'settings.agents.harnessRollback': 'Undo last change',
+  'settings.agents.harnessRestore': 'Restore',
+  'settings.agents.harnessRollbackConfirm': 'Undo the last change to "{title}"? (Undo again to bring it back)',
+  'settings.agents.harnessActCreate': 'created',
+  'settings.agents.harnessActUpdate': 'edited',
+  'settings.agents.harnessActDelete': 'deleted',
+  'settings.agents.harnessActRollback': 'rolled back',
   'agent.pickTitle': 'Choose agent',
 
   'settings.tab.special': 'Background Agents',
@@ -2316,6 +2392,8 @@ const en: Dict = {
   'settings.special.museDesc': 'Resident background thinker for "what can I do for you", producing TODOs (its only write).',
   'settings.special.h.rounds': 'Maintain every N rounds',
   'settings.special.h.firstRound': 'Always trigger on first round',
+  'settings.special.h.harnessCandidates': 'Self-evolution auto-collect',
+  'settings.special.h.harnessCandidatesHint': 'The judge also nominates working-note candidates into each agent\'s inbox; they surface only when you type /refine, adopted via approval — never written automatically.',
   'settings.special.h.prompt': 'Memory-judgment prompt (empty = default)',
   'settings.special.m.restartWindow': 'Restart window (hours)',
   'settings.special.m.maxRestarts': 'Max restarts / window',
@@ -2559,14 +2637,37 @@ export function cycleLocale(): void { _setLocale?.(_locale === 'zh' ? 'en' : 'zh
 /** 当前语言(模块级快照):供非组件代码(如用户 Space 的 name 懒求值)读取。 */
 export function currentLocale(): Locale { return _locale }
 
+// 语言变更广播:给**非 React 的消费方**(外置插件的 ctx.subscribeLocale)用。React 侧照旧走 context。
+// 纪律(codex 评审 2026-08-14):同语言重复设置不广播;先更新 _locale 再回调;单个回调抛错不影响其余;
+// 退订幂等;只报变化,初值由 getLocale() 读。
+const localeSubs = new Set<(l: Locale) => void>()
+export function subscribeLocale(cb: (l: Locale) => void): () => void {
+  localeSubs.add(cb)
+  return () => { localeSubs.delete(cb) }
+}
+function broadcastLocale(l: Locale): void {
+  if (_locale === l) return
+  _locale = l
+  for (const cb of Array.from(localeSubs)) {
+    try { cb(l) } catch (e) { console.error('[i18n] locale subscriber failed', e) }
+  }
+}
+/** 模块级切换(无 Provider 也成立:台架/非 React 宿主)。Provider 在时由它驱动 React 状态。 */
+export function setLocaleGlobal(l: Locale): void {
+  if (_setLocale) { _setLocale(l); return }
+  try { localStorage.setItem(LS_KEY, l) } catch { /* ignore */ }
+  try { document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }
+  broadcastLocale(l)
+}
+
 export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [locale, setLocaleState] = useState<Locale>(resolveInitialLocale)
 
   const setLocale = useCallback((l: Locale) => {
     setLocaleState(l)
-    _locale = l
     try { localStorage.setItem(LS_KEY, l) } catch { /* ignore */ }
     try { document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }
+    broadcastLocale(l) // 内含 _locale = l(同值不重播)
   }, [])
 
   useEffect(() => { _setLocale = setLocale; _locale = locale; return () => { if (_setLocale === setLocale) _setLocale = null } }, [setLocale, locale])

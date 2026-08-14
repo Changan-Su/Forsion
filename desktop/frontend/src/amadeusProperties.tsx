@@ -13,9 +13,15 @@ interface Entry { key: string; value: unknown }
 
 const isScalarArray = (v: unknown): v is unknown[] => Array.isArray(v) && v.every((x) => x === null || typeof x !== 'object')
 
-export function AmadeusPropertiesPanel() {
+export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
+  /** 缺省 = pageStore.manifest.fmExtra(v3 老路径);unified 传显式 fm 文本 + onCommit 走自己的管线。 */
+  fmExtra?: string
+  onCommit?: (yaml: string) => void
+} = {}) {
   const activePage = usePageStore((s) => s.activePage)
-  const fmExtra = usePageStore((s) => s.manifest?.fmExtra ?? '')
+  const storeFm = usePageStore((s) => s.manifest?.fmExtra ?? '')
+  const external = fmProp !== undefined
+  const fmExtra = external ? fmProp : storeFm
   const [open, setOpen] = useState(false)
   useEffect(() => { setOpen(false) }, [activePage])
 
@@ -30,8 +36,12 @@ export function AmadeusPropertiesPanel() {
     return { ok: false as const, entries: [] as Entry[] }
   }, [fmExtra])
 
-  if (!activePage) return null
+  if (!external && !activePage) return null
 
+  const commitYaml = (yaml: string): void => {
+    if (onCommit) onCommit(yaml)
+    else ps().setFmExtra(yaml)
+  }
   const commit = (entries: Entry[]): void => {
     const obj: Record<string, unknown> = {}
     for (const e of entries) {
@@ -41,7 +51,7 @@ export function AmadeusPropertiesPanel() {
       if (!k || /^(amadeus_page|amadeus_schema|amadeus_layout|amadeus_next_id)$/.test(k)) continue
       obj[k] = e.value
     }
-    ps().setFmExtra(Object.keys(obj).length ? stringifyYaml(obj).trimEnd() : '')
+    commitYaml(Object.keys(obj).length ? stringifyYaml(obj).trimEnd() : '')
   }
 
   const addProp = async (): Promise<void> => {
@@ -91,7 +101,7 @@ export function AmadeusPropertiesPanel() {
           className="amx-props-raw"
           defaultValue={fmExtra}
           spellCheck={false}
-          onBlur={(e) => { if (e.target.value !== fmExtra) ps().setFmExtra(e.target.value) }}
+          onBlur={(e) => { if (e.target.value !== fmExtra) commitYaml(e.target.value) }}
         />
       ))}
     </div>

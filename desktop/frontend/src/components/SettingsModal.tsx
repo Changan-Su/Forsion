@@ -58,6 +58,7 @@ import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
+import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
@@ -1181,6 +1182,20 @@ export const SettingsModal: React.FC<{
                         {t('settings.notes.previewLabel')}
                       </label>
                       <div className="hint">{t('settings.notes.previewHint')}</div>
+                    </div>
+                    <div className="field">
+                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={stored.notesUpgradeV4 !== false}
+                          onChange={(e) => {
+                            setUpgradeV4Enabled(e.target.checked) // 路由分类同步读缓存,即时生效
+                            void window.tangu!.setConfig({ notesUpgradeV4: e.target.checked }).then(setStored)
+                          }}
+                        />
+                        {t('settings.notes.upgradeV4Label')}
+                      </label>
+                      <div className="hint">{t('settings.notes.upgradeV4Hint')}</div>
                     </div>
                     <div className="field">
                       <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>

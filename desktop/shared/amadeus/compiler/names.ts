@@ -19,7 +19,8 @@ export function nextBlockId(existing: Iterable<BlockId>, floor = 1): BlockId {
   let max = 0
   for (const id of existing) {
     const n = Number.parseInt(String(id), 10)
-    if (Number.isInteger(n) && String(n) === String(id) && n > max) max = n
+    // isSafeInteger:超出安全整数的 id 参与 max 会让 max+1 == max(浮点),「新」号与现存同号。
+    if (Number.isSafeInteger(n) && String(n) === String(id) && n > max) max = n
   }
   return String(Math.max(max + 1, floor))
 }
@@ -29,7 +30,7 @@ export function nextBlockId(existing: Iterable<BlockId>, floor = 1): BlockId {
  *  1,2 note has no stored floor, deleting 2 must raise it to 3 before the next insert). */
 export function bumpNextId(current: number | undefined, id: BlockId): number | undefined {
   const n = Number.parseInt(String(id), 10)
-  if (!Number.isInteger(n) || String(n) !== String(id)) return current
+  if (!Number.isSafeInteger(n) || String(n) !== String(id)) return current
   return Math.max(current ?? 0, n + 1)
 }
 

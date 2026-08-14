@@ -155,6 +155,6 @@ export function unescapeWikiOutsideFences(md: string): string {
  */
 export function stripForIndex(md: string): string {
   return md
-    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '') // leading YAML frontmatter
+    .replace(/^---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '') // leading YAML frontmatter(口径=split.ts:空 fm 合法+收尾栅栏独占一行)
     .replace(/<!--[\s\S]*?-->/g, '') // HTML comments (amadeus:block / amadeus:layout)
 }

@@ -6,7 +6,8 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { AMADEUS_FM_KEY } from '../compiler/split'
 import { PAGE_NAME_KEY, type CellValue, type ColumnType, type DbColumn } from './schema'
 
-const FM_BLOCK_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
+// 口径与 compiler/split.ts stripFrontmatter 恒一致(空 fm 合法 + 收尾栅栏独占一行,Codex P0)。
+const FM_BLOCK_RE = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/
 
 const isReserved = (key: string): boolean => AMADEUS_FM_KEY.test(`${key}:`)
 
@@ -29,7 +30,7 @@ export function parseFmObject(fmExtra: string): Record<string, unknown> {
  *  保留 amadeus_* 行与正文原样,返回新的 .md 源。无 frontmatter 时按需前置一个块。 */
 export function setFmExtraOnSource(raw: string, patch: Record<string, unknown>): string {
   const m = FM_BLOCK_RE.exec(raw)
-  const inner = m ? m[1] : ''
+  const inner = m?.[1] ?? '' // 空 fm 块时捕获组缺席
   const body = m ? raw.slice(m[0].length) : raw
 
   const amadeusLines: string[] = []
