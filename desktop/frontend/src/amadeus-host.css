@@ -525,7 +525,15 @@
 .amx-db-cell[data-coltype='number'] { text-align: right; }
 .amx-db-cell[data-coltype='number'] .amx-db-input { text-align: right; }
 .amx-db-input { width: 100%; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 22px; padding: 6px; }
-.amx-db-input:focus { box-shadow: inset 0 0 0 1px var(--accent, #6c5ce7), 0 0 0 2px color-mix(in srgb, var(--accent, #6c5ce7) 30%, transparent); border-radius: 2px; }
+/* 单元格聚焦态(Notion 式):主题色淡描边 + 淡填充 + 柔和阴影。
+   刻意不用实心描边/硬轮廓 —— 暗色主题里 --primary/--accent 近白,实心就是一圈刺眼白框(用户实报)。 */
+.amx-db-input:focus {
+  border-radius: var(--radius-xs, 4px);
+  background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 10%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 38%, transparent),
+    0 4px 12px -4px rgba(0, 0, 0, 0.35);
+}
 .amx-db-checkbox { margin: 6px; accent-color: var(--accent, #6c5ce7); }
 /* 事件卡里的完成勾选:裸原生 checkbox 曾不随主题 → 用 accent-color 上色(勾随主题变量,深浅一致可见) */
 .amx-cal-card-check { width: 15px; height: 15px; accent-color: var(--accent, #6c5ce7); cursor: pointer; }
@@ -634,39 +642,75 @@
 .amx-pageadd[data-flow='h'][data-end='after'] { transform: translate(-50%, -50%) rotate(90deg); }
 .amx-pageadd[data-flow='h'][data-end='before'] { transform: translate(-50%, -50%) rotate(-90deg); }
 
-/* 紧凑模式(对标 obsidian-excalidraw 的 stylesPanelMode: 'compact')。
-   ⚠️ 上游 @excalidraw/excalidraw 里**没有**这个模式:compact/tray 是 zsviczian fork 新写的
-   CompactShapeActions / TrayMenu,吃的是 actionManager.renderAction、appState.openPopup 这些
-   没导出的内部件。所以这里照他同一条原则办 —— **控件一个不重写,只换布局**(他的 TrayMenu 也是
-   原样复用 SelectedShapeActions):把左侧那根 200px 竖条压成底部一条横排、隐掉文字标签。
-   与 fork 的差距只剩「分组折叠进弹层」那一层(⚙样式▼/箭头▼/Aa▼),那部分非 fork 不可。
-   全局偏好(localStorage amx.boardCompact),多个白板同开一起变。
-
-   几何来自真 DOM(scripts/_traydump 量过):.Island.App-menu__left 是 position:absolute,
-   包含块 = .FixedSideContainer_side_top(画布内缩 16px)。底部 3.5rem 让开 excalidraw 自己的
-   缩放条(.App-menu_bottom{bottom:1rem});max-height 是内联的,必须 !important 才压得住。 */
-.amx-compact .excalidraw .App-menu__left {
-  top: auto;
+/* ⚠️ fork 把 `.Island.App-toolbar` 改成了 flex row(托盘档要横排),而 HintViewer 是它的第一个子元素
+   —— 常规/紧凑档下就被挤成工具条左边一竖溜字,还把整条工具岛从 60px 撑到 250px 高。
+   还原上游的摆法:提示浮在工具岛下方居中,不参与 flex 布局(.App-toolbar 自带 position:relative)。 */
+.amx-boardhost .excalidraw .App-toolbar > .HintViewer {
+  position: absolute;
+  top: 100%;
   left: 0;
-  right: 0;
-  bottom: 3.5rem;
-  width: auto;
-  max-height: 40vh !important;
-  padding: 0.5rem 0.75rem;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding-right: 0;
 }
-.amx-compact .excalidraw .App-menu__left .panelColumn {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: 0.85rem;
-  row-gap: 0.4rem;
+
+/* ── 自建工具胶囊(BoardToolbar)────────────────────────────────────────────────
+   引擎那条工具栏在预编译 bundle 里改不动(见 BoardToolbar.tsx 顶部),所以:
+   **壳留着、瓤换掉** —— `.App-toolbar` 那张 Island 的定位/圆角/投影/HintViewer 全部白捡,
+   只把它自己的按钮藏了,再 portal 我们的进去。
+   ⚠️ `:not(.HintViewer)` 不能省:提示条也是 .App-toolbar 的孩子,一并藏掉就没有操作提示了。 */
+.amx-boardhost .excalidraw .App-toolbar > *:not(.amx-toolbar-slot):not(.HintViewer) { display: none; }
+.amx-boardhost .excalidraw .amx-toolbar-slot { display: contents; }
+
+.amx-boardhost .excalidraw .amx-toolbar { display: flex; align-items: center; gap: 1px; }
+.amx-boardhost .excalidraw .amx-toolbar-seg { display: flex; align-items: center; gap: 1px; min-width: 8px; }
+/* 分隔竖线 = 段界。画在段的**前面**(第二、三段各一条),所以是两条。 */
+.amx-boardhost .excalidraw .amx-toolbar-sep {
+  width: 1px; align-self: stretch; margin: 4px 5px;
+  /* 用 outline 那档而不是 --default-border-color:后者在岛底色上几乎看不见,而用户要的就是「看得见的分栏线」 */
+  background: var(--color-border-outline, rgba(127, 127, 127, 0.35));
 }
-/* compact 只留色板与图标,文字标题一概不显示 */
-.amx-compact .excalidraw .App-menu__left h3,
-.amx-compact .excalidraw .App-menu__left legend { display: none; }
-.amx-compact .excalidraw .App-menu__left fieldset,
-.amx-compact .excalidraw .App-menu__left .control-label { margin: 0; }
-.amx-compact .excalidraw .App-menu__left .buttonList { flex-wrap: nowrap; column-gap: 0.25rem; }
+.amx-boardhost .excalidraw .amx-tool {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--border-radius-lg, 10px);
+  background: transparent; color: var(--color-on-surface, inherit); cursor: pointer;
+  touch-action: none; /* 指针拖拽排序:不让浏览器把移动当成滚动手势抢走 */
+  -webkit-user-select: none; user-select: none;
+}
+.amx-boardhost .excalidraw .amx-tool:hover { background: var(--button-hover-bg, rgba(127, 127, 127, 0.12)); }
+.amx-boardhost .excalidraw .amx-tool[data-on] { background: var(--color-primary-light); color: var(--color-primary); }
+.amx-boardhost .excalidraw .amx-tool[data-drag] { opacity: 0.55; }
+.amx-boardhost .excalidraw .amx-toolbar[data-dragging] .amx-tool { transition: none; }
+/* 数字键角标。中段才有 —— 拖动改顺序就是改快捷键,所以它必须画出来。 */
+.amx-boardhost .excalidraw .amx-tool-key {
+  position: absolute; right: 3px; bottom: 1px; font-size: 9px; line-height: 1; opacity: 0.45; pointer-events: none;
+}
+
+/* ── 属性面板里的加料(PanelExtras:笔预设 / 形状 / 线)────────────────────────
+   常规档直接吃引擎的 fieldset+legend+buttonList 排版,这里只补两件事:
+   ① 笔那 7 颗在窄栏里要能折行;② 紧凑档的面板是贴左边缘的窄竖条,得自己给一套两列几何。 */
+.amx-boardhost .excalidraw .amx-panelsec { border: 0; margin: 0 0 8px; padding: 0; }
+.amx-boardhost .excalidraw .amx-panelsec > legend { font-size: 0.75rem; margin-bottom: 0.25rem; color: var(--text-primary-color); }
+.amx-boardhost .excalidraw .amx-penrow,
+.amx-boardhost .excalidraw .amx-panelrow { display: flex; flex-wrap: wrap; gap: 2px; }
+.amx-boardhost .excalidraw .amx-penrow > label,
+.amx-boardhost .excalidraw .amx-panelrow > label {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--border-radius-md, 8px); cursor: pointer;
+  color: var(--color-on-surface, inherit);
+}
+.amx-boardhost .excalidraw .amx-penrow > label:hover,
+.amx-boardhost .excalidraw .amx-panelrow > label:hover { background: var(--button-hover-bg, rgba(127, 127, 127, 0.12)); }
+.amx-boardhost .excalidraw .amx-penrow > label[data-on],
+.amx-boardhost .excalidraw .amx-panelrow > label[data-on] { background: var(--color-primary-light); color: var(--color-primary); }
+/* 紧凑档:面板只有一条 ~48px 的窄栏,7 支笔横着放不下 → 两列。legend 在这么窄的地方是噪音,收掉。 */
+.amx-boardhost .excalidraw .compact-shape-actions .amx-panelsec > legend { display: none; }
+.amx-boardhost .excalidraw .compact-shape-actions .amx-penrow,
+.amx-boardhost .excalidraw .compact-shape-actions .amx-panelrow {
+  display: grid; grid-template-columns: repeat(2, 26px); gap: 1px; justify-content: center;
+}
+.amx-boardhost .excalidraw .compact-shape-actions .amx-penrow > label,
+.amx-boardhost .excalidraw .compact-shape-actions .amx-panelrow > label { width: 26px; height: 26px; }
 
 /* 汉堡菜单里的纸张/网格面板。取色一律用 excalidraw 自己的 token,免得和它的菜单两张皮。 */
 .amx-bs { display: flex; flex-direction: column; gap: 6px; padding: 6px 4px 2px; font-size: 12px; color: var(--color-on-surface); }
@@ -761,17 +805,36 @@
   /* 底部编辑工具栏(AmxMobileBar)是 .amx-pane 的兄弟(mb-view flex 列):
      pane 从 height:100% 改弹性占满剩余,否则 100% + 工具栏高度会把栏挤出屏。 */
   .am-app.amx-pane.amx-editor { height: auto; flex: 1 1 auto; min-height: 0; }
+  /* 底栏已改悬浮胶囊(约 48px),正文最后一行不能压在它底下 → 尾部留白管够。
+     同样不叠 env():安全区已由 .mb-shell 的 padding-bottom 让出(见 .amx-mbar 的注释)。 */
+  .amx-editor { padding-bottom: 76px; }
 }
+/* 笔记编辑器/仪表盘在移动端的顶部起始留白已并入 styles/base.css 末尾的「移动端内容顶满」整块
+   (那里按 data-view 逐视图统一管理,免得两代规则分散两处)。此处刻意不再重复。 */
 
-/* 移动端底部编辑工具栏(触屏才渲染,见 amadeusViews.AmxMobileBar;键盘贴合与 zoom 反补偿在组件内)。 */
+/* 移动端底部编辑工具栏(触屏才渲染,见 amadeusViews.AmxMobileBar;键盘贴合与 zoom 反补偿在组件内)。
+   悬浮胶囊(2026-08-13 用户拍板,Obsidian 式):脱离文档流浮在正文之上,居中一条药丸。
+   ⚠️ 居中**不许用 transform: translateX(-50%)** —— 组件用内联 transform 做贴键盘的 translateY,
+   两者会互相覆盖(表现为一按键盘胶囊就跳到屏幕右半边)。用 left/right:0 + margin:auto + width:max-content。 */
 .amx-mbar {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* ⚠️ 这里**不要**再加 env(safe-area-inset-bottom):.mb-shell 已经在底部留了安全区,而胶囊是
+     .mb-view 内的绝对定位元素,.mb-view 的盒子本来就止于壳的内容框下沿(实测:给壳加 40px 底内距,
+     .mb-view 底部上移 40×zoom)。再加一次 = 手势条上方白白多空一截。 */
+  bottom: 10px;
+  margin: 0 auto;
+  width: max-content;
+  max-width: calc(100% - 24px);
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 5px 8px;
-  border-top: 1px solid var(--border);
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   background: var(--bg-card, var(--bg));
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
   z-index: 5;
 }
 .amx-mbar button {
@@ -779,16 +842,53 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
+  width: 40px;
   height: 40px;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  border-radius: 10px;
+  border-radius: 999px;
   cursor: pointer;
 }
 .amx-mbar button:active { background: var(--bg-hover, rgba(127, 127, 127, 0.1)); color: var(--text); }
+.amx-mbar button.on { background: var(--bg-hover, rgba(127, 127, 127, 0.14)); color: var(--text); }
 .amx-mbar-gap { flex: 1 1 auto; }
+/* 跟顶部胶囊一起随滚动收起(判定见 lcl/engine/SingleColumnHost 的 useChromeAutoHide)。
+   ⚠️ 只用 `translate`:贴键盘的位移是组件内联的 transform,同属性会互相覆盖(见本块顶部警告)。 */
+.amx-mbar { transition: translate 0.24s ease, opacity 0.18s ease; }
+.mb-shell[data-chrome='off'] .amx-mbar { translate: 0 calc(100% + 22px); opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .amx-mbar { transition: none; } }
+
+/* 「+」的双列块面板:占掉软键盘让出的那块地(Notion 式)。高度由组件按实测键盘高度内联给出。 */
+.amx-bpick {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card, var(--bg));
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
+  animation: amx-bpick-up 0.2s var(--ease-out, ease-out);
+}
+@keyframes amx-bpick-up { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .amx-bpick { animation: none; } }
+.amx-bpick-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 10px 10px; }
+.amx-bpick-label { padding: 8px 6px 4px; font-size: 12px; color: var(--text-muted); }
+.amx-bpick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+.amx-bpick-item {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 11px 10px; border: none; background: transparent; color: var(--text);
+  border-radius: 10px; font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.amx-bpick-item:active { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); }
+.amx-bpick-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--text-muted); }
+.amx-bpick-icon svg { width: 18px; height: 18px; }
+.amx-bpick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 动作 sheet 骑 .mb-sheet 壳(引擎 singleColumn.css 提供);只补危险项配色。 */
+.mb-sheet-row.danger { color: var(--danger, #d9534f); }
 .amx-title-actions { display: flex; gap: 6px; height: 24px; opacity: 0; transition: opacity 0.15s ease; }
 .amx-title-wrap:hover .amx-title-actions, .amx-title-actions:focus-within { opacity: 1; }
 .amx-title-actions button { border: none; background: transparent; color: var(--text-faint, var(--text-muted)); font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px; cursor: pointer; }

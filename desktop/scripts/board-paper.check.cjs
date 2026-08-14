@@ -9,8 +9,7 @@
  *    网格立刻从「内容之下」变成「盖在内容之上的一层灰」。本条把这个失败形态钉死 —— 有人图省事
  *    加个包裹层时,它会先红。
  *  D clip-path(evenodd)真的改命中测试:纸外点中遮罩(= 越界不可画),纸内穿到画布(照常画)。
- *  E 深色档换 screen:同一根线在暗底上必须变亮而不是更暗,且白笔画不被它盖住。
- *  F 紧凑模式压得过 excalidraw 自己的 `.App-menu__left{width:12.5rem}`。
+ *  (深色 screen 与紧凑面板已迁去 board-live.check.cjs 的 L15 / L6,理由见文末。)
  *
  * 改 amadeus-host.css 的 .amx-* / 升级 @excalidraw/excalidraw 后必跑:node scripts/board-paper.check.cjs
  */
@@ -142,42 +141,10 @@ paint('#ffffff', '#000000'); place()
     wrap.remove()
   })
 
-  // ── E 深色档:screen ──
-  // ⚠️ 深色不是重画一遍,而是 excalidraw 的 `.theme--dark canvas{filter:invert(93%) hue-rotate(180deg)}`
-  // 把浅色画布整个反相。所以这里照样画白底黑笔,让那条 filter 干活 —— 我们的层叠在**反相之后**的结果上混合,
-  // 这正是深色要换 screen(而不是继续 multiply)的原因。
-  await p.evaluate(() => {
-    document.getElementById('ex').classList.add('theme--dark')
-    paint('#ffffff', '#000000')
-  })
-  await shot()
-  const dOn = await px(PAPER.x + STEP, ROW)
-  const dOff = await px(PAPER.x + STEP + 8, ROW)
-  const dInkOnLine = await px(100, 85)
-  check('E 深色下网格线比底色亮(screen 生效)', lum(dOn) > lum(dOff) + 15 && lum(dOff) < 60, `线=${dOn} 底=${dOff}`)
-  check('E 深色下亮笔画不被网格线压住', lum(dInkOnLine) > 200, `笔画上的线=${dInkOnLine}`)
-
-  // ── F 紧凑模式压得过 excalidraw 自己的 `.App-menu__left{width:12.5rem}` ──
-  // (真布局是横排还是竖条,归 scripts/board-live.check.cjs 的 L6 —— 那里有真 DOM 与真包含块。)
-  const f = await p.evaluate(() => {
-    const stage = document.getElementById('stage')
-    const panel = document.createElement('div')
-    panel.className = 'Island App-menu__left'
-    panel.style.maxHeight = '594px' // excalidraw 是内联设的,不带 !important 压不住
-    document.getElementById('ex').appendChild(panel)
-    const base = getComputedStyle(panel)
-    const off = { w: base.width, top: base.top, bottom: base.bottom, maxH: base.maxHeight }
-    stage.classList.add('amx-compact')
-    const c = getComputedStyle(panel)
-    const on = { w: c.width, top: c.top, bottom: c.bottom, maxH: c.maxHeight }
-    stage.classList.remove('amx-compact')
-    panel.remove()
-    return { off, on }
-  })
-  check('F 紧凑模式解开 200px 定宽(横排的前提)', f.off.w === '200px' && f.on.w !== '200px', `默认=${f.off.w} 紧凑=${f.on.w}`)
-  // computed 的 top/bottom 对绝对定位元素回的是**用值**,`auto` 看不出来 → 只能比锚在哪边
-  check('F 紧凑模式改成贴底锚定', f.on.bottom === '56px' && f.off.bottom !== '56px', `默认 bottom=${f.off.bottom} 紧凑 bottom=${f.on.bottom}`)
-  check('F 紧凑模式压得住内联 max-height', f.off.maxH === '594px' && f.on.maxH !== '594px', `默认=${f.off.maxH} 紧凑=${f.on.maxH}`)
+  // E(深色 screen)与 F(紧凑面板)已迁走,2026-08-13 换 zsviczian 引擎那次:
+  // - E:深色档到底怎么画,是**引擎的实现细节**(上游 0.18.1 是 CSS 反相白画布,fork 改成原生画深色)。
+  //   合成页必须替它假设一种,一换引擎就假红/假绿 —— 现在归 board-live 的 L15,直接量真画布的像素。
+  // - F:紧凑/托盘现在是引擎自带的真档位,我们那套压 .App-menu__left 的 CSS 已删 → 归 board-live 的 L6。
 
   await browser.close()
   const bad = results.filter((r) => !r.ok)

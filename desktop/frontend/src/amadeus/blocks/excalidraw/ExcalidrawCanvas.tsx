@@ -1,13 +1,20 @@
-/** 真画布。这里是**唯一**静态 import @excalidraw/excalidraw 的地方(整包 ~1MB + 它的 CSS),
- *  由 ExcalidrawEmbed 经 React.lazy 隔成独立 chunk —— 不含画板的笔记一个字节都不加载。
- *  语言包是包内动态 import('./locales/*.js'),vite 自会分块,无需自托管(字体才需要,见 ExcalidrawEmbed)。
+/** 真画布。这里是**唯一**碰白板引擎的地方,由 ExcalidrawEmbed 经 React.lazy 隔成独立 chunk ——
+ *  不含画板的笔记一个字节都不加载。引擎本体走 forkRuntime(<script> 装自托管副本,连 CSS 一起,
+ *  原因见那个文件);字体同样自托管(见 ExcalidrawEmbed)。
  *  远端合并(reconcile+restoreElements+updateScene)也必须留在本 chunk 内 —— drawingStore 在启动
- *  bundle 里,绝不能 import 这个包;它只经 registerApplier 拿到一个闭包。 */
-import { Excalidraw, MainMenu, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction } from '@excalidraw/excalidraw'
-import '@excalidraw/excalidraw/index.css'
+ *  bundle 里,绝不能碰引擎;它只经 registerApplier 拿到一个闭包。 */
+import { Excalidraw, MainMenu, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction } from './forkRuntime'
+import { getBoardUiMode, setBoardUiMode, subscribeBoardUiMode, type BoardUiMode } from './boardUiMode'
+import { newPenState, usePenRestore } from './PenRow'
+import BoardToolbar, { LINE_MEMBERS, SHAPE_MEMBERS, activateTool, newGroupState, type LineMember, type ShapeMember, type ToolRefs } from './BoardToolbar'
+import PanelExtras from './PanelExtras'
+import { getToolbarLayout, isDefaultLayout, resetToolbarLayout, subscribeToolbarLayout } from './toolbarOrder'
+import { newBoardUi, sameBoardUi, type BoardUi } from './boardUi'
+import './excalidrawTheme.css' // 引擎 token → LCL 契约(见该文件),随画布 chunk 一起加载
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { UI_ZOOM_EVENT } from '@lcl/engine'
+import type { ObsidianResetCustomPenState } from '@excalidraw/excalidraw/obsidianTypes'
 import type { AppState, ExcalidrawInitialDataState, ExcalidrawImperativeAPI, BinaryFileData } from '@excalidraw/excalidraw/types'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import { reconcileElements, sameElements, type SceneElement, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
@@ -24,35 +31,6 @@ import {
   type Bounds,
 } from '@amadeus-shared/excalidraw/board'
 
-/** 紧凑(tray)面板是**显示偏好**不是文档内容 → 全局一份,localStorage;多个白板同时开着要一起变,
- *  所以走 useSyncExternalStore 而不是各自的 useState。 */
-const COMPACT_KEY = 'amx.boardCompact'
-const compactSubs = new Set<() => void>()
-/** 内存态优先:localStorage 写不进去(隐私模式/配额满)时,开关本次会话内仍然生效 —— 只落在 storage 上
- *  的话,通知发出去 React 回读的还是旧值,表现就是「勾了没反应」。 */
-let compactMem: boolean | null = null
-const getCompact = (): boolean => {
-  if (compactMem !== null) return compactMem
-  try {
-    return localStorage.getItem(COMPACT_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-const setCompact = (v: boolean): void => {
-  compactMem = v
-  try {
-    localStorage.setItem(COMPACT_KEY, v ? '1' : '0')
-  } catch {
-    /* 存不下就只活在本次会话 */
-  }
-  for (const f of compactSubs) f()
-}
-const subscribeCompact = (f: () => void): (() => void) => {
-  compactSubs.add(f)
-  return () => compactSubs.delete(f)
-}
-
 /** 线距小于这个屏幕像素就不画:再密就是一片糊(excalidraw 自带网格同款下限)。 */
 const MIN_VISIBLE_PX = 4
 const V_GRAD = 'linear-gradient(90deg, var(--amx-grid-line) 0 1px, transparent 1px)'
@@ -60,6 +38,87 @@ const H_GRAD = 'linear-gradient(180deg, var(--amx-grid-line) 0 1px, transparent 
 
 const clampNum = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi)
 const mod = (a: number, n: number): number => ((a % n) + n) % n
+
+/** 往引擎自己的 DOM 里插一个挂点,并在引擎重挂那块 DOM 时**自动补回去**。
+ *  ⚠️ 只插一次是不够的:属性面板每换一次工具就整块重建,工具栏在切换面板形态时也会重建 ——
+ *     插一次的锚点第二次就不在了(症状:换个工具笔排就没了,再也回不来)。 */
+function useEngineAnchor(root: Element | null, selector: string, cls: string): HTMLElement | null {
+  const [node, setNode] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!root) return
+    let cur: HTMLElement | null = null
+    const ensure = (): void => {
+      const host = root.querySelector(selector)
+      if (!host) {
+        if (cur) {
+          cur.remove()
+          cur = null
+          setNode(null)
+        }
+        return
+      }
+      if (cur && cur.parentElement === host) return // 已经在位:零动作,免得自己触发自己
+      cur?.remove()
+      const el = document.createElement('div')
+      el.className = cls
+      host.insertBefore(el, host.firstChild)
+      cur = el
+      setNode(el)
+    }
+    ensure()
+    const mo = new MutationObserver(ensure)
+    mo.observe(root, { childList: true, subtree: true })
+    return () => {
+      mo.disconnect()
+      cur?.remove()
+      setNode(null)
+    }
+  }, [root, selector, cls])
+  return node
+}
+
+/** 引擎的弹层(汉堡菜单 / ⋮ / 取色器 / 对话框)不在画布里 —— `useCreatePortalContainer` 不给
+ *  `parentSelector` 就 `document.body.appendChild(<div class="excalidraw">)`。后果实测两条:
+ *   ① 它在 `.tangu-lovable .amx-boardhost` 作用域外 → 主题桥够不着(字体/圆角/配色全是引擎原样);
+ *   ② 它在画布的 zoom 反补偿外 → 端级界面缩放≠100% 时整体错位并被放大(实测 zoom=1.1 偏 27px)。
+ *  这里给它打上标记类(供 excalidrawTheme.css 取色)并跟着做同一份 zoom 补偿。 */
+function useBoardPortalRoots(zoom: string): void {
+  useEffect(() => {
+    // ⚠️ 引擎那个 hook 每次主题/形态变化都 `el.className = ""` 再重新加一遍类 —— 只打一次标记
+    //    会被它抹掉(表现:切一次深浅色,弹层的皮就掉回引擎原样)。所以每个根还要单独盯 class。
+    const watched = new Map<HTMLElement, MutationObserver>()
+    const mark = (el: HTMLElement): void => {
+      if (!el.classList.contains('amx-board-portal')) el.classList.add('amx-board-portal')
+      if (el.style.zoom !== zoom) el.style.zoom = zoom
+    }
+    const tag = (n: Node): void => {
+      if (!(n instanceof HTMLElement) || !n.classList.contains('excalidraw')) return
+      if (n.closest('.amx-boardhost')) return // 画布本体,不是弹层
+      mark(n)
+      if (watched.has(n)) return
+      const ob = new MutationObserver(() => mark(n))
+      ob.observe(n, { attributes: true, attributeFilter: ['class', 'style'] })
+      watched.set(n, ob)
+    }
+    for (const el of [...document.body.children]) tag(el)
+    const mo = new MutationObserver((recs) => {
+      for (const r of recs) {
+        for (const n of r.addedNodes) tag(n)
+        for (const n of r.removedNodes) {
+          if (n instanceof HTMLElement && watched.has(n)) {
+            watched.get(n)?.disconnect()
+            watched.delete(n)
+          }
+        }
+      }
+    })
+    mo.observe(document.body, { childList: true })
+    return () => {
+      mo.disconnect()
+      for (const ob of watched.values()) ob.disconnect()
+    }
+  }, [zoom])
+}
 
 export default function ExcalidrawCanvas({
   initialData,
@@ -95,7 +154,62 @@ export default function ExcalidrawCanvas({
   const pages = useMemo(() => Array.from({ length: range.max - range.min + 1 }, (_, i) => range.min + i), [range])
   /** 内容 + 第 0 页决定的**页数下限**:删页按钮删到这儿就到底了,再删会把已画的东西甩到页外。 */
   const floor = useMemo(() => pageRange({ ...settings, pageFirst: 0, pageLast: 0 }, bounds), [settings, bounds])
-  const compact = useSyncExternalStore(subscribeCompact, getCompact, getCompact)
+  const uiMode = useSyncExternalStore(subscribeBoardUiMode, getBoardUiMode, getBoardUiMode)
+  // 笔 / 合并按钮的「最近用过哪个成员」都归**画布**持有:工具栏与属性面板都是 portal 进引擎 DOM 的,
+  // 引擎一重挂它们就卸载重建,ref 放在组件里必然归零(上一轮 Codex 抓到的就是这个 bug 类)。
+  const penState = useRef(newPenState())
+  const groupState = useRef(newGroupState())
+  const toolRefs: ToolRefs = useMemo(() => ({ pen: penState, group: groupState }), [])
+  // 我们自建的 UI 需要的那一小片 appState(为什么不是整份见 boardUi.ts)
+  const [ui, setUi] = useState<BoardUi>(newBoardUi)
+  const [hostZoom, setHostZoom] = useState('')
+  const [root, setRoot] = useState<Element | null>(null)
+  const toolbarAnchor = useEngineAnchor(root, '.App-toolbar', 'amx-toolbar-slot')
+  // ⚠️ 必须限定 `.Island >`:外面还套着一层同名的 `section.selected-shape-actions`(它是**整列**的
+  //    容器,包含常规档那张岛),而 querySelector 逗号选择器按**文档顺序**取,不按写的顺序 ——
+  //    不限定就锚在外层 section 上,笔排会飘在面板岛外面、被岛盖住(实测)。
+  //    手机档又不一样:类名落在 Island **自己**身上(`Island.compact-shape-actions.mobile-shape-actions`),
+  //    没有 `.Island > .compact-shape-actions` 这层 —— 第三条选择器就是给它的。
+  const panelAnchor = useEngineAnchor(
+    root,
+    '.Island > .selected-shape-actions, .Island > .compact-shape-actions, .Island.compact-shape-actions',
+    'amx-panel-slot',
+  )
+  useBoardPortalRoots(hostZoom)
+  usePenRestore(api, ui.tool, ui.snapshot, penState)
+
+  // 合并按钮记住「最近用过的成员」。键盘直接按 r/d/o/a/l 也算 —— 所以只能盯 appState,不能只在点击时记。
+  useEffect(() => {
+    if ((SHAPE_MEMBERS as readonly string[]).includes(ui.tool)) groupState.current.shape = ui.tool as ShapeMember
+    if ((LINE_MEMBERS as readonly string[]).includes(ui.tool)) groupState.current.line = ui.tool as LineMember
+  }, [ui.tool])
+
+  /** 数字键按**中段的当前顺序**重映射(拖动改顺序 = 改快捷键)。
+   *  ⚠️ 必须 window 捕获阶段 + stopImmediatePropagation:引擎自己也绑了 1..0,不截住就两边都动。
+   *  只在事件确实落在本画布内时接管,否则会把整个 App 的数字键都吃掉。 */
+  useEffect(() => {
+    if (!api) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.metaKey || e.ctrlKey || e.altKey || !/^[0-9]$/.test(e.key)) return
+      const el = hostRef.current?.querySelector('.excalidraw')
+      const t = e.target as HTMLElement | null
+      if (!el || !t || !el.contains(t)) return
+      if (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return // 正在打字
+      const id = getToolbarLayout().mid[e.key === '0' ? 9 : Number(e.key) - 1]
+      if (!id) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      activateTool(id, api, toolRefs)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [api, toolRefs])
+
+  // 属性面板形态。引擎自己也会回调 host.getPreferredUIMode()(见 forkRuntime),但那只在它下次重排时读到;
+  // 这里显式推一把,勾完立刻变形。
+  useEffect(() => {
+    api?.setDesktopUIMode(uiMode)
+  }, [api, uiMode])
 
   useEffect(() => {
     if (!api || !registerApplier) return
@@ -120,15 +234,17 @@ export default function ExcalidrawCanvas({
   //    `.excalidraw` 那一刻**还不在 DOM 里** —— mount 时查一次必然落空,两层从此永不出现。
   //    excalidrawAPI 回调是在真 App 挂载后才来的,拿它当「DOM 就绪」的信号。
   useEffect(() => {
-    const root = api && hostRef.current?.querySelector('.excalidraw')
-    if (!root) return
+    const el = api && hostRef.current?.querySelector('.excalidraw')
+    if (!el) return
     const node = document.createElement('div')
     node.style.display = 'contents'
-    root.insertBefore(node, root.firstChild)
+    el.insertBefore(node, el.firstChild)
     setLayerHost(node)
+    setRoot(el)
     return () => {
       node.remove()
       setLayerHost(null)
+      setRoot(null)
     }
   }, [api])
 
@@ -283,31 +399,44 @@ export default function ExcalidrawCanvas({
   //    我们自己的层用的是**未缩放的局部 px**,是对的,于是层和内容也就对不上了。
   //    修:在画布容器上反向抵消祖先的 zoom,让 excalidraw 永远跑在 zoom=1 的坐标系里。
   //    代价:白板自带 UI 不跟随 App 的界面缩放 —— 它有自己的画布缩放,可接受。
-  useEffect(() => {
+  //
+  //    ⚠️⚠️ 2026-08-14:光标偏移的真凶就在这条 effect 的**触发时机**。`Element.currentCSSZoom`
+  //    规范规定「元素未参与渲染时返回 1」—— 白板挂在 Dockview 面板里,如果那一刻面板是隐藏的
+  //    (后台 tab / 切换动画中),读到的就是 1,补偿被跳过;而唯一的重算信号 UI_ZOOM_EVENT 只在
+  //    用户**改**缩放时才发,面板露出来时没人再算一遍 → 这块画布从此一直偏。
+  //    修:ResizeObserver 也当信号(元素从隐藏变可见必然过一次 resize),并且只在值真变了才写
+  //    style,避免自己触发自己。补偿值同时给弹层用(见 useBoardPortalRoots)。
+  const syncZoom = useCallback((): void => {
     const el = hostRef.current
     if (!el) return
-    const sync = (): void => {
-      const z = (el.parentElement as (HTMLElement & { currentCSSZoom?: number }) | null)?.currentCSSZoom ?? 1
-      el.style.zoom = Math.abs(z - 1) > 1e-6 ? String(1 / z) : ''
-    }
-    sync()
-    window.addEventListener(UI_ZOOM_EVENT, sync)
-    return () => window.removeEventListener(UI_ZOOM_EVENT, sync)
+    const z = (el.parentElement as (HTMLElement & { currentCSSZoom?: number }) | null)?.currentCSSZoom ?? 1
+    const next = Math.abs(z - 1) > 1e-6 ? String(1 / z) : ''
+    if (el.style.zoom !== next) el.style.zoom = next
+    setHostZoom((cur) => (cur === next ? cur : next))
   }, [])
+
+  useEffect(() => {
+    syncZoom()
+    window.addEventListener(UI_ZOOM_EVENT, syncZoom)
+    return () => window.removeEventListener(UI_ZOOM_EVENT, syncZoom)
+  }, [syncZoom])
 
   // 画布尺寸变了(分栏拖动/窗口缩放),纸张的居中与钳制都得重算 —— 这条既不走 onChange 也不走 onScrollChange。
   useEffect(() => {
     const el = hostRef.current
     if (!el || !api || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => layout(clampView(api.getAppState())))
+    const ro = new ResizeObserver(() => {
+      syncZoom() // 从隐藏变可见的那一下:currentCSSZoom 这才有真值(见上面那条 effect 的长注释)
+      layout(clampView(api.getAppState()))
+    })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [api, layout, clampView])
+  }, [api, layout, clampView, syncZoom])
 
   return (
-    <div className={`amx-boardhost${compact ? ' amx-compact' : ''}`} ref={hostRef}>
+    <div className="amx-boardhost" ref={hostRef}>
       <Excalidraw
-        excalidrawAPI={setApi}
+        onExcalidrawAPI={setApi}
         initialData={initialData}
         theme={theme}
         langCode={langCode}
@@ -322,6 +451,16 @@ export default function ExcalidrawCanvas({
         onChange={(elements, appState, files) => {
           syncRange(elements)
           layout(clampView(appState))
+          // 自建工具栏/面板是 portal 出去的,拿不到引擎的 React 数据流 —— 这里回捞那一小片。
+          // 只比对三个字段,画一笔的过程中不会有一次重渲(理由见 boardUi.ts)。
+          const so = appState.currentStrokeOptions
+          const next: BoardUi = {
+            tool: appState.activeTool.type,
+            locked: !!appState.activeTool.locked,
+            snapshot: (appState.resetCustomPen as ObsidianResetCustomPenState | null) ?? null,
+            capRound: so ? !!so.options?.start?.cap : null,
+          }
+          setUi((cur) => (sameBoardUi(cur, next) ? cur : next))
           onSceneChange(serializeAsJSON(elements, appState, files, 'local'))
         }}
       >
@@ -336,14 +475,20 @@ export default function ExcalidrawCanvas({
           <MainMenu.DefaultItems.Help />
           <MainMenu.DefaultItems.ClearCanvas />
           <MainMenu.Separator />
-          <MainMenu.DefaultItems.ToggleTheme />
+          {/* 主题由 App 统一下发(theme prop),这里只要那颗切换按钮,不开 fork 的「跟随系统」档 */}
+          <MainMenu.DefaultItems.ToggleTheme allowSystemTheme={false} />
           <MainMenu.DefaultItems.ChangeCanvasBackground />
           <MainMenu.Separator />
           <MainMenu.ItemCustom>
-              <BoardPanel settings={settings} onSettings={onSettings} compact={compact} onCompact={setCompact} />
+              <BoardPanel settings={settings} onSettings={onSettings} uiMode={uiMode} onUiMode={setBoardUiMode} />
           </MainMenu.ItemCustom>
         </MainMenu>
       </Excalidraw>
+      {/* 自建工具胶囊。塞进引擎那张已经定好位的 Island(`.App-toolbar`)里,它自己的按钮用 CSS 藏掉 ——
+          定位/圆角/投影/HintViewer 全部白捡。引擎的工具栏为什么不能直接改:见 BoardToolbar.tsx。 */}
+      {toolbarAnchor && createPortal(<BoardToolbar api={api} ui={ui} refs={toolRefs} />, toolbarAnchor)}
+      {/* 笔预设 / 形状 / 线的切换 —— 收在左侧属性面板里(用户口径的「二级菜单」)。 */}
+      {panelAnchor && createPortal(<PanelExtras api={api} ui={ui} pen={penState} group={groupState} />, panelAnchor)}
       {layerHost &&
         createPortal(
           <>
@@ -409,16 +554,21 @@ function forwardWheel(e: React.WheelEvent<HTMLDivElement>): void {
   )
 }
 
+const UI_MODES: { id: BoardUiMode; label: string }[] = [
+  { id: 'full', label: '常规' },
+  { id: 'compact', label: '紧凑' },
+]
+
 function BoardPanel({
   settings,
   onSettings,
-  compact,
-  onCompact,
+  uiMode,
+  onUiMode,
 }: {
   settings: BoardSettings
   onSettings: (patch: Partial<BoardSettings>) => void
-  compact: boolean
-  onCompact: (v: boolean) => void
+  uiMode: BoardUiMode
+  onUiMode: (v: BoardUiMode) => void
 }): React.JSX.Element {
   const patch = onSettings
   return (
@@ -463,12 +613,32 @@ function BoardPanel({
         disabled={settings.gridH <= 0 && settings.gridV <= 0}
         onCommit={(v) => patch({ gridOpacity: v })}
       />
-      <label className="amx-bs-check">
-        <input type="checkbox" checked={compact} onChange={(e) => onCompact(e.target.checked)} />
-        <span className="amx-bs-lbl">紧凑面板</span>
-        <span className="amx-bs-note">所有白板</span>
-      </label>
+      <div className="amx-bs-h">属性面板 <span className="amx-bs-note">所有白板</span></div>
+      <div className="amx-bs-row">
+        {UI_MODES.map((m) => (
+          <button key={m.id} className="amx-bs-chip" data-on={uiMode === m.id || undefined} onClick={() => onUiMode(m.id)}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <ToolbarResetRow />
     </div>
+  )
+}
+
+/** 工具栏顺序是拖出来的,总得有条路回去。默认顺序时不显示 —— 没得可恢复就别占一行。 */
+function ToolbarResetRow(): React.JSX.Element | null {
+  const layout = useSyncExternalStore(subscribeToolbarLayout, getToolbarLayout, getToolbarLayout)
+  if (isDefaultLayout(layout)) return null
+  return (
+    <>
+      <div className="amx-bs-h">工具栏 <span className="amx-bs-note">所有白板</span></div>
+      <div className="amx-bs-row">
+        <button className="amx-bs-chip" onClick={() => resetToolbarLayout()}>
+          恢复默认顺序
+        </button>
+      </div>
+    </>
   )
 }
 

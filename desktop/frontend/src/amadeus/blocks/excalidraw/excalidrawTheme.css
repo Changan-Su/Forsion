@@ -1,0 +1,98 @@
+/* 白板引擎的 token 桥 —— 把 excalidraw 自己的一套 CSS 变量别名到 LCL 设计语言契约,
+ * 让画布 UI(工具岛/属性面板/弹层/对话框)跟着 Forsion 的配色、圆角、字体走,而不是 excalidraw 默认皮。
+ * 手法与 amadeus/lcl/bridge.css 同源:**只改变量,不改一条布局规则**,引擎组件零重写。
+ *
+ * ⚠️ 作用域 `.tangu-lovable .amx-boardhost .excalidraw`(0,3,0):
+ *   - 挂在 `.tangu-lovable` 下 —— 那是 LCL 词表的落点(见 amadeus/theme/lcl/tangu.css);画布不在
+ *     它下面时整块不生效,退回引擎原皮,不会拿到一堆解析不出来的变量。
+ *   - 必须 0,3,0:引擎的 CSS 是运行时 `<link>` 进 <head> 的(见 forkRuntime.ts),**排在我们后面**,
+ *     同分特异性会被它压过;而深色档那条 `.excalidraw.theme--dark` 就是 0,2,0。
+ *
+ * ⚠️ 不碰 `--theme-filter`:深色档的交互画布靠它反相,改了选中框会变色。
+ * ⚠️ 明暗两档共用这一份:LCL 的 token 自己会跟着 App 的 data-mode 翻,画布的 theme prop 也同步翻,
+ *   两边天然对齐 —— 别再为深色单写一份。
+ *
+ * ⚠️⚠️ 第二条选择器 `.excalidraw.amx-board-portal` 不能省(2026-08-14 实测):
+ *   引擎的弹层(汉堡菜单 / ⋮ / 取色器 / 各种对话框)**根本不在画布里** —— 它的
+ *   `useCreatePortalContainer` 不给 parentSelector 就 `document.body.appendChild(<div class="excalidraw">)`,
+ *   于是整片弹层落在 `.tangu-lovable .amx-boardhost` 作用域外,上面那条一个字都够不着
+ *   (症状:弹层字体是 Assistant、圆角 8px,而触发器是 Hanken Grotesk、10px —— 两张皮)。
+ *   `amx-board-portal` 这个标记类由 ExcalidrawCanvas 的 useBoardPortalRoots 打(引擎会周期性
+ *   `className=""` 重置,所以那边还盯着 class 属性补)。LCL 词表定义在 `:root` 上,body 的孩子
+ *   照样继承得到,不需要把词表再抄一份。
+ *   特异性 0,2,1 > 引擎的 `.excalidraw.theme--dark`(0,2,0),够压。
+ */
+.tangu-lovable .amx-boardhost .excalidraw,
+.tangu-soft .amx-boardhost .excalidraw,
+html .excalidraw.amx-board-portal {
+  /* ── 面 ── */
+  --island-bg-color: var(--bg-card);
+  --island-bg-color-alt: var(--sidebar-bg);
+  --default-bg-color: var(--bg);
+  --popup-bg-color: var(--bg-card);
+  --popup-secondary-bg-color: var(--sidebar-bg);
+  --sidebar-bg-color: var(--bg-card);
+  --color-surface-lowest: var(--bg-card);
+  --color-surface-low: var(--sidebar-bg);
+  --color-surface-mid: var(--bg);
+  --color-surface-high: var(--accent-light);
+  --color-surface-primary-container: var(--accent-light);
+
+  /* ── 字 ── */
+  --ui-font: var(--font-ui);
+  --text-primary-color: var(--text);
+  --color-on-surface: var(--text);
+  --popup-text-color: var(--text);
+  --input-label-color: var(--text-light);
+  --keybinding-color: var(--text-faint);
+  --color-muted: var(--text-muted);
+  --color-muted-darker: var(--text-faint);
+  --color-disabled: var(--text-ghost);
+
+  /* ── 线 ── */
+  --default-border-color: var(--border);
+  --dialog-border-color: var(--border);
+  --input-border-color: var(--border);
+  --sidebar-border-color: var(--border);
+  --list-border-color: var(--border);
+  --color-border-outline: var(--overlay-strong);
+  --color-border-outline-variant: var(--border);
+
+  /* ── 强调色。excalidraw 拿 --color-primary 当**前景**(选中图标/焦点框),
+       拿 --color-primary-light 当选中态的**底色** —— 别对调,否则黑底黑字。 ── */
+  --color-primary: var(--accent-ink);
+  --color-primary-hover: var(--accent-hover);
+  --color-primary-darker: var(--accent-hover);
+  --color-primary-darkest: var(--accent-hover);
+  --color-primary-light: var(--accent-light);
+  --color-primary-light-darker: var(--accent-light);
+  --color-brand-hover: var(--accent-hover);
+  --color-brand-active: var(--accent-hover);
+  --color-selection: var(--accent-ink);
+  --select-highlight-color: var(--accent-ink);
+  --focus-highlight-color: var(--accent-ink);
+  --link-color: var(--accent-ink);
+  --link-color-hover: var(--accent-hover);
+  --color-icon-white: var(--on-accent);
+  --color-on-primary-container: var(--text);
+
+  /* ── 圆角 / 阴影 ── */
+  --border-radius-md: var(--radius-md);
+  --border-radius-lg: var(--radius-lg);
+  --shadow-island: var(--card-shadow);
+  --shadow-island-stronger: var(--card-shadow);
+  --modal-shadow: var(--card-shadow);
+  --library-dropdown-shadow: var(--card-shadow);
+  --sidebar-shadow: var(--card-shadow);
+
+  /* ── 控件 ── */
+  --button-hover-bg: var(--overlay-light);
+  --button-active-bg: var(--overlay-medium);
+  --button-active-border: var(--overlay-strong);
+  --input-bg-color: var(--bg-card);
+  --input-hover-bg-color: var(--overlay-subtle);
+  --overlay-bg-color: var(--overlay-light);
+  --scrollbar-thumb: var(--overlay-medium);
+  --scrollbar-thumb-hover: var(--overlay-strong);
+  --color-danger: var(--danger);
+}
