@@ -1,8 +1,9 @@
-/** 文件面板(右侧栏):镜像会话侧栏结构 —— 列所有本地工作区文件夹(手风琴:展开一个,收起其余),
+/** 文件面板(右侧栏):镜像会话侧栏结构 —— 列所有本地工作区文件夹(各自独立展开/收起,可多开),
  *  展开后用 Electron listDir 列真实磁盘目录,子文件夹可逐级展开。
  *  **只有一个工作区常驻可见**(pinnedKey,通常 = 当前打开文件所在的那个),其余全部收进底部
  *  「显示全部工作区」折叠区 —— 手上这个文件夹永远在顶上,不用在一长串工作区里找。
- *  交互(与旧 RightPanel 工作区树对齐,复用同一套 fs IPC):单击选中,双击在主区开预览标签页;
+ *  交互(三档列表统一,判据单源见 views/itemSelect):单击打开并选中、⌘/Ctrl 单击开新标签页、
+ *  shift 单击选范围、option/alt 单击逐个加减选;右键菜单与拖拽对**整批选中**生效。
  *  右键菜单(打开/系统默认打开/新建文件/文件夹/重命名/复制路径/文件管理器显示/回收站);
  *  行拖进文件夹=移动、Alt+拖=原生拖出、OS 文件拖入=复制;行内重命名/新建。
  *  云端 Project 工作区(kind='cloud',无磁盘路径)走 workspace API 按 project 取数(CloudGroup):
@@ -23,6 +24,7 @@ import { useApp } from '../../stores/appStore'
 import { hostTargetFor } from '../wsFileNav'
 import { tipProps, fsTipLines } from '../../hoverTip'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
+import { useItemSelect, type ClickAct, type ItemSelect } from '../itemSelect'
 import './sidebar2.css'
 
 registerMessages({
@@ -44,8 +46,9 @@ export const bumpDir = (dir: string): void => { fsBus.dispatchEvent(new CustomEv
 
 /** 树的共享交互上下文(递归行组件经它拿状态与操作,避免层层传参)。 */
 interface TreeCtx {
-  selected: string | null
-  select: (p: string) => void
+  isSel: (p: string) => boolean
+  /** 行点击唯一入口:先更新选中态,再按修饰键决定开不开(返回值给目录行判断要不要展开)。 */
+  rowClick: (ev: React.MouseEvent, e: Entry) => ClickAct
   openFile: (e: Entry) => void
   onMenu: (ev: React.MouseEvent, e: Entry) => void
   renaming: string | null
@@ -89,13 +92,14 @@ function FileRow({ entry, depth, ctx }: { entry: Entry; depth: number; ctx: Tree
   if (ctx.renaming === entry.path) return <NameInput initial={entry.name} depth={depth} onCommit={(n) => ctx.commitRename(entry, n)} onCancel={ctx.cancelEdit} />
   return (
     <div
-      className={`t2sf-row t2sf-file${ctx.selected === entry.path ? ' sel' : ''}`}
+      className={`t2sf-row t2sf-file${ctx.isSel(entry.path) ? ' sel' : ''}`}
+      data-sel-id={entry.path}
       style={{ paddingLeft: rowPadLeft(depth + 1) }}
       {...tipProps(() => fsTipLines(entry.path, entry.name))}
       draggable
       onDragStart={(e) => ctx.rowDragStart(e, entry)}
       onDragEnd={ctx.dragEnd}
-      onClick={() => ctx.select(entry.path)}
+      onClick={(e) => ctx.rowClick(e, entry)}
       onDoubleClick={() => ctx.openFile(entry)}
       onContextMenu={(e) => ctx.onMenu(e, entry)}
     >
@@ -139,7 +143,8 @@ function DirRow({ entry, depth, ctx, forceOpen }: { entry: Entry; depth: number;
         ? <NameInput initial={entry.name} depth={depth} onCommit={(n) => ctx.commitRename(entry, n)} onCancel={ctx.cancelEdit} />
         : (
           <div
-            className={`t2sf-row${ctx.selected === entry.path ? ' sel' : ''}${ctx.dropDir === entry.path ? ' drop' : ''}`}
+            className={`t2sf-row${ctx.isSel(entry.path) ? ' sel' : ''}${ctx.dropDir === entry.path ? ' drop' : ''}`}
+            data-sel-id={entry.path}
             style={{ paddingLeft: rowPadLeft(depth + 1) }}
             {...tipProps(() => fsTipLines(entry.path, entry.name))}
             draggable
@@ -148,7 +153,8 @@ function DirRow({ entry, depth, ctx, forceOpen }: { entry: Entry; depth: number;
             onDragOver={(e) => ctx.dragOverDir(e, entry.path)}
             onDragLeave={() => ctx.dragLeaveDir(entry.path)}
             onDrop={(e) => ctx.dropOnDir(e, entry.path)}
-            onClick={(e) => { ctx.select(entry.path); if (e.detail === 1) setOpen((o) => !o) }}
+            // 目录的「打开」= 就地展开/收起;shift/option 只选不展开(否则范围选一路把树全撑开)。
+            onClick={(e) => { const act = ctx.rowClick(e, entry); if (act.open !== 'none' && e.detail === 1) setOpen((o) => !o) }}
             onContextMenu={(e) => ctx.onMenu(e, entry)}
           >
             {/* 前导槽:与笔记/会话 view 同构(图标 ↔ hover 换箭头);展开态靠 FolderOpen/Folder 表达。 */}
@@ -176,11 +182,13 @@ function DirRow({ entry, depth, ctx, forceOpen }: { entry: Entry; depth: number;
 /** 云端 Project 组:文件在 Penzor 云(files 表),经 workspace API 按 project 取数;fs IPC 不可用 →
  *  只读呈现(双击预览 / 右键 预览・下载・删除)。
  *  ponytail: 平铺相对路径,文件多层级复杂了再做树。 */
-function CloudGroup({ ws, open, onToggle, onOpenPreview }: {
+function CloudGroup({ ws, open, onToggle, onOpenPreview, sel }: {
   ws: WorkspaceDescriptor
   open: boolean
   onToggle: () => void
-  onOpenPreview: (t: PreviewTarget) => void
+  onOpenPreview: (t: PreviewTarget, opts?: { newTab?: boolean }) => void
+  /** 与本地工作区共用同一个多选(同一个滚动容器里,范围选要能跨过去)。 */
+  sel: ItemSelect
 }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -205,7 +213,7 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview }: {
     void downloadWorkspaceFile(cfg, '__project__', f.path, project)
       .catch((err) => useApp.getState().toast(err?.message || String(err), true))
   }
-  const preview = (f: WorkspaceFileMeta): void => {
+  const preview = (f: WorkspaceFileMeta, newTab?: boolean): void => {
     onOpenPreview({
       name: f.path,
       load: async () => {
@@ -213,15 +221,35 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview }: {
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
       },
       download: () => download(f),
-    })
+    }, newTab ? { newTab: true } : undefined)
   }
   const del = async (f: WorkspaceFileMeta): Promise<void> => {
     if (!window.confirm(t('panel.confirm.delete', { name: f.path }))) return
     try { await deleteWorkspaceFile(cfg, '__project__', f.path, project); refresh() }
     catch (err: any) { useApp.getState().toast(err?.message || String(err), true) }
   }
+  /** 整批删除(云端文件无回收站 → 一次确认后逐个 DELETE)。 */
+  const delMany = async (fs: WorkspaceFileMeta[]): Promise<void> => {
+    if (!fs.length || !window.confirm(t('panel.confirm.deleteN', { n: String(fs.length) }))) return
+    try { for (const f of fs) await deleteWorkspaceFile(cfg, '__project__', f.path, project) }
+    catch (err: any) { useApp.getState().toast(err?.message || String(err), true) }
+    sel.clear()
+    refresh()
+  }
   const onRowMenu = (ev: React.MouseEvent, f: WorkspaceFileMeta): void => {
     ev.preventDefault(); ev.stopPropagation()
+    const paths = sel.batch(f.path)
+    if (paths.length === 1) sel.only(f.path)
+    if (paths.length > 1) {
+      const targets = (files ?? []).filter((x) => paths.includes(x.path))
+      const items: CtxItem[] = [{
+        label: t('panel.action.deleteN', { n: String(targets.length) }),
+        icon: <Trash2 size={13} />, danger: true,
+        run: () => void delMany(targets),
+      }]
+      setMenu({ ...menuPos(ev, items.length), items })
+      return
+    }
     const items: CtxItem[] = [
       { label: t('panel.action.preview'), icon: <Eye size={13} />, run: () => preview(f) },
       { label: t('panel.action.download'), icon: <Download size={13} />, run: () => download(f) },
@@ -251,8 +279,10 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview }: {
               return (
                 <div
                   key={f.path}
-                  className="t2sf-row t2sf-file"
+                  className={`t2sf-row t2sf-file${sel.has(f.path) ? ' sel' : ''}`}
+                  data-sel-id={f.path}
                   style={{ paddingLeft: rowPadLeft(1) }}
+                  onClick={(e) => { const act = sel.click(f.path, e); if (act.open !== 'none') preview(f, act.open === 'new') }}
                   onDoubleClick={() => preview(f)}
                   onContextMenu={(e) => onRowMenu(e, f)}
                 >
@@ -271,8 +301,9 @@ function CloudGroup({ ws, open, onToggle, onOpenPreview }: {
 
 export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEnterWorkspace, expandToPath, pinnedWorkspaceKey }: {
   workspaces: WorkspaceDescriptor[]
-  onOpenPreview: (t: PreviewTarget) => void
-  /** 共享「进入的工作区」key(与会话面板手风琴同步)。 */
+  /** newTab = ⌘/Ctrl 单击:强开一个新标签页(缺省则同路径已开就聚焦过去)。 */
+  onOpenPreview: (t: PreviewTarget, opts?: { newTab?: boolean }) => void
+  /** 共享「进入的工作区」key(与会话面板联动:进入 = 展开它 + 置顶,不收其余)。 */
   activeWorkspaceKey?: string | null
   onEnterWorkspace?: (key: string | null) => void
   /** 自动展开到某绝对目录(统一工作区视图定位笔记所在目录;仅作用于当前展开的工作区)。 */
@@ -282,10 +313,14 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
 }) {
   const { t } = useI18n()
   const running = useApp((s) => Object.keys(s.runningBySession).length > 0)
+  // 展开态放 appStore(不是组件 state):左栏切「会话/文件」档会重挂本面板,组件 state 会把用户展开的一排全塌掉。
+  const openKeys = useApp((s) => s.openWorkspaceKeys)
+  const toggleOpenWorkspace = useApp((s) => s.toggleOpenWorkspace)
   const locals = workspaces.filter((w) => w.kind === 'local' && !!w.path)
   const clouds = workspaces.filter((w) => w.kind === 'cloud' && !!w.project)
   const [rootsByKey, setRootsByKey] = useState<Record<string, Entry[] | null>>({})
-  const [selected, setSelected] = useState<string | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const sel = useItemSelect(scrollRef) // 多选(范围选按 DOM 顺序,故要给容器 ref)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [creating, setCreating] = useState<{ dir: string; kind: 'file' | 'folder' } | null>(null)
   const [menu, setMenu] = useState<CtxMenu>(null)
@@ -294,7 +329,15 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   const draggingRef = useRef<string[] | null>(null)
 
   const toast = (m: string, err?: boolean): void => useApp.getState().toast(m, err)
-  const openFile = (e: Entry): void => { if (!e.isDir) onOpenPreview(hostTargetFor(e.path, e.name)) }
+  const openFile = (e: Entry, newTab?: boolean): void => {
+    if (!e.isDir) onOpenPreview(hostTargetFor(e.path, e.name), newTab ? { newTab: true } : undefined)
+  }
+  /** 行点击:选中态归 itemSelect(三档共用判据),打不打开由它返回的 act 说了算。 */
+  const rowClick = (ev: React.MouseEvent, e: Entry): ClickAct => {
+    const act = sel.click(e.path, ev)
+    if (act.open !== 'none' && !e.isDir) openFile(e, act.open === 'new')
+    return act
+  }
 
   const loadRoot = useCallback((key: string, path: string) => {
     setRootsByKey((m) => ({ ...m, [key]: m[key] ?? null }))
@@ -342,13 +385,17 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     } catch (err: any) { toast(t('panel.toast.mkdirFail', { err: err?.message || err }), true) }
     bumpDir(dir)
   }
-  const trash = async (e: Entry): Promise<void> => {
-    if (!window.tangu?.trashHostPath) return
-    if (!window.confirm(t('panel.confirm.trash', { name: e.name }))) return
-    try { await window.tangu.trashHostPath(e.path) }
+  /** 回收站:对整批选中生效(单个时文案/确认与从前一致)。 */
+  const trashPaths = async (paths: string[]): Promise<void> => {
+    if (!paths.length || !window.tangu?.trashHostPath) return
+    const ok = window.confirm(paths.length === 1
+      ? t('panel.confirm.trash', { name: paths[0].split(/[/\\]/).pop() || '' })
+      : t('panel.confirm.trashN', { n: String(paths.length) }))
+    if (!ok) return
+    try { for (const p of paths) await window.tangu.trashHostPath(p) }
     catch (err: any) { toast(t('panel.toast.deleteFail', { err: err?.message || err }), true) }
-    if (selected === e.path) setSelected(null)
-    bumpDir(dirOf(e.path))
+    sel.clear()
+    for (const p of paths) bumpDir(dirOf(p))
   }
   const moveInto = async (destDir: string, paths: string[]): Promise<void> => {
     if (!window.tangu?.moveHostPath) return
@@ -373,7 +420,17 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   // ── 右键菜单 ──
   const onMenu = (ev: React.MouseEvent, e: Entry): void => {
     ev.preventDefault(); ev.stopPropagation()
-    setSelected(e.path)
+    // 右键落在已选中的项上 → 整批;落在别处 → 改成只选它(与 Finder 一致)。
+    const paths = sel.batch(e.path)
+    if (paths.length === 1) sel.only(e.path)
+    if (paths.length > 1) {
+      const items: CtxItem[] = [
+        { label: t('panel.action.copyPath'), icon: <Copy size={13} />, run: () => { void navigator.clipboard.writeText(paths.join('\n')) } },
+        { label: t('panel.action.deleteN', { n: String(paths.length) }), icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths(paths) },
+      ]
+      setMenu({ ...menuPos(ev, items.length), items })
+      return
+    }
     const items: CtxItem[] = []
     if (!e.isDir) {
       items.push({ label: t('panel.action.open'), icon: <Eye size={13} />, run: () => openFile(e) })
@@ -387,7 +444,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     items.push({ label: t('panel.action.rename'), icon: <Pencil size={13} />, run: () => setRenaming(e.path) })
     items.push({ label: t('panel.action.copyPath'), icon: <Copy size={13} />, run: () => { void navigator.clipboard.writeText(e.path) } })
     items.push({ label: t('panel.action.revealInFileManager'), icon: <FolderSearch size={13} />, run: () => void window.tangu?.revealHostPath?.(e.path) })
-    items.push({ label: t('panel.action.moveToTrash'), icon: <Trash2 size={13} />, danger: true, run: () => void trash(e) })
+    items.push({ label: t('panel.action.moveToTrash'), icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths([e.path]) })
     setMenu({ ...menuPos(ev, items.length), items })
   }
   const onWsMenu = (ev: React.MouseEvent, ws: WorkspaceDescriptor): void => {
@@ -406,8 +463,9 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   // ── 拖拽:行拖(内部移动 / Alt=原生拖出);文件夹与工作区头是投放目标;OS 文件拖入=复制 ──
   const rowDragStart = (ev: React.DragEvent, e: Entry): void => {
     if (ev.altKey && window.tangu?.startHostDrag) { ev.preventDefault(); window.tangu.startHostDrag(e.path); return }
-    draggingRef.current = [e.path]
-    ev.dataTransfer.setData(DRAG_MIME, JSON.stringify([e.path]))
+    const paths = sel.batch(e.path) // 拖已选中的项 = 整批搬走
+    draggingRef.current = paths
+    ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths))
     ev.dataTransfer.effectAllowed = 'move'
   }
   const dragEnd = (): void => { draggingRef.current = null; setDropDir(null) }
@@ -431,29 +489,34 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   }
 
   const ctx: TreeCtx = {
-    selected, select: setSelected, openFile, onMenu,
+    isSel: sel.has, rowClick, openFile, onMenu,
     renaming, commitRename, creating, commitCreate,
     cancelEdit: () => { setRenaming(null); setCreating(null) },
     dropDir, rowDragStart, dragEnd, dragOverDir, dragLeaveDir, dropOnDir,
   }
 
-  // 手风琴(共享):点工作区头 = 就地展开/收起(与会话面板手风琴同步)。
+  // 点工作区头 = 就地展开/收起,**各自独立**(手风琴已去掉);展开时顺带「进入」它(置顶/联动会话面板)。
   const toggleWs = (ws: WorkspaceDescriptor): void => {
-    onEnterWorkspace?.(activeWorkspaceKey === ws.key ? null : ws.key)
+    const willOpen = !openKeys.includes(ws.key)
+    toggleOpenWorkspace(ws.key, willOpen)
+    if (willOpen) onEnterWorkspace?.(ws.key)
   }
 
-  // 别人(会话面板/Coding Space)把手风琴切到了折叠区里的工作区 → 自动摊开折叠区,
+  // 别人(会话面板/Coding Space)进入了折叠区里的工作区 → 展开它 + 自动摊开折叠区,
   // 否则用户看见的是「点了没反应」。
   useEffect(() => {
-    if (activeWorkspaceKey && activeWorkspaceKey !== pinnedWorkspaceKey) setShowAll(true)
-  }, [activeWorkspaceKey, pinnedWorkspaceKey])
-
-  // 当前进入的本地工作区首次展开时加载磁盘根目录。
-  useEffect(() => {
     if (!activeWorkspaceKey) return
-    const w = locals.find((x) => x.key === activeWorkspaceKey)
-    if (w?.path && rootsByKey[activeWorkspaceKey] === undefined) loadRoot(activeWorkspaceKey, w.path)
-  }, [activeWorkspaceKey, locals, rootsByKey, loadRoot])
+    toggleOpenWorkspace(activeWorkspaceKey, true)
+    if (activeWorkspaceKey !== pinnedWorkspaceKey) setShowAll(true)
+  }, [activeWorkspaceKey, pinnedWorkspaceKey, toggleOpenWorkspace])
+
+  // 展开着的本地工作区首次展开时加载磁盘根目录。
+  useEffect(() => {
+    for (const key of openKeys) {
+      const w = locals.find((x) => x.key === key)
+      if (w?.path && rootsByKey[key] === undefined) loadRoot(key, w.path)
+    }
+  }, [openKeys, locals, rootsByKey, loadRoot])
 
   if (!locals.length && !clouds.length) return <div className="t2s-hint" style={{ padding: '18px 12px' }}>{t('panel.files.noLocalWs')}</div>
 
@@ -463,13 +526,14 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
         <CloudGroup
           key={ws.key}
           ws={ws}
-          open={activeWorkspaceKey === ws.key}
+          open={openKeys.includes(ws.key)}
           onToggle={() => toggleWs(ws)}
           onOpenPreview={onOpenPreview}
+          sel={sel}
         />
       )
     }
-    const open = activeWorkspaceKey === ws.key
+    const open = openKeys.includes(ws.key)
     const roots = rootsByKey[ws.key]
     return (
             <div key={ws.key}>
@@ -522,7 +586,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
 
   return (
     <aside className="t2s-side">
-      <div className="t2s-scroll" onClick={(e) => { if (e.target === e.currentTarget) setSelected(null) }}>
+      <div ref={scrollRef} className="t2s-scroll" onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }}>
         {ordered.filter((w) => w.key === pinKey).map(renderWs)}
         {rest.length > 0 && (
           <>

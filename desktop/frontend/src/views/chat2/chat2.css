@@ -30,11 +30,28 @@
 .t2-toolbar-pill.error { color: var(--danger); background: var(--danger-light); }
 .t2-toolbar .locale-toggle, .t2-toolbar .icon-btn { flex-shrink: 0; }
 .t2-chat-body { position: relative; flex: 1; min-height: 0; display: flex; }
-.t2-stream { flex: 1; width: 100%; min-height: 0; overflow-y: auto; }
+/* ── 输入卡悬浮:正文铺满整列,从胶囊底下穿过去(2026-08-14 用户草图)──────────────
+ * 高度不定(芯片行 / 多行草稿 / steer 队列都会长高),ChatView 用 ResizeObserver 把实测高写进
+ * .t2-chat-col 的 --t2-composer-h;**底部留白、渐隐止点、回到底按钮三处共用它**,改一处就得想全三处。
+ * 渐隐用 mask 而不是铺一条背景色渐变:聊天区自己没有底色(主区透纸卡、侧栏透玻璃面),
+ * 铺色必然在某个主题/某一侧对不上;mask 是把内容本身淡成透明,与背景是什么无关。
+ *
+ * ⚠️ 渐隐**只在视图最底边**那条缝里(胶囊下方 16px,= .t2c-inner 的下内边距),**绝不能挂在胶囊上沿**。
+ * 挂上沿是 08-14 打回过的做法:文字还没碰到胶囊就先化没,看着就像胶囊上面又盖了一层。
+ * 正确观感(对标 ChatGPT):正文清清楚楚被胶囊**硬边挡住**,再从胶囊底下钻出来、在视图最底边溶掉。
+ * 24px 里有 8px 压在胶囊后面(看不见),露出来的 16px 由此从约 2/3 浓度渐隐,不出硬台阶。 */
+.t2-stream {
+  flex: 1; width: 100%; min-height: 0; overflow-y: auto;
+  --t2-fade: 24px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--t2-fade)), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--t2-fade)), transparent 100%);
+}
 .t2-stream-inner {
   max-width: 820px;
   margin: 0 auto;
-  padding: 28px 28px 8px;
+  /* 底部留白 = 输入卡实高:滚到底时最后一条完整浮在卡**上方**(用户选的)。渐隐带在视图最底边、
+     整条压在卡后面,够不着末行,故不必再加它。 */
+  padding: 28px 28px calc(var(--t2-composer-h, 96px) + 8px);
   display: flex;
   flex-direction: column;
   gap: 26px;
@@ -129,6 +146,12 @@
   margin-top: 2px;
 }
 .t2-avatar img { width: 100%; height: 100%; object-fit: cover; }
+/* 细长列(侧栏对话:宽:高 < 9:16)不画头像,34px + 间距整条让给正文。
+   要查块轴就得 container-type: size(见 .t2-chat-col);inline-size 只能查宽,量不出比例。
+   身份没丢:助手那行本来就有 .t2-name 名字条,用户气泡右对齐自明。 */
+@container (aspect-ratio < 9 / 16) {
+  .t2-avatar { display: none; }
+}
 .t2-asst-col { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 8px; }
 /* 子件与正文共用阅读宽度,避免卡片拉满整列显空 */
 .t2-asst-col > .t2-think,
@@ -158,7 +181,13 @@
 .t2-content > :first-child { margin-top: 0; }
 .t2-content > :last-child { margin-bottom: 0; }
 .t2-content p { margin: 0 0 .7em; }
-.t2-content pre { border-radius: var(--radius-md, 12px); }
+/* 代码块在**自己的框里**横滚。这两个属性是「agent 输出超出 chat view、要左右滑」的全部病因
+   (08-14 实测:去掉 overflow-x 后 .t2-stream 横向溢出 2530px):base.css 那条
+   `.msg-content pre{overflow-x:auto}` 管不到这里 —— Markdown 组件直接渲染进 .t2-content,
+   中间没有 .msg-content 外壳,于是长代码行整条溢出滚动流。
+   (流本身不会被顶宽:它 overflow-y:auto ⇒ 是滚动容器 ⇒ flex 自动最小尺寸恒为 0,不必写 min-width:0。)
+   仪器:npm run check:chatside 的 16/17。 */
+.t2-content pre { border-radius: var(--radius-md, 12px); max-width: 100%; overflow-x: auto; }
 /* 分割线 ---:比正文边框更淡的发丝线 + 上下留白 */
 .t2-content hr {
   border: none;
@@ -335,8 +364,16 @@
 }
 .t2-empty-title { font-size: 16px; font-weight: 500; color: var(--text); }
 .t2-empty-sub { font-size: 12px; color: var(--text-muted); }
+/* 聊天列直属的那份 = 新对话空状态(ChatView):盖满整列 → 在 **view 的竖向中心**,
+   而不是「输入框以上那段」的中心(2026-08-14)。直接子选择器:留在流里的用法
+   (ChatPreview、其他调用点)照旧走上面那条 flex:1 居中。 */
+.t2-chat-col > .t2-empty { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 
-.t2-jump { position: absolute; right: 22px; bottom: 16px; z-index: 12; }
+/* 锚在 .t2-chat-body(现在满列高)→ 得自己抬过悬浮的输入卡。
+   ⚠️ 必须写成 `.t2-jump.jump-bottom`(0,2,0):base.css 的 `.jump-bottom` 也定 bottom:16px 且同为
+   (0,1,0),排在后面胜出 —— 以前两边都是 16px 看不出来,现在会把按钮按回卡里。 */
+.t2-jump { position: absolute; right: 22px; z-index: 12; }
+.t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 96px) + 16px); }
 .t2-quote {
   position: absolute;
   transform: translateX(-100%);
@@ -374,6 +411,18 @@
 }
 
 /* ====== 合成器(悬浮圆角卡) ====== */
+/* 真·悬浮:脱离文档流压在正文上方。只作用于聊天列里的那个,别处的 .composer-anchor 不动。 */
+.t2-chat-col > .composer-anchor {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
+  pointer-events: none;
+}
+/* ⚠️ pointer-events 是**继承**属性:悬浮层置 none 之后,里面的东西不点名就一起哑了。
+   簇内各块(选择器条 / 输入卡 …)一律收回 auto。 */
+.t2-chat-col > .composer-anchor > * { pointer-events: auto; }
+/* 唯独 .t2c 例外:它铺满整宽,可有内容的只有中间那 880px(.t2c-inner)。让它自己不吃事件,
+   胶囊两侧的空当就把滚轮/框选交还给底下的正文。`:not(.t2c-inner)` 兜住卡外的浮层(群聊设置弹窗等)。 */
+.t2-chat-col > .composer-anchor > .t2c { pointer-events: none; }
+.t2c-inner, .t2c > :not(.t2c-inner) { pointer-events: auto; }
 .t2-composer-wrap { padding: 8px 28px 18px; max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
 .t2-composer {
   background: var(--bg-card, var(--bg));
@@ -698,7 +747,10 @@
    原有 @container 规则(浮动目录/任务概览)自动改按聊天列宽度求值——Desk 打开时它们该收就收。
    Desk 自身的窄屏隐藏规则则按外层 .t2-chat-view(整个 leaf 宽)求值。 */
 /* position:relative:.t2-rail 锚整列(含输入框区),Desk 卡底缘才能与输入框底缘同线(列底 -16px) */
-.t2-chat-col { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+/* container-type: size(不是 inline-size)—— 头像的隐藏条件是**宽高比**,查块轴必须两轴都成为容器。
+   前提是本元素的高不由内容决定:它是 row flex 里 flex:1 的项,高来自父级拉伸,满足。
+   列内原有的 @container 宽度规则不受影响(仍解析到这同一个容器)。 */
+.t2-chat-col { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: size; }
 /* 展开动画(Apple 风):侧板壳常驻(有内容即挂),open 才有宽度 —— flex-basis 0%→--desk-w
  * 弹性生长;收起反向滑合。拖宽期间 .no-anim 关过渡,否则跟手感全无。 */
 .agent-desk {

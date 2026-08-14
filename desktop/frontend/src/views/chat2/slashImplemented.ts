@@ -28,6 +28,7 @@ export const DESKTOP_IMPLEMENTED: string[] = [
   '/mcp',
   '/plugins',
   '/memory',
+  '/refine',
   '/config',
   '/login',
   '/historian',

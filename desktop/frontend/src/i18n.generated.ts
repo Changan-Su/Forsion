@@ -1860,6 +1860,7 @@ registerMessages({
   "sidebar.emptyTitle": { "zh": "空侧栏", "en": "Empty sidebar" },
   "sidebar.empty": { "zh": "这个侧栏是空的,把标签页拖进来试试。", "en": "This sidebar is empty, try dragging a tab here." },
   "input.fileref.note": { "zh": "引用笔记 / 文件 / 会话", "en": "Reference a note / file / session" },
+  "input.ref.selected": { "zh": "已选择：", "en": "Selected:" },
   "command.navBack": { "zh": "后退(本标签页)", "en": "Back (this tab)" },
   "command.navForward": { "zh": "前进(本标签页)", "en": "Forward (this tab)" },
   "view.workspace": { "zh": "工作区", "en": "Workspace" },

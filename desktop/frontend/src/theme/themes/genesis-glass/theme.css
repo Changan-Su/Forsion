@@ -175,6 +175,21 @@
   background: var(--gl-paper);
 }
 
+/* ═══ 3.5 输入卡:唯一一块「嵌在内容里的玻璃」═══
+ * 输入卡**悬浮在正文之上**(chat2.css 的 .composer-anchor 脱流),正文就从它底下滚过去 ——
+ * 于是这一层的 backdrop 里真有像素可糊,是全 app 唯一「玻璃底下有内容在动」的地方,
+ * 也正是用户要磨砂的理由。base 那层是不透明 --bg-card,本主题换成 float 那档材质。
+ * ⚠ 敢加 backdrop-filter 的前提:卡内浮层(.t2c-menu / .composer-menu / .t2c-ctxring-pop)
+ *   **全是 position:absolute**,没有一个 fixed 后代 —— 否则会被这层 filter 抢走包含块(见下方
+ *   chrome 段那条长警告)。往卡里塞 fixed 浮层之前先回来看这行。 */
+[data-theme='genesis-glass'] .t2c-card {
+  background: var(--gl-float);
+  backdrop-filter: var(--gl-blur-float);
+  -webkit-backdrop-filter: var(--gl-blur-float);
+  border-color: var(--gl-hairline);
+  isolation: isolate;
+}
+
 /* ═══ 4 float:浮在一切之上的层 —— 最厚模糊 + 描边 + 独立层叠上下文 ═══
  * isolation 是必需的:不隔离的话 backdrop-filter 会去采样同一层叠上下文里的兄弟元素,
  * 浮层会把自己底下的浮层也糊进来。

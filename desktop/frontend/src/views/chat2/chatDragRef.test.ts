@@ -4,7 +4,7 @@
  * 文件路径按它交给 run_bash/read_file。写歪一个字符,链路就断在别处而不是这里,故钉死。
  */
 import { describe, it, expect } from 'vitest'
-import { REF_MIME, PATHS_MIME, hasChatRef, readChatRefs, refToText, refsToText, sessionIdOfTarget, type ChatRef } from './chatDragRef'
+import { REF_MIME, PATHS_MIME, hasChatRef, readChatRefs, refToText, sessionIdOfTarget, type ChatRef } from './chatDragRef'
 
 const dt = (data: Record<string, string>) => ({
   types: Object.keys(data),
@@ -58,9 +58,9 @@ describe('refToText', () => {
     expect(refToText({ kind: 'session', id: 's1', title: '' }, root)).toBe('[[session:s1|Chat]] ')
   })
 
-  it('多条连拼,每条自带尾空格', () => {
+  it('每条自带尾空格(连引多条时不粘在一起)', () => {
     const refs: ChatRef[] = [{ kind: 'file', path: '/a.ts' }, { kind: 'session', id: 's1', title: 'T' }]
-    expect(refsToText(refs, root)).toBe('/a.ts [[session:s1|T]] ')
+    expect(refs.map((r) => refToText(r, root)).join('')).toBe('/a.ts [[session:s1|T]] ')
   })
 })
 

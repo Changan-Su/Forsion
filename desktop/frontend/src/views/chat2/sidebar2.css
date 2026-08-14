@@ -124,10 +124,15 @@
   margin: 4px 10px 8px;
   padding: 2px;
   border-radius: 999px;
-  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  /* 明暗关系(2026-08-13 用户拍板反转):**轨道恒比所在面板暗一档(凹),选中态用 --accent 实底反色**。
+   * --accent 深色是近白 / 浅色是近黑,所以一套规则同时满足「深色选中浅、浅色选中深」。
+   * ⚠️ 轨道不能用 --overlay-light:它在深色下是**提亮**叠层(rgba(242,239,232,.05)),轨道会比面板更亮
+   *    而滑块回落到 --bg = 面板色,正好把明暗关系做反了 —— 这就是改前的观感。固定黑色叠层两模式都凹。 */
+  background: rgba(0, 0, 0, 0.05);
   -webkit-app-region: no-drag;
   flex-shrink: 0;
 }
+:root.dark .t2s-vaultseg { background: rgba(0, 0, 0, 0.24); }
 .t2s-vaultseg-thumb {
   position: absolute;
   top: 2px;
@@ -135,9 +140,11 @@
   left: 2px;
   width: calc(50% - 2px);
   border-radius: 999px;
-  background: var(--surface, var(--bg));
-  border: var(--border-width, 1px) solid var(--border);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.07);
+  /* 次强调色(= 桌面 ribbon `.rb-space.on` 那一档),不是纯 --accent 实底 —— 用户拍板 2026-08-13。
+   * 半透明叠在上面的黑色轨道上:深色下往亮里走、浅色下往暗里走,明暗方向照旧成立,只是更克制。 */
+  background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
+  border: none;
+  box-shadow: none;
   /* 克制的弹性:轻微过冲即收,不弹跳 */
   transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
   will-change: transform;
@@ -159,7 +166,8 @@
   cursor: pointer;
   transition: color 0.25s var(--ease-out, ease);
 }
-.t2s-vaultseg button.on { color: var(--text); }
+/* 与 `.rb-space.on` 同款:accent 前景(--accent-ink 是它的可读性守卫版)。 */
+.t2s-vaultseg button.on { color: var(--accent-ink, var(--accent, var(--text))); }
 .t2s-vaultseg[data-busy] button { cursor: default; }
 .t2s-vaultseg-hint {
   margin: 0 12px 8px;
@@ -366,6 +374,9 @@
   transition: background var(--duration-fast, 0.15s);
 }
 .t2s-srow:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+/* 多选选中态(会话行与笔记行共用 .t2s-srow):与「当前打开」的 .active 刻意不同色 —— 选中是灰底,
+   当前是主题色底 + 左侧色条,同时成立时两者叠加也读得出来(与文件树 .t2sf-row.sel 同一档灰)。 */
+.t2s-srow.sel { background: var(--overlay-medium); }
 .t2s-srow.active { background: color-mix(in srgb, var(--accent-ink) 12%, transparent); }
 .t2s-srow.active::before {
   content: '';

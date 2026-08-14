@@ -8,7 +8,7 @@
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Bot } from 'lucide-react'
-import { zoomOf } from '@lcl/engine'
+import { zoomOf, useEdgeNudge } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 import type { AgentConfig } from '../types'
@@ -56,18 +56,26 @@ export const ModelPill: React.FC<{
   onSelect: (id: string) => void
   thinkingLevel?: Thinking
   onThinkingChange?: (lv: Thinking) => void
+  /** 当前模型支持的思考档(引擎能力表);缺省=未知,全可选。不支持的档标灰但仍可选(引擎会自动降档)。 */
+  supportedThinking?: string[]
+  /** 本 run 实际生效档(引擎 context_info):与请求档不同=被降档,行值标注出来(H6)。 */
+  effectiveThinking?: string
   /** 无可选模型时的只读标签(外部引擎:「用引擎默认」)。 */
   emptyLabel?: string
   /** 菜单底部说明(云端会话解释「为什么直连模型不在列表里」,免得用户以为丢了)。 */
   footnote?: string
   title?: string
-}> = ({ disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, emptyLabel, footnote, title }) => {
+}> = ({ disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, supportedThinking, effectiveThinking, emptyLabel, footnote, title }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<'model' | 'effort' | null>(null)
   const [flip, setFlip] = useState(false)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
+  // 视口兜底:菜单 `right:0` + 固定 224px 宽,pill 只要离左边不足 232px,菜单左缘就是负数;
+  // 子面板再 flip 到左边一叠加,整块跑出屏幕(手机上实报)。subFlips 只决定翻不翻,不管掉不掉出去。
+  const menuFix = useEdgeNudge(open)
+  const subFix = useEdgeNudge(pane ? `${pane}:${flip}` : '') // flip 进依赖:翻面后要按新一侧重夹
 
   useEffect(() => {
     if (!open) { setPane(null); return }
@@ -123,7 +131,7 @@ export const ModelPill: React.FC<{
         <ChevronDown size={10} />
       </button>
       {open && (
-        <div className="composer-menu composer-menu--model">
+        <div ref={menuFix.ref} className="composer-menu composer-menu--model" style={menuFix.style}>
           <button className={`cm-row${pane === 'model' ? ' is-open' : ''}`} onMouseEnter={showPane('model')} onFocus={showPane('model')} onClick={showPane('model')}>
             <span className="cm-row-k">{t('pill.rowModel')}</span>
             <span className="cm-row-v">{label}</span>
@@ -132,24 +140,37 @@ export const ModelPill: React.FC<{
           {onThinkingChange && (
             <button className={`cm-row${pane === 'effort' ? ' is-open' : ''}`} onMouseEnter={showPane('effort')} onFocus={showPane('effort')} onClick={showPane('effort')}>
               <span className="cm-row-k">{t('pill.rowEffort')}</span>
-              <span className="cm-row-v">{t(thinkingShortKey(effLevel))}</span>
+              <span className="cm-row-v">
+                {t(thinkingShortKey(effLevel))}
+                {/* 实际生效档与请求档不同=被能力表降档,如实标出(H6) */}
+                {effectiveThinking && effectiveThinking !== effLevel && ` → ${t(thinkingShortKey(effectiveThinking as Thinking))}`}
+              </span>
               <ChevronRight size={13} />
             </button>
           )}
           {footnote && <div className="menu-section cm-foot">{footnote}</div>}
           {pane && (
-            <div ref={subRef} className={`cm-sub${flip ? ' flip' : ''}`} data-pane={pane}>
+            <div
+              ref={(el) => { subRef.current = el; subFix.ref.current = el }}
+              className={`cm-sub${flip ? ' flip' : ''}`}
+              data-pane={pane}
+              style={subFix.style}
+            >
               {pane === 'effort'
-                ? THINKING_LEVELS.map((lv) => (
-                    <button
-                      key={lv}
-                      className={`menu-item${effLevel === lv ? ' active' : ''}`}
-                      onClick={() => { onThinkingChange?.(lv); setOpen(false) }}
-                    >
-                      <span className="grow">{t(thinkingLabelKey(lv))}</span>
-                      <span className="mi-check">{effLevel === lv ? '✓' : ''}</span>
-                    </button>
-                  ))
+                ? THINKING_LEVELS.map((lv) => {
+                    // 不支持的档标灰但可选:引擎会自动降档,选了也不出错——灰+后缀让降档不再静默
+                    const unsupported = !!supportedThinking && !supportedThinking.includes(lv)
+                    return (
+                      <button
+                        key={lv}
+                        className={`menu-item${effLevel === lv ? ' active' : ''}${unsupported ? ' mi-dim' : ''}`}
+                        onClick={() => { onThinkingChange?.(lv); setOpen(false) }}
+                      >
+                        <span className="grow">{t(thinkingLabelKey(lv))}{unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}</span>
+                        <span className="mi-check">{effLevel === lv ? '✓' : ''}</span>
+                      </button>
+                    )
+                  })
                 : groups.map((g) => (
                     <React.Fragment key={g.label}>
                       <div className="menu-section">{g.label}</div>

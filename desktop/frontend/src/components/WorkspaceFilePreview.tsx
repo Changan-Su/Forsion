@@ -16,11 +16,10 @@ import { Markdown } from './Markdown'
 import {
   previewKindFor, iconForFile, extOf, baseOf, parseDelimited, fmtSize, mimeForExt, type PreviewKind,
 } from '../services/fileKinds'
-import { useIsDark } from '../services/useIsDark'
+import { DiffView } from './DiffView'
 import { useI18n } from '../i18n'
 import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
-import 'diff2html/bundles/css/diff2html.min.css'
 // pdf.js worker(?url 走 Vite 资源,单独 asset);PDF 渲染到 canvas,不依赖 Electron PDF 插件。
 // ⚠️legacy 构建:pdf.js 5.7 用了 Map.prototype.getOrInsertComputed,Electron 40 V8 没有(见 PdfAnnotator)。
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
@@ -159,28 +158,8 @@ export const DocxView: React.FC<{ bytes: Uint8Array; download?: () => void }> = 
   return <div className="wsfile-doc wsfile-docx"><div ref={ref} />{busy && <Spinner />}</div>
 }
 
-// ── diff → diff2html(并排/逐行;暗色加 d2h-dark-color-scheme)─────────────────────
-export const DiffView: React.FC<{ text: string; side: boolean; download?: () => void }> = ({ text, side, download }) => {
-  const { t } = useI18n()
-  const dark = useIsDark()
-  const [html, setHtml] = useState<string | null>(null)
-  const [err, setErr] = useState(false)
-  useEffect(() => {
-    let cancelled = false
-    setHtml(null); setErr(false)
-    void (async () => {
-      try {
-        const d2h: any = await import('diff2html')
-        const out: string = (d2h.html || d2h.default?.html)(text, { outputFormat: side ? 'side-by-side' : 'line-by-line', drawFileList: false, matching: 'lines' })
-        if (!cancelled) setHtml(out)
-      } catch { if (!cancelled) setErr(true) }
-    })()
-    return () => { cancelled = true }
-  }, [text, side])
-  if (err) return <OfficeFail t={t} download={download} />
-  if (html == null) return <Spinner />
-  return <div className={`wsfile-doc wsfile-diff${dark ? ' d2h-dark-color-scheme' : ''}`} dangerouslySetInnerHTML={{ __html: html }} />
-}
+// ── diff → diff2html:已抽独立模块(聊天流工具卡/审批卡共用),此处 re-export 保住既有 import 面 ──
+export { DiffView }
 
 // ── PDF → pdf.js 渲染到 canvas(渲染器侧,不依赖 Electron PDF 插件 / file:// / blob)──
 const MAX_PDF_PAGES = 100
@@ -371,7 +350,7 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
   else if (kind === 'json') { let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2) } catch { /* keep raw */ } body = cm({ value: pretty, fileName: 'x.json', language: 'json', wrap }) }
   else if (kind === 'code') body = cm({ value: text, fileName: target.name, wrap })
   else if (kind === 'text') body = cm({ value: text, fileName: target.name, wrap })
-  else if (kind === 'diff') body = <DiffView text={text} side={diffSide} download={target.download} />
+  else if (kind === 'diff') body = <DiffView text={text} side={diffSide} />
   else if (kind === 'csv') {
     const rows = parseDelimited(text, ext === 'tsv' ? '\t' : ',')
     const capped = rows.slice(0, CSV_ROW_CAP); const header = capped[0] ?? []

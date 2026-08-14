@@ -5,7 +5,9 @@
 .t2c { position: relative; width: 100%; }
 .t2c-inner { max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; padding: 8px 28px 16px; display: flex; flex-direction: column; gap: 8px; }
 
-/* 悬浮卡 */
+/* 悬浮卡 —— 字面意义上的悬浮:输入区**不占布局**,正文铺满整列从它底下穿过去
+   (见 chat2.css 的 .composer-anchor)。所以底色必须是**不透明**的:它要真的挡住底下滚过的字。
+   glass 主题把这层换成半透磨砂(genesis-glass/theme.css 3.5),那里糊的正是底下的正文。 */
 .t2c-card {
   position: relative;
   container-type: inline-size; /* 卡宽驱动底排药丸收窄(容器查询,不看视口) */
@@ -58,6 +60,9 @@
 
 .t2c-hint { font-size: 11px; color: var(--danger, #e0564b); margin-bottom: 6px; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+/* 「已选择」引用条:标签 + 文件/会话芯片。芯片本体沿用 base.css 的 .attach-chip(与附件同一套观感)。 */
+.t2c-refrow { align-items: center; }
+.t2c-reflabel { font-size: 12px; color: var(--text-faint); flex-shrink: 0; }
 
 /* slash / @ 菜单(浮在卡上方) */
 .t2c-menu {
@@ -100,6 +105,7 @@
 .t2c-ctxring-track { fill: none; stroke: var(--overlay-light, rgba(127, 127, 127, 0.2)); stroke-width: 3; }
 .t2c-ctxring-fill { fill: none; stroke: var(--accent-ink); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.35s var(--ease-out, ease); }
 .t2c-ctxring[data-warn] .t2c-ctxring-fill { stroke: var(--danger, #e0564b); }
+.t2c-ctxring-pop span[data-warn] { color: var(--danger, #e0564b); }
 .t2c-ctxring-pop {
   position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 30;
   display: none; flex-direction: column; gap: 3px; padding: 8px 11px; min-width: 150px;
@@ -107,11 +113,24 @@
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
   font-size: 11px; color: var(--text-muted); white-space: nowrap;
 }
+/* 矮窗口兜底:弹层向上生长会顶穿视口。限高只能加在内层列表——加在弹层本体的 overflow 会把
+ * ::after 那条 8px 悬停桥剪掉(check:ctxring 钉过的坑),「压缩」按钮就又点不到了 */
+.t2c-ctxring-pop .t2c-ctxinfo-secs, .t2c-ctxring-pop .t2c-ctxinfo-files { max-height: 170px; overflow-y: auto; }
 /* 圈与浮层之间那 8px 空隙谁都不占:鼠标往上走时 hover 断掉、浮层消失,里面的「压缩」就永远点不到。
  * 铺一条透明桥补上(视觉不变)。仪器:npm run check:ctxring */
 .t2c-ctxring-pop::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
 .t2c-ctxring:hover .t2c-ctxring-pop { display: flex; }
 .t2c-ctxring-pct { font-weight: 600; color: var(--text); }
+/* context 视图(H5/H8/B2):窗口来源标注 + 注入段分解 + 指令文件清单 */
+.t2c-ctxinfo-src { color: var(--text-faint); }
+.t2c-ctxinfo-secs, .t2c-ctxinfo-files {
+  display: flex; flex-direction: column; gap: 2px; margin-top: 3px; padding-top: 5px;
+  border-top: var(--border-width, 1px) solid var(--border);
+}
+.t2c-ctxinfo-row { display: flex; justify-content: space-between; gap: 14px; }
+.t2c-ctxinfo-row > span:last-child { font-family: var(--font-mono); color: var(--text-faint); }
+.t2c-ctxinfo-label { color: var(--text-faint); }
+.t2c-ctxinfo-file { font-family: var(--font-mono); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; }
 .t2c-ctxring-compact:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
 

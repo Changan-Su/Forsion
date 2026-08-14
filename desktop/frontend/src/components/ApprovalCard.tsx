@@ -1,10 +1,12 @@
 /**
  * host-exec 审批卡片(approval_request 事件 → 内嵌聊天流;run_bash 命令可编辑后批准)。
- * 已兑现(approval_result/410)置灰。
+ * 文件修改类工具批准前渲染 diff 预览(B4:破坏发生前可见)。已兑现(approval_result/410)置灰。
  */
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
 import type { ApprovalRequest } from '../types'
+import { DiffView } from './DiffView'
+import { toolDiffText } from './toolDiff'
 import { useI18n } from '../i18n'
 
 export const ApprovalCard: React.FC<{
@@ -19,6 +21,7 @@ export const ApprovalCard: React.FC<{
   })()
   const [cmd, setCmd] = useState(initialCmd)
   const resolved = req.status !== 'pending'
+  const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
   const decide = (action: 'approve' | 'approve_always' | 'reject') => {
     if (resolved) return
@@ -46,7 +49,11 @@ export const ApprovalCard: React.FC<{
           spellCheck={false}
         />
       ) : (
-        <div className="approval-preview">{req.preview}</div>
+        <>
+          {/* preview 恒显:它是「⚠ 工作区外写入」等升级警示的唯一载体(引擎 approvals.ts 拼进字符串),diff 只能附加不能替换 */}
+          <div className="approval-preview">{req.preview}</div>
+          {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
+        </>
       )}
       {!resolved && (
         <div className="approval-actions">

@@ -17,8 +17,7 @@ import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
 import { useApp, stickyDefaults, newChatModelId } from '../stores/appStore'
-import { hasChatRef, readChatRefs, refsToText } from './chat2/chatDragRef'
-import { usePageStore } from '@amadeus/store/pageStore'
+import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { useI18n } from '../i18n'
@@ -30,7 +29,7 @@ import { zoomOf } from '@lcl/engine'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
-const EMPTY_USAGE = { ctx: 0, base: 0, live: 0 }
+const EMPTY_USAGE: { ctx: number; base: number; live: number; runCost?: number; costLimit?: number } = { ctx: 0, base: 0, live: 0 }
 const EMPTY_STEER: Array<{ id: string; text: string }> = []
 const EMPTY_STRS: string[] = []
 
@@ -53,6 +52,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     running: !!(activeId && state.runningBySession[activeId]),
     execConfig: (activeId && state.configBySession[activeId]) || EMPTY_CONFIG,
     activeUsage: (activeId && state.usageBySession[activeId]) || EMPTY_USAGE,
+    activeCtxInfo: (activeId && state.ctxInfoBySession[activeId]) || null,
     isGroupVoting: !!(activeId && state.groupVoting[activeId]),
     llmRetry: (activeId && state.llmRetryBySession[activeId]) || null,
     compacting: activeId ? state.compactingBySession[activeId] : undefined,
@@ -65,9 +65,9 @@ export function ChatView({ leaf, params }: ViewProps) {
     newChatModel: state.newChatModel,
     pendingDraft: state.pendingDraft,
     setPendingDraft: state.setPendingDraft,
-    draftAppend: state.draftAppend,
-    appendDraft: state.appendDraft,
-    clearDraftAppend: state.clearDraftAppend,
+    draftRefs: state.draftRefs,
+    appendRefs: state.appendRefs,
+    clearDraftRefs: state.clearDraftRefs,
     steerPending: (activeId && state.steerPendingBySession[activeId]) || EMPTY_STEER,
     steerSent: (activeId && state.steerSentBySession[activeId]) || EMPTY_STRS,
     steerRestore: (activeId && state.steerRestoreBySession[activeId]) || null,
@@ -121,9 +121,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
   const [quotedText, setQuotedText] = useState('')
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
-  const vaultRoot = usePageStore((st) => st.vaultRoot)
   const activeSession = s.activeSession
   const activeModel = (s.modelsResp?.models || []).find((m) => m.id === (activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || '')) || null
+  // 切模型后 SSE 重放会把 setSessionModel 清掉的旧 context_info 复活——事件带的 modelId 与当前
+  // 会话模型不一致就视同没有(老引擎事件不带 modelId → 放行,保持兼容)
+  const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
   const running = s.running
@@ -186,6 +188,21 @@ export function ChatView({ leaf, params }: ViewProps) {
     chatScrollRef.current = el
     useWorkspace.getState().registerChatSurface(leaf.id, el)
   }, [leaf.id])
+
+  // 输入卡悬浮在正文之上(不占布局)→ 它的实高得回传给 CSS:正文底部留白、底部渐隐止点、
+  // 「回到底」按钮三处都按 --t2-composer-h 让位。高度随芯片行/多行草稿/steer 队列实时变,
+  // 只能量不能算;写在 .t2-chat-col 上(= 悬浮的定位祖先),整列共享。
+  const composerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = composerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const col = el.parentElement
+    const apply = (): void => col?.style.setProperty('--t2-composer-h', `${Math.round(el.getBoundingClientRect().height)}px`)
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // 原生标签栏的标签名 = 会话标题(否则显示视图名「对话」);随会话/标题变化更新。
   useEffect(() => { leaf.setTitle(activeSession?.title || t('sidebar.newChat')) }, [activeSession?.title, leaf, t])
@@ -323,8 +340,9 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (!hasChatRef(e.dataTransfer)) return
     e.preventDefault()
     e.stopPropagation()
-    const text = refsToText(readChatRefs(e.dataTransfer), vaultRoot || '')
-    if (text) s.appendDraft(text)
+    // 结构化交给 Composer(它转成「已选择」芯片)——不再拼成文本再解析回来。
+    const refs = readChatRefs(e.dataTransfer)
+    if (refs.length) s.appendRefs(refs)
   }
 
   return (
@@ -343,7 +361,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           <div className="t2-stream" ref={registerChatScroll}>
             <div className="t2-stream-inner">
             {!hasMessages ? (
-              historyLoading ? <Skeleton variant="chat" /> : <EmptyState2 />
+              // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
+              // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。
+              historyLoading ? <Skeleton variant="chat" /> : null
             ) : (
               activeMessages.map((m) => {
                 if (m.role === 'user' && m.id === editingId) {
@@ -430,44 +450,52 @@ export function ChatView({ leaf, params }: ViewProps) {
         </div>
       </ErrorBoundary>
 
-      {/* Agent 选择不 gate execMode:云会话(sandbox,web/桌面云端)同样有 agent;引擎=本地 ACP 子进程,仍 host-only。 */}
-      {!hasMessages && !mvCfg.groupChat && (
-        <div className="newchat-pickers">
-          {mvCfg.execMode === 'host' && availableEngines.length > 0 && (
-            <EnginePicker
-              engines={availableEngines}
-              selectedId={mvCfg.engineId || ''}
-              warmingId={mvCfg.engineId && !s.engineCaps[mvCfg.engineId] ? mvCfg.engineId : null}
-              onSelect={(id) => (activeId ? s.setSessionEngine(id, activeId) : s.setNewChatCfg((c) => ({ ...c, engineId: id || undefined, engineModelId: undefined, ...(id ? { groupChat: false } : {}) })))}
-            />
-          )}
-          {!mvCfg.engineId && s.agentDefs.length > 0 && (
-            <AgentPicker
-              agents={s.agentDefs}
-              selectedSlug={mvCfg.agentSlug || ''}
-              defaultSlug={s.defaultAgentSlug}
-              avatars={s.agentAvatars}
-              onSelect={activeId ? (slug) => s.selectSessionAgent(slug, activeId) : s.selectNewChatAgent}
-            />
-          )}
-        </div>
-      )}
+      {/* 新对话空状态:铺满整个聊天列的绝对定位层 → 品牌图+标语落在 **view 的竖向中心**
+          (2026-08-14 用户要求)。放在滚动流里只能在「输入框以上那段」居中,整体偏高。
+          pointer-events:none:它盖在下面的 agent/引擎选择器与输入框之上,不能吃掉它们的点击。 */}
+      {!hasMessages && !historyLoading && <EmptyState2 />}
 
-      {!activeId && (
-        <div className="newchat-projectbar">
-          <div className="newchat-projectbar-inner">
-            <ProjectSelector
-              workspaces={s.workspaces()}
-              value={s.newChatWs?.key ?? null}
-              onChange={(w) => s.setNewChatWs(w)}
-              onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
-              onAddCloudProject={(name) => void s.addCloudProject(name)}
-            />
+      {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
+          正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
+          新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
+      <div className="composer-anchor" ref={composerRef}>
+        {/* Agent 选择不 gate execMode:云会话(sandbox,web/桌面云端)同样有 agent;引擎=本地 ACP 子进程,仍 host-only。 */}
+        {!hasMessages && !mvCfg.groupChat && (
+          <div className="newchat-pickers">
+            {mvCfg.execMode === 'host' && availableEngines.length > 0 && (
+              <EnginePicker
+                engines={availableEngines}
+                selectedId={mvCfg.engineId || ''}
+                warmingId={mvCfg.engineId && !s.engineCaps[mvCfg.engineId] ? mvCfg.engineId : null}
+                onSelect={(id) => (activeId ? s.setSessionEngine(id, activeId) : s.setNewChatCfg((c) => ({ ...c, engineId: id || undefined, engineModelId: undefined, ...(id ? { groupChat: false } : {}) })))}
+              />
+            )}
+            {!mvCfg.engineId && s.agentDefs.length > 0 && (
+              <AgentPicker
+                agents={s.agentDefs}
+                selectedSlug={mvCfg.agentSlug || ''}
+                defaultSlug={s.defaultAgentSlug}
+                avatars={s.agentAvatars}
+                onSelect={activeId ? (slug) => s.selectSessionAgent(slug, activeId) : s.selectNewChatAgent}
+              />
+            )}
           </div>
-        </div>
-      )}
+        )}
+  
+        {!activeId && (
+          <div className="newchat-projectbar">
+            <div className="newchat-projectbar-inner">
+              <ProjectSelector
+                workspaces={s.workspaces()}
+                value={s.newChatWs?.key ?? null}
+                onChange={(w) => s.setNewChatWs(w)}
+                onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+                onAddCloudProject={(name) => void s.addCloudProject(name)}
+              />
+            </div>
+          </div>
+        )}
 
-      <div className="composer-anchor">
         <AnimatePresence>
           {s.filePreview && (
             <WorkspaceFilePreview key={s.filePreview.name} target={s.filePreview} onClose={() => s.setFilePreview(null)} />
@@ -514,13 +542,19 @@ export function ChatView({ leaf, params }: ViewProps) {
           onStop={() => s.stop(activeId)}
           quotedText={quotedText}
           onClearQuote={() => setQuotedText('')}
-          contextWindow={activeModel?.contextWindow || 0}
+          // 引擎 context_info 报的窗口是真实预算口径(覆盖表/族兜底),优先于模型列表值——两边可能不一致
+          contextWindow={activeCtxInfo?.ctxWindow || activeModel?.contextWindow || 0}
+          ctxInfo={activeCtxInfo}
           ctxTokens={activeUsage.ctx}
           sessionTokens={activeUsage.base + activeUsage.live}
+          runCost={activeUsage.runCost}
+          costLimit={activeUsage.costLimit}
           onCompact={() => void s.compact(activeId)}
           seedText={s.steerRestore ?? s.pendingDraft}
-          appendText={s.draftAppend}
-          onAppendConsumed={s.clearDraftAppend}
+          appendRefs={s.draftRefs}
+          onAppendRefsConsumed={s.clearDraftRefs}
+          // 聊天开在侧栏(Amadeus 右栏等)→ 默认引用主区当前打开的那篇笔记;聊天自己就是主区时无从谈起
+          autoRefFromMain={leaf.loc !== 'main'}
           onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else s.setPendingDraft(null) }}
           sentHistory={sentHistory}
           pendingSteer={s.steerPending}

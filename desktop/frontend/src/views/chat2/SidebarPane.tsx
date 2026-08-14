@@ -11,7 +11,8 @@ import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { moveTo } from '@lcl/engine'
 import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
-import { useI18n } from '../../i18n'
+import { registerMessages, useI18n } from '../../i18n'
+import { useItemSelect } from '../itemSelect'
 import { tipProps, tipT } from '../../hoverTip'
 import { setChannelConnectedSession } from '../../services/backendService'
 import { useChannels } from '../../stores/channelsStore'
@@ -20,6 +21,13 @@ import './sidebar2.css'
 import { OverlayAt } from '@lcl/engine'
 
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
+
+registerMessages({
+  'sidebar.archiveN': { zh: '归档 {n} 项', en: 'Archive {n}' },
+  'sidebar.unarchiveN': { zh: '取消归档 {n} 项', en: 'Unarchive {n}' },
+  'sidebar.deleteN': { zh: '删除 {n} 项', en: 'Delete {n}' },
+  'sidebar.deleteConfirmN': { zh: '删除选中的 {n} 个会话?不可撤销。', en: 'Delete {n} selected chats? This cannot be undone.' },
+})
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
 const WS_ORDER_KEY = 'forsion_tangu_workspace_order'
@@ -44,7 +52,8 @@ export interface SidebarPaneProps {
   activeId: string | null
   runningIds: Set<string>
   unreadIds: Set<string>
-  onSelect: (id: string) => void
+  /** opts.newTab = ⌘/Ctrl 单击:把会话开进新标签页而不是就地。 */
+  onSelect: (id: string, opts?: { newTab?: boolean }) => void
   cfg: TanguDesktopConfig
   modelId: string
   activeSession: SessionRecord | null
@@ -62,12 +71,13 @@ export interface SidebarPaneProps {
   showSpecial?: boolean
   onNewChat: () => void
   onOpenWorkspace: (wsKey: string) => void
-  /** 共享「进入的工作区」key(与文件面板手风琴同步)。 */
+  /** 共享「进入的工作区」key(与文件面板联动展开;不收其余)。 */
   activeWorkspaceKey?: string | null
   onEnterWorkspace?: (key: string) => void
 }
 
-interface MenuState { id: string; x: number; y: number; archived: boolean }
+/** ids = 本次菜单的作用集合(右键落在多选里 → 整批;否则就它自己);archived 取被右键那条的状态。 */
+interface MenuState { id: string; ids: string[]; x: number; y: number; archived: boolean }
 
 /** 顶部入口行(新对话 / 记忆 / 后台智能体):图标 + 名 + 可选展开箭头。 */
 const SpecialRow: React.FC<{
@@ -84,6 +94,10 @@ const SpecialRow: React.FC<{
 
 export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const { t } = useI18n()
+  const rootRef = useRef<HTMLElement>(null)
+  // 会话行的多选(判据与文件树/笔记树同源,见 views/itemSelect)。范围选按 DOM 顺序 → 要整个 aside
+  // 作用域:归档区在 sticky footer 里,不在 .t2s-scroll 内。
+  const sel = useItemSelect(rootRef)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
@@ -163,19 +177,21 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       return next
     })
   }
-  // 手风琴:进入某工作区(点工作区头 / 点其会话)→ 只展开它,收起其余;并同步给文件面板(共享 key)。
-  const accordion = (key: string): void => {
-    p.onEnterWorkspace?.(key)
-    const next = new Set(orderedWorkspaces.map((w) => w.key).filter((k) => k !== key))
-    setCollapsedGroups(next)
-    saveCollapsed(next)
+  /** 展开某工作区。**只展开自己,不动别人** —— 原先是手风琴(展开一个收起其余),
+   *  用户拍板去掉:多个工作区可以同时开着。enterGroup = 展开 + 同步给文件面板。 */
+  const openGroup = (key: string): void => {
+    setCollapsedGroups((prev) => {
+      if (!prev.has(key)) return prev
+      const next = new Set(prev)
+      next.delete(key)
+      saveCollapsed(next)
+      return next
+    })
   }
-  // 文件面板那侧进入工作区时,本面板同步只展开它(收起其余)。
+  const enterGroup = (key: string): void => { p.onEnterWorkspace?.(key); openGroup(key) }
+  // 文件面板那侧进入工作区时,本面板同步展开它(同样不收其余)。
   useEffect(() => {
-    if (p.activeWorkspaceKey == null) return
-    const next = new Set(orderedWorkspaces.map((w) => w.key).filter((k) => k !== p.activeWorkspaceKey))
-    setCollapsedGroups(next)
-    saveCollapsed(next)
+    if (p.activeWorkspaceKey != null) openGroup(p.activeWorkspaceKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.activeWorkspaceKey])
 
@@ -191,7 +207,10 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
   const openMenu = (e: React.MouseEvent, s: SessionRecord) => {
     e.preventDefault(); e.stopPropagation(); setWsMenu(null)
-    setMenu({ id: s.id, x: e.clientX, y: e.clientY, archived: !!s.archived })
+    // 右键落在已选中的会话上 → 整批;落在别处 → 改成只选它。
+    const ids = sel.batch(s.id)
+    if (ids.length === 1) sel.only(s.id)
+    setMenu({ id: s.id, ids, x: e.clientX, y: e.clientY, archived: !!s.archived })
   }
   const openWsMenu = (e: React.MouseEvent, ws: WorkspaceDescriptor) => {
     e.preventDefault(); e.stopPropagation(); setMenu(null)
@@ -226,12 +245,19 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const renderItem = (s: SessionRecord) => (
     <button
       key={s.id}
-      className={`t2s-srow${s.id === p.activeId ? ' active' : ''}`}
+      className={`t2s-srow${s.id === p.activeId ? ' active' : ''}${sel.has(s.id) ? ' sel' : ''}`}
+      data-sel-id={s.id}
       // Historian 会话摘要 → 悬停预览(无摘要回落标题本身,长标题被截断时仍可读全)。
       title={s.summary || s.title || undefined}
       // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts。
       style={{ paddingLeft: rowPadLeft(1) }}
-      onClick={() => { p.onSelect(s.id); accordion(sessionWorkspaceKey(s)) }}
+      // 统一点击语义(见 views/itemSelect):裸击开、⌘ 开新标签、shift/option 只动选中态。
+      onClick={(e) => {
+        const act = sel.click(s.id, e)
+        if (act.open === 'none') return
+        p.onSelect(s.id, act.open === 'new' ? { newTab: true } : undefined)
+        enterGroup(sessionWorkspaceKey(s))
+      }}
       onContextMenu={(e) => openMenu(e, s)}
       // 拖到聊天区 = 插入 [[session:id]] 引用(agent 用 read_session 读)。重命名中不拖,否则选不了文字。
       draggable={renaming !== s.id}
@@ -239,7 +265,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         const r = e.currentTarget.getBoundingClientRect()
         e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
         e.dataTransfer.effectAllowed = 'copy'
-        setChatRefDrag(e.dataTransfer, [{ kind: 'session', id: s.id, title: s.title || 'New Chat' }])
+        // 拖已选中的会话 = 整批带走(引用块支持多条)。
+        const all = [...p.sessions, ...p.archivedSessions]
+        const refs = sel.batch(s.id).map((id) => {
+          const x = all.find((y) => y.id === id)
+          return { kind: 'session' as const, id, title: x?.title || 'New Chat' }
+        })
+        setChatRefDrag(e.dataTransfer, refs)
       }}
     >
       {/* 前导槽:与笔记/文件 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
@@ -270,7 +302,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   )
 
   return (
-    <aside className="t2s-side">
+    <aside className="t2s-side" ref={rootRef}>
       <div className="t2s-search">
         <Search size={13} className="t2s-dim" />
         <input value={query} placeholder={t('sidebar.search.placeholder')} onChange={(e) => setQuery(e.target.value)} />
@@ -354,15 +386,15 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </div>
                     ) : ws.kind === 'channel' ? (
                       // 通道文件夹:纯展开折叠(与普通工作区一致)。行尾连接状态点。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? accordion(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className="t2s-group-label">{ws.name}</span>
                         <span className={`t2s-mini-dot${channelRunning.get(ws.channel || 'wechat') ? ' ok' : ''}`} />
                       </button>
                     ) : (
                       // 点组头 = 纯展开/折叠,**不跳主区**(用户拍板;进工作区详情走「查看更多」或组菜单)。
-                      // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 手风琴展开。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? accordion(ws.key) : toggleGroup(ws.key) }}>
+                      // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 展开自己。
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className="t2s-group-label">{ws.name}</span>
                       </button>
@@ -409,14 +441,18 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
       {menu && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
-            <Pencil size={13} /> {t('sidebar.rename')}
-          </button>
-          <button onClick={() => { p.onArchive(menu.id, !menu.archived); setMenu(null) }}>
+          {menu.ids.length === 1 && (
+            <button onClick={() => { const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
+              <Pencil size={13} /> {t('sidebar.rename')}
+            </button>
+          )}
+          <button onClick={() => { for (const id of menu.ids) p.onArchive(id, !menu.archived); sel.clear(); setMenu(null) }}>
             {menu.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-            {menu.archived ? t('sidebar.unarchive') : t('sidebar.archive')}
+            {menu.ids.length > 1
+              ? t(menu.archived ? 'sidebar.unarchiveN' : 'sidebar.archiveN', { n: String(menu.ids.length) })
+              : menu.archived ? t('sidebar.unarchive') : t('sidebar.archive')}
           </button>
-          {(() => {
+          {menu.ids.length === 1 && (() => {
             // 通道会话 → 「设为正在连接」(该通道的入站消息改走此会话)。
             const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id)
             const chWs = s?.project_path ? p.workspaces.find((w) => w.kind === 'channel' && w.key === s.project_path) : null
@@ -433,13 +469,20 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               </button>
             )
           })()}
-          {menu.archived && (
+          {/* 删除仍只给已归档的(旧规矩:先归档再删);多选时要求**整批都已归档**,免得一刀切进活跃会话。 */}
+          {menu.ids.every((id) => p.archivedSessions.some((x) => x.id === id)) && (
             <button className="danger" onClick={() => {
+              const ids = menu.ids
               const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id)
               setMenu(null)
-              if (window.confirm(t('sidebar.deleteConfirm', { name: s?.title || 'New Chat' }))) p.onDelete(menu.id)
+              const ok = ids.length > 1
+                ? window.confirm(t('sidebar.deleteConfirmN', { n: String(ids.length) }))
+                : window.confirm(t('sidebar.deleteConfirm', { name: s?.title || 'New Chat' }))
+              if (!ok) return
+              for (const id of ids) p.onDelete(id)
+              sel.clear()
             }}>
-              <Trash2 size={13} /> {t('sidebar.delete')}
+              <Trash2 size={13} /> {menu.ids.length > 1 ? t('sidebar.deleteN', { n: String(menu.ids.length) }) : t('sidebar.delete')}
             </button>
           )}
         </OverlayAt>

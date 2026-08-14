@@ -4,9 +4,11 @@
  * 展开:每个调用一紧凑行(动作 + 目标 + 可选 +增/-删),每行可再展开看完整参数/结果。
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
-import React, { useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { ChevronRight, ChevronDown, Loader2, XCircle, CheckCircle2, Terminal } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
+import { DiffView } from './DiffView'
+import { toolDiffText } from './toolDiff'
 import { useI18n } from '../i18n'
 import type { ToolEvent } from '../types'
 
@@ -89,6 +91,8 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
 const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc }> = ({ ev, desc }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
+  const diff = useMemo(() => (open ? toolDiffText(ev.name, ev.arguments) : null), [open, ev.name, ev.arguments])
   const verb = desc.verbKey ? t(desc.verbKey) : ev.name
   return (
     <div className="tool-row">
@@ -103,7 +107,17 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc }> = ({ ev, desc }) => {
       </button>
       <AnimatedCollapse open={open}>
         <div className="tool-card-body">
-          {ev.arguments && (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>)}
+          {diff ? (
+            <>
+              <DiffView text={diff} side={false} />
+              {ev.arguments && (
+                <details className="tool-raw-args">
+                  <summary>{t('tool.argsLabel')}</summary>
+                  {fmtArgs(ev.arguments)}
+                </details>
+              )}
+            </>
+          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
           {ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{ev.result || t('tool.empty')}</>)}
         </div>
       </AnimatedCollapse>

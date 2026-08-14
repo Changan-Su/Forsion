@@ -112,6 +112,8 @@ export interface HistorianConfig {
    *  fork=尾部分叉判官:用会话模型在全量上下文快照上一次补全出判断(缓存对齐),失败自动回落 independent。 */
   mode: 'independent' | 'assist' | 'fork'
   prompt: string
+  /** 自进化自动档:判官额外提名「工作笔记候选」进各 Agent 收件箱,/refine 时供其审阅采纳(默认关)。 */
+  harnessCandidates: boolean
 }
 export interface MuseConfig {
   enabled: boolean
@@ -439,6 +441,8 @@ export interface ModelInfo {
   contextWindow?: number
   /** 能不能直接「看」图。黑名单制:缺省/true=能;false=遇图自动转交「辅助模型 · 图像识别」。 */
   supportsVision?: boolean
+  /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
+  thinkingLevels?: string[]
 }
 
 export interface ModelsResponse {
@@ -573,6 +577,23 @@ export interface DisplayFile {
 
 // ── 聊天流 UI 模型(由历史 + SSE 事件归约) ─────────────────────────────────────
 
+/** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模(H5/H8/B2)。 */
+export interface CtxInfo {
+  ctxWindow: number
+  /** 'override' | 'model' | 'family' | 'default';后两档是猜的,UI 要标注 */
+  ctxWindowSource: string
+  sections: Array<{ k: string; tokens: number }>
+  files: string[]
+  filesTruncated: boolean
+  historyCount: number
+  historyTokens: number
+  /** 思考档:请求档 vs 实际生效档(能力表 clamp;不同=被自动降档,H6 降档可见)。 */
+  thinkingRequested?: string
+  thinkingEffective?: string
+  /** 事件按哪个模型算的:切模型后 SSE 重放会复活旧事件,消费方据此丢弃不匹配的。 */
+  modelId?: string
+}
+
 export interface ToolEvent {
   id: string
   name: string
@@ -699,6 +720,7 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   notesAttachmentFolder?: string
   /** 导入文件是否默认开启预览(![[file]] 形式);false=插入 [名](路径) 链接。 */
   notesImportPreview?: boolean
+  notesUpgradeV4?: boolean
   /** 日记(每日笔记)所在 vault 相对文件夹;'' = vault 根。 */
   notesDailyFolder?: string
   /** `[[ ]]` 补全是否收录附件与数据库(undefined 视为 true=默认开;关掉则只补全笔记)。 */

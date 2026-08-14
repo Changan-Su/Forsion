@@ -12,7 +12,11 @@ import {
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
-import type { AgentConfig, Attachment, MessageRecord, ModelInfo, NormalAgentDef, SkillInfo } from '../../types'
+
+// context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
+const CTX_SEC_KEYS = new Set(['persona', 'harness', 'guidance', 'profile', 'project', 'agentFolder', 'memory', 'skills', 'environment', 'hooks', 'plan'])
+import type { AgentConfig, Attachment, CtxInfo, MessageRecord, ModelInfo, NormalAgentDef, SkillInfo } from '../../types'
+import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { useI18n } from '../../i18n'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
@@ -21,7 +25,7 @@ import { track } from '../../achievements/store'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { noteRefInsert } from '../../components/wikiChat'
-import { refToText } from './chatDragRef'
+import { refToText, type ChatRef } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
@@ -44,6 +48,38 @@ const APPROVALS = [
   { id: 'full-auto', Icon: ShieldAlert, key: 'input.approval.fullAuto', desc: 'input.approval.fullAutoDesc', danger: true },
   { id: 'custom', Icon: Settings2, key: 'input.approval.custom', desc: 'input.approval.customDesc' },
 ] as const satisfies ReadonlyArray<{ id: NonNullable<AgentConfig['approvalMode']>; Icon: LucideIcon; key: string; desc: string; danger?: boolean }>
+
+/**
+ * 输入框上方「已选择」引用条的一条。
+ *
+ * token = 发送时原样拼回正文的那段文本 —— 与 [[ 选择器 / 拖拽引用**完全同一套契约**
+ * (`[[绝对路径|名字]]` / `[[session:id|标题]]` / 本机路径),所以引擎、消息气泡、read_session
+ * 这些下游一个字都不用改:变的只是「引用长什么样」,不是「引用是什么」。
+ */
+export interface RefChip {
+  /** 去重键 + 发送时拼回的文本(不带尾空格)。 */
+  token: string
+  /** 芯片上显示的名字。 */
+  name: string
+  kind: 'note' | 'file' | 'session'
+}
+
+const chipBaseName = (p: string): string => p.split(/[\\/]/).pop() || p
+/** 本机/工作区路径 → 芯片(含空格的路径发送时要加引号,与 refToText 的 file 分支一致)。 */
+export const fileChip = (path: string): RefChip => ({
+  token: /\s/.test(path) ? `"${path}"` : path,
+  name: chipBaseName(path),
+  kind: 'file',
+})
+
+/** 一条结构化引用 → 芯片。token 由 refToText 生成 = **与行内插入完全同一段文本**,
+ *  发送时原样拼回,故引擎/气泡/read_session 收到的东西一个字节都没变。 */
+export function refChipOf(ref: ChatRef, vaultRoot: string): RefChip {
+  const token = refToText(ref, vaultRoot).trim()
+  if (ref.kind === 'session') return { token, name: ref.title || 'Chat', kind: 'session' }
+  if (ref.kind === 'note') return { token, name: chipBaseName(ref.path), kind: 'note' }
+  return fileChip(ref.path)
+}
 
 /** 历史召回的纯索引算术:hist=旧→新,pos 0=草稿、1..N=第 N 条最近发送。
  *  older=true(↑)由新到旧、false(↓)回到草稿。越界返回 null(不动)。 */
@@ -121,13 +157,22 @@ export const Composer2: React.FC<{
   contextWindow?: number
   ctxTokens?: number
   sessionTokens?: number
+  /** 本 run 累计成本(点)与上限(TANGU_MAX_RUN_COST;0=关闭):引擎 usage 事件下发,无 run 时 undefined。 */
+  runCost?: number
+  costLimit?: number
+  /** 引擎 context_info(窗口来源/注入段分解/指令文件/历史规模);未跑过 run 时 null。 */
+  ctxInfo?: CtxInfo | null
   onCompact?: () => void
   /** 外部预填草稿(反馈诊断/对话建 agent 等 via-chat 入口);非空时 mount/变更即写入输入框并回调清空。 */
   seedText?: string | null
   onSeedConsumed?: () => void
-  /** 拖引用进聊天:**追加**到草稿末尾(seedText 是整体覆盖,两条通道语义不同别合并)。 */
-  appendText?: { text: string; seq: number } | null
-  onAppendConsumed?: () => void
+  /** 拖引用进聊天(工作区侧栏 / 笔记树 / 会话列表):直接挂到输入框上方的「已选择」芯片条。
+   *  seq 让连拖同一条也能触发;消费后由宿主清空。 */
+  appendRefs?: { refs: ChatRef[]; seq: number } | null
+  onAppendRefsConsumed?: () => void
+  /** 聊天开在侧栏(left/right)时为 true:自动把**主区当前打开的那篇笔记**作为默认引用挂上
+   *  「已选择」条(用户可 ×,换一篇即复活)。聊天自己就是主区时无「另一个主区文件」可言,恒 false。 */
+  autoRefFromMain?: boolean
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
   sentHistory?: string[]
   /** steer 等待区:run 跑动中已发出、还没被引擎注入的消息(注入即从这里消失并上屏)。 */
@@ -150,8 +195,8 @@ export const Composer2: React.FC<{
   agents, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
-  contextWindow, ctxTokens, sessionTokens, onCompact,
-  seedText, onSeedConsumed, appendText, onAppendConsumed, sentHistory,
+  contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
+  seedText, onSeedConsumed, appendRefs, onAppendRefsConsumed, autoRefFromMain, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
 }) => {
   const { t, locale } = useI18n()
@@ -160,6 +205,19 @@ export const Composer2: React.FC<{
   const [customCommands, setCustomCommands] = useState<CustomCommandInfo[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [wsFiles, setWsFiles] = useState<Attachment[]>([])
+  /** 「已选择」引用条(显式加的:[[ 选择器 / 拖进来 / 粘贴本机文件)。自动那条不进这里,见 autoChip。 */
+  const [refChips, setRefChips] = useState<RefChip[]>([])
+  /** 被 × 掉的自动引用(值 = 那条引用的 token):主区换一个文件即复活,不是永久关闭。 */
+  const [autoRefOff, setAutoRefOff] = useState<string | null>(null)
+  /** 加引用:按 token 去重 —— 既比已有的,也比**这一批内部**的(多选拖拽可能带重复行:
+   *  只比 prev 的话两条同 token 会一起进来,React key 撞车且发送时正文里重复一遍)。 */
+  const addRefChips = (next: RefChip[]): void =>
+    setRefChips((prev) => {
+      const seen = new Set(prev.map((c) => c.token))
+      const add: RefChip[] = []
+      for (const c of next) if (!seen.has(c.token)) { seen.add(c.token); add.push(c) }
+      return add.length ? [...prev, ...add] : prev
+    })
   const [pinnedSkills, setPinnedSkills] = useState<SkillInfo[]>([])
   const [hint, setHint] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
@@ -304,6 +362,12 @@ export const Composer2: React.FC<{
 
   const isHost = execConfig.execMode === 'host'
   const approval = execConfig.approvalMode || 'auto-edit'
+  // 视口兜底:这两个菜单是 absolute-in-relative + 硬编码宽度(mode 菜单 min-width:320px),
+  // 手机上比可用宽度还宽、按钮又贴着左缘 → 菜单直接掉出屏幕(用户实报)。见 menuAnchor.useEdgeNudge。
+  const addFix = useEdgeNudge(openMenu === 'add')
+  const modeFix = useEdgeNudge(openMenu === 'mode')
+  // 上下文占比的悬停详情条:同款 absolute + 固定宽,窄屏也会捅出边缘(它常挂 true,靠 RO/resize 重量)。
+  const ctxPopFix = useEdgeNudge(true)
 
   useEffect(() => {
     if (!openMenu) return
@@ -323,9 +387,29 @@ export const Composer2: React.FC<{
   const autoGrow = () => {
     const ta = taRef.current
     if (!ta) return
+    // 空草稿一律交还给 CSS(rows=1 + min-height:1.6em)。不管上一次量高是在什么怪状态下发生的
+    // ——面板隐藏、宽度为 0、折叠动画中途——只要内容空了就一定收得回一行:用户报的正是
+    // 「明明 chat box 是空的却撑到最高档」。内联 height 是这个 bug 唯一的落脚点,清掉即根治症状。
+    if (!ta.value) { ta.style.height = ''; return }
     ta.style.height = 'auto'
     ta.style.height = composerAutoHeight(ta.scrollHeight)
   }
+
+  // 宽度变了要重量:autoGrow 只挂在 draft 上,而换行行数是宽度的函数 —— 拖侧栏、开关右栏、
+  // 缩窗口都会让旧高度失真(在错误宽度下量到的高也是这么留下的)。只认**宽度**变化:
+  // autoGrow 自己就在改高度,听高度会自激成循环。
+  useEffect(() => {
+    const ta = taRef.current
+    if (!ta || typeof ResizeObserver === 'undefined') return
+    let w = ta.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (ta.clientWidth === w) return
+      w = ta.clientWidth
+      autoGrow()
+    })
+    ro.observe(ta)
+    return () => ro.disconnect()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 草稿变化后同步高度(含发送清空后回缩):useLayoutEffect 在 React 把新值提交到 DOM 之后、绘制之前跑,
   // 量到的是当前文本;此前散落的 rAF(autoGrow) 会早于提交跑而量到旧文本 → 发送长文后输入框不回缩(本次修的 bug)。
@@ -354,15 +438,15 @@ export const Composer2: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedText])
 
-  // 从工作区拖进来的引用:追加到草稿末尾(与语音转写同一套追加规则),消费后回调清空。
+  // 从工作区/笔记树/会话列表拖进来的引用 → 上方「已选择」芯片(2026-08-14 起;此前是往草稿里塞
+  // 一长串 [[路径]] 文本)。消费后回调清空。
   useEffect(() => {
-    if (!appendText?.text) return
-    setDraft((d) => (d ? d.replace(/\s+$/, '') + ' ' + appendText.text : appendText.text))
-    setHistPos(0) // 草稿被改过 → 退出 ↑ 历史召回,否则下次 ↓ 会把引用抹掉
-    onAppendConsumed?.()
+    if (!appendRefs?.refs.length) return
+    addRefChips(appendRefs.refs.map((r) => refChipOf(r, vaultRoot || '')))
+    onAppendRefsConsumed?.()
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appendText?.seq])
+  }, [appendRefs?.seq])
 
   /** 把光标处那个命令词换成 text(空串=删掉),返回它的起点。
    *  命令项一律走它 —— 斜杠不再必然在开头,直接 setDraft('') 会连带抹掉用户已写好的正文。 */
@@ -403,6 +487,10 @@ export const Composer2: React.FC<{
         ? () => { replaceSlash('/verify '); setSlashIndex(0) }
         : undefined,
       '/think': onThinkingChange ? () => { replaceSlash('/think '); setSlashIndex(0) } : undefined,
+      // /refine:插入原文让用户可补充说明,回车走普通发送——引擎检测 /refine 前缀注入复盘指令(agentLoop)。
+      // 仅 host 会话(工作笔记写在本机 agent 目录,manage_harness 也是 host-only);运行中不露出——
+      // 此时发送会变成 steer 注入,引擎的 refine 检测只在 run 开头跑一次,steer 进去的 /refine 不生效。
+      '/refine': isHost && !running ? () => { replaceSlash('/refine '); setSlashIndex(0) } : undefined,
       '/approval': () => { setOpenMenu('mode'); close() },
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
       '/help': () => { app().openSettings('about'); close() },
@@ -423,7 +511,10 @@ export const Composer2: React.FC<{
       '/cost': () => {
         const st = app()
         st.pushNotice(
-          `${(sessionTokens ?? 0).toLocaleString()} tokens · 上下文 ${(ctxTokens ?? 0).toLocaleString()}/${(contextWindow ?? 0).toLocaleString()}`,
+          `${(sessionTokens ?? 0).toLocaleString()} tokens · ${t('input.ctxLabel')} ${(ctxTokens ?? 0).toLocaleString()}/${(contextWindow ?? 0).toLocaleString()}` +
+            (runCost != null && costLimit != null && costLimit > 0
+              ? ` · ${t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}`
+              : ''),
         )
         close()
       },
@@ -433,12 +524,13 @@ export const Composer2: React.FC<{
           [
             `${t('input.slash.status')}`,
             `model=${modelId || '-'}`,
-            `think=${thinkingLevel || 'medium'}`,
+            `think=${thinkingLevel || 'medium'}${ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') && ctxInfo.thinkingEffective && ctxInfo.thinkingEffective !== ctxInfo.thinkingRequested ? `→${ctxInfo.thinkingEffective}` : ''}`,
             `approval=${execConfig.approvalMode || '-'}`,
             `cwd=${execConfig.cwd || '-'}`,
             `loop=${maxIterations || 90}`,
             `verify=${verifyCommand || '-'}`,
             `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
+            `cost=${runCost != null ? Math.round(runCost).toLocaleString() : '-'}${costLimit != null && costLimit > 0 ? `/${costLimit.toLocaleString()}` : ''}`,
           ].join('\n  '),
         )
         close()
@@ -467,10 +559,13 @@ export const Composer2: React.FC<{
     }
     // 思考档位:每档一条,直接点选(比先 /think 再敲档位快)。
     if (onThinkingChange) {
+      // 外部引擎会话:modelId 是 Tangu 侧回退值,不是引擎实际用的模型——不标注,免得标错方向
+      const supported = engineId ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels
       for (const lv of THINKING_LEVELS) {
+        const unsupported = !!supported && !supported.includes(lv)
         items.push({
           cmd: `/think ${lv}`,
-          desc: `${t('input.slash.thinkDesc', { level: lv })}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
+          desc: `${t('input.slash.thinkDesc', { level: lv })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
           run: () => { onThinkingChange(lv); close() },
         })
       }
@@ -500,7 +595,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
@@ -639,27 +734,60 @@ export const Composer2: React.FC<{
   const refActive = !!fileRefCtx && refMatches.length > 0
   useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])
 
+  /** 选中一条候选 → 变成上方「已选择」芯片,并把触发用的 `[[查询` 从草稿里抹掉。
+   *  发送时 token 原样拼回正文,故对引擎/气泡而言与旧的行内插入完全等价(见 RefChip)。 */
   const pickRef = (c: RefCand) => {
     if (!fileRefCtx) return
-    const before = draft.slice(0, fileRefCtx.start)
-    const insert = c.session
+    const token = (c.session
       ? refToText({ kind: 'session', id: c.session.id, title: c.session.title }, vaultRoot || '') // [[session:id|标题]]:与拖拽同契约(session 分支不用 vaultRoot)
       : c.note && vaultRoot
       ? noteRefInsert(vaultRoot, c.p) // [[绝对路径|名字]]:气泡渲染名字,agent 读到路径
-      : `${/\s/.test(c.p) ? `"${c.p}"` : c.p} ` // 含空格加引号,与粘贴本机路径一致
-    const next = before + insert + draft.slice(cursorPos)
-    setDraft(next)
-    const caret = before.length + insert.length
+      : /\s/.test(c.p) ? `"${c.p}"` : c.p // 含空格加引号,与粘贴本机路径一致
+    ).trim()
+    addRefChips([{ token, name: c.session ? c.session.title : chipBaseName(c.p), kind: c.session ? 'session' : c.note ? 'note' : 'file' }])
+    const before = draft.slice(0, fileRefCtx.start)
+    setDraft(before + draft.slice(cursorPos))
     requestAnimationFrame(() => {
       const ta = taRef.current
-      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
+      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = before.length; setCursorPos(before.length) }
       autoGrow()
     })
   }
 
+  /** 主区当前打开的那篇**笔记**。pageStore 门面在编辑器子树**之外**解析到「活动编辑器面板」那份,
+   *  正是「当前这篇」的语义,主区换 tab / 就地换笔记都会自动跟上(见 pageStore 的作用域一节)。 */
+  const mainNote = usePageStore((s) => s.activePage)
+  /** 主区聚焦的那个 tab 承载的文件(笔记以外的:工作区文件预览 wsfile 等)。
+   *  ⚠️ `mainTabs[].active` 比的是**全局** activePanel —— 焦点在侧栏(本功能的常态)时主区一个
+   *  active 都没有,只看它必然恒空。故:主区有焦点就按焦点那个判,没焦点就在主区里挑一个带文件的
+   *  (编辑器优先 —— 它的实时路径由 activePage 提供,比 tab 参数准)。 */
+  const mainRefKey = useWorkspace((w) => {
+    const tabs = w.mainTabs
+    // 焦点在侧栏(本功能的常态)时主区一个 active 都没有 → 退到主区**自己的前台 tab**(front),
+    // 而不是「第一个类型对得上的」——后者在主区开着两个 tab 时会引用后台那篇(评审 M4)。
+    const cand = tabs.find((t) => t.active) ?? tabs.find((t) => t.front) ?? tabs.find((t) => t.type === 'amadeus-editor') ?? tabs.find((t) => t.filePath)
+    if (!cand) return ''
+    if (cand.type === 'amadeus-editor') return 'note' // 具体哪一篇由 activePage 说了算(就地换笔记也跟得上)
+    return cand.filePath ? `file:${cand.filePath}` : ''
+  }) // 选择器返回**字符串**:zustand v5 没有 equalityFn,返回新对象会每次都判「变了」→ 无限重渲
+  const autoChip = useMemo<RefChip | null>(() => {
+    // 仅 host 会话:引用是一条**本机绝对路径**,云端/沙箱会话的 agent 读不到 —— 挂上去就是
+    // 「显示了路径但模型读不到」,与 [[ 候选、粘贴本机文件那两处的门控同一条理由。
+    if (!isHost || !autoRefFromMain || !mainRefKey) return null
+    const chip = mainRefKey === 'note'
+      ? (mainNote && vaultRoot ? refChipOf({ kind: 'note', path: mainNote }, vaultRoot) : null)
+      : fileChip(mainRefKey.slice('file:'.length))
+    if (!chip || autoRefOff === chip.token) return null
+    if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
+    return chip
+  }, [isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
+  const allRefChips = autoChip ? [autoChip, ...refChips] : refChips
+
   const send = () => {
     const text = draft.trim()
-    if (!text) return
+    // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;
+    // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
+    if (!text && !allRefChips.length) return
     const loopMatch = /^\/loop(?:\s+(\d+))?$/i.exec(text)
     if (loopMatch && onMaxIterationsChange) {
       if (loopMatch[1]) {
@@ -726,7 +854,9 @@ export const Composer2: React.FC<{
     }
     if (disabled) return
     const quoted = quotedText ? `${quotedText.split('\n').map((l) => `> ${l}`).join('\n')}\n\n` : ''
-    const outgoing = quoted + text
+    // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
+    const refs = allRefChips.length ? allRefChips.map((c) => c.token).join(' ') + '\n' : ''
+    const outgoing = refs + quoted + text
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
       return
@@ -741,6 +871,7 @@ export const Composer2: React.FC<{
       setHistPos(0)
       setAttachments([])
       setWsFiles([])
+      setRefChips([]) // 自动那条不在这里面 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
       setPinnedSkills([])
       setMentionedSlug('')
       setMentionAgents([])
@@ -859,10 +990,8 @@ export const Composer2: React.FC<{
               const paths = Array.from(files)
                 .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
                 .filter(Boolean)
-                .map((p) => (/\s/.test(p) ? `"${p}"` : p))
               if (paths.length) {
-                setDraft((d) => (d ? `${d} ${paths.join(' ')}` : paths.join(' ')))
-                setSlashDismissed(false)
+                addRefChips(paths.map(fileChip)) // 上方「已选择」芯片,不再往输入框里塞一串裸路径
                 requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
                 return
               }
@@ -875,6 +1004,27 @@ export const Composer2: React.FC<{
             <div className="t2c-quote">
               <span className="t2c-quote-text">{quotedText.length > 280 ? `${quotedText.slice(0, 280)}…` : quotedText}</span>
               <button title={t('input.remove')} onClick={() => onClearQuote?.()} className="t2c-quote-x"><X size={12} /></button>
+            </div>
+          )}
+          {allRefChips.length > 0 && (
+            <div className="t2c-chiprow t2c-refrow">
+              <span className="t2c-reflabel">{t('input.ref.selected')}</span>
+              {allRefChips.map((c) => (
+                <span className="attach-chip" key={c.token} title={c.token}>
+                  {c.kind === 'session'
+                    ? <MessageSquare size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
+                    : <FileText size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
+                  <span>{c.name}</span>
+                  <button
+                    title={t('input.remove')}
+                    onClick={() => {
+                      // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
+                      if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
+                      else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
+                    }}
+                  ><X size={12} /></button>
+                </span>
+              ))}
             </div>
           )}
           {attachments.length > 0 && (
@@ -943,16 +1093,15 @@ export const Composer2: React.FC<{
               if (others.length) {
                 const paths: string[] = []
                 for (const f of others) {
-                  // 仅 host 会话才插入本机绝对路径(与 onDrop 一致);云端/沙箱会话模型读不到本机路径,
+                  // 仅 host 会话才引用本机绝对路径(与 onDrop 一致);云端/沙箱会话模型读不到本机路径,
                   // 一律回退上传到会话工作区,避免「显示了路径但模型读不到、文件也没进工作区」。
                   let p = ''
                   if (isHost) { try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' } }
-                  if (p) paths.push(/\s/.test(p) ? `"${p}"` : p)
+                  if (p) paths.push(p)
                   else leftover.push(f) // 无路径(云端/网页/剪贴板非磁盘文件)→ 上传工作区
                 }
                 if (paths.length) {
-                  setDraft((d) => (d ? `${d} ${paths.join(' ')}` : paths.join(' ')))
-                  setSlashDismissed(false)
+                  addRefChips(paths.map(fileChip)) // 粘贴的本机文件同样走「已选择」芯片
                   requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
                 }
               }
@@ -1071,7 +1220,7 @@ export const Composer2: React.FC<{
                 <Plus size={16} />
               </button>
               {openMenu === 'add' && (
-                <div className="composer-menu left">
+                <div ref={addFix.ref} className="composer-menu left" style={addFix.style}>
                   <button className="menu-item" onClick={() => { fileRef.current?.click(); setOpenMenu(null) }}>
                     <ImagePlus size={14} />
                     <span className="grow">{t('input.addImage')}</span>
@@ -1092,7 +1241,7 @@ export const Composer2: React.FC<{
                   <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
-                  <div className="composer-menu composer-menu--mode left">
+                  <div ref={modeFix.ref} className="composer-menu composer-menu--mode left" style={modeFix.style}>
                     {onPlanModeChange && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>
@@ -1149,10 +1298,44 @@ export const Composer2: React.FC<{
                     <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
                   </svg>
                   {/* 悬停详情:token 占用 / 会话累计 / 压缩(替代旧的横条+文字,平时只留进度圈) */}
-                  <span className="t2c-ctxring-pop">
+                  <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
                     <span className="t2c-ctxring-pct">{t('input.ctxLabel')} {pct}%</span>
                     <span>{(ctxTokens || 0).toLocaleString()} / {contextWindow.toLocaleString()} tokens</span>
                     {!!sessionTokens && sessionTokens > 0 && <span>{t('input.sessionTokens', { n: sessionTokens.toLocaleString() })}</span>}
+                    {runCost != null && costLimit != null && costLimit > 0 && (
+                      <span data-warn={runCost >= costLimit * 0.8 || undefined}>{t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}</span>
+                    )}
+                    {/* context 视图(H5/H8/B2):窗口来源(family/default=猜的要标注)、注入段分解、指令文件、历史 */}
+                    {ctxInfo && (
+                      <>
+                        <span className="t2c-ctxinfo-src">
+                          {t(`ctx.windowSource.${['override', 'model', 'family', 'default'].includes(ctxInfo.ctxWindowSource) ? ctxInfo.ctxWindowSource : 'default'}`)}
+                        </span>
+                        {(ctxInfo.sections.length > 0 || ctxInfo.historyTokens > 0) && (
+                          <div className="t2c-ctxinfo-secs">
+                            {[...ctxInfo.sections].sort((a, b) => b.tokens - a.tokens).map((sec) => (
+                              <span key={sec.k} className="t2c-ctxinfo-row">
+                                {/* 未来引擎新增的段 key 直接显示 key 本身,别渲染成 'ctx.sec.xxx' 原始键 */}
+                                <span>{CTX_SEC_KEYS.has(sec.k) ? t(`ctx.sec.${sec.k}`) : sec.k}</span><span>~{sec.tokens.toLocaleString()}</span>
+                              </span>
+                            ))}
+                            {ctxInfo.historyTokens > 0 && (
+                              <span className="t2c-ctxinfo-row">
+                                <span>{t('ctx.sec.history', { n: ctxInfo.historyCount })}</span><span>~{ctxInfo.historyTokens.toLocaleString()}</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {ctxInfo.files.length > 0 && (
+                          <div className="t2c-ctxinfo-files">
+                            <span className="t2c-ctxinfo-label">{t('ctx.files.label')}{ctxInfo.filesTruncated ? ` ${t('ctx.files.truncated')}` : ''}</span>
+                            {ctxInfo.files.map((f) => (
+                              <span key={f} className="t2c-ctxinfo-file" title={f}>{f.split(/[/\\]/).slice(-2).join('/')}</span>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
                     {onCompact && <button className="t2c-ctxring-compact" onClick={onCompact}>{t('input.slash.compact')}</button>}
                   </span>
                 </span>
@@ -1166,6 +1349,11 @@ export const Composer2: React.FC<{
                 onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
                 thinkingLevel={isEngine ? undefined : thinkingLevel}
                 onThinkingChange={isEngine ? undefined : onThinkingChange}
+                supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
+                effectiveThinking={
+                  // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
+                  isEngine ? undefined : (ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
+                }
                 emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
                 footnote={!isEngine && !isHost ? t('input.cloudModelHint') : undefined}
               />
@@ -1180,13 +1368,14 @@ export const Composer2: React.FC<{
             </button>
             {running ? (
               <>
-                {!!draft.trim() && (
+                {(!!draft.trim() || allRefChips.length > 0) && (
                   <button className="t2c-send" onClick={send} disabled={disabled} title={t('input.send')}><ArrowUp size={16} /></button>
                 )}
                 <button className="t2c-stop" onClick={onStop}><Square size={10} /> {t('input.stop')}</button>
               </>
             ) : (
-              <button className="t2c-send" onClick={send} disabled={disabled || !draft.trim()} title={t('input.send')}><ArrowUp size={16} /></button>
+              // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
+              <button className="t2c-send" onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')}><ArrowUp size={16} /></button>
             )}
             </>)}
           </div>

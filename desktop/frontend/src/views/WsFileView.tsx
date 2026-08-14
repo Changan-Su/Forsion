@@ -268,7 +268,7 @@ export function WsFileView({ leaf }: ViewProps) {
   else if (kind === 'json') { let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2) } catch { /* keep raw */ } body = cm({ value: pretty, fileName: 'x.json', language: 'json', wrap }) }
   else if (kind === 'code') body = cm({ value: text, fileName: name, wrap })
   else if (kind === 'text') body = cm({ value: text, fileName: name, wrap })
-  else if (kind === 'diff') body = <DiffView text={text} side={diffSide} download={target.download} />
+  else if (kind === 'diff') body = <DiffView text={text} side={diffSide} />
   else if (kind === 'csv') {
     const rows = parseDelimited(text, ext === 'tsv' ? '\t' : ',')
     const capped = rows.slice(0, CSV_ROW_CAP); const header = capped[0] ?? []
