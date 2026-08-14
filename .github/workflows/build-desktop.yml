@@ -55,8 +55,8 @@ jobs:
 
       # desktop 的单测此前**一个都不在 CI 里**(本 job 的 working-directory 是 tangu-agent),
       # 于是渲染层 + electron main 的九百多个用例只在本地跑过。纯 vitest,不需要浏览器。
-      # `check:*` 那批不在这儿:它们要真 Electron / Chromium(scrollfade 那支在无头 chromium 上
-      # 必然假红 —— overlay 滚动条,gutter 恒为 0),留在本地跑。
+      # `check:*` 那批不在这儿:它们要真 Electron / Chromium(check:scrollbar 那支在无头 chromium 上
+      # 必然**假绿** —— 那儿恒是 overlay 滚动条、gutter 恒为 0,量什么都通过),留在本地跑。
       - name: Desktop unit tests
         working-directory: desktop
         run: |

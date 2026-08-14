@@ -3,7 +3,7 @@
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, globalShortcut, session, shell, nativeImage, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences } from 'electron'
 import { basename, dirname, join, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
@@ -12,13 +12,13 @@ import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { privateHostReason } from './netGuard'
-import { execFile, spawn } from 'child_process'
+import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir } from 'os'
 import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
 import { startForsionMcp } from './mcpServer'
 import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
-  forsionRefreshToken, shouldRefreshToken, tokenRemainingMs,
+  forsionRefreshToken, shouldRefreshToken,
 } from './forsionAuth'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
@@ -333,6 +333,8 @@ interface TanguStoredConfig {
   notesImportPreview: boolean
   /** 日记(每日笔记)所在 vault 相对文件夹;'' = vault 根。 */
   notesDailyFolder: string
+  /** 打开 v3 笔记时是否升级为 v4 纯 md 格式(默认关:手机端装机闸未确认前不写出 v4)。 */
+  notesUpgradeV4: boolean
   /** `[[ ]]` 补全是否收录附件与数据库;关=只补全笔记。默认开。 */
   notesWikiIncludeFiles: boolean
   /** 朗读(TTS)模型 id(<providerId>/<model> 或某 provider ttsModelIds 命中);'' = 未启用,聊天不显示朗读按钮。 */
@@ -391,6 +393,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   notesAttachmentFolder: 'assets',
   notesImportPreview: true,
   notesDailyFolder: '',
+  notesUpgradeV4: true, // 2026-08-14 默认开(用户拍板);显式 false 才关
   notesWikiIncludeFiles: true,
   ttsModelId: '',
   ttsVoice: '',
@@ -483,6 +486,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       notesAttachmentFolder: notes.folder || 'assets',
       notesImportPreview: notes.preview !== false,
       notesDailyFolder: notes.dailyFolder || '',
+      notesUpgradeV4: notes.upgradeV4 !== false, // 未配置=开(Codex P1:=== true 会把默认物化成关)
       notesWikiIncludeFiles: notes.wikiIncludeFiles !== false,
     } : {}),
     ...(home.tts !== undefined ? {
@@ -541,6 +545,7 @@ async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStore
   if ('notesAttachmentFolder' in patch) { notes.folder = patch.notesAttachmentFolder; nT = true }
   if ('notesImportPreview' in patch) { notes.preview = patch.notesImportPreview; nT = true }
   if ('notesDailyFolder' in patch) { notes.dailyFolder = patch.notesDailyFolder; nT = true }
+  if ('notesUpgradeV4' in patch) { notes.upgradeV4 = patch.notesUpgradeV4; nT = true }
   if ('notesWikiIncludeFiles' in patch) { notes.wikiIncludeFiles = patch.notesWikiIncludeFiles; nT = true }
   if ('ttsModelId' in patch) { tts.modelId = patch.ttsModelId; tT = true }
   if ('ttsVoice' in patch) { tts.voice = patch.ttsVoice; tT = true }
@@ -1049,6 +1054,29 @@ function recoverRenderer(reason: string): void {
 // TANGU_DISABLE_GPU=1 是逃生阀,驱动有问题的机器可彻底关硬件加速(默认不关,避免牺牲所有人性能)。
 if (process.platform === 'win32') app.commandLine.appendSwitch('disable-gpu-process-crash-limit')
 if (process.env.TANGU_DISABLE_GPU === '1') app.disableHardwareAcceleration()
+
+// 滚动条悬浮不占位 + 静止后自动隐去。
+// Win/Linux 的 Aura 滚动条默认经典、恒占 15px,只能靠 feature 开成 overlay。
+// 两个名字都传:Chromium 换过一轮命名(OverlayScrollbar → FluentOverlayScrollbar),不认识的会被忽略。
+if (process.platform !== 'darwin') {
+  app.commandLine.appendSwitch('enable-features', 'FluentOverlayScrollbar,OverlayScrollbar')
+} else {
+  // ⚠️ 2026-08-14 更正:原先写「mac 不用管,默认就是 overlay」是错的 —— 系统「显示滚动条」缺省值是
+  // **自动**,而自动的语义是「触控板→overlay,接了鼠标→经典」。插着鼠标时 AppKit 给的是
+  // NSScrollerStyleLegacy,Chromium 照单全收:恒占 15px 且**永不隐去**(用户实报「静止后不渐隐」,
+  // check:scrollbar 实测 gutter=15px)。页面 CSS 覆盖不了,自绘滚动条又必然占位(那是上一轮被否的方案)。
+  // 出路:AppleShowScrollBars 是**逐 app 生效**的 —— 只往本 app 自己的域里写,不动全局,别的 app 不受影响。
+  try {
+    // 用户在全局显式选了「总是显示」的,多半是无障碍需要,不许替他改回去 → 撤掉本 app 的覆盖。
+    // ⚠️ 必须走子进程读全局:本 app 域一旦写过,systemPreferences.getUserDefault 读到的就是自己写的那份。
+    const g = execFileSync('defaults', ['read', '-g', 'AppleShowScrollBars'], { encoding: 'utf8' }).trim()
+    if (g === 'Always') systemPreferences.removeUserDefault('AppleShowScrollBars')
+    else systemPreferences.setUserDefault('AppleShowScrollBars', 'string', 'WhenScrolling')
+  } catch {
+    // 全局没设过(缺省=自动)时 `defaults read` 直接非零退出 —— 这恰恰是要修的那种情况。
+    systemPreferences.setUserDefault('AppleShowScrollBars', 'string', 'WhenScrolling')
+  }
+}
 
 // Amadeus Space:amadeus-asset:// 自定义协议须在 app ready 前登记为 privileged。
 registerAmadeusAssetSchemes()
@@ -1786,8 +1814,9 @@ app.whenReady().then(async () => {
     lastAuthToken = fresh // 先更新去重锚:watcher 随后比对相同即跳过,不会白重启一次后端
     saveTanguCreds({ ...loadTanguCreds(), token: fresh })
     console.log('[auth] 登录态已滑动续期(有效期重新计满 2 周)')
-    // ponytail: 只写文件,不重启 managed 后端 / 同步引擎——它们手上那枚(env 快照)还有效,下次启动
-    // 自然吃到新的;代价是连续运行 >14d 不重启的极端情形里 env 那枚会过期,重启即自愈。
+    // ponytail: 只写文件,不重启 managed 后端 / 同步引擎。启动那次由调用点排序保证(spawn 排在续期
+    // 之后),运行中每 24h 这次留下的漂移是良性的:渲染层的 cfg.token 也是「boot / 后端 ready」时的
+    // 同一次快照,两边同为旧串 → 逐字比对照样通过。代价仍是连续运行 >14d 不重启时 env 那枚会过期。
   }
 
   ipcMain.handle('auth:status', async () => {
@@ -2331,12 +2360,12 @@ app.whenReady().then(async () => {
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   try { globalShortcut.register('CommandOrControl+Shift+M', () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ }
 
-  // 启动即续期(2 周滑动窗口)。平时不阻塞启动;只有剩余不足 1 天才等它换完再拉后端——后端 token
-  // 走 env 快照,拿一枚马上过期的会中途 401。等的那条也最多 4s(离线时不能把开窗一起拖住)。
-  if (tokenRemainingMs(loadTanguCreds().token || '') < 24 * 3600_000) await refreshAuthSliding(4000)
-  else void refreshAuthSliding()
+  // 启动即续期(2 周滑动窗口),且**必须先于 ensureBackend**:后端 token 走 env 快照,而本地端点鉴权
+  // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
+  // auth.json)一连就整片 401,表现为「本地会话列表加载失败 + 假的『登录已过期』」。开窗不等这条
+  // (4s 封顶,离线不拖启动);无需续期时(1h 内换过)立即落到 finally,后端照常即刻起。
+  void refreshAuthSliding(4000).catch(() => {}).finally(() => { void ensureBackend() })
   setInterval(() => { void refreshAuthSliding() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
-  void ensureBackend()
   // 对外 MCP 端点:仅在设置「高级」已开启时随 App 启动(默认关);不依赖后端就绪,工具调用时现取引擎地址。
   void loadConfig().then((c) => applyForsionMcp(c.mcpEnabled))
   // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,

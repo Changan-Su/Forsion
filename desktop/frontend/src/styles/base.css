@@ -67,6 +67,10 @@
    * 深色态近白、浅色态近黑 —— 比没修之前还刺眼。不是「优雅降级」,是反向劣化。 */
   --sel-line: var(--overlay-strong);
   --sel-fill: var(--accent-light);
+  /* 选中/聚焦圈的**线宽单点**(2026-08-13 用户拍板由 2px 减半)。全端一切 focus ring / 选中描边
+     一律 `var(--focus-ring)`,别再各写各的 px —— 用户问的「这个选中效果应该是统一的吧」答案就在这。
+     仪器:npm run check:focusring(会把仓里所有硬编码的圈宽揪出来)。 */
+  --focus-ring: 1px;
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
   --duration-slow: 0.25s;
@@ -183,19 +187,13 @@ input, textarea, select { font: inherit; color: var(--text); }
 a { color: var(--accent-ink); text-decoration: none; }
 a:hover { color: var(--accent-hover); }
 
-/* 滚动条:静止时透明,滚动中或指针落到滚动条上才显形(macOS overlay 手感)。
-   `[data-scrolling]` 由 scrollFade.ts 在**捕获阶段**的 scroll 上打在正在滚的那个元素上,静止 900ms 后摘。
-   ⚠️ webkit 滚动条伪元素不吃 opacity/transform,渐隐只能走 background-color 过渡。
-   ⚠️ 淡入快(0.12s,别让人等)、淡出慢(0.35s,别一停就啪地消失)—— 基础规则写慢速,显形的两条覆盖成快速。 */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 4px;
-  transition: background-color 0.35s ease;
-}
-[data-scrolling]::-webkit-scrollbar-thumb { background: var(--overlay-medium); transition-duration: 0.12s; }
-::-webkit-scrollbar-thumb:hover { background: var(--overlay-strong); transition-duration: 0.12s; }
+/* ⚠️ 全局**不要**写 `::-webkit-scrollbar` 自定义样式(2026-08-13 起)。
+   Blink 里只要匹配到任意一条滚动条伪元素规则,就从系统滚动条切成 custom scrollbar,
+   而 custom scrollbar **恒占布局宽度** —— 用户报的「滚动条占体积」就是这么来的。
+   交还系统后:mac 走系统 overlay 滚动条(悬浮在内容上、不占位、自动隐现,明暗随上面的 color-scheme),
+   Win/Linux 由主进程的 enable-features=…OverlayScrollbar 开成悬浮。
+   要藏某处滚动条仍可局部写(见 .settings-subbar 等),那是零宽,不占位。
+   仪器:npm run check:scrollbar(必须打真 Electron —— headless chromium 恒 overlay,在那儿量必假绿)。 */
 
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(3px); }
@@ -622,6 +620,8 @@ a:hover { color: var(--accent-hover); }
 .account-name-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
 .account-sub { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 徽章挪到第二行后成了 flex 列的直接子项:不给 align-self 会被拉满整行宽(自身 inline-flex 挡不住 stretch)。 */
+.account-meta > .tier-badge { align-self: flex-start; }
 .account-logout { width: 24px; height: 24px; flex-shrink: 0; opacity: 0; }
 .account-card:hover .account-logout { opacity: 1; }
 .tier-badge {
@@ -1066,6 +1066,14 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
   overflow-y: auto;
 }
 .tool-card-body .label { color: var(--text-faint); font-size: 11px; margin: 6px 0 2px; }
+/* 工具卡/审批卡内嵌 diff(diff2html):约束在卡内横向滚动、缩字号;裸回退用等宽 pre */
+.tool-card-body .wsfile-diff, .approval-card .wsfile-diff { overflow-x: auto; font-size: 11px; margin: 4px 0; white-space: normal; }
+.tool-card-body .wsfile-diff .d2h-file-wrapper, .approval-card .wsfile-diff .d2h-file-wrapper { margin-bottom: 4px; border-color: var(--border); }
+/* diff2html 自带的英文 CHANGED/ADDED 角标不过 t(),聊天面藏掉(文件预览面保留) */
+.tool-card-body .wsfile-diff .d2h-tag, .approval-card .wsfile-diff .d2h-tag { display: none; }
+.wsfile-diff-raw { font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; margin: 4px 0; }
+.tool-raw-args summary { color: var(--text-faint); font-size: 11px; margin: 6px 0 2px; cursor: pointer; user-select: none; }
+.approval-card .approval-diff { max-height: 320px; overflow-y: auto; margin-top: 8px; }
 .tool-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1341,6 +1349,8 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
 }
 .composer-menu .menu-item:hover { background: var(--overlay-light); color: var(--text); }
 .composer-menu .menu-item.active { color: var(--accent-ink); }
+/* 当前模型不支持的思考档:标灰但可点(引擎自动降档,选了不出错) */
+.composer-menu .menu-item.mi-dim { color: var(--text-faint); }
 .composer-menu .menu-item .grow { flex: 1; }
 .composer-menu .menu-item .menu-meta { font-size: 11px; color: var(--text-faint); }
 
@@ -2023,7 +2033,7 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
 }
 .switch.on { background: var(--accent-ink); border-color: var(--accent-ink); }
 .switch.on::after { left: calc(100% - 16px); background: var(--on-accent, #fff); }
-.switch:focus-visible { outline: 2px solid var(--accent-light); outline-offset: 1px; }
+.switch:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-light); outline-offset: 1px; }
 .switch-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); }
 
 /* 主题卡片网格 */
@@ -3058,3 +3068,76 @@ body[data-file-drag] .shell-work::after {
 .pv-confirm { font-size: 11px; color: var(--danger); white-space: nowrap; }
 .pv-spin { animation: csx-spin 0.8s linear infinite; }
 .pv-rowerr { color: var(--danger); }
+
+/* ══════════════════════════════════════════════════════════════════════════════════════
+   移动端「内容顶满」—— 浮动胶囊顶栏之下的起始留白(2026-08-13 用户拍板)
+   ──────────────────────────────────────────────────────────────────────────────────────
+   单列壳的顶栏是**悬浮胶囊**、不占流高,而壳自己**不持有滚动容器**(每个 feature 视图自带一份),
+   所以没有「一处加内边距」的落点。默认规则 `.mb-main > .mb-view { padding-top: var(--mb-top) }`
+   (见 lcl/engine/singleColumn.css)是安全值:整块视图往下推,谁都不会被胶囊盖住,代价是滚动内容
+   在 y=--mb-top 处被硬切一刀,面到不了顶。
+
+   要「面顶满、字不被压」,必须让**视图顶端那个元素**自己吃掉这段留白:
+     · 滚动器就在视图顶端  → 内距加在滚动器上(内容从胶囊下方起,往上滚时从胶囊底下穿过)
+     · 视图自绘了顶部工具条 → 内距加在**工具条**上(条的底色照样铺到 y=0,按钮落在胶囊下方)
+     · 居中/不滚动的视图    → 只退订默认让位,什么都不加(内容本来就居中,不会撞胶囊)
+   加内距时一律 `calc(var(--mb-top) + 原有上内距)`,别把原来的留白吃掉。
+
+   ⚠️ 放这个文件是因为 base.css 是 desktop `main.tsx` 与 mobile `mobileEntry.tsx` **都会 import**
+      的那一份 —— 新建 css 只在 main.tsx 里 import 的话,移动端静默拿不到(见 CLAUDE.md 三端同步)。
+   ⚠️ 选择器特异性(4 类 + 属性)远高于各视图原本的单类规则,故跨文件覆盖不依赖加载顺序。
+   仪器:desktop `npm run check:capsule` 的 D 段。
+   ══════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ① 退订默认让位 —— 下面逐个把留白还给「视图顶端那个元素」。不在这张名单里的视图(以及将来新加的、
+      插件注册的)一律走默认让位:失败方向是「多留一条白」,不是「内容被盖住」。 */
+.mb-shell:not(.mini-shell) .mb-main > .mb-view:is(
+  [data-view='chat'], [data-view='launcher'], [data-view='home'],
+  [data-view='workspace-detail'], [data-view='agents-detail'],
+  [data-view='amadeus-editor'], [data-view='amadeus-dashboard'],
+  [data-view='amadeus-db'], [data-view='amadeus-image'], [data-view='amadeus-pdf'],
+  [data-view='inbox-reader'], [data-view='todo-list'], [data-view='automation-detail'],
+  [data-view='calendar'], [data-view='public-view'], [data-view='code-studio'], [data-view='wsfile']
+) { padding-top: 0; }
+
+/* ② 滚动器就在视图顶端:内距进滚动器内部 —— 面顶满,字不被压。 */
+.mb-shell:not(.mini-shell) .mb-view[data-view='chat'] .t2-stream { padding-top: var(--mb-top); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='launcher'] .newtab { padding-top: var(--mb-top); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='workspace-detail'] .wsd,
+.mb-shell:not(.mini-shell) .mb-view[data-view='agents-detail'] .agentsd { padding-top: calc(var(--mb-top) + 28px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='amadeus-db'] .amx-dbview { padding-top: calc(var(--mb-top) + 18px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='inbox-reader'] .ibx-reader-wrap { padding-top: calc(var(--mb-top) + 28px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='automation-detail'] .auto-detail { padding-top: calc(var(--mb-top) + 18px); }
+/* todo-list / calendar-config 的根是 astryx `<Theme>` 包的 display:contents 壳(不生成盒子),
+   所以只能用后代选择器,不能靠 `.mb-view > *`。 */
+.mb-shell:not(.mini-shell) .mb-view[data-view='todo-list'] .amx-todo { padding-top: calc(var(--mb-top) + 6px); }
+/* 笔记编辑器与仪表盘共用 .amx-editor(仪表盘根多带一个 .amx-dashview)。 */
+.mb-shell:not(.mini-shell) .mb-view:is([data-view='amadeus-editor'], [data-view='amadeus-dashboard']) .amx-editor { padding-top: var(--mb-top); }
+/* ⚠️ 仪表盘的 .amx-toolbar 是 position:sticky top:0,滚起来会**贴回滚动口上沿 = 胶囊底下**。
+   内容内距管不着 sticky 的吸附线,必须单独把吸附线也压到胶囊之下。(编辑器那份顶栏在移动端不渲染,
+   只有仪表盘还留着。) */
+.mb-shell:not(.mini-shell) .mb-view[data-view='amadeus-dashboard'] .amx-toolbar { top: var(--mb-top); }
+/* ⚠️ 上一条的让位是**滚动器自己的 padding**,连封面图一起往下推 —— 用户实报「顶部还是空一条」(2026-08-13)。
+   有封面的笔记要的是封面满铺到 y=0(从胶囊底下穿过去),让位只对**没封面**的页面有意义(否则首行标题被压)。
+   .amx-cover 是 .amx-editor 的直接子元素(amadeusViews:2108 NoteCover 与 .amx-doc 平级),故 :has(>) 即可判定;
+   横向的 edge-to-edge 早已由 amadeus-host.css 的 coarse-pointer 块处理(width:100%/border-radius:0)。 */
+.mb-shell:not(.mini-shell) .mb-view[data-view='amadeus-editor'] .amx-editor:has(> .amx-cover) { padding-top: 0; }
+
+/* ③ 视图自绘顶部工具条:内距加在**条**上 —— 条的底色铺到 y=0,按钮落在胶囊下方。
+      (给条下面的滚动器加内距是错的:条本身仍会杵在胶囊底下。) */
+.mb-shell:not(.mini-shell) .mb-view[data-view='calendar'] .amx-cal-bar { padding-top: calc(var(--mb-top) + 10px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='public-view'] .pv-head { padding-top: calc(var(--mb-top) + 12px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='wsfile'] .wsfile-head { padding-top: calc(var(--mb-top) + 7px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='amadeus-pdf'] .pdfa-toolbar { padding-top: calc(var(--mb-top) + 6px); }
+/* code-studio 两个分支:选了项目 = .csx(顶上是 .csx-head 工具条);没选 = .csx-picker(自己就是滚动器)。 */
+.mb-shell:not(.mini-shell) .mb-view[data-view='code-studio'] .csx-head { padding-top: calc(var(--mb-top) + 7px); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='code-studio'] .csx-picker { padding-top: calc(var(--mb-top) + 20px); }
+
+/* ④ 居中/不滚动的视图:只退订,什么都不加。加了反而把居中内容压偏。
+      home = .wb-home 垂直居中的欢迎页;amadeus-image = .amx-imgview-scroll 居中单图(灯箱观感)。 */
+
+/* ⑤ 保留默认让位的四个,连同理由 —— 不是漏了,是 CSS 够不着:
+      · activity-log   根与滚动器都没有 class,且内距是内联的(内联 padding 压过样式表);开发者模式视图。
+      · changelog      根就是滚动器,但 `style={{padding:24}}` 是内联的,样式表改不动它的 padding-top。
+      · amadeus-drawing Excalidraw 在画布顶部自绘浮动 UI 岛,是第三方 DOM,压不住也不该压。
+      · amadeus-plugin-file 内容整块由插件 mount() 画,宿主不知道里面是什么。 */
