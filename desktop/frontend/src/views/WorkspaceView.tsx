@@ -48,7 +48,7 @@ function useCurrentFilePath(): string | null {
 }
 
 /** 文件模式体:appStore 接线(≈ 原 FilesView),编辑器场景注入合成的 vault 工作区并定位笔记目录。
- *  vault 场景手风琴用本地 state(初始/跟随 vault),不写全局 activeWorkspaceKey(那是会话侧的联动)。
+ *  vault 场景「进入的工作区」用本地 state(初始/跟随 vault),不写全局 activeWorkspaceKey(那是会话侧的联动)。
  *  sideFilter(左栏胶囊):cloud=只看云端工作区,local=只看本地(不混);undefined=不过滤(右栏)。 */
 function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir: string | null } | null; sideFilter?: 'local' | 'cloud' }) {
   const s = useApp(useShallow((state) => ({

@@ -7,6 +7,7 @@ import { Folder, Cloud, ChevronDown, Check, Search, FolderPlus } from 'lucide-re
 import type { WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
 import { isCoarsePointer } from '../touch'
+import { useEdgeNudge } from '@lcl/engine'
 
 export const ProjectSelector: React.FC<{
   workspaces: WorkspaceDescriptor[]
@@ -22,6 +23,8 @@ export const ProjectSelector: React.FC<{
   const [naming, setNaming] = useState(false)
   const [draft, setDraft] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  // 下拉是 absolute-in-relative + 固定 264px 宽、左对齐,窄屏会捅出右边缘 → 视口兜底。
+  const menuFix = useEdgeNudge(open)
 
   useEffect(() => {
     if (!open) return
@@ -45,7 +48,7 @@ export const ProjectSelector: React.FC<{
         <ChevronDown size={12} />
       </button>
       {open && (
-        <div className="project-menu">
+        <div ref={menuFix.ref} className="project-menu" style={menuFix.style}>
           <div className="project-menu-search">
             <Search size={13} />
             {/* ⚠️触屏不自动聚焦:软键盘一弹,向上开的菜单整块移位,点条目那一下 click 落不到条目上

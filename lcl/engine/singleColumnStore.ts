@@ -15,8 +15,10 @@ import { label } from './types'
 import { getView } from './viewRegistry'
 import type { PersistedPanel } from './layoutPersist'
 
-/** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者。 */
-export interface MainTab { id: string; type: string; title: string; active: boolean; closable: boolean; sessionId?: string; followActive: boolean }
+/** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
+ *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
+ *  因为读者读的是可选属性)。`filePath` 见桌面版同名字段的注释。 */
+export interface MainTab { id: string; type: string; title: string; active: boolean; closable: boolean; sessionId?: string; followActive: boolean; filePath?: string; front: boolean }
 /** 侧栏视图快照。 */
 export interface SideTab { type: string; title: string; active: boolean; closable: boolean }
 
@@ -36,8 +38,123 @@ function makeId(type: string, existing: Iterable<string>): string {
   return `${type}#${n}`
 }
 
-/** scheduleWorkspaceSave:移动端 v1 不持久化布局(启动/切 Space 由 build() 重建)。保留导出以满足 barrel。 */
-export function scheduleWorkspaceSave(): void { /* v1 no-op */ }
+/* ── 布局持久化 ────────────────────────────────────────────────────────────────
+ * 桌面靠 Dockview 的 toJSON/fromJSON,单列这边没有 api —— 三桶 leaf 本身就是纯数据,直接序列化。
+ * **不与桌面共用键**:两边的 blob 形状互不兼容,而 layoutPersist 的命名表在写入时会把校验不过的
+ * 条目顺手丢掉(同源同 origin 的 web 端可能两种壳都跑过)→ 各用各的键,谁也别踩谁。
+ */
+/** 卫星窗(mini 悬浮卡 / detached)按 `?window=` 各自命名空间 —— 与 layoutPersist.computeLayoutKey
+ *  同一套语义。不隔离的话:主窗切到 mobile UI 预览时和 mini 卡共用一份存档,两个 realm 各 200ms
+ *  节流写同一个键,后写的整份盖掉前一个(Codex 评审抓的 Medium)。同 origin 开两个普通标签页仍共用
+ *  —— 那和桌面 LAYOUT_KEY 的天花板一样(没有可区分的窗口 id),不另造。 */
+function scKey(base: string): string {
+  try {
+    const w = new URLSearchParams(location.search).get('window')
+    return w && w !== 'main' ? `${base}_${w}` : base
+  } catch { return base } // node 测试无 location
+}
+const SC_LAYOUT_KEY = scKey('lcl_sc_layout_v1')
+const SC_NAMED_KEY = scKey('lcl_sc_named_layouts_v1')
+
+interface SCBlob {
+  v: 1
+  main: LeafRec[]
+  left: LeafRec[]
+  right: LeafRec[]
+  activeMainId: string | null
+  leftActiveId: string | null
+  rightActiveId: string | null
+}
+
+function readJSON<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : null
+  } catch { return null } // 私密模式 / 坏 JSON
+}
+function writeJSON(key: string, value: unknown): void {
+  // 出声再吞:配额满 / 私密模式 / 某个 leaf 的 params 塞了循环引用 —— 任一情形都是「布局从此不再持久化」,
+  // 静默失败的话下次只会收到一句「进去又是新页」,查无对证。
+  try { localStorage.setItem(key, JSON.stringify(value)) } catch (e) { console.warn('[lcl] 单列布局存盘失败', key, e) }
+}
+
+function isBlob(v: unknown): v is SCBlob {
+  const b = v as Partial<SCBlob> | null
+  return !!b && b.v === 1 && Array.isArray(b.main) && Array.isArray(b.left) && Array.isArray(b.right)
+}
+
+/** 逐个剔除不能用的 leaf:①结构坏的(手改 localStorage、旧版本残留 —— `isBlob` 只查三个桶是不是
+ *  数组,桶里塞了 `null` 就会在这炸,而这里没有 catch,壳会进错误边界而不是回落默认布局);
+ *  ②视图未注册的(端间差异:Tangu Web 没有 amadeus-*;插件视图可能已卸载)。
+ *  桌面那边是「有一个未注册就整份回退」,单列这边逐个剔更稳:剩下的还能用。 */
+const knownLeaves = (arr: LeafRec[]): LeafRec[] =>
+  arr.filter((r): r is LeafRec =>
+    !!r && typeof r === 'object'
+    && typeof r.id === 'string' && typeof r.type === 'string'
+    && !!r.params && typeof r.params === 'object'
+    && !!getView(r.type))
+
+let autoSaveArmed = false
+
+/** 冷启动还原上次的三桶 leaf + 各自激活项。成功 true;首启/整份不可用返回 false,调用方 build 默认布局。
+ *  同时是自动存盘的**发令枪** —— 还原之前 bootstrap 的那些 setSidebarDefaults 之类的 set() 不该
+ *  把一份空布局先写回去,把真正要还原的东西冲掉。 */
+export function restoreSingleColumnLayout(): boolean {
+  const ok = applySCBlob(readJSON<unknown>(SC_LAYOUT_KEY))
+  autoSaveArmed = true
+  return ok
+}
+
+function applySCBlob(raw: unknown): boolean {
+  if (!isBlob(raw)) return false
+  const main = knownLeaves(raw.main)
+  if (main.length === 0) return false // 主区空 = 没什么可还原的,交回 buildDefault
+  const left = knownLeaves(raw.left)
+  const right = knownLeaves(raw.right)
+  const pick = (want: string | null, pool: LeafRec[]): string | null =>
+    pool.some((r) => r.id === want) ? want : pool[pool.length - 1]?.id ?? null
+  useWorkspace.setState({
+    mainLeaves: main, leftLeaves: left, rightLeaves: right,
+    activeMainId: pick(raw.activeMainId, main),
+    leftActiveId: pick(raw.leftActiveId, left),
+    rightActiveId: pick(raw.rightActiveId, right),
+    // ponytail: 抽屉开合不还原,冷启动一律收起 —— 单列的侧栏是全屏浮层不是版面的一部分,
+    // 「上次退出时抽屉开着」还原成开着 = 一进 app 先看到侧栏。
+    leftVisible: false, rightVisible: false,
+    focusedChatLeafId: main.find((r) => r.type === 'chat')?.id ?? null,
+  })
+  useWorkspace.getState().refreshTabs()
+  return true
+}
+
+function snapshot(): SCBlob {
+  const s = useWorkspace.getState()
+  return {
+    v: 1,
+    main: s.mainLeaves, left: s.leftLeaves, right: s.rightLeaves,
+    activeMainId: s.activeMainId, leftActiveId: s.leftActiveId, rightActiveId: s.rightActiveId,
+  }
+}
+
+/** scheduleWorkspaceSave:桌面由 Dockview 的 onDidLayoutChange 驱动,单列这边**订阅 store**
+ *  (见文件末尾)—— 少一个「新加的 mutation 忘了调 save」的坑。保留导出以满足 barrel。 */
+export function scheduleWorkspaceSave(): void { saveSoon() }
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+function saveSoon(): void {
+  if (!autoSaveArmed || saveTimer) return
+  saveTimer = setTimeout(() => { saveTimer = null; useWorkspace.getState().saveCurrent() }, 200)
+}
+/** 节流窗口内关掉页面/卡片 = 这一下改动没落盘(「开了个新标签立刻退出,回来它不在」)。
+ *  `pagehide` 是移动端唯一可靠的收尾事件(iOS 后台化不发 beforeunload/unload)。 */
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    if (!autoSaveArmed || !saveTimer) return
+    clearTimeout(saveTimer)
+    saveTimer = null
+    useWorkspace.getState().saveCurrent()
+  })
+}
 
 /** activeMainPanel:桌面签名 (DockviewApi)=>panel;移动端 api 恒 null,bootstrapEngine 的 navGo 以
  *  `api ?` 守卫故从不真正调用。保留导出以满足 barrel / bootstrapEngine 的 import。 */
@@ -184,6 +301,8 @@ export const useWorkspace = create<WS>((set, get) => {
           active, closable: def?.closable !== false,
           sessionId: typeof r.params.sessionId === 'string' ? r.params.sessionId : undefined,
           followActive: r.params.followActive !== false,
+          filePath: typeof r.params.notePath === 'string' ? r.params.notePath : typeof r.params.path === 'string' ? r.params.path : undefined,
+          front: active, // 单列壳同一时刻只显示一个主区 leaf → 前台即活动
         }
       }
       const side = (arr: LeafRec[], activeId: string | null): SideTab[] => arr.map((r) => {
@@ -334,10 +453,20 @@ export const useWorkspace = create<WS>((set, get) => {
       get().refreshTabs()
     },
 
-    // 移动端 v1 不做布局序列化 / 命名布局:saveNamed→false 使 spaceRegistry.setActiveSpace 落到 resetLayout→build()。
-    saveCurrent() { /* no-op */ },
-    saveNamed() { /* no-op */ },
-    applyNamed() { return false },
-    namedLayouts() { return [] },
+    saveCurrent() { writeJSON(SC_LAYOUT_KEY, snapshot()) },
+    // 命名布局 = spaceRegistry 的每-Space 布局槽(`space:<id>`):切走时存、切回来时还原。
+    saveNamed(name) {
+      const all = readJSON<Record<string, SCBlob>>(SC_NAMED_KEY) ?? {}
+      all[name] = snapshot()
+      writeJSON(SC_NAMED_KEY, all)
+    },
+    applyNamed(name) {
+      return applySCBlob((readJSON<Record<string, unknown>>(SC_NAMED_KEY) ?? {})[name])
+    },
+    namedLayouts() { return Object.keys(readJSON<Record<string, SCBlob>>(SC_NAMED_KEY) ?? {}) },
   }
 })
+
+// 自动存盘:订阅整个 store(节流 200ms),而不是往每个 mutation 里插一行 save。
+// 发令枪是 restoreSingleColumnLayout(),见其注释。
+useWorkspace.subscribe(saveSoon)

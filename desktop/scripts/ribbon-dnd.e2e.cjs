@@ -196,6 +196,90 @@ async function main() {
     check('G1 下区首元素是 ＋(镜像对称)', kinds[0] === '+', kinds.join(' '))
     const topKinds = await page.$$eval('.rb-top > *', (els) => els.map((e) => (e.classList.contains('rb-plus') ? '+' : e.classList.contains('rb-more') ? '…' : 'slot')))
     check('G2 上区末元素是 ＋', topKinds[topKinds.length - 1] === '+', topKinds.join(' '))
+
+    // L. Space 快捷键 mod+1..9:号**只认上区当前排序**(拖动改序后号跟着走),收纳夹也占一个号且按下=弹浮层。
+    //    这里钉的同样是接线:纯函数 rankIds 排好的序,必须就是键盘分发数的那一份。
+    const hits = () => page.evaluate(() => window.__rbHits.join())
+    await fresh(page)
+    await page.keyboard.press('Meta+2')
+    await page.waitForTimeout(60)
+    check('L1 mod+2 = 上区第 2 个(tB)', (await hits()) === 'tB', await hits())
+    await page.evaluate(() => window.__rb.getState().setZoneOrder('top', ['tD', 'tA', 'tB', 'tC']))
+    await page.waitForTimeout(80)
+    await page.keyboard.press('Meta+1')
+    await page.waitForTimeout(60)
+    check('L2 改序后 mod+1 跟着走(tD)', (await hits()) === 'tB,tD', await hits())
+    // L3/L4:第 5 个位置放一个收纳夹(addFolder 追加到区末)。
+    await fresh(page)
+    await page.evaluate(() => window.__rb.getState().addFolder('top', 'FKB'))
+    await page.waitForTimeout(120)
+    await page.keyboard.press('Meta+5')
+    await page.waitForTimeout(80)
+    check('L3 第 5 个是收纳夹 → 弹出它的浮层', (await page.$eval('.rb-fly .rb-fly-head', (e) => e.textContent).catch(() => null)) === 'FKB')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(60)
+    check('L4 Esc 关掉键盘开的浮层(鼠标不在上面,没有 mouseleave 可用)', (await page.$('.rb-fly')) === null)
+    await page.keyboard.press('Meta+9')
+    await page.waitForTimeout(60)
+    check('L5 空号(mod+9)什么也不做', (await hits()) === '', await hits())
+
+    // M. 槽位上的快捷键提示:只在展开态露、跟着排序走、没号的不画。绝对定位 —— 顺带确认它没把槽撑高
+    //    (撑高 = slotH 常量失配 = 让位预览与落点全歪,所以这条必须量)。
+    const keysOf = (page) => page.$$eval('.rb-top .rb-slot', (els) => els.map((e) => e.querySelector('.rb-key')?.textContent ?? ''))
+    const slotHeights = (page) => page.$$eval('.rb-top .rb-slot', (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
+    await fresh(page)
+    check('M1 折叠态不显示快捷键提示', (await keysOf(page)).every((t) => t === ''), (await keysOf(page)).join('|'))
+    const hCollapsed = await slotHeights(page)
+    await page.evaluate(() => window.__rb.getState().toggleExpanded())
+    await page.waitForTimeout(150)
+    check('M2 展开态按顺序标 ⌘1..4', (await keysOf(page)).join() === '⌘1,⌘2,⌘3,⌘4', (await keysOf(page)).join())
+    check('M3 提示不撑高槽位(撑高就会让位预览歪掉)', (await slotHeights(page)).join() === hCollapsed.map(() => 34).join(), `${(await slotHeights(page)).join()} ｜ 折叠 ${hCollapsed.join()}`)
+    await page.evaluate(() => window.__rb.getState().setZoneOrder('top', ['tD', 'tA', 'tB', 'tC']))
+    await page.waitForTimeout(120)
+    const firstId = await page.$eval('.rb-top .rb-slot', (e) => e.dataset.id)
+    check('M4 改序后 ⌘1 标在新的第一个上', firstId === 'tD' && (await keysOf(page))[0] === '⌘1', `${firstId} / ${(await keysOf(page))[0]}`)
+    // 补到 10 个:第 10 个没有快捷键 → 不画提示
+    await page.evaluate(() => {
+      const s = window.__rb.getState()
+      for (const n of ['E', 'F', 'G', 'H', 'I', 'J']) s.addRibbonIcon({ id: 't' + n, side: 'top', tooltip: () => 'Top ' + n, icon: s.items[0].icon, onClick() {} })
+    })
+    await page.setViewportSize({ width: 900, height: 1000 }) // 够高,10 个都不进「…」
+    await page.waitForTimeout(250)
+    const ks = await keysOf(page)
+    check('M5 第 10 个没有快捷键 → 不画提示', ks.length === 10 && ks[8] === '⌘9' && ks[9] === '', `${ks.length} 个 ｜ ${ks.join('|')}`)
+    await page.setViewportSize({ width: 900, height: 800 })
+
+    // N. 未读角标(收件箱红点)× 快捷键提示:展开态角标必须贴**图标**右上角,不是行右端 ——
+    //    行右端归 .rb-key,两个都往那儿放就是用户实报的「红点和 ⌘1 重合」。
+    //    角标真身是 desktop 的 SpaceButton(.rb-btn.rb-space + .rb-badge 子节点),这里复刻同一 DOM,
+    //    验的是 engine.css 的落点(engine 里没有 Space 概念,harness 造不出真的收件箱)。
+    await fresh(page)
+    await page.evaluate(() => window.__rb.getState().toggleExpanded())
+    await page.waitForTimeout(150)
+    await page.$eval('.rb-top .rb-slot .rb-btn', (b) => {
+      b.classList.add('rb-space')
+      const s = document.createElement('span')
+      s.className = 'rb-badge'
+      s.textContent = '3'
+      b.appendChild(s)
+    })
+    await page.waitForTimeout(60)
+    const geo = await page.$eval('.rb-top .rb-slot', (slot) => {
+      const box = (el) => { const b = el.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom } }
+      return {
+        badge: box(slot.querySelector('.rb-badge')),
+        key: box(slot.querySelector('.rb-key')),
+        icon: box(slot.querySelector('.rb-btn svg')),
+        row: box(slot),
+      }
+    })
+    const hit = geo.badge.l < geo.key.r && geo.badge.r > geo.key.l && geo.badge.t < geo.key.b && geo.badge.b > geo.key.t
+    check('N1 展开态红点与快捷键提示不重合', !hit, JSON.stringify(geo))
+    check(
+      'N2 红点贴在图标右上角(不是行右端)',
+      geo.badge.l <= geo.icon.r && geo.badge.t < (geo.row.t + geo.row.b) / 2,
+      `badge.l=${Math.round(geo.badge.l)} icon.r=${Math.round(geo.icon.r)} badge.t=${Math.round(geo.badge.t)} rowMid=${Math.round((geo.row.t + geo.row.b) / 2)}`,
+    )
   } finally {
     await browser.close()
     if (vite) vite.kill()

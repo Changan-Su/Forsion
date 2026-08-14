@@ -96,7 +96,10 @@
   pointer-events: none;
   box-sizing: border-box;
 }
-.rb-expanded .rb-space .rb-badge { top: 50%; right: 8px; transform: translateY(-50%); }
+/* 展开态:角标继续贴在**图标**右上角(不是行右端)—— 行右端已被快捷键提示 .rb-key 占着,
+   两者摞在一起就是用户报的「红点和 ⌘1 重合」。图标位置在展开态是定死的(左内边距 10px + 18px 见方),
+   故落点直接写常量;右侧留给 .rb-key。 */
+.rb-expanded .rb-space .rb-badge { top: 2px; left: 21px; right: auto; transform: none; }
 .rb-btn {
   -webkit-app-region: no-drag;
   width: 32px;
@@ -144,6 +147,17 @@
 .rb-expanded .rb-pinned { padding: 0 8px; }
 .rb-expanded .rb-slot { width: 100%; justify-content: stretch; }
 .rb-expanded .rb-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 10px; height: 34px; }
+/* 槽位右侧的快捷键提示(⌘1…):绝对定位不进流 —— 槽高常量与拖拽落点几何一点不受影响。
+   pointer-events:none 让点击照旧落在按钮上;名称给它让出右边距,长名省略号不会压上来。 */
+.rb-expanded .rb-top .rb-slot .rb-key {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  pointer-events: none; font-size: 11px; line-height: 1; letter-spacing: 0.02em;
+  color: var(--text-muted, var(--text-light, #8a8a8a)); opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+.rb-expanded .rb-top .rb-slot .rb-label { padding-right: 26px; }
+/* 悬停/当前 Space 时提示稍微实一点,但始终比正文淡。 */
+.rb-expanded .rb-top .rb-slot:hover .rb-key { opacity: 0.8; }
 
 /* ===== 收纳夹 / 「…」浮层(悬停在 ribbon 右侧展开:icon + 文字行,可拖排/拖出) ===== */
 .rb-fly {

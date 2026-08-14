@@ -14,8 +14,13 @@
   --mb-dur: 0.34s;
   /* push 抽屉宽度:面板滑入多少,main 就被推走多少(main 原尺寸,右缘滑出屏外)。
      ⚠️ 必须除以端级 zoom(--uiz,uiZoom.ts 维护):vw 不吃 body zoom,但面板作为 body 后代
-     渲染宽度会被 zoom 放大 —— 不补偿的话 86vw×1.15 ≈ 全屏,main 的「露边」整个消失。 */
-  --mb-panelw: calc(min(86vw, 380px) / var(--uiz, 1));
+     渲染宽度会被 zoom 放大 —— 不补偿的话 86vw×1.15 ≈ 全屏,main 的「露边」整个消失。
+     露边宽度 = 100% - 这个值:原 86vw 只露 14vw(≈58px),用户实测太窄 → 2026-08-13 改 78vw(露 ≈90px)。 */
+  --mb-panelw: calc(min(78vw, 380px) / var(--uiz, 1));
+  /* 浮动胶囊顶栏之下的「起始留白」:6 上留白 + 46 胶囊 + 6 下留白,再加刘海。
+     ⚠️ 必须含 safe-area:壳顶部已不再留安全区(内容 edge-to-edge),所以躲刘海这件事全落在
+     消费 --mb-top 的那一侧 —— 视图把它当**滚动容器内部**的 padding-top 用,面顶满、字不被压。 */
+  --mb-top: calc(58px + env(safe-area-inset-top));
 }
 
 .mb-topbar {
@@ -29,6 +34,58 @@
   background: var(--bg-card, var(--bg, #fff));
 }
 .mb-topbar-spacer { flex: 1 1 auto; min-width: 0; }
+/* 按钮分组容器。mini 保持原样(卡片太小,胶囊只是浪费地方);手机端下面单独上药丸皮。 */
+.mb-cap { display: flex; align-items: center; gap: 2px; }
+
+/* ── 手机端:顶栏浮在内容之上、收成两组胶囊(Obsidian 式,2026-08-13)───────────────────
+   条本身 pointer-events:none —— 两组胶囊之间那段空白要把触摸放给下面的内容(否则整条 58px
+   变成吞手势的死区,横滑呼出侧栏也废了);胶囊自己再 auto 收回来。
+   z:6 是「.mb-main 内部」的层级:.mb-main 有 isolation:isolate 自成栈,故这个 6 只跟视图内的
+   chrome(如 .amx-mbar z5)比,永远压不过 .mb-body 里的 dim(2)/抽屉(3)。 */
+.mb-shell:not(.mini-shell) .mb-topbar {
+  position: absolute;
+  top: env(safe-area-inset-top); /* 壳不再留安全区 → 胶囊自己躲刘海 */
+  left: 0;
+  right: 0;
+  z-index: 6;
+  height: auto;
+  padding: 6px 8px;
+  border-bottom: none;
+  background: transparent;
+  pointer-events: none;
+}
+.mb-shell:not(.mini-shell) .mb-cap {
+  pointer-events: auto;
+  padding: 2px;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: 999px;
+  background: var(--bg-card, var(--bg, #fff));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+/* 空胶囊(没有右抽屉且只剩幽灵钮时)不画药丸,免得屏幕上杵个空壳。 */
+.mb-shell:not(.mini-shell) .mb-cap:has(> .mb-icon-btn--ghost:only-child) { border-color: transparent; background: none; box-shadow: none; }
+.mb-shell:not(.mini-shell) .mb-topbar .mb-icon-btn { width: 40px; height: 40px; border-radius: 999px; }
+
+/* ── 下滑收起 / 上滑召回(2026-08-13 用户拍板):扩大阅读区,同时保证操作入口一抬手就回来。
+   判定在 SingleColumnHost 的 useChromeAutoHide(scroll 捕获阶段,一处吃下所有子滚动器)。
+   ⚠️ 位移只用 `translate` 独立属性,**绝不写 transform** —— 编辑器悬浮条 .amx-mbar 的贴键盘位移
+      走的是内联 transform,两者写同一属性会互相清掉(表现为一按键盘胶囊瞬移)。translate 与之叠加。
+   ⚠️ 收起量必须是 `calc(-100% - env(safe-area-inset-top) - 8px)`:光给 -130% 之类的百分比,在有刘海的
+      机器上 top 已被安全区推下去,收不干净会露半截胶囊在状态栏底下。 */
+.mb-shell:not(.mini-shell) .mb-topbar {
+  transition: translate 0.24s var(--mb-ease, ease-out), opacity 0.18s ease;
+}
+.mb-shell:not(.mini-shell)[data-chrome='off'] .mb-topbar {
+  translate: 0 calc(-100% - env(safe-area-inset-top) - 8px);
+  opacity: 0;
+}
+/* 收起后胶囊不吃触摸(它虽然移出屏幕,但 pointer-events:auto 的元素在过渡途中仍会抢手势)。 */
+.mb-shell:not(.mini-shell)[data-chrome='off'] .mb-cap { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .mb-shell:not(.mini-shell) .mb-topbar { transition: none; }
+}
+/* .mb-main 自成栈:否则宽屏(无 push transform)时栏内 z:6 会盖到 z:3 的右抽屉上。 */
+.mb-shell:not(.mini-shell) .mb-main { isolation: isolate; }
 /* 标签页切换钮:圆角方框里画 tab 计数(手机浏览器惯例),一眼即知是标签页。 */
 .mb-tabcount {
   display: inline-flex;
@@ -74,6 +131,12 @@
   overflow: hidden;
   animation: mb-view-in 0.22s var(--ease-out, ease-out);
 }
+/* 浮动胶囊顶栏之下的**安全默认**:整块视图往下让 --mb-top,谁都不会被胶囊盖住。
+   本壳自己不持有滚动容器(每个 feature 视图自带一份),没有「一处加内边距」的落点,所以真正的
+   「面顶满、字不被压」是逐视图把这段留白还给**视图顶端那个元素**——退订名单与逐条规则在
+   desktop/frontend/src/styles/base.css 末尾的「移动端内容顶满」整块(引擎不认识 feature 类名)。
+   不在名单里的视图(含将来新加的、插件注册的)自动吃这条默认:失败方向是多留一条白,不是被盖住。 */
+.mb-shell:not(.mini-shell) .mb-main > .mb-view { padding-top: var(--mb-top); }
 @keyframes mb-view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .mb-view, .mb-sheet, .mb-sheet-scrim { animation: none; }
@@ -98,6 +161,10 @@
   pointer-events: none;
   transition: transform var(--mb-dur) var(--mb-ease), visibility 0s linear var(--mb-dur);
 }
+/* 壳顶部不再留安全区(内容要 edge-to-edge)→ 抽屉/并排侧栏各自躲刘海,否则它们的标题行、
+   下拉、关闭钮会钻到状态栏底下。底色仍铺满到最顶(padding 在盒内)。 */
+.mb-shell:not(.mini-shell) .mb-drawer,
+.mb-shell:not(.mini-shell) .mb-sidecol { padding-top: env(safe-area-inset-top); }
 .mb-drawer--left { left: 0; transform: translateX(-102%); box-shadow: 6px 0 24px rgba(0, 0, 0, 0.1); }
 .mb-drawer--right { right: 0; transform: translateX(102%); box-shadow: -6px 0 24px rgba(0, 0, 0, 0.1); }
 .mb-drawer.open { transform: none; visibility: visible; pointer-events: auto; transition: transform var(--mb-dur) var(--mb-ease); }
@@ -131,6 +198,14 @@
 }
 .mb-drawer-title { flex: 1 1 auto; min-width: 0; padding-left: 6px; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mb-drawer-body { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
+/* 手机端抽屉内容再放大一档(2026-08-13 用户实报「字号好小」)。
+   侧栏那套 .t2s-* 是**桌面鼠标尺度**(13px 字 / 28px 行,sidebar2.css 开头写明「字号只统一、不缩放」),
+   端级 zoom 1.15 之后仍只有 ~15px —— 手指够不着。这里叠第二档 1.15(合计 ≈17px / 37px 行)。
+   ponytail: 沿用同文件 .mini-shell 的单旋钮 zoom 写法(那边是 0.85),想调只改这一个数;
+   逐个 hand-tune .t2s-* 才是「易漏」的那条路。
+   只罩 .mb-drawer-body:抽屉顶栏(.mb-drawer-bar)与底部 Space/账号(.mb-drawer-foot)是兄弟节点,不跟着变。
+   ⚠️ 新增一层 zoom 上下文:锚定浮层照 menuAnchor.tsx 的定则走 currentCSSZoom,不要写死坐标。 */
+.mb-shell:not(.mini-shell) .mb-drawer-body { zoom: 1.15; }
 
 /* 「⋯」底部弹出菜单(桌面 ribbon 底部功能的手机版落点) */
 .mb-sheet-scrim {
@@ -185,10 +260,24 @@
 /* ── 左抽屉底部常驻区:Space 切换条 + 账号卡/设置(原全局底栏移入,2026-08-05) ── */
 .mb-drawer-foot {
   flex: 0 0 auto;
-  border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  background: var(--bg-card, var(--bg, #fff));
+  position: relative;
+  /* 与抽屉上半部**同一个底色**(原来是 --bg-card,比 .mb-drawer 的 --bg 亮一档,看着像贴了块补丁)。
+     交界也不再用硬分割线,改由下面的 ::before 渐变把上方列表渐隐进底栏(用户拍板 2026-08-13)。 */
+  background: var(--bg, #fff);
 }
-.mb-spacebar { display: flex; }
+/* 渐隐带:贴在底栏**上沿之外**(bottom:100%),盖住抽屉列表的最后一截。
+   底栏在 DOM 里晚于 .mb-drawer-body,自然画在其上;.mb-drawer 没有 overflow 裁剪,伸出去不会被切。 */
+.mb-drawer-foot::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 28px;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--bg, #fff), transparent);
+}
+.mb-spacebar { display: flex; padding: 2px 4px 0; }
 .mb-tab {
   flex: 1 1 0;
   min-width: 0;
@@ -196,15 +285,21 @@
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 8px 4px 7px;
+  margin: 2px;
+  padding: 7px 3px 6px;
   border: none;
+  border-radius: var(--radius-md, 11px);
   background: transparent;
   color: var(--text-muted, rgba(0, 0, 0, 0.5));
   cursor: pointer;
-  transition: color 0.12s ease, transform 0.08s ease;
+  transition: background 0.14s ease, color 0.12s ease, transform 0.08s ease;
 }
 .mb-tab:active { transform: scale(0.94); }
-.mb-tab.on { color: var(--accent, #4d8794); }
+/* 当前 Space = 胶囊高亮,与桌面 ribbon 的 `.rb-space.on` 同一套(accent-light 底 + accent 前景)。 */
+.mb-tab.on {
+  background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
+  color: var(--accent-ink, var(--accent, #4d8794));
+}
 .mb-tab-label { font-size: 11px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .mb-foot-row {
   display: flex;
@@ -314,7 +409,12 @@
 .mini-shell .mb-sheet-row svg { width: 17px; height: 17px; }
 
 /* ── 主体行:宽屏左栏并排(docked sidecol);push 抽屉与 dim 都以它为定位容器 ───────────── */
-.mb-body { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+/* ⚠️ overflow 必须是 **clip 而不是 hidden**:两侧抽屉靠 transform 移出视野,而被 transform 推出去的
+   部分仍计入可滚动溢出区 —— hidden 只是「看不见」,容器**照样是个滚动容器**,浏览器给焦点元素做
+   scrollIntoView 时会把它横向滚起来(实测 scrollWidth 637 / clientWidth 339,点笔记行进编辑器后
+   scrollLeft 被滚到 268 → 整个主区连同浮动胶囊顶栏一起被推出屏幕左侧)。clip 压根不建滚动容器。
+   仪器:mobile 的 npm run e2e:editorbar 第 0 条。 */
+.mb-body { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: clip; }
 .mb-body .mb-main { flex: 1 1 auto; min-width: 0; }
 .mb-sidecol {
   width: min(320px, 38vw);
@@ -330,4 +430,9 @@
    桌面(鼠标)与桌面手机框预览不吃。zoom 不影响媒体查询评估与 fixed inset:0 贴边。 ── */
 @media (pointer: coarse) and (max-width: 820px) {
   body { zoom: 1.15; }
+  /* ⚠️ 这条 zoom 也必须同步 --uiz,否则一切「/var(--uiz)」的反补偿会当场失效:
+     uiZoom.apply(1) 走的是「清 inline zoom + 移除 --uiz」,清完 CSS 这条 1.15 立刻接管,
+     而 --uiz 掉回默认 1 → --mb-panelw = 86vw × 1.15 ≈ 99vw,抽屉的「露边」只剩几个 px。
+     JS 首帧之前也是同一种失配。inline(uiZoom 显式设过)优先级更高,仍然覆盖得掉这条。 */
+  :root { --uiz: 1.15; }
 }

@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import type { SpaceDefinition } from './types'
 import { useWorkspace } from './workspaceStore'
 import { useNav } from './navStore'
+import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout } from './layoutPersist'
 
 const ACTIVE_KEY = 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
@@ -14,6 +15,14 @@ export const spaceLayoutName = (id: string): string => `space:${id}`
 function loadActive(): string {
   try { return localStorage.getItem(ACTIVE_KEY) || 'tangu' } catch { return 'tangu' }
 }
+
+/** 模块装载那一刻的活动 Space id = 「上次退出时在哪」的**原样**快照。
+ *  ⚠️ 冷启动的布局归档必须用它,不能用 `useSpaceStore.getState().activeSpaceId` —— `registerSpaces()`
+ *  会把「此刻尚未注册」的 id 就地归一成产品默认(用户 L0 Space 走异步装载、或该 Space 已被删),
+ *  它跑在 installEngine 的启动策略**之前**。读归一后的值 = 把上一程的布局归档到别人名下:
+ *  上次退出在用户 Space U → 归一成 tangu → U 的现场被写进 `space:tangu`,U 自己的槽还停在上上次
+ *  (Codex 评审 2026-08-13 抓的 High)。 */
+export const BOOT_ACTIVE_SPACE_ID: string = loadActive()
 
 interface SpaceState {
   spaces: SpaceDefinition[]
@@ -71,6 +80,25 @@ export function setActiveSpaceCold(id: string): void {
   if (!spaces.some((s) => s.id === id)) return
   useSpaceStore.setState({ activeSpaceId: id })
   try { localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
+}
+
+/** 冷启动的每-Space 布局交接。**纯 Storage 搬运**,故可以跑在 Dockview api 就绪之前(onReady 之前
+ *  没有 api,saveNamed/applyNamed 都是空转)。
+ *  ① 先把本窗布局键归档进「上次退出的那个 Space」的命名槽 —— 会话中只有**切走**才写命名槽,
+ *     直接退出的那个 Space 槽里还是上上次的样子,不补这一手就等于每次退出都丢一次。
+ *  ② 再把目标 Space 的命名布局搬进布局键,交给 onReady 的 tryRestoreLayout 自然吃到;没有则清空,
+ *     落空 → buildDefault 建该 Space 的干净默认。
+ *  from === to(最常见:固定启动 Space 恰好就是上次退出那个)只归档,布局键原样留着。 */
+export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
+  const cur = loadLayout()
+  if (cur) saveNamedLayout(spaceLayoutName(fromId), cur)
+  if (fromId === toId) return
+  // ⚠️ 归档没真落盘(配额满 / 私密模式 —— saveNamedLayout 是吞掉异常的 void)就别再动布局键:
+  // 那是这份布局**仅存的一份**,搬走或清掉即等于直接丢。读回来确认过再往下(Codex 评审抓的 Medium)。
+  if (cur && !loadNamedLayout(spaceLayoutName(fromId))) return
+  const next = loadNamedLayout(spaceLayoutName(toId))
+  if (next) saveLayout(next)
+  else clearLayout()
 }
 
 export const registerSpace = (def: SpaceDefinition): void => useSpaceStore.getState().registerSpace(def)

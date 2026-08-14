@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampMenu } from './menuAnchor'
+import { clampMenu, edgeNudge } from './menuAnchor'
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
@@ -36,5 +36,34 @@ describe('clampMenu', () => {
   })
   it('center 溢出右边→仍收进视口', () => {
     expect(clampMenu(980, 100, 200, 300, 1000, 800, { center: true }).left).toBe(792)
+  })
+})
+
+// 锚定 absolute 菜单的横向兜底(useEdgeNudge 的算术核)。手机 390 宽 + body zoom 1.15 是真实工况。
+describe('edgeNudge', () => {
+  it('已在屏内 → 不动', () => {
+    expect(edgeNudge(100, 200, 1000, 1)).toEqual({ dx: 0, maxWidth: undefined })
+  })
+  it('掉出左缘(ModelPill 菜单 right:0 + 224px 宽的真实症状)→ 推回边距内', () => {
+    // 用户实报那张图:菜单左缘 -40 → 需要右推 48 才够 8px 边距
+    expect(edgeNudge(-40, 224, 390, 1).dx).toBe(48)
+  })
+  it('捅出右缘 → 左推', () => {
+    // left=300 width=264(ProjectSelector)→ right=564 > 390-8 → 推 -182
+    expect(edgeNudge(300, 264, 390, 1).dx).toBe(-182)
+  })
+  it('⚠️ zoom≠1:dx 是局部 px,必须除以 zoom(手机 body zoom 恒 1.15,桌面恒 1 → 写错本地看不出来)', () => {
+    expect(edgeNudge(-46, 224, 390, 1.15).dx).toBeCloseTo(46.956, 2)
+  })
+  it('比可用宽度还宽(mode 菜单 min-width:320 vs 手机可用 ~323)→ 给 maxWidth 且贴左边距', () => {
+    const r = edgeNudge(60, 512, 390, 1)
+    expect(r.maxWidth).toBe(374) // 390 - 2*8
+    expect(r.dx).toBe(-52) // 收窄后按 374 宽重算,左缘落到 8
+  })
+  it('maxWidth 也是局部 px(同样除 zoom)', () => {
+    expect(edgeNudge(60, 512, 390, 1.15).maxWidth).toBeCloseTo(325.217, 2)
+  })
+  it('⚠️ 隐藏中(display:none → rect 全零)不许推:否则一显示就整体歪掉 margin/zoom', () => {
+    expect(edgeNudge(0, 0, 390, 1.15)).toEqual({ dx: 0 })
   })
 })

@@ -7,14 +7,15 @@
  */
 import { create } from 'zustand'
 import type {
-  AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, ModelsResponse, NormalAgentDef,
+  AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SubChat, TanguDesktopConfig, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
 } from '../types'
-import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY } from '../types'
+import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { abortRun, cancelSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import { splitSuggestions } from '../views/chat2/suggest'
+import type { ChatRef } from '../views/chat2/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
 import type { Tab as SettingsTab } from '../components/SettingsModal'
@@ -206,9 +207,20 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
   void window.tangu?.setConfig?.(patch).catch(() => {})
 }
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
+let lastEngineResyncAt = 0 // 凭据不同步时的引擎重启节流:401 持续不断也不许变成重启风暴
 const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
 const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
 const recentSessions: string[] = [] // 最近查看的会话 id(MRU 在前),用于 LRU 淘汰
+/** 「进入某工作区」= 记下它 + **保证它是展开的**。
+ *  ⚠️ 展开这一步必须在这里做,不能交给下游 effect 监听 activeWorkspaceKey:用户手动收起某个工作区
+ *  时 activeWorkspaceKey 并不会变,再点进同一个工作区时值没变化 → effect 不重跑 → 点了没反应。 */
+function enterWorkspace(s: { openWorkspaceKeys: string[] }, key: string | null): {
+  activeWorkspaceKey: string | null
+  openWorkspaceKeys: string[]
+} {
+  const open = key && !s.openWorkspaceKeys.includes(key) ? [...s.openWorkspaceKeys, key] : s.openWorkspaceKeys
+  return { activeWorkspaceKey: key, openWorkspaceKeys: open }
+}
 /** 单条正文超上限则截断 + 标注(后端仍完整落库;仅界面侧防 OOM)。 */
 function capContent(s: string): string {
   return s.length >= MAX_MSG_CHARS ? s.slice(0, MAX_MSG_CHARS) + '\n\n[输出过长,界面已截断显示]' : s
@@ -245,8 +257,10 @@ export interface AppState {
   sessions: SessionRecord[]
   archivedSessions: SessionRecord[]
   activeId: string | null
-  /** 当前「进入」的工作区 key:会话面板 + 文件面板共享(手风琴同步,展开它收起其余)。 */
+  /** 当前「进入」的工作区 key:会话面板 + 文件面板共享。只管「置顶 / 联动展开它」,**不再收起其余**。 */
   activeWorkspaceKey: string | null
+  /** 文件面板里展开着的工作区(多开;手风琴已去掉)。放 store 而非组件 state = 切侧栏模式重挂后不塌。 */
+  openWorkspaceKeys: string[]
   modelsResp: ModelsResponse | null
   skillsList: SkillInfo[] | null
   agentDefs: NormalAgentDef[]
@@ -265,8 +279,10 @@ export interface AppState {
   newChatModel: string | null
   /** 瞬态:外部入口(反馈诊断/对话建 agent/插件)预填聊天框的草稿;Composer2 mount 消费一次即清,不落盘。 */
   pendingDraft: string | null
-  /** 拖引用进聊天:追加到草稿末尾(区别于 pendingDraft 的整体覆盖)。seq 让连拖同一条也能触发。 */
-  draftAppend: { text: string; seq: number } | null
+  /** 拖引用进聊天:结构化引用直接进输入框上方的「已选择」芯片条(不是往草稿里塞文本 —— 那条老路
+   *  要把 token 再解析回来,拖到「工作区根目录下的裸文件名」这类无分隔符路径就认不出了)。
+   *  seq 让连拖同一条也能触发。 */
+  draftRefs: { refs: ChatRef[]; seq: number } | null
   /** steer 等待区:run 跑动中发出的消息先等在这里,引擎 turn_boundary 注入后才进对话(id=引擎 userMessageId)。 */
   steerPendingBySession: Record<string, Array<{ id: string; text: string; attachments?: Attachment[] }>>
   /** ↑ 历史召回的补充池:steer 消息**入队即记**(类 pi addToHistory-on-enqueue),被删/被撤回后仍能从 ↑ 找回。 */
@@ -283,7 +299,9 @@ export interface AppState {
   /** 手动 Compact 进度 0-100(undefined = 未在压缩)。ponytail: 客户端估算,compact 接口一次性返回没有进度信号。 */
   compactingBySession: Record<string, number | undefined>
   subChatsBySession: Record<string, SubChat[]>
-  usageBySession: Record<string, { ctx: number; base: number; live: number }>
+  usageBySession: Record<string, { ctx: number; base: number; live: number; runCost?: number; costLimit?: number }>
+  /** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模。ctx 环弹层消费。 */
+  ctxInfoBySession: Record<string, CtxInfo>
   /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
   deskBySession: Record<string, DeskState>
   /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
@@ -324,6 +342,8 @@ export interface AppState {
   pollSession(sessionId: string): Promise<void>
   setActiveId(id: string | null): void
   setActiveWorkspaceKey(key: string | null): void
+  /** 展开/收起一个工作区;open 省略 = 翻转。 */
+  toggleOpenWorkspace(key: string, open?: boolean): void
   workspaces(): WorkspaceDescriptor[]
   defaultWorkspace(): WorkspaceDescriptor
   createInWorkspace(ws: WorkspaceDescriptor): Promise<void>
@@ -379,9 +399,10 @@ export interface AppState {
   setPendingDraft(text: string | null): void
   /** Composer 消费掉「未送达插话」的回填后清位(per-session)。 */
   clearSteerRestore(sessionId: string): void
-  appendDraft(text: string): void
-  clearDraftAppend(): void
-  setFilePreview(p: PreviewTarget | null): void
+  appendRefs(refs: ChatRef[]): void
+  clearDraftRefs(): void
+  /** opts.newTab(⌘/Ctrl 单击文件行)= 强开新标签页,不聚焦已开的同路径页。 */
+  setFilePreview(p: PreviewTarget | null, opts?: { newTab?: boolean }): void
   patchConfig(patch: Partial<TanguDesktopConfig>): void
   ensureEngineCaps(engineId: string | undefined): void
   openSettings(tab?: SettingsTab): void
@@ -435,6 +456,7 @@ export const useApp = create<AppState>((set, get) => ({
   archivedSessions: [],
   activeId: null,
   activeWorkspaceKey: null,
+  openWorkspaceKeys: [],
   modelsResp: null,
   skillsList: null,
   agentDefs: [],
@@ -450,7 +472,7 @@ export const useApp = create<AppState>((set, get) => ({
   newChatCfg: {},
   newChatModel: null,
   pendingDraft: null,
-  draftAppend: null,
+  draftRefs: null,
   steerPendingBySession: {},
   steerSentBySession: {},
   steerRestoreBySession: {},
@@ -467,6 +489,7 @@ export const useApp = create<AppState>((set, get) => ({
   compactingBySession: {},
   subChatsBySession: {},
   usageBySession: {},
+  ctxInfoBySession: {},
   unread: loadUnread(),
   settingsOpen: false,
   settingsTab: null,
@@ -710,12 +733,29 @@ export const useApp = create<AppState>((set, get) => ({
         }))
         break
       }
-      case 'usage':
+      case 'usage': {
+        // 成本闸预警(H3):越过上限 80% 的那一刻提示一次(runCost 是引擎发的绝对值,新 run 从小
+        // 值重来,阈值判断天然按 run 复位,无需另存旗标)。
+        const prev = get().usageBySession[sessionId]
+        const runCost = pl.costTotal != null ? Number(pl.costTotal) : prev?.runCost
+        const costLimit = pl.costLimit != null ? Number(pl.costLimit) : prev?.costLimit
+        if (
+          runCost != null && costLimit != null && costLimit > 0 &&
+          runCost >= costLimit * 0.8 && (prev?.runCost == null || prev.runCost < costLimit * 0.8)
+        ) {
+          // 落进产生事件的那个会话(勿用 pushNotice:它追加到 activeId,后台会话的警告会错挂到用户正看的会话)
+          set((s) => ({
+            messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {
+              id: `costwarn-${runId}-${ev.seq}`, role: 'system', content: get().tr('cost.nearCap', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() }), status: 'done', timestamp: Date.now(),
+            }] },
+          }))
+        }
         set((s) => {
           const u = s.usageBySession[sessionId] || { ctx: 0, base: 0, live: 0 }
-          return { usageBySession: { ...s.usageBySession, [sessionId]: { ctx: pl.prompt || u.ctx, base: u.base, live: pl.total || u.live } } }
+          return { usageBySession: { ...s.usageBySession, [sessionId]: { ...u, ctx: pl.prompt || u.ctx, live: pl.total || u.live, runCost, costLimit } } }
         })
         break
+      }
       case 'turn_boundary': {
         const newId = pl.newAssistantId
         const users: Array<{ id: string; content: string }> = Array.isArray(pl.userMessages) ? pl.userMessages : []
@@ -817,6 +857,41 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
       case 'status':
+        // context 视图数据(H5/H8/B2):整包存下,ctx 环弹层渲染
+        if (pl.phase === 'context_info') {
+          set((s) => ({ ctxInfoBySession: { ...s.ctxInfoBySession, [sessionId]: {
+            ctxWindow: Number(pl.ctxWindow) || 0,
+            ctxWindowSource: String(pl.ctxWindowSource || 'default'),
+            // 元素级清洗:事件会持久化重放,一条畸形 payload 不清洗=每次渲染都炸(弹层在 ErrorBoundary 外)
+            sections: (Array.isArray(pl.sections) ? pl.sections : [])
+              .filter((it: any) => it && typeof it === 'object')
+              .map((it: any) => ({ k: String(it.k ?? ''), tokens: Number(it.tokens) || 0 })),
+            files: (Array.isArray(pl.files) ? pl.files : []).filter((f: any): f is string => typeof f === 'string'),
+            filesTruncated: !!pl.filesTruncated,
+            historyCount: Number(pl.historyCount) || 0,
+            historyTokens: Number(pl.historyTokens) || 0,
+            // 白名单:版本漂移下未知档位会在 ModelPill 渲染成原始 i18n 键,按本 reducer 的清洗纪律挡在入口
+            ...(THINKING_LEVELS.includes(pl.thinkingRequested) ? { thinkingRequested: pl.thinkingRequested } : {}),
+            ...(THINKING_LEVELS.includes(pl.thinkingEffective) ? { thinkingEffective: pl.thinkingEffective } : {}),
+            ...(typeof pl.modelId === 'string' && pl.modelId ? { modelId: pl.modelId } : {}),
+          } } }))
+          break
+        }
+        // 自动压缩提示(H4):此前 ctx% 突然回落零提示,与手动 /compact 的明确回执反差。
+        // 只认 'compacted'(forced 路径先发 'compacting' 再发 'compacted',避免一次压缩两条)。
+        if (pl.phase === 'compacted') {
+          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」
+          const line = pl.forced && !pl.fallback
+            ? get().tr('ctx.compacted.forced')
+            : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
+          set((s) => ({
+            messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {
+              // id 掺 seq(per-run 单调):中流断线恢复会 iteration-1 重进同一迭代号,纯 iteration 会撞 React key
+              id: `compacted-${runId}-${ev.seq}`, role: 'system', content: line, status: 'done', timestamp: Date.now(),
+            }] },
+          }))
+          break
+        }
         // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
         if (pl.phase === 'llm_retry') {
           set((s) => ({
@@ -1040,7 +1115,7 @@ export const useApp = create<AppState>((set, get) => ({
       // ctx 只有流式 usage 事件会喂,重开会话后本地是空的 → 用服务端回放的「最近一次上下文占用」兜底
       // (本地已有值更新,不覆盖:历史加载可能与正在跑的 run 竞速)。
       void api.getSessionUsage(c, sessionId)
-        .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
+        .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...s.usageBySession[sessionId], ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
         .catch(() => {})
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
@@ -1132,10 +1207,17 @@ export const useApp = create<AppState>((set, get) => ({
       // 焦点回到会话 → 展开它所在工作区(文件面板 + 会话列表共享 activeWorkspaceKey;
       // 否则启动/恢复/从特殊视图跳回时无人设置,右栏文件面板全收起显得「空」)。
       const s = get().sessions.find((x) => x.id === id) || get().archivedSessions.find((x) => x.id === id)
-      if (s) set({ activeWorkspaceKey: sessionWorkspaceKey(s) })
+      if (s) set(enterWorkspace(get(), sessionWorkspaceKey(s)))
     }
   },
-  setActiveWorkspaceKey: (key) => set({ activeWorkspaceKey: key }),
+  setActiveWorkspaceKey: (key) => set(enterWorkspace(get(), key)),
+
+  toggleOpenWorkspace: (key, open) => set((s) => {
+    const has = s.openWorkspaceKeys.includes(key)
+    const want = open ?? !has
+    if (want === has) return {}
+    return { openWorkspaceKeys: want ? [...s.openWorkspaceKeys, key] : s.openWorkspaceKeys.filter((k) => k !== key) }
+  }),
 
   defaultWorkspace: () => ({
     key: get().defaultWsDir || '__default_ws__',
@@ -1683,10 +1765,15 @@ export const useApp = create<AppState>((set, get) => ({
     // 在会话里换模型 = 也换掉全局默认(新会话延续);cfg.modelId 本来就是「新会话用哪个模型」的真源。
     if (remember) set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
     if (!sid) { set({ newChatModel: modelId }); return }
-    set((s) => ({
-      sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
-      archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
-    }))
+    set((s) => {
+      // 换模型即作废旧 context_info:窗口值/来源标注是按旧模型算的,留着会让 ctx 环分母错到下一次 run
+      const { [sid]: _stale, ...ctxRest } = s.ctxInfoBySession
+      return {
+        sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
+        archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
+        ctxInfoBySession: ctxRest,
+      }
+    })
     void api.updateSession(get().cfg, sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 
@@ -1784,11 +1871,11 @@ export const useApp = create<AppState>((set, get) => ({
   setNewChatModel: (id) => set({ newChatModel: id }),
   setPendingDraft: (text) => set({ pendingDraft: text }),
   clearSteerRestore: (sessionId) => set((s) => ({ steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: undefined } })),
-  appendDraft: (text) => set((s) => ({ draftAppend: { text, seq: (s.draftAppend?.seq || 0) + 1 } })),
-  clearDraftAppend: () => set({ draftAppend: null }),
+  appendRefs: (refs) => set((s) => ({ draftRefs: { refs, seq: (s.draftRefs?.seq || 0) + 1 } })),
+  clearDraftRefs: () => set({ draftRefs: null }),
   // 预览改道:所有入口(文件面板/右栏工作区/对话内联)汇聚于此 —— 一律开主区标签页(wsfile 视图)。
   // 原 chatbox 上方浮层暂时停用(filePreview 永不置非空,ChatView 渲染块保留但不触发)。
-  setFilePreview: (p) => { if (p) openWsFile(p); else set({ filePreview: null }) },
+  setFilePreview: (p, opts) => { if (p) openWsFile(p, opts); else set({ filePreview: null }) },
 
   patchConfig: (patch) => {
     set((s) => { void window.tangu?.setConfig(patch); return { cfg: { ...s.cfg, ...patch } } })
@@ -1842,16 +1929,31 @@ export const useApp = create<AppState>((set, get) => ({
     const now = Date.now()
     if (now - lastAuthExpiredAt < 10_000) return // 幂等去抖
     lastAuthExpiredAt = now
-    const t = s.tr
-    set({
-      authInfo: { ...s.authInfo, loggedIn: false, tokenValid: false },
-      connState: 'err',
-      connMessage: t('app.sessionExpired'),
-    })
-    s.toast(t('app.sessionExpired'), true)
-    // 通知常驻的账号卡(自管 authStatus,不订阅本 store)刷新 → 显示过期态 + 点击改走重新登录。
-    try { window.dispatchEvent(new Event('tangu:auth-expired')) } catch { /* ignore */ }
-    get().openSettings('forsion') // 复用现成 forsion tab 的登录入口
+    void (async () => {
+      // 401 ≠ 云端登录过期:本地引擎的端点鉴权是**逐字比对 spawn 时的 env token 快照**,凭据一漂
+      // (auth.json 被改写而引擎没重启)本地接口就整片 401 —— 而那时云端登录完好无损。所以先复检真实
+      // 登录态(与 run 出错路径同一套路),服务端也不认了才走过期 UX;仍有效 = 引擎凭据不同步,重启引擎
+      // 自愈(ready 后渲染层带新配置重连,会话列表自己回来),绝不弹「请重新登录」误导用户。
+      const a = await (window.tangu?.authStatus?.().catch(() => null) ?? Promise.resolve(null))
+      if (a?.loggedIn) {
+        set({ authInfo: a })
+        if (now - lastEngineResyncAt > 60_000) {
+          lastEngineResyncAt = now
+          void window.tangu?.backendRestart?.()
+        }
+        return
+      }
+      const t = get().tr
+      set({
+        authInfo: a ?? { ...s.authInfo!, loggedIn: false, tokenValid: false },
+        connState: 'err',
+        connMessage: t('app.sessionExpired'),
+      })
+      get().toast(t('app.sessionExpired'), true)
+      // 通知常驻的账号卡(自管 authStatus,不订阅本 store)刷新 → 显示过期态 + 点击改走重新登录。
+      try { window.dispatchEvent(new Event('tangu:auth-expired')) } catch { /* ignore */ }
+      get().openSettings('forsion') // 复用现成 forsion tab 的登录入口
+    })()
   },
 
   openFeedback: () => {

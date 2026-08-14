@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentRunEvent, UiMessage } from '../types'
+import type { AgentRunEvent, AuthStatusInfo, UiMessage } from '../types'
 import { useApp, recordToUi, type AppState } from './appStore'
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
@@ -103,6 +103,51 @@ describe('appStore.reduceEvent', () => {
     expect(ref.current).toBe('a2')
     expect(state.subChatsBySession.s1[0]).toMatchObject({ id: 'sub1', streaming: false })
     expect(state.subChatsBySession.s1[0].segs).toHaveLength(2)
+  })
+
+  it('usage 事件存 runCost/costLimit,越 80% 提示一次;status compacted 落一条系统提示', () => {
+    const ref = { current: 'a1' }
+    let seq = 0 // per-run 单调:compacted/costwarn 的消息 id 掺 seq 防撞
+    const emit = (type: string, payload: Record<string, unknown> = {}) => {
+      useApp.getState().reduceEvent('s1', 'r1', ref, { seq: ++seq, type, payload } as AgentRunEvent)
+    }
+    // activeId 指向别的会话:警告必须落进产生事件的 s1,不是用户正看的会话
+    useApp.setState({ activeId: 'other' })
+
+    emit('usage', { prompt: 100, total: 25, costTotal: 500, costLimit: 20000 })
+    expect(useApp.getState().usageBySession.s1).toMatchObject({ runCost: 500, costLimit: 20000 })
+    const before = useApp.getState().messagesBySession.s1.length
+
+    // 越过 80% 阈值 → s1 流里落系统提示一次;再涨不重复提示
+    emit('usage', { prompt: 100, total: 25, costTotal: 16_500, costLimit: 20000 })
+    const afterWarn = useApp.getState().messagesBySession.s1
+    expect(afterWarn.length).toBe(before + 1)
+    expect(afterWarn[afterWarn.length - 1]).toMatchObject({ role: 'system' })
+    expect(afterWarn[afterWarn.length - 1].content).toContain('cost.nearCap')
+    expect(useApp.getState().messagesBySession.other).toBeUndefined()
+    emit('usage', { prompt: 100, total: 25, costTotal: 17_000, costLimit: 20000 })
+    expect(useApp.getState().messagesBySession.s1.length).toBe(before + 1)
+
+    // context_info 整包落存(H5/H8/B2)
+    emit('status', { phase: 'context_info', ctxWindow: 272000, ctxWindowSource: 'family', sections: [{ k: 'skills', tokens: 1200 }], files: ['/p/AGENTS.md'], filesTruncated: true, historyCount: 8, historyTokens: 4200, thinkingRequested: 'high', thinkingEffective: 'medium' })
+    expect(useApp.getState().ctxInfoBySession.s1).toMatchObject({
+      ctxWindow: 272000, ctxWindowSource: 'family', filesTruncated: true, historyCount: 8, historyTokens: 4200,
+      thinkingRequested: 'high', thinkingEffective: 'medium',
+    })
+    expect(useApp.getState().ctxInfoBySession.s1.sections[0]).toEqual({ k: 'skills', tokens: 1200 })
+
+    // 自动压缩提示:机械档带 savedChars;compacting 阶段不落消息;forced+fallback 用机械措辞不谎称摘要
+    emit('status', { phase: 'compacting', forced: true, iteration: 2 })
+    expect(useApp.getState().messagesBySession.s1.length).toBe(before + 1)
+    emit('status', { phase: 'compacted', savedChars: 1234, iteration: 2 })
+    let msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1]).toMatchObject({ role: 'system', content: 'ctx.compacted.auto' })
+    emit('status', { phase: 'compacted', forced: true, iteration: 3 })
+    msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.forced')
+    emit('status', { phase: 'compacted', forced: true, fallback: true, savedChars: 99, iteration: 4 })
+    msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.auto')
   })
 
   it('done 与 error 正确收尾并过期未决操作', () => {
@@ -338,5 +383,82 @@ describe('appStore.compact 进度', () => {
     expect(pct()).toBe(100)
     await vi.advanceTimersByTimeAsync(800)
     expect(pct()).toBeUndefined()
+  })
+})
+
+// 工作区展开态:手风琴(展开一个收起其余)已按用户要求去掉 —— 每个工作区各自开合,互不影响。
+describe('toggleOpenWorkspace', () => {
+  beforeEach(() => { useApp.setState({ openWorkspaceKeys: [] }) })
+  const keys = (): string[] => useApp.getState().openWorkspaceKeys
+
+  it('多个工作区可以同时展开', () => {
+    useApp.getState().toggleOpenWorkspace('a')
+    useApp.getState().toggleOpenWorkspace('b')
+    expect(keys()).toEqual(['a', 'b'])
+  })
+
+  it('再点一次只收自己', () => {
+    useApp.getState().toggleOpenWorkspace('a')
+    useApp.getState().toggleOpenWorkspace('b')
+    useApp.getState().toggleOpenWorkspace('a')
+    expect(keys()).toEqual(['b'])
+  })
+
+  it('显式 open=true 幂等(联动 effect 会反复调)', () => {
+    useApp.getState().toggleOpenWorkspace('a', true)
+    const before = keys()
+    useApp.getState().toggleOpenWorkspace('a', true)
+    expect(keys()).toBe(before) // 同一个引用 = 没有多余的 set,不会把订阅者刷醒
+  })
+
+  // Codex 评审:收起后再进入同一个工作区,activeWorkspaceKey 值没变 —— 展开这件事不能挂在
+  // 「监听 activeWorkspaceKey 变化」的 effect 上,必须由 setActiveWorkspaceKey 自己保证。
+  it('「进入」永远保证它是展开的(哪怕 activeWorkspaceKey 没变)', () => {
+    useApp.setState({ activeWorkspaceKey: null })
+    useApp.getState().setActiveWorkspaceKey('a')
+    expect(keys()).toEqual(['a'])
+    useApp.getState().toggleOpenWorkspace('a', false) // 用户手动收起,active 仍是 a
+    expect(keys()).toEqual([])
+    useApp.getState().setActiveWorkspaceKey('a') // 再点进去 —— 值没变,但必须重新展开
+    expect(keys()).toEqual(['a'])
+  })
+})
+
+// 401 ≠ 云端登录过期:引擎的端点鉴权是逐字比对 spawn 时的 env token 快照,凭据一漂本地接口整片 401,
+// 而云端登录完好 —— 那时弹「登录已过期」既是假话,又把「本地会话列表加载失败」推给用户自己去重登。
+// 这两条挂了 = 那个 bug 回来了(2026-08-13)。
+describe('handleAuthExpired:401 先复检真实登录态', () => {
+  const auth = (patch: Partial<AuthStatusInfo>): AuthStatusInfo =>
+    ({ loggedIn: true, cloudUrl: 'https://forsion.net', username: 'u', tokenSource: 'tangu-login', ...patch })
+  let restarts = 0
+  const arm = (status: AuthStatusInfo | null): void => {
+    restarts = 0
+    ;(globalThis as any).window = {
+      tangu: {
+        authStatus: () => Promise.resolve(status),
+        backendRestart: () => { restarts += 1; return Promise.resolve({}) },
+      },
+    }
+    useApp.setState({ ...initial, tr: (k) => k, toast: () => {}, authInfo: auth({}) }, true)
+  }
+
+  afterEach(() => { delete (globalThis as any).window; vi.restoreAllMocks() })
+
+  it('云端仍认账 → 重启引擎自愈,不进过期态', async () => {
+    arm(auth({ tokenValid: null }))
+    useApp.getState().handleAuthExpired()
+    await vi.waitFor(() => expect(restarts).toBe(1))
+    expect(useApp.getState().connState).not.toBe('err')
+    expect(useApp.getState().settingsOpen).toBe(false) // 没有把用户弹去登录页
+    expect(useApp.getState().authInfo?.loggedIn).toBe(true)
+  })
+
+  it('服务端已登出 → 照旧走过期 UX', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000) // 越过 handleAuthExpired 的 10s 去抖
+    arm(auth({ loggedIn: false }))
+    useApp.getState().handleAuthExpired()
+    await vi.waitFor(() => expect(useApp.getState().connState).toBe('err'))
+    expect(useApp.getState().settingsOpen).toBe(true)
+    expect(restarts).toBe(0) // 真过期不重启引擎
   })
 })

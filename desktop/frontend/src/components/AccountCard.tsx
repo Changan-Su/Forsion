@@ -279,9 +279,13 @@ export const AccountCard: React.FC<{
         <span className="account-meta">
           <span className="account-name-row">
             <span className="account-name">{loggedIn ? display : (loggingIn ? t('sidebar.account.loggingIn') : t('sidebar.account.login'))}</span>
-            {loggedIn && !expired && <TierBadge tier={auth?.membershipTier} />}
           </span>
-          <span className="account-sub">{subText}</span>
+          {/* 第二行(用户拍板 2026-08-13):正常登录态只放会员标识,不再写「用户中心」。
+              引擎未运行 / 登录过期 / 未登录这几档是**状态提示**,卡上没别的地方说得了,照旧走 subText。
+              free 用户 TierBadge 恒返回 null(对齐 AI Studio),此时第二行就是空的,卡自然变矮。 */}
+          {loggedIn && !expired && !engineDown && !engineStarting
+            ? <TierBadge tier={auth?.membershipTier} />
+            : <span className="account-sub">{subText}</span>}
         </span>
         {loggedIn && (
           <button className="icon-btn account-logout" title={t('sidebar.account.logout')} onClick={(e) => { e.stopPropagation(); void logout() }}>

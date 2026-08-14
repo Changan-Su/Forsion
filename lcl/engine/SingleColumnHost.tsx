@@ -15,7 +15,7 @@ import { useSpaceStore, setActiveSpace, getActiveSpace } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { getView } from './viewRegistry'
 import { label } from './types'
-import { useWorkspace } from './singleColumnStore'
+import { useWorkspace, restoreSingleColumnLayout } from './singleColumnStore'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 // ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
@@ -25,6 +25,56 @@ import './singleColumn.css'
 // 直接借整份而不是抽 .cmd-* 出来:engine.css 通篇是类选择器(.rb-/.dv-/.wb-/.cmd-),无 :root/html/body
 // 全局规则,单列壳的 .mb-* 与之零交集 —— 不匹配的规则是惰性的,抽文件反而要动别的会话正在改的 engine.css。
 import './engine.css'
+
+/** 下滑收起浮动 chrome(顶部胶囊 + 编辑器底部悬浮条)、上滑立刻召回 —— 扩大阅读区,同时保证入口能快速找回。
+ *  ⚠️ scroll 事件**不冒泡**,但捕获阶段照样经过祖先。所以一个挂在 .mb-main 上的捕获监听就吃下了全部子
+ *  视图的滚动 —— 每个视图的滚动器都不一样(.t2-stream / .amx-editor / .newtab / 各种列表),逐视图接线
+ *  既漏又要改二十几个文件。返回 true = 该收起;位移全在 CSS 的 [data-chrome='off'] 里。 */
+function useChromeAutoHide(ref: React.RefObject<HTMLElement | null>, enabled: boolean): boolean {
+  const [off, setOff] = useState(false)
+  // 换视图 / 开抽屉 → 无条件召回:换了页面 chrome 还藏着,用户会以为按钮没了。
+  const activeId = useWorkspace((s) => s.activeMainId)
+  const anyDrawer = useWorkspace((s) => s.leftVisible || s.rightVisible)
+  useEffect(() => { setOff(false) }, [activeId, anyDrawer, enabled])
+  useEffect(() => {
+    const root = ref.current
+    if (!root || !enabled) return
+    let src: HTMLElement | null = null
+    let last = 0
+    let acc = 0
+    const onScroll = (e: Event): void => {
+      const el = e.target as HTMLElement | null
+      if (!el || !(el instanceof HTMLElement)) return
+      // 换了滚动器(切视图/切面板/抽屉里的列表)→ 这一帧的 delta 是跨元素的垃圾值,只重置基线不判方向。
+      if (el !== src) { src = el; last = el.scrollTop; acc = 0; return }
+      const top = el.scrollTop
+      const dy = top - last
+      last = top
+      if (Math.abs(dy) < 2) return // 惯性尾巴 / 亚像素抖动
+      if (top < 56) { acc = 0; setOff(false); return } // 顶部一段恒显示
+      acc = dy > 0 === acc > 0 ? acc + dy : dy // 同向累积,换向清零(免得惯性回弹来回抽搐)
+      if (acc > 44) {
+        // 正在打字不收:编辑器底栏是此刻唯一的操作入口,收了等于把工具抽走。键盘弹出本身也会让页面滚。
+        const a = document.activeElement as HTMLElement | null
+        if (a && (a.isContentEditable || /^(input|textarea)$/i.test(a.tagName))) return
+        setOff(true)
+      } else if (acc < -28) setOff(false)
+    }
+    // 一落焦到可编辑处就召回:收起态下点正文 → 键盘弹出,而工具条还被 translate 推在屏外,
+    // 用户就得先滚回顶才拿得到「+」。focusin 会冒泡(focus 不会),挂根上一处即可。
+    const onFocusIn = (ev: Event): void => {
+      const t = ev.target as HTMLElement | null
+      if (t && (t.isContentEditable || /^(input|textarea)$/i.test(t.tagName))) { acc = 0; setOff(false) }
+    }
+    root.addEventListener('scroll', onScroll, true)
+    root.addEventListener('focusin', onFocusIn)
+    return () => {
+      root.removeEventListener('scroll', onScroll, true)
+      root.removeEventListener('focusin', onFocusIn)
+    }
+  }, [ref, enabled])
+  return off
+}
 
 export function LeafHost() {
   // 订阅 active 的 id、type、以及 **params 的对象身份**。标题变化仍不重渲染宿主——视图渲染期
@@ -44,7 +94,9 @@ export function LeafHost() {
   // key 仍只含 id:type —— params 变化是「同面板换参数」(桌面 dockview 同语义),重渲不重挂,
   // 否则换一篇笔记就整棵编辑器树重建,滚动/光标/未存草稿全丢。
   return (
-    <div className="mb-view" key={`${active.id}:${active.type}`}>
+    // data-view:主区视图默认给浮动胶囊顶栏让出一条 --mb-top 的空位(见 singleColumn.css);
+    // 自己想让内容从胶囊底下滚过去的视图(如 amadeus-editor)按 type 单独退订。
+    <div className="mb-view" data-view={active.type} key={`${active.id}:${active.type}`}>
       <ViewErrorBoundary>
         <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
           {def.factory({ leaf: active, params: activeParams ?? active.params })}
@@ -132,6 +184,17 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
   )
 }
 
+/** 切 Space 但**留在左抽屉里**(用户拍板 2026-08-13:切完接着在面板里找东西,不要被甩回主区)。
+ *  setActiveSpace 会走 applyNamed / resetLayout 整体重建布局,leftVisible 跟着复位 → 抽屉自动收回;
+ *  它是同步的,所以重建之后再开一次即可。新 Space 压根没有左栏内容时不开(免得弹出个空抽屉)。 */
+function switchSpaceKeepDrawer(id: string): void {
+  setActiveSpace(id)
+  const ws = useWorkspace.getState()
+  if (ws.leftVisible) return
+  if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0) return
+  ws.toggleSidebar('left')
+}
+
 /** 左抽屉底部常驻区:Space 切换条(原全局底栏移入)+ 账号卡与设置钮。
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
  *  同两项已从「⋯」菜单滤掉(不重复出现)。切 Space 会走 resetLayout → 抽屉自动收回。 */
@@ -151,7 +214,7 @@ function DrawerFoot() {
             const Icon = sp.icon
             const on = sp.id === activeId || (!spaces.some((x) => x.id === activeId) && sp === spaces[0])
             return (
-              <button key={sp.id} className={`mb-tab${on ? ' on' : ''}`} onClick={() => setActiveSpace(sp.id)}>
+              <button key={sp.id} className={`mb-tab${on ? ' on' : ''}`} onClick={() => switchSpaceKeepDrawer(sp.id)}>
                 {Icon && <Icon size={20} />}
                 <span className="mb-tab-label">{label(sp.name)}</span>
               </button>
@@ -286,10 +349,13 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   useEffect(() => {
     const ws = useWorkspace.getState()
     if (buildDefault) ws.setDefaultBuilder(buildDefault)
-    if (ws.mainLeaves.length === 0) buildDefault?.() // 首次:构建当前活动 Space
+    // 冷启动先还原上次的标签 + 激活项(桌面是 WorkspaceHost.onReady 的 tryRestoreLayout,单列这边
+    // 是三桶 leaf 的序列化);首启 / 整份不可用才构建当前 Space 的默认布局。
+    if (ws.mainLeaves.length === 0 && !restoreSingleColumnLayout()) buildDefault?.()
     ws.refreshTabs()
   }, [])
 
+  const mainRef = useRef<HTMLElement | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [tabsOpen, setTabsOpen] = useState(false)
   const hasLeft = useWorkspace((s) => s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0)
@@ -300,6 +366,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
 
   const mini = variant === 'mini'
   const wide = useWideAspect(!mini)
+  // mini(桌面卫星窗)顶栏仍占一行、不是浮层,收起来会让内容跳一格 —— 只在手机形态启用。
+  const chromeOff = useChromeAutoHide(mainRef, !mini)
 
   // Android 系统返回:MobileRoot 派发可取消的 forsion:mobile-back,壳先接管最上层的两个 sheet。
   const sheetsRef = useRef({ tabs: false, more: false })
@@ -369,15 +437,17 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const dimSwipe = useRef<{ x: number; y: number; t: number } | null>(null)
   const pushed = !wide && (leftVisible || rightVisible)
 
-  return (
-    <div className={`mb-shell${mini ? ' mini-shell' : ''}`} style={{ paddingTop: mini ? 0 : 'env(safe-area-inset-top)', paddingBottom: mini ? 0 : 'env(safe-area-inset-bottom)' }}>
-      {/* mini:顶部横向 Space 切换条(ribbon 在顶部)+ 兼作 frameless 拖窗把手。 */}
-      {mini && <MiniRibbon />}
-      <header className="mb-topbar">
+  {/* 按钮收成左右两组胶囊(Obsidian 式)。顺序不许动:mobile e2e(note-open)靠
+      `.mb-topbar .mb-icon-btn` 的第一个拿左抽屉钮 —— 胶囊只是中间多包了一层 div,后代选择器照命中。 */}
+  const topbar = (
+    <header className="mb-topbar">
+      <div className="mb-cap">
         {hasLeft ? (
           <button className="mb-icon-btn" onClick={() => useWorkspace.getState().toggleSidebar('left')} aria-label="left panel"><PanelLeft size={20} /></button>
         ) : <span className="mb-icon-btn mb-icon-btn--ghost" />}
-        <div className="mb-topbar-spacer" />
+      </div>
+      <div className="mb-topbar-spacer" />
+      <div className="mb-cap">
         {hasRight ? (
           <button className="mb-icon-btn" onClick={() => useWorkspace.getState().toggleSidebar('right')} aria-label="right panel"><PanelRight size={20} /></button>
         ) : null}
@@ -385,14 +455,30 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
           <span className="mb-tabcount">{tabCount || 1}</span>
         </button>
         <button className="mb-icon-btn" onClick={() => setMoreOpen(true)} aria-label="more"><MoreHorizontal size={20} /></button>
-      </header>
+      </div>
+    </header>
+  )
+
+  return (
+    // ⚠️ 顶部**不再**在壳上留安全区:内容要画到屏幕最顶端(封面图/网页/白板 edge-to-edge),
+    //    躲刘海是浮动胶囊自己的事(.mb-topbar 的 top、抽屉的 padding-top,见 singleColumn.css)。
+    //    底部仍留 —— 底部 chrome 分散在各视图里,没法逐个保证自理,收窄爆炸半径。
+    <div className={`mb-shell${mini ? ' mini-shell' : ''}`} data-chrome={chromeOff ? 'off' : undefined} style={{ paddingBottom: mini ? 0 : 'env(safe-area-inset-bottom)' }}>
+      {/* mini:顶部横向 Space 切换条(ribbon 在顶部)+ 兼作 frameless 拖窗把手。 */}
+      {mini && <MiniRibbon />}
+      {/* mini 的顶栏仍占一行(卡片太小,浮层会盖住内容);手机端的挪进 .mb-main 里浮着 —— 见下。 */}
+      {mini && topbar}
 
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
       <div className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
         <Drawer side="left" docked={wide} showFoot={!mini} />
-        <main className="mb-main" onTouchStart={mini ? undefined : swipeStart} onTouchEnd={mini ? undefined : swipeEnd}>
+        <main ref={mainRef} className="mb-main" onTouchStart={mini ? undefined : swipeStart} onTouchEnd={mini ? undefined : swipeEnd}>
+          {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
+              ① push 抽屉的 translate 只打在 .mb-main —— 挂外面胶囊就不跟着内容滑,视觉当场穿帮;
+              ② 宽屏 docked 形态左栏(.mb-sidecol)与 main 并排,挂外面的 left:0 会盖到左栏头上。 */}
+          {!mini && topbar}
           <LeafHost />
         </main>
         <div

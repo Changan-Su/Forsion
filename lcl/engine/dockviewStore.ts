@@ -211,6 +211,14 @@ export interface MainTab {
   closable: boolean
   sessionId?: string
   followActive: boolean
+  /** 这个 tab 承载的文件(笔记 notePath / 工作区文件 path);无文件的视图(启动器、日历…)为 undefined。
+   *  「主区当前打开的是哪个文件」全靠它对外传导(侧栏对话的默认引用等)。
+   *  ⚠️ 笔记编辑器**就地换笔记**不发 refreshTabs(参数变不触发),那条实时性由 pageStore 的活动
+   *  作用域负责;这里只保证「开/关/切 tab」这类结构变化下的正确。 */
+  filePath?: string
+  /** 本组内的**前台** tab(组自己的 activePanel)。`active` 比的是跨三区唯一的 api.activePanel ——
+   *  焦点一旦落在侧栏,主区就一个 active 都没有;要问「主区现在显示的是哪个」只能看这个。 */
+  front: boolean
 }
 
 /** 侧栏视图的轻量快照,供顶栏两侧的视图图标渲染。收起态也列(从 stash),点击可重开。 */
@@ -241,7 +249,8 @@ interface WorkspaceState {
   sidebarDefaults: Record<'left' | 'right', Stashed[]>
   /** 默认布局构建器(WorkspaceHost 从 buildDefault prop 注入,供 resetLayout 复用)。 */
   defaultBuilder: (() => void) | null
-  /** 可自由拖宽 + 持久化的侧栏(如 Coding 的对话栏);其余侧栏仍钉黄金分割宽。 */
+  /** 可自由拖宽 + 持久化的侧栏。**2026-08-14 起默认两侧全开**(用户要求「拖过就常驻」);
+   *  SpaceDefinition.resizableSides 从「开哪侧」变成「关哪侧」(显式 false 才钉黄金分割)。 */
   sideFree: Record<'left' | 'right', boolean>
   /** 记住的侧栏宽度(仅 sideFree 侧生效;null=用「黄金分割 × sideScale」默认宽)。按当前 Space 从 localStorage 载。 */
   sideWidths: Record<'left' | 'right', number | null>
@@ -252,7 +261,8 @@ interface WorkspaceState {
   setApi(api: DockviewApi | null): void
   setDefaultBuilder(fn: () => void): void
   setSidebarDefaults(defaults: Record<'left' | 'right', Stashed[]>): void
-  /** 设置「可自由拖宽」侧栏画像(切 Space 时调):载入该 Space 记住的宽度。 */
+  /** 设置「可自由拖宽」侧栏画像(切 Space 时调):载入该 Space 记住的宽度。
+   *  free 缺省 = true(两侧都记宽);只有显式传 false 的那侧才回到「钉黄金分割」。 */
   setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }): void
   initializeSidebar(side: 'left' | 'right', visible: boolean): void
   setFocusedLeaf(panel: IDockviewPanel | null | undefined): void
@@ -322,7 +332,18 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const raw = localStorage.getItem(`lcl.sideWidth2.${key}`)
       if (raw) { const p = JSON.parse(raw) as Record<string, unknown>; widths = { left: typeof p.left === 'number' ? p.left : null, right: typeof p.right === 'number' ? p.right : null } }
     } catch { /* private mode */ }
-    set({ sideProfileKey: key, sideFree: { left: !!free.left, right: !!free.right }, sideWidths: widths, sideScale: { left: scale?.left ?? 1, right: scale?.right ?? 1 } })
+    // 缺省 true:此前只有声明了 resizableSides 的那侧记宽,其余一律被 pinSides 钉回黄金分割 ——
+    // 用户拖完、一折一开就打回原形(实报)。现在两侧默认都记,显式 false 才钉。
+    // ⚠️ 一并清 stashActive:它是全局单份、只在「折叠某侧」时写。不清的话,在 A 空间折叠右栏(记下
+    // outline)→ 切到 B 空间首次展开右栏,会拿 A 的 outline 顶掉 B 配方的默认首项(B 里也有 outline
+    // 就更隐蔽)。stash 本身在 applyNamed/resetLayout 已重置,这条是它漏下的那半。
+    set({
+      sideProfileKey: key,
+      sideFree: { left: free.left !== false, right: free.right !== false },
+      sideWidths: widths,
+      sideScale: { left: scale?.left ?? 1, right: scale?.right ?? 1 },
+      stashActive: { left: null, right: null },
+    })
   },
   initializeSidebar: (side, visible) => set((s) => ({
     [side === 'left' ? 'leftVisible' : 'rightVisible']: visible,
@@ -361,11 +382,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         closable: def?.closable !== false,
         sessionId: typeof params.sessionId === 'string' ? params.sessionId : undefined,
         followActive: params.followActive !== false,
+        // notePath = Amadeus 编辑器;path = 工作区文件预览(wsfile)。两者都是「这个 tab 是哪个文件」。
+        filePath: typeof params.notePath === 'string' ? params.notePath : typeof params.path === 'string' ? params.path : undefined,
+        front: (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id,
       }
     })
     const prev = get().mainTabs
     const same = prev.length === tabs.length && prev.every((t, i) =>
-      t.id === tabs[i].id && t.active === tabs[i].active && t.title === tabs[i].title)
+      t.id === tabs[i].id && t.active === tabs[i].active && t.title === tabs[i].title
+      && t.filePath === tabs[i].filePath && t.front === tabs[i].front)
     if (!same) set({ mainTabs: tabs })
 
     // 两侧侧栏图标:可见时从 live panel(active=组内当前显示),收起时从 stash(无 active)。
@@ -647,7 +672,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const release = lockOtherSide(api, side)
       stashed.forEach((v) => get().openView(v.type, v.params, side))
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
-      const wantActive = get().stashActive[side]
+      // 无记忆(从没展开过 / 默认折叠的 Space 首次展开)→ 取**首项**:openView 顺序落到最后一个纯属副作用,
+      // 「侧栏默认第一位 = 默认视图」才是配方作者(sidebarDefaults / space.json)写下的意思。
+      const wantActive = get().stashActive[side] ?? stashed[0]?.type ?? null
       if (wantActive) {
         const p = panelsAt(api, side).find((x) => panelType(x) === wantActive)
         if (p) get().activateLeaf(p.id)

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useSpaceStore, getActiveSpace, spaceLayoutName, setActiveSpaceCold } from './spaceRegistry'
+import { useSpaceStore, getActiveSpace, spaceLayoutName, setActiveSpaceCold, adoptSpaceLayoutCold } from './spaceRegistry'
 import { useWorkspace } from './workspaceStore'
+import { loadLayout, saveLayout, loadNamedLayout, saveNamedLayout, type LayoutBlob } from './layoutPersist'
 import type { SpaceDefinition } from './types'
 
 const mkSpace = (id: string): SpaceDefinition => ({
@@ -124,5 +125,60 @@ describe('spaceRegistry', () => {
     useSpaceStore.setState({ spaces: [mkSpace('tangu')], activeSpaceId: 'tangu' })
     setActiveSpaceCold('ghost')
     expect(useSpaceStore.getState().activeSpaceId).toBe('tangu')
+  })
+})
+
+// 冷启动的每-Space 布局交接:纯 Storage 搬运,不碰 workspace store(此刻 Dockview api 还没就绪)。
+// 病史:原来这里是无条件 clearLayout(),于是「固定启动 Space」= 每次重启都推倒重建,
+// 用户实报「进 space 不显示上次打开的文件」。
+describe('adoptSpaceLayoutCold', () => {
+  const blob = (tag: string): LayoutBlob => ({
+    version: 4,
+    dockview: { tag },
+    sidebars: { left: { visible: true, stash: [] }, right: { visible: false, stash: [] } },
+  })
+  const tagOf = (b: LayoutBlob | null): string | undefined => (b?.dockview as { tag?: string } | undefined)?.tag
+
+  it('同一个 Space:归档进它自己的命名槽,布局键原样留着(重启后照旧还原)', () => {
+    saveLayout(blob('now'))
+    adoptSpaceLayoutCold('tangu', 'tangu')
+    expect(tagOf(loadLayout())).toBe('now')
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('now')
+  })
+
+  it('换 Space:先归档上次退出那个,再把目标的命名布局搬进布局键', () => {
+    saveNamedLayout(spaceLayoutName('amadeus'), blob('amadeus-old'))
+    saveLayout(blob('tangu-now'))
+    adoptSpaceLayoutCold('tangu', 'amadeus')
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('tangu-now') // 没丢
+    expect(tagOf(loadLayout())).toBe('amadeus-old')
+  })
+
+  it('目标 Space 没有命名布局:清空布局键 → onReady 落空 → buildDefault 干净默认', () => {
+    saveLayout(blob('tangu-now'))
+    adoptSpaceLayoutCold('tangu', 'inbox')
+    expect(loadLayout()).toBeNull()
+    expect(tagOf(loadNamedLayout(spaceLayoutName('tangu')))).toBe('tangu-now')
+  })
+
+  it('首启(布局键为空)不写出空归档,也不崩', () => {
+    adoptSpaceLayoutCold('tangu', 'tangu')
+    expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull()
+    expect(loadLayout()).toBeNull()
+  })
+
+  // Codex 评审 2026-08-13:saveNamedLayout 吞异常且不返回成败。归档没落盘就往下搬/清,等于把
+  // 这份布局仅存的一份直接丢掉。
+  it('归档写不进去(配额满)→ 保住布局键不动,宁可不换也不丢', () => {
+    saveLayout(blob('tangu-now'))
+    const real = localStorage.setItem.bind(localStorage)
+    vi.spyOn(localStorage, 'setItem').mockImplementation((k: string, v: string) => {
+      if (k === 'tangu2_named_layouts') throw new Error('QuotaExceededError')
+      real(k, v)
+    })
+    adoptSpaceLayoutCold('tangu', 'amadeus')
+    vi.restoreAllMocks()
+    expect(loadNamedLayout(spaceLayoutName('tangu'))).toBeNull() // 确实没归档成
+    expect(tagOf(loadLayout())).toBe('tangu-now')                // 但布局键还在
   })
 })

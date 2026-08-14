@@ -6,8 +6,7 @@
 import React from 'react'
 import { useSpaceStore, label } from '@lcl/engine'
 import { isUserSpace, deleteUserSpace } from '../userSpaces'
-import { DEFAULT_SPACE_KEY, LAST_EXIT_SPACE } from '../spaces'
-import { PRODUCT } from '../product'
+import { DEFAULT_SPACE_KEY, LAST_EXIT_SPACE, startupSpacePref } from '../spaces'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 
@@ -20,9 +19,7 @@ export const SpacesTab: React.FC = () => {
   const { t } = useI18n()
   const spaces = useSpaceStore((s) => s.spaces)
   const zh = document.documentElement.lang.startsWith('zh') // ponytail: 2~3 条新文案内联双语,不为它扩 i18n 字典
-  const [startup, setStartup] = React.useState<string>(() => {
-    try { return localStorage.getItem(DEFAULT_SPACE_KEY) || PRODUCT.defaultSpace } catch { return PRODUCT.defaultSpace }
-  })
+  const [startup, setStartup] = React.useState<string>(startupSpacePref)
   const changeStartup = (v: string): void => {
     setStartup(v)
     try { localStorage.setItem(DEFAULT_SPACE_KEY, v) } catch { /* private mode */ }
@@ -38,19 +35,23 @@ export const SpacesTab: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="hint">{t('settings.spaces.hint')}</div>
 
-      {/* 启动时进入哪个 Space:固定某 Space(冷启动进其干净默认布局)或「上次退出时的 Space」(恢复上次布局)。 */}
+      {/* 启动时进入哪个 Space:默认「上次退出时的 Space」(连同当时开着的标签页一起恢复);
+          也可固定某个 Space —— 那时冷启动进的是**那个 Space 自己上次的布局**。 */}
       <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <b style={{ fontSize: 13 }}>{zh ? '启动时进入' : 'Open on startup'}</b>
-          <div className="hint">{zh ? '重启 / 刷新后默认进入的 Space' : 'Which Space to open when the app starts'}</div>
+          <div className="hint">
+            {zh ? '默认回到上次退出时的 Space,并恢复当时打开的标签页;也可固定进某个 Space'
+              : 'Defaults to the Space you left last time, with its open tabs restored; or pin a fixed Space'}
+          </div>
         </div>
         <select
           value={startup}
           onChange={(e) => changeStartup(e.target.value)}
           style={{ padding: '4px 8px', border: 'var(--border-width) solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)' }}
         >
+          <option value={LAST_EXIT_SPACE}>{zh ? '上次退出时的 Space(默认)' : 'Last Space on exit (default)'}</option>
           {spaces.map((sp) => <option key={sp.id} value={sp.id}>{label(sp.name)}</option>)}
-          <option value={LAST_EXIT_SPACE}>{zh ? '上次退出时的 Space' : 'Last Space on exit'}</option>
         </select>
       </div>
 

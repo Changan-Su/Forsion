@@ -12,11 +12,16 @@ import { installAmadeusCommands } from './amadeusCommands'
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
 
-/** 「启动时进入的 Space」设置(设置 → Spaces)。值 = Space id | LAST_EXIT_SPACE;缺省(未设)= PRODUCT.defaultSpace。
- *  固定 Space 时冷启动进其干净默认布局(修复重启被上次退出布局覆盖);选 LAST_EXIT_SPACE 保留「恢复上次退出布局」旧行为。
- *  实际启动决策见 bootstrapEngine.installEngine(仅主窗读取)。 */
+/** 「启动时进入的 Space」设置(设置 → Spaces)。值 = Space id | LAST_EXIT_SPACE。
+ *  **缺省(未设)= LAST_EXIT_SPACE**(2026-08-13 用户要求改的默认):重启回到上次退出的那个 Space,
+ *  且布局键原样交给 tryRestoreLayout → 连同上次开着的标签页一起回来。
+ *  选固定某个 Space 则冷启动进**那个 Space 自己上次的布局**。实际启动决策见 bootstrapEngine.installEngine(仅主窗读取)。 */
 export const DEFAULT_SPACE_KEY = 'forsion_default_space'
 export const LAST_EXIT_SPACE = '__last__'
+/** 读「启动时进入」设置的唯一入口 —— 缺省值只在这里写一次(bootstrapEngine 与设置面板都读它)。 */
+export function startupSpacePref(): string {
+  try { return localStorage.getItem(DEFAULT_SPACE_KEY) || LAST_EXIT_SPACE } catch { return LAST_EXIT_SPACE } // private mode
+}
 
 /** Space 的 ribbon 顶部图标:复用 .rb-btn,当前空间加 .on 高亮(订阅 activeSpaceId 自动刷新)。
  *  导出供用户自定义 Space(userSpaces.tsx)复用同一观感。 */
@@ -86,7 +91,12 @@ const inboxSpace: SpaceDefinition = {
   },
 }
 
-/** Amadeus Space 的侧栏默认:左=工作区(自动→笔记)/搜索/标签 同组 tab;右=大纲/反链/关系图 同组 tab。 */
+/** Amadeus Space 的侧栏默认:左=工作区(自动→笔记)/搜索/标签 同组 tab;右=对话/大纲/反链/关系图 同组 tab。
+ *  右栏首位 = 对话(2026-08-14 用户要求的默认视图):展开右栏即在笔记旁边聊天,且会自动引用主区当前这篇
+ *  (见 Composer2 的「已选择」引用条)。**排第一位就是默认选中**——展开时无记忆则取 stash 首项(dockviewStore.toggleSidebar)。
+ *  `chat` 视图只在含 tangu 的产品档案里注册(bootstrapEngine),Amadeus 单品档案没有它 → 那儿不排进来,
+ *  否则侧栏会多出一个渲染不出内容的空 tab。 */
+const AMADEUS_HAS_CHAT = PRODUCT.spaces.includes('tangu')
 const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
   left: [
     { type: 'workspace', params: {} },
@@ -94,6 +104,7 @@ const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
     { type: 'amadeus-tags', params: {} },
   ],
   right: [
+    ...(AMADEUS_HAS_CHAT ? [{ type: 'chat', params: { followActive: true, reuseKey: 'primary' } }] : []),
     { type: 'outline', params: {} },
     { type: 'amadeus-backlinks', params: {} },
     { type: 'amadeus-graph', params: {} },
@@ -261,6 +272,12 @@ export function registerSpaces(): void {
         // 一并清掉,onReady 落空走 buildDefault 按新默认重建(代价=丢一次该空间的布局微调,与命名布局同权衡)。
         if (localStorage.getItem('forsion_tangu_active_space') === 'amadeus') clearLayout()
         localStorage.setItem('amadeus_layout_v2', '1')
+      }
+      // v3(2026-08-14):右栏加了「对话」并置于首位。老布局的右栏 stash 里没有它 → 同 v2 一次性重建。
+      if (AMADEUS_HAS_CHAT && localStorage.getItem('amadeus_layout_v3') !== '1') {
+        deleteNamedLayout('space:amadeus')
+        if (localStorage.getItem('forsion_tangu_active_space') === 'amadeus') clearLayout()
+        localStorage.setItem('amadeus_layout_v3', '1')
       }
     } catch { /* ignore */ }
   }

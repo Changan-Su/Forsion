@@ -24,10 +24,14 @@ function read(): UiMode {
 /** 本次页面生命周期的固定 UI 模式(启动时定格)。 */
 export const UI_MODE: UiMode = read()
 
-/** 写入下次生效的模式;调用方随后 location.reload()。 */
+/** 写入下次生效的模式;调用方随后 location.reload()。
+ *  同时清掉 `lcl.uiMode.auto` 归属标记 —— 那个标记是 index.html 里的自动切换脚本用来认领
+ *  「这个值是我写的、可以继续自动改写」的。用户经命令面板显式选了,就不能再被设备判定推翻
+ *  (否则在窄触屏上手动切回桌面,下一次 resize 就被自动拽回移动壳)。两处同源,见两份 index.html。 */
 export function setUiMode(m: UiMode): void {
   try {
     localStorage.setItem(KEY, m)
+    localStorage.removeItem(`${KEY}.auto`)
   } catch {
     /* ignore */
   }

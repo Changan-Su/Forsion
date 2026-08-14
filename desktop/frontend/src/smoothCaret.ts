@@ -92,6 +92,33 @@ function textareaCaretRect(ta: HTMLTextAreaElement): { left: number; top: number
   }
 }
 
+/**
+ * collapsed range 拿不到可用矩形时,按 DOM 位置找**邻居**定位:往前找到的取其右边(caret 就在它
+ * 后面),往后找到的取其左边;两侧都取邻居自己的 top/height —— 那正是 caret 所在行的行内盒。
+ *
+ * ⚠️ 必须跳过 `img.ProseMirror-separator`:ProseMirror 在空 textblock 里塞的零尺寸占位 img,
+ * 矩形是 `h=0` 且 top 落在**基线**上。病史(用户实报「开丝滑光标后打标题必偏」):空标题
+ * `<h3><span.heading-hash>### </span><img.separator><br></h3>` 光标在元素 offset=1,旧代码直接取
+ * `childNodes[1]` = 那个 img → 画在 top 73 / 高 18,真值是 top 56 / 高 21(h1 更夸张,偏 25px)。
+ * 高度取自 `caretEm(host)` 也是错的 —— 那是 `.ProseMirror` 的字号,不是标题的。
+ */
+function neighborCaretRect(el: Element, offset: number): { x: number; y: number; h: number } | null {
+  const usable = (n: Node | undefined): DOMRect | null => {
+    if (!(n instanceof Element) || n.classList.contains('ProseMirror-separator')) return null
+    const r = n.getBoundingClientRect()
+    return r.height > 0 ? r : null
+  }
+  for (let i = offset - 1; i >= 0; i--) {
+    const r = usable(el.childNodes[i])
+    if (r) return { x: r.right, y: r.top, h: r.height }
+  }
+  for (let i = offset; i < el.childNodes.length; i++) {
+    const r = usable(el.childNodes[i])
+    if (r) return { x: r.left, y: r.top, h: r.height }
+  }
+  return null
+}
+
 function caretInfo(): { x: number; y: number; h: number; host: Element } | null {
   const ae = document.activeElement
   // 聊天输入框:textarea 分支
@@ -108,11 +135,15 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
   const host = el?.closest('.milkdown .ProseMirror')
   if (!host || !ae || !host.contains(ae)) return null
   const range = sel.getRangeAt(0)
+  const c = range.startContainer
   let r: DOMRect | undefined = range.getClientRects()[0]
+  // 空块(`<p><br></p>`、只有 `###` widget 的空标题)collapsed range 给不出可用矩形:要么一个没有,
+  // 要么给个高度 0 的。此时按 DOM 位置找邻居定位(空段落照旧落到 <br>,行内盒高度即 caret 高度)。
+  if (c instanceof Element && (!r || r.height === 0)) {
+    const nb = neighborCaretRect(c, range.startOffset)
+    if (nb) return { ...nb, host }
+  }
   if (!r || (r.width === 0 && r.height === 0)) {
-    // 空行(<p><br></p>)等场景 range 无矩形:退回节点矩形。落到 <br> 时它是行内盒,高度恰好就是
-    // caret 高度(仪器已钉:15px/1.6 的空行 18px,与有字行一致)。
-    const c = range.startContainer
     const fb = c instanceof Element ? c.childNodes[range.startOffset] ?? c : c.parentElement
     if (fb instanceof Element) r = fb.getBoundingClientRect()
   }

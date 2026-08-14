@@ -28,10 +28,19 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('pinSides / repinSides / captureSideWidths(抽风集成:R1 + R3)', () => {
+  it('侧栏宽度记忆缺省两侧全开(resizableSides 变 opt-out)', () => {
+    // 2026-08-14 用户实报「手动调宽后一折一开就打回原形」:此前只有声明过 resizableSides 的那侧
+    // 记宽,其余被 pinSides 钉回黄金分割。缺省翻成 free 之后,显式 false 才是钉宽档。
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    expect(useWorkspace.getState().sideFree).toEqual({ left: true, right: true })
+    useWorkspace.getState().setSideProfile('sp', { right: false }, {})
+    expect(useWorkspace.getState().sideFree).toEqual({ left: true, right: false })
+  })
+
   it('R3:repinSides 按当前容器宽把 pinned 两侧钉回黄金分割', () => {
     const { api, panels } = mkApi(1600)
     useWorkspace.getState().setApi(api)
-    useWorkspace.getState().setSideProfile('sp', {}, {}) // 两侧 pinned(非 free)
+    useWorkspace.getState().setSideProfile('sp', {}, {}) // 两侧 free 但**无记忆** → 目标宽 = 黄金分割
     useWorkspace.getState().repinSides()
     // rAF 兜底同步 → apply 已执行
     expect(groupW(panels[0])).toBe(computeSideWidth(1600, 'left', { free: false, saved: null })) // 280(钳 max)
@@ -102,7 +111,7 @@ describe('pinSides / repinSides / captureSideWidths(抽风集成:R1 + R3)', () =
   it('R1:pin 窗口内 captureSideWidths 不记宽(过渡态不污染);窗口关闭后真拖宽才记', () => {
     const { api, panels } = mkApi(1600)
     useWorkspace.getState().setApi(api)
-    useWorkspace.getState().setSideProfile('sp', { left: true }, {}) // 左 free(可记宽)
+    useWorkspace.getState().setSideProfile('sp', { left: true }, {}) // 左 free(2026-08-14 起缺省即 free)
     useWorkspace.getState().repinSides() // pinPending=true(setTimeout 未触发)
     // 模拟 dockview 把左组瞬时铺到 ~50%(800),钉宽尚未最终落地
     setGroupW(panels[0], 800)

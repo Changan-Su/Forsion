@@ -127,6 +127,40 @@ async function main() {
     await page.close()
   }
 
+  // C3 空标题:`### ` 打完还没打字时,块里只剩 headingSource 的 `###` widget + PM 的零尺寸
+  // `img.ProseMirror-separator`。collapsed range 此时一个矩形都给不出,旧代码的退路直接取
+  // `childNodes[offset]` = 那个 separator → 光标画在基线上、还按 `.ProseMirror` 的字号取高
+  // (h3 偏 17px/短 3px,h1 偏 25px/短 12px)。用户实报:「开丝滑光标后打标题必定偏」。
+  // 真值取法与 check:caret 的空行用例同源 —— 补一个字符,量它 offset 0 处的 range 矩形。
+  for (const [lv, hashes] of [[3, '### '], [1, '# ']]) {
+    const page = await open(browser, '')
+    await caretAt(page, 0, 0, 0)
+    await page.keyboard.type(hashes, { delay: 25 })
+    await settle(page)
+    const empty = await geom(page)
+    const emptyH = await page.evaluate(() => { const o = document.querySelector('.sc-caret'); return o && o.style.display !== 'none' ? Math.round(o.getBoundingClientRect().height) : null })
+    const tag = `C3(h${lv}) 空标题`
+    check(`${tag} 已变成 h${lv} 且露出井号`, (await page.evaluate((l) => !!document.querySelector(`.md-block .ProseMirror h${l} .heading-hash`), lv)), '')
+    await page.keyboard.type('x', { delay: 25 })
+    await settle(page)
+    const truth = await page.evaluate((l) => {
+      const h = document.querySelector(`.md-block .ProseMirror h${l}`)
+      const t = Array.from(h.childNodes).find((n) => n.nodeType === 3)
+      const r = document.createRange()
+      r.setStart(t, 0)
+      r.collapse(true)
+      const b = r.getClientRects()[0]
+      return { top: Math.round(b.top), left: Math.round(b.left), height: Math.round(b.height) }
+    }, lv)
+    check(
+      `${tag}:覆盖层落在真值处(不是 separator 的基线)`,
+      !!empty.overlay && Math.abs(empty.overlay.top - truth.top) <= 2 && Math.abs(empty.overlay.left - truth.left) <= 2,
+      `空标题时 ${JSON.stringify(empty.overlay)},真值 ${JSON.stringify(truth)}`,
+    )
+    check(`${tag}:覆盖层高度 = 标题行内盒(不是 .ProseMirror 的字号)`, emptyH !== null && Math.abs(emptyH - truth.height) <= 2, `实画高 ${emptyH},真值高 ${truth.height}`)
+    await page.close()
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

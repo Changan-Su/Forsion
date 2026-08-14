@@ -8,6 +8,66 @@
          且 'unsafe-inline' 已在,eval 不扩大 XSS 面),删掉它=所有外置插件 setup 失败。 -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https:; media-src 'self' blob: amadeus-asset: https:; frame-src 'self' amadeus-asset: https://www.youtube-nocookie.com https://player.bilibili.com http://127.0.0.1:* http://localhost:* http://*.localhost:*;" />
     <title>Forsion</title>
+    <!-- 相对路径:生产走 file://(Electron loadFile),绝对 /… 会 404。文件来自 frontend/public/。 -->
+    <link rel="icon" type="image/svg+xml" href="./Forsion-LOGO3.svg" />
+    <script>
+      /* 手机浏览器自动用移动单列布局(@lcl/engine 的 UI_MODE 在模块加载时**定格**,故必须抢在任何
+         模块求值前把键写好)。⚠️ 本段在 desktop/frontend/index.html 与 web/index.html 各一份,
+         **两处必须逐字同改**(desktop 那份同时服务 Electron 与 `npm run web`)。
+
+         判定 = 触屏(pointer:coarse)且窄视口(≤820)。
+         归属标记 `lcl.uiMode.auto`:有它 = 这个值是本脚本自动写的,可以继续自动改写;
+         没有它而键又在 = 用户经命令面板「切换 UI 模式」显式选过(setUiMode 会清掉标记),一律尊重。
+         老版本只会自动写 'mobile' 且不带标记 —— 首次运行时认领为自动值(那时唯一的写入者就是自动)。
+
+         运行时也必须跟:DevTools 切设备工具栏、真机旋转都发生在页面存活期间,而 UI_MODE 已定格。
+         ⚠️ 只挂 mq.change 是不够的(旧版就是这么写的,实测切设备模拟后键始终为 null、页面纹丝不动):
+            Chrome 打开触摸模拟时 `(pointer: coarse)` 的 change 不保证派发,而且尺寸与触摸两项更新
+            不在同一拍。所以 resize/orientationchange 一并当信号,并在 0/300/900ms 各复查一次。
+         ⚠️ **退出**移动壳只认「指针不再是粗指针」:真机横屏宽度可能超过 820,但它还是手机,
+            不能因为变宽就把用户踢回桌面壳。 */
+      (function () {
+        try {
+          // Electron 桌面应用不参与自动切换:触屏本 / Windows 平板模式会把桌面版整个换成手机壳。
+          // 两道闸都要:UA 里的 `Electron/`(当前没被 setUserAgent 改过),以及 preload 暴露的
+          // window.tangu —— preload 早于页面脚本执行,而 web 端的 window.tangu 是模块里装的(晚于本段),
+          // 所以「此刻就有 tangu」等价于「跑在 Electron 里」,不依赖 UA 字符串哪天被改。
+          if (/Electron\//.test(navigator.userAgent) || window.tangu) return;
+          var KEY = 'lcl.uiMode', MARK = KEY + '.auto';
+          var hit = function (q) { return matchMedia(q).matches };
+          var want = function () { return hit('(pointer: coarse) and (max-width: 820px)') ? 'mobile' : 'desktop' };
+          if (localStorage.getItem(KEY) != null && localStorage.getItem(MARK) == null) localStorage.setItem(MARK, '1');
+          var owned = function () { return localStorage.getItem(KEY) == null || localStorage.getItem(MARK) === '1' };
+          var put = function (m) {
+            if (!owned() || localStorage.getItem(KEY) === m) return false;
+            localStorage.setItem(KEY, m); localStorage.setItem(MARK, '1'); return true;
+          };
+          var url = null;
+          try { url = new URLSearchParams(location.search).get('ui') } catch (e) { /* ignore */ }
+          if (url !== 'mobile' && url !== 'desktop') { url = null; put(want()) }
+          var eff = url || localStorage.getItem(KEY);
+          // 生效移动布局时对齐 Mobile App 的 viewport(锁缩放 + viewport-fit=cover,否则 safe-area-inset
+          // 全为 0,单列壳的刘海/手势条留白失效)。桌面布局不动,保留浏览器缩放。
+          if (eff === 'mobile') {
+            var vp = document.querySelector('meta[name="viewport"]');
+            if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
+          }
+          if (url) return; // ?ui= 逐窗定死(卫星窗/预览),不参与自动跳
+          var frozen = eff === 'mobile' ? 'mobile' : 'desktop';
+          var check = function () {
+            var w = want();
+            if (w === frozen) return;
+            if (frozen === 'mobile' && hit('(pointer: coarse)')) return; // 手机横屏不踢回桌面
+            if (put(w)) location.reload();
+          };
+          var kick = function () { check(); setTimeout(check, 300); setTimeout(check, 900) };
+          addEventListener('resize', kick);
+          addEventListener('orientationchange', kick);
+          matchMedia('(pointer: coarse) and (max-width: 820px)').addEventListener('change', kick);
+          matchMedia('(pointer: coarse)').addEventListener('change', kick);
+        } catch (e) { /* private mode / 老浏览器:退回桌面布局 */ }
+      })();
+    </script>
     <script>
       // FOUC 防护:React 挂载前按 localStorage 设 data-theme(语言)/data-skin(配色)/.dark/data-glass,
       // 避免主题/暗色闪烁。合法性由 registry 启动后兜底纠正。双轴 = 语言(lovable/soft) × 配色(cream/coral/teal/lavender/custom)。

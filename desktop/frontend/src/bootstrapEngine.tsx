@@ -1,11 +1,11 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, CalendarDays, ListTodo, Code2, Database, PenTool, Trophy, Activity, Workflow, Network, Rocket, LayoutDashboard } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, clearLayout, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE } from '@lcl/engine'
 import { windowKind } from './windowKind'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
 import { useRecentViews } from './recentViews'
-import { registerSpaces, DEFAULT_SPACE_KEY, LAST_EXIT_SPACE } from './spaces'
+import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref } from './spaces'
 import { loadUserSpaces, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
 import { installBuiltins } from './builtins'
@@ -163,18 +163,25 @@ export function installEngine(): void {
   // Space:注册(注册序 = ribbon 顶部默认序,排在商店等功能图标之上;每个 Space 贡献一个可拖动的 ribbon 顶部图标)。
   // 同时按当前活动 Space 设侧栏默认,使恢复的非 Tangu Space 在首次 toggle 前即正确。
   registerSpaces()
-  // 启动策略(仅主窗、非移动端):默认或用户在「设置 → Spaces」指定的固定 Space,冷启动进其干净默认布局 ——
-  // 不再被上次退出的布局强行覆盖(bug 修复)。选「上次退出的 Space」(LAST_EXIT_SPACE)则保留旧的
-  // tryRestoreLayout 行为。卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局;
-  // 移动端是另一套 SingleColumnHost(无 dockview onReady 恢复链)→ 不介入,保持其原生启动行为。
+  // 启动策略(仅主窗、非移动端)。「设置 → Spaces → 启动时进入」:
+  //  · 缺省 = 上次退出的那个 Space(LAST_EXIT_SPACE):id 不动,布局键原样交给 tryRestoreLayout
+  //    → 连同上次开着的标签页一起回来。仍走一次归档(from===to 只写命名槽、不碰布局键),
+  //    好让此后切到别的 Space 再切回来时槽里是新的。
+  //  · 固定某 Space:冷启动进**那个 Space 自己上次的布局**(不是上次退出那个 Space 的布局 ——
+  //    那是原来的 bug;也不是每次都推倒重建 —— 那是修那个 bug 时的过头做法,表现为
+  //    「每次重启都丢上次打开的文件」)。
+  // 卫星窗(detached/mini)有各自隔离的布局键 → 跳过,各恢复自身布局;
+  // 移动端是另一套 SingleColumnHost(自带 restoreSingleColumnLayout,本就恢复上次)→ 不介入。
   if (windowKind() === 'main' && UI_MODE !== 'mobile') {
-    let pref = PRODUCT.defaultSpace
-    try { pref = localStorage.getItem(DEFAULT_SPACE_KEY) || PRODUCT.defaultSpace } catch { /* private mode */ }
-    if (pref !== LAST_EXIT_SPACE) {
-      const target = useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
-      setActiveSpaceCold(target) // 用户 L0 Space 作默认:此刻尚未异步装载 → 先回退 defaultSpace,下面 loadUserSpaces 完再补定位
-      clearLayout()              // 清本窗布局键 → onReady 的 tryRestoreLayout 落空 → buildDefault 重建 target 的干净默认布局
-    }
+    const pref = startupSpacePref()
+    // 上次退出在哪:用模块装载时的快照,**不是**此刻的 activeSpaceId —— 上面的 registerSpaces()
+    // 已经把「尚未注册」的用户 Space id 归一成了产品默认(见 BOOT_ACTIVE_SPACE_ID 的注释)。
+    const lastExit = BOOT_ACTIVE_SPACE_ID
+    const target = pref === LAST_EXIT_SPACE ? lastExit
+      : useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
+    // 用户 L0 Space 作目标:此刻尚未异步装载 → setActiveSpaceCold 认不出会自己放过,下面 loadUserSpaces 完再补定位
+    setActiveSpaceCold(target)
+    adoptSpaceLayoutCold(lastExit, target)
   }
   const activeSpace = getActiveSpace()
   if (activeSpace) {
@@ -186,17 +193,28 @@ export function installEngine(): void {
   // 插件视图也才恢复得回来。装完由 installAmadeusPlugins 自己补跑 loadUserSpaces。vault 恢复仍然懒。
   if (window.amadeus) installAmadeusPlugins()
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
-  // 若「启动 Space」设置指向某用户 Space,它在上面的同步策略里尚未注册(回退了 defaultSpace)→ 装载完成后
-  // 补一次冷定位 + resetLayout 重建(仅此情形有一瞬 Tangu→目标;默认是内置 Space 时下面整段早退不闪)。
+  // 上面的同步策略跑在装载之前,若目标是某个用户 Space,那时它还没注册 → 装载完成后补定位。两种补法:
+  //  · 固定启动 Space:走正常切换(此时已晚于 onReady,api 就绪),它会存出回退 Space 的布局并还原目标
+  //    Space 上次的(没有才重建默认)。仅此情形有一瞬 Tangu→目标;目标是内置 Space 时整段早退不闪。
+  //  · 上次退出的 Space:布局键里本来就是它的现场(tryRestoreLayout 已吃下),只是 registerSpaces() 把
+  //    活动 id 归一成了产品默认 → **冷**定位回去(setActiveSpace 会把这份现场 saveNamed 进产品默认的槽
+  //    = 归档到别人名下),顺手补该 Space 的侧栏默认/可拖宽画像。
   if (window.tangu?.spacesList) void loadUserSpaces().then(() => {
     if (windowKind() !== 'main' || UI_MODE === 'mobile') return
-    let pref = ''
-    try { pref = localStorage.getItem(DEFAULT_SPACE_KEY) || '' } catch { /* private mode */ }
-    if (!pref || pref === LAST_EXIT_SPACE) return
+    const pref = startupSpacePref()
     const sp = useSpaceStore.getState()
-    if (sp.activeSpaceId === pref || !sp.spaces.some((s) => s.id === pref)) return // 已是它 / 仍未注册 → 不动
-    setActiveSpaceCold(pref)
-    ws().resetLayout() // 装载晚于 onReady 首建 → 补重建该用户 Space 的干净默认布局
+    const want = pref === LAST_EXIT_SPACE ? BOOT_ACTIVE_SPACE_ID : pref
+    if (sp.activeSpaceId === want || !sp.spaces.some((s) => s.id === want)) return // 已是它 / 仍未注册(已删)→ 不动
+    if (pref === LAST_EXIT_SPACE) {
+      setActiveSpaceCold(want)
+      const space = getActiveSpace()
+      if (space) {
+        ws().setSidebarDefaults(space.sidebarDefaults)
+        ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale)
+      }
+      return
+    }
+    setActiveSpace(want)
   })
 
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。

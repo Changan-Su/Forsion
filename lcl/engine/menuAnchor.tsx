@@ -97,6 +97,89 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth } }
 }
 
+/**
+ * 「CSS 已经把位置定好、只是会掉出屏幕」那类浮层的横向兜底 —— 锚在按钮上的 `position:absolute`
+ * 菜单(聊天输入区的 add / mode 菜单、ModelPill 的两级菜单、ProjectSelector…)。
+ *
+ * 【为什么不直接改成 fixed 走 useClampedMenu】聊天区自上而下三层 `container-type: inline-size`
+ * (`.t2-chat-view` / `.t2-chat-col` / `.t2c-card`)。container-type 蕴含 `contain: layout`,
+ * 而 layout containment 会让元素成为 **fixed 后代的包含块** —— 菜单一改 fixed 就锚到卡片而不是视口,
+ * 还得连带 portal 出去,而 portal 又会打断 `closest('[data-cmenu]')` / `wrapRef.contains()` 那套
+ * 「点外面关菜单」判定(第一下 mousedown 就把菜单关了 = 用户眼里的「点了没反应」)。
+ * 所以这里只做最小事:量真实矩形,溢出就横向推回来,比屏幕还宽再给 max-width。
+ *
+ * 【为什么用 `translate` 而不是 `transform`】这些菜单的入场动画 `@keyframes pop` 正动着 transform,
+ * 写 inline transform 头 160ms 会被它覆盖;`translate` 是独立属性,与 transform 叠加不打架。
+ * 【zoom】rect 是视口 px,写回样式是局部 px(手机 body zoom 恒 1.15)→ 一律除 zoomOf。
+ */
+/**
+ * useEdgeNudge 的纯算术部分(仪器打在这里,见 menuAnchor.test.ts)。
+ * 入参 left/width/vw 全是**视口 px**;返回的 dx / maxWidth 是**局部 px**(可直接写进 style)。
+ * @returns dx 需要横向推移多少(0 = 已经在屏内);maxWidth 仅在浮层比可用宽度还宽时给出。
+ */
+export function edgeNudge(
+  left: number,
+  width: number,
+  vw: number,
+  zoom: number,
+  margin = 8,
+): { dx: number; maxWidth?: number } {
+  // 隐藏中的浮层(display:none → rect 全零)必须原样返回:否则 left=0 < margin 会被当成「掉出左边」,
+  // 白推一个 margin/zoom 的偏移进去,一显示就整体歪掉(`.t2c-ctxring-pop` 就是 display:none + hover 显示)。
+  // 显示的那一刻尺寸从 0 变真,useEdgeNudge 的 ResizeObserver 会再夹一次,不会漏夹。
+  if (width <= 0) return { dx: 0 }
+  const avail = vw - 2 * margin
+  const tooWide = width > avail
+  const w = tooWide ? avail : width
+  let dx = 0
+  if (left < margin) dx = margin - left
+  else if (left + w > vw - margin) dx = vw - margin - w - left
+  return { dx: dx / zoom, maxWidth: tooWide ? avail / zoom : undefined }
+}
+
+/** @param active 假值 = 关闭(清零);真值同时**兼作重算依赖** —— 调用方把会挪动浮层的状态编进去
+ *  (如 ModelPill 的 `${pane}:${flip}`),翻面之后才会重新夹取。 */
+export function useEdgeNudge(active: string | number | boolean | null | undefined, margin = 8): {
+  ref: RefObject<HTMLDivElement | null>
+  style: CSSProperties
+} {
+  const ref = useRef<HTMLDivElement>(null)
+  const [fix, setFix] = useState<{ dx: number; maxWidth?: number }>({ dx: 0 })
+  useLayoutEffect(() => {
+    if (!active) return setFix((p) => (p.dx === 0 && p.maxWidth === undefined ? p : { dx: 0 }))
+    const el = ref.current
+    if (!el) return
+    const apply = (): void => {
+      const z = zoomOf(el)
+      // 先撤掉上一次的推移再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去)。
+      const prev = el.style.translate
+      el.style.translate = ''
+      const r = el.getBoundingClientRect()
+      el.style.translate = prev
+      // ⚠️ 这里跑在 useLayoutEffect,而入场动画 `@keyframes pop` 正 `scale(0.97)` 着 —— rect 会**偏窄**,
+      // 于是刚好溢出的菜单被判成「放得下」,dx=0,动画结束一还原就露在屏幕外(实测:390 屏上模式菜单
+      // 量到 357 宽判定通过,实际 368 宽、右缘 387.5 已经出界)。offsetWidth 不吃 transform,是未缩放的
+      // 真实宽(局部 px,×zoom 换到视口 px);pop 只有 translateY,缩放中心横向不动,故用 rect 中线还原左缘。
+      const w = el.offsetWidth * z
+      const { dx, maxWidth } = edgeNudge((r.left + r.right) / 2 - w / 2, w, window.innerWidth, z, margin)
+      setFix((p) => (Math.abs(p.dx - dx) < 0.5 && p.maxWidth === maxWidth ? p : { dx, maxWidth }))
+    }
+    apply()
+    // 兜住「动画不止 translateY」的将来:入场动画放完再夹一次(尺寸没变时 setFix 会自己短路)。
+    void Promise.allSettled(el.getAnimations().map((a) => a.finished)).then(() => { if (ref.current === el) apply() })
+    window.addEventListener('resize', apply)
+    window.addEventListener(UI_ZOOM_EVENT, apply)
+    const ro = new ResizeObserver(apply) // 内容异步长出来(模型列表拉完)后重量
+    ro.observe(el)
+    return () => {
+      window.removeEventListener('resize', apply)
+      window.removeEventListener(UI_ZOOM_EVENT, apply)
+      ro.disconnect()
+    }
+  }, [active, margin])
+  return { ref, style: { translate: fix.dx ? `${fix.dx}px` : undefined, maxWidth: fix.maxWidth } }
+}
+
 /** 一行接入版:把 `style={{ left: x, top: y }}` 换成 `<OverlayAt x={x} y={y} className=…>`。 */
 export function OverlayAt({
   x,

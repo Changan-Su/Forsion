@@ -39,7 +39,7 @@ import { BlockHost } from '@amadeus/components/BlockHost'
 import { askString } from '@amadeus/components/askString'
 import { useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
-import { allViews, getView, label, subscribeViews, useWorkspace } from '@lcl/engine'
+import { allViews, getView, label, subscribeViews, useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from '../components/CloudSyncDialog'
@@ -87,8 +87,19 @@ function DashboardInner({ leaf }: ViewProps) {
   const vaultSide = usePageStore((s) => s.vaultSide)
   const [addMenu, setAddMenu] = useState(false)
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)
+  // 两个 dash-add-menu 都是硬编码宽度、锚在按钮/鼠标上,窄屏会掉出边缘 → 视口兜底(见 menuAnchor)。
+  const addMenuFix = useEdgeNudge(addMenu)
+  const noteMenuFix = useEdgeNudge(noteMenu ? `${noteMenu.x},${noteMenu.y}` : '')
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  // 兜底收虚线框:拖拽在别处松手 / Esc 取消 / 拖出窗口时,本容器的 dragleave 未必来得及。
+  useEffect(() => {
+    if (!dragOver) return
+    const clear = (): void => setDragOver(false)
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => { window.removeEventListener('dragend', clear); window.removeEventListener('drop', clear) }
+  }, [dragOver])
 
   useEntrySync((s) => s.vaults)
   useEffect(() => { ensureEntrySyncSubscribed() }, [])
@@ -280,12 +291,13 @@ function DashboardInner({ leaf }: ViewProps) {
         e.preventDefault()
         setDragOver(true)
       }}
-      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false) }}
+      // 判据是「指针出了本容器」而非「事件打在容器本身」—— 后者从子元素离开时不触发,虚线框会赖着不走。
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false) }}
       onDrop={(e) => {
+        setDragOver(false) // 必须在 early return 之前
         const files = Array.from(e.dataTransfer?.files ?? [])
         if (locked || !files.length) return
         e.preventDefault()
-        setDragOver(false)
         // ⚠️ importToPage 内部走的是**活动面板**那份门面 store(分屏时可能是隔壁那篇)。
         // OS 文件拖放未必先激活本 pane → 先把活动作用域认领过来,占位块才会插进本仪表盘。
         setActivePageScope(leaf.id)
@@ -344,7 +356,7 @@ function DashboardInner({ leaf }: ViewProps) {
             {addMenu && (
               <>
                 <div className="dash-menu-scrim" onClick={() => setAddMenu(false)} />
-                <div className="dash-add-menu">
+                <div ref={addMenuFix.ref} className="dash-add-menu" style={addMenuFix.style}>
                   {ADD_MENU.map((a) => (
                     <button key={a.key} onClick={() => addCard(a.key)}>
                       <a.icon size={13} /> {a.label}
@@ -437,7 +449,7 @@ function DashboardInner({ leaf }: ViewProps) {
       {noteMenu && (
         <>
           <div className="dash-menu-scrim" onClick={() => setNoteMenu(null)} />
-          <div className="dash-add-menu" style={{ position: 'fixed', left: noteMenu.x, top: noteMenu.y }}>
+          <div ref={noteMenuFix.ref} className="dash-add-menu" style={{ position: 'fixed', left: noteMenu.x, top: noteMenu.y, ...noteMenuFix.style }}>
             <button
               onClick={() => {
                 setNoteMenu(null)

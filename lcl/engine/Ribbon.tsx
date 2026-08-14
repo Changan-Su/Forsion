@@ -4,12 +4,14 @@
  *  - 收纳夹:同区图标拖到夹上收入;悬停夹图标在右侧浮层展开(icon + 文字),浮层内可重排/拖出。
  *  - 区内放不下时尾部收进「…」,悬停展开,行为同收纳夹;两区高度弹性分配,都挤时各保一半。
  *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。 */
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { PanelLeftClose, PanelLeftOpen, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
-import { useCommandStore, openCommandPicker } from './commandRegistry'
+import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
+import { setActiveSpace } from './spaceRegistry'
+import { effectiveHotkey, formatHotkey, useShortcuts } from './shortcutStore'
 import { label } from './types'
 import type { Command, RibbonItem } from './types'
 import { OverlayAt, zoomOf } from './menuAnchor'
@@ -26,6 +28,14 @@ interface MenuState { x: number; y: number; entries: { label: string; onClick():
 
 const GAP = 4
 const zh = (): boolean => document.documentElement.lang.startsWith('zh')
+/** 与 desktop 的 ShortcutsTab 同一判据(宿主启动时写 data-platform)。 */
+const isMac = (): boolean => { try { return document.documentElement.dataset.platform === 'mac' } catch { return false } }
+/** 上区第 n 个槽(0 基)的快捷键显示文本;已解绑/超出前 9 个 → 空串(什么都不画)。 */
+function slotHint(i: number): string {
+  if (i >= 9) return ''
+  const hk = effectiveHotkey({ id: `space-slot-${i + 1}`, hotkey: `mod+${i + 1}` })
+  return hk ? formatHotkey(hk, isMac()) : ''
+}
 
 function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolean }) {
   if (item.component) {
@@ -62,6 +72,7 @@ export function Ribbon() {
   const commandItems = useRibbonStore((s) => s.commandItems)
   const commandIcons = useRibbonStore((s) => s.commandIcons)
   const commands = useCommandStore((s) => s.commands)
+  useShortcuts((s) => s.overrides) // 设置里改了键 → 槽位上的快捷键提示当场跟着变
   const st = () => useRibbonStore.getState()
 
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -164,6 +175,53 @@ export function Ribbon() {
     const over = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
     if (over > 0) setFly({ ...fly, top: Math.max(8, fly.top - over) })
   }, [fly?.key, flyFolder?.items.length, flyTail?.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 键盘开的浮层没有「鼠标移开」这条退路(scheduleClose 只挂在 mouseleave)→ 补 Esc / 点别处关。
+  const flyOpen = !!fly
+  useEffect(() => {
+    if (!flyOpen) return
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setFly(null) }
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node
+      if (!flyRef.current?.contains(t) && !rootRef.current?.contains(t)) setFly(null)
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onDown)
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onDown) }
+  }, [flyOpen])
+
+  // ---- Space 快捷键:mod+1..9 = 上区第 N 个条目,**纯按当前排序**(拖动改序,号跟着走)。
+  //      收纳夹同样占一个号,按下 = 弹它的浮层;溢出进「…」的条目也按得到(没有按钮锚点就贴条顶)。 ----
+  const folderBtns = useRef(new Map<string, HTMLElement>())
+  const runSlot = useRef<(i: number) => void>(() => {})
+  useEffect(() => { // 无 deps:每次渲染刷新闭包,拿到最新的 topE / openFly
+    runSlot.current = (i) => {
+      const e = topE[i]
+      if (!e) return
+      if (e.kind === 'folder') {
+        const anchor = folderBtns.current.get(e.id) ?? rootRef.current
+        if (anchor) openFly(e.id, 'top', anchor, e.id)
+        return
+      }
+      setFly(null) // 上一次按开的收纳夹浮层
+      if (e.kind === 'cmd') e.cmd.run()
+      else if (e.id.startsWith('space:')) setActiveSpace(e.id.slice('space:'.length))
+      else e.item.onClick?.()
+    }
+  })
+  const slotCount = Math.min(9, topE.length)
+  useEffect(() => {
+    for (let n = 1; n <= 9; n++) {
+      if (n > slotCount) { removeCommand(`space-slot-${n}`); continue }
+      addCommand({
+        id: `space-slot-${n}`,
+        title: () => (zh() ? `切到第 ${n} 个 Space` : `Switch to Space ${n}`),
+        keywords: `space switch ${n} 切换 空间`,
+        hotkey: `mod+${n}`,
+        run: () => runSlot.current(n - 1),
+      })
+    }
+    return () => { for (let n = 1; n <= 9; n++) removeCommand(`space-slot-${n}`) }
+  }, [slotCount])
 
   // ---- 拖拽:区内重排 / 拖入收纳夹 / 浮层内重排、拖出;跨区一律拒收 ----
   const startDrag = (e: React.DragEvent, id: string, zone: RibbonZone, from: string | null): void => {
@@ -280,6 +338,8 @@ export function Ribbon() {
     const Icon = iconByName(f.icon) ?? FolderIcon // 自定义图标 → 回落文件夹
     return (
       <button
+        // 记下按钮元素:mod+N 打开这个收纳夹时要拿它当浮层锚点(键盘路径没有 currentTarget)。
+        ref={(el) => { el ? folderBtns.current.set(f.id, el) : folderBtns.current.delete(f.id) }}
         className={`rb-btn rb-folder${overFolder === f.id ? ' drag-into' : ''}`}
         title={expanded ? undefined : `${f.name} (${f.items.length})`}
         onMouseEnter={(e) => openFly(f.id, f.zone, e.currentTarget, f.id)}
@@ -334,6 +394,9 @@ export function Ribbon() {
         onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : undefined}
       >
         {renderEntry(e)}
+        {/* 快捷键提示:只在展开态(收起态 32px 塞不下)、只给上区前 9 个。绝对定位 = 不进流,
+            槽高常量 slotH 与拖拽落点几何一点不受影响。 */}
+        {zone === 'top' && expanded && slotHint(i) && <span className="rb-key">{slotHint(i)}</span>}
       </div>
     )
   }
