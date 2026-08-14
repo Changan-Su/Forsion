@@ -132,6 +132,7 @@ function RelationCell({ value, onChange }: PropCellProps) {
         <RelationPicker
           x={pos.x}
           y={pos.y}
+          anchorTop={pos.anchorTop}
           onClose={() => setPos(null)}
           onPick={(linkInner) => {
             onChange(linkInner ? `[[${linkInner}]]` : undefined)
@@ -143,10 +144,13 @@ function RelationCell({ value, onChange }: PropCellProps) {
   )
 }
 
-/** 页面选择器:模糊搜索全库笔记,「唯一即最短」插入(与 [[ 补全同语义)。 */
-function RelationPicker({ x, y, onPick, onClose }: {
+/** 页面选择器:模糊搜索全库笔记,「唯一即最短」插入(与 [[ 补全同语义)。
+ *  关联列与 text 单元格的 [[ 补全共用这一份 —— 别再复制一套搜索/重名消歧。 */
+export function RelationPicker({ x, y, anchorTop, onPick, onClose }: {
   x: number
   y: number
+  /** 触发按钮/输入框的上沿:下方放不下时浮层翻到它之上,不盖住源单元格(见 engine/menuAnchor)。 */
+  anchorTop?: number
   onPick: (linkInner: string | null) => void
   onClose: () => void
 }) {
@@ -171,7 +175,7 @@ function RelationPicker({ x, y, onPick, onClose }: {
     (dupes.get(pageKey(base(p))) ?? 0) > 1 ? `${p.replace(/\\/g, '/').replace(/\.md$/i, '')}|${base(p)}` : base(p)
   return (
     <div className="amx-db-popwrap" onMouseDown={onClose}>
-      <OverlayAt className="amx-db-pop" x={x} y={y} onMouseDown={(e) => e.stopPropagation()}>
+      <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="amx-db-pop-input"
           autoFocus

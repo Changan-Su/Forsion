@@ -20,6 +20,7 @@ import { FILTER_OPS, OP_LABEL, STAT_LABEL, UNARY_OPS, applyFilters, computeStat,
 import { fmtCalDate, parseCalDate, splitSide } from '@amadeus-shared/db/calDate'
 import { deriveColumns, fmValueToCell } from '@amadeus-shared/db/pageFrontmatter'
 import { allPropertyTypes, getPropertyType, resolveBaseType, usePropertyTypesVersion } from './propertyTypes'
+import { RelationPicker } from './propertyTypes.builtins'
 import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { useDbStore } from '../../store/dbStore'
 import { renameDb } from '../../lib/dbFileOps'
@@ -724,6 +725,8 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
 // ── 单元格(七/八类型) ────────────────────────────────────────────────────────
 
 const CELL_WIKI_RE = /(\[\[[^\]\n]+\]\])/
+/** 光标处一对**未闭合**的 [[(中文输入法打出的【【同收):补全触发判据 + 选中后被替换的那一段。 */
+const WIKI_OPEN_RE = /(?:\[\[|【【)([^[\]【】\n]*)$/
 
 function Cell({
   row,
@@ -739,6 +742,9 @@ function Cell({
   openOptions: (e: ReactMouseEvent) => void
 }) {
   const [editing, setEditing] = useState(false) // text 含 [[ ]] 时的展示/编辑切换 + url 编辑态
+  // [[ 补全弹层;caret = 触发时的光标位置(替换只作用于它之前那段未闭合的 [[…)。
+  const [wikiPick, setWikiPick] = useState<{ x: number; y: number; anchorTop: number; caret: number } | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null) // 关掉补全弹层后把焦点还给单元格(autoFocus 只在挂载时生效)
   const ps = useScopedPageStore() // 单元格里点双链要落在自己这半屏
   const cancelRef = useRef(false)
   const custom = getPropertyType(col.type)
@@ -765,7 +771,8 @@ function Cell({
     case 'text': {
       const s = v as string
       // 含 [[链接]] 且非编辑态 → 富文本展示(链接可点);点击其余区域 / ✎ 进入编辑。
-      if (!editing && CELL_WIKI_RE.test(s)) {
+      // 补全弹层开着时不切:弹层里的搜索框会抢焦点 → 输入框失焦 → 整支换成展示态,弹层跟着被卸掉。
+      if (!editing && !wikiPick && CELL_WIKI_RE.test(s)) {
         return (
           <div className="amx-db-urlcell" onClick={() => setEditing(true)}>
             <span className="amx-db-richtext">
@@ -785,15 +792,54 @@ function Cell({
           </div>
         )
       }
+      const put = (next: string): void => setCell(row.id, col.id, next === '' ? undefined : next)
       return (
-        <input
-          className="amx-db-input"
-          autoFocus={editing || undefined}
-          value={s}
-          onChange={(e) => setCell(row.id, col.id, e.target.value === '' ? undefined : e.target.value)}
-          onFocus={() => setEditing(true)}
-          onBlur={() => setEditing(false)}
-        />
+        <>
+          <input
+            ref={inputRef}
+            className="amx-db-input"
+            autoFocus={editing || undefined}
+            value={s}
+            onChange={(e) => {
+              const next = e.target.value
+              put(next)
+              // 判据只看**光标之前**那一段:在已有文字中间插 [[ 也得弹(整串结尾还有后文,拿全串判会漏)。
+              const caret = e.target.selectionStart ?? next.length
+              if (WIKI_OPEN_RE.test(next.slice(0, caret))) {
+                const r = e.target.getBoundingClientRect()
+                setWikiPick({ x: r.left, y: r.bottom + 4, anchorTop: r.top, caret })
+              } else setWikiPick(null)
+            }}
+            onFocus={() => setEditing(true)}
+            onBlur={() => {
+              setEditing(false)
+              // 中文输入法打出来的是全角【】,归一成半角才是双链(否则用户「打了却不成链接」)。
+              const fixed = s.replace(/【【([^】\n]+)】】/g, '[[$1]]')
+              if (fixed !== s) put(fixed)
+            }}
+            // Enter/Esc = 提交并离开:没有这一步,链接只在「点了别处」之后才现形。
+            // ⚠️ 组合态(拼音选词)的 Enter 是「确认候选词」,吞掉它 = 中文用户打一半就被踢出单元格。
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return
+              if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur()
+            }}
+          />
+          {wikiPick && (
+            <RelationPicker
+              x={wikiPick.x}
+              y={wikiPick.y}
+              anchorTop={wikiPick.anchorTop} // 下方放不下时翻到输入框**上沿之上**,别盖住正在打字的格子
+              onClose={() => { setWikiPick(null); inputRef.current?.focus() }}
+              onPick={(inner) => {
+                setWikiPick(null)
+                setEditing(false) // 直接回展示态,选完立刻看见链接
+                // 只替换光标前那段未闭合的 [[…,光标之后的原文原样保留。
+                const head = s.slice(0, wikiPick.caret).replace(WIKI_OPEN_RE, inner ? `[[${inner}]]` : '')
+                put(head + s.slice(wikiPick.caret))
+              }}
+            />
+          )}
+        </>
       )
     }
     case 'number': {
