@@ -15,7 +15,16 @@
       "@lcl/*": ["../lcl/*"],
       "@/*": ["frontend/src/*"],
       "@amadeus/*": ["frontend/src/amadeus/*"],
-      "@amadeus-shared/*": ["shared/amadeus/*"]
+      "@amadeus-shared/*": ["shared/amadeus/*"],
+      // 我们装的是 zsviczian fork(alias 成 @excalidraw/excalidraw,见 package.json)。
+      // 它的 exports 把 types 指到 ./dist/types/**,而包里 .d.ts 实际躺在 ./types/** —— 上游包错，
+      // moduleResolution:Bundler 认 exports 就全找不到。这几条按真实布局兜回来；运行时(. / index.css
+      // 指向 dist/prod)本来就是好的，不受影响。
+      "@excalidraw/excalidraw": ["node_modules/@excalidraw/excalidraw/types/excalidraw/index.d.ts"],
+      "@excalidraw/excalidraw/element/*": ["node_modules/@excalidraw/excalidraw/types/element/src/*"],
+      "@excalidraw/excalidraw/common/*": ["node_modules/@excalidraw/excalidraw/types/common/src/*"],
+      "@excalidraw/excalidraw/math/*": ["node_modules/@excalidraw/excalidraw/types/math/src/*"],
+      "@excalidraw/excalidraw/*": ["node_modules/@excalidraw/excalidraw/types/excalidraw/*"]
     }
   },
   "include": ["electron/**/*", "frontend/src/**/*", "shared/**/*", "products/**/*", "../lcl/**/*"]

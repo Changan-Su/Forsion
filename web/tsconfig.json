@@ -20,7 +20,14 @@
       "@mobile/*": ["../mobile/src/*"],
       "@capacitor/app": ["./src/capacitorAppStub.ts"],
       "react": ["./node_modules/@types/react"],
-      "react-dom": ["./node_modules/@types/react-dom"]
+      "react-dom": ["./node_modules/@types/react-dom"],
+      // 白板引擎(zsviczian fork)。那张 exports 表把 types 指到了不存在的 ./dist/types/**,
+      // 必须按真实布局兜回来;运行时不 import 这个包,是 <script> 装 public/excalidraw 里的副本。
+      "@excalidraw/excalidraw": ["./node_modules/@excalidraw/excalidraw/types/excalidraw/index.d.ts"],
+      "@excalidraw/excalidraw/element/*": ["./node_modules/@excalidraw/excalidraw/types/element/src/*"],
+      "@excalidraw/excalidraw/common/*": ["./node_modules/@excalidraw/excalidraw/types/common/src/*"],
+      "@excalidraw/excalidraw/math/*": ["./node_modules/@excalidraw/excalidraw/types/math/src/*"],
+      "@excalidraw/excalidraw/*": ["./node_modules/@excalidraw/excalidraw/types/excalidraw/*"]
     },
     "noEmit": true
   },

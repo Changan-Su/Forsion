@@ -21,7 +21,15 @@
       "@webamadeus/*": ["../web/src/amadeus/*"],
       "@mobile/*": ["src/*"],
       "react": ["./node_modules/@types/react"],
-      "react-dom": ["./node_modules/@types/react-dom"]
+      "react-dom": ["./node_modules/@types/react-dom"],
+      // 白板引擎(zsviczian fork)只装在 desktop 下,这里只借它的 .d.ts —— 运行时是 <script> 装
+      // desktop/frontend/public 里的自托管副本(publicDir 已借同一个目录),见 forkRuntime.ts。
+      // 那张 exports 表把 types 指到了不存在的 ./dist/types/**,必须按真实布局兜回来。
+      "@excalidraw/excalidraw": ["../desktop/node_modules/@excalidraw/excalidraw/types/excalidraw/index.d.ts"],
+      "@excalidraw/excalidraw/element/*": ["../desktop/node_modules/@excalidraw/excalidraw/types/element/src/*"],
+      "@excalidraw/excalidraw/common/*": ["../desktop/node_modules/@excalidraw/excalidraw/types/common/src/*"],
+      "@excalidraw/excalidraw/math/*": ["../desktop/node_modules/@excalidraw/excalidraw/types/math/src/*"],
+      "@excalidraw/excalidraw/*": ["../desktop/node_modules/@excalidraw/excalidraw/types/excalidraw/*"]
     }
   },
   "include": ["src", "../desktop/frontend/src"]

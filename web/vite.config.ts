@@ -22,6 +22,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    // publicDir 用 web 自己的(默认 web/public):白板引擎的自托管副本由 `npm run prepare-board`
+    // 生成在那儿(见 package.json,build/dev 都会先跑一遍)。
+    // ⚠️ **不能借 desktop 的 public** —— 那是 desktop postinstall 的产物、不入库,而 web 的镜像
+    //    只 COPY desktop 的源码、在公共祖先自己 npm ci,借过去在 CI 里必然是空的:
+    //    镜像照样构建成功,用户点开白板才 404。
     resolve: {
       alias: {
         // 被复用的 desktop 源里 `@/...` 与 web 自身都解析到 desktop/frontend/src。

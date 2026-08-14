@@ -25,6 +25,9 @@ COPY lcl ./lcl
 COPY mobile/src ./mobile/src
 # changelog.ts 经 `?raw` 内联 desktop 根的 CHANGELOG.md(关于页用),frontend/ 之外唯一外部引用。
 COPY desktop/CHANGELOG.md ./desktop/CHANGELOG.md
+# 白板引擎的自托管副本由这支脚本从 node_modules 现生成(web 的 `npm run build` 会先跑 prepare-board)。
+# ⚠️ 副本本身**不入库**,所以绝不能指望 COPY desktop/frontend 把它带进来 —— CI 里那个目录是空的。
+COPY desktop/build/copy-excalidraw-assets.cjs ./desktop/build/copy-excalidraw-assets.cjs
 COPY web ./web
 RUN cd web && npm run build   # vite 经 /app/node_modules 解析全部依赖 → /app/web/dist(base '/')
 

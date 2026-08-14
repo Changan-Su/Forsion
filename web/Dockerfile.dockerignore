@@ -14,4 +14,7 @@ archived
 designs
 desktop/electron
 desktop/build
+# ⚠️ 例外:白板引擎的自托管副本由这支脚本在镜像里现生成(web 的 build 前置 prepare-board 调它)。
+#    上面那条 `desktop/build` 会把它一起排掉 → COPY 直接报 not found,镜像构建当场失败。
+!desktop/build/copy-excalidraw-assets.cjs
 desktop/out

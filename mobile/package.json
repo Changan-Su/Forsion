@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
-    "e2e:noteopen": "node scripts/note-open.e2e.cjs"
+    "e2e:noteopen": "node scripts/note-open.e2e.cjs",
+    "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",
