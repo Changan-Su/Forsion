@@ -115,7 +115,9 @@ function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; 
  *   · **本块失焦** = 收回源码态(每个 Amadeus 块是独立编辑器,点别的块即失焦)
  *   · 键盘走进标题行**不露**,方向键把藏起来的语法段整段跳过
  */
-const calloutKey = new PluginKey<{ srcAt: number | null }>('amadeus-callout-src')
+// export:统一实例 spike(amadeus/unified)需要在「光标离开 callout」时代为清 srcAt ——
+// 每块一实例时代「本块失焦=收回」靠编辑器 blur,单实例里点别的段落不再触发 blur。
+export const calloutKey = new PluginKey<{ srcAt: number | null }>('amadeus-callout-src')
 
 /** 语法字符藏着时,方向键把它当一个整体跳过 —— 否则光标停在看不见的字里,打字位置发玄。 */
 function skipHidden(state: EditorState, next: number, dir: 1 | -1): number | null {

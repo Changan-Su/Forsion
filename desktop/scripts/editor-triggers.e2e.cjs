@@ -330,7 +330,7 @@ async function main() {
     await p.waitForTimeout(300)
     await p.locator('.inline-toolbar .itb-color').dispatchEvent('mousedown') // 开颜色面板
     await p.waitForTimeout(250)
-    await p.locator('.inline-toolbar .itb-swatch[data-fg="#e03131"]').dispatchEvent('mousedown')
+    await p.locator('.inline-toolbar .itb-swatch[data-fg="#c62222"]').dispatchEvent('mousedown') // AFFiNE v1 红(2026-08-13 第4振换正典)
     await p.waitForTimeout(400)
     const md = await mdOf(p)
     check('T16 文字色 → 序列化含 <span style="color', /<span style="color:[^"]+">red<\/span>/.test(md), `md=${JSON.stringify(md)}`)
@@ -1125,6 +1125,137 @@ async function main() {
     check('T41 跨小节的行不给折叠箭头', (await p.locator('.amx-hfold').count()) === 0)
     check('T41 后续行照常显示', (await p.locator('.block-host[data-block-id="B"]').count()) === 1)
     await p.close()
+  })
+
+  // T42:Tab 缩进(2026-08-14 用户实报「普通笔记没做 Tab 缩进」:v3 块世界此前无任何 Tab 键位,
+  //      段落里按 Tab 焦点直接被浏览器抛出编辑器)。阶梯与 v4 blockLayer 共用 blocks/markdown/tabIndent.ts。
+  await tryTest('T42', async () => {
+    // ① 列表项 Tab = 降为子级(DOM 出现嵌套 ul);Shift-Tab = 升回。
+    const p = await freshPage('- 甲\n\n- 乙')
+    await p.locator('.md-block .ProseMirror li').nth(1).click()
+    await p.waitForTimeout(200)
+    await p.keyboard.press('Tab')
+    await p.waitForTimeout(500)
+    check('T42 列表项 Tab → 子级(嵌套 ul)', (await p.locator('.md-block .ProseMirror ul ul').count()) === 1)
+    const inEditor = () => p.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+    check('T42 Tab 后焦点仍在编辑器里', await inEditor())
+    await p.keyboard.press('Shift+Tab')
+    await p.waitForTimeout(500)
+    check('T42 Shift-Tab → 升回同级', (await p.locator('.md-block .ProseMirror ul ul').count()) === 0)
+    await p.close()
+
+    // ② 段落且前一兄弟是列表 → Tab 收进该列表末项(AFFiNE「成为前块子块」的 md 形态)。
+    const q = await freshPage('- 项目一\n\n后续段落')
+    await q.locator('.md-block .ProseMirror > p').first().click()
+    await q.waitForTimeout(200)
+    await q.keyboard.press('Tab')
+    await q.waitForTimeout(500)
+    check('T42 段落并入前列表(顶层段落消失)', (await q.locator('.md-block .ProseMirror > p').count()) === 0)
+    check('T42 并入后列表里两段都在', (await q.locator('.md-block .ProseMirror ul p').count()) === 2)
+    await q.close()
+
+    // ③ 段落、前面没有列表 → Tab 自转 bullet 项(用户拍板「段落转列表」);Shift-Tab 原路脱出。
+    const r = await freshPage('孤段落')
+    await r.locator('.md-block .ProseMirror').first().click()
+    await r.waitForTimeout(200)
+    await r.keyboard.press('Tab')
+    await r.waitForTimeout(500)
+    check('T42 无前列表的段落 Tab → 变 bullet 项', (await r.locator('.md-block .ProseMirror > ul li').count()) === 1)
+    const rInEditor = await r.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+    check('T42 转换后焦点仍在编辑器里(不逃逸)', rInEditor)
+    await r.keyboard.press('Shift+Tab')
+    await r.waitForTimeout(500)
+    check('T42 Shift-Tab 脱出回段落', (await r.locator('.md-block .ProseMirror > ul').count()) === 0 &&
+      (await r.locator('.md-block .ProseMirror > p').count()) === 1)
+    await r.close()
+
+    // ④ 表格内 Tab = 跳下一格(gfm tableKeymap),绝不许被缩进层吞成哑键。
+    const s = await freshPage('| a | b |\n| --- | --- |\n| 1 | 2 |')
+    await s.locator('.md-block .ProseMirror th').first().click()
+    await s.waitForTimeout(200)
+    await s.keyboard.press('Tab')
+    await s.waitForTimeout(200)
+    await s.keyboard.type('X', { delay: 30 })
+    await s.waitForTimeout(500)
+    // gfm 跳格会**全选**目标格内容,输入即整格替换 → b 格变 X、a 格纹丝不动才是「跳成功」。
+    const tmd = await mdOf(s)
+    check('T42 表格 Tab 跳到下一格(b 格被替换成 X,a 格不动)', tmd.startsWith('| a | X |'), `md=${JSON.stringify(tmd)}`)
+    await s.close()
+
+    // ⑤ 代码块内 Tab = 插两空格(绝不转列表/跳走);多行选区 = 逐行缩进(整段替换会吃掉选中代码)。
+    const c = await freshPage('```\ncode\n```')
+    await c.locator('.md-block .ProseMirror pre').first().click()
+    await c.waitForTimeout(200)
+    await c.keyboard.press('Home')
+    await c.keyboard.press('Tab')
+    await c.waitForTimeout(500)
+    const cmd = await mdOf(c)
+    check('T42 代码块 Tab → 行首两空格', cmd.includes('  code'), `md=${JSON.stringify(cmd)}`)
+    await c.close()
+    // 真选区必须真跨行:无头端键盘导航(Cmd+箭头/Shift+End)不稳定,用 DOM Range 精确铺
+    // (Cmd+A 的 AllSelection 父节点是 doc,阶梯刻意吞掉 —— 真实多行操作是 shift 选区)。
+    const spanSelect = (p, fromSel, toSel) =>
+      p.evaluate(([a, b]) => {
+        const root = document.querySelector('.md-block .ProseMirror')
+        const el1 = root.querySelector(a)
+        const el2 = root.querySelector(b)
+        const firstText = (n) => { while (n.firstChild) n = n.firstChild; return n }
+        const lastText = (n) => { while (n.lastChild) n = n.lastChild; return n }
+        const r = document.createRange()
+        r.setStart(firstText(el1), 0)
+        const lt = lastText(el2)
+        r.setEnd(lt, lt.textContent ? lt.textContent.length : 0)
+        const s = window.getSelection()
+        s.removeAllRanges()
+        s.addRange(r)
+      }, [fromSel, toSel])
+    const c2 = await freshPage('```\naa\nbb\n```')
+    await c2.locator('.md-block .ProseMirror pre').first().click()
+    await c2.waitForTimeout(200)
+    await spanSelect(c2, 'pre', 'pre')
+    await c2.waitForTimeout(200)
+    await c2.keyboard.press('Tab')
+    await c2.waitForTimeout(500)
+    const cmd2 = await mdOf(c2)
+    check('T42 代码块多行选区 Tab → 逐行缩进(不吃代码)', cmd2.includes('  aa') && cmd2.includes('  bb'), `md=${JSON.stringify(cmd2)}`)
+    await c2.keyboard.press('Shift+Tab')
+    await c2.waitForTimeout(500)
+    const cmd3 = await mdOf(c2)
+    check('T42 代码块多行 Shift-Tab → 逐行去缩进', cmd3.includes('aa') && cmd3.includes('bb') && !cmd3.includes('  aa'), `md=${JSON.stringify(cmd3)}`)
+    await c2.close()
+
+    // ⑥ Tab↔Shift-Tab 对称:段落并进前列表后,Shift-Tab 只把那段抬出来,邻项的 bullet 结构不动。
+    const u = await freshPage('- 项目一\n\n后段')
+    await u.locator('.md-block .ProseMirror > p').first().click()
+    await u.waitForTimeout(200)
+    await u.keyboard.press('Tab')
+    await u.waitForTimeout(400)
+    await u.keyboard.press('Shift+Tab')
+    await u.waitForTimeout(500)
+    const uState = await u.evaluate(() => {
+      const pm = document.querySelector('.md-block .ProseMirror')
+      return { lis: pm.querySelectorAll('li').length, ps: pm.querySelectorAll(':scope > p').length, text: pm.textContent }
+    })
+    check('T42 并入后 Shift-Tab 抬出该段,邻项 bullet 保全', uState.lis === 1 && uState.ps === 1 && uState.text.includes('项目一') && uState.text.includes('后段'), JSON.stringify(uState))
+    await u.close()
+
+    // ⑦ 多块选区 Tab:逐块各成一项,不许塞进同一个 list_item。
+    const m2 = await freshPage('甲段\n\n乙段')
+    await m2.locator('.md-block .ProseMirror > p').first().click()
+    await m2.waitForTimeout(200)
+    await spanSelect(m2, ':scope > p:first-of-type', ':scope > p:last-of-type')
+    await m2.waitForTimeout(200)
+    await m2.keyboard.press('Tab')
+    await m2.waitForTimeout(500)
+    // 种子 '甲段\n\n乙段' 在 v3 里落成三段(中间空段)→ 逐块成项 = 3 个 li,首尾内容各归各项。
+    // 钉住的语义是「不许塞进同一个 list_item」,裸 wrap 类回归会变成 1 个 li。
+    const m2State = await m2.evaluate(() => {
+      const pm = document.querySelector('.md-block .ProseMirror')
+      const lis = [...pm.querySelectorAll('li')]
+      return { n: lis.length, first: lis[0]?.textContent, last: lis[lis.length - 1]?.textContent }
+    })
+    check('T42 多块选区 Tab → 逐块成项', m2State.n === 3 && m2State.first === '甲段' && m2State.last === '乙段', JSON.stringify(m2State))
+    await m2.close()
   })
 
   const fails = results.filter((r) => !r.ok).length

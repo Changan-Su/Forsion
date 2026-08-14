@@ -1,5 +1,7 @@
 /** 行内链接地址的归一 + 安全闸。用户手打的地址会原样落进 `[文字](href)` 并渲染成 `<a href>`,
  *  笔记还会被分享页独立渲染 —— 所以 `javascript:` 这类可执行 scheme 必须在入口就挡掉,不能只靠渲染层。 */
+import { $inputRule } from '@milkdown/kit/utils'
+import { InputRule } from '@milkdown/kit/prose/inputrules'
 
 /** 允许出现在 `<a href>` 里的 scheme(小写)。其余带 scheme 的一律拒绝。
  *
@@ -29,3 +31,18 @@ export function normalizeHref(raw: string): string | null {
   // 无 scheme 且形似域名(含点、首段非空)→ 补 https://;否则当站内相对路径原样留。
   return /^[^\s/]+\.[^\s/]/.test(s) ? 'https://' + s : s
 }
+
+/** 打完 `[文字](地址)` 的右括号 → 当场成链接(AFFiNE/Notion 手感)。
+ *  commonmark 预设只带了 strong/em/code 的行内输入规则,链接没有 —— 于是手打的链接要等下一次
+ *  「序列化→重解析」才活过来(整页一实例后那次重解析根本不会发生,只有换页/重开才有)。
+ *  地址过 normalizeHref 安全闸;闸拒了就原样留字面,绝不落一个 javascript: 的 `<a>`。 */
+export const linkInputRule = $inputRule(
+  () =>
+    new InputRule(/\[([^[\]]+)\]\((\S+)\)$/, (state, match, start, end) => {
+      const linkMark = state.schema.marks.link
+      if (!linkMark) return null
+      const href = normalizeHref(match[2])
+      if (!href) return null
+      return state.tr.replaceWith(start, end, state.schema.text(match[1], [linkMark.create({ href })]))
+    }),
+)

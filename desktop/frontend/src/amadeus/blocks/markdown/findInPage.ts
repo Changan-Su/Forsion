@@ -41,9 +41,15 @@ export const useFindStore = create<FindState>((set, get) => ({
   },
 }))
 
-/** 总命中 = 按块序求和(flatOrder 过滤掉已删块的残留计数)。 */
+/** v4 统一实例的上报 id:整篇只有一个编辑器,且它**不在 pageStore 的块序里**(flatOrder 恒空)
+ *  —— 求和会得 0,全局序号折算也无从谈起。故这一格自成一路:总数即它自己,active 直接就是本地序号。
+ *  ⚠️ 统一页卸载时必须 close() 清掉这一格,否则 v3 页面会一直走这条捷径(见 UnifiedPage)。 */
+export const UNIFIED_FIND_ID = '__unified__'
+
+/** 总命中 = 按块序求和(flatOrder 过滤掉已删块的残留计数);统一实例走单格捷径。 */
 export function findTotal(): number {
   const { counts } = useFindStore.getState()
+  if (counts[UNIFIED_FIND_ID] != null) return counts[UNIFIED_FIND_ID]
   return usePageStore
     .getState()
     .flatOrder()
@@ -53,6 +59,7 @@ export function findTotal(): number {
 /** 全局 active → 某块的本地命中序号;不在本块返回 -1。 */
 function localActive(blockId: string): number {
   const { active, counts } = useFindStore.getState()
+  if (blockId === UNIFIED_FIND_ID) return active < (counts[blockId] ?? 0) ? active : -1
   let before = 0
   for (const id of usePageStore.getState().flatOrder()) {
     const c = counts[id] ?? 0

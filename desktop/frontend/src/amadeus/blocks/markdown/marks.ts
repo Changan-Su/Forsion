@@ -151,10 +151,39 @@ export const underlineSchema = $markSchema('amadeusUnderline', () => ({
   },
 }))
 
+// AFFiNE theme v2 高亮色 → 语义名(亮色 hex 落盘保 Obsidian 可渲染;in-app 暗色靠 data-hl/data-hlc
+// 语义名走 styles.css 的 [data-mode='dark'] 覆盖)。与 InlineToolbar 色板同源,改一处必须三处同步。
+// 正典 = AFFiNE **v1** 编辑器色板(--affine-text-highlight-*,@toeverything/theme dist/style.css
+// 实测;高亮菜单实际引用的是 v1 变量,v2 design token 不是编辑器渲染值)。品红为本产品扩展。
+const HL_FG_NAMES: Record<string, string> = {
+  '#c62222': 'red', '#d34f0b': 'orange', '#b67c04': 'yellow', '#149343': 'green',
+  '#0782a0': 'teal', '#2159d3': 'blue', '#842ed3': 'purple', '#941555': 'magenta', '#7a7a7a': 'grey',
+  // 2026-08-13 当日 v2 token 误版兼容别名(当日落盘的文档):
+  '#c83030': 'red', '#db7123': 'orange', '#ac7400': 'yellow', '#225c18': 'green',
+  '#0e4841': 'teal', '#003c67': 'blue', '#7c3aed': 'purple',
+  // 旧色板(Open Color,2026-08-13 前落盘的文档)兼容别名:暗色下同样按语义名覆盖,不留刺眼亮色。
+  '#e03131': 'red', '#e8590c': 'orange', '#f08c00': 'yellow', '#2f9e44': 'green',
+  '#0c8599': 'teal', '#1971c2': 'blue', '#9c36b5': 'purple', '#868e96': 'grey',
+}
+const HL_BG_NAMES: Record<string, string> = {
+  '#fed5d5': 'red', '#fedfbb': 'orange', '#fef3a1': 'yellow', '#e1fab1': 'green',
+  '#adf8e9': 'teal', '#cce2fe': 'blue', '#edddff': 'purple', '#ffcece': 'magenta', '#eaecef': 'grey',
+  // 2026-08-13 当日 v2 token 误版兼容别名:
+  '#fce5e6': 'red', '#ffebd5': 'orange', '#fff9b6': 'yellow', '#f0fccb': 'green',
+  '#c7f8f2': 'teal', '#daf0ff': 'blue', '#ede9ff': 'purple', '#ffecf6': 'magenta', '#e6e6e6': 'grey',
+  // 旧色板兼容别名(同上)。
+  '#ffe3e3': 'red', '#ffe8cc': 'orange', '#fff3bf': 'yellow', '#d3f9d8': 'green',
+  '#c5f6fa': 'teal', '#d0ebff': 'blue', '#f3d9fa': 'purple', '#e9ecef': 'grey',
+}
+
 export const colorSchema = $markSchema('amadeusColor', () => ({
   attrs: { color: { default: '' } },
   parseDOM: [{ tag: 'span[style*="color"]', getAttrs: (dom) => ({ color: (dom as HTMLElement).style.color }) }],
-  toDOM: (mark) => ['span', { style: `color:${mark.attrs.color}` }, 0],
+  toDOM: (mark) => {
+    const c = String(mark.attrs.color)
+    const name = HL_FG_NAMES[c.toLowerCase()]
+    return ['span', { style: `color:${c}`, ...(name ? { 'data-hlc': name } : {}) }, 0]
+  },
   parseMarkdown: {
     match: (node) => node.type === FG,
     runner: (state, node, markType) => {
@@ -174,7 +203,12 @@ export const colorSchema = $markSchema('amadeusColor', () => ({
 export const bgSchema = $markSchema('amadeusBg', () => ({
   attrs: { bg: { default: '' } },
   parseDOM: [{ tag: 'mark', getAttrs: (dom) => ({ bg: (dom as HTMLElement).style.backgroundColor || '' }) }],
-  toDOM: (mark) => ['mark', mark.attrs.bg ? { style: `background:${mark.attrs.bg}` } : {}, 0],
+  toDOM: (mark) => {
+    const bg = String(mark.attrs.bg)
+    if (!bg) return ['mark', {}, 0]
+    const name = HL_BG_NAMES[bg.toLowerCase()]
+    return ['mark', { style: `background:${bg}`, ...(name ? { 'data-hl': name } : {}) }, 0]
+  },
   parseMarkdown: {
     match: (node) => node.type === BG,
     runner: (state, node, markType) => {

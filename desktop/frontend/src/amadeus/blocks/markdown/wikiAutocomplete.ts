@@ -3,9 +3,17 @@
 // The query lives in the document (unlike the slash menu), so the popup lets letters
 // pass through and only intercepts navigation keys.
 
-import { $prose } from '@milkdown/kit/utils'
+import { $inputRule, $prose } from '@milkdown/kit/utils'
+import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin } from '@milkdown/kit/prose/state'
 import { blockLabel, type BlockNode } from './blockTriggers'
+
+/** 全角【【 当场换成半角 [[(AFFiNE 的 convertTriggerKey 同款,它的触发键表就是 ['@','[[','【【'])。
+ *  中文输入法下打 `[` 得先切回英文键盘 —— 不给这条,双链在中文写作里天然多两次切换。
+ *  换完由既有的 wikiSuggestPlugin 照常接管(它只认半角,不必改)。 */
+export const fullWidthWikiRule = $inputRule(
+  () => new InputRule(/【【$/, (state, _match, start, end) => state.tr.insertText('[[', start, end)),
+)
 
 export interface WikiQuery {
   /** Text typed after the opening "[[". */
@@ -152,6 +160,9 @@ export interface SelRect {
   bottom: number
   /** 选区所在块的类型名(「正文」/「标题 2」/「无序列表」…),给工具栏的「转换为」按钮显示当前类型。 */
   kind: string
+  /** **全覆盖**的行内格式名集合(AFFiNE 判据:选区内每一段都带这个格式才算激活;
+   *  「粗体半句 + 普通半句」显示未激活,再按一次是整段加粗而不是取消)。 */
+  active: string[]
 }
 export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
   return $prose(
@@ -182,7 +193,23 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               const n = $from.node(d)
               chain.push({ name: n.type.name, level: n.attrs.level as number | undefined, checked: (n.attrs.checked as boolean | null | undefined) ?? null })
             }
-            report({ from, to, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? '多个块' : blockLabel(chain) })
+            // 全覆盖判定:rangeHasMark 是「有没有一处带」,这里要的是「是不是处处都带」——
+            // 逐个文本片段问,任一片段没有即不算激活。
+            const active: string[] = []
+            for (const name of ['strong', 'emphasis', 'inlineCode', 'strike_through', 'amadeusU']) {
+              const type = view.state.schema.marks[name]
+              if (!type) continue
+              let all = true
+              let seen = false
+              doc.nodesBetween(from, to, (node) => {
+                if (!node.isText) return true
+                seen = true
+                if (!type.isInSet(node.marks)) all = false
+                return true
+              })
+              if (seen && all) active.push(name)
+            }
+            report({ from, to, active, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? '多个块' : blockLabel(chain) })
           },
         }),
       }),

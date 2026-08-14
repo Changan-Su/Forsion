@@ -24,29 +24,37 @@ export type ToolbarAction =
   | 'todo'
   | 'quote'
   | 'fold'
+  | 'codeblock'
+  | 'math'
 
 // 调色板(参考 AFFiNE 命名色;十六进制,后续可换 LCL token)。'' = 清除该颜色。
+// 色板 = AFFiNE **v1** 编辑器亮色真值(--affine-text-highlight-*;高亮菜单实际引用的是 v1 变量,
+// 2026-08-13 第4振:此前误取 v2 design token,暗色整片过暗)。品红/粉为本产品扩展(AFFiNE 无 fg 粉)。
+// 落盘存字面亮色 hex(Obsidian 可渲染);暗色由 marks.ts 的 data-hl/data-hlc 语义名 + styles.css
+// 覆盖切换 —— 改这里的值必须同步 marks.ts 的 HL_BG_NAMES/HL_FG_NAMES 与 styles.css 暗色段。
 const TEXT_COLORS: Array<{ name: string; v: string }> = [
   { name: '默认', v: '' },
-  { name: '红', v: '#e03131' },
-  { name: '橙', v: '#e8590c' },
-  { name: '黄', v: '#f08c00' },
-  { name: '绿', v: '#2f9e44' },
-  { name: '青', v: '#0c8599' },
-  { name: '蓝', v: '#1971c2' },
-  { name: '紫', v: '#9c36b5' },
-  { name: '灰', v: '#868e96' },
+  { name: '红', v: '#c62222' },
+  { name: '橙', v: '#d34f0b' },
+  { name: '黄', v: '#b67c04' },
+  { name: '绿', v: '#149343' },
+  { name: '青', v: '#0782a0' },
+  { name: '蓝', v: '#2159d3' },
+  { name: '紫', v: '#842ed3' },
+  { name: '品红', v: '#941555' },
+  { name: '灰', v: '#7a7a7a' },
 ]
 const BG_COLORS: Array<{ name: string; v: string }> = [
   { name: '默认', v: '' },
-  { name: '灰', v: '#e9ecef' },
-  { name: '红', v: '#ffe3e3' },
-  { name: '橙', v: '#ffe8cc' },
-  { name: '黄', v: '#fff3bf' },
-  { name: '绿', v: '#d3f9d8' },
-  { name: '青', v: '#c5f6fa' },
-  { name: '蓝', v: '#d0ebff' },
-  { name: '紫', v: '#f3d9fa' },
+  { name: '红', v: '#fed5d5' },
+  { name: '橙', v: '#fedfbb' },
+  { name: '黄', v: '#fef3a1' },
+  { name: '绿', v: '#e1fab1' },
+  { name: '青', v: '#adf8e9' },
+  { name: '蓝', v: '#cce2fe' },
+  { name: '紫', v: '#edddff' },
+  { name: '粉', v: '#ffcece' },
+  { name: '灰', v: '#eaecef' },
 ]
 const TURN_INTO: Array<{ k: ToolbarAction; label: string }> = [
   { k: 'text', label: '正文' },
@@ -61,6 +69,9 @@ const TURN_INTO: Array<{ k: ToolbarAction; label: string }> = [
   { k: 'todo', label: '待办' },
   { k: 'quote', label: '引用' },
   { k: 'fold', label: '折叠' },
+  // AFFiNE 的 Turn into 矩阵里有代码块与公式(分割线被它显式过滤掉,只留在 slash 菜单)。
+  { k: 'codeblock', label: '代码块' },
+  { k: 'math', label: '公式' },
 ]
 
 export function InlineToolbar({
@@ -68,6 +79,7 @@ export function InlineToolbar({
   top,
   bottom,
   kind,
+  active,
   onAct,
   onColor,
   onBg,
@@ -80,6 +92,8 @@ export function InlineToolbar({
   bottom: number
   /** 选区所在块的当前类型名(selectionToolbarPlugin 实时算);此前这里写死「正文」。 */
   kind: string
+  /** 选区**全覆盖**的格式名(schema mark name);半覆盖不算,按钮显示未激活。 */
+  active?: string[]
   onAct: (a: ToolbarAction) => void
   onColor: (v: string) => void // '' = 清除文字色
   onBg: (v: string) => void // '' = 清除背景色
@@ -99,6 +113,9 @@ export function InlineToolbar({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
+  /** 全覆盖才点亮(半覆盖显示未激活 —— 与「再按一次是整段加粗」的语义一致)。 */
+  const on = (mark: string): string => (active?.includes(mark) ? ' on' : '')
+
   // onMouseDown+preventDefault:保住选区/焦点(否则命令执行前编辑器已 blur、选区已丢)。
   const down = (fn: () => void) => (e: ReactMouseEvent): void => {
     e.preventDefault()
@@ -115,11 +132,11 @@ export function InlineToolbar({
           {kind} ▾
         </button>
         <span className="itb-sep" />
-        <button className="itb-btn" style={{ fontWeight: 700 }} title="加粗" data-act="bold" onMouseDown={down(() => onAct('bold'))}>B</button>
-        <button className="itb-btn" style={{ fontStyle: 'italic' }} title="斜体" data-act="italic" onMouseDown={down(() => onAct('italic'))}>I</button>
-        <button className="itb-btn" style={{ textDecoration: 'underline' }} title="下划线" data-act="underline" onMouseDown={down(() => onAct('underline'))}>U</button>
-        <button className="itb-btn" style={{ textDecoration: 'line-through' }} title="删除线" data-act="strike" onMouseDown={down(() => onAct('strike'))}>S</button>
-        <button className="itb-btn" title="行内代码" data-act="code" onMouseDown={down(() => onAct('code'))}>&lt;/&gt;</button>
+        <button className={`itb-btn${on('strong')}`} style={{ fontWeight: 700 }} title="加粗" data-act="bold" onMouseDown={down(() => onAct('bold'))}>B</button>
+        <button className={`itb-btn${on('emphasis')}`} style={{ fontStyle: 'italic' }} title="斜体" data-act="italic" onMouseDown={down(() => onAct('italic'))}>I</button>
+        <button className={`itb-btn${on('amadeusU')}`} style={{ textDecoration: 'underline' }} title="下划线" data-act="underline" onMouseDown={down(() => onAct('underline'))}>U</button>
+        <button className={`itb-btn${on('strike_through')}`} style={{ textDecoration: 'line-through' }} title="删除线" data-act="strike" onMouseDown={down(() => onAct('strike'))}>S</button>
+        <button className={`itb-btn${on('inlineCode')}`} title="行内代码" data-act="code" onMouseDown={down(() => onAct('code'))}>&lt;/&gt;</button>
         <button className="itb-btn" title="链接" data-act="link" onMouseDown={down(() => onAct('link'))}>🔗</button>
         <span className="itb-sep" />
         <button className="itb-btn itb-color" title="文字 / 背景颜色" onMouseDown={down(() => setPanel(panel === 'color' ? null : 'color'))}>

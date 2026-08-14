@@ -50,7 +50,17 @@ function tokenRanges(code: string, lang: string): TokenRange[] {
   return out
 }
 
-const codeKey = new PluginKey<{ wrapped: Set<number> }>('amx-code-block')
+const codeKey = new PluginKey<CodeUi>('amx-code-block')
+
+/** 三个视图开关都是**会话态**:切页/重开即复位。AFFiNE 那边是持久化块属性(code-model.ts),
+ *  我们不往纯 md 里加 amadeus_* 键,这是刻意的偏差。 */
+interface CodeUi {
+  wrapped: Set<number>
+  lineno: Set<number>
+  collapsed: Set<number>
+}
+/** 语言选择的「最近使用」:同一次会话里选过的语言排到列表最前(AFFiNE 同款手感)。 */
+const recentLangs: string[] = []
 
 export function codeBlockPlugin() {
   return $prose(
@@ -58,29 +68,58 @@ export function codeBlockPlugin() {
       new Plugin({
         key: codeKey,
         state: {
-          init: () => ({ wrapped: new Set<number>() }),
+          init: () => ({ wrapped: new Set<number>(), lineno: new Set<number>(), collapsed: new Set<number>() }),
           apply(tr, v) {
-            const meta = tr.getMeta(codeKey) as { toggle?: number } | undefined
-            if (!tr.docChanged && !meta) return v
+            if (!tr.docChanged && !tr.getMeta(codeKey)) return v
             const wrapped = new Set([...v.wrapped].map((p) => tr.mapping.map(p)))
-            if (meta?.toggle !== undefined) {
-              if (wrapped.has(meta.toggle)) wrapped.delete(meta.toggle)
-              else wrapped.add(meta.toggle)
+            const lineno = new Set([...v.lineno].map((p) => tr.mapping.map(p)))
+            const collapsed = new Set([...v.collapsed].map((p) => tr.mapping.map(p)))
+            const meta = tr.getMeta(codeKey) as { toggle?: number; which?: 'wrap' | 'lineno' | 'collapse' } | undefined
+            if (meta?.toggle != null) {
+              const set = meta.which === 'lineno' ? lineno : meta.which === 'collapse' ? collapsed : wrapped
+              if (set.has(meta.toggle)) set.delete(meta.toggle)
+              else set.add(meta.toggle)
             }
-            return { wrapped }
+            return { wrapped, lineno, collapsed }
           },
         },
         props: {
           decorations(state) {
             const decos: Decoration[] = []
-            const wrapped = codeKey.getState(state)?.wrapped ?? new Set<number>()
+            const ui = codeKey.getState(state)
+            const wrapped = ui?.wrapped ?? new Set<number>()
+            const lineno = ui?.lineno ?? new Set<number>()
+            const collapsed = ui?.collapsed ?? new Set<number>()
             state.doc.descendants((node, pos) => {
               if (node.type.name !== 'code_block') return true
               const lang = String((node.attrs as { language?: string }).language ?? '').trim()
               const isWrap = wrapped.has(pos)
-              decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `amx-code${isWrap ? ' amx-code-wrap' : ''}` }))
+              const isNo = lineno.has(pos) && !isWrap // 折行时行号必然错位(软换行没有自己的号),互斥
+              const isCollapsed = collapsed.has(pos)
+              decos.push(Decoration.node(pos, pos + node.nodeSize, {
+                class: `amx-code${isWrap ? ' amx-code-wrap' : ''}${isNo ? ' amx-code-lineno' : ''}${isCollapsed ? ' amx-code-collapsed' : ''}`,
+                ...(isNo ? { 'data-lines': String(node.textContent.split('\n').length) } : {}),
+              }))
               for (const t of tokenRanges(node.textContent, lang)) {
                 decos.push(Decoration.inline(pos + 1 + t.from, pos + 1 + t.to, { class: t.cls }))
+              }
+              if (isNo) {
+                // ⚠️ code_block 是**一个** <pre>,行不是元素 —— CSS 计数器没有可计的东西。
+                // 只能自己画一列:与代码同字体同行高(挂在 pre 内部,直接继承),绝对定位在左槽。
+                const lines = node.textContent.split('\n').length
+                decos.push(
+                  Decoration.widget(
+                    pos + 1,
+                    () => {
+                      const col = document.createElement('span')
+                      col.className = 'amx-code-nums'
+                      col.contentEditable = 'false'
+                      col.textContent = Array.from({ length: lines }, (_, i) => String(i + 1)).join('\n')
+                      return col
+                    },
+                    { side: -1, ignoreSelection: true, stopEvent: () => true, key: `cn${pos}:${lines}` },
+                  ),
+                )
               }
               decos.push(
                 Decoration.widget(
@@ -103,7 +142,9 @@ export function codeBlockPlugin() {
                     opt0.textContent = '纯文本'
                     sel.appendChild(opt0)
                     const known = LANGS.includes(lang) || !lang
-                    for (const l of known ? LANGS : [lang, ...LANGS]) {
+                    // 最近用过的排最前(会话内),其余保持原序 —— AFFiNE 选中即 unshift 的同款手感。
+                    const ordered = [...recentLangs.filter((l) => LANGS.includes(l)), ...LANGS.filter((l) => !recentLangs.includes(l))]
+                    for (const l of known ? ordered : [lang, ...ordered]) {
                       const o = document.createElement('option')
                       o.value = l
                       o.textContent = l
@@ -112,6 +153,11 @@ export function codeBlockPlugin() {
                     sel.value = lang
                     sel.addEventListener('change', () => {
                       const at = nodeAt()
+                      if (sel.value) {
+                        const i = recentLangs.indexOf(sel.value)
+                        if (i >= 0) recentLangs.splice(i, 1)
+                        recentLangs.unshift(sel.value)
+                      }
                       if (at === null) return
                       const n = view.state.doc.nodeAt(at)
                       if (n?.type.name === 'code_block') {
@@ -141,11 +187,30 @@ export function codeBlockPlugin() {
                       const at = nodeAt()
                       if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at }))
                     })
-                    bar.append(sel, copy, wrap)
+                    // 行号(与折行互斥:软换行没有自己的号,开着折行时行号必然错位)
+                    const nums = document.createElement('button')
+                    nums.className = `amx-code-btn${isNo ? ' on' : ''}`
+                    nums.textContent = isNo ? '取消行号' : '行号'
+                    nums.title = isWrap ? '折行开着时不显示行号(软换行无独立行号)' : '切换行号(视图态,不改内容)'
+                    nums.disabled = isWrap
+                    nums.addEventListener('click', () => {
+                      const at = nodeAt()
+                      if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'lineno' }))
+                    })
+                    // 折叠(限高 8 行 + 底部渐隐,AFFiNE 同款)
+                    const fold = document.createElement('button')
+                    fold.className = `amx-code-btn${isCollapsed ? ' on' : ''}`
+                    fold.textContent = isCollapsed ? '展开' : '折叠'
+                    fold.title = '折叠代码块(限高 8 行,视图态)'
+                    fold.addEventListener('click', () => {
+                      const at = nodeAt()
+                      if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'collapse' }))
+                    })
+                    bar.append(sel, copy, wrap, nums, fold)
                     return bar
                   },
                   // key 带语言与折行态:变更即重建(select 值/按钮态才会刷新)
-                  { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ct${pos}:${lang}:${isWrap ? 1 : 0}` },
+                  { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ct${pos}:${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}` },
                 ),
               )
               return false

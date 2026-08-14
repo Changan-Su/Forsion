@@ -9,7 +9,7 @@ import { Selection, type Transaction } from '@milkdown/kit/prose/state'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import type { EditorView } from '@milkdown/kit/prose/view'
 
-export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold'
+export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | 'quote' | 'fold' | 'code' | 'math'
 
 /**
  * 折叠块的落盘形态 = Obsidian 折叠 callout(`> [!fold]- 标题` + 内容行同样带 `> ` 前缀)。
@@ -27,6 +27,8 @@ export interface Trigger {
   level?: number
   order?: number
   checked?: boolean
+  /** code 专用:围栏后的语言(```py → 'py');空串 = 纯文本。 */
+  lang?: string
 }
 
 /** 光标前的行内文本;leaf 节点占 1 位占位符,保证字符串下标 == 文档偏移(行内有图片/公式也不错位)。 */
@@ -45,6 +47,9 @@ export function matchTrigger(before: string): Trigger | null {
   // `|` = 引用,`>` = 折叠(Notion 手感;用户 2026-07-29 定的键位)。落盘两者都还是 `>` 开头的合法 md。
   if (b === '|') return { kind: 'quote' }
   if (b === '>') return { kind: 'fold' }
+  // ```lang → 代码块(语言即 fence info,落盘就是原生 md);$$ → 行内公式骨架。
+  if ((m = /^```([A-Za-z0-9+#._-]*)$/.exec(b))) return { kind: 'code', lang: m[1] }
+  if (b === '$$') return { kind: 'math' }
   return null
 }
 
@@ -249,6 +254,43 @@ export function applyTrigger(
     const idx = $blk.index(-1)
     if (!$blk.node(-1).canReplaceWith(idx, idx + 1, target)) return false
     tr.setBlockType($blk.before(), $blk.after(), target, trig.kind === 'heading' ? { level: trig.level ?? 1 } : undefined)
+    view.dispatch(tr.scrollIntoView())
+    return true
+  }
+
+  if (trig.kind === 'code' || trig.kind === 'math') {
+    // ⚠️ 每一步都要在**当前 tr.doc** 上重解析:consume 已经删过触发符,拿删之前的 $blk 算
+    // before()/after() 会越界(实测 "Position 9 out of range",且余文被塞进代码块里)。
+    const codeType = schema.nodes.code_block
+    if (trig.kind === 'code' && !codeType) return false
+    // ⚠️ list_item 的 content 是 `paragraph block*` —— code_block 当不了首子。直接 replaceWith
+    //    会被 PM Fitter 自动补一个空 paragraph 再放代码块,于是「余文段落插到了代码块之前」+
+    //    光标落进那个凭空多出来的空段(评审实测)。与 heading/text 分支同一套解法:先脱出容器。
+    let $b = tr.doc.resolve(pos)
+    if (trig.kind === 'code' && inAny($b, ['list_item', 'blockquote'])) {
+      pos = liftOutOfWrappers(tr, pos, ['list_item', 'blockquote'])
+      $b = tr.doc.resolve(pos)
+    }
+    if (!$b.parent.isTextblock) return false
+    // 行尾余文:光标之后剩下的字要切成**这个块之后**的一个新段落(AFFiNE 同),不能被吞掉。
+    const rest = tr.doc.textBetween($b.pos, $b.end(), '\n', '\n')
+    if (rest) tr.delete($b.pos, $b.end())
+    $b = tr.doc.resolve(tr.mapping.map(pos))
+    const blkFrom = $b.before()
+    const blkTo = $b.after()
+    let afterBlock: number
+    if (trig.kind === 'math') {
+      // 公式骨架 `$$  $$` 落在同一段里(两个 delimiter 同处一个 textblock,实况预览才扫得到成对)。
+      tr.insertText('$$  $$', blkFrom + 1)
+      tr.setSelection(Selection.near(tr.doc.resolve(blkFrom + 4)))
+      afterBlock = tr.mapping.map(blkTo)
+    } else {
+      const code = codeType!.create({ language: trig.lang || null })
+      tr.replaceWith(blkFrom, blkTo, code)
+      tr.setSelection(Selection.near(tr.doc.resolve(blkFrom + 1)))
+      afterBlock = blkFrom + code.nodeSize
+    }
+    if (rest) tr.insert(afterBlock, paragraph.create(null, schema.text(rest)))
     view.dispatch(tr.scrollIntoView())
     return true
   }
