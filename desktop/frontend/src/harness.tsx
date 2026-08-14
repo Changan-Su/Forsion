@@ -2,7 +2,7 @@
 // 真浏览器裸挂 MarkdownBlock,给 Playwright 自动化实测 slash / markdown 触发层用。
 // window.__harness 暴露块状态供断言;不进产物(electron-vite build 只打 index.html)。
 import type React from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
 import './styles/base.css'
@@ -15,19 +15,23 @@ import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { AmadeusDashboardView } from './views/AmadeusDashboardView'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
+import { applyTheme as applyRealTheme } from './theme/loader'
+import { resolveInitialLang, resolveInitialSkin } from './theme/registry'
+import { setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
 import { ModelPill } from './components/ModelPill'
 import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
-import { addRibbonIcon, registerView, useRibbonStore, useWorkspace } from '@lcl/engine'
+import { addRibbonIcon, installHotkeys, registerView, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
-import { usePageStore } from './amadeus/store/pageStore'
+import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
+import { UnifiedSpikeHarness } from './amadeus/unified/UnifiedSpike'
 
 // ExcalidrawEmbed 平时干这件事;harness 直挂画布,得自己设(否则字体去 CDN 拉,CSP 拦)。
 ;(window as unknown as { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = new URL('excalidraw/', document.baseURI).href
@@ -138,6 +142,103 @@ function MindmapHarness() {
   )
 }
 
+// ── ?canvasplug 模式:与 ?mindmap 同构,验外置**画布**插件(forsion-plugin-canvas)的整条接缝:
+//    new Function 装载 → registerFileType('.canvas.md') → 插件文件视图 → ctx.app.mountBlocks 真块卡片。
+//    种 3 个真块(b1/b2 已放置、b3 未放置)+ 1 条连线 + 1 个矩形。见 scripts/canvas.e2e.cjs。
+const CV_FILE = 'Harness.canvas.md'
+
+function CanvasPlugHarness() {
+  const loaded = usePluginStore((s) => s.activeIds.length > 0)
+  const leaf = { id: 'cv-harness', params: { filePath: CV_FILE }, setTitle: () => {} }
+  return (
+    <div className="amadeus-root am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0 }}>
+      {loaded ? <AmadeusPluginFileView {...({ leaf, params: leaf.params } as unknown as ViewProps)} /> : <div>等待注入插件产物…</div>}
+    </div>
+  )
+}
+
+// ── ?plugview 模式:通用外置插件视图台架。真插件宿主(new Function('ctx', code))+ 真 ctx +
+//    真 UI 壳(.amadeus-root.am-app + 真 theme/loader.applyTheme,深浅可切),把插件 registerView 注册的视图挂进来。
+//    ⚠️容器**不带 .tangu-lovable**:那是旧 LCL 词表层(选择子 [data-skin='lovable'|'echo'…] 在现行
+//    registry 里永不命中),挂上它等于把一整套**浅色** token 钉死在容器上 —— 深色档量到的低对比是假的。
+//    与 ?mindmap 的区别:那个专验块表面 seam,这个不认识任何具体插件 —— 任意插件的 main.js 注进来
+//    就能截图/点按/切语言,是「插件也要过真机 UIUX」这条纪律的仪器。见 scripts/plugin-view.e2e.cjs。
+function PlugViewHarness() {
+  const views = usePluginStore((s) => s.views)
+  const [mode, setMode] = useState<'light' | 'dark'>('light')
+  const [viewId, setViewId] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), 'light')
+    const w = window as unknown as { __pv: Record<string, unknown> }
+    w.__pv = {
+      ...(w.__pv ?? {}),
+      // 明暗/配色必须走真 applyTheme:token 的选择子是 <html> 上的 [data-theme]×[data-skin]×.dark,
+      // 只给容器加 data-mode 只能拿到半套变量(= 假的低对比告警)。
+      setMode: (m: 'light' | 'dark') => { applyRealTheme(resolveInitialLang(), resolveInitialSkin(), m); setMode(m) },
+      setSkin: (skin: string, m?: 'light' | 'dark') => { applyRealTheme(resolveInitialLang(), skin, m ?? mode); setNonce((n) => n + 1) },
+      /** 切语言:走真广播(ctx.subscribeLocale)。**刻意不重挂视图** —— 界面要跟着变,
+       *  靠的必须是插件自己订了语言变更,而不是台架替它重建 DOM。 */
+      setLocale: (l: 'zh' | 'en') => setLocaleGlobal(l),
+      open: (id: string) => { setViewId(id); setNonce((n) => n + 1) },
+      remount: () => setNonce((n) => n + 1),
+      /** 插件到底贡献了什么(断言「SPEC 点名的贡献点齐全」用)。 */
+      contributions: () => {
+        const s = usePluginStore.getState()
+        return {
+          views: s.views.map((o) => ({ pluginId: o.pluginId, id: o.item.id, title: o.item.title })),
+          commands: s.commands.map((o) => ({ id: o.item.id, title: o.item.title })),
+          slashItems: s.slashItems.map((o) => ({ id: o.item.id, label: o.item.label })),
+          settings: s.settings.map((o) => ({ key: o.item.key, label: o.item.label, type: o.item.type })),
+          statusItems: s.statusItems.map((o) => ({ id: o.item.id, text: o.item.text })),
+          fileTypes: s.fileTypes.map((o) => ({ id: o.item.id, extensions: o.item.extensions })),
+          fileCreators: s.fileCreators.map((o) => ({ id: o.item.id, label: o.item.label })),
+        }
+      },
+      run: (commandId: string) => {
+        const c = usePluginStore.getState().commands.find((o) => o.item.id === commandId)
+        if (!c) throw new Error(`no such command: ${commandId}`)
+        c.item.run()
+      },
+    }
+  }, [])
+
+  // 插件注进来后自动开第一个视图(单视图插件的常见情况,e2e 不必先问 id)
+  useEffect(() => {
+    if (!viewId && views.length) setViewId(views[0].item.id)
+  }, [views, viewId])
+
+  useEffect(() => {
+    const el = hostRef.current
+    const v = views.find((o) => o.item.id === viewId)
+    if (!el || !v) return
+    el.textContent = ''
+    let cleanup: (() => void) | void
+    try {
+      cleanup = v.item.mount(el)
+    } catch (e) {
+      ;(window as unknown as { __pvError?: string }).__pvError = String(e)
+      throw e
+    }
+    return () => {
+      try { cleanup?.() } catch (e) { console.error('[plugview] cleanup failed', e) }
+    }
+  }, [views, viewId, nonce])
+
+  return (
+    <div
+      className="amadeus-root am-app"
+      data-mode={mode}
+      style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}
+    >
+      <div ref={hostRef} data-tag="pv-host" style={{ flex: 1, minHeight: 0, overflow: 'auto' }} />
+      <AskStringHost />
+    </div>
+  )
+}
+
 // ── ?dashboard 模式:真 AmadeusDashboardView + 真 pageStore + 真 BlockHost,种一张 3 卡片的仪表盘。
 //    纯逻辑(格子几何 / frontmatter 编解码 / 冲突判定)已由 shared/amadeus/dashboard.test.ts 钉死;
 //    这里钉的是**单测看不见的那一层**:CSS Grid 把 [x,y,w,h] 摆到哪里、指针位移换算成几格、
@@ -173,18 +274,21 @@ function DashHarness() {
 //    纯逻辑归 shared/amadeus/excalidraw/board.test.ts,CSS 契约归 scripts/board-paper.check.cjs。
 function BoardHarness() {
   const [settings, setSettings] = useState<BoardSettings>({ ...DEFAULT_BOARD })
+  // 深色档要能切:网格层在深色下换的是 mix-blend-mode(multiply → screen),而混合的结果只有截图看得见。
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
   useEffect(() => {
     // 合并式:仪器只传改动的字段,别因为漏写新字段把设置打成 undefined
     ;(window as unknown as { __board: unknown }).__board = {
       setSettings: (patch: Partial<BoardSettings>) => setSettings((s) => ({ ...s, ...patch })),
+      setTheme,
     }
   }, [])
   return (
-    <div className="am-app tangu-lovable amx-pane amx-drawview" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+    <div className="am-app tangu-lovable amx-pane amx-drawview" data-mode={theme} data-flat="0" style={{ position: 'fixed', inset: 0 }}>
       <div className="amx-draw">
         <ExcalidrawCanvas
           initialData={{ elements: [], appState: { viewBackgroundColor: '#ffffff' } }}
-          theme="light"
+          theme={theme}
           langCode="en"
           settings={settings}
           onSettings={(patch) => setSettings((s) => ({ ...s, ...patch }))}
@@ -254,11 +358,17 @@ if (new URLSearchParams(location.search).has('dock')) {
   }
   createRoot(document.getElementById('root')!).render(<DockHarness />)
 } else if (new URLSearchParams(location.search).has('ribbon')) {
+  // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
+  const hits: string[] = []
+  ;(window as unknown as { __rbHits: string[] }).__rbHits = hits
   const mk = (id: string, side: 'top' | 'bottom', name: string): void =>
-    addRibbonIcon({ id, side, icon: Square, tooltip: () => name, onClick: () => {} })
+    addRibbonIcon({ id, side, icon: Square, tooltip: () => name, onClick: () => hits.push(id) })
   for (const n of ['A', 'B', 'C', 'D']) mk(`t${n}`, 'top', `Top ${n}`)
   for (const n of ['A', 'B', 'C']) mk(`b${n}`, 'bottom', `Bot ${n}`)
   useRibbonStore.setState({ order: ['tA', 'tB', 'tC', 'tD'], bottomOrder: ['bA', 'bB', 'bC'] })
+  installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装
+  // 快捷键提示的符号按 data-platform 走(宿主启动时写);仪器钉死 mac 一路,断言才不看 CI 跑在什么系统上。
+  document.documentElement.dataset.platform = 'mac'
   ;(window as unknown as { __rb: typeof useRibbonStore }).__rb = useRibbonStore
   createRoot(document.getElementById('root')!).render(<RibbonHarness />)
 } else if (new URLSearchParams(location.search).has('modelpill')) {
@@ -316,7 +426,10 @@ if (new URLSearchParams(location.search).has('dock')) {
 } else if (new URLSearchParams(location.search).has('mindmap')) {
   const iso = new Date().toISOString()
   const mm = JSON.stringify({ b2: { p: 'b1' }, b3: { p: 'b1' } }) // b2/b3 是 b1 的子节点
-  usePageStore.setState({
+  // 2026-08-14 seam scope 化:真宿主(AmadeusPluginFileView)会给插件发绑定 `plug:<leaf.id>` 作用域的
+  // per-view surface —— 台架必须把状态种进**那个 scope 的 store**,种门面等于种给别人(插件读不到)。
+  const mmStore = pageStoreFor('plug:mm-harness')
+  mmStore.setState({
     activePage: 'Harness.mindmap.md',
     vaultRoot: '/harness',
     status: 'ready',
@@ -343,7 +456,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   })
   ;(window as unknown as { __mm: unknown }).__mm = {
-    store: usePageStore,
+    store: mmStore,
     /** e2e 注入外置插件的构建产物(main.js 原文)。走的是真 setup 路径:new Function('ctx', code)。 */
     loadPlugin(code: string) {
       usePluginStore.getState().init([
@@ -361,6 +474,102 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   }
   createRoot(document.getElementById('root')!).render(<MindmapHarness />)
+} else if (new URLSearchParams(location.search).has('canvasplug')) {
+  const iso = new Date().toISOString()
+  // 同 ?mindmap:状态种进 per-view scope(plug:cv-harness),走真宿主发的 surface。
+  const cvStore = pageStoreFor('plug:cv-harness')
+  const cvfm = JSON.stringify({
+    v: 1,
+    n: { b1: { x: 40, y: 40 }, b2: { x: 420, y: 60, w: 340 } }, // b3 刻意不放置(验「未放置列」)
+    e: [{ a: 'b1', b: 'b2', label: '关联' }],
+    s: [{ id: 's1', t: 'rect', x: 40, y: 300, w: 200, h: 100 }],
+  })
+  cvStore.setState({
+    activePage: CV_FILE,
+    vaultRoot: '/harness',
+    status: 'ready',
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-cv',
+      title: 'CV Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: {
+        type: 'stack',
+        children: [
+          { type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: 'b1' }, { ref: 'b2' }, { ref: 'b3' }] }] },
+        ],
+      },
+      blocks: { b1: { type: 'markdown' }, b2: { type: 'markdown' }, b3: { type: 'markdown' } },
+      // 哨兵键:fmExtra 是公共空间,画布的每次外科写都不许动别人的键(用户手写的 + 其它插件的)。
+      // e2e 尾部逐字断言这两行幸存 —— 没有哨兵,整对象重写类回归会假绿(Codex P2)。
+      fmExtra: `custom_note: 用户手写的键要幸存\nother_plugin: '{"keep":1}'\ncanvas: '${cvfm}'`,
+    },
+    blocks: {
+      b1: { id: 'b1', type: 'markdown', content: '中心卡片' },
+      b2: { id: 'b2', type: 'markdown', content: '第二卡片' },
+      b3: { id: 'b3', type: 'markdown', content: '游离卡片' },
+    },
+  })
+  ;(window as unknown as { __cv: unknown }).__cv = {
+    store: cvStore,
+    /** e2e 注入外置插件的构建产物(main.js 原文)。走的是真 setup 路径:new Function('ctx', code)。 */
+    loadPlugin(code: string) {
+      usePluginStore.getState().init([
+        {
+          id: 'canvas',
+          name: '画布',
+          version: 'harness',
+          setup: (ctx) => {
+            const fn = new Function('ctx', code) as (c: unknown) => unknown
+            const d = fn(ctx)
+            return typeof d === 'function' ? (d as () => void) : undefined
+          },
+        },
+      ])
+    },
+  }
+  createRoot(document.getElementById('root')!).render(<CanvasPlugHarness />)
+} else if (new URLSearchParams(location.search).has('plugview')) {
+  // 种一页真块:插件若用块表面(getPage/mountBlocks/insertBlockAfter)在台架里也成立。
+  const iso = new Date().toISOString()
+  usePageStore.setState({
+    activePage: 'Harness.md',
+    vaultRoot: '/harness',
+    status: 'ready',
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-pv',
+      title: 'PlugView Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: 'b1' }] }] }] },
+      blocks: { b1: { type: 'markdown' } },
+      fmExtra: '',
+    },
+    blocks: { b1: { id: 'b1', type: 'markdown', content: '台架页首块' } },
+  })
+  ;(window as unknown as { __pv: Record<string, unknown> }).__pv = {
+    /** e2e 注入外置插件的构建产物(main.js 原文)。走的是真 setup 路径:new Function('ctx', code)。
+     *  一次页面加载只装一个插件(pluginStore.init 有 initialized 闸)—— e2e 每个插件开一页。 */
+    loadPlugin(code: string, meta?: { id?: string; name?: string }) {
+      usePluginStore.getState().init([
+        {
+          id: meta?.id || 'harness-plugin',
+          name: meta?.name || meta?.id || 'harness-plugin',
+          version: 'harness',
+          setup: (ctx) => {
+            const fn = new Function('ctx', code) as (c: unknown) => unknown
+            const d = fn(ctx)
+            return typeof d === 'function' ? (d as () => void) : undefined
+          },
+        },
+      ])
+    },
+  }
+  createRoot(document.getElementById('root')!).render(<PlugViewHarness />)
 } else if (new URLSearchParams(location.search).has('embed')) {
   // ── ?embed 模式:真 PageView + 真 BlockHost,种几个嵌入块(图片 / PDF / 未知文件)。
   //    验的是块级「查看源码」`</>`:悬停浮现 → 点击进 EmbedSourceLine → 失焦复渲染。
@@ -430,6 +639,78 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   })
   createRoot(document.getElementById('root')!).render(<DndHarness />)
+} else if (new URLSearchParams(location.search).has('upage')) {
+  // ── ?upage 模式:UnifiedPage 生产组件全链(读 → 编辑 → 防抖落盘 → 外部回灌事务)。
+  //    window.amadeus 的四个面用内存 vault 顶替 —— harnessBridge 的对象是可变的,api.ts
+  //    抓的是同一引用。见 scripts/unified-page.check.cjs。
+  const g = window as unknown as { amadeus?: Record<string, unknown> }
+  const vault = new Map<string, string>()
+  const seedMd = new URLSearchParams(location.search).get('useed') ?? '# 外来标题\n\n第一段。\n\n第二段。\n'
+  vault.set('Unified.md', seedMd)
+  const writes: Array<{ path: string; text: string }> = []
+  const listeners = new Set<(p: string) => void>()
+  Object.assign(g.amadeus ?? (g.amadeus = {}), {
+    readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
+    writeTextFile: (p: string, text: string) => {
+      vault.set(p, text)
+      writes.push({ path: p, text })
+      return Promise.resolve()
+    },
+    onExternalChange: (cb: (p: string) => void) => {
+      listeners.add(cb)
+      return () => listeners.delete(cb)
+    },
+    saveAttachment: () => Promise.reject(new Error('harness: no attachments')),
+    resolveEmbed: () => Promise.resolve(null), // 跨笔记嵌入一律「未解析」(embedLayer 仪器用)
+    renamePageFile: (p: string, next: string) => {
+      const dir = p.split('/').slice(0, -1).join('/')
+      const np = (dir ? dir + '/' : '') + next + '.md'
+      if (np !== p) {
+        vault.set(np, vault.get(p) ?? '')
+        vault.delete(p)
+      }
+      return Promise.resolve(np)
+    },
+  })
+  const upageProbe: Record<string, unknown> = {}
+  ;(window as unknown as { __upage: unknown }).__upage = {
+    vault,
+    writes,
+    probe: upageProbe,
+    fire(path: string, text: string) {
+      vault.set(path, text)
+      for (const cb of listeners) cb(path)
+    },
+    // 源码/可视模式开关(P16 源码 textarea 撑高仪器):生产里在 uiOverlayStore,这里透传。
+    setEditorMode(m: 'wysiwyg' | 'source') {
+      void import('./amadeusOverlayStore').then(({ useUiOverlay }) => useUiOverlay.setState({ editorMode: m }))
+    },
+  }
+  void import('./amadeus/unified/UnifiedPage').then(({ UnifiedPage }) => {
+    // 改名重挂载宿主壳:镜像 amadeusViews 的 leaf 行为(onRenamed → 换参数,实例随 key 重建)。
+    function UPageHost(): React.ReactElement {
+      const [st, setSt] = useState({ path: 'Unified.md', initial: seedMd })
+      return (
+        <UnifiedPage
+          key={st.path}
+          path={st.path}
+          initial={st.initial}
+          probe={upageProbe}
+          onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
+        />
+      )
+    }
+    createRoot(document.getElementById('root')!).render(
+      <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+        <UPageHost />
+      </div>,
+    )
+  })
+} else if (new URLSearchParams(location.search).has('unified')) {
+  // ── ?unified 模式:v4 统一实例 spike(整篇一个 Milkdown 实例,spec §9 step 1)。
+  //    验三关:回灌=事务不重挂 / callout 整只带入+光标离开收回 / PM 原生 Enter=Notion 语义。
+  //    种子经 ?useed=<md> 注入(别占 ?seed —— 默认 harness 用它)。见 scripts/unified-spike.check.cjs。
+  createRoot(document.getElementById('root')!).render(<UnifiedSpikeHarness />)
 } else if (new URLSearchParams(location.search).has('dnd')) {
   const iso = new Date().toISOString()
   usePageStore.setState({

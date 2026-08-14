@@ -11,6 +11,7 @@ import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending } from '../stores/pluginOnboardingStore'
 import { useI18n } from '../i18n'
+import { pluginDisplayName, pluginDisplayDescription } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { setPluginEnabled, type PluginInfo } from '../services/backendService'
@@ -215,7 +216,7 @@ const PluginDetail: React.FC<{
   onEngineReload?: () => void
   enginePlugins?: PluginInfo[] | null
 }> = ({ plugin: p, onBack, cfg, onEngineReload, enginePlugins }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const activeIds = usePluginStore((s) => s.activeIds)
   const toggle = usePluginStore((s) => s.toggle)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
@@ -230,7 +231,7 @@ const PluginDetail: React.FC<{
     void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins)
   }
   const uninstall = async (): Promise<void> => {
-    if (!window.confirm(t('settings.amadeusPlugins.uninstallConfirm', { name: p.name }))) return
+    if (!window.confirm(t('settings.amadeusPlugins.uninstallConfirm', { name: pluginDisplayName(p, locale) }))) return
     const ids = p.bundle?.enginePlugins ?? []
     // 先级联关停内嵌引擎插件(尽力):目录一删设置落点就没了,先关能让工具即刻对模型不可见
     if (cfg) for (const id of ids) await setPluginEnabled(cfg, id, false).catch(() => {})
@@ -249,11 +250,11 @@ const PluginDetail: React.FC<{
       const st = await window.tangu?.backendRestart?.().catch(() => null)
       onEngineReload?.()
       if (!st || st.state === 'crashed') {
-        useApp.getState().toast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: p.name }), true)
+        useApp.getState().toast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
         return
       }
     }
-    useApp.getState().toast(t('settings.amadeusPlugins.uninstalled', { name: p.name }))
+    useApp.getState().toast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
   }
 
   return (
@@ -266,7 +267,7 @@ const PluginDetail: React.FC<{
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <b style={{ fontSize: 15 }}>{p.name}</b>
+            <b style={{ fontSize: 15 }}>{pluginDisplayName(p, locale)}</b>
             <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
             <span style={badge}>{p.builtin ? t('settings.amadeusPlugins.builtin') : t('settings.amadeusPlugins.external')}</span>
             {p.blocked && (
@@ -277,7 +278,7 @@ const PluginDetail: React.FC<{
             )}
             <BundleChips p={p} />
           </div>
-          {p.description && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 3 }}>{p.description}</div>}
+          {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 3 }}>{pluginDisplayDescription(p, locale)}</div>}
         </div>
         {p.onboarding && !p.blocked && (
           <button className="btn ghost sm" onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
@@ -352,7 +353,7 @@ export const AmadeusPluginsTab: React.FC<{
   /** 引擎插件清单(SettingsModal 下传):级联时识别首方内置同 id,绝不去动它们。 */
   enginePlugins?: PluginInfo[] | null
 }> = ({ cfg, onEngineReload, enginePlugins }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
   const toggle = usePluginStore((s) => s.toggle)
@@ -385,7 +386,7 @@ export const AmadeusPluginsTab: React.FC<{
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <b style={{ fontSize: 13 }}>{p.name}</b>
+              <b style={{ fontSize: 13 }}>{pluginDisplayName(p, locale)}</b>
               <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
               {p.blocked && (
                 <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
@@ -395,7 +396,7 @@ export const AmadeusPluginsTab: React.FC<{
               )}
               <BundleChips p={p} />
             </div>
-            {p.description && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{p.description}</div>}
+            {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{pluginDisplayDescription(p, locale)}</div>}
           </div>
           <input
             type="checkbox"

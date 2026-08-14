@@ -15,6 +15,7 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { openNote, openDb, openPdf, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
 import { openDailyNote } from '../amadeusTemplates'
 import { useI18n } from '../i18n'
+import { pluginDisplayName } from '../amadeus/plugins/display'
 import { openBrowser, openTerminal } from '../builtins'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
@@ -23,7 +24,7 @@ import { useShallow } from 'zustand/react/shallow'
 interface Item { key: string; icon: ReactNode; label: string; run: () => void; show: boolean; drag?: { type: string; params?: Record<string, unknown> } }
 
 export function NewTabView({ leaf }: ViewProps) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const zh = document.documentElement.lang.startsWith('zh')
   const s = useApp(useShallow((state) => ({
     specialEnabled: state.specialEnabled,
@@ -110,7 +111,7 @@ export function NewTabView({ leaf }: ViewProps) {
   const pluginGroups: { pluginId: string; name: string; items: Item[] }[] = []
   const groupFor = (pluginId: string): { pluginId: string; name: string; items: Item[] } => {
     let g = pluginGroups.find((x) => x.pluginId === pluginId)
-    if (!g) { g = { pluginId, name: plugins.find((p) => p.id === pluginId)?.name || pluginId, items: [] }; pluginGroups.push(g) }
+    if (!g) { g = { pluginId, name: (() => { const pp = plugins.find((p) => p.id === pluginId); return pp ? pluginDisplayName(pp, locale) : pluginId })(), items: [] }; pluginGroups.push(g) }
     return g
   }
   for (const o of pluginViews) {

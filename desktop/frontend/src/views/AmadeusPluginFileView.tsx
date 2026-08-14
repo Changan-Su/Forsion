@@ -6,7 +6,8 @@ import { useEffect, useRef } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '../amadeus/store/pageStore'
-import { usePluginStore, findFileType, fileTypeBaseName } from '../amadeus/plugins/pluginStore'
+import { usePluginStore, findFileType, fileTypeBaseName, addPluginViewTeardown } from '../amadeus/plugins/pluginStore'
+import { createPluginViewSurface } from '../amadeus/plugins/viewSurface'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
 import { openFile } from '../amadeusNav'
 
@@ -34,12 +35,26 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
   }, [filePath])
 
   useEffect(() => {
-    const el = hostRef.current
-    if (!el || !filePath || !ft) return
-    el.textContent = ''
+    const host = hostRef.current
+    if (!host || !filePath || !ft) return
+    // 每次挂载发一个**新的子容器**:插件普遍裸 createRoot(el) + 微任务延迟 unmount,同一 el 复用会
+    // 撞出「重挂建第二个 root + 旧 root 延迟卸载对已摘除节点抛错」(评审 P2)。子容器一次一个,
+    // 旧容器随旧 root 的延迟卸载自清自摘,互不相干。
+    host.textContent = ''
+    const el = document.createElement('div')
+    el.className = 'amx-pluginfile-mount'
+    el.style.height = '100%' // 插件根(amx-pane)按父高铺满,中间容器不能塌成 auto
+    host.appendChild(el)
+    // per-view 页表面(scope 化,2026-08-14):这个 tab 拿自己的 pageStore 作用域,与编辑器面板
+    // 并存编辑。scope 用 leaf.id 前缀化 —— 与编辑器面板的 scope(裸 leaf.id)同一命名空间但不撞。
+    // 吊销双保险:视图卸载走本 effect 的 cleanup;插件禁用走 pluginStore.teardown 的同步吊销
+    // (fileTypes 一变 ft 就换 → 本 effect 也会重跑,但那是下一拍,空窗期不能留)。
+    const pluginId = usePluginStore.getState().fileTypes.find((o) => o.item === ft)?.pluginId ?? 'unknown'
+    const vs = createPluginViewSurface(pluginId, `plug:${leaf.id}`, ft.extensions ?? [])
+    const dereg = addPluginViewTeardown(pluginId, vs.dispose)
     let cleanup: (() => void) | void
     try {
-      cleanup = ft.mount(el, { filePath })
+      cleanup = ft.mount(el, { filePath, surface: vs.surface })
     } catch (e) {
       console.error('[amadeus] 插件文件视图挂载失败', e)
     }
@@ -49,8 +64,13 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
       } catch {
         /* ignore */
       }
+      dereg()
+      vs.dispose()
+      // 微任务后再摘容器:插件的延迟 unmount 还要在它身上跑一拍(直接 remove 会让 React 卸到
+      // 已摘除的节点上,历史上会抛 removeChild 错)。
+      queueMicrotask(() => queueMicrotask(() => el.remove()))
     }
-  }, [filePath, ft, vaultRoot])
+  }, [filePath, ft, vaultRoot]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!filePath) return <div className="amx-draw-state">未指定文件。</div>
   if (!ft) return <div className="amx-draw-state">没有已启用的插件能打开「{filePath}」。</div>

@@ -18,6 +18,7 @@ import { createBlockSurface } from './blockSurface'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
+import { currentLocale, subscribeLocale } from '../../i18n'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -86,18 +87,50 @@ function sanitizeFolderName(name: string, fallback: string): string {
   return s || fallback
 }
 
+/** 路径归一:主进程在 Windows 上用 `path.relative()` 返回 `\` 分隔 —— 平台差异不许传给第三方插件
+ *  (仓库自己为此打过补丁,见 amadeus/lib/fd.ts)。 */
+const toSlash = (p: string): string => String(p ?? '').replace(/\\/g, '/')
+
+/** 枚举是**整库递归扫盘 + 排序 + 跨进程传输**,「插件自己分页」减不掉这份成本(codex 评审指出)。
+ *  多个插件在同一屏内反复要清单是常态,这里做 single-flight + 1.5s 短缓存:并发合成一次调用,
+ *  刚拿到的结果短时间内复用。缓存**不跨库**:pageStore 的 vaultRoot 变了立刻作废。 */
+const listCache: Record<'pages' | 'files', { at: number; root: string; p: Promise<string[]> } | undefined> = {
+  pages: undefined,
+  files: undefined,
+}
+function listCached(kind: 'pages' | 'files'): Promise<string[]> {
+  const fn = kind === 'pages' ? amadeus?.listPages : amadeus?.listFiles
+  if (!fn) return Promise.resolve([])
+  const root = usePageStore.getState().vaultRoot || ''
+  const hit = listCache[kind]
+  if (hit && hit.root === root && Date.now() - hit.at < 1500) return hit.p
+  const p = Promise.resolve(fn.call(amadeus))
+    .then((xs) => (xs || []).map(toSlash))
+    .catch(() => []) // 没有活动库时主进程 requireRoot() 会抛 —— 统一成空数组
+  listCache[kind] = { at: Date.now(), root, p }
+  return p
+}
+
 /** 每个插件一份 app API。块表面是**可吊销**的(见 blockSurface.tsx 的信任边界说明):
  *  teardown 时调 revoke,插件开的订阅/挂的 React root 一并收掉,之后它在飞的异步任务也改不动用户文件。 */
 function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
   const surface = createBlockSurface(pluginId)
+  // 块表面有 alive 闸,ctx.app 的**直通副作用面**(写盘/换页/开文件)此前没有 —— 插件禁用后残留的
+  // setTimeout / 在飞 promise 照样能 writeFile 落盘,与 teardown 注释「收完 API 整体变哑」直接矛盾
+  // (评审 P1,2026-08-14)。同款纪律补齐:吊销后副作用方法变 no-op 并说一声。
+  let alive = true
+  const ok = (): boolean => {
+    if (!alive) console.warn(`[amadeus] 插件 ${pluginId} 已停用,ctx.app 副作用调用被忽略`)
+    return alive
+  }
   const api: PluginAppApi = {
     getActivePage: () => usePageStore.getState().activePage,
     getActivePageText: () =>
       Object.values(usePageStore.getState().blocks)
         .map((b) => b.content)
         .join('\n\n'),
-    loadPage: (p) => void usePageStore.getState().loadPage(p),
-    createPage: () => void usePageStore.getState().createPage(),
+    loadPage: (p) => { if (ok()) void usePageStore.getState().loadPage(p) },
+    createPage: () => { if (ok()) void usePageStore.getState().createPage() },
     toggleMode: () => void toggleMode(),
     setTheme: (t) => applyAccent(t),
     openSearch: () => useUiStore.getState().setPalette('search'),
@@ -105,7 +138,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
-    writeFile: (p, text) => amadeus.writeTextFile(p, text),
+    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
     // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ 插件显示名。
     workFolder: () => {
       let v = ''
@@ -115,9 +148,30 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       return bad ? sanitizeFolderName(getName(), pluginId) : v
     },
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
-    openFile: (p) => { void import('../../amadeusNav').then((m) => m.openFile(p)) },
+    openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
+    // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。
+    // 三条统一语义 —— **桥缺席(web/台架未垫)或没有活动库都给空数组,绝不 reject**:
+    // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
+    // 也挡不住主进程 requireRoot() 抛。一半空值一半异常是最难写对的 API。
+    listPages: () => listCached('pages'),
+    listFiles: () => listCached('files'),
+    searchVault: async (q) => {
+      if (!amadeus?.search) return []
+      try {
+        const hits = await amadeus.search(String(q ?? ''))
+        return (hits || []).map((h) => ({ ...h, path: toSlash(h.path) }))
+      } catch { return [] }
+    },
+    // 库绝对路径:读渲染进程已有的 pageStore 状态,**不调 restoreVault**(那会重开库,有副作用)。
+    vaultRoot: () => usePageStore.getState().vaultRoot || null,
   }
-  return { api, revokeSurface: surface.revoke }
+  return {
+    api,
+    revokeSurface: () => {
+      alive = false
+      surface.revoke()
+    },
+  }
 }
 
 function injectThemeStyle(id: string, css: string): void {
@@ -160,8 +214,10 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
   return {
     id: src.id,
     name: src.name,
+    nameEn: src.nameEn,
     version: src.version,
     description: src.description,
+    descriptionEn: src.descriptionEn,
     builtin: false,
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
@@ -180,6 +236,24 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
   }
 }
 
+/** 插件文件后缀的形态判定(registerFileType 与 viewSurface 的 loadPage 闸共用)。 */
+export function isValidPluginExt(e: string): boolean {
+  if (!e.startsWith('.') || e.length < 2) return false
+  if (/\.md$/i.test(e)) return /^\.[^.].*\.md$/i.test(e) // md 类必须复合后缀 '.X.md'
+  return true
+}
+
+/** 视图级页表面(viewSurface)的吊销登记:插件禁用时 fileTypes 切片一变,React 重渲 → effect
+ *  cleanup 会把视图表面收掉,但那是**异步**的 —— teardown 里同步吊销才封死「禁用后在飞的插件
+ *  代码还能写文件」的空窗。视图正常卸载时自己 dereg,这里只兜插件层的收尸。 */
+const viewTeardowns = new Map<string, Set<() => void>>()
+export function addPluginViewTeardown(pluginId: string, fn: () => void): () => void {
+  let bucket = viewTeardowns.get(pluginId)
+  if (!bucket) viewTeardowns.set(pluginId, (bucket = new Set()))
+  bucket.add(fn)
+  return () => { viewTeardowns.get(pluginId)?.delete(fn) }
+}
+
 export const usePluginStore = create<PluginState>((set, get) => {
   // 每个插件一份 app API(块表面可吊销);teardown 时按 id 吊销。同 id 重新 enable 会覆盖成新的一份,
   // 旧 facade 已在 teardown 里吊销 → 旧代码持有的引用是哑的。
@@ -187,7 +261,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
   const makeContext = (pluginId: string): PluginContext => {
     revokers[pluginId]?.() // 防守:没经 teardown 就重建 context(setup 抛错后重试)也不留旧订阅
     const { api: appApi, revokeSurface } = makeAppApi(pluginId, () => get().plugins.find((p) => p.id === pluginId)?.name || pluginId)
-    revokers[pluginId] = revokeSurface
+    // 语言订阅与块表面同一条纪律:插件自己能退订,但**最终责任人是宿主** —— disable/reload/setup 抛错
+    // 一律统一收掉(codex 评审 2026-08-14)。
+    const localeUnsubs = new Set<() => void>()
+    revokers[pluginId] = () => {
+      revokeSurface()
+      for (const u of Array.from(localeUnsubs)) {
+        try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" locale unsubscribe failed`, e) }
+      }
+      localeUnsubs.clear()
+    }
     return {
     app: appApi,
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
@@ -232,7 +315,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
     registerFileType: (def) => {
       const exts = Array.isArray(def?.extensions) ? def.extensions : []
-      if (exts.length && exts.every((e) => isBuiltinFileType(String(e)))) {
+      // 形态闸:后缀必须 '.x' 起步;以 '.md' 收尾的必须是复合后缀('.X.md')。裸 '.md'、漏点 'md'、
+      // 空串这类声明会让 viewSurface 的 loadPage 后缀闸(endsWith 判定)对**所有笔记**敞开 ——
+      // 那道闸防的是「普通 v4/素 md 被拽进 v3 存储管线改写 = 毁档」(评审 P2,2026-08-14)。
+      if (!exts.length || !exts.every((e) => isValidPluginExt(String(e ?? '')))) {
+        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:后缀声明不合形态(须 '.x',md 类须复合后缀 '.X.md')`)
+        return false
+      }
+      if (exts.every((e) => isBuiltinFileType(String(e)))) {
         console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领`)
         return false
       }
@@ -245,6 +335,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`),
+    // 宿主 UI 当前语言(2026-08-14 起):插件自带双语词表,用它挑。只报变化,初值走 getLocale()。
+    getLocale: () => currentLocale(),
+    subscribeLocale: (cb) => {
+      const off = subscribeLocale(cb)
+      const wrapped = () => { off(); localeUnsubs.delete(wrapped) }
+      localeUnsubs.add(wrapped)
+      return wrapped
+    },
     // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
     registerSetting: (def) =>
       set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
@@ -279,6 +377,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       console.error(`[amadeus] plugin "${id}" block-surface revoke failed`, e)
     }
     revokers[id] = undefined
+    // 视图级表面同一条纪律:同步吊销,别等 React 的 effect cleanup(那是下一拍的事)。
+    for (const fn of Array.from(viewTeardowns.get(id) ?? [])) {
+      try { fn() } catch (e) { console.error(`[amadeus] plugin "${id}" view-surface revoke failed`, e) }
+    }
+    viewTeardowns.delete(id)
     for (const o of get().themes) if (o.pluginId === id) removeThemeStyle(o.item.id)
     for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
     unregisterPluginAchievements(id)
@@ -353,6 +456,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       } catch (e) {
         console.error(`[amadeus] plugin "${id}" setup failed`, e)
         useUiStore.getState().notify(`插件「${plugin.name}」加载失败`)
+        // 抛错前它可能已经订了块表面/语言 —— 这条分支原来漏收(codex 评审 2026-08-14),补上。
+        try { revokers[id]?.() } catch (err) { console.error(`[amadeus] plugin "${id}" revoke failed`, err) }
+        revokers[id] = undefined
         // setup 抛错前可能已注册了主题/成就/属性类型 —— 三者都有 store 外的副作用(注入的 <style>、成就注册表),
         // 只 filter zustand 状态会留下孤儿(禁用的插件主题仍挂在 head 上)。与 teardown 同口径全清。
         for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)

@@ -88,6 +88,47 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void
+
+  // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。
+  //    定位(codex 2026-08-14 评审的措辞,别写成「读写自然包含枚举」):这是把外置插件**本来就有的**
+  //    renderer ambient authority(它跑在主世界,`window.amadeus` 上的 listPages/listFiles/search 一直够得着)
+  //    正式收进受支持的 `ctx.app` 契约 —— 而不是新开一档权限。当前信任模型是「只装可信插件」,
+  //    不是严格的 capability sandbox。
+  //    全部可选:旧宿主没有 → 一律 `ctx.app.listPages?.()`,缺席时降级而不是抛错。
+  //    统一语义:**没有活动库 / 桥缺席 → 三条 list/search 一律给空数组(不 reject)**,vaultRoot 给 null。
+  //    路径一律 `/` 分隔(Windows 上主进程会返回 `\`,这层已归一)。
+
+  /** 页面(笔记)清单,vault 相对路径。插件声明为自定义文件类型的后缀已被主进程排除在外。**不截断**。 */
+  listPages?(): Promise<string[]>
+  /** **文件树可见的**非页面文件(附件 / 图片 / .db / PDF…),vault 相对路径。**不截断**。
+   *  ⚠️范围有洞,别声称「库里所有图片」:主进程的遍历跳过一切**点目录 / 点文件 / node_modules**,
+   *  所以经 `saveAsset()` 落进 `.amadeus/` 的页面附件**枚举不到**(codex 评审指出)。 */
+  listFiles?(): Promise<string[]>
+  /** **全库笔记**全文检索(主进程既有索引)。只索引 `listPages()` 那批笔记 —— 不搜附件、`.db`、
+   *  插件自定义文件类型。**最多 50 条且可能截断**,要穷举别靠它。
+   *  `line` 是剥掉 frontmatter/标记后的行号,**不是磁盘编辑坐标**;`score` 是不透明排序值,跨版本不保证稳定。 */
+  searchVault?(query: string): Promise<PluginSearchHit[]>
+  /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
+   *  run_bash)—— 它们跑在真实文件系统上,只有 vault 相对路径喂不进去。读的是渲染进程已有的
+   *  pageStore 状态,**不会重开库、无副作用**。
+   *  ⚠️**敏感信息**:里面可能有用户名、组织目录、Dropbox/iCloud 路径。插件**不得默认持久化、上报或写进遥测**;
+   *  这是「可信插件」契约的一部分,不是最小权限接口。
+   *  ⚠️**切库竞态**:本值来自渲染进程 store,而 list/search 来自主进程 —— 切换本地/云端库的那一瞬间
+   *  主进程先换根、渲染进程后更新,两边可能短暂不同源。拿它拼绝对路径前后都要复核,别缓存过夜。 */
+  vaultRoot?(): string | null
+}
+
+/** 插件契约自己的检索结果 DTO(**刻意不复用宿主内部的 SearchHit**:内部结构以后要改,不该牵动插件 API)。 */
+export interface PluginSearchHit {
+  /** vault 相对路径(`/` 分隔)。 */
+  path: string
+  title: string
+  /** 命中处的上下文片段(已剥 frontmatter/标记)。 */
+  snippet: string
+  /** 剥离后文本里的 1-based 行号 —— 展示用,**不是磁盘行号**。 */
+  line: number
+  /** 不透明排序值,只用来比大小,别当分数显示。 */
+  score: number
 }
 
 /** A read-only view of the ACTIVE page's blocks. Amadeus is single-active-page (one page loaded at a
@@ -147,6 +188,31 @@ export interface BlockSurfaceApi {
   prompt(title: string, initial?: string, opts?: { label?: string }): Promise<string | null>
   /** Render a real, editable block into `el`. Returns a dispose function; call it when you drop the node. */
   mountBlocks(el: HTMLElement, opts: MountBlockOptions): () => void
+}
+
+/** Per-view page surface (2026-08-14): handed to FileTypeContribution.mount as `file.surface`.
+ *  Same shape as BlockSurfaceApi but bound to the view's OWN pageStore scope — the file-type view and
+ *  the note editor panels edit different files at the same time, no "one page at a time" contention.
+ *  Feature-detect it (`file.surface?.mountNoteView`); on older hosts fall back to ctx.app + the
+ *  active-page model.
+ *
+ *  ⚠️ v3-marker pages only. Plugin file types are pinned to the v3 format (the v4 upgrader refuses
+ *  them by extension and by foreign fm key), and loadPage imports plain files into v3 on first open —
+ *  that is the intended lifecycle. Feeding a NORMAL v4/plain note through this loadPage would rewrite
+ *  it into v3 on the first debounced save (= data corruption), so loadPage refuses any path outside
+ *  the file type's registered extensions. */
+export interface PluginPageSurface extends BlockSurfaceApi {
+  /** Load a file of THIS file type into the view's scope. Paths outside the registered extensions are
+   *  refused (see the invariant above). Nonexistent paths spring a blank page into existence — check
+   *  with readFile first if "may have been deleted" is a real state for you. */
+  loadPage(path: string): void
+  /** The path currently loaded in this view's scope (null before the first loadPage resolves). */
+  getActivePage(): string | null
+  /** Render the native note editor (the same body a normal note gets: block list, ⠿ drag handles,
+   *  enter/backspace semantics, slash menu, click-below-to-append) into `el`, bound to this view's
+   *  scope. Title bar / cover / properties are deliberately not included (renaming compound suffixes
+   *  and exposing plugin fm keys are both corruption paths). Returns a dispose function. */
+  mountNoteView(el: HTMLElement): () => void
 }
 
 /** One achievement inside a plugin-registered series. Titles/descriptions are literal strings
@@ -242,8 +308,10 @@ export interface FileTypeContribution {
    *  fallback (used when the basename is empty). */
   title?: string
   /** Build the editor for one file into the host element; called once per opened instance. Return a
-   *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile. */
-  mount(el: HTMLElement, file: { filePath: string }): (() => void) | void
+   *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
+   *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
+   *  over ctx.app's active-page model so the view coexists with the note editor. */
+  mount(el: HTMLElement, file: { filePath: string; surface?: PluginPageSurface }): (() => void) | void
 }
 
 /** A "New …" file-creation entry a plugin contributes to the file tree's right-click menu (root + folder
@@ -330,6 +398,15 @@ export interface PluginContext {
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:
    *  always call as `ctx.notify?.(…)`. For persistent state prefer registerStatusItem. */
   notify?(message: string, opts?: { level?: 'info' | 'success' | 'warning' | 'error'; title?: string; sticky?: boolean }): void
+  /** The host UI's current language (2026-08-14+). Plugins ship bilingual strings and pick with this.
+   *  Optional in the type only because API v1 hosts predate it — every current host injects it, so
+   *  always call as `ctx.getLocale?.() ?? 'zh'` (Chinese is the canonical fallback). */
+  getLocale?(): 'zh' | 'en'
+  /** Fires when the user switches language — re-render your DOM here (only *changes* are reported;
+   *  read the initial value from getLocale()). Returns an unsubscribe. The host also drops every
+   *  subscription a plugin made when it is disabled/reloaded/its setup throws, so a forgotten
+   *  unsubscribe can't leak — but dispose yours anyway. Old hosts lack it: `ctx.subscribeLocale?.(…)`. */
+  subscribeLocale?(cb: (locale: 'zh' | 'en') => void): () => void
   /** Declare a tunable setting (rendered on the plugin detail page; localStorage-backed). */
   registerSetting(def: SettingContribution): void
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
@@ -350,9 +427,14 @@ export interface PluginContext {
 
 export interface AmadeusPlugin {
   id: string
+  /** Canonical (Chinese) name — also the source of the default work folder, so it never changes with
+   *  the UI language. For display, go through `pluginDisplayName(p, locale)`. */
   name: string
   version: string
   description?: string
+  /** English display name / description (manifest `nameEn` / `descriptionEn`). External plugins only. */
+  nameEn?: string
+  descriptionEn?: string
   /** Built-in plugins ship with the app and can't be uninstalled (only disabled). */
   builtin?: boolean
   /** Manifest apiVersion (missing → 1). */

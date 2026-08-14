@@ -93,6 +93,11 @@ export interface PluginOnboardingSpec {
   /** true = embed all of the plugin's registered settings in the card; or a list of setting keys. */
   settings?: boolean | string[]
   recommends?: PluginOnboardingRecommend[]
+  /** English mirror of the translatable half (2026-08-14+). Chinese stays canonical: anything missing
+   *  or malformed here falls back to it field by field, and `steps` is index-aligned with `steps` above
+   *  (sanitised in lockstep) so a missing translation can never shift the wrong text onto a step.
+   *  `settings`/`recommends` are structural — no English mirror. */
+  en?: { intro?: string; steps?: (PluginOnboardingStep | null)[] }
 }
 
 const REC_TYPES = new Set(['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin'])
@@ -107,16 +112,28 @@ export function sanitizeOnboarding(raw: unknown): PluginOnboardingSpec | undefin
   const out: PluginOnboardingSpec = {}
   const intro = str(r.intro, 500)
   if (intro) out.intro = intro
+  // 英文镜像与中文**同一趟**消毒:按原始下标配对,中文那步被丢弃时英文那步一并丢弃 ——
+  // 各消各的会因为压缩数组让翻译错位到别的步骤上(codex 评审 2026-08-14)。
+  const rawEn = (r.en && typeof r.en === 'object' ? (r.en as Record<string, unknown>) : null)
+  const rawEnSteps = rawEn && Array.isArray(rawEn.steps) ? rawEn.steps : null
   if (Array.isArray(r.steps)) {
     const steps: PluginOnboardingStep[] = []
-    for (const s of r.steps.slice(0, 8)) {
+    const enSteps: (PluginOnboardingStep | null)[] = []
+    r.steps.slice(0, 8).forEach((s, i) => {
       const title = str((s as Record<string, unknown>)?.title, 120)
-      if (!title) continue
+      if (!title) return
       const description = str((s as Record<string, unknown>)?.description, 500)
       steps.push(description ? { title, description } : { title })
-    }
+      const e = rawEnSteps ? (rawEnSteps[i] as Record<string, unknown> | undefined) : undefined
+      const eTitle = str(e?.title, 120)
+      const eDesc = str(e?.description, 500)
+      enSteps.push(eTitle ? (eDesc ? { title: eTitle, description: eDesc } : { title: eTitle }) : null)
+    })
     if (steps.length) out.steps = steps
+    if (steps.length && enSteps.some(Boolean)) out.en = { ...(out.en ?? {}), steps: enSteps }
   }
+  const enIntro = str(rawEn?.intro, 500)
+  if (enIntro) out.en = { ...(out.en ?? {}), intro: enIntro }
   if (r.settings === true) out.settings = true
   else if (Array.isArray(r.settings)) {
     const keys = r.settings.filter((k): k is string => typeof k === 'string' && !!k).slice(0, 16)
@@ -181,9 +198,15 @@ export interface PluginBundleInfo {
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
+  /** Canonical (Chinese) display name. **Identity-adjacent**: the default work folder is derived from it,
+   *  so it must never change with the UI language — English goes in `nameEn`. */
   name: string
   version: string
   description?: string
+  /** English display name (manifest `nameEn`, 2026-08-14+). Shown when the UI is English; missing → `name`. */
+  nameEn?: string
+  /** English description (manifest `descriptionEn`); missing → `description`. */
+  descriptionEn?: string
   /** The plugin's main JS source; evaluated in the renderer with a `ctx` argument. '' when blocked (never evaluated). */
   code: string
   /** Manifest apiVersion (missing → 1). */

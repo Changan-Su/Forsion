@@ -1290,8 +1290,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         const m = JSON.parse(await fs.readFile(path.join(pdir, 'manifest.json'), 'utf8')) as {
           id?: string
           name?: string
+          nameEn?: string
           version?: string
           description?: string
+          descriptionEn?: string
           main?: string
           apiVersion?: number
           minAppVersion?: string
@@ -1330,6 +1332,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           name: m.name || e.name,
           version: m.version || '0.0.0',
           description: m.description,
+          // 英文镜像:纯展示用,坏了就当没有(中文 canonical 永远兜底)。
+          nameEn: typeof m.nameEn === 'string' && m.nameEn.trim() ? m.nameEn.trim().slice(0, 120) : undefined,
+          descriptionEn: typeof m.descriptionEn === 'string' && m.descriptionEn.trim() ? m.descriptionEn.trim().slice(0, 2000) : undefined,
           code,
           apiVersion: typeof m.apiVersion === 'number' ? m.apiVersion : 1,
           minAppVersion: typeof m.minAppVersion === 'string' ? m.minAppVersion : undefined,

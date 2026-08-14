@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { usePluginOnboarding, nudgeOnboardingOnce } from '../stores/pluginOnboardingStore'
 import { useI18n } from '../i18n'
+import { localizedOnboarding, pluginDisplayName } from '../amadeus/plugins/display'
 import { useApp } from '../stores/appStore'
 import { SettingRow } from './AmadeusPluginsTab'
 import { listMarket, installMarket, listInstalled } from '../services/marketService'
@@ -80,8 +81,9 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
 }
 
 const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
-  const { t } = useI18n()
-  const spec = p.onboarding!
+  const { t, locale } = useI18n()
+  // 语言解析单点:英文缺失逐字段回退中文(display.ts)
+  const spec = localizedOnboarding(p.onboarding, locale)!
   const allSettings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
   const settings =
     spec.settings === true ? allSettings
@@ -109,7 +111,7 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
   return (
     <div className="dialog-overlay" onMouseDown={skip}>
       <div className="dialog" style={{ width: 'min(480px, 92vw)' }} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="dialog-title">{t('plugin.onboarding.title', { name: p.name })}</div>
+        <div className="dialog-title">{t('plugin.onboarding.title', { name: pluginDisplayName(p, locale) })}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '60vh', overflowY: 'auto', padding: '2px 0' }}>
           {spec.intro && <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{spec.intro}</div>}
           {!!spec.steps?.length && (
