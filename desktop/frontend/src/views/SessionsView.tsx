@@ -64,7 +64,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       cfg={s.cfg}
       modelId={activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''}
       activeSession={activeSession}
-      onSelect={(id) => openSession(id)}
+      onSelect={(id, o) => openSession(id, o)}
       showSpecial={true} // 新对话 = createSession HTTP,云 web(无本地后端)同样可用,不 gate backendStatus
       onNewChat={() => {
         s.setActiveId(null); s.setNewChatWs(null); s.setNewChatCfg(() => ({})); s.setNewChatModel(null)

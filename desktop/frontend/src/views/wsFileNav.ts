@@ -37,14 +37,15 @@ export function getTransientTarget(key: string): PreviewTarget | undefined {
   return transient.get(key)
 }
 
-export function openWsFile(target: PreviewTarget): void {
+/** opts.newTab(⌘/Ctrl 单击)= 强开一个新标签页,跳过「同路径已开就聚焦过去」——语义同 openNote。 */
+export function openWsFile(target: PreviewTarget, opts?: { newTab?: boolean }): void {
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   if (target.path) {
     // 本地 .html 交给内置浏览器(file:// 直开,页面里的相对资源/跳转都对);wsfile 预览器只会把它
     // 当文本渲染。内置浏览器被关掉 → openLocalHtml 返 false,照旧落 wsfile 预览。
     if (/\.html?$/i.test(target.path) && openLocalHtml(target.path)) return
-    const hit = api?.panels.find((p) => p.params?.__type === 'wsfile' && p.params?.path === target.path)
+    const hit = opts?.newTab ? null : api?.panels.find((p) => p.params?.__type === 'wsfile' && p.params?.path === target.path)
     if (hit) { ws.activateLeaf(hit.id); return }
     ws.openView('wsfile', { path: target.path, name: target.name }, 'main', { newTab: true })
     return

@@ -4,9 +4,12 @@ import { useApp } from './stores/appStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { planSessionOpen } from './sessionOpenPlan'
 
-export function openSession(id: string): void {
+export function openSession(id: string, opts?: { newTab?: boolean }): void {
   useApp.getState().setActiveId(id) // 侧栏高亮 + 「跟随主聊天」据此切换会话
   const ws = useWorkspace.getState()
+  // ⌘/Ctrl 单击:直接开一个**钉住该会话**的新标签(followActive:false,否则它会跟着侧栏高亮乱跑,
+  // 等于两个标签永远显示同一个会话)。语义同 Amadeus 的 openNote({newTab})。
+  if (opts?.newTab) { ws.openView('chat', { sessionId: id, followActive: false }, 'main', { newTab: true }); return }
   const focused = ws.api ? activeMainPanel(ws.api) : null
   const fp = (focused?.params ?? {}) as { __type?: string; followActive?: boolean }
   switch (planSessionOpen(focused ? { type: fp.__type, followActive: fp.followActive } : null)) {

@@ -95,43 +95,43 @@ export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolea
 }
 
 /** 打开独立图片视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openPdf 的简版,无批注)。 */
-export function openImage(imagePath: string): void {
+export function openImage(imagePath: string, opts?: { newTab?: boolean }): void {
   actThrottled('view.open', { f: imagePath }, `view.open|${imagePath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-image' && p.params?.imagePath === imagePath)
-  if (hit) {
+  if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-image', { imagePath }, 'main')
+  ws.openView('amadeus-image', { imagePath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 打开独立白板视图(.excalidraw.md 画布,兼容 Obsidian Excalidraw 插件):已有认领该文件的 tab → 激活;否则主区打开。 */
-export function openDrawing(drawingPath: string): void {
+export function openDrawing(drawingPath: string, opts?: { newTab?: boolean }): void {
   actThrottled('view.open', { f: drawingPath }, `view.open|${drawingPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-drawing' && p.params?.drawingPath === drawingPath)
-  if (hit) {
+  if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-drawing', { drawingPath }, 'main')
+  ws.openView('amadeus-drawing', { drawingPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 打开独立仪表盘视图(.dashboard.md 网格):已有认领该文件的 tab → 激活;否则主区打开。
  *  `unlocked` 只在「刚建好」时给 —— 新建完直接能摆,不必先点一下解锁。 */
-export function openDashboard(dashPath: string, opts?: { unlocked?: boolean }): void {
+export function openDashboard(dashPath: string, opts?: { unlocked?: boolean; newTab?: boolean }): void {
   actThrottled('view.open', { f: dashPath }, `view.open|${dashPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-dashboard' && p.params?.dashPath === dashPath)
-  if (hit) {
+  if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-dashboard', opts?.unlocked ? { dashPath, locked: false } : { dashPath }, 'main')
+  ws.openView('amadeus-dashboard', opts?.unlocked ? { dashPath, locked: false } : { dashPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 新建仪表盘(.dashboard.md),建成即打开(解锁态)。返回 vault 相对路径(取消/失败 null)。
@@ -197,14 +197,14 @@ function blankDashboard(title: string): string {
 
 /** 打开一个「插件文件类型」文件到通用 amadeus-plugin-file 视图:已有认领该文件的 tab
  *  → 激活;否则主区打开。新建后打开时该文件可能还没进结构 → 先刷新树再开。非插件文件类型回落系统默认程序。 */
-export function openFile(path: string): void {
+export function openFile(path: string, opts?: { newTab?: boolean }): void {
   // 内置文件类型先接管:插件的 ctx.app.openFile('x.excalidraw.md') 也落在这里,而 matchFileType 已经
   // 拒绝内置后缀(内置优先),不特判的话它会掉到下面的「非插件文件类型 → 交给系统默认程序」。
-  if (isDrawingPath(path)) { openDrawing(path); return }
-  if (isDashboardPath(path)) { openDashboard(path); return }
-  if (/\.db$/i.test(path)) { openDb(path); return }
-  if (/\.pdf$/i.test(path)) { openPdf(path); return }
-  if (/\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(path)) { openImage(path); return }
+  if (isDrawingPath(path)) { openDrawing(path, opts); return }
+  if (isDashboardPath(path)) { openDashboard(path, opts); return }
+  if (/\.db$/i.test(path)) { openDb(path, opts); return }
+  if (/\.pdf$/i.test(path)) { openPdf(path, undefined, opts); return }
+  if (/\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(path)) { openImage(path, opts); return }
   // 本地库里的 .html → 内置浏览器(云端库没有本机路径 / 内置浏览器关着 → 照旧交系统默认程序)。
   if (/\.html?$/i.test(path)) {
     const ps0 = usePageStore.getState()
@@ -224,11 +224,11 @@ export function openFile(path: string): void {
     const ws = useWorkspace.getState()
     const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
     const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-plugin-file' && p.params?.filePath === path)
-    if (hit) {
+    if (hit && !opts?.newTab) {
       ws.activateLeaf(hit.id)
       return
     }
-    ws.openView('amadeus-plugin-file', { filePath: path }, 'main')
+    ws.openView('amadeus-plugin-file', { filePath: path }, 'main', opts?.newTab ? { newTab: true } : undefined)
   }
   // 先跳转后加载:面板立即开(视图按 filePath 自行拉内容),树刷新在后台补 ——
   // 弱网下不再让 GET /tree 挡住跳转(此前「文件还没进缓存清单」要先等整棵树才开面板)。
