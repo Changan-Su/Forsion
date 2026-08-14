@@ -16,7 +16,6 @@ import '@/i18n.generated'
 import { installEngine } from '@/bootstrapEngine'
 import { installSmoothCaret } from '@/smoothCaret'
 import { applyUiFonts } from '@/uiFont'
-import { installScrollFade } from '@/scrollFade'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -42,9 +41,6 @@ try {
   // 界面字体三档:设置→外观里的那三个输入框**没有桌面门控**,移动端本来就能改、改完当场生效
   // (setFont 自己调 applyUiFonts),但启动时没人读回 localStorage → 重启即回退。半坏比没有更糟。
   applyUiFonts()
-  // 滚动条自动隐现。Android WebView 若本就是 overlay 滚动条,这行是无害 no-op ——
-  // 判断它需不需要比直接装上还贵,且与 desktop 保持同一条启动序列本身就是目的。
-  installScrollFade()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
 }
