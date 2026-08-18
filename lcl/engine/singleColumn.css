@@ -201,8 +201,7 @@
 /* 手机端抽屉内容再放大一档(2026-08-13 用户实报「字号好小」)。
    侧栏那套 .t2s-* 是**桌面鼠标尺度**(13px 字 / 28px 行,sidebar2.css 开头写明「字号只统一、不缩放」),
    端级 zoom 1.15 之后仍只有 ~15px —— 手指够不着。这里叠第二档 1.15(合计 ≈17px / 37px 行)。
-   ponytail: 沿用同文件 .mini-shell 的单旋钮 zoom 写法(那边是 0.85),想调只改这一个数;
-   逐个 hand-tune .t2s-* 才是「易漏」的那条路。
+   单列端只在抽屉 body 收口缩放,逐个 hand-tune .t2s-* 才是「易漏」的那条路。
    只罩 .mb-drawer-body:抽屉顶栏(.mb-drawer-bar)与底部 Space/账号(.mb-drawer-foot)是兄弟节点,不跟着变。
    ⚠️ 新增一层 zoom 上下文:锚定浮层照 menuAnchor.tsx 的定则走 currentCSSZoom,不要写死坐标。 */
 .mb-shell:not(.mini-shell) .mb-drawer-body { zoom: 1.15; }
@@ -349,64 +348,6 @@
   overflow: hidden;
   background: var(--bg, #fff);
 }
-
-/* ── Mini 悬浮卡片壳 ──────────────────────────────────────────────
-   顶部 ribbon 条(Space 切换)+ 全屏内容;条本身 -webkit-app-region:drag 拖窗,按钮 no-drag。
-   3:4 竖比由主进程窗口 bounds 保证,.mb-shell 的 fixed inset:0 填满整窗。 */
-.mini-ribbon {
-  flex: 0 0 auto;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding: 0 5px;
-  border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  background: var(--bg-card, var(--bg, #fff));
-  -webkit-app-region: drag; /* frameless 卡片靠此条拖动 */
-  overflow-x: auto;
-}
-.mini-rib-btn {
-  -webkit-app-region: no-drag; /* 按钮须可点(拖窗区几何合成会吞点击) */
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-muted, rgba(0, 0, 0, 0.55));
-  cursor: pointer;
-}
-.mini-rib-btn svg { width: 16px; height: 16px; }
-.mini-rib-btn:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); color: var(--text, #111); }
-.mini-rib-btn.on { background: var(--bg-hover, rgba(0, 0, 0, 0.08)); color: var(--accent, #4d8794); }
-
-/* ── Mini 紧凑覆盖(方向 B:字号/间距/图标独立压紧)──────────────────────
-   卡片仅 ~300×400,mobile 触控尺寸(52px 顶栏/44px 钮/15px 字/20px 图标)太占地。
-   下列全 .mini-shell 作用域,只压 mini,不动手机端/主窗;共享 .mb-* 类走覆盖,图标覆盖 lucide 内联 svg 尺寸。 */
-/* 内容区(mb-main = 各 feature 视图:聊天/欢迎语/输入框…自带 px 字号,chrome 覆盖够不着)
-   按比例缩:一行 zoom 缩全部内容,不必逐个 hand-tune 每个视图的类(那才是 B 的「易漏」坑)。
-   ⚠️只作用于内容区,顶部 chrome 仍是上面手调的紧凑值 —— 不是被否的「整卡等比缩」。
-   ponytail: 单旋钮 zoom,想更小/更大改这一个数即可。 */
-.mini-shell .mb-main { zoom: 0.85; }
-
-.mini-shell .mb-topbar { height: 38px; gap: 2px; padding: 0 3px; }
-.mini-shell .mb-icon-btn { width: 30px; height: 30px; border-radius: 8px; }
-.mini-shell .mb-icon-btn svg { width: 17px; height: 17px; }
-.mini-shell .mb-tabcount { width: 16px; height: 16px; border-width: 1.5px; border-radius: 5px; font-size: 9.5px; }
-
-/* 左右抽屉 */
-.mini-shell .mb-drawer-bar { height: 36px; }
-.mini-shell .mb-drawer-select { height: 28px; font-size: 12px; }
-.mini-shell .mb-drawer-title { font-size: 13px; }
-.mini-shell .mb-drawer-body { zoom: 0.85; } /* 抽屉内也是 feature 视图,同内容区一起缩 */
-
-/* 「⋯」底部弹层 */
-.mini-shell .mb-sheet { padding: 4px 8px 8px; }
-.mini-shell .mb-sheet-row { padding: 9px 10px; gap: 9px; font-size: 13px; }
-.mini-shell .mb-sheet-row svg { width: 17px; height: 17px; }
 
 /* ── 主体行:宽屏左栏并排(docked sidecol);push 抽屉与 dim 都以它为定位容器 ───────────── */
 /* ⚠️ overflow 必须是 **clip 而不是 hidden**:两侧抽屉靠 transform 移出视野,而被 transform 推出去的

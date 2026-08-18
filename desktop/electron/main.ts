@@ -42,7 +42,7 @@ import { KNOWN_APPS } from '../shared/knownApps'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
-import { nearestEdge, collapsedBounds, expandedBounds, miniSizeFromWidth, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
+import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
@@ -909,18 +909,21 @@ let miniDragging = false // 用户正在拖窗(moved 连发中);其间不吸附/
 let miniSettleTimer: NodeJS.Timeout | null = null
 let miniPollTimer: NodeJS.Timeout | null = null
 
-const MINI_PEEK = 8 // 折叠后露出的薄条 px
+const MINI_CARD_WIDTH = 320
+const MINI_CARD_HEIGHT = 420
+const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
 
 function createMiniWindow(): void {
-  const { width, height } = miniSizeFromWidth(300) // 300×400,3:4 竖比
+  const width = MINI_CARD_WIDTH
+  const height = MINI_CARD_HEIGHT
   const wa = screen.getPrimaryDisplay().workArea
   miniWindow = new BrowserWindow({
     width, height,
     x: wa.x + wa.width - width - 24,
     y: wa.y + 24,
-    minWidth: width, minHeight: height, maxWidth: width, maxHeight: height, // 锁 3:4
+    minWidth: width, minHeight: height, maxWidth: width, maxHeight: height,
     frame: false,
     transparent: true,
     resizable: false,

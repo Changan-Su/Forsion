@@ -310,28 +310,8 @@ function TabSheet({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** 顶部横向 Space 切换条(mini 变体用):与左抽屉底部 Space 条同数据,搬到顶部;条本身可拖窗、按钮 no-drag。 */
-function MiniRibbon() {
-  const spaces = useSpaceStore((s) => s.spaces)
-  const activeId = useSpaceStore((s) => s.activeSpaceId)
-  if (spaces.length === 0) return null
-  return (
-    <div className="mini-ribbon">
-      {spaces.map((sp) => {
-        const Icon = sp.icon
-        const on = sp.id === activeId || (!spaces.some((x) => x.id === activeId) && sp === spaces[0])
-        return (
-          <button key={sp.id} className={`mini-rib-btn${on ? ' on' : ''}`} title={label(sp.name)} onClick={() => setActiveSpace(sp.id)}>
-            {Icon && <Icon size={18} />}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
 /** 长宽比 > 4:3(横屏手机/平板)→ 左栏与 main 并排推开而非悬浮(用户拍板:默认展开,右栏仍抽屉)。
- *  mini 变体不启用;desktop「手机框」预览是 3:4 竖比,天然不触发。 */
+ *  desktop「手机框」预览是 3:4 竖比,天然不触发。 */
 function useWideAspect(enabled: boolean): boolean {
   const [wide, setWide] = useState(() => enabled && window.matchMedia('(min-aspect-ratio: 4/3)').matches)
   useEffect(() => {
@@ -345,7 +325,7 @@ function useWideAspect(enabled: boolean): boolean {
   return enabled && wide
 }
 
-export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildDefault?: () => void; variant?: 'full' | 'mini' }> = ({ buildDefault, variant = 'full' }) => {
+export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildDefault?: () => void }> = ({ buildDefault }) => {
   useEffect(() => {
     const ws = useWorkspace.getState()
     if (buildDefault) ws.setDefaultBuilder(buildDefault)
@@ -364,10 +344,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const rightVisible = useWorkspace((s) => s.rightVisible)
   const tabCount = useWorkspace((s) => s.mainTabs.length)
 
-  const mini = variant === 'mini'
-  const wide = useWideAspect(!mini)
-  // mini(桌面卫星窗)顶栏仍占一行、不是浮层,收起来会让内容跳一格 —— 只在手机形态启用。
-  const chromeOff = useChromeAutoHide(mainRef, !mini)
+  const wide = useWideAspect(true)
+  const chromeOff = useChromeAutoHide(mainRef, true)
 
   // Android 系统返回:MobileRoot 派发可取消的 forsion:mobile-back,壳先接管最上层的两个 sheet。
   const sheetsRef = useRef({ tabs: false, more: false })
@@ -463,22 +441,17 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     // ⚠️ 顶部**不再**在壳上留安全区:内容要画到屏幕最顶端(封面图/网页/白板 edge-to-edge),
     //    躲刘海是浮动胶囊自己的事(.mb-topbar 的 top、抽屉的 padding-top,见 singleColumn.css)。
     //    底部仍留 —— 底部 chrome 分散在各视图里,没法逐个保证自理,收窄爆炸半径。
-    <div className={`mb-shell${mini ? ' mini-shell' : ''}`} data-chrome={chromeOff ? 'off' : undefined} style={{ paddingBottom: mini ? 0 : 'env(safe-area-inset-bottom)' }}>
-      {/* mini:顶部横向 Space 切换条(ribbon 在顶部)+ 兼作 frameless 拖窗把手。 */}
-      {mini && <MiniRibbon />}
-      {/* mini 的顶栏仍占一行(卡片太小,浮层会盖住内容);手机端的挪进 .mb-main 里浮着 —— 见下。 */}
-      {mini && topbar}
-
+    <div className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
       <div className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
-        <Drawer side="left" docked={wide} showFoot={!mini} />
-        <main ref={mainRef} className="mb-main" onTouchStart={mini ? undefined : swipeStart} onTouchEnd={mini ? undefined : swipeEnd}>
+        <Drawer side="left" docked={wide} showFoot />
+        <main ref={mainRef} className="mb-main" onTouchStart={swipeStart} onTouchEnd={swipeEnd}>
           {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
               ① push 抽屉的 translate 只打在 .mb-main —— 挂外面胶囊就不跟着内容滑,视觉当场穿帮;
               ② 宽屏 docked 形态左栏(.mb-sidecol)与 main 并排,挂外面的 left:0 会盖到左栏头上。 */}
-          {!mini && topbar}
+          {topbar}
           <LeafHost />
         </main>
         <div

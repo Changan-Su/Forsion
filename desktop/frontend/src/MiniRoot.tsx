@@ -1,6 +1,6 @@
-/** Mini 悬浮卡片根:mobile UI 模式(?ui=mobile)下挂精简 MiniColumnHost。
+/** Mini 悬浮卡片根:卫星窗口(?window=mini)下挂独立 MiniColumnHost。
  *  精简 bootstrap(i18n 注入 + 连接共享后端);不跑主窗独有的更新/inbox/通知,不挂 app 级浮层。
- *  独立导航:内容与切换全由 MiniColumnHost 顶部 ribbon(Space)驱动,与主窗互不影响。 */
+ *  独立导航:内容与切换全由 Mini Card 单层 chrome 驱动,与主窗互不影响。 */
 import { useEffect } from 'react'
 import { MiniColumnHost } from '@lcl/engine'
 import { useApp } from './stores/appStore'

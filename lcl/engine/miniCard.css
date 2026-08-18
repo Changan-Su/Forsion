@@ -1,0 +1,257 @@
+/* Genesis Mini Card ---------------------------------------------------------
+ * 桌面悬浮窗专属外壳。颜色只消费 LCL skin token,结构只消费 language token。
+ * 外壳层不使用 backdrop-filter:macOS system glass 在窗口层完成,且外壳模糊会改变 fixed 后代包含块。
+ */
+.mini-card-shell {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 44px minmax(0, 1fr);
+  overflow: hidden;
+  border-radius: var(--radius-lg, 14px);
+  background: var(--bg, #fff);
+  color: var(--text, #111);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.08)) 74%, transparent);
+}
+
+.mini-card-chrome {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 44px;
+  padding: 0 5px 0 7px;
+  border-bottom: var(--border-width, 1px) solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.08)) 72%, transparent);
+  background: var(--bg-card, var(--bg, #fff));
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.mini-card-space,
+.mini-card-action {
+  -webkit-app-region: no-drag;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border: var(--border-width, 1px) solid transparent;
+  background: transparent;
+  color: var(--text-muted, rgba(0, 0, 0, 0.58));
+  cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s), transform 0.08s ease;
+}
+.mini-card-space:hover:not(:disabled),
+.mini-card-action:hover,
+.mini-card-space[aria-expanded='true'],
+.mini-card-action[aria-expanded='true'] {
+  background: var(--overlay-light, rgba(127, 127, 127, 0.1));
+  color: var(--text, #111);
+}
+.mini-card-space:active:not(:disabled), .mini-card-action:active { transform: scale(0.94); }
+.mini-card-space:focus-visible, .mini-card-action:focus-visible, .mini-card-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-ink, var(--accent)) 72%, transparent);
+  outline-offset: -2px;
+}
+
+.mini-card-space {
+  gap: 5px;
+  min-width: 0;
+  max-width: 112px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm, 9px);
+  font: 600 11.5px/1 var(--font-ui, sans-serif);
+}
+.mini-card-space:disabled { cursor: default; color: var(--text-muted, rgba(0, 0, 0, 0.58)); }
+.mini-card-space > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-card-space > svg { flex: 0 0 auto; color: var(--accent-ink, var(--accent)); }
+
+.mini-card-drag-title {
+  flex: 1 1 auto;
+  min-width: 16px;
+  overflow: hidden;
+  padding: 0 5px;
+  color: var(--text-faint, var(--text-muted));
+  font: 500 10.5px/1 var(--font-ui, sans-serif);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-card-action {
+  position: relative;
+  width: 30px;
+  padding: 0;
+  border-radius: var(--radius-sm, 9px);
+}
+.mini-card-tab-count {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 999px;
+  background: var(--accent, var(--accent-ink));
+  color: var(--on-accent, #fff);
+  font: 700 8px/12px var(--font-ui, sans-serif);
+  text-align: center;
+}
+.mini-card-close:hover { background: color-mix(in srgb, var(--danger, #e0564b) 12%, transparent); color: var(--danger, #e0564b); }
+
+.mini-card-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg, #fff);
+}
+
+/* 点击内容空白关闭菜单。透明层只住在 chrome 下方,不会阻断顶部按钮之间的切换。 */
+.mini-card-dismiss {
+  position: absolute;
+  inset: 44px 0 0;
+  z-index: 35;
+  border: none;
+  background: color-mix(in srgb, var(--bg, #fff) 22%, transparent);
+  cursor: default;
+}
+
+.mini-card-popover {
+  position: absolute;
+  top: 49px;
+  left: 7px;
+  right: 7px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 58px);
+  overflow: hidden;
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.1)) 78%, transparent);
+  border-radius: var(--radius-lg, 14px);
+  background: var(--bg-glass, var(--bg-card, var(--bg, #fff)));
+  color: var(--text, #111);
+  box-shadow: var(--card-shadow, 0 12px 34px rgba(0, 0, 0, 0.2));
+  animation: mini-card-popover-in 0.16s var(--ease-out, ease-out);
+}
+@supports (backdrop-filter: blur(1px)) {
+  .mini-card-popover { backdrop-filter: blur(18px) saturate(130%); }
+}
+@keyframes mini-card-popover-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.mini-card-popover-title {
+  flex: 0 0 auto;
+  padding: 9px 11px 6px;
+  color: var(--text-faint, var(--text-muted));
+  font: 600 10px/1.2 var(--font-ui, sans-serif);
+}
+.mini-card-popover-list { min-height: 0; overflow-y: auto; padding: 0 5px 5px; }
+.mini-card-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 7px;
+  border: none;
+  border-radius: var(--radius-sm, 9px);
+  background: transparent;
+  color: var(--text-muted, rgba(0, 0, 0, 0.62));
+  font: 500 11.5px/1.25 var(--font-ui, sans-serif);
+  text-align: left;
+  cursor: pointer;
+}
+.mini-card-row:hover, .mini-card-row.active { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text, #111); }
+.mini-card-row.active { font-weight: 600; }
+.mini-card-row > svg { flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); }
+.mini-card-row.active > svg, .mini-card-row-new > svg { color: var(--accent-ink, var(--accent)); }
+.mini-card-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-card-row-fallback { flex: 0 0 auto; width: 15px; }
+.mini-card-row-current { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 999px; background: var(--accent, var(--accent-ink)); }
+.mini-card-row-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint, var(--text-muted));
+  cursor: pointer;
+}
+.mini-card-row-close:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--danger, #e0564b); }
+.mini-card-row-new { color: var(--accent-ink, var(--accent)); }
+.mini-card-component-row { padding: 4px; }
+
+/* Chat 是 mini 的主路径:保留完整发送能力,但把“开新对话配置台”收成快速输入卡。 */
+.mini-card-shell .t2-toolbar { display: none; }
+.mini-card-shell .t2-stream-inner {
+  padding: 16px 12px calc(var(--t2-composer-h, 88px) + 6px);
+  gap: 18px;
+}
+.mini-card-shell .t2-chat-col > .t2-empty {
+  inset: 0 0 var(--t2-composer-h, 88px);
+  gap: 8px;
+  padding: 14px 18px;
+}
+.mini-card-shell .t2-empty-mark .brand-logo { width: 42px; height: 42px; }
+.mini-card-shell .t2-empty-title {
+  max-width: 230px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.mini-card-shell .t2-empty-sub {
+  max-width: 230px;
+  overflow: hidden;
+  color: var(--text-faint, var(--text-muted));
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mini-card-shell .newchat-pickers { display: none; }
+.mini-card-shell .newchat-projectbar { padding: 0 8px 2px; }
+.mini-card-shell .newchat-projectbar-inner { max-width: none; }
+.mini-card-shell .project-pill {
+  gap: 4px;
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+}
+.mini-card-shell .project-pill-name { max-width: 176px; }
+.mini-card-shell .project-menu { width: min(264px, calc(100vw - 16px)); }
+.mini-card-shell .t2c-inner { max-width: none; gap: 4px; padding: 4px 8px 8px; }
+.mini-card-shell .t2c-card {
+  border-radius: var(--radius-md, 12px);
+  padding: 8px 9px;
+}
+.mini-card-shell .t2c-ta {
+  min-height: 1.45em;
+  max-height: 96px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.mini-card-shell .t2c-row { gap: 2px; margin-top: 5px; }
+.mini-card-shell .t2c-iconbtn { width: 26px; height: 26px; }
+.mini-card-shell .t2c-pill { gap: 2px; padding: 4px 6px; }
+.mini-card-shell .t2c-pill-label,
+.mini-card-shell .t2c-row .composer-chip .pill-marquee { display: none; }
+.mini-card-shell .t2c-ctxring { display: none; }
+.mini-card-shell .t2c-send { width: 29px; height: 29px; }
+.mini-card-shell .t2c-stop { height: 29px; padding: 0 9px; }
+.mini-card-shell .t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 88px) + 9px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-card-popover { animation: none; }
+  .mini-card-space, .mini-card-action { transition: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .mini-card-popover { background-color: var(--bg-card, var(--bg, #fff)); backdrop-filter: none; }
+}

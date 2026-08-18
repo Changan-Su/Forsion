@@ -2,8 +2,8 @@
  * 多窗口纯几何(无 electron 依赖 → node vitest 可测)。
  * - rectUnderPoint:跨窗拖拽落点命中测试(哪个窗口在屏幕点下)。
  * - nearestEdge / collapsedBounds / expandedBounds:mini 卡片贴边吸附折叠 ↔ 展开。
- * 折叠策略 = 不改尺寸,把窗口滑出工作区、只露 peek px 的薄条(mouseenter 该薄条即展开;
- * 保尺寸不 reflow → 3:4 内容不抖)。expandedBounds 是 collapsedBounds 的逆(尺寸不变故可逆推)。
+ * 折叠策略 = 不改尺寸,把窗口滑出工作区、只露 peek px 的把手(mouseenter 该把手即展开;
+ * 保尺寸不 reflow → Mini Card 内容不抖)。expandedBounds 是 collapsedBounds 的逆(尺寸不变故可逆推)。
  */
 export interface Rect { x: number; y: number; width: number; height: number }
 export type Edge = 'left' | 'right' | 'top' | 'bottom'
@@ -61,10 +61,4 @@ export function pointInRect(x: number, y: number, r: Rect): boolean {
 /** 四周外扩 m px(迟滞/触发容差用)。 */
 export function growRect(r: Rect, m: number): Rect {
   return { x: r.x - m, y: r.y - m, width: r.width + 2 * m, height: r.height + 2 * m }
-}
-
-/** 3:4(宽:高)竖比:给定宽度求高度,或给定高度求宽度。mini 卡片固定此比。 */
-export const MINI_ASPECT = 3 / 4
-export function miniSizeFromWidth(width: number): { width: number; height: number } {
-  return { width: Math.round(width), height: Math.round(width / MINI_ASPECT) }
 }

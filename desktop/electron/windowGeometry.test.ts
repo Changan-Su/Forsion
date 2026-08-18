@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, miniSizeFromWidth, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
+import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
 
 const WA: Rect = { x: 0, y: 0, width: 1440, height: 900 }
 
@@ -78,24 +78,17 @@ describe('collapsedBounds / expandedBounds', () => {
   })
 })
 
-describe('miniSizeFromWidth', () => {
-  it('keeps 3:4 (w:h) portrait ratio', () => {
-    expect(miniSizeFromWidth(300)).toEqual({ width: 300, height: 400 })
-    expect(miniSizeFromWidth(240)).toEqual({ width: 240, height: 320 })
-  })
-})
-
 describe('visibleRect / pointInRect / growRect (mini 悬停触发+迟滞)', () => {
   const card: Rect = { x: 600, y: 300, width: 300, height: 400 }
   it('collapsed sliver visible rect is exactly the peek strip on that edge', () => {
-    const c = collapsedBounds(card, 'left', WA, 8)
+    const c = collapsedBounds(card, 'left', WA, 14)
     const v = visibleRect(c, WA)
     expect(v.x).toBe(WA.x)
-    expect(v.width).toBe(8) // 只露 8px
+    expect(v.width).toBe(14) // 露出可辨识的把手
     expect(v.height).toBe(card.height)
   })
   it('cursor at the sliver is inside; away is outside (drives expand)', () => {
-    const c = collapsedBounds(card, 'right', WA, 8)
+    const c = collapsedBounds(card, 'right', WA, 14)
     const v = growRect(visibleRect(c, WA), 6) // 触发容差
     expect(pointInRect(WA.x + WA.width - 2, c.y + 10, v)).toBe(true) // 贴右边=命中薄条
     expect(pointInRect(WA.x + WA.width - 200, c.y + 10, v)).toBe(false) // 深入屏内=不命中
