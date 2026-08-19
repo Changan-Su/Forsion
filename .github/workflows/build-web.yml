@@ -1,6 +1,9 @@
 # 构建 Forsion Web(tangu-web)镜像 → 推 ghcr.io,部署服务器免构建直接 pull。
 # 动机:web 镜像里的 vite 打包吃内存,小内存 ECS 现场 --build 会 swap 卡死(2026-07-16 实测 25min+ 不出)。
-# 触发:web/** 推 main 自动出镜像;desktop 渲染层/lcl 改了想吃到新代码 → Actions 页手动 Run workflow。
+# 触发:推 main 命中 web 真正的源码集就自动出镜像。⚠️ 那个源码集不只 web/** —— web 经
+# vite alias 整份复用 desktop 渲染层 / shared amadeus / lcl / mobile 壳(见 web/vite.config.ts),
+# 原来只监听 web/**,于是「改了渲染层 → 忘了手动 Run workflow → 修复静默不上线」。
+# 2026-08-19 实翻:工作区文件面板的 appId 修复推了 main 却没出镜像,线上跑的还是旧包。
 name: build-web
 
 on:
@@ -9,6 +12,10 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'desktop/frontend/src/**'   # web 的主体渲染层(@/@amadeus 别名)
+      - 'desktop/shared/amadeus/**' # @amadeus-shared
+      - 'lcl/**'                    # @lcl(Space-View 框架)
+      - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)
       - '.github/workflows/build-web.yml'
 
 permissions:
