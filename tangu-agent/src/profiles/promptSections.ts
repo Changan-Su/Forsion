@@ -121,26 +121,52 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
   );
 }
 
-/** sandbox 模式:文件输出位置(最常见的「产物丢失」原因:模型把文件写到工作区之外)。 */
-export const SANDBOX_OUTPUT_SECTION =
-  '## File Output Location (important)\n' +
-  'This session has a **workspace**, the only place that is preserved and returned to the user. ' +
-  'When writing files with `write_file` or inside `run_python`, always use **relative paths** (e.g. `report.docx`, `out/data.csv`) — ' +
-  'they land in the workspace (run_python\'s current directory is /workspace, equivalent to /mnt/data).\n' +
-  '**Do not** write deliverables to `/tmp`, `~/` (HOME), or other absolute paths — those are outside the workspace, are not preserved, and the files will be lost.\n' +
-  'The user may have uploaded files into this workspace. When a task involves existing files, or you are unsure what is present, call `list_files` first instead of assuming the workspace is empty.\n' +
-  'To change part of an existing file, use `apply_patch` to edit only the affected lines rather than re-emitting the whole file with `write_file` (which wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so a patch\'s context/old lines match the raw text.';
+/** sandbox 模式:文件输出位置(最常见的「产物丢失」原因:模型把文件写到工作区之外)。
+ *  提示词必须与工具面一致:features.sandbox=false 的部署 run_python 根本不注册,此时绝不能
+ *  在提示里提它——模型会被教唆着「执行脚本」,发不出调用就无限重写文件死循环(2026-08-19 实锤)。 */
+export function sandboxOutputSection(pythonExec: boolean): string {
+  return (
+    '## File Output Location (important)\n' +
+    'This session has a **workspace**, the only place that is preserved and returned to the user. ' +
+    (pythonExec
+      ? 'When writing files with `write_file` or inside `run_python`, always use **relative paths** (e.g. `report.docx`, `out/data.csv`) — ' +
+        'they land in the workspace (run_python\'s current directory is /workspace, equivalent to /mnt/data).\n'
+      : 'When writing files with `write_file`, always use **relative paths** (e.g. `report.md`, `out/data.csv`) — they land in the workspace.\n') +
+    '**Do not** write deliverables to `/tmp`, `~/` (HOME), or other absolute paths — those are outside the workspace, are not preserved, and the files will be lost.\n' +
+    'The user may have uploaded files into this workspace. When a task involves existing files, or you are unsure what is present, call `list_files` first instead of assuming the workspace is empty.\n' +
+    'To change part of an existing file, use `apply_patch` to edit only the affected lines rather than re-emitting the whole file with `write_file` (which wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so a patch\'s context/old lines match the raw text.'
+  );
+}
+/** @deprecated 用 sandboxOutputSection(true);保留常量名兼容既有 import。 */
+export const SANDBOX_OUTPUT_SECTION = sandboxOutputSection(true);
 
-/** sandbox 模式:执行效率约束(最影响耗时的是模型「生成量」:慢模型 ~50 tok/s,写 8000 token 要 ~160s)。 */
-export const EFFICIENCY_SECTION =
-  '## Execution Efficiency (important)\n' +
-  '- To generate documents, use python-docx / openpyxl / python-pptx to **write the target file in one step**; ' +
-  'do not write an intermediate md/txt and convert, do not generate the same content twice, do not hand-craft OOXML/XML, and do not use docx-js/pandoc/node.\n' +
-  '- Produce exactly the length the user asked for; do not pad needlessly (the more you generate, the slower it is).\n' +
-  '- In run_python, write the full script in one pass where possible to reduce round-trips.';
+/** sandbox 模式:执行效率约束(最影响耗时的是模型「生成量」:慢模型 ~50 tok/s,写 8000 token 要 ~160s)。
+ *  pythonExec=false(无 run_python)时改为明示「没有代码执行环境」:模型该直接产出文本/markdown,
+ *  或告知用户当前环境做不了二进制文档,而不是一遍遍宣称「现在执行脚本」。 */
+export function efficiencySection(pythonExec: boolean): string {
+  if (!pythonExec) {
+    return (
+      '## Execution Environment (important)\n' +
+      '- This session has **no code-execution tools** (no `run_python`, no shell). Never claim you will "run" or "execute" a script — you cannot, and there is no tool for it.\n' +
+      '- Deliver content as text/markdown files via `write_file`. For formats that require generation tooling (docx/xlsx/pptx), write the content as markdown instead and tell the user this environment cannot produce binary documents.\n' +
+      '- Produce exactly the length the user asked for; do not pad needlessly.'
+    );
+  }
+  return (
+    '## Execution Efficiency (important)\n' +
+    '- To generate documents, use python-docx / openpyxl / python-pptx to **write the target file in one step**; ' +
+    'do not write an intermediate md/txt and convert, do not generate the same content twice, do not hand-craft OOXML/XML, and do not use docx-js/pandoc/node.\n' +
+    '- Produce exactly the length the user asked for; do not pad needlessly (the more you generate, the slower it is).\n' +
+    '- In run_python, write the full script in one pass where possible to reduce round-trips.'
+  );
+}
+/** @deprecated 用 efficiencySection(true);保留常量名兼容既有 import。 */
+export const EFFICIENCY_SECTION = efficiencySection(true);
 
 /** 默认段落装载(AI Studio 与 Tangu 当前文本一致;per-app 差异化在各自工厂覆盖)。 */
 export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
+  // 未传视为有(host 路径/旧调用点不受影响);只有显式 false(run_python 未注册)才裁执行类提示。
+  const pyExec = ctx.sandboxExec !== false;
   if (ctx.preset === 'coding') {
     // coding 预设:陪伴式「记忆与日志」指引、笔记/日历指引、浏览器引导全部退场——
     // 对应工具已转 deferred(registry CODING_PRESET_DEFERRED),提示词与工具面保持一致。
@@ -149,7 +175,7 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
       environment:
         ctx.execMode === 'host'
           ? [hostEnvSection(ctx.cwd, ctx.extraRoots, { coding: true })]
-          : [SANDBOX_OUTPUT_SECTION, EFFICIENCY_SECTION],
+          : [sandboxOutputSection(pyExec), efficiencySection(pyExec)],
     };
   }
   return {
@@ -159,7 +185,7 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
         ? // host 模式:本地环境段 + (若本机存在 Amadeus vault)笔记/日历指引
           [hostEnvSection(ctx.cwd, ctx.extraRoots), amadeusPromptSection()].filter((s): s is string => !!s)
         : // 非 host:沙箱段 + (若云端 amadeus facet 已装配,如 thin worker)云笔记库指引
-          [SANDBOX_OUTPUT_SECTION, EFFICIENCY_SECTION, amadeusCloudPromptSection()].filter(
+          [sandboxOutputSection(pyExec), efficiencySection(pyExec), amadeusCloudPromptSection()].filter(
             (s): s is string => !!s,
           ),
   };

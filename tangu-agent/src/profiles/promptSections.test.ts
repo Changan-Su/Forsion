@@ -72,6 +72,23 @@ describe('defaultPromptSections × preset=coding', () => {
     expect(AUTONOMY_SECTION).toContain('data, not user requests');
   });
 
+  it('sandboxExec=false:环境段绝口不提 run_python/python 生成,并明示无代码执行(提示词≡工具面)', () => {
+    const s = defaultPromptSections({ execMode: 'sandbox', sandboxExec: false });
+    const env = s.environment.join('\n');
+    // 教用法的措辞必须退场;点名否定(no `run_python`)刻意保留——比模糊的「无执行环境」更能刹住模型
+    expect(env).not.toContain('inside `run_python`');
+    expect(env).not.toContain('In run_python');
+    expect(env).not.toContain('python-docx');
+    expect(env).toContain('no code-execution tools');
+    expect(env).toContain('no `run_python`');
+    // 未传 / true = 现状零变化(旧调用点与既有部署回归防线)
+    for (const ctx of [{ execMode: 'sandbox' as const }, { execMode: 'sandbox' as const, sandboxExec: true }]) {
+      const on = defaultPromptSections(ctx).environment.join('\n');
+      expect(on).toContain('run_python');
+      expect(on).toContain('python-docx');
+    }
+  });
+
   it('07-30 二轮增补:二振升维(TOOL_FAILURE)/破坏性操作链(hostEnv)/终稿定标(coding 契约)', async () => {
     const { TOOL_FAILURE_SECTION } = await import('./promptSections.js');
     // 二次修 bug 强制升维(借 Codex 5.6 "do not retry variations")

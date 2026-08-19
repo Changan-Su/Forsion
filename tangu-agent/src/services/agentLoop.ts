@@ -636,7 +636,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? await channelHub.isChannelSession(userId, sessionId)
       : false;
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
-    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset });
+    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
     // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
     // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
     // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。

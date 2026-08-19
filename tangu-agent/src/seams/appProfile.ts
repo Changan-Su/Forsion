@@ -17,6 +17,10 @@ export interface PromptSectionCtx {
   channelSession?: boolean;
   /** 工作预设:'coding' 时陪伴式指引(记忆日志/浏览器/笔记)退场,与工具面的 deferred 收敛保持一致。 */
   preset?: 'coding';
+  /** sandbox 模式下 run_python/pip_install 是否实际注册(profile.features.sandbox)。
+   *  显式 false 时环境段不得提及代码执行——提示词与工具面必须一致,否则模型会
+   *  反复宣称「现在执行脚本」却发不出调用而死循环。未传视为 true(既有调用点零影响)。 */
+  sandboxExec?: boolean;
 }
 
 /**

@@ -49,10 +49,15 @@ async function resolveScope(
       }
     } catch { /* standalone 旧库缺列等 → 回退旧 per-session 行为 */ }
   }
-  appId = appId || deps().profile.appId;
+  // 显式 project 但解析不出 appId(客户端传 '__project__' 哑值、session 行不存在):
+  // 绝不能落进程基线 appId —— agent-core 的基线是 ai-studio,会读到另一棵空树
+  // (2026-08-19「工作区文件全不见」实锤)。云 Project 树目前只有 tangu 客户端在用,
+  // 且已发布的 Desktop/APK 不带 appId,这里兜死 'tangu';新客户端一律显式传 appId。
+  appId = appId || (project ? LEGACY_CLOUD_PROJECT_APP : deps().profile.appId);
   const scope: WsScope = { sessionId, project };
   return { scope, appId, key: { userId, appId, sessionId, wsProject: project } };
 }
+const LEGACY_CLOUD_PROJECT_APP = 'tangu';
 
 // ── 本地会话目录回退(standalone):brain.storage 在 standalone 不可用(httpBrain 全抛),
 //    而文件工具本就 local-first 写在会话沙箱目录——云存储不可用时改用同一目录,

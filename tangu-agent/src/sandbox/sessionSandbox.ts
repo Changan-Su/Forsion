@@ -420,10 +420,13 @@ export async function snapshotSession(k: SessionKey): Promise<string[]> {
     let changed: string[] = [];
     try {
       changed = await snapshotDirToWorkspace(s.key.userId, s.key.appId, scopeOf(s.key), s.dir, s.manifest);
+      s.dirty = false;
     } catch (e) {
-      console.warn('[agent-core] session snapshot failed:', e);
+      // 失败必须保留 dirty:清了它,下次 snapshotSession 直接短路、disposeSession 也不再补推,
+      // 一次网络抖动 = 本地改动永久丢失。保留 dirty 还顺带挡住 refreshSessionWorkspace 的
+      // 重 hydrate 覆盖(「dirty 不失效防覆盖」既有设计),下个 run 末自然重试。
+      console.warn('[agent-core] session snapshot failed (dirty retained, will retry):', e);
     }
-    s.dirty = false;
     s.lastUsed = Date.now();
     return changed;
   });
