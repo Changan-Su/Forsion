@@ -9,6 +9,7 @@ import { create } from 'zustand'
 import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SubChat, TanguDesktopConfig, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
+  DefaultModelSlot,
 } from '../types'
 import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
@@ -83,6 +84,16 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
       }
     })
+  }
+  // 计划卡重载后不该消失:plan 事件不落库,但计划全文原样在 exit_plan_mode 的 tool_call 参数里。
+  if (msg.toolEvents) {
+    for (const ev of msg.toolEvents) {
+      if (ev.name !== 'exit_plan_mode' || !ev.arguments) continue
+      try {
+        const p = String(JSON.parse(ev.arguments).plan ?? '').trim()
+        if (p) msg.planProposal = p
+      } catch { /* 参数残缺:当没有 */ }
+    }
   }
   if (r.is_error) msg.status = 'error'
   return msg
@@ -289,6 +300,8 @@ export interface AppState {
   steerSentBySession: Record<string, string[]>
   /** run 终结时未送达的插话回填输入框(per-session,防串会话;ChatView 并进 seedText 通道)。 */
   steerRestoreBySession: Record<string, string | undefined>
+  /** 会话搜索命中后的跳转目标:打开会话 → ChatView 滚到该消息并高亮一次。seq 让同一目标可重复触发。 */
+  jumpTarget: { sessionId: string; messageId: string; seq: number } | null
   filePreview: PreviewTarget | null
   messagesBySession: Record<string, UiMessage[]>
   configBySession: Record<string, AgentConfig>
@@ -364,9 +377,17 @@ export interface AppState {
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null): void
   branchFromMessage(messageId?: string, sessionId?: string | null): Promise<void>
+  /** 回退到某条消息的时刻(借 Claude Code rewind):'code'=只回滚 agent 写工具改过的文件,
+   *  'conversation'=只截断该消息及之后的对话(原文回填输入框,不自动重发),'both'=两者。 */
+  rewindTo(messageId: string, mode: 'code' | 'conversation' | 'both', sessionId?: string | null): Promise<void>
   compact(sessionId?: string | null): Promise<void>
+  /** 记下「打开该会话后滚到这条消息」(内容级搜索的命中项);打开会话本身由调用方走既有 onSelect/openSession。
+   *  ⚠️ 不在 store 里直接调 openSession:sessionNav 依赖 store,反向 import 会成环。 */
+  setJumpTarget(sessionId: string, messageId?: string): void
+  clearJumpTarget(): void
   decideApproval(messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>, sessionId?: string | null): Promise<void>
-  answerInquiry(messageId: string, inquiryId: string, answer: string, sessionId?: string | null): Promise<void>
+  /** 兑现一次询问。返回 false = 没送达(网络/非 2xx)→ 调用方(计划卡)得解锁按钮重试。 */
+  answerInquiry(messageId: string, inquiryId: string, answer: string, sessionId?: string | null): Promise<boolean>
   /** Agent Desk:接收 desk_present 事件(白名单校验/静音/档位策略都在这)。 */
   deskPresent(sessionId: string, spec: Record<string, any>): void
   /** Agent Desk:编辑类工具成功后把目标文件自动搬上顶格(host 会话限定)。 */
@@ -404,6 +425,8 @@ export interface AppState {
   /** opts.newTab(⌘/Ctrl 单击文件行)= 强开新标签页,不聚焦已开的同路径页。 */
   setFilePreview(p: PreviewTarget | null, opts?: { newTab?: boolean }): void
   patchConfig(patch: Partial<TanguDesktopConfig>): void
+  /** Chat View「高级」的默认辅助 / 生图 / 识图模型；先乐观更新，再写入 config.json。 */
+  setDefaultModel(slot: DefaultModelSlot, modelId: string): void
   ensureEngineCaps(engineId: string | undefined): void
   openSettings(tab?: SettingsTab): void
   closeSettings(): void
@@ -476,6 +499,7 @@ export const useApp = create<AppState>((set, get) => ({
   steerPendingBySession: {},
   steerSentBySession: {},
   steerRestoreBySession: {},
+  jumpTarget: null,
   filePreview: null,
   messagesBySession: {},
   historyLoading: {},
@@ -625,18 +649,33 @@ export const useApp = create<AppState>((set, get) => ({
           void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(cfg, runId, sessionId, String(pl.shotId)))
         }
         break
-      case 'approval_request':
+      case 'approval_request': {
+        // reason 白名单清洗:审批事件会持久化重放,一条畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律)
+        const rk = pl.reason?.kind
+        const reason = rk === 'custom-ask' || rk === 'escalate' || rk === 'mode'
+          ? {
+            kind: rk as 'custom-ask' | 'escalate' | 'mode',
+            ...(typeof pl.reason.rule === 'string' && pl.reason.rule ? { rule: String(pl.reason.rule).slice(0, 200) } : {}),
+            ...(['readonly', 'auto-edit', 'full-auto'].includes(pl.reason.mode) ? { mode: pl.reason.mode } : {}),
+          }
+          : undefined
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId, name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const }],
+          ...m, approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId, name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
         }))
         break
+      }
       case 'approval_result':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
         }))
         break
       case 'inquiry_request': {
-        const inq = { inquiryId: pl.inquiryId, runId, question: pl.question || '', options: Array.isArray(pl.options) ? pl.options : [], status: 'pending' as const }
+        const inq = {
+          inquiryId: pl.inquiryId, runId, question: pl.question || '',
+          options: Array.isArray(pl.options) ? pl.options : [], status: 'pending' as const,
+          // kind='plan' → 渲染专属计划卡(批准 / 编辑后批准 / 打回);未知值当通用问答。
+          ...(pl.kind === 'plan' ? { kind: 'plan' as const } : {}),
+        }
         const gref = assistantRef as GroupRef
         if (gref.group && gref.groupEnded) {
           const id = `grp-inq-${pl.inquiryId}`
@@ -1688,6 +1727,55 @@ export const useApp = create<AppState>((set, get) => ({
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
 
+  rewindTo: async (messageId, mode, targetSessionId) => {
+    const t = get().tr
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (!sid) return
+    if (get().runningBySession[sid]) { get().toast(t('rewind.busy'), true); return }
+    const list = get().messagesBySession[sid] || []
+    const idx = list.findIndex((m) => m.id === messageId)
+    if (idx < 0) return
+    const at = list[idx].timestamp
+    if (!at) { get().toast(t('rewind.noTime'), true); return }
+    // 代码先回滚:失败就整体中止 —— 对话删了没法重来,而代码没回滚的话「回退」是假的。
+    if (mode !== 'conversation') {
+      try {
+        const r = await api.restoreCheckpoint(get().cfg, sid, at)
+        const n = r.restored.length + r.deleted.length
+        // 逐路径失败是装在 200 响应里的,不抛异常 —— 不看它就会「代码没回滚成功、对话已经删掉」。
+        if (r.failed.length) {
+          get().toast(t('rewind.codePartial', { n, bad: r.failed.length }), true)
+          return
+        }
+        // conflicts = agent 建的、但你后来改过的文件:引擎故意没删,如实说,别让人以为回干净了。
+        if (r.conflicts?.length) get().toast(t('rewind.codeConflict', { n, kept: r.conflicts.length }), true)
+        // skipped = 当时就没存下快照(过大/读不了),是已在菜单里明示过的边界,不阻断。
+        else if (r.skipped.length) get().toast(t('rewind.codeSkipped', { n, bad: r.skipped.length }), true)
+        else get().toast(t('rewind.codeDone', { n }))
+      } catch (e: any) { get().toast(t('rewind.codeFail', { e: e?.message || e }), true); return }
+    }
+    if (mode !== 'code') {
+      const removed = list.slice(idx)
+      try { await api.deleteMessages(get().cfg, sid, removed.map((m) => m.id)) }
+      catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return }
+      const speaking = ttsState()
+      if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
+      set((s) => {
+        // 上下文分解是按「回退前那些消息」算的,删完还挂着就是假数据(且刻意不重发 → 没人来刷新它)。
+        const ctx = { ...s.ctxInfoBySession }
+        delete ctx[sid]
+        return {
+          messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, idx) },
+          ctxInfoBySession: ctx,
+          // 原 prompt 回填输入框(类 Claude Code:回退不自动重发,改不改由用户定)。
+          ...(list[idx].role === 'user' && list[idx].content
+            ? { steerRestoreBySession: { ...s.steerRestoreBySession, [sid]: list[idx].content } }
+            : {}),
+        }
+      })
+    }
+  },
+
   branchFromMessage: async (messageId, targetSessionId) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
@@ -1741,12 +1829,24 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   answerInquiry: async (messageId, inquiryId, answer, targetSessionId) => {
+    const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) return false
     const inquiry = (get().messagesBySession[sid] || []).find((m) => m.id === messageId)?.inquiries?.find((q) => q.inquiryId === inquiryId)
-    if (!inquiry?.runId) return
-    const r = await resolveInquiry(get().cfg, inquiry.runId, inquiryId, answer)
-    if (r.gone) get().patchMessage(sid, messageId, (m) => ({ ...m, inquiries: (m.inquiries || []).map((q) => (q.inquiryId === inquiryId ? { ...q, status: 'expired' as const } : q)) }))
+    if (!inquiry?.runId) return false
+    let r: { ok: boolean; gone: boolean }
+    try {
+      r = await resolveInquiry(get().cfg, inquiry.runId, inquiryId, answer)
+    } catch (e: any) {
+      get().toast(t('inquiry.sendFail', { e: e?.message || e }), true)
+      return false // 没送达:卡片解锁,用户能重试(否则决策按钮永久置灰=死路)
+    }
+    if (r.gone) {
+      get().patchMessage(sid, messageId, (m) => ({ ...m, inquiries: (m.inquiries || []).map((q) => (q.inquiryId === inquiryId ? { ...q, status: 'expired' as const } : q)) }))
+      return true
+    }
+    if (!r.ok) { get().toast(t('inquiry.sendFail', { e: 'HTTP' }), true); return false }
+    return true
   },
 
   setExecConfig: (patch, targetSessionId) => {
@@ -1871,6 +1971,12 @@ export const useApp = create<AppState>((set, get) => ({
   setNewChatModel: (id) => set({ newChatModel: id }),
   setPendingDraft: (text) => set({ pendingDraft: text }),
   clearSteerRestore: (sessionId) => set((s) => ({ steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: undefined } })),
+
+  setJumpTarget: (sessionId, messageId) => {
+    // 目标要先落下再开会话:ChatView 那侧是「消息到齐了就滚」,顺序反了会错过第一次渲染。
+    set((s) => ({ jumpTarget: messageId ? { sessionId, messageId, seq: (s.jumpTarget?.seq || 0) + 1 } : null }))
+  },
+  clearJumpTarget: () => set({ jumpTarget: null }),
   appendRefs: (refs) => set((s) => ({ draftRefs: { refs, seq: (s.draftRefs?.seq || 0) + 1 } })),
   clearDraftRefs: () => set({ draftRefs: null }),
   // 预览改道:所有入口(文件面板/右栏工作区/对话内联)汇聚于此 —— 一律开主区标签页(wsfile 视图)。
@@ -1879,6 +1985,17 @@ export const useApp = create<AppState>((set, get) => ({
 
   patchConfig: (patch) => {
     set((s) => { void window.tangu?.setConfig(patch); return { cfg: { ...s.cfg, ...patch } } })
+  },
+
+  setDefaultModel: (slot, modelId) => {
+    set((s) => ({
+      // desktopConfig 是三个槽的完整 UI 真源；桌面尚未 boot 完时保持 null，避免伪造必填连接配置。
+      desktopConfig: s.desktopConfig ? { ...s.desktopConfig, [slot]: modelId } : null,
+      // 生图 / 识图还会随每次 run 透传，必须同步运行态 cfg；后台辅助模型只由引擎读 config.json。
+      cfg: slot === 'backgroundModelId' ? s.cfg : { ...s.cfg, [slot]: modelId },
+    }))
+    // 不用 setConfig 返回的整份旧快照回灌：用户连续改三个槽时，请求可能乱序完成，整份回灌会把后选项冲掉。
+    void window.tangu?.setConfig?.({ [slot]: modelId }).catch(() => {})
   },
 
   ensureEngineCaps: (engineId) => {
@@ -2020,4 +2137,12 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     saveUnread(next)
     set(() => ({ unread: next }))
   }
+}
+
+// dev-only 驱动入口:真机 live 台架(scripts/plan-live.e2e.cjs)靠它连上**你手里已经跑着的**
+// dev 实例发指令 —— 自起 Electron 会被引导覆盖层挡住,而真模型/真引擎的行为(比如模型到底
+// 调不调 exit_plan_mode)只有真实例答得了。生产构建里这行不存在。
+// typeof window 守卫不能省:一部分单测跑在 node 环境(非 happy-dom),少了它 14 个测试文件当场 ReferenceError。
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__forsionStore = useApp
 }

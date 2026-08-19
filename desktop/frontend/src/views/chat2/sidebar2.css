@@ -150,6 +150,10 @@
   will-change: transform;
 }
 .t2s-vaultseg-thumb[data-side='cloud'] { transform: translateX(100%); }
+/* 第二个消费者:Amadeus 笔记的「文档 | 画布」模式胶囊(amadeus/unified/UnifiedPage)。
+   右段的语义名不同,滑块方向一样 —— 放在这里而不是那边,是为了让「本组件认哪些 data-side」
+   只有一处答案。 */
+.t2s-vaultseg-thumb[data-side='canvas'] { transform: translateX(100%); }
 .t2s-vaultseg button {
   position: relative;
   z-index: 1;
@@ -458,3 +462,18 @@
 .t2sw, .t2sw * { font-weight: 600; }
 .t2sw .t2s-vaultseg button { font-weight: 600; }
 /* 图标放大档 = 本文件上方的 `.t2sw .t2s-side { --t2s-icon }`(三个 view 共用的那一个旋钮)。 */
+
+/* 内容级搜索命中(P3):两行行高 —— 标题 + 命中片段;右侧日期。 */
+.t2s-deep-head { padding-top: 10px; font-size: 11px; letter-spacing: 0.04em; color: var(--text-faint); }
+.t2s-srow.t2s-deep { align-items: flex-start; height: auto; padding-top: 6px; padding-bottom: 6px; }
+.t2s-deep-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.t2s-deep-snip {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.t2s-deep-date { font-size: 11px; color: var(--text-faint); flex-shrink: 0; margin-left: 6px; }

@@ -71,6 +71,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     steerPending: (activeId && state.steerPendingBySession[activeId]) || EMPTY_STEER,
     steerSent: (activeId && state.steerSentBySession[activeId]) || EMPTY_STRS,
     steerRestore: (activeId && state.steerRestoreBySession[activeId]) || null,
+    jumpTarget: state.jumpTarget,
+    clearJumpTarget: state.clearJumpTarget,
     withdrawSteer: state.withdrawSteer,
     steerNow: state.steerNow,
     clearSteerRestore: state.clearSteerRestore,
@@ -88,6 +90,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     editUserMessage: state.editUserMessage,
     regenerate: state.regenerate,
     branchFromMessage: state.branchFromMessage,
+    rewindTo: state.rewindTo,
     decideApproval: state.decideApproval,
     answerInquiry: state.answerInquiry,
     setFilePreview: state.setFilePreview,
@@ -103,6 +106,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     setNewChatModel: state.setNewChatModel,
     setSessionEngineModel: state.setSessionEngineModel,
     setSessionThinking: state.setSessionThinking,
+    setDefaultModel: state.setDefaultModel,
     setSessionMaxIterations: state.setSessionMaxIterations,
     setSessionPlanMode: state.setSessionPlanMode,
     voiceOnByAgent: state.voiceOnByAgent,
@@ -215,6 +219,29 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => {
     leaf.setTitle(activeSession?.title || (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
   }, [activeId, activeSession?.title, leaf, t])
+
+  // 内容级搜索命中 → 打开会话后滚到那条消息并闪一下(P3)。消息还没到齐时不动手:
+  // 历史是异步拉的,早滚一次会落在错的位置;拉完仍找不到 = 命中落在更早的分页里,如实提示而不是假装跳了。
+  useEffect(() => {
+    const jt = s.jumpTarget
+    if (!jt || jt.sessionId !== activeId || historyLoading) return
+    const el = document.getElementById(`tocmsg-${jt.messageId}`)
+    if (!el) {
+      if (activeMessages.length) { s.toast(t('search.jumpOutOfWindow'), true); s.clearJumpTarget() }
+      return // 消息还没渲染出来:等下一次 activeMessages 变更再试
+    }
+    const root = chatScrollRef.current
+    if (root) {
+      const top = el.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop
+      root.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' })
+      stickToBottom.current = false
+    }
+    el.classList.add('t2-jump-flash')
+    const timer = window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
+    s.clearJumpTarget()
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
 
   const scrollToBottom = useCallback((smooth = false): void => {
     const el = chatScrollRef.current
@@ -397,6 +424,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     userName={userName}
                     userAvatar={userAvatar}
                     fileCtx={{ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }}
+                    modelId={mvModelId}
                     speakState={tts?.msgId === m.id ? tts.phase : undefined}
                     voice={ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined}
                     handlers={{
@@ -404,8 +432,9 @@ export function ChatView({ leaf, params }: ViewProps) {
                       onRegenerate: () => s.regenerate(m.id, activeId),
                       onBranch: () => void s.branchFromMessage(m.id, activeId),
                       onEdit: () => startEdit(m.id, m.content),
+                      onRewind: (mode) => void s.rewindTo(m.id, mode, activeId),
                       onApproval: (aid, action, args) => void s.decideApproval(m.id, aid, action, args, activeId),
-                      onInquiry: (iid, ans) => void s.answerInquiry(m.id, iid, ans, activeId),
+                      onInquiry: (iid, ans) => s.answerInquiry(m.id, iid, ans, activeId),
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
                       onSuggest: (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
                       ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
@@ -506,6 +535,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           running={running}
           execConfig={mvCfg}
           models={visibleModels}
+          modelsResponse={s.modelsResp}
           modelId={mvModelId}
           onModelChange={(id) => s.setSessionModel(id, activeId)}
           engines={s.engines}
@@ -516,6 +546,12 @@ export function ChatView({ leaf, params }: ViewProps) {
           engineCommands={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.commands ?? []) : undefined}
           thinkingLevel={mvCfg.thinkingLevel}
           onThinkingChange={(lv) => s.setSessionThinking(lv, activeId)}
+          defaultModelIds={{
+            backgroundModelId: s.desktopConfig?.backgroundModelId || '',
+            imageModelId: s.cfg.imageModelId || '',
+            visionModelId: s.cfg.visionModelId || '',
+          }}
+          onDefaultModelChange={s.setDefaultModel}
           maxIterations={mvCfg.maxIterations}
           onMaxIterationsChange={activeId ? (n) => s.setSessionMaxIterations(n, activeId) : (n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
           verifyCommand={mvCfg.verifyCommand}
@@ -571,6 +607,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           messages={activeMessages}
           running={running}
           cwd={mvCfg.cwd}
+          modelId={mvModelId}
           hostCwd={mvCfg.execMode === 'host' ? mvCfg.cwd : undefined}
           extraRoots={mvCfg.extraRoots}
           // 只有本机会话谈得上「加本机文件夹」;沙箱会话的工作区不在本机。

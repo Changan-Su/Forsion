@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, Loader2, Pencil, Plus, Search, X, XCircle } from 'lucide-react'
 import { describeTool } from '../../components/ToolGroup'
-import { humanizeRunError } from './EditorialMessage'
+import { humanizeRunError, ReloginChip } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
 import type { DisplayFile, UiMessage } from '../../types'
 import { findLiveEdit } from '../../stores/deskPlan'
@@ -110,10 +110,12 @@ const fmtDur = (ms: number): string => {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 
-export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], onAddRoot, onRemoveRoot }: {
+export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], onAddRoot, onRemoveRoot, modelId }: {
   messages: UiMessage[]
   running: boolean
   cwd?: string
+  /** 本会话实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */
+  modelId?: string
   /** 仅 host 会话给的 cwd:让工具参数里的相对路径拼成绝对路径,和 display_file 归并成一行。 */
   hostCwd?: string
   /** 点「需要你处理」时把对话滚到底(审批/询问卡就在那儿)。 */
@@ -169,6 +171,7 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
           </button>
         )}
         {f.state === 'error' && f.error && <div className="t2-tsum-sub err" title={f.error}>{humanizeRunError(f.error, t)}</div>}
+        {f.state === 'error' && <ReloginChip error={f.error ?? undefined} modelId={modelId} />}
 
         {f.attention.length > 0 && (
           <button className="t2-tsum-attn" onClick={onJumpToAttention}>

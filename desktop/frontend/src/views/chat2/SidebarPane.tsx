@@ -14,7 +14,8 @@ import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
 import { useItemSelect } from '../itemSelect'
 import { tipProps, tipT } from '../../hoverTip'
-import { setChannelConnectedSession } from '../../services/backendService'
+import { searchSessions as apiSearchSessions, setChannelConnectedSession, type SessionSearchHit } from '../../services/backendService'
+import { useApp } from '../../stores/appStore'
 import { useChannels } from '../../stores/channelsStore'
 import { setChatRefDrag } from './chatDragRef'
 import './sidebar2.css'
@@ -23,6 +24,10 @@ import { OverlayAt } from '@lcl/engine'
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
 registerMessages({
+  'sidebar.search.inContent': { zh: '内容匹配', en: 'In conversation' },
+  'sidebar.search.searching': { zh: '正在搜索内容…', en: 'Searching contents…' },
+  'sidebar.search.contentFailed': { zh: '内容搜索没跑成(标题匹配仍可用);改动输入可重试', en: 'Content search failed (title matches still work) — edit the query to retry' },
+  'sidebar.openInNewTab': { zh: '在新标签页打开', en: 'Open in new tab' },
   'sidebar.archiveN': { zh: '归档 {n} 项', en: 'Archive {n}' },
   'sidebar.unarchiveN': { zh: '取消归档 {n} 项', en: 'Unarchive {n}' },
   'sidebar.deleteN': { zh: '删除 {n} 项', en: 'Delete {n}' },
@@ -168,6 +173,34 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     () => (q ? [...p.sessions, ...p.archivedSessions].filter((s) => (s.title || '').toLowerCase().includes(q)) : []),
     [q, p.sessions, p.archivedSessions],
   )
+
+  // 内容级召回(P3):标题匹配是本地即时的,正文匹配要问引擎(与模型侧 search_sessions 同一条 SQL)。
+  // 去抖 250ms + AbortController:每键一发会把长会话库的 LIKE 扫描打满,且回包乱序会让结果闪回旧的。
+  const [deepHits, setDeepHits] = useState<SessionSearchHit[] | null>(null)
+  const [deepBusy, setDeepBusy] = useState(false)
+  // 检索失败 ≠ 没搜到:后端出错时若也渲染成「无结果」,用户会以为库里真没有(Codex 真机走查提的)。
+  const [deepErr, setDeepErr] = useState(false)
+  useEffect(() => {
+    const raw = query.trim()
+    if (raw.length < 2) { setDeepHits(null); setDeepBusy(false); setDeepErr(false); return }
+    const ac = new AbortController()
+    setDeepBusy(true)
+    const timer = window.setTimeout(() => {
+      apiSearchSessions(p.cfg, raw, { limit: 20, signal: ac.signal })
+        .then((hits) => { if (!ac.signal.aborted) { setDeepHits(hits); setDeepErr(false); setDeepBusy(false) } })
+        // 中止是常态(下一次输入),不当错误;真失败**如实说搜不了**,别伪装成「无匹配」——
+        // 标题匹配不受影响,照常可用。
+        .catch(() => { if (!ac.signal.aborted) { setDeepHits([]); setDeepErr(true); setDeepBusy(false) } })
+    }, 250)
+    return () => { window.clearTimeout(timer); ac.abort() }
+  }, [query, p.cfg])
+
+  // 标题匹配已在上面列过 → 正文命中只留没重复的那些。
+  const contentHits = useMemo(() => {
+    if (!deepHits) return []
+    const shown = new Set(matchAll.map((s) => s.id))
+    return deepHits.filter((h) => !shown.has(h.id))
+  }, [deepHits, matchAll])
 
   const toggleGroup = (key: string): void => {
     setCollapsedGroups((prev) => {
@@ -315,9 +348,36 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey) } }}
       >
         {q ? (
-          matchAll.length
-            ? matchAll.map(renderItem)
-            : <div className="t2s-hint">{t('sidebar.search.noResults')}</div>
+          <>
+            {matchAll.map(renderItem)}
+            {/* 正文命中(问引擎):标题匹配之下单独一组,带命中片段;点了直接跳到那条消息。 */}
+            {!!contentHits.length && (
+              <>
+                <div className="t2s-hint t2s-deep-head">{t('sidebar.search.inContent')}</div>
+                {contentHits.map((h) => (
+                  <button
+                    key={h.id}
+                    className="t2s-srow t2s-deep"
+                    title={h.hit?.snippet || h.summary || h.title}
+                    style={{ paddingLeft: rowPadLeft(1) }}
+                    onClick={() => { useApp.getState().setJumpTarget(h.id, h.hit?.messageId); p.onSelect(h.id) }}
+                  >
+                    <span className="t2s-lead"><MessageSquare className="t2s-lead-icon t2s-dim" /></span>
+                    <span className="t2s-deep-col">
+                      <span className="t2s-srow-title">{h.title || 'New Chat'}</span>
+                      <span className="t2s-deep-snip">{h.hit?.snippet || h.summary}</span>
+                    </span>
+                    <span className="t2s-deep-date">{h.updatedAt}</span>
+                  </button>
+                ))}
+              </>
+            )}
+            {deepBusy && <div className="t2s-hint">{t('sidebar.search.searching')}</div>}
+            {deepErr && !deepBusy && <div className="t2s-hint">{t('sidebar.search.contentFailed')}</div>}
+            {!matchAll.length && !contentHits.length && !deepBusy && !deepErr && (
+              <div className="t2s-hint">{t('sidebar.search.noResults')}</div>
+            )}
+          </>
         ) : (
           <>
             {p.showSpecial && (
@@ -441,6 +501,12 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
       {menu && (
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+          {/* 与笔记树右键菜单同一项(amadeusViews 的「在新标签页打开」);⌘/Ctrl 单击是它的快捷路径。 */}
+          {menu.ids.length === 1 && (
+            <button onClick={() => { p.onSelect(menu.id, { newTab: true }); setMenu(null) }}>
+              <Plus size={13} /> {t('sidebar.openInNewTab')}
+            </button>
+          )}
           {menu.ids.length === 1 && (
             <button onClick={() => { const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
               <Pencil size={13} /> {t('sidebar.rename')}

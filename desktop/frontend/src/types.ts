@@ -9,6 +9,9 @@ export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhi
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
+/** Chat View「高级」里可持久化的三类默认模型槽。 */
+export type DefaultModelSlot = 'backgroundModelId' | 'imageModelId' | 'visionModelId'
+
 /**
  * 「辅助模型 · 图像识别」何时介入:
  *   auto   —— 只在主模型被判定为无原生视觉时(黑名单制,见引擎 modelCapabilities)
@@ -622,6 +625,18 @@ export interface ApprovalRequest {
   arguments?: string
   preview: string
   status: 'pending' | 'approved' | 'rejected' | 'expired'
+  /** 「这次为什么问你」(B3)。旧事件没有这个字段 → 卡上不显示解释,不是错误。 */
+  reason?: ApprovalReason
+}
+
+/** 引擎给出的审批判定理由。kind 由 reducer 白名单清洗,渲染层可以信任。 */
+export interface ApprovalReason {
+  /** custom-ask=你写的规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 */
+  kind: 'custom-ask' | 'escalate' | 'mode'
+  /** 命中的规则串(仅 custom-ask) */
+  rule?: string
+  /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base) */
+  mode?: 'readonly' | 'auto-edit' | 'full-auto'
 }
 
 /** ask_user / exit_plan_mode 的询问(机制同审批;answer 为自由文本)。 */
@@ -632,6 +647,8 @@ export interface InquiryRequest {
   options: string[]
   status: 'pending' | 'answered' | 'expired'
   answer?: string
+  /** 'plan'=计划审阅(渲染专属计划卡:批准 / 编辑后批准 / 打回);缺省=通用问答卡。 */
+  kind?: 'plan'
 }
 
 /** 任务清单一项(todo_write/todo_read 工具 + `todo` 事件;对齐 Claude TodoWrite)。 */
@@ -826,6 +843,8 @@ declare global {
       /** 截当前窗口的一块视口矩形(Agent Desk 截屏 → 引擎 desk_screenshot);失败返回 null。 */
       captureRect?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>
       pickDirectory?(): Promise<string | null>
+      /** Chat Box 添加文件或文件夹；取消返回空数组。 */
+      pickPaths?(): Promise<Array<{ path: string; isDirectory: boolean }>>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
       saveTextFile?(defaultName: string, content: string): Promise<{ ok: boolean; path: string | null }>
       /** 用户活动日志埋点(fire-and-forget;拼行/消毒在 main 侧 activityLog.ts)。 */
@@ -1165,6 +1184,11 @@ export interface MarketCard {
   latestTag?: string | null
   /** 可比较的最新版本(github=release tag,zip=manifest/手填 version);null=不参与「可更新」判断。 */
   latestVersion?: string | null
+  /** 投稿标签。旧服务端未返回时按空数组处理。 */
+  tags?: string[]
+  /** 用于商店「最近上架」和详情元信息；兼容旧服务端，均可缺省。 */
+  createdAt?: string | null
+  updatedAt?: string | null
 }
 
 /** 市场详情(含 README 正文)。 */

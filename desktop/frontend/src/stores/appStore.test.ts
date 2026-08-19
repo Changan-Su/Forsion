@@ -275,12 +275,16 @@ describe('appStore.reduceEvent', () => {
 const compactMock = vi.hoisted(() => vi.fn())
 const createSessionMock = vi.hoisted(() => vi.fn())
 const startRunMock = vi.hoisted(() => vi.fn())
+const restoreCpMock = vi.hoisted(() => vi.fn())
+const deleteMsgsMock = vi.hoisted(() => vi.fn())
 vi.mock('../services/backendService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   compactSession: (...a: unknown[]) => compactMock(...a),
   createSession: (...a: unknown[]) => createSessionMock(...a),
   putSessionConfig: () => Promise.resolve({}),
   updateSession: () => Promise.resolve({}),
+  restoreCheckpoint: (...a: unknown[]) => restoreCpMock(...a),
+  deleteMessages: (...a: unknown[]) => deleteMsgsMock(...a),
 }))
 vi.mock('../services/agentRunService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -460,5 +464,86 @@ describe('handleAuthExpired:401 先复检真实登录态', () => {
     await vi.waitFor(() => expect(useApp.getState().connState).toBe('err'))
     expect(useApp.getState().settingsOpen).toBe(true)
     expect(restarts).toBe(0) // 真过期不重启引擎
+  })
+})
+
+// 回退(B1):三档各自只做该做的事。最要紧的两条不变量——① 代码回滚失败绝不接着删对话
+// (对话删了没法重来,而代码没回滚的「回退」是假的);② 仅回退对话时不自动重发(类 Claude Code:
+// 原文回输入框,改不改由用户定)。
+describe('appStore.rewindTo', () => {
+  const msgs = (): UiMessage[] => ([
+    { id: 'u1', role: 'user', content: '第一问', status: 'done', timestamp: 100 },
+    { id: 'a1', role: 'assistant', content: '答一', status: 'done', timestamp: 110 },
+    { id: 'u2', role: 'user', content: '第二问', status: 'done', timestamp: 200 },
+    { id: 'a2', role: 'assistant', content: '答二', status: 'done', timestamp: 210 },
+  ])
+
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({
+      tr: ((k: string) => k) as AppState['tr'],
+      toast: () => {},
+      activeId: 's1',
+      messagesBySession: { s1: msgs() },
+      runningBySession: {},
+    })
+    restoreCpMock.mockReset()
+    deleteMsgsMock.mockReset()
+    startRunMock.mockReset()
+    restoreCpMock.mockResolvedValue({ restored: ['/w/a.ts'], deleted: [], skipped: [], failed: [] })
+    deleteMsgsMock.mockResolvedValue({ ok: true, deleted: 2 })
+  })
+
+  it("mode='code':按该消息时间戳回滚,不动对话", async () => {
+    await useApp.getState().rewindTo('u2', 'code', 's1')
+    expect(restoreCpMock.mock.calls[0]?.[2]).toBe(200)
+    expect(deleteMsgsMock).not.toHaveBeenCalled()
+    expect(useApp.getState().messagesBySession.s1).toHaveLength(4)
+  })
+
+  it("mode='conversation':截断该条及之后 + 原文回输入框,且不重发", async () => {
+    await useApp.getState().rewindTo('u2', 'conversation', 's1')
+    expect(restoreCpMock).not.toHaveBeenCalled()
+    expect(deleteMsgsMock.mock.calls[0]?.[2]).toEqual(['u2', 'a2'])
+    expect(useApp.getState().messagesBySession.s1.map((m) => m.id)).toEqual(['u1', 'a1'])
+    expect(useApp.getState().steerRestoreBySession.s1).toBe('第二问')
+    expect(startRunMock).not.toHaveBeenCalled()
+  })
+
+  it("mode='both':两边都做", async () => {
+    await useApp.getState().rewindTo('u2', 'both', 's1')
+    expect(restoreCpMock).toHaveBeenCalledTimes(1)
+    expect(useApp.getState().messagesBySession.s1).toHaveLength(2)
+  })
+
+  it('代码回滚失败 → 对话保持原样(不做一半)', async () => {
+    restoreCpMock.mockRejectedValue(new Error('disk on fire'))
+    await useApp.getState().rewindTo('u2', 'both', 's1')
+    expect(deleteMsgsMock).not.toHaveBeenCalled()
+    expect(useApp.getState().messagesBySession.s1).toHaveLength(4)
+  })
+
+  it('运行中拒绝回退', async () => {
+    useApp.setState({ runningBySession: { s1: 'r1' } })
+    await useApp.getState().rewindTo('u2', 'both', 's1')
+    expect(restoreCpMock).not.toHaveBeenCalled()
+    expect(deleteMsgsMock).not.toHaveBeenCalled()
+  })
+})
+
+// 计划卡重载后不该消失:plan 事件不落库,计划全文在 exit_plan_mode 的 tool_call 参数里。
+describe('recordToUi 计划回填', () => {
+  it('从 exit_plan_mode 的参数还原 planProposal', () => {
+    const m = recordToUi({
+      id: 'a9', role: 'model', content: '计划已提交',
+      tool_calls: [{ id: 'c1', function: { name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 计划\n1. 做事' }) } }],
+      tool_results: [{ tool_call_id: 'c1', content: 'ok' }],
+    })
+    expect(m.planProposal).toBe('# 计划\n1. 做事')
+  })
+
+  it('参数残缺/非计划工具 → 不设 planProposal', () => {
+    expect(recordToUi({ id: 'a10', role: 'model', content: '', tool_calls: [{ id: 'c1', function: { name: 'exit_plan_mode', arguments: '{bad json' } }] }).planProposal).toBeUndefined()
+    expect(recordToUi({ id: 'a11', role: 'model', content: '', tool_calls: [{ id: 'c2', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }).planProposal).toBeUndefined()
   })
 })

@@ -6,8 +6,8 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowUp, Square, Plus, Mic, ImagePlus, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, MessageSquare, Loader2, Clock, Zap, type LucideIcon,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, type LucideIcon,
 } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
@@ -15,7 +15,7 @@ import { THINKING_LEVELS } from '../../types'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 const CTX_SEC_KEYS = new Set(['persona', 'harness', 'guidance', 'profile', 'project', 'agentFolder', 'memory', 'skills', 'environment', 'hooks', 'plan'])
-import type { AgentConfig, Attachment, CtxInfo, MessageRecord, ModelInfo, NormalAgentDef, SkillInfo } from '../../types'
+import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { useI18n } from '../../i18n'
@@ -27,12 +27,14 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { noteRefInsert } from '../../components/wikiChat'
 import { refToText, type ChatRef } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
+import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
+import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import './composer2.css'
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
-type OpenMenu = 'add' | 'mode' | null
+type OpenMenu = 'add' | 'mode' | 'model' | null
 /** [[ 引用候选:note=vault 笔记(p=vault 相对 .md 路径);session=历史会话(p=标题,供打分);
  *  否则工作区文件(p=cwd 相对路径)。 */
 type RefCand = { p: string; note?: true; session?: { id: string; title: string; summary?: string | null } }
@@ -40,7 +42,7 @@ type RefCand = { p: string; note?: true; session?: { id: string; title: string; 
 const MAX_ATTACH_BYTES = 5 * 1024 * 1024
 const MAX_INPUT_CHARS = 150_000
 const MAX_WS_BYTES = 25 * 1024 * 1024
-/** 审批档位(Codex 形):图标 + 标题 + 一句说明。顺序 = 从最谨慎到最放手,自定义压轴。
+/** 审批档位:菜单行只放图标 + 标题，说明在 hover / focus 时显示到菜单侧边。顺序 = 从最谨慎到最放手,自定义压轴。
  *  full-auto 标 danger(菜单里染强调色)——这一档是把整台电脑交出去,不该和其余三档长得一样。 */
 const APPROVALS = [
   { id: 'readonly', Icon: Hand, key: 'input.approval.readonly', desc: 'input.approval.readonlyDesc' },
@@ -61,7 +63,7 @@ export interface RefChip {
   token: string
   /** 芯片上显示的名字。 */
   name: string
-  kind: 'note' | 'file' | 'session'
+  kind: 'note' | 'file' | 'folder' | 'session' | 'view'
 }
 
 const chipBaseName = (p: string): string => p.split(/[\\/]/).pop() || p
@@ -71,6 +73,18 @@ export const fileChip = (path: string): RefChip => ({
   name: chipBaseName(path),
   kind: 'file',
 })
+
+export const folderChip = (path: string): RefChip => ({
+  token: /\s/.test(path) ? `"${path}"` : path,
+  name: chipBaseName(path),
+  kind: 'folder',
+})
+
+/** 没有文件身份的功能 View 仍把稳定 type + 人类标题显式交给模型；不用 [[...]]，避免被气泡当笔记链接。 */
+export const viewChip = (type: string, title: string): RefChip => {
+  const attr = (value: string): string => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return { token: `<forsion-view type="${attr(type)}" title="${attr(title)}" />`, name: title, kind: 'view' }
+}
 
 /** 一条结构化引用 → 芯片。token 由 refToText 生成 = **与行内插入完全同一段文本**,
  *  发送时原样拼回,故引擎/气泡/read_session 收到的东西一个字节都没变。 */
@@ -119,6 +133,8 @@ export const Composer2: React.FC<{
   running: boolean
   execConfig: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>
   models?: ModelInfo[] | null
+  /** 全量模型目录（含生图模型）+ app 级默认槽；主模型列表仍走上面的会话可见过滤。 */
+  modelsResponse?: ModelsResponse | null
   modelId?: string
   onModelChange?: (modelId: string) => void
   engines?: Array<{ id: string; name: string }>
@@ -129,6 +145,8 @@ export const Composer2: React.FC<{
   engineCommands?: Array<{ name: string; description: string; hint?: string }>
   thinkingLevel?: AgentConfig['thinkingLevel']
   onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>) => void
+  defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
+  onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   maxIterations?: number
   onMaxIterationsChange?: (n: number) => void
   /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令;空=未配置。 */
@@ -185,9 +203,10 @@ export const Composer2: React.FC<{
   onSteerNow?: () => void
 }> = ({
   disabled, running, execConfig,
-  models, modelId, onModelChange, engines, engineId,
+  models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
+  defaultModelIds, onDefaultModelChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
   planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
@@ -242,7 +261,6 @@ export const Composer2: React.FC<{
   const [histPos, setHistPos] = useState(0) // 历史召回位置:0=当前草稿;1..N=第 N 条最近发送
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
   const taRef = useRef<HTMLTextAreaElement>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
 
   /** 命令描述直接取 catalog 的 zh/en —— 不再另建一套 input.slash.* key(那正是两端文案漂移的来源)。 */
   const describe = useMemo(() => {
@@ -362,9 +380,8 @@ export const Composer2: React.FC<{
 
   const isHost = execConfig.execMode === 'host'
   const approval = execConfig.approvalMode || 'auto-edit'
-  // 视口兜底:这两个菜单是 absolute-in-relative + 硬编码宽度(mode 菜单 min-width:320px),
-  // 手机上比可用宽度还宽、按钮又贴着左缘 → 菜单直接掉出屏幕(用户实报)。见 menuAnchor.useEdgeNudge。
-  const addFix = useEdgeNudge(openMenu === 'add')
+  // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
+  // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode')
   // 上下文占比的悬停详情条:同款 absolute + 固定宽,窄屏也会捅出边缘(它常挂 true,靠 RO/resize 重量)。
   const ctxPopFix = useEdgeNudge(true)
@@ -913,6 +930,55 @@ export const Composer2: React.FC<{
     setWsFiles((prev) => [...prev, ...next])
   }
 
+  /** Web / 云端回退：一个系统文件选择动作里，图片仍进 vision 附件，其余文件仍进工作区附件。 */
+  const pickMixedFiles = async (files: FileList | null): Promise<void> => {
+    if (!files?.length) return
+    const images = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    const others = Array.from(files).filter((f) => !f.type.startsWith('image/'))
+    if (images.length) {
+      const dt = new DataTransfer()
+      images.forEach((f) => dt.items.add(f))
+      await pickFiles(dt.files)
+    }
+    if (others.length) {
+      const dt = new DataTransfer()
+      others.forEach((f) => dt.items.add(f))
+      await pickWsFiles(dt.files)
+    }
+  }
+
+  /** Electron 原生「文件或文件夹」：文件读成原有附件格式；文件夹与超大文件保留为路径引用。 */
+  const pickHostPaths = async (items: Array<{ path: string; isDirectory: boolean }>): Promise<void> => {
+    const nextImages: Attachment[] = []
+    const nextFiles: Attachment[] = []
+    const nextRefs: RefChip[] = []
+    for (const item of items) {
+      if (item.isDirectory) { nextRefs.push(folderChip(item.path)); continue }
+      try {
+        const file = await window.tangu?.readHostFile?.(item.path)
+        if (!file || file.tooLarge) { nextRefs.push(fileChip(item.path)); continue }
+        const attachment = { name: chipBaseName(item.path), mimeType: file.mimeType, data: file.content, size: file.size }
+        if (file.mimeType.startsWith('image/') && file.size <= MAX_ATTACH_BYTES) nextImages.push(attachment)
+        else if (file.size <= MAX_WS_BYTES) nextFiles.push(attachment)
+        else nextRefs.push(fileChip(item.path))
+      } catch {
+        // 路径仍是有效上下文；读盘失败不该让用户刚选的文件无声消失。
+        nextRefs.push(fileChip(item.path))
+      }
+    }
+    if (nextImages.length) setAttachments((prev) => [...prev, ...nextImages])
+    if (nextFiles.length) setWsFiles((prev) => [...prev, ...nextFiles])
+    if (nextRefs.length) addRefChips(nextRefs)
+  }
+
+  const addContentReference = (ref: AddContentReference): void => {
+    addRefChips([ref.kind === 'view' ? viewChip(ref.type, ref.title) : refChipOf(ref, vaultRoot || '')])
+    requestAnimationFrame(() => taRef.current?.focus())
+  }
+
+  const [rulesOpen, setRulesOpen] = useState(false)
+  // 订阅而非 getState() 快照:cfg(token/backendUrl)刷新时弹层要跟着拿到新的
+  const liveCfg = useApp((s) => s.cfg)
   const setApproval = (m: NonNullable<AgentConfig['approvalMode']>) => {
     onExecConfigChange({ execMode: 'host', approvalMode: m, cwd: execConfig.cwd })
     setOpenMenu(null)
@@ -1013,6 +1079,10 @@ export const Composer2: React.FC<{
                 <span className="attach-chip" key={c.token} title={c.token}>
                   {c.kind === 'session'
                     ? <MessageSquare size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
+                    : c.kind === 'folder'
+                    ? <Folder size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
+                    : c.kind === 'view'
+                    ? <PanelsTopLeft size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
                     : <FileText size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
                   <span>{c.name}</span>
                   <button
@@ -1215,33 +1285,34 @@ export const Composer2: React.FC<{
           )}
 
           <div className="t2c-row">
-            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-              <button className="t2c-iconbtn" title={t('input.addContent')} disabled={disabled} onClick={() => setOpenMenu((m) => (m === 'add' ? null : 'add'))}>
-                <Plus size={16} />
-              </button>
-              {openMenu === 'add' && (
-                <div ref={addFix.ref} className="composer-menu left" style={addFix.style}>
-                  <button className="menu-item" onClick={() => { fileRef.current?.click(); setOpenMenu(null) }}>
-                    <ImagePlus size={14} />
-                    <span className="grow">{t('input.addImage')}</span>
-                  </button>
-                  <div className="menu-section" style={{ padding: '4px 8px 2px' }}>{t('input.otherFilesHint')}</div>
-                </div>
-              )}
-            </span>
-            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { void pickFiles(e.target.files); e.target.value = '' }} />
+            <AddContentMenu
+              open={openMenu === 'add'}
+              disabled={disabled}
+              activeSessionId={activeSessionId}
+              canUsePathPicker={isHost}
+              onOpenChange={(next) => setOpenMenu(next ? 'add' : null)}
+              onNewSession={onNewSession}
+              onPickPaths={pickHostPaths}
+              onPickFiles={pickMixedFiles}
+              onAddReference={addContentReference}
+            />
             {voiceActive ? (
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
             ) : (<>
             {showModeChip && (
-              <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-                <button className={`t2c-pill${planMode ? ' active' : ''}`} title={t('input.modeChipTitle')} onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}>
+              <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
+                <button
+                  className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode ? ' active' : ''}`}
+                  title={t('input.modeChipTitle')}
+                  aria-expanded={openMenu === 'mode'}
+                  onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}
+                >
                   <ModeIcon size={13} />
                   <span className="t2c-pill-label">{modeLabel}</span>
                   <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
-                  <div ref={modeFix.ref} className="composer-menu composer-menu--mode left" style={modeFix.style}>
+                  <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
                     {onPlanModeChange && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>
@@ -1269,16 +1340,27 @@ export const Composer2: React.FC<{
                           <button
                             key={id}
                             className={`menu-item approval-item${approval === id ? ' active' : ''}${'danger' in a ? ' danger' : ''}`}
+                            aria-describedby={`approval-mode-desc-${id}`}
                             onClick={() => setApproval(id)}
                           >
                             <Icon size={15} className="approval-ic" />
-                            <span className="grow">
-                              <span className="approval-title">{t(key)}</span>
-                              <span className="approval-desc">{t(desc)}</span>
-                            </span>
+                            <span className="grow approval-title">{t(key)}</span>
                             {approval === id && <Check size={13} className="approval-ck" />}
+                            <span id={`approval-mode-desc-${id}`} role="tooltip" className="approval-hover-desc">{t(desc)}</span>
                           </button>
                         ))}
+                        {/* 选了自定义才给编辑入口:没选这一档时打开它没有意义(规则不参与判定) */}
+                        {approval === 'custom' && (
+                          <button
+                            className="menu-item approval-item"
+                            aria-describedby="approval-edit-rules-desc"
+                            onClick={() => { setRulesOpen(true); setOpenMenu(null) }}
+                          >
+                            <SlidersHorizontal size={15} className="approval-ic" />
+                            <span className="grow approval-title">{t('input.approval.editRules')}</span>
+                            <span id="approval-edit-rules-desc" role="tooltip" className="approval-hover-desc">{t('input.approval.editRulesDesc')}</span>
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
@@ -1292,7 +1374,7 @@ export const Composer2: React.FC<{
               const R = 9
               const CIRC = 2 * Math.PI * R
               return (
-                <span className="t2c-ctxring" data-warn={warn || undefined}>
+                <span className="t2c-ctxring t2c-collapse-on-capsule-open" data-warn={warn || undefined}>
                   <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                     <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />
                     <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
@@ -1326,14 +1408,16 @@ export const Composer2: React.FC<{
                             )}
                           </div>
                         )}
-                        {ctxInfo.files.length > 0 && (
-                          <div className="t2c-ctxinfo-files">
-                            <span className="t2c-ctxinfo-label">{t('ctx.files.label')}{ctxInfo.filesTruncated ? ` ${t('ctx.files.truncated')}` : ''}</span>
-                            {ctxInfo.files.map((f) => (
+                        {/* 空态也要说话:不显示这一节时,「这个工作区没有指令文件」和「这功能坏了」长得一模一样
+                            —— 2026-08-18 真机走查就据此报了一条假 ❌。 */}
+                        <div className="t2c-ctxinfo-files">
+                          <span className="t2c-ctxinfo-label">{t('ctx.files.label')}{ctxInfo.filesTruncated ? ` ${t('ctx.files.truncated')}` : ''}</span>
+                          {ctxInfo.files.length > 0
+                            ? ctxInfo.files.map((f) => (
                               <span key={f} className="t2c-ctxinfo-file" title={f}>{f.split(/[/\\]/).slice(-2).join('/')}</span>
-                            ))}
-                          </div>
-                        )}
+                            ))
+                            : <span className="t2c-ctxinfo-file dim">{t('ctx.files.none')}</span>}
+                        </div>
                       </>
                     )}
                     {onCompact && <button className="t2c-ctxring-compact" onClick={onCompact}>{t('input.slash.compact')}</button>}
@@ -1343,6 +1427,9 @@ export const Composer2: React.FC<{
             })()}
             {showModelPill && (
               <ModelPill
+                className="t2c-capsule-peer"
+                open={openMenu === 'model'}
+                onOpenChange={(next) => setOpenMenu(next ? 'model' : null)}
                 disabled={disabled}
                 modelId={isEngine ? engineModelId : modelId}
                 groups={modelPillGroups}
@@ -1354,12 +1441,15 @@ export const Composer2: React.FC<{
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
                   isEngine ? undefined : (ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
                 }
+                modelsResponse={isEngine ? undefined : modelsResponse}
+                defaultModelIds={isEngine ? undefined : defaultModelIds}
+                onDefaultModelChange={isEngine ? undefined : onDefaultModelChange}
                 emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
                 footnote={!isEngine && !isHost ? t('input.cloudModelHint') : undefined}
               />
             )}
             <button
-              className={`t2c-iconbtn${voice.recording ? ' recording' : ''}`}
+              className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
               disabled={disabled || voice.busy || !voice.supported}
               onClick={voice.toggle}
@@ -1384,6 +1474,7 @@ export const Composer2: React.FC<{
           )}
         </div>
       </div>
+      {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
     </div>
   )
 }

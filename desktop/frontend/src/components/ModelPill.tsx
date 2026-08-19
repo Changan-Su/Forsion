@@ -1,40 +1,61 @@
 /**
- * 模型选择器 pill:圆角 pill(机器人图标 + 模型名 + 下拉箭头,长名跑马灯;窄屏收成纯图标)+ 两级菜单
- * (Codex 形:左面板「模型 / 思考」两行各显示当前值,点开某行 → 右侧贴出选项子面板,带 ✓)+
- * 三态(只读「用引擎默认」/ 交互)。
+ * Chat View 模型 / Effort 控制器。
  *
- * 数据源由调用方决定:Tangu 模式传 groups=按 provider 分组 + thinking;外部引擎模式传 groups=引擎模型单组、
- * 无 thinking、emptyLabel=「用引擎默认」。组件本身与数据来源无关。
+ * 展开层固定为三段：①「高级」折叠区；②主模型选择器；③ ChatGPT 式可拖拽 Effort 条。
+ * 高级区复用 config.json 的默认辅助 / 生图 / 识图模型槽；Effort 与模型一样由 store 记住，
+ * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Bot } from 'lucide-react'
 import { zoomOf, useEdgeNudge } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
-import type { AgentConfig } from '../types'
+import type { AgentConfig, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
+  'pill.rowAdvanced': { zh: '高级', en: 'Advanced' },
   'pill.rowModel': { zh: '模型', en: 'Model' },
-  'pill.rowEffort': { zh: '思考', en: 'Effort' },
+  'pill.rowEffort': { zh: 'Effort', en: 'Effort' },
+  'pill.reasoningStrength': { zh: '推理强度', en: 'Reasoning effort' },
+  'pill.defaultAuxModel': { zh: '默认辅助模型', en: 'Default auxiliary model' },
+  'pill.defaultImageModel': { zh: '生图模型', en: 'Image generation model' },
+  'pill.defaultVisionModel': { zh: '识图辅助模型', en: 'Vision auxiliary model' },
+  'pill.followCloudDefault': { zh: '跟随云端默认', en: 'Follow cloud default' },
+  'pill.noModels': { zh: '暂无可用模型', en: 'No available models' },
+  'pill.faster': { zh: '更快', en: 'Faster' },
+  'pill.smarter': { zh: '更智能', en: 'Smarter' },
 })
 
 export interface ModelPillOption { id: string; name: string; description?: string }
 export interface ModelPillGroup { label: string; options: ModelPillOption[] }
 type Thinking = NonNullable<AgentConfig['thinkingLevel']>
+type Pane = 'model' | DefaultModelSlot
 
 const thinkingLabelKey = (lv: Thinking): string => `input.thinking.${lv}`
 const thinkingShortKey = (lv: Thinking): string => `input.thinkingShort.${lv}`
+const effortDisplay = (lv: Thinking, t: (key: string) => string): string => lv === 'max' ? 'Max' : t(thinkingShortKey(lv))
+
+/** 原生 range 的 index ↔ 七档映射集中在这里，避免视图和键盘路径各算一套。 */
+export function effortAt(index: number): Thinking {
+  return THINKING_LEVELS[Math.max(0, Math.min(THINKING_LEVELS.length - 1, Math.round(index)))]
+}
+
+/** 高级区各模型槽的候选过滤规则（与设置页一致）。 */
+export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlot): ModelInfo[] {
+  if (slot === 'imageModelId') return models.filter((m) => m.modelType === 'image_gen')
+  const llms = models.filter((m) => (m.modelType || 'llm') === 'llm')
+  return slot === 'visionModelId' ? llms.filter((m) => m.supportsVision !== false) : llms
+}
 
 /**
  * 子面板要不要翻到菜单左侧。
- * ⚠️ anchorRight / vw 是**视口** px(rect、innerWidth),subW 是**未缩放**局部 px(offsetWidth):
- * 跨坐标系比较必须先把 subW 乘上端级 zoom,否则 body zoom≠1 时判定必错(见 lcl/engine/menuAnchor 的同款坑)。
+ * ⚠️ anchorRight / vw 是视口 px，subW 是未缩放局部 px；比较前必须乘端级 zoom。
  */
 export function subFlips(anchorRight: number, subW: number, zoom: number, vw: number, gap = 6, margin = 8): boolean {
   return anchorRight + (gap + subW) * zoom > vw - margin
 }
 
-/** 仅当文本溢出才在 hover 时跑马灯(测 scrollWidth>clientWidth → 加 class,纯 CSS 平移)。 */
+/** 仅当文本溢出才在 hover 时跑马灯。 */
 const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   const ref = useRef<HTMLSpanElement>(null)
   const [over, setOver] = useState(false)
@@ -50,43 +71,57 @@ const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
 }
 
 export const ModelPill: React.FC<{
+  className?: string
+  /** Composer2 传入时由三颗胶囊共用一个排他开关；harness / 独立用法仍可不受控。 */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   disabled?: boolean
   modelId?: string
   groups: ModelPillGroup[]
   onSelect: (id: string) => void
   thinkingLevel?: Thinking
   onThinkingChange?: (lv: Thinking) => void
-  /** 当前模型支持的思考档(引擎能力表);缺省=未知,全可选。不支持的档标灰但仍可选(引擎会自动降档)。 */
+  /** 当前模型支持的思考档；不支持的档仍可选，由引擎自动降档。 */
   supportedThinking?: string[]
-  /** 本 run 实际生效档(引擎 context_info):与请求档不同=被降档,行值标注出来(H6)。 */
+  /** 本 run 实际生效档；与请求档不同则在推理强度摘要中显示降档。 */
   effectiveThinking?: string
-  /** 无可选模型时的只读标签(外部引擎:「用引擎默认」)。 */
+  /** 高级区需要全量目录（主模型列表可能已按云端会话过滤，不能拿它代替）。 */
+  modelsResponse?: ModelsResponse | null
+  defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
+  onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
+  /** 无可选模型时的只读标签（外部引擎：用引擎默认）。 */
   emptyLabel?: string
-  /** 菜单底部说明(云端会话解释「为什么直连模型不在列表里」,免得用户以为丢了)。 */
   footnote?: string
   title?: string
-}> = ({ disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, supportedThinking, effectiveThinking, emptyLabel, footnote, title }) => {
+}> = ({
+  className, open: controlledOpen, onOpenChange,
+  disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, supportedThinking, effectiveThinking,
+  modelsResponse, defaultModelIds, onDefaultModelChange, emptyLabel, footnote, title,
+}) => {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  const [pane, setPane] = useState<'model' | 'effort' | null>(null)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setPillOpen = (next: boolean): void => {
+    if (controlledOpen === undefined) setInternalOpen(next)
+    onOpenChange?.(next)
+  }
+  const [advanced, setAdvanced] = useState(false)
+  const [pane, setPane] = useState<Pane | null>(null)
   const [flip, setFlip] = useState(false)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
-  // 视口兜底:菜单 `right:0` + 固定 224px 宽,pill 只要离左边不足 232px,菜单左缘就是负数;
-  // 子面板再 flip 到左边一叠加,整块跑出屏幕(手机上实报)。subFlips 只决定翻不翻,不管掉不掉出去。
   const menuFix = useEdgeNudge(open)
-  const subFix = useEdgeNudge(pane ? `${pane}:${flip}` : '') // flip 进依赖:翻面后要按新一侧重夹
+  const subFix = useEdgeNudge(pane ? `${pane}:${flip}` : '')
 
   useEffect(() => {
-    if (!open) { setPane(null); return }
-    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setOpen(false) }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    if (!open) { setPane(null); setAdvanced(false); return }
+    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setPillOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPillOpen(false) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
-  }, [open])
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 子面板默认贴菜单右侧,右边放不下就翻到左侧。菜单 right:0 贴在 wrap 右缘,故菜单右缘 == wrap 右缘。
   useLayoutEffect(() => {
     const el = subRef.current
     const wrap = wrapRef.current
@@ -97,34 +132,73 @@ export const ModelPill: React.FC<{
   const all = groups.flatMap((g) => g.options)
   const hasModels = all.length > 0
   const current = all.find((m) => m.id === modelId)
-  // 三态:无 thinking(=外部引擎模式)且无可选模型 + 有 emptyLabel → 只读 pill。
   const readonly = !onThinkingChange && !hasModels && !!emptyLabel
   const label = current?.name || emptyLabel || t('input.selectModel')
-  // 未显式设置 = 引擎默认思考·中(agentLoop 同款回退)——显示必须与实际执行一致。
   const effLevel: Thinking = thinkingLevel || 'medium'
-  const effort = effLevel !== 'off' ? ` · ${t(thinkingShortKey(effLevel))}` : ''
+  const effortText = effortDisplay(effLevel, t)
+  const effort = effLevel !== 'off' ? ` · ${effortText}` : ''
+  const effortIndex = Math.max(0, THINKING_LEVELS.indexOf(effLevel))
+  const effortPct = `${(effortIndex / (THINKING_LEVELS.length - 1)) * 100}%`
+  const effortThumbLeft = `calc(${effortPct} + ${(0.5 - effortIndex / (THINKING_LEVELS.length - 1)) * 25}px)`
+  const effectiveText = effectiveThinking && effectiveThinking !== effLevel
+    ? ` → ${effortDisplay(effectiveThinking as Thinking, t)}`
+    : ''
+  const isMax = effLevel === 'max'
+
+  const groupCatalog = (models: ModelInfo[]): ModelPillGroup[] => {
+    const map = new Map<string, ModelPillGroup>()
+    for (const m of models) {
+      const key = `${m.source}:${m.provider}`
+      const source = m.source === 'direct' ? t('model.group.direct') : t('model.group.forsion')
+      let g = map.get(key)
+      if (!g) { g = { label: `${m.provider} · ${source}`, options: [] }; map.set(key, g) }
+      g.options.push({ id: m.id, name: m.name, description: `${m.provider} · ${m.id}` })
+    }
+    return [...map.values()]
+  }
+
+  const slotModels = (slot: DefaultModelSlot): ModelInfo[] => catalogForDefaultSlot(modelsResponse?.models || [], slot)
+  const cloudDefaultFor = (slot: DefaultModelSlot): string | null | undefined => modelsResponse?.[slot]
+  const modelName = (id?: string | null): string => {
+    if (!id) return ''
+    return modelsResponse?.models.find((m) => m.id === id)?.name || id
+  }
+  const slotLabel = (slot: DefaultModelSlot): string => {
+    const selected = defaultModelIds?.[slot]
+    if (selected) return modelName(selected)
+    const cloud = cloudDefaultFor(slot)
+    return cloud ? `${t('pill.followCloudDefault')} · ${modelName(cloud)}` : t('pill.followCloudDefault')
+  }
+  const slotRows: Array<{ slot: DefaultModelSlot; label: string }> = [
+    { slot: 'backgroundModelId', label: t('pill.defaultAuxModel') },
+    { slot: 'imageModelId', label: t('pill.defaultImageModel') },
+    { slot: 'visionModelId', label: t('pill.defaultVisionModel') },
+  ]
+
+  const paneGroups = pane === 'model' ? groups : pane ? groupCatalog(slotModels(pane)) : []
+  const paneValue = pane === 'model' ? modelId : pane ? (defaultModelIds?.[pane] || '') : ''
+  const selectDefault = (slot: DefaultModelSlot, id: string): void => {
+    onDefaultModelChange?.(slot, id)
+    setPane(null)
+  }
+  const showPane = (p: Pane) => (): void => setPane(p)
 
   if (readonly) {
     return (
-      <span className="composer-chip composer-chip--readonly" title={title}>
+      <span className={`composer-chip composer-chip--readonly${className ? ` ${className}` : ''}`} title={title}>
         <Bot size={13} />
         <MarqueeLabel text={label} />
       </span>
     )
   }
 
-  // 一级菜单点击才开(不抢焦点),二级子面板悬停即显示。
-  // 悬停只「切换到这一格」、从不在 mouseleave 关闭 —— 关了的话斜着往子面板走的路径会先掠过另一行/空白,
-  // 面板闪没,里面的选项就永远点不到(同 .t2c-ctxring-pop 那条透明桥治的是一个病)。
-  const showPane = (p: 'model' | 'effort') => (): void => setPane(p)
-
   return (
-    <span ref={wrapRef} className={`model-pill-wrap${open ? ' is-open' : ''}`} data-cmenu>
+    <span ref={wrapRef} className={`model-pill-wrap${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-cmenu>
       <button
-        className={`composer-chip model-pill-btn${open ? ' is-open' : ''}`}
+        className={`composer-chip model-pill-btn${open ? ' is-open' : ''}${isMax ? ' is-max' : ''}`}
         title={title || t('input.modelChipTitle')}
         disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setPillOpen(!open)}
       >
         <Bot size={13} />
         <MarqueeLabel text={label + effort} />
@@ -132,22 +206,100 @@ export const ModelPill: React.FC<{
       </button>
       {open && (
         <div ref={menuFix.ref} className="composer-menu composer-menu--model" style={menuFix.style}>
-          <button className={`cm-row${pane === 'model' ? ' is-open' : ''}`} onMouseEnter={showPane('model')} onFocus={showPane('model')} onClick={showPane('model')}>
+          {onThinkingChange && (
+            <>
+              {/* 高级内容放在触发行上方；菜单底边固定，所以展开时卡片向上生长、后三行不位移。 */}
+              <div className={`cm-advanced-reveal${advanced ? ' is-open' : ''}`} aria-hidden={!advanced}>
+                <div className="cm-advanced-reveal-inner">
+                  <div className="cm-advanced-list">
+                    <div className="cm-row cm-row--static">
+                      <span className="cm-row-k">{t('pill.reasoningStrength')}</span>
+                      <span className={`cm-row-v${isMax ? ' is-max' : ''}`}>{effortText}{effectiveText}</span>
+                    </div>
+                    {onDefaultModelChange && slotRows.map(({ slot, label: rowLabel }) => (
+                      <button
+                        key={slot}
+                        className={`cm-row${pane === slot ? ' is-open' : ''}`}
+                        tabIndex={advanced ? 0 : -1}
+                        onFocus={showPane(slot)}
+                        onClick={showPane(slot)}
+                      >
+                        <span className="cm-row-k">{rowLabel}</span>
+                        <span className="cm-row-v">{slotLabel(slot)}</span>
+                        <ChevronRight size={13} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {/* 第一行：高级；它本身仍留在模型和 Effort 上方。 */}
+              <button
+                className={`cm-row cm-advanced-toggle${advanced ? ' is-open' : ''}`}
+                aria-expanded={advanced}
+                onClick={() => { setAdvanced((v) => !v); setPane(null) }}
+              >
+                <span className="cm-row-k">{t('pill.rowAdvanced')}</span>
+                <span className="cm-row-v" />
+                <ChevronRight size={13} />
+              </button>
+            </>
+          )}
+
+          {/* 第二行：保留原有按 provider 分组的模型选择器。 */}
+          <button
+            className={`cm-row cm-model-row${pane === 'model' ? ' is-open' : ''}`}
+            onMouseEnter={showPane('model')}
+            onFocus={showPane('model')}
+            onClick={showPane('model')}
+          >
             <span className="cm-row-k">{t('pill.rowModel')}</span>
             <span className="cm-row-v">{label}</span>
             <ChevronRight size={13} />
           </button>
+
+          {/* 第三行：ChatGPT 式离散拖动条。Max 单独切换蓝紫渐变 + 星点层。 */}
           {onThinkingChange && (
-            <button className={`cm-row${pane === 'effort' ? ' is-open' : ''}`} onMouseEnter={showPane('effort')} onFocus={showPane('effort')} onClick={showPane('effort')}>
-              <span className="cm-row-k">{t('pill.rowEffort')}</span>
-              <span className="cm-row-v">
-                {t(thinkingShortKey(effLevel))}
-                {/* 实际生效档与请求档不同=被能力表降档,如实标出(H6) */}
-                {effectiveThinking && effectiveThinking !== effLevel && ` → ${t(thinkingShortKey(effectiveThinking as Thinking))}`}
-              </span>
-              <ChevronRight size={13} />
-            </button>
+            <div className={`cm-effort${isMax ? ' is-max' : ''}`} data-effort={effLevel}>
+              <div className="cm-effort-head">
+                <span>{t('pill.rowEffort')}</span>
+                <span key={effLevel} className="cm-effort-value">{effortText}{effectiveText}</span>
+              </div>
+              <div className="cm-effort-ends"><span>{t('pill.faster')}</span><span>{t('pill.smarter')}</span></div>
+              <div className="cm-effort-slider-wrap">
+                <span className="cm-effort-track" aria-hidden="true">
+                  <span className="cm-effort-range" style={{ width: effortPct }} />
+                  {isMax && (
+                    <span className="cm-effort-sparkles">
+                      {Array.from({ length: 10 }, (_, i) => <i key={i} />)}
+                    </span>
+                  )}
+                  <span className="cm-effort-ticks">
+                    {THINKING_LEVELS.map((lv, i) => (
+                      <i
+                        key={lv}
+                        className={`${i <= effortIndex ? ' is-on' : ''}${supportedThinking && !supportedThinking.includes(lv) ? ' is-unsupported' : ''}`}
+                        style={{ left: `${(i / (THINKING_LEVELS.length - 1)) * 100}%` }}
+                      />
+                    ))}
+                  </span>
+                </span>
+                <span className="cm-effort-thumb" style={{ left: effortThumbLeft }} aria-hidden="true" />
+                <input
+                  className="cm-effort-input"
+                  type="range"
+                  min={0}
+                  max={THINKING_LEVELS.length - 1}
+                  step={1}
+                  value={effortIndex}
+                  aria-label={t('pill.reasoningStrength')}
+                  aria-valuetext={`${effortText}${supportedThinking && !supportedThinking.includes(effLevel) ? ` ${t('pill.thinkUnsupported')}` : ''}`}
+                  title={t(thinkingLabelKey(effLevel))}
+                  onChange={(e) => onThinkingChange(effortAt(Number(e.currentTarget.value)))}
+                />
+              </div>
+            </div>
           )}
+
           {footnote && <div className="menu-section cm-foot">{footnote}</div>}
           {pane && (
             <div
@@ -156,38 +308,35 @@ export const ModelPill: React.FC<{
               data-pane={pane}
               style={subFix.style}
             >
-              {pane === 'effort'
-                ? THINKING_LEVELS.map((lv) => {
-                    // 不支持的档标灰但可选:引擎会自动降档,选了也不出错——灰+后缀让降档不再静默
-                    const unsupported = !!supportedThinking && !supportedThinking.includes(lv)
-                    return (
-                      <button
-                        key={lv}
-                        className={`menu-item${effLevel === lv ? ' active' : ''}${unsupported ? ' mi-dim' : ''}`}
-                        onClick={() => { onThinkingChange?.(lv); setOpen(false) }}
-                      >
-                        <span className="grow">{t(thinkingLabelKey(lv))}{unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}</span>
-                        <span className="mi-check">{effLevel === lv ? '✓' : ''}</span>
-                      </button>
-                    )
-                  })
-                : groups.map((g) => (
-                    <React.Fragment key={g.label}>
-                      <div className="menu-section">{g.label}</div>
-                      {g.options.map((m) => (
-                        <button
-                          key={m.id}
-                          className={`menu-item${m.id === modelId ? ' active' : ''}`}
-                          title={m.description}
-                          onClick={() => { onSelect(m.id); setOpen(false) }}
-                        >
-                          <span className="grow">{m.name}</span>
-                          <span className="mi-check">{m.id === modelId ? '✓' : ''}</span>
-                        </button>
-                      ))}
-                    </React.Fragment>
+              {pane !== 'model' && (
+                <button
+                  className={`menu-item${paneValue ? '' : ' active'}`}
+                  onClick={() => selectDefault(pane, '')}
+                >
+                  <span className="grow">{slotLabel(pane)}</span>
+                  <span className="mi-check">{paneValue ? '' : '✓'}</span>
+                </button>
+              )}
+              {paneGroups.map((g) => (
+                <React.Fragment key={g.label}>
+                  <div className="menu-section">{g.label}</div>
+                  {g.options.map((m) => (
+                    <button
+                      key={m.id}
+                      className={`menu-item${m.id === paneValue ? ' active' : ''}`}
+                      title={m.description}
+                      onClick={() => {
+                        if (pane === 'model') { onSelect(m.id); setPillOpen(false) }
+                        else selectDefault(pane, m.id)
+                      }}
+                    >
+                      <span className="grow">{m.name}</span>
+                      <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
+                    </button>
                   ))}
-              {pane === 'model' && !hasModels && <div className="menu-section">{t('common.loading')}</div>}
+                </React.Fragment>
+              ))}
+              {!paneGroups.length && <div className="menu-section">{t('pill.noModels')}</div>}
             </div>
           )}
         </div>

@@ -9,10 +9,15 @@
    (见 chat2.css 的 .composer-anchor)。所以底色必须是**不透明**的:它要真的挡住底下滚过的字。
    glass 主题把这层换成半透磨砂(genesis-glass/theme.css 3.5),那里糊的正是底下的正文。 */
 .t2c-card {
+  --t2c-font-body: 13px;
+  --t2c-font-control: 12px;
+  --t2c-font-meta: 11px;
   position: relative;
   container-type: inline-size; /* 卡宽驱动底排药丸收窄(容器查询,不看视口) */
   background: var(--bg-card, var(--bg));
-  border: var(--border-width, 1px) solid var(--border);
+  /* 不描边(2026-08-14 用户要求,同 chat2.css 那批卡)。留着 1px transparent 而不是 border:none:
+     盒模型不变 → 拖文件进来时 .dragover 换个 border-color 就能亮边,布局不位移。 */
+  border: var(--border-width, 1px) solid transparent;
   border-radius: var(--radius-chat-surface, 20px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
   padding: 12px 14px;
@@ -22,7 +27,7 @@
 
 .t2c-ta {
   width: 100%; border: none; outline: none; background: transparent; resize: none;
-  color: var(--text); font-family: var(--font-ui); font-size: 14px; line-height: 1.6;
+  color: var(--text); font-family: var(--font-ui); font-size: var(--t2c-font-body, 13px); line-height: 1.6;
   /* min-height 保底一行:即便 autoGrow 在未布局时把内联 height 写小,也永远有一行可点可输入的区域
      (根治「首启引导后输入区塌成 0、须刷新才有」)。 */
   min-height: 1.6em; max-height: 200px; display: block;
@@ -81,13 +86,143 @@
 .t2c-pill {
   display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: none;
   border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text);
-  font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; transition: background var(--duration-fast, 0.15s);
+  font-size: var(--t2c-font-control, 12px); font-family: var(--font-ui); cursor: pointer; transition: background var(--duration-fast, 0.15s);
 }
-/* 模型药丸(ModelPill 用 base.css .composer-chip)在底排里也随「再缩小一号」——作用域限定,不动别处的 chip。 */
-.t2c-row .composer-chip { font-size: 10.5px; }
+/* 模型药丸(ModelPill 用 base.css .composer-chip)与模式药丸统一到 12px；作用域限定，不动别处的 chip。 */
+.t2c-row .composer-chip { font-size: var(--t2c-font-control, 12px); }
 .t2c-pill:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
 .t2c-pill.active { background: color-mix(in srgb, var(--accent-ink) 16%, transparent); color: var(--accent-ink); }
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
+   模式胶囊在底栏左侧:若外层跟着按钮逐帧变宽,绑 right:0 的菜单会横移百余 px,
+   看起来像从侧面滑入。打开时外层先占住最终宽度,按钮仍在槽内平滑展开,菜单锚点不动。 */
+.mode-pill-wrap { position: relative; display: inline-flex; }
+.t2c-pill.mode-pill-btn {
+  min-width: 0;
+  interpolate-size: allow-keywords;
+  width: fit-content;
+  transition: background var(--duration-fast, 0.15s), width 0.18s var(--ease-spring);
+}
+.t2c-pill.mode-pill-btn.is-open {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  width: 224px;
+  background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+}
+.mode-pill-wrap.is-open { width: 224px; flex-shrink: 0; }
+.mode-pill-btn.is-open > svg { justify-self: center; }
+.mode-pill-btn.is-open .t2c-pill-label { width: 100%; max-width: none; text-align: center; }
+
+/* 「＋」升级为第三颗同语系胶囊：闭合 28px，展开 224px；菜单左缘固定，所以只向右长。 */
+.add-pill-wrap { position: relative; display: inline-flex; }
+.t2c-pill.add-pill-btn {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 0fr) 0;
+  justify-content: center;
+  gap: 0;
+  width: 28px;
+  height: 28px;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  transition:
+    background var(--duration-fast, 0.15s),
+    color var(--duration-fast, 0.15s),
+    width 0.18s var(--ease-spring),
+    grid-template-columns 0.18s var(--ease-spring),
+    gap 0.18s var(--ease-spring),
+    padding 0.18s var(--ease-spring);
+}
+.t2c-pill.add-pill-btn.is-open {
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  justify-content: stretch;
+  gap: 4px;
+  width: 224px;
+  padding: 4px 9px;
+  color: var(--text);
+  background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+}
+.add-pill-plus { justify-self: center; transition: transform 0.2s var(--ease-spring); }
+.add-pill-btn.is-open .add-pill-plus { transform: rotate(45deg); }
+.add-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-align: center;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.add-pill-btn.is-open .add-pill-label { opacity: 1; transition-delay: 0.04s; }
+.add-pill-chevron { justify-self: center; opacity: 0; transition: opacity 0.12s ease; }
+.add-pill-btn.is-open .add-pill-chevron { opacity: 1; transition-delay: 0.04s; }
+
+/* 一级菜单与胶囊等宽；二级菜单优先沿侧边展开，两侧都不够时完整叠到一级菜单上方。 */
+.composer-menu--add {
+  left: 0;
+  width: 224px;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+}
+.composer-menu--add .menu-item { font-size: var(--t2c-font-control, 12px); }
+.composer-menu--add .menu-item .grow {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-menu--add .add-menu-parent > svg:last-child { flex: none; color: var(--text-faint); }
+.add-menu-sub {
+  position: absolute;
+  bottom: 100%;
+  left: calc(100% + 6px);
+  width: 268px;
+  min-width: 0;
+  padding: 5px;
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  animation: pop 0.16s var(--ease-spring);
+}
+.add-menu-sub.left { left: auto; right: calc(100% + 6px); }
+.add-menu-sub.stacked { left: 0; right: auto; }
+.add-menu-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 1px 1px 4px;
+  padding: 7px 8px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  color: var(--text-faint);
+}
+.add-menu-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-ink) 22%, transparent); }
+.add-menu-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--t2c-font-control, 12px);
+}
+.add-menu-search input::placeholder { color: var(--text-faint); }
+.add-menu-sub-scroll { max-height: 286px; overflow-y: auto; overscroll-behavior: contain; }
+.add-menu-result { align-items: flex-start !important; }
+.add-menu-result > svg { flex: none; margin-top: 1px; color: var(--text-muted); }
+.add-menu-result-main { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.add-menu-result-title, .add-menu-result-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-menu-result-title { color: inherit; }
+.add-menu-result-meta { color: var(--text-faint); font-size: var(--t2c-font-meta, 11px); }
+.add-menu-empty { padding: 10px 9px; color: var(--text-faint); font-size: var(--t2c-font-meta, 11px); }
+.add-menu-section-gap { margin-top: 4px; border-top: var(--border-width, 1px) solid var(--border); }
 
 /* 收窄让位:药丸(含 data-cmenu 外层包裹)与其标签可截断收缩,固定图标钮各自 flex-shrink:0 不受影响。 */
 .t2c-row [data-cmenu], .t2c-row .t2c-pill, .t2c-row .composer-chip,
@@ -97,6 +232,27 @@
    ponytail: 单断点(用户确认「一起收」);480px 按 880 卡宽估,可调。 */
 @container (max-width: 480px) {
   .t2c-pill-label, .t2c-row .composer-chip .pill-marquee { display: none; }
+  /* 收窄时只藏闭合态标签；当前展开胶囊仍要保留完整居中文案。 */
+  .mode-pill-btn.is-open .t2c-pill-label,
+  .model-pill-btn.is-open .pill-marquee { display: block; }
+}
+
+/* 窄 Chat View 的排他展开：当前胶囊完整保留，其他胶囊 / 次要控制直接退出布局。
+   发送（以及运行时停止）永远保留，避免为了观感牺牲核心动作。 */
+@container (max-width: 600px) {
+  .t2c-row:has(> .add-pill-wrap.is-open) > .t2c-capsule-peer:not(.add-pill-wrap),
+  .t2c-row:has(> .mode-pill-wrap.is-open) > .t2c-capsule-peer:not(.mode-pill-wrap),
+  .t2c-row:has(> .model-pill-wrap.is-open) > .t2c-capsule-peer:not(.model-pill-wrap),
+  .t2c-row:has(> .add-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
+  .t2c-row:has(> .mode-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
+  .t2c-row:has(> .model-pill-wrap.is-open) > .t2c-collapse-on-capsule-open {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t2c-pill.mode-pill-btn, .t2c-pill.add-pill-btn { transition: background var(--duration-fast, 0.15s); }
+  .add-pill-plus, .add-pill-label, .add-pill-chevron { transition: none; }
+  .add-menu-sub { animation: none; }
 }
 
 /* 上下文进度圈:平时只是一个圆环,hover 弹出 token 占用详情(替代旧的横条+文字) */
@@ -131,6 +287,7 @@
 .t2c-ctxinfo-row > span:last-child { font-family: var(--font-mono); color: var(--text-faint); }
 .t2c-ctxinfo-label { color: var(--text-faint); }
 .t2c-ctxinfo-file { font-family: var(--font-mono); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.t2c-ctxinfo-file.dim { font-family: inherit; opacity: 0.6; } /* 空态那句不是文件名,别用等宽 */
 .t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; }
 .t2c-ctxring-compact:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
 

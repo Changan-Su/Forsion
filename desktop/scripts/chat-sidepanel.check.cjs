@@ -12,7 +12,12 @@
  *  16-17 长代码行只在自己框里横滚,不顶宽聊天流(正文恒受 view 宽度约束)
  *  18-21 输入卡脱流悬浮在正文之上:正文铺满整列、按卡实高留白、卡两侧空当放行、
  *        渐隐只在卡下方那条缝(挂卡上沿被用户打回过)、「回到底」按钮抬过卡
- * (15-17 在流程里跑在 3 之后、Amadeus 那段之前;编号按加入顺序,不按执行顺序)
+ *  23-25 那批卡一律不描边;glass 的输入卡与二级菜单同为薄档磨砂(84% 糊了也看不见)
+ *  26   窄栏(≤520px 容器)滚到底,末条仍完整停在悬浮输入卡上方 —— 那档的 padding 简写
+ *       曾把 calc 抹掉,末条被卡压住 178px
+ *  27   16 的推广:用户原话是「不管宽度多少,一行内容过长就超出」——长单词/URL/行内 code/宽表/
+ *       思考块/工具卡/用户气泡逐个量,都不许顶出横滚(只钉代码块会漏掉表格那类另有溢出路子的)
+ * (15-17、27 在流程里跑在 3 之后、Amadeus 那段之前;编号按加入顺序,不按执行顺序)
  *
  * 为什么必须打真 Electron:Amadeus Space 只在有 window.amadeus(文件系统桥)时注册,浏览器里根本
  * 没有这个 Space;右栏的默认内容又走「折叠→stash→展开还原」那条路,单元测试摸不到。
@@ -159,6 +164,43 @@ async function main() {
     '17 代码块在自己的框里横滚(而不是溢出去)',
     !!wrapProbe && wrapProbe.preScrolls > 0 && wrapProbe.preOverflowX !== 'visible',
     wrapProbe ? `pre 内部可滚 ${wrapProbe.preScrolls}px,overflow-x=${wrapProbe.preOverflowX}` : 'no probe',
+  )
+
+  // ── 27 「任何一行内容过长」都不顶宽 ─────────────────────────────────────────
+  // 用户原话是「不管宽度多少,一行内容过长就超出」——16 只钉了 ```代码块```,别的形态一样会顶宽
+  // (表格 width:max-content、行内 code、长 URL 各有各的溢出路子)。逐个插进真流里量,判据同 16。
+  const shapes = await win.evaluate(`(() => {
+    const inner = document.querySelector('.t2-stream-inner')
+    const stream = document.querySelector('.t2-stream')
+    if (!inner || !stream) return null
+    const L = 'x'.repeat(400) // 400 字符不含空格:任何宽度都放不下
+    const td = Array.from({ length: 30 }, (_, i) => '<td>单元格内容' + i + '</td>').join('')
+    const SHAPES = [
+      ['正文长单词', '<div class="t2-asst-col"><div class="t2-content"><p>' + L + '</p></div></div>'],
+      ['长 URL', '<div class="t2-asst-col"><div class="t2-content"><p>看这个 https://example.com/' + 'a'.repeat(380) + ' 就是了</p></div></div>'],
+      ['行内 code', '<div class="t2-asst-col"><div class="t2-content"><p>路径是 <code>' + L + '</code> 这样</p></div></div>'],
+      ['宽表格', '<div class="t2-asst-col"><div class="t2-content"><table><tbody><tr>' + td + '</tr></tbody></table></div></div>'],
+      ['思考块', '<div class="t2-asst-col"><div class="thinking-block"><div class="t2-content"><p>' + L + '</p></div></div></div>'],
+      ['工具卡', '<div class="t2-asst-col"><div class="tool-card"><div class="tool-card-body">' + L + '</div></div></div>'],
+      ['用户气泡', '<div class="t2-user-col"><div class="t2-user">' + L + '</div></div>'],
+    ]
+    const bad = []
+    for (const [name, html] of SHAPES) {
+      const node = document.createElement('div')
+      node.className = name === '用户气泡' ? 't2-userwrap' : 't2-asst'
+      node.innerHTML = html
+      inner.appendChild(node)
+      void node.offsetWidth
+      const over = stream.scrollWidth - stream.clientWidth
+      if (over > 1) bad.push(name + ' +' + over + 'px')
+      node.remove()
+    }
+    return { bad, width: Math.round(stream.clientWidth) }
+  })()`)
+  check(
+    '27 长单词/URL/行内code/宽表/思考块/工具卡/用户气泡 都不顶出横滚',
+    !!shapes && shapes.bad.length === 0,
+    shapes ? `流宽 ${shapes.width}px;顶宽的形态:${shapes.bad.length ? shapes.bad.join('、') : '无'}` : 'no probe',
   )
 
   // ── 18-20 输入卡悬浮在正文之上 ───────────────────────────────────────────────
@@ -316,6 +358,46 @@ async function main() {
   const slimAv = (await win.evaluate(AVATAR_PROBE)).filter((a) => a.ratio < 9 / 16)
   check('11 细长聊天列(宽:高 < 0.5625)隐藏头像', slimAv.length > 0 && slimAv.every((a) => a.display === 'none'), JSON.stringify(slimAv))
 
+  // ── 26 窄栏(侧栏对话)触底时末条不许被输入卡压住 ─────────────────────────────
+  // 08-14 用户报「窄到藏头像那一档,最底下的消息总有一截到不了 chatbox 上面」。
+  // 根因不是头像那条规则,是 `@container (max-width:520px)` 里 .t2-stream-inner 用 **padding 简写**
+  // 把基础规则的 `calc(var(--t2-composer-h) + 8px)` 整个抹掉,退回 6px —— 悬浮卡下面就没留白了。
+  // 实测:窄栏 padBottom=6 / 末条底缘在卡顶下方 178px;修好后 192 / +8(与宽栏同)。
+  const bottomGap = await win.evaluate(`(() => {
+    const cols = [...document.querySelectorAll('.t2-chat-col')]
+    const col = cols.find((c) => { const b = c.getBoundingClientRect(); return b.width / b.height < 9 / 16 }) || cols[0]
+    if (!col) return null
+    const inner = col.querySelector('.t2-stream-inner')
+    const stream = col.querySelector('.t2-stream')
+    const anchor = col.querySelector(':scope > .composer-anchor')
+    if (!inner || !stream || !anchor) return null
+    const made = []
+    for (let i = 0; i < 14; i++) {
+      const n = document.createElement('div')
+      n.className = 't2-asst'
+      n.innerHTML = '<div class="t2-asst-col"><div class="t2-content"><p>第' + i + '条 窄栏触底对照文本,写长一点好换行。</p></div></div>'
+      inner.appendChild(n)
+      made.push(n)
+    }
+    stream.scrollTop = stream.scrollHeight
+    const b = col.getBoundingClientRect()
+    const a = anchor.getBoundingClientRect()
+    const l = made[made.length - 1].getBoundingClientRect()
+    const out = {
+      ratio: +(b.width / b.height).toFixed(3),
+      padBottom: Math.round(parseFloat(getComputedStyle(inner).paddingBottom)),
+      anchorH: Math.round(a.height),
+      lastAboveCard: Math.round(a.top - l.bottom),
+    }
+    made.forEach((n) => n.remove())
+    return out
+  })()`)
+  check(
+    '26 窄栏滚到底:末条完整停在输入卡上方(不被悬浮卡压住)',
+    !!bottomGap && bottomGap.lastAboveCard >= 0 && bottomGap.padBottom >= bottomGap.anchorH,
+    JSON.stringify(bottomGap) + '(lastAboveCard 负数 = 被卡压住多少 px;旧行为 -178)',
+  )
+
   // ── 侧栏宽度:拖过之后折叠再展开必须还是那个宽 ──────────────────────────────────
   const groupRect = `(() => { const g = document.querySelector('.t2-chat-view'); const grp = g && g.closest('.dv-groupview'); return grp ? Math.round(grp.getBoundingClientRect().width) : 0 })()`
   const before = await win.evaluate(groupRect)
@@ -347,6 +429,92 @@ async function main() {
   await win.click('.dv-edge-right'); await win.waitForTimeout(1600) // 再展开
   const restored = await win.evaluate(groupRect)
   check('13 折叠再展开后宽度仍是拖出来的那个', Math.abs(restored - dragged) <= 6, `拖后 ${dragged}px → 折返 ${restored}px(旧行为会打回黄金分割 ≈${before}px)`)
+
+  // ── 23-24 卡片不描边 / glass 输入卡真的是磨砂 ─────────────────────────────────
+  // 颜色可能被 Chrome 报成 `color(srgb r g b / a)`(color-mix 的结果),不只有 rgba() 那一种写法。
+  const ALPHA = `const alphaOf = (c) => { const m = /\\/\\s*([0-9.]+)\\s*\\)/.exec(c) || /rgba\\(\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*([0-9.]+)\\s*\\)/.exec(c); return m ? parseFloat(m[1]) : 1 }`
+  const rings = await win.evaluate(`(() => {
+    ${ALPHA}
+    const col = document.querySelector('.t2-chat-col')
+    const out = {}
+    const card = document.querySelector('.t2c-card')
+    out['t2c-card'] = card ? alphaOf(getComputedStyle(card).borderTopColor) : null
+    // 这些块要有真实消息才渲染 → 插同类名探针,量的是规则本身
+    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-tsum-in', 'agent-desk-card', 'tool-card', 'tool-group']) {
+      const p = document.createElement('div')
+      p.className = cls
+      col.appendChild(p)
+      out[cls] = alphaOf(getComputedStyle(p).borderTopColor)
+      p.remove()
+    }
+    return out
+  })()`)
+  check(
+    '23 输入卡/任务概览/Agent Desk/工具折叠块都不描边',
+    !!rings && Object.values(rings).every((a) => a === 0),
+    JSON.stringify(rings) + '(值 = 描边色 alpha,须全 0)',
+  )
+
+  // glass 主题只能这样验:启用它的样式表 + 打 data-theme(与 loader 做的事一致),等一帧再量。
+  // 08-14 用户报「磨砂没有」——规则一直生效,病在浓度:float 那档 84% 只漏 16%,糊出来的看不见。
+  await win.evaluate(`(() => {
+    const n = document.getElementById('forsion-theme-css-genesis-glass')
+    if (n) n.disabled = false
+    document.documentElement.dataset.theme = 'genesis-glass'
+  })()`)
+  await win.waitForTimeout(1200)
+  const glass = await win.evaluate(`(() => {
+    ${ALPHA}
+    const card = document.querySelector('.t2c-card')
+    if (!card) return null
+    const cs = getComputedStyle(card)
+    // 主区 vs 侧栏各插一颗输入卡探针:侧栏那边 CSS 模糊糊不出东西(backdrop 里没有 app 画的
+    // 不透明像素),只能靠染色浓度盖住底下的字 → 两边**本来就该是不同浓度**,这里逐边量。
+    const tier = {}
+    for (const g of document.querySelectorAll('.dv-groupview')) {
+      const side = !!g.querySelector('.wb-tab--icon')
+      const host = g.querySelector('.dv-react-part') || g
+      const p = document.createElement('div')
+      p.className = 't2c-card'
+      host.appendChild(p)
+      tier[side ? 'side' : 'main'] = alphaOf(getComputedStyle(p).backgroundColor)
+      p.remove()
+    }
+    // 二级菜单那批只有交互时才渲染 → 插同类名探针,量的是材质表收没收它们
+    const menus = {}
+    for (const cls of ['composer-menu', 'ctx-menu', 'rb-menu', 'account-pop', 'ntf', 'wsfile-panel', 'amx-db-pop', 'amx-cal-cardwrap', 'dash-add-menu']) {
+      const p = document.createElement('div')
+      p.className = cls
+      document.body.appendChild(p)
+      const s = getComputedStyle(p)
+      menus[cls] = { b: (s.backdropFilter || s.webkitBackdropFilter) !== 'none', a: alphaOf(s.backgroundColor) }
+      p.remove()
+    }
+    return {
+      blur: cs.backdropFilter || cs.webkitBackdropFilter,
+      bgAlpha: alphaOf(cs.backgroundColor),
+      borderAlpha: alphaOf(cs.borderTopColor),
+      tier,
+      menus,
+    }
+  })()`)
+  // 侧栏那边**不能**也是薄档:08-14 实测,侧栏的 backdrop 里没有 app 画的不透明像素
+  // (pane 半透 → shell 全透 → 窗口原生 vibrancy),blur 出来是空的,50% 会让正文直接透过输入卡。
+  check(
+    '24 glass 主题:输入卡主区薄档磨砂 / 侧栏加厚(侧栏糊不出东西,只能靠浓度)',
+    !!glass && glass.blur && glass.blur !== 'none' && glass.borderAlpha === 0
+      && glass.tier.main >= 0.45 && glass.tier.main <= 0.6
+      && glass.tier.side >= 0.8,
+    JSON.stringify({ blur: glass && glass.blur, tier: glass && glass.tier, borderAlpha: glass && glass.borderAlpha })
+      + '(主区 ≈0.5 才糊得出来;侧栏须 ≥0.8,否则正文透过输入卡)',
+  )
+  // 08-14 第二次报「磨砂没有」:选模型/切模式那批二级菜单(.composer-menu)压根没进材质表,
+  // 一直吃 base.css 的实色 --bg-card。这条按名单逐个量,漏收一个就红。
+  check(
+    '25 glass 主题:二级菜单/浮层同为薄档磨砂(不是实色)',
+    !!glass && Object.values(glass.menus).every((m) => m.b && m.a >= 0.45 && m.a <= 0.6),
+    glass ? Object.entries(glass.menus).map(([k, v]) => `${k}:${v.b ? '糊' : '实色'}/${v.a}`).join(' ') : 'no probe',
+  )
 
   await app.close()
 

@@ -6,7 +6,7 @@
  * 每条用例都反向断言 token,而不只断言名字。
  */
 import { describe, expect, it } from 'vitest'
-import { refChipOf, fileChip } from './Composer2'
+import { refChipOf, fileChip, folderChip, viewChip } from './Composer2'
 import { refToText, type ChatRef } from './chatDragRef'
 
 const VAULT = '/Users/x/vault'
@@ -53,5 +53,19 @@ describe('refChipOf', () => {
 
   it('vaultRoot 为空(云端库未就绪)也不崩,仍是合法 wiki token', () => {
     expect(refChipOf({ kind: 'note', path: 'a.md' }, '').token).toBe('[[/a.md|a]]')
+  })
+
+  it('文件夹引用保留完整路径并用末级目录作芯片名', () => {
+    expect(folderChip('/Users/x/My Project')).toEqual({
+      token: '"/Users/x/My Project"', name: 'My Project', kind: 'folder',
+    })
+  })
+
+  it('View 引用携带稳定 type + 标题，且属性不会突破结构化 token', () => {
+    expect(viewChip('canvas&board', '规划 <A> "主视图"')).toEqual({
+      token: '<forsion-view type="canvas&amp;board" title="规划 &lt;A&gt; &quot;主视图&quot;" />',
+      name: '规划 <A> "主视图"',
+      kind: 'view',
+    })
   })
 })

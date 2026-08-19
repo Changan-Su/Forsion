@@ -276,7 +276,22 @@
   display: flex; align-items: center; gap: 8px;
   font-size: 12px;
 }
-.t2-tool.err { border-color: color-mix(in srgb, #e0564b 50%, var(--border)); }
+.t2-tool.err { border-color: color-mix(in srgb, #e0564b 50%, var(--border)); flex-wrap: wrap; }
+/* 「重新登录 X」:直连订阅凭证过期时唯一能做的动作(跳设置 → 模型页的订阅登录一节)。
+   上游那句错误本来就长,所以错误条改为可换行 —— 不换行会把按钮挤没。 */
+.t2-relogin {
+  /* ⚠️ 任务概览那侧的容器是 column flex(默认 stretch)—— 不写 align-self 会被拉成一条满宽红条,
+     同栏的 .t2-tsum-edit / .t2-tsum-attn 是**故意**要满宽才写的 width:100%,这颗药丸不是。 */
+  align-self: flex-start;
+  flex: none; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  border: var(--border-width, 1px) solid color-mix(in srgb, #e0564b 45%, var(--border));
+  border-radius: 999px; background: transparent; color: #e0564b;
+  font-family: var(--font-ui); font-size: 11.5px; padding: 3px 10px;
+  transition: background var(--duration-fast, .15s);
+}
+.t2-tool .t2-relogin { align-self: center; } /* 聊天错误条是 row flex + align-items:center,跟着居中 */
+.t2-relogin:hover { background: color-mix(in srgb, #e0564b 12%, transparent); }
 .t2-tool-name { font-weight: 600; color: var(--text); }
 .t2-tool-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .t2-chip {
@@ -400,7 +415,10 @@
 }
 
 @container (max-width: 520px) {
-  .t2-stream-inner { padding: 20px 12px 6px; gap: 20px; }
+  /* ⚠️ 底部**必须**照抄基础规则那条 calc:输入卡是悬浮的,留白少一点末条就钻到卡底下去。
+     原来这里是 `6px` 简写 —— 窄栏(侧栏对话)末条被卡压住 178px,用户 08-14 报的就是它。
+     以后改这条:要么只写 padding-inline / padding-block-start,要么把 calc 一起带上。 */
+  .t2-stream-inner { padding: 20px 12px calc(var(--t2-composer-h, 96px) + 8px); gap: 20px; }
   .t2-toolbar { padding-inline: 8px; gap: 4px; }
   .t2-toolbar-title { max-width: 120px; }
   .t2-toolbar-pill { display: none; }
@@ -844,3 +862,23 @@
 /* 聊天 leaf 整体太窄(相对外层 .t2-chat-view 容器)→ 整个面板隐藏,聊天列拿回全宽。
  * 阈值与卡片的 760 对齐:错开会出现「侧板已藏、卡片又因 mode=open 不渲染」的内容消失带(Codex #3)。 */
 @container (max-width: 759.9px) { .agent-desk { display: none; } }
+
+/* ====== 卡片一律不描边(2026-08-14 用户要求)—— 必须留在文件最末 ==================
+ * 输入卡(在 composer2.css 里就地改了)/ 任务概览 / Agent Desk / 工具调用等折叠块:
+ * 靠底色 + 圆角 + 间距分层,不再画那圈框线。
+ * ⚠️ 位置就是正确性:这些选择器与各自的原定义**同为 (0,1,0)**,靠源码顺序取胜 ——
+ *    放在文件中段时 .t2-tsum-in / .agent-desk-card(定义在更后面)压根压不住(仪器 23 抓到过)。
+ * 用 `border-color: transparent` 而非 `border: none`:保住 1px 盒模型,布局不位移,
+ * 状态态(拖入高亮、报错)换个颜色就能把边亮回来。
+ * 刻意**没动**:.tool-card.err(报错红圈)、.approval-card/.inquiry-card(等你拍板的动作卡,
+ * 不是被动折叠块)、.thinking-block/.t2-think 左侧那条 2px 竖条(引用条,不是轮廓)。 */
+.t2-tool, .t2-todo, .t2-panelcard, .t2-tsum-in, .agent-desk-card,
+.t2-chat-col .tool-card:not(.err), .t2-chat-col .tool-group { border-color: transparent; }
+
+/* 搜索命中跳转:落点闪一下再淡出(不改布局,只加底色) */
+.t2-jump-flash { animation: t2JumpFlash 1.6s ease-out; border-radius: var(--radius-md); }
+@keyframes t2JumpFlash {
+  0% { background: var(--overlay-light); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .t2-jump-flash { animation: none; } }
