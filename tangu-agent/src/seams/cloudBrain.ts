@@ -31,8 +31,8 @@ export interface BuildPayloadOpts {
    *  归进应用桶而 projectSource 留空保持指令干净。缺省时云端盖印回退 projectSource。 */
   usageSource?: string;
   /** 客户端面标识 `<desktop|web|mobile>/<版本>`(api_usage_logs.client,与 projectSource 正交)。
-   *  来自 run 的 input.client(已过 /agent/runs 的白名单闸);云端 build-payload 盖印后 stream 端记账。
-   *  后台任务(压缩/Historian/vision)不传 → 该行 client 为空,面板显示「—」。 */
+   *  来自 run 的 input.client(已过 /agent/runs 的白名单闸);runtime 接缝会让压缩/Historian/vision/
+   *  子代理等派生调用自动继承。仅无用户 run 来源的服务端定时任务保持为空。 */
   client?: string;
   temperature?: number;
   maxTokens?: number;

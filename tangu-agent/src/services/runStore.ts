@@ -5,6 +5,7 @@
  * 持库进程 = SqlStateStore(直连),thin worker = HttpStateStore(走 server)。调用点 import 路径不变。
  */
 import { deps } from '../seams/runtime.js';
+import { currentRunClientTag } from '../seams/runContext.js';
 import type { AgentEvent } from './eventBus.js';
 import type { ActiveRunRow, StepInput, StepRow } from '../seams/stateStore.js';
 
@@ -32,7 +33,14 @@ export const createRun = (run: {
   modelId: string;
   assistantMessageId: string;
   input: any;
-}): Promise<void> => deps().state.createRun(run);
+}): Promise<void> => {
+  const clientTag = currentRunClientTag();
+  const input = clientTag && run.input && typeof run.input === 'object' && !Array.isArray(run.input)
+    && run.input.client == null
+    ? { ...run.input, client: clientTag }
+    : run.input;
+  return deps().state.createRun(input === run.input ? run : { ...run, input });
+};
 
 export const getRun = (id: string): Promise<AgentRun | null> => deps().state.getRun(id);
 

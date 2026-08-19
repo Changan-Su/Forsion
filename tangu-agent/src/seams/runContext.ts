@@ -6,7 +6,7 @@
  * 分离式云 worker 一个进程服务多用户,brain-api 调用必须按**当前 run 的用户**鉴权/计费;
  * thin worker 还要按 **当前 runId** 取该 run 的 per-dispatch token(见 HttpStateStore / httpBrain)。
  *
- * 用 AsyncLocalStorage 在 runLoop 顶部把 {userId, runId} 注入本 run 的整个异步子树。
+ * 用 AsyncLocalStorage 在 runLoop 顶部把 {userId, runId, clientTag} 注入本 run 的整个异步子树。
  * 对 microserver/standalone **无害**:它们的 brain/state 不读此上下文(固定身份、本地库)。
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -14,6 +14,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 interface RunCtx {
   userId: string;
   runId?: string;
+  /** 发起本 run 的客户端面标识(desktop/web/mobile + 版本),供所有派生 LLM 调用统一记账。 */
+  clientTag?: string;
   /** 本 run 激活的 Normal Agent slug —— 记忆/日志据此落到 ~/.tangu/agents/<slug>/(缺省 = 默认 agent)。
    *  注意这是「记忆作用域」slug:shareDefaultMemory 的 agent 会是 DEFAULT,不能直接拿来当展示身份。 */
   agentSlug?: string;
@@ -30,8 +32,22 @@ const als = new AsyncLocalStorage<RunCtx>();
  * 用 enterWith 而非 run:改写当前同步帧之后整个异步子树的 store,故 system prompt 的 getMemory
  * 与每个 executeTool 都能读到 agentSlug。
  */
-export function enterRunContext(userId: string, runId?: string, agentSlug?: string, displayAgentSlug?: string): void {
-  als.enterWith({ userId, runId, agentSlug, displayAgentSlug: displayAgentSlug ?? agentSlug });
+export function enterRunContext(
+  userId: string,
+  runId?: string,
+  agentSlug?: string,
+  displayAgentSlug?: string,
+  clientTag?: string,
+): void {
+  const prev = als.getStore();
+  als.enterWith({
+    userId,
+    runId,
+    agentSlug,
+    displayAgentSlug: displayAgentSlug ?? agentSlug,
+    // 同一 run 解析 agentSlug 时会再次 enter；未显式覆盖就保留已解析出的客户端标签。
+    clientTag: clientTag ?? prev?.clientTag,
+  });
 }
 
 /** 当前 run 的 userId(不在 run 上下文内时 undefined)。 */
@@ -42,6 +58,17 @@ export function currentRunUserId(): string | undefined {
 /** 当前 run 的 runId(thin worker 据此取该 run 的 per-dispatch token)。 */
 export function currentRunId(): string | undefined {
   return als.getStore()?.runId;
+}
+
+/** 把 run.input.client 并入当前异步上下文；传 undefined 会清掉父上下文，防派生 run 串标。 */
+export function setRunClientTag(clientTag?: string): void {
+  const s = als.getStore();
+  if (s) als.enterWith({ ...s, clientTag });
+}
+
+/** 当前 run 的客户端面标识；后台定时任务等无设备来源时为 undefined。 */
+export function currentRunClientTag(): string | undefined {
+  return als.getStore()?.clientTag;
 }
 
 /** 把本 run 的 cwd 并入上下文(agentLoop 解析出 cwd 后调;merge 不覆盖已有 userId/agentSlug 等)。 */
@@ -72,5 +99,9 @@ export function currentDisplayAgentSlug(): string | undefined {
  */
 export function runWithAgentSlug<T>(agentSlug: string, fn: () => Promise<T>): Promise<T> {
   const cur = als.getStore();
-  return als.run({ userId: cur?.userId || '', runId: cur?.runId, agentSlug }, fn);
+  return als.run({
+    ...(cur ?? { userId: '' }),
+    agentSlug,
+    displayAgentSlug: agentSlug,
+  }, fn);
 }

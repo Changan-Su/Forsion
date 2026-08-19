@@ -13,7 +13,7 @@ import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { publish, drain, cleanup } from './eventBus.js';
 import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
@@ -397,6 +397,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
   // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
+  setRunClientTag(clientTag);
   // standalone/desktop host 的 Agent 文件必须先与云端镜像对齐，再从本地激活。headless worker 没有
   // 桌面设置页去触发 /agent/sync；若跳过此步，云端人格虽可经 brain.agents 兜底加载，Library/ 却仍为空。
   // 同步器按 manifest mtime 幂等，未变化时只做清单比较；失败软降级，不阻断对话。

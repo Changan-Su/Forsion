@@ -11,6 +11,7 @@ import type { EngineManager } from '../engines/manager.js';
 import type { StateStore } from './stateStore.js';
 import { createProfileStore, type ProfileStore } from '../profiles/profileStore.js';
 import { createSqlStateStore } from '../services/stateStore/sqlStateStore.js';
+import { currentRunClientTag } from './runContext.js';
 
 export interface TanguDeps {
   host: HostServices;
@@ -46,7 +47,38 @@ export function configureTangu(d: TanguDeps): void {
   const profileStore =
     d.profileStore ?? createProfileStore({ baseline: d.profile, seedAppIds: d.appIds });
   const state = d.state ?? createSqlStateStore();
-  _deps = { ...d, profileStore, state };
+
+  // client 是 run 级上下文,不是某一种模型调用的参数。统一在接缝咽喉继承,这样主模型、视觉辅助、
+  // Historian、压缩、子代理/群聊等所有 build-payload 与显式 usage 记账都不会各自漏接。
+  const rawLlm = d.brain?.llm;
+  const brain = rawLlm?.buildProviderPayload
+    ? {
+        ...d.brain,
+        llm: {
+          ...rawLlm,
+          buildProviderPayload: (opts: any) => {
+            const inherited = currentRunClientTag();
+            return rawLlm.buildProviderPayload(
+              opts?.client == null && inherited ? { ...opts, client: inherited } : opts,
+            );
+          },
+        },
+      }
+    : d.brain;
+
+  const rawUsage = d.billing?.logApiUsage;
+  const billing = typeof rawUsage === 'function'
+    ? {
+        ...d.billing,
+        logApiUsage: (...args: any[]) => {
+          const inherited = currentRunClientTag();
+          if (args[11] == null && inherited) args[11] = inherited;
+          return (rawUsage as any).apply(d.billing, args);
+        },
+      }
+    : d.billing;
+
+  _deps = { ...d, brain, billing, profileStore, state };
 }
 
 /** 取已装配的依赖;未装配即抛(防止漏调 configureTangu)。 */

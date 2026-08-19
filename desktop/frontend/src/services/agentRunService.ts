@@ -21,15 +21,16 @@ export const AGENT_APP_ID = 'tangu'
 /**
  * 客户端面标识(统计维度,与 app_id **正交** —— 归属恒为 'tangu',在哪个端调的用这个分):
  * `desktop|web|mobile / 渲染层版本`。随 run 体上报,落 agent_runs.input.client,
- * admin 的 /client-stats 按它分组。模块求值时三端垫片均已挂好 window.tangu(web/mobile 的
- * entry 都是先装垫片再动态 import 渲染层)。
+ * admin 的 /client-stats 按它分组。必须在**请求时**读取宿主垫片:共享模块可能比 web/mobile
+ * shim 更早求值,若在模块加载时冻结,该进程之后所有请求都会被永久误记成 desktop。
  */
-export const CLIENT_ID = `${
-  typeof window === 'undefined' ? 'desktop' // node 环境(vitest)兜底,浏览器里恒有 window
-  : window.tangu?.mobile ? 'mobile'
-  : window.tangu?.cloudWeb ? 'web'
-  : 'desktop'
-}/${CHANGELOG[0]?.version || '0'}`
+export function currentClientId(): string {
+  const platform = typeof window === 'undefined' ? 'desktop' // node 环境(vitest)兜底,浏览器里恒有 window
+    : window.tangu?.mobile ? 'mobile'
+    : window.tangu?.cloudWeb ? 'web'
+    : 'desktop'
+  return `${platform}/${CHANGELOG[0]?.version || '0'}`
+}
 
 export async function testConnection(cfg: TanguDesktopConfig): Promise<{ ok: boolean; message: string }> {
   try {
@@ -61,7 +62,7 @@ export async function startRun(
       session_id: params.sessionId,
       model_id: params.modelId || cfg.modelId || undefined,
       app_id: AGENT_APP_ID,
-      client: CLIENT_ID,
+      client: currentClientId(),
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

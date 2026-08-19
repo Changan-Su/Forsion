@@ -181,7 +181,7 @@ export type {
 // resolveMemorySlug/DEFAULT_AGENT_SLUG 供 memory/log 按 slug 作用域路由。
 export { parseAgentConfig, serializeAgentConfig, resolveMemorySlug } from './agents/agentRegistry.js';
 export type { NormalAgentDef } from './agents/agentRegistry.js';
-export { currentAgentSlug } from './seams/runContext.js';
+export { currentAgentSlug, currentRunClientTag } from './seams/runContext.js';
 export { DEFAULT_AGENT_SLUG } from './core/tanguHome.js';
 export type { BillingServices } from './seams/billing.js';
 export type { AppProfile, AppProfileOverride, PromptSectionCtx, PromptSections } from './seams/appProfile.js';
