@@ -14,6 +14,12 @@ describe('splitTerms', () => {
   it('最多 5 个词', () => {
     expect(splitTerms('a b c d e f g')).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
+  it('引号短语算一个词;引号不闭合退回空白拆(不留裸引号)', () => {
+    expect(splitTerms('foo "bar baz" qux')).toEqual(['foo', 'bar baz', 'qux']);
+    expect(splitTerms('"a b"')).toEqual(['a b']);
+    expect(splitTerms('foo "bar')).toEqual(['foo', 'bar']);
+    expect(splitTerms('""')).toEqual([]);
+  });
 });
 
 describe('likePattern', () => {

@@ -21,7 +21,7 @@ import type { ToolProvider, ToolDef } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolCapabilities, ToolContext } from '../toolTypes.js';
 import { deps, isConfigured } from '../../seams/runtime.js';
-import { AmadeusConflictError, type AmadeusBrain } from '../../seams/cloudBrain.js';
+import { AmadeusConflictError, AmadeusNotFoundError, type AmadeusBrain } from '../../seams/cloudBrain.js';
 
 // ── vault 定位 ────────────────────────────────────────────────────────────
 // 解析优先级:① FORSION_AMADEUS_VAULT 显式覆盖(standalone CLI 直指) → ② desktop 注入的
@@ -196,6 +196,21 @@ function cloudBackend(facet: AmadeusBrain): AmadeusBackend {
 /** 这些扩展名的结构(frontmatter + `<!-- a id -->` 块标记)会被 read 剥掉、被 write 的线性覆盖抹平。
  *  云端目前没有无损的 raw 读写 API → **宁可失败,也不许覆盖**(codex:描述里写 "never use" 不是执行层保护)。 */
 const STRUCTURED_RE = /\.(mindmap\.md|excalidraw\.md|db)$/i;
+/** 原生画布笔记按**内容**认(它就是普通 `.md`):frontmatter 里的 `amadeus_canvas` 单行 JSON =
+ *  卡片坐标/连线/白板元素。只在 frontmatter 区找(正文里出现同名字样不算)。
+ *  ⚠️不能用一条正则一路扫(codex 2026-08-17 P3):`[\s\S]*?` 再懒也**不受 `---` 约束**,
+ *  正文里一行顶格的 `amadeus_canvas:`(比如文档示例)会让整篇笔记被误判成画布 → 云端写入被永久拒绝。
+ *  改成先切出 frontmatter 块,再只在块内匹配键。 */
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
+const CANVAS_KEY_RE = /^[ \t]*["']?amadeus_canvas["']?[ \t]*:/m;
+const hasCanvasFrontmatter = (raw: string): boolean => {
+  const fm = FRONTMATTER_RE.exec(raw ?? '');
+  return !!fm && CANVAS_KEY_RE.test(fm[1]);
+};
+const canvasRefusal = (rel: string): string =>
+  `"${rel}" is a canvas note: its card coordinates, connectors and whiteboard elements live in the ` +
+  '`amadeus_canvas` frontmatter key, which a full-file overwrite would destroy. Read it, edit the body ' +
+  'text you need to change, and write it back with the frontmatter intact — or ask the user to edit it in the app.';
 const structuredRefusal = (rel: string): string =>
   `"${rel}" is a structured Amadeus file (mind map / whiteboard / database): its content lives in frontmatter ` +
   'and inline block markers that these note tools strip and overwrite. There is no lossless cloud API for it yet, ' +
@@ -410,6 +425,20 @@ export const amadeusProvider: ToolProvider = {
         if (!rel) return 'Error: path is required';
         if (!/\.md$/i.test(rel)) rel += '.md';
         if (STRUCTURED_RE.test(rel)) throw new Error(structuredRefusal(rel));
+        // 扩展名之外还要看**内容**:原生画布笔记是普通 `.md`,几何存在 frontmatter 的
+        // `amadeus_canvas` 单行 JSON 里,整篇覆盖会把它连同锚一起抹掉(Canvas 双模式方案 §6.1
+        // 点名的运行时闸)。
+        // ⚠️**这道闸必须 fail-closed**(codex 2026-08-17 P1)。原来是 `.catch(() => '')`:
+        // 任何读失败(网络抖一下、5xx、超时)都被当成「文件不存在」→ 空串过闸 → 紧接着
+        // force 覆盖,画布几何当场没了。只有明确的「不存在」才等于新建;其余错误一律抬出去,
+        // 让模型看到失败去重试 —— 宁可写不进,也不能糊掉用户的画布。
+        let existing = '';
+        try {
+          existing = (await be.read(rel)).content;
+        } catch (e) {
+          if (!(e instanceof AmadeusNotFoundError)) throw e;
+        }
+        if (hasCanvasFrontmatter(existing)) throw new Error(canvasRefusal(rel));
         // 保留覆盖语义:cloud 走 force=true 无条件覆盖(与本地直接 writeFile 等价)。
         await be.write(rel, String(args.content ?? ''), { overwrite: true });
         return `Saved note ${rel}.`;

@@ -14,6 +14,49 @@ import type { ToolProvider } from '../toolRegistry.js';
 
 const MAX_OPTIONS = 6;
 
+/**
+ * 「编辑后批准」的回传约定:answer = <原样的批准选项> + 本标记 + 用户改过的计划全文。
+ * inquiry 通道只有一个字符串,故用标记追加——**选项字符串本身逐字不动**(TUI/旧客户端照旧能批)。
+ */
+export const PLAN_REVISION_MARK = '\n<<<REVISED_PLAN>>>\n';
+/** 计划审阅的固定选项(顺序即客户端按钮顺序;「自动开始」在首位,类 Codex 的三选一)。 */
+const PLAN_OPTIONS = [
+  '批准,自动开始执行',
+  '批准,退出计划模式(手动开始)',
+  '需要修改(在输入框写反馈)',
+  '拒绝,保持计划模式',
+];
+
+/** 两个「批准」选项(修订全文与自动开始都只认这两串逐字命中)。 */
+const APPROVE_OPTIONS = [PLAN_OPTIONS[0], PLAN_OPTIONS[1]];
+/** 自由文本批准:只认「就这一个词」的形态。**绝不能用前缀/子串判**——用户在打回框里写
+ *  「批准前先补上回滚方案」「批准不了,先说清楚迁移」都是反对意见,前缀判会把它们当成批准
+ *  (还可能因为含「自动开始」直接开跑)。否定式中文是这条的常态,不是边角。 */
+const FREE_APPROVE_RE = /^(批准|同意|approve|approved|ok|yes|y)[!!。.]?$/i;
+
+/** 解析计划审阅的答案。修订全文**只在头部逐字等于批准选项时**才认(自由文本恰好含标记不算)。 */
+export function parsePlanAnswer(answer: string): {
+  approved: boolean;
+  autoStart: boolean;
+  revised?: string;
+  /** 回给模型的原文(未批准时用):无修订则为整串答案。 */
+  raw: string;
+} {
+  const i = answer.indexOf(PLAN_REVISION_MARK);
+  const head = (i >= 0 ? answer.slice(0, i) : answer).trim();
+  const tail = i >= 0 ? answer.slice(i + PLAN_REVISION_MARK.length).trim() : '';
+  const isApproveOption = APPROVE_OPTIONS.includes(head);
+  const revised = tail && isApproveOption ? tail : undefined;
+  const approved = isApproveOption || FREE_APPROVE_RE.test(head);
+  return {
+    approved,
+    autoStart: head === PLAN_OPTIONS[0],
+    revised,
+    // 非批准的答案一律把**整串**交回模型(含标记后的正文:那可能就是用户的反馈全文)。
+    raw: revised ? head : answer,
+  };
+}
+
 export const interactionProvider: ToolProvider = {
   id: 'builtin:interaction',
   tools: () => [
@@ -89,15 +132,18 @@ export const interactionProvider: ToolProvider = {
           ctx.runId,
           {
             question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?',
-            // 「自动开始」放首位(类 Codex 的 "Implement this plan?" 三选一):批准后由客户端在本 run
-            // 结束时自动发起执行消息(本轮工具集已冻结只读,执行必须是新 run,引擎侧无法就地开工)。
-            options: ['批准,自动开始执行', '批准,退出计划模式(手动开始)', '需要修改(在输入框写反馈)', '拒绝,保持计划模式'],
+            // 批准后由客户端在本 run 结束时自动发起执行消息(本轮工具集已冻结只读,执行必须是新 run,
+            // 引擎侧无法就地开工)。选项字符串是与客户端的 wire 约定,勿改字面。
+            options: PLAN_OPTIONS,
             allowFreeText: true,
+            kind: 'plan', // 客户端据此渲染专属计划卡(批准 / 编辑后批准 / 打回)
           },
           ctx.signal,
         );
-        if (answer.startsWith('批准')) {
-          const autoStart = answer.includes('自动开始');
+        const verdict = parsePlanAnswer(answer);
+        if (verdict.approved) {
+          const autoStart = verdict.autoStart;
+          const finalPlan = verdict.revised || plan;
           // 关掉会话的 planMode(读-改-写 agent_config;本轮 defs 已冻结仍只读,下一轮生效)
           try {
             const raw = await deps().state.getAgentConfig(ctx.sessionId);
@@ -117,21 +163,29 @@ export const interactionProvider: ToolProvider = {
             const dir = join(cwd, '.tangu', 'plans');
             await mkdir(dir, { recursive: true });
             planFile = join(dir, `plan-${ts}.md`);
-            await writeFile(planFile, plan.endsWith('\n') ? plan : `${plan}\n`, 'utf8');
+            // 存档存**最终版**:用户改过就以用户那份为准,否则存档与要执行的东西不是一回事。
+            await writeFile(planFile, finalPlan.endsWith('\n') ? finalPlan : `${finalPlan}\n`, 'utf8');
           } catch {
             planFile = '';
           }
           // auto 标志让客户端在本 run 结束后自动发起执行消息(desktop 监听 plan_approved)。
-          void publish(ctx.runId, 'plan_approved', { ...(planFile ? { file: planFile } : {}), auto: autoStart });
+          void publish(ctx.runId, 'plan_approved', {
+            ...(planFile ? { file: planFile } : {}),
+            auto: autoStart,
+            ...(verdict.revised ? { revised: true } : {}),
+          });
           return (
             '用户已批准计划,计划模式已关闭。' +
             (planFile ? `计划已存档到 ${planFile}。` : '') +
+            (verdict.revised
+              ? `\n\n⚠️ 用户**修改了计划**,以下是最终版,一切以它为准(不要按你原来那份执行):\n\n${finalPlan}\n\n`
+              : '') +
             '现在请用 todo_write 把计划拆成任务清单(便于跟踪进度),并简要总结收尾;' +
             '本轮工具集仍为只读,' +
             (autoStart ? '收尾后将自动开始执行(无需等用户确认)。' : '用户的下一条消息将开始执行。')
           );
         }
-        return `用户未批准:${answer}\n请按反馈完善计划,再次调用 exit_plan_mode 提交。`;
+        return `用户未批准:${verdict.raw}\n请按反馈完善计划,再次调用 exit_plan_mode 提交。`;
       },
     },
   ],

@@ -195,6 +195,45 @@ describe('cloud backend (execMode≠host → deps().brain.amadeus)', () => {
     expect(await runCloud('amadeus_delete_event', { calendar: 'CloudCal', eventId: events[0].id })).toContain('Deleted');
     expect(JSON.parse(store.get('Cloud.db')!.content).rows).toHaveLength(0);
   });
+
+  // ── 画布覆盖闸(codex 2026-08-17:P1 fail-open + P3 正则越界)────────────────────
+  // 画布笔记就是普通 `.md`,几何全在 frontmatter 的 `amadeus_canvas` 单行 JSON 里。
+  // 整篇覆盖 = 几何没了,所以 write_note 前要读一眼现状。这三条钉住那道闸的边界。
+
+  it('画布笔记拒绝整篇覆盖', async () => {
+    store.set('Board.md', { content: "---\namadeus_canvas: '{\"v\":1}'\n---\n正文", seq: 1 });
+    await expect(runCloud('amadeus_write_note', { path: 'Board.md', content: '覆盖' })).rejects.toThrow(/canvas note/);
+    expect(store.get('Board.md')!.content).toContain('amadeus_canvas'); // 一个字节都没动
+  });
+
+  it('⚠️读失败**不是**「文件不存在」时必须抬错,不许放行覆盖(fail-closed)', async () => {
+    store.set('Flaky.md', { content: "---\namadeus_canvas: '{\"v\":1}'\n---\n正文", seq: 1 });
+    const orig = facet.read;
+    (facet as any).read = async () => { throw new Error('ETIMEDOUT'); };
+    try {
+      // 原来是 `.catch(() => '')`:网络抖一下就被当成新建 → force 覆盖 → 画布几何当场没了。
+      await expect(runCloud('amadeus_write_note', { path: 'Flaky.md', content: '覆盖' })).rejects.toThrow(/ETIMEDOUT/);
+      expect(store.get('Flaky.md')!.content).toContain('amadeus_canvas');
+    } finally {
+      (facet as any).read = orig;
+    }
+  });
+
+  it('不存在的文件照常新建(NotFound 才等于新建)', async () => {
+    expect(await runCloud('amadeus_write_note', { path: 'Brand.md', content: '新笔记' })).toContain('Saved note');
+    expect(store.get('Brand.md')!.content).toBe('新笔记');
+  });
+
+  it('⚠️正文里出现 `amadeus_canvas:` 的普通笔记**不算**画布(正则不许越过 --- 栅栏)', async () => {
+    store.set('Doc.md', { content: '---\ntitle: 文档\n---\n讲一下这个键:\namadeus_canvas: 是画布几何\n', seq: 1 });
+    expect(await runCloud('amadeus_write_note', { path: 'Doc.md', content: '改过的正文' })).toContain('Saved note');
+    expect(store.get('Doc.md')!.content).toBe('改过的正文');
+  });
+
+  it('无 frontmatter 的笔记也不会被正文误判', async () => {
+    store.set('Plain.md', { content: 'amadeus_canvas: 只是正文第一行\n', seq: 1 });
+    expect(await runCloud('amadeus_write_note', { path: 'Plain.md', content: 'x' })).toContain('Saved note');
+  });
 });
 
 describe('note tools', () => {

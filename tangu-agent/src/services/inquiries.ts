@@ -12,6 +12,8 @@ export interface InquiryRequestPayload {
   options: string[];
   /** 是否允许自由文本(选项之外自己输入)。 */
   allowFreeText: boolean;
+  /** 询问种类:'plan'=计划审阅(客户端渲染专属计划卡,含「编辑后批准」);缺省=通用问答。 */
+  kind?: 'plan';
 }
 
 interface PendingInquiry {

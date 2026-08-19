@@ -15,6 +15,7 @@ const SQLITE_PATH_FILES = [
   'src/services/compaction.ts',
   'src/routes/special.ts',
   'src/routes/sessions.ts',
+  'src/services/sessionSearch.ts', // 会话检索:桌面 sqlite 与云 PG 同一条 SQL
   'src/agents/agentRegistry.ts',
 ];
 

@@ -8,31 +8,19 @@
  * 检索。输出行用 [[session:<id>|标题]] 格式——既是 read_session 的入参,桌面聊天里又
  * 渲染成可点击的会话引用。
  *
- * 归属边界:同 read_session,只按 (user_id, app_id) 取,且 kind='user'(muse/fork 等
- * 内部会话不出现)。chat_messages 没有 user_id 列,内容检索必须 JOIN chat_sessions 做
- * 租户隔离,别改成裸查 chat_messages。
- *
- * 方言约束(desktop=sqlite / 云=PG 同一条 SQL):LOWER+LIKE+ESCAPE '\'、`||` 拼接、
- * COALESCE 两边行为一致;sqlite LOWER 只折 ASCII,对 CJK 是恒等,与 PG 语义相容。
+ * **查询本体已抽到 services/sessionSearch.ts**(2026-08-17,桌面搜索面共用同一条 SQL:
+ * 两边各写一份就会出现「界面搜得到、模型搜不到」)。归属边界、方言约束、LIMIT 按会话计等
+ * 语义正典见那里;本文件只剩模型侧的措辞与行格式。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { query } from '../../core/db.js';
+import {
+  clip, dayArg, fmtDate, likePattern, searchSessions, snippetAround, splitTerms, tsDate,
+  type SessionHit,
+} from '../../services/sessionSearch.js';
 
-/** 查询词拆分:空白分隔,最多 5 个(防超长 AND 链)。 */
-export function splitTerms(q: string): string[] {
-  return q.trim().split(/\s+/).filter(Boolean).slice(0, 5);
-}
-
-/** LIKE 模式:小写 + 转义 \ % _(SQL 端配 ESCAPE '\')+ 两侧通配。 */
-export function likePattern(term: string): string {
-  return '%' + term.toLowerCase().replace(/[\\%_]/g, (c) => '\\' + c) + '%';
-}
-
-/** 空白折叠 + 超长截断(截断处补省略号)。 */
-function clip(s: string, n: number): string {
-  const flat = s.replace(/\s+/g, ' ').trim();
-  return flat.length > n ? flat.slice(0, n) + '…' : flat;
-}
+// 纯函数面从服务层原样再导出:既有单测(searchSessions.test.ts)与其它 import 点不变。
+export { splitTerms, likePattern, snippetAround, fmtDate, dayArg, tsDate };
+export type { SessionHit };
 
 /** 摘掉标题里会破坏 [[session:id|title]] 引用语法的字符(与桌面端 chatDragRef.safeLabel 同旨),
  *  并镜像桌面端标题 60 字上限。 */
@@ -41,50 +29,9 @@ function safeTitle(title: unknown): string {
   return t || '(untitled)';
 }
 
-/** updated_at 归一成 YYYY-MM-DD:sqlite 给 'YYYY-MM-DD HH:MM:SS' 字符串,PG 驱动给 Date。 */
-export function fmtDate(v: unknown): string {
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  return String(v ?? '').trim().slice(0, 10);
-}
-
-/** before/after 参数:只认 YYYY-MM-DD(或其 ISO 延长形),归一成日期;非法返回 null。
- *  必须前置校验——乱串直传 PG 会在 timestamp cast 上炸整条查询(sqlite 只是静默不中)。 */
-export function dayArg(v: unknown): string | null {
-  const s = String(v ?? '').trim();
-  return /^\d{4}-\d{2}-\d{2}([T ].*)?$/.test(s) ? s.slice(0, 10) : null;
-}
-
 /** boolean 归一:PG 驱动给 true/false,sqlite 给 0/1。 */
 function toBool(v: unknown): boolean {
   return v === true || v === 1 || v === '1' || v === 't' || v === 'true';
-}
-
-/** 消息 timestamp(BIGINT 毫秒;PG 驱动把 BIGINT 给成字符串)→ YYYY-MM-DD;非法给 ''。 */
-export function tsDate(v: unknown): string {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) return '';
-  return new Date(n).toISOString().slice(0, 10);
-}
-
-/** 内容命中片段:围绕首个命中词截 ~span 字,空白折叠,截断处加省略号。 */
-export function snippetAround(content: string, term: string, span = 120): string {
-  const flat = content.replace(/\s+/g, ' ').trim();
-  const idx = flat.toLowerCase().indexOf(term.toLowerCase());
-  if (idx < 0) return clip(flat, span);
-  const lead = Math.floor(span / 4);
-  const start = Math.max(0, idx - lead);
-  const end = Math.min(flat.length, idx + term.length + (span - lead));
-  return (start > 0 ? '…' : '') + flat.slice(start, end) + (end < flat.length ? '…' : '');
-}
-
-export interface SessionHit {
-  id: string;
-  title: unknown;
-  summary: unknown;
-  archived: unknown;
-  updated_at: unknown;
-  /** 内容命中时:`role: "…片段…"`;标题/摘要命中的行不填,显示 summary。 */
-  match?: string;
 }
 
 /** 一行一个会话:[[session:id|标题]] — 日期 [标记] — 摘要或命中片段。 */
@@ -143,81 +90,32 @@ export const searchSessionsProvider: ToolProvider = {
         const before = dayArg(args.before);
         const after = dayArg(args.after);
 
-        // 范围:本用户 × 本 app × 用户会话 × 排除当前会话(它已在上下文里,而且最近列表必被它霸榜)
-        // × 可选时间窗。`p` 是列前缀(JOIN 查询里要挂 s.)。
-        const scopeSql = (p: string) => {
-          let sql = `${p}user_id = ? AND ${p}app_id = ? AND ${p}kind = 'user' AND ${p}id <> ?`;
-          if (before) sql += ` AND ${p}updated_at < ?`;
-          if (after) sql += ` AND ${p}updated_at >= ?`;
-          return sql;
-        };
-        const scopeParams = [ctx.userId, ctx.appId, ctx.sessionId, ...(before ? [before] : []), ...(after ? [after] : [])];
-        const cols = 'id, title, summary, archived, updated_at';
+        const hits = await searchSessions({
+          userId: ctx.userId,
+          appId: ctx.appId,
+          // 当前会话已在模型上下文里,而且最近列表必被它霸榜 → 服务端排除(别指望提示词)
+          excludeSessionId: ctx.sessionId,
+          terms,
+          limit,
+          before,
+          after,
+        });
 
-        // limit 已 clamp 成 1..20 的整数,内联进 SQL(LIMIT 占位符不是所有后端都吃,同 read_session)。
         if (!terms.length) {
-          // 空壳会话(没标题没摘要=还没聊出内容)不进最近列表——否则每个新开的空聊天都霸榜
-          // (借 Codex threads 目录 `preview <> ''` 部分索引的同一招)。带 query 的路径天然排除。
-          const rows = await query<SessionHit[]>(
-            `SELECT ${cols} FROM chat_sessions WHERE ${scopeSql('')}`
-              + ` AND (COALESCE(title, '') <> '' OR COALESCE(summary, '') <> '')`
-              + ` ORDER BY updated_at DESC LIMIT ${limit}`,
-            scopeParams,
-          );
-          if (!rows.length) {
+          if (!hits.length) {
             return before || after
               ? 'No past chat sessions in that date range. Widen or drop `before`/`after` to see more.'
               : 'No past chat sessions found for this user yet.';
           }
-          const lines = rows.map(formatHit);
-          return `The user's ${rows.length} most recent past session(s), newest first:\n${lines.join('\n')}\n`
+          const lines = hits.map(formatHit);
+          return `The user's ${hits.length} most recent past session(s), newest first:\n${lines.join('\n')}\n`
             + `${FOOTER} Search by keyword with \`query\`; page further back by passing the oldest date above as \`before\`.`;
         }
 
-        // 检索语义:每个词都出现在该会话**某处**(标题/摘要 OR 任一消息;EXISTS 走
-        // idx_chat_messages_session 逐会话短路探测)。跨消息也算命中——中英词常分散在
-        // 一问一答两侧,「同一条消息里全命中」偏严。LIMIT 限的是会话数,单会话再话痨
-        // 也挤不占别人的名额(旧版按消息池截 200 条会被刷屏挤占,Codex 评审抓的)。
-        const patterns = terms.map(likePattern);
-        const perTerm = terms
-          .map(() =>
-            `(LOWER(COALESCE(s.title, '') || ' ' || COALESCE(s.summary, '')) LIKE ? ESCAPE '\\'`
-            + ` OR EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = s.id AND LOWER(m.content) LIKE ? ESCAPE '\\'))`)
-          .join(' AND ');
-        const hits = await query<SessionHit[]>(
-          `SELECT s.id, s.title, s.summary, s.archived, s.updated_at FROM chat_sessions s`
-            + ` WHERE ${scopeSql('s.')} AND ${perTerm} ORDER BY s.updated_at DESC LIMIT ${limit}`,
-          [...scopeParams, ...patterns.flatMap((p) => [p, p])],
-        );
         if (!hits.length) {
           return `No past sessions matched "${terms.join(' ')}". Try fewer or broader keywords, `
             + 'or call search_sessions without `query` to list recent sessions.';
         }
-
-        // 标题/摘要自证命中的行显示摘要;其余行补一条代表性命中消息(最新)做片段,带角色+日期。
-        // ponytail: 片段探针固定用第一个词,探不到就回退摘要——够用,别为片段再开一轮 per-term 查询。
-        const needSnippet = new Map<string, SessionHit>();
-        for (const h of hits) {
-          const meta = `${h.title ?? ''} ${h.summary ?? ''}`.toLowerCase();
-          if (!terms.every((t) => meta.includes(t.toLowerCase()))) needSnippet.set(h.id, h);
-        }
-        if (needSnippet.size) {
-          const ids = [...needSnippet.keys()];
-          const msgRows = await query<any[]>(
-            `SELECT session_id, role, content, timestamp FROM chat_messages`
-              + ` WHERE session_id IN (${ids.map(() => '?').join(', ')}) AND LOWER(content) LIKE ? ESCAPE '\\'`
-              + ` ORDER BY timestamp DESC LIMIT 100`,
-            [...ids, patterns[0]],
-          );
-          for (const r of msgRows) {
-            const h = needSnippet.get(String(r.session_id));
-            if (!h || h.match) continue; // 每会话只留最新一条命中
-            const role = r.role === 'model' ? 'assistant' : String(r.role || '');
-            const d = tsDate(r.timestamp);
-            h.match = `${role}${d ? ' ' + d : ''}: "${snippetAround(String(r.content ?? ''), terms[0])}"`;
-          }
-        }
-
         const lines = hits.map(formatHit);
         return `${hits.length} past session(s) matching "${terms.join(' ')}", newest first:\n${lines.join('\n')}\n${FOOTER}`;
       },

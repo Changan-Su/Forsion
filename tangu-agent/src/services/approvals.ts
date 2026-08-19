@@ -14,6 +14,7 @@
 import path from 'node:path';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace } from '../tools/fsPolicy.js';
+import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
@@ -27,6 +28,8 @@ export interface ApprovalDecision {
   action: ApprovalAction;
   /** 用户在审批时修改了参数（如改 bash 命令）：用这份覆盖原 call 的 arguments 执行。 */
   argsOverride?: Record<string, any>;
+  /** 拒绝原因（仅规则自动拒绝时有）：让模型与用户都看得见是**哪条规则**挡的，否则无从调起。 */
+  rejectReason?: string;
 }
 
 interface Pending {
@@ -108,9 +111,10 @@ export function requestApproval(
   call: ToolCall,
   preview: string,
   signal?: AbortSignal,
+  reason?: ApprovalReason,
 ): Promise<ApprovalDecision> {
   const tail = approvalQueues.get(runId) || Promise.resolve();
-  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal));
+  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason));
   const entry = mine.then(() => undefined, () => undefined);
   approvalQueues.set(runId, entry);
   void entry.then(() => { if (approvalQueues.get(runId) === entry) approvalQueues.delete(runId); });
@@ -122,6 +126,7 @@ function requestApprovalNow(
   call: ToolCall,
   preview: string,
   signal?: AbortSignal,
+  reason?: ApprovalReason,
 ): Promise<ApprovalDecision> {
   if (signal?.aborted) return Promise.resolve({ action: 'reject' });
   const approvalId = nextApprovalId();
@@ -143,6 +148,7 @@ function requestApprovalNow(
       name: call.function.name,
       arguments: call.function.arguments,
       preview,
+      ...(reason ? { reason } : {}), // 旧客户端忽略未知字段;preview 一个字都没动(它是越界警示的唯一载体)
     });
   });
 }
@@ -188,31 +194,7 @@ export function isKnownSafeBash(command: string): boolean {
   return SAFE_BASH_PROGRAMS.has(parts[0]);
 }
 
-// 补丁路径抽取(escalation 用,不必整体解析补丁):匹配 File: / Move to: 行。
-const PATCH_PATH_RE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gm;
-
-/** host 写工具的目标路径(write/edit/multi_edit 取 args.path;apply_patch 从补丁文本抽)。 */
-function writeTargetsOf(call: ToolCall): string[] {
-  const name = call.function.name;
-  let args: any = {};
-  try {
-    args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-  } catch {
-    return [];
-  }
-  if (name === 'write_file' || name === 'edit_file' || name === 'multi_edit') {
-    return args.path ? [String(args.path)] : [];
-  }
-  if (name === 'apply_patch') {
-    const patch = String(args.patch ?? args.input ?? '');
-    const out: string[] = [];
-    PATCH_PATH_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = PATCH_PATH_RE.exec(patch))) out.push((m[1] || m[2] || '').trim());
-    return out;
-  }
-  return [];
-}
+// 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
 
 /** 写目标是否越界(工作区外,但非硬拒保护路径)→ 需升级审批。借 Codex writable-roots escalation。 */
 export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): boolean {
@@ -246,6 +228,19 @@ function parseCallArgs(call: ToolCall): any {
 //   规则串 = 工具名（`*` 结尾为前缀通配），可再跟 `:参数前缀`（跑命令比 command，写文件比 path）：
 //     "web_fetch"    "mcp__*"    "run_bash:npm test"    "write_file:/etc/"
 //   优先级 deny > ask > allow > base 档；一条都没命中就退回 base 档的原三档语义。
+/**
+ * 「这次为什么要问你」——审批卡的解释来源(B3)。
+ * 判定分支在 gateToolCall 里已经算过一遍,不带出来客户端只能猜(而它猜不到引擎侧生效的 base 档)。
+ */
+export interface ApprovalReason {
+  /** custom-ask=用户规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 */
+  kind: 'custom-ask' | 'escalate' | 'mode';
+  /** 命中的规则串(仅 custom-ask) */
+  rule?: string;
+  /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base;客户端算不出来) */
+  mode?: Exclude<ApprovalMode, 'custom'>;
+}
+
 export interface CustomApprovalRules {
   base: Exclude<ApprovalMode, 'custom'>;
   allow: string[];
@@ -285,13 +280,25 @@ function ruleMatches(rule: string, call: ToolCall): boolean {
   return !argPrefix || ruleSubject(call).trim().startsWith(argPrefix);
 }
 
+/**
+ * custom 档判定（详版）：连**命中的那条规则**一起返回。
+ * 界面要回答「为什么问你/为什么被拒」，只给一个档位是答不了的；用户写坏一条 deny 规则时，
+ * 没有规则串就只能看到 agent 莫名失败，无从调起。
+ */
+export function customVerdictDetailed(
+  call: ToolCall,
+  rules: CustomApprovalRules,
+): { verdict: 'allow' | 'ask' | 'deny'; rule: string } | undefined {
+  const hit = (list: string[]): string | undefined => list.find((r) => ruleMatches(r, call));
+  const d = hit(rules.deny); if (d) return { verdict: 'deny', rule: d };
+  const a = hit(rules.ask); if (a) return { verdict: 'ask', rule: a };
+  const w = hit(rules.allow); if (w) return { verdict: 'allow', rule: w };
+  return undefined;
+}
+
 /** custom 档判定：命中即返回该档，全不命中返回 undefined（交回 base 档处理）。 */
 export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allow' | 'ask' | 'deny' | undefined {
-  const hit = (list: string[]): boolean => list.some((r) => ruleMatches(r, call));
-  if (hit(rules.deny)) return 'deny';
-  if (hit(rules.ask)) return 'ask';
-  if (hit(rules.allow)) return 'allow';
-  return undefined;
+  return customVerdictDetailed(call, rules)?.verdict;
 }
 
 /**
@@ -316,12 +323,16 @@ export async function gateToolCall(
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
   let mode = ctx.approvalMode;
   let forceAsk = false;
+  let askRule = '';
   if (mode === 'custom') {
     const rules = customRules();
-    const v = customVerdict(call, rules);
-    if (v === 'deny') return { action: 'reject' };
-    if (v === 'allow') return { action: 'approve' };
-    forceAsk = v === 'ask';
+    const v = customVerdictDetailed(call, rules);
+    // 拒绝时把规则串一并带出:否则用户写坏一条 deny 规则,只看到 agent 莫名失败,无从调起。
+    // 模型面文本一律英文(项目约定:提示/工具结果英文,UI/日志中文)
+    if (v?.verdict === 'deny') return { action: 'reject', rejectReason: `Denied by approval rule: ${v.rule}` };
+    if (v?.verdict === 'allow') return { action: 'approve' };
+    forceAsk = v?.verdict === 'ask';
+    askRule = forceAsk ? v!.rule : '';
     mode = rules.base;
   }
 
@@ -346,11 +357,18 @@ export async function gateToolCall(
     execMode: ctx.execMode === 'host' ? 'host' : 'sandbox',
     cwd: ctx.cwd, sessionId: ctx.sessionId, runId, signal,
   });
-  if (permV.block) return { action: 'reject' };
+  // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
+  if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
   if (permV.allow) return { action: 'approve' };
 
   const preview = escalate ? '⚠ 工作区外写入 · ' + approvalPreview(call) : approvalPreview(call);
-  const d = await requestApproval(runId, call, preview, signal);
+  // 「为什么问你」(B3):优先级与判定同序 —— 用户自己写的规则 > 越界升级 > 档位本身。
+  const reason: ApprovalReason = forceAsk
+    ? { kind: 'custom-ask', rule: askRule, mode }
+    : escalate
+      ? { kind: 'escalate', mode }
+      : { kind: 'mode', mode };
+  const d = await requestApproval(runId, call, preview, signal, reason);
   if (d.action === 'approve_always') {
     // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
     if (!escalate && !forceAsk) allowAlways(ctx.sessionId, name);

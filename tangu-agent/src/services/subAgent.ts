@@ -216,7 +216,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       let content: string;
       let isError = false;
       if (decision.action === 'reject') {
-        content = 'The user rejected this operation.';
+        content = decision.rejectReason || 'The user rejected this operation.';
         isError = true;
       } else {
         const execCall = decision.argsOverride

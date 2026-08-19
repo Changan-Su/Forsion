@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configExists, loadRawConfig, getRawSection, saveSection, migrateLegacyConfig } from './config.js';
@@ -67,5 +67,15 @@ describe('config.json 唯一真源', () => {
   it('A4 接线:loadMcpConfig 优先读 config.json 的 mcp 段', () => {
     saveSection('mcp', { mcpServers: { x: { command: 'c' } } });
     expect(loadMcpConfig().mcpServers).toEqual({ x: { command: 'c' } });
+  });
+
+  it('⚠️文件存在但解析不了 → saveSection 抛错且**一个字节都不动**(否则整份被重写成只剩这一段)', () => {
+    saveSection('cloud', { url: 'u', token: 't' });          // 先有一份好配置
+    const nested = join(dir, 'tangu', 'config.json');
+    const path = existsSync(nested) ? nested : join(dir, 'config.json');
+    const before = '{ 坏掉的 json,,,';
+    writeFileSync(path, before, 'utf8');
+    expect(() => saveSection('approval', { base: 'readonly', allow: [], ask: [], deny: [] })).toThrow();
+    expect(readFileSync(path, 'utf8')).toBe(before);          // 没被覆盖
   });
 });

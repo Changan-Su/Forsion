@@ -96,6 +96,8 @@ export function writeUserMd(content: string): void {
 }
 /** Special Agent(Historian/Muse)配置文件(默认关;桌面/TUI 经端点读写)。 */
 export const specialAgentsConfigFile = (): string => join(tanguHome(), 'special-agents.json');
+/** 代码检查点(写工具落盘前的 pre-image;每会话一个子目录,见 services/checkpoints.ts)。 */
+export const checkpointsDir = (): string => join(tanguHome(), 'checkpoints');
 export const pgdataDir = (): string => join(tanguHome(), 'pgdata');
 /** 嵌入式 SQLite 本地库文件(TUI / standalone / desktop 三端共用,故本地会话跨前端共享)。 */
 export const stateDbPath = (): string => join(tanguHome(), 'state.db');

@@ -13,13 +13,79 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { getRunForUser } from '../services/runStore.js';
-import { resolveApproval, type ApprovalAction } from '../services/approvals.js';
+import { resolveApproval, customRules, type ApprovalAction, type CustomApprovalRules } from '../services/approvals.js';
+import { saveSection } from '../core/config.js';
+import { deps } from '../seams/runtime.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { resolveDeskShot } from '../services/deskCapture.js';
 
 const router = Router();
 
 const ACTIONS: ApprovalAction[] = ['approve', 'approve_always', 'reject'];
+
+// ── custom 档规则的读写(H2:此前只能手写 config.json)。────────────────────────────────
+//   GET  /agent/approval-rules → { base, allow[], ask[], deny[] }
+//   PUT  /agent/approval-rules { base?, allow?, ask?, deny? } → 200 { ok, rules } | 400 非法
+// 门控与 providers.ts 写 API key 那条同级(authMiddleware + saveSection);敏感度不高于它。
+// 提权面:规则落在 ~/.tangu/config.json —— 工作区外,agent 写它要过越界升级;web_fetch 打不到
+// 本机端点(urlSafety 挡 localhost/私网/回环,且 DNS 解析后再验)。**MCP/插件自带的网络能力
+// 不过这道闸**,那是既有事实,不因本路由而变。
+//
+// ⚠️ **必须 host-only**(照 commands.ts 的既有守卫):本 router 挂在 `userRouter` 上,而云端
+// microserver 是照单挂 userRouter 的 —— 不挡的话,任何已登录的云端用户都能读写一个**进程级全局**
+// 配置文件(两个 handler 都不含 per-user 作用域),而 `customRules()` 在云端仍被 mcp__* 工具的
+// 审批判定消费(gateToolCall 对 mcp__ 不早退)→ 用户 A 的规则会改变用户 B 的判定。
+// `core/config.ts` 头注也写明这份配置「仅 standalone/TUI/desktop 使用」。
+const localOnly = (): boolean => !!deps().profile.capabilities.hostExec;
+const BASES = ['readonly', 'auto-edit', 'full-auto'] as const;
+
+/**
+ * 规则列表清洗:逐条 String+trim,丢空串。与引擎侧 strList 同语义。
+ * `undefined` = 未提供 → 保持原样(PUT 允许部分更新);**非数组一律报错**,不静默当空 ——
+ * 客户端一处 JSON 序列化把字段变成 null,就会把安全相关的 deny 名单悄悄清空落盘。
+ * 清空必须是**显式传空数组**才成立。
+ */
+function ruleList(v: unknown, cur: string[]): string[] | null {
+  if (v === undefined) return cur;
+  if (!Array.isArray(v)) return null; // → 400
+  // 200 条 × 单条 500 字符封顶:规则是人手写的,而 customRules() 每次工具调用都全文读+解析
+  return v.map((x) => String(x).trim().slice(0, 500)).filter(Boolean).slice(0, 200);
+}
+
+router.get('/agent/approval-rules', authMiddleware, async (_req, res) => {
+  try {
+    if (!localOnly()) return res.status(404).json({ detail: 'not available in this deployment' });
+    res.json(customRules());
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'read approval rules failed' });
+  }
+});
+
+router.put('/agent/approval-rules', authMiddleware, async (req, res) => {
+  try {
+    if (!localOnly()) return res.status(404).json({ detail: 'not available in this deployment' });
+    const b = req.body || {};
+    const cur = customRules();
+    if (b.base !== undefined && !BASES.includes(String(b.base) as any)) {
+      return res.status(400).json({ detail: `base must be one of ${BASES.join(' | ')}` });
+    }
+    const allow = ruleList(b.allow, cur.allow);
+    const ask = ruleList(b.ask, cur.ask);
+    const deny = ruleList(b.deny, cur.deny);
+    if (!allow || !ask || !deny) {
+      return res.status(400).json({ detail: 'allow / ask / deny must be arrays of strings (omit a field to keep it)' });
+    }
+    const next: CustomApprovalRules = {
+      base: (b.base === undefined ? cur.base : String(b.base)) as CustomApprovalRules['base'],
+      allow, ask, deny,
+    };
+    saveSection('approval', next);
+    // customRules() 每次现读 config.json → 保存后**下一次工具调用**即生效,不必重启引擎
+    res.json({ ok: true, rules: next });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'save approval rules failed' });
+  }
+});
 
 router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (req: AuthRequest, res) => {
   try {

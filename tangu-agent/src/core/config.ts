@@ -54,12 +54,21 @@ function writeConfig(c: Record<string, any>): void {
   try { chmodSync(configFile(), 0o600); } catch { /* best-effort 私有权限(含 token/apiKey) */ }
 }
 
-/** 深合并某段并落盘(其他段原样保留),返回写后的整份配置。唯一写入口。 */
+/**
+ * 深合并某段并落盘(其他段原样保留),返回写后的整份配置。唯一写入口。
+ * ⚠️ **文件存在但解析不了 → 拒绝写入**:`loadRawConfig()` 对坏 JSON 也返回 null,
+ * 若照 `|| {}` 兜底就会把整份 config.json 重写成只剩这一段 —— providers 的 apiKey、
+ * 云端 token、mcp 配置全没了,且不可撤销。宁可报错让人去修那个文件。
+ */
 export function saveSection(name: string, value: any): Record<string, any> {
-  const c = loadRawConfig() || {};
-  c[name] = value;
-  writeConfig(c);
-  return c;
+  const c = loadRawConfig();
+  if (c === null && configExists()) {
+    throw new Error(`config.json 解析失败,拒绝写入(以免其余配置被整份覆盖):${configFile()}`);
+  }
+  const next = c || {};
+  next[name] = value;
+  writeConfig(next);
+  return next;
 }
 
 /** 读一个 JSON 文件,失败返回 undefined。 */

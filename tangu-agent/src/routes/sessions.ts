@@ -16,6 +16,8 @@ import { query, getNowSql } from '../core/db.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { compactSession } from '../services/compaction.js';
 import { branchSession } from '../services/sessionBranch.js';
+import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
+import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 
 const router = Router();
 
@@ -172,6 +174,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
     await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
     await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
+    await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete session failed' });
@@ -295,6 +298,72 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
     res.json({ ok: true, summarizedCount: r.summarizedCount, throughTimestamp: r.throughTimestamp });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'compact failed' });
+  }
+});
+
+// 会话内容级检索(P3):标题/摘要/**消息正文**。与模型侧 search_sessions 共用
+// services/sessionSearch 的同一条 SQL —— 两边各写一份就会出现「界面搜得到、模型搜不到」。
+// 与工具的唯一差别:不排除当前会话(用户就可能在找手上这段),且回传结构化命中(带 messageId 供跳转)。
+router.get('/agent/sessions/search', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user!.userId;
+    const profile = resolveProfile(req.query.app_id ? String(req.query.app_id) : undefined);
+    if (!profile) return res.status(400).json({ detail: `unknown app_id: ${req.query.app_id}` });
+    for (const k of ['before', 'after'] as const) {
+      if (String(req.query[k] ?? '').trim() && !dayArg(req.query[k])) {
+        return res.status(400).json({ detail: `${k} must be a YYYY-MM-DD date` });
+      }
+    }
+    const hits = await searchSessions({
+      userId,
+      appId: profile.appId,
+      terms: splitTerms(String(req.query.q ?? '')),
+      limit: Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 20), 50)),
+      before: dayArg(req.query.before),
+      after: dayArg(req.query.after),
+    });
+    res.json({
+      hits: hits.map((h) => ({
+        id: h.id,
+        title: String(h.title ?? ''),
+        summary: String(h.summary ?? ''),
+        archived: h.archived === true || h.archived === 1 || h.archived === '1',
+        updatedAt: fmtDate(h.updated_at),
+        ...(h.hit ? { hit: h.hit } : {}),
+      })),
+    });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'search sessions failed' });
+  }
+});
+
+// 代码检查点(rewind):列出本会话的写工具快照 / 把代码恢复到某时刻。
+// 对话侧回退复用 messages/delete;两者由客户端按用户选的档位分别调用(仅代码/仅对话/两者)。
+router.get('/agent/sessions/:id/checkpoints', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    res.json({ checkpoints: await listCheckpoints(req.params.id) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'list checkpoints failed' });
+  }
+});
+
+router.post('/agent/sessions/:id/checkpoints/restore', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const at = Number(req.body?.at);
+    if (!Number.isFinite(at) || at <= 0) return res.status(400).json({ detail: 'at (ms timestamp) is required' });
+    // 与 messages/delete 同款闸:在飞 run 正在改文件,恢复会与它对写。
+    const inflight = await query<any[]>(
+      `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
+      [req.params.id],
+    );
+    if (inflight.length) return res.status(409).json({ detail: 'run in progress' });
+    res.json(await restoreCodeSince(req.params.id, at));
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'restore checkpoint failed' });
   }
 });
 

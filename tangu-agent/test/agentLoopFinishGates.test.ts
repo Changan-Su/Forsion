@@ -252,3 +252,29 @@ describe('验证回路(/verify)', () => {
     expect(String(rows.pop()!.content)).not.toContain('验证命令未通过');
   }, 20_000);
 });
+
+describe('计划提交兜底(2026-08-18 真机:模型把计划当普通文本回完就收尾)', () => {
+  it('planMode 下收尾未调 exit_plan_mode → 回灌 <plan_submit_check> 续跑;只催一次;不落库', async () => {
+    script = [
+      finalStep('小计划:1. 读 a.txt 2. 追加一行。'), // 纯文本计划 = 用户没有批准入口
+      finalStep('那我就不提交了。'), // 第二次收尾:planNudged 已用掉 → 放行(plan 模式也用于问答)
+    ];
+    const run = await runToSettled({ execMode: 'host', cwd: home, planMode: true });
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(2); // 催了一次(否则只会有 1 次调用)
+
+    expect(userTexts(llmPayloads[1])).toContain('<plan_submit_check>');
+    // 上一轮的纯文本计划要以 assistant 轮在场,否则模型看不懂在催什么
+    expect((llmPayloads[1].messages as any[]).some((m) => m.role === 'assistant' && String(m.content).includes('小计划'))).toBe(true);
+
+    const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S'`);
+    expect(rows.some((r) => String(r.content).includes('plan_submit_check'))).toBe(false); // 脚手架不落库
+  }, 20_000);
+
+  it('负对照:非 planMode 收尾不催(否则普通会话每轮都被拦)', async () => {
+    script = [finalStep('做完了。')];
+    const run = await runToSettled({ execMode: 'host', cwd: home });
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+});

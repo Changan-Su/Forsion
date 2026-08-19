@@ -42,6 +42,10 @@ import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
+import { recordPostWrite, snapshotBeforeWrite } from '../services/checkpoints.js';
+import { WRITE_TOOLS, writeTargetsOf } from './writeTargets.js';
+import { withWriteLock } from './writeLock.js';
+import path from 'node:path';
 import type { ToolContext, ToolResult, ToolImpl, ToolCapabilities } from './toolTypes.js';
 
 // 类型 re-export:保持既有 `from './registry.js'` 的 import 路径不变。
@@ -161,6 +165,27 @@ function currentProfile(ctx: ToolContext) {
   return ctx.profile ?? deps().profile;
 }
 
+/** 本次调用的写目标(绝对路径);快照与「写后取指纹」共用同一份口径。 */
+function writeTargetsAbs(call: ToolCall, ctx: ToolContext): string[] {
+  const cwd = ctx.cwd || process.cwd();
+  return writeTargetsOf(call).map((t) => (path.isAbsolute(t) ? t : path.resolve(cwd, t)));
+}
+
+/**
+ * 写类工具落盘前留 pre-image(代码检查点/rewind;host 形态才有真实 FS)。挂在这里=单点覆盖
+ * 全部写类工具。路径口径与审批越界判定共用 writeTargetsOf。工具报错(没真写)时撤销本次条目。
+ */
+async function snapshotForCheckpoint(name: string, call: ToolCall, ctx: ToolContext): Promise<(() => Promise<void>) | null> {
+  if (ctx.execMode !== 'host' || !WRITE_TOOLS.has(name) || !ctx.sessionId || !ctx.runId) return null;
+  try {
+    const abs = writeTargetsAbs(call, ctx);
+    if (!abs.length) return null;
+    return await snapshotBeforeWrite(ctx.sessionId, ctx.runId, abs);
+  } catch {
+    return null; // 快照是尽力而为的护栏,绝不因它挡住工具执行
+  }
+}
+
 /** agent 代改文件 → 用户活动日志(引擎侧唯一埋点,单点覆盖全部写类工具;host 成功才记)。 */
 const AGENT_EDIT_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
 function logAgentEdit(name: string, args: Record<string, any>, ctx: ToolContext, result: string): void {
@@ -247,11 +272,37 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   if (impl) {
     const caps = mergeCapabilities(name, impl);
     const { scopedCtx, cleanup } = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    // ⚠️「拍 pre-image → 执行 → 取写后指纹 / 撤销」必须整段在**同一把写锁**里(codex 2026-08-17 P1)。
+    // 原来快照在锁外拍:两个子代理/会话同时写同一个文件时,双方都会在任一方进锁之前拍完快照 ——
+    // 后写的那个拍到的是**前写者改动之前**的字节,回退它就把前者的改动一起抹掉。
+    // 写锁可重入(见 writeLock.ts),所以工具自己内部那层 withWriteLock 变成直通,不会死锁。
+    // 只有写类工具进锁:读类工具没必要排队(判据与 snapshotForCheckpoint 内的门禁同一份)。
+    const needsLock = ctx.execMode === 'host' && WRITE_TOOLS.has(name) && !!ctx.sessionId && !!ctx.runId;
+    const inLock = <T,>(fn: () => Promise<T>): Promise<T> => (needsLock ? withWriteLock(fn) : fn());
+    // 抛出路径已在锁内撤销过时置回 null,免得外层 catch 再撤一次(第二次撤会拿「已恢复」的现状
+    // 当 pre-image 比对,把本该删掉的新建文件误判成用户改过)。
+    let undoSnapshot: (() => Promise<void>) | null = null;
     try {
-      const result = await impl.execute(args, scopedCtx);
-      logAgentEdit(name, args, ctx, String(result));
-      return { toolCallId: call.id, name, result: String(result), isError: false };
+      const text = await inLock(async () => {
+        const undo = await snapshotForCheckpoint(name, call, ctx);
+        undoSnapshot = undo;
+        try {
+          const out = String(await impl.execute(args, scopedCtx));
+          if (undo && out.startsWith('Error')) await undo();
+          else if (undo) await recordPostWrite(ctx.sessionId, ctx.runId!, writeTargetsAbs(call, ctx));
+          return out;
+        } catch (err) {
+          if (undo) await undo(); // 撤销也留在锁内:它是写盘
+          undoSnapshot = null;
+          throw err;
+        }
+      });
+      logAgentEdit(name, args, ctx, text);
+      // 内置工具**用返回串表达失败**(不抛),此前一律标 isError:false —— 于是真失败在 SSE/hooks/
+      // 持久化里都是「成功」。与下面自定义工具分支(早就按 'Error:' 判)口径统一。
+      return { toolCallId: call.id, name, result: text, isError: text.startsWith('Error:') };
     } catch (e: any) {
+      if (undoSnapshot) await (undoSnapshot as () => Promise<void>)();
       if (scopedCtx.signal?.aborted && !ctx.signal?.aborted) {
         return { toolCallId: call.id, name, result: `Error: tool timed out after ${caps.defaultTimeoutMs}ms. If you retry, narrow the operation (smaller file / shorter command) or split it into steps.`, isError: true };
       }

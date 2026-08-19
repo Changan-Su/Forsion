@@ -51,15 +51,13 @@ function relDisplay(ctx: ToolContext, abs: string): string {
   return rel && !rel.startsWith('..') ? rel : abs;
 }
 
-// 全局单链写锁(Codex 评审 07-30 #1):并行子代理各自串行执行工具,但两个子代理可同时进写类工具;
-// edit/multi_edit/apply_patch 是「读-改-写」,交叠会静默丢更新。写操作毫秒级,单链无争用痛点。
-// ponytail: 全局一条链,真出现写吞吐瓶颈再按路径分锁。
-let writeChain: Promise<unknown> = Promise.resolve();
-export function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const r = writeChain.then(fn, fn);
-  writeChain = r.then(() => undefined, () => undefined);
-  return r;
-}
+// 全局单链写锁(Codex 评审 07-30 #1)。**实现已迁到叶子模块 ./writeLock.ts 并改成可重入** ——
+// 检查点快照必须和写在同一个临界区里(codex 2026-08-17 P1),而 registry 在外层加锁后,
+// 下面这些工具自己的 withWriteLock 就成了内层调用,不可重入即死锁。这里只做转出保持调用点不变。
+// ⚠️ import + export 两行都要:纯 `export … from` 不会把名字带进本模块作用域,
+//    下面三个工具里的 withWriteLock(...) 会解析不到。
+import { withWriteLock } from './writeLock.js';
+export { withWriteLock };
 
 /** cat -n 风格按行分页(host read_file):每行前缀「右对齐行号 + Tab」(1-based),带 [lines a-b of N] 头。
  *  行号给模型定位坐标、并逼它精确复制缩进,从而命中 edit_file/multi_edit 的唯一 old_string —— 这是模型

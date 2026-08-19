@@ -1151,7 +1151,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const decision = await gateToolCall(runId, effCall, { sessionId, execMode, approvalMode, cwd, extraRoots, profile }, ac.signal);
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'reject') {
-        return mkRejected(call, startedAt, parallelGroup, '用户拒绝了该操作。');
+        // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)
+        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || '用户拒绝了该操作。');
       }
       // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
       const execCall = decision.argsOverride
@@ -1257,6 +1258,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
+    let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -1544,6 +1546,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             continue;
           }
         }
+        // —— 计划提交兜底:planMode 下模型把计划当**普通文本**回完就收尾(2026-08-18 真机实测
+        //    gpt-5.6-luna 就这么干:planMode:true、guidance 已注入、零工具调用)。这样用户手里
+        //    没有计划卡=没有批准入口,整条计划流程静默失效。收尾前催一次。
+        //    整 run 只催一次(第二次放行):plan 模式也用来问答/调研,不该把每一轮都逼成计划。
+        //    不看 usedTools:「只读调研完直接口述计划」正是要拦的那种。——
+        if (planMode && !planNudged && !lastIter) {
+          planNudged = true;
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({
+            role: 'user',
+            content:
+              '<plan_submit_check>\nYou are in plan mode and about to end your turn without calling exit_plan_mode. A plan written as plain chat text gives the user no way to approve it — the approval card only appears when you call the tool.\nIf your response above is a plan or a change proposal: call exit_plan_mode now, passing the full plan as the argument (do not merely reference the text above).\nIf the user only asked a question and no plan is warranted: answer normally and end your turn — this notice does not require you to invent a plan.\n</plan_submit_check>',
+          } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'plan_submit_nudge', iteration });
+          continue;
+        }
+
         // —— 验证回路(收尾闸门,机械强制「跑绿才算完」):会话配了 /verify 命令且本 run 动过工具 →
         //    收尾前跑一遍;失败把输出尾巴回灌(不落库)逼模型修完再收。顺序刻意在完成度审计之后:
         //    先干完活(审计),再证明干对了(验证)。VERIFY_MAX_ROUNDS 兜底:最后一次仍红 → 在终稿
