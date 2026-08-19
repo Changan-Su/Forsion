@@ -53,7 +53,9 @@ export function compile(manifest: PageManifest, contents: Record<BlockId, string
   for (const row of manifest.root.children) {
     for (const col of row.columns) {
       for (const ref of col.children) {
-        const content = (contents[ref.ref] ?? '').trim()
+        // 保住块首行首横向空白(段落缩进档=行首制表符,indentIo,2026-08-14):裸 .trim() 会抹缩进。
+        // trimEnd 而非 /\s+$/(长空白 run 二次方回溯,评审 P1);\r? 防 CRLF 垃圾前缀。
+        const content = (contents[ref.ref] ?? '').replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
         segments.push(content ? `${blockMarker(ref.ref)}\n\n${content}` : blockMarker(ref.ref))
       }
     }

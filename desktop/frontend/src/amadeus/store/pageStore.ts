@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import { create, useStore } from 'zustand'
+import type { FocusPlace } from '../blocks/registry'
 import { bumpNextId, generateColumnId, generateRowId, nextBlockId, stripPageBasename } from '@amadeus-shared/compiler/names'
 import type {
   BlockEntry,
@@ -196,7 +197,8 @@ function isolateBlockRow(root: StackNode, id: BlockId): number | null {
 }
 
 export type Status = 'idle' | 'loading' | 'ready' | 'saving'
-export type FocusPlace = 'start' | 'end'
+// 单源在 blocks/registry(2026-08-18 加 'body-enter' 档时两份撞车,这里改成转发别再分叉)。
+export type { FocusPlace }
 
 interface PageState {
   vaultRoot: string | null
@@ -649,8 +651,25 @@ function makePageStore() {
     },
 
     async renamePage(newName) {
-      const { manifest, blocks, activePage } = get()
-      if (!manifest || !activePage) return false
+      const { manifest: manifest0, activePage } = get()
+      if (!manifest0 || !activePage) return false
+      // 复合后缀保全(.canvas.md 等插件文件类型):标题栏给的是剥掉全后缀的基名,而主进程
+      // IPC 只剥/补 `.md` —— 不在**入口**把 `.canvas` 段补回去,改名一次就把文件类型改丢。
+      // 归一化与树上 commitRename 共用 pluginExt.normalizePluginRename(口径分叉=叠床名,评审 P2)。
+      // 动态 import 破 pageStore↔pluginStore 静态环(先例:pluginStore.ts:150 注)。
+      {
+        const { matchFileType } = await import('../plugins/pluginStore')
+        const { normalizePluginRename } = await import('../plugins/pluginExt')
+        const ext = matchFileType(activePage)?.extensions.find((e) => activePage.toLowerCase().endsWith(e.toLowerCase()))
+        if (ext) {
+          // 本 IPC 恒产出 .md 路径:非 .md 类插件后缀(注册面允许 '.xyz')走这条必然改坏类型,直接拒。
+          if (!/\.md$/i.test(ext)) {
+            set({ error: '该文件类型不支持在标题栏改名' })
+            return false
+          }
+          newName = normalizePluginRename(newName, ext)
+        }
+      }
       // .fd 级联预检:新名对应的 .fd 位置已被占 → 先中止,不做半级联。
       const oldFd = fdDirOf(activePage)
       const hasFd = get().folders.includes(oldFd)
@@ -675,6 +694,10 @@ function makePageStore() {
       // 别的面板 400ms 待存的旧文本会在重写完成后写回、把改好的 [[链接]] 盖掉;
       // 本面板更早发出的在途写也要等(旧路径写盘晚于移动 = 旧文件复活)。(Codex 评审 P1)
       await flushAllScopes()
+      // 快照必须在 flush **之后**取:标题回车改名的同一拍正文就可能继续输入,入口处的旧快照
+      // 会经 IPC 把 flush 期间的编辑覆写回旧内容(Codex 评审 P0)。页在 await 间被换掉则中止。
+      const { manifest, blocks, activePage: nowPage } = get()
+      if (!manifest || nowPage !== activePage) return false
       const contents: Record<string, string> = {}
       for (const [id, b] of Object.entries(blocks)) contents[id] = b.content
       try {

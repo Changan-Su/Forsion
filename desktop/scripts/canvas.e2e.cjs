@@ -265,6 +265,36 @@ async function main() {
     })
     check('文档模式有 ⠿ 块把手(display≠none)', gutterVis)
     check('点空白追加(.page-tail)在场', !!(await page.locator('.cvv-doc-native .page-tail').count()))
+
+    // 14.5) 完整笔记面(2026-08-14 用户验收拍板「与普通 md 完全无差」,1.2.0):标题/图标封面
+    //       入口/属性面板与普通笔记同一套三件套;标题口径剥**全**复合后缀;属性面板隐藏
+    //       canvas 几何键(fmKeys 声明)但别的键照常展示。
+    check('完整面:标题栏在', (await page.locator('.cvv-doc-native .amx-title-input').count()) === 1)
+    const titleVal = await page.locator('.cvv-doc-native .amx-title-input').inputValue()
+    // 台架 manifest.title 故意种成 'Harness.canvas'(真实导入形态):标题必须无条件走文件基名口径。
+    check('标题=剥全后缀的基名(manifest.title 不许短路)', titleVal === 'Harness', titleVal)
+    check('完整面:添加图标/封面入口在', (await page.locator('.cvv-doc-native .amx-title-actions button').count()) >= 1)
+    // 14.6) 顶栏对位(实报「添加图标/封面按钮位置与普通 md 不齐」的根治):笔记面上方要有与
+    //       普通编辑器同一条 .amx-toolbar(sticky 面包屑条),高度不塌(真顶栏靠动作钮撑 32px,
+    //       这里靠 min-height),封面/标题从它下面开始排。只断「存在」会漏掉塌高/绝对定位两种假绿。
+    const strip = await page.evaluate(() => {
+      const bar = document.querySelector('.plugin-note-surface .amx-toolbar')
+      const wrap = document.querySelector('.plugin-note-surface .amx-title-wrap')
+      const crumb = document.querySelector('.plugin-note-surface .amx-crumb-leaf')
+      if (!bar || !wrap) return null
+      const b = bar.getBoundingClientRect()
+      return { bh: b.height, below: wrap.getBoundingClientRect().top >= b.top + b.height - 1, crumb: crumb ? crumb.textContent : null }
+    })
+    check('顶栏条在且不塌高(≥30px)', !!strip && strip.bh >= 30, JSON.stringify(strip))
+    check('标题排在顶栏之下', !!strip && strip.below)
+    check('面包屑叶子=剥全后缀基名', !!strip && strip.crumb === 'Harness', strip ? String(strip.crumb) : 'no strip')
+    await page.locator('.cvv-doc-native .amx-props-chip').click()
+    await page.waitForTimeout(250)
+    const propKeys = await page.evaluate(() => [...document.querySelectorAll('.cvv-doc-native .amx-prop-key')].map((i) => i.value))
+    check('属性面板隐藏 canvas 键、保留用户键', !propKeys.includes('canvas') && propKeys.includes('custom_note'), JSON.stringify(propKeys))
+    await page.locator('.cvv-doc-native .amx-props-chip').click() // 收起,别挡后面的点击
+    await page.waitForTimeout(150)
+
     cv = await readCv(page)
     check('模式落盘 mode:doc', cv?.mode === 'doc', JSON.stringify(cv?.mode))
 
@@ -302,6 +332,23 @@ async function main() {
       'fm 哨兵键幸存(用户手写 + 其它插件)',
       fmFinal.includes('custom_note: 用户手写的键要幸存') && fmFinal.includes(`other_plugin: '{"keep":1}'`),
       fmFinal.replace(/\n/g, ' ⏎ ').slice(0, 160),
+    )
+
+    // 16.5) 属性面板编辑别的键 → canvas 几何键幸存(评审 P0 的真面验证:隐藏≠可抹,
+    //       模型持全量、commit 全量重建必须把几何键原值带回)。
+    await page.locator('.cvv-modes button', { hasText: '文档' }).click()
+    await page.waitForTimeout(500)
+    await page.locator('.cvv-doc-native .amx-props-chip').click()
+    await page.waitForTimeout(250)
+    const noteRow = page.locator('.cvv-doc-native .amx-prop-row', { has: page.locator('input[value="custom_note"]') })
+    await noteRow.locator('.amx-prop-input').fill('面板改过')
+    await page.evaluate(() => (document.activeElement instanceof HTMLElement) && document.activeElement.blur())
+    await page.waitForTimeout(300)
+    const fmAfterEdit = await page.evaluate(() => window.__cv.store.getState().manifest?.fmExtra ?? '')
+    check(
+      '属性编辑别的键后 canvas 几何键幸存',
+      fmAfterEdit.includes('custom_note: 面板改过') && /canvas: /.test(fmAfterEdit) && fmAfterEdit.includes('"b1"'),
+      fmAfterEdit.replace(/\n/g, ' ⏎ ').slice(0, 200),
     )
 
     // 17) 页面级错误兜底

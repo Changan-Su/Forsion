@@ -394,6 +394,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       // 外部改 .db(如 agent 直连磁盘改日历)→ 通知渲染端热重载对应 dbStore 条目。
       notifyAll(IPC.dbChange, dbPath)
     },
+    (filePath) => {
+      // 外部改其余文件(插件片段库 .js 之类)→ 渲染端 ctx.app.watchFile 按路径分发。
+      notifyAll(IPC.fileChange, filePath)
+    },
   )
 
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: pagePath })
@@ -1363,6 +1367,36 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     const dir = globalPluginsDir()
     await fs.mkdir(dir, { recursive: true })
     await shell.openPath(dir)
+  })
+
+  // ── 插件私有数据 blob(ctx.loadData / ctx.saveData)。~/.forsion/plugins-data/<id>.json。
+  // 为什么不复用 registerSetting:那是「每键一个字符串塞 localStorage」,装不下几十 KB 的
+  // 片段库,也没有原子性。为什么不落 vault:插件数据跟着**应用**走,不跟着某个笔记库走
+  // (换库不该丢配置),与 plugins/ 目录同域。
+  // ⚠️id 必须过 SAFE_PLUGIN_ID —— 它直接拼进文件名,`../` 就是任意写。
+  const pluginDataFile = (id: unknown): string | null =>
+    typeof id === 'string' && SAFE_PLUGIN_ID.test(id)
+      ? path.join(forsionHomeDir(), 'plugins-data', `${id}.json`)
+      : null
+
+  ipcMain.handle(IPC.pluginDataRead, async (_e, id: string): Promise<string | null> => {
+    const f = pluginDataFile(id)
+    if (!f) return null
+    try {
+      return await fs.readFile(f, 'utf8')
+    } catch {
+      return null // 没写过 = null,与「读失败」同一出口:插件侧只需一条 `?? 默认值`
+    }
+  })
+
+  ipcMain.handle(IPC.pluginDataWrite, async (_e, id: string, text: string): Promise<void> => {
+    const f = pluginDataFile(id)
+    if (!f) throw new Error('非法插件 id')
+    await fs.mkdir(path.dirname(f), { recursive: true })
+    // 原子写:直接覆盖会在崩溃/断电时留下半截 JSON,而这里存的是用户手写的片段库。
+    const tmp = `${f}.tmp-${process.pid}-${Date.now()}`
+    await fs.writeFile(tmp, String(text ?? ''), 'utf8')
+    await fs.rename(tmp, f)
   })
 
   ipcMain.handle(IPC.revealInFileManager, async (_e, targetPath: string) => {

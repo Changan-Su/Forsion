@@ -7,6 +7,10 @@ import { activePageScope } from '@amadeus/store/pageStore'
 /** 模板插入上下文:插到哪个块之后;光标块为空则首个模板块直接填入它。 */
 export interface TemplateCtx { afterId: string; emptyBlock: boolean }
 
+// (「文档 | 画布」胶囊曾在这里占一格 `canvasSeg`:UnifiedPage 发布、顶栏按 path 比对后渲染。
+//  2026-08-18 拆掉 —— 那个「单个全局槽 + 路径比对」协议有三条各自都能让胶囊消失的路,用户实报过
+//  两次。现在由 UnifiedPage 自己 portal 进本 pane 顶栏的插槽,理由与被排除的假设见 CanvasModeSeg 顶注。)
+
 interface UiOverlayState {
   overlay: 'switcher' | 'template' | null
   templateCtx: TemplateCtx | null

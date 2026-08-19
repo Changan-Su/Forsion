@@ -1144,30 +1144,50 @@ async function main() {
     check('T42 Shift-Tab → 升回同级', (await p.locator('.md-block .ProseMirror ul ul').count()) === 0)
     await p.close()
 
-    // ② 段落且前一兄弟是列表 → Tab 收进该列表末项(AFFiNE「成为前块子块」的 md 形态)。
-    const q = await freshPage('- 项目一\n\n后续段落')
-    await q.locator('.md-block .ProseMirror > p').first().click()
-    await q.waitForTimeout(200)
-    await q.keyboard.press('Tab')
-    await q.waitForTimeout(500)
-    check('T42 段落并入前列表(顶层段落消失)', (await q.locator('.md-block .ProseMirror > p').count()) === 0)
-    check('T42 并入后列表里两段都在', (await q.locator('.md-block .ProseMirror ul p').count()) === 2)
-    await q.close()
-
-    // ③ 段落、前面没有列表 → Tab 自转 bullet 项(用户拍板「段落转列表」);Shift-Tab 原路脱出。
+    // ② 段落 Tab = 整段缩进档(2026-08-14 用户拍板「纯缩进,不转列表」,Notion/AFFiNE 视觉):
+    //    data-indent 逐档加、margin-left 真生效、落盘是行首字面制表符;Shift-Tab 逐档退。
     const r = await freshPage('孤段落')
     await r.locator('.md-block .ProseMirror').first().click()
     await r.waitForTimeout(200)
     await r.keyboard.press('Tab')
     await r.waitForTimeout(500)
-    check('T42 无前列表的段落 Tab → 变 bullet 项', (await r.locator('.md-block .ProseMirror > ul li').count()) === 1)
+    const ind1 = await r.evaluate(() => {
+      const p = document.querySelector('.md-block .ProseMirror > p')
+      return { di: p?.getAttribute('data-indent'), ml: p ? parseFloat(getComputedStyle(p).marginLeft) : -1 }
+    })
+    check('T42 段落 Tab → 缩进一档(data-indent=1 且 margin 生效)', ind1.di === '1' && ind1.ml > 0, JSON.stringify(ind1))
+    check('T42 缩进后不产生列表', (await r.locator('.md-block .ProseMirror ul, .md-block .ProseMirror ol').count()) === 0)
     const rInEditor = await r.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
-    check('T42 转换后焦点仍在编辑器里(不逃逸)', rInEditor)
+    check('T42 缩进后焦点仍在编辑器里(不逃逸)', rInEditor)
+    await r.keyboard.press('Tab')
+    await r.waitForTimeout(400)
+    check('T42 再按 Tab → 第二档', (await r.locator('.md-block .ProseMirror > p[data-indent="2"]').count()) === 1)
+    const rmd = await mdOf(r)
+    check('T42 缩进落盘 = 行首两枚字面制表符', rmd.startsWith('\t\t孤段落'), `md=${JSON.stringify(rmd)}`)
+    await r.keyboard.press('Shift+Tab')
     await r.keyboard.press('Shift+Tab')
     await r.waitForTimeout(500)
-    check('T42 Shift-Tab 脱出回段落', (await r.locator('.md-block .ProseMirror > ul').count()) === 0 &&
-      (await r.locator('.md-block .ProseMirror > p').count()) === 1)
+    const rmd0 = await mdOf(r)
+    check('T42 Shift-Tab 逐档退回零(attr 摘除,落盘无制表符)',
+      (await r.locator('.md-block .ProseMirror > p[data-indent]').count()) === 0 && !rmd0.includes('\t'), `md=${JSON.stringify(rmd0)}`)
+    await r.keyboard.press('Shift+Tab') // 零档再退:吞键不动,焦点不逃逸
+    await r.waitForTimeout(300)
+    check('T42 零档 Shift-Tab 吞键(焦点仍在)', await r.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror')))
     await r.close()
+
+    // ③ 缩进段落经「落盘 → 重新载入」round-trip 不塌成代码块、档位还在(indentIo 编解码 + compiler 保尾)。
+    const q = await freshPage('\t缩进种子段')
+    await q.waitForTimeout(300)
+    const qState = await q.evaluate(() => {
+      const pm = document.querySelector('.md-block .ProseMirror')
+      return {
+        code: pm.querySelectorAll('pre, code').length,
+        di: pm.querySelector(':scope > p')?.getAttribute('data-indent'),
+        text: pm.textContent,
+      }
+    })
+    check('T42 磁盘行首制表符载入 → 缩进段落而非代码块', qState.code === 0 && qState.di === '1' && qState.text.includes('缩进种子段'), JSON.stringify(qState))
+    await q.close()
 
     // ④ 表格内 Tab = 跳下一格(gfm tableKeymap),绝不许被缩进层吞成哑键。
     const s = await freshPage('| a | b |\n| --- | --- |\n| 1 | 2 |')
@@ -1224,22 +1244,27 @@ async function main() {
     check('T42 代码块多行 Shift-Tab → 逐行去缩进', cmd3.includes('aa') && cmd3.includes('bb') && !cmd3.includes('  aa'), `md=${JSON.stringify(cmd3)}`)
     await c2.close()
 
-    // ⑥ Tab↔Shift-Tab 对称:段落并进前列表后,Shift-Tab 只把那段抬出来,邻项的 bullet 结构不动。
+    // ⑥ 列表后面的段落 Tab:**不并入列表**(旧「成为前块子块」语义已废除)—— 列表结构原封不动,
+    //    段落只是缩进;落盘后重载也不许被列表吸走(indentIo 实体形态防 md 懒延续)。
     const u = await freshPage('- 项目一\n\n后段')
     await u.locator('.md-block .ProseMirror > p').first().click()
     await u.waitForTimeout(200)
     await u.keyboard.press('Tab')
-    await u.waitForTimeout(400)
-    await u.keyboard.press('Shift+Tab')
     await u.waitForTimeout(500)
     const uState = await u.evaluate(() => {
       const pm = document.querySelector('.md-block .ProseMirror')
-      return { lis: pm.querySelectorAll('li').length, ps: pm.querySelectorAll(':scope > p').length, text: pm.textContent }
+      return {
+        lis: pm.querySelectorAll('li').length,
+        ps: pm.querySelectorAll(':scope > p').length,
+        di: pm.querySelector(':scope > p')?.getAttribute('data-indent'),
+      }
     })
-    check('T42 并入后 Shift-Tab 抬出该段,邻项 bullet 保全', uState.lis === 1 && uState.ps === 1 && uState.text.includes('项目一') && uState.text.includes('后段'), JSON.stringify(uState))
+    check('T42 列表后段落 Tab → 只缩进不并入(列表 1 项、段落还在顶层)', uState.lis === 1 && uState.ps === 1 && uState.di === '1', JSON.stringify(uState))
+    const umd = await mdOf(u)
+    check('T42 列表+缩进段落落盘形态(列表原样 + 行首制表符)', /[-*] 项目一/.test(umd) && /\n\t后段/.test(umd), `md=${JSON.stringify(umd)}`)
     await u.close()
 
-    // ⑦ 多块选区 Tab:逐块各成一项,不许塞进同一个 list_item。
+    // ⑦ 多段选区 Tab:逐段各自缩进一档,不产生列表。
     const m2 = await freshPage('甲段\n\n乙段')
     await m2.locator('.md-block .ProseMirror > p').first().click()
     await m2.waitForTimeout(200)
@@ -1247,14 +1272,16 @@ async function main() {
     await m2.waitForTimeout(200)
     await m2.keyboard.press('Tab')
     await m2.waitForTimeout(500)
-    // 种子 '甲段\n\n乙段' 在 v3 里落成三段(中间空段)→ 逐块成项 = 3 个 li,首尾内容各归各项。
-    // 钉住的语义是「不许塞进同一个 list_item」,裸 wrap 类回归会变成 1 个 li。
     const m2State = await m2.evaluate(() => {
       const pm = document.querySelector('.md-block .ProseMirror')
-      const lis = [...pm.querySelectorAll('li')]
-      return { n: lis.length, first: lis[0]?.textContent, last: lis[lis.length - 1]?.textContent }
+      return {
+        indented: pm.querySelectorAll(':scope > p[data-indent="1"]').length,
+        lis: pm.querySelectorAll('li').length,
+      }
     })
-    check('T42 多块选区 Tab → 逐块成项', m2State.n === 3 && m2State.first === '甲段' && m2State.last === '乙段', JSON.stringify(m2State))
+    // 种子 '甲段\n\n乙段' 在 v3 里落成三段(中间空段);选区内三段全部 +1 档(空段的档位只活在
+    // 会话内 —— 空段序列化走 <br/> 不带缩进,重载即丢,属 md 可表示性边界,不追求)。
+    check('T42 多段选区 Tab → 逐段缩进、零列表', m2State.indented === 3 && m2State.lis === 0, JSON.stringify(m2State))
     await m2.close()
   })
 

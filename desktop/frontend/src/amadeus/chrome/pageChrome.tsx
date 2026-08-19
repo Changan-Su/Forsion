@@ -7,12 +7,10 @@ import { Search } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
-import { usePageStore } from '@amadeus/store/pageStore'
+import { usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
 import { joinRel, toAssetUrl } from '@amadeus-shared/assets'
 import { EMOJI_ALL, EMOJI_GROUPS, searchEmoji } from '@amadeus/lib/emoji'
-
-const ps = () => usePageStore.getState()
 
 export const UNTITLED_RE = /^(未命名|untitled)(-\d+)?$/i
 
@@ -48,6 +46,9 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   const activePage = usePageStore((s) => s.activePage)
   const storeCover = useActiveCover()
   const storeY = useActiveCoverY()
+  // 写操作走**本面板**的 store:插件文件视图(画布文档模式)也挂这套 chrome,活动面板门面
+  // (ps())在那里解析到隔壁编辑器面板,封面会写进别人那篇(2026-08-14 scope 化后必须如此)。
+  const scoped = useScopedPageStore()
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
   const [dragY, setDragY] = useState<number | null>(null)
   const [reposition, setReposition] = useState(false) // 「调整位置」模式:默认图片锁定,点按钮才解锁可拖
@@ -55,8 +56,8 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   const cover = coverProp !== undefined ? coverProp : storeCover
   const savedY = coverY ?? storeY
   const posY = dragY ?? savedY
-  const setCover = onSetCover ?? ((c: string | null) => { if (target) void ps().setPageCover(target, c) })
-  const setY = onSetCoverY ?? ((y: number) => { if (target) void ps().setPageCoverY(target, y) })
+  const setCover = onSetCover ?? ((c: string | null) => { if (target) void scoped.getState().setPageCover(target, c) })
+  const setY = onSetCoverY ?? ((y: number) => { if (target) void scoped.getState().setPageCoverY(target, y) })
   if (!target || !cover) return null
   const src = /^https?:\/\//i.test(cover) ? cover : toAssetUrl(cover)
   return (
@@ -119,6 +120,7 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   onApply?: (cover: string) => void
 }) {
   const hasSearch = !!amadeus.searchImages
+  const scoped = useScopedPageStore() // 写本面板的 store(理由同 NoteCover:插件视图里 ps() 会写到隔壁)
   const [tab, setTab] = useState<'gallery' | 'url' | 'upload'>('gallery')
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<Array<{ thumb: string; full: string; author?: string }> | null>(null)
@@ -127,7 +129,7 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   const [url, setUrl] = useState('')
   const apply = (cover: string): void => {
     if (onApply) onApply(cover)
-    else void ps().setPageCover(page, cover) // 不自动关闭:用户可连选换图,点浮层外才关
+    else void scoped.getState().setPageCover(page, cover) // 不自动关闭:用户可连选换图,点浮层外才关
   }
   const search = (): void => {
     const query = q.trim()

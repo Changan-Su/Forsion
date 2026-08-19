@@ -42,12 +42,21 @@ export function parseLayoutJson(raw: string | null): LayoutV4 | null {
   }
 }
 
-/** 文件内唯一的新锚 id(v4 锚永不 renumber,写侧只保证不撞已有)。 */
+/** 文件内唯一的新锚 id(v4 锚永不 renumber,写侧只保证不撞已有)。
+ *  ⚠️ 画布卡片(amadeusCanvasCard,2026-08-16)与分栏共用同一个锚命名空间 —— 分栏与画布**绝不许
+ *  引用同一枚锚**(方案 §3.2 互斥不变式),所以这里必须把卡片锚也算进已用集合。 */
 export function freshAnchorId(doc: ProseNode): string {
   const used = new Set<string>()
   doc.descendants((n) => {
     if (n.type.name === 'amadeusColumnCell' && n.attrs.anchor) used.add(String(n.attrs.anchor))
     if (n.type.name === 'amadeusColumnRow' && n.attrs.tail) used.add(String(n.attrs.tail))
+    if (n.type.name === 'amadeusCanvasCard' && n.attrs.anchor) used.add(String(n.attrs.anchor))
+    // 惰性字面锚(解散/收回留下的 `<!-- a id -->`)同属一个命名空间 —— 漏掉它,新锚就有概率撞上一枚
+    // 正文里已存在的标记,下次折叠因「重复锚」整体失败(Codex P2-1)。锚形态见 foldColumns 的注释。
+    if (n.type.name === 'html') {
+      const m = MARKER_RE.exec(String(n.attrs.value ?? '').trim())
+      if (m) used.add(m[1])
+    }
   })
   for (;;) {
     const id = 'c' + Math.random().toString(36).slice(2, 6)
@@ -432,6 +441,10 @@ export function executeMoveBelowRow(view: EditorView, rowPos: number, copy = fal
  *  光标落右列。⠿ 菜单与 slash「分栏」共用这一份 —— 别在调用处各写一遍建行代码。
  *  目标不在顶层(已在列内 / li 内)返回 false:行只允许顶级,列内块靠拖拽调整(与 executePair 同规)。 */
 export function splitToColumn(view: EditorView, from: number, to: number, node: ProseNode): boolean {
+  // ⚠️ 画布卡片不给入列(Codex P0-7):卡真被塞进 cell 后,空列 normalizer 解散行、canvas normalizer
+  //    又因卡后出现列锚/tail 把卡拆壳 —— 既没有新列,卡片几何与 canvas 键也一起没了,只剩几枚惰性锚。
+  //    将来要支持得定义「先收回卡、再入列」的单事务并保住旧锚(方案 §3.2),不是放开这道闸就行。
+  if (node.type.name === 'amadeusCanvasCard') return false
   const { state } = view
   if (state.doc.resolve(from).depth !== 0) return false
   const row = state.schema.nodes.amadeusColumnRow

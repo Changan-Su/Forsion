@@ -347,18 +347,22 @@ async function main() {
     }, PM)
     record('P13a 列表项 Tab 嵌套 / Shift-Tab 还原', a1 && !a2.nested && a2.lis === 2, JSON.stringify({ a1, a2 }))
 
+    // 2026-08-14 语义再拍板(用户否掉「段落转列表/并入列表」):段落 Tab = 整段缩进档,列表不动。
     await clickIn(`${PM} > p`) // 尾段(列表后第一个顶级段落)
     await pg.keyboard.press('Tab')
     await pg.waitForTimeout(150)
     const b13 = await pg.evaluate((s) => {
       const el = document.querySelector(s)
-      const lastLi = el.querySelector(':scope > ul > li:last-of-type')
+      const p = [...el.querySelectorAll(':scope > p')].find((x) => x.textContent === '尾段。')
       return {
-        tucked: !!lastLi && [...lastLi.querySelectorAll('p')].some((x) => x.textContent === '尾段。'),
-        topPs: [...el.querySelectorAll(':scope > p')].map((x) => x.textContent),
+        di: p?.getAttribute('data-indent'),
+        ml: p ? parseFloat(getComputedStyle(p).marginLeft) : -1,
+        lis: el.querySelectorAll(':scope > ul > li').length,
+        inLi: !!el.querySelector(':scope > ul li p') && [...el.querySelectorAll(':scope > ul li p')].some((x) => x.textContent === '尾段。'),
       }
     }, PM)
-    record('P13b 列表后段落 Tab 收进最后一项', b13.tucked && !b13.topPs.includes('尾段。'), JSON.stringify(b13))
+    record('P13b 列表后段落 Tab → 只缩进不并入(data-indent=1、margin 生效、列表 2 项不动)',
+      b13.di === '1' && b13.ml > 0 && b13.lis === 2 && !b13.inLi, JSON.stringify(b13))
 
     await clickIn(`${PM} pre`)
     await pg.keyboard.press('End')
@@ -375,25 +379,176 @@ async function main() {
     }, PM)
     record('P13c code_block 内 Tab 插两空格且焦点在', c13.text.includes('line  ') && c13.inPm, JSON.stringify(c13))
 
-    // 2026-08-14 语义升级(用户拍板「段落转列表」):前面没有列表的段落 Tab 不再是无操作,
-    // 而是自转 bullet 项(Shift-Tab 可原路脱出)。焦点仍绝不放走。
-    await clickIn(`${PM} > p:last-of-type`) // 孤段(前兄弟是 code_block,没有可并入的列表)
+    // 2026-08-14 语义再拍板(用户否掉「段落转列表」):孤段 Tab = 缩进档,序列化落盘是行首字面
+    // 制表符(经 toStoredMarkdown 的 entitiesToTabs);Shift-Tab 逐档退,零档吞键焦点不放走。
+    await clickIn(`${PM} > p:last-of-type`) // 孤段(前兄弟是 code_block)
     await pg.keyboard.press('Tab')
     await pg.waitForTimeout(150)
     const d13 = await pg.evaluate((s) => {
       const el = document.querySelector(s)
-      const lastUl = el.querySelector(':scope > ul:last-of-type')
-      return { inPm: !!el.contains(document.activeElement), li: lastUl?.textContent }
+      const p = el.querySelector(':scope > p:last-of-type')
+      window.__upage.probe.flush?.() // 把防抖中的序列化拉平,fmState().body 才是最新 stored 形态
+      const st = window.__upage.probe.fmState?.().body // stored 形态(缩进=行首字面 \t)
+      return { inPm: !!el.contains(document.activeElement), di: p?.getAttribute('data-indent'), ul: !!el.querySelector(':scope > ul:last-of-type li'), stored: typeof st === 'string' ? st : null }
     }, PM)
-    record('P13d 无前列表的段落 Tab → 自转 bullet 项(焦点不放走)', d13.inPm && d13.li === '孤段。', JSON.stringify(d13))
+    record('P13d 孤段 Tab → 缩进档(不转列表、焦点不放走)', d13.inPm && d13.di === '1' && !String(d13.stored ?? '').includes('- 孤段'), JSON.stringify({ ...d13, stored: undefined }))
+    record('P13d 缩进落盘 = 行首字面制表符', d13.stored === null || /\n\t孤段。/.test(d13.stored), JSON.stringify({ has: /\n\t孤段。/.test(String(d13.stored)) }))
     await pg.keyboard.press('Shift+Tab')
     await pg.waitForTimeout(150)
     const d13b = await pg.evaluate((s) => {
       const el = document.querySelector(s)
-      return { p: el.querySelector(':scope > p:last-of-type')?.textContent, uls: el.querySelectorAll(':scope > ul').length }
+      const p = el.querySelector(':scope > p:last-of-type')
+      return { p: p?.textContent, di: p?.getAttribute('data-indent') }
     }, PM)
-    // uls 也要钉住:lift 若留下孤立的重复列表结构,只看段落文本会假绿(Codex 评审)。
-    record('P13d Shift-Tab 原路脱出回段落(无残留列表)', d13b.p === '孤段。' && d13b.uls === 1, JSON.stringify(d13b))
+    record('P13d Shift-Tab 退回零档(attr 摘除)', d13b.p === '孤段。' && !d13b.di, JSON.stringify(d13b))
+    await pg.keyboard.press('Shift+Tab') // 零档再退:吞键
+    await pg.waitForTimeout(120)
+    const d13c = await pg.evaluate((s) => !!document.querySelector(s)?.contains(document.activeElement), PM)
+    record('P13d 零档 Shift-Tab 吞键(焦点不逃逸)', d13c)
+    await pg.close()
+  }
+
+  // K13:段落缩进档 × 回车/退格(2026-08-16 用户实报「tab 过的一行回车之后没有继续保持 tab,
+  //      多 tab 了会全部一起删除」)。整张行为矩阵按 AFFiNE/Notion 对齐,逐格钉死:
+  //        Tab / Shift-Tab   → 已由 P13 覆盖,这里不重复
+  //        段尾回车          → 新段**继承**档位(base splitBlock 的 atEnd 分支造节点用默认 attrs,病灶在此)
+  //        行中回车          → 两半都保档(base 的 node.copy() 本来就带 attrs,这条是防回归)
+  //        空缩进段回车      → **仍留同档**(显式拍板:空段没有「空 bullet」那种视觉垃圾要清,
+  //                            而「缩进写完一段回车就掉回顶格」是更常见的挫败;逃生口有 Shift-Tab 和行首退格)
+  //        行首退格          → **逐级**降一档,绝不一次清零、绝不并进上一段
+  //        0 档行首退格      → 交回 base 合并上一段(缩进层不许恒吞键把退格做死)
+  //        Mod+Backspace     → 一步归零
+  //        列表里            → 一格都不受影响(反向断言:防这层截胡 list 的 lift/split 语义)
+  {
+    const pg = await browser.newPage()
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent('甲段。\n\n乙段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(400)
+
+    // 精确落点:鼠标点击只能落到「大概那个字」,而档位继承/合并这些格差一个字测的就是别的东西了。
+    // 选区走 probe 直驱 PM(与分栏 spike 同款),**按键仍是真键盘** —— 被测的始终是 keymap 本身。
+    // off<0 = 块尾。Selection.near 是基类静态,当前选区是 Text 还是 Node 都取得到。
+    const caret = (text, off) => pg.evaluate(({ text, off }) => {
+      const v = window.__upage.probe.view()
+      let at = null
+      v.state.doc.descendants((n, p) => {
+        if (at == null && n.isTextblock && n.textContent === text) at = p + 1 + (off < 0 ? n.content.size : off)
+      })
+      if (at == null) return false
+      v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+      v.focus()
+      return true
+    }, { text, off })
+    const ps = () => pg.evaluate((s) => [...document.querySelectorAll(`${s} > p`)].map((p) => ({ t: p.textContent, di: p.getAttribute('data-indent') })), PM)
+
+    // e1 段尾回车继承档位
+    await caret('乙段。', -1)
+    await pg.keyboard.press('Tab')
+    await pg.keyboard.press('Tab')
+    await pg.waitForTimeout(120)
+    await pg.keyboard.press('Enter')
+    await pg.keyboard.type('丙丁')
+    await pg.waitForTimeout(200)
+    const e1 = await ps()
+    record('K13e1 段尾回车 → 新段继承缩进档(2 档,且原段不动)',
+      e1.length === 3 && e1[1].t === '乙段。' && e1[1].di === '2' && e1[2].t === '丙丁' && e1[2].di === '2' && !e1[0].di, JSON.stringify(e1))
+
+    // e2 行中回车两半都保档
+    await caret('丙丁', 1)
+    await pg.keyboard.press('Enter')
+    await pg.waitForTimeout(200)
+    const e2 = await ps()
+    record('K13e2 行中回车 → 两半都保档',
+      e2.length === 4 && e2[2].t === '丙' && e2[2].di === '2' && e2[3].t === '丁' && e2[3].di === '2', JSON.stringify(e2))
+
+    // e3 空缩进段回车仍留同档
+    await caret('丁', -1)
+    await pg.keyboard.press('Enter')
+    await pg.waitForTimeout(150)
+    await pg.keyboard.press('Enter')
+    await pg.waitForTimeout(200)
+    const e3 = await ps()
+    record('K13e3 空缩进段回车 → 仍留同档(不掉回顶格)',
+      e3.length === 6 && e3[4].t === '' && e3[4].di === '2' && e3[5].t === '' && e3[5].di === '2', JSON.stringify(e3))
+
+    // e4 行首退格逐级降档,绝不一次清零、绝不合并
+    await caret('丁', 0)
+    await pg.keyboard.press('Backspace')
+    await pg.waitForTimeout(150)
+    const e4a = await ps()
+    await pg.keyboard.press('Backspace')
+    await pg.waitForTimeout(150)
+    const e4b = await ps()
+    record('K13e4 行首退格 → 逐级降档(2→1→0),段落既不合并也不清零',
+      e4a.length === 6 && e4a[3].t === '丁' && e4a[3].di === '1' &&
+      e4b.length === 6 && e4b[3].t === '丁' && !e4b[3].di, JSON.stringify({ e4a: e4a[3], e4b: e4b[3], n: e4b.length }))
+
+    // e5 0 档行首退格 = 交回 base 合并上一段(缩进层不许把退格做死)
+    await pg.keyboard.press('Backspace')
+    await pg.waitForTimeout(200)
+    const e5 = await ps()
+    record('K13e5 0 档行首退格 → 合并上一段(退格没被吞死)',
+      e5.length === 5 && e5[2].t === '丙丁', JSON.stringify(e5))
+
+    // e6 Mod+Backspace 一步归零
+    await caret('乙段。', 0)
+    await pg.keyboard.press(process.platform === 'darwin' ? 'Meta+Backspace' : 'Control+Backspace')
+    await pg.waitForTimeout(200)
+    const e6 = await ps()
+    record('K13e6 Mod+Backspace → 一步归零(段落仍在)', e6[1].t === '乙段。' && !e6[1].di, JSON.stringify(e6[1]))
+
+    // e7 继承来的档位真的落盘(行首字面制表符 ×2,经 indentIo 的 entitiesToTabs)
+    await caret('乙段。', -1)
+    await pg.keyboard.press('Tab')
+    await pg.keyboard.press('Tab')
+    await pg.waitForTimeout(120)
+    await pg.keyboard.press('Enter')
+    await pg.keyboard.type('戊')
+    await pg.waitForTimeout(200)
+    const e7 = await pg.evaluate(() => {
+      window.__upage.probe.flush?.()
+      const b = window.__upage.probe.fmState?.().body
+      return typeof b === 'string' ? b : null
+    })
+    // ⚠️ 不许写成 `e7 === null || ...`:probe 取不到值时那条恒真,落盘坏掉照样绿。取不到 = 红。
+    record('K13e7 继承的档位落盘 = 行首两枚字面制表符', typeof e7 === 'string' && /\n\t\t戊/.test(e7), JSON.stringify({ got: typeof e7, has: /\n\t\t戊/.test(String(e7)) }))
+    await pg.close()
+  }
+
+  // K14:列表里一格都不受影响 —— 缩进层截胡 list 语义是这轮最可能的回归面,单开一页反向断言。
+  {
+    const pg = await browser.newPage()
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent('- 甲\n- 乙\n')}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(400)
+    const caret = (text, off) => pg.evaluate(({ text, off }) => {
+      const v = window.__upage.probe.view()
+      let at = null
+      v.state.doc.descendants((n, p) => {
+        if (at == null && n.isTextblock && n.textContent === text) at = p + 1 + (off < 0 ? n.content.size : off)
+      })
+      if (at == null) return false
+      v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(at))))
+      v.focus()
+      return true
+    }, { text, off })
+
+    await caret('甲', -1)
+    await pg.keyboard.press('Enter')
+    await pg.waitForTimeout(200)
+    const f1 = await pg.evaluate((s) => document.querySelectorAll(`${s} li`).length, PM)
+    record('K14 列表项尾回车 → 仍是拆出新项(缩进层没截胡)', f1 === 3, JSON.stringify({ lis: f1 }))
+
+    await caret('乙', 0)
+    await pg.keyboard.press('Backspace')
+    await pg.waitForTimeout(250)
+    const f2 = await pg.evaluate((s) => {
+      const el = document.querySelector(s)
+      return { lis: el.querySelectorAll('li').length, out: [...el.querySelectorAll(':scope > p')].some((p) => p.textContent === '乙') }
+    }, PM)
+    record('K14 列表项行首退格 → 仍是脱壳变段落(缩进层没截胡)', f2.out && f2.lis === 2, JSON.stringify(f2))
     await pg.close()
   }
 
@@ -1635,19 +1790,27 @@ async function main() {
       }, PM)
       await pg.mouse.move(c.x, c.y)
       await pg.waitForTimeout(350)
-      const pressed = await pg.evaluate(() => {
+      const pressed = await pg.evaluate((s) => {
         const gutter = document.querySelector('.unified-gutter')
         gutter?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
         const rect = document.querySelector('.unified-press-rect')
-        return !!rect && rect.style.display === 'block'
-      })
+        if (!rect || rect.style.display !== 'block') return { shown: false }
+        // ⚠️ 只断「display:block」是假绿(2026-08-15 Codex 评审):这框是 position:absolute,
+        //    包含块=.milkdown,坐标算错会画到十万八千里外而这条断言照样绿。量真几何:
+        //    它应该外扩 4px 罩住块本身。
+        const el = [...document.querySelector(s).querySelectorAll(':scope > p')][0]
+        const b = el.getBoundingClientRect()
+        const r = rect.getBoundingClientRect()
+        return { shown: true, dx: r.left - (b.left - 4), dy: r.top - (b.top - 4) }
+      }, PM)
       await pg.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })))
       await pg.waitForTimeout(100)
       const gone = await pg.evaluate(() => {
         const rect = document.querySelector('.unified-press-rect')
         return !rect || rect.style.display === 'none'
       })
-      record('D2 按下把手出外扩高亮矩形,松手即收', pressed && gone, JSON.stringify({ pressed, gone }))
+      const aligned = !!pressed.shown && Math.abs(pressed.dx) <= 2 && Math.abs(pressed.dy) <= 2
+      record('D2 按下把手出外扩高亮矩形(罩住块,±2px)、松手即收', aligned && gone, JSON.stringify({ pressed, gone }))
       await pg.close()
     }
   }

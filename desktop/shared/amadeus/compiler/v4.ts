@@ -74,6 +74,9 @@ export interface V4Page {
   fmExtra: string
   /** 分栏布局;素文件与无分栏的结构化文件为 null。 */
   layout: V4Layout | null
+  /** `amadeus_canvas` 单行 JSON 原文(画布几何,不解释内容);无画布为 null。
+   *  刻意存原文而非解析对象:画布 schema 独立演进(§8),编译器只负责字节保全与 schema 不变式。 */
+  canvas: string | null
   /** frontmatter 之后的正文,原样保留(锚点标记行含在内)。 */
   body: string
   /** 正文里出现的锚点 id,按文序。素文件中它们是惰性的(仅被引用时才有意义)。 */
@@ -107,42 +110,58 @@ export function parseV4Source(raw: string): V4Page {
     kind: cls === 'v4-structured' ? 'structured' : 'plain',
     fmExtra: extractFrontmatterExtra(raw),
     layout: cls === 'v4-structured' ? parseV4Layout(fm.amadeus_layout) : null,
+    // 空值(`amadeus_canvas:`)不折成 null:那是「画布键在场但值坏了」,按 §3.2 读侧容错
+    // 逐字保留、本次会话按无画布渲染 —— 折成 null 会让写侧连键带 schema 一起剥掉(Codex P2)。
+    canvas: cls === 'v4-structured' && fm.amadeus_canvas != null ? fm.amadeus_canvas.trim() : null,
     body,
     anchors: scanAnchors(body),
   }
 }
 
-/** 与 compile() 同一道写盘过滤,再加严:v4 侧 `amadeus_` 前缀键**整体**不进 frontmatter
- *  (未知 amadeus_* 键也剥,升级契约=v4 文件不携带任何 amadeus 键),裸 '---' 行照旧拒。 */
+/** 与 compile() 同一道写盘过滤。已知保留键与裸 '---' 行恒拒;未知 `amadeus_*` 前缀键**按来源分**
+ *  (spec §6.0-3 / §8,Codex 评审 P1):
+ *  - 来源已是 v4-structured → **保留**:未知 amadeus_* 是不透明扩展元数据(只承诺字节保全,不承诺
+ *    语义),剥掉 = 新端写的扩展被老端一次保存静默吞掉;
+ *  - 升级路径 / 素文件 → **剥除**:v3 遗留垃圾键不加区分地穿透,文件会缺 schema 又带 amadeus_ 键,
+ *    下次 classify 二次误判成 v3。 */
 const AMADEUS_PREFIX_LINE = /^["']?amadeus_[A-Za-z0-9_-]*["']?\s*:/
-function sanitizeFmExtra(fmExtra: string): string {
+function sanitizeFmExtra(fmExtra: string, keepUnknown: boolean): string {
   return fmExtra
     .split('\n')
     .map((l) => l.replace(/\r$/, '')) // CRLF 源文的行尾 \r 不进重建的 frontmatter
-    .filter((l) => !AMADEUS_FM_KEY.test(l) && !AMADEUS_PREFIX_LINE.test(l) && !/^---\s*$/.test(l))
+    .filter((l) => !AMADEUS_FM_KEY.test(l) && !/^---\s*$/.test(l))
+    .filter((l) => keepUnknown || !AMADEUS_PREFIX_LINE.test(l))
     .join('\n')
     .replace(/^\n+|\n+$/g, '')
 }
 
-export function compileV4(page: Pick<V4Page, 'fmExtra' | 'layout' | 'body'>): string {
-  const extra = sanitizeFmExtra(page.fmExtra)
+/** **结构键发射的唯一判据**(方案 §6.0-1,2026-08-15):`amadeus_schema` 在场 ⟺ 分栏或画布任一在场。
+ *  两个真实写点(本文件的 compileV4 + desktop 的 fm 行级 splice)必须共用这一份——各判各的迟早
+ *  写出「剥了 schema 却留着 canvas 行」的半吊子文件,而 classifyPageSource 见任一 amadeus_ 前缀键
+ *  无 schema 即判 v3 → 文件被拽进 v3 管线补号改写,画布连同正文一起毁(Codex P0)。
+ *  返回的是**结构键行**,顺序固定 schema→layout→canvas;两个 JSON 参数都必须是单行 stringify 输出。 */
+export function structureKeysFor(layoutJson: string | null, canvasJson: string | null): string[] {
+  if (layoutJson == null && canvasJson == null) return []
+  return [
+    `amadeus_schema: ${PAGE_SCHEMA_V4}`,
+    ...(layoutJson != null ? [`amadeus_layout: ${layoutJson}`] : []),
+    ...(canvasJson != null ? [`amadeus_canvas: ${canvasJson}`] : []),
+  ]
+}
+
+export function compileV4(page: Pick<V4Page, 'fmExtra' | 'layout' | 'canvas' | 'body'> & Partial<Pick<V4Page, 'kind'>>): string {
+  // kind 缺省按 'plain' 处理(=剥掉未知 amadeus_* 的保守侧):parseV4Source 的产物天然带 kind,
+  // 常规「parse → 改 → compile」链自动走对;只有手搭字面量才需要显式声明。
+  const extra = sanitizeFmExtra(page.fmExtra, page.kind === 'structured')
   const body = normalizeBody(page.body)
-  if (page.layout) {
-    const fm = [
-      '---',
-      `amadeus_schema: ${PAGE_SCHEMA_V4}`,
-      `amadeus_layout: ${serializeV4Layout(page.layout)}`,
-      ...(extra ? [extra] : []),
-      '---',
-    ].join('\n')
-    return body ? `${fm}\n\n${body}` : `${fm}\n`
-  }
-  // 素文件:有外来 fm 才有 frontmatter 块,否则纯正文(与外来 md 同构)。
-  if (extra) {
-    const fm = ['---', extra, '---'].join('\n')
-    return body ? `${fm}\n\n${body}` : `${fm}\n`
-  }
-  return body
+  // 素文件(无分栏无画布且无外来 fm)= 纯正文,与外来 md 同构。
+  const lines = [
+    ...structureKeysFor(page.layout ? serializeV4Layout(page.layout) : null, page.canvas),
+    ...(extra ? [extra] : []),
+  ]
+  if (!lines.length) return body
+  const fm = ['---', ...lines, '---'].join('\n')
+  return body ? `${fm}\n\n${body}` : `${fm}\n`
 }
 
 // ── v3 → v4 升级(spec §5.1) ─────────────────────────────────────────────────────
@@ -157,14 +176,19 @@ export type UpgradeRefusalReason =
 
 export type UpgradeResult = { ok: true; src: string } | { ok: false; reason: UpgradeRefusalReason }
 
-/** 布局之外持有块 id 的已知 frontmatter 键(宿主 dashboard + mindmap/canvas 插件)。升级一律拒绝,
- *  这些文件留在 v3。清单刻意保守:未知插件键不在此列,但那类文件也都以专属扩展名收尾。
+/** 布局之外持有块 id 的已知 frontmatter 键(宿主 dashboard + mindmap 插件 + **已退役的**画布插件)。
+ *  升级一律拒绝,这些文件留在 v3。清单刻意保守:未知插件键不在此列,但那类文件也都以专属扩展名收尾。
  *  键容忍 YAML 引号:`"mindmap":` 漏判会剥标记剪树(Codex #3)。
- *  ⚠️canvas(2026-08-14 画布插件):无插件端(手机/网页无外置插件)会把 .canvas.md 当普通笔记,
- *  升级剥标记 = canvas 键里的坐标/连线全部孤儿 → 两道防线都必须认识它。 */
+ *  ⚠️裸 `canvas:`(2026-08-14 画布插件的旧格式)**留在表上**:画布 2026-08-16 转原生之后这类文件
+ *  已无生产者,但存量文件的坐标/连线仍按块 id 引用,升级剥标记会让它们整片孤儿 —— 失效闭合,
+ *  存量原样留在 v3 由用户自行处置。原生画布用的是 `amadeus_canvas`(行首带 amadeus_ 前缀,不匹配本正则)。 */
 const FOREIGN_ID_TREE_KEY = /^["']?(mindmap|mindmap_rel|dashboard|canvas)["']?\s*:/m
 
-const PLUGIN_FILETYPE = /\.(mindmap|excalidraw|canvas)\.md$/i
+/** 路径闸:这些扩展名的文件恒留 v3(格式归各自的插件所有)。
+ *  ⚠️2026-08-16 `canvas` 已移出:画布转为**任意 v4 笔记的一种模式**(fm 键 `amadeus_canvas`,
+ *  首次真用才物化),`.canvas.md` 不再是一等文件类型 —— 它就是个普通笔记,照常升 v4。
+ *  存量插件格式文件由上面的 fm 键闸兜住,不会被这一刀带走。 */
+const PLUGIN_FILETYPE = /\.(mindmap|excalidraw)\.md$/i
 
 /** 把一份 v3 源文升级为 v4 源文(纯函数,不落盘;调用方负责「首次编辑才升」的时机)。
  *  平凡布局(无分栏)→ 素文件:剥全部标记与 amadeus_* 键;含分栏 → 仅保留分栏行内块的
@@ -197,7 +221,9 @@ export function upgradeV3Source(pagePath: string, raw: string, now: string): Upg
     }
     for (const col of row.columns) {
       for (const ref of col.children) {
-        const content = (page.blocks[ref.ref]?.content ?? '').trim()
+        // 保住块首行首横向空白(段落缩进档=行首制表符,indentIo):裸 .trim() 会抹缩进。
+        // trimEnd 而非 /\s+$/(长空白 run 二次方回溯,评审 P1);\r? 防 CRLF 垃圾前缀。
+        const content = (page.blocks[ref.ref]?.content ?? '').replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
         if (multiCol) {
           // 分栏行内的块保留锚(布局引用它;空块也要锚在场)。
           segments.push(content ? `${blockMarker(ref.ref)}\n\n${content}` : blockMarker(ref.ref))
@@ -211,5 +237,6 @@ export function upgradeV3Source(pagePath: string, raw: string, now: string): Upg
   }
 
   const body = segments.join('\n\n')
-  return { ok: true, src: compileV4({ fmExtra, layout: rows.length ? { v: 4, rows } : null, body }) }
+  // canvas: null —— v3 源文不可能携带画布(画布是 v4 独有键;.canvas.md 插件文件在函数首行就被拒)。
+  return { ok: true, src: compileV4({ fmExtra, layout: rows.length ? { v: 4, rows } : null, canvas: null, body }) }
 }

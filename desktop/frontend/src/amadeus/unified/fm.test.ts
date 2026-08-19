@@ -1,6 +1,7 @@
 /** P0 契约(2026-08-13):UnifiedPage 绝不把 frontmatter 喂进编辑器,也绝不在保存时丢它。 */
 import { describe, it, expect } from 'vitest'
-import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf } from './fm'
+import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
+import { classifyPageSource } from '@amadeus-shared/compiler/v4'
 
 const FM = '---\nicon: "📘"\ncover: assets/x.png\ntags:\n  - a\n---\n'
 const BODY = '# Hi\n\n正文段落。\n'
@@ -93,31 +94,95 @@ describe('setForeignFm(属性面板整区替换)', () => {
 describe('setAmadeusStructure / layoutLineOf(分栏结构键,行级 splice 绝不过 YAML)', () => {
   const LAYOUT = '{"v":4,"rows":[{"columns":[{"refs":["a1"],"width":0.5},{"refs":["a2"],"width":0.5}],"tail":"t1"}]}'
   it('无 fm + layout → 生出 schema+layout 两行', () => {
-    const next = setAmadeusStructure('', LAYOUT)
+    const next = setAmadeusStructure('', LAYOUT, null)
     expect(next).toBe(`---\namadeus_schema: amadeus.page/4\namadeus_layout: ${LAYOUT}\n---\n`)
     expect(layoutLineOf(next)).toBe(LAYOUT)
   })
   it('已有外来键:结构行置顶,外来行逐字原样', () => {
-    const next = setAmadeusStructure('---\nicon: "📘"\n# note\n---\n', LAYOUT)
+    const next = setAmadeusStructure('---\nicon: "📘"\n# note\n---\n', LAYOUT, null)
     expect(next).toContain('amadeus_schema: amadeus.page/4')
     expect(next.indexOf('amadeus_layout')).toBeLessThan(next.indexOf('icon'))
     expect(next).toContain('icon: "📘"')
     expect(next).toContain('# note')
   })
   it('null → 剥除结构行(其余原样);剥空整块消失', () => {
-    const withStruct = setAmadeusStructure('---\nicon: "📘"\n---\n', LAYOUT)
-    expect(setAmadeusStructure(withStruct, null)).toBe('---\nicon: "📘"\n---\n')
-    expect(setAmadeusStructure(setAmadeusStructure('', LAYOUT), null)).toBe('')
+    const withStruct = setAmadeusStructure('---\nicon: "📘"\n---\n', LAYOUT, null)
+    expect(setAmadeusStructure(withStruct, null, null)).toBe('---\nicon: "📘"\n---\n')
+    expect(setAmadeusStructure(setAmadeusStructure('', LAYOUT, null), null, null)).toBe('')
   })
   it('引号键/重复行一并替换干净', () => {
     const messy = '---\n"amadeus_layout": {"v":4,"rows":[]}\namadeus_layout: old\namadeus_schema: x\n---\n'
-    const next = setAmadeusStructure(messy, LAYOUT)
+    const next = setAmadeusStructure(messy, LAYOUT, null)
     expect(next.match(/amadeus_layout/g)?.length).toBe(1)
     expect(next).toContain(`amadeus_layout: ${LAYOUT}`)
   })
   it('layoutLineOf:无 layout 行 → null', () => {
     expect(layoutLineOf('---\nicon: x\n---\n')).toBe(null)
     expect(layoutLineOf('')).toBe(null)
+  })
+})
+
+/** 发布阻断契约(方案 §6.0-2,2026-08-15):画布几何住在 fm 的 `amadeus_canvas` 单行 JSON 里,
+ *  而 `amadeus_schema` 缺席会让 classifyPageSource 把文件判成 v3 → 拽进 v3 管线补号改写 = 毁档。
+ *  所以「canvas 在场 ⇒ schema 在场」必须在**每个**结构区写点成立,这里钉的就是桌面端那个真身写点。 */
+describe('canvas ⇒ schema 不变式(发布阻断,画布文件绝不许掉回 v3)', () => {
+  const LAYOUT = '{"v":4,"rows":[{"columns":[{"refs":["a1"],"width":0.5},{"refs":["a2"],"width":0.5}],"tail":"t1"}]}'
+  const CANVAS = '{"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":800},"cards":[{"ref":"c1","x":900,"y":40,"w":480}]}'
+  const bodyOf = (fm: string): string => composeFm(fm, '# Hi\n\n正文。\n')
+
+  it('解散最后一个分栏行:schema 与 canvas 行都留下,文件仍判 v4-structured', () => {
+    const withBoth = setAmadeusStructure('---\nicon: "📘"\n---\n', LAYOUT, CANVAS)
+    expect(classifyPageSource(bodyOf(withBoth))).toBe('v4-structured')
+    const dissolved = setAmadeusStructure(withBoth, null, canvasLineOf(withBoth))
+    expect(layoutLineOf(dissolved)).toBe(null)
+    expect(canvasLineOf(dissolved)).toBe(CANVAS) // 字节稳定
+    expect(dissolved).toContain('amadeus_schema: amadeus.page/4')
+    expect(classifyPageSource(bodyOf(dissolved))).toBe('v4-structured') // ← 掉成 'v3' 就是毁档
+    expect(dissolved).toContain('icon: "📘"')
+  })
+
+  it('文档模式反复保存:canvas 行逐字不变(第二次起是不动点)', () => {
+    let fm = setAmadeusStructure('---\nstatus: draft\n---\n', null, CANVAS)
+    const first = fm
+    for (let i = 0; i < 5; i++) fm = setAmadeusStructure(fm, null, canvasLineOf(fm)) // 每次防抖保存派生一遍
+    expect(fm).toBe(first)
+    expect(canvasLineOf(fm)).toBe(CANVAS)
+    expect(classifyPageSource(bodyOf(fm))).toBe('v4-structured')
+  })
+
+  it('画布解散(canvas=null)且无分栏 → 结构键全剥,回落素文件', () => {
+    const withCanvas = setAmadeusStructure('', null, CANVAS)
+    expect(setAmadeusStructure(withCanvas, null, null)).toBe('')
+    expect(classifyPageSource('# Hi\n')).toBe('v4-plain')
+  })
+
+  it('重复结构键取最后一条(与 parseSimpleYaml 同口径:后者胜)', () => {
+    const dup = `---\namadeus_schema: amadeus.page/4\namadeus_canvas: {"v":1,"cards":[]}\namadeus_canvas: ${CANVAS}\n---\n`
+    // 取第一条 = 读到的是后一份、写回的是前一份,一次保存就把有效几何换成旧值。
+    expect(canvasLineOf(dup)).toBe(CANVAS)
+    expect(canvasLineOf(setAmadeusStructure(dup, null, canvasLineOf(dup)))).toBe(CANVAS)
+  })
+
+  it('fixStructKeys:手删 schema(源码模式)→ 补回;没有结构键则一字不动', () => {
+    const broken = `---\nicon: "📘"\namadeus_canvas: ${CANVAS}\n---\n`
+    expect(classifyPageSource(bodyOf(broken))).toBe('v3') // ← 不修就是这个下场(进 v3 管线=毁档)
+    const fixed = fixStructKeys(broken)
+    expect(classifyPageSource(bodyOf(fixed))).toBe('v4-structured')
+    expect(canvasLineOf(fixed)).toBe(CANVAS)
+    // 只补不拆:两者都没有时原样返回(含「只剩一个孤零零 schema 行」的合法空态)
+    const plain = '---\nicon: "📘"\n---\n'
+    expect(fixStructKeys(plain)).toBe(plain)
+    const lonely = '---\namadeus_schema: amadeus.page/4\nicon: "📘"\n---\n'
+    expect(fixStructKeys(lonely)).toBe(lonely)
+    // 已有 schema 的正常文件不被重排
+    const ok = setAmadeusStructure('', LAYOUT, CANVAS)
+    expect(fixStructKeys(ok)).toBe(ok)
+  })
+
+  it('canvas 是保留键:不落进属性面板的外来区(否则用户能编/YAML 往返会重排单行 JSON)', () => {
+    const fm = setAmadeusStructure('---\nicon: "📘"\n---\n', null, CANVAS)
+    expect(foreignFmText(fm)).toBe('icon: "📘"')
+    expect(foreignFmObject(fm).amadeus_canvas).toBeUndefined()
   })
 })
 

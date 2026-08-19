@@ -69,7 +69,7 @@ export function parseFrontmatter(markdown: string): Record<string, string> {
 
 /** Reserved single-line keys we own; everything else in the frontmatter is the user's.
  *  键侧同样容忍引号:带引号的 `"amadeus_page":` 若漏过此过滤,会经 fmExtra 落盘劫持页结构。 */
-export const AMADEUS_FM_KEY = /^["']?(amadeus_page|amadeus_schema|amadeus_layout|amadeus_next_id)["']?\s*:/
+export const AMADEUS_FM_KEY = /^["']?(amadeus_page|amadeus_schema|amadeus_layout|amadeus_canvas|amadeus_next_id)["']?\s*:/
 
 /** Major of `amadeus_schema` ("amadeus.page/3" → 3), or null when absent/unparseable.
  *  容忍 YAML 引号:parseSimpleYaml 取整行原文,"amadeus.page/4" 带引号也必须被闸认出(Codex)。 */

@@ -88,6 +88,13 @@
   padding: 6px 10px 2px;
   background: var(--bg);
 }
+/* 插件文档模式(PluginNoteSurface)复用这条顶栏做对位:真顶栏的高度由右侧动作钮撑
+ * (.amx-mode-btn 14px 图标 + 5px padding = 24px 内容),这里只有绝对定位的面包屑,
+ * 不给 min-height 会塌成 8px → 笔记面比普通笔记整体上移(实报「添加图标/封面按钮位置不齐」)。
+ * 24 为 content-box 内容高,叠上自身 6/2 padding = 与真顶栏同高;按钮尺寸若改要跟着动。 */
+.plugin-note-surface .amx-toolbar { min-height: 24px; box-sizing: content-box; }
+/* 与 .amx-editor 的 padding: 0 0 40px 对位:正文尾部留同样的缓冲。 */
+.plugin-note-surface { padding: 0 0 40px; }
 /* 前进 / 后退导航(常驻左上角)。 */
 .amx-nav { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .amx-nav-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: none; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s); }

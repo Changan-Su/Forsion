@@ -45,8 +45,11 @@ async function main() {
       process.exit(1)
     }
   }
+  // --check=<名> → <名>.check.cjs;--script=<文件名> → 直接跑同目录下那个脚本
+  // (e2e 类脚本文件名是 *.e2e.cjs,套不进 --check 的命名约定)。
   const only = (process.argv.find((a) => a.startsWith('--check=')) || '').slice('--check='.length)
-  const script = only ? `${only}.check.cjs` : 'editor-triggers.e2e.cjs'
+  const named = (process.argv.find((a) => a.startsWith('--script=')) || '').slice('--script='.length)
+  const script = named || (only ? `${only}.check.cjs` : 'editor-triggers.e2e.cjs')
   const e2e = spawn('node', [path.join(__dirname, script)], { stdio: 'inherit' })
   e2e.on('exit', (code) => {
     if (vite) vite.kill()

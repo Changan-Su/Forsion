@@ -25,7 +25,7 @@ import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { zoomOf } from '@lcl/engine'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
 import { executeMoveBelowRow, executePair } from './columns'
-import { foldStateAt, isHiddenAt, toggleFoldAt } from './headingFold'
+import { foldStateAt, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 
@@ -40,6 +40,61 @@ export interface BlockLayer {
   getView: () => EditorView | null
   /** 跨块选区覆盖到的顶层块边界(整节点对齐、两端同父);⠿ 菜单的整批动作与拖拽共用这一份判定。 */
   topRangeOf: (view: EditorView) => { from: number; to: number } | null
+}
+
+/** 元素的**累计视觉缩放**(CSS zoom × 全部祖先的 transform scale)。`rect` 是视口 px、`offsetWidth`
+ *  是未缩放的局部 px(端级 zoom×浮层坐标那条老账),两者相除就把两种缩放一并量到。宽为 0 时无从量,
+ *  回落 zoomOf(老口径)。
+ *  ponytail:只对**轴对齐等比缩放**成立(画布卡片就是这一种)。旋转/倾斜/scaleX≠scaleY 下
+ *  bounding box 宽度不是 x/y 的统一因子 —— 真要支持那些,换 `new DOMMatrix(cs.transform)` 逐层
+ *  累乘。另:offsetWidth 取整,分数布局宽会带亚像素误差,故与 zoomOf 差得极小时按 zoomOf 算,
+ *  保证「无 transform 时严格退化成老行为」(Codex 评审 P2)。 */
+function visualScale(el: HTMLElement): number {
+  const w = el.offsetWidth
+  if (w <= 0) return zoomOf(el)
+  const z = zoomOf(el)
+  const k = el.getBoundingClientRect().width / w
+  return Math.abs(k - z) < 0.01 ? z : k
+}
+
+/** 这个元素会不会给后代的 `position: fixed` 当包含块(css-position-3 §containing block +
+ *  css-contain:layout/paint containment)。⚠️不止 transform —— will-change 预告同样属性、
+ *  contain: layout/paint/strict/content、container-type、backdrop-filter、content-visibility
+ *  全都会建立包含块(Codex 评审 P1:漏一项 = 浮层整体偏一个容器位)。 */
+function createsFixedCB(cs: CSSStyleDeclaration): boolean {
+  if (cs.transform !== 'none' || cs.perspective !== 'none' || cs.filter !== 'none') return true
+  if (cs.backdropFilter && cs.backdropFilter !== 'none') return true
+  if (cs.containerType && cs.containerType !== 'normal') return true
+  if (/\b(layout|paint|strict|content)\b/.test(cs.contain ?? '')) return true
+  if (cs.contentVisibility === 'auto' || cs.contentVisibility === 'hidden') return true
+  return /\b(transform|perspective|filter|backdrop-filter|contain)\b/.test(cs.willChange ?? '')
+}
+
+/** 包含块的**padding box** 原点(视口 px):写进 style 的坐标是相对它算的,先减掉。
+ *  - `position: absolute` → offsetParent(最近的定位祖先,编辑器里是 .milkdown);
+ *  - `position: fixed` → 最近的 createsFixedCB 祖先,没有则视口({0,0})。
+ *  边框要单独减:包含块是 padding box,而 rect 给的是 border box(卡片带 1px 描边就差 1px)。 */
+function overlayOrigin(el: HTMLElement): { x: number; y: number } {
+  const originOf = (host: HTMLElement): { x: number; y: number } => {
+    const r = host.getBoundingClientRect()
+    const cs = getComputedStyle(host)
+    return { x: r.left + (Number.parseFloat(cs.borderLeftWidth) || 0), y: r.top + (Number.parseFloat(cs.borderTopWidth) || 0) }
+  }
+  if (getComputedStyle(el).position === 'absolute') {
+    // ⚠️ offsetParent 在元素(或祖先)`display:none` 时是 **null** —— 这些浮层的 CSS 初值恰好就是
+    //    display:none,首次定位时问它必然拿 null,回落 {0,0} = 整体偏一个容器位(实测 336×244)。
+    //    所以自己往上找:非 static 的祖先,或任何能当包含块的祖先(transform 系同样接管 absolute)。
+    let cb = el.offsetParent as HTMLElement | null
+    for (let p = el.parentElement; !cb && p; p = p.parentElement) {
+      const cs = getComputedStyle(p)
+      if (cs.position !== 'static' || createsFixedCB(cs)) cb = p
+    }
+    return cb ? originOf(cb) : { x: 0, y: 0 }
+  }
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    if (createsFixedCB(getComputedStyle(p))) return originOf(p)
+  }
+  return { x: 0, y: 0 }
 }
 
 /** 把手可命中判定:表格/引用(callout)内部不给独立把手(整只算一块);行/列骨架自身不给把手。 */
@@ -130,12 +185,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   }
   const showVline = (view: EditorView, el: HTMLElement, side: 'left' | 'right'): void => {
     const dom = ensureVline(view)
-    const z = zoomOf(view.dom)
+    const z = visualScale(view.dom)
+    const o = overlayOrigin(dom)
     const r = el.getBoundingClientRect()
-    const x = (side === 'left' ? r.left - 6 : r.right + 3) / z
+    const x = (side === 'left' ? r.left - 6 : r.right + 3) - o.x
     dom.style.display = 'block'
     dom.style.height = `${r.height / z}px`
-    dom.style.transform = `translate(${Math.round(x)}px, ${Math.round(r.top / z)}px)`
+    dom.style.transform = `translate(${Math.round(x / z)}px, ${Math.round((r.top - o.y) / z)}px)`
   }
   const hideVline = (): void => {
     if (vline) vline.style.display = 'none'
@@ -171,11 +227,62 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     return { from: sel.$from.before(df), to: sel.$to.after(dt) }
   }
 
+  /** 抓取点所在段落的「tab 缩进子树」范围:段落 + 紧随其后、缩进更深的连续段落。
+   *  (2026-08-19 用户实报,AFFiNE/Notion 同款:带子块的块,选中/拖动都是整体。)
+   *  只认 doc 顶层与分栏 cell(与 topRangeOf 的容器名单一致;卡内抓取维持单块,闭合锚轮再扩);
+   *  列表/引用等结构块自带整体性,不在此列。单段(无更深后继)返回 null。 */
+  const indentSubtreeOf = (view: EditorView, pos: number, node: ProseNode): { from: number; to: number } | null => {
+    if (node.type.name !== 'paragraph') return null
+    const $p = view.state.doc.resolve(pos)
+    const parent = $p.parent
+    if (!['doc', 'amadeusColumnCell'].includes(parent.type.name)) return null
+    const base = Number(node.attrs.indent ?? 0)
+    const idx = $p.index()
+    let end = pos + node.nodeSize
+    let kids = 0
+    for (let i = idx + 1; i < parent.childCount; i++) {
+      const sib = parent.child(i)
+      if (sib.type.name !== 'paragraph' || Number(sib.attrs.indent ?? 0) <= base) break
+      end += sib.nodeSize
+      kids++
+    }
+    return kids ? { from: pos, to: end } : null
+  }
+
   /** 跨块选区的整批拖:落点按「指针在目标块中线上/下」定前/后,删+插一个事务。
    *  为什么不交给 PM/落点插件:TextSelection.content() 是 openStart/openEnd=1 的**开片**,
    *  drop 时 replaceRange 会把它并进落点块 —— 实测只搬走第一块,后面几块留在原地(M2 首红)。
    *  这里按整节点边界切一个**闭片**,再自己删+插,整批语义才成立。
    *  顺带兑现「落回原处 = no-op」:落点落在自己范围内直接放弃,不产生空事务/空撤销步。 */
+  /** 拖到末块之下 = 搬到文档末尾(顶层)。单块(NodeSelection,含整卡)与跨块选区(缩进子树/
+   *  框选)都收;已在末尾 = no-op 不造空撤销步。 */
+  const executeMoveToTail = (view: EditorView, copy: boolean): boolean => {
+    const { state } = view
+    const end = state.doc.content.size
+    const range = topRangeOf(view)
+    if (range) {
+      if (!copy && range.to === end) return true
+      const content = state.doc.slice(range.from, range.to).content
+      let tr = state.tr
+      if (!copy) tr = tr.delete(range.from, range.to)
+      tr = tr.insert(tr.mapping.map(end), content)
+      tr.setMeta('amxColumns', true)
+      view.dispatch(tr.scrollIntoView())
+      return true
+    }
+    const sel = state.selection
+    if (!(sel instanceof NodeSelection)) return false
+    if (!copy && sel.to === end) return true
+    const dragged = sel.node
+    const moved = dragged.type.name === 'list_item' ? sel.$from.parent.type.create(sel.$from.parent.attrs, dragged) : dragged
+    let tr = state.tr
+    if (!copy) tr = tr.delete(sel.from, sel.to)
+    tr = tr.insert(tr.mapping.map(end), moved)
+    tr.setMeta('amxColumns', true)
+    view.dispatch(tr.scrollIntoView())
+    return true
+  }
+
   const executeMoveBlocks = (view: EditorView, e: DragEvent, copy: boolean): boolean => {
     const range = topRangeOf(view)
     if (!range) return false
@@ -237,10 +344,101 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     return true
   }
 
+  /** 这台编辑器此刻在不在画布模式(`.amx-canvas` 挂在 pane 级 .unified-body 上)。 */
+  const inCanvas = (view: EditorView): boolean => !!view.dom.closest('.unified-body')?.classList.contains('amx-canvas')
+
+  /** 一个父节点的子块里,按指针纵坐标定的插入位置(上半 = 该块之前,下半 = 该块之后)。 */
+  const dropPosAmong = (view: EditorView, parent: ProseNode, start: number, e: DragEvent): number => {
+    let off = start
+    for (let i = 0; i < parent.childCount; i++) {
+      const child = parent.child(i)
+      const dom = view.nodeDOM(off)
+      const r = dom instanceof HTMLElement ? dom.getBoundingClientRect() : null
+      if (r && e.clientY <= r.bottom) return e.clientY > r.top + r.height / 2 ? off + child.nodeSize : off
+      off += child.nodeSize
+    }
+    return off
+  }
+
+  /** 主卡(自然流)里的落点。**只数非卡子节点**,兜底恒是卡片区起点 —— 见下面那条不变式。 */
+  const dropPosInMain = (view: EditorView, e: DragEvent): number => {
+    const doc = view.state.doc
+    const card = view.state.schema.nodes.amadeusCanvasCard
+    let at = 0
+    for (let i = 0; i < doc.childCount; i++) {
+      const child = doc.child(i)
+      if (child.type === card) return at // 卡片区起点:再往后就是「卡与卡之间」,禁区
+      const dom = view.nodeDOM(at)
+      const r = dom instanceof HTMLElement ? dom.getBoundingClientRect() : null
+      if (r && e.clientY <= r.bottom) return e.clientY > r.top + r.height / 2 ? at + child.nodeSize : at
+      at += child.nodeSize
+    }
+    return at
+  }
+
+  /** 画布模式的落点路由(2026-08-18,用户实报)。
+   *
+   *  ⚠️ **不变式:画布模式下,块拖拽绝不允许在「卡与卡之间」的 doc 顶层插入。** 那会打断尾部连续
+   *  卡片区 → canvasNormalizer 立刻把断点之前的卡**全部就地拆壳**,锚以 `<!-- a k1 -->` 的字面形态
+   *  显形在正文里、cards 同时掉枚。两段都是实测的:
+   *   · 落点插件在画布模式下算出来的位置**与指针无关** —— 卡片是绝对定位,view.dom 的子元素矩形
+   *     彼此重叠、DOM 序 ≠ 视觉序,它那套「逐块扫上下边沿」失去前提。瞄准另一张卡的正文/顶边/底边,
+   *     三次落点完全一样(都掉进主卡)。
+   *   · 顶层插在两张卡之间 → 前一张卡当场拆壳、锚显形。
+   *  所以这一层在画布模式下**全接管**:指针压在哪张卡上就落进那张卡,否则落进主卡自然流(位置钳在
+   *  卡片区之前)。两条路都产生不了禁区里的位置。 */
+  const executeDropInCanvas = (view: EditorView, e: DragEvent, copy: boolean): boolean => {
+    const sel = view.state.selection
+    if (!(sel instanceof NodeSelection)) return false
+    const card = view.state.schema.nodes.amadeusCanvasCard
+    if (!card) return false
+    // ⚠️ 舞台空白区不归这里:那是 canvasStage 的 onStageDrop(普通块「拖出成卡」/ 已有卡「搬到
+    //    落点」)。判据必须是「落点在编辑器 DOM 之内」,而且必须排在下面的卡片吞判**之前** ——
+    //    2026-08-18 用户实报「⠿ 拖卡没反应」的根因之一就是这两句次序反了:凡卡片拖拽一律被吞,
+    //    连拖到空白重新摆位也被吃掉(还顺手清了 view.dragging,舞台的 drop 根本收不到)。
+    const t = e.target as HTMLElement | null
+    if (!t || !view.dom.contains(t)) return false
+    // 卡拖进**编辑器区域**(主卡/别的卡)= 卡内出现卡锚,重开时 fold 的「末卡之后不许还有别的锚」
+    // 当场拒折,**整篇画布消失** —— 这条毁档防线只吞「落点在编辑器里」的卡拖拽(no-op 远好过毁档)。
+    if (sel.node.type === card) return true
+    const el = t.closest?.('.amx-ucard') as HTMLElement | null
+    let at: number
+    if (el) {
+      let pos: number
+      try {
+        pos = view.posAtDOM(el, 0) - 1
+      } catch {
+        return false
+      }
+      const node = view.state.doc.nodeAt(pos)
+      if (node?.type !== card) return false
+      at = dropPosAmong(view, node, pos + 1, e)
+    } else {
+      at = dropPosInMain(view, e)
+    }
+    if (at >= sel.from && at <= sel.to) return true // 落回自己身上:吞掉,不产生空事务
+    let tr = view.state.tr
+    if (!copy) tr = tr.delete(sel.from, sel.to)
+    tr = tr.insert(tr.mapping.map(at), sel.node)
+    tr.setMeta('amxColumns', true)
+    view.dispatch(tr.scrollIntoView())
+    return true
+  }
+
   /** OS 文件拖入时的落点(与块拖拽两套指示互斥:文件那条只画线、不参与块路由)。 */
+  // ⚠️ 浮层几何的两个补偿量(2026-08-15 PM-under-transform spike 实测后加,仪器 unified-scale.check.cjs):
+  //    编辑器将来住在画布卡片里 = `transform: scale(k)` 的子树,而这层原来只除 zoomOf。
+  //    ① zoomOf 读的是 currentCSSZoom,**transform 不进那个量** → 视口 rect ÷ 1 再被同一个 transform
+  //       缩放一次 = k² 级偏差(实测 k=2 时把手偏 94px);
+  //    ② 祖先一有 transform,`position: fixed` 的包含块就从视口变成那个祖先 → 直接写视口 px 整体
+  //       偏一个卡片位(实测 k=1 也偏 245px)。
+  //    两者都退化成老行为(无 transform 时 ①=zoomOf、②={0,0}),所以普通笔记路径零变化。
   let fileDropRef: { pos: number } | null = null
   let childRef: { targetPos: number; el: HTMLElement } | null = null
   let belowRef: { rowEl: HTMLElement } | null = null
+  /** 末块之下 = 顶层文末落点(2026-08-19 闭合锚:末块是卡时这里成了合法且常用的落点,
+   *  此前无人认领 → 拖到末卡之下静默没反应)。 */
+  let tailRef = false
   let hline: HTMLDivElement | null = null
   const ensureHline = (view: EditorView): HTMLDivElement => {
     if (hline && hline.isConnected) return hline
@@ -253,11 +451,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   }
   const showHline = (view: EditorView, rowEl: HTMLElement, indent = 0): void => {
     const dom = ensureHline(view)
-    const z = zoomOf(view.dom)
+    const z = visualScale(view.dom)
+    const o = overlayOrigin(dom)
     const r = rowEl.getBoundingClientRect()
     dom.style.display = 'block'
     dom.style.width = `${Math.max(0, r.width - indent) / z}px`
-    dom.style.transform = `translate(${Math.round((r.left + indent) / z)}px, ${Math.round((r.bottom + 6) / z)}px)`
+    dom.style.transform = `translate(${Math.round((r.left + indent - o.x) / z)}px, ${Math.round((r.bottom + 6 - o.y) / z)}px)`
   }
   const hideHline = (): void => {
     if (hline) hline.style.display = 'none'
@@ -273,6 +472,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // hover 追踪挂 pane 级 .unified-body:把手悬在 .milkdown 左缘**之外**(实测 rect 整个在容器
         // 左侧),挂 container 的话指针一穿越容器边界 mouseleave 就藏把手——真机「一移过去就消失」。
         const root = (container.closest('.unified-body') as HTMLElement | null) ?? container
+        /** 画布模式的落点指示:目标卡描边(单选,传 null = 清掉)。 */
+        const markDropCard = (el: HTMLElement | null): void => {
+          for (const c of root.querySelectorAll('.amx-ucard.amx-droptarget')) c.classList.remove('amx-droptarget')
+          el?.classList.add('amx-droptarget')
+        }
         const content = document.createElement('div')
         content.className = 'unified-gutter'
         content.dataset.show = 'false'
@@ -285,8 +489,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!editorView.editable) return // 只读文档不给把手(AFFiNE 同):看得见拖不动比没有更糟
           activeRef = a
           syncFold(a)
-          // 绝对定位(布局 px):视口 rect ÷ zoomOf 反补偿,把手压到块首行行高中点(AFFiNE 手感)。
-          const z = zoomOf(container)
+          // 绝对定位(布局 px):视口 rect ÷ 累计视觉缩放反补偿,把手压到块首行行高中点(AFFiNE 手感)。
+          const z = visualScale(container)
           const cr = container.getBoundingClientRect()
           const r = a.el.getBoundingClientRect()
           const cs = getComputedStyle(a.el)
@@ -326,6 +530,15 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             view.focus()
             return
           }
+          // tab 缩进子树 = 整体单元:抓的段落带着更深缩进的后继段时,按下即收成跨块选区 ——
+          // 拖拽/联合高亮/块菜单/Delete 全走既有多块机器,一处收敛零新路径。
+          const sub = indentSubtreeOf(view, a.pos, a.node)
+          if (sub) {
+            const doc = view.state.doc
+            view.dispatch(view.state.tr.setSelection(TextSelection.between(doc.resolve(sub.from + 1), doc.resolve(sub.to - 1))))
+            view.focus()
+            return
+          }
           if (!NodeSelection.isSelectable(a.node)) return
           view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, a.pos)))
           view.focus()
@@ -342,16 +555,17 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             hoverRect.className = 'unified-press-rect'
             ;(view.dom.parentElement ?? document.body).appendChild(hoverRect)
           }
-          const z = zoomOf(view.dom)
+          const z = visualScale(view.dom)
+          const o = overlayOrigin(hoverRect)
           const r = a.el.getBoundingClientRect()
           const range = topRangeOf(view)
-          let box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+          let box = { left: r.left - o.x, top: r.top - o.y, right: r.right - o.x, bottom: r.bottom - o.y }
           if (range) {
             // 多块选中:并集矩形(把手按下时拖走的是整批,高亮也该是整批)
             for (const el of Array.from(view.dom.children) as HTMLElement[]) {
               if (!el.classList.contains('amx-block-selected')) continue
               const b = el.getBoundingClientRect()
-              box = { left: Math.min(box.left, b.left), top: Math.min(box.top, b.top), right: Math.max(box.right, b.right), bottom: Math.max(box.bottom, b.bottom) }
+              box = { left: Math.min(box.left, b.left - o.x), top: Math.min(box.top, b.top - o.y), right: Math.max(box.right, b.right - o.x), bottom: Math.max(box.bottom, b.bottom - o.y) }
             }
           }
           Object.assign(hoverRect.style, {
@@ -396,6 +610,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           pairRef = null
           belowRef = null
           childRef = null
+          tailRef = false
           hideVline()
           hideHline()
           if (view) {
@@ -489,6 +704,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         const onMqDown = (e: PointerEvent): void => {
           if (e.button !== 0 || e.pointerType === 'touch') return
+          // ⚠️ 画布模式整片让路给舞台自己的框选(canvasStage)。root 是 `.unified-body` —— 舞台是它的
+          //    后代,所以这个处理器会**吃到画布上的每一次按下**:两个框选同时起(屏幕上真的两个框),
+          //    而且 onMqUp 收尾时会 `editorView.focus()` 把焦点从舞台抢走 —— 现象是画布上选中形状后
+          //    按 Delete 毫无反应(键盘事件全去了 PM)。实测抓到的,别把这一行删了。
+          if (root.classList.contains('amx-canvas')) return
           const t = e.target as HTMLElement | null
           if (!t || t.closest('.unified-gutter') || t.closest('.amx-embed') || t.closest('button, input, textarea, a')) return
           if (!editorView.editable) return
@@ -669,7 +889,37 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             return
           }
           if (!view || view.dom.dataset.dragging !== 'true') return
+          // 末块之下(NodeSelection 与跨块选区都收;画布模式不适用,卡是绝对定位):
+          tailRef = false
+          if (!inCanvas(view)) {
+            const selNow = view.state.selection
+            const blocksDrag = selNow instanceof NodeSelection || !!topRangeOf(view)
+            const lastEl = view.dom.lastElementChild as HTMLElement | null
+            if (blocksDrag && lastEl) {
+              const lr = lastEl.getBoundingClientRect()
+              const vr = view.dom.getBoundingClientRect()
+              if (e.clientY > lr.bottom + 2 && e.clientX >= vr.left && e.clientX <= vr.right) {
+                tailRef = true
+                pairRef = null
+                childRef = null
+                belowRef = null
+                hideVline()
+                showHline(view, lastEl)
+                e.preventDefault()
+                return
+              }
+            }
+          }
           if (!(view.state.selection instanceof NodeSelection)) return
+          // 画布模式:落点指示换成「目标卡描边」。那条横线在这里必然撒谎(卡是绝对定位,画线用的
+          // 块矩形彼此重叠),而落点由 executeDropInCanvas 全接管 —— 见它的不变式注释。
+          if (inCanvas(view)) {
+            markDropCard((e.target as HTMLElement | null)?.closest?.('.amx-ucard') as HTMLElement | null)
+            belowRef = null
+            hideHline()
+            e.preventDefault()
+            return
+          }
           let belowRow: HTMLElement | null = null
           for (const el of view.dom.querySelectorAll(':scope > .amx-ucolrow')) {
             const r = el.getBoundingClientRect()
@@ -706,6 +956,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           pairRef = null
           hideVline()
           hideHline()
+          markDropCard(null)
         }
         root.addEventListener('dragleave', onRootDragLeave, true)
 
@@ -717,12 +968,15 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const br = belowRef
           const cr = childRef
           const fd = fileDropRef
+          const tl = tailRef
           pairRef = null
           belowRef = null
           childRef = null
           fileDropRef = null
+          tailRef = false
           hideVline()
           hideHline()
+          markDropCard(null)
           if (!view) return
           // OS 文件:只把光标送到落点(内容插入归 importToPage 那条链),不 preventDefault。
           if (fd) {
@@ -733,20 +987,26 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           }
           // 行下方:对仍连接的行元素**现场**重解析 pos(悬停期事务把缓存 pos 弄脏的话,
           // 旧 pos 可能指到别的行;元素断连/解析失败=放行默认落点)。
-          let done = false
           const copy = dragCopies(e)
-          if (topRangeOf(view)) {
-            done = executeMoveBlocks(view, e, copy)
-          } else if (cr) {
-            done = executeMoveIntoList(view, cr.targetPos, copy)
-          } else if (br) {
-            try {
-              if (br.rowEl.isConnected) done = executeMoveBelowRow(view, view.posAtDOM(br.rowEl, 0) - 1, copy)
-            } catch {
-              done = false
+          // 画布模式的落点全归这一支(不变式见 executeDropInCanvas);它只在「不是 NodeSelection /
+          // posAtDOM 失效」时返回 false,那时才退回普通笔记那套。
+          let done = inCanvas(view) && executeDropInCanvas(view, e, copy)
+          if (!done) {
+            if (tl) {
+              done = executeMoveToTail(view, copy)
+            } else if (topRangeOf(view)) {
+              done = executeMoveBlocks(view, e, copy)
+            } else if (cr) {
+              done = executeMoveIntoList(view, cr.targetPos, copy)
+            } else if (br) {
+              try {
+                if (br.rowEl.isConnected) done = executeMoveBelowRow(view, view.posAtDOM(br.rowEl, 0) - 1, copy)
+              } catch {
+                done = false
+              }
+            } else if (pr) {
+              done = executePair(view, pr.targetPos, pr.side, copy)
             }
-          } else if (pr) {
-            done = executePair(view, pr.targetPos, pr.side, copy)
           }
           if (done) {
             e.preventDefault()
@@ -869,6 +1129,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       dom = document.createElement('div')
       dom.className = 'unified-drop-line'
       dom.style.display = 'none'
+      // ⚠️ 与 ensureHline 同款:关掉入场动画。`amx-dropline-in` 的 from 里写了 `transform: scaleX(.3)`,
+      //    而这条线的位置**全靠内联 transform** —— 动画期间(100ms)CSS 动画压过内联样式,线会跳到
+      //    容器原点再弹回来(2026-08-15 spike 探针实锤:量到的 transform 与代码写的对不上)。
+      dom.style.animation = 'none'
       ;(view.dom.parentElement ?? document.body).appendChild(dom)
       return dom
     }
@@ -877,6 +1141,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // OS 文件拖入不归本层(fileDropGuard/importToPage 链路),不出指示线不抢 drop。
         const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
         if (types.includes('Files')) return false
+        // 画布模式:这条线在这里必然撒谎(卡片绝对定位 → 画线依据的块矩形彼此重叠、DOM 序 ≠ 视觉序),
+        // 而落点已由 onDropCapture 的 executeDropInCanvas 全接管。指示改成目标卡描边。
+        if (inCanvas(view)) {
+          hideVline()
+          return false
+        }
         // 只接管「从 ⠿ 拖起的整块」(Codex P1):PM 文字选区拖拽/浏览器链接与 HTML 拖入
         // 走 PM 默认落点 —— 精确落点插件会把行内文字硬插到块边界,还 preventDefault 抢默认 drop。
         if (!view.dragging) return false
@@ -919,10 +1189,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       },
       onShow: ({ view, line }) => {
         const el = ensureDom(view)
-        const z = zoomOf(view.dom)
-        const x1 = line.p1.x / z
-        const x2 = line.p2.x / z
-        const y = line.p1.y / z
+        // 与 showHline 同一套补偿(见那两个 helper 的注释):累计视觉缩放 + fixed 包含块原点。
+        const z = visualScale(view.dom)
+        const o = overlayOrigin(el)
+        const x1 = (line.p1.x - o.x) / z
+        const x2 = (line.p2.x - o.x) / z
+        const y = (line.p1.y - o.y) / z
         el.style.display = 'block'
         el.style.width = `${Math.max(0, x2 - x1)}px`
         el.style.transform = `translate(${Math.round(x1)}px, ${Math.round(y - 1.5)}px)`
@@ -934,14 +1206,105 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     return plugin
   })
 
+  // ── 卡缝插入口(2026-08-19 用户拍板「悬停卡缝出 + 行」,AFFiNE 同款)。──────────────────
+  // 闭合锚让「两卡之间的顶层正文」成为合法位置,但两卡相邻时中间没有可点击的光标位 ——
+  // 文档模式下,指针悬进相邻两张卡的缝隙带即浮现一条细插入线(中央 ＋),点击 = 在缝隙处插入
+  // 空段并落光标。只认「卡↔卡」相邻对:卡↔正文之间本来就有光标位,文首/文末各有标题回车与
+  // page-tail 兜底。画布模式不出(卡是绝对定位,缝隙无意义)。
+  const gapInsert = $prose(() => {
+    let line: HTMLDivElement | null = null
+    // ⚠️ 记「缝下那张卡的锚」,不记裸数字位置(Codex 08-19:悬停后键盘编辑再点击,旧 pos 已经
+    // 漂进卡内/越界)。点击时按锚现场重解析;update 钩子在 doc 变更后直接藏线。
+    let beforeAnchor: string | null = null
+    const hide = (): void => { if (line) line.style.display = 'none' }
+    return new Plugin({
+      key: new PluginKey('AMX_GAP_INSERT'),
+      view: (view) => {
+        const ensure = (): HTMLDivElement => {
+          if (line && line.isConnected) return line
+          line = document.createElement('div')
+          line.className = 'amx-gap-insert'
+          line.innerHTML = '<span>＋</span>'
+          line.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() })
+          line.addEventListener('click', (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            if (!beforeAnchor) return
+            let pos = -1
+            view.state.doc.forEach((n, off) => {
+              if (pos < 0 && n.type.name === 'amadeusCanvasCard' && String(n.attrs.anchor) === beforeAnchor) pos = off
+            })
+            const para = view.state.schema.nodes.paragraph
+            if (pos < 0 || !para) { hide(); return }
+            let tr = view.state.tr.insert(pos, para.create())
+            tr = tr.setSelection(TextSelection.create(tr.doc, pos + 1)).scrollIntoView()
+            view.dispatch(tr)
+            view.focus()
+            hide()
+          })
+          ;(view.dom.parentElement ?? document.body).appendChild(line)
+          return line
+        }
+        const onMove = (e: MouseEvent): void => {
+          if (inCanvas(view) || view.dragging) { hide(); return }
+          const card = view.state.schema.nodes.amadeusCanvasCard
+          if (!card) { hide(); return }
+          const doc = view.state.doc
+          let off = 0
+          let prevEl: HTMLElement | null = null
+          let hit: { top: number; bottom: number; left: number; right: number; anchor: string } | null = null
+          for (let i = 0; i < doc.childCount && !hit; i++) {
+            const n = doc.child(i)
+            if (n.type === card) {
+              const el = view.nodeDOM(off)
+              if (el instanceof HTMLElement) {
+                if (prevEl) {
+                  const a = prevEl.getBoundingClientRect()
+                  const b = el.getBoundingClientRect()
+                  // 缝隙带各向卡内借 3px:文档模式相邻卡几乎零间距,不借就没有可悬停的命中面
+                  if (e.clientY >= a.bottom - 3 && e.clientY <= b.top + 3
+                    && e.clientX >= Math.min(a.left, b.left) && e.clientX <= Math.max(a.right, b.right)) {
+                    hit = { top: a.bottom, bottom: b.top, left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), anchor: String(n.attrs.anchor) }
+                  }
+                }
+                prevEl = el
+              } else prevEl = null
+            } else prevEl = null
+            off += n.nodeSize
+          }
+          if (!hit) { hide(); return }
+          const el2 = ensure()
+          const z = visualScale(view.dom)
+          const o = overlayOrigin(el2)
+          const midY = (hit.top + hit.bottom) / 2
+          el2.style.display = 'flex'
+          el2.style.width = `${(hit.right - hit.left) / z}px`
+          el2.style.transform = `translate(${Math.round((hit.left - o.x) / z)}px, ${Math.round((midY - o.y) / z - 9)}px)`
+          beforeAnchor = hit.anchor
+        }
+        const root = view.dom.parentElement ?? view.dom
+        root.addEventListener('mousemove', onMove)
+        root.addEventListener('mouseleave', hide)
+        return {
+          update: (v, prev) => {
+            if (!v.state.doc.eq(prev.doc)) hide() // 文档变了:线的几何依据已过期,藏掉等下次悬停重算
+          },
+          destroy: () => {
+            root.removeEventListener('mousemove', onMove)
+            root.removeEventListener('mouseleave', hide)
+            line?.remove()
+            line = null
+          },
+        }
+      },
+    })
+  })
+
   // ── Tab 缩进层:分支阶梯全在 blocks/markdown/tabIndent.ts(v3 块世界共用同一份,免得两边
-  //    漂移);这里只补 v4 才有的标题折叠钩子。表格内让位(return false)→ gfm tableKeymap 的
-  //    Tab=跳下一格在 preset 链里接住(此前无条件吞键把它变成了哑键)。
+  //    漂移);这里只补 v4 才有的列表折叠钩子。段落分支已改纯缩进档(paragraphIndent.ts),
+  //    不再有「并入前列表」,标题折叠钩子(hiddenAt/unfold)随之退役。
   const tabFoldHooks: TabFoldHooks = {
-    // 目标落在折叠隐藏区里 → 先展开,别把内容送进 display:none(与「拖折叠标题先展开」同原则)。
-    hiddenAt: (state, pos) => isHiddenAt(state, pos),
-    unfold: (view, pos) => toggleFoldAt(view, pos),
-    // sink 的落点是前一兄弟 li 的子列表:兄弟列表折叠着(listFold)同样先展开(评审 P1)。
+    // sink 的落点是前一兄弟 li 的子列表:兄弟列表折叠着(listFold)先展开(评审 P1)。
     listFoldedAt: (state, itemPos) => isListFolded(state, itemPos),
     unfoldList: (view, itemPos) => toggleListFoldAt(view, itemPos),
   }
@@ -1022,6 +1385,27 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   // 一级=光标所在文本块的内容;二级=它所属的顶层块(列表整只 / 引用整只 / 列内那一块);
   // 三级=整篇。PM 原生只有「整篇」一级 —— 整页一实例之后,那一下会把别的段落一起吞掉,
   // 用户想全选本段却得到全文(块世界里每块一实例时不存在这个问题)。
+  // 跨块选区的 Delete/Backspace = 删整块范围(2026-08-19,配合缩进子树/框选的「整体操作」):
+  // TextSelection.between 的默认删除按文字语义走,会留一个合并后的**空段壳** —— 块级多选的
+  // 语义是「删这些块」,不是「删这段文字」。整节点边界一刀,不留渣。
+  const blockRangeDelete = (state: EditorState, dispatch?: (tr: Transaction) => void, view?: EditorView): boolean => {
+    const range = view ? topRangeOf(view) : null
+    if (!range) return false
+    // 两道闸(Codex 08-19 high:卡内 AAA→BBB 的普通跨段选删曾被升级成整卡删除):
+    // ① 范围须覆盖 ≥2 个同层块 —— 卡内跨段选区被 topRangeOf 提升成「整张卡」= 1 个块,交还 PM
+    //   (Cmd+A 二级的整卡内容选同理:删内容不删卡);
+    // ② 选区须顶满整块内容跨度(把手子树/框选=between(from+1,to-1) 恰好顶满);部分选择交还
+    //   PM 做文字删除。
+    const $f = state.doc.resolve(range.from)
+    const $t = state.doc.resolve(range.to)
+    if ($t.index() - $f.index() < 2) return false
+    const sel = state.selection
+    if (sel.from > range.from + 1 || sel.to < range.to - 1) return false
+    dispatch?.(state.tr.delete(range.from, range.to).scrollIntoView())
+    return true
+  }
+  const blockDeleteKeymap = $prose(() => keymap({ Backspace: blockRangeDelete, Delete: blockRangeDelete }))
+
   const selectAllKeymap = $prose(() =>
     keymap({
       'Mod-a': (state, dispatch) => {
@@ -1104,7 +1488,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   return {
-    plugins: [handlePlugin, dropIndicator, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, moveBlockKeymap, keyboardPlugins].flat(),
+    plugins: [handlePlugin, dropIndicator, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, moveBlockKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
   }

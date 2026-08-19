@@ -67,4 +67,67 @@ describe('compiler fmExtra round-trip', () => {
     const fm = md.split('---')[1]
     expect(fm.trim().split('\n')).toHaveLength(3) // 仅 amadeus_page/schema/layout
   })
+
+  it('CRLF 正文:载入→编译 不引入 \\r\\n 垃圾前缀(前导正则吃 \\r,评审 P2)', () => {
+    const src = '---\r\ntags: x\r\n---\r\n\r\n首段。\r\n\r\n次段。\r\n'
+    const p = parsePageSource('note.md', src, NOW)
+    const first = Object.values(p.blocks)[0]
+    expect(first.content.startsWith('\r') || first.content.startsWith('\n')).toBe(false)
+    expect(first.content).toContain('首段。')
+  })
+
+  it('长空白 run 不冻结(trimEnd 线性;/\\s+$/ 二次方回溯,评审 P1)', () => {
+    const src = `前文。${' '.repeat(60000)}x\n`
+    const t0 = Date.now()
+    const p = parsePageSource('note.md', src, NOW)
+    expect(Date.now() - t0).toBeLessThan(2000)
+    expect(Object.values(p.blocks)[0].content).toContain('前文。')
+  })
+
+  it('块首行首制表符(段落缩进档)经 载入→编译 往返逐字保留', () => {
+    // indentIo(2026-08-14):缩进落盘=行首字面 \t。parseBody 的 flush 只掐空行,
+    // 不许把首个非空行的行首横向空白一并 trim 掉,否则每次 parse 丢一层缩进。
+    const src = ['\t\t缩进两档的段落。', '', '正常段落。', ''].join('\n')
+    const p1 = parsePageSource('note.md', src, NOW)
+    const first = Object.values(p1.blocks)[0]
+    expect(first.content.startsWith('\t\t缩进两档的段落。')).toBe(true)
+    const md1 = compile(p1.manifest, contentsOf(p1))
+    const p2 = parsePageSource('note.md', md1, NOW)
+    expect(Object.values(p2.blocks)[0].content).toBe(first.content)
+    expect(compile(p2.manifest, contentsOf(p2))).toBe(md1)
+  })
+})
+
+describe('闭合符(2026-08-19 画布双标记)', () => {
+  it('parseBody:闭合符收束块辖域,卡后内容是匿名主流,不吞进块', async () => {
+    const { parseBody } = await import('./markers')
+    const body = ['<!-- a k1 -->', '卡一甲。', '<!-- /a k1 -->', '', '卡后正文。', '', '<!-- a k2 -->', '卡二甲。'].join('\n')
+    const blocks = parseBody(body)
+    expect(blocks.map((b) => [b.id, b.content])).toEqual([
+      ['k1', '卡一甲。'],
+      [null, '卡后正文。'],
+      ['k2', '卡二甲。'],
+    ])
+  })
+  it('parseBody:无闭合符 = 旧辖域(到下一锚或文件尾),v3 文件行为不变', async () => {
+    const { parseBody } = await import('./markers')
+    const body = ['<!-- a k1 -->', '甲。', '<!-- a k2 -->', '乙。'].join('\n')
+    expect(parseBody(body).map((b) => [b.id, b.content])).toEqual([['k1', '甲。'], ['k2', '乙。']])
+  })
+})
+
+describe('闭合符畸形输入(Codex 08-19:编译器与编辑器辖域必须一致)', () => {
+  it('parseBody:id 不匹配的闭合符按字面保留,不收束当前块', async () => {
+    const { parseBody } = await import('./markers')
+    const body = ['<!-- a k1 -->', '甲。', '<!-- /a k2 -->', '乙。', '<!-- /a k1 -->', '', '尾流。'].join('\n')
+    expect(parseBody(body).map((b) => [b.id, b.content])).toEqual([
+      ['k1', '甲。\n<!-- /a k2 -->\n乙。'],
+      [null, '尾流。'],
+    ])
+  })
+  it('parseBody:孤儿闭合符(无开锚在途)按字面保留在匿名主流', async () => {
+    const { parseBody } = await import('./markers')
+    const body = ['前文。', '<!-- /a k9 -->', '后文。'].join('\n')
+    expect(parseBody(body).map((b) => [b.id, b.content])).toEqual([[null, '前文。\n<!-- /a k9 -->\n后文。']])
+  })
 })

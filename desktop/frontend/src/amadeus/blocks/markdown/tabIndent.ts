@@ -1,4 +1,4 @@
-/** Tab 缩进语义(AFFiNE 对齐,取 markdown 可表示子集)—— v3 块世界与 v4 unified **共用同一份**:
+/** Tab 缩进语义 —— v3 块世界与 v4 unified **共用同一份**:
  *  两个世界各自的 keymap 只做「挂在哪、要不要让位」的判断,分支阶梯全在这里,免得两边漂移。
  *
  *  阶梯(先命中先赢):
@@ -6,25 +6,19 @@
  *  · 表格内 → 自己调 goToNextCell(±1)(与 gfm tableKeymap 同一条命令):边界格跳不动时**吞键**,
  *    裸 return false 会落进浏览器默认行为把焦点抛出编辑器(评审 P2)
  *  · 列表项 Tab/Shift-Tab = sink/lift(显式调命令,不依赖 fall-through;首项无处可缩也吞掉);
- *    Shift-Tab 对「li 内非首子段落」只抬那一段(merge 的真逆操作,整项 lift 会拆散邻项 bullet)
- *  · 顶级段落且前一兄弟是列表 → Tab 收进该列表最后一项(AFFiNE「Tab=成为前块子块」在 md
- *    唯一可表示的形态;v4 传 fold 钩子:目标在折叠隐藏区先展开,再按一次才真缩进)
- *  · 顶级段落、前面没有列表 → 本段自己转成 bullet 项(用户拍板的「段落转列表」:AFFiNE 的
- *    任意块嵌套 md 表示不了,能表示的最近形态就是变列表项,Shift-Tab 可原路脱出)
+ *    Shift-Tab 对「li 内非首子段落」只抬那一段(历史 merge 内容的对称逃生口)
+ *  · 段落(不在列表/表格/代码里)→ 整段缩进档 ±1(2026-08-14 用户拍板:纯缩进,Notion/AFFiNE
+ *    视觉;此前的「段落转列表/并入前列表」两条已废除)。语义在 paragraphIndent.ts。
  *  · 其余一律吞掉:编辑器内按 Tab 绝不把焦点放走(AFFiNE/Notion 同款,焦点跳走比无操作更糟)
  */
-import { sinkListItem, liftListItem, wrapInList } from '@milkdown/kit/prose/schema-list'
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { sinkListItem, liftListItem } from '@milkdown/kit/prose/schema-list'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { goToNextCell } from '@milkdown/kit/prose/tables'
 import { liftTarget } from '@milkdown/kit/prose/transform'
+import { adjustParagraphIndent } from './paragraphIndent'
 
 export interface TabFoldHooks {
-  /** 插入点落在折叠隐藏区 → 返回折叠头位置(v4 标题折叠);v3 块世界无整页折叠概念,不传。 */
-  hiddenAt?(state: EditorState, pos: number): number | null
-  /** 展开那只折叠(只展开,不缩进 —— 展开是个事务,同一拍算出的插入点已经过期)。 */
-  unfold?(view: EditorView, pos: number): void
   /** sink 的落点是**前一兄弟 li** 的子列表:该兄弟处于列表折叠态(子项 display:none)时返回 true,
    *  否则缩进的项会消失在折叠区里(v4 listFold;评审 P1)。 */
   listFoldedAt?(state: EditorState, itemPos: number): boolean
@@ -98,29 +92,7 @@ export function tabIndent(state: EditorState, dispatch: Dispatch, view: EditorVi
     sinkListItem(state.schema.nodes.list_item)(state, dispatch)
     return true
   }
-  if ($from.parent.type.name === 'paragraph' && $from.depth === 1) {
-    const idx = $from.index(0)
-    const prev = idx > 0 ? state.doc.child(idx - 1) : null
-    if (prev && (prev.type.name === 'bullet_list' || prev.type.name === 'ordered_list')) {
-      const paraFrom = $from.before(1)
-      const paraTo = $from.after(1)
-      const para = state.doc.child(idx)
-      const insertAt = paraFrom - 2 // 前列表最后一项内容末尾(li 闭合符之前)
-      const foldedAt = hooks?.hiddenAt?.(state, insertAt)
-      if (foldedAt != null) {
-        if (view) hooks?.unfold?.(view, foldedAt)
-        return true
-      }
-      const tr = state.tr.delete(paraFrom, paraTo).insert(insertAt, para)
-      tr.setSelection(TextSelection.near(tr.doc.resolve(insertAt + 1 + $from.parentOffset)))
-      dispatch?.(tr.scrollIntoView())
-      return true
-    }
-    // wrapInList 而不是裸 findWrapping+wrap:多块选区要**逐块成项**(doWrapInList 自带按块 split
-    // 与向前 join),裸 wrap 会把选中的几段塞进同一个 list_item(评审 P2)。
-    const bulletList = state.schema.nodes.bullet_list
-    if (bulletList && wrapInList(bulletList)(state, dispatch)) return true
-  }
+  if ($from.parent.type.name === 'paragraph') return adjustParagraphIndent(state, dispatch, 1)
   return true
 }
 
@@ -155,5 +127,6 @@ export function tabOutdent(state: EditorState, dispatch: Dispatch): boolean {
     liftListItem(li)(state, dispatch)
     return true
   }
+  if ($from.parent.type.name === 'paragraph') return adjustParagraphIndent(state, dispatch, -1)
   return true
 }

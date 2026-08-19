@@ -174,7 +174,9 @@ export async function newPage(io: CompilerIO, pagePath: string, now: string): Pr
  *  raw body verbatim (no remark re-stringify) so Obsidian 等来源的 .md 原样呈现、不被拆成奇怪的多块。
  *  DO NOT write — only adopt to v3 on the first real edit. */
 function importForeign(pagePath: string, raw: string, now: string): LoadedPage {
-  const body = stripFrontmatter(raw).trim()
+  // 掐首尾空行但保住首个非空行的行首横向空白:行首制表符是段落缩进档(indentIo,2026-08-14)。
+  // trimEnd 而非 /\s+$/(长空白 run 二次方回溯,评审 P1);\r? 防 CRLF 垃圾前缀。
+  const body = stripFrontmatter(raw).replace(/^(?:[ \t]*\r?\n)+/, '').trimEnd()
   const id = nextBlockId([])
   // 外来 fm(如 Obsidian properties)进 fmExtra,否则首次编辑落盘即被销毁。
   return buildPage(pagePath, generatePageId(), EMPTY_STACK, { [id]: 'markdown' }, { [id]: body }, now, now, extractFrontmatterExtra(raw))

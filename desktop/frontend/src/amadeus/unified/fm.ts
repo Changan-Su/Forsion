@@ -4,6 +4,7 @@
  *  chrome(icon/cover/属性)只改 fm 侧,与正文共用同一条整文件写盘管线(单写者,不与防抖竞态)。 */
 import { parse as parseYaml } from 'yaml'
 import { AMADEUS_FM_KEY, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
+import { structureKeysFor } from '@amadeus-shared/compiler/v4'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 
 export interface FmSplit {
@@ -60,32 +61,56 @@ function extractAmadeusLines(fmText: string): string[] {
   return (m[1] ?? '').split('\n').filter((l) => AMADEUS_FM_KEY.test(l))
 }
 
-const STRUCT_KEY = /^["']?amadeus_(schema|layout)["']?\s*:/
+const STRUCT_KEY = /^["']?amadeus_(schema|layout|canvas)["']?\s*:/
 
-/** 结构键(amadeus_schema/amadeus_layout)行级 splice(绝不过 YAML 往返,Codex A14):
- *  layoutJson 非空 → 两行置顶(替换旧行,容忍引号键/重复行);null → 剥除(解散回素文件,
- *  其余 fm 行逐字原样;剥到空 fm 块则整块消失)。layoutJson 必须是单行 JSON.stringify 输出。 */
-export function setAmadeusStructure(fmText: string, layoutJson: string | null): string {
+/** 结构键(amadeus_schema/amadeus_layout/amadeus_canvas)行级 splice(绝不过 YAML 往返,Codex A14):
+ *  整片结构区重写 —— 先摘掉全部旧结构行(容忍引号键/重复行),再按 structureKeysFor 的判据重发;
+ *  其余 fm 行逐字原样,剥到空 fm 块则整块消失。两个 JSON 参数必须是单行 JSON.stringify 输出。
+ *  ⚠️ canvasJson 是**必填**:它与 layout 同属被本函数整片重写的区域,漏传 = 保存一次画布几何蒸发
+ *  (且 schema 判据也跟着错)。要保持原状就传 `canvasLineOf(fmText)` —— 编译期强制每个写点表态。 */
+export function setAmadeusStructure(fmText: string, layoutJson: string | null, canvasJson: string | null): string {
   const m = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/.exec(fmText)
   const inner = m ? (m[1] ?? '') : ''
   const kept = (inner ? inner.replace(/\r?\n$/, '').split('\n') : []).filter((l) => !STRUCT_KEY.test(l))
-  const structLines = layoutJson != null
-    ? ['amadeus_schema: amadeus.page/4', `amadeus_layout: ${layoutJson}`]
-    : []
-  const lines = [...structLines, ...kept]
+  const lines = [...structureKeysFor(layoutJson, canvasJson), ...kept]
   if (!lines.length) return ''
   return ['---', ...lines, '---', ''].join('\n')
 }
 
+/** 结构键自愈:layout/canvas 任一在场却没有 `amadeus_schema` 时补发结构区(顺序也归位)。
+ *  只补不拆 —— 两者都不在场时原样返回,不去动一个孤零零的 schema 行(那只是 v4-structured
+ *  的合法空态,拆了会把文件从 structured 变成 plain,不该由「自愈」擅自决定)。
+ *  给源码模式这类绕过 setAmadeusStructure 的手写路径兜底(Codex P0)。 */
+export function fixStructKeys(fmText: string): string {
+  const layout = layoutLineOf(fmText)
+  const canvas = canvasLineOf(fmText)
+  if (layout == null && canvas == null) return fmText
+  if (/^["']?amadeus_schema["']?\s*:/m.test(fmText)) return fmText
+  return setAmadeusStructure(fmText, layout, canvas)
+}
+
 /** fm 块 → amadeus_layout 单行 JSON 原文(没有 → null)。 */
 export function layoutLineOf(fmText: string): string | null {
+  return structLineOf(fmText, 'layout')
+}
+
+/** fm 块 → amadeus_canvas 单行 JSON 原文(没有 → null)。画布几何在宿主侧只按原文搬运。 */
+export function canvasLineOf(fmText: string): string | null {
+  return structLineOf(fmText, 'canvas')
+}
+
+function structLineOf(fmText: string, key: 'layout' | 'canvas'): string | null {
   const m = /^---\r?\n([\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)$/.exec(fmText)
   if (!m) return null
+  const re = new RegExp(`^["']?amadeus_${key}["']?\\s*:\\s*(.+)$`)
+  // ⚠️ 重复键取**最后一条** —— 与 parseSimpleYaml 同口径(它逐行覆盖同名键,后者胜)。取第一条
+  //    会与解析侧打架:读到的是后一份、写回去的是前一份,一次保存把有效几何换成旧值(Codex P1)。
+  let hit: string | null = null
   for (const line of (m[1] ?? '').split('\n')) {
-    const lm = /^["']?amadeus_layout["']?\s*:\s*(.+)$/.exec(line)
-    if (lm) return lm[1].trim()
+    const lm = re.exec(line)
+    if (lm) hit = lm[1].trim()
   }
-  return null
+  return hit
 }
 
 /** fm 块 → 外来键对象(icon/cover/cover_y/用户属性)。非法 YAML → {}。 */

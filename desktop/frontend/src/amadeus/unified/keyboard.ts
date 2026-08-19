@@ -30,6 +30,7 @@ import { classifyEmbed } from './embedLayer'
 import { foldedSectionAfter, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTrigger, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
+import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
 export function topDepth($from: ResolvedPos): number {
@@ -196,13 +197,34 @@ const enterSplitIntoChild: Command = (state, dispatch) => {
   return true
 }
 
+/** 段尾回车继承段落缩进档(Tab 缩进,paragraphIndent.ts)。
+ *  base 的 splitBlock 只有**光标不在段尾**那条走 `node.copy()`(带 attrs);段尾那条改用
+ *  `types=[{type: 默认块}]` —— 不带 attrs,于是新段缩进当场归 0。缩进是块属性、回车是新块,
+ *  属性理应跟着走(Word/Notion/AFFiNE 一致),这里把段尾那格补齐。
+ *
+ *  **空缩进段回车 = 继续留在同一档**(本轮显式拍板,勿当疏漏改掉):空列表项回车之所以脱出一层
+ *  (enterEmptyListItem),是因为空 bullet 是视觉垃圾必须清;空缩进段落只是一个空行,没有垃圾要清。
+ *  而「缩进写了一段,回车想写第二段却掉回顶格」是更常遇到的挫败。逃生口已有两个:Shift-Tab、
+ *  行首退格(bsOutdentParagraph),不缺第三个。 */
+const enterKeepIndent: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty) return false
+  const indent = paragraphIndentAt($from)
+  if (!indent) return false
+  if ($from.parentOffset !== $from.parent.content.size) return false // 行中拆分:base 的 copy() 已带 attrs
+  const tr = state.tr.split($from.pos, 1, [{ type: $from.parent.type, attrs: { ...$from.parent.attrs, indent } }])
+  dispatch?.(tr.scrollIntoView())
+  return true
+}
+
 const enterCmd: Command = chain(
   enterFoldedHeading,
   enterOnBlockSelection,
-  enterRunsTrigger,
+  enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
   enterEmptyListItem,
   enterFoldedListItem,
   enterSplitIntoChild,
+  enterKeepIndent,
 )
 
 /** Mod+Enter:引用内 = 块内换行;列表内 = 等同回车(拆项);其余 = 下方直接新建空段落(不拆分文本)。 */
@@ -304,14 +326,37 @@ const bsSelectPrevAtom: Command = (state, dispatch) => {
   return true
 }
 
-const backspaceCmd: Command = chain(bsHeadingToParagraph, bsCallout, bsListToParagraph, bsSelectPrevAtom)
+/** 行首退格:**先逐级反缩进**,退到 0 档才交回原路(与上一段合并)。
+ *  没有这条时行首退格直接落到 base 的 joinBackward:三档缩进的段落一按就整段并进上一段,
+ *  缩进一次性全没 —— 用户报的「多 tab 了会全部一起删除」正是这一格。列表/引用里的段落
+ *  由 paragraphIndentAt 返回 null 让路给 bsListToParagraph / bsCallout,不会被这条截胡。
+ *  ⚠️ 不要改写成直接调 adjustParagraphIndent:那支为 Tab 设计、**恒返回 true**(恒吞键),
+ *  用在退格上会让 0 档段落的退格彻底失灵。 */
+const bsOutdentParagraph: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.parentOffset !== 0) return false
+  const indent = paragraphIndentAt($from)
+  if (!indent) return false // null=不归缩进档管、0=已顶格:两种都交回 base
+  const pos = $from.before($from.depth)
+  dispatch?.(state.tr.setNodeMarkup(pos, undefined, { ...$from.parent.attrs, indent: indent - 1 }).scrollIntoView())
+  return true
+}
+
+const backspaceCmd: Command = chain(bsHeadingToParagraph, bsCallout, bsListToParagraph, bsOutdentParagraph, bsSelectPrevAtom)
 
 /** Mod+Backspace:光标在块首时一路反缩进到顶层。逐级经 view.dispatch 发 —— PM history 会把
  *  同一次按键内的相邻事务并进同一组,撤销仍是一下;整文替换那种写法会连带毁掉分栏派生与装饰,勿用。
- *  不在列表里就 return false,让路给浏览器/base 的删词。 */
+ *  段落缩进档一步归 0(与列表的「一路 lift 到顶层项」同语义,单笔事务够了)。
+ *  两者都不适用就 return false,让路给浏览器/base 的删词。 */
 const modBackspaceCmd: Command = (state, dispatch, view) => {
   const { $from, empty } = state.selection
   if (!empty || $from.parentOffset !== 0) return false
+  const indent = paragraphIndentAt($from)
+  if (indent) {
+    const pos = $from.before($from.depth)
+    dispatch?.(state.tr.setNodeMarkup(pos, undefined, { ...$from.parent.attrs, indent: 0 }).scrollIntoView())
+    return true
+  }
   const listItem = state.schema.nodes.list_item
   if (!listItem || listItemDepth($from) == null) return false
   if (!dispatch || !view) return true

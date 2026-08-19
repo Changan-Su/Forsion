@@ -5,7 +5,9 @@
 
 import type { ComponentType } from 'react'
 
-export type FocusPlace = 'start' | 'end'
+/** 'body-enter' 仅统一实例的标题回车发出(AFFiNE 语义:首块非空段则顶插空段再落光标);
+ *  v3 逐块宿主永远只发 start/end,消费侧把它当 start 兜底即可。 */
+export type FocusPlace = 'start' | 'end' | 'body-enter'
 
 export interface BlockEditorProps {
   blockId: string

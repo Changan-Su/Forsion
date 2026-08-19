@@ -2,10 +2,12 @@
 // compile∘parse 不动点、v3→v4 升级规则(平凡布局全剥/分栏保锚/结构文件拒绝)。
 import { describe, expect, it } from 'vitest'
 import {
+  PAGE_SCHEMA_V4,
   classifyPageSource,
   compileV4,
   parseV4Layout,
   parseV4Source,
+  structureKeysFor,
   upgradeV3Source,
 } from './v4'
 
@@ -55,6 +57,7 @@ describe('parseV4Source / compileV4', () => {
     const src = compileV4({
       fmExtra: 'tags:\n  - alpha',
       layout,
+      canvas: null,
       body: '<!-- a a1 -->\n\n左栏。\n\n<!-- a a2 -->\n\n右栏。\n',
     })
     const once = parseV4Source(src)
@@ -66,16 +69,17 @@ describe('parseV4Source / compileV4', () => {
   })
 
   it('plain files carry frontmatter ONLY when there is foreign fm', () => {
-    const withFm = compileV4({ fmExtra: 'status: draft', layout: null, body: '正文。\n' })
+    const withFm = compileV4({ fmExtra: 'status: draft', layout: null, canvas: null, body: '正文。\n' })
     expect(withFm).toBe('---\nstatus: draft\n---\n\n正文。\n')
     expect(parseV4Source(withFm).fmExtra).toBe('status: draft')
-    expect(compileV4({ fmExtra: '', layout: null, body: '正文。\n' })).toBe('正文。\n')
+    expect(compileV4({ fmExtra: '', layout: null, canvas: null, body: '正文。\n' })).toBe('正文。\n')
   })
 
   it('sanitizes reserved keys and bare --- lines out of fmExtra (same chokepoint rule as v3)', () => {
     const src = compileV4({
       fmExtra: ['amadeus_page: hijacked', 'status: draft', '---', 'evil: body'].join('\n'),
       layout: null,
+      canvas: null,
       body: '正文。\n',
     })
     expect(src).toContain('status: draft')
@@ -102,7 +106,58 @@ describe('parseV4Source / compileV4', () => {
     expect(once).toBe('---\nstatus: draft\n---\n\n正文。\n') // 头部 CRLF 残留不产生空行,fm 重建为 LF
     expect(compileV4(parseV4Source(once))).toBe(once) // 不动点
     expect(parseV4Source('\n').body).toBe('') // 纯空白文件规整为空,不主张字节级往返
-    expect(compileV4({ fmExtra: '', layout: null, body: '\n\n' })).toBe('')
+    expect(compileV4({ fmExtra: '', layout: null, canvas: null, body: '\n\n' })).toBe('')
+  })
+})
+
+describe('structureKeysFor:canvas ⇒ schema 不变式(方案 §6.0-1,单一判据)', () => {
+  const LAYOUT = '{"v":4,"rows":[]}'
+  const CANVAS = '{"v":1,"mode":"canvas","cards":[]}'
+  it('两者皆无 → 一行不发(素文件)', () => {
+    expect(structureKeysFor(null, null)).toEqual([])
+  })
+  it('画布单独在场也必须发 schema —— 只发 canvas = 文件判成 v3 = 毁档', () => {
+    expect(structureKeysFor(null, CANVAS)).toEqual([`amadeus_schema: ${PAGE_SCHEMA_V4}`, `amadeus_canvas: ${CANVAS}`])
+    expect(classifyPageSource(`---\n${structureKeysFor(null, CANVAS).join('\n')}\n---\n\n正文\n`)).toBe('v4-structured')
+    // 反证:漏了 schema 的半吊子写者产出什么(这条掉进 v3 管线就会被补号改写)
+    expect(classifyPageSource(`---\namadeus_canvas: ${CANVAS}\n---\n\n正文\n`)).toBe('v3')
+  })
+  it('分栏与画布并存 → schema/layout/canvas 三行,顺序固定', () => {
+    expect(structureKeysFor(LAYOUT, CANVAS)).toEqual([
+      `amadeus_schema: ${PAGE_SCHEMA_V4}`,
+      `amadeus_layout: ${LAYOUT}`,
+      `amadeus_canvas: ${CANVAS}`,
+    ])
+  })
+  it('compileV4 携带画布往返不动点(fmExtra 与画布行互不干扰)', () => {
+    const src = compileV4({ fmExtra: 'icon: "📘"', layout: null, canvas: CANVAS, body: '# Hi\n\n正文。\n' })
+    const page = parseV4Source(src)
+    expect(page.kind).toBe('structured')
+    expect(page.layout).toBeNull()
+    expect(page.canvas).toBe(CANVAS)
+    expect(page.fmExtra).toBe('icon: "📘"')
+    expect(compileV4(page)).toBe(src)
+  })
+  it('未知 amadeus_* 键:v4-structured 来源保留(不透明元数据),升级/素文件路径剥除', () => {
+    const src = `---\namadeus_schema: ${PAGE_SCHEMA_V4}\namadeus_canvas: ${CANVAS}\namadeus_future: opaque\nicon: "📘"\n---\n\n正文。\n`
+    const page = parseV4Source(src)
+    expect(page.kind).toBe('structured')
+    expect(page.fmExtra).toContain('amadeus_future: opaque')
+    expect(compileV4(page)).toContain('amadeus_future: opaque') // 新端写的扩展不许被老端一次保存吞掉
+    // kind 缺省 = 保守侧(剥):升级路径拿 v3 遗留垃圾键去发 v4 会二次误判成 v3
+    expect(compileV4({ fmExtra: 'amadeus_next_id: 9\namadeus_junk: x', layout: null, canvas: null, body: '正文。\n' }))
+      .toBe('正文。\n')
+  })
+  it('画布键空值 = 键在场但值坏了:逐字保留,不许连 schema 一起剥', () => {
+    const src = `---\namadeus_schema: ${PAGE_SCHEMA_V4}\namadeus_canvas:\n---\n\n正文。\n`
+    const page = parseV4Source(src)
+    expect(page.canvas).toBe('')
+    expect(classifyPageSource(compileV4(page))).toBe('v4-structured')
+    expect(compileV4(page)).toContain('amadeus_canvas:')
+  })
+  it('画布是保留键:夹带在 fmExtra 里不能劫持结构区', () => {
+    const src = compileV4({ fmExtra: `amadeus_canvas: ${CANVAS}`, layout: null, canvas: null, body: '正文。\n' })
+    expect(src).toBe('正文。\n') // 前缀键整体被 sanitize 剥掉,素文件恒素
   })
 })
 
@@ -176,13 +231,16 @@ describe('upgradeV3Source(spec §5.1)', () => {
     const v3 = v3Source([], ['<!-- a 1 -->', '', '正文。'])
     expect(upgradeV3Source('图.mindmap.md', v3, NOW)).toEqual({ ok: false, reason: 'plugin-structured-file' })
     expect(upgradeV3Source('画.excalidraw.md', v3, NOW)).toEqual({ ok: false, reason: 'plugin-structured-file' })
-    // 画布(2026-08-14):无插件端把 .canvas.md 当普通笔记 → 升级剥标记会让 canvas 键全孤儿,必须拒。
-    expect(upgradeV3Source('板.canvas.md', v3, NOW)).toEqual({ ok: false, reason: 'plugin-structured-file' })
+    // ⚠️ 画布 2026-08-16 转原生后 `.canvas.md` **不再是一等文件类型**:它就是个普通笔记,照常升 v4
+    // (画布成了任意 v4 笔记的一种模式,几何存 amadeus_canvas)。这条断言是路由翻转的门 —— 改红了
+    // 说明有人把 canvas 加回了 PLUGIN_FILETYPE,那等于把画布退回 v3 块世界(用户为此打回过两轮)。
+    expect(upgradeV3Source('板.canvas.md', v3, NOW).ok).toBe(true)
     const withMindmap = v3Source(["mindmap: '{\"1\":{\"p\":null,\"o\":0}}'"], ['<!-- a 1 -->', '', '正文。'])
     expect(upgradeV3Source('note.md', withMindmap, NOW)).toEqual({ ok: false, reason: 'plugin-structured-frontmatter' })
     const withDash = v3Source(["dashboard: '{\"1\":[0,0,2,2]}'"], ['<!-- a 1 -->', '', '正文。'])
     expect(upgradeV3Source('note.md', withDash, NOW)).toEqual({ ok: false, reason: 'plugin-structured-frontmatter' })
-    // canvas 键按 fm 判也要拒(文件被改名/复制丢扩展名时的第二道防线)。
+    // **已退役的**画布插件那套裸 `canvas:` 键仍要拒:存量文件的坐标按块 id 引用,升级剥标记会
+    // 让它们整片孤儿。原生画布用的是 amadeus_canvas(带前缀,不匹配这条规则),不受影响。
     const withCanvas = v3Source(["canvas: '{\"v\":1,\"n\":{\"1\":{\"x\":0,\"y\":0}}}'"], ['<!-- a 1 -->', '', '正文。'])
     expect(upgradeV3Source('note.md', withCanvas, NOW)).toEqual({ ok: false, reason: 'plugin-structured-frontmatter' })
     // 引号键是合法 YAML,拒绝规则不能被引号绕过(Codex #3)。

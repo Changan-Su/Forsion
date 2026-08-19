@@ -8,14 +8,15 @@
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的 focusTitleFor(新建流标题聚焦)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2 } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
+import { UI_MODE } from '@lcl/engine'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
@@ -34,26 +35,33 @@ import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
 import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename } from '../store/pageStore'
+// 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
+// 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
+import '../../views/chat2/sidebar2.css'
+import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
 import { useUiOverlay } from '../../amadeusOverlayStore'
+import { CanvasSegPortal } from './CanvasModeSeg'
 import { AmadeusPropertiesPanel } from '../../amadeusProperties'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { createBlockLayer } from './blockLayer'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId } from './columns'
+import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
+import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { createEmbedLayer } from './embedLayer'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
-import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf } from './fm'
+import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
 
 /** 标题回车的聚焦请求要跨「改名 → 实例随 key 重建」存活(重建清零一切组件态,只能挂模块级)。
  *  没有它:新建笔记打完名按回车,焦点刚进正文就被改名后的重建拆掉(P12b 实测)。 */
-let pendingBodyFocus: string | null = null
+let pendingBodyFocus: { path: string; place: 'start' | 'body-enter' } | null = null
 
 const NOOP_KEYS = {
   insertAfter: () => {},
@@ -101,6 +109,10 @@ interface Pipe {
   /** 本实例是否**真渲染过**分栏行:layout 剥除(解散语义)只许在此后发生 —— layout 形状合法
    *  但因缺锚/错位没折叠成功时,首次编辑绝不能顺手把结构键抹掉(Codex 终审 P0)。 */
   sawRows: boolean
+  /** 画布卡片的**归属集合**:本实例负责得起的卡锚 = 本次 parse 折出来的 ∪ 本实例建出来的。
+   *  磁盘上的 cards 只要有一枚不在这里面,派生就整行逐字保留。四条毁数据理由见
+   *  `canvas.ts` 的 `deriveCanvasJson` 顶注。**每次 parse 前必须清零**(不是终身锁存)。 */
+  ownedCards: Set<string>
   /** 写盘串行链(Codex P0):并发 writeNow 一律排队,且**执行时**才 compose——
    *  旧内容的大写入绝不可能后完成盖掉新状态。 */
   chain: Promise<void>
@@ -117,6 +129,9 @@ interface HostApi {
   insertFiles: (files: File[]) => void
   focusStart: () => void
   focusEnd: () => void
+  /** 尾部空白区点击(AFFiNE 语义):末行有内容 → 追加一个普通空段并落光标;已是空段 → 直接落。
+   *  末块是卡片时空段追加在**卡尾**(v4 卡片区必须收尾,顶层追加会被 normalizer 吸回同一位置)。 */
+  focusTail: () => void
 }
 
 function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused }: {
@@ -133,8 +148,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   probe?: Record<string, unknown>
   extraPlugins?: MilkdownPlugin[]
   /** 走 MilkdownInner 的 v3 聚焦通道(等 loading 完才消费):hostApi.focusStart 在编辑器
-   *  初始化窗口/重建期间是静默 no-op,聚焦请求一律走这条。 */
-  focusPlace: 'start' | 'end' | null
+   *  初始化窗口/重建期间是静默 no-op,聚焦请求一律走这条。'body-enter' = 标题回车档(见 registry)。 */
+  focusPlace: 'start' | 'end' | 'body-enter' | null
   onFocused: () => void
 }): ReactElement {
   const [, getInstance] = useInstance()
@@ -182,6 +197,21 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         getInstance()?.action((ctx) => {
           const view = ctx.get(editorViewCtx)
           view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)))
+          view.focus()
+        })
+      },
+      focusTail: () => {
+        getInstance()?.action((ctx) => {
+          const view = ctx.get(editorViewCtx)
+          const { doc, schema } = view.state
+          const para = schema.nodes.paragraph
+          const emptyPara = (n: ProseNode | null): boolean => !!n && n.type === para && n.content.size === 0
+          const last = doc.lastChild
+          let tr = view.state.tr
+          // 末块有内容(含「末块是卡」—— 闭合锚 2026-08-19 之后卡后顶层正文完全合法,AFFiNE 同款
+          // 卡外新行)→ 顶层追加普通空段;已是空段 → 不重复加,直接落光标。
+          if (!emptyPara(last)) tr = tr.insert(doc.content.size, para.create())
+          view.dispatch(tr.setSelection(TextSelection.atEnd(tr.doc)).scrollIntoView())
           view.focus()
         })
       },
@@ -494,8 +524,11 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   onSetIcon: (em: string | null) => void
   onSetCover: (cover: string) => void
   /** 返回改名是否成功:失败(撞名/非法名)时输入框还原旧名,不留「显示新名实为旧名」的假象。 */
-  onRename: (next: string) => Promise<boolean>
-  onEnterBody: () => void
+  /** focusKind = 触发本次 commit 的按键档(回车/方向键),点走 blur 恒 null —— 逐次绑定逐次消费,
+   *  不用时间窗推断(Codex 深夜 F2:5 秒窗会把「回车后 5 秒内点走改名」误判成回车改名,凭空插首行抢焦点)。 */
+  onRename: (next: string, focusKind: 'enter' | 'move' | null) => Promise<boolean>
+  /** 'enter' = 回车确定标题(首块非空段则顶插空白首行);'move' = 方向键滑入正文(只落光标不插行)。 */
+  onEnterBody: (kind: 'enter' | 'move') => void
   /** 新建流:挂载即聚焦标题(消费 pageStore.focusTitleFor 后由父级置真)。 */
   focusSignal: boolean
 }): ReactElement {
@@ -515,9 +548,13 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
       el.setSelectionRange(n, n)
     }
   }, [focusSignal])
+  // 本次 blur 由哪个键触发(commit 时一次性消费):回车/方向键在 keydown 里设,点走 blur 恒 null。
+  const blurKind = useRef<'enter' | 'move' | null>(null)
   const commit = (): void => {
+    const kind = blurKind.current
+    blurKind.current = null
     const next = val.trim()
-    if (next && next !== current) void onRename(next).then((ok) => { if (!ok) setVal(shown) })
+    if (next && next !== current) void onRename(next, kind).then((ok) => { if (!ok) setVal(shown) })
     else setVal(shown)
   }
   return (
@@ -562,8 +599,9 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
             const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length
             if (e.key === 'Enter' || ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && atEnd)) {
               e.preventDefault()
+              blurKind.current = e.key === 'Enter' ? 'enter' : 'move'
               el.blur() // blur → commit(改名);统一实例正文恒存在,先后顺序无 v3 的首块竞态
-              onEnterBody()
+              onEnterBody(e.key === 'Enter' ? 'enter' : 'move')
             }
             if (e.key === 'Escape') { setVal(shown); el.blur() }
           }}
@@ -603,22 +641,142 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, dead: false, retired: false, sawRows: false, chain: Promise.resolve() }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve() }
   }
   const pipe = pipeRef.current
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
   const [editorKey, setEditorKey] = useState(0) // 源码 → 可视切回时重建编辑器(正文可能被改)
+
+  // ⚠️ 插件启停 = **第四条重 parse 路径**,而且是唯一一条绕开本组件的:MarkdownBlock 自己订阅
+  //    `editorExtensionGen` 并把它挂在 `useEditor` 的 deps 上,milkdown 于是 destroy+create,
+  //    `ctx.set(defaultValueCtx, initial)` 吃的是**那一刻的 prop**。v3 时代 content 由 store 驱动、
+  //    变了就重渲,所以 prop 恒新;v4 换成 ref 型 pipe 之后,拖块成卡与打字全程零 setState ——
+  //    prop 停在上一次 UnifiedPage 渲染那一刻。后果不是「丢几个字」而是**毁数据**:陈旧 body 里
+  //    缺新卡的锚 → foldCanvas fail-closed 早退 → onFolded 不被调用,而这条重建**不经
+  //    setEditorKey、也不卸载 UnifiedEditorHost**,三处 ownedCards.clear() 一处都够不着 →
+  //    归属集合停在上一世代 ⊇ 磁盘 cards → 派生判据放行 → 写回 `cards: []`,全部卡片几何没了
+  //    (没有 elements 时更狠:整个 amadeus_canvas 键被剥)。
+  //    修法是把它拉回既有纪律:代次进 MilkdownProvider 的 key(整棵子树按**本次渲染**的 pipe.body
+  //    重挂,旧实例卸载时的 onFinalFlush 先把真实内容收回来),归属集合在**渲染期**换世代 ——
+  //    放 effect 里会排在子树 fold 之后,把刚折出来的锚当场清掉。
+  const extGen = useSyncExternalStore(subscribeEditorExtensions, editorExtensionGen)
+  const lastExtGen = useRef(extGen)
+  if (lastExtGen.current !== extGen) {
+    lastExtGen.current = extGen
+    pipe.ownedCards.clear()
+  }
   const hostApi = useRef<HostApi | null>(null)
 
+  // ── 画布模式(canvas.ts / canvasStage.tsx)。────────────────────────────────────
+  // **默认恒为文档模式**(用户 2026-08-16 原话:「它首先是个文档」)。只有磁盘上已经物化过画布、
+  // 且上次退出时停在画布模式,打开才直接进画布 —— 没有 amadeus_canvas 键的笔记永远从文档进。
+  // 移动端**忽略持久化的 mode:"canvas"**,恒从文档进(方案 §6.1,Codex P1):mode 是跨设备
+  // 持久化的,而手机上的画布 Phase 1 只是只读查看 —— 不挡的话「在桌面切到画布」会让同一篇笔记
+  // 在手机上打开就变成只读,用户完全不知道发生了什么。手机要看画布,自己点模式钮。
+  const [canvasOn, setCanvasOn] = useState(() => UI_MODE !== 'mobile' && parseCanvasJson(canvasLineOf(pipe.fm))?.mode === 'canvas')
+  const canvasModeRef = useRef(canvasOn) // deriveFmFromDoc 在事件里同步读,不能等 state 落定
+  canvasModeRef.current = canvasOn
+  // ⚠️ 只有用户**亲手点过模式钮**,本实例才有资格改盘上的 mode。不设这道闸的话:桌面存了
+  // `mode:"canvas"`,手机按约定以文档模式打开,随后只改正文 → 派生无条件把 mode 覆写成 "doc",
+  // 「移动端忽略 mode」就变成了「移动端改写 mode」,桌面下次也进不去画布了(Codex P1-7)。
+  const modeTouched = useRef(false)
+  // 单次解析(canvasLine 是字符串,不变时 memo 命中 → main/elements 的引用也稳,不会每渲染
+  // 把舞台的白板层依赖抖一遍)。
+  const canvasLine = canvasLineOf(pipe.fm)
+  const canvasDoc = useMemo(() => parseCanvasJson(canvasLine), [canvasLine])
+  const canvasMain = canvasDoc?.main ?? { x: 0, y: 0, w: MAIN_W }
+  const toggleCanvas = (): void => {
+    const next = !canvasOn
+    canvasModeRef.current = next
+    modeTouched.current = true
+    setCanvasOn(next)
+    // 切模式本身**不算用过画布**(方案 §4):没物化过就只是换个视角,一个字节都不写。
+    // 已物化的才把 mode 跟着落盘 —— 走的仍是同一条防抖单写者,不另开写路径。
+    if (canvasLineOf(pipe.fm) != null) {
+      syncFromEditor()
+      schedule()
+    }
+  }
+  const toggleCanvasRef = useRef(toggleCanvas)
+  toggleCanvasRef.current = toggleCanvas
+  /** 白板元素落盘。cards 的真源是 doc(deriveCanvasJson 派生),**elements 的真源是磁盘那行** ——
+   *  所以这一支不经 deriveFmFromDoc,直接换掉 canvas 行里的 elements 键、其余字段逐字保留。
+   *  ⚠️ 那行读不懂时(手改坏的 JSON)当面说、什么都不写:withElements 会逐字返回原行,
+   *  静默丢改动比报错更糟 —— 用户会以为画了、下次打开发现没了。 */
+  const setCanvasElements = (next: unknown[]): void => {
+    const stored = canvasLineOf(pipe.fm)
+    if (stored != null && parseCanvasJson(stored) == null) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', {
+        detail: { text: '画布改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', error: true },
+      }))
+      return
+    }
+    pipe.fm = setAmadeusStructure(pipe.fm, layoutLineOf(pipe.fm), withElements(stored, next))
+    setFmVer((v) => v + 1) // canvasDoc 是 canvasLine 的 memo:不推这一下,舞台看不到新元素
+    syncSrcDraft()
+    schedule()
+  }
+  /** 节点层级落盘。与 setCanvasElements 同一套(真源在磁盘那行、不经 deriveFmFromDoc、坏行当面说)。 */
+  const setCanvasTree = (next: Record<string, unknown>): void => {
+    const stored = canvasLineOf(pipe.fm)
+    if (stored != null && parseCanvasJson(stored) == null) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', {
+        detail: { text: '层级改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', error: true },
+      }))
+      return
+    }
+    pipe.fm = setAmadeusStructure(pipe.fm, layoutLineOf(pipe.fm), withTree(stored, next))
+    setFmVer((v) => v + 1)
+    syncSrcDraft()
+    schedule()
+  }
+  /** 主卡几何落盘(2026-08-18 一等公民)。同一套三口径;withMain 自带「盘上无键 + 默认位形 =
+   *  一个字节不写」的懒物化闸(撤销回默认位不该物化一行 JSON)。 */
+  const setCanvasMain = (next: CanvasMain): void => {
+    const stored = canvasLineOf(pipe.fm)
+    if (stored != null && parseCanvasJson(stored) == null) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', {
+        detail: { text: '主卡改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', error: true },
+      }))
+      return
+    }
+    pipe.fm = setAmadeusStructure(pipe.fm, layoutLineOf(pipe.fm), withMain(stored, next))
+    setFmVer((v) => v + 1)
+    syncSrcDraft()
+    schedule()
+  }
+  /** 统一撤销时间线:编辑器插件(createHistoryTimeline)与舞台(histStep 仲裁)共享的一个对象。
+   *  与 fm 快照栈同寿命 —— 换页换新;编辑器整实例重建(editorKey)**不**换,陈旧 'pm' 由自愈丢弃。 */
+  const undoTimeline = useMemo<UndoTimeline>(() => ({ log: [], future: [] }), [path])
+  /** 满铺态。源码模式下恒否:那条分支渲染的是 textarea,把 chrome 抽掉只会让人无处改标题。 */
+  const fullCanvas = canvasOn && mode !== 'source'
+  // 模式胶囊画在**笔记顶栏** `.amx-toolbar`(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。
+  // 顶栏住在宿主壳 amadeusViews 里、是本组件的**祖先**,所以胶囊由这里渲染、portal 进那一行的插槽。
+  // ⚠️ 2026-08-18 从「状态进店 + 顶栏按 path 比对」改成 portal:用户实报「开机还原到一篇 md 笔记时
+  //    胶囊必不显示,点过别的笔记才出来」。理由与被排除的假设都写在 CanvasModeSeg 顶注。
+  const segAnchorRef = useRef<HTMLSpanElement | null>(null)
+  const [segAnchor, setSegAnchor] = useState<HTMLElement | null>(null)
+  useEffect(() => { setSegAnchor(segAnchorRef.current) }, [])
+  // 满铺靠**给滚动容器加个类**,而不是给 `.amx-pane` 全局加 `position: relative` ——
+  // 那会把面板里所有「本来解析到更外层」的绝对定位后代一起改锚点(浮层整体偏一个容器位是本仓的老账)。
+  // 只在本笔记进画布期间挂,退出/卸载即摘。顶栏 sticky 且 z-index:3,满铺层压不住它,照旧可点。
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const pane = bodyRef.current?.closest('.amx-pane')
+    if (!pane) return
+    pane.classList.toggle('amx-canvas-pane', fullCanvas)
+    return () => pane.classList.remove('amx-canvas-pane')
+  }, [fullCanvas])
+
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
-  const [bodyFocus, setBodyFocus] = useState<'start' | 'end' | null>(() => {
-    if (pendingBodyFocus === path) {
+  const [bodyFocus, setBodyFocus] = useState<'start' | 'end' | 'body-enter' | null>(() => {
+    if (pendingBodyFocus?.path === path) {
+      const place = pendingBodyFocus.place
       pendingBodyFocus = null
-      return 'start'
+      return place
     }
     return null
   })
-  const enterIntent = useRef(0) // 最近一次标题回车的时刻:doRename 用它区分「回车改名」与「点走 blur 改名」
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
@@ -633,7 +791,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
         () => parseLayoutJson(layoutLineOf(pipe.fm)),
         () => { pipe.sawRows = true }, // parse 折叠成功=真渲染过行(打开即拖散也要能剥 layout)
       ),
+      // 画布卡片(canvas.ts)。两种模式共用同一次折叠 —— 不折的话文档模式的正文里会冒出
+      // `<!-- a c1 -->` 字面注释行。layout 一并传进去做互斥判定(同一枚锚不许两个折叠器抢)。
+      ...canvasPlugins,
+      ...createCanvasFold(
+        () => parseCanvasJson(canvasLineOf(pipe.fm)),
+        () => parseLayoutJson(layoutLineOf(pipe.fm)),
+        // 折出来的锚进归属集合。⚠️ 这里**只增不清**,清零由 parse 的发起方负责(见 resetOwned)——
+        // 折叠失败时这个回调根本不会被调,清零动作放在它里面就永远等不到。
+        (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
+      ),
       ...createEmbedLayer({ path }),
+      // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
+      // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
+      // 时间线只在画布模式被查询,顺序跨模式仍然成立)。
+      ...createSelectionClamp(() => canvasModeRef.current),
+      ...createHistoryTimeline(undoTimeline),
+      // 文档模式的「光标在哪张卡」标注(约束框 CSS 只在文档模式消费,画布下类挂着无害)。
+      ...createCardActiveDeco(),
       ...headingFoldPlugins,
       ...listFoldPlugins,
     ],
@@ -705,20 +880,40 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
     return pipe.chain
   }
 
-  /** 从编辑器 doc 派生 layout 进 fm(分栏单一真源 = doc,Codex A13);仅可视模式有 view。 */
+  /** 从编辑器 doc 派生 layout + canvas 进 fm(两者的真源都是 doc,Codex A13);仅可视模式有 view。
+   *  ⚠️ 两个结构键各自独立判定后**合并成一次** setAmadeusStructure。早先写成 if/else-if 阶梯
+   *  (先 layout、else 才轮到 canvas)时有个必现雷:一篇曾经有分栏、后来被解散的笔记 sawRows 恒 true,
+   *  阶梯永远停在 layout 分支,画布的任何改动从此再也写不进 fm。结构键之间没有优先级,别再串成阶梯。 */
   const deriveFmFromDoc = (): void => {
     const v = layer.getView()
     if (!v) return
+    const storedLayout = layoutLineOf(pipe.fm)
     const json = deriveLayoutJson(v.state.doc)
+    // layout 三分支:派生出行 → 用派生值;没派生出来但本实例**确实渲染过行** → 用户解散了,剥掉;
+    // 折叠从未成功(缺锚/错位)或行本身非法 → 逐字保留(fail-closed,Codex 终审 P0/共1)。
+    let layoutVal = storedLayout
     if (json != null) {
-      pipe.fm = setAmadeusStructure(pipe.fm, json)
+      layoutVal = json
       pipe.sawRows = true
-    } else if (pipe.sawRows) {
-      // doc 无分栏且本实例**确实渲染过行** → 用户解散了,剥结构键。折叠从未成功(缺锚/错位)
-      // 或 layout 行非法 → 逐字保留:fail-closed 容错绝不顺手抹掉布局元数据(Codex 终审 P0/共1)。
-      const line = layoutLineOf(pipe.fm)
-      if (line != null && parseLayoutJson(line) != null) pipe.fm = setAmadeusStructure(pipe.fm, null)
+    } else if (pipe.sawRows && storedLayout != null && parseLayoutJson(storedLayout) != null) {
+      layoutVal = null
     }
+    // 画布:cards 段的真源 = doc 里的卡片节点,mode/main/elements/未知键从磁盘那行原样搬(canvas.ts
+    // 顶注的「组装点唯一」)。**懒物化**与「折叠没成功就逐字保留」两条都在 deriveCanvasJson 里。
+    const canvasVal = deriveCanvasJson(
+      v.state.doc,
+      canvasLineOf(pipe.fm),
+      modeTouched.current ? (canvasModeRef.current ? 'canvas' : 'doc') : null, // 见 modeTouched 的告警
+      pipe.ownedCards,
+    )
+    const before = canvasLineOf(pipe.fm)
+    pipe.fm = setAmadeusStructure(pipe.fm, layoutVal, canvasVal)
+    // ⚠️ canvas 行**真变了**才推版本。舞台的 elements/tree 两个 prop 都来自 `canvasDoc`(canvasLine
+    //    的 memo),而这个函数只改 pipe.fm、本身不触发任何重渲染 —— 少这一句的实测表现是:
+    //    删掉/收回中间那张卡后,层级线仍按旧 tree 去找那张卡的盒子、两端双双解析失败,线全没了
+    //    且再也不回来(4 秒后、手动扰动 DOM 之后仍是 0 条)。
+    //    判据必须是「行变了」而不是无条件推:这个函数每次击键都跑,无条件推 = 每敲一个字重渲染一次。
+    if (canvasLineOf(pipe.fm) !== before) setFmVer((x) => x + 1)
   }
 
   /** flush 前强制取编辑器**此刻**的 doc(Codex A4):listener 的 markdownUpdated 有 200ms 防抖,
@@ -812,15 +1007,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
           return
         }
         const { fmText, body } = splitFm(raw)
+        // 结构键行变没变要在换 pipe.fm **之前**判(Codex P0-4)。
+        const structChanged = layoutLineOf(fmText) !== layoutLineOf(pipe.fm) || canvasLineOf(fmText) !== canvasLineOf(pipe.fm)
         pipe.fm = fmText // fold 闭包现读 pipe.fm:此行必须先于 applyBody 的重 parse(advisor)
         setFmVer((v) => v + 1)
         if (body !== pipe.body) {
+          pipe.ownedCards.clear() // 归属集合按 parse 世代重建,绝不跨 parse 锁存(Codex P0-5)
           if (hostApi.current?.applyBody(body)) {
             pipe.body = body
           } else {
             pipe.body = body
             setEditorKey((k) => k + 1) // 编辑器不在(源码模式等):换 key 重建吃新正文
           }
+        } else if (structChanged) {
+          // 正文一字未变、只有结构键变了(外部工具只挪了卡片坐标)。卡片几何活在 PM attrs 里,
+          // 而 applyBody 的最小差异事务对「正文相同」会算出零差异**根本不重 parse** —— doc 停在旧
+          // 坐标,用户随后敲一个字,派生就把外部那次修改静默写回旧值(Codex P0-4)。只能整实例重建
+          // 让 fold 拿新的 canvas 行重跑一遍。回灌本就少见,这点成本换正确性。
+          pipe.ownedCards.clear()
+          setEditorKey((k) => k + 1)
         }
         pipe.lastSaved = raw
         pipe.pending = false
@@ -910,7 +1115,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
-  const doRename = async (next: string): Promise<boolean> => {
+  const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null): Promise<boolean> => {
     try {
       syncFromEditor() // 快打字后立刻回车改名:先拉平防抖窗里的最后几击(Codex A4)
       await writeNow() // 待写先落旧路径(chain 串行:在途写全部排完)
@@ -927,8 +1132,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
         remapScopePaths(path, newPath, 'file')
         await cascadeFdAfterRename(path, newPath)
         void usePageStore.getState().refreshPages()
-        // 回车触发的改名:聚焦请求跨重建带给新实例(点走 blur 的改名不抢焦点)。
-        if (Date.now() - enterIntent.current < 5000) pendingBodyFocus = newPath
+        // 回车/方向键触发的改名:聚焦请求跨重建带给新实例(点走 blur 的改名 focusKind=null,不抢焦点)。
+        // 档位由**本次 commit** 逐次携带(Codex 深夜 F2:原 5 秒时间窗会把「回车后 5 秒内点走改名」
+        // 误判成回车改名 —— 凭空顶插空段还把焦点从用户点的控件抢回正文)。
+        if (focusKind) pendingBodyFocus = { path: newPath, place: focusKind === 'enter' ? 'body-enter' : 'start' }
         onRenamed?.(newPath)
       }
       return true
@@ -950,6 +1157,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
     // 源码 → 可视:textarea 编辑已实时进 pipe,这里只负责让编辑器重建吃新正文。
     if (mode !== 'source') {
       setSrcDraft(null)
+      // ⚠️ 重建 = 一次新 parse,归属集合必须跟着换世代(与 reconcile 那两处同一条纪律,Codex P0-5)。
+      // 漏在这里是潜伏的毁数据:在源码模式把某张卡的锚改坏 → 回可视时折叠失败、doc 零卡片,而
+      // 上一代的集合仍然满足 deriveCanvasJson 的归属判据 → 派生出 `cards: []` → 整个 amadeus_canvas
+      // 键被剥,全部卡片几何一次没。(sawRows 是分栏那边的同族布尔量,毛病更老,不在本轮动。)
+      pipe.ownedCards.clear()
       setEditorKey((k) => k + 1)
     }
   }, [mode])
@@ -968,13 +1180,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
 
   return (
     <>
-      <NoteCover
-        page={path}
-        cover={cover}
-        coverY={coverY}
-        onSetCover={(c) => setFm({ cover: c ?? undefined, ...(c ? {} : { cover_y: undefined }) })}
-        onSetCoverY={(y) => setFm({ cover_y: y })}
-      />
+      {/* 顶栏胶囊的锚:恒在场(源码模式也在),只用来 `closest('.amx-pane')` 找本 pane 的插槽。
+          零尺寸、不吃指针 —— 它不参与任何布局。 */}
+      <span ref={segAnchorRef} className="amx-seg-anchor" aria-hidden />
+      {mode === 'source' ? null : (
+        <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} />
+      )}
+      {/* 画布模式满铺(用户 2026-08-17 拍板「像 AFFiNE 一样整个 view 显示」):封面/标题/属性整层
+          不渲染,笔记体脱出 920px 纸面铺满面板。⚠️ 这几个槽位用 `x ? <A/> : null` 而不是把它们
+          挪走 —— 静态 JSX 的子节点按位置对位,槽位在场就不会把后面的编辑器挤到别的 index 上重挂。 */}
+      {fullCanvas ? null : (
+        <NoteCover
+          page={path}
+          cover={cover}
+          coverY={coverY}
+          onSetCover={(c) => setFm({ cover: c ?? undefined, ...(c ? {} : { cover_y: undefined }) })}
+          onSetCoverY={(y) => setFm({ cover_y: y })}
+        />
+      )}
+      {fullCanvas ? null : (
       <div className="amx-doc unified-page" data-unified-path={path}>
         <UnifiedTitle
           path={path}
@@ -983,10 +1207,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
           onSetIcon={(em) => setFm({ icon: em ?? undefined })}
           onSetCover={(c) => setFm({ cover: c })}
           onRename={doRename}
-          onEnterBody={() => {
-            enterIntent.current = Date.now()
-            setBodyFocus('start')
-          }}
+          onEnterBody={(kind) => setBodyFocus(kind === 'enter' ? 'body-enter' : 'start')}
           focusSignal={titleFocus}
         />
         <AmadeusPropertiesPanel
@@ -1000,6 +1221,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
           }}
         />
       </div>
+      )}
       {mode === 'source' ? (
         <textarea
           ref={srcTaRef}
@@ -1010,14 +1232,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
             const v = e.target.value
             setSrcDraft(v)
             const { fmText, body } = splitFm(v)
-            pipe.fm = fmText
+            // 源码模式是**唯一**绕过 setAmadeusStructure 的写点(Codex P0):手删掉 amadeus_schema
+            // 却留着 layout/canvas,文件下次打开就被 classifyPageSource 判 v3 → 升级链把 canvas
+            // 从 fmExtra 里剥掉 = 几何永久丢失。这里只做「缺 schema 就补回」这一个方向的修复:
+            // 用户想整个解散结构就把 layout/canvas 也删掉(那时 structureKeysFor 一行都不发)。
+            pipe.fm = fixStructKeys(fmText)
             pipe.body = body
             schedule()
           }}
         />
       ) : (
         <div
-          className="page-view unified-body"
+          ref={bodyRef}
+          className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-bare
           onKeyDownCapture={(e) => {
             // 编辑器内 Cmd/Ctrl+F → 页内查找(与 v3 PageView 同一道门:焦点在编辑器里才接管,
@@ -1029,31 +1256,52 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
           }}
         >
           {findOpen && <FindBar />}
-          <MilkdownProvider key={`${path}:${editorKey}`}>
-            <UnifiedEditorHost
-              path={path}
-              pageDir={pageDir}
-              body={pipe.body}
-              onChange={(stored) => {
-                pipe.body = stored
-                deriveFmFromDoc() // 分栏 layout 单一真源 = 当前 doc(Codex A13)
-                schedule()
-              }}
-              onFinalFlush={(stored) => {
-                pipe.body = stored
-                deriveFmFromDoc()
-                schedule()
-                setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
-              }}
-              skipFinalFlush={() => pipe.reconcileBusy}
-              apiRef={hostApi}
-              probe={probe}
-              extraPlugins={editorPlugins}
-              focusPlace={bodyFocus}
-              onFocused={() => setBodyFocus(null)}
-            />
-          </MilkdownProvider>
-          <div className="page-tail" onClick={() => hostApi.current?.focusEnd()} />
+          {/* 模式钮(AFFiNE 同位:页面右上)。整篇零画布数据时也照常显示 —— 画布是任意笔记随时
+              可用的能力,不是某种文件类型的特权;点进去只是换视角,不写盘(见 toggleCanvas)。 */}
+          <CanvasStage
+            path={path}
+            active={canvasOn}
+            getView={() => layer.getView()}
+            main={canvasMain}
+            mainStored={canvasDoc?.main != null}
+            elements={canvasDoc?.elements}
+            tree={canvasDoc?.tree}
+            onElements={setCanvasElements}
+            onTree={setCanvasTree}
+            onMain={setCanvasMain}
+            timeline={undoTimeline}
+            onCommit={(newRef) => {
+              if (newRef) pipe.ownedCards.add(newRef) // 本实例建的卡也算「负责得起」,见 deriveCanvasJson
+              syncFromEditor() // 版本推送在 deriveFmFromDoc 里(canvas 行真变了才推)
+              schedule()
+            }}
+          >
+            <MilkdownProvider key={`${path}:${editorKey}:${extGen}`}>
+              <UnifiedEditorHost
+                path={path}
+                pageDir={pageDir}
+                body={pipe.body}
+                onChange={(stored) => {
+                  pipe.body = stored
+                  deriveFmFromDoc() // 分栏 layout 单一真源 = 当前 doc(Codex A13)
+                  schedule()
+                }}
+                onFinalFlush={(stored) => {
+                  pipe.body = stored
+                  deriveFmFromDoc()
+                  schedule()
+                  setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
+                }}
+                skipFinalFlush={() => pipe.reconcileBusy}
+                apiRef={hostApi}
+                probe={probe}
+                extraPlugins={editorPlugins}
+                focusPlace={bodyFocus}
+                onFocused={() => setBodyFocus(null)}
+              />
+            </MilkdownProvider>
+          </CanvasStage>
+          {!canvasOn && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
         </div>
       )}
       <LinkHoverCard getView={() => layer.getView()} />
@@ -1083,10 +1331,63 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
             })}>
               <Columns2 size={13} /> 移到新列
             </button>
+            {/* 显式「块 → 画布」入口(2026-08-18,评审 P1「核心动作太依赖隐藏手势」):此前唯一的
+                入口是画布模式下把 ⠿ 拖到舞台空白。摆位是启发式(主卡右侧、按已有卡数下移错开)。
+                条件渲染与 blockToCard 的排除清单一致 —— 对做不了卡的块显示菜单项是纯噪音。 */}
+            {(() => {
+              const v = layer.getView()
+              const s = v?.state.selection
+              if (!v || !(s instanceof NodeSelection)) return null
+              if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell', 'list_item'].includes(s.node.type.name)) return null
+              const $at = v.state.doc.resolve(s.from)
+              for (let d = $at.depth; d >= 1; d--) if ($at.node(d).type.name === 'amadeusColumnCell') return null
+              return (
+                <button onClick={() => withSelectedNode((view) => {
+                  let n = 0
+                  view.state.doc.forEach((node) => { if (node.type.name === 'amadeusCanvasCard') n++ })
+                  const made = blockToCard(view, Math.round(canvasMain.x + canvasMain.w + 80), Math.round(canvasMain.y + n * 72))
+                  if (!made) return
+                  pipe.ownedCards.add(made)
+                  syncFromEditor()
+                  schedule()
+                  if (!canvasModeRef.current) {
+                    window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '已放到画布 —— 右上角切到画布模式查看' } }))
+                  }
+                })}>
+                  <StickyNote size={13} /> 放到画布
+                </button>
+              )
+            })()}
+            {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。
+                条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
+            {layer.getView()?.state.selection instanceof NodeSelection
+              && (layer.getView()!.state.selection as NodeSelection).node.type.name === 'amadeusCanvasCard' && (
+              <button onClick={() => withSelectedNode((view, sel) => {
+                if (sel.node.type.name !== 'amadeusCanvasCard') return
+                unwrapCard(view, String(sel.node.attrs.anchor))
+                syncFromEditor()
+                schedule()
+              })}>
+                <Undo2 size={13} /> 收回文档
+              </button>
+            )}
             <button onClick={() => withBlocks(
               // 跨块选区:整批复制(AFFiNE 的 Duplicate 也是「只选半行也复制整块」)。
               (view, r) => view.dispatch(view.state.tr.insert(r.to, view.state.doc.slice(r.from, r.to).content).scrollIntoView()),
-              (view, sel) => view.dispatch(view.state.tr.insert(sel.to, sel.node)),
+              (view, sel) => {
+                // ⚠️ 画布卡片必须换新锚再复制(Codex P0-6):原样插入会得到两个 anchor=c1,派生写出
+                // 重复 ref,下次打开 parseCanvasJson 判歧义**整键作废** —— 全部画布卡一起失效。
+                if (sel.node.type.name === 'amadeusCanvasCard') {
+                  const anchor = freshAnchorId(view.state.doc)
+                  const copy = sel.node.type.create({ ...sel.node.attrs, anchor, x: Number(sel.node.attrs.x) + 40, y: Number(sel.node.attrs.y) + 40 }, sel.node.content)
+                  view.dispatch(view.state.tr.insert(sel.to, copy).setMeta('amxCanvas', true))
+                  pipe.ownedCards.add(anchor)
+                  syncFromEditor()
+                  schedule()
+                  return
+                }
+                view.dispatch(view.state.tr.insert(sel.to, sel.node))
+              },
             )}>
               <Copy size={13} /> 复制块
             </button>

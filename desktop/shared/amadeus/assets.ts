@@ -6,6 +6,13 @@
 // we rewrite them to a custom protocol URL that the main process resolves against the vault:
 //   ![](amadeus-asset://v/<encoded vault-relative path>)
 // …and rewrite back to the relative form before persisting, keeping main.md Obsidian-clean.
+//
+// 2026-08-14 起这对函数同时是「段落缩进」的编解码边界(indentIo):磁盘=行首字面制表符,
+// 编辑器(remark)侧=&#9; 实体。挂这儿的理由:display/stored 恰好就是 parser/serializer
+// 的唯一必经口(v3 MarkdownBlock ×2 + v4 UnifiedPage ×5 站点),磁盘 IO、源码模式与
+// 搜索索引永远只见字面制表符。
+
+import { tabsToEntities, entitiesToTabs } from './indentIo'
 
 export const ASSET_SCHEME = 'amadeus-asset'
 
@@ -56,20 +63,21 @@ function isExternal(url: string): boolean {
   return /^(https?:|data:|amadeus-asset:|blob:|\/)/.test(url)
 }
 
-/** Stored (page-relative) markdown → display markdown (protocol URLs for local images). */
+/** Stored (page-relative) markdown → display markdown (protocol URLs for local images;
+ *  行首字面制表符 → &#9; 实体,防 remark 读成缩进代码块/列表吸入)。 */
 export function toDisplayMarkdown(md: string, pageDir: string): string {
-  return md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
+  return tabsToEntities(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     const u = url.trim()
     if (isExternal(u)) return full
     return pre + toAssetUrl(joinRel(pageDir, u)) + rest
-  })
+  }))
 }
 
-/** Display markdown (protocol URLs) → stored (page-relative) markdown. */
+/** Display markdown (protocol URLs) → stored (page-relative) markdown(行首缩进实体 → 字面制表符)。 */
 export function toStoredMarkdown(md: string, pageDir: string): string {
-  return md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
+  return entitiesToTabs(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     const vaultRel = fromAssetUrl(url.trim())
     if (vaultRel == null) return full
     return pre + relFrom(pageDir, vaultRel) + rest
-  })
+  }))
 }

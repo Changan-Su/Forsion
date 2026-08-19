@@ -17,12 +17,14 @@ import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycl
 import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
 import { UnifiedPage } from '@amadeus/unified/UnifiedPage'
+import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITLED_RE } from '@amadeus/chrome/pageChrome'
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { cursorFromSource, setModeCursor, sourceOffsetFor, takeModeCursor } from '@amadeus/lib/modeCursor'
 import { importToPage, importToFolder, pasteImagesToPage } from './amadeusImport'
-import { usePluginStore, findFileType, fileTypeBaseName } from '@amadeus/plugins/pluginStore'
+import { usePluginStore, findFileType, matchFileType, fileTypeBaseName } from '@amadeus/plugins/pluginStore'
+import { normalizePluginRename } from '@amadeus/plugins/pluginExt'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from './amadeusPlugins'
 import { AmadeusPropertiesPanel } from './amadeusProperties'
@@ -206,7 +208,9 @@ export function Breadcrumb({ path }: { path?: string } = {}) {
   const activePage = path ?? storePage // unified 笔记不设 activePage,显式传路径
   if (!activePage) return null
   const segs = activePage.replace(/(\.dashboard)?\.md$/i, '').split('/')
-  const leaf = segs[segs.length - 1]
+  // 插件复合后缀文件与标题栏同口径:剥全后缀('Foo.canvas.md' → 'Foo'),别露 '.canvas' 残段。
+  const ft = matchFileType(activePage)
+  const leaf = ft ? fileTypeBaseName(activePage, ft.extensions) : segs[segs.length - 1]
   const parents = segs.slice(0, -1).map((seg, i) => ({ seg, target: segs.slice(0, i + 1).join('/') as string | null }))
   const shown = parents.length > 3
     ? [...parents.slice(0, 2), { seg: '…', target: null }, parents[parents.length - 1]]
@@ -863,6 +867,16 @@ export function AmadeusPagesView() {
     setRenaming(null)
     const name = draft.trim()
     if (!path || !name) return
+    // 插件复合后缀文件(.canvas.md):树上改名框给的是剥全后缀的基名,提交前把 `.canvas` 段
+    // 补回去(renamePageFile IPC 只补 .md)。归一化与标题入口共用 normalizePluginRename。
+    const ft = findFileType(pluginFileTypes, path)
+    if (ft) {
+      const ext = ft.extensions.find((e) => path.toLowerCase().endsWith(e.toLowerCase()))
+      if (!ext || !/\.md$/i.test(ext)) return // 非 .md 插件后缀:renamePageFile 恒补 .md,走不了
+      const withStem = normalizePluginRename(name, ext)
+      if (withStem !== fileTypeBaseName(path, ft.extensions) + ext.replace(/\.md$/i, '')) void renameAt(path, withStem)
+      return
+    }
     if (isNotePath(path)) {
       if (name !== baseName(path)) void renameAt(path, name)
     } else if (isDbPath(path)) {
@@ -872,7 +886,11 @@ export function AmadeusPagesView() {
       }
     }
   }
-  const startRename = (path: string): void => { setDraft(isDbPath(path) ? dbBaseName(path) : baseName(path)); setRenaming(path); setMenu(null) }
+  const startRename = (path: string): void => {
+    const ft = findFileType(pluginFileTypes, path) // 插件复合后缀:草稿剥全后缀,提交时补回
+    setDraft(ft ? fileTypeBaseName(path, ft.extensions) : isDbPath(path) ? dbBaseName(path) : baseName(path))
+    setRenaming(path); setMenu(null)
+  }
   const newFolder = async (parent: string): Promise<void> => {
     const name = (await askString(parent ? `在「${folderName(parent)}」中新建文件夹` : '新建文件夹', '新文件夹'))?.trim()
     if (name) {
@@ -1581,13 +1599,19 @@ function EditorScope({
  *  标题栏对这些显示为空 + 「New Page」占位(Notion 式),不显示字面「未命名」。 */
 /** 可编辑笔记标题 = 文件名(manifest.title 恒取 basename),提交即 renamePage。在编辑器内联改标题。
  *  (封面/图标 chrome 组件 2026-08-13 搬去 @amadeus/chrome/pageChrome:UnifiedPage 也要用,留此即模块环。) */
-function NoteTitle() {
+export function NoteTitle() {
   const store = useScopedPageStore() // 改名/设图标要作用在本面板这篇
   const sps = (): ReturnType<typeof store.getState> => store.getState()
   const activePage = usePageStore((s) => s.activePage)
   const manifest = usePageStore((s) => s.manifest)
   const icon = usePageStore((s) => (activePage ? s.icons[activePage] ?? null : null))
-  const current = manifest?.title || (activePage ? baseName(activePage) : '')
+  // 插件复合后缀文件(.canvas.md):标题**无条件**取剥全后缀的文件基名,不看 manifest.title ——
+  // 这类文件的 title 多为导入时的 'Foo.canvas' 形态,manifest?.title 短路在前会把口径修正整个
+  // 架空(评审 P1:显示仍带 .canvas,且与 commit 比较口径打架=失焦假改名)。renamePage 入口补回后缀。
+  const pageFt = activePage ? matchFileType(activePage) : undefined
+  const current = pageFt && activePage
+    ? fileTypeBaseName(activePage, pageFt.extensions)
+    : manifest?.title || (activePage ? baseName(activePage) : '')
   const shown = UNTITLED_RE.test(current) ? '' : current // 未命名 → 空,露出 New Page 占位
   const [val, setVal] = useState(shown)
   const [pick, setPick] = useState<{ x: number; y: number } | null>(null)
@@ -2031,6 +2055,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         // 顶栏与编辑器融为一体:实色纸面底(var(--bg)),滚动时正文从其后穿过被遮住(见 CSS)。
         <div className="amx-toolbar">
           <Breadcrumb path={barPath} />
+          {/* 「文档 | 画布」胶囊(用户 2026-08-17 拍板:跟路径/分享/置顶同一行)。状态在 UnifiedPage,
+              经 uiOverlay 交出来 —— 与旁边那颗可视/源码的路子一致。标记在 CanvasModeSeg(harness 共用)。 */}
+          <span className={SEG_SLOT} />
           {window.amadeusCollab && <ShareStatus path={barPath} refreshKey={shareVer} onOpen={(x, y) => setShareCard({ x, y })} />}
           {/* 置顶图钉:写 amadeusPrefs(每 vault localStorage),侧边栏「置顶」分区同步点亮。 */}
           <button

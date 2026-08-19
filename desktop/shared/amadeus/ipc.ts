@@ -59,6 +59,11 @@ export const IPC = {
   // 通用 vault 文本文件读写(供插件文件类型 ctx.app.readFile/writeFile;写走自写账本防 watcher 回弹)。
   readTextFile: 'file:read-text',
   writeTextFile: 'file:write-text',
+  /** 外部改动了 vault 里的**非 .md / 非 .db** 文件(附件、片段 .js…)→ ctx.app.watchFile 的数据源。 */
+  fileChange: 'file:external-change',
+  /** 每插件一份 JSON blob(~/.forsion/plugins-data/<id>.json);ctx.loadData/saveData 的落点。 */
+  pluginDataRead: 'plugins:data-read',
+  pluginDataWrite: 'plugins:data-write',
   setPageFrontmatter: 'page:set-frontmatter',
   listPageProps: 'vault:page-props',
   renamePageFile: 'page:rename-file',
@@ -456,6 +461,13 @@ export interface AmadeusApi {
   onStructureChange(cb: () => void): () => void
   /** Subscribe to external `.db` content changes (e.g. the agent editing calendars on disk). Returns unsubscribe. */
   onDbExternalChange(cb: (dbPath: string) => void): () => void
+  /** 订阅**非 .md / .db** 文件的外部内容改动(vault 相对路径)。`ctx.app.watchFile` 的底座 ——
+   *  插件把片段库写成 `.js` 放在库里,外部编辑器改完要能热重载。可选:非桌面宿主缺位。 */
+  onFileExternalChange?(cb: (filePath: string) => void): () => void
+  /** 读某插件的私有 JSON blob(不存在 → null)。可选:非桌面宿主缺位,ctx.loadData 降级 null。 */
+  readPluginData?(pluginId: string): Promise<string | null>
+  /** 原子写某插件的私有 JSON blob。可选:非桌面宿主缺位,ctx.saveData 静默 no-op。 */
+  writePluginData?(pluginId: string, text: string): Promise<void>
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
   /** Open the vault's plugins folder in the OS file manager (creating it if needed). */

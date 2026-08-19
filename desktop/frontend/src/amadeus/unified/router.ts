@@ -5,6 +5,7 @@
 // unified —— **只读打开不改写**(spec §5.1):落盘发生在首次真实编辑的保存,由
 // UnifiedPage 的 lastSaved 基线保证(初始序列化差异不触发写)。
 import { classifyPageSource, upgradeV3Source } from '@amadeus-shared/compiler/v4'
+import { isPluginCanvasSource, migratePluginCanvas } from '@amadeus-shared/compiler/canvasMigrate'
 
 export type RouteDecision =
   | { editor: 'block' }
@@ -22,6 +23,14 @@ export function routeNote(path: string, raw: string | null, upgradeV3: boolean, 
   const cls = classifyPageSource(raw)
   if (cls === 'v4-plain' || cls === 'v4-structured') return { editor: 'unified', initial: raw, diskRaw: raw, upgradedFromV3: false }
   if (cls === 'v3' && upgradeV3) {
+    // 画布插件格式(裸 `canvas:` 键)有专用迁移:通用升级对平凡布局会剥掉全部锚,而卡片正是靠锚
+    // 定位的 —— 走通用路径 = 坐标当场全变孤儿,所以 upgradeV3Source 一直在拒绝这类文件。
+    // 迁移失败(读不懂 / 有多列行)照旧留 v3,一个字节不动。
+    if (isPluginCanvasSource(raw)) {
+      const mg = migratePluginCanvas(path, raw, now)
+      if (mg.ok) return { editor: 'unified', initial: mg.src, diskRaw: raw, upgradedFromV3: true }
+      return { editor: 'block' }
+    }
     const up = upgradeV3Source(path, raw, now)
     if (up.ok) return { editor: 'unified', initial: up.src, diskRaw: raw, upgradedFromV3: true }
   }

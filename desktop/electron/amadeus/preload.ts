@@ -72,6 +72,15 @@ const api: AmadeusApi = {
       ipcRenderer.removeListener(IPC.dbChange, listener)
     }
   },
+  onFileExternalChange: (cb) => {
+    const listener = (_event: IpcRendererEvent, filePath: string): void => cb(filePath)
+    ipcRenderer.on(IPC.fileChange, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.fileChange, listener)
+    }
+  },
+  readPluginData: (pluginId) => ipcRenderer.invoke(IPC.pluginDataRead, pluginId),
+  writePluginData: (pluginId, text) => ipcRenderer.invoke(IPC.pluginDataWrite, pluginId, text),
   listPlugins: () => ipcRenderer.invoke(IPC.listPlugins),
   openPluginsFolder: () => ipcRenderer.invoke(IPC.openPluginsFolder),
   scaffoldSamplePlugin: () => ipcRenderer.invoke(IPC.scaffoldPlugin),
