@@ -84,13 +84,19 @@ export async function forsionRefreshToken(
   cloudUrl: string,
   token: string,
   timeoutMs = 8000,
+  /** 端/版本(`desktop/2.7.9`)——服务端把每次续期记成一次「上线」,admin 活跃度按这个分端。
+   *  由调用方传(这里不 import electron 的 app:本模块的单测跑在纯 node 下)。 */
+  clientTag?: string,
 ): Promise<string | null> {
   if (!cloudUrl || !token) return null
   const base = cloudUrl.replace(/\/+$/, '')
   try {
     const r = await fetch(`${base}/api/auth/refresh`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(clientTag ? { 'X-Forsion-Client': clientTag } : {}),
+      },
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (!r.ok) return null

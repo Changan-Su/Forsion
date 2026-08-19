@@ -52,13 +52,22 @@ export function forsionWebOrigin(): string {
  * 服务端 jti 沿用,单枚吊销 / 退出所有设备语义不变。
  * 失败一律静默(离线 / 老版本 server 没这端点 / 这枚已失效),绝不在这里清凭证——401 兜底在 mobileShim。
  */
+/** 端/版本(`mobile/2.7.9`):服务端把每次续期记成一次「上线」,admin 活跃度按这个分端。取不到就不带。 */
+async function clientTag(): Promise<string | undefined> {
+  try {
+    const v = (await App.getInfo()).version
+    return v ? `mobile/${v}` : undefined
+  } catch { return undefined }
+}
+
 export async function refreshStoredToken(): Promise<void> {
   const token = await getStoredToken()
   if (!token) return
   try {
+    const tag = await clientTag()
     const r = await fetch(`${apiBase()}/auth/refresh`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, ...(tag ? { 'X-Forsion-Client': tag } : {}) },
     })
     if (!r.ok) return
     const j = await r.json().catch(() => null)

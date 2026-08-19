@@ -128,6 +128,52 @@ export const deleteMessages = (cfg: TanguDesktopConfig, sessionId: string, ids: 
     { method: 'POST', body: JSON.stringify({ ids }) },
   )
 
+/** 会话内容级检索的一条命中(P3):与模型侧 search_sessions 共用引擎里的同一条 SQL。 */
+export interface SessionSearchHit {
+  id: string
+  title: string
+  summary: string
+  archived: boolean
+  /** YYYY-MM-DD(引擎已按方言归一)。 */
+  updatedAt: string
+  /** 正文命中时带:可据 messageId 跳到那条消息。标题/摘要命中的行没有。 */
+  hit?: { messageId: string; role: string; timestamp: number; snippet: string }
+}
+/** q 为空 = 最近会话列表(空壳会话不进榜);`"带空格短语"` 算一个词。
+ *  客户端先截 500 字:粘一大段进搜索框会撑爆 URL,Node 在 handler 之前就 431(引擎侧另有词长闸)。
+ *  ⚠️ 按**码点**截(`[...q]`):`String.slice` 会把代理对劈开,`encodeURIComponent` 当场抛,
+ *  而这一抛发生在去抖定时器里、catch 还没挂上 → 搜索永远停在「正在搜索内容…」。 */
+export const searchSessions = (cfg: TanguDesktopConfig, q: string, opts?: { limit?: number; signal?: AbortSignal }) =>
+  request<{ hits: SessionSearchHit[] }>(
+    cfg,
+    // ⚠️`app_id` 必带(codex 2026-08-17 P2):路由 `resolveProfile(req.query.app_id)` 缺省会回落到
+    // **基线 application**。云端/多 profile 后端的默认 profile 不是 `tangu` 时,搜的就成了别的应用的
+    // 会话 —— 列表/新建(见上面 listSessions/createSession)一直都在传,只有搜索漏了。
+    `/agent/sessions/search?q=${encodeURIComponent([...q].slice(0, 500).join(''))}&limit=${opts?.limit ?? 20}`
+      + `&app_id=${encodeURIComponent(AGENT_APP_ID)}`,
+    opts?.signal ? { signal: opts.signal } : {},
+  ).then((r) => r.hits || [])
+
+/** 代码检查点(写工具落盘前的 pre-image;时间轴按 at 比,files 为绝对路径)。 */
+export interface CheckpointInfo {
+  runId: string
+  at: number
+  files: string[]
+  /** 快照过大未存字节 → 恢复不了,UI 需如实提示。 */
+  skipped: string[]
+}
+export const listCheckpoints = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ checkpoints: CheckpointInfo[] }>(
+    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
+  ).then((r) => r.checkpoints || [])
+
+/** 把代码恢复到 `at` 时刻(该时刻之后所有写工具改动按最早 pre-image 回滚)。 */
+export const restoreCheckpoint = (cfg: TanguDesktopConfig, sessionId: string, at: number) =>
+  request<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
+    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
+    { method: 'POST', body: JSON.stringify({ at }) },
+  )
+
 export const getSessionConfig = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ agent_config: AgentConfig }>(
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/config`,
@@ -138,6 +184,22 @@ export const putSessionConfig = (cfg: TanguDesktopConfig, sessionId: string, con
     method: 'PUT',
     body: JSON.stringify(config),
   }).then((r) => r.agent_config)
+
+// ── custom 审批档规则(H2:此前只能手写 ~/.tangu/config.json)。规则是**全局**的(跨会话),
+//    档位才是按会话;引擎每次工具调用现读 config.json → 保存后下一次调用即生效。
+export interface ApprovalRules {
+  base: 'readonly' | 'auto-edit' | 'full-auto'
+  allow: string[]
+  ask: string[]
+  deny: string[]
+}
+export const getApprovalRules = (cfg: TanguDesktopConfig) =>
+  request<ApprovalRules>(cfg, '/agent/approval-rules')
+export const putApprovalRules = (cfg: TanguDesktopConfig, rules: Partial<ApprovalRules>) =>
+  request<{ ok: boolean; rules: ApprovalRules }>(cfg, '/agent/approval-rules', {
+    method: 'PUT',
+    body: JSON.stringify(rules),
+  }).then((r) => r.rules)
 
 /** 本会话累计 token 消耗(跨 run 求和)+ 最近一次的上下文占用(重载会话后恢复上下文圈用)。 */
 export const getSessionUsage = (cfg: TanguDesktopConfig, sessionId: string) =>

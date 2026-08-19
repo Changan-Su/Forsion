@@ -5,6 +5,7 @@ import { windowKind } from './windowKind'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
 import { useRecentViews } from './recentViews'
+import { planChatRestore } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref } from './spaces'
 import { loadUserSpaces, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
@@ -41,6 +42,7 @@ import { setMobileUiCommand, MOBILE_UI_KEY } from './mobileUiCommand'
 import { initUiZoom } from './uiZoom'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from './activityViewCommand'
 import { isSmoothCaretOn, setSmoothCaretEnabled } from './smoothCaret'
+import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
 import { SMOOTH_CARET_KEY } from './types'
 import { ActivityLogView } from './views/ActivityLogView'
 import { AutomationListView } from './views/automation/AutomationListView'
@@ -219,19 +221,32 @@ export function installEngine(): void {
 
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。
   // 时序:点会话列表是 setActiveId → openView,订阅同步 fire 时目标 chat leaf 可能尚未就位/激活,
-  // 推迟一拍(microtask)再读 focusedChatLeafId。back/forward 复原:restore() 同步触发本订阅时
-  // go() 的 navigating 闸仍未放开(其 finally 注册晚于订阅排队),microtask 里 record 仍被闸 ✓。
+  // 推迟一拍(microtask)再问当前活动主 leaf。back/forward 复原:restore() 同步触发本订阅时
+  // go() 的 navDepth 仍未回零(其 finally 注册晚于订阅排队),microtask 里 record 仍被闸 ✓。
+  // ⚠️ 归属必须是**主区活动 leaf**,不能用 focusedChatLeafId:它跟着「最后被激活的聊天」跑,而侧栏那份
+  //    常驻陪伴聊天一被点就把它抢走 —— 历史记进侧栏的栈,箭头只读主区活动 tab 的栈 → 箭头恒灰(实报的
+  //    「有时候失效」)。侧栏聊天自身不记历史(用户 2026-08-17 拍板:谁都不记)。
   useApp.subscribe((s, p) => {
     const id = s.activeId
     if (!id || id === p.activeId) return
     queueMicrotask(() => {
-      const leafId = ws().focusedChatLeafId
-      // 固定会话 leaf(followActive:false,新标签/分屏各自独立会话)不被「跟随」引擎回拽成主聊天。
-      const leaf = leafId ? ws().api?.getPanel(leafId) : null
-      const pinned = !!leaf && ((leaf.params ?? {}) as { followActive?: boolean }).followActive === false
+      // ⚠️ 移动单列壳 `api` 恒 null(同 amadeusViews 那条 leafById 告警)→ 必须退回 focusedChatLeafId,
+      //    否则安卓返回键再也走不动会话(手机没有侧栏聊天,抢不走它,上面那个坑在单列壳里不存在)。
+      //    check:parity 抓不到这种「不是类型错、也不崩,只是静默少功能」。
+      const api = ws().api
+      const am = api ? activeMainPanel(api) : null
+      const leafId = api
+        ? (am && ((am.params ?? {}) as { __type?: string }).__type === 'chat' ? am.id : null)
+        : ws().focusedChatLeafId
       recordNav(leafId, `chat:${id}`, () => {
-        app().setActiveId(id)
-        if (leafId && !pinned) ws().navigateLeaf(leafId, 'chat', { followActive: true, reuseKey: 'primary' })
+        // 状态在**复原当时**现读:主聊天可能已被冻成钉住档(见 sessionNav.freezeMainPrimary)。
+        const w = ws()
+        const cur = leafId ? w.leafById(leafId) : null
+        switch (planChatRestore(cur)) {
+          case 'follow': app().setActiveId(id); break
+          case 'pin': cur!.setParams({ sessionId: id }); break
+          case 'navigate': w.navigateLeaf(leafId!, 'chat', { sessionId: id, followActive: false }); break
+        }
       })
     })
     const title = s.sessions.find((x) => x.id === id)?.title
@@ -255,12 +270,25 @@ export function installEngine(): void {
     const params = (p?.params ?? {}) as Record<string, unknown>
     const type = typeof params.__type === 'string' ? params.__type : ''
     const fileParam = RECENT_FILE_PARAM[type]
+    // per-tab 导航历史(2026-08-17):PDF/白板/多维表/图片/仪表盘/插件文件/工作区预览此前一条都不记,
+    // 于是这类标签的箭头恒灰,同一标签里「笔记→PDF→笔记」中间那步也会被跳过。restore 只碰本 leaf。
+    // ⚠️ 记在 lastRecentKey 去重**之前**:那是「最近使用」用的全局单值,拿它挡会漏掉「同一个文件在
+    //    第二个标签里打开」——那个新标签的栈会一条都没有(=箭头恒灰,又一种「失效」)。
+    const navKey = fileParam && typeof params[fileParam] === 'string' ? `file:${type}:${params[fileParam] as string}`
+      : (RECENT_VIEW_TYPES.has(type) || type.startsWith('plugin:')) ? `view:${type}` : null
+    if (p && navKey) {
+      const restoreParams = fileParam ? { [fileParam]: params[fileParam] } : {}
+      recordNav(p.id, navKey, () => useWorkspace.getState().navigateLeaf(p.id, type, restoreParams))
+    }
     if (fileParam && typeof params[fileParam] === 'string') {
       const path = params[fileParam] as string
       const key = `file:${type}:${path}`
       if (key === lastRecentKey) return
       lastRecentKey = key
-      useRecentViews.getState().record({ key, kind: 'file', id: path, viewType: type, title: path.split(/[\\/]/).pop() || path })
+      // 插件复合后缀文件与树上/tab 同口径剥全后缀(Foo.canvas.md → Foo),别的文件保持原样文件名。
+      const ft = type === 'amadeus-plugin-file' ? matchFileType(path) : undefined
+      const title = ft ? fileTypeBaseName(path, ft.extensions) : path.split(/[\\/]/).pop() || path
+      useRecentViews.getState().record({ key, kind: 'file', id: path, viewType: type, title })
     } else if (RECENT_VIEW_TYPES.has(type) || type.startsWith('plugin:')) {
       const key = `view:${type}`
       if (key === lastRecentKey) return

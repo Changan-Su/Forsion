@@ -12,11 +12,12 @@
  * 历史实证:installSmoothCaret 漏装过一轮(用户实报「移动端没生效」);2026-07-30 的
  * applyUiFonts / installScrollFade 落地当天就只进了 desktop。
  *
- * 本脚本做四件事(纯正则,不引 TS parser):
+ * 本脚本做五件事(纯正则,不引 TS parser):
  *   A. 启动序列对齐  desktop/frontend/src/main.tsx  ↔ mobile/src/mobileEntry.tsx
  *   B. 根组件对齐    desktop/frontend/src/Root.tsx  ↔ mobile/src/MobileRoot.tsx
  *   C. 外壳替换边界  lcl/engine/Shell.tsx ↔ (MobileRoot.tsx ∪ SingleColumnHost.tsx)
  *   D. 门控台账      bootstrapEngine.tsx 里的 host 门控名单必须与 KNOWN_GATES 一致
+ *   E. MainTab 字段  lcl/engine/dockviewStore.ts ↔ lcl/engine/singleColumnStore.ts(两份接口同字段)
  *
  * C 是 2026-07-30 Codex 评审补的:移动端 vite.config 把 `Shell.tsx` 整个换成空壳,于是 Shell 承载的
  * 东西(命令面板、热键、engine.css)一起消失,而 A/B 两对都看不见这条边界。实证:ribbon 的 `rb-cmd`
@@ -184,12 +185,49 @@ if (blind.length || a.deskCount < 10 || b.deskCount < 10 || d.found.size < 5) {
   process.exit(2)
 }
 
+/** E. 两份 MainTab 接口的字段集合必须一致 —— 桌面用 dockviewStore,移动端整份换成 singleColumnStore
+ *  (vite alias 换模块)。往桌面那份加字段、移动端不加,是**静默少功能**:读者读的是可选属性,
+ *  typecheck 不红;A-D 段只扫 main/Root/Shell,也照不到 store。2026-08-14 的 filePath/front
+ *  就是这么漏过一轮的(侧栏对话「引用主区文件」在移动端整条失效)。 */
+function checkMainTab(problems) {
+  const f1 = path.join(GENESIS, 'lcl/engine/dockviewStore.ts')
+  const f2 = path.join(GENESIS, 'lcl/engine/singleColumnStore.ts')
+  const fields = (file) => {
+    const src = fs.readFileSync(file, 'utf8')
+    const m = /export interface MainTab \{([\s\S]*?)\n?\}/.exec(src)
+    if (!m) return null
+    // 两份写法不同:桌面那份一行一个字段(靠换行分隔),移动端那份是分号挤一行 —— 都要认。
+    // 先剥注释:字段名正则本身不会命中中文,但剥掉更稳。
+    const body = m[1].replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    return new Set([...body.matchAll(/(?:^|[;{])\s*([a-zA-Z_][a-zA-Z0-9_]*)\??\s*:/gm)].map((x) => x[1]))
+  }
+  const a = fields(f1)
+  const b = fields(f2)
+  if (!a || !b || a.size < 4) {
+    console.error('❌ E 解析失效:抽不到 MainTab 接口 —— 先修本脚本,别当绿灯。')
+    process.exit(2)
+  }
+  const missing = [...a].filter((k) => !b.has(k))
+  const extra = [...b].filter((k) => !a.has(k))
+  if (missing.length || extra.length) {
+    problems.push({
+      label: 'E. MainTab 字段两端不一致(桌面 dockviewStore ↔ 移动 singleColumnStore)',
+      deskFile: f1,
+      mobFile: f2,
+      missing: [...missing.map((k) => `移动端缺:${k}`), ...extra.map((k) => `移动端多:${k}`)],
+    })
+  }
+  return { desk: a.size, mob: b.size }
+}
+const e = checkMainTab(problems)
+
 const rel = (p) => path.relative(GENESIS, p)
 console.log('=== 三端功能同步检查 (check:parity) ===')
 console.log(`A. 启动序列  desktop ${a.deskCount} 项 / mobile ${a.mobCount} 项`)
 console.log(`B. 根组件    desktop ${b.deskCount} 项 / mobile ${b.mobCount} 项`)
 console.log(`C. 外壳边界  desktop ${c.deskCount} 项 / mobile ${c.mobCount} 项`)
 console.log(`D. host 门控 ${d.found.size} 处,已登记 ${Object.keys(KNOWN_GATES).length} 条`)
+console.log(`E. MainTab 字段 desktop ${e.desk} 个 / mobile ${e.mob} 个`)
 if (d.stale.length) console.log(`   ⚠ KNOWN_GATES 里有 ${d.stale.length} 条已在代码中消失(可删):${d.stale.join(', ')}`)
 
 if (!problems.length) {

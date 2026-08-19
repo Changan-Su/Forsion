@@ -138,13 +138,17 @@ const check = (name, ok, detail) => {
     return el ? el.getBoundingClientRect().toJSON() : null
   }, sel)
 
-  // 模式药丸(盾牌):它的菜单 min-width:320px,比 390 屏减掉边距后的可用宽还宽 → 必须收窄 + 贴边。
-  const modePill = page.locator('.t2c-row .t2c-pill').first()
+  // 模式药丸(盾牌):打开后与 224px 菜单等宽、同右缘,同时仍要落在 390px 屏内。
+  // 「＋」现在也是 .t2c-pill；必须按语义类找模式胶囊，不能再拿第一个 pill 猜。
+  const modePill = page.locator('.t2c-row .mode-pill-btn').first()
   if (await modePill.count()) {
     await modePill.click()
     await page.waitForTimeout(350)
     const r = await rectOf('.composer-menu--mode')
-    check('B1 模式菜单整块在屏内(min-width:320 在 390 屏上会溢出)', inScreen(r), r ? `${r.left.toFixed(1)}..${r.right.toFixed(1)} w=${r.width.toFixed(1)}` : '没打开')
+    const p = await rectOf('.mode-pill-btn')
+    check('B1 模式胶囊与菜单等宽对齐且整块在屏内',
+      inScreen(r) && p && Math.abs(p.width - r.width) < 1 && Math.abs(p.right - r.right) < 1,
+      r && p ? `pill=${p.left.toFixed(1)}..${p.right.toFixed(1)} menu=${r.left.toFixed(1)}..${r.right.toFixed(1)} w=${r.width.toFixed(1)}` : '没打开')
     await page.keyboard.press('Escape')
     await page.waitForTimeout(200)
   } else check('B1 找得到模式药丸', false, '选择器失效,断言落空了')
@@ -163,7 +167,7 @@ const check = (name, ok, detail) => {
     await page.waitForTimeout(350)
     const menu = await rectOf('.composer-menu--model')
     check('B2 模型菜单整块在屏内', inScreen(menu), menu ? `${menu.left.toFixed(1)}..${menu.right.toFixed(1)}` : '没打开')
-    await page.locator('.composer-menu--model .cm-row').first().click()
+    await page.locator('.composer-menu--model .cm-model-row').click()
     await page.waitForTimeout(350)
     const sub = await rectOf('.cm-sub')
     check('B3 ⚠️ 子面板整块在屏内(截图里被切掉的就是它)', inScreen(sub), sub ? `${sub.left.toFixed(1)}..${sub.right.toFixed(1)} w=${sub.width.toFixed(1)}` : '没打开')

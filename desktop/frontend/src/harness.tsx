@@ -24,7 +24,7 @@ import { ModelPill } from './components/ModelPill'
 import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
-import { addRibbonIcon, installHotkeys, registerView, useRibbonStore, useWorkspace } from '@lcl/engine'
+import { addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
@@ -32,6 +32,8 @@ import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
 import { UnifiedSpikeHarness } from './amadeus/unified/UnifiedSpike'
+import { SEG_SLOT } from './amadeus/unified/CanvasModeSeg'
+import { useUiOverlay } from './amadeusOverlayStore'
 
 // ExcalidrawEmbed 平时干这件事;harness 直挂画布,得自己设(否则字体去 CDN 拉,CSP 拦)。
 ;(window as unknown as { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = new URL('excalidraw/', document.baseURI).href
@@ -149,7 +151,7 @@ const CV_FILE = 'Harness.canvas.md'
 
 function CanvasPlugHarness() {
   const loaded = usePluginStore((s) => s.activeIds.length > 0)
-  const leaf = { id: 'cv-harness', params: { filePath: CV_FILE }, setTitle: () => {} }
+  const leaf = { id: 'cv-harness', params: { filePath: CV_FILE }, setTitle: () => {}, setParams: () => {} }
   return (
     <div className="amadeus-root am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0 }}>
       {loaded ? <AmadeusPluginFileView {...({ leaf, params: leaf.params } as unknown as ViewProps)} /> : <div>等待注入插件产物…</div>}
@@ -332,7 +334,42 @@ if (new URLSearchParams(location.search).has('caret')) {
 
 if (new URLSearchParams(location.search).has('dock')) {
   // ⚠️必须按 tag 分开计:两个视图共用一个 Body 时,展侧栏本身就会 +1,主区「重挂」就成了假阳性。
-  const probe = { mounts: {} as Record<string, number>, mainW: () => 0, toggle: (side: 'left' | 'right') => useWorkspace.getState().toggleSidebar(side) }
+  const probe = {
+    mounts: {} as Record<string, number>,
+    mainW: () => 0,
+    toggle: (side: 'left' | 'right') => useWorkspace.getState().toggleSidebar(side),
+    // 多标签契约(scripts/chat-multitab.check.cjs):singleton 视图碰上显式 newTab 必须让路。
+    // 用 singlev 这个只在仪器里注册的单例视图验引擎本身,不必拖上真 chat 的后端依赖。
+    open: (type: string, params: Record<string, unknown> = {}, newTab = false): string | null =>
+      useWorkspace.getState().openView(type, params, 'main', newTab ? { newTab: true } : undefined)?.id ?? null,
+    panels: (): Array<{ id: string; type?: string; params: Record<string, unknown> }> =>
+      (useWorkspace.getState().api?.panels ?? []).map((p) => {
+        const params = (p.params ?? {}) as Record<string, unknown>
+        return { id: p.id, type: params.__type as string | undefined, params }
+      }),
+    // per-tab 导航史(scripts/nav-history.check.cjs)。navv 视图的 label 参数当「页面」,restore 只碰
+    // 自己那个 leaf —— 真 chat/笔记要后端和库,进不了这个仪器,但引擎那层(每 tab 一份栈、箭头打谁、
+    // 异步 restore 期间的重记闸)与产品完全同一份代码。restore 故意异步:真 restore 是 loadPage。
+    nav: {
+      visit: (leafId: string, label: string): void => {
+        const put = (): Promise<void> => {
+          useWorkspace.getState().leafById(leafId)?.setParams({ label })
+          return new Promise((r) => setTimeout(r, 40))
+        }
+        void put()
+        recordNav(leafId, `p:${label}`, put)
+      },
+      split: (): string | null => useWorkspace.getState().splitActive('right')?.id ?? null,
+      activate: (leafId: string): void => useWorkspace.getState().activateLeaf(leafId),
+      stack: (leafId: string): { keys: string[]; idx: number } => {
+        const st = useNav.getState().stacks[leafId]
+        return { keys: st?.entries.map((e) => e.key) ?? [], idx: st?.idx ?? -1 }
+      },
+      labels: (): Record<string, string> => Object.fromEntries(
+        (useWorkspace.getState().api?.panels ?? []).map((p) => [p.id, String((p.params as { label?: unknown } | undefined)?.label ?? '')]),
+      ),
+    },
+  }
   ;(window as unknown as { __dock: typeof probe }).__dock = probe
   // 内容量必须真实:空 div 重排不要钱,量不出「展侧栏时主区卡一下」。主区喂长文(每段长度不同,
   // 才会真的逐帧重新折行),侧栏喂一坨行(模拟文件树/会话列表那种不便宜的挂载)。
@@ -351,6 +388,12 @@ if (new URLSearchParams(location.search).has('dock')) {
     const rows = lines(n, seed)
     registerView({ type, displayName: name, icon: Square, factory: () => <Body tag={name} rows={rows} /> })
   }
+  // 单例视图替身(真 chat 要后端才有会话,进不了这个仪器)——验的是 openView 里 singleton × newTab 那条闸。
+  registerView({ type: 'singlev', displayName: 'single', icon: Square, singleton: true, factory: () => <Body tag="single" rows={lines(10, 5)} /> })
+  // 导航史用的「页面」替身:参数 label 即当前页,后退/前进改的就是它(断言直接读 DOM,不信 store 自证)。
+  registerView({ type: 'navv', displayName: 'nav', icon: Square, factory: ({ params }) => (
+    <div className="navv" data-label={String(params.label ?? '')} style={{ padding: 12 }}>{String(params.label ?? '')}</div>
+  ) })
   useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'sidev', params: {} }], right: [{ type: 'sidev', params: {} }] } })
   probe.mainW = () => {
     const p = useWorkspace.getState().api?.panels.find((x) => ((x.params ?? {}) as { __loc?: string }).__loc === 'main')
@@ -372,19 +415,42 @@ if (new URLSearchParams(location.search).has('dock')) {
   ;(window as unknown as { __rb: typeof useRibbonStore }).__rb = useRibbonStore
   createRoot(document.getElementById('root')!).render(<RibbonHarness />)
 } else if (new URLSearchParams(location.search).has('modelpill')) {
-  // 模型药丸两级菜单:真组件裸挂,肉眼/截图核对观感(几何契约由 scripts/model-menu.check.cjs 钉)。
+  // 模型 / Effort 菜单:真组件裸挂,肉眼/截图核对三行结构与 Max 特效(几何契约由 scripts/model-menu.check.cjs 钉)。
+  if (new URLSearchParams(location.search).has('dark')) {
+    document.documentElement.dataset.mode = 'dark'
+    document.documentElement.classList.add('dark')
+  }
   const GROUPS = [
     { label: 'zhipu', options: [{ id: 'glm-4.7', name: 'GLM-4.7' }, { id: 'glm-4.6', name: 'GLM-4.6' }, { id: 'glm-air', name: 'GLM-4.5-Air' }] },
     { label: 'deepseek', options: [{ id: 'ds-v32', name: 'DeepSeek-V3.2-Exp' }, { id: 'ds-r1', name: 'DeepSeek-R1' }] },
   ]
   const PillHarness = (): React.ReactElement => {
     const [id, setId] = useState('glm-4.7')
-    const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>('high')
+    const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(new URLSearchParams(location.search).has('max') ? 'max' : 'high')
+    const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
+    const modelsResponse = {
+      models: [
+        { id: 'glm-4.7', name: 'GLM-4.7', provider: 'zhipu', source: 'direct' as const, modelType: 'llm' as const, supportsVision: true },
+        { id: 'glm-4.6', name: 'GLM-4.6', provider: 'zhipu', source: 'direct' as const, modelType: 'llm' as const, supportsVision: false },
+        { id: 'ds-v32', name: 'DeepSeek-V3.2-Exp', provider: 'deepseek', source: 'forsion' as const, modelType: 'llm' as const },
+        { id: 'gpt-image-1', name: 'GPT Image 1', provider: 'openai', source: 'forsion' as const, modelType: 'image_gen' as const },
+      ],
+      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7',
+    }
     return (
       <div className="am-app tangu-lovable" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 24 }}>
         <div className="t2c-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button className="t2c-pill">模式</button>
-          <ModelPill modelId={id} groups={GROUPS} onSelect={setId} thinkingLevel={lv} onThinkingChange={setLv} />
+          <ModelPill
+            modelId={id}
+            groups={GROUPS}
+            onSelect={setId}
+            thinkingLevel={lv}
+            onThinkingChange={setLv}
+            modelsResponse={modelsResponse}
+            defaultModelIds={defaults}
+            onDefaultModelChange={(slot, modelId) => setDefaults((d) => ({ ...d, [slot]: modelId }))}
+          />
         </div>
       </div>
     )
@@ -491,7 +557,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     manifest: {
       schema: PAGE_SCHEMA,
       id: 'harness-cv',
-      title: 'CV Harness',
+      // 复现真实管线形态:导入的插件文件 title 就是带复合段的 'Harness.canvas' ——
+      // NoteTitle 若被 manifest.title 短路,e2e 的「标题无后缀残段」断言才抓得到(评审 P1 假绿教训)。
+      title: 'Harness.canvas',
       createdAt: iso,
       updatedAt: iso,
       compiler: { version: 'harness' },
@@ -688,22 +756,95 @@ if (new URLSearchParams(location.search).has('dock')) {
   }
   void import('./amadeus/unified/UnifiedPage').then(({ UnifiedPage }) => {
     // 改名重挂载宿主壳:镜像 amadeusViews 的 leaf 行为(onRenamed → 换参数,实例随 key 重建)。
-    function UPageHost(): React.ReactElement {
-      const [st, setSt] = useState({ path: 'Unified.md', initial: seedMd })
+    // ⚠️ 顶栏胶囊必须拿**宿主自己的笔记路径**喂 CanvasModeSeg —— 生产传的是 `barPath`,组件内
+    //    要拿它跟 store 自报的 path 比对。第一版图省事把 store 的 path 又喂回去,那道闸就恒真:
+    //    「切到另一篇却显示上一篇的模式」「路径对不上导致胶囊不显示」两类真 bug 一个都测不到。
+    function UPageHost({ file }: { file?: string }): React.ReactElement {
+      const [st, setSt] = useState({ path: file ?? 'Unified.md', initial: vault.get(file ?? 'Unified.md') ?? seedMd })
+      // ⚠️ `&udelay` = **顶栏晚于编辑器到场**的时序(用户 2026-08-18 实报:开机还原到一篇 md 笔记时
+      //    胶囊必不显示,点过别的笔记才出来)。生产里顶栏整块挂在 `barPath` 这道门后面,而 barPath
+      //    要等一次异步分类才落定 —— 也就是说**插槽可能比 UnifiedPage 晚出现**。默认壳是两者同时到,
+      //    这一档专门把插槽推后,钉 CanvasSegPortal 的 MutationObserver 那条路(不然它就是死代码)。
+      const [barReady, setBarReady] = useState(!new URLSearchParams(location.search).has('udelay'))
+      useEffect(() => {
+        if (barReady) return
+        const t = setTimeout(() => setBarReady(true), 120)
+        return () => clearTimeout(t)
+      }, [barReady])
       return (
-        <UnifiedPage
-          key={st.path}
-          path={st.path}
-          initial={st.initial}
-          probe={upageProbe}
-          onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
-        />
+        <>
+          {barReady && (
+            <div className="amx-toolbar">
+              <span className={SEG_SLOT} />
+              <button className="amx-mode-btn" type="button">⋯</button>
+            </div>
+          )}
+          <UnifiedPage
+            key={st.path}
+            path={st.path}
+            initial={st.initial}
+            probe={upageProbe}
+            onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
+          />
+          <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
+        </>
       )
     }
+    // ── ?uscale=<k>[&ucards=2]:PM-under-transform Spike(Canvas 双模式方案 §7 go/no-go)。
+    //    把生产 UnifiedPage 放进「画布卡片」的**稳态**形态:绝对定位 + 每卡自身 transform: scale(k)
+    //    (§5 两段式在手势结束后就是这个样子)。验的是 scale 底下 posAtCoords / 把手定位 / 拖拽落点
+    //    /IME 落字还成不成立 —— 现行补偿走 zoomOf(=currentCSSZoom),transform 不进那个量。
+    //    见 scripts/unified-scale.check.cjs。
+    const scale = Number(new URLSearchParams(location.search).get('uscale') ?? '')
+    const cards = Number(new URLSearchParams(location.search).get('ucards') ?? '1') || 1
+    if (scale > 0) {
+      vault.set('Unified2.md', '# 二号卡\n\n卡二段一。\n\n卡二段二。\n')
+      createRoot(document.getElementById('root')!).render(
+        <div data-tag="stage" style={{ position: 'relative', width: '100%', height: '100vh', overflow: 'hidden' }}>
+          {Array.from({ length: cards }, (_, i) => (
+            // 后一张 DOM 序在后 = 压在前一张上(重叠命中用);位移刻意让两卡有交叠区。
+            <div
+              key={i}
+              data-tag="card"
+              data-card={i}
+              className="amadeus-root am-app"
+              style={{
+                position: 'absolute',
+                // 位移刻意小:两卡要在**正文区**真交叠(仪器 S5 先证采样点同时落在两张卡里,
+                // 位移大了就变成「相邻不重叠」,命中断言当场变假绿)。
+                left: 40 + i * 60,
+                top: 40 + i * 40,
+                width: 640,
+                padding: 16,
+                background: 'var(--bg-0, #fff)',
+                border: '1px solid #8884',
+                transform: `scale(${scale})`,
+                transformOrigin: '0 0',
+              }}
+            >
+              <UPageHost file={i ? 'Unified2.md' : 'Unified.md'} />
+            </div>
+          ))}
+        </div>,
+      )
+      return
+    }
+    // ── &upane:**生产壳镜像**(2026-08-17)。默认那个 720px 居中盒子测不了画布满铺 ——
+    //    满铺要脱出纸面铺满滚动容器 `.amx-pane`,而顶栏 `.amx-toolbar` 是 sticky 且必须**继续可点**
+    //    (满铺层不许盖住它)。类名与 amadeusViews 的 EditorScope 一致。
+    //    做成 opt-in 而不是改默认壳:`unified-page` / `unified-columns` 两套仪器也吃 ?upage,
+    //    换掉默认纸面宽度会连带动它们的几何。
+    const upane = new URLSearchParams(location.search).has('upane')
     createRoot(document.getElementById('root')!).render(
-      <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
-        <UPageHost />
-      </div>,
+      upane ? (
+        <div className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+          <UPageHost />
+        </div>
+      ) : (
+        <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+          <UPageHost />
+        </div>
+      ),
     )
   })
 } else if (new URLSearchParams(location.search).has('unified')) {
@@ -744,5 +885,31 @@ if (new URLSearchParams(location.search).has('dock')) {
   })
   createRoot(document.getElementById('root')!).render(<DndHarness />)
 } else {
+  // 默认 harness = 真编辑器。顺带开一个插件注入口:**编辑器扩展类**插件(ctx.registerEditorExtension)
+  // 没有 registerView,`?plugview` 那套挂不了它 —— 它要验的东西全在编辑器里(打字展开、按键接管、
+  // 装饰渲染)。同 `?plugview`,走的是真 setup 路径 new Function('ctx', code)。
+  // e2e 是页面加载完才注入的,那时编辑器已经建好 —— 靠的正是「扩展注册表代次变了就重建编辑器」
+  // 这条机制(useEditor 的 deps 挂着代次)。所以注入后要等一拍再断言,别读到重建中途态。
+  // 见 scripts/latex-suite.e2e.cjs。
+  ;(window as unknown as { __ep: Record<string, unknown> }).__ep = {
+    loadPlugin(code: string, meta?: { id?: string; name?: string }) {
+      usePluginStore.getState().init([
+        {
+          id: meta?.id || 'harness-plugin',
+          name: meta?.name || meta?.id || 'harness-plugin',
+          version: 'harness',
+          setup: (ctx) => {
+            const fn = new Function('ctx', code) as (c: unknown) => unknown
+            const d = fn(ctx)
+            return typeof d === 'function' ? (d as () => void) : undefined
+          },
+        },
+      ])
+    },
+    active: () => usePluginStore.getState().activeIds.slice(),
+    /** 插件自绘的设置面板(ctx.registerSettingsView)。台架没有插件详情页,e2e 自己挂一次 ——
+     *  面板里嵌的是真 CodeMirror,那半只有真 DOM 验得了(check.mjs 里是拿不到的)。 */
+    settingsViews: () => usePluginStore.getState().settingsViews.map((o) => o.item),
+  }
   createRoot(document.getElementById('root')!).render(<Harness />)
 }

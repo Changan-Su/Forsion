@@ -1232,6 +1232,18 @@ app.whenReady().then(async () => {
     return r.canceled || !r.filePaths.length ? null : r.filePaths[0]
   })
 
+  // Chat Box「添加文件或文件夹」：一个系统面板允许多选文件 / 目录，并把类型一并回给 renderer。
+  ipcMain.handle('dialog:pickPaths', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const opts = { properties: ['openFile' as const, 'openDirectory' as const, 'multiSelections' as const], title: '添加文件或文件夹' }
+    const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+    if (r.canceled || !r.filePaths.length) return []
+    return Promise.all(r.filePaths.map(async (path) => ({
+      path,
+      isDirectory: await stat(path).then((s) => s.isDirectory()).catch(() => false),
+    })))
+  })
+
   // 另存为文本文件(导出日志等):弹系统保存框,用户选位置后写盘。canceled → { ok:false }。
   ipcMain.handle('dialog:saveTextFile', async (_e, defaultName: string, content: string) => {
     if (typeof content !== 'string') return { ok: false, path: null }
@@ -1809,7 +1821,7 @@ app.whenReady().then(async () => {
     if (!shouldRefreshToken(token)) return
     const stored = await loadConfig()
     const base = stored.cloudUrl || creds.cloudUrl || ''
-    const fresh = await forsionRefreshToken(base, token, timeoutMs)
+    const fresh = await forsionRefreshToken(base, token, timeoutMs, `desktop/${app.getVersion()}`)
     // 留痕:日后「又被登出了」的第一个排查问题就是「续期到底跑没跑」,没日志只能靠猜。
     if (!fresh) { console.log('[auth] 滑动续期未成功(离线/老版本 server/这枚已失效),继续用旧 token'); return }
     // 竞态防线:换新在途期间可能已并发登录/登出换了凭证——绝不拿旧链条换来的 token 盖掉新的。

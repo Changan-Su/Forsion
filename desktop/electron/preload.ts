@@ -82,6 +82,8 @@ const api = {
   },
   /** 本机模式工作目录选择;取消返回 null。 */
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory'),
+  /** Chat Box 添加文件或文件夹；取消返回空数组。 */
+  pickPaths: (): Promise<Array<{ path: string; isDirectory: boolean }>> => ipcRenderer.invoke('dialog:pickPaths'),
   /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */
   saveTextFile: (defaultName: string, content: string): Promise<{ ok: boolean; path: string | null }> =>
     ipcRenderer.invoke('dialog:saveTextFile', defaultName, content),
