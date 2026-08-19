@@ -79,6 +79,13 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Atomically write a vault file's UTF-8 text by its exact vault-relative path (self-write ledger →
    *  the app's own saves don't bounce back as external changes). Creates the file if absent. */
   writeFile(path: string, text: string): Promise<void>
+  /** 订阅某个 vault 文件的**外部**内容改动(2026-08-15+),返回退订。用途:插件把配置/片段库写成
+   *  库里的一个文件,用户拿别的编辑器改完要能热重载。
+   *  ⚠️只报「内容变了」这一类事件 —— 新建/删除/改名不报(那是文件树的事)。
+   *  ⚠️自写不回声:经 `writeFile` 落的盘走自写账本,不会把自己的保存当外部改动弹回来。
+   *  ⚠️路径必须与 `readFile` 用的是同一个字符串(vault 相对、`/` 分隔);大小写按平台。
+   *  旧宿主 / 非桌面宿主没有:`const off = ctx.app.watchFile?.(p, cb)`,缺位时自己退化成轮询。 */
+  watchFile?(path: string, cb: () => void): () => void
   /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
    *  this returns that value, defaulting to the plugin's display name. Use it as the base for
@@ -307,6 +314,11 @@ export interface FileTypeContribution {
   /** Optional display label for the type. The file view titles its tab by the file's basename; this is a
    *  fallback (used when the basename is empty). */
   title?: string
+  /** frontmatter keys this type OWNS on its files (e.g. ['canvas'] for the canvas geometry key).
+   *  The host hides them from the note properties panel on matching files — they're plugin data,
+   *  hand-editing corrupts the view and a plain note has no such keys. Hidden ≠ droppable: the
+   *  panel still round-trips them verbatim on every properties edit. (2026-08-14) */
+  fmKeys?: string[]
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
@@ -365,6 +377,56 @@ export interface SettingContribution {
   description?: string
 }
 
+/** 插件自绘的设置面板(2026-08-15,Obsidian `PluginSettingTab` 的对位)。
+ *  `registerSetting` 那套「一行一个 number/boolean/text」只够调旋钮;需要列表编辑、多标签页、
+ *  内嵌代码编辑器的插件(片段库、规则表)装不下 —— 这里直接给一个裸 DOM 容器,插件自己画。
+ *
+ *  渲染在插件详情页的声明式设置表**下方**(两者可并存:旋钮交给宿主渲染,复杂面自绘)。
+ *  ⚠️宿主主题的 CSS 变量在容器上照常可用,但**没有任何样式重置** —— 自己带样式。 */
+export interface SettingsViewContribution {
+  /** 本插件内唯一(同 id 重注册即覆盖)。 */
+  id: string
+  /** 可选小标题;省略则不画标题行。 */
+  title?: string
+  /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
+   *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
+  mount(el: HTMLElement): void | (() => void)
+}
+
+/** 宿主交给编辑器扩展的 ProseMirror 工具箱(2026-08-15)。
+ *
+ *  外置插件是 `new Function('ctx', code)` 求值的裸 setup 体 —— **没有 import**,自己造不出
+ *  `new Plugin({...})`。所以宿主把编辑器底层库递进去,和 Obsidian 把 CodeMirror 递给插件是同一招。
+ *  这些就是宿主编辑器自己在用的那一份实例(不是副本),`instanceof` 与 PluginKey 查找都对得上。 */
+export interface PmToolkit {
+  Plugin: typeof import('@milkdown/kit/prose/state').Plugin
+  PluginKey: typeof import('@milkdown/kit/prose/state').PluginKey
+  Selection: typeof import('@milkdown/kit/prose/state').Selection
+  TextSelection: typeof import('@milkdown/kit/prose/state').TextSelection
+  NodeSelection: typeof import('@milkdown/kit/prose/state').NodeSelection
+  Decoration: typeof import('@milkdown/kit/prose/view').Decoration
+  DecorationSet: typeof import('@milkdown/kit/prose/view').DecorationSet
+  Slice: typeof import('@milkdown/kit/prose/model').Slice
+  Fragment: typeof import('@milkdown/kit/prose/model').Fragment
+  keymap: typeof import('@milkdown/kit/prose/keymap').keymap
+  InputRule: typeof import('@milkdown/kit/prose/inputrules').InputRule
+  inputRules: typeof import('@milkdown/kit/prose/inputrules').inputRules
+}
+
+/** 每个编辑器实例调一次,返回要挂上去的 ProseMirror 插件。 */
+export type EditorExtensionFactory = (
+  pm: PmToolkit,
+) => import('@milkdown/kit/prose/state').Plugin[]
+
+export interface EditorExtensionOptions {
+  /** `'high'` = 排在宿主全部插件**之前**,能抢在内置行为前处理按键。
+   *
+   *  什么时候需要:插件要接管一个宿主已经占用的键(最典型的是 `Tab` —— 宿主用它做列表缩进)。
+   *  ⚠️代价与义务:高优先级插件坐在每一次按键的最前面,**不该自己处理的必须返回 false**,
+   *  否则整个编辑器的内置行为在它手里静默消失。缺省 `'normal'`(排在宿主之后,只捡没人处理的)。 */
+  priority?: 'high' | 'normal'
+}
+
 export interface PluginContext {
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
@@ -409,6 +471,28 @@ export interface PluginContext {
   subscribeLocale?(cb: (locale: 'zh' | 'en') => void): () => void
   /** Declare a tunable setting (rendered on the plugin detail page; localStorage-backed). */
   registerSetting(def: SettingContribution): void
+  /** 自绘设置面板(2026-08-15+)。声明式旋钮装不下的复杂设置走这里。见 SettingsViewContribution。
+   *  旧宿主没有:`ctx.registerSettingsView?.(…)`。 */
+  registerSettingsView?(def: SettingsViewContribution): void
+  /** 往笔记编辑器里注 ProseMirror 插件(2026-08-15+)。片段展开、按键拦截、行内装饰这类
+   *  「必须住在编辑器里」的能力靠它 —— v3 块编辑器与 v4 统一编辑器共用同一个编辑器工厂,注一次两端到位。
+   *
+   *  factory 在**每个编辑器实例**创建时调用一次(一篇笔记在 v3 下是很多个小编辑器),返回的插件
+   *  归那一个实例所有。宿主把返回插件的 `props.*` 处理器包了 try/catch:第三方代码在按键热路径上
+   *  抛错不会连坐整个编辑器(state.apply 不包 —— 那里吞异常等于放任状态损坏)。
+   *
+   *  ⚠️能力边界:拿到 EditorView 就能读写当前打开笔记的全文。这是把外置插件**本来就有的**
+   *  renderer ambient authority 收进受支持契约,不是新开权限档(同只读 vault 查询面的口径)。
+   *  ⚠️插件禁用后已建好的编辑器不会当场摘掉扩展 —— 宿主会让编辑器重建,但那是下一拍的事。
+   *
+   *  旧宿主没有:`ctx.registerEditorExtension?.(…)`。 */
+  registerEditorExtension?(factory: EditorExtensionFactory, opts?: EditorExtensionOptions): void
+  /** 读本插件的私有 JSON blob(`~/.forsion/plugins-data/<id>.json`)。没写过 / 宿主缺位 → null。
+   *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
+   *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
+  loadData?<T = unknown>(): Promise<T | null>
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
+  saveData?(value: unknown): Promise<void>
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
   registerPropertyType(def: PropertyTypeContribution): void
   /** Achievements: register a series and bump its counters. Series/achievement ids and events

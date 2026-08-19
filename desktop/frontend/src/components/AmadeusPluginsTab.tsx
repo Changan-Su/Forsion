@@ -4,7 +4,7 @@
  * 执行复用 env:run 通道(opaque installId+流式输出);连接探测由 renderer 直连(CSP 放行 localhost)。
  * 数据源是 vendored 的 usePluginStore(与 Amadeus Space 同一单例);样式照 PluginsTab 的 hint/btn 约定。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
@@ -19,7 +19,7 @@ import { loadUserSpaces } from '../userSpaces'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
 import type { TanguDesktopConfig } from '../types'
-import type { AmadeusPlugin, SettingContribution } from '@amadeus/plugins/types'
+import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 
 /** 同一插件的级联串行链:快速连点按序执行,防两批 PUT 乱序落成「父关子开」(codex P1-4)。 */
 const cascadeChain = new Map<string, Promise<void>>()
@@ -124,6 +124,45 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
   )
 }
 
+/** 插件自绘设置面板(registerSettingsView)的挂载点。宿主只负责给一个干净的容器、
+ *  在正确的时机 mount/dispose,里面画什么完全归插件。
+ *
+ *  ⚠️两条纪律,踩过同类坑:
+ *  ①**一容器一次挂载**:mount 只跑在 el+def 变化时。把 def 放进 deps 而不是整个 owner 对象 ——
+ *    zustand 每次 set 都产出新的 { pluginId, item } 包装对象,拿它当 deps 会每次 store 变动就
+ *    重挂一次面板(用户正在输入的内容当场清零)。
+ *  ②**dispose 必须接异常**:第三方 dispose 抛错不能把 React 的 cleanup 链带崩,否则下一个面板
+ *    挂不上去。 */
+const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribution }> = ({ pluginId, def }) => {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let dispose: (() => void) | void
+    try {
+      dispose = def.mount(el)
+    } catch (e) {
+      console.error(`[amadeus] 插件 ${pluginId} 的设置面板 mount 抛错`, e)
+      el.textContent = ''
+      return
+    }
+    return () => {
+      try {
+        if (typeof dispose === 'function') dispose()
+      } catch (e) {
+        console.error(`[amadeus] 插件 ${pluginId} 的设置面板 dispose 抛错`, e)
+      }
+      el.textContent = '' // 插件没清干净也不给下一次挂载留残渣
+    }
+  }, [pluginId, def])
+  return (
+    <>
+      {def.title && <div className="hint">{def.title}</div>}
+      <div className="plugin-card" ref={ref} />
+    </>
+  )
+}
+
 const blockedLabel = (t: (k: string, v?: Record<string, string>) => string, p: AmadeusPlugin): string =>
   p.blocked === 'api'
     ? t('settings.amadeusPlugins.blockedApi', { v: String(p.apiVersion ?? '?') })
@@ -221,6 +260,7 @@ const PluginDetail: React.FC<{
   const toggle = usePluginStore((s) => s.toggle)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
   const settings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
+  const settingsViews = usePluginStore((s) => s.settingsViews).filter((o) => o.pluginId === p.id)
   usePluginOnboarding((s) => s.version) // 完成引导后徽标即时消失
   const on = activeIds.includes(p.id)
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
@@ -328,6 +368,9 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      {/* 自绘设置面板:排在声明式旋钮之后 —— 旋钮是宿主统一样式的小项,复杂面往下放才不打断阅读节奏。
+          只在插件启用时挂:停用的插件其 setup 没跑过,面板里的按钮点了也没有后端。 */}
+      {on && settingsViews.map((o) => <PluginSettingsView key={o.item.id} pluginId={p.id} def={o.item} />)}
       {/* README / 更新日志:必须套 .md-body —— 裸 <Markdown> 吃的是浏览器默认样式(h1 2em、1em 段距),
           和设置页其余部分的行距对不上,观感就是「排版很乱」。同一个类也管着关于页的更新日志。 */}
       {p.readme && (

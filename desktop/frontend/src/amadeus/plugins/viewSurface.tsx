@@ -9,19 +9,32 @@
  *  loadPage = 首次防抖保存把它改写成 v3 格式 = 毁档。所以 loadPage 只认本文件类型注册的后缀。 */
 import { PageScopeCtx, disposePageStoreScope, pageStoreFor } from '../store/pageStore'
 import { PageView } from '../components/PageView'
+import { NoteCover } from '../chrome/pageChrome'
+import { Breadcrumb, NoteTitle } from '../../amadeusViews'
+import { AmadeusPropertiesPanel } from '../../amadeusProperties'
+import { isCoarsePointer } from '../../touch'
 import { createBlockSurface, mountHostReact } from './blockSurface'
 import { isValidPluginExt } from './pluginStore'
 import type { PluginPageSurface } from './types'
 
-/** 文档模式要的是「与普通笔记同一个身体」:真 PageView(块列表 + ⠿ 把手/拖拽排序 + 回车/退格
- *  语义 + 斜杠 + 点空白追加),不是插件自绘的近似。标题/封面/属性面板**刻意不挂**:
- *  - 标题栏的改名走 renamePage,对 `.canvas.md` 这类复合后缀会把名字改出类型判定(毁档路径);
- *  - 属性面板会把插件藏在 fm 里的数据键(canvas/mindmap)当普通属性摊开给用户改。
- *  包裹类名与台架/仪表盘一致(.amadeus-root.am-app),否则拿不到主题 token。 */
+/** 文档模式要的是「与普通笔记**完全无差**的身体」(2026-08-14 用户验收拍板):封面横幅 + emoji
+ *  图标 + 标题 + 属性面板 + 真 PageView,与 amadeusViews v3 编辑器同一套三件套逐字复用。
+ *  此前刻意裁掉标题/属性的两层顾虑已在宿主根治:
+ *  - 改名:renamePage 入口 + 树上改名双双保全复合后缀(`.canvas.md` 改不丢类型);
+ *  - 属性面板:按 FileTypeContribution.fmKeys 隐藏插件数据键,且模型持全量不可能抹键(P0 契约)。
+ *  包裹类名与编辑器面板一致(.amadeus-root.am-app.amx-pane),否则拿不到主题 token 与 amx-doc 版式。 */
 function PluginNoteSurface({ scope }: { scope: string }) {
   return (
     <PageScopeCtx.Provider value={scope}>
-      <div className="amadeus-root am-app plugin-note-surface">
+      <div className="amadeus-root am-app amx-pane plugin-note-surface">
+        {/* 普通编辑器面板在笔记面之上还有一条 sticky 顶栏(.amx-toolbar):没有它,封面/标题/
+            「添加图标/封面」整面贴到 tab 顶沿,比普通笔记高一截(实报)。这里同类名复用同一套
+            sticky/背景/padding,面包屑也走 scope 化 activePage;右侧动作钮(置顶/分享/源码切换…)
+            是编辑器视图的内联 chrome,语义未接线,刻意不搬 —— 插件自己的模式切换钮悬浮在同一条带右侧。
+            移动端与普通笔记同口径隐藏(amadeusViews 2051 行同款门)。 */}
+        {!isCoarsePointer() && <div className="amx-toolbar"><Breadcrumb /></div>}
+        <NoteCover />
+        <div className="amx-doc"><NoteTitle /><AmadeusPropertiesPanel /></div>
         <PageView bare />
       </div>
     </PageScopeCtx.Provider>

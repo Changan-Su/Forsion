@@ -15,6 +15,7 @@ import { BUILTIN_PLUGINS } from './builtins'
 import { registerPropertyType as registerPropType, unregisterPropertyType as unregisterPropType } from '../blocks/database/propertyTypes'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
 import { createBlockSurface } from './blockSurface'
+import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
@@ -30,6 +31,7 @@ import type {
   PluginContext,
   PropertyTypeContribution,
   SettingContribution,
+  SettingsViewContribution,
   SlashContribution,
   StatusItemContribution,
   ThemeContribution,
@@ -60,6 +62,7 @@ interface PluginState {
   statusItems: Owned<StatusItemContribution>[]
   propertyTypes: Owned<PropertyTypeContribution>[]
   settings: Owned<SettingContribution>[]
+  settingsViews: Owned<SettingsViewContribution>[]
   views: Owned<ViewContribution>[]
   fileTypes: Owned<FileTypeContribution>[]
   embedRenderers: Owned<EmbedRendererContribution>[]
@@ -111,6 +114,39 @@ function listCached(kind: 'pages' | 'files'): Promise<string[]> {
   return p
 }
 
+// ── ctx.app.watchFile 的分发器(2026-08-15)。主进程一条广播(非 .md/.db 文件的外部内容改动),
+//    渲染端按路径分给订阅者。**接线是懒的**:第一个订阅者出现才挂 IPC 监听,最后一个走了就摘掉 ——
+//    没人用这条能力时不留常驻监听。
+const fileWatchers = new Map<string, Set<() => void>>()
+let fileWatchOff: (() => void) | null = null
+/** 路径归一到与 readFile 同一形态(vault 相对、`/` 分隔、无前导斜杠);大小写按平台原样不动。 */
+const normRel = (p: unknown): string => toSlash(String(p ?? '')).replace(/^\/+/, '')
+
+function watchVaultFile(rel: string, cb: () => void): () => void {
+  const key = normRel(rel)
+  if (!key || typeof cb !== 'function') return () => {}
+  if (!fileWatchOff) {
+    fileWatchOff = amadeus?.onFileExternalChange?.((changed) => {
+      for (const fn of Array.from(fileWatchers.get(normRel(changed)) ?? [])) {
+        try { fn() } catch (e) { console.error('[amadeus] watchFile 回调抛错', e) }
+      }
+    }) ?? null
+  }
+  let bucket = fileWatchers.get(key)
+  if (!bucket) fileWatchers.set(key, (bucket = new Set()))
+  bucket.add(cb)
+  return () => {
+    const b = fileWatchers.get(key)
+    if (!b) return
+    b.delete(cb)
+    if (!b.size) fileWatchers.delete(key)
+    if (!fileWatchers.size && fileWatchOff) {
+      fileWatchOff()
+      fileWatchOff = null
+    }
+  }
+}
+
 /** 每个插件一份 app API。块表面是**可吊销**的(见 blockSurface.tsx 的信任边界说明):
  *  teardown 时调 revoke,插件开的订阅/挂的 React root 一并收掉,之后它在飞的异步任务也改不动用户文件。 */
 function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppApi; revokeSurface: () => void } {
@@ -123,6 +159,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     if (!alive) console.warn(`[amadeus] 插件 ${pluginId} 已停用,ctx.app 副作用调用被忽略`)
     return alive
   }
+  // 文件订阅与语言订阅同一条纪律:插件自己能退订,但最终责任人是宿主 —— 停用时统一收掉,
+  // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
+  const fileUnsubs = new Set<() => void>()
   const api: PluginAppApi = {
     getActivePage: () => usePageStore.getState().activePage,
     getActivePageText: () =>
@@ -139,6 +178,19 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
     writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
+    // 桥缺席(web/移动端/台架)时**整条方法不挂** —— 挂一个永不触发的空壳会让插件的
+    // `if (ctx.app.watchFile) …else 轮询` 走错分支,配置改了永远热重载不了。
+    ...(amadeus?.onFileExternalChange
+      ? {
+          watchFile: (p: string, cb: () => void): (() => void) => {
+            if (!alive) return () => {}
+            const off = watchVaultFile(p, cb)
+            const wrapped = (): void => { off(); fileUnsubs.delete(wrapped) }
+            fileUnsubs.add(wrapped)
+            return wrapped
+          },
+        }
+      : {}),
     // 工作文件夹(相对 vault 根):读标准设置 plugin.<id>.workFolder;没设或非法(空段/./..)→ 插件显示名。
     workFolder: () => {
       let v = ''
@@ -170,6 +222,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     revokeSurface: () => {
       alive = false
       surface.revoke()
+      for (const u of Array.from(fileUnsubs)) {
+        try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" watchFile unsubscribe failed`, e) }
+      }
+      fileUnsubs.clear()
     },
   }
 }
@@ -326,7 +382,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
         console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:该后缀已由 Forsion 内置文件类型认领`)
         return false
       }
-      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: def }] }))
+      // fmKeys(属性面板隐藏用)只收非空字符串;amadeus_* 是编译器地盘,插件不许认领。
+      const fmKeys = Array.isArray(def?.fmKeys)
+        ? def.fmKeys.map((k) => String(k ?? '').trim()).filter((k) => k && !/^amadeus_/.test(k))
+        : undefined
+      set((s) => ({ fileTypes: [...s.fileTypes, { pluginId, item: fmKeys ? { ...def, fmKeys } : def }] }))
       return true
     },
     registerEmbedRenderer: (def) =>
@@ -346,6 +406,39 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
     registerSetting: (def) =>
       set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
+    // 自绘设置面板(Obsidian PluginSettingTab 的对位):同 id 重注册即覆盖,渲染在详情页声明式表单下方。
+    registerSettingsView: (def) => {
+      if (!def?.id || typeof def.mount !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerSettingsView 需要 { id, mount }`)
+        return
+      }
+      set((s) => ({
+        settingsViews: [
+          ...s.settingsViews.filter((o) => !(o.pluginId === pluginId && o.item.id === def.id)),
+          { pluginId, item: def },
+        ],
+      }))
+    },
+    // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
+    registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts),
+    // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
+    // 插件侧一律 `await ctx.loadData?.() ?? 默认值`。坏 JSON 当没写过(用户手改文件改坏了不该让插件起不来)。
+    loadData: async () => {
+      // ⚠️`amadeus?.readPluginData?.(id).catch(…)` 是错的:方法缺席时 `?.()` 求值成 undefined,
+      //   紧跟着的 `.catch` 就是在 undefined 上取属性 → 同步 TypeError。非桌面宿主必炸。
+      const raw = await Promise.resolve(amadeus?.readPluginData?.(pluginId)).catch(() => null)
+      if (raw == null) return null
+      try {
+        return JSON.parse(raw)
+      } catch (e) {
+        console.error(`[amadeus] 插件 ${pluginId} 的数据文件不是合法 JSON,已当作空`, e)
+        return null
+      }
+    },
+    saveData: async (value) => {
+      if (!amadeus?.writePluginData) return
+      await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
+    },
     registerPropertyType: (def) => {
       registerPropType(def)
       set((s) => ({ propertyTypes: [...s.propertyTypes, { pluginId, item: def }] }))
@@ -385,6 +478,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     for (const o of get().themes) if (o.pluginId === id) removeThemeStyle(o.item.id)
     for (const o of get().propertyTypes) if (o.pluginId === id) unregisterPropType(o.item.type)
     unregisterPluginAchievements(id)
+    clearEditorExtensions(id) // 代次 +1 → 已建好的编辑器重建,当场摘掉这个插件的 PM 插件
     set((s) => ({
       activeIds: s.activeIds.filter((x) => x !== id),
       slashItems: s.slashItems.filter((o) => o.pluginId !== id),
@@ -394,6 +488,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       statusItems: s.statusItems.filter((o) => o.pluginId !== id),
       propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
       settings: s.settings.filter((o) => o.pluginId !== id),
+      settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
       views: s.views.filter((o) => o.pluginId !== id),
       fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
       embedRenderers: s.embedRenderers.filter((o) => o.pluginId !== id),
@@ -417,6 +512,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     statusItems: [],
     propertyTypes: [],
     settings: [],
+    settingsViews: [],
     views: [],
     fileTypes: [],
     embedRenderers: [],
@@ -472,6 +568,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           statusItems: s.statusItems.filter((o) => o.pluginId !== id),
           propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
           settings: s.settings.filter((o) => o.pluginId !== id),
+      settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
           views: s.views.filter((o) => o.pluginId !== id),
           fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
           embedRenderers: s.embedRenderers.filter((o) => o.pluginId !== id),
