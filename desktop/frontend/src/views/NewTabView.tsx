@@ -14,6 +14,7 @@ import { resolveIcon } from '@amadeus/components/icons'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { openNote, openDb, openPdf, openDrawing, openDashboard, openImage, openFile, createDrawing, createDashboard } from '../amadeusNav'
 import { openDailyNote } from '../amadeusTemplates'
+import { openNewChat, openSession } from '../sessionNav'
 import { useI18n } from '../i18n'
 import { pluginDisplayName } from '../amadeus/plugins/display'
 import { openBrowser, openTerminal } from '../builtins'
@@ -45,10 +46,8 @@ export function NewTabView({ leaf }: ViewProps) {
   const amadeusOn = !!window.amadeus && AMADEUS_ENABLED // 笔记/文件项跟随 Amadeus 门控(与 Space 注册同纪律)
   const ws = () => useWorkspace.getState()
 
-  const newChat = (): void => {
-    s.setActiveId(null); s.setNewChatWs(null); s.setNewChatCfg(() => ({})); s.setNewChatModel(null)
-    ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-  }
+  // 门面统一在 sessionNav:站在这张空白页里点「新对话」就该开在**这个**标签,不是跳回老聊天把它清空。
+  const newChat = (): void => { openNewChat() }
   /** 编辑器是非 singleton(每笔记一 tab):已有编辑器 tab 时别再开,否则每次都多出一个空 tab。 */
   const ensureEditor = (): void => {
     if (!useWorkspace.getState().mainTabs.some((t) => t.type === 'amadeus-editor')) {
@@ -142,7 +141,9 @@ export function NewTabView({ leaf }: ViewProps) {
   /** 重开一条「最近使用」:按 kind 分派到专属门面 / openView。 */
   const openRecent = (r: RecentView): void => {
     if (r.kind === 'note') { void openNote(r.id); return }
-    if (r.kind === 'chat') { s.setActiveId(r.id); ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main'); return }
+    // 会话走门面(认领已开的标签 / 落进当前这张空白页 / 冻结老聊天),别在这儿另写一套 —— 另写的
+    // 那套恒复用主聊天 = 在新标签里点最近会话,内容跑到老标签里去了。
+    if (r.kind === 'chat') { openSession(r.id); return }
     if (r.kind === 'file') {
       switch (r.viewType) {
         case 'amadeus-db': openDb(r.id); break

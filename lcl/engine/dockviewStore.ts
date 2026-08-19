@@ -151,7 +151,9 @@ function makeLeaf(panel: IDockviewPanel): Leaf {
     loc: __loc ?? 'main',
     params: userParams,
     setTitle: (t) => panel.api.setTitle(t),
-    setParams: (p) => panel.api.updateParameters({ ...(panel.params ?? {}), ...p }),
+    // params 是布局的一部分(重建视图就靠它),改完必须记账 —— Dockview 的 onDidLayoutChange
+    // 只认结构变化,不认参数变化,不主动存就会在下次结构事件前被旧快照覆盖(如「钉住会话」重启后又变回跟随档)。
+    setParams: (p) => { panel.api.updateParameters({ ...(panel.params ?? {}), ...p }); scheduleWorkspaceSave() },
     close: () => panel.api.close(),
   }
 }
@@ -284,7 +286,8 @@ interface WorkspaceState {
   resetLayout(): void
   /** 按当前容器宽把两侧栏重钉回目标宽(容器 resize 后调,补 dockview 不自动重算黄金分割的缺口)。 */
   repinSides(): void
-  /** 开/聚焦一个视图。singleton 已存在则聚焦;主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
+  /** 开/聚焦一个视图。singleton 已存在则聚焦(**除非显式 newTab**——那是「我明确要再来一个」,
+   *  见下方 singleton 分支上的注释);主区默认**就地替换**当前活动 leaf(浏览器/Obsidian 式,
    *  opts.newTab 显式新建);侧栏同侧同类型复用。返回 leaf。 */
   openView(type: string, params?: Record<string, unknown>, loc?: ViewLocation, opts?: { newTab?: boolean }): Leaf | null
   /** 就地把某 leaf 切换为另一视图类型(同 tab 内导航的原语)。旧视图参数全清,不残留。 */
@@ -513,7 +516,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const api = get().api
     if (!api) return null
     const def = getView(type)
-    if (def?.singleton) {
+    // ⚠️ singleton 复用必须给显式 newTab 让路:reuseKey 没给时下面那句「命中任意同类型 panel」会把
+    // ⌘点击「在新标签页打开」整个吞掉(setActive 就返回了)—— chat 多标签就卡在这一句上。
+    // 单例语义只管「顺手开一个」,不管「我明确要再来一个」;笔记/PDF/白板那些非 singleton 视图一直是这个行为。
+    if (def?.singleton && !opts?.newTab) {
       const reuseKey = params.reuseKey
       const existing = api.panels.find((p) => {
         if (panelType(p) !== type) return false
@@ -542,7 +548,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         return makeLeaf(existingSide)
       }
     }
-    const id = def?.singleton ? type : nextId(api, type)
+    // newTab 开出来的第二份 singleton 必须换 id:裸 type 已被第一份占着,重名 addPanel 会炸。
+    const id = def?.singleton && !opts?.newTab ? type : nextId(api, type)
     const title = def ? label(def.displayName) : type
     const firstOfSide = loc !== 'main' && panelsAt(api, loc).length === 0
     const panel = api.addPanel({

@@ -40,6 +40,30 @@ describe('navStore per-leaf', () => {
     expect(nav().stacks.A.entries.map((e) => e.key)).toEqual(['a1', 'a2'])
   })
 
+  // 用户实报「有时候前进失效」的一条:真 restore 是异步的(loadPage / 引擎装载),连按两次后退时
+  // 两个 restore 会重叠。闸若是布尔量,先落地的那个 finally 会提前放开它,后一个 restore 的落点被当成
+  // 「用户新导航」重记 → forward 段当场截断:退两步只能前进一步。故闸必须是计数。
+  // ⚠️ 两个 restore 的耗时必须**不同**且交错(快的先完成、慢的还在跑):都一样长的话布尔量与计数
+  //    表现完全一致,测试恒绿 = 没测到东西(本轮写反过一次,负对照才抓出来)。
+  it('⚠️异步 restore 重叠期间闸不许提前放开(否则前进史被吃掉)', async () => {
+    const log: string[] = []
+    const after = (key: string, ms: number) => ({ key, restore: () => new Promise<void>((r) => setTimeout(r, ms)).then(() => { log.push(key) }) })
+    nav().record('A', after('a1', 80)) // 后按的那次退回它 —— 慢
+    nav().record('A', after('a2', 5))  // 先按的那次退回它 —— 快
+    nav().record('A', after('a3', 5))
+    nav().back('A') // → 复原 a2(5ms 就结束)
+    nav().back('A') // → 复原 a1(80ms),与上一个重叠
+    await new Promise((r) => setTimeout(r, 30)) // 此刻 a2 已完成、a1 仍在跑:布尔闸在这里就开了
+    nav().record('A', entry('intruder', log)) // 仍属复原过程 → 必须被闸掉
+    await new Promise((r) => setTimeout(r, 120))
+    expect(nav().stacks.A.entries.map((e) => e.key)).toEqual(['a1', 'a2', 'a3'])
+    nav().forward('A')
+    await new Promise((r) => setTimeout(r, 30))
+    nav().forward('A')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(nav().stacks.A.idx).toBe(2) // 退两步后仍能前进两步回到 a3
+  })
+
   it('越界 back/forward 与未知 leaf 均 no-op', () => {
     const log: string[] = []
     nav().back('missing')

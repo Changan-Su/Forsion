@@ -4,8 +4,7 @@ import { useMemo } from 'react'
 import { SidebarPane } from './chat2/SidebarPane'
 import { useApp } from '../stores/appStore'
 import { openSpecial } from './SpecialViews'
-import { useWorkspace } from '@lcl/engine'
-import { openSession } from '../sessionNav'
+import { openSession, openNewChat } from '../sessionNav'
 import { useShallow } from 'zustand/react/shallow'
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
@@ -66,10 +65,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       activeSession={activeSession}
       onSelect={(id, o) => openSession(id, o)}
       showSpecial={true} // 新对话 = createSession HTTP,云 web(无本地后端)同样可用,不 gate backendStatus
-      onNewChat={() => {
-        s.setActiveId(null); s.setNewChatWs(null); s.setNewChatCfg(() => ({})); s.setNewChatModel(null)
-        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-      }}
+      onNewChat={() => openNewChat()}
       onOpenWorkspace={(wsKey) => openSpecial('workspace', wsKey)}
       workspaces={workspaces}
       onNewInWorkspace={(ws) => void s.createInWorkspace(ws)}

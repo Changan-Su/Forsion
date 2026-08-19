@@ -6,6 +6,7 @@ import { AgentsDetailView } from '../components/AgentsDetailView'
 import { WorkspaceDetailView } from '../components/WorkspaceDetailView'
 import { useApp, type SpecialKind } from '../stores/appStore'
 import { useWorkspace, recordNav } from '@lcl/engine'
+import { openSession } from '../sessionNav'
 import { sessionWorkspaceKey } from '../types'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -32,10 +33,11 @@ export function openSpecial(kind: SpecialKind, wsKey?: string): void {
   }
 }
 
-/** 从特殊视图里打开某会话 → 设为活动 + 焦点回对话 leaf。 */
+/** 从特殊视图里打开某会话 → 走会话门面(认领已开的标签 / 就地落在本标签 / 冻结老聊天)。
+ *  别在这儿自写 openView({reuseKey:'primary'}):那条恒复用主聊天,等于从这个标签里点会话、
+ *  内容却跑到别的标签去(2026-08-16 那轮修掉的老毛病,这一处当时漏了)。 */
 function focusSession(id: string): void {
-  useApp.getState().setActiveId(id)
-  useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+  openSession(id)
 }
 
 export function AgentsDetailSpecialView() {

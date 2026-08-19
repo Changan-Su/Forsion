@@ -25,20 +25,24 @@ interface NavState {
   reset(): void
 }
 
-let navigating = false // back/forward 期间置真 → restore 引发的页面变化不被重新记录
+// back/forward 期间 >0 → restore 引发的页面变化不被重新记录。
+// ⚠️ 计数不是布尔:restore 多为异步(loadPage / 引擎装载),连按两次后退时两个 restore 会重叠,
+//    布尔量被先落地的那个 finally 提前放开 → 后一个 restore 的落点被当成「用户新导航」重记一条,
+//    forward 段当场被截掉(退两步后前进只能回一步)。
+let navDepth = 0
 
 function go(get: () => NavState, set: (p: Partial<NavState>) => void, leafId: string, j: number): void {
   const st = get().stacks[leafId]
   if (!st || j === st.idx || j < 0 || j >= st.entries.length) return
   set({ stacks: { ...get().stacks, [leafId]: { ...st, idx: j } } })
-  navigating = true
-  Promise.resolve(st.entries[j].restore()).finally(() => { navigating = false })
+  navDepth++
+  Promise.resolve(st.entries[j].restore()).finally(() => { navDepth-- })
 }
 
 export const useNav = create<NavState>((set, get) => ({
   stacks: {},
   record(leafId, entry) {
-    if (navigating || !leafId) return
+    if (navDepth > 0 || !leafId) return
     const st = get().stacks[leafId] ?? { entries: [], idx: -1 }
     if (st.entries[st.idx]?.key === entry.key) return // 同页去重
     const entries = [...st.entries.slice(0, st.idx + 1), entry].slice(-100) // 截断 forward + 压入 + 封顶 100

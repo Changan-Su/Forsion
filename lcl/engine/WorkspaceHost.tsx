@@ -193,14 +193,16 @@ function isMainGroup(panels: IDockviewHeaderActionsProps['panels']): boolean {
 /** 主区组标签栏左侧前缀:左栏折叠钮(在左panel右缘)。主区常驻 →
  *  折叠左栏后此钮仍在原处(左panel右缘=主区左缘),可重开。 */
 function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
-  return function PrefixActions({ panels }) {
+  return function PrefixActions({ panels, activePanel }) {
     // 左栏收起后,主区组成为最左 → 折叠钮要躲开 mac 交通灯(加 --edge,见 engine.css)。
     const leftCollapsed = !useWorkspace((s) => s.leftVisible)
-    // per-tab 历史:箭头只作用于「当前活动主 leaf」的栈。订阅 mainTabs(激活变化)与 stacks 重渲。
+    // per-tab 历史:箭头作用于**本组自己**的活动 tab。订阅 mainTabs(激活变化)与 stacks 重渲。
+    // ⚠️ 别用全局 activeMainPanel:这套箭头每个主区组各渲一份,分屏后左右两套都会指向同一个
+    //    全局活动 tab —— 点左边那套动的是右边那个 tab(用户实报的「控制别的 tabs」),而本组的栈
+    //    没人走、箭头恒灰(「失效」)。props.activePanel 就是本组当前显示的 panel,天然 per-group。
     useWorkspace((s) => s.mainTabs)
     const stacks = useNav((s) => s.stacks)
-    const api = useWorkspace.getState().api
-    const amId = api ? activeMainPanel(api)?.id ?? null : null
+    const amId = activePanel?.id ?? null
     const st = amId ? stacks[amId] : undefined
     const canBack = !!st && st.idx > 0
     const canFwd = !!st && st.idx >= 0 && st.idx < st.entries.length - 1
