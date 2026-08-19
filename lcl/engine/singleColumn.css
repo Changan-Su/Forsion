@@ -156,6 +156,9 @@
   color: var(--text, #111);
   display: flex;
   flex-direction: column;
+  /* 贴屏侧保持齐边,只把面向主区的上下角收圆。overflow:clip 负责把列表/底栏自己的
+     背景也裁进同一轮廓,否则父层圆了、子层仍会把角铺回直角。 */
+  overflow: clip;
   visibility: hidden;
   /* 关合中(退场过渡期)不吃指针:visibility 是延迟隐藏的,不禁的话滑出中的面板还会吞触摸(Codex 评审 P2)。 */
   pointer-events: none;
@@ -165,8 +168,18 @@
    下拉、关闭钮会钻到状态栏底下。底色仍铺满到最顶(padding 在盒内)。 */
 .mb-shell:not(.mini-shell) .mb-drawer,
 .mb-shell:not(.mini-shell) .mb-sidecol { padding-top: env(safe-area-inset-top); }
-.mb-drawer--left { left: 0; transform: translateX(-102%); box-shadow: 6px 0 24px rgba(0, 0, 0, 0.1); }
-.mb-drawer--right { right: 0; transform: translateX(102%); box-shadow: -6px 0 24px rgba(0, 0, 0, 0.1); }
+.mb-drawer--left {
+  left: 0;
+  border-radius: 0 var(--radius-lg, 16px) var(--radius-lg, 16px) 0;
+  transform: translateX(-102%);
+  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.1);
+}
+.mb-drawer--right {
+  right: 0;
+  border-radius: var(--radius-lg, 16px) 0 0 var(--radius-lg, 16px);
+  transform: translateX(102%);
+  box-shadow: -6px 0 24px rgba(0, 0, 0, 0.1);
+}
 .mb-drawer.open { transform: none; visibility: visible; pointer-events: auto; transition: transform var(--mb-dur) var(--mb-ease); }
 .mb-main { transition: transform var(--mb-dur) var(--mb-ease); }
 .mb-body.push-left .mb-main { transform: translateX(var(--mb-panelw)); }
@@ -363,6 +376,8 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: clip;
+  border-radius: 0 var(--radius-lg, 16px) var(--radius-lg, 16px) 0;
   border-right: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   background: var(--bg, #fff);
 }

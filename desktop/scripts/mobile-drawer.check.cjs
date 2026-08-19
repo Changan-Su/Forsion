@@ -1,13 +1,15 @@
 /**
  * 手机端左右抽屉的**几何仪器**(390×844,pointer:coarse)。静态复刻 + 真 CSS,不需要起 dev server。
  *
- * 钉两件 2026-08-13 用户实报的事:
+ * 钉三件移动抽屉容易回退的事:
  *  1) 露边:抽屉不许铺满,右侧要留出能看见/能点的主区。**关键是 --uiz 与 body zoom 不许失配** ——
  *     uiZoom.apply(1) 走的是「清 inline zoom + 移除 --uiz」,而 singleColumn.css 里 (pointer:coarse)
  *     那条 `body{zoom:1.15}` 是 CSS 层的,清不掉;--uiz 一掉回 1,`--mb-panelw = 86vw/1` 再被 zoom 放大
  *     1.15 倍 ≈ 99vw,露边只剩几个 px。D2 就是这条的负对照。
  *  2) 抽屉内文件树的**实际渲染字号/行高**:.t2s-* 是桌面鼠标尺度(13px/28px 行),端级 zoom 之后仍太小,
  *     .mb-drawer-body 上再叠一档 zoom 才够手指用。
+ *  3) 圆角只落在面向主区的暴露边,贴屏边保持齐平;竖屏抽屉与横屏 docked sidecol
+ *     使用同一轮廓,子内容必须被裁住。
  *
  * 跑:npm run check:drawer
  */
@@ -137,6 +139,65 @@ const check = (name, ok, detail) => {
     f.sel.cum < f.row.cum && f.tab.cum < f.row.cum,
     `select=${f.sel.cum} tab=${f.tab.cum} vs body=${f.row.cum}`,
   )
+
+  // ── D8-D11 暴露边圆角 ──────────────────────────────────────────────────
+  const corners = await page.evaluate(() => {
+    const readCorners = (el) => {
+      const cs = getComputedStyle(el)
+      return {
+        tl: parseFloat(cs.borderTopLeftRadius),
+        tr: parseFloat(cs.borderTopRightRadius),
+        br: parseFloat(cs.borderBottomRightRadius),
+        bl: parseFloat(cs.borderBottomLeftRadius),
+        overflow: cs.overflow,
+      }
+    }
+    const left = document.querySelector('.mb-drawer--left')
+    const right = left.cloneNode(false)
+    right.className = 'mb-drawer mb-drawer--right open'
+    document.querySelector('.mb-body').appendChild(right)
+    return { left: readCorners(left), right: readCorners(right) }
+  })
+  check(
+    'D8 左抽屉贴屏边为直角、暴露边上下圆角',
+    corners.left.tl === 0 && corners.left.bl === 0 && corners.left.tr > 0 && corners.left.br > 0,
+    JSON.stringify(corners.left),
+  )
+  check(
+    'D9 右抽屉镜像圆角,且两侧子内容都裁进轮廓',
+    corners.right.tr === 0 && corners.right.br === 0 && corners.right.tl > 0 && corners.right.bl > 0
+      && corners.left.overflow === 'clip' && corners.right.overflow === 'clip',
+    JSON.stringify(corners.right),
+  )
+  const docked = await page.evaluate(() => {
+    const sidecol = document.querySelector('.mb-drawer--left').cloneNode(false)
+    sidecol.className = 'mb-sidecol'
+    document.querySelector('.mb-body').appendChild(sidecol)
+    const cs = getComputedStyle(sidecol)
+    return {
+      tl: parseFloat(cs.borderTopLeftRadius),
+      tr: parseFloat(cs.borderTopRightRadius),
+      br: parseFloat(cs.borderBottomRightRadius),
+      bl: parseFloat(cs.borderBottomLeftRadius),
+      overflow: cs.overflow,
+    }
+  })
+  check(
+    'D10 横屏 docked sidecol 沿用左抽屉的内容侧圆角',
+    docked.tl === 0 && docked.bl === 0 && docked.tr > 0 && docked.br > 0 && docked.overflow === 'clip',
+    JSON.stringify(docked),
+  )
+  const squareNeg = await page.evaluate(() => {
+    const s = document.createElement('style')
+    s.textContent = '.mb-drawer, .mb-sidecol { border-radius: 0 !important }'
+    document.head.appendChild(s)
+    return [...document.querySelectorAll('.mb-drawer, .mb-sidecol')].every((el) => {
+      const cs = getComputedStyle(el)
+      return [cs.borderTopLeftRadius, cs.borderTopRightRadius, cs.borderBottomRightRadius, cs.borderBottomLeftRadius]
+        .every((value) => parseFloat(value) === 0)
+    })
+  })
+  check('D11 负对照:抹掉圆角后所有 Side Panel 确实退回四角全直', squareNeg, `square=${squareNeg}`)
 
   await browser.close()
   const failed = results.filter((r) => !r.ok)
