@@ -717,8 +717,10 @@ export const createProject = (cfg: TanguDesktopConfig, name: string) =>
 // ── 工作区 ──
 // project 有值 = 按云端 Project 树取数(服务端 resolveScope 显式 project 优先,sessionId 仅形式必填,
 // 调用方无会话时传 '__project__' 哑值即可)。
+// appId 必须显式带上:'__project__' 哑值查不到 session 行时,服务端会落进程基线 appId
+// (agent-core 基线=ai-studio)→ 读到另一棵空树,文件面板恒空(2026-08-19 实锤)。
 const wsQ = (sessionId: string, project?: string) =>
-  `sessionId=${encodeURIComponent(sessionId)}${project ? `&project=${encodeURIComponent(project)}` : ''}`
+  `sessionId=${encodeURIComponent(sessionId)}&appId=${encodeURIComponent(AGENT_APP_ID)}${project ? `&project=${encodeURIComponent(project)}` : ''}`
 
 export const listWorkspace = (cfg: TanguDesktopConfig, sessionId: string, project?: string) =>
   request<{ files: WorkspaceFileMeta[] }>(
@@ -758,7 +760,7 @@ export const uploadWorkspaceFiles = (
 export const deleteWorkspaceFile = (cfg: TanguDesktopConfig, sessionId: string, path: string, project?: string) =>
   request<{ ok: boolean }>(cfg, '/agent/workspace/delete', {
     method: 'POST',
-    body: JSON.stringify({ sessionId, path, ...(project ? { project } : {}) }),
+    body: JSON.stringify({ sessionId, path, appId: AGENT_APP_ID, ...(project ? { project } : {}) }),
   })
 
 // ── Inbox(收件箱)──
