@@ -74,9 +74,9 @@ async function main() {
       const c = pm.cloneNode(true)
       // 剥掉一切**装饰**,只留文档真正的内容:
       //   .katex*      宿主的公式实况预览(公式一闭合就渲染,它的 textContent 会混进 MathML 注解)
-      //   .heading-hash 标题行的 `#` widget
+      //   .amx-struct-prefix 标题/列表等行首源码 input
       //   .ls-*        本插件的 conceal 替换字符与占位点装饰
-      c.querySelectorAll('.katex, .katex-display, .katex-html, .heading-hash, .ls-conceal-widget').forEach((n) => n.remove())
+      c.querySelectorAll('.katex, .katex-display, .katex-html, .amx-struct-prefix, .ls-conceal-widget').forEach((n) => n.remove())
       return c.textContent
     })
 

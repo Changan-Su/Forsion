@@ -5,13 +5,14 @@
  * 刻意不展示历史绑定列表(旧版乱源);连接语义 = 连接即新会话。
  */
 import React, { useEffect, useState } from 'react'
-import { MessageCircle, Send, MessagesSquare, Loader2 } from 'lucide-react'
+import { MessageCircle, Send, MessagesSquare, Loader2, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { useChannels, type ChannelStatus } from '../stores/channelsStore'
 import { startWechatLogin, pollWechatLogin, type ChannelConfigPatch } from '../services/backendService'
 import { QrImage } from './QrImage'
 import type { ChannelKind, TanguDesktopConfig } from '../types'
+import { SettingsState } from './SettingsPrimitives'
 
 const ICONS: Record<ChannelKind, React.ReactNode> = {
   wechat: <MessageCircle size={16} />,
@@ -129,8 +130,15 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
       : { on: false, text: t('channels.status.notConnected') }
   }
 
-  if (!loaded) return <div className="hint">{t('common.loading')}</div>
-  if (!available) return <div className="hint">{t('channels.notAvailable')}</div>
+  if (!loaded) return <SettingsState icon={<Loader2 size={19} />} title={t('channels.loadingTitle')} description={t('channels.loadingHint')} busy />
+  if (!available) return (
+    <SettingsState
+      icon={<MessageCircle size={19} />}
+      title={t('channels.notAvailable')}
+      description={t('channels.notAvailableHint')}
+      actions={<button className="btn ghost sm" onClick={() => void useChannels.getState().refresh()}><RefreshCw size={12} />{t('common.refresh')}</button>}
+    />
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

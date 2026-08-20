@@ -140,10 +140,20 @@ button { font:inherit; border:0; }
   const stackedMenu = await box('.composer-menu--add')
   const stackedSub = await box('.add-menu-sub')
   check('两侧都放不下时二级菜单完整叠到一级菜单上方', stackedSub.bottom < stackedMenu.top, `主菜单 top ${stackedMenu.top.toFixed(1)}，子菜单 bottom ${stackedSub.bottom.toFixed(1)}`)
+
+  await page.evaluate(() => { document.querySelector('.stage').style.width = '250px' })
+  const tinyCard = await box('.stage')
+  const tinySub = await box('.add-menu-sub')
+  check(
+    '极窄 Chat View 会压缩二级菜单而不是越过 View 边界',
+    tinySub.left >= tinyCard.left && tinySub.right <= tinyCard.right,
+    `View ${tinyCard.left.toFixed(1)}..${tinyCard.right.toFixed(1)}，子菜单 ${tinySub.left.toFixed(1)}..${tinySub.right.toFixed(1)}`,
+  )
   await page.evaluate(() => {
     const sub = document.querySelector('.add-menu-sub')
     sub.classList.remove('stacked')
     sub.style.bottom = ''
+    document.querySelector('.stage').style.width = '700px'
   })
 
   await page.evaluate(() => {

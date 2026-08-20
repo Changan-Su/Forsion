@@ -98,7 +98,7 @@ function textareaCaretRect(ta: HTMLTextAreaElement): { left: number; top: number
  *
  * ⚠️ 必须跳过 `img.ProseMirror-separator`:ProseMirror 在空 textblock 里塞的零尺寸占位 img,
  * 矩形是 `h=0` 且 top 落在**基线**上。病史(用户实报「开丝滑光标后打标题必偏」):空标题
- * `<h3><span.heading-hash>### </span><img.separator><br></h3>` 光标在元素 offset=1,旧代码直接取
+ * `<h3><input.amx-struct-prefix><img.separator><br></h3>` 光标在元素 offset=1,旧代码直接取
  * `childNodes[1]` = 那个 img → 画在 top 73 / 高 18,真值是 top 56 / 高 21(h1 更夸张,偏 25px)。
  * 高度取自 `caretEm(host)` 也是错的 —— 那是 `.ProseMirror` 的字号,不是标题的。
  */
@@ -108,13 +108,19 @@ function neighborCaretRect(el: Element, offset: number): { x: number; y: number;
     const r = n.getBoundingClientRect()
     return r.height > 0 ? r : null
   }
+  // input/widget 可能吃的是整行 line-height（h1 实测 33px），原生文字 caret 只吃字体行内盒
+  // （同处 h1 为 30px）。位置取邻居边缘，高度取「邻居盒与本行字体盒的较小者」并垂直居中。
+  const at = (r: DOMRect, x: number): { x: number; y: number; h: number } => {
+    const h = Math.min(r.height, caretEm(el))
+    return { x, y: r.top + (r.height - h) / 2, h }
+  }
   for (let i = offset - 1; i >= 0; i--) {
     const r = usable(el.childNodes[i])
-    if (r) return { x: r.right, y: r.top, h: r.height }
+    if (r) return at(r, r.right)
   }
   for (let i = offset; i < el.childNodes.length; i++) {
     const r = usable(el.childNodes[i])
-    if (r) return { x: r.left, y: r.top, h: r.height }
+    if (r) return at(r, r.left)
   }
   return null
 }
@@ -127,6 +133,9 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
     const r = textareaCaretRect(ae)
     return { x: r.left, y: r.top, h: r.height, host: ae }
   }
+  // 结构源码前缀是真 input，自带可编辑的逐字符 caret。此时 PM selection 仍停在正文行首，
+  // 若继续按它画覆盖层，会在 input 光标之外多出一根“假光标”，且位置永远不随 input 内移动。
+  if (ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement) return null
   // 编辑器:contenteditable 分支
   const sel = document.getSelection()
   if (!sel || !sel.rangeCount || !sel.isCollapsed) return null
@@ -152,6 +161,36 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
   return { x: r.left, y: r.top, h, host }
 }
 
+/**
+ * caret 的真实裁剪范围。
+ *
+ * `.ProseMirror` 只是选区宿主，并不一定是视觉边界：Canvas 的卡片用绝对定位摆在它的
+ * 自然流 border-box 之外，但仍是完全可见的后代。直接拿宿主 rect 判越界会误杀卡片里的
+ * 光标。这里只收紧那些 CSS overflow 确实会裁剪的轴；textarea 自己通常是 auto，仍会被
+ * 正确纳入。初始范围用布局视口，因为 caret rect 与 fixed 覆盖层都在同一个坐标系。
+ */
+function caretClipRect(host: Element): { left: number; top: number; right: number; bottom: number } {
+  const clip = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+  const clips = (value: string): boolean => /^(?:auto|clip|hidden|scroll)$/.test(value)
+  for (let el: Element | null = host; el; el = el.parentElement) {
+    const cs = getComputedStyle(el)
+    // 文档模式为保住 ProseMirror 实例，会把持久 Canvas 舞台切成 display:contents。
+    // 它仍继承 `.amx-stage { overflow:hidden }`，但自身没有布局盒，不能拿零矩形当裁剪边界。
+    // getClientRects() 同时覆盖其他不生成盒子的祖先；真正的 0×N / N×0 裁剪盒仍有 rect，照常生效。
+    if (cs.display === 'contents' || el.getClientRects().length === 0) continue
+    const r = el.getBoundingClientRect()
+    if (clips(cs.overflowX)) {
+      clip.left = Math.max(clip.left, r.left)
+      clip.right = Math.min(clip.right, r.right)
+    }
+    if (clips(cs.overflowY)) {
+      clip.top = Math.max(clip.top, r.top)
+      clip.bottom = Math.min(clip.bottom, r.bottom)
+    }
+  }
+  return clip
+}
+
 /** 触屏设备上软键盘是否正占着屏(视觉视口比布局视口矮一大截)。桌面/无 visualViewport 恒 false。
  *  ⚠️ 让位必须**连 `sc-on` 一起摘**:`html.sc-on` 把宿主的 caret-color 置成了 transparent,
  *  只 hide() 覆盖层的话用户会一个光标都看不见。 */
@@ -165,9 +204,13 @@ function update(): void {
   if (!enabled || !document.hasFocus()) return hide()
   const info = caretInfo()
   if (!info) return hide()
-  // caret 滚出宿主可视范围时藏起(覆盖层 fixed,不然会浮到工具栏上)
-  const hr = info.host.getBoundingClientRect()
-  if (info.y + info.h < hr.top + 1 || info.y > hr.bottom - 1) return hide()
+  // caret 滚出真实裁剪范围时藏起(覆盖层 fixed,不然会浮到工具栏上)。Canvas 卡片可能位于
+  // ProseMirror 自身 border-box 之外，故不能把编辑宿主本身一概当作裁剪容器。
+  const clip = caretClipRect(info.host)
+  if (
+    info.x < clip.left - 1 || info.x > clip.right + 1
+    || info.y + info.h < clip.top + 1 || info.y > clip.bottom - 1
+  ) return hide()
   const el = ensureOverlay()
   // 颜色跟宿主:主题 --primary 优先,退回文字色(原生 caret 已被置 transparent,读不到)
   const cs = getComputedStyle(info.host)

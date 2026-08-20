@@ -20,6 +20,7 @@ import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
+import { useEdgeNudge } from '@lcl/engine'
 import { splitSuggestions, type SuggestState } from './suggest'
 import './chat2.css'
 
@@ -170,6 +171,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
   // 靠近底部时向上翻:.t2-stream 有 mask 自成层叠上下文,菜单的 z-index 出不去,会被悬浮输入卡盖住且点不到。
   const [up, setUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const edgeFix = useEdgeNudge(true, { boundary: '.t2-chat-view' })
   useEffect(() => {
     // at=0(消息没时间戳)时 rewindTo 会直接拒绝 → 这里也必须报 0,别把整会话的检查点算进来点亮按钮。
     if (!ctx?.sessionId || !at) { setStat({ files: 0, skipped: 0 }); return }
@@ -200,7 +202,11 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
   }, [stat])
   const n = stat?.files ?? 0
   return (
-    <div ref={ref} className={`composer-menu rewind-menu left${up ? ' up' : ''}`}>
+    <div
+      ref={(el) => { ref.current = el; edgeFix.ref.current = el }}
+      className={`composer-menu rewind-menu left${up ? ' up' : ''}`}
+      style={edgeFix.style}
+    >
       <div className="menu-section">{t('rewind.title')}</div>
       <button className="menu-item" disabled={!n} onClick={() => onPick('code')}>
         <FileCode2 size={14} />

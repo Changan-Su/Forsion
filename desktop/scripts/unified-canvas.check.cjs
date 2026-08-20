@@ -3164,6 +3164,132 @@ async function main() {
       && s63c.conns === 1 && s63c.tree === null,
     JSON.stringify({ cardToCard: s63, cardToShape: s63b, shiftCardToCard: s63c }))
 
+  // ── C64-C65 文档模式的层级嵌套 + 点阵底纹(2026-08-19 用户拍板)────────────────────────
+  // 三张卡,k3 在源码最末尾 —— 认 k1 当爹之后它必须**搬到 k1 那一段之后**(源码相邻),
+  // 文档模式才谈得上「排序始终在父 Card 内」。k2 是对照:不动、不缩进。
+  const NEST = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k1","x":520,"y":80,"w":300},{"ref":"k2","x":560,"y":460,"w":300},{"ref":"k3","x":560,"y":760,"w":300}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一甲。', '<!-- /a k1 -->', '',
+    '<!-- a k2 -->', '卡二甲。', '<!-- /a k2 -->', '', '<!-- a k3 -->', '卡三甲。', '<!-- /a k3 -->', '',
+  ].join('\n')
+  /** 正文里锚出现的先后 = 落盘顺序。⚠️ 判据必须读 body 而不是 DOM:文档模式的 DOM 顺序恒等于
+   *  源码顺序,拿 DOM 断言的话「没搬源码、只是 CSS 缩进」照样绿(本轮真正要钉的就是搬没搬)。 */
+  const anchorOrder = (p) => p.evaluate(() => {
+    window.__upage.probe.flush?.()
+    const body = window.__upage.probe.fmState?.().body ?? ''
+    return [...body.matchAll(/^<!--\s*a\s+([A-Za-z0-9_-]+)\s*-->$/gm)].map((m) => m[1])
+  })
+  const p64 = await open(browser, NEST)
+  await p64.waitForTimeout(300)
+  const a64 = await cardBox(p64, 'k1')
+  await dragCardTo(p64, 'k3', a64.r - 12, a64.t + a64.h / 2) // 指针推到 k1 右缘 = 认它当爹
+  const s64 = await canvasState(p64)
+  const order64 = await anchorOrder(p64)
+  // ⚠️ 一击撤销必须在**画布模式**里按:统一撤销仲裁挂在舞台的捕获期 keydown 上,文档模式下
+  //    舞台是 display:contents 且焦点在别处,那一下谁也收不到(第一版就是在文档模式按的,
+  //    测出来「撤销没反应」——是仪器按错了地方,不是产品坏了)。
+  await p64.keyboard.press('Meta+z')
+  await p64.waitForTimeout(400)
+  const undo64 = { order: await anchorOrder(p64), tree: (await canvasState(p64)).tree }
+  await p64.keyboard.press('Meta+Shift+z') // 重做回嵌套形态,再看文档模式的呈现
+  await p64.waitForTimeout(400)
+  await p64.click('.amx-modeseg button:nth-child(2)') // → 文档模式
+  await p64.waitForTimeout(400)
+  const nest64 = await p64.evaluate(() => {
+    const of = (a) => {
+      const el = document.querySelector(`.amx-ucard[data-anchor="${a}"]`)
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      return { cls: el.className, ml: Math.round(parseFloat(cs.marginLeft) || 0), bl: Math.round(parseFloat(cs.borderLeftWidth) || 0) }
+    }
+    return { k1: of('k1'), k2: of('k2'), k3: of('k3') }
+  })
+  await p64.close()
+  record('C64 认爹 → 子卡那一段搬到父段之后(源码相邻);文档模式下子卡缩进+左轨,自由卡零装饰不动;一击撤销顺序与层级同退',
+    s64.tree === '"tree":{"k3":"k1"}' && order64.join(',') === 'k1,k3,k2'
+      && nest64.k3?.cls.includes('amx-card-child') && nest64.k3?.cls.includes('amx-card-d1')
+      && nest64.k3.ml > 0 && nest64.k3.bl > 0
+      && !nest64.k1?.cls.includes('amx-card-child') && nest64.k1?.ml === 0 && nest64.k1?.bl === 0
+      && !nest64.k2?.cls.includes('amx-card-child') && nest64.k2?.ml === 0
+      && undo64.order.join(',') === 'k1,k2,k3' && undo64.tree === null,
+    JSON.stringify({ state: s64, order: order64, doc: nest64, undo: undo64 }))
+
+  // C64b ⚠️ 毁数据防线(Codex 2026-08-20 critical 实证):子树段必须**遇到非卡节点就收边**。
+  // cards 是过滤后的数组,只判后代关系的话 `[k2, 正文, k3]` 会被算成一整段,而搬迁是「按首尾
+  // 位置删区间 + 只把卡片插回去」—— 夹在中间的正文当场永久消失。这里把 k2 挂到 k1 下面,
+  // 断言那段正文一个字都不能少。
+  // 源码顺序刻意排成 `子卡 | 正文 | 孙卡 | 父卡`(Codex 的原始复现形):子卡在父卡**之前**,
+  // 搬迁必然真执行 —— 若段判据不看相邻性,删的就是「子卡→孙卡」这一整段,中间那段正文陪葬。
+  const GAP = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k2","x":520,"y":80,"w":300},{"ref":"k3","x":900,"y":80,"w":300},{"ref":"k1","x":520,"y":460,"w":300}],"tree":{"k3":"k2"}}',
+    '---', '', '主卡正文。', '', '<!-- a k2 -->', '卡二甲。', '<!-- /a k2 -->', '',
+    '夹在卡之间的正文一定不能被吞。', '',
+    '<!-- a k3 -->', '卡三甲。', '<!-- /a k3 -->', '', '<!-- a k1 -->', '卡一甲。', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p64b = await open(browser, GAP)
+  await p64b.waitForTimeout(300)
+  const a64b = await cardBox(p64b, 'k1')
+  await dragCardTo(p64b, 'k2', a64b.r - 12, a64b.t + a64b.h / 2)
+  const body64b = await p64b.evaluate(() => {
+    window.__upage.probe.flush?.()
+    return window.__upage.probe.fmState?.().body ?? ''
+  })
+  const order64b = await anchorOrder(p64b)
+  await p64b.close()
+  record('C64b 子树段遇非卡节点即收边:搬迁只带走紧邻的那一截,夹在中间的正文与孙卡一个字不动',
+    body64b.includes('夹在卡之间的正文一定不能被吞。') && body64b.includes('卡三甲。')
+      && order64b.join(',') === 'k3,k1,k2',
+    JSON.stringify({ order: order64b, keptGap: body64b.includes('夹在卡之间的正文一定不能被吞。') }))
+
+  // C65 点阵底纹跟着视口走(AFFiNE 同款)。⚠️ 判据不能只是「有 radial-gradient」——
+  // 改之前那版也有,只是拿 --border 画得几乎看不见、且平移缩放时纹丝不动。
+  const p65 = await open(browser, NEST)
+  await p65.waitForTimeout(300)
+  /** ⚠️ 墨色的判据不能写成「不是全透明」:radial-gradient 的**第二个**色标本来就是
+   *  `rgba(0,0,0,0)`,那样写只是在断言渐变有个透明端(第一版实测照绿)。这里改成把两种配方
+   *  各自算出来比对 —— 用的是正文色兑的那个、且**不是** --border 那个(退回去就当场红)。 */
+  const bg = () => p65.evaluate(() => {
+    const stage = document.querySelector('.amx-stage')
+    const probe = document.createElement('div')
+    stage.appendChild(probe)
+    const colorOf = (v) => {
+      probe.style.color = v
+      return getComputedStyle(probe).color
+    }
+    const want = colorOf('color-mix(in srgb, var(--text) 20%, transparent)')
+    const old = colorOf('var(--border)')
+    probe.remove()
+    const cs = getComputedStyle(stage)
+    return { img: cs.backgroundImage, size: cs.backgroundSize, pos: cs.backgroundPosition, want, old }
+  })
+  const g0 = await bg()
+  const st65 = await p65.evaluate(() => {
+    const r = document.querySelector('.amx-stage').getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  await p65.keyboard.down('Alt') // Alt 拖 = 平移(pan)
+  await p65.mouse.move(st65.x, st65.y)
+  await p65.mouse.down()
+  await p65.mouse.move(st65.x + 60, st65.y + 40, { steps: 6 })
+  await p65.mouse.up()
+  await p65.keyboard.up('Alt')
+  await p65.waitForTimeout(250)
+  const bg1 = await bg()
+  await p65.click('.amx-stage-hud button[title="放大"]')
+  await p65.waitForTimeout(250)
+  const bg2 = await bg()
+  await p65.close()
+  const px = (s) => s.split(' ').map((v) => Math.round(parseFloat(v) || 0))
+  const [x0, y0] = px(g0.pos)
+  const [x1, y1] = px(bg1.pos)
+  record('C65 点阵底纹:墨色按正文色兑(不再是几乎看不见的 --border);平移 60/40 → 背景同步偏移;放大 → 格距变大',
+    /radial-gradient/.test(g0.img) && g0.img.includes(g0.want) && !g0.img.includes(g0.old)
+      && x1 - x0 === 60 && y1 - y0 === 40
+      && px(bg2.size)[0] > px(bg1.size)[0],
+    JSON.stringify({ before: g0, panned: bg1, zoomed: bg2 }))
+
   await browser.close()
   const ok = results.filter(Boolean).length
   console.log(`\n${ok}/${results.length} 通过`)

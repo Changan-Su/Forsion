@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, FileText, MessageSquarePlus, MessagesSquare,
   PanelsTopLeft, Paperclip, Plus, Search,
 } from 'lucide-react'
-import { allViews, getView, label, useEdgeNudge, useWorkspace, zoomOf } from '@lcl/engine'
+import { allViews, getView, label, nestedPanelPlacement, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'
@@ -75,8 +75,8 @@ export const AddContentMenu: React.FC<{
   const subRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const menuFix = useEdgeNudge(open)
-  const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '')
+  const menuFix = useEdgeNudge(open, { boundary: '.t2-chat-view' })
+  const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
 
   const sessions = useApp((s) => s.sessions)
   const archivedSessions = useApp((s) => s.archivedSessions)
@@ -103,28 +103,25 @@ export const AddContentMenu: React.FC<{
     if (!pane || !menu || !sub) return
     const update = (): void => {
       const menuRect = menu.getBoundingClientRect()
-      const cardRect = menu.closest('.t2c-card')?.getBoundingClientRect()
+      const boundaryRect = (menu.closest('.t2c-card') || menu.closest('.t2-chat-view'))?.getBoundingClientRect()
       const zoom = zoomOf(sub)
-      const width = sub.offsetWidth * zoom
-      const gap = 6 * zoom
-      const edge = 8
-      const next = !cardRect || menuRect.right + gap + width <= cardRect.right - edge
-        ? 'right'
-        : menuRect.left - gap - width >= cardRect.left + edge
-        ? 'left'
-        : 'stacked'
+      const next = boundaryRect
+        ? nestedPanelPlacement(menuRect.left, menuRect.right, sub.offsetWidth, boundaryRect.left, boundaryRect.right, zoom)
+        : 'right'
       setPlacement((prev) => prev === next ? prev : next)
       setStackOffset((prev) => prev === menu.offsetHeight + 6 ? prev : menu.offsetHeight + 6)
     }
     update()
     window.addEventListener('resize', update)
+    window.addEventListener(UI_ZOOM_EVENT, update)
     const ro = new ResizeObserver(update)
     ro.observe(menu)
     ro.observe(sub)
-    const card = menu.closest('.t2c-card')
-    if (card) ro.observe(card)
+    const boundary = menu.closest('.t2c-card') || menu.closest('.t2-chat-view')
+    if (boundary) ro.observe(boundary)
     return () => {
       window.removeEventListener('resize', update)
+      window.removeEventListener(UI_ZOOM_EVENT, update)
       ro.disconnect()
     }
   }, [pane])

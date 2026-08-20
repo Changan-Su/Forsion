@@ -98,7 +98,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
 }
 
 /**
- * 「CSS 已经把位置定好、只是会掉出屏幕」那类浮层的横向兜底 —— 锚在按钮上的 `position:absolute`
+ * 「CSS 已经把位置定好、只是会掉出边界」那类浮层的横向兜底 —— 锚在按钮上的 `position:absolute`
  * 菜单(聊天输入区的 add / mode 菜单、ModelPill 的两级菜单、ProjectSelector…)。
  *
  * 【为什么不直接改成 fixed 走 useClampedMenu】聊天区自上而下三层 `container-type: inline-size`
@@ -106,7 +106,8 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
  * 而 layout containment 会让元素成为 **fixed 后代的包含块** —— 菜单一改 fixed 就锚到卡片而不是视口,
  * 还得连带 portal 出去,而 portal 又会打断 `closest('[data-cmenu]')` / `wrapRef.contains()` 那套
  * 「点外面关菜单」判定(第一下 mousedown 就把菜单关了 = 用户眼里的「点了没反应」)。
- * 所以这里只做最小事:量真实矩形,溢出就横向推回来,比屏幕还宽再给 max-width。
+ * 所以这里只做最小事:量真实矩形,溢出就横向推回来,比可用边界还宽再给 max-width。
+ * 默认边界是 viewport；Chatbox 等嵌在 Dock View 里的浮层传 `boundary`，不能借相邻 View 的空间。
  *
  * 【为什么用 `translate` 而不是 `transform`】这些菜单的入场动画 `@keyframes pop` 正动着 transform,
  * 写 inline transform 头 160ms 会被它覆盖;`translate` 是独立属性,与 transform 叠加不打架。
@@ -137,12 +138,47 @@ export function edgeNudge(
   return { dx: dx / zoom, maxWidth: tooWide ? avail / zoom : undefined }
 }
 
+/**
+ * 二级面板相对一级面板的横向落位。所有坐标都是视口 px；panelWidth / gap / margin
+ * 是元素局部 px，内部统一乘累计 zoom 后再比较。边界可以是整个 viewport，也可以是某个 View / 卡片。
+ * 两侧都放不下时返回 stacked，由调用方把二级面板叠到一级面板上方。
+ */
+export type NestedPanelPlacement = 'right' | 'left' | 'stacked'
+export function nestedPanelPlacement(
+  anchorLeft: number,
+  anchorRight: number,
+  panelWidth: number,
+  boundaryLeft: number,
+  boundaryRight: number,
+  zoom = 1,
+  gap = 6,
+  margin = 8,
+): NestedPanelPlacement {
+  const widthV = panelWidth * zoom
+  const gapV = gap * zoom
+  const marginV = margin * zoom
+  if (anchorRight + gapV + widthV <= boundaryRight - marginV) return 'right'
+  if (anchorLeft - gapV - widthV >= boundaryLeft + marginV) return 'left'
+  return 'stacked'
+}
+
+interface EdgeNudgeOptions {
+  margin?: number
+  /** 除 viewport 外再收进最近的容器边界，例如 Chat View。找不到时自动回退 viewport。 */
+  boundary?: string
+}
+
 /** @param active 假值 = 关闭(清零);真值同时**兼作重算依赖** —— 调用方把会挪动浮层的状态编进去
  *  (如 ModelPill 的 `${pane}:${flip}`),翻面之后才会重新夹取。 */
-export function useEdgeNudge(active: string | number | boolean | null | undefined, margin = 8): {
+export function useEdgeNudge(
+  active: string | number | boolean | null | undefined,
+  options: number | EdgeNudgeOptions = 8,
+): {
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
+  const margin = typeof options === 'number' ? options : (options.margin ?? 8)
+  const boundarySelector = typeof options === 'number' ? undefined : options.boundary
   const ref = useRef<HTMLDivElement>(null)
   const [fix, setFix] = useState<{ dx: number; maxWidth?: number }>({ dx: 0 })
   useLayoutEffect(() => {
@@ -161,7 +197,11 @@ export function useEdgeNudge(active: string | number | boolean | null | undefine
       // 量到 357 宽判定通过,实际 368 宽、右缘 387.5 已经出界)。offsetWidth 不吃 transform,是未缩放的
       // 真实宽(局部 px,×zoom 换到视口 px);pop 只有 translateY,缩放中心横向不动,故用 rect 中线还原左缘。
       const w = el.offsetWidth * z
-      const { dx, maxWidth } = edgeNudge((r.left + r.right) / 2 - w / 2, w, window.innerWidth, z, margin)
+      const boundary = boundarySelector ? el.closest(boundarySelector)?.getBoundingClientRect() : undefined
+      const boundaryLeft = boundary?.left ?? 0
+      const boundaryRight = boundary?.right ?? window.innerWidth
+      const localLeft = (r.left + r.right) / 2 - w / 2 - boundaryLeft
+      const { dx, maxWidth } = edgeNudge(localLeft, w, boundaryRight - boundaryLeft, z, margin)
       setFix((p) => (Math.abs(p.dx - dx) < 0.5 && p.maxWidth === maxWidth ? p : { dx, maxWidth }))
     }
     apply()
@@ -171,12 +211,14 @@ export function useEdgeNudge(active: string | number | boolean | null | undefine
     window.addEventListener(UI_ZOOM_EVENT, apply)
     const ro = new ResizeObserver(apply) // 内容异步长出来(模型列表拉完)后重量
     ro.observe(el)
+    const boundaryEl = boundarySelector ? el.closest(boundarySelector) : null
+    if (boundaryEl) ro.observe(boundaryEl)
     return () => {
       window.removeEventListener('resize', apply)
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
     }
-  }, [active, margin])
+  }, [active, margin, boundarySelector])
   return { ref, style: { translate: fix.dx ? `${fix.dx}px` : undefined, maxWidth: fix.maxWidth } }
 }
 

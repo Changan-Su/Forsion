@@ -210,7 +210,7 @@ async function main() {
     await p7.waitForSelector('.unified-block-menu', { timeout: 3000 })
     await p7.click('.unified-block-menu button:nth-of-type(3)') // 标题 2
     await p7.waitForTimeout(250)
-    // textContent 含 headingSource 装饰的字面 `## `(光标在标题行时露出),断言只看结尾。
+    // structuralSource 现在是真 input（value 不进 textContent），断言仍只看正文结尾。
     const p9a = await p7.evaluate((s) => document.querySelector(`${s} > h2`)?.textContent, PM)
     await hoverBlock(p7, `${PM} > h2`)
     await p7.click('.unified-gutter .drag-handle')
@@ -543,12 +543,20 @@ async function main() {
 
     await caret('乙', 0)
     await pg.keyboard.press('Backspace')
-    await pg.waitForTimeout(250)
+    await pg.waitForTimeout(180)
     const f2 = await pg.evaluate((s) => {
       const el = document.querySelector(s)
-      return { lis: el.querySelectorAll('li').length, out: [...el.querySelectorAll(':scope > p')].some((p) => p.textContent === '乙') }
+      return {
+        lis: el.querySelectorAll('li').length,
+        source: el.querySelectorAll('.amx-struct-prefix').length,
+        literal: [...el.querySelectorAll(':scope > p')].find((p) => p.textContent.includes('乙'))?.textContent ?? null,
+        offset: getSelection()?.anchorOffset ?? null,
+        active: document.activeElement?.classList.contains('ProseMirror'),
+      }
     }, PM)
-    record('K14 列表项行首退格 → 仍是脱壳变段落(缩进层没截胡)', f2.out && f2.lis === 2, JSON.stringify(f2))
+    record('K14 列表项行首退格 → 立即还原字面 “-” 且光标可继续编辑(缩进层没截胡)',
+      f2.source === 0 && f2.lis === 2 && f2.literal === '-乙' && f2.offset === 1 && f2.active,
+      JSON.stringify(f2))
     await pg.close()
   }
 
@@ -1301,32 +1309,47 @@ async function main() {
       await pg.close()
     }
 
-    // K2 行首退格:非空标题**一步**降正文(preset 是逐级降,h2 要按两下才到正文)
+    // K2 行首退格删掉渲染边界空格后立即还原字面源码，之后 Backspace 继续删普通字符。
     {
       const pg = await openSeed('段前。\n\n## 标题文字\n')
       await caret(pg, '标题文字', 'start')
       await pg.waitForTimeout(150)
       await pg.keyboard.press('Backspace')
-      await pg.waitForTimeout(200)
+      await pg.waitForTimeout(150)
       const a = await tops(pg)
+      const aState = await pg.evaluate(() => ({
+        source: document.querySelectorAll('.amx-struct-prefix').length,
+        offset: getSelection()?.anchorOffset ?? null,
+        active: document.activeElement?.classList.contains('ProseMirror'),
+      }))
       await pg.keyboard.press('Backspace')
       await pg.waitForTimeout(200)
       const b = await tops(pg)
-      record('K2 行首退格:标题一步降正文,再按一下才并入上一块',
-        a === 'paragraph:段前。 | paragraph:标题文字' && b === 'paragraph:段前。标题文字', JSON.stringify({ a, b }))
+      const bOffset = await pg.evaluate(() => getSelection()?.anchorOffset ?? null)
+      record('K2 标题边界退格立即还原字面源码，后续逐字符删除',
+        a === 'paragraph:段前。 | paragraph:##标题文字' && aState.source === 0
+          && aState.offset === 2 && aState.active && b === 'paragraph:段前。 | paragraph:#标题文字'
+          && bOffset === 1,
+        JSON.stringify({ a, aState, b, bOffset }))
       await pg.close()
     }
 
-    // K3 列表项行首退格 = 就地脱壳变段落(不与上一块合并);K10 Mod+退格一路反缩进到顶层
+    // K3 列表项删掉边界空格后立即变成字面 `-`；Mod+退格仍保留原来的列表反缩进快捷语义。
     {
       const pg = await openSeed('引子。\n\n- 甲项\n- 乙项\n')
       await caret(pg, '乙项', 'start')
       await pg.waitForTimeout(150)
       await pg.keyboard.press('Backspace')
-      await pg.waitForTimeout(200)
+      await pg.waitForTimeout(120)
+      const source = await pg.evaluate(() => ({
+        inputs: document.querySelectorAll('.amx-struct-prefix').length,
+        offset: getSelection()?.anchorOffset ?? null,
+        active: document.activeElement?.classList.contains('ProseMirror'),
+      }))
       const k3 = await tops(pg)
-      record('K3 列表项行首退格 = 就地转段落(不并入上一块)',
-        k3 === 'paragraph:引子。 | bullet_list:甲项 | paragraph:乙项', k3)
+      record('K3 列表边界退格立即就地转为字面普通文本',
+        source.inputs === 0 && source.offset === 1 && source.active
+          && k3 === 'paragraph:引子。 | bullet_list:甲项 | paragraph:-乙项', JSON.stringify({ source, k3 }))
       await pg.close()
     }
     {
@@ -1421,21 +1444,35 @@ async function main() {
       await pg.close()
     }
 
-    // K11 callout:非首段行首退格 = 拆出 callout;首段行首退格 = 整只块选中
+    // K11 引用/callout 的 `> ` 也遵循同一套边界语义：空格一删，立即脱壳成字面 `>`。
     {
       const pg = await openSeed('> [!note] 标记\n>\n> 次段内容\n')
       await caret(pg, '次段内容', 'start')
       await pg.waitForTimeout(150)
       await pg.keyboard.press('Backspace')
-      await pg.waitForTimeout(250)
+      await pg.waitForTimeout(120)
+      const aState = await pg.evaluate(() => ({
+        source: document.querySelectorAll('.amx-struct-prefix').length,
+        offset: getSelection()?.anchorOffset ?? null,
+        active: document.activeElement?.classList.contains('ProseMirror'),
+      }))
       const a = await tops(pg)
       await caret(pg, '[!note] 标记', 'start')
       await pg.waitForTimeout(150)
       await pg.keyboard.press('Backspace')
-      await pg.waitForTimeout(200)
-      const b = await pg.evaluate(() => window.__upage.probe.view().state.selection.node?.type?.name ?? '')
-      record('K11 callout:非首段退格拆出去 / 首段退格整只选中',
-        a === 'blockquote:[!note] 标记 | paragraph:次段内容' && b === 'blockquote', JSON.stringify({ a, b }))
+      await pg.waitForTimeout(120)
+      const b = await pg.evaluate(() => ({
+        source: document.querySelectorAll('.amx-struct-prefix').length,
+        top: window.__upage.probe.view().state.doc.firstChild?.type?.name ?? '',
+        offset: getSelection()?.anchorOffset ?? null,
+      }))
+      const afterFirst = await tops(pg)
+      record('K11 引用边界退格立即还原字面文本，非首段与首段均不困在 input',
+        aState.source === 0 && aState.offset === 1 && aState.active
+          && a === 'blockquote:[!note] 标记 | paragraph:>次段内容'
+          && b.source === 0 && b.top === 'paragraph' && b.offset === 1
+          && afterFirst === 'paragraph:>[!note] 标记 | paragraph:>次段内容',
+        JSON.stringify({ aState, a, b, afterFirst }))
       await pg.close()
     }
 

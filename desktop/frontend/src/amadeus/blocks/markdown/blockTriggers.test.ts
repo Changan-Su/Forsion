@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blockLabel, matchTrigger } from './blockTriggers'
+import { blockLabel, matchTrigger, triggerFromStructuralPrefix } from './blockTriggers'
 
 describe('matchTrigger(光标前文本 → 块触发)', () => {
   it('标题 1-6 级;7 个 # 不触发', () => {
@@ -17,6 +17,8 @@ describe('matchTrigger(光标前文本 → 块触发)', () => {
     expect(matchTrigger('[ ]')).toEqual({ kind: 'task', checked: false })
     expect(matchTrigger('[x]')).toEqual({ kind: 'task', checked: true })
     expect(matchTrigger('[X]')).toEqual({ kind: 'task', checked: true })
+    expect(matchTrigger('- [ ]')).toEqual({ kind: 'task', checked: false })
+    expect(matchTrigger('- [x]')).toEqual({ kind: 'task', checked: true })
     // 2026-07-29 换键位:`|` = 引用,`>` = 折叠(Notion 手感)。落盘两者仍都是 `>` 开头的合法 md。
     expect(matchTrigger('|')).toEqual({ kind: 'quote' })
     expect(matchTrigger('>')).toEqual({ kind: 'fold' })
@@ -30,6 +32,23 @@ describe('matchTrigger(光标前文本 → 块触发)', () => {
     expect(matchTrigger('')).toBeNull()
     expect(matchTrigger('1')).toBeNull()
     expect(matchTrigger('[y]')).toBeNull()
+  })
+})
+
+describe('triggerFromStructuralPrefix(实况源码 → 块类型)', () => {
+  it('只有带渲染边界空格的完整标题语法才命中', () => {
+    expect(triggerFromStructuralPrefix('### ')).toEqual({ kind: 'heading', level: 3 })
+    expect(triggerFromStructuralPrefix('###')).toBeNull()
+    expect(triggerFromStructuralPrefix('####### ')).toBeNull()
+  })
+  it('列表/待办/引用逐字符删坏后不再命中', () => {
+    expect(triggerFromStructuralPrefix('- ')).toEqual({ kind: 'bullet' })
+    expect(triggerFromStructuralPrefix('4. ')).toEqual({ kind: 'ordered', order: 4 })
+    expect(triggerFromStructuralPrefix('- [ ] ')).toEqual({ kind: 'task', checked: false })
+    expect(triggerFromStructuralPrefix('- [x] ')).toEqual({ kind: 'task', checked: true })
+    expect(triggerFromStructuralPrefix('> ')).toEqual({ kind: 'quote' })
+    expect(triggerFromStructuralPrefix('- [] ')).toBeNull()
+    expect(triggerFromStructuralPrefix('>')).toBeNull()
   })
 })
 

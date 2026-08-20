@@ -43,6 +43,9 @@ export function matchTrigger(before: string): Trigger | null {
   if ((m = /^(#{1,6})$/.exec(b))) return { kind: 'heading', level: m[1].length }
   if (/^[-*+]$/.test(b)) return { kind: 'bullet' }
   if ((m = /^(\d{1,9})\.$/.exec(b))) return { kind: 'ordered', order: Number(m[1]) }
+  // `- [ ]` 是任务项从渲染态退回字面源码后的自然形态；用户补回最后一个空格时必须能
+  // 再次渲染。保留既有 `[ ]` / `[]` 简写，两条入口落到同一 task 事务。
+  if ((m = /^- \[( |x)\]$/i.exec(b))) return { kind: 'task', checked: m[1].toLowerCase() === 'x' }
   if ((m = /^\[( |x)?\]$/i.exec(b))) return { kind: 'task', checked: (m[1] ?? '').toLowerCase() === 'x' }
   // `|` = 引用,`>` = 折叠(Notion 手感;用户 2026-07-29 定的键位)。落盘两者都还是 `>` 开头的合法 md。
   if (b === '|') return { kind: 'quote' }
@@ -50,6 +53,22 @@ export function matchTrigger(before: string): Trigger | null {
   // ```lang → 代码块(语言即 fence info,落盘就是原生 md);$$ → 行内公式骨架。
   if ((m = /^```([A-Za-z0-9+#._-]*)$/.exec(b))) return { kind: 'code', lang: m[1] }
   if (b === '$$') return { kind: 'math' }
+  return null
+}
+
+/**
+ * 实况预览里露出的完整行首源码 → 块类型。
+ * 与 matchTrigger 的区别是这里包含「触发转换所需的尾随空格」，因此删掉任意关键字符后就不再
+ * 命中，调用方会把残余源码还原成普通文本。这个空格是 Obsidian 式“渲染/源码”边界。
+ */
+export function triggerFromStructuralPrefix(source: string): Trigger | null {
+  const s = source.replace(/\u00A0/g, ' ')
+  let m: RegExpExecArray | null
+  if ((m = /^(#{1,6}) $/.exec(s))) return { kind: 'heading', level: m[1].length }
+  if (/^[-*+] $/.test(s)) return { kind: 'bullet' }
+  if ((m = /^(\d{1,9})\. $/.exec(s))) return { kind: 'ordered', order: Number(m[1]) }
+  if ((m = /^- \[( |x)\] $/i.exec(s))) return { kind: 'task', checked: m[1].toLowerCase() === 'x' }
+  if (s === '> ') return { kind: 'quote' }
   return null
 }
 

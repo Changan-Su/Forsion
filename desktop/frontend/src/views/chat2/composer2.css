@@ -181,8 +181,10 @@
   position: absolute;
   bottom: 100%;
   left: calc(100% + 6px);
-  width: 268px;
+  /* 268px 是舒适宽；极窄 Chat View 下以卡片容器为硬边界收缩，不能借 window 的空间越界。 */
+  width: min(268px, calc(100cqw - 16px));
   min-width: 0;
+  max-width: calc(100cqw - 16px);
   padding: 5px;
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);

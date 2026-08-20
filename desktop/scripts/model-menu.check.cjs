@@ -8,8 +8,7 @@
  *    否则子面板整块被裁 → 表现为「点了行没反应」。用 elementFromPoint 打命中,裁切会漏出来。
  *  D 主面板固定为「高级 → 模型 → Effort」且 Effort 是可拖动 range；Max 有独立渐变 / 星点层。
  *  E 高级内容从高级行上方向上展开，卡片有高度过渡且高级 / 模型 / Effort 三行不位移。
- *  F .flip 生效:加上 flip class 后子面板整个落到菜单**左**侧(翻面的另一半是 JS 决策,
- *    那部分在 frontend/src/components/modelPill.test.ts 里钉,含 zoom≠1 的坐标系换算)。
+ *  F 模型 / 辅助 / 生图 / 识图共用 View 感知的右 → 左 → 上方落位；极窄 View 下仍不得越界。
  *
  * 改 .model-pill-btn / .composer-menu--model / .cm-sub 任何一条样式后必跑。
  * 跑:node scripts/model-menu.check.cjs   (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
@@ -50,11 +49,13 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
 ${CSS}
 ${COMPOSER_CSS}
 body { margin: 0; }
+.model-stage { position: fixed; inset: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 /* 药丸在输入框底排右端:离视口右缘还有点余量,子面板默认能贴右侧 */
 .row { position: absolute; right: 260px; top: 420px; display: flex; align-items: center; gap: 8px; }
 button { font: inherit; background: none; border: 0; cursor: pointer; }
 </style></head><body>
 <div class="t2c-card" style="position:fixed;visibility:hidden;pointer-events:none"><textarea class="t2c-ta"></textarea></div>
+<div class="model-stage t2c-card">
 <div class="row t2c-row">
   <button class="t2c-pill">模式</button>
   <span class="model-pill-wrap" data-cmenu>
@@ -87,6 +88,7 @@ button { font: inherit; background: none; border: 0; cursor: pointer; }
       </div>
     </div>
   </span>
+</div>
 </div>
 </body></html>`
 
@@ -243,11 +245,33 @@ const box = (sel) => {
   const fillMids = effortMotion.frames.filter((f) => f.t > 25 && f.t < 180 && f.fill < effortMotion.fillStart - 3 && f.fill > effortMotion.fillEnd + 3).length
   check('Effort 档位切换时滑块与填充都有中间过渡帧', thumbMids >= 3 && fillMids >= 3, `thumb=${thumbMids}, fill=${fillMids}`)
 
-  // ── F:.flip 把子面板整块搬到菜单左侧 ──
-  await p.evaluate(() => document.querySelector('.cm-sub').classList.add('flip'))
+  // ── F:左侧与上方叠放都走 class，JS 的 View 边界决策由 menuAnchor.test.ts 钉。 ──
+  await p.evaluate(() => document.querySelector('.cm-sub').classList.add('left'))
   const flipped = await p.evaluate(box, '.cm-sub')
-  check('.flip 生效:子面板整块落到菜单左侧', flipped.right <= menu.left + 1,
+  check('.left 生效:子面板整块落到菜单左侧', flipped.right <= menu.left + 1,
     `sub.right=${flipped.right.toFixed(1)} menu.left=${menu.left.toFixed(1)}`)
+
+  await p.evaluate(() => {
+    const stage = document.querySelector('.model-stage')
+    const row = document.querySelector('.row')
+    const sub = document.querySelector('.cm-sub')
+    stage.style.inset = 'auto'
+    stage.style.left = '400px'
+    stage.style.top = '0'
+    stage.style.width = '250px'
+    stage.style.height = '700px'
+    row.style.right = '16px'
+    sub.classList.remove('left')
+    sub.classList.add('stacked')
+  })
+  await p.evaluate(() => document.querySelectorAll('.composer-menu--model,.cm-sub').forEach((el) => el.getAnimations().forEach((a) => a.finish())))
+  const narrowStage = await p.evaluate(box, '.model-stage')
+  const stackedMenu = await p.evaluate(box, '.composer-menu--model')
+  const stackedSub = await p.evaluate(box, '.cm-sub')
+  check('两侧都不足时模型类二级面板叠到一级菜单上方', stackedSub.bottom < stackedMenu.top,
+    `main.top=${stackedMenu.top.toFixed(1)} sub.bottom=${stackedSub.bottom.toFixed(1)}`)
+  check('极窄 Chat View 下模型类二级面板收缩且完整留在 View 内', stackedSub.left >= narrowStage.left && stackedSub.right <= narrowStage.right,
+    `View ${narrowStage.left.toFixed(1)}..${narrowStage.right.toFixed(1)} sub ${stackedSub.left.toFixed(1)}..${stackedSub.right.toFixed(1)}`)
 
   // ── F:扁平/立体开关。阴影必须走 --card-shadow 这类高程 token —— 写死 `0 10px 32px var(--shadow)`
   //    在扁平模式下照样投影(用户实报)。立体态那半边同样要钉,否则「全都写死 none」也能骗过去。 ──

@@ -1,7 +1,7 @@
 {
   "id": "genesis-glass",
   "name": "Genesis Glass · 琉璃",
-  "description": "Genesis 结构 × macOS 原生玻璃。外壳(ribbon/标签栏/侧栏)溶进窗后景深,主视图纸卡保持 96% 实色 —— 正文永远不透背景。不定义任何颜色,任意配色/明暗都成立。",
+  "description": "Genesis 结构 × macOS 原生玻璃。外壳(ribbon/标签栏/侧栏)溶进窗后景深,主视图纸卡保持全实色 —— 正文永远不透背景。不定义任何颜色,任意配色/明暗都成立。",
   "version": "1.0.0",
   "author": "Forsion",
   "supportsDarkMode": true,

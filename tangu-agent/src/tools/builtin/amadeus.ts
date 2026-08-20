@@ -209,8 +209,10 @@ const hasCanvasFrontmatter = (raw: string): boolean => {
 };
 const canvasRefusal = (rel: string): string =>
   `"${rel}" is a canvas note: its card coordinates, connectors and whiteboard elements live in the ` +
-  '`amadeus_canvas` frontmatter key, which a full-file overwrite would destroy. Read it, edit the body ' +
-  'text you need to change, and write it back with the frontmatter intact — or ask the user to edit it in the app.';
+  '`amadeus_canvas` frontmatter key, which a full-file overwrite would destroy. There is no lossless way to edit it ' +
+  'from here — `amadeus_read_note` strips frontmatter, so you cannot read that geometry back to preserve it. ' +
+  'Ask the user to edit it in the app, or open it on a machine where the vault is a real directory and use the ' +
+  'ordinary file tools (see the `amadeus-note-format` skill).';
 const structuredRefusal = (rel: string): string =>
   `"${rel}" is a structured Amadeus file (mind map / whiteboard / database): its content lives in frontmatter ` +
   'and inline block markers that these note tools strip and overwrite. There is no lossless cloud API for it yet, ' +
@@ -611,7 +613,11 @@ export function amadeusCloudPromptSection(): string | null {
   return (
     '## Amadeus Notes & Calendar (cloud)\n' +
     "The user's Amadeus cloud note vault is available through the amadeus_* tools (reads and writes go to the user's cloud vault). " +
-    'There is no filesystem access to the cloud vault, so `amadeus_read_note` / `amadeus_write_note` are the only way in here — but they strip frontmatter and reset layout, so do not use them on `.mindmap.md` / `.excalidraw.md` / `.db`.\n' +
+    'There is no filesystem access to the cloud vault, so `amadeus_read_note` / `amadeus_write_note` are the only way in here — ' +
+    'but they strip frontmatter and reset layout, so they are lossless only for plain-markdown notes. ' +
+    '`.mindmap.md` / `.excalidraw.md` / `.db` and canvas notes (frontmatter key `amadeus_canvas`) are refused outright; ' +
+    'for those, ask the user to edit in the app. A note whose frontmatter carries `amadeus_` keys is structured — ' +
+    'overwriting it drops the user\'s columns and canvas geometry; load the `amadeus-note-format` skill before you try.\n' +
     AMADEUS_TOOL_GUIDANCE
   );
 }
@@ -623,12 +629,16 @@ export function amadeusPromptSection(): string | null {
     '## Amadeus Notes & Calendar (local)\n' +
     `The user keeps notes and calendars in a local Amadeus vault at \`${amadeusVaultPath()}\`.\n` +
     '- **A note is a real file. Read and write it with the ordinary file tools** at ' +
-    `\`${amadeusVaultPath()}/<relative path>\`. There is deliberately no note read/write tool here: ` +
-    'notes carry structure in frontmatter and inline `<!-- a id -->` block markers, and anything that ' +
-    '"helpfully" returns clean prose or rewrites the file linearly silently destroys that structure.\n' +
-    '- **Several extensions are not plain markdown even though they end in `.md`**: `.mindmap.md` (mind map), ' +
-    '`.excalidraw.md` (whiteboard), plus `.db` (database). Before editing one, load the matching skill ' +
-    '(e.g. `mindmap-format`) — rewriting one as prose or as an indented outline destroys it.\n' +
+    `\`${amadeusVaultPath()}/<relative path>\`. There is deliberately no note read/write tool here — one that ` +
+    '"helpfully" returned clean prose would destroy the structure some notes carry.\n' +
+    '- **A new note is just plain markdown** — no frontmatter, no markers. That is the normal shape; write it and stop.\n' +
+    '- **An existing note whose frontmatter carries `amadeus_` keys, or whose body carries `<!-- a id -->` anchors, ' +
+    'is structured**: its column layout and canvas-card geometry live in frontmatter and the anchors delimit which ' +
+    'text belongs to which. Rewriting such a file linearly silently deletes the user\'s columns and canvas. ' +
+    'Load the `amadeus-note-format` skill before editing one.\n' +
+    '- **Some extensions are not plain markdown even though they end in `.md`**: `.mindmap.md` (mind map) — load the ' +
+    '`mindmap-format` skill first; `.excalidraw.md` (whiteboard) and `.db` (database) — do not hand-edit at all, ' +
+    'ask the user to change them in the app.\n' +
     AMADEUS_TOOL_GUIDANCE
   );
 }

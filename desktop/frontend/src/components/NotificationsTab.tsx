@@ -5,23 +5,23 @@
  * 状态栏行 = 内置元数据 ∪ 当前已注册项(插件项动态出现;禁用插件即消失,偏好键保留无妨)。
  */
 import { useMemo, useState } from 'react'
-import { GripVertical } from 'lucide-react'
+import { Bell, GripVertical, ListChecks, MonitorUp, PanelBottom, Plug } from 'lucide-react'
 import { useStatusStore } from '@lcl/engine'
 import { useI18n } from '../i18n'
 import { NOTIFY_EVENTS, eventDefaultOn, notifyApp, useNotifications } from '../stores/notificationStore'
 import { BUILTIN_STATUS_ITEMS } from '../statusbar/items'
 import { useSbPrefs } from '../statusbar/prefs'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 
-/** 复选行(name 已本地化,兼作 key)。 */
-const checkRow = (checked: boolean, onChange: (on: boolean) => void, name: string, desc?: string) => (
-  <label className="check-row" key={name}>
-    <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-    <span>
-      <span className="check-name">{name}</span>
-      {desc && <><br /><span className="check-desc">{desc}</span></>}
-    </span>
-  </label>
+const switchRow = (checked: boolean, onChange: (on: boolean) => void, name: string, desc?: string, disabled?: boolean) => (
+  <SettingsRow
+    key={name}
+    label={name}
+    description={desc}
+    className={disabled ? 'is-disabled' : ''}
+    control={<SettingsSwitch checked={checked} onChange={onChange} label={name} disabled={disabled} />}
+  />
 )
 
 export function NotificationsTab() {
@@ -35,42 +35,43 @@ export function NotificationsTab() {
   const activePlugins = plugins.filter((p) => activeIds.includes(p.id))
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {checkRow(prefs.enabled, setEnabled, t('ntf.enable'))}
-        <div style={{ flex: 1 }} />
-        <button className="btn ghost sm" onClick={() => notifyApp({ text: t('ntf.testBody'), level: 'info', force: true })}>
-          {t('ntf.sendTest')}
-        </button>
-      </div>
-      <div className="hint">{t('ntf.enableHint')}</div>
-      <div style={{ opacity: prefs.enabled ? 1 : 0.5 }}>
-        {checkRow(prefs.osEnabled, setOsEnabled, t('ntf.osEnable'), t('ntf.osEnableHint'))}
-      </div>
+    <>
+      <SettingsPanel
+        icon={<Bell size={16} />}
+        title={t('ntf.delivery')}
+        description={t('ntf.enableHint')}
+        actions={<button className="btn ghost sm" onClick={() => notifyApp({ text: t('ntf.testBody'), level: 'info', force: true })}>{t('ntf.sendTest')}</button>}
+      >
+        <div className="settings-control-list">
+          {switchRow(prefs.enabled, setEnabled, t('ntf.enable'))}
+          {switchRow(prefs.osEnabled, setOsEnabled, t('ntf.osEnable'), t('ntf.osEnableHint'), !prefs.enabled)}
+        </div>
+      </SettingsPanel>
 
-      <div className="settings-sec settings-sec--gap">{t('ntf.events')}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, opacity: prefs.enabled ? 1 : 0.5 }}>
+      <SettingsPanel icon={<ListChecks size={16} />} title={t('ntf.events')} description={t('ntf.eventsHint')}>
+        <div className="settings-control-list">
         {NOTIFY_EVENTS.map((ev) =>
-          checkRow(prefs.events[ev.id] ?? ev.defaultOn, (on) => setEventOn(ev.id, on), t(ev.labelKey)),
+            switchRow(prefs.events[ev.id] ?? ev.defaultOn, (on) => setEventOn(ev.id, on), t(ev.labelKey), undefined, !prefs.enabled),
         )}
-      </div>
+        </div>
+      </SettingsPanel>
 
       {activePlugins.length > 0 && (
-        <>
-          <div className="settings-sec settings-sec--gap">{t('ntf.pluginEvents')}</div>
-          <div className="hint">{t('ntf.pluginEventsHint')}</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, opacity: prefs.enabled ? 1 : 0.5 }}>
+        <SettingsPanel icon={<Plug size={16} />} title={t('ntf.pluginEvents')} description={t('ntf.pluginEventsHint')}>
+          <div className="settings-control-list">
             {activePlugins.map((p) =>
-              checkRow(
+              switchRow(
                 prefs.events[`plugin:${p.id}`] ?? eventDefaultOn(`plugin:${p.id}`),
                 (on) => setEventOn(`plugin:${p.id}`, on),
                 p.name,
+                undefined,
+                !prefs.enabled,
               ),
             )}
           </div>
-        </>
+        </SettingsPanel>
       )}
-    </div>
+    </>
   )
 }
 
@@ -124,15 +125,18 @@ export function StatusBarTab() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {checkRow(sbEnabled, setSbEnabled, t('sb.enable'), t('sb.enableHint'))}
-      <div className="settings-sec settings-sec--gap">{t('sb.items')}</div>
-      <div className="hint">{t('sb.itemsHint')}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, opacity: sbEnabled ? 1 : 0.5 }}>
+    <>
+      <SettingsPanel icon={<PanelBottom size={16} />} title={t('sb.display')} description={t('sb.enableHint')}>
+        <div className="settings-control-list">
+          {switchRow(sbEnabled, setSbEnabled, t('sb.enable'))}
+        </div>
+      </SettingsPanel>
+      <SettingsPanel icon={<MonitorUp size={16} />} title={t('sb.items')} description={t('sb.itemsHint')}>
+        <div className={`settings-drag-list${sbEnabled ? '' : ' is-disabled'}`}>
         {rows.map((r) => (
           <div
             key={r.id}
-            className="file-row"
+            className="settings-drag-row"
             draggable
             onDragStart={() => setDragId(r.id)}
             onDragEnd={() => setDragId(null)}
@@ -141,7 +145,7 @@ export function StatusBarTab() {
               if (dragId && dragId !== r.id) reorder(dragId, r.id)
               setDragId(null)
             }}
-            style={{ cursor: 'grab', opacity: dragId === r.id ? 0.45 : 1 }}
+            style={{ opacity: dragId === r.id ? 0.45 : 1 }}
           >
             <GripVertical size={13} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
             <input
@@ -150,13 +154,14 @@ export function StatusBarTab() {
               onChange={(e) => setSbHidden(r.id, !e.target.checked)}
               style={{ accentColor: 'var(--accent-ink)' }}
             />
-            <span className="file-name" style={{ flex: 1 }}>{r.label}</span>
-            <span style={{ fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
+            <span className="settings-drag-name">{r.label}</span>
+            <span className="settings-badge">
               {r.side === 'left' ? t('sb.side.left') : t('sb.side.right')}
             </span>
           </div>
         ))}
-      </div>
-    </div>
+        </div>
+      </SettingsPanel>
+    </>
   )
 }

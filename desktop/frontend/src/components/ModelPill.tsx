@@ -7,7 +7,8 @@
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Bot } from 'lucide-react'
-import { zoomOf, useEdgeNudge } from '@lcl/engine'
+import { nestedPanelPlacement, UI_ZOOM_EVENT, zoomOf, useEdgeNudge } from '@lcl/engine'
+import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 import type { AgentConfig, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
@@ -45,14 +46,6 @@ export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlo
   if (slot === 'imageModelId') return models.filter((m) => m.modelType === 'image_gen')
   const llms = models.filter((m) => (m.modelType || 'llm') === 'llm')
   return slot === 'visionModelId' ? llms.filter((m) => m.supportsVision !== false) : llms
-}
-
-/**
- * 子面板要不要翻到菜单左侧。
- * ⚠️ anchorRight / vw 是视口 px，subW 是未缩放局部 px；比较前必须乘端级 zoom。
- */
-export function subFlips(anchorRight: number, subW: number, zoom: number, vw: number, gap = 6, margin = 8): boolean {
-  return anchorRight + (gap + subW) * zoom > vw - margin
 }
 
 /** 仅当文本溢出才在 hover 时跑马灯。 */
@@ -107,11 +100,12 @@ export const ModelPill: React.FC<{
   }
   const [advanced, setAdvanced] = useState(false)
   const [pane, setPane] = useState<Pane | null>(null)
-  const [flip, setFlip] = useState(false)
+  const [placement, setPlacement] = useState<NestedPanelPlacement>('right')
   const wrapRef = useRef<HTMLSpanElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
-  const menuFix = useEdgeNudge(open)
-  const subFix = useEdgeNudge(pane ? `${pane}:${flip}` : '')
+  const menuFix = useEdgeNudge(open, { boundary: '.t2-chat-view' })
+  const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
 
   useEffect(() => {
     if (!open) { setPane(null); setAdvanced(false); return }
@@ -123,10 +117,30 @@ export const ModelPill: React.FC<{
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useLayoutEffect(() => {
-    const el = subRef.current
-    const wrap = wrapRef.current
-    if (!pane || !el || !wrap) return
-    setFlip(subFlips(wrap.getBoundingClientRect().right, el.offsetWidth, zoomOf(el), window.innerWidth))
+    const menu = menuRef.current
+    const sub = subRef.current
+    if (!pane || !menu || !sub) return
+    const update = (): void => {
+      const menuRect = menu.getBoundingClientRect()
+      const boundaryRect = (menu.closest('.t2c-card') || menu.closest('.t2-chat-view'))?.getBoundingClientRect()
+      const next = boundaryRect
+        ? nestedPanelPlacement(menuRect.left, menuRect.right, sub.offsetWidth, boundaryRect.left, boundaryRect.right, zoomOf(sub))
+        : 'right'
+      setPlacement((prev) => prev === next ? prev : next)
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener(UI_ZOOM_EVENT, update)
+    const ro = new ResizeObserver(update)
+    ro.observe(menu)
+    ro.observe(sub)
+    const boundary = menu.closest('.t2c-card') || menu.closest('.t2-chat-view')
+    if (boundary) ro.observe(boundary)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener(UI_ZOOM_EVENT, update)
+      ro.disconnect()
+    }
   }, [pane])
 
   const all = groups.flatMap((g) => g.options)
@@ -205,7 +219,11 @@ export const ModelPill: React.FC<{
         <ChevronDown size={10} />
       </button>
       {open && (
-        <div ref={menuFix.ref} className="composer-menu composer-menu--model" style={menuFix.style}>
+        <div
+          ref={(el) => { menuRef.current = el; menuFix.ref.current = el }}
+          className="composer-menu composer-menu--model"
+          style={menuFix.style}
+        >
           {onThinkingChange && (
             <>
               {/* 高级内容放在触发行上方；菜单底边固定，所以展开时卡片向上生长、后三行不位移。 */}
@@ -304,7 +322,7 @@ export const ModelPill: React.FC<{
           {pane && (
             <div
               ref={(el) => { subRef.current = el; subFix.ref.current = el }}
-              className={`cm-sub${flip ? ' flip' : ''}`}
+              className={`cm-sub ${placement}`}
               data-pane={pane}
               style={subFix.style}
             >

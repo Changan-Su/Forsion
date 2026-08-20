@@ -31,6 +31,8 @@
     "check:spacerestart": "node scripts/space-restart.check.cjs",
     "check:br": "node scripts/e2e-editor.cjs --check=blank-line-br",
     "check:caretmerge": "node scripts/e2e-editor.cjs --check=caret-merge",
+    "check:canvascaret": "node scripts/e2e-editor.cjs --check=canvas-caret",
+    "check:amadeusinteractions": "node scripts/e2e-editor.cjs --check=amadeus-interactions",
     "check:dashboard": "node scripts/e2e-editor.cjs --check=dashboard",
     "check:overlay": "node scripts/overlay-zoom.check.cjs",
     "check:leadicon": "node scripts/t2s-lead-icon.check.cjs",

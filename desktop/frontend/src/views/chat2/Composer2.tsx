@@ -382,9 +382,9 @@ export const Composer2: React.FC<{
   const approval = execConfig.approvalMode || 'auto-edit'
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
-  const modeFix = useEdgeNudge(openMenu === 'mode')
+  const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
   // 上下文占比的悬停详情条:同款 absolute + 固定宽,窄屏也会捅出边缘(它常挂 true,靠 RO/resize 重量)。
-  const ctxPopFix = useEdgeNudge(true)
+  const ctxPopFix = useEdgeNudge(true, { boundary: '.t2-chat-view' })
 
   useEffect(() => {
     if (!openMenu) return

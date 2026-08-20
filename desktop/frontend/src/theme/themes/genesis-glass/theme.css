@@ -10,9 +10,9 @@
  *   0 stage   外壳全透   → 交给窗口的原生 NSVisualEffectView(manifest windowMaterial=system-glass)
  *   1 chrome  ribbon / 主区外框 / 标签栏     ← 只染色
  *   2 pane    侧栏(文字密度高,比 chrome 更实)← 只染色
- *   3 paper   **主视图纸卡 96% 实色 —— 可读性锚点,正文永不透背景**
- *   3.5 thin  输入卡 / 菜单 / 各类浮层 ← 薄玻璃(50%),身后有内容在动,糊得出来才算玻璃
- *   4 float   弹窗 / 命令面板 / toast   ← 厚玻璃(84%),密集文字的大面板,再透就影响读
+ *   3 paper   **主视图纸卡全实色 —— 可读性锚点,正文永不透背景**
+ *   3.5 thin  输入卡 ← 薄玻璃(50%),身后有正文在动,糊得出来才算玻璃
+ *   4 float   菜单 / 弹窗 / 命令面板 / toast ← 厚玻璃(84%),浮层文字优先保证可读
  *             (3.5 与 4 都用 CSS backdrop-filter;外壳层 0/1/2 一律不用)
  *
  * 两条结构性纪律,破了就出 bug:
@@ -52,10 +52,9 @@
    * 用 var(--bg) 一条声明明暗通吃(在使用处解析),暗色块无需镜像。 */
   --gl-paper: var(--bg);
   --gl-float: color-mix(in srgb, var(--bg-card) var(--gl-float-pct, 84%), transparent);
-  /* 薄档(3.5):输入卡 + 所有菜单/浮层。**比 float 薄一档**——float 那 84% 只漏 16% 过去,
-   * 糊出来的东西根本看不见:用户 08-14 两次报「磨砂没有」(先是 chatbox,后是选模型/切模式那批
-   * 二级菜单),规则一直生效,病在浓到看不出。这一层与 float 的处境不同:身后是滚动的正文或壁纸,
-   * 值得让人看见被糊掉的那片影子。明暗同值(用户定的 50%),不加暗色增量。不接设置旋钮,
+  /* 薄档(3.5):只给输入卡。它身后是滚动的正文,值得让人看见被糊掉的那片影子;
+   * 菜单则必须进入可调的 float 档,否则「浮层浓度」滑块对菜单无效,又会在侧栏 / portal
+   * 这类没有有效 CSS backdrop 的位置退化成一层透明色。明暗同值(用户定的 50%),不加暗色增量。不接设置旋钮,
    * 故写字面值(带 --gl-*-pct 的那种写法专留给 theme.json 声明过的档位)。 */
   --gl-thin: color-mix(in srgb, var(--bg-card) 50%, transparent);
   /* 边线从 --text 派生而不是 --border:--border 在部分配色里本身就是 rgba(lavender 亮色是 0.1 alpha),
@@ -63,7 +62,7 @@
    * --text 各配色恒为不透明色,且明暗自动反向(暗色下自然得到浅色描边)。 */
   --gl-hairline: color-mix(in srgb, var(--text) 12%, transparent);
 
-  /* 只有 float 层用得上 CSS 模糊(外壳层的模糊由窗口原生材质提供,见下方 chrome 段的警告)。
+  /* 只有 thin / float 叶子浮面用得上 CSS 模糊(外壳层的模糊由窗口原生材质提供,见下方 chrome 段的警告)。
    * saturate 是「玻璃」与「灰雾」的分界:透过来的内容不提饱和度就是一层脏灰。两档都可在设置里调。 */
   --gl-blur-float: blur(var(--gl-blur-radius, 40px)) saturate(var(--gl-saturate, 190%));
 
@@ -185,23 +184,32 @@
   background: var(--gl-paper);
 }
 
-/* ═══ 3.5 输入卡:唯一一块「嵌在内容里的玻璃」═══
+/* ═══ 3.5 输入卡:唯一一块「嵌在内容里的薄玻璃」═══
  * 输入卡**悬浮在正文之上**(chat2.css 的 .composer-anchor 脱流),正文就从它底下滚过去 ——
  * 于是这一层的 backdrop 里真有像素可糊,是全 app 唯一「玻璃底下有内容在动」的地方,
- * 也正是用户要磨砂的理由。base 那层是不透明 --bg-card,本主题换成 float 那档材质。
+ * 也正是用户要磨砂的理由。base 那层是不透明 --bg-card,本主题换成 thin 那档材质。
  * ⚠ 敢加 backdrop-filter 的前提:卡内浮层(.t2c-menu / .composer-menu / .t2c-ctxring-pop)
  *   **全是 position:absolute**,没有一个 fixed 后代 —— 否则会被这层 filter 抢走包含块(见下方
  *   chrome 段那条长警告)。往卡里塞 fixed 浮层之前先回来看这行。 */
-[data-theme='genesis-glass'] .t2c-card,
-/* 3.5b 菜单 / 浮层:同一档薄玻璃。它们浮在正文与壁纸之上,身后真有像素可糊 ——
- * 用户 08-14 点名「选择模型、切换模式这些二级菜单没磨砂」,病因是这批只在 base.css/engine.css
- * 里吃实色 --bg-card,从没进过本主题的材质表。
+[data-theme='genesis-glass'] .t2c-card {
+  background: var(--gl-thin);
+  backdrop-filter: var(--gl-blur-float);
+  -webkit-backdrop-filter: var(--gl-blur-float);
+  border-color: transparent;
+  isolation: isolate;
+}
+
+/* ═══ 4a 菜单 / 浮层:可调的厚磨砂 ═══
+ * 菜单不再与输入卡共用写死 50% 的 thin 档:它们可能出现在侧栏 / body portal / 已有 backdrop-filter
+ * 的父面板里,这些位置的 CSS blur 未必有可采样的页面像素。用 --gl-float 提供足够染色兜底,
+ * 同时让设置里的「浮层浓度」真实控制菜单;backdrop 条件成立时仍保留 40px blur + 饱和度。
  * ⚠ 名单里每一个都确认过**没有 fixed 后代**:Amadeus 的嵌套浮层走 overlayPortal 的 createPortal
  *   挂到 body(不是 DOM 后代),EventCard 卡内也不开浮层 —— 否则会被这层 filter 抢走包含块
  *   (见下方 chrome 段那条长警告)。往这些浮层里塞 fixed 子元素之前先回来看这行。
- * ⚠ 与 4 float 的分工:**菜单/浮层走这档(50%,无描边),弹窗/命令面板走 float(84%+hairline)** ——
- *   后者是密集文字的大面板,再透就影响读。 */
+ * cm-sub / approval-hover-desc 是 Chatbox 新增的第二层浮面,必须和一级菜单一起进材质表。 */
 [data-theme='genesis-glass'] .composer-menu,
+[data-theme='genesis-glass'] .cm-sub,
+[data-theme='genesis-glass'] .approval-hover-desc,
 [data-theme='genesis-glass'] .ctx-menu,
 [data-theme='genesis-glass'] .project-menu,
 [data-theme='genesis-glass'] .t2c-menu,
@@ -221,7 +229,7 @@
 [data-theme='genesis-glass'] .amx-cal-cardwrap,
 [data-theme='genesis-glass'] .amx-toast,
 [data-theme='genesis-glass'] .dash-add-menu {
-  background: var(--gl-thin);
+  background: var(--gl-float);
   backdrop-filter: var(--gl-blur-float);
   -webkit-backdrop-filter: var(--gl-blur-float);
   /* 不描边:与其他主题的输入卡一致(用户 08-14 要求整批卡去轮廓线)。
@@ -230,7 +238,7 @@
   isolation: isolate;
 }
 
-/* ⚠⚠ 薄档只在**主区纸卡之上**成立 —— 侧栏必须加厚,这不是审美是物理:
+/* ⚠⚠ 输入卡的薄档只在**主区纸卡之上**成立 —— 侧栏必须加厚,这不是审美是物理:
  * CSS 的 backdrop-filter 只能糊「页面自己画出来的像素」。侧栏那一路全是半透/全透
  * (pane 半透 → shell 全透 → 窗口原生 vibrancy),backdrop 里根本没有可糊的东西,
  * blur 出来是空的 —— 实测(08-14,把窗口材质也切成 system-glass 才复现):侧栏聊天卡后面的
@@ -240,11 +248,11 @@
  * 染色浓度把底下的字盖住 → 回到 float 那档。
  * 边界:body 里 portal 出去的浮层(右键菜单等)按**屏幕位置**取 backdrop,DOM 上不在侧栏组里,
  * 选择器管不着 —— 它们开在侧栏上方时同样糊不出东西,只能靠自身浓度。已知,暂不追。 */
-[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) :is(.t2c-card, .composer-menu, .t2c-menu, .ctx-menu, .t2c-ctxring-pop) {
+[data-theme='genesis-glass'] .dv-groupview:has(.wb-tab--icon) .t2c-card {
   background: var(--gl-float);
 }
 
-/* ═══ 4 float:浮在一切之上的层 —— 最厚模糊 + 描边 + 独立层叠上下文 ═══
+/* ═══ 4b 大型浮层:厚磨砂 + 描边 + 独立层叠上下文 ═══
  * isolation 是必需的:不隔离的话 backdrop-filter 会去采样同一层叠上下文里的兄弟元素,
  * 浮层会把自己底下的浮层也糊进来。
  *
@@ -285,6 +293,12 @@
 [data-theme='genesis-glass'] .fs-overlay .settings-main,
 [data-theme='genesis-glass'] .fs-overlay .settings-main-head { background: var(--gl-paper); }
 
+/* 首启引导沿用同一套 pane → paper 层级,不在壳/面板层叠 CSS blur。 */
+[data-theme='genesis-glass'] .ob-shell { background: transparent; }
+[data-theme='genesis-glass'] .ob-rail { background: var(--gl-pane); }
+[data-theme='genesis-glass'] .ob-stage,
+[data-theme='genesis-glass'] .ob-step-actions { background: var(--gl-paper); }
+
 /* ═══ 降级:性能开关关掉毛玻璃时,材质全部回落实色 ═══
  * base.css 的 html[data-glass='off'] * 只清 backdrop-filter,不管染色 —— 不补这块的话
  * 半透明面板会直接压在窗口底上,看着像掉色。带 [data-mode] 抬到 (0,4,0),稳压上面的暗色块。
@@ -295,7 +309,7 @@
   --gl-chrome: var(--sidebar-bg);
   --gl-pane: var(--sidebar-bg);
   --gl-float: var(--bg-card);
-  /* 输入卡必须一起回实色:毛玻璃关了 backdrop-filter 就没了,再留 60% 半透就是「正文直接透过输入卡」 */
+  /* 输入卡必须一起回实色:毛玻璃关了 backdrop-filter 就没了,再留 50% 半透就是「正文直接透过输入卡」 */
   --gl-thin: var(--bg-card);
   --gl-hairline: var(--border);
 }

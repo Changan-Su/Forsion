@@ -49,7 +49,7 @@ import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { createBlockLayer } from './blockLayer'
 import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId } from './columns'
-import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
+import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { createEmbedLayer } from './embedLayer'
 import { headingFoldPlugins } from './headingFold'
@@ -134,7 +134,7 @@ interface HostApi {
   focusTail: () => void
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard }: {
   path: string
   pageDir: string
   body: string
@@ -151,6 +151,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  初始化窗口/重建期间是静默 no-op,聚焦请求一律走这条。'body-enter' = 标题回车档(见 registry)。 */
   focusPlace: 'start' | 'end' | 'body-enter' | null
   onFocused: () => void
+  /** `/card`：消费 slash 查询后，把当前顶层块交给 Canvas 卡片事务。 */
+  onCard: (view: EditorView) => void
 }): ReactElement {
   const [, getInstance] = useInstance()
   const store = useScopedPageStore()
@@ -159,6 +161,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   const [dbPick, setDbPick] = useState(false) // slash「链接数据库」唤起的已有 .db 选择器
   const finalFlushRef = useRef({ onFinalFlush, skipFinalFlush })
   finalFlushRef.current = { onFinalFlush, skipFinalFlush }
+  const onCardRef = useRef(onCard)
+  onCardRef.current = onCard
   useEffect(() => {
     apiRef.current = {
       applyBody: (stored) => {
@@ -352,6 +356,10 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
     const S = SLASH_SENTINELS
+    if (item.scaffold === S.card) {
+      getInstance()?.action((ctx) => onCardRef.current(ctx.get(editorViewCtx)))
+      return
+    }
     if (item.run) {
       // 插件注册的「先干活再插入」项。插件是 new Function 装载的第三方 JS,返回值一律当外部输入校验
       // (与 v3 同一套闸:非字符串会毒化文档,NUL/控制字符会污染笔记文件)。
@@ -809,6 +817,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
       ...createHistoryTimeline(undoTimeline),
       // 文档模式的「光标在哪张卡」标注(约束框 CSS 只在文档模式消费,画布下类挂着无害)。
       ...createCardActiveDeco(),
+      // 文档模式的层级缩进档位(同一份 pipe.fm 闭包;tree 变了要补一笔空事务推醒,见下面的 effect)。
+      ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
       ...headingFoldPlugins,
       ...listFoldPlugins,
     ],
@@ -857,6 +867,43 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
     view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(sel.from + 1))))
     applyTrigger(view, trig, null)
   })
+
+  /** 当前块 → Canvas 卡片。slash 落点是 TextSelection，块菜单落点是 NodeSelection；两条入口先
+   *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。 */
+  const makeCard = (view: EditorView): boolean => {
+    const unavailable = (): false => {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', {
+        detail: { text: '当前块不能转换为卡片；请先移出列表、分栏或已有卡片' },
+      }))
+      return false
+    }
+    if (!(view.state.selection instanceof NodeSelection)) {
+      const { $from } = view.state.selection
+      // 块菜单对 list_item 本就隐藏 Card；slash 也必须同规，不能悄悄把整份父列表搬成一张卡。
+      for (let depth = $from.depth; depth >= 1; depth--) {
+        if ($from.node(depth).type.name === 'list_item') return unavailable()
+      }
+      let depth = $from.depth
+      while (depth >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(depth - 1).type.name)) depth--
+      if (depth < 1) return false
+      view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, $from.before(depth))))
+    }
+    let count = 0
+    view.state.doc.forEach((node) => { if (node.type.name === 'amadeusCanvasCard') count++ })
+    const made = blockToCard(
+      view,
+      Math.round(canvasMain.x + canvasMain.w + 80),
+      Math.round(canvasMain.y + count * 72),
+    )
+    if (!made) return unavailable()
+    pipe.ownedCards.add(made)
+    syncFromEditor()
+    schedule()
+    if (!canvasModeRef.current) {
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '已转换为卡片 —— 右上角切到画布模式查看' } }))
+    }
+    return true
+  }
 
   const writeNow = (): Promise<void> => {
     const run = async (): Promise<void> => {
@@ -1144,6 +1191,23 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
     }
   }
 
+  // 层级缩进的重算触发。tree 住在 fm 里、不在 doc 里 → 改层级不产生 PM 事务 → createCardDepthDeco
+  // 的 decorations 不会自己重算(现象:认了爹但缩进要等下一次击键才出现;删掉中间那层后孙卡
+  // 一直缩着不动)。canvas 行**真变过**才推 fmVer(见 deriveFmFromDoc 那句),挂在它上面正好。
+  // ⚠️ 两条都是刻意的**收窄**,别图省事改回去:
+  //  1. `updateState(state)` 而不是 dispatch 一笔空事务 —— 想要的只是「照现有 state 重画一次
+  //     decoration」。空事务看着无害,实际要穿过 filterTransaction / appendTransaction / history /
+  //     listener 一整排钩子,而这条 effect 恰好在撤销/重做收尾的那一刻触发,白给的风险面。
+  //  2. 只在 **tree 真变了**时推:fmVer 每拖一次卡、挪一次元素都会涨,那些与缩进档位无关。
+  const treeSeen = useRef<string>('')
+  useEffect(() => {
+    const now = JSON.stringify(parseCanvasJson(canvasLineOf(pipe.fm))?.tree ?? null)
+    if (now === treeSeen.current) return
+    treeSeen.current = now
+    const view = layer.getView()
+    if (view) view.updateState(view.state)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fmVer, layer])
   void fmVer // chrome 数据全部经 pipe.fm 派生,fmVer 只负责触发重渲
   const fmObj = foreignFmObject(pipe.fm)
   const icon = typeof fmObj.icon === 'string' && fmObj.icon.trim() ? fmObj.icon.trim() : null
@@ -1298,6 +1362,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
                 extraPlugins={editorPlugins}
                 focusPlace={bodyFocus}
                 onFocused={() => setBodyFocus(null)}
+                onCard={makeCard}
               />
             </MilkdownProvider>
           </CanvasStage>
@@ -1325,39 +1390,28 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
             <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> 待办</button>
             <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> 引用</button>
             <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> 折叠</button>
+            {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
+            {(() => {
+              const view = layer.getView()
+              const selection = view?.state.selection
+              if (!view || !(selection instanceof NodeSelection)) return null
+              if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell', 'list_item'].includes(selection.node.type.name)) return null
+              const $at = view.state.doc.resolve(selection.from)
+              for (let depth = $at.depth; depth >= 1; depth--) {
+                if ($at.node(depth).type.name === 'amadeusColumnCell') return null
+              }
+              return (
+                <button onClick={() => withSelectedNode((current) => { makeCard(current) })}>
+                  <StickyNote size={13} /> 卡片
+                </button>
+              )
+            })()}
             <div className="ubm-sep" />
             <button onClick={() => withSelectedNode((view, sel) => {
               splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
             })}>
               <Columns2 size={13} /> 移到新列
             </button>
-            {/* 显式「块 → 画布」入口(2026-08-18,评审 P1「核心动作太依赖隐藏手势」):此前唯一的
-                入口是画布模式下把 ⠿ 拖到舞台空白。摆位是启发式(主卡右侧、按已有卡数下移错开)。
-                条件渲染与 blockToCard 的排除清单一致 —— 对做不了卡的块显示菜单项是纯噪音。 */}
-            {(() => {
-              const v = layer.getView()
-              const s = v?.state.selection
-              if (!v || !(s instanceof NodeSelection)) return null
-              if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell', 'list_item'].includes(s.node.type.name)) return null
-              const $at = v.state.doc.resolve(s.from)
-              for (let d = $at.depth; d >= 1; d--) if ($at.node(d).type.name === 'amadeusColumnCell') return null
-              return (
-                <button onClick={() => withSelectedNode((view) => {
-                  let n = 0
-                  view.state.doc.forEach((node) => { if (node.type.name === 'amadeusCanvasCard') n++ })
-                  const made = blockToCard(view, Math.round(canvasMain.x + canvasMain.w + 80), Math.round(canvasMain.y + n * 72))
-                  if (!made) return
-                  pipe.ownedCards.add(made)
-                  syncFromEditor()
-                  schedule()
-                  if (!canvasModeRef.current) {
-                    window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '已放到画布 —— 右上角切到画布模式查看' } }))
-                  }
-                })}>
-                  <StickyNote size={13} /> 放到画布
-                </button>
-              )
-            })()}
             {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。
                 条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
             {layer.getView()?.state.selection instanceof NodeSelection
