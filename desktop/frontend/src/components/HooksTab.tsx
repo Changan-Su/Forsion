@@ -8,6 +8,8 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { getHooks, saveHooks, trustHookReq, enableHookReq, type HooksData, type HookDiscovered } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { Loader2, RefreshCw, Webhook } from 'lucide-react'
+import { SettingsState } from './SettingsPrimitives'
 
 type Row = HookDiscovered & { event: string }
 type Draft = { event: string; matcher: string; command: string; timeout: string }
@@ -78,7 +80,16 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
     setDraft({ event: row.event, matcher: row.matcher, command: row.command, timeout: row.timeout ? String(row.timeout) : '' })
   }
 
-  if (!data) return <div className="hint">{err || (en ? 'Loading…' : '加载中…')}</div>
+  if (!data) return err ? (
+    <SettingsState
+      icon={<Webhook size={19} />}
+      title={en ? 'Could not load hooks' : '无法加载 Hooks'}
+      description={err}
+      actions={<button className="btn ghost sm" onClick={reload}><RefreshCw size={12} />{en ? 'Retry' : '重试'}</button>}
+    />
+  ) : (
+    <SettingsState icon={<Loader2 size={19} />} title={en ? 'Loading hooks…' : '正在加载 Hooks…'} description={en ? 'Reading local lifecycle automation.' : '正在读取本机生命周期自动化配置。'} busy />
+  )
   const eventNames = data.eventNames?.length ? data.eventNames : Object.keys(EVENT_DESC)
 
   const badge = (text: string, color: string): React.ReactNode => (

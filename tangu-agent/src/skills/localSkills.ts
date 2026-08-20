@@ -149,15 +149,26 @@ let seeding: Promise<SeedReport> | null = null;
  */
 const SEED_STAMP = '.seed-stamp';
 
-/** 目录树指纹:相对路径 + 内容,排序后一起哈希;`.seed-stamp` 自身不参与(它是描述,不是内容)。 */
-async function treeHash(dir: string): Promise<string | null> {
+/** 操作系统垃圾:不是技能内容,却会进哈希 —— 2026-08-19 实翻:`skill-creator` 因为源与家目录各有
+ *  一个内容不同的 `.DS_Store`(Finder 一开文件夹就写),被永久判成「用户改过」保护住,内置更新
+ *  再也传不下去,还朝用户喊「删掉你的技能目录」。判据必须只看技能内容。 */
+const OS_JUNK = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+
+/** 目录树指纹:相对路径 + 内容,排序后一起哈希;`.seed-stamp` 与 OS 垃圾不参与(都不是内容)。
+ *
+ *  ⚠️ **收窄参与集不是自动向后兼容的**(Codex 2026-08-19 P1):老版本按「含 OS 垃圾」算出的指纹
+ *  已经写在用户机器上了。若只改算法不认旧值,那些**目录里恰好有 `.DS_Store` 的、原本一直正常跟更新的**
+ *  镜像会在下一次内置更新时算出不同的 curHash → 被误判成「用户改过」→ 永久停更。也就是把本次要修的
+ *  病换个人群复发。所以判定处必须**两种算法都认**(`legacy=true` 复现旧值),更新/自愈时再把指纹
+ *  改写成新算法值,逐台迁移过去。 */
+async function treeHash(dir: string, legacy = false): Promise<string | null> {
   const files: string[] = [];
   const walk = async (rel: string): Promise<void> => {
     const entries = await fs.readdir(path.join(dir, rel), { withFileTypes: true });
     for (const e of entries) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) await walk(r);
-      else if (e.isFile() && r !== SEED_STAMP) files.push(r);
+      else if (e.isFile() && r !== SEED_STAMP && (legacy || !OS_JUNK.has(e.name))) files.push(r);
     }
   };
   try {
@@ -263,15 +274,19 @@ export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<
       continue;
     }
     if (curHash === srcHash) {
-      // 已经是这一版。老装机可能没有指纹 → 补一个:内容既然逐字节相同,补它吃不掉任何改动,
-      // 于是下一次内置更新就能正常跟上(这是老装机唯一安全的自愈口子)。
-      if (!(await readStamp(dest))) {
+      // 已经是这一版。老装机可能没有指纹、或指纹是旧算法(含 OS 垃圾)算的 → 写一个新算法值:
+      // 内容既然与内置逐字节相同,改它吃不掉任何改动,于是下一次内置更新就能正常跟上
+      // (这是老装机唯一安全的自愈口子;旧算法指纹的迁移也走这里)。
+      if ((await readStamp(dest)) !== curHash) {
         await fs.writeFile(path.join(dest, SEED_STAMP), srcHash, 'utf8').catch(() => {});
       }
       continue;
     }
     const stamp = await readStamp(dest);
-    if (stamp && stamp === curHash) {
+    // 指纹与「现在的目录内容」对得上 = 用户没动过。新旧两种算法都认:旧值是上一版代码写下的,
+    // 不认它就等于把一批本来正常的镜像判成「用户改过」(见 treeHash 注释)。更新后写的是新算法值。
+    const untouched = !!stamp && (stamp === curHash || stamp === (await treeHash(dest, true)));
+    if (untouched) {
       if (await replaceDir(srcSkill, dest, srcHash)) out.updated.push(name); // 用户没动过 → 跟着更新
     } else {
       out.protectedStale.push(name); // 用户改过 / 老装机无指纹 → 保护并报告

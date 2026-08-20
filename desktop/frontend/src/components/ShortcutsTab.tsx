@@ -3,9 +3,10 @@
  * 生效与分发由 engine/shortcutStore(覆盖)+ commandRegistry.installHotkeys 负责;此处只读写覆盖。
  */
 import React, { useState } from 'react'
-import { RotateCcw, X } from 'lucide-react'
+import { Keyboard, RotateCcw, Search, X } from 'lucide-react'
 import { useCommandStore, useShortcuts, eventToHotkey, formatHotkey } from '@lcl/engine'
 import { useI18n } from '../i18n'
+import { SettingsPanel } from './SettingsPrimitives'
 
 const isMac = (): boolean => { try { return document.documentElement.dataset.platform === 'mac' } catch { return false } }
 
@@ -18,6 +19,7 @@ export const ShortcutsTab: React.FC = () => {
   const { setOverride, clearOverride, resetAll, setRecording } = useShortcuts.getState()
   const [recId, setRecId] = useState<string | null>(null)
   const [note, setNote] = useState('')
+  const [query, setQuery] = useState('')
   const mac = isMac()
 
   // 命令面板是引擎内置(非注册命令),作伪命令排首位;其余跟随注册命令。
@@ -29,6 +31,10 @@ export const ShortcutsTab: React.FC = () => {
     Object.prototype.hasOwnProperty.call(overrides, r.id) ? (overrides[r.id] || '') : r.def
   const isCustomized = (r: Row): boolean =>
     Object.prototype.hasOwnProperty.call(overrides, r.id) && (overrides[r.id] || '') !== r.def
+  const visibleRows = rows.filter((r) => {
+    const q = query.trim().toLowerCase()
+    return !q || r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q) || effOf(r).toLowerCase().includes(q)
+  })
 
   const stopRecord = (): void => { setRecId(null); setRecording(false) }
   const startRecord = (id: string): void => { setNote(''); setRecId(id); setRecording(true) }
@@ -46,12 +52,24 @@ export const ShortcutsTab: React.FC = () => {
   }
 
   return (
-    <div className="field">
-      <div className="settings-sec">{t('settings.tab.shortcuts')}</div>
-      <div className="hint" style={{ marginBottom: 10 }}>{t('settings.shortcuts.desc')}</div>
-      {note && <div className="hint" style={{ marginBottom: 8, color: 'var(--accent-ink)' }}>{note}</div>}
+    <SettingsPanel
+      className="settings-shortcuts-panel"
+      icon={<Keyboard size={16} />}
+      title={t('settings.shortcuts.commands', { count: rows.length })}
+      description={t('settings.shortcuts.desc')}
+      actions={<button type="button" className="btn ghost sm" onClick={() => resetAll()}><RotateCcw size={12} />{t('settings.shortcuts.resetAll')}</button>}
+    >
+      <div className="settings-panel-toolbar">
+        <label className="settings-filter-input">
+          <Search size={13} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('settings.shortcuts.searchPlaceholder')} />
+          {query && <button type="button" onClick={() => setQuery('')} aria-label={t('common.cancel')}><X size={12} /></button>}
+        </label>
+        <span>{t('settings.shortcuts.resultCount', { count: visibleRows.length })}</span>
+      </div>
+      {note && <div className="settings-inline-notice">{note}</div>}
       <div className="shortcut-list">
-        {rows.map((r) => {
+        {visibleRows.map((r) => {
           const eff = effOf(r)
           return (
             <div className="shortcut-row" key={r.id}>
@@ -82,10 +100,8 @@ export const ShortcutsTab: React.FC = () => {
             </div>
           )
         })}
+        {visibleRows.length === 0 && <div className="settings-empty-row">{t('settings.shortcuts.noResults')}</div>}
       </div>
-      <div className="field-row" style={{ marginTop: 12 }}>
-        <button type="button" className="btn sm" onClick={() => resetAll()}>{t('settings.shortcuts.resetAll')}</button>
-      </div>
-    </div>
+    </SettingsPanel>
   )
 }

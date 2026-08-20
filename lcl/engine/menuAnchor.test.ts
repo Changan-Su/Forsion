@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampMenu, edgeNudge } from './menuAnchor'
+import { clampMenu, edgeNudge, nestedPanelPlacement } from './menuAnchor'
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
@@ -65,5 +65,21 @@ describe('edgeNudge', () => {
   })
   it('⚠️ 隐藏中(display:none → rect 全零)不许推:否则一显示就整体歪掉 margin/zoom', () => {
     expect(edgeNudge(0, 0, 390, 1.15)).toEqual({ dx: 0 })
+  })
+})
+
+describe('nestedPanelPlacement', () => {
+  it('优先放右侧，右侧不够则翻到左侧', () => {
+    expect(nestedPanelPlacement(300, 524, 200, 100, 1000)).toBe('right')
+    expect(nestedPanelPlacement(760, 984, 200, 100, 1000)).toBe('left')
+  })
+
+  it('以 View 边界而不是 window 边界判断：窗口还有空间、View 已经没空间时必须叠放', () => {
+    expect(nestedPanelPlacement(437, 661, 260, 354, 710)).toBe('stacked')
+  })
+
+  it('zoom≠1 时 panel / gap / margin 都换成视口 px 后再判断', () => {
+    expect(nestedPanelPlacement(300, 524, 200, 100, 860, 1)).toBe('right')
+    expect(nestedPanelPlacement(300, 524, 200, 100, 860, 1.6)).toBe('stacked')
   })
 })

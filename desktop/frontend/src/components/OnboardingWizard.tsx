@@ -274,29 +274,94 @@ export const OnboardingWizard: React.FC<{
 
   const connectReady = loggedIn || byokSaved || subLoggedIn
 
+  // 引导仍保留每个独立配置步骤,但左侧把它们组织成四个用户能理解的阶段。
+  // 这是视觉与认知分组,不改现有保存时机、跳过语义或步骤顺序。
+  const phaseItems = [
+    { id: 'connect', label: t('onboarding.phase.connect'), icon: Cloud, steps: ['connect'] as Step[] },
+    { id: 'appearance', label: t('onboarding.phase.appearance'), icon: Palette, steps: ['theme'] as Step[] },
+    { id: 'capabilities', label: t('onboarding.phase.capabilities'), icon: Sparkles, steps: ['model', 'speech', 'agents'] as Step[] },
+    { id: 'workspace', label: t('onboarding.phase.workspace'), icon: FolderOpen, steps: ['workspace', 'env', 'done'] as Step[] },
+  ].filter((phase) => phase.steps.some((s) => STEP_ORDER.includes(s)))
+  const activePhaseIdx = Math.max(0, phaseItems.findIndex((phase) => phase.steps.includes(step)))
+  const stepMeta: Record<Exclude<Step, 'welcome'>, { title: string; description: string }> = {
+    connect: { title: t('onboarding.step.connect.title'), description: t('onboarding.step.connect.description') },
+    theme: { title: t('onboarding.step.theme.title'), description: t('onboarding.step.theme.description') },
+    model: { title: t('onboarding.step.model.title'), description: t('onboarding.step.model.description') },
+    speech: { title: t('onboarding.step.speech.title'), description: t('onboarding.step.speech.description') },
+    agents: { title: t('onboarding.step.agents.title'), description: t('onboarding.step.agents.description') },
+    workspace: { title: t('onboarding.step.workspace.title'), description: t('onboarding.step.workspace.description') },
+    env: { title: t('onboarding.step.env.title'), description: t('onboarding.step.env.description') },
+    done: { title: t('onboarding.step.done.title'), description: t('onboarding.step.done.description') },
+  }
+
+  const rail = (showProgress: boolean): React.ReactNode => (
+    <aside className="ob-rail">
+      <div className="ob-brand">
+        <BrandLogo size={42} />
+        <div>
+          <div className="ob-brand-name">{PRODUCT_DISPLAY_NAME}</div>
+          <div className="ob-brand-caption">{t('onboarding.brand.caption')}</div>
+        </div>
+      </div>
+
+      {showProgress ? (
+        <nav className="ob-phases" aria-label={t('onboarding.progress.label')}>
+          <div className="ob-rail-label">{t('onboarding.progress.label')}</div>
+          {phaseItems.map((phase, index) => {
+            const Icon = phase.icon
+            const active = index === activePhaseIdx
+            const complete = index < activePhaseIdx || step === 'done'
+            return (
+              <div key={phase.id} className={`ob-phase${active ? ' active' : ''}${complete ? ' complete' : ''}`}>
+                <span className="ob-phase-icon">{complete ? <Check size={14} /> : <Icon size={15} />}</span>
+                <span>{phase.label}</span>
+              </div>
+            )
+          })}
+        </nav>
+      ) : (
+        <div className="ob-promise">
+          <div className="ob-rail-label">{t('onboarding.welcome.railLabel')}</div>
+          <h2>{t('onboarding.welcome.railTitle')}</h2>
+          <p>{t('onboarding.welcome.railBody')}</p>
+          <div className="ob-promise-list">
+            <span><Cloud size={15} />{t('onboarding.welcome.promiseModels')}</span>
+            <span><Bot size={15} />{t('onboarding.welcome.promiseAgents')}</span>
+            <span><FolderOpen size={15} />{t('onboarding.welcome.promiseLocal')}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="ob-rail-foot">
+        <LocaleToggle />
+      </div>
+    </aside>
+  )
+
   // ── ⓪ 欢迎页:开机式入场动画(标题/版本/按钮错峰淡入)+ 侧边丝滑展开的更新日志(markdown)。 ──
   if (step === 'welcome') {
     return (
-      <div className="ob-hero-wrap" style={{ position: 'relative' }}>
-        {/* 语言开关固定**左上**:更新日志抽屉从右侧滑出、关闭时光标也在右侧,左上角与之全程不相交——
-            彻底避开重叠/关闭尾段误点(codex R3);抽屉/scrim 的 z-index(3/4)保留作窄窗纵深防御。 */}
-        <div style={{ position: 'absolute', top: 16, left: 16, zIndex: 2 }}>
-          <LocaleToggle />
-        </div>
-        <div className="ob-hero">
-          <div className="ob-hero-mark"><BrandLogo size={56} /></div>
-          <h1 className="ob-hero-title">{t('onboarding.welcome.title', { name: PRODUCT_DISPLAY_NAME })}</h1>
-          <div className="ob-hero-ver">{t('onboarding.welcome.version', { v: appVer || CHANGELOG[0]?.version || '' })}</div>
-          <div className="ob-hero-actions">
-            <button className="btn primary" onClick={() => setStep('connect')}>
-              {t('onboarding.welcome.continue')} <ArrowRight size={15} />
-            </button>
-            <button className={`btn ghost${showChangelog ? ' active' : ''}`} onClick={() => setShowChangelog((v) => !v)}>
-              <FileText size={14} /> {t('onboarding.welcome.viewChangelog')}
-            </button>
+      <div className="ob-shell ob-shell--welcome">
+        {rail(false)}
+        <main className="ob-stage">
+          <div className="ob-hero">
+            <div className="ob-hero-kicker">{t('onboarding.welcome.kicker')}</div>
+            <h1 className="ob-hero-title">{t('onboarding.welcome.title', { name: PRODUCT_DISPLAY_NAME })}</h1>
+            <p className="ob-hero-subtitle">{t('onboarding.welcome.subtitle')}</p>
+            <div className="ob-hero-actions">
+              <button className="btn primary" onClick={() => setStep('connect')}>
+                {t('onboarding.welcome.continue')} <ArrowRight size={15} />
+              </button>
+              <button className={`btn ghost${showChangelog ? ' active' : ''}`} onClick={() => setShowChangelog((v) => !v)}>
+                <FileText size={14} /> {t('onboarding.welcome.viewChangelog')}
+              </button>
+            </div>
+            <div className="ob-hero-foot">
+              <span>{t('onboarding.welcome.version', { v: appVer || CHANGELOG[0]?.version || '' })}</span>
+              <button className="ob-hero-skip" onClick={finish}>{t('onboarding.nav.skip')}</button>
+            </div>
           </div>
-          <button className="ob-hero-skip" onClick={finish}>{t('onboarding.nav.skip')}</button>
-        </div>
+        </main>
 
         <div className={`ob-drawer-scrim${showChangelog ? ' open' : ''}`} onClick={() => setShowChangelog(false)} />
         <aside className={`ob-drawer${showChangelog ? ' open' : ''}`} aria-hidden={!showChangelog}>
@@ -319,18 +384,25 @@ export const OnboardingWizard: React.FC<{
   }
 
   return (
-    <div className="ob-step-wrap">
-      {/* 无边设计:与欢迎页一致,无卡片;key={step} 让每步重新触发入场动画 */}
-      <div className="ob-step" key={step}>
-        <div className="ob-step-head">
-          <Sparkles size={14} /> <span className="grow">{t('onboarding.title', { name: PRODUCT_DISPLAY_NAME })}</span>
-          <span className="ob-step-count">{stepIdx} / {STEP_ORDER.length - 1}</span>
-        </div>
-        <div className="ob-step-body">
+    <div className="ob-shell ob-shell--steps">
+      {rail(true)}
+      <main className="ob-stage">
+        <div className="ob-step-wrap">
+          {/* key={step} 让每步重新触发一次克制的入场动画。 */}
+          <div className="ob-step" key={step}>
+            <header className="ob-step-head">
+              <div>
+                <div className="ob-step-kicker">{phaseItems[activePhaseIdx]?.label}</div>
+                <h1>{stepMeta[step].title}</h1>
+                <p>{stepMeta[step].description}</p>
+              </div>
+              <span className="ob-step-count">{stepIdx} / {STEP_ORDER.length - 1}</span>
+            </header>
+            <div className="ob-step-body">
           {step === 'connect' && (
             <>
               <div className="field">
-                <label>{t('onboarding.connect.stepLabel')}</label>
+                <label>{t('onboarding.connect.modeLabel')}</label>
                 <div className="seg">
                   <button className={connectMode === 'forsion' ? 'active' : ''} onClick={() => setConnectMode('forsion')}>
                     <Cloud size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{t('onboarding.connect.modeForsion')}
@@ -457,7 +529,7 @@ export const OnboardingWizard: React.FC<{
             <>
               <div className="field">
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Palette size={13} /> {t('onboarding.theme.stepLabel')}
+                  <Palette size={13} /> {t('settings.theme.langLabel')}
                 </label>
                 <div className="theme-grid">
                   {listLanguages().map((th) => (
@@ -535,7 +607,7 @@ export const OnboardingWizard: React.FC<{
           {step === 'model' && (
             <>
               <div className="field">
-                <label>{t('onboarding.model.stepLabel')}</label>
+                <label>{t('onboarding.model.choiceLabel')}</label>
                 {modelsLoading && <div className="hint">{t('onboarding.model.loading')}</div>}
                 {!modelsLoading && !models?.models.length && (
                   <div className="hint">
@@ -567,7 +639,7 @@ export const OnboardingWizard: React.FC<{
 
           {step === 'speech' && (
             <div className="field">
-              <label>{t('onboarding.speech.stepLabel')}</label>
+              <label>{t('onboarding.speech.choiceLabel')}</label>
               <div className="hint" style={{ marginBottom: 10 }}>{t('onboarding.speech.intro')}</div>
               <AsrModelChoice models={models} />
             </div>
@@ -685,7 +757,7 @@ export const OnboardingWizard: React.FC<{
             <>
               <div className="field">
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <FolderOpen size={13} /> {t('onboarding.workspace.stepLabel')}
+                  <FolderOpen size={13} /> {t('onboarding.workspace.choiceLabel')}
                 </label>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <input
@@ -773,7 +845,7 @@ export const OnboardingWizard: React.FC<{
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, alignItems: 'center' }}>
+          <div className="ob-step-actions">
             {stepIdx > 0 && step !== 'done' && (
               <button className="btn ghost sm" onClick={() => setStep(STEP_ORDER[stepIdx - 1])}>
                 <ArrowLeft size={12} /> {t('onboarding.nav.prev')}
@@ -807,8 +879,10 @@ export const OnboardingWizard: React.FC<{
               </button>
             )}
           </div>
+            </div>
+          </div>
         </div>
+      </main>
       </div>
-    </div>
   )
 }

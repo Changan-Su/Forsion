@@ -41,7 +41,8 @@ export {
 } from './layoutPersist'
 export type { PersistedPanel } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
-export { OverlayAt, useClampedMenu, clampMenu, useEdgeNudge, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export { OverlayAt, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export type { NestedPanelPlacement } from './menuAnchor'
 export type { AnchorOpts } from './menuAnchor'
 export { setEngineI18n, useEngineI18n } from './i18nSeam'
 /** 骨架屏(list/document/chat 三变体)+ 面板级错误边界:加载分支/懒视图兜底统一用它,别再各写空白或转圈。 */

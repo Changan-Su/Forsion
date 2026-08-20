@@ -212,6 +212,39 @@ export function pruneTree(tree: Record<string, unknown>, gone: ReadonlySet<strin
 export const childrenOf = (tree: Record<string, unknown>, parent: string): string[] =>
   Object.keys(tree).filter((c) => tree[c] === parent).sort()
 
+/** `node` 是不是 `ancestor` 的**真后代**(自己不算)。父值认不出(非字符串 / 主卡哨兵 / 指向不存在的
+ *  卡)就是一条走到头的链,返回 false。环由 seen 兜底 —— setParent 已拒环,但盘上那份是外部可改的。 */
+export function isUnder(tree: Record<string, unknown>, node: string, ancestor: string): boolean {
+  if (!node || !ancestor || node === ancestor) return false
+  const seen = new Set<string>([node])
+  let p: unknown = tree[node]
+  while (typeof p === 'string' && p && !seen.has(p)) {
+    if (p === ancestor) return true
+    seen.add(p)
+    p = tree[p]
+  }
+  return false
+}
+
+/** 层级深度 = 文档模式的缩进档位(2026-08-19 用户拍板「有父子属性的 Card 嵌套包裹」)。
+ *  `alive` = 本篇 doc 里**真实存在**的卡锚。父不在其中的一律停在这一层 —— 主卡哨兵 `m:`、
+ *  手改坏的值、指向已删卡的悬空父,统统算「没有爹」→ 深度 0 = **自由卡不包裹**(用户第二句话)。
+ *  ⚠️ 与 deriveCanvasJson 的剪枝同一条纪律:认不出的父值既不当错误、也不当层级,只是没有爹。
+ *  ⚠️ 主卡的子节点故意也算 0:文档模式下主卡就是正文本身,它的子卡「已经在它里面」,再缩进
+ *     等于把整篇正文的直属卡全体右推一格,没有信息量。
+ *  `cap` 是缩进档位上限(不是环保护,环由 seen 管):再深就只是把卡越推越窄。 */
+export function depthOf(tree: Record<string, unknown>, node: string, alive: ReadonlySet<string>, cap = 6): number {
+  let d = 0
+  const seen = new Set<string>([node])
+  let p: unknown = tree[node]
+  while (typeof p === 'string' && p && alive.has(p) && !seen.has(p) && d < cap) {
+    d++
+    seen.add(p)
+    p = tree[p]
+  }
+  return d
+}
+
 /** 新 Frame(2026-08-18)。`title` 空着由渲染侧兜底成 "Frame" —— 空串不写键(与 setElementText 同口径)。 */
 export function newFrame(id: string, x: number, y: number, w: number, h: number, title?: string): RawEl {
   const out: RawEl = { id, type: 'frame', x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }

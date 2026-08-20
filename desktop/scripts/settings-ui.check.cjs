@@ -59,7 +59,7 @@ ${CSS}
 body { margin: 0; }
 </style></head><body>
 <div class="settings-page">
-<!-- ⚠️ 侧栏不能省:.settings-page 是 grid(224px + 1fr),少了它 .settings-main 会落进 224px 那一列,
+<!-- ⚠️ 侧栏不能省:.settings-page 是 grid(252px + 1fr),少了它 .settings-main 会落进 252px 那一列,
      正文被挤成一条,量出来的几何全是假的(截图里主题卡互相压在一起就是这个)。 -->
 <aside class="settings-nav"><div class="settings-nav-top"></div><div class="settings-nav-list"></div></aside>
 <section class="settings-main">
@@ -294,14 +294,14 @@ function surfaceUnder(el) {
     }
   })
   check('D 栏目条在标题下方、正文上方', bar.belowTitle && bar.aboveBody, `belowTitle=${bar.belowTitle} aboveBody=${bar.aboveBody}`)
-  check('D 栏目条与标题左对齐(同 720 栏宽)', bar.leftAligned)
+  check('D 栏目条与标题左对齐(同一内容栏)', bar.leftAligned)
   check('D 栏目条横向滚动、不换行(窄窗不会撑成两行顶掉正文)', bar.overflowX === 'auto' && bar.wrap === 'nowrap', `overflow-x=${bar.overflowX} wrap=${bar.wrap}`)
   check('D 选中栏目用 overlay 底,不是满强度 accent', bar.activeBg !== bar.accentInk, `bg=${bar.activeBg}`)
   // ⚠️ .settings-main-head 是拖窗区,整条栏目条(不止按钮)必须抠成 no-drag,否则横滑拖不动。
   check('D 栏目条整条 no-drag(拖窗区会吞掉横滑)', bar.appRegion === 'no-drag', `app-region=${bar.appRegion}`)
-  // 多包一层 .settings-sub 之后,`.settings-body > *` 的 720 上限落到了包装层上,里面的 .field
+  // 多包一层 .settings-sub 之后,`.settings-body > *` 的 840 上限落到了包装层上,里面的 .field
   // 不再直接吃到那条规则 —— 得确认列宽没塌:正文与标题同一列、.field 撑满包装层。
-  // ⚠️ 别把 720 写死:窄窗下列宽由可用宽度决定(本页 1000px 视口下是 712),写死会误报。
+  // ⚠️ 别把 840 写死:窄窗下列宽由可用宽度决定(本页 1000px 视口下是 672),写死会误报。
   const colAt = (w) => p.setViewportSize({ width: w, height: 800 }).then(() => p.evaluate(() => {
     const r = (s) => document.querySelector(s).getBoundingClientRect()
     const sub = r('.settings-sub'), field = r('.settings-body .field'), title = r('.settings-main-title')
@@ -312,7 +312,7 @@ function surfaceUnder(el) {
   check('D 正文与标题同一列、.field 撑满(多包一层没把列宽吃掉)',
     Math.abs(narrow.sub - narrow.title) < 1 && Math.abs(narrow.field - narrow.sub) < 1 && narrow.dx < 1,
     `窄窗 sub=${narrow.sub.toFixed(1)} field=${narrow.field.toFixed(1)} title=${narrow.title.toFixed(1)}`)
-  check('D 宽窗下 720 上限仍然生效(不会拉成大通栏)', Math.abs(wide.field - 720) < 1,
+  check('D 宽窗下 840 上限仍然生效(外观页可并排、其他页不会拉成大通栏)', Math.abs(wide.field - 840) < 1,
     `宽窗 field=${wide.field.toFixed(1)}`)
   await p.setViewportSize({ width: 1000, height: 800 })
 
@@ -358,8 +358,8 @@ function surfaceUnder(el) {
   //    漏传 data-dir,那些断言不会红(Codex 评审指出)。这里静态钉住真组件的这几处接线。 ══
   const wiring = [
     ['栏目条渲染在 .settings-main-head 内', /settings-main-head[\s\S]{0,900}?className="settings-subbar"/],
-    ['包装层带 key(靠重挂触发入场动画)', /key=\{`\$\{tab\}:\$\{activeSub\}`\}[\s\S]{0,120}?className="settings-sub"/],
-    ['包装层传了 data-dir(方向)', /className="settings-sub" data-dir=\{subDir\}/],
+    ['包装层带 key(靠重挂触发入场动画)', /key=\{`\$\{tab\}:\$\{activeSub\}`\}[\s\S]{0,160}?className=\{`settings-sub settings-sub--\$\{tab\}`\}/],
+    ['包装层传了 data-dir(方向)', /className=\{`settings-sub settings-sub--\$\{tab\}`\} data-dir=\{subDir\}/],
     ['切页/切分类后正文回顶部', /\.settings-body'\)[\s\S]{0,120}?scrollTop = 0/],
   ]
   const brokenWiring = wiring.filter(([, re]) => !re.test(TSX)).map(([n]) => n)
@@ -376,6 +376,29 @@ function surfaceUnder(el) {
   check('H color-mix 之前有非 color-mix 兜底,且升级版包在 @supports 里',
     plainAt > -1 && supAt > -1 && plainAt < supAt && supAt < mixAt && BASE.includes('--sel-fill: var('),
     plainAt < 0 ? '缺兜底值' : supAt < 0 ? '缺 @supports' : `兜底@${plainAt} < @supports@${supAt} < color-mix@${mixAt}`)
+
+  // ══ I:其余设置页的收敛不能退回「主标题 + 正文重复标题 / 一项一卡」。静态钉住共用面板、
+  //    无障碍 switch 与高频页的关键结构；具体间距和主题表现仍由 Electron 截图人工点验。 ══
+  const PRIMITIVES = fs.readFileSync(path.join(SRC, 'components/SettingsPrimitives.tsx'), 'utf8')
+  const SHORTCUTS = fs.readFileSync(path.join(SRC, 'components/ShortcutsTab.tsx'), 'utf8')
+  const NOTIFICATIONS = fs.readFileSync(path.join(SRC, 'components/NotificationsTab.tsx'), 'utf8')
+  const SPACES = fs.readFileSync(path.join(SRC, 'components/SpacesTab.tsx'), 'utf8')
+  const duplicateHeadings = [
+    /tab === 'hooks'[\s\S]{0,100}?settings-sec/,
+    /tab === 'spaces'[\s\S]{0,100}?settings-sec/,
+    /tab === 'notifications'[\s\S]{0,100}?settings-sec/,
+    /tab === 'statusbar'[\s\S]{0,100}?settings-sec/,
+    /tab === 'channels'[\s\S]{0,100}?settings-sec/,
+  ].some((re) => re.test(TSX))
+  const compactWiring = [
+    PRIMITIVES.includes('role="switch"'),
+    SHORTCUTS.includes('settings-filter-input') && SHORTCUTS.includes('visibleRows'),
+    NOTIFICATIONS.includes('SettingsSwitch') && NOTIFICATIONS.includes('settings-drag-list'),
+    SPACES.includes('settings-collection-list') && !SPACES.includes('const zh ='),
+    TSX.includes("settings.page.notesDescription") && TSX.includes("settings.page.browserDescription"),
+  ]
+  check('I 其余设置页共用面板/开关/紧凑列表，且不再重复主标题', !duplicateHeadings && compactWiring.every(Boolean),
+    duplicateHeadings ? '仍有正文重复标题' : `${compactWiring.filter(Boolean).length}/${compactWiring.length} 处结构接线`)
 
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)

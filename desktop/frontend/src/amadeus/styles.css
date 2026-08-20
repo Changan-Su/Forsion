@@ -550,6 +550,11 @@
   min-width: 0;
   padding: 2px 6px;
 }
+/* 块选中撤销时保留 250ms 透明过渡，避免淡底“啪”地消失。属性摘除后元素仍在，故过渡
+   必须挂在基态而不是 [data-selected] 上。 */
+.am-app .block-host > .block-body:not(.embed-src-line) {
+  transition: background-color 250ms var(--ease-apple, ease-out);
+}
 
 .am-app .block-unknown {
   color: var(--text-muted);
@@ -713,15 +718,49 @@
   letter-spacing: 0.04em;
   color: var(--text-muted);
 }
-/* 标题源码行(headingSource.ts):光标进了这行,行首露出字面井号。
-   ⚠️ **绝不要再把这一行降回正文排版**。栽过一次:降回正文之后,用户敲 `# ` 时触发其实已经生效
-   (节点真的变成了 h1),但看上去字号纹丝不动、行首还杵着一个 `#` —— 与「触发压根没生效」
-   完全无法区分(用户实报「输入 # 什么也没发生」)。Obsidian 的行为也是井号可见 + 标题照常大。 */
-.am-app .milkdown .ProseMirror .heading-hash {
+/* 结构源码行(structuralSource.ts):标题/列表/待办/引用的行首语法是真 input，不再是不可进入的
+   原子 widget。标题只在当前编辑行显示，其余结构按需进入；字号继承，字重/颜色退后成“语法”层。 */
+.am-app .milkdown .ProseMirror .amx-struct-prefix {
+  display: inline-block;
+  /* fallback 按平均符号宽估；新 Chromium 用 field-sizing 直接贴合 value，待办标记后不留一截空洞。 */
+  width: calc(var(--amx-prefix-ch, 2) * 0.72ch);
+  min-width: 1ch;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
   color: var(--text-muted);
+  font: inherit;
   font-weight: 400;
+  line-height: inherit;
   opacity: 0.55;
-  user-select: none;
+  vertical-align: baseline;
+  caret-color: var(--primary);
+}
+@supports (field-sizing: content) {
+  .am-app .milkdown .ProseMirror .amx-struct-prefix {
+    field-sizing: content;
+    width: auto;
+  }
+}
+.am-app .milkdown .ProseMirror .amx-struct-prefix:focus {
+  opacity: 0.82;
+}
+/* 源码打开时让原生 marker / 自绘 checkbox 让位，避免 `- [ ] ` 与复选框叠成两份。 */
+.am-app .milkdown .ProseMirror li.amx-struct-source-open {
+  list-style: none;
+}
+.am-app .milkdown .ProseMirror li[data-item-type='task'].amx-struct-source-open::before,
+.am-app .milkdown .ProseMirror li[data-item-type='task'].amx-struct-source-open::after {
+  display: none;
+}
+.am-app .milkdown .ProseMirror li[data-item-type='task'].amx-struct-source-open {
+  color: inherit;
+  text-decoration: none;
+}
+.am-app .milkdown .ProseMirror blockquote.amx-struct-source-open::before {
+  opacity: 0;
 }
 .am-app .milkdown .ProseMirror p {
   margin: 0.3em 0;
@@ -2662,6 +2701,12 @@ body.amx-marquee-active * {
   transform-origin: left center;
 }
 /* 块选中 = 选区色板同款淡底(v3 [data-selected] 的口径:只染内容不加描边)。 */
+.am-app .unified-body .ProseMirror :is(
+  p, h1, h2, h3, h4, h5, h6, ul, ol, li, blockquote, pre, hr, table,
+  .amx-ucard, .amx-ucolrow, .amx-ucolcell
+) {
+  transition: background-color 250ms var(--ease-apple, ease-out);
+}
 .am-app .unified-body .ProseMirror-selectednode {
   border-radius: 6px;
   background: color-mix(in srgb, var(--primary) 14%, transparent);
@@ -2917,6 +2962,34 @@ body.amx-marquee-active * {
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-active {
   outline-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }
+/* 文档模式的层级嵌套(2026-08-19 用户拍板「有父子属性的 Card 嵌套包裹,排序始终在父 Card 内」)。
+   两半分工:**源码相邻**由 canvasStage 的 orderUnder / addCardAt(under) 在认爹那一刻保证,这里只
+   管呈现 —— 按深度缩进 + 一条左轨把子卡收进父卡的势力范围。扁平的兄弟 DOM 画不出一个真的
+   「框住父+子」的盒子(真嵌套 = 协议改动,见 canvas.ts 的 createCardDepthDeco 顶注),缩进 + 轨线
+   是大纲编辑器与 AFFiNE 嵌套块同款的可行写法。
+   ⚠️ 只作用于**有爹的卡**(.amx-card-child 由 createCardDepthDeco 下发)。自由卡一个像素不动 ——
+      08-18「零装饰无缝」那条对它们原样有效(仪器 C45 钉的就是自由卡)。
+   ⚠️ 档位走六条类而不是 decoration 的内联 style:卡的 toDOM 已经把画布几何(--amx-x/y/w)写在
+      style 上,同属性一旦被覆盖而不是追加,画布模式的卡会当场全飞到 0,0。 */
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-child {
+  --amx-depth: 1;
+  margin-left: calc(var(--amx-depth) * 22px);
+  /* 上下各留 2px:一行字的子卡,轨线才不至于短到看不出是一条线(观感自查截图实测)。
+     同深度的相邻兄弟卡之间没有外边距 → 它们的轨线首尾相接,连成一条完整的层级线。 */
+  padding: 2px 0 2px 12px;
+  /* 轨线用中性墨色(与点阵同一条口径:按正文色兑固定比例,明暗两套皮肤都稳),不用 --primary ——
+     层级线是结构不是强调,染上主色会跟选中/悬停的主色语汇打架。 */
+  border-left: 2px solid color-mix(in srgb, var(--text) 18%, transparent);
+  /* ⚠️ 轨线必须**是直的**:卡片自己的 6px 圆角是给悬停约束框(outline)用的,落到 border-left
+     上会把线两头拗成小钩子 —— 第一版截图里看着像引用块的残渣,不像层级线。 */
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d2 { --amx-depth: 2; }
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d3 { --amx-depth: 3; }
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d4 { --amx-depth: 4; }
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d5 { --amx-depth: 5; }
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d6 { --amx-depth: 6; }
 /* 卡缝插入口(2026-08-19 用户拍板):文档模式悬停相邻两卡缝隙浮现,点击插空段落光标。
    线体 absolute 不进布局;18px 高命中带,视觉=中央细线+圆 ＋。 */
 .am-app .amx-gap-insert {
@@ -2997,8 +3070,14 @@ body.amx-marquee-active * {
   border: 1px solid var(--border);
   border-radius: 12px;
   background-color: var(--bg);
-  background-image: radial-gradient(var(--border) 1px, transparent 1px);
-  background-size: 24px 24px;
+  /* 点阵底纹(AFFiNE 同款)。⚠️ 原来是 `var(--border)`:浅色皮肤下 #eae9e7 压在 #fff 上几乎看不见
+     (用户 2026-08-19 实报「几乎看不见」)。改成按正文色兑固定比例 —— 明暗两套皮肤都保证同一档
+     对比度,而 --border 的取值各主题自便,拿它当墨色画不出稳定的格子。 */
+  background-image: radial-gradient(color-mix(in srgb, var(--text) 20%, transparent) 1px, transparent 1px);
+  /* 格子跟着视口平移/缩放走(AFFiNE 同款:它是画布的一部分,不是背板贴纸)。三个量由 canvasStage
+     下发到本元素 —— 背景只能画在这一层,stage-inner 是 0×0 的定位原点,给它画背景等于没画。 */
+  background-position: var(--amx-vpx, 0px) var(--amx-vpy, 0px);
+  background-size: calc(24px * var(--amx-vpz, 1)) calc(24px * var(--amx-vpz, 1));
 }
 .am-app .amx-stage.amx-dropzone { outline: 2px dashed var(--primary); outline-offset: -4px; }
 /* 文档模式:舞台两层整个摘出布局。DOM 保持在场 → React 不重挂子树 → PM 撤销栈不被切模式清空

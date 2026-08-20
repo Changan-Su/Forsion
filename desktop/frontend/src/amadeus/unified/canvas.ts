@@ -30,7 +30,7 @@ import { undoDepth, isHistoryTransaction } from '@milkdown/kit/prose/history'
 import { Fragment, Slice } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { freshAnchorId, type LayoutV4 } from './columns'
-import { rawTree, pruneTree } from './canvasEdit'
+import { rawTree, pruneTree, depthOf } from './canvasEdit'
 
 /** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。 */
 export interface CanvasCard { ref: string; x: number; y: number; w: number; h?: number }
@@ -608,6 +608,50 @@ export function createCardActiveDeco(): MilkdownPlugin[] {
           }
           if (!node) return null
           return DecorationSet.create(state.doc, [Decoration.node(pos, pos + node.nodeSize, { class: 'amx-card-active' })])
+        },
+      },
+    }),
+  )].flat()
+}
+
+// ── 文档模式:层级缩进(2026-08-19,用户拍板「有父子属性的 Card 嵌套包裹,排序始终在父 Card 内」)。──
+// 分工:**源码相邻**由写侧保证(canvasStage 的 orderUnder / addCardAt(under) —— 认爹或建子节点时
+// 把子卡那一段整体搬到父段之后),这里只负责**呈现**:按深度给卡打一枚档位类,CSS 去缩进 + 画左轨。
+// 为什么不是真嵌套:卡在 PM 里恒为顶层节点(canvasIntegrityGuard),而闭合锚的辖域遇到下一枚开锚
+// 就收边 —— 卡里再冒一枚开锚 = 父卡辖域提前截断,那是协议改动,不是一个显示需求该付的代价。
+//
+// ⚠️ 档位走 **class 而不是内联 style**:卡的 toDOM 已经把画布几何(--amx-x/y/w)写在 style 上了,
+//    decoration 的 style 与它同属一个属性,一旦哪天的 prosemirror-view 是「覆盖」而不是「追加」,
+//    画布模式的卡会当场全部飞到 0,0。六个档位六条 CSS,换的是这条风险归零。
+// ⚠️ tree 不在 doc 里,改层级不产生 PM 事务 → decorations 不会自己重算。UnifiedPage 在 canvas 行
+//    真变过之后补一笔空事务把它推醒(见那边的 useEffect)。
+const DEPTH_CAP = 6
+
+export function createCardDepthDeco(getCanvas: () => CanvasV1 | null): MilkdownPlugin[] {
+  return [$prose(() =>
+    new Plugin({
+      key: new PluginKey('AMX_CARD_DEPTH'),
+      props: {
+        decorations(state) {
+          const card = state.schema.nodes.amadeusCanvasCard
+          if (!card) return null
+          const tree = rawTree(getCanvas()?.tree)
+          if (!Object.keys(tree).length) return null
+          // alive = 本篇真实在场的卡锚。父不在其中 = 没有爹(深度 0),见 depthOf 的告警。
+          const alive = new Set<string>()
+          const at: Array<{ pos: number; size: number; anchor: string }> = []
+          state.doc.forEach((node, offset) => {
+            if (node.type !== card) return
+            const a = String(node.attrs.anchor)
+            alive.add(a)
+            at.push({ pos: offset, size: node.nodeSize, anchor: a })
+          })
+          const decos: Decoration[] = []
+          for (const c of at) {
+            const d = depthOf(tree, c.anchor, alive, DEPTH_CAP)
+            if (d > 0) decos.push(Decoration.node(c.pos, c.pos + c.size, { class: `amx-card-child amx-card-d${d}` }))
+          }
+          return decos.length ? DecorationSet.create(state.doc, decos) : null
         },
       },
     }),

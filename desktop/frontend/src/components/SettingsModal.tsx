@@ -3,7 +3,7 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon } from 'lucide-react'
+import { X, ArrowLeft, ArrowUp, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
@@ -29,6 +29,7 @@ import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
+import { BrandLogo } from './BrandLogo'
 import { RemoteSyncSection } from './RemoteSyncSection'
 import { CHANGELOG } from '../changelog'
 import { Markdown } from './Markdown'
@@ -60,6 +61,7 @@ import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewComman
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
+import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Obsidian 式一级入口)。
@@ -679,6 +681,32 @@ export const SettingsModal: React.FC<{
   const activeTabLabel = tab.startsWith('plugin:')
     ? (pluginNavItems.find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
     : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
+  const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
+    general: 'settings.page.generalDescription',
+    spaces: 'settings.page.spacesDescription',
+    notes: 'settings.page.notesDescription',
+    sync: 'settings.page.syncDescription',
+    theme: 'settings.page.themeDescription',
+    shortcuts: 'settings.page.shortcutsDescription',
+    notifications: 'settings.page.notificationsDescription',
+    statusbar: 'settings.page.statusbarDescription',
+    model: 'settings.page.modelDescription',
+    agents: 'settings.page.agentsDescription',
+    skills: 'settings.page.skillsDescription',
+    mcp: 'settings.page.mcpDescription',
+    hooks: 'settings.page.hooksDescription',
+    channels: 'settings.page.channelsDescription',
+    browser: 'settings.page.browserDescription',
+    'amadeus-plugins': 'settings.page.pluginsDescription',
+    advanced: 'settings.page.advancedDescription',
+    developer: 'settings.page.developerDescription',
+    about: 'settings.page.aboutDescription',
+  }
+  const activeStaticTab = tab.startsWith('plugin:') ? null : tab as StaticTab
+  const activeDescriptionKey = activeStaticTab ? pageDescriptionKey[activeStaticTab] : undefined
+  const activeTabDescription = tab.startsWith('plugin:')
+    ? t('settings.page.pluginDescription')
+    : activeDescriptionKey ? t(activeDescriptionKey) : ''
 
   // 中分类:只给内容确实长、且本来就有天然分界的一级页;短页(笔记/浏览器/关于/开发者…)不加栏目条,
   // 免得为一两项设置硬造分类。条目的显隐条件必须与下方正文块的渲染条件一一对应,否则会出现
@@ -740,16 +768,14 @@ export const SettingsModal: React.FC<{
     setSub(k)
   }
 
-  // 分类导航(两级):大类只剩 Forsion(品牌名,不进 i18n),Tangu 降为它下面的一个小类,
-  // 与「选项 / 社区插件 / 系统」平级并排在选项之后 —— 引擎是 Forsion 的一部分,不是并列的另一个品牌。
-  // Tangu 原先的「AI / 工具」两组合并成一组:分完只有两三项,两个组头比它们管的条目还多。
-  // Amadeus 不设组——它只是一个 Space(views 组合),笔记设置归「选项」,插件只有 Forsion/Tangu 两种。
-  // brand:小类标题默认 uppercase(中文标签看不出来),品牌名不该被喊成「TANGU」。
+  // 一级入口一个不少,但按用户目标而不是技术归属分组:先找工作区与外观,再找 AI 能力和扩展。
+  // Forsion 品牌独立放在导航顶部,不再用一个额外的大类标题重复占据滚动区。
   const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[]; brand?: boolean }> }> = [
-    { key: 'forsion', label: 'Forsion', groups: [
-      { key: 'options', label: t('settings.group.options'), tabs: ['general', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'notes', 'sync'] },
-      { key: 'tangu', label: 'Tangu', brand: true, tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
-      { key: 'fplugins', label: t('settings.group.communityPlugins'), tabs: ['amadeus-plugins'] },
+    { key: 'settings', label: '', groups: [
+      { key: 'workspace', label: t('settings.group.workspace'), tabs: ['general', 'spaces', 'notes', 'sync'] },
+      { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
+      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
+      { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
       { key: 'system', label: t('settings.group.system'), tabs: ['advanced', 'developer', 'about'] },
     ] },
   ]
@@ -757,13 +783,20 @@ export const SettingsModal: React.FC<{
   if (!p.open) return null
 
   return (
-    <div className="settings-page">
+    <div className="settings-page settings-page--control-center">
       <aside className="settings-nav" aria-label="Settings navigation">
         {/* 左上角返回 + 设置搜索(codex 风):常驻顶部,不随分类列表滚动。 */}
         <div className="settings-nav-top">
           <button className="settings-back" onClick={p.onClose}>
             <ArrowLeft size={15} /> {t('settings.backToApp')}
           </button>
+          <div className="settings-nav-brand">
+            <BrandLogo size={30} />
+            <div>
+              <strong>Forsion</strong>
+              <span>{t('settings.title')}</span>
+            </div>
+          </div>
           <div className="settings-nav-search">
             <Search size={14} className="settings-nav-search-ic" />
             <input
@@ -785,7 +818,7 @@ export const SettingsModal: React.FC<{
                   .map((id) => tabItems.find(([tid]) => tid === id))
                   .filter((x): x is [Tab, string] => !!x)
                 // 「社区插件」组末尾追加已启用且有设置的外置 agent 插件,各成一级项(动态项无图标)。
-                const all = grp.key === 'fplugins' ? [...base, ...pluginNavItems] : base
+                const all = grp.key === 'extensions' ? [...base, ...pluginNavItems] : base
                 const items = secHit || grp.label.toLowerCase().includes(ql)
                   ? all
                   : all.filter(([, label]) => label.toLowerCase().includes(ql))
@@ -795,7 +828,7 @@ export const SettingsModal: React.FC<{
             if (groups.length === 0) return null
             return (
               <div key={sec.key} className="settings-nav-section">
-                <div className="settings-nav-sectionhead">{sec.label}</div>
+                {sec.label && <div className="settings-nav-sectionhead">{sec.label}</div>}
                 {groups.map((grp) => (
                   <div key={grp.key} className="settings-nav-group">
                     <div className={`settings-nav-grouphead${grp.brand ? ' brand' : ''}`}>{grp.label}</div>
@@ -813,7 +846,10 @@ export const SettingsModal: React.FC<{
       </aside>
       <section className="settings-main">
         <div className="settings-main-head">
-          <div className="settings-main-title">{activeTabLabel}</div>
+          <div className="settings-main-copy">
+            <div className="settings-main-title">{activeTabLabel}</div>
+            {activeTabDescription && <p>{activeTabDescription}</p>}
+          </div>
           {subItems.length > 1 && (
             <div className="settings-subbar" role="tablist" aria-label={activeTabLabel}>
               {subItems.map(([k, label]) => (
@@ -832,27 +868,59 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-body">
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
-          <div key={`${tab}:${activeSub}`} className="settings-sub" data-dir={subDir}>
+          <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir}>
                 {/* 小节标题(原 .settings-sec)已由标题下的中分类栏目条承担,不再在正文重复一遍。 */}
                 {tab === 'general' && activeSub === 'g-conn' && (
                   <>
-                    {isDesktop && (
-                      <div className="field">
-                        <label>{t('settings.backend.modeLabel')}</label>
-                        <div className="seg">
-                          <button className={mode === 'managed' ? 'active' : ''} onClick={() => setMode('managed')}>
-                            {t('settings.backend.modeManaged')}
-                          </button>
-                          <button className={mode === 'external' ? 'active' : ''} onClick={() => setMode('external')}>
-                            {t('settings.backend.modeExternal')}
-                          </button>
+                    <section className="settings-overview" aria-label={t('settings.overview.label')}>
+                      <div className="settings-overview-copy">
+                        <span>{t('settings.overview.label')}</span>
+                        <strong>{backendSt?.state === 'ready' ? t('settings.overview.readyTitle') : t('settings.overview.attentionTitle')}</strong>
+                        <p>{backendSt?.state === 'ready' ? t('settings.overview.readyDescription') : t('settings.overview.attentionDescription')}</p>
+                      </div>
+                      <div className="settings-overview-list">
+                        <div className="settings-overview-row">
+                          <span className="settings-overview-icon"><Settings2 size={15} /></span>
+                          <span><small>{t('settings.overview.mode')}</small><strong>{mode === 'managed' ? t('settings.backend.modeManaged') : t('settings.backend.modeExternal')}</strong></span>
+                        </div>
+                        <div className="settings-overview-row">
+                          <span className="settings-overview-icon"><Server size={15} /></span>
+                          <span><small>{t('settings.overview.backend')}</small><strong>{backendSt ? t(BACKEND_STATE_LABEL[backendSt.state] || 'settings.backend.state.stopped') : t('common.loading')}</strong></span>
+                          <i className={`settings-status-dot${backendSt?.state === 'ready' ? ' ok' : backendSt?.state === 'crashed' ? ' err' : ''}`} />
+                        </div>
+                        <div className="settings-overview-row">
+                          <span className="settings-overview-icon"><LogIn size={15} /></span>
+                          <span><small>{t('settings.overview.account')}</small><strong>{authSt?.loggedIn && authSt.tokenValid !== false ? t('settings.overview.signedIn') : t('settings.overview.signedOut')}</strong></span>
                         </div>
                       </div>
+                    </section>
+                    {isDesktop && (
+                      <section className="settings-panel settings-mode-panel">
+                        <div className="settings-panel-head">
+                          <span className="settings-panel-icon"><Server size={16} /></span>
+                          <div><strong>{t('settings.backend.modeLabel')}</strong><p>{t('settings.backend.modeDescription')}</p></div>
+                        </div>
+                        <div className="settings-choice-grid">
+                          <button className={`settings-choice-card${mode === 'managed' ? ' active' : ''}`} onClick={() => setMode('managed')}>
+                            <span className="settings-choice-icon"><Settings2 size={17} /></span>
+                            <span><strong>{t('settings.backend.modeManaged')}</strong><small>{t('settings.backend.modeManagedDescription')}</small></span>
+                            {mode === 'managed' && <Check size={15} className="settings-choice-check" />}
+                          </button>
+                          <button className={`settings-choice-card${mode === 'external' ? ' active' : ''}`} onClick={() => setMode('external')}>
+                            <span className="settings-choice-icon"><Globe2 size={17} /></span>
+                            <span><strong>{t('settings.backend.modeExternal')}</strong><small>{t('settings.backend.modeExternalDescription')}</small></span>
+                            {mode === 'external' && <Check size={15} className="settings-choice-check" />}
+                          </button>
+                        </div>
+                      </section>
                     )}
 
                     {isDesktop && stored && (
-                      <div className="field">
-                        <label>{t('settings.workspace.label')}</label>
+                      <section className="settings-panel settings-workspace-panel">
+                        <div className="settings-panel-head">
+                          <span className="settings-panel-icon"><FolderOpen size={16} /></span>
+                          <div><strong>{t('settings.workspace.label')}</strong><p>{t('settings.workspace.summary')}</p></div>
+                        </div>
                         <div className="settings-inline-row">
                           <input
                             type="text"
@@ -878,11 +946,15 @@ export const SettingsModal: React.FC<{
                         <div className="hint">
                           {t('settings.workspace.hint')}
                         </div>
-                      </div>
+                      </section>
                     )}
 
                     {isDesktop && mode === 'managed' && stored && (
-                      <>
+                      <section className="settings-panel settings-runtime-panel">
+                        <div className="settings-panel-head">
+                          <span className="settings-panel-icon"><Wrench size={16} /></span>
+                          <div><strong>{t('settings.runtime.title')}</strong><p>{t('settings.runtime.description')}</p></div>
+                        </div>
                         <div className="field-row">
                           <div className="field" style={{ maxWidth: 160 }}>
                             <label>{t('settings.sandbox.label')}</label>
@@ -921,12 +993,15 @@ export const SettingsModal: React.FC<{
                             </div>
                           </div>
                         </div>
-                        <div className="hint" style={{ marginBottom: 10 }}>{t('settings.python.hint')}</div>
                         {likelyMainlandChina() && (stored.mirror || 'default') !== 'china' && (
-                          <div className="hint" style={{ marginBottom: 6, color: 'var(--accent-ink)' }}>{t('settings.mirror.recommend')}</div>
+                          <div className="settings-runtime-callout">{t('settings.mirror.recommend')}</div>
                         )}
-                        <div className="hint" style={{ marginBottom: 6 }}>{t('settings.mirror.hint')}</div>
-                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+                        <details className="settings-runtime-details">
+                          <summary><Info size={13} /> {t('settings.runtime.details')}</summary>
+                          <p>{t('settings.python.hint')}</p>
+                          <p>{t('settings.mirror.hint')}</p>
+                        </details>
+                        <div className="settings-runtime-test">
                           <button
                             className="btn ghost sm"
                             disabled={mirrorTesting || !window.tangu?.envTestMirror}
@@ -947,7 +1022,7 @@ export const SettingsModal: React.FC<{
                             </span>
                           ))}
                         </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+                        <div className="settings-runtime-actions">
                           <button className="btn primary sm" onClick={saveManaged}>{t('settings.backend.saveRestart')}</button>
                           <button
                             className="btn ghost sm"
@@ -970,8 +1045,8 @@ export const SettingsModal: React.FC<{
                           </div>
                         )}
                         {/* 环境检测(与首启向导第③步同一个组件):事后回来补装 node/git 的地方。 */}
-                        <EnvProbeSection onLeave={() => useApp.getState().closeSettings()} />
-                        <div className="field">
+                        <div className="settings-runtime-probe"><EnvProbeSection onLeave={() => useApp.getState().closeSettings()} /></div>
+                        <div className="field settings-runtime-logs">
                           <button
                             className="btn ghost sm"
                             onClick={() => void window.tangu!.backendLogs!().then(setLogs)}
@@ -989,11 +1064,15 @@ export const SettingsModal: React.FC<{
                             </pre>
                           )}
                         </div>
-                      </>
+                      </section>
                     )}
 
                     {(!isDesktop || mode === 'external') && !cloudWeb && (
-                      <>
+                      <section className="settings-panel settings-external-panel">
+                        <div className="settings-panel-head">
+                          <span className="settings-panel-icon"><Plug size={16} /></span>
+                          <div><strong>{t('settings.external.title')}</strong><p>{t('settings.external.description')}</p></div>
+                        </div>
                         <div className="field">
                           <label>{t('settings.external.urlLabel')}</label>
                           <input
@@ -1022,7 +1101,7 @@ export const SettingsModal: React.FC<{
                           </button>
                           <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{testResult}</span>
                         </div>
-                      </>
+                      </section>
                     )}
                   </>
                 )}
@@ -1140,111 +1219,54 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'notes' && stored && (
                   <>
-                    <div className="field">
-                      <label>{t('settings.notes.modeLabel')}</label>
-                      <select
-                        value={stored.notesAttachmentMode || 'attachments'}
-                        onChange={(e) => void window.tangu!.setConfig({ notesAttachmentMode: e.target.value as StoredDesktopConfig['notesAttachmentMode'] }).then(setStored)}
-                      >
-                        <option value="attachments">{t('settings.notes.modeAttachments')}</option>
-                        <option value="same">{t('settings.notes.modeSame')}</option>
-                        <option value="vault">{t('settings.notes.modeVault')}</option>
-                      </select>
-                      <div className="hint">{t('settings.notes.modeHint')}</div>
-                    </div>
-                    {(stored.notesAttachmentMode || 'attachments') === 'vault' && (
-                      <div className="field">
-                        <label>{t('settings.notes.folderLabel')}</label>
-                        <div className="settings-inline-row">
-                          <input
-                            type="text"
-                            value={stored.notesAttachmentFolder ?? 'assets'}
-                            onChange={(e) => setStored({ ...stored, notesAttachmentFolder: e.target.value })}
-                            placeholder="assets"
-                          />
-                          <button
-                            className="btn primary sm"
-                            onClick={() => void window.tangu!.setConfig({ notesAttachmentFolder: (stored.notesAttachmentFolder || 'assets').trim().replace(/^\/+|\/+$/g, '') }).then(setStored)}
-                          >
-                            {t('settings.btn.save')}
-                          </button>
-                        </div>
-                        <div className="hint">{t('settings.notes.folderHint')}</div>
+                    <SettingsPanel icon={<FolderOpen size={16} />} title={t('settings.notes.storageTitle')} description={t('settings.notes.storageDescription')}>
+                      <div className="settings-control-list">
+                        <SettingsRow
+                          label={t('settings.notes.modeLabel')}
+                          description={t('settings.notes.modeHint')}
+                          control={(
+                            <select value={stored.notesAttachmentMode || 'attachments'} onChange={(e) => void window.tangu!.setConfig({ notesAttachmentMode: e.target.value as StoredDesktopConfig['notesAttachmentMode'] }).then(setStored)}>
+                              <option value="attachments">{t('settings.notes.modeAttachments')}</option>
+                              <option value="same">{t('settings.notes.modeSame')}</option>
+                              <option value="vault">{t('settings.notes.modeVault')}</option>
+                            </select>
+                          )}
+                        />
+                        {(stored.notesAttachmentMode || 'attachments') === 'vault' && (
+                          <SettingsRow label={t('settings.notes.folderLabel')} description={t('settings.notes.folderHint')}>
+                            <div className="settings-inline-row settings-row-wide-control">
+                              <input type="text" value={stored.notesAttachmentFolder ?? 'assets'} onChange={(e) => setStored({ ...stored, notesAttachmentFolder: e.target.value })} placeholder="assets" />
+                              <button className="btn primary sm" onClick={() => void window.tangu!.setConfig({ notesAttachmentFolder: (stored.notesAttachmentFolder || 'assets').trim().replace(/^\/+|\/+$/g, '') }).then(setStored)}>{t('settings.btn.save')}</button>
+                            </div>
+                          </SettingsRow>
+                        )}
+                        <SettingsRow label={t('settings.notes.dailyLabel')} description={t('settings.notes.dailyHint')}>
+                          <div className="settings-inline-row settings-row-wide-control">
+                            <input type="text" value={stored.notesDailyFolder ?? ''} onChange={(e) => setStored({ ...stored, notesDailyFolder: e.target.value })} placeholder={t('settings.notes.dailyPlaceholder')} />
+                            <button className="btn primary sm" onClick={() => void window.tangu!.setConfig({ notesDailyFolder: (stored.notesDailyFolder || '').trim().replace(/^\/+|\/+$/g, '') }).then(setStored)}>{t('settings.btn.save')}</button>
+                          </div>
+                        </SettingsRow>
                       </div>
-                    )}
-                    <div className="field">
-                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={stored.notesImportPreview !== false}
-                          onChange={(e) => void window.tangu!.setConfig({ notesImportPreview: e.target.checked }).then(setStored)}
+                    </SettingsPanel>
+
+                    <SettingsPanel icon={<NotebookPen size={16} />} title={t('settings.notes.behaviorTitle')} description={t('settings.notes.behaviorDescription')}>
+                      <div className="settings-control-list">
+                        <SettingsRow label={t('settings.notes.previewLabel')} description={t('settings.notes.previewHint')} control={<SettingsSwitch checked={stored.notesImportPreview !== false} onChange={(on) => void window.tangu!.setConfig({ notesImportPreview: on }).then(setStored)} label={t('settings.notes.previewLabel')} />} />
+                        <SettingsRow label={t('settings.notes.upgradeV4Label')} description={t('settings.notes.upgradeV4Hint')} control={<SettingsSwitch checked={stored.notesUpgradeV4 !== false} onChange={(on) => { setUpgradeV4Enabled(on); void window.tangu!.setConfig({ notesUpgradeV4: on }).then(setStored) }} label={t('settings.notes.upgradeV4Label')} />} />
+                        <SettingsRow label={t('settings.notes.wikiFilesLabel')} description={t('settings.notes.wikiFilesHint')} control={<SettingsSwitch checked={stored.notesWikiIncludeFiles !== false} onChange={(on) => { setWikiFilesEnabled(on); void window.tangu!.setConfig({ notesWikiIncludeFiles: on }).then(setStored) }} label={t('settings.notes.wikiFilesLabel')} />} />
+                        <SettingsRow
+                          label={t('settings.notes.deleteAssetsLabel')}
+                          description={t('settings.notes.deleteAssetsHint')}
+                          control={(
+                            <select value={deleteAssetsPref() === null ? 'ask' : deleteAssetsPref() ? 'yes' : 'no'} onChange={(e) => { setDeleteAssetsPref(e.target.value === 'ask' ? null : e.target.value === 'yes'); setStored({ ...stored }) }}>
+                              <option value="ask">{t('settings.notes.deleteAssetsAsk')}</option>
+                              <option value="yes">{t('settings.notes.deleteAssetsYes')}</option>
+                              <option value="no">{t('settings.notes.deleteAssetsNo')}</option>
+                            </select>
+                          )}
                         />
-                        {t('settings.notes.previewLabel')}
-                      </label>
-                      <div className="hint">{t('settings.notes.previewHint')}</div>
-                    </div>
-                    <div className="field">
-                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={stored.notesUpgradeV4 !== false}
-                          onChange={(e) => {
-                            setUpgradeV4Enabled(e.target.checked) // 路由分类同步读缓存,即时生效
-                            void window.tangu!.setConfig({ notesUpgradeV4: e.target.checked }).then(setStored)
-                          }}
-                        />
-                        {t('settings.notes.upgradeV4Label')}
-                      </label>
-                      <div className="hint">{t('settings.notes.upgradeV4Hint')}</div>
-                    </div>
-                    <div className="field">
-                      <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={stored.notesWikiIncludeFiles !== false}
-                          onChange={(e) => {
-                            setWikiFilesEnabled(e.target.checked) // 编辑器同步读缓存,不等下次 getConfig
-                            void window.tangu!.setConfig({ notesWikiIncludeFiles: e.target.checked }).then(setStored)
-                          }}
-                        />
-                        {t('settings.notes.wikiFilesLabel')}
-                      </label>
-                      <div className="hint">{t('settings.notes.wikiFilesHint')}</div>
-                    </div>
-                    {/* 「删除笔记时连带删独占附件」的记忆闸:每次询问 / 记住的选择。弹窗勾了「下次不再问」才会落到这里。 */}
-                    <div className="field">
-                      <label>{t('settings.notes.deleteAssetsLabel')}</label>
-                      <select
-                        value={deleteAssetsPref() === null ? 'ask' : deleteAssetsPref() ? 'yes' : 'no'}
-                        onChange={(e) => {
-                          setDeleteAssetsPref(e.target.value === 'ask' ? null : e.target.value === 'yes')
-                          setStored({ ...stored }) // 本地闩锁不在 config 里,靠这一下重渲染
-                        }}
-                      >
-                        <option value="ask">{t('settings.notes.deleteAssetsAsk')}</option>
-                        <option value="yes">{t('settings.notes.deleteAssetsYes')}</option>
-                        <option value="no">{t('settings.notes.deleteAssetsNo')}</option>
-                      </select>
-                      <div className="hint">{t('settings.notes.deleteAssetsHint')}</div>
-                    </div>
-                    <div className="field">
-                      <label>{t('settings.notes.dailyLabel')}</label>
-                      <div className="settings-inline-row">
-                        <input
-                          type="text"
-                          value={stored.notesDailyFolder ?? ''}
-                          onChange={(e) => setStored({ ...stored, notesDailyFolder: e.target.value })}
-                          placeholder={t('settings.notes.dailyPlaceholder')}
-                        />
-                        <button
-                          className="btn primary sm"
-                          onClick={() => void window.tangu!.setConfig({ notesDailyFolder: (stored.notesDailyFolder || '').trim().replace(/^\/+|\/+$/g, '') }).then(setStored)}
-                        >
-                          {t('settings.btn.save')}
-                        </button>
                       </div>
-                      <div className="hint">{t('settings.notes.dailyHint')}</div>
-                    </div>
+                    </SettingsPanel>
 
                   </>
                 )}
@@ -2075,7 +2097,7 @@ export const SettingsModal: React.FC<{
                     两者不在同一页了)。 */}
                 {tab === 'agents' && activeSub === 'ag-roster' && <AgentsTab cfg={p.cfg} />}
                 {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} />}
-                {tab === 'hooks' && <><div className="settings-sec">Hooks</div><HooksTab cfg={p.cfg} /></>}
+                {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。 */}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
                   <AmadeusPluginsTab cfg={p.cfg} onEngineReload={reloadPlugins} enginePlugins={plugins} />
@@ -2090,9 +2112,9 @@ export const SettingsModal: React.FC<{
                     />
                   </>
                 )}
-                {tab === 'spaces' && <><div className="settings-sec">{t('settings.tab.spaces')}</div><SpacesTab /></>}
-                {tab === 'notifications' && <><div className="settings-sec">{t('settings.tab.notifications')}</div><NotificationsTab /></>}
-                {tab === 'statusbar' && <><div className="settings-sec">{t('settings.tab.statusbar')}</div><StatusBarTab /></>}
+                {tab === 'spaces' && <SpacesTab />}
+                {tab === 'notifications' && <NotificationsTab />}
+                {tab === 'statusbar' && <StatusBarTab />}
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
                   const pl = (plugins || []).find((x) => x.id === pid)
@@ -2104,92 +2126,108 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'browser' && stored && (
                   <>
-                    <div className="settings-section-title">
-                      <Globe2 size={14} /> {t('settings.browser.title')}
-                    </div>
-                    <div className="field">
-                      <label>{t('settings.browser.agentBrowser')}</label>
-                      <div className="seg">
-                        <button
-                          className={stored.browserEnabled !== false ? 'active' : ''}
-                          onClick={() => setStored({ ...stored, browserEnabled: true })}
-                        >
-                          {t('common.enabled')}
-                        </button>
-                        <button
-                          className={stored.browserEnabled === false ? 'active' : ''}
-                          onClick={() => setStored({ ...stored, browserEnabled: false })}
-                        >
-                          {t('common.disabled')}
-                        </button>
-                      </div>
-                      <div className="hint">
-                        {t('settings.browser.hint')}
-                      </div>
-                    </div>
-                    <div className="field-row">
-                      <div className="field">
-                        <label>{t('settings.browser.engine')}</label>
-                        <select
-                          value={stored.browserEngine || 'auto'}
-                          onChange={(e) => setStored({ ...stored, browserEngine: e.target.value as StoredDesktopConfig['browserEngine'] })}
-                        >
-                          <option value="auto">Auto</option>
-                          <option value="chrome">Chrome</option>
-                          <option value="lightpanda">Lightpanda</option>
-                        </select>
-                      </div>
-                      <div className="field">
-                        <label>{t('settings.browser.searchEngine')}</label>
-                        <select
-                          value={stored.browserSearchEngine || 'duckduckgo'}
-                          onChange={(e) => setStored({ ...stored, browserSearchEngine: e.target.value as StoredDesktopConfig['browserSearchEngine'] })}
-                        >
-                          <option value="duckduckgo">DuckDuckGo</option>
-                          <option value="bing">Bing</option>
-                          <option value="google">Google</option>
-                          <option value="baidu">Baidu</option>
-                        </select>
-                      </div>
-                      <div className="field" style={{ maxWidth: 160 }}>
-                        <label>{t('settings.browser.timeout')}</label>
-                        <input
-                          type="text"
-                          value={String(stored.browserCommandTimeoutMs || 30000)}
-                          onChange={(e) => setStored({ ...stored, browserCommandTimeoutMs: Number(e.target.value.replace(/[^\d]/g, '')) || 30000 })}
+                    <SettingsPanel
+                      className="settings-browser-panel"
+                      icon={<Globe2 size={16} />}
+                      title={t('settings.browser.agentBrowser')}
+                      description={t('settings.browser.hint')}
+                      actions={<SettingsSwitch checked={stored.browserEnabled !== false} onChange={(on) => setStored({ ...stored, browserEnabled: on })} label={t('settings.browser.agentBrowser')} />}
+                    >
+                      <div className={`settings-control-list${stored.browserEnabled === false ? ' is-disabled' : ''}`}>
+                        <SettingsRow
+                          label={t('settings.browser.engine')}
+                          description={t('settings.browser.engineHint')}
+                          control={(
+                            <select value={stored.browserEngine || 'auto'} onChange={(e) => setStored({ ...stored, browserEngine: e.target.value as StoredDesktopConfig['browserEngine'] })}>
+                              <option value="auto">Auto</option>
+                              <option value="chrome">Chrome</option>
+                              <option value="lightpanda">Lightpanda</option>
+                            </select>
+                          )}
                         />
-                      </div>
-                    </div>
-                    <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={!!stored.browserAllowPrivateUrls}
-                          onChange={(e) => setStored({ ...stored, browserAllowPrivateUrls: e.target.checked })}
+                        <SettingsRow
+                          label={t('settings.browser.searchEngine')}
+                          control={(
+                            <select value={stored.browserSearchEngine || 'duckduckgo'} onChange={(e) => setStored({ ...stored, browserSearchEngine: e.target.value as StoredDesktopConfig['browserSearchEngine'] })}>
+                              <option value="duckduckgo">DuckDuckGo</option>
+                              <option value="bing">Bing</option>
+                              <option value="google">Google</option>
+                              <option value="baidu">Baidu</option>
+                            </select>
+                          )}
                         />
-                        {t('settings.browser.allowPrivate')}
-                      </label>
-                      <div className="hint">{t('settings.browser.allowPrivateHint')}</div>
-                    </div>
-                    <button className="btn primary sm" disabled={remoteBusy} onClick={() => void saveRemoteSettings()}>
-                      {remoteBusy ? <Loader2 size={12} className="spin" /> : null}
-                      {t('settings.btn.save')}
-                    </button>
-                    {remoteMsg && <div className="hint" style={{ marginTop: 8 }}>{remoteMsg}</div>}
+                        <SettingsRow label={t('settings.browser.timeout')} description={t('settings.browser.timeoutHint')} control={<input className="settings-number-input" type="text" value={String(stored.browserCommandTimeoutMs || 30000)} onChange={(e) => setStored({ ...stored, browserCommandTimeoutMs: Number(e.target.value.replace(/[^\d]/g, '')) || 30000 })} />} />
+                        <SettingsRow label={t('settings.browser.allowPrivate')} description={t('settings.browser.allowPrivateHint')} control={<SettingsSwitch checked={!!stored.browserAllowPrivateUrls} onChange={(on) => setStored({ ...stored, browserAllowPrivateUrls: on })} label={t('settings.browser.allowPrivate')} />} />
+                      </div>
+                      <div className="settings-panel-footer">
+                        <button className="btn primary sm" disabled={remoteBusy} onClick={() => void saveRemoteSettings()}>
+                          {remoteBusy ? <Loader2 size={12} className="spin" /> : null}{t('settings.btn.save')}
+                        </button>
+                        {remoteMsg && <span className="hint">{remoteMsg}</span>}
+                      </div>
+                    </SettingsPanel>
                   </>
                 )}
 
                 {tab === 'channels' && (
                   <>
-                    <div className="settings-sec">{t('settings.tab.channels')}</div>
                     <ChannelsTab cfg={p.cfg} />
                   </>
                 )}
 
                 {tab === 'theme' && (
                   <>
-                    <div className="field">
-                      <label>{t('settings.theme.langLabel')}</label>
+                    <section className="settings-theme-live" aria-label={t('settings.theme.previewLabel')}>
+                      <div className="settings-theme-live-head">
+                        <span><i /><i /><i /></span>
+                        <strong>{t('settings.theme.previewLabel')}</strong>
+                        <small>{activeTabLabel}</small>
+                      </div>
+                      <div className="settings-theme-live-canvas">
+                        <div className="settings-theme-live-rail">
+                          <div className="settings-theme-live-brand"><BrandLogo size={18} /><strong>Forsion</strong></div>
+                          <div className="settings-theme-live-nav">
+                            <span><MessageCircle size={12} />{t('settings.theme.previewChat')}</span>
+                            <span className="active"><Palette size={12} />{t('settings.tab.theme')}</span>
+                            <span><Bot size={12} />{t('settings.tab.agents')}</span>
+                          </div>
+                        </div>
+                        <div className="settings-theme-live-paper">
+                          <span className="settings-theme-live-kicker">{t('settings.theme.previewWorkspace')}</span>
+                          <strong className="settings-theme-live-title">{t('settings.theme.previewTitle')}</strong>
+                          <div className="settings-theme-live-message">
+                            <span><Bot size={14} /></span>
+                            <p>{t('settings.theme.previewMessage')}</p>
+                          </div>
+                          <div className="settings-theme-live-composer">
+                            <span>{t('settings.theme.previewInput')}</span>
+                            <button type="button" tabIndex={-1}><ArrowUp size={12} /></button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                    <section className="settings-panel settings-theme-language">
+                      <div className="settings-panel-head settings-panel-head--actions">
+                        <span className="settings-panel-icon"><Palette size={16} /></span>
+                        <div><strong>{t('settings.theme.langLabel')}</strong><p>{t('settings.theme.langDescription')}</p></div>
+                        <div className="settings-panel-actions">
+                          <button type="button" className="btn ghost sm" onClick={() => { void window.tangu?.openThemesDir?.() }} title={t('settings.theme.openFolder')}>
+                            <FolderOpen size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost sm"
+                            title={t('settings.theme.reload')}
+                            disabled={themesReloading}
+                            onClick={async () => {
+                              setThemesReloading(true)
+                              try { await p.onReloadThemes?.() } finally { setThemesReloading(false) }
+                            }}
+                          >
+                            <RefreshCw size={13} className={themesReloading ? 'spin' : ''} />
+                          </button>
+                        </div>
+                      </div>
                       <div className="theme-grid">
                         {listLanguages().map((th) => (
                           <ThemeCard
@@ -2210,28 +2248,13 @@ export const SettingsModal: React.FC<{
                         const cur = listLanguages().find((th) => th.manifest.id === p.themeLang)
                         return cur ? <ThemeSettingsPanel key={p.themeLang} entry={cur} /> : null
                       })()}
-                      <div className="field-row" style={{ gap: 8, marginTop: 8 }}>
-                        <button type="button" className="btn sm" onClick={() => { void window.tangu?.openThemesDir?.() }}>
-                          <FolderOpen size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-                          {t('settings.theme.openFolder')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn sm"
-                          disabled={themesReloading}
-                          onClick={async () => {
-                            setThemesReloading(true)
-                            try { await p.onReloadThemes?.() } finally { setThemesReloading(false) }
-                          }}
-                        >
-                          <RefreshCw size={13} className={themesReloading ? 'spin' : ''} style={{ verticalAlign: -2, marginRight: 4 }} />
-                          {t('settings.theme.reload')}
-                        </button>
-                      </div>
                       <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.dropHint')}</div>
-                    </div>
-                    <div className="field">
-                      <label>{t('settings.theme.skinLabel')}</label>
+                    </section>
+                    <section className="settings-panel settings-theme-palette">
+                      <div className="settings-panel-head">
+                        <span className="settings-panel-icon"><Sparkles size={16} /></span>
+                        <div><strong>{t('settings.theme.skinLabel')}</strong><p>{t('settings.theme.skinDescription')}</p></div>
+                      </div>
                       <div className="skin-row">
                         {listSkins().map((sk) => (
                           <button
@@ -2249,7 +2272,7 @@ export const SettingsModal: React.FC<{
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </section>
                     {p.themeSkin === 'custom' && (
                       <div className="field">
                         <label>{t('settings.theme.customSeedLabel')}</label>
@@ -2289,91 +2312,103 @@ export const SettingsModal: React.FC<{
                         <div className="hint" style={{ marginTop: 4 }}>{t('settings.theme.customBgHint')}</div>
                       </div>
                     )}
-                    {(() => {
-                      // 主题若锁定 colorScheme(如 Glass 固定 system),明暗不可手动改:高亮强制值 + 禁用按钮。
-                      // 用校验版(与 store 同一判定):脏 manifest 值(如 "auto")不会让按钮禁用而 store 却没锁。
-                      const forced = forcedSchemeForLanguage(p.themeLang)
-                      const active = forced ?? p.themeModePref
-                      const opts: Array<{ id: 'light' | 'dark' | 'system'; icon: typeof Sun; label: string }> = [
-                        { id: 'light', icon: Sun, label: t('settings.theme.light') },
-                        { id: 'dark', icon: Moon, label: t('settings.theme.dark') },
-                        { id: 'system', icon: MonitorCog, label: t('settings.theme.system') },
-                      ]
-                      return (
-                        <div className="field">
-                          <label>{t('settings.theme.modeLabel')}</label>
+                    <section className="settings-panel settings-theme-behavior">
+                      <div className="settings-panel-head">
+                        <span className="settings-panel-icon"><Layers3 size={16} /></span>
+                        <div><strong>{t('settings.theme.behaviorTitle')}</strong><p>{t('settings.theme.behaviorDescription')}</p></div>
+                      </div>
+                      <div className="settings-control-list">
+                        {(() => {
+                          // 主题若锁定 colorScheme(如 Glass 固定 system),明暗不可手动改:高亮强制值 + 禁用按钮。
+                          // 用校验版(与 store 同一判定):脏 manifest 值(如 "auto")不会让按钮禁用而 store 却没锁。
+                          const forced = forcedSchemeForLanguage(p.themeLang)
+                          const active = forced ?? p.themeModePref
+                          const opts: Array<{ id: 'light' | 'dark' | 'system'; icon: typeof Sun; label: string }> = [
+                            { id: 'light', icon: Sun, label: t('settings.theme.light') },
+                            { id: 'dark', icon: Moon, label: t('settings.theme.dark') },
+                            { id: 'system', icon: MonitorCog, label: t('settings.theme.system') },
+                          ]
+                          return (
+                            <div className="settings-control-row">
+                              <div className="settings-control-copy"><MonitorCog size={14} /><span><strong>{t('settings.theme.modeLabel')}</strong>{forced && <small>{t('settings.theme.modeLockedHint')}</small>}</span></div>
+                              <div className="seg">
+                                {opts.map(({ id, icon: Ic, label }) => (
+                                  <button
+                                    key={id}
+                                    className={active === id ? 'active' : ''}
+                                    disabled={!!forced}
+                                    title={forced ? t('settings.theme.modeLocked') : undefined}
+                                    onClick={() => p.onThemeChange(p.themeLang, p.themeSkin, id)}
+                                  >
+                                    <Ic size={13} />{label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        })()}
+                        <div className="settings-control-row">
+                          <div className="settings-control-copy"><Sparkles size={14} /><span><strong>{t('settings.theme.flatLabel')}</strong><small>{t('settings.theme.flatDescription')}</small></span></div>
                           <div className="seg">
-                            {opts.map(({ id, icon: Ic, label }) => (
-                              <button
-                                key={id}
-                                className={active === id ? 'active' : ''}
-                                disabled={!!forced}
-                                title={forced ? t('settings.theme.modeLocked') : undefined}
-                                onClick={() => p.onThemeChange(p.themeLang, p.themeSkin, id)}
-                              >
-                                <Ic size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
-                                {label}
-                              </button>
-                            ))}
+                            <button className={!p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(false)}>{t('settings.theme.flatOff')}</button>
+                            <button className={p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(true)}>{t('settings.theme.flatOn')}</button>
                           </div>
-                          {forced && <div className="hint" style={{ marginTop: 4 }}>{t('settings.theme.modeLockedHint')}</div>}
                         </div>
-                      )
-                    })()}
-                    <div className="field">
-                      <label>{t('settings.theme.flatLabel')}</label>
-                      <div className="seg">
-                        <button className={!p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(false)}>{t('settings.theme.flatOff')}</button>
-                        <button className={p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(true)}>{t('settings.theme.flatOn')}</button>
+                        <div className="settings-control-row">
+                          <div className="settings-control-copy"><Layers3 size={14} /><span><strong>{t('settings.theme.glassLabel')}</strong><small>{t('settings.theme.glassDescription')}</small></span></div>
+                          <div className="seg">
+                            <button className={p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(true)}>{t('settings.theme.glassOn')}</button>
+                            <button className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
+                          </div>
+                        </div>
+                        <div className="settings-control-row">
+                          <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={smoothCaret}
+                            className={`switch${smoothCaret ? ' on' : ''}`}
+                            onClick={() => {
+                              const on = !smoothCaret
+                              setSmoothCaret(on)
+                              try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
+                              setSmoothCaretEnabled(on)
+                            }}
+                          />
+                        </div>
                       </div>
-                    </div>
-                    <div className="field">
-                      <label>{t('settings.theme.glassLabel')}</label>
-                      <div className="seg">
-                        <button className={p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(true)}>{t('settings.theme.glassOn')}</button>
-                        <button className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
+                    </section>
+                    <section className="settings-panel settings-theme-fonts">
+                      <div className="settings-panel-head">
+                        <span className="settings-panel-icon"><Type size={16} /></span>
+                        <div><strong>{t('settings.theme.typographyTitle')}</strong><p>{t('settings.theme.fontHint')}</p></div>
                       </div>
-                    </div>
-                    <div className="field">
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={smoothCaret}
-                          onChange={(e) => {
-                            const on = e.target.checked
-                            setSmoothCaret(on)
-                            try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                            setSmoothCaretEnabled(on)
-                          }}
-                        />
-                        {t('settings.theme.smoothCaret')}
-                      </label>
-                      <div className="hint">{t('settings.theme.smoothCaretHint')}</div>
-                    </div>
-                    {/* 字体三档:留空 = 跟随主题(主题自己可能就写的系统字体)。预设可选,也可直接敲任意 font-family。 */}
-                    {([
-                      ['ui', 'settings.theme.fontUi', SANS_FONTS],
-                      ['body', 'settings.theme.fontBody', SANS_FONTS],
-                      ['mono', 'settings.theme.fontMono', MONO_FONTS],
-                    ] as const).map(([slot, labelKey, list]) => (
-                      <div className="field" key={slot}>
-                        <label htmlFor={`font-${slot}`}>{t(labelKey)}</label>
-                        <input
-                          id={`font-${slot}`}
-                          list={`font-list-${slot}`}
-                          value={fonts[slot]}
-                          placeholder={t('settings.theme.fontFollow')}
-                          onChange={(e) => setFont(slot, e.target.value)}
-                          style={{ fontFamily: fonts[slot] || undefined }}
-                        />
-                        <datalist id={`font-list-${slot}`}>
-                          {list.map((f) => (
-                            <option key={f} value={f}>{f === 'system-ui' || f === 'ui-monospace' ? t('settings.theme.fontSystem') : f}</option>
-                          ))}
-                        </datalist>
+                      <div className="settings-font-list">
+                        {/* 字体三档:留空 = 跟随主题(主题自己可能就写的系统字体)。预设可选,也可直接敲任意 font-family。 */}
+                        {([
+                          ['ui', 'settings.theme.fontUi', SANS_FONTS],
+                          ['body', 'settings.theme.fontBody', SANS_FONTS],
+                          ['mono', 'settings.theme.fontMono', MONO_FONTS],
+                        ] as const).map(([slot, labelKey, list]) => (
+                          <label className="settings-font-row" key={slot} htmlFor={`font-${slot}`}>
+                            <span>{t(labelKey)}</span>
+                            <input
+                              id={`font-${slot}`}
+                              list={`font-list-${slot}`}
+                              value={fonts[slot]}
+                              placeholder={t('settings.theme.fontFollow')}
+                              onChange={(e) => setFont(slot, e.target.value)}
+                              style={{ fontFamily: fonts[slot] || undefined }}
+                            />
+                            <datalist id={`font-list-${slot}`}>
+                              {list.map((f) => (
+                                <option key={f} value={f}>{f === 'system-ui' || f === 'ui-monospace' ? t('settings.theme.fontSystem') : f}</option>
+                              ))}
+                            </datalist>
+                          </label>
+                        ))}
                       </div>
-                    ))}
-                    <div className="hint" style={{ marginTop: -4 }}>{t('settings.theme.fontHint')}</div>
+                    </section>
                   </>
                 )}
 

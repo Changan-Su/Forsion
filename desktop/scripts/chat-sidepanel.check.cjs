@@ -12,7 +12,7 @@
  *  16-17 长代码行只在自己框里横滚,不顶宽聊天流(正文恒受 view 宽度约束)
  *  18-21 输入卡脱流悬浮在正文之上:正文铺满整列、按卡实高留白、卡两侧空当放行、
  *        渐隐只在卡下方那条缝(挂卡上沿被用户打回过)、「回到底」按钮抬过卡
- *  23-25 那批卡一律不描边;glass 的输入卡与二级菜单同为薄档磨砂(84% 糊了也看不见)
+ *  23-25 那批卡一律不描边;glass 输入卡主区走薄档,菜单走可调 float 磨砂(侧栏/portal 也有染色兜底)
  *  26   窄栏(≤520px 容器)滚到底,末条仍完整停在悬浮输入卡上方 —— 那档的 padding 简写
  *       曾把 calc 抹掉,末条被卡压住 178px
  *  27   16 的推广:用户原话是「不管宽度多少,一行内容过长就超出」——长单词/URL/行内 code/宽表/
@@ -456,7 +456,7 @@ async function main() {
   )
 
   // glass 主题只能这样验:启用它的样式表 + 打 data-theme(与 loader 做的事一致),等一帧再量。
-  // 08-14 用户报「磨砂没有」——规则一直生效,病在浓度:float 那档 84% 只漏 16%,糊出来的看不见。
+  // Glass 输入卡与菜单分档:输入卡主区 50% 看景深,菜单用可调 float 保证侧栏/portal 可读。
   await win.evaluate(`(() => {
     const n = document.getElementById('forsion-theme-css-genesis-glass')
     if (n) n.disabled = false
@@ -480,9 +480,9 @@ async function main() {
       tier[side ? 'side' : 'main'] = alphaOf(getComputedStyle(p).backgroundColor)
       p.remove()
     }
-    // 二级菜单那批只有交互时才渲染 → 插同类名探针,量的是材质表收没收它们
+    // 菜单 / 二级浮面只有交互时才渲染 → 插同类名探针,量的是材质表收没收它们
     const menus = {}
-    for (const cls of ['composer-menu', 'ctx-menu', 'rb-menu', 'account-pop', 'ntf', 'wsfile-panel', 'amx-db-pop', 'amx-cal-cardwrap', 'dash-add-menu']) {
+    for (const cls of ['composer-menu', 'cm-sub', 'approval-hover-desc', 'ctx-menu', 'rb-menu', 'account-pop', 'ntf', 'wsfile-panel', 'amx-db-pop', 'amx-cal-cardwrap', 'dash-add-menu']) {
       const p = document.createElement('div')
       p.className = cls
       document.body.appendChild(p)
@@ -508,11 +508,11 @@ async function main() {
     JSON.stringify({ blur: glass && glass.blur, tier: glass && glass.tier, borderAlpha: glass && glass.borderAlpha })
       + '(主区 ≈0.5 才糊得出来;侧栏须 ≥0.8,否则正文透过输入卡)',
   )
-  // 08-14 第二次报「磨砂没有」:选模型/切模式那批二级菜单(.composer-menu)压根没进材质表,
-  // 一直吃 base.css 的实色 --bg-card。这条按名单逐个量,漏收一个就红。
+  // 菜单必须走 float,而不是输入卡的 50% thin:否则浮层浓度设置对菜单无效,在没有有效 backdrop
+  // 的侧栏 / portal 位置又只剩透明染色。新二级面板也逐个列入,漏收一个就红。
   check(
-    '25 glass 主题:二级菜单/浮层同为薄档磨砂(不是实色)',
-    !!glass && Object.values(glass.menus).every((m) => m.b && m.a >= 0.45 && m.a <= 0.6),
+    '25 glass 主题:一级/二级菜单均为可调 float 磨砂(不是透明薄片)',
+    !!glass && Object.values(glass.menus).every((m) => m.b && m.a >= 0.8 && m.a <= 0.9),
     glass ? Object.entries(glass.menus).map(([k, v]) => `${k}:${v.b ? '糊' : '实色'}/${v.a}`).join(' ') : 'no probe',
   )
 

@@ -4,7 +4,7 @@
  * 契约:
  *  A 模式胶囊像 ModelPill 一样平滑展开到 224px,与菜单等宽、右缘对齐、文案居中。
  *  B 审批档位行只放图标 / 标题 / 勾,说明不占菜单布局。
- *  C hover 时说明作为侧边 tooltip 出现,并保留 aria-describedby 键盘/读屏关系。
+ *  C hover 时说明作为侧边 tooltip 出现,并保留 aria-describedby 键盘/读屏关系；窄 View 改叠到行上方且不越界。
  *
  * 页面注入仓里真实的 base.css + composer2.css,不复制样式。
  * 跑:npm run check:approval   (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
@@ -53,8 +53,10 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   ${BASE_CSS}
   ${COMPOSER_CSS}
   /* 药丸容器:菜单是它的 absolute 定位子级。 */
+  .approval-stage { position:fixed; inset:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
   .anchor { margin:480px 0 0 80px; }
 </style></head><body>
+<div class="approval-stage t2c-card">
   <span class="anchor mode-pill-wrap">
     <button class="t2c-pill mode-pill-btn">
       <svg width="13" height="13"><rect width="13" height="13"/></svg>
@@ -72,6 +74,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
         </button>`).join('')}
     </div>
   </span>
+</div>
 </body></html>`
 
 ;(async () => {
@@ -161,6 +164,26 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   })
   check('hover 后说明在菜单右侧浮出', hovered.opacity === '1' && hovered.visibility === 'visible' && hovered.left >= hovered.menuRight && !!hovered.text,
     JSON.stringify(hovered))
+
+  await page.evaluate(() => {
+    const stage = document.querySelector('.approval-stage')
+    stage.style.inset = 'auto'
+    stage.style.left = '100px'
+    stage.style.top = '0'
+    stage.style.width = '420px'
+    stage.style.height = '700px'
+  })
+  await page.locator('[data-id="full-auto"]').hover()
+  await page.waitForTimeout(40)
+  const narrowTip = await page.evaluate(() => {
+    const stage = document.querySelector('.approval-stage').getBoundingClientRect()
+    const row = document.querySelector('[data-id="full-auto"]').getBoundingClientRect()
+    const tip = document.querySelector('[data-id="full-auto"] .approval-hover-desc').getBoundingClientRect()
+    return { stage: { left: stage.left, right: stage.right }, rowTop: row.top, tip: { left: tip.left, right: tip.right, bottom: tip.bottom } }
+  })
+  check('窄 Chat View 中模式说明叠到行上方且不越出 View',
+    narrowTip.tip.bottom < narrowTip.rowTop && narrowTip.tip.left >= narrowTip.stage.left && narrowTip.tip.right <= narrowTip.stage.right,
+    JSON.stringify(narrowTip))
 
   // 完全放行的行保留 danger 强调,侧边说明回到中性正文色。
   const full = rows.find((r) => r.id === 'full-auto')

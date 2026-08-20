@@ -127,8 +127,9 @@ async function main() {
     await page.close()
   }
 
-  // C3 空标题:`### ` 打完还没打字时,块里只剩 headingSource 的 `###` widget + PM 的零尺寸
-  // `img.ProseMirror-separator`。collapsed range 此时一个矩形都给不出,旧代码的退路直接取
+  // C3 空标题:`### ` 打完还没打字时保持标题渲染态，当前编辑行用 structuralSource input 显示井号；
+  // 正文仍只剩 PM 的零尺寸 `img.ProseMirror-separator`。collapsed range 此时一个矩形都给不出,
+  // 旧代码的退路直接取
   // `childNodes[offset]` = 那个 separator → 光标画在基线上、还按 `.ProseMirror` 的字号取高
   // (h3 偏 17px/短 3px,h1 偏 25px/短 12px)。用户实报:「开丝滑光标后打标题必定偏」。
   // 真值取法与 check:caret 的空行用例同源 —— 补一个字符,量它 offset 0 处的 range 矩形。
@@ -140,7 +141,21 @@ async function main() {
     const empty = await geom(page)
     const emptyH = await page.evaluate(() => { const o = document.querySelector('.sc-caret'); return o && o.style.display !== 'none' ? Math.round(o.getBoundingClientRect().height) : null })
     const tag = `C3(h${lv}) 空标题`
-    check(`${tag} 已变成 h${lv} 且露出井号`, (await page.evaluate((l) => !!document.querySelector(`.md-block .ProseMirror h${l} .heading-hash`), lv)), '')
+    check(
+      `${tag} 已变成 h${lv}、当前行显示井号且正文仍保持编辑焦点`,
+      await page.evaluate(({ l, hashes }) => {
+        const h = document.querySelector(`.md-block .ProseMirror h${l}`)
+        return h?.querySelector('.amx-struct-prefix')?.value === hashes
+          && document.activeElement?.classList.contains('ProseMirror')
+      }, { l: lv, hashes }),
+      '',
+    )
+    await page.keyboard.press('ArrowLeft')
+    await settle(page)
+    const source = await page.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix') ? document.activeElement.value : null)
+    check(`${tag} 行首向左仍可进入 Markdown 源码`, source === hashes, `source=${JSON.stringify(source)}`)
+    await page.keyboard.press('ArrowRight') // 源码末尾向右回到正文起点
+    await settle(page)
     await page.keyboard.type('x', { delay: 25 })
     await settle(page)
     const truth = await page.evaluate((l) => {

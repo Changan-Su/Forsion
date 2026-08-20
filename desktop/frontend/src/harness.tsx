@@ -416,7 +416,10 @@ if (new URLSearchParams(location.search).has('dock')) {
   createRoot(document.getElementById('root')!).render(<RibbonHarness />)
 } else if (new URLSearchParams(location.search).has('modelpill')) {
   // 模型 / Effort 菜单:真组件裸挂,肉眼/截图核对三行结构与 Max 特效(几何契约由 scripts/model-menu.check.cjs 钉)。
-  if (new URLSearchParams(location.search).has('dark')) {
+  const modelPillParams = new URLSearchParams(location.search)
+  const modelPillMode = modelPillParams.has('dark') ? 'dark' : 'light'
+  if (modelPillParams.has('glass')) applyRealTheme('genesis-glass', resolveInitialSkin(), modelPillMode)
+  else if (modelPillMode === 'dark') {
     document.documentElement.dataset.mode = 'dark'
     document.documentElement.classList.add('dark')
   }

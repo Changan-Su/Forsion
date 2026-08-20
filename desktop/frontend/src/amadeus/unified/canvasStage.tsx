@@ -25,7 +25,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { NodeSelection, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory, undo as pmUndo, redo as pmRedo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import { Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
 import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2 } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
 import { CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
@@ -33,7 +33,7 @@ import {
   CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey,
   MAIN_KEY, MIN_EL, type El, type ElBox, type ElGhost, type FrameEl,
 } from './canvasElements'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, rawTree, setParent, childrenOf, type ShapeKind } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, rawTree, setParent, childrenOf, isUnder, type ShapeKind } from './canvasEdit'
 import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
 import { OverlayPortal } from '../lib/overlayPortal'
@@ -76,15 +76,84 @@ const SHAPE_TOOLS: Record<string, ShapeKind> = { rect: 'rect', ellipse: 'ellipse
 /** 拖拽样式表的舞台作用域序号(见手势 effect 里 dragCss 的告警)。 */
 let dragScopeSeq = 0
 
-interface CardBox { anchor: string; pos: number; node: ProseNode }
+/** `idx` = 它在 doc 顶层子节点里的**序号**(不是卡片序号)。⚠️ 有了它才判得出「两张卡之间夹没夹
+ *  别的东西」—— cards 是过滤后的数组,相邻两项在文档里可能隔着好几段正文(Codex 2026-08-20 critical
+ *  实证:少这一条,重排子树会把夹在中间的正文整段删掉)。 */
+interface CardBox { anchor: string; pos: number; idx: number; node: ProseNode }
 
 /** doc 顶层的卡片节点(锚 → 位置)。锚唯一,按锚找比 posAtDOM 稳(卡内 DOM 结构随内容变)。 */
-function cardsOf(view: EditorView): CardBox[] {
+function cardsOfDoc(doc: ProseNode): CardBox[] {
   const out: CardBox[] = []
-  view.state.doc.forEach((node, offset) => {
-    if (node.type.name === 'amadeusCanvasCard') out.push({ anchor: String(node.attrs.anchor), pos: offset, node })
+  doc.forEach((node, offset, index) => {
+    if (node.type.name === 'amadeusCanvasCard') out.push({ anchor: String(node.attrs.anchor), pos: offset, idx: index, node })
   })
   return out
+}
+function cardsOf(view: EditorView): CardBox[] {
+  return cardsOfDoc(view.state.doc)
+}
+
+// ── 「排序始终在父 Card 内」(2026-08-19 用户拍板)。────────────────────────────────────────
+// 文档模式的层级呈现由两半组成:**源码相邻**在这里(认爹 / 建子节点时把子卡那一段整体搬到父段
+// 之后),**缩进**在 canvas.ts 的 createCardDepthDeco。为什么不是真嵌套见那边的顶注。
+// 只在**用户改层级的那一刻**搬,不设常驻 normalizer —— 本周全部毁档都出自「每笔事务都重排一遍
+// 文档」那类补丁(canvas.ts 顶注:勿把拆壳/吸收加回来),这里不许重蹈。
+
+/** 卡片子树在 doc 顶层的**连续段**:从 cards[i] 起,把**紧邻其后**、且确实是它后代的卡一并算进来。
+ *  段是被「认爹即搬到父段末尾」构造出来的,正常路径下恒连续;中间隔了正文或别人的卡就在那里
+ *  收边 —— 宁可少搬一截,绝不吞不属于它的内容。返回结束下标(不含)。
+ *  ⚠️ `idx` 那一条是**毁数据防线**,不是优化:cards 是过滤后的数组,只判后代关系的话
+ *  `[子卡, 正文, 孙卡]` 会被算成一整段,而 orderUnder 按首尾位置删区间、只把卡片插回去 ——
+ *  夹在中间的正文当场永久消失(Codex 2026-08-20 critical,同形 PM 文档实证)。注释里写过
+ *  「遇正文收边」但代码里没有,正是本仓栽过多次的那一族。 */
+function runEnd(cards: CardBox[], i: number, tree: Record<string, unknown>): number {
+  let end = i + 1
+  while (end < cards.length
+    && cards[end].idx === cards[end - 1].idx + 1
+    && isUnder(tree, cards[end].anchor, cards[i].anchor)) end++
+  return end
+}
+
+/** 「插在这张卡的子树之后」的 doc 位置。父不是本篇的卡(主卡哨兵 `m:` / 外部改坏)→ 文末。 */
+function tailPosUnder(doc: ProseNode, tree: Record<string, unknown>, parent: string): number {
+  const cards = cardsOfDoc(doc)
+  const i = cards.findIndex((c) => c.anchor === parent)
+  if (i < 0) return doc.content.size
+  const last = cards[runEnd(cards, i, tree) - 1]
+  return last.pos + last.node.nodeSize
+}
+
+/** 把 child 的卡片段搬到 parent 段之后;`parent` 空 = **摘爹**,整段搬到文末。只搬**顶层整节点**,
+ *  正文一个字不动;已经到位就零 step 返回(幂等)。
+ *  ⚠️ `tree` 必须传**认爹之后**的那份:段的归属按新关系算,拿旧表算出来的段会把新子卡漏在外面。
+ *  ⚠️ 摘爹**必须也搬**(Codex 2026-08-20 high):`[P,A,B]` 里 A、B 都挂 P,把 A 摘成自由卡却留在
+ *     原地的话,P 的段被 A 劈成两半 —— 此后 runEnd(P) 走到 A 就停,B 明明还认 P 却落在父段之外,
+ *     再搬 P 就会把 B 丢下,「排序始终在父 Card 内」当场破。搬到文末 = 与双击建自由卡同一落点。
+ *  ⚠️ 删除后的落点偏移**手算**:两段都在顶层且不重叠,减掉被删长度即可 —— 走 tr.mapping 会把同
+ *     一笔里的几何 setNodeMarkup 也算进去(它的 StepMap 覆盖卡的开闭边界),落点会偏一格。 */
+function orderUnder(tr: Transaction, tree: Record<string, unknown>, child: string, parent: string): Transaction {
+  const cards = cardsOfDoc(tr.doc)
+  const ci = cards.findIndex((c) => c.anchor === child)
+  if (ci < 0) return tr
+  const cEnd = runEnd(cards, ci, tree)
+  const from = cards[ci].pos
+  const last = cards[cEnd - 1]
+  const to = last.pos + last.node.nodeSize
+  let target: number
+  if (!parent) {
+    target = tr.doc.content.size
+    if (to === target) return tr // 已经在文末
+  } else {
+    const pi = cards.findIndex((c) => c.anchor === parent)
+    if (pi < 0) return tr // 父是主卡哨兵 / 不在本篇:主卡的子卡本来就住在正文里,不排
+    if (pi >= ci && pi < cEnd) return tr // 父落在子段内 = 环(setParent 已拒,这里兜底)
+    const pEnd = runEnd(cards, pi, tree)
+    if (ci > pi && ci < pEnd) return tr // 已经在父段里
+    const pLast = cards[pEnd - 1]
+    target = pLast.pos + pLast.node.nodeSize
+  }
+  const frag = Fragment.fromArray(cards.slice(ci, cEnd).map((c) => c.node))
+  return tr.delete(from, to).insert(target > to ? target - (to - from) : target, frag)
 }
 
 /** 几何事务的落笔:单笔(方案 §5:过程只动 CSS,drop 才落一笔 —— 否则 PM history 被拖拽灌成上千步)
@@ -529,8 +598,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   }, [mutate])
 
   // ── 新建 ──────────────────────────────────────────────────────────────────────────
-  /** 新建卡片:空段落卡插在文末卡片区(x/y 是**左上角**,调用方自己让开指针中心)。返回新卡锚。 */
-  const addCardAt = useCallback((x: number, y: number): string | null => {
+  /** 新建卡片:空段落卡插在文末(x/y 是**左上角**,调用方自己让开指针中心)。返回新卡锚。
+   *  `under` = 这张卡的爹:给了就插在那张卡的子树**之后**而不是文末 —— 建子节点一步到位,
+   *  省掉「先插文末再搬过去」的第二笔事务(两笔 = 一次 Tab 要按两次 Cmd+Z)。 */
+  const addCardAt = useCallback((x: number, y: number, under?: string): string | null => {
     const view = cbRef.current.getView()
     const card = view?.state.schema.nodes.amadeusCanvasCard
     const paragraph = view?.state.schema.nodes.paragraph
@@ -538,7 +609,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const anchor = freshAnchorId(view.state.doc)
     const made = card.createAndFill({ anchor, x: Math.round(x), y: Math.round(y), w: CARD_W, h: 0 }, paragraph.create())
     if (!made) return null
-    commitGeo(view, view.state.tr.insert(view.state.doc.content.size, made))
+    const at = under ? tailPosUnder(view.state.doc, rawTree(cbRef.current.tree), under) : view.state.doc.content.size
+    commitGeo(view, view.state.tr.insert(at, made))
     cbRef.current.onCommit(anchor) // ⚠️ 必须报锚:不进归属集合的话派生会把这张卡当「代表不了全貌」
     setSel([cardKey(anchor)])
     return anchor
@@ -547,11 +619,15 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   /** 层级写入的便捷写点(经 writeFm,进 fm 快照/时间线)。⚠️ 必须**排在 onCommit 之后**调用:
    *  onCommit 里的 syncFromEditor 会同步重写 fm 那一行(cards 派生),先写 tree 的话下一句就被
    *  它整行盖掉。 */
-  const mutTree = useCallback((fn: (cur: Record<string, unknown>) => Record<string, unknown>): void => {
+  /** 返回值 = **这一笔到底写没写**。调用方靠它决定要不要 mergePair:成环被 setParent 拒掉时
+   *  只有 PM 那一格、没有 fm 那一格,无条件并对的话会把上一件不相干的事拽进同一次 Cmd+Z
+   *  (Codex 2026-08-20 medium)。 */
+  const mutTree = useCallback((fn: (cur: Record<string, unknown>) => Record<string, unknown>): boolean => {
     const cur = rawTree(cbRef.current.tree)
     const next = fn(cur)
-    if (next === cur) return
+    if (next === cur) return false
     writeFm({ t: next })
+    return true
   }, [writeFm])
 
   /** 层级键 → 盒。主卡不在 measureCards 里(它是自然流,不是卡片 DOM),单独量。 */
@@ -595,10 +671,13 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   const addRelated = useCallback((selfNode: string, rel: 'child' | 'sibling'): void => {
     const slot = slotFor(selfNode, rel, 'e', CARD_W)
     if (!slot) return
-    const made = addCardAt(slot.x, slot.y)
+    // slot.parent 就是新卡的爹(建子节点=自己,建兄弟=自己的爹):直接插进那一段的末尾,
+    // 源码顺序一次成型(空串=顶层 → 文末)。
+    const made = addCardAt(slot.x, slot.y, slot.parent || undefined)
     if (!made) return
-    if (slot.parent) {
-      mutTree((t) => setParent(t, made, slot.parent))
+    // ⚠️ 只有层级**真写进去**才并格。盘上那份 tree 是用户可手改的,里头若已有环,setParent 会
+    //    原样返回(拒绝)→ 只有建卡那一格 'pm',这时并格会把上一件不相干的事拽进同一次 Cmd+Z。
+    if (slot.parent && mutTree((t) => setParent(t, made, slot.parent))) {
       mergePair() // 建卡('pm')+ 记层级('fm')= 一次用户动作,时间线并成一格
     }
   }, [slotFor, addCardAt, mutTree, mergePair])
@@ -666,10 +745,24 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const cur = rawTree(cbRef.current.tree)
     const had = typeof cur[self] === 'string' ? (cur[self] as string) : ''
     if (slot.parent === self) return false // 自环:上面 descends 已排掉,这里兜底
-    setCardAttrs(view, new Map([[self, { x: slot.x, y: slot.y }]]))
+    // 认爹之后的表先算一份**只给排序用**:几何与源码顺序要合成同一笔 PM 事务(一次 Cmd+Z 全退),
+    // 而「谁是谁的后代」必须按新关系算。落盘那笔仍在下面照旧现读现写(不拿这份陈的去覆盖)。
+    const next = rawTree(cur)
+    if (slot.parent) delete next[self] // 先摘干净,免得旧父值混进 orderUnder 的后代判定
+    const relinked = slot.parent ? setParent(cur, self, slot.parent) : next
+    let tr = view.state.tr
+    for (const c of cardsOf(view)) {
+      if (c.anchor === self) tr = tr.setNodeMarkup(c.pos, undefined, { ...c.node.attrs, x: slot.x, y: slot.y })
+    }
+    // 认爹搬到父段之后;摘爹搬到文末(**也得搬** —— 留在原地会把老父亲那一段劈成两半,
+    // 后面还认着它的兄弟从此掉在父段之外,见 orderUnder 的告警)。
+    if (slot.parent !== had && (slot.parent ? relinked !== cur : true)) {
+      tr = orderUnder(tr, relinked, self, slot.parent)
+    }
+    commitGeo(view, tr)
     cbRef.current.onCommit(self)
     if (slot.parent !== had) {
-      mutTree((t) => {
+      const wrote = mutTree((t) => {
         if (!slot.parent) { // 认顶层 = 摘爹
           const out = rawTree(t)
           delete out[self]
@@ -677,7 +770,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         }
         return setParent(t, self, slot.parent)
       })
-      mergePair()
+      if (wrote) mergePair()
     }
     return true
   }, [slotFor, mutTree, mergePair])
@@ -690,8 +783,20 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     if (cur[child] === parent) return
     const next = setParent(cur, child, parent)
     if (next === cur) return // 自环/成环:拒绝
+    // 源码顺序跟着层级走(与 applyAttach 同口径)。真搬动了才有 'pm' 那一格,才需要并 pair ——
+    // 目标是主卡/已经在父段里时一步没走,无条件 mergePair 会把上一件不相干的事拽进来。
+    const view = cbRef.current.getView()
+    let moved = false
+    if (view) {
+      const tr = orderUnder(view.state.tr, next, child, parent)
+      if (tr.steps.length) {
+        commitGeo(view, tr)
+        moved = true
+      }
+    }
     writeFm({ t: next })
-  }, [writeFm])
+    if (moved) mergePair()
+  }, [writeFm, mergePair])
 
   /** 新形状:id 必须在 mutate 的闭包里取(现读现算,并发写不会撞号)。
    *  `box` 给了就是**拖出来的尺寸**(x/y 是左上角),没给就是点击建(x/y 当中心、取默认尺寸)。 */
@@ -1594,6 +1699,18 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     <div
       className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${tool}` : ''}`}
       ref={hostRef}
+      // 点阵底纹跟着视口走(AFFiNE 同款:格子是画布的一部分,不是背板贴纸)。背景只能画在这一层
+      // —— stage-inner 是 0×0 的定位原点,给它画背景等于没画。所以把 viewport 三个量下发成自定义
+      // 属性,由 CSS 自己换算 background-position/size(重渲频率与 stage-inner 的 transform 同源)。
+      style={
+        active
+          ? {
+              ['--amx-vpx' as string]: `${vp.x}px`,
+              ['--amx-vpy' as string]: `${vp.y}px`,
+              ['--amx-vpz' as string]: String(vp.z),
+            }
+          : undefined
+      }
       tabIndex={-1}
       onKeyDownCapture={onKeyDownCapture}
       onKeyDown={onKeyDown}

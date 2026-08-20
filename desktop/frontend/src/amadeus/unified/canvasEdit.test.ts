@@ -1,6 +1,6 @@
 // 白板写侧的三条不变式。第一条是**毁数据级**的,单独写在最前面。
 import { describe, it, expect } from 'vitest'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, addConnector, setElementText, rawTree, setParent, pruneTree, childrenOf } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, addConnector, setElementText, rawTree, setParent, pruneTree, childrenOf, isUnder, depthOf } from './canvasEdit'
 import { withElements, parseCanvasJson } from './canvas'
 
 /** 迁移产物的真实形状:形状带未来字段 `note`,顶层带未知键 `futureKey`。 */
@@ -98,5 +98,45 @@ describe('层级里的主卡哨兵 m:', () => {
 
   it('哨兵不与真锚撞号:锚的字符集不含冒号', () => {
     expect(/^[A-Za-z0-9_-]+$/.test('m:')).toBe(false)
+  })
+})
+
+// 文档模式的层级呈现(2026-08-19 用户拍板「有父子属性的 Card 嵌套包裹,自由 Card 不被包裹」)。
+// depthOf 决定缩进档位、isUnder 决定「搬哪一段」——两条都作用在**外部可改**的盘上数据,所以
+// 认不出的父值必须一律降级成「没有爹」,不能抛、不能当层级。
+describe('层级深度与子树归属', () => {
+  const alive = new Set(['p', 'c', 'g'])
+
+  it('自由卡深度 0;逐级 +1', () => {
+    const t = setParent(setParent(rawTree({}), 'c', 'p'), 'g', 'c')
+    expect(depthOf(t, 'p', alive)).toBe(0)
+    expect(depthOf(t, 'c', alive)).toBe(1)
+    expect(depthOf(t, 'g', alive)).toBe(2)
+  })
+
+  it('主卡哨兵 m: 当爹 = 深度 0(文档模式下主卡就是正文本身,子卡已经在它里面)', () => {
+    expect(depthOf(setParent(rawTree({}), 'c', 'm:'), 'c', alive)).toBe(0)
+  })
+
+  it('父卡已经不在本篇(悬空父/手改坏的值)→ 停在这一层,不当层级也不报错', () => {
+    expect(depthOf(setParent(rawTree({}), 'c', 'zzz'), 'c', alive)).toBe(0)
+    expect(depthOf(rawTree({ c: 42 }), 'c', alive)).toBe(0)
+  })
+
+  it('盘上手改出的环不把遍历转死,深度也有上限', () => {
+    const ring = rawTree({ a: 'b', b: 'a' })
+    expect(depthOf(ring, 'a', new Set(['a', 'b']))).toBeLessThanOrEqual(6)
+    // 一条长链按 cap 截断(再深只是把卡越推越窄)
+    const long = rawTree({ n0: 'n1', n1: 'n2', n2: 'n3', n3: 'n4', n4: 'n5', n5: 'n6', n6: 'n7', n7: 'n8' })
+    const all = new Set(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8'])
+    expect(depthOf(long, 'n0', all, 3)).toBe(3)
+  })
+
+  it('isUnder 认隔代、不认自己、不认反向', () => {
+    const t = setParent(setParent(rawTree({}), 'c', 'p'), 'g', 'c')
+    expect(isUnder(t, 'g', 'p')).toBe(true)
+    expect(isUnder(t, 'p', 'g')).toBe(false)
+    expect(isUnder(t, 'p', 'p')).toBe(false)
+    expect(isUnder(rawTree({ a: 'b', b: 'a' }), 'a', 'zzz')).toBe(false) // 环里找不着的爹:走得完
   })
 })

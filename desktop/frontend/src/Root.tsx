@@ -228,11 +228,12 @@ export function Root() {
         <FeedbackModal cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
       )}
 
-      <PluginOnboardingHost />
+      {/* 全屏二级界面是单任务空间:插件引导、成就与同步通知延后到回到主应用后再出现。 */}
+      {!overlayOpen && <PluginOnboardingHost />}
 
-      <AchievementToast />
+      {!overlayOpen && <AchievementToast />}
 
-      <NotificationHost />
+      {!overlayOpen && <NotificationHost />}
     </MobilePreviewFrame>
   )
 }

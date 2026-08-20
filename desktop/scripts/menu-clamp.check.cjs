@@ -24,7 +24,7 @@ const ROOT = path.join(__dirname, '..', 'frontend', 'src')
 const CLAMPERS = ['useEdgeNudge', 'OverlayAt', 'useClampedMenu']
 const GUARDED = [
   'composer-menu', // 输入区 add / mode 菜单 + ModelPill 一级菜单(base.css 固定 224px)
-  'cm-sub',        // ModelPill 子面板(flip 只决定翻不翻,不管掉不掉出去)
+  'cm-sub',        // ModelPill 四类子面板(右/左/叠放决定形态,useEdgeNudge 负责边界兜底)
   'project-menu',  // New Chat 的工作区下拉(264px 左对齐)
   'dash-add-menu', // 仪表盘「添加卡片」/ 右键菜单
   't2c-ctxring-pop', // 上下文占比悬停详情

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, chmodSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { seedSkillsInto } from './localSkills.js';
@@ -14,6 +15,28 @@ const put = (dir: string, name: string, body: string, extra?: Record<string, str
   }
 };
 const read = (name: string, rel = 'SKILL.md'): string => readFileSync(path.join(dest, name, rel), 'utf8');
+/** 复现**上一版** treeHash(OS 垃圾也进哈希),用来伪造老装机上已经写下的指纹。 */
+const legacyStamp = (dir: string): string => {
+  const files: string[] = [];
+  const walk = (rel: string): void => {
+    for (const e of readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else if (e.isFile() && r !== '.seed-stamp') files.push(r);
+    }
+  };
+  walk('');
+  files.sort();
+  const h = createHash('sha256');
+  for (const f of files) {
+    h.update(f);
+    h.update('\0');
+    h.update(readFileSync(path.join(dir, f)));
+    h.update('\0');
+  }
+  return h.digest('hex').slice(0, 16);
+};
+const stampOf = (name: string): string => readFileSync(path.join(dest, name, '.seed-stamp'), 'utf8').trim();
 
 beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), 'seed-'));
@@ -39,6 +62,56 @@ describe('内置技能播种', () => {
     const r = await seedSkillsInto(src, dest);
     expect(r.updated).toEqual(['alpha']);
     expect(read('alpha')).toBe('v2(新增一整节)');
+  });
+
+  it('⚠️.DS_Store 不参与指纹 —— 否则 Finder 一开文件夹就把技能永久冻在旧版(2026-08-19 实翻 skill-creator)', async () => {
+    put(src, 'alpha', 'v1');
+    await seedSkillsInto(src, dest);
+    // 两边各自被 Finder 写了一个内容不同的 .DS_Store(源里的还会随构建打进包)
+    writeFileSync(path.join(src, 'alpha', '.DS_Store'), 'finder-A', 'utf8');
+    writeFileSync(path.join(dest, 'alpha', '.DS_Store'), 'finder-B', 'utf8');
+    put(src, 'alpha', 'v2');
+    const r = await seedSkillsInto(src, dest);
+    expect(r.protectedStale).toEqual([]);
+    expect(r.updated).toEqual(['alpha']);
+    expect(read('alpha')).toBe('v2');
+  });
+
+  it('.DS_Store 之外的真实用户改动照旧保护(上一条不能把保护也一起放水)', async () => {
+    put(src, 'alpha', 'v1');
+    await seedSkillsInto(src, dest);
+    writeFileSync(path.join(dest, 'alpha', '.DS_Store'), 'finder-B', 'utf8');
+    writeFileSync(path.join(dest, 'alpha', 'SKILL.md'), '用户自己改的', 'utf8');
+    put(src, 'alpha', 'v2');
+    const r = await seedSkillsInto(src, dest);
+    expect(r.protectedStale).toEqual(['alpha']);
+    expect(read('alpha')).toBe('用户自己改的');
+  });
+
+  it('⚠️老装机的旧算法指纹仍要认 —— 否则「排除 OS 垃圾」这一改会把一批本来正常的镜像判成用户改过(Codex P1)', async () => {
+    put(src, 'alpha', 'v1');
+    writeFileSync(path.join(src, 'alpha', '.DS_Store'), 'finder', 'utf8');
+    await seedSkillsInto(src, dest);
+    writeFileSync(path.join(dest, 'alpha', '.seed-stamp'), legacyStamp(path.join(dest, 'alpha')), 'utf8');
+    put(src, 'alpha', 'v2');
+    writeFileSync(path.join(src, 'alpha', '.DS_Store'), 'finder', 'utf8');
+    const r = await seedSkillsInto(src, dest);
+    expect(r.protectedStale).toEqual([]);
+    expect(r.updated).toEqual(['alpha']);
+    expect(read('alpha')).toBe('v2');
+    expect(stampOf('alpha')).not.toBe(legacyStamp(path.join(dest, 'alpha')));
+  });
+
+  it('内容已是最新但指纹是旧算法 → 就地迁移成新算法值(不必等下一版内置)', async () => {
+    put(src, 'alpha', 'v1');
+    writeFileSync(path.join(src, 'alpha', '.DS_Store'), 'finder', 'utf8');
+    await seedSkillsInto(src, dest);
+    const legacy = legacyStamp(path.join(dest, 'alpha'));
+    writeFileSync(path.join(dest, 'alpha', '.seed-stamp'), legacy, 'utf8');
+    const r = await seedSkillsInto(src, dest);
+    expect(r.updated).toEqual([]);
+    expect(r.protectedStale).toEqual([]);
+    expect(stampOf('alpha')).not.toBe(legacy);
   });
 
   it('⚠️用户改过 SKILL.md → 保护,且报告出来(不静默停更)', async () => {

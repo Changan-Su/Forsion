@@ -53,7 +53,7 @@ async function main() {
         return t
       })
     )
-  // ⚠️ 剥掉 `.heading-hash`:光标在标题行时 headingSource 会画一个 `# ` widget 装饰,
+  // ⚠️ 剥掉结构源码 input：它是装饰，不是文档内容；断言问的是文档里有什么。
   // 它是装饰不是文档内容(不进选区、不进序列化)。断言问的是「文档里有什么」,不该看见它。
   const texts = () =>
     page.evaluate(() =>
@@ -61,7 +61,7 @@ async function main() {
         const pm = b.querySelector('.ProseMirror')
         if (!pm) return null
         const c = pm.cloneNode(true)
-        c.querySelectorAll('.heading-hash').forEach((n) => n.remove())
+        c.querySelectorAll('.amx-struct-prefix').forEach((n) => n.remove())
         return c.textContent
       })
     )
@@ -703,7 +703,8 @@ async function main() {
     check('T27 待办 → 待办(幂等)', /^[-*] \[ \] hello world$/.test(todo), `md=${JSON.stringify(todo)}`)
   })
 
-  // T28:行首退格先脱列表壳。首块没有「上一块」,不脱壳的话那个 checkbox 永远删不掉。
+  // T28:尾随空格是结构渲染边界。第一次退格删掉它后必须立刻脱壳成字面 `- [ ]`，
+  // 光标留在字面源码之后；再补空格则重新渲染为待办。
   await tryTest('T28', async () => {
     const p = await freshPage('- [ ] abc')
     await p.locator('.md-block .ProseMirror').first().click()
@@ -711,8 +712,33 @@ async function main() {
     await p.keyboard.press('Home')
     await p.waitForTimeout(150)
     await p.keyboard.press('Backspace')
-    await p.waitForTimeout(700)
-    check('T28 首块待办行首退格 → 脱成正文(checkbox 删得掉)', (await mdOf(p)).trim() === 'abc', `md=${JSON.stringify(await mdOf(p))}`)
+    await p.waitForTimeout(200)
+    const literal = await p.evaluate(() => {
+      const pm = document.querySelector('.md-block .ProseMirror')
+      return {
+        text: pm?.querySelector(':scope > p')?.textContent ?? null,
+        lists: pm?.querySelectorAll(':scope > ul, :scope > ol').length ?? -1,
+        source: pm?.querySelectorAll('.amx-struct-prefix').length ?? -1,
+        offset: getSelection()?.anchorOffset ?? null,
+        active: document.activeElement?.classList.contains('ProseMirror'),
+      }
+    })
+    check(
+      'T28 首块待办行首退格 → 立即还原字面源码并退出 input',
+      literal.text === '- [ ]abc' && literal.lists === 0 && literal.source === 0
+        && literal.offset === 5 && literal.active,
+      JSON.stringify(literal),
+    )
+    await p.keyboard.type(' ')
+    await p.waitForTimeout(500)
+    check('T28 字面 `- [ ]` 补回边界空格 → 恢复待办渲染', /^[-*] \[ \] abc\s*$/.test(await mdOf(p)), `md=${JSON.stringify(await mdOf(p))}`)
+    // 第二次往返仍须成立，不能被上一次提交闩锁卡死。
+    await p.keyboard.press('Home')
+    await p.keyboard.press('Backspace')
+    await p.keyboard.type(' ')
+    await p.waitForTimeout(250)
+    const reenter = await p.evaluate(() => ({ active: document.activeElement?.classList.contains('ProseMirror'), sourceFocused: document.activeElement?.classList.contains('amx-struct-prefix') }))
+    check('T28 原样退出后可再次进入并提交同一标记', reenter.active && !reenter.sourceFocused, JSON.stringify(reenter))
     await p.close()
   })
 
@@ -877,36 +903,56 @@ async function main() {
       return bq ? bq.className : 'NO-BLOCKQUOTE'
     })
     await legacy.close()
-    check('T34 老笔记的裸 `>` 仍是普通引用', legacyCls === '', `class=${JSON.stringify(legacyCls)}`)
+    check('T34 老笔记的裸 `>` 仍是普通引用', !/callout/.test(legacyCls), `class=${JSON.stringify(legacyCls)}`)
   })
 
   // ─── F6:2026-08-03 那批(标题源码行 / 行内链接 / 标题折叠)───
 
-  // T35:光标进标题行 → 露字面 `#` 并降回正文排版;离开 → 收回,变回大标题。
+  // T35:标题保持渲染，只有当前编辑行显示 `# `；行首向左可逐字符编辑，增删井号实时切级。
   await tryTest('T35', async () => {
     const p = await freshPage('## 二级标题')
     const probe = () => p.evaluate(() => {
       const h = document.querySelector('.md-block .ProseMirror :is(h1,h2,h3,h4,h5,h6)')
-      const hash = h && h.querySelector('.heading-hash')
+      const hash = h && h.querySelector('.amx-struct-prefix')
       const body = document.querySelector('.md-block .ProseMirror')
       return {
-        hash: hash ? hash.textContent : null,
-        src: !!(h && h.classList.contains('heading-src')),
+        hash: hash ? hash.value : null,
         fs: h ? parseFloat(getComputedStyle(h).fontSize) : 0,
         base: body ? parseFloat(getComputedStyle(body).fontSize) : 0,
         tag: h ? h.tagName : null,
       }
     })
-    await p.locator('.md-block .ProseMirror').first().click()
+    // freshPage 会按编辑器契约自动聚焦首块；先主动离开，才能验证真正的“未编辑行”。
+    await p.evaluate(() => document.activeElement?.blur())
     await p.waitForTimeout(300)
+    const rendered = await probe()
+    check('T35 标题未编辑时不显示井号', rendered.hash === null, `hash=${JSON.stringify(rendered.hash)}`)
+    await p.locator('.md-block .ProseMirror h2').click()
+    await p.waitForTimeout(180)
+    const editing = await probe()
+    check('T35 光标进入标题行 → 显示字面 "## "', editing.hash === '## ', `hash=${JSON.stringify(editing.hash)}`)
+    await p.keyboard.press('Home')
+    await p.keyboard.press('ArrowLeft')
+    await p.waitForTimeout(180)
     const on = await probe()
-    check('T35 光标在标题行 → 露出字面 "## "', on.hash === '## ', `hash=${JSON.stringify(on.hash)}`)
+    check('T35 行首向左进入字面 "## " 编辑', on.hash === '## ' && await p.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix')), `hash=${JSON.stringify(on.hash)}`)
     // ⚠️ 露源码时**必须仍是标题字号**。曾经降回正文,结果「敲 `# ` 触发已生效」与
     // 「触发压根没生效」在屏幕上一模一样(用户实报「输入 # 什么也没发生」)。
-    check('T35 露源码时仍是标题字号(绝不降回正文)', !on.src && on.fs > on.base + 2, JSON.stringify(on))
+    check('T35 露源码时仍是标题字号(绝不降回正文)', on.fs > on.base + 2, JSON.stringify(on))
     check('T35 节点是 h2', on.tag === 'H2', `tag=${on.tag}`)
     // 井号是装饰而非文本:落盘必须还是 `## 二级标题`,不能变成 `## ## 二级标题`
     check('T35 井号不进文档(往返不变)', (await mdOf(p)).trim() === '## 二级标题', `md=${JSON.stringify(await mdOf(p))}`)
+    await p.keyboard.press('ArrowLeft')
+    await p.keyboard.press('Backspace')
+    await p.waitForTimeout(180)
+    const h1 = await probe()
+    check('T35 逐字符删除井号实时从 H2 切为 H1', h1.hash === '# ' && h1.tag === 'H1'
+      && await p.evaluate(() => document.activeElement?.selectionStart === 1), JSON.stringify(h1))
+    await p.keyboard.type('#')
+    await p.waitForTimeout(180)
+    const h2 = await probe()
+    check('T35 逐字符补回井号实时恢复 H2', h2.hash === '## ' && h2.tag === 'H2'
+      && await p.evaluate(() => document.activeElement?.selectionStart === 2), JSON.stringify(h2))
     await p.evaluate(() => document.activeElement.blur())
     await p.waitForTimeout(300)
     const off = await probe()
@@ -920,10 +966,18 @@ async function main() {
     await q.waitForTimeout(500)
     const live = await q.evaluate(() => {
       const h = document.querySelector('.md-block .ProseMirror h1')
-      return h ? { fs: parseFloat(getComputedStyle(h).fontSize), hash: h.querySelector('.heading-hash')?.textContent ?? null } : null
+      return h ? { fs: parseFloat(getComputedStyle(h).fontSize), hash: h.querySelector('.amx-struct-prefix')?.value ?? null } : null
     })
     check('T35 敲 "# " 当场变 H1 字号(不能看着像没生效)', !!live && live.fs > body + 2, JSON.stringify({ ...live, body }))
-    check('T35 同时露出字面 "# "', live?.hash === '# ', `hash=${JSON.stringify(live?.hash)}`)
+    check('T35 空格触发后当前行显示字面 "# "', live?.hash === '# ', `hash=${JSON.stringify(live?.hash)}`)
+    // v3 空块转标题时外层 PageView 会按节点类型换壳，编辑器可能随之丢焦点；先按真实用户动作点回标题。
+    await q.locator('.md-block .ProseMirror h1').click()
+    await q.waitForTimeout(180) // click → selectionchange 异步落定，不能让 Home/← 吃到上一枚选区
+    await q.keyboard.press('Home')
+    await q.keyboard.press('ArrowLeft')
+    await q.waitForTimeout(180)
+    const reopened = await q.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix') ? document.activeElement.value : null)
+    check('T35 触发后的标题仍可从行首进入字面 "# "', reopened === '# ', `hash=${JSON.stringify(reopened)}`)
     check('T35 井号不进文档(落盘仍是 `# 标题`)', (await mdOf(q)).trim() === '# 标题', `md=${JSON.stringify(await mdOf(q))}`)
     await q.close()
     await p.close()
