@@ -41,6 +41,17 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     redirectPort: 56121,
     redirectPath: '/callback',
     baseUrl: 'https://api.x.ai/v1',
+    // 仅兜底提示(实拉 /models 失败时才用),快照会过时——真实列表以 fetchProviderModels 实拉为准。
+    // 2026-08-20 实拉 https://api.x.ai/v1/models 的聊天模型集;grok-imagine-* 是生图/生视频,不列。
+    modelIds: [
+      'grok-4.6',
+      'grok-4.5',
+      'grok-4.3',
+      'grok-4.20-0309-reasoning',
+      'grok-4.20-0309-non-reasoning',
+      'grok-4.20-multi-agent-0309',
+      'grok-build-0.1',
+    ],
   },
   // ⛔ 这里**没有** claude 条目,是有意的(2026-07-31 删除,勿再加回)。
   //    那条走的是拿 Claude Code 的 client_id + 强制注入「You are Claude Code…」身份串冒充官方 CLI,
