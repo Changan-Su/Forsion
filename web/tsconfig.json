@@ -19,6 +19,7 @@
       "@web/*": ["./src/*"],
       "@mobile/*": ["../mobile/src/*"],
       "@capacitor/app": ["./src/capacitorAppStub.ts"],
+      "@capacitor/core": ["./src/capacitorCoreStub.ts"],
       "react": ["./node_modules/@types/react"],
       "react-dom": ["./node_modules/@types/react-dom"],
       // 白板引擎(zsviczian fork)。那张 exports 表把 types 指到了不存在的 ./dist/types/**,

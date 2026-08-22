@@ -9,6 +9,35 @@ import react from '@vitejs/plugin-react'
 
 const DESKTOP_SRC = resolve(__dirname, '../desktop/frontend/src')
 
+/**
+ * capacitor 桩闸(2026-08-22 建)。web 整份复用 mobile 壳,壳里的 `@capacitor/*` import 在**本机**
+ * 会被一路向上解析到 `mobile/node_modules` 的真包 → `npm run build` **假绿**;而 web 镜像里只有
+ * `/app/node_modules`(web 自己的依赖,没有 capacitor)→ 只有 build-web CI 红,且那时 main 已推出去:
+ *   [vite]: Rollup failed to resolve import "@capacitor/core" from ".../mobile/src/spaceShortcuts.ts"
+ * (2026-08-20 加移动端 Space 快捷方式时实翻。)
+ *
+ * 闸:凡是**真进了 web 包图**的 `@capacitor/*`,只要没在下面 alias 表里配桩就当场报错 —— 与镜像里
+ * 没有 node_modules 时的行为一致,本机与 CI 同构。用 vite 自己的解析而不是静态 grep,是因为 mobile
+ * 树里另有几个 capacitor 包(filesystem/browser/preferences)压根不在 web 的包图里,grep 判不了可达性。
+ * ⚠️ **必须 `enforce: 'pre'`**:vite 的插件序是 `alias → pre → vite:resolve → normal`。不带 pre 就排在
+ *    `vite:resolve` 之后,真包早被 node_modules 解析掉了,闸一次都不响(实测负对照照样绿);而 alias
+ *    永远排在 pre 之前,所以配了桩的仍先被改写,只有漏网的才走到这里。
+ */
+function capacitorStubGate() {
+  return {
+    name: 'forsion:capacitor-stub-gate',
+    enforce: 'pre' as const,
+    resolveId(id: string, importer?: string) {
+      if (!id.startsWith('@capacitor/')) return null
+      throw new Error(
+        `[capacitor-stub-gate] web 包图里出现了没配浏览器桩的 "${id}"(来自 ${importer ?? '未知'})。\n` +
+        `web 镜像里没有 capacitor 依赖,这在本机看不出来、只会让 build-web CI 红。\n` +
+        `修法:照 web/src/capacitorAppStub.ts 写一个桩,再加进本文件的 resolve.alias 与 web/tsconfig.json 的 paths。`,
+      )
+    },
+  }
+}
+
 // dev 把后端相关路径代理到 Forsion server,让 localhost:PORT 同源化(webShim 用 location.origin+/api;
 // 登录页 /auth 也代理过去)。生产由各 app 自己的 nginx 代理 /api 等到后端(见 nginx.conf.template)。
 const PROXY_PATHS = ['/api', '/auth', '/account', '/shared', '/oauth', '/shop', '/pay', '/legal']
@@ -21,7 +50,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PROXY = env.TANGU_DEV_PROXY || 'http://localhost:3001'
 
   return {
-    plugins: [react()],
+    plugins: [react(), capacitorStubGate()],
     // publicDir 用 web 自己的(默认 web/public):白板引擎的自托管副本由 `npm run prepare-board`
     // 生成在那儿(见 package.json,build/dev 都会先跑一遍)。
     // ⚠️ **不能借 desktop 的 public** —— 那是 desktop postinstall 的产物、不入库,而 web 的镜像
@@ -37,9 +66,13 @@ export default defineConfig(({ mode }) => {
         '@': DESKTOP_SRC,
         '@web': resolve(__dirname, 'src'),
         // 手机视口装载 Mobile 壳(mobileEntry/MobileRoot),与移动 App 同一套源码(镜像 mobile 侧
-        // @webamadeus → web/src/amadeus 的既有先例)。@capacitor/app 用浏览器桩顶掉,零原生依赖。
+        // @webamadeus → web/src/amadeus 的既有先例)。capacitor 一律用浏览器桩顶掉,零原生依赖。
+        // ⚠️ 每个用到的 capacitor 包都得有桩:漏一个本机照样绿(vite 会从 mobile/src 向上找到
+        //    mobile/node_modules 里的真包),但 web 镜像里只有 /app/node_modules → 只有 CI 红
+        //    (2026-08-22 @capacitor/core 实翻)。
         '@mobile': resolve(__dirname, '../mobile/src'),
         '@capacitor/app': resolve(__dirname, 'src/capacitorAppStub.ts'),
+        '@capacitor/core': resolve(__dirname, 'src/capacitorCoreStub.ts'),
       },
       // 关键:web 与 desktop 各有 node_modules/react,跨文件夹复用会加载两份 React →
       // hooks 报 "Cannot read properties of null (reading 'useState')" + 白屏。强制单实例。
