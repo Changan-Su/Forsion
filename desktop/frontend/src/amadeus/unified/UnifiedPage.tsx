@@ -13,17 +13,18 @@ import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Trash2, Undo2, StickyNote } from 'lucide-react'
-import { UI_MODE } from '@lcl/engine'
+import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, stampedFileName,
-  PREFIX_TRIGGERS, SLASH_SENTINELS, type SlashItem, type SlashOps,
+  PREFIX_TRIGGERS, SLASH_SENTINELS, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -40,6 +41,7 @@ import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, casc
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import { docHeadings } from './outline'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
 import { AmadeusPropertiesPanel } from '../../amadeusProperties'
@@ -48,6 +50,7 @@ import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { createBlockLayer } from './blockLayer'
+import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
 import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId } from './columns'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
@@ -74,6 +77,19 @@ const NOOP_KEYS = {
 
 /** 顶层子节点级最小差异替换:首尾相同段跳过,只替换中间不同的范围。
  *  选区在范围外由 PM 映射自动保持;在范围内钳到边界。整文替换是它的退化情形。 */
+/** 存一个 OS 文件为附件 → 磁盘形态的引用 md(`![[base]]`);失败 null。
+ *  正文粘贴/拖入(saveFiles)与画布落卡(CanvasStage.saveFile)共用这一份。 */
+async function saveOneFile(page: string, f: File): Promise<string | null> {
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer())
+    const { opts } = await getAttachmentPrefs()
+    const { base } = await amadeus.saveAttachment(page, f.name || 'file', bytes, opts)
+    return `![[${base}]]`
+  } catch {
+    return null
+  }
+}
+
 function applyMinimalDiff(view: EditorView, next: ProseNode): void {
   const cur = view.state.doc
   if (next.eq(cur)) return
@@ -127,11 +143,17 @@ interface HostApi {
   serializeNow: () => string | null
   /** OS 拖入/上传按钮的文件:存附件 + 光标处插 `![[base]]`(经 lifecycle.insertFilesForPath 递入)。 */
   insertFiles: (files: File[]) => void
+  /** 插一段 markdown(插件块表面的 v4 写口;经 lifecycle.unifiedInsertMarkdown 递入)。编辑器未挂载 = false。 */
+  insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end') => boolean
+  /** markdown → 块内容(画布粘贴/拖入用)。解析不出东西 = null。 */
+  parseMd: (md: string) => Fragment | null
   focusStart: () => void
   focusEnd: () => void
   /** 尾部空白区点击(AFFiNE 语义):末行有内容 → 追加一个普通空段并落光标;已是空段 → 直接落。
    *  末块是卡片时空段追加在**卡尾**(v4 卡片区必须收尾,顶层追加会被 normalizer 吸回同一位置)。 */
   focusTail: () => void
+  /** 移动端「+」块面板选中的条目 → 本实例的 applySlash(v3 的对位是 MarkdownBlock 逐块登记)。 */
+  applySlashItem: (it: SlashItem) => void
 }
 
 function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard }: {
@@ -165,6 +187,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onCardRef.current = onCard
   useEffect(() => {
     apiRef.current = {
+      applySlashItem: (it) => applySlashRef.current(it),
       applyBody: (stored) => {
         let ok = false
         getInstance()?.action((ctx) => {
@@ -189,6 +212,15 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       },
       insertFiles: (files) => {
         void saveFiles(files)
+      },
+      insertMarkdown: (md, where) => insertMd(md, where),
+      parseMd: (md) => {
+        let out: Fragment | null = null
+        getInstance()?.action((ctx) => {
+          const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
+          out = parsed?.childCount ? parsed.content : null
+        })
+        return out
       },
       focusStart: () => {
         getInstance()?.action((ctx) => {
@@ -286,27 +318,32 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       })
     }
     for (let i = 0; i < files.length; i++) {
-      const f = files[i]
-      try {
-        const bytes = new Uint8Array(await f.arrayBuffer())
-        const { opts } = await getAttachmentPrefs()
-        const { base } = await amadeus.saveAttachment(path, f.name || 'file', bytes, opts)
-        replaceMark(marks[i], `![[${base}]]`)
-      } catch {
-        replaceMark(marks[i], null) // 保存失败:把占位撤掉,不留一行假内容
-      }
+      replaceMark(marks[i], await saveOneFile(path, files[i])) // 失败 = null → 把占位撤掉,不留一行假内容
     }
   }
 
-  /** 把一段 markdown 插进当前文档:光标所在**顶层块**为空 → 原地替换;否则插到它之后。
-   *  「顶层块」= doc 或分栏 cell 的直接子节点 —— 列内插入绝不许穿出到 doc 级(否则 /代码块
-   *  在列里会插到整行下面)。列表项里插 = 插在整份列表之后(与 Tab 层同一套祖先判定)。
+  /** 把一段 markdown 插进当前文档。返回是否真落地(编辑器没挂载 / 解析成空 = false)。
+   *  - `'cursor'`(缺省,用户动作走这档):光标所在**顶层块**为空 → 原地替换;否则插到它之后。
+   *    「顶层块」= doc 或分栏 cell 的直接子节点 —— 列内插入绝不许穿出到 doc 级(否则 /代码块
+   *    在列里会插到整行下面)。列表项里插 = 插在整份列表之后(与 Tab 层同一套祖先判定)。落光标+聚焦。
+   *  - `'start'`/`'end'`(插件写口走这两档):doc 的最前/最后。**不动选区、不抢焦点** —— 调用方是
+   *    插件按钮/浮层,用户此刻的光标可能正在别处,PM 会把选区随事务映射过去。
+   *  卡片文档也安全:插的是普通顶层节点,`canvasIntegrityGuard` 那道 filterTransaction 只拒
+   *  「卡不在 doc 顶层」,不拒卡前后的正文(闭合锚 2026-08-19 之后卡外顶层正文完全合法)。
    *  v3 走的是 store 的 onChange/onInsertAfter(块世界);统一实例没有块 id,一切都是本 doc 的事务。 */
-  const insertMd = (md: string): void => {
+  const insertMd = (md: string, where: 'cursor' | 'start' | 'end' = 'cursor'): boolean => {
+    let done = false
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
       if (!parsed?.childCount) return
+      const content = parsed.content
+      if (where !== 'cursor') {
+        const at = where === 'start' ? 0 : view.state.doc.content.size
+        view.dispatch(view.state.tr.insert(at, content))
+        done = true
+        return
+      }
       const { $from } = view.state.selection
       let d = $from.depth
       while (d >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(d - 1).type.name)) d--
@@ -314,14 +351,15 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const from = $from.before(d)
       const to = $from.after(d)
       const blank = $from.node(d).textContent.trim() === ''
-      const content = parsed.content
       let tr = blank ? view.state.tr.replaceWith(from, to, content) : view.state.tr.insert(to, content)
       // 落点=插入内容的末尾(v3 的 requestSelfFocus('end') 同位):near() 会自己找最近的合法文字位。
       const end = Math.min((blank ? from : to) + content.size, tr.doc.content.size)
       tr = tr.setSelection(TextSelection.near(tr.doc.resolve(end)))
       view.dispatch(tr.scrollIntoView())
       view.focus()
+      done = true
     })
+    return done
   }
 
   /** 建文件类 slash 项的落点守卫:await 期间用户可能已切走(实例退休/换页)。v3 靠 blockId 三道闸,
@@ -343,9 +381,15 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     } catch { /* 保存失败静默跳过(v3 同款) */ }
   }
 
+  /** 移动端双列块面板的落点(真身)。登记/撤销由**宿主 UnifiedPage** 管(见那边的 stableApply):
+   *  登记必须跟着焦点走,而焦点信号在宿主的 `.unified-body` 上。这里只负责把 applySlash
+   *  经 HostApi 交出去,并保持 ref 型身份 —— apiRef 是挂载期一次性组装的,直接放 applySlash
+   *  会把闭包钉死在首帧。 */
+  const applySlashRef = useRef<(it: SlashItem) => void>(() => {})
+
   /** slash 选中项 → 统一实例的落地(v3 MarkdownBlock.applySlash 的对位实现)。
    *  前缀型(文本/标题/列表/待办/引用/折叠)走编辑器内单事务转换,不新建块;其余先消费 '/query',
-   *  再按类型插入。「模板」在 unified 下不露出(见 UNIFIED_HIDDEN_SLASH)。 */
+   *  再按类型插入。「模板」把本篇 path 交给宿主的选择器,由它插回来。 */
   const applySlash = (item: SlashItem): void => {
     const ops = slashOps.current
     if (!ops) return // fail closed:实例刚重挂/已销毁时不执行,免得删不掉的 '/query' 留成残渣
@@ -356,6 +400,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
     const S = SLASH_SENTINELS
+    if (item.scaffold === S.template) {
+      // 模板库住在宿主壳里(vault 的 templates/),编辑器不认识它 —— 照 v3 的老规矩发事件,
+      // 由 amadeusOverlays 的 TemplatePicker 接。**必须带上本篇 path**:v4 没有块 id,选择器
+      // 回插时要的是「往哪篇写」,而选择器开着的这段时间面板还可能被切走。
+      window.dispatchEvent(new CustomEvent('amadeus:template-picker', { detail: { v4Path: path } }))
+      return
+    }
     if (item.scaffold === S.card) {
       getInstance()?.action((ctx) => onCardRef.current(ctx.get(editorViewCtx)))
       return
@@ -486,6 +537,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     // 整块型(代码/表格/分隔线/公式/[[/按钮):scaffold 本身就是要插的 markdown。
     insertMd(item.scaffold)
   }
+  applySlashRef.current = applySlash // 交出去的是恒等身份 stableApply,真身逐渲染刷新
 
   return (
     <>
@@ -631,7 +683,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   )
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode }: {
   path: string
   /** router 已读到的源文(打开即升场景是升级后的 v4 源)。 */
   initial: string
@@ -641,6 +693,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
   probe?: Record<string, unknown>
   /** 行内改名成功 → 通知宿主换 leaf 参数(路径变了,本实例随 key 重建)。 */
   onRenamed?: (newPath: string) => void
+  /** 画布模式的状态出口。桌面走 CanvasSegPortal 投进顶栏插槽,移动端整条顶栏不渲染 → 没插槽,
+   *  改由宿主(NoteView)把它放进底栏胶囊的「⋯」。交给**父组件**而不是全局槽:结构上就是同一篇
+   *  笔记,旧写法「uiOverlay 单槽 + 路径比对」栽过的那三条歧路(见 CanvasModeSeg 顶注)一条都不沾。 */
+  onCanvasMode?: (s: { on: boolean; toggle: () => void } | null) => void
 }): ReactElement {
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
@@ -679,9 +735,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
   // **默认恒为文档模式**(用户 2026-08-16 原话:「它首先是个文档」)。只有磁盘上已经物化过画布、
   // 且上次退出时停在画布模式,打开才直接进画布 —— 没有 amadeus_canvas 键的笔记永远从文档进。
   // 移动端**忽略持久化的 mode:"canvas"**,恒从文档进(方案 §6.1,Codex P1):mode 是跨设备
-  // 持久化的,而手机上的画布 Phase 1 只是只读查看 —— 不挡的话「在桌面切到画布」会让同一篇笔记
-  // 在手机上打开就变成只读,用户完全不知道发生了什么。手机要看画布,自己点模式钮。
-  const [canvasOn, setCanvasOn] = useState(() => UI_MODE !== 'mobile' && parseCanvasJson(canvasLineOf(pipe.fm))?.mode === 'canvas')
+  // 持久化的 —— 不挡的话「在桌面切到画布」会让同一篇笔记在手机上打开就直接是画布,用户完全
+  // 不知道发生了什么。手机要看画布,自己点底栏胶囊「⋯」里的模式项(见下面的 onCanvasMode)。
+  // ⚠️ 判据 2026-08-20 从 `UI_MODE !== 'mobile'` 改成 `!isCoarsePointer()`:UI_MODE 读的是
+  //    localStorage `lcl.uiMode`,而写它的那段自动脚本只在 desktop/frontend/index.html 与
+  //    web/index.html 里 —— **mobile/index.html 没有**,MobileRoot 也绕过 uiMode.ts 直接渲
+  //    SingleColumnHost。于是安卓 APK 里 UI_MODE 恒 'desktop',这道门从来没生效过(用户实报
+  //    「移动端没有画布」时顺带查出)。改用顶栏渲染与否用的**同一个信号**,两者不再各说各话。
+  const [canvasOn, setCanvasOn] = useState(() => !isCoarsePointer() && parseCanvasJson(canvasLineOf(pipe.fm))?.mode === 'canvas')
   const canvasModeRef = useRef(canvasOn) // deriveFmFromDoc 在事件里同步读,不能等 state 落定
   canvasModeRef.current = canvasOn
   // ⚠️ 只有用户**亲手点过模式钮**,本实例才有资格改盘上的 mode。不设这道闸的话:桌面存了
@@ -707,6 +768,22 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
   }
   const toggleCanvasRef = useRef(toggleCanvas)
   toggleCanvasRef.current = toggleCanvas
+
+  /** 移动端「+」双列块面板的落点登记。v3 由每个 MarkdownBlock 在 onFocusCapture 里登记自己,
+   *  v4 整页只有一个编辑器 —— 但**不能只在挂载时登记**:dockview 会把非活动面板一起挂着,
+   *  触屏笔记本上分屏两篇 v4,最后挂载的那篇会抢走落点,点「+」插进背景那篇里去。
+   *  所以照抄 v3 的口径:挂载先登记一次(新开一篇不点正文也能用「+」),焦点进本页再登记一次。
+   *  卸载只撤自己那份;applySlash 经 hostApi 走,实例没了就是 null → fail-closed。 */
+  const stableApply = useRef((it: SlashItem) => hostApi.current?.applySlashItem(it)).current
+  useEffect(() => {
+    setFocusedBlockApply(stableApply)
+    return () => { if (getFocusedBlockApply() === stableApply) setFocusedBlockApply(null) }
+  }, [stableApply])
+  // 交出去时 toggle 恒经 ref 取最新那份(宿主把它存进 state,不然会捏着某一帧的闭包)。
+  useEffect(() => {
+    onCanvasMode?.({ on: canvasOn, toggle: () => toggleCanvasRef.current() })
+    return () => onCanvasMode?.(null)
+  }, [canvasOn, onCanvasMode])
   /** 白板元素落盘。cards 的真源是 doc(deriveCanvasJson 派生),**elements 的真源是磁盘那行** ——
    *  所以这一支不经 deriveFmFromDoc,直接换掉 canvas 行里的 elements 键、其余字段逐字保留。
    *  ⚠️ 那行读不懂时(手改坏的 JSON)当面说、什么都不写:withElements 会逐字返回原行,
@@ -788,7 +865,18 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
 
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
-  const layer = useMemo(() => createBlockLayer({ onMenu: (at) => setBlockMenu(at) }), [])
+  const onBlocksDeletedRef = useRef<(content: Fragment) => void>(() => {})
+  const layer = useMemo(() => createBlockLayer({
+    onMenu: (at) => setBlockMenu(at),
+    onBlocksDeleted: (content) => onBlocksDeletedRef.current(content),
+  }), [])
+  /** 整块删掉的内容里若牵着只有本篇引用的磁盘文件,删完问一句(见 assetDelete 顶注)。
+   *  ⚠️ 只能在删除事务**之后**调:这里读的 doc 已是删完的,「同一篇里还有没有别处引用」才算得准。 */
+  const onBlocksDeleted = (content: Fragment): void => {
+    const view = layer.getView()
+    if (view) void askDeleteRemovedAssets(path, refTextOf(content), refTextOf(view.state.doc.content))
+  }
+  onBlocksDeletedRef.current = onBlocksDeleted
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -832,11 +920,21 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
       if ((e.target as HTMLElement | null)?.closest?.('.ctx-menu')) return
       setBlockMenu(null)
     }
+    // Esc 关菜单并把焦点还给编辑器(此前 Esc 对块菜单完全无效,探针实测)。块还选着,
+    // 接着按 Cmd+C / Cmd+X / Delete 就能直接操作 —— 不必非得从菜单里挑。
+    const onEsc = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      setBlockMenu(null)
+      layer.getView()?.focus()
+    }
     window.addEventListener('pointerdown', close, true)
     window.addEventListener('contextmenu', close, true)
+    window.addEventListener('keydown', onEsc, true)
     return () => {
       window.removeEventListener('pointerdown', close, true)
       window.removeEventListener('contextmenu', close, true)
+      window.removeEventListener('keydown', onEsc, true)
     }
   }, [blockMenu])
   /** 菜单动作作用在当前 NodeSelection 上(点 ⠿ 的 mousedown 已由交互层设好)。 */
@@ -916,6 +1014,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
       try {
         await amadeus.writeTextFile(path, text)
         pipe.lastSaved = text
+        scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
         // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
         // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
         if (composeFm(pipe.fm, pipe.body) === text) pipe.pending = false
@@ -1126,6 +1225,26 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
       insertFiles: (files) => {
         hostApi.current?.insertFiles(files)
       },
+      // ── 插件块表面的接缝(读 fm / 插 markdown):v4 没有块模型,插件对「当前这篇」的读写走这里。 ──
+      fmNow: () => foreignFmText(pipe.fm),
+      insertMarkdown: (md, where) => (pipe.retired ? false : (hostApi.current?.insertMarkdown(md, where) ?? false)),
+      // ── 只读面板的接缝(大纲 / 字数):v4 正文不进 pageStore,它们读 blocks 只会得空。 ──
+      bodyNow: () => pipe.body,
+      headings: () => {
+        const v = layer.getView()
+        return v ? docHeadings(v.state.doc) : []
+      },
+      revealHeading: (index, text) => {
+        const v = layer.getView()
+        if (!v) return
+        // 现遍历一次:大纲那份是渲染时算的,点击之间文档可能已增删标题 → 同序号未必是同一条。
+        // 先按序号取,文本对不上就退回按文本找第一条;都不成就不动(绝不静默跳到别的标题)。
+        const hs = docHeadings(v.state.doc)
+        const h = hs[index]?.text === text ? hs[index] : hs.find((x) => x.text === text)
+        if (!h) return
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(h.pos + 1))).scrollIntoView())
+        v.focus()
+      },
       retire: () => {
         pipe.retired = true
         if (pipe.timer) {
@@ -1310,6 +1429,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-bare
+          onFocusCapture={() => setFocusedBlockApply(stableApply)}
           onKeyDownCapture={(e) => {
             // 编辑器内 Cmd/Ctrl+F → 页内查找(与 v3 PageView 同一道门:焦点在编辑器里才接管,
             // 别抢应用全局查找)。统一实例整篇一个编辑器,命中计数走 UNIFIED_FIND_ID 单格。
@@ -1334,6 +1454,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
             onTree={setCanvasTree}
             onMain={setCanvasMain}
             timeline={undoTimeline}
+            saveFile={(f) => saveOneFile(path, f)}
+            // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
+            parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
+            onBlocksDeleted={onBlocksDeleted}
             onCommit={(newRef) => {
               if (newRef) pipe.ownedCards.add(newRef) // 本实例建的卡也算「负责得起」,见 deriveCanvasJson
               syncFromEditor() // 版本推送在 deriveFmFromDoc 里(canvas 行真变了才推)
@@ -1446,8 +1570,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed }: {
               <Copy size={13} /> 复制块
             </button>
             <button className="danger" onClick={() => withBlocks(
-              (view, r) => view.dispatch(view.state.tr.delete(r.from, r.to).scrollIntoView()),
-              (view) => view.dispatch(view.state.tr.deleteSelection().scrollIntoView()),
+              (view, r) => {
+                const removed = view.state.doc.slice(r.from, r.to).content
+                view.dispatch(view.state.tr.delete(r.from, r.to).scrollIntoView())
+                onBlocksDeleted(removed) // 与键盘删块同一条询问路径(assetDelete)
+              },
+              (view, sel) => {
+                const removed = Fragment.from(sel.node)
+                view.dispatch(view.state.tr.deleteSelection().scrollIntoView())
+                onBlocksDeleted(removed)
+              },
             )}>
               <Trash2 size={13} /> 删除
             </button>

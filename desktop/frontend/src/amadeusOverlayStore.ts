@@ -4,8 +4,10 @@ import { create } from 'zustand'
 import { captureFromDom, setModeCursor } from '@amadeus/lib/modeCursor'
 import { activePageScope } from '@amadeus/store/pageStore'
 
-/** 模板插入上下文:插到哪个块之后;光标块为空则首个模板块直接填入它。 */
-export interface TemplateCtx { afterId: string; emptyBlock: boolean }
+/** 模板插入上下文。两条路由二选一(发起方是谁就带谁的坐标):
+ *  - v3 块编辑器:`afterId` 插到这个块之后;`emptyBlock` = 光标块为空 → 首个模板块直接填入它。
+ *  - v4/unified:`v4Path` = 目标笔记路径 —— 那篇没有块 id,整份模板按 markdown 插在光标处。 */
+export interface TemplateCtx { afterId?: string; emptyBlock?: boolean; v4Path?: string }
 
 // (「文档 | 画布」胶囊曾在这里占一格 `canvasSeg`:UnifiedPage 发布、顶栏按 path 比对后渲染。
 //  2026-08-18 拆掉 —— 那个「单个全局槽 + 路径比对」协议有三条各自都能让胶囊消失的路,用户实报过

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isBuiltinFileType } from './builtinTypes'
+import { isBuiltinFileType, isPlainNoteRef } from './builtinTypes'
 
 describe('isBuiltinFileType', () => {
   it('认领内置类型的确切后缀', () => {
@@ -28,5 +28,26 @@ describe('isBuiltinFileType', () => {
   it('只看后缀,不被路径中段的同名片段骗到', () => {
     expect(isBuiltinFileType('excalidraw.md 的备份.txt')).toBe(false)
     expect(isBuiltinFileType('.db 目录/说明.md')).toBe(false)
+  })
+})
+
+describe('isPlainNoteRef', () => {
+  it('裸 .md 与「名字里带点」的笔记都是笔记', () => {
+    expect(isPlainNoteRef('某笔记.md')).toBe(true)
+    expect(isPlainNoteRef('子夹/另一篇.md')).toBe(true)
+    expect(isPlainNoteRef('X.fd.md')).toBe(true) // 子笔记夹里的笔记,仓内到处都是
+    expect(isPlainNoteRef('ADR.001.md')).toBe(true) // 带版本号的名字 ≠ 文件类型(Codex 评审)
+    expect(isPlainNoteRef('某笔记.md|别名')).toBe(true)
+    expect(isPlainNoteRef('某笔记.md#块')).toBe(true)
+  })
+
+  it('内置文件类型不是笔记', () => {
+    expect(isPlainNoteRef('图.excalidraw.md')).toBe(false)
+    expect(isPlainNoteRef('图.excalidraw')).toBe(false)
+  })
+
+  it('非 .md 一律不是笔记', () => {
+    expect(isPlainNoteRef('report.pdf')).toBe(false)
+    expect(isPlainNoteRef('tasks.db')).toBe(false)
   })
 })

@@ -38,6 +38,7 @@ import { readActivityProvider } from './builtin/readActivity.js';
 import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
+import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
@@ -79,8 +80,11 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   todo_read: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 10_000 },
   // 子代理可并发(借 Codex spawn 并行模式:一轮多 delegate 同时跑,批宽由 MAX_PARALLEL_TOOL_CALLS 管)。
   // 子代理内部的工具串行执行且审批闸门照走,父层并发不叠加写冲突面;写作用域不重叠由委派方(模型)划分。
-  delegate: { sideEffect: 'unknown', parallel: true, defaultTimeoutMs: 600_000 },
-  // 纯推理无副作用,但 N 席×2 轮很贵且自身已内部并行 → 不再与其它工具并跑;超时同 delegate。
+  // 30min 而非 10min:engine 委派(delegate 的 engine 参数)把整个子任务交给外部 agent CLI 跑,
+  // 一次真实编码子任务经常超过 10 分钟 —— 旧的 600s 会在正常工作中途 abort。自有子 loop 有 8 轮硬上限,
+  // 这个超时只是「别永久挂住」的兜底,放宽不改变它的作用。父 run 的 abort 仍即时穿透。
+  delegate: { sideEffect: 'unknown', parallel: true, defaultTimeoutMs: 1_800_000 },
+  // 纯推理无副作用,但 N 席×2 轮很贵且自身已内部并行 → 不再与其它工具并跑。
   self_brainstorm: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 600_000 },
 };
 
@@ -158,6 +162,7 @@ registerToolProvider(readSessionProvider); // both:read_session 按 id 读另一
 registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前上下文分裂多视角分身自我批判(append 末尾,保前缀缓存)
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
 registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
+registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI 不注册):sketch 在对话流内联画可交互 HTML 卡片(append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

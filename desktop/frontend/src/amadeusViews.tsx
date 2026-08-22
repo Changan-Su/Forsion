@@ -8,11 +8,11 @@ import {
   SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
-  Undo2, Redo2, ChevronsDown,
+  Undo2, Redo2, ChevronsDown, Frame,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
-import { activePageScope, cascadeFdAfterRename, disposePageScope, flushAllScopes, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, cascadeFdAfterRename, disposePageScope, flushAllScopes, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
@@ -48,6 +48,7 @@ import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
 import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
+import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
@@ -614,8 +615,9 @@ export function AmadeusPagesView() {
   const folders = usePageStore((s) => s.folders)
   const files = usePageStore((s) => s.files)
   const icons = usePageStore((s) => s.icons)
-  // pendingPage 先行:点击瞬间高亮就位,不等云端 GET 回来(activePage 那时才更新)
-  const activePage = usePageStore((s) => s.pendingPage ?? s.activePage)
+  // pendingPage 先行:点击瞬间高亮就位,不等云端 GET 回来(activePage 那时才更新)。
+  // 末位 activeNotePath 兜 v4(它不设 activePage,否则树上高亮不到当前这篇)。
+  const activePage = usePageStore((s) => s.pendingPage ?? s.activePage ?? s.activeNotePath)
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaultLoading = usePageStore((s) => s.vaultLoading)
@@ -1504,13 +1506,15 @@ function AmxBlockPicker({ height, onClose }: { height: number; onClose: () => vo
  *    故用差值 translateY 顶上去。差值是视口 px,元素在 body zoom 里 → 除以 zoomOf 反补偿(老坑)。
  *  - 按钮一律 onPointerDown preventDefault:不抢编辑器焦点,点工具栏软键盘不塌。
  *  - 「+」:先记下键盘高度再收键盘,块面板正好补上键盘让出的那块地。 */
-function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus }: {
+function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus, canvas }: {
   actions: AmxAction[]
   onUpload: () => void
   undo: () => void
   redo: () => void
   sourceMode: boolean
   onNeedFocus: () => void
+  /** v4 统一页交出来的画布模式(用户 2026-08-20 拍板:常驻在胶囊里、排上传后面,不进「⋯」)。 */
+  canvas: { on: boolean; toggle: () => void } | null
 }) {
   const { lift, kbHeight } = useKeyboardMetrics()
   const [sheet, setSheet] = useState(false)
@@ -1535,6 +1539,12 @@ function AmxMobileBar({ actions, onUpload, undo, redo, sourceMode, onNeedFocus }
           <button onPointerDown={keep} onClick={() => (pick ? setPick(0) : openPick())} className={pick ? 'on' : undefined} title="插入块"><Plus size={19} /></button>
         )}
         {!sourceMode && <button onPointerDown={keep} onClick={onUpload} title="上传文件到本页"><Upload size={19} /></button>}
+        {/* 画布模式。源码模式下跟其他键一起隐:fullCanvas 本来就要求 mode !== 'source',留着是颗死键。
+            v3 笔记(canvas === null)也不出 —— 那边压根没有画布这回事。 */}
+        {!sourceMode && canvas && (
+          <button onPointerDown={keep} onClick={canvas.toggle} className={canvas.on ? 'on' : undefined}
+            title={canvas.on ? '切换到文档' : '切换到画布'}><Frame size={19} /></button>
+        )}
         {!sourceMode && <button onPointerDown={keep} onClick={undo} title="撤销"><Undo2 size={19} /></button>}
         {!sourceMode && <button onPointerDown={keep} onClick={redo} title="重做"><Redo2 size={19} /></button>}
         <button onPointerDown={keep} onClick={() => setSheet(true)} title="更多操作"><MoreHorizontal size={19} /></button>
@@ -1819,6 +1829,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   }, [dragging])
   // 笔记多功能菜单(Obsidian 式右上角 ⋮):导出/收藏/定位/删除。
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)
+  /** v4 统一页交出来的画布模式(移动端专用:顶栏不渲染 = 那颗「文档 | 画布」胶囊没插槽可投)。
+   *  v3 笔记不挂 UnifiedPage → 恒 null → 底栏「⋯」里自然没有这一项。 */
+  const [canvasSeg, setCanvasSeg] = useState<{ on: boolean; toggle: () => void } | null>(null)
   const [shareCard, setShareCard] = useState<{ x: number; y: number } | null>(null) // 共享/发布卡片(web/桌面 collab)
   const [shareVer, setShareVer] = useState(0) // ShareCard 关闭后 bump → 状态指示重新拉取
   const printHostRef = useRef<HTMLElement | null>(null) // 本编辑器实例的 EditorScope 根(分屏下导出各自的)
@@ -1863,30 +1876,57 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const isActiveLeaf = useWorkspace((s) => s.mainTabs.find((t) => t.id === leaf.id)?.active ?? false)
   const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
   const prevActiveRef = useRef(false)
-  // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
-  // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
-  const loadingNote = (!!pendingPage && pendingPage !== activePage) || (!!notePath && !loadError && notePath !== activePage)
-
   // ── v4 绞杀者路由(spec §9 step 3 Phase A):先读原文按 fm 分类,素文件/外来 md/v4 →
   // UnifiedPage(统一实例),v3 标记文件 → 下面的 PageView 老路。分类必须**先于** effect ①:
   // 外来 md 一旦进了 pageStore,首次防抖保存就会把它改写成 v3(注 amadeus_page+标记)= 毁档类。
   // route 以 forPath 配对防陈旧:快速切换笔记时,旧文件的分类绝不套在新路径上。
   const [route, setRoute] = useState<{ forPath: string; decision: RouteDecision } | null>(null)
+  /** 已按真实内容(读到了字节)定过案的路径。库根回填触发重跑时靠它挡住二次读,免得重挂编辑器。 */
+  const routedFor = useRef<string | null>(null)
   useEffect(() => {
     if (!notePath) {
       setRoute(null)
       return
     }
+    // 已经按**真实内容**给这篇定过案 → 不再重读:库根变动(切库/回填)不该把活着的编辑器重挂。
+    if (routedFor.current === notePath) return
     let alive = true
     void (async () => {
-      const raw = await amadeus.readTextFile(notePath).catch(() => null)
+      let raw = await amadeus.readTextFile(notePath).catch(() => null)
+      // ⚠️ 冷启动竞态:主进程库根还没就位时 readTextFile **一律返回 null**
+      //    (electron/amadeus/ipc.ts 的 `if (!vault.getRoot()) return null`),而 routeNote 把
+      //    raw==null 读成「文件不存在 → 新建流 → v3 块编辑器」—— 于是「刚打开 Forsion 恰好停在
+      //    Amadeus 笔记上,整篇按 v3 渲染,重开这篇才正常」(用户 2026-08-20 实报)。
+      //    两道保险,缺一不可:
+      //    ① 本 effect 依赖 vaultRoot —— 库根一落地就**重跑重判**。这条才是根治:光靠等待,
+      //       库根初始化超过等待窗就又变回永久误判(Codex 2026-08-20 high)。
+      //    ② 库根未就位时先原地等一会儿 —— 纯兜底,免得先闪一下 v3 再跳回 v4;
+      //       库根本来就在(常态)则一次都不等,真·新建笔记零额外延迟。
+      for (let i = 0; raw == null && !myPs().vaultRoot && i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 100))
+        if (!alive) return
+        raw = await amadeus.readTextFile(notePath).catch(() => null)
+      }
       if (!alive) return
+      if (raw != null) routedFor.current = notePath
       setRoute({ forPath: notePath, decision: routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString()) })
     })()
     return () => { alive = false }
-  }, [notePath])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notePath, vaultRoot])
   const routed = route && route.forPath === notePath ? route.decision : null
   const unifiedRoute = routed?.editor === 'unified' ? routed : null
+
+  // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
+  // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
+  // ⚠️ 必须先排掉 unified:v4 走 UnifiedPage,**根本不设 activePage**(见下面 barPath 的注释),
+  //    于是 `notePath !== activePage` 对每一篇 v4 笔记恒真 = loadingNote 永远卡在 true。
+  //    骨架屏那支排在 unified 之后看不出来,而**移动端底栏胶囊的门里带着 `!loadingNote`** ——
+  //    v4 自 2026-08-14 起是缺省路由,等于手机上从那天起就没有底栏了(没有「+」/撤销/上传/「⋯」,
+  //    自然也没有画布入口)。2026-08-20 用户实报「移动端没有画布」时查出。
+  //    (声明也随之从 route 之前挪到了这里 —— 它只被下面的 JSX 用,没有前移的必要。)
+  const loadingNote = !unifiedRoute
+    && ((!!pendingPage && pendingPage !== activePage) || (!!notePath && !loadError && notePath !== activePage))
 
   // 顶栏/菜单/移动端胶囊的「当前笔记」:v3 = activePage;unified 不设 activePage,用 leaf 认领的路径。
   const barPath = activePage ?? (unifiedRoute && notePath ? notePath : null)
@@ -1897,7 +1937,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // unified 接管 → 让 pageStore 交出本文件的快照(新建流/装载残留):陈旧快照×reconcile 回写
   // =延时毁档链,见 pageStore.releasePage 注释。
   useEffect(() => {
-    if (unifiedRoute && notePath) void myPs().releasePage(notePath)
+    if (!unifiedRoute || !notePath) return
+    // 交出的是**本面板此刻还占着的那一篇**,不是「这一篇」—— releasePage(notePath) 在 activePage
+    // 停在上一篇 v3 时会 `activePage !== path` 早退,activePage 就一直留着上一篇,于是
+    // `activePage ?? activeNotePath` 全线取到上一篇(A=v3 → B=v4 直接切、或后退再前进都能复现;
+    // Codex 评审 high)。占着谁交谁,releasePage 内部照旧先 flush 再清。
+    const held = myPs().activePage
+    void myPs().releasePage(held ?? notePath)
   }, [unifiedRoute, notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。
@@ -1919,6 +1965,46 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (tryRestore()) return
     const unsub = myStore.subscribe((s) => { if (s.vaultRoot && tryRestore()) unsub() })
     return unsub
+  }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 本面板在看哪篇 —— 反链/图谱等只读面板的路径真源(v4 不设 activePage,见 pageStore.activeNotePath)。
+  useEffect(() => { myPs().setActiveNotePath(notePath) }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // v4 的导航历史(前进/后退箭头)与「最近访问」:上面那条 pageStore 订阅按 activePage 喂,
+  // unified 永不设它 → v4 笔记整个不进历史。这里按 **本 leaf** 直记,归属比订阅那条的
+  // activeMainPanel 推断还准(那条要防「手快切到另一半屏,历史记到隔壁」)。
+  // 只在判为 unified 后记:分类在途(routed=null)时不记,免得记成一条打不开的空历史。
+  useEffect(() => {
+    if (!unifiedRoute || !notePath) return
+    recordNav(leaf.id, `amadeus:${notePath}`, () => {
+      // 恢复 = 把本 leaf 切回编辑器并指到这篇;v4 不经 loadPage(那是 v3 的装载管线)。
+      // params 在**恢复那一刻**现取(同 v3 那条用 leafById):闭包里捕获的是记这条历史时的快照,
+      // 拿它回写会把此后改过的其它参数一并退回去;leaf 已关掉则直接放弃。
+      const w = useWorkspace.getState()
+      const cur = w.leafById(leaf.id)
+      if (!cur) return
+      w.navigateLeaf(leaf.id, 'amadeus-editor', { ...cur.params, notePath })
+    })
+    useRecentViews.getState().record({ key: `note:${notePath}`, kind: 'note', id: notePath, title: baseName(notePath) })
+  }, [unifiedRoute, notePath]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 本 leaf 攥着的笔记被删掉 / 挪走了 → 改指,别停在一个不存在的路径上。
+  // v3 靠效果③(store 导航 → activePage 变 → 认领)自愈;**v4 的 activePage 恒 null,效果③ 永不触发**
+  // —— 不接这条广播,v4 标签会一直显示一个已退休(打字静默不落盘)的编辑器(Codex #1 的另一半)。
+  useEffect(() => {
+    if (!notePath) return
+    return onNotePathGone((from, kind, to) => {
+      const dead = (x: string): boolean => (kind === 'file' ? x === from : x === from || x.startsWith(`${from}/`))
+      if (!dead(notePath)) return
+      if (to) { // 挪走/改名:同 remap 规则算出本篇的新路径
+        leaf.setParams({ ...leaf.params, notePath: kind === 'file' ? to : to + notePath.slice(from.length) })
+        return
+      }
+      // 删除:优先跟随本面板 store 的活动页(v3 已被导航到下一篇),否则库里第一篇还活着的,再否则回欢迎页
+      const st = myPs()
+      const a = st.activePage
+      leaf.setParams({ ...leaf.params, notePath: (a && !dead(a) ? a : st.pages.find((x) => !dead(x))) ?? undefined })
+    })
   }, [notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 记住每库最后打开的笔记(移动端 Space 重建后回填的数据源;桌面端只写不读)。
@@ -2145,6 +2231,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           path={notePath}
           initial={unifiedRoute.initial}
           diskRaw={unifiedRoute.diskRaw}
+          onCanvasMode={setCanvasSeg}
           onRenamed={(np) => {
             leaf.setParams({ ...leaf.params, notePath: np })
             leaf.setTitle(baseName(np))
@@ -2201,13 +2288,16 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     {isCoarsePointer() && barPath && !loadingNote && (
       <AmxMobileBar
         sourceMode={mode === 'source'}
+        canvas={canvasSeg}
         onUpload={() => uploadInputRef.current?.click()}
         undo={() => { if (activePage) myPs().undo() }}
         redo={() => { if (activePage) myPs().redo() }}
         onNeedFocus={() => { if (activePage) focusBody(myStore) }}
         actions={[
           { id: 'mode', icon: mode === 'source' ? <Eye size={16} /> : <Code2 size={16} />, label: mode === 'source' ? '切换到可视编辑' : '切换到源码 Markdown', run: () => useUiOverlay.getState().toggleEditorMode() },
-          ...(activePage ? [{ id: 'upload', icon: <Upload size={16} />, label: '上传文件到本页', run: () => uploadInputRef.current?.click() }] : []),
+          // ⚠️ 门是 barPath 不是 activePage:v4 不设 activePage(见 barPath 注释),按 activePage 判
+          // 这一条在每篇 v4 笔记上都会整条消失 —— 而隐藏 input 与它的 onChange 都认 unified 路。
+          ...(barPath ? [{ id: 'upload', icon: <Upload size={16} />, label: '上传文件到本页', run: () => uploadInputRef.current?.click() }] : []),
           { id: 'pin', icon: <Pin size={16} />, label: pinned ? '取消置顶' : '置顶', on: pinned, run: () => useAmadeusPrefs.getState().togglePin(barPath!) },
           { id: 'star', icon: <Star size={16} />, label: starred ? '取消收藏' : '收藏', on: starred, run: () => useAmadeusPrefs.getState().toggleStar(barPath!) },
           ...(canEntrySync ? [{ id: 'sync', icon: <Cloud size={16} />, label: synced ? '关闭云同步(云端副本保留)' : '开启云同步', on: synced, run: () => { if (synced) void window.amadeusSync?.entrySyncDisable?.(barPath!); else openCloudSyncDialog(barPath!, 'page') } }] : []),
@@ -2224,24 +2314,10 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
 
 // ─────────────────────────────── 右:大纲 / 反链(原生 Tangu 列表) ───────────────────────────────
 
-interface Head { id: string; level: number; text: string; key: string }
-
 export function AmadeusOutlineView() {
-  const manifest = usePageStore((s) => s.manifest)
-  const blocks = usePageStore((s) => s.blocks)
-  const heads = useMemo<Head[]>(() => {
-    if (!manifest) return []
-    const out: Head[] = []
-    for (const r of manifest.root.children)
-      for (const c of r.columns)
-        for (const ref of c.children)
-          for (const line of (blocks[ref.ref]?.content ?? '').split('\n')) {
-            const m = /^(#{1,6})\s+(.+?)\s*$/.exec(line.trim())
-            if (m) out.push({ id: ref.ref, level: m[1].length, text: m[2], key: `${ref.ref}:${out.length}` })
-          }
-    return out
-  }, [manifest, blocks])
-  const goto = (id: string): void => { document.querySelector(`[data-block-id="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+  // v3/v4 两条路由的取标题与跳转都封在 useNoteOutline(此前这里只认 v3 的 manifest+blocks,
+  // v4 笔记恒显示「没有标题」)。插件版大纲面板与本视图现在共用同一份实现。
+  const heads = useNoteOutline()
 
   return (
     <div className="amx-panel">
@@ -2251,7 +2327,7 @@ export function AmadeusOutlineView() {
       ) : (
         <div className="amx-list">
           {heads.map((h) => (
-            <button key={h.key} className="amx-list-item" style={{ paddingLeft: 10 + (h.level - 1) * 12 }} onClick={() => goto(h.id)} title={h.text}>{h.text}</button>
+            <button key={h.key} className="amx-list-item" style={{ paddingLeft: 10 + (h.level - 1) * 12 }} onClick={h.go} title={h.text}>{h.text}</button>
           ))}
         </div>
       )}
@@ -2260,7 +2336,8 @@ export function AmadeusOutlineView() {
 }
 
 export function AmadeusBacklinksView() {
-  const activePage = usePageStore((s) => s.activePage)
+  // v4 笔记不设 activePage → 回落到 activeNotePath,否则本视图对 v4 恒显示「未打开笔记」。
+  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath)
   const version = usePageStore((s) => s.linkGraphVersion)
   const [refs, setRefs] = useState<Array<{ path: string; title: string; snippet: string }>>([])
   useEffect(() => {

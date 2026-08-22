@@ -31,3 +31,34 @@ export function localizedOnboarding(
   })
   return { ...ob, intro: ob.en.intro || ob.intro, ...(steps ? { steps } : {}) }
 }
+
+/** pluginStore.enable() 自动给每个启用插件塞的「工作文件夹」设置行的 key。人人都有 → 不算「有设置面板」。 */
+export const AUTO_WORK_FOLDER_KEY = 'workFolder'
+
+/** 够格在设置左栏单独占一项的插件:已启用,且除了自动那行 workFolder 之外还有真设置
+ *  (声明式 registerSetting 行 或 registerSettingsView 自绘面板)。
+ *  不这么滤的话每个启用插件都「有设置」,左栏会被几十个条目冲垮 —— 那比藏起来更糟。 */
+export function pluginsWithSettingsPanel<T extends { id: string }>(
+  plugins: readonly T[],
+  activeIds: readonly string[],
+  settings: ReadonlyArray<{ pluginId: string; item: { key: string } }>,
+  settingsViews: ReadonlyArray<{ pluginId: string }>,
+): T[] {
+  return plugins.filter((p) => activeIds.includes(p.id) && (
+    settings.some((o) => o.pluginId === p.id && o.item.key !== AUTO_WORK_FOLDER_KEY)
+    || settingsViews.some((o) => o.pluginId === p.id)
+  ))
+}
+
+/** 插件详情面归属:受控 id(左栏 `fplugin:<id>` 深链)**只在解析得到插件时**才压过列表内部选中态。
+ *  ⚠️ 无条件优先是个坑:插件被卸载/禁用后受控 id 仍非空,回落的卡片列表里每次点击都会被它盖掉,
+ *  成了一张点不开的假列表(codex 评审 2026-08-21)。 */
+export function resolvePluginDetail<T extends { id: string }>(
+  plugins: readonly T[],
+  controlledId: string | undefined,
+  localId: string | null,
+): { plugin?: T; controlled: boolean } {
+  const forced = controlledId ? plugins.find((p) => p.id === controlledId) : undefined
+  if (forced) return { plugin: forced, controlled: true }
+  return { plugin: localId ? plugins.find((p) => p.id === localId) : undefined, controlled: false }
+}

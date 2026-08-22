@@ -10,6 +10,7 @@ import './amadeus-host.css'
 import './amadeus/styles.css'
 import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
 import { AskStringHost } from './amadeus/components/askString'
+import { DeleteAssetsHost } from './amadeus/components/askDeleteAssets'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
@@ -28,6 +29,7 @@ import { addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibb
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
+import { QuickFind, useQuickFind } from './quickFind'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
@@ -43,6 +45,32 @@ let nextId = 1
 
 // harness 调试/断言用:暴露 store,供 Playwright 注入任意 manifest(如两栏布局)验证块间方向键落点。
 ;(window as unknown as { __pageStore: typeof usePageStore }).__pageStore = usePageStore
+
+/** 插件注入口 `window.__ep`:默认壳(v3 编辑器)与 `?upage`(v4 统一编辑器)两处都要 ——
+ *  块表面仪器要在**真 v4 笔记**上验插件看到的东西,而那只有 ?upage 里有。走的是真 setup 路径
+ *  `new Function('ctx', code)`,与生产的外置插件同一条。见 scripts/plugin-blocksurface.check.cjs。 */
+function installPluginInjector(): void {
+  ;(window as unknown as { __ep: Record<string, unknown> }).__ep = {
+    loadPlugin(code: string, meta?: { id?: string; name?: string }) {
+      usePluginStore.getState().init([
+        {
+          id: meta?.id || 'harness-plugin',
+          name: meta?.name || meta?.id || 'harness-plugin',
+          version: 'harness',
+          setup: (ctx) => {
+            const fn = new Function('ctx', code) as (c: unknown) => unknown
+            const d = fn(ctx)
+            return typeof d === 'function' ? (d as () => void) : undefined
+          },
+        },
+      ])
+    },
+    active: () => usePluginStore.getState().activeIds.slice(),
+    /** 插件自绘的设置面板(ctx.registerSettingsView)。台架没有插件详情页,e2e 自己挂一次 ——
+     *  面板里嵌的是真 CodeMirror,那半只有真 DOM 验得了(check.mjs 里是拿不到的)。 */
+    settingsViews: () => usePluginStore.getState().settingsViews.map((o) => o.item),
+  }
+}
 
 function Harness() {
   // ?seed=<md> 种入首块内容,供 Playwright 验证「加载既有 markdown 的解析/往返」(如自定义 HTML 标记)。
@@ -368,6 +396,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       labels: (): Record<string, string> => Object.fromEntries(
         (useWorkspace.getState().api?.panels ?? []).map((p) => [p.id, String((p.params as { label?: unknown } | undefined)?.label ?? '')]),
       ),
+      /** 「同一个 View 里就地换文件」= 只改身份参数。导航历史/最近使用两条订阅都挂在 mainTabs 的
+       *  引用变化上,所以这一步必须惊动 mainTabs(2026-08-20 用户实报:此前整片看不见)。 */
+      setParams: (leafId: string, p: Record<string, unknown>): void => {
+        useWorkspace.getState().leafById(leafId)?.setParams(p)
+      },
+      onTabs: (cb: () => void): (() => void) =>
+        useWorkspace.subscribe((s, prev) => { if (s.mainTabs !== prev.mainTabs) cb() }),
     },
   }
   ;(window as unknown as { __dock: typeof probe }).__dock = probe
@@ -400,6 +435,17 @@ if (new URLSearchParams(location.search).has('dock')) {
     return (p as unknown as { group?: { api?: { width?: number } } } | undefined)?.group?.api?.width ?? 0
   }
   createRoot(document.getElementById('root')!).render(<DockHarness />)
+} else if (new URLSearchParams(location.search).has('qf')) {
+  // ⌘P 快切面板裸挂:分类条(全部/笔记/文件/会话)与 ←/→ 切换的真键盘路径 + 一张真截图。
+  // 库内容用内存表顶替(pageStore 是同一个 store,setState 即生效);会话表走 appStore。
+  const qfDark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), qfDark ? 'dark' : 'light')
+  usePageStore.setState({
+    pages: ['月度计划.md', '子夹/会议纪要.md', 'MOC-Forsion.md'],
+    files: ['报告.pdf', '图/照片.png', '库.db', '画板.excalidraw.md'],
+  })
+  useQuickFind.getState().openPalette()
+  createRoot(document.getElementById('root')!).render(<QuickFind />)
 } else if (new URLSearchParams(location.search).has('ribbon')) {
   // 点击记账:mod+1..9 的 slot 分发靠它断言(见 ribbon-dnd.e2e.cjs 的 L 组)。
   const hits: string[] = []
@@ -743,6 +789,10 @@ if (new URLSearchParams(location.search).has('dock')) {
       return Promise.resolve(np)
     },
   })
+  // 生产里 activeNotePath 由编辑器 leaf 写(v4 不设 activePage,只读面板与插件块表面全靠它取路径)。
+  // 台架站它的位 —— 不写的话块表面在 ?upage 下恒报「没打开笔记」,仪器验的就成了另一回事。
+  usePageStore.getState().setActiveNotePath('Unified.md')
+  installPluginInjector()
   const upageProbe: Record<string, unknown> = {}
   ;(window as unknown as { __upage: unknown }).__upage = {
     vault,
@@ -790,6 +840,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
           />
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}
+          <DeleteAssetsHost />{/* 删文件引用块时的「磁盘文件也删吗」;生产由 AmadeusOverlays 挂 */}
         </>
       )
     }
@@ -894,25 +945,6 @@ if (new URLSearchParams(location.search).has('dock')) {
   // e2e 是页面加载完才注入的,那时编辑器已经建好 —— 靠的正是「扩展注册表代次变了就重建编辑器」
   // 这条机制(useEditor 的 deps 挂着代次)。所以注入后要等一拍再断言,别读到重建中途态。
   // 见 scripts/latex-suite.e2e.cjs。
-  ;(window as unknown as { __ep: Record<string, unknown> }).__ep = {
-    loadPlugin(code: string, meta?: { id?: string; name?: string }) {
-      usePluginStore.getState().init([
-        {
-          id: meta?.id || 'harness-plugin',
-          name: meta?.name || meta?.id || 'harness-plugin',
-          version: 'harness',
-          setup: (ctx) => {
-            const fn = new Function('ctx', code) as (c: unknown) => unknown
-            const d = fn(ctx)
-            return typeof d === 'function' ? (d as () => void) : undefined
-          },
-        },
-      ])
-    },
-    active: () => usePluginStore.getState().activeIds.slice(),
-    /** 插件自绘的设置面板(ctx.registerSettingsView)。台架没有插件详情页,e2e 自己挂一次 ——
-     *  面板里嵌的是真 CodeMirror,那半只有真 DOM 验得了(check.mjs 里是拿不到的)。 */
-    settingsViews: () => usePluginStore.getState().settingsViews.map((o) => o.item),
-  }
+  installPluginInjector()
   createRoot(document.getElementById('root')!).render(<Harness />)
 }

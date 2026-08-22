@@ -5,7 +5,7 @@
  * 本模块补上,并**刻意兼容别家 agent 的既有文件名** —— 一个仓库不该为了换 agent 再写一份约定。
  *
  * 算法照抄 Codex(`codex-rs/core/src/agents_md.rs`),它的取舍是对的:
- *   1. 从 cwd 逐级向上找**项目根**:第一个含标记目录(`.git` / `.tangu`)的祖先。找不到 → 只看 cwd。
+ *   1. 从 cwd 逐级向上找**项目根**:第一个含标记目录(`.git`)的祖先。找不到 → 只看 cwd。
  *   2. 收集**项目根 → cwd**(含两端)沿途每一层的指令文件,按**根在前**的顺序拼接
  *      —— 越靠近工作目录的约定越具体,放后面,让它压过上层的通则。
  *   3. **绝不越过项目根往上走**:否则家目录里一份陈年 AGENTS.md 会悄悄进每个项目。
@@ -13,7 +13,8 @@
  *
  * 与 Codex 的差异:`AGENTS.override.md` 那种「本地覆盖」我们不做(它服务的是 Codex 的多层 config 体系)。
  */
-import { closeSync, lstatSync, openSync, readSync, statSync } from 'node:fs';
+import { closeSync, constants as fsConstants, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 
 /** 每层按此顺序找,**首个命中即用**。前两个是通用约定,后面是各家 agent 的既有位置。 */
@@ -25,8 +26,13 @@ export const PROJECT_DOC_FILENAMES = [
   '.tangu/AGENTS.md', // Tangu 自己的位置(想只给 Tangu 看时用)
 ];
 
-/** 含这些条目的目录 = 项目根,向上搜索到此为止。 */
-export const PROJECT_ROOT_MARKERS = ['.git', '.tangu'];
+/** 含这些条目的目录 = 项目根,向上搜索到此为止。
+ *  ⚠️**只认 `.git`**(与 Codex 的 `DEFAULT_PROJECT_ROOT_MARKERS` 一致)。曾经还认 `.tangu`,
+ *  但那正是引擎 home 的目录名(`~/.tangu`,桌面是软链、standalone 是真目录,`tanguHome.ts` 会造出来)
+ *  → **$HOME 恒被判成项目根**,`$HOME` 下任何非 git 的 cwd 都会把家目录那份 AGENTS.md/CLAUDE.md
+ *  拼进系统提示,把上面第 3 条自己作废。加别的标记前先想清楚这条:标记名不能与任何**会被自动创建**
+ *  的目录同名(`.tangu/plans` 是批准计划时写的,`.forsion/skills` 是用户建的,都不许进这张表)。 */
+export const PROJECT_ROOT_MARKERS = ['.git'];
 
 /** 全部项目文档合起来的上限;超了就在文件边界截断(宁可少给,不能把上下文吃穿)。 */
 export const PROJECT_DOC_MAX_BYTES = 32 * 1024;
@@ -47,11 +53,48 @@ const isPlainFile = (p: string): boolean => {
     return false;
   }
 };
+/** ⚠️候选名里有**带目录段**的(`.claude/CLAUDE.md` 等),而 lstat 只判最后一段 —— 仓库里提交一个
+ *  **目录软链** `.claude -> 别处` 就能绕过上面那道防线,把别处的 CLAUDE.md 读进系统提示(最高信任位)。
+ *  现实靶子=用户的个人全局指令(`~/.claude/CLAUDE.md`)或另一个私有仓的约定,一次 clone 即中。
+ *  故**逐段**确认:除最后一段外每段都必须是真目录,最后一段必须是真文件。
+ *  base 自身不检查(项目路径本来就可能经软链抵达,如 mac 的 /tmp → /private/tmp)。 */
+/** 目录的**真实身份**(解软链 + 规范大小写);不存在/取不到就退回原路径(只用于比对,退化=按字面比)。 */
+const realDir = (p: string): string => {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return p;
+  }
+};
+const isPlainFileUnder = (baseDir: string, relName: string): boolean => {
+  const segs = relName.split('/');
+  let cur = baseDir;
+  for (let i = 0; i < segs.length; i++) {
+    cur = path.join(cur, segs[i]);
+    try {
+      const st = lstatSync(cur);
+      if (!(i === segs.length - 1 ? st.isFile() : st.isDirectory())) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+};
 
-/** cwd 起逐级向上,第一个含标记的祖先;没有则 null。 */
+/** cwd 起逐级向上,第一个含标记的祖先;没有则 null。
+ *  ⚠️**走到家目录就停**(纵深防御):即便用户把 $HOME 本身做成 dotfiles 仓(`~/.git` 存在),
+ *  也不该让家目录当项目根 —— 否则 `~/Desktop/foo` 这类目录会把家目录的通用约定当成「项目约定」。
+ *  停在此处 = root 为 null = 只看 cwd,家目录自己那份仍读得到(cwd 就是 $HOME 时)。
+ *  ⚠️比的是**真实目录身份不是路径字符串**(codex):`path.resolve` 不做 realpath,于是
+ *  `/tmp/h -> $HOME` 这样的别名、$HOME 自身是软链、以及大小写不敏感卷上的 `/users` vs `/Users`,
+ *  都能让字面比对整条守卫失效。`realpathSync.native` 同时规范化软链与磁盘上的真实大小写。
+ *  只用于**比对**,返回值仍是用户给的那条路径 —— 别把 realpath 结果吐出去,调用方(与 projectDocPaths
+ *  的逐层遍历)拿的是未规范化路径,吐 canonical 出去会两边对不上。 */
 export function findProjectRoot(cwd: string, markers: string[] = PROJECT_ROOT_MARKERS): string | null {
+  const home = realDir(path.resolve(homedir()));
   let cur = path.resolve(cwd);
   for (;;) {
+    if (realDir(cur) === home) return null;
     for (const m of markers) {
       const p = path.join(cur, m);
       if (isDir(p) || isPlainFile(p)) return cur;
@@ -85,7 +128,7 @@ export function projectDocPaths(cwd: string): string[] {
   for (const d of dirs) {
     for (const name of PROJECT_DOC_FILENAMES) {
       const p = path.join(d, name);
-      if (isPlainFile(p)) {
+      if (isPlainFileUnder(d, name)) {
         out.push(p);
         break; // 同一层只取第一个命中的
       }
@@ -101,7 +144,9 @@ const SEP_BYTES = 2; // parts.join('\n\n')
 function readBounded(p: string, limit: number): { text: string; overflowed: boolean } | null {
   let fd: number | null = null;
   try {
-    fd = openSync(p, 'r');
+    // ⚠️O_NOFOLLOW:最后一段若是软链,由**内核**拒绝(ELOOP)而不是只靠上面那次 lstat 的结论 ——
+    // lstat 与 open 之间毕竟隔着一段时间(codex)。Windows 无此常量 → ?? 0 退化成普通只读。
+    fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
     const buf = Buffer.allocUnsafe(Math.max(1, limit));
     const n = readSync(fd, buf, 0, buf.length, 0);
     const slice = buf.subarray(0, n);

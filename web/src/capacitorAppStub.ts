@@ -4,6 +4,10 @@
  * 这些方法根本不会被调到 —— 桩只为了让静态 import 不把 Capacitor 拖进 web 依赖。
  */
 export const App = {
-  addListener: async (_event: string, _cb: (...args: unknown[]) => void): Promise<{ remove: () => void }> => ({ remove: () => {} }),
+  // 回调签名跟着真 Capacitor 走(appUrlOpen 带 { url },backButton 不带参 —— 零参回调照样可赋值)。
+  // ⚠️ 写成 `(...args: unknown[]) => void` 会因逆变把 `({ url }) => …` 判成不可赋值。
+  addListener: async (_event: string, _cb: (payload: { url: string }) => void): Promise<{ remove: () => void }> => ({ remove: () => {} }),
   minimizeApp: async (): Promise<void> => {},
+  /** 冷启动深链。浏览器里没有「启动 URL」这回事,恒 undefined(与 Capacitor 未命中时同形)。 */
+  getLaunchUrl: async (): Promise<{ url: string } | undefined> => undefined,
 }

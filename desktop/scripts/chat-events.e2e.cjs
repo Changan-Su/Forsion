@@ -67,7 +67,12 @@ async function main() {
   }
   const stub = await startStubEngine({
     sessions: [SESSION],
-    messages: [],
+    // 预置一条带 sketch 调用的历史消息:开场水合即走 recordToUi back-fill(F5 断言历史卡不丢)。
+    messages: [{
+      id: 'hm1', role: 'model', content: '历史前言。\n\n历史后记。', timestamp: 1755500000000,
+      tool_calls: [{ id: 'hsk1', ui_content_offset: '历史前言。'.length, function: { name: 'sketch', arguments: JSON.stringify({ title: '历史卡', html: '<div id="hist">HISTORY-CARD</div>' }) } }],
+      tool_results: [{ tool_call_id: 'hsk1', content: 'Sketch card rendered in the conversation.' }],
+    }],
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000, thinkingLevels: ['off', 'low', 'medium'] }],
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatev-'))
@@ -120,10 +125,13 @@ async function main() {
     await send(win, '改一下 app.ts')
     await win.waitForTimeout(600)
 
-    // 工具卡是**两级**折叠:先展开工具组,再展开那一行,才轮到 diff(ToolGroup.tsx 的结构)
-    await clickInView(win.locator('.tool-group-head').first()).catch(() => {})
+    // 工具卡是**两级**折叠:先展开工具组,再展开那一行,才轮到 diff(ToolGroup.tsx 的结构)。
+    // ⚠️ 作用域必须钉在**最后一个**工具组:开场预置的 sketch 历史消息自带一个工具组排在最前,
+    //    first() 会展开历史组(F 场景加历史卡时 A1 就这么假红过)。
+    const lastGroup = () => win.locator('.tool-group').last()
+    await clickInView(lastGroup().locator('.tool-group-head')).catch(() => {})
     await win.waitForTimeout(500)
-    await clickInView(win.locator('.tool-row-head').first()).catch(() => {})
+    await clickInView(lastGroup().locator('.tool-row-head').first()).catch(() => {})
     await win.waitForTimeout(900)
     const diffProbe = await win.evaluate(() => ({
       d2h: document.querySelectorAll('[class*="d2h-"]').length,
@@ -137,7 +145,7 @@ async function main() {
     // (工具行标题已写了文件名),多文件再隐就变成「第二块像第一块的续篇」——08-18 真机走查报的。
     // 断言必须看**可见性**:textContent 在 display:none 下照样有,只查文本会假绿。
     // 同一个工具组里的第二行 = 那次多文件 apply_patch
-    await clickInView(win.locator('.tool-row-head').nth(1)).catch(() => {})
+    await clickInView(lastGroup().locator('.tool-row-head').nth(1)).catch(() => {})
     await win.waitForTimeout(900)
     // 按**内容**定位而不是「最后一行」:同一组里两行 diff 都展开着,位置不该成为断言的一部分。
     // 负对照并在同一次探测里 —— 同一页的单文件 diff(src/app.ts)标题必须仍然隐藏。
@@ -212,8 +220,8 @@ async function main() {
 
     // 把 A 场景展开的两段 diff 收回去:它们撑得页面很长,后面计划卡的按钮会被 diff 行号与悬浮输入区
     // 轮流挡住(playwright 一路重试到 30s 超时,报 "subtree intercepts pointer events")。
-    // 真实用法本来也是看完 diff 就收起来。
-    await clickInView(win.locator('.tool-group-head').first()).catch(() => {})
+    // 真实用法本来也是看完 diff 就收起来。(同样钉最后一组,别把历史 sketch 组点开。)
+    await clickInView(lastGroup().locator('.tool-group-head')).catch(() => {})
     await win.waitForTimeout(500)
 
     // ── 场景 B:计划卡三态(P2)—— 批准发出的必须逐字是引擎认的那串
@@ -267,6 +275,240 @@ async function main() {
     check('C1 ⚠️编辑后批准:头部仍是批准选项,后面挂修订标记 + 改后的全文',
       ans.startsWith(PLAN_APPROVE_AUTO) && ans.includes(PLAN_REVISION_MARK) && ans.includes('先补回滚方案'),
       JSON.stringify(ans.slice(0, 80)))
+
+    // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
+    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts
+    // + 内层 CSP 真断网,在**真 Electron** 里实证而非单测纸面)/ 历史水合 back-fill 卡不丢。
+    stub.script([
+      { type: 'token', payload: { delta: '先看第一张。' } },
+      { type: 'tool_call', payload: { id: 'sk1', name: 'sketch', arguments: JSON.stringify({
+        title: '柱状图',
+        html: '<div id="skp">SKETCH-LIVE</div><div id="net">NET-?</div>' +
+          '<script>document.getElementById("skp").textContent+="-JS";' +
+          'fetch("https://example.com").then(function(){document.getElementById("net").textContent="NET-OPEN"})' +
+          '.catch(function(){document.getElementById("net").textContent="NET-BLOCKED"})</script>',
+      }) } },
+      { type: 'tool_result', payload: { id: 'sk1', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'token', payload: { delta: '第一张说明完成，接着看第二张。' } },
+      { type: 'tool_call', payload: { id: 'sk2', name: 'sketch', arguments: JSON.stringify({ html: '<p>SECOND-CARD</p>' }) } },
+      { type: 'tool_result', payload: { id: 'sk2', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'token', payload: { delta: '第二张之后是完整数据图。' } },
+      // 超高卡:钉折叠闸(默认高度上限 = 右侧车道两卡的高度,超了才露展开钮)。
+      // ⚠️故意写成**一张像样的真卡**而不是空白占位:观感自查那两张截图(明/暗)要能看出
+      // 主题桥 + 基础排版对不对 —— 空 div 什么都验不出来。只用 --fs-* 变量,一个色值都不硬编码。
+      { type: 'tool_call', payload: { id: 'sk4', name: 'sketch', arguments: JSON.stringify({
+        title: '模型调用量',
+        html: '<div id="tall">' +
+          '<header class="fs-header"><div class="fs-eyebrow">Usage pulse · 7 days</div>' +
+          '<h1 class="fs-title">桌面端承担了近一半调用</h1>' +
+          '<p class="fs-subtitle">按客户端统计 · 长度 = 调用次数 · 2026-08-14 → 08-20</p></header>' +
+          '<div class="fs-stat-grid"><div class="fs-stat"><div class="fs-value">2,765</div><div class="fs-label">总调用</div></div>' +
+          '<div class="fs-stat"><div class="fs-value">46%</div><div class="fs-label">来自 desktop</div></div>' +
+          '<div class="fs-stat"><div class="fs-value">1.2s</div><div class="fs-label">desktop P50</div></div></div>' +
+          '<figure class="fs-plot" aria-label="近 7 日各端模型调用量横向条形图">' +
+          [['desktop', 1284, 1], ['web', 806, 2], ['mobile', 412, 3], ['cli', 189, 4], ['channel', 74, 5]]
+            .map(([n, v, s]) =>
+              '<div class="fs-row" style="margin-bottom:10px">' +
+              `<div style="width:62px;font-size:10.5px;font-weight:650;color:var(--fs-muted)">${n}</div>` +
+              // ⚠️条宽写在**内层**:外层 flex:1 是轨道,给内层写 width:% 会被 flex 尺寸压掉(条永远满宽)
+              `<div class="fs-bar-track" style="flex:1"><div class="fs-bar-fill" style="background:var(--fs-s${s});width:${Math.round((v / 1284) * 100)}%"></div></div>` +
+              `<div style="width:46px;text-align:right;font-family:var(--fs-mono);font-size:11px;font-variant-numeric:tabular-nums">${v.toLocaleString('en-US')}</div>` +
+              '</div>').join('') +
+          '<figcaption class="fs-caption">desktop 的调用量是 mobile 的 3.1 倍；channel 仍是长尾入口。</figcaption></figure>' +
+          '<div class="fs-panel" style="margin-top:18px"><table><thead><tr><th>端</th><th>P50</th><th>P95</th></tr></thead><tbody>' +
+          '<tr><td>desktop</td><td>1.2s</td><td>4.8s</td></tr>' +
+          '<tr><td>web</td><td>1.4s</td><td>6.1s</td></tr>' +
+          '<tr><td>mobile</td><td>2.0s</td><td>9.3s</td></tr>' +
+          '</tbody></table></div>' +
+          '<footer class="fs-source">来源 · api_usage_logs · 失败请求已排除</footer>' +
+          // 撑高到必然超过折叠上限(折叠闸要可测),同时不影响上面那段的观感
+          '<div style="height:900px"></div></div>',
+      }) } },
+      { type: 'tool_result', payload: { id: 'sk4', result: 'Sketch card rendered in the conversation.' } },
+      // 引擎尺寸闸拒掉的调用:isError=true → 不许画卡(渲染挂 tool_result 的原因)
+      { type: 'tool_call', payload: { id: 'sk3', name: 'sketch', arguments: JSON.stringify({ html: '<p>REJECTED-CARD</p>' }) } },
+      { type: 'tool_result', payload: { id: 'sk3', result: 'Error: html too large', isError: true } },
+      { type: 'token', payload: { delta: '三张草图都画好了。' } },
+    ])
+    await send(win, '画两张卡')
+    await win.waitForTimeout(1500)
+
+    // 沙箱无 allow-same-origin ⇒ 页面侧 contentDocument 拿不到,卡内探针统一走 Playwright CDP frame。
+    const probeFrames = async (id) => {
+      for (const fr of win.frames()) {
+        try {
+          if (await fr.locator(`#${id}`).count()) return fr
+        } catch { /* frame 可能已卸载 */ }
+      }
+      return null
+    }
+    const skProbe = await win.evaluate(() => {
+      const cards = [...document.querySelectorAll('.sketch-card')]
+      return {
+        count: cards.length,
+        titles: cards.map((c) => (c.querySelector('.sketch-card-title')?.textContent || '').trim()).filter(Boolean),
+        sandboxes: cards.map((c) => c.querySelector('iframe')?.getAttribute('sandbox')),
+      }
+    })
+    check('F1 sketch 直播上卡:本轮三张 + 历史一张,标题可选', skProbe.count === 4 && skProbe.titles.includes('柱状图'), JSON.stringify(skProbe))
+    const liveOrder = await win.evaluate(() => {
+      const msg = [...document.querySelectorAll('.t2-asst')].findLast((el) => el.querySelector('[data-sketch-call-id="sk1"]'))
+      if (!msg) return []
+      return [...msg.querySelectorAll('.t2-content, .sketch-card')].map((el) =>
+        el.classList.contains('sketch-card')
+          ? `sketch:${el.getAttribute('data-sketch-call-id')}`
+          : `text:${(el.textContent || '').trim()}`)
+    })
+    check('F1b 多草图按调用位置夹在正文中间(不再统一堆到消息末尾)',
+      liveOrder[0]?.includes('先看第一张') && liveOrder[1] === 'sketch:sk1' &&
+      liveOrder[2]?.includes('接着看第二张') && liveOrder[3] === 'sketch:sk2' &&
+      liveOrder[4]?.includes('完整数据图') && liveOrder[5] === 'sketch:sk4' &&
+      liveOrder[6]?.includes('三张草图都画好了'), JSON.stringify(liveOrder))
+    const fusedCard = await win.evaluate(() => {
+      const card = document.querySelector('[data-sketch-call-id="sk1"]')
+      if (!card) return null
+      const s = getComputedStyle(card)
+      return {
+        border: [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth],
+        borderStyle: s.borderTopStyle,
+        borderColor: s.borderTopColor,
+        shadow: s.boxShadow,
+        cardBg: s.backgroundColor,
+        pageBg: getComputedStyle(document.body).backgroundColor,
+      }
+    })
+    const fusedFrame = await probeFrames('skp')
+    const fusedInnerBg = fusedFrame
+      ? await fusedFrame.evaluate(() => getComputedStyle(document.body).backgroundColor).catch(() => '')
+      : ''
+    check('F1c Sketch 内容面仅有淡描边,内外画布透明以透出任意 Chat View 底色',
+      !!fusedCard && fusedCard.border.every((v) => v === '1px') && fusedCard.borderStyle === 'solid' &&
+      fusedCard.borderColor !== 'rgba(0, 0, 0, 0)' && fusedCard.shadow === 'none' &&
+      fusedCard.cardBg === 'rgba(0, 0, 0, 0)' && fusedInnerBg === 'rgba(0, 0, 0, 0)',
+      JSON.stringify({ ...fusedCard, innerBg: fusedInnerBg }))
+    // DESIGN.md §8 观感仪器:截整条消息而非单卡,肉眼确认卡真的夹在段落之间。
+    const inlineMessage = win.locator('.t2-asst:has([data-sketch-call-id="sk1"])').last()
+    await inlineMessage.scrollIntoViewIfNeeded().catch(() => {})
+    await win.waitForTimeout(300)
+    await inlineMessage.screenshot({ path: process.env.SKETCH_INLINE_SHOT || '/tmp/sketch-inline-order.png' }).catch(() => {})
+    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts', skProbe.sandboxes.length === 4 && skProbe.sandboxes.every((s) => s === 'allow-scripts'), JSON.stringify(skProbe.sandboxes))
+    check('F3 被引擎拒掉的 sketch(isError)不画卡', skProbe.count === 4, `count=${skProbe.count}`)
+
+    // 卡内探针:JS 真跑 + 网络真断(内层 CSP 收口;裸 sandbox 是挡不住 fetch 的,此断言在真 Electron 里钉死)。
+    let inFrame = { js: '', net: '' }
+    for (let i = 0; i < 10; i++) {
+      const fr = await probeFrames('skp')
+      if (fr) {
+        inFrame.js = (await fr.locator('#skp').textContent().catch(() => '')) || ''
+        inFrame.net = (await fr.locator('#net').textContent().catch(() => '')) || ''
+      }
+      if (inFrame.net && inFrame.net !== 'NET-?') break
+      await win.waitForTimeout(500)
+    }
+    check('F4 卡内 JS 可跑(交互能力在)', inFrame.js === 'SKETCH-LIVE-JS', JSON.stringify(inFrame))
+    check('F4b ⚠️卡内 fetch 被内层 CSP 掐死(无网络)', inFrame.net === 'NET-BLOCKED', JSON.stringify(inFrame))
+
+    // 高度自适应:小卡应收到内容高(≈几十px),还停在 220 初始占位=postMessage 通道断了
+    const skHeights = await win.evaluate(() =>
+      [...document.querySelectorAll('.sketch-frame')].map((f) => parseFloat(getComputedStyle(f).height)))
+    check('F5 高度上报通道工作(小卡收窄,不停在初始占位)', skHeights.some((h) => h > 0 && h < 200), JSON.stringify(skHeights))
+
+    // 历史水合 back-fill:开场预置的那条历史消息的卡,现在还必须在(HTML 只活在 tool_call 参数里)
+    const histFr = await probeFrames('hist')
+    const histCard = histFr ? (await histFr.locator('#hist').textContent().catch(() => '')) || '' : ''
+    check('F6 ⚠️历史水合 back-fill:重载路径的卡不丢', histCard === 'HISTORY-CARD', JSON.stringify(histCard))
+    const historyOrder = await win.evaluate(() => {
+      const msg = document.querySelector('[data-sketch-call-id="hsk1"]')?.closest('.t2-asst')
+      if (!msg) return []
+      return [...msg.querySelectorAll('.t2-content, .sketch-card')].map((el) =>
+        el.classList.contains('sketch-card') ? `sketch:${el.getAttribute('data-sketch-call-id')}` : `text:${(el.textContent || '').trim()}`)
+    })
+    check('F6b ⚠️历史重载仍恢复正文 → Sketch → 正文的位置',
+      historyOrder[0]?.includes('历史前言') && historyOrder[1] === 'sketch:hsk1' && historyOrder[2]?.includes('历史后记'),
+      JSON.stringify(historyOrder))
+
+    // 折叠闸:1400px 的卡必须被夹到「右侧车道卡」那么高并露出展开钮;小卡一律不露钮。
+    const foldProbe = await win.evaluate(() => {
+      const cards = [...document.querySelectorAll('.sketch-card')]
+      const tall = cards.find((c) => c.querySelector('.sketch-card-toggle'))
+      const clip = tall?.querySelector('.sketch-clip')
+      return {
+        toggles: cards.filter((c) => c.querySelector('.sketch-card-toggle')).length,
+        clipH: clip ? Math.round(clip.getBoundingClientRect().height) : 0,
+        frameH: clip ? Math.round(clip.querySelector('iframe').getBoundingClientRect().height) : 0,
+        faded: !!clip?.classList.contains('faded'),
+      }
+    })
+    check('F7 折叠闸:只有超高卡露展开钮,且卡身被夹在 iframe 内容高之下',
+      foldProbe.toggles === 1 && foldProbe.clipH > 100 && foldProbe.clipH < foldProbe.frameH && foldProbe.faded,
+      JSON.stringify(foldProbe))
+
+    await win.locator('.sketch-card-toggle').first().click().catch(() => {})
+    await win.waitForTimeout(400)
+    const openedH = await win.evaluate(() => {
+      const clip = document.querySelector('.sketch-clip.open')
+      return clip ? Math.round(clip.getBoundingClientRect().height) : 0
+    })
+    check('F8 展开后放全高(且钮还在,收得回去)', openedH > foldProbe.clipH + 200, `${foldProbe.clipH} → ${openedH}`)
+    await win.locator('.sketch-card-toggle').first().click().catch(() => {})
+    await win.waitForTimeout(300)
+
+    // 主题桥:首帧变量必须已在卡内(不是换肤后才补),且换肤走 postMessage **就地改**——
+    // iframe 若重载,预置的 window.__alive 会没,那说明 srcdoc 被重建了(卡内交互状态全丢)。
+    const themeFr = await probeFrames('skp')
+    let theme = { firstBg: '', afterBg: '', firstText: '', afterText: '', alive: '' }
+    if (themeFr) {
+      const firstTheme = await themeFr.evaluate(() => {
+        window.__alive = 'YES'
+        const s = getComputedStyle(document.documentElement)
+        return {
+          bg: s.getPropertyValue('--fs-bg').trim(),
+          text: s.getPropertyValue('--fs-text').trim(),
+        }
+      }).catch(() => ({ bg: '', text: '' }))
+      theme.firstBg = firstTheme.bg
+      theme.firstText = firstTheme.text
+      // ⚠️暗色 token 挂在 `:root.dark`(base.css),data-mode 只管 color-scheme —— 只翻 data-mode
+      // 量不出颜色变化(F10 曾因此假红)。两个一起翻才是宿主真实的换肤动作。
+      const prevMode = await win.evaluate(() => {
+        const r = document.documentElement, p = r.getAttribute('data-mode') || ''
+        const wasDark = r.classList.contains('dark')
+        r.classList.toggle('dark', !wasDark)
+        r.setAttribute('data-mode', wasDark ? 'light' : 'dark')
+        return { mode: p, dark: wasDark }
+      })
+      await win.waitForTimeout(500)
+      const after = await themeFr.evaluate(() => ({
+        bg: getComputedStyle(document.documentElement).getPropertyValue('--fs-bg').trim(),
+        text: getComputedStyle(document.documentElement).getPropertyValue('--fs-text').trim(),
+        alive: window.__alive || '',
+      })).catch(() => ({ bg: '', text: '', alive: '' }))
+      theme.afterBg = after.bg
+      theme.afterText = after.text
+      theme.alive = after.alive
+      // 观感自查(DESIGN.md §8)的暗色那张:趁翻过去时留一张,免得另起一轮
+      const visualCard = win.locator('.sketch-card:has(.sketch-card-toggle)').first()
+      await visualCard.scrollIntoViewIfNeeded().catch(() => {})
+      await win.waitForTimeout(300)
+      await visualCard.screenshot({ path: process.env.SKETCH_SHOT_DARK || '/tmp/sketch-cards-dark.png' }).catch(() => {})
+      await win.evaluate((p) => {
+        const r = document.documentElement
+        r.classList.toggle('dark', p.dark)
+        if (p.mode) r.setAttribute('data-mode', p.mode); else r.removeAttribute('data-mode')
+      }, prevMode)
+      await win.waitForTimeout(300)
+    }
+    check('F9 主题桥:首帧画布透明且文字 token 已在卡内(不靠换肤补)',
+      theme.firstBg === 'transparent' && /\S/.test(theme.firstText), JSON.stringify(theme))
+    check('F10 ⚠️换肤就地改变量,iframe 不重载(重载=卡内交互状态全丢)',
+      theme.afterBg === 'transparent' && theme.afterText !== '' && theme.afterText !== theme.firstText && theme.alive === 'YES', JSON.stringify(theme))
+
+    // 观感自查(DESIGN.md §8):几何断言全绿 ≠ 看起来对,留一张卡片实景
+    const visualCard = win.locator('.sketch-card:has(.sketch-card-toggle)').first()
+    await visualCard.scrollIntoViewIfNeeded().catch(() => {})
+    await win.waitForTimeout(500)
+    await visualCard.screenshot({ path: process.env.SKETCH_SHOT || '/tmp/sketch-cards.png' }).catch(() => {})
+
 
     // ── 场景 D:审批卡的「为什么问你」(B3)+ 工作区外写入警示仍在(台账里挂着的那条未验)
     // 三种 reason 各来一张卡,一次断完:custom-ask 要报出**命中的规则串**,escalate 与 custom-ask

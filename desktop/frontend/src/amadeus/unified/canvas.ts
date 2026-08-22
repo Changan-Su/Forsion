@@ -30,7 +30,7 @@ import { undoDepth, isHistoryTransaction } from '@milkdown/kit/prose/history'
 import { Fragment, Slice } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { freshAnchorId, type LayoutV4 } from './columns'
-import { rawTree, pruneTree, depthOf } from './canvasEdit'
+import { rawTree, pruneTree, depthOf, runEndOf } from './canvasEdit'
 
 /** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。 */
 export interface CanvasCard { ref: string; x: number; y: number; w: number; h?: number }
@@ -614,18 +614,30 @@ export function createCardActiveDeco(): MilkdownPlugin[] {
   )].flat()
 }
 
-// ── 文档模式:层级缩进(2026-08-19,用户拍板「有父子属性的 Card 嵌套包裹,排序始终在父 Card 内」)。──
+// ── 文档模式:层级缩进 + 层级框(2026-08-19 起,用户拍板「有父子属性的 Card 嵌套包裹,排序始终
+// 在父 Card 内」;2026-08-20 追加「父卡应该包裹住子卡」)。────────────────────────────────────
 // 分工:**源码相邻**由写侧保证(canvasStage 的 orderUnder / addCardAt(under) —— 认爹或建子节点时
-// 把子卡那一段整体搬到父段之后),这里只负责**呈现**:按深度给卡打一枚档位类,CSS 去缩进 + 画左轨。
+// 把子卡那一段整体搬到父段之后),这里只负责**呈现**:给卡打档位类与框位类,CSS 去缩进 + 画框。
 // 为什么不是真嵌套:卡在 PM 里恒为顶层节点(canvasIntegrityGuard),而闭合锚的辖域遇到下一枚开锚
 // 就收边 —— 卡里再冒一枚开锚 = 父卡辖域提前截断,那是协议改动,不是一个显示需求该付的代价。
 //
+// 框怎么画(**扁平兄弟 DOM 也画得出真的框**,2026-08-20 更正此前「画不出来」的说法):同一段的卡在
+// 文档里恒连续,于是一个框可以拆给整段来画 —— 段首画上沿 + 两侧、段中只画两侧、段末画下沿 + 两侧,
+// 卡与卡之间的外边距归零,三段边合起来就是一个完整的圆角框。
+// ⚠️ 一张卡身上能承载的「盒子」只有三个:元素自身的 border、::before、::after。::before 归**编辑/
+//    选中环**(它必须恒是同一个圆角,不能被框的直角弄方,这正是用户 08-20 提的第一条),于是框最多
+//    画到两层:元素 border = 最外层框,::after = 第二层框。
+//    ponytail: 第三层起只缩进不画框。真要每层都画,得给每层加一个绝对定位的测量浮层(要跟滚动/
+//    输入/图片加载重算),或者把段首段末的封口改成 widget 装饰 —— 那时再说,现在不值。
+//
 // ⚠️ 档位走 **class 而不是内联 style**:卡的 toDOM 已经把画布几何(--amx-x/y/w)写在 style 上了,
 //    decoration 的 style 与它同属一个属性,一旦哪天的 prosemirror-view 是「覆盖」而不是「追加」,
-//    画布模式的卡会当场全部飞到 0,0。六个档位六条 CSS,换的是这条风险归零。
+//    画布模式的卡会当场全部飞到 0,0。几个档位几条 CSS,换的是这条风险归零。
 // ⚠️ tree 不在 doc 里,改层级不产生 PM 事务 → decorations 不会自己重算。UnifiedPage 在 canvas 行
 //    真变过之后补一笔空事务把它推醒(见那边的 useEffect)。
 const DEPTH_CAP = 6
+/** 画到第几层框为止 —— 见上面「一张卡只有三个盒子」。 */
+const FRAME_CAP = 2
 
 export function createCardDepthDeco(getCanvas: () => CanvasV1 | null): MilkdownPlugin[] {
   return [$prose(() =>
@@ -639,17 +651,34 @@ export function createCardDepthDeco(getCanvas: () => CanvasV1 | null): MilkdownP
           if (!Object.keys(tree).length) return null
           // alive = 本篇真实在场的卡锚。父不在其中 = 没有爹(深度 0),见 depthOf 的告警。
           const alive = new Set<string>()
-          const at: Array<{ pos: number; size: number; anchor: string }> = []
-          state.doc.forEach((node, offset) => {
+          const at: Array<{ pos: number; size: number; anchor: string; idx: number }> = []
+          state.doc.forEach((node, offset, index) => {
             if (node.type !== card) return
             const a = String(node.attrs.anchor)
             alive.add(a)
-            at.push({ pos: offset, size: node.nodeSize, anchor: a })
+            at.push({ pos: offset, size: node.nodeSize, anchor: a, idx: index })
           })
+          // 每张卡各自的连续同族段;长度 > 1 的段 = 一层框(段首那张就是「父卡」)。
+          // 段天生要么互不相交、要么真包含 → 按 start 升序就是由外到内,取前 FRAME_CAP 层画。
+          const frames: Array<{ start: number; end: number }> = []
+          for (let i = 0; i < at.length; i++) {
+            const end = runEndOf(at, i, tree)
+            if (end > i + 1) frames.push({ start: i, end })
+          }
           const decos: Decoration[] = []
-          for (const c of at) {
+          for (let i = 0; i < at.length; i++) {
+            const c = at[i]
             const d = depthOf(tree, c.anchor, alive, DEPTH_CAP)
-            if (d > 0) decos.push(Decoration.node(c.pos, c.pos + c.size, { class: `amx-card-child amx-card-d${d}` }))
+            const mine = frames.filter((f) => f.start <= i && i < f.end).slice(0, FRAME_CAP)
+            if (!d && !mine.length) continue // 自由卡:一个类都不挂(08-18「零装饰无缝」原样有效)
+            const cls: string[] = []
+            if (d > 0) cls.push('amx-card-child', `amx-card-d${d}`)
+            mine.forEach((f, level) => {
+              cls.push(`amx-card-f${level}`)
+              if (f.start === i) cls.push(`amx-card-f${level}-top`)
+              if (f.end - 1 === i) cls.push(`amx-card-f${level}-end`)
+            })
+            decos.push(Decoration.node(c.pos, c.pos + c.size, { class: cls.join(' ') }))
           }
           return decos.length ? DecorationSet.create(state.doc, decos) : null
         },

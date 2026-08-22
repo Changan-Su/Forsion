@@ -21,6 +21,7 @@ import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { AUTONOMY_SECTION, CODING_CONTRACT_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
+import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
@@ -528,6 +529,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${t}` : t;
   };
   const allToolCalls: ToolCall[] = [];
+  /**
+   * Tool calls are stored separately from assistant text. Stamp the finalized-text offset at which
+   * each call happened so clients can reconstruct interleaving after reload without a DB migration.
+   * Clone rather than mutate `res.toolCalls`: the unannotated originals continue into provider history.
+   */
+  const persistToolCallsAtCurrentOffset = (calls: ToolCall[]): void => {
+    const ui_content_offset = finalContent.length;
+    allToolCalls.push(...calls.map((call) => ({ ...call, ui_content_offset })));
+  };
   const allToolResults: any[] = [];
   // agent 在对话区展示给用户的文件(display_file/generate_image/表情包);函数级声明,使 catch(中止)路径也能持久化。
   const pendingDisplayFiles: DisplayFileItem[] = [];
@@ -669,6 +679,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, preset === 'coding' ? { noPreamble: true } : undefined));
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段)。
     if (!planMode) systemParts.push(PERSISTENCE_SECTION);
+    // 3c) 可视化卡片段:与 sketch 工具**同一个判定源**(sketchEnabledFor),CLI/TUI run 两者一起缺席。
+    //     常驻段管「什么时候该画 + 怎么画到下限之上」;本轮信号对比较/流程/数据形状再加一次定向提醒,
+    //     不等用户必须说「画」。子代理走 subAgent.ts 自己的提示装配,天然不经过这里。
+    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession });
+    const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || '')) : undefined;
+    if (sketchEnabled) {
+      systemParts.push(SKETCH_SECTION);
+      if (sketchTurnSignal) systemParts.push(sketchTurnSignal.section);
+    }
     ctxMark('guidance');
     // 4) USER.md 全局用户画像(所有 agent 可见,用户维护,半稳定)。读失败不阻断。
     try {
@@ -760,6 +779,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       );
     }
     systemParts.push(...promptSections.environment);
+
+    // 8a2) 当前日期(易变区):只到"天"粒度、刻意不含时刻——同一天内字节恒定,护前缀缓存
+    //     (同 8c 日程段的纪律)。此前系统提示零日期,模型只能靠 get_datetime 现问,不问就用
+    //     训练截止年份编造(2026-08-21 天气会话实测:首条搜索词带"2025-?")。精确时刻仍走 get_datetime。
+    {
+      const now = new Date();
+      const weekday = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.getDay()];
+      const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      systemParts.push(`## Current Date\nToday is ${weekday}, ${ymd} (local timezone). For the precise current time, call get_datetime.`);
+    }
 
     // 8b) host:注入工作区(cwd)顶层文件清单,让 agent 主动认知现有文件(修「工作区文件意识弱」)。
     //     ephemeral——随系统块每 run 重建,绝不落库。sandbox/云端不在此预拉(保留懒 hydrate),靠环境段提示按需 list_files。
@@ -1053,7 +1082,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // load_tools 解锁 → 置脏,下一迭代重算 defs(解锁那一刻打一次前缀缓存,之后稳定)。
     let toolDefsDirty = false;
     const toolCtx: ToolContext = {
-      userId, sessionId, appId, runId, signal: ac.signal, customTools, mcpTools, channelSession, preset,
+      userId, sessionId, appId, runId, client: clientTag, signal: ac.signal, customTools, mcpTools, channelSession, preset,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
@@ -1259,6 +1288,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
+    let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
     let verifyRounds = 0; // 验证回路已跑次数(整 run 上限 VERIFY_MAX_ROUNDS,最后一次仍红则如实标注收尾)
     let tokensTotal = 0;
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
@@ -1563,6 +1593,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           continue;
         }
 
+        // —— Sketch 交付兜底:常驻提示不足以对抗部分模型「直接写完文字就收尾」的惯性。
+        //    本轮启发式命中、工具确实在场、且整 run 没调过 sketch 时,在收尾前补催一次。
+        //    只催一次:模型二次检查仍认为图是噪声时允许收尾;用户的「纯文字/不要画」在信号层已排除。——
+        if (sketchTurnSignal && !sketchNudged && !lastIter && !allToolCalls.some((c) => c.function.name === 'sketch')) {
+          sketchNudged = true;
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({
+            role: 'user',
+            content:
+              '<visual_delivery_check>\nYou are about to finish a turn that was identified as strongly visual, but you did not call `sketch`. Re-check the actual user goal now. If a comparison, sequence, structure, data shape, or interaction would be clearer as a card, call `sketch` and make that card before the final reply; do not merely promise it. If closer inspection shows a card would genuinely add noise, finish normally and briefly preserve that judgment.\n</visual_delivery_check>',
+          } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'sketch_delivery_nudge', iteration, signal: sketchTurnSignal.kind });
+          continue;
+        }
+
         // —— 验证回路(收尾闸门,机械强制「跑绿才算完」):会话配了 /verify 命令且本 run 动过工具 →
         //    收尾前跑一遍;失败把输出尾巴回灌(不落库)逼模型修完再收。顺序刻意在完成度审计之后:
         //    先干完活(审计),再证明干对了(验证)。VERIFY_MAX_ROUNDS 兜底:最后一次仍红 → 在终稿
@@ -1631,7 +1676,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (res.finishReason === 'length') {
         if (res.content && !looksLikeToolCallText(res.content)) appendFinal(res.content);
         workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
-        allToolCalls.push(...res.toolCalls);
+        persistToolCallsAtCurrentOffset(res.toolCalls);
         usedTools = true;
         const truncatedResults: any[] = [];
         for (const call of res.toolCalls) {
@@ -1670,7 +1715,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (res.content && !looksLikeToolCallText(res.content)) appendFinal(res.content);
 
       workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
-      allToolCalls.push(...res.toolCalls);
+      persistToolCallsAtCurrentOffset(res.toolCalls);
       usedTools = true; // 到达本行说明这一轮在调工具并继续循环;若后续顶到 lastIter 即为真·循环耗尽
 
       const toolResults = await executeToolCallsInOrder(res.toolCalls);

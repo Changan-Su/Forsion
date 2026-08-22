@@ -8,7 +8,7 @@
 import { create } from 'zustand'
 import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
-  MsgSeg, SessionRecord, SkillInfo, SubChat, TanguDesktopConfig, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
+  MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot,
 } from '../types'
 import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
@@ -42,6 +42,19 @@ function saveUnread(s: Set<string>): void {
 
 /** 群聊发言落库为 `**🗣 名字**\n\n正文`(DB 无结构化发言人列)。重载时据此还原发言人身份并剥前缀。 */
 const GROUP_SPEAKER_RE = /^\*\*🗣\s*([^*\n]+?)\s*\*\*\n+([\s\S]*)$/
+
+/** sketch 工具事件 → 卡片载荷。只认**有结果**且非错的调用:引擎尺寸闸拒掉的不画;
+ *  result 闸兼防重载分歧——recordToUi 对历史事件一律 done:true,run 中止在 tool_result 前的调用
+ *  只有它能挡住(直播路径没画过的卡,重载也不该补画)。参数残缺=当没有。 */
+export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
+  if (ev.name !== 'sketch' || !ev.done || ev.isError || ev.result === undefined || !ev.arguments) return undefined
+  try {
+    const a = JSON.parse(ev.arguments)
+    const html = typeof a.html === 'string' ? a.html.trim() : ''
+    if (!html) return undefined
+    return { callId: ev.id, html, title: typeof a.title === 'string' && a.title ? a.title : undefined }
+  } catch { return undefined }
+}
 
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
 export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
@@ -77,17 +90,25 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
     msg.toolEvents = r.tool_calls.map((c: any) => {
       const res = results.get(c.id)
+      const rawOffset = c.ui_content_offset
       return {
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
+        contentOffset: typeof rawOffset === 'number' && Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : undefined,
       }
     })
+    // 新消息把工具发生时的正文偏移存在 tool_call 上,所以重载后仍能恢复
+    // 「正文 -> Sketch/工具 -> 正文」；旧消息没有锚点,继续走末尾回退,不猜位置。
+    msg.segments = segmentsFromHistory(content, msg.toolEvents)
   }
   // 计划卡重载后不该消失:plan 事件不落库,但计划全文原样在 exit_plan_mode 的 tool_call 参数里。
+  // sketch 卡同理 back-fill:HTML 原样在 sketch 调用参数里,零新列零迁移。
   if (msg.toolEvents) {
     for (const ev of msg.toolEvents) {
+      const sk = sketchFromToolEvent(ev)
+      if (sk) { (msg.sketches ||= []).push(sk); continue }
       if (ev.name !== 'exit_plan_mode' || !ev.arguments) continue
       try {
         const p = String(JSON.parse(ev.arguments).plan ?? '').trim()
@@ -138,6 +159,25 @@ export function pushToolSeg(segs: MsgSeg[] | undefined, id: string): MsgSeg[] {
   if (last && last.t === 'tools') next[next.length - 1] = { t: 'tools', ids: [...last.ids, id] }
   else next.push({ t: 'tools', ids: [id] })
   return next
+}
+
+/**
+ * 用持久化工具锚点重建消息顺序。所有调用都必须有合法、单调的偏移；否则整条回退旧渲染，
+ * 避免把混合版本消息的工具或 Sketch 猜到错误段落里。
+ */
+export function segmentsFromHistory(content: string, events: ToolEvent[] | undefined): MsgSeg[] | undefined {
+  if (!events?.length || events.some((ev) => !Number.isInteger(ev.contentOffset))) return undefined
+  let cursor = 0
+  let segs: MsgSeg[] = []
+  for (const ev of events) {
+    const at = ev.contentOffset as number
+    if (at < cursor || at < 0 || at > content.length) return undefined
+    segs = pushTextSeg(segs, content.slice(cursor, at))
+    segs = pushToolSeg(segs, ev.id)
+    cursor = at
+  }
+  segs = pushTextSeg(segs, content.slice(cursor))
+  return segs
 }
 
 // 非响应式跨事件状态(App.tsx 的 useRef Map/Set)。
@@ -627,6 +667,11 @@ export const useApp = create<AppState>((set, get) => ({
               ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true,
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
+            }
+            // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
+            const sk = sketchFromToolEvent(evs[i])
+            if (sk && !(m.sketches || []).some((s) => s.callId === sk.callId)) {
+              return { ...m, toolEvents: evs, sketches: [...(m.sketches || []), sk] }
             }
           }
           return { ...m, toolEvents: evs }

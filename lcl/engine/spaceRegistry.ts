@@ -101,6 +101,18 @@ export function adoptSpaceLayoutCold(fromId: string, toId: string): void {
   else clearLayout()
 }
 
+/** 「把这个 Space 固定到系统桌面」的宿主接缝(2026-08-20)。引擎不认识 Capacitor / 安卓,
+ *  由 mobile 侧在启动时注册实现;没注册(桌面 / web)时 pinSpaceToHome 返回 false,调用方当无事发生。
+ *  接缝形态与 setRibbonActions / setEngineI18n 同款:引擎只留一个口子,绝不 import feature。 */
+let spacePin: ((id: string, name: string) => void) | null = null
+export function setSpacePinHandler(fn: ((id: string, name: string) => void) | null): void { spacePin = fn }
+/** 有宿主实现则请求固定(系统自己弹确认框),返回是否发出了请求。 */
+export function pinSpaceToHome(id: string, name: string): boolean {
+  if (!spacePin) return false
+  spacePin(id, name)
+  return true
+}
+
 export const registerSpace = (def: SpaceDefinition): void => useSpaceStore.getState().registerSpace(def)
 export const unregisterSpace = (id: string): void => useSpaceStore.getState().unregisterSpace(id)
 export const setActiveSpace = (id: string): void => useSpaceStore.getState().setActiveSpace(id)

@@ -1112,6 +1112,9 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: var(--text-muted);
 }
+.tool-group-cur-copy {
+  display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+}
 .tool-group-cur .file { color: var(--accent-ink); font-family: var(--font-mono); font-size: 12px; }
 .tool-group-status { flex-shrink: 0; display: inline-flex; }
 .tool-group-list { padding: 2px 0 4px; border-top: var(--border-width) solid var(--border); }
@@ -1123,6 +1126,8 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
 }
 .tool-row-head:hover { background: var(--overlay-subtle); }
 .tool-row-head > svg:first-child { color: var(--text-faint); flex-shrink: 0; }
+.tool-row-copy { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+.tool-row-copy-text { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; vertical-align: bottom; }
 .tool-row-verb { color: var(--text-muted); flex-shrink: 0; }
 .tool-row-target {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1134,6 +1139,40 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
 .tool-row-stat .del { color: var(--danger); }
 .tool-row-status { flex-shrink: 0; display: inline-flex; width: 13px; }
 .tool-row .tool-card-body { padding-left: 22px; }
+
+/* Chat View 运行态:只有一束窄光从左到右完整扫出，末段停顿后再开始。
+ * 背景不重复，避免同一段文字同时出现多道光；文字仍留在 DOM 中供读屏读取。 */
+@keyframes chat-run-shimmer {
+  0% { background-position: 100% 0; }
+  72% { background-position: 0% 0; }
+  100% { background-position: 0% 0; }
+}
+.chat-run-shimmer-text {
+  --chat-shimmer-color: var(--accent-ink);
+  color: var(--chat-shimmer-color);
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--chat-shimmer-color) 42%, transparent) 0%,
+    color-mix(in srgb, var(--chat-shimmer-color) 42%, transparent) 47%,
+    var(--chat-shimmer-color) 50%,
+    color-mix(in srgb, var(--chat-shimmer-color) 42%, transparent) 53%,
+    color-mix(in srgb, var(--chat-shimmer-color) 42%, transparent) 100%
+  );
+  background-size: 280% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: chat-run-shimmer 2.1s linear infinite;
+}
+.chat-thinking-live { width: fit-content; max-width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-run-shimmer-text {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
 
 /* ─── 审批卡片(对齐 LCL:中性柔影浮卡,accent 只留在图标与主按钮) ─── */
 .approval-card {
@@ -1197,6 +1236,47 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
   box-shadow: var(--card-shadow);
 }
 .inquiry-card.resolved { opacity: 0.75; box-shadow: none; }
+/* sketch 内容面:它属于消息正文,不是另一张实底浮卡。透明画布透出当前 Chat View(含 Side Panel),
+ * 只留 overlay-medium 的安静轮廓；不用硬色 --border,避免自定义配色把明暗关系翻转。 */
+.sketch-card {
+  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.12));
+  background: transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  overflow: hidden;
+}
+.sketch-card-title {
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+  padding: 3px 24px 7px;
+  border: 0;
+}
+.sketch-frame { display: block; width: 100%; border: 0; background: transparent; }
+.sketch-card-note { padding: 12px; font-size: 13px; color: var(--text-muted); }
+/* 折叠夹:默认高度上限 = 右侧车道那两张卡(任务概览 / Agent Desk)的高度,用户口径「一样高」。
+ * 算式来源(chat2.css):.t2-rail 铺满 .t2-chat-col 且上下各 padding 16 → 车道内容高 = 100% − 32;
+ * 两卡各 calc(50% - 5px) ⇒ 50cqb − 16 − 5。cqb 解析到最近的 size 容器 = .t2-chat-col
+ * (container-type: size,见 chat2.css 的头像宽高比查询)。
+ * ⚠️移动壳里若这条链上没有 size 容器,cqb 回落到小视口单位 ≈ 半屏 —— 观感一致,不是 bug。
+ * 溢出遮罩用 mask 而非渐变叠层:卡内是 iframe,盖不住也不该盖(会吃掉指针事件)。 */
+.sketch-clip {
+  max-height: calc(50cqb - 21px);
+  overflow: hidden;
+}
+.sketch-clip.open { max-height: none; }
+.sketch-clip.faded {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
+}
+.sketch-card-toggle {
+  display: block; width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent; cursor: pointer;
+  font: inherit; font-size: 11.5px; font-weight: 600;
+  letter-spacing: .02em; color: var(--text-muted);
+  transition: color var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
+}
+.sketch-card-toggle:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .inquiry-q {
   display: flex;
   align-items: center;

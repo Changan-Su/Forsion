@@ -148,6 +148,8 @@ async function startStubEngine(data = {}) {
     if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
     if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id });
+    // 通道轮询(15s):不给这个端点的话 catch-all 缺 channels 字段,毒化 channelsStore → 侧栏崩「not iterable」
+    if (p === '/agent/channels') return json({ channels: [], available: false });
 
     // 其余给「空但结构正确」的应答:桌面启动会摸不少端点,少一个就卡在加载态。
     return json({

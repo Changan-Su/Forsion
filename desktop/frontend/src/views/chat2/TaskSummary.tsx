@@ -5,7 +5,7 @@
  * 窄了就整块收掉、正文回到全宽 —— 组件始终挂着,靠 class 切换,才有进出动画。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, Loader2, Pencil, Plus, Search, X, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, Pencil, Plus, Search, X, XCircle } from 'lucide-react'
 import { describeTool } from '../../components/ToolGroup'
 import { humanizeRunError, ReloginChip } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
@@ -149,16 +149,16 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
   const StateIcon = f.state === 'attention' ? AlertTriangle
     : f.state === 'error' ? XCircle
     : f.state === 'stopped' ? CircleStop
-    : f.state === 'running' ? Loader2
+    : f.state === 'running' ? null
     : CheckCircle2
 
   return (
     // 卡本身不再单列标题(对齐 Codex:开篇即第一个分区),标题降级为无障碍名。
-    <aside className={`t2-tsum${hasFacts(f) ? ' show' : ''}`} aria-hidden={!hasFacts(f)} aria-label={t('tsum.title')}>
+    <aside className={`t2-tsum${hasFacts(f) ? ' show' : ''}`} aria-hidden={!hasFacts(f)} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
       <div className="t2-tsum-in">
-        <div className={`t2-tsum-state ${f.state}`}>
-          <StateIcon size={14} className={f.state === 'running' ? 'spin' : undefined} />
-          <span className="t2-tsum-state-tx">{t(`tsum.state.${f.state === 'idle' ? 'done' : f.state}`)}</span>
+        <div className={`t2-tsum-state ${f.state}`} role="status" aria-live="polite">
+          {StateIcon && <StateIcon size={14} />}
+          <span className={`t2-tsum-state-tx${f.state === 'running' ? ' chat-run-shimmer-text' : ''}`}>{t(`tsum.state.${f.state === 'idle' ? 'done' : f.state}`)}</span>
           {f.todos.length > 0 && <span className="t2-tsum-count">{done}/{f.todos.length}</span>}
         </div>
         {elapsed >= 30_000 && <div className="t2-tsum-sub">{t('tsum.elapsed', { t: fmtDur(elapsed) })}</div>}

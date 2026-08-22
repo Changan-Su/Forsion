@@ -9,9 +9,10 @@
  * - 系统返回(Android):MobileRoot 派发可取消的 `forsion:mobile-back`,本壳先接管 tab sheet/「⋯」的关闭。
  * mobile 构建直接渲染它(MobileRoot);desktop/web 由 Shell 在 UI_MODE==='mobile' 时套「手机框」渲染。
  */
-import { Suspense, useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState, type RefObject } from 'react'
+import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus } from 'lucide-react'
-import { useSpaceStore, setActiveSpace, getActiveSpace } from './spaceRegistry'
+import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { getView } from './viewRegistry'
 import { label } from './types'
@@ -113,8 +114,6 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
   const leavesSig = useWorkspace((s) => (side === 'left' ? s.leftLeaves : s.rightLeaves).map((r) => r.id).join(','))
   const activeId = useWorkspace((s) => (side === 'left' ? s.leftActiveId : s.rightActiveId))
   void leavesSig; void activeId // 仅用于订阅触发重渲染;真身走 getState() 读
-  // 抽屉内反向横滑关闭(左抽屉左滑/右抽屉右滑;点被推开的 main 关闭在 Host 的 dim 层)。
-  const swipe = useRef<{ x: number; y: number; t: number } | null>(null)
   // push 形态容器**恒挂载**(mount 即 open 就没有滑入过渡了);内容首开才挂、之后常驻(保树状态+退场动画)。
   const [warm, setWarm] = useState(visible)
   if (visible && !warm) setWarm(true)
@@ -162,26 +161,138 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
   // docked 也要认 visible(顶栏钮/返回键关左栏后不能还杵在那,Codex 评审 P2)。
   if (docked) return !visible || leaves.length === 0 ? null : <aside className="mb-sidecol">{inner}</aside>
   return (
-    <div
-      className={`mb-drawer mb-drawer--${side}${visible && leaves.length > 0 ? ' open' : ''}`}
-      onTouchStart={(e) => {
-        const t0 = e.touches[0]
-        swipe.current = t0 && e.touches.length === 1 ? { x: t0.clientX, y: t0.clientY, t: Date.now() } : null
-      }}
-      onTouchEnd={(e) => {
-        const s = swipe.current
-        swipe.current = null
-        const t0 = e.changedTouches[0]
-        if (!s || !t0 || Date.now() - s.t > 600) return
-        const dx = t0.clientX - s.x
-        const dy = t0.clientY - s.y
-        if (Math.abs(dx) < 56 || Math.abs(dx) < 2 * Math.abs(dy)) return
-        if ((side === 'left' && dx < 0) || (side === 'right' && dx > 0)) close()
-      }}
-    >
+    // 反向横滑关闭(左抽屉左滑/右抽屉右滑)已并进 Host 的 useDrawerDrag —— 三处 fling 判定
+    // (main 呼出 / 抽屉内关 / dim 上关)本来就是同一件事的三个入口,合成一个控制器才有中间态。
+    <div className={`mb-drawer mb-drawer--${side}${visible && leaves.length > 0 ? ' open' : ''}`}>
       {warm ? inner : null}
     </div>
   )
+}
+
+/** 左右抽屉的**跟手**拖拽(2026-08-20 用户实报「左右面板不跟手、没有中间态」)。
+ *
+ *  改之前是三处各管一段的 fling 判定 —— main 上横滑呼出 / 抽屉内反向滑关 / dim 上滑关 ——
+ *  三处都只看 touchstart→touchend 的净位移,中间一帧位移都不产生:面板要么在这头要么在那头。
+ *  它们本来就是同一件事的三个入口,合成一个挂在 `.mb-body` 上的控制器才可能有中间态。
+ *  touchmove 逐帧写 `--mb-p`(0=关 1=全开的**比例**),松手按位置 + 甩动速度吸附。
+ *
+ *  ⚠️ 用比例不用像素:`.mb-drawer-body` 上挂着 `zoom: 1.15`,像素在视口坐标与局部坐标里对不上
+ *     (栽过一次,见 desktop 的 zoomOf 补偿);比例是两个视口量相除,天生免疫。
+ *  ⚠️ 必须原生 addEventListener + `passive: false`:React 在根上是被动注册 touchmove 的,
+ *     它的 onTouchMove 里 preventDefault() 不生效,横滑会被浏览器同时当成滚动。
+ *  ⚠️ 方向锁定判在第一次 preventDefault **之前**:纵向滚动一帧都不能被影响。
+ *  ⚠️ 松手顺序:`flushSync` 里先 toggleSidebar(React 当场把 .open/.push-* 打上),**下一帧**才摘
+ *     data-drag。同帧摘 = 面板先跳回未拖前的位置再动画(经典 snap-back);flushSync 是为了让
+ *     「React 已提交」这件事确定发生在 rAF 之前 —— 本控制器是原生监听,普通更新不保证这个先后。
+ *     CSS 那边 data-drag 的特异性高于 .open 与 push 那几条,所以中间这一帧看到的仍是手指停下的位置。
+ */
+function useDrawerDrag(
+  bodyRef: RefObject<HTMLDivElement | null>,
+  wide: boolean,
+  hasLeft: boolean,
+  hasRight: boolean,
+): void {
+  const envRef = useRef({ wide, hasLeft, hasRight })
+  envRef.current = { wide, hasLeft, hasRight }
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!body) return
+    const LOCK = 10 // 方向锁定阈值(px)
+    const FLING = 0.5 // px/ms:超过这个速度按甩动方向吸附,不看拖过没拖过一半
+    type Drag = {
+      x0: number; y0: number
+      /** 起手点合不合格:白板/PDF/横向可滚动区里横滑是人家的手势,只让屏幕边缘起手抢 */
+      ok: boolean
+      side: 'left' | 'right' | null
+      opening: boolean
+      w: number
+      lastX: number; lastT: number; vx: number
+    }
+    let d: Drag | null = null
+    const clamp = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n)
+    const clearDrag = (): void => {
+      body.removeAttribute('data-drag')
+      body.classList.remove('mb-drag-push')
+      body.style.removeProperty('--mb-p')
+    }
+
+    const onStart = (e: TouchEvent): void => {
+      d = null
+      const t = e.touches[0]
+      if (!t || e.touches.length > 1) return
+      const target = e.target as HTMLElement | null
+      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container')
+      if (!exempt) {
+        for (let el = target; el && el !== body; el = el.parentElement) {
+          const cs = getComputedStyle(el)
+          if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) { exempt = true; break }
+        }
+      }
+      const EDGE = 24
+      const edgeStart = t.clientX < EDGE || t.clientX > window.innerWidth - EDGE
+      d = { x0: t.clientX, y0: t.clientY, ok: !exempt || edgeStart, side: null, opening: false, w: 0, lastX: t.clientX, lastT: Date.now(), vx: 0 }
+    }
+
+    const onMove = (e: TouchEvent): void => {
+      if (!d) return
+      const t = e.touches[0]
+      if (!t) return
+      const dx = t.clientX - d.x0
+      const dy = t.clientY - d.y0
+      if (!d.side) {
+        if (Math.abs(dx) < LOCK) return
+        if (Math.abs(dx) < Math.abs(dy) || !d.ok) { d = null; return } // 纵向 / 豁免区:整段让出去
+        const ws = useWorkspace.getState()
+        const env = envRef.current
+        // 开着的那侧优先接管(窄屏一次只开一侧;宽屏左栏是并排常驻的 sidecol,不参与拖拽)。
+        if (ws.rightVisible && dx > 0) { d.side = 'right'; d.opening = false }
+        else if (ws.leftVisible && !env.wide && dx < 0) { d.side = 'left'; d.opening = false }
+        else if (ws.leftVisible || ws.rightVisible) { d = null; return }
+        else if (dx > 0 && env.hasLeft && !env.wide) { d.side = 'left'; d.opening = true }
+        else if (dx < 0 && env.hasRight) { d.side = 'right'; d.opening = true }
+        else { d = null; return }
+        const panel = body.querySelector<HTMLElement>(`.mb-drawer--${d.side}`)
+        d.w = panel?.getBoundingClientRect().width ?? 0
+        if (!d.w) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
+        body.dataset.drag = d.side
+        if (!envRef.current.wide) body.classList.add('mb-drag-push') // 宽屏右抽屉不推 main
+      }
+      const now = Date.now()
+      if (now > d.lastT) d.vx = (t.clientX - d.lastX) / (now - d.lastT)
+      d.lastX = t.clientX
+      d.lastT = now
+      const sign = d.side === 'left' ? 1 : -1
+      body.style.setProperty('--mb-p', clamp((d.opening ? 0 : 1) + (sign * dx) / d.w).toFixed(4))
+      e.preventDefault()
+    }
+
+    const onEnd = (): void => {
+      const cur = d
+      d = null
+      if (!cur || !cur.side) return
+      const sign = cur.side === 'left' ? 1 : -1
+      const p = Number(body.style.getPropertyValue('--mb-p')) || 0
+      const v = sign * cur.vx // 正 = 朝「开」的方向甩
+      const wantOpen = v > FLING ? true : v < -FLING ? false : p > 0.5
+      const ws = useWorkspace.getState()
+      const isOpen = cur.side === 'left' ? ws.leftVisible : ws.rightVisible
+      if (wantOpen !== isOpen) flushSync(() => ws.toggleSidebar(cur.side as 'left' | 'right'))
+      requestAnimationFrame(clearDrag)
+    }
+
+    body.addEventListener('touchstart', onStart, { passive: true })
+    body.addEventListener('touchmove', onMove, { passive: false })
+    body.addEventListener('touchend', onEnd)
+    body.addEventListener('touchcancel', onEnd)
+    return () => {
+      body.removeEventListener('touchstart', onStart)
+      body.removeEventListener('touchmove', onMove)
+      body.removeEventListener('touchend', onEnd)
+      body.removeEventListener('touchcancel', onEnd)
+      clearDrag()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 }
 
 /** 切 Space 但**留在左抽屉里**(用户拍板 2026-08-13:切完接着在面板里找东西,不要被甩回主区)。
@@ -214,7 +325,15 @@ function DrawerFoot() {
             const Icon = sp.icon
             const on = sp.id === activeId || (!spaces.some((x) => x.id === activeId) && sp === spaces[0])
             return (
-              <button key={sp.id} className={`mb-tab${on ? ' on' : ''}`} onClick={() => switchSpaceKeepDrawer(sp.id)}>
+              <button
+                key={sp.id}
+                className={`mb-tab${on ? ' on' : ''}`}
+                onClick={() => switchSpaceKeepDrawer(sp.id)}
+                /* 长按 = 把这个 Space 固定到系统桌面(安卓 WebView 的长按就是 contextmenu)。
+                   宿主没实现(桌面 / web)时 pinSpaceToHome 返回 false —— 那就当普通长按,
+                   连默认菜单都别拦,免得白白吃掉一个原生行为。 */
+                onContextMenu={(e) => { if (pinSpaceToHome(sp.id, label(sp.name))) e.preventDefault() }}
+              >
                 {Icon && <Icon size={20} />}
                 <span className="mb-tab-label">{label(sp.name)}</span>
               </button>
@@ -375,44 +494,14 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     if (!ws.leftVisible && (ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0)) ws.toggleSidebar('left')
   }, [wide])
 
-  // main view 横滑呼出侧栏(用户拍板:全域滑动;白板/PDF/横向可滚动区内只认屏幕边缘起手防误触)。
-  // touch 事件专属 —— 桌面鼠标不触发;不 preventDefault,纵向滚动照常。
-  const swipe = useRef<{ x: number; y: number; t: number; ok: boolean } | null>(null)
-  const swipeStart = (e: React.TouchEvent): void => {
-    const t0 = e.touches[0]
-    if (!t0 || e.touches.length > 1) { swipe.current = null; return }
-    let exempt = !!(e.target as HTMLElement).closest?.('.amx-draw, .pdfa-container')
-    if (!exempt) {
-      // 横向可滚动祖先(看板/表格):滑动是它的手势,只让边缘起手抢。向上最多走到 .mb-main。
-      for (let el = e.target as HTMLElement | null; el && el !== e.currentTarget; el = el.parentElement) {
-        const cs = getComputedStyle(el)
-        if ((cs.overflowX === 'auto' || cs.overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) { exempt = true; break }
-      }
-    }
-    const EDGE = 24
-    const edgeStart = t0.clientX < EDGE || t0.clientX > window.innerWidth - EDGE
-    swipe.current = { x: t0.clientX, y: t0.clientY, t: Date.now(), ok: !exempt || edgeStart }
-  }
-  const swipeEnd = (e: React.TouchEvent): void => {
-    const s = swipe.current
-    swipe.current = null
-    const t0 = e.changedTouches[0]
-    if (!s || !s.ok || !t0 || Date.now() - s.t > 600) return
-    const dx = t0.clientX - s.x
-    const dy = t0.clientY - s.y
-    if (Math.abs(dx) < 56 || Math.abs(dx) < 2 * Math.abs(dy)) return
-    const ws = useWorkspace.getState()
-    if (dx > 0) { if (hasLeft && !ws.leftVisible) ws.toggleSidebar('left') }
-    else if (hasRight && !ws.rightVisible) ws.toggleSidebar('right')
-  }
-
-  // 关抽屉(dim 层点击/横滑):窄屏一次只开一侧,右优先(右开着必是最上)。
+  // 关抽屉(dim 层点击):窄屏一次只开一侧,右优先(右开着必是最上)。横滑关闭走 useDrawerDrag。
   const closeDrawers = (): void => {
     const ws = useWorkspace.getState()
     if (ws.rightVisible) ws.toggleSidebar('right')
     else if (ws.leftVisible && !wide) ws.toggleSidebar('left')
   }
-  const dimSwipe = useRef<{ x: number; y: number; t: number } | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  useDrawerDrag(bodyRef, wide, hasLeft, hasRight)
   const pushed = !wide && (leftVisible || rightVisible)
 
   {/* 按钮收成左右两组胶囊(Obsidian 式)。顺序不许动:mobile e2e(note-open)靠
@@ -445,35 +534,16 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
-      <div className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
+      <div ref={bodyRef} className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
         <Drawer side="left" docked={wide} showFoot />
-        <main ref={mainRef} className="mb-main" onTouchStart={swipeStart} onTouchEnd={swipeEnd}>
+        <main ref={mainRef} className="mb-main">
           {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
               ① push 抽屉的 translate 只打在 .mb-main —— 挂外面胶囊就不跟着内容滑,视觉当场穿帮;
               ② 宽屏 docked 形态左栏(.mb-sidecol)与 main 并排,挂外面的 left:0 会盖到左栏头上。 */}
           {topbar}
           <LeafHost />
         </main>
-        <div
-          className={`mb-push-dim${pushed || (wide && rightVisible) ? ' on' : ''}`}
-          onClick={closeDrawers}
-          onTouchStart={(e) => {
-            const t0 = e.touches[0]
-            dimSwipe.current = t0 && e.touches.length === 1 ? { x: t0.clientX, y: t0.clientY, t: Date.now() } : null
-          }}
-          onTouchEnd={(e) => {
-            const s = dimSwipe.current
-            dimSwipe.current = null
-            const t0 = e.changedTouches[0]
-            if (!s || !t0 || Date.now() - s.t > 600) return
-            const dx = t0.clientX - s.x
-            const dy = t0.clientY - s.y
-            if (Math.abs(dx) < 56 || Math.abs(dx) < 2 * Math.abs(dy)) return
-            const ws = useWorkspace.getState()
-            if (dx < 0 && ws.leftVisible && !wide) ws.toggleSidebar('left')
-            else if (dx > 0 && ws.rightVisible) ws.toggleSidebar('right')
-          }}
-        />
+        <div className={`mb-push-dim${pushed || (wide && rightVisible) ? ' on' : ''}`} onClick={closeDrawers} />
         <Drawer side="right" />
       </div>
 

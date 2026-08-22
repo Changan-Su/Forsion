@@ -9,7 +9,7 @@ interface P { userId: string; username: string; page: string | null; at: number 
 
 export function PresenceDots(): React.ReactElement | null {
   const collab = window.amadeusCollab
-  const activePage = usePageStore((s) => s.activePage)
+  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
   const vaultSide = usePageStore((s) => s.vaultSide)
   const [list, setList] = useState<P[]>([])
   // 桌面(有 amadeusSync)只在 Cloud 侧渲染/心跳:Local 侧的页面路径对云端无意义。

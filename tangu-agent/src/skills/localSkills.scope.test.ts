@@ -1,4 +1,4 @@
-/** 技能作用域:agent 级(agents/<slug>/skills)+ 项目级(<cwd>/.forsion/skills)加载与覆盖。
+/** 技能作用域:agent 级(agents/<slug>/skills)+ 项目级(<cwd>/.tangu/skills,旧位 .forsion/skills 只读兼容)加载与覆盖。
  *  独立文件 → seedBuiltinSkills 的一次性播种不污染别的用例。 */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs, mkdirSync, writeFileSync } from 'node:fs';
@@ -19,7 +19,10 @@ describe('localSkills agent/project 作用域', () => {
     process.env.TANGU_HOME = home;
     skill(path.join(home, 'skills'), 'user-skill', 'User Skill');
     skill(path.join(home, 'agents', 'coding', 'skills'), 'agent-skill', 'Agent Skill');
-    skill(path.join(cwd, '.forsion', 'skills'), 'proj-skill', 'Project Skill');
+    skill(path.join(cwd, '.tangu', 'skills'), 'proj-skill', 'Project Skill');
+    skill(path.join(cwd, '.forsion', 'skills'), 'legacy-skill', 'Legacy Project Skill'); // v2.3.3 旧位,仍要认
+    skill(path.join(cwd, '.forsion', 'skills'), 'moved', 'From Legacy');
+    skill(path.join(cwd, '.tangu', 'skills'), 'moved', 'From Tangu'); // 同 id → 新位置赢
     skill(path.join(home, 'skills'), 'shared', 'From User');
     skill(path.join(home, 'agents', 'coding', 'skills'), 'shared', 'From Agent'); // 同 id
   });
@@ -46,6 +49,8 @@ describe('localSkills agent/project 作用域', () => {
     const ids = all.map((s) => s.id);
     expect(ids).toContain('local:agent-skill');
     expect(ids).toContain('local:proj-skill');
+    expect(ids).toContain('local:legacy-skill'); // ⚠️旧位置的技能不能因为改名就消失
+    expect(all.find((s) => s.id === 'local:moved')?.name).toBe('From Tangu'); // 同 id 新位置赢
     expect(all.find((s) => s.id === 'local:shared')?.name).toBe('From Agent');
     // coding 激活 → 包内置 agent-skills/coding/ 的默认技能也应加载(随包发布,不在 temp home)
     expect(ids).toContain('local:forsion-webapp');

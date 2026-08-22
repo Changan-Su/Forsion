@@ -7,7 +7,7 @@ import type { PageProps } from '@amadeus-shared/ipc'
 import { cellToFmValue } from '@amadeus-shared/db/pageFrontmatter'
 import type { CellValue, ColumnType } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
-import { cascadeFdAfterRename, flushAllScopes, remapScopePaths } from './pageStore'
+import { cascadeFdAfterRename, flushAllScopes, remapScopePaths, usePageStore } from './pageStore'
 
 export interface FolderView {
   status: 'loading' | 'ok' | 'error'
@@ -100,8 +100,11 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
   },
 
   async deleteNote(folder, notePath) {
-    if (amadeus.trashEntry) await amadeus.trashEntry(notePath) // 可恢复(回收站);缺位端硬删
-    else await amadeus.deletePage(notePath)
+    // ⚠️ 必须走 pageStore.deletePage,别直打 IPC:那条路上挂着整串善后 —— 退休 unified 实例
+    //    (不退休的话,被删笔记若正开在编辑器里,它 800ms 的防抖写会把文件**复活**)、级联 .fd、
+    //    清各 scope 的 activeNotePath、广播给攥着该路径的编辑器标签改指。这里删的是「笔记视图」
+    //    的一行,而那一行完全可能正开在旁边的标签里(2026-08-20)。
+    await usePageStore.getState().deletePage(notePath)
     await get().refresh(folder)
   },
 

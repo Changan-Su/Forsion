@@ -124,4 +124,18 @@ export function label(v: string | (() => string)): string {
   return typeof v === 'function' ? v() : v
 }
 
+/** 面板参数里「指向哪个对象」的那部分:一切 *Path / path / sessionId。视图类型五花八门
+ *  (pdfPath / dbPath / drawingPath / dashPath / imagePath / filePath / notePath / path…),
+ *  与其维护一张类型表,不如按参数名收 —— 新视图自带命名习惯就自动进比对。
+ *  用途:MainTab 的身份指纹。**同一个 tab 里就地换一个文件**只改这些参数,不进比对的话
+ *  mainTabs 引用不变 → 导航历史/最近使用两条订阅整片看不见这次跳转(2026-08-20 用户实报
+ *  「同一个 View 里发生页面跳转,前进后退无法识别」)。 */
+export function identitySig(params: Record<string, unknown>): string {
+  return Object.keys(params)
+    .filter((k) => /path$/i.test(k) || k === 'sessionId')
+    .sort()
+    .map((k) => `${k}=${String(params[k])}`)
+    .join('&')
+}
+
 export type { ReactNode }

@@ -1,7 +1,7 @@
 ---
 name: Forsion 扩展开发
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.6.0
+version: 1.8.0
 author: Forsion
 category: Forsion
 ---
@@ -71,6 +71,62 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 ```
 
 两种生命周期,发包前必须分清:**随包**(引擎插件、Space —— 父插件禁用即级联关闭/收起,卸载一并消失)与**播种一次**(Agent —— 首次发现拷入引擎成为活体,升级不覆盖、卸载保留)。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
+## 桌面插件:贡献点全表(动手前先看这张表)
+
+`ctx` 上的注册口就这些 —— **内置与外置拿到的是同一份**(`pluginStore.makeContext`,能力对等原则)。
+细节正典 = 仓根 `docs/Function/生态内容制作指南.md`(本表每一行都能在那儿找到对应小节);
+类型契约 = `Forsion-Genesis/desktop/frontend/src/amadeus/plugins/types.ts`。
+
+| 贡献点 | 给用户的入口 | 备注 |
+|---|---|---|
+| `registerCommand` | 命令面板 | id 处于全局命名空间,裸名会互顶 |
+| `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
+| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el)` 返 disposer),外置插件的主力 |
+| `registerFileType` | 自定义 `.x.md` 文件类型 | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
+| `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
+| `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
+| `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
+| `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例 |
+| `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
+| `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
+| `registerTheme` | 强调色主题 | 与磁盘主题包(`~/.forsion/themes/`)是两件事 |
+| `registerPanel` | 右侧栏面板 | ⚠️收 **React 组件** —— 外置插件得自带一份 React(mindmap 有先例),多数场景改用 `registerView` |
+| `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
+| `ctx.notify(msg, {level})` | 右上角通知 | 自动标插件名,用户可按插件静音 |
+| `ctx.achievements` | 成就系列 + `track(event, n)` | 宿主强制 `plugin:<id>:` 前缀,伪造不了官方成就 |
+| `ctx.activity.log(event, detail)` | 写进活动日志(Muse 读得到) | 同款前缀纪律 |
+| `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
+| `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
+| manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
+| manifest `onboarding` | 装完的首启引导卡 | **别 recommends 自家已内嵌的 agent/skill**(会引导去市场重复装) |
+
+`ctx.app` 上另有三组:**整库文件读写**、**只读全库查询**、**块表面** —— 各占下面一节。
+
+### 只读全库查询(2026-08-14 起)
+
+全部可选 → 一律 `ctx.app.listPages?.()`;**没有活动库/桥缺席时给空数组不抛错**,`vaultRoot` 给 `null`。
+
+| | 语义与坑 |
+|---|---|
+| `listPages()` | 笔记清单,vault 相对路径,**不截断**;插件自定义后缀已被主进程排除在外 |
+| `listFiles()` | 文件树可见的非笔记文件。⚠️遍历**跳过一切点目录/点文件** → 经 `saveAsset()` 落进 `.amadeus/` 的页面附件枚举不到,**别声称「库里所有图片」** |
+| `searchVault(q)` | 全库笔记全文检索。⚠️**最多 50 条且可能截断**,要穷举别靠它;`line` 是剥掉 frontmatter 后的行号**不是磁盘坐标**;`score` 不透明,跨版本不保证稳定 |
+| `vaultRoot()` | 库的绝对路径(把路径喂给 Agent 的 host 工具时才需要)。⚠️含用户名/组织目录等**敏感信息,不得默认持久化或上报**;切库瞬间与主进程短暂不同源,**别缓存过夜** |
+
+### 双语与图标
+
+- `ctx.getLocale()` 取初值 + `ctx.subscribeLocale(cb)` 只报变化。判定 = **切语言时视图不重挂也要变**;
+  但整树重建会吃掉用户没提交的输入 —— 重建前快照、重建后回填。
+- ⚠️`t()` 的占位符替换**必须单趟正则**:`s.replace(/\{(\w+)\}/g, (m,k)=> (k in vars ? String(vars[k]) : m))`。
+  逐个 `split('{k}').join(v)` 会让先替进去的值被后面轮次再吃一遍(用户把卡组命名成 `{n}` → 自己的数据被当占位符)。
+- ⚠️**会落盘的兜底默认名(文件名、frontmatter 值)一律钉死中文常量,不许取 `t()`** —— 否则英文界面建出来的
+  文件名与中文界面对不上,同一个库里冒出两套。
+- 贡献点的**标题是注册时的单字符串**(命令 title / slash label / view title / setting label / 成就标题),
+  宿主不做运行时重解析 → 切语言要等重启。**不许**用「语言变了就 teardown 重注册」绕(会打断录音、写队列、已开的视图)。
+- `icon` 一律写宿主词表里的名字(`'template'` / `'pin'` / `'callout-warning'`…),**别塞 emoji** ——
+  命中词表宿主就画和内置项同一套 SVG。全表见正典文档「图标」节与 `components/icons` 的 `PLUGIN_ICONS`;
+  ⚠️词表键全是 `[a-z0-9-]`,只增不改不删。
+
 
 ## 插件文件读写与「工作文件夹」(2026-08-03 起)
 
@@ -83,14 +139,28 @@ await ctx.app.writeFile(`${folder}/笔记.md`, markdown)
 
 要自定义这条设置的 label/描述,setup 里自注册同 key 的 setting(同 key 重注册即覆盖标准行);用户改文件夹不迁移旧文件,读端自己做旧夹兜底。范例:`bluebird` 1.3.0(分析完自动保存 + 旧夹兜底 + check.mjs 迁移断言)。Session 同款约定:Tangu 会话默认工作区在笔记库 `Sessions/`——插件产物与会话产物同库,都能被笔记引用。
 
-## 块表面:让插件的界面里放**真 Amadeus 块**(2026-07-26 起)
+## 块表面:当前这篇笔记的读写(2026-07-26 起;2026-08-20 改口径)
+
+> **⚠️ 先看 `page.model`。** 普通笔记如今默认是 **v4/unified** 载体,**没有块 id** —— `blocks`/`order`
+> 在它上面恒空,正文在 `page.text` 里。块寻址类调用在 v4 笔记上**诚实拒绝并 warn**(不静默),
+> 改内容一律用两条路由都成立的 `insertMarkdown`:
+>
+> ```js
+> const pg = ctx.app.getPage()
+> const text = pg.text ?? (pg.order || []).map((id) => pg.blocks[id]).join('\n\n')  // 新老宿主通吃
+> if (pg.model === 'blocks') { /* v3:可以按块 id 寻址 */ }
+> ctx.app.insertMarkdown?.(pg.token, '> 一段引用', 'start')   // 'cursor'(缺省)/'start'/'end'
+> ```
+>
+> **`mountBlocks` 完整可用的地方是插件自定义文件类型**(`.mindmap.md` / `.canvas.md`,经 `file.surface`)
+> —— 那类文件按设计钉在 v3,思维导图那套一个字都不用改。下面这段讲的就是它。
 
 **能力对等原则**:内置插件和外置插件拿到的 `ctx` 一模一样,唯一区别是内置的**已经装好了**。此前不是这样 —— 内置插件跑在进程内、能直接给 React 组件,所以只有它们能渲染真块;外置插件是裸 `setup(ctx)` 体,只有 DOM。补上 `ctx.app` 的块表面之后这条缺口关掉了。
 
 想做「一个节点/一张卡片里就是一个可编辑的 Amadeus 块」这类界面(思维导图、看板、白板便签),别自己复刻编辑器 —— **把 DOM 交给宿主渲染**:
 
 ```js
-const page = ctx.app.getPage()          // {token, path, status, blocks:{id→markdown}, order, fmExtra}
+const page = ctx.app.getPage()   // {token, path, status, text, model:'blocks'|'text', blocks, order, fmExtra}
 const dispose = ctx.app.mountBlocks(el, {
   token: page.token,
   blockId,
@@ -102,19 +172,25 @@ const dispose = ctx.app.mountBlocks(el, {
 
 **改数据一律要带 `page.token`**:块 id 是**页内**递增的(两页都有 `b1`)。插件拿着 A 页的 id、用户已切到 B 页时继续提交,轻则把块插进 B、重则删掉 B 的同名块 —— 令牌不匹配宿主直接拒绝并 warn。每次 `await` 之后重新 `getPage()` 取新令牌。
 
-| | 用途 |
-|---|---|
-| `getPage()` | 活动页快照(**冻结且全插件共用,别改它**) |
-| `subscribePage(cb)` | 块/顺序/外来 frontmatter 变了才回调,返回退订函数 |
-| `insertBlockAfter(token, afterId, content)` | 建块,返回新 id(`null` = 插到最前;令牌过期返回 `null`) |
-| `deleteBlock(token, id)` | 删块(async) |
-| `setFmExtra(token, text)` | 写**外来 frontmatter**——你的每页数据存这儿,进页面撤销栈 |
-| `undo(token)` / `redo(token)` | 走页面自己的撤销栈(结构改动天然可撤销) |
-| `requestFocus(id, place)` / `consumeFocus(id)` | 把光标送进某个块(只读焦点,不要令牌) |
-| `prompt(title, initial)` | 模态输入。**Electron 没有 `window.prompt`,永远别用 DOM 那个** |
+| | 用途 | v4 笔记 |
+|---|---|---|
+| `getPage()` | 当前这篇的快照(**冻结且全插件共用,别改它**) | ✅ |
+| `getPage().text` | 整篇正文 markdown(v3 = 块按 order 拼) | ✅ |
+| `getPage().model` | `'blocks'`(v3)/ `'text'`(v4)。**分叉判据**;老宿主没这字段 → 当 `'blocks'` | ✅ |
+| `subscribePage(cb)` | 正文/块/顺序/外来 frontmatter 变了才回调,返回退订函数 | ✅ |
+| `insertMarkdown(token, md, where?)` | 插一段 md,`where` = `'cursor'`(缺省)/`'start'`/`'end'` | ✅ |
+| `insertBlockAfter(token, afterId, content)` | 建块,返回新 id(`afterId=null` = 插到最前) | ❌ 返 `null` |
+| `deleteBlock(token, id)` | 删块(async) | ❌ |
+| `setFmExtra(token, text)` | 写**外来 frontmatter**——你的每页数据存这儿,进页面撤销栈 | ❌ 读可以,写还没开 |
+| `undo(token)` / `redo(token)` | 走页面自己的撤销栈(结构改动天然可撤销) | ❌ |
+| `requestFocus(id, place)` / `consumeFocus(id)` | 把光标送进某个块(只读焦点,不要令牌) | ❌ |
+| `mountBlocks(el, {token, blockId, …})` | 宿主往你的 DOM 里渲染真块 | ❌ 插件文件类型面照常 ✅ |
+| `prompt(title, initial)` | 模态输入。**Electron 没有 `window.prompt`,永远别用 DOM 那个** | ✅ |
 
 坑,按踩到的顺序:
 
+- **`page.text` 只读,而且在 v4 上是「上次保存那一刻」的快照**(≤800ms 陈旧)。**绝不「读全文 → 改 → 整篇写回」**:那 800ms 里用户敲的字会被你抹掉。改内容只有 `insertMarkdown`;插进去的文本必须能原样 markdown 往返(连续空格被压 → 宿主重载整篇 → 你的插件状态全没)。
+- **不给 v4 合成块 id 是刻意的**:PM 顶层节点没有身份,按位置编号的 id 用户按一次回车就全体位移,而令牌只挡「换了一篇」挡不住「同一篇里 id 易主」。宁可空,不可假。
 - **只服务活动页**。Amadeus 是「单活页」模型(同一时刻只加载一处,笔记编辑器和文件类型视图共用),插件跟着走。令牌闸是宿主兜的底,你自己也别拿旧快照连环操作。
 - **`fmExtra` 要外科式改**:用户和别的插件的键也在同一份 frontmatter 里,整段重写会抹掉它们。**绝不把数据塞进 `amadeus_layout`**(zod 无 passthrough,未知键加载即被 strip)。
 - **`blocks` 的引用是稳定的**:`subscribePage` 靠引用比较去重,自己缓存派生结果时也按引用判,别每帧深比较。快照本身是 `Object.freeze` 的(全插件共用一份,改它没用也不许改)。

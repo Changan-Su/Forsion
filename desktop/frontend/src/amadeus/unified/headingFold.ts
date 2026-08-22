@@ -1,6 +1,7 @@
 // v4 统一编辑器的标题小节折叠(AFFiNE 对齐,2026-08-14 用户拍板:**会话内状态,不落盘**)。
 // 折叠 = 纯装饰:标题后的小节(到下一个 level ≤ 本级的标题,或文末)整段 display:none;
-// 锚 = 标题节点顶层 pos,随事务 mapping 存活,标题被删/降不成标题即丢。序列化零影响,
+// 锚 = 标题节点的文档 pos(**任意深度**:顶层、卡内、分栏格内都算),随事务 mapping 存活,
+// 标题被删/降不成标题即丢。小节边界在标题**自己那个容器**里算,不跨出去。序列化零影响,
 // md 原样;编辑器重建(切源码/重开笔记)后全展开 —— 这是拍板的取舍,不是缺陷。
 // 交互两个入口:hover 把手的折叠钮(blockLayer 渲染,调这里的 API)+ 折叠标题行首的常驻
 // 展开钮(widget 装饰,不折叠时不出现,不占别的行的版面)。
@@ -19,44 +20,69 @@ interface FoldState {
 
 export const headingFoldKey = new PluginKey<FoldState>('AMX_HEADING_FOLD')
 
-/** 顶层小节末 index:从标题(顶层 index)往后,到下一个 level ≤ 本级的标题为止;
- *  空小节(紧跟同级/更高级标题或文末)返回 null = 没东西可折。 */
-function sectionEndIndex(doc: ProseNode, headIndex: number): number | null {
-  const head = doc.child(headIndex)
+/** 标题在**它自己那个容器**里的落点。⚠️ 容器不一定是 doc:卡(amadeusCanvasCard)、
+ *  分栏格里的标题一样要能折 —— 2026-08-20 用户报「各级别标题还是没能折叠」,探针实测
+ *  顶层标题出钮、卡内标题不出钮,病根就是这里原本只按 doc 的直接子节点找 index。
+ *  小节的边界也随之只在**同一个容器内**算:卡里的 `# 甲` 折不到卡外面去,天然正确。 */
+interface HeadingSite {
+  parent: ProseNode
+  index: number
+  /** 容器内容起点(顶层容器 = 0);容器内第 i 个子节点的前位 = base + 前 i 个的 nodeSize 之和 */
+  base: number
+}
+
+function headingSiteAt(doc: ProseNode, pos: number): HeadingSite | null {
+  // ⚠️ 边界守卫不能省:folded 锚是 mapping 过来的,可能落到范围外或节点当中,resolve 会抛。
+  if (!Number.isInteger(pos) || pos < 0 || pos > doc.content.size) return null
+  let $p
+  try {
+    $p = doc.resolve(pos)
+  } catch {
+    return null
+  }
+  // nodeAfter 非空即说明 pos 正落在容器的子节点边界上(落在文本块中间时 parent 是文本块,
+  // 那里不可能有 heading 直系子节点),所以这一条同时兼作「pos 是块前位」的判据。
+  const node = $p.nodeAfter
+  if (!node || node.type.name !== 'heading') return null
+  return { parent: $p.parent, index: $p.index(), base: $p.start() }
+}
+
+/** 容器内每个子节点的前位。 */
+function childPositions(site: HeadingSite): number[] {
+  const out: number[] = []
+  let at = site.base
+  site.parent.forEach((n) => {
+    out.push(at)
+    at += n.nodeSize
+  })
+  return out
+}
+
+/** 小节末 index:从标题往后,到下一个 level ≤ 本级的标题(或容器末)为止;
+ *  空小节(紧跟同级/更高级标题或容器末)返回 null = 没东西可折。 */
+function sectionEndIndex(parent: ProseNode, headIndex: number): number | null {
+  const head = parent.child(headIndex)
   const level = Number(head.attrs.level) || 1
   let end = headIndex
-  for (let i = headIndex + 1; i < doc.childCount; i++) {
-    const n = doc.child(i)
+  for (let i = headIndex + 1; i < parent.childCount; i++) {
+    const n = parent.child(i)
     if (n.type.name === 'heading' && (Number(n.attrs.level) || 1) <= level) break
     end = i
   }
   return end === headIndex ? null : end
 }
 
-/** pos 处的顶层节点是标题 → 返回其顶层 index;否则 null。 */
-function topHeadingIndexAt(doc: ProseNode, pos: number): number | null {
-  let at = 0
-  for (let i = 0; i < doc.childCount; i++) {
-    const n = doc.child(i)
-    if (at === pos) return n.type.name === 'heading' ? i : null
-    if (at > pos) return null
-    at += n.nodeSize
-  }
-  return null
-}
-
 function build(doc: ProseNode, folded: number[]): DecorationSet {
   const decos: Decoration[] = []
-  const tops: Array<{ pos: number; node: ProseNode }> = []
-  doc.forEach((node, offset) => tops.push({ pos: offset, node }))
   for (const fp of folded) {
-    const idx = tops.findIndex((t) => t.pos === fp)
-    if (idx < 0) continue
-    const end = sectionEndIndex(doc, idx)
+    const site = headingSiteAt(doc, fp)
+    if (!site) continue
+    const end = sectionEndIndex(site.parent, site.index)
     if (end == null) continue
-    decos.push(Decoration.node(fp, fp + tops[idx].node.nodeSize, { class: 'amx-heading-folded' }))
-    for (let i = idx + 1; i <= end; i++)
-      decos.push(Decoration.node(tops[i].pos, tops[i].pos + tops[i].node.nodeSize, { class: 'amx-fold-hidden' }))
+    const at = childPositions(site)
+    decos.push(Decoration.node(fp, fp + site.parent.child(site.index).nodeSize, { class: 'amx-heading-folded' }))
+    for (let i = site.index + 1; i <= end; i++)
+      decos.push(Decoration.node(at[i], at[i] + site.parent.child(i).nodeSize, { class: 'amx-fold-hidden' }))
     decos.push(
       Decoration.widget(
         fp + 1,
@@ -72,9 +98,11 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
             e.stopPropagation()
             const at = getPos()
             if (at == null) return
-            // widget 在标题内容首,标题节点前位置 = 所在顶层节点的 before
-            const headPos = view.state.doc.resolve(at).before(1)
-            toggleFoldAt(view, headPos)
+            // widget 在标题内容首 → 标题节点前位 = 它**所在那一层**的 before。
+            // ⚠️ 不能写死 before(1):卡内标题的 depth 是 2,写死 1 拿到的是**卡**的前位,
+            //    展开钮当场变哑巴(2026-08-20 与折叠钮不出现同一批修)。
+            const $at = view.state.doc.resolve(at)
+            toggleFoldAt(view, $at.before($at.depth))
           })
           return b
         },
@@ -93,22 +121,21 @@ export function toggleFoldAt(view: EditorView, headingPos: number): void {
  *  空小节先于 folded 判(Codex P2:被外部编辑掏空的小节不许报 'folded' 幽灵态)。 */
 export function foldStateAt(view: EditorView, pos: number): 'foldable' | 'folded' | null {
   const st = headingFoldKey.getState(view.state)
-  const idx = topHeadingIndexAt(view.state.doc, pos)
-  if (idx == null || sectionEndIndex(view.state.doc, idx) == null) return null
+  const site = headingSiteAt(view.state.doc, pos)
+  if (!site || sectionEndIndex(site.parent, site.index) == null) return null
   return st?.folded.includes(pos) ? 'folded' : 'foldable'
 }
 
 /** 折叠产生的隐藏区间(顶层文档坐标,[start, after) = 首隐藏节点前位 → 末隐藏节点后位)。 */
 export function hiddenRanges(doc: ProseNode, folded: number[]): Array<{ start: number; after: number }> {
   const out: Array<{ start: number; after: number }> = []
-  const tops: Array<{ pos: number; node: ProseNode }> = []
-  doc.forEach((node, offset) => tops.push({ pos: offset, node }))
   for (const fp of folded) {
-    const idx = tops.findIndex((t) => t.pos === fp)
-    if (idx < 0) continue
-    const end = sectionEndIndex(doc, idx)
+    const site = headingSiteAt(doc, fp)
+    if (!site) continue
+    const end = sectionEndIndex(site.parent, site.index)
     if (end == null) continue
-    out.push({ start: tops[idx + 1].pos, after: tops[end].pos + tops[end].node.nodeSize })
+    const at = childPositions(site)
+    out.push({ start: at[site.index + 1], after: at[end] + site.parent.child(end).nodeSize })
   }
   return out
 }
@@ -148,7 +175,7 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
               // 映射位仍是顶层标题就保留(H1→H2 折叠不丢);真删的锚经下面标题校验淘汰。
               folded = folded
                 .map((p) => tr.mapping.mapResult(p))
-                .filter((r) => !r.deleted || topHeadingIndexAt(tr.doc, r.pos) != null)
+                .filter((r) => !r.deleted || headingSiteAt(tr.doc, r.pos) != null)
                 .map((r) => r.pos)
             const meta = tr.getMeta(headingFoldKey) as { toggle?: number } | undefined
             if (meta?.toggle != null) {
@@ -158,8 +185,8 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
             // 只留「仍是顶层标题且小节非空」的锚(标题转段落=展开;小节被外部编辑掏空=展开,
             // 否则空小节留幽灵态,后续在标题下新打的内容会被旧状态当场隐藏 —— Codex P2)。
             folded = [...new Set(folded)].filter((p) => {
-              const i = topHeadingIndexAt(tr.doc, p)
-              return i != null && sectionEndIndex(tr.doc, i) != null
+              const site = headingSiteAt(tr.doc, p)
+              return site != null && sectionEndIndex(site.parent, site.index) != null
             })
             if (!tr.docChanged && !meta && folded === prev.folded) return prev
             return { folded, decos: build(tr.doc, folded) }

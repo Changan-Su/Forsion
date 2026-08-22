@@ -10,6 +10,7 @@ import path from 'node:path';
 import { assertPublicHttpUrl } from '../../core/util/urlSafety.js';
 import { tanguHome } from '../../core/tanguHome.js';
 import { getRawSection } from '../../core/config.js';
+import { formatToolOutput } from '../outputPersist.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 
@@ -295,14 +296,17 @@ export const browserToolsProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'browser_snapshot',
-          description: 'Read the accessibility-tree snapshot of the current browser page. compact=true returns a shorter view of interactive elements.',
+          description: 'Read the accessibility-tree snapshot of the current browser page. compact=true (the default) returns a shorter view of interactive elements; a full snapshot (compact=false) is large — oversized output is offloaded to a file with only a preview inline, so prefer compact unless you truly need the whole tree.',
           parameters: { type: 'object', properties: { compact: { type: 'boolean', description: 'Defaults to true' } }, required: [] },
         },
       },
       execute: async (args, ctx) => {
         const compact = args.compact !== false;
         const r = await runBrowserCommand(ctx, 'snapshot', compact ? ['-c'] : [], commandTimeout());
-        return toJson(r.success ? { success: true, snapshot: clipSnapshot(String(r.data?.snapshot || r.raw || '')), element_count: r.data?.refs ? Object.keys(r.data.refs).length : undefined } : r);
+        const out = toJson(r.success ? { success: true, snapshot: clipSnapshot(String(r.data?.snapshot || r.raw || '')), element_count: r.data?.refs ? Object.keys(r.data.refs).length : undefined } : r);
+        // 全量快照动辄 40KB(实测 cookie 弹窗页 42KB 直灌上下文):超 8KB 走落盘+预览,模型按需 read_file。
+        // browser_search/browser_navigate 的内嵌快照恒为 compact('-c'),实测个位数 KB,不做此处理。
+        return formatToolOutput(ctx, 'browser_snapshot', out);
       },
     },
     {

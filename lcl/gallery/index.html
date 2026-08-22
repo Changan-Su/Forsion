@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN" data-skin="cream" data-mode="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Forsion LCL 设计系统图鉴</title>
+<!--
+  Forsion LCL 设计系统图鉴 —— 零构建静态页,直接 <link> 真源 CSS + fetch 同一份文本解析目录。
+  所以它**没有副本可腐烂**:改 base.css / skins.css / theme.css,刷新本页即同步(样式与目录都是)。
+
+  跑法:
+      cd Forsion-Genesis/desktop && npm run gallery      # 只绑 127.0.0.1:8100
+      open http://localhost:8100/lcl/gallery/
+  ⚠️ 服务的 root 是整个 Forsion-Genesis/(含 .git),所以**必须只绑回环**,别加 --bind 0.0.0.0 之类。
+  解析器自测:node lcl/gallery/cssIndex.js
+
+  扩展性契约:要收录新的 CSS 真源或新主题 —— 只改 gallery.js 顶部的 SOURCES / THEMES 各加一行,
+  其余(分类、组件清单、token 面板、覆盖率)全部自动。别在本页里抄任何色值或组件清单。
+
+  已知边界:
+  - genesis-glass 的外壳玻璃靠 macOS 原生窗口材质(见 DESIGN.md §4),浏览器里只能呈现半透染色,不是 bug。
+  - 实例(demo)是人手写的少量基元;其余类只登记不出图,「未收录」计数就是提醒。
+-->
+<!-- 真源清单 = 下面这批 link,**gallery.js 直接读它们**(带 data-label 的即入目录),不另存一份 JS 数组。
+     层叠顺序照 DESIGN.md §2:base.css(缺省) → 组件 → skins.css(配色轴) → theme.css(语言轴,JS 最后注入)。 -->
+<link rel="stylesheet" href="../../desktop/frontend/src/styles/base.css" data-label="桌面组件语义类(正典)" />
+<link rel="stylesheet" href="../engine/engine.css" data-label="LCL 外壳:ribbon / 标签栏 / 命令面板 / 状态栏" />
+<link rel="stylesheet" href="../engine/singleColumn.css" data-label="LCL 移动单列壳" />
+<link rel="stylesheet" href="../engine/miniCard.css" data-label="LCL Mini Card 窗" />
+<link rel="stylesheet" href="../engine/skeleton.css" data-label="LCL 骨架屏" />
+<link rel="stylesheet" href="../../desktop/frontend/src/theme/skins.css" data-label="配色轴 [data-skin]" data-axis="skin" />
+<style>
+  /* 图鉴自身的排版壳。只用主题 token,不引入第二套颜色 —— 换肤时本页跟着变,那也是一种验收。 */
+  body { overflow: hidden; }
+  .g-app { display: flex; flex-direction: column; height: 100%; }
+  .g-top {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+    padding: 10px 18px; border-bottom: var(--border-width) solid var(--border); background: var(--bg);
+  }
+  .g-brand { font-size: 14px; font-weight: 700; letter-spacing: 0.01em; }
+  .g-brand small { display: block; font-weight: 400; font-size: 11px; color: var(--text-faint); }
+  .g-axis { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-faint); }
+  .g-spacer { flex: 1; }
+  .g-stat { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+  #g-alarm:not(:empty) { flex: none; padding: 12px 18px 0; }
+  .g-body { flex: 1; min-height: 0; display: flex; }
+  .g-nav {
+    flex: none; width: 232px; overflow-y: auto; padding: 12px 8px 40px;
+    border-right: var(--border-width) solid var(--border); background: var(--sidebar-bg);
+  }
+  .g-nav-file { font-size: 11px; color: var(--text-faint); padding: 10px 8px 4px; text-transform: none; }
+  .g-nav a { display: block; padding: 4px 8px; border-radius: var(--radius-sm); font-size: 12.5px; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-nav a:hover { background: var(--overlay-light); color: var(--text); }
+  .g-nav a span { color: var(--text-ghost); font-size: 11px; }
+  .g-main { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 24px 120px; }
+  .g-sec { max-width: 940px; margin: 0 0 30px; scroll-margin-top: 14px; }
+  .g-sec > h3 { font-size: 15px; margin-bottom: 4px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .g-src { font-size: 11px; color: var(--text-ghost); font-family: var(--font-mono, monospace); font-weight: 400; }
+  .g-doc { white-space: pre-wrap; font-size: 12.5px; color: var(--text-muted); margin-bottom: 10px; }
+  .g-demo {
+    border: var(--border-width) solid var(--border); border-radius: var(--radius-md);
+    background: var(--bg-card); margin: 10px 0 12px; overflow: hidden;
+  }
+  .g-demo-head {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 7px 12px; border-bottom: var(--border-width) solid var(--border); background: var(--overlay-subtle);
+  }
+  .g-demo-name { font-family: var(--font-mono, monospace); font-size: 12px; font-weight: 600; }
+  .g-when { font-size: 11.5px; color: var(--text-muted); flex: 1; min-width: 200px; }
+  .g-stage { padding: 18px 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+  .g-stage.col { flex-direction: column; }
+  .g-code { margin: 0; padding: 10px 12px; border-top: var(--border-width) solid var(--border);
+    background: var(--overlay-subtle); font-family: var(--font-mono, monospace); font-size: 11px;
+    color: var(--text-muted); white-space: pre; overflow-x: auto; }
+  .g-rows { display: flex; flex-direction: column; gap: 2px; }
+  .g-row { display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; border-radius: var(--radius-sm); font-size: 12.5px; }
+  .g-row:hover { background: var(--overlay-subtle); }
+  .g-row > code { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text); flex: none; min-width: 190px; }
+  .g-row-note { flex: 1; color: var(--text-faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .g-tag { flex: none; font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); }
+  .g-tag.on { background: var(--accent-light); color: var(--accent-ink); }
+  .g-row details { flex: none; }
+  .g-row summary { font-size: 11px; color: var(--text-ghost); cursor: pointer; list-style: none; }
+  .g-row summary:hover { color: var(--accent-ink); }
+  .g-detail { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-muted);
+    white-space: pre-wrap; padding: 6px 8px 2px 22px; }
+  .g-tokens { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px; }
+  .g-tok { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius-sm); font-size: 12px; }
+  .g-tok:hover { background: var(--overlay-subtle); }
+  .g-sw { width: 22px; height: 22px; flex: none; border-radius: var(--radius-sm);
+    border: var(--border-width) solid var(--overlay-medium); background-image:
+      linear-gradient(45deg, var(--overlay-light) 25%, transparent 25%, transparent 75%, var(--overlay-light) 75%),
+      linear-gradient(45deg, var(--overlay-light) 25%, transparent 25%, transparent 75%, var(--overlay-light) 75%);
+    background-size: 8px 8px; background-position: 0 0, 4px 4px; }
+  .g-sw i { display: block; width: 100%; height: 100%; border-radius: inherit; }
+  .g-tok code { font-family: var(--font-mono, monospace); font-size: 11.5px; flex: none; min-width: 128px; }
+  .g-tok em { font-style: normal; font-size: 11px; color: var(--text-faint); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 64px; }
+  .g-axisof { flex: none; font-size: 9.5px; padding: 0 5px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); }
+  .g-layer { border-radius: var(--radius-md); padding: 12px; font-size: 12px; }
+  .g-hint { font-size: 11.5px; color: var(--text-faint); margin: 6px 0 14px; }
+  .g-unfix { position: static !important; z-index: auto !important; animation: none !important; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="g-app">
+  <header class="g-top">
+    <div class="g-brand">Forsion LCL 设计系统图鉴<small id="g-sub">读取真源 CSS 中…</small></div>
+    <div class="g-axis">语言 <div class="seg" id="ax-theme"></div></div>
+    <div class="g-axis">配色 <div class="seg" id="ax-skin"></div></div>
+    <div class="g-axis">明暗 <div class="seg" id="ax-mode"></div></div>
+    <div class="g-axis">扁平 <button class="switch" role="switch" id="ax-flat"></button></div>
+    <div class="g-axis">毛玻璃 <button class="switch on" role="switch" id="ax-glass"></button></div>
+    <div class="g-spacer"></div>
+    <div class="seg" id="ax-tab"></div>
+    <div class="seg" id="ax-filter"></div>
+    <input class="inline-input" id="q" placeholder="搜类名 / 注释 / token…" style="width:190px" />
+    <div class="g-stat" id="g-stat"></div>
+  </header>
+  <div id="g-alarm"></div>
+  <div class="g-body">
+    <nav class="g-nav" id="nav"></nav>
+    <main class="g-main" id="main"></main>
+  </div>
+</div>
+<script type="module" src="./gallery.js"></script>
+</body>
+</html>

@@ -33,4 +33,13 @@ const all = {
   ...dumpFor(createTanguProfile({ sandboxMode: 'docker' }), 'tangu-docker'),
   ...dumpFor(createTanguProfile({ sandboxMode: 'none' }), 'tangu-none'),
 };
+// GUI 客户端面(ctx.client 门禁工具,如 sketch):追加在末尾钉住 GUI-only defs 字节,旧键零扰动。
+{
+  const p = createTanguProfile({ sandboxMode: 'none' });
+  configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+  all['tangu-none:host+gui'] = getToolDefinitions({
+    userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+    execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0',
+  });
+}
 process.stdout.write(JSON.stringify(all, null, 2) + '\n');

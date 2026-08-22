@@ -26,3 +26,14 @@ export function isBuiltinFileType(p: string): boolean {
   const n = p.toLowerCase()
   return BUILTIN_FILE_SUFFIXES.some((ext) => n.endsWith(ext))
 }
+
+/** `.md` 目标是不是「笔记」(而不是某个文件类型)。
+ *  判据 = **不在内置后缀表上**就是笔记。刻意不写「带两个点就不是笔记」那种形状启发式:
+ *  `X.fd.md`(子笔记夹)、`ADR.001.md`(带版本号的名字)都是货真价实的笔记(Codex 评审 medium)。
+ *  插件声明的复合后缀不用在这儿管 —— 两个调用点(embedLayer.classifyEmbed / BlockHost.embedFile)
+ *  都已经先问过画板与插件 renderer 了,轮到本判据时剩下的就是笔记。
+ *  2026-08-20 用户实报:`![[某笔记.md]]` 此前渲染成「📄 打开 ↗」文件卡,点了还去调系统默认程序。 */
+export function isPlainNoteRef(target: string): boolean {
+  const t = target.split('|')[0].split('#')[0].trim().toLowerCase()
+  return /\.md$/.test(t) && !isBuiltinFileType(t)
+}

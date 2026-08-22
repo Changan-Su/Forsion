@@ -12,6 +12,9 @@ export interface ToolContext {
   sessionId: string;
   appId: string;
   runId?: string;
+  /** 客户端面标识(input.client,经 routes/runs 白名单:desktop|web|mobile|cli|tui/版本)。
+   *  GUI 门禁工具(sketch)据此判定;TUI/通道/自动化/子代理 run 无 tag → 缺省即不可见(default-deny)。 */
+  client?: string;
   signal?: AbortSignal;
   /** 本次 run 的自定义工具（HTTP/JS），按工具名索引。 */
   customTools?: Map<string, LoadedCustomTool>;

@@ -121,6 +121,98 @@ async function main() {
   await triggerPage.screenshot({ path: path.join(os.tmpdir(), 'amadeus-list-trigger.png'), fullPage: true })
   await triggerPage.close()
 
+  // 精确复现用户截图：空列表本来带 slash 占位提示；进入 `- ` 字面源码后，提示不能压住连字符。
+  const emptyListPage = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  await emptyListPage.goto(`${URL}?upage&upane&caret&useed=${encodeURIComponent('\n')}`, { waitUntil: 'domcontentloaded' })
+  await emptyListPage.waitForSelector(PM, { timeout: 20000 })
+  await emptyListPage.click(PM)
+  await emptyListPage.keyboard.type('- ', { delay: 60 })
+  await emptyListPage.waitForTimeout(180)
+  // 空块转列表时外层行壳可能按节点类型换壳；按真实动作点回这条空列表，再从正文起点向左。
+  await emptyListPage.click(`${PM} li p`)
+  await emptyListPage.waitForTimeout(120)
+  await emptyListPage.keyboard.press('Home')
+  await emptyListPage.keyboard.press('ArrowLeft')
+  await emptyListPage.waitForTimeout(120)
+  const emptyListPrefix = await emptyListPage.evaluate(() => {
+    const input = document.activeElement
+    const line = document.querySelector('.unified-body .ProseMirror li p')
+    const rect = input?.getBoundingClientRect()
+    const listRect = line?.closest('ul,ol')?.getBoundingClientRect()
+    return {
+      empty: line?.classList.contains('is-empty') ?? false,
+      value: input?.classList.contains('amx-struct-prefix') ? input.value : null,
+      offset: input?.selectionStart ?? null,
+      placeholder: line ? getComputedStyle(line, '::before').content : null,
+      width: rect?.width ?? 0,
+      sourceLeft: rect?.left ?? null,
+      listLeft: listRect?.left ?? null,
+    }
+  })
+  check(
+    '空列表第一下 ← 即显示字面 “- ”、越过唯一空格且不再被占位提示遮住',
+    emptyListPrefix.empty && emptyListPrefix.value === '- ' && emptyListPrefix.offset === 1
+      && emptyListPrefix.placeholder === 'none' && emptyListPrefix.width > 0
+      && emptyListPrefix.sourceLeft != null && emptyListPrefix.listLeft != null
+      && Math.abs(emptyListPrefix.sourceLeft - emptyListPrefix.listLeft) <= 2,
+    JSON.stringify(emptyListPrefix),
+  )
+  await emptyListPage.screenshot({ path: path.join(os.tmpdir(), 'amadeus-empty-list-prefix.png'), fullPage: true })
+  await emptyListPage.close()
+
+  const orderedSourcePage = await browser.newPage({ viewport: { width: 1000, height: 500 } })
+  await orderedSourcePage.goto(`${URL}?upage&upane&useed=${encodeURIComponent('1. 有序项\n')}`, { waitUntil: 'domcontentloaded' })
+  await orderedSourcePage.waitForSelector(`${PM} li p`, { timeout: 20000 })
+  await orderedSourcePage.click(`${PM} li p`)
+  await orderedSourcePage.waitForTimeout(120)
+  await orderedSourcePage.keyboard.press('Home')
+  await orderedSourcePage.keyboard.press('ArrowLeft')
+  await orderedSourcePage.waitForTimeout(100)
+  const orderedSource = await orderedSourcePage.evaluate(() => {
+    const input = document.activeElement
+    const list = document.querySelector('.unified-body .ProseMirror > ol')
+    const ir = input?.getBoundingClientRect()
+    const lr = list?.getBoundingClientRect()
+    return {
+      value: input?.classList.contains('amx-struct-prefix') ? input.value : null,
+      offset: input?.selectionStart ?? null,
+      sourceLeft: ir?.left ?? null,
+      listLeft: lr?.left ?? null,
+    }
+  })
+  check(
+    '有序列表第一下 ← 的 “1. ” 与普通正文同轴，不借 marker gutter 假缩进',
+    orderedSource.value === '1. ' && orderedSource.offset === 2
+      && orderedSource.sourceLeft != null && orderedSource.listLeft != null
+      && Math.abs(orderedSource.sourceLeft - orderedSource.listLeft) <= 2,
+    JSON.stringify(orderedSource),
+  )
+  await orderedSourcePage.close()
+
+  // Home/原生方向移动后的 DOM Selection 与 EditorState 曾有一拍时差，导致标题第一下 Backspace
+  // 偶发只同步选区、第二下才删边界空格。连续重开覆盖这条竞态，不能靠单次碰巧通过。
+  const headingBackspaceRuns = []
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const p = await browser.newPage({ viewport: { width: 1000, height: 500 } })
+    await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent('## 标题\n')}`, { waitUntil: 'domcontentloaded' })
+    await p.waitForSelector(`${PM} h2`, { timeout: 20000 })
+    await p.click(`${PM} h2`)
+    await p.waitForTimeout(160)
+    await p.keyboard.press('Home')
+    await p.keyboard.press('Backspace')
+    await p.waitForTimeout(90)
+    headingBackspaceRuns.push(await p.evaluate(() => ({
+      paragraph: document.querySelector('.unified-body .ProseMirror > p')?.textContent ?? null,
+      offset: getSelection()?.anchorOffset ?? null,
+    })))
+    await p.close()
+  }
+  check(
+    '标题正文起点第一下 Backspace 稳定删除唯一边界空格（无需第二下）',
+    headingBackspaceRuns.every((run) => run.paragraph === '##标题' && run.offset === 2),
+    JSON.stringify(headingBackspaceRuns),
+  )
+
   // 空格是 Markdown 结构的渲染边界：`- ` 已成列表后在正文起点退格，第一下只删边界空格，
   // 但必须立刻退出结构并还原字面 `-`；光标不能继续困在一个已经无效的前缀 input 里。
   const unrenderPage = await browser.newPage({ viewport: { width: 1440, height: 900 } })
@@ -183,9 +275,20 @@ async function main() {
   // 同一结果也必须覆盖用户截图里的另一条路径：向左进入 `- `，把光标移到空格前再按 Delete。
   await unrenderPage.keyboard.type('- ', { delay: 50 })
   await unrenderPage.waitForTimeout(160)
-  await unrenderPage.keyboard.press('ArrowLeft') // 正文起点 → 进入结构源码，光标在 `- ` 末尾
+  await unrenderPage.keyboard.press('ArrowLeft') // 正文起点 → 一步跨过边界空格，光标落在 `-` 与空格之间
   await unrenderPage.waitForTimeout(100)
-  await unrenderPage.keyboard.press('ArrowLeft') // input 内移到 `-` 与空格之间
+  const enteredListSource = await unrenderPage.evaluate(() => {
+    const input = document.activeElement
+    return {
+      value: input?.classList.contains('amx-struct-prefix') ? input.value : null,
+      offset: input?.selectionStart ?? null,
+    }
+  })
+  check(
+    '非空列表第一下 ← 同样直接越过唯一空格',
+    enteredListSource.value === '- ' && enteredListSource.offset === 1,
+    JSON.stringify(enteredListSource),
+  )
   await unrenderPage.keyboard.press('Delete')
   await unrenderPage.waitForTimeout(180)
   const afterForwardDelete = await unrenderPage.evaluate(() => ({
@@ -305,12 +408,17 @@ async function main() {
   await page.waitForTimeout(140)
   const headingPrefixState = await page.evaluate(() => ({
     source: document.activeElement?.classList.contains('amx-struct-prefix') ? document.activeElement.value : null,
+    inputOffset: document.activeElement?.selectionStart ?? null,
     active: document.activeElement?.className ?? '',
     inputs: document.querySelectorAll('.amx-struct-prefix').length,
     parent: getSelection()?.anchorNode?.parentElement?.tagName ?? null,
     offset: getSelection()?.anchorOffset ?? null,
   }))
-  check('当前标题行显示井号且可从正文行首进入编辑', headingPrefixState.source === '### ', JSON.stringify(headingPrefixState))
+  check(
+    '当前标题行第一下 ← 即跨过唯一空格并进入井号区',
+    headingPrefixState.source === '### ' && headingPrefixState.inputOffset === 3,
+    JSON.stringify(headingPrefixState),
+  )
   await page.screenshot({ path: path.join(os.tmpdir(), 'amadeus-heading-prefix-active.png') })
   const sourceCaretHidden = await page.evaluate(() => {
     const overlay = document.querySelector('.sc-caret')
@@ -318,7 +426,6 @@ async function main() {
       && (!overlay || getComputedStyle(overlay).display === 'none')
   })
   check('结构源码输入框使用原生光标且收起旧丝滑覆盖层', sourceCaretHidden)
-  await page.keyboard.press('ArrowLeft')
   await page.keyboard.press('Backspace')
   await page.waitForTimeout(180)
   const liveH2 = await page.evaluate(() => {
@@ -386,9 +493,9 @@ async function main() {
   })
   check('待办标记按字符改为 [x] 后立即更新', task?.checked === 'true' && task.text === '待办行', JSON.stringify(task))
 
-  // 删除标题标记的渲染边界空格：不再命中标题，剩余源码立刻回到普通文本。
+  // 已在井号与空格之间时按 Delete 删除标题渲染边界：剩余源码立刻回到普通文本。
   await enterPrefix(page, `${PM} h2`)
-  await page.keyboard.press('Backspace')
+  await page.keyboard.press('Delete')
   await page.waitForTimeout(250)
   const literal = await page.evaluate((selector) => {
     const p = [...document.querySelector(selector).querySelectorAll(':scope > p')]

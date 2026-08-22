@@ -1,7 +1,7 @@
 /** 收藏 / 最近(每 vault 一份,localStorage):渲染时对 pages 过滤 → 已删除的自然消失。
  *  ponytail: 重命名/移动不做路径重映射(条目失效即自动隐藏),需要时再补 remap。 */
 import { create } from 'zustand'
-import { usePageStore } from '@amadeus/store/pageStore'
+import { noteOf, usePageStore } from '@amadeus/store/pageStore'
 import { setRecentsProvider } from '@amadeus/lib/recents'
 
 export interface Collection { name: string; query: string }
@@ -82,7 +82,10 @@ export const useAmadeusPrefs = create<PrefsState>((set, get) => ({
 // vault 切换 → 载入该 vault 的偏好;笔记切换 → 记最近。
 usePageStore.subscribe((s, p) => {
   if (s.vaultRoot !== p.vaultRoot) useAmadeusPrefs.setState(load())
-  if (s.activePage && s.activePage !== p.activePage) useAmadeusPrefs.getState().pushRecent(s.activePage)
+  // v4 笔记不设 activePage → 经 noteOf 取,否则 v4 笔记永远进不了「最近打开」
+  // (@ 提及的候选排序也取这份)。pushRecent 自带去重,v3 双路径同值不会记两条。
+  const cur = noteOf(s)
+  if (cur && cur !== noteOf(p)) useAmadeusPrefs.getState().pushRecent(cur)
 })
 
 // 供 vendored 层(@ 提及的候选排序)取「最近打开」,不倒转依赖方向。

@@ -12,7 +12,7 @@ import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skillsDir as userSkillsDir, agentsDir } from '../core/tanguHome.js';
+import { skillsDir as userSkillsDir, agentsDir, WORKSPACE_DIR_NAME, LEGACY_WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { bundleSkillRoots } from '../plugins/bundles.js';
 import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
@@ -38,9 +38,14 @@ export function builtinAgentSkillsDir(slug: string): string {
 function agentSkillsDir(slug: string): string {
   return path.join(agentsDir(), slug, 'skills');
 }
-/** 项目级技能目录 <cwd>/.forsion/skills(对标 Claude Code 的 .claude/skills)。 */
-function projectSkillsDir(cwd: string): string {
-  return path.join(cwd, '.forsion', 'skills');
+/** 项目级技能目录 <cwd>/.tangu/skills(对标 Claude Code 的 .claude/skills)。
+ *  返回两个:先 legacy `.forsion/skills`(v2.3.3 发出去的旧位置,只读兼容),再新位置 ——
+ *  同 id 后者赢。⚠️两个名字都**不许**进 projectDoc 的 PROJECT_ROOT_MARKERS。 */
+function projectSkillsDirs(cwd: string): string[] {
+  return [
+    path.join(cwd, LEGACY_WORKSPACE_DIR_NAME, 'skills'),
+    path.join(cwd, WORKSPACE_DIR_NAME, 'skills'),
+  ];
 }
 
 /** 极简 frontmatter 解析:--- 包围块内的顶层 `key: value` 单行标量(带引号可)。 */
@@ -321,7 +326,7 @@ export async function seedBuiltinSkills(): Promise<SeedReport> {
 }
 
 /** 列出当前 run 可见的本地技能。作用域从泛到专,越具体越优先(同 id 覆盖):
- *  内置(全局) < bundle(Forsion 插件内嵌) < 用户 ~/.forsion/skills < **当前 agent** agents/<slug>/skills(+包内置默认) < **项目** <cwd>/.forsion/skills。
+ *  内置(全局) < bundle(Forsion 插件内嵌) < 用户 ~/.forsion/skills < **当前 agent** agents/<slug>/skills(+包内置默认) < **项目** <cwd>/.tangu/skills(旧位置 <cwd>/.forsion/skills 仍认,同 id 让新的赢)。
  *  agent/项目级仅在有激活 agent / host cwd 时加入,故云端/无上下文时行为与原来一致。 */
 /** 用户目录里指纹仍匹配的技能 id 集合 —— 即「原样的内置镜像,用户没动过」。 */
 async function untouchedMirrors(destRoot: string): Promise<Set<string>> {
@@ -356,7 +361,7 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
     roots.push([agentSkillsDir(slug), 'agent']);        // 用户为该 agent 增改的(覆盖同 id 默认)
   }
   const cwd = currentRunCwd();
-  if (cwd) roots.push([projectSkillsDir(cwd), 'project']);
+  if (cwd) for (const d of projectSkillsDirs(cwd)) roots.push([d, 'project']);
 
   const scanned = await Promise.all(roots.map(([dir, src]) => scanDir(dir, src)));
   // ⚠️用户目录里那些**未被改动的内置镜像**不算「用户技能」:它们只是为了可见可改而复制过去的副本,

@@ -78,16 +78,24 @@ const todoWriteStep = (todos: Array<{ content: string; status: string }>) => () 
   toolCalls: [{ id: 'tc1', type: 'function', function: { name: 'todo_write', arguments: JSON.stringify({ todos }) } }],
   usage: { prompt_tokens: 10, completion_tokens: 10 }, finishReason: 'stop',
 });
+const sketchStep = () => () => ({
+  content: '', reasoning: '',
+  toolCalls: [{
+    id: 'sk1', type: 'function',
+    function: { name: 'sketch', arguments: JSON.stringify({ html: '<h1 class="fs-title">三方对比</h1>' }) },
+  }],
+  usage: { prompt_tokens: 10, completion_tokens: 20 }, finishReason: 'stop',
+});
 /** 上下文里的 user 文本全集(断言脚手架是否被喂给模型)。 */
 const userTexts = (payload: any): string => (payload.messages as any[])
   .filter((m) => m.role === 'user')
   .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
   .join('\n---\n');
 
-async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活'): Promise<any> {
+async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string): Promise<any> {
   await createRun({
     id: 'R1', sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A1',
-    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig },
+    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}) },
   });
   enqueueRun('S', 'R1');
   const t0 = Date.now();
@@ -98,6 +106,35 @@ async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活
     await new Promise((res) => setTimeout(res, 25));
   }
 }
+
+describe('Sketch 主动触发交付闸', () => {
+  it('桌面端的隐式对比请求:纯文字收尾会被催一次,调 sketch 后正常收尾', async () => {
+    script = [
+      finalStep('三款产品各有优缺点。'),
+      sketchStep(),
+      finalStep('图中的主要取舍是协作性和本地性。'),
+    ];
+    const run = await runToSettled({}, '比较 Notion、Obsidian 和 Logseq 的定位和优缺点', 'desktop/2.8.0');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(3);
+    expect(String((llmPayloads[0].messages as any[]).find((m) => m.role === 'system')?.content)).toContain('Visual-first note for this turn');
+    expect(userTexts(llmPayloads[1])).toContain('<visual_delivery_check>');
+    expect((llmPayloads[2].messages as any[]).some((m) => m.role === 'tool' && String(m.content).includes('Sketch card rendered'))).toBe(true);
+    const rows = await query<any[]>(`SELECT content, tool_calls FROM chat_messages WHERE session_id = 'S'`);
+    expect(rows.some((r) => String(r.content).includes('visual_delivery_check'))).toBe(false);
+    const persisted = rows.find((r) => r.tool_calls);
+    const calls = typeof persisted?.tool_calls === 'string' ? JSON.parse(persisted.tool_calls) : persisted?.tool_calls;
+    expect(calls?.[0]?.ui_content_offset).toBe('三款产品各有优缺点。'.length);
+  }, 20_000);
+
+  it('纯文字显式退订:不注入本轮信号、不拦收尾', async () => {
+    script = [finalStep('用文字给你结论。')];
+    const run = await runToSettled({}, '只用文字比较 Notion 和 Obsidian，不要画图', 'desktop/2.8.0');
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+    expect(String((llmPayloads[0].messages as any[]).find((m) => m.role === 'system')?.content)).not.toContain('Visual-first note for this turn');
+  }, 20_000);
+});
 
 describe('中流断线恢复', () => {
   it('吐过帧后断线:段切分落库 + <stream_resume> 续写,run 照常 done;脚手架不落库', async () => {

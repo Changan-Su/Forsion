@@ -1,6 +1,6 @@
 // 白板写侧的三条不变式。第一条是**毁数据级**的,单独写在最前面。
 import { describe, it, expect } from 'vitest'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, addConnector, setElementText, rawTree, setParent, pruneTree, childrenOf, isUnder, depthOf } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, addConnector, setElementText, rawTree, setParent, pruneTree, childrenOf, isUnder, depthOf, runEndOf } from './canvasEdit'
 import { withElements, parseCanvasJson } from './canvas'
 
 /** 迁移产物的真实形状:形状带未来字段 `note`,顶层带未知键 `futureKey`。 */
@@ -138,5 +138,23 @@ describe('层级深度与子树归属', () => {
     expect(isUnder(t, 'p', 'g')).toBe(false)
     expect(isUnder(t, 'p', 'p')).toBe(false)
     expect(isUnder(rawTree({ a: 'b', b: 'a' }), 'a', 'zzz')).toBe(false) // 环里找不着的爹:走得完
+  })
+
+  // ⚠️ Codex 2026-08-20 critical:悬空父必须**逐跳**掐断,否则同一份盘上数据会有两套答案 ——
+  // depthOf 说「c 没有爹(自由卡)」,段判定却说「c 是 p 的后代」→ 画框把自由卡圈进去,
+  // 认爹搬迁还会把它跟着父段一起挪并落盘。
+  it('isUnder 逐跳校验在场:中间那一环不在场 = 关系断在那里', () => {
+    const t = rawTree({ c: 'ghost', ghost: 'p' })
+    expect(isUnder(t, 'c', 'p')).toBe(true) // 不给 alive:纯 tree 语义(旧调用方原样)
+    expect(isUnder(t, 'c', 'p', new Set(['c', 'p']))).toBe(false) // ghost 不在场 → 断
+    expect(isUnder(t, 'c', 'p', new Set(['c', 'p', 'ghost']))).toBe(true) // 都在场 → 通
+  })
+
+  it('runEndOf:段遇非卡节点收边、悬空父不成段', () => {
+    const items = [{ anchor: 'p', idx: 0 }, { anchor: 'c', idx: 1 }]
+    expect(runEndOf(items, 0, rawTree({ c: 'p' }))).toBe(2) // 真父子 = 一段
+    expect(runEndOf(items, 0, rawTree({ c: 'ghost', ghost: 'p' }))).toBe(1) // 悬空 = 各归各
+    // idx 不连续(中间夹着正文)→ 就地收边,这是毁数据防线
+    expect(runEndOf([{ anchor: 'p', idx: 0 }, { anchor: 'c', idx: 2 }], 0, rawTree({ c: 'p' }))).toBe(1)
   })
 })

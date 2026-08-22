@@ -255,8 +255,9 @@ export function installEngine(): void {
 
   // 「最近使用」扩展到所有主区文件 + 功能视图(chat/note 已在上面 / amadeusViews 记账,此处只补其余):
   // 订阅主区标签变化 → 看活动主 leaf 的 __type + 身份参数记账。无身份的辅助视图(工作区/大纲/启动器等)不记。
-  // ponytail: 只认 mainTabs 引用变化 → 活动文件「就地改名」(params 原地改、mainTabs 引用不变)不会即时补记,
-  //   旧路径条目滞留到下次切标签才自愈;无损(点了顶多开个空视图),不值为它给活动面板打身份指纹。
+  // 只认 mainTabs 引用变化 —— 2026-08-20 起 refreshTabs 把「身份参数指纹」(identitySig)算进比对、
+  //   setParams 也发 refreshTabs,所以「同一个 tab 里换一个文件」这类**就地跳转**同样会到达这里
+  //   (此前一律看不见 → 用户实报「同一个 View 里页面跳转,前进后退无法识别」)。
   const RECENT_FILE_PARAM: Record<string, string> = {
     'amadeus-db': 'dbPath', 'amadeus-pdf': 'pdfPath', 'amadeus-drawing': 'drawingPath', 'amadeus-dashboard': 'dashPath', 'amadeus-image': 'imagePath', 'amadeus-plugin-file': 'filePath',
     'wsfile': 'path', // 工作区文件预览:只记有 path 的(tkey 瞬态目标无 path → 天然排除,重开不了)

@@ -30,6 +30,9 @@ export function setDeleteAssetsPref(v: boolean | null): void {
 interface Req {
   note: string
   assets: string[]
+  /** 删的是笔记里的一个**引用块**(块已经删了,这里只处置文件):换文案、不给「下次不再问」
+   *  —— 那个偏好记的是「删笔记时附件怎么办」,两个决定不该互相顶。 */
+  block?: boolean
   resolve: (v: DeleteAssetsChoice) => void
 }
 
@@ -40,10 +43,10 @@ const useStore = create<{ req: Req | null; open(r: Req): void; clear(): void }>(
 }))
 
 /** 弹窗询问;返回 'with'=连附件一起删,'only'=只删笔记,null=取消。 */
-export function askDeleteAssets(note: string, assets: string[]): Promise<DeleteAssetsChoice> {
+export function askDeleteAssets(note: string, assets: string[], opts?: { block?: boolean }): Promise<DeleteAssetsChoice> {
   return new Promise((resolve) => {
     useStore.getState().req?.resolve(null) // 单例:旧的先取消
-    useStore.getState().open({ note, assets, resolve })
+    useStore.getState().open({ note, assets, block: opts?.block, resolve })
   })
 }
 
@@ -70,22 +73,32 @@ function Dialog({ req }: { req: Req }) {
   return (
     <div className="dialog-overlay" onMouseDown={() => settle(null)}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="dialog-title">删除「{req.note}」</div>
+        <div className="dialog-title">{req.block ? '引用块已删除' : `删除「${req.note}」`}</div>
         <div className="dialog-msg">
-          有 {req.assets.length} 个附件只被这条笔记引用，要一并删除吗？
+          {req.block
+            ? `这 ${req.assets.length} 个文件只被这条笔记引用，要一并从磁盘删除吗？`
+            : `有 ${req.assets.length} 个附件只被这条笔记引用，要一并删除吗？`}
           <ul style={{ margin: '6px 0 0', paddingLeft: 18, opacity: 0.8 }}>
             {shown.map((a) => <li key={a}>{a}</li>)}
             {req.assets.length > shown.length && <li>…还有 {req.assets.length - shown.length} 个</li>}
           </ul>
         </div>
-        <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10 }}>
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-          下次不再问（设置→笔记可改回）
-        </label>
+        {!req.block && (
+          <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10 }}>
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            下次不再问（设置→笔记可改回）
+          </label>
+        )}
         <div className="dialog-actions">
-          <button className="dialog-btn" onClick={() => settle(null)}>取消</button>
-          <button className="dialog-btn" onClick={() => settle('only')}>只删笔记</button>
-          <button className="dialog-btn" data-danger autoFocus onClick={() => settle('with')}>一并删除</button>
+          {req.block
+            ? <button className="dialog-btn" autoFocus onClick={() => settle('only')}>保留文件</button>
+            : (
+              <>
+                <button className="dialog-btn" onClick={() => settle(null)}>取消</button>
+                <button className="dialog-btn" onClick={() => settle('only')}>只删笔记</button>
+              </>
+            )}
+          <button className="dialog-btn" data-danger autoFocus={!req.block} onClick={() => settle('with')}>一并删除</button>
         </div>
       </div>
     </div>

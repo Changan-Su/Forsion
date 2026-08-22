@@ -24,6 +24,14 @@ import { useEffect, useMemo, useState, type RefObject } from 'react'
 export interface ElBox { x: number; y: number; w: number; h: number }
 interface Pt { x: number; y: number }
 
+/** 拖卡认亲的手势预告。source/node 都是层级节点键：卡锚或主卡哨兵 `m:`。 */
+export interface AttachPreview {
+  source: string
+  node: string
+  side: 'e' | 'w' | 'n' | 's'
+  rel: 'child' | 'sibling'
+}
+
 /** 端点:`{ref}` = 卡锚(卡片),`{id}` = 本层的形状 id,`{main}` = 主卡(2026-08-18,唯一实例
  *  不需要名字)。三个形态靠键名消歧;老端认不出 `{main}` → 那条连线不画但数据一个字节不动。 */
 export interface EndRef { ref?: string; id?: string; main?: boolean }
@@ -250,7 +258,7 @@ export interface CanvasElementsProps {
   marquee: ElBox | null
   /** 拖到边缘认亲的当前候选(2026-08-19 晚):在目标卡的那条边上画一道粗高亮。
    *  ⚠️ 只是**手势期的意图预告**,不是数据 —— 松手才由舞台落笔。 */
-  attach?: { node: string; side: 'e' | 'w' | 'n' | 's'; rel: 'child' | 'sibling' } | null
+  attach?: AttachPreview | null
   /** 连线橡皮筋(2026-08-18):第一击之后跟随指针的预览线 + 有效目标高亮。
    *  from = 起点选中键,x/y = 指针舞台坐标,over = 指针下的可连对象(高亮用)。 */
   preview?: { from: string; x: number; y: number; over: string | null } | null
@@ -353,8 +361,8 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
         ) : null
       })}
       {/* 主卡**完全等同卡片**(2026-08-18 晚,用户拍板;「正文」标题条已移除,别加回来):
-          选中/拖动手柄 = padding 圈(事件目标==.ProseMirror 本身),正文区走与卡片同款的
-          两段式(一击选中、二击进编辑),命中逻辑全在 canvasStage.onDown。 */}
+          选中/拖动手柄 = padding 圈(事件目标==.ProseMirror 本身),正文区单击选中/拖动、
+          空格进入编辑,命中逻辑全在 canvasStage.onDown。 */}
       {mainSel && mainBox ? (
         <div className={`amx-el-selbox${editing === MAIN_KEY ? ' is-editing' : ''}`} data-main-sel style={{ left: `${mainBox.x}px`, top: `${mainBox.y}px`, width: `${mainBox.w}px`, height: `${mainBox.h}px` }}>
           {/* 主卡只有宽度可调(高随内容),把手仍用右下角语法 —— 拖的时候只吃 dx。 */}
@@ -380,23 +388,42 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
         : null}
       {/* ⚠️ 类名不能叫 `.amx-marquee` —— blockLayer 的块框选用的就是那个名字(挂在 body 上、client
           坐标),同名会让仪器把两个框数成一个东西,而它们连坐标系都不同。 */}
-      {/* 认亲高亮:目标卡的那条边(左右=收作子节点,上下=同父兄弟)。 */}
+      {/* 认亲预告:不只画一条难懂的边。目标整卡起环、源→目标画虚线、边口给关系标签，
+          松手前就能读懂「会连到谁 / 会成为子节点还是同级节点」。 */}
       {attach ? (() => {
         const b = attach.node === MAIN_KEY ? mainBox : boxes.get(attach.node)
+        const source = boxes.get(attach.source)
         if (!b) return null
-        const T = 4
+        const T = 5
         const horiz = attach.side === 'n' || attach.side === 's'
+        const lx = attach.side === 'w' ? b.x : attach.side === 'e' ? b.x + b.w : b.x + b.w / 2
+        const ly = attach.side === 'n' ? b.y : attach.side === 's' ? b.y + b.h : b.y + b.h / 2
         return (
-          <div
-            className={`amx-el-attach is-${attach.rel}`}
-            data-attach={attach.side}
-            style={{
-              left: `${attach.side === 'e' ? b.x + b.w - T : b.x}px`,
-              top: `${attach.side === 's' ? b.y + b.h - T : b.y}px`,
-              width: `${horiz ? b.w : T}px`,
-              height: `${horiz ? T : b.h}px`,
-            }}
-          />
+          <>
+            {source ? (
+              <Connector
+                el={{ kind: 'connector', id: '~attach', from: { ref: attach.source }, to: attach.node === MAIN_KEY ? { main: true } : { ref: attach.node }, label: null }}
+                a={source}
+                b={b}
+                sel={false}
+                preview
+              />
+            ) : null}
+            <div className={`amx-el-attach-target is-${attach.rel}`} style={{ left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` }} />
+            <div
+              className={`amx-el-attach is-${attach.rel}`}
+              data-attach={attach.side}
+              style={{
+                left: `${attach.side === 'e' ? b.x + b.w - T : b.x}px`,
+                top: `${attach.side === 's' ? b.y + b.h - T : b.y}px`,
+                width: `${horiz ? b.w : T}px`,
+                height: `${horiz ? T : b.h}px`,
+              }}
+            />
+            <div className={`amx-el-attach-label is-${attach.rel}`} style={{ left: `${lx}px`, top: `${ly}px` }}>
+              {attach.rel === 'child' ? '设为子节点' : '设为同级节点'}
+            </div>
+          </>
         )
       })() : null}
       {marquee ? (

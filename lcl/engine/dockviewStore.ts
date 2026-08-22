@@ -8,7 +8,7 @@ import { create } from 'zustand'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { Leaf, ViewLocation } from './types'
 import { getView } from './viewRegistry'
-import { label } from './types'
+import { identitySig, label } from './types'
 import { computeSideWidth } from './sideWidth'
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
@@ -153,7 +153,13 @@ function makeLeaf(panel: IDockviewPanel): Leaf {
     setTitle: (t) => panel.api.setTitle(t),
     // params 是布局的一部分(重建视图就靠它),改完必须记账 —— Dockview 的 onDidLayoutChange
     // 只认结构变化,不认参数变化,不主动存就会在下次结构事件前被旧快照覆盖(如「钉住会话」重启后又变回跟随档)。
-    setParams: (p) => { panel.api.updateParameters({ ...(panel.params ?? {}), ...p }); scheduleWorkspaceSave() },
+    // ⚠️ 必须连 refreshTabs 一起发:视图**就地换自己指向的文件**(编辑器认领新笔记、阅读器换 PDF)
+    //    走的就是这条,不刷 mainTabs 的话订阅方看不见这次跳转 → 前进后退不记账(2026-08-20 实报)。
+    setParams: (p) => {
+      panel.api.updateParameters({ ...(panel.params ?? {}), ...p })
+      useWorkspace.getState().refreshTabs()
+      scheduleWorkspaceSave()
+    },
     close: () => panel.api.close(),
   }
 }
@@ -215,12 +221,16 @@ export interface MainTab {
   followActive: boolean
   /** 这个 tab 承载的文件(笔记 notePath / 工作区文件 path);无文件的视图(启动器、日历…)为 undefined。
    *  「主区当前打开的是哪个文件」全靠它对外传导(侧栏对话的默认引用等)。
-   *  ⚠️ 笔记编辑器**就地换笔记**不发 refreshTabs(参数变不触发),那条实时性由 pageStore 的活动
-   *  作用域负责;这里只保证「开/关/切 tab」这类结构变化下的正确。 */
+   *  (2026-08-20 起就地换文件也发 refreshTabs —— 见 setParams 与 sig。) */
   filePath?: string
   /** 本组内的**前台** tab(组自己的 activePanel)。`active` 比的是跨三区唯一的 api.activePanel ——
    *  焦点一旦落在侧栏,主区就一个 active 都没有;要问「主区现在显示的是哪个」只能看这个。 */
   front: boolean
+  /** 这个 tab 现在指着哪个对象(所有 *Path / sessionId 类参数的指纹)。**只用来比对**:
+   *  「同一个 tab 里换一个文件」(A.pdf → B.pdf、笔记 → PDF → 笔记)是纯参数变化,不进比对的话
+   *  mainTabs 引用不变 → 订阅方(导航历史/最近使用)整片看不见,前进后退于是「无法识别」
+   *  (2026-08-20 用户实报)。 */
+  sig: string
 }
 
 /** 侧栏视图的轻量快照,供顶栏两侧的视图图标渲染。收起态也列(从 stash),点击可重开。 */
@@ -388,12 +398,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         // notePath = Amadeus 编辑器;path = 工作区文件预览(wsfile)。两者都是「这个 tab 是哪个文件」。
         filePath: typeof params.notePath === 'string' ? params.notePath : typeof params.path === 'string' ? params.path : undefined,
         front: (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id,
+        sig: identitySig(params),
       }
     })
     const prev = get().mainTabs
     const same = prev.length === tabs.length && prev.every((t, i) =>
       t.id === tabs[i].id && t.active === tabs[i].active && t.title === tabs[i].title
-      && t.filePath === tabs[i].filePath && t.front === tabs[i].front)
+      && t.filePath === tabs[i].filePath && t.front === tabs[i].front && t.sig === tabs[i].sig)
     if (!same) set({ mainTabs: tabs })
 
     // 两侧侧栏图标:可见时从 live panel(active=组内当前显示),收起时从 stash(无 active)。

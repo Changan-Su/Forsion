@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { findProjectRoot, projectDocPaths, loadProjectDoc, projectDocSection } from './projectDoc.js';
 
@@ -32,9 +32,38 @@ describe('项目根定位', () => {
   it('找最近的含标记祖先', () => {
     expect(findProjectRoot(path.join(root, 'repo/pkg/app'))).toBe(path.join(root, 'repo'));
   });
-  it('.tangu 也算标记(不是只认 .git)', () => {
+  it('⚠️`.tangu` 不是标记:它就是引擎 home 的目录名(~/.tangu),认了会让 $HOME 恒为项目根', () => {
     w('solo/.tangu/AGENTS.md', 'x');
-    expect(findProjectRoot(path.join(root, 'solo'))).toBe(path.join(root, 'solo'));
+    expect(findProjectRoot(path.join(root, 'solo'))).toBeNull();
+    // 但那份 .tangu/AGENTS.md 照样读得到 —— 无根时只看 cwd,cwd 就是它所在那层
+    expect(projectDocPaths(path.join(root, 'solo'))).toEqual([path.join(root, 'solo/.tangu/AGENTS.md')]);
+  });
+  it('⚠️走到家目录就停:$HOME 自己是 dotfiles 仓也不当项目根', () => {
+    const sub = path.join(homedir(), 'no-such-dir-for-test');
+    expect(findProjectRoot(homedir())).toBeNull();
+    expect(findProjectRoot(sub)).toBeNull(); // 不存在也不该上溯出 $HOME
+  });
+  it('⚠️家目录守卫比的是真实身份:软链别名绕不过去(codex)', () => {
+    // 用可控的假 home 建真场景:home 自己是 dotfiles 仓(有 .git)+ 一条指向它的软链别名。
+    // 字面比对下 `<root>/homealias` !== `<root>/fakehome` → 守卫不命中 → 经别名看到 .git
+    // → 把家目录判成项目根 → 家目录那份 AGENTS.md 被当成项目约定注入。
+    const fakeHome = path.join(root, 'fakehome');
+    w('fakehome/.git/HEAD', 'ref: refs/heads/main');
+    w('fakehome/AGENTS.md', '家目录的通用约定,不该被当成项目约定');
+    w('fakehome/work/deep/note.txt', 'x');
+    const alias = path.join(root, 'homealias');
+    symlinkSync(fakeHome, alias);
+    const prevHome = process.env.HOME;
+    process.env.HOME = fakeHome; // os.homedir() 在 POSIX 上读 $HOME
+    try {
+      expect(findProjectRoot(fakeHome)).toBeNull(); // 字面命中
+      expect(findProjectRoot(alias)).toBeNull(); // ⚠️软链别名:修复前会返回 alias
+      expect(findProjectRoot(path.join(alias, 'work/deep'))).toBeNull(); // ⚠️修复前会返回 alias
+      expect(projectDocPaths(path.join(alias, 'work/deep'))).toEqual([]); // 家目录那份没渗进来
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
   });
 });
 
@@ -90,6 +119,14 @@ describe('信任边界(codex 评审)', () => {
     symlinkSync(path.join(root, 'secret.key'), path.join(root, 'evil/AGENTS.md'));
     expect(projectDocPaths(path.join(root, 'evil'))).toEqual([]);
     expect(loadProjectDoc(path.join(root, 'evil'))).toBeNull();
+  });
+
+  it('⚠️目录段软链也要拒:提交 `.claude -> 别处` 不能把别处的 CLAUDE.md 读进系统提示', () => {
+    // lstat 只判最后一段 → 光有上面那条防线,目录软链能整个绕过去
+    mkdirSync(path.join(root, 'evildir/.git'), { recursive: true });
+    w('elsewhere/CLAUDE.md', '别人家的约定');
+    symlinkSync(path.join(root, 'elsewhere'), path.join(root, 'evildir/.claude'));
+    expect(projectDocPaths(path.join(root, 'evildir'))).toEqual([]);
   });
 
   it('二进制文件(含 NUL)跳过,不把控制字符塞进系统提示', () => {

@@ -2,7 +2,7 @@
  *  每个项目自带 context 敏感性(不适用时返回 null 整项消失):同步项无同步源即隐藏、
  *  反链/字数只在 Amadeus 编辑器视图、收件箱/运行中只在计数 > 0 时出现。
  *  用户可在设置「通知与状态栏」隐藏/排序(prefs.ts);插件项见 pluginStatusBridge.tsx。 */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, Check, CloudOff, Inbox, Link2, RefreshCw } from 'lucide-react'
 import {
   StatusBar, activeMainPanel, addStatusItem, getActiveSpace, label,
@@ -13,6 +13,7 @@ import { useApp } from '../stores/appStore'
 import { useInbox } from '../stores/inboxStore'
 import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStore'
 import { usePageStore } from '@amadeus/store/pageStore'
+import { useNoteChars } from '@amadeus/lib/activeNote'
 import { amadeus } from '@amadeus/api'
 import { useSbPrefs } from './prefs'
 import type { AmadeusSyncStatus, RemoteSyncProgress, RemoteSyncReport } from '../types'
@@ -118,7 +119,7 @@ function SyncItem() {
 function BacklinksItem() {
   const { t } = useI18n()
   const type = useActiveMainType()
-  const activePage = usePageStore((s) => s.activePage)
+  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
   const ver = usePageStore((s) => s.linkGraphVersion)
   const [count, setCount] = useState<number | null>(null)
   useEffect(() => {
@@ -143,13 +144,8 @@ function BacklinksItem() {
 function WordCountItem() {
   const { t } = useI18n()
   const type = useActiveMainType()
-  const activePage = usePageStore((s) => s.activePage)
-  const blocks = usePageStore((s) => s.blocks)
-  const chars = useMemo(() => {
-    const text = Object.values(blocks).map((b) => b.content).join(' ')
-    return text.replace(/\s/g, '').length
-  }, [blocks])
-  if (type !== 'amadeus-editor' || !activePage) return null
+  const chars = useNoteChars() // v3 读 blocks,v4 问 unified 实例(正文不进 store)
+  if (type !== 'amadeus-editor' || chars == null) return null
   return <span className="sb-plain">{t('sb.chars', { n: chars })}</span>
 }
 

@@ -138,7 +138,11 @@
   top: 2px;
   bottom: 2px;
   left: 2px;
-  width: calc(50% - 2px);
+  /* 格数与当前格由变量驱动(2026-08-20 加第三个消费者:⌘P 快切的四格分类)。
+     ⚠️ 缺省 `--seg-n: 2` 时 `(100% - 4px)/2` 与原来的 `50% - 2px` 逐像素相同,而 `--seg-i` 缺省 0
+     时 translateX(0) 也与原来一致 —— 两个老消费者(本地|云端 / 文档|画布)一个字节都没变,
+     它们照旧靠下面的 `[data-side=…]` 规则平移(属性选择器特异性更高,盖得住这条)。 */
+  width: calc((100% - 4px) / var(--seg-n, 2));
   border-radius: 999px;
   /* 次强调色(= 桌面 ribbon `.rb-space.on` 那一档),不是纯 --accent 实底 —— 用户拍板 2026-08-13。
    * 半透明叠在上面的黑色轨道上:深色下往亮里走、浅色下往暗里走,明暗方向照旧成立,只是更克制。 */
@@ -148,6 +152,7 @@
   /* 克制的弹性:轻微过冲即收,不弹跳 */
   transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
   will-change: transform;
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
 }
 .t2s-vaultseg-thumb[data-side='cloud'] { transform: translateX(100%); }
 /* 第二个消费者:Amadeus 笔记的「文档 | 画布」模式胶囊(amadeus/unified/UnifiedPage)。

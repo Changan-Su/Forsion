@@ -3,16 +3,17 @@
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
-import { useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare } from 'lucide-react'
 import * as api from '../../services/backendService'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg, InquiryRequest } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg, InquiryRequest, SketchItem } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
 import { WikiText } from '../../components/ChatWikiLink'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
+import { SketchCards } from '../../components/SketchCard'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import { ToolGroup } from '../../components/ToolGroup'
 import { ApprovalCard } from '../../components/ApprovalCard'
@@ -34,6 +35,33 @@ export function caretSegIndex(segs: MsgSeg[], toolEvents?: ToolEvent[]): number 
     if (s.t === 'text' ? !!s.text : s.ids.some((id) => toolEvents?.some((e) => e.id === id))) return i
   }
   return -1
+}
+
+export type OrderedToolPart =
+  | { t: 'tools'; events: ToolEvent[] }
+  | { t: 'sketch'; item: SketchItem }
+
+/**
+ * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后；
+ * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
+ */
+export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[]): OrderedToolPart[] {
+  const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
+  const parts: OrderedToolPart[] = []
+  let tools: ToolEvent[] = []
+  const flushTools = (): void => {
+    if (tools.length) parts.push({ t: 'tools', events: tools })
+    tools = []
+  }
+  for (const ev of events) {
+    tools.push(ev)
+    const sketch = sketchByCall.get(ev.id)
+    if (!sketch) continue
+    flushTools()
+    parts.push({ t: 'sketch', item: sketch })
+  }
+  flushTools()
+  return parts
 }
 
 /** 头像回退:无图时取昵称首字(支持 CJK/emoji),对齐 desktop1.0。 */
@@ -305,6 +333,16 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   const { text: body, items: suggestions } = splitSuggestions(msg.content, { streaming })
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
+  const voiceMode = !!voice?.on && (msg.status === 'done' || msg.status === 'stopped')
+  // 顺序段里已消费的 Sketch 不许再在底部画一次。旧历史/语音消息走尾部兼容路径。
+  const availableSketchIds = new Set((msg.sketches || []).map((item) => item.callId))
+  const inlineSketchIds = new Set<string>()
+  if (!voiceMode) {
+    for (const seg of msg.segments || []) {
+      if (seg.t === 'tools') for (const id of seg.ids) if (availableSketchIds.has(id)) inlineSketchIds.add(id)
+    }
+  }
+  const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
 
   return (
     <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`}>
@@ -314,9 +352,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {msg.reasoning && <Thinking2 reasoning={msg.reasoning} />}
         {(() => {
-          const voiceMode = !!voice?.on && (msg.status === 'done' || msg.status === 'stopped')
-          // 直播穿插:有顺序段(segments)则按发生顺序渲染文字段/工具段(连续工具已在归约期并块);
-          // 无段(历史重载 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
+          // 直播与带锚点的历史:按发生顺序渲染文字/工具,并把 Sketch 插在对应工具完成点。
+          // 无段(旧历史 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
             const caretAt = msg.status === 'streaming' ? caretSegIndex(msg.segments, msg.toolEvents) : -1
             // 一道围栏可能被中间的工具块切成两段 —— 状态要续读,否则后半段的建议原文会漏进正文。
@@ -331,7 +368,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
-              return evs.length ? <ToolGroup key={i} events={evs} running={msg.status === 'streaming'} /> : null
+              const parts = partitionToolSegment(evs, msg.sketches)
+              return parts.length ? (
+                <Fragment key={i}>
+                  {parts.map((part, j) => part.t === 'tools'
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} />
+                    : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} />)}
+                </Fragment>
+              ) : null
             })
           }
           return (
@@ -374,10 +418,15 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.todos?.length && <TodoList todos={msg.todos} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
-        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && <div className="t2-dim streaming-caret">{t('chat.thinking')}</div>}
+        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && (
+          <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
+            {t('chat.thinking')}
+          </div>
+        )}
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
+        {!!trailingSketches.length && <SketchCards items={trailingSketches} />}
         {msg.approvals?.map((a) => <ApprovalCard key={a.approvalId} req={a} onDecide={(act, args) => handlers?.onApproval?.(a.approvalId, act, args)} />)}
         {msg.inquiries?.filter((q) => q !== planInq).map((q) => <InquiryCard key={q.inquiryId} req={q} onAnswer={(ans) => handlers?.onInquiry?.(q.inquiryId, ans)} />)}
         {msg.status === 'error' && (

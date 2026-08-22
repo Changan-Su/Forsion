@@ -7,6 +7,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
+import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
 import type { EmbedResolved } from '@amadeus-shared/ipc'
 import { getBlockType } from '../blocks/registry'
 import { DatabaseEmbed } from '../blocks/database/DatabaseEmbed'
@@ -215,7 +216,8 @@ export const BlockHost = memo(function BlockHost({
   const embedFile = useMemo(() => {
     if (!embedTarget || embedImage || embedDb || embedDraw || embedPlugin) return null
     const t = embedTarget.split('|')[0].trim()
-    if (t.includes('#') || !FILE_EXT_RE.test(t)) return null
+    // 裸 `.md` 是笔记,不是文件卡(与 v4 embedLayer 同源判定;见 isPlainNoteRef)。
+    if (t.includes('#') || isPlainNoteRef(t) || !FILE_EXT_RE.test(t)) return null
     const kind = PDF_EXT_RE.test(t) ? 'pdf' : VIDEO_EXT_RE.test(t) ? 'video' : AUDIO_EXT_RE.test(t) ? 'audio' : 'other'
     return { name: t, kind, url: kind === 'other' ? '' : toAssetUrl(t) }
   }, [embedTarget, embedImage, embedDb, embedDraw, embedPlugin])

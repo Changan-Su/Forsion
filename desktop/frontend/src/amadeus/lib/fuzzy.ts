@@ -7,7 +7,10 @@
  * first match and a shorter target.
  */
 export function fuzzyScore(query: string, target: string): number | null {
-  const q = query.trim().toLowerCase()
+  const raw = query.trim().toLowerCase()
+  // 查询里的分隔符不当数(空格/连字符/下划线/点/斜杠互通):用户打「moc forsion」要能找到
+  // 「moc-forsion」—— 目标侧照旧保留分隔符,词首加分那一条还靠它。
+  const q = raw.replace(/[\s\-_/.]+/g, '')
   const t = target.toLowerCase()
   if (!q) return 1
   let score = 0
@@ -28,7 +31,7 @@ export function fuzzyScore(query: string, target: string): number | null {
   if (qi < q.length) return null // not every query char matched
   score -= firstIdx * 0.1
   score -= t.length * 0.02
-  if (t === q) score += 10 // exact
+  if (t === raw || t === q) score += 10 // exact
   return score
 }
 

@@ -46,6 +46,8 @@ import { previewTts } from '../services/ttsService'
 import { ShortcutsTab } from './ShortcutsTab'
 import { PluginsTab } from './PluginsTab'
 import { AmadeusPluginsTab } from './AmadeusPluginsTab'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
 import { HooksTab } from './HooksTab'
@@ -61,11 +63,13 @@ import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewComman
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
+import { canvasDoubleClickFocusEnabled, setCanvasDoubleClickFocusEnabled } from '@amadeus/unified/canvasPrefs'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
-// 动态插件设置页用 `plugin:<id>`(Obsidian 式一级入口)。
-export type Tab = StaticTab | `plugin:${string}`
+// 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
+// ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
+export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 
@@ -201,6 +205,8 @@ export const SettingsModal: React.FC<{
   })
   // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
+  // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
+  const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
     ui: readFont('ui'), body: readFont('body'), mono: readFont('mono'),
@@ -253,8 +259,10 @@ export const SettingsModal: React.FC<{
   // 一级页也做 activeSub 同款推导:请求的页在本端不存在时(深链带来的旧 tab、或上面被摘掉的 general)
   // 落到第一个可用页,免得停在白板上。plugin:<id> 动态页不在 tabItems 里,单独放行。
   const tab: Tab = tabItems.some(([id]) => id === rawTab) || rawTab.startsWith('plugin:')
+    || (rawTab.startsWith('fplugin:') && isDesktop && !!window.amadeus)
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
+  const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
 
   const [stored, setStored] = useState<StoredDesktopConfig | null>(null)
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
@@ -373,6 +381,18 @@ export const SettingsModal: React.FC<{
   const pluginNavItems = (plugins || [])
     .filter((pl) => pl.enabled && pl.settings)
     .map((pl) => [`plugin:${pl.id}`, pluginNm(pl)] as [Tab, string])
+
+  // Forsion 插件同款待遇:有真设置的各成左栏一级项,免得几十个插件全靠进插件页逐张卡点开找。
+  // ⚠️ pluginStore.enable() 给每个启用插件自动塞一行 `workFolder`,那行人人都有,不算「有设置」。
+  const amxPlugins = usePluginStore((s) => s.plugins)
+  const amxActiveIds = usePluginStore((s) => s.activeIds)
+  const amxSettings = usePluginStore((s) => s.settings)
+  const amxSettingsViews = usePluginStore((s) => s.settingsViews)
+  // ⚠️ 闸必须与「插件」页(amadeus-plugins,isDesktop 限定)一致:移动端 window.amadeus 在、那一页却不在,
+  // 只按 amadeus 放行会列出一批点「返回」就被推导弹回首页的条目。
+  const forsionNavItems: Array<[Tab, string]> = !(isDesktop && window.amadeus) ? []
+    : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
+      .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
   useEffect(() => { if (tab === 'plugins') setTab('amadeus-plugins') }, [tab])
@@ -594,6 +614,9 @@ export const SettingsModal: React.FC<{
     try {
       await window.tangu.providerLogin(id)
       refreshAuth()
+      // 后端已带新 provider 重启完(IPC 已 await),按新端口重拉模型目录 —— 否则本页停在
+      // 登录前的旧目录,用户「登录了却看不到该 provider 的模型」。
+      await loadModels(await window.tangu.getConfig?.())
     } catch (e: any) {
       setTestResult(String(e?.message || e).replace(/^Error invoking remote method '[^']+': Error: /, ''))
     } finally {
@@ -638,10 +661,11 @@ export const SettingsModal: React.FC<{
     }
   }
 
-  const loadModels = async () => {
+  // cfg 缺省取实时 store 值而非 draft:draft 是挂载时快照,后端一重启(换端口)就成死地址。
+  const loadModels = async (cfg?: TanguDesktopConfig) => {
     setModelsLoading(true)
     try {
-      setModels(await listModels(draft))
+      setModels(await listModels(cfg ?? useApp.getState().cfg))
     } catch (e: any) {
       setModels(null)
       setTestResult(e?.message || t('settings.model.loadFailed'))
@@ -678,8 +702,8 @@ export const SettingsModal: React.FC<{
     p.onReconnect(patch)
   }
 
-  const activeTabLabel = tab.startsWith('plugin:')
-    ? (pluginNavItems.find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
+  const activeTabLabel = isPluginTab
+    ? ([...forsionNavItems, ...pluginNavItems].find(([id]) => id === tab)?.[1] || t('settings.tab.plugins'))
     : (tabItems.find(([id]) => id === tab)?.[1] || t('settings.title'))
   const pageDescriptionKey: Partial<Record<StaticTab, string>> = {
     general: 'settings.page.generalDescription',
@@ -702,9 +726,9 @@ export const SettingsModal: React.FC<{
     developer: 'settings.page.developerDescription',
     about: 'settings.page.aboutDescription',
   }
-  const activeStaticTab = tab.startsWith('plugin:') ? null : tab as StaticTab
+  const activeStaticTab = isPluginTab ? null : tab as StaticTab
   const activeDescriptionKey = activeStaticTab ? pageDescriptionKey[activeStaticTab] : undefined
-  const activeTabDescription = tab.startsWith('plugin:')
+  const activeTabDescription = isPluginTab
     ? t('settings.page.pluginDescription')
     : activeDescriptionKey ? t(activeDescriptionKey) : ''
 
@@ -818,7 +842,7 @@ export const SettingsModal: React.FC<{
                   .map((id) => tabItems.find(([tid]) => tid === id))
                   .filter((x): x is [Tab, string] => !!x)
                 // 「社区插件」组末尾追加已启用且有设置的外置 agent 插件,各成一级项(动态项无图标)。
-                const all = grp.key === 'extensions' ? [...base, ...pluginNavItems] : base
+                const all = grp.key === 'extensions' ? [...base, ...forsionNavItems, ...pluginNavItems] : base
                 const items = secHit || grp.label.toLowerCase().includes(ql)
                   ? all
                   : all.filter(([, label]) => label.toLowerCase().includes(ql))
@@ -1255,6 +1279,11 @@ export const SettingsModal: React.FC<{
                         <SettingsRow label={t('settings.notes.upgradeV4Label')} description={t('settings.notes.upgradeV4Hint')} control={<SettingsSwitch checked={stored.notesUpgradeV4 !== false} onChange={(on) => { setUpgradeV4Enabled(on); void window.tangu!.setConfig({ notesUpgradeV4: on }).then(setStored) }} label={t('settings.notes.upgradeV4Label')} />} />
                         <SettingsRow label={t('settings.notes.wikiFilesLabel')} description={t('settings.notes.wikiFilesHint')} control={<SettingsSwitch checked={stored.notesWikiIncludeFiles !== false} onChange={(on) => { setWikiFilesEnabled(on); void window.tangu!.setConfig({ notesWikiIncludeFiles: on }).then(setStored) }} label={t('settings.notes.wikiFilesLabel')} />} />
                         <SettingsRow
+                          label={t('settings.notes.canvasDoubleClickFocusLabel')}
+                          description={t('settings.notes.canvasDoubleClickFocusHint')}
+                          control={<SettingsSwitch checked={canvasDoubleClickFocus} onChange={(on) => { setCanvasDoubleClickFocus(on); setCanvasDoubleClickFocusEnabled(on) }} label={t('settings.notes.canvasDoubleClickFocusLabel')} />}
+                        />
+                        <SettingsRow
                           label={t('settings.notes.deleteAssetsLabel')}
                           description={t('settings.notes.deleteAssetsHint')}
                           control={(
@@ -1356,7 +1385,7 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         {t('settings.model.defaultLabel')}
-                        <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={loadModels}>
+                        <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => void loadModels()}>
                           <RefreshCw size={12} className={modelsLoading ? 'spin' : ''} />
                         </button>
                       </label>
@@ -1425,6 +1454,7 @@ export const SettingsModal: React.FC<{
                             </button>
                           ))}
                         </div>
+                        {providerBusy && <div className="hint" style={{ marginTop: 6 }}>{t('settings.provider.loginBusy')}</div>}
                         <div className="hint">
                           {t('settings.provider.loginHintPrefix')}<code>provider/model</code>{t('settings.provider.loginHintSuffix')}
                         </div>
@@ -2115,6 +2145,15 @@ export const SettingsModal: React.FC<{
                 {tab === 'spaces' && <SpacesTab />}
                 {tab === 'notifications' && <NotificationsTab />}
                 {tab === 'statusbar' && <StatusBarTab />}
+                {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
+                {tab.startsWith('fplugin:') && (
+                  <AmadeusPluginsTab
+                    cfg={p.cfg}
+                    onEngineReload={reloadPlugins}
+                    enginePlugins={plugins}
+                    controlledDetail={{ id: tab.slice('fplugin:'.length), onBack: () => goTab('amadeus-plugins') }}
+                  />
+                )}
                 {tab.startsWith('plugin:') && (() => {
                   const pid = tab.slice('plugin:'.length)
                   const pl = (plugins || []).find((x) => x.id === pid)

@@ -17,3 +17,8 @@
 .amx-qf-foot kbd { background: var(--overlay-light, rgba(127, 127, 127, 0.14)); border-radius: 4px; padding: 1px 5px; font-family: inherit; }
 /* 居中小卡片(加库第二步:选日期/勾选列),复用同款悬浮 chrome */
 .amx-qf-card { width: min(340px, 92vw); background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4); padding: 12px; }
+/* 分类胶囊:复用 `.t2s-vaultseg`(sidebar2.css),这里只补面板里的尺寸与间距。
+   选中态的字色/滑块色一律由那颗组件出,别在这儿另调一套 —— 第一版自己写 chip 时就是在这里
+   写死了 color:#fff,深色皮肤下 --accent 近白 = 白字白底(截图自查才发现)。 */
+.amx-qf-seg { margin: 8px 14px; height: 28px; }
+.amx-qf-seg button { font-size: 12px; }

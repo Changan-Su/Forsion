@@ -935,14 +935,15 @@ async function main() {
     await p.keyboard.press('ArrowLeft')
     await p.waitForTimeout(180)
     const on = await probe()
-    check('T35 行首向左进入字面 "## " 编辑', on.hash === '## ' && await p.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix')), `hash=${JSON.stringify(on.hash)}`)
+    check('T35 第一下向左即越过唯一空格进入字面 "## "', on.hash === '## '
+      && await p.evaluate(() => document.activeElement?.classList.contains('amx-struct-prefix') && document.activeElement.selectionStart === 2),
+    `hash=${JSON.stringify(on.hash)}`)
     // ⚠️ 露源码时**必须仍是标题字号**。曾经降回正文,结果「敲 `# ` 触发已生效」与
     // 「触发压根没生效」在屏幕上一模一样(用户实报「输入 # 什么也没发生」)。
     check('T35 露源码时仍是标题字号(绝不降回正文)', on.fs > on.base + 2, JSON.stringify(on))
     check('T35 节点是 h2', on.tag === 'H2', `tag=${on.tag}`)
     // 井号是装饰而非文本:落盘必须还是 `## 二级标题`,不能变成 `## ## 二级标题`
     check('T35 井号不进文档(往返不变)', (await mdOf(p)).trim() === '## 二级标题', `md=${JSON.stringify(await mdOf(p))}`)
-    await p.keyboard.press('ArrowLeft')
     await p.keyboard.press('Backspace')
     await p.waitForTimeout(180)
     const h1 = await probe()

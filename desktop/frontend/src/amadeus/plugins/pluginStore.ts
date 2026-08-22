@@ -7,7 +7,7 @@
 // full renderer scope). Only install plugins you trust.
 
 import { create } from 'zustand'
-import { usePageStore } from '../store/pageStore'
+import { noteOf, usePageStore } from '../store/pageStore'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -20,6 +20,7 @@ import { registerPluginSeries, track, unregisterPluginAchievements } from '../..
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { currentLocale, subscribeLocale } from '../../i18n'
+import { AUTO_WORK_FOLDER_KEY } from './display'
 import type {
   AmadeusPlugin,
   CommandContribution,
@@ -163,11 +164,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
   const api: PluginAppApi = {
-    getActivePage: () => usePageStore.getState().activePage,
-    getActivePageText: () =>
-      Object.values(usePageStore.getState().blocks)
-        .map((b) => b.content)
-        .join('\n\n'),
+    // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
+    getActivePage: () => noteOf(usePageStore.getState()),
+    getActivePageText: () => surface.api.getPage().text,
     loadPage: (p) => { if (ok()) void usePageStore.getState().loadPage(p) },
     createPage: () => { if (ok()) void usePageStore.getState().createPage() },
     toggleMode: () => void toggleMode(),
@@ -540,7 +539,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。teardown/失败清理按 pluginId 一并收走。
       set((s) => ({
         settings: [...s.settings, { pluginId: id, item: {
-          key: 'workFolder', label: '工作文件夹', type: 'text' as const,
+          key: AUTO_WORK_FOLDER_KEY, label: '工作文件夹', type: 'text' as const,
           default: sanitizeFolderName(plugin.name, id),
           description: '本插件在笔记库内读写文件的文件夹(相对库根;留空恢复默认=插件名)',
         } }],

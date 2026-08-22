@@ -11,14 +11,14 @@
  */
 import { create } from 'zustand'
 import type { Leaf, ViewLocation } from './types'
-import { label } from './types'
+import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
 import type { PersistedPanel } from './layoutPersist'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
  *  因为读者读的是可选属性)。`filePath` 见桌面版同名字段的注释。 */
-export interface MainTab { id: string; type: string; title: string; active: boolean; closable: boolean; sessionId?: string; followActive: boolean; filePath?: string; front: boolean }
+export interface MainTab { id: string; type: string; title: string; active: boolean; closable: boolean; sessionId?: string; followActive: boolean; filePath?: string; front: boolean; sig: string }
 /** 侧栏视图快照。 */
 export interface SideTab { type: string; title: string; active: boolean; closable: boolean }
 
@@ -303,6 +303,7 @@ export const useWorkspace = create<WS>((set, get) => {
           followActive: r.params.followActive !== false,
           filePath: typeof r.params.notePath === 'string' ? r.params.notePath : typeof r.params.path === 'string' ? r.params.path : undefined,
           front: active, // 单列壳同一时刻只显示一个主区 leaf → 前台即活动
+          sig: identitySig(r.params), // 就地换文件也算一次跳转,见桌面版同名字段
         }
       }
       const side = (arr: LeafRec[], activeId: string | null): SideTab[] => arr.map((r) => {

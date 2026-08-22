@@ -30,7 +30,9 @@ export function AmadeusOverlays() {
   useEffect(() => {
     const onPick = (e: Event): void => {
       const d = (e as CustomEvent<TemplateCtx>).detail
-      if (d?.afterId) useUiOverlay.getState().openTemplate(d)
+      // 两条坐标制各认一个字段:v3 给 afterId,v4/unified 给 v4Path。只认 afterId 的话,
+      // 统一实例发来的事件会被这道门静默丢掉(选择器根本不弹)。
+      if (d?.afterId || d?.v4Path) useUiOverlay.getState().openTemplate(d)
     }
     window.addEventListener('amadeus:template-picker', onPick)
     return () => window.removeEventListener('amadeus:template-picker', onPick)
@@ -162,7 +164,7 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
     const t = templates[i]
     close()
     // 模板可能在列表刷新前被删(readPage 只读、缺文件即抛)——吞掉即可,不留幽灵文件。
-    if (t) insertTemplate(t, ctx.afterId, ctx.emptyBlock).catch(() => { /* ignore */ })
+    if (t) insertTemplate(t, ctx).catch(() => { /* ignore */ })
   }
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, templates.length - 1)) }

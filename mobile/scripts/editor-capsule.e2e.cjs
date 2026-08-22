@@ -92,6 +92,17 @@ async function main() {
       if (!b) throw new Error('目标不可见')
       await tapBox(b)
     }
+    /** 关 sheet 专用:点**遮罩顶部**而不是它的几何中心 —— 遮罩铺满全屏,而 sheet 从底部长上来,
+     *  动作多加一条(2026-08-20 加画布项时实测)中心就落进 sheet 里,变成误点某一行(当时点到了
+     *  删除笔记,后面全线超时)。顶部 60px 恒在 sheet 之上。 */
+    const closeSheet = async () => {
+      const b = await page.locator('.mb-sheet-scrim').boundingBox()
+      if (!b) return
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: b.x + b.width / 2, y: b.y + 60 }] })
+      await new Promise((r) => setTimeout(r, 60))
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await page.waitForTimeout(400)
+    }
 
     // 进 Amadeus space(Space 切换条在左抽屉底部)→ 用侧栏自己的「新建笔记」开一篇。
     // ⚠️ 不走 window.amadeus.newPage():那条只写库、不通知侧栏刷新结构,列表里根本不出现(实测)。
@@ -104,8 +115,11 @@ async function main() {
     await page.waitForTimeout(900)
     await tap(page.locator('.mb-topbar .mb-icon-btn').first())
     await page.waitForTimeout(600)
-    await tap(page.locator('.mb-drawer--left button', { hasText: '新建笔记' }).first())
-    await page.waitForTimeout(1500)
+    // ⚠️ 2026-08-20 从「抽屉里的新建笔记」改成**欢迎页**那颗:抽屉那条在本台架里已经建不出笔记
+    //    (点完 .t2s-srow 一行都不多,主区仍停在欢迎页),而欢迎页这颗直接 myPs().createPage()。
+    //    抽屉那条为什么不灵是另一码事,跟本文件钉的三件事无关 —— 别为了它把台架卡在这儿。
+    await tap(page.locator('.amx-welcome-btn', { hasText: '新建笔记' }).first())
+    await page.waitForTimeout(1800)
     if (!(await page.$('.amx-editor .page-view'))) throw new Error('新建笔记后主区没有出现编辑器')
     // 「新建笔记」不收抽屉(既有行为,与本次改动无关),而**点笔记行**会自动收(note-open e2e 钉着)。
     // 所以再开一次抽屉、点刚建那行进来 —— 主区不带 push 位移,后面的几何与截图才是真状态。
@@ -148,8 +162,9 @@ async function main() {
     const want = ['源码', '上传文件到本页', '置顶', '收藏', '导出为 PDF', '在文件管理器中显示', '删除笔记']
     const missing = want.filter((w) => !rows.some((r) => r.includes(w)))
     ok('2 「⋯」sheet 收下了原顶栏 + 原「更多操作」的全部动作', missing.length === 0, missing.length ? `缺:${missing.join('/')}(现有:${rows.join('|')})` : rows.join(' | '))
-    await tap(page.locator('.mb-sheet-scrim'))
-    await page.waitForTimeout(400)
+    // 一个功能一个入口:画布搬进常驻胶囊后,「⋯」里不许再留一条(用户 2026-08-20 拍板)。
+    ok('2b 「⋯」里没有重复的画布条目', !rows.some((r) => r.includes('画布')), rows.join(' | '))
+    await closeSheet()
 
     // ── 3. 「+」→ 双列块面板 → 真插块 ────────────────────────────────────────
     await tap(page.locator('.page-view .ProseMirror').first())
@@ -204,6 +219,79 @@ async function main() {
 
     await page.screenshot({ path: path.join(shotDir, 'after-insert.png') })
     console.log('screenshot →', path.join(shotDir, 'after-insert.png'))
+
+    // ── 4. 画布模式(2026-08-20 补入口)────────────────────────────────────────
+    // 桌面那颗「文档 | 画布」胶囊是 portal 进 .amx-toolbar 里的插槽的,而顶栏在移动端整行不渲染
+    // (1a 钉着)→ 手机上一直没有任何进画布的路,v4 画布代码在包里但点不到。入口补在「⋯」里。
+    // ⚠️ 顺带:UnifiedPage 那道「移动端忽略盘上 mode:canvas」的门原来判 UI_MODE,而 APK 里
+    //    UI_MODE 恒 'desktop'(mobile/index.html 没有写 lcl.uiMode 的那段脚本),从来没生效过;
+    //    已改判 isCoarsePointer() —— 与 1a「顶栏不渲染」同一个信号,1a 绿就说明这门在手机上真会关。
+    const capsule = await page.evaluate(() => {
+      const bar = document.querySelector('.amx-mbar')
+      if (!bar) return null
+      const r = bar.getBoundingClientRect()
+      return {
+        titles: [...bar.querySelectorAll('button')].map((b) => b.title || b.getAttribute('aria-label') || ''),
+        // 药丸不许被撑破:多加一颗键后仍须整条留在屏内(按钮已改可收缩,见 amadeus-host.css)。
+        fits: r.left >= -1 && r.right <= window.innerWidth + 1,
+      }
+    })
+    ok('4a 画布键常驻在底栏胶囊里、就排在上传后面(用户 2026-08-20 拍板)',
+      !!capsule && capsule.titles.indexOf('切换到画布') === capsule.titles.indexOf('上传文件到本页') + 1,
+      capsule ? capsule.titles.join(' | ') : '没有胶囊')
+    // ⚠️ 390pt 下七颗键(7×40 + 间隙 ≈ 298)本来就塞得进 ~315 的上限 —— 只在这一档量,
+    //    等于这条断言**加不加那道收缩兜底都绿**(= 恒真断言)。真正会顶穿的是窄机,所以临时
+    //    切到 360pt 再量一次,量完切回去(后面几段的点击几何是按 390 算的)。
+    const fitsAt = async (w) => {
+      await page.setViewportSize({ width: w, height: 844 })
+      await page.waitForTimeout(400)
+      return await page.evaluate(() => {
+        const b = document.querySelector('.amx-mbar')
+        if (!b) return null
+        const r = b.getBoundingClientRect()
+        const last = [...b.querySelectorAll('button')].pop()
+        // ⚠️ 量的是**最后一颗键有没有越出药丸**,不是药丸有没有越出屏:药丸有 max-width,
+        //    撑不撑得住都被裁在同一个盒子里 —— 只量盒子的话,去掉收缩兜底这条照样绿。
+        return {
+          w: Math.round(r.width),
+          vw: window.innerWidth,
+          spill: last ? Math.round(last.getBoundingClientRect().right - r.right) : null,
+        }
+      })
+    }
+    const narrow = await fitsAt(360)
+    await fitsAt(390)
+    ok('4a2 加了一颗之后药丸没被撑出屏(390 与窄机 360 各量一次)',
+      !!capsule && capsule.fits && !!narrow && narrow.spill !== null && narrow.spill <= 1,
+      JSON.stringify({ at390: capsule && capsule.fits, at360: narrow }))
+    await tap(page.locator('.amx-mbar button[title="切换到画布"]'))
+    await page.waitForTimeout(1000)
+    const c1 = await page.evaluate(() => ({
+      on: !!document.querySelector('.unified-body.amx-canvas'),
+      full: !!document.querySelector('.unified-body.amx-canvas-full'),
+      stage: !!document.querySelector('.amx-stage'),
+      // 底栏胶囊必须还在:满铺画布是 .amx-pane 内的 absolute inset:0,而胶囊是 pane 的兄弟 —— 盖掉就出不来了。
+      barVisible: (() => { const b = document.querySelector('.amx-mbar'); if (!b) return false; const r = b.getBoundingClientRect(); return r.width > 0 && r.bottom <= window.innerHeight + 1 })(),
+      sheetClosed: !document.querySelector('.mb-sheet'),
+    }))
+    ok('4b 点了真进画布(满铺舞台在场;底栏胶囊没被盖掉 = 还回得来)',
+      c1.on && c1.full && c1.stage && c1.barVisible && c1.sheetClosed, JSON.stringify(c1))
+    await page.screenshot({ path: path.join(shotDir, 'canvas-mode.png') })
+    console.log('screenshot →', path.join(shotDir, 'canvas-mode.png'))
+
+    const seg = await page.evaluate(() => {
+      const b = document.querySelector('.amx-mbar button[title="切换到文档"]')
+      const sheetRows = [...document.querySelectorAll('.mb-sheet .mb-sheet-row')].map((e) => e.textContent.trim())
+      return { flipped: !!b, on: !!b && b.classList.contains('on'), sheetRows }
+    })
+    ok('4c 画布态下同一颗翻成「切换到文档」并点亮(不是两颗并列的死键)', seg.flipped && seg.on, JSON.stringify(seg))
+    await tap(page.locator('.amx-mbar button[title="切换到文档"]'))
+    await page.waitForTimeout(900)
+    const c2 = await page.evaluate(() => ({
+      on: !!document.querySelector('.unified-body.amx-canvas'),
+      h1: !!document.querySelector('.page-view .ProseMirror h1'),
+    }))
+    ok('4d 真回得到文档态,正文原样还在', !c2.on && c2.h1, JSON.stringify(c2))
   } catch (e) {
     fails.push(String((e && e.message) || e))
   } finally {
@@ -211,7 +299,7 @@ async function main() {
     killPreview()
   }
   if (fails.length) { console.error('❌ e2e:editorbar\n' + fails.map((f) => '  - ' + f).join('\n')); process.exit(1) }
-  console.log('✅ e2e:editorbar —— 顶栏已隐/上传仍在/胶囊底栏/⋯ 动作齐全/「+」双列面板真插块')
+  console.log('✅ e2e:editorbar —— 顶栏已隐/上传仍在/胶囊底栏/⋯ 动作齐全/「+」双列面板真插块/画布模式进得去回得来')
 }
 
 main()

@@ -16,6 +16,7 @@ import '@/i18n.generated'
 import { installEngine } from '@/bootstrapEngine'
 import { installSmoothCaret } from '@/smoothCaret'
 import { applyUiFonts } from '@/uiFont'
+import { installSpaceShortcuts } from './spaceShortcuts'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -41,6 +42,9 @@ try {
   // 界面字体三档:设置→外观里的那三个输入框**没有桌面门控**,移动端本来就能改、改完当场生效
   // (setFont 自己调 applyUiFonts),但启动时没人读回 localStorage → 重启即回退。半坏比没有更糟。
   applyUiFonts()
+  // 安卓 Space 快捷方式(长按 app 图标出 Space 列表 / 固定某个 Space 到桌面 / 接住点击)。
+  // 必须排在 installEngine 之后:Space 是在那里面注册的,早了发布出去是空名单。
+  installSpaceShortcuts()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
 }

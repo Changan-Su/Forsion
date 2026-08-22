@@ -183,15 +183,44 @@ async function main() {
     await hoverBlock(p7, `${PM} > p`)
     const p7a = await p7.evaluate(() => {
       const g = document.querySelector('.unified-gutter')
-      return { show: g?.dataset.show, y: Math.round(g?.getBoundingClientRect().y ?? -1) }
+      return { show: g?.dataset.show, x: Math.round(g?.getBoundingClientRect().x ?? -1), y: Math.round(g?.getBoundingClientRect().y ?? -1) }
     })
     await hoverBlock(p7, `${PM} li:nth-of-type(2)`)
     const p7b = await p7.evaluate(() => {
       const g = document.querySelector('.unified-gutter')
       const li = document.querySelectorAll('.unified-body .ProseMirror li')[1]
-      return { show: g?.dataset.show, dy: Math.abs((g?.getBoundingClientRect().y ?? 0) - li.getBoundingClientRect().top) }
+      return {
+        show: g?.dataset.show,
+        x: Math.round(g?.getBoundingClientRect().x ?? -1),
+        dy: Math.abs((g?.getBoundingClientRect().y ?? 0) - li.getBoundingClientRect().top),
+      }
     })
-    record('P7 hover ⠿ 逐节点(段落/列表项分别锚定)', p7a.show === 'true' && p7b.show === 'true' && p7b.dy < 8, JSON.stringify({ p7a, p7b }))
+    record(
+      'P7 hover ⠿ 逐节点且顶层列表不被 marker gutter 推右',
+      p7a.show === 'true' && p7b.show === 'true' && p7b.dy < 8 && Math.abs(p7a.x - p7b.x) <= 2,
+      JSON.stringify({ p7a, p7b }),
+    )
+
+    // 只抵消当前列表自身的 marker gutter；嵌套列表与字面 Tab 段落仍是实际层级，手柄必须右移。
+    const p7c = await browser.newPage()
+    await p7c.goto(`${URL}?upage&useed=${encodeURIComponent('正文\n\n- 父\n  - 子\n\n\t缩进段\n')}`, { waitUntil: 'domcontentloaded' })
+    await p7c.waitForSelector(PM, { timeout: 20000 })
+    await p7c.waitForTimeout(300)
+    const gutterX = async (selector) => {
+      await hoverBlock(p7c, selector)
+      return p7c.evaluate(() => Math.round(document.querySelector('.unified-gutter')?.getBoundingClientRect().x ?? -1))
+    }
+    const hierarchyX = {
+      plain: await gutterX(`${PM} > p:first-of-type`),
+      nested: await gutterX(`${PM} > ul > li > ul > li > p`),
+      tab: await gutterX(`${PM} > p[data-indent='1']`),
+    }
+    record(
+      'P7c 嵌套列表与 Tab 段落仍保留真实层级位移',
+      hierarchyX.nested >= hierarchyX.plain + 12 && hierarchyX.tab >= hierarchyX.plain + 12,
+      JSON.stringify(hierarchyX),
+    )
+    await p7c.close()
 
     // P8:＋ 在下方插入段落并聚焦(打字直接落新段)。
     await hoverBlock(p7, `${PM} > p`)
@@ -612,6 +641,28 @@ async function main() {
     await pg.close()
   }
 
+  // P14d:裸 `.md` 目标 = **跨笔记嵌入**,不是「📄 打开 ↗」的文件卡(2026-08-20 用户实报
+  // 「md 笔记无法渲染」:FILE_EXT_RE 把 .md 也当文件后缀吃掉了)。复合后缀 `.x.md` 仍归文件面。
+  {
+    // ⚠️ 首块不能放嵌入:挂载时光标就在首块,装饰会让位露源码(那是编辑入口,不是 bug)。
+    const seed = '首段。\n\n![[某笔记.md]]\n\n![[子夹/另一篇.md]]\n\n![[图.excalidraw.md]]\n'
+    const pg = await browser.newPage()
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(700)
+    const d14 = await pg.evaluate((s) => {
+      const el = document.querySelector(s)
+      return {
+        notes: [...el.querySelectorAll('.embed-body')].length, // 跨笔记嵌入壳(harness 恒「嵌入丢失」)
+        fileCards: [...el.querySelectorAll('.embed-file')].map((e) => e.textContent),
+      }
+    }, PM)
+    record('P14d 裸 .md 走跨笔记嵌入(不落文件卡);.excalidraw.md 仍归画板面',
+      d14.notes === 2 && d14.fileCards.length === 0, JSON.stringify(d14))
+    await pg.close()
+  }
+
   // P15:真实鼠标路径下把手可达(真机回归 2026-08-13 第4振:把手悬在 .milkdown 左缘之外,
   // hover 追踪挂 container 的话指针一穿越容器边界 mouseleave 就藏把手 —— 必须挂 pane 级
   // .unified-body。合成事件直打 gutter 的其余检查绕过了这条路径,只有真 mouse.move 能抓)。
@@ -767,6 +818,114 @@ async function main() {
       JSON.stringify({ a18, b18, d18, c18 }),
     )
     await pg.close()
+  }
+
+  // P18b:**卡内**标题的折叠(2026-08-20 用户报「各级别标题还是没能折叠」)。真因两条叠加:
+  //   ① headingFold 原本只按 doc 的直接子节点找标题 index → 卡内标题一律判不出是标题;
+  //   ② 卡的**首块**按「首子归外壳」把手锚在卡上 → 折叠钮问的是卡不是标题(修①之后卡内 H2
+  //      出钮、卡内首行 H1 仍不出钮,就是这一格之差)。所以断言必须同时覆盖首块与非首块。
+  // 反向哨兵:折卡内小节绝不许连累卡外的同名层级(小节边界只在自己容器内算)。
+  {
+    const seed = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":720},"cards":[{"ref":"k1","x":40,"y":40,"w":300}]}',
+      '---', '', '# 顶层甲', '', '顶层甲一。', '', '## 顶层乙', '', '顶层乙一。', '',
+      '<!-- a k1 -->', '# 卡内甲', '', '卡内甲一。', '', '## 卡内乙', '', '卡内乙一。', '<!-- /a k1 -->', '',
+    ].join('\n')
+    const pg = await browser.newPage()
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    /** 把手悬到某个标题上,回折叠钮出不出来。 */
+    const hoverFold = async (text) => {
+      const h = await pg.evaluate(({ s, t }) => {
+        const el = [...document.querySelectorAll(`${s} h1, ${s} h2`)].find((x) => x.textContent.includes(t))
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.left + 15, y: r.top + r.height / 2 }
+      }, { s: PM, t: text })
+      if (!h) return null
+      await pg.mouse.move(h.x - 60, h.y - 40, { steps: 2 })
+      await pg.mouse.move(h.x, h.y, { steps: 4 })
+      await pg.waitForTimeout(320)
+      return await pg.evaluate(() => {
+        const f = document.querySelector('.unified-gutter .block-fold')
+        return !!f && f.style.display !== 'none'
+      })
+    }
+    const vis = (t) => pg.evaluate(({ s, t }) => {
+      const el = [...document.querySelectorAll(`${s} h1, ${s} h2, ${s} p`)].find((x) => x.textContent.includes(t))
+      return el ? el.offsetParent !== null : null
+    }, { s: PM, t })
+    const btn = {
+      top: await hoverFold('顶层甲'),
+      cardFirst: await hoverFold('卡内甲'), // 卡的首块 = 「首子归外壳」那一格
+      cardMid: await hoverFold('卡内乙'),
+    }
+    await hoverFold('卡内甲')
+    const wBefore = await pg.evaluate(() => window.__upage.writes.length)
+    await pg.evaluate(() => document.querySelector('.unified-gutter .block-fold')?.click())
+    await pg.waitForTimeout(400)
+    const folded = {
+      卡内甲一: await vis('卡内甲一'), 卡内乙: await vis('卡内乙'),
+      顶层乙: await vis('顶层乙'), 顶层甲一: await vis('顶层甲一'),
+      caret: await pg.evaluate(() => !!document.querySelector('.amx-fold-caret')),
+      writes: await pg.evaluate(() => window.__upage.writes.length),
+    }
+    // 常驻展开钮:widget 在标题内容首,它拿标题前位时**不能写死 before(1)**(卡内标题 depth=2)
+    await pg.evaluate(() => document.querySelector('.amx-fold-caret')
+      ?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
+    await pg.waitForTimeout(300)
+    const back = { 卡内甲一: await vis('卡内甲一'), caretGone: await pg.evaluate(() => !document.querySelector('.amx-fold-caret')) }
+    record(
+      'P18b 卡内标题同样能折:首块/非首块都出钮;折的只是卡内小节(卡外不受累)+零写盘;展开钮还原',
+      btn.top === true && btn.cardFirst === true && btn.cardMid === true &&
+        folded.卡内甲一 === false && folded.卡内乙 === false && folded.顶层乙 === true && folded.顶层甲一 === true &&
+        folded.caret && folded.writes === wBefore && back.卡内甲一 === true && back.caretGone,
+      JSON.stringify({ btn, folded, back }),
+    )
+    await pg.close()
+  }
+
+  // P18c:复制到**外部应用**的纯文本不许带锚(用户 2026-08-20 实报:复制一张卡,末尾跟着一行
+  // `<!-- /a xxxx -->` 贴进微信)。真因:剥锚正则是 08-19 闭合锚改版**之前**写的,只剥开标记。
+  // 反向哨兵(Codex 2026-08-20 medium):「收回卡片」留下的惰性锚是**合法正文字面**,切片里没有
+  // 卡/分栏节点时一个字都不许动 —— 无差别正则会把用户自己写的那一行悄悄吞掉。
+  // 走 PM 自己的 serializeForClipboard(= Cmd+C 的同一条路),不碰浏览器剪贴板权限。
+  {
+    const seed = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":720},"cards":[{"ref":"kc","x":40,"y":40,"w":300}]}',
+      '---', '', '# 标题甲', '', '<!-- /a kold -->', '', '上面那行是收回卡片留下的惰性锚字面。', '',
+      '<!-- a kc -->', '卡内一句。', '<!-- /a kc -->', '',
+    ].join('\n')
+    const pg = await browser.newPage()
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector(PM, { timeout: 20000 })
+    await pg.waitForTimeout(500)
+    const clip = await pg.evaluate(() => {
+      const view = window.__upage.probe.view()
+      // TextSelection 不是全局:从当前选区(装载后恒是文本选区)的构造器上取,再 between 两端。
+      const TS = view.state.selection.constructor
+      const text = (from, to) => {
+        view.dispatch(view.state.tr.setSelection(TS.between(view.state.doc.resolve(from), view.state.doc.resolve(to))))
+        return view.serializeForClipboard(view.state.selection.content()).text
+      }
+      // 全选(含卡)→ 生成的锚必须一个都不剩
+      const all = text(0, view.state.doc.content.size)
+      // 只选「标题 + 惰性锚那两段」(切片里没有卡)→ 用户的字面锚必须原样活着
+      let stop = -1
+      view.state.doc.forEach((n, off) => { if (stop < 0 && n.type.name === 'amadeusCanvasCard') stop = off })
+      const part = text(0, stop > 0 ? stop - 1 : view.state.doc.content.size)
+      return { all, part }
+    })
+    await pg.close()
+    record('P18c 复制到外部:切片里有卡 → 生成的开合锚都剥干净;切片里没有卡 → 用户的惰性锚字面一个字不动',
+      !clip.all.includes('<!-- a kc -->') && !clip.all.includes('<!-- /a kc -->') && clip.all.includes('卡内一句。')
+        && clip.part.includes('<!-- /a kold -->') && clip.part.includes('标题甲'),
+      JSON.stringify(clip))
   }
 
   // P19:slash 菜单接进统一实例。此前 unified 只传了 slashOpsRef(为的是行内工具栏),没传
@@ -1848,6 +2007,52 @@ async function main() {
       })
       const aligned = !!pressed.shown && Math.abs(pressed.dx) <= 2 && Math.abs(pressed.dy) <= 2
       record('D2 按下把手出外扩高亮矩形(罩住块,±2px)、松手即收', aligned && gone, JSON.stringify({ pressed, gone }))
+      await pg.close()
+    }
+    // D2b/D2c 长块 hover 抓手必须内嵌块高，上下各留 8px。修前高度虽然取了 blockH-16，
+    // 但仍围绕“首行 24px 槽”居中生长：多行引用会伸到块上方，图片越高偏得越离谱。
+    const grownHandle = async (pg, targetSelector) => {
+      const at = await pg.evaluate((sel) => {
+        const el = document.querySelector(sel)
+        const r = el?.getBoundingClientRect()
+        return r ? { x: r.left + Math.min(40, r.width / 2), y: r.top + 12 } : null
+      }, targetSelector)
+      if (!at) return null
+      await pg.mouse.move(at.x, at.y)
+      await pg.waitForTimeout(260)
+      const handleAt = await pg.evaluate(() => {
+        const h = document.querySelector('.unified-gutter .drag-handle')?.getBoundingClientRect()
+        return h ? { x: h.left + h.width / 2, y: h.top + 12 } : null
+      })
+      if (!handleAt) return null
+      await pg.mouse.move(handleAt.x, handleAt.y)
+      await pg.waitForTimeout(360)
+      return pg.evaluate((sel) => {
+        const target = document.querySelector(sel)
+        const handle = document.querySelector('.unified-gutter .drag-handle')
+        if (!target || !handle) return null
+        const t = target.getBoundingClientRect()
+        const h = handle.getBoundingClientRect()
+        return { top: h.top - (t.top + 8), bottom: h.bottom - (t.bottom - 8), hh: h.height, th: t.height }
+      }, targetSelector)
+    }
+    {
+      const pg = await openSeed('> 第一行。\n>\n> 第二行。\n>\n> 第三行。\n')
+      const g = await grownHandle(pg, `${PM} > blockquote`)
+      record('D2b 多行块 hover 长抓手：上下沿均缩进 8px，不再围绕首行向上漂',
+        !!g && g.hh > 24 && Math.abs(g.top) <= 2 && Math.abs(g.bottom) <= 2, JSON.stringify(g))
+      await pg.close()
+    }
+    {
+      const pg = await openSeed('![](https://example.test/tall.png)\n')
+      await pg.evaluate((s) => {
+        const img = document.querySelector(`${s} img`)
+        if (img) Object.assign(img.style, { display: 'block', width: '320px', height: '240px' })
+      }, PM)
+      await pg.waitForTimeout(100)
+      const g = await grownHandle(pg, `${PM} img`)
+      record('D2c 图片块 hover 长抓手：上下沿均缩进 8px，高图片不再把抓手顶出块外',
+        !!g && g.hh > 200 && Math.abs(g.top) <= 2 && Math.abs(g.bottom) <= 2, JSON.stringify(g))
       await pg.close()
     }
   }

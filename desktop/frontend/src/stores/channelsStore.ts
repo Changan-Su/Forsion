@@ -55,8 +55,10 @@ export const useChannels = create<ChannelsState>((set, get) => ({
     if (!window.tangu?.backendStatus) return // 通道仅内置本地后端形态可用
     try {
       const r = await listChannels(cfg())
-      set({ channels: r.channels, available: r.available, loaded: true })
-      pushWorkspaces(r.channels)
+      // 形状防御:老后端/桩若 200 返回但缺 channels,undefined 会毒化 store,侧栏迭代直接崩(ErrorBoundary 整片吃掉会话列表)
+      const channels = Array.isArray(r.channels) ? r.channels : []
+      set({ channels, available: !!r.available, loaded: true })
+      pushWorkspaces(channels)
     } catch { /* 静默:断连/云端/老后端 */ }
   },
 

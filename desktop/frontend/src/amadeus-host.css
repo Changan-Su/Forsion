@@ -845,7 +845,12 @@
   z-index: 5;
 }
 .amx-mbar button {
-  flex: 0 0 auto;
+  /* 可收缩 + 下限:胶囊是 width:max-content + max-width:calc(100% - 24px),而按钮此前 flex:0 0 auto
+     —— 窄机(≈360pt,再摊上 body zoom 1.15)上多加一颗就顶穿药丸背景往外溢。给一档收缩空间,
+     图标本身 19px,收到 34 仍留得住内边距(2026-08-20 加画布键时补;负对照:退回 0 0 auto 后
+     360pt 下最后一颗键溢出药丸 8px,e2e 的 4a2 当场变红)。 */
+  flex: 0 1 auto;
+  min-width: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

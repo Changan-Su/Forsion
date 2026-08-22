@@ -7,6 +7,7 @@
  */
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { WORKSPACE_DIR_NAME } from '../../core/tanguHome.js';
 import { deps } from '../../seams/runtime.js';
 import { requestInquiry } from '../../services/inquiries.js';
 import { publish } from '../../services/eventBus.js';
@@ -154,13 +155,14 @@ export const interactionProvider: ToolProvider = {
             return `用户已批准,但关闭计划模式失败:${e?.message || e}(请手动关闭计划开关)`;
           }
           // 把批准的计划存盘(<cwd>/.tangu/plans/plan-<时间>.md;best-effort,失败不阻断退出)
+          // 目录名走 WORKSPACE_DIR_NAME 单一常量 —— 别再写字面量,双名漂移就是那么来的。
           let planFile = '';
           try {
             const cwd = ctx.cwd || process.cwd();
             const d = new Date();
             const pad = (n: number) => String(n).padStart(2, '0');
             const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-            const dir = join(cwd, '.tangu', 'plans');
+            const dir = join(cwd, WORKSPACE_DIR_NAME, 'plans');
             await mkdir(dir, { recursive: true });
             planFile = join(dir, `plan-${ts}.md`);
             // 存档存**最终版**:用户改过就以用户那份为准,否则存档与要执行的东西不是一回事。

@@ -81,3 +81,28 @@ export function toStoredMarkdown(md: string, pageDir: string): string {
     return pre + relFrom(pageDir, vaultRel) + rest
   }))
 }
+
+/** `![[x|200]]` / `[[x#锚]]` / `![](x)` / `[名](x)` 里的**附件**引用(非 .md、非外链、带扩展名)。
+ *  主进程用它算「删笔记时哪些附件是独占的」,渲染层用它算「整块删掉的引用块牵着哪个文件」——
+ *  同一套判据,别再抄第二份。 */
+export function assetRefs(text: string): string[] {
+  const out: string[] = []
+  const add = (raw: string): void => {
+    const r = raw.split('|')[0].split('#')[0].trim().replace(/^<|>$/g, '')
+    if (!r || /^[a-z][a-z0-9+.-]*:/i.test(r)) return // http(s)/data/amadeus-asset… 一律不是 vault 附件
+    if (!/\.[a-z0-9]{1,12}$/i.test(r) || /\.md$/i.test(r)) return // 无扩展名 = 笔记名;.md = 笔记/画板,不删
+    if (!out.includes(r)) out.push(r)
+  }
+  for (const m of text.matchAll(/!?\[\[([^\]\n]+)\]\]/g)) add(m[1])
+  for (const m of text.matchAll(/!?\[[^\]\n]*\]\(([^)\s]+)/g)) add(decodeSafe(m[1]))
+  return out
+}
+
+/** 共享判定只认文件名(小写):同名不同目录也当共享 —— 宁可少删。 */
+export function assetKey(ref: string): string {
+  return (ref.split(/[\\/]/).pop() ?? ref).toLowerCase()
+}
+
+function decodeSafe(s: string): string {
+  try { return decodeURIComponent(s) } catch { return s }
+}

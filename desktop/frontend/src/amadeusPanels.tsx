@@ -5,6 +5,7 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { amadeus } from '@amadeus/api'
 import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
 import { parseWikiLinks, resolvePageName } from '@amadeus-shared/links'
+import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { openNote } from './amadeusNav'
 import { create } from 'zustand'
@@ -214,7 +215,8 @@ function step(nodes: GNode[], edges: GEdge[], alpha: number): void {
 }
 
 export function AmadeusLocalGraphView() {
-  const activePage = usePageStore((s) => s.activePage)
+  // v4/unified 笔记不设 activePage(见 pageStore.activeNotePath)→ 回落到它,否则本视图对 v4 全空。
+  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath)
   const version = usePageStore((s) => s.linkGraphVersion)
   const [graph, setGraph] = useState<{ nodes: GNode[]; edges: GEdge[] } | null>(null)
   const [, setFrame] = useState(0) // 仿真帧计数:节点位置就地突变,靠它触发重渲
@@ -266,7 +268,12 @@ export function AmadeusLocalGraphView() {
       const incoming = await amadeus.backlinks(activePage).catch(() => [])
       if (!live) return
       const st = ps()
-      const contents = Object.values(st.blocks).map((b) => b.content).join('\n')
+      // 出链一律读**盘上原文**:v3 的块内容在 store 里,v4 的在 UnifiedPage 自己的 ref 型 pipe 里
+      // (根本不进 store)—— 读 blocks 就是 v4 图谱只剩反链的原因。原文对两条路由都齐全,
+      // 且与主进程 vaultIndex 算反链用的是同一份文本(同样先剥 frontmatter,免得出链/反链对不上)。
+      const raw = await amadeus.readTextFile(activePage).catch(() => null)
+      if (!live) return
+      const contents = stripFrontmatter(raw ?? '')
       // 出链拆两桶:解析到的 → 实体节点;解析不到的 → ghost 节点(黯淡显示,点击询问创建)。
       const outs: string[] = []
       const ghosts: string[] = []

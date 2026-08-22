@@ -609,11 +609,13 @@ export interface ToolEvent {
   outputChars?: number
   parallelGroup?: string
   artifactPath?: string
+  /** 历史恢复锚点:工具调用发生前,终稿正文中的 UTF-16 偏移。旧消息没有。 */
+  contentOffset?: number
 }
 
-/** 助手一条消息的「顺序段」(直播归约期填充,保留文字↔工具的发生顺序):
+/** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):
  *  text=一段正文;tools=一串**连续**工具调用(按 id 引用 toolEvents,连续者并入同一块)。
- *  仅流式期间有;历史重载不含 → 渲染回退老序(全部工具一块 + 全文)。 */
+ *  旧历史没有锚点 → 渲染回退老序(全部工具一块 + 全文)。 */
 export type MsgSeg =
   | { t: 'text'; text: string }
   | { t: 'tools'; ids: string[] }
@@ -651,6 +653,15 @@ export interface InquiryRequest {
   kind?: 'plan'
 }
 
+/** sketch 工具画的对话内 HTML 卡片。载荷在 tool_call **参数**里(原样落 JSONB 不截断),
+ *  直播由 tool_result 归约生成、重载由 recordToUi back-fill 重建并按工具锚点归位。 */
+export interface SketchItem {
+  /** 工具调用 id:去重键(SSE 重放/重载不双画),兼作 React key。 */
+  callId: string
+  html: string
+  title?: string
+}
+
 /** 任务清单一项(todo_write/todo_read 工具 + `todo` 事件;对齐 Claude TodoWrite)。 */
 export interface TodoItem {
   content: string
@@ -677,6 +688,8 @@ export interface UiMessage {
   attachments?: Attachment[]
   /** agent 在对话区展示的文件(display_file 事件 / 历史 display_files);图片渲染为可点击放大的缩略图。 */
   displayFiles?: DisplayFile[]
+  /** sketch 工具画的 HTML 卡片;按 callId 嵌回对应顺序段,旧历史无锚点时才回退到消息末尾。 */
+  sketches?: SketchItem[]
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
   timestamp: number

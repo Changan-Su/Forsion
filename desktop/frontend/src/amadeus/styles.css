@@ -751,6 +751,12 @@
 .am-app .milkdown .ProseMirror li.amx-struct-source-open {
   list-style: none;
 }
+/* 展开列表源码时，`- ` / `1. ` 应从列表容器左缘开始，和删掉边界空格后得到的普通字面行
+   完全同轴。li 正文左缘自带一档 1.4em marker gutter；只抵消当前这一档，嵌套列表仍由它
+   自己的父级 padding 保留真实层级，不能把 bullet 的标记槽误算成一次 Tab 缩进。 */
+.am-app .milkdown .ProseMirror li.amx-struct-source-open > p > .amx-struct-prefix {
+  margin-left: -1.4em;
+}
 .am-app .milkdown .ProseMirror li[data-item-type='task'].amx-struct-source-open::before,
 .am-app .milkdown .ProseMirror li[data-item-type='task'].amx-struct-source-open::after {
   display: none;
@@ -1602,6 +1608,11 @@ body.amx-marquee-active * {
   float: left;
   height: 0;
   font-style: normal;
+}
+/* 空结构行进入字面 Markdown 前缀后，`- ` / `## ` 已经承担行首内容；继续画空行提示会与
+   input 完全重叠，把真实前缀遮掉（原生列表 marker 此时又已让位，看起来就只剩一条空行）。 */
+.am-app .milkdown .ProseMirror .is-empty:has(.amx-struct-prefix)::before {
+  content: none;
 }
 
 /* ── Command palette (quick switch / search) ─────────────── */
@@ -2802,10 +2813,13 @@ body.amx-marquee-active * {
 /* 把手 hover 拉长(AFFiNE:12px 短条 → 撑成整块高,上下各留 8px)。整块高度由 blockLayer 在
    定位时写进 --amx-block-h;非 hover 保持短条,免得每一行都挂一条长杠。 */
 .am-app .unified-gutter .drag-handle {
-  transition: height 0.25s var(--ease-apple, cubic-bezier(0.4, 0, 0.2, 1));
+  transition:
+    height 0.25s var(--ease-apple, cubic-bezier(0.4, 0, 0.2, 1)),
+    transform 0.25s var(--ease-apple, cubic-bezier(0.4, 0, 0.2, 1));
 }
 .am-app .unified-gutter:hover .drag-handle {
   height: max(24px, calc(var(--amx-block-h, 24px) - 16px));
+  transform: translateY(var(--amx-block-grow-y, 0px));
 }
 /* 按下把手(还没开拖)= 块上盖一层外扩 4px 的圆角高亮;多块选中时是整个选区的并集矩形。 */
 .am-app .unified-press-rect {
@@ -2940,56 +2954,139 @@ body.amx-marquee-active * {
    下的规则去消费它 —— 文档模式下同一个卡片节点就是一个普通顺流块,一个像素都不偏。
    ⚠️ 主卡(.ProseMirror)在画布模式下用 **margin** 偏移而不是 position/transform:后两者会建立
    包含块,卡片的绝对定位当场从「舞台坐标」变成「相对主卡」,落盘的坐标就全错位了。 */
-/* 文档模式:卡片内容与正文**完全无缝衔接**(2026-08-18 用户拍板,对齐 AFFiNE:左轨线也嫌
-   切碎阅读流,撤掉)。块的总体范围只在**悬停或光标进入**时以整块圆角约束框浮现:
-   · 悬停 = 纯 :hover;光标 = canvas.ts 的 createCardActiveDeco 打的 `amx-card-active` 类。
-   · 约束框用 outline + offset:不进布局(border 会挤动内容),offset 让框离正文一口气。
+/* 文档模式:卡片内容与正文**完全无缝衔接**(2026-08-18 用户拍板,对齐 AFFiNE)。块的总体范围
+   只在**光标进入(=编辑)或被选中**时以整块圆角约束框浮现 —— 2026-08-20 用户拍板「取消悬停的
+   card 的边界显示」,:hover 那一支已撤,别加回来。
+   · 编辑 = canvas.ts 的 createCardActiveDeco 打的 `amx-card-active`;
+   · 选中 = PM 的 `ProseMirror-selectednode`(⠿ 单选)与 blockLayer 的 `amx-block-selected`(框选)。
+   ⚠️ 约束框画在 **::before** 上,不是 outline:层级框(见下)会把卡自身的 border-radius 按段首/
+      段中/段末拆成直角,而 outline 恒跟随 border-radius —— 用户 08-20 第一句「描边要是一样的
+      圆角」说的就是这个。::before 自带固定圆角,与框的直角互不干涉。
    ⚠️ 三条纪律:
    1. 选择器必须 `:not(.amx-canvas)` 限定文档模式 —— 画布模式的 `.amx-droptarget` 也用
       outline,泄进去就是同属性打架(谁赢看文件序,必炸)。⚠️ 限定类**只能是 .amx-canvas**
       (canvasOn 恒挂),不能用 .amx-canvas-full(那是满铺布局的独立状态,不恒在)。
    2. 画布模式的完整卡观感(描边/圆角/阴影)由后面的 .amx-canvas 块**自持**,别指望这里。
-   3. transition 只写 outline-color:transition all 会把 PM 重画节点时的几何变化也拖上动画。 */
+   3. transition 只写 border-color:transition all 会把 PM 重画节点时的几何变化也拖上动画。 */
 .am-app .unified-body:not(.amx-canvas) .amx-ucard {
-  /* offset 2px / 圆角 6px(2026-08-18 深夜用户拍板「削弱圆角弧度,防止重合」):offset 6px 时
-     相邻两张卡的框各向外扩 6px,活动框+悬停框同屏就交叠;2px 之后总外扩 4px < 卡间距,画不到一起。 */
+  /* 层级几何的单一口径:一格缩进 = --amx-nest-step,框到正文的内边距 = --amx-frame-pad。
+     框线用中性墨色(按正文色兑固定比例,明暗两套皮肤都稳),不用 --primary —— 层级是结构不是
+     强调,染上主色会跟选中/编辑的主色语汇打架。 */
+  --amx-nest-step: 20px;
+  --amx-frame-pad: 10px;
+  --amx-frame-ink: color-mix(in srgb, var(--text) 16%, transparent);
+  /* 约束框离正文一口气 = 向外 2px;卡进了层级框之后改成向内 2px(见 .amx-card-f0),
+     否则它正压在框线上。右缘单独一个变量:第二层框的卡右侧多让一格(见 .amx-card-f1),
+     不分开写的话环会**探出内层框**,压在外层框和内层框之间(观感自查截图实测)。 */
+  --amx-ring-inset: -2px;
+  --amx-ring-right: var(--amx-ring-inset);
+  position: relative;
   border-radius: 6px;
-  outline: 1px solid transparent;
-  outline-offset: 2px;
-  transition: outline-color 0.15s ease;
 }
-.am-app .unified-body:not(.amx-canvas) .amx-ucard:hover,
-.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-active {
-  outline-color: color-mix(in srgb, var(--primary) 45%, transparent);
+.am-app .unified-body:not(.amx-canvas) .amx-ucard::before {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  top: var(--amx-ring-inset);
+  right: var(--amx-ring-right);
+  bottom: var(--amx-ring-inset);
+  /* 左缘跟着缩进走:缩进档位是 padding,框不跟上就会把左边那片空缩进也圈进来。 */
+  left: calc(var(--amx-depth, 0) * var(--amx-nest-step) + var(--amx-ring-inset));
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s ease;
 }
-/* 文档模式的层级嵌套(2026-08-19 用户拍板「有父子属性的 Card 嵌套包裹,排序始终在父 Card 内」)。
-   两半分工:**源码相邻**由 canvasStage 的 orderUnder / addCardAt(under) 在认爹那一刻保证,这里只
-   管呈现 —— 按深度缩进 + 一条左轨把子卡收进父卡的势力范围。扁平的兄弟 DOM 画不出一个真的
-   「框住父+子」的盒子(真嵌套 = 协议改动,见 canvas.ts 的 createCardDepthDeco 顶注),缩进 + 轨线
-   是大纲编辑器与 AFFiNE 嵌套块同款的可行写法。
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-active::before,
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.ProseMirror-selectednode::before,
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-block-selected::before {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+/* 文档模式的层级嵌套(2026-08-19 用户拍板「有父子属性的 Card 嵌套包裹,排序始终在父 Card 内」;
+   2026-08-20 追加「父卡应该包裹住子卡」)。两半分工:**源码相邻**由 canvasStage 的 orderUnder /
+   addCardAt(under) 在认爹那一刻保证,这里只管呈现。
    ⚠️ 只作用于**有爹的卡**(.amx-card-child 由 createCardDepthDeco 下发)。自由卡一个像素不动 ——
       08-18「零装饰无缝」那条对它们原样有效(仪器 C45 钉的就是自由卡)。
-   ⚠️ 档位走六条类而不是 decoration 的内联 style:卡的 toDOM 已经把画布几何(--amx-x/y/w)写在
-      style 上,同属性一旦被覆盖而不是追加,画布模式的卡会当场全飞到 0,0。 */
+   ⚠️ 缩进用 padding 不用 margin:框线画在元素自己的 border 上,margin 会把整个盒子推走,
+      同一层框的上下两截线就对不齐了。 */
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-child {
   --amx-depth: 1;
-  margin-left: calc(var(--amx-depth) * 22px);
-  /* 上下各留 2px:一行字的子卡,轨线才不至于短到看不出是一条线(观感自查截图实测)。
-     同深度的相邻兄弟卡之间没有外边距 → 它们的轨线首尾相接,连成一条完整的层级线。 */
-  padding: 2px 0 2px 12px;
-  /* 轨线用中性墨色(与点阵同一条口径:按正文色兑固定比例,明暗两套皮肤都稳),不用 --primary ——
-     层级线是结构不是强调,染上主色会跟选中/悬停的主色语汇打架。 */
-  border-left: 2px solid color-mix(in srgb, var(--text) 18%, transparent);
-  /* ⚠️ 轨线必须**是直的**:卡片自己的 6px 圆角是给悬停约束框(outline)用的,落到 border-left
-     上会把线两头拗成小钩子 —— 第一版截图里看着像引用块的残渣,不像层级线。 */
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
+  box-sizing: border-box;
+  padding-left: calc(var(--amx-depth) * var(--amx-nest-step));
 }
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d2 { --amx-depth: 2; }
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d3 { --amx-depth: 3; }
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d4 { --amx-depth: 4; }
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d5 { --amx-depth: 5; }
 .am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-d6 { --amx-depth: 6; }
+/* 层级框:一个框由整段的卡**合画** —— 段首画上沿+两侧、段中只画两侧、段末画下沿+两侧,段内卡
+   与卡之间外边距归零,三段边接起来就是一个完整的圆角框(扁平兄弟 DOM 一样画得出「父卡包裹住
+   子卡」,2026-08-20 更正了此前「画不出来」的说法)。段的判据 = canvasEdit.runEndOf,与搬源码
+   共用同一把尺;段位类 amx-card-f{0,1}[-top|-end] 由 createCardDepthDeco 下发。
+   f0 = 最外层框(画在元素自身 border 上),f1 = 第二层(画在 ::after 上,左右各内缩一格)。
+   ponytail: 只画两层 —— ::before 已被编辑/选中环占用,第三个盒子没有了(理由与升级路径见
+   canvas.ts 的 createCardDepthDeco 顶注)。第三层起只缩进不画框。
+   ⚠️ 本段与上面的 .amx-card-child 同特异性(都是五个类),padding-left 靠**文件序**压过它 ——
+      按 DESIGN.md §7,这一段只能在它后面,别往上挪。 */
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f0 {
+  box-sizing: border-box;
+  /* ⚠️ flow-root 不是可有可无:段中的卡上下都没有 border/padding,里面段落的外边距会**穿过**
+     卡的边沿折叠出去 → 相邻两卡之间空出 4.5px,两侧框线被切成一节一节(第一版截图实测)。
+     建 BFC 把那份外边距关回卡内,框线才连得起来。 */
+  display: flow-root;
+  /* 正文再往里让出一格边距,才不贴着框线;深度 0 的父卡自己没有缩进,fallback 走 0。 */
+  padding-left: calc(var(--amx-depth, 0) * var(--amx-nest-step) + var(--amx-frame-pad));
+  padding-right: var(--amx-frame-pad);
+  border-left: 1px solid var(--amx-frame-ink);
+  border-right: 1px solid var(--amx-frame-ink);
+  border-radius: 0;
+  /* 段内不许有外边距:留一丝缝,两侧的框线就断成一节一节。 */
+  margin-top: 0;
+  margin-bottom: 0;
+  --amx-ring-inset: 2px;
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f0-top {
+  border-top: 1px solid var(--amx-frame-ink);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  padding-top: var(--amx-frame-pad);
+  margin-top: 12px;
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f0-end {
+  border-bottom: 1px solid var(--amx-frame-ink);
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+  padding-bottom: var(--amx-frame-pad);
+  margin-bottom: 12px;
+}
+/* 第二层框:::after 相对 padding box 定位,左右各内缩一格;-1px 是为了让它的框线正好落在
+   「距元素外缘一格」处(padding box 比 border box 小掉那 1px 的边框)。 */
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f1 {
+  padding-right: calc(var(--amx-nest-step) + var(--amx-frame-pad));
+  --amx-ring-right: calc(var(--amx-nest-step) + 2px);
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f1::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--amx-nest-step) - 1px);
+  right: calc(var(--amx-nest-step) - 1px);
+  border-left: 1px solid var(--amx-frame-ink);
+  border-right: 1px solid var(--amx-frame-ink);
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f1-top::after {
+  border-top: 1px solid var(--amx-frame-ink);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f1-end::after {
+  border-bottom: 1px solid var(--amx-frame-ink);
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f1-top { padding-top: var(--amx-frame-pad); }
+.am-app .unified-body:not(.amx-canvas) .amx-ucard.amx-card-f1-end { padding-bottom: var(--amx-frame-pad); }
 /* 卡缝插入口(2026-08-19 用户拍板):文档模式悬停相邻两卡缝隙浮现,点击插空段落光标。
    线体 absolute 不进布局;18px 高命中带,视觉=中央细线+圆 ＋。 */
 .am-app .amx-gap-insert {
@@ -3070,14 +3167,19 @@ body.amx-marquee-active * {
   border: 1px solid var(--border);
   border-radius: 12px;
   background-color: var(--bg);
-  /* 点阵底纹(AFFiNE 同款)。⚠️ 原来是 `var(--border)`:浅色皮肤下 #eae9e7 压在 #fff 上几乎看不见
-     (用户 2026-08-19 实报「几乎看不见」)。改成按正文色兑固定比例 —— 明暗两套皮肤都保证同一档
-     对比度,而 --border 的取值各主题自便,拿它当墨色画不出稳定的格子。 */
+}
+.am-app .amx-stage-grid {
+  /* 点阵是随视口移动的独立合成层，不是 `.amx-stage` 的固定背景。向四边多铺一格，循环相位
+     仍会始终盖满窗口；pointer-events:none 保证它只是“布”，不会成为手势命中面。 */
+  position: absolute;
+  top: calc(-1 * var(--amx-grid-step));
+  right: calc(-1 * var(--amx-grid-step));
+  bottom: calc(-1 * var(--amx-grid-step));
+  left: calc(-1 * var(--amx-grid-step));
   background-image: radial-gradient(color-mix(in srgb, var(--text) 20%, transparent) 1px, transparent 1px);
-  /* 格子跟着视口平移/缩放走(AFFiNE 同款:它是画布的一部分,不是背板贴纸)。三个量由 canvasStage
-     下发到本元素 —— 背景只能画在这一层,stage-inner 是 0×0 的定位原点,给它画背景等于没画。 */
-  background-position: var(--amx-vpx, 0px) var(--amx-vpy, 0px);
-  background-size: calc(24px * var(--amx-vpz, 1)) calc(24px * var(--amx-vpz, 1));
+  background-size: var(--amx-grid-step) var(--amx-grid-step);
+  pointer-events: none;
+  will-change: transform;
 }
 .am-app .amx-stage.amx-dropzone { outline: 2px dashed var(--primary); outline-offset: -4px; }
 /* 文档模式:舞台两层整个摘出布局。DOM 保持在场 → React 不重挂子树 → PM 撤销栈不被切模式清空
@@ -3190,8 +3292,22 @@ body.amx-marquee-active * {
 .am-app .amx-el-add:hover { opacity: 1; border-color: var(--primary); color: var(--primary); }
 .am-app .amx-el-add.is-child { right: -30px; top: 50%; transform: translateY(-50%); }
 .am-app .amx-el-add.is-sibling { bottom: -30px; left: 50%; transform: translateX(-50%); }
-/* 拖到边缘认亲的高亮(2026-08-19 晚):贴在目标卡的那条边上。左右缘=收作子节点(主色),
-   上下缘=同父兄弟(弱一档)——两种关系必须一眼分得开,不然「贴哪边得到什么」只能靠试。 */
+/* 拖到边缘认亲的预告:目标整卡起环 + 源目标虚线 + 边口关系标签。旧版只有 4px 边条，用户既
+   看不清命中了谁，也只能靠松手试错关系种类；现在松手前把完整意图说清楚。 */
+.am-app .amx-el-attach-target {
+  position: absolute;
+  border-radius: 12px;
+  outline: 2px solid color-mix(in srgb, var(--primary) 72%, transparent);
+  outline-offset: 5px;
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--primary) 5%, transparent);
+  pointer-events: none;
+  z-index: 2;
+}
+.am-app .amx-el-attach-target.is-sibling {
+  outline-style: dashed;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
 .am-app .amx-el-attach {
   position: absolute;
   border-radius: 3px;
@@ -3203,6 +3319,23 @@ body.amx-marquee-active * {
   z-index: 3;
 }
 .am-app .amx-el-attach.is-sibling { background: color-mix(in srgb, var(--primary) 45%, transparent); }
+.am-app .amx-el-attach-label {
+  position: absolute;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--primary) 42%, var(--border));
+  border-radius: 999px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-panel);
+  color: var(--primary);
+  font-size: 10.5px;
+  line-height: 1.2;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.am-app .amx-el-attach-label.is-sibling { color: var(--text-sec); }
 /* ⚠️ 非选择工具下把手与 ⊕ 一律收起(Codex 08-19 medium):选中态不随换工具清空,而建形状/建卡/
    连线那几支在 onDown 里**早于**它们 return —— 留着就是「看得见、点下去却建了个矩形」。
    舞台根的 `amx-tool-*` 只在画布模式挂,文档模式本层根本不渲染。 */
@@ -3266,6 +3399,53 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   white-space: nowrap;
 }
+/* 画布缩略图：固定在 chrome 层，不吃舞台 pan/zoom；盒子来自真实卡片/主卡/图形几何。
+   视口框本身也是导航面，点击或拖动都会平移画布。 */
+.am-app .amx-stage-minimap {
+  position: absolute;
+  right: 8px;
+  bottom: 42px;
+  width: 184px;
+  height: 112px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 14%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+  box-shadow: var(--shadow-panel);
+  cursor: crosshair;
+  touch-action: none;
+  opacity: 0.82;
+  transition: opacity 140ms ease, border-color 140ms ease;
+  z-index: 4;
+}
+.am-app .amx-stage-minimap:hover {
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--border));
+}
+.am-app .amx-stage-minimap svg { display: block; width: 100%; height: 100%; }
+.am-app .amx-mini-item {
+  fill: color-mix(in srgb, var(--text-muted) 34%, transparent);
+  stroke: color-mix(in srgb, var(--text-muted) 42%, transparent);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+.am-app .amx-mini-item.is-card,
+.am-app .amx-mini-item.is-main {
+  fill: color-mix(in srgb, var(--primary) 28%, var(--surface-2));
+  stroke: color-mix(in srgb, var(--primary) 64%, transparent);
+}
+.am-app .amx-mini-item.is-main { fill: color-mix(in srgb, var(--primary) 16%, var(--surface-2)); }
+.am-app .amx-mini-item.is-frame { fill: transparent; stroke-dasharray: 3 2; }
+.am-app .amx-mini-viewport {
+  fill: color-mix(in srgb, var(--primary) 8%, transparent);
+  stroke: var(--primary);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .amx-stage-minimap { transition: none; }
+}
 .am-app .amx-stage-hud {
   position: absolute;
   right: 8px;
@@ -3291,6 +3471,10 @@ body.amx-marquee-active * {
   border-radius: 5px;
 }
 .am-app .amx-stage-hud button:hover { background: var(--surface-2); color: var(--text); }
+.am-app .amx-stage-hud button.is-on {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
 /* 工具条(AFFiNE edgeless 同位:底部居中)。 */
 .am-app .amx-stage-tools {
   position: absolute;
@@ -3385,3 +3569,14 @@ body.amx-marquee-active * {
    锚在 UnifiedPage 自己的树里,零尺寸,只用来 closest('.amx-pane') 找本 pane。 */
 .am-app .amx-toolbar .amx-modeseg-slot { display: contents; }
 .am-app .amx-seg-anchor { display: none; }
+
+/* ── 移动端画布:底部悬浮编辑胶囊压着舞台工具栏(2026-08-20 真机台架截图查出)────────────
+   `.amx-mbar` 是 z-index:5 的悬浮药丸(bottom:10px + 约 46px 高),舞台工具栏 z-index:4、
+   bottom:12px —— 两者完全重叠,手机上进画布只看得到胶囊,一个画布工具都点不到(而画布刚在
+   移动端补上入口,不抬等于给了个只能看的画布)。缩略图跟着一起抬,免得压在工具栏头上。
+   ⚠️ 只改 bottom,不写简写:base 里的 left/transform 带着定位语义,简写会连它们一起吃掉。
+   放文件末尾 = 与 base 同特异性时靠顺序取胜(DESIGN.md §7)。 */
+@media (pointer: coarse) {
+  .am-app .amx-stage-tools { bottom: 64px; }
+  .am-app .amx-stage-minimap { bottom: 108px; }
+}

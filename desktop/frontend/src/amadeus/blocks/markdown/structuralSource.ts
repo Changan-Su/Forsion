@@ -220,7 +220,10 @@ function prefixInput(view: EditorView, info: PrefixInfo): HTMLInputElement {
       commitPrefix(view, input, true)
       return
     }
-    if (event.key === 'Enter' || (event.key === 'ArrowRight' && input.selectionStart === input.value.length && input.selectionEnd === input.value.length)) {
+    const rightAcrossBoundary = event.key === 'ArrowRight'
+      && input.selectionStart === input.selectionEnd
+      && (input.selectionStart ?? 0) >= Math.max(0, input.value.length - 1)
+    if (event.key === 'Enter' || rightAcrossBoundary) {
       event.preventDefault()
       commitPrefix(view, input, true)
     }
@@ -277,9 +280,29 @@ function build(state: EditorState, view: EditorView): DecorationSet {
   return decos.length ? DecorationSet.create(state.doc, decos) : DecorationSet.empty
 }
 
+function syncTextblockStartFromDOM(view: EditorView): boolean {
+  const current = view.state.selection
+  if (current.empty && current.$from.parentOffset === 0) return true
+
+  // Home / 原生 ← 改的是浏览器 Selection，ProseMirror 的 EditorState 偶尔要到下一拍才同步。
+  // 结构入口若只读旧 state，第一下 Backspace/← 会被当成“还没到行首”而原样放过。
+  const dom = view.dom.ownerDocument.getSelection()
+  if (!dom?.isCollapsed || !dom.anchorNode || !view.dom.contains(dom.anchorNode)) return false
+  let pos: number
+  try {
+    pos = view.posAtDOM(dom.anchorNode, dom.anchorOffset)
+  } catch {
+    return false
+  }
+  const $pos = view.state.doc.resolve(pos)
+  if (!$pos.parent.isTextblock || $pos.parentOffset !== 0) return false
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)))
+  return true
+}
+
 /** 从正文行首进入结构标记；Backspace 入口可顺手删掉最后一个字符（通常是渲染边界空格）。 */
 export function focusStructuralPrefix(view: EditorView, deleteLast = false): boolean {
-  if (!view.state.selection.empty || view.state.selection.$from.parentOffset !== 0) return false
+  if (!syncTextblockStartFromDOM(view)) return false
   const info = prefixInfo(view.state)
   if (!info) return false
   // 显式 openAt 既负责展开列表等结构，也保护标题 input 跨过 PM→input 的短暂焦点缝隙。
@@ -292,7 +315,9 @@ export function focusStructuralPrefix(view: EditorView, deleteLast = false): boo
     return false
   }
   input.focus({ preventScroll: true })
-  const at = input.value.length
+  // 正文与源码之间只有一枚 Markdown 边界空格。← 进入时直接跨过它，落在标记与空格之间；
+  // 否则第一键只负责跨 DOM widget、第二键才跨空格，视觉上会像凭空多出一个字符位。
+  const at = deleteLast ? input.value.length : Math.max(0, input.value.length - 1)
   input.setSelectionRange(at, at)
   if (deleteLast && at > 0) {
     input.setRangeText('', at - 1, at, 'end')

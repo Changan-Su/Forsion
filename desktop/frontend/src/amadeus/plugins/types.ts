@@ -62,8 +62,9 @@ export interface ThemeContribution {
 
 /** App actions exposed to plugins (no direct store access). */
 export interface PluginAppApi extends BlockSurfaceApi {
+  /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
-  /** Concatenated text of the active page's blocks. */
+  /** The active note's whole body as markdown — same value (and same staleness) as `getPage().text`. */
   getActivePageText(): string
   loadPage(path: string): void
   createPage(): void
@@ -138,24 +139,40 @@ export interface PluginSearchHit {
   score: number
 }
 
-/** A read-only view of the ACTIVE page's blocks. Amadeus is single-active-page (one page loaded at a
- *  time, shared by the note editor and any file-type view) — plugins ride that same model rather than
- *  getting a second page state that would save over the first. */
+/** A read-only view of the ACTIVE NOTE. Amadeus is single-active-page (one page per panel, shared by
+ *  the note editor and any file-type view) — plugins ride that same model rather than getting a second
+ *  page state that would save over the first.
+ *
+ *  ⚠️ Two note carriers exist (2026-08-20). Branch on `model`, never assume blocks:
+ *  - `'blocks'` — the v3 marker-based page. `blocks`/`order` are the real thing.
+ *  - `'text'`   — the v4/unified note (the default carrier for ordinary notes). There are **no block
+ *                 ids at all**; `blocks`/`order` are permanently empty and `text` is the content.
+ *  `path` / `token` / `status` / `text` / `fmExtra` are true under both. */
 export interface PageSnapshot {
-  /** Opaque identity of "the page these ids belong to". Pass it back to every mutator — block ids are
-   *  PER PAGE (both pages have a `b1`), so acting on a stale snapshot after the user switched pages
+  /** Opaque identity of "the note this snapshot came from". Pass it back to every mutator — block ids
+   *  are PER PAGE (both pages have a `b1`), so acting on a stale snapshot after the user switched notes
    *  would insert into, or delete from, the wrong file. Mismatched token = the call is refused. */
   token: string
-  /** Vault-relative path of the active page, or null when none is loaded. */
+  /** Vault-relative path of the active note, or null when none is open. */
   path: string | null
   status: string
-  /** blockId → markdown source. Identity-stable between edits (compare by reference to skip work).
-   *  Frozen and shared between plugins — never mutate it. */
+  /** The whole note body as markdown. v3 = blocks joined in `order`; v4 = the unified instance's body.
+   *  ⚠️ On v4 this is the snapshot **as of the last save** (≤800ms stale — the same beat as the
+   *  backlink / outline / word-count panels), not a per-keystroke value.
+   *  ⚠️ Read-only. To change content use `insertMarkdown` — never read-modify-write the whole text:
+   *  the staleness window means you would erase whatever the user typed in the meantime. */
+  text: string
+  /** Which carrier this note uses; the branch predicate for everything below.
+   *  Absent (`undefined`) on hosts older than 2026-08-20 → treat as `'blocks'`, which is what they were. */
+  model: 'blocks' | 'text'
+  /** blockId → markdown source. **v3 only; always empty when `model === 'text'`.** Identity-stable
+   *  between edits (compare by reference to skip work). Frozen and shared between plugins — never mutate it. */
   blocks: Readonly<Record<string, string>>
-  /** Block ids in document order (columns flattened). */
+  /** Block ids in document order (columns flattened). **v3 only; always empty when `model === 'text'`.** */
   order: readonly string[]
   /** Foreign frontmatter keys the page compiler round-trips verbatim — where a plugin stores its own
-   *  per-page data (the built-in mindmap keeps parent/position/relations here). */
+   *  per-page data (the built-in mindmap keeps parent/position/relations here).
+   *  Readable under both carriers; `setFmExtra` is v3-only for now. */
   fmExtra: string
 }
 
@@ -184,16 +201,34 @@ export interface BlockSurfaceApi {
    *  the user's own keys live in there too). Goes through the page's undo stack. */
   setFmExtra(token: string, text: string): void
   /** Insert a block after `afterId` (null = at the very start) and return its new id, or null if the
-   *  token was stale. */
+   *  token was stale, no note is loaded, or the note is v4 (`model === 'text'` — no block model to
+   *  address; use `insertMarkdown`). Refusals are logged, never silent. */
   insertBlockAfter(token: string, afterId: string | null, content: string): string | null
+  /** Insert a chunk of markdown into the active note. **Works under both carriers** — this is the
+   *  write path to reach for unless you genuinely need block ids.
+   *  `where`: `'cursor'` (default) = after the top-level block holding the caret, replacing it when
+   *  empty; `'start'` / `'end'` = the very start / end of the note, leaving the caret and focus alone.
+   *  ⚠️ v3 has no caret source of truth, so `'cursor'` degrades to `'end'` there (logged).
+   *  ⚠️ What you insert must round-trip through markdown unchanged (runs of spaces get collapsed →
+   *  the host reloads the document → any editor state your plugin holds is gone).
+   *  Returns false when refused (stale token / no note / nothing to insert / no live editor).
+   *  Older hosts lack it: `ctx.app.insertMarkdown?.(…)`. */
+  insertMarkdown(token: string, md: string, where?: 'cursor' | 'start' | 'end'): boolean
+  /** v3 only — refused (and logged) on a v4 note. */
   deleteBlock(token: string, id: string): Promise<void>
+  /** v3 only — refused (and logged) on a v4 note. */
   requestFocus(id: string, place?: 'start' | 'end'): void
+  /** v3 only — refused (and logged) on a v4 note. */
   consumeFocus(id: string): void
+  /** v3 only — v4 keeps its own unified undo timeline, which is not exposed here yet. */
   undo(token: string): void
+  /** v3 only — see `undo`. */
   redo(token: string): void
   /** Modal text input. Electron has no `window.prompt` — use this, never the DOM one. */
   prompt(title: string, initial?: string, opts?: { label?: string }): Promise<string | null>
-  /** Render a real, editable block into `el`. Returns a dispose function; call it when you drop the node. */
+  /** Render a real, editable block into `el`. Returns a dispose function; call it when you drop the node.
+   *  **v3 only** — a v4 note has no blocks to mount, so this is refused (and logged) there. In practice
+   *  this is the surface plugin FILE TYPES use (`file.surface`), and those are pinned to v3 by design. */
   mountBlocks(el: HTMLElement, opts: MountBlockOptions): () => void
 }
 

@@ -9,6 +9,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
+import { assetKey, assetRefs } from '@amadeus-shared/assets'
 import type { BacklinkRef, SearchHit, TagCount } from '@amadeus-shared/ipc'
 import type { VaultManager } from './vaultManager'
 
@@ -237,10 +238,16 @@ export class VaultIndex {
   search(query: string): SearchHit[] {
     const q = query.trim().toLowerCase()
     if (!q) return []
+    // 多词 = **模糊到词一级**:全部词都出现即命中,顺序不论、隔着什么符号也不论
+    // (用户实报:「moc forsion」要能找到 moc-forsion)。单词查询与从前逐字节一致。
+    const terms = searchTerms(q)
     const hits: SearchHit[] = []
     for (const e of this.entries.values()) {
-      const bodyIdx = e.lower.indexOf(q)
-      const titleHit = e.title.toLowerCase().includes(q)
+      const title = e.title.toLowerCase()
+      if (!terms.every((t) => e.lower.includes(t) || title.includes(t))) continue
+      // 摘要/行号锚在**第一个能在正文里找到的词**上(整串找不到时退到词)。
+      const bodyIdx = e.lower.indexOf(q) >= 0 ? e.lower.indexOf(q) : terms.map((t) => e.lower.indexOf(t)).find((i) => i >= 0) ?? -1
+      const titleHit = title.includes(q) || terms.every((t) => title.includes(t))
       if (bodyIdx < 0 && !titleHit) continue
 
       let snippet = ''
@@ -248,8 +255,9 @@ export class VaultIndex {
       let score = 0
 
       if (bodyIdx >= 0) {
+        const anchor = e.lower.startsWith(q, bodyIdx) ? q : (terms.find((t) => e.lower.startsWith(t, bodyIdx)) ?? q)
         const start = Math.max(0, bodyIdx - 40)
-        const end = Math.min(e.text.length, bodyIdx + q.length + 80)
+        const end = Math.min(e.text.length, bodyIdx + anchor.length + 80)
         snippet =
           (start > 0 ? '…' : '') +
           e.text.slice(start, end).replace(/\s+/g, ' ').trim() +
@@ -258,15 +266,16 @@ export class VaultIndex {
         score += 5 - Math.min(4, bodyIdx / 200)
         let n = 0
         let from = 0
-        while ((from = e.lower.indexOf(q, from)) >= 0) {
+        while ((from = e.lower.indexOf(anchor, from)) >= 0) {
           n++
-          from += q.length
+          from += anchor.length
           if (n > 20) break
         }
         score += Math.min(5, n)
       }
       if (titleHit) {
         score += 12
+        if (terms.length > 1 && !title.includes(q)) score -= 4 // 分词命中不如整串命中
         if (!snippet) snippet = e.text.replace(/\s+/g, ' ').trim().slice(0, 120)
         if (e.title.toLowerCase() === q) score += 8
       }
@@ -346,27 +355,11 @@ export class VaultIndex {
   }
 }
 
-/** `![[x|200]]` / `[[x#锚]]` / `![](x)` / `[名](x)` 里的**附件**引用(非 .md、非外链、带扩展名)。 */
-function assetRefs(text: string): string[] {
-  const out: string[] = []
-  const add = (raw: string): void => {
-    const r = raw.split('|')[0].split('#')[0].trim().replace(/^<|>$/g, '')
-    if (!r || /^[a-z][a-z0-9+.-]*:/i.test(r)) return // http(s)/data/amadeus-asset… 一律不是 vault 附件
-    if (!/\.[a-z0-9]{1,12}$/i.test(r) || /\.md$/i.test(r)) return // 无扩展名 = 笔记名;.md = 笔记/画板,不删
-    if (!out.includes(r)) out.push(r)
-  }
-  for (const m of text.matchAll(/!?\[\[([^\]\n]+)\]\]/g)) add(m[1])
-  for (const m of text.matchAll(/!?\[[^\]\n]*\]\(([^)\s]+)/g)) add(decodeSafe(m[1]))
-  return out
-}
-
-/** 共享判定只认文件名(小写):同名不同目录也当共享 —— 宁可少删。 */
-function assetKey(ref: string): string {
-  return (ref.split(/[\\/]/).pop() ?? ref).toLowerCase()
-}
-
-function decodeSafe(s: string): string {
-  try { return decodeURIComponent(s) } catch { return s }
+/** 查询串 → 词表。空白/连字符/下划线/斜杠/点一律当分隔符 —— 用户不该记得原名里到底用的哪一种
+ *  (实报:「moc forsion」要找得到 moc-forsion)。切不出多个词时返回原串,行为与从前逐字节一致。 */
+export function searchTerms(q: string): string[] {
+  const parts = q.split(/[\s\-_/.]+/).filter(Boolean)
+  return parts.length > 1 ? parts : [q]
 }
 
 function countNewlines(s: string, end: number): number {

@@ -165,6 +165,7 @@
 .t2-asst-col > .approval-card,
 .t2-asst-col > .inquiry-card,
 .t2-asst-col > .t2-suggest,
+.t2-asst-col > .sketch-card,
 .t2-asst-col > .thinking-block { max-width: 700px; width: 100%; box-sizing: border-box; }
 .t2-name {
   font-size: 10px; letter-spacing: .05em; text-transform: uppercase;

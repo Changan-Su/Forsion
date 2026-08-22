@@ -5,7 +5,7 @@
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
 import React, { useMemo, useState } from 'react'
-import { ChevronRight, ChevronDown, Loader2, XCircle, CheckCircle2, Terminal } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
@@ -59,6 +59,8 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'run', verbKey: 'tool.verb.ran', target: 'python: ' + String(a.code ?? '').split('\n')[0], isFile: false }
     case 'read_file': case 'read_document': case 'read_log': case 'view_image': case 'display_file':
       return { kind: 'read', verbKey: 'tool.verb.read', target: baseName(path || String(a.name ?? a.file ?? '')), isFile: true }
+    case 'sketch':
+      return { kind: 'other', verbKey: 'tool.verb.sketched', target: String(a.title ?? '') || 'sketch', isFile: false }
     case 'desk_present': {
       const views = Array.isArray(a.views) ? a.views : []
       const names = views.map((v: any) => baseName(String(v?.path || ''))).filter(Boolean).join(', ')
@@ -96,13 +98,17 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc }> = ({ ev, desc }) => {
   const verb = desc.verbKey ? t(desc.verbKey) : ev.name
   return (
     <div className="tool-row">
-      <button className="tool-row-head" onClick={() => setOpen((o) => !o)}>
+      <button className="tool-row-head" aria-busy={!ev.done} onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span className="tool-row-verb">{verb}</span>
-        <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
+        <span className="tool-row-copy">
+          <span className={`tool-row-copy-text${!ev.done ? ' chat-run-shimmer-text' : ''}`}>
+            <span className="tool-row-verb">{verb}</span>
+            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
+          </span>
+        </span>
         <Stat d={desc} />
         <span className="tool-row-status">
-          {!ev.done ? <Loader2 size={11} className="spin" /> : ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
+          {ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
       </button>
       <AnimatedCollapse open={open}>
@@ -149,16 +155,21 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
 
   return (
     <div className="tool-group">
-      <button className="tool-group-head" onClick={() => setOpen((o) => !o)}>
+      <button className="tool-group-head" aria-busy={!allDone} onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <Terminal size={12} className="tool-group-ic" />
         {!open && curDesc ? (
-          <span className="tool-group-cur">{curVerb} <span className={curDesc.isFile ? 'file' : ''}>{curDesc.target}</span>…</span>
+          <span className="tool-group-cur">
+            <span className="tool-group-cur-copy chat-run-shimmer-text">
+              {curVerb}{' '}
+              <span className={curDesc.isFile ? 'file' : undefined}>{curDesc.target}</span>…
+            </span>
+          </span>
         ) : (
-          <span className="tool-group-sum">{summary}</span>
+          <span className={`tool-group-sum${!allDone ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
         )}
         <span className="tool-group-status">
-          {!allDone ? <Loader2 size={13} className="spin" /> : anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />}
+          {allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
         </span>
       </button>
       <AnimatedCollapse open={open}>

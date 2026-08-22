@@ -214,11 +214,20 @@ export const childrenOf = (tree: Record<string, unknown>, parent: string): strin
 
 /** `node` 是不是 `ancestor` 的**真后代**(自己不算)。父值认不出(非字符串 / 主卡哨兵 / 指向不存在的
  *  卡)就是一条走到头的链,返回 false。环由 seen 兜底 —— setParent 已拒环,但盘上那份是外部可改的。 */
-export function isUnder(tree: Record<string, unknown>, node: string, ancestor: string): boolean {
+export function isUnder(
+  tree: Record<string, unknown>,
+  node: string,
+  ancestor: string,
+  alive?: ReadonlySet<string>,
+): boolean {
   if (!node || !ancestor || node === ancestor) return false
   const seen = new Set<string>([node])
   let p: unknown = tree[node]
-  while (typeof p === 'string' && p && !seen.has(p)) {
+  // ⚠️ 给了 alive 就必须**逐跳**校验:链子上任何一环不在场,这条祖先关系就到此为止 ——
+  //    与 depthOf 同一条纪律(悬空父 = 没有爹)。不校验的话 tree={c:"ghost",ghost:"p"} 会让
+  //    深度判定说「c 是自由卡」、而段判定说「c 是 p 的后代」,同一份数据两套答案:画框把自由卡
+  //    圈进去,搬迁还会把它跟着父段一起挪并落盘(Codex 2026-08-20 critical)。
+  while (typeof p === 'string' && p && !seen.has(p) && (!alive || alive.has(p))) {
     if (p === ancestor) return true
     seen.add(p)
     p = tree[p]
@@ -243,6 +252,31 @@ export function depthOf(tree: Record<string, unknown>, node: string, alive: Read
     p = tree[p]
   }
   return d
+}
+
+/** 卡片子树在 doc 顶层的**连续段**:从 items[i] 起,把**紧邻其后**、且确实是它后代的卡一并
+ *  算进来。段是被「认爹即搬到父段末尾」构造出来的,正常路径下恒连续;中间隔了正文或别人的卡
+ *  就在那里收边 —— 宁可少算一截,绝不吞不属于它的内容。返回结束下标(不含)。
+ *  `idx` = 该卡在 doc 顶层的子节点序号(不是数组下标:items 已把非卡节点滤掉了)。
+ *  ⚠️ `idx` 那一条是**毁数据防线**,不是优化:只判后代关系的话 `[子卡, 正文, 孙卡]` 会被算成
+ *  一整段,而 orderUnder 按首尾位置删区间、只把卡片插回去 —— 夹在中间的正文当场永久消失
+ *  (Codex 2026-08-20 critical,同形 PM 文档实证)。注释里写过「遇正文收边」但代码里没有,
+ *  正是本仓栽过多次的那一族。
+ *  ⚠️ 搬源码(canvasStage.orderUnder)与画层级框(canvas.createCardDepthDeco)必须用**同一个**
+ *  判据:框画在段上,段却按另一套算法搬 —— 两边一旦分叉就是「框住了不该框的东西」。 */
+export function runEndOf(
+  items: ReadonlyArray<{ anchor: string; idx: number }>,
+  i: number,
+  tree: Record<string, unknown>,
+): number {
+  // items 就是本篇在场的全部卡 → 在场集合从它自己身上取,调用方不可能忘记传(悬空父必须失效,
+  // 见 isUnder 的告警)。卡的量级是几十,每次现建一份集合的代价可以忽略。
+  const alive = new Set(items.map((x) => x.anchor))
+  let end = i + 1
+  while (end < items.length
+    && items[end].idx === items[end - 1].idx + 1
+    && isUnder(tree, items[end].anchor, items[i].anchor, alive)) end++
+  return end
 }
 
 /** 新 Frame(2026-08-18)。`title` 空着由渲染侧兜底成 "Frame" —— 空串不写键(与 setElementText 同口径)。 */

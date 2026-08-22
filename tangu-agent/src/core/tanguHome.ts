@@ -112,3 +112,14 @@ export function ensureHome(): string {
   mkdirSync(agentsDir(), { recursive: true });
   return tanguHome();
 }
+
+/** 工作区(用户项目目录)里 Tangu 自己那个点目录的名字 —— `<cwd>/.tangu/{skills,plans}`。
+ *  ⚠️与家目录同名是**刻意**的,三家上游都这样(Claude Code `.claude`、Codex `.codex`、pi `.pi`
+ *  各自家目录与工作区同名)。同名无害的前提是:**它绝不能进 `PROJECT_ROOT_MARKERS`**
+ *  (见 services/projectDoc.ts —— 曾经进过,后果是 $HOME 恒被判成项目根)。
+ *  单一常量而非各处字面量:2026-07-05 家目录做 `.tangu → .forsion` 品牌迁移时,工作区那几处
+ *  字面量没跟上,双名并存漂移了 6 周才被发现。 */
+export const WORKSPACE_DIR_NAME = '.tangu';
+/** 只读兼容:`<cwd>/.forsion/skills` 是 v2.3.3(2026-07-07)发出去的项目级技能位置,继续认,
+ *  但同 id 让 `.tangu/skills` 赢。新写入一律用 WORKSPACE_DIR_NAME。 */
+export const LEGACY_WORKSPACE_DIR_NAME = '.forsion';

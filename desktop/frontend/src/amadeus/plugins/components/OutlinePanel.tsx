@@ -1,42 +1,12 @@
 // Sidebar panel contributed by the built-in "outline" plugin: lists the active page's
-// headings (in document order) and scrolls to a block on click.
+// headings (in document order) and scrolls to them on click.
+// 取标题/跳转两条路由(v3 块 + v4 unified)统一在 lib/activeNote,与右栏那个大纲视图同源。
 
-import { useMemo } from 'react'
-import { usePageStore } from '../../store/pageStore'
-
-interface Head {
-  id: string
-  level: number
-  text: string
-  key: string
-}
+import { useNoteOutline } from '../../lib/activeNote'
 
 export function OutlinePanel() {
-  const manifest = usePageStore((s) => s.manifest)
-  const blocks = usePageStore((s) => s.blocks)
-
-  const heads = useMemo<Head[]>(() => {
-    if (!manifest) return []
-    const out: Head[] = []
-    for (const row of manifest.root.children)
-      for (const col of row.columns)
-        for (const ref of col.children) {
-          const content = blocks[ref.ref]?.content ?? ''
-          for (const line of content.split('\n')) {
-            const m = /^(#{1,6})\s+(.+?)\s*$/.exec(line.trim())
-            if (m) out.push({ id: ref.ref, level: m[1].length, text: m[2], key: `${ref.ref}:${out.length}` })
-          }
-        }
-    return out
-  }, [manifest, blocks])
-
+  const heads = useNoteOutline()
   if (heads.length === 0) return <div className="panel-empty">没有标题</div>
-
-  const goto = (id: string): void => {
-    document
-      .querySelector(`[data-block-id="${id}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
 
   return (
     <div className="outline">
@@ -46,7 +16,7 @@ export function OutlinePanel() {
           className="outline-item"
           data-level={h.level}
           style={{ paddingLeft: 8 + (h.level - 1) * 12 }}
-          onClick={() => goto(h.id)}
+          onClick={h.go}
           title={h.text}
         >
           {h.text}

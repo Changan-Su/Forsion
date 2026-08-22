@@ -4,6 +4,7 @@
 import { activePageScope, pageStoreFor, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
+import { hasUnifiedInstance } from '@amadeus/unified/lifecycle'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
 import { BLANK_SCENE_JSON, blankDrawing, isDrawingPath } from '@amadeus-shared/excalidraw/format'
@@ -285,13 +286,28 @@ export function openSearch(): void {
   ws.openView('amadeus-search', {}, 'main')
 }
 
-/** resolve 时笔记必须真的加载完(调用方靠它定位/高亮块);超时兜底防 leaf 效果没接住。 */
+/** resolve 时笔记必须真的加载完(调用方靠它定位/高亮块);超时兜底防 leaf 效果没接住。
+ *  v3 的就绪信号 = activePage 落到本路径;**v4 永不设 activePage**,就绪信号换成
+ *  「该路径上有活着的 unified 实例」(registerUnifiedPipe 是它挂载后才登记的)。
+ *  没有这一路时 v4 的每一次跳转都要空等满 3s 超时才继续。 */
+const noteReady = (path: string): boolean =>
+  usePageStore.getState().activePage === path || hasUnifiedInstance(path)
+
 function waitForActive(path: string, timeoutMs = 3000): Promise<void> {
-  if (usePageStore.getState().activePage === path) return Promise.resolve()
+  if (noteReady(path)) return Promise.resolve()
   return new Promise((resolve) => {
-    const off = usePageStore.subscribe((s) => {
-      if (s.activePage === path) { clearTimeout(t); off(); resolve() }
-    })
-    const t = setTimeout(() => { off(); resolve() }, timeoutMs)
+    // unified 实例的登记不经 store,靠 store 通知轮询它(笔记切换必然带来若干次 store 变更;
+    // 真错过了还有 250ms 的兜底轮询,最坏仍受 timeoutMs 封顶)。
+    const done = (): boolean => {
+      if (!noteReady(path)) return false
+      clearTimeout(t)
+      clearInterval(poll)
+      off()
+      resolve()
+      return true
+    }
+    const off = usePageStore.subscribe(() => { done() })
+    const poll = setInterval(done, 250)
+    const t = setTimeout(() => { clearInterval(poll); off(); resolve() }, timeoutMs)
   })
 }

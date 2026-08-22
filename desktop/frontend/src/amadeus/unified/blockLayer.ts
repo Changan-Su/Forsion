@@ -20,6 +20,7 @@ import { AllSelection, NodeSelection, TextSelection, Plugin, PluginKey } from '@
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { zoomOf } from '@lcl/engine'
@@ -28,10 +29,15 @@ import { executeMoveBelowRow, executePair } from './columns'
 import { foldStateAt, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
+import { isCoarsePointer } from '../../touch'
 
 export interface BlockLayerHooks {
   /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。 */
   onMenu: (at: { x: number; y: number }) => void
+  /** **整块**删掉了这些内容(块选中 Delete/Backspace)。宿主据此问「引用块牵着的磁盘文件也删吗」。
+   *  剪切不发(搬家不是删除),逐字符编辑更不经过这里 —— 判据是结构性的,不靠启发式。
+   *  调用时机在 dispatch **之后**:宿主要读删完的文档算「同一篇里还有没有别处引用」。 */
+  onBlocksDeleted?: (content: Fragment) => void
 }
 
 export interface BlockLayer {
@@ -110,6 +116,24 @@ export interface ActiveBlock {
   node: ProseNode
   pos: number // 节点前位置(NodeSelection 落点)
   el: HTMLElement
+}
+
+/** 单独成块的图片/嵌入以可见媒体盒作为交互几何。它们的 PM 段落壳还可能带隐藏源码、基线行盒，
+ *  高度会比画面多出一截；拿壳去拉长抓手/画按压框，就会在图片底下多垂几十像素。 */
+function visualBlockElement(el: HTMLElement): HTMLElement {
+  if (el.tagName !== 'P') return el
+  const media = el.querySelector<HTMLElement>(
+    ':scope > img:not(.ProseMirror-separator), :scope > .wiki-inline-img-wrap, :scope > .unified-embed',
+  )
+  if (!media) return el
+  // PM 会在叶子图片后补 separator img + trailingBreak；wiki/embed 的源码则留在隐藏 span 里。
+  // 它们都不是用户可见的同排内容，不能让 `:only-child` 判据失效。真正混有文字/其它元素时仍用段落壳。
+  const visibleSibling = [...el.children].some((child) =>
+    child !== media
+    && !child.matches('.ProseMirror-separator, .ProseMirror-trailingBreak, .wikilink-src-hidden'),
+  )
+  const visibleText = [...el.childNodes].some((child) => child.nodeType === Node.TEXT_NODE && !!child.textContent?.trim())
+  return visibleSibling || visibleText ? el : media
 }
 
 /** hover 命中(取代 plugin-block 的列盲中线版):按**真指针坐标** posAtCoords,爬升规则沿用
@@ -490,17 +514,38 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           activeRef = a
           syncFold(a)
           // 绝对定位(布局 px):视口 rect ÷ 累计视觉缩放反补偿,把手压到块首行行高中点(AFFiNE 手感)。
-          const z = visualScale(container)
-          const cr = container.getBoundingClientRect()
-          const r = a.el.getBoundingClientRect()
-          const cs = getComputedStyle(a.el)
+          // `.milkdown` 在画布模式是 position:static 且宽度为 0；拿它量 visualScale 会退化成
+          // 仅 CSS zoom、漏掉 stage-inner 的 transform scale。PM 根始终有实体宽度，能同时量到两级缩放。
+          const z = visualScale(editorView.dom)
+          // 画布模式会把 `.milkdown` 改成 position:static，让 stage-inner 成为真正的 absolute
+          // containing block；用 container.rect 当原点会把舞台 pan 整段重复算进 left/top，缩放后
+          // 偏移还会继续放大。始终从把手自己的真实包含块取原点，文档/画布两种布局都成立。
+          const o = overlayOrigin(content)
+          const geometryEl = visualBlockElement(a.el)
+          const r = geometryEl.getBoundingClientRect()
+          // list_item 的边框盒从正文左缘开始，已包含当前 ul/ol 的 marker gutter；直接拿 r.left
+          // 会让顶层 bullet 的把手比普通段落右移整整 1.4em。把手横轴改锚到当前列表容器左缘：
+          // 只去掉“本层标记槽”，嵌套列表的父级左移量仍在，因此真正层级/Tab 缩进不会被抹平。
+          const list = a.el.tagName === 'LI' && /^(UL|OL)$/.test(a.el.parentElement?.tagName ?? '')
+            ? a.el.parentElement
+            : null
+          const anchorLeft = list?.getBoundingClientRect().left ?? r.left
+          const cs = getComputedStyle(geometryEl)
           const lh = Number.parseFloat(cs.lineHeight) || 24
           const pt = Number.parseFloat(cs.paddingTop) || 0
+          const lineOffset = pt + Math.max(0, (lh - 24) / 2)
+          const blockH = r.height / z
+          const grownH = Math.max(24, blockH - 16)
+          // 长块 hover 时抓手会从 24px 拉到“块高 - 16px”。它原本仍以首行 24px 槽的中心为轴
+          // 向上下同时生长，于是多行块/图片越高，顶部越跑到块外（截图里的长灰条即此）。补一个
+          // 向下位移，让拉长后的上下沿恒落在块内各 8px；短块仍保持 0 位移。
+          const growY = grownH > 24 ? grownH / 2 - 4 - lineOffset : 0
           content.dataset.show = 'true'
-          content.style.setProperty('--amx-block-h', `${r.height / z}px`) // hover 拉长用(见 styles.css)
+          content.style.setProperty('--amx-block-h', `${blockH}px`) // hover 拉长用(见 styles.css)
+          content.style.setProperty('--amx-block-grow-y', `${growY}px`)
           const w = content.offsetWidth || 52
-          content.style.top = `${(r.top - cr.top) / z + pt + Math.max(0, (lh - 24) / 2)}px`
-          content.style.left = `${(r.left - cr.left) / z - w - 8}px`
+          content.style.top = `${(r.top - o.y) / z + lineOffset}px`
+          content.style.left = `${(anchorLeft - o.x) / z - w - 8}px`
         }
 
         const drag = document.createElement('button')
@@ -513,6 +558,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
           hooks.onMenu({ x: r.left, y: r.bottom + 4 })
+          // 焦点收回编辑器:mousedown 的浏览器默认行为把焦点给了 ⠿ 这个 <button>,不收回的话
+          // 菜单一开,键盘就整片失效(块选着却 Cmd+C/Delete 无反应)。菜单是浮层,不吃焦点也照用。
+          // ⚠️ 触屏上不收:focus 会弹安卓软键盘,把这个向上弹的浮层从手指底下顶走(见 touch.ts
+          //    顶注与 check:menutap);手机上本来也没有快捷键可按。
+          if (!isCoarsePointer()) viewRef?.focus()
         })
         // mousedown = 选中所在块;三个拖拽事件都挂 gutter 整体(plugin-block 同款:真实拖动
         // 从 ⠿ 冒泡上来,仪器合成事件也直接打在 gutter 上)。
@@ -557,7 +607,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           }
           const z = visualScale(view.dom)
           const o = overlayOrigin(hoverRect)
-          const r = a.el.getBoundingClientRect()
+          const r = visualBlockElement(a.el).getBoundingClientRect()
           const range = topRangeOf(view)
           let box = { left: r.left - o.x, top: r.top - o.y, right: r.right - o.x, bottom: r.bottom - o.y }
           if (range) {
@@ -636,10 +686,24 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (/_list$/.test(a.node.type.name) && listFoldStateAt(view, a.pos + 1)) return a.pos + 1
           return null
         }
+        /** 标题折叠锚。⚠️ 与列表同一条「首子归外壳」规矩:hover 卡/分栏格的**首块**时把手锚在
+         *  外壳上(a.pos = 卡的前位),折叠钮要往里探一格才够得着那个标题 —— 否则卡内第一个标题
+         *  永远不出钮(2026-08-20 探针实测:卡内 H2 有钮、卡内首行 H1 没钮,就是这一格之差)。
+         *  探一格对文本块无害:段落 +1 落进 inline,headingSiteAt 判不出标题,自然返回 null。 */
+        const headFoldPos = (a: ActiveBlock): number | null => {
+          const view = viewRef
+          if (!view) return null
+          if (foldStateAt(view, a.pos)) return a.pos
+          // ⚠️ `childCount > 0` 不能省(Codex 2026-08-20):分割线是**非文本块的叶子**、nodeSize=1,
+          //    只挡 isTextblock 的话 a.pos+1 落到的是它**后面那个块**的前位 —— 下一块恰是可折叠
+          //    标题时,折叠钮会长在分割线的把手上,点下去折的是别人的小节。
+          if (!a.node.isTextblock && a.node.childCount > 0 && foldStateAt(view, a.pos + 1)) return a.pos + 1
+          return null
+        }
         const foldKindOf = (a: ActiveBlock | null): 'heading' | 'list' | null => {
           const view = viewRef
           if (!view || !a) return null
-          if (foldStateAt(view, a.pos)) return 'heading'
+          if (headFoldPos(a) != null) return 'heading'
           if (listFoldPos(a) != null) return 'list'
           return null
         }
@@ -647,7 +711,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const view = viewRef
           const kind = foldKindOf(a)
           const lp = a ? listFoldPos(a) : null
-          const fs = !view || !a || !kind ? null : kind === 'heading' ? foldStateAt(view, a.pos) : lp == null ? null : listFoldStateAt(view, lp)
+          const hp = a ? headFoldPos(a) : null
+          const fs = !view || !a || !kind ? null : kind === 'heading' ? (hp == null ? null : foldStateAt(view, hp)) : lp == null ? null : listFoldStateAt(view, lp)
           fold.style.display = fs ? '' : 'none'
           fold.textContent = fs === 'folded' ? '▸' : '▾'
           const what = kind === 'list' ? '子项 / children' : '小节 / section'
@@ -660,7 +725,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!view || !a) return
           const lp2 = foldKindOf(a) === 'list' ? listFoldPos(a) : null
           if (lp2 != null) toggleListFoldAt(view, lp2)
-          else toggleFoldAt(view, a.pos)
+          else {
+            const hp2 = headFoldPos(a)
+            if (hp2 == null) return
+            toggleFoldAt(view, hp2)
+          }
           syncFold(a)
         })
 
@@ -763,9 +832,16 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           marquee = null
           mqFrom = null
           document.body.classList.remove('amx-marquee-active')
+          // 框选收尾必须把焦点收回编辑器:框选是在**空白**上按下的,焦点还留在 body ——
+          // 选中一片块之后 Delete / Cmd+C / Cmd+X 全部没反应(键盘事件压根到不了 PM),
+          // 用户实报的「必须通过菜单」就是这条。2026-08-20 探针实测 activeElement=BODY。
+          if (moved) {
+            editorView.focus()
+            return
+          }
           // 没拖动 = 一次「点空白」:AFFiNE 把光标送到该 y 上最近块的行首/行尾(按点在正文列哪一侧),
           // 而不是什么都不做。拖动过的那次是框选,已经在 onMqMove 里设过选区了。
-          if (moved || !start || !e) return
+          if (!start || !e) return
           // ⚠️ 用 posAtCoords(x 钳进编辑区)而不是 DOM 遍历:同一 y 上可能压着零高度的 widget,
           //    按 DOM 挑「第一个 y 命中的元素」会挑错(实测落进一个空块)。钳 x 这一手与 hover
           //    的余白重试同源(见 onMouseMove)。
@@ -1258,6 +1334,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             if (n.type === card) {
               const el = view.nodeDOM(off)
               if (el instanceof HTMLElement) {
+                // 层级框内部不给插入口(2026-08-20):框是「段首画上沿、段末画下沿」合出来的,
+                // 往段中插一个段落 = 把段切断,框当场从中间裂开。要在父子之间加正文,先把子卡
+                // 拖出这一段。判据 = 本卡是框成员但不是段首 → 它上面那道缝在框里。
+                if (el.classList.contains('amx-card-f0') && !el.classList.contains('amx-card-f0-top')) {
+                  prevEl = el
+                  off += n.nodeSize
+                  continue
+                }
                 if (prevEl) {
                   const a = prevEl.getBoundingClientRect()
                   const b = el.getBoundingClientRect()
@@ -1388,7 +1472,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   // 跨块选区的 Delete/Backspace = 删整块范围(2026-08-19,配合缩进子树/框选的「整体操作」):
   // TextSelection.between 的默认删除按文字语义走,会留一个合并后的**空段壳** —— 块级多选的
   // 语义是「删这些块」,不是「删这段文字」。整节点边界一刀,不留渣。
-  const blockRangeDelete = (state: EditorState, dispatch?: (tr: Transaction) => void, view?: EditorView): boolean => {
+  const blockRangeDelete = (state: EditorState, dispatch?: (tr: Transaction) => void, view?: EditorView, cut = false): boolean => {
     const range = view ? topRangeOf(view) : null
     if (!range) return false
     // 两道闸(Codex 08-19 high:卡内 AAA→BBB 的普通跨段选删曾被升级成整卡删除):
@@ -1401,10 +1485,50 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     if ($t.index() - $f.index() < 2) return false
     const sel = state.selection
     if (sel.from > range.from + 1 || sel.to < range.to - 1) return false
-    dispatch?.(state.tr.delete(range.from, range.to).scrollIntoView())
+    if (!dispatch) return true
+    const removed = state.doc.slice(range.from, range.to).content
+    dispatch(state.tr.delete(range.from, range.to).scrollIntoView())
+    if (!cut) hooks.onBlocksDeleted?.(removed)
     return true
   }
-  const blockDeleteKeymap = $prose(() => keymap({ Backspace: blockRangeDelete, Delete: blockRangeDelete }))
+
+  /** 块选中(NodeSelection)按 Delete/Backspace:PM base 的 deleteSelection 逐字对齐,只多发一次
+   *  onBlocksDeleted —— 文件引用块最常见的删法就是「点 ⠿ 选中 → Delete」。 */
+  const nodeSelDelete = (state: EditorState, dispatch?: (tr: Transaction) => void): boolean => {
+    const sel = state.selection
+    if (!(sel instanceof NodeSelection)) return false
+    if (!dispatch) return true
+    const removed = Fragment.from(sel.node)
+    dispatch(state.tr.deleteSelection().scrollIntoView())
+    hooks.onBlocksDeleted?.(removed)
+    return true
+  }
+  const blockDel = (state: EditorState, dispatch?: (tr: Transaction) => void, view?: EditorView): boolean =>
+    blockRangeDelete(state, dispatch, view) || nodeSelDelete(state, dispatch)
+  const blockDeleteKeymap = $prose(() => keymap({ Backspace: blockDel, Delete: blockDel }))
+
+  // 跨块选区的**剪切**同理:PM 自带的 cut = 复制 + deleteSelection(文字语义)= 留一个空段壳。
+  // 这里只在 blockRangeDelete 认账(≥2 个同层块、且顶满整块跨度)时接管,序列化照抄 dragstart
+  // 那份 serializeForClipboard;其余一律交回 PM。复制(copy)不用管 —— 它本来就没有删除那一步。
+  const blockCutPlugin = $prose(() => new Plugin({
+    props: {
+      handleDOMEvents: {
+        cut: (view, event) => {
+          const e = event as ClipboardEvent
+          if (!e.clipboardData || !blockRangeDelete(view.state, undefined, view, true)) return false
+          const { dom, text } = (view as unknown as {
+            serializeForClipboard: (s: unknown) => { dom: HTMLElement; text: string }
+          }).serializeForClipboard(view.state.selection.content())
+          e.preventDefault()
+          e.clipboardData.clearData()
+          e.clipboardData.setData('text/html', dom.innerHTML)
+          e.clipboardData.setData('text/plain', text)
+          blockRangeDelete(view.state, view.dispatch.bind(view), view, true)
+          return true
+        },
+      },
+    },
+  }))
 
   const selectAllKeymap = $prose(() =>
     keymap({
@@ -1488,7 +1612,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   return {
-    plugins: [handlePlugin, dropIndicator, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, moveBlockKeymap, keyboardPlugins].flat(),
+    plugins: [handlePlugin, dropIndicator, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
   }

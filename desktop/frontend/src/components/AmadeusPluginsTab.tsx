@@ -11,7 +11,7 @@ import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending } from '../stores/pluginOnboardingStore'
 import { useI18n } from '../i18n'
-import { pluginDisplayName, pluginDisplayDescription } from '../amadeus/plugins/display'
+import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { setPluginEnabled, type PluginInfo } from '../services/backendService'
@@ -395,7 +395,11 @@ export const AmadeusPluginsTab: React.FC<{
   onEngineReload?: () => void
   /** 引擎插件清单(SettingsModal 下传):级联时识别首方内置同 id,绝不去动它们。 */
   enginePlugins?: PluginInfo[] | null
-}> = ({ cfg, onEngineReload, enginePlugins }) => {
+  /** 受控详情面:左栏 `fplugin:<id>` 一级项直接落到该插件的设置页,不经卡片列表。
+   *  id 与返回去处**必须成对**给 —— 拆成两个可选 prop 会出现「给了 id 没给 onBack、返回点不动」
+   *  的半瘫状态(codex 评审 2026-08-21)。 */
+  controlledDetail?: { id: string; onBack: () => void }
+}> = ({ cfg, onEngineReload, enginePlugins, controlledDetail }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
@@ -409,8 +413,12 @@ export const AmadeusPluginsTab: React.FC<{
   // 设置页可能先于 Amadeus Space 打开 → 兜底装载(幂等,installed 闸在 amadeusPlugins 内)。
   useEffect(() => { installAmadeusPlugins() }, [])
 
-  const detailPlugin = detail ? plugins.find((p) => p.id === detail) : undefined
-  if (detailPlugin) return <PluginDetail plugin={detailPlugin} onBack={() => setDetail(null)} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
+  // 受控 id 解析得到才赢;插件被卸载/禁用后落回卡片列表,且**列表点得动**(见 resolvePluginDetail)。
+  const { plugin: detailPlugin, controlled } = resolvePluginDetail(plugins, controlledDetail?.id, detail)
+  if (detailPlugin) {
+    const back = controlled && controlledDetail ? controlledDetail.onBack : () => setDetail(null)
+    return <PluginDetail plugin={detailPlugin} onBack={back} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
+  }
 
   // 内置 vs 外置分两区:Callout 标注/字数统计 是 builtin,过去和外置插件混在同一串里,
   // 而浏览器/终端(宿主原生)又单挂在最上面 —— 同样是「内置」却分三处,用户实报看不出章法。

@@ -27,7 +27,7 @@ export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions } fro
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo } from './ribbonRegistry'
 export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
-export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName } from './spaceRegistry'
+export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome } from './spaceRegistry'
 export { useNav, recordNav } from './navStore'
 export type { NavEntry } from './navStore'
 export { useStatusStore, addStatusItem, removeStatusItem } from './statusRegistry'

@@ -10,6 +10,16 @@
 //   2. `mountBlocks(el, …)` —— 宿主往插件给的 DOM 里渲染一个真 <BlockHost>:内容、编辑、slash、
 //      `![[嵌入]]`、插件块全都原样跟随,插件不必也不该复刻编辑器。
 //
+// v4/unified 之后(2026-08-20):
+// - **不带 bind 那份**跟随的「活动面板正在看的那篇」如今默认是 v4 —— 它没有 activePage、没有块 id、
+//   正文根本不进 pageStore。所以本面的快照重新定义成「**当前这篇笔记**的快照」:`path`/`token`/
+//   `status`/`text`/`fmExtra` 两条路由都真,`blocks`/`order` 是 **v3 专有**、v4 下恒空且由 `model`
+//   字段自报家门。**不给 v4 合成块 id** —— PM 顶层节点没有身份,合成 id 一按回车就全体位移,
+//   而令牌只挡「换了一篇」挡不住「同一篇里 id 易主」。宁可空,不可假。
+// - 块寻址类写口(insertBlockAfter/deleteBlock/mountBlocks/undo/…)在 v4 下**诚实拒绝并 warn**,
+//   不静默 no-op;跨路由都成立的写口只有一条:`insertMarkdown`。
+// - 正典 = docs/ToBeImproved/块表面v4适配方案_2026-08-20.md。
+//
 // 绑定模型(2026-08-14 scope 化):
 // - **不带 bind**(插件 ctx.app 上那份,每插件一个):跟随「活动面板」门面 —— 老模型,老插件不变。
 // - **带 bind{store,scope}**(每个插件文件视图一份,由 AmadeusPluginFileView 创建):绑定该视图
@@ -30,7 +40,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import type { ReactNode } from 'react'
 import { DndContext, useSensors } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
-import { usePageStore, PageScopeCtx, type PageStoreApi } from '../store/pageStore'
+import { usePageStore, PageScopeCtx, noteOf, v4PathOf, type PageStoreApi } from '../store/pageStore'
+import { hasUnifiedInstance, subscribeUnified, unifiedBody, unifiedFm, unifiedInsertMarkdown } from '../unified/lifecycle'
 import { BlockHost, BlockSurfaceContext, type BlockSurface } from '../components/BlockHost'
 import { askString } from '../components/askString'
 import type { BlockSurfaceApi, PageSnapshot, MountBlockOptions } from './types'
@@ -68,6 +79,8 @@ export function samePage(a: PageSnapshot, b: PageSnapshot): boolean {
     // (ready→saving→ready),大插件视图整树白重渲两遍(codex)。
     liveStatus(a.status) === liveStatus(b.status) &&
     a.blocks === b.blocks && // 引用比较成立靠 contentMap 的按引用缓存,见 makeRuntime
+    a.model === b.model &&
+    a.text === b.text && // v4 的正文不进 store,块表恒空 —— 少这条 = v4 下永远「没变化」
     a.fmExtra === b.fmExtra &&
     a.order.length === b.order.length &&
     a.order.every((id, i) => id === b.order[i])
@@ -75,22 +88,33 @@ export function samePage(a: PageSnapshot, b: PageSnapshot): boolean {
 }
 const liveStatus = (s: string): string => (s === 'saving' ? 'ready' : s)
 
+/** v4 下这两张表恒空,且必须是**同一个引用** —— samePage 靠引用比较去重,每次新建空对象
+ *  = v4 笔记上每个 store tick 都通知一遍插件(整树重渲)。 */
+const EMPTY_BLOCKS: Readonly<Record<string, string>> = Object.freeze({})
+const EMPTY_ORDER: readonly string[] = Object.freeze([])
+
 /** 每份 surface 一套的快照/令牌运行时(scope 化前是模块级单例 —— 单页模型的遗迹)。 */
 function makeRuntime(bind?: SurfaceBind) {
   const src = bind?.store ?? usePageStore
 
   // 页令牌:`${路径}#${序号}`,序号在页路径每次变化时 +1 —— 只比路径不够:A→B→A 之后,插件手里
   // 那张第一次 A 时拿的旧快照又会「验证通过」,而那期间的块 id 早已易主。
+  // ⚠️ 路径必须经 `noteOf()` 取(v3 的 activePage ∪ v4 的 activeNotePath)。只读 activePage 的话
+  //    v4 全程 null → 令牌恒为 `'#0'` → A 篇的令牌在 B 篇照样过闸,**跨笔记护栏整条失效**
+  //    (信任边界五条的第一条)。2026-08-20 修。
   let pageSeq = 0
-  let lastPath: string | null = src.getState().activePage
+  let lastPath: string | null = noteOf(src.getState())
   const stopWatch = src.subscribe(() => {
-    const p = src.getState().activePage
+    const p = noteOf(src.getState())
     if (p !== lastPath) {
       lastPath = p
       pageSeq++
     }
   })
   const currentToken = (): string => `${lastPath ?? ''}#${pageSeq}`
+
+  /** 当前这篇是 v4/unified 吗?是 → 它的路径(判据单源见 pageStore.v4PathOf)。 */
+  const v4Now = (): string | null => v4PathOf(src.getState())
 
   // 派生表按**上游对象的引用**缓存:每次快照都新建 object 的话,subscribePage 的引用比较永远不等
   // → 插件每次 store 变动都整棵重渲。缓存冻结:插件写坏它,后续读到的全是假内容。
@@ -103,19 +127,47 @@ function makeRuntime(bind?: SurfaceBind) {
     return lastContentMap
   }
 
+  // 整篇正文(v3 侧):块按 order 拼。同样按上游引用缓存 —— 不缓存的话每个 store tick(每次击键)
+  // 都要把整篇重拼一遍,长文里这是最贵的一档浪费,而 samePage 随后多半判它没变。
+  let lastTextSrc: readonly [unknown, unknown] = [null, null]
+  let lastText = ''
+  const v3Text = (raw: Record<string, { content: string }>, manifest: unknown, order: readonly string[]): string => {
+    if (raw === lastTextSrc[0] && manifest === lastTextSrc[1]) return lastText
+    lastTextSrc = [raw, manifest]
+    lastText = order.map((id) => raw[id]?.content ?? '').join('\n\n')
+    return lastText
+  }
+
   const snapshot = (): Readonly<PageSnapshot> => {
     const s = src.getState()
+    const v4 = v4PathOf(s)
+    if (v4) {
+      return Object.freeze({
+        token: currentToken(),
+        path: v4,
+        // v4 没有 store 装载态:「实例在册」就是它的 ready(导航等待用的同一判据)。
+        status: hasUnifiedInstance(v4) ? 'ready' : 'idle',
+        text: unifiedBody(v4) ?? '',
+        model: 'text' as const,
+        blocks: EMPTY_BLOCKS,
+        order: EMPTY_ORDER,
+        fmExtra: unifiedFm(v4) ?? '',
+      })
+    }
+    const order = Object.freeze(s.flatOrder()) as readonly string[]
     return Object.freeze({
       token: currentToken(),
       path: s.activePage,
       status: s.status,
+      text: v3Text(s.blocks, s.manifest, order),
+      model: 'blocks' as const,
       blocks: contentMap(s.blocks),
-      order: Object.freeze(s.flatOrder()) as readonly string[],
+      order,
       fmExtra: s.manifest?.fmExtra ?? '',
     })
   }
 
-  return { src, scope: bind?.scope ?? null, currentToken, snapshot, stopWatch }
+  return { src, scope: bind?.scope ?? null, currentToken, v4Now, snapshot, stopWatch }
 }
 
 // 一个容器只许有一个 React root。插件常「dispose 完立刻在同一个 el 上重挂」,而 unmount 推迟到
@@ -195,6 +247,13 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
     }
     return true
   }
+  /** 块寻址类调用在 v4 上的闸:那篇没有块模型,**说出来**再拒 —— 静默 no-op 会被当宿主 bug 查半天
+   *  (今天 insertBlockAfter 就因为返回 `''` 而不是 null,让 zotero 一路弹「已插入」的成功 toast)。 */
+  const refuseBlocks = (what: string): boolean => {
+    if (!rt.v4Now()) return false
+    console.warn(`[amadeus] 插件 ${pluginId} 在 v4 笔记上调用 ${what}:这篇没有块模型,请改用 page.text / insertMarkdown`)
+    return true
+  }
 
   const api: BlockSurfaceApi = {
     getPage: () => rt.snapshot(),
@@ -202,12 +261,20 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
     subscribePage(cb) {
       if (!ok()) return () => {}
       let prev = rt.snapshot()
-      const off = rt.src.subscribe(() => {
+      const tick = (): void => {
         const next = rt.snapshot()
         if (samePage(prev, next)) return
         prev = next
         safeCall('subscribePage 回调', cb as (p: PageSnapshot) => unknown, next)
-      })
+      }
+      // 两个源缺一不可:store(v3 的块变动、两条路由的换页、v4 落盘时的 linkGraphVersion)
+      // + unified 实例集合(挂载/卸载 —— 那一刻正文从「问不到」变成「问得到」,store 一声不吭)。
+      const offStore = rt.src.subscribe(tick)
+      const offUnified = subscribeUnified(tick)
+      const off = (): void => {
+        offStore()
+        offUnified()
+      }
       const dispose = (): void => {
         if (unsubs.delete(off)) off()
       }
@@ -216,37 +283,57 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
     },
 
     setFmExtra(token, text) {
-      if (!guard(token)) return
+      if (!guard(token) || refuseBlocks('setFmExtra')) return // v4 的 fm 写口本轮不做,见文件头正典
       rt.src.getState().setFmExtra(String(text ?? ''))
     },
 
     insertBlockAfter(token, afterId, content) {
-      if (!guard(token)) return null
-      return rt.src.getState().insertBlockAfter(afterId ?? null, undefined, String(content ?? ''))
+      if (!guard(token) || refuseBlocks('insertBlockAfter')) return null
+      // ⚠️ store 在「没装载完/没有页」时返回的是 `''` 而不是 null,而插件的判据普遍是 `id == null`
+      //    → 空串一路走成功分支。这里归一成 null,别把这个洞再传下去。
+      return rt.src.getState().insertBlockAfter(afterId ?? null, undefined, String(content ?? '')) || null
+    },
+
+    insertMarkdown(token, md, where) {
+      if (!guard(token)) return false
+      const text = String(md ?? '')
+      if (!text) return false
+      const w = where === 'start' || where === 'end' ? where : 'cursor'
+      const v4 = rt.v4Now()
+      if (v4) return unifiedInsertMarkdown(v4, text, w)
+      const st = rt.src.getState()
+      if (!st.activePage) return false
+      // v3 没有「光标」这个真源(每块一实例,store 不记谁有焦点)→ 'cursor' 退化为 'end'。
+      // 只有**显式**传了 'cursor' 才吱一声:缺省档天天走这条,warn 会变噪音。
+      if (where === 'cursor') console.warn(`[amadeus] 插件 ${pluginId}:v3 笔记没有光标位,insertMarkdown('cursor') 按 'end' 处理`)
+      const order = st.flatOrder()
+      const afterId = w === 'start' ? null : (order[order.length - 1] ?? null)
+      return !!st.insertBlockAfter(afterId, undefined, text)
     },
 
     async deleteBlock(token, id) {
-      if (!guard(token)) return
+      if (!guard(token) || refuseBlocks('deleteBlock')) return
       await rt.src.getState().deleteBlock(String(id))
     },
 
     requestFocus(id, place) {
-      if (!ok()) return
+      if (!ok() || refuseBlocks('requestFocus')) return
       rt.src.getState().requestFocus(String(id), place === 'start' ? 'start' : 'end')
     },
 
     consumeFocus(id) {
-      if (!ok()) return
+      if (!ok() || refuseBlocks('consumeFocus')) return
       rt.src.getState().consumeFocus(String(id))
     },
 
     undo(token) {
-      if (!guard(token)) return
+      // v4 有自己的统一撤销时间线(2026-08-18),不在 store 的撤销栈上 —— 接它是另一轮的事。
+      if (!guard(token) || refuseBlocks('undo')) return
       rt.src.getState().undo()
     },
 
     redo(token) {
-      if (!guard(token)) return
+      if (!guard(token) || refuseBlocks('redo')) return
       rt.src.getState().redo()
     },
 
@@ -259,7 +346,7 @@ export function createBlockSurface(pluginId: string, bind?: SurfaceBind): { api:
       if (!ok() || !isEl(el)) return () => {}
       const o = (opts ?? {}) as MountBlockOptions
       const blockId = String(o.blockId ?? '')
-      if (!blockId || !guard(o.token)) return () => {}
+      if (!blockId || !guard(o.token) || refuseBlocks('mountBlocks')) return () => {}
       // 给了 onInsertAfter = 插件宣告接管结构(见文件头)。
       const surface: BlockSurface | null = o.onInsertAfter
         ? { insertAfter: (id, content) => safeCall('onInsertAfter', o.onInsertAfter, id, content) }

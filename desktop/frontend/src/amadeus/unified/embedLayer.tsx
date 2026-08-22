@@ -21,6 +21,7 @@ import { lazyRetry } from '../../lazyRetry'
 import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
+import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
 import type { EmbedResolved } from '@amadeus-shared/ipc'
 import { getBlockType } from '../blocks/registry'
 import { DatabaseEmbed } from '../blocks/database/DatabaseEmbed'
@@ -77,6 +78,10 @@ export function classifyEmbed(node: ProseNode): EmbedKind | null {
   const renderers = usePluginStore.getState().embedRenderers
   if (findEmbedRenderer(renderers, target.trim())) return { k: 'plugin', target: target.trim() }
   if (!t.includes('#') && findEmbedRenderer(renderers, t)) return { k: 'plugin', target: t }
+  // 裸 `.md` = 笔记:必须先于文件卡判定,否则 `![[某笔记.md]]` 渲染成「📄 打开 ↗」的文件卡
+  //(点了还去调系统默认程序)—— 2026-08-20 用户实报「md 笔记无法渲染」。复合后缀 `.x.md`
+  // 仍归上面的插件/画板分支,插件缺席时才落到文件卡(它有自己的「在 Forsion 里打开」)。
+  if (isPlainNoteRef(t)) return { k: 'note', target }
   if (!t.includes('#') && FILE_EXT_RE.test(t)) {
     const fileKind = PDF_EXT_RE.test(t) ? 'pdf' : VIDEO_EXT_RE.test(t) ? 'video' : AUDIO_EXT_RE.test(t) ? 'audio' : 'other'
     return { k: 'file', name: t, fileKind }

@@ -231,6 +231,14 @@ interface PageState {
   dndOverId: string | null
   /** Bumped whenever on-disk links may have changed (save / external reconcile); backlink & tag panels watch it. */
   linkGraphVersion: number
+  /** 本 scope 当前在看的笔记路径 —— **v3 与 v4 通用**。v4/unified 刻意不设 activePage
+   *  (那是 v3 块编辑器的装载态,给了它 reconcile 会拿陈旧快照回写=延时毁档,见 releasePage),
+   *  于是反链/图谱这些只读面板一律读空。它由编辑器 leaf 的 notePath 驱动,两条路由都写,
+   *  面板一律用 `activePage ?? activeNotePath`。releasePage 交出 v3 快照时**不清**它。 */
+  activeNotePath: string | null
+  setActiveNotePath(path: string | null): void
+  /** 盘上链接可能变了(v4 unified 自写账本不走 store 的 save,得自己吱一声)。 */
+  bumpLinkGraph(): void
 
   openVault(): Promise<void>
   restoreVault(): Promise<void>
@@ -423,8 +431,16 @@ function makePageStore() {
     dndActiveId: null,
     dndOverId: null,
     linkGraphVersion: 0,
+    activeNotePath: null,
     pendingWikiCreate: null,
     focusTitleFor: null,
+
+    setActiveNotePath(path) {
+      if (get().activeNotePath !== path) set({ activeNotePath: path })
+    },
+    bumpLinkGraph() {
+      set((s) => ({ linkGraphVersion: s.linkGraphVersion + 1 }))
+    },
 
     consumeTitleFocus() {
       set({ focusTitleFor: null })
@@ -561,7 +577,7 @@ function makePageStore() {
         fetchIcons(info.root)
         const target = info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
         if (target) await get().loadPage(target)
-        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {} }) // 空库(如未登录的云侧):清编辑器,防旧库笔记误存新根
+        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {}, activeNotePath: null }) // 空库(如未登录的云侧):清编辑器,防旧库笔记误存新根
       } catch (e) {
         set({ error: String(e) })
       }
@@ -930,6 +946,8 @@ function makePageStore() {
       }
       retireUnifiedPath(pagePath)
       if (hasFd && fd) retireUnifiedPath(fd, 'prefix')
+      clearScopeNotePaths(pagePath, 'file') // v4:activeInside 那条善后分支看不见它(Codex 评审 high)
+      if (hasFd && fd) clearScopeNotePaths(fd, 'prefix')
       if (hasFd) {
         try {
           if (trash) await trash(fd)
@@ -944,8 +962,11 @@ function makePageStore() {
       if (activeInside) {
         const next = get().pages.find((p) => p !== pagePath) ?? null
         if (next) await get().loadPage(next)
-        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle' })
+        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle', activeNotePath: null })
       }
+      // 放在善后**之后**广播:v3 此刻 activePage 才落到 next,标签的回落逻辑读它才是对的。
+      emitNotePathGone(pagePath, 'file', null)
+      if (hasFd && fd) emitNotePathGone(fd, 'prefix', null)
     },
 
     async movePage(pagePath, destFolder) {
@@ -1044,12 +1065,14 @@ function makePageStore() {
         return
       }
       retireUnifiedPath(folderPath, 'prefix') // 树下 unified 实例的防抖写会复活刚删的文件(Codex P0)
+      clearScopeNotePaths(folderPath, 'prefix') // 同 deletePage:v4 的 activeNotePath 不清就指着已删的路径
       await get().refreshStructure()
       if (activeInside) {
         const next = get().pages[0] ?? null
         if (next) await get().loadPage(next)
-        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle' })
+        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle', activeNotePath: null })
       }
+      emitNotePathGone(folderPath, 'prefix', null)
     },
 
     setBlockContent(id, content) {
@@ -1478,12 +1501,45 @@ export async function flushAllScopes(): Promise<void> {
  * 发起操作的面板自己已 set 过新路径 → 等值判定天然跳过,重复调用无害。
  */
 export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'prefix'): void {
+  const hit = (a: string): boolean => (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`))
+  const to = (a: string): string => (kind === 'file' ? newP : newP + a.slice(oldP.length))
   for (const s of stores.values()) {
-    const a = s.getState().activePage
+    const st = s.getState()
+    // activeNotePath 必须一起改:v4 面板的 activePage 恒 null,只 remap 它等于没 remap ——
+    // 改名/移动之后 noteOf 会一直返回**旧路径**(Codex 评审 high)。
+    const patch: Partial<PageState> = {}
+    if (st.activePage && hit(st.activePage)) patch.activePage = to(st.activePage)
+    if (st.activeNotePath && hit(st.activeNotePath)) patch.activeNotePath = to(st.activeNotePath)
+    if (Object.keys(patch).length) s.setState(patch)
+  }
+  emitNotePathGone(oldP, kind, newP) // v4 标签自己改指(v3 走效果③,两边写同一个值,幂等)
+}
+
+type PathGoneListener = (from: string, kind: 'file' | 'prefix', to: string | null) => void
+const pathGoneListeners = new Set<PathGoneListener>()
+
+/** 某路径(或其子树)被**删除**(to=null)或**挪走/改名**(to=新路径)。攥着它的编辑器标签据此改指。
+ *
+ *  为什么需要这条广播:v3 有一条自愈链 —— deletePage/movePage 会把 store 导航/remap 到新页,
+ *  `activePage` 一变,amadeusViews 的效果③ 就把本 leaf 的 notePath 认领过去。**v4 的 activePage
+ *  恒 null,效果③ 永不触发**,标签于是一直攥着一个已删/已挪走的路径,显示着一个已退休
+ *  (`pipe.retired`,打字静默不落盘)的编辑器。这条广播给 v4 补上同一条自愈链。 */
+export function onNotePathGone(f: PathGoneListener): () => void {
+  pathGoneListeners.add(f)
+  return () => pathGoneListeners.delete(f)
+}
+function emitNotePathGone(from: string, kind: 'file' | 'prefix', to: string | null): void {
+  for (const f of pathGoneListeners) f(from, kind, to)
+}
+
+/** 删除后把各 scope 里指向该路径(或其子树)的 activeNotePath 清掉。
+ *  v3 有 activeInside 那条善后分支兜底,v4 的 activePage 恒 null 走不到 —— 不清的话
+ *  noteOf 会一直返回一个**已删掉的**路径,图谱/反链/在场/聊天引用全指着它(Codex 评审 high)。 */
+export function clearScopeNotePaths(path: string, kind: 'file' | 'prefix'): void {
+  for (const s of stores.values()) {
+    const a = s.getState().activeNotePath
     if (!a) continue
-    if (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`)) {
-      s.setState({ activePage: kind === 'file' ? newP : newP + a.slice(oldP.length) })
-    }
+    if (kind === 'file' ? a === path : a === path || a.startsWith(`${path}/`)) s.setState({ activeNotePath: null })
   }
 }
 
@@ -1494,7 +1550,7 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
  */
 export function resetAllScopeDocs(): void {
   for (const s of stores.values()) {
-    s.setState({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle', error: null })
+    s.setState({ activePage: null, pendingPage: null, manifest: null, blocks: {}, status: 'idle', error: null, activeNotePath: null })
   }
 }
 
@@ -1559,6 +1615,19 @@ export function usePageScope(): string {
 }
 /** 编辑器子树里做**写操作**时用它拿自己那份 store —— 别用 usePageStore.getState()。
  *  后者解析到「活动面板」,异步回调(防抖保存 / await 后的斜杠动作)里就可能写到隔壁那篇去。 */
+/** 「本 scope 当前这篇」的统一读法:v3 有 activePage,v4 只有 activeNotePath。
+ *  所有**只读**面板一律经它取路径,别再各写各的(v4 全面适配,2026-08-20)。 */
+export function noteOf(s: Pick<PageState, 'activePage' | 'activeNotePath'>): string | null {
+  return s.activePage ?? s.activeNotePath
+}
+
+/** 「本 scope 当前这篇是不是 v4/unified」的**判据单源**:activePage 只有 v3 块编辑器会设。
+ *  是 → 返回它的路径(正文活在 UnifiedPage 私有 pipe 里,得经 unified/lifecycle 的接缝去问);
+ *  不是(v3 / 没打开笔记)→ null。大纲·字数(lib/activeNote)与插件块表面共用它,别再各写各的。 */
+export function v4PathOf(s: Pick<PageState, 'activePage' | 'activeNotePath'>): string | null {
+  return s.activePage ? null : s.activeNotePath
+}
+
 export function useScopedPageStore(): PageStoreApi {
   return pageStoreFor(usePageScope())
 }

@@ -117,7 +117,7 @@ export function WorkspaceView({ leaf }: ViewProps) {
   const mode: WorkspaceMode = override === 'auto' ? (auto === 'notes' && !hasNotes ? 'files' : auto) : override
 
   const vaultRoot = usePageStore((s) => s.vaultRoot)
-  const activePage = usePageStore((s) => s.activePage)
+  const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
   // 编辑器场景的文件模式:定位到笔记所在目录(顶层笔记 → 工作区根,无需展开)。
   const vaultCtx = useMemo(() => {
     if (mode !== 'files' || mainType !== 'amadeus-editor' || !vaultRoot) return null

@@ -149,6 +149,29 @@ async function main() {
       JSON.stringify({ A: labels[tabA], C: labels[tabC], 按钮可点: hit7 }) + '(修复前:右组箭头恒灰 = 用户报的「失效」)',
     )
 
+    // ── 8:同一个 tab 里**就地**换文件(pdfPath a→b)必须惊动 mainTabs ──────────────────
+    //    导航历史与「最近使用」两条订阅都只在 mainTabs 引用变化时才回头看当前面板;此前
+    //    refreshTabs 的比对只认 notePath/path,就地换 PDF/多维表/图片一律看不见 → 用户实报
+    //    「同一个 View 里发生页面跳转,前进后退无法识别」。
+    const inplace = await page.evaluate(async () => {
+      const d = window.__dock
+      const id = d.open('navv', { label: 'F1', pdfPath: 'a.pdf' }, true)
+      let n = 0
+      const un = d.nav.onTabs(() => { n++ })
+      d.nav.setParams(id, { pdfPath: 'b.pdf' })
+      await new Promise((r) => setTimeout(r, 150))
+      const fired = n
+      d.nav.setParams(id, { page: 3 }) // 非身份参数:不该再惊动一次
+      await new Promise((r) => setTimeout(r, 150))
+      un()
+      return { fired, afterNoise: n }
+    })
+    check(
+      '⚠️8 就地换文件(a.pdf→b.pdf)惊动 mainTabs;无关参数不惊动',
+      inplace.fired >= 1 && inplace.afterNoise === inplace.fired,
+      JSON.stringify(inplace) + '(修复前:fired=0 → 历史一条都记不上)',
+    )
+
     const bad = results.filter((r) => !r.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)
     process.exitCode = bad.length ? 1 : 0

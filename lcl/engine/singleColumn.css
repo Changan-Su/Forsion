@@ -195,6 +195,25 @@
   transition: opacity var(--mb-dur) var(--mb-ease);
 }
 .mb-push-dim.on { opacity: 1; pointer-events: auto; }
+
+/* ── 跟手拖拽中(2026-08-20)。手指在屏上时由 JS 逐帧写 `--mb-p`(0=关 1=全开,**比例**不是像素:
+   .mb-drawer-body 上挂着 zoom:1.15,像素在视口/局部两个坐标系里对不上,比例天生免疫)。
+   `data-drag` 的三条选择器都比 `.open` / `.push-*` / `.on` 高一级特异性 —— 松手时先 toggleSidebar
+   (React 打上 .open),下一帧才摘 data-drag:中间这一帧拖拽位仍然赢,所以不会先跳回原位再动画;
+   摘掉的那一刻 transition 从 .open 那条恢复,浏览器按「变化后样式」从当前位置接着补间。
+   ⚠️ 拖拽期必须关掉 transition,否则每帧都在追一个 0.34s 的补间 = 手指和面板差半拍。 */
+.mb-body[data-drag] .mb-drawer,
+.mb-body[data-drag] .mb-main,
+.mb-body[data-drag] .mb-push-dim { transition: none; }
+.mb-body[data-drag='left'] .mb-drawer--left,
+.mb-body[data-drag='right'] .mb-drawer--right { visibility: visible; pointer-events: none; }
+.mb-body[data-drag='left'] .mb-drawer--left { transform: translateX(calc((var(--mb-p) - 1) * var(--mb-panelw))); }
+.mb-body[data-drag='right'] .mb-drawer--right { transform: translateX(calc((1 - var(--mb-p)) * var(--mb-panelw))); }
+/* main 跟着一起被推:宽屏 docked 形态右抽屉**不推** main(与 .push-right 只在窄屏挂的口径一致),
+   靠 JS 只在该推时才加 .mb-drag-push 这个类来区分。 */
+.mb-body.mb-drag-push[data-drag='left'] .mb-main { transform: translateX(calc(var(--mb-p) * var(--mb-panelw))); }
+.mb-body.mb-drag-push[data-drag='right'] .mb-main { transform: translateX(calc(var(--mb-p) * var(--mb-panelw) * -1)); }
+.mb-body[data-drag] .mb-push-dim { opacity: var(--mb-p); pointer-events: none; }
 .mb-drawer-bar { height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 6px; border-bottom: 1px solid var(--border, rgba(0, 0, 0, 0.08)); }
 .mb-drawer-select {
   flex: 1 1 auto;

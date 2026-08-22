@@ -20,6 +20,7 @@ import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
   forsionRefreshToken, shouldRefreshToken,
 } from './forsionAuth'
+import type { WhoamiResult } from './forsionAuth'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
 import { createTray } from './tray'
@@ -1834,12 +1835,30 @@ app.whenReady().then(async () => {
     // 同一次快照,两边同为旧串 → 逐字比对照样通过。代价仍是连续运行 >14d 不重启时 env 那枚会过期。
   }
 
+  // 最近一次**成功**的云端用户资料,按「云端地址 + token」记账。whoami 把超时/5xx/网关 401 一律
+  // 折成 offline,而账号卡在窗口聚焦、引擎每次状态变化时都重拉 —— 不缓存的话云端抖一下就把
+  // 头像/昵称/会员标全抹成 null(loggedIn 还是 true),表现就是「头像时不时消失」。
+  // 换号/登出/换云端地址一律不复用;whoami 在途期间凭据变了则整份作废(见下方 fresh 复核)。
+  let whoProfileCache: { key: string; user: NonNullable<WhoamiResult['user']> } | null = null
+  const credKey = (url: string, tok: string): string => `${url.replace(/\/+$/, '')}\u0000${tok}`
   ipcMain.handle('auth:status', async () => {
     const stored = await loadConfig()
     const creds = loadTanguCreds()
     const cloudUrl = stored.cloudUrl || creds.cloudUrl || ''
     const token = creds.token || ''
     const who = token ? await forsionWhoami(cloudUrl, token) : null
+    // ⚠️ whoami 最长 5s;这期间用户完全可能登出/换号。回来先复核当下的凭据还是不是我查的那份 ——
+    //    不复核的话,A 账号的迟到响应会把 A 的头像写进(或读出)B 的位置上(Codex 评审 medium)。
+    const nowCreds = loadTanguCreds()
+    const stale = credKey(stored.cloudUrl || nowCreds.cloudUrl || '', nowCreds.token || '') !== credKey(cloudUrl, token)
+    const key = credKey(cloudUrl, token)
+    if (!stale && who?.status === 'ok' && who.user) whoProfileCache = { key, user: who.user }
+    // 离线沿用同一凭据的上次资料;ok 用新的;其余(未登录/换号/凭据已漂)一律留空。
+    const u = stale
+      ? undefined
+      : who?.status === 'ok'
+        ? who.user
+        : who?.status === 'offline' && whoProfileCache?.key === key ? whoProfileCache.user : undefined
     // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
     // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
     const backendState = PRODUCT.agentBackend && stored.mode === 'managed' ? backend.getStatus().state : null
@@ -1873,10 +1892,10 @@ app.whenReady().then(async () => {
       // null=未校验/离线(不确定);true=有效。失效(401/403)已在上面就地转登出,不再返回 false。
       tokenValid: who ? (who.status === 'ok' ? true : null) : null,
       cloudUrl,
-      username: who?.user?.username || null,
-      nickname: who?.user?.nickname || null,
-      avatar: who?.user?.avatar || null,
-      membershipTier: who?.user?.membershipTier || null,
+      username: u?.username || null,
+      nickname: u?.nickname || null,
+      avatar: u?.avatar || null,
+      membershipTier: u?.membershipTier || null,
       tokenSource: token ? 'tangu-login' : null,
       backendState,
     }
@@ -2244,7 +2263,9 @@ app.whenReady().then(async () => {
     if (!p) throw new Error(`未知 provider: ${id}`)
     await m.providerOAuthLogin(p) // loopback+PKCE,自动开浏览器,落盘 provider-auth.json
     const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend() // 重启让后端加载该 provider
+    // await(不是 void):provider 只在引擎启动时装载一次,IPC 必须等重启完成才返回,
+    // 否则渲染层拿到 ok 就去拉模型目录 —— 打的还是正在被杀的旧端口。
+    if (stored.mode === 'managed') await ensureBackend() // 重启让后端加载该 provider
     return { ok: true, id }
   })
 

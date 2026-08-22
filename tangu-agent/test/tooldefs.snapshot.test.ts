@@ -6,7 +6,7 @@ import { configureTangu } from '../src/seams/runtime.js';
 import { createAiStudioProfile, createTanguProfile } from '../src/profiles/index.js';
 import { getToolDefinitions } from '../src/tools/registry.js';
 
-// 把 scripts/dump-tooldefs.mjs 的 12-context dump 变成自动闸门:从 src 跑(免 build),
+// 把 scripts/dump-tooldefs.mjs 的 13-context dump 变成自动闸门:从 src 跑(免 build),
 // 与提交的基线 scripts/__snapshots__/tooldefs.json 深等比对。任何工具定义漂移都会让测试失败。
 // 有意变更工具时:`npm run build && node scripts/dump-tooldefs.mjs > scripts/__snapshots__/tooldefs.json` 重生并提交。
 const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
@@ -25,11 +25,20 @@ function dumpFor(profile: any, label: string): Record<string, unknown> {
 
 describe('getToolDefinitions snapshot (behavior-preserving)', () => {
   it('matches committed baseline tooldefs.json', () => {
-    const all = {
+    const all: Record<string, unknown> = {
       ...dumpFor(createAiStudioProfile(), 'ai-studio'),
       ...dumpFor(createTanguProfile({ sandboxMode: 'docker' }), 'tangu-docker'),
       ...dumpFor(createTanguProfile({ sandboxMode: 'none' }), 'tangu-none'),
     };
+    // GUI 客户端面(ctx.client 门禁工具,如 sketch)——与 dump-tooldefs.mjs 的追加块保持一致。
+    {
+      const p = createTanguProfile({ sandboxMode: 'none' });
+      configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+      all['tangu-none:host+gui'] = getToolDefinitions({
+        userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+        execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0',
+      } as any);
+    }
     const here = dirname(fileURLToPath(import.meta.url));
     const snapshotPath = join(here, '../scripts/__snapshots__/tooldefs.json');
     const expected = JSON.parse(readFileSync(snapshotPath, 'utf8'));

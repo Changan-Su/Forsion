@@ -773,7 +773,7 @@ export const Composer2: React.FC<{
 
   /** 主区当前打开的那篇**笔记**。pageStore 门面在编辑器子树**之外**解析到「活动编辑器面板」那份,
    *  正是「当前这篇」的语义,主区换 tab / 就地换笔记都会自动跟上(见 pageStore 的作用域一节)。 */
-  const mainNote = usePageStore((s) => s.activePage)
+  const mainNote = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 笔记不设 activePage
   /** 主区聚焦的那个 tab 承载的文件(笔记以外的:工作区文件预览 wsfile 等)。
    *  ⚠️ `mainTabs[].active` 比的是**全局** activePanel —— 焦点在侧栏(本功能的常态)时主区一个
    *  active 都没有,只看它必然恒空。故:主区有焦点就按焦点那个判,没焦点就在主区里挑一个带文件的
