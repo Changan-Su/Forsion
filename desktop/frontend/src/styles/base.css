@@ -3453,6 +3453,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   pointer-events: none; /* 空隙不挡点击;卡片自身恢复 */
   -webkit-app-region: no-drag;
 }
+.ntf-wrap.ntf-wrap-calendar { top: auto; bottom: 42px; }
 .ntf {
   pointer-events: auto;
   display: flex;

@@ -91,6 +91,7 @@
     "check:blockops": "node scripts/e2e-editor.cjs --check=block-file-ops",
     "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-cats",
     "check:cssvar": "node scripts/css-var-override.check.cjs",
+    "check:calendarui": "node scripts/calendar-ui.check.cjs",
     "check:chattabs": "node scripts/chat-multitab.check.cjs",
     "check:newtab": "node scripts/newtab-open.check.cjs",
     "e2e:canvaslive": "node scripts/canvas-live.e2e.cjs",

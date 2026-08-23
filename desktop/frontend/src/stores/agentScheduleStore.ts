@@ -21,14 +21,16 @@ export const useAgentSchedules = create<AgentScheduleState>((set, get) => ({
   schedules: [],
   loaded: false,
   async refresh(cfg) {
-    const schedules = await getAgentSchedules(cfg).catch(() => get().schedules)
+    const next = await getAgentSchedules(cfg).catch(() => get().schedules)
+    // 旧/代理后端偶尔会以 200 返回缺字段对象；Calendar 不应因一份可选只读源把主视图一起砸掉。
+    const schedules = Array.isArray(next) ? next : get().schedules
     set({ schedules, loaded: true })
   },
 }))
 
 /** 合成只读日历源:path=`agent://<slug>/SCHEDULE.db`(colorForDb/isHidden 按 path 字符串键,天然可用)。 */
 export function useAgentCalDbs(): AggDb[] {
-  const schedules = useAgentSchedules((s) => s.schedules)
+  const schedules = useAgentSchedules((s) => (Array.isArray(s.schedules) ? s.schedules : []))
   return useMemo(() => schedules.map((s): AggDb => {
     const nameId = s.db.columns[0]?.id ?? ''
     return {

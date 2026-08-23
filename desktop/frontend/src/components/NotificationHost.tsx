@@ -4,6 +4,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { X, Check, Info, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useNotifications, type NotifyLevel } from '../stores/notificationStore'
+import { useSpaceStore } from '@lcl/engine'
 
 // 级别用小图标(带级别色)传达,替代旧的左侧竖条高亮 —— 卡片本体保持与整体一致的中性风。
 const LEVEL_ICON: Record<NotifyLevel, typeof Info> = { info: Info, success: Check, warning: AlertTriangle, error: AlertCircle }
@@ -14,8 +15,9 @@ export function NotificationHost() {
   const pause = useNotifications((s) => s.pause)
   const resume = useNotifications((s) => s.resume)
   const dismiss = useNotifications((s) => s.dismiss)
+  const inCalendar = useSpaceStore((s) => s.activeSpaceId === 'calendar')
   return (
-    <div className="ntf-wrap" aria-live="polite" onMouseEnter={pause} onMouseLeave={resume}>
+    <div className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`} aria-live="polite" onMouseEnter={pause} onMouseLeave={resume}>
       {/* popLayout:退场卡片立即让出布局位,下方卡片经 layout 弹簧同步上移补位(toast 堆叠标准配方)。 */}
       <AnimatePresence initial={false} mode="popLayout">
         {items.map((n) => (

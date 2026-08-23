@@ -2,11 +2,11 @@
 import { create } from 'zustand'
 import type { TodoWindow } from '../../views/calendar/todoWindow'
 
-export type TodoSort = 'name' | 'done-first' | 'undone-first'
+export type TodoSort = 'date' | 'name' | 'done-first' | 'undone-first'
 export interface TodoPrefs { win: TodoWindow; customDays: number; hideDone: boolean; sort: TodoSort }
 
 const KEY = 'amadeus.todo.prefs'
-const DEF: TodoPrefs = { win: 'week', customDays: 5, hideDone: false, sort: 'name' }
+const DEF: TodoPrefs = { win: 'week', customDays: 5, hideDone: false, sort: 'date' }
 
 interface State {
   byVault: Record<string, Partial<TodoPrefs>>

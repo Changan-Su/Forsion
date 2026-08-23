@@ -5,7 +5,7 @@
  *  重命名/设默认/新标签打开/改列映射/移出日历;底部「+ 添加 Forsion database」搜库入历。 */
 import { useEffect, useMemo, useState } from 'react'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
-import { Plus, Search, Database, Globe, Upload } from 'lucide-react'
+import { Bot, ChevronDown, Database, Globe, HardDrive, Plus, Search, Star, Upload } from 'lucide-react'
 import { CheckboxInput } from '@astryxdesign/core/CheckboxInput'
 import { AstryxScope } from '../theme/astryxBridge'
 import { askString } from '@amadeus/components/askString'
@@ -121,6 +121,7 @@ function ConfigList() {
   const removeMember = useCalendarConfig((s) => s.removeMember)
 
   const [showAdd, setShowAdd] = useState(false)
+  const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null)
   const [importErr, setImportErr] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ db: AggDb; ics?: boolean; x: number; y: number } | null>(null)
   const [editing, setEditing] = useState<AggDb | null>(null) // 「Calendar 设置」改列映射
@@ -185,19 +186,31 @@ function ConfigList() {
           const isDefault = def ? def === db.path : di === 0 // 未显式设默认时,首个隐式为默认
           return (
             <div className="amx-calcfg-row" key={db.path}>
+              <span className="amx-calcfg-type" aria-hidden="true">
+                {kind === 'agent' ? <Bot size={14} /> : kind === 'ics' ? <Globe size={14} /> : kind === 'other' ? <HardDrive size={14} /> : <Database size={14} />}
+              </span>
               <span className="amx-calcfg-swatch" style={{ background: visible ? color : 'transparent', borderColor: color }}>
                 <input type="color" value={color} onChange={(e) => setColor(vault, db.path, e.target.value)} title="事件颜色" />
               </span>
               <span className={`amx-calcfg-name${visible ? '' : ' off'}`} title={icsError(db.path) || db.name}>
-                {kind === 'agent' ? `⚙ ${db.name}` : kind === 'ics' ? `🌐 ${db.name}` : db.name}
+                {db.name}
                 {kind === 'ics' && icsError(db.path) && <span className="amx-cal-vault"> · 拉取失败</span>}
                 {(() => {
                   // Vault 归属后缀(淡显):agent 已用 ⚙ 标识不缀;other 用其所属侧名;其余=活动侧库,缀活动侧名。
                   const vaultLabel = kind === 'agent' ? '' : kind === 'other' ? (db.vaultLabel || '') : activeLabel
                   return vaultLabel ? <span className="amx-cal-vault"> · {vaultLabel}</span> : null
                 })()}
-                {!readonly && isDefault && ' ★'}
               </span>
+              {!readonly && (
+                <button
+                  className={`amx-calcfg-def${isDefault ? ' on' : ''}`}
+                  aria-label={isDefault ? `${db.name} 是新建默认日历` : `将 ${db.name} 设为新建默认日历`}
+                  title={isDefault ? '新建默认日历' : '设为新建默认日历'}
+                  onClick={() => setDefault(vault, db.path)}
+                >
+                  <Star size={13} fill={isDefault ? 'currentColor' : 'none'} />
+                </button>
+              )}
               <CheckboxInput
                 label="在日历中显示"
                 isLabelHidden
@@ -221,17 +234,23 @@ function ConfigList() {
           )
         })}
       </div>
-      <button className="amx-calcfg-add" onClick={() => setShowAdd(true)}>
-        <Plus size={14} /> 添加 Forsion database
-      </button>
-      <button className="amx-calcfg-add" onClick={subscribe}>
-        <Globe size={14} /> 订阅外部日历(.ics)
-      </button>
-      <button className="amx-calcfg-add" onClick={importFile}>
-        <Upload size={14} /> 导入 .ics 文件
+      <button className="amx-calcfg-add amx-calcfg-add-main" onClick={(e) => {
+        const r = e.currentTarget.getBoundingClientRect()
+        setAddMenu({ x: Math.max(12, r.left), y: r.bottom + 4 })
+      }}>
+        <Plus size={14} /> 添加日历 <ChevronDown size={13} />
       </button>
       {importErr && <div className="amx-calcfg-hint" style={{ color: 'var(--danger)' }}>{importErr}</div>}
-      {dbs.length > 0 && <div className="amx-calcfg-hint">★=新建默认库 · 勾选=是否显示 · 点色块改颜色 · ⋯ 更多</div>}
+
+      {addMenu && (
+        <div className="amx-db-popwrap" onMouseDown={() => setAddMenu(null)}>
+          <OverlayAt className="amx-db-pop amx-calcfg-addmenu" x={addMenu.x} y={addMenu.y} onMouseDown={(e) => e.stopPropagation()}>
+            <button className="amx-db-opt" onClick={() => { setAddMenu(null); setShowAdd(true) }}><Database size={14} /> 添加数据库</button>
+            <button className="amx-db-opt" onClick={() => { setAddMenu(null); subscribe() }}><Globe size={14} /> 订阅外部日历</button>
+            <button className="amx-db-opt" onClick={() => { setAddMenu(null); importFile() }}><Upload size={14} /> 导入 .ics 文件</button>
+          </OverlayAt>
+        </div>
+      )}
 
       {menu && (
         <div className="amx-db-popwrap" onMouseDown={() => setMenu(null)}>
@@ -259,7 +278,7 @@ function ConfigList() {
             <button className="amx-db-opt" onClick={() => rename(menu.db)}>重命名</button>
             <button className="amx-db-opt" onClick={() => { setDefault(vault, menu.db.path); setMenu(null) }}>设为默认库</button>
             <button className="amx-db-opt" onClick={() => { openDb(menu.db.path); setMenu(null) }}>在新标签打开</button>
-            <button className="amx-db-opt" onClick={() => { setEditing(menu.db); setMenu(null) }}>Calendar 设置(改列映射)</button>
+            <button className="amx-db-opt" onClick={() => { setEditing(menu.db); setMenu(null) }}>日历设置（列映射）</button>
             <button className="amx-db-opt amx-db-opt-danger" onClick={() => { removeMember(vault, menu.db.path); setMenu(null) }}>从日历移除</button>
               </>
             )}

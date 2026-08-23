@@ -14,9 +14,10 @@ import { useTodoPrefs, prefsOf } from '../amadeus/store/todoPrefsStore'
 import { centeredRange, windowTotal, type TodoWindow } from './calendar/todoWindow'
 import { fmtStamp, startOfDay } from './calendar/dateUtils'
 import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
+import { todoDueMeta } from './calendar/todoMeta'
 import { OverlayAt } from '@lcl/engine'
 
-const MODE_LABEL: Record<TodoWindow, string> = { day: '日', '3day': '3日', week: '周', month: '月', custom: '自定义' }
+const MODE_LABEL: Record<TodoWindow, string> = { day: '今天', '3day': '3 天', week: '7 天', month: '31 天', custom: '自定义' }
 const ALL_MODES: TodoWindow[] = ['day', '3day', 'week', 'month', 'custom']
 
 export function TodoListView() {
@@ -68,6 +69,13 @@ export function TodoListView() {
         return day >= startStr && day <= endStr
       })
       .sort((a, b) => {
+        if (prefs.sort === 'date') {
+          const rawA = typeof a.cells[m.dateCol] === 'string' ? (a.cells[m.dateCol] as string) : ''
+          const rawB = typeof b.cells[m.dateCol] === 'string' ? (b.cells[m.dateCol] as string) : ''
+          const timeA = todoDueMeta(rawA, today).sortTime
+          const timeB = todoDueMeta(rawB, today).sortTime
+          return (timeA === timeB ? 0 : timeA < timeB ? -1 : 1) || a.name.localeCompare(b.name, 'zh')
+        }
         if (prefs.sort === 'done-first') return (done(b) ? 1 : 0) - (done(a) ? 1 : 0) || a.name.localeCompare(b.name, 'zh')
         if (prefs.sort === 'undone-first') return (done(a) ? 1 : 0) - (done(b) ? 1 : 0) || a.name.localeCompare(b.name, 'zh')
         return a.name.localeCompare(b.name, 'zh')
@@ -79,6 +87,7 @@ export function TodoListView() {
     <div className="amx-todo">
       {groups.length > 0 && (
         <div className="amx-todo-bar">
+          <span className="amx-todo-range-label">范围</span>
           <DropdownMenu button={{ label: prefs.win === 'custom' ? `自定义 ${prefs.customDays} 天` : MODE_LABEL[prefs.win], variant: 'secondary', size: 'sm' }} menuWidth={150}>
             {ALL_MODES.map((w) => (
               <DropdownMenuItem key={w} label={MODE_LABEL[w]} endContent={prefs.win === w ? '✓' : undefined} onClick={() => setPref(vault, { win: w })} />
@@ -95,7 +104,7 @@ export function TodoListView() {
             />
           )}
           <span className="amx-todo-bar-sp" />
-          <button className="amx-todo-set" title="设置" onClick={(e) => {
+          <button className="amx-todo-set" title="待办设置" aria-label="待办设置" onClick={(e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
             setSetPos({ x: Math.min(r.right - 184, window.innerWidth - 192), y: r.bottom + 4 })
           }}>⚙</button>
@@ -122,6 +131,8 @@ export function TodoListView() {
               <ul className="amx-todo-list">
                 {rows.map((r) => {
                   const checked = r.cells[checkCol] === true
+                  const raw = typeof r.cells[m.dateCol] === 'string' ? (r.cells[m.dateCol] as string) : ''
+                  const due = todoDueMeta(raw, today)
                   return (
                     <li className="amx-todo-item" key={r.rowId}>
                       <CheckboxInput
@@ -131,16 +142,17 @@ export function TodoListView() {
                         value={checked}
                         onChange={(next) => setAggCell(db, r.rowId, checkCol, next ? true : undefined)}
                       />
-                      <span
-                        className={`amx-todo-name${checked ? ' done' : ''}`}
+                      <button
+                        className="amx-todo-main"
                         title="点击编辑"
                         onClick={(e) => {
                           const rc = (e.currentTarget as HTMLElement).getBoundingClientRect()
                           setCard({ dbPath: db.path, rowId: r.rowId, at: { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom } })
                         }}
                       >
-                        {r.name || '未命名'}
-                      </span>
+                        <span className={`amx-todo-name${checked ? ' done' : ''}`}>{r.name || '未命名'}</span>
+                        <span className={`amx-todo-due ${due.tone}`}>{due.label}</span>
+                      </button>
                     </li>
                   )
                 })}
@@ -156,7 +168,7 @@ export function TodoListView() {
           <OverlayAt className="amx-db-pop amx-todo-setpop" x={setPos.x} y={setPos.y} onMouseDown={(e) => e.stopPropagation()}>
             <label className="amx-todo-setrow"><input type="checkbox" checked={prefs.hideDone} onChange={(e) => setPref(vault, { hideDone: e.target.checked })} /> 隐藏已完成</label>
             <div className="amx-db-pop-sec">排序</div>
-            {([['name', '按字母'], ['undone-first', '未完成优先'], ['done-first', '已完成优先']] as const).map(([v, label]) => (
+            {([['date', '按日期'], ['name', '按字母'], ['undone-first', '未完成优先'], ['done-first', '已完成优先']] as const).map(([v, label]) => (
               <label key={v} className="amx-todo-setrow"><input type="radio" name="todo-sort" checked={prefs.sort === v} onChange={() => setPref(vault, { sort: v })} /> {label}</label>
             ))}
           </OverlayAt>

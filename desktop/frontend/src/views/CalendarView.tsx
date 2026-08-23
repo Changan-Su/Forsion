@@ -15,7 +15,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from 'react'
-import { Check, ChevronLeft, ChevronRight, Minus, Plus } from 'lucide-react'
+import { CalendarPlus, Check, ChevronLeft, ChevronRight, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@astryxdesign/core/Button'
 import { DropdownMenu, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
 import { Kbd } from '@astryxdesign/core/Kbd'
@@ -25,7 +25,6 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import {
   setAggCell,
   createAggEvent,
-  deleteAggRow,
   duplicateAggRow,
   firstDateCol,
   type AggDb,
@@ -33,13 +32,15 @@ import {
 } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden, defaultDbPath } from '../amadeus/store/calendarConfigStore'
-import { useCalendarNav } from '../amadeus/store/calendarNavStore'
+import { HOUR_PX_DEFAULT, useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { useAgentSchedules, useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useApp } from '../stores/appStore'
 import { EventCard, type Anchor } from './calendar/EventCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
+import { layoutTimedEvents } from './calendar/eventLayout'
+import { deleteCalendarRow } from './calendar/eventActions'
 import {
   HOURS,
   WEEKDAYS,
@@ -118,6 +119,16 @@ const eventValue = (start: Date, end: Date | null, allDay: boolean): string =>
 const commitTime = (ev: CalEvent, start: Date, end: Date | null): void =>
   setAggCell(ev.db, ev.row.rowId, ev.colId, eventValue(start, end, ev.allDay))
 
+const eventColorStyle = (color: string): CSSProperties =>
+  ({ '--amx-event-color': color } as CSSProperties)
+
+const daySpanClass = (ev: CalEvent, day: Date): string => {
+  const t = startOfDay(day).getTime()
+  const before = startOfDay(ev.start).getTime() < t
+  const after = startOfDay(ev.end ?? ev.start).getTime() > t
+  return `${before ? ' continues-left' : ''}${after ? ' continues-right' : ''}`
+}
+
 export function CalendarView() {
   const members = useCalendarMembers()
   const agentDbs = useAgentCalDbs()
@@ -172,6 +183,7 @@ export function CalendarView() {
     const m = members.find((x) => x.db.path === dp) ?? members.find((x) => !x.db.isNoteView) ?? members[0] ?? null
     return m ? { db: m.db, dateCol: m.dateCol } : null
   }
+  const defaultEntry = resolveDefaultDb()
   const create = async (day: Date, min: number | null, at: Anchor): Promise<void> => {
     const target = resolveDefaultDb()
     if (!target) return
@@ -204,7 +216,7 @@ export function CalendarView() {
           break
         case 'delete':
           if (sel && !sel.readonly) {
-            deleteAggRow(sel.db, sel.row.rowId)
+            deleteCalendarRow(sel.db, sel.row, sel.title)
             setCard(null)
           }
           break
@@ -228,18 +240,29 @@ export function CalendarView() {
   return (
     <div className="amx-cal">
       <AstryxScope>
-        {/* Notion Calendar 式工具条:左=标题;右=模式▾ 今天 ‹ ›(时间视图另有 ± 缩放)。 */}
+        {/* 主任务优先:新建 / 回今天 / 翻页;视图与密度退到后面。双击空白仍保留为效率快捷方式。 */}
         <header className="amx-cal-bar">
           <div className="amx-cal-nav">
             <span className="amx-cal-title" ref={titleRef} />
           </div>
           <div className="amx-cal-modes">
-            {mode !== 'month' && (
-              <>
-                <Button size="sm" variant="ghost" isIconOnly icon={<Minus size={14} />} label="缩小时间轴" tooltip="缩小时间轴（Ctrl/Cmd+滚轮）" onClick={() => setHourPx(hourPx - 8)} />
-                <Button size="sm" variant="ghost" isIconOnly icon={<Plus size={14} />} label="放大时间轴" tooltip="放大时间轴（Ctrl/Cmd+滚轮）" onClick={() => setHourPx(hourPx + 8)} />
-              </>
-            )}
+            <Button
+              size="sm"
+              variant="primary"
+              icon={<CalendarPlus size={14} />}
+              label="新建"
+              isDisabled={!defaultEntry}
+              tooltip={defaultEntry ? `新建到「${defaultEntry.db.name}」` : '请先在右栏添加一个日历数据库'}
+              onClick={(e) => {
+                const now = new Date()
+                const next = addMinutes(startOfDay(now), snap15(now.getHours() * 60 + now.getMinutes() + 15))
+                const at = rectOf(e)
+                void create(startOfDay(next), next.getHours() * 60 + next.getMinutes(), at)
+              }}
+            />
+            <Button size="sm" variant="secondary" label="今天" onClick={() => api.current?.today()} />
+            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronLeft size={14} />} label="上一页" onClick={() => api.current?.prev()} />
+            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronRight size={14} />} label="下一页" onClick={() => api.current?.next()} />
             <DropdownMenu button={{ label: MODE_ITEMS.find((m) => m.id === mode)?.label ?? '周', variant: 'secondary', size: 'sm' }} menuWidth={168}>
               {MODE_ITEMS.map((m) => (
                 <DropdownMenuItem
@@ -251,21 +274,27 @@ export function CalendarView() {
                 />
               ))}
             </DropdownMenu>
-            <Button size="sm" variant="secondary" label="今天" onClick={() => api.current?.today()} />
-            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronLeft size={14} />} label="上一页" onClick={() => api.current?.prev()} />
-            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronRight size={14} />} label="下一页" onClick={() => api.current?.next()} />
+            {mode !== 'month' && (
+              <span className="amx-cal-density">
+                <DropdownMenu button={{ label: '密度', variant: 'ghost', size: 'sm' }} menuWidth={176}>
+                  <DropdownMenuItem icon={<ZoomOut size={14} />} label="缩小时间轴" onClick={() => setHourPx(hourPx - 8)} />
+                  <DropdownMenuItem icon={<ZoomIn size={14} />} label="放大时间轴" onClick={() => setHourPx(hourPx + 8)} />
+                  <DropdownMenuItem icon={<RotateCcw size={14} />} label="恢复默认密度" endContent={`${hourPx}px`} onClick={() => setHourPx(HOUR_PX_DEFAULT)} />
+                </DropdownMenu>
+              </span>
+            )}
           </div>
         </header>
       </AstryxScope>
 
       {visible.length === 0 && (
-        <div className="amx-cal-empty">还没有日历事件。双击空白处新建,或给多维表加「日历日期」列。</div>
+        <div className="amx-cal-empty">还没有日历事件。点「新建」，或在右栏添加一个含日期属性的数据库。</div>
       )}
 
       {mode === 'month' ? (
-        <MonthScroll ref={api} events={visible} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
+        <MonthScroll ref={api} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
       ) : (
-        <TimeScroll ref={api} n={n} events={visible} onPick={openCard} onCreate={(d, min, at) => void create(d, min, at)} titleRef={titleRef} />
+        <TimeScroll ref={api} n={n} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, min, at) => void create(d, min, at)} titleRef={titleRef} />
       )}
 
       {selected && card && <EventCard ev={selected} at={card.at} onClose={() => setCard(null)} />}
@@ -277,20 +306,21 @@ export function CalendarView() {
 interface TimeProps {
   n: number
   events: CalEvent[]
+  selectedKey: string | null
   onPick: (key: string, at: Anchor) => void
   onCreate: (day: Date, min: number, at: Anchor) => void
   titleRef: RefObject<HTMLSpanElement | null>
 }
-const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events, onPick, onCreate, titleRef }, ref) {
+const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events, selectedKey, onPick, onCreate, titleRef }, ref) {
   const wrap = useRef<HTMLDivElement>(null)
-  const gutterInner = useRef<HTMLDivElement>(null) // 固定左轴内层:纵向随日区 scrollTop 命令式平移(横滚不动)
+  const gutterHours = useRef<HTMLDivElement>(null) // 表头/全天常驻；仅小时轴随正文纵向滚动。
   const [colw, setColw] = useState(0)
   const [alldayH, setAlldayH] = useState(0) // 全天行高(auto,由日区量出)→ 左轴 gallday 镜像,保小时刻度对齐
   const hourPx = useCalendarNav((s) => s.hourPx)
   const setVisibleRange = useCalendarNav((s) => s.setVisibleRange)
   // 左轴纵向跟随日区滚动(命令式,不触发重渲,几百列仍丝滑)。
   const syncGutter = (): void => {
-    if (gutterInner.current && wrap.current) gutterInner.current.style.transform = `translateY(${-wrap.current.scrollTop}px)`
+    if (gutterHours.current && wrap.current) gutterHours.current.style.transform = `translateY(${-wrap.current.scrollTop}px)`
   }
   const today = useMemo(() => startOfDay(new Date()), [])
   const days = useMemo(() => {
@@ -347,7 +377,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     const el = wrap.current
     if (!el) return
     // 左轴已是独立 flex 项(52px),日区宽度不再含它 → colw 直接按日区宽均分。
-    const measure = (): void => setColw(Math.max(64, el.clientWidth / n))
+    const minCol = n === 7 ? 112 : n === 3 ? 132 : 180
+    const measure = (): void => setColw(Math.max(minCol, el.clientWidth / n))
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -553,10 +584,10 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     <div className="amx-cal-timerow" style={{ '--amx-hour-px': `${hourPx}px` } as CSSProperties}>
       {/* 常驻左轴(任务:左侧 24h 时间轴常驻):独立 52px 列,只纵向随日区滚(横滚不走)。 */}
       <div className="amx-cal-gutterfixed">
-        <div className="amx-cal-gutterinner" ref={gutterInner}>
+        <div className="amx-cal-gutterinner">
           <div className="amx-cal-gcorner" style={{ height: HEAD_H + 14 }} />
           <div className="amx-cal-gallday" style={{ height: alldayH }}>全天</div>
-          <div className="amx-cal-ghours">
+          <div className="amx-cal-ghours" ref={gutterHours}>
             {HOURS.map((h) => (
               <div key={h} className="amx-cal-hour" style={{ height: hourPx }}>
                 {h === 0 ? '' : `${h}:00`}
@@ -587,8 +618,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
               .map((e) => (
                 <button
                   key={e.key}
-                  className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}`}
-                  style={{ background: e.color }}
+                  className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${daySpanClass(e, d)}`}
+                  style={eventColorStyle(e.color)}
+                  aria-label={`${e.title}，全天事件`}
                   title={e.readonly ? e.title : `${e.title}（可拖入时间格设为定时）`}
                   onPointerDown={allDown}
                   onPointerUp={(pe) => allUp(e, pe)}
@@ -610,15 +642,24 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
               onCreate(d, min, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY })
             }}
           >
-            {events
-              .filter((e) => !e.allDay && sameDay(e.start, d))
-              .map((e) => {
+            {(() => {
+              const dayEvents = events.filter((e) => !e.allDay && sameDay(e.start, d))
+              const layouts = layoutTimedEvents(dayEvents)
+              return dayEvents.map((e) => {
                 const box = eventBox(e.start, e.end, hourPx)
+                const layout = layouts.get(e.key) ?? { leftPct: 0, widthPct: 100, lane: 0, laneCount: 1 }
                 return (
                   <button
                     key={e.key}
-                    className={`amx-cal-event${e.readonly ? ' readonly' : ''}`}
-                    style={{ top: box.top, height: Math.max(14, box.height), background: e.color }}
+                    className={`amx-cal-event${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}`}
+                    style={{
+                      ...eventColorStyle(e.color),
+                      top: box.top,
+                      height: Math.max(14, box.height),
+                      left: `calc(${layout.leftPct}% + 2px)`,
+                      width: `calc(${layout.widthPct}% - 4px)`,
+                    }}
+                    aria-label={`${e.title}，${hhmm(e.start)}${e.end ? ` 至 ${hhmm(e.end)}` : ''}`}
                     title={e.title}
                     onPointerDown={(pe) => down(e, pe)}
                     onPointerMove={move}
@@ -628,7 +669,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
                     <span className="amx-cal-event-title">{e.title}</span>
                   </button>
                 )
-              })}
+              })
+            })()}
             {/* 当前时间线(任务2):横跨整个日历所有列(每列一段,相邻拼成一条);圆点只在「今天」列。
              *  pointer-events:none 不挡双击建事件。 */}
             <div className={`amx-cal-nowline${sameDay(d, today) ? ' today' : ''}`} style={{ top: (nowMin / 60) * hourPx }} />
@@ -645,11 +687,12 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
 // ── 月视图(纵向连续周行条)────────────────────────────────────────────────
 interface MonthProps {
   events: CalEvent[]
+  selectedKey: string | null
   onPick: (key: string, at: Anchor) => void
   onCreate: (day: Date, at: Anchor) => void
   titleRef: RefObject<HTMLSpanElement | null>
 }
-const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events, onPick, onCreate, titleRef }, ref) {
+const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events, selectedKey, onPick, onCreate, titleRef }, ref) {
   const wrap = useRef<HTMLDivElement>(null)
   const [rowH, setRowH] = useState(0)
   const setVisibleRange = useCalendarNav((s) => s.setVisibleRange)
@@ -659,6 +702,7 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
     return Array.from({ length: WEEK_HALF * 2 + 1 }, (_, i) => addDays(b, i * 7))
   }, [today])
   const centered = useRef(false)
+  const [agenda, setAgenda] = useState<{ day: Date; events: CalEvent[]; at: Anchor } | null>(null)
   const lastTitle = useRef('')
   const lastRangeI = useRef(-1)
   useEffect(() => () => setVisibleRange(null, null), [setVisibleRange])
@@ -760,19 +804,102 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
                 >
                   <div className="amx-cal-mnum">{day.getDate() === 1 ? `${day.getMonth() + 1}月1` : day.getDate()}</div>
                   {dayEvents.slice(0, 3).map((e) => (
-                    <button key={e.key} className={`amx-cal-chip-ev${e.readonly ? ' readonly' : ''}`} style={{ background: e.color }} title={e.title} onPointerDown={chipDown} onPointerUp={(pe) => chipUp(e, pe)}>
+                    <button
+                      key={e.key}
+                      className={`amx-cal-chip-ev${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${daySpanClass(e, day)}`}
+                      style={eventColorStyle(e.color)}
+                      title={e.title}
+                      aria-label={`${e.title}${!e.allDay && sameDay(e.start, day) ? `，${hhmm(e.start)}` : ''}`}
+                      onPointerDown={chipDown}
+                      onPointerUp={(pe) => chipUp(e, pe)}
+                    >
                       {!e.allDay && sameDay(e.start, day) && <span className="amx-cal-chip-t">{hhmm(e.start)}</span>} {e.title}
                     </button>
                   ))}
-                  {dayEvents.length > 3 && <div className="amx-cal-more">+{dayEvents.length - 3}</div>}
+                  {dayEvents.length > 3 && (
+                    <button
+                      className="amx-cal-more"
+                      aria-label={`查看 ${day.getMonth() + 1} 月 ${day.getDate()} 日全部 ${dayEvents.length} 个事件`}
+                      onClick={(e) => setAgenda({ day, events: dayEvents, at: rectOf(e) })}
+                    >
+                      还有 {dayEvents.length - 3} 项
+                    </button>
+                  )}
                 </div>
               )
             })}
           </div>
         ))}
       </div>
+      {agenda && (
+        <DayAgendaPopover
+          day={agenda.day}
+          events={agenda.events}
+          at={agenda.at}
+          onPick={(key, at) => { setAgenda(null); onPick(key, at) }}
+          onClose={() => setAgenda(null)}
+        />
+      )}
     </div>
   )
 })
+
+function DayAgendaPopover({
+  day,
+  events,
+  at,
+  onPick,
+  onClose,
+}: {
+  day: Date
+  events: CalEvent[]
+  at: Anchor
+  onPick: (key: string, at: Anchor) => void
+  onClose: () => void
+}) {
+  const width = 292
+  const left = Math.max(12, Math.min(at.left, window.innerWidth - width - 12))
+  const top = Math.max(12, Math.min(at.bottom + 6, window.innerHeight - 356))
+  const dialogRef = useRef<HTMLElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    dialogRef.current?.querySelector<HTMLButtonElement>('.amx-cal-agenda-list > button')?.focus()
+    const keydown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      onCloseRef.current()
+    }
+    window.addEventListener('keydown', keydown)
+    return () => { window.removeEventListener('keydown', keydown); previous?.focus() }
+  }, [])
+  return (
+    <div className="amx-cal-agenda-overlay" onMouseDown={onClose}>
+      <section
+        className="amx-cal-agenda"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${day.getMonth() + 1} 月 ${day.getDate()} 日事件`}
+        style={{ left, top, width }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <header>
+          <strong>{day.getMonth() + 1} 月 {day.getDate()} 日</strong>
+          <button onClick={onClose} aria-label="关闭日程列表">×</button>
+        </header>
+        <div className="amx-cal-agenda-list">
+          {events.map((ev) => (
+            <button key={ev.key} style={eventColorStyle(ev.color)} onClick={(e) => onPick(ev.key, rectOf(e))}>
+              <span className="amx-cal-agenda-time">{ev.allDay ? '全天' : hhmm(ev.start)}</span>
+              <span>{ev.title}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
 
 // 旁弹编辑卡已抽到 ./calendar/EventCard.tsx(与 TodoListView 共用);CalEvent 结构性满足 CardTarget。

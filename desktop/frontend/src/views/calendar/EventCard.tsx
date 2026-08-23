@@ -8,12 +8,15 @@
  *    刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  *  ponytail: 时间仍用原生 date/time 输入编辑(点击展开),未做参考图那种内联时间胶囊编辑器;
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
-import { useState, type ReactElement, type SVGProps } from 'react'
+import { useEffect, useRef, useState, type ReactElement, type SVGProps } from 'react'
+import { ExternalLink } from 'lucide-react'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { getPropertyType, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
-import { setAggCell, setAggName, deleteAggRow, cellText, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
+import { setAggCell, setAggName, cellText, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
+import { openDb } from '../../amadeusNav'
 import { eventTimeSummary } from './dateUtils'
+import { deleteCalendarRow } from './eventActions'
 import {
   PageIcon, DateTimeIcon, TextIcon, NumberIcon,
   SingleSelectIcon, MultiSelectIcon, LinkIcon, CheckBoxCheckLinearIcon,
@@ -64,10 +67,52 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
   const summary = colId ? eventTimeSummary(ev.raw) : null
   const [editTime, setEditTime] = useState(false)
   const accent = ev.color ?? 'var(--accent, #6c5ce7)'
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
+  const canOpenSource = !readonly
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const frame = window.requestAnimationFrame(() => {
+      const titleInput = dialogRef.current?.querySelector<HTMLInputElement>('.amx-cal-card-title:not(.amx-cal-card-title-ro)')
+      ;(titleInput ?? closeRef.current)?.focus()
+    })
+    const keydown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onCloseRef.current()
+        return
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
+    window.addEventListener('keydown', keydown)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', keydown)
+      previous?.focus()
+    }
+  }, [])
 
   return (
     <div className="amx-cal-cardcatch" onMouseDown={onClose}>
-      <div className="amx-cal-cardwrap" style={pos} onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        className="amx-cal-cardwrap"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`编辑事件：${title || '未命名'}`}
+        style={pos}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="amx-cal-cardin">
           {/* 顶栏:来源库(色点)+ 关闭 */}
           <div className="amx-cal-card-top">
@@ -75,7 +120,7 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
               <span className="amx-cal-card-dot" style={{ background: accent }} />
               {db.name}
             </span>
-            <button className="amx-cal-card-x" onClick={onClose} aria-label="关闭">×</button>
+            <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label="关闭">×</button>
           </div>
 
           {/* 标题 */}
@@ -144,9 +189,16 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
             </div>
           )}
 
-          {!readonly && (
+          {(canOpenSource || !readonly) && (
             <div className="amx-cal-card-foot">
-              <button className="amx-cal-card-del" onClick={() => { deleteAggRow(db, row.rowId); onClose() }}>删除</button>
+              {canOpenSource && (
+                <button className="amx-cal-card-open" onClick={() => { openDb(db.path); onClose() }}>
+                  <ExternalLink size={13} /> 打开数据库
+                </button>
+              )}
+              {!readonly && (
+                <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>删除</button>
+              )}
             </div>
           )}
         </div>
@@ -167,21 +219,22 @@ function CardPropField({ db, row, col }: { db: AggDb; row: AggRow; col: DbColumn
   }
   switch (base) {
     case 'checkbox':
-      return <input className="amx-cal-card-check" type="checkbox" checked={v === true} onChange={(e) => set(e.target.checked ? true : undefined)} />
+      return <input aria-label={col.name} className="amx-cal-card-check" type="checkbox" checked={v === true} onChange={(e) => set(e.target.checked ? true : undefined)} />
     case 'number':
       return (
         <input
           className="amx-cal-card-input"
+          aria-label={col.name}
           type="number"
           value={(v as number | null) ?? ''}
           onChange={(e) => (e.target.value === '' ? set(undefined) : Number.isFinite(Number(e.target.value)) && set(Number(e.target.value)))}
         />
       )
     case 'date':
-      return <input className="amx-cal-card-input" type="date" value={v as string} onChange={(e) => set(e.target.value || undefined)} />
+      return <input aria-label={col.name} className="amx-cal-card-input" type="date" value={v as string} onChange={(e) => set(e.target.value || undefined)} />
     case 'select':
       return (
-        <select className="amx-cal-card-input amx-cal-card-select" value={v as string} onChange={(e) => set(e.target.value || undefined)}>
+        <select aria-label={col.name} className="amx-cal-card-input amx-cal-card-select" value={v as string} onChange={(e) => set(e.target.value || undefined)}>
           <option value="">—</option>
           {(col.options ?? []).map((o) => (
             <option key={o} value={o}>{o}</option>
@@ -198,6 +251,7 @@ function CardPropField({ db, row, col }: { db: AggDb; row: AggRow; col: DbColumn
               <button
                 key={o}
                 className={`amx-cal-card-chip${on ? ' on' : ''}`}
+                aria-pressed={on}
                 onClick={() => {
                   const next = on ? arr.filter((x) => x !== o) : [...arr, o]
                   set(next.length ? next : undefined)
@@ -214,6 +268,6 @@ function CardPropField({ db, row, col }: { db: AggDb; row: AggRow; col: DbColumn
     case 'page':
       return <span className="amx-cal-card-val">{cellText(row.cells[col.id]) || '—'}</span>
     default:
-      return <input className="amx-cal-card-input" value={v as string} onChange={(e) => set(e.target.value || undefined)} />
+      return <input aria-label={col.name} className="amx-cal-card-input" value={v as string} onChange={(e) => set(e.target.value || undefined)} />
   }
 }

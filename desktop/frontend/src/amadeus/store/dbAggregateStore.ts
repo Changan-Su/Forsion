@@ -168,6 +168,15 @@ export function deleteAggRow(db: AggDb, rowId: string): void {
   useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }))
 }
 
+/** Calendar 删除后的轻量撤销：仅经典表可无损恢复原 row；笔记视图仍走文件删除确认，不伪造文件级撤销。 */
+export function restoreAggRow(db: AggDb, row: AggRow): void {
+  if (db.readonly || db.isNoteView) return
+  useDbStore.getState().mutate(db.path, (d) => {
+    if (d.rows.some((r) => r.id === row.rowId)) return d
+    return { ...d, rows: [...d.rows, { id: row.rowId, cells: { ...row.cells } }] }
+  })
+}
+
 /** 复制一行(键盘粘贴):经典表克隆全部单元格为新行(同日期/时间的原位副本);
  *  笔记视图新建笔记 + 逐列拷贝属性(page 身份列除外)。返回新 rowId / 笔记路径,失败返回 null。 */
 export async function duplicateAggRow(db: AggDb, rowId: string): Promise<string | null> {
