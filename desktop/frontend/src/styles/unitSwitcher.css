@@ -1,0 +1,80 @@
+/* Forsion Unit 切换器(Ribbon head 常驻件)。只引用语义 token(DESIGN.md §2);
+ * 菜单属 3.5 层薄浮层:bg-card + 描边 + 阴影(按钮/药丸/芯片保边 —— 边就是形状,§5)。 */
+
+.unitsw-pill { position: relative; }
+.unitsw-pill .unitsw-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; }
+.unitsw-pill .unitsw-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-pill .unitsw-chev { opacity: 0.55; flex: none; }
+.unitsw-pill.on,
+.unitsw-pill:hover { background: var(--overlay-medium); }
+.unitsw-pill[data-busy] { opacity: 0.6; pointer-events: none; }
+.unitsw-emoji { font-size: 14px; line-height: 1; }
+
+.unitsw-backdrop { position: fixed; inset: 0; z-index: 1000; }
+.unitsw-menu {
+  position: fixed;
+  min-width: 232px;
+  max-width: 300px;
+  padding: 5px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px var(--shadow);
+  font-family: var(--font-ui);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.unitsw-row-group { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow-y: auto; }
+.unitsw-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+}
+.unitsw-row:hover { background: var(--overlay-light); }
+.unitsw-row.on { background: var(--accent-light); }
+.unitsw-row.off { opacity: 0.55; }
+.unitsw-row .unitsw-ic { flex: none; display: inline-flex; width: 18px; justify-content: center; color: var(--text-muted); }
+.unitsw-row.on .unitsw-ic { color: var(--accent-ink); }
+.unitsw-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.unitsw-title { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-off { font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--text-faint); }
+.unitsw-desc { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-check { flex: none; color: var(--accent-ink); }
+.unitsw-empty { padding: 8px 9px; font-size: 11.5px; color: var(--text-muted); }
+
+.unitsw-foot { border-top: var(--border-width) solid var(--border); margin-top: 3px; padding-top: 4px; }
+.unitsw-hosttoggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-light);
+  font-size: 11.5px;
+}
+.unitsw-hosttoggle:hover { background: var(--overlay-light); }
+.unitsw-foot-label { flex: 1; text-align: left; }
+.unitsw-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-ghost); flex: none; }
+.unitsw-dot.wait { background: var(--text-faint); }
+.unitsw-dot.live { background: var(--green); }
+/* 迷你开关(纯 CSS 药丸):data-on 时滑块右移 + accent 填充。 */
+.unitsw-switch { flex: none; width: 26px; height: 15px; border-radius: 999px; background: var(--overlay-strong); position: relative; transition: background 0.15s ease; }
+.unitsw-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg-card); transition: transform 0.15s ease; }
+.unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--accent); }
+.unitsw-hosttoggle[data-on] .unitsw-switch::after { transform: translateX(11px); }
+.unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: 10.5px; color: var(--text-faint); }
+.unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
+.unitsw-refresh:hover { background: var(--overlay-light); color: var(--text-muted); }

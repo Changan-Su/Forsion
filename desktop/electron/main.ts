@@ -36,6 +36,8 @@ import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, 
 import { computerUseLiveView } from './computerUse'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
+import { UnitHost } from './unitHost'
+import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { registerRemoteSync } from './remotesyncIpc'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
@@ -291,10 +293,17 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
 
 /** 持久化配置(userData/tangu-desktop-config.json)。 */
 interface TanguStoredConfig {
-  /** managed=自动托管内置后端;external=连接外部 tangu-server。 */
-  mode: 'managed' | 'external'
+  /** managed=自动托管内置后端;external=连接外部 tangu-server;unit=attach 账号名下另一台设备(经 server 隧道)。 */
+  mode: 'managed' | 'external' | 'unit'
   backendUrl: string // external 模式
   token: string // external 模式
+  /** mode='unit' 时 attach 的目标设备 id(effectiveConfig 折算成隧道地址)。 */
+  unitId: string
+  /** 「允许其他设备连接本机」:开=本机入册为 Unit 并维持出站通道(unitHost.ts)。 */
+  unitHostEnabled: boolean
+  /** 本机的设备配对凭据(入册时服务端下发;清空=下次开启重新入册)。 */
+  unitHostId: string
+  unitHostSecret: string
   modelId: string
   /** 辅助模型 · LLM(后台/特殊 agent 用;落 config.json models.background;缺省=跟随 app 级槽)。 */
   backgroundModelId: string
@@ -370,6 +379,10 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   mode: 'external',
   backendUrl: 'http://localhost:8787',
   token: '',
+  unitId: '',
+  unitHostEnabled: false,
+  unitHostId: '',
+  unitHostSecret: '',
   modelId: '',
   backgroundModelId: '',
   visionModelId: '',
@@ -430,6 +443,8 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
 // 其余键(cloud/sandbox/workspace/browser/wechat)以 ~/.tangu/config.json 各段为权威,落盘亦写那里。
 const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'mode', 'backendUrl', 'token', 'forsionSyncEnabled', 'forsionLastSyncedAt',
+  'unitId', 'unitHostEnabled', 'unitHostId', 'unitHostSecret', // 设备互联(mode='unit' 目标 + 本机 Unit 配对态)
+
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
   'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
@@ -616,6 +631,37 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
   return { running: !!mcpHandle, url: mcpHandle?.url ?? null, token: backend.localSecret() }
 }
 
+// ── Unit host(设备互联,unitHost.ts):「允许其他设备连接本机」开关起停。 ──────────────
+let unitHost: UnitHost | null = null
+let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
+let unitHostCloudUrl = DEFAULT_CLOUD_URL
+let unitHostPairing: { unitId: string; secret: string } | null = null
+
+/** 按当前配置起停/重建 unit host(开关或 cloudUrl 变化后调;幂等)。 */
+async function refreshUnitHost(): Promise<void> {
+  const stored = await loadConfig()
+  unitHostCloudUrl = stored.cloudUrl
+  unitHostPairing = stored.unitHostId && stored.unitHostSecret
+    ? { unitId: stored.unitHostId, secret: stored.unitHostSecret }
+    : null
+  if (unitHost) { unitHost.stop(); unitHost = null }
+  if (!stored.unitHostEnabled) return
+  unitHost = new UnitHost({
+    getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
+    getEngine: () => {
+      const st = backend.getStatus()
+      return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
+    },
+    getPairing: () => unitHostPairing,
+    savePairing: async (p) => { unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
+    clearPairing: async () => { unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
+    readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
+    appVersion: app.getVersion(),
+    log: (m) => console.log(m),
+  })
+  unitHost.start()
+}
+
 /** renderer 视角的有效配置:managed 就绪时 backendUrl/token 来自托管子进程。 */
 async function effectiveConfig(): Promise<
   TanguStoredConfig & {
@@ -633,6 +679,16 @@ async function effectiveConfig(): Promise<
   if (stored.mode === 'managed' && st.state === 'ready' && st.url) {
     return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
   }
+  // unit 模式:backendUrl 折算为 server 隧道基址,token 用当前 forsion_token(auth.json 实时读,续期自然生效)。
+  if (stored.mode === 'unit' && stored.unitId) {
+    const base = stored.cloudUrl.replace(/\/+$/, '')
+    return {
+      ...stored,
+      backendUrl: `${base}/api/units/${stored.unitId}/proxy`,
+      token: loadTanguCreds().token || '',
+      backendState: st, homeDir, defaultWorkspaceDir, forsionMcp,
+    }
+  }
   return { ...stored, backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
 }
 
@@ -643,7 +699,9 @@ function ensureBackend(): Promise<void> {
   if (!PRODUCT.agentBackend) return Promise.resolve() // 产品档案:本变体不捆 agent 托管后端
   ensureChain = ensureChain.then(async () => {
     const stored = await loadConfig()
-    if (stored.mode !== 'managed') {
+    // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
+    // 也不能停 —— 停了 = 别的设备那头断服(unitHost 的转发目标就是这个引擎)。
+    if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
       await backend.stop()
       return
     }
@@ -1171,9 +1229,15 @@ app.whenReady().then(async () => {
     const managedKeys: Array<keyof TanguStoredConfig> = [
       'mode', 'cloudUrl', 'sandbox', 'pythonMode', 'mirror',
       'browserEnabled', 'browserEngine', 'browserSearchEngine', 'browserAllowPrivateUrls', 'browserCommandTimeoutMs',
+      'unitHostEnabled', // 开着 = 引擎常驻(即使 mode≠managed),见 ensureBackend
     ]
     if (managedKeys.some((k) => patch[k] !== undefined && patch[k] !== before[k])) {
       void ensureBackend()
+    }
+    // 设备互联:开关或云端地址变化 → 重建 unit host 连接。
+    if ((patch.unitHostEnabled !== undefined && patch.unitHostEnabled !== before.unitHostEnabled)
+      || (patch.cloudUrl !== undefined && patch.cloudUrl !== before.cloudUrl)) {
+      void refreshUnitHost()
     }
     // 对外 MCP 端点开关变化 → 起停(await 完再返回,让 effectiveConfig 带上最新运行状态供 UI 展示连接信息)。
     if (patch.mcpEnabled !== undefined && patch.mcpEnabled !== before.mcpEnabled) {
@@ -1181,6 +1245,29 @@ app.whenReady().then(async () => {
     }
     return effectiveConfig()
   })
+
+  // ── 设备互联(Forsion Unit):名册 CRUD 由 main 代打(凭 auth.json 的 forsion_token,不下发渲染层)。 ──
+  const unitsApi = async (method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> => {
+    const token = loadTanguCreds().token
+    if (!token) return { status: 401, json: { detail: '未登录 Forsion 账号' } }
+    const stored = await loadConfig()
+    try {
+      const r = await fetch(`${stored.cloudUrl.replace(/\/+$/, '')}/api${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      })
+      return { status: r.status, json: await r.json().catch(() => null) }
+    } catch (e: any) {
+      return { status: 0, json: { detail: String(e?.message || e) } }
+    }
+  }
+  ipcMain.handle('units:list', () => unitsApi('GET', '/units'))
+  ipcMain.handle('units:update', (_e, id: string, patch: { name?: string; icon?: string }) =>
+    unitsApi('PATCH', `/units/${encodeURIComponent(String(id))}`, { name: patch?.name, icon: patch?.icon }))
+  ipcMain.handle('units:remove', (_e, id: string) => unitsApi('DELETE', `/units/${encodeURIComponent(String(id))}`))
+  ipcMain.handle('units:hostStatus', () =>
+    unitHost ? unitHost.status() : { running: false, connected: false, unitId: null, lastError: null })
 
   // 收件箱:系统通知(点击 → 聚焦窗口 + 回跳 Inbox Space)与 dock 角标。
   ipcMain.handle('inbox:notify', (_e, title: string, body: string) => {
@@ -2416,7 +2503,9 @@ app.whenReady().then(async () => {
     quit: () => { isQuitting = true; app.quit() },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, restartSync } = registerAmadeusIpc(() => mainWindow)
+  const { getVaultRoot, restartSync, readExternalPlugins } = registerAmadeusIpc(() => mainWindow)
+  amadeusReadPlugins = readExternalPlugins
+  void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
   registerAmadeusAssetProtocol(getVaultRoot)
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)

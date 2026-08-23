@@ -11,6 +11,7 @@ import { loadUserSpaces, saveCurrentAsSpace, createBlankSpace } from './userSpac
 import { installAmadeusPlugins } from './amadeusPlugins'
 import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
+import { UnitSwitcher } from './components/UnitSwitcher'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
@@ -303,6 +304,10 @@ export function installEngine(): void {
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
   // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册。
   // 商店置于底部首位:注册序即上下序,故在 rb-mode 之前注册 → 落在底部组最上方。
+  // Unit 切换器(head 常驻,折叠钮旁):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
+  // 仅真桌面(unitsList 是 agent 后端形态的 preload 能力;web/mobile 垫片无此方法 → 不注册,
+  // 它们的 vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态)。
+  if (window.tangu?.unitsList) addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
   addRibbonIcon({ id: 'rb-search', side: 'bottom', icon: Search, tooltip: () => '快速查找', onClick: () => useQuickFind.getState().openPalette() })
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })

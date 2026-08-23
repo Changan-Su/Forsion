@@ -455,6 +455,30 @@ if (new URLSearchParams(location.search).has('dock')) {
   for (const n of ['A', 'B', 'C', 'D']) mk(`t${n}`, 'top', `Top ${n}`)
   for (const n of ['A', 'B', 'C']) mk(`b${n}`, 'bottom', `Bot ${n}`)
   useRibbonStore.setState({ order: ['tA', 'tB', 'tC', 'tD'], bottomOrder: ['bA', 'bB', 'bC'] })
+  // &unit:Unit 切换器(head 常驻件)上架。stub 最小 host 面(getConfig/setConfig/unitsList/
+  // unitHostStatus)+ amadeusSync 布尔门 —— 这支仪器验切换器的 DOM/开合/两态几何,不验真隧道
+  // (那半在 server 的 unit-hub relay.test.ts)。见 scripts/unit-switcher.check.cjs。
+  if (new URLSearchParams(location.search).has('unit')) {
+    const cfg: Record<string, unknown> = { mode: 'managed', unitId: '', unitHostEnabled: false, backendUrl: 'http://localhost:0', token: 't', modelId: '' }
+    const units = [
+      { id: 'u-mba', name: 'MacBook Air', platform: 'darwin', icon: '🦊', online: true },
+      { id: 'u-pc', name: '书房 PC', platform: 'win32', icon: null, online: false },
+    ]
+    const w = window as unknown as { tangu?: Record<string, unknown>; amadeusSync?: unknown }
+    w.tangu = {
+      ...(w.tangu ?? {}),
+      getConfig: async () => ({ ...cfg }),
+      setConfig: async (patch: Record<string, unknown>) => Object.assign(cfg, patch),
+      unitsList: async () => ({ status: 200, json: { units } }),
+      unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
+      unitsRemove: async () => ({ status: 200, json: { ok: true } }),
+      unitHostStatus: async () => ({ running: false, connected: false, unitId: null, lastError: null }),
+    }
+    w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
+    void import('./components/UnitSwitcher').then(({ UnitSwitcher }) => {
+      addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
+    })
+  }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装
   // 快捷键提示的符号按 data-platform 走(宿主启动时写);仪器钉死 mac 一路,断言才不看 CI 跑在什么系统上。
   document.documentElement.dataset.platform = 'mac'

@@ -726,7 +726,12 @@ export interface UpdaterStatusInfo {
 
 /** 主进程持久化的完整配置;getConfig 返回时 backendUrl/token 已折算为有效值(managed 就绪=托管子进程的)。 */
 export interface StoredDesktopConfig extends TanguDesktopConfig {
-  mode: 'managed' | 'external'
+  /** managed=本机托管引擎;external=外部 tangu-server;unit=attach 账号名下另一台设备(经 server 隧道)。 */
+  mode: 'managed' | 'external' | 'unit'
+  /** mode='unit' 时 attach 的目标设备 id(backendUrl 已被主进程折算为隧道基址)。 */
+  unitId?: string
+  /** 「允许其他设备连接本机」开关(本机作为 Unit 被远程 attach)。 */
+  unitHostEnabled?: boolean
   cloudUrl: string
   sandbox: 'auto' | 'docker' | 'none'
   /** Python 来源:bundled=内置解释器(默认,免装/隔离);system=用系统已装 python。 */
@@ -792,6 +797,18 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   homeDir?: string
 }
 
+/** 账号名下的一台设备(Forsion Unit,unit-hub 名册行)。 */
+export interface UnitInfo {
+  id: string
+  name: string
+  platform: string | null
+  /** 切换器里的自定义 emoji 图标;null = 按 platform 给默认。 */
+  icon: string | null
+  online: boolean
+  createdAt?: string
+  lastSeenAt?: string | null
+}
+
 export interface AuthStatusInfo {
   loggedIn: boolean
   /** token 是否仍有效:true=有效,false=已失效(401/403),null=未校验/离线(不确定)。用于检测登录过期。 */
@@ -822,6 +839,11 @@ declare global {
       backendLogs?(): Promise<string[]>
       backendRestart?(): Promise<BackendStatusInfo>
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
+      // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
+      unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
+      unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
+      unitsRemove?(id: string): Promise<{ status: number; json: any }>
+      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null }>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>

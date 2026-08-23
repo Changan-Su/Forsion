@@ -38,9 +38,35 @@ import type {
   ThemeContribution,
   ViewContribution,
 } from './types'
-import type { ExternalPluginSource } from '@amadeus-shared/ipc'
+import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 
 const DISABLED_KEY = 'amadeus.plugins.disabled'
+
+/** 外置插件来源按 desktopConfig **现场派生**(不设切换器手动接缝):mode='unit' 时从目标设备经
+ *  隧道拉(`{backendUrl}/__unit/plugins`),否则走本机 window.amadeus.listPlugins。冷启动与切换后的
+ *  reloadExternal 走同一条路 —— 接缝式设计会漏掉「unit 模式下重启应用」这档(引擎远程、插件本地)。
+ *  远程插件仍在本机渲染器执行(VS Code Remote 模型),但 ctx.app 的 vault **写面被阻断**:
+ *  它们的库在对方设备上,写进本机库 = 写错目标(毁档级)。 */
+let remotePluginMode = false
+async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
+  const c = await window.tangu?.getConfig?.().catch(() => null) ?? null
+  // 写闸先于拉取落位:unit 模式下就算插件清单拉失败(沿用上一批),阻断也必须已生效。
+  remotePluginMode = c?.mode === 'unit'
+  if (c?.mode === 'unit' && c.backendUrl) {
+    const r = await fetch(`${c.backendUrl}/__unit/plugins`, { headers: { Authorization: `Bearer ${c.token}` } })
+    if (!r.ok) throw new Error(`unit plugins HTTP ${r.status}`)
+    const j = (await r.json()) as { plugins?: ExternalPluginSource[] }
+    // 版本协商 P0:B 端 gating 用的是 B 的版本,这里按**本机**版本再过一遍门禁;
+    // 被闸的照常列出(blocked 徽章 =「需要更高版本」),绝不静默消失。
+    const { CHANGELOG } = await import('../../changelog')
+    const myVersion = CHANGELOG[0]?.version || '0.0.0'
+    return (j.plugins || []).map((src) => {
+      const blocked = gatePluginManifest({ apiVersion: src.apiVersion, minAppVersion: src.minAppVersion }, myVersion) ?? src.blocked
+      return blocked ? { ...src, blocked, code: '' } : src
+    })
+  }
+  return amadeus.listPlugins()
+}
 
 interface Owned<T> {
   pluginId: string
@@ -160,6 +186,15 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     if (!alive) console.warn(`[amadeus] 插件 ${pluginId} 已停用,ctx.app 副作用调用被忽略`)
     return alive
   }
+  /** vault 写面额外一闸:远程 Unit 的插件不许写本机库(库不跟随,见 setExternalPluginSource)。 */
+  const writable = (): boolean => {
+    if (!ok()) return false
+    if (remotePluginMode) {
+      console.warn(`[amadeus] 远程插件 ${pluginId} 的 vault 写操作被阻断(远程库暂不跟随)`)
+      return false
+    }
+    return true
+  }
   // 文件订阅与语言订阅同一条纪律:插件自己能退订,但最终责任人是宿主 —— 停用时统一收掉,
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
@@ -168,7 +203,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     getActivePage: () => noteOf(usePageStore.getState()),
     getActivePageText: () => surface.api.getPage().text,
     loadPage: (p) => { if (ok()) void usePageStore.getState().loadPage(p) },
-    createPage: () => { if (ok()) void usePageStore.getState().createPage() },
+    createPage: () => { if (writable()) void usePageStore.getState().createPage() },
     toggleMode: () => void toggleMode(),
     setTheme: (t) => applyAccent(t),
     openSearch: () => useUiStore.getState().setPalette('search'),
@@ -176,7 +211,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
-    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
+    writeFile: (p, text) => (writable() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
     // 桥缺席(web/移动端/台架)时**整条方法不挂** —— 挂一个永不触发的空壳会让插件的
     // `if (ctx.app.watchFile) …else 轮询` 走错分支,配置改了永远热重载不了。
     ...(amadeus?.onFileExternalChange
@@ -598,7 +633,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     async loadExternal() {
       let sources: ExternalPluginSource[] = []
       try {
-        sources = await amadeus.listPlugins()
+        sources = await resolveExternalSources()
       } catch {
         return
       }

@@ -123,6 +123,7 @@ function dbVersion(text: string): string {
 export function registerIpc(getWindow: () => BrowserWindow | null): {
   getVaultRoot: () => string | null
   restartSync: () => void
+  readExternalPlugins: () => Promise<ExternalPluginSource[]>
 } {
   const vault = new VaultManager()
   const index = new VaultIndex(vault)
@@ -1278,7 +1279,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       : undefined
   }
 
-  ipcMain.handle(IPC.listPlugins, async (): Promise<ExternalPluginSource[]> => {
+  /** 外置插件全量读取(manifest 门禁 + bundle 收集 + 代码/文档)。IPC listPlugins 与
+   *  unitHost 的 /__unit/plugins 自服面共用 —— 设备互联把同一份插件面分发给远端渲染器。 */
+  const readExternalPlugins = async (): Promise<ExternalPluginSource[]> => {
     const seen = new Set<string>()
     const out: ExternalPluginSource[] = []
     let entries: import('node:fs').Dirent[]
@@ -1361,7 +1364,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     // 而非从 out 派生。按 manifest 声明豁免(与启用态无关):禁用/坏掉的插件也不能让其文件掉回笔记被 compiler 改写=毁档。
     vault.setPluginFileExtensions(collectPluginExts())
     return out
-  })
+  }
+  ipcMain.handle(IPC.listPlugins, () => readExternalPlugins())
 
   ipcMain.handle(IPC.openPluginsFolder, async () => {
     const dir = globalPluginsDir()
@@ -1459,5 +1463,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     getVaultRoot: () => vault.getRoot(),
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
     restartSync: () => { restartAllSync() },
+    readExternalPlugins,
   }
 }

@@ -1,8 +1,8 @@
 /**
- * Local | Cloud 胶囊滑块:极简 segmented control,两等宽选项,滑块弹性平移 + 文字颜色过渡。
- * 常驻 Amadeus 工作区各子 view 开头;切换 = 全局切活动 vault(树/编辑器/聚合全跟随)。
- * 仅桌面(window.amadeusSync);web/mobile 渲染为 null。未登录时 Cloud 侧可切,给登录引导。
- * 样式在 views/chat2/sidebar2.css 的 .t2s-vaultseg 块。
+ * Local | Cloud vault 切换(历史上的胶囊滑块)。
+ * 2026-08-23:桌面端胶囊本体迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx 的
+ * 本地/云端两行,同一 switchVaultSide 语义)——本组件在桌面只剩「云端侧未登录」的登录引导条;
+ * mobile 分支(amadeusVaultMode 桥)保持原胶囊形态不变。样式在 views/chat2/sidebar2.css。
  */
 import React, { useEffect, useState } from 'react'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -12,7 +12,6 @@ import type { AmadeusSyncStatus } from '../types'
 export function VaultSideSwitch(): React.ReactElement | null {
   const { t } = useI18n()
   const side = usePageStore((s) => s.vaultSide)
-  const switchSide = usePageStore((s) => s.switchVaultSide)
   const initSide = usePageStore((s) => s.initVaultSide)
   const [busy, setBusy] = useState(false)
   const [sync, setSync] = useState<AmadeusSyncStatus | null>(null)
@@ -52,35 +51,18 @@ export function VaultSideSwitch(): React.ReactElement | null {
   }
   if (!window.amadeusSync) return null
 
-  const pick = (next: 'local' | 'cloud'): void => {
-    if (busy || next === side) return
-    setBusy(true)
-    void switchSide(next).finally(() => setBusy(false))
-  }
-
+  // 桌面端胶囊已迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx,2026-08-23):
+  // 本地/云端两行 = 原胶囊语义;此处只保留云端侧登录引导(切到云端但未登录时仍要给出口)。
   const needLogin = side === 'cloud' && sync?.state === 'auth-required'
-
+  if (!needLogin) return null
   return (
-    <>
-      <div className="t2s-vaultseg" role="tablist" aria-label="vault side" data-busy={busy || undefined}>
-        <div className="t2s-vaultseg-thumb" data-side={side} />
-        <button role="tab" aria-selected={side === 'local'} className={side === 'local' ? 'on' : ''} onClick={() => pick('local')}>
-          {t('notes.cloud.local')}
+    <div className="t2s-vaultseg-hint">
+      {t('notes.cloud.loginHint')}
+      {window.tangu?.forsionLogin && (
+        <button className="t2s-vaultseg-login" onClick={() => void window.tangu?.forsionLogin?.()}>
+          {t('notes.cloud.loginBtn')}
         </button>
-        <button role="tab" aria-selected={side === 'cloud'} className={side === 'cloud' ? 'on' : ''} onClick={() => pick('cloud')}>
-          {t('notes.cloud.cloud')}
-        </button>
-      </div>
-      {needLogin && (
-        <div className="t2s-vaultseg-hint">
-          {t('notes.cloud.loginHint')}
-          {window.tangu?.forsionLogin && (
-            <button className="t2s-vaultseg-login" onClick={() => void window.tangu?.forsionLogin?.()}>
-              {t('notes.cloud.loginBtn')}
-            </button>
-          )}
-        </div>
       )}
-    </>
+    </div>
   )
 }

@@ -302,7 +302,7 @@ export interface AppState {
   cfgLoaded: boolean
   connState: ConnState
   connMessage: string
-  desktopMode: 'managed' | 'external' | null
+  desktopMode: 'managed' | 'external' | 'unit' | null
   homeDir: string | undefined
   defaultWsDir: string
   sessions: SessionRecord[]

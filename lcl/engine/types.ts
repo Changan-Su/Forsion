@@ -66,8 +66,9 @@ export interface RibbonItem {
   /** 图标钮的悬浮名;ribbon 展开时也作为图标右侧的名称。 */
   tooltip?: string | (() => string)
   onClick?(): void
-  /** 上区(默认;Spaces)或下区(命令);两区内均可拖拽改序、可进收纳夹,跨区禁止。 */
-  side?: 'top' | 'bottom'
+  /** 上区(默认;Spaces)或下区(命令);两区内均可拖拽改序、可进收纳夹,跨区禁止。
+   *  'head' = 顶部固定区(折叠钮旁):不参与拖拽/收纳/溢出/持久化,宿主放全局常驻件(如 Unit 切换器)。 */
+  side?: 'top' | 'bottom' | 'head'
   /** 钉死在 ribbon 最底部:不参与拖拽/收纳/溢出(账号卡)。仅对 side:'bottom' 有意义。 */
   pinned?: boolean
   /** 复合项:自定义组件渲染,拿到 ribbon 展开态(替代 icon/onClick)。用于账号卡。 */

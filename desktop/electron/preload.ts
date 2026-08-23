@@ -40,6 +40,13 @@ const api = {
     ipcRenderer.on('inbox:open', listener)
     return () => ipcRenderer.removeListener('inbox:open', listener)
   },
+  // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
+  unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
+  unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
+    ipcRenderer.invoke('units:update', id, patch),
+  unitsRemove: (id: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:remove', id),
+  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null }> =>
+    ipcRenderer.invoke('units:hostStatus'),
   // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
@@ -295,6 +302,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
+  'unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', // 设备互联依赖 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]

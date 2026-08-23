@@ -111,6 +111,8 @@ export function Ribbon() {
   const topE = zoneList('top')
   const botE = zoneList('bottom')
   const pinned = items.filter((i) => i.side === 'bottom' && i.pinned)
+  // head 区:折叠钮下的固定件(zoneList 的 top/bottom 过滤天然排除它,不进拖拽/溢出/持久化)。
+  const headItems = items.filter((i) => i.side === 'head')
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
   const slotH = (expanded ? 34 : 32) + GAP
@@ -491,6 +493,7 @@ export function Ribbon() {
           {expanded ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
           {expanded && <span className="rb-label">{zh() ? '折叠侧栏' : 'Collapse'}</span>}
         </button>
+        {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
       {renderZone('top', top)}
       {renderZone('bottom', bot)}
