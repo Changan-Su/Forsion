@@ -86,6 +86,10 @@ export async function installUnitShim(): Promise<boolean> {
     token = fresh
     try { localStorage.setItem(tokenKey, token) } catch { /* ignore */ }
   }
+  // T2 隧道:whoami 靠壳注入的 Authorization + 内部密钥豁免过闸,本页无配对令牌 ——
+  // 但 appStore.boot 只在 token 非空时才 connect(空 token = 未配置形态),给一枚非机密哨兵;
+  // 隧道请求的 Authorization 反正会被桌面壳在分区层整个换成 forsion token(unitWeb 不看它)。
+  if (!token) token = 'tunnel'
   ;(window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ = token
 
   const engineBase = new URL('engine', base()).href

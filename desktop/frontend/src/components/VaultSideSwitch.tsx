@@ -51,11 +51,8 @@ export function VaultSideSwitch(): React.ReactElement | null {
   }
   if (!window.amadeusSync) return null
 
-  // 桌面端胶囊已迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx,2026-08-23):
-  // 本地/云端两行 = 原胶囊语义;此处只保留云端侧登录引导(切到云端但未登录时仍要给出口)。
   const needLogin = side === 'cloud' && sync?.state === 'auth-required'
-  if (!needLogin) return null
-  return (
+  const loginHint = needLogin && (
     <div className="t2s-vaultseg-hint">
       {t('notes.cloud.loginHint')}
       {window.tangu?.forsionLogin && (
@@ -64,5 +61,30 @@ export function VaultSideSwitch(): React.ReactElement | null {
         </button>
       )}
     </div>
+  )
+
+  // 全量桌面:胶囊已迁入 Ribbon 的 Unit 切换器(components/UnitSwitcher.tsx,2026-08-23),
+  // 此处只保留云端侧登录引导。⚠️ FORSION_PRODUCT=amadeus 单品无 agent 后端 → preload 删了
+  // unitsList → 切换器不上架,这里必须保留原胶囊,否则库切换整个消失(Codex P1)。
+  if (window.tangu?.unitsList) return loginHint || null
+
+  const pick = (next: 'local' | 'cloud'): void => {
+    if (busy || next === side) return
+    setBusy(true)
+    void usePageStore.getState().switchVaultSide(next).finally(() => setBusy(false))
+  }
+  return (
+    <>
+      <div className="t2s-vaultseg" role="tablist" aria-label="vault side" data-busy={busy || undefined}>
+        <div className="t2s-vaultseg-thumb" data-side={side} />
+        <button role="tab" aria-selected={side === 'local'} className={side === 'local' ? 'on' : ''} onClick={() => pick('local')}>
+          {t('notes.cloud.local')}
+        </button>
+        <button role="tab" aria-selected={side === 'cloud'} className={side === 'cloud' ? 'on' : ''} onClick={() => pick('cloud')}>
+          {t('notes.cloud.cloud')}
+        </button>
+      </div>
+      {loginHint}
+    </>
   )
 }

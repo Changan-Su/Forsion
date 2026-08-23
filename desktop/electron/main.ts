@@ -2062,6 +2062,7 @@ app.whenReady().then(async () => {
       lastAuthToken = ''
       if (stored.mode === 'managed') void ensureBackend()
       restartAmadeusSync?.()
+      void refreshUnitHost() // 身份没了 → 互联通道不许再以旧账号挂着(Codex P1:账号隔离)
       broadcast('auth:changed', { loggedIn: false })
       return {
         loggedIn: false, tokenValid: null, cloudUrl,
@@ -2388,6 +2389,7 @@ app.whenReady().then(async () => {
     // 自愈(竞态;新用户引导里常表现为登录后一直「连接后端」、模型加载不出,得手动去设置重启)。
     if (stored.mode === 'managed') await ensureBackend()
     restartAmadeusSync?.() // 登录成功:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)
+    void refreshUnitHost() // 互联通道换新身份重建(旧账号的通道不许滞留;配对行不属新账号会 404 自愈重入册)
     broadcast('auth:changed', { loggedIn: true }) // 其余窗口的账号卡也同步刷新
     return { ok: true, cloudUrl: r.cloudUrl }
   })
@@ -2410,6 +2412,7 @@ app.whenReady().then(async () => {
     lastAuthToken = ''
     if (stored.mode === 'managed') void ensureBackend()
     restartAmadeusSync?.() // 硬重启同步引擎丢弃旧账号 client:否则登出后仍拿旧 token 继续同步
+    void refreshUnitHost() // 同上:登出即重建互联通道(未登录态下 unitWeb 局域网面照常,云通道退避等登录)
     broadcast('auth:changed', { loggedIn: false })
     return { ok: true }
   })
@@ -2473,6 +2476,7 @@ app.whenReady().then(async () => {
         const stored = await loadConfig()
         if (stored.mode === 'managed') void ensureBackend()
         restartAmadeusSync?.()
+        void refreshUnitHost() // 外部来源(CLI tangu login/logout)换身份 → 互联通道同步重建
       })()
     }, 300) // 防抖:登录流程对 auth.json 的连续写只触发一次
   }
