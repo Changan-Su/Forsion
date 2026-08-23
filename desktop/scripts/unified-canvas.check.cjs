@@ -59,6 +59,18 @@
 //   C63 箭头工具:卡→卡=建父子(零连线条目),卡→形状/Shift=仍自由连线
 //   C69 卡片松手排斥:拖进另一张卡中心也会滑到最近空位,并保持单笔撤销
 //   C70 画布缩略图:内容/视口/导航齐全;HUD 同尺寸开关默认开、持久隐藏且可恢复
+//   C73 跨笔记嵌入 = **一张卡**(2026-08-22 用户实报「像两层卡片,竟然能被单独拖动」)。四件事:
+//      a 卡内嵌入照渲染(此前 buildDecos 只扫顶层 + 分栏行,卡里那份退化成行内双链「!笔记名」),
+//        且同一段不再多挂一条行内链接(inline 装饰藏得住文本、藏不住 wikilink 的 widget);
+//      b 嵌入体内那个只读 PM 不许穿主卡外衣 —— `.amx-canvas .ProseMirror` 是**后代**选择器,
+//        主卡的 border/shadow/padding 连同 `--amx-main-x/y/w` 偏移整套漏进第二个 Milkdown 实例:
+//        嵌入头留在原位、嵌入体被 margin 推去主卡偏移处,这就是「两片」;拖主卡时它还多走一份偏移;
+//      c 「一张卡」的几何判据:嵌入体的矩形整个落在所属卡/主卡之内;
+//      d 嵌入外壳 = 左轨不是卡(卡里套卡是「两层」的另一半;文档/收件箱共用同一套外壳)
+//   C74 多选卡片整批认亲 + 框选手势期实时选中
+//   C75 回车建兄弟会按父卡两侧负载自动选边
+//   C76 编辑卡片增高时固定当前卡、自动推开相撞卡
+//   C77 按笔记记住文档/画布、文档滚动，并在切面时接力当前光标
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -87,9 +99,17 @@ const record = (name, ok, detail) => {
  *  amadeusViews 渲染),默认那个 720px 居中盒子根本没有顶栏 —— 在那儿测切模式等于测一个
  *  用户永远看不到的形态。满铺的两个真风险(脱不出纸面 / 盖住顶栏)也只有这个壳能暴露。
  *  (unified-page / unified-columns 仍吃默认壳,别去动它们的几何。) */
-async function open(browser, seed) {
+async function open(browser, seed, keepSurfaceMemory = false) {
   const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  if (!keepSurfaceMemory) {
+    await p.addInitScript(() => {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i)
+        if (key?.startsWith('amx.noteSurfaceMode:')) localStorage.removeItem(key)
+      }
+    })
+  }
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
   await p.waitForTimeout(400)
@@ -655,7 +675,11 @@ async function main() {
     stage.dispatchEvent(mk('pointermove', r.right - 3, r.bottom - 3))
   })
   await p19.waitForTimeout(120)
-  const c21mid = await p19.evaluate(() => document.querySelectorAll('.amx-el-marquee').length)
+  const c21mid = await p19.evaluate(() => ({
+    marquee: document.querySelectorAll('.amx-el-marquee').length,
+    cards: document.querySelectorAll('.amx-el-selbox').length,
+    shapes: document.querySelectorAll('.amx-el-shape.is-sel').length,
+  }))
   await p19.evaluate(() => {
     const stage = document.querySelector('.amx-stage')
     const r = window.__r
@@ -670,7 +694,8 @@ async function main() {
   }))
   // ⚠️ 2026-08-18 起主卡是一等公民:整场框选把主卡也选进来,.amx-el-selbox 计 3 卡 + 1 主卡 = 4。
   record('C21 空白拖 = 框选(前置:选中已清零;拖动期间有选框、视口没被平移、卡/形状/主卡一起进选中、松手收框)',
-    c21pre.sel === 0 && c21mid === 1 && c21.box === 0 && c21pre.tf === c21.tf && c21.cards === 4 && c21.shapes === 1,
+    c21pre.sel === 0 && c21mid.marquee === 1 && c21mid.cards === 4 && c21mid.shapes === 1
+      && c21.box === 0 && c21pre.tf === c21.tf && c21.cards === 4 && c21.shapes === 1,
     JSON.stringify({ pre: c21pre.sel, mid: c21mid, ...c21 }))
 
   // C24 卡内打字时舞台键盘必须让路(keydown 从 PM 冒泡上来 —— 不挡的话在卡里按退格会删掉选中的形状)。
@@ -793,6 +818,62 @@ async function main() {
   record('C13 切模式往返后 Cmd+Z 仍能撤销切之前打的字(撤销栈没被清空)',
     undoBefore.includes('新增字') && !undoAfter.includes('新增字'), JSON.stringify({ undoBefore, undoAfter }))
   await p13.close()
+
+  // ── C77 视图记忆 + 光标接力 ──────────────────────────────────────────────────
+  const LONG77 = Array.from({ length: 80 }, (_, i) => `第 ${i + 1} 段，用来产生文档滚动高度。`).join('\n\n')
+  const p77 = await open(browser, LONG77, true)
+  await p77.waitForTimeout(350)
+  await p77.evaluate(() => {
+    const pane = document.querySelector('.amx-pane')
+    pane.scrollTop = 640
+    pane.dispatchEvent(new Event('scroll'))
+  })
+  await p77.click('.amx-modeseg button:nth-child(3)')
+  await p77.waitForTimeout(220)
+  await p77.click('.amx-modeseg button:nth-child(2)')
+  await p77.waitForTimeout(300)
+  const scroll77 = await p77.evaluate(() => document.querySelector('.amx-pane').scrollTop)
+  await p77.click('.amx-modeseg button:nth-child(3)')
+  await p77.waitForTimeout(120)
+  await p77.reload({ waitUntil: 'domcontentloaded' })
+  await p77.waitForSelector(PM, { timeout: 20000 })
+  await p77.waitForTimeout(350)
+  const mode77Canvas = await p77.evaluate(() => !document.querySelector('.amx-stage').classList.contains('amx-stage-off'))
+  await p77.click('.amx-modeseg button:nth-child(2)')
+  await p77.waitForTimeout(120)
+  await p77.reload({ waitUntil: 'domcontentloaded' })
+  await p77.waitForSelector(PM, { timeout: 20000 })
+  await p77.waitForTimeout(350)
+  const mode77Doc = await p77.evaluate(() => document.querySelector('.amx-stage').classList.contains('amx-stage-off'))
+  await p77.close()
+  record('C77 每篇笔记记住最后的文档/画布；文档切去画布再回来恢复滚动位置',
+    scroll77 >= 620 && mode77Canvas && mode77Doc, JSON.stringify({ scroll: scroll77, canvas: mode77Canvas, doc: mode77Doc }))
+
+  const CARD77 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k1","x":620,"y":180,"w":280}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '光标应该跟随这一卡。', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p77d = await open(browser, CARD77)
+  await p77d.waitForTimeout(350)
+  await p77d.click('.amx-ucard[data-anchor="k1"] p')
+  await p77d.keyboard.press('End')
+  const beforeCaret77 = await p77d.evaluate(() => window.__upage.probe.view().state.selection.from)
+  await p77d.click('.amx-modeseg button:nth-child(3)')
+  await p77d.waitForTimeout(650)
+  const canvasCaret77 = await p77d.evaluate(() => ({
+    selected: !!document.querySelector('.amx-el-selbox[data-anchor="k1"].is-editing'),
+    focused: window.__upage.probe.view().hasFocus(),
+    pos: window.__upage.probe.view().state.selection.from,
+  }))
+  await p77d.click('.amx-modeseg button:nth-child(2)')
+  await p77d.waitForTimeout(350)
+  const docCaret77 = await p77d.evaluate(() => ({ focused: window.__upage.probe.view().hasFocus(), pos: window.__upage.probe.view().state.selection.from }))
+  await p77d.close()
+  record('C77 正在编辑时切文档/画布：对应卡自动入视野并续焦，往返选区位置不变',
+    canvasCaret77.selected && canvasCaret77.focused && docCaret77.focused
+      && canvasCaret77.pos === beforeCaret77 && docCaret77.pos === beforeCaret77,
+    JSON.stringify({ before: beforeCaret77, canvas: canvasCaret77, doc: docCaret77 }))
 
   // ── C17 插件启停 = 第四条重 parse 路径(对抗评审 P0,已端到端复现过)─────────────────
   // MarkdownBlock 自己订阅 editorExtensionGen 并挂在 useEditor 的 deps 上 → milkdown destroy+create,
@@ -3218,6 +3299,99 @@ async function main() {
     hl61c === null && s61c.tree === null && s61c.lines === 0,
     JSON.stringify({ hl: hl61c, after: s61c, box: t61c }))
 
+  // C74 多选卡片整批认亲：组内相对位置保持，所有选中根节点一起挂到同一父卡，一击撤销。
+  const p74 = await open(browser, MIND)
+  await p74.waitForTimeout(300)
+  const k174 = await cardBox(p74, 'k1')
+  const k274 = await cardBox(p74, 'k2')
+  await p74.mouse.click(k174.l + 6, k174.t + 6)
+  await p74.keyboard.down('Shift')
+  await p74.mouse.click(k274.l + 6, k274.t + 6)
+  await p74.keyboard.up('Shift')
+  await p74.waitForTimeout(120)
+  const pre74 = await p74.evaluate(() => ({
+    selected: document.querySelectorAll('.amx-el-selbox[data-anchor]').length,
+    cards: [...document.querySelectorAll('.amx-ucard')].map((c) => `${c.dataset.anchor}@${c.dataset.x},${c.dataset.y}`),
+  }))
+  const main74 = await p74.evaluate(() => {
+    const r = document.querySelector('.unified-body .ProseMirror').getBoundingClientRect()
+    return { x: r.right - 12, y: r.top + Math.min(42, r.height / 2) }
+  })
+  await p74.mouse.move(k274.l + 6, k274.t + 6)
+  await p74.mouse.down()
+  await p74.mouse.move(main74.x, main74.y, { steps: 10 })
+  await p74.waitForTimeout(120)
+  const mid74 = await p74.evaluate(() => ({
+    label: document.querySelector('.amx-el-attach-label')?.textContent ?? '',
+    preview: !!document.querySelector('.amx-el-conn.is-preview'),
+  }))
+  await p74.mouse.up()
+  await p74.waitForTimeout(650)
+  const after74 = await canvasState(p74)
+  const doc74 = await cvDoc(p74)
+  await p74.evaluate(() => document.querySelector('.amx-stage').focus())
+  await p74.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p74.waitForTimeout(650)
+  const undo74 = await canvasState(p74)
+  await p74.close()
+  record('C74 多选两卡拖到主卡边缘：手势期明确整批预告，两个根一起认主卡；Cmd+Z 一击全部还原',
+    pre74.selected === 2 && mid74.label.startsWith('2 张 · ') && mid74.preview
+      && doc74?.tree?.k1 === 'm:' && doc74?.tree?.k2 === 'm:' && after74.lines === 2
+      && undo74.tree === null && JSON.stringify(undo74.cards) === JSON.stringify(pre74.cards),
+    JSON.stringify({ pre: pre74, mid: mid74, after: after74, tree: doc74?.tree, undo: undo74 }))
+
+  const ENTER75 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k1","x":420,"y":260,"w":280},{"ref":"k2","x":780,"y":260,"w":280}],"tree":{"k2":"k1"}}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '父卡。', '<!-- /a k1 -->', '', '<!-- a k2 -->', '右侧已有孩子。', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const p75 = await open(browser, ENTER75)
+  await p75.waitForTimeout(350)
+  const k275 = await cardBox(p75, 'k2')
+  await p75.mouse.click(k275.l + 6, k275.t + 6)
+  await p75.keyboard.press('Enter')
+  await p75.waitForTimeout(750)
+  const state75 = await cvDoc(p75)
+  const made75 = (state75?.cards ?? []).find((c) => c.ref !== 'k1' && c.ref !== 'k2')
+  await p75.close()
+  record('C75 回车建兄弟：父卡右侧已有队列时，新卡自动落到父卡左侧且关系仍挂同一父卡',
+    !!made75 && made75.x + made75.w < 420 && state75?.tree?.[made75.ref] === 'k1',
+    JSON.stringify({ made: made75, tree: state75?.tree }))
+
+  const GROW76 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k1","x":520,"y":80,"w":280},{"ref":"k2","x":520,"y":205,"w":280}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '正在编辑。', '<!-- /a k1 -->', '', '<!-- a k2 -->', '需要被推开的卡。', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const p76 = await open(browser, GROW76)
+  await p76.waitForTimeout(350)
+  const before76 = await cvDoc(p76)
+  const box76 = await cardBox(p76, 'k1')
+  await p76.mouse.click(box76.l + box76.w / 2, box76.t + box76.h / 2)
+  await p76.keyboard.press('Space')
+  await p76.waitForTimeout(180)
+  await p76.keyboard.press('End')
+  for (let i = 0; i < 8; i++) {
+    await p76.keyboard.press('Enter')
+    await p76.keyboard.type(`新增行 ${i + 1}`)
+  }
+  await p76.waitForTimeout(1200)
+  const after76 = await cvDoc(p76)
+  const visual76 = await p76.evaluate(() => {
+    const box = (a) => {
+      const r = document.querySelector(`.amx-ucard[data-anchor="${a}"]`).getBoundingClientRect()
+      return { l: r.left, t: r.top, r: r.right, b: r.bottom }
+    }
+    const a = box('k1'); const b = box('k2')
+    return { overlap: a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t, a, b }
+  })
+  await p76.close()
+  const pos76 = (doc, a) => (doc?.cards ?? []).find((c) => c.ref === a)
+  record('C76 编辑卡片增高：当前卡坐标不动，相撞的另一张自动退到无重叠位置',
+    JSON.stringify(pos76(before76, 'k1')) === JSON.stringify(pos76(after76, 'k1'))
+      && JSON.stringify(pos76(before76, 'k2')) !== JSON.stringify(pos76(after76, 'k2')) && !visual76.overlap,
+    JSON.stringify({ before: before76?.cards, after: after76?.cards, visual: visual76 }))
+
   // C62 层级线可选中 + Delete=解除关系(用户 2026-08-19 拍板,推翻 08-18「层级线故意不可选中」)
   const p62 = await open(browser, MIND)
   await p62.waitForTimeout(300)
@@ -3599,13 +3773,14 @@ async function main() {
   await p68.waitForTimeout(700)
   const undo68 = cards68(await cvDoc(p68))
   await p68.close()
-  record('C68 卡片右键“一键整理”:后代分层错峰过渡，根/障碍不动，全部避障；一次 Cmd+Z 整体还原',
+  const split68 = [a68.k2, a68.k3].some((b) => b.x < a68.k1.x) && [a68.k2, a68.k3].some((b) => b.x > a68.k1.x)
+  record('C68 卡片右键“一键整理”:一级分支自动分到左右、全部避障；分层错峰过渡且一次 Cmd+Z 整体还原',
     menu68 && motion68.cards.length === 3 && motion68.staggered && motion68.lines > 0
-      && layout68.clean && JSON.stringify(after68?.tree) === JSON.stringify(before68?.tree)
+      && layout68.clean && split68 && JSON.stringify(after68?.tree) === JSON.stringify(before68?.tree)
       && JSON.stringify(a68.k1) === JSON.stringify(b68.k1) && JSON.stringify(a68.k9) === JSON.stringify(b68.k9)
       && ['k2', 'k3', 'k4'].some((k) => JSON.stringify(a68[k]) !== JSON.stringify(b68[k]))
       && JSON.stringify(undo68) === JSON.stringify(b68),
-    JSON.stringify({ menu: menu68, motion: motion68, clean: layout68.clean, before: b68, after: a68, undo: undo68 }))
+    JSON.stringify({ menu: menu68, motion: motion68, clean: layout68.clean, split: split68, before: b68, after: a68, undo: undo68 }))
 
   // ── C69 卡片松手排斥：目标中心是认亲中立区，但不能容许两张卡叠在一起 ───────────────
   const p69 = await open(browser, MIND)
@@ -3887,6 +4062,73 @@ async function main() {
       && c72.pmFocus && c72.text.includes('![[pic.png]]') && !c72.text.includes('</>'),
     JSON.stringify({ btn: btn72, ...c72 }))
   await p72.close()
+
+  // ── C73 嵌入 = 一张卡(卡内下潜 + 嵌入体不冒充主卡 + 外壳不是第二张卡)─────────────
+  //  ⚠️ 种子里主卡偏移刻意取非零、且卡**不排在首位**:
+  //   · 偏移归零 → 泄漏的 `margin: var(--amx-main-y) 0 0 var(--amx-main-x)` 推不动嵌入体,
+  //     这几条会静默恒绿;
+  //   · 卡排首位 → 初始光标落在卡内那段里,嵌入按「选区在内」整体让位露源码,测的就成了另一回事。
+  const SEED_E1 = [
+    '---',
+    'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":-60,"y":90,"w":720},"cards":[{"ref":"e1","x":700,"y":40,"w":520}]}',
+    '---',
+    '',
+    '主卡第一段。',
+    '',
+    '<!-- a e1 -->',
+    '',
+    '![[Embedded]]',
+    '',
+    '<!-- /a e1 -->',
+    '',
+    '![[Embedded]]',
+    '',
+  ].join('\n')
+  const pE1 = await open(browser, SEED_E1)
+  await pE1.waitForTimeout(800) // resolveEmbed 是异步的:嵌入体(第二个 Milkdown 实例)要等一拍
+  const cE1 = await pE1.evaluate(() => {
+    const inside = (a, b) => !!a && !!b && a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && a.bottom <= b.bottom + 1
+    const r = (el) => (el ? el.getBoundingClientRect().toJSON() : null)
+    const cs = (el) => {
+      if (!el) return null
+      const s = getComputedStyle(el)
+      return { ml: s.marginLeft, mt: s.marginTop, bw: s.borderTopWidth, sh: s.boxShadow, bg: s.backgroundColor, cur: s.cursor }
+    }
+    const card = document.querySelector('.amx-ucard')
+    const hostPm = document.querySelector('.unified-body .ProseMirror')
+    const embeds = [...document.querySelectorAll('.unified-embed')]
+    const inCard = embeds.find((e) => card?.contains(e)) ?? null
+    const inMain = embeds.find((e) => !card?.contains(e)) ?? null
+    const pmOf = (e) => e?.querySelector('.ProseMirror') ?? null
+    const wiki = card?.querySelector('.wikilink') ?? null
+    return {
+      embeds: embeds.length,
+      cardHasEmbed: !!inCard,
+      cardText: inCard?.textContent ?? '',
+      // 行内双链层给同一段也渲了一条链接 → 嵌入体底下会多挂一个笔记名(2026-08-22 实报截图里那条)
+      strayWiki: !!wiki && getComputedStyle(wiki).display !== 'none',
+      bodyStyle: cs(pmOf(inCard)),
+      hostStyle: cs(hostPm),
+      shellStyle: cs(inCard?.querySelector('.embed-body') ?? null),
+      bodyInCard: inside(r(pmOf(inCard)), r(card)),
+      bodyInMain: inside(r(pmOf(inMain)), r(hostPm)),
+    }
+  })
+  const neutralE1 = (st) => !!st && st.ml === '0px' && st.mt === '0px' && st.bw === '0px' && st.sh === 'none'
+  record('C73a 卡内的跨笔记嵌入照渲染(buildDecos 下潜整棵树),且不再多挂一条行内双链',
+    cE1.embeds === 2 && cE1.cardHasEmbed && !cE1.strayWiki && cE1.cardText.includes('被嵌入的第一段'),
+    JSON.stringify({ embeds: cE1.embeds, cardHasEmbed: cE1.cardHasEmbed, strayWiki: cE1.strayWiki }))
+  record('C73b 嵌入体内的只读 PM 不穿主卡外衣(无 margin 偏移/无描边/无阴影),而宿主 PM 照旧是主卡',
+    neutralE1(cE1.bodyStyle) && !!cE1.hostStyle && cE1.hostStyle.bw !== '0px' && cE1.hostStyle.sh !== 'none',
+    JSON.stringify({ body: cE1.bodyStyle, host: cE1.hostStyle }))
+  record('C73c 嵌入 = 一张卡:嵌入体的矩形整个落在所属卡(卡内)/主卡(主流)之内,不另立一片',
+    cE1.bodyInCard && cE1.bodyInMain,
+    JSON.stringify({ bodyInCard: cE1.bodyInCard, bodyInMain: cE1.bodyInMain }))
+  record('C73d 嵌入外壳 = 左轨不是卡(无描边/无阴影):它永远住在别的容器里,再画一圈就是卡里套卡',
+    neutralE1(cE1.shellStyle),
+    JSON.stringify(cE1.shellStyle))
+  await pE1.close()
 
   await browser.close()
   const ok = results.filter(Boolean).length

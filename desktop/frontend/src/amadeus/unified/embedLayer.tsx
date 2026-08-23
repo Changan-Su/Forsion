@@ -266,6 +266,11 @@ export function createEmbedLayer(opts: { path: string }): MilkdownPlugin[] {
         if (selTo > pos && selFrom < pos + node.nodeSize) return
         const dkey = `${baseKey}#${nth}`
         decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
+        // 本段已归块级嵌入 → 给段落打标,行内双链层渲出来的那条链接由 CSS 收掉(2026-08-22 实报:
+        // 嵌入体底下多挂一条下划线的笔记名)。inline 装饰只藏得住**文本**,藏不住 wikilink.ts 的
+        // widget —— 而那层不能一刀切跳过整段:嵌入体内的只读 MarkdownBlock 没装本层,那里的
+        // `![[x]]` 正是靠行内双链渲的。所以判据留在这里,由「本层确实接手了」这件事本身表达。
+        decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'unified-embed-host' }))
         decos.push(
           Decoration.widget(
             pos + 1,
@@ -341,16 +346,14 @@ export function createEmbedLayer(opts: { path: string }): MilkdownPlugin[] {
           ),
         )
       }
-      doc.forEach((node, offset) => {
-        if (node.type.name === 'amadeusColumnRow') {
-          // 列内块同样享受嵌入渲染(位置:row+1 进 cell 序列,cell+1 进内容)。
-          node.forEach((cell, cOff) => {
-            const cellPos = offset + 1 + cOff
-            cell.forEach((child, chOff) => visit(child, cellPos + 1 + chOff))
-          })
-          return
-        }
-        visit(node, offset)
+      // 整棵树都走一遍,不再逐种容器特判:分栏 cell 与**画布卡片**里的嵌入同样照渲染
+      // (2026-08-22 用户实报「画布上卡里的 ![[…]] 只剩一个 ! 加个链接」—— 旧版只扫顶层 +
+      // amadeusColumnRow,卡内那份根本拿不到 widget,退化成 wikilink 行内层的兜底)。
+      // ⚠️ 枚举口径必须与 findNth 的 doc.descendants 逐字一致:两边错位 = 双击第 n 个嵌入
+      // 会把光标送进第 m 个的源码。
+      doc.descendants((node, pos) => {
+        visit(node, pos)
+        return true
       })
       return DecorationSet.create(doc, decos)
     }

@@ -761,9 +761,12 @@ if (new URLSearchParams(location.search).has('dock')) {
   //    window.amadeus 的四个面用内存 vault 顶替 —— harnessBridge 的对象是可变的,api.ts
   //    抓的是同一引用。见 scripts/unified-page.check.cjs。
   const g = window as unknown as { amadeus?: Record<string, unknown> }
+  /** 被嵌入那篇的正文。两段 —— 只有一段的话「嵌入体被当成主卡」那条几何断言分不出来。 */
+  const EMBED_MD = '被嵌入的第一段。\n\n被嵌入的第二段。\n'
   const vault = new Map<string, string>()
   const seedMd = new URLSearchParams(location.search).get('useed') ?? '# 外来标题\n\n第一段。\n\n第二段。\n'
   vault.set('Unified.md', seedMd)
+  vault.set('Embedded.md', EMBED_MD)
   const writes: Array<{ path: string; text: string }> = []
   const listeners = new Set<(p: string) => void>()
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
@@ -778,7 +781,15 @@ if (new URLSearchParams(location.search).has('dock')) {
       return () => listeners.delete(cb)
     },
     saveAttachment: () => Promise.reject(new Error('harness: no attachments')),
-    resolveEmbed: () => Promise.resolve(null), // 跨笔记嵌入一律「未解析」(embedLayer 仪器用)
+    // 跨笔记嵌入:只认 `Embedded` 这一篇(嵌入体里会长出**第二个** Milkdown 实例 —— 画布模式
+    // 的主卡样式泄漏就是被它接住的,见 unified-canvas C71)。其余目标一律「未解析」,
+    // unified-page 的「嵌入丢失」壳靠的正是这条,别改成无条件返回内容。
+    resolveEmbed: (target: string) =>
+      Promise.resolve(
+        target.trim() === 'Embedded'
+          ? { owner: 'Embedded.md', content: EMBED_MD, type: 'markdown' }
+          : null,
+      ),
     renamePageFile: (p: string, next: string) => {
       const dir = p.split('/').slice(0, -1).join('/')
       const np = (dir ? dir + '/' : '') + next + '.md'

@@ -59,6 +59,7 @@ import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
+import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
 
@@ -154,6 +155,10 @@ interface HostApi {
   focusTail: () => void
   /** 移动端「+」块面板选中的条目 → 本实例的 applySlash(v3 的对位是 MarkdownBlock 逐块登记)。 */
   applySlashItem: (it: SlashItem) => void
+  /** 模式胶囊按下时保留 PM 焦点；切面只在用户当时真的正在编辑时才做光标接力。 */
+  hasFocus: () => boolean
+  /** 画布 → 文档：DOM 恢复为流式排版后，把原 PM 选区滚回视野并继续编辑。 */
+  revealSelection: () => void
 }
 
 function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard }: {
@@ -248,6 +253,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           // 卡外新行)→ 顶层追加普通空段;已是空段 → 不重复加,直接落光标。
           if (!emptyPara(last)) tr = tr.insert(doc.content.size, para.create())
           view.dispatch(tr.setSelection(TextSelection.atEnd(tr.doc)).scrollIntoView())
+          view.focus()
+        })
+      },
+      hasFocus: () => {
+        let focused = false
+        getInstance()?.action((ctx) => { focused = ctx.get(editorViewCtx).hasFocus() })
+        return focused
+      },
+      revealSelection: () => {
+        getInstance()?.action((ctx) => {
+          const view = ctx.get(editorViewCtx)
+          view.dispatch(view.state.tr.scrollIntoView())
           view.focus()
         })
       },
@@ -700,6 +717,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 }): ReactElement {
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
+  const vaultRoot = scoped.getState().vaultRoot
   const mode = useUiOverlay((s) => s.editorMode)
 
   const pipeRef = useRef<Pipe | null>(null)
@@ -730,6 +748,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     pipe.ownedCards.clear()
   }
   const hostApi = useRef<HostApi | null>(null)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const segAnchorRef = useRef<HTMLSpanElement | null>(null)
+  const [segAnchor, setSegAnchor] = useState<HTMLElement | null>(null)
 
   // ── 画布模式(canvas.ts / canvasStage.tsx)。────────────────────────────────────
   // **默认恒为文档模式**(用户 2026-08-16 原话:「它首先是个文档」)。只有磁盘上已经物化过画布、
@@ -742,7 +763,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   //    web/index.html 里 —— **mobile/index.html 没有**,MobileRoot 也绕过 uiMode.ts 直接渲
   //    SingleColumnHost。于是安卓 APK 里 UI_MODE 恒 'desktop',这道门从来没生效过(用户实报
   //    「移动端没有画布」时顺带查出)。改用顶栏渲染与否用的**同一个信号**,两者不再各说各话。
-  const [canvasOn, setCanvasOn] = useState(() => !isCoarsePointer() && parseCanvasJson(canvasLineOf(pipe.fm))?.mode === 'canvas')
+  const [canvasOn, setCanvasOn] = useState(() => {
+    if (isCoarsePointer()) return false
+    const remembered = readNoteSurfaceMode(vaultRoot, path)
+    return remembered ? remembered === 'canvas' : parseCanvasJson(canvasLineOf(pipe.fm))?.mode === 'canvas'
+  })
+  /** 正在编辑时切面才发定位信号；普通浏览/点选切面保持各自记忆的位置，不凭陈旧选区乱跳。 */
+  const [canvasReveal, setCanvasReveal] = useState(0)
+  const revealDocAfterSwitch = useRef(false)
   const canvasModeRef = useRef(canvasOn) // deriveFmFromDoc 在事件里同步读,不能等 state 落定
   canvasModeRef.current = canvasOn
   // ⚠️ 只有用户**亲手点过模式钮**,本实例才有资格改盘上的 mode。不设这道闸的话:桌面存了
@@ -756,8 +784,20 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const canvasMain = canvasDoc?.main ?? { x: 0, y: 0, w: MAIN_W }
   const toggleCanvas = (): void => {
     const next = !canvasOn
+    const editing = hostApi.current?.hasFocus() ?? false
+    if (editing) {
+      if (next) setCanvasReveal((v) => v + 1)
+      else revealDocAfterSwitch.current = true
+    }
+    // 满铺 class 提交时浏览器可能先把 pane.scrollTop 归零、随后才跑 effect cleanup；切面按钮的
+    // click 里先同步留档，避免 cleanup 读到归零后的假位置。
+    if (next) {
+      const pane = segAnchorRef.current?.closest<HTMLElement>('.amx-pane')
+      if (pane) writeDocumentScroll(vaultRoot, path, pane.scrollTop)
+    }
     canvasModeRef.current = next
     modeTouched.current = true
+    writeNoteSurfaceMode(vaultRoot, path, next ? 'canvas' : 'doc')
     setCanvasOn(next)
     // 切模式本身**不算用过画布**(方案 §4):没物化过就只是换个视角,一个字节都不写。
     // 已物化的才把 mode 跟着落盘 —— 走的仍是同一条防抖单写者,不另开写路径。
@@ -839,19 +879,49 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 顶栏住在宿主壳 amadeusViews 里、是本组件的**祖先**,所以胶囊由这里渲染、portal 进那一行的插槽。
   // ⚠️ 2026-08-18 从「状态进店 + 顶栏按 path 比对」改成 portal:用户实报「开机还原到一篇 md 笔记时
   //    胶囊必不显示,点过别的笔记才出来」。理由与被排除的假设都写在 CanvasModeSeg 顶注。
-  const segAnchorRef = useRef<HTMLSpanElement | null>(null)
-  const [segAnchor, setSegAnchor] = useState<HTMLElement | null>(null)
   useEffect(() => { setSegAnchor(segAnchorRef.current) }, [])
   // 满铺靠**给滚动容器加个类**,而不是给 `.amx-pane` 全局加 `position: relative` ——
   // 那会把面板里所有「本来解析到更外层」的绝对定位后代一起改锚点(浮层整体偏一个容器位是本仓的老账)。
   // 只在本笔记进画布期间挂,退出/卸载即摘。顶栏 sticky 且 z-index:3,满铺层压不住它,照旧可点。
-  const bodyRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const pane = bodyRef.current?.closest('.amx-pane')
     if (!pane) return
     pane.classList.toggle('amx-canvas-pane', fullCanvas)
     return () => pane.classList.remove('amx-canvas-pane')
   }, [fullCanvas])
+
+  /** 文档位置补齐与 Canvas viewport 对称的会话记忆。滚动容器是 `.amx-pane`，不是正文 div；
+   * 切进画布的 cleanup 先记住 scrollTop，切回后等绝对布局摘掉再恢复，避免被浏览器锚定归零。 */
+  useEffect(() => {
+    if (canvasOn) return
+    const pane = segAnchorRef.current?.closest<HTMLElement>('.amx-pane')
+    if (!pane) return
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => { pane.scrollTop = readDocumentScroll(vaultRoot, path) })
+    })
+    const remember = (): void => writeDocumentScroll(vaultRoot, path, pane.scrollTop)
+    pane.addEventListener('scroll', remember, { passive: true })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+      pane.removeEventListener('scroll', remember)
+      // 切进画布已在 toggleCanvas 的同步路径记过；此时 DOM 提交可能已经让 scrollTop 归零，
+      // 不用这个晚到的零覆盖真值。卸载/换页时仍照常记。
+      if (!canvasModeRef.current) remember()
+    }
+  }, [canvasOn, path, vaultRoot])
+
+  /** 同一个 PM 实例在两种排版间复用：选区本身不会丢，只需在文档重新回流后滚回并续焦。 */
+  useEffect(() => {
+    if (canvasOn || !revealDocAfterSwitch.current) return
+    revealDocAfterSwitch.current = false
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => hostApi.current?.revealSelection())
+    })
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
+  }, [canvasOn])
 
   // 标题 → 正文的聚焦请求(consume-when-ready):挂载时吃掉跨重建的 pending(改名回车场景)。
   const [bodyFocus, setBodyFocus] = useState<'start' | 'end' | 'body-enter' | null>(() => {
@@ -1288,6 +1358,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       await flushAllScopes() // 全库 [[链接]] 重写前,其它面板待存文本先落盘
       const newPath = await amadeus.renamePageFile(path, next)
       if (newPath !== path) {
+        remapNoteViewMemory(vaultRoot, path, newPath)
         pipe.retired = true // 本实例退休:再写旧路径 = 复活幽灵文件
         // 改名 IPC 窗口里刚打的字不该丢(Codex P0):按新路径补一发,随 key 重建被读回。
         // IPC await 期间可能又打了字(200ms 监听窗)→ 补写前再拉平一次(Codex 终审 P0)。
@@ -1445,6 +1516,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           <CanvasStage
             path={path}
             active={canvasOn}
+            revealSelection={canvasReveal}
             getView={() => layer.getView()}
             main={canvasMain}
             mainStored={canvasDoc?.main != null}

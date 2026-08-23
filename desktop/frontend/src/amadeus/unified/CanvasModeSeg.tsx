@@ -26,8 +26,10 @@ export function CanvasModeSeg({ on, toggle }: { on: boolean; toggle: () => void 
     <div className="t2s-vaultseg amx-modeseg" role="tablist" aria-label="编辑模式">
       <div className="t2s-vaultseg-thumb" data-side={on ? 'canvas' : 'doc'} />
       <button type="button" role="tab" aria-selected={!on} className={on ? '' : 'on'}
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => { if (on) toggle() }}>文档</button>
       <button type="button" role="tab" aria-selected={on} className={on ? 'on' : ''}
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => { if (!on) toggle() }}>画布</button>
     </div>
   )

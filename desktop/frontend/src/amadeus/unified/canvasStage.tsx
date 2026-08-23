@@ -54,6 +54,15 @@ const GRIP = 12 // 右缘调宽热区(舞台像素)
 const NUDGE = 8
 /** 指针一次都没真正移动过(纯点击)的判据。落笔前必须问这一句 —— 见 onUp 的告警。 */
 const CLICK_SLOP = 3
+/** 触屏版的同一道闸。手指的抖动比鼠标大一个数量级,3px 下「点一下卡片」经常被判成真拖动
+ *  —— 落一笔几何进撤销栈、进磁盘。
+ *  ⚠️ 这个值是**屏幕像素**,进 onDown 时才换算成舞台单位:`live` 的比较全在舞台坐标里做,
+ *  而舞台坐标随缩放伸缩 —— 实测自动 fit 后 z≈0.37,6px 的手指抖动到那边是 14 舞台 px,
+ *  写死 10 照样判成拖动。(鼠标那档 CLICK_SLOP 仍是舞台单位的老口径,不在本轮动。) */
+const TOUCH_SLOP = 10
+/** 长按出菜单的时长与作废半径(Excalidraw 的 TOUCH_CTX_MENU_TIMEOUT 同值);半径按**屏幕**像素算。 */
+const LONG_PRESS_MS = 500
+const PRESS_SLOP = 10
 /** 元素的可点面:形状本体,以及 Frame 的**标题条**(框体整片 pointer-events:none,见 canvasElements
  *  的 Frame 顶注 —— 一个满屏大的可点矩形就是糊在画布上的隐形挡板)。 */
 const EL_HIT = '.amx-el-shape, .amx-el-frame-bar'
@@ -171,7 +180,7 @@ function commitGeo(view: EditorView, tr: Transaction): void {
 
 /** 一批卡片的几何**合成一笔**事务:多选整批搬时若逐卡 dispatch,一次拖拽会攒出 N 个撤销步。
  *  ⚠️ 位置从同一份快照取,且 setNodeMarkup 不改变节点尺寸 → 后面的 pos 不需要映射。 */
-function setCardAttrs(view: EditorView, patches: Map<string, Record<string, number>>): void {
+function setCardAttrs(view: EditorView, patches: Map<string, Record<string, number>>, history = true): void {
   const cards = cardsOf(view)
   let tr = view.state.tr
   let any = false
@@ -181,7 +190,9 @@ function setCardAttrs(view: EditorView, patches: Map<string, Record<string, numb
     tr = tr.setNodeMarkup(c.pos, undefined, { ...c.node.attrs, ...patch })
     any = true
   }
-  if (any) commitGeo(view, tr)
+  if (!any) return
+  if (history) commitGeo(view, tr)
+  else view.dispatch(tr.setMeta('amxCanvas', true).setMeta('addToHistory', false))
 }
 
 /** 把某张卡的正文整体换成一行文本(上传占位 → `![[base]]` 用)。空文本 = 留一个空段。
@@ -384,10 +395,12 @@ export interface CanvasStageProps {
   /** 删掉了整张卡(舞台上删卡)→ 宿主据此问「卡里那个引用块牵着的磁盘文件也删吗」。
    *  与块菜单/键盘删块同一条路(见 assetDelete);调用时机在删除事务之后。 */
   onBlocksDeleted?: (content: Fragment) => void
+  /** 文档中正编辑着光标时切进画布：递增一次，舞台把同一 PM 选区所属卡带回视野。 */
+  revealSelection?: number
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, onBlocksDeleted, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, onBlocksDeleted, revealSelection = 0, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const [vp, setVp] = useState<Viewport>(() => viewports.get(path) ?? { x: 0, y: 0, z: 1 })
   const vpRef = useRef(vp)
@@ -944,15 +957,22 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const paragraph = view?.state.schema.nodes.paragraph
     if (!view || !card || !paragraph) return null
     const anchor = freshAnchorId(view.state.doc)
+    // 新卡也走与拖拽同源的“最近无碰撞位置”。过去工具点击/双击/回车只照搬调用点，右侧已经
+    // 塞满时仍会把卡叠上去；先用空卡的保守高度占位，真实高度在挂载后还会由编辑避让继续兜底。
+    const seed: ElBox = { x, y, w: CARD_W, h: 80 }
+    const obstacles = [...boxesNow(null).values()]
+    const push = resolveCardRepulsion([seed], obstacles)
+    const px = x + push.x
+    const py = y + push.y
     const body = content?.childCount ? content : paragraph.create(null, text ? view.state.schema.text(text) : undefined)
-    const made = card.createAndFill({ anchor, x: Math.round(x), y: Math.round(y), w: CARD_W, h: 0 }, body)
+    const made = card.createAndFill({ anchor, x: Math.round(px), y: Math.round(py), w: CARD_W, h: 0 }, body)
     if (!made) return null
     const at = under ? tailPosUnder(view.state.doc, rawTree(cbRef.current.tree), under) : view.state.doc.content.size
     commitGeo(view, view.state.tr.insert(at, made))
     cbRef.current.onCommit(anchor) // ⚠️ 必须报锚:不进归属集合的话派生会把这张卡当「代表不了全貌」
     setSel([cardKey(anchor)])
     return anchor
-  }, [])
+  }, [boxesNow])
 
   /** 拖进舞台空白的 OS 文件 → **每个文件一张独立卡片**,内容是对该附件的引用(用户拍板 2026-08-20)。
    *  先建卡带「上传中」占位(大文件/云端库时立刻看得见东西落下了),存好再把占位换成 `![[base]]`;
@@ -1077,6 +1097,42 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     return { parent, x: Math.round(x), y: Math.round(y) }
   }, [nodeBox])
 
+  /** 键盘/侧边 ⊕ 的自动槽位：左右两侧都试，选负载更小且离无碰撞位置最近的一边。
+   *  拖拽认亲仍尊重用户明确指向的边，只有“没有指定方向”的创建动作走这里。 */
+  const autoSlotFor = useCallback((selfNode: string, rel: 'child' | 'sibling', w: number, h = 80): { parent: string; x: number; y: number } | null => {
+    const me = nodeBox(selfNode)
+    if (!me) return null
+    const treeNow = rawTree(cbRef.current.tree)
+    const own = treeNow[selfNode]
+    const parent = rel === 'child' ? selfNode : (typeof own === 'string' && own ? own : '')
+    const basis = rel === 'child' ? me : (parent ? nodeBox(parent) : me)
+    if (!basis) return null
+    const view = cbRef.current.getView()
+    const allNodes = view ? cardsOf(view).map((c) => c.anchor) : []
+    const peers = parent
+      ? childrenOf(treeNow, parent)
+      : rel === 'child'
+        ? childrenOf(treeNow, selfNode)
+        : allNodes.filter((a) => typeof treeNow[a] !== 'string' || !treeNow[a])
+    const peerBoxes = peers.map((a) => nodeBox(a)).filter(Boolean) as ElBox[]
+    const center = basis.x + basis.w / 2
+    const obstacles = [...boxesNow(null).values()]
+    const GAP_X = 80
+    const GAP_Y = 32
+    let best: { x: number; y: number; score: number } | null = null
+    for (const dir of [1, -1] as const) {
+      const side = peerBoxes.filter((b) => (b.x + b.w / 2 - center) * dir > 0)
+      const x = dir > 0 ? basis.x + basis.w + GAP_X : basis.x - GAP_X - w
+      const y = side.length ? Math.max(...side.map((b) => b.y + b.h)) + GAP_Y : basis.y
+      const seed: ElBox = { x, y, w, h }
+      const push = resolveCardRepulsion([seed], obstacles, { x: dir, y: 0 })
+      // 同样空时略偏右；一侧越拥挤，越早把下一支分到另一侧。实际碰撞位移是主项。
+      const score = Math.hypot(push.x, push.y) * 100 + side.length * 32 + (dir < 0 ? 6 : 0)
+      if (!best || score < best.score) best = { x: x + push.x, y: y + push.y, score }
+    }
+    return best ? { parent, x: Math.round(best.x), y: Math.round(best.y) } : null
+  }, [boxesNow, nodeBox])
+
   /** Tab = 加子节点,回车 = 加兄弟节点(用户 2026-08-18 拍板,mindmap 惯例)。
    *  `selfNode` 是**层级键**:卡片 = 锚,主卡 = `MAIN_KEY`(2026-08-19 用户实报「正文卡片不支持」——
    *  主卡自 08-18 起完全等同卡片,长子节点也不该例外;哨兵为什么撞不上真锚见 canvasEdit 那一节)。
@@ -1084,7 +1140,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
    *  建卡走 PM、层级走 fm,两笔在时间线上并成 'pair' —— 一次 Cmd+Z 卡与层级一起退
    *  (2026-08-18 统一时间线收口;此前要按两次,评审 P0-1 点名的就是这个)。 */
   const addRelated = useCallback((selfNode: string, rel: 'child' | 'sibling'): void => {
-    const slot = slotFor(selfNode, rel, 'e', CARD_W)
+    const slot = autoSlotFor(selfNode, rel, CARD_W)
     if (!slot) return
     // slot.parent 就是新卡的爹(建子节点=自己,建兄弟=自己的爹):直接插进那一段的末尾,
     // 源码顺序一次成型(空串=顶层 → 文末)。
@@ -1095,12 +1151,16 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     if (slot.parent && mutTree((t) => setParent(t, made, slot.parent))) {
       mergePair() // 建卡('pm')+ 记层级('fm')= 一次用户动作,时间线并成一格
     }
-  }, [slotFor, addCardAt, mutTree, mergePair])
+  }, [autoSlotFor, addCardAt, mutTree, mergePair])
   /** 拖到边缘认亲(2026-08-19 晚,用户拍板;思维导图同款 drop-to-attach):把一张**已有**卡拖到
    *  另一张卡/主卡的边缘 → 左右缘 = 当它的子节点,上下缘 = 与它同父(兄弟)。
    *  ⚠️ 环形目标必须先排掉:setParent 遇环只是「拒绝写入」静默返回,那样卡会被吸附摆位却没有关系,
    *     用户看到的是「吸过去了但线没出来」。这里连高亮都不给,手势期就说清楚。 */
-  const attachHit = useCallback((self: string, at: { x: number; y: number }): AttachPreview | null => {
+  const attachHit = useCallback((source: string | readonly string[], at: { x: number; y: number }): AttachPreview | null => {
+    const sources = [...new Set(typeof source === 'string' ? [source] : source)]
+    const self = sources[0]
+    if (!self) return null
+    const sourceSet = new Set(sources)
     // ⚠️ 判据是**指针**落在目标卡的边缘带,不是「两个盒子离得近」。按盒距离判的第一版被 C32/C34
     //    当场抓住:把卡停在另一张卡下方 23px(纯粹是挪个位置)就被静默收成了兄弟并吸走 ——
     //    盒子挨得近是常态,指针指过去才是意图。想认亲就把指针推到那张卡的边上,边会亮起来。
@@ -1113,11 +1173,11 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     //   (Codex 08-19 深夜 medium;我自己在文档里写了中立区,代码里却没有)。
     const strip = (len: number): number => Math.min(38, Math.max(18, len * 0.32))
     const cur = rawTree(cbRef.current.tree)
-    const descends = (node: string): boolean => { // node 是不是 self 的后代(含 self)
+    const descends = (node: string): boolean => { // node 是不是任一来源的后代(含来源本身)
       let p: unknown = node
       const seen = new Set<string>()
       while (typeof p === 'string' && p && !seen.has(p)) {
-        if (p === self) return true
+        if (sourceSet.has(p)) return true
         seen.add(p)
         p = cur[p]
       }
@@ -1126,7 +1186,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // ⚠️ 拖拽期的几何来自 measureCards(offset* 反映 dragCss 的过程位置),不是 dataset ——
     //    读 dataset 会让感应带整场拖拽都按**起点**判定(方案 §5「过程只动 CSS」的同一条坑)。
     const boxes = measureCards(hostRef.current)
-    const targets: Array<[string, ElBox]> = [...boxes].filter(([a]) => a !== self && !descends(a))
+    const targets: Array<[string, ElBox]> = [...boxes].filter(([a]) => !sourceSet.has(a) && !descends(a))
     const mb = measureMain(hostRef.current)
     if (mb) targets.push([MAIN_KEY, mb])
     let best: { node: string; side: 'e' | 'w' | 'n' | 's'; rel: 'child' | 'sibling'; score: number } | null = null
@@ -1148,51 +1208,83 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         if (!best || score < best.score) best = { node, side, rel: side === 'e' || side === 'w' ? 'child' : 'sibling', score }
       }
     }
-    return best ? { source: self, node: best.node, side: best.side, rel: best.rel } : null
+    return best ? { source: self, count: sources.length, node: best.node, side: best.side, rel: best.rel } : null
   }, [])
 
   /** 认亲落笔:位置吸附进队列(PM 一笔)+ 层级(fm 一笔),并成 'pair' 一击撤销。
    *  ⚠️ 兄弟且目标是顶层节点 = 自己也成顶层 → **主动摘掉旧爹**(否则卡排进了别人的队列、关系却还
    *  挂在原处,线与位置对不上)。这条同时也是唯一一个「拖拽即可解除关系」的口子。 */
-  const applyAttach = useCallback((self: string, hit: { node: string; side: 'e' | 'w' | 'n' | 's'; rel: 'child' | 'sibling' }): boolean => {
+  const applyAttach = useCallback((source: string | readonly string[], hit: { node: string; side: 'e' | 'w' | 'n' | 's'; rel: 'child' | 'sibling' }): boolean => {
     const view = cbRef.current.getView()
-    const box = measureCards(hostRef.current).get(self)
-    if (!view || !box) return false
+    const sources = [...new Set(typeof source === 'string' ? [source] : source)]
+    const sourceSet = new Set(sources)
+    const boxes = measureCards(hostRef.current)
+    const primary = sources[0]
+    const box = primary ? boxes.get(primary) : null
+    if (!view || !box || !primary) return false
     const slot = slotFor(hit.node, hit.rel, hit.side, box.w, box.h)
     if (!slot) return false
     const cur = rawTree(cbRef.current.tree)
-    const had = typeof cur[self] === 'string' ? (cur[self] as string) : ''
-    if (slot.parent === self) return false // 自环:上面 descends 已排掉,这里兜底
+    // 已选子树只挂它的根；否则父子一起选中时把两张都改成目标的直属孩子，会把原结构拍扁。
+    const roots = sources.filter((a) => !(typeof cur[a] === 'string' && sourceSet.has(cur[a] as string)))
+    if (!roots.length || roots.includes(slot.parent)) return false
     // 认爹之后的表先算一份**只给排序用**:几何与源码顺序要合成同一笔 PM 事务(一次 Cmd+Z 全退),
     // 而「谁是谁的后代」必须按新关系算。落盘那笔仍在下面照旧现读现写(不拿这份陈的去覆盖)。
-    const next = rawTree(cur)
-    if (slot.parent) delete next[self] // 先摘干净,免得旧父值混进 orderUnder 的后代判定
-    const relinked = slot.parent ? setParent(cur, self, slot.parent) : next
+    let relinked = rawTree(cur)
+    for (const rootNode of roots) {
+      delete relinked[rootNode]
+      if (slot.parent) {
+        const linked = setParent(relinked, rootNode, slot.parent)
+        if (linked === relinked) return false
+        relinked = linked
+      }
+    }
+    const moving = sources.flatMap((a) => {
+      const b = boxes.get(a)
+      return b ? [{ anchor: a, box: b }] : []
+    })
+    if (!moving.length) return false
+    const baseDx = slot.x - box.x
+    const baseDy = slot.y - box.y
+    const movingBoxes = moving.map(({ box: b }) => ({ ...b, x: b.x + baseDx, y: b.y + baseDy }))
+    const obstacles: ElBox[] = [...boxes].filter(([a]) => !sourceSet.has(a)).map(([, b]) => b)
+    const mainBox = measureMain(hostRef.current)
+    if (mainBox) obstacles.push(mainBox)
+    for (const b of shapeBoxes(safeElements(cbRef.current.elements), null).values()) obstacles.push(b)
+    const push = resolveCardRepulsion(movingBoxes, obstacles, { x: baseDx, y: baseDy })
+    const dx = baseDx + push.x
+    const dy = baseDy + push.y
     let tr = view.state.tr
     for (const c of cardsOf(view)) {
-      if (c.anchor === self) tr = tr.setNodeMarkup(c.pos, undefined, { ...c.node.attrs, x: slot.x, y: slot.y })
+      const measured = boxes.get(c.anchor)
+      if (sourceSet.has(c.anchor) && measured) {
+        tr = tr.setNodeMarkup(c.pos, undefined, { ...c.node.attrs, x: Math.round(measured.x + dx), y: Math.round(measured.y + dy) })
+      }
     }
     // 认爹搬到父段之后;摘爹搬到文末(**也得搬** —— 留在原地会把老父亲那一段劈成两半,
     // 后面还认着它的兄弟从此掉在父段之外,见 orderUnder 的告警)。
-    if (slot.parent !== had && (slot.parent ? relinked !== cur : true)) {
-      tr = orderUnder(tr, relinked, self, slot.parent)
+    const changedRoots = roots.filter((a) => (typeof cur[a] === 'string' ? cur[a] as string : '') !== slot.parent)
+    for (const rootNode of changedRoots) {
+      tr = orderUnder(tr, relinked, rootNode, slot.parent)
     }
     commitGeo(view, tr)
-    cbRef.current.onCommit(self)
-    if (slot.parent !== had) {
+    cbRef.current.onCommit()
+    if (changedRoots.length) {
       const wrote = mutTree((t) => {
-        if (!slot.parent) { // 认顶层 = 摘爹
-          const out = rawTree(t)
-          delete out[self]
-          return out
+        let out = rawTree(t)
+        for (const rootNode of roots) {
+          delete out[rootNode]
+          if (slot.parent) out = setParent(out, rootNode, slot.parent)
         }
-        return setParent(t, self, slot.parent)
+        return out
       })
       if (wrote) mergePair()
     }
-    playAttachMotion(self, { x: slot.x - box.x, y: slot.y - box.y })
+    if (sources.length === 1) playAttachMotion(primary, { x: dx, y: dy })
+    else playArrangeMotion(moving.map(({ anchor }) => ({ anchor, x: dx, y: dy, depth: roots.includes(anchor) ? 1 : 2 })))
+    setSel(sources.map(cardKey))
     return true
-  }, [slotFor, mutTree, mergePair, playAttachMotion])
+  }, [slotFor, mutTree, mergePair, playArrangeMotion, playAttachMotion])
 
   /** 只认爹、不挪位置(箭头工具用)。与 applyAttach 的差别就在这:那条是拖拽手势,用户已经把卡
    *  拖到位了所以顺手吸附进队列;这条是隔空指定关系,把人家的卡凭空挪走反而莫名其妙。
@@ -1400,8 +1492,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     host.focus({ preventScroll: true })
   }, [stopFocusMotion])
 
-  /** 以 root 为不动锚，把全部后代排成思维导图。先试右侧，再试左侧；每个方向沿纵轴找最近的
-   *  无碰撞位置，避让其它卡片、主卡、形状与 Frame。全部坐标合成一笔 PM 事务，可一击撤销。 */
+  /** 以 root 为不动锚，把全部后代排成思维导图。根的各支可以独立分到左右两侧；再沿纵轴找
+   *  最近的无碰撞位置，避让其它卡片、主卡、形状与 Frame。全部坐标合成一笔 PM 事务。 */
   const arrangeChildren = useCallback((root: string): boolean => {
     const host = hostRef.current
     const view = cbRef.current.getView()
@@ -1443,9 +1535,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
     spanOf(root)
 
-    const makePlan = (dir: 1 | -1): Map<string, ElBox> => {
+    const roots = direct(root).filter((a) => a !== root && seen.has(a))
+    const makePlan = (rootDirs: Map<string, 1 | -1>): Map<string, ElBox> => {
       const plan = new Map<string, ElBox>()
-      const place = (node: string, parent: ElBox): void => {
+      const place = (node: string, parent: ElBox, dir: 1 | -1): void => {
         const kids = direct(node).filter((a) => a !== root && seen.has(a))
         if (!kids.length) return
         const total = kids.reduce((n, a) => n + (spanMemo.get(a) ?? spanOf(a)), 0) + (kids.length - 1) * GAP_Y
@@ -1461,20 +1554,65 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
             h: old.h,
           }
           plan.set(child, box)
-          place(child, box)
+          place(child, box, dir)
           y += span + GAP_Y
         }
       }
-      place(root, rootBox)
+      for (const dir of [1, -1] as const) {
+        const sideRoots = roots.filter((a) => rootDirs.get(a) === dir)
+        const total = sideRoots.reduce((n, a) => n + (spanMemo.get(a) ?? spanOf(a)), 0) + Math.max(0, sideRoots.length - 1) * GAP_Y
+        let y = rootBox.y + rootBox.h / 2 - total / 2
+        for (const child of sideRoots) {
+          const old = cardBoxes.get(child)
+          if (!old) continue
+          const span = spanMemo.get(child) ?? old.h
+          const box = {
+            x: dir > 0 ? rootBox.x + rootBox.w + GAP_X : rootBox.x - GAP_X - old.w,
+            y: y + (span - old.h) / 2,
+            w: old.w,
+            h: old.h,
+          }
+          plan.set(child, box)
+          place(child, box, dir)
+          y += span + GAP_Y
+        }
+      }
       return plan
     }
+
+    // 常见思维导图的一级分支很少，可穷举左右分配拿到真正最优；极端大树只保留几种有意义的
+    // 候选，避免 2^N。旧位置所在侧也作为候选，整理不会无缘无故把已经合理的一支翻面。
+    const assignments: Array<Map<string, 1 | -1>> = []
+    const signatures = new Set<string>()
+    const addAssignment = (dirs: Array<1 | -1>): void => {
+      const sig = dirs.join(',')
+      if (signatures.has(sig)) return
+      signatures.add(sig)
+      assignments.push(new Map(roots.map((a, i) => [a, dirs[i]])))
+    }
+    if (roots.length <= 9) {
+      for (let mask = 0; mask < 2 ** roots.length; mask++) {
+        addAssignment(roots.map((_, i) => (mask & (1 << i)) ? -1 : 1))
+      }
+    } else {
+      addAssignment(roots.map((_, i) => i % 2 ? -1 : 1))
+      addAssignment(roots.map((_, i) => i < Math.ceil(roots.length / 2) ? 1 : -1))
+      addAssignment(roots.map(() => 1))
+      addAssignment(roots.map(() => -1))
+    }
+    addAssignment(roots.map((a) => ((cardBoxes.get(a)?.x ?? rootBox.x) < rootBox.x ? -1 : 1)))
 
     const all = boxesNow(null)
     const movingKeys = new Set(descendants.map(cardKey))
     const obstacles = [...all].filter(([key]) => !movingKeys.has(key)).map(([, box]) => growBox(box, 24))
     let best: { plan: Map<string, ElBox>; score: number } | null = null
-    for (const dir of [1, -1] as const) {
-      const base = makePlan(dir)
+    for (const dirs of assignments) {
+      const leftRoots = roots.filter((a) => dirs.get(a) === -1).length
+      // 两支以上时一键整理必须真正使用主节点两侧。只靠“负载均衡”软评分仍可能在一侧有障碍时
+      // 把全部分支纵向挪到另一侧，视觉上依旧是一条挤满的单边队列；纵向避障已经保证双侧方案
+      // 总能找到安全落点，因此这里把双侧分布提升为明确约束。
+      if (roots.length > 1 && (leftRoots === 0 || leftRoots === roots.length)) continue
+      const base = makePlan(dirs)
       const planBoxes = [...base.values()]
       const minY = Math.min(...planBoxes.map((b) => b.y))
       const maxY = Math.max(...planBoxes.map((b) => b.y + b.h))
@@ -1494,9 +1632,23 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         const plan = new Map([...base].map(([a, b]) => [a, { ...b, y: b.y + dy }]))
         let collisions = 0
         for (const box of plan.values()) for (const obstacle of obstacles) if (overlaps(growBox(box, 12), obstacle)) collisions++
-        const score = collisions * 1_000_000 + Math.abs(dy) + (dir < 0 ? 36 : 0)
+        const load = (dir: 1 | -1): number => {
+          const spans = roots.filter((a) => dirs.get(a) === dir).map((a) => spanMemo.get(a) ?? 0)
+          return spans.reduce((n, v) => n + v, 0) + Math.max(0, spans.length - 1) * GAP_Y
+        }
+        const rightLoad = load(1)
+        const leftLoad = load(-1)
+        const movement = [...plan].reduce((n, [a, b]) => {
+          const old = cardBoxes.get(a)
+          return n + (old ? Math.hypot(b.x - old.x, b.y - old.y) : 0)
+        }, 0)
+        const score = collisions * 1_000_000
+          + Math.abs(dy)
+          + Math.max(rightLoad, leftLoad) * 0.18
+          + Math.abs(rightLoad - leftLoad) * 0.04
+          + movement * 0.002
+          + leftRoots * 2
         if (!best || score < best.score) best = { plan, score }
-        if (collisions === 0 && dy === 0 && dir > 0) break
       }
     }
     if (!best) return false
@@ -1529,6 +1681,120 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   // 卡片弹回原位、事务不落。回调一律经 ref 现读。
   const actRef = useRef({ mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, pasteCards })
   actRef.current = { mutate, writeFm, mergePair, pushFmCheckpoint, treeTouches, removeSel, editText, boxesNow, fit, zoomBy, addCardAt, addShapeAt, addFrame, addRelated, attachHit, applyAttach, setNodeParent, expandFrames, enterNodeEdit, focusNode, arrangeChildren, stopArrangeMotion, stopFocusMotion, dropFilesAt, addCardMd, pasteCards }
+
+  /** 编辑导致卡片换行/增高时，把相撞的其它卡推到最近空位；当前编辑卡是固定锚。自动布局不进
+   *  用户撤销栈，否则打一行字会混进一笔“卡片自己跑开”的几何撤销。 */
+  useEffect(() => {
+    const host = hostRef.current
+    if (!active || !host || typeof ResizeObserver === 'undefined') return
+    const watched = new Set<HTMLElement>()
+    const sizes = new WeakMap<HTMLElement, { w: number; h: number }>()
+    let timer = 0
+    let syncing = false
+    const repel = (): void => {
+      timer = 0
+      if (syncing) return
+      const fixedId = editingRef.current
+      const view = cbRef.current.getView()
+      if (!fixedId || !view) return
+      const cardBoxes = measureCards(host)
+      const fixed = fixedId === MAIN_KEY ? measureMain(host) : cardBoxes.get(fixedId)
+      if (!fixed) return
+      const moving = [...cardBoxes].filter(([a, b]) => a !== fixedId && overlaps(growBox(fixed, 18), b))
+      if (!moving.length) return
+      const mutable = new Map(cardBoxes)
+      const patches = new Map<string, Record<string, number>>()
+      const motions: Array<{ anchor: string; x: number; y: number; depth: number }> = []
+      for (const [anchor, box] of moving) {
+        const obstacles: ElBox[] = [...mutable].filter(([a]) => a !== anchor).map(([, b]) => b)
+        const mainBox = measureMain(host)
+        if (mainBox && fixedId !== MAIN_KEY) obstacles.push(mainBox)
+        for (const b of shapeBoxes(safeElements(cbRef.current.elements), null).values()) obstacles.push(b)
+        const intent = {
+          x: box.x + box.w / 2 - (fixed.x + fixed.w / 2),
+          y: box.y + box.h / 2 - (fixed.y + fixed.h / 2),
+        }
+        const push = resolveCardRepulsion([box], obstacles, intent)
+        if (!push.x && !push.y) continue
+        const next = { ...box, x: box.x + push.x, y: box.y + push.y }
+        mutable.set(anchor, next)
+        patches.set(anchor, { x: Math.round(next.x), y: Math.round(next.y) })
+        motions.push({ anchor, x: push.x, y: push.y, depth: 1 })
+      }
+      if (!patches.size) return
+      syncing = true
+      setCardAttrs(view, patches, false)
+      playArrangeMotion(motions)
+      cbRef.current.onCommit()
+      requestAnimationFrame(() => { syncing = false })
+    }
+    const schedule = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(repel, 90)
+    }
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement
+        const next = { w: el.offsetWidth, h: el.offsetHeight }
+        const prev = sizes.get(el)
+        sizes.set(el, next)
+        if (prev && (prev.w !== next.w || prev.h !== next.h)) {
+          const id = el.classList.contains('amx-ucard') ? el.dataset.anchor : MAIN_KEY
+          if (id && id === editingRef.current) schedule()
+        }
+      }
+    })
+    const syncTargets = (): void => {
+      const now = new Set<HTMLElement>(host.querySelectorAll('.amx-ucard'))
+      const pm = host.querySelector<HTMLElement>('.ProseMirror')
+      if (pm) now.add(pm)
+      for (const el of now) if (!watched.has(el)) {
+        watched.add(el)
+        sizes.set(el, { w: el.offsetWidth, h: el.offsetHeight })
+        ro.observe(el, { box: 'border-box' })
+      }
+      for (const el of [...watched]) if (!now.has(el)) {
+        watched.delete(el)
+        ro.unobserve(el)
+      }
+    }
+    syncTargets()
+    const mo = new MutationObserver(syncTargets)
+    mo.observe(host, { subtree: true, childList: true })
+    return () => {
+      window.clearTimeout(timer)
+      mo.disconnect()
+      ro.disconnect()
+    }
+  }, [active, path, playArrangeMotion])
+
+  /** 文档 → 画布的光标接力。等两帧是为了让 `.amx-canvas` 的绝对几何先真正落到 DOM；过早量盒
+   * 会拿到文档流位置，随后把视口居中到完全错误的地方。正在编辑的卡自身位置与选区都不改。 */
+  useEffect(() => {
+    if (!active || revealSelection <= 0) return
+    shouldFit.current = false
+    let raf2 = 0
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const view = cbRef.current.getView()
+        if (!view) return
+        const { $from } = view.state.selection
+        let key = MAIN_KEY
+        for (let d = $from.depth; d > 0; d--) {
+          const node = $from.node(d)
+          if (node.type.name === 'amadeusCanvasCard') {
+            key = cardKey(String(node.attrs.anchor))
+            break
+          }
+        }
+        setSel([key])
+        setEditing(key === MAIN_KEY ? MAIN_KEY : keyId(key))
+        actRef.current.focusNode(key, true)
+        view.focus()
+      })
+    })
+    return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
+  }, [active, revealSelection])
   useEffect(() => {
     const host = hostRef.current
     if (!host || !active) return
@@ -1648,17 +1914,94 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       | { kind: 'mwidth'; el: HTMLElement; x0: number; w0: number; live?: boolean }
       | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean }
       | { kind: 'size'; id: string; corner: string; b0: ElBox; dx: number; dy: number; dw: number; dh: number; live?: boolean }
-      | { kind: 'marquee'; x0: number; y0: number; additive: boolean; live?: boolean }
+      | { kind: 'marquee'; x0: number; y0: number; additive: boolean; base: string[]; live?: boolean }
       | { kind: 'create'; tool: Tool; x0: number; y0: number; x1: number; y1: number; live?: boolean }
     let drag: Drag | null = null
     // 指针捕获拿不到就算了(合成事件、pointerId 已失效、外设拔掉都会抛)——**绝不能让它把
     // 后面的拖拽状态一起带走**:这一句抛出去的话,onDown 里它之后的语句全不执行。
-    const capture = (id: number): void => { try { host.setPointerCapture(id) } catch { /* 无所谓 */ } }
+    /** ⚠️ 起手这一笔**归谁**(Codex 2026-08-23 high)。修前 `onUp` 不问 pointerId:第一根手指正在
+     *  拖卡、第二根落在工具条/HUD/缩略图上(那几支在登记触点**之前**就早退了,凑不成双指手势),
+     *  第二根的 pointerup 冒泡到舞台就把第一根的拖拽**提前落笔** —— 而 width/mwidth/认亲那几支
+     *  是拿 `e.clientX/Y` 现算的,落下去的宽度/父子关系是第二根手指的位置。
+     *  记在 `capture()` 里 = 12 个 drag 起手的唯一必经点,不会漏。鼠标只有一个 pointerId,行为不变。 */
+    let dragOwner = -1
+    const capture = (id: number): void => { dragOwner = id; try { host.setPointerCapture(id) } catch { /* 无所谓 */ } }
     const release = (id: number): void => { try { if (host.hasPointerCapture(id)) host.releasePointerCapture(id) } catch { /* 同上 */ } }
 
     /** 舞台空白(不含卡片正文、不含形状、不含浮层 chrome)。 */
     const isBlank = (t: HTMLElement): boolean =>
       t === host || t.classList.contains('amx-stage-inner') || t.classList.contains('amx-el-layer')
+
+    // ── 触屏手势(Excalidraw 同款模型)────────────────────────────────────────────────
+    //  · 双指 = 平移 + 缩放一起(单指仍归当前工具,与 Excalidraw 一致:空白单指拖 = 框选)
+    //  · 长按 500ms = 右键菜单(手机上没有右键;`touch-action:none` 之后系统也不再补 contextmenu)
+    // ⚠️ 结构上的要害是**只有一个 `drag` 变量**:第二根手指落下会照常跑完整个 onDown、把
+    //    第一根手指的 drag 顶掉,而 onMove 不认 pointerId —— 两根手指于是一起驱动同一笔拖拽。
+    //    所以双指一成立就把在途的 drag 整笔作废(cancel 语义,不落笔),并在**全部手指抬起前**
+    //    一概不进单指逻辑。编辑态不动:视口 transform 不惊动 PM,捏合时正在编辑的卡照常编辑。
+    const touchPts = new Map<number, { x: number; y: number }>()
+    let pinch: { d0: number; z0: number; sx: number; sy: number; ids: string } | null = null
+    let pressTimer = 0
+    let pressAt: { x: number; y: number } | null = null
+    let slop = CLICK_SLOP
+
+    /** 手势被别的东西接管:只回滚外观,**绝不落笔**(与 pointercancel 同一条,见 onCancel 顶注)。 */
+    const abortDrag = (): void => {
+      const d = drag
+      drag = null
+      if (d && d.kind !== 'pan') clearVisuals(d)
+    }
+    /** 两指的中心与间距,**已回到舞台窗口的局部坐标**。
+     *  ⚠️ 必须先 ÷ `zoomOf`(应用级 CSS zoom —— 移动端 `body{zoom:1.15}` 就在这一级),再进舞台的 z:
+     *  两级缩放,见 toStage 的告警。少这一级在桌面(zoom=1)测不出来,真机上捏合的锚点恒偏。 */
+    const pinchAt = (): { x: number; y: number; d: number; ids: string } | null => {
+      const [ia, ib] = [...touchPts.keys()]
+      const a = touchPts.get(ia)
+      const b = touchPts.get(ib)
+      if (!a || !b) return null
+      const u = zoomOf(host) || 1
+      const r = host.getBoundingClientRect()
+      return { x: ((a.x + b.x) / 2 - r.left) / u, y: ((a.y + b.y) / 2 - r.top) / u, d: Math.hypot(a.x - b.x, a.y - b.y) / u, ids: `${ia}/${ib}` }
+    }
+    /** 锚 = **手势开始时两指中心底下的那个舞台点**,整场手势里它始终跟着中心走 ——
+     *  缩放与平移于是一次算完(增量式两段做法会随帧漂)。 */
+    const beginPinch = (): void => {
+      const c = pinchAt()
+      if (!c) return
+      const { x, y, z } = vpRef.current
+      pinch = { d0: Math.max(1, c.d), z0: z, sx: (c.x - x) / z, sy: (c.y - y) / z, ids: c.ids }
+    }
+    const updatePinch = (): void => {
+      const c = pinchAt()
+      if (!c || !pinch) return
+      // ⚠️ 触点对**换人就必须换基线**(Codex 2026-08-23):`pinchAt` 取的是 Map 里的前两点,而
+      //    三指在场时抬起原来那两根中的一根,前两点会变成「剩下的那根 + 第三根」—— 基线还是旧
+      //    那一对的中心与间距,下一帧就是一次没有手指位移对应的凭空平移/缩放。按当前视口重建
+      //    (不是接着旧基线算)= 换手那一帧零跳变。
+      if (c.ids !== pinch.ids) {
+        beginPinch()
+        return
+      }
+      const z = Math.max(MIN_Z, Math.min(MAX_Z, (pinch.z0 * c.d) / pinch.d0))
+      setVp({ z, x: c.x - pinch.sx * z, y: c.y - pinch.sy * z })
+    }
+    const clearPress = (): void => {
+      if (pressTimer) window.clearTimeout(pressTimer)
+      pressTimer = 0
+      pressAt = null
+    }
+    /** 长按 = 触屏的右键。移动超过 PRESS_SLOP / 第二根手指落下 / 手指抬起,三者任一都作废 ——
+     *  不作废的话拖卡、框选途中会平地弹出菜单。命中判定与右键**逐字同源**(stageMenuAt)。 */
+    const armPress = (e: PointerEvent): void => {
+      const target = e.target as HTMLElement
+      const { clientX, clientY } = e
+      pressAt = { x: clientX, y: clientY }
+      pressTimer = window.setTimeout(() => {
+        pressTimer = 0
+        pressAt = null
+        if (stageMenuAt(target, clientX, clientY) === 'open') abortDrag()
+      }, LONG_PRESS_MS)
+    }
 
     const onDown = (e: PointerEvent): void => {
       setMenu(null)
@@ -1667,6 +2010,19 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       stopRepelMotion() // 动画途中再次抓取 = 立刻把控制权交还指针
       actRef.current.stopArrangeMotion()
       actRef.current.stopFocusMotion()
+      if (e.pointerType === 'touch') {
+        touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY })
+        clearPress()
+        if (touchPts.size >= 2) {
+          e.preventDefault()
+          abortDrag()
+          beginPinch()
+          return
+        }
+        armPress(e)
+      }
+      if (pinch) return // 手势期间新落的手指(三指以上)同样不进单指逻辑
+      slop = e.pointerType === 'touch' ? TOUCH_SLOP / (vpRef.current.z * (zoomOf(host) || 1)) : CLICK_SLOP
       const middle = e.button === 1
       if (e.button !== 0 && !middle) return
       const t = toolRef.current
@@ -1697,6 +2053,17 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       // 创建工具:建完回选择工具(AFFiNE 同款「一次性工具」)。矩形/椭圆/Frame 是**按下拖出尺寸**
       // (拖不动就回落默认尺寸,见 onUp);文本只给点击建。
       if (DRAW_TOOLS.has(t)) {
+        e.preventDefault()
+        drag = { kind: 'create', tool: t, x0: at.x, y0: at.y, x1: at.x, y1: at.y }
+        capture(e.pointerId)
+        return
+      }
+      // ⚠️ 触屏下「一击建卡 / 一击建文本」必须推迟到**抬手**(Codex 2026-08-23 high)。
+      //    这两支是全画布仅有的「pointerdown 当场落笔」——手指刚碰上就写进 PM/fm。armed 着卡片
+      //    工具时想先捏合找个位置,第一根手指落下就平白多一张卡,而**手机上没有 Cmd+Z**。
+      //    走既有的 create 通道:第二根手指(abortDrag)与长按(同样 abortDrag)都能把它整笔作废。
+      //    rect/ellipse/frame 早就在 DRAW_TOOLS 里推迟了,这里补的正是漏下的那两个。
+      if (e.pointerType === 'touch' && (t === 'card' || SHAPE_TOOLS[t])) {
         e.preventDefault()
         drag = { kind: 'create', tool: t, x0: at.x, y0: at.y, x1: at.x, y1: at.y }
         capture(e.pointerId)
@@ -1946,12 +2313,31 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         return
       }
       const additive = e.shiftKey || e.metaKey || e.ctrlKey
+      const base = additive ? [...selRef.current] : []
       if (!additive) setSel([])
-      drag = { kind: 'marquee', x0: at.x, y0: at.y, additive }
+      // 触屏的空白单指拖 = **平移**(2026-08-23 用户拍板)。Figma / Miro / Freeform 全是
+      // 「单指平移、双指缩放」,Excalidraw 的「单指框选」反而是异类 —— 手指按住空白往外拽,
+      // 期待的就是画布跟着走。代价说清楚:**触屏没有框选了**,多选只能逐个点(手机端画布普遍如此);
+      // 鼠标/触控板一字未动,`select` 工具照旧框选(check:canvas C21 钉着那一条)。
+      if (e.pointerType === 'touch') {
+        drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y }
+        capture(e.pointerId)
+        return
+      }
+      drag = { kind: 'marquee', x0: at.x, y0: at.y, additive, base }
       capture(e.pointerId)
     }
 
     const onMove = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') {
+        if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY })
+        if (pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > PRESS_SLOP) clearPress()
+      }
+      if (pinch) {
+        updatePinch()
+        return
+      }
+      if (drag && dragOwner !== e.pointerId) return // 不是这一笔的主人(见 capture 顶注)
       // 连线橡皮筋:第一击之后、第二击之前的**悬停**(没有 drag)也要出预览 —— 只有底部一行字
       // 提示的连线是盲连(评审 P1)。悬到有效目标上预览线吸附到它的盒(渲染在 CanvasElements)。
       if (!drag && toolRef.current === 'conn' && connFromRef.current) {
@@ -1980,13 +2366,13 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       // 卡片的过程通道是 dragCss(舞台样式表),见 effect 顶部的告警 —— PM 的 DOM 一个属性都不碰。
       if (drag.kind === 'width') {
         const w = Math.max(MIN_W, Math.round(drag.w0 + (e.clientX - drag.x0) / (vpRef.current.z * u)))
-        if (Math.abs(w - drag.w0) > CLICK_SLOP) drag.live = true
+        if (Math.abs(w - drag.w0) > slop) drag.live = true
         setDragRule([{ anchor: drag.anchor, decl: `width:${w}px;${LIFT}` }])
         return
       }
       if (drag.kind === 'mwidth') {
         const w = Math.max(MAIN_MIN_W, Math.round(drag.w0 + (e.clientX - drag.x0) / (vpRef.current.z * u)))
-        if (Math.abs(w - drag.w0) > CLICK_SLOP) drag.live = true
+        if (Math.abs(w - drag.w0) > slop) drag.live = true
         drag.el.style.width = `${w}px`
         return
       }
@@ -2003,26 +2389,32 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         drag.dy = south ? 0 : b.h - h
         drag.dw = w - b.w
         drag.dh = h - b.h
-        if (Math.abs(drag.dw) > CLICK_SLOP || Math.abs(drag.dh) > CLICK_SLOP) drag.live = true
+        if (Math.abs(drag.dw) > slop || Math.abs(drag.dh) > slop) drag.live = true
         setGhost({ move: null, size: { id: drag.id, dx: drag.dx, dy: drag.dy, dw: drag.dw, dh: drag.dh } })
         return
       }
       if (drag.kind === 'create') {
         drag.x1 = s.x
         drag.y1 = s.y
-        if (Math.abs(drag.x1 - drag.x0) > CLICK_SLOP || Math.abs(drag.y1 - drag.y0) > CLICK_SLOP) drag.live = true
+        if (Math.abs(drag.x1 - drag.x0) > slop || Math.abs(drag.y1 - drag.y0) > slop) drag.live = true
         // 预览借框选那个虚线框(同一个坐标系、同一种「正在圈一块地」的语义,不值一个新浮层)。
-        setMarquee({ x: Math.min(drag.x0, s.x), y: Math.min(drag.y0, s.y), w: Math.abs(s.x - drag.x0), h: Math.abs(s.y - drag.y0) })
+        // card/text 不吃尺寸(见 onUp 的 box),别给它们画一个骗人的框。
+        if (DRAW_TOOLS.has(drag.tool)) setMarquee({ x: Math.min(drag.x0, s.x), y: Math.min(drag.y0, s.y), w: Math.abs(s.x - drag.x0), h: Math.abs(s.y - drag.y0) })
         return
       }
       if (drag.kind === 'marquee') {
         drag.live = true
-        setMarquee({ x: Math.min(drag.x0, s.x), y: Math.min(drag.y0, s.y), w: Math.abs(s.x - drag.x0), h: Math.abs(s.y - drag.y0) })
+        const rect = { x: Math.min(drag.x0, s.x), y: Math.min(drag.y0, s.y), w: Math.abs(s.x - drag.x0), h: Math.abs(s.y - drag.y0) }
+        setMarquee(rect)
+        // 命中随框逐帧更新，用户拖过卡片的当下就能看见选中框；缩回框时也要撤掉刚退出范围的项。
+        const hits: string[] = []
+        for (const [k, b] of actRef.current.boxesNow(null)) if (boxHits(rect, b)) hits.push(k)
+        setSel(drag.additive ? [...new Set([...drag.base, ...hits])] : hits)
         return
       }
       drag.dx = Math.round(s.x - drag.x0)
       drag.dy = Math.round(s.y - drag.y0)
-      if (Math.abs(drag.dx) > CLICK_SLOP || Math.abs(drag.dy) > CLICK_SLOP) drag.live = true
+      if (Math.abs(drag.dx) > slop || Math.abs(drag.dy) > slop) drag.live = true
       const { dx, dy } = drag
       setDragRule(drag.cards.map((c) => ({ anchor: c.anchor, decl: `left:${c.ox + dx}px;top:${c.oy + dy}px;${LIFT}` })))
       // 主卡的过程通道是 **margin**(position/transform 会建立包含块,坐标系当场塌掉,见文件头)。
@@ -2033,10 +2425,12 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         drag.mainEl.style.marginTop = `${drag.mainStart.y + drag.dy}px`
       }
       setGhost({ move: { ids: drag.ids, dx: drag.dx, dy: drag.dy }, size: null })
-      // 单张卡拖动时找「贴到谁的边上了」——多选整批搬不给认亲(拖的是一堆,认谁当爹没有语义);
-      // 主卡入列时也不给(主卡是根,不认爹)。
-      const solo = drag.cards.length === 1 && drag.ids.size === 1 && !drag.mainStart ? drag.cards[0].anchor : null
-      setAttach(solo && drag.live ? actRef.current.attachHit(solo, s) : null)
+      // 纯卡片选择可以整批挂接；夹带主卡/形状时仍只做刚体搬动，避免把没有 tree 身份的对象认爹。
+      const grabbed = keyId(drag.hit)
+      const sources = !drag.mainStart && drag.cards.length > 0 && drag.ids.size === drag.cards.length
+        ? drag.cards.map((c) => c.anchor).sort((a, b) => Number(b === grabbed) - Number(a === grabbed))
+        : []
+      setAttach(sources.length && drag.live ? actRef.current.attachHit(sources, s) : null)
     }
 
     /** 手势外观回滚(取消 / 纯点击 / 落笔后让位给数据驱动的渲染)。 */
@@ -2053,6 +2447,22 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
 
     const onUp = (e: PointerEvent): void => {
+      if (e.pointerType === 'touch') {
+        touchPts.delete(e.pointerId)
+        clearPress()
+        // 双指手势的抬起既不是点击也不是落笔;**剩下那根手指也一并吞掉**,直到全部抬起为止
+        // (否则松开一根手指的瞬间,另一根会当场变成一次拖拽/一次点选)。
+        if (pinch) {
+          if (touchPts.size === 0) pinch = null
+          release(e.pointerId)
+          drag = null
+          return
+        }
+      }
+      if (drag && dragOwner !== e.pointerId) {
+        release(e.pointerId) // 别人的手指抬起:动不了这一笔(见 capture 顶注)
+        return
+      }
       const d = drag
       drag = null
       release(e.pointerId)
@@ -2063,10 +2473,14 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       if (d.kind === 'create') {
         const w = Math.abs(d.x1 - d.x0)
         const h = Math.abs(d.y1 - d.y0)
-        const box = w >= MIN_EL && h >= MIN_EL ? { x: Math.min(d.x0, d.x1), y: Math.min(d.y0, d.y1), w, h } : null
+        // 尺寸只归 DRAW_TOOLS:触屏的 card/text 也走这条通道(见 onDown 的告警),但它们本来就
+        // 只有「一击建默认大小」这一种形态,拖出来的框不该变成它们的尺寸。
+        const box = DRAW_TOOLS.has(d.tool) && w >= MIN_EL && h >= MIN_EL ? { x: Math.min(d.x0, d.x1), y: Math.min(d.y0, d.y1), w, h } : null
         if (d.tool === 'frame') {
           if (box) actRef.current.addFrame(box.x, box.y, box.w, box.h)
           else actRef.current.addFrame(d.x0 - FRAME_SIZE.w / 2, d.y0 - FRAME_SIZE.h / 2)
+        } else if (d.tool === 'card') {
+          actRef.current.addCardAt(d.x0 - CARD_W / 2, d.y0 - 24)
         } else if (SHAPE_TOOLS[d.tool]) {
           actRef.current.addShapeAt(SHAPE_TOOLS[d.tool], d.x0, d.y0, box ?? undefined)
         }
@@ -2097,7 +2511,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         const rect = { x: Math.min(d.x0, s.x), y: Math.min(d.y0, s.y), w: Math.abs(s.x - d.x0), h: Math.abs(s.y - d.y0) }
         const hits: string[] = []
         for (const [k, b] of actRef.current.boxesNow(null)) if (boxHits(rect, b)) hits.push(k)
-        setSel((old) => (d.additive ? [...new Set([...old, ...hits])] : hits))
+        setSel(d.additive ? [...new Set([...d.base, ...hits])] : hits)
         clearVisuals(d)
         return
       }
@@ -2130,9 +2544,11 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
           // 认亲优先(2026-08-19 晚):贴到某张卡的边上松手 = 认爹/成兄弟,位置由队列决定而不是落点
           // (用户拍板「自动吸附到父卡旁的队列」)。⚠️ 必须在下面的位置落笔**之前**——两笔都写
           // x/y 的话撤销栈里就是两格,而这是一个动作。认亲失败(几何没了)照旧走普通搬家。
-          const solo = d.cards.length === 1 && d.ids.size === 1 && !d.mainStart ? d.cards[0].anchor : null
-          const hit = solo ? actRef.current.attachHit(solo, toStage(e.clientX, e.clientY)) : null
-          if (solo && hit && actRef.current.applyAttach(solo, hit)) {
+          const sources = !d.mainStart && d.cards.length > 0 && d.ids.size === d.cards.length
+            ? d.cards.map((c) => c.anchor).sort((a, b) => Number(b === keyId(d.hit)) - Number(a === keyId(d.hit)))
+            : []
+          const hit = sources.length ? actRef.current.attachHit(sources, toStage(e.clientX, e.clientY)) : null
+          if (sources.length && hit && actRef.current.applyAttach(sources, hit)) {
             clearVisuals(d)
             return
           }
@@ -2236,17 +2652,15 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // (非编辑态就能对主卡/卡片正文做块级删除)。捕获期规则:编辑中的卡/正文 = 掐断传播
     // (块菜单别抢)但**不取消默认** → 原生文本菜单;其余 = 掐断传播 + 取消默认 → 只开画布菜单。
     // 文档模式不受影响:本 effect 只在画布模式挂(!active 早退),块菜单在文档模式照常。
-    const onCtxMenu = (e: MouseEvent): void => {
-      const target = e.target as HTMLElement
-      if (target.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')) return
+    /** 命中判定与开菜单本身(右键与触屏长按**共用这一份**,别再各写一遍)。
+     *  'skip' = 不归舞台管(交给原生/别人),'native' = 明确让位给 PM/原生菜单,'open' = 已开画布菜单。 */
+    const stageMenuAt = (target: HTMLElement, x: number, y: number): 'skip' | 'native' | 'open' => {
+      if (target.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')) return 'skip'
       const shape = target.closest<HTMLElement>(EL_HIT)
       const card = target.closest<HTMLElement>('.amx-ucard')
       const inMain = !card && !shape && !!target.closest('.ProseMirror')
       // 正在编辑的卡/正文让位给 PM/原生菜单(复制粘贴、拼写检查都在那儿)。
-      if ((card?.dataset.anchor && editingRef.current === card.dataset.anchor) || (inMain && editingRef.current === MAIN_KEY)) {
-        e.stopPropagation()
-        return
-      }
+      if ((card?.dataset.anchor && editingRef.current === card.dataset.anchor) || (inMain && editingRef.current === MAIN_KEY)) return 'native'
       const key = shape?.dataset.el
         ? elKey(shape.dataset.el)
         : card?.dataset.anchor
@@ -2254,11 +2668,17 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
           : inMain
             ? MAIN_KEY
             : null
-      if (!key && !isBlank(target)) return // 浮层 chrome(把手等,不在 PM 内):原生菜单
-      e.preventDefault()
-      e.stopPropagation()
+      if (!key && !isBlank(target)) return 'skip' // 浮层 chrome(把手等,不在 PM 内):原生菜单
       if (key && !selRef.current.includes(key)) setSel([key])
-      setMenu({ x: e.clientX, y: e.clientY, key, at: toStage(e.clientX, e.clientY) })
+      setMenu({ x, y, key, at: toStage(x, y) })
+      return 'open'
+    }
+
+    const onCtxMenu = (e: MouseEvent): void => {
+      const r = stageMenuAt(e.target as HTMLElement, e.clientX, e.clientY)
+      if (r === 'skip') return
+      e.stopPropagation()
+      if (r === 'open') e.preventDefault()
     }
 
     // 从 ⠿ 把块拖到舞台空白 → 成卡(AFFiNE 的 drag-handle drop 到 edgeless 空白同款)。
@@ -2399,12 +2819,31 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
 
     // pointercancel ≠ 松手:系统手势接管 / 失焦 / 设备断连都会发它。当成松手的话,用户**取消**的
     // 那次拖拽会把最后一帧的临时坐标提交进 history 和磁盘(Codex P2-2)。这里只回滚外观。
+    /** 幽灵手指兜底,挂 **window 捕获期**。触屏指针有**隐式捕获**(pointerdown 的目标恒收后续事件),
+     *  正常情况下舞台一定收得到 pointerup —— 但隐式捕获会在**捕获目标被移出 DOM** 时释放,而卡内
+     *  正文是 PM 的节点、随打字重建是常态;那之后手指抬在舞台外(顶栏/侧栏),touchPts 里就永远
+     *  留着一条,下一次单击当场被当成「第二根手指」,pinch 再也等不到 size 归零 = 画布不响应单指。
+     *  代价 12 行、症状是冻死,所以留这道兜底(⚠️ 仪器够不到它:harness 里舞台铺满视口,
+     *  制造不出「抬在舞台外」)。次序无害:捕获期先于舞台的 pointerup,而整场手势里 `drag` 恒为
+     *  null,舞台那支落到 `if (!d) return` 就结束(不会误落笔)。 */
+    const onWinUp = (e: PointerEvent): void => {
+      if (e.pointerType !== 'touch') return
+      touchPts.delete(e.pointerId)
+      clearPress()
+      if (pinch && touchPts.size === 0) pinch = null
+    }
+    window.addEventListener('pointerup', onWinUp, true)
+    window.addEventListener('pointercancel', onWinUp, true)
+
     const onCancel = (e: PointerEvent): void => {
-      const d = drag
-      drag = null
+      if (e.pointerType === 'touch') {
+        touchPts.delete(e.pointerId)
+        clearPress()
+        if (pinch && touchPts.size === 0) pinch = null
+      }
       release(e.pointerId)
-      if (!d || d.kind === 'pan') return
-      clearVisuals(d)
+      if (drag && dragOwner !== e.pointerId) return // 同上:别人的 cancel 不该回滚这一笔
+      abortDrag()
     }
 
     host.addEventListener('pointerdown', onDown)
@@ -2420,6 +2859,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     host.addEventListener('cut', onCopy, true)
     host.addEventListener('paste', onPaste, true)
     return () => {
+      window.removeEventListener('pointerup', onWinUp, true)
+      window.removeEventListener('pointercancel', onWinUp, true)
+      clearPress()
       dragCss.remove()
       stopRepelMotion()
       delete host.dataset.amxDragscope

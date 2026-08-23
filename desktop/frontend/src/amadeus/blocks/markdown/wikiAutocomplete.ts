@@ -163,6 +163,8 @@ export interface SelRect {
   /** **全覆盖**的行内格式名集合(AFFiNE 判据:选区内每一段都带这个格式才算激活;
    *  「粗体半句 + 普通半句」显示未激活,再按一次是整段加粗而不是取消)。 */
   active: string[]
+  /** 选区覆盖文本块的共同对齐；不一致时缺省。 */
+  align?: 'left' | 'center' | 'right'
 }
 export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
   return $prose(
@@ -209,7 +211,16 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               })
               if (seen && all) active.push(name)
             }
-            report({ from, to, active, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? '多个块' : blockLabel(chain) })
+            const aligns = new Set<string>()
+            doc.nodesBetween(from, to, (node) => {
+              if (node.type.name === 'paragraph' || node.type.name === 'heading') aligns.add(node.attrs.align === 'center' || node.attrs.align === 'right' ? node.attrs.align : 'left')
+              return true
+            })
+            if (!aligns.size && ($from.parent.type.name === 'paragraph' || $from.parent.type.name === 'heading')) {
+              aligns.add($from.parent.attrs.align === 'center' || $from.parent.attrs.align === 'right' ? $from.parent.attrs.align : 'left')
+            }
+            const align = aligns.size === 1 ? [...aligns][0] as 'left' | 'center' | 'right' : undefined
+            report({ from, to, active, align, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? '多个块' : blockLabel(chain) })
           },
         }),
       }),

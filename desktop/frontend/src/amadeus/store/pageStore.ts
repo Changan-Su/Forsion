@@ -652,8 +652,10 @@ function makePageStore() {
       await get().refreshPages()
       // loadPage 对已存在的素文件走 importForeign(纯读不回写):店内快照一致 + effect③ 认领;
       // 视图层路由判为 unified 后会调 releasePage 把这份快照交出去。
-      await get().loadPage(path)
+      // 聚焦请求必须先于 loadPage 的 activePage 更新：后设时 UnifiedPage 已经挂载并跑完一次性消费
+      // effect，信号永远等不到下一次 path 变化，表现成“新笔记偶尔不进标题编辑”。
       set({ focusTitleFor: path })
+      await get().loadPage(path)
     },
 
     async releasePage(path) {

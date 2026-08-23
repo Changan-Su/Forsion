@@ -2,6 +2,7 @@
 // 所有动作经 props 回调交给 MarkdownBlock 调 Milkdown 命令。按钮一律 onMouseDown+preventDefault,
 // 按下不夺走编辑器选区/焦点(同 SlashMenu 项)。位置由 selectionToolbarPlugin 报的选区坐标 fixed 定位。
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { AlignCenter, AlignLeft, AlignRight } from 'lucide-react'
 import { OverlayAt } from '../../lib/clampMenu'
 
 export type ToolbarAction =
@@ -26,6 +27,9 @@ export type ToolbarAction =
   | 'fold'
   | 'codeblock'
   | 'math'
+  | 'alignLeft'
+  | 'alignCenter'
+  | 'alignRight'
 
 // 调色板(参考 AFFiNE 命名色;十六进制,后续可换 LCL token)。'' = 清除该颜色。
 // 色板 = AFFiNE **v1** 编辑器亮色真值(--affine-text-highlight-*;高亮菜单实际引用的是 v1 变量,
@@ -80,6 +84,7 @@ export function InlineToolbar({
   bottom,
   kind,
   active,
+  align,
   onAct,
   onColor,
   onBg,
@@ -94,6 +99,8 @@ export function InlineToolbar({
   kind: string
   /** 选区**全覆盖**的格式名(schema mark name);半覆盖不算,按钮显示未激活。 */
   active?: string[]
+  /** 当前块对齐；跨块且不一致时缺省，不误点亮任何一个。 */
+  align?: 'left' | 'center' | 'right'
   onAct: (a: ToolbarAction) => void
   onColor: (v: string) => void // '' = 清除文字色
   onBg: (v: string) => void // '' = 清除背景色
@@ -143,6 +150,10 @@ export function InlineToolbar({
           A ▾
         </button>
         <button className="itb-btn" title="清除格式" data-act="clear" onMouseDown={down(() => onAct('clear'))}>T×</button>
+        <span className="itb-sep" />
+        <button className={`itb-btn${align === 'left' ? ' on' : ''}`} title="左对齐 (⌘L)" aria-label="左对齐" data-act="alignLeft" onMouseDown={down(() => onAct('alignLeft'))}><AlignLeft size={14} /></button>
+        <button className={`itb-btn${align === 'center' ? ' on' : ''}`} title="居中 (⌘E)" aria-label="居中" data-act="alignCenter" onMouseDown={down(() => onAct('alignCenter'))}><AlignCenter size={14} /></button>
+        <button className={`itb-btn${align === 'right' ? ' on' : ''}`} title="右对齐 (⌘R)" aria-label="右对齐" data-act="alignRight" onMouseDown={down(() => onAct('alignRight'))}><AlignRight size={14} /></button>
       </div>
 
       {panel === 'turn' && (

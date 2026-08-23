@@ -27,6 +27,8 @@ interface Pt { x: number; y: number }
 /** 拖卡认亲的手势预告。source/node 都是层级节点键：卡锚或主卡哨兵 `m:`。 */
 export interface AttachPreview {
   source: string
+  /** 同一笔被挂接的卡片数；连线只从主拖拽卡画出，标签负责说明整批语义。 */
+  count?: number
   node: string
   side: 'e' | 'w' | 'n' | 's'
   rel: 'child' | 'sibling'
@@ -421,7 +423,7 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
               }}
             />
             <div className={`amx-el-attach-label is-${attach.rel}`} style={{ left: `${lx}px`, top: `${ly}px` }}>
-              {attach.rel === 'child' ? '设为子节点' : '设为同级节点'}
+              {attach.count && attach.count > 1 ? `${attach.count} 张 · ` : ''}{attach.rel === 'child' ? '设为子节点' : '设为同级节点'}
             </div>
           </>
         )

@@ -11,7 +11,7 @@
  *  $node 对同名节点 filter+append —— paragraph 被挪到 schema 节点序**尾部**,heading 顶替它成为
  *  缺省块类型,新建/切分块全部变 H1(实测 e2e 栽过,两种错法都别再犯)。
  */
-import { commonmark, paragraphAttr, paragraphSchema } from '@milkdown/kit/preset/commonmark'
+import { commonmark, headingAttr, headingIdGenerator, headingSchema, paragraphAttr, paragraphSchema } from '@milkdown/kit/preset/commonmark'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
@@ -19,20 +19,44 @@ import { MAX_INDENT } from '@amadeus-shared/indentIo'
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
 type MdNode = { type: string; value?: string; children?: MdNode[] }
+export type TextAlignment = 'left' | 'center' | 'right'
+
+const ALIGN_MARK = /^<span data-amadeus-align="(left|center|right)"><\/span>$/
+const ALIGN_OPEN = /^<span data-amadeus-align="(left|center|right)">$/
+export const normalizeTextAlignment = (v: unknown): TextAlignment => v === 'center' || v === 'right' ? v : 'left'
+const alignMarker = (align: TextAlignment): string => `<span data-amadeus-align="${align}"></span>`
+const takeAlignMarker = (children: MdNode[] | undefined): { align: TextAlignment; children: MdNode[] | undefined } => {
+  const first = children?.[0]
+  if (first?.type !== 'html' || typeof first.value !== 'string') return { align: 'left', children }
+  const hit = ALIGN_MARK.exec(first.value.trim())
+  if (hit) return { align: normalizeTextAlignment(hit[1]), children: children!.slice(1) }
+  // remark 会把同一行的空 span 拆成两个相邻 html 节点；两种 AST 形态都要认。
+  const open = ALIGN_OPEN.exec(first.value.trim())
+  const close = children?.[1]
+  if (open && close?.type === 'html' && close.value?.trim() === '</span>') {
+    return { align: normalizeTextAlignment(open[1]), children: children!.slice(2) }
+  }
+  return { align: 'left', children }
+}
 
 const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)
   return {
     ...base,
-    attrs: { indent: { default: 0 } },
+    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' } },
     parseDOM: [{
       tag: 'p',
-      getAttrs: (dom) => ({ indent: clampIndent(Number((dom as HTMLElement).getAttribute('data-indent'))) }),
+      getAttrs: (dom) => ({
+        indent: clampIndent(Number((dom as HTMLElement).getAttribute('data-indent'))),
+        align: normalizeTextAlignment((dom as HTMLElement).getAttribute('data-align') || (dom as HTMLElement).style.textAlign),
+      }),
     }],
     toDOM: (node) => {
       const attrs = { ...ctx.get(paragraphAttr.key)(node) } as Record<string, string>
       const indent = clampIndent(node.attrs.indent as number)
+      const align = normalizeTextAlignment(node.attrs.align)
       if (indent) attrs['data-indent'] = String(indent)
+      if (align !== 'left') attrs['data-align'] = align
       return ['p', attrs, 0]
     },
     parseMarkdown: {
@@ -40,7 +64,9 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
       runner: (state, node, type) => {
         // 段首 text 的行首字面 \t(来自 &#9; 实体解码)剥进 indent attr。
         let indent = 0
-        let children = node.children as MdNode[] | undefined
+        const marked = takeAlignMarker(node.children as MdNode[] | undefined)
+        const align = marked.align
+        let children = marked.children
         const first = children?.[0]
         if (first && first.type === 'text' && typeof first.value === 'string') {
           const m = /^\t+/.exec(first.value)
@@ -53,7 +79,7 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
             children = rest ? [{ ...first, value: rest }, ...children!.slice(1)] : children!.slice(1)
           }
         }
-        state.openNode(type, indent ? { indent } : undefined)
+        state.openNode(type, indent || align !== 'left' ? { indent, align } : undefined)
         if (children?.length) state.next(children as never)
         else if (!children) state.addText(((node as MdNode).value || '') as string)
         state.closeNode()
@@ -63,10 +89,56 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
       match: base.toMarkdown.match,
       runner: (state, node) => {
         const indent = clampIndent(node.attrs.indent as number)
-        if (!indent || node.content.size === 0) return void base.toMarkdown.runner(state, node)
+        const align = normalizeTextAlignment(node.attrs.align)
+        if ((!indent && align === 'left') || node.content.size === 0 && align === 'left') return void base.toMarkdown.runner(state, node)
         state.openNode('paragraph')
-        state.addNode('html', undefined, '&#9;'.repeat(indent))
+        if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
+        if (indent) state.addNode('html', undefined, '&#9;'.repeat(indent))
         // serializeText 内联:尾部 hardbreak 掐掉(与基座 preset 同款,内部函数拿不到)
+        const lastIsBreak = node.lastChild?.type.name === 'hardbreak'
+        state.next(lastIsBreak ? node.content.cut(0, node.content.size - node.lastChild!.nodeSize) : node.content)
+        state.closeNode()
+      },
+    },
+  }
+})
+
+/** 标题与段落共享同一对齐 attr / Markdown 标记，避免“正文能居中，标题切一下就丢”。 */
+const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
+  const base = prev(ctx)
+  const getId = ctx.get(headingIdGenerator.key)
+  return {
+    ...base,
+    attrs: { ...(base.attrs ?? {}), align: { default: 'left' } },
+    parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
+      tag: `h${level}`,
+      getAttrs: (dom: Node | string) => {
+        const el = dom as HTMLElement
+        return { level, id: el.id, align: normalizeTextAlignment(el.getAttribute('data-align') || el.style.textAlign) }
+      },
+    })),
+    toDOM: (node) => {
+      const attrs = { ...ctx.get(headingAttr.key)(node), id: node.attrs.id || getId(node) } as Record<string, string>
+      const align = normalizeTextAlignment(node.attrs.align)
+      if (align !== 'left') attrs['data-align'] = align
+      return [`h${node.attrs.level}`, attrs, 0]
+    },
+    parseMarkdown: {
+      match: base.parseMarkdown.match,
+      runner: (state, node, type) => {
+        const marked = takeAlignMarker(node.children as MdNode[] | undefined)
+        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}) })
+        if (marked.children?.length) state.next(marked.children as never)
+        state.closeNode()
+      },
+    },
+    toMarkdown: {
+      match: base.toMarkdown.match,
+      runner: (state, node) => {
+        const align = normalizeTextAlignment(node.attrs.align)
+        if (align === 'left') return void base.toMarkdown.runner(state, node)
+        state.openNode('heading', undefined, { depth: node.attrs.level })
+        state.addNode('html', undefined, alignMarker(align))
         const lastIsBreak = node.lastChild?.type.name === 'hardbreak'
         state.next(lastIsBreak ? node.content.cut(0, node.content.size - node.lastChild!.nodeSize) : node.content)
         state.closeNode()
@@ -80,6 +152,8 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
 export const commonmarkWithIndent = commonmark.map((p) =>
   (p as unknown) === (paragraphSchema.node as unknown) ? paragraphIndentSchema.node
   : (p as unknown) === (paragraphSchema.ctx as unknown) ? paragraphIndentSchema.ctx
+  : (p as unknown) === (headingSchema.node as unknown) ? headingAlignmentSchema.node
+  : (p as unknown) === (headingSchema.ctx as unknown) ? headingAlignmentSchema.ctx
   : p)
 
 /** 缩进档的适用面:列表项/引用块的**任意深度祖先**内一律不适用 —— 列表是 sink/lift 的地盘;
@@ -118,5 +192,35 @@ export function adjustParagraphIndent(state: EditorState, dispatch: ((tr: Transa
     return false
   })
   if (touched) dispatch?.(tr.scrollIntoView())
+  return true
+}
+
+/** Word 同款左/中/右对齐：作用于选区覆盖的全部正文/标题；折叠光标则作用于当前文本块。 */
+export function setTextAlignment(state: EditorState, dispatch: ((tr: Transaction) => void) | undefined, align: TextAlignment): boolean {
+  const next = normalizeTextAlignment(align)
+  const positions = new Set<number>()
+  const supported = (name: string): boolean => name === 'paragraph' || name === 'heading'
+  state.doc.nodesBetween(state.selection.from, state.selection.to, (node, pos) => {
+    if (supported(node.type.name)) positions.add(pos)
+    return true
+  })
+  if (!positions.size) {
+    const { $from } = state.selection
+    for (let d = $from.depth; d > 0; d--) {
+      if (!supported($from.node(d).type.name)) continue
+      positions.add($from.before(d))
+      break
+    }
+  }
+  if (!positions.size) return false
+  let tr = state.tr
+  let changed = false
+  for (const pos of positions) {
+    const node = state.doc.nodeAt(pos)
+    if (!node || normalizeTextAlignment(node.attrs.align) === next) continue
+    tr = tr.setNodeMarkup(pos, undefined, { ...node.attrs, align: next })
+    changed = true
+  }
+  if (changed) dispatch?.(tr.scrollIntoView())
   return true
 }

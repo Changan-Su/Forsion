@@ -30,6 +30,7 @@ async function freshStore() {
   writes.length = 0
   writeTextFile.mockClear()
   newPage.mockClear()
+  loadPage.mockClear()
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
   vi.stubGlobal('window', {
     amadeus: {
@@ -64,6 +65,24 @@ describe('createPageInFolder 素文件出生', () => {
     store.setState({ vaultRoot: '/v', pages: ['untitled.md'], status: 'ready' })
     await store.getState().createPageInFolder('')
     expect(writes[0]?.path).toBe('untitled-2.md')
+  })
+
+  it('在页面开始加载前就发布标题聚焦请求（UnifiedPage 首次挂载即可消费）', async () => {
+    const { usePageStore: store } = await freshStore()
+    store.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
+    let finish!: (value: Awaited<ReturnType<typeof loadPage>>) => void
+    loadPage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const creating = store.getState().createPageInFolder('')
+    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('untitled.md'))
+    expect(store.getState().focusTitleFor).toBe('untitled.md')
+    finish({
+      manifest: {
+        schema: 'amadeus.page/3', id: 'pg_t', title: 'untitled.md', createdAt: '', updatedAt: '',
+        compiler: { version: 't' }, root: { type: 'stack', children: [] }, blocks: {},
+      },
+      blocks: {},
+    })
+    await creating
   })
 })
 

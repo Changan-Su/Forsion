@@ -88,6 +88,7 @@
     "check:chatside": "node scripts/chat-sidepanel.check.cjs",
     "check:canvas": "node scripts/e2e-editor.cjs --check=unified-canvas",
     "check:canvasreal": "node scripts/e2e-editor.cjs --check=canvas-realinput",
+    "check:canvastouch": "node scripts/e2e-editor.cjs --check=canvas-touch",
     "check:blockops": "node scripts/e2e-editor.cjs --check=block-file-ops",
     "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-cats",
     "check:cssvar": "node scripts/css-var-override.check.cjs",

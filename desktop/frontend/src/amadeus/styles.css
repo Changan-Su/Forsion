@@ -563,12 +563,13 @@
 }
 
 /* Cross-note embed cell (read-only transclusion). */
+/* 嵌入外壳 = **左轨**,不是卡(2026-08-22)。此前是「描边 + 圆角 + 底纹」的完整卡观感,
+   而嵌入永远住在别的容器里 —— 画布模式下住在卡片里、文档模式下住在正文块里、收件箱里住在
+   消息卡里 —— 于是处处都是「卡里再套一张卡」。左轨表达的是「这段字是从别处引来的」,
+   三处共用同一套外壳,不再各自看起来像一张能单独拿走的卡。 */
 .am-app .embed-body {
-  border: 1px solid var(--border);
   border-left: 2px solid var(--primary);
-  border-radius: 6px;
-  background: var(--surface-2);
-  padding: 4px 8px 6px;
+  padding: 2px 0 2px 12px;
 }
 .am-app .embed-head {
   display: flex;
@@ -782,6 +783,8 @@
 .am-app .milkdown .ProseMirror p[data-indent='6'] { margin-left: calc(6 * var(--amx-indent-step, 28px)); }
 .am-app .milkdown .ProseMirror p[data-indent='7'] { margin-left: calc(7 * var(--amx-indent-step, 28px)); }
 .am-app .milkdown .ProseMirror p[data-indent='8'] { margin-left: calc(8 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6)[data-align='center'] { text-align: center; }
+.am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6)[data-align='right'] { text-align: right; }
 .am-app .milkdown .ProseMirror ul,
 .am-app .milkdown .ProseMirror ol {
   margin: 0.3em 0;
@@ -2756,6 +2759,9 @@ body.amx-marquee-active * {
   display: block;
   max-width: 100%;
 }
+/* 同一段既被块级嵌入接手、又被行内双链层渲了一条链接(inline 装饰藏得住文本、藏不住 widget)——
+   段落上的 unified-embed-host 由 embedLayer 下发,这里把那条多余的行内链接收掉。 */
+.unified-body .unified-embed-host > .wikilink { display: none; }
 /* 段落独占一条 ![[图片]] → 升级成块级观感(渲染仍是 wikilink 行内 widget,只放大呈现)。 */
 .unified-body p > .wiki-inline-img-wrap:only-child > .wiki-inline-img {
   display: block;
@@ -3578,5 +3584,39 @@ body.amx-marquee-active * {
    放文件末尾 = 与 base 同特异性时靠顺序取胜(DESIGN.md §7)。 */
 @media (pointer: coarse) {
   .am-app .amx-stage-tools { bottom: 64px; }
-  .am-app .amx-stage-minimap { bottom: 108px; }
+  /* HUD(缩放档位/适应内容/缩略图开关)当初漏在原位 —— 它 `bottom:8px`,正落在胶囊那 46px 里,
+     手机上整条点不到。抬到工具条之上;缩略图再让一档。 */
+  .am-app .amx-stage-hud { bottom: 112px; }
+  .am-app .amx-stage-minimap { bottom: 168px; }
+  /* 手指命中面:这几颗按钮的尺寸是按鼠标定的(28×26 / 12px 图标)。只放大盒子,图标 size 归 React。
+     ⚠️ 34px 是**上限不是审美**:8 颗工具 + 间距 + 内边距 = 294px,窄机(360pt ÷ body zoom 1.15
+     ≈ 313px)刚好装得下;再大就顶穿工具条背景往外溢(与 .amx-mbar 那条同一笔账)。 */
+  .am-app .amx-stage-tools button { width: 34px; height: 34px; }
+  .am-app .amx-stage-hud { padding: 4px 10px; gap: 8px; }
+  /* ⚠️ HUD 的图标只有 12px,光加 padding 到不了 34(6+12+6=24,Codex 2026-08-23 实测)——
+     用 min-width/min-height 把盒子撑起来,并补 justify-content(base 只写了 align-items,
+     inline-flex 撑宽之后图标会靠左)。4 颗 34 + 3 道 gap + 档位文字 + 内边距 ≈ 222px,
+     窄机 ≈358px 装得下。缩略图跟着再让一档(HUD 高度 34+8+2=44,112+44=156)。 */
+  .am-app .amx-stage-hud button { min-width: 34px; min-height: 34px; padding: 0; justify-content: center; }
+}
+
+/* ── 嵌入体不是主卡(2026-08-22,用户实报「嵌入像两层卡片,竟然还能被单独拖动」)────────
+   `.am-app .amx-canvas .ProseMirror` 是**后代**选择器,而跨笔记嵌入里还长着第二个 Milkdown
+   实例(CrossNoteEmbed → MarkdownBlock)。主卡那身外衣于是整套漏进去:描边/圆角/阴影/padding
+   之外,还有 `margin: var(--amx-main-y) 0 0 var(--amx-main-x)` 与 `width: var(--amx-main-w)` ——
+   嵌入头留在原位、嵌入体被推去主卡偏移处,一个嵌入看着就是两张卡;拖主卡时嵌入体还跟着
+   多走一份偏移,于是「能被单独拖动」。cursor:grab 也一并漏了。
+   ⚠️ 修法只能是在嵌入边界上脱外衣,**不能给上面那条加 `:not(.unified-embed *)`** —— 那会把它
+   从 (0,3,0) 抬到 (0,4,0),压过 canvasStage 手势期动态下发的
+   `.amx-stage[data-amx-dragscope="…"] .ProseMirror{cursor:text}`(同为 0,3,0,靠后来居上取胜),
+   拖块时的文本光标当场退化成 grab。 */
+.am-app .amx-canvas .unified-embed .ProseMirror {
+  margin: 0;
+  width: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: default;
 }

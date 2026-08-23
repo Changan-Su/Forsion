@@ -304,6 +304,36 @@ async function main() {
     await p.close()
   })
 
+  // T14c:划选工具栏可改左/中/右，对齐标记可往返；Word 同款 Mod-L/E/R 快捷键。
+  await tryTest('T14c', async () => {
+    const p = await freshPage()
+    const pm = p.locator('.md-block .ProseMirror').first()
+    await pm.click()
+    await p.keyboard.type('需要对齐的正文', { delay: 20 })
+    for (let i = 0; i < 4; i++) await p.keyboard.press('Shift+ArrowLeft')
+    await p.waitForTimeout(250)
+    await p.locator('.inline-toolbar [data-act="alignCenter"]').dispatchEvent('mousedown')
+    await p.waitForTimeout(400)
+    const centerDom = await pm.locator('p[data-align="center"]').count()
+    const centerMd = await mdOf(p)
+    check('T14c 划选工具栏“居中”立即生效并落 Markdown 标记', centerDom === 1 && /data-amadeus-align="center"/.test(centerMd), `md=${JSON.stringify(centerMd)}`)
+    await p.keyboard.press('Meta+r')
+    await p.waitForTimeout(350)
+    const rightDom = await pm.locator('p[data-align="right"]').count()
+    const rightMd = await mdOf(p)
+    check('T14c Word 快捷键 Mod-R 切右对齐', rightDom === 1 && /data-amadeus-align="right"/.test(rightMd), `md=${JSON.stringify(rightMd)}`)
+    await p.close()
+
+    const q = await freshPage(rightMd)
+    check('T14c 关闭重开后右对齐仍在', (await q.locator('.md-block .ProseMirror p[data-align="right"]').count()) === 1)
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.press('Meta+l')
+    await q.waitForTimeout(350)
+    const leftMd = await mdOf(q)
+    check('T14c Mod-L 恢复左对齐并清除持久化标记', !/data-amadeus-align=/.test(leftMd), `md=${JSON.stringify(leftMd)}`)
+    await q.close()
+  })
+
   // T15: 下划线 mark 往返(apply → DOM <u> → 序列化 <u>abc</u>)—— remark 桥核心验证
   await tryTest('T15', async () => {
     const p = await freshPage()
