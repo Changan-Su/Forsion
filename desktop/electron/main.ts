@@ -664,15 +664,24 @@ function unitLanUrl(): string | null {
   return null
 }
 
-/** 按当前配置起停/重建 unitWeb + unitHost(开关或 cloudUrl 变化后调;幂等)。 */
-async function refreshUnitHost(): Promise<void> {
+/** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
+ *  串行化(同 ensureChain 的病):四个身份变化点 + config:set 可能连发,并发重建会让第二次
+ *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
+let unitRefreshChain: Promise<void> = Promise.resolve()
+function refreshUnitHost(): Promise<void> {
+  unitRefreshChain = unitRefreshChain
+    .then(() => doRefreshUnitHost())
+    .catch((e) => { console.error('[unit] refresh failed:', e) })
+  return unitRefreshChain
+}
+async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
   unitHostCloudUrl = stored.cloudUrl
   unitHostPairing = stored.unitHostId && stored.unitHostSecret
     ? { unitId: stored.unitHostId, secret: stored.unitHostSecret }
     : null
   if (unitHost) { unitHost.stop(); unitHost = null }
-  if (unitWeb) { void unitWeb.close(); unitWeb = null }
+  if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   if (!stored.unitHostEnabled) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
