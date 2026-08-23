@@ -15,7 +15,7 @@ import { centeredRange, windowTotal, type TodoWindow } from './calendar/todoWind
 import { fmtStamp, startOfDay } from './calendar/dateUtils'
 import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
 import { todoDueMeta } from './calendar/todoMeta'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, zoomOf } from '@lcl/engine'
 
 const MODE_LABEL: Record<TodoWindow, string> = { day: '今天', '3day': '3 天', week: '7 天', month: '31 天', custom: '自定义' }
 const ALL_MODES: TodoWindow[] = ['day', '3day', 'week', 'month', 'custom']
@@ -147,7 +147,7 @@ export function TodoListView() {
                         title="点击编辑"
                         onClick={(e) => {
                           const rc = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                          setCard({ dbPath: db.path, rowId: r.rowId, at: { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom } })
+                          setCard({ dbPath: db.path, rowId: r.rowId, at: { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom, zoom: zoomOf(e.currentTarget) || 1 } })
                         }}
                       >
                         <span className={`amx-todo-name${checked ? ' done' : ''}`}>{r.name || '未命名'}</span>

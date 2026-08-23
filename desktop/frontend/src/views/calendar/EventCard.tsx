@@ -22,7 +22,7 @@ import {
   SingleSelectIcon, MultiSelectIcon, LinkIcon, CheckBoxCheckLinearIcon,
 } from '../../amadeus/components/icons'
 
-export interface Anchor { left: number; top: number; right: number; bottom: number }
+export interface Anchor { left: number; top: number; right: number; bottom: number; zoom?: number }
 
 export interface CardTarget {
   db: AggDb
@@ -37,11 +37,15 @@ export interface CardTarget {
 }
 
 function cardPos(at: Anchor): { left: number; top: number } {
+  const zoom = at.zoom || 1
   const W = 360
-  let left = at.right + 8
-  if (left + W > window.innerWidth) left = Math.max(8, at.left - W - 8)
-  const top = Math.max(8, Math.min(at.top, window.innerHeight - 380))
-  return { left, top }
+  const H = 380
+  const margin = 8 * zoom
+  let left = at.right + margin
+  if (left + W * zoom > window.innerWidth) left = Math.max(margin, at.left - W * zoom - margin)
+  const top = Math.max(margin, Math.min(at.top, window.innerHeight - H * zoom - margin))
+  // body 使用 CSS zoom 时，fixed 的 left/top 仍是元素自身的 CSS 像素；锚点则来自视口像素。
+  return { left: left / zoom, top: top / zoom }
 }
 
 /** 属性行的类型图标:自定义类型用注册表已声明的图标,primitive 按 baseType 取。 */

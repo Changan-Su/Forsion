@@ -19,6 +19,7 @@ import { CalendarPlus, Check, ChevronLeft, ChevronRight, RotateCcw, ZoomIn, Zoom
 import { Button } from '@astryxdesign/core/Button'
 import { DropdownMenu, DropdownMenuItem } from '@astryxdesign/core/DropdownMenu'
 import { Kbd } from '@astryxdesign/core/Kbd'
+import { zoomOf } from '@lcl/engine'
 import { AstryxScope } from '../theme/astryxBridge'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -113,7 +114,11 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
 
 /** 模式下拉(Notion Calendar 式)的条目与单键快捷键。 */
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-const rectOf = (e: ReactMouseEvent | ReactPointerEvent): Anchor => (e.currentTarget as HTMLElement).getBoundingClientRect()
+const rectOf = (e: ReactMouseEvent | ReactPointerEvent): Anchor => {
+  const el = e.currentTarget as HTMLElement
+  const r = el.getBoundingClientRect()
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, zoom: zoomOf(el) || 1 }
+}
 const eventValue = (start: Date, end: Date | null, allDay: boolean): string =>
   end ? `${fmtStamp(start, allDay)}/${fmtStamp(end, allDay)}` : fmtStamp(start, allDay)
 const commitTime = (ev: CalEvent, start: Date, end: Date | null): void =>
@@ -340,6 +345,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     tEl: HTMLElement | null // 块内时间文本 span(拖拽中命令式更新)
     t0: string        // 原始时间文本(未生效的拖拽收手时还原)
     x0: number; y0: number
+    zoom: number      // PointerEvent 是视口 px；transform/hourPx 是未缩放局部 px，换算必须除累计 CSS zoom。
     top0: number; h0: number
     grabOffY: number // 按下时光标距事件顶部的偏移,拖动保持该抓握点
     durMin: number   // 时长(分,用于吸附上限与提示块高)
@@ -454,15 +460,16 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     if (ev.readonly) return // 只读源:不设 dragRef 不 capture;up() 里补点击开卡
     const el = e.currentTarget as HTMLElement
     const rect = el.getBoundingClientRect()
-    const offY = e.clientY - rect.top
-    const mode: 'move' | 'start' | 'end' = offY < EDGE ? 'start' : rect.height - offY < EDGE ? 'end' : 'move'
+    const zoom = zoomOf(el) || 1
+    const offY = (e.clientY - rect.top) / zoom
+    const mode: 'move' | 'start' | 'end' = offY < EDGE ? 'start' : rect.height / zoom - offY < EDGE ? 'end' : 'move'
     const box = eventBox(ev.start, ev.end, hourPx)
     const h0 = Math.max(14, box.height)
     const tEl = el.querySelector('.amx-cal-event-t') as HTMLElement | null
     el.setPointerCapture(e.pointerId)
     el.classList.add('dragging')
     dragRef.current = {
-      mode, ev, el, tEl, t0: tEl?.textContent ?? '', x0: e.clientX, y0: e.clientY, top0: box.top, h0, grabOffY: offY,
+      mode, ev, el, tEl, t0: tEl?.textContent ?? '', x0: e.clientX, y0: e.clientY, zoom, top0: box.top, h0, grabOffY: offY,
       durMin: Math.round((h0 / hourPx) * 60), msDur: ev.end ? ev.end.getTime() - ev.start.getTime() : 0,
       dyMin: 0, moved: false, target: null,
     }
@@ -472,16 +479,17 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     if (!d) return
     // move = 整个日历自由拖动:块本身跟手不吸附(translate),吸附只体现在落点提示 ghost 上。
     if (d.mode === 'move') {
-      const dx = e.clientX - d.x0
-      const dy = e.clientY - d.y0
+      const dx = (e.clientX - d.x0) / d.zoom
+      const dy = (e.clientY - d.y0) / d.zoom
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true
       d.el.style.transform = `translate(${dx}px, ${dy}px)`
       const sc = wrap.current
       if (!sc || !colw) return
       const scRect = sc.getBoundingClientRect()
-      const colIndex = Math.max(0, Math.min(days.length - 1, Math.floor((e.clientX - scRect.left + sc.scrollLeft) / colw)))
+      const gridZoom = zoomOf(sc) || 1
+      const colIndex = Math.max(0, Math.min(days.length - 1, Math.floor(((e.clientX - scRect.left) / gridZoom + sc.scrollLeft) / colw)))
       const bodyTop = HEAD_H + 14 + alldayH
-      const eventTopY = e.clientY - d.grabOffY - scRect.top + sc.scrollTop - bodyTop // 保持抓握点:算事件顶在时间体内的 y
+      const eventTopY = (e.clientY - scRect.top) / gridZoom - d.grabOffY + sc.scrollTop - bodyTop // 保持抓握点:算事件顶在时间体内的 y
       const topMin = Math.max(0, Math.min(24 * 60 - d.durMin, snap15((eventTopY / hourPx) * 60)))
       d.target = { iso: fmtStamp(days[colIndex], true), topMin }
       const g = ghostRef.current
@@ -503,7 +511,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
       return
     }
     // resize(start/end):竖向改时长;时间文本随预览实时反算(与 up() 的钳制一致)
-    const dyMin = snap15(((e.clientY - d.y0) / hourPx) * 60)
+    const dyMin = snap15((((e.clientY - d.y0) / d.zoom) / hourPx) * 60)
     d.dyMin = dyMin
     const dPx = (dyMin / 60) * hourPx
     if (d.mode === 'end') d.el.style.height = `${Math.max(14, d.h0 + dPx)}px`
@@ -571,7 +579,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     const iso = cell?.getAttribute('data-date')
     if (cell && iso) {
       const rect = cell.getBoundingClientRect()
-      const min = Math.max(0, Math.min(24 * 60 - 30, snap15(((e.clientY - rect.top) / hourPx) * 60)))
+      const min = Math.max(0, Math.min(24 * 60 - 30, snap15((((e.clientY - rect.top) / (zoomOf(cell) || 1)) / hourPx) * 60)))
       const start = addMinutes(startOfDay(toLocalDate(iso)), min)
       setAggCell(ev.db, ev.row.rowId, ev.colId, `${fmtStamp(start, false)}/${fmtStamp(addMinutes(start, 30), false)}`)
       return
@@ -638,8 +646,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
             onDoubleClick={(e) => {
               if ((e.target as HTMLElement).closest('.amx-cal-event')) return
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-              const min = Math.max(0, Math.min(24 * 60 - 30, snap15(((e.clientY - rect.top) / hourPx) * 60)))
-              onCreate(d, min, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY })
+              const zoom = zoomOf(e.currentTarget) || 1
+              const min = Math.max(0, Math.min(24 * 60 - 30, snap15((((e.clientY - rect.top) / zoom) / hourPx) * 60)))
+              onCreate(d, min, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY, zoom })
             }}
           >
             {(() => {
@@ -799,7 +808,7 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
                   data-date={fmtStamp(day, true)}
                   onDoubleClick={(e) => {
                     if ((e.target as HTMLElement).closest('.amx-cal-chip-ev')) return
-                    onCreate(day, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY })
+                    onCreate(day, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY, zoom: zoomOf(e.currentTarget) || 1 })
                   }}
                 >
                   <div className="amx-cal-mnum">{day.getDate() === 1 ? `${day.getMonth() + 1}月1` : day.getDate()}</div>
@@ -858,8 +867,10 @@ function DayAgendaPopover({
   onClose: () => void
 }) {
   const width = 292
-  const left = Math.max(12, Math.min(at.left, window.innerWidth - width - 12))
-  const top = Math.max(12, Math.min(at.bottom + 6, window.innerHeight - 356))
+  const zoom = at.zoom || 1
+  const margin = 12 * zoom
+  const left = Math.max(margin, Math.min(at.left, window.innerWidth - width * zoom - margin)) / zoom
+  const top = Math.max(margin, Math.min(at.bottom + 6 * zoom, window.innerHeight - 356 * zoom - margin)) / zoom
   const dialogRef = useRef<HTMLElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose

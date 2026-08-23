@@ -38,6 +38,34 @@ async function forceMode(win, mode) {
   await win.waitForTimeout(800)
 }
 
+async function forceZoom(win, zoom) {
+  await win.evaluate((next) => {
+    if (next === 1) localStorage.removeItem('forsion_ui_zoom')
+    else localStorage.setItem('forsion_ui_zoom', String(next))
+    document.body.style.zoom = next === 1 ? '' : String(next)
+    if (next === 1) document.documentElement.style.removeProperty('--uiz')
+    else document.documentElement.style.setProperty('--uiz', String(next))
+    window.dispatchEvent(new Event('forsion:uizoom'))
+  }, zoom)
+  await win.waitForTimeout(700)
+}
+
+async function alignWeekGrid(win, startHour) {
+  await win.evaluate((hour) => {
+    const sc = document.querySelector('.amx-cal-tscroll')
+    const today = new Date()
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const cell = document.querySelector(`.amx-cal-daycol2[data-date="${iso}"]`)
+    const timerow = document.querySelector('.amx-cal-timerow')
+    if (!sc || !cell || !timerow) throw new Error('日历周网格尚未就绪')
+    const hourPx = parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44
+    sc.scrollLeft = Math.max(0, cell.offsetLeft - (sc.clientWidth - cell.clientWidth) / 2)
+    sc.scrollTop = Math.max(0, cell.offsetTop + hour * hourPx)
+    sc.dispatchEvent(new Event('scroll'))
+  }, startHour)
+  await win.waitForTimeout(350)
+}
+
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('缺 out/main/main.js —— 先跑 npm run build')
   fs.mkdirSync(OUT, { recursive: true })
@@ -162,6 +190,81 @@ async function main() {
     check('当日日程列表支持 Esc 关闭', (await win.locator('.amx-cal-agenda').count()) === 0)
     await win.keyboard.press('w')
     await win.waitForSelector('.amx-cal-tscroll', { timeout: 5000 })
+
+    // 页面级 CSS zoom 会让 getBoundingClientRect/clientX 使用视口像素，而事件 top/hourPx 仍是局部 CSS 像素。
+    // 125% 下分别覆盖双击建事件与跨列拖拽，直接断言最终事件矩形和鼠标目标重合。
+    await forceZoom(win, 1.25)
+    await alignWeekGrid(win, 7)
+    const createPoint = await win.evaluate(() => {
+      const today = new Date()
+      const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+      const cell = document.querySelector(`.amx-cal-daycol2[data-date="${iso}"]`)
+      const timerow = document.querySelector('.amx-cal-timerow')
+      if (!cell || !timerow) return null
+      const rect = cell.getBoundingClientRect()
+      const zoom = cell.currentCSSZoom || 1
+      const hourPx = parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44
+      const min = 14 * 60 + 15
+      return { x: rect.left + rect.width / 2, y: rect.top + (min / 60) * hourPx * zoom, zoom }
+    })
+    if (!createPoint) throw new Error('无法计算 125% 缩放下的创建落点')
+    await win.mouse.dblclick(createPoint.x, createPoint.y)
+    await win.waitForSelector('.amx-cal-event[aria-label^="新事件，14:15"]', { timeout: 5000 })
+    const createLanding = await win.evaluate(({ x, zoom }) => {
+      const event = document.querySelector('.amx-cal-event[aria-label^="新事件，14:15"]')
+      const dialog = document.querySelector('.amx-cal-cardwrap[role="dialog"]')
+      const er = event?.getBoundingClientRect()
+      const dr = dialog?.getBoundingClientRect()
+      const cell = event?.closest('.amx-cal-daycol2')
+      const cr = cell?.getBoundingClientRect()
+      const timerow = document.querySelector('.amx-cal-timerow')
+      const hourPx = timerow ? parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44 : 44
+      return er && dr && cr
+        ? { eventDelta: Math.abs(er.top - (cr.top + 14.25 * hourPx * zoom)), cardDelta: Math.abs(dr.left - (x + 8 * zoom)) }
+        : null
+    }, createPoint)
+    check('125% 缩放下双击创建命中鼠标时刻', createLanding && createLanding.eventDelta <= 2.5, JSON.stringify(createLanding))
+    check('125% 缩放下事件详情贴合点击锚点', createLanding && createLanding.cardDelta <= 3, JSON.stringify(createLanding))
+    await win.keyboard.press('Escape')
+
+    await alignWeekGrid(win, 7)
+    const dragPoints = await win.evaluate(() => {
+      const source = document.querySelector('.amx-cal-event[aria-label^="产品深度工作"]')
+      const today = new Date()
+      const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1)
+      const iso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`
+      const target = document.querySelector(`.amx-cal-daycol2[data-date="${iso}"]`)
+      const timerow = document.querySelector('.amx-cal-timerow')
+      if (!source || !target || !timerow) return null
+      const sr = source.getBoundingClientRect()
+      const tr = target.getBoundingClientRect()
+      const zoom = target.currentCSSZoom || 1
+      const hourPx = parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44
+      const grab = sr.height / 2
+      return {
+        from: { x: sr.left + sr.width / 2, y: sr.top + grab },
+        to: { x: tr.left + tr.width / 2, y: tr.top + 14 * hourPx * zoom + grab },
+      }
+    })
+    if (!dragPoints) throw new Error('无法计算 125% 缩放下的拖拽落点')
+    await win.mouse.move(dragPoints.from.x, dragPoints.from.y)
+    await win.mouse.down()
+    await win.mouse.move(dragPoints.to.x, dragPoints.to.y, { steps: 12 })
+    await win.mouse.up()
+    await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作，14:00"]', { timeout: 5000 })
+    const dragLanding = await win.evaluate(() => {
+      const event = document.querySelector('.amx-cal-event[aria-label^="产品深度工作，14:00"]')
+      const cell = event?.closest('.amx-cal-daycol2')
+      const timerow = document.querySelector('.amx-cal-timerow')
+      const er = event?.getBoundingClientRect()
+      const cr = cell?.getBoundingClientRect()
+      if (!er || !cr || !cell || !timerow) return null
+      const zoom = cell.currentCSSZoom || 1
+      const hourPx = parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44
+      return { yDelta: Math.abs(er.top - (cr.top + 14 * hourPx * zoom)), xInside: er.left >= cr.left && er.right <= cr.right }
+    })
+    check('125% 缩放下拖拽事件命中目标日期与时刻', dragLanding && dragLanding.yDelta <= 2.5 && dragLanding.xInside, JSON.stringify(dragLanding))
+    await forceZoom(win, 1)
 
     await win.setViewportSize({ width: 1100, height: 800 })
     await win.waitForTimeout(900)
