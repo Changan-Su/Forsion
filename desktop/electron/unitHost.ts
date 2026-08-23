@@ -9,21 +9,21 @@
  * owner 校验(同账号)——设备只信自己拨出的这条通道,绝不复用 thin worker 的受信头模型。
  */
 import { hostname } from 'node:os'
-import { AMADEUS_PLUGIN_API, type ExternalPluginSource } from '@amadeus-shared/ipc'
 
 export interface UnitPairing { unitId: string; secret: string }
 
 export interface UnitHostDeps {
   /** 云端地址 + 当前 forsion_token(每次连接现读,续期自然生效)。 */
   getCreds: () => { cloudUrl: string; token: string }
-  /** 本机 managed 引擎(未就绪时 url=null → 回 503 信封)。 */
-  getEngine: () => { url: string | null; token: string }
+  /** 本机 unitWeb 服务(v2:一个目标吃全部——页面资产/引擎反代/配对);
+   *  internalSecret 走「loopback + 内部密钥头」豁免 unitWeb 鉴权(server 已验 owner)。null=web 未起。 */
+  getUnitWeb: () => { url: string | null; internalSecret: string }
+  /** 上报给名册的本机局域网直连地址(随通道自报,IP/端口会漂)。 */
+  getLanUrl: () => string | null
   /** 已配对凭据(shell 配置);null = 未入册。 */
   getPairing: () => UnitPairing | null
   savePairing: (p: UnitPairing) => Promise<void>
   clearPairing: () => Promise<void>
-  readPlugins: () => Promise<ExternalPluginSource[]>
-  appVersion: string
   log: (msg: string) => void
 }
 
@@ -83,8 +83,13 @@ export class UnitHost {
           await this.deps.savePairing(pairing)
           this.deps.log(`[unit-host] 已入册为设备 ${pairing.unitId}`)
         }
+        const lanUrl = this.deps.getLanUrl()
         const resp = await fetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/channel`, {
-          headers: { Authorization: `Bearer ${token}`, 'X-Unit-Secret': pairing.secret },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'X-Unit-Secret': pairing.secret,
+            ...(lanUrl ? { 'X-Unit-Lan-Url': lanUrl } : {}),
+          },
           signal: ctrl.signal,
         })
         if (resp.status === 403 || resp.status === 404) {
@@ -148,37 +153,27 @@ export class UnitHost {
     }
   }
 
+  /** v2(B 端渲染):整个信封转发本机 unitWeb —— 页面资产/引擎反代/插件清单一个目标吃全部。
+   *  「loopback + per-boot 内部密钥头」= server 已验 owner 的隧道豁免(见 unitWeb.authed)。 */
   private async handle(env: Envelope, ctrl: AbortController): Promise<void> {
-    // 自服面:/__unit/*(不进引擎;P1 只有插件清单)。
-    if (env.path.startsWith('/__unit/')) {
-      if (env.path.split('?')[0] === '/__unit/plugins' && env.method === 'GET') {
-        const plugins = await this.deps.readPlugins()
-        const payload = { appVersion: this.deps.appVersion, pluginApi: AMADEUS_PLUGIN_API, plugins }
-        await this.respond(env.id, 200, 'application/json', Buffer.from(JSON.stringify(payload)))
-      } else {
-        await this.respond(env.id, 404, 'application/json', Buffer.from(JSON.stringify({ detail: 'unknown unit endpoint' })))
-      }
+    const web = this.deps.getUnitWeb()
+    if (!web.url) {
+      await this.respond(env.id, 503, 'application/json', Buffer.from(JSON.stringify({ detail: '本机互联服务未就绪', code: 'UNIT_WEB_NOT_READY' })))
       return
     }
-    // 引擎面:剥入站身份,盖本机引擎 token。
-    const engine = this.deps.getEngine()
-    if (!engine.url) {
-      await this.respond(env.id, 503, 'application/json', Buffer.from(JSON.stringify({ detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' })))
-      return
-    }
-    const headers: Record<string, string> = { Authorization: `Bearer ${engine.token}` }
+    const headers: Record<string, string> = { 'x-unit-internal': web.internalSecret }
     if (env.ct) headers['Content-Type'] = env.ct
     if (env.accept) headers.Accept = env.accept
     let r: Response
     try {
-      r = await fetch(`${engine.url}${env.path}`, {
+      r = await fetch(`${web.url}${env.path}`, {
         method: env.method,
         headers,
         body: env.body ?? undefined,
         signal: ctrl.signal,
       })
     } catch (e: any) {
-      await this.respond(env.id, 502, 'application/json', Buffer.from(JSON.stringify({ detail: `本机引擎不可达: ${e?.message || e}` })))
+      await this.respond(env.id, 502, 'application/json', Buffer.from(JSON.stringify({ detail: `本机互联服务不可达: ${e?.message || e}` })))
       return
     }
     const ct = r.headers.get('content-type') || ''

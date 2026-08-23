@@ -13,7 +13,8 @@ import { PRODUCT } from './product'
 import { forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
-import { homedir } from 'os'
+import { homedir, hostname, networkInterfaces } from 'os'
+import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
 import { startForsionMcp } from './mcpServer'
 import {
@@ -37,6 +38,7 @@ import { computerUseLiveView } from './computerUse'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
+import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { registerRemoteSync } from './remotesyncIpc'
@@ -293,17 +295,22 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
 
 /** 持久化配置(userData/tangu-desktop-config.json)。 */
 interface TanguStoredConfig {
-  /** managed=自动托管内置后端;external=连接外部 tangu-server;unit=attach 账号名下另一台设备(经 server 隧道)。 */
-  mode: 'managed' | 'external' | 'unit'
+  /** managed=自动托管内置后端;external=连接外部 tangu-server。
+   *  (历史:v1 曾有 mode='unit' attach 远端;v2 换成 B 端渲染后废除,loadConfig 把遗留值迁回 managed。) */
+  mode: 'managed' | 'external'
   backendUrl: string // external 模式
   token: string // external 模式
-  /** mode='unit' 时 attach 的目标设备 id(effectiveConfig 折算成隧道地址)。 */
-  unitId: string
-  /** 「允许其他设备连接本机」:开=本机入册为 Unit 并维持出站通道(unitHost.ts)。 */
+  /** 「允许其他设备连接本机」:开=起 unitWeb(局域网面)+ unitHost(云通道,需登录)。 */
   unitHostEnabled: boolean
-  /** 本机的设备配对凭据(入册时服务端下发;清空=下次开启重新入册)。 */
+  /** 本机在名册里的设备配对凭据(入册时服务端下发;清空=下次开启重新入册)。 */
   unitHostId: string
   unitHostSecret: string
+  /** unitWeb 服务端口(0=未定;首次启动选定后回写,保持稳定便于手输 IP 直连)。 */
+  unitWebPort: number
+  /** 本机安装实例 id(/unit/meta 自证身份,防 DHCP 换主后把别人的 Forsion 当成这台)。 */
+  unitInstanceId: string
+  /** 已配对设备(T1 局域网直连;令牌只存 hash,可在切换器里回收)。 */
+  unitPairedDevices: PairedDevice[]
   modelId: string
   /** 辅助模型 · LLM(后台/特殊 agent 用;落 config.json models.background;缺省=跟随 app 级槽)。 */
   backgroundModelId: string
@@ -379,10 +386,12 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   mode: 'external',
   backendUrl: 'http://localhost:8787',
   token: '',
-  unitId: '',
   unitHostEnabled: false,
   unitHostId: '',
   unitHostSecret: '',
+  unitWebPort: 0,
+  unitInstanceId: '',
+  unitPairedDevices: [],
   modelId: '',
   backgroundModelId: '',
   visionModelId: '',
@@ -443,7 +452,7 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
 // 其余键(cloud/sandbox/workspace/browser/wechat)以 ~/.tangu/config.json 各段为权威,落盘亦写那里。
 const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'mode', 'backendUrl', 'token', 'forsionSyncEnabled', 'forsionLastSyncedAt',
-  'unitId', 'unitHostEnabled', 'unitHostId', 'unitHostSecret', // 设备互联(mode='unit' 目标 + 本机 Unit 配对态)
+  'unitHostEnabled', 'unitHostId', 'unitHostSecret', 'unitWebPort', 'unitInstanceId', 'unitPairedDevices', // 设备互联(本机 Unit 侧状态)
 
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
@@ -518,6 +527,8 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
+  // v1→v2 迁移:mode='unit'(A 渲染器 attach 远端)已废除,遗留值一律迁回 managed,防悬空启动态。
+  if ((merged.mode as unknown) === 'unit') merged.mode = 'managed'
   // 环境变量兜底:TANGU_CLOUD_URL(managed/登录默认)、TANGU_BACKEND_URL(external 外部地址)。
   if (!merged.cloudUrl) {
     merged.cloudUrl = process.env.TANGU_CLOUD_URL || loadTanguCreds().cloudUrl || DEFAULT_CLOUD_URL
@@ -631,13 +642,29 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
   return { running: !!mcpHandle, url: mcpHandle?.url ?? null, token: backend.localSecret() }
 }
 
-// ── Unit host(设备互联,unitHost.ts):「允许其他设备连接本机」开关起停。 ──────────────
+// ── 设备互联(方案 §11,B 端渲染):「允许其他设备连接本机」开关起停两件东西 ──────────────
+//   unitWeb(unitWeb.ts):局域网 web 面(0.0.0.0,无需登录;配对令牌鉴权)——把本机曝成网页。
+//   unitHost(unitHost.ts):server 反向通道(需登录),把隧道请求整包转发给本机 unitWeb。
 let unitHost: UnitHost | null = null
+let unitWeb: UnitWebHandle | null = null
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
+/** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
+let unitTunnelPrefix = ''
 
-/** 按当前配置起停/重建 unit host(开关或 cloudUrl 变化后调;幂等)。 */
+/** 本机第一个非回环 IPv4 → 局域网直连地址;拿不到给 null(名册照常,只是没有直连提示)。 */
+function unitLanUrl(): string | null {
+  if (!unitWeb) return null
+  for (const list of Object.values(networkInterfaces())) {
+    for (const ni of list ?? []) {
+      if (!ni.internal && ni.family === 'IPv4') return `http://${ni.address}:${unitWeb.port}`
+    }
+  }
+  return null
+}
+
+/** 按当前配置起停/重建 unitWeb + unitHost(开关或 cloudUrl 变化后调;幂等)。 */
 async function refreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
   unitHostCloudUrl = stored.cloudUrl
@@ -645,22 +672,76 @@ async function refreshUnitHost(): Promise<void> {
     ? { unitId: stored.unitHostId, secret: stored.unitHostSecret }
     : null
   if (unitHost) { unitHost.stop(); unitHost = null }
+  if (unitWeb) { void unitWeb.close(); unitWeb = null }
   if (!stored.unitHostEnabled) return
-  unitHost = new UnitHost({
-    getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
+  // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
+  let instanceId = stored.unitInstanceId
+  if (!instanceId) {
+    instanceId = randomUUID()
+    await saveConfig({ unitInstanceId: instanceId })
+  }
+  const webDeps = {
     getEngine: () => {
       const st = backend.getStatus()
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
     },
+    confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
+      showMainWindow()
+      const r = await dialog.showMessageBox({
+        type: 'question',
+        title: '设备连接请求',
+        message: `「${info.name}」(${info.ip})请求连接本机 Forsion`,
+        detail: `对方屏幕上显示同一组配对码,核对一致再允许:\n\n配对码:${info.code}\n\n允许后对方可远程使用这台设备的 Forsion(含执行任务)。`,
+        buttons: ['允许', '拒绝'],
+        defaultId: 1,
+        cancelId: 1,
+      })
+      return r.response === 0
+    },
+    pairedDevices: {
+      list: (): PairedDevice[] => unitPairedCache,
+      add: async (d: PairedDevice): Promise<void> => {
+        unitPairedCache = [...unitPairedCache, d]
+        await saveConfig({ unitPairedDevices: unitPairedCache })
+      },
+    },
+    readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
+    meta: { instanceId, name: hostname(), version: app.getVersion() },
+    webDistDir: (): string | null => {
+      const env = process.env.TANGU_UNIT_WEB_DIST
+      if (env && existsSync(env)) return env
+      const bundled = join(process.resourcesPath || '', 'unit-web') // v2.1 捆包落点(本轮可缺席)
+      return existsSync(bundled) ? bundled : null
+    },
+    log: (m: string) => console.log(m),
+  }
+  unitPairedCache = stored.unitPairedDevices || []
+  try {
+    // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
+    const want = stored.unitWebPort || 8791
+    try {
+      unitWeb = await startUnitWeb(webDeps, { port: want })
+    } catch {
+      unitWeb = await startUnitWeb(webDeps, { port: 0 })
+    }
+    if (unitWeb.port !== stored.unitWebPort) await saveConfig({ unitWebPort: unitWeb.port })
+    console.log(`[unit-web] 已启动:${unitLanUrl() ?? `http://127.0.0.1:${unitWeb.port}`}`)
+  } catch (e: any) {
+    console.error('[unit-web] 启动失败:', e?.message || e)
+    return
+  }
+  unitHost = new UnitHost({
+    getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
+    getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+    getLanUrl: () => unitLanUrl(),
     getPairing: () => unitHostPairing,
     savePairing: async (p) => { unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
     clearPairing: async () => { unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
-    readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
-    appVersion: app.getVersion(),
     log: (m) => console.log(m),
   })
   unitHost.start()
 }
+let unitPairedCache: PairedDevice[] = []
 
 /** renderer 视角的有效配置:managed 就绪时 backendUrl/token 来自托管子进程。 */
 async function effectiveConfig(): Promise<
@@ -676,18 +757,10 @@ async function effectiveConfig(): Promise<
   const forsionMcp = forsionMcpStatus()
   // 默认工作区目录折算为有效绝对路径(并确保存在),renderer 用它建「Tangu 默认工作区」会话。
   const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
+  // 内置浏览器给隧道设备页注入 Authorization 的前缀(effectiveConfig 被 boot/配置变更高频调用,借道刷新)。
+  unitTunnelPrefix = `${stored.cloudUrl.replace(/\/+$/, '')}/api/units/`
   if (stored.mode === 'managed' && st.state === 'ready' && st.url) {
     return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
-  }
-  // unit 模式:backendUrl 折算为 server 隧道基址,token 用当前 forsion_token(auth.json 实时读,续期自然生效)。
-  if (stored.mode === 'unit' && stored.unitId) {
-    const base = stored.cloudUrl.replace(/\/+$/, '')
-    return {
-      ...stored,
-      backendUrl: `${base}/api/units/${stored.unitId}/proxy`,
-      token: loadTanguCreds().token || '',
-      backendState: st, homeDir, defaultWorkspaceDir, forsionMcp,
-    }
   }
   return { ...stored, backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
 }
@@ -1170,6 +1243,17 @@ app.whenReady().then(async () => {
         try { new Notification({ title: item.getFilename(), body: '下载完成' }).show() } catch { /* 通知不可用 */ }
       })
     })
+    // 设备互联 T2(方案 §11.2):内置浏览器打开「经 server 隧道的设备页」时,webview 的文档与子资源
+    // 请求无法自带 Bearer —— 在分区层对**当前云端的隧道前缀**注入 Authorization。绝不走 URL query
+    // (隐私铁律);前缀随 effectiveConfig 刷新,其余站点请求原样放行。
+    bs.webRequest.onBeforeSendHeaders((details, cb) => {
+      const h = details.requestHeaders
+      if (unitTunnelPrefix && details.url.startsWith(unitTunnelPrefix)) {
+        const token = loadTanguCreds().token
+        if (token) h.Authorization = `Bearer ${token}`
+      }
+      cb({ requestHeaders: h })
+    })
   } catch (e) {
     console.error('[main] 内置浏览器分区权限策略注册失败:', e)
   }
@@ -1266,8 +1350,19 @@ app.whenReady().then(async () => {
   ipcMain.handle('units:update', (_e, id: string, patch: { name?: string; icon?: string }) =>
     unitsApi('PATCH', `/units/${encodeURIComponent(String(id))}`, { name: patch?.name, icon: patch?.icon }))
   ipcMain.handle('units:remove', (_e, id: string) => unitsApi('DELETE', `/units/${encodeURIComponent(String(id))}`))
-  ipcMain.handle('units:hostStatus', () =>
-    unitHost ? unitHost.status() : { running: false, connected: false, unitId: null, lastError: null })
+  ipcMain.handle('units:hostStatus', () => ({
+    ...(unitHost ? unitHost.status() : { running: false, connected: false, unitId: null, lastError: null }),
+    webPort: unitWeb?.port ?? null,
+    lanUrl: unitLanUrl(),
+  }))
+  // T1 配对设备的回收面(B 侧自己的 UI;无回收的配对不许上线——方案 §11.3)。
+  ipcMain.handle('units:pairedList', async () => (await loadConfig()).unitPairedDevices || [])
+  ipcMain.handle('units:pairedRemove', async (_e, id: string) => {
+    const cur = (await loadConfig()).unitPairedDevices || []
+    unitPairedCache = cur.filter((d) => d.id !== String(id))
+    await saveConfig({ unitPairedDevices: unitPairedCache })
+    return { ok: true }
+  })
 
   // 收件箱:系统通知(点击 → 聚焦窗口 + 回跳 Inbox Space)与 dock 角标。
   ipcMain.handle('inbox:notify', (_e, title: string, body: string) => {

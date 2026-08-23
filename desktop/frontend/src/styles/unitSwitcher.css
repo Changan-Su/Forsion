@@ -75,6 +75,14 @@
 .unitsw-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg-card); transition: transform 0.15s ease; }
 .unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--accent); }
 .unitsw-hosttoggle[data-on] .unitsw-switch::after { transform: translateX(11px); }
-.unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: 10.5px; color: var(--text-faint); }
+.unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: 10.5px; color: var(--text-faint); user-select: text; }
 .unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
 .unitsw-refresh:hover { background: var(--overlay-light); color: var(--text-muted); }
+
+/* 已配对来访设备(T1 回收面) */
+.unitsw-pairedbox { padding: 2px 9px 5px; }
+.unitsw-paired-head { font-size: 10px; color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 0; }
+.unitsw-paired-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.unitsw-paired-name { flex: 1; min-width: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-paired-x { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
+.unitsw-paired-x:hover { background: var(--danger-light); color: var(--danger); }

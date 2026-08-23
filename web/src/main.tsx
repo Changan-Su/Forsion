@@ -10,7 +10,16 @@ import { installCloudCollab } from './amadeus/cloudCollab'
 
 const path = location.pathname
 
-if (path.startsWith('/share/')) {
+if ((window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) {
+  // 设备页(方案 §11.4):unitWeb 出 index 时注入标记。**必须先于 webShim** —— webShim 的
+  // 无 token 路径会 location.replace 跳 Forsion 登录页,设备页(尤其 T1 无账号)绝不能进那条路。
+  // 不挂云端 Amadeus 桥:本页的数据面是对方设备,云库不属于它(本地 vault 面 = v2.1)。
+  void import('./unitShim')
+    .then(async (m) => {
+      if (await m.installUnitShim()) await import('@/main')
+    })
+    .catch((e) => console.error('[unit-page] bootstrap failed:', e))
+} else if (path.startsWith('/share/')) {
   // P3 公开分享 viewer:无鉴权、不加载主应用(轻量独立页)。
   void import('./sharePage')
     .then((m) => m.mountSharePage(decodeURIComponent(path.slice('/share/'.length)).replace(/\/+$/, '')))

@@ -1,25 +1,26 @@
 /**
- * Forsion Unit 切换器(Ribbon head 常驻件,仅真桌面):吸收原「本地 | 云端」胶囊(VaultSideSwitch
- * 桌面分支),推广为列表式 Unit 切换 —— 参考 ChatGPT/Codex 顶部切换器:当前项胶囊 + 展开列表
- * (每行 图标 + 名称 + 描述 + 选中勾),Ribbon 折叠态只显图标。
+ * Forsion Unit 切换器(Ribbon head 常驻件,仅真桌面)。吸收原「本地 | 云端」胶囊(VaultSideSwitch
+ * 桌面分支),列表式切换 —— 参考 ChatGPT/Codex 顶部切换器:当前项胶囊 + 展开列表(图标+名称+描述),
+ * Ribbon 折叠态只显图标。
  *
- * 条目语义(方案 §4.5「三元组塌缩」,勿重开):
- *   本地 / 云端 = 原胶囊语义原样搬家(只切 vault side,引擎不动);
- *   设备 X     = 引擎 + 插件整体 attach 对方(mode='unit' 经 server 隧道);**笔记库暂不跟随**,
- *               行描述里写明(P1.5 远程库接上后摘掉)。
- * 设备行图标可自定义 emoji(右键行 → 输入,落名册 PATCH /units/:id)。
- * 菜单脚部内联「允许其他设备连接本机」开关(B 侧启用入口,P1 不进设置页)。
+ * v2(B 端渲染,方案 §11):
+ *   本地 / 云端 = 原胶囊语义原样搬家(只切 vault side,勾选态跟 vaultSide);
+ *   设备 X     = **打开这台设备曝出来的网页**(server 隧道页,内置浏览器标签承载;
+ *                Authorization 由主进程在浏览器分区对隧道前缀注入);
+ *   通过地址连接… = T1 局域网直连:手输 http://<ip>:<端口>,配对验证在对方页面里走。
+ * 设备行图标可自定义 emoji(右键行);菜单脚部 = 「允许其他设备连接本机」开关 + 本机直连地址 +
+ * 已配对来访设备回收(无回收的配对不许上线)。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Cloud, Laptop, Monitor, RefreshCw, Smartphone } from 'lucide-react'
+import { Check, ChevronDown, Cloud, Globe, Laptop, Monitor, Smartphone, X } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
-import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { notifyApp } from '../stores/notificationStore'
 import { askString } from '../amadeus/components/askString'
+import { openBrowser } from '../builtins'
 import { registerMessages, useI18n } from '../i18n'
-import type { StoredDesktopConfig, UnitInfo } from '../types'
+import type { UnitInfo, UnitPairedDevice } from '../types'
 import '../styles/unitSwitcher.css'
 
 registerMessages({
@@ -27,49 +28,23 @@ registerMessages({
   'unit.cloud': { zh: '云端', en: 'Cloud' },
   'unit.localDesc': { zh: '本机引擎与本地笔记库', en: 'Local engine and vault' },
   'unit.cloudDesc': { zh: '云端笔记库(引擎照旧)', en: 'Cloud vault (engine unchanged)' },
-  'unit.deviceDesc': { zh: '远程引擎与插件(笔记库暂不跟随)', en: 'Remote engine & plugins (vault stays local)' },
+  'unit.deviceDesc': { zh: '打开这台设备的 Forsion(远程页面)', en: "Open this device's Forsion (remote page)" },
   'unit.offline': { zh: '离线', en: 'Offline' },
-  'unit.self': { zh: '本机', en: 'This device' },
   'unit.offlineNote': { zh: '「{name}」不在线:需在那台设备上开着 Forsion 并启用互联', en: '"{name}" is offline — open Forsion on that device with connect enabled' },
-  'unit.attached': { zh: '已切换到「{name}」', en: 'Switched to "{name}"' },
-  'unit.detached': { zh: '已切回本地', en: 'Back to local' },
-  'unit.attachFailed': { zh: '切换失败:{msg}', en: 'Switch failed: {msg}' },
+  'unit.byAddress': { zh: '通过地址连接…', en: 'Connect by address…' },
+  'unit.byAddressDesc': { zh: '同一局域网直连:http://<IP>:<端口>', en: 'Same-LAN direct: http://<ip>:<port>' },
+  'unit.byAddressAsk': { zh: '对方设备的直连地址(在其切换器脚部可见)', en: "The device's direct address (shown in its switcher footer)" },
   'unit.hostToggle': { zh: '允许其他设备连接本机', en: 'Allow other devices to connect' },
   'unit.hostConnected': { zh: '互联通道已连接', en: 'Connect channel online' },
-  'unit.hostStarting': { zh: '通道连接中…', en: 'Channel connecting…' },
+  'unit.hostStarting': { zh: '通道连接中…(需登录 Forsion;局域网直连不受影响)', en: 'Channel connecting… (login required; LAN direct unaffected)' },
+  'unit.lanAddr': { zh: '本机直连地址:{addr}', en: 'Direct address: {addr}' },
+  'unit.paired': { zh: '已配对设备', en: 'Paired devices' },
+  'unit.pairedRemove': { zh: '移除「{name}」的连接权限?', en: 'Revoke access for "{name}"?' },
   'unit.setEmoji': { zh: '设备图标(输入一个 emoji,留空恢复默认)', en: 'Device icon (one emoji; empty = default)' },
   'unit.switcher': { zh: 'Forsion Unit 切换', en: 'Switch Forsion Unit' },
-  'unit.notLoggedIn': { zh: '登录 Forsion 账号后可连接其他设备', en: 'Sign in to connect your other devices' },
+  'unit.notLoggedIn': { zh: '登录 Forsion 账号后可见你的其他设备', en: 'Sign in to see your other devices' },
+  'unit.opened': { zh: '已在新标签页打开「{name}」', en: 'Opened "{name}" in a new tab' },
 })
-
-const PREV_MODE_KEY = 'tangu.unit.prevMode'
-
-/** setConfig 之后的统一收尾:回填 appStore.cfg、接引擎、重载插件面。
- *  插件来源不在这里指定 —— pluginStore.loadExternal 按 desktopConfig 现场派生(冷启动同一条路)。 */
-function applyCfg(c: StoredDesktopConfig): void {
-  useApp.setState({ desktopConfig: c, desktopMode: c.mode, cfg: { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId } })
-  if (c.mode === 'unit') {
-    void useApp.getState().connect({ backendUrl: c.backendUrl, token: c.token, modelId: c.modelId })
-  } else if (c.mode === 'external' && c.token) {
-    // managed 由 onBackendStatus 的 ready 分支自动接管(引擎正在被主进程拉起);external 直接连。
-    void useApp.getState().connect({ backendUrl: c.backendUrl, token: c.token, modelId: c.modelId })
-  }
-  void usePluginStore.getState().reloadExternal()
-}
-
-async function attachUnit(unitId: string): Promise<void> {
-  const cur = await window.tangu!.getConfig()
-  if (cur.mode !== 'unit') { try { localStorage.setItem(PREV_MODE_KEY, cur.mode) } catch { /* ignore */ } }
-  applyCfg(await window.tangu!.setConfig({ mode: 'unit', unitId }))
-}
-
-async function detachToLocal(): Promise<void> {
-  const cur = await window.tangu!.getConfig()
-  if (cur.mode !== 'unit') return
-  let prev: 'managed' | 'external' = 'managed'
-  try { const v = localStorage.getItem(PREV_MODE_KEY); if (v === 'external') prev = 'external' } catch { /* ignore */ }
-  applyCfg(await window.tangu!.setConfig({ mode: prev }))
-}
 
 function deviceIcon(u: UnitInfo, size = 15): React.ReactNode {
   if (u.icon) return <span className="unitsw-emoji" aria-hidden>{u.icon}</span>
@@ -78,31 +53,39 @@ function deviceIcon(u: UnitInfo, size = 15): React.ReactNode {
   return <Laptop size={size} />
 }
 
+/** 设备的隧道页地址:经 server 通用隧道回到该设备的 unitWeb(尾斜杠必须留 —— 页面用相对 base)。 */
+function tunnelPageUrl(cloudUrl: string | undefined, unitId: string): string {
+  return `${(cloudUrl || '').replace(/\/+$/, '')}/api/units/${unitId}/proxy/`
+}
+
 export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactElement {
   const { t } = useI18n()
-  const mode = useApp((s) => s.desktopConfig?.mode)
-  const unitId = useApp((s) => s.desktopConfig?.unitId)
+  const cloudUrl = useApp((s) => s.desktopConfig?.cloudUrl)
+  const hostEnabled = useApp((s) => !!s.desktopConfig?.unitHostEnabled)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const initSide = usePageStore((s) => s.initVaultSide)
   const [open, setOpen] = useState(false)
   const [units, setUnits] = useState<UnitInfo[] | null>(null)
-  const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null } | null>(null)
+  const [host, setHost] = useState<{ running: boolean; connected: boolean; unitId: string | null; lanUrl: string | null } | null>(null)
+  const [paired, setPaired] = useState<UnitPairedDevice[]>([])
   const [busy, setBusy] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
 
   // 原 VaultSideSwitch 桌面分支负责的 vaultSide 初始化,随胶囊迁到这里。
   useEffect(() => { if (window.amadeusSync) void initSide() }, [initSide])
-  // unit 模式冷启动:名册没拉之前胶囊只能显示占位名 —— 主动拉一次,让当前设备的名字/emoji 上位。
-  useEffect(() => { if (mode === 'unit') void refresh() }, [mode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const say = (text: string): void => { notifyApp({ text, event: 'system.unit' }) }
 
   const refresh = async (): Promise<void> => {
-    const [list, hs] = await Promise.all([
+    const [list, hs, pd] = await Promise.all([
       window.tangu?.unitsList?.().catch(() => null) ?? null,
       window.tangu?.unitHostStatus?.().catch(() => null) ?? null,
+      window.tangu?.unitsPairedList?.().catch(() => []) ?? [],
     ])
     setUnits(list?.status === 200 ? (list.json?.units ?? []) : list?.status === 401 ? null : [])
     if (hs) setHost(hs)
+    setPaired(pd || [])
   }
 
   const toggleOpen = (): void => {
@@ -114,38 +97,38 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     setOpen(!open)
   }
 
-  // 当前条目
-  const current: { key: string; name: string; icon: React.ReactNode } = (() => {
-    if (mode === 'unit' && unitId) {
-      const u = units?.find((x) => x.id === unitId)
-      return { key: `unit:${unitId}`, name: u?.name || t('unit.switcher'), icon: u ? deviceIcon(u) : <Laptop size={15} /> }
-    }
-    if (vaultSide === 'cloud') return { key: 'cloud', name: t('unit.cloud'), icon: <Cloud size={15} /> }
-    return { key: 'local', name: t('unit.local'), icon: <Laptop size={15} /> }
-  })()
+  const current: { key: 'local' | 'cloud'; name: string; icon: React.ReactNode } =
+    vaultSide === 'cloud'
+      ? { key: 'cloud', name: t('unit.cloud'), icon: <Cloud size={15} /> }
+      : { key: 'local', name: t('unit.local'), icon: <Laptop size={15} /> }
 
-  const say = (text: string): void => { notifyApp({ text, event: 'system.unit' }) }
   const guard = (fn: () => Promise<void>): void => {
     if (busy) return
     setBusy(true)
-    void fn().catch((e) => say(t('unit.attachFailed', { msg: String((e as Error)?.message || e) }))).finally(() => setBusy(false))
+    void fn().catch((e) => say(String((e as Error)?.message || e))).finally(() => setBusy(false))
   }
 
   const pickLocalSide = (side: 'local' | 'cloud'): void => {
     setOpen(false)
     guard(async () => {
-      if (mode === 'unit') await detachToLocal()
       if (window.amadeusSync && usePageStore.getState().vaultSide !== side) await usePageStore.getState().switchVaultSide(side)
-      if (mode === 'unit') say(t('unit.detached'))
     })
   }
 
-  const pickUnit = (u: UnitInfo): void => {
+  const openUnit = (u: UnitInfo): void => {
     if (!u.online) { say(t('unit.offlineNote', { name: u.name })); return }
     setOpen(false)
-    guard(async () => {
-      await attachUnit(u.id)
-      say(t('unit.attached', { name: u.name }))
+    openBrowser(tunnelPageUrl(cloudUrl, u.id))
+    say(t('unit.opened', { name: u.name }))
+  }
+
+  const openByAddress = (): void => {
+    setOpen(false)
+    void askString(t('unit.byAddressAsk'), 'http://').then((v) => {
+      const raw = v?.trim()
+      if (!raw) return
+      const url = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`
+      openBrowser(url.endsWith('/') ? url : `${url}/`)
     })
   }
 
@@ -162,14 +145,20 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   const toggleHost = (): void => {
     guard(async () => {
       const cur = await window.tangu!.getConfig()
-      await window.tangu!.setConfig({ unitHostEnabled: !cur.unitHostEnabled })
-      // 通道要一两秒才挂上,稍等再刷状态(菜单开着就能看到点亮)。
+      const next = await window.tangu!.setConfig({ unitHostEnabled: !cur.unitHostEnabled })
+      useApp.setState({ desktopConfig: next }) // 开关立刻反映到胶囊脚部(boot 之外没人回填 desktopConfig)
+      // 服务与通道要一两秒才起来,稍等再刷状态(菜单开着就能看到地址与点亮)。
       setTimeout(() => { void refresh() }, 1500)
       void refresh()
     })
   }
 
-  const hostEnabled = useApp((s) => !!s.desktopConfig?.unitHostEnabled)
+  const removePaired = (d: UnitPairedDevice): void => {
+    guard(async () => {
+      await window.tangu?.unitsPairedRemove?.(d.id)
+      void refresh()
+    })
+  }
 
   return (
     <>
@@ -210,8 +199,8 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               {units?.filter((u) => u.id !== host?.unitId).map((u) => (
                 <button
                   key={u.id}
-                  className={`unitsw-row${current.key === `unit:${u.id}` ? ' on' : ''}${u.online ? '' : ' off'}`}
-                  onClick={() => pickUnit(u)}
+                  className={`unitsw-row${u.online ? '' : ' off'}`}
+                  onClick={() => openUnit(u)}
                   onContextMenu={editIcon(u)}
                 >
                   <span className="unitsw-ic">{deviceIcon(u)}</span>
@@ -219,9 +208,15 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                     <span className="unitsw-title">{u.name}{!u.online && <em className="unitsw-off">{t('unit.offline')}</em>}</span>
                     <span className="unitsw-desc">{t('unit.deviceDesc')}</span>
                   </span>
-                  {current.key === `unit:${u.id}` && <Check size={14} className="unitsw-check" />}
                 </button>
               ))}
+              <button className="unitsw-row" onClick={openByAddress}>
+                <span className="unitsw-ic"><Globe size={15} /></span>
+                <span className="unitsw-col">
+                  <span className="unitsw-title">{t('unit.byAddress')}</span>
+                  <span className="unitsw-desc">{t('unit.byAddressDesc')}</span>
+                </span>
+              </button>
             </div>
             <div className="unitsw-foot">
               <button className="unitsw-hosttoggle" onClick={toggleHost} data-on={hostEnabled || undefined}>
@@ -231,8 +226,20 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
               </button>
               {hostEnabled && (
                 <div className="unitsw-foot-hint">
-                  {host?.connected ? t('unit.hostConnected') : t('unit.hostStarting')}
-                  <button className="unitsw-refresh" title="refresh" onClick={() => void refresh()}><RefreshCw size={11} /></button>
+                  {host?.lanUrl ? t('unit.lanAddr', { addr: host.lanUrl }) : host?.connected ? t('unit.hostConnected') : t('unit.hostStarting')}
+                </div>
+              )}
+              {hostEnabled && paired.length > 0 && (
+                <div className="unitsw-pairedbox">
+                  <div className="unitsw-paired-head">{t('unit.paired')}</div>
+                  {paired.map((d) => (
+                    <div key={d.id} className="unitsw-paired-row">
+                      <span className="unitsw-paired-name">{d.name}</span>
+                      <button className="unitsw-paired-x" title={t('unit.pairedRemove', { name: d.name })} onClick={() => removePaired(d)}>
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

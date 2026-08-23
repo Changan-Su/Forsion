@@ -91,7 +91,8 @@ const KNOWN_GATES = {
   'window.tangu?.marketList': '应用市场 ribbon 图标 — 仅桌面',
   'window.tangu?.submitFeedback': '反馈 ribbon 图标 — 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
-  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head)— 仅真桌面:web/mobile 无设备名册 IPC,vault 切换仍走 VaultSideSwitch mobile 分支;P2 计划给 web/mobile 出切换器(方案 §5)',
+  'window.tangu?.unitsList': 'Unit 切换器(Ribbon head)— 仅真桌面:名册/配对回收走桌面 IPC,设备行=打开对方设备页(B 端渲染,方案 §11);web/mobile 无此 IPC,vault 切换仍走 VaultSideSwitch mobile 分支',
+  'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变',
 }
 
 /**

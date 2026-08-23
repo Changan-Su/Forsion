@@ -455,27 +455,34 @@ if (new URLSearchParams(location.search).has('dock')) {
   for (const n of ['A', 'B', 'C', 'D']) mk(`t${n}`, 'top', `Top ${n}`)
   for (const n of ['A', 'B', 'C']) mk(`b${n}`, 'bottom', `Bot ${n}`)
   useRibbonStore.setState({ order: ['tA', 'tB', 'tC', 'tD'], bottomOrder: ['bA', 'bB', 'bC'] })
-  // &unit:Unit 切换器(head 常驻件)上架。stub 最小 host 面(getConfig/setConfig/unitsList/
-  // unitHostStatus)+ amadeusSync 布尔门 —— 这支仪器验切换器的 DOM/开合/两态几何,不验真隧道
-  // (那半在 server 的 unit-hub relay.test.ts)。见 scripts/unit-switcher.check.cjs。
+  // &unit:Unit 切换器(head 常驻件)上架。stub 最小 host 面(getConfig/setConfig/名册/配对/
+  // openExternal 记账)+ amadeusSync 布尔门 —— 这支仪器验切换器的 DOM/开合/两态几何与「设备行 =
+  // 打开对方页面」的 URL 组装,不验真隧道/真配对(那半在 server relay.test.ts 与 electron/unitWeb.test.ts)。
+  // 见 scripts/unit-switcher.check.cjs。
   if (new URLSearchParams(location.search).has('unit')) {
-    const cfg: Record<string, unknown> = { mode: 'managed', unitId: '', unitHostEnabled: false, backendUrl: 'http://localhost:0', token: 't', modelId: '' }
+    const cfg: Record<string, unknown> = { mode: 'managed', unitHostEnabled: false, backendUrl: 'http://localhost:0', token: 't', modelId: '', cloudUrl: 'https://cloud.test' }
     const units = [
-      { id: 'u-mba', name: 'MacBook Air', platform: 'darwin', icon: '🦊', online: true },
-      { id: 'u-pc', name: '书房 PC', platform: 'win32', icon: null, online: false },
+      { id: 'u-mba', name: 'MacBook Air', platform: 'darwin', icon: '🦊', online: true, lanUrl: 'http://192.168.1.20:8791' },
+      { id: 'u-pc', name: '书房 PC', platform: 'win32', icon: null, online: false, lanUrl: null },
     ]
+    const opened: string[] = []
+    ;(window as unknown as { __unitOpened: string[] }).__unitOpened = opened
     const w = window as unknown as { tangu?: Record<string, unknown>; amadeusSync?: unknown }
     w.tangu = {
       ...(w.tangu ?? {}),
       getConfig: async () => ({ ...cfg }),
       setConfig: async (patch: Record<string, unknown>) => Object.assign(cfg, patch),
+      openExternal: async (url: string) => { opened.push(url) }, // openBrowser 在无浏览器视图时的回落口
       unitsList: async () => ({ status: 200, json: { units } }),
       unitsUpdate: async () => ({ status: 200, json: { ok: true } }),
       unitsRemove: async () => ({ status: 200, json: { ok: true } }),
-      unitHostStatus: async () => ({ running: false, connected: false, unitId: null, lastError: null }),
+      unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
+      unitsPairedList: async () => (cfg.unitHostEnabled ? [{ id: 'p1', name: '客厅 iPad', createdAt: 1 }] : []),
+      unitsPairedRemove: async () => ({ ok: true }),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void import('./components/UnitSwitcher').then(({ UnitSwitcher }) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher }, { useApp }]) => {
+      useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
     })
   }

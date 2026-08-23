@@ -1,0 +1,104 @@
+/**
+ * unitShim —— 「设备页」垫片(方案 §11.4):本页面 = 某台设备(unitWeb)曝出来的 Forsion。
+ *
+ * 与 webShim 的三点不同:
+ *   1. 不是 Forsion 账号态:局域网直连(T1)靠**配对令牌**(6 位码双侧比对,unitWeb 发放,
+ *      localStorage 按对方 instanceId 存);server 隧道(T2)由桌面壳在浏览器分区注入
+ *      Authorization,页面自身无需令牌(unit/whoami 探针直接过)。
+ *   2. API 基址是**相对 base**(new URL('.', location.href)):局域网 `http://ip:port/` 与
+ *      隧道子路径 `…/api/units/<id>/proxy/` 同一套写法 —— 构建必须 `--base=./`。
+ *   3. 绝不跳 Forsion 登录页;未配对时页内走配对流(纯 DOM,先于 React 挂载)。
+ */
+
+interface UnitMeta { instanceId: string; name: string; version: string }
+
+const base = (): URL => new URL('.', location.href)
+
+/** 未配对时的页内配对流:请求 → 双侧展示同一 6 位码 → 轮询 → 拿到令牌。取消/失败返回 null。 */
+async function pairFlow(meta: UnitMeta): Promise<string | null> {
+  const root = document.createElement('div')
+  root.setAttribute('style', 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#f7f6f4;font-family:system-ui;z-index:99999')
+  const card = document.createElement('div')
+  card.setAttribute('style', 'max-width:380px;padding:32px;border-radius:16px;background:#fff;box-shadow:0 8px 40px rgba(0,0,0,.08);text-align:center')
+  root.appendChild(card)
+  document.body.appendChild(root)
+  const render = (html: string): void => { card.innerHTML = html }
+  const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+
+  try {
+    for (;;) {
+      render(`<h3 style="margin:0 0 8px">连接「${esc(meta.name)}」</h3><p style="color:#777;font-size:13px">正在请求配对…</p>`)
+      let req: { requestId?: string; code?: string } | null = null
+      try {
+        const r = await fetch(new URL('unit/pair/request', base()), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: '来访设备' }),
+        })
+        if (r.status === 429) {
+          render(`<h3 style="margin:0 0 8px">稍等一下</h3><p style="color:#777;font-size:13px">对方还有一个待确认的配对请求,请稍后重试。</p><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:999px;border:1px solid #ddd;background:#fff;cursor:pointer">重试</button>`)
+          await new Promise<void>((res) => { card.querySelector('#up-retry')?.addEventListener('click', () => res()) })
+          continue
+        }
+        req = await r.json()
+      } catch { /* 网络失败落到下面统一重试 */ }
+      if (!req?.requestId || !req.code) {
+        render(`<h3 style="margin:0 0 8px">连接失败</h3><p style="color:#777;font-size:13px">联系不上对方设备,确认它开着 Forsion 并启用了互联。</p><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:999px;border:1px solid #ddd;background:#fff;cursor:pointer">重试</button>`)
+        await new Promise<void>((res) => { card.querySelector('#up-retry')?.addEventListener('click', () => res()) })
+        continue
+      }
+      render(`<h3 style="margin:0 0 8px">在「${esc(meta.name)}」上确认</h3>
+        <p style="color:#777;font-size:13px">对方屏幕会弹出同一组配对码,核对一致后点「允许」:</p>
+        <div style="font-size:34px;letter-spacing:8px;font-weight:700;margin:16px 0">${esc(req.code)}</div>
+        <p style="color:#aaa;font-size:12px">等待对方确认…(2 分钟内有效)</p>`)
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500))
+        let st: { status?: string; token?: string } = {}
+        try { st = await (await fetch(new URL(`unit/pair/poll?id=${req.requestId}`, base()))).json() } catch { /* 掉线继续轮询 */ }
+        if (st.status === 'approved' && st.token) return st.token
+        if (st.status === 'denied' || st.status === 'expired') {
+          render(`<h3 style="margin:0 0 8px">${st.status === 'denied' ? '对方拒绝了连接' : '配对超时'}</h3><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:999px;border:1px solid #ddd;background:#fff;cursor:pointer">重新配对</button>`)
+          await new Promise<void>((res) => { card.querySelector('#up-retry')?.addEventListener('click', () => res()) })
+          break
+        }
+      }
+    }
+  } finally {
+    root.remove()
+  }
+}
+
+/** 装载设备页垫片。false = 用户中止(不挂载应用)。 */
+export async function installUnitShim(): Promise<boolean> {
+  const meta = (window as unknown as { __FORSION_UNIT_PAGE__?: UnitMeta }).__FORSION_UNIT_PAGE__
+  if (!meta) return false
+  const tokenKey = `unit_pair_${meta.instanceId}`
+  let token = ''
+  try { token = localStorage.getItem(tokenKey) || '' } catch { /* private mode */ }
+
+  // 探针:隧道来的(桌面壳分区注入,unitHost 加内部密钥)直接 200;局域网未配对 → 401 → 配对流。
+  const probe = await fetch(new URL('unit/whoami', base()), {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  }).catch(() => null)
+  if (!probe || probe.status === 401) {
+    const fresh = await pairFlow(meta)
+    if (!fresh) return false
+    token = fresh
+    try { localStorage.setItem(tokenKey, token) } catch { /* ignore */ }
+  }
+  ;(window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ = token
+
+  const engineBase = new URL('engine', base()).href
+  const cfg = { mode: 'external' as const, backendUrl: engineBase, token, modelId: '', cloudUrl: '', sandbox: 'none' as const }
+  const w = window as unknown as { tangu?: Record<string, unknown> }
+  w.tangu = {
+    /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
+    unitPage: true,
+    platform: undefined,
+    getConfig: async () => ({ ...cfg }),
+    setConfig: async () => ({ ...cfg }), // 设备页不落配置(对方的配置属于对方)
+    authStatus: async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null }),
+  }
+  document.title = `${meta.name} · Forsion`
+  return true
+}

@@ -194,7 +194,9 @@ export function installEngine(): void {
   // Forsion 插件在启动期就装(此前只在 Amadeus/Calendar/聊天输入框挂载时懒引导 → 从 Inbox 之类的 Space
   // 冷启动时插件根本没装):插件视图要尽早进注册表,内嵌 Space 才通得过「视图已注册」闸、旧布局引用
   // 插件视图也才恢复得回来。装完由 installAmadeusPlugins 自己补跑 loadUserSpaces。vault 恢复仍然懒。
-  if (window.amadeus) installAmadeusPlugins()
+  // unit 设备页(B 端渲染)没有 vault 桥(window.amadeus 缺席,本地 vault 面=v2.1)但**必须装宿主**:
+  // 对方设备的插件清单经 unit/plugins 分发,视图/命令类插件不依赖 vault 即可工作(方案 §11.4)。
+  if (window.amadeus || window.tangu?.unitPage) installAmadeusPlugins()
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
   // 上面的同步策略跑在装载之前,若目标是某个用户 Space,那时它还没注册 → 装载完成后补定位。两种补法:
   //  · 固定启动 Space:走正常切换(此时已晚于 onReady,api 就绪),它会存出回退 Space 的布局并还原目标

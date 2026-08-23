@@ -45,8 +45,10 @@ const api = {
   unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
     ipcRenderer.invoke('units:update', id, patch),
   unitsRemove: (id: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:remove', id),
-  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null }> =>
+  unitHostStatus: (): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }> =>
     ipcRenderer.invoke('units:hostStatus'),
+  unitsPairedList: (): Promise<Array<{ id: string; name: string; createdAt: number }>> => ipcRenderer.invoke('units:pairedList'),
+  unitsPairedRemove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('units:pairedRemove', id),
   // ── Forsion 账号 / provider OAuth 登录(与 `tangu login` 同一份凭证)──
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
@@ -302,7 +304,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', // 设备互联依赖 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]

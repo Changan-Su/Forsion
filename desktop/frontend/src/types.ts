@@ -726,11 +726,8 @@ export interface UpdaterStatusInfo {
 
 /** 主进程持久化的完整配置;getConfig 返回时 backendUrl/token 已折算为有效值(managed 就绪=托管子进程的)。 */
 export interface StoredDesktopConfig extends TanguDesktopConfig {
-  /** managed=本机托管引擎;external=外部 tangu-server;unit=attach 账号名下另一台设备(经 server 隧道)。 */
-  mode: 'managed' | 'external' | 'unit'
-  /** mode='unit' 时 attach 的目标设备 id(backendUrl 已被主进程折算为隧道基址)。 */
-  unitId?: string
-  /** 「允许其他设备连接本机」开关(本机作为 Unit 被远程 attach)。 */
+  mode: 'managed' | 'external'
+  /** 「允许其他设备连接本机」开关(起 unitWeb 局域网面 + unitHost 云通道,B 端渲染)。 */
   unitHostEnabled?: boolean
   cloudUrl: string
   sandbox: 'auto' | 'docker' | 'none'
@@ -807,6 +804,15 @@ export interface UnitInfo {
   online: boolean
   createdAt?: string
   lastSeenAt?: string | null
+  /** 设备自报的局域网直连地址(同网段优先直连的候选;不作可达性担保)。 */
+  lanUrl?: string | null
+}
+
+/** 已配对的来访设备(本机 unitWeb 的 T1 局域网配对;令牌只存 hash)。 */
+export interface UnitPairedDevice {
+  id: string
+  name: string
+  createdAt: number
 }
 
 export interface AuthStatusInfo {
@@ -833,6 +839,9 @@ declare global {
       cloudWeb?: boolean
       /** 移动端(Capacitor/Android)标志:由 mobile 垫片注入;Inbox 等据此走设备本地存储实现。 */
       mobile?: boolean
+      /** unit 设备页标志(B 端渲染,unitShim 注入):本页是另一台设备曝出来的 Forsion 面 ——
+       *  插件清单走对方的 unit/plugins,无 vault 桥(本地 vault 面 = v2.1)。 */
+      unitPage?: boolean
       getConfig(): Promise<StoredDesktopConfig>
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -843,7 +852,10 @@ declare global {
       unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
       unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
       unitsRemove?(id: string): Promise<{ status: number; json: any }>
-      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null }>
+      unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>
+      /** 本机已配对的来访设备(T1)与回收。 */
+      unitsPairedList?(): Promise<UnitPairedDevice[]>
+      unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>
