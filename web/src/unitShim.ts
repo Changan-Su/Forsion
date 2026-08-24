@@ -108,14 +108,39 @@ export async function installUnitShim(): Promise<boolean> {
   })
 
   const engineBase = new URL('engine', base()).href
-  const cfg = { mode: 'external' as const, backendUrl: engineBase, token, modelId: '', cloudUrl: '', sandbox: 'none' as const }
+  // 连接键恒为本页值(对方的 mode/backendUrl/token 绝不进来 —— 服务端白名单也不会下发它们)。
+  const cfg = { mode: 'external' as const, backendUrl: engineBase, token, cloudUrl: '', sandbox: 'none' as const }
+  const authHeaders = (): Record<string, string> | undefined =>
+    fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined
+  /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig
+   *  门控的功能靠它长出来 —— 体验跟随对方设置(2026-08-24 拍板);写回走同一张白名单。 */
+  let remotePrefs: Record<string, unknown> = {}
+  const pullConfig = async (): Promise<void> => {
+    const r = await fetch(new URL('unit/config', base()), { headers: authHeaders() })
+    if (r.ok) remotePrefs = ((await r.json()) as { config?: Record<string, unknown> }).config || {}
+  }
+  try { await pullConfig() } catch { /* 首拉失败:偏好按缺省,连接面不受影响 */ }
+  const mergedConfig = (): Record<string, unknown> => ({ modelId: '', ...remotePrefs, ...cfg })
   const w = window as unknown as { tangu?: Record<string, unknown> }
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
     platform: undefined,
-    getConfig: async () => ({ ...cfg }),
-    setConfig: async () => ({ ...cfg }), // 设备页不落配置(对方的配置属于对方)
+    getConfig: async () => {
+      try { await pullConfig() } catch { /* 掉线用上次值 */ }
+      return mergedConfig()
+    },
+    setConfig: async (patch: Record<string, unknown>) => {
+      try {
+        const r = await fetch(new URL('unit/config', base()), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...(authHeaders() || {}) },
+          body: JSON.stringify(patch || {}),
+        })
+        if (r.ok) remotePrefs = ((await r.json()) as { config?: Record<string, unknown> }).config || remotePrefs
+      } catch { remotePrefs = { ...remotePrefs, ...patch } } // 掉线:本地先并,下次 getConfig 对齐
+      return mergedConfig()
+    },
     authStatus: async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null }),
     // Space 配方(只读):loadUserSpaces 按本方法存在性门控 —— 缺了它插件 Space 全不装,
     // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。

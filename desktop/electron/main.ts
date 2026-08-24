@@ -699,6 +699,25 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
   return out
 }
 
+/** 设备页可见的配置白名单(方案口径「完整 Forsion 体验」= UI 偏好跟随本机设置)。
+ *  RW = 设备页可读可写回(纯 UI/体验/笔记偏好,写回无本机副作用);RO = 只读展示。
+ *  ⚠️ default-deny:token/backendUrl/cloudUrl/mode/sandbox/unitHostEnabled/forsionMcp(含 token)
+ *  等连接与本机治理键**读写都绝不透传**;browser 系/mirror/pythonMode 属 managedKeys(写=重启对方后端)只读不写。 */
+const UNIT_CONFIG_RW = [
+  'modelId', 'imageModelId', 'asrModelId', 'visionModelId', 'visionMode', 'backgroundModelId',
+  'agentDeskEnabled', 'summaryOpenIn',
+  'ttsModelId', 'ttsVoice', 'ttsSpeed', 'ttsAutoSpeak', 'asrBackend',
+  'lastApprovalMode', 'lastThinkingLevel',
+  'notesAttachmentMode', 'notesAttachmentFolder', 'notesImportPreview', 'notesDailyFolder',
+  'notesWikiIncludeFiles', 'notesDeleteAssets', 'notesUpgradeV4', 'inboxNotifyEnabled',
+] as const
+const UNIT_CONFIG_RO = ['homeDir', 'defaultWorkspaceDir', 'activityLogEnabled', 'browserSearchEngine'] as const
+function pickUnitConfig(src: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of keys) if (src[k] !== undefined) out[k] = src[k]
+  return out
+}
+
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
  *  串行化(同 ensureChain 的病):四个身份变化点 + config:set 可能连发,并发重建会让第二次
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
@@ -764,6 +783,16 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
     readSpaces: () => readSpacesList(),
+    readConfig: async () => {
+      const c = (await effectiveConfig()) as unknown as Record<string, unknown>
+      return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
+    },
+    writeConfig: async (patch: Record<string, unknown>) => {
+      const p = pickUnitConfig(patch as Record<string, unknown>, UNIT_CONFIG_RW)
+      if (Object.keys(p).length) await saveConfig(p as Partial<TanguStoredConfig>)
+      const c = (await effectiveConfig()) as unknown as Record<string, unknown>
+      return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
+    },
     vault: () => amadeusVaultFace,
     meta: { instanceId, name: hostname(), version: app.getVersion() },
     webDistDir: (): string | null => {

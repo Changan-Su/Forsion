@@ -80,6 +80,8 @@ async function boot(distDir: string | null = null, vaultRoot?: string): Promise<
     pairedDevices: { list: () => paired, add: async (d) => { paired.push(d) } },
     readPlugins: async () => [{ id: 'demo' }],
     readSpaces: async () => [{ slug: 'demo-space', json: '{}', plugin: 'demo' }],
+    readConfig: async () => ({ agentDeskEnabled: true, homeDir: '/home/demo' }),
+    writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: patch.agentDeskEnabled ?? true, homeDir: '/home/demo' }),
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
     webDistDir: () => distDir,
     vault: () => vault,
@@ -172,6 +174,20 @@ describe('unitWeb', () => {
       expect(((await r2.json()) as any).plugins[0].id).toBe('demo')
       // 错的内部密钥不豁免
       expect((await fetch(`${b.base}/unit/plugins`, { headers: { 'x-unit-internal': 'nope' } })).status).toBe(401)
+    } finally { b.close() }
+  })
+
+  it('/unit/config:未配对 401;GET 出白名单子集,PUT 走 writeConfig 往返', async () => {
+    const b = await boot()
+    try {
+      expect((await fetch(`${b.base}/unit/config`)).status).toBe(401)
+      const h = { 'x-unit-internal': b.handle.internalSecret }
+      const g = (await (await fetch(`${b.base}/unit/config`, { headers: h })).json()) as any
+      expect(g.config).toEqual({ agentDeskEnabled: true, homeDir: '/home/demo' })
+      const put = await fetch(`${b.base}/unit/config`, { method: 'PUT', headers: h, body: JSON.stringify({ agentDeskEnabled: false, token: 'EVIL' }) })
+      const j = (await put.json()) as any
+      expect(j.config.agentDeskEnabled).toBe(false)
+      expect(j.config.token).toBeUndefined() // 非白名单键绝不回流
     } finally { b.close() }
   })
 
