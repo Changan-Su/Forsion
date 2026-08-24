@@ -142,6 +142,20 @@ export async function installUnitShim(): Promise<boolean> {
       return mergedConfig()
     },
     authStatus: async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null }),
+    // 直连 provider 元数据(对方已剥 apiKey/baseUrl):模型选择器据此认出直连模型 ——
+    // 缺了它直连模型不进清单,选择器显示「选择模型」(2026-08-24 用户实报)。
+    listProviders: async () => {
+      const r = await fetch(new URL('unit/providers', base()), { headers: authHeaders() })
+      if (!r.ok) throw new Error(`unit providers HTTP ${r.status}`)
+      return ((await r.json()) as { providers?: unknown[] }).providers || []
+    },
+    // 主机文件只读(对方侧 realpath 钳制工作区根∪vault 根):Desk 文件卡/Pin Summary 产物/
+    // 文件预览的数据源 —— 缺了它 desk_present 的文件视图整个空白。契约与桌面 fs:readFile 同形。
+    readHostFile: async (p: string) => {
+      const r = await fetch(new URL(`unit/hostfile?path=${encodeURIComponent(p)}`, base()), { headers: authHeaders() })
+      if (!r.ok) throw new Error(`hostfile HTTP ${r.status}`)
+      return r.json()
+    },
     // Space 配方(只读):loadUserSpaces 按本方法存在性门控 —— 缺了它插件 Space 全不装,
     // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。
     spacesList: async () => {

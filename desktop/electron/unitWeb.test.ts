@@ -81,6 +81,8 @@ async function boot(distDir: string | null = null, vaultRoot?: string): Promise<
     readPlugins: async () => [{ id: 'demo' }],
     readSpaces: async () => [{ slug: 'demo-space', json: '{}', plugin: 'demo' }],
     readConfig: async () => ({ agentDeskEnabled: true, homeDir: '/home/demo' }),
+    readProviders: async () => [{ providerId: 'demo-direct', modelIds: ['demo/m1'] }],
+    readHostFile: async (p: string) => (p === '/ws/ok.md' ? { mimeType: 'text/markdown', content: 'aGk=', size: 2 } : null),
     writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: patch.agentDeskEnabled ?? true, homeDir: '/home/demo' }),
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
     webDistDir: () => distDir,
@@ -174,6 +176,22 @@ describe('unitWeb', () => {
       expect(((await r2.json()) as any).plugins[0].id).toBe('demo')
       // 错的内部密钥不豁免
       expect((await fetch(`${b.base}/unit/plugins`, { headers: { 'x-unit-internal': 'nope' } })).status).toBe(401)
+    } finally { b.close() }
+  })
+
+  it('/unit/providers 与 /unit/hostfile:未配对 401;providers 剥密;hostfile 越界 404', async () => {
+    const b = await boot()
+    try {
+      expect((await fetch(`${b.base}/unit/providers`)).status).toBe(401)
+      const h = { 'x-unit-internal': b.handle.internalSecret }
+      const pv = (await (await fetch(`${b.base}/unit/providers`, { headers: h })).json()) as any
+      expect(pv.providers[0].providerId).toBe('demo-direct')
+      expect(pv.providers[0].apiKey).toBeUndefined()
+      expect(pv.providers[0].baseUrl).toBeUndefined()
+      const ok = await fetch(`${b.base}/unit/hostfile?path=${encodeURIComponent('/ws/ok.md')}`, { headers: h })
+      expect(ok.status).toBe(200)
+      expect(((await ok.json()) as any).content).toBe('aGk=')
+      expect((await fetch(`${b.base}/unit/hostfile?path=${encodeURIComponent('/etc/passwd')}`, { headers: h })).status).toBe(404)
     } finally { b.close() }
   })
 

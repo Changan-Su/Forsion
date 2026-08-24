@@ -795,6 +795,43 @@ async function doRefreshUnitHost(): Promise<void> {
       const c = (await effectiveConfig()) as unknown as Record<string, unknown>
       return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
     },
+    // 直连 provider 元数据(模型选择器认直连模型用):**剥 apiKey/baseUrl** —— 密钥绝不出机,
+    // 设备页只需要清单字段;代价=设备页朗读/生图直连不可用(它们要 key,本就该在对方机器上跑)。
+    readProviders: async () => (await readProvidersFile()).map((p) => ({
+      providerId: p.providerId,
+      modelIds: p.modelIds || [],
+      imageModelIds: p.imageModelIds || [],
+      ttsModelIds: p.ttsModelIds || [],
+      asrModelIds: p.asrModelIds || [],
+      noVisionModelIds: p.noVisionModelIds || [],
+    })),
+    // 主机文件只读面(Desk/文件卡/Pin Summary 产物的数据源):realpath 钳制在工作区根 ∪ vault 根,
+    // default-deny —— 越界/不存在一律 null(unitWeb 统一 404,不泄露存在性)。写/删一概不给(审计 C1)。
+    readHostFile: async (p: string) => {
+      if (!p || typeof p !== 'string') return null
+      let real: string
+      try { real = realpathSync(p) } catch { return null }
+      const stored = await loadConfig()
+      const roots: string[] = []
+      try { roots.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
+      try { const vr = amadeusVaultFace?.root(); if (vr) roots.push(realpathSync(vr)) } catch { /* 无库 */ }
+      // ponytail: posix 路径前缀判断(本项目引擎数据全 posix 惯例);上 win 再补 sep 归一
+      if (!roots.some((r) => real === r || real.startsWith(r + '/'))) return null
+      const st = await stat(real).catch(() => null)
+      if (!st?.isFile()) return null
+      const UNIT_MAX_READ = 50 * 1024 * 1024 // 与 fs:readFile 的预览上限同款
+      const ext = (real.split('.').pop() || '').toLowerCase()
+      const UNIT_MIME: Record<string, string> = {
+        md: 'text/markdown', txt: 'text/plain', html: 'text/html', htm: 'text/html', css: 'text/css',
+        js: 'text/javascript', ts: 'text/plain', json: 'application/json', csv: 'text/csv',
+        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+        pdf: 'application/pdf', mp4: 'video/mp4', mp3: 'audio/mpeg', wav: 'audio/wav',
+      } // ponytail: fs:readFile 的 MIME_BY_EXT 是函数局部,先复制常用子集;要合并时把那张表提到模块级
+      const mimeType = UNIT_MIME[ext] || 'application/octet-stream'
+      if (st.size > UNIT_MAX_READ) return { mimeType, content: '', size: st.size, mtimeMs: st.mtimeMs, tooLarge: true }
+      const buf = await readFile(real)
+      return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
+    },
     vault: () => amadeusVaultFace,
     meta: { instanceId, name: hostname(), version: app.getVersion() },
     webDistDir: (): string | null => {

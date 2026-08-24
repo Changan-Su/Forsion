@@ -1582,9 +1582,13 @@ export const useApp = create<AppState>((set, get) => ({
     let implicitInit: AgentConfig | null = null
     if (!sid) {
       const ws = get().newChatWs
+      // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
+      // 已经 /unit/config 透传)。判成 external 会把新对话全建成云端 sandbox —— host 工具整个消失
+      // (desk_present「当前环境没有该工具」)、直连模型被过滤、药丸显示「选择模型」(2026-08-24 用户实报三症状同根)。
+      const hostCapable = get().desktopMode === 'managed' || !!window.tangu?.unitPage
       const path = ws
         ? (ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null)
-        : (get().desktopMode === 'managed' ? (get().defaultWsDir || get().homeDir || null) : null)
+        : (hostCapable ? (get().defaultWsDir || get().homeDir || null) : null)
       // 云沙箱新会话一律落云端 Project(选择器未选 = 默认 Tangu 项目):文件跨会话共享且 Penzor 可见。
       const cloudProject = path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
       // 模型**当场固化**(记忆兜底也算,同下面的 agentSlug):不传的话引擎按 profile.defaultModelId

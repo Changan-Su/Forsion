@@ -65,6 +65,10 @@ export interface UnitWebDeps {
    *  按 desktopConfig 门控的功能;写回同一张白名单(体验跟随本机设置,双向)。 */
   readConfig: () => Promise<Record<string, unknown>>
   writeConfig: (patch: Record<string, unknown>) => Promise<Record<string, unknown>>
+  /** 直连 provider 元数据(剥 apiKey/baseUrl):模型选择器认出直连模型;密钥绝不下发。 */
+  readProviders: () => Promise<unknown[]>
+  /** 主机文件只读(Desk/文件卡数据源):deps 层 realpath 钳制工作区根∪vault 根;越界/不存在=null。 */
+  readHostFile: (p: string) => Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean } | null>
   meta: { instanceId: string; name: string; version: string }
   /** web 构建目录(TANGU_UNIT_WEB_DIST / 捆包路径);null = 出「未捆构建」提示页。 */
   webDistDir: () => string | null
@@ -327,6 +331,21 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (path === '/unit/spaces' && req.method === 'GET') {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       json(res, 200, { spaces: await deps.readSpaces() })
+      return
+    }
+    // 直连 provider 元数据(剥密):模型选择器数据源。
+    if (path === '/unit/providers' && req.method === 'GET') {
+      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      json(res, 200, { providers: await deps.readProviders() })
+      return
+    }
+    // 主机文件只读(钳制在 deps 层):越界与不存在同样 404,不泄露存在性。
+    if (path === '/unit/hostfile' && req.method === 'GET') {
+      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      const p = String(new URL(url, 'http://x').searchParams.get('path') || '')
+      const f = await deps.readHostFile(p)
+      if (!f) { json(res, 404, { detail: 'not readable' }); return }
+      json(res, 200, f)
       return
     }
     // UI 偏好配置面(白名单子集,读写对称;deps 负责裁剪 —— 这里绝不直接碰 config 全量)。
