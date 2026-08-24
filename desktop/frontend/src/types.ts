@@ -856,6 +856,8 @@ declare global {
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
+      /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。 */
+      unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>

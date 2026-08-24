@@ -479,6 +479,9 @@ if (new URLSearchParams(location.search).has('dock')) {
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
       unitsPairedList: async () => (cfg.unitHostEnabled ? [{ id: 'p1', name: '客厅 iPad', createdAt: 1 }] : []),
       unitsPairedRemove: async () => ({ ok: true }),
+      // LAN 探针桩:MacBook Air 的直连地址可达(自动择路走直连),别的一律探不通。
+      unitsProbeLan: async (lanUrl: string) =>
+        lanUrl === 'http://192.168.1.20:8791' ? { instanceId: 'inst-mba', name: 'MacBook Air' } : null,
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
     void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher }, { useApp }]) => {

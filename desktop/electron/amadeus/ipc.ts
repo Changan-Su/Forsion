@@ -120,10 +120,19 @@ function dbVersion(text: string): string {
   return createHash('sha1').update(text).digest('hex').slice(0, 16)
 }
 
+/** Unit 设备页(unitWeb /vault/*)拿到的本地 vault 面:同一套 handler,HTTP RPC 起源。 */
+export interface VaultFace {
+  call: (channel: string, args: unknown[]) => Promise<unknown>
+  onEvent: (cb: (channel: string, payload?: unknown) => void) => () => void
+  assetAbs: (page: string | null, ref: string) => Promise<string | null>
+  absPath: (rel: string) => string
+}
+
 export function registerIpc(getWindow: () => BrowserWindow | null): {
   getVaultRoot: () => string | null
   restartSync: () => void
   readExternalPlugins: () => Promise<ExternalPluginSource[]>
+  vaultFace: VaultFace
 } {
   const vault = new VaultManager()
   const index = new VaultIndex(vault)
@@ -131,8 +140,59 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   // 文件变更回灌播给**所有**窗口:拖出的 detached 窗里同样有编辑器/画板/日历,
   // 只发主窗 = 那些窗永远显示旧内容(getWindow() 恒为主窗)。
+  // 2026-08-24 起同时扇出给 Unit 设备页的 SSE 订阅(watcher 外部改动、改名引用重写都借此到远端)。
+  const vaultEventSubs = new Set<(channel: string, payload?: unknown) => void>()
+  const emitRemote = (channel: string, payload?: unknown): void => {
+    for (const s of [...vaultEventSubs]) { try { s(channel, payload) } catch { /* 订阅者自理 */ } }
+  }
   const notifyAll = (channel: string, payload?: unknown): void => {
     for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, payload)
+    emitRemote(channel, payload)
+  }
+
+  /**
+   * 写通道 → 回灌事件映射。为什么需要它:savePage 一类的写不广播(本窗自己知道),watcher 又按
+   * 自写账本压掉主进程落盘 —— 设备互联后「另一端」就永远听不到。两个派发口各补一半:
+   *   渲染层 IPC 起源 → 只发 SSE 给远端(本机各窗维持既有静默,不动外部回灌 P0 契约);
+   *   RPC 起源(远端写) → notifyAll(本机窗口回灌 + SSE;远端桥对自己的写做回声丢弃)。
+   */
+  const WRITE_EVENTS: Record<string, (a: unknown[]) => [string, unknown?]> = {
+    [IPC.savePage]: (a) => [IPC.externalChange, a[0]],
+    [IPC.reconcilePage]: (a) => [IPC.externalChange, a[0]],
+    [IPC.setPageFrontmatter]: (a) => [IPC.externalChange, a[0]],
+    [IPC.writeTextFile]: (a) => [IPC.fileChange, a[0]],
+    [IPC.drawingWrite]: (a) => [IPC.fileChange, a[0]],
+    [IPC.saveVaultBytes]: (a) => [IPC.fileChange, a[0]],
+    [IPC.dbWrite]: (a) => [IPC.dbChange, a[0]],
+    [IPC.dbWriteCas]: (a) => [IPC.dbChange, a[0]],
+    [IPC.newPage]: () => [IPC.structureChange],
+    [IPC.deletePage]: () => [IPC.structureChange],
+    [IPC.movePage]: () => [IPC.structureChange],
+    [IPC.renamePage]: () => [IPC.structureChange],
+    [IPC.createFolder]: () => [IPC.structureChange],
+    [IPC.renameFolder]: () => [IPC.structureChange],
+    [IPC.deleteFolder]: () => [IPC.structureChange],
+    [IPC.moveFolder]: () => [IPC.structureChange],
+    [IPC.trashEntry]: () => [IPC.structureChange],
+    [IPC.restoreTrash]: () => [IPC.structureChange],
+    [IPC.deleteTrashEntry]: () => [IPC.structureChange],
+    [IPC.emptyTrash]: () => [IPC.structureChange],
+    [IPC.renamePageFile]: () => [IPC.structureChange],
+    [IPC.renameDbFile]: () => [IPC.structureChange],
+    [IPC.saveAttachment]: () => [IPC.structureChange],
+    [IPC.saveAsset]: () => [IPC.structureChange],
+  }
+
+  // vault 面 handler 统一注册口:落 ipcMain + 进派发表(unitWeb 的 /vault/rpc 走 callVault)。
+  const vaultHandlers = new Map<string, (e: unknown, ...args: any[]) => unknown>()
+  const handle = (channel: string, fn: (e: unknown, ...args: any[]) => unknown): void => {
+    vaultHandlers.set(channel, fn)
+    ipcMain.handle(channel, async (e, ...a) => {
+      const r = await fn(e, ...a)
+      const ev = WRITE_EVENTS[channel]?.(a)
+      if (ev) emitRemote(ev[0], ev[1])
+      return r
+    })
   }
 
   // 云镜像迁移到隐藏目录:必须早于任何引擎创建/启动(整目录 rename,保 shadow 一致)。
@@ -709,14 +769,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return activateRoot(root, false)
   }
 
-  ipcMain.handle(IPC.openVault, async () => {
+  handle(IPC.openVault, async () => {
     const root = await vault.openDialog()
     if (!root) return null
     await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
     return activateRoot(root, false)
   })
 
-  ipcMain.handle(IPC.restoreVault, async () => {
+  handle(IPC.restoreVault, async () => {
     let { lastVault } = await readConfig()
     if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区 + 种子多维表(不再落欢迎页)
     // 云镜像已迁隐藏目录:曾记在旧可见位置的活动根改指新位置(迁移已搬走内容)。
@@ -738,10 +798,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return activateRoot(lastVault, true)
   })
 
-  ipcMain.handle(IPC.listPages, () => vault.listPages())
-  ipcMain.handle(IPC.listFiles, () => vault.listFiles())
+  handle(IPC.listPages, () => vault.listPages())
+  handle(IPC.listFiles, () => vault.listFiles())
 
-  ipcMain.handle(IPC.loadPage, async (_e, pagePath: string) => {
+  handle(IPC.loadPage, async (_e, pagePath: string) => {
     const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso())
     await rememberPage(pagePath)
     return page
@@ -749,20 +809,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   // 只读加载(模板读取等):不写 lastPage,不当成「打开」;文件不存在直接报错——
   // 编译器 loadPage 缺文件会 newPage 落盘,只读语义下不允许悄悄造文件。
-  ipcMain.handle(IPC.readPage, async (_e, pagePath: string) => {
+  handle(IPC.readPage, async (_e, pagePath: string) => {
     const io = vault.pageIO(pagePath)
     if (!(await io.exists(pageFileName(pagePath)))) throw new Error(`note not found: ${pagePath}`)
     return loadPage(io, pagePath, nowIso())
   })
 
-  ipcMain.handle(IPC.newPage, async (_e, pagePath: string) => {
+  handle(IPC.newPage, async (_e, pagePath: string) => {
     const page = await newPage(vault.pageIO(pagePath), pagePath, nowIso())
     await rememberPage(pagePath)
     await index.update(pagePath)
     return page
   })
 
-  ipcMain.handle(
+  handle(
     IPC.savePage,
     async (_e, pagePath: string, manifest: PageManifest, contents: Record<string, string>) => {
       const io = vault.pageIO(pagePath)
@@ -810,7 +870,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return out
   }
 
-  ipcMain.handle(
+  handle(
     IPC.renamePage,
     async (
       _e,
@@ -841,7 +901,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     },
   )
 
-  ipcMain.handle(
+  handle(
     IPC.reconcilePage,
     async (_e, pagePath: string, _prevManifest: PageManifest, _prevContents: Record<string, string>) => {
       // v3 is single-file: an external edit just reloads (the .md is the single source).
@@ -851,20 +911,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     },
   )
 
-  ipcMain.handle(
+  handle(
     IPC.saveAsset,
     (_e, pagePath: string, fileName: string, bytes: Uint8Array) =>
       vault.writeAsset(pagePath, fileName, bytes),
   )
 
-  ipcMain.handle(IPC.saveVaultBytes, async (_e, filePath: string, bytes: Uint8Array) => {
+  handle(IPC.saveVaultBytes, async (_e, filePath: string, bytes: Uint8Array) => {
     await vault.writeVaultBytes(filePath, bytes)
     logActivity('file.save', { f: filePath })
   })
 
-  ipcMain.handle(IPC.readVaultBytes, (_e, filePath: string) => vault.readVaultBytes(filePath))
+  handle(IPC.readVaultBytes, (_e, filePath: string) => vault.readVaultBytes(filePath))
 
-  ipcMain.handle(
+  handle(
     IPC.saveAttachment,
     async (_e, pagePath: string, fileName: string, bytes: Uint8Array, opts: { mode: 'attachments' | 'same' | 'vault'; folder: string }) => {
       const r = await vault.writeAttachment(pagePath, fileName, bytes, opts)
@@ -874,21 +934,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     },
   )
 
-  ipcMain.handle(IPC.openAttachment, async (_e, pagePath: string, ref: string) => {
+  handle(IPC.openAttachment, async (_e, pagePath: string, ref: string) => {
     const abs = await vault.resolveAttachment(pagePath, ref)
     if (abs) await shell.openPath(abs)
   })
 
   // 树/侧栏点开:路径已知且精确 → 直接钳制解析,不走 markdown ref 的 decode/basename 兜底
   // (否则根级同名文件会开错、含字面 %xx 的文件名会被解码到不存在的路径)。
-  ipcMain.handle(IPC.openVaultFile, async (_e, vaultRel: string) => {
+  handle(IPC.openVaultFile, async (_e, vaultRel: string) => {
     const err = await shell.openPath(vault.absPath(vaultRel))
     if (err) throw new Error(err)
   })
 
   // 导出 PDF:渲染端已把编辑器克隆挂到 #amx-print-root,@media print 只呈现它(见 amadeus-host.css);
   // printToPDF 走打印媒体查询,同文档内 amadeus-asset://、KaTeX 字体全部可用,无需隐藏窗口二次渲染。
-  ipcMain.handle(IPC.exportPdf, async (_e, defaultName: string) => {
+  handle(IPC.exportPdf, async (_e, defaultName: string) => {
     const win = getWindow()
     if (!win) return null
     const safe = (defaultName || 'note').replace(/[\\/:*?"<>|]/g, ' ').trim() || 'note'
@@ -904,7 +964,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   })
 
   // Database(.db JSON):read 按 ref 解析(与附件同一 basename 语义),write 按 read 返回的精确相对路径。
-  ipcMain.handle(IPC.dbRead, async (_e, pagePath: string, ref: string): Promise<DbReadResult> => {
+  handle(IPC.dbRead, async (_e, pagePath: string, ref: string): Promise<DbReadResult> => {
     const abs = await vault.resolveAttachment(pagePath, ref)
     if (!abs) return { status: 'missing' }
     const root = vault.getRoot()
@@ -922,7 +982,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       : { status: 'corrupt', path: rel, message: r.error }
   })
 
-  ipcMain.handle(IPC.dbWrite, async (_e, dbPath: string, data: unknown) => {
+  handle(IPC.dbWrite, async (_e, dbPath: string, data: unknown) => {
     const parsed = dbFileSchema.parse(data) // 防御性校验:坏数据拒写,绝不落半截文件
     await vault.writeTextFile(dbPath, serializeDb(parsed))
   })
@@ -934,7 +994,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 「读→比对→写」这三步**在本进程内**是原子的(单线程,中间没有 await 让给别的 handler),
   // 但引擎是另一个进程 —— 它完全可以插在比对与写之间。所以整段再裹一层跨进程锁,
   // 与引擎 `mutateDb` 用的是同一个锁文件(见 dbLock.ts 里的路径约定)。
-  ipcMain.handle(IPC.dbWriteCas, async (_e, dbPath: string, data: unknown, baseVersion: string) => {
+  handle(IPC.dbWriteCas, async (_e, dbPath: string, data: unknown, baseVersion: string) => {
     const parsed = dbFileSchema.parse(data)
     try {
       return await withDbLock(vault.absPath(dbPath), async () => {
@@ -958,7 +1018,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   // Excalidraw 画板(`.excalidraw.md`,Obsidian 插件同款格式;裸 `.excalidraw` 也认)。
   // 只搬字节:解析/序列化是纯函数,在渲染端与编辑器同侧(见 shared/amadeus/excalidraw)。
-  ipcMain.handle(IPC.drawingRead, async (_e, pagePath: string, ref: string): Promise<DrawingReadResult> => {
+  handle(IPC.drawingRead, async (_e, pagePath: string, ref: string): Promise<DrawingReadResult> => {
     // Obsidian 链接省略 .md:`![[Foo.excalidraw]]` 实指 `Foo.excalidraw.md` → 原样先试,落空再补 .md。
     const abs =
       (await vault.resolveAttachment(pagePath, ref)) ?? (await vault.resolveAttachment(pagePath, `${ref}.md`))
@@ -973,13 +1033,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   // 必须走 writeTextFile 而非 saveVaultBytes:后者不记自写账本,而 .excalidraw.md 命中 watcher 的
   // `.md` 分支 → 每次自动保存都会被当成外部改动回弹。
-  ipcMain.handle(IPC.drawingWrite, async (_e, drawingPath: string, source: string) => {
+  handle(IPC.drawingWrite, async (_e, drawingPath: string, source: string) => {
     await vault.writeTextFile(drawingPath, source)
   })
 
   // 通用 vault 文本读写(插件文件类型:ctx.app.readFile/writeFile)。读越界即 null;
   // 写同 drawingWrite 走 writeTextFile(记自写账本,插件保存不被 watcher 当外部改动回弹)。
-  ipcMain.handle(IPC.readTextFile, async (_e, filePath: string): Promise<string | null> => {
+  handle(IPC.readTextFile, async (_e, filePath: string): Promise<string | null> => {
     if (!vault.getRoot()) return null
     try {
       return await fs.readFile(vault.absPath(filePath), 'utf8')
@@ -987,12 +1047,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       return null
     }
   })
-  ipcMain.handle(IPC.writeTextFile, async (_e, filePath: string, text: string) => {
+  handle(IPC.writeTextFile, async (_e, filePath: string, text: string) => {
     await vault.writeTextFile(filePath, text)
   })
 
   // 「笔记视图」(Bases):行 = 目标文件夹直属笔记,frontmatter 是唯一真源。
-  ipcMain.handle(IPC.listPageProps, async (_e, folder: string): Promise<PageProps[]> => {
+  handle(IPC.listPageProps, async (_e, folder: string): Promise<PageProps[]> => {
     if (!vault.getRoot()) return []
     const prefix = folder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
     const inFolder = (await vault.listPages()).filter((p) => {
@@ -1013,7 +1073,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return out
   })
 
-  ipcMain.handle(IPC.setPageFrontmatter, async (_e, pagePath: string, patch: Record<string, unknown>) => {
+  handle(IPC.setPageFrontmatter, async (_e, pagePath: string, patch: Record<string, unknown>) => {
     let raw: string
     try {
       raw = await fs.readFile(vault.absPath(pagePath), 'utf8')
@@ -1024,7 +1084,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     await index.update(pagePath)
   })
 
-  ipcMain.handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {
+  handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {
     const dir = path.dirname(oldPath)
     let base = newBaseName.trim().replace(/[\\/]/g, '')
     if (!base) throw new Error('笔记名不能为空')
@@ -1040,7 +1100,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return newPath
   })
 
-  ipcMain.handle(IPC.renameDbFile, async (_e, oldPath: string, newBaseName: string): Promise<{ newPath: string; rewrittenPages: string[] }> => {
+  handle(IPC.renameDbFile, async (_e, oldPath: string, newBaseName: string): Promise<{ newPath: string; rewrittenPages: string[] }> => {
     const norm = (s: string): string => s.replace(/\\/g, '/')
     const oldRel = norm(oldPath)
     let base = newBaseName.trim().replace(/[\\/]/g, '')
@@ -1078,29 +1138,29 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return { newPath, rewrittenPages }
   })
 
-  ipcMain.handle(IPC.search, (_e, query: string) => index.search(query))
-  ipcMain.handle(IPC.backlinks, (_e, pagePath: string) => index.backlinks(pagePath))
-  ipcMain.handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
-  ipcMain.handle(IPC.reindex, () => index.build())
-  ipcMain.handle(IPC.listTags, () => index.listTags())
-  ipcMain.handle(IPC.pagesByTag, (_e, tag: string) => index.pagesByTag(tag))
+  handle(IPC.search, (_e, query: string) => index.search(query))
+  handle(IPC.backlinks, (_e, pagePath: string) => index.backlinks(pagePath))
+  handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
+  handle(IPC.reindex, () => index.build())
+  handle(IPC.listTags, () => index.listTags())
+  handle(IPC.pagesByTag, (_e, tag: string) => index.pagesByTag(tag))
 
-  ipcMain.handle(IPC.listFolders, () => vault.listFolders())
+  handle(IPC.listFolders, () => vault.listFolders())
 
-  ipcMain.handle(IPC.resolveEmbed, (_e, target: string) => {
+  handle(IPC.resolveEmbed, (_e, target: string) => {
     // The inline index already holds each block's content + owning note.
     const hit = index.resolveBlock(target)
     return hit ? { owner: hit.path, content: hit.content, type: hit.type } : null
   })
 
-  ipcMain.handle(IPC.blockBacklinks, (_e, target: string) => index.blockBacklinks(target))
+  handle(IPC.blockBacklinks, (_e, target: string) => index.blockBacklinks(target))
 
-  ipcMain.handle(IPC.deletePage, async (_e, pagePath: string) => {
+  handle(IPC.deletePage, async (_e, pagePath: string) => {
     await vault.removeEntry(pagePath) // v3: a note is a single .md
     index.remove(pagePath)
   })
 
-  ipcMain.handle(IPC.movePage, async (_e, pagePath: string, destFolder: string) => {
+  handle(IPC.movePage, async (_e, pagePath: string, destFolder: string) => {
     const fileName = pageFileName(pagePath)
     const dstRel = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
     const newPath = dstRel ? `${dstRel}/${fileName}` : fileName
@@ -1118,7 +1178,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return newPath
   })
 
-  ipcMain.handle(IPC.createFolder, async (_e, parentFolder: string, name: string) => {
+  handle(IPC.createFolder, async (_e, parentFolder: string, name: string) => {
     const clean = name.trim().replace(/[\\/]/g, '')
     if (!clean) throw new Error('文件夹名不能为空')
     const parent = parentFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
@@ -1128,7 +1188,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return rel
   })
 
-  ipcMain.handle(IPC.renameFolder, async (_e, folderPath: string, newName: string) => {
+  handle(IPC.renameFolder, async (_e, folderPath: string, newName: string) => {
     const clean = newName.trim().replace(/[\\/]/g, '')
     if (!clean) throw new Error('文件夹名不能为空')
     const parentDir = path.dirname(folderPath)
@@ -1143,12 +1203,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return newPath
   })
 
-  ipcMain.handle(IPC.deleteFolder, async (_e, folderPath: string) => {
+  handle(IPC.deleteFolder, async (_e, folderPath: string) => {
     await vault.removeEntry(folderPath)
     await index.build()
   })
 
-  ipcMain.handle(IPC.moveFolder, async (_e, folderPath: string, destFolder: string) => {
+  handle(IPC.moveFolder, async (_e, folderPath: string, destFolder: string) => {
     const src = folderPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
     const name = src.split('/').pop()
     if (!name) throw new Error('文件夹路径不能为空')
@@ -1165,21 +1225,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   })
 
   // ── 回收站:移入/列出/恢复/彻底删/清空(.trash 点目录对扫描天然隐身,动索引的只有移入与恢复) ──
-  ipcMain.handle(IPC.trashEntry, async (_e, rel: string) => {
+  handle(IPC.trashEntry, async (_e, rel: string) => {
     await vault.trashEntry(rel)
     await index.build()
   })
-  ipcMain.handle(IPC.listTrash, async () => vault.listTrash())
-  ipcMain.handle(IPC.restoreTrash, async (_e, name: string) => {
+  handle(IPC.listTrash, async () => vault.listTrash())
+  handle(IPC.restoreTrash, async (_e, name: string) => {
     const restored = await vault.restoreTrash(name)
     await index.build()
     return restored
   })
-  ipcMain.handle(IPC.deleteTrashEntry, async (_e, name: string) => vault.deleteTrashEntry(name))
-  ipcMain.handle(IPC.emptyTrash, async () => vault.emptyTrash())
-  ipcMain.handle(IPC.pageIcons, () => index.pageIcons())
-  ipcMain.handle(IPC.fetchLinkMeta, (_e, url: string) => fetchLinkMeta(url))
-  ipcMain.handle(IPC.searchImages, (_e, q: string) => searchImages(q))
+  handle(IPC.deleteTrashEntry, async (_e, name: string) => vault.deleteTrashEntry(name))
+  handle(IPC.emptyTrash, async () => vault.emptyTrash())
+  handle(IPC.pageIcons, () => index.pageIcons())
+  handle(IPC.fetchLinkMeta, (_e, url: string) => fetchLinkMeta(url))
+  handle(IPC.searchImages, (_e, q: string) => searchImages(q))
 
   // Forsion(UI)插件单一目录(market type='amadeus-plugin' 装到同目录)。vault 级装载已砍——
   // Amadeus 只是一个 Space,插件属于 Forsion 桌面本体,不属于某个 vault。
@@ -1365,9 +1425,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     vault.setPluginFileExtensions(collectPluginExts())
     return out
   }
-  ipcMain.handle(IPC.listPlugins, () => readExternalPlugins())
+  handle(IPC.listPlugins, () => readExternalPlugins())
 
-  ipcMain.handle(IPC.openPluginsFolder, async () => {
+  handle(IPC.openPluginsFolder, async () => {
     const dir = globalPluginsDir()
     await fs.mkdir(dir, { recursive: true })
     await shell.openPath(dir)
@@ -1383,7 +1443,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       ? path.join(forsionHomeDir(), 'plugins-data', `${id}.json`)
       : null
 
-  ipcMain.handle(IPC.pluginDataRead, async (_e, id: string): Promise<string | null> => {
+  handle(IPC.pluginDataRead, async (_e, id: string): Promise<string | null> => {
     const f = pluginDataFile(id)
     if (!f) return null
     try {
@@ -1393,7 +1453,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     }
   })
 
-  ipcMain.handle(IPC.pluginDataWrite, async (_e, id: string, text: string): Promise<void> => {
+  handle(IPC.pluginDataWrite, async (_e, id: string, text: string): Promise<void> => {
     const f = pluginDataFile(id)
     if (!f) throw new Error('非法插件 id')
     await fs.mkdir(path.dirname(f), { recursive: true })
@@ -1403,14 +1463,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     await fs.rename(tmp, f)
   })
 
-  ipcMain.handle(IPC.revealInFileManager, async (_e, targetPath: string) => {
+  handle(IPC.revealInFileManager, async (_e, targetPath: string) => {
     // Clamp to the vault, then select the item in the OS file manager. showItemInFolder
     // opens the parent and highlights the entry — works for both files and folders.
     const abs = vault.absPath(targetPath)
     shell.showItemInFolder(abs)
   })
 
-  ipcMain.handle(IPC.scaffoldPlugin, async () => {
+  handle(IPC.scaffoldPlugin, async () => {
     const pdir = path.join(globalPluginsDir(), 'hello-amadeus')
     await fs.mkdir(pdir, { recursive: true })
     await fs.writeFile(path.join(pdir, 'manifest.json'), SAMPLE_MANIFEST, 'utf8')
@@ -1420,7 +1480,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  ipcMain.handle(IPC.uninstallPlugin, async (_e, id: string) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('非法的插件标识')
     const root = globalPluginsDir()
     let target: string | null = null
@@ -1464,5 +1524,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
     restartSync: () => { restartAllSync() },
     readExternalPlugins,
+    // Unit 设备页的本地 vault 面(unitWeb /vault/*):白名单在 unitWeb.ts(default-deny),这里只管派发。
+    vaultFace: {
+      call: async (channel, args) => {
+        const fn = vaultHandlers.get(channel)
+        if (!fn) throw new Error(`unknown vault channel: ${channel}`)
+        const r = await fn(null, ...args)
+        // 远端写 → 本机窗口回灌 + SSE(远端桥回声丢弃自己的写);映射见 WRITE_EVENTS 注释。
+        const ev = WRITE_EVENTS[channel]?.(args)
+        if (ev) notifyAll(ev[0], ev[1])
+        return r
+      },
+      onEvent: (cb) => { vaultEventSubs.add(cb); return () => { vaultEventSubs.delete(cb) } },
+      assetAbs: (page, ref) => vault.resolveAttachment(page ?? '', ref),
+      absPath: (rel) => vault.absPath(rel),
+    },
   }
 }

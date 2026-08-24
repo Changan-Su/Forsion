@@ -14,7 +14,9 @@ import os from 'node:os'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { chromium } from 'playwright-core'
+import { IPC } from '../shared/amadeus/ipc'
 import { startUnitWeb, type PairedDevice } from '../electron/unitWeb'
+import type { VaultFace } from '../electron/amadeus/ipc'
 
 const DIST = path.resolve(import.meta.dirname, '../unit-web-dist')
 const SHOT_DIR = process.env.UNITSW_SHOT_DIR || '/tmp'
@@ -69,6 +71,32 @@ async function main(): Promise<void> {
   const paired: PairedDevice[] = []
   let pluginsServed = 0
   let pairCode = ''
+  // 假 vault 面:内存页表(loadPage/savePage 真往返走「真桥→RPC→白名单→派发」全链,只有落盘是假的)。
+  const pages = new Map<string, { manifest: unknown; contents: Record<string, string> }>()
+  pages.set('E2E笔记.md', { manifest: { blocks: [] }, contents: { main: '# 来自 B 的笔记\n\n中文字节数一致性 ✓' } })
+  const vaultSubs = new Set<(ch: string, payload?: unknown) => void>()
+  const vaultFace: VaultFace = {
+    call: async (ch, args) => {
+      if (ch === IPC.restoreVault) return { root: '/e2e-vault', pages: [...pages.keys()], folders: [], lastPage: 'E2E笔记.md' }
+      if (ch === IPC.listPages) return [...pages.keys()]
+      if (ch === IPC.listFiles) return []
+      if (ch === IPC.listFolders) return []
+      if (ch === IPC.pageIcons) return {}
+      if (ch === IPC.loadPage || ch === IPC.readPage) {
+        const p = pages.get(String(args[0]))
+        if (!p) throw new Error(`note not found: ${args[0]}`)
+        return { ...p }
+      }
+      if (ch === IPC.savePage) {
+        pages.set(String(args[0]), { manifest: args[1], contents: args[2] as Record<string, string> })
+        return undefined
+      }
+      return null
+    },
+    onEvent: (cb) => { vaultSubs.add(cb); return () => { vaultSubs.delete(cb) } },
+    assetAbs: async () => null,
+    absPath: (rel) => `/e2e-vault/${rel}`,
+  }
   const handle = await startUnitWeb({
     getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN' }),
     confirmPair: async (info) => { pairCode = info.code; return true }, // B 侧自动点「允许」
@@ -79,6 +107,7 @@ async function main(): Promise<void> {
     },
     meta: { instanceId: 'e2e-inst', name: 'E2E 测试机', version: '9.9.9' },
     webDistDir: () => DIST,
+    vault: () => vaultFace,
     log: (m) => console.log(m),
   }, { port: 0, bindHost: '127.0.0.1' })
   const base = `http://127.0.0.1:${handle.port}`
@@ -115,10 +144,38 @@ async function main(): Promise<void> {
     const stamped = engine.seen.every((s) => s.auth === 'Bearer ENGINE_TOKEN')
     check('引擎调用到达且全部盖引擎 token', engine.seen.length > 0 && stamped, `hits=${engine.seen.length}`)
 
+    // 6 本地 vault 面:真页面里经真桥(window.amadeus → RPC → 白名单 → 派发)读写 B 的笔记
+    const vaultRt = await page.evaluate(async () => {
+      const am = (window as any).amadeus
+      const listed: string[] = await am.listPages()
+      const loaded = await am.loadPage('E2E笔记.md')
+      await am.savePage('E2E笔记.md', { blocks: [] }, { main: '# A 改写的\n\n远程保存 ✓' })
+      const after = await am.loadPage('E2E笔记.md')
+      return { listed, firstMain: loaded?.contents?.main ?? '', afterMain: after?.contents?.main ?? '' }
+    })
+    check('vault 面:listPages 看到 B 的笔记', vaultRt.listed.includes('E2E笔记.md'))
+    check('vault 面:loadPage 中文内容无损', vaultRt.firstMain.includes('中文字节数一致性 ✓'))
+    check('vault 面:savePage→loadPage 真往返', vaultRt.afterMain.includes('远程保存 ✓'))
+
+    // 7 B 侧改动经 SSE 回灌到页面(非自写路径,不落回声丢弃)
+    await page.evaluate(() => {
+      ;(window as any).__evGot = []
+      ;(window as any).amadeus.onExternalChange((p: string) => { (window as any).__evGot.push(p) })
+    })
+    for (let i = 0; i < 30; i++) {
+      // SSE 在资源令牌到手后才建连,连上前的 emit 会丢:重复发直到页面收到
+      for (const s of vaultSubs) s(IPC.externalChange, 'B侧改动.md')
+      const got = await page.evaluate(() => ((window as any).__evGot as string[]).includes('B侧改动.md'))
+      if (got) break
+      await page.waitForTimeout(500)
+    }
+    const evGot = await page.evaluate(() => ((window as any).__evGot as string[]).includes('B侧改动.md'))
+    check('vault 面:B 侧改动经 SSE 到达页面', evGot)
+
     await page.waitForTimeout(1200)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-page-booted.png') })
 
-    // 6 刷新免配对直进(令牌按 instanceId 落 localStorage)
+    // 8 刷新免配对直进(令牌按 instanceId 落 localStorage)
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.rb', { timeout: 45000 })
     const askedAgain = await page.evaluate(() => document.body.textContent?.includes('配对码') ?? false)

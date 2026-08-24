@@ -9,6 +9,14 @@ const id = process.env.FORSION_PRODUCT || 'forsion'
 const product = JSON.parse(readFileSync(join(__dirname, 'products', `${id}.json`), 'utf8'))
 if (product.id !== id) throw new Error(`products/${id}.json 的 id 与文件名不一致`)
 
+// 设备互联的「设备页」web 构建(unitWeb 静态壳):agent 变体必捆。缺产物直接失败而不是静默跳过 ——
+// 装机版出「本机未捆构建」提示页是死路(用户没有仓库脚本可跑)。dist/pack 链已前置 build:unitweb;
+// 其他入口(手敲 electron-builder)由这里兜底。
+const { existsSync } = require('fs')
+if (product.agentBackend && !existsSync(join(__dirname, 'unit-web-dist', 'index.html'))) {
+  throw new Error('缺 unit-web-dist(设备页 web 构建):先跑 node scripts/build-unit-web.mjs')
+}
+
 module.exports = {
   appId: product.appId,
   productName: product.productName,
@@ -77,6 +85,8 @@ module.exports = {
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
           { from: 'build/python', to: 'python' },
           { from: 'build/node', to: 'node' },
+          // 设备页 web 构建(unitWeb 静态壳;webDistDir 读 resourcesPath/unit-web)
+          { from: 'unit-web-dist', to: 'unit-web' },
         ]
       : []),
   ],

@@ -29,6 +29,10 @@ registerMessages({
   'unit.localDesc': { zh: '本机引擎与本地笔记库', en: 'Local engine and vault' },
   'unit.cloudDesc': { zh: '云端笔记库(引擎照旧)', en: 'Cloud vault (engine unchanged)' },
   'unit.deviceDesc': { zh: '打开这台设备的 Forsion(远程页面)', en: "Open this device's Forsion (remote page)" },
+  'unit.deviceLanDesc': { zh: '同一局域网:直连打开(更快)', en: 'Same LAN: opens via direct connection (faster)' },
+  'unit.menuEditIcon': { zh: '自定义图标(emoji)', en: 'Set icon (emoji)' },
+  'unit.menuViaTunnel': { zh: '经云端中转打开', en: 'Open via cloud relay' },
+  'unit.menuInBrowser': { zh: '在系统浏览器打开', en: 'Open in system browser' },
   'unit.offline': { zh: '离线', en: 'Offline' },
   'unit.offlineNote': { zh: '「{name}」不在线:需在那台设备上开着 Forsion 并启用互联', en: '"{name}" is offline — open Forsion on that device with connect enabled' },
   'unit.byAddress': { zh: '通过地址连接…', en: 'Connect by address…' },
@@ -71,6 +75,9 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
   const [busy, setBusy] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null)
+  /** LAN 探针结果(菜单每次展开时重探;true = 该设备的 lanUrl 此刻可达)。 */
+  const [lanOk, setLanOk] = useState<Record<string, boolean>>({})
+  const [ctxMenu, setCtxMenu] = useState<{ u: UnitInfo; x: number; y: number } | null>(null)
 
   // 原 VaultSideSwitch 桌面分支负责的 vaultSide 初始化,随胶囊迁到这里。
   useEffect(() => { if (window.amadeusSync) void initSide() }, [initSide])
@@ -83,9 +90,19 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
       window.tangu?.unitHostStatus?.().catch(() => null) ?? null,
       window.tangu?.unitsPairedList?.().catch(() => []) ?? [],
     ])
-    setUnits(list?.status === 200 ? (list.json?.units ?? []) : list?.status === 401 ? null : [])
+    const us = list?.status === 200 ? (list.json?.units ?? []) : list?.status === 401 ? null : []
+    setUnits(us)
     if (hs) setHost(hs)
     setPaired(pd || [])
+    // LAN 优先自动择路(方案 §11.2):对报了直连地址的设备逐台探(1.2s 封顶,渐进点亮)。
+    // 不看 online:B 未登录时隧道离线但局域网照样可达 —— 探通了行就能点。
+    setLanOk({})
+    for (const u of us ?? []) {
+      if (!u.lanUrl) continue
+      void window.tangu?.unitsProbeLan?.(u.lanUrl)
+        .then((meta) => { if (meta) setLanOk((m) => ({ ...m, [u.id]: true })) })
+        .catch(() => {})
+    }
   }
 
   const toggleOpen = (): void => {
@@ -115,7 +132,15 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     })
   }
 
-  const openUnit = (u: UnitInfo): void => {
+  /** 打开设备页:LAN 探通优先直连,否则走隧道(via 显式指定时不择路 —— 右键「经云端中转」的逃生口)。 */
+  const openUnit = (u: UnitInfo, via?: 'lan' | 'tunnel'): void => {
+    const mode = via ?? (u.lanUrl && lanOk[u.id] ? 'lan' : 'tunnel')
+    if (mode === 'lan' && u.lanUrl) {
+      setOpen(false)
+      openBrowser(u.lanUrl.endsWith('/') ? u.lanUrl : `${u.lanUrl}/`)
+      say(t('unit.opened', { name: u.name }))
+      return
+    }
     if (!u.online) { say(t('unit.offlineNote', { name: u.name })); return }
     setOpen(false)
     openBrowser(tunnelPageUrl(cloudUrl, u.id))
@@ -132,9 +157,14 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
     })
   }
 
-  const editIcon = (u: UnitInfo) => (e: React.MouseEvent): void => {
+  // 设备行右键 → 小菜单:改图标 / 经云端中转(LAN 自动择路的逃生口,对面没人点配对框时用)/
+  // 系统浏览器(server 的 /open 引导页换 cookie 进隧道页,v2.1 浏览器直开 T2)。
+  const openCtxMenu = (u: UnitInfo) => (e: React.MouseEvent): void => {
     e.preventDefault()
     e.stopPropagation()
+    setCtxMenu({ u, x: e.clientX, y: e.clientY })
+  }
+  const editIcon = (u: UnitInfo): void => {
     void askString(t('unit.setEmoji'), u.icon || '').then(async (v) => {
       if (v == null) return
       await window.tangu?.unitsUpdate?.(u.id, { icon: v.trim().slice(0, 8) })
@@ -196,20 +226,24 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 </button>
               )}
               {units === null && <div className="unitsw-empty">{t('unit.notLoggedIn')}</div>}
-              {units?.filter((u) => u.id !== host?.unitId).map((u) => (
-                <button
-                  key={u.id}
-                  className={`unitsw-row${u.online ? '' : ' off'}`}
-                  onClick={() => openUnit(u)}
-                  onContextMenu={editIcon(u)}
-                >
-                  <span className="unitsw-ic">{deviceIcon(u)}</span>
-                  <span className="unitsw-col">
-                    <span className="unitsw-title">{u.name}{!u.online && <em className="unitsw-off">{t('unit.offline')}</em>}</span>
-                    <span className="unitsw-desc">{t('unit.deviceDesc')}</span>
-                  </span>
-                </button>
-              ))}
+              {units?.filter((u) => u.id !== host?.unitId).map((u) => {
+                const lan = !!(u.lanUrl && lanOk[u.id])
+                const reachable = u.online || lan // 隧道离线但 LAN 探通(如 B 未登录)照样能点
+                return (
+                  <button
+                    key={u.id}
+                    className={`unitsw-row${reachable ? '' : ' off'}`}
+                    onClick={() => openUnit(u)}
+                    onContextMenu={openCtxMenu(u)}
+                  >
+                    <span className="unitsw-ic">{deviceIcon(u)}</span>
+                    <span className="unitsw-col">
+                      <span className="unitsw-title">{u.name}{!reachable && <em className="unitsw-off">{t('unit.offline')}</em>}</span>
+                      <span className="unitsw-desc">{lan ? t('unit.deviceLanDesc') : t('unit.deviceDesc')}</span>
+                    </span>
+                  </button>
+                )
+              })}
               <button className="unitsw-row" onClick={openByAddress}>
                 <span className="unitsw-ic"><Globe size={15} /></span>
                 <span className="unitsw-col">
@@ -243,6 +277,30 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 </div>
               )}
             </div>
+          </OverlayAt>
+        </div>
+      )}
+      {ctxMenu && (
+        <div className="unitsw-backdrop" onMouseDown={() => setCtxMenu(null)} onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null) }}>
+          <OverlayAt className="unitsw-menu unitsw-ctx" x={ctxMenu.x} y={ctxMenu.y} onMouseDown={(e) => e.stopPropagation()}>
+            <button className="unitsw-row" onClick={() => { const u = ctxMenu.u; setCtxMenu(null); editIcon(u) }}>
+              <span className="unitsw-col"><span className="unitsw-title">{t('unit.menuEditIcon')}</span></span>
+            </button>
+            <button className="unitsw-row" onClick={() => { const u = ctxMenu.u; setCtxMenu(null); openUnit(u, 'tunnel') }}>
+              <span className="unitsw-col"><span className="unitsw-title">{t('unit.menuViaTunnel')}</span></span>
+            </button>
+            <button
+              className="unitsw-row"
+              onClick={() => {
+                const u = ctxMenu.u
+                setCtxMenu(null)
+                setOpen(false)
+                // server /open 引导页:同源 localStorage 的 forsion_token 换 HttpOnly cookie 再进隧道页。
+                void window.tangu?.openExternal?.(`${(cloudUrl || '').replace(/\/+$/, '')}/api/units/${u.id}/open`)
+              }}
+            >
+              <span className="unitsw-col"><span className="unitsw-title">{t('unit.menuInBrowser')}</span></span>
+            </button>
           </OverlayAt>
         </div>
       )}

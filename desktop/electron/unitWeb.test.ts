@@ -10,7 +10,9 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
-import { startUnitWeb, type PairedDevice, type UnitWebDeps } from './unitWeb'
+import { IPC } from '@amadeus-shared/ipc'
+import type { VaultFace } from './amadeus/ipc'
+import { startUnitWeb, VAULT_RPC_ALLOW, type PairedDevice, type UnitWebDeps } from './unitWeb'
 
 function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Array<{ path: string; auth: string; body: string }>; close(): void }> {
   let release: () => void = () => {}
@@ -44,13 +46,33 @@ interface Boot {
   paired: PairedDevice[]
   approve: (ok: boolean) => void
   engine: Awaited<ReturnType<typeof fakeEngine>>
+  vaultCalls: Array<{ ch: string; args: unknown[] }>
+  emitVault: (ch: string, payload?: unknown) => void
   close: () => void
 }
 
-async function boot(distDir: string | null = null): Promise<Boot> {
+async function boot(distDir: string | null = null, assetFile?: string): Promise<Boot> {
   const engine = await fakeEngine()
   const paired: PairedDevice[] = []
   let approveFn: (ok: boolean) => void = () => {}
+  const vaultCalls: Array<{ ch: string; args: unknown[] }> = []
+  const vaultSubs = new Set<(ch: string, payload?: unknown) => void>()
+  const vault: VaultFace = {
+    call: async (ch, args) => {
+      vaultCalls.push({ ch, args })
+      if (ch === IPC.listPages) return ['甲.md', '乙.md']
+      if (ch === IPC.readVaultBytes) return Buffer.from([1, 2, 254])
+      if (ch === IPC.saveVaultBytes) return undefined
+      if (ch === IPC.deletePage) throw new Error('测试炸点')
+      return null
+    },
+    onEvent: (cb) => { vaultSubs.add(cb); return () => { vaultSubs.delete(cb) } },
+    assetAbs: async (_page, ref) => (ref === 'pic.png' && assetFile ? assetFile : null),
+    absPath: (rel) => {
+      if (rel.includes('..')) throw new Error('escape')
+      return assetFile || `/nonexistent/${rel}`
+    },
+  }
   const deps: UnitWebDeps = {
     getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN' }),
     confirmPair: () => new Promise<boolean>((r) => { approveFn = r }),
@@ -58,10 +80,29 @@ async function boot(distDir: string | null = null): Promise<Boot> {
     readPlugins: async () => [{ id: 'demo' }],
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
     webDistDir: () => distDir,
+    vault: () => vault,
     log: () => {},
   }
   const handle = await startUnitWeb(deps, { port: 0, bindHost: '127.0.0.1' })
-  return { base: `http://127.0.0.1:${handle.port}`, handle, paired, approve: (ok) => approveFn(ok), engine, close: () => { void handle.close(); engine.close() } }
+  return {
+    base: `http://127.0.0.1:${handle.port}`,
+    handle,
+    paired,
+    approve: (ok) => approveFn(ok),
+    engine,
+    vaultCalls,
+    emitVault: (ch, payload) => { for (const s of vaultSubs) s(ch, payload) },
+    close: () => { void handle.close(); engine.close() },
+  }
+}
+
+/** 走完配对流拿一枚可用令牌。 */
+async function pairUp(b: Boot): Promise<string> {
+  const req = await (await fetch(`${b.base}/unit/pair/request`, { method: 'POST', body: '{}' })).json() as any
+  b.approve(true)
+  await tick()
+  const { token } = await (await fetch(`${b.base}/unit/pair/poll?id=${req.requestId}`)).json() as any
+  return token as string
 }
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30))
@@ -172,6 +213,81 @@ describe('unitWeb', () => {
       expect(spa).toContain('shell')
       // 带扩展名才走文件分支(无扩展名的会被 SPA 回退兜成 index,本身无害):穿越必须被拒。
       expect((await fetch(`${b.base}/..%2f..%2fsecret.txt`)).status).toBeGreaterThanOrEqual(400)
+    } finally { b.close() }
+  })
+
+  it('/vault/rpc:未配对 401;白名单 default-deny;字节双向 base64;handler 抛错回 ok:false', async () => {
+    const b = await boot()
+    try {
+      expect((await fetch(`${b.base}/vault/rpc`, { method: 'POST', body: '{}' })).status).toBe(401)
+      const token = await pairUp(b)
+      const call = (ch: string, args: unknown[] = []): Promise<Response> =>
+        fetch(`${b.base}/vault/rpc`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ch, args }),
+        })
+      // 白名单外(桌面 UX 通道)一律拒,handler 根本不被触达
+      for (const denied of [IPC.openVault, IPC.openAttachment, IPC.exportPdf, IPC.revealInFileManager, IPC.uninstallPlugin, 'made:up']) {
+        const r = await call(denied)
+        expect(r.status).toBe(400)
+        expect(((await r.json()) as any).code).toBe('VAULT_CH_DENIED')
+      }
+      expect(b.vaultCalls.length).toBe(0)
+      expect(VAULT_RPC_ALLOW.has(IPC.openVault)).toBe(false)
+      // 正常调用直通 handler
+      const list = await (await call(IPC.listPages)).json() as any
+      expect(list.ok).toBe(true)
+      expect(list.result).toEqual(['甲.md', '乙.md'])
+      // 字节出:Buffer → {__u8}
+      const bytes = await (await call(IPC.readVaultBytes, ['a.bin'])).json() as any
+      expect(Buffer.from(bytes.result.__u8, 'base64')).toEqual(Buffer.from([1, 2, 254]))
+      // 字节入:{__u8} → handler 收到 Buffer
+      await call(IPC.saveVaultBytes, ['b.bin', { __u8: Buffer.from([9, 8]).toString('base64') }])
+      const saved = b.vaultCalls.find((c) => c.ch === IPC.saveVaultBytes)!
+      expect(Buffer.isBuffer(saved.args[1])).toBe(true)
+      expect([...(saved.args[1] as Buffer)]).toEqual([9, 8])
+      // handler 抛错 → HTTP 200 + ok:false(桥按数据分支,不猜异常)
+      const boom = await (await call(IPC.deletePage, ['x.md'])).json() as any
+      expect(boom.ok).toBe(false)
+      expect(boom.error).toContain('测试炸点')
+    } finally { b.close() }
+  })
+
+  it('/vault/asset-token + asset:短时令牌走 ?at=;ref 解析/精确 path/越界;/vault/events SSE 收到回灌', async () => {
+    const dist = await mkdtemp(join(tmpdir(), 'unitweb-asset-'))
+    const pic = join(dist, 'p.png')
+    await writeFile(pic, Buffer.from([137, 80, 78, 71]))
+    const b = await boot(null, pic)
+    try {
+      const token = await pairUp(b)
+      // asset-token 需配对;令牌换资源
+      expect((await fetch(`${b.base}/vault/asset-token`, { method: 'POST' })).status).toBe(401)
+      const at = ((await (await fetch(`${b.base}/vault/asset-token`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })).json()) as any).token as string
+      expect(at).toBeTruthy()
+      // ?at= 过闸拿字节;坏 at 拒;缺 at 但带配对令牌也过(openAttachment 走 window.open 带不了头,兜底给带头的)
+      const img = await fetch(`${b.base}/vault/asset?ref=pic.png&at=${at}`)
+      expect(img.status).toBe(200)
+      expect(img.headers.get('content-type')).toBe('image/png')
+      expect([...Buffer.from(await img.arrayBuffer())]).toEqual([137, 80, 78, 71])
+      expect((await fetch(`${b.base}/vault/asset?ref=pic.png&at=WRONG`)).status).toBe(401)
+      // 解析不到 → 404;精确 path 越界 → 404
+      expect((await fetch(`${b.base}/vault/asset?ref=ghost.png&at=${at}`)).status).toBe(404)
+      expect((await fetch(`${b.base}/vault/asset?path=..%2fsecret&at=${at}`)).status).toBe(404)
+      // SSE:B 侧事件到达页面
+      const es = await fetch(`${b.base}/vault/events?at=${at}`)
+      expect(String(es.headers.get('content-type'))).toContain('text/event-stream')
+      const reader = es.body!.getReader()
+      b.emitVault(IPC.externalChange, '甲.md')
+      let seen = ''
+      const dec = new TextDecoder()
+      while (!seen.includes('page:external-change')) {
+        const { done, value } = await reader.read()
+        expect(done).toBe(false)
+        seen += dec.decode(value, { stream: true })
+      }
+      expect(seen).toContain('甲.md')
+      await reader.cancel()
     } finally { b.close() }
   })
 })

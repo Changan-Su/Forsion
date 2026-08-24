@@ -26,6 +26,9 @@
   gap: 2px;
 }
 .unitsw-row-group { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow-y: auto; }
+/* 设备行右键小菜单:同一浮层语汇,更窄;行内只有标题一行。 */
+.unitsw-ctx { min-width: 168px; }
+.unitsw-ctx .unitsw-row { padding: 6px 9px; }
 .unitsw-row {
   display: flex;
   align-items: center;

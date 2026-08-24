@@ -14,9 +14,40 @@ import http from 'node:http'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { extname, normalize } from 'node:path'
 import { readFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
+import { IPC } from '@amadeus-shared/ipc'
+import type { VaultFace } from './amadeus/ipc'
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
+
+/**
+ * /vault/rpc 可远程调用的通道白名单(default-deny,同 sketch 工具的 GUI 门禁范式)。
+ * 排除项都是「在 B 的机器上弹对话框/开 shell」类桌面 UX 通道:openVault(目录选择框)、
+ * openAttachment/openVaultFile(shell.openPath)、exportPdf(保存框+printToPDF)、
+ * revealInFileManager、插件管理(listPlugins 走 /unit/plugins;scaffold/uninstall/open-folder 不给远端)。
+ * 文件类通道全部经 VaultManager.resolveInVault 钳制在库根内,越界即抛。
+ */
+export const VAULT_RPC_ALLOW: ReadonlySet<string> = new Set([
+  IPC.restoreVault, IPC.listPages, IPC.listFiles, IPC.loadPage, IPC.readPage, IPC.newPage,
+  IPC.savePage, IPC.renamePage, IPC.reconcilePage, IPC.saveAsset, IPC.saveVaultBytes,
+  IPC.readVaultBytes, IPC.saveAttachment, IPC.search, IPC.backlinks, IPC.exclusiveAssets,
+  IPC.reindex, IPC.listTags, IPC.pagesByTag, IPC.deletePage, IPC.movePage, IPC.resolveEmbed,
+  IPC.blockBacklinks, IPC.listFolders, IPC.createFolder, IPC.renameFolder, IPC.deleteFolder,
+  IPC.moveFolder, IPC.trashEntry, IPC.listTrash, IPC.restoreTrash, IPC.deleteTrashEntry,
+  IPC.emptyTrash, IPC.pageIcons, IPC.fetchLinkMeta, IPC.searchImages, IPC.dbRead, IPC.dbWrite,
+  IPC.dbWriteCas, IPC.drawingRead, IPC.drawingWrite, IPC.readTextFile, IPC.writeTextFile,
+  IPC.listPageProps, IPC.setPageFrontmatter, IPC.renamePageFile, IPC.renameDbFile,
+  IPC.pluginDataRead, IPC.pluginDataWrite,
+])
+
+/** RPC 里字节参数/返回值的 JSON 包裹形态(Uint8Array ↔ base64)。 */
+const decodeRpcArgs = (args: unknown[]): unknown[] =>
+  args.map((a) => (a && typeof a === 'object' && typeof (a as { __u8?: unknown }).__u8 === 'string')
+    ? Buffer.from((a as { __u8: string }).__u8, 'base64')
+    : a)
+const encodeRpcResult = (r: unknown): unknown =>
+  r instanceof Uint8Array ? { __u8: Buffer.from(r).toString('base64') } : r
 
 export interface UnitWebDeps {
   /** 本机 managed 引擎(未就绪 url=null → /engine 回 503)。 */
@@ -31,6 +62,8 @@ export interface UnitWebDeps {
   meta: { instanceId: string; name: string; version: string }
   /** web 构建目录(TANGU_UNIT_WEB_DIST / 捆包路径);null = 出「未捆构建」提示页。 */
   webDistDir: () => string | null
+  /** 本地 vault 面(registerAmadeusIpc 返回;懒取 —— unitWeb 可能先于它起)。null = /vault/* 回 503。 */
+  vault: () => VaultFace | null
   log: (m: string) => void
 }
 
@@ -52,12 +85,16 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon', '.json': 'application/json', '.map': 'application/json',
   '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.wasm': 'application/wasm',
   '.webp': 'image/webp', '.txt': 'text/plain; charset=utf-8',
+  // vault 资源面(/vault/asset)常见附件类型
+  '.gif': 'image/gif', '.jpeg': 'image/jpeg', '.pdf': 'application/pdf', '.mp4': 'video/mp4',
+  '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4',
+  '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.md': 'text/markdown; charset=utf-8',
 }
 
 const isLoopback = (addr: string | undefined): boolean =>
   addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 
-/** 缺 web 构建时的提示页(附构建命令;v2.1 才捆进桌面包)。 */
+/** 缺 web 构建时的提示页(只会出现在 dev:打包链前置构建 + builder 缺产物即失败)。 */
 const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Forsion Unit</title>
 <body style="font-family:system-ui;max-width:560px;margin:80px auto;line-height:1.7">
 <h2>本机未捆 web 构建</h2>
@@ -70,6 +107,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const internalSecret = randomUUID()
   const pending = new Map<string, PendingPair>()
   const pendingByIp = new Map<string, string>()
+  // 短时资源令牌(<img>/EventSource 带不了 Authorization → ?at= 查询串;照 amadeus-cloud 先例)。
+  const assetTokens = new Map<string, number>()
+  const ASSET_TTL_MS = 10 * 60_000
 
   const gc = (): void => {
     const now = Date.now()
@@ -79,6 +119,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         if (pendingByIp.get(p.ip) === id) pendingByIp.delete(p.ip)
       }
     }
+    for (const [t, exp] of assetTokens) if (exp < now) assetTokens.delete(t)
   }
 
   /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道,server 已验 owner)。 */
@@ -236,6 +277,80 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (path === '/engine' || path.startsWith('/engine/')) {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       proxyEngine(req, res, url.slice('/engine'.length) || '/')
+      return
+    }
+
+    // ── 本地 vault 面(v2.1):设备页里的 Amadeus 显示/编辑本机笔记库 ──
+    if (path.startsWith('/vault/')) {
+      const vault = deps.vault()
+      if (!vault) { json(res, 503, { detail: '本机笔记库面未就绪', code: 'VAULT_NOT_READY' }); return }
+      const q = new URL(url, 'http://x').searchParams
+      const assetAuthed = (): boolean => {
+        const at = String(q.get('at') || '')
+        return (at !== '' && (assetTokens.get(at) ?? 0) > Date.now()) || authed(req)
+      }
+
+      if (path === '/vault/rpc' && req.method === 'POST') {
+        if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+        let body: { ch?: string; args?: unknown[] }
+        // 32MB:附件上传按 b64 膨胀 ~4/3;隧道路径另受 server 信封 10MB 顶(见方案 §9,LAN 不受限)。
+        try { body = JSON.parse(await readBody(req, 32 * 1024 * 1024)) } catch { json(res, 400, { detail: 'bad body' }); return }
+        const ch = String(body.ch || '')
+        if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
+        try {
+          const result = await vault.call(ch, decodeRpcArgs(Array.isArray(body.args) ? body.args : []))
+          json(res, 200, { ok: true, result: encodeRpcResult(result) ?? null })
+        } catch (e) {
+          json(res, 200, { ok: false, error: String((e as Error)?.message || e) })
+        }
+        return
+      }
+
+      if (path === '/vault/asset-token' && req.method === 'POST') {
+        if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+        const token = randomBytes(16).toString('hex')
+        assetTokens.set(token, Date.now() + ASSET_TTL_MS)
+        json(res, 200, { token, ttlSec: ASSET_TTL_MS / 1000 })
+        return
+      }
+
+      if (path === '/vault/asset' && (req.method === 'GET' || req.method === 'HEAD')) {
+        if (!assetAuthed()) { json(res, 401, { detail: '资源令牌无效', code: 'ASSET_TOKEN' }); return }
+        const exact = q.get('path')
+        let abs: string | null = null
+        try {
+          abs = exact != null
+            ? vault.absPath(exact) // 树/侧栏点开:路径精确,不走 ref 的 basename 兜底
+            : await vault.assetAbs(q.get('page'), String(q.get('ref') || ''))
+        } catch { /* 越界/无库 → 404 */ }
+        if (!abs) { json(res, 404, { detail: 'not found' }); return }
+        const stream = createReadStream(abs) // ponytail: 无 Range;远程视频拖进度条要 Range 再加
+        stream.on('error', () => { if (!res.headersSent) json(res, 404, { detail: 'not found' }); else res.destroy() })
+        stream.once('open', () => {
+          res.writeHead(200, { 'Content-Type': MIME[extname(abs!).toLowerCase()] || 'application/octet-stream' })
+          stream.pipe(res)
+        })
+        res.on('close', () => stream.destroy())
+        return
+      }
+
+      if (path === '/vault/events' && req.method === 'GET') {
+        if (!assetAuthed()) { json(res, 401, { detail: '资源令牌无效', code: 'ASSET_TOKEN' }); return }
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          'X-Accel-Buffering': 'no',
+        })
+        res.write(': connected\n\n')
+        const unsub = vault.onEvent((ch, payload) => {
+          res.write(`data: ${JSON.stringify({ ch, payload })}\n\n`)
+        })
+        const hb = setInterval(() => res.write(': hb\n\n'), 25_000)
+        res.on('close', () => { unsub(); clearInterval(hb) })
+        return
+      }
+
+      json(res, 404, { detail: 'not found' })
       return
     }
 

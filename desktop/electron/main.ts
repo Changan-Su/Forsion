@@ -648,6 +648,7 @@ function forsionMcpStatus(): { running: boolean; url: string | null; token: stri
 let unitHost: UnitHost | null = null
 let unitWeb: UnitWebHandle | null = null
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
+let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
@@ -700,7 +701,7 @@ async function doRefreshUnitHost(): Promise<void> {
         type: 'question',
         title: '设备连接请求',
         message: `「${info.name}」(${info.ip})请求连接本机 Forsion`,
-        detail: `对方屏幕上显示同一组配对码,核对一致再允许:\n\n配对码:${info.code}\n\n允许后对方可远程使用这台设备的 Forsion(含执行任务)。`,
+        detail: `对方屏幕上显示同一组配对码,核对一致再允许:\n\n配对码:${info.code}\n\n允许后对方可远程使用这台设备的 Forsion(含执行任务、读写本机笔记库)。`,
         buttons: ['允许', '拒绝'],
         defaultId: 1,
         cancelId: 1,
@@ -715,12 +716,15 @@ async function doRefreshUnitHost(): Promise<void> {
       },
     },
     readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
+    vault: () => amadeusVaultFace,
     meta: { instanceId, name: hostname(), version: app.getVersion() },
     webDistDir: (): string | null => {
       const env = process.env.TANGU_UNIT_WEB_DIST
       if (env && existsSync(env)) return env
-      const bundled = join(process.resourcesPath || '', 'unit-web') // v2.1 捆包落点(本轮可缺席)
-      return existsSync(bundled) ? bundled : null
+      const bundled = join(process.resourcesPath || '', 'unit-web') // 捆包落点(electron-builder extraResources)
+      if (existsSync(bundled)) return bundled
+      const dev = join(app.getAppPath(), 'unit-web-dist') // dev:build-unit-web.mjs 的产物,免设环境变量
+      return existsSync(dev) ? dev : null
     },
     log: (m: string) => console.log(m),
   }
@@ -1364,6 +1368,26 @@ app.whenReady().then(async () => {
     webPort: unitWeb?.port ?? null,
     lanUrl: unitLanUrl(),
   }))
+  // LAN 直连探针(v2.1 自动择路):主进程发(渲染层跨源 fetch 会被 CORS 拦),1.2s 封顶。
+  // 只判「是台 unitWeb 且响应 meta」,身份最终由配对流的 6 位码人工比对把关(防 DHCP 换主)。
+  ipcMain.handle('units:probeLan', async (_e, lanUrl: string) => {
+    try {
+      const u = new URL(String(lanUrl))
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 1200)
+      try {
+        const r = await fetch(new URL('/unit/meta', u), { signal: ctrl.signal })
+        if (!r.ok) return null
+        const meta = (await r.json()) as { instanceId?: unknown; name?: unknown }
+        return typeof meta?.instanceId === 'string' ? { instanceId: meta.instanceId, name: String(meta.name || '') } : null
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch {
+      return null
+    }
+  })
   // T1 配对设备的回收面(B 侧自己的 UI;无回收的配对不许上线——方案 §11.3)。
   ipcMain.handle('units:pairedList', async () => (await loadConfig()).unitPairedDevices || [])
   ipcMain.handle('units:pairedRemove', async (_e, id: string) => {
@@ -2611,8 +2635,9 @@ app.whenReady().then(async () => {
     quit: () => { isQuitting = true; app.quit() },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, restartSync, readExternalPlugins } = registerAmadeusIpc(() => mainWindow)
+  const { getVaultRoot, restartSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow)
   amadeusReadPlugins = readExternalPlugins
+  amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
   registerAmadeusAssetProtocol(getVaultRoot)

@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * 构建「设备页」用的 web 渲染层(方案 §11.5:本轮不捆进桌面包,手动构建 + 环境变量指路)。
+ * 构建「设备页」用的 web 渲染层。产物三种消费路径(unitWeb.webDistDir 依此序解析):
+ *   1. TANGU_UNIT_WEB_DIST 环境变量(显式指路);
+ *   2. 打进桌面包:electron-builder extraResources 把 unit-web-dist 落到
+ *      process.resourcesPath/unit-web(v2.1 起;全家桶 dist/pack 前置本脚本,缺产物构建即失败);
+ *   3. dev:desktop/unit-web-dist 原地被读到(免设环境变量)。
  *
- * 做三件事:
- *   1. 在 ../web 里跑 `vite build --base=./ --outDir <desktop>/unit-web-dist`
- *      —— **必须相对 base**:设备页既在局域网根路径(`http://ip:port/`)也在 server 隧道
- *      子路径(`…/api/units/<id>/proxy/`)下打开,绝对 /assets 在后者必炸。
- *   2. 提示把 TANGU_UNIT_WEB_DIST 指到产物(unitWeb.webDistDir 读它;缺席出提示页)。
- *   3. v2.1 捆包时把产物改进 electron-builder extraResources(落 process.resourcesPath/unit-web)。
+ * **必须相对 base**:设备页既在局域网根路径(`http://ip:port/`)也在 server 隧道
+ * 子路径(`…/api/units/<id>/proxy/`)下打开,绝对 /assets 在后者必炸。
  *
  * 跑:node scripts/build-unit-web.mjs
  */
@@ -26,6 +26,13 @@ if (!existsSync(resolve(webRoot, 'package.json'))) {
   process.exit(1)
 }
 
+// 发布机可能没装过 web 的依赖(dist 链会走到这):缺 node_modules 先装,别让 vite 直接炸。
+if (!existsSync(resolve(webRoot, 'node_modules'))) {
+  console.log('[build-unit-web] web/node_modules 缺席,先 npm ci …')
+  const i = spawnSync('npm', ['ci'], { cwd: webRoot, stdio: 'inherit' })
+  if (i.status !== 0) process.exit(i.status ?? 1)
+}
+
 console.log(`[build-unit-web] vite build --base=./ → ${outDir}`)
 const r = spawnSync('npx', ['vite', 'build', '--base=./', '--outDir', outDir, '--emptyOutDir'], {
   cwd: webRoot,
@@ -34,6 +41,5 @@ const r = spawnSync('npx', ['vite', 'build', '--base=./', '--outDir', outDir, '-
 if (r.status !== 0) process.exit(r.status ?? 1)
 
 console.log(`
-[build-unit-web] 完成。让 unitWeb 用上它:
-  export TANGU_UNIT_WEB_DIST=${outDir}
-然后重启 Forsion Desktop 并打开「允许其他设备连接本机」。`)
+[build-unit-web] 完成。dev 下 unitWeb 会直接读到 ${outDir};
+打包(npm run dist / pack)会把它捆进安装包;也可显式 export TANGU_UNIT_WEB_DIST=${outDir}。`)

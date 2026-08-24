@@ -92,6 +92,20 @@ export async function installUnitShim(): Promise<boolean> {
   if (!token) token = 'tunnel'
   ;(window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ = token
 
+  // 本地 vault 面(v2.1):设备页里的 Amadeus = 对方的本地笔记库。必须先于 '@/main' 挂上
+  // window.amadeus(amadeus/api.ts 模块求值时捕获,dbStore 等也在模块级订阅事件)。
+  const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
+  const fixedToken = token
+  window.amadeus = createUnitAmadeusBridge({
+    base: base().href,
+    getToken: () => fixedToken,
+    onAuthError: () => {
+      // 配对被对方回收:清本地令牌,重进配对流(T1);隧道形态不会 401 到这。
+      try { localStorage.removeItem(tokenKey) } catch { /* private mode */ }
+      location.reload()
+    },
+  })
+
   const engineBase = new URL('engine', base()).href
   const cfg = { mode: 'external' as const, backendUrl: engineBase, token, modelId: '', cloudUrl: '', sandbox: 'none' as const }
   const w = window as unknown as { tangu?: Record<string, unknown> }

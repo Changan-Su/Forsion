@@ -7,7 +7,8 @@
  *   1 head 区出现胶囊(折叠钮之后,不进上/下两区的拖拽序)
  *   2 展开态显示当前面(本地/云端,跟 vaultSide);点开列表 = 本地/云端/两台设备/「通过地址连接…」,
  *     离线设备灰显,emoji 图标生效,当前项带勾选
- *   3 点在线设备 → 菜单收起 + 记录到打开 URL = 隧道页(cloud.test/api/units/<id>/proxy/,尾斜杠)
+ *   3 LAN 优先自动择路(v2.1):探针通的设备行显「局域网直连」描述,点击打开 lanUrl;
+ *     右键菜单三项 —— 改图标/「经云端中转打开」(→ 隧道页 …/proxy/ 尾斜杠)/「在系统浏览器打开」(→ /open 引导页)
  *   4 菜单脚部:开「允许其他设备连接本机」→ 显示本机直连地址 + 已配对设备可回收
  *   5 折叠态只显图标;菜单整体在视口内
  * 顺带产两张真实截图(交付纪律):unit-switcher-expanded.png / unit-switcher-collapsed.png
@@ -121,14 +122,49 @@ async function main() {
     await page.waitForTimeout(350) // 开关 background/transform 有 150ms 过渡,别把起始帧截进交付图
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-expanded.png') })
 
-    // 设备行 = 打开对方页面(openBrowser 无浏览器视图 → openExternal 回落,stub 记账)
+    // LAN 优先自动择路:探针桩对 MacBook Air 的 lanUrl 回 meta → 行描述换「局域网直连」
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row'))
+      .some((r) => r.textContent.includes('MacBook Air') && r.textContent.includes('局域网')), null, { timeout: 5000 })
+    check('LAN 探通设备行显「局域网直连」描述', true)
+
+    // 设备行 = 打开对方页面(openBrowser 无浏览器视图 → openExternal 回落,stub 记账):LAN 通 → 直连地址
     await page.evaluate(() => {
       const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air'))
       row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 5000 })
     const opened = await page.evaluate(() => window.__unitOpened)
-    check('点在线设备 → 打开隧道页(尾斜杠相对 base)', opened.length === 1 && opened[0] === 'https://cloud.test/api/units/u-mba/proxy/', JSON.stringify(opened))
+    check('点 LAN 可达设备 → 直连地址(尾斜杠)', opened.length === 1 && opened[0] === 'http://192.168.1.20:8791/', JSON.stringify(opened))
+
+    // 右键菜单:改图标 / 经云端中转(逃生口 → 隧道页) / 在系统浏览器打开(/open 引导页)
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    const rightClickMba = () => page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air'))
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 200 }))
+    })
+    await rightClickMba()
+    await page.waitForSelector('.unitsw-ctx', { timeout: 5000 })
+    const ctxTitles = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-title')).map((n) => n.textContent))
+    check('右键菜单三项(图标/中转/浏览器)', ctxTitles.length === 3 && ctxTitles.some((t) => t.includes('中转')) && ctxTitles.some((t) => t.includes('浏览器')), JSON.stringify(ctxTitles))
+    await page.evaluate(() => {
+      const item = Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-row')).find((r) => r.textContent.includes('中转'))
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => window.__unitOpened.length === 2, null, { timeout: 5000 })
+    const viaTunnel = await page.evaluate(() => window.__unitOpened[1])
+    check('「经云端中转」逃生口 → 隧道页(尾斜杠)', viaTunnel === 'https://cloud.test/api/units/u-mba/proxy/', viaTunnel)
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    await rightClickMba()
+    await page.waitForSelector('.unitsw-ctx', { timeout: 5000 })
+    await page.evaluate(() => {
+      const item = Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-row')).find((r) => r.textContent.includes('浏览器'))
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => window.__unitOpened.length === 3, null, { timeout: 5000 })
+    const viaBrowser = await page.evaluate(() => window.__unitOpened[2])
+    check('「在系统浏览器打开」→ /open 引导页', viaBrowser === 'https://cloud.test/api/units/u-mba/open', viaBrowser)
 
     // 离线设备点了不开页
     await page.click('.unitsw-pill')
@@ -139,7 +175,7 @@ async function main() {
     })
     await page.waitForTimeout(150)
     const openedAfterOffline = await page.evaluate(() => window.__unitOpened.length)
-    check('离线设备不打开页面(就地提示)', openedAfterOffline === 1)
+    check('离线设备不打开页面(就地提示)', openedAfterOffline === 3)
     await page.keyboard.press('Escape')
     await page.evaluate(() => { document.querySelector('.unitsw-backdrop')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
 
