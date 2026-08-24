@@ -4,7 +4,7 @@
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
 import { app, BrowserWindow, dialog, ipcMain, Menu, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences } from 'electron'
-import { basename, dirname, join, sep } from 'path'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
@@ -720,6 +720,32 @@ function pickUnitConfig(src: Record<string, unknown>, keys: readonly string[]): 
   return out
 }
 
+/** host 会话的 project_path 集合(realpath 后):/unit/hostfile 的白名单根扩展。
+ *  引擎在 loopback,15s 缓存防抖;引擎没起/拉取失败=空集(只剩工作区+vault 两根,不放大)。 */
+let unitSessionRootsCache: { at: number; roots: string[] } = { at: 0, roots: [] }
+async function unitSessionRoots(): Promise<string[]> {
+  if (Date.now() - unitSessionRootsCache.at < 15_000) return unitSessionRootsCache.roots
+  const roots: string[] = []
+  try {
+    const st = backend.getStatus()
+    if (st.state === 'ready' && st.url) {
+      const r = await fetch(`${st.url}/agent/sessions?limit=500`, {
+        headers: { Authorization: `Bearer ${backend.getToken()}` },
+        signal: AbortSignal.timeout(3000),
+      })
+      if (r.ok) {
+        const d = (await r.json()) as unknown
+        const rows = Array.isArray(d) ? d : ((d as { sessions?: unknown[] })?.sessions ?? [])
+        for (const row of rows as Array<{ project_path?: string | null }>) {
+          if (row?.project_path) { try { roots.push(realpathSync(row.project_path)) } catch { /* 目录已删 */ } }
+        }
+      }
+    }
+  } catch { /* 引擎不可达 = 空集 */ }
+  unitSessionRootsCache = { at: Date.now(), roots: [...new Set(roots)] }
+  return unitSessionRootsCache.roots
+}
+
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
  *  串行化(同 ensureChain 的病):四个身份变化点 + config:set 可能连发,并发重建会让第二次
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
@@ -805,9 +831,11 @@ async function doRefreshUnitHost(): Promise<void> {
       asrModelIds: p.asrModelIds || [],
       noVisionModelIds: p.noVisionModelIds || [],
     })),
-    // 主机文件只读面(Desk/文件卡/Pin Summary 产物的数据源):realpath 钳制在工作区根 ∪ vault 根,
+    // 主机文件只读面(Desk/文件卡/Pin Summary 产物的数据源):realpath 钳制在
+    // 工作区根 ∪ vault 根 ∪ **host 会话的 project_path 集合**(Codex P2:会话可开在任意目录,
+    // 只钳默认工作区会让那些会话的 Desk/文件卡全 404;这些目录本就是 agent 的可达范围,只读不扩权)。
     // default-deny —— 越界/不存在一律 null(unitWeb 统一 404,不泄露存在性)。写/删一概不给(审计 C1)。
-    readHostFile: async (p: string) => {
+    readHostFile: async (p: string, maxBytes?: number) => {
       if (!p || typeof p !== 'string') return null
       let real: string
       try { real = realpathSync(p) } catch { return null }
@@ -815,11 +843,19 @@ async function doRefreshUnitHost(): Promise<void> {
       const roots: string[] = []
       try { roots.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
       try { const vr = amadeusVaultFace?.root(); if (vr) roots.push(realpathSync(vr)) } catch { /* 无库 */ }
-      // ponytail: posix 路径前缀判断(本项目引擎数据全 posix 惯例);上 win 再补 sep 归一
-      if (!roots.some((r) => real === r || real.startsWith(r + '/'))) return null
+      for (const sp of await unitSessionRoots()) roots.push(sp)
+      // relative 判定(Codex P1:win 的 realpath 是反斜杠,'+/' 前缀判定恒 false → 全 404)
+      const inRoot = (r: string): boolean => {
+        if (real === r) return false // 根本身是目录,不可读
+        const rel = relative(r, real)
+        return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
+      }
+      if (!roots.some(inRoot)) return null
       const st = await stat(real).catch(() => null)
       if (!st?.isFile()) return null
-      const UNIT_MAX_READ = 50 * 1024 * 1024 // 与 fs:readFile 的预览上限同款
+      // 上限:直连 50MB(同 fs:readFile);隧道路径由 unitWeb 按信封余量传入更小值(Codex P2:
+      // base64 双重膨胀,10MB 信封实际只装得下 ~4MB 原文,超了会超时而不是优雅 tooLarge)。
+      const UNIT_MAX_READ = Math.min(maxBytes || 50 * 1024 * 1024, 50 * 1024 * 1024)
       const ext = (real.split('.').pop() || '').toLowerCase()
       const UNIT_MIME: Record<string, string> = {
         md: 'text/markdown', txt: 'text/plain', html: 'text/html', htm: 'text/html', css: 'text/css',

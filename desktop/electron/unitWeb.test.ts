@@ -82,7 +82,7 @@ async function boot(distDir: string | null = null, vaultRoot?: string): Promise<
     readSpaces: async () => [{ slug: 'demo-space', json: '{}', plugin: 'demo' }],
     readConfig: async () => ({ agentDeskEnabled: true, homeDir: '/home/demo' }),
     readProviders: async () => [{ providerId: 'demo-direct', modelIds: ['demo/m1'] }],
-    readHostFile: async (p: string) => (p === '/ws/ok.md' ? { mimeType: 'text/markdown', content: 'aGk=', size: 2 } : null),
+    readHostFile: async (p: string, maxBytes?: number) => { lastHostfileMax = maxBytes; return p === '/ws/ok.md' ? { mimeType: 'text/markdown', content: 'aGk=', size: 2 } : null },
     writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: patch.agentDeskEnabled ?? true, homeDir: '/home/demo' }),
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
     webDistDir: () => distDir,
@@ -112,6 +112,8 @@ async function pairUp(b: Boot): Promise<string> {
 }
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30))
+
+let lastHostfileMax: number | undefined
 
 describe('unitWeb', () => {
   it('公开面:meta 可读;缺构建出提示页', async () => {
@@ -192,6 +194,7 @@ describe('unitWeb', () => {
       expect(ok.status).toBe(200)
       expect(((await ok.json()) as any).content).toBe('aGk=')
       expect((await fetch(`${b.base}/unit/hostfile?path=${encodeURIComponent('/etc/passwd')}`, { headers: h })).status).toBe(404)
+      expect(lastHostfileMax).toBe(4 * 1024 * 1024) // 内部密钥来路=隧道语义 → 信封余量上限
     } finally { b.close() }
   })
 

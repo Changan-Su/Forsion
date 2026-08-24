@@ -67,8 +67,9 @@ export interface UnitWebDeps {
   writeConfig: (patch: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** 直连 provider 元数据(剥 apiKey/baseUrl):模型选择器认出直连模型;密钥绝不下发。 */
   readProviders: () => Promise<unknown[]>
-  /** 主机文件只读(Desk/文件卡数据源):deps 层 realpath 钳制工作区根∪vault 根;越界/不存在=null。 */
-  readHostFile: (p: string) => Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean } | null>
+  /** 主机文件只读(Desk/文件卡数据源):deps 层 realpath 钳制工作区根∪vault 根∪host 会话根;
+   *  越界/不存在=null。maxBytes:隧道路径信封余量(b64 双重膨胀),超限回 tooLarge 而非撑爆信封。 */
+  readHostFile: (p: string, maxBytes?: number) => Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean } | null>
   meta: { instanceId: string; name: string; version: string }
   /** web 构建目录(TANGU_UNIT_WEB_DIST / 捆包路径);null = 出「未捆构建」提示页。 */
   webDistDir: () => string | null
@@ -343,7 +344,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (path === '/unit/hostfile' && req.method === 'GET') {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       const p = String(new URL(url, 'http://x').searchParams.get('path') || '')
-      const f = await deps.readHostFile(p)
+      // 隧道来的请求(unitHost 带内部密钥):响应还要整体再 base64 进 10MB 信封,原文超 ~4MB 就撑爆
+      // → 传更小上限,超限走 tooLarge(渲染层有兜底 UI)而不是超时(Codex P2)。
+      const viaTunnel = typeof req.headers['x-unit-internal'] === 'string'
+      const f = await deps.readHostFile(p, viaTunnel ? 4 * 1024 * 1024 : undefined)
       if (!f) { json(res, 404, { detail: 'not readable' }); return }
       json(res, 200, f)
       return
