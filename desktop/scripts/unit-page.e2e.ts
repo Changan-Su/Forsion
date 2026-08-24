@@ -119,8 +119,16 @@ async function main(): Promise<void> {
     log: (m) => console.log(m),
   }, { port: 0, bindHost: '127.0.0.1' })
   const base = `http://127.0.0.1:${handle.port}`
+  // ⚠️ 页面一律经映射域名打开而非 127.0.0.1:T1 真实语境是明文 http://<LAN IP> = **非安全上下文**,
+  // 而 loopback 是安全上下文 —— 用它跑等于永远测不到 T1(crypto.randomUUID 之类只存在于安全上下文的
+  // API 在这里现形;那颗雷曾让 LAN 页整页白屏,兜底代码在 loopback 下恒为死代码)。
+  const pageBase = `http://unit-e2e.test:${handle.port}`
 
-  const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
+  const browser = await chromium.launch({
+    executablePath: findChromium(),
+    headless: true,
+    args: ['--host-resolver-rules=MAP unit-e2e.test 127.0.0.1'],
+  })
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
     const pageErrors: string[] = []
@@ -130,8 +138,10 @@ async function main(): Promise<void> {
     const home = await (await fetch(`${base}/`)).text()
     check('index 注入 unit 标记', home.includes('__FORSION_UNIT_PAGE__') && home.includes('e2e-inst'))
 
-    // 2 配对流:卡片 + 6 位码上屏
-    await page.goto(base, { waitUntil: 'domcontentloaded' })
+    // 2 配对流:卡片 + 6 位码上屏(非安全上下文 —— T1 的真实语境)
+    await page.goto(pageBase, { waitUntil: 'domcontentloaded' })
+    const secureCtx = await page.evaluate(() => window.isSecureContext)
+    check('页面运行于非安全上下文(T1 真实语境)', secureCtx === false)
     await page.waitForFunction(() => document.body.textContent?.includes('确认'), null, { timeout: 20000 })
     const codeShown = await page.evaluate(() => /\d{6}/.exec(document.body.textContent || '')?.[0] ?? '')
     check('配对卡展示 6 位码', /^\d{6}$/.test(codeShown))
