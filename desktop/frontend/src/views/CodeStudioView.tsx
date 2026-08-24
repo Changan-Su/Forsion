@@ -143,7 +143,10 @@ function ProjectPicker({ root }: { root: string | null }) {
     <div className="csx-picker">
       <div className="csx-picker-head">
         <span className="csx-picker-title">{t('coding.projects')}</span>
-        <button className="csx-newproj" onClick={() => { setCreating(true); setErr(null) }}><FolderPlus size={14} />{t('coding.newProject')}</button>
+        {/* 设备页无 mkdirHost:新建工程是通向空处的死控件,藏掉 */}
+        {!!window.tangu?.mkdirHost && (
+          <button className="csx-newproj" onClick={() => { setCreating(true); setErr(null) }}><FolderPlus size={14} />{t('coding.newProject')}</button>
+        )}
       </div>
       {creating && (
         <div className="csx-newrow">
@@ -340,7 +343,8 @@ export function CodeStudioView(_: ViewProps) {
               ? <PreviewFrame url={previewUrl} nonce={reloadNonce} />
               : <div className="csx-empty">{t('coding.emptyPreview')}</div>)
             : (codeFile
-              ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={text} fileName={codeFile} editable onChange={onCode} /></Suspense>
+              // 设备页只读桥无 writeHostFile:必须锁只读 —— 否则编辑器照常吃输入而防抖保存静默蒸发(丢档假象)
+              ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={text} fileName={codeFile} editable={!!window.tangu?.writeHostFile} onChange={onCode} /></Suspense>
               : <div className="csx-empty">{t('coding.pickFile')}</div>)}
       </div>
       {showPublish && (

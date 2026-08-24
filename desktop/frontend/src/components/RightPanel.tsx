@@ -192,6 +192,12 @@ const HostFilesTab: React.FC<{
 
   const sel = useSelection(entries.map((en) => en.path))
 
+  // 设备页(unitShim)只有 listDir/statPath/readHostFile 只读桥:写类控件按能力嗅探隐藏,
+  // 否则新建/重命名/删除/拖拽全是「确认后静默消失」的哑弹(Codex 三轮 P2)。桌面写面四件套
+  // 同生同灭,嗅探 mkdirHost 一枚即代表全家;reveal 语义独立单独嗅探。
+  const canWrite = !!window.tangu?.mkdirHost
+  const canReveal = !!window.tangu?.revealHostPath
+
   useEffect(() => { setCurDir(cwd); setRenaming(null); setNewFolder(false) }, [cwd])
 
   const refresh = useCallback(async () => {
@@ -267,12 +273,13 @@ const HostFilesTab: React.FC<{
     const multi = selPaths.length > 1
     const items: CtxItem[] = []
     if (!multi && !en.isDir) items.push({ label: t('panel.action.preview'), icon: <Eye size={13} />, run: () => preview(en) })
-    if (!multi) items.push({ label: t('panel.action.rename'), icon: <Pencil size={13} />, run: () => beginRename(en) })
-    if (!multi) items.push({ label: t('panel.action.revealInFileManager'), icon: <ExternalLink size={13} />, run: () => window.tangu?.revealHostPath?.(en.path) })
-    items.push({
+    if (!multi && canWrite) items.push({ label: t('panel.action.rename'), icon: <Pencil size={13} />, run: () => beginRename(en) })
+    if (!multi && canReveal) items.push({ label: t('panel.action.revealInFileManager'), icon: <ExternalLink size={13} />, run: () => window.tangu?.revealHostPath?.(en.path) })
+    if (canWrite) items.push({
       label: multi ? t('panel.action.deleteN', { n: String(selPaths.length) }) : t('panel.action.moveToTrash'),
       icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths(selPaths),
     })
+    if (!items.length) return // 设备页目录行/多选:没有可用动作就不开空菜单
     setMenu({ ...menuPos(e, items.length), items })
   }
 
@@ -285,7 +292,7 @@ const HostFilesTab: React.FC<{
     e.dataTransfer.effectAllowed = 'move'
   }
   const folderDragOver = (e: React.DragEvent, destPath: string) => {
-    const osFiles = e.dataTransfer.types.includes('Files')
+    const osFiles = canWrite && e.dataTransfer.types.includes('Files')
     if (!dragging && !osFiles) return
     if (dragging?.includes(destPath)) return // 不能拖进自身
     e.preventDefault(); e.stopPropagation(); setDropDir(destPath); setDragInFiles(false)
@@ -302,7 +309,7 @@ const HostFilesTab: React.FC<{
     <div
       className={dragInFiles ? 'wsfiles dragover' : 'wsfiles'}
       onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }}
-      onDragOver={(e) => { if (e.dataTransfer.types.includes('Files') && !dragging) { e.preventDefault(); setDragInFiles(true) } }}
+      onDragOver={(e) => { if (canWrite && e.dataTransfer.types.includes('Files') && !dragging) { e.preventDefault(); setDragInFiles(true) } }}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragInFiles(false) }}
       onDrop={(e) => { e.preventDefault(); setDragInFiles(false); setDropDir(null); if (e.dataTransfer.files?.length && !dragging) void copyFilesInto(e.dataTransfer.files, curDir) }}
     >
@@ -310,12 +317,16 @@ const HostFilesTab: React.FC<{
         <span className="panel-section-title" style={{ flex: 1, padding: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={curDir}>
           {rel ? `…/${rel}` : (cwd.split(/[/\\]/).filter(Boolean).pop() || cwd)}
         </span>
-        <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => { setNewFolder(true); setNewFolderVal('') }} title={t('panel.action.newFolder')}>
-          <FolderPlus size={13} />
-        </button>
-        <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => window.tangu?.revealHostPath?.(curDir)} title={t('panel.action.openCurDirInFileManager')}>
-          <ExternalLink size={13} />
-        </button>
+        {canWrite && (
+          <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => { setNewFolder(true); setNewFolderVal('') }} title={t('panel.action.newFolder')}>
+            <FolderPlus size={13} />
+          </button>
+        )}
+        {canReveal && (
+          <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => window.tangu?.revealHostPath?.(curDir)} title={t('panel.action.openCurDirInFileManager')}>
+            <ExternalLink size={13} />
+          </button>
+        )}
         <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => void refresh()} title={t('panel.action.refresh')}>
           {loading ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
         </button>
@@ -362,7 +373,7 @@ const HostFilesTab: React.FC<{
             key={en.path}
             role="button"
             tabIndex={0}
-            draggable={renaming !== en.path}
+            draggable={canWrite && renaming !== en.path}
             onDragStart={(e) => rowDragStart(e, en)}
             onDragEnd={() => { setDragging(null); setDropDir(null) }}
             onDragOver={en.isDir ? (e) => folderDragOver(e, en.path) : undefined}

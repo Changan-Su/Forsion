@@ -199,7 +199,8 @@ export function WsFileView({ leaf }: ViewProps) {
     })
   }
   const reveal = (): void => { if (path) void window.tangu?.revealHostPath?.(path) }
-  const hostActions = path ? (
+  // 设备页只读桥没有 openHostPath/revealHostPath:两枚按钮是静默哑弹,整对藏掉(两桥同生同灭,嗅探一枚)。
+  const hostActions = path && window.tangu?.openHostPath ? (
     <>
       <button className="btn ghost sm" onClick={openWithDefault}><ExternalLink size={13} /> {t('preview.openWithDefault')}</button>
       <button className="btn ghost sm" onClick={reveal}><FolderSearch size={13} /> {t('panel.action.revealInFileManager')}</button>

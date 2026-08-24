@@ -26,7 +26,8 @@ export function hostTargetFor(path: string, name: string): PreviewTarget {
       if (r.tooLarge) return { tooLarge: true, size: r.size }
       return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size, mtimeMs: r.mtimeMs }
     },
-    download: () => { void window.tangu?.revealHostPath?.(path) },
+    // 设备页无 revealHostPath:给 undefined 藏掉下载位(哑弹不如没有);浏览器侧真下载属 A 类快赢另做。
+    download: window.tangu?.revealHostPath ? () => { void window.tangu?.revealHostPath?.(path) } : undefined,
   }
 }
 

@@ -40,6 +40,12 @@ const dirOf = (p: string): string => p.slice(0, Math.max(p.lastIndexOf('/'), p.l
 /** 单段文件名合法性(与主进程 safeName 同规):无路径分隔符、非 ./..、非空、<256。 */
 const validName = (s: string): boolean => !!s && s.length < 256 && !/[\\/]/.test(s) && !s.includes('\0') && s !== '.' && s !== '..'
 
+/** 设备页(unitShim)只有 listDir/statPath/readHostFile 只读桥:写类控件按能力嗅探隐藏,否则
+ *  新建/重命名/删除/拖拽全是「确认后静默消失」的哑弹(Codex 三轮 P2)。桌面写面同生同灭,
+ *  嗅探 mkdirHost 一枚即代表全家;reveal 语义独立单独嗅探。 */
+const canWrite = (): boolean => !!window.tangu?.mkdirHost
+const canReveal = (): boolean => !!window.tangu?.revealHostPath
+
 /** 目录刷新总线:文件操作后 bump(目录绝对路径)→ 对应节点丢缓存重拉;'*' = 全树(run 结束等)。 */
 const fsBus = new EventTarget()
 export const bumpDir = (dir: string): void => { fsBus.dispatchEvent(new CustomEvent('fs-bump', { detail: dir })) }
@@ -96,7 +102,7 @@ function FileRow({ entry, depth, ctx }: { entry: Entry; depth: number; ctx: Tree
       data-sel-id={entry.path}
       style={{ paddingLeft: rowPadLeft(depth + 1) }}
       {...tipProps(() => fsTipLines(entry.path, entry.name))}
-      draggable
+      draggable={canWrite()}
       onDragStart={(e) => ctx.rowDragStart(e, entry)}
       onDragEnd={ctx.dragEnd}
       onClick={(e) => ctx.rowClick(e, entry)}
@@ -147,7 +153,7 @@ function DirRow({ entry, depth, ctx, forceOpen }: { entry: Entry; depth: number;
             data-sel-id={entry.path}
             style={{ paddingLeft: rowPadLeft(depth + 1) }}
             {...tipProps(() => fsTipLines(entry.path, entry.name))}
-            draggable
+            draggable={canWrite()}
             onDragStart={(e) => ctx.rowDragStart(e, entry)}
             onDragEnd={ctx.dragEnd}
             onDragOver={(e) => ctx.dragOverDir(e, entry.path)}
@@ -426,8 +432,8 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     if (paths.length > 1) {
       const items: CtxItem[] = [
         { label: t('panel.action.copyPath'), icon: <Copy size={13} />, run: () => { void navigator.clipboard.writeText(paths.join('\n')) } },
-        { label: t('panel.action.deleteN', { n: String(paths.length) }), icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths(paths) },
       ]
+      if (canWrite()) items.push({ label: t('panel.action.deleteN', { n: String(paths.length) }), icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths(paths) })
       setMenu({ ...menuPos(ev, items.length), items })
       return
     }
@@ -437,26 +443,27 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
       if (window.tangu?.openHostPath) items.push({ label: t('preview.openWithDefault'), icon: <ExternalLink size={13} />, run: () => {
         void window.tangu?.openHostPath?.(e.path).then((r) => { if (r && !r.ok) toast(r.error || 'open failed', true) })
       } })
-    } else {
+    } else if (canWrite()) {
       items.push({ label: t('panel.action.newFile'), icon: <FilePlus2 size={13} />, run: () => setCreating({ dir: e.path, kind: 'file' }) })
       items.push({ label: t('panel.action.newFolder'), icon: <FolderPlus size={13} />, run: () => setCreating({ dir: e.path, kind: 'folder' }) })
     }
-    items.push({ label: t('panel.action.rename'), icon: <Pencil size={13} />, run: () => setRenaming(e.path) })
+    if (canWrite()) items.push({ label: t('panel.action.rename'), icon: <Pencil size={13} />, run: () => setRenaming(e.path) })
     items.push({ label: t('panel.action.copyPath'), icon: <Copy size={13} />, run: () => { void navigator.clipboard.writeText(e.path) } })
-    items.push({ label: t('panel.action.revealInFileManager'), icon: <FolderSearch size={13} />, run: () => void window.tangu?.revealHostPath?.(e.path) })
-    items.push({ label: t('panel.action.moveToTrash'), icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths([e.path]) })
+    if (canReveal()) items.push({ label: t('panel.action.revealInFileManager'), icon: <FolderSearch size={13} />, run: () => void window.tangu?.revealHostPath?.(e.path) })
+    if (canWrite()) items.push({ label: t('panel.action.moveToTrash'), icon: <Trash2 size={13} />, danger: true, run: () => void trashPaths([e.path]) })
     setMenu({ ...menuPos(ev, items.length), items })
   }
   const onWsMenu = (ev: React.MouseEvent, ws: WorkspaceDescriptor): void => {
     if (!ws.path) return
     ev.preventDefault(); ev.stopPropagation()
     const path = ws.path
-    const items: CtxItem[] = [
-      { label: t('panel.action.newFile'), icon: <FilePlus2 size={13} />, run: () => { onEnterWorkspace?.(ws.key); setCreating({ dir: path, kind: 'file' }) } },
-      { label: t('panel.action.newFolder'), icon: <FolderPlus size={13} />, run: () => { onEnterWorkspace?.(ws.key); setCreating({ dir: path, kind: 'folder' }) } },
-      { label: t('panel.action.revealInFileManager'), icon: <FolderSearch size={13} />, run: () => void window.tangu?.revealHostPath?.(path) },
-      { label: t('panel.files.refresh'), icon: <RefreshCw size={13} />, run: () => bumpDir(path) },
-    ]
+    const items: CtxItem[] = []
+    if (canWrite()) {
+      items.push({ label: t('panel.action.newFile'), icon: <FilePlus2 size={13} />, run: () => { onEnterWorkspace?.(ws.key); setCreating({ dir: path, kind: 'file' }) } })
+      items.push({ label: t('panel.action.newFolder'), icon: <FolderPlus size={13} />, run: () => { onEnterWorkspace?.(ws.key); setCreating({ dir: path, kind: 'folder' }) } })
+    }
+    if (canReveal()) items.push({ label: t('panel.action.revealInFileManager'), icon: <FolderSearch size={13} />, run: () => void window.tangu?.revealHostPath?.(path) })
+    items.push({ label: t('panel.files.refresh'), icon: <RefreshCw size={13} />, run: () => bumpDir(path) })
     setMenu({ ...menuPos(ev, items.length), items })
   }
 
@@ -470,7 +477,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   }
   const dragEnd = (): void => { draggingRef.current = null; setDropDir(null) }
   const dragOverDir = (ev: React.DragEvent, dir: string): void => {
-    const osFiles = ev.dataTransfer.types.includes('Files')
+    const osFiles = canWrite() && ev.dataTransfer.types.includes('Files')
     const internal = !!draggingRef.current || ev.dataTransfer.types.includes(DRAG_MIME) // 本面板 或 其他面板的行拖
     if (!internal && !osFiles) return
     if (draggingRef.current?.includes(dir)) return
@@ -554,10 +561,10 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
                   </span>
                   <span className="t2s-group-label">{ws.name}</span>
                 </button>
-                {open && (
+                {open && canWrite() && (
                   <button className="t2s-group-add" title={t('panel.action.newFile')} onClick={() => { if (ws.path) setCreating({ dir: ws.path, kind: 'file' }) }}><FilePlus2 size={13} /></button>
                 )}
-                {open && (
+                {open && canWrite() && (
                   <button className="t2s-group-add" title={t('panel.action.newFolder')} onClick={() => { if (ws.path) setCreating({ dir: ws.path, kind: 'folder' }) }}><FolderPlus size={13} /></button>
                 )}
                 <button className="t2s-group-add" title={t('panel.files.refresh')} onClick={() => { if (ws.path) loadRoot(ws.key, ws.path) }}><RefreshCw size={13} /></button>

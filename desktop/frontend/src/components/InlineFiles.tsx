@@ -41,7 +41,8 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
     },
     download: f.path
       ? (execMode === 'host'
-          ? () => { void window.tangu?.revealHostPath?.(f.path!) }
+          // 设备页无 revealHostPath:undefined 藏掉下载位,免留静默哑弹
+          ? (window.tangu?.revealHostPath ? () => { void window.tangu?.revealHostPath?.(f.path!) } : undefined)
           : () => { void api.downloadWorkspaceFile(cfg, sessionId, f.path!).catch(() => {}) })
       : undefined,
   }
