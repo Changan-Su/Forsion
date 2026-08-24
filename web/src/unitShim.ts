@@ -93,10 +93,11 @@ export async function installUnitShim(): Promise<boolean> {
   ;(window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ = token
 
   // 本地 vault 面(v2.1):设备页里的 Amadeus = 对方的本地笔记库。必须先于 '@/main' 挂上
-  // window.amadeus(amadeus/api.ts 模块求值时捕获,dbStore 等也在模块级订阅事件)。
+  // window.amadeus(amadeus/api.ts 模块求值时捕获,dbStore 等也在模块级订阅事件);
+  // 工厂是 async 的:首枚资源令牌等到手才交桥,首屏资源 URL 不缺 at。
   const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
   const fixedToken = token
-  window.amadeus = createUnitAmadeusBridge({
+  window.amadeus = await createUnitAmadeusBridge({
     base: base().href,
     getToken: () => fixedToken,
     onAuthError: () => {

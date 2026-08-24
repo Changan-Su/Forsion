@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   // 假 vault 面:内存页表(loadPage/savePage 真往返走「真桥→RPC→白名单→派发」全链,只有落盘是假的)。
   const pages = new Map<string, { manifest: unknown; contents: Record<string, string> }>()
   pages.set('E2E笔记.md', { manifest: { blocks: [] }, contents: { main: '# 来自 B 的笔记\n\n中文字节数一致性 ✓' } })
-  const vaultSubs = new Set<(ch: string, payload?: unknown) => void>()
+  const vaultSubs = new Set<(ch: string, payload: unknown, origin: string | null) => void>()
   const vaultFace: VaultFace = {
     call: async (ch, args) => {
       if (ch === IPC.restoreVault) return { root: '/e2e-vault', pages: [...pages.keys()], folders: [], lastPage: 'E2E笔记.md' }
@@ -96,6 +96,14 @@ async function main(): Promise<void> {
     onEvent: (cb) => { vaultSubs.add(cb); return () => { vaultSubs.delete(cb) } },
     assetAbs: async () => null,
     absPath: (rel) => `/e2e-vault/${rel}`,
+    root: () => '/e2e-vault',
+  }
+  // 镜像真 vaultFace 的写→回灌:savePage 后按写入者 origin 发 externalChange(桥应丢自己的回声)。
+  const rawCall = vaultFace.call
+  vaultFace.call = async (ch, args, origin) => {
+    const r = await rawCall(ch, args, origin)
+    if (ch === IPC.savePage) for (const s of vaultSubs) s(IPC.externalChange, args[0], origin ?? null)
+    return r
   }
   const handle = await startUnitWeb({
     getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN' }),
@@ -157,20 +165,22 @@ async function main(): Promise<void> {
     check('vault 面:loadPage 中文内容无损', vaultRt.firstMain.includes('中文字节数一致性 ✓'))
     check('vault 面:savePage→loadPage 真往返', vaultRt.afterMain.includes('远程保存 ✓'))
 
-    // 7 B 侧改动经 SSE 回灌到页面(非自写路径,不落回声丢弃)
+    // 7 B 侧改动经 SSE 回灌到页面;自己的写(带本桥 origin 的回声)必须被丢
     await page.evaluate(() => {
       ;(window as any).__evGot = []
       ;(window as any).amadeus.onExternalChange((p: string) => { (window as any).__evGot.push(p) })
     })
+    await page.evaluate(async () => { await (window as any).amadeus.savePage('E2E笔记.md', { blocks: [] }, { main: '再存一次' }) })
     for (let i = 0; i < 30; i++) {
-      // SSE 在资源令牌到手后才建连,连上前的 emit 会丢:重复发直到页面收到
-      for (const s of vaultSubs) s(IPC.externalChange, 'B侧改动.md')
+      // SSE 在资源令牌到手后才建连,连上前的 emit 会丢:重复发直到页面收到(origin=null 模拟 B 侧改动)
+      for (const s of vaultSubs) s(IPC.externalChange, 'B侧改动.md', null)
       const got = await page.evaluate(() => ((window as any).__evGot as string[]).includes('B侧改动.md'))
       if (got) break
       await page.waitForTimeout(500)
     }
-    const evGot = await page.evaluate(() => ((window as any).__evGot as string[]).includes('B侧改动.md'))
-    check('vault 面:B 侧改动经 SSE 到达页面', evGot)
+    const ev = await page.evaluate(() => (window as any).__evGot as string[])
+    check('vault 面:B 侧改动经 SSE 到达页面', ev.includes('B侧改动.md'))
+    check('vault 面:自己的 savePage 回声按 origin 丢弃', !ev.includes('E2E笔记.md'), JSON.stringify(ev))
 
     await page.waitForTimeout(1200)
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-page-booted.png') })

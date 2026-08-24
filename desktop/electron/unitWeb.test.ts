@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import http from 'node:http'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -46,20 +46,20 @@ interface Boot {
   paired: PairedDevice[]
   approve: (ok: boolean) => void
   engine: Awaited<ReturnType<typeof fakeEngine>>
-  vaultCalls: Array<{ ch: string; args: unknown[] }>
-  emitVault: (ch: string, payload?: unknown) => void
+  vaultCalls: Array<{ ch: string; args: unknown[]; origin: string | null }>
+  emitVault: (ch: string, payload?: unknown, origin?: string | null) => void
   close: () => void
 }
 
-async function boot(distDir: string | null = null, assetFile?: string): Promise<Boot> {
+async function boot(distDir: string | null = null, vaultRoot?: string): Promise<Boot> {
   const engine = await fakeEngine()
   const paired: PairedDevice[] = []
   let approveFn: (ok: boolean) => void = () => {}
-  const vaultCalls: Array<{ ch: string; args: unknown[] }> = []
-  const vaultSubs = new Set<(ch: string, payload?: unknown) => void>()
+  const vaultCalls: Array<{ ch: string; args: unknown[]; origin: string | null }> = []
+  const vaultSubs = new Set<(ch: string, payload: unknown, origin: string | null) => void>()
   const vault: VaultFace = {
-    call: async (ch, args) => {
-      vaultCalls.push({ ch, args })
+    call: async (ch, args, origin) => {
+      vaultCalls.push({ ch, args, origin: origin ?? null })
       if (ch === IPC.listPages) return ['甲.md', '乙.md']
       if (ch === IPC.readVaultBytes) return Buffer.from([1, 2, 254])
       if (ch === IPC.saveVaultBytes) return undefined
@@ -67,11 +67,12 @@ async function boot(distDir: string | null = null, assetFile?: string): Promise<
       return null
     },
     onEvent: (cb) => { vaultSubs.add(cb); return () => { vaultSubs.delete(cb) } },
-    assetAbs: async (_page, ref) => (ref === 'pic.png' && assetFile ? assetFile : null),
+    assetAbs: async (_page, ref) => (ref.endsWith('.png') || ref.endsWith('.html') || ref.endsWith('.pdf') || ref === 'link.png' ? join(vaultRoot || '/nonexistent', ref) : null),
     absPath: (rel) => {
       if (rel.includes('..')) throw new Error('escape')
-      return assetFile || `/nonexistent/${rel}`
+      return join(vaultRoot || '/nonexistent', rel)
     },
+    root: () => vaultRoot || null,
   }
   const deps: UnitWebDeps = {
     getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN' }),
@@ -91,7 +92,7 @@ async function boot(distDir: string | null = null, assetFile?: string): Promise<
     approve: (ok) => approveFn(ok),
     engine,
     vaultCalls,
-    emitVault: (ch, payload) => { for (const s of vaultSubs) s(ch, payload) },
+    emitVault: (ch, payload, origin = null) => { for (const s of vaultSubs) s(ch, payload, origin) },
     close: () => { void handle.close(); engine.close() },
   }
 }
@@ -254,31 +255,49 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
-  it('/vault/asset-token + asset:短时令牌走 ?at=;ref 解析/精确 path/越界;/vault/events SSE 收到回灌', async () => {
-    const dist = await mkdtemp(join(tmpdir(), 'unitweb-asset-'))
-    const pic = join(dist, 'p.png')
-    await writeFile(pic, Buffer.from([137, 80, 78, 71]))
-    const b = await boot(null, pic)
+  it('/vault/asset-token + asset:短时令牌走 ?at=;CSP sandbox 惰化附件;软链逃逸拒;/vault/events SSE 带 origin', async () => {
+    const vaultDir = await mkdtemp(join(tmpdir(), 'unitweb-vault-'))
+    const outside = await mkdtemp(join(tmpdir(), 'unitweb-outside-'))
+    await writeFile(join(vaultDir, 'pic.png'), Buffer.from([137, 80, 78, 71]))
+    await writeFile(join(vaultDir, 'evil.html'), '<script>alert(1)</script>')
+    await writeFile(join(vaultDir, 'doc.pdf'), '%PDF-1.4')
+    await writeFile(join(outside, 'secret.txt'), 'TOP SECRET')
+    await symlink(join(outside, 'secret.txt'), join(vaultDir, 'link.png')) // 库内软链指库外
+    const b = await boot(null, vaultDir)
     try {
       const token = await pairUp(b)
       // asset-token 需配对;令牌换资源
       expect((await fetch(`${b.base}/vault/asset-token`, { method: 'POST' })).status).toBe(401)
       const at = ((await (await fetch(`${b.base}/vault/asset-token`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })).json()) as any).token as string
       expect(at).toBeTruthy()
-      // ?at= 过闸拿字节;坏 at 拒;缺 at 但带配对令牌也过(openAttachment 走 window.open 带不了头,兜底给带头的)
+      // ?at= 过闸拿字节;坏 at 拒
       const img = await fetch(`${b.base}/vault/asset?ref=pic.png&at=${at}`)
       expect(img.status).toBe(200)
       expect(img.headers.get('content-type')).toBe('image/png')
       expect([...Buffer.from(await img.arrayBuffer())]).toEqual([137, 80, 78, 71])
       expect((await fetch(`${b.base}/vault/asset?ref=pic.png&at=WRONG`)).status).toBe(401)
-      // 解析不到 → 404;精确 path 越界 → 404
+      // 不受信附件惰化:HTML 带 CSP sandbox+nosniff(直开不执行脚本);PDF 豁免 CSP(Chromium 查看器)
+      const html = await fetch(`${b.base}/vault/asset?ref=evil.html&at=${at}`)
+      expect(html.headers.get('content-security-policy')).toBe('sandbox')
+      expect(html.headers.get('x-content-type-options')).toBe('nosniff')
+      const pdf = await fetch(`${b.base}/vault/asset?ref=doc.pdf&at=${at}`)
+      expect(pdf.headers.get('content-security-policy')).toBeNull()
+      // 解析不到 → 404;词法越界 → 404;**库内软链指库外 → 404(realpath 边界)**
       expect((await fetch(`${b.base}/vault/asset?ref=ghost.png&at=${at}`)).status).toBe(404)
       expect((await fetch(`${b.base}/vault/asset?path=..%2fsecret&at=${at}`)).status).toBe(404)
-      // SSE:B 侧事件到达页面
+      expect((await fetch(`${b.base}/vault/asset?path=link.png&at=${at}`)).status).toBe(404)
+      // RPC 的 X-Unit-Client → vault.call 的 origin
+      await fetch(`${b.base}/vault/rpc`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Unit-Client': 'client-a' },
+        body: JSON.stringify({ ch: IPC.listPages, args: [] }),
+      })
+      expect(b.vaultCalls.find((c) => c.ch === IPC.listPages)?.origin).toBe('client-a')
+      // SSE:B 侧事件到达页面且带 origin(远端桥据此丢自己的回声)
       const es = await fetch(`${b.base}/vault/events?at=${at}`)
       expect(String(es.headers.get('content-type'))).toContain('text/event-stream')
       const reader = es.body!.getReader()
-      b.emitVault(IPC.externalChange, '甲.md')
+      b.emitVault(IPC.externalChange, '甲.md', 'client-a')
       let seen = ''
       const dec = new TextDecoder()
       while (!seen.includes('page:external-change')) {
@@ -287,7 +306,31 @@ describe('unitWeb', () => {
         seen += dec.decode(value, { stream: true })
       }
       expect(seen).toContain('甲.md')
+      expect(seen).toContain('"origin":"client-a"')
       await reader.cancel()
+    } finally { b.close() }
+  })
+
+  it('回收即断供:配对移除后,该设备签发的资源令牌失效、已开的 SSE 在下一事件被掐', async () => {
+    const vaultDir = await mkdtemp(join(tmpdir(), 'unitweb-revoke-'))
+    await writeFile(join(vaultDir, 'pic.png'), Buffer.from([1]))
+    const b = await boot(null, vaultDir)
+    try {
+      const token = await pairUp(b)
+      const at = ((await (await fetch(`${b.base}/vault/asset-token`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })).json()) as any).token as string
+      const es = await fetch(`${b.base}/vault/events?at=${at}`)
+      const reader = es.body!.getReader()
+      await reader.read() // ': connected'
+      // 回收配对(unitsPairedRemove 语义:从列表移除)
+      b.paired.splice(0, b.paired.length)
+      // 资源令牌立即失效(发行者不再配对)
+      expect((await fetch(`${b.base}/vault/asset?ref=pic.png&at=${at}`)).status).toBe(401)
+      // 已开的流在下一次事件时被掐(不再吐给被回收设备)
+      b.emitVault(IPC.externalChange, '甲.md')
+      const { done } = await reader.read()
+      expect(done).toBe(true)
+      // RPC 也过不了闸
+      expect((await fetch(`${b.base}/vault/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ch: IPC.listPages, args: [] }) })).status).toBe(401)
     } finally { b.close() }
   })
 })

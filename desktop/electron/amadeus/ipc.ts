@@ -122,10 +122,13 @@ function dbVersion(text: string): string {
 
 /** Unit 设备页(unitWeb /vault/*)拿到的本地 vault 面:同一套 handler,HTTP RPC 起源。 */
 export interface VaultFace {
-  call: (channel: string, args: unknown[]) => Promise<unknown>
-  onEvent: (cb: (channel: string, payload?: unknown) => void) => () => void
+  /** origin = 远端客户端自报的 clientId(回声按 origin 判,不按路径时间窗——Codex P1)。 */
+  call: (channel: string, args: unknown[], origin?: string | null) => Promise<unknown>
+  onEvent: (cb: (channel: string, payload: unknown, origin: string | null) => void) => () => void
   assetAbs: (page: string | null, ref: string) => Promise<string | null>
   absPath: (rel: string) => string
+  /** 当前 vault 根(远程 asset 面做 realpath 边界校验用);无库 = null。 */
+  root: () => string | null
 }
 
 export function registerIpc(getWindow: () => BrowserWindow | null): {
@@ -140,25 +143,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 
   // 文件变更回灌播给**所有**窗口:拖出的 detached 窗里同样有编辑器/画板/日历,
   // 只发主窗 = 那些窗永远显示旧内容(getWindow() 恒为主窗)。
-  // 2026-08-24 起同时扇出给 Unit 设备页的 SSE 订阅(watcher 外部改动、改名引用重写都借此到远端)。
-  const vaultEventSubs = new Set<(channel: string, payload?: unknown) => void>()
-  const emitRemote = (channel: string, payload?: unknown): void => {
-    for (const s of [...vaultEventSubs]) { try { s(channel, payload) } catch { /* 订阅者自理 */ } }
+  // 2026-08-24 起同时扇出给 Unit 设备页的 SSE 订阅(watcher 外部改动、改名引用重写都借此到远端);
+  // SSE 事件带 origin(写入者的 clientId / 'host'=B 的渲染层 / null=watcher 等无主来源),
+  // 远端桥按 origin 丢自己的回声 —— 路径时间窗方案有预臂竞态+误吞真改动,已废(Codex P1)。
+  const vaultEventSubs = new Set<(channel: string, payload: unknown, origin: string | null) => void>()
+  const emitRemote = (channel: string, payload: unknown, origin: string | null): void => {
+    for (const s of [...vaultEventSubs]) { try { s(channel, payload, origin) } catch { /* 订阅者自理 */ } }
+  }
+  const notifyWindows = (channel: string, payload?: unknown): void => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, payload)
   }
   const notifyAll = (channel: string, payload?: unknown): void => {
-    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send(channel, payload)
-    emitRemote(channel, payload)
+    notifyWindows(channel, payload)
+    emitRemote(channel, payload, null)
   }
 
   /**
    * 写通道 → 回灌事件映射。为什么需要它:savePage 一类的写不广播(本窗自己知道),watcher 又按
    * 自写账本压掉主进程落盘 —— 设备互联后「另一端」就永远听不到。两个派发口各补一半:
    *   渲染层 IPC 起源 → 只发 SSE 给远端(本机各窗维持既有静默,不动外部回灌 P0 契约);
-   *   RPC 起源(远端写) → notifyAll(本机窗口回灌 + SSE;远端桥对自己的写做回声丢弃)。
+   *   RPC 起源(远端写) → 本机窗口回灌 + SSE(带写入者 origin,远端桥据此丢自己的回声)。
+   * ⚠️ reconcilePage 是只读重载(本身就是 externalChange 的响应),映射它=回灌风暴+带新打字的
+   *    窗口被旧盘面回灌丢字,绝不能进这张表(Codex P1)。
    */
   const WRITE_EVENTS: Record<string, (a: unknown[]) => [string, unknown?]> = {
     [IPC.savePage]: (a) => [IPC.externalChange, a[0]],
-    [IPC.reconcilePage]: (a) => [IPC.externalChange, a[0]],
     [IPC.setPageFrontmatter]: (a) => [IPC.externalChange, a[0]],
     [IPC.writeTextFile]: (a) => [IPC.fileChange, a[0]],
     [IPC.drawingWrite]: (a) => [IPC.fileChange, a[0]],
@@ -190,7 +199,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     ipcMain.handle(channel, async (e, ...a) => {
       const r = await fn(e, ...a)
       const ev = WRITE_EVENTS[channel]?.(a)
-      if (ev) emitRemote(ev[0], ev[1])
+      if (ev) emitRemote(ev[0], ev[1], 'host') // B 渲染层的写:远端要听,'host' 不会撞任何远端 clientId
       return r
     })
   }
@@ -1526,18 +1535,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     readExternalPlugins,
     // Unit 设备页的本地 vault 面(unitWeb /vault/*):白名单在 unitWeb.ts(default-deny),这里只管派发。
     vaultFace: {
-      call: async (channel, args) => {
+      call: async (channel, args, origin) => {
         const fn = vaultHandlers.get(channel)
         if (!fn) throw new Error(`unknown vault channel: ${channel}`)
         const r = await fn(null, ...args)
-        // 远端写 → 本机窗口回灌 + SSE(远端桥回声丢弃自己的写);映射见 WRITE_EVENTS 注释。
+        // 远端写 → 本机窗口回灌 + SSE(带写入者 origin,远端桥据此丢自己的回声);映射见 WRITE_EVENTS 注释。
         const ev = WRITE_EVENTS[channel]?.(args)
-        if (ev) notifyAll(ev[0], ev[1])
+        if (ev) {
+          notifyWindows(ev[0], ev[1])
+          emitRemote(ev[0], ev[1], origin ?? null)
+        }
         return r
       },
       onEvent: (cb) => { vaultEventSubs.add(cb); return () => { vaultEventSubs.delete(cb) } },
       assetAbs: (page, ref) => vault.resolveAttachment(page ?? '', ref),
       absPath: (rel) => vault.absPath(rel),
+      root: () => vault.getRoot(),
     },
   }
 }

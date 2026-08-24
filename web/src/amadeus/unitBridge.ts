@@ -7,11 +7,13 @@
  * 三件事在桥内:
  *   1. RPC:POST vault/rpc {ch,args};字节参数/返回按 {__u8: base64} 包裹(saveAsset 等)。
  *   2. 资源:<img>/<video> 带不了 Authorization → 短时资源令牌 ?at=(照 cloudAssets 先例),
- *      ttl/2 自续;setAssetUrlBuilder 接进渲染层 toAssetUrl。
- *   3. 事件:GET vault/events SSE({ch,payload} 直通 desktop 的回灌通道);断线自管理重连
+ *      ttl/2 自续;setAssetUrlBuilder 接进渲染层 toAssetUrl。**首枚令牌在工厂里等到手**——
+ *      否则 LAN 直连下首屏笔记先于令牌渲染,资源 URL 缺 at 全 401 且无人重渲(Codex P2)。
+ *   3. 事件:GET vault/events SSE({ch,payload,origin} 直通 desktop 的回灌通道);断线自管理重连
  *      (1s→30s 退避),重连后补课 = structureChange + 当前笔记 externalChange(照 cloudEvents);
- *      自己的写会被 B 侧 notifyAll 回声回来 → 按「3 秒内自写路径」丢弃(cloud 用 clientId 判,
- *      这里 RPC 无 origin 通道,时间窗版本够用;窗内恰好撞上 B 同径改动会漏一拍,下次事件补上)。
+ *      回声按 **origin===本桥 clientId** 丢弃(RPC 带 X-Unit-Client,B 侧原样回吐)——
+ *      路径时间窗方案有预臂竞态(SSE 回声先于 RPC 响应到达)且会误吞窗内真改动,已废(Codex P1)。
+ *      结构事件永不抑制,照 cloud 口径。
  *
  * 桌面 UX 通道(弹框/shell)不可远程:openVault 回 null,openAttachment/openVaultFile 改开新标签,
  * exportPdf 走浏览器打印(与 cloudBridge 同口径);服务端白名单(unitWeb VAULT_RPC_ALLOW)是真闸,
@@ -29,18 +31,11 @@ export interface UnitBridgeCfg {
   onAuthError(): void
 }
 
-const ECHO_WINDOW_MS = 3000
-
-export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
+export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<AmadeusApi> {
   let lastLoadedPage: string | null = null
   let assetToken = ''
-  /** 自写路径 → 时刻(SSE 回声丢弃;结构事件永不抑制,照 cloud 口径)。 */
-  const selfWrites = new Map<string, number>()
-  const noteSelfWrite = (p: unknown): void => {
-    if (typeof p === 'string' && p) selfWrites.set(p, Date.now())
-  }
-  const isEcho = (p: unknown): boolean =>
-    typeof p === 'string' && Date.now() - (selfWrites.get(p) ?? 0) < ECHO_WINDOW_MS
+  /** 本桥身份:随每次 RPC 发出(X-Unit-Client),B 侧把它标进对应事件的 origin。 */
+  const clientId = crypto.randomUUID()
 
   // ---- RPC ------------------------------------------------------------------
   const enc = (a: unknown): unknown => {
@@ -65,7 +60,7 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
     try {
       res = await fetch(new URL('vault/rpc', cfg.base), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.getToken()}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.getToken()}`, 'X-Unit-Client': clientId },
         body: JSON.stringify({ ch, args: args.map(enc) }),
         signal: ctrl.signal,
       })
@@ -107,8 +102,8 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
       assetTimer = setTimeout(() => { void refreshAssetToken() }, 30_000)
     }
   }
-  void refreshAssetToken()
-  setAssetUrlBuilder((ref) => assetUrl(ref))
+  // ⚠️ 首枚令牌的 await 在事件段**之后**(文件底部):refreshAssetToken 成功即调 startEvents,
+  // 若此刻 `let es` 还在暂时性死区,抛错会被 catch 吞成「30 秒后再试」—— SSE 静默迟到半分钟。
 
   // ---- 事件(SSE → 四条回灌通道) ---------------------------------------------
   const extCbs = new Set<(p: string) => void>()
@@ -119,7 +114,7 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
   let backoff = 1000
   let hadSession = false
   const fire = (set: Set<(p: string) => void>, p: unknown): void => {
-    if (typeof p !== 'string' || isEcho(p)) return
+    if (typeof p !== 'string') return
     for (const cb of [...set]) cb(p)
   }
   function startEvents(): void {
@@ -136,12 +131,14 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
       hadSession = true
     }
     src.onmessage = (ev) => {
-      let d: { ch?: string; payload?: unknown } = {}
+      let d: { ch?: string; payload?: unknown; origin?: string | null } = {}
       try { d = JSON.parse(ev.data) } catch { return }
-      if (d.ch === IPC.externalChange) fire(extCbs, d.payload)
+      // 自己的写回声按 origin 丢;结构事件永不抑制(照 cloud:树刷新幂等,漏真事件才是事故)。
+      const own = d.origin === clientId
+      if (d.ch === IPC.externalChange) { if (!own) fire(extCbs, d.payload) }
       else if (d.ch === IPC.structureChange) { for (const cb of [...structCbs]) cb() }
-      else if (d.ch === IPC.dbChange) fire(dbCbs, d.payload)
-      else if (d.ch === IPC.fileChange) fire(fileCbs, d.payload)
+      else if (d.ch === IPC.dbChange) { if (!own) fire(dbCbs, d.payload) }
+      else if (d.ch === IPC.fileChange) { if (!own) fire(fileCbs, d.payload) }
     }
     src.onerror = () => {
       // ?at= 过期后 EventSource 自带重试会沿用旧 URL → 自管理重连,拿新令牌重建。
@@ -153,6 +150,9 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
     }
   }
   window.addEventListener('beforeunload', () => { es?.close(); if (assetTimer) clearTimeout(assetTimer) })
+
+  await refreshAssetToken() // 首枚等到手再交出桥(失败已排了 30s 重试,降级不阻塞挂载);成功即起 SSE
+  setAssetUrlBuilder((ref) => assetUrl(ref))
 
   const notSupported = (what: string) => (): never => { throw new Error(`${what}:请在对方设备上操作`) }
 
@@ -168,21 +168,11 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
     },
     readPage: (pagePath) => rpc(IPC.readPage, [pagePath]),
     newPage: (pagePath) => rpc(IPC.newPage, [pagePath]),
-    savePage: async (pagePath, manifest, contents) => {
-      await rpc(IPC.savePage, [pagePath, manifest, contents])
-      noteSelfWrite(pagePath)
-    },
+    savePage: (pagePath, manifest, contents) => rpc(IPC.savePage, [pagePath, manifest, contents]),
     renamePage: (oldPath, newName, manifest, contents) => rpc(IPC.renamePage, [oldPath, newName, manifest, contents]),
-    reconcilePage: async (pagePath, prevManifest, prevContents) => {
-      const r = await rpc<Awaited<ReturnType<AmadeusApi['reconcilePage']>>>(IPC.reconcilePage, [pagePath, prevManifest, prevContents])
-      noteSelfWrite(pagePath)
-      return r
-    },
+    reconcilePage: (pagePath, prevManifest, prevContents) => rpc(IPC.reconcilePage, [pagePath, prevManifest, prevContents]),
     saveAsset: (pagePath, fileName, bytes) => rpc(IPC.saveAsset, [pagePath, fileName, bytes]),
-    saveVaultBytes: async (filePath, bytes) => {
-      await rpc(IPC.saveVaultBytes, [filePath, bytes])
-      noteSelfWrite(filePath)
-    },
+    saveVaultBytes: (filePath, bytes) => rpc(IPC.saveVaultBytes, [filePath, bytes]),
     readVaultBytes: (filePath) => rpc(IPC.readVaultBytes, [filePath]),
     saveAttachment: (pagePath, fileName, bytes, opts) => rpc(IPC.saveAttachment, [pagePath, fileName, bytes, opts]),
     openAttachment: async (pagePath, ref) => {
@@ -230,31 +220,14 @@ export function createUnitAmadeusBridge(cfg: UnitBridgeCfg): AmadeusApi {
     uninstallPlugin: notSupported('卸载插件'),
     revealInFileManager: notSupported('在文件管理器中显示'),
     readDatabase: (pagePath, ref) => rpc(IPC.dbRead, [pagePath, ref]),
-    writeDatabase: async (dbPath, data) => {
-      await rpc(IPC.dbWrite, [dbPath, data])
-      noteSelfWrite(dbPath)
-    },
-    writeDatabaseCas: async (dbPath, data, baseVersion) => {
-      const r = await rpc<Awaited<ReturnType<NonNullable<AmadeusApi['writeDatabaseCas']>>>>(IPC.dbWriteCas, [dbPath, data, baseVersion])
-      noteSelfWrite(dbPath)
-      return r
-    },
+    writeDatabase: (dbPath, data) => rpc(IPC.dbWrite, [dbPath, data]),
+    writeDatabaseCas: (dbPath, data, baseVersion) => rpc(IPC.dbWriteCas, [dbPath, data, baseVersion]),
     readDrawing: (pagePath, ref) => rpc(IPC.drawingRead, [pagePath, ref]),
-    writeDrawing: async (drawingPath, source) => {
-      await rpc(IPC.drawingWrite, [drawingPath, source])
-      noteSelfWrite(drawingPath)
-    },
+    writeDrawing: (drawingPath, source) => rpc(IPC.drawingWrite, [drawingPath, source]),
     readTextFile: (filePath) => rpc(IPC.readTextFile, [filePath]),
-    writeTextFile: async (filePath, text) => {
-      await rpc(IPC.writeTextFile, [filePath, text])
-      noteSelfWrite(filePath)
-    },
+    writeTextFile: (filePath, text) => rpc(IPC.writeTextFile, [filePath, text]),
     listPageProps: (folder) => rpc(IPC.listPageProps, [folder]),
-    setPageFrontmatter: async (pagePath, patch) => {
-      const r = await rpc<Awaited<ReturnType<AmadeusApi['setPageFrontmatter']>>>(IPC.setPageFrontmatter, [pagePath, patch])
-      noteSelfWrite(pagePath)
-      return r
-    },
+    setPageFrontmatter: (pagePath, patch) => rpc(IPC.setPageFrontmatter, [pagePath, patch]),
     renamePageFile: (oldPath, newBaseName) => rpc(IPC.renamePageFile, [oldPath, newBaseName]),
     renameDbFile: (oldPath, newBaseName) => rpc(IPC.renameDbFile, [oldPath, newBaseName]),
   }

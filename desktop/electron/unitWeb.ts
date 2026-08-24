@@ -12,8 +12,8 @@
  */
 import http from 'node:http'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { extname, normalize } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { extname, normalize, sep } from 'node:path'
+import { readFile, realpath } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { IPC } from '@amadeus-shared/ipc'
@@ -108,7 +108,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const pending = new Map<string, PendingPair>()
   const pendingByIp = new Map<string, string>()
   // 短时资源令牌(<img>/EventSource 带不了 Authorization → ?at= 查询串;照 amadeus-cloud 先例)。
-  const assetTokens = new Map<string, number>()
+  // 记发行者的配对 hash:配对被回收后,它签发过的资源令牌立即失效(Codex P2——否则被回收设备
+  // 还能凭手里的 at 继续收 10 分钟的库活动)。internal(隧道)签发的 pairHash=null,不受回收影响。
+  const assetTokens = new Map<string, { exp: number; pairHash: string | null }>()
   const ASSET_TTL_MS = 10 * 60_000
 
   const gc = (): void => {
@@ -119,16 +121,38 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         if (pendingByIp.get(p.ip) === id) pendingByIp.delete(p.ip)
       }
     }
-    for (const [t, exp] of assetTokens) if (exp < now) assetTokens.delete(t)
+    for (const [t, rec] of assetTokens) if (rec.exp < now) assetTokens.delete(t)
   }
 
-  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道,server 已验 owner)。 */
-  const authed = (req: http.IncomingMessage): boolean => {
-    if (req.headers['x-unit-internal'] === internalSecret && isLoopback(req.socket.remoteAddress)) return true
+  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道,server 已验 owner)。
+   *  返回来路:internal=隧道;pairHash=命中的配对记录(回收后再验即失败)。 */
+  const authInfo = (req: http.IncomingMessage): { ok: boolean; pairHash: string | null } => {
+    if (req.headers['x-unit-internal'] === internalSecret && isLoopback(req.socket.remoteAddress)) return { ok: true, pairHash: null }
     const m = /^Bearer (.+)$/.exec(String(req.headers.authorization || ''))
-    if (!m) return false
+    if (!m) return { ok: false, pairHash: null }
     const h = sha256(m[1])
-    return deps.pairedDevices.list().some((d) => d.tokenHash === h)
+    const hit = deps.pairedDevices.list().some((d) => d.tokenHash === h)
+    return { ok: hit, pairHash: hit ? h : null }
+  }
+  const authed = (req: http.IncomingMessage): boolean => authInfo(req).ok
+
+  /** 资源令牌活性:未过期 + 发行者(若为配对设备)仍在已配对列表里。 */
+  const assetTokenLive = (at: string): boolean => {
+    const rec = assetTokens.get(at)
+    if (!rec || rec.exp < Date.now()) return false
+    return rec.pairHash === null || deps.pairedDevices.list().some((d) => d.tokenHash === rec.pairHash)
+  }
+
+  /** 远程 asset 面的真实路径边界:软链能把词法钳制过的路径带出库根(Codex P2)——
+   *  realpath 后必须仍在 realpath(库根) 之下才许伺服。 */
+  const underVaultReal = async (abs: string, rootRaw: string | null): Promise<string | null> => {
+    if (!rootRaw) return null
+    try {
+      const [real, rootReal] = await Promise.all([realpath(abs), realpath(rootRaw)])
+      return real === rootReal || real.startsWith(rootReal + sep) ? real : null
+    } catch {
+      return null // 不存在/不可达一律 404
+    }
   }
 
   const json = (res: http.ServerResponse, status: number, body: unknown): void => {
@@ -285,10 +309,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const vault = deps.vault()
       if (!vault) { json(res, 503, { detail: '本机笔记库面未就绪', code: 'VAULT_NOT_READY' }); return }
       const q = new URL(url, 'http://x').searchParams
-      const assetAuthed = (): boolean => {
-        const at = String(q.get('at') || '')
-        return (at !== '' && (assetTokens.get(at) ?? 0) > Date.now()) || authed(req)
-      }
+      const at = String(q.get('at') || '')
+      const assetAuthed = (): boolean => (at !== '' && assetTokenLive(at)) || authed(req)
 
       if (path === '/vault/rpc' && req.method === 'POST') {
         if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
@@ -297,8 +319,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         try { body = JSON.parse(await readBody(req, 32 * 1024 * 1024)) } catch { json(res, 400, { detail: 'bad body' }); return }
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
+        // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);限长防注水。
+        const origin = String(req.headers['x-unit-client'] || '').slice(0, 64) || null
         try {
-          const result = await vault.call(ch, decodeRpcArgs(Array.isArray(body.args) ? body.args : []))
+          const result = await vault.call(ch, decodeRpcArgs(Array.isArray(body.args) ? body.args : []), origin)
           json(res, 200, { ok: true, result: encodeRpcResult(result) ?? null })
         } catch (e) {
           json(res, 200, { ok: false, error: String((e as Error)?.message || e) })
@@ -307,9 +331,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       }
 
       if (path === '/vault/asset-token' && req.method === 'POST') {
-        if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+        const info = authInfo(req)
+        if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
         const token = randomBytes(16).toString('hex')
-        assetTokens.set(token, Date.now() + ASSET_TTL_MS)
+        assetTokens.set(token, { exp: Date.now() + ASSET_TTL_MS, pairHash: info.pairHash })
         json(res, 200, { token, ttlSec: ASSET_TTL_MS / 1000 })
         return
       }
@@ -323,11 +348,19 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
             ? vault.absPath(exact) // 树/侧栏点开:路径精确,不走 ref 的 basename 兜底
             : await vault.assetAbs(q.get('page'), String(q.get('ref') || ''))
         } catch { /* 越界/无库 → 404 */ }
-        if (!abs) { json(res, 404, { detail: 'not found' }); return }
-        const stream = createReadStream(abs) // ponytail: 无 Range;远程视频拖进度条要 Range 再加
+        // 词法钳制挡不住库内软链指向库外(Codex P2):realpath 后仍须在库根之下。
+        const real = abs ? await underVaultReal(abs, vault.root()) : null
+        if (!real) { json(res, 404, { detail: 'not found' }); return }
+        const stream = createReadStream(real) // ponytail: 无 Range;远程视频拖进度条要 Range 再加
         stream.on('error', () => { if (!res.headersSent) json(res, 404, { detail: 'not found' }); else res.destroy() })
         stream.once('open', () => {
-          res.writeHead(200, { 'Content-Type': MIME[extname(abs!).toLowerCase()] || 'application/octet-stream' })
+          const mime = MIME[extname(real).toLowerCase()] || 'application/octet-stream'
+          const h: Record<string, string> = { 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff' }
+          // 库内附件是不受信内容:HTML/SVG 直开会在本应用 origin 执行脚本(可读配对令牌+打 RPC)。
+          // CSP sandbox 让文档落进 opaque origin 且禁脚本;<img>/媒体子资源解码不受此头影响。
+          // PDF 豁免:Chromium 的 PDF 查看器在 sandbox 下拒渲,且它本身跑在独立扩展 origin。
+          if (mime !== 'application/pdf') h['Content-Security-Policy'] = 'sandbox'
+          res.writeHead(200, h)
           stream.pipe(res)
         })
         res.on('close', () => stream.destroy())
@@ -336,16 +369,26 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
       if (path === '/vault/events' && req.method === 'GET') {
         if (!assetAuthed()) { json(res, 401, { detail: '资源令牌无效', code: 'ASSET_TOKEN' }); return }
+        // 记住开流时的授权形态,事件与心跳逐次复验:配对被回收的设备不许继续收库活动(Codex P2)。
+        const viaAt = at !== '' && assetTokenLive(at)
+        const bearerInfo = viaAt ? null : authInfo(req)
+        const stillAuthed = (): boolean => (viaAt ? assetTokenLive(at)
+          : bearerInfo?.pairHash != null ? deps.pairedDevices.list().some((d) => d.tokenHash === bearerInfo.pairHash)
+          : true) // 内部密钥(隧道):per-boot 常量,server 已验 owner
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
           'X-Accel-Buffering': 'no',
         })
         res.write(': connected\n\n')
-        const unsub = vault.onEvent((ch, payload) => {
-          res.write(`data: ${JSON.stringify({ ch, payload })}\n\n`)
+        const unsub = vault.onEvent((ch, payload, origin) => {
+          if (!stillAuthed()) { res.end(); return }
+          res.write(`data: ${JSON.stringify({ ch, payload, origin })}\n\n`)
         })
-        const hb = setInterval(() => res.write(': hb\n\n'), 25_000)
+        const hb = setInterval(() => {
+          if (!stillAuthed()) { res.end(); return }
+          res.write(': hb\n\n')
+        }, 25_000)
         res.on('close', () => { unsub(); clearInterval(hb) })
         return
       }
