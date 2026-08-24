@@ -720,6 +720,38 @@ function pickUnitConfig(src: Record<string, unknown>, keys: readonly string[]): 
   return out
 }
 
+/** listDir 唯一真源(fs:listDir IPC 与 /unit/hostdir 共用):2000 条 cap,目录在前按名排序。 */
+async function listDirImpl(dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number; path: string }>> {
+  if (!dirPath || typeof dirPath !== 'string') return []
+  const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => [])
+  const out: Array<{ name: string; isDir: boolean; size: number; path: string }> = []
+  for (const e of entries.slice(0, 2000)) {
+    let size = 0
+    if (e.isFile()) {
+      try { size = (await stat(join(dirPath, e.name))).size } catch { /* ignore */ }
+    }
+    // path 必须随条目返回:渲染层(HostFilesTab)按 en.path 做预览/进目录/重命名/删除,缺失则全部操作拿到 undefined 而报错。
+    out.push({ name: e.name, isDir: e.isDirectory(), size, path: join(dirPath, e.name) })
+  }
+  // 目录在前,各自按名排序
+  out.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+  return out
+}
+/** statPath 唯一真源(fs:stat IPC 与 /unit/hoststat 共用)。 */
+async function statPathImpl(p: string): Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null> {
+  if (!p || typeof p !== 'string') return null
+  try {
+    const st = await stat(p)
+    const birthtimeMs = st.birthtimeMs > 0 ? st.birthtimeMs : null
+    if (!st.isDirectory()) return { isDir: false, mtimeMs: st.mtimeMs, birthtimeMs }
+    const es = await readdir(p, { withFileTypes: true }).catch(() => [])
+    let files = 0
+    let folders = 0
+    for (const e of es) e.isDirectory() ? folders++ : files++
+    return { isDir: true, mtimeMs: st.mtimeMs, birthtimeMs, files, folders }
+  } catch { return null }
+}
+
 /** host 会话的 project_path 集合(realpath 后):/unit/hostfile 的白名单根扩展。
  *  引擎在 loopback,15s 缓存防抖;引擎没起/拉取失败=空集(只剩工作区+vault 两根,不放大)。 */
 let unitSessionRootsCache: { at: number; roots: string[] } = { at: 0, roots: [] }
@@ -744,6 +776,26 @@ async function unitSessionRoots(): Promise<string[]> {
   } catch { /* 引擎不可达 = 空集 */ }
   unitSessionRootsCache = { at: Date.now(), roots: [...new Set(roots)] }
   return unitSessionRootsCache.roots
+}
+
+/** /unit/host{file,dir,stat} 三端点共用的路径钳制:realpath 后判 roots(工作区∪vault∪host 会话根)内,
+ *  default-deny。allowRoot:目录类操作(list/stat)可指根本身;文件读不可(根是目录)。
+ *  relative 判定跨平台(win 反斜杠 realpath 下 '+/' 前缀恒 false 的坑,Codex P1)。 */
+async function unitResolveInScope(p: string, allowRoot: boolean): Promise<string | null> {
+  if (!p || typeof p !== 'string') return null
+  let real: string
+  try { real = realpathSync(p) } catch { return null }
+  const stored = await loadConfig()
+  const roots: string[] = []
+  try { roots.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
+  try { const vr = amadeusVaultFace?.root(); if (vr) roots.push(realpathSync(vr)) } catch { /* 无库 */ }
+  for (const sp of await unitSessionRoots()) roots.push(sp)
+  const inRoot = (r: string): boolean => {
+    if (real === r) return allowRoot
+    const rel = relative(r, real)
+    return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
+  }
+  return roots.some(inRoot) ? real : null
 }
 
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
@@ -836,21 +888,8 @@ async function doRefreshUnitHost(): Promise<void> {
     // 只钳默认工作区会让那些会话的 Desk/文件卡全 404;这些目录本就是 agent 的可达范围,只读不扩权)。
     // default-deny —— 越界/不存在一律 null(unitWeb 统一 404,不泄露存在性)。写/删一概不给(审计 C1)。
     readHostFile: async (p: string, maxBytes?: number) => {
-      if (!p || typeof p !== 'string') return null
-      let real: string
-      try { real = realpathSync(p) } catch { return null }
-      const stored = await loadConfig()
-      const roots: string[] = []
-      try { roots.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
-      try { const vr = amadeusVaultFace?.root(); if (vr) roots.push(realpathSync(vr)) } catch { /* 无库 */ }
-      for (const sp of await unitSessionRoots()) roots.push(sp)
-      // relative 判定(Codex P1:win 的 realpath 是反斜杠,'+/' 前缀判定恒 false → 全 404)
-      const inRoot = (r: string): boolean => {
-        if (real === r) return false // 根本身是目录,不可读
-        const rel = relative(r, real)
-        return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
-      }
-      if (!roots.some(inRoot)) return null
+      const real = await unitResolveInScope(p, false) // 文件读:根本身是目录,不含
+      if (!real) return null
       const st = await stat(real).catch(() => null)
       if (!st?.isFile()) return null
       // 上限:直连 50MB(同 fs:readFile);隧道路径由 unitWeb 按信封余量传入更小值(Codex P2:
@@ -867,6 +906,20 @@ async function doRefreshUnitHost(): Promise<void> {
       if (st.size > UNIT_MAX_READ) return { mimeType, content: '', size: st.size, mtimeMs: st.mtimeMs, tooLarge: true }
       const buf = await readFile(real)
       return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
+    },
+    // 主机目录/条目只读面(工作台文件面板/悬停提示的数据源):钳制同 hostfile,目录类可指根本身。
+    // 与 fs:listDir / fs:stat 共用唯一真源实现(listDirImpl/statPathImpl)。写/删仍一概不给。
+    readHostDir: async (p: string) => {
+      const real = await unitResolveInScope(p, true)
+      if (!real) return null
+      const st = await stat(real).catch(() => null)
+      if (!st?.isDirectory()) return null
+      return listDirImpl(real)
+    },
+    readHostStat: async (p: string) => {
+      const real = await unitResolveInScope(p, true)
+      if (!real) return null
+      return statPathImpl(real)
     },
     vault: () => amadeusVaultFace,
     meta: { instanceId, name: hostname(), version: app.getVersion() },
@@ -1628,38 +1681,11 @@ app.whenReady().then(async () => {
   })
 
   // ── 本机工作区文件浏览(host 模式右栏:直接读 cwd 真实目录)──
-  ipcMain.handle('fs:listDir', async (_e, dirPath: string) => {
-    if (!dirPath || typeof dirPath !== 'string') return []
-    const entries = await readdir(dirPath, { withFileTypes: true }).catch(() => [])
-    const out: Array<{ name: string; isDir: boolean; size: number; path: string }> = []
-    for (const e of entries.slice(0, 2000)) {
-      let size = 0
-      if (e.isFile()) {
-        try { size = (await stat(join(dirPath, e.name))).size } catch { /* ignore */ }
-      }
-      // path 必须随条目返回:渲染层(HostFilesTab)按 en.path 做预览/进目录/重命名/删除,缺失则全部操作拿到 undefined 而报错。
-      out.push({ name: e.name, isDir: e.isDirectory(), size, path: join(dirPath, e.name) })
-    }
-    // 目录在前,各自按名排序
-    out.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
-    return out
-  })
+  ipcMain.handle('fs:listDir', (_e, dirPath: string) => listDirImpl(dirPath))
   /** 单条目 stat(侧栏悬停提示用;悬停 1s 才调 = 天然节流,不进 listDir 热路径)。
    *  文件 → 修改/创建时间;目录 → 另带直接子项计数。⚠️birthtime 只有 mac/Windows 可靠,
    *  Linux 部分文件系统拿不到 → Node 给 0(或悄悄回退 ctime);0 一律当「无」,由渲染层省略该行。 */
-  ipcMain.handle('fs:stat', async (_e, p: string) => {
-    if (!p || typeof p !== 'string') return null
-    try {
-      const st = await stat(p)
-      const birthtimeMs = st.birthtimeMs > 0 ? st.birthtimeMs : null
-      if (!st.isDirectory()) return { isDir: false, mtimeMs: st.mtimeMs, birthtimeMs }
-      const es = await readdir(p, { withFileTypes: true }).catch(() => [])
-      let files = 0
-      let folders = 0
-      for (const e of es) e.isDirectory() ? folders++ : files++
-      return { isDir: true, mtimeMs: st.mtimeMs, birthtimeMs, files, folders }
-    } catch { return null }
-  })
+  ipcMain.handle('fs:stat', (_e, p: string) => statPathImpl(p))
   const MIME_BY_EXT: Record<string, string> = {
     txt: 'text/plain', md: 'text/markdown', markdown: 'text/markdown', json: 'application/json',
     js: 'text/javascript', mjs: 'text/javascript', cjs: 'text/javascript', ts: 'text/typescript',

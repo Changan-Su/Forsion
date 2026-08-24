@@ -70,6 +70,9 @@ export interface UnitWebDeps {
   /** 主机文件只读(Desk/文件卡数据源):deps 层 realpath 钳制工作区根∪vault 根∪host 会话根;
    *  越界/不存在=null。maxBytes:隧道路径信封余量(b64 双重膨胀),超限回 tooLarge 而非撑爆信封。 */
   readHostFile: (p: string, maxBytes?: number) => Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean } | null>
+  /** 主机目录列表/条目 stat(工作台文件面板/悬停提示):钳制同上,目录类可指根本身;越界=null。 */
+  readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
+  readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
   /** web 构建目录(TANGU_UNIT_WEB_DIST / 捆包路径);null = 出「未捆构建」提示页。 */
   webDistDir: () => string | null
@@ -350,6 +353,15 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const f = await deps.readHostFile(p, viaTunnel ? 4 * 1024 * 1024 : undefined)
       if (!f) { json(res, 404, { detail: 'not readable' }); return }
       json(res, 200, f)
+      return
+    }
+    // 主机目录列表 / 条目 stat(只读;钳制同 hostfile,目录类可指根本身)。
+    if ((path === '/unit/hostdir' || path === '/unit/hoststat') && req.method === 'GET') {
+      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      const p = String(new URL(url, 'http://x').searchParams.get('path') || '')
+      const r = path === '/unit/hostdir' ? await deps.readHostDir(p) : await deps.readHostStat(p)
+      if (!r) { json(res, 404, { detail: 'not readable' }); return }
+      json(res, 200, path === '/unit/hostdir' ? { entries: r } : r)
       return
     }
     // UI 偏好配置面(白名单子集,读写对称;deps 负责裁剪 —— 这里绝不直接碰 config 全量)。

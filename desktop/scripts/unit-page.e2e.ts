@@ -117,6 +117,8 @@ async function main(): Promise<void> {
     writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: true, ...patch }),
     readProviders: async () => [{ providerId: 'e2e-direct', modelIds: ['e2e/m1'] }],
     readHostFile: async () => null, // e2e 不铺主机文件面;桥侧对 404 兜底即可
+    readHostDir: async () => null,
+    readHostStat: async () => null,
     readSpaces: async () => [{
       slug: 'demo-space',
       json: JSON.stringify({ id: 'demo-space', name: '远程演示空间', icon: 'boxes', layout: { main: [{ type: 'launcher' }], left: [], right: [] } }),

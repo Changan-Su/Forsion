@@ -83,6 +83,8 @@ async function boot(distDir: string | null = null, vaultRoot?: string): Promise<
     readConfig: async () => ({ agentDeskEnabled: true, homeDir: '/home/demo' }),
     readProviders: async () => [{ providerId: 'demo-direct', modelIds: ['demo/m1'] }],
     readHostFile: async (p: string, maxBytes?: number) => { lastHostfileMax = maxBytes; return p === '/ws/ok.md' ? { mimeType: 'text/markdown', content: 'aGk=', size: 2 } : null },
+    readHostDir: async (p: string) => (p === '/ws' ? [{ name: 'ok.md', isDir: false, size: 2, path: '/ws/ok.md' }] : null),
+    readHostStat: async (p: string) => (p === '/ws/ok.md' ? { isDir: false, mtimeMs: 1, birthtimeMs: null } : null),
     writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: patch.agentDeskEnabled ?? true, homeDir: '/home/demo' }),
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
     webDistDir: () => distDir,
@@ -195,6 +197,14 @@ describe('unitWeb', () => {
       expect(((await ok.json()) as any).content).toBe('aGk=')
       expect((await fetch(`${b.base}/unit/hostfile?path=${encodeURIComponent('/etc/passwd')}`, { headers: h })).status).toBe(404)
       expect(lastHostfileMax).toBe(4 * 1024 * 1024) // 内部密钥来路=隧道语义 → 信封余量上限
+      // hostdir/hoststat:钳制同源,越界 404、根内出货
+      const dir = await fetch(`${b.base}/unit/hostdir?path=${encodeURIComponent('/ws')}`, { headers: h })
+      expect(dir.status).toBe(200)
+      expect(((await dir.json()) as any).entries[0].name).toBe('ok.md')
+      expect((await fetch(`${b.base}/unit/hostdir?path=${encodeURIComponent('/etc')}`, { headers: h })).status).toBe(404)
+      const st = await fetch(`${b.base}/unit/hoststat?path=${encodeURIComponent('/ws/ok.md')}`, { headers: h })
+      expect(((await st.json()) as any).isDir).toBe(false)
+      expect((await fetch(`${b.base}/unit/hoststat?path=${encodeURIComponent('/etc/passwd')}`, { headers: h })).status).toBe(404)
     } finally { b.close() }
   })
 
