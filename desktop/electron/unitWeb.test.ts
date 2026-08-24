@@ -286,11 +286,11 @@ describe('unitWeb', () => {
       expect((await fetch(`${b.base}/vault/asset?ref=ghost.png&at=${at}`)).status).toBe(404)
       expect((await fetch(`${b.base}/vault/asset?path=..%2fsecret&at=${at}`)).status).toBe(404)
       expect((await fetch(`${b.base}/vault/asset?path=link.png&at=${at}`)).status).toBe(404)
-      // RPC 的 X-Unit-Client → vault.call 的 origin
+      // RPC 的 body.client → vault.call 的 origin(走 body:隧道信封不带自定义头)
       await fetch(`${b.base}/vault/rpc`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Unit-Client': 'client-a' },
-        body: JSON.stringify({ ch: IPC.listPages, args: [] }),
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ch: IPC.listPages, args: [], client: 'client-a' }),
       })
       expect(b.vaultCalls.find((c) => c.ch === IPC.listPages)?.origin).toBe('client-a')
       // SSE:B 侧事件到达页面且带 origin(远端桥据此丢自己的回声)

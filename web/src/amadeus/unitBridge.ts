@@ -34,8 +34,12 @@ export interface UnitBridgeCfg {
 export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<AmadeusApi> {
   let lastLoadedPage: string | null = null
   let assetToken = ''
-  /** 本桥身份:随每次 RPC 发出(X-Unit-Client),B 侧把它标进对应事件的 origin。 */
-  const clientId = crypto.randomUUID()
+  /** 本桥身份:随每次 RPC 发出(body.client),B 侧把它标进对应事件的 origin。
+   *  ⚠️ T1 是明文 http://<LAN IP>(非安全上下文),crypto.randomUUID 在那里**不存在**——
+   *  直接调会在挂桥前抛掉整页(getRandomValues 不限安全上下文,用它兜底)。 */
+  const clientId = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, '0')).join('')
 
   // ---- RPC ------------------------------------------------------------------
   const enc = (a: unknown): unknown => {
@@ -58,10 +62,12 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     const timer = setTimeout(() => ctrl.abort(), hasBytes ? 120_000 : 30_000)
     let res: Response
     try {
+      // clientId 走 body 而非自定义头:T2 隧道信封只带 method/path/ct/accept/body,头会被剥掉,
+      // body 原样过 —— 走头的话隧道页事件 origin 恒 null,自己的回声全被当外部改动回灌。
       res = await fetch(new URL('vault/rpc', cfg.base), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.getToken()}`, 'X-Unit-Client': clientId },
-        body: JSON.stringify({ ch, args: args.map(enc) }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.getToken()}` },
+        body: JSON.stringify({ ch, args: args.map(enc), client: clientId }),
         signal: ctrl.signal,
       })
     } catch (e) {
@@ -88,10 +94,15 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   }
   let assetTimer: ReturnType<typeof setTimeout> | null = null
   const refreshAssetToken = async (): Promise<void> => {
+    // 10s 封顶:工厂 await 首枚令牌,这个 fetch 一旦挂死(链路断/隧道 dispatch 悬置),
+    // 整页永远挂不上 window.amadeus —— 超时落 catch(30s 重试),降级放行。
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 10_000)
     try {
       const r = await fetch(new URL('vault/asset-token', cfg.base), {
         method: 'POST',
         headers: { Authorization: `Bearer ${cfg.getToken()}` },
+        signal: ctrl.signal,
       })
       const j = (await r.json()) as { token?: string; ttlSec?: number }
       if (!r.ok || !j.token) throw new Error(`HTTP ${r.status}`)
@@ -100,6 +111,8 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
       assetTimer = setTimeout(() => { void refreshAssetToken() }, (Math.max(60, j.ttlSec || 600) / 2) * 1000)
     } catch {
       assetTimer = setTimeout(() => { void refreshAssetToken() }, 30_000)
+    } finally {
+      clearTimeout(timer)
     }
   }
   // ⚠️ 首枚令牌的 await 在事件段**之后**(文件底部):refreshAssetToken 成功即调 startEvents,

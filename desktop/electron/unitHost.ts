@@ -181,18 +181,25 @@ export class UnitHost {
       await this.streamBack(env.id, r, ctrl)
     } else {
       const buf = Buffer.from(await r.arrayBuffer())
-      await this.respond(env.id, r.status, ct || 'application/json', buf)
+      // 安全头随包回传(白名单):/vault/asset 用 CSP sandbox 惰化不受信附件——隧道剥掉它,
+      // HTML 附件就会在鉴权过的 proxy origin 上活着执行(Codex 二轮 P1)。
+      const extra: Record<string, string> = {}
+      for (const k of ['content-security-policy', 'x-content-type-options'] as const) {
+        const v = r.headers.get(k)
+        if (v) extra[k] = v
+      }
+      await this.respond(env.id, r.status, ct || 'application/json', buf, extra)
     }
   }
 
-  private async respond(dispatchId: string, status: number, ct: string, body: Buffer): Promise<void> {
+  private async respond(dispatchId: string, status: number, ct: string, body: Buffer, extraHeaders?: Record<string, string>): Promise<void> {
     const { cloudUrl, token } = this.deps.getCreds()
     const pairing = this.deps.getPairing()
     if (!pairing) return
     await fetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/resp/${dispatchId}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'X-Unit-Secret': pairing.secret, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status, headers: { 'content-type': ct }, bodyB64: body.toString('base64') }),
+      body: JSON.stringify({ status, headers: { 'content-type': ct, ...extraHeaders }, bodyB64: body.toString('base64') }),
     }).catch((e) => this.deps.log(`[unit-host] 回包失败: ${e?.message || e}`))
   }
 

@@ -314,13 +314,13 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
       if (path === '/vault/rpc' && req.method === 'POST') {
         if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-        let body: { ch?: string; args?: unknown[] }
+        let body: { ch?: string; args?: unknown[]; client?: unknown }
         // 32MB:附件上传按 b64 膨胀 ~4/3;隧道路径另受 server 信封 10MB 顶(见方案 §9,LAN 不受限)。
         try { body = JSON.parse(await readBody(req, 32 * 1024 * 1024)) } catch { json(res, 400, { detail: 'bad body' }); return }
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
-        // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);限长防注水。
-        const origin = String(req.headers['x-unit-client'] || '').slice(0, 64) || null
+        // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);走 body 因为隧道信封不带自定义头;限长防注水。
+        const origin = String(body.client || '').slice(0, 64) || null
         try {
           const result = await vault.call(ch, decodeRpcArgs(Array.isArray(body.args) ? body.args : []), origin)
           json(res, 200, { ok: true, result: encodeRpcResult(result) ?? null })
