@@ -202,14 +202,24 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
-  it('静态壳:index 注入 unit 标记;SPA 回退;路径穿越拒绝', async () => {
+  it('静态壳:index 注入 unit 标记 + CSP 放行插件 eval;SPA 回退;路径穿越拒绝', async () => {
     const dist = await mkdtemp(join(tmpdir(), 'unitweb-'))
-    await writeFile(join(dist, 'index.html'), '<html><head></head><body>shell</body></html>')
+    // 真 web 构建的 CSP 形状(script-src 无 unsafe-eval)——插件宿主 new Function 会被它毙掉。
+    await writeFile(join(dist, 'index.html'),
+      `<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'" /></head><body>shell</body></html>`)
     const b = await boot(dist)
     try {
       const home = await (await fetch(`${b.base}/`)).text()
       expect(home).toContain('__FORSION_UNIT_PAGE__')
       expect(home).toContain('inst-1')
+      // 设备页必须补上 unsafe-eval(否则 19 个插件全部 setup 失败,页面看着就是「插件都没了」)
+      expect(home).toMatch(/script-src 'self' 'unsafe-inline' 'unsafe-eval'/)
+      expect(home).toContain("style-src 'self'") // 只动 script-src,别的指令原样
+      // 幂等:已带 unsafe-eval 的构建不重复追加
+      await writeFile(join(dist, 'index.html'),
+        `<html><head><meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-eval'" /></head><body>shell</body></html>`)
+      const again = await (await fetch(`${b.base}/`)).text()
+      expect(again.match(/'unsafe-eval'/g)?.length).toBe(1)
       const spa = await (await fetch(`${b.base}/some/route`)).text() // 无扩展名 → index
       expect(spa).toContain('shell')
       // 带扩展名才走文件分支(无扩展名的会被 SPA 回退兜成 index,本身无害):穿越必须被拒。

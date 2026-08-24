@@ -2,14 +2,19 @@
  * 活体探针:对**正在运行**的 Forsion(unitWeb)做端到端体检 —— 不起假件,测真进程。
  * 用途:用户报「设备页不实时/插件不显示」时,把 B 侧管道逐环钉死(配对→RPC→SSE→watcher→插件清单)。
  *
- * 会弹一次真配对确认框(需要在 B 机上点「允许」);探针会在库里建又删一篇 `__unit探针__.md`。
+ * 免手点:B 机的 dev 用 `FORSION_UNIT_AUTO_PAIR=1 npm run dev` 起(双闸后门,仅非打包),
+ * 配对请求会被自动批准,探针从头到尾无需人工。否则会弹一次真确认框(点一次后令牌落盘,以后复用)。
+ * 探针会在库里建又删一篇 `__unit探针__.md`。
  * 跑:npx tsx scripts/unit-live.probe.ts [base]   (缺省 http://127.0.0.1:8791)
  */
-import { appendFile } from 'node:fs/promises'
+import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const base = process.argv[2] || 'http://127.0.0.1:8791'
 const PROBE_NOTE = '__unit探针__.md'
+/** 配对令牌落盘复用:免得每跑一次都要在 B 机点一次弹框。 */
+const TOKEN_FILE = join(tmpdir(), 'forsion-unit-probe-token.txt')
 const results: Array<{ name: string; ok: boolean }> = []
 function check(name: string, ok: boolean, detail?: string): void {
   results.push({ name, ok })
@@ -22,23 +27,44 @@ async function main(): Promise<void> {
   const meta = (await (await fetch(`${base}/unit/meta`)).json()) as { instanceId?: string; name?: string; version?: string }
   check('unit/meta 可达', !!meta.instanceId, `${meta.name} v${meta.version}`)
 
-  // 2 配对(B 机屏幕会弹确认框;2 分钟内点「允许」)
-  const req = (await (await fetch(`${base}/unit/pair/request`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Claude 活体探针' }),
-  })).json()) as { requestId?: string; code?: string; detail?: string }
-  if (!req.requestId) {
-    console.log(`配对请求被拒(${req.detail ?? '未知'})——若是 429,先在切换器脚部移除挂着的待确认,再重跑`)
-    process.exit(2)
-  }
-  console.log(`\n>>> 请在 Forsion 弹框上核对配对码 ${req.code} 并点「允许」(等 120s)…\n`)
+  // 2 配对:先试落盘的旧令牌(whoami 过闸即复用);不行再走弹框流(B 机 2 分钟内点「允许」)
   let token = ''
-  for (let i = 0; i < 80 && !token; i++) {
-    await sleep(1500)
-    const st = (await (await fetch(`${base}/unit/pair/poll?id=${req.requestId}`)).json()) as { status?: string; token?: string }
-    if (st.status === 'approved' && st.token) token = st.token
-    if (st.status === 'denied' || st.status === 'expired') break
+  try {
+    const saved = (await readFile(TOKEN_FILE, 'utf8')).trim()
+    if (saved && (await fetch(`${base}/unit/whoami`, { headers: { Authorization: `Bearer ${saved}` } })).status === 200) {
+      token = saved
+      console.log('(复用上次的配对令牌,免弹框)')
+    }
+  } catch { /* 没存过 */ }
+  if (!token) {
+    const req = (await (await fetch(`${base}/unit/pair/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Claude 活体探针' }),
+    })).json()) as { requestId?: string; code?: string; detail?: string }
+    if (!req.requestId) {
+      console.log(`配对请求被拒(${req.detail ?? '未知'})——若是 429,等 2 分钟或点掉挂着的弹框再重跑`)
+      process.exit(2)
+    }
+    console.log(`\n>>> 请在 Forsion 弹框上核对配对码 ${req.code} 并点「允许」(等 240s;配对请求 2 分钟一枚,过期自动再发)…\n`)
+    for (let i = 0; i < 160 && !token; i++) {
+      await sleep(1500)
+      const st = (await (await fetch(`${base}/unit/pair/poll?id=${req.requestId}`)).json()) as { status?: string; token?: string }
+      if (st.status === 'approved' && st.token) token = st.token
+      if (st.status === 'denied') break
+      if (st.status === 'expired') {
+        // 上一枚过期:补发一枚(新码会另弹一框),继续等
+        const again = (await (await fetch(`${base}/unit/pair/request`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Claude 活体探针' }),
+        })).json()) as { requestId?: string; code?: string }
+        if (!again.requestId) break
+        req.requestId = again.requestId
+        console.log(`>>> 上一枚过期,新配对码 ${again.code},请点新弹框的「允许」…`)
+      }
+    }
+    if (token) await writeFile(TOKEN_FILE, token, 'utf8').catch(() => {})
   }
   check('配对拿到令牌', !!token)
   if (!token) { finish(); return }
@@ -83,8 +109,19 @@ async function main(): Promise<void> {
   })()
   await sleep(300)
 
-  // 5 RPC 写 → SSE 必须吐 externalChange(origin=probe-a;真桥会丢自己的,这里裸看流证明发了)
-  await rpc('page:save', [PROBE_NOTE, { blocks: [] }, { main: '# 探针\n\n第一笔\n' }])
+  // 5a RPC 建页(page:new 走真编译器出合法 manifest)→ SSE 必须吐 structureChange(origin=probe-a)
+  await rpc('page:new', [PROBE_NOTE])
+  await sleep(1200)
+  const newEv = events.find((e) => e.ch === 'vault:structure-change' && e.origin === 'probe-a')
+  check('RPC 建页 → SSE structureChange(带 origin)', !!newEv, JSON.stringify(newEv ?? events.slice(-3)))
+
+  // 5b 真数据往返:load 取真 manifest/blocks → 按 savePage 的 contents 形状(blockId→正文)回存
+  //    → SSE 必须吐 externalChange(origin=probe-a;真桥会按 origin 丢自己的,这里裸看流证明发了)。
+  //    ⚠️ LoadedPage 是 {manifest, blocks:{id:{id,type,content}}},**没有 contents 字段** ——
+  //    写错字段名会让 undefined 经 JSON 数组变成 null,设备端报 `null['1']`(2026-08-24 栽过)。
+  const loaded = await rpc<{ manifest: unknown; blocks: Record<string, { content: string }> }>('page:load', [PROBE_NOTE])
+  const contents = Object.fromEntries(Object.entries(loaded.blocks || {}).map(([id, b]) => [id, `${b.content ?? ''}\n探针写入 ${Date.now()}\n`]))
+  await rpc('page:save', [PROBE_NOTE, loaded.manifest, contents])
   await sleep(1200)
   const rpcEv = events.find((e) => e.ch === 'page:external-change' && e.payload === PROBE_NOTE)
   check('RPC 写 → SSE 回灌事件(带 origin)', !!rpcEv && rpcEv.origin === 'probe-a', JSON.stringify(rpcEv ?? events.slice(-3)))

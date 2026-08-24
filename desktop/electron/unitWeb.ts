@@ -223,7 +223,21 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
         const inject = `<script>window.__FORSION_UNIT_PAGE__=${JSON.stringify({ instanceId: deps.meta.instanceId, name: deps.meta.name, version: deps.meta.version })}</script>`
-        buf = Buffer.from(buf.toString('utf8').replace(/<head>/i, `<head>${inject}`))
+        let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
+        // ⚠️ 设备页必须放行 'unsafe-eval':插件宿主用 new Function 求值插件代码,而 web 构建的
+        // CSP(script-src 'self' 'unsafe-inline')没它 —— 19 个插件会**全部** setup 失败,页面看起来
+        // 就是「插件和视图都没了」(2026-08-24 真机实测)。云端 web 那份 index 不动(它本就不装插件)。
+        // 信任面:这里跑的是 B 自己装的插件,与 B 桌面端同一信任级;附件的惰化另走 /vault/asset 的 CSP sandbox。
+        // 两步走(别塞一个巨型正则:CSP 值自带单引号 'self'/'unsafe-inline',一步匹配会在那里断掉):
+        // ① 揪出 CSP meta 标签 ② 只在它的 script-src 指令尾部补 'unsafe-eval',其余指令原样。
+        html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/i, (tag) =>
+          tag.replace(/(content=(["']))([\s\S]*?)\2/i, (_m, head: string, quote: string, csp: string) => {
+            const next = csp.includes("'unsafe-eval'")
+              ? csp
+              : csp.replace(/script-src([^;]*)/i, (_d, srcs: string) => `script-src${srcs} 'unsafe-eval'`)
+            return `${head}${next}${quote}`
+          }))
+        buf = Buffer.from(html)
       }
       res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': buf.length })
       res.end(buf)

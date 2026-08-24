@@ -696,6 +696,14 @@ async function doRefreshUnitHost(): Promise<void> {
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
     },
     confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
+      // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
+      // 才自动批准免手点。任一缺失都走下面的真弹框。⚠️ 这道闸绝不能变成无条件/进发布包:
+      // 少了它同网段任何设备都能无验证接管本机(引擎执行 + 读写库)。打包版 isPackaged 恒 true,
+      // 后门天然失效;env 需人显式设,不会误触。
+      if (!app.isPackaged && process.env.FORSION_UNIT_AUTO_PAIR === '1') {
+        console.log(`[unit-web] AUTO-PAIR(dev 后门):自动批准「${info.name}」(${info.ip}) 码=${info.code}`)
+        return true
+      }
       showMainWindow()
       // ⚠️ 弹框必须挂父窗:mac 上无父的 showMessageBox 是 app-modal,会**冻住主进程事件循环**——
       // unitWeb/引擎代理/本机 IPC 全部悬死,对端的配对轮询整片超时(活体探针 2026-08-24 实测)。
