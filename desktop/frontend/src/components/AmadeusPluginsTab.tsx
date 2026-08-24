@@ -323,7 +323,8 @@ const PluginDetail: React.FC<{
         {p.onboarding && !p.blocked && (
           <button className="btn ghost sm" onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
         )}
-        {!p.builtin && !!amadeus?.uninstallPlugin && (
+        {/* 设备页 uninstallPlugin 是 notSupported 桩(truthy)——按标志再挡一道,免得按钮点了才报不支持 */}
+        {!p.builtin && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
           <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>
@@ -473,9 +474,10 @@ export const AmadeusPluginsTab: React.FC<{
       <div className="settings-sec settings-sec--gap">{t('settings.amadeusPlugins.externalTitle')}</div>
       <div className="hint">{t('settings.amadeusPlugins.hint')}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>
+        {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为,unitBridge 只有 notSupported 桩 —— 藏;重新装载(重拉 unit/plugins + unit/spaces)保留。 */}
+        {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
         <button className="btn ghost sm" onClick={() => void reload().then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
-        <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>
+        {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
       </div>
       {externals.length === 0 && <div className="hint">{t('settings.amadeusPlugins.empty')}</div>}
       {externals.map(renderCard)}

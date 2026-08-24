@@ -234,6 +234,9 @@ export const SettingsModal: React.FC<{
   const isDesktop = !!window.tangu?.backendStatus
   // Tangu Web(浏览器云端客户端):解闸云端可用特性(技能);其余 host tab 仍随 isDesktop 隐藏。
   const cloudWeb = !!window.tangu?.cloudWeb
+  // Unit 设备页(B 端渲染):插件真的在装(unit/plugins),插件页必须给 —— 只藏 shell 类操作;
+  // 其余 host tab(MCP/Hooks/托管后端等)仍随 isDesktop 隐藏(shim 没有那些桥,列出来就是白板)。
+  const unitPage = !!window.tangu?.unitPage
   const tabItems = [
     // = 连接 + Forsion 合并。⚠️ 云端 Web / 移动端(webShim、mobileShim 都是 cloudWeb:true 且不给
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
@@ -244,7 +247,9 @@ export const SettingsModal: React.FC<{
     // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
     // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(effect 重定向)。
-    ...(isDesktop ? ([['mcp', 'MCP'], ['hooks', 'Hooks'], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')], ['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
+    ...(isDesktop ? ([['mcp', 'MCP'], ['hooks', 'Hooks'], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
+    // 插件页设备页也给(插件在 B 端真的装载运行,列表/启停是本页 runtime 行为,不碰对方设备)。
+    ...(isDesktop || unitPage ? ([['amadeus-plugins', t('settings.tab.amadeusPlugins')]] as Array<[Tab, string]>) : []),
     ...(isDesktop && !!window.amadeus ? ([['notes', t('settings.tab.notes')], ['sync', t('settings.tab.sync')]] as Array<[Tab, string]>) : []),
     ...(isDesktop ? ([['spaces', t('settings.tab.spaces')]] as Array<[Tab, string]>) : []),
     ['theme', t('settings.tab.theme')],
@@ -259,7 +264,7 @@ export const SettingsModal: React.FC<{
   // 一级页也做 activeSub 同款推导:请求的页在本端不存在时(深链带来的旧 tab、或上面被摘掉的 general)
   // 落到第一个可用页,免得停在白板上。plugin:<id> 动态页不在 tabItems 里,单独放行。
   const tab: Tab = tabItems.some(([id]) => id === rawTab) || rawTab.startsWith('plugin:')
-    || (rawTab.startsWith('fplugin:') && isDesktop && !!window.amadeus)
+    || (rawTab.startsWith('fplugin:') && (isDesktop || unitPage) && !!window.amadeus)
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
   const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
@@ -388,9 +393,9 @@ export const SettingsModal: React.FC<{
   const amxActiveIds = usePluginStore((s) => s.activeIds)
   const amxSettings = usePluginStore((s) => s.settings)
   const amxSettingsViews = usePluginStore((s) => s.settingsViews)
-  // ⚠️ 闸必须与「插件」页(amadeus-plugins,isDesktop 限定)一致:移动端 window.amadeus 在、那一页却不在,
+  // ⚠️ 闸必须与「插件」页(amadeus-plugins,isDesktop/unitPage 限定)一致:移动端 window.amadeus 在、那一页却不在,
   // 只按 amadeus 放行会列出一批点「返回」就被推导弹回首页的条目。
-  const forsionNavItems: Array<[Tab, string]> = !(isDesktop && window.amadeus) ? []
+  const forsionNavItems: Array<[Tab, string]> = !((isDesktop || unitPage) && window.amadeus) ? []
     : pluginsWithSettingsPanel(amxPlugins, amxActiveIds, amxSettings, amxSettingsViews)
       .map((pl) => [`fplugin:${pl.id}`, pluginDisplayName(pl, locale)] as [Tab, string])
 

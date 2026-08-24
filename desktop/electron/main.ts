@@ -665,6 +665,40 @@ function unitLanUrl(): string | null {
   return null
 }
 
+/** 用户/插件 Space 配方清单(spaces:list IPC 与 unitWeb /unit/spaces 共用的唯一真源):
+ *  ~/.tangu/spaces/<slug>/space.json + 插件捆绑包内嵌 plugins/<id>/spaces/<slug>/space.json。
+ *  设备页(B 端渲染)没有这份数据就装不出插件 Space → Ribbon 上一个插件图标都没有(2026-08-24 实测),
+ *  而方案 §拍板口径是「A 看到 B 的完整 Forsion(含 Ribbon/Space)」。 */
+async function readSpacesList(): Promise<Array<{ slug: string; json: string; plugin?: string }>> {
+  const out: Array<{ slug: string; json: string; plugin?: string }> = []
+  try {
+    const base = join(tanguHomeDir(), 'spaces')
+    for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
+      try { out.push({ slug: e.name, json: await readFile(join(base, e.name, 'space.json'), 'utf8') }) } catch { /* 无 manifest 跳过 */ }
+    }
+  } catch { /* 目录不存在 = 空 */ }
+  try {
+    const proot = join(tanguHomeDir(), 'plugins')
+    const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
+    for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
+      let pid: string
+      try {
+        const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: string }
+        const cand = typeof m.id === 'string' && SAFE_PID.test(m.id) ? m.id : p.name
+        if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
+        pid = cand
+      } catch { continue } // 无 manifest.json = 非插件目录,跳过
+      try {
+        const sroot = join(proot, p.name, 'spaces')
+        for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
+          try { out.push({ slug: e.name, json: await readFile(join(sroot, e.name, 'space.json'), 'utf8'), plugin: pid }) } catch { /* 无 space.json 跳过 */ }
+        }
+      } catch { /* 无 spaces/ 子目录 */ }
+    }
+  } catch { /* plugins 目录不存在 = 无捆绑包 */ }
+  return out
+}
+
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
  *  串行化(同 ensureChain 的病):四个身份变化点 + config:set 可能连发,并发重建会让第二次
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
@@ -729,6 +763,7 @@ async function doRefreshUnitHost(): Promise<void> {
       },
     },
     readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
+    readSpaces: () => readSpacesList(),
     vault: () => amadeusVaultFace,
     meta: { instanceId, name: hostname(), version: app.getVersion() },
     webDistDir: (): string | null => {
@@ -2319,35 +2354,7 @@ app.whenReady().then(async () => {
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
   // 另汇入 Forsion 插件捆绑包内嵌的 Space(plugins/<id>/spaces/<slug>/space.json,带 plugin=manifest id):
   // 用户目录条目在前(同 spec id 先到先得,用户版本胜);渲染层按插件启停显隐、不提供单独删除。
-  ipcMain.handle('spaces:list', async () => {
-    const out: Array<{ slug: string; json: string; plugin?: string }> = []
-    try {
-      const base = join(tanguHomeDir(), 'spaces')
-      for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-        try { out.push({ slug: e.name, json: await readFile(join(base, e.name, 'space.json'), 'utf8') }) } catch { /* 无 manifest 跳过 */ }
-      }
-    } catch { /* 目录不存在 = 空 */ }
-    try {
-      const proot = join(tanguHomeDir(), 'plugins')
-      const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
-      for (const p of (await readdir(proot, { withFileTypes: true })).filter((x) => x.isDirectory() && !x.name.startsWith('.'))) {
-        let pid: string
-        try {
-          const m = JSON.parse(await readFile(join(proot, p.name, 'manifest.json'), 'utf8')) as { id?: string }
-          const cand = typeof m.id === 'string' && SAFE_PID.test(m.id) ? m.id : p.name
-          if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
-          pid = cand
-        } catch { continue } // 无 manifest.json = 非插件目录,跳过
-        try {
-          const sroot = join(proot, p.name, 'spaces')
-          for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-            try { out.push({ slug: e.name, json: await readFile(join(sroot, e.name, 'space.json'), 'utf8'), plugin: pid }) } catch { /* 无 space.json 跳过 */ }
-          }
-        } catch { /* 无 spaces/ 子目录 */ }
-      }
-    } catch { /* plugins 目录不存在 = 无捆绑包 */ }
-    return out
-  })
+  ipcMain.handle('spaces:list', () => readSpacesList())
   ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
     if (!isSafeSlug(slug)) throw new Error('非法的 Space 标识')
     JSON.parse(json) // 落盘前校验合法 JSON,防写入损坏配方

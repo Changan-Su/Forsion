@@ -59,6 +59,8 @@ export interface UnitWebDeps {
     add: (d: PairedDevice) => Promise<void>
   }
   readPlugins: () => Promise<unknown[]>
+  /** Space 配方清单(与 spaces:list IPC 同源):设备页没有它装不出插件 Space,Ribbon 上就没有插件图标。 */
+  readSpaces: () => Promise<Array<{ slug: string; json: string; plugin?: string }>>
   meta: { instanceId: string; name: string; version: string }
   /** web 构建目录(TANGU_UNIT_WEB_DIST / 捆包路径);null = 出「未捆构建」提示页。 */
   webDistDir: () => string | null
@@ -208,7 +210,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const serveStatic = async (res: http.ServerResponse, urlPath: string): Promise<void> => {
     const dist = deps.webDistDir()
     if (!dist) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' })
       res.end(PLACEHOLDER)
       return
     }
@@ -239,7 +241,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
           }))
         buf = Buffer.from(html)
       }
-      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': buf.length })
+      const h: Record<string, string | number> = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': buf.length }
+      // index(含 SPA 回退)必须每次回源验新:CSP 修复等都烙在注入后的 HTML 里,复用旧页面=修复永不生效。
+      // assets/* 带内容 hash,放心长缓存。
+      if (norm === 'index.html') h['Cache-Control'] = 'no-cache'
+      else if (/^assets[\\/]/.test(norm)) h['Cache-Control'] = 'public, max-age=31536000, immutable'
+      res.writeHead(200, h)
       res.end(buf)
     } catch {
       json(res, 404, { detail: 'not found' })
@@ -310,6 +317,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (path === '/unit/plugins' && req.method === 'GET') {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       json(res, 200, { appVersion: deps.meta.version, plugins: await deps.readPlugins() })
+      return
+    }
+    // 只读 Space 配方面(纯数据布局,无 shell 面):设备页 loadUserSpaces 的数据源,缺了它插件 view 无入口。
+    if (path === '/unit/spaces' && req.method === 'GET') {
+      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      json(res, 200, { spaces: await deps.readSpaces() })
       return
     }
     if (path === '/engine' || path.startsWith('/engine/')) {

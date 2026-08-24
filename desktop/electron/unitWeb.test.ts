@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import http from 'node:http'
-import { mkdtemp, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
@@ -79,6 +79,7 @@ async function boot(distDir: string | null = null, vaultRoot?: string): Promise<
     confirmPair: () => new Promise<boolean>((r) => { approveFn = r }),
     pairedDevices: { list: () => paired, add: async (d) => { paired.push(d) } },
     readPlugins: async () => [{ id: 'demo' }],
+    readSpaces: async () => [{ slug: 'demo-space', json: '{}', plugin: 'demo' }],
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
     webDistDir: () => distDir,
     vault: () => vault,
@@ -174,6 +175,17 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
+  it('/unit/spaces:未配对 401;配对后返回 Space 配方清单(设备页 Ribbon 的数据源)', async () => {
+    const b = await boot()
+    try {
+      expect((await fetch(`${b.base}/unit/spaces`)).status).toBe(401)
+      const r = await fetch(`${b.base}/unit/spaces`, { headers: { 'x-unit-internal': b.handle.internalSecret } })
+      expect(r.status).toBe(200)
+      const j = (await r.json()) as any
+      expect(j.spaces[0]).toEqual({ slug: 'demo-space', json: '{}', plugin: 'demo' })
+    } finally { b.close() }
+  })
+
   it('SSE 边收边转:第一帧先于引擎收尾到达', async () => {
     const b = await boot()
     try {
@@ -207,9 +219,16 @@ describe('unitWeb', () => {
     // 真 web 构建的 CSP 形状(script-src 无 unsafe-eval)——插件宿主 new Function 会被它毙掉。
     await writeFile(join(dist, 'index.html'),
       `<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'" /></head><body>shell</body></html>`)
+    await mkdir(join(dist, 'assets'))
+    await writeFile(join(dist, 'assets', 'app-abc123.js'), 'console.log(1)')
     const b = await boot(dist)
     try {
-      const home = await (await fetch(`${b.base}/`)).text()
+      const homeRes = await fetch(`${b.base}/`)
+      // 缓存纪律:index(含 SPA 回退)每次验新——CSP 修复烙在注入后的 HTML 里,旧页面复用=修复不生效;hash 资产长缓存。
+      expect(homeRes.headers.get('cache-control')).toBe('no-cache')
+      expect((await fetch(`${b.base}/some/route`)).headers.get('cache-control')).toBe('no-cache')
+      expect((await fetch(`${b.base}/assets/app-abc123.js`)).headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+      const home = await homeRes.text()
       expect(home).toContain('__FORSION_UNIT_PAGE__')
       expect(home).toContain('inst-1')
       // 设备页必须补上 unsafe-eval(否则 19 个插件全部 setup 失败,页面看着就是「插件都没了」)

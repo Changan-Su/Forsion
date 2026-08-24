@@ -113,6 +113,11 @@ async function main(): Promise<void> {
       pluginsServed++
       return [{ id: 'demo-remote', name: '远程演示插件', version: '1.0.0', apiVersion: 1, code: 'ctx.registerCommand({ id: "demo-remote-cmd", title: "远程演示", run() {} })' }]
     },
+    readSpaces: async () => [{
+      slug: 'demo-space',
+      json: JSON.stringify({ id: 'demo-space', name: '远程演示空间', icon: 'boxes', layout: { main: [{ type: 'launcher' }], left: [], right: [] } }),
+      plugin: 'demo-remote',
+    }],
     meta: { instanceId: 'e2e-inst', name: 'E2E 测试机', version: '9.9.9' },
     webDistDir: () => DIST,
     vault: () => vaultFace,
@@ -156,6 +161,17 @@ async function main(): Promise<void> {
     await page.waitForFunction(() => true, null, { timeout: 1 }).catch(() => {})
     for (let i = 0; i < 20 && pluginsServed === 0; i++) await new Promise((r) => setTimeout(r, 500))
     check('插件清单经 /unit/plugins 分发', pluginsServed > 0, `served=${pluginsServed}`)
+    // 页面侧痕迹断言(勿只数服务端下发数):插件 Space 经 /unit/spaces → loadUserSpaces → Ribbon 真出图标。
+    let spaceOnRibbon = false
+    for (let i = 0; i < 20 && !spaceOnRibbon; i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      spaceOnRibbon = await page.evaluate(() => {
+        const rb = document.querySelector('.rb')
+        return !!rb && [...rb.querySelectorAll('[title],[aria-label]')].some((el) =>
+          ((el.getAttribute('title') || el.getAttribute('aria-label')) ?? '').includes('远程演示空间'))
+      })
+    }
+    check('插件 Space 经 /unit/spaces 上 Ribbon(页面侧痕迹)', spaceOnRibbon)
 
     // 5 引擎调用被反代且盖引擎 token(剥外来身份)
     for (let i = 0; i < 20 && engine.seen.length === 0; i++) await new Promise((r) => setTimeout(r, 500))

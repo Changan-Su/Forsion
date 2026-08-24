@@ -117,6 +117,15 @@ export async function installUnitShim(): Promise<boolean> {
     getConfig: async () => ({ ...cfg }),
     setConfig: async () => ({ ...cfg }), // 设备页不落配置(对方的配置属于对方)
     authStatus: async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null }),
+    // Space 配方(只读):loadUserSpaces 按本方法存在性门控 —— 缺了它插件 Space 全不装,
+    // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。
+    spacesList: async () => {
+      const r = await fetch(new URL('unit/spaces', base()), {
+        headers: fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined,
+      })
+      if (!r.ok) throw new Error(`unit spaces HTTP ${r.status}`)
+      return ((await r.json()) as { spaces?: unknown[] }).spaces || []
+    },
   }
   document.title = `${meta.name} · Forsion`
   return true
