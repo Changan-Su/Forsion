@@ -697,15 +697,20 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
       showMainWindow()
-      const r = await dialog.showMessageBox({
-        type: 'question',
+      // ⚠️ 弹框必须挂父窗:mac 上无父的 showMessageBox 是 app-modal,会**冻住主进程事件循环**——
+      // unitWeb/引擎代理/本机 IPC 全部悬死,对端的配对轮询整片超时(活体探针 2026-08-24 实测)。
+      // 挂父 = window-modal sheet,主循环照转;拿不到窗口的极端情形维持旧行为(短暂冻结好过弹不出)。
+      const opts = {
+        type: 'question' as const,
         title: '设备连接请求',
         message: `「${info.name}」(${info.ip})请求连接本机 Forsion`,
         detail: `对方屏幕上显示同一组配对码,核对一致再允许:\n\n配对码:${info.code}\n\n允许后对方可远程使用这台设备的 Forsion(含执行任务、读写本机笔记库)。`,
         buttons: ['允许', '拒绝'],
         defaultId: 1,
         cancelId: 1,
-      })
+      }
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
       return r.response === 0
     },
     pairedDevices: {
