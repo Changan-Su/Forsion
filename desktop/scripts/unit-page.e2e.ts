@@ -113,6 +113,10 @@ async function main(): Promise<void> {
       pluginsServed++
       return [{ id: 'demo-remote', name: '远程演示插件', version: '1.0.0', apiVersion: 1, code: 'ctx.registerCommand({ id: "demo-remote-cmd", title: "远程演示", run() {} })' }]
     },
+    readConfig: async () => ({ agentDeskEnabled: true, homeDir: '/tmp/e2e-home', defaultWorkspaceDir: '/tmp/e2e-home/Tangu' }),
+    writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: true, ...patch }),
+    readProviders: async () => [{ providerId: 'e2e-direct', modelIds: ['e2e/m1'] }],
+    readHostFile: async () => null, // e2e 不铺主机文件面;桥侧对 404 兜底即可
     readSpaces: async () => [{
       slug: 'demo-space',
       json: JSON.stringify({ id: 'demo-space', name: '远程演示空间', icon: 'boxes', layout: { main: [{ type: 'launcher' }], left: [], right: [] } }),
