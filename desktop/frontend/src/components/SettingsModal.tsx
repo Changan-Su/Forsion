@@ -764,7 +764,8 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': [
       // Forsion 插件区整块在 window.amadeus 后面 —— 没有就只剩引擎插件一项,栏目条自动隐藏。
       ...(window.amadeus ? [['pl-forsion', t('settings.plugins.secForsion')] as [string, string]] : []),
-      ['pl-engine', t('settings.plugins.secEngine')],
+      // 引擎插件管理桌面专属:设备页的 cfg.backendUrl=对方引擎,rescan/npm 装/启停会真打到对方机器(Codex P1)。
+      ...(isDesktop ? [['pl-engine', t('settings.plugins.secEngine')] as [string, string]] : []),
     ],
     advanced: [
       ...(isDesktop ? [['a-mcp', t('settings.sub.mcpServer')] as [string, string]] : []),
@@ -2133,11 +2134,15 @@ export const SettingsModal: React.FC<{
                 {tab === 'agents' && activeSub === 'ag-roster' && <AgentsTab cfg={p.cfg} />}
                 {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
-                {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。 */}
+                {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
+                    设备页(unitPage)不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
+                    启停会经代理持久改对方引擎插件(Codex P1);引擎插件区同因整块桌面专属。 */}
                 {tab === 'amadeus-plugins' && activeSub === 'pl-forsion' && !!window.amadeus && (
-                  <AmadeusPluginsTab cfg={p.cfg} onEngineReload={reloadPlugins} enginePlugins={plugins} />
+                  unitPage
+                    ? <AmadeusPluginsTab />
+                    : <AmadeusPluginsTab cfg={p.cfg} onEngineReload={reloadPlugins} enginePlugins={plugins} />
                 )}
-                {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && (
+                {tab === 'amadeus-plugins' && activeSub === 'pl-engine' && isDesktop && (
                   <>
                     <PluginsTab
                       cfg={p.cfg}
@@ -2153,9 +2158,7 @@ export const SettingsModal: React.FC<{
                 {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
                 {tab.startsWith('fplugin:') && (
                   <AmadeusPluginsTab
-                    cfg={p.cfg}
-                    onEngineReload={reloadPlugins}
-                    enginePlugins={plugins}
+                    {...(unitPage ? {} : { cfg: p.cfg, onEngineReload: reloadPlugins, enginePlugins: plugins })}
                     controlledDetail={{ id: tab.slice('fplugin:'.length), onBack: () => goTab('amadeus-plugins') }}
                   />
                 )}
