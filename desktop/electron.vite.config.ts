@@ -33,6 +33,9 @@ export default defineConfig({
       rollupOptions: { input: resolve('frontend/index.html') },
     },
     resolve: {
+      // lcl 是直接链进源码的 workspace 目录。独立 worktree 下 Vite/Rollup 可能把宿主与
+      // 链接源各解析一份 React，最终在打包版直接触发 invalid hook call。
+      dedupe: ['react', 'react-dom'],
       // @amadeus-shared = vendored Amadeus 同构编译器/IPC 契约;@amadeus = vendored Amadeus 渲染层。
       alias: {
         '@lcl': resolve('../lcl'),
