@@ -1,7 +1,7 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Quote } from 'lucide-react'
+import { ArrowDown, MessageSquarePlus, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { EnginePicker } from '../components/EnginePicker'
@@ -16,7 +16,7 @@ import { EditorialMessage } from './chat2/EditorialMessage'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults, newChatModelId } from '../stores/appStore'
+import { useApp, stickyDefaults, newChatModelId, withAmadeusWorkspace } from '../stores/appStore'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
@@ -26,6 +26,7 @@ import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
 import { zoomOf } from '@lcl/engine'
+import { usePageStore } from '../amadeus/store/pageStore'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -65,6 +66,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     newChatModel: state.newChatModel,
     pendingDraft: state.pendingDraft,
     setPendingDraft: state.setPendingDraft,
+    pendingChatQuote: state.pendingChatQuote,
+    clearPendingChatQuote: state.clearPendingChatQuote,
     draftRefs: state.draftRefs,
     appendRefs: state.appendRefs,
     clearDraftRefs: state.clearDraftRefs,
@@ -134,8 +137,19 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeMessages = s.activeMessages
   const running = s.running
   const execConfig = s.execConfig
+  // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
+  // 否则 appStore 本身没变化时 React 不会重渲染选择器。
+  const amadeusRoot = usePageStore((state) => state.vaultRoot)
 
-  const mvCfg: AgentConfig = activeId
+  // 主区划线后交给侧栏的引用可能先于 chat-panel 挂载；目标承载一出现就消费，其他 ChatView 不碰。
+  useEffect(() => {
+    const pending = s.pendingChatQuote
+    if (!pending || pending.targetType !== leaf.type) return
+    setQuotedText(pending.text)
+    s.clearPendingChatQuote(pending.seq)
+  }, [leaf.type, s.pendingChatQuote, s.clearPendingChatQuote])
+
+  const mvCfg: AgentConfig = withAmadeusWorkspace(activeId
     // 已有会话:配置未加载完(execMode 缺失)时按 project_path 兜底判 host/sandbox,避免加载窗口内
     // 拖文件误走 25MB 上传;配置一旦到达(含用户显式选的 sandbox)即以 execConfig 为准。
     ? (execConfig.execMode ? execConfig : {
@@ -147,11 +161,11 @@ export function ChatView({ leaf, params }: ViewProps) {
     // 空态:药丸显示的必须是这条消息**实际会用**的档位 —— 即 stickyDefaults(上次用的),
     // 否则会出现「显示自动编辑、发出去却是全自动」的错位。
     : {
-        execMode: s.newChatWs?.kind === 'cloud' ? 'sandbox' : 'host',
-        ...stickyDefaults(s.desktopConfig, s.newChatWs?.kind !== 'cloud'),
-        cwd: s.newChatWs?.kind === 'cloud' ? undefined : (s.newChatWs?.path || undefined),
+        execMode: s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless' ? 'sandbox' : 'host',
+        ...stickyDefaults(s.desktopConfig, s.newChatWs?.kind !== 'cloud' && s.newChatWs?.kind !== 'rootless'),
+        cwd: s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless' ? undefined : (s.newChatWs?.path || undefined),
         ...s.newChatCfg,
-      }
+      }, amadeusRoot)
   const mvModelId = activeId
     ? (activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || '')
     : (newChatModelId(s) || '') // 与建会话落库、startRun 同源,勿就地展开回退链
@@ -208,14 +222,12 @@ export function ChatView({ leaf, params }: ViewProps) {
     return () => ro.disconnect()
   }, [])
 
-  // 原生标签栏的标签名 = 会话标题(否则显示视图名「对话」);随会话/标题变化更新。
-  useEffect(() => { leaf.setTitle(activeSession?.title || t('sidebar.newChat')) }, [activeSession?.title, leaf, t])
-
   useEffect(() => {
     if (activeId) void useApp.getState().loadSessionHistory(activeId)
   }, [activeId])
 
-  // 每个 leaf 维护自己的标题，避免分屏时误改第一块 Chat tab。
+  // 每个 leaf 维护自己的标题，避免分屏时误改第一块 Chat tab。会话清单尚未加载但 sessionId 已从
+  // Mini handoff 到达时用稳定占位；不能再另挂一段「新对话」标题 effect 与本段来回改名(React #185)。
   useEffect(() => {
     leaf.setTitle(activeSession?.title || (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
   }, [activeId, activeSession?.title, leaf, t])
@@ -375,6 +387,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   return (
     <div
       className={`t2-chat-view${refDrop ? ' refdrop' : ''}`}
+      data-chat-surface={leaf.type}
+      data-session-id={activeId || undefined}
       style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row', minWidth: 0 }}
       onDragOver={onRefDragOver}
       // 只有真的离开整块才撤高亮(子元素间移动会连发 leave/enter)
@@ -463,18 +477,44 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
           {showJump && <button className="jump-bottom t2-jump" title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)}><ArrowDown size={16} /></button>}
           {quoteButton && (
-            <button
-              className="quote-float t2-quote"
+            <div
+              className="quote-float t2-quote-menu"
+              role="toolbar"
+              aria-label={t('chat.selection.actions')}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                setQuotedText(quoteButton.text)
-                setQuoteButton(null)
-                window.getSelection()?.removeAllRanges()
-              }}
               style={{ left: quoteButton.x, top: quoteButton.y }}
             >
-              <Quote size={13} /> {t('chat.action.quote')}
-            </button>
+              <button
+                className="t2-quote-action"
+                data-testid="selection-quote"
+                onClick={() => {
+                  setQuotedText(quoteButton.text)
+                  setQuoteButton(null)
+                  window.getSelection()?.removeAllRanges()
+                }}
+              >
+                <Quote size={13} /> {t('chat.action.quote')}
+              </button>
+              {leaf.type !== 'chat-panel' && (
+                <button
+                  className="t2-quote-action"
+                  data-testid="selection-ask-in-panel"
+                  onClick={() => {
+                    const text = quoteButton.text
+                    useApp.getState().setPendingChatQuote('chat-panel', text)
+                    const workspace = useWorkspace.getState()
+                    const panelIsFront = workspace.rightVisible
+                      && workspace.rightTabs.some((tab) => tab.type === 'chat-panel' && tab.active)
+                    // showSideView 对当前活动项是 toggle；这里的语义是 reveal，已在前台时不能反向收起。
+                    if (!panelIsFront) workspace.showSideView('right', 'chat-panel')
+                    setQuoteButton(null)
+                    window.getSelection()?.removeAllRanges()
+                  }}
+                >
+                  <MessageSquarePlus size={13} /> {t('chat.action.askInPanel')}
+                </button>
+              )}
+            </div>
           )}
         </div>
       </ErrorBoundary>
@@ -610,6 +650,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           modelId={mvModelId}
           hostCwd={mvCfg.execMode === 'host' ? mvCfg.cwd : undefined}
           extraRoots={mvCfg.extraRoots}
+          lockedRoots={mvCfg.execMode === 'host' && amadeusRoot ? [amadeusRoot] : []}
           // 只有本机会话谈得上「加本机文件夹」;沙箱会话的工作区不在本机。
           onAddRoot={mvCfg.execMode === 'host' && activeId ? () => {
             void window.tangu?.pickDirectory?.().then((dir) => {
@@ -620,6 +661,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             })
           } : undefined}
           onRemoveRoot={mvCfg.execMode === 'host' && activeId ? (p) => {
+            if (p === amadeusRoot) return
             const cur = useApp.getState().configBySession[activeId]?.extraRoots || []
             useApp.getState().setExecConfig({ extraRoots: cur.filter((x) => x !== p) }, activeId)
           } : undefined}

@@ -15,3 +15,9 @@ export function windowKind(): WindowKind {
 export function detachedId(): string {
   return params().get('id') || 'default'
 }
+
+/** Mini 首次打开时由主进程写进 query 的目标正式会话。 */
+export function miniSessionId(): string | null {
+  const id = params().get('sessionId')?.trim()
+  return id || null
+}

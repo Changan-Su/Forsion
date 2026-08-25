@@ -66,6 +66,7 @@ import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
 import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
 import { OverlayAt } from '@lcl/engine'
+import { SidebarRow } from './components/SidebarRow'
 
 const ps = () => usePageStore.getState()
 const baseName = (p: string): string => p.split(/[\\/]/).pop()!.replace(/\.md$/, '')
@@ -992,12 +993,30 @@ export function AmadeusPagesView() {
     // 无 emoji 时的类型兜底图标(md 笔记也有 —— 用户要求)。尺寸由 CSS .t2s-lead-icon 定,勿传 size。
     const LeadIcon = isDbPath(path) ? Database : isDraw ? PenTool : isDash ? LayoutDashboard : isNote ? FileText : isImagePath(path) ? FileImage : Paperclip
     return (
-    <button
+    <SidebarRow
       key={path}
-      ref={(el) => { if (path === flash) flashRef.current = el }}
-      className={`t2s-srow${path === (activeViewFile ?? activePage) ? ' active' : ''}${sel.has(path) ? ' sel' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${merged && dragPath && dragOver === merged.fd ? ' amx-drop-into' : ''}`}
-      data-sel-id={path}
-      style={{ paddingLeft: rowPadLeft(depth) }}
+      as="button"
+      elRef={(el) => { if (path === flash) flashRef.current = el as HTMLButtonElement | null }}
+      className={`${path === (activeViewFile ?? activePage) ? 'active' : ''}${sel.has(path) ? ' sel' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${merged && dragPath && dragOver === merged.fd ? ' amx-drop-into' : ''}`.trim() || undefined}
+      selId={path}
+      depth={depth}
+      // 前导槽:**每行都有**(含文件夹行),故所有图标左边缘对齐、尺寸也一致(见 .t2s-lead)。
+      // 槽内恒显图标(emoji 优先,否则类型兜底图标);**可展开的行 hover 才把图标换成箭头**(用户拍板)。
+      lead={<>
+        {icons[path]
+          ? <span className="amx-page-emoji">{icons[path]}</span>
+          : ft?.icon
+          ? <span className="amx-page-emoji">{resolveIcon(ft.icon)}</span>
+          : <LeadIcon className="t2s-lead-icon t2s-dim" />}
+        {merged && (
+          <span
+            className={`t2s-chev t2s-lead-chev${merged.open ? ' open' : ''}`}
+            onClick={(e) => { e.stopPropagation(); toggle(merged.fd) }}
+          >
+            <ChevronRight size={12} />
+          </span>
+        )}
+      </>}
       // 统一点击语义(见 views/itemSelect):裸击开、⌘ 开新标签、shift/option 只动选中态。
       onClick={(e) => {
         const act = sel.click(path, e)
@@ -1028,23 +1047,6 @@ export function AmadeusPagesView() {
       onDrop={merged ? (e) => { if (filesDrop(e, merged.fd)) return; e.preventDefault(); e.stopPropagation(); dropTo(merged.fd) } : undefined}
       {...tipProps(rowTip(path))}
     >
-      {/* 前导槽:**每行都有**(含文件夹行),故所有图标左边缘对齐、尺寸也一致(见 .t2s-lead)。
-          槽内恒显图标(emoji 优先,否则类型兜底图标);**可展开的行 hover 才把图标换成箭头**(用户拍板)。 */}
-      <span className="t2s-lead">
-        {icons[path]
-          ? <span className="amx-page-emoji">{icons[path]}</span>
-          : ft?.icon
-          ? <span className="amx-page-emoji">{resolveIcon(ft.icon)}</span>
-          : <LeadIcon className="t2s-lead-icon t2s-dim" />}
-        {merged && (
-          <span
-            className={`t2s-chev t2s-lead-chev${merged.open ? ' open' : ''}`}
-            onClick={(e) => { e.stopPropagation(); toggle(merged.fd) }}
-          >
-            <ChevronRight size={12} />
-          </span>
-        )}
-      </span>
       {renaming === path ? (
         <input
           ref={renameRef}
@@ -1069,7 +1071,7 @@ export function AmadeusPagesView() {
           <Plus size={14} />
         </span>
       )}
-    </button>
+    </SidebarRow>
     )
   }
 

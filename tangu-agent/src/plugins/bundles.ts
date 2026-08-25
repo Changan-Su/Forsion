@@ -4,9 +4,13 @@
  *
  *   plugins/<id>/tangu-plugins/<pid>/tangu-plugin.json → 追加进插件搜索根(loader.resolvePluginsDirs ③)
  *   plugins/<id>/skills/<slug>/SKILL.md                → 追加进技能扫描根(localSkills,内置<bundle<用户)
- *   plugins/<id>/agents/<slug>/config.toml             → **播种一次**进 agentsDir()(已存在永不覆盖:
+ *   plugins/<id>/agents/<slug>/config.toml             → 人格**播种一次**进 agentsDir()(已存在永不覆盖:
  *                                                        agent 落地后是带 MEMORY/LOG 的活体,bundle 升级
- *                                                        不得清洗用户改动;卸载 bundle 也保留 agent)
+ *                                                        不得清洗用户改动;卸载 bundle 也保留 agent)。
+ *                                                        **例外 = agents/<slug>/skills/**(08-24):技能副本走
+ *                                                        seedSkillsInto 指纹自愈——用户没改过的跟着 bundle 更新,
+ *                                                        改过的(含无指纹老副本)保护并报告。否则 agent 技能的
+ *                                                        SKILL.md 修订永远到不了已装机器(bluebird 案实翻过)。
  *
  * 识别全靠标志文件,manifest.json 无新增字段;单独安装的引擎插件/技能/agent 不受影响。
  * `TANGU_PLUGINS=off` / `TANGU_PLUGINS_DIR` 覆盖时整体停用(云 worker/docker 均设了后者,bundle 天然不进云端)。
@@ -68,15 +72,51 @@ export function bundleSkillRoots(): string[] {
 
 /**
  * 把各 bundle 内嵌的 agent(<bundle>/agents/<slug>/,以 config.toml 为标志)播种进 agentsDir()。
- * 仅目标 slug 尚不存在时复制(含 SOUL.md/Library/skills);幂等、永不覆盖。
+ * 人格面(config/SOUL/Library/MEMORY)仅目标 slug 尚不存在时复制;幂等、永不覆盖。
  * 原子纪律(codex P1-2/P1-3):先整目录拷到同盘 staging(符号链接一律解引用,播种结果自包含——
  * 否则卸载 bundle 后链接断裂,「保留的 agent」名存实亡),校验后 rename 落位;任何失败清理 staging,
  * 绝不把半成品留在 agentsDir(半成品会被「已存在→跳过」永久卡死,agent 无法自愈)。
+ *
+ * **技能面例外(08-24)**:agents/<slug>/skills/ 每次都过 seedSkillsInto 指纹自愈(与内置技能同一套
+ * 判据:没改过的副本跟 bundle 更新,改过的/无指纹的保护并报告)——新播种的副本也立刻补指纹,
+ * 否则它下一次更新就会被当成「无指纹老副本」永久停更。技能路径复用 seedSkillsInto 原样
+ * (含其 cp 不解引用的既有语义;技能目录里放符号链接本就不受支持)。
  * 返回本次新播种的 slug 列表(供日志/调用方感知)。
  */
 export async function seedBundleAgents(): Promise<string[]> {
   const seeded: string[] = [];
-  for (const bundle of bundleDirs()) {
+  const bundles = bundleDirs();
+  if (!bundles.length) return seeded; // 云 worker/无桌面:不触 localSkills(该模块此前也从不进 worker 装配)
+  // 动态 import 破模块环:localSkills →(静态)bundles 已有一条边,反向只能运行时取
+  // (同 channels/forward.ts 的模块环纪律)。import 失败退化为仅人格播种——技能自愈绝不把播种整体带崩,
+  // 「静默停摆」正是这套机制要治的病,不能自己引入一个。
+  let seedSkillsInto:
+    | ((src: string, dest: string) => Promise<{ installed: string[]; updated: string[]; protectedStale: string[] }>)
+    | null = null;
+  try {
+    ({ seedSkillsInto } = await import('../skills/localSkills.js'));
+  } catch (e: any) {
+    console.warn(`[tangu] 技能自愈模块加载失败(退化为仅人格播种):${e?.message || e}`);
+  }
+  const healSkills = async (bundle: string, slug: string, srcSkills: string): Promise<void> => {
+    if (!seedSkillsInto || !isRealDir(srcSkills)) return;
+    const destSkills = path.join(agentsDir(), slug, 'skills');
+    try {
+      const r = await seedSkillsInto(srcSkills, destSkills);
+      const moved = [...r.installed, ...r.updated];
+      if (moved.length) console.log(`[tangu] bundle ${path.basename(bundle)} agent "${slug}" 技能已随包更新: ${moved.join(', ')}`);
+      // 保护住的说出来——静默停更正是这套机制要治的病(与 seedBuiltinSkills 同口径)。
+      if (r.protectedStale.length) {
+        console.warn(
+          `[tangu] agent "${slug}" 技能有新版但你的副本不同,已保护未覆盖: ${r.protectedStale.join(', ')}。` +
+            `想用新版就删掉 ${destSkills}/<名字>`,
+        );
+      }
+    } catch (e: any) {
+      console.warn(`[tangu] agent "${slug}" 技能自愈失败(忽略):${e?.message || e}`);
+    }
+  };
+  for (const bundle of bundles) {
     const agentsRoot = path.join(bundle, 'agents');
     if (!isRealDir(agentsRoot)) continue;
     let names: string[];
@@ -93,7 +133,10 @@ export async function seedBundleAgents(): Promise<string[]> {
       const src = path.join(agentsRoot, slug);
       if (!existsSync(path.join(src, 'config.toml'))) continue; // 非 agent 目录
       const dest = path.join(agentsDir(), slug);
-      if (existsSync(dest)) continue; // 已播种/同名已有 → 永不覆盖(活体保护)
+      if (existsSync(dest)) {
+        await healSkills(bundle, slug, path.join(src, 'skills')); // 人格不动,技能指纹自愈
+        continue;
+      }
       const staging = path.join(agentsDir(), `.seed-${slug}-${process.pid}-${seeded.length}`);
       try {
         await fs.mkdir(agentsDir(), { recursive: true });
@@ -101,6 +144,7 @@ export async function seedBundleAgents(): Promise<string[]> {
         await fs.rename(staging, dest); // 目标同时被别的进程占下 → rename 抛错走 catch,保持不覆盖语义
         seeded.push(slug);
         console.log(`[tangu] 已从 bundle ${path.basename(bundle)} 播种 agent "${slug}"`);
+        await healSkills(bundle, slug, path.join(src, 'skills')); // 刚复制的技能立刻补指纹(内容同版→只写 stamp)
       } catch (e: any) {
         await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
         console.warn(`[tangu] bundle agent "${slug}" 播种失败(已清理,忽略):${e?.message || e}`);

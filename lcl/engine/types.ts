@@ -32,6 +32,11 @@ export interface ViewProps {
   params: Record<string, unknown>
 }
 
+/** 视图分类(View 基座统一化,正典 docs/ToBeImproved/View基座统一化方案_2026-08-25.md):
+ *  entity = 打开某个有身份的东西(文件路径 / 会话 id);collection = 列举可打开项(列表/日历);
+ *  aux = 跟随活动主视图的辅助面板(大纲/双链/记忆);page = 自包含页(设置/启动器/工具)。 */
+export type ViewKind = 'entity' | 'collection' | 'aux' | 'page'
+
 /** 注册一种视图(≈ Obsidian registerView)。 */
 export interface ViewDefinition {
   /** 注册键(= Dockview component 名)。 */
@@ -44,6 +49,19 @@ export interface ViewDefinition {
   singleton?: boolean
   /** 默认可关。主区视图通常可关;侧栏固定视图设 false。 */
   closable?: boolean
+  /** 视图分类,缺省 'page'。deep link 白名单与「最近使用」按它分流。 */
+  kind?: ViewKind
+  /** entity 类:身份参数名(如 'notePath' / 'sessionId')——params[idParam] 即该实例的身份。 */
+  idParam?: string
+  /** entity 文件类:认领的后缀声明(小写含点,如 '.dashboard.md')。**声明元数据**:deep link 校验
+   *  与嵌卡白名单消费;运行时分派仍在 amadeusNav/pageStore(判定次序=毁档防线),一致性由单测锁住。
+   *  priority 大者先判(复合后缀 > 单后缀 > 缺省)。 */
+  fileMatch?: { extensions: string[]; priority?: number }
+  /** 可被嵌进 Dashboard 卡片(默认 false;宿主白名单语义,插件自声明不足信)。 */
+  embeddable?: boolean
+  /** 该 view 做活动主视图时,左栏统一工作区应自动切到的模式(如 'notes' 或 'plugin:<pid>:<srcId>')。
+   *  autoWorkspaceMode 的声明式扩展位;内置硬规则仍在 workspaceMode.ts。 */
+  workspaceSource?: string
 }
 
 /** 命令面板(Cmd/Ctrl+K)里的一条命令(≈ Obsidian addCommand)。 */

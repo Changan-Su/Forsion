@@ -26,6 +26,7 @@ import { $prose } from '@milkdown/kit/utils'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
+import { attentionSerializer } from '../blocks/markdown/attentionFlanking'
 import { bgSchema, colorSchema, inlineHtmlMarksRemark, underlineSchema } from '../blocks/markdown/marks'
 import { calloutKey, calloutPlugin, unescapeCalloutToken } from '../blocks/markdown/callout'
 import { taskCheckboxPlugin } from '../blocks/markdown/taskList'
@@ -108,6 +109,7 @@ function SpikeInner({ initial }: { initial: string }): ReactElement {
       .use(commonmark)
       .use(gfm)
       .use(inlineHtmlMarksRemark)
+      .use(attentionSerializer) // `~~`/`**`/`*` 落盘修正,必须经 ctx 覆盖 milkdown 自带 handler
       .use(underlineSchema)
       .use(colorSchema)
       .use(bgSchema)

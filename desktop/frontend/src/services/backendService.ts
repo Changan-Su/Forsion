@@ -72,7 +72,7 @@ export const listSessions = (cfg: TanguDesktopConfig, archived = false) =>
 
 export const createSession = (
   cfg: TanguDesktopConfig,
-  init?: { title?: string; model_id?: string; emoji?: string; project_path?: string; project_name?: string },
+  init?: { title?: string; model_id?: string; emoji?: string; project_path?: string; project_name?: string; projectless?: boolean },
 ) =>
   request<{ session: SessionRecord }>(cfg, '/agent/sessions', {
     method: 'POST',
@@ -84,7 +84,7 @@ export const updateSession = (
   id: string,
   patch: {
     title?: string; archived?: boolean; model_id?: string; emoji?: string | null
-    project_path?: string | null; project_name?: string | null
+    project_path?: string | null; project_name?: string | null; projectless?: boolean
   },
 ) =>
   request<{ session: SessionRecord }>(cfg, `/agent/sessions/${encodeURIComponent(id)}`, {

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, AuthStatusInfo, UiMessage } from '../types'
-import { useApp, recordToUi, type AppState } from './appStore'
+import { ROOTLESS_WORKSPACE_KEY } from '../types'
+import { useApp, recordToUi, withAmadeusWorkspace, type AppState } from './appStore'
+import { usePageStore } from '../amadeus/store/pageStore'
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
 // 否则只能回退到「会话默认 agent」(就是 Christina 被显示成默认 Tangu Arioso 的 bug)。
@@ -306,6 +308,7 @@ describe('appStore.send 新会话固化模型', () => {
     })
     createSessionMock.mockReset()
     startRunMock.mockReset()
+    usePageStore.setState({ vaultRoot: null })
     // 建会话之后就够断言了;让 startRun 抛错在此收尾,免得拖进 SSE 订阅。
     startRunMock.mockRejectedValue(new Error('stop here'))
   })
@@ -336,6 +339,52 @@ describe('appStore.send 新会话固化模型', () => {
 
     expect(createSessionMock.mock.calls[0][1]).toMatchObject({ model_id: 'picked-model' })
     expect(startRunMock.mock.calls[0]?.[1]).toMatchObject({ modelId: 'picked-model' })
+  })
+
+  it('「不在项目中工作」建立显式无根会话,使用 session 隔离沙箱而非默认 Project', async () => {
+    useApp.setState({
+      desktopMode: 'managed',
+      defaultWsDir: '/default',
+      newChatWs: { key: ROOTLESS_WORKSPACE_KEY, name: '不在项目中工作', kind: 'rootless', path: null, system: true },
+    })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string; projectless?: boolean }) =>
+      Promise.resolve({ ...created('s-rootless', init?.model_id ?? null), projectless: init.projectless }))
+
+    await useApp.getState().send('随便聊聊', [])
+
+    expect(createSessionMock.mock.calls[0][1]).toMatchObject({ projectless: true })
+    expect(createSessionMock.mock.calls[0][1]).not.toHaveProperty('project_path')
+    expect(createSessionMock.mock.calls[0][1]).not.toHaveProperty('project_name')
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig).toMatchObject({ execMode: 'sandbox' })
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig).not.toHaveProperty('workspaceProject')
+  })
+
+  it('本地项目会话默认把活动 Amadeus Vault 并入可写根', async () => {
+    usePageStore.setState({ vaultRoot: '/vault/amadeus' })
+    useApp.setState({
+      desktopMode: 'managed',
+      newChatWs: { key: '/project', name: 'Project', kind: 'local', path: '/project' },
+    })
+    createSessionMock.mockImplementation((_cfg: unknown, init: { model_id?: string; project_path?: string }) =>
+      Promise.resolve({ ...created('s-local', init?.model_id ?? null), project_path: init.project_path }))
+
+    await useApp.getState().send('编辑笔记', [])
+
+    expect(startRunMock.mock.calls[0]?.[1].agentConfig).toMatchObject({
+      execMode: 'host', cwd: '/project', extraRoots: ['/vault/amadeus'],
+    })
+    const keys = useApp.getState().workspaces().map((w) => w.key)
+    expect(keys).toContain('/vault/amadeus')
+    expect(keys).toContain(ROOTLESS_WORKSPACE_KEY)
+  })
+})
+
+describe('withAmadeusWorkspace', () => {
+  it('只给 host 添加且去重;Vault 本身是 cwd 时不重复', () => {
+    expect(withAmadeusWorkspace({ execMode: 'sandbox' }, '/vault')).toEqual({ execMode: 'sandbox' })
+    expect(withAmadeusWorkspace({ execMode: 'host', cwd: '/vault' }, '/vault')).toEqual({ execMode: 'host', cwd: '/vault' })
+    expect(withAmadeusWorkspace({ execMode: 'host', cwd: '/p', extraRoots: ['/x'] }, '/vault').extraRoots).toEqual(['/x', '/vault'])
+    expect(withAmadeusWorkspace({ execMode: 'host', cwd: '/p', extraRoots: ['/vault'] }, '/vault').extraRoots).toEqual(['/vault'])
   })
 })
 

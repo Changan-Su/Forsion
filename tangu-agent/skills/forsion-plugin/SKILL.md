@@ -1,7 +1,7 @@
 ---
 name: Forsion 扩展开发
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.8.0
+version: 1.9.0
 author: Forsion
 category: Forsion
 ---
@@ -29,6 +29,7 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 2. **注入模型的文本一律英文**:工具 `description`、参数说明、promptSection —— 给模型读的全英文;用户可见字段用 `name`/`nameEn`、`description`/`descriptionEn` 双语镜像。
 3. **id 全局唯一、kebab-case**:命令/斜杠/工具 id 处于全局命名空间,裸名会互相顶掉;主题 id **就是** `data-theme` 值,更要独一无二。
 4. **交付=能跑+能回归**:非平凡逻辑留一个 `check.mjs`(`node check.mjs` 一条命令),范式见 `forsion-plugin-mindmap` / activitywatch 的 check 模式。
+5. **动作性能力住引擎侧,渲染端命令只做导航**(2026-08-24 拍板):注册任何入口前先问一句——这是**导航**(开视图/切面板)还是**动作**(带参数、可 headless 完成的活,比如「分析这条链接」)?动作**不要**做成命令面板命令:`Command.run(): void` 类型上就没有参数位,而且命令表活在渲染进程,聊天 agent 与自动化都够不着。正确做法=把能力做成捆绑包的**引擎侧资产**(`agents/<slug>/` 具名 agent + `skills/` 技能):聊天 agent 经 `delegate(agentSlug)`、自动化经 `agent_run` 动作即可直接调用,零通道基建;需要桌面主进程能力时引擎侧已有桥工具(如 `transcribe_audio` 语音转写)。范式=青鸟收藏夹:工作台 UI 归渲染端插件,分析管线归 bundle 内嵌的 `bluebird` agent+技能,两个入口(人点工作台 / agent 委派)共用同一条引擎管线。
 
 ## 引擎插件(samples/forsion-sample-plugin)
 
@@ -66,11 +67,29 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
      main.js                           ← UI 部分(可省)
      tangu-plugins/<pid>/tangu-plugin.json   ← 内嵌引擎插件:引擎原地加载(优先级最低,顶不掉手装同 id)
      skills/<slug>/SKILL.md            ← 内嵌全局技能:引擎原地扫描(内置 < bundle < 用户)
-     agents/<slug>/config.toml         ← 内嵌 Agent(可带 skills/ agent 级技能):播种一次
+     agents/<slug>/config.toml         ← 内嵌 Agent:人格面播种一次,其 skills/ 指纹自愈
      spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐
 ```
 
-两种生命周期,发包前必须分清:**随包**(引擎插件、Space —— 父插件禁用即级联关闭/收起,卸载一并消失)与**播种一次**(Agent —— 首次发现拷入引擎成为活体,升级不覆盖、卸载保留)。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
+**三种生命周期,发包前必须分清**:
+
+| | 谁 | 升级时 |
+|---|---|---|
+| **随包** | 引擎插件、Space | 父插件禁用即级联关闭/收起,卸载一并消失 |
+| **播种一次** | Agent 的**人格面**(config.toml / SOUL.md / Library / MEMORY) | 首次发现拷入引擎成为活体,**永不覆盖**,卸载保留 |
+| **指纹自愈** | Agent 的 `skills/`(2026-08-25 起) | 每次启动比指纹:用户没动过的跟着 bundle 更新;动过的(含无指纹老副本)保护不覆盖并在引擎日志报出来 |
+
+包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
+
+### 把动作搬进引擎侧:三档路由(通用纪律 5 的落地写法)
+
+发现某个能力「只有点命令面板才能用」时,把它做成 bundle 的 `agents/<slug>/` + `skills/`,然后在**通用技能**里写一张降级路由表(照抄 `bluebird/skills/bluebird-link/SKILL.md`):
+
+1. **我自己就有那份技能**(即我就是那个专门 agent)→ `use_skill` 直接做。**这一档必须排最前**,否则专门 agent 会委派自己。
+2. **有 `delegate` 工具且当前是本地库** → `delegate({ agentSlug: "<slug>", task })`,task 里带**真实库根路径**并要求它自己落盘、回报路径;顺带如实说明「委派产物不进插件侧栏索引」。
+3. **都不行**(没 delegate / 云端库 / 第 2 档失败)→ 让用户从命令面板打开工作台自己操作。
+
+需要桌面主进程能力时(语音转写、系统面)引擎侧已有 MCP 桥工具,如 `transcribe_audio(path, timestamps?)` —— 它在没开桌面/云端 worker 上自动隐身。**调用方明确说了「我自己接力转写」时,即使工具可见也不要调**。子 agent 继承**父会话**的审批档位,不是它 config 里的 `approval_mode`。
 ## 桌面插件:贡献点全表(动手前先看这张表)
 
 `ctx` 上的注册口就这些 —— **内置与外置拿到的是同一份**(`pluginStore.makeContext`,能力对等原则)。
@@ -79,7 +98,7 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 | 贡献点 | 给用户的入口 | 备注 |
 |---|---|---|
-| `registerCommand` | 命令面板 | id 处于全局命名空间,裸名会互顶 |
+| `registerCommand` | 命令面板 | id 处于全局命名空间,裸名会互顶;**只做导航**——动作性能力走引擎侧 agent/技能(通用纪律 5) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el)` 返 disposer),外置插件的主力 |
 | `registerFileType` | 自定义 `.x.md` 文件类型 | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |

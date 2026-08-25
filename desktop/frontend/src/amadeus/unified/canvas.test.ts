@@ -4,7 +4,7 @@
 //   3. 懒物化 —— 没卡片且磁盘上本来没这个键 → 一个字节都不写(用户 2026-08-16 拍板)
 import { describe, expect, it } from 'vitest'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import { parseCanvasJson, deriveCanvasJson, deriveCards } from './canvas'
+import { parseCanvasJson, deriveCanvasJson, deriveCards, withMain } from './canvas'
 
 /** deriveCards 只碰 doc.forEach / node.type.name / node.attrs —— 用最小替身即可诚实覆盖,
  *  不必为纯函数契约把整套 PM schema 搭起来。 */
@@ -34,7 +34,20 @@ describe('parseCanvasJson', () => {
     expect(parseCanvasJson('{"v":1,"cards":[{"ref":"c1","x":0,"y":0,"w":"480"}]}')).toBeNull()
     expect(parseCanvasJson('{"v":1,"cards":[{"ref":"c1","x":0,"y":0,"w":480,"h":"500"}]}')).toBeNull()
     expect(parseCanvasJson('{"v":1,"main":{"x":"5","y":0,"w":700}}')).toBeNull()
+    expect(parseCanvasJson('{"v":1,"main":{"x":5,"y":6,"w":700,"h":"500"}}')).toBeNull()
+    expect(parseCanvasJson('{"v":1,"main":{"x":5,"y":6,"w":700,"h":-1}}')).toBeNull()
     expect(parseCanvasJson('{"v":1,"main":{"x":5,"y":6,"w":700}}')).toEqual({ v: 1, main: { x: 5, y: 6, w: 700 } })
+    expect(parseCanvasJson('{"v":1,"main":{"x":5,"y":6,"w":700,"h":500}}')).toEqual({ v: 1, main: { x: 5, y: 6, w: 700, h: 500 } })
+  })
+})
+
+describe('withMain', () => {
+  it('主卡高度与普通卡片同口径：调整后落 h，回到自适应时剥掉 h', () => {
+    expect(withMain(null, { x: 0, y: 0, w: 720 })).toBeNull()
+    const sized = withMain(null, { x: 24, y: 48, w: 696, h: 312 })!
+    expect(JSON.parse(sized).main).toEqual({ x: 24, y: 48, w: 696, h: 312 })
+    const auto = withMain(sized, { x: 24, y: 48, w: 696, h: 0 })!
+    expect(JSON.parse(auto).main).toEqual({ x: 24, y: 48, w: 696 })
   })
 })
 

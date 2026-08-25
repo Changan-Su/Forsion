@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   todos JSONB,
   project_path TEXT,
   project_name VARCHAR(255),
+  projectless BOOLEAN NOT NULL DEFAULT FALSE,
   historian_last_summary_at TIMESTAMP,
   kind VARCHAR(16) NOT NULL DEFAULT 'user',
   parent_session_id VARCHAR(36),

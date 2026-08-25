@@ -240,7 +240,12 @@ const api = {
     ipcRenderer.invoke('window:detachedReady', id),
   openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }> =>
     ipcRenderer.invoke('window:openDetached', views, at),
-  openMini: (): void => ipcRenderer.send('window:openMini'),
+  openMini: (opts?: { sessionId?: string }): void => ipcRenderer.send('window:openMini', opts),
+  onMiniTarget: (cb: (opts: { sessionId?: string }) => void): (() => void) => {
+    const listener = (_e: unknown, opts: { sessionId?: string }): void => cb(opts)
+    ipcRenderer.on('window:miniTarget', listener)
+    return () => ipcRenderer.removeListener('window:miniTarget', listener)
+  },
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
@@ -270,6 +275,15 @@ const api = {
     ipcRenderer.on('app:open-url', listener)
     return () => ipcRenderer.removeListener('app:open-url', listener)
   },
+  // ── forsion:// deep link(入站导航意图;白名单与解析在渲染层 deepLink.ts)────────────────
+  /** 热路径:主进程实时推来的 deep link。 */
+  onDeepLink: (cb: (url: string) => void): (() => void) => {
+    const listener = (_e: unknown, url: string): void => cb(url)
+    ipcRenderer.on('app:deep-link', listener)
+    return () => ipcRenderer.removeListener('app:deep-link', listener)
+  },
+  /** 冷启动:拉走渲染层就绪前积压的 deep link(拿走即清;也把主进程翻到「可直推」态)。 */
+  drainDeepLinks: (): Promise<string[]> => ipcRenderer.invoke('deeplink:drain'),
   /** 内置终端的 PTY:spawn 失败(原生模块未就绪)返回 {error},不抛。 */
   pty: {
     spawn: (opts: { cols?: number; rows?: number; cwd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>

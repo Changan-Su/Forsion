@@ -110,7 +110,7 @@ const fmtDur = (ms: number): string => {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 
-export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], onAddRoot, onRemoveRoot, modelId }: {
+export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId }: {
   messages: UiMessage[]
   running: boolean
   cwd?: string
@@ -126,6 +126,8 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
   onOpenFile?: (f: DisplayFile) => void
   /** 额外工作文件夹(绝对路径):并入引擎可写根 + 写进系统提示。cwd 仍是默认目录。 */
   extraRoots?: string[]
+  /** 产品系统注入的工作根(如活动 Amadeus Vault):照常展示,但不能当成用户临时根删除。 */
+  lockedRoots?: string[]
   /** 缺省(非 host 会话)=不显示添加/移除入口 —— 沙箱会话没有本机目录可言。 */
   onAddRoot?: () => void
   onRemoveRoot?: (path: string) => void
@@ -207,7 +209,7 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
               ...extraRoots.map((r) => (
                 <div key={r} className="t2-tsum-row t2-tsum-root" title={r}>
                   <FolderOpen size={14} /><span className="t2-tsum-row-tx">{baseName(r)}</span>
-                  {onRemoveRoot && (
+                  {onRemoveRoot && !lockedRoots.includes(r) && (
                     <button type="button" className="t2-tsum-x" title={t('tsum.scope.remove')}
                       aria-label={`${t('tsum.scope.remove')}:${baseName(r)}`} onClick={() => onRemoveRoot(r)}>
                       <X size={12} />

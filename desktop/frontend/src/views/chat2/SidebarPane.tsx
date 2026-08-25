@@ -6,8 +6,9 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Search, Smartphone, Send, MessagesSquare, MessageSquare } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, FolderX, Cloud, FolderPlus, SquarePen, Search, Smartphone, Send, MessagesSquare, MessageSquare } from 'lucide-react'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
+import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
 import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
@@ -264,7 +265,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   /** 工作区组头的前导槽:图标 ↔ hover 换箭头(与笔记树文件夹行同一套)。三个变体(重命名中/微信/普通)共用。
    *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。 */
   const wsLead = (ws: WorkspaceDescriptor, collapsed: boolean) => {
-    const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : collapsed ? Folder : FolderOpen
+    const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? FolderX : collapsed ? Folder : FolderOpen
     return (
       <span className="t2s-lead">
         <Ic className="t2s-lead-icon" />
@@ -276,14 +277,24 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   }
 
   const renderItem = (s: SessionRecord) => (
-    <button
+    <SidebarRow
       key={s.id}
-      className={`t2s-srow${s.id === p.activeId ? ' active' : ''}${sel.has(s.id) ? ' sel' : ''}`}
-      data-sel-id={s.id}
+      as="button"
+      className={`${s.id === p.activeId ? 'active' : ''}${sel.has(s.id) ? ' sel' : ''}`.trim() || undefined}
+      selId={s.id}
       // Historian 会话摘要 → 悬停预览(无摘要回落标题本身,长标题被截断时仍可读全)。
       title={s.summary || s.title || undefined}
       // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts。
-      style={{ paddingLeft: rowPadLeft(1) }}
+      depth={1}
+      // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
+      // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
+      lead={<>
+        <MessageSquare className="t2s-lead-icon t2s-dim" />
+        {p.runningIds.has(s.id)
+          ? <span className="t2s-dot running" title={t('sidebar.running')} />
+          : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}
+      </>}
+      trailing={<span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}><MoreHorizontal size={14} /></span>}
       // 统一点击语义(见 views/itemSelect):裸击开、⌘ 开新标签、shift/option 只动选中态。
       onClick={(e) => {
         const act = sel.click(s.id, e)
@@ -307,14 +318,6 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         setChatRefDrag(e.dataTransfer, refs)
       }}
     >
-      {/* 前导槽:与笔记/文件 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
-          **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。 */}
-      <span className="t2s-lead">
-        <MessageSquare className="t2s-lead-icon t2s-dim" />
-        {p.runningIds.has(s.id)
-          ? <span className="t2s-dot running" title={t('sidebar.running')} />
-          : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}
-      </span>
       {renaming === s.id ? (
         <input
           ref={renameRef}
@@ -328,10 +331,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       ) : (
         <span className="t2s-srow-title">{s.title || 'New Chat'}</span>
       )}
-      <span className="t2s-srow-menu" onClick={(e) => openMenu(e as React.MouseEvent, s)}>
-        <MoreHorizontal size={14} />
-      </span>
-    </button>
+    </SidebarRow>
   )
 
   return (

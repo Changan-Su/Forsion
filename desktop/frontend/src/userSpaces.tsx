@@ -54,6 +54,29 @@ function specName(spec: SpaceSpec): () => string {
 
 const toPanels = (list: SpacePanelSpec[]): PersistedPanel[] => list.map((p) => ({ type: p.type, params: p.params ?? {} }))
 
+/** 配方版本迁移:`space.json` 的 layout 换了新版,但 setActiveSpace 恒「有保存布局就用保存布局」
+ *  (刻意设计:进 Space 回到上次的样子)——于是**用过该 Space 的用户永远看不到新配方**。
+ *  这里在注册前比对已应用的配方版本,变了就丢弃该 Space 的命名布局,让下次进入走 build() 重建。
+ *  只在 version 真的变化时动手:用户自己调的布局照常保存,不受影响。 */
+const RECIPE_VER_KEY = 'forsion_space_recipe_ver'
+function migrateRecipeLayout(spec: SpaceSpec): void {
+  if (!spec.version) return // 没声明版本 = 老配方,不介入(丢布局的代价比不更新大)
+  let map: Record<string, string> = {}
+  try { map = JSON.parse(localStorage.getItem(RECIPE_VER_KEY) || '{}') } catch { /* 坏值当空 */ }
+  if (typeof map !== 'object' || !map) map = {}
+  const prev = map[spec.id]
+  if (prev === spec.version) return
+  // 首见(prev === undefined)也算「换过」:这份配方此前从没按版本记过,可能正是升级前装的那版。
+  // 但只有**确实存在保存布局**时才需要丢——否则下次进入本来就会 build()。
+  if (useWorkspace.getState().namedLayouts().includes(spaceLayoutName(spec.id))) {
+    deleteNamedLayout(spaceLayoutName(spec.id))
+    // 正在这个 Space 里 → 立刻按新配方重建,不必等用户切走再切回。
+    if (useSpaceStore.getState().activeSpaceId === spec.id) useWorkspace.getState().resetLayout()
+  }
+  map[spec.id] = spec.version
+  try { localStorage.setItem(RECIPE_VER_KEY, JSON.stringify(map)) } catch { /* 配额满:下次再试 */ }
+}
+
 function specToDefinition(spec: SpaceSpec): SpaceDefinition {
   const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right) }
   return {
@@ -73,6 +96,7 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
 }
 
 function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id): void {
+  migrateRecipeLayout(spec)
   const def = specToDefinition(spec)
   registerSpace(def)
   userIds.set(spec.id, dirSlug)
@@ -95,6 +119,7 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id): void {
 
 /** 插件 Space 注册:同 installUserSpace 但不进 userIds(不可右键删除——生命周期随插件),悬停提示来源。 */
 function installPluginSpace(spec: SpaceSpec, pluginId: string): void {
+  migrateRecipeLayout(spec)
   const def = specToDefinition(spec)
   registerSpace(def)
   pluginSpaceOwner.set(spec.id, pluginId)

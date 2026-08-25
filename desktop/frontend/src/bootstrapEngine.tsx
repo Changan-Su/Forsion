@@ -5,7 +5,7 @@ import { windowKind } from './windowKind'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
 import { useRecentViews } from './recentViews'
-import { planChatRestore } from './sessionOpenPlan'
+import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref } from './spaces'
 import { loadUserSpaces, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
@@ -25,7 +25,7 @@ import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/Spe
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
 import { AmadeusDbView } from './views/AmadeusDbView'
 import { AmadeusDrawingView } from './views/AmadeusDrawingView'
-import { AmadeusDashboardView } from './views/AmadeusDashboardView'
+import { DashboardCanvasView } from './views/DashboardCanvasView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { AmadeusPdfView } from './views/AmadeusPdfView'
 import { AmadeusImageView } from './views/AmadeusImageView'
@@ -49,6 +49,8 @@ import { ActivityLogView } from './views/ActivityLogView'
 import { AutomationListView } from './views/automation/AutomationListView'
 import { AutomationDetailView } from './views/automation/AutomationDetailView'
 import { AutomationRunsView } from './views/automation/AutomationRunsView'
+import { VIEW_FILE_MATCH } from './viewFileMatch'
+import { installDeepLinks } from './deepLinkInstall'
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -86,42 +88,45 @@ export function installEngine(): void {
 
   // 统一「工作区」视图(合并 原会话列表/工作区文件/笔记库):非 singleton —— 左右侧栏各放一个,
   // 各自独立的模式覆盖(存 leaf params);同侧防重复靠 openView 的「同侧同类型复用」。
-  registerView({ type: 'workspace', displayName: () => app().tr('view.workspace'), icon: Folder, factory: (props) => <WorkspaceView {...props} /> })
+  registerView({ type: 'workspace', kind: 'collection', displayName: () => app().tr('view.workspace'), icon: Folder, factory: (props) => <WorkspaceView {...props} /> })
   // 统一「大纲」视图(合并 原目录/Amadeus 大纲):随活动主视图切换采集器。
-  registerView({ type: 'outline', displayName: () => app().tr('view.outline'), icon: ListTree, factory: () => <OutlineView />, singleton: true })
+  registerView({ type: 'outline', kind: 'aux', embeddable: true, displayName: () => app().tr('view.outline'), icon: ListTree, factory: () => <OutlineView />, singleton: true })
   // chat 可关闭(浏览器式):关掉主区最后一个 view → 显示「新建标签页」启动器(见 workspaceStore.closeLeaf)。
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat', kind: 'entity', idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
+  // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
+  // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat-panel', kind: 'aux', displayName: () => (document.documentElement.lang.startsWith('zh') ? '对话面板' : 'Chat panel'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
   // 右栏视图(可关,可重开)
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'memory', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'subchats', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'session-files', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'session-files', kind: 'aux', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
   // 主区特殊视图(按需从侧栏打开,不进默认布局)。旧 'wechat' 视图已退役:恢复布局时未注册类型被引擎自动剔除。
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'agents-detail', displayName: () => app().tr('special.agents.title'), icon: Bot, factory: () => <AgentsDetailSpecialView />, singleton: true })
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'workspace-detail', displayName: () => app().tr('app.workspace'), icon: FolderOpen, factory: () => <WorkspaceDetailSpecialView />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'agents-detail', kind: 'page', displayName: () => app().tr('special.agents.title'), icon: Bot, factory: () => <AgentsDetailSpecialView />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'workspace-detail', kind: 'page', displayName: () => app().tr('app.workspace'), icon: FolderOpen, factory: () => <WorkspaceDetailSpecialView />, singleton: true })
   // 新建标签页(空白启动器):列出所有视图按 主区/侧区 分类,选中即在对应区打开。
-  registerView({ type: 'launcher', displayName: () => app().tr('newtab.title'), icon: Plus, factory: (props) => <NewTabView {...props} /> })
+  registerView({ type: 'launcher', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: (props) => <NewTabView {...props} /> })
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,
   // 替代原 chatbox 上方的浮层预览 —— 浮层暂时停用,见 appStore.setFilePreview)。无条件注册:
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
-  registerView({ type: 'wsfile', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
+  registerView({ type: 'wsfile', kind: 'entity', idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
-  if (PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+  if (PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
   // Public Space:管理已发布网站(Forsion Connect)+ 已公开发布/协作共享的笔记。档案点名 public 时注册。
-  if (PRODUCT.spaces.includes('public')) registerView({ type: 'public-view', displayName: () => app().tr('view.publicHub'), icon: Rocket, factory: (props) => <PublicView {...props} />, singleton: true })
+  if (PRODUCT.spaces.includes('public')) registerView({ type: 'public-view', kind: 'page', displayName: () => app().tr('view.publicHub'), icon: Rocket, factory: (props) => <PublicView {...props} />, singleton: true })
   // Automation Space 三件套(左=列表/主=详情+构建器/右=触发记录);仅档案点名 automation 时注册。
   if (PRODUCT.spaces.includes('automation')) {
-    registerView({ type: 'automation-list', displayName: () => app().tr('view.automationList'), icon: Workflow, factory: () => <AutomationListView />, singleton: true })
-    registerView({ type: 'automation-detail', displayName: () => app().tr('view.automationDetail'), icon: Workflow, factory: () => <AutomationDetailView />, singleton: true })
-    registerView({ type: 'automation-runs', displayName: () => app().tr('view.automationRuns'), icon: ListTree, factory: () => <AutomationRunsView />, singleton: true })
+    registerView({ type: 'automation-list', kind: 'collection', displayName: () => app().tr('view.automationList'), icon: Workflow, factory: () => <AutomationListView />, singleton: true })
+    registerView({ type: 'automation-detail', kind: 'page', displayName: () => app().tr('view.automationDetail'), icon: Workflow, factory: () => <AutomationDetailView />, singleton: true })
+    registerView({ type: 'automation-runs', kind: 'aux', displayName: () => app().tr('view.automationRuns'), icon: ListTree, factory: () => <AutomationRunsView />, singleton: true })
   }
   // 「更新」标签页(更新日志 + 下载/安装):检测到新版自动弹出;任何产品变体都注册。
-  registerView({ type: 'changelog', displayName: () => app().tr('view.changelog'), icon: FileText, factory: () => <ChangelogView />, singleton: true })
+  registerView({ type: 'changelog', kind: 'page', displayName: () => app().tr('view.changelog'), icon: FileText, factory: () => <ChangelogView />, singleton: true })
   // 活动日志实时视图(开发者工具):恒注册,⌘K 入口由开发者选项开关控制(activityViewCommand)。
-  registerView({ type: 'activity-log', displayName: () => app().tr('view.activityLog'), icon: Activity, factory: () => <ActivityLogView />, singleton: true })
+  registerView({ type: 'activity-log', kind: 'page', displayName: () => app().tr('view.activityLog'), icon: Activity, factory: () => <ActivityLogView />, singleton: true })
   // 空侧栏占位:侧栏关空/拖空后由 closeLeaf/dropView 自动补上,保住 group 作拖放靶(整组只剩它时 tab 条隐藏,见 engine.css)。
-  registerView({ type: 'sidebar-empty', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: () => <SidebarEmptyView />, closable: false })
+  registerView({ type: 'sidebar-empty', kind: 'page', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: () => <SidebarEmptyView />, closable: false })
   // 主区空态占位:关掉最后一个主区 tab 后 closeLeaf 就地把该 leaf 变成它(Forsion 品牌图 + 新建;tab 条隐藏机关同 sidebar-empty)。
-  registerView({ type: 'home', displayName: () => app().tr('newtab.title'), icon: Plus, factory: () => <HomeEmptyView />, closable: false })
+  registerView({ type: 'home', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: () => <HomeEmptyView />, closable: false })
 
   // Amadeus Space:原生可停靠视图(左 笔记列表 / 主 编辑器 / 右 大纲+反链),共享 pageStore。
   // Amadeus 依赖 electron 预载的 window.amadeus 文件系统桥;Tangu Web(无 host)下缺省 → 整个 Space 不注册,
@@ -130,37 +135,40 @@ export function installEngine(): void {
     // 笔记库/大纲已并入统一的 workspace/outline 视图(见上);Amadeus 专属侧视图保留。
     // 编辑器 = 非 singleton 多实例(类 Obsidian 每笔记一个 tab,params.notePath 认领笔记并随布局持久化);
     // 可关闭:关到主区最后一个 → 落 launcher 启动器(见 workspaceStore.closeLeaf)。
-    registerView({ type: 'amadeus-editor', displayName: () => app().tr('amadeus.editor'), icon: FileText, factory: (props) => <AmadeusEditorView {...props} /> })
+    registerView({ type: 'amadeus-editor', kind: 'entity', idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'], displayName: () => app().tr('amadeus.editor'), icon: FileText, factory: (props) => <AmadeusEditorView {...props} /> })
     // 独立 .db 数据库视图(多实例,params.dbPath 认领文件并随布局持久化;树上点 .db 打开,见 amadeusNav.openDb)。
-    registerView({ type: 'amadeus-db', displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} /> })
+    registerView({ type: 'amadeus-db', kind: 'entity', idParam: 'dbPath', fileMatch: VIEW_FILE_MATCH['amadeus-db'], displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} /> })
     // 独立白板视图(多实例,params.drawingPath 认领文件;树上点 .excalidraw.md / 笔记里点 [[X.excalidraw]] 打开,见 amadeusNav.openDrawing)。
-    registerView({ type: 'amadeus-drawing', displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} /> })
-    // 独立仪表盘视图(多实例,params.dashPath 认领文件;树上点 .dashboard.md 打开,见 amadeusNav.openDashboard)。
-    // 文件本身是一份合法笔记(布局记在外来 frontmatter 键),掉进笔记编辑器也不会坏 —— 见 shared/amadeus/dashboard.ts。
-    registerView({ type: 'amadeus-dashboard', displayName: () => (document.documentElement.lang.startsWith('zh') ? '仪表盘' : 'Dashboard'), icon: LayoutDashboard, factory: (props) => <AmadeusDashboardView {...props} /> })
+    registerView({ type: 'amadeus-drawing', kind: 'entity', idParam: 'drawingPath', fileMatch: VIEW_FILE_MATCH['amadeus-drawing'], displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} /> })
+    // 仪表盘(P3a 画布版,2026-08-25 拍板):.dashboard.md 一律开进它;文件仍是一份合法笔记
+    // (布局在外来 frontmatter 键 dashboard2:),掉进笔记编辑器也不会坏 —— 见 shared/amadeus/dashboard.ts。
+    registerView({ type: 'dashboard', kind: 'entity', idParam: 'dashPath', fileMatch: VIEW_FILE_MATCH['dashboard'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '仪表盘' : 'Dashboard'), icon: LayoutDashboard, factory: (props) => <DashboardCanvasView {...props} /> })
+    // 旧网格版 view **已移除**(用户拍板:旧 UI 不能留着让人看到)。已存布局里的 amadeus-dashboard
+    // panel 由 layoutViewsAllRegistered 整份回退 → 该 Space 按新配方重建,文件本身不受影响
+    // (.dashboard.md 照旧被新画布版认领,旧布局键 dashboard: 也原样留在文件里当回滚保险)。
     // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf)。
-    registerView({ type: 'amadeus-pdf', displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} /> })
+    registerView({ type: 'amadeus-pdf', kind: 'entity', idParam: 'pdfPath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} /> })
     // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。
-    registerView({ type: 'amadeus-image', displayName: () => (document.documentElement.lang.startsWith('zh') ? '图片' : 'Image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
+    registerView({ type: 'amadeus-image', kind: 'entity', idParam: 'imagePath', fileMatch: VIEW_FILE_MATCH['amadeus-image'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '图片' : 'Image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
     // 通用「插件文件类型」视图(多实例,params.filePath 认领文件;树上点插件声明的文件类型 / 笔记里点
     // ![[x.ext]] 打开,见 amadeusNav.openFile + 插件的 ctx.registerFileType)。一个视图服务所有插件文件类型。
-    registerView({ type: 'amadeus-plugin-file', displayName: () => (document.documentElement.lang.startsWith('zh') ? '插件文件' : 'Plugin File'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
-    registerView({ type: 'amadeus-backlinks', displayName: () => app().tr('amadeus.backlinks'), icon: Link2, factory: () => <AmadeusBacklinksView />, singleton: true })
-    registerView({ type: 'amadeus-search', displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
-    registerView({ type: 'amadeus-tags', displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
-    registerView({ type: 'amadeus-graph', displayName: () => app().tr('amadeus.graph'), icon: Waypoints, factory: () => <AmadeusLocalGraphView />, singleton: true })
+    registerView({ type: 'amadeus-plugin-file', kind: 'entity', idParam: 'filePath', displayName: () => (document.documentElement.lang.startsWith('zh') ? '插件文件' : 'Plugin File'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
+    registerView({ type: 'amadeus-backlinks', kind: 'aux', displayName: () => app().tr('amadeus.backlinks'), icon: Link2, factory: () => <AmadeusBacklinksView />, singleton: true })
+    registerView({ type: 'amadeus-search', kind: 'collection', displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
+    registerView({ type: 'amadeus-tags', kind: 'collection', displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
+    registerView({ type: 'amadeus-graph', kind: 'aux', displayName: () => app().tr('amadeus.graph'), icon: Waypoints, factory: () => <AmadeusLocalGraphView />, singleton: true })
     // Calendar Space:待办清单(汇总全库 todo 属性)+ 日历(汇总全库 calendarDate 属性)。数据经 dbAggregateStore。
-    registerView({ type: 'todo-list', displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <TodoListView />, singleton: true })
-    registerView({ type: 'calendar', displayName: () => app().tr('view.calendar'), icon: CalendarDays, factory: () => <CalendarView />, singleton: true })
-    registerView({ type: 'calendar-config', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <CalendarConfigView />, singleton: true })
+    registerView({ type: 'todo-list', kind: 'collection', embeddable: true, displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <TodoListView />, singleton: true })
+    registerView({ type: 'calendar', kind: 'collection', embeddable: true, displayName: () => app().tr('view.calendar'), icon: CalendarDays, factory: () => <CalendarView />, singleton: true })
+    registerView({ type: 'calendar-config', kind: 'page', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <CalendarConfigView />, singleton: true })
   }
 
   // Inbox Space:收件箱(左 邮件列表 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
   // gate = window.tangu?.backendStatus(桌面壳语义,含 external 模式;webShim 无 → Tangu Web 不注册,
   // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩)。
   if (window.tangu?.backendStatus || window.tangu?.mobile) {
-    registerView({ type: 'inbox-list', displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true })
-    registerView({ type: 'inbox-reader', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true })
+    registerView({ type: 'inbox-list', kind: 'collection', embeddable: true, displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true })
+    registerView({ type: 'inbox-reader', kind: 'page', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true })
   }
 
   // Space:注册(注册序 = ribbon 顶部默认序,排在商店等功能图标之上;每个 Space 贡献一个可拖动的 ribbon 顶部图标)。
@@ -220,6 +228,18 @@ export function installEngine(): void {
       return
     }
     setActiveSpace(want)
+  })
+
+  // 「当前会话」按 Space 分账(2026-08-23):切 Space 时把老 Space 那条存进账本、还原新 Space 上次那条。
+  // 不分账的话所有跟随档 chat leaf 共用一个 activeId —— Tangu 主 tab 开的会话会原样出现在 Amadeus 侧栏
+  // 那份陪伴聊天里,且双向互拖(用户实报)。判定见 planSpaceSwitch;Space **内部**的跟随语义原样不动。
+  // 只留内存:多窗口按 URL 参数隔离(勿写 localStorage),重启后照旧走 appStore 的启动兜底。
+  const spaceSessions = new Map<string, string | null>()
+  useSpaceStore.subscribe((s, p) => {
+    if (s.activeSpaceId === p.activeSpaceId) return
+    const a = app()
+    const alive = (id: string): boolean => a.sessions.some((x) => x.id === id) || a.archivedSessions.some((x) => x.id === id)
+    a.setActiveId(planSpaceSwitch(spaceSessions, p.activeSpaceId, s.activeSpaceId, a.activeId, alive))
   })
 
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。
@@ -366,8 +386,15 @@ export function installEngine(): void {
   addCommand({ id: 'nav-back', title: () => app().tr('command.navBack'), keywords: 'back history 后退 历史', hotkey: 'mod+shift+[', run: () => navGo('back') })
   addCommand({ id: 'nav-forward', title: () => app().tr('command.navForward'), keywords: 'forward history 前进 历史', hotkey: 'mod+shift+]', run: () => navGo('forward') })
   addCommand({ id: 'reset-layout', title: () => app().tr('command.resetLayout'), keywords: 'layout reset default 布局 默认 黄金分割', run: () => ws().resetLayout() })
+  if (PRODUCT.spaces.includes('tangu')) addCommand({
+    id: 'show-chat-panel',
+    icon: MessageCircle,
+    title: () => (document.documentElement.lang.startsWith('zh') ? '显示对话面板' : 'Show chat panel'),
+    keywords: 'chat panel side conversation 侧栏 对话 面板',
+    run: () => ws().showSideView('right', 'chat-panel'),
+  })
   // Mini 悬浮卡片(全局快捷键 ⌘/Ctrl+⇧+M 亦可):仅桌面(openMini 存在)。
-  if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => (document.documentElement.lang.startsWith('zh') ? '打开 Mini 卡片' : 'Open mini card'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => window.tangu?.openMini?.() })
+  if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => (document.documentElement.lang.startsWith('zh') ? '打开 Mini 卡片' : 'Open mini card'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => window.tangu?.openMini?.({ sessionId: app().activeId || undefined }) })
   // 另存为 Space:当前布局序列化成 ~/.tangu/spaces/<slug>/space.json 并注册(仅桌面)。
   if (window.tangu?.spacesSave) addCommand({ id: 'save-as-space', title: () => app().tr('command.saveAsSpace'), keywords: 'space 空间 另存 保存 custom', run: () => {
     void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void saveCurrentAsSpace(name) })
@@ -397,6 +424,9 @@ export function installEngine(): void {
   try { setMobileUiCommand(localStorage.getItem(MOBILE_UI_KEY) === '1') } catch { /* ignore */ }
   // 开发者选项:活动日志实时视图命令(同款模式)。
   try { setActivityViewCommand(localStorage.getItem(ACTIVITY_VIEW_KEY) === '1') } catch { /* ignore */ }
+
+  // forsion:// deep link(仅桌面主窗;内部自门控 window.tangu?.onDeepLink,web/mobile 各有通道)。
+  installDeepLinks()
 }
 
 /** 默认布局 = 当前活动 Space 的 build()(WorkspaceHost 无保存布局时调用,经 buildDefault prop)。 */

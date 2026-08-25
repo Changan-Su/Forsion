@@ -1,9 +1,12 @@
 /** 统一「工作区」视图的模式模型(纯函数,无 React/amadeus 依赖 → node 环境可测)。 */
 export type WorkspaceMode = 'sessions' | 'files' | 'notes'
 
+/** 扩展模式 = 内置三档 + 插件列表源(`plugin:<pid>:<srcId>`,View 基座 P2)。 */
+export type WorkspaceModeEx = WorkspaceMode | `plugin:${string}`
+
 /** 从笔记树点开的 Amadeus 文档 —— 主区 focus 它们时左栏一律回笔记树,**不分 Space**
  *  (在 Tangu Space 里点开一张图/一个 PDF 也该看见它在笔记树里的位置)。 */
-const NOTE_DOC_VIEWS = new Set(['amadeus-editor', 'amadeus-drawing', 'amadeus-dashboard', 'amadeus-db', 'amadeus-pdf'])
+const NOTE_DOC_VIEWS = new Set(['amadeus-editor', 'amadeus-drawing', 'dashboard', 'amadeus-dashboard', 'amadeus-db', 'amadeus-pdf'])
 
 /**
  * 自动模式 = f(所在侧, 活动主视图类型, 本 Space 默认档)。
@@ -18,7 +21,11 @@ export function autoWorkspaceMode(
   loc: 'left' | 'right' | 'main',
   mainType: string | null,
   spaceDefault: WorkspaceMode = 'sessions',
-): WorkspaceMode {
+  /** 主视图注册时声明的 workspaceSource(ViewDefinition.workspaceSource,调用方查注册表后传入;
+   *  View 基座 P2 的声明式联动位)。显式声明优先于内置硬规则;右栏仍恒 files 不受它管。 */
+  mainSource?: string | null,
+): WorkspaceModeEx {
+  if (loc !== 'right' && mainSource) return mainSource as WorkspaceModeEx
   if (mainType === 'chat') return loc === 'right' ? 'files' : 'sessions'
   if (mainType && NOTE_DOC_VIEWS.has(mainType)) return loc === 'right' ? 'files' : 'notes'
   if (mainType === 'code-studio') return 'files' // Coding Space:侧栏恒为工作区文件树(点文件 → 主区代码)

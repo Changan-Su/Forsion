@@ -3196,7 +3196,23 @@ body.amx-marquee-active * {
   pointer-events: none;
   will-change: transform;
 }
-.am-app .amx-stage.amx-dropzone { outline: 2px dashed var(--primary); outline-offset: -4px; }
+/* 全舞台虚线框像调试边界,且 class 若跨模式残留会围住整篇文档。落点反馈收成顶部短光条:
+   保留「这里可放」的即时信号,不再用四边装饰抢内容层级。 */
+.am-app .amx-stage.amx-dropzone { outline: none; }
+.am-app .amx-stage.amx-dropzone:not(.amx-stage-off)::after {
+  content: '';
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 20;
+  width: min(96px, 30%);
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 78%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--primary) 24%, transparent);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
 /* 文档模式:舞台两层整个摘出布局。DOM 保持在场 → React 不重挂子树 → PM 撤销栈不被切模式清空
    (canvasStage 的渲染注释写了全过程)。`position: static` 是配套的,删了会让 blockLayer 的
    overlayOrigin 挑中这个没有盒子的祖先(display:contents ⇒ rect 恒 0)→ 块浮层整体偏一个容器位。 */
@@ -3246,6 +3262,37 @@ body.amx-marquee-active * {
   outline-color: color-mix(in srgb, var(--primary) 72%, transparent);
   box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
 }
+/* 卡片尺寸热区：四边负责单轴，四角负责双轴。只在单选且非编辑态渲染；热区骑在描边上，
+   不向 PM 卡片 DOM 塞把手，避免 DOMObserver 将过程节点重画掉。 */
+.am-app .amx-card-size-grip {
+  position: absolute;
+  z-index: 6;
+  pointer-events: auto;
+}
+.am-app .amx-card-size-grip.is-n,
+.am-app .amx-card-size-grip.is-s { left: 9px; right: 9px; height: 10px; cursor: ns-resize; }
+.am-app .amx-card-size-grip.is-n { top: -5px; }
+.am-app .amx-card-size-grip.is-s { bottom: -5px; }
+.am-app .amx-card-size-grip.is-e,
+.am-app .amx-card-size-grip.is-w { top: 9px; bottom: 9px; width: 10px; cursor: ew-resize; }
+.am-app .amx-card-size-grip.is-e { right: -5px; }
+.am-app .amx-card-size-grip.is-w { left: -5px; }
+.am-app .amx-card-size-grip:is(.is-nw, .is-ne, .is-sw, .is-se) { width: 12px; height: 12px; }
+.am-app .amx-card-size-grip.is-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.am-app .amx-card-size-grip.is-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.am-app .amx-card-size-grip.is-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.am-app .amx-card-size-grip.is-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.am-app .amx-grid-landing {
+  position: absolute;
+  z-index: 4;
+  box-sizing: border-box;
+  border: 2px dashed color-mix(in srgb, var(--primary) 76%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--primary) 62%, transparent);
+  pointer-events: none;
+}
+.am-app .amx-grid-landing.is-resize { background: color-mix(in srgb, var(--primary) 5%, transparent); }
 .am-app .amx-el-shape {
   position: absolute;
   box-sizing: border-box;
@@ -3312,28 +3359,84 @@ body.amx-marquee-active * {
 .am-app .amx-el-attach-target {
   position: absolute;
   border-radius: 12px;
-  outline: 2px solid color-mix(in srgb, var(--primary) 72%, transparent);
-  outline-offset: 5px;
-  background: color-mix(in srgb, var(--primary) 7%, transparent);
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--primary) 5%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--primary) 44%, transparent);
+  outline-offset: 3px;
+  background: color-mix(in srgb, var(--primary) 3%, transparent);
   pointer-events: none;
   z-index: 2;
 }
 .am-app .amx-el-attach-target.is-sibling {
-  outline-style: dashed;
+  outline-color: color-mix(in srgb, var(--primary) 32%, transparent);
   background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+/* 松手后的真实落点：参考思维导图应用的占位主题，用“幽灵卡”而不是只有一条边提示。
+   盒子来自提交同一套槽位 + 避让数学；outline 不进布局，且只消费 Genesis 自己的语义 token。 */
+.am-app .amx-el-attach-slot {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 34%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 2;
+}
+.am-app .amx-el-attach-slot.is-sibling {
+  border-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+/* 靠父节点一侧的短条才是“准星”：完整虚线框交代最终占位尺寸，短条交代连接真正会落在哪一口。
+   data 值沿用 attachHit 的 e/w/n/s，不再派生第二套方向。 */
+.am-app .amx-el-attach-slot::before {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 72%, transparent);
+}
+.am-app .amx-el-attach-slot[data-attach-slot='e']::before {
+  left: -2px;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  transform: translateY(-50%);
+}
+.am-app .amx-el-attach-slot[data-attach-slot='w']::before {
+  right: -2px;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  transform: translateY(-50%);
+}
+.am-app .amx-el-attach-slot[data-attach-slot='s']::before {
+  left: 50%;
+  top: -2px;
+  width: 22px;
+  height: 3px;
+  transform: translateX(-50%);
+}
+.am-app .amx-el-attach-slot[data-attach-slot='n']::before {
+  left: 50%;
+  bottom: -2px;
+  width: 22px;
+  height: 3px;
+  transform: translateX(-50%);
 }
 .am-app .amx-el-attach {
   position: absolute;
-  border-radius: 3px;
-  background: var(--primary);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 72%, transparent);
   pointer-events: none;
   /* ⚠️ 必须抬到卡片之上:元素层整层画在正文**底下**(舞台里它排在编辑器之前),而认亲时被拖的
      那张卡正好压在目标的边上 —— 不抬就是「高亮画了但看不见」(截图自查抓到的,几何断言全绿)。
      `.amx-el-layer` 自身没有 z-index,不建立层叠上下文,所以这一条能越过卡片生效。 */
   z-index: 3;
 }
-.am-app .amx-el-attach.is-sibling { background: color-mix(in srgb, var(--primary) 45%, transparent); }
+.am-app .amx-el-attach.is-sibling { background: color-mix(in srgb, var(--primary) 52%, transparent); }
 .am-app .amx-el-attach-label {
   position: absolute;
   z-index: 4;
@@ -3355,7 +3458,8 @@ body.amx-marquee-active * {
    连线那几支在 onDown 里**早于**它们 return —— 留着就是「看得见、点下去却建了个矩形」。
    舞台根的 `amx-tool-*` 只在画布模式挂,文档模式本层根本不渲染。 */
 .am-app .amx-stage:not(.amx-tool-select) .amx-el-add,
-.am-app .amx-stage:not(.amx-tool-select) .amx-el-grip { display: none; }
+.am-app .amx-stage:not(.amx-tool-select) .amx-el-grip,
+.am-app .amx-stage:not(.amx-tool-select) .amx-card-size-grip { display: none; }
 .am-app .amx-el-ellipse { border-radius: 50%; }
 /* Frame(2026-08-18)。⚠️ 框体 `pointer-events: none` 是**正确性**不是审美:一个满屏大的可点矩形
    就是糊在画布上的隐形挡板(挡拖卡、挡选字、挡 ⠿)—— 只有标题条 auto,把手自 08-19 起画在
@@ -3396,6 +3500,15 @@ body.amx-marquee-active * {
 /* 连线橡皮筋(第一击之后跟随指针的预览)与有效目标高亮。 */
 .am-app .amx-el-conn.is-preview path { stroke: var(--primary); stroke-width: 1.5; stroke-dasharray: 5 4; }
 .am-app .amx-el-conn.is-preview polygon { fill: var(--primary); }
+/* 拖卡认亲不是自由连线工具：预告只要一根安静的实线。自由连线的橡皮筋仍保留上面的虚线语义。 */
+.am-app .amx-el-conn.is-preview[data-el='~attach'] path {
+  stroke: color-mix(in srgb, var(--primary) 46%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+.am-app .amx-el-conn.is-preview[data-el='~attach'] polygon {
+  fill: color-mix(in srgb, var(--primary) 46%, transparent);
+}
 .am-app .amx-conn-target {
   position: absolute;
   outline: 2px solid color-mix(in srgb, var(--primary) 65%, transparent);
@@ -3414,6 +3527,68 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   white-space: nowrap;
 }
+/* 远距概览是真正的渲染替身，不是盖在完整正文上的标签：原 PM 块退出 layout/paint，卡壳高度由
+   CanvasElements 在跨阈值前量好并以独立样式撑住；再次放大后规则与替身一起卸载。
+   普通卡是主 ProseMirror 的绝对定位后代，因此 paint containment 只能落在每张普通卡自身；
+   若把主 ProseMirror 也设为 paint container，会把位于主卡盒外的所有普通卡壳一起裁掉。 */
+.am-app .amx-stage-overview .amx-ucard > *,
+.am-app .amx-stage-overview .ProseMirror:not(.unified-embed .ProseMirror) > :not(.amx-ucard) { display: none !important; }
+.am-app .amx-stage-overview .amx-ucard {
+  overflow: hidden;
+  contain: paint;
+}
+.am-app .amx-card-overview {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(3px * var(--amx-overview-inv));
+  padding: calc(6px * var(--amx-overview-inv));
+  overflow: hidden;
+  color: var(--text);
+  text-align: center;
+  pointer-events: none;
+}
+.am-app .amx-card-overview-title,
+.am-app .amx-card-overview-detail {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.am-app .amx-card-overview-title {
+  font-size: calc(var(--amx-overview-title-screen, 12px) * var(--amx-overview-inv));
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.am-app .amx-card-overview-detail {
+  display: -webkit-box;
+  color: var(--text-muted);
+  font-size: calc(10.5px * var(--amx-overview-inv));
+  font-weight: 450;
+  line-height: 1.3;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.am-app .amx-card-overview[data-overview-density='summary'] {
+  gap: calc(2px * var(--amx-overview-inv));
+  padding: calc(4px * var(--amx-overview-inv));
+}
+.am-app .amx-card-overview[data-overview-density='summary'] .amx-card-overview-detail {
+  display: block;
+  white-space: nowrap;
+  -webkit-line-clamp: 1;
+}
+.am-app .amx-card-overview[data-overview-density='title'] {
+  gap: 0;
+  padding: calc(1.5px * var(--amx-overview-inv));
+}
+.am-app .amx-card-overview[data-overview-density='title'] .amx-card-overview-detail { display: none; }
 /* 画布缩略图：固定在 chrome 层，不吃舞台 pan/zoom；盒子来自真实卡片/主卡/图形几何。
    视口框本身也是导航面，点击或拖动都会平移画布。 */
 .am-app .amx-stage-minimap {
@@ -3547,18 +3722,21 @@ body.amx-marquee-active * {
 .am-app .amx-canvas .ProseMirror {
   margin: var(--amx-main-y, 0) 0 0 var(--amx-main-x, 0);
   width: var(--amx-main-w, 720px);
+  height: var(--amx-main-h, auto);
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
   box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
   cursor: grab;
+  overflow: auto;
 }
 .am-app .amx-canvas .amx-ucard {
   position: absolute;
   left: var(--amx-x, 0);
   top: var(--amx-y, 0);
   width: var(--amx-w, 400px);
+  height: var(--amx-h, auto);
   margin: 0;
   /* 这一圈 padding 就是卡片的手柄:指针落在它上面时事件目标恰好是卡片 div 本身(落在正文里
      时是内部的 p/h1/…),canvasStage 的 pointerdown 靠这一点区分「搬卡」与「编辑正文」。 */
@@ -3569,6 +3747,7 @@ body.amx-marquee-active * {
   background: var(--bg);
   box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
   cursor: grab;
+  overflow: auto;
 }
 /* (拖拽中的位置与「抬起」观感**不在这里**:手势期任何 class/inline 都不能写到卡片 DOM 上 ——
    PM 的 DOMObserver 会把带陌生属性的节点按 toDOM 重画,过程样式当场蒸发(2026-08-18 C34 真实
@@ -3622,10 +3801,12 @@ body.amx-marquee-active * {
 .am-app .amx-canvas .unified-embed .ProseMirror {
   margin: 0;
   width: auto;
+  height: auto;
   padding: 0;
   border: none;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   cursor: default;
+  overflow: visible;
 }

@@ -34,8 +34,8 @@ import { rawTree, pruneTree, depthOf, runEndOf } from './canvasEdit'
 
 /** 卡片几何。坐标一律取整(方案 §3.1 量化,控制 fm 体积);h 省略 = 随内容自适应。 */
 export interface CanvasCard { ref: string; x: number; y: number; w: number; h?: number }
-/** 主卡几何(未入卡的自然流全部)。 */
-export interface CanvasMain { x: number; y: number; w: number }
+/** 主卡几何(未入卡的自然流全部)。h 省略 = 随内容自适应，与普通卡片同口径。 */
+export interface CanvasMain { x: number; y: number; w: number; h?: number }
 export interface CanvasV1 {
   v: number
   mode?: 'doc' | 'canvas'
@@ -84,6 +84,7 @@ export function parseCanvasJson(raw: string | null): CanvasV1 | null {
     if (c.main != null) {
       if (typeof c.main !== 'object' || !num(c.main.w) || c.main.w <= 0) return null
       if (!num(c.main.x) || !num(c.main.y)) return null
+      if (c.main.h != null && (!num(c.main.h) || c.main.h < 0)) return null
     }
     if (c.cards != null) {
       if (!Array.isArray(c.cards)) return null
@@ -144,7 +145,8 @@ export const canvasCardSchema = $nodeSchema('amadeusCanvasCard', () => ({
     // 几何走自定义属性而不是直接写 left/top/width:CSS 的 attr() 取不了长度值,而内联 left
     // 会在**文档模式**下也生效(卡片当场变绝对定位飞出正文)。自定义属性只被 .amx-canvas
     // 作用域下的规则消费,文档模式一个像素都不动。
-    style: `--amx-x:${node.attrs.x}px;--amx-y:${node.attrs.y}px;--amx-w:${node.attrs.w}px`,
+    // h=0 保持随内容长高；用户从画布边缘调过高度后才落成显式 px。
+    style: `--amx-x:${node.attrs.x}px;--amx-y:${node.attrs.y}px;--amx-w:${node.attrs.w}px;--amx-h:${Number(node.attrs.h) > 0 ? `${node.attrs.h}px` : 'auto'}`,
   }, 0],
   parseMarkdown: {
     match: ({ type }) => type === 'amadeusCanvasCard',
@@ -366,7 +368,12 @@ export function withElements(storedLine: string | null, elements: unknown[]): st
  *  fail-closed(读不懂原样返回)。懒物化的判据反着来 —— main 恒有默认值,「盘上无键 + 写的是
  *  默认位形」= 没有信息,一个字节不写(否则视角切进画布就物化一行默认 JSON,违反方案 §4)。 */
 export function withMain(storedLine: string | null, main: CanvasMain): string | null {
-  const next: CanvasMain = { x: Math.round(main.x), y: Math.round(main.y), w: Math.round(main.w) }
+  const next: CanvasMain = {
+    x: Math.round(main.x),
+    y: Math.round(main.y),
+    w: Math.round(main.w),
+    ...(typeof main.h === 'number' && main.h > 0 ? { h: Math.round(main.h) } : {}),
+  }
   const stored = parseCanvasJson(storedLine)
   if (!stored) {
     if (storedLine != null) return storedLine

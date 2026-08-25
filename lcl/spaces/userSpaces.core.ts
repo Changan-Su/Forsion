@@ -11,6 +11,10 @@ export interface SpaceSpec {
   id: string
   name: string | { zh?: string; en?: string }
   icon?: string
+  /** 配方版本(插件/市场包升级时递增)。宿主据此判断「这份配方换过了」→ 丢弃该 Space 的
+   *  已保存布局,让新配方真正落地;否则 setActiveSpace 恒走 applyNamed(保存布局优先),
+   *  改了 layout 的新版对**用过该 Space 的用户永远不生效**。 */
+  version?: string
   minAppVersion?: string
   layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[] }
   requires?: { views?: string[]; plugin?: string | null }
@@ -98,6 +102,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
       id,
       name: name as SpaceSpec['name'],
       icon: typeof d.icon === 'string' ? d.icon : undefined,
+      version: typeof d.version === 'string' ? d.version : undefined,
       minAppVersion: typeof d.minAppVersion === 'string' ? d.minAppVersion : undefined,
       layout: { main: main as SpacePanelSpec[], left: left as SpacePanelSpec[], right: right as SpacePanelSpec[] },
       requires: reqViews.length ? { views: reqViews } : undefined,

@@ -107,8 +107,22 @@ export function LeafHost() {
   )
 }
 
+/** 左抽屉底部常驻区(Space 切换条 + 账号 + 设置)有没有内容 —— 与 DrawerFoot 自己的早退条件同源。
+ *  ⚠️ 它是移动端**唯一**的切 Space / 账号 / 设置入口(「⋯」菜单刻意滤掉了后两项),所以「左抽屉可不可达」
+ *  不能只看侧栏视图:进了没有左栏配方的 Space(内置「发布」,或 layout.left 为空的用户 Space)后
+ *  leftLeaves 与 sidebarDefaults.left 双双为空 → 左胶囊塌成幽灵、抽屉拿不到 .open,连切回别的 Space
+ *  的路一起断掉,且 saveCurrent 把空布局存了回去 = 重启也出不来(2026-08-25 用户实报,2.8.1 可复现)。 */
+const footAliveOf = (spaceCount: number, items: { id: string }[]): boolean =>
+  spaceCount > 1 || items.some((i) => i.id === 'rb-account' || i.id === 'rb-settings')
+function useFootAlive(): boolean {
+  return footAliveOf(useSpaceStore((s) => s.spaces.length), useRibbonStore((s) => s.items))
+}
+const footAliveNow = (): boolean => footAliveOf(useSpaceStore.getState().spaces.length, useRibbonStore.getState().items)
+
 function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: boolean; showFoot?: boolean }) {
   const visible = useWorkspace((s) => (side === 'left' ? s.leftVisible : s.rightVisible))
+  const footAlive = useFootAlive() // 无条件调用:hooks 不能进条件分支
+  const withFoot = side === 'left' && !!showFoot && footAlive
   // 只订阅稳定量:该侧 leaf 的 id 签名(增删触发)+ active id(切换触发)。**不**订阅 title,
   // 否则视图渲染期调 leaf.setTitle → 宿主重渲染 → 再 setTitle 的无限循环(React #185)。
   const leavesSig = useWorkspace((s) => (side === 'left' ? s.leftLeaves : s.rightLeaves).map((r) => r.id).join(','))
@@ -121,7 +135,9 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
   const active = useWorkspace.getState().getActiveSideLeaf(side)
   const def = active ? getView(active.type) : null
   const close = () => useWorkspace.getState().toggleSidebar(side)
-  const inner = leaves.length === 0 ? null : (
+  // 「这个抽屉有没有东西可给」:侧栏视图,或(仅左)底部常驻区。见 footAliveOf 上方的注释。
+  const alive = leaves.length > 0 || withFoot
+  const inner = !alive ? null : (
     <>
       <div className="mb-drawer-bar">
         {/* 该侧多个视图 → 下拉切换(原生 select,真机走系统选择器);单个则显示标题。 */}
@@ -154,16 +170,16 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
       </div>
       {/* 左栏底部常驻:Space 切换 + 账号卡 + 设置(用户拍板 2026-08-05;docked 宽屏形态同样带)。
           mini 变体不带(顶部 MiniRibbon 已是 Space 入口,mini 契约=无底部 Space 栏)。 */}
-      {side === 'left' && showFoot && <DrawerFoot />}
+      {withFoot && <DrawerFoot />}
     </>
   )
   // 宽屏(>4:3)并排形态:与 main 同排的常驻列(仅左栏用;见 SingleColumnHost)。
   // docked 也要认 visible(顶栏钮/返回键关左栏后不能还杵在那,Codex 评审 P2)。
-  if (docked) return !visible || leaves.length === 0 ? null : <aside className="mb-sidecol">{inner}</aside>
+  if (docked) return !visible || !alive ? null : <aside className="mb-sidecol">{inner}</aside>
   return (
     // 反向横滑关闭(左抽屉左滑/右抽屉右滑)已并进 Host 的 useDrawerDrag —— 三处 fling 判定
     // (main 呼出 / 抽屉内关 / dim 上关)本来就是同一件事的三个入口,合成一个控制器才有中间态。
-    <div className={`mb-drawer mb-drawer--${side}${visible && leaves.length > 0 ? ' open' : ''}`}>
+    <div className={`mb-drawer mb-drawer--${side}${visible && alive ? ' open' : ''}`}>
       {warm ? inner : null}
     </div>
   )
@@ -302,7 +318,7 @@ function switchSpaceKeepDrawer(id: string): void {
   setActiveSpace(id)
   const ws = useWorkspace.getState()
   if (ws.leftVisible) return
-  if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0) return
+  if (ws.leftLeaves.length === 0 && ws.sidebarDefaults.left.length === 0 && !footAliveNow()) return
   ws.toggleSidebar('left')
 }
 
@@ -310,6 +326,7 @@ function switchSpaceKeepDrawer(id: string): void {
  *  账号/设置是 feature 层的 ribbon 注册项(rb-account / rb-settings),引擎按 id 取用不 import feature;
  *  同两项已从「⋯」菜单滤掉(不重复出现)。切 Space 会走 resetLayout → 抽屉自动收回。 */
 function DrawerFoot() {
+  const alive = useFootAlive()
   const spaces = useSpaceStore((s) => s.spaces)
   const activeId = useSpaceStore((s) => s.activeSpaceId)
   const account = useRibbonStore((s) => s.items.find((i) => i.id === 'rb-account'))
@@ -322,7 +339,7 @@ function DrawerFoot() {
   useEffect(() => {
     barRef.current?.querySelector('.mb-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'center' })
   }, [activeId])
-  if (spaces.length <= 1 && !AccountC && !settings) return null
+  if (!alive) return null // 与 Drawer 的 withFoot 同源,免得两处判活漂移
   return (
     <div className="mb-drawer-foot" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {spaces.length > 1 && (
@@ -463,7 +480,10 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const mainRef = useRef<HTMLElement | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const [tabsOpen, setTabsOpen] = useState(false)
-  const hasLeft = useWorkspace((s) => s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0)
+  // 左抽屉恒可达:它兼着 Space 切换 / 账号 / 设置(见 footAliveOf)。只按侧栏视图判会把用户
+  // 关死在没有左栏配方的 Space 里。右抽屉没有这层身份,照旧只看侧栏视图。
+  const footAlive = useFootAlive() // 无条件调用:`x || useFootAlive()` 会被短路,hooks 不许时有时无
+  const hasLeft = useWorkspace((s) => s.leftLeaves.length > 0 || s.sidebarDefaults.left.length > 0) || footAlive
   const hasRight = useWorkspace((s) => s.rightLeaves.length > 0 || s.sidebarDefaults.right.length > 0)
   const leftVisible = useWorkspace((s) => s.leftVisible)
   const rightVisible = useWorkspace((s) => s.rightVisible)

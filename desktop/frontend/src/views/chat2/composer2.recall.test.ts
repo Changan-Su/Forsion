@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickRecall, composerAutoHeight, slashTokenAt } from './Composer2'
+import { pickRecall, composerAutoHeight, slashTokenAt, fmtTokens } from './Composer2'
 
 // slash 菜单的触发点:任意位置的 `/` 都算,但必须在行首或空白之后。
 describe('slashTokenAt', () => {
@@ -51,5 +51,21 @@ describe('pickRecall (composer history nav)', () => {
 
   it('empty history never recalls', () => {
     expect(pickRecall([], 0, true, 'draft')).toBeNull()
+  })
+})
+
+// token 计数进位:截断而非四舍五入 —— 四舍五入会把 999,950 写成 "1000.0k"。
+describe('fmtTokens', () => {
+  it('千位以下原样,满千 k、满百万 M', () => {
+    expect(fmtTokens(0)).toBe('0')
+    expect(fmtTokens(999)).toBe('999')
+    expect(fmtTokens(1000)).toBe('1k')
+    expect(fmtTokens(17607)).toBe('17.6k')
+    expect(fmtTokens(128000)).toBe('128k')
+    expect(fmtTokens(1e6)).toBe('1M')
+    expect(fmtTokens(1234567)).toBe('1.2M')
+  })
+  it('进位边界不会溢出成 1000k', () => {
+    expect(fmtTokens(999999)).toBe('999.9k')
   })
 })

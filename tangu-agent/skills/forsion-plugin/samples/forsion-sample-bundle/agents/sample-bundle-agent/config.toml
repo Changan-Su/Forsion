@@ -1,9 +1,10 @@
 # Tangu agent 配置。文件夹名 = agent 的 slug(kebab-case);本文件 + SOUL.md 即最小可用 agent。
 # version 必须带引号 —— 市场「可更新」检查用正则读带引号的值,裸值会读不到。
-# 捆绑形态:住在 Forsion 插件的 agents/ 子目录;引擎启动/重扫时**播种一次**到 tangu/agents/
-# (已存在永不覆盖 —— 播种后是带 MEMORY/LOG 的活体,包升级不清洗、卸载包也保留)。
+# 捆绑形态:住在 Forsion 插件的 agents/ 子目录;人格面(本文件/SOUL/Library/MEMORY)引擎启动或重扫时
+# **播种一次**到 tangu/agents/(已存在永不覆盖 —— 播种后是带 MEMORY/LOG 的活体,包升级不清洗、卸载包也保留)。
+# 例外:同目录下的 skills/ 走**指纹自愈** —— 用户没改过的技能副本每次启动跟着包更新,改过的保护不覆盖。
 name = "示例捆绑助手"
-version = "1.0.0"
+version = "1.1.0"
 description = "捆绑包模板的内嵌 Agent:演示 agents/<slug>/ 播种语义(config.toml + SOUL.md + agent 级技能)。"
 model_reasoning_effort = "low"
 created_by = "user"

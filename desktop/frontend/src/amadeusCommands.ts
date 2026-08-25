@@ -41,7 +41,7 @@ const CMDS: Command[] = [
   },
 ]
 
-/** 打开(或聚焦)左栏全文搜索:showSideView 只会激活「已存在」的面板——用户右键关掉过该 tab 时要重开。 */
+/** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。 */
 export function openSearchView(): void {
   ws().showSideView('left', 'amadeus-search')
   const st = useWorkspace.getState()

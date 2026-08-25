@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { autoWorkspaceMode, workspaceKeyForPath } from './workspaceMode'
 import { migrateLayoutBlob } from '@lcl/engine/dockviewStore'
+import { ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey } from '../types'
 
 describe('autoWorkspaceMode', () => {
   it('chat 主视图:左=会话,右=文件', () => {
@@ -27,6 +28,15 @@ describe('autoWorkspaceMode', () => {
     expect(autoWorkspaceMode('left', 'launcher', 'notes')).toBe('notes') // Amadeus Space
     expect(autoWorkspaceMode('left', 'agents-detail', 'sessions')).toBe('sessions') // Tangu Space
     expect(autoWorkspaceMode('left', null, 'notes')).toBe('notes') // 主区空着也算
+  })
+  it('P2 声明位:主视图声明 workspaceSource → 左栏用它,优先于硬规则;右栏仍恒文件', () => {
+    expect(autoWorkspaceMode('left', 'plugin:bluebird:video', 'sessions', 'plugin:bluebird:favorites')).toBe('plugin:bluebird:favorites')
+    // 声明也可以指内置模式(非插件 view 未来同样能用)
+    expect(autoWorkspaceMode('left', 'chat', 'sessions', 'notes')).toBe('notes')
+    // 右栏 = 参考栏,不受声明管
+    expect(autoWorkspaceMode('right', 'plugin:bluebird:video', 'sessions', 'plugin:bluebird:favorites')).toBe('files')
+    // 无声明(undefined/null)→ 原路不变
+    expect(autoWorkspaceMode('left', 'chat', 'sessions', null)).toBe('sessions')
   })
   it('Space 默认档缺省 = sessions(没点名的 Space 沿用现状)', () => {
     expect(autoWorkspaceMode('left', 'launcher')).toBe('sessions')
@@ -59,6 +69,16 @@ describe('workspaceKeyForPath', () => {
   it('认不出来 → null(面板退回按「进入的工作区」置顶)', () => {
     expect(workspaceKeyForPath(ws, '/tmp/x.ts')).toBeNull()
     expect(workspaceKeyForPath(ws, null)).toBeNull()
+  })
+})
+
+describe('sessionWorkspaceKey', () => {
+  it('无根会话有独立分组,不混进历史默认 Cloud Project', () => {
+    expect(sessionWorkspaceKey({ projectless: true, project_path: null, project_name: null })).toBe(ROOTLESS_WORKSPACE_KEY)
+    expect(sessionWorkspaceKey({ project_path: null, project_name: null })).toBe(cloudProjectKey(null))
+  })
+  it('本地路径仍优先于 Cloud Project 名', () => {
+    expect(sessionWorkspaceKey({ project_path: '/work', project_name: 'Tangu' })).toBe('/work')
   })
 })
 

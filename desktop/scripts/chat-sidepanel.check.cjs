@@ -49,6 +49,9 @@ async function main() {
     process.exit(1)
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatside-'))
+  const sideShot = path.join(os.tmpdir(), `forsion-chat-panel-${process.pid}.png`)
+  const selectionMenuShot = path.join(os.tmpdir(), `forsion-chat-selection-menu-${process.pid}.png`)
+  const selectionPanelShot = path.join(os.tmpdir(), `forsion-chat-selection-panel-${process.pid}.png`)
   let app
   try {
     app = await electron.launch({
@@ -203,6 +206,93 @@ async function main() {
     shapes ? `流宽 ${shapes.width}px;顶宽的形态:${shapes.bad.length ? shapes.bad.join('、') : '无'}` : 'no probe',
   )
 
+  // ── 29-30 主对话划线 → 在侧栏提问 ─────────────────────────────────────────
+  // 没有后端消息，插一条生产类名的助手文本，再用真实 Selection + mouseup 走 ChatView 的选区逻辑。
+  // 关键不只是「面板打开」：同一份引用只能落进 chat-panel，不能被同时挂载的主 ChatView 抢走。
+  const selectedText = '现有其他未提交改动均保持未动。'
+  const picked = await win.evaluate((text) => {
+    const surface = document.querySelector('[data-chat-surface="chat"]')
+    const inner = surface?.querySelector('.t2-stream-inner')
+    const stream = surface?.querySelector('.t2-stream')
+    if (!inner || !stream) return ''
+    const node = document.createElement('div')
+    node.className = 't2-asst'
+    node.dataset.selectionProbe = 'true'
+    node.innerHTML = '<div class="t2-asst-col"><div class="t2-content"><p></p></div></div>'
+    const p = node.querySelector('p')
+    p.textContent = text
+    inner.appendChild(node)
+    const range = document.createRange()
+    range.selectNodeContents(p)
+    const selection = window.getSelection()
+    selection.removeAllRanges()
+    selection.addRange(range)
+    stream.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    return selection.toString()
+  }, selectedText)
+  const askButton = win.locator('[data-chat-surface="chat"] [data-testid="selection-ask-in-panel"]')
+  await askButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+  const selectionMenu = await win.evaluate(`(() => {
+    const menu = document.querySelector('[data-chat-surface="chat"] .t2-quote-menu')
+    if (!menu) return null
+    const b = menu.getBoundingClientRect()
+    return { text: menu.textContent.trim(), left: b.left, right: b.right, top: b.top, width: b.width }
+  })()`)
+  check(
+    '29 主对话划线后出现「引用 / 在侧栏提问」分段菜单',
+    picked === selectedText && !!selectionMenu && selectionMenu.text.includes('引用') && selectionMenu.text.includes('在侧栏提问')
+      && selectionMenu.left >= 0 && selectionMenu.right <= (await win.evaluate('window.innerWidth')),
+    JSON.stringify({ picked, selectionMenu }),
+  )
+  await win.screenshot({ path: selectionMenuShot })
+  await askButton.click()
+  await win.waitForTimeout(1600)
+  const selectionHandoff = await win.evaluate(`(() => {
+    const main = document.querySelector('[data-chat-surface="chat"]')
+    const panel = document.querySelector('[data-chat-surface="chat-panel"]')
+    const quote = (root) => root?.querySelector('.t2c-quote-text')?.textContent?.trim() || ''
+    const textarea = panel?.querySelector('.t2c-ta')
+    return {
+      panelWidth: panel?.getBoundingClientRect().width || 0,
+      panelQuote: quote(panel),
+      mainQuote: quote(main),
+      focused: textarea === document.activeElement,
+      disabled: !!textarea?.disabled,
+    }
+  })()`)
+  check(
+    '30 「在侧栏提问」展开 chat-panel，选中文字只进侧栏引用，可用时聚焦输入框',
+    !!selectionHandoff && selectionHandoff.panelWidth > 0 && selectionHandoff.panelQuote === selectedText
+      && selectionHandoff.mainQuote === '' && (selectionHandoff.disabled || selectionHandoff.focused),
+    JSON.stringify(selectionHandoff) + (selectionHandoff?.disabled ? '(无后端，textarea 按产品规则 disabled，无法获取焦点)' : ''),
+  )
+  await win.screenshot({ path: selectionPanelShot })
+  await win.evaluate("document.querySelector('[data-selection-probe]')?.remove()")
+  await win.click('.dv-edge-right')
+  await win.waitForTimeout(1200)
+
+  // ── 28 Tangu 右栏 = 同一正式会话的 ChatView 承载形态 ────────────────────────
+  // 独立 type 只为绕开主区 `chat` singleton 冲突;DOM 身份钉成 chat-panel,业务内容仍由 ChatView 渲染。
+  await win.click('.dv-edge-right', { timeout: 10_000 })
+  await win.waitForTimeout(1600)
+  const panelReuse = await win.evaluate(`(() => {
+    const main = document.querySelector('[data-chat-surface="chat"]')
+    const panel = document.querySelector('[data-chat-surface="chat-panel"]')
+    const rect = (el) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { left: r.left, right: r.right, width: r.width, height: r.height }
+    }
+    return { main: rect(main), panel: rect(panel), total: document.querySelectorAll('.t2-chat-view').length }
+  })()`)
+  check(
+    '28 Tangu 右栏直接复用 ChatView(main + panel 双承载、无 Side Chat 类型)',
+    !!panelReuse.main && !!panelReuse.panel && panelReuse.main.width > 0 && panelReuse.panel.width > 0 && panelReuse.total === 2,
+    JSON.stringify(panelReuse),
+  )
+  await win.click('.dv-edge-right')
+  await win.waitForTimeout(1200)
+
   // ── 18-20 输入卡悬浮在正文之上 ───────────────────────────────────────────────
   // 用户草图:正文铺满整列、从胶囊底下穿过去;输入区不再是占着布局、涂着背景色的一条底栏。
   const floatProbe = await win.evaluate(`(() => {
@@ -293,6 +383,7 @@ async function main() {
     !!side.chat && !!side.am && side.chat.left > side.am.left + side.am.w * 0.5,
     side.chat && side.am ? `chat.left=${Math.round(side.chat.left)} vs am.left=${Math.round(side.am.left)} w=${Math.round(side.am.w)}` : '缺 .am-app 或 .t2-chat-view',
   )
+  await win.screenshot({ path: sideShot })
 
   // ── 3 侧栏对话默认引用主区当前这篇 ──────────────────────────────────────────
   const row = win.locator('.t2s-srow').first()
@@ -569,6 +660,10 @@ async function main() {
     seeded ? `Tangu 右栏停在第 2/${seeded} 个 tab 后折叠;Amadeus 首次展开右栏见到对话:${crossOk}` : '⚠️ Tangu 右栏没展开/不足 2 个 tab → 这条没跑到,不算数',
   )
   await app2.close()
+
+  console.log(`SCREENSHOT  chat-panel ${sideShot}`)
+  console.log(`SCREENSHOT  selection-menu ${selectionMenuShot}`)
+  console.log(`SCREENSHOT  selection-panel ${selectionPanelShot}`)
 
   const bad = results.filter((r) => !r.ok)
   console.log(bad.length ? `\n${bad.length} 项失败` : `\n${results.length}/${results.length} 通过`)

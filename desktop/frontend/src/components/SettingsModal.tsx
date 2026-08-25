@@ -3,12 +3,12 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ArrowUp, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
+import { X, ArrowLeft, ArrowUp, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
 import { applyTheme } from '../theme/loader'
-import { useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局
+import { UI_MODE, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import {
@@ -173,6 +173,11 @@ export const SettingsModal: React.FC<{
   initialTab?: Tab
 }> = (p) => {
   const { t, locale } = useI18n()
+  // 真机、开发者移动预览、手机浏览器统一走两层设置 IA。不能只靠窄屏 media query:
+  // 桌面里的手机框宽 390px,但物理 viewport 仍是宽屏,而真机又不经过 Root 的预览框。
+  const mobileSettings = !!window.tangu?.mobile || UI_MODE === 'mobile' || (() => {
+    try { return window.matchMedia('(pointer: coarse) and (max-width: 820px)').matches } catch { return false }
+  })()
   // 合并后:连接/Forsion → 常规设置(general);Agent CLI → 智能体(agents);微信 → 通道。旧入口 tab 归一。
   const normalizeTab = (x: Tab | undefined): Tab =>
     x === 'connection' || x === 'forsion' ? 'general' : x === 'agent-clis' ? 'agents' : (x as string) === 'wechat' ? 'channels' : (x ?? 'general')
@@ -185,6 +190,8 @@ export const SettingsModal: React.FC<{
   /** 换一级页统一入口:方向清零(换页无左右语义,纯淡入)。裸 setTab 会让上次点分类的方向漏过来。 */
   const goTab = (x: Tab): void => { setSubDir(0); setTab(x) }
   const [navQuery, setNavQuery] = useState('')
+  // 普通入口先落一级列表;显式 deep link(initialTab)直达对应二级页。
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(() => mobileSettings && !p.initialTab)
   const [appVersion, setAppVersion] = useState<string>('')
   // custom 配色的独立背景色(强调/背景双取色器;走 themeStore,不经 props 链)。
   const themeBgSeed = useTheme((s) => s.bgSeed)
@@ -736,6 +743,11 @@ export const SettingsModal: React.FC<{
   const activeTabDescription = isPluginTab
     ? t('settings.page.pluginDescription')
     : activeDescriptionKey ? t(activeDescriptionKey) : ''
+  const descriptionForTab = (id: Tab): string => {
+    if (id.startsWith('plugin:') || id.startsWith('fplugin:')) return t('settings.page.pluginDescription')
+    const key = pageDescriptionKey[id as StaticTab]
+    return key ? t(key) : ''
+  }
 
   // 中分类:只给内容确实长、且本来就有天然分界的一级页;短页(笔记/浏览器/关于/开发者…)不加栏目条,
   // 免得为一两项设置硬造分类。条目的显隐条件必须与下方正文块的渲染条件一一对应,否则会出现
@@ -789,10 +801,13 @@ export const SettingsModal: React.FC<{
   // ②正文回到顶部 —— ⚠️ 滚动容器是**外层** .settings-body,内层 `key` 重挂不会重置父容器的
   // scrollTop:在技能库往下滚过再切到另一个长分类,会直接落在新页中段(短分类则落到底)。
   useEffect(() => {
-    document.querySelector('.settings-nav-list button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' })
-    const body = document.querySelector('.settings-body')
-    if (body) body.scrollTop = 0
-  }, [tab, activeSub])
+    // 一级列表打开时不再偷偷滚隐藏的旧导航;进入详情(含重新打开同一项)才复位正文。
+    if (!mobileSettings || !mobileMenuOpen) {
+      document.querySelector('.settings-nav-list button.active')?.scrollIntoView({ block: 'nearest', inline: 'center' })
+      const body = document.querySelector('.settings-body')
+      if (body) body.scrollTop = 0
+    }
+  }, [tab, activeSub, mobileMenuOpen, mobileSettings])
   const pickSub = (k: string): void => {
     setSubDir(subItems.findIndex(([x]) => x === k) > subItems.findIndex(([x]) => x === activeSub) ? 1 : -1)
     setSub(k)
@@ -809,11 +824,76 @@ export const SettingsModal: React.FC<{
       { key: 'system', label: t('settings.group.system'), tabs: ['advanced', 'developer', 'about'] },
     ] },
   ]
+  const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
+    const base = grp.tabs
+      .map((id) => tabItems.find(([tid]) => tid === id))
+      .filter((x): x is [Tab, string] => !!x)
+    // 「社区插件」组末尾追加已启用且有设置的外置插件,动态项同样进入移动端一级列表。
+    return grp.key === 'extensions' ? [...base, ...forsionNavItems, ...pluginNavItems] : base
+  }
+
+  // Android 实体返回 / 系统侧滑:二级页先回设置首页;已在首页时再交给 MobileRoot 退出设置。
+  useEffect(() => {
+    if (!p.open || !mobileSettings || mobileMenuOpen) return
+    const backToMenu = (event: Event): void => {
+      event.preventDefault()
+      setMobileMenuOpen(true)
+    }
+    window.addEventListener('forsion:mobile-back', backToMenu)
+    return () => window.removeEventListener('forsion:mobile-back', backToMenu)
+  }, [mobileMenuOpen, mobileSettings, p.open])
 
   if (!p.open) return null
 
   return (
-    <div className="settings-page settings-page--control-center">
+    <div className={`settings-page settings-page--control-center${mobileSettings ? ' settings-page--mobile' : ''}${mobileSettings && mobileMenuOpen ? ' settings-page--mobile-menu' : ''}`}>
+      <section className="settings-mobile-home" aria-label={t('settings.title')}>
+        <header className="settings-mobile-home-head">
+          <button type="button" onClick={p.onClose} aria-label={t('settings.backToApp')} title={t('settings.backToApp')}>
+            <ArrowLeft size={20} />
+          </button>
+          <strong>{t('settings.title')}</strong>
+          <span className="settings-mobile-head-logo" aria-hidden="true"><BrandLogo size={24} /></span>
+        </header>
+        <div className="settings-mobile-home-scroll">
+          <div className="settings-mobile-hero">
+            <BrandLogo size={38} />
+            <span>
+              <strong>Forsion Genesis</strong>
+              <small>{t('settings.title')}</small>
+            </span>
+          </div>
+          {navSections.flatMap((section) => section.groups).map((grp) => {
+            const items = navItemsForGroup(grp)
+            if (items.length === 0) return null
+            return (
+              <section className="settings-mobile-group" key={grp.key}>
+                <h2>{grp.label}</h2>
+                <div className="settings-mobile-group-card">
+                  {items.map(([id, label]) => {
+                    const description = descriptionForTab(id)
+                    return (
+                      <button
+                        type="button"
+                        className="settings-mobile-row"
+                        key={id}
+                        onClick={() => { goTab(id); setMobileMenuOpen(false) }}
+                      >
+                        <span className="settings-mobile-row-icon" aria-hidden="true">{TAB_ICONS[id] ?? <Puzzle size={14} />}</span>
+                        <span className="settings-mobile-row-copy">
+                          <strong>{label}</strong>
+                          {description && <small>{description}</small>}
+                        </span>
+                        <ChevronRight className="settings-mobile-row-chevron" size={18} aria-hidden="true" />
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+            )
+          })}
+        </div>
+      </section>
       <aside className="settings-nav" aria-label="Settings navigation">
         {/* 左上角返回 + 设置搜索(codex 风):常驻顶部,不随分类列表滚动。 */}
         <div className="settings-nav-top">
@@ -844,11 +924,7 @@ export const SettingsModal: React.FC<{
             const secHit = !ql || sec.label.toLowerCase().includes(ql)
             const groups = sec.groups
               .map((grp) => {
-                const base = grp.tabs
-                  .map((id) => tabItems.find(([tid]) => tid === id))
-                  .filter((x): x is [Tab, string] => !!x)
-                // 「社区插件」组末尾追加已启用且有设置的外置 agent 插件,各成一级项(动态项无图标)。
-                const all = grp.key === 'extensions' ? [...base, ...forsionNavItems, ...pluginNavItems] : base
+                const all = navItemsForGroup(grp)
                 const items = secHit || grp.label.toLowerCase().includes(ql)
                   ? all
                   : all.filter(([, label]) => label.toLowerCase().includes(ql))
@@ -875,6 +951,15 @@ export const SettingsModal: React.FC<{
         </div>
       </aside>
       <section className="settings-main">
+        <div className="settings-mobile-detail-head">
+          <button type="button" onClick={() => setMobileMenuOpen(true)} aria-label={t('settings.title')} title={t('settings.title')}>
+            <ArrowLeft size={20} />
+          </button>
+          <strong>{activeTabLabel}</strong>
+          <button type="button" onClick={p.onClose} aria-label={t('settings.backToApp')} title={t('settings.backToApp')}>
+            <X size={19} />
+          </button>
+        </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
             <div className="settings-main-title">{activeTabLabel}</div>

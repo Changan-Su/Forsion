@@ -39,7 +39,7 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
 
   // 1) 源会话 + owner/app 校验
   const srcRows = await query<any[]>(
-    `SELECT id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name
+    `SELECT id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless
      FROM chat_sessions WHERE id = ? LIMIT 1`,
     [sourceSessionId],
   );
@@ -58,10 +58,10 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   const newId = uuidv4();
   const newTitle = (typeof title === 'string' && title.trim() ? title.trim() : (src.title || 'New Chat')).slice(0, 200);
   await query(
-    `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, kind, parent_session_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless, kind, parent_session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [newId, userId, appId, newTitle, src.model_id, src.emoji,
-     asJsonText(src.agent_config), src.project_path, src.project_name, kind || 'user', parentSessionId || null],
+     asJsonText(src.agent_config), src.project_path, src.project_name, !!src.projectless, kind || 'user', parentSessionId || null],
   );
 
   // 4) 复制 timestamp <= 分支点 的消息:新 uuid,保留原 timestamp 与全部字段(lastN → 只取最近 N 条)

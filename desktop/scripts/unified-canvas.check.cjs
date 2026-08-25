@@ -53,7 +53,8 @@
 //   C58 卡侧 ⊕:点得中(元素层 pointer-events)、建卡连线、编辑态收起
 //   C59 形状四角塑型:把手不再被 overflow 裁掉(真鼠标命中);对角固定 + 夹到最小也不走位
 //   C60 Frame 进工具栏 + 矩形/椭圆/Frame 拖出尺寸(拖不动则回落默认尺寸)
-//   C61 拖到卡边缘=认亲:右缘=子+吸附队列+一击撤销/下缘=兄弟(目标顶层则摘爹)/环形目标不给认
+//   C61 拖到卡边缘=认亲:真实落点幽灵卡/放宽外侧命中带/右缘=子+吸附队列+一击撤销/
+//      下缘=兄弟(目标顶层则摘爹)/环形目标不给认
 //   C62 层级线可选中 + Delete=解除关系(卡片不动);Cmd+A 不收线
 //   C61c 卡心中立区:边缘带按盒尺寸取比例,一行卡也留得出「只是挪位置」的落点
 //   C63 箭头工具:卡→卡=建父子(零连线条目),卡→形状/Shift=仍自由连线
@@ -71,6 +72,10 @@
 //   C75 回车建兄弟会按父卡两侧负载自动选边
 //   C76 编辑卡片增高时固定当前卡、自动推开相撞卡
 //   C77 按笔记记住文档/画布、文档滚动，并在切面时接力当前光标
+//   C78 远距概览:低于 55% 显示恒定屏幕字号的标题；无标题退首行，放大后收起
+//   C79 卡片四边/四角塑型:宽高与移动边落盘，点阵开启时边界吸附，一击撤销
+//   C80 点阵吸附开关:右下角默认开、手动移动吸附、关闭后自由移动并跨重载记忆
+//   C81 正文主卡八向塑型:宽高落盘/点阵落点/松手动画/普通卡不被主卡 overflow 裁切
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -565,6 +570,8 @@ async function main() {
   //        StepMap 只覆盖卡节点开/闭边界,与卡内文本位置不重叠)= 假绿,Codex 评审实证推翻。
   //     ⚠️ 往**下**拖,别往右:主卡在 (0,0) 且 720 宽,横向挪一点仍落在它的矩形里 → onUp 判成
   //        「拖回主卡」把卡拆了,后面全拿 null。落点不能依赖当时的布局凑巧。
+  //     本格测的是 PM history 分组，不测点阵；默认吸附会让两次小拖落到同一格，故显式关掉后再跑。
+  await pw.click('.amx-stage-hud button[title="关闭点阵吸附"]')
   const c14 = await pw.evaluate(() => {
     const stage = document.querySelector('.amx-stage')
     const mk = (t, x, y) => new PointerEvent(t, { bubbles: true, cancelable: true, pointerId: 9, button: 0, clientX: x, clientY: y })
@@ -596,6 +603,7 @@ async function main() {
   record('C14 连拖两次后一次撤销 → 退回**上一次**落点而不是原位(几何事务各自成步)',
     c14.y1 != null && c14.y2 != null && c14.y1 > c14.y0 + 50 && c14.y2 > c14.y1 + 50 && c14b.y === c14.y1,
     JSON.stringify({ ...c14, afterUndo: c14b.y }))
+  await pw.click('.amx-stage-hud button[title="开启点阵吸附"]')
 
   // C15 doc 表达不了的东西(elements + 顶层未知键)派生一次后必须**逐字节**不变。
   // ⚠️ 断言必须是**字符串比对**,不是「解析后 length===3」——后者对「未知字段被删/被改值/键序重排」
@@ -3235,6 +3243,10 @@ async function main() {
         target: document.querySelectorAll('.amx-el-attach-target').length,
         label: document.querySelector('.amx-el-attach-label')?.textContent ?? '',
         preview: !!document.querySelector('.amx-el-conn.is-preview'),
+        landing: (() => {
+          const slot = document.querySelector('[data-attach-slot]')
+          return slot ? { x: parseFloat(slot.style.left), y: parseFloat(slot.style.top), w: parseFloat(slot.style.width), h: parseFloat(slot.style.height) } : null
+        })(),
       }
     })
     await p.mouse.up()
@@ -3263,9 +3275,11 @@ async function main() {
   const cyc61 = await dragCardTo(p61, 'k1', b61.r - 12, b61.t + b61.h / 2)
   const after61 = await canvasState(p61)
   await p61.close()
-  record('C61 拖到卡右缘=认爹 + 弹簧吸附进子队列(x=父右缘+80) + 层级线淡入;Cmd+Z 一击全退',
+  record('C61 拖到卡右缘=认爹 + 预示真实落点 + 弹簧吸附进子队列(x=父右缘+80) + 层级线淡入;Cmd+Z 一击全退',
     hl61?.side === 'e' && hl61?.rel === 'child' && hl61.target === 1
-      && hl61.label === '设为子节点' && hl61.preview && hl61.motion.card && hl61.motion.line
+      && hl61.label === '设为子节点' && hl61.preview
+      && hl61.landing?.x === 900 && hl61.landing?.y === 80 && hl61.landing?.w === 300
+      && hl61.motion.card && hl61.motion.line
       && s61.tree === '"tree":{"k2":"k1"}' && s61.cards.includes('k2@900,80') && s61.lines === 1
       && undo61.tree === null && undo61.cards.includes('k2@560,460')
       && cyc61 === null && after61.tree === '"tree":{"k2":"k1"}',
@@ -3298,6 +3312,17 @@ async function main() {
   record('C61c 卡心中立区:指针停在目标卡正中央松手 = 只是挪位置(不认亲、不吸附、tree 不动)',
     hl61c === null && s61c.tree === null && s61c.lines === 0,
     JSON.stringify({ hl: hl61c, after: s61c, box: t61c }))
+
+  // C61d 外侧命中带略放宽：指针离右缘 46px 时已经给出落点；旧 40px 带在这里不会触发。
+  const p61d = await open(browser, MIND)
+  await p61d.waitForTimeout(300)
+  const t61d = await cardBox(p61d, 'k1')
+  const hl61d = await dragCardTo(p61d, 'k2', t61d.r + 46, t61d.t + t61d.h / 2)
+  const s61d = await canvasState(p61d)
+  await p61d.close()
+  record('C61d 连结外侧命中带放宽到 48px：离目标边缘 46px 仍显示真实落点并完成认爹',
+    hl61d?.side === 'e' && hl61d?.rel === 'child' && !!hl61d.landing && s61d.tree === '"tree":{"k2":"k1"}',
+    JSON.stringify({ hl: hl61d, after: s61d, box: t61d }))
 
   // C74 多选卡片整批认亲：组内相对位置保持，所有选中根节点一起挂到同一父卡，一击撤销。
   const p74 = await open(browser, MIND)
@@ -3889,6 +3914,294 @@ async function main() {
       && !remembered70.mini && remembered70.showButton
       && restored70.mini && restored70.pressed === 'true' && restored70.stored === '1',
     JSON.stringify({ mini: mini70, nav: nav70, hidden: hidden70, remembered: remembered70, restored: restored70 }))
+
+  // ── C78 低倍率标题概览 ───────────────────────────────────────────────────────────
+  const OVERVIEW78 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k1","x":480,"y":40,"w":288},{"ref":"k2","x":480,"y":200,"w":288}]}',
+    '---', '', '# 主卡标题', '', '<!-- a k1 -->', '卡片前言。', '', '## 卡片正式标题', '<!-- /a k1 -->', '',
+    '<!-- a k2 -->', '没有标题的首行。', '', '第二行内容。', '<!-- /a k2 -->', '',
+  ].join('\n')
+  const p78 = await open(browser, OVERVIEW78)
+  await p78.waitForTimeout(300)
+  const before78 = await p78.evaluate(() => ({
+    labels: document.querySelectorAll('.amx-card-overview').length,
+    k1h: document.querySelector('.amx-ucard[data-anchor="k1"]')?.offsetHeight ?? 0,
+    original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
+  }))
+  for (let i = 0; i < 4; i++) await p78.click('.amx-stage-hud button[title="缩小"]')
+  await p78.waitForTimeout(250)
+  const low78 = await p78.evaluate(() => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform)
+    const labels = Object.fromEntries([...document.querySelectorAll('[data-card-label]')].map((el) => [el.dataset.cardLabel, {
+      title: el.querySelector('.amx-card-overview-title')?.textContent?.trim() ?? '',
+      detail: el.querySelector('.amx-card-overview-detail')?.textContent?.trim() ?? '',
+    }]))
+    const shells = Object.fromEntries(['k1', 'k2'].map((anchor) => {
+      const el = document.querySelector(`.amx-ucard[data-anchor="${anchor}"]`)
+      if (!el) return [anchor, { hit: false, fill: false, outline: false }]
+      const rect = el.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      const style = getComputedStyle(el)
+      return [anchor, {
+        hit: hit?.closest?.('.amx-ucard') === el,
+        fill: style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent',
+        outline: parseFloat(style.borderTopWidth) > 0 && style.borderTopStyle !== 'none',
+      }]
+    }))
+    const sample = document.querySelector('[data-card-label="k1"] .amx-card-overview-title')
+    return {
+      z: matrix.a,
+      labels,
+      shells,
+      screenFont: sample ? parseFloat(getComputedStyle(sample).fontSize) * matrix.a : 0,
+      mode: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+      originalsHidden: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display === 'none'
+        && getComputedStyle(document.querySelector('.unified-body .ProseMirror > h1')).display === 'none',
+      k1h: document.querySelector('.amx-ucard[data-anchor="k1"]')?.offsetHeight ?? 0,
+    }
+  })
+  // 继续缩到约 40%：固定屏幕字号不能再把「标题 + 两行摘要」硬塞进已经只有约 25px 高的短卡。
+  // 不只看 overflow 值；flex item 会被压扁到盒内，必须同时确认每条可见文字仍保有完整 line-height。
+  await p78.click('.amx-stage-hud button[title="缩小"]')
+  await p78.waitForTimeout(160)
+  const veryLow78 = await p78.evaluate(() => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform)
+    const items = Object.fromEntries([...document.querySelectorAll('[data-card-label]')].map((el) => {
+      const outer = el.getBoundingClientRect()
+      const title = el.querySelector('.amx-card-overview-title')
+      const detail = el.querySelector('.amx-card-overview-detail')
+      const visible = (node) => !!node && getComputedStyle(node).display !== 'none'
+      const intact = (node) => {
+        if (!visible(node)) return true
+        const rect = node.getBoundingClientRect()
+        const lineHeight = parseFloat(getComputedStyle(node).lineHeight) * matrix.a
+        return rect.top >= outer.top - 0.75 && rect.bottom <= outer.bottom + 0.75 && rect.height >= lineHeight - 0.75
+      }
+      return [el.dataset.cardLabel, {
+        fits: el.scrollHeight <= el.clientHeight + 1 && intact(title) && intact(detail),
+        titleFont: title ? parseFloat(getComputedStyle(title).fontSize) * matrix.a : 0,
+        detailVisible: visible(detail),
+        screenH: outer.height,
+      }]
+    }))
+    return { z: matrix.a, items }
+  })
+  const OVERVIEW78_B = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[]}',
+    '---', '', '# 另一张画布', '', '用于触发画布实例切换。', '',
+  ].join('\n')
+  await p78.evaluate(({ seed }) => window.__upage.switchFile('Overview-B.md', seed), { seed: OVERVIEW78_B })
+  await p78.waitForSelector('.unified-body .ProseMirror')
+  await p78.waitForTimeout(350)
+  await p78.evaluate(() => window.__upage.switchFile('Unified.md'))
+  await p78.waitForSelector('.unified-body .ProseMirror')
+  await p78.waitForTimeout(500)
+  const returned78 = await p78.evaluate(() => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform)
+    const labels = Object.fromEntries([...document.querySelectorAll('[data-card-label]')].map((el) => [
+      el.dataset.cardLabel,
+      el.querySelector('.amx-card-overview-title')?.textContent?.trim() ?? '',
+    ]))
+    return {
+      z: matrix.a,
+      mode: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+      labels,
+      originalsHidden: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display === 'none',
+    }
+  })
+  for (let i = 0; i < 3; i++) await p78.click('.amx-stage-hud button[title="放大"]')
+  await p78.waitForTimeout(200)
+  const after78 = await p78.evaluate(() => ({
+    labels: document.querySelectorAll('.amx-card-overview').length,
+    overview: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+    original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
+  }))
+  await p78.close()
+  record('C78 缩到 55% 以下：原 PM 内容退出渲染，轻量替身显示标题+摘要/首行回退且保持卡高；放大后恢复正文',
+    before78.labels === 0 && before78.original !== 'none' && low78.z <= 0.55 && low78.mode && low78.originalsHidden
+      && low78.labels['m:'].title === '主卡标题' && low78.labels.k1.title === '卡片正式标题' && low78.labels.k1.detail === '卡片前言。'
+      && low78.labels.k2.title === '没有标题的首行。' && low78.labels.k2.detail === '第二行内容。'
+      && low78.shells.k1.hit && low78.shells.k1.fill && low78.shells.k1.outline
+      && low78.shells.k2.hit && low78.shells.k2.fill && low78.shells.k2.outline
+      && Math.abs(low78.screenFont - 12) < 0.6 && low78.k1h === before78.k1h
+      && veryLow78.z <= 0.42 && Object.values(veryLow78.items).every((item) => item.fits && item.titleFont >= 10)
+      && returned78.z <= 0.42 && returned78.mode && returned78.originalsHidden
+      && returned78.labels['m:'] === '主卡标题' && returned78.labels.k1 === '卡片正式标题'
+      && returned78.labels.k2 === '没有标题的首行。'
+      && after78.labels === 0 && !after78.overview && after78.original !== 'none',
+    JSON.stringify({ before: before78, low: low78, veryLow: veryLow78, returned: returned78, after: after78 }))
+
+  // ── C79 卡片四边/四角尺寸 + 点阵边界吸附 ─────────────────────────────────────────
+  const SNAP79 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":420},"cards":[{"ref":"k1","x":528,"y":96,"w":288}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '可调整尺寸的卡片。', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p79 = await open(browser, SNAP79)
+  await p79.waitForTimeout(300)
+  const center79 = await cardBox(p79, 'k1')
+  await p79.mouse.click(center79.l + center79.w / 2, center79.t + center79.h / 2)
+  await p79.waitForTimeout(180)
+  const grip79 = await p79.evaluate(() => {
+    const grips = [...document.querySelectorAll('[data-card-grip="k1"]')]
+    const se = document.querySelector('[data-card-grip="k1"][data-card-edge="se"]')?.getBoundingClientRect()
+    return { count: grips.length, at: se ? { x: se.left + se.width / 2, y: se.top + se.height / 2 } : null }
+  })
+  const before79 = await p79.evaluate(() => {
+    const el = document.querySelector('.amx-ucard[data-anchor="k1"]')
+    return { x: +el.dataset.x, y: +el.dataset.y, w: +el.dataset.w, h: +el.dataset.h }
+  })
+  let mid79 = null
+  let motion79 = false
+  if (grip79.at) {
+    await p79.mouse.move(grip79.at.x, grip79.at.y)
+    await p79.mouse.down()
+    await p79.mouse.move(grip79.at.x + 91, grip79.at.y + 83, { steps: 7 })
+    await p79.waitForTimeout(80)
+    mid79 = await p79.evaluate(() => {
+      const card = document.querySelector('.amx-ucard[data-anchor="k1"]')
+      const landing = document.querySelector('[data-snap-landing="k1"]')
+      const box = (el) => el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null
+      return { card: box(card), landing: box(landing) }
+    })
+    await p79.mouse.up()
+    await p79.waitForTimeout(40)
+    motion79 = await p79.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k1"]')?.getAnimations().some((a) => a.id === 'amx-card-snap') ?? false)
+    await p79.waitForTimeout(320)
+  }
+  const sized79 = await p79.evaluate(() => {
+    const el = document.querySelector('.amx-ucard[data-anchor="k1"]')
+    const r = el.getBoundingClientRect()
+    return { x: +el.dataset.x, y: +el.dataset.y, w: +el.dataset.w, h: +el.dataset.h, domW: Math.round(r.width), domH: Math.round(r.height) }
+  })
+  await p79.evaluate(() => { document.querySelector('.amx-stage').focus() })
+  await p79.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p79.waitForTimeout(350)
+  const undo79 = await p79.evaluate(() => {
+    const el = document.querySelector('.amx-ucard[data-anchor="k1"]')
+    return { x: +el.dataset.x, y: +el.dataset.y, w: +el.dataset.w, h: +el.dataset.h }
+  })
+  await p79.close()
+  record('C79 单选卡八向塑型：过程逐像素跟手并显示点阵落点，松手后动画吸附、宽高落盘且一击撤销',
+    grip79.count === 8 && !!grip79.at && sized79.w > before79.w && sized79.h > before79.h
+      && !!mid79?.card && !!mid79?.landing
+      && ((mid79.card.x + mid79.card.w) % 24 !== 0 || (mid79.card.y + mid79.card.h) % 24 !== 0)
+      && (mid79.landing.x + mid79.landing.w) % 24 === 0 && (mid79.landing.y + mid79.landing.h) % 24 === 0
+      && motion79
+      && (sized79.x + sized79.w) % 24 === 0 && (sized79.y + sized79.h) % 24 === 0
+      && sized79.domW === sized79.w && sized79.domH === sized79.h
+      && JSON.stringify(undo79) === JSON.stringify(before79),
+    JSON.stringify({ grips: grip79, before: before79, mid: mid79, motion: motion79, sized: sized79, undo: undo79 }))
+
+  // ── C80 点阵吸附开关：默认开、可关、持久化 ───────────────────────────────────────
+  const p80 = await open(browser, SNAP79)
+  await p80.waitForTimeout(300)
+  const toggle80 = await p80.evaluate(() => ({
+    pressed: document.querySelector('.amx-stage-hud button[title="关闭点阵吸附"]')?.getAttribute('aria-pressed'),
+    stored: localStorage.getItem('amadeus.canvas.gridSnap'),
+  }))
+  const move80 = async (dx, dy) => {
+    const b = await cardBox(p80, 'k1')
+    const x = b.l + b.w / 2
+    const y = b.t + b.h / 2
+    await p80.mouse.move(x, y)
+    await p80.mouse.down()
+    await p80.mouse.move(x + dx, y + dy, { steps: 6 })
+    await p80.waitForTimeout(70)
+    const mid = await p80.evaluate(() => {
+      const el = document.querySelector('.amx-ucard[data-anchor="k1"]')
+      const landing = document.querySelector('[data-snap-landing]')
+      const box = (node) => node ? { x: node.offsetLeft, y: node.offsetTop, w: node.offsetWidth, h: node.offsetHeight } : null
+      return { card: box(el), landing: box(landing) }
+    })
+    await p80.mouse.up()
+    await p80.waitForTimeout(40)
+    const motion = await p80.evaluate(() => document.querySelector('.amx-ucard[data-anchor="k1"]')?.getAnimations().some((a) => a.id === 'amx-card-snap') ?? false)
+    await p80.waitForTimeout(300)
+    const after = await p80.evaluate(() => {
+      const el = document.querySelector('.amx-ucard[data-anchor="k1"]')
+      return { x: +el.dataset.x, y: +el.dataset.y }
+    })
+    return { mid, motion, after }
+  }
+  const snapped80 = await move80(37, 29)
+  await p80.click('.amx-stage-hud button[title="关闭点阵吸附"]')
+  const free80 = await move80(37, 29)
+  const off80 = await p80.evaluate(() => ({ pressed: document.querySelector('.amx-stage-hud button[title="开启点阵吸附"]')?.getAttribute('aria-pressed'), stored: localStorage.getItem('amadeus.canvas.gridSnap') }))
+  await p80.reload({ waitUntil: 'domcontentloaded' })
+  await p80.waitForSelector('.amx-stage-hud')
+  const remembered80 = await p80.evaluate(() => ({ pressed: document.querySelector('.amx-stage-hud button[title="开启点阵吸附"]')?.getAttribute('aria-pressed'), stored: localStorage.getItem('amadeus.canvas.gridSnap') }))
+  await p80.click('.amx-stage-hud button[title="开启点阵吸附"]')
+  await p80.evaluate(() => localStorage.removeItem('amadeus.canvas.gridSnap'))
+  await p80.close()
+  record('C80 点阵默认开：移动过程自由跟手+显示落点，松手动画归位；关闭后自由落点并跨重载记忆',
+    toggle80.pressed === 'true' && toggle80.stored === null
+      && !!snapped80.mid.card && !!snapped80.mid.landing
+      && (snapped80.mid.card.x % 24 !== 0 || snapped80.mid.card.y % 24 !== 0)
+      && snapped80.mid.landing.x % 24 === 0 && snapped80.mid.landing.y % 24 === 0 && snapped80.motion
+      && snapped80.after.x % 24 === 0 && snapped80.after.y % 24 === 0
+      && !free80.mid.landing && !free80.motion && (free80.after.x % 24 !== 0 || free80.after.y % 24 !== 0)
+      && off80.pressed === 'false' && off80.stored === '0'
+      && remembered80.pressed === 'false' && remembered80.stored === '0',
+    JSON.stringify({ toggle: toggle80, snapped: snapped80, free: free80, off: off80, remembered: remembered80 }))
+
+  // ── C81 正文主卡四边/四角尺寸 ────────────────────────────────────────────────────
+  const p81 = await open(browser, SNAP79)
+  await p81.waitForTimeout(350)
+  const mainPt81 = await p81.evaluate(() => {
+    const p = document.querySelector('.unified-body .ProseMirror > p')
+    const r = p?.getBoundingClientRect()
+    return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null
+  })
+  if (mainPt81) await p81.mouse.click(mainPt81.x, mainPt81.y)
+  await p81.waitForTimeout(160)
+  const grip81 = await p81.evaluate(() => {
+    const grips = [...document.querySelectorAll('[data-card-grip="m:"]')]
+    const se = document.querySelector('[data-card-grip="m:"][data-card-edge="se"]')?.getBoundingClientRect()
+    return { count: grips.length, at: se ? { x: se.left + se.width / 2, y: se.top + se.height / 2 } : null }
+  })
+  const before81 = await cvDoc(p81)
+  let mid81 = null
+  let motion81 = false
+  if (grip81.at) {
+    await p81.mouse.move(grip81.at.x, grip81.at.y)
+    await p81.mouse.down()
+    await p81.mouse.move(grip81.at.x + 103, grip81.at.y + 87, { steps: 7 })
+    await p81.waitForTimeout(70)
+    mid81 = await p81.evaluate(() => {
+      const main = document.querySelector('.unified-body .ProseMirror')
+      const landing = document.querySelector('[data-snap-landing="m:"]')
+      const box = (el) => el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null
+      return { main: box(main), landing: box(landing) }
+    })
+    await p81.mouse.up()
+    await p81.waitForTimeout(40)
+    motion81 = await p81.evaluate(() => document.querySelector('.unified-body .ProseMirror')?.getAnimations().some((a) => a.id === 'amx-card-snap') ?? false)
+    await p81.waitForTimeout(320)
+  }
+  const sized81 = await cvDoc(p81)
+  const dom81 = await p81.evaluate(() => {
+    const main = document.querySelector('.unified-body .ProseMirror')
+    const card = document.querySelector('.amx-ucard[data-anchor="k1"]')
+    const r = card?.getBoundingClientRect()
+    const hit = r ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null
+    return { w: main?.offsetWidth ?? 0, h: main?.offsetHeight ?? 0, cardHit: hit?.closest?.('.amx-ucard')?.dataset.anchor ?? null }
+  })
+  await p81.evaluate(() => document.querySelector('.amx-stage').focus())
+  await p81.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p81.waitForTimeout(350)
+  const undo81 = await cvDoc(p81)
+  await p81.close()
+  record('C81 正文主卡单选出现八向热区；过程自由跟手、落点可见，松手动画吸附宽高并落盘；普通卡仍可命中',
+    !!mainPt81 && grip81.count === 8 && !!grip81.at && !!mid81?.main && !!mid81?.landing && motion81
+      && ((mid81.main.x + mid81.main.w) % 24 !== 0 || (mid81.main.y + mid81.main.h) % 24 !== 0)
+      && (mid81.landing.x + mid81.landing.w) % 24 === 0 && (mid81.landing.y + mid81.landing.h) % 24 === 0
+      && sized81?.main?.h > 0 && (sized81.main.x + sized81.main.w) % 24 === 0 && (sized81.main.y + sized81.main.h) % 24 === 0
+      && dom81.w === sized81.main.w && dom81.h === sized81.main.h && dom81.cardHit === 'k1'
+      && JSON.stringify(undo81?.main) === JSON.stringify(before81?.main),
+    JSON.stringify({ point: mainPt81, grips: grip81, before: before81?.main, mid: mid81, motion: motion81, sized: sized81?.main, dom: dom81, undo: undo81?.main }))
 
   // ── C71 粘贴 / 拖入(2026-08-20 用户实报「画布里没法粘贴和拖入东西」)──────────────
   //  a 空白处粘贴文字 = 落一张卡,markdown 解析成真块(**事件派发给 document.activeElement**:

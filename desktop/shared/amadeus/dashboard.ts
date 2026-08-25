@@ -271,3 +271,120 @@ export function snapDelta(dxPx: number, dyPx: number, stepX: number, stepY: numb
     dy: Math.round(dyPx / Math.max(1, stepY)),
   }
 }
+
+// ───────────────────── 画布版布局(dashboard2:,2026-08-25 拍板的新版) ─────────────────────
+//
+// 与旧 24 列网格同一份笔记、同一套块与 widget,只换几何:外来键 `dashboard2:` 记每块的
+// **自由 px 矩形**(格式与旧键同构:块 id → [x, y, w, h],单位从「格」换成 px)。
+// 打开时新键优先;只有旧键 → 视图给一键迁移(写新键、**保留旧键**——它无害,而且是回滚保险)。
+// 旧键的读写函数原样保留:迁移横幅与旧视图(保留一个发布周期)都还要读它。
+
+export const DASH2_FM_KEY = 'dashboard2'
+/** px 边界:卡最小 80×60(比它小连标题都放不下),坐标±1e6(手写 1e308 会把 CSS transform 写炸)。 */
+export const DASH2_MIN_W = 80
+export const DASH2_MIN_H = 60
+export const DASH2_MAX_WH = 4000
+export const DASH2_MAX_XY = 1_000_000
+/** 新卡默认 px 尺寸(≈ 旧默认 8×6 格的观感)。 */
+export const DASH2_DEFAULT_W = 400
+export const DASH2_DEFAULT_H = 220
+
+export function clampRect2(r: Rect): Rect {
+  const n = (v: number, lo: number, hi: number): number =>
+    Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.round(v))) : lo
+  return {
+    x: n(r.x, -DASH2_MAX_XY, DASH2_MAX_XY),
+    y: n(r.y, -DASH2_MAX_XY, DASH2_MAX_XY),
+    w: n(r.w, DASH2_MIN_W, DASH2_MAX_WH),
+    h: n(r.h, DASH2_MIN_H, DASH2_MAX_WH),
+  }
+}
+
+/** 读画布布局:三态语义比旧键更严——**「键不存在」与「键在但 schema 坏」必须分开**。
+ *
+ *  ⚠️ 二者都返回 `ok:true, layout:{}` 会酿成数据丢失(Codex 评审实证):空布局既不 stale 也不
+ *  migratable,自愈 effect 视之为「一张卡都没排过」,当场按默认值重排并落盘 —— 用户手写/合并
+ *  损伤/未来 schema 漂移出来的**合法 YAML 坏值**,只要打开一次就被永久覆盖,与横幅承诺的
+ *  「读不懂即冻结」正好相反。故坏值一律 ok:false:画面不好看可以忍,布局写没了不能忍。 */
+export function readDash2Layout(fmExtra: string): DashRead {
+  if (!fmExtra.trim()) return { ok: true, layout: {} }
+  const doc = parseDocument(fmExtra)
+  if (doc.errors.length) return { ok: false, error: doc.errors[0].message.split('\n')[0] }
+  const obj = doc.toJS() as unknown
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ok: true, layout: {} }
+  const raw = (obj as Record<string, unknown>)[DASH2_FM_KEY]
+  if (raw === undefined || raw === null) return { ok: true, layout: {} } // 键不存在 = 还没排过版
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: `${DASH2_FM_KEY} 不是映射` }
+  const out: DashLayout = {}
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(v) || v.length < 4) return { ok: false, error: `${DASH2_FM_KEY}.${id} 不是 [x, y, w, h]` }
+    const n = v.slice(0, 4).map((x) => Number(x))
+    if (!n.every((x) => Number.isFinite(x))) return { ok: false, error: `${DASH2_FM_KEY}.${id} 含非数值` }
+    out[String(id)] = clampRect2({ x: n[0], y: n[1], w: n[2], h: n[3] })
+  }
+  return { ok: true, layout: out }
+}
+
+/** 写画布布局(只动 dashboard2: 一个键;yaml Document 保注释键序,同 setDashInFm 的教训)。 */
+export function setDash2InFm(fmExtra: string, layout: DashLayout): string | null {
+  const doc = fmExtra.trim() ? parseDocument(fmExtra) : new Document({})
+  if (doc.errors.length) return null
+  const ids = Object.keys(layout).sort((a, b) => (Number(a) || 0) - (Number(b) || 0) || a.localeCompare(b))
+  if (!ids.length) {
+    doc.delete(DASH2_FM_KEY)
+  } else {
+    const obj: Record<string, number[]> = {}
+    for (const id of ids) {
+      const r = layout[id]
+      obj[id] = [r.x, r.y, r.w, r.h]
+    }
+    const node = doc.createNode(obj)
+    if ('items' in node) for (const it of (node as { items: Array<{ value?: unknown }> }).items) {
+      const v = it.value as { flow?: boolean } | undefined
+      if (v && typeof v === 'object') v.flow = true
+    }
+    doc.set(DASH2_FM_KEY, node)
+  }
+  return String(doc).replace(/\n+$/, '')
+}
+
+/** 旧网格 → 画布:纯数学,格步长换固定 px 系数(cell 44 + gap 8 = 52 / row 28 + 8 = 36),
+ *  比例与旧版中等窗宽下的观感一致;卡内边 8px 的 gap 语义折进尺寸(-8)。 */
+export const DASH2_MIGRATE_STEP_X = 52
+export const DASH2_MIGRATE_STEP_Y = 36
+export function migrateGridToCanvas(grid: DashLayout): DashLayout {
+  const out: DashLayout = {}
+  for (const [id, r] of Object.entries(grid)) {
+    out[id] = clampRect2({
+      x: r.x * DASH2_MIGRATE_STEP_X,
+      y: r.y * DASH2_MIGRATE_STEP_Y,
+      w: r.w * DASH2_MIGRATE_STEP_X - DASH_GAP_PX,
+      h: r.h * DASH2_MIGRATE_STEP_Y - DASH_GAP_PX,
+    })
+  }
+  return out
+}
+
+/** 画布自愈(对齐 reconcileLayout 的语义,但自由坐标没有「重叠禁令」——只补缺、清孤儿):
+ *  · 布局里有、块已不在 → 丢;
+ *  · 块在、布局没有(别处新建/手写)→ 排到现有内容下方,依次错开;
+ *  返回 null = 无需改动。 */
+export function reconcileCanvas(layout: DashLayout, ids: string[]): DashLayout | null {
+  const present = new Set(ids)
+  let changed = Object.keys(layout).some((id) => !present.has(id))
+  const next: DashLayout = {}
+  let bottom = 0
+  for (const id of ids) if (layout[id]) bottom = Math.max(bottom, layout[id].y + layout[id].h)
+  for (const id of ids) {
+    if (layout[id]) {
+      const want = clampRect2(layout[id])
+      next[id] = want
+      if (!sameRect(layout[id], want)) changed = true
+    } else {
+      next[id] = clampRect2({ x: 0, y: bottom + 16, w: DASH2_DEFAULT_W, h: DASH2_DEFAULT_H })
+      bottom = next[id].y + next[id].h
+      changed = true
+    }
+  }
+  return changed ? next : null
+}

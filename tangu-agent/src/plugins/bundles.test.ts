@@ -170,6 +170,39 @@ describe('seedBundleAgents', () => {
     expect(readdirSync(agentsDir()).filter((n) => n.startsWith('.seed-'))).toEqual([]); // 无 staging 残留
   });
 
+  it('技能指纹自愈:新播种补指纹;没改过跟 bundle 更新;改过保护;人格恒不覆盖', async () => {
+    const bundle = makeBundle('heal-bundle');
+    const src = path.join(bundle, 'agents', 'healy');
+    mkdirSync(path.join(src, 'skills', 'sk-a'), { recursive: true });
+    mkdirSync(path.join(src, 'skills', 'sk-b'), { recursive: true });
+    writeFileSync(path.join(src, 'config.toml'), 'name = "Healy"\nversion = "1"\n');
+    writeFileSync(path.join(src, 'SOUL.md'), '初版灵魂');
+    writeFileSync(path.join(src, 'skills', 'sk-a', 'SKILL.md'), 'v1-a');
+    writeFileSync(path.join(src, 'skills', 'sk-b', 'SKILL.md'), 'v1-b');
+
+    // 首播:整目录复制 + 技能立刻补指纹(否则下次更新被当无指纹老副本永久停更)
+    expect(await seedBundleAgents()).toEqual(['healy']);
+    const destSkills = path.join(agentsDir(), 'healy', 'skills');
+    expect(existsSync(path.join(destSkills, 'sk-a', '.seed-stamp'))).toBe(true);
+    expect(existsSync(path.join(destSkills, 'sk-b', '.seed-stamp'))).toBe(true);
+
+    // bundle 升级:sk-a 没改过 → 跟着更新;sk-b 用户改过 → 保护;SOUL 恒不覆盖
+    writeFileSync(path.join(src, 'skills', 'sk-a', 'SKILL.md'), 'v2-a');
+    writeFileSync(path.join(src, 'skills', 'sk-b', 'SKILL.md'), 'v2-b');
+    writeFileSync(path.join(destSkills, 'sk-b', 'SKILL.md'), '用户改过');
+    writeFileSync(path.join(src, 'SOUL.md'), 'bundle v2 灵魂');
+    expect(await seedBundleAgents()).toEqual([]); // 不算新播种
+    expect(readFileSync(path.join(destSkills, 'sk-a', 'SKILL.md'), 'utf8')).toBe('v2-a');
+    expect(readFileSync(path.join(destSkills, 'sk-b', 'SKILL.md'), 'utf8')).toBe('用户改过');
+    expect(readFileSync(path.join(agentsDir(), 'healy', 'SOUL.md'), 'utf8')).toBe('初版灵魂');
+
+    // bundle 新增技能 → 已存在的 agent 也能长出来(installed 路径)
+    mkdirSync(path.join(src, 'skills', 'sk-new'), { recursive: true });
+    writeFileSync(path.join(src, 'skills', 'sk-new', 'SKILL.md'), 'v1-new');
+    await seedBundleAgents();
+    expect(readFileSync(path.join(destSkills, 'sk-new', 'SKILL.md'), 'utf8')).toBe('v1-new');
+  });
+
   it('跳过非法 slug 与无 config.toml 的目录', async () => {
     const bundle = makeBundle('my-bundle');
     mkdirSync(path.join(bundle, 'agents', 'Bad_Slug'), { recursive: true });

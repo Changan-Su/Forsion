@@ -394,6 +394,7 @@ a:hover { color: var(--accent-ink); }
 .project-menu-item > svg:first-child { color: var(--text-faint); flex-shrink: 0; }
 .project-menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-menu-check { color: var(--accent-ink); flex-shrink: 0; }
+.project-menu-projectless { margin-top: 2px; padding-top: 9px; border-top: var(--border-width) solid var(--border); border-radius: 0; }
 .project-menu-add { color: var(--text-muted); border-top: var(--border-width) solid var(--border); border-radius: 0; margin-top: 2px; padding-top: 9px; }
 
 /* ── 工作区 / 后台智能体 / 记忆 详情面板(主区)公共底座 ──────────────────── */
@@ -2023,6 +2024,10 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
   grid-template-columns: 252px minmax(0, 1fr);
   background: var(--bg);
 }
+/* 移动端设置的一级列表 / 二级页头只在 SettingsModal 主动判为 mobile 时出现。
+ * 判据不能只写 media query:桌面手机框的物理 viewport 仍是宽屏。 */
+.settings-mobile-home,
+.settings-mobile-detail-head { display: none; }
 .settings-nav {
   min-height: 0;
   display: flex;
@@ -2653,10 +2658,8 @@ html.sc-on textarea.t2c-ta { caret-color: transparent; }
   .settings-row-control > input { width: 100%; max-width: none; }
 }
 
-/* 移动预览手机框内:桌面「左栏导航 + 右内容」双栏 → 「顶部横向滚动标签栏 + 内容」。
-   设置 / 应用市场 / 成就三个二级界面共用 .settings-page 骨架,一处通吃。媒体查询按视口宽,预览时桌面窗口很宽
-   不会触发,故改按 .sc-device 容器作用域。ponytail: 只覆盖预览态;真机 MobileRoot 暂不渲染这些浮层,
-   将来若渲染,改用 <html data-ui-mode="mobile"> 标记复用同一套规则。 */
+/* 移动预览手机框内的通用二级界面兜底。SettingsModal 会在文件末尾用
+   .settings-page--mobile 覆盖成一级列表 → 二级详情;市场 / 成就仍沿用横向入口。 */
 .sc-device .settings-page {
   grid-template-columns: 1fr;
   grid-template-rows: auto minmax(0, 1fr);
@@ -3996,15 +3999,190 @@ html.dark .brand-logo--dark { display: inline-block; }
  * 栏目多/窗口窄时要能拖着滚——拖窗区会把这些指针事件整个吞掉(同 [[project_electron_dragregion_overlays]])。 */
 .settings-subbar { -webkit-app-region: no-drag; }
 
-/* ── 移动端(触屏+窄屏)二级页统一形态:左列表 → 顶部横滑 chips(用户拍板)。
-   结构级选择器,settings 与 market 同一套 .settings-page/.settings-nav 布局一起吃到。 ── */
+/* ── 移动端设置:一级分组列表 → 二级详情 ────────────────────────────────
+   SettingsModal 同时识别真机 / UI_MODE 手机框 / coarse 窄屏并挂本 class,所以不依赖 viewport。
+   顶部不再横滑全局分类;详情里少量天然子栏目可折行,同样不会要求横滑。 */
+.settings-page--mobile {
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+}
+.settings-page--mobile > .settings-nav { display: none; }
+.settings-page--mobile > .settings-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.settings-page--mobile.settings-page--mobile-menu > .settings-main { display: none; }
+
+.settings-page--mobile .settings-mobile-home {
+  display: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--bg);
+}
+.settings-page--mobile.settings-page--mobile-menu .settings-mobile-home { display: flex; }
+.settings-mobile-home-head,
+.settings-mobile-detail-head {
+  flex: 0 0 auto;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-app-region: no-drag;
+}
+.settings-mobile-home-head > strong,
+.settings-mobile-detail-head > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 17px;
+  font-weight: 680;
+  letter-spacing: -0.012em;
+}
+.settings-mobile-home-head > button,
+.settings-mobile-detail-head > button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  transition: background var(--duration-fast), color var(--duration-fast), transform var(--duration-fast);
+}
+.settings-mobile-home-head > button:active,
+.settings-mobile-detail-head > button:active {
+  color: var(--text);
+  background: var(--overlay-light);
+  transform: scale(0.96);
+}
+.settings-mobile-head-logo { display: grid; place-items: center; }
+.settings-mobile-home-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 16px calc(34px + env(safe-area-inset-bottom));
+}
+.settings-mobile-hero {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px;
+  margin-bottom: 22px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+}
+.settings-mobile-hero > span { min-width: 0; display: flex; flex-direction: column; }
+.settings-mobile-hero strong { color: var(--text); font-size: 15px; font-weight: 680; }
+.settings-mobile-hero small { margin-top: 3px; color: var(--text-faint); font-size: 12px; }
+.settings-mobile-group + .settings-mobile-group { margin-top: 22px; }
+.settings-mobile-group > h2 {
+  margin: 0 4px 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 650;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+.settings-mobile-group-card {
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+}
+.settings-mobile-row {
+  width: 100%;
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  color: var(--text);
+  text-align: left;
+  transition: background var(--duration-fast), transform var(--duration-fast);
+}
+.settings-mobile-row + .settings-mobile-row { border-top: var(--border-width) solid var(--border); }
+.settings-mobile-row:active { background: var(--overlay-light); }
+.settings-mobile-row-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-light);
+  color: var(--accent-ink);
+}
+.settings-mobile-row-icon svg { width: 18px; height: 18px; }
+.settings-mobile-row-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.settings-mobile-row-copy strong { font-size: 14px; line-height: 1.35; font-weight: 620; }
+.settings-mobile-row-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+.settings-mobile-row-chevron { flex: 0 0 auto; color: var(--text-faint); }
+
+.settings-page--mobile .settings-mobile-detail-head { display: grid; }
+.settings-page--mobile .settings-main-head {
+  padding: 2px 16px 10px;
+  background: var(--bg);
+  -webkit-app-region: no-drag;
+}
+.settings-page--mobile .settings-main-copy { max-width: none; margin: 0; }
+.settings-page--mobile .settings-main-title { display: none; }
+.settings-page--mobile .settings-main-copy > p {
+  max-width: none;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.settings-page--mobile .settings-subbar {
+  max-width: none;
+  margin: 10px 0 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow: visible;
+}
+.settings-page--mobile .settings-subtab {
+  flex: 1 1 auto;
+  min-height: 36px;
+  padding: 7px 11px;
+  background: var(--overlay-light);
+  text-align: center;
+}
+.settings-page--mobile .settings-subtab.active { background: var(--accent-light); color: var(--accent-ink); }
+.settings-page--mobile .settings-body {
+  padding: 8px 14px calc(34px + env(safe-area-inset-bottom));
+}
+.settings-page--mobile .settings-body > * { max-width: none; }
+
+/* 市场 / 成就仍复用 .settings-page,但没有 SettingsModal 的两层 DOM。真机窄屏继续给它们保留
+   原来的横向入口兜底;`:not` 是关键,否则会把上面的新设置首页再次压成 chips。 */
 @media (pointer: coarse) and (max-width: 820px) {
-  .settings-page {
+  .settings-page:not(.settings-page--mobile) {
     display: flex;
     flex-direction: column;
-    padding-top: env(safe-area-inset-top); /* 浮层 fixed inset:0,自己避开状态栏 */
+    padding-top: env(safe-area-inset-top);
   }
-  .settings-nav {
+  .settings-page:not(.settings-page--mobile) > .settings-nav {
     flex: 0 0 auto;
     flex-direction: row;
     align-items: center;
@@ -4012,10 +4190,10 @@ html.dark .brand-logo--dark { display: inline-block; }
     border-right: none;
     border-bottom: var(--border-width) solid var(--border);
   }
-  .settings-nav-top { display: flex; align-items: center; padding: 8px 4px 8px 8px; }
-  .settings-nav-search { display: none; } /* chips 本身就是快速选择,搜索是桌面长列表的产物 */
-  .settings-back { width: auto; margin: 0; font-size: 0; gap: 0; padding: 8px; } /* 只留 ← 图标 */
-  .settings-nav-list {
+  .settings-page:not(.settings-page--mobile) .settings-nav-top { display: flex; align-items: center; padding: 8px 4px 8px 8px; }
+  .settings-page:not(.settings-page--mobile) .settings-nav-search { display: none; }
+  .settings-page:not(.settings-page--mobile) .settings-back { width: auto; margin: 0; font-size: 0; gap: 0; padding: 8px; }
+  .settings-page:not(.settings-page--mobile) .settings-nav-list {
     flex: 1 1 auto;
     flex-direction: row;
     align-items: center;
@@ -4025,21 +4203,22 @@ html.dark .brand-logo--dark { display: inline-block; }
     padding: 8px 12px 8px 2px;
     scrollbar-width: none;
   }
-  .settings-nav-list::-webkit-scrollbar { display: none; }
-  /* 分区/分组容器扁平化成一条 chips 流;组头隐藏 */
-  .settings-nav-section, .settings-nav-group { display: contents; }
-  .settings-nav-sectionhead, .settings-nav-grouphead { display: none; }
-  .settings-nav-list button {
+  .settings-page:not(.settings-page--mobile) .settings-nav-list::-webkit-scrollbar { display: none; }
+  .settings-page:not(.settings-page--mobile) .settings-nav-section,
+  .settings-page:not(.settings-page--mobile) .settings-nav-group { display: contents; }
+  .settings-page:not(.settings-page--mobile) .settings-nav-sectionhead,
+  .settings-page:not(.settings-page--mobile) .settings-nav-grouphead { display: none; }
+  .settings-page:not(.settings-page--mobile) .settings-nav-list button {
     width: auto;
     flex: 0 0 auto;
     min-height: 32px;
     padding: 6px 13px;
     border-radius: 999px;
     white-space: nowrap;
-    background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+    background: var(--overlay-light);
   }
-  .settings-nav-list button.active { background: var(--accent-light); }
-  .settings-main { flex: 1 1 auto; min-height: 0; }
+  .settings-page:not(.settings-page--mobile) .settings-nav-list button.active { background: var(--accent-light); }
+  .settings-page:not(.settings-page--mobile) > .settings-main { flex: 1 1 auto; min-height: 0; }
 }
 
 /* ── OS 文件拖入工作区时的全局提示遮罩 ──────────────────────────────────

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planChatRestore, planNewChat, planSessionOpen } from './sessionOpenPlan'
+import { planChatRestore, planNewChat, planSessionOpen, planSpaceSwitch } from './sessionOpenPlan'
 
 const primary = { id: 'chat', followActive: true }
 const pinnedA = { id: 'chat#1', followActive: false as const, sessionId: 'A' }
@@ -80,5 +80,24 @@ describe('planNewChat', () => {
   })
   it('主区没有 leaf → reuse(兜底新建)', () => {
     expect(planNewChat(null, null)).toBe('reuse')
+  })
+})
+
+describe('planSpaceSwitch', () => {
+  const alive = (id: string): boolean => id === 'A' || id === 'B'
+  it('新 Space 没进过 → null(空白新对话,不把老 Space 的会话带过去)', () => {
+    const ledger = new Map<string, string | null>()
+    expect(planSpaceSwitch(ledger, 'tangu', 'amadeus', 'A', alive)).toBeNull()
+    expect(ledger.get('tangu')).toBe('A')
+  })
+  it('回到老 Space → 还原它自己那条', () => {
+    const ledger = new Map<string, string | null>()
+    planSpaceSwitch(ledger, 'tangu', 'amadeus', 'A', alive)
+    planSpaceSwitch(ledger, 'amadeus', 'coding', 'B', alive)
+    expect(planSpaceSwitch(ledger, 'coding', 'tangu', null, alive)).toBe('A')
+  })
+  it('记着的会话已被删 → null(不还原成一条查无此人的会话)', () => {
+    const ledger = new Map<string, string | null>([['tangu', 'gone']])
+    expect(planSpaceSwitch(ledger, 'amadeus', 'tangu', 'B', alive)).toBeNull()
   })
 })

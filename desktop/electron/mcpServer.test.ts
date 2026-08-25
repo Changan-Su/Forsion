@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { callInboxSend, startForsionMcp, type McpDeps } from './mcpServer'
+import { callInboxSend, callTranscribeAudio, startForsionMcp, type McpDeps } from './mcpServer'
 
 const listen = (s: Server) =>
   new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as { port: number }).port)))
@@ -11,6 +11,8 @@ const listen = (s: Server) =>
 const deps = (over: Partial<McpDeps>): McpDeps => ({
   getEngine: () => ({ url: null, token: '' }),
   localSecret: 'secret',
+  bridgeSecret: 'bridge',
+  externalEnabled: () => true,
   homeDir: '/tmp',
   ...over,
 })
@@ -84,6 +86,8 @@ describe('MCP end-to-end over HTTP', () => {
     const mcp = await startForsionMcp({
       getEngine: () => ({ url: `http://127.0.0.1:${ePort}`, token: 'ENGTKN' }),
       localSecret: 'SEC',
+      bridgeSecret: 'BRD',
+      externalEnabled: () => true,
       homeDir: tmpdir(),
       log: () => {},
     })
@@ -112,6 +116,8 @@ describe('MCP end-to-end over HTTP', () => {
     const mcp = await startForsionMcp({
       getEngine: () => ({ url: null, token: '' }),
       localSecret: 'SEC',
+      bridgeSecret: 'BRD',
+      externalEnabled: () => true,
       homeDir: tmpdir(),
       log: () => {},
     })
@@ -121,5 +127,67 @@ describe('MCP end-to-end over HTTP', () => {
     })
     await expect(client.connect(transport)).rejects.toThrow()
     mcp.close()
+  })
+
+  it('外部面关闭时:localSecret 被拒,bridgeSecret 仍通(常驻桥的双钥语义)', async () => {
+    const mcp = await startForsionMcp({
+      getEngine: () => ({ url: null, token: '' }),
+      localSecret: 'SEC',
+      bridgeSecret: 'BRD',
+      externalEnabled: () => false,
+      homeDir: tmpdir(),
+      log: () => {},
+    })
+    const mk = (secret: string) => {
+      const c = new Client({ name: 'test', version: '1.0.0' })
+      const t = new StreamableHTTPClientTransport(new URL(mcp.url), {
+        requestInit: { headers: { Authorization: `Bearer ${secret}` } },
+      })
+      return { c, t }
+    }
+    try {
+      const ext = mk('SEC')
+      await expect(ext.c.connect(ext.t)).rejects.toThrow()
+      const bridge = mk('BRD')
+      await bridge.c.connect(bridge.t)
+      const tools = await bridge.c.listTools()
+      expect(tools.tools.map((t) => t.name)).toContain('transcribe_audio')
+      await bridge.c.close()
+    } finally {
+      mcp.close()
+    }
+  })
+})
+
+describe('transcribe_audio (主进程 ASR 桥)', () => {
+  it('转发路径与选项到 transcribeFile,segments 透传为 JSON', async () => {
+    let got: { p?: string; req?: unknown } = {}
+    const result = await callTranscribeAudio(
+      deps({
+        transcribeFile: async (p, req) => {
+          got = { p, req }
+          return { text: 'hello', segments: [{ start: 0, end: 1.5, text: 'hello' }] }
+        },
+      }),
+      { path: '/tmp/a.wav', timestamps: true },
+    )
+    expect(got.p).toBe('/tmp/a.wav')
+    expect(got.req).toEqual({ timestamps: true, language: undefined })
+    expect(result.isError).toBeFalsy()
+    const j = JSON.parse((result.content[0] as { text: string }).text)
+    expect(j.text).toBe('hello')
+    expect(j.segments).toHaveLength(1)
+  })
+
+  it('字符串返回(老口径)包成 {text};相对路径与非音频扩展名被拒;无 transcribeFile 回错误', async () => {
+    const ok = await callTranscribeAudio(deps({ transcribeFile: async () => 'plain' }), { path: '/tmp/a.mp3' })
+    expect(JSON.parse((ok.content[0] as { text: string }).text)).toEqual({ text: 'plain' })
+
+    const rel = await callTranscribeAudio(deps({ transcribeFile: async () => 'x' }), { path: 'a.wav' })
+    expect(rel.isError).toBe(true)
+    const bad = await callTranscribeAudio(deps({ transcribeFile: async () => 'x' }), { path: '/tmp/a.pdf' })
+    expect(bad.isError).toBe(true)
+    const none = await callTranscribeAudio(deps({}), { path: '/tmp/a.wav' })
+    expect(none.isError).toBe(true)
   })
 })

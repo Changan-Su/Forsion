@@ -7,13 +7,32 @@ import { useApp } from './stores/appStore'
 import { buildDefaultLayout } from './bootstrapEngine'
 import { useI18n } from './i18n'
 import { installFileDropGuard } from './fileDropGuard'
+import { miniSessionId } from './windowKind'
 
 export function MiniRoot() {
   const { t } = useI18n()
   useEffect(() => {
     useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined))
   }, [t])
-  useEffect(() => { void useApp.getState().boot() }, [])
+  useEffect(() => {
+    let ready = false
+    let pending = miniSessionId()
+    const applyTarget = (): void => {
+      if (!pending) return
+      const id = pending
+      pending = null
+      useApp.getState().setActiveId(id)
+    }
+    const off = window.tangu?.onMiniTarget?.((opts) => {
+      pending = typeof opts?.sessionId === 'string' ? opts.sessionId.trim() || null : null
+      if (ready) applyTarget()
+    })
+    void useApp.getState().boot().finally(() => {
+      ready = true
+      applyTarget()
+    })
+    return () => off?.()
+  }, [])
   useEffect(() => installFileDropGuard(), []) // 全局 OS 文件拖放守卫(mini 窗也防被拖入文件冲掉)
   // 边缘吸附折叠/展开全在主进程(轮询光标位置,见 electron/main.ts onMiniSettled/pollMiniCursor)——
   // frameless 透明窗上 DOM mouseenter/leave 不可靠且无迟滞(会「一动就弹回」),故不在渲染层做。

@@ -47,8 +47,9 @@ export function syncPluginViews(): void {
   if (installed) return
   installed = true
 
-  usePluginStore.getState().setViewOpener((type) => {
-    useWorkspace.getState().openView(type, {}, 'main')
+  usePluginStore.getState().setViewOpener((type, loc) => {
+    // P2:放开停靠位(此前写死 'main',插件 view 进侧栏只能靠 space.json 声明)。
+    useWorkspace.getState().openView(type, {}, loc === 'left' || loc === 'right' ? loc : 'main')
   })
 
   const registered = new Map<string, ViewContribution>()
@@ -69,10 +70,14 @@ export function syncPluginViews(): void {
       registered.set(type, def)
       registerView({
         type,
+        kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
         displayName: () => def.title,
         factory: () => <PluginViewHost def={def} />,
         singleton: def.singleton !== false,
         closable: true,
+        // P2 联动声明:插件内相对 id → 补全命名空间(type 形如 plugin:<pid>:<vid>,pid 取中段;
+        // 只能指本插件自己的源 —— 前缀由宿主拼,插件写不了别家的)。
+        workspaceSource: def.workspaceSource ? `plugin:${type.split(':')[1]}:${def.workspaceSource}` : undefined,
       })
     }
   }

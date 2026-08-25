@@ -20,15 +20,32 @@ import { query } from '../core/db.js';
 import { getToolDefinitions, executeTool, type ToolContext } from '../tools/registry.js';
 import { gateToolCall, requestApproval } from './approvals.js';
 import { publish } from './eventBus.js';
-import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { getAgent, resolveActiveSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { projectDocSection } from './projectDoc.js';
+import { loadSkillLoadout, type SkillLoadout } from './skillLoadout.js';
 import { loadCustomTools } from '../tools/customTools.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
 import type { ChatMessage } from '../core/types.js';
 
 const SUB_MAX_ITERATIONS = 8;
 const SUB_RESULT_CAP = 12_000;
+
+/** 具名子代理的技能装载:临时以该 agent 的身份圈 ALS 作用域(listLocalSkills 据此叠加
+ *  agents/<slug>/skills),取回与主循环同形状的目录段与可用技能集。失败回 null 不阻断委派。
+ *  导出仅为测试。 */
+export async function loadSubAgentSkills(
+  agentSlug: string,
+  parentCtx: Pick<ToolContext, 'userId' | 'appId' | 'execMode' | 'preset'>,
+): Promise<SkillLoadout | null> {
+  try {
+    return await runWithAgentSlug(agentSlug, () =>
+      loadSkillLoadout(parentCtx.userId, parentCtx.appId, { execMode: parentCtx.execMode, preset: parentCtx.preset }),
+    );
+  } catch {
+    return null;
+  }
+}
 
 const SUB_SYSTEM_PROMPT =
   'You are a sub-agent: complete the assigned subtask independently, then give a **self-contained final report**.\n' +
@@ -208,7 +225,14 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   const envSection = parentCtx.execMode === 'host'
     ? hostEnvSection(parentCtx.cwd, undefined, { coding: parentCtx.preset === 'coding' })
     : null;
-  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc]
+  // 具名 agent 的技能面跟着走(08-24):主循环经 enterRunContext 圈 ALS 后 loadSkillLoadout 装目录
+  // (listLocalSkills 按 displayAgentSlug 叠加 agents/<slug>/skills)。此前子代理不装载——委派 bluebird
+  // 却看不到 bluebird-video,skill 只能让人去点命令面板。目录段进 sysPrompt;enabledSkillIds 进
+  // subCtx(use_skill 按它鉴权)。作用域用实际 slug 而非 memSlug:shareDefaultMemory 的 agent
+  // memSlug=DEFAULT,技能仍是它自己的。装载失败不阻断委派(与主循环「加载失败不阻断 run」同口径)。
+  const skillSlug = def && p.agentSlug ? resolveActiveSlug(String(p.agentSlug)) : '';
+  const skills = skillSlug ? await loadSubAgentSkills(skillSlug, parentCtx) : null;
+  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc, ...(skills?.sections ?? [])]
     .filter((s): s is string => !!s)
     .join('\n\n---\n');
   const effModelId = def?.model || p.modelId;
@@ -229,6 +253,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     ...parentCtx,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     customTools: subCustomTools,
+    // 具名 agent 的可用技能集(use_skill 按 ctx.enabledSkillIds 鉴权);未装载则继承父。
+    ...(skills ? { enabledSkillIds: skills.enabledSkillIds } : {}),
     // 子代理拿精简集:显式剥掉父的解锁面。若继承 unlockTools,子代理会看到 load_tools 且「解锁成功」,
     // 但自己的 toolDefs 本轮已冻结永不刷新,反而把父 run 的集合污染置脏——语义与「完全隐藏」设计对齐。
     unlockedTools: undefined,
@@ -325,8 +351,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } }
           : call;
         // 具名子代理:在它自己的记忆作用域内执行(remember/log_event 落它的文件夹),用完即恢复父作用域。
+        // 展示/技能身份单独给实际 slug:use_skill 等在执行期按 displayAgentSlug 解析 agents/<slug>/skills。
         const r = def
-          ? await runWithAgentSlug(memSlug, () => executeTool(execCall, subCtx))
+          ? await runWithAgentSlug(memSlug, () => executeTool(execCall, subCtx), skillSlug || undefined)
           : await executeTool(execCall, subCtx);
         content = r.result;
         isError = r.isError;

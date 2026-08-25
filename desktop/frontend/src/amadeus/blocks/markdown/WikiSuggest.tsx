@@ -5,7 +5,7 @@
 // Only intercepts navigation keys (Arrow/Enter/Tab/Esc) in the capture phase — letters
 // and Backspace fall through to ProseMirror so the in-document query keeps updating.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { OverlayAt } from '../../lib/clampMenu'
 import { pickWikiResults, type Cand } from './wikiRank'
 import { isFileRef } from '../../lib/vaultFiles'
@@ -75,7 +75,13 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     setActive(0)
   }, [query])
 
-  useEffect(() => {
+  // ⚠️ useLayoutEffect 而非 useEffect:被动 effect 的 cleanup 排在提交之后的调度任务里,面板已经
+  // 从 DOM 消失、旧监听器却还挂在 window 上 —— 那个窗口里的 Enter 仍会被吞,甚至按**过期的**
+  // results 选中错误页面(Codex 评审)。layout effect 在提交时同步摘除,窗口为零。
+  useLayoutEffect(() => {
+    // 面板无内容时 render 早退(total === 0),但 effect 照跑 —— 不加这道闸,一个看不见的面板
+    // 仍在捕获阶段吞掉 Enter/Tab/↑↓(用户实报「@ 之后回车换不了行」)。见 allowCreate 注释的契约。
+    if (total === 0) return
     const pick = (i: number): void => {
       if (showCreate && i === results.length) onPick(q)
       else if (results[i]) onPick(linkInner(results[i]))

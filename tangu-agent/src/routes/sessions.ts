@@ -21,7 +21,7 @@ import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/session
 
 const router = Router();
 
-const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, created_at, updated_at';
+const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
 
 function parseMaybeJson(v: any): any {
   if (v == null) return null;
@@ -30,7 +30,7 @@ function parseMaybeJson(v: any): any {
 }
 
 function rowToSession(r: any): any {
-  return { ...r, agent_config: parseMaybeJson(r.agent_config) };
+  return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless };
 }
 
 /** 取本人会话行(含 app 归属校验);不存在/非本人 → null。 */
@@ -67,19 +67,20 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
 router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { title, model_id, emoji, app_id, project_path, project_name } = req.body || {};
+    const { title, model_id, emoji, app_id, project_path, project_name, projectless } = req.body || {};
     const profile = resolveProfile(app_id);
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${app_id}` });
     const id = uuidv4();
     await query(
-      `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, project_path, project_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, project_path, project_name, projectless)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, userId, profile.appId,
        typeof title === 'string' && title.trim() ? title.trim().slice(0, 200) : 'New Chat',
        typeof model_id === 'string' && model_id ? model_id : profile.defaultModelId || null,
        typeof emoji === 'string' && emoji ? emoji.slice(0, 16) : null,
        typeof project_path === 'string' && project_path ? project_path.slice(0, 1000) : null,
-       typeof project_name === 'string' && project_name ? project_name.slice(0, 255) : null],
+       typeof project_name === 'string' && project_name ? project_name.slice(0, 255) : null,
+       projectless === true],
     );
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [id]);
     res.json({ session: rowToSession(rows[0]) });
@@ -142,7 +143,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const { title, archived, model_id, emoji, project_path, project_name } = req.body || {};
+    const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
     const sets: string[] = [];
     const params: any[] = [];
     if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
@@ -151,6 +152,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(emoji ? String(emoji).slice(0, 16) : null); }
     if (typeof project_path === 'string' || project_path === null) { sets.push('project_path = ?'); params.push(project_path ? String(project_path).slice(0, 1000) : null); }
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
+    if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }
     if (!sets.length) return res.status(400).json({ detail: 'nothing to update' });
     sets.push(`updated_at = ${getNowSql()}`);
     params.push(req.params.id);

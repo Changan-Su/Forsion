@@ -40,6 +40,7 @@ import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
+import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
@@ -86,6 +87,8 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   delegate: { sideEffect: 'unknown', parallel: true, defaultTimeoutMs: 1_800_000 },
   // 纯推理无副作用,但 N 席×2 轮很贵且自身已内部并行 → 不再与其它工具并跑。
   self_brainstorm: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 600_000 },
+  // 桌面桥 ASR:纯网络转发主进程,长音频/本地模型冷启可到分钟级(内层 callTool 540s 先到)。
+  transcribe_audio: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 600_000 },
 };
 
 const SERIAL_TOOL_CAPABILITIES: ToolCapabilities = {
@@ -163,6 +166,7 @@ registerToolProvider(brainstormProvider); // host-only:self_brainstorm 从当前
 registerToolProvider(searchSessionsProvider); // both:search_sessions 列出/检索过去会话,找到 id 交给 read_session(append 末尾,保前缀缓存)
 registerToolProvider(manageHarnessProvider); // host-only:agent 自维护工作笔记 HARNESS.md(自进化层;审批 command 档;append 末尾,保前缀缓存)
 registerToolProvider(sketchProvider); // GUI 限定(ctx.client 门禁,CLI/TUI 不注册):sketch 在对话流内联画可交互 HTML 卡片(append 末尾,保前缀缓存)
+registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经桌面桥(desktop-bridge.json)调主进程 ASR;无桥文件不可见(append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

@@ -34,7 +34,7 @@ import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import './composer2.css'
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
-type OpenMenu = 'add' | 'mode' | 'model' | null
+type OpenMenu = 'add' | 'mode' | 'model' | 'ctx' | null
 /** [[ 引用候选:note=vault 笔记(p=vault 相对 .md 路径);session=历史会话(p=标题,供打分);
  *  否则工作区文件(p=cwd 相对路径)。 */
 type RefCand = { p: string; note?: true; session?: { id: string; title: string; summary?: string | null } }
@@ -107,6 +107,10 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
   const next = pos - 1
   return { pos: next, val: next === 0 ? stash : hist[hist.length - next] }
 }
+
+/** token 计数进位:满千 k、满百万 M,一位小数。截断而非四舍五入 —— 999,999 是 999.9k,不是 1000k。 */
+export const fmtTokens = (n: number): string =>
+  n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : n >= 1e3 ? `${Math.floor(n / 100) / 10}k` : String(n)
 
 /**
  * 输入框 autosize 的目标 style.height。**scrollHeight ≤ 0 = 元素当前没被布局**
@@ -383,8 +387,8 @@ export const Composer2: React.FC<{
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
-  // 上下文占比的悬停详情条:同款 absolute + 固定宽,窄屏也会捅出边缘(它常挂 true,靠 RO/resize 重量)。
-  const ctxPopFix = useEdgeNudge(true, { boundary: '.t2-chat-view' })
+  // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
+  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2-chat-view' })
 
   useEffect(() => {
     if (!openMenu) return
@@ -454,6 +458,12 @@ export const Composer2: React.FC<{
     requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedText])
+
+  // 划线引用落入当前承载后，光标直接交给输入框：侧栏展开即可继续输入问题。
+  useEffect(() => {
+    if (!quotedText) return
+    requestAnimationFrame(() => taRef.current?.focus())
+  }, [quotedText])
 
   // 从工作区/笔记树/会话列表拖进来的引用 → 上方「已选择」芯片(2026-08-14 起;此前是往草稿里塞
   // 一长串 [[路径]] 文本)。消费后回调清空。
@@ -1374,16 +1384,24 @@ export const Composer2: React.FC<{
               const R = 9
               const CIRC = 2 * Math.PI * R
               return (
-                <span className="t2c-ctxring t2c-collapse-on-capsule-open" data-warn={warn || undefined}>
-                  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                    <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />
-                    <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
-                  </svg>
-                  {/* 悬停详情:token 占用 / 会话累计 / 压缩(替代旧的横条+文字,平时只留进度圈) */}
+                <span className={`t2c-ctxring t2c-collapse-on-capsule-open${openMenu === 'ctx' ? ' is-open' : ''}`} data-warn={warn || undefined} data-cmenu>
+                  <button
+                    type="button"
+                    className="t2c-ctxring-btn"
+                    aria-expanded={openMenu === 'ctx'}
+                    aria-label={`${t('input.ctxLabel')} ${pct}%`}
+                    onClick={() => setOpenMenu((m) => (m === 'ctx' ? null : 'ctx'))}
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                      <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />
+                      <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
+                    </svg>
+                  </button>
+                  {/* 点击详情:token 占用 / 会话累计 / 压缩(替代旧的横条+文字,平时只留进度圈) */}
                   <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
                     <span className="t2c-ctxring-pct">{t('input.ctxLabel')} {pct}%</span>
-                    <span>{(ctxTokens || 0).toLocaleString()} / {contextWindow.toLocaleString()} tokens</span>
-                    {!!sessionTokens && sessionTokens > 0 && <span>{t('input.sessionTokens', { n: sessionTokens.toLocaleString() })}</span>}
+                    <span>{fmtTokens(ctxTokens || 0)} / {fmtTokens(contextWindow)} tokens</span>
+                    {!!sessionTokens && sessionTokens > 0 && <span>{t('input.sessionTokens', { n: fmtTokens(sessionTokens) })}</span>}
                     {runCost != null && costLimit != null && costLimit > 0 && (
                       <span data-warn={runCost >= costLimit * 0.8 || undefined}>{t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}</span>
                     )}
@@ -1398,12 +1416,12 @@ export const Composer2: React.FC<{
                             {[...ctxInfo.sections].sort((a, b) => b.tokens - a.tokens).map((sec) => (
                               <span key={sec.k} className="t2c-ctxinfo-row">
                                 {/* 未来引擎新增的段 key 直接显示 key 本身,别渲染成 'ctx.sec.xxx' 原始键 */}
-                                <span>{CTX_SEC_KEYS.has(sec.k) ? t(`ctx.sec.${sec.k}`) : sec.k}</span><span>~{sec.tokens.toLocaleString()}</span>
+                                <span>{CTX_SEC_KEYS.has(sec.k) ? t(`ctx.sec.${sec.k}`) : sec.k}</span><span>~{fmtTokens(sec.tokens)}</span>
                               </span>
                             ))}
                             {ctxInfo.historyTokens > 0 && (
                               <span className="t2c-ctxinfo-row">
-                                <span>{t('ctx.sec.history', { n: ctxInfo.historyCount })}</span><span>~{ctxInfo.historyTokens.toLocaleString()}</span>
+                                <span>{t('ctx.sec.history', { n: ctxInfo.historyCount })}</span><span>~{fmtTokens(ctxInfo.historyTokens)}</span>
                               </span>
                             )}
                           </div>
@@ -1420,7 +1438,7 @@ export const Composer2: React.FC<{
                         </div>
                       </>
                     )}
-                    {onCompact && <button className="t2c-ctxring-compact" onClick={onCompact}>{t('input.slash.compact')}</button>}
+                    {onCompact && <button className="t2c-ctxring-compact" onClick={() => { onCompact(); setOpenMenu(null) }}>{t('input.slash.compact')}</button>}
                   </span>
                 </span>
               )

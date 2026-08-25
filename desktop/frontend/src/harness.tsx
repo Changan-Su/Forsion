@@ -14,7 +14,7 @@ import { DeleteAssetsHost } from './amadeus/components/askDeleteAssets'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
-import { AmadeusDashboardView } from './views/AmadeusDashboardView'
+import { DashboardCanvasView } from './views/DashboardCanvasView'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { resolveInitialLang, resolveInitialSkin } from './theme/registry'
@@ -130,7 +130,7 @@ function Harness() {
           onFocused={() => setFocus(null)}
           requestSelfFocus={(place) => setFocus({ id: b.id, place })}
           onOpenWiki={() => {}}
-          getPageNames={() => []}
+          getPageNames={() => ['笔记一.md']} // 给 @ 提及一个真候选(空候选池下面板永不显示,T43 会假绿)
         />
       ))}
       <pre data-harness-dump style={{ fontSize: 11, opacity: 0.6, whiteSpace: 'pre-wrap' }}>
@@ -269,7 +269,7 @@ function PlugViewHarness() {
   )
 }
 
-// ── ?dashboard 模式:真 AmadeusDashboardView + 真 pageStore + 真 BlockHost,种一张 3 卡片的仪表盘。
+// ── ?dashboard 模式:真 DashboardCanvasView(画布版)+ 真 pageStore + 真 BlockHost,种一张 3 卡片的仪表盘。
 //    纯逻辑(格子几何 / frontmatter 编解码 / 冲突判定)已由 shared/amadeus/dashboard.test.ts 钉死;
 //    这里钉的是**单测看不见的那一层**:CSS Grid 把 [x,y,w,h] 摆到哪里、指针位移换算成几格、
 //    「压到别人就回弹」在真 DOM 上成不成立、锁定态到底锁没锁住编辑。见 scripts/dashboard.check.cjs。
@@ -293,7 +293,7 @@ function DashHarness() {
   const leaf = { id: 'main', params, setTitle: () => {}, setParams: (p: Record<string, unknown>) => setParams(p) }
   return (
     <div className="amadeus-root am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0 }}>
-      <AmadeusDashboardView {...({ leaf, params } as unknown as ViewProps)} />
+      <DashboardCanvasView {...({ leaf, params } as unknown as ViewProps)} />
     </div>
   )
 }
@@ -803,6 +803,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   vault.set('Embedded.md', EMBED_MD)
   const writes: Array<{ path: string; text: string }> = []
   const listeners = new Set<(p: string) => void>()
+  let switchUPage: ((path: string) => void) | null = null
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
     writeTextFile: (p: string, text: string) => {
@@ -843,6 +844,10 @@ if (new URLSearchParams(location.search).has('dock')) {
     vault,
     writes,
     probe: upageProbe,
+    switchFile(path: string, text?: string) {
+      if (typeof text === 'string') vault.set(path, text)
+      switchUPage?.(path)
+    },
     fire(path: string, text: string) {
       vault.set(path, text)
       for (const cb of listeners) cb(path)
@@ -859,6 +864,13 @@ if (new URLSearchParams(location.search).has('dock')) {
     //    「切到另一篇却显示上一篇的模式」「路径对不上导致胶囊不显示」两类真 bug 一个都测不到。
     function UPageHost({ file }: { file?: string }): React.ReactElement {
       const [st, setSt] = useState({ path: file ?? 'Unified.md', initial: vault.get(file ?? 'Unified.md') ?? seedMd })
+      useEffect(() => {
+        switchUPage = (next) => {
+          usePageStore.getState().setActiveNotePath(next)
+          setSt({ path: next, initial: vault.get(next) ?? '' })
+        }
+        return () => { switchUPage = null }
+      }, [])
       // ⚠️ `&udelay` = **顶栏晚于编辑器到场**的时序(用户 2026-08-18 实报:开机还原到一篇 md 笔记时
       //    胶囊必不显示,点过别的笔记才出来)。生产里顶栏整块挂在 `barPath` 这道门后面,而 barPath
       //    要等一次异步分类才落定 —— 也就是说**插槽可能比 UnifiedPage 晚出现**。默认壳是两者同时到,

@@ -500,7 +500,16 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     } else {
       get().toggleSidebar(side) // 展开 → openView 同步还原 stash
     }
-    panelsAt(get().api!, side).find((p) => panelType(p) === type)?.api.setActive()
+    const sidePanels = panelsAt(get().api!, side)
+    const target = sidePanels.find((p) => panelType(p) === type)
+    if (target) target.api.setActive()
+    else {
+      // 旧布局 / 被用户关掉过的侧栏 tab 不在 stash 里:点击明确目标时应把它补回来,
+      // 与 singleColumnStore 的同名方法对齐。否则命令看似执行,侧栏却只展示别的 tab。
+      get().openView(type, {}, side)
+      const now = panelsAt(get().api!, side)
+      if (now.length > 1) now.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
+    }
     get().refreshTabs()
   },
   closeSideView: (side, type) => {

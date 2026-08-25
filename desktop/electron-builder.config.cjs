@@ -40,6 +40,10 @@ module.exports = {
   // 于是本开关对我们是空转的(`computeChannelNames()` 第一行就对 provider==='github' 返回单通道),
   // 留着只是为了将来换 generic 更新服务器时不必重想。
   generateUpdatesFilesForAllChannels: true,
+  // forsion:// deep link:mac 写进 Info.plist CFBundleURLTypes;win 由运行时 setAsDefaultProtocolClient
+  // 写注册表(NSIS 装机即生效);linux AppImage 无自动 .desktop 安装,用户需自行集成(appimaged 等)——
+  // electron-builder 会把 protocols 合入生成的 .desktop 的 MimeType(x-scheme-handler/forsion)。
+  protocols: [{ name: 'Forsion', schemes: ['forsion'] }],
   artifactName: product.artifactPrefix + '-${version}-${arch}.${ext}',
   files: [
     'out/**/*',

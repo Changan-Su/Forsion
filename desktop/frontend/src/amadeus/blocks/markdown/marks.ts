@@ -115,22 +115,25 @@ function htmlWrap(open: (n: MdNode) => string, close: string) {
   return handle
 }
 
-export const inlineHtmlMarksRemark = $remark('amadeusInlineHtmlMarks', () =>
-  function inlineHtmlMarks(this: any) {
-    const data = this.data()
-    const toMd = (data.toMarkdownExtensions ||= [])
-    toMd.push({
-      handlers: {
-        [U]: htmlWrap(() => '<u>', '</u>'),
-        [FG]: htmlWrap((n: MdNode) => `<span style="color:${n.color}">`, '</span>'),
-        [BG]: htmlWrap((n: MdNode) => `<mark style="background:${n.bg}">`, '</mark>'),
-      },
-    })
-    return (tree: MdNode): void => {
-      if (Array.isArray(tree?.children)) tree.children = foldTags(tree.children)
-    }
-  },
-)
+// 真身单独导出:$remark 包起来之后拿不回 unified 插件(要 ctx),而落盘正确性必须能单测。
+export function inlineHtmlMarksPlugin(this: any) {
+  const data = this.data()
+  const toMd = (data.toMarkdownExtensions ||= [])
+  toMd.push({
+    handlers: {
+      // 注:`~~`/`**`/`*` 的落盘修正不在这里 —— 扩展里的 handler 会被 milkdown 的
+      // `remarkStringifyOptionsCtx.handlers` 压掉,见 attentionFlanking.ts 文件头。
+      [U]: htmlWrap(() => '<u>', '</u>'),
+      [FG]: htmlWrap((n: MdNode) => `<span style="color:${n.color}">`, '</span>'),
+      [BG]: htmlWrap((n: MdNode) => `<mark style="background:${n.bg}">`, '</mark>'),
+    },
+  })
+  return (tree: MdNode): void => {
+    if (Array.isArray(tree?.children)) tree.children = foldTags(tree.children)
+  }
+}
+
+export const inlineHtmlMarksRemark = $remark('amadeusInlineHtmlMarks', () => inlineHtmlMarksPlugin)
 
 export const underlineSchema = $markSchema('amadeusUnderline', () => ({
   parseDOM: [{ tag: 'u' }],

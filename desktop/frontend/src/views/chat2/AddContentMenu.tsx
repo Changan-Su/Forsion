@@ -41,7 +41,7 @@ interface ViewCandidate {
   meta?: string
 }
 
-const OMIT_VIEW_TYPES = new Set(['chat', 'home', 'launcher', 'sidebar-empty'])
+const OMIT_VIEW_TYPES = new Set(['chat', 'chat-panel', 'home', 'launcher', 'sidebar-empty'])
 
 function uniqueViews(items: ViewCandidate[]): ViewCandidate[] {
   const seen = new Set<string>()

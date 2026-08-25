@@ -1370,6 +1370,60 @@ async function main() {
     await m2.close()
   })
 
+  // T43:'@' 提及的退出语义。用户实报「@ 之后整句都被当成提及对象,回车换不了行」——
+  //      两个独立故障叠在同一症状上,各钉一条:
+  //      ① 空格必须退出提及(此前只有方括号/换行/超长才退,`@张三 你好` 一路当查询串);
+  //      ② 无候选时面板 render 早退但 effect 照跑,看不见的面板仍在捕获阶段吞 Enter。
+  await tryTest('T43', async () => {
+    const p = await freshPage()
+    // 「换行发生了没」= 全体段落数 +1(Enter 可能拆块也可能在块内新起一段,两种都算换行成功)
+    const paras = () => p.locator('.md-block .ProseMirror p').count()
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('Meta+ArrowRight')
+    await p.keyboard.type('@笔记', { delay: 40 })
+    await p.waitForTimeout(300)
+    check('T43① "@笔记" → 提及面板弹出', (await p.locator('.wiki-suggest').count()) === 1)
+    await p.keyboard.type(' ', { delay: 40 })
+    await p.waitForTimeout(300)
+    check('T43① 空格后面板关(退出提及语义)', (await p.locator('.wiki-suggest').count()) === 0)
+    await p.keyboard.type('你好', { delay: 40 })
+    const n1 = await paras()
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(500)
+    check('T43① "@x 你好" 后回车能换行', (await paras()) === n1 + 1, `paras ${n1} → ${await paras()}`)
+    await p.close()
+
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.press('Meta+ArrowRight')
+    await q.keyboard.type('@zzz', { delay: 40 })
+    await q.waitForTimeout(300)
+    check('T43② 无候选 → 面板不显示', (await q.locator('.wiki-suggest').count()) === 0)
+    const n2 = await q.locator('.md-block .ProseMirror p').count()
+    await q.keyboard.press('Enter')
+    await q.waitForTimeout(500)
+    const n3 = await q.locator('.md-block .ProseMirror p').count()
+    check('T43② 无候选时回车不被隐形面板吞掉', n3 === n2 + 1, `paras ${n2} → ${n3}`)
+    await q.close()
+
+    // ③ 有候选 → 空格(候选归零)→ **不等待**直接回车。钉的是「监听器在提交时同步摘掉」:
+    //    被动 effect 的 cleanup 排在提交之后,那段窗口里旧监听器还挂在 window 上(Codex 评审)。
+    const r = await freshPage()
+    await r.locator('.md-block .ProseMirror').first().click()
+    await r.keyboard.press('Meta+ArrowRight')
+    await r.keyboard.type('@笔记', { delay: 40 })
+    await r.waitForTimeout(300)
+    const n4 = await r.locator('.md-block .ProseMirror p').count()
+    await r.keyboard.type(' ', { delay: 0 })
+    await r.keyboard.press('Enter')
+    await r.waitForTimeout(500)
+    const n5 = await r.locator('.md-block .ProseMirror p').count()
+    check('T43③ 候选归零后立刻回车仍能换行(监听器同步摘除)', n5 === n4 + 1, `paras ${n4} → ${n5}`)
+    const t3 = await r.locator('.md-block .ProseMirror').first().innerText()
+    check('T43③ "@笔记 " 留成字面(未被吞成双链)', t3.includes('@笔记') && !t3.includes('[['), `text=${JSON.stringify(t3)}`)
+    await r.close()
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

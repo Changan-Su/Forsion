@@ -43,7 +43,15 @@ export interface SlashContribution {
   keywords?: string
 }
 
-/** A command surfaced in the command palette (Cmd/Ctrl+K). */
+/** A command surfaced in the command palette (Cmd/Ctrl+K).
+ *
+ * Navigation only (open a view, switch a panel). Real *actions* — parameterized, headless-able work
+ * like "analyze this link" — must NOT be registered as commands: `run(): void` has no parameter slot,
+ * and the command table lives in the renderer where the chat agent and automation cannot reach it.
+ * Ship such capabilities as engine-side bundle assets instead (`agents/<slug>/` + `skills/`) — the
+ * agent invokes them via `delegate(agentSlug)`, automation via the `agent_run` action.
+ * (2026-08-24 引擎原生路拍板; pattern: the bluebird workbench UI stays renderer-side while its
+ * analysis pipeline is the bundled `bluebird` agent.) */
 export interface CommandContribution {
   id: string
   title: string
@@ -329,6 +337,73 @@ export interface ViewContribution {
   mount(el: HTMLElement): (() => void) | void
   /** Default true: at most one instance app-wide (re-opening focuses the existing one). */
   singleton?: boolean
+  /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main
+   *  view, the unified workspace sidebar auto-switches to that list. Old hosts ignore it. */
+  workspaceSource?: string
+}
+
+/** One row in a plugin list source (kept deliberately flat — no tree). */
+export interface ListItem {
+  /** Stable key within the source (dedupe / React key). */
+  key: string
+  title: string
+  /** Optional static section header; items sharing a group render under one collapsible section.
+   *  Ignored when the source declares `groups()` — those are selectable filters, not sections. */
+  group?: string
+  /** Optional dim text on the right (count, date, status). */
+  hint?: string
+  /** Leading icon, by name from the host icon vocabulary (same table as manifest icons —
+   *  keys are [a-z0-9-]; unknown names fall back to the generic row icon). Use it to keep
+   *  per-item recognisability (e.g. one icon per source platform) inside the shared row UI. */
+  icon?: string
+}
+
+/** A selectable filter row (≈ a folder). The host owns which one is active and passes the
+ *  selection back through `items()` — the plugin stays stateless about the UI. */
+export interface ListGroup {
+  key: string
+  title: string
+  /** Leading icon by vocabulary name (same as ListItem.icon); defaults to a folder glyph. */
+  icon?: string
+  /** Shown right-aligned; the plugin computes it (the host does not count for you). */
+  count?: number
+}
+
+/** A button the host renders for a list source (top bar, group header, or context menu). */
+export interface ListAction {
+  id: string
+  label: string
+  run(): void
+}
+
+/** A list source a plugin can contribute to the unified workspace sidebar (View 基座 P2).
+ *  The host renders it with the same UI as the built-in session/note lists and wires it into
+ *  the sidebar's auto mode: a view registered with `workspaceSource` pointing at this source
+ *  makes the sidebar switch to this list whenever that view is the active main view.
+ *  Registered as `plugin:<pluginId>:<sourceId>`; disappears when the plugin is disabled. */
+export interface ListSourceContribution {
+  /** Source id, unique within the plugin (kebab-case recommended). */
+  id: string
+  /** Section title shown above the list. */
+  title: string
+  /** Current items snapshot, already filtered by the host-owned search text and selected group.
+   *  Called on every render — keep it cheap (cache inside the plugin). */
+  items(filter?: { query?: string; group?: string }): ListItem[]
+  /** Notify the host when items() changed. Return an unsubscribe. */
+  subscribe(cb: () => void): () => void
+  /** Open one item (the plugin decides what that means — usually ctx.openView / ctx.app.openFile). */
+  open(item: ListItem, opts?: { newTab?: boolean }): void
+  /** Render the shared search box above the list; the text arrives via `items({ query })`. */
+  search?: boolean
+  /** Selectable filter rows (folders). The host renders them with an "all" row on top, tracks the
+   *  selection, and passes it back via `items({ group })`. */
+  groups?(): ListGroup[]
+  /** Buttons above the whole list (e.g. "New analysis"). */
+  actions?: ListAction[]
+  /** Buttons on the groups section header (e.g. "New folder"). */
+  groupActions?: ListAction[]
+  /** Right-click menu for one row (e.g. "Move to…", "Delete"). */
+  itemMenu?(item: ListItem): ListAction[]
 }
 
 /** A custom file type a plugin owns end-to-end (like the built-in Excalidraw whiteboard): its own tree
@@ -487,9 +562,13 @@ export interface PluginContext {
   registerEmbedRenderer(def: EmbedRendererContribution): void
   /** Contribute a "新建 …" entry into the file tree's right-click menu (root + folder). See FileCreatorContribution. */
   registerFileCreator(def: FileCreatorContribution): void
-  /** Open (or focus) one of this plugin's own registered views in the main area.
-   *  No-op on hosts without a workbench (e.g. the standalone notes app). */
-  openView(viewId: string): void
+  /** Open (or focus) one of this plugin's own registered views. Defaults to the main area;
+   *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
+   *  ignore the option and open in main). No-op on hosts without a workbench. */
+  openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' }): void
+  /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
+   *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
+  registerListSource?(src: ListSourceContribution): void
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:

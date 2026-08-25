@@ -97,7 +97,7 @@ export const BUILTINS: BuiltinDef[] = [
     description: () => tr('browser.desc'),
     available: () => !!window.tangu, // Electron preload 在场 = <webview> 可用
     install() {
-      registerView({ type: 'browser', displayName: () => tr('browser.title'), icon: Globe, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><BrowserView {...props} /></Suspense>, closable: true, singleton: false })
+      registerView({ type: 'browser', kind: 'page', displayName: () => tr('browser.title'), icon: Globe, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><BrowserView {...props} /></Suspense>, closable: true, singleton: false })
       addCommand({ id: 'builtin-browser-open', title: () => tr('browser.open'), icon: Globe, keywords: 'browser web url 浏览器 网页', run: () => openBrowser() })
     },
   },
@@ -108,7 +108,7 @@ export const BUILTINS: BuiltinDef[] = [
     description: () => tr('terminal.desc'),
     available: () => !!window.tangu?.pty,
     install() {
-      registerView({ type: 'terminal', displayName: () => tr('terminal.title'), icon: TerminalSquare, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><TerminalView {...props} /></Suspense>, closable: true, singleton: false })
+      registerView({ type: 'terminal', kind: 'page', displayName: () => tr('terminal.title'), icon: TerminalSquare, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><TerminalView {...props} /></Suspense>, closable: true, singleton: false })
       addCommand({ id: 'builtin-terminal-open', title: () => tr('terminal.open'), icon: TerminalSquare, keywords: 'terminal shell console 终端 命令行', run: () => openTerminal() })
     },
   },

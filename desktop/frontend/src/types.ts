@@ -100,6 +100,8 @@ export interface SessionRecord {
   /** 项目工作区(本机模式;云端会话为 null → 侧栏归「未分组」)。 */
   project_path?: string | null
   project_name?: string | null
+  /** Codex 式无根会话:不属于本地目录或 Cloud Project,运行在会话自己的隔离沙箱。 */
+  projectless?: boolean
   created_at: string
   updated_at: string
 }
@@ -388,14 +390,14 @@ export interface AgentConfig {
 /** 通道类型(微信/Telegram/QQ;与引擎 channels/types.ts 对齐)。 */
 export type ChannelKind = 'wechat' | 'telegram' | 'qq'
 
-/** 侧栏工作区:Cloud Project(云沙箱,文件落 Penzor Cloud-Workspaces/Projects/<名>)或本地目录(host 执行,cwd=path)。 */
+/** 侧栏工作区:Cloud Project、本地目录、通道目录或不绑定项目的无根会话组。 */
 export interface WorkspaceDescriptor {
-  /** 分组键:cloud 用 cloudProjectKey(project);本地用绝对路径(= project_path)。 */
+  /** 分组键:cloud 用 cloudProjectKey(project);本地用绝对路径;rootless 用固定哨兵。 */
   key: string
   name: string
-  /** channel = 通道专属工作区文件夹(webot/tgbot/qqbot;会话按 project_path 归入)。 */
-  kind: 'cloud' | 'local' | 'channel'
-  /** 本地工作目录绝对路径;cloud 为 null。 */
+  /** channel = 通道专属文件夹;rootless = 不在项目中工作。 */
+  kind: 'cloud' | 'local' | 'channel' | 'rootless'
+  /** 本地工作目录绝对路径;cloud/rootless 为 null。 */
   path: string | null
   /** 常驻系统工作区(默认云 Project / Tangu 默认本地区):不可重命名 / 移除。 */
   system?: boolean
@@ -408,6 +410,9 @@ export interface WorkspaceDescriptor {
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */
 export const CLOUD_WORKSPACE_KEY = '__cloud__'
 
+/** 「不在项目中工作」会话组。单独列哨兵,不与旧的默认 Cloud Project 会话混淆。 */
+export const ROOTLESS_WORKSPACE_KEY = '__rootless__'
+
 /** 默认云 Project 名(新会话未选时的「Tangu」默认工作区项目;与引擎 DEFAULT_PROJECT_NAME 一致)。 */
 export const DEFAULT_CLOUD_PROJECT = 'Tangu'
 
@@ -417,8 +422,8 @@ export const cloudProjectKey = (project?: string | null): string =>
 
 /** 会话 → 工作区分组键:本地按 project_path;云会话按 project_name 归组(旧会话
  *  project_name 为空 → 归默认 Tangu 组,文件视图仍走其 per-session 工作区,不迁移)。 */
-export const sessionWorkspaceKey = (s: { project_path?: string | null; project_name?: string | null }): string =>
-  s.project_path || cloudProjectKey(s.project_name)
+export const sessionWorkspaceKey = (s: { project_path?: string | null; project_name?: string | null; projectless?: boolean }): string =>
+  s.projectless ? ROOTLESS_WORKSPACE_KEY : s.project_path || cloudProjectKey(s.project_name)
 
 export interface MessageRecord {
   id: string
@@ -1014,8 +1019,10 @@ declare global {
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }>
-      /** 开/切换 mini 悬浮卡片(命令 + 全局快捷键共用)。 */
-      openMini?(): void
+      /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
+      openMini?(opts?: { sessionId?: string }): void
+      /** 已存在的 Mini 窗收到新的会话定向。返回取消订阅。 */
+      onMiniTarget?(cb: (opts: { sessionId?: string }) => void): () => void
       /** 关闭当前(卫星)窗口。 */
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */

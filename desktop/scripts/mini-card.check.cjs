@@ -6,7 +6,8 @@
  * ② mini 不再挂 mobile 的双层顶栏 / push 抽屉,也不再 zoom 整个 feature 视图;
  * ③ 新对话空状态会为悬浮 composer 让位,二者不重叠;
  * ④ 标签/更多使用卡内 popover,不会变回覆盖大半窗口的 bottom sheet;
- * ⑤ 亮暗主题都留一张真实 Electron 截图供人工复核。
+ * ⑤ 从主窗带 sessionId 打开时,Mini 复用原壳并定向到同一份正式会话;
+ * ⑥ 亮暗主题都留一张真实 Electron 截图供人工复核。
  *
  * 跑:npm run build && npm run check:minicard
  */
@@ -55,11 +56,29 @@ async function main() {
     })
     const mainWin = await app.firstWindow()
     await mainWin.waitForSelector('#root', { timeout: 30_000 })
-    await mainWin.evaluate(() => window.tangu?.openMini?.())
+    const targetSessionId = 'mini-card-check-session'
+    const loadingSessionId = `${targetSessionId}-while-loading`
+    await mainWin.evaluate(({ first, latest }) => {
+      window.tangu?.openMini?.({ sessionId: first })
+      window.tangu?.openMini?.({ sessionId: latest })
+    }, { first: targetSessionId, latest: loadingSessionId })
 
     const mini = await waitForMini(app)
     await mini.waitForSelector('.mini-card-shell', { timeout: 30_000 })
+    await mini.waitForSelector(`[data-chat-surface="chat"][data-session-id="${loadingSessionId}"]`, { timeout: 30_000 })
     await mini.waitForTimeout(350)
+
+    const target = await mini.evaluate(() => ({
+      query: new URLSearchParams(location.search).get('sessionId'),
+      rendered: document.querySelector('.t2-chat-view')?.getAttribute('data-session-id') || null,
+      surfaces: Array.from(document.querySelectorAll('.t2-chat-view')).map((el) => el.getAttribute('data-chat-surface')),
+    }))
+    check('带 sessionId 打开 Mini → 同一正式会话', target.query === targetSessionId && target.rendered === loadingSessionId && target.surfaces.includes('chat'), JSON.stringify(target))
+
+    const updatedSessionId = `${targetSessionId}-updated`
+    await mainWin.evaluate((sessionId) => window.tangu?.openMini?.({ sessionId }), updatedSessionId)
+    await mini.waitForSelector(`[data-chat-surface="chat"][data-session-id="${updatedSessionId}"]`, { timeout: 30_000 })
+    check('Mini 已显示时改目标 → 原窗口就地切会话', app.windows().filter((win) => win.url().includes('window=mini')).length === 1, `windows=${app.windows().length}`)
 
     const bounds = await app.evaluate(({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows().find((item) => item.webContents.getURL().includes('window=mini'))

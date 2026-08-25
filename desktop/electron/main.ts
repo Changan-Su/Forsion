@@ -16,7 +16,8 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
-import { startForsionMcp } from './mcpServer'
+import { startForsionMcp, publishExternalEndpoint, unpublishExternalEndpoint } from './mcpServer'
+import { randomBytes } from 'node:crypto'
 import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
   forsionRefreshToken, shouldRefreshToken,
@@ -49,6 +50,7 @@ import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
+import { isForsionUrl, pushDeepLink, drainDeepLinks } from './deepLink'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -65,7 +67,29 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
 if (!app.requestSingleInstanceLock()) app.exit(0)
-app.on('second-instance', () => showMainWindow())
+app.on('second-instance', (_e, argv) => {
+  showMainWindow()
+  for (const a of argv) if (isForsionUrl(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
+})
+
+// ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
+// 正典:docs/ToBeImproved/View基座统一化方案_2026-08-25.md §4。只导航不执行;白名单在渲染层 resolver。
+// 系统 handler 仅打包版注册:dev 注册会把裸 electron 二进制写进 LaunchServices/注册表,污染整机。
+if (app.isPackaged) app.setAsDefaultProtocolClient('forsion')
+/** 渲染层已 drain 过 → 之后直推;窗口 reload/重建把它翻回 false(Cmd+R 会换掉监听者,推进虚空)。 */
+let deepLinkReady = false
+function deliverDeepLink(url: string): void {
+  pushDeepLink(url)
+  if (!app.isReady()) return // 冷启动:窗口未建;whenReady 建窗后渲染层自会来 drain
+  showMainWindow()
+  if (deepLinkReady && mainWindow && !mainWindow.isDestroyed()) {
+    for (const u of drainDeepLinks()) mainWindow.webContents.send('app:deep-link', u)
+  }
+}
+// mac:open-url 必须在 whenReady 之前挂上,冷启动经 Dock/浏览器唤起的 URL 才接得到。
+app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) deliverDeepLink(url) })
+// win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
+for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
 
 /**
  * 加载 ~/.tangu/.env 进 process.env(不覆盖真实环境;与包内 tanguHome.loadTanguEnv 同语义)。
@@ -618,28 +642,43 @@ let mainWindow: BrowserWindow | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
 
-// 对外 MCP 端点(electron/mcpServer.ts):由设置「高级」开关起停。开=外部 agent 可调桌面能力。
+// MCP 端点(electron/mcpServer.ts):**常驻**(08-24 引擎原生路 P1)——App 启动即起,给引擎当
+// ASR 桥(transcribe_audio,凭每次启动随机的 bridgeSecret)。设置「高级」开关只管**外部 agent 面**:
+// 开=接受 localSecret + 发布 forsion-mcp.json;关=拒外部密钥 + 删发现文件(知情启用的同意语义)。
 let mcpHandle: Awaited<ReturnType<typeof startForsionMcp>> | null = null
+let mcpExternalEnabled = false
+const mcpBridgeSecret = randomBytes(24).toString('hex')
+/** 主进程 ASR 的路径面(在 ipc 注册段与 runTranscribe 一起定义后赋值;桥调用时兜空)。 */
+let mcpTranscribeFile:
+  | ((p: string, req: { timestamps?: boolean; language?: string }) => Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }>)
+  | null = null
 async function applyForsionMcp(enabled: boolean): Promise<void> {
   try {
-    if (enabled && !mcpHandle) {
+    mcpExternalEnabled = enabled
+    if (!mcpHandle) {
       mcpHandle = await startForsionMcp({
         getEngine: () => ({ url: backend.getStatus().url, token: backend.getToken() }),
         localSecret: backend.localSecret(),
+        bridgeSecret: mcpBridgeSecret,
+        externalEnabled: () => mcpExternalEnabled,
+        transcribeFile: (p, req) => {
+          if (!mcpTranscribeFile) return Promise.reject(new Error('ASR 未初始化'))
+          return mcpTranscribeFile(p, req)
+        },
         homeDir: forsionHomeDir(),
         log: (m) => console.log(m),
       })
-    } else if (!enabled && mcpHandle) {
-      mcpHandle.close()
-      mcpHandle = null
     }
+    if (enabled) publishExternalEndpoint(forsionHomeDir(), mcpHandle.url, backend.localSecret(), (m) => console.log(m))
+    else unpublishExternalEndpoint(forsionHomeDir(), (m) => console.log(m))
   } catch (e) {
     console.error('[mcp] apply enabled failed:', e)
   }
 }
-/** 渲染端「高级」页展示用:是否在跑 + 端点 + 守门密钥(供拼 `claude mcp add` 命令)。 */
+/** 渲染端「高级」页展示用:开关语义不变——running/url 只反映**外部 agent 面**是否开启(桥面常驻不展示)。 */
 function forsionMcpStatus(): { running: boolean; url: string | null; token: string } {
-  return { running: !!mcpHandle, url: mcpHandle?.url ?? null, token: backend.localSecret() }
+  const on = mcpExternalEnabled && !!mcpHandle
+  return { running: on, url: on ? mcpHandle!.url : null, token: backend.localSecret() }
 }
 
 // ── 设备互联(方案 §11,B 端渲染):「允许其他设备连接本机」开关起停两件东西 ──────────────
@@ -1136,6 +1175,9 @@ function createWindow(): void {
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
+  // deep link 推送门:reload(Cmd+R)换掉渲染层监听者但 webContents 不变 → 每次开载都翻回「未就绪」,
+  // 等新一代渲染层来 drain(否则 push 进虚空,URL 丢失)。
+  mainWindow.webContents.on('did-start-loading', () => { deepLinkReady = false })
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -1254,7 +1296,11 @@ async function restoreDetachedWindows(): Promise<void> {
   for (const { id, bounds } of [...persistedDetached]) createDetachedWindow({ id, bounds })
 }
 
+interface MiniOpenOptions { sessionId?: string }
+
 let miniWindow: BrowserWindow | null = null
+/** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
+let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
 let miniDock: { edge: Edge; expanded: boolean } | null = null
 let suppressMiniMoved = false // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
@@ -1268,7 +1314,15 @@ const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细�
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
 
-function createMiniWindow(): void {
+function normalizeMiniOpenOptions(raw: unknown): MiniOpenOptions | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const id = (raw as { sessionId?: unknown }).sessionId
+  if (typeof id !== 'string' || !id.trim()) return undefined
+  return { sessionId: id.trim() }
+}
+
+function createMiniWindow(opts?: MiniOpenOptions): void {
+  miniTarget = opts
   const width = MINI_CARD_WIDTH
   const height = MINI_CARD_HEIGHT
   const wa = screen.getPrimaryDisplay().workArea
@@ -1289,17 +1343,26 @@ function createMiniWindow(): void {
   miniWindow.setAlwaysOnTop(true, 'floating')
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
+  miniWindow.webContents.on('did-finish-load', () => {
+    if (miniTarget?.sessionId && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+  })
   miniWindow.on('moved', onMiniMoved)
-  miniWindow.on('closed', () => { console.log('[win] mini closed'); miniWindow = null; miniDock = null; stopMiniPoll() })
+  miniWindow.on('closed', () => { console.log('[win] mini closed'); miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
   console.log('[win] mini open')
-  loadRendererWith(miniWindow, { window: 'mini', ui: 'mobile' })
+  loadRendererWith(miniWindow, { window: 'mini', ui: 'mobile', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
 
-function toggleMiniWindow(): void {
+function toggleMiniWindow(opts?: MiniOpenOptions): void {
   if (miniWindow && !miniWindow.isDestroyed()) {
-    if (miniWindow.isVisible()) miniWindow.hide()
+    // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
+    if (opts?.sessionId) {
+      miniTarget = opts
+      if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
+      miniWindow.show()
+      miniWindow.focus()
+    } else if (miniWindow.isVisible()) miniWindow.hide()
     else { miniWindow.show(); miniWindow.focus() }
-  } else createMiniWindow()
+  } else createMiniWindow(opts)
 }
 
 /** 设 bounds;mac 传 animate=true 走原生滑动动画(修「无动画」),win/linux 瞬时。程序化移动抑制 moved 自激。 */
@@ -2176,12 +2239,16 @@ app.whenReady().then(async () => {
 
   // 按路径转写:视频转录动辄几十 MB WAV,走 base64 过 IPC 既撑爆消息又白涨 33%(且 fs:readFile 有 50MB 闸)。
   // 主进程直接读盘。路径由调用方给(与 fs:readFile 同口径,不额外设沙箱)。
-  ipcMain.handle('asr:transcribeFile', async (_e, filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) => {
+  const transcribeFileByPath = async (filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) => {
     if (!filePath || typeof filePath !== 'string') throw new Error('非法的音频路径')
     const audio = await readFile(filePath)
     const ext = (filePath.split('.').pop() || '').toLowerCase()
     return runTranscribe(audio, { ...(req || {}), mime: req?.mime || (ext === 'wav' ? 'audio/wav' : ext === 'mp3' ? 'audio/mpeg' : ext === 'm4a' ? 'audio/mp4' : 'application/octet-stream') })
-  })
+  }
+  ipcMain.handle('asr:transcribeFile', async (_e, filePath: string, req?: { mime?: string; modelId?: string; language?: string; timestamps?: boolean }) =>
+    transcribeFileByPath(filePath, req))
+  // MCP 桥(transcribe_audio)复用同一条路径面:引擎侧 needs_asr 接力不再必须经渲染端插件。
+  mcpTranscribeFile = (p, req) => transcribeFileByPath(p, req)
 
   // ── 本地语音模型(SenseVoice)下载 / 状态 / 删除。下载进度经 'asr:localProgress' 推回发起窗口。──
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
@@ -2299,6 +2366,12 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('app:version', () => app.getVersion())
+  // forsion:// 待处理队列:仅主窗顶层可拉(卫星窗不是 deep link 目标);拉过=就绪,后续直推。
+  ipcMain.handle('deeplink:drain', (e) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return []
+    deepLinkReady = true
+    return drainDeepLinks()
+  })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
   ipcMain.handle('updater:check', () => checkForUpdates())
@@ -2684,7 +2757,10 @@ app.whenReady().then(async () => {
     const bounds = at ? { x: Math.round(at.screenX), y: Math.round(at.screenY), width: 900, height: 680 } : undefined
     return { id: createDetachedWindow({ views: list, bounds }) }
   })
-  ipcMain.on('window:openMini', () => toggleMiniWindow())
+  ipcMain.on('window:openMini', (e, raw: unknown) => {
+    if (!isTrustedSender(e)) return
+    toggleMiniWindow(normalizeMiniOpenOptions(raw))
+  })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),
   // 别的 scheme 经 openExternal 等于让页面唤起任意本机协议处理器。scheme 用 URL 解析比对,

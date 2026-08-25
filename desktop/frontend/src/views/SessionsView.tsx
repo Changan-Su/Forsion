@@ -6,6 +6,7 @@ import { useApp } from '../stores/appStore'
 import { openSpecial } from './SpecialViews'
 import { openSession, openNewChat } from '../sessionNav'
 import { useShallow } from 'zustand/react/shallow'
+import { usePageStore } from '../amadeus/store/pageStore'
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */
@@ -38,6 +39,7 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
   })))
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
+  const amadeusRoot = usePageStore((state) => state.vaultRoot)
 
   // 侧过滤:会话的云/本地归属 = project_path 有无(appStore 同判据);工作区按 kind。
   const inSide = (p: string | null | undefined): boolean => (sideFilter === 'cloud' ? !p : !!p)
@@ -48,8 +50,8 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
   const workspaces = useMemo(() => {
     const all = s.workspaces()
     if (!sideFilter) return all
-    return all.filter((w) => (sideFilter === 'cloud' ? w.kind === 'cloud' : w.kind !== 'cloud'))
-  }, [s, sideFilter])
+    return all.filter((w) => (sideFilter === 'cloud' ? w.kind === 'cloud' || w.kind === 'rootless' : w.kind !== 'cloud' && w.kind !== 'rootless'))
+  }, [s, sideFilter, amadeusRoot])
 
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>

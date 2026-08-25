@@ -390,22 +390,42 @@
    (0,1,0),排在后面胜出 —— 以前两边都是 16px 看不出来,现在会把按钮按回卡里。 */
 .t2-jump { position: absolute; right: 22px; z-index: 12; }
 .t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 96px) + 16px); }
-.t2-quote {
+.t2-quote-menu {
   position: absolute;
   transform: translateX(-100%);
   z-index: 20;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
   border: var(--border-width, 1px) solid var(--border);
   border-radius: 999px;
   background: var(--bg-card);
   color: var(--text);
   box-shadow: var(--card-shadow);
+}
+.t2-quote-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 11px;
+  border: 0;
+  border-right: var(--border-width, 1px) solid var(--border);
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   font: inherit;
   font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.t2-quote-action:last-child { border-right: 0; }
+.t2-quote-action:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+.t2-quote-action:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+.t2-quote-action svg { flex: 0 0 auto; }
+
+@container (max-width: 360px) {
+  .t2-quote-action { padding-inline: 8px; }
 }
 
 @media (max-width: 1040px) {

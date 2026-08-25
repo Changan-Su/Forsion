@@ -96,12 +96,16 @@ export function currentDisplayAgentSlug(): string | undefined {
 /**
  * 在子作用域内临时把 agentSlug 改成另一个(子代理:让被委派的具名 agent 的 remember/log_event
  * 落到它自己的文件夹),fn 结束后**自动恢复**父作用域。用 als.run(非 enterWith)故不污染父 run。
+ *
+ * displayAgentSlug 可单独给:记忆作用域与身份作用域不是一回事——shareDefaultMemory 的 agent
+ * memSlug=DEFAULT,但技能/展示身份(listLocalSkills 按 displayAgentSlug 叠 agents/<slug>/skills)
+ * 仍应是它自己。缺省 = 与 agentSlug 相同(既有调用方语义不变)。
  */
-export function runWithAgentSlug<T>(agentSlug: string, fn: () => Promise<T>): Promise<T> {
+export function runWithAgentSlug<T>(agentSlug: string, fn: () => Promise<T>, displayAgentSlug?: string): Promise<T> {
   const cur = als.getStore();
   return als.run({
     ...(cur ?? { userId: '' }),
     agentSlug,
-    displayAgentSlug: agentSlug,
+    displayAgentSlug: displayAgentSlug ?? agentSlug,
   }, fn);
 }

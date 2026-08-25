@@ -54,3 +54,19 @@ export function planSessionOpen(
   if (focused.type === 'chat' && focused.followActive !== false) return { act: 'follow' }
   return { act: 'pin' }
 }
+
+/** 切 Space 时的「当前会话」交接:老 Space 那条存进账本,取新 Space 上次那条(从没进过 / 已删 → null = 空白新对话)。
+ *  为什么要分账:所有跟随档 chat leaf 共用同一个全局 activeId,不分账的话 Tangu 主 tab 里开的会话会原样
+ *  出现在 Amadeus/Coding 侧栏那份陪伴聊天里,且双向互拖(2026-08-23 用户实报)。Space **内部**的跟随不变
+ *  (点会话列表 → 同 Space 的陪伴聊天照旧跟着切,Coding Space 的左栏 Prompt 靠这个)。 */
+export function planSpaceSwitch(
+  ledger: Map<string, string | null>,
+  from: string,
+  to: string,
+  current: string | null,
+  alive: (id: string) => boolean,
+): string | null {
+  ledger.set(from, current)
+  const next = ledger.get(to) ?? null
+  return next && alive(next) ? next : null
+}

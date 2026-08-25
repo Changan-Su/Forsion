@@ -10,7 +10,7 @@ export function WidgetCard({ widget }: { widget: Widget }) {
   if (widget.kind === 'clock') return <ClockWidget opts={widget.opts} />
   if (widget.kind === 'weather') return <WeatherWidget opts={widget.opts} />
   if (widget.kind === 'webview') return <WebviewWidget opts={widget.opts} />
-  return null // 'view' 卡片在 AmadeusDashboardView 里活化(要宿主的视图注册表)
+  return null // 'view' 卡片在 views/dashboardViewCard.tsx 里活化(要宿主的视图注册表)
 }
 
 // ───────────────────────────────── 时钟 ─────────────────────────────────

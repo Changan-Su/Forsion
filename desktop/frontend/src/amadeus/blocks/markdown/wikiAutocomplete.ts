@@ -132,7 +132,11 @@ export function mentionSuggestPlugin(report: (q: WikiQuery | null) => void) {
             if (at < 0) return report(null)
             if (at > 0 && !/\s/.test(before[at - 1])) return report(null) // 邮箱等:@ 前非空白不触发
             const q = before.slice(at + 1)
-            if (q.length > 30 || /[[\]\n]/.test(q)) return report(null)
+            // 空格(含 nbsp)/换行/方括号/'￼' → 退出提及语义,留成字面文本(同 slash)。空格这条是
+            // 用户实报:`@张三 你好` 整句被当成提及查询,面板赖着不走 → Enter 被它劫持,换不了行。
+            // 多词页面照样提及:fuzzyScore 是子序列匹配,`@MeetingNotes` 命中 “Meeting Notes”。
+            // '￼' = 行内图片/公式 leaf 占位:pickMention 替换 [from-1, to),夹在中间会被一并删掉。
+            if (q.length > 30 || /[\s[\]\n￼]/.test(q)) return report(null)
             const from = $head.start() + at + 1
             const to = selection.head
             let coords: { left: number; top: number; bottom: number }

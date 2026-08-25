@@ -4,7 +4,7 @@
  * 上下文菜单与归档区复刻侧栏(Sidebar.tsx)同款模式,复用 ctx-menu 样式与 sidebar.* 文案。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Plus, Folder, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Folder, FolderX, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown } from 'lucide-react'
 import type { SessionRecord, WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
 import { OverlayAt } from '@lcl/engine'
@@ -98,7 +98,7 @@ export const WorkspaceDetailView: React.FC<{
     <div className="wsd">
       <div className="wsd-inner">
         <div className="wsd-head">
-          {workspace.kind === 'cloud' ? <Cloud size={16} /> : <Folder size={16} />}
+          {workspace.kind === 'cloud' ? <Cloud size={16} /> : workspace.kind === 'rootless' ? <FolderX size={16} /> : <Folder size={16} />}
           <span className="wsd-title">{workspace.name}</span>
           <span className="wsd-count">{t('ws.detail.count', { n: active.length })}</span>
         </div>

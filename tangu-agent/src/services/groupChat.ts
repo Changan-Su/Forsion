@@ -52,6 +52,8 @@ export interface GroupChatParams {
   modelId: string;
   execMode: 'sandbox' | 'host';
   cwd?: string;
+  /** 与主 loop 同一套额外可写根(含 Forsion 注入的活动 Amadeus Vault)。 */
+  extraRoots?: string[];
   /** 云端 Project 工作区名(主 loop 已按 host 门/合法性算好);群聊发言人工具与主 loop 落同一工作区。 */
   wsProject?: string | null;
   profile: AppProfile;
@@ -254,7 +256,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
 
 /** 一个 agent 的「发言」轮:私有上下文上的小 agentic loop(完整工具 + 流式),返回最终发言文本。 */
 async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupChatParams, meter: Meter): Promise<{ text: string; cost: number }> {
-  const { runId, sessionId, appId, execMode, cwd, profile, signal } = p;
+  const { runId, sessionId, appId, execMode, cwd, extraRoots, profile, signal } = p;
   const llm = deps().brain.llm;
   const effModelId = agent.model || p.modelId;
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(effModelId);
@@ -266,7 +268,7 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
   let turnDefsDirty = false;
   const toolCtx: ToolContext = {
     userId: p.userId, sessionId, appId, runId, signal,
-    execMode, cwd, approvalMode, profile, modelId: effModelId, planMode: false, muse: false,
+    execMode, cwd, extraRoots, approvalMode, profile, modelId: effModelId, planMode: false, muse: false,
     wsProject: p.wsProject,
     // 群聊发言人不可再起讨论(start_discussion/wait_discussion 隐藏)——防递归裂变。
     inDiscussion: true,
@@ -316,7 +318,7 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
     for (const call of res.toolCalls) {
       if (signal.aborted) throw new AbortLikeError();
       await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, agentId: agent.slug });
-      const decision = await gateToolCall(runId, call, { sessionId, execMode, approvalMode, cwd }, signal);
+      const decision = await gateToolCall(runId, call, { sessionId, execMode, approvalMode, cwd, extraRoots }, signal);
       let content: string;
       let isError = false;
       if (decision.action === 'reject') {

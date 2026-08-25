@@ -23,6 +23,7 @@ export async function buildSessionLogPayload(cfg: TanguDesktopConfig, session: S
     session: {
       id: session.id, title: session.title, model_id: session.model_id,
       project_path: session.project_path ?? null, project_name: session.project_name ?? null,
+      projectless: !!session.projectless,
       created_at: session.created_at, updated_at: session.updated_at,
     },
     agentConfig,

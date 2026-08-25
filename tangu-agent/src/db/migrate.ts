@@ -311,12 +311,14 @@ export async function runMigration(): Promise<void> {
     console.warn('[agent-core] chat_sessions.todos 列迁移失败：', e?.message || e);
   }
 
-  // 项目工作区(桌面本机模式会话按项目分组;云端会话恒 NULL,零影响)。幂等。
+  // 项目工作区(本地/Cloud Project/无根会话显式分型)。幂等。
   try {
     await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS project_path TEXT`);
     await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS project_name VARCHAR(255)`);
+    // 不能拿 project_path/project_name 都为空来推断:历史默认 Cloud 会话也是双空。
+    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS projectless BOOLEAN NOT NULL DEFAULT FALSE`);
   } catch (e: any) {
-    console.warn('[agent-core] chat_sessions.project_* 列迁移失败：', e?.message || e);
+    console.warn('[agent-core] chat_sessions project workspace 列迁移失败：', e?.message || e);
   }
 
   // 图片附件链路:hydrateHistory 读 chat_messages.attachments(新基础 schema 已内联;

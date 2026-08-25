@@ -231,8 +231,23 @@
 .am-app .embed-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-app .embed-file-open { flex: 0 0 auto; font-size: 11.5px; color: var(--text-muted); }
 
-/* 拖入文件高亮:编辑器四周虚线提示可放下。 */
-.amx-editor.amx-dragover { outline: 2px dashed var(--accent, var(--primary)); outline-offset: -8px; border-radius: 12px; }
+/* 拖入文件反馈:不再给整篇文档画虚线框(视觉像调试态,而且状态残留时会长期围住正文)。
+ * 文档模式只在顶部留一枚短 accent 光条;画布模式由 .amx-stage.amx-dropzone 自己反馈,避免双层提示。 */
+.amx-editor.amx-dragover {
+  outline: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent-ink, var(--primary)) 72%, transparent) 28%,
+    var(--accent-ink, var(--primary)) 50%,
+    color-mix(in srgb, var(--accent-ink, var(--primary)) 72%, transparent) 72%,
+    transparent
+  );
+  background-repeat: no-repeat;
+  background-position: center 8px;
+  background-size: min(96px, 30%) 3px;
+}
+.amx-editor.amx-dragover:has(.amx-stage:not(.amx-stage-off)) { background-image: none; }
 
 /* 双链 [[wikilink]]:跟随主题 accent(明暗/皮肤自适应;下划线弱化区分正文)。曾是固定紫 #6c5ce7,
  * 用户要求编辑器色彩与主题统一后改 token。比 styles.css 的选择器多一层 .am-app → 特异性更高,覆盖其 color。 */

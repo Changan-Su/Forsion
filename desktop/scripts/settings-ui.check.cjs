@@ -66,10 +66,21 @@ ${CSS}
 body { margin: 0; }
 </style></head><body>
 <div class="settings-page">
+<section class="settings-mobile-home">
+  <header class="settings-mobile-home-head"><button>←</button><strong>设置</strong><span></span></header>
+  <div class="settings-mobile-home-scroll">
+    <div class="settings-mobile-hero"><span><strong>Forsion Genesis</strong><small>设置</small></span></div>
+    <section class="settings-mobile-group"><h2>外观</h2><div class="settings-mobile-group-card">
+      <button class="settings-mobile-row"><span class="settings-mobile-row-icon"></span><span class="settings-mobile-row-copy"><strong>外观</strong><small>主题、配色与字体</small></span><span>›</span></button>
+      <button class="settings-mobile-row"><span class="settings-mobile-row-icon"></span><span class="settings-mobile-row-copy"><strong>通知</strong><small>通知出口与事件提醒</small></span><span>›</span></button>
+    </div></section>
+  </div>
+</section>
 <!-- ⚠️ 侧栏不能省:.settings-page 是 grid(252px + 1fr),少了它 .settings-main 会落进 252px 那一列,
      正文被挤成一条,量出来的几何全是假的(截图里主题卡互相压在一起就是这个)。 -->
 <aside class="settings-nav"><div class="settings-nav-top"></div><div class="settings-nav-list"></div></aside>
 <section class="settings-main">
+  <div class="settings-mobile-detail-head"><button>←</button><strong>外观</strong><button>×</button></div>
   <div class="settings-main-head">
     <div class="settings-main-title">主题</div>
     <div class="settings-subbar" role="tablist">
@@ -339,6 +350,48 @@ function surfaceUnder(el) {
   check('E 点左边的栏目 → 新内容从左侧滑入', xL < -4, `首帧 translateX=${xL.toFixed(1)}px`)
   check('E 换一级页(dir=0)→ 纯淡入不左右跳', Math.abs(x0) < 1, `首帧 translateX=${x0.toFixed(1)}px`)
 
+  // ══ M:移动端全局分类必须是一级列表 → 二级详情,不准回退成顶部横滑 chips。 ══
+  await p.setViewportSize({ width: 390, height: 844 })
+  const mobileMenu = await p.evaluate(() => {
+    const page = document.querySelector('.settings-page')
+    page.classList.add('settings-page--mobile', 'settings-page--mobile-menu')
+    const style = (s) => getComputedStyle(document.querySelector(s))
+    const row = document.querySelector('.settings-mobile-row')
+    return {
+      home: style('.settings-mobile-home').display,
+      nav: style('.settings-nav').display,
+      main: style('.settings-main').display,
+      rowH: row.getBoundingClientRect().height,
+      overflow: document.body.scrollWidth - document.body.clientWidth,
+    }
+  })
+  check('M 移动端打开设置先显示分组列表,旧侧栏与正文隐藏',
+    mobileMenu.home === 'flex' && mobileMenu.nav === 'none' && mobileMenu.main === 'none',
+    `home=${mobileMenu.home} nav=${mobileMenu.nav} main=${mobileMenu.main}`)
+  check('M 一级入口满足触控行高且页面无横向溢出', mobileMenu.rowH >= 64 && mobileMenu.overflow === 0,
+    `row=${mobileMenu.rowH.toFixed(1)}px overflow=${mobileMenu.overflow}px`)
+
+  const mobileDetail = await p.evaluate(() => {
+    const page = document.querySelector('.settings-page')
+    page.classList.remove('settings-page--mobile-menu')
+    const style = (s) => getComputedStyle(document.querySelector(s))
+    return {
+      home: style('.settings-mobile-home').display,
+      nav: style('.settings-nav').display,
+      main: style('.settings-main').display,
+      head: style('.settings-mobile-detail-head').display,
+      subWrap: style('.settings-subbar').flexWrap,
+      subOverflow: style('.settings-subbar').overflowX,
+      overflow: document.body.scrollWidth - document.body.clientWidth,
+    }
+  })
+  check('M 点一级项进入独立二级页(页头返回,不复活全局 chips)',
+    mobileDetail.home === 'none' && mobileDetail.nav === 'none' && mobileDetail.main === 'flex' && mobileDetail.head === 'grid',
+    `home=${mobileDetail.home} nav=${mobileDetail.nav} main=${mobileDetail.main} head=${mobileDetail.head}`)
+  check('M 二级页天然子栏目折行而非横滑',
+    mobileDetail.subWrap === 'wrap' && mobileDetail.subOverflow === 'visible' && mobileDetail.overflow === 0,
+    `wrap=${mobileDetail.subWrap} overflow-x=${mobileDetail.subOverflow} page-overflow=${mobileDetail.overflow}px`)
+
   await browser.close()
 
   // ══ F:栏目条上声明的每个 key,正文里都得有**同一个 tab 下的**渲染块 —— 少一个 / 挂错 tab
@@ -368,9 +421,12 @@ function surfaceUnder(el) {
     ['包装层带 key(靠重挂触发入场动画)', /key=\{`\$\{tab\}:\$\{activeSub\}`\}[\s\S]{0,160}?className=\{`settings-sub settings-sub--\$\{tab\}`\}/],
     ['包装层传了 data-dir(方向)', /className=\{`settings-sub settings-sub--\$\{tab\}`\} data-dir=\{subDir\}/],
     ['切页/切分类后正文回顶部', /\.settings-body'\)[\s\S]{0,120}?scrollTop = 0/],
+    ['移动一级行进入二级页', /onClick=\{\(\) => \{ goTab\(id\); setMobileMenuOpen\(false\) \}\}/],
+    ['移动二级页头返回一级列表', /settings-mobile-detail-head[\s\S]{0,180}?setMobileMenuOpen\(true\)/],
+    ['Android 系统返回先退一级列表', /addEventListener\('forsion:mobile-back', backToMenu\)/],
   ]
   const brokenWiring = wiring.filter(([, re]) => !re.test(TSX)).map(([n]) => n)
-  check('G 真组件的接线仍在(栏目条位置 / key / data-dir / 回顶部)', brokenWiring.length === 0,
+  check('G 真组件的接线仍在(栏目动画 / 两层移动导航 / Android 返回)', brokenWiring.length === 0,
     brokenWiring.join(' ; ') || `${wiring.length} 处接线`)
 
   // ══ H:--sel-line/--sel-fill 必须**先**有不含 color-mix 的值,再在 @supports 里升级。

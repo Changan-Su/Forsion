@@ -61,3 +61,18 @@ describe('slug 工具', () => {
     expect(cmpVersion('2.2.4', '2.3.0')).toBe(-1)
   })
 })
+
+describe('配方版本(version)', () => {
+  it('解析并透传 version —— 宿主靠它判断「配方换过了」丢弃旧保存布局', () => {
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, version: '1.1.0' }), opts())
+    expect(r.ok && r.spec.version).toBe('1.1.0')
+  })
+  it('未声明 version → undefined(老配方,宿主不介入布局)', () => {
+    const r = parseSpaceJson(JSON.stringify(VALID), opts())
+    expect(r.ok && r.spec.version).toBeUndefined()
+  })
+  it('非字符串 version 忽略,不让坏值触发误迁移', () => {
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, version: 3 }), opts())
+    expect(r.ok && r.spec.version).toBeUndefined()
+  })
+})

@@ -9,9 +9,10 @@ import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
 import { BLANK_SCENE_JSON, blankDrawing, isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { DEFAULT_BOARD, writeBoard } from '@amadeus-shared/excalidraw/board'
-import { DASH_FM_KEY, isDashboardPath, widgetSource } from '@amadeus-shared/dashboard'
+import { DASH2_FM_KEY, isDashboardPath, widgetSource } from '@amadeus-shared/dashboard'
 import { COMPILER_VERSION, PAGE_SCHEMA, compile, generateColumnId, generatePageId, generateRowId, type PageManifest } from '@amadeus-shared/compiler'
 import { matchFileType } from '@amadeus/plugins/pluginStore'
+import { extHit } from './viewFileMatch'
 import { act, actThrottled } from './activity/log'
 import { track } from './achievements/store'
 import { openLocalHtml } from './builtins'
@@ -121,18 +122,19 @@ export function openDrawing(drawingPath: string, opts?: { newTab?: boolean }): v
   ws.openView('amadeus-drawing', { drawingPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
-/** 打开独立仪表盘视图(.dashboard.md 网格):已有认领该文件的 tab → 激活;否则主区打开。
+/** 打开仪表盘视图(.dashboard.md,P3a 起一律画布版 'dashboard';旧网格 view 只为布局恢复保留,
+ *  不再从这里开)。已有认领该文件的 tab → 激活;否则主区打开。
  *  `unlocked` 只在「刚建好」时给 —— 新建完直接能摆,不必先点一下解锁。 */
 export function openDashboard(dashPath: string, opts?: { unlocked?: boolean; newTab?: boolean }): void {
   actThrottled('view.open', { f: dashPath }, `view.open|${dashPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
-  const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-dashboard' && p.params?.dashPath === dashPath)
+  const hit = api?.panels.find((p) => (p.params?.__type === 'dashboard' || p.params?.__type === 'amadeus-dashboard') && p.params?.dashPath === dashPath)
   if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     return
   }
-  ws.openView('amadeus-dashboard', opts?.unlocked ? { dashPath, locked: false } : { dashPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+  ws.openView('dashboard', opts?.unlocked ? { dashPath, locked: false } : { dashPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 新建仪表盘(.dashboard.md),建成即打开(解锁态)。返回 vault 相对路径(取消/失败 null)。
@@ -170,7 +172,8 @@ export async function createDashboard(parent: string): Promise<string | null> {
   }
 }
 
-/** 出厂仪表盘:一个标题块 + 一个时钟 + 一个天气。用 compile() 生成,格式与编辑器保存出来的**逐字节同源**。 */
+/** 出厂仪表盘(P3a 起产画布版:布局键 dashboard2:,单位 px)。
+ *  一个标题块 + 一个时钟 + 一个天气;compile() 生成,格式与编辑器保存出来的**逐字节同源**。 */
 function blankDashboard(title: string): string {
   const now = new Date().toISOString()
   const ids = ['1', '2', '3']
@@ -187,10 +190,10 @@ function blankDashboard(title: string): string {
       children: [{ type: 'row', id: generateRowId(), columns: [{ id: generateColumnId(), width: 1, children: ids.map((ref) => ({ ref })) }] }],
     },
     blocks: Object.fromEntries(ids.map((i) => [i, { type: 'markdown' }])),
-    fmExtra: [`${DASH_FM_KEY}:`, '  "1": [0, 0, 14, 8]', '  "2": [14, 0, 5, 4]', '  "3": [19, 0, 5, 4]'].join('\n'),
+    fmExtra: [`${DASH2_FM_KEY}:`, '  "1": [0, 0, 520, 200]', '  "2": [540, 0, 260, 150]', '  "3": [540, 166, 260, 150]'].join('\n'),
   }
   return compile(manifest, {
-    '1': `# ${title}\n\n解锁后可拖动卡片、拖右下角缩放;右上角 ＋ 添加卡片。`,
+    '1': `# ${title}\n\n双击卡片进入内容;空白处拖动平移、⌘/Ctrl+滚轮缩放;解锁后可拖动/缩放卡片,右上角 ＋ 添加。`,
     '2': widgetSource('clock', { tz }),
     '3': widgetSource('weather', { city: '上海' }),
   })
@@ -203,9 +206,10 @@ export function openFile(path: string, opts?: { newTab?: boolean }): void {
   // 拒绝内置后缀(内置优先),不特判的话它会掉到下面的「非插件文件类型 → 交给系统默认程序」。
   if (isDrawingPath(path)) { openDrawing(path, opts); return }
   if (isDashboardPath(path)) { openDashboard(path, opts); return }
-  if (/\.db$/i.test(path)) { openDb(path, opts); return }
-  if (/\.pdf$/i.test(path)) { openPdf(path, undefined, opts); return }
-  if (/\.(png|jpe?g|gif|webp|svg|avif|bmp|ico)$/i.test(path)) { openImage(path, opts); return }
+  // 单后缀分派查声明单源表(viewFileMatch;复合后缀在上面两行走 shared 判定函数=毁档防线,次序不动)。
+  if (extHit(path, 'amadeus-db')) { openDb(path, opts); return }
+  if (extHit(path, 'amadeus-pdf')) { openPdf(path, undefined, opts); return }
+  if (extHit(path, 'amadeus-image')) { openImage(path, opts); return }
   // 本地库里的 .html → 内置浏览器(云端库没有本机路径 / 内置浏览器关着 → 照旧交系统默认程序)。
   if (/\.html?$/i.test(path)) {
     const ps0 = usePageStore.getState()

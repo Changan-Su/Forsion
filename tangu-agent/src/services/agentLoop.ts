@@ -555,7 +555,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // advanceQueue + cleanup),runGroupChat 自管终态(done/failed/aborted),不碰会话队列。
     if (agentConfig.groupChat && profile.capabilities.groupChat) {
       await runGroupChat({
-        runId, sessionId, userId, appId, modelId, execMode, cwd, wsProject, profile, agentConfig,
+        runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
         attachments,

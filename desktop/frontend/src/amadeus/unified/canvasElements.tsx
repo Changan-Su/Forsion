@@ -19,7 +19,7 @@
 //     由 `hitEdge` 在舞台层用数学做。仪器 C12 钉的就是这条。
 //  2. **逐项容错只在本层**。读侧 parseCanvasJson 的整键 fail-closed 绝不放宽(canvas.ts:85):
 //     一条手改坏的形状不许带走全部卡片几何。反过来,一条坏形状也不该让别的元素跟着不画。
-import { useEffect, useMemo, useState, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
 export interface ElBox { x: number; y: number; w: number; h: number }
 interface Pt { x: number; y: number }
@@ -32,6 +32,8 @@ export interface AttachPreview {
   node: string
   side: 'e' | 'w' | 'n' | 's'
   rel: 'child' | 'sibling'
+  /** 松手后的主卡真实落位；与提交共用槽位和避让数学，不是只表达大概方向的装饰框。 */
+  landing: ElBox
 }
 
 /** 端点:`{ref}` = 卡锚(卡片),`{id}` = 本层的形状 id,`{main}` = 主卡(2026-08-18,唯一实例
@@ -219,6 +221,50 @@ export function measureMain(host: HTMLElement | null): ElBox | null {
   return { x: pm.offsetLeft, y: pm.offsetTop, w: pm.offsetWidth, h: pm.offsetHeight }
 }
 
+type OverviewItem = { key: string; anchor: string; title: string; detail: string | null; h: number; autoHeight: boolean }
+
+function summaryOf(root: HTMLElement, outsideCards = false): { title: string; detail: string | null } | null {
+  const allowed = (el: HTMLElement): boolean => !outsideCards || !el.closest('.amx-ucard')
+  const lineOf = (el: HTMLElement): string | null =>
+    (el.innerText || el.textContent || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean) ?? null
+  const headings = [...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')].filter(allowed).map(lineOf).filter((s): s is string => !!s)
+  const body = [...root.querySelectorAll<HTMLElement>('p,li,blockquote,pre')].filter(allowed).map(lineOf).filter((s): s is string => !!s)
+  const title = headings[0] ?? body[0]
+  if (!title) return null
+  const detail = body.find((line, i) => line !== title && (headings.length > 0 || i > 0)) ?? null
+  return { title, detail }
+}
+
+/** 从已提交的编辑器 DOM 抽概览快照。直接以记忆低倍率打开时，overview class 会先把 PM 子树
+ * display:none；在 layout effect 中短暂摘掉 class 才能量到自然卡高，恢复发生在浏览器绘制前。 */
+function captureOverview(host: HTMLElement, mainAutoHeight: boolean): OverviewItem[] {
+  const wasOverview = host.classList.contains('amx-stage-overview')
+  if (wasOverview) host.classList.remove('amx-stage-overview')
+  try {
+    const next: OverviewItem[] = []
+    for (const [anchor, box] of measureCards(host)) {
+      const card = host.querySelector<HTMLElement>(`.amx-ucard[data-anchor="${CSS.escape(anchor)}"]`)
+      const summary = card ? summaryOf(card) : null
+      if (card && summary) next.push({ key: cardKey(anchor), anchor, ...summary, h: box.h, autoHeight: Number(card.dataset.h) <= 0 })
+    }
+    const pm = host.querySelector<HTMLElement>('.ProseMirror')
+    const mainBox = measureMain(host)
+    const mainSummary = pm ? summaryOf(pm, true) : null
+    if (mainBox && mainSummary) next.push({ key: MAIN_KEY, anchor: MAIN_KEY, ...mainSummary, h: mainBox.h, autoHeight: mainAutoHeight })
+    return next
+  } finally {
+    if (wasOverview) host.classList.add('amx-stage-overview')
+  }
+}
+
+function sameOverviewItems(a: OverviewItem[], b: OverviewItem[]): boolean {
+  return a.length === b.length && a.every((item, i) => {
+    const other = b[i]
+    return item.key === other?.key && item.anchor === other.anchor && item.title === other.title
+      && item.detail === other.detail && item.h === other.h && item.autoHeight === other.autoHeight
+  })
+}
+
 /** 手势期的幽灵位移/缩放:只作用在渲染上,松手才落盘(与卡片的「过程只动 CSS」同一条纪律)。
  *  ⚠️ size 带 dx/dy(2026-08-19 四角塑型):拖左上角要**同时**改左上角与尺寸。方向数学一次性在
  *  舞台的 onMove 里按「对角固定点」算完(夹住 MIN_EL 之后再回推 dx/dy),这里只做加法 ——
@@ -250,6 +296,8 @@ export interface CanvasElementsProps {
   /** 舞台根。ref 对象**本身**传下来(不传 `() => ref.current`):行内箭头每渲染换身份,
    *  挂进 effect 依赖会把观察者拆了重装,这个仓在同一个坑上栽过两次(见 canvasStage 顶注)。 */
   hostRef: RefObject<HTMLDivElement | null>
+  /** 当前画布身份。记忆倍率下换页会复用/重建舞台，概览快照必须与文档绑定，不能沿用上一页。 */
+  documentKey: string
   sel: ReadonlySet<string>
   /** 正在编辑的卡锚(两段式的第二段)。选中框换成「编辑中」的那一套描边 —— 见下面为什么画在本层。 */
   editing?: string | null
@@ -261,12 +309,18 @@ export interface CanvasElementsProps {
   /** 拖到边缘认亲的当前候选(2026-08-19 晚):在目标卡的那条边上画一道粗高亮。
    *  ⚠️ 只是**手势期的意图预告**,不是数据 —— 松手才由舞台落笔。 */
   attach?: AttachPreview | null
+  /** 点阵落点只负责预告松手后的目标盒；手势中的实体仍逐像素跟手。 */
+  snapLanding?: { key: string; kind: 'move' | 'resize'; box: ElBox } | null
+  /** 缩到正文不可读时传当前倍率，渲染轻量标题/摘要替身；null = 常规正文。 */
+  overviewScale?: number | null
+  /** 主卡没有显式 h 时，概览模式要用切换前实测高度撑住卡壳。 */
+  mainAutoHeight?: boolean
   /** 连线橡皮筋(2026-08-18):第一击之后跟随指针的预览线 + 有效目标高亮。
    *  from = 起点选中键,x/y = 指针舞台坐标,over = 指针下的可连对象(高亮用)。 */
   preview?: { from: string; x: number; y: number; over: string | null } | null
 }
 
-export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, marquee, attach, preview }: CanvasElementsProps): React.ReactElement | null {
+export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, snapLanding, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
   const els = useMemo(() => safeElements(elements), [elements])
   const edges = useMemo(() => safeTree(tree), [tree])
   const [ver, setVer] = useState(0)
@@ -277,6 +331,8 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
   const selCards = [...sel].filter((k) => k.startsWith('c:')).map(keyId)
   const mainSel = sel.has(MAIN_KEY)
   const live = n + selCards.length + (mainSel ? 1 : 0)
+  const overviewActive = overviewScale != null && overviewScale > 0
+  const [overviewSnapshot, setOverviewSnapshot] = useState<{ documentKey: string; items: OverviewItem[] }>({ documentKey: '', items: [] })
 
   // 卡片/主卡一动(搬/调宽/打字改高)连线与主卡选中框就得跟着走。本层只在画布模式挂载,而画布
   // 模式恒有主卡几何要跟(选中框/连线端点都读 mainBox)—— 观察者常开(2026-08-18 起;此前按
@@ -306,7 +362,7 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
     }
     bump() // 挂载即量一次:观察者不会为「已经在那儿的 DOM」补发通知
     const mo = new MutationObserver(bump)
-    mo.observe(host, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style', 'data-x', 'data-y', 'data-w'] })
+    mo.observe(host, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style', 'data-x', 'data-y', 'data-w', 'data-h'] })
     ro.observe(host)
     return () => {
       cancelAnimationFrame(raf)
@@ -318,10 +374,40 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
   // ⚠️ ghost 必须进依赖:拖拽期卡片几何走舞台的 dragCss 样式表(不碰 PM DOM → 零 mutation →
   //    观察者收不到任何通知),选中框/连线要跟手只能靠「每帧幽灵变化时重量一次」。量的就是
   //    样式表作用后的 offset*,与屏幕恒一致。
-  const boxes = useMemo(() => measureCards(hostRef.current), [hostRef, ver, live, ghost])
+  const boxes = useMemo(() => measureCards(hostRef.current), [hostRef, documentKey, overviewSnapshot.documentKey, ver, live, ghost])
   const shapes = useMemo(() => shapeBoxes(els, ghost), [els, ghost])
   // 主卡盒不进 memo:它的位置随 --amx-main-* 变(props 流,不经 ver),一次 querySelector 量它不值一个缓存。
   const mainBox = measureMain(hostRef.current)
+
+  /** 低倍率不是在完整正文上盖一行字：从已提交的 PM DOM 抽轻量快照，CSS 再把原块子树
+   * display:none。Milkdown 换页后异步创建 EditorView，所以不能在 render 里把第一次空结果永久
+   * 冻结；DOM 观察器的 ver 到来时继续补抽。内容没变化时保持同一份 state，平移/缩放不遍历 PM。 */
+  useLayoutEffect(() => {
+    if (!overviewActive) return
+    const host = hostRef.current
+    const pm = host?.querySelector<HTMLElement>('.ProseMirror')
+    if (!host || !pm || pm.childElementCount === 0) return
+    const next = captureOverview(host, mainAutoHeight)
+    setOverviewSnapshot((prev) =>
+      prev.documentKey === documentKey && sameOverviewItems(prev.items, next)
+        ? prev
+        : { documentKey, items: next })
+  }, [documentKey, hostRef, mainAutoHeight, overviewActive, ver])
+  const overviewItems = overviewSnapshot.documentKey === documentKey ? overviewSnapshot.items : []
+  const overview = overviewActive
+    ? overviewItems.flatMap((item) => {
+        const box = item.anchor === MAIN_KEY ? mainBox : boxes.get(item.anchor)
+        return box ? [{ ...item, box }] : []
+      })
+    : []
+  const overviewScope = hostRef.current?.dataset.amxDragscope
+  const overviewHeightCss = overviewActive && overviewScope
+    ? overviewItems.flatMap((item) => {
+        const root = `.amx-stage[data-amx-dragscope="${CSS.escape(overviewScope)}"].amx-stage-overview`
+        if (item.anchor === MAIN_KEY) return mainAutoHeight ? [`${root} .ProseMirror:not(.unified-embed .ProseMirror){height:${item.h}px;}`] : []
+        return item.autoHeight ? [`${root} .amx-ucard[data-anchor="${CSS.escape(item.anchor)}"][data-h="0"]{height:${item.h}px;}`] : []
+      }).join('\n')
+    : ''
 
   const boxOf = (r: EndRef): ElBox | null =>
     r.ref != null ? boxes.get(r.ref) ?? null : r.id != null ? shapes.get(r.id) ?? null : r.main ? mainBox : null
@@ -329,6 +415,7 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
   const keyBox = (k: string): ElBox | null => (k === MAIN_KEY ? mainBox : k.startsWith('c:') ? boxes.get(keyId(k)) ?? null : shapes.get(keyId(k)) ?? null)
   return (
     <div className="amx-el-layer">
+      {overviewHeightCss ? <style data-amx-overview-heights>{overviewHeightCss}</style> : null}
       {/* Frame 先画 = 垫在最底下(同为 absolute 且都没 z-index,绘制序即 DOM 序)。 */}
       {els.filter((e): e is FrameEl => e.kind === 'frame').map((e) => (
         <Frame key={e.id} el={e} box={shapes.get(e.id)!} sel={sel.has(elKey(e.id))} />
@@ -358,7 +445,7 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
         const b = boxes.get(a)
         return b ? (
           <div key={`sel:${a}`} className={`amx-el-selbox${editing === a ? ' is-editing' : ''}`} data-anchor={a} style={{ left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` }}>
-            {sel.size === 1 && editing !== a ? <AddButtons node={a} /> : null}
+            {sel.size === 1 && editing !== a ? <><CardResizeHandles anchor={a} /><AddButtons node={a} /></> : null}
           </div>
         ) : null
       })}
@@ -367,11 +454,46 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
           空格进入编辑,命中逻辑全在 canvasStage.onDown。 */}
       {mainSel && mainBox ? (
         <div className={`amx-el-selbox${editing === MAIN_KEY ? ' is-editing' : ''}`} data-main-sel style={{ left: `${mainBox.x}px`, top: `${mainBox.y}px`, width: `${mainBox.w}px`, height: `${mainBox.h}px` }}>
-          {/* 主卡只有宽度可调(高随内容),把手仍用右下角语法 —— 拖的时候只吃 dx。 */}
-          {sel.size === 1 ? <div className="amx-el-grip" data-grip="m:" /> : null}
-          {sel.size === 1 && editing !== MAIN_KEY ? <AddButtons node={MAIN_KEY} /> : null}
+          {sel.size === 1 && editing !== MAIN_KEY ? <><CardResizeHandles anchor={MAIN_KEY} /><AddButtons node={MAIN_KEY} /></> : null}
         </div>
       ) : null}
+      {snapLanding ? (
+        <div
+          className={`amx-grid-landing is-${snapLanding.kind}`}
+          data-snap-landing={snapLanding.key}
+          style={{ left: `${snapLanding.box.x}px`, top: `${snapLanding.box.y}px`, width: `${snapLanding.box.w}px`, height: `${snapLanding.box.h}px` }}
+        />
+      ) : null}
+      {/* 原 PM 内容已经由 overview 状态从渲染树中摘下；这里是唯一可见的轻量标题/摘要替身。 */}
+      {overview.map((item) => {
+        // 概览文字按屏幕 px 保持可读，但卡壳仍随舞台缩小：若永远硬塞标题+两行摘要，约 40% 时
+        // 一张 67px 高的卡在屏幕上只剩 27px，flex 只好把每行压扁。按**屏幕卡高**降密度，极小卡
+        // 只留完整标题；到 MIN_Z 时再轻微缩小标题，而不是裁字或撑大卡壳改变连线几何。
+        const screenH = item.box.h * overviewScale!
+        const density = screenH < 44 ? 'title' : screenH < 60 ? 'summary' : 'full'
+        const titleScreenPx = density === 'title'
+          ? Math.max(8, Math.min(12, (screenH - 3) / 1.2))
+          : 12
+        return (
+          <div
+            key={`overview:${item.key}`}
+            className="amx-card-overview"
+            data-card-label={item.anchor}
+            data-overview-density={density}
+            style={{
+              left: `${item.box.x}px`,
+              top: `${item.box.y}px`,
+              width: `${item.box.w}px`,
+              height: `${item.box.h}px`,
+              ['--amx-overview-inv' as string]: String(1 / overviewScale!),
+              ['--amx-overview-title-screen' as string]: `${titleScreenPx}px`,
+            }}
+          >
+            <span className="amx-card-overview-title">{item.title}</span>
+            {item.detail ? <span className="amx-card-overview-detail">{item.detail}</span> : null}
+          </div>
+        )
+      })}
       {/* 连线橡皮筋:起点/目标描边 + 跟随指针的预览线(悬到有效目标上就吸附到它的盒)。 */}
       {preview
         ? (() => {
@@ -390,13 +512,14 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
         : null}
       {/* ⚠️ 类名不能叫 `.amx-marquee` —— blockLayer 的块框选用的就是那个名字(挂在 body 上、client
           坐标),同名会让仪器把两个框数成一个东西,而它们连坐标系都不同。 */}
-      {/* 认亲预告:不只画一条难懂的边。目标整卡起环、源→目标画虚线、边口给关系标签，
-          松手前就能读懂「会连到谁 / 会成为子节点还是同级节点」。 */}
+      {/* 认亲预告:不只画一条难懂的边。目标整卡起环、源→目标画细线、最终槽位画幽灵卡、
+          边口给关系标签，松手前就能读懂「会连到谁 / 会成为哪种关系 / 最后落在哪里」。 */}
       {attach ? (() => {
         const b = attach.node === MAIN_KEY ? mainBox : boxes.get(attach.node)
         const source = boxes.get(attach.source)
         if (!b) return null
-        const T = 5
+        const T = 3
+        const MARK = 22
         const horiz = attach.side === 'n' || attach.side === 's'
         const lx = attach.side === 'w' ? b.x : attach.side === 'e' ? b.x + b.w : b.x + b.w / 2
         const ly = attach.side === 'n' ? b.y : attach.side === 's' ? b.y + b.h : b.y + b.h / 2
@@ -413,13 +536,20 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
             ) : null}
             <div className={`amx-el-attach-target is-${attach.rel}`} style={{ left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` }} />
             <div
+              className={`amx-el-attach-slot is-${attach.rel}`}
+              data-attach-slot={attach.side}
+              style={{ left: `${attach.landing.x}px`, top: `${attach.landing.y}px`, width: `${attach.landing.w}px`, height: `${attach.landing.h}px` }}
+            >
+              {attach.count && attach.count > 1 ? <span>{attach.count} 张</span> : null}
+            </div>
+            <div
               className={`amx-el-attach is-${attach.rel}`}
               data-attach={attach.side}
               style={{
-                left: `${attach.side === 'e' ? b.x + b.w - T : b.x}px`,
-                top: `${attach.side === 's' ? b.y + b.h - T : b.y}px`,
-                width: `${horiz ? b.w : T}px`,
-                height: `${horiz ? T : b.h}px`,
+                left: `${attach.side === 'e' ? b.x + b.w - T : attach.side === 'w' ? b.x : b.x + (b.w - MARK) / 2}px`,
+                top: `${attach.side === 's' ? b.y + b.h - T : attach.side === 'n' ? b.y : b.y + (b.h - MARK) / 2}px`,
+                width: `${horiz ? MARK : T}px`,
+                height: `${horiz ? T : MARK}px`,
               }}
             />
             <div className={`amx-el-attach-label is-${attach.rel}`} style={{ left: `${lx}px`, top: `${ly}px` }}>
@@ -439,6 +569,19 @@ export function CanvasElements({ elements, hostRef, sel, editing, tree, ghost, m
  *  ⚠️ 必须显式 `pointer-events: auto`(CSS 里配套):它住在 `.amx-el-layer` 之内,而那一层整片
  *  是 `pointer-events: none`(文件头纪律 1,C12 钉着)—— 少这一条把手就是画上去的贴纸。 */
 const CORNERS = ['nw', 'ne', 'sw', 'se'] as const
+const CARD_EDGES = ['n', 'e', 's', 'w', ...CORNERS] as const
+
+/** 卡片选中后四边与四角都是尺寸热区。它们住在选中浮层里，不改 PM 管辖的卡片 DOM。 */
+function CardResizeHandles({ anchor }: { anchor: string }): React.ReactElement {
+  return (
+    <>
+      {CARD_EDGES.map((edge) => (
+        <div key={edge} className={`amx-card-size-grip is-${edge}`} data-card-grip={anchor} data-card-edge={edge} />
+      ))}
+    </>
+  )
+}
+
 function Grips({ id, box }: { id: string; box: ElBox }): React.ReactElement {
   return (
     <>

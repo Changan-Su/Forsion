@@ -11,7 +11,7 @@ import type {
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot,
 } from '../types'
-import { DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
+import { DEFAULT_CLOUD_PROJECT, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { abortRun, cancelSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -25,6 +25,7 @@ import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { DESK_EDIT_TOOLS, DESK_PERSIST_KEY, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
+import { usePageStore } from '../amadeus/store/pageStore'
 
 export type { SettingsTab }
 
@@ -242,6 +243,17 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean): P
   if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
   return out
 }
+
+/** 活动 Amadeus Vault 是 Forsion 的系统工作区:本机会话默认把它并入额外可写根。
+ *  cwd 仍是相对路径基准;同根/重复项不再列,并保留用户手工添加根的顺序。 */
+export function withAmadeusWorkspace(config: AgentConfig, vaultRoot: string | null | undefined): AgentConfig {
+  if (config.execMode !== 'host' || !vaultRoot || vaultRoot === config.cwd) return config
+  const roots = config.extraRoots || []
+  if (roots.includes(vaultRoot)) return config
+  return { ...config, extraRoots: [...roots, vaultRoot] }
+}
+
+const activeAmadeusRoot = (): string | null => usePageStore.getState().vaultRoot || null
 /** 新会话「这条消息实际会用哪个模型」的**唯一**回退链:本次空态显式选的 → 全局记忆
  *  (cfg.modelId 就是「新会话用哪个模型」的真源,在会话里换模型也会写它)→ 后端默认。
  *  ⚠️ 输入栏药丸(ChatView)、建会话时落库、startRun 三处必须同源。三份各写各的时出过的 bug:
@@ -262,6 +274,9 @@ let lastEngineResyncAt = 0 // 凭据不同步时的引擎重启节流:401 持续
 const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
 const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
 const recentSessions: string[] = [] // 最近查看的会话 id(MRU 在前),用于 LRU 淘汰
+let pendingChatQuoteSeq = 0 // 引用消费后 state 会清空，序号需在 state 外保持单调，旧 effect 才不会误清新交接
+// 本窗口是否已经连上过一次:connect 的「没选会话就兜底选第一条」只在冷启动那一次做。
+let connectedOnce = false
 /** 「进入某工作区」= 记下它 + **保证它是展开的**。
  *  ⚠️ 展开这一步必须在这里做,不能交给下游 effect 监听 activeWorkspaceKey:用户手动收起某个工作区
  *  时 activeWorkspaceKey 并不会变,再点进同一个工作区时值没变化 → effect 不重跑 → 点了没反应。 */
@@ -330,6 +345,9 @@ export interface AppState {
   newChatModel: string | null
   /** 瞬态:外部入口(反馈诊断/对话建 agent/插件)预填聊天框的草稿;Composer2 mount 消费一次即清,不落盘。 */
   pendingDraft: string | null
+  /** Chat View 划线后的定向引用交接。与 pendingDraft 分开:主区 chat 和侧栏 chat-panel 会同时挂载，
+   *  只有 targetType 对应的承载面消费，避免选中文字误落进主输入框。 */
+  pendingChatQuote: { targetType: string; text: string; seq: number } | null
   /** 拖引用进聊天:结构化引用直接进输入框上方的「已选择」芯片条(不是往草稿里塞文本 —— 那条老路
    *  要把 token 再解析回来,拖到「工作区根目录下的裸文件名」这类无分隔符路径就认不出了)。
    *  seq 让连拖同一条也能触发。 */
@@ -458,6 +476,10 @@ export interface AppState {
   setNewChatModel(id: string | null): void
   /** 预填聊天框草稿(外部 via-chat 入口的统一接缝);Composer2 消费后自行清空。 */
   setPendingDraft(text: string | null): void
+  /** 把选中文字作为引用交给指定 Chat View；seq 使连续交接同一段文字也会重新触发。 */
+  setPendingChatQuote(targetType: string, text: string): void
+  /** 只清掉自己消费的那一版，防止较晚的交接被旧 effect 清空。 */
+  clearPendingChatQuote(seq: number): void
   /** Composer 消费掉「未送达插话」的回填后清位(per-session)。 */
   clearSteerRestore(sessionId: string): void
   appendRefs(refs: ChatRef[]): void
@@ -535,6 +557,7 @@ export const useApp = create<AppState>((set, get) => ({
   newChatCfg: {},
   newChatModel: null,
   pendingDraft: null,
+  pendingChatQuote: null,
   draftRefs: null,
   steerPendingBySession: {},
   steerSentBySession: {},
@@ -1045,7 +1068,11 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const act = await get().refreshSessions(c)
       const cur = get().activeId
-      get().setActiveId(cur && act.some((s) => s.id === cur) ? cur : (act[0]?.id ?? null))
+      // ⚠️ activeId 为 null 往往是**故意**的空白新对话(用户点了「新对话」/ 按 Space 分账给这个 Space 的
+      //    起手,见 bootstrapEngine 的 planSpaceSwitch 订阅)。兜底选第一条只在本窗口首次连上时做 ——
+      //    否则后端重启 / 登录变化 / 手动重连触发的 connect 会把这份空白顶成别的会话。
+      if (cur || !connectedOnce) get().setActiveId(cur && act.some((s) => s.id === cur) ? cur : (act[0]?.id ?? null))
+      connectedOnce = true
     } catch (e: any) {
       get().toast(t('app.sessionListLoadFail', { e: e?.message || e }), true)
     }
@@ -1190,9 +1217,9 @@ export const useApp = create<AppState>((set, get) => ({
       // 「上传工作区(25MB 限制)」而非本机路径插入,且因 loadedHistory 已标记不再重拉 → 刷新前一直卡住。
       // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
       const sess = get().sessions.find((x) => x.id === sessionId) || get().archivedSessions.find((x) => x.id === sessionId)
-      const base: AgentConfig = sess?.project_path
+      const base: AgentConfig = withAmadeusWorkspace(sess?.project_path
         ? { execMode: 'host', approvalMode: DEFAULT_APPROVAL, cwd: sess.project_path }
-        : {}
+        : {}, activeAmadeusRoot())
       // 本地已有的键优先(local-wins):本地每次改配置都会同步 PUT,永远不旧于服务端;而这里的
       // fetch 可能与「新会话初始配置 PUT」竞速,整体替换会把刚选好的 agentSlug/thinkingLevel 冲掉。
       set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))
@@ -1313,12 +1340,13 @@ export const useApp = create<AppState>((set, get) => ({
   workspaces: () => {
     const { defaultWsDir, homeDir, sessions, archivedSessions, cloudProjects, channelWorkspaces, tr: t } = get()
     const defPath = defaultWsDir || homeDir || null
+    const amadeusRoot = activeAmadeusRoot()
     // 云端 Project 列表(默认 Tangu 恒在首位);每个项目一个工作区分组。
     // 并上会话行派生的项目名:/agent/projects 拉取失败/滞后时,含该 project_name 的会话
     // 仍有组头可挂(否则 SidebarPane 只渲染 workspaces() 里的组,这些会话会整组隐身)。
     const projSet = new Set<string>([DEFAULT_CLOUD_PROJECT, ...cloudProjects])
     for (const s of [...sessions, ...archivedSessions]) {
-      if (!s.project_path && s.project_name) projSet.add(s.project_name)
+      if (!s.projectless && !s.project_path && s.project_name) projSet.add(s.project_name)
     }
     const projNames = [...projSet]
     const list: WorkspaceDescriptor[] = [
@@ -1328,6 +1356,12 @@ export const useApp = create<AppState>((set, get) => ({
       { key: defaultWsDir || '__default_ws__', name: t('app.defaultWorkspace'), kind: 'local', path: defPath, system: true },
     ]
     const seen = new Set<string>([...projNames.map(cloudProjectKey), defaultWsDir || '__default_ws__'])
+    // Vault 不再只在「编辑器 + 文件自动模式」临时出现:它是常驻系统工作区,可直接作为新会话 cwd。
+    if (amadeusRoot && !seen.has(amadeusRoot)) {
+      const base = amadeusRoot.split(/[\\/]/).filter(Boolean).pop() || 'Vault'
+      list.push({ key: amadeusRoot, name: t('app.amadeusWorkspace', { name: base }), kind: 'local', path: amadeusRoot, system: true })
+      seen.add(amadeusRoot)
+    }
     // 已启用通道的专属工作区文件夹(webot/tgbot/qqbot;channelsStore 轮询维护,通道停用则回落普通本地组)。
     for (const cw of channelWorkspaces) {
       if (!seen.has(cw.key)) { list.push(cw); seen.add(cw.key) }
@@ -1338,6 +1372,8 @@ export const useApp = create<AppState>((set, get) => ({
         list.push({ key: s.project_path, name: s.project_name || s.project_path.split('/').filter(Boolean).pop() || t('app.workspace'), kind: 'local', path: s.project_path })
       }
     }
+    // 对齐 Codex:项目列表底部常驻「不在项目中工作」;会话有独立标记,不挤进默认 Cloud Project。
+    list.push({ key: ROOTLESS_WORKSPACE_KEY, name: t('input.project.dontWork'), kind: 'rootless', path: null, system: true })
     return list
   },
 
@@ -1357,16 +1393,17 @@ export const useApp = create<AppState>((set, get) => ({
       const cloudProject = ws.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : null
       const s = await api.createSession(get().cfg, path
         ? { project_path: path, project_name: ws.name }
-        : cloudProject ? { project_name: cloudProject } : undefined)
+        : cloudProject ? { project_name: cloudProject }
+        : ws.kind === 'rootless' ? { projectless: true } : undefined)
       act('chat.new', { s: s.id.slice(0, 6) })
       set((st) => ({ sessions: [s, ...st.sessions] }))
       loadedHistory.add(s.id) // 先标记再 setActiveId(其内部 loadSessionHistory 会拉空配置冲掉 init,同 send)
       get().setActiveId(s.id)
       // 新会话延续「上次用的」档位(审批 + 思考;模型走 cfg.modelId 的老路)。
       const sticky = stickyDefaults(get().desktopConfig, !!path)
-      const init: AgentConfig = path
+      const init: AgentConfig = withAmadeusWorkspace(path
         ? { ...sticky, execMode: 'host', cwd: path }
-        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
+        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, activeAmadeusRoot())
       set((st) => ({ messagesBySession: { ...st.messagesBySession, [s.id]: [] }, configBySession: { ...st.configBySession, [s.id]: init } }))
       void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
     } catch (e: any) {
@@ -1585,18 +1622,22 @@ export const useApp = create<AppState>((set, get) => ({
       // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
       // 已经 /unit/config 透传)。判成 external 会把新对话全建成云端 sandbox —— host 工具整个消失
       // (desk_present「当前环境没有该工具」)、直连模型被过滤、药丸显示「选择模型」(2026-08-24 用户实报三症状同根)。
-      const hostCapable = get().desktopMode === 'managed' || !!window.tangu?.unitPage
+      const hostCapable = get().desktopMode === 'managed'
+        || (typeof window !== 'undefined' && !!window.tangu?.unitPage)
+      const rootless = ws?.kind === 'rootless'
       const path = ws
         ? (ws.kind === 'local' ? (ws.path || get().defaultWsDir || get().homeDir || null) : null)
         : (hostCapable ? (get().defaultWsDir || get().homeDir || null) : null)
       // 云沙箱新会话一律落云端 Project(选择器未选 = 默认 Tangu 项目):文件跨会话共享且 Penzor 可见。
-      const cloudProject = path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
+      // 无根会话刻意不传 Project:引擎按 session 隔离临时工作区,不会混进默认 Tangu Project。
+      const cloudProject = rootless ? null : path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
       // 模型**当场固化**(记忆兜底也算,同下面的 agentSlug):不传的话引擎按 profile.defaultModelId
       // 落库,而输入栏显示的是 newChatModelId() —— 两边一错开就是「发送后药丸跳回默认模型」。
       const model_id = newChatModelId(get())
       const s = await api.createSession(get().cfg, {
         ...(path
           ? { project_path: path, project_name: ws?.name || t('app.defaultWorkspace') }
+          : rootless ? { projectless: true }
           : { project_name: cloudProject! }),
         ...(model_id ? { model_id } : {}),
       }).catch(() => null)
@@ -1609,9 +1650,9 @@ export const useApp = create<AppState>((set, get) => ({
       get().setActiveId(s.id)
       sid = s.id
       const draft = { ...stickyDefaults(get().desktopConfig, !!path), ...get().newChatCfg }
-      implicitInit = path
+      implicitInit = withAmadeusWorkspace(path
         ? { ...draft, execMode: 'host', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }
+        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, activeAmadeusRoot())
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!implicitInit.agentSlug && get().defaultAgentSlug) implicitInit.agentSlug = get().defaultAgentSlug
@@ -1621,7 +1662,14 @@ export const useApp = create<AppState>((set, get) => ({
     const sessionId = sid
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
     // Agent Desk:新一条用户消息解除「用户关过面板」的静音。
-    const agentConfig = { ...(implicitInit || get().configBySession[sessionId] || {}) }
+    const storedAgentConfig = implicitInit || get().configBySession[sessionId] || {}
+    const scopedAgentConfig = withAmadeusWorkspace(storedAgentConfig, activeAmadeusRoot())
+    let agentConfig = { ...scopedAgentConfig }
+    // 存量本机会话第一次发送时补齐系统 Vault 根:不仅本轮权限生效,后续 UI/重启也保持同一工作范围。
+    if (!implicitInit && scopedAgentConfig !== storedAgentConfig) {
+      set((st) => ({ configBySession: { ...st.configBySession, [sessionId]: scopedAgentConfig } }))
+      void api.putSessionConfig(get().cfg, sessionId, scopedAgentConfig).catch(() => {})
+    }
     if (!agentConfig.agentSlug && get().defaultAgentSlug) {
       // 会话没有显式选 agent → 用全局默认兜底,并**固化进会话配置**(本地 + 后端)。
       // defaultAgentSlug 是易变全局(启动异步刷新/用户改默认),不固化的话同一会话前后两轮
@@ -2019,6 +2067,8 @@ export const useApp = create<AppState>((set, get) => ({
   setNewChatCfg: (fn) => set((s) => ({ newChatCfg: fn(s.newChatCfg) })),
   setNewChatModel: (id) => set({ newChatModel: id }),
   setPendingDraft: (text) => set({ pendingDraft: text }),
+  setPendingChatQuote: (targetType, text) => set({ pendingChatQuote: { targetType, text, seq: ++pendingChatQuoteSeq } }),
+  clearPendingChatQuote: (seq) => set((s) => (s.pendingChatQuote?.seq === seq ? { pendingChatQuote: null } : {})),
   clearSteerRestore: (sessionId) => set((s) => ({ steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: undefined } })),
 
   setJumpTarget: (sessionId, messageId) => {

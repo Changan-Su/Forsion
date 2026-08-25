@@ -44,10 +44,11 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
   )
 }
 
-/** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=工作区(自动→文件)/大纲/记忆/子聊天 同组 tab。 */
+/** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=对话/工作区(自动→文件)/大纲/记忆/子聊天 同组 tab。 */
 const TANGU_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
   left: [{ type: 'workspace', params: {} }],
   right: [
+    { type: 'chat-panel', params: { followActive: true } },
     { type: 'workspace', params: {} },
     { type: 'outline', params: {} },
     { type: 'memory', params: {} },
@@ -60,7 +61,7 @@ const tanguSpace: SpaceDefinition = {
   name: () => app().tr('space.tangu'),
   icon: Bot,
   sidebarDefaults: TANGU_SIDE_VIEWS,
-  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(工作区[自动=文件] + 大纲/记忆/子聊天,默认折叠)。 */
+  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(同会话 ChatView + 文件/大纲/记忆/子聊天,默认折叠)。 */
   build() {
     ws().setSidebarDefaults(TANGU_SIDE_VIEWS)
     ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
@@ -94,7 +95,7 @@ const inboxSpace: SpaceDefinition = {
 /** Amadeus Space 的侧栏默认:左=工作区(自动→笔记)/搜索/标签 同组 tab;右=对话/大纲/反链/关系图 同组 tab。
  *  右栏首位 = 对话(2026-08-14 用户要求的默认视图):展开右栏即在笔记旁边聊天,且会自动引用主区当前这篇
  *  (见 Composer2 的「已选择」引用条)。**排第一位就是默认选中**——展开时无记忆则取 stash 首项(dockviewStore.toggleSidebar)。
- *  `chat` 视图只在含 tangu 的产品档案里注册(bootstrapEngine),Amadeus 单品档案没有它 → 那儿不排进来,
+ *  `chat-panel` 视图只在含 tangu 的产品档案里注册(bootstrapEngine),Amadeus 单品档案没有它 → 那儿不排进来,
  *  否则侧栏会多出一个渲染不出内容的空 tab。 */
 const AMADEUS_HAS_CHAT = PRODUCT.spaces.includes('tangu')
 const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
@@ -104,7 +105,7 @@ const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
     { type: 'amadeus-tags', params: {} },
   ],
   right: [
-    ...(AMADEUS_HAS_CHAT ? [{ type: 'chat', params: { followActive: true, reuseKey: 'primary' } }] : []),
+    ...(AMADEUS_HAS_CHAT ? [{ type: 'chat-panel', params: { followActive: true } }] : []),
     { type: 'outline', params: {} },
     { type: 'amadeus-backlinks', params: {} },
     { type: 'amadeus-graph', params: {} },

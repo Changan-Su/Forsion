@@ -38,6 +38,7 @@ function check(name, ok, detail) {
 }
 
 const BASE_CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/styles/base.css'), 'utf8')
+const SIDEBAR_CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/views/chat2/sidebar2.css'), 'utf8')
 
 /** 复刻 ChatView 的真实结构:.t2-chat-view(内联 flex 列)> .newchat-pickers > .engine-picker > PillBar。 */
 function page(nPills, viewWidth) {
@@ -66,6 +67,47 @@ function page(nPills, viewWidth) {
       </div>
     </div>
   </body></html>`
+}
+
+/** 工作区左栏的档位条:.t2sw(flex 列,被侧栏宽度卡住)> PillBar。
+ *  ⚠️侧栏变体把 bar 从 inline-flex 改成 flex —— 正是本文件开头警告的那条链,故单独钉一遍:
+ *  只准**胶囊层**横滚,整个侧栏绝不能跟着横向滚动(2026-08-25 用户实报)。 */
+function sidePage(nPills, sideWidth) {
+  const pills = Array.from({ length: nPills }, (_, i) =>
+    `<button class="t2sw-seg${i === 0 ? ' on' : ''}" aria-checked="${i === 0}">档位 ${i}</button>`).join('')
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    :root { --bg-card:#fff; --bg:#fff; --border:#ddd; --border-width:1px; --overlay-light:#eee;
+            --overlay-medium:#ddd; --text:#111; --text-muted:#666; --text-faint:#999; --font-ui:system-ui; }
+    body { margin:0; }
+    /* 侧栏容器:固定宽 + flex 列(与 WorkspaceHost 里的侧栏面板同构) */
+    .side-host { width:${sideWidth}px; display:flex; flex-direction:column; min-width:0; overflow:hidden; }
+    .t2sw { display:flex; flex-direction:column; min-height:0; min-width:0; flex:1; }
+    ${BASE_CSS}
+    ${SIDEBAR_CSS}
+  </style></head><body>
+    <div class="side-host">
+      <div class="t2sw">
+        <div class="engine-picker-bar" data-more>
+          <div class="engine-picker-scroll" role="radiogroup">${pills}</div>
+          <button class="engine-picker-more">⋯</button>
+        </div>
+        <div class="t2sw-body"></div>
+      </div>
+    </div>
+  </body></html>`
+}
+
+const measureSide = () => {
+  const host = document.querySelector('.side-host')
+  const bar = document.querySelector('.engine-picker-bar')
+  const scroll = document.querySelector('.engine-picker-scroll')
+  return {
+    hostW: host.getBoundingClientRect().width,
+    hostScrollW: host.scrollWidth,
+    barW: bar.getBoundingClientRect().width,
+    clientW: scroll.clientWidth,
+    scrollW: scroll.scrollWidth,
+  }
 }
 
 const measure = () => {
@@ -114,6 +156,16 @@ const measure = () => {
   })
   check('内层可横向滚动且能到底', scrolled.left > 0 && Math.abs(scrolled.left - scrolled.max) <= 1,
     `left=${scrolled.left} max=${scrolled.max}`)
+
+  // ④ 侧栏变体(工作区档位条):档位多到放不下时,**只有胶囊层横滚,侧栏本身不横滚**。
+  await p.setContent(sidePage(8, 260))
+  const side = await p.evaluate(measureSide)
+  check('侧栏:溢出测得出(⋯ 会出现)', side.scrollW - side.clientW > 1,
+    `scrollW=${side.scrollW} clientW=${side.clientW}`)
+  check('⚠️侧栏:整条不撑破侧栏宽(否则整个 view 跟着左右滑)', side.barW <= side.hostW + 1,
+    `barW=${side.barW.toFixed(1)} hostW=${side.hostW.toFixed(1)}`)
+  check('⚠️侧栏:宿主容器自身无横向滚动内容', side.hostScrollW <= side.hostW + 1,
+    `hostScrollW=${side.hostScrollW} hostW=${side.hostW.toFixed(1)}`)
 
   await browser.close()
   const failed = results.filter((r) => !r.ok)

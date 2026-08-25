@@ -8,6 +8,8 @@
  *
  * 基线快照入库于 scripts/__snapshots__/tooldefs.json:新增工具的 diff 必须是「严格追加」
  * (旧 defs 字节级前缀不变,新 provider 一律注册在 hostExecProvider 之后)。
+ * ⚠️ transcribe_audio 按仓外文件门控(<共享域>/desktop-bridge.json 存在才可见,08-24):
+ * 跑过新桌面的机器上快照会多出这一条,属预期追加,不是失败。
  * 注:MCP 工具(P6)与自定义工具走 ToolContext 运行时注入,不进本静态注册表,故不在快照内。
  */
 import { configureTangu } from '../dist/seams/runtime.js';

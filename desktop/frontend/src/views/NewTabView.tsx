@@ -149,7 +149,8 @@ export function NewTabView({ leaf }: ViewProps) {
         case 'amadeus-db': openDb(r.id); break
         case 'amadeus-pdf': openPdf(r.id); break
         case 'amadeus-drawing': openDrawing(r.id); break
-        case 'amadeus-dashboard': openDashboard(r.id); break
+        case 'amadeus-dashboard': // legacy:旧「最近使用」条目仍记着老类型 → 同样开进新画布版
+        case 'dashboard': openDashboard(r.id); break
         case 'amadeus-image': openImage(r.id); break
         case 'wsfile': ws().openView('wsfile', { path: r.id, name: r.title }, 'main', { newTab: true }); break // 同布局恢复重建 wsfile 面板的路径(bare path,不需 openWsFile 的 load 闭包)
         default: openFile(r.id)

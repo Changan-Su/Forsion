@@ -201,16 +201,23 @@ jobs:
       # 就是因为从没有任何一环真的把移动端跑起来过。
       # 浏览器**显式解析并断言存在**:不靠"runner 应该自带 chrome"这种假设,缺了就当场说清楚,
       # 免得将来 runner 镜像一换,这一步变成看不懂的失败(或更糟:被当成产品坏了)。
-      - name: Boot smoke (headless)
+      # 2026-08-25 起不止跑开机:2.8.1 发出去的包**开得起来**,可进「发布」Space 就把左面板连同
+      # 切 Space / 账号 / 设置的入口一起弄没了(e2e:spacetrap);同一天还发现 e2e:noteopen 自 08-13
+      # 就一直是红的 —— 因为**只有 e2e:boot 进过 CI**,别的仪器全靠人想起来在本地跑。这类 bug 的共性是
+      # 不崩、不报错、typecheck 也照过,开机冒烟一路绿 —— 只有真点一遍才现形,所以它们必须进这道闸。
+      - name: Mobile e2e (headless)
         working-directory: mobile
         run: |
           EXE="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
           if [ -z "$EXE" ]; then
-            echo "::error::runner 上找不到 chrome/chromium,移动端开机冒烟无法运行。请在本步骤前加装浏览器。"
+            echo "::error::runner 上找不到 chrome/chromium,移动端 e2e 无法运行。请在本步骤前加装浏览器。"
             exit 1
           fi
           echo "使用浏览器: $EXE"
-          CHROMIUM_EXE="$EXE" npm run e2e:boot
+          export CHROMIUM_EXE="$EXE"
+          npm run e2e:boot
+          npm run e2e:spacetrap
+          npm run e2e:noteopen
 
       - name: Build APK
         working-directory: mobile/android

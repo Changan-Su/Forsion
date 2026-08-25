@@ -37,6 +37,7 @@ import type {
   StatusItemContribution,
   ThemeContribution,
   ViewContribution,
+  ListSourceContribution,
 } from './types'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 
@@ -88,12 +89,13 @@ interface PluginState {
   settings: Owned<SettingContribution>[]
   settingsViews: Owned<SettingsViewContribution>[]
   views: Owned<ViewContribution>[]
+  listSources: Owned<ListSourceContribution>[]
   fileTypes: Owned<FileTypeContribution>[]
   embedRenderers: Owned<EmbedRendererContribution>[]
   fileCreators: Owned<FileCreatorContribution>[]
   /** 宿主注入的视图打开器(桌面壳=workspace.openView);无工作台的宿主保持 null,ctx.openView 即 no-op。 */
-  viewOpener: ((type: string) => void) | null
-  setViewOpener(fn: ((type: string) => void) | null): void
+  viewOpener: ((type: string, loc?: 'main' | 'left' | 'right') => void) | null
+  setViewOpener(fn: ((type: string, loc?: 'main' | 'left' | 'right') => void) | null): void
   disposers: Record<string, (() => void) | undefined>
   initialized: boolean
   /** 注册并按偏好启用一组插件;缺省 = 全部 builtins(独立版);桌面壳传自己的选择性子集。 */
@@ -388,6 +390,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         sourceLabel: get().plugins.find((p) => p.id === pluginId)?.name || pluginId,
       }),
     registerView: (view) => set((s) => ({ views: [...s.views, { pluginId, item: view }] })),
+    registerListSource: (src) => set((s) => ({ listSources: [...s.listSources, { pluginId, item: src }] })),
     // 内置后缀不给注册(内置优先是硬规则,见 isBuiltinFileType)。返回 false 让插件知道自己被内置取代了,
     // 可以整体退让 —— 光靠 find* 那道闸拦不住插件继续贡献重复的「新建 X」右键项和斜杠项。
     // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
@@ -416,7 +419,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     registerFileCreator: (def) =>
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
-    openView: (viewId) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`),
+    openView: (viewId, opts) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location),
     // 宿主 UI 当前语言(2026-08-14 起):插件自带双语词表,用它挑。只报变化,初值走 getLocale()。
     getLocale: () => currentLocale(),
     subscribeLocale: (cb) => {
@@ -512,6 +515,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       settings: s.settings.filter((o) => o.pluginId !== id),
       settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
       views: s.views.filter((o) => o.pluginId !== id),
+      listSources: s.listSources.filter((o) => o.pluginId !== id),
       fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
       embedRenderers: s.embedRenderers.filter((o) => o.pluginId !== id),
       fileCreators: s.fileCreators.filter((o) => o.pluginId !== id),
@@ -536,6 +540,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     settings: [],
     settingsViews: [],
     views: [],
+    listSources: [],
     fileTypes: [],
     embedRenderers: [],
     fileCreators: [],
@@ -592,6 +597,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           settings: s.settings.filter((o) => o.pluginId !== id),
       settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
           views: s.views.filter((o) => o.pluginId !== id),
+      listSources: s.listSources.filter((o) => o.pluginId !== id),
           fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
           embedRenderers: s.embedRenderers.filter((o) => o.pluginId !== id),
           fileCreators: s.fileCreators.filter((o) => o.pluginId !== id),

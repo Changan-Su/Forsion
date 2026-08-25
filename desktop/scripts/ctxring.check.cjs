@@ -1,19 +1,17 @@
 /**
- * 输入框「上下文进度圈」悬浮层可达性契约(真 Chromium 断言)。
+ * 输入框「上下文进度圈」详情浮层的开合契约(真 Chromium 断言)。
  *
- * 为什么存在:「压缩上下文」这个操作**唯一的按钮**住在进度圈的 hover 浮层里
- * (`.t2c-ctxring:hover .t2c-ctxring-pop`)。浮层用 `bottom: calc(100% + 8px)` 抬高,
- * 那 8px 是**谁都不占的空隙**——鼠标从圆圈往上走的一瞬间既不在圆圈上也不在浮层上,
- * hover 断掉 → 浮层 display:none → 按钮永远点不到(用户口径:「压缩不可用」)。
- * 修法是给浮层补一条透明桥(::after 铺满那 8px),视觉不变、hover 连续。
+ * 2026-08-24 起由 hover 改为**点击**开合(`.t2c-ctxring.is-open .t2c-ctxring-pop`):
+ * 悬停式浮层与圆圈之间那 8px 空隙谁都不占,鼠标往上走 hover 就断,里面唯一的
+ * 「压缩上下文」按钮点不到,当年靠一条 ::after 透明桥补的——点击式不需要那条桥。
+ * 这个仪器现在钉的是:①平时不显示 ②光悬停不弹(防退回 hover 式)③点击弹出
+ * ④与圆环左对齐 ⑤压缩按钮点得到 ⑥点浮层外收起。
  *
- * 关键:必须用**分步移动**的鼠标(steps)模拟真人轨迹。Playwright 的 locator.click()
- * 是一步瞬移到目标,浮层还没来得及消失就命中了按钮——那样测什么都是绿的。
- *
- * 页面直接注入仓里真实的 composer2.css(不复制样式),故不会与源码漂移。
+ * 页面直接注入仓里真实的 composer2.css(不复制样式),故不会与源码漂移;
+ * 开合的那点 JS 是 Composer2 的 `openMenu === 'ctx'` + `[data-cmenu]` 外点关的复刻。
  * 改 .t2c-ctxring* 任何一条样式后必跑。
  *
- * 跑:node scripts/ctxring-hover.check.cjs   (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
+ * 跑:node scripts/ctxring.check.cjs   (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
  */
 const fs = require('fs')
 const os = require('os')
@@ -51,27 +49,33 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
   ${CSS}
 </style></head><body>
   <div class="row">
-    <span class="t2c-ctxring">
-      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-        <circle class="t2c-ctxring-track" cx="12" cy="12" r="9"></circle>
-        <circle class="t2c-ctxring-fill" cx="12" cy="12" r="9" style="stroke-dasharray:56.5;stroke-dashoffset:48.6"></circle>
-      </svg>
+    <span class="t2c-ctxring" data-cmenu>
+      <button type="button" class="t2c-ctxring-btn" aria-label="上下文 14%">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <circle class="t2c-ctxring-track" cx="12" cy="12" r="9"></circle>
+          <circle class="t2c-ctxring-fill" cx="12" cy="12" r="9" style="stroke-dasharray:56.5;stroke-dashoffset:48.6"></circle>
+        </svg>
+      </button>
       <span class="t2c-ctxring-pop">
         <span class="t2c-ctxring-pct">上下文 14%</span>
-        <span>17,607 / 128,000 tokens</span>
+        <span>17.6k / 128k tokens</span>
         <button class="t2c-ctxring-compact" id="compact">压缩上下文</button>
       </span>
     </span>
   </div>
   <script>
+    // Composer2 的 openMenu==='ctx' 复刻:点圆环切换,点 [data-cmenu] 外收起
+    const ring = document.querySelector('.t2c-ctxring')
+    ring.querySelector('.t2c-ctxring-btn').addEventListener('click', () => ring.classList.toggle('is-open'))
+    document.addEventListener('mousedown', (e) => { if (!e.target.closest('[data-cmenu]')) ring.classList.remove('is-open') })
     window.__compacted = false
-    document.getElementById('compact').addEventListener('click', () => { window.__compacted = true })
+    document.getElementById('compact').addEventListener('click', () => { window.__compacted = true; ring.classList.remove('is-open') })
   </script>
 </body></html>`
 
 const box = (sel) => {
   const r = document.querySelector(sel).getBoundingClientRect()
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, bottom: r.bottom }
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
 }
 const popShown = () => getComputedStyle(document.querySelector('.t2c-ctxring-pop')).display !== 'none'
 
@@ -80,38 +84,31 @@ const popShown = () => getComputedStyle(document.querySelector('.t2c-ctxring-pop
   const p = await browser.newPage({ viewport: { width: 900, height: 600 } })
   await p.setContent(PAGE)
 
+  check('初始不显示详情浮层', !(await p.evaluate(popShown)))
+
   const ring = await p.evaluate(box, '.t2c-ctxring')
   await p.mouse.move(ring.x, ring.y)
-  check('悬停进度圈弹出详情浮层', await p.evaluate(popShown))
+  check('⚠️只悬停不弹出(2026-08-24 改点击式,退回 hover 即红)', !(await p.evaluate(popShown)))
+
+  await p.mouse.down()
+  await p.mouse.up()
+  check('点击进度圈弹出详情浮层', await p.evaluate(popShown))
 
   // 浮层与圆环左对齐(用户要求;此前是 right:0 右对齐,浮层往左甩出去一大截)
-  const pop = await p.evaluate(() => {
-    const r = document.querySelector('.t2c-ctxring-pop').getBoundingClientRect()
-    return { left: r.left, right: r.right }
-  })
+  const pop = await p.evaluate(() => document.querySelector('.t2c-ctxring-pop').getBoundingClientRect().left)
   const ringL = await p.evaluate(() => document.querySelector('.t2c-ctxring').getBoundingClientRect().left)
-  check('详情浮层与圆环左对齐', Math.abs(pop.left - ringL) < 1, `pop.left=${pop.left.toFixed(1)} ring.left=${ringL.toFixed(1)}`)
+  check('详情浮层与圆环左对齐', Math.abs(pop - ringL) < 1, `pop.left=${pop.toFixed(1)} ring.left=${ringL.toFixed(1)}`)
 
   const btn = await p.evaluate(box, '.t2c-ctxring-compact')
-  // 空隙中点:浮层底缘与圆圈顶缘之间。真人的鼠标必经此处。
-  const gapY = await p.evaluate(() => {
-    const pop = document.querySelector('.t2c-ctxring-pop').getBoundingClientRect()
-    const ring = document.querySelector('.t2c-ctxring').getBoundingClientRect()
-    return (pop.bottom + ring.top) / 2
-  })
-  await p.mouse.move(ring.x, gapY, { steps: 6 })
-  check('⚠️鼠标经过圆圈与浮层之间的空隙时浮层不消失(消失=压缩按钮永远点不到)', await p.evaluate(popShown),
-    `gapY=${gapY.toFixed(1)} ringTop=${ring.top.toFixed(1)}`)
-
-  // 真人轨迹:分步移到按钮再点(不是 locator.click 的一步瞬移——那会掩盖 hover 断裂)
   await p.mouse.move(btn.x, btn.y, { steps: 12 })
   await p.mouse.down()
   await p.mouse.up()
-  check('沿真人轨迹能点到「压缩上下文」', await p.evaluate(() => window.__compacted))
+  check('能点到「压缩上下文」', await p.evaluate(() => window.__compacted))
 
-  // 反向:移开后浮层必须收起(别把桥做成常显)
-  await p.mouse.move(ring.x + 300, ring.y + 200, { steps: 8 })
-  check('鼠标移开后浮层收起', !(await p.evaluate(popShown)))
+  // 外点收起(压缩那下已顺带关掉,重开一次再验)
+  await p.mouse.move(ring.x, ring.y); await p.mouse.down(); await p.mouse.up()
+  await p.mouse.move(ring.x + 300, ring.y + 200); await p.mouse.down(); await p.mouse.up()
+  check('点浮层外收起', !(await p.evaluate(popShown)))
 
   await browser.close()
   const failed = results.filter((r) => !r.ok)
