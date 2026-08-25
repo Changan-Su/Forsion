@@ -41,15 +41,22 @@ function check(name, ok, detail) {
 
 const SRC = path.join(__dirname, '../frontend/src')
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
-// 真源:base.css(token 契约 + 组件类)+ skins.css(配色轴)+ 三个 bundle 语言包。
-// 磁盘主题(~/.forsion/themes)天然管不到,那是用户文件;bundle 这几个是我们的门面。
-const LANGS = ['lovable', 'genesis-glass', 'zhi']
-const CSS = [read('styles/base.css'), read('theme/skins.css'), ...LANGS.map((id) => read(`theme/themes/${id}/theme.css`))].join('\n')
-const SKINS = ['cream', 'coral', 'teal', 'lavender']
+// 真源:base.css(token 契约 + 组件类)+ skins.css(配色轴)+ 三个 bundle 语言包 + 第一方 soft 磁盘种子。
+// 任意用户主题天然管不到；但 soft 是产品首次启动自动种入的默认语言，必须与 bundle 门面同级受检。
+require('sucrase/register/ts')
+const { SEED_THEMES } = require(path.join(__dirname, '../electron/seedThemes.ts'))
+const SOFT_CSS = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
+if (!SOFT_CSS) throw new Error('缺少第一方 soft 磁盘种子主题')
+const LANGS = ['lovable', 'genesis-glass', 'soft', 'zhi']
+const CSS = [
+  read('styles/base.css'),
+  read('theme/skins.css'),
+  ...LANGS.map((id) => id === 'soft' ? SOFT_CSS : read(`theme/themes/${id}/theme.css`)),
+].join('\n')
+const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi']
 // custom 配色没有 CSS 块 —— 它的 accent/bg 族由 customSkinVars(seed) 运行时内联到 :root。
 // 必须一起扫:seed 直接改写 --accent-ink,而 --sel-line 就建在它上面。极端 seed(纯白/纯黑)专门
 // 用来验 customSkinVars 里那两条可读性守卫(暗底提亮过深 seed、亮底压深过浅 seed)确实兜住了。
-require('sucrase/register/ts')
 const { customSkinVars } = require(path.join(SRC, 'theme/lcl/lovableData.ts'))
 const SEEDS = ['#8b7fd6', '#ffffff', '#000000', '#ff0000']
 

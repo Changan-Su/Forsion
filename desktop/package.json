@@ -50,6 +50,8 @@
     "check:modelmenu": "node scripts/model-menu.check.cjs",
     "check:menutap": "node scripts/menu-tap.check.cjs",
     "check:settingsui": "node scripts/settings-ui.check.cjs",
+    "check:themecontrast": "node scripts/theme-contrast.check.cjs",
+    "check:themevisual": "node scripts/theme-visual.check.cjs",
     "check:marketui": "node scripts/market-ui.check.cjs",
     "check:uifont": "node scripts/ui-font.check.cjs",
     "check:topchrome": "node scripts/top-chrome.check.cjs",
