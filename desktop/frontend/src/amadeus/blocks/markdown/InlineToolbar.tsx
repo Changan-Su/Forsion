@@ -32,21 +32,21 @@ export type ToolbarAction =
   | 'alignRight'
 
 // 调色板(参考 AFFiNE 命名色;十六进制,后续可换 LCL token)。'' = 清除该颜色。
-// 色板 = AFFiNE **v1** 编辑器亮色真值(--affine-text-highlight-*;高亮菜单实际引用的是 v1 变量,
-// 2026-08-13 第4振:此前误取 v2 design token,暗色整片过暗)。品红/粉为本产品扩展(AFFiNE 无 fg 粉)。
+// 色板的色相沿用 AFFiNE **v1** 编辑器(--affine-text-highlight-*),但文字色为 Genesis 的
+// 浅色纸面略微压暗到 AA;否则橙/黄/绿/青/灰会在某些 skin 下掉到 3–4:1。品红/粉为产品扩展。
 // 落盘存字面亮色 hex(Obsidian 可渲染);暗色由 marks.ts 的 data-hl/data-hlc 语义名 + styles.css
 // 覆盖切换 —— 改这里的值必须同步 marks.ts 的 HL_BG_NAMES/HL_FG_NAMES 与 styles.css 暗色段。
 const TEXT_COLORS: Array<{ name: string; v: string }> = [
   { name: '默认', v: '' },
   { name: '红', v: '#c62222' },
-  { name: '橙', v: '#d34f0b' },
-  { name: '黄', v: '#b67c04' },
-  { name: '绿', v: '#149343' },
-  { name: '青', v: '#0782a0' },
+  { name: '橙', v: '#b9450a' },
+  { name: '黄', v: '#8f6203' },
+  { name: '绿', v: '#117b38' },
+  { name: '青', v: '#06748f' },
   { name: '蓝', v: '#2159d3' },
   { name: '紫', v: '#842ed3' },
   { name: '品红', v: '#941555' },
-  { name: '灰', v: '#7a7a7a' },
+  { name: '灰', v: '#6a6a6a' },
 ]
 const BG_COLORS: Array<{ name: string; v: string }> = [
   { name: '默认', v: '' },

@@ -246,8 +246,8 @@
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
-  background: var(--accent);
-  color: var(--on-accent, #fff);
+  background: var(--action-fill);
+  color: var(--on-action, #fff);
 }
 .ibx-claim-btn:disabled { cursor: default; opacity: 0.55; }
 .ibx-claim-btn.done { background: var(--bg-secondary, transparent); color: var(--text-faint); border: 1px solid var(--border); opacity: 1; }

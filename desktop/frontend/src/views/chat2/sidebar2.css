@@ -352,7 +352,7 @@
   line-height: 16px;
 }
 .t2s-mini-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint, var(--text-muted)); opacity: 0.5; }
-.t2s-mini-dot.ok { background: #3aaf7d; opacity: 1; }
+.t2s-mini-dot.ok { background: var(--green); opacity: 1; }
 .t2s-group-add {
   width: 24px; height: 24px;
   display: inline-flex; align-items: center; justify-content: center;

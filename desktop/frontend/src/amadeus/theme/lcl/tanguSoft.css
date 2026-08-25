@@ -120,23 +120,23 @@
 /* ── sidebar card ── */
 .ts-side { width: 230px; flex: 0 0 auto; display: flex; flex-direction: column; padding: 14px; }
 .ts-brand { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 700; padding: 4px 6px 14px; }
-.ts-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 15px; box-shadow: var(--shadow-sm); }
+.ts-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--action-fill); color: var(--on-action); display: inline-flex; align-items: center; justify-content: center; font-size: 15px; box-shadow: var(--shadow-sm); }
 .ts-side-group { font-size: 11px; font-weight: 700; color: var(--ink-faint); padding: 8px 8px 6px; letter-spacing: 0.04em; }
 .ts-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .ts-nav-item { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13.5px; color: var(--ink-soft); }
 .ts-nav-item:hover { background: var(--card-2); }
-.ts-nav-item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.ts-nav-item.on { background: var(--accent-soft); color: var(--accent-ink, var(--accent)); font-weight: 600; }
 .ts-nav-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
 .ts-nav-item .ts-ic { width: 17px; text-align: center; opacity: 0.8; }
 .ts-nav-grow { flex: 1; }
-.ts-badge { margin-left: auto; font-size: 10px; font-weight: 700; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; }
+.ts-badge { margin-left: auto; font-size: 10px; font-weight: 700; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--action-fill); color: var(--on-action); display: inline-flex; align-items: center; justify-content: center; }
 /* account = nested card-in-card */
 .ts-account { display: flex; align-items: center; gap: 9px; margin-top: 10px; padding: 9px 10px; border-radius: var(--radius-sm); background: var(--card-2); }
-.ts-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: 0 0 auto; }
+.ts-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--action-fill); color: var(--on-action); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: 0 0 auto; }
 .ts-avatar.lav { background: var(--lav); }
 .ts-account-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; }
 .ts-account-sub { font-size: 11px; color: var(--ink-faint); }
-.ts-tier { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.ts-tier { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink, var(--accent)); }
 
 /* ── header card ── */
 .ts-header { display: flex; align-items: center; gap: 10px; padding: 11px 16px; }
@@ -150,7 +150,7 @@
 .ts-chat { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: var(--gap); }
 .ts-row { display: flex; flex-direction: column; }
 .ts-row.user { align-items: flex-end; }
-.ts-user { max-width: 78%; padding: 11px 15px; border-radius: 16px 16px 5px 16px; background: var(--accent); color: var(--on-accent); font-size: 14px; line-height: 1.55; box-shadow: var(--shadow-sm); }
+.ts-user { max-width: 78%; padding: 11px 15px; border-radius: 16px 16px 5px 16px; background: var(--action-fill); color: var(--on-action); font-size: 14px; line-height: 1.55; box-shadow: var(--shadow-sm); }
 .ts-role { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--ink-faint); margin: 2px 0 9px; }
 .ts-role .ts-avatar { width: 20px; height: 20px; font-size: 10px; }
 .ts-asst { display: flex; flex-direction: column; gap: 11px; }
@@ -165,7 +165,7 @@
 .ts-think-body { margin-top: 7px; font-size: 12.5px; line-height: 1.6; color: var(--ink-faint); }
 
 .ts-tool-head { display: flex; align-items: center; gap: 9px; font-size: 13px; }
-.ts-tool-ic { width: 24px; height: 24px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-size: 12.5px; flex: 0 0 auto; }
+.ts-tool-ic { width: 24px; height: 24px; border-radius: 7px; background: var(--accent-soft); color: var(--accent-ink, var(--accent)); display: inline-flex; align-items: center; justify-content: center; font-size: 12.5px; flex: 0 0 auto; }
 .ts-tool-name { font-weight: 700; }
 .ts-tool-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
 .ts-pill { font-size: 11px; font-weight: 600; padding: 3px 2px; background: transparent; color: var(--ink-faint); }
@@ -175,14 +175,14 @@
 .ts-card-title { font-size: 12.5px; font-weight: 700; margin-bottom: 9px; display: flex; align-items: center; gap: 7px; }
 .ts-todo { display: flex; gap: 8px; font-size: 13.5px; line-height: 1.85; }
 .ts-todo .m-done { color: var(--ok); }
-.ts-todo .m-prog { color: var(--accent); }
+.ts-todo .m-prog { color: var(--accent-ink, var(--accent)); }
 .ts-todo .m-wait { color: var(--ink-ghost); }
 .ts-strike { text-decoration: line-through; color: var(--ink-faint); }
 
 .ts-approve-pre { font-family: var(--mono); font-size: 12.5px; background: var(--card-2); border-radius: var(--radius-xs); padding: 9px 12px; margin: 0 0 11px; }
 .ts-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .ts-btn { padding: 8px 15px; border: none; border-radius: 999px; cursor: pointer; font-family: var(--font); font-size: 13px; font-weight: 600; }
-.ts-btn.primary { background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-sm); }
+.ts-btn.primary { background: var(--action-fill); color: var(--on-action); box-shadow: var(--shadow-sm); }
 .ts-btn.soft { background: var(--card); color: var(--ink); box-shadow: var(--shadow-sm); }
 .ts-btn.danger { background: var(--danger-soft); color: var(--danger); }
 /* options = ONE connected list (single subtle surface, rows split by a soft hairline — not separate cards) */
@@ -195,12 +195,12 @@
 
 /* ── composer card ── */
 .ts-composer { padding: 13px 15px; }
-.ts-attach { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-bottom: 9px; }
+.ts-attach { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-ink, var(--accent)); margin-bottom: 9px; }
 .ts-attach button { border: none; background: transparent; color: inherit; cursor: pointer; }
 .ts-composer-ta { font-size: 14px; line-height: 1.5; color: var(--ink-soft); min-height: 24px; }
 .ts-composer-bar { display: flex; align-items: center; gap: 9px; margin-top: 11px; }
 .ts-composer-bar .ts-grow { flex: 1; }
-.ts-send { width: 38px; height: 38px; border: none; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; font-size: 16px; box-shadow: var(--shadow-sm); }
+.ts-send { width: 38px; height: 38px; border: none; border-radius: 50%; background: var(--action-fill); color: var(--on-action); cursor: pointer; font-size: 16px; box-shadow: var(--shadow-sm); }
 .ts-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 7px 13px; border: none; border-radius: 999px; background: var(--card-2); color: var(--ink-soft); cursor: pointer; }
 .ts-ctx { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-faint); }
 .ts-ctxbar { width: 48px; height: 6px; border-radius: 3px; background: var(--accent-soft); overflow: hidden; }
@@ -210,11 +210,11 @@
 .ts-ws { width: 256px; flex: 0 0 auto; display: flex; flex-direction: column; padding: 14px; }
 .ts-ws-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
 .ts-ws-tab { flex: 1; padding: 8px 0; border: none; border-radius: 999px; background: transparent; color: var(--ink-faint); cursor: pointer; font-family: var(--font); font-size: 12px; font-weight: 600; }
-.ts-ws-tab.on { background: var(--accent-soft); color: var(--accent); }
+.ts-ws-tab.on { background: var(--accent-soft); color: var(--accent-ink, var(--accent)); }
 .ts-ws-sub { font-size: 11px; font-weight: 700; color: var(--ink-faint); padding: 4px 6px; }
 .ts-file { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; color: var(--ink-soft); }
 .ts-file:hover { background: var(--card-2); }
-.ts-file.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.ts-file.on { background: var(--accent-soft); color: var(--accent-ink, var(--accent)); font-weight: 600; }
 .ts-file .ts-ic { opacity: 0.75; }
 .ts-file-name { font-family: var(--mono); font-size: 12.5px; }
 

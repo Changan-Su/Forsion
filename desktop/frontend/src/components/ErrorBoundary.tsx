@@ -26,7 +26,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
           {zh ? '这一部分崩溃了。可重试、或切换/新建会话避开它;请把下面的错误发给开发者。'
               : 'This view crashed. Retry, or switch/start a new chat to avoid it; send the error below to the developer.'}
         </p>
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, background: 'rgba(127,127,127,0.12)', color: '#c0392b', padding: 12, borderRadius: 8, maxHeight: 280, overflow: 'auto' }}>{detail}</pre>
+        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, background: 'var(--danger-light)', color: 'var(--danger)', padding: 12, borderRadius: 8, maxHeight: 280, overflow: 'auto' }}>{detail}</pre>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button style={{ padding: '6px 12px' }} onClick={() => this.setState({ error: null })}>{zh ? '重试' : 'Retry'}</button>
           <button style={{ padding: '6px 12px' }} onClick={() => { try { void navigator.clipboard.writeText(detail) } catch { /* ignore */ } }}>{zh ? '复制错误' : 'Copy error'}</button>

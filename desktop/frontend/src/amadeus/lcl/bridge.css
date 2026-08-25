@@ -17,8 +17,8 @@
   --text-sec: var(--ink-soft);
   --text-muted: var(--ink-faint);
   --primary: var(--accent-ink);
-  --primary-2: var(--accent-hover);
-  --on-primary: var(--on-accent);
+  --primary-2: var(--action-fill-hover);
+  --on-primary: var(--on-action, var(--on-accent-ink, var(--on-accent)));
   --selection: var(--accent-soft);
   --drop: var(--accent-soft);
   --primary-soft: var(--accent-soft);
@@ -42,8 +42,8 @@
   --border-strong: var(--overlay-strong);
   --text-sec: var(--text-light);
   --primary: var(--accent-ink);
-  --primary-2: var(--accent-hover);
-  --on-primary: var(--on-accent);
+  --primary-2: var(--action-fill-hover);
+  --on-primary: var(--on-action, var(--on-accent-ink, var(--on-accent)));
   --selection: var(--accent-light);
   --drop: var(--accent-light);
   --primary-soft: var(--accent-light);

@@ -286,7 +286,7 @@
 .mb-tabrow-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mb-tabrow-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px; border-radius: 8px; opacity: 0.5; }
 .mb-tabrow-x:active { opacity: 1; background: var(--bg-active, rgba(0, 0, 0, 0.12)); }
-.mb-tabrow-new { color: var(--accent, #4d8794); font-weight: 600; }
+.mb-tabrow-new { color: var(--accent-ink, var(--accent, #4d8794)); font-weight: 600; }
 
 /* ── 左抽屉底部常驻区:Space 切换条 + 账号卡/设置(原全局底栏移入,2026-08-05) ── */
 .mb-drawer-foot {
@@ -365,7 +365,7 @@
   color: var(--text-muted, rgba(0, 0, 0, 0.6));
   cursor: pointer;
 }
-.sc-size.on { background: var(--accent, #4d8794); border-color: transparent; color: #fff; }
+.sc-size.on { background: var(--action-fill, var(--accent-ink, #41727d)); border-color: transparent; color: var(--on-action, var(--on-accent-ink, #fff)); }
 .sc-device {
   position: relative;
   /* transform 让 .sc-device 成为「包含块」:框内所有 position:fixed 后代(单列壳 mb-shell、抽屉/弹层 scrim,

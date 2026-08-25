@@ -177,7 +177,7 @@ export const GroupChatSetup: React.FC<{
                         background: on ? 'var(--accent-soft)' : 'transparent', color: 'inherit', cursor: 'pointer',
                       }}>
                         <span style={{ width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${on ? 'var(--accent-ink)' : 'var(--border)'}`, background: on ? 'var(--accent-ink)' : 'transparent' }}>
-                          {on && <Check size={12} color="var(--on-accent)" />}
+                          {on && <Check size={12} color="var(--on-accent-ink, var(--on-accent))" />}
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>

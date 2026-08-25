@@ -62,8 +62,8 @@
 .pdfa-tool { border-color: transparent; padding: 0 6px; color: var(--text-muted); }
 .pdfa-tool:hover:not(:disabled) { color: var(--text); }
 .pdfa-tool.on {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--accent-ink, var(--accent));
+  border-color: var(--accent-ink, var(--accent));
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
@@ -93,7 +93,7 @@
   cursor: pointer;
   box-shadow: inset 0 0 0 1px var(--border);
 }
-.pdfa-swatch.on { border-color: var(--accent); }
+.pdfa-swatch.on { border-color: var(--accent-ink, var(--accent)); }
 
 /* ---------- 主体:侧栏 + 视口 ---------- */
 
@@ -134,9 +134,9 @@
   border-radius: 4px;
   box-sizing: border-box;
 }
-.pdfa-thumb.on canvas { border-color: var(--accent); }
+.pdfa-thumb.on canvas { border-color: var(--accent-ink, var(--accent)); }
 .pdfa-thumb .no { margin-top: 3px; font-size: 11px; color: var(--text-muted); }
-.pdfa-thumb.on .no { color: var(--accent); }
+.pdfa-thumb.on .no { color: var(--accent-ink, var(--accent)); }
 
 .pdfa-outline { padding: 8px 6px; font-size: 13px; }
 .pdfa-outline button {

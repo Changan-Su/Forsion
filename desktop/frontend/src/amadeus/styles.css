@@ -1498,6 +1498,15 @@ body.amx-marquee-active * {
    2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
    in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
    色值与 InlineToolbar/marks.ts 同源;品红/粉为本产品扩展,取同族明度自配。 */
+[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'] { color: #c62222 !important; }
+[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'] { color: #b9450a !important; }
+[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'] { color: #8f6203 !important; }
+[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'] { color: #117b38 !important; }
+[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'] { color: #06748f !important; }
+[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'] { color: #2159d3 !important; }
+[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'] { color: #842ed3 !important; }
+[data-mode='light'] .am-app span[data-hlc='magenta'], .am-app[data-mode='light'] span[data-hlc='magenta'] { color: #941555 !important; }
+[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'] { color: #6a6a6a !important; }
 [data-mode='dark'] .am-app mark[data-hl='red'], .am-app[data-mode='dark'] mark[data-hl='red'] { background: #6c2727 !important; }
 [data-mode='dark'] .am-app mark[data-hl='orange'], .am-app[data-mode='dark'] mark[data-hl='orange'] { background: #703a15 !important; }
 [data-mode='dark'] .am-app mark[data-hl='yellow'], .am-app[data-mode='dark'] mark[data-hl='yellow'] { background: #6a540f !important; }
@@ -1516,7 +1525,7 @@ body.amx-marquee-active * {
 [data-mode='dark'] .am-app span[data-hlc='blue'], .am-app[data-mode='dark'] span[data-hlc='blue'] { color: #80b7fb !important; }
 [data-mode='dark'] .am-app span[data-hlc='purple'], .am-app[data-mode='dark'] span[data-hlc='purple'] { color: #cd9dfd !important; }
 [data-mode='dark'] .am-app span[data-hlc='magenta'], .am-app[data-mode='dark'] span[data-hlc='magenta'] { color: #f98dbb !important; }
-[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'] { color: #565656 !important; }
+[data-mode='dark'] .am-app span[data-hlc='grey'], .am-app[data-mode='dark'] span[data-hlc='grey'] { color: #a8a8ad !important; }
 .am-app .slash-scroll {
   display: flex;
   flex-direction: column;
@@ -2203,7 +2212,7 @@ body.amx-marquee-active * {
 .am-app .dialog-btn[data-danger] {
   background: var(--danger, #e5484d);
   border-color: var(--danger, #e5484d);
-  color: var(--on-accent, #fff);
+  color: var(--on-danger, #fff);
 }
 
 /* ── Theme picker ─────────────────────────────────────────── */
@@ -2651,10 +2660,10 @@ body.amx-marquee-active * {
   border-color: var(--border-strong); border-style: dashed;
 }
 .amx-btnblock-btn[data-blank]:hover:not(:disabled) { background: var(--primary-soft, transparent); color: var(--text); border-color: var(--primary); }
-/* 二次确认:就地变态(不弹模态)。红底恒配白字 —— 与 .dialog-btn[data-danger] 同款处理。 */
+/* 二次确认:就地变态(不弹模态)。危险底必须走 on-danger；暗色 danger 偏亮，不能继续硬配白字。 */
 .amx-btnblock-btn[data-confirm],
 .amx-btnblock-btn[data-confirm]:hover:not(:disabled) {
-  background: var(--danger, #e5484d); border-color: var(--danger, #e5484d); color: #fff;
+  background: var(--danger, #e5484d); border-color: var(--danger, #e5484d); color: var(--on-danger, #fff);
 }
 .amx-btnblock-cancel, .amx-btnblock-gear {
   border: none; background: transparent; cursor: pointer; font-size: 12px;
@@ -2952,7 +2961,7 @@ body.amx-marquee-active * {
 }
 .am-app .amx-linkedit-row { display: flex; justify-content: flex-end; gap: 8px; }
 .am-app .amx-linkedit-row button { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
-.am-app .amx-linkedit-row button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.am-app .amx-linkedit-row button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary, #fff); }
 .am-app .amx-linkedit-row button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── 画布模式(unified/canvas.ts + unified/canvasStage.tsx,2026-08-16 Phase 1)。─────────────
@@ -3509,7 +3518,7 @@ body.amx-marquee-active * {
   cursor: pointer;
 }
 .am-app .amx-stage-tools button:hover { background: var(--surface-3, var(--bg)); color: var(--text); }
-.am-app .amx-stage-tools button.on { background: var(--primary); color: #fff; }
+.am-app .amx-stage-tools button.on { background: var(--primary); color: var(--on-primary, #fff); }
 .am-app .amx-stage-hint {
   position: absolute;
   left: 50%;

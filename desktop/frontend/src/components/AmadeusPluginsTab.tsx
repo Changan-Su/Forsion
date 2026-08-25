@@ -74,7 +74,7 @@ const BundleChips: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   return (
     <>
       {parts.filter(([, n]) => n > 0).map(([k, n]) => (
-        <span key={k} style={{ ...badge, color: 'var(--accent, var(--text-faint))', borderColor: 'var(--accent, var(--border))' }}>
+        <span key={k} style={{ ...badge, color: 'var(--accent-ink, var(--accent, var(--text-faint)))', borderColor: 'var(--accent-ink, var(--accent, var(--border)))' }}>
           {t(k, { n: String(n) })}
         </span>
       ))}

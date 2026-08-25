@@ -46,7 +46,7 @@
 .t2c-iconbtn:disabled { opacity: 0.4; cursor: default; }
 .t2c-send {
   width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: 999px; background: var(--accent); color: var(--on-accent, #fff); cursor: pointer;
+  border: none; border-radius: 999px; background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;
   transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s);
 }
 .t2c-send:hover:not(:disabled) { transform: translateY(-1px); }

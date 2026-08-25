@@ -32,7 +32,7 @@
   padding: 7px; border-radius: 8px; border: var(--border-width) dashed var(--border);
   background: none; color: var(--text-light); font-size: 12.5px; cursor: pointer;
 }
-.auto-newbtn:hover { border-color: var(--accent); color: var(--accent-ink, var(--accent)); }
+.auto-newbtn:hover { border-color: var(--accent-ink, var(--accent)); color: var(--accent-ink, var(--accent)); }
 
 /* ── 主区详情 ── */
 .auto-detail { height: 100%; overflow-y: auto; padding: 18px 22px; }
@@ -112,7 +112,7 @@
   background: none; color: var(--text-light); font-size: 12px; cursor: pointer;
 }
 .auto-seg button.active {
-  border-color: var(--accent); color: var(--accent-ink, var(--accent)); font-weight: 500;
+  border-color: var(--accent-ink, var(--accent)); color: var(--accent-ink, var(--accent)); font-weight: 500;
 }
 .auto-builder-actions { display: flex; gap: 10px; margin-top: 22px; justify-content: flex-end; }
 
@@ -137,7 +137,7 @@
   border: var(--border-width) dashed var(--border); background: none;
   color: var(--text-light); font-size: 12px; cursor: pointer;
 }
-.auto-addstep button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-ink, var(--accent)); }
+.auto-addstep button:hover:not(:disabled) { border-color: var(--accent-ink, var(--accent)); color: var(--accent-ink, var(--accent)); }
 .auto-addstep button:disabled { opacity: 0.45; cursor: default; }
 .auto-guard {
   display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; color: var(--text-light);

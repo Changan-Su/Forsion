@@ -222,10 +222,10 @@
 .ach-row-got { color: var(--accent-ink); display: grid; place-items: center; width: 26px; flex: none; }
 .ach-claim {
   height: 26px; padding: 0 12px; flex: none;
-  border: 1px solid var(--accent); border-radius: var(--radius-sm);
-  background: var(--accent); color: var(--on-accent);
+  border: 1px solid var(--action-fill); border-radius: var(--radius-sm);
+  background: var(--action-fill); color: var(--on-action);
   font-size: 12px; font-weight: 600; cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-out);
+  transition: filter var(--duration-fast) var(--ease-out);
   -webkit-app-region: no-drag;
 }
-.ach-claim:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.ach-claim:hover { filter: brightness(1.06); }

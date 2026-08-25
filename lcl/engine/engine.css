@@ -72,10 +72,10 @@
 .rb-plus { opacity: 0.4; }
 .rb-plus:hover { opacity: 1; }
 /* 收纳夹/「…」作为拖入目标时的高亮(整钮描边,区别于槽位间的插入线)。 */
-.rb-btn.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent, var(--text)); }
+.rb-btn.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent-ink, var(--accent, var(--text))); }
 /* Space 图标 = 顶部 ribbon 项(可拖动改序,排在折叠钮之下、商店之上):当前空间高亮。 */
-.rb-space.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); color: var(--accent, var(--text)); }
-.rb-space.on:hover { color: var(--accent, var(--text)); }
+.rb-space.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); color: var(--accent-ink, var(--accent, var(--text))); }
+.rb-space.on:hover { color: var(--accent-ink, var(--accent, var(--text))); }
 /* 收件箱未读角标(数字胶囊;模板源自 base.css .ribbon-account.expired 红点)。 */
 .rb-space { position: relative; }
 .rb-badge {
@@ -87,7 +87,7 @@
   padding: 0 4px;
   border-radius: 999px;
   background: var(--danger, #e5484d);
-  color: #fff;
+  color: var(--on-danger, #fff);
   font-size: 9.5px;
   font-weight: 700;
   line-height: 15px;
@@ -179,7 +179,7 @@
 /* 「…」里溢出的收纳夹标题:可拖出重排 + 可放入(codex#6)。 */
 .rb-fly-folderhead { display: flex; align-items: center; gap: 6px; border-radius: var(--radius-sm, 8px); cursor: grab; }
 .rb-fly-folderhead.dragging { opacity: 0.4; }
-.rb-fly-folderhead.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent, var(--text)); }
+.rb-fly-folderhead.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent-ink, var(--accent, var(--text))); }
 .rb-fly-empty { font-size: 12px; color: var(--text-muted); padding: 4px 8px 8px; }
 .rb-fly-row { position: relative; border-radius: var(--radius-sm, 8px); }
 .rb-fly-row .rb-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 10px; height: 32px; }
@@ -243,7 +243,7 @@
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .rb-iconpick-btn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
-.rb-iconpick-btn.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); color: var(--accent, var(--text)); box-shadow: inset 0 0 0 1.5px var(--accent-ink); }
+.rb-iconpick-btn.on { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); color: var(--accent-ink, var(--accent, var(--text))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); }
 
 /* 命令面板行首图标(选取模式 + 常规都用)。 */
 .cmd-title { display: inline-flex; align-items: center; gap: 8px; }

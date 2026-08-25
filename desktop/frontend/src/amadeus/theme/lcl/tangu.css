@@ -138,7 +138,7 @@
 
 /* ── hero ── */
 .tg-hero { display: flex; align-items: center; gap: 18px; margin-bottom: 44px; }
-.tg-hero__mark { width: 56px; height: 56px; flex: 0 0 auto; border-radius: 14px; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-size: 26px; box-shadow: var(--btn-shadow); }
+.tg-hero__mark { width: 56px; height: 56px; flex: 0 0 auto; border-radius: 14px; background: var(--action-fill); color: var(--on-action); display: flex; align-items: center; justify-content: center; font-size: 26px; box-shadow: var(--btn-shadow); }
 .tg-hero h1 { margin: 0 0 8px; font-size: 30px; font-weight: 600; letter-spacing: -0.9px; }
 .tg-hero h1 span { color: var(--text-muted); font-weight: 400; }
 .tg-hero p { margin: 0 0 12px; font-size: 15px; line-height: 1.55; color: var(--text-muted); max-width: 64ch; }
@@ -156,7 +156,7 @@
 .tg-skin-btn b { font-size: 13px; font-weight: 600; }
 .tg-skin-btn span { font-size: 10px; color: var(--text-faint); }
 .tg-skin-btn:not(.is-active):hover { color: var(--text); background: var(--overlay-light); }
-.tg-skin-btn.is-active { background: var(--accent); color: var(--on-accent); box-shadow: var(--btn-shadow); }
+.tg-skin-btn.is-active { background: var(--action-fill); color: var(--on-action); box-shadow: var(--btn-shadow); }
 .tg-skin-btn.is-active span { color: var(--on-accent); opacity: 0.72; }
 
 /* ── sections ── */
@@ -178,7 +178,7 @@
 .tangu-lovable .sidebar { width: 224px; flex: 0 0 auto; display: flex; flex-direction: column; background: var(--sidebar-bg); border-right: 1px solid var(--border); }
 .tangu-lovable .sidebar-header { padding: 14px 14px 10px; }
 .tangu-lovable .sidebar-brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
-.tangu-lovable .tg-mark { width: 22px; height: 22px; border-radius: 7px; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; box-shadow: var(--btn-shadow); }
+.tangu-lovable .tg-mark { width: 22px; height: 22px; border-radius: 7px; background: var(--action-fill); color: var(--on-action); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; box-shadow: var(--btn-shadow); }
 .tangu-lovable .session-list { flex: 1; overflow-y: auto; padding: 8px; }
 .tangu-lovable .ws-group-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 4px; font-size: 11.5px; font-weight: 600; color: var(--text-faint); }
 .tangu-lovable .tg-count { font-size: 11px; color: var(--text-ghost); }
@@ -200,7 +200,7 @@
 .tangu-lovable .sidebar-footer { display: flex; align-items: center; gap: 8px; padding: 10px; border-top: 1px solid var(--border); }
 .tangu-lovable .account-card { flex: 1; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 9999px; cursor: pointer; }
 .tangu-lovable .account-card:hover { background: var(--overlay-light); }
-.tangu-lovable .tg-avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.tangu-lovable .tg-avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--action-fill); color: var(--on-action); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
 .tangu-lovable .tg-acc-name { flex: 1; font-size: 13px; font-weight: 500; }
 .tangu-lovable .tg-tier { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 9999px; border: 1px solid var(--border); color: var(--text-muted); }
 
@@ -216,7 +216,7 @@
 .tangu-lovable .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius-sm); border: none; cursor: pointer; font-family: var(--font-ui); font-size: 14px; transition: opacity var(--duration-fast) var(--ease-out); }
 .tangu-lovable .btn:active { opacity: 0.8; }
 .tangu-lovable .btn.sm { padding: 6px 12px; font-size: 13px; }
-.tangu-lovable .btn.primary { background: var(--accent); color: var(--on-accent); box-shadow: var(--btn-shadow); }
+.tangu-lovable .btn.primary { background: var(--action-fill); color: var(--on-action); box-shadow: var(--btn-shadow); }
 .tangu-lovable .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--overlay-strong); }
 .tangu-lovable .btn.danger { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 
@@ -254,7 +254,7 @@
 /* approval / inquiry / plan / todo cards */
 .tangu-lovable .approval-card, .tangu-lovable .inquiry-card { border: var(--border-width) solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; background: var(--bg-card); box-shadow: var(--card-shadow); }
 .tangu-lovable .approval-title, .tangu-lovable .inquiry-q { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-.tangu-lovable .tg-accent-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--accent); font-size: 11px; }
+.tangu-lovable .tg-accent-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--accent-ink, var(--accent)); font-size: 11px; }
 .tangu-lovable .approval-preview { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; font-family: var(--font-mono); font-size: 12.5px; margin-bottom: 8px; }
 .tangu-lovable .approval-actions, .tangu-lovable .inquiry-opts, .tangu-lovable .inquiry-input { display: flex; gap: 8px; }
 .tangu-lovable .inquiry-opts { flex-direction: column; gap: 4px; margin-bottom: 8px; }
@@ -266,7 +266,7 @@
 .tangu-lovable .todo-row { display: flex; gap: 7px; font-size: 13px; line-height: 1.7; }
 .tangu-lovable .todo-mark { flex: 0 0 auto; }
 .tangu-lovable .todo-mark.completed { color: var(--green); }
-.tangu-lovable .todo-mark.in_progress { color: var(--accent); }
+.tangu-lovable .todo-mark.in_progress { color: var(--accent-ink, var(--accent)); }
 .tangu-lovable .todo-mark.pending { color: var(--text-ghost); }
 .tangu-lovable .tg-done { text-decoration: line-through; color: var(--text-faint); }
 
@@ -275,7 +275,7 @@
 .tangu-lovable .msg-system-text { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--text-muted); }
 .tangu-lovable .tg-votes { display: inline-flex; gap: 8px; flex-wrap: wrap; }
 .tangu-lovable .tg-votes > span { display: inline-flex; gap: 3px; }
-.tangu-lovable .tg-yes { color: var(--accent); }
+.tangu-lovable .tg-yes { color: var(--accent-ink, var(--accent)); }
 .tangu-lovable .tg-no { color: var(--text-ghost); }
 
 /* ── composer ── */
@@ -300,7 +300,7 @@
 .tangu-lovable .right-panel { width: 248px; flex: 0 0 auto; display: flex; flex-direction: column; border-left: 1px solid var(--border); }
 .tangu-lovable .right-panel-tabs { display: flex; border-bottom: 1px solid var(--border); }
 .tangu-lovable .right-panel-tabs button { flex: 1; padding: 9px 0; border: none; background: transparent; cursor: pointer; font-family: var(--font-ui); font-size: 12px; color: var(--text-muted); border-bottom: 2px solid transparent; }
-.tangu-lovable .right-panel-tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.tangu-lovable .right-panel-tabs button.active { color: var(--text); border-bottom-color: var(--accent-ink, var(--accent)); }
 .tangu-lovable .right-panel-body { flex: 1; overflow-y: auto; padding: 10px; }
 .tangu-lovable .file-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; }
 .tangu-lovable .file-row:hover { background: var(--overlay-light); }

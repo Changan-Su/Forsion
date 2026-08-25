@@ -248,7 +248,7 @@
 .t2-interrupted { display: flex; align-items: center; gap: 10px; }
 .t2-interrupted::before, .t2-interrupted::after { content: ''; flex: 1; border-top: 1px dashed var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
 /* LLM 网络重试横幅:琥珀色示警但不是失败(失败是红色 t2-status-err);原始错误淡化拖尾。 */
-.t2-retry { color: #b8860b; }
+.t2-retry { color: var(--warning); }
 .t2-retry .t2-retry-err { opacity: 0.65; margin-left: 6px; }
 /* Compact 进度条:轨道语汇沿用 .rsync-progress-*(4px 轨 + accent 填充);百分比 tabular-nums 防跳字,
    宽度过渡吃掉 120ms 采样的台阶。淡入避免它在流末尾硬弹出来。 */
@@ -277,7 +277,7 @@
   display: flex; align-items: center; gap: 8px;
   font-size: 12px;
 }
-.t2-tool.err { border-color: color-mix(in srgb, #e0564b 50%, var(--border)); flex-wrap: wrap; }
+.t2-tool.err { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); flex-wrap: wrap; }
 /* 「重新登录 X」:直连订阅凭证过期时唯一能做的动作(跳设置 → 模型页的订阅登录一节)。
    上游那句错误本来就长,所以错误条改为可换行 —— 不换行会把按钮挤没。 */
 .t2-relogin {
@@ -286,13 +286,13 @@
   align-self: flex-start;
   flex: none; cursor: pointer;
   display: inline-flex; align-items: center; gap: 5px;
-  border: var(--border-width, 1px) solid color-mix(in srgb, #e0564b 45%, var(--border));
-  border-radius: 999px; background: transparent; color: #e0564b;
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 999px; background: transparent; color: var(--danger);
   font-family: var(--font-ui); font-size: 11.5px; padding: 3px 10px;
   transition: background var(--duration-fast, .15s);
 }
 .t2-tool .t2-relogin { align-self: center; } /* 聊天错误条是 row flex + align-items:center,跟着居中 */
-.t2-relogin:hover { background: color-mix(in srgb, #e0564b 12%, transparent); }
+.t2-relogin:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .t2-tool-name { font-weight: 600; color: var(--text); }
 .t2-tool-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .t2-chip {
@@ -318,7 +318,7 @@
 .t2-suggest-chip:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
 
 .t2-status-ok { color: var(--accent-ink); }
-.t2-status-err { color: #e0564b; }
+.t2-status-err { color: var(--danger); }
 
 /* ====== 待办 ====== */
 .t2-todo {
@@ -366,11 +366,11 @@
   display: inline-flex; align-items: center; gap: 5px;
   transition: filter var(--duration-fast, .15s), background var(--duration-fast, .15s);
 }
-.t2-btn.primary { background: var(--accent-ink); color: var(--on-accent, #fff); }
+.t2-btn.primary { background: var(--action-fill); color: var(--on-action, #fff); }
 .t2-btn.primary:hover { filter: brightness(1.06); }
 .t2-btn.ghost { background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text); }
 .t2-btn.ghost:hover { background: var(--overlay-medium, rgba(127,127,127,.18)); }
-.t2-btn.danger { background: color-mix(in srgb, #e0564b 14%, transparent); color: #e0564b; }
+.t2-btn.danger { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 
 /* ====== 空状态 ====== */
 .t2-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px; text-align: center; }
@@ -463,7 +463,7 @@
 .t2-grow { flex: 1; }
 .t2-send {
   width: 36px; height: 36px; border-radius: 50%; border: none; cursor: pointer;
-  background: var(--accent-ink); color: var(--on-accent, #fff);
+  background: var(--action-fill); color: var(--on-action, #fff);
   display: inline-flex; align-items: center; justify-content: center;
   transition: filter var(--duration-fast, .15s), opacity var(--duration-fast, .15s);
 }
@@ -498,7 +498,7 @@
 }
 .t2-voice-play {
   flex-shrink: 0; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: 50%; cursor: pointer; color: #fff; background: var(--accent-ink);
+  border: none; border-radius: 50%; cursor: pointer; color: var(--on-action, #fff); background: var(--action-fill);
 }
 .t2-voice-play:hover { filter: brightness(1.08); }
 .t2-voice-track { flex: 1; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--accent-ink) 22%, transparent); overflow: hidden; }
@@ -687,7 +687,7 @@
   cursor: pointer; user-select: none; list-style: none; /* Firefox 的 ▸ */
 }
 .t2-tsum-sectitle::-webkit-details-marker { display: none; } /* Safari/旧 Chromium 的 ▸ */
-.t2-tsum-sectitle:hover { color: var(--accent, var(--text)); }
+.t2-tsum-sectitle:hover { color: var(--accent-ink, var(--accent, var(--text))); }
 /* chevron 贴右缘。有计数时计数自己带 margin-left:auto 已经顶到头,chevron 的 auto 必须清零
    —— 两个 auto 会平分剩余空间,把计数推到中间。 */
 .t2-tsum-chev {

@@ -156,8 +156,11 @@ export const underlineSchema = $markSchema('amadeusUnderline', () => ({
 // 正典 = AFFiNE **v1** 编辑器色板(--affine-text-highlight-*,@toeverything/theme dist/style.css
 // 实测;高亮菜单实际引用的是 v1 变量,v2 design token 不是编辑器渲染值)。品红为本产品扩展。
 const HL_FG_NAMES: Record<string, string> = {
-  '#c62222': 'red', '#d34f0b': 'orange', '#b67c04': 'yellow', '#149343': 'green',
-  '#0782a0': 'teal', '#2159d3': 'blue', '#842ed3': 'purple', '#941555': 'magenta', '#7a7a7a': 'grey',
+  '#c62222': 'red', '#b9450a': 'orange', '#8f6203': 'yellow', '#117b38': 'green',
+  '#06748f': 'teal', '#2159d3': 'blue', '#842ed3': 'purple', '#941555': 'magenta', '#6a6a6a': 'grey',
+  // 2026-08-25 前的 v1 原值：也识别为语义色，便于应用内按明暗可读色补偿。
+  '#d34f0b': 'orange', '#b67c04': 'yellow', '#149343': 'green', '#0782a0': 'teal', '#7a7a7a': 'grey',
+  '#ca4c0b': 'orange', '#9e6b03': 'yellow', '#12873e': 'green', '#077f9d': 'teal', '#757575': 'grey',
   // 2026-08-13 当日 v2 token 误版兼容别名(当日落盘的文档):
   '#c83030': 'red', '#db7123': 'orange', '#ac7400': 'yellow', '#225c18': 'green',
   '#0e4841': 'teal', '#003c67': 'blue', '#7c3aed': 'purple',
