@@ -75,6 +75,15 @@ export function MobileUnitsSheet(): React.ReactElement | null {
       .catch(() => setUnits([]))
   }, [open])
 
+  // Android 系统返回:弹层开着时接管并关闭(同 SingleColumnHost 两个 sheet 的语义,事件可取消),
+  // 否则全局返回把底下视图切走/最小化 App 而弹层还悬着(Codex 四轮 P2)。
+  useEffect(() => {
+    if (!open) return
+    const onBack = (e: Event): void => { e.preventDefault(); setOpen(false) }
+    window.addEventListener('forsion:mobile-back', onBack)
+    return () => window.removeEventListener('forsion:mobile-back', onBack)
+  }, [open, setOpen])
+
   if (!open) return null
 
   const openByAddress = (): void => {

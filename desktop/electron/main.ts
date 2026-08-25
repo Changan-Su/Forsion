@@ -914,10 +914,10 @@ async function doRefreshUnitHost(): Promise<void> {
       if (!real) return null
       const st = await stat(real).catch(() => null)
       if (!st?.isDirectory()) return null
-      // 条目路径保持**请求方命名空间**(listDirImpl 按入参 join):根是软链时若改用 realpath,
-      // 面板(HostFilesTab)拿原 cwd 做根判定/面包屑,进子目录后就认不出自己的根(Codex 三轮 P2)。
-      // 钳制仍按 realpath(上面 unitResolveInScope),后续逐条读取各自 realpath,越界照旧 404。
-      return listDirImpl(p)
+      // 枚举必须钉在**已验证的 real**上(拿 p 再列会在钳制后重新解引用软链 —— 竞态改指向即可
+      // 越界枚举,Codex 四轮 P2/TOCTOU);条目路径再改写回**请求方命名空间**(根是软链时,realpath
+      // 命名空间会让面板认不出自己的根,三轮 P2)。逐条读取仍各自 realpath,越界照旧 404。
+      return (await listDirImpl(real)).map((e) => ({ ...e, path: join(p, e.name) }))
     },
     readHostStat: async (p: string) => {
       const real = await unitResolveInScope(p, true)

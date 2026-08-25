@@ -223,7 +223,8 @@ const HostFilesTab: React.FC<{
         if (r.tooLarge) return { tooLarge: true as const, size: r.size }
         return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size, mtimeMs: r.mtimeMs }
       },
-      download: () => { void window.tangu?.revealHostPath?.(en.path) },
+      // 设备页无 revealHostPath:undefined 藏掉预览页的下载位(否则 WsFileView 兜底渲染死按钮)
+      download: canReveal ? () => { void window.tangu?.revealHostPath?.(en.path) } : undefined,
     })
   }
   const open = (en: { name: string; isDir: boolean; path: string }) => { en.isDir ? setCurDir(en.path) : preview(en) }
