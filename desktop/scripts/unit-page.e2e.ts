@@ -239,7 +239,20 @@ async function main(): Promise<void> {
     check('手机形态(coarse+窄):设备页装 Mobile 壳(.mb-shell)', true)
     check('手机形态:无桌面 Ribbon(.rb)', !mobileState.rb)
     check('设备页无 unitsList 桥(互联入口不套娃)', !mobileState.unitsBridge)
-    await mpage.waitForTimeout(800)
+    // 9b 手机形态下对方插件同样装载并出图:插件 Space 落在移动壳的左抽屉脚部空间条
+    //    (桌面是 Ribbon)。⚠️必须查页面侧痕迹,数服务端下发数是假绿(本仪器栽过)。
+    await mpage.click('[aria-label="left panel"]')
+    let spaceOnMobile = false
+    for (let i = 0; i < 20 && !spaceOnMobile; i++) {
+      await mpage.waitForTimeout(500)
+      spaceOnMobile = await mpage.evaluate(() =>
+        [...document.querySelectorAll('.mb-spacebar .mb-tab-label')].some((el) => (el.textContent || '').includes('远程演示空间')))
+    }
+    check('手机形态:对方插件 Space 上移动壳空间条(页面侧痕迹)', spaceOnMobile)
+    await mpage.waitForTimeout(600)
+    await mpage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-mobile-spaces.png') })
+    await mpage.keyboard.press('Escape').catch(() => {})
+    await mpage.waitForTimeout(400)
     await mpage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-mobile.png') })
     await mpage.close()
 
