@@ -1,20 +1,18 @@
-# theme/lcl — vendored from Forsion-LCL
+# theme/lcl — Genesis-owned LCL compatibility layer
 
-Tangu Desktop is the **source** of the LCL `.tangu-lovable` design language (LCL extracted it
-from here). So we do **not** vendor the base CSS — Tangu's own `styles/base.css` + the
-`themes/{lovable,echo,qbird}/` folders are authoritative for the token values and shell classes.
+This directory keeps the small compatibility seam between Genesis and the historical LCL
+`.tangu-lovable` contract. Genesis now owns the live base/skin/language files; the archived
+Forsion-LCL study remains useful provenance, but it is no longer an upstream to sync blindly.
 
-The only thing vendored here is the runtime helper the folder model can't express:
+The runtime helper began as a vendored function the folder model could not express:
 
-- `lovableData.ts` ← `Forsion-LCL/src/tangu/tanguData.ts` (the `customSkinVars` seed→vars fn + its
-  hex helpers, for the `custom` skin). Re-sync by copying that section verbatim.
+- `lovableData.ts` ← historical `Forsion-LCL/src/tangu/tanguData.ts` snapshot. Genesis is now the
+  source of truth for this function because it owns independent background seeds, semantic
+  `accent/on-accent` pairs, and the WCAG contrast guard. Do **not** copy the archived study back.
 
-The static skin **values** (lovable/echo/qbird, light + dark) were copied from
-`Forsion-LCL/src/tangu/tangu.css` (the `.tangu-lovable[data-skin=…]` / `[data-mode='dark']`
-blocks) into `../themes/<id>/theme.css`, with the selector translated
-`.tangu-lovable[data-skin='X'][data-mode='dark']` → `.dark[data-theme='X']` to fit Tangu's
-existing `[data-theme]` + `.dark` engine. The 6 elevation tokens
-(`--on-accent/--card-shadow/--btn-shadow/--icon-shadow/--inset/--focus`) and the
-`html[data-flat='1']` rule live in `../../styles/base.css`.
+The historical named palettes were subsequently consolidated into `../skins.css`, while language
+folders under `../themes/<id>/` now own structure only. Elevation aliases and the flat-mode rule
+live in `../../styles/base.css`.
 
-Single source of truth for shared values = Forsion-LCL.
+Single source of truth for Genesis theme behavior = repository-root `DESIGN.md` plus the files
+named there (`styles/base.css`, `theme/skins.css`, and `theme/themes/<id>/theme.css`).

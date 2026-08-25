@@ -15,14 +15,31 @@ let currentKey: string | null = null;
 let currentCssId: string | null = null;
 let themesWarmed = false;
 
+/** 把任意合法 CSS 色解析成 Electron 接受的 #rrggbb；失败就让主进程走明暗兜底。 */
+function resolvedWindowBackground(): string | undefined {
+  const root = document.documentElement;
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;color:var(--bg)';
+  root.appendChild(probe);
+  try {
+    const value = getComputedStyle(probe).color;
+    const channels = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+    if (!channels || channels.length !== 3 || channels.some((n) => !Number.isFinite(n))) return undefined;
+    return '#' + channels.map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('');
+  } finally {
+    probe.remove();
+  }
+}
+
 /** 把主题 manifest 的材质意图同步给 Electron 窗口。浏览器/Web 环境无 preload 时自然 no-op。 */
 export function syncWindowMaterial(): void {
   const root = document.documentElement;
   const entry = currentCssId ? getLanguage(currentCssId) : null;
   const wantsGlass = entry?.manifest.windowMaterial === 'system-glass' && root.dataset.glass !== 'off';
   const mode = root.dataset.mode === 'dark' ? 'dark' : 'light';
+  const backgroundColor = resolvedWindowBackground();
   try {
-    void window.tangu?.setWindowMaterial?.({ material: wantsGlass ? 'system-glass' : 'opaque', mode });
+    void window.tangu?.setWindowMaterial?.({ material: wantsGlass ? 'system-glass' : 'opaque', mode, backgroundColor });
   } catch { /* browser/no preload */ }
 }
 

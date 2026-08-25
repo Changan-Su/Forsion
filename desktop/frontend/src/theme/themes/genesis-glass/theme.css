@@ -3,7 +3,7 @@
  *
  * 双轴模型:语言(data-theme)只管结构,颜色由配色(data-skin)决定。
  * 本文件**不定义任何颜色**,所有材质都是配色 token 的 color-mix 半透版 ——
- * 故 cream/coral/teal/lavender/custom × 亮/暗 全部自动成立,
+ * 故 cream/coral/teal/lavender/zhi/custom × 亮/暗 全部自动成立,
  * 也就不存在「暗色块漏键拿到亮色值」的 28/28 对称问题(没有一个颜色键被声明)。
  *
  * 材质四级(分层做法参考 Zotero Glass:窗口一整块原生玻璃,各层只叠不同浓度的染色):
@@ -21,9 +21,8 @@
  *
  * 降级:
  *   · 设置里的性能开关 data-glass='off' → 全部材质回落实色(见文件末尾)。
- *   · 非 macOS 无原生 vibrancy,主进程给窗口铺**写死的**实色底(#fbf8f5/#252327,不跟配色)——
- *     外壳仍是半透染色,于是非 cream 配色下会透出与配色不符的窗口底。CSS 判不了平台,
- *     绕不过去;要治本得让宿主的降级底色跟随当前配色。见 README「已知边界」。
+ *   · 非 macOS 无原生 vibrancy，loader 会把当前 skin 解析后的 --bg 同步给原生窗口底；
+ *     CSS 同时把舞台钉回 var(--bg)，两层不会再透出写死的 cream 底色。
  *   · 扁平开关 data-flat='1' 由 base.css 清空三个阴影 token,顶部高光随之消失(符合扁平语义)。
  */
 
@@ -302,8 +301,8 @@
 /* ═══ 降级:性能开关关掉毛玻璃时,材质全部回落实色 ═══
  * base.css 的 html[data-glass='off'] * 只清 backdrop-filter,不管染色 —— 不补这块的话
  * 半透明面板会直接压在窗口底上,看着像掉色。带 [data-mode] 抬到 (0,4,0),稳压上面的暗色块。
- * stage 也必须跟着回实色:glass=off 时 loader 会把窗口材质切回 opaque,而主进程给的实色窗口底
- * 是写死的 #fbf8f5/#252327,不随配色走 —— 舞台再透就会露出这个与配色不符的底。 */
+ * stage 也必须跟着回实色:glass=off 时 loader 会把窗口材质切回 opaque；虽然主进程窗口底现在
+ * 也会跟随当前 --bg，同色实面仍应由页面自己画，不能依赖宿主底色补洞。 */
 :root[data-theme='genesis-glass'][data-glass='off'][data-mode] {
   --gl-stage: var(--bg);
   --gl-chrome: var(--sidebar-bg);
@@ -315,9 +314,8 @@
 }
 
 /* ═══ 非 macOS / 浏览器构建:舞台回实色 ═══
- * 只有 darwin 会被 main.tsx 打上 data-platform='mac',别处没有原生 vibrancy,主进程铺的是
- * **写死的** #fbf8f5/#252327(不跟配色)。舞台若还透着,coral/teal/lavender/custom 就会
- * 压在一块与配色不符的底上。这里把舞台钉回 var(--bg),外壳各层的半透染色照旧 ——
+ * 只有 darwin 会被 main.tsx 打上 data-platform='mac',别处没有原生 vibrancy。loader 会把当前
+ * --bg 同步给原生窗口底；这里仍把舞台钉回 var(--bg)，外壳各层的半透染色照旧 ——
  * 于是非 mac 上呈现为「柔和分层的实色主题」,而不是掉色。
  * (0,3,0) 与暗色块打平、位置更靠后,故生效;毛玻璃开关那块 (0,4,0) 仍能压过它。 */
 :root[data-theme='genesis-glass']:not([data-platform='mac']) {

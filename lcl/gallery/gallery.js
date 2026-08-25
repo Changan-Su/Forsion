@@ -125,7 +125,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const root = document.documentElement;
 
 const state = { tab: 'comp', filter: 'all', q: '' };
-const SKIN_LABEL = { cream: '经典', coral: '珊瑚', teal: '青瓷', lavender: '薰衣草', custom: '自定义' };
+const SKIN_LABEL = { cream: '经典', coral: '珊瑚', teal: '青瓷', lavender: '薰衣草', zhi: '知蓝', custom: '自定义' };
 let SKIN_IDS = [];       // 从 skins.css 文本推,不硬编码
 let FILES = [];          // [{name, label, sections}]
 let CLASSES = new Map(); // class -> {rules, vars, files}

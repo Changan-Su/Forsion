@@ -2076,7 +2076,7 @@ app.whenReady().then(async () => {
     await shell.openPath(themesDir())
     return { ok: true }
   })
-  // 主题只提交白名单语义(system-glass/opaque);具体 vibrancy 类型与平台能力由主进程掌控。
+  // 主题提交白名单语义(system-glass/opaque)+ 已解析的 #rrggbb 舞台色；具体 vibrancy 与平台能力由主进程掌控。
   ipcMain.handle('window:setMaterial', (e, input: unknown) => {
     const request = parseWindowMaterialRequest(input)
     if (!request) return { ok: false }

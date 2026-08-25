@@ -168,8 +168,8 @@ const api = {
   listThemes: (): Promise<Array<{ id: string; manifest: Record<string, any>; css: string }>> =>
     ipcRenderer.invoke('themes:list'),
   openThemesDir: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('themes:openDir'),
-  /** 当前主题请求窗口级系统材质;主进程仅接受白名单值并按平台实现。 */
-  setWindowMaterial: (input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark' }): Promise<{ ok: boolean }> =>
+  /** 当前主题请求窗口级系统材质，并同步经白名单校验的实色降级底。 */
+  setWindowMaterial: (input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:setMaterial', input),
   // 设置界面「打开文件夹」:agent(slug 缺省=agents 根)/ skills 目录。
   openAgentDir: (slug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('agents:openDir', slug),

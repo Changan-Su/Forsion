@@ -3,7 +3,9 @@
  * 这段容易错在「键回退顺序」和「system 没解析成落地明暗」,故钉死。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { resolveInitialModePref, resolveInitialMode, resolveInitialEffectiveMode, systemMode } from './registry'
+import {
+  listSkins, resolveInitialEffectiveMode, resolveInitialMode, resolveInitialModePref, resolveInitialSkin, systemMode,
+} from './registry'
 
 const g = globalThis as unknown as { localStorage?: unknown; window?: unknown }
 let ls: Record<string, string>
@@ -102,5 +104,34 @@ describe('systemMode', () => {
   it('无 matchMedia 兜底 light', () => {
     delete g.window
     expect(systemMode()).toBe('light')
+  })
+})
+
+describe('知语言拆回独立配色轴', () => {
+  it('旧 zhi + cream 默认位只迁一次到知蓝，保持升级前观感', () => {
+    ls['forsion_theme_lang'] = 'zhi'
+    ls['forsion_theme_skin'] = 'cream'
+    expect(resolveInitialSkin()).toBe('zhi')
+    expect(ls['forsion_theme_skin']).toBe('zhi')
+    expect(ls['forsion_theme_zhi_skin_v1']).toBe('1')
+  })
+
+  it('迁移标记在场后尊重用户重新选择的 cream', () => {
+    ls['forsion_theme_lang'] = 'zhi'
+    ls['forsion_theme_skin'] = 'cream'
+    ls['forsion_theme_zhi_skin_v1'] = '1'
+    expect(resolveInitialSkin()).toBe('cream')
+  })
+
+  it('旧用户明确选过的其他配色不被迁移覆盖', () => {
+    ls['forsion_theme_lang'] = 'zhi'
+    ls['forsion_theme_skin'] = 'coral'
+    expect(resolveInitialSkin()).toBe('coral')
+  })
+
+  it('知蓝是独立命名配色且位于自定义之前', () => {
+    const ids = listSkins().map((skin) => skin.id)
+    expect(ids).toContain('zhi')
+    expect(ids.indexOf('zhi')).toBeLessThan(ids.indexOf('custom'))
   })
 })

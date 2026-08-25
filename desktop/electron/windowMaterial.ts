@@ -9,6 +9,8 @@ export type WindowMaterialMode = 'light' | 'dark'
 export interface WindowMaterialRequest {
   material: WindowMaterial
   mode: WindowMaterialMode
+  /** 当前 skin 解析后的不透明舞台色；供非 macOS / 关闭玻璃时的原生窗口底同步。 */
+  backgroundColor?: string
 }
 
 export interface MaterialWindow {
@@ -24,9 +26,11 @@ export function parseWindowMaterialRequest(input: unknown): WindowMaterialReques
   if (!input || typeof input !== 'object') return null
   const material = (input as Record<string, unknown>).material
   const mode = (input as Record<string, unknown>).mode
+  const backgroundColor = (input as Record<string, unknown>).backgroundColor
   if (material !== 'opaque' && material !== 'system-glass') return null
   if (mode !== 'light' && mode !== 'dark') return null
-  return { material, mode }
+  if (backgroundColor !== undefined && (typeof backgroundColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(backgroundColor))) return null
+  return backgroundColor ? { material, mode, backgroundColor: backgroundColor.toLowerCase() } : { material, mode }
 }
 
 /**
@@ -39,9 +43,10 @@ export function applyWindowMaterial(
   platform: NodeJS.Platform = process.platform,
 ): void {
   if (!win || win.isDestroyed()) return
+  const solid = request.backgroundColor ?? (request.mode === 'dark' ? '#252327' : '#fbf8f5')
   if (platform !== 'darwin') {
-    // 非 macOS 没有同等原生 vibrancy:保留实色降级,并随明暗同步窗口底避免透明 CSS 露出错误亮度。
-    win.setBackgroundColor(request.mode === 'dark' ? '#252327' : '#fbf8f5')
+    // 非 macOS 没有同等原生 vibrancy：窗口底跟随当前 skin，不能永远透出 cream 奶油色。
+    win.setBackgroundColor(solid)
     return
   }
 
@@ -53,5 +58,5 @@ export function applyWindowMaterial(
 
   // 先撤原生材质再恢复实色窗口底;主题自身的 body/shell 仍会正常绘制。
   win.setVibrancy(null, { animationDuration: 140 })
-  win.setBackgroundColor(request.mode === 'dark' ? '#252327' : '#fbf8f5')
+  win.setBackgroundColor(solid)
 }

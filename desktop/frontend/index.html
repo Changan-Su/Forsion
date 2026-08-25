@@ -70,7 +70,7 @@
     </script>
     <script>
       // FOUC 防护:React 挂载前按 localStorage 设 data-theme(语言)/data-skin(配色)/.dark/data-glass,
-      // 避免主题/暗色闪烁。合法性由 registry 启动后兜底纠正。双轴 = 语言(lovable/soft) × 配色(cream/coral/teal/lavender/custom)。
+      // 避免主题/暗色闪烁。合法性由 registry 启动后兜底纠正。双轴 = 语言 × 配色(cream/coral/teal/lavender/zhi/custom)。
       (function () {
         try {
           // 明暗偏好 pref(可 system=跟随系统):forced_scheme(主题锁定值)优先,再 pref,再老键。
@@ -93,7 +93,13 @@
           // registry 启动后合并并重应用其结构;只挡明显非法 id。
           if (!/^[a-z0-9-]+$/.test(lang)) lang = 'lovable';
           var skin = localStorage.getItem('forsion_theme_skin') || (legacy ? legacy[1] : 'cream');
-          if (['cream', 'coral', 'teal', 'lavender', 'custom'].indexOf(skin) < 0) skin = 'cream';
+          if (['cream', 'coral', 'teal', 'lavender', 'zhi', 'custom'].indexOf(skin) < 0) skin = 'cream';
+          // zhi 旧语言包曾把 cream 的中性色强制改成知蓝；颜色拆回 skin 轴后只迁一次，保持老用户首帧观感。
+          if (lang === 'zhi' && skin === 'cream' && localStorage.getItem('forsion_theme_zhi_skin_v1') !== '1') {
+            skin = 'zhi';
+            localStorage.setItem('forsion_theme_skin', skin);
+            localStorage.setItem('forsion_theme_zhi_skin_v1', '1');
+          }
           var root = document.documentElement;
           root.dataset.theme = lang;
           root.dataset.skin = skin;
@@ -101,13 +107,13 @@
           root.dataset.glass = glass;
           root.dataset.flat = flat;
           if (mode === 'dark') root.classList.add('dark');
-          // 首帧背景按配色取纯色底,防闪烁(skins.css 接管后即一致;custom 亮色优先用户自选背景色)。
+          // 首帧背景按配色取安全纯色底,防闪烁(skins.css / customSkinVars 接管后即一致)。
           var BG = {
             cream: ['#f8f7f6', '#2a292b'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
-            lavender: ['#f4eef7', '#1e1a29'], custom: ['#f6f6f7', '#1b1b1d']
+            lavender: ['#f4eef7', '#1e1a29'], zhi: ['#ffffff', '#141414'], custom: ['#f6f6f7', '#1b1b1d']
           };
-          var customBg = skin === 'custom' && mode !== 'dark' ? localStorage.getItem('forsion_theme_bg_seed') : null;
-          root.style.background = customBg || (BG[skin] || BG.cream)[mode === 'dark' ? 1 : 0];
+          // 自定义背景运行时会为当前模式做可读性收敛；首帧不可直接铺原始 seed，否则极端色会先闪一帧反相底。
+          root.style.background = (BG[skin] || BG.cream)[mode === 'dark' ? 1 : 0];
         } catch (e) { /* private mode */ }
       })();
     </script>

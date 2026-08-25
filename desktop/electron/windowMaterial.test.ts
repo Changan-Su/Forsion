@@ -18,6 +18,9 @@ describe('window material', () => {
       .toEqual({ material: 'system-glass', mode: 'dark' })
     expect(parseWindowMaterialRequest({ material: 'blur(999px)', mode: 'dark' })).toBeNull()
     expect(parseWindowMaterialRequest({ material: 'opaque', mode: 'auto' })).toBeNull()
+    expect(parseWindowMaterialRequest({ material: 'opaque', mode: 'light', backgroundColor: '#FBF5EF' }))
+      .toEqual({ material: 'opaque', mode: 'light', backgroundColor: '#fbf5ef' })
+    expect(parseWindowMaterialRequest({ material: 'opaque', mode: 'light', backgroundColor: 'red;url(x)' })).toBeNull()
     expect(parseWindowMaterialRequest(null)).toBeNull()
   })
 
@@ -38,5 +41,15 @@ describe('window material', () => {
     applyWindowMaterial(win, { material: 'system-glass', mode: 'light' }, 'win32')
     expect(win.setVibrancy).not.toHaveBeenCalled()
     expect(win.setBackgroundColor).toHaveBeenCalledWith('#fbf8f5')
+  })
+
+  it('实色窗口底优先跟随当前 skin，而不是写死 cream', () => {
+    const mac = fakeWindow()
+    applyWindowMaterial(mac, { material: 'opaque', mode: 'light', backgroundColor: '#fbf5ef' }, 'darwin')
+    expect(mac.setBackgroundColor).toHaveBeenCalledWith('#fbf5ef')
+
+    const win = fakeWindow()
+    applyWindowMaterial(win, { material: 'system-glass', mode: 'dark', backgroundColor: '#141414' }, 'win32')
+    expect(win.setBackgroundColor).toHaveBeenCalledWith('#141414')
   })
 })

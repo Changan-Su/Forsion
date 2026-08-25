@@ -2280,7 +2280,6 @@ export const SettingsModal: React.FC<{
                           <ThemeCard
                             key={th.manifest.id}
                             entry={th}
-                            mode={p.themeMode}
                             active={th.manifest.id === p.themeLang}
                             onSelect={() => {
                               // 传明暗**偏好**(非落地明暗):换到锁定 colorScheme 的主题时由 setTheme 解析,

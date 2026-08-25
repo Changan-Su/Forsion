@@ -885,7 +885,7 @@ declare global {
       /** 应用内清空数据(卸载/重置);清完主进程 relaunch。 */
       clearAppData?(opts: { desktop?: boolean; tangu?: boolean }): Promise<{ ok: boolean }>
       /** 主题请求窗口级材质;system-glass 在 macOS 映射为可取样窗口后方的高透原生 vibrancy。 */
-      setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark' }): Promise<{ ok: boolean }>
+      setWindowMaterial?(input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }>
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源)→ 刷新账号卡/authInfo。 */
       onAuthChanged?(cb: (info: { loggedIn: boolean }) => void): () => void

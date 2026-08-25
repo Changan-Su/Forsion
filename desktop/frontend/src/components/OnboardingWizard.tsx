@@ -536,7 +536,6 @@ export const OnboardingWizard: React.FC<{
                     <ThemeCard
                       key={th.manifest.id}
                       entry={th}
-                      mode={themeMode}
                       active={th.manifest.id === themeLang}
                       onSelect={() => onThemeChange(th.manifest.id, themeSkin, themeModePref)}
                     />

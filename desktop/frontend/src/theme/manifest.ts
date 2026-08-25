@@ -55,6 +55,8 @@ interface ThemeSettingBase {
 }
 
 export interface ThemePreview {
+  /** 预览只表达结构语言；颜色始终取当前 skin，避免语言卡再次私藏一套配色。 */
+  shape?: 'paper' | 'glass' | 'soft' | 'compact';
   background: string | { light: string; dark: string };
   accent: string;
   label?: string;

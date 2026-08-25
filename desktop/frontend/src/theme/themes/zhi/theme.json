@@ -1,20 +1,21 @@
 {
   "id": "zhi",
   "name": "知",
-  "description": "白纸蓝笔 · AFFiNE 官方观感内置版。色值/阴影/半径/字栈 1:1 取自 @toeverything/theme@1.1.23:纯白纸面 + 灰阶文字梯队 + Inter 字栈。中性底任何配色下恒定;默认位为官方蓝招牌,珊瑚/柔青/薰衣草与全家桶统一强调色,自定义配色的 seed 照常穿透。",
+  "description": "AFFiNE 观感的紧凑结构语言：小半径、Inter 字栈与极薄阴影。颜色完全由配色轴决定；选择“知蓝”可恢复纯白纸面×蓝笔观感。",
   "version": "1.0.0",
   "author": "Forsion",
   "supportsDarkMode": true,
   "tags": ["affine", "clean", "blue"],
   "fonts": { "google": ["Inter:wght@400;500;600;700"] },
   "preview": {
+    "shape": "compact",
     "background": {
       "light": "linear-gradient(135deg, #ffffff 0%, #f4f4f5 100%)",
       "dark": "linear-gradient(135deg, #141414 0%, #1e1e1e 100%)"
     },
     "accent": "#1e96eb",
     "title": { "text": "知" },
-    "tagline": "白纸蓝笔 · AFFiNE 观感",
+    "tagline": "紧凑知性 · AFFiNE 结构",
     "swatches": ["#1e96eb", "#ff8a6b", "#4d8794", "#8b7fd6"]
   }
 }

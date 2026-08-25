@@ -77,6 +77,7 @@
     }
   ],
   "preview": {
+    "shape": "glass",
     "background": {
       "light": "linear-gradient(160deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.18) 100%), linear-gradient(160deg, #cfd8e6 0%, #e3dcec 52%, #dbe6e3 100%)",
       "dark": "linear-gradient(160deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.015) 100%), linear-gradient(160deg, #202634 0%, #262130 52%, #1b2523 100%)"

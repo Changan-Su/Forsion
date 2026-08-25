@@ -1,7 +1,7 @@
 # Genesis Glass · 琉璃
 
 设计语言 = Genesis 结构 × macOS 原生玻璃。**本主题一个颜色键都不声明** —— 所有材质都是配色 token 的
-`color-mix` 半透版,故任意配色(cream/coral/teal/lavender/custom)× 亮暗全部自动成立,
+`color-mix` 半透版,故任意配色(cream/coral/teal/lavender/zhi/custom)× 亮暗全部自动成立,
 也就不存在「暗色块漏键拿到亮色值」的对称问题。
 
 跨主题的通用纪律见仓根 `DESIGN.md`;这里只写**本主题特有的东西和踩过的坑**。
@@ -45,9 +45,9 @@
   菜单无论主区/侧栏都默认使用 float。主区输入卡能糊是因为身后有实色纸卡。
 - **body portal 出去的浮层管不着**:右键菜单等按**屏幕位置**取 backdrop,DOM 上不在侧栏组里,
   上面那条选择器覆盖不到 —— 它们开在侧栏上方时同样糊不出东西,只能靠自身浓度。
-- **非 macOS 没有原生 vibrancy**:主进程铺的是**写死的**实色底(`#fbf8f5`/`#252327`,不跟配色),
-  故 `:root[data-theme][:not([data-platform='mac'])]` 把舞台钉回 `var(--bg)`,
-  呈现为「柔和分层的实色主题」而不是掉色。要治本得让宿主的降级底色跟随当前配色。
+- **非 macOS 没有原生 vibrancy**:loader 会把当前 skin 解析后的 `--bg` 作为 `#rrggbb`
+  同步给主进程窗口底，同时 `:root[data-theme][:not([data-platform='mac'])]` 把页面舞台钉回
+  `var(--bg)`；因此呈现为「柔和分层的实色主题」，不会再从半透外壳下漏出 cream 底色。
 - **`data-glass='off'`**:`base.css` 只清 `backdrop-filter`,**不管染色** —— 本文件末尾那块必须把
   所有材质一并回落实色,漏一个(如 `--gl-thin`)就会出现「毛玻璃关了、正文却透过输入卡」。
 

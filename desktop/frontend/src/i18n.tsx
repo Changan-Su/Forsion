@@ -925,7 +925,7 @@ const zh: Dict = {
   'settings.theme.customBgLabel': '自定义背景色',
   'settings.theme.customBgFollow': '跟随强调色',
   'settings.theme.customBgClear': '恢复跟随',
-  'settings.theme.customBgHint': '不设置时背景由强调色微染;设置后背景独立于强调色,浅色强调也不再影响背景。',
+  'settings.theme.customBgHint': '不设置时背景由强调色微染；设置后将所选色作为独立氛围种子，并自动调至当前明暗模式的可读范围。',
   // 双轴主题:设计语言(结构)× 配色(颜色)
   'settings.theme.langLabel': '设计语言',
   'settings.theme.openFolder': '打开主题文件夹',
@@ -938,6 +938,7 @@ const zh: Dict = {
   'settings.theme.skin.coral': '珊瑚',
   'settings.theme.skin.teal': '柔青',
   'settings.theme.skin.lavender': '薰衣草',
+  'settings.theme.skin.zhi': '知蓝',
   'settings.theme.skin.custom': '自定义',
   // 设置分类导航(P2 Obsidian 两栏)
   'settings.group.appearance': '外观',
@@ -2407,7 +2408,7 @@ const en: Dict = {
   'settings.theme.customBgLabel': 'Custom background',
   'settings.theme.customBgFollow': 'Follows accent',
   'settings.theme.customBgClear': 'Reset',
-  'settings.theme.customBgHint': 'Unset: background is tinted by the accent. Set: background is independent of the accent.',
+  'settings.theme.customBgHint': 'Unset: the accent softly tints the background. Set: use this hue as an independent ambience seed, adjusted into the current mode’s readable range.',
   // Two-axis theme: design language (structure) × color scheme (palette)
   'settings.theme.langLabel': 'Design language',
   'settings.theme.openFolder': 'Open themes folder',
@@ -2420,6 +2421,7 @@ const en: Dict = {
   'settings.theme.skin.coral': 'Coral',
   'settings.theme.skin.teal': 'Teal',
   'settings.theme.skin.lavender': 'Lavender',
+  'settings.theme.skin.zhi': 'Zhi Blue',
   'settings.theme.skin.custom': 'Custom',
   // Settings nav groups (P2 Obsidian two-column)
   'settings.group.appearance': 'Appearance',

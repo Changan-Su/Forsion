@@ -8,6 +8,7 @@
   "tags": ["lcl", "paper", "mono"],
   "fonts": { "google": ["Hanken Grotesk:wght@400;500;600;700"] },
   "preview": {
+    "shape": "paper",
     "background": {
       "light": "linear-gradient(135deg, #f8f7f6 0%, #efeeec 100%)",
       "dark": "linear-gradient(135deg, #2a292b 0%, #353538 100%)"

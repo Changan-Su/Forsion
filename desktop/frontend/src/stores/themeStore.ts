@@ -1,5 +1,5 @@
 /**
- * 主题 store(双轴:语言 lovable|<磁盘主题> × 配色 cream/coral/teal/lavender/custom × 明暗 + glass/flat)。
+ * 主题 store(双轴:语言 lovable|<磁盘主题> × 配色 cream/coral/teal/lavender/zhi/custom × 明暗 + glass/flat)。
  * 包 theme/loader.applyTheme(已 FOUC 安全 + 自持久化)。Shell 据 mode/lang 派生 dark/soft。
  * glass/flat 只是 documentElement 上的 data 属性(+localStorage),对齐 App.tsx 的 onGlassChange/onFlatChange。
  * 磁盘主题(~/.tangu/themes)经 initThemes/reloadThemes 异步合并进 registry,themesVersion 触发 UI 重渲染。

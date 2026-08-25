@@ -24,6 +24,7 @@ const SOFT_MANIFEST = {
   panelGap: 8,
   fonts: { google: ['Plus Jakarta Sans:wght@400;500;600;700', 'Nunito:wght@400;600;700;800'] },
   preview: {
+    shape: 'soft' as const,
     background: {
       light: 'linear-gradient(158deg, #fceee4 0%, #f6edf9 52%, #edeefc 100%)',
       dark: 'linear-gradient(158deg, #221c2e 0%, #1d1a28 55%, #181a2a 100%)',
@@ -49,15 +50,24 @@ const SOFT_CSS = `/**
   --radius-chat-card: 14px;
   --font-ui: 'Plus Jakarta Sans', 'Nunito', ui-rounded, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --panel-blur: none;
-  --card-shadow: 0 1px 2px rgba(70, 50, 100, 0.05), 0 12px 30px -10px rgba(90, 70, 130, 0.18);
-  --btn-shadow: 0 3px 12px rgba(139, 127, 214, 0.28);
-  --icon-shadow: 0 1px 5px rgba(90, 70, 130, 0.16);
+  /* 阴影形态归 soft，阴影色归当前 skin：旧值写死薰衣草紫，soft × coral/teal 会无故泛紫。 */
+  --card-shadow: 0 1px 2px var(--shadow), 0 12px 30px -10px var(--shadow);
+  --btn-shadow: 0 3px 12px var(--shadow);
+  --icon-shadow: 0 1px 5px var(--shadow);
+}
+
+@supports (color: color-mix(in srgb, red 50%, transparent)) {
+  [data-theme='soft'] {
+    --card-shadow: 0 1px 2px var(--shadow), 0 12px 30px -10px color-mix(in srgb, var(--accent-ink) 16%, transparent);
+    --btn-shadow: 0 3px 12px color-mix(in srgb, var(--accent-ink) 22%, transparent);
+    --icon-shadow: 0 1px 5px color-mix(in srgb, var(--accent-ink) 14%, transparent);
+  }
 }
 
 .dark[data-theme='soft'] {
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 34px -10px rgba(0, 0, 0, 0.55);
-  --btn-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
-  --icon-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
+  --card-shadow: 0 1px 2px var(--shadow), 0 14px 34px -10px var(--shadow);
+  --btn-shadow: 0 3px 12px var(--shadow);
+  --icon-shadow: 0 1px 5px var(--shadow);
 }
 
 /* ─── soft 结构:渐变舞台 + 角落辉光 + 内嵌留白 + 每个停靠面板成独立圆角浮卡 ───

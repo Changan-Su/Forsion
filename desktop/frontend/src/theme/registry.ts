@@ -2,8 +2,8 @@
 /**
  * 双轴主题注册表:**设计语言(data-theme)× 配色(data-skin)× 明暗(data-mode)**。
  * - 语言 = 文件夹主题(themes/<id>/{theme.json,theme.css}),构建期 import.meta.glob 收集,只管 UI 结构(圆角/字体/阴影/布局)。
- *   现两套:lovable(平展)/ soft(柔影浮卡)。
- * - 配色 = 纯颜色,见 theme/skins.css 的 [data-skin]/ .dark[data-skin] 块(cream/coral/teal/lavender);custom 走内联 seed 变量。
+ *   bundle 语言按目录自动发现,磁盘语言在运行时合并。
+ * - 配色 = 纯颜色,见 theme/skins.css 的 [data-skin]/ .dark[data-skin] 块(cream/coral/teal/lavender/zhi);custom 走内联 seed 变量。
  * 旧单轴 preset(lovable/echo/qbird/dreamer/custom)首启自动迁移到 (lang, skin)。
  */
 import type { ThemeManifest, ThemeEntry } from './manifest';
@@ -69,7 +69,7 @@ export const DEFAULT_SEED = '#8b7fd6';
 
 /** 配色条目(纯颜色;CSS 在 theme/skins.css)。swatch 仅供设置面板色卡预览。custom 用 seed 动态取色。 */
 export interface SkinInfo {
-  id: 'cream' | 'coral' | 'teal' | 'lavender' | 'custom';
+  id: 'cream' | 'coral' | 'teal' | 'lavender' | 'zhi' | 'custom';
   /** 强调色(色卡主点) */
   accent: string;
   /** 浅色底(色卡背景) */
@@ -81,6 +81,7 @@ const SKINS: SkinInfo[] = [
   { id: 'coral', accent: '#ff8a6b', bg: '#fbf5ef' },
   { id: 'teal', accent: '#4d8794', bg: '#f5f5f7' },
   { id: 'lavender', accent: '#8b7fd6', bg: '#f4eef7' },
+  { id: 'zhi', accent: '#1e96eb', bg: '#ffffff' },
   { id: 'custom', accent: DEFAULT_SEED, bg: '#f6f6f7' },
 ];
 
@@ -143,6 +144,14 @@ export function resolveInitialLang(): string {
 export function resolveInitialSkin(): string {
   try {
     const raw = localStorage.getItem('forsion_theme_skin');
+    // zhi 在拆轴前会把 cream 的整套颜色强制成知蓝。只迁默认位一次，避免升级后老用户突然变成炭黑奶油色；
+    // 其余用户明确选过的 coral/teal/lavender/custom 保留，让它们从此按真正的配色轴完整生效。
+    if (localStorage.getItem('forsion_theme_lang') === 'zhi' && raw === 'cream'
+      && localStorage.getItem('forsion_theme_zhi_skin_v1') !== '1') {
+      localStorage.setItem('forsion_theme_skin', 'zhi');
+      localStorage.setItem('forsion_theme_zhi_skin_v1', '1');
+      return 'zhi';
+    }
     if (raw && hasSkin(raw)) return raw;
   } catch { /* private mode */ }
   const migrated = legacyPreset();
