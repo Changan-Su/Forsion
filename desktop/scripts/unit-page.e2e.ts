@@ -223,6 +223,26 @@ async function main(): Promise<void> {
     const askedAgain = await page.evaluate(() => document.body.textContent?.includes('配对码') ?? false)
     check('刷新后免配对直进', !askedAgain)
 
+    // 9 手机形态装 Mobile 壳(2026-08-25 用户拍板移动端对齐):index 内联脚本按
+    //   `(pointer: coarse) and (max-width: 820px)` 自动写 lcl.uiMode → unit 分支装
+    //   @mobile/mobileEntry(.mb-shell,无桌面 Ribbon)。⚠️ 光 setViewportSize 不带触点、
+    //   媒体查询不命中(实翻)—— 必须 hasTouch 的新 context(顺带重走一遍配对流,fake 恒允许)。
+    //   触屏放宽不翻回桌面是设计(真机横屏仍是手机),故不设反向断言;桌面页不受影响由 1-8 步覆盖。
+    const mpage = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3 })
+    await mpage.goto(pageBase, { waitUntil: 'domcontentloaded' })
+    await mpage.waitForSelector('.mb-shell', { timeout: 60000 })
+    const mobileState = await mpage.evaluate(() => ({
+      rb: !!document.querySelector('.rb'),
+      // 互联入口的数据桥在设备页必须缺席(设备页里不套设备页;入口按 unitsList 存在性上架)
+      unitsBridge: !!(window as unknown as { tangu?: { unitsList?: unknown } }).tangu?.unitsList,
+    }))
+    check('手机形态(coarse+窄):设备页装 Mobile 壳(.mb-shell)', true)
+    check('手机形态:无桌面 Ribbon(.rb)', !mobileState.rb)
+    check('设备页无 unitsList 桥(互联入口不套娃)', !mobileState.unitsBridge)
+    await mpage.waitForTimeout(800)
+    await mpage.screenshot({ path: path.join(SHOT_DIR, 'unit-page-mobile.png') })
+    await mpage.close()
+
     if (pageErrors.length) console.log(`[pageerror ×${pageErrors.length}] 首条: ${pageErrors[0]}`)
   } finally {
     await browser.close()

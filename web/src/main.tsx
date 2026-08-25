@@ -17,7 +17,14 @@ if ((window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PA
   // 挂 unitBridge(对方本地库经 /vault/*,v2.1 已落地)。
   void import('./unitShim')
     .then(async (m) => {
-      if (await m.installUnitShim()) await import('@/main')
+      if (!(await m.installUnitShim())) return
+      // 手机开设备页装 Mobile 壳(与下方 web 主线同一判定:index 内联脚本按视口写 lcl.uiMode,
+      // ?ui= 可强制)—— 与移动 App 同源码,小屏体验对齐(2026-08-25 用户拍板);桌面视口照旧。
+      let uiMobile = false
+      try {
+        uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
+      } catch { /* private mode → 桌面布局 */ }
+      await (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
     })
     .catch((e) => console.error('[unit-page] bootstrap failed:', e))
 } else if (path.startsWith('/share/')) {

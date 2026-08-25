@@ -91,6 +91,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     forsionLogin: login,
     forsionLogout: logout,
     accountQuota: () => cloudJson('GET', '/token-quota/my'),
+    openExternal,
+    // 账号名下设备名册(Forsion Unit):互联入口 UnitsSheet 的数据面;与桌面 units:list IPC 同形 {status,json}。
+    unitsList: () => cloudJson('GET', '/units'),
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })

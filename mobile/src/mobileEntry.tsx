@@ -17,6 +17,7 @@ import { installEngine } from '@/bootstrapEngine'
 import { installSmoothCaret } from '@/smoothCaret'
 import { applyUiFonts } from '@/uiFont'
 import { installSpaceShortcuts } from './spaceShortcuts'
+import { installUnitsEntry } from './UnitsSheet'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -45,6 +46,9 @@ try {
   // 安卓 Space 快捷方式(长按 app 图标出 Space 列表 / 固定某个 Space 到桌面 / 接住点击)。
   // 必须排在 installEngine 之后:Space 是在那里面注册的,早了发布出去是空名单。
   installSpaceShortcuts()
+  // 互联设备入口(⋯ 菜单,Forsion Unit):数据桥在才上架 —— App(mobileShim)有 unitsList,
+  // 设备页(unitShim)没有(设备页里不套设备页),自然隐藏。
+  installUnitsEntry()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
 }

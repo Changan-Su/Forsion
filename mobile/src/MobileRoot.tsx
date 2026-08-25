@@ -31,6 +31,7 @@ import { SingleColumnHost, useWorkspace, useNav } from '@lcl/engine'
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
+import { MobileUnitsSheet } from './UnitsSheet'
 
 /** 移动端本地 inbox 内容来自云端广播,但无服务端 inboxPull 调度器 → 客户端定时静默拉(绕开 inboxStore.pull 的 toast)。 */
 function useInboxAutoPull(): void {
@@ -128,6 +129,8 @@ export function MobileRoot() {
           只是点完没有任何东西渲染(状态置了 true,宿主不在)。属于静默死按钮,不是「移动端没这功能」。 */}
       <QuickFind />
       <CommandPalette />
+      {/* 互联设备弹层(Forsion Unit):入口在 ⋯ 菜单(mobileEntry 的 installUnitsEntry 按桥上架)。 */}
+      <MobileUnitsSheet />
 
       <AnimatePresence>
         {a.achievementsOpen && (
