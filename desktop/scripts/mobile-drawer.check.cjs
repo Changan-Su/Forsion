@@ -199,6 +199,72 @@ const check = (name, ok, detail) => {
   })
   check('D11 负对照:抹掉圆角后所有 Side Panel 确实退回四角全直', squareNeg, `square=${squareNeg}`)
 
+  // ── D12-D13 Space 条:Space 一多不许挤扁,改横滚,且末位恒露半格 ─────────────
+  // ⚠️ 必须跨屏宽测:固定 px 下限在**某一档**宽度上凑得出半格,换一档就退化成「最后一格正好卡在
+  //    抽屉边上」= 看着像到头了(60px 与 66px 两版都栽在这上面,靠真机截图才看出来)。
+  await page.evaluate(() => {
+    const nav = document.querySelector('.mb-spacebar')
+    const first = nav.querySelector('.mb-tab')
+    for (let i = 1; i < 20; i++) {
+      const c = first.cloneNode(true)
+      c.classList.remove('on')
+      c.querySelector('.mb-tab-label').textContent = `远程演示空间${i}`
+      nav.appendChild(c)
+    }
+  })
+  // 露边比 = 右端那格露出多少(占一格的比例)。0 ≈ 齐边看不出还有东西,1 ≈ 整格,要的是半格上下。
+  const MEASURE = `(cumSrc)=>{const cum=eval(cumSrc);const nav=document.querySelector('.mb-spacebar')
+    const nb=nav.getBoundingClientRect();let peek=0
+    for(const t of nav.querySelectorAll('.mb-tab')){const r=t.getBoundingClientRect()
+      const vis=Math.min(r.right,nb.right)-Math.max(r.left,nb.left)
+      if(vis>0&&vis<r.width-0.5)peek=Math.max(peek,vis/r.width)}
+    return {tab:+nav.querySelector('.mb-tab').getBoundingClientRect().width.toFixed(1),
+      scrolls:nav.scrollWidth>nav.clientWidth+1, peek:+peek.toFixed(2), cum:+cum(nav).toFixed(3)}}`
+  const bars = []
+  for (const w of [360, 375, 390, 412, 432]) {
+    await page.setViewportSize({ width: w, height: 844 })
+    bars.push({ w, ...(await page.evaluate(`(${MEASURE})(${JSON.stringify(CUMZOOM)})`)) })
+  }
+  await page.setViewportSize({ width: 390, height: 844 })
+  const bad = bars.filter((b) => !(b.tab >= 50 && b.scrolls && b.peek >= 0.2 && b.peek <= 0.85))
+  check(
+    'D12 20 个 Space × 5 档屏宽:每格 ≥50 视口px、整条可滚、末位恒露半格(0.2~0.85)',
+    bad.length === 0,
+    bars.map((b) => `${b.w}:格${b.tab}/露${b.peek}`).join(' '),
+  )
+
+  // 负对照跑两组:①退回改前的「平分」= 挤扁且无可滚;②固定 px 下限 = 能滚但某些屏宽露边塌成 0
+  const negs = { flat: [], fixed: [] }
+  for (const [key, css] of [
+    ['flat', '.mb-spacebar{overflow-x:visible}.mb-tab{flex:1 1 0}'],
+    ['fixed', '.mb-tab{flex:1 0 66px}'],
+  ]) {
+    await page.evaluate((c) => {
+      const s = document.createElement('style')
+      s.id = 'neg-bar'
+      s.textContent = c
+      document.head.appendChild(s)
+    }, css)
+    for (const w of [360, 375, 390, 412, 432]) {
+      await page.setViewportSize({ width: w, height: 844 })
+      negs[key].push({ w, ...(await page.evaluate(`(${MEASURE})(${JSON.stringify(CUMZOOM)})`)) })
+    }
+    await page.evaluate(() => document.getElementById('neg-bar').remove())
+  }
+  await page.setViewportSize({ width: 390, height: 844 })
+  const flatBad = negs.flat.every((b) => b.tab < 40 && !b.scrolls)
+  const fixedBad = negs.fixed.some((b) => b.peek < 0.2)
+  check(
+    'D13 负对照①:退回 flex:1 1 0 平分后确实挤扁且没得滚(证明 D12 不是假绿)',
+    flatBad,
+    negs.flat.map((b) => `${b.w}:格${b.tab}`).join(' '),
+  )
+  check(
+    'D14 负对照②:换回固定 66px 下限,至少一档屏宽的露边塌掉(证明百分比 basis 不是白改)',
+    fixedBad,
+    negs.fixed.map((b) => `${b.w}:露${b.peek}`).join(' '),
+  )
+
   await browser.close()
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)

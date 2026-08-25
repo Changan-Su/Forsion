@@ -308,9 +308,16 @@
   pointer-events: none;
   background: linear-gradient(to top, var(--bg, #fff), transparent);
 }
-.mb-spacebar { display: flex; padding: 2px 4px 0; }
+/* Space 一多(实报 20+ 个)平分就把每格压到 30px 出头,图标叠着字糊成一片(2026-08-25 用户实报)。
+   少的时候照旧平分铺满(grow:1),多的时候各自保住一个下限然后**横向滚**,放不下的标签自己 ellipsis。
+   ⚠️ 下限写成 `100%/4.5`(百分比 basis 按容器内容盒解析)而**不是固定 px**:要的是「末位露半格」
+   这条提示,固定 px 只在某一档屏宽上凑得出半格 —— 先试 60px、再试 66px,都是换了个屏宽就又变成
+   「第 N 格正好卡在抽屉边上、看着像到头了」。除以 4.5 则任何宽度恒定 4 格半。减 4px = 让掉自己的左右 margin。
+   ⚠️ 横滑不会误关抽屉:useDrawerDrag 起手时按「祖先横向真溢出」整段豁免,认的就是这里的 overflow-x。 */
+.mb-spacebar { display: flex; padding: 2px 4px 0; overflow-x: auto; scrollbar-width: none; }
+.mb-spacebar::-webkit-scrollbar { display: none; }
 .mb-tab {
-  flex: 1 1 0;
+  flex: 1 0 calc(100% / 4.5 - 4px);
   min-width: 0;
   display: flex;
   flex-direction: column;

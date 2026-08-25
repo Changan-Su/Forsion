@@ -316,11 +316,17 @@ function DrawerFoot() {
   const settings = useRibbonStore((s) => s.items.find((i) => i.id === 'rb-settings'))
   const AccountC = account?.component
   const SettingsIcon = settings?.icon
+  const barRef = useRef<HTMLElement>(null)
+  // Space 多到要横滚时(见 .mb-spacebar),当前那格可能压根不在视野里 —— 看着像哪个都没选中。
+  // 挂载与切 Space 后把它拨到中间;没溢出时 scrollIntoView 本身就是空操作,不用另外判。
+  useEffect(() => {
+    barRef.current?.querySelector('.mb-tab.on')?.scrollIntoView({ block: 'nearest', inline: 'center' })
+  }, [activeId])
   if (spaces.length <= 1 && !AccountC && !settings) return null
   return (
     <div className="mb-drawer-foot" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {spaces.length > 1 && (
-        <nav className="mb-spacebar">
+        <nav className="mb-spacebar" ref={barRef}>
           {spaces.map((sp) => {
             const Icon = sp.icon
             const on = sp.id === activeId || (!spaces.some((x) => x.id === activeId) && sp === spaces[0])
