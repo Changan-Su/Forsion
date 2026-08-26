@@ -6,6 +6,23 @@
  */
 import { query, ddl, getDbType } from '../core/db.js';
 
+/**
+ * 两方言通吃的存量库补列:发裸 ALTER(经 ddl() 做 JSONB→TEXT 方言转换),只吞「列已存在」
+ * (SQLite 报文 duplicate column / PG code 42701 already exists),其余 rethrow——权限/锁/IO/
+ * 语法失败必须炸,否则启动装成功、首查爆列缺失。
+ * ⚠️ 禁用 PG 专有的 ADD COLUMN IF NOT EXISTS:SQLite 报 near "EXISTS" 语法错,再包一层
+ * catch warn 就是「迁移静默失败、老库永远缺列」(no such column: projectless 事故根因;
+ * dialectSafety.test.ts 守禁,migrate.standalone.test.ts 守列集)。
+ */
+async function addColumnIfMissing(table: string, columnDdl: string): Promise<void> {
+  try {
+    await query(ddl(`ALTER TABLE ${table} ADD COLUMN ${columnDdl}`));
+  } catch (e: any) {
+    if (e?.code === '42701' || /duplicate column|already exists/i.test(String(e?.message || ''))) return;
+    throw e;
+  }
+}
+
 export async function runMigration(): Promise<void> {
   await query(ddl(`
     CREATE TABLE IF NOT EXISTS agent_runs (
@@ -178,17 +195,10 @@ export async function runMigration(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_inbox_messages_user ON inbox_messages(user_id, archived_at, created_at)`);
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_messages_broadcast
     ON inbox_messages(user_id, origin_broadcast_id) WHERE origin_broadcast_id IS NOT NULL`);
-  // 存量库补列(SQLite 无 ADD COLUMN IF NOT EXISTS → 吞「重复列」错,两方言同法幂等):
-  // attachments = 广播物品 JSON {items:[...], claimed:bool};expires_at = 过期后读端自动归档、附件不可领。
-  // 只吞 duplicate column(SQLite 报文)/ 42701(PG code)——权限/锁/IO 失败必须炸,否则启动装成功、首查爆列缺失。
-  for (const col of ['attachments TEXT', 'expires_at TIMESTAMP']) {
-    try {
-      await query(`ALTER TABLE inbox_messages ADD COLUMN ${col}`);
-    } catch (e: any) {
-      if (e?.code === '42701' || /duplicate column/i.test(String(e?.message || ''))) continue;
-      throw e;
-    }
-  }
+  // 存量库补列:attachments = 广播物品 JSON {items:[...], claimed:bool};
+  // expires_at = 过期后读端自动归档、附件不可领。
+  await addColumnIfMissing('inbox_messages', 'attachments TEXT');
+  await addColumnIfMissing('inbox_messages', 'expires_at TIMESTAMP');
 
   // 自动化动作链执行账本(本地特性,同 inbox 纪律直连 query())。真源在此;常驻 automation 会话里的
   // role='model' 合成消息只是它的人读投影。steps=JSON 数组 [{type,tool?,ok,summary}](TEXT,方言无关)。
@@ -206,149 +216,84 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_automation_exec_trigger ON automation_executions(trigger_id, created_at)`);
 
-  // 以下迁移仅对共享云库 / 外部 Postgres 生效：standalone(SQLite) 的 base schema(STANDALONE_SCHEMA)
-  // 已完整建好 chat_sessions/chat_messages 的全部列，且 SQLite 的 ALTER ADD COLUMN 不支持
-  // IF NOT EXISTS、也无 pg_constraint 目录，故 sqlite 形态在此提前返回，跳过整段 PG-only 迁移。
-  if (getDbType() !== 'postgres') {
-    // 老 SQLite 库补 kind 列（base schema 已含;此 ALTER 兜旧库。SQLite 不支持 IF NOT EXISTS,
-    // 重复列报错吞掉即幂等)。隔离 Special Agent 工作会话不进会话列表。
-    try { await query(`ALTER TABLE chat_sessions ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT 'user'`); }
-    catch { /* 列已存在 */ }
-    // 老 SQLite 库逐列补齐消息媒体与作者字段。base schema 只影响新库；CREATE TABLE IF NOT EXISTS
-    // 不会给存量表补列，因此这里必须显式 ALTER（SQLite 不支持 IF NOT EXISTS，重复列错误吞掉即幂等）。
-    for (const sql of [
-      `ALTER TABLE chat_messages ADD COLUMN attachments JSONB`,
-      `ALTER TABLE chat_messages ADD COLUMN display_files JSONB`,
-      `ALTER TABLE chat_messages ADD COLUMN agent_slug VARCHAR(64)`,
-      // Background Session 父链接:@讨论 / Historian 辅助讨论等隐藏子会话指回其来源会话,
-      // 供 GET /agent/sessions/:id/background(右栏「子聊天」)持久列出。
-      `ALTER TABLE chat_sessions ADD COLUMN parent_session_id VARCHAR(36)`,
-      // Historian 会话摘要(人读:列表预览 / [[session:]] 引用第一跳 / 整固上下文)。
-      `ALTER TABLE chat_sessions ADD COLUMN summary TEXT`,
-      // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
-      `ALTER TABLE tangu_wechat_accounts ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`,
-      `ALTER TABLE tangu_wechat_bindings ADD COLUMN channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`,
-    ]) {
-      try { await query(sql); }
-      catch { /* 列已存在 */ }
-    }
-    await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
-    console.log('✅ [agent-core] migrations done (sqlite：base schema 已含全部列)');
-    return;
-  }
-
-  // 修复共享 files 表唯一约束漏掉 app_id 的 bug：parent_id='ROOT' 是跨 app 共享 sentinel，
-  // 旧约束 (user_id, parent_id, name, is_deleted) 让两个 app 不能各自拥有同名顶级目录
-  // （旧 'agent' app 占了 workspace → 'ai-studio' 建不了自己的 workspace，云端 snapshot 静默失败）。
-  // 加上 app_id 即修复（仅放宽约束，存量行不会违反）。幂等。
-  try {
-    const oldName = 'files_user_id_parent_id_name_is_deleted_key';
-    const newName = 'files_user_app_parent_name_deleted_key';
-    const hasNew = await query<any[]>(
-      `SELECT 1 FROM pg_constraint WHERE conname = ? AND conrelid = 'files'::regclass`,
-      [newName],
-    );
-    if (!hasNew.length) {
-      await query(`ALTER TABLE files DROP CONSTRAINT IF EXISTS ${oldName}`);
-      await query(`ALTER TABLE files ADD CONSTRAINT ${newName} UNIQUE (user_id, app_id, parent_id, name, is_deleted)`);
-      console.log('✅ [agent-core] files 唯一约束已修正为含 app_id');
-    }
-  } catch (e: any) {
-    console.warn('[agent-core] files 约束修正失败（可能并发或权限）：', e?.message || e);
-  }
-
-  // Historian：会话复盘标记列（幂等）。记录某 session 上次被 historian 处理的时间，
-  // 配合扫描谓词「last IS NULL OR last < updated_at」只在 session 有新活动后再复盘。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS historian_last_summary_at TIMESTAMP`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_historian ON chat_sessions(app_id, archived, updated_at)`);
-  } catch (e: any) {
-    console.warn('[agent-core] historian 列迁移失败：', e?.message || e);
-  }
-
-  // 会话 kind（user|historian|muse）：隔离 Special Agent 工作会话不进列表。幂等。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS kind VARCHAR(16) NOT NULL DEFAULT 'user'`);
-  } catch (e: any) {
-    console.warn('[agent-core] chat_sessions.kind 列迁移失败：', e?.message || e);
-  }
-
-  // Historian 会话摘要(人读;区别于 session_summaries 的压缩检查点=给模型的交接件)。幂等。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT`);
-  } catch (e: any) {
-    console.warn('[agent-core] chat_sessions.summary 列迁移失败：', e?.message || e);
-  }
-
-  // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。幂等。
-  try {
-    await query(`ALTER TABLE tangu_wechat_accounts ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`);
-    await query(`ALTER TABLE tangu_wechat_bindings ADD COLUMN IF NOT EXISTS channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`);
-  } catch (e: any) {
-    console.warn('[agent-core] 通道 channel 列迁移失败：', e?.message || e);
-  }
-
-  // Background Session 父链接(@讨论/Historian 辅助讨论等指回来源会话)。幂等。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS parent_session_id VARCHAR(36)`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
-  } catch (e: any) {
-    console.warn('[agent-core] chat_sessions.parent_session_id 列迁移失败：', e?.message || e);
-  }
-
-  // 会话级 agent 配置 + emoji（桌面端会话设置;幂等,云端已有同名列时为 no-op）。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS agent_config JSONB`);
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS emoji VARCHAR(32)`);
-  } catch (e: any) {
-    console.warn('[agent-core] agent_config/emoji 列迁移失败：', e?.message || e);
-  }
-
-  // todo 工具(builtin:todo)的会话级任务清单(幂等)。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS todos JSONB`);
-  } catch (e: any) {
-    console.warn('[agent-core] chat_sessions.todos 列迁移失败：', e?.message || e);
-  }
-
-  // 项目工作区(本地/Cloud Project/无根会话显式分型)。幂等。
-  try {
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS project_path TEXT`);
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS project_name VARCHAR(255)`);
-    // 不能拿 project_path/project_name 都为空来推断:历史默认 Cloud 会话也是双空。
-    await query(`ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS projectless BOOLEAN NOT NULL DEFAULT FALSE`);
-  } catch (e: any) {
-    console.warn('[agent-core] chat_sessions project workspace 列迁移失败：', e?.message || e);
-  }
-
-  // 图片附件链路:hydrateHistory 读 chat_messages.attachments(新基础 schema 已内联;
-  // 老库补列,幂等)。
-  try {
-    await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS attachments JSONB`);
+  // ── 存量库补列(两方言公共段)────────────────────────────────────────────
+  // CREATE TABLE IF NOT EXISTS 只管新库;老库(建库时 base schema 还没有这些列)必须显式
+  // ALTER 补齐。本清单与 schemaStandalone.ts 同步演进:往 base schema 加列时这里同加一条
+  // (migrate.standalone.test.ts 的「老库迁完 ⊇ 新建库」对比断言守住漂移)。
+  const columnBackfills: Array<[table: string, columnDdl: string]> = [
+    // 会话 kind(user|historian|muse):隔离 Special Agent 工作会话不进会话列表。
+    ['chat_sessions', `kind VARCHAR(16) NOT NULL DEFAULT 'user'`],
+    // Historian 会话摘要(人读:列表预览 / [[session:]] 引用第一跳;区别于 session_summaries 的压缩检查点)。
+    ['chat_sessions', 'summary TEXT'],
+    // Background Session 父链接:@讨论 / Historian 辅助讨论等隐藏子会话指回其来源会话,
+    // 供 GET /agent/sessions/:id/background(右栏「子聊天」)持久列出。
+    ['chat_sessions', 'parent_session_id VARCHAR(36)'],
+    // Historian 复盘标记:配合扫描谓词「last IS NULL OR last < updated_at」只复盘有新活动的会话。
+    ['chat_sessions', 'historian_last_summary_at TIMESTAMP'],
+    // 会话级 agent 配置 + emoji(桌面端会话设置)。
+    ['chat_sessions', 'agent_config JSONB'],
+    ['chat_sessions', 'emoji VARCHAR(32)'],
+    // todo 工具(builtin:todo)的会话级任务清单。
+    ['chat_sessions', 'todos JSONB'],
+    // 项目工作区(本地/Cloud Project/无根会话显式分型)。projectless 不能拿 project_path/
+    // project_name 双空来推断:历史默认 Cloud 会话也是双空。
+    ['chat_sessions', 'project_path TEXT'],
+    ['chat_sessions', 'project_name VARCHAR(255)'],
+    ['chat_sessions', 'projectless BOOLEAN NOT NULL DEFAULT FALSE'],
+    // 图片附件链路:hydrateHistory 读 chat_messages.attachments。
+    ['chat_messages', 'attachments JSONB'],
     // agent 在对话区展示的文件(display_file / generate_image / 表情包):路径或内联 dataUrl 列表。
-    await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS display_files JSONB`);
+    ['chat_messages', 'display_files JSONB'],
     // 产出该消息的 agent slug(客户端据此还原头像/昵称;旧消息 NULL → 回退会话 agent)。
-    await query(`ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS agent_slug VARCHAR(64)`);
-  } catch (e: any) {
-    console.warn('[agent-core] chat_messages.attachments/display_files/agent_slug 列迁移失败：', e?.message || e);
-  }
+    ['chat_messages', 'agent_slug VARCHAR(64)'],
+    // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
+    ['tangu_wechat_accounts', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],
+    ['tangu_wechat_bindings', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],
+  ];
+  for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_historian ON chat_sessions(app_id, archived, updated_at)`);
 
-  // 会话 app_id 归位(2026-08-03,幂等):客户端此前 list/create 不带 app_id,Tangu 面(Web/桌面云)
-  // 的会话被服务端兜底写成 'ai-studio',而它们的 run 一直显式带 'tangu'(agentRunService)——
-  // 用 run 表当证据把纯 Tangu 会话迁回来。**只迁 run 全为 tangu 的**:混用会话(在 AI Studio 里
-  // 也跑过的)留在 ai-studio,宁可 Tangu 列表少见一条,不让 AI Studio 的会话凭空消失。
-  // 无 run 的空会话无证据,不迁。standalone(SQLite)由 fixLegacyAppIds 无条件迁,不走此分支。
-  try {
-    const r = await query<any[]>(
-      `UPDATE chat_sessions SET app_id = 'tangu'
-       WHERE app_id = 'ai-studio'
-         AND id IN (SELECT session_id FROM agent_runs WHERE app_id = 'tangu' AND session_id IS NOT NULL)
-         AND id NOT IN (SELECT session_id FROM agent_runs WHERE app_id <> 'tangu' AND session_id IS NOT NULL)
-       RETURNING id`,
-    );
-    if (r?.length) console.log(`✅ [agent-core] 会话 app_id 归位:${r.length} 条 ai-studio → tangu(按 run 证据)`);
-  } catch (e: any) {
-    console.warn('[agent-core] 会话 app_id 归位失败(下次启动重试):', e?.message || e);
+  // ── 以下仅共享云库 / 外部 Postgres / PGlite(getDbType()='postgres')────────
+  // sqlite 无 pg_constraint 目录;app_id 归位在 standalone 由 fixLegacyAppIds 无条件迁。
+  if (getDbType() === 'postgres') {
+    // 修复共享 files 表唯一约束漏掉 app_id 的 bug：parent_id='ROOT' 是跨 app 共享 sentinel，
+    // 旧约束 (user_id, parent_id, name, is_deleted) 让两个 app 不能各自拥有同名顶级目录
+    // （旧 'agent' app 占了 workspace → 'ai-studio' 建不了自己的 workspace，云端 snapshot 静默失败）。
+    // 加上 app_id 即修复（仅放宽约束，存量行不会违反）。幂等。容错(并发/权限)是有意的,别收紧。
+    try {
+      const oldName = 'files_user_id_parent_id_name_is_deleted_key';
+      const newName = 'files_user_app_parent_name_deleted_key';
+      const hasNew = await query<any[]>(
+        `SELECT 1 FROM pg_constraint WHERE conname = ? AND conrelid = 'files'::regclass`,
+        [newName],
+      );
+      if (!hasNew.length) {
+        await query(`ALTER TABLE files DROP CONSTRAINT IF EXISTS ${oldName}`);
+        await query(`ALTER TABLE files ADD CONSTRAINT ${newName} UNIQUE (user_id, app_id, parent_id, name, is_deleted)`);
+        console.log('✅ [agent-core] files 唯一约束已修正为含 app_id');
+      }
+    } catch (e: any) {
+      console.warn('[agent-core] files 约束修正失败（可能并发或权限）：', e?.message || e);
+    }
+
+    // 会话 app_id 归位(2026-08-03,幂等):客户端此前 list/create 不带 app_id,Tangu 面(Web/桌面云)
+    // 的会话被服务端兜底写成 'ai-studio',而它们的 run 一直显式带 'tangu'(agentRunService)——
+    // 用 run 表当证据把纯 Tangu 会话迁回来。**只迁 run 全为 tangu 的**:混用会话(在 AI Studio 里
+    // 也跑过的)留在 ai-studio,宁可 Tangu 列表少见一条,不让 AI Studio 的会话凭空消失。
+    // 无 run 的空会话无证据,不迁。standalone(SQLite)由 fixLegacyAppIds 无条件迁,不走此分支。
+    try {
+      const r = await query<any[]>(
+        `UPDATE chat_sessions SET app_id = 'tangu'
+         WHERE app_id = 'ai-studio'
+           AND id IN (SELECT session_id FROM agent_runs WHERE app_id = 'tangu' AND session_id IS NOT NULL)
+           AND id NOT IN (SELECT session_id FROM agent_runs WHERE app_id <> 'tangu' AND session_id IS NOT NULL)
+         RETURNING id`,
+      );
+      if (r?.length) console.log(`✅ [agent-core] 会话 app_id 归位:${r.length} 条 ai-studio → tangu(按 run 证据)`);
+    } catch (e: any) {
+      console.warn('[agent-core] 会话 app_id 归位失败(下次启动重试):', e?.message || e);
+    }
   }
 
   console.log('✅ [agent-core] migrations done (agent_runs/agent_steps/agent_run_events)');

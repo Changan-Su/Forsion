@@ -37,3 +37,14 @@ describe('SQLite 方言安全(本地特性禁 PG 专有 SQL)', () => {
     });
   }
 });
+
+// migrate.ts 不进上面的共享清单:它的 PG-only 尾段(getDbType()==='postgres' 守卫内)合法地
+// 用 ::regclass 等 PG 语法。这里只单独禁一条:补列必须走 addColumnIfMissing(裸 ALTER+吞重复列),
+// PG 专有的 ADD COLUMN IF NOT EXISTS 会让 SQLite 报 near "EXISTS" 语法错——曾被 catch warn 吞掉,
+// 表现为「老库永远缺列 → no such column: projectless」(2026-08 事故)。
+describe('migrate.ts 补列方言安全', () => {
+  it('不含 ADD COLUMN IF NOT EXISTS(存量库补列走 addColumnIfMissing)', () => {
+    const code = stripComments(readFileSync(path.join(root, 'src/db/migrate.ts'), 'utf-8'));
+    expect(code, 'PG 专有语法,SQLite 老库补列会静默失败').not.toMatch(/ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS/i);
+  });
+});
