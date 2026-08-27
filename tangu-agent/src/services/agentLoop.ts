@@ -41,7 +41,7 @@ import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from '../llm/retry.js';
+import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { runGroupChat } from './groupChat.js';
 import { listPluginMetas } from '../plugins/registry.js';
@@ -567,7 +567,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return;
     }
 
-    const { model, apiKey, baseUrl, apiModelId } = await resolveModelAndKey(modelId);
+    // 有界重试:这一步在托管面是真实 HTTP,一次秒级 fetch failed 此前会让 run 还没开跑就报废。
+    const { model, apiKey, baseUrl, apiModelId } = await withLlmRetry(
+      () => resolveModelAndKey(modelId),
+      (attempt, wait, err) =>
+        console.warn(`[agent-core] run=${runId} resolve 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`),
+      ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
+    );
     // 本 run 的上下文预算基数:真实模型窗口(覆盖表/模型对象/族兜底),不再用 128k 全局常量——
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
     const { tokens: ctxWindowTokens, source: ctxWindowSource } = modelContextWindowInfo(modelId, model);
@@ -1357,7 +1363,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // attachments 恒传空:图片已由 hydrateHistory 物化进最新 user 消息的 parts(每轮字节一致,
       // 缓存稳定且多轮可见;旧链路只在第 0 轮注入,前缀分叉还会让模型第 1 轮起丢图)。
       const lastIter = iteration === maxIterations - 1;
-      const payload = await buildProviderPayload({
+      // 有界重试 + 接 run signal:build-payload 是一次真实上传(带图时 body 数 MB),此前在下面的
+      // 重试圈**外面**,结构上零重试——一次抖动就报废整个已跑几分钟的 run,且用户点「停」停不掉它。
+      const payload = await withLlmRetry(
+        () => buildProviderPayload({
         model,
         apiModelId,
         messages: workingMessages,
@@ -1376,7 +1385,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // (bench/自动化)可经 agentConfig.reasoningSummary='none' 关思考摘要。仅 Responses 直连上 wire。
         ...(preset === 'coding' ? { verbosity: 'low' as const } : {}),
         ...(agentConfig.reasoningSummary === 'none' ? { reasoningSummary: 'none' as const } : {}),
-      });
+        signal: ac.signal,
+        }),
+        (attempt, wait, err) => {
+          console.warn(`[agent-core] run=${runId} build-payload 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`);
+          void publish(runId, 'status', {
+            phase: 'llm_retry', attempt, max: MODEL_MAX_RETRIES, waitMs: wait,
+            error: String((err as any)?.message || err).slice(0, 160), iteration,
+          });
+        },
+        ac.signal,
+      );
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
       // 有界重试:兜「首帧前的瞬时传输错」(fetch failed / 网关 502 / idle 504 等——托管面偶发抖动的主因)。
@@ -1783,7 +1802,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => scheduleAgentFilesSync(userId, memScopeSlug));
   } catch (err: any) {
-    const aborted = err?.name === 'AbortError' || err instanceof AbortLikeError;
+    // ac.signal.aborted 也算:用户按停后,在途的前置请求可能以传输错(非 AbortError)收尾,
+    // 只认错误名会把用户主动停止误记成 failed(Codex 评审逮到)。
+    const aborted = err?.name === 'AbortError' || err instanceof AbortLikeError || ac.signal.aborted;
     const status = aborted ? 'aborted' : 'failed';
     const msg = aborted ? 'aborted' : (err?.message || String(err));
     console.error(`[agent-core] run ${runId} ${status}:`, msg);

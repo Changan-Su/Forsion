@@ -136,3 +136,114 @@ describe('httpBrain.streamProviderCompletion 空闲看门狗', () => {
     await expect(p).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
+
+/**
+ * brain HTTP 的超时与错误面(2026-08-27 桌面端 2.8.1「请求超时」复盘的仪器)。
+ *
+ * 当时 view_image 把 1.7MB PNG 按 base64 塞进 messages,下一 leg 的 /llm/build-payload 要上传
+ * ~2.3MB —— 撞上写死的 60s 超时,run 直接报废,用户只看到裸的
+ * "The operation was aborted due to timeout"。三条契约:超时随 body 放大、run signal 与超时
+ * **合并**而非互斥、错误带上端点与体积。
+ *
+ * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run src/adapters/standalone/httpBrain.test.ts
+ */
+describe('httpBrain 请求超时与错误面', () => {
+  /** 永不返回、但像真 fetch 那样按 signal.reason 拒绝。 */
+  function hangingFetch(): void {
+    vi.stubGlobal('fetch', (_u: any, init: any) => new Promise((_res, rej) => {
+      init?.signal?.addEventListener('abort', () => rej(init.signal.reason), { once: true });
+    }));
+  }
+  const buildOpts = (chars: number, signal?: AbortSignal): any => ({
+    model: { id: 'm' }, apiModelId: 'm',
+    messages: [{ role: 'user', content: 'x'.repeat(chars) }],
+    ...(signal ? { signal } : {}),
+  });
+
+  afterEach(() => {
+    delete process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS;
+    delete process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS;
+    delete process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS;
+  });
+
+  it('传了 run signal 也仍然有超时(负对照:退回 `s ?? timeout` 会永久挂起)', async () => {
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '80';
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '0';
+    hangingFetch();
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    const runSignal = new AbortController().signal; // 用户没点停,只是把 run 的信号传了进去
+
+    await expect(brain.llm.buildProviderPayload(buildOpts(10, runSignal)))
+      .rejects.toThrow(/build-payload 超时/);
+  });
+
+  it('超时窗口随 body 放大', async () => {
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '60';
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '600';
+    hangingFetch();
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+
+    const timeOf = async (chars: number): Promise<number> => {
+      const t0 = Date.now();
+      await brain.llm.buildProviderPayload(buildOpts(chars)).catch(() => undefined);
+      return Date.now() - t0;
+    };
+    const small = await timeOf(10);          // ≈60ms
+    const big = await timeOf(1024 * 1024);   // ≈60+600ms
+    expect(small).toBeLessThan(300);
+    expect(big).toBeGreaterThan(300);
+  });
+
+  it('错误带上端点与体积,不再是裸的 undici 原文', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')));
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    await expect(brain.llm.buildProviderPayload(buildOpts(1024 * 1024)))
+      .rejects.toThrow(/build-payload 连接失败.*body 1\.0MB.*cloud\.test/s);
+  });
+
+  it('生图窗口不被通用超时截断(负对照:把 floorMs 并进取消信号会把 180s 砍成 60s)', async () => {
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '40';   // 通用基准:小 prompt 40ms 就该到点
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '0';
+    process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS = '400';  // 生图下限:必须压过通用基准
+    hangingFetch();
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+
+    const t0 = Date.now();
+    await brain.images.generate({ model: 'img', prompt: '一只猫' } as any).catch(() => undefined);
+    expect(Date.now() - t0).toBeGreaterThan(250); // 走 40ms 通用窗口就是回归
+  });
+
+  it('超时按 UTF-8 字节算,中文不被低估 3 倍', async () => {
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '40';
+    process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '800';
+    hangingFetch();
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+
+    const timeOf = async (text: string): Promise<number> => {
+      const t0 = Date.now();
+      await brain.llm.buildProviderPayload({
+        model: { id: 'm' }, apiModelId: 'm', messages: [{ role: 'user', content: text }],
+      } as any).catch(() => undefined);
+      return Date.now() - t0;
+    };
+    const N = 350_000;
+    const ascii = await timeOf('x'.repeat(N));    // 0.33MB → ≈307ms
+    const cjk = await timeOf('中'.repeat(N));      // 1.05MB → ≈880ms(按 UTF-16 数则同为 ≈307ms)
+    expect(ascii).toBeLessThan(600);
+    expect(cjk).toBeGreaterThan(600);
+  });
+
+  it('signal 不进 JSON body(AbortSignal 会被 stringify 成 {} 白送上云)', async () => {
+    let sentBody = '';
+    vi.stubGlobal('fetch', (_u: any, init: any) => {
+      sentBody = String(init?.body ?? '');
+      return Promise.resolve(new Response(JSON.stringify({ payload: { ok: 1 } }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      }));
+    });
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    await brain.llm.buildProviderPayload(buildOpts(10, new AbortController().signal));
+    expect(Object.keys(JSON.parse(sentBody))).not.toContain('signal');
+  });
+});
+

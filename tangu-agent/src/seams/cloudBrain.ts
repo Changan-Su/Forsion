@@ -47,6 +47,9 @@ export interface BuildPayloadOpts {
   verbosity?: 'low' | 'medium' | 'high';
   /** 思考摘要开关(Responses 直连):'none'=不生成摘要(headless/bench 省输出;UI 将看不到思考过程)。缺省=auto。 */
   reasoningSummary?: 'none';
+  /** run 的 abort 信号。托管面的 build-payload 是一次真实 HTTP 上传(带图时 body 可达数 MB),
+   *  不接 signal 则用户点「停」停不掉它,且客户端只能干等固定超时。直连面忽略此字段。 */
+  signal?: AbortSignal;
 }
 
 export interface StreamResult {

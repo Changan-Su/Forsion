@@ -46,19 +46,50 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 托管流的兜底窗口(只兜 server 进程死/网络整体失联)。上游判死归服务端 upstreamIdleGuard(默认 180s),
   // 这里必须留足余量让服务端先响,否则用户看到的是本地 504 而非上游真实错因。
   const BRAIN_STREAM_IDLE_MS = Number(process.env.TANGU_BRAIN_STREAM_IDLE_MS) || 300_000;
-  const reqSignal = (s?: AbortSignal): AbortSignal => s ?? AbortSignal.timeout(REQ_TIMEOUT_MS);
+  // 超时随 body 放大:固定 60s 对 200 字节的 /llm/resolve 和带整页截图(view_image 的图按 base64
+  // 进 messages,1.7MB PNG ≈ 2.3MB 文本)的 /llm/build-payload 是同一把尺子,后者在慢上行上必然
+  // 先撞墙 —— 2026-08-27 桌面端 2.8.1 实证:两个 run 都恰好死在 view_image 之后那一 leg。
+  // 基准 60s + 每 MB 追加 30s(≈270kbps 的保底上行假设),两个数都可经 env 调。
+  const TIMEOUT_PER_MB_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS) || 30_000;
+  const sizedTimeoutMs = (bytes: number): number =>
+    REQ_TIMEOUT_MS + Math.floor((bytes / (1024 * 1024)) * TIMEOUT_PER_MB_MS);
+  // ⚠️ 必须 any 合并而非 `s ?? timeout`:调用方一旦传了 run 的 abort signal,`??` 会把超时整个抹掉,
+  // 请求变成无限等(上游半开连接时 run 永久挂死)。两个来源都要能中止。
+  // floorMs = 端点自己的超时下限(生图 180s 等),与「用户取消信号」正交:早期把两者挤在同一个参数里
+  // (`req.signal ?? AbortSignal.timeout(IMG)`),合并超时后通用 60s 会先杀掉慢生图 —— Codex 评审逮到。
+  const reqSignal = (s?: AbortSignal, bytes = 0, floorMs = 0): AbortSignal => {
+    const t = AbortSignal.timeout(Math.max(sizedTimeoutMs(bytes), floorMs));
+    return s ? AbortSignal.any([s, t]) : t;
+  };
+  /**
+   * 把 undici 的裸传输错换成能定位的 LlmError。原文("The operation was aborted due to timeout" /
+   * "fetch failed")既不说是哪个端点、也不说是本机不通还是云端慢,用户只看到「请求超时」四个字,
+   * 连"该查自己的网还是等厂商恢复"都判断不了。用户主动 abort 原样透传(agentLoop 据此标 aborted)。
+   */
+  const netError = (e: any, path: string, bytes: number, floorMs = 0): unknown => {
+    if (e?.name === 'AbortError') return e;
+    const body = bytes > 512 * 1024 ? `,body ${(bytes / 1024 / 1024).toFixed(1)}MB` : '';
+    if (e?.name === 'TimeoutError') {
+      const secs = Math.round(Math.max(sizedTimeoutMs(bytes), floorMs) / 1000);
+      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):本机到 ${base} 的上行过慢或不通`);
+    }
+    if (e instanceof LlmError) return e;
+    return new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`);
+  };
   const toB64 = (c: Buffer | string): string =>
     (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf-8')).toString('base64');
   // 运行中 agent 的记忆作用域 slug(非默认才带;无 run 上下文 → ''=全局)。
   const scopedSlug = (): string => { const s = currentAgentSlug(); return s && s !== DEFAULT_AGENT_SLUG ? s : ''; };
 
-  async function postJson<T>(path: string, body: any, signal?: AbortSignal): Promise<T> {
+  async function postJson<T>(path: string, body: any, signal?: AbortSignal, floorMs = 0): Promise<T> {
+    const raw = JSON.stringify(body);
+    const bytes = Buffer.byteLength(raw, 'utf-8'); // 不是 raw.length:JSON 不转义非 ASCII,中文按 UTF-16 数会低估 3 倍
     const r = await fetch(`${base}${path}`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify(body),
-      signal: reqSignal(signal),
-    });
+      body: raw,
+      signal: reqSignal(signal, bytes, floorMs),
+    }).catch((e) => { throw netError(e, path, bytes, floorMs); });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
       throw new LlmError(r.status, detail || `brain ${path} ${r.status}`);
@@ -67,7 +98,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   }
 
   async function getJson<T>(path: string): Promise<T> {
-    const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal: reqSignal() });
+    const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal: reqSignal() })
+      .catch((e) => { throw netError(e, path, 0); });
     if (r.status === 404) return null as unknown as T;
     if (!r.ok) throw new Error(`brain ${path} ${r.status}`);
     return (await r.json()) as T;
@@ -83,12 +115,14 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   }
 
   async function putJson<T>(path: string, body: any): Promise<T> {
+    const raw = JSON.stringify(body);
+    const bytes = Buffer.byteLength(raw, 'utf-8');
     const r = await fetch(`${base}${path}`, {
       method: 'PUT',
       headers: authHeaders(),
-      body: JSON.stringify(body),
-      signal: reqSignal(),
-    });
+      body: raw,
+      signal: reqSignal(undefined, bytes),
+    }).catch((e) => { throw netError(e, path, bytes); });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
       throw new LlmError(r.status, detail || `brain ${path} ${r.status}`);
@@ -174,10 +208,11 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         return { model: r.model, apiKey: '__cloud_proxy__', baseUrl: base, apiModelId: r.apiModelId };
       },
       buildProviderPayload: async (opts: BuildPayloadOpts) => {
+        const { signal, ...rest } = opts as BuildPayloadOpts & { signal?: AbortSignal };
         const r = await postJson<{ payload: any }>('/api/brain/llm/build-payload', {
           modelId: (opts.model as any)?.id,
-          ...opts,
-        });
+          ...rest, // signal 摘掉:AbortSignal 进 JSON.stringify 会变成 {} 白送上云
+        }, signal);
         return r.payload;
       },
       streamProviderCompletion,
@@ -279,7 +314,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
           '/v1/images/generations',
           { model: req.model, prompt: req.prompt, size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png' },
-          req.signal ?? AbortSignal.timeout(IMG_TIMEOUT_MS),
+          req.signal,
+          IMG_TIMEOUT_MS, // 生图比 LLM 慢:窗口下限单独放宽,不受通用 60s 基准截断
         );
         const images = (r.data || []).filter((d) => d.b64_json).map((d) => ({ b64: d.b64_json as string, mime: 'image/png' }));
         if (!images.length) throw new Error('云端未返回图片');
