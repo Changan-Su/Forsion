@@ -9,6 +9,7 @@
  *  D 主面板固定为「高级 → 模型 → Effort」且 Effort 是可拖动 range；Max 有独立渐变 / 星点层。
  *  E 高级内容从高级行上方向上展开，卡片有高度过渡且高级 / 模型 / Effort 三行不位移。
  *  F 模型 / 辅助 / 生图 / 识图共用 View 感知的右 → 左 → 上方落位；极窄 View 下仍不得越界。
+ *  G 一级/二级选择面板同为 224px,菜单行密度与工作区 item 的约 28px 节奏一致。
  *
  * 改 .model-pill-btn / .composer-menu--model / .cm-sub 任何一条样式后必跑。
  * 跑:node scripts/model-menu.check.cjs   (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
@@ -174,6 +175,21 @@ const box = (sel) => {
   // bottom:0 参照的是菜单的 padding box,故正常就差一条边框(1px)。
   check('子面板底边与菜单底对齐、向上生长(向下会盖住输入框)', Math.abs(sub.bottom - menu.bottom) <= 2,
     `sub.bottom=${sub.bottom.toFixed(1)} menu.bottom=${menu.bottom.toFixed(1)}`)
+  check('一级/二级选择面板统一为 224px', Math.abs(menu.w - 224) < 1 && Math.abs(sub.w - menu.w) < 1,
+    `main=${menu.w.toFixed(1)} sub=${sub.w.toFixed(1)}`)
+  const itemDensity = await p.evaluate(() => {
+    const item = document.querySelector('.cm-sub .menu-item')
+    const row = document.querySelector('.cm-model-row')
+    return { item: item?.getBoundingClientRect().height ?? 0, row: row?.getBoundingClientRect().height ?? 0 }
+  })
+  check('选择菜单行统一为约 28px 的工作区密度', [itemDensity.item, itemDensity.row].every((h) => h >= 27 && h <= 29),
+    JSON.stringify(itemDensity))
+
+  if (process.argv.includes('--shot') || process.env.MODEL_MENU_SHOT) {
+    const shot = process.env.MODEL_MENU_SHOT || path.join(os.tmpdir(), 'forsion-model-menu.png')
+    await p.screenshot({ path: shot })
+    console.log(`screenshot → ${shot}`)
+  }
 
   // ── D:主面板三行顺序 + 真 range + Max 特效层 ──
   const mainOrder = await p.evaluate(() => [...document.querySelector('.composer-menu--model').children]

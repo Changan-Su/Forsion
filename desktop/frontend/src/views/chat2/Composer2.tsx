@@ -67,6 +67,50 @@ export interface RefChip {
 }
 
 const chipBaseName = (p: string): string => p.split(/[\\/]/).pop() || p
+/** OS 文件的落区选择器 —— 必须与 ChatView 根节点的类名一致(改一处即断,故有 filesdrop 测试盯着)。 */
+export const DROP_ZONE_SEL = '.t2-chat-view'
+
+/**
+ * 把 OS 文件的拖放落区从输入框卡片提到**整个聊天区**(用户实报:满屏都在提示可落,只有输入框接得住)。
+ * 落区不是本组件渲染的节点 → 只能上原生监听;ChatPreview / 移动端没有 .t2-chat-view 祖先则退回卡片本身。
+ * 只吃 'Files';应用内引用拖拽(REF_MIME/PATHS_MIME)仍归 ChatView 的 refdrop,两条路不打架。
+ */
+export function bindFilesDropZone(
+  card: HTMLElement,
+  onFiles: (files: FileList) => void,
+  setCardDragOver: (on: boolean) => void,
+): () => void {
+  const zone = (card.closest(DROP_ZONE_SEL) as HTMLElement | null) ?? card
+  const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  // 卡片自己当落区时沿用 .dragover 亮边;整片聊天区改用属性驱动虚线框(class 归 ChatView 管,别抢)。
+  const mark = (on: boolean): void => {
+    if (zone === card) setCardDragOver(on)
+    else zone.toggleAttribute('data-filedrop', on)
+  }
+  const over = (e: DragEvent): void => {
+    if (!hasFiles(e)) return
+    e.preventDefault() // 认领这次拖放:fileDropGuard 看 defaultPrevented 才不去兜底吞掉
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    mark(true)
+  }
+  const leave = (e: DragEvent): void => { if (!zone.contains(e.relatedTarget as Node)) mark(false) }
+  const drop = (e: DragEvent): void => {
+    if (!hasFiles(e)) return
+    e.preventDefault()
+    mark(false)
+    if (e.dataTransfer?.files?.length) onFiles(e.dataTransfer.files)
+  }
+  zone.addEventListener('dragover', over)
+  zone.addEventListener('dragleave', leave)
+  zone.addEventListener('drop', drop)
+  return () => {
+    zone.removeEventListener('dragover', over)
+    zone.removeEventListener('dragleave', leave)
+    zone.removeEventListener('drop', drop)
+    mark(false)
+  }
+}
+
 /** 本机/工作区路径 → 芯片(含空格的路径发送时要加引号,与 refToText 的 file 分支一致)。 */
 export const fileChip = (path: string): RefChip => ({
   token: /\s/.test(path) ? `"${path}"` : path,
@@ -133,6 +177,10 @@ export function slashTokenAt(text: string, cursor: number): { start: number; tok
 }
 
 export const Composer2: React.FC<{
+  /** 缺省 = 跟随 appStore.activeId;`null` = 明确按新对话语义跑(主页复用时用)。 */
+  sessionId?: string | null
+  /** 只给桌面首页等高意图入口开;触屏不应自动弹软键盘。 */
+  autoFocus?: boolean
   disabled: boolean
   running: boolean
   execConfig: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>
@@ -206,7 +254,7 @@ export const Composer2: React.FC<{
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
 }> = ({
-  disabled, running, execConfig,
+  sessionId, autoFocus, disabled, running, execConfig,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
@@ -265,6 +313,7 @@ export const Composer2: React.FC<{
   const [histPos, setHistPos] = useState(0) // 历史召回位置:0=当前草稿;1..N=第 N 条最近发送
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
 
   /** 命令描述直接取 catalog 的 zh/en —— 不再另建一套 input.slash.* key(那正是两端文案漂移的来源)。 */
   const describe = useMemo(() => {
@@ -283,7 +332,7 @@ export const Composer2: React.FC<{
 
   const copyLastReply = async (): Promise<void> => {
     const st = useApp.getState()
-    const sid = st.activeId
+    const sid = activeSessionId
     const msgs = sid ? st.messagesBySession[sid] || [] : []
     const last = [...msgs].reverse().find((m) => m.role === 'assistant')
     const text = (last?.content || '').trim()
@@ -296,7 +345,7 @@ export const Composer2: React.FC<{
 
   const retryLastMessage = async (): Promise<void> => {
     const st = useApp.getState()
-    const sid = st.activeId
+    const sid = activeSessionId
     const msgs = sid ? st.messagesBySession[sid] || [] : []
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
     if (!lastUser) { st.toast(t('input.slash.nothingToRetry'), true); return }
@@ -307,7 +356,7 @@ export const Composer2: React.FC<{
   // frontmatter 元数据(标题/摘要/模型)+ 逐消息正文 + 工具调用一行摘要。接口失败回落内存切片。
   const exportSession = async (): Promise<void> => {
     const st = useApp.getState()
-    const sid = st.activeId
+    const sid = activeSessionId
     if (!sid) { st.toast(t('input.slash.nothingToExport'), true); return }
     const sess = st.sessions.find((x) => x.id === sid)
     let msgs: Array<Pick<MessageRecord, 'role' | 'content' | 'tool_calls' | 'attachments'> & { timestamp?: number }> = []
@@ -735,7 +784,8 @@ export const Composer2: React.FC<{
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
   const chatSessions = useApp((s) => s.sessions)
-  const activeSessionId = useApp((s) => s.activeId)
+  const storeActiveSessionId = useApp((s) => s.activeId)
+  const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
   const refMatches = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
     const q = fileRefCtx.query.toLowerCase()
@@ -940,6 +990,30 @@ export const Composer2: React.FC<{
     setWsFiles((prev) => [...prev, ...next])
   }
 
+  /** OS 文件落下:host 走本机路径芯片,其余上传成工作区附件。 */
+  const onFilesDrop = (files: FileList): void => {
+    if (!files.length) return
+    if (isHost && window.tangu?.getPathForFile) {
+      const paths = Array.from(files)
+        .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
+        .filter(Boolean)
+      if (paths.length) {
+        addRefChips(paths.map(fileChip)) // 上方「已选择」芯片,不再往输入框里塞一串裸路径
+        requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+        return
+      }
+    }
+    void pickWsFiles(files)
+  }
+  const filesDropRef = useRef(onFilesDrop)
+  filesDropRef.current = onFilesDrop
+
+  // 落区 = **整个聊天区**(与侧栏拖引用同一片,见 ChatView 的 refdrop),不用瞄准输入框。
+  useEffect(() => {
+    const card = cardRef.current
+    return card ? bindFilesDropZone(card, (f) => filesDropRef.current(f), setDragOver) : undefined
+  }, [])
+
   /** Web / 云端回退：一个系统文件选择动作里，图片仍进 vision 附件，其余文件仍进工作区附件。 */
   const pickMixedFiles = async (files: FileList | null): Promise<void> => {
     if (!files?.length) return
@@ -1053,28 +1127,7 @@ export const Composer2: React.FC<{
             </div>
           </div>
         )}
-        <div
-          className={`t2c-card${dragOver ? ' dragover' : ''}`}
-          onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragOver(true) } }}
-          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false) }}
-          onDrop={(e) => {
-            e.preventDefault()
-            setDragOver(false)
-            const files = e.dataTransfer?.files
-            if (!files?.length) return
-            if (isHost && window.tangu?.getPathForFile) {
-              const paths = Array.from(files)
-                .map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } })
-                .filter(Boolean)
-              if (paths.length) {
-                addRefChips(paths.map(fileChip)) // 上方「已选择」芯片,不再往输入框里塞一串裸路径
-                requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
-                return
-              }
-            }
-            void pickWsFiles(files)
-          }}
-        >
+        <div ref={cardRef} className={`t2c-card${dragOver ? ' dragover' : ''}`}>
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotedText && (
             <div className="t2c-quote">
@@ -1147,6 +1200,7 @@ export const Composer2: React.FC<{
             ref={taRef}
             className="t2c-ta"
             rows={1}
+            autoFocus={autoFocus}
             value={draft}
             placeholder={disabled ? t('input.placeholderDisabled') : t('input.placeholder')}
             disabled={disabled}
@@ -1409,7 +1463,7 @@ export const Composer2: React.FC<{
                     {ctxInfo && (
                       <>
                         <span className="t2c-ctxinfo-src">
-                          {t(`ctx.windowSource.${['override', 'model', 'family', 'default'].includes(ctxInfo.ctxWindowSource) ? ctxInfo.ctxWindowSource : 'default'}`)}
+                          {t(`ctx.windowSource.${['override', 'model', 'learned', 'family', 'default'].includes(ctxInfo.ctxWindowSource) ? ctxInfo.ctxWindowSource : 'default'}`)}
                         </span>
                         {(ctxInfo.sections.length > 0 || ctxInfo.historyTokens > 0) && (
                           <div className="t2c-ctxinfo-secs">

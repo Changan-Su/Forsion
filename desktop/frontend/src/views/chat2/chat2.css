@@ -9,7 +9,8 @@
 /* 从工作区拖会话/笔记/文件进来:整块聊天区都是落区 —— 高亮画在伪元素上(不动布局,
    也不给根加 border 以免 container 尺寸抖动进而触发容器查询换档)。 */
 .t2-chat-view { position: relative; }
-.t2-chat-view.refdrop::after {
+.t2-chat-view.refdrop::after,
+.t2-chat-view[data-filedrop]::after { /* OS 文件也落整片(见 Composer2) */
   content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 20;
   border: 2px dashed var(--accent-ink, var(--accent)); border-radius: var(--radius-lg, 12px);
   background: color-mix(in srgb, var(--accent-ink, var(--accent)) 7%, transparent);
@@ -531,13 +532,16 @@
 .t2-voice-txt:hover { color: var(--text); background: color-mix(in srgb, var(--text-muted) 14%, transparent); }
 
 /* ── 聊天气泡里的 [[双链]](assistant Markdown 经 remarkWiki、user 纯文本经 WikiText;观感对齐编辑器) ── */
-.t2-content .wikilink, .t2-user .wikilink {
+/* .citelink = 网页引用(普通 markdown 链接,ChatWebLink)。与文件引用条**同一套观感**:出厂配色是
+   单色的(--accent-ink ≈ 正文色,e2e 实测两者都是 rgb(28,28,28)),光靠颜色的链接在这儿等于隐形 ——
+   下划线才是这套语言里唯一跨配色成立的「可点」信号。 */
+.t2-content .wikilink, .t2-user .wikilink, .t2-content .citelink {
   color: var(--primary);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.t2-content .wikilink:hover, .t2-user .wikilink:hover { background: var(--drop); border-radius: 3px; }
+.t2-content .wikilink:hover, .t2-user .wikilink:hover, .t2-content .citelink:hover { background: var(--drop); border-radius: 3px; }
 .t2-content .wikilink.wikilink-unresolved, .t2-user .wikilink.wikilink-unresolved {
   color: var(--text-muted);
   opacity: 0.75;
