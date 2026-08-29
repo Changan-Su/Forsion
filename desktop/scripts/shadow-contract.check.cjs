@@ -76,6 +76,7 @@ const INTERACTION_EXCEPTIONS = new Map([
   ['frontend/src/amadeus-host.css|.dash-card[data-dragging]|box-shadow', '旧仪表盘拖拽反馈'],
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-interact]|box-shadow', '仪表盘交互期间抬起反馈'],
   ['frontend/src/views/dashCanvas.css|.dash2-card[data-dragging]|box-shadow', '仪表盘拖拽反馈'],
+  ['frontend/src/views/dashGrid.css|.dash3-card--lift|box-shadow', '网格仪表盘 DragOverlay 跟手壳抬起反馈(只在浮层这一层,不落到格子里的卡)'],
 ])
 
 /* LCL 展示页保留旧 token，但其自身 data-flat 规则会清空这些 token。 */
