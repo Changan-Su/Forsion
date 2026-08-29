@@ -5,7 +5,7 @@
 
 import { $inputRule, $prose } from '@milkdown/kit/utils'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
-import { Plugin } from '@milkdown/kit/prose/state'
+import { Plugin, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { blockLabel, type BlockNode } from './blockTriggers'
 
 /** 全角【【 当场换成半角 [[(AFFiNE 的 convertTriggerKey 同款,它的触发键表就是 ['@','[[','【【'])。
@@ -170,6 +170,16 @@ export interface SelRect {
   /** 选区覆盖文本块的共同对齐；不一致时缺省。 */
   align?: 'left' | 'center' | 'right'
 }
+/** 选中的是不是「一张图」—— 两种形态都算:md 图片节点(NodeSelection),以及 `![[pic.png|200]]`
+ *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
+ *  行内格式工具栏据此让位:对图片来说 B/I/U 毫无意义,浮条还会盖住正文(截图自查发现)。 */
+const IMG_EMBED_SEL_RE = /^!\[\[[^\]\n|]+\.(png|jpe?g|gif|webp|svg|avif|bmp)(\|\d+)?\]\]$/i
+function isImageSelection(state: EditorState): boolean {
+  const sel = state.selection
+  if (sel instanceof NodeSelection) return sel.node.type.name === 'image'
+  return IMG_EMBED_SEL_RE.test(state.doc.textBetween(sel.from, sel.to))
+}
+
 export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
   return $prose(
     () =>
@@ -180,6 +190,9 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
             // hasFocus:编辑器失焦(点到别处/别的块)时 blur 会派空事务触发 update、选区仍非空 →
             // 不判此条会留下过期工具栏,点它会对已离开的块施格式(Codex L2)。
             if (selection.empty || !view.editable || !view.hasFocus()) return report(null)
+            // 选中的是一张图片(md 图片节点 / `![[pic.png|200]]` 整段源码)→ 让位:B/I/U 对图片
+            // 没有意义,浮条还正好盖住上一段正文(2026-08-27 观感自查揪出来的)。
+            if (isImageSelection(view.state)) return report(null)
             const { from, to } = selection
             const $from = doc.resolve(from)
             if (!$from.parent.isTextblock) return report(null) // 节点选区不服务行内格式化

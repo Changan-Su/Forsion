@@ -18,8 +18,13 @@ export function revealSource(view: EditorView, srcFrom: number): void {
 /**
  * 给一个「渲染结果」元素挂上 `</>` 按钮。inline=true 时按钮缩到左上角外沿,
  * 免得盖住本来就很小的行内公式。只读视图不给编辑入口(和 renderMath 同一条约定)。
+ *
+ * `reveal` 两种口径:
+ *  · **数字** = 源码在文档里的位置 → 把光标送进去(公式 / 双链 / `![[…]]` 图片,它们本来就是文本);
+ *  · **函数** = 自定入口 —— `![](path)` 那种是 PM 的 image **节点**,文档里根本没有字面源码可露,
+ *    由 mdImage.ts 自己弹一行源码输入框(见那边的注释)。
  */
-export function attachSourceButton(host: HTMLElement, view: EditorView, srcFrom: number, inline = false): void {
+export function attachSourceButton(host: HTMLElement, view: EditorView, reveal: number | (() => void), inline = false): void {
   if (!view.editable) return
   const b = document.createElement('button')
   b.type = 'button'
@@ -36,7 +41,8 @@ export function attachSourceButton(host: HTMLElement, view: EditorView, srcFrom:
   b.addEventListener('click', (e) => {
     e.preventDefault()
     e.stopPropagation()
-    revealSource(view, srcFrom)
+    if (typeof reveal === 'function') reveal()
+    else revealSource(view, reveal)
   })
   host.classList.add('amx-has-src-btn')
   host.appendChild(b)

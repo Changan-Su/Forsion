@@ -43,7 +43,12 @@ export function setAssetUrlBuilder(fn: (ref: string) => string): void {
 }
 
 export function toAssetUrl(vaultRelPath: string): string {
-  return assetUrlBuilder(vaultRelPath)
+  // ⚠️ 结果要塞进 markdown 的链接目标(`![](…)`),那里**不许有裸括号** —— IMG_RE 和 CommonMark
+  // 都在第一个 `)` 处截断,而 `encodeURIComponent` 偏偏不编码 `()`(实测:`export (1).png` →
+  // `export%20(1).png`)。截断的后果是落盘写出 `![](…%281).png)` 这种半截路径,图片当场失联。
+  // 统一在**唯一出口**兜住:桌面协议版、云端 HTTP 版(setAssetUrlBuilder 注入)都不必各自记得。
+  // 解析侧 decodeURIComponent 认 `%28`/`%29`,对称。
+  return assetUrlBuilder(vaultRelPath).replace(/[()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
 }
 
 export function fromAssetUrl(url: string): string | null {
@@ -59,6 +64,20 @@ export function fromAssetUrl(url: string): string | null {
 // ![alt](path) or ![alt](path "title") — captures alt-wrapper, the URL token, then the rest.
 const IMG_RE = /(!\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g
 
+/** markdown 的链接目标里,空格和括号会当场把图片语法弄坏 —— 必须百分号编码。
+ *
+ *  ⚠️ 2026-08-27 用户实报「原来的图片文件都无法被引用了」的根因就在这:
+ *  粘贴/上传一张名字带空格的图(`Screenshot 2026-08-27 at 22.25.59.png`),这里原样写下
+ *  `![](attachments/Screenshot 2026-08-27 at 22.25.59.png)` —— 这**不是**合法的 markdown 图片
+ *  (CommonMark 的链接目标遇空格即止),remark 于是当纯文本读,下一次保存又给 `[`/`(` 加上反斜杠
+ *  转义 → 盘上永久变成 `!\[]\(…)` 一行死字,图片再也回不来。
+ *
+ *  编码而不是用 `<...>` 包裹:Obsidian 自己写的就是 `%20`,这条是兼容口径。
+ *  ⚠️ 天花板:文件名里**字面**含 `%20` 这种串,读回时会被解码成空格(与 Obsidian 同一处歧义)。 */
+function encodeDest(rel: string): string {
+  return rel.replace(/[ ()<>]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+}
+
 function isExternal(url: string): boolean {
   return /^(https?:|data:|amadeus-asset:|blob:|\/)/.test(url)
 }
@@ -69,7 +88,8 @@ export function toDisplayMarkdown(md: string, pageDir: string): string {
   return tabsToEntities(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     const u = url.trim()
     if (isExternal(u)) return full
-    return pre + toAssetUrl(joinRel(pageDir, u)) + rest
+    // 先解码再拼:盘上是 `%20` 编码形态,不解码的话 toAssetUrl 会二次编码 → 协议侧找不到文件。
+    return pre + toAssetUrl(joinRel(pageDir, decodeSafe(u))) + rest
   }))
 }
 
@@ -78,7 +98,7 @@ export function toStoredMarkdown(md: string, pageDir: string): string {
   return entitiesToTabs(md.replace(IMG_RE, (full, pre: string, url: string, rest: string) => {
     const vaultRel = fromAssetUrl(url.trim())
     if (vaultRel == null) return full
-    return pre + relFrom(pageDir, vaultRel) + rest
+    return pre + encodeDest(relFrom(pageDir, vaultRel)) + rest
   }))
 }
 
