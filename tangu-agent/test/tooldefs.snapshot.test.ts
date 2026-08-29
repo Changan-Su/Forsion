@@ -42,6 +42,16 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const snapshotPath = join(here, '../scripts/__snapshots__/tooldefs.json');
     const expected = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+    // 按**宿主环境**门控的工具:view_video 要本机装了 ffmpeg/ffprobe,transcribe_audio 要仓外桥文件。
+    // 基线是在装了的机器上生成的,CI runner 没装 —— 实跑缺哪条就把它从基线里一并剔掉,其余逐字比对。
+    // 反向不剔:实跑**多出**基线没有的工具照样红(那才是真漂移)。
+    const ENV_GATED = ['view_video', 'transcribe_audio'];
+    for (const key of Object.keys(expected)) {
+      const got = new Set(((all[key] as any[]) ?? []).map((t) => t?.function?.name));
+      expected[key] = (expected[key] as any[]).filter(
+        (t) => !(ENV_GATED.includes(t?.function?.name) && !got.has(t?.function?.name)),
+      );
+    }
     expect(all).toEqual(expected);
   });
 });
