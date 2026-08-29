@@ -20,11 +20,17 @@ export function resolveCardRepulsion(
   obstacles: readonly ElBox[],
   intent: { x: number; y: number } = { x: 0, y: 0 },
   clearance = CARD_CLEARANCE,
+  /** 有限画布可限制候选落点；无限 Canvas 缺省不传。 */
+  bounds?: ElBox,
 ): { x: number; y: number } {
   if (!moving.length || !obstacles.length) return { x: 0, y: 0 }
   const blocked = obstacles.map((b) => grow(b, Math.max(0, clearance)))
-  const valid = (x: number, y: number): boolean =>
-    moving.every((m) => blocked.every((o) => !overlaps({ ...m, x: m.x + x, y: m.y + y }, o)))
+  const valid = (x: number, y: number): boolean => moving.every((m) => {
+    const candidate = { ...m, x: m.x + x, y: m.y + y }
+    if (bounds && (candidate.x < bounds.x || candidate.y < bounds.y
+      || candidate.x + candidate.w > bounds.x + bounds.w || candidate.y + candidate.h > bounds.y + bounds.h)) return false
+    return blocked.every((o) => !overlaps(candidate, o))
+  })
   if (valid(0, 0)) return { x: 0, y: 0 }
 
   const xs = new Set<number>([0])
@@ -49,4 +55,3 @@ export function resolveCardRepulsion(
   }
   return best ? { x: best.x, y: best.y } : { x: 0, y: 0 }
 }
-

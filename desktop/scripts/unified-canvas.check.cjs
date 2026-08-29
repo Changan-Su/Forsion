@@ -53,7 +53,7 @@
 //   C58 卡侧 ⊕:点得中(元素层 pointer-events)、建卡连线、编辑态收起
 //   C59 形状四角塑型:把手不再被 overflow 裁掉(真鼠标命中);对角固定 + 夹到最小也不走位
 //   C60 Frame 进工具栏 + 矩形/椭圆/Frame 拖出尺寸(拖不动则回落默认尺寸)
-//   C61 拖到卡边缘=认亲:真实落点幽灵卡/放宽外侧命中带/右缘=子+吸附队列+一击撤销/
+//   C61 拖到卡边缘=认亲:不画落点占位/放宽外侧命中带/右缘=子+吸附队列+一击撤销/
 //      下缘=兄弟(目标顶层则摘爹)/环形目标不给认
 //   C62 层级线可选中 + Delete=解除关系(卡片不动);Cmd+A 不收线
 //   C61c 卡心中立区:边缘带按盒尺寸取比例,一行卡也留得出「只是挪位置」的落点
@@ -76,6 +76,8 @@
 //   C79 卡片四边/四角塑型:宽高与移动边落盘，点阵开启时边界吸附，一击撤销
 //   C80 点阵吸附开关:右下角默认开、手动移动吸附、关闭后自由移动并跨重载记忆
 //   C81 正文主卡八向塑型:宽高落盘/点阵落点/松手动画/普通卡不被主卡 overflow 裁切
+//   C82 低倍率简略显示开关:默认开、即时切换、跨重载记忆
+//   C83 低倍率选中卡保留完整正文；取消选中后重新回到轻量替身
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -1475,6 +1477,22 @@ async function main() {
   })
   await p34.mouse.click(at34.x, at34.y) // 一击选中(两段式)
   await p34.waitForTimeout(200)
+  // 舞台的 pointermove 先同步改卡片动态样式；document 冒泡监听紧接着取样，能抓到
+  // “卡片已经走了、React 选中框还没提交”的单事件拖尾。只看拖完后的静态位置会漏掉它。
+  await p34.evaluate(() => {
+    window.__amxSelectionDragLag = []
+    window.__amxSelectionDragLagProbe = (event) => {
+      if (!(event.buttons & 1)) return
+      const card = [...document.querySelectorAll('.amx-ucard')].find((c) => c.dataset.anchor === 'k1')
+      const selbox = document.querySelector('.amx-el-selbox[data-anchor="k1"]')
+      if (!card || !selbox) return
+      window.__amxSelectionDragLag.push({
+        x: Math.abs(selbox.offsetLeft - card.offsetLeft),
+        y: Math.abs(selbox.offsetTop - card.offsetTop),
+      })
+    }
+    document.addEventListener('pointermove', window.__amxSelectionDragLagProbe)
+  })
   await p34.mouse.move(at34.x, at34.y)
   await p34.mouse.down()
   await p34.mouse.move(at34.x + 140, at34.y + 90, { steps: 10 })
@@ -1484,7 +1502,20 @@ async function main() {
   const mid34 = await p34.evaluate(() => {
     const el = [...document.querySelectorAll('.amx-ucard')].find((c) => c.dataset.anchor === 'k1')
     const cs = getComputedStyle(el)
-    return { left: el.offsetLeft, top: el.offsetTop, cursor: cs.cursor, styleAttr: el.getAttribute('style') ?? '', selbox: (() => { const b = document.querySelector('.amx-el-selbox[data-anchor="k1"]'); return b ? b.offsetLeft : null })() }
+    document.removeEventListener('pointermove', window.__amxSelectionDragLagProbe)
+    const lag = window.__amxSelectionDragLag ?? []
+    return {
+      left: el.offsetLeft,
+      top: el.offsetTop,
+      cursor: cs.cursor,
+      styleAttr: el.getAttribute('style') ?? '',
+      selbox: (() => { const b = document.querySelector('.amx-el-selbox[data-anchor="k1"]'); return b ? b.offsetLeft : null })(),
+      selectionLag: {
+        samples: lag.length,
+        maxX: Math.max(0, ...lag.map((sample) => sample.x)),
+        maxY: Math.max(0, ...lag.map((sample) => sample.y)),
+      },
+    }
   })
   await p34.mouse.up()
   await p34.waitForTimeout(1200)
@@ -1498,6 +1529,7 @@ async function main() {
     !!at34 && Math.abs(mid34.left - (at34.left0 + 140)) <= 24 && Math.abs(mid34.top - (at34.top0 + 90)) <= 24
       && mid34.cursor === 'grabbing' && !mid34.styleAttr.includes('left')
       && mid34.selbox != null && Math.abs(mid34.selbox - mid34.left) <= 4
+      && mid34.selectionLag.samples >= 2 && mid34.selectionLag.maxX <= 1 && mid34.selectionLag.maxY <= 1
       && !!k134 && Math.abs(k134.x - (40 + 140)) <= 24 && end34.cursor === 'grab',
     JSON.stringify({ at: at34, mid: mid34, k1: k134, end: end34 }))
   await p34.close()
@@ -3243,10 +3275,7 @@ async function main() {
         target: document.querySelectorAll('.amx-el-attach-target').length,
         label: document.querySelector('.amx-el-attach-label')?.textContent ?? '',
         preview: !!document.querySelector('.amx-el-conn.is-preview'),
-        landing: (() => {
-          const slot = document.querySelector('[data-attach-slot]')
-          return slot ? { x: parseFloat(slot.style.left), y: parseFloat(slot.style.top), w: parseFloat(slot.style.width), h: parseFloat(slot.style.height) } : null
-        })(),
+        landingPreview: !!document.querySelector('[data-attach-slot]'),
       }
     })
     await p.mouse.up()
@@ -3275,10 +3304,10 @@ async function main() {
   const cyc61 = await dragCardTo(p61, 'k1', b61.r - 12, b61.t + b61.h / 2)
   const after61 = await canvasState(p61)
   await p61.close()
-  record('C61 拖到卡右缘=认爹 + 预示真实落点 + 弹簧吸附进子队列(x=父右缘+80) + 层级线淡入;Cmd+Z 一击全退',
+  record('C61 拖到卡右缘=认爹（不画落点占位）+ 弹簧吸附进子队列(x=父右缘+80) + 层级线淡入;Cmd+Z 一击全退',
     hl61?.side === 'e' && hl61?.rel === 'child' && hl61.target === 1
       && hl61.label === '设为子节点' && hl61.preview
-      && hl61.landing?.x === 900 && hl61.landing?.y === 80 && hl61.landing?.w === 300
+      && !hl61.landingPreview
       && hl61.motion.card && hl61.motion.line
       && s61.tree === '"tree":{"k2":"k1"}' && s61.cards.includes('k2@900,80') && s61.lines === 1
       && undo61.tree === null && undo61.cards.includes('k2@560,460')
@@ -3320,8 +3349,8 @@ async function main() {
   const hl61d = await dragCardTo(p61d, 'k2', t61d.r + 46, t61d.t + t61d.h / 2)
   const s61d = await canvasState(p61d)
   await p61d.close()
-  record('C61d 连结外侧命中带放宽到 48px：离目标边缘 46px 仍显示真实落点并完成认爹',
-    hl61d?.side === 'e' && hl61d?.rel === 'child' && !!hl61d.landing && s61d.tree === '"tree":{"k2":"k1"}',
+  record('C61d 连结外侧命中带 48px：离目标边缘 46px 仍提示关系但不画落点占位，并完成认爹',
+    hl61d?.side === 'e' && hl61d?.rel === 'child' && !hl61d.landingPreview && s61d.tree === '"tree":{"k2":"k1"}',
     JSON.stringify({ hl: hl61d, after: s61d, box: t61d }))
 
   // C74 多选卡片整批认亲：组内相对位置保持，所有选中根节点一起挂到同一父卡，一击撤销。
@@ -3928,6 +3957,8 @@ async function main() {
     labels: document.querySelectorAll('.amx-card-overview').length,
     k1h: document.querySelector('.amx-ucard[data-anchor="k1"]')?.offsetHeight ?? 0,
     original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
+    toggle: document.querySelector('.amx-stage-hud button[title="关闭低倍率简略显示"]')?.getAttribute('aria-pressed'),
+    stored: localStorage.getItem('amadeus.canvas.overview'),
   }))
   for (let i = 0; i < 4; i++) await p78.click('.amx-stage-hud button[title="缩小"]')
   await p78.waitForTimeout(250)
@@ -4011,6 +4042,55 @@ async function main() {
       originalsHidden: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display === 'none',
     }
   })
+  await p78.click('.amx-stage-hud button[title="关闭低倍率简略显示"]')
+  await p78.waitForTimeout(180)
+  const off78 = await p78.evaluate(() => ({
+    mode: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+    labels: document.querySelectorAll('.amx-card-overview').length,
+    original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
+    pressed: document.querySelector('.amx-stage-hud button[title="开启低倍率简略显示"]')?.getAttribute('aria-pressed'),
+    stored: localStorage.getItem('amadeus.canvas.overview'),
+  }))
+  await p78.reload({ waitUntil: 'domcontentloaded' })
+  await p78.waitForSelector('.amx-stage-hud')
+  await p78.waitForTimeout(350)
+  for (let i = 0; i < 5; i++) await p78.click('.amx-stage-hud button[title="缩小"]')
+  await p78.waitForTimeout(200)
+  const rememberedOff78 = await p78.evaluate(() => ({
+    z: new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a,
+    mode: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+    labels: document.querySelectorAll('.amx-card-overview').length,
+    original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
+    pressed: document.querySelector('.amx-stage-hud button[title="开启低倍率简略显示"]')?.getAttribute('aria-pressed'),
+    stored: localStorage.getItem('amadeus.canvas.overview'),
+  }))
+  await p78.click('.amx-stage-hud button[title="开启低倍率简略显示"]')
+  await p78.waitForTimeout(220)
+  const onAgain78 = await p78.evaluate(() => ({
+    mode: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+    labels: document.querySelectorAll('.amx-card-overview').length,
+    hidden: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display === 'none',
+    pressed: document.querySelector('.amx-stage-hud button[title="关闭低倍率简略显示"]')?.getAttribute('aria-pressed'),
+    stored: localStorage.getItem('amadeus.canvas.overview'),
+  }))
+  const selectedCardBox78 = await p78.locator('.amx-ucard[data-anchor="k1"]').boundingBox()
+  if (selectedCardBox78) await p78.mouse.click(selectedCardBox78.x + selectedCardBox78.width / 2, selectedCardBox78.y + selectedCardBox78.height / 2)
+  await p78.waitForTimeout(180)
+  const selected78 = await p78.evaluate(() => ({
+    selected: !!document.querySelector('.amx-el-selbox[data-anchor="k1"]'),
+    labels: [...document.querySelectorAll('[data-card-label]')].map((el) => el.getAttribute('data-card-label')),
+    k1Original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
+    k2Original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k2"] p')).display,
+  }))
+  const stageBox78 = await p78.locator('.amx-stage').boundingBox()
+  if (stageBox78) await p78.mouse.click(stageBox78.x + 40, stageBox78.y + stageBox78.height / 2)
+  await p78.waitForTimeout(180)
+  const deselected78 = await p78.evaluate(() => ({
+    selected: !!document.querySelector('.amx-el-selbox[data-anchor="k1"]'),
+    labels: [...document.querySelectorAll('[data-card-label]')].map((el) => el.getAttribute('data-card-label')),
+    k1Hidden: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display === 'none',
+  }))
+  await p78.evaluate(() => localStorage.removeItem('amadeus.canvas.overview'))
   for (let i = 0; i < 3; i++) await p78.click('.amx-stage-hud button[title="放大"]')
   await p78.waitForTimeout(200)
   const after78 = await p78.evaluate(() => ({
@@ -4032,6 +4112,18 @@ async function main() {
       && returned78.labels.k2 === '没有标题的首行。'
       && after78.labels === 0 && !after78.overview && after78.original !== 'none',
     JSON.stringify({ before: before78, low: low78, veryLow: veryLow78, returned: returned78, after: after78 }))
+  record('C82 低倍率简略显示默认开；关闭即恢复原正文，跨重载记忆；低倍率重新开启立即恢复轻量层',
+    before78.toggle === 'true' && before78.stored === null
+      && !off78.mode && off78.labels === 0 && off78.original !== 'none' && off78.pressed === 'false' && off78.stored === '0'
+      && rememberedOff78.z <= 0.42 && !rememberedOff78.mode && rememberedOff78.labels === 0
+      && rememberedOff78.original !== 'none' && rememberedOff78.pressed === 'false' && rememberedOff78.stored === '0'
+      && onAgain78.mode && onAgain78.labels === 3 && onAgain78.hidden && onAgain78.pressed === 'true' && onAgain78.stored === '1',
+    JSON.stringify({ before: before78, off: off78, remembered: rememberedOff78, onAgain: onAgain78 }))
+  record('C83 低倍率选中卡保留完整正文且不画轻量替身；取消选中后重新简略渲染',
+    selected78.selected && selected78.k1Original !== 'none' && selected78.k2Original === 'none'
+      && !selected78.labels.includes('k1') && selected78.labels.includes('m:') && selected78.labels.includes('k2')
+      && !deselected78.selected && deselected78.k1Hidden && deselected78.labels.includes('k1') && deselected78.labels.length === 3,
+    JSON.stringify({ selected: selected78, deselected: deselected78 }))
 
   // ── C79 卡片四边/四角尺寸 + 点阵边界吸附 ─────────────────────────────────────────
   const SNAP79 = [
@@ -4062,9 +4154,8 @@ async function main() {
     await p79.waitForTimeout(80)
     mid79 = await p79.evaluate(() => {
       const card = document.querySelector('.amx-ucard[data-anchor="k1"]')
-      const landing = document.querySelector('[data-snap-landing="k1"]')
       const box = (el) => el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null
-      return { card: box(card), landing: box(landing) }
+      return { card: box(card), landingPreview: !!document.querySelector('[data-snap-landing]') }
     })
     await p79.mouse.up()
     await p79.waitForTimeout(40)
@@ -4084,11 +4175,10 @@ async function main() {
     return { x: +el.dataset.x, y: +el.dataset.y, w: +el.dataset.w, h: +el.dataset.h }
   })
   await p79.close()
-  record('C79 单选卡八向塑型：过程逐像素跟手并显示点阵落点，松手后动画吸附、宽高落盘且一击撤销',
+  record('C79 单选卡八向塑型：过程逐像素跟手且不画落点预览，松手后动画吸附、宽高落盘且一击撤销',
     grip79.count === 8 && !!grip79.at && sized79.w > before79.w && sized79.h > before79.h
-      && !!mid79?.card && !!mid79?.landing
+      && !!mid79?.card && !mid79.landingPreview
       && ((mid79.card.x + mid79.card.w) % 24 !== 0 || (mid79.card.y + mid79.card.h) % 24 !== 0)
-      && (mid79.landing.x + mid79.landing.w) % 24 === 0 && (mid79.landing.y + mid79.landing.h) % 24 === 0
       && motion79
       && (sized79.x + sized79.w) % 24 === 0 && (sized79.y + sized79.h) % 24 === 0
       && sized79.domW === sized79.w && sized79.domH === sized79.h
@@ -4112,9 +4202,8 @@ async function main() {
     await p80.waitForTimeout(70)
     const mid = await p80.evaluate(() => {
       const el = document.querySelector('.amx-ucard[data-anchor="k1"]')
-      const landing = document.querySelector('[data-snap-landing]')
       const box = (node) => node ? { x: node.offsetLeft, y: node.offsetTop, w: node.offsetWidth, h: node.offsetHeight } : null
-      return { card: box(el), landing: box(landing) }
+      return { card: box(el), landingPreview: !!document.querySelector('[data-snap-landing]') }
     })
     await p80.mouse.up()
     await p80.waitForTimeout(40)
@@ -4136,13 +4225,13 @@ async function main() {
   await p80.click('.amx-stage-hud button[title="开启点阵吸附"]')
   await p80.evaluate(() => localStorage.removeItem('amadeus.canvas.gridSnap'))
   await p80.close()
-  record('C80 点阵默认开：移动过程自由跟手+显示落点，松手动画归位；关闭后自由落点并跨重载记忆',
+  record('C80 点阵默认开：移动过程自由跟手且不画落点预览，松手动画归位；关闭后自由落点并跨重载记忆',
     toggle80.pressed === 'true' && toggle80.stored === null
-      && !!snapped80.mid.card && !!snapped80.mid.landing
+      && !!snapped80.mid.card && !snapped80.mid.landingPreview
       && (snapped80.mid.card.x % 24 !== 0 || snapped80.mid.card.y % 24 !== 0)
-      && snapped80.mid.landing.x % 24 === 0 && snapped80.mid.landing.y % 24 === 0 && snapped80.motion
+      && snapped80.motion
       && snapped80.after.x % 24 === 0 && snapped80.after.y % 24 === 0
-      && !free80.mid.landing && !free80.motion && (free80.after.x % 24 !== 0 || free80.after.y % 24 !== 0)
+      && !free80.mid.landingPreview && !free80.motion && (free80.after.x % 24 !== 0 || free80.after.y % 24 !== 0)
       && off80.pressed === 'false' && off80.stored === '0'
       && remembered80.pressed === 'false' && remembered80.stored === '0',
     JSON.stringify({ toggle: toggle80, snapped: snapped80, free: free80, off: off80, remembered: remembered80 }))
@@ -4172,9 +4261,8 @@ async function main() {
     await p81.waitForTimeout(70)
     mid81 = await p81.evaluate(() => {
       const main = document.querySelector('.unified-body .ProseMirror')
-      const landing = document.querySelector('[data-snap-landing="m:"]')
       const box = (el) => el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null
-      return { main: box(main), landing: box(landing) }
+      return { main: box(main), landingPreview: !!document.querySelector('[data-snap-landing]') }
     })
     await p81.mouse.up()
     await p81.waitForTimeout(40)
@@ -4194,10 +4282,9 @@ async function main() {
   await p81.waitForTimeout(350)
   const undo81 = await cvDoc(p81)
   await p81.close()
-  record('C81 正文主卡单选出现八向热区；过程自由跟手、落点可见，松手动画吸附宽高并落盘；普通卡仍可命中',
-    !!mainPt81 && grip81.count === 8 && !!grip81.at && !!mid81?.main && !!mid81?.landing && motion81
+  record('C81 正文主卡单选出现八向热区；过程自由跟手且不画落点预览，松手动画吸附宽高并落盘；普通卡仍可命中',
+    !!mainPt81 && grip81.count === 8 && !!grip81.at && !!mid81?.main && !mid81.landingPreview && motion81
       && ((mid81.main.x + mid81.main.w) % 24 !== 0 || (mid81.main.y + mid81.main.h) % 24 !== 0)
-      && (mid81.landing.x + mid81.landing.w) % 24 === 0 && (mid81.landing.y + mid81.landing.h) % 24 === 0
       && sized81?.main?.h > 0 && (sized81.main.x + sized81.main.w) % 24 === 0 && (sized81.main.y + sized81.main.h) % 24 === 0
       && dom81.w === sized81.main.w && dom81.h === sized81.main.h && dom81.cardHit === 'k1'
       && JSON.stringify(undo81?.main) === JSON.stringify(before81?.main),

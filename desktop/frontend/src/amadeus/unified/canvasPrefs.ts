@@ -2,6 +2,7 @@
 export const CANVAS_DOUBLE_CLICK_FOCUS_KEY = 'amadeus.canvas.doubleClickFocus'
 export const CANVAS_MINIMAP_KEY = 'amadeus.canvas.minimap'
 export const CANVAS_GRID_SNAP_KEY = 'amadeus.canvas.gridSnap'
+export const CANVAS_OVERVIEW_KEY = 'amadeus.canvas.overview'
 
 /** 默认开启；只把显式的 `0` 视为关闭，旧用户无需迁移。 */
 export function canvasDoubleClickFocusEnabled(): boolean {
@@ -28,4 +29,13 @@ export function canvasGridSnapEnabled(): boolean {
 
 export function setCanvasGridSnapEnabled(on: boolean): void {
   try { localStorage.setItem(CANVAS_GRID_SNAP_KEY, on ? '1' : '0') } catch { /* ignore */ }
+}
+
+/** 低倍率简略显示默认开启；关闭后即使缩到阈值以下也继续渲染完整正文。 */
+export function canvasOverviewEnabled(): boolean {
+  try { return localStorage.getItem(CANVAS_OVERVIEW_KEY) !== '0' } catch { return true }
+}
+
+export function setCanvasOverviewEnabled(on: boolean): void {
+  try { localStorage.setItem(CANVAS_OVERVIEW_KEY, on ? '1' : '0') } catch { /* ignore */ }
 }

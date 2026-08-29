@@ -68,3 +68,31 @@ export function ViewCard({ dashLeafId, dashPath, blockId, opts, onClose }: {
   // 复用引擎的 .wb-view(满高 flex 列 + 自身滚动):视图在卡片里拿到的尺寸语义与在 tab 里一致。
   return <div className="wb-view dash-viewcard">{def.factory({ leaf, params })}</div>
 }
+
+// ───────────────── 嵌卡白名单与身份判定(网格版 / 画布版共用,勿各写一份) ─────────────────
+
+/** 渲染层也拒的嵌入禁区(安全 / 全局语义炸弹)。添加菜单另按 `embeddable` 白名单收窄。
+ *  ⚠️ 白名单必须在**渲染入口**复查,不能只做菜单过滤:卡片源码是 md 文本,同步/共享/手写都能
+ *  往里塞任意注册键,那样 embeddable 就只是建议而不是安全边界(Codex 2026-08-25 评审)。 */
+export const EMBED_DENY = new Set(['chat', 'browser', 'terminal', 'dashboard', 'amadeus-dashboard', 'sidebar-empty', 'home'])
+
+/** 这张视图卡需不需要先挑一个文件?返回 `{param, accept}` = 需要,把选中的路径写进 `param`。
+ *  判据来自 P0 的声明元数据,不另立表:`idParam` + `fileMatch` = 文件类实体视图。
+ *  大纲是唯一例外 —— aux 类没有 idParam,但不给身份就恒空(方案 §6.4 C 类),故显式配。 */
+export function pickSpecOf(
+  v: { type: string; idParam?: string; fileMatch?: unknown },
+  fileMatchViewType: (path: string) => string | null,
+): { param: string; accept: (kind: string, path: string) => boolean } | null {
+  if (v.type === 'outline') return { param: 'sourcePath', accept: (_k, path) => fileMatchViewType(path) === 'amadeus-editor' }
+  if (!v.idParam || !v.fileMatch) return null
+  return { param: v.idParam, accept: (_k, path) => fileMatchViewType(path) === v.type }
+}
+
+/** 一张视图卡在统一外壳上显示的标题:视图名 +(带身份时)文件名。
+ *  外壳由 Dashboard 画、标题由 Dashboard 取 —— 视图自己不再画标题栏,这是「统一」的来源。 */
+export function viewCardTitle(opts: Record<string, string>, displayName: string): string {
+  const idish = Object.entries(opts).find(([k, v]) => k !== 'type' && /path$/i.test(k) && v)
+  if (!idish) return displayName
+  const base = (idish[1].split(/[\\/]/).pop() ?? idish[1]).replace(/\.[^.]+$/, '')
+  return base ? `${displayName} · ${base}` : displayName
+}

@@ -125,13 +125,13 @@ function neighborCaretRect(el: Element, offset: number): { x: number; y: number;
   return null
 }
 
-function caretInfo(): { x: number; y: number; h: number; host: Element } | null {
+function caretInfo(): { x: number; y: number; h: number; host: Element; origin: Element } | null {
   const ae = document.activeElement
   // 聊天输入框:textarea 分支
   if (ae instanceof HTMLTextAreaElement && ae.classList.contains('t2c-ta')) {
     if ((ae.selectionStart ?? 0) !== (ae.selectionEnd ?? 0)) return null // 有选区=无 caret
     const r = textareaCaretRect(ae)
-    return { x: r.left, y: r.top, h: r.height, host: ae }
+    return { x: r.left, y: r.top, h: r.height, host: ae, origin: ae }
   }
   // 结构源码前缀是真 input，自带可编辑的逐字符 caret。此时 PM selection 仍停在正文行首，
   // 若继续按它画覆盖层，会在 input 光标之外多出一根“假光标”，且位置永远不随 input 内移动。
@@ -150,7 +150,7 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
   // 要么给个高度 0 的。此时按 DOM 位置找邻居定位(空段落照旧落到 <br>,行内盒高度即 caret 高度)。
   if (c instanceof Element && (!r || r.height === 0)) {
     const nb = neighborCaretRect(c, range.startOffset)
-    if (nb) return { ...nb, host }
+    if (nb) return { ...nb, host, origin: el! }
   }
   if (!r || (r.width === 0 && r.height === 0)) {
     const fb = c instanceof Element ? c.childNodes[range.startOffset] ?? c : c.parentElement
@@ -158,7 +158,7 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
   }
   if (!r) return null
   const h = r.height || caretEm(host)
-  return { x: r.left, y: r.top, h, host }
+  return { x: r.left, y: r.top, h, host, origin: el! }
 }
 
 /**
@@ -169,10 +169,15 @@ function caretInfo(): { x: number; y: number; h: number; host: Element } | null 
  * 光标。这里只收紧那些 CSS overflow 确实会裁剪的轴；textarea 自己通常是 auto，仍会被
  * 正确纳入。初始范围用布局视口，因为 caret rect 与 fixed 覆盖层都在同一个坐标系。
  */
-function caretClipRect(host: Element): { left: number; top: number; right: number; bottom: number } {
+function caretClipRect(host: Element, origin: Element): { left: number; top: number; right: number; bottom: number } {
   const clip = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
   const clips = (value: string): boolean => /^(?:auto|clip|hidden|scroll)$/.test(value)
+  // Canvas 卡片虽然是 ProseMirror 后代，绝对定位的包含块却是 stage-inner；卡片可以合法地画在
+  // ProseMirror 自身 border-box 之外。此时 PM 的 overflow:auto 不会裁掉卡片，却会被下面这段
+  // 通用祖先算法误当成裁剪边界。只跳过这一层，真正的卡片/舞台/窗口裁剪仍照常参与。
+  const cardEscapesEditorBox = !!origin.closest('.amx-ucard') && !!host.closest('.amx-stage:not(.amx-stage-off)')
   for (let el: Element | null = host; el; el = el.parentElement) {
+    if (el === host && cardEscapesEditorBox) continue
     const cs = getComputedStyle(el)
     // 文档模式为保住 ProseMirror 实例，会把持久 Canvas 舞台切成 display:contents。
     // 它仍继承 `.amx-stage { overflow:hidden }`，但自身没有布局盒，不能拿零矩形当裁剪边界。
@@ -206,7 +211,7 @@ function update(): void {
   if (!info) return hide()
   // caret 滚出真实裁剪范围时藏起(覆盖层 fixed,不然会浮到工具栏上)。Canvas 卡片可能位于
   // ProseMirror 自身 border-box 之外，故不能把编辑宿主本身一概当作裁剪容器。
-  const clip = caretClipRect(info.host)
+  const clip = caretClipRect(info.host, info.origin)
   if (
     info.x < clip.left - 1 || info.x > clip.right + 1
     || info.y + info.h < clip.top + 1 || info.y > clip.bottom - 1
@@ -257,6 +262,23 @@ function schedule(animate = true): void {
   if (!animate) animateNext = false
   if (raf) return
   raf = requestAnimationFrame(() => { raf = 0; update() })
+}
+
+/**
+ * 外层布局在同一帧改了 transform 时，把自绘 caret 硬同步到新的 Range 几何。
+ *
+ * selectionchange / input / scroll 都覆盖不到 Canvas viewport 的 transform；100ms 几何轮询只适合
+ * 静态布局兜底，拿它追逐手势会天然拖尾。调用方必须放在 useLayoutEffect（DOM 已提交、尚未绘制）里，
+ * 这里同步取消待执行的普通动画更新，并复用 update 的“滚动重定位不做 transition”通道。
+ */
+export function syncSmoothCaretToLayout(): void {
+  if (!enabled) return
+  if (raf) {
+    cancelAnimationFrame(raf)
+    raf = 0
+  }
+  animateNext = false
+  update()
 }
 
 /** main.tsx 模块级安装(每个 BrowserWindow 各自一份)。 */

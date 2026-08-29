@@ -32,8 +32,6 @@ export interface AttachPreview {
   node: string
   side: 'e' | 'w' | 'n' | 's'
   rel: 'child' | 'sibling'
-  /** 松手后的主卡真实落位；与提交共用槽位和避让数学，不是只表达大概方向的装饰框。 */
-  landing: ElBox
 }
 
 /** 端点:`{ref}` = 卡锚(卡片),`{id}` = 本层的形状 id,`{main}` = 主卡(2026-08-18,唯一实例
@@ -309,8 +307,6 @@ export interface CanvasElementsProps {
   /** 拖到边缘认亲的当前候选(2026-08-19 晚):在目标卡的那条边上画一道粗高亮。
    *  ⚠️ 只是**手势期的意图预告**,不是数据 —— 松手才由舞台落笔。 */
   attach?: AttachPreview | null
-  /** 点阵落点只负责预告松手后的目标盒；手势中的实体仍逐像素跟手。 */
-  snapLanding?: { key: string; kind: 'move' | 'resize'; box: ElBox } | null
   /** 缩到正文不可读时传当前倍率，渲染轻量标题/摘要替身；null = 常规正文。 */
   overviewScale?: number | null
   /** 主卡没有显式 h 时，概览模式要用切换前实测高度撑住卡壳。 */
@@ -320,7 +316,7 @@ export interface CanvasElementsProps {
   preview?: { from: string; x: number; y: number; over: string | null } | null
 }
 
-export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, snapLanding, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
+export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
   const els = useMemo(() => safeElements(elements), [elements])
   const edges = useMemo(() => safeTree(tree), [tree])
   const [ver, setVer] = useState(0)
@@ -394,18 +390,32 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
         : { documentKey, items: next })
   }, [documentKey, hostRef, mainAutoHeight, overviewActive, ver])
   const overviewItems = overviewSnapshot.documentKey === documentKey ? overviewSnapshot.items : []
+  const fullOverviewAnchors = new Set<string>([
+    ...selCards,
+    ...(mainSel ? [MAIN_KEY] : []),
+  ])
   const overview = overviewActive
     ? overviewItems.flatMap((item) => {
+        // 选中的卡必须保留真实 PM 子树，既能读全量内容也能继续进入编辑；它不再画轻量替身。
+        if (fullOverviewAnchors.has(item.anchor)) return []
         const box = item.anchor === MAIN_KEY ? mainBox : boxes.get(item.anchor)
         return box ? [{ ...item, box }] : []
       })
     : []
   const overviewScope = hostRef.current?.dataset.amxDragscope
-  const overviewHeightCss = overviewActive && overviewScope
+  const overviewCss = overviewActive && overviewScope
     ? overviewItems.flatMap((item) => {
         const root = `.amx-stage[data-amx-dragscope="${CSS.escape(overviewScope)}"].amx-stage-overview`
-        if (item.anchor === MAIN_KEY) return mainAutoHeight ? [`${root} .ProseMirror:not(.unified-embed .ProseMirror){height:${item.h}px;}`] : []
-        return item.autoHeight ? [`${root} .amx-ucard[data-anchor="${CSS.escape(item.anchor)}"][data-h="0"]{height:${item.h}px;}`] : []
+        if (fullOverviewAnchors.has(item.anchor)) return []
+        if (item.anchor === MAIN_KEY) return [
+          `${root} .ProseMirror:not(.unified-embed .ProseMirror) > :not(.amx-ucard){display:none!important;}`,
+          ...(mainAutoHeight ? [`${root} .ProseMirror:not(.unified-embed .ProseMirror){height:${item.h}px;}`] : []),
+        ]
+        const card = `${root} .amx-ucard[data-anchor="${CSS.escape(item.anchor)}"]`
+        return [
+          `${card} > *{display:none!important;}`,
+          ...(item.autoHeight ? [`${card}[data-h="0"]{height:${item.h}px;}`] : []),
+        ]
       }).join('\n')
     : ''
 
@@ -415,7 +425,7 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
   const keyBox = (k: string): ElBox | null => (k === MAIN_KEY ? mainBox : k.startsWith('c:') ? boxes.get(keyId(k)) ?? null : shapes.get(keyId(k)) ?? null)
   return (
     <div className="amx-el-layer">
-      {overviewHeightCss ? <style data-amx-overview-heights>{overviewHeightCss}</style> : null}
+      {overviewCss ? <style data-amx-overview-rules>{overviewCss}</style> : null}
       {/* Frame 先画 = 垫在最底下(同为 absolute 且都没 z-index,绘制序即 DOM 序)。 */}
       {els.filter((e): e is FrameEl => e.kind === 'frame').map((e) => (
         <Frame key={e.id} el={e} box={shapes.get(e.id)!} sel={sel.has(elKey(e.id))} />
@@ -456,13 +466,6 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
         <div className={`amx-el-selbox${editing === MAIN_KEY ? ' is-editing' : ''}`} data-main-sel style={{ left: `${mainBox.x}px`, top: `${mainBox.y}px`, width: `${mainBox.w}px`, height: `${mainBox.h}px` }}>
           {sel.size === 1 && editing !== MAIN_KEY ? <><CardResizeHandles anchor={MAIN_KEY} /><AddButtons node={MAIN_KEY} /></> : null}
         </div>
-      ) : null}
-      {snapLanding ? (
-        <div
-          className={`amx-grid-landing is-${snapLanding.kind}`}
-          data-snap-landing={snapLanding.key}
-          style={{ left: `${snapLanding.box.x}px`, top: `${snapLanding.box.y}px`, width: `${snapLanding.box.w}px`, height: `${snapLanding.box.h}px` }}
-        />
       ) : null}
       {/* 原 PM 内容已经由 overview 状态从渲染树中摘下；这里是唯一可见的轻量标题/摘要替身。 */}
       {overview.map((item) => {
@@ -512,8 +515,8 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
         : null}
       {/* ⚠️ 类名不能叫 `.amx-marquee` —— blockLayer 的块框选用的就是那个名字(挂在 body 上、client
           坐标),同名会让仪器把两个框数成一个东西,而它们连坐标系都不同。 */}
-      {/* 认亲预告:不只画一条难懂的边。目标整卡起环、源→目标画细线、最终槽位画幽灵卡、
-          边口给关系标签，松手前就能读懂「会连到谁 / 会成为哪种关系 / 最后落在哪里」。 */}
+      {/* 认亲预告只说明目标与关系：目标整卡起环、源→目标画细线、边口给关系标签。
+          最终落点由松手后的自动布局决定，不再另画幽灵占位卡。 */}
       {attach ? (() => {
         const b = attach.node === MAIN_KEY ? mainBox : boxes.get(attach.node)
         const source = boxes.get(attach.source)
@@ -535,13 +538,6 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
               />
             ) : null}
             <div className={`amx-el-attach-target is-${attach.rel}`} style={{ left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` }} />
-            <div
-              className={`amx-el-attach-slot is-${attach.rel}`}
-              data-attach-slot={attach.side}
-              style={{ left: `${attach.landing.x}px`, top: `${attach.landing.y}px`, width: `${attach.landing.w}px`, height: `${attach.landing.h}px` }}
-            >
-              {attach.count && attach.count > 1 ? <span>{attach.count} 张</span> : null}
-            </div>
             <div
               className={`amx-el-attach is-${attach.rel}`}
               data-attach={attach.side}

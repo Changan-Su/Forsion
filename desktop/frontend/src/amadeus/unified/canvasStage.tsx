@@ -21,13 +21,20 @@
 // createHistoryTimeline(canvas.ts)在编辑器里记每个新 PM 撤销组,fm 写点记每笔 fm 快照,
 // Cmd+Z(捕获期拦,卡内卡外一律)按时间线退「最近发生的那件事」;Tab 这类跨域动作并成 'pair'
 // 一击双退。陈旧条目(编辑器重建/深度截断)由 histStep 丢弃自愈,绝不卡死撤销链。
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NodeSelection, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory, undo as pmUndo, redo as pmRedo, undoDepth, redoDepth } from '@milkdown/kit/prose/history'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet } from 'lucide-react'
+import { MousePointer2, Hand, Square, Circle, Type, Spline, StickyNote, Frame, Minus, Plus, Maximize2, Map as MapIcon, Magnet, ListCollapse } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
+// 画布几何内核 —— **与仪表盘共用同一份**(View 基座方案 §6.4 S2)。PM 相关的东西不在里面:
+// dragCss / pmOwns / transaction 是本文件独有的负担,它们存在的唯一原因是 PM 拥有卡片 DOM。
+import {
+  CLICK_SLOP, GRID_STEP, LONG_PRESS_MS, MAX_Z, MIN_Z, NUDGE, PRESS_SLOP, TOUCH_SLOP,
+  CanvasChrome, CanvasMiniMap as KitMiniMap, gridLayerStyle, recallViewport, rememberViewport, resizeBox, snapGrid,
+  type MiniItem, type ResizeEdge, type Viewport,
+} from './canvasKit'
 import { CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import {
   CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey,
@@ -38,13 +45,11 @@ import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled } from './canvasPrefs'
+import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
+import { syncSmoothCaretToLayout } from '../../smoothCaret'
 
-const MIN_Z = 0.25
-const MAX_Z = 2.5
-const GRID_STEP = 24
 /** 低于这档正文已经不可扫读，改由恒定屏幕字号的标题/首行承担概览。 */
 const OVERVIEW_LABEL_Z = 0.55
 /** Chromium 把触控板双指捏合作为 `ctrlKey + wheel` 送达；macOS 的 Cmd+滚轮则是
@@ -54,18 +59,7 @@ const MIN_W = 168 // 7 个点阵步长；开吸附时缩到下限仍能两侧落
 const MIN_H = 72 // 3 个点阵步长
 const MAIN_MIN_W = 320 // 主卡调宽下限(比卡片宽:它是正文,压太窄就不是「文档优先」了)
 const GRIP = 12 // 右缘调宽热区(舞台像素)
-const NUDGE = 8
-/** 指针一次都没真正移动过(纯点击)的判据。落笔前必须问这一句 —— 见 onUp 的告警。 */
-const CLICK_SLOP = 3
-/** 触屏版的同一道闸。手指的抖动比鼠标大一个数量级,3px 下「点一下卡片」经常被判成真拖动
- *  —— 落一笔几何进撤销栈、进磁盘。
- *  ⚠️ 这个值是**屏幕像素**,进 onDown 时才换算成舞台单位:`live` 的比较全在舞台坐标里做,
- *  而舞台坐标随缩放伸缩 —— 实测自动 fit 后 z≈0.37,6px 的手指抖动到那边是 14 舞台 px,
- *  写死 10 照样判成拖动。(鼠标那档 CLICK_SLOP 仍是舞台单位的老口径,不在本轮动。) */
-const TOUCH_SLOP = 10
-/** 长按出菜单的时长与作废半径(Excalidraw 的 TOUCH_CTX_MENU_TIMEOUT 同值);半径按**屏幕**像素算。 */
-const LONG_PRESS_MS = 500
-const PRESS_SLOP = 10
+
 /** 元素的可点面:形状本体,以及 Frame 的**标题条**(框体整片 pointer-events:none,见 canvasElements
  *  的 Frame 顶注 —— 一个满屏大的可点矩形就是糊在画布上的隐形挡板)。 */
 const EL_HIT = '.amx-el-shape, .amx-el-frame-bar'
@@ -76,10 +70,7 @@ const CARD_CTL = 'button, a[href], input, select, textarea'
 const textKeyOf = (el: El): 'text' | 'label' | 'title' => (el.kind === 'connector' ? 'label' : el.kind === 'frame' ? 'title' : 'text')
 const textTitleOf = (el: El): string => (el.kind === 'connector' ? '连线标签' : el.kind === 'frame' ? 'Frame 标题' : '元素文字')
 
-export interface Viewport { x: number; y: number; z: number }
-
-/** 会话级视口(方案 §3.1:平移/缩放**不落盘**,AFFiNE 同款;落 fm 会让每次平移都触发写盘)。 */
-const viewports = new Map<string, Viewport>()
+export type { Viewport }
 
 /** fm 侧(elements+tree+main)的撤销栈。存的是三键合影的 JSON 快照 —— 表本来就小,存整份比记
  *  差分省心得多,而且天然免疫「差分基底漂移」。
@@ -91,7 +82,7 @@ interface ElHistory { past: string[]; future: string[] }
 const HIST_CAP = 50
 
 type Tool = 'select' | 'pan' | 'card' | 'rect' | 'ellipse' | 'text' | 'frame' | 'conn'
-type CardResizeEdge = 'n' | 'e' | 's' | 'w' | 'nw' | 'ne' | 'sw' | 'se'
+type CardResizeEdge = ResizeEdge
 /** 按下拖出尺寸的工具(2026-08-19 用户实报「都应该能够塑型」)。文本不在里面 —— 它的高随字号,
  *  AFFiNE 同样只给点击建。拖不动 CLICK_SLOP 就回落成默认尺寸,与修前的一击建完全一致。 */
 const DRAW_TOOLS = new Set<Tool>(['rect', 'ellipse', 'frame'])
@@ -99,36 +90,9 @@ const SHAPE_TOOLS: Record<string, ShapeKind> = { rect: 'rect', ellipse: 'ellipse
 /** 拖拽样式表的舞台作用域序号(见手势 effect 里 dragCss 的告警)。 */
 let dragScopeSeq = 0
 
-const snapGrid = (v: number): number => Math.round(v / GRID_STEP) * GRID_STEP
-
-/** 四边/四角调整卡片盒；固定对边不动，开吸附时只量化正在移动的边。 */
-function resizeCardBox(b: ElBox, edge: CardResizeEdge, dx: number, dy: number, snap: boolean, minW = MIN_W): ElBox {
-  const west = edge.includes('w')
-  const east = edge.includes('e')
-  const north = edge.includes('n')
-  const south = edge.includes('s')
-  let left = west ? b.x + dx : b.x
-  let right = east ? b.x + b.w + dx : b.x + b.w
-  let top = north ? b.y + dy : b.y
-  let bottom = south ? b.y + b.h + dy : b.y + b.h
-  if (snap) {
-    if (west) left = snapGrid(left)
-    if (east) right = snapGrid(right)
-    if (north) top = snapGrid(top)
-    if (south) bottom = snapGrid(bottom)
-  } else {
-    left = Math.round(left); right = Math.round(right); top = Math.round(top); bottom = Math.round(bottom)
-  }
-  if (right - left < minW) {
-    if (west) left = right - minW
-    else right = left + minW
-  }
-  if (bottom - top < MIN_H) {
-    if (north) top = bottom - MIN_H
-    else bottom = top + MIN_H
-  }
-  return { x: left, y: top, w: right - left, h: bottom - top }
-}
+/** 四边/四角调整卡片盒 —— 实现在 canvasKit(与仪表盘共用),这里只钉住本舞台的下限。 */
+const resizeCardBox = (b: ElBox, edge: CardResizeEdge, dx: number, dy: number, snap: boolean, minW = MIN_W): ElBox =>
+  resizeBox(b, edge, dx, dy, snap, minW, MIN_H)
 
 /** `idx` = 它在 doc 顶层子节点里的**序号**(不是卡片序号)。⚠️ 有了它才判得出「两张卡之间夹没夹
  *  别的东西」—— cards 是过滤后的数组,相邻两项在文档里可能隔着好几段正文(Codex 2026-08-20 critical
@@ -273,11 +237,12 @@ const growBox = (b: ElBox, n: number): ElBox => ({ x: b.x - n, y: b.y - n, w: b.
 const overlaps = (a: ElBox, b: ElBox): boolean =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
 
-const MINI_W = 184
-const MINI_H = 112
-const MINI_PAD = 7
 
 /** 画布总览缩略图。卡片/主卡/白板元素共用真实舞台盒，视口框可点击或拖动导航。 */
+/**
+ * 画布缩略图 —— **投影与导航归 canvasKit**(与仪表盘同一份),这里只负责本舞台特有的那半:
+ * 从真 DOM 量卡片/主卡的盒子。PM 的卡高会因图片加载/换行独立变化,只等 React props 量不到。
+ */
 function CanvasMiniMap({
   hostRef,
   vp,
@@ -292,9 +257,7 @@ function CanvasMiniMap({
   onCenter: (x: number, y: number) => void
 }): React.ReactElement | null {
   const [, setVer] = useState(0)
-  const dragging = useRef(false)
 
-  // PM 的卡高会因图片加载/换行独立变化；缩略图不能只等 React props，必须观察真实盒。
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
@@ -321,7 +284,7 @@ function CanvasMiniMap({
 
   const host = hostRef.current
   if (!host) return null
-  const items: Array<{ key: string; kind: 'card' | 'main' | 'shape' | 'frame'; box: ElBox }> = []
+  const items: MiniItem[] = []
   for (const [anchor, box] of measureCards(host)) items.push({ key: cardKey(anchor), kind: 'card', box })
   const mainBox = measureMain(host)
   if (mainBox) items.push({ key: MAIN_KEY, kind: 'main', box: mainBox })
@@ -332,71 +295,7 @@ function CanvasMiniMap({
     const box = shapeMap.get(el.id)
     if (box) items.push({ key: elKey(el.id), kind: el.kind === 'frame' ? 'frame' : 'shape', box })
   }
-  if (!items.length) return null
-
-  const u = zoomOf(host) || 1
-  const hr = host.getBoundingClientRect()
-  const visible: ElBox = {
-    x: -vp.x / vp.z,
-    y: -vp.y / vp.z,
-    w: Math.max(1, hr.width / u / vp.z),
-    h: Math.max(1, hr.height / u / vp.z),
-  }
-  // 把视口也并进世界范围：即使用户平移到内容之外，缩略图仍能显示“你现在在哪里”。
-  const boxes = [...items.map((i) => i.box), visible]
-  const minX = Math.min(...boxes.map((b) => b.x))
-  const minY = Math.min(...boxes.map((b) => b.y))
-  const maxX = Math.max(...boxes.map((b) => b.x + b.w))
-  const maxY = Math.max(...boxes.map((b) => b.y + b.h))
-  const worldW = Math.max(1, maxX - minX)
-  const worldH = Math.max(1, maxY - minY)
-  const scale = Math.min((MINI_W - MINI_PAD * 2) / worldW, (MINI_H - MINI_PAD * 2) / worldH)
-  const ox = (MINI_W - worldW * scale) / 2 - minX * scale
-  const oy = (MINI_H - worldH * scale) / 2 - minY * scale
-  const miniBox = (b: ElBox): ElBox => ({ x: ox + b.x * scale, y: oy + b.y * scale, w: Math.max(1.5, b.w * scale), h: Math.max(1.5, b.h * scale) })
-
-  const jump = (e: React.PointerEvent<HTMLDivElement>): void => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const mx = ((e.clientX - r.left) / Math.max(1, r.width)) * MINI_W
-    const my = ((e.clientY - r.top) / Math.max(1, r.height)) * MINI_H
-    onCenter((mx - ox) / scale, (my - oy) / scale)
-  }
-
-  const vb = miniBox(visible)
-  return (
-    <div
-      className="amx-stage-minimap"
-      role="navigation"
-      aria-label="画布缩略图"
-      title="画布缩略图：点击或拖动以导航"
-      onPointerDown={(e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        dragging.current = true
-        try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 合成事件可没有有效 id */ }
-        jump(e)
-      }}
-      onPointerMove={(e) => {
-        if (!dragging.current) return
-        e.preventDefault()
-        e.stopPropagation()
-        jump(e)
-      }}
-      onPointerUp={(e) => {
-        dragging.current = false
-        try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* 同上 */ }
-      }}
-      onPointerCancel={() => { dragging.current = false }}
-    >
-      <svg viewBox={`0 0 ${MINI_W} ${MINI_H}`} aria-hidden="true">
-        {items.map((item) => {
-          const b = miniBox(item.box)
-          return <rect key={item.key} className={`amx-mini-item is-${item.kind}`} data-mini-key={item.key} x={b.x} y={b.y} width={b.w} height={b.h} rx={item.kind === 'frame' ? 2 : 1.5} />
-        })}
-        <rect className="amx-mini-viewport" x={vb.x} y={vb.y} width={vb.w} height={vb.h} rx="2" />
-      </svg>
-    </div>
-  )
+  return <KitMiniMap hostRef={hostRef} vp={vp} items={items} onCenter={onCenter} />
 }
 
 export interface CanvasStageProps {
@@ -437,11 +336,13 @@ export interface CanvasStageProps {
 
 export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, onBlocksDeleted, revealSelection = 0, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
-  const [vp, setVp] = useState<Viewport>(() => viewports.get(path) ?? { x: 0, y: 0, z: 1 })
+  const [vp, setVp] = useState<Viewport>(() => recallViewport(path) ?? { x: 0, y: 0, z: 1 })
   const vpRef = useRef(vp)
   vpRef.current = vp
   /** 本机画布 chrome 偏好：默认显示，HUD 开关即时生效并跨页面/重启记忆，不写进笔记。 */
   const [miniMapVisible, setMiniMapVisible] = useState<boolean>(canvasMiniMapEnabled)
+  /** 低倍率概览同属本机渲染偏好；默认开，关闭时阈值以下仍保留完整正文。 */
+  const [overviewEnabled, setOverviewEnabled] = useState<boolean>(canvasOverviewEnabled)
   /** 点阵吸附同属本机手势偏好，默认开启；ref 给只依赖 active 的指针 effect 现读。 */
   const [snapEnabled, setSnapEnabledState] = useState<boolean>(canvasGridSnapEnabled)
   const snapRef = useRef(snapEnabled)
@@ -493,8 +394,6 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   const pasteSeq = useRef(0)
   const [ghost, setGhost] = useState<ElGhost | null>(null)
   const [marquee, setMarquee] = useState<ElBox | null>(null)
-  /** 点阵候选盒只画松手目标；实体手势始终走原始指针坐标，绝不在过程中跳格。 */
-  const [snapLanding, setSnapLanding] = useState<{ key: string; kind: 'move' | 'resize'; box: ElBox } | null>(null)
   /** 拖到边缘认亲的当前候选(手势期高亮用;落笔在 onUp)。 */
   const [attach, setAttach] = useState<AttachPreview | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; key: string | null; at: { x: number; y: number } } | null>(null)
@@ -543,24 +442,24 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
           {
             transform: `translate(${-move.x}px, ${-move.y}px) scale(0.988)`,
             opacity: 0.94,
-            boxShadow: '0 8px 24px rgb(0 0 0 / 18%)',
+            boxShadow: '0 8px 24px rgb(0 0 0 / 18%)', // shadow-contract: interaction (arrange motion)
             offset: 0,
             easing: 'cubic-bezier(0.16, 0.82, 0.24, 1)',
           },
           {
             transform: `translate(${move.x * 0.035}px, ${move.y * 0.035}px) scale(1.003)`,
             opacity: 1,
-            boxShadow: '0 3px 12px rgb(0 0 0 / 14%)',
+            boxShadow: '0 3px 12px rgb(0 0 0 / 14%)', // shadow-contract: interaction (arrange motion)
             offset: 0.72,
             easing: 'ease-out',
           },
           {
             transform: `translate(${-move.x * 0.008}px, ${-move.y * 0.008}px) scale(0.999)`,
-            boxShadow: '0 2px 10px rgb(0 0 0 / 12%)',
+            boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', // shadow-contract: interaction (arrange motion)
             offset: 0.9,
             easing: 'ease-out',
           },
-          { transform: 'translate(0, 0) scale(1)', opacity: 1, boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', offset: 1 },
+          { transform: 'translate(0, 0) scale(1)', opacity: 1, boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', offset: 1 }, // shadow-contract: interaction (arrange motion)
         ], { duration, delay, fill: 'backwards' })
         animation.id = 'amx-card-arrange'
         remember(animation)
@@ -602,31 +501,31 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
           {
             transform: `translate(${-move.x}px, ${-move.y}px) scale(1.012)`,
             opacity: 0.94,
-            boxShadow: '0 12px 32px rgb(0 0 0 / 24%)',
+            boxShadow: '0 12px 32px rgb(0 0 0 / 24%)', // shadow-contract: interaction (attach motion)
             offset: 0,
             easing: 'ease-in',
           },
           {
             transform: `translate(${-move.x * 0.54}px, ${-move.y * 0.54}px) scale(1.007)`,
             opacity: 0.97,
-            boxShadow: '0 8px 24px rgb(0 0 0 / 19%)',
+            boxShadow: '0 8px 24px rgb(0 0 0 / 19%)', // shadow-contract: interaction (attach motion)
             offset: 0.22,
             easing: 'cubic-bezier(0.16, 0.82, 0.24, 1)',
           },
           {
             transform: `translate(${move.x * 0.05}px, ${move.y * 0.05}px) scale(0.998)`,
             opacity: 1,
-            boxShadow: '0 3px 12px rgb(0 0 0 / 14%)',
+            boxShadow: '0 3px 12px rgb(0 0 0 / 14%)', // shadow-contract: interaction (attach motion)
             offset: 0.72,
             easing: 'ease-out',
           },
           {
             transform: `translate(${-move.x * 0.012}px, ${-move.y * 0.012}px) scale(1.001)`,
-            boxShadow: '0 2px 10px rgb(0 0 0 / 12%)',
+            boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', // shadow-contract: interaction (attach motion)
             offset: 0.9,
             easing: 'ease-out',
           },
-          { transform: 'translate(0, 0) scale(1)', opacity: 1, boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', offset: 1 },
+          { transform: 'translate(0, 0) scale(1)', opacity: 1, boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', offset: 1 }, // shadow-contract: interaction (attach motion)
         ], { duration, fill: 'none' })
         animation.id = 'amx-card-attach'
         remember(animation)
@@ -653,10 +552,17 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   // ⚠️「这次要不要自动 fit」必须在**渲染期**定,不能留到 effect 里查 viewports ——
   //   下面那个存视口的 effect 声明在前、也就先跑,查的时候 viewports 里早就有本页了,
   //   自动 fit 于是永远不触发:实测现象是打开画布只看得见主卡,卡片全在视野外(截图才发现的)。
-  const shouldFit = useRef(!viewports.has(path))
+  const shouldFit = useRef(!recallViewport(path))
   useEffect(() => {
-    viewports.set(path, vp)
+    rememberViewport(path, vp)
   }, [path, vp])
+  /** Canvas 的 viewport 走 transform，不会触发 selectionchange / scroll。编辑态下必须在 DOM 提交后、
+   *  浏览器绘制前把 body 下的丝滑 caret 硬同步到新 Range；否则它只能靠 100ms 轮询追手。 */
+  useLayoutEffect(() => {
+    const host = hostRef.current
+    if (!active || !editing || !host || !document.activeElement || !host.contains(document.activeElement)) return
+    syncSmoothCaretToLayout()
+  }, [active, editing, vp])
 
   // ── fm 三键(elements / tree / main)的读写 ────────────────────────────────────────
   // 一切回调经 ref 现读:下面那个手势 effect 只依赖 [active],闭包里拿的必须是**此刻**的值
@@ -1201,8 +1107,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       mergePair() // 建卡('pm')+ 记层级('fm')= 一次用户动作,时间线并成一格
     }
   }, [autoSlotFor, addCardAt, mutTree, mergePair])
-  /** 认亲提交与落点预览共用的布局结果。过程期卡片盒已经叠加 dragCss 位移，因此这里算出的
-   *  landing 就是松手后真正落盘的位置；两边各算一套会出现“幽灵卡在 A、实际吸到 B”的假预告。 */
+  /** 认亲提交使用的统一布局结果。过程期卡片盒已经叠加 dragCss 位移，松手时由这里一次算完
+   *  槽位、碰撞避让与多选根节点；手势期只提示目标和关系，不再渲染最终落点占位。 */
   const attachPlacement = useCallback((
     source: string | readonly string[],
     hit: Pick<AttachPreview, 'node' | 'side' | 'rel'>,
@@ -1216,7 +1122,6 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     slot: { parent: string; x: number; y: number }
     dx: number
     dy: number
-    landing: ElBox
   } | null => {
     const sources = [...new Set(typeof source === 'string' ? [source] : source)]
     const sourceSet = new Set(sources)
@@ -1255,7 +1160,6 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       slot,
       dx,
       dy,
-      landing: { ...box, x: Math.round(box.x + dx), y: Math.round(box.y + dy) },
     }
   }, [slotFor])
 
@@ -1319,7 +1223,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     if (!best) return null
     const hit = { node: best.node, side: best.side, rel: best.rel }
     const placement = attachPlacement(sources, hit)
-    return placement ? { source: self, count: sources.length, ...hit, landing: placement.landing } : null
+    return placement ? { source: self, count: sources.length, ...hit } : null
   }, [attachPlacement])
 
   /** 认亲落笔:位置吸附进队列(PM 一笔)+ 层级(fm 一笔),并成 'pair' 一击撤销。
@@ -1903,18 +1807,34 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // 松手排斥用一次性 WAAPI 弹簧，不给卡片常驻 transition —— 常驻会让逐帧 dragCss 追手变拖尾。
     let repelAnimations: Animation[] = []
     let repelRaf = 0
-    /** 拖拽期几何规则。lift = 抬起观感(影子加深 + grabbing),与几何同一条规则免得两处拼。 */
-    const setDragRule = (rules: Array<{ anchor: string; decl: string }>): void => {
-      dragCss.textContent = rules
-        .map((r) => `.amx-stage[data-amx-dragscope="${scope}"] .amx-ucard[data-anchor="${CSS.escape(r.anchor)}"]{${r.decl}}`)
-        .join('\n')
+    /** 拖拽期几何规则。lift = 抬起观感(影子加深 + grabbing),与几何同一条规则免得两处拼。
+     *  ⚠️ 选中框也必须写进**同一张同步样式表**:卡片本体在 pointermove 当场生效，而 React 的
+     *  ghost/重测最早下一次提交才追上；拆成两路会稳定落后一个事件(C34 实测 14×9px)。 */
+    const selectionPosition = (box: Pick<ElBox, 'x' | 'y'>, includeSize = false): string =>
+      `left:${box.x}px!important;top:${box.y}px!important;${includeSize && 'w' in box && 'h' in box ? `width:${box.w}px!important;height:${box.h}px!important;` : ''}`
+    const setDragRule = (
+      rules: Array<{ anchor: string; decl: string; selection: Pick<ElBox, 'x' | 'y'> }>,
+      mainSelection?: Pick<ElBox, 'x' | 'y'>,
+    ): void => {
+      const css: string[] = []
+      for (const rule of rules) {
+        const anchor = CSS.escape(rule.anchor)
+        css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-ucard[data-anchor="${anchor}"]{${rule.decl}}`)
+        css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${anchor}"]{${selectionPosition(rule.selection)}}`)
+      }
+      if (mainSelection) css.push(`.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-main-sel]{${selectionPosition(mainSelection)}}`)
+      dragCss.textContent = css.join('\n')
     }
-    const setSizeRule = (key: string, decl: string): void => {
-      dragCss.textContent = key === MAIN_KEY
+    const setSizeRule = (key: string, decl: string, selection: ElBox): void => {
+      const target = key === MAIN_KEY
         ? `.amx-stage[data-amx-dragscope="${scope}"] .ProseMirror:not(.unified-embed .ProseMirror){${decl}}`
         : `.amx-stage[data-amx-dragscope="${scope}"] .amx-ucard[data-anchor="${CSS.escape(key)}"]{${decl}}`
+      const selected = key === MAIN_KEY
+        ? `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-main-sel]{${selectionPosition(selection, true)}}`
+        : `.amx-stage[data-amx-dragscope="${scope}"] .amx-el-selbox[data-anchor="${CSS.escape(key)}"]{${selectionPosition(selection, true)}}`
+      dragCss.textContent = `${target}\n${selected}`
     }
-    const LIFT = 'cursor:grabbing;opacity:.94;box-shadow:0 12px 32px rgb(0 0 0 / 24%);'
+    const LIFT = 'cursor:grabbing;opacity:.94;box-shadow:0 12px 32px rgb(0 0 0 / 24%);' // shadow-contract: interaction (drag lift)
     const clearDragRule = (): void => { dragCss.textContent = '' }
     const stopRepelMotion = (): void => {
       cancelAnimationFrame(repelRaf)
@@ -1933,24 +1853,24 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         {
           transform: `translate(${-push.x}px, ${-push.y}px) scale(1.012)`,
           opacity: 0.94,
-          boxShadow: '0 12px 32px rgb(0 0 0 / 24%)',
+          boxShadow: '0 12px 32px rgb(0 0 0 / 24%)', // shadow-contract: interaction (repel motion)
           offset: 0,
           easing: 'cubic-bezier(0.16, 0.84, 0.24, 1)',
         },
         {
           transform: `translate(${push.x * 0.06}px, ${push.y * 0.06}px) scale(0.998)`,
           opacity: 1,
-          boxShadow: '0 3px 12px rgb(0 0 0 / 14%)',
+          boxShadow: '0 3px 12px rgb(0 0 0 / 14%)', // shadow-contract: interaction (repel motion)
           offset: 0.72,
           easing: 'ease-out',
         },
         {
           transform: `translate(${-push.x * 0.015}px, ${-push.y * 0.015}px) scale(1.001)`,
-          boxShadow: '0 2px 10px rgb(0 0 0 / 12%)',
+          boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', // shadow-contract: interaction (repel motion)
           offset: 0.9,
           easing: 'ease-out',
         },
-        { transform: 'translate(0, 0) scale(1)', opacity: 1, boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', offset: 1 },
+        { transform: 'translate(0, 0) scale(1)', opacity: 1, boxShadow: '0 2px 10px rgb(0 0 0 / 12%)', offset: 1 }, // shadow-contract: interaction (repel motion)
       ]
       // 等 React/PM 把最终坐标落到 DOM，再用反向 transform 从松手点开跑；rAF 发生在下一次绘制前，
       // 用户看不到“先闪到终点再回来”的中间帧。
@@ -2146,24 +2066,26 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       if (e.button !== 0 && !middle) return
       const t = toolRef.current
       const at = toStage(e.clientX, e.clientY)
-      // ⚠️ 退出编辑必须排在下面**所有早退分支之前**(平移/建形状/建卡那几支原本带着陈旧的
+      // ⚠️ 退出编辑必须排在下面**所有早退分支之前**(建形状/建卡那几支原本带着陈旧的
       //    editing 就 return 了 —— 之后再点那张卡会直接落光标,两段式的第一段被绕过,Codex P2-3)。
       // ⚠️ 判据**分两种,混成一条就是真机第四轮 G5 那个洞**:
-      //  · 非 select 工具 / Alt / 中键 = 明确的「我现在要做别的事」,**落在哪都退出编辑**。
+      //  · 建形状/建卡等非 select 工具 = 明确的「我现在要改内容」,**落在哪都退出编辑**。
       //    只按位置判的话,矩形恰好放在正在编辑的那张卡上时 `closest` 认为「还在卡里」→ 不退出 →
       //    下一次单击那张卡直接落光标(实测:`a` 打成 `ax`)。
+      //  · 抓手 / Alt / 中键只是移动视口，必须保留编辑与 PM 焦点；丝滑 caret 由 vp layout effect 同帧跟随。
       //  · select 工具下才按位置判:点回正在编辑的那张卡是继续编辑,点别处才退出。
       const cur = editingRef.current
-      const otherIntent = t !== 'select' || e.altKey || middle
+      const panIntent = t === 'pan' || e.altKey || middle
+      const otherIntent = t !== 'select' && !panIntent
       // 「还在原地」判据分身份:卡=还在那张卡里;主卡=还在正文里(在 .ProseMirror 内**且不在任何
       // 卡里** —— 卡片的 DOM 就住在 PM 根之内,少了后半句,编辑主卡时点卡片会被当成「还在主卡」)。
       const stillIn = cur === MAIN_KEY
         ? !!target.closest('.ProseMirror') && !target.closest('.amx-ucard')
         : !!target.closest(`.amx-ucard[data-anchor="${CSS.escape(cur ?? '')}"]`)
-      if (cur && (otherIntent || !stillIn)) setEditing(null)
+      if (cur && !panIntent && (otherIntent || !stillIn)) setEditing(null)
 
       // 平移**先于一切空间命中**:抓手/Alt/中键的意图就是移视口,压在什么上面都不该变成选中。
-      if (t === 'pan' || e.altKey || middle) {
+      if (panIntent) {
         e.preventDefault()
         drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y }
         capture(e.pointerId)
@@ -2514,17 +2436,14 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         drag.dx = s.x - drag.x0
         drag.dy = s.y - drag.y0
         const mainSize = drag.key === MAIN_KEY
-        // 过程盒永远按原始指针走；点阵盒只画作落点，直到 pointerup 才成为数据。
+        // 过程盒永远按原始指针走；pointerup 才应用点阵吸附，不在手势期另画落点占位。
         const next = resizeCardBox(drag.b0, drag.edge, drag.dx, drag.dy, false, mainSize ? MAIN_MIN_W : MIN_W)
         drag.next = next
         if (Math.abs(next.x - drag.b0.x) > slop || Math.abs(next.y - drag.b0.y) > slop
           || Math.abs(next.w - drag.b0.w) > slop || Math.abs(next.h - drag.b0.h) > slop) drag.live = true
         setSizeRule(drag.key, mainSize
           ? `margin-left:${next.x}px;margin-top:${next.y}px;width:${next.w}px;height:${next.h}px;${LIFT}`
-          : `left:${next.x}px;top:${next.y}px;width:${next.w}px;height:${next.h}px;${LIFT}`)
-        setSnapLanding(snapRef.current
-          ? { key: drag.key, kind: 'resize', box: resizeCardBox(drag.b0, drag.edge, drag.dx, drag.dy, true, mainSize ? MAIN_MIN_W : MIN_W) }
-          : null)
+          : `left:${next.x}px;top:${next.y}px;width:${next.w}px;height:${next.h}px;${LIFT}`, next)
         // dragCss 不改 DOM 属性，借 ghost 的身份变化通知选中框/连线每帧重量。
         setGhost({ move: { ids: new Set([mainSize ? MAIN_KEY : cardKey(drag.key)]), dx: 0, dy: 0 }, size: null })
         return
@@ -2568,7 +2487,14 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       drag.dy = Math.round(s.y - drag.y0)
       if (Math.abs(drag.dx) > slop || Math.abs(drag.dy) > slop) drag.live = true
       const { dx, dy } = drag
-      setDragRule(drag.cards.map((c) => ({ anchor: c.anchor, decl: `left:${c.ox + dx}px;top:${c.oy + dy}px;${LIFT}` })))
+      setDragRule(
+        drag.cards.map((c) => ({
+          anchor: c.anchor,
+          decl: `left:${c.ox + dx}px;top:${c.oy + dy}px;${LIFT}`,
+          selection: { x: c.ox + dx, y: c.oy + dy },
+        })),
+        drag.mainStart ? { x: drag.mainStart.x + dx, y: drag.mainStart.y + dy } : undefined,
+      )
       // 主卡的过程通道是 **margin**(position/transform 会建立包含块,坐标系当场塌掉,见文件头)。
       // 内联写在 view.dom(PM 根)上没事 —— DOMObserver 重画的是**内容节点**,根自身的样式它不管
       // (C39 真实输入实测跟手)。卡片不行,理由见 dragCss 顶注。
@@ -2584,21 +2510,6 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         : []
       const attachNext = sources.length && drag.live ? actRef.current.attachHit(sources, s) : null
       setAttach(attachNext)
-      if (snapRef.current && !attachNext) {
-        const basis = (grabbed ? drag.cards.find((c) => c.anchor === grabbed) : null)
-          ?? drag.cards[0]
-          ?? (drag.mainStart ? { anchor: MAIN_KEY, ox: drag.mainStart.x, oy: drag.mainStart.y } : null)
-        const rawBox = basis?.anchor === MAIN_KEY ? measureMain(host) : basis ? measureCards(host).get(basis.anchor) : null
-        if (basis && rawBox) {
-          const snapDx = snapGrid(basis.ox + drag.dx) - basis.ox
-          const snapDy = snapGrid(basis.oy + drag.dy) - basis.oy
-          setSnapLanding({
-            key: basis.anchor === MAIN_KEY ? MAIN_KEY : cardKey(basis.anchor),
-            kind: 'move',
-            box: { ...rawBox, x: rawBox.x + snapDx - drag.dx, y: rawBox.y + snapDy - drag.dy },
-          })
-        } else setSnapLanding(null)
-      } else setSnapLanding(null)
     }
 
     /** 手势外观回滚(取消 / 纯点击 / 落笔后让位给数据驱动的渲染)。 */
@@ -2611,7 +2522,6 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       setGhost(null)
       setMarquee(null)
       setAttach(null)
-      setSnapLanding(null)
     }
 
     const onUp = (e: PointerEvent): void => {
@@ -3203,12 +3113,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     { id: 'conn', icon: <Spline size={14} />, title: '箭头:依次点父节点、子节点(Shift 或形状=自由连线)' },
   ]
 
-  // 点阵是画布内容的一部分，不是舞台窗口的壁纸。位移取视口平移在当前格距里的相位：
-  // phase(x, step) 与 x+n·step 是同一组点，但合成层只需比视口多铺一格，不必造超大元素。
-  const gridStep = GRID_STEP * vp.z
-  const gridPhase = (v: number): number => ((v % gridStep) + gridStep) % gridStep
-  const gridX = gridPhase(vp.x)
-  const gridY = gridPhase(vp.y)
+  // 点阵层的相位算法搬进了 canvasKit(与仪表盘共用同一份;见 gridLayerStyle 顶注)。
+  const gridStyle = gridLayerStyle(vp)
 
   // ⚠️ 文档模式下**不能**换成 `<>{children}</>`。那样这一槽位的元素类型在 Fragment 与 div 之间跳变,
   //    React 判定为不同类型 → 整棵子树卸载重挂 → **MilkdownProvider 重建,PM 的撤销栈当场销毁**:
@@ -3220,7 +3126,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   //    往上找包含块的 —— 留着 relative 就会挑中这个没有盒子的祖先,浮层整体偏一个容器位。
   return (
     <div
-      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${tool}` : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && vp.z <= OVERVIEW_LABEL_Z ? ' amx-stage-overview' : ''}`}
+      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${tool}` : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= OVERVIEW_LABEL_Z ? ' amx-stage-overview' : ''}`}
       ref={hostRef}
       tabIndex={-1}
       onKeyDownCapture={onKeyDownCapture}
@@ -3230,10 +3136,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         <div
           className="amx-stage-grid"
           aria-hidden="true"
-          style={{
-            ['--amx-grid-step' as string]: `${gridStep}px`,
-            transform: `translate3d(${gridX}px, ${gridY}px, 0)`,
-          }}
+          style={gridStyle}
         />
       ) : null}
       <div
@@ -3262,8 +3165,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
             ghost={ghost}
             marquee={marquee}
             attach={attach}
-            snapLanding={snapLanding}
-            overviewScale={vp.z <= OVERVIEW_LABEL_Z ? vp.z : null}
+            overviewScale={overviewEnabled && vp.z <= OVERVIEW_LABEL_Z ? vp.z : null}
             mainAutoHeight={!(typeof main.h === 'number' && main.h > 0)}
             preview={connFrom && connPt ? { from: connFrom, x: connPt.x, y: connPt.y, over: connPt.over } : null}
           />
@@ -3302,39 +3204,33 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       ) : null}
       {active && connFrom ? <div className="amx-stage-hint">再点一个对象:卡片/正文 = 收它作子节点(按住 Shift = 改画自由连线),形状 = 自由连线;Esc 取消</div> : null}
       {active ? (
-        <div className="amx-stage-hud">
-          <button type="button" onClick={() => zoomBy(1 / 1.2)} title="缩小"><Minus size={12} /></button>
-          <span>{Math.round(vp.z * 100)}%</span>
-          <button type="button" onClick={() => zoomBy(1.2)} title="放大"><Plus size={12} /></button>
-          <button type="button" onClick={fit} title="适应内容"><Maximize2 size={12} /></button>
-          <button
-            type="button"
-            className={`amx-snap-toggle${snapEnabled ? ' is-on' : ''}`}
-            aria-pressed={snapEnabled}
-            aria-label="点阵吸附"
-            title={snapEnabled ? '关闭点阵吸附' : '开启点阵吸附'}
-            onClick={() => {
-              setSnapEnabled(!snapEnabled)
-              hostRef.current?.focus({ preventScroll: true })
-            }}
-          >
-            <Magnet size={12} />
-          </button>
-          <button
-            type="button"
-            className={miniMapVisible ? 'is-on' : ''}
-            aria-pressed={miniMapVisible}
-            title={miniMapVisible ? '隐藏缩略图' : '显示缩略图'}
-            onClick={() => {
-              const next = !miniMapVisible
-              setMiniMapVisible(next)
-              setCanvasMiniMapEnabled(next)
-              hostRef.current?.focus({ preventScroll: true })
-            }}
-          >
-            <MapIcon size={12} />
-          </button>
-        </div>
+        // 缩放胶囊 / 吸附 / 缩略图开关 —— 与仪表盘共用同一份 chrome(View 基座方案 §6.4 S2)。
+        <CanvasChrome
+          zoom={vp.z}
+          onZoomBy={zoomBy}
+          onFit={fit}
+          snap={snapEnabled}
+          onSnap={(on) => { setSnapEnabled(on); hostRef.current?.focus({ preventScroll: true }) }}
+          mini={miniMapVisible}
+          onMini={(on) => { setMiniMapVisible(on); setCanvasMiniMapEnabled(on); hostRef.current?.focus({ preventScroll: true }) }}
+          extra={(
+            <button
+              type="button"
+              className={overviewEnabled ? 'is-on' : ''}
+              aria-pressed={overviewEnabled}
+              aria-label="低倍率简略显示"
+              title={overviewEnabled ? '关闭低倍率简略显示' : '开启低倍率简略显示'}
+              onClick={() => {
+                const next = !overviewEnabled
+                setOverviewEnabled(next)
+                setCanvasOverviewEnabled(next)
+                hostRef.current?.focus({ preventScroll: true })
+              }}
+            >
+              <ListCollapse size={12} />
+            </button>
+          )}
+        />
       ) : null}
       {active && menu ? (
         <OverlayPortal>

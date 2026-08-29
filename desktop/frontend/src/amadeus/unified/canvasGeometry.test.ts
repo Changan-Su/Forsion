@@ -40,5 +40,11 @@ describe('resolveCardRepulsion', () => {
       expect(overlap({ ...box, x: box.x + push.x, y: box.y + push.y }, obstacle)).toBe(false)
     }
   })
-})
 
+  it('keeps a finite-canvas repel candidate inside bounds instead of pushing through an outer edge', () => {
+    const moving = { x: 0, y: 0, w: 100, h: 80 }
+    const obstacle = { x: 0, y: 0, w: 120, h: 100 }
+    const bounds = { x: 0, y: 0, w: 400, h: 300 }
+    expect(resolveCardRepulsion([moving], [obstacle], { x: 0, y: -200 }, undefined, bounds)).toEqual({ x: 0, y: 118 })
+  })
+})

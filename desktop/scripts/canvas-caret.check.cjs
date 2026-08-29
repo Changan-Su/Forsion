@@ -1,4 +1,4 @@
-// Canvas 卡片二击进入编辑后的丝滑光标回归。
+// Canvas 卡片进入编辑、画布平移后的丝滑光标回归。
 // 用生产 UnifiedPage + CanvasStage 的两段式交互,不是裸 contenteditable。
 // 用法:npm run check:canvascaret(由 e2e-editor 自起/复用 Vite)。
 const fs = require('fs')
@@ -57,11 +57,13 @@ async function main() {
     const r = p.getBoundingClientRect()
     return { x: r.left + Math.min(40, r.width / 2), y: r.top + r.height / 2 }
   })
+  // 现行 Canvas 契约：单击选中，Space 进入编辑；不靠浏览器对两次独立 click 合成 dblclick。
   await page.mouse.click(at.x, at.y)
   await page.waitForTimeout(160)
-  await page.mouse.click(at.x, at.y)
+  await page.keyboard.press('Space')
   await page.waitForTimeout(260)
-  await page.keyboard.press('End')
+  // 编辑态下再点同一正文位置，让浏览器给出现场可见的真实 caret 几何。
+  await page.mouse.click(at.x, at.y)
   await page.waitForTimeout(240)
 
   const state = await page.evaluate(() => {
@@ -90,6 +92,59 @@ async function main() {
       && Math.abs(state.native.top - state.overlay.top) <= 2
       && Math.abs(state.native.height - state.overlay.height) <= 2,
     JSON.stringify(state),
+  )
+
+  // 编辑状态下用触控板/滚轮平移，真实 Range 会随 stage-inner transform 同帧移动；丝滑覆盖层也必须
+  // 同帧硬同步，不能等 100ms 轮询后再走 90ms transition。连续三帧取样，直接量用户看到的拖尾。
+  const samplePanFrame = () => page.evaluate(() => {
+    const sel = getSelection()
+    const rr = sel?.rangeCount ? sel.getRangeAt(0).getClientRects()[0] || sel.getRangeAt(0).getBoundingClientRect() : null
+    const overlay = document.querySelector('.sc-caret')
+    const or = overlay && getComputedStyle(overlay).display !== 'none' ? overlay.getBoundingClientRect() : null
+    return {
+      editing: !!document.querySelector('.amx-el-selbox.is-editing'),
+      pmFocus: !!document.activeElement?.closest?.('.ProseMirror'),
+      transform: getComputedStyle(document.querySelector('.amx-stage-inner')).transform,
+      dx: rr && or ? Math.round((or.left - rr.left) * 10) / 10 : null,
+      dy: rr && or ? Math.round((or.top - rr.top) * 10) / 10 : null,
+    }
+  })
+  const wheelFrames = []
+  await page.mouse.move(at.x, at.y)
+  for (let i = 0; i < 3; i++) {
+    await page.mouse.wheel(34, 26)
+    await page.waitForTimeout(18)
+    wheelFrames.push(await samplePanFrame())
+  }
+
+  // Alt/抓手/中键属于“移动视口”，不是离开文字编辑；拖拽期间同样要保住焦点并逐帧跟随。
+  const blank = await page.evaluate(() => {
+    const stage = document.querySelector('.amx-stage')
+    const r = stage.getBoundingClientRect()
+    for (let y = r.top + 90; y < r.bottom - 90; y += 48) {
+      for (let x = r.left + 90; x < r.right - 90; x += 48) {
+        const hit = document.elementFromPoint(x, y)
+        if (hit && !hit.closest('.ProseMirror, .amx-ucard, .amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')) return { x, y }
+      }
+    }
+    return { x: r.right - 120, y: r.bottom - 120 }
+  })
+  const dragFrames = []
+  await page.keyboard.down('Alt')
+  await page.mouse.move(blank.x, blank.y)
+  await page.mouse.down()
+  for (let i = 1; i <= 3; i++) {
+    await page.mouse.move(blank.x + i * 24, blank.y + i * 16)
+    await page.waitForTimeout(18)
+    dragFrames.push(await samplePanFrame())
+  }
+  await page.mouse.up()
+  await page.keyboard.up('Alt')
+  const panFrames = [...wheelFrames, ...dragFrames]
+  check(
+    'Canvas 编辑状态滚动/拖拽平移时丝滑光标逐帧跟随，不产生拖尾偏移',
+    panFrames.every((f) => f.editing && f.pmFocus && f.dx != null && f.dy != null && Math.abs(f.dx) <= 2 && Math.abs(f.dy) <= 2),
+    JSON.stringify({ wheel: wheelFrames, drag: dragFrames }),
   )
 
   // 文档模式会保留 Canvas 舞台 DOM，并用 display:contents 把两层外壳摘出布局。

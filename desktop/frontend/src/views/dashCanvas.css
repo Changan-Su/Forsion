@@ -1,7 +1,8 @@
-/* 画布版 Dashboard(dash2)。token 跟旧 dash-card 同体系(amadeus-host.css),
- * 卡片描边纪律照 DESIGN.md:overlay-medium 细描边 + bg-card,不另立配色。 */
+/* 画布版 Dashboard(dash2)。双态只有一份逻辑几何:
+ * 解锁 = 固定 16:9 有限排版台；锁定 = 铺满宿主、按比例响应的复合 View。颜色/圆角/高程只吃 LCL token。 */
 
 .dash2 { display: flex; flex-direction: column; min-height: 0; }
+.dash2-mode-btn { padding-inline: 8px; font-weight: 550; }
 
 .dash2-host {
   position: relative;
@@ -10,9 +11,24 @@
   overflow: hidden; /* 舞台自己管平移,宿主永不出滚动条 */
   cursor: grab;
   touch-action: none; /* 触屏:手势归画布(平移),不给浏览器滚动 */
-  background: var(--bg, transparent);
+  background: color-mix(in srgb, var(--bg) 96%, var(--text) 4%);
 }
-.dash2-host:active { cursor: grabbing; }
+.dash2-host:not([data-locked]):active { cursor: grabbing; }
+
+/* 排版台里的无界坐标只是一层实现细节；用户能放卡片的范围只到这张固定画板的四条边。 */
+.dash2-space { position: absolute; inset: 0; }
+.dash2-board {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  border-radius: var(--radius-lg, 16px);
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+}
+.dash2-board-grid { z-index: 0; }
 
 .dash2-stage {
   position: absolute;
@@ -20,34 +36,56 @@
   width: 0; height: 0; /* 卡片绝对定位,自身不占布局 */
   transform-origin: 0 0;
 }
+.dash2-stage--responsive {
+  inset: 0;
+  width: auto;
+  height: auto;
+  transform: none;
+}
 
 .dash2-card {
   position: absolute;
   display: flex; flex-direction: column;
   min-width: 0; min-height: 0;
-  border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  z-index: 1;
+  border: var(--border-width, 1px) solid transparent;
   border-radius: var(--radius-md, 10px);
-  background: var(--bg-card, var(--bg));
-  overflow: hidden;
+  /* ⚠️ 不能写 overflow:hidden —— 八向把手有一半骑在描边外侧,会被整片剪掉(点不着)。
+     内容的溢出由 `.dash2-card-body` 自己管。 */
 }
-.dash2-card[data-selected] { border-color: var(--accent, #6aa1ff); }
+.dash2-host:not([data-locked]) .dash2-card {
+  /* 编辑卡的表面与生产 Canvas `.amx-ucard` 逐项同款。别换成 `--bg-card`:
+     Canvas 故意用 `--bg`，画布内的纸面和常规弹层是两个不同的表面层级。 */
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+}
+/* ⚠️ `touch-action: none` **只给排版台的卡**。触控动作按「命中元素 → 滚动祖先」这条链求交集裁决,
+   所以卡上写了 none,宿主写 auto 也救不回来 —— 成品页里长列表/笔记/嵌入视图会整个滚不动
+   (Codex 评审)。锁定态的卡一律交还给内容自己。 */
+.dash2-host:not([data-locked]) .dash2-card { touch-action: none; }
+.dash2-host[data-locked] .dash2-card,
+.dash2-host[data-locked] .dash2-card * { touch-action: auto; }
+/* 选中 / 进卡片的观感**照抄画布的 `.amx-el-selbox`**(2px --primary 描边;进编辑再推开一圈 + 起浮)。
+   画布把它画在独立一层是因为卡片 DOM 归 PM 所有、加 class 会被抹掉;仪表盘的卡是自家 div,
+   直接写在卡上就行 —— 观感一致,不必把那层「白板层」也搬过来。
+   ⚠️ token 用 `--primary`(画布同款),不是 `--accent`:后者在本主题里是近黑色,选中看着像加粗描边。 */
+.dash2-card[data-selected] {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  transition: outline-offset 140ms ease, outline-color 140ms ease, box-shadow 140ms ease;
+}
 .dash2-card[data-interact] {
-  border-color: var(--accent, #6aa1ff);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #6aa1ff) 30%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--primary) 72%, transparent);
+  outline-offset: 5px;
+  box-shadow: var(--card-shadow);
 }
-.dash2-card[data-dragging] { z-index: 5; opacity: 0.92; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
-.dash2-card-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
-
-/* 浏览态罩层:独立 DOM 截获指针(卡内容收不到事件,也就无所谓 preventDefault 连锁)。 */
-.dash2-shield {
-  position: absolute; inset: 0;
-  cursor: grab;
-  touch-action: none;
-  /* 罩层本身透明;悬停给一点点提示光,示意「这层可拖」 */
-  background: transparent;
-}
-.dash2-shield:hover { background: color-mix(in srgb, var(--overlay-light, rgba(127, 127, 127, 0.06)) 50%, transparent); }
-.dash2-card[data-dragging] .dash2-shield { cursor: grabbing; }
+.dash2-card[data-dragging] { z-index: 5; opacity: 0.94; box-shadow: var(--card-shadow); }
+/* 悬停给一点点提示光:卡片整片都是可拖面(与画布一致),不给提示就看不出来。 */
+.dash2-host:not([data-locked]) .dash2-card:not([data-interact]) { cursor: grab; }
+.dash2-host:not([data-locked]) .dash2-card[data-dragging] { cursor: grabbing; }
+.dash2-card-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; border-radius: inherit; }
 
 .dash2-del {
   position: absolute; top: 4px; right: 4px; z-index: 2;
@@ -59,21 +97,10 @@
 .dash2-card:hover .dash2-del { opacity: 1; }
 .dash2-del:hover { color: var(--danger, #e5484d); background: var(--overlay-light, rgba(127, 127, 127, 0.16)); }
 
-.dash2-resize {
-  position: absolute; right: 0; bottom: 0; z-index: 2;
-  width: 16px; height: 16px;
-  cursor: nwse-resize; touch-action: none;
-  background: linear-gradient(135deg, transparent 50%, var(--overlay-medium, rgba(127, 127, 127, 0.35)) 50%);
-  border-bottom-right-radius: var(--radius-md, 10px);
-}
-
-.dash2-zoom {
-  position: absolute; right: 10px; bottom: 8px;
-  font-size: 11px; color: var(--text-faint, var(--text-muted));
-  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
-  padding: 2px 8px; border-radius: 999px;
-  pointer-events: none;
-}
+/* 调整尺寸的把手用画布那套 `.amx-card-size-grip`(styles.css),缩放胶囊/缩略图用 `.amx-stage-hud`
+   与 `.amx-stage-minimap` —— 都是 `.am-app` 作用域,仪表盘根上有这个类,直接吃得到。
+   这里只补一条本地的:把手不能被卡片的 overflow:hidden 剪掉(它骑在描边上,有半个在外面)。 */
+.dash2-card .amx-card-size-grip { touch-action: none; }
 
 .dash2-empty { color: var(--text-faint, var(--text-muted)); font-size: 13px; padding: 24px; }
 .dash2-empty-stage { position: absolute; left: 24px; top: 24px; white-space: nowrap; }
@@ -92,3 +119,31 @@
   display: flex; flex-direction: column;
 }
 .dash2-list-card > * { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+/* ── 锁定态 = 成品页 ──────────────────────────────────────────────────────
+   宿主本身就是复合 View，不再在里面居中摆一张缩放纸面。卡片按固定逻辑画板的百分比定位，
+   所以横纵尺寸可分别响应 View，内容重新排版而不是连文字一起缩成缩略图。 */
+.dash2-host[data-locked] {
+  overflow: hidden;
+  cursor: default;
+  touch-action: auto;
+  background: var(--bg-card, var(--bg));
+}
+.dash2-host[data-locked] .dash2-card {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  cursor: default;
+}
+.dash2-host[data-locked] .dash2-card-body { border-radius: 0; }
+
+/* 窄屏仍走卡片流,但宿主保持在场才能在窗口重新变宽时恢复画板。 */
+.dash2-host[data-narrow] { overflow: hidden; cursor: default; touch-action: auto; background: transparent; }
+.dash2-host[data-narrow][data-locked] { background: var(--bg-card, var(--bg)); }
+.dash2-list[data-locked] { gap: 0; padding: 0; }
+.dash2-list[data-locked] .dash2-list-card {
+  border-color: transparent;
+  border-bottom-color: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  border-radius: 0;
+  background: transparent;
+}

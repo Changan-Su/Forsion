@@ -20,11 +20,23 @@ import { fuzzyScore } from './amadeus/lib/fuzzy'
 import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 
-interface QFState { open: boolean; openPalette(): void; close(): void }
+/** 选取模式(2026-08-25,仪表盘嵌卡要「挑一个文件」):同一个面板,回车不导航而是回调给调用方。
+ *  刻意复用本面板而不另造 picker —— 模糊搜索 / 键盘 / 样式 / 最近项这一整套已经在这儿了。 */
+export interface QFPick {
+  /** 输入框 placeholder,直接当标题用(面板没有标题栏)。 */
+  title: string
+  /** 该候选能不能选。kind 见 `Kind`;path 对 note/db/file 是库内路径,对 session 是会话 id。 */
+  accept(kind: string, path: string): boolean
+  onPick(path: string): void
+}
+
+interface QFState { open: boolean; pick: QFPick | null; openPalette(): void; openPicker(pick: QFPick): void; close(): void }
 export const useQuickFind = create<QFState>((set) => ({
   open: false,
-  openPalette: () => set({ open: true }),
-  close: () => set({ open: false }),
+  pick: null,
+  openPalette: () => set({ open: true, pick: null }),
+  openPicker: (pick) => set({ open: true, pick }),
+  close: () => set({ open: false, pick: null }),
 }))
 
 type Kind = 'note' | 'db' | 'session' | 'file'
@@ -92,6 +104,7 @@ export function QuickFind() {
 
 function QuickFindInner() {
   const close = useQuickFind((s) => s.close)
+  const pick = useQuickFind((s) => s.pick)
   const pages = usePageStore((s) => s.pages)
   const files = usePageStore((s) => s.files)
   const dbs = useAllDatabases()
@@ -104,7 +117,7 @@ function QuickFindInner() {
   const inputRef = useRef<HTMLInputElement>(null)
 
   // 全部候选(名称快切)。open 内构建 → 只在面板打开时加载 .db。
-  const all = useMemo<Item[]>(() => {
+  const allItems = useMemo<Item[]>(() => {
     const notes: Item[] = pages
       .filter((p) => /\.md$/i.test(p))
       .map((p) => ({ kind: 'note', id: p, title: base(p), sub: dirOf(p), open: () => void openNote(p) }))
@@ -126,6 +139,8 @@ function QuickFindInner() {
 
   const results = useMemo<Item[]>(() => {
     const needle = q.trim()
+    // 选取模式:先按调用方的 accept 收窄,后面的分类/模糊/最近项逻辑一个字不改。
+    const all = pick ? allItems.filter((it) => pick.accept(it.kind, it.id)) : allItems
     const inCat = (it: Item): boolean => cat === 'all' || catOf(it.kind) === cat
     if (needle) {
       return all
@@ -136,6 +151,8 @@ function QuickFindInner() {
         .slice(0, 30)
         .map((x) => x.it)
     }
+    // 选取模式空态:直接列可选项(最近项与会话兜底在这儿都不成立 —— 会 accept 成空面板)。
+    if (pick) return all.slice(0, 30)
     const byKey = new Map(all.map((it) => [`${it.kind}:${it.id}`, it]))
     const recent = loadRecents().map((r) => byKey.get(`${r.kind}:${r.id}`)).filter((x): x is Item => !!x).filter(inCat)
     if (recent.length) return recent.slice(0, 12)
@@ -147,12 +164,13 @@ function QuickFindInner() {
       .map((s) => byKey.get(`session:${s.id}`))
       .filter((x): x is Item => !!x)
       .filter(inCat)
-  }, [q, all, sessions, cat])
+  }, [q, allItems, sessions, cat, pick])
 
   useEffect(() => setSel(0), [q, pos])
   useEffect(() => inputRef.current?.focus(), [])
 
   const openItem = (it: Item): void => {
+    if (pick) { pick.onPick(it.id); close(); return } // 选取模式:不导航、不记最近(选卡片内容 ≠ 我最近开过它)
     pushRecent({ kind: it.kind, id: it.id, title: it.title, sub: it.sub, emoji: it.emoji })
     it.open()
     close()
@@ -164,6 +182,7 @@ function QuickFindInner() {
     else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((i) => Math.max(i - 1, 0)) }
     else if (e.key === 'Enter') { e.preventDefault(); const it = results[sel]; if (it) openItem(it) }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (pick) return // 选取模式没有分类胶囊 → 左右恒归输入框
       const el = inputRef.current
       const next = posOnArrow(pos, e.key, { start: el?.selectionStart ?? 0, end: el?.selectionEnd ?? 0, len: el?.value.length ?? 0 })
       if (next === null) return // 归输入框:移动光标/扩选
@@ -189,7 +208,7 @@ function QuickFindInner() {
           <input
             ref={inputRef}
             className="amx-qf-input"
-            placeholder="搜索笔记、文件、会话…"
+            placeholder={pick ? pick.title : '搜索笔记、文件、会话…'}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             /* 用鼠标把光标点回正文里 = 离开分类格(同一条线上的位置变了),胶囊滑回「全部」。 */
@@ -199,7 +218,7 @@ function QuickFindInner() {
         {/* 分类胶囊:复用「本地|云端」「文档|画布」那颗 `.t2s-vaultseg`(凹轨道 + 滑块弹性平移),
             只是从两格变成四格 —— 格数与当前格走 CSS 变量(见 sidebar2.css)。
             ⚠️ 整条 mousedown preventDefault:点格子不夺焦点,点完还能接着打字。 */}
-        <div
+        {!pick && <div
           className="t2s-vaultseg amx-qf-seg"
           role="tablist"
           aria-label="搜索范围"
@@ -219,9 +238,9 @@ function QuickFindInner() {
               {c.label}
             </button>
           ))}
-        </div>
+        </div>}
         <div className="amx-qf-list">
-          {!q.trim() && results.length > 0 && <div className="amx-qf-sec">最近</div>}
+          {!q.trim() && results.length > 0 && <div className="amx-qf-sec">{pick ? '可选' : '最近'}</div>}
           {results.map((it, i) => (
             <button
               key={`${it.kind}:${it.id}`}
@@ -234,9 +253,11 @@ function QuickFindInner() {
               <span className="amx-qf-sub">{it.sub}</span>
             </button>
           ))}
-          {results.length === 0 && <div className="amx-qf-empty">{q.trim() ? '无匹配' : '还没有最近项'}</div>}
+          {results.length === 0 && <div className="amx-qf-empty">{q.trim() ? '无匹配' : pick ? '库里没有可选的文件' : '还没有最近项'}</div>}
         </div>
-        <div className="amx-qf-foot"><kbd>↑↓</kbd> 选择 · <kbd>←→</kbd> 分类 · <kbd>↵</kbd> 打开 · <kbd>esc</kbd> 关闭</div>
+        <div className="amx-qf-foot">{pick
+          ? <><kbd>↑↓</kbd> 选择 · <kbd>↵</kbd> 选中 · <kbd>esc</kbd> 取消</>
+          : <><kbd>↑↓</kbd> 选择 · <kbd>←→</kbd> 分类 · <kbd>↵</kbd> 打开 · <kbd>esc</kbd> 关闭</>}</div>
       </div>
     </div>
   )

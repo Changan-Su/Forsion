@@ -164,6 +164,17 @@ describe('恶意/退化数值', () => {
 describe('网页卡片 URL 闸门', () => {
   it('放行公网 http(s)', () => {
     expect(webviewUrlAllowed('https://example.com/a?b=1')).toBe(true)
+    // ⚠️ IPv4-mapped IPv6:URL 会把它规范化成十六进制形态(`[::ffff:7f00:1]`),不折回点分十进制
+    // 就绕过全部私网判定 —— 环回与云元数据直通(Codex 评审实测出来的绕过面)。
+    expect(webviewUrlAllowed('http://[::ffff:127.0.0.1]/')).toBe(false)
+    expect(webviewUrlAllowed('http://[::ffff:169.254.169.254]/')).toBe(false)
+    expect(webviewUrlAllowed('http://[::ffff:10.0.0.1]/')).toBe(false)
+    expect(webviewUrlAllowed('http://[::ffff:192.168.1.1]/')).toBe(false)
+    // 十进制/八进制整数形态由 URL 自己规范化成 127.0.0.1,原有 v4 分支已拦住
+    expect(webviewUrlAllowed('http://2130706433/')).toBe(false)
+    expect(webviewUrlAllowed('http://0177.0.0.1/')).toBe(false)
+    // 映射到公网地址的仍应放行(别一刀切把 ::ffff: 全禁了)
+    expect(webviewUrlAllowed('http://[::ffff:93.184.216.34]/')).toBe(true)
     expect(webviewUrlAllowed('http://93.184.216.34/')).toBe(true)
   })
   it('拒非 http(s) 协议', () => {
