@@ -642,6 +642,17 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   -webkit-app-region: no-drag;
   background: var(--sidebar-bg);
 }
+/* 底部面板折叠钮:紧挨右栏钮的**左边**(26px 钮宽 + 2px 缝 = 28)。同样浮着,底部收起后仍在原处。 */
+.dv-edge-bottom {
+  position: absolute;
+  top: 5px;
+  right: 34px;
+  z-index: 6;
+  -webkit-app-region: no-drag;
+  background: var(--sidebar-bg);
+}
+/* 展开态高亮:底部面板不像左右栏那样一眼可见「有没有开」(它可能被拖得很矮),故钮自己表达开合。 */
+.dv-edge-bottom.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
 
 /* 侧栏图标-only tab:仅图标(名入 tooltip),贴合 Obsidian 侧栏,免文字 tab 溢出 */
 .wb-tab--icon { gap: 0; padding: 0 5px; }

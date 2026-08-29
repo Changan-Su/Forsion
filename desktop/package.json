@@ -86,6 +86,8 @@
     "dev:amadeus": "FORSION_PRODUCT=amadeus electron-vite dev --noSandbox",
     "build:amadeus": "FORSION_PRODUCT=amadeus electron-vite build",
     "pack:amadeus": "FORSION_PRODUCT=amadeus npm run build:amadeus && FORSION_PRODUCT=amadeus electron-builder --config electron-builder.config.cjs --dir",
+    "check:bottompanel": "node scripts/bottom-panel.check.cjs",
+    "shot:bottompanel": "node scripts/bottom-panel.check.cjs --shot",
     "check:remount": "node scripts/main-remount.check.cjs",
     "check:nav": "node scripts/nav-history.check.cjs",
     "check:builtins": "node scripts/builtins.check.cjs",

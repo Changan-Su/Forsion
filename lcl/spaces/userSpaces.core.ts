@@ -121,3 +121,17 @@ export function uniqueId(base: string, taken: ReadonlySet<string>): string {
   if (!taken.has(base)) return base
   for (let i = 2; ; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`
 }
+
+/** 一个 panel 的 `__loc` 该进配方的哪个桶;`null` = 不进配方。
+ *
+ * 单独成纯函数是因为它原本是一句**会骗过类型检查的断言**:`params.__loc as 'main'|'left'|'right'`。
+ * 引擎加了第四个 loc `'bottom'` 之后,断言仍然编译通过,但 `layout['bottom']` 是 undefined —— 调用方的
+ * `layout[loc].push(...)` 当场抛(开着底部面板点「另存为 Space」必崩)。断言不会报错,实判才会。
+ *
+ * 底部**故意不进配方**:SpaceSpec.layout 只有 main/left/right 三桶,「底部的 per-Space 默认内容」是
+ * 明确的未做项 —— 真要做得先扩配方格式并迁移已存的 space.json。
+ */
+export function recipeBucketOf(rawLoc: unknown): 'main' | 'left' | 'right' | null {
+  if (rawLoc === 'bottom') return null
+  return rawLoc === 'left' || rawLoc === 'right' ? rawLoc : 'main'
+}

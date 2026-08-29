@@ -1,6 +1,6 @@
 /** parseSpaceJson / slug 工具:用户自定义 Space 配方的解析校验。 */
 import { describe, it, expect } from 'vitest'
-import { parseSpaceJson, slugifyId, uniqueId, cmpVersion, type ParseOpts } from './userSpaces.core'
+import { parseSpaceJson, slugifyId, uniqueId, cmpVersion, recipeBucketOf, type ParseOpts } from './userSpaces.core'
 
 const REGISTERED = new Set(['chat', 'workspace', 'outline'])
 const opts = (over?: Partial<ParseOpts>): ParseOpts => ({
@@ -74,5 +74,22 @@ describe('配方版本(version)', () => {
   it('非字符串 version 忽略,不让坏值触发误迁移', () => {
     const r = parseSpaceJson(JSON.stringify({ ...VALID, version: 3 }), opts())
     expect(r.ok && r.spec.version).toBeUndefined()
+  })
+})
+
+describe('recipeBucketOf(「另存为 Space」的落桶判定)', () => {
+  it('left/right 原样;main 与一切未知值都落 main', () => {
+    expect(recipeBucketOf('left')).toBe('left')
+    expect(recipeBucketOf('right')).toBe('right')
+    expect(recipeBucketOf('main')).toBe('main')
+    expect(recipeBucketOf(undefined)).toBe('main') // 老 panel 没有 __loc
+    expect(recipeBucketOf('wat')).toBe('main')
+  })
+
+  // ⚠️回归:这里以前是 `as 'main'|'left'|'right'` 硬转,bottom 会穿过去 → layout['bottom'] 是 undefined
+  //   → 调用方 `layout[loc].push()` 抛 TypeError = 开着底部面板点「另存为 Space」必崩。
+  //   必须返回 null(= 跳过这个 panel),绝不能落进 main 桶(那会把终端之类的东西塞进主区配方)。
+  it('⚠️bottom 返回 null(既不崩、也不错落进 main 桶)', () => {
+    expect(recipeBucketOf('bottom')).toBeNull()
   })
 })

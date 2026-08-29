@@ -61,26 +61,13 @@ function writeFlag(k: string, on: boolean): void {
   try { localStorage.setItem(k, on ? '1' : '0') } catch { /* 隐私模式:本次会话生效即可 */ }
 }
 
-/** 关掉工作台里该类型的**全部**实例(主区 + 两侧),为反注册清场:Dockview 的 components map
- *  收缩时不能留活面板。⚠️`closeSideView` 一次只关**第一个**匹配面板(engine/dockviewStore),
- *  同侧拖了两个同类型面板时单调一次会漏 → 循环到关光为止(带上限,防 close 失败时死循环)。 */
+/** 关掉工作台里该类型的**全部**实例,为反注册清场:Dockview 的 components map 收缩时不能留活面板。
+ *  ⚠️改用引擎的 closeViewsOfType(以 api.panels 为准、循环到关光)。原来按 `mainTabs + left + right`
+ *  手写枚举,加了底部面板之后会漏掉停在 bottom 的实例 —— 而**终端正是最可能被放进底部的视图**:
+ *  关掉内置终端后那个 panel、PTY 都还活着,且已反注册的类型留在持久化布局里 → 下次启动
+ *  layoutViewsAllRegistered 判定失败,**整份布局丢回默认**。 */
 function closeLeafsOfType(type: string): void {
-  const ws = useWorkspace.getState()
-  for (const tab of ws.mainTabs) if (tab.type === type) ws.closeLeaf(tab.id)
-  for (const side of ['left', 'right'] as const) {
-    for (let i = 0; i < 16; i++) {
-      const before = sideCount(type, side)
-      if (!before) break
-      ws.closeSideView(side, type)
-      if (sideCount(type, side) >= before) break // 没关掉就别转下去了
-    }
-  }
-}
-
-/** 某侧还剩几个该类型的面板(读 dockview 真实 panel 表,`mainTabs` 只覆盖主区)。 */
-function sideCount(type: string, side: 'left' | 'right'): number {
-  const api = (useWorkspace.getState() as unknown as { api?: { panels?: Array<{ params?: Record<string, unknown> }> } }).api
-  return (api?.panels ?? []).filter((p) => p.params?.__type === type && p.params?.__loc === side).length
+  useWorkspace.getState().closeViewsOfType(type)
 }
 
 interface BuiltinDef {

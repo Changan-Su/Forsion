@@ -15,13 +15,16 @@ export interface PersistedSidebar {
   stash: PersistedPanel[]
 }
 
-/** v4 布局信封：Dockview 图 + 引擎自己的侧栏状态。 */
+/** v4 布局信封：Dockview 图 + 引擎自己的侧栏状态。
+ *  bottom(底部面板)**刻意做成可选、不升版本号**:老 blob 没有它 = 底部收起,新 blob 被老代码读到也只是
+ *  多一个被忽略的键 —— 升 v5 会让所有人的布局重建一次,为一个新增区付这个代价不值。 */
 export interface LayoutEnvelopeV4 {
   version: 4
   dockview: unknown
   sidebars: {
     left: PersistedSidebar
     right: PersistedSidebar
+    bottom?: PersistedSidebar
   }
 }
 
@@ -61,6 +64,9 @@ export function isLayoutEnvelopeV4(value: unknown): value is LayoutEnvelopeV4 {
     && typeof v.sidebars.right?.visible === 'boolean'
     && isPanelList(v.sidebars.left?.stash)
     && isPanelList(v.sidebars.right?.stash)
+    // bottom 可选:没有 = 底部面板收起(老布局);有就必须成形。
+    && (v.sidebars.bottom === undefined
+      || (typeof v.sidebars.bottom.visible === 'boolean' && isPanelList(v.sidebars.bottom.stash)))
 }
 
 /** v3 只有 Dockview JSON；仅左右栏都在时可无损迁移，否则重建默认布局。 */

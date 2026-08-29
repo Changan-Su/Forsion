@@ -12,7 +12,7 @@ import {
   type IDockviewHeaderActionsProps,
   type DockviewTheme,
 } from 'dockview-react'
-import { X, Plus, PanelLeft, PanelRight, ArrowLeft, ArrowRight, AppWindow } from 'lucide-react'
+import { X, Plus, PanelLeft, PanelRight, PanelBottom, ArrowLeft, ArrowRight, AppWindow } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
@@ -42,7 +42,7 @@ function leafFromProps(props: IDockviewPanelProps): Leaf {
   return {
     id: props.api.id,
     type: (typeof __type === 'string' && __type) || (props.api as { component?: string }).component || '',
-    loc: (__loc === 'left' || __loc === 'right') ? __loc : 'main',
+    loc: (__loc === 'left' || __loc === 'right' || __loc === 'bottom') ? __loc : 'main',
     params: userParams,
     setTitle: (t) => props.api.setTitle(t),
     setParams: (p) => props.api.updateParameters({ ...raw, ...p }),
@@ -60,7 +60,7 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
   return function ViewHost(props) {
     const leaf = leafFromProps(props)
     const loc = ((props.params ?? {}) as { __loc?: string }).__loc ?? 'main'
-    const [enter] = useState(() => {
+    const [enter, setEnter] = useState(() => {
       if (loc !== 'main') return false // 仅主区做切换淡入;侧栏靠自身宽度补间,别再叠淡入
       const changed = lastMainViewType !== def.type
       lastMainViewType = def.type
@@ -68,7 +68,19 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
     })
     // 面板级兜底:懒视图挂起 → 骨架屏(替代空白);渲染/chunk 失败 → 本面板错误面,不再冒到根边界。
     return (
-      <div className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}>
+      <div
+        className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}
+        // ⚠️淡入类**播完必须摘**。CSS 动画是绑在元素上的:类只要还留着,元素每次被重新挂进 DOM 就会
+        // 从头再播一遍。而 Dockview 在网格结构变化时正会这么干 —— 收起底部面板/侧栏时它把纵向
+        // branch node 收回成 leaf,主区子树被摘下重挂(实测 t=200ms 一条 removed/added,元素对象不变),
+        // 于是整页重播 0.22s 淡入 = 用户三次实报的「收起时闪一下」(左右栏同因,由来已久)。
+        // 上面的 lastMainViewType 只挡住了「重挂时**再加**这个类」,挡不住「类还在 → 重挂即重播」。
+        // ⚠️几何断言看不见这个:元素身份、尺寸、padding 全程不变,变的只有 opacity —— 别再用量几何的
+        // 方式来验这条(前两轮就是这么漏掉的)。
+        onAnimationEnd={(e) => {
+          if (e.animationName === 'wb-view-enter' && e.target === e.currentTarget) setEnter(false)
+        }}
+      >
         <ViewErrorBoundary>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
             {def.factory({ leaf, params: leaf.params })}
@@ -102,6 +114,11 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const [, bumpTitle] = useState(0)
   useEffect(() => {
     const d = api.onDidTitleChange(() => bumpTitle((n) => n + 1))
+    // ⚠️订阅**之前**可能已经有人 setTitle 过:内容视图在自己的 mount effect 里改标题(空面板占位按所在区
+    // 改称呼、编辑器认领笔记名…),而两个 portal(tab / 内容)的 effect 谁先跑没有保证。内容先跑时这次
+    // onDidTitleChange 没人听见,tab 就永远停在首帧那个旧标题(实测:panel.title 已是新的,DOM 还是旧的)。
+    // 订阅完补一次重渲即可把当前 api.title 读进来 —— 多一次挂载期渲染,换掉一整类「标题不刷新」。
+    bumpTitle((n) => n + 1)
     return () => d.dispose()
   }, [api])
   const type = ((params as { __type?: string } | undefined)?.__type) || (api as { component?: string }).component || ''
@@ -310,7 +327,7 @@ function openViewAtTarget(t: DropTarget, spec: { type: string; params?: Record<s
   const loc = locOf(t.group)
   const ws = useWorkspace.getState()
   if (loc === 'main') { ws.openView(spec.type, spec.params ?? {}, 'main', { newTab: true }); return }
-  const visible = loc === 'left' ? ws.leftVisible : ws.rightVisible
+  const visible = loc === 'left' ? ws.leftVisible : loc === 'right' ? ws.rightVisible : ws.bottomVisible
   if (!visible) ws.toggleSidebar(loc) // 收起态直接 openView 会把 stash 覆盖成单视图 → 先展开还原
   ws.openView(spec.type, spec.params ?? {}, loc)
   // 该侧原只有 sidebar-empty 占位时,落入真视图后清掉它(镜像 dockviewStore.dropView 的占位退位)。
@@ -342,6 +359,14 @@ export const WorkspaceHost: React.FC<{
   soft: boolean
   buildDefault?: () => void
 }> = ({ dark, soft, buildDefault }) => {
+  // 底部面板展开态:只用来给折叠钮上高亮(底部可能被拖得很矮,不像左右栏一眼看得出开合)。
+  // ⚠️曾经还拿它给 dockview 根打 .wb-has-bottom,好把状态栏让位从主区移交给底部组(省掉主区
+  // 那 18px 的 --sb-h 空当)。**已撤**:那个类是随 panel 增删翻转的**阶跃**,而收起是 200ms 补间 ——
+  // 补间平滑走完之后类才掉,主区纸卡底边在收尾那一帧瞬跳 19px = 用户实报的「收起时还是会闪一下」。
+  // 实测轨迹:187ms 时 padding 4px/纸卡底 895,209ms 变 22px/纸卡底 876。宁可让主区常留那 18px
+  // (= 加底部面板之前主区一直就是这样),也不要一次阶跃。真要收掉那点空当,得让 padding 与补间
+  // 同相位地一起动,不是翻一个类能了的。
+  const bottomVisible = useWorkspace((s) => s.bottomVisible)
   // 视图注册表 → Dockview components map(注册变化时重建,支持运行期注册)。
   const [version, setVersion] = useState(0)
   useEffect(() => subscribeViews(() => setVersion((v) => v + 1)), [])
@@ -487,7 +512,14 @@ export const WorkspaceHost: React.FC<{
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */
         onReady={onReady}
       />
-      {/* 右栏折叠钮:浮在工作区右上角(=右panel最右缘);右栏收起后仍在原处,可重开。 */}
+      {/* 右上角浮层两枚折叠钮:底部面板钮在左、右栏钮在右(用户指定的次序);两者收起后都仍在原处,可重开。 */}
+      <button
+        className={`dv-edge-toggle dv-edge-bottom${bottomVisible ? ' is-on' : ''}`}
+        title={document.documentElement.lang.startsWith('zh') ? '底部面板 (⌘/Ctrl+J)' : 'Toggle bottom panel (Ctrl/Cmd+J)'}
+        onClick={() => useWorkspace.getState().toggleSidebar('bottom')}
+      >
+        <PanelBottom size={15} />
+      </button>
       <button
         className="dv-edge-toggle dv-edge-right"
         title={document.documentElement.lang.startsWith('zh') ? '右侧栏' : 'Toggle right panel'}

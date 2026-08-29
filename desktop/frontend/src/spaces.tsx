@@ -3,7 +3,7 @@
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket } from 'lucide-react'
 import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout } from '@lcl/engine'
-import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
+import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { installAmadeusCommands } from './amadeusCommands'
@@ -43,7 +43,7 @@ export function resolveStartupTarget(lastExit: string): string {
 }
 
 /** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=对话/工作区(自动→文件)/大纲/记忆/子聊天 同组 tab。 */
-const TANGU_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
+const TANGU_SIDE_VIEWS: SidebarDefaults = {
   left: [{ type: 'workspace', params: {} }],
   right: [
     { type: 'chat-panel', params: { followActive: true } },
@@ -52,6 +52,9 @@ const TANGU_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
     { type: 'memory', params: {} },
     { type: 'subchats', params: {} },
   ],
+  // 底部面板预置终端(默认折叠,见 build())。终端被禁用 / 非桌面宿主时 getView('terminal') 为空,
+  // toggleSidebar 展开路径的 known 过滤会自动跳过 → 退回空停靠区,不会开出一个死面板。
+  bottom: [{ type: 'terminal', params: {} }],
 }
 
 const tanguSpace: SpaceDefinition = {
@@ -66,6 +69,8 @@ const tanguSpace: SpaceDefinition = {
     ws().openView('workspace', {}, 'left')
     // 右栏默认折叠 —— 内容入 stash,toggle 可展(仅作用于全新布局;已存布局尊重用户,见 spaceRegistry.applyNamed 路径)。
     ws().initializeSidebar('right', false)
+    // 底部面板同样默认折叠,但 stash 里已放好终端 → 用户点开就是终端,而不是空停靠区。
+    ws().initializeSidebar('bottom', false)
   },
 }
 

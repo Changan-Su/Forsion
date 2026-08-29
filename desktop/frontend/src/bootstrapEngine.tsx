@@ -1,6 +1,8 @@
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, Code2, Database, PenTool, Trophy, Activity, AppWindow, Workflow, Network, Rocket, LayoutDashboard, FileVideo } from 'lucide-react'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, PanelBottom, Code2, Database, PenTool, Trophy, Activity, AppWindow, Workflow, Network, Rocket, LayoutDashboard, FileVideo } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE } from '@lcl/engine'
+import type { ViewProps } from '@lcl/engine'
+import { useEffect } from 'react'
 import { windowKind } from './windowKind'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
@@ -64,10 +66,14 @@ export const blankNewChat = (): void => {
   s.setNewChatModel(null)
   ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
 }
-/** 空侧栏占位内容(订阅 i18n,语言切换即时生效)。 */
-function SidebarEmptyView() {
+/** 空占位内容(订阅 i18n,语言切换即时生效)。同一个视图服务左右侧栏与**底部面板**,
+ *  故文案按所在区取:底部说「面板」不说「侧栏」。tab 标题在 displayName 里拿不到 leaf,
+ *  只能在这儿按区改写(WbTab 订阅了 onDidTitleChange,改完即刷)。 */
+function SidebarEmptyView({ leaf }: ViewProps) {
   const { t } = useI18n()
-  return <div className="wb-sidebar-empty">{t('sidebar.empty')}</div>
+  const bottom = leaf.loc === 'bottom'
+  useEffect(() => { if (bottom) leaf.setTitle(t('panel.emptyTitle')) }, [bottom, leaf, t])
+  return <div className="wb-sidebar-empty">{t(bottom ? 'panel.empty' : 'sidebar.empty')}</div>
 }
 const splitChat = (): void => {
   const active = ws().getActiveLeaf()
@@ -133,7 +139,7 @@ export function installEngine(): void {
   // 前台窗口采样调试面板(开发者工具):同款纪律 —— 视图恒注册,⌘K 入口跟着采样开关走。
   registerView({ type: 'active-window', kind: 'page', embeddable: true, displayName: () => app().tr('view.activeWindow'), icon: AppWindow, factory: () => <ActiveWindowView />, singleton: true })
   // 空侧栏占位:侧栏关空/拖空后由 closeLeaf/dropView 自动补上,保住 group 作拖放靶(整组只剩它时 tab 条隐藏,见 engine.css)。
-  registerView({ type: 'sidebar-empty', kind: 'page', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: () => <SidebarEmptyView />, closable: false })
+  registerView({ type: 'sidebar-empty', kind: 'page', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: (props) => <SidebarEmptyView {...props} />, closable: false })
   // 主区空态占位:关掉最后一个主区 tab 后 closeLeaf 就地把该 leaf 变成它(Forsion 品牌图 + 新建;tab 条隐藏机关同 sidebar-empty)。
   registerView({ type: 'home', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: () => <HomeEmptyView />, closable: false })
 
@@ -402,6 +408,11 @@ export function installEngine(): void {
   addCommand({ id: 'toggle-left', icon: PanelLeft, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
   addCommand({ id: 'quick-find', icon: Search, title: () => '快速查找', keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
   addCommand({ id: 'toggle-right', icon: PanelLeft, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
+  // mod+j 与 VS Code 的面板热键对齐;app 命令表与编辑器 keymap 皆空闲(mod+/ 已被左栏占,见上)。
+  // ⚠️仅桌面壳:移动单列壳没有底部面板,而 singleColumnStore.toggleSidebar 是
+  // `side === 'left' ? 左 : 右` 的二元三目 —— 传 'bottom' 会**去开右抽屉**(命令面板在移动端也在,
+  // 不 gate 就真能点到)。同理它的 bucketOf/sidebarDefaults 也没有 bottom 桶。
+  if (UI_MODE !== 'mobile') addCommand({ id: 'toggle-bottom', icon: PanelBottom, title: () => app().tr('command.toggleBottom'), keywords: 'panel bottom terminal 底部 面板 终端', hotkey: 'mod+j', run: () => ws().toggleSidebar('bottom') })
   addCommand({ id: 'theme-mode', icon: Moon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })

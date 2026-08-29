@@ -15,7 +15,7 @@ import {
 } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
-import { parseSpaceJson, slugifyId, uniqueId, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
+import { parseSpaceJson, slugifyId, uniqueId, recipeBucketOf, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
 import { track } from './achievements/store'
@@ -202,7 +202,10 @@ export async function saveCurrentAsSpace(name: string): Promise<void> {
   const seen = new Set<string>()
   for (const p of api.panels) {
     const params = (p.params ?? {}) as Record<string, unknown>
-    const loc = (params.__loc as 'main' | 'left' | 'right' | undefined) ?? 'main'
+    // 落桶判定抽到 @lcl/spaces(纯函数 + 单测):这里以前是 `as 'main'|'left'|'right'` 硬转,
+    // 断言骗过了类型检查 —— 引擎加了 'bottom' 之后 layout['bottom'] 是 undefined,`.push` 当场抛。
+    const loc = recipeBucketOf(params.__loc)
+    if (!loc) continue // bottom 不进配方(见 recipeBucketOf 注释)
     const type = typeof params.__type === 'string' ? params.__type : ''
     if (!type || SKIP_TYPES.has(type) || seen.has(`${loc}:${type}`)) continue
     seen.add(`${loc}:${type}`)

@@ -1,15 +1,16 @@
 /**
  * Workspace store(≈ Obsidian workspace)。在已集成的 Dockview 之上建薄 API:
  * openView / getActiveLeaf / splitActive / toggleSidebar / saveLayout↔restore / 命名布局。
- * 单个 Dockview 实例托管三区:左侧栏 / 主区 / 右侧栏,由 panel.params.__loc 标记区分。
+ * 单个 Dockview 实例托管四区:左侧栏 / 主区 / 右侧栏 / 底部面板,由 panel.params.__loc 标记区分。
+ * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部只在主区那一列下方,按**高**折叠且恒 free(见 toggleSidebar)。
  * 视图「参数驱动可重建」:panel 存 {component:type, params} → 刷新/恢复时 Dockview 据此重建。
  */
 import { create } from 'zustand'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
-import type { Leaf, ViewLocation } from './types'
+import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
 import { identitySig, label } from './types'
-import { computeSideWidth } from './sideWidth'
+import { computeSideWidth, computeBottomHeight } from './sideWidth'
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { useNav } from './navStore'
@@ -36,8 +37,70 @@ function nextId(api: DockviewApi, type: string): string {
   return nextPanelId(api.panels.map((p) => p.id), type)
 }
 
-/** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。 */
-const sidebarAnimating: Record<'left' | 'right', boolean> = { left: false, right: false }
+/** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。
+ *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
+const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
+
+/** 布局结构一变(加/减一个组),Dockview 会把幸存的那一支**摘下来重新挂**到新的父节点上 ——
+ *  DOM 节点、React 树都不变,但**元素重新入 DOM 会让其中所有 CSS 动画从头重播**。于是各视图自己的
+ *  入场动画(主页的 hp-rise、聊天输入区、图标……)在收/展面板时集体重放一遍 = 用户实报的
+ *  「不是整页在闪,是一些组件闪一下」。实测:收起前三个 hp-rise 都是 finished(t=250/310/370),
+ *  收起后同一批变成 running(t=50)。
+ *
+ *  这不是我们的动画,也枚举不完(每个视图都可能有自己的入场效果),所以按**时机**掐:结构变化那一帧,
+ *  把工作区内刚起头的动画直接推到终态。既有的 lastMainViewType 是同一个意图的窄版(只管 wb-view-enter)。
+ *  ⚠️无限循环动画(加载转圈)必须跳过 —— finish() 对它们会抛,而且它们本来就该继续转。 */
+/** 除了动画,重挂还会**把所有滚动容器的位置抹成 0**(同一个 DOM 节点,scrollTop 照样归零 ——
+ *  实测 1500 → 0)。用户实报「日历里日期退回到 4 月 3 号左右」就是它:日历的当前日期由滚动位置决定,
+ *  被滚回区间开头就显示成那个日期。聊天记录等一切滚动视图同受其害。
+ *
+ *  故结构变化必须**成对**包起来:变化前快照,变化后还原 + 掐掉误重播的动画。
+ *  返回的收尾函数在结构变化之后调用。 */
+function preserveAcrossRestructure(): () => void {
+  const root = typeof document !== 'undefined' ? document.querySelector('.wb-dockview') : null
+  if (!root) return () => { /* 无 DOM(测试) */ }
+  // 只记真的滚过的容器(绝大多数元素 scrollTop 为 0,不必留档)。toggle 才走这条,遍历成本可接受。
+  const scrolls: Array<{ el: Element; top: number; left: number }> = []
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    const top = el.scrollTop, left = el.scrollLeft
+    if (top || left) scrolls.push({ el, top, left })
+  }
+  const restoreScroll = (): void => {
+    for (const s of scrolls) {
+      // 节点在重挂后依然是同一个对象(实测),故直接写回即可;内容还没铺好时写不进去,靠下面再补一帧。
+      if (s.el.scrollTop !== s.top) s.el.scrollTop = s.top
+      if (s.el.scrollLeft !== s.left) s.el.scrollLeft = s.left
+    }
+  }
+  const settleAnimations = (): void => {
+    const el = root as Element & { getAnimations?: (o?: { subtree?: boolean }) => Animation[] }
+    for (const a of el.getAnimations?.({ subtree: true }) ?? []) {
+      if (a.effect?.getTiming().iterations === Infinity) continue // 转圈之类,别掐
+      if (Number(a.currentTime ?? 0) > 80) continue               // 不是这一帧刚重播的,放过
+      try { a.finish() } catch { /* 有些动画不可 finish */ }
+    }
+  }
+  return () => {
+    restoreScroll()   // 同步先写一次
+    // 重播/回流发生在重挂之后的下一帧,故再补一帧:动画那时才起头,滚动位置那时才写得进去。
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { restoreScroll(); settleAnimations() })
+    else settleAnimations()
+  }
+}
+
+/** 每个区一轮开合的代号。补间是异步的(200ms),期间用户再点一次就会有两条 tween 同时在跑 ——
+ *  收尾回调必须先比代号,不是自己那一轮的就整段放弃。否则旧那轮的 finish() 会去 close 新那轮刚开出来的
+ *  panel:实测抛 dockview 的 'invalid operation'(未捕获),还会把 pinSides / 释放约束 / 存布局一起带跑偏。 */
+const toggleGen: Record<DockSide, number> = { left: 0, right: 0, bottom: 0 }
+
+/** Dockview 组的默认最小尺寸(dockviewGroupPanel.ts 的 MINIMUM_DOCKVIEW_GROUP_PANEL_WIDTH/HEIGHT)。
+ *  展开补间必须先把它放开到 0,否则起步的 setSize(1) 被钳在这里 —— 见 toggleSidebar 展开分支。 */
+const DV_GROUP_MIN = 100
+
+/** 折叠区 → 其 visible 状态键。 */
+function visKeyOf(side: DockSide): 'leftVisible' | 'rightVisible' | 'bottomVisible' {
+  return side === 'left' ? 'leftVisible' : side === 'right' ? 'rightVisible' : 'bottomVisible'
+}
 
 /** pinSides 的延迟钉宽窗口标记:置位期间 captureSideWidths 一律不记宽(防把系统过渡态当用户拖宽写进
  *  localStorage → 焊死错宽 = 侧栏抽风根因 R1)。pinGen 让「最后一次 pin」负责清旗,多次 pin 叠加时
@@ -52,13 +115,31 @@ function sideTargetWidth(api: DockviewApi, loc: 'left' | 'right'): number {
   return computeSideWidth(api.width, loc, { free: st.sideFree[loc], saved: st.sideWidths[loc], scale: st.sideScale[loc] })
 }
 
+/** 底部面板的目标高(纯几何在 sideWidth.computeBottomHeight)。底部不进 pinSides 体系:
+ *  没有「钉回黄金分割」这回事,只有「记住的高 / 首次 32%」。 */
+function bottomTargetHeight(api: DockviewApi): number {
+  return computeBottomHeight(api.height, useWorkspace.getState().sideWidths.bottom)
+}
+
+/** 刚建出的底部组按 Dockview 默认高(~50%)诞生 → 把它落到目标高。≈pinSides 的纵向版,但**只在建组时用一次**
+ *  (底部恒 free,用户拖多高就是多高,不做持续钉高)。补间动画期间跳过,让 tween 独占。 */
+function settleBottomHeight(api: DockviewApi): void {
+  const apply = (): void => {
+    if (sidebarAnimating.bottom) return
+    try { panelsAt(api, 'bottom')[0]?.group.api.setSize({ height: bottomTargetHeight(api) }) } catch { /* 跨版本兜底 */ }
+  }
+  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => f()
+  raf(() => raf(apply))
+  setTimeout(apply, 60) // 同 pinSides:rAF 偶尔早于 Dockview 内部 resize
+}
+
 /** 记住「可自由拖宽」侧栏的当前宽度(WorkspaceHost 在布局变更时调):用户拖动 sash 后即被捕获 +
  *  写 localStorage,下次 pinSides/展开都用它 → 拖宽持久。动画期间跳过(避免记下补间中间值)。 */
 export function captureSideWidths(api: DockviewApi): void {
   const st = useWorkspace.getState()
   if (!st.sideProfileKey) return
   let changed = false
-  const next = { ...st.sideWidths }
+  const next: Record<DockSide, number | null> = { ...st.sideWidths }
   for (const loc of ['left', 'right'] as const) {
     if (!st.sideFree[loc] || sidebarAnimating[loc]) continue
     const w = (panelsAt(api, loc)[0] as { group?: SizableGroup } | undefined)?.group?.api?.width
@@ -69,13 +150,23 @@ export function captureSideWidths(api: DockviewApi): void {
     next[loc] = Math.round(w)
     changed = true
   }
+  // 底部面板高度:恒 free,判定复用同一个 shouldRecordSideWidth(pinPending 恒 false —— 底部无钉高窗口),
+  // 于是「贴近目标高 = 系统设的」「<120 = 收起补间中间值」「与已记值几乎相同」三条豁免自动生效。
+  if (!sidebarAnimating.bottom) {
+    const h = (panelsAt(api, 'bottom')[0] as { group?: SizableGroup } | undefined)?.group?.api?.height
+    if (typeof h === 'number'
+      && shouldRecordSideWidth({ measured: h, target: bottomTargetHeight(api), prev: next.bottom, pinPending: false })) {
+      next.bottom = Math.round(h)
+      changed = true
+    }
+  }
   if (changed) {
     useWorkspace.setState({ sideWidths: next })
     try { localStorage.setItem(`lcl.sideWidth2.${st.sideProfileKey}`, JSON.stringify(next)) } catch { /* private mode */ }
   }
 }
 
-type SizableGroup = { api: { setSize: (s: { width: number }) => void; width?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number }) => void } }
+type SizableGroup = { api: { setSize: (s: { width?: number; height?: number }) => void; width?: number; height?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number; minimumHeight?: number; maximumHeight?: number }) => void } }
 
 /** 临时锁住指定侧栏的宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收 ——
  *  Dockview 默认把腾出的宽度按比例摊给所有组,侧栏会「突然变宽」而剩下的主区纹丝不动。
@@ -96,16 +187,20 @@ function lockSides(api: DockviewApi, sides: ('left' | 'right')[], keepCurrent = 
 /** 收起一侧期间锁住**另一**侧(空白只给主区,免另一侧变宽再被 pinSides 弹回 = 收栏闪屏)。 */
 const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) => lockSides(api, [side === 'left' ? 'right' : 'left'])
 
-/** rAF 把某组宽度从 from 平滑补间到 to(ease-out cubic),done 收尾。无 rAF(测试)时直接收尾。 */
-function tweenGroupWidth(group: SizableGroup, from: number, to: number, done: () => void): void {
-  if (typeof requestAnimationFrame !== 'function') { try { group.api.setSize({ width: to }) } catch { /* ignore */ } done(); return }
+/** rAF 把某组的一个维度(width|height)从 from 平滑补间到 to(ease-out cubic),done 收尾。
+ *  无 rAF(测试)时直接收尾。 */
+function tweenGroupSize(group: SizableGroup, key: 'width' | 'height', from: number, to: number, done: () => void, cancelled?: () => boolean): void {
+  if (typeof requestAnimationFrame !== 'function') { if (cancelled?.()) return; try { group.api.setSize({ [key]: to }) } catch { /* ignore */ } done(); return }
   const DURATION = 200
   const ease = (k: number): number => 1 - Math.pow(1 - k, 3)
   let startTs = 0
   const step = (ts: number): void => {
+    // 被后一次开合接管 → **立刻停帧**。只在收尾回调里判 stale 不够:这条 tween 会继续每帧 setSize,
+    // 和新那条反向的 tween 逐帧对打(实测「收起途中再点一下」因此停在关闭态,反向展开不生效)。
+    if (cancelled?.()) return
     if (!startTs) startTs = ts
     const k = Math.min(1, (ts - startTs) / DURATION)
-    try { group.api.setSize({ width: Math.round(from + (to - from) * ease(k)) }) } catch { /* 跨版本兜底 */ }
+    try { group.api.setSize({ [key]: Math.round(from + (to - from) * ease(k)) }) } catch { /* 跨版本兜底 */ }
     if (k < 1) requestAnimationFrame(step)
     else done()
   }
@@ -183,7 +278,9 @@ function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknow
   if (sameLoc.length) return { referencePanel: sameLoc[0].id, direction: 'within' }
   if (loc === 'main') return undefined // 首个主区 panel
   const main = panelsAt(api, 'main')[0] ?? api.panels[0]
-  if (main) return { referencePanel: main.id, direction: loc === 'left' ? 'left' : 'right' }
+  // ponytail: 底部锚在 panelsAt('main')[0] 上向下开 → 主区若已左右分屏成两列,底部只落在**第一列**下方
+  //   (而非横跨整个主区)。真需要「跨整个主区」时再换成锚到主区那一支的 gridview 分支。
+  if (main) return { referencePanel: main.id, direction: loc === 'left' ? 'left' : loc === 'right' ? 'right' : 'below' }
   return undefined
 }
 
@@ -197,6 +294,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
       left: { visible: panelsAt(api, 'left').length > 0, stash: state.stash.left },
       right: { visible: panelsAt(api, 'right').length > 0, stash: state.stash.right },
+      bottom: { visible: panelsAt(api, 'bottom').length > 0, stash: state.stash.bottom },
     },
   }
 }
@@ -254,29 +352,34 @@ interface WorkspaceState {
   chatSurfaces: Record<string, HTMLDivElement>
   leftVisible: boolean
   rightVisible: boolean
-  /** 收起侧栏时暂存其内容,展开时还原。 */
-  stash: Record<'left' | 'right', Stashed[]>
+  /** 底部面板是否展开(主区下方那一条;≈ VS Code 的 Panel)。 */
+  bottomVisible: boolean
+  /** 收起侧栏/底部面板时暂存其内容,展开时还原。 */
+  stash: Record<DockSide, Stashed[]>
   /** 收起时记住的活动 tab 类型,展开后据此还原选中(否则按 openView 顺序落到最后一个)。 */
-  stashActive: Record<'left' | 'right', string | null>
-  sidebarDefaults: Record<'left' | 'right', Stashed[]>
+  stashActive: Record<DockSide, string | null>
+  /** 各区默认内容。bottom 恒 [] ——「通用停靠区,默认空」,展开无内容即空占位;
+   *  真有 Space 要给底部预置视图时再给 SpaceDefinition 加 bottom 字段(现在加 = 零消费者的投机抽象)。 */
+  sidebarDefaults: Record<DockSide, Stashed[]>
   /** 默认布局构建器(WorkspaceHost 从 buildDefault prop 注入,供 resetLayout 复用)。 */
   defaultBuilder: (() => void) | null
   /** 可自由拖宽 + 持久化的侧栏。**2026-08-14 起默认两侧全开**(用户要求「拖过就常驻」);
    *  SpaceDefinition.resizableSides 从「开哪侧」变成「关哪侧」(显式 false 才钉黄金分割)。 */
   sideFree: Record<'left' | 'right', boolean>
-  /** 记住的侧栏宽度(仅 sideFree 侧生效;null=用「黄金分割 × sideScale」默认宽)。按当前 Space 从 localStorage 载。 */
-  sideWidths: Record<'left' | 'right', number | null>
+  /** 记住的侧栏宽度(仅 sideFree 侧生效;null=用「黄金分割 × sideScale」默认宽)。按当前 Space 从 localStorage 载。
+   *  bottom 存的是**高**(恒生效,底部无 free 开关)。 */
+  sideWidths: Record<DockSide, number | null>
   /** 各侧「首次无记录」默认宽相对黄金分割的系数(= 当前 Space 的 sideDefaultScale;缺省 1)。 */
   sideScale: Record<'left' | 'right', number>
   /** 当前宽度持久化归属键(= 活动 Space id);切 Space 时重载对应记忆。 */
   sideProfileKey: string | null
   setApi(api: DockviewApi | null): void
   setDefaultBuilder(fn: () => void): void
-  setSidebarDefaults(defaults: Record<'left' | 'right', Stashed[]>): void
+  setSidebarDefaults(defaults: SidebarDefaults): void
   /** 设置「可自由拖宽」侧栏画像(切 Space 时调):载入该 Space 记住的宽度。
    *  free 缺省 = true(两侧都记宽);只有显式传 false 的那侧才回到「钉黄金分割」。 */
   setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }): void
-  initializeSidebar(side: 'left' | 'right', visible: boolean): void
+  initializeSidebar(side: DockSide, visible: boolean): void
   setFocusedLeaf(panel: IDockviewPanel | null | undefined): void
   registerChatSurface(leafId: string, el: HTMLDivElement | null): void
   syncPanelState(): void
@@ -289,9 +392,15 @@ interface WorkspaceState {
   /** 受控拖放落子:把 panelId 视图按 computeDropTarget 的结果并入/分屏到目标组,并继承目标面板身份(__loc)。 */
   dropView(panelId: string, target: DropTarget): void
   /** 顶栏侧栏图标点击 → 展开该侧(若收起)并显示该视图。 */
-  showSideView(side: 'left' | 'right', type: string): void
-  /** 关闭某侧的某视图(右键菜单)。 */
-  closeSideView(side: 'left' | 'right', type: string): void
+  showSideView(side: DockSide, type: string): void
+  /** 关闭某侧的某视图(右键菜单)。**一次只关该侧第一个匹配** —— 要清场请用 closeViewsOfType。 */
+  closeSideView(side: DockSide, type: string): void
+  /** 关掉**所有区**里该类型的全部实例(反注册插件/内置视图前的清场)。
+   *  调用方从前是各自 `mainTabs + closeSideView('left') + closeSideView('right')` 手写一遍 —— 加了
+   *  bottom 之后那种写法会漏掉停在底部的实例:视图被 unregisterView 之后 panel 还活着(cleanup 不跑、
+   *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动 layoutViewsAllRegistered
+   *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。 */
+  closeViewsOfType(type: string): void
   /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。 */
   resetLayout(): void
   /** 按当前容器宽把两侧栏重钉回目标宽(容器 resize 后调,补 dockview 不自动重算黄金分割的缺口)。 */
@@ -307,7 +416,8 @@ interface WorkspaceState {
   leafById(id: string): Leaf | null
   /** 把当前活动视图分屏到一侧(同 type+params 复制一份)。 */
   splitActive(direction: 'right' | 'down', paramsOverride?: Record<string, unknown>): Leaf | null
-  toggleSidebar(side: 'left' | 'right'): void
+  /** 折叠/展开一个区。左右量宽、bottom 量高;收起前暂存内容,展开时还原。 */
+  toggleSidebar(side: DockSide): void
   saveCurrent(): void
   saveNamed(name: string): void
   /** 应用命名布局。成功 true;缺失/损坏返回 false(调用方可回退 resetLayout)。 */
@@ -324,26 +434,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   chatSurfaces: {},
   leftVisible: true,
   rightVisible: true,
-  stash: { left: [], right: [] },
-  stashActive: { left: null, right: null },
-  sidebarDefaults: { left: [], right: [] },
+  bottomVisible: false, // 底部面板默认收起(用户按需展开,同 VS Code)
+  stash: { left: [], right: [], bottom: [] },
+  stashActive: { left: null, right: null, bottom: null },
+  sidebarDefaults: { left: [], right: [], bottom: [] },
   defaultBuilder: null,
   sideFree: { left: false, right: false },
-  sideWidths: { left: null, right: null },
+  sideWidths: { left: null, right: null, bottom: null },
   sideScale: { left: 1, right: 1 },
   sideProfileKey: null,
 
   setApi: (api) => set({ api }),
   setDefaultBuilder: (fn) => set({ defaultBuilder: fn }),
-  setSidebarDefaults: (defaults) => set({ sidebarDefaults: defaults }),
+  // bottom 显式兜底成 []:不能写 `{ bottom: [], ...defaults }` —— 若调用方带了 `bottom: undefined`
+  // 这个**存在但为 undefined** 的键,展开时 `sidebarDefaults[side].filter` 会当场炸。
+  setSidebarDefaults: (defaults) => set({ sidebarDefaults: { left: defaults.left, right: defaults.right, bottom: defaults.bottom ?? [] } }),
   setSideProfile: (key, free, scale) => {
-    let widths: Record<'left' | 'right', number | null> = { left: null, right: null }
+    let widths: Record<DockSide, number | null> = { left: null, right: null, bottom: null }
     try {
       // v1 key(lcl.sideWidth.)被「布局变更即记宽」污染过:×1.2 时代把系统钉的 336 当用户记忆存了。
       // 升版丢弃 = 全员回默认一次(golden × sideDefaultScale),真拖过的用户重拖一次即可。
       localStorage.removeItem(`lcl.sideWidth.${key}`)
       const raw = localStorage.getItem(`lcl.sideWidth2.${key}`)
-      if (raw) { const p = JSON.parse(raw) as Record<string, unknown>; widths = { left: typeof p.left === 'number' ? p.left : null, right: typeof p.right === 'number' ? p.right : null } }
+      if (raw) { const p = JSON.parse(raw) as Record<string, unknown>; widths = { left: typeof p.left === 'number' ? p.left : null, right: typeof p.right === 'number' ? p.right : null, bottom: typeof p.bottom === 'number' ? p.bottom : null } }
     } catch { /* private mode */ }
     // 缺省 true:此前只有声明了 resizableSides 的那侧记宽,其余一律被 pinSides 钉回黄金分割 ——
     // 用户拖完、一折一开就打回原形(实报)。现在两侧默认都记,显式 false 才钉。
@@ -355,11 +468,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       sideFree: { left: free.left !== false, right: free.right !== false },
       sideWidths: widths,
       sideScale: { left: scale?.left ?? 1, right: scale?.right ?? 1 },
-      stashActive: { left: null, right: null },
+      stashActive: { left: null, right: null, bottom: null },
     })
   },
   initializeSidebar: (side, visible) => set((s) => ({
-    [side === 'left' ? 'leftVisible' : 'rightVisible']: visible,
+    [visKeyOf(side)]: visible,
     stash: visible ? s.stash : { ...s.stash, [side]: s.sidebarDefaults[side] },
   } as Partial<WorkspaceState>)),
   setFocusedLeaf: (panel) => {
@@ -376,7 +489,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api) return
     const leftVisible = panelsAt(api, 'left').length > 0
     const rightVisible = panelsAt(api, 'right').length > 0
-    if (leftVisible !== get().leftVisible || rightVisible !== get().rightVisible) set({ leftVisible, rightVisible })
+    // 底部没有占位兜底(关掉最后一个视图 = 关掉面板),故它的可见态更依赖这条同步 —— 折叠钮的亮/灭全看它。
+    const bottomVisible = panelsAt(api, 'bottom').length > 0
+    if (leftVisible !== get().leftVisible || rightVisible !== get().rightVisible || bottomVisible !== get().bottomVisible) {
+      set({ leftVisible, rightVisible, bottomVisible })
+    }
   },
 
   refreshTabs: () => {
@@ -452,12 +569,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 侧栏关空 → 补「空侧栏」占位(保住 group 作拖放靶;toggleSidebar 折叠不走 closeLeaf,不受影响)。
     const wasLastSide = (loc === 'left' || loc === 'right')
       && panelType(panel) !== 'sidebar-empty' && panelsAt(api, loc).length <= 1
+    // 底部面板反过来:关掉最后一个视图 = 关掉整个面板(VS Code 观感,不补占位;Dockview 自动移除空组,
+    // syncPanelState 随即把 bottomVisible 翻假)。**stash 必须一并清空** —— 否则「折叠→展开→×关掉→
+    // 再折叠→展开」会把用户已经明确关掉的视图从 stash 里复活(左右栏有占位撑着,不会走到这一步)。
+    const wasLastBottom = loc === 'bottom' && panelsAt(api, 'bottom').length <= 1
     // 关掉分屏的一半 → 腾出的宽度必须全给剩下的主区。不锁两侧的话 Dockview 按比例摊给所有组:
     // 侧栏被强行拉宽、剩下的主区纹丝不动(用户实报)。180ms 后释放,恢复手动拖宽。
     const release = loc === 'main' ? lockSides(api, ['left', 'right'], true) : () => {}
     // 先关再填:占位可能与被关视图同 type,open-first 会复用到正被关的那个。
     panel.api.close()
     if (wasLastSide) get().openView('sidebar-empty', {}, loc)
+    if (wasLastBottom) set((st) => ({ stash: { ...st.stash, bottom: [] }, stashActive: { ...st.stashActive, bottom: null }, bottomVisible: false }))
     useNav.getState().drop(id) // 该 tab 的导航历史随之销毁
     get().refreshTabs()
     setTimeout(release, 180)
@@ -468,7 +590,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api || !panel) return
     const loc = locOf(target.group) // 目标面板身份 → 落子后视图继承(侧栏=图标 / 主区=tab+标题)
     // 拖动前各侧计数:占位进退判定不能依赖 visible 标志(moveTo 触发的 syncPanelState 可能已翻转它)。
-    const sideBefore = { left: panelsAt(api, 'left').length, right: panelsAt(api, 'right').length }
+    const sideBefore = { left: panelsAt(api, 'left').length, right: panelsAt(api, 'right').length, bottom: panelsAt(api, 'bottom').length }
     try {
       if (target.mode === 'tab') panel.api.moveTo({ group: target.group, position: 'center', index: target.index })
       else panel.api.moveTo({ group: target.group, position: target.dir }) // 方向 = 面板内分屏并新建组
@@ -482,6 +604,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (sideBefore[side] > 0 && now.length === 0) get().openView('sidebar-empty', {}, side)
       else if (now.length > 1) now.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
     }
+    // 底部无占位:被拖空 = 面板关闭(同 closeLeaf 的 wasLastBottom,stash 一并清,免复活已关视图)。
+    const bottomNow = panelsAt(api, 'bottom')
+    if (sideBefore.bottom > 0 && bottomNow.length === 0) set((st) => ({ stash: { ...st.stash, bottom: [] }, stashActive: { ...st.stashActive, bottom: null }, bottomVisible: false }))
+    else if (bottomNow.length > 1) bottomNow.filter((p) => panelType(p) === 'sidebar-empty').forEach((p) => p.api.close())
     pinSides(api) // 侧栏可能变动 → 重钉黄金分割宽
     get().refreshTabs()
     scheduleWorkspaceSave()
@@ -489,7 +615,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   showSideView: (side, type) => {
     const api = get().api
     if (!api) return
-    const visible = side === 'left' ? get().leftVisible : get().rightVisible
+    const visible = get()[visKeyOf(side)]
     // 已显示该视图时再点 = 收起该侧(开合切换);否则展开(若收起)并激活该视图。
     if (visible) {
       const cur = panelsAt(api, side).find((p) => {
@@ -519,13 +645,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     get().refreshTabs()
   },
 
+  closeViewsOfType(type) {
+    const api = get().api
+    if (!api) return
+    // 逐个关:close 会就地改 api.panels,不能边遍历边删。上限防「关不掉」时死循环。
+    // 一律走 closeLeaf 而不是 panel.api.close(),这样各区的收尾语义都对:主区最后一个 → 就地换 home;
+    // 侧栏最后一个 → 回填占位;底部最后一个 → 连 stash 一起清、面板收起。
+    for (let i = 0; i < 64; i++) {
+      const hit = api.panels.find((p) => panelType(p) === type)
+      if (!hit) break
+      get().closeLeaf(hit.id)
+      // 还在且仍是该类型 = 这一轮没关掉(主区最后一个会变成 home,类型已变,不算没关掉)→ 别再转了。
+      if (api.panels.some((p) => p.id === hit.id && panelType(p) === type)) break
+    }
+    get().refreshTabs()
+  },
+
   resetLayout() {
     const api = get().api
     if (!api) return
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
-    set({ stash: { left: [], right: [] }, leftVisible: true, rightVisible: true, focusedChatLeafId: null })
+    set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
   },
@@ -581,9 +723,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       position: positionFor(api, loc) as never,
     })
     // 侧栏首个 panel 创建了新组 → Dockview 默认 ~50/50 太宽,按黄金分割钉两侧 0.191×容器宽。
-    if (firstOfSide) pinSides(api)
-    if (loc === 'left') set({ leftVisible: true })
-    if (loc === 'right') set({ rightVisible: true })
+    // 底部走纵向的那一版(settleBottomHeight):**不能借 pinSides** —— 它只管横向,还会开 pinPending
+    // 窗口白白冻住 60ms 的侧栏宽记忆。两者都在补间动画期自动让位(sidebarAnimating)。
+    if (firstOfSide) { if (loc === 'bottom') settleBottomHeight(api); else pinSides(api) }
+    if (loc !== 'main') set({ [visKeyOf(loc)]: true } as Partial<WorkspaceState>)
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
     scheduleWorkspaceSave()
     return makeLeaf(panel)
@@ -633,11 +776,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const type = panelType(active)
     const { __loc, __type, ...userParams } = (active.params ?? {}) as PanelMeta & Record<string, unknown>
     void __type
-    // 侧栏严禁左右分屏(与拖拽路径 dropModel.splitDirection 同一铁律):焦点在侧栏时向右分一律折叠成向下。
+    // 左右侧栏严禁左右分屏(与拖拽路径 dropModel.splitDirection 同一铁律):焦点在侧栏时向右分一律折叠成向下。
+    // 底部面板不在此列 —— 它是横着的宽条,左右分屏才是自然动作(≈ VS Code 终端分栏)。
     const inSidebar = __loc === 'left' || __loc === 'right'
     const panel = api.addPanel({
       id: nextId(api, type),
-      component: inSidebar ? type : '__frame', // 主区分屏 panel 同样挂 frame 宿主(支持就地切视图)
+      component: __loc && __loc !== 'main' ? type : '__frame', // 主区分屏 panel 同样挂 frame 宿主(支持就地切视图);非主区(含 bottom)保持 per-type 组件,与 openView 一致
       title: active.title ?? type,
       params: { ...userParams, ...paramsOverride, __loc: __loc ?? 'main', __type: type },
       position: { referencePanel: active.id, direction: direction === 'right' && !inSidebar ? 'right' : 'below' } as never,
@@ -650,11 +794,28 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   toggleSidebar(side) {
     const api = get().api
     if (!api) return
-    const visKey = side === 'left' ? 'leftVisible' : 'rightVisible'
+    // 唯一的轴向差异集中在这几行:左右量宽 / 底部量高。其余(暂存、还原、补间、沉降)两轴共用一份。
+    const vert = side === 'bottom'
+    const sizeKey = vert ? 'height' : 'width'
+    const readSize = (g: SizableGroup): number | undefined => (vert ? g.api.height : g.api.width)
+    const targetSize = (): number => (vert ? bottomTargetHeight(api) : sideTargetWidth(api, side))
+    const setSize = (g: SizableGroup, v: number): void => { try { g.api.setSize({ [sizeKey]: v }) } catch { /* 跨版本兜底 */ } }
+    // 沉降后重钉:只有横向有「黄金分割钉宽」这回事;底部恒 free,拖多高就是多高,钉了反而把用户的高抹掉。
+    const settleSizes = (): void => { if (!vert) pinSides(api) }
+    // 收起/展开期锁死**对侧**只对横向有意义:底部吞吐的高只在主区那一列内部流动,左右栏宽度纹丝不动。
+    const lockNeighbour = (): (() => void) => (vert ? () => {} : lockOtherSide(api, side))
+    const visKey = visKeyOf(side)
     const panels = panelsAt(api, side)
+    // 本轮代号 + 「我这一轮是不是已经被后一次点击接管了」。
+    const gen = ++toggleGen[side]
+    const stale = (): boolean => gen !== toggleGen[side]
+    // ⚠️已知局限(左右栏自古如此,非本次引入):补间的 200ms 内 panel 还在,故「收起途中再点一下」
+    // 会被判成「还开着」→ 再收一次,而不是反向展开;终态是关闭、状态与实况一致、不报错(实测),
+    // 只是少了一次反向。真要做反向得把 tween 做成可接管的双向动画,不是改这一行能了的 ——
+    // 试过按意图态判(sidebarAnimating ? get()[visKey] : …),两条 tween 仍会打架,反向依旧不生效。
     const visible = panels.length > 0
     if (visible) {
-      // 收起:暂存内容,先把该侧宽度补间到 0(丝滑),动画结束再移除 panel。占位不入 stash
+      // 收起:暂存内容,先把该区尺寸补间到 0(丝滑),动画结束再移除 panel。占位不入 stash
       // (空 stash 展开时回落 sidebarDefaults —— 折叠空侧栏再展开会复活默认视图,有意为之)。
       const stashed: Stashed[] = panels.filter((p) => panelType(p) !== 'sidebar-empty').map((p) => {
         const { __loc, __type, ...userParams } = (p.params ?? {}) as PanelMeta & Record<string, unknown>
@@ -672,23 +833,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const group = (panels[0] as { group?: SizableGroup }).group
       // 另一侧**全程**锁死:补间每帧吐出的宽和 close 释放的空白都会被 Dockview 按比例摊给所有组,
       // 只锁 close 那一下的话,对侧仍会在这 200ms 里一路鼓起来、收尾再被 pinSides 弹回 = 抽闪。
-      const release = lockOtherSide(api, side)
+      const release = lockNeighbour()
       const finish = (): void => {
-        panels.forEach((p) => p.api.close())
-        pinSides(api) // 收起后另一侧会吃掉空白漂移 → 重新钉回 0.191
+        if (stale()) return // 已被后一次点击接管:那一轮会自己收尾,这里再动手就是去关别人的 panel
+        // 逐个 try:这批 panel 可能已被新一轮 / closeLeaf 关掉,dockview 对重复 close 抛 'invalid operation'。
+        // 组被移除 → 网格收支 → 幸存的那一支被摘下重挂:滚动位置会归零、入场动画会重播。成对包住。
+        const restore = preserveAcrossRestructure()
+        panels.forEach((p) => { try { p.api.close() } catch { /* 已经不在了 */ } })
+        restore()
+        settleSizes() // 收起后另一侧会吃掉空白漂移 → 重新钉回 0.191
         setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
         scheduleWorkspaceSave()
       }
       if (group) {
         sidebarAnimating[side] = true
-        try { group.api.setConstraints?.({ minimumWidth: 0 }) } catch { /* ignore */ } // 放开最小宽,补间能到 0
-        const from = group.api.width ?? sideTargetWidth(api, side)
-        tweenGroupWidth(group, from, 0, () => { sidebarAnimating[side] = false; finish() })
+        // 放开最小尺寸,补间能到 0
+        try { group.api.setConstraints?.(vert ? { minimumHeight: 0 } : { minimumWidth: 0 }) } catch { /* ignore */ }
+        const from = readSize(group) ?? targetSize()
+        tweenGroupSize(group, sizeKey, from, 0, () => { if (stale()) return; sidebarAnimating[side] = false; finish() }, stale)
       } else finish()
     } else {
-      // 展开:还原暂存内容(pinSides 跳过本侧),把该侧宽度从 ~0 补间到黄金分割目标宽。
-      // stash 与 defaults 都为空(如无该侧默认的自定义 Space)→ 开占位:否则不建任何 panel,
-      // syncPanelState 又按「无 panel」把 visible 复位,toggle 变成永远空转的死键。
+      // 展开:还原暂存内容(pinSides 跳过本侧),把该区尺寸从 ~0 补间到目标值。
+      // stash 与 defaults 都为空(如无该侧默认的自定义 Space、或底部这种恒空默认)→ 开占位:
+      // 否则不建任何 panel,syncPanelState 又按「无 panel」把 visible 复位,toggle 变成永远空转的死键。
       // ⚠️**收起期间该视图可能已被反注册**(关掉内置插件 / 禁用外置插件 / 换产品档案)——
       // 侧栏 panel 的 component 就是视图名,Dockview 的表里没有它就当场抛
       // (「Only React.memo… are accepted as components」,一次未捕获异常打断整次展开)。
@@ -699,12 +866,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const restored = live.length ? live : defaults
       const stashed: Stashed[] = restored.length ? restored : [{ type: 'sidebar-empty', params: {} }]
       set({ [visKey]: true } as Partial<WorkspaceState>)
+      // ⚠️必须在 openView **之前**置位:新组按 Dockview 默认尺寸(~50%)诞生,这一帧的尺寸既不能被
+      // settleBottomHeight/pinSides 当真、也不能被 captureSideWidths 当成用户拖出来的记下。
       sidebarAnimating[side] = true
-      // ⚠️必须在 openView **之前**锁另一侧:新组按 Dockview 默认宽(~50%)诞生、紧接着被 setSize(1)
-      // 压回去,这一进一出的宽都是按比例摊给所有组的 → 对侧先被顶宽,补间收尾 pinSides 再把它弹回,
-      // 就是用户看到的「左栏抽闪一下」。锁死后这些空白只能由中间主区吞吐。
-      const release = lockOtherSide(api, side)
+      // ⚠️同样必须在 openView **之前**锁对侧:新组按 ~50% 诞生、紧接着被 setSize(1) 压回去,这一进一出
+      // 都是按比例摊给所有组的 → 对侧先被顶宽,补间收尾 pinSides 再把它弹回,就是「左栏抽闪一下」。
+      const release = lockNeighbour()
+      const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂
       stashed.forEach((v) => get().openView(v.type, v.params, side))
+      restoreOpen()
       // 还原折叠前的活动 tab(openView 会把最后打开的设为活动,故此处显式拉回用户上次所在的视图)。
       // 无记忆(从没展开过 / 默认折叠的 Space 首次展开)→ 取**首项**:openView 顺序落到最后一个纯属副作用,
       // 「侧栏默认第一位 = 默认视图」才是配方作者(sidebarDefaults / space.json)写下的意思。
@@ -715,14 +885,25 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       }
       const group = (panelsAt(api, side)[0] as { group?: SizableGroup } | undefined)?.group
       const settle = (): void => {
+        if (stale()) return // 同 finish:后一次点击接管后,本轮不再碰 animating/约束/布局
         sidebarAnimating[side] = false
-        pinSides(api)
+        settleSizes()
         setTimeout(release, 180) // 布局沉降后释放,恢复可手动拖宽
         scheduleWorkspaceSave()
       }
       if (group) {
-        try { group.api.setSize({ width: 1 }) } catch { /* ignore */ } // 起点贴 0,免首帧闪到默认宽
-        tweenGroupWidth(group, 1, sideTargetWidth(api, side), settle)
+        // ⚠️必须先放开最小尺寸再起步:Dockview 组自带 100px 的默认最小宽/高,`setSize(1)` 会被**钳在 100**
+        // → 补间还没开始,相邻的主区就已经被一帧挤掉 100px,然后才从 100 平滑到目标值。用户实报
+        // 「底部面板出来的时候上面的面板会闪一下,很奇怪,不连贯」就是这一下(实测轨迹首帧 bottom 直接 =100、
+        // main 900→800,补间的前 1/3 全被钳平吃掉)。收起分支早就放开了 min,展开这侧一直漏掉。
+        try { group.api.setConstraints?.(vert ? { minimumHeight: 0 } : { minimumWidth: 0 }) } catch { /* 跨版本兜底 */ }
+        setSize(group, 1) // 起点贴 0,免首帧闪到默认尺寸
+        tweenGroupSize(group, sizeKey, 1, targetSize(), () => {
+          if (stale()) return // 新一轮已接管这个组的尺寸,别把 min 还回去打断它
+          // 补间结束再把最小尺寸还回去:0 会让用户手动拖 sash 时把这一区拖到彻底消失。
+          try { group.api.setConstraints?.(vert ? { minimumHeight: DV_GROUP_MIN } : { minimumWidth: DV_GROUP_MIN }) } catch { /* 跨版本兜底 */ }
+          settle()
+        }, stale)
       } else settle()
     }
   },
@@ -748,7 +929,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       set({
         leftVisible: blob.sidebars.left.visible,
         rightVisible: blob.sidebars.right.visible,
-        stash: { left: blob.sidebars.left.stash, right: blob.sidebars.right.stash },
+        // bottom 是后加的可选字段:老布局没有它 = 底部收起(见 layoutPersist 的信封注释)。
+        bottomVisible: blob.sidebars.bottom?.visible ?? false,
+        stash: { left: blob.sidebars.left.stash, right: blob.sidebars.right.stash, bottom: blob.sidebars.bottom?.stash ?? [] },
       })
       pinSides(api)
       return true
@@ -801,7 +984,7 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
       if ((params.__loc ?? 'main') === 'main') p.contentComponent = '__frame'
     }
   }
-  for (const side of ['left', 'right'] as const) {
+  for (const side of ['left', 'right', 'bottom'] as const) {
     const sb = layout.sidebars?.[side]
     if (!sb) continue
     sb.stash = sb.stash.map((v) => (RETIRED_VIEW_MAP[v.type] ? { ...v, type: RETIRED_VIEW_MAP[v.type] } : v))
@@ -819,7 +1002,12 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
     useWorkspace.setState({
       leftVisible: layout.sidebars.left.visible,
       rightVisible: layout.sidebars.right.visible,
-      stash: { left: layout.sidebars.left.stash.filter(known), right: layout.sidebars.right.stash.filter(known) },
+      bottomVisible: layout.sidebars.bottom?.visible ?? false,
+      stash: {
+        left: layout.sidebars.left.stash.filter(known),
+        right: layout.sidebars.right.stash.filter(known),
+        bottom: (layout.sidebars.bottom?.stash ?? []).filter(known),
+      },
     })
     const focused = api.activePanel && panelType(api.activePanel) === 'chat'
       ? api.activePanel

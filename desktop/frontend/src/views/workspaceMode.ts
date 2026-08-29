@@ -1,4 +1,6 @@
 /** 统一「工作区」视图的模式模型(纯函数,无 React/amadeus 依赖 → node 环境可测)。 */
+// 仅类型导入(编译期擦除,不引入任何运行时依赖 → 上面那条「node 环境可测」不受影响)。
+import type { ViewLocation } from '@lcl/engine'
 export type WorkspaceMode = 'sessions' | 'files' | 'notes'
 
 /** 扩展模式 = 内置三档 + 插件列表源(`plugin:<pid>:<srcId>`,View 基座 P2)。 */
@@ -18,7 +20,8 @@ const NOTE_DOC_VIEWS = new Set(['amadeus-editor', 'amadeus-drawing', 'dashboard'
  * 故此前「维持上一模式」的 prev 在右栏永远等于 files —— 这里直接写死,行为不变。
  */
 export function autoWorkspaceMode(
-  loc: 'left' | 'right' | 'main',
+  /** 'bottom' 与 left/main 同档:下面「右栏恒 files」那几条是**参考/附件栏**专属规则,底部面板不适用。 */
+  loc: ViewLocation,
   mainType: string | null,
   spaceDefault: WorkspaceMode = 'sessions',
   /** 主视图注册时声明的 workspaceSource(ViewDefinition.workspaceSource,调用方查注册表后传入;

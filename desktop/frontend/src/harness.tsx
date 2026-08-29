@@ -465,6 +465,10 @@ function RibbonHarness() {
 //    Dockview 摘下来重挂(= 用户报的「像重新加载闪一遍」)、主区宽度有没有在一帧里暴缩再弹回。
 //    window.__dock.mounts 计主区视图的挂载次数;__dock.mainW() 读主区组当前宽。见 scripts/main-remount.check.cjs。
 function DockHarness() {
+  // ⚠️必须把 --sb-h 也立起来(产品里由 DesktopStatusBar mount 时设)。engine.css 里「状态栏让位」那套
+  //   padding 全挂在这个变量上 —— 台架不设它就恒为 0,那套 CSS 在仪器里**整片不生效**:
+  //   2026-08-29 用户实报「收起时还是会闪一下」,而 check:bottompanel 当时 9/9 全绿,漏就漏在这里。
+  useEffect(() => { document.documentElement.style.setProperty('--sb-h', '18px') }, [])
   return (
     <div className="am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0, display: 'flex' }}>
       <WorkspaceHost dark={false} soft={false} buildDefault={() => useWorkspace.getState().openView('mainv', {}, 'main')} />
@@ -483,11 +487,42 @@ if (new URLSearchParams(location.search).has('dock')) {
   const probe = {
     mounts: {} as Record<string, number>,
     mainW: () => 0,
-    toggle: (side: 'left' | 'right') => useWorkspace.getState().toggleSidebar(side),
+    toggle: (side: 'left' | 'right' | 'bottom') => useWorkspace.getState().toggleSidebar(side),
+    // 底部面板(scripts/bottom-panel.check.cjs):量的是**高**,且要能读到「主区那一列」的宽 ——
+    // 底部只该落在主区下方,不能横跨左右栏,这条只有真 Dockview 的几何能证。
+    bottomH: (): number => {
+      const p = useWorkspace.getState().api?.panels.find((x) => ((x.params ?? {}) as { __loc?: string }).__loc === 'bottom')
+      return (p as unknown as { group?: { api?: { height?: number } } } | undefined)?.group?.api?.height ?? 0
+    },
+    rectOf: (loc: string): { x: number; y: number; w: number; h: number } | null => {
+      const p = useWorkspace.getState().api?.panels.find((x) => ((x.params ?? {}) as { __loc?: string }).__loc === loc)
+      const el = (p as unknown as { group?: { element?: HTMLElement } } | undefined)?.group?.element
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
+    },
+    // 开合状态自证:panel 实况 vs store 意图态是否一致(折叠钮亮不亮看的是后者)。
+    vis: (): { bottomVisible: boolean; bottomPanels: number } => ({
+      bottomVisible: useWorkspace.getState().bottomVisible,
+      bottomPanels: (useWorkspace.getState().api?.panels ?? []).filter((p) => ((p.params ?? {}) as { __loc?: string }).__loc === 'bottom').length,
+    }),
+    // 主区纸卡的底边 + 其外框的 padding-bottom:「状态栏让位」那套 CSS 的观测点。
+    // 收起是 200ms 补间,而让位是随 panel 增删翻转的**阶跃** —— 两者不同相位就会在收尾那一帧跳一下。
+    cardBottom: (): number => {
+      const g = [...document.querySelectorAll('.dv-groupview')].find((x) => x.querySelector('.wb-view--main'))
+      const c = g?.querySelector('.dv-content-container > .dv-react-part')
+      return c ? Math.round(c.getBoundingClientRect().bottom) : 0
+    },
+    mainPadBottom: (): string => {
+      const g = [...document.querySelectorAll('.dv-groupview')].find((x) => x.querySelector('.wb-view--main'))
+      const cc = g?.querySelector('.dv-content-container')
+      return cc ? getComputedStyle(cc).paddingBottom : '?'
+    },
+    locs: (): string[] => (useWorkspace.getState().api?.panels ?? []).map((p) => String(((p.params ?? {}) as { __loc?: string }).__loc ?? 'main')),
     // 多标签契约(scripts/chat-multitab.check.cjs):singleton 视图碰上显式 newTab 必须让路。
     // 用 singlev 这个只在仪器里注册的单例视图验引擎本身,不必拖上真 chat 的后端依赖。
-    open: (type: string, params: Record<string, unknown> = {}, newTab = false): string | null =>
-      useWorkspace.getState().openView(type, params, 'main', newTab ? { newTab: true } : undefined)?.id ?? null,
+    open: (type: string, params: Record<string, unknown> = {}, newTab = false, loc: 'main' | 'left' | 'right' | 'bottom' = 'main'): string | null =>
+      useWorkspace.getState().openView(type, params, loc, newTab ? { newTab: true } : undefined)?.id ?? null,
     panels: (): Array<{ id: string; type?: string; params: Record<string, unknown> }> =>
       (useWorkspace.getState().api?.panels ?? []).map((p) => {
         const params = (p.params ?? {}) as Record<string, unknown>
@@ -543,11 +578,15 @@ if (new URLSearchParams(location.search).has('dock')) {
   }
   // 单例视图替身(真 chat 要后端才有会话,进不了这个仪器)——验的是 openView 里 singleton × newTab 那条闸。
   registerView({ type: 'singlev', displayName: 'single', icon: Square, singleton: true, factory: () => <Body tag="single" rows={lines(10, 5)} /> })
+  // 空占位替身:产品里由 bootstrapEngine 注册,仪器不跑那条引导 —— 但 toggleSidebar 的展开路径在
+  // stash/defaults 都空时必开 'sidebar-empty'(否则 toggle 成死键),没注册就当场抛「Only React.memo…」。
+  // 底部面板默认就是空的,这条是它的必经之路。
+  registerView({ type: 'sidebar-empty', displayName: 'empty', icon: Square, closable: false, factory: () => <Body tag="empty" rows={[]} /> })
   // 导航史用的「页面」替身:参数 label 即当前页,后退/前进改的就是它(断言直接读 DOM,不信 store 自证)。
   registerView({ type: 'navv', displayName: 'nav', icon: Square, factory: ({ params }) => (
     <div className="navv" data-label={String(params.label ?? '')} style={{ padding: 12 }}>{String(params.label ?? '')}</div>
   ) })
-  useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'sidev', params: {} }], right: [{ type: 'sidev', params: {} }] } })
+  useWorkspace.setState({ sidebarDefaults: { left: [{ type: 'sidev', params: {} }], right: [{ type: 'sidev', params: {} }], bottom: [] } })
   probe.mainW = () => {
     const p = useWorkspace.getState().api?.panels.find((x) => ((x.params ?? {}) as { __loc?: string }).__loc === 'main')
     return (p as unknown as { group?: { api?: { width?: number } } } | undefined)?.group?.api?.width ?? 0

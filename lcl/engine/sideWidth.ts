@@ -28,3 +28,15 @@ export function computeSideWidth(containerWidth: number, loc: 'left' | 'right', 
   const hardMax = Math.max(RESIZABLE_MIN, Math.min(680, Math.round(containerWidth * 0.6)))
   return Math.min(hardMax, Math.max(RESIZABLE_MIN, target))
 }
+
+/** 底部面板高度下限(= shouldRecordSideWidth 的 measured<120 门槛,两者必须一致:
+ *  低于它的高度一律当「收起补间的中间值」,不记忆)。 */
+export const BOTTOM_MIN_HEIGHT = 120
+
+/** 底部面板目标高。底部**恒 free**(不进 pinSides 的黄金分割钉宽体系,那套是横向的):
+ *  只有一条规则 —— 记得住、拖得动。无记忆时取容器高的 32%(≈ VS Code 面板起手高),钳 [120, 60%]。 */
+export function computeBottomHeight(containerHeight: number, saved: number | null): number {
+  const max = Math.max(BOTTOM_MIN_HEIGHT, Math.round(containerHeight * 0.6))
+  const target = typeof saved === 'number' ? saved : Math.round(containerHeight * 0.32)
+  return Math.min(max, Math.max(BOTTOM_MIN_HEIGHT, target))
+}

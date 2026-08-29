@@ -10,7 +10,7 @@
  * 布局序列化 / 命名布局 / Dockview api 在移动端退化为 no-op / 空(见各方法注释)。
  */
 import { create } from 'zustand'
-import type { Leaf, ViewLocation } from './types'
+import type { Leaf, ViewLocation, SidebarDefaults } from './types'
 import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
 import type { PersistedPanel } from './layoutPersist'
@@ -180,7 +180,7 @@ interface WS {
 
   setApi(api: unknown): void
   setDefaultBuilder(fn: () => void): void
-  setSidebarDefaults(d: Record<'left' | 'right', PersistedPanel[]>): void
+  setSidebarDefaults(d: SidebarDefaults): void
   setSideProfile(key: string, free: { left?: boolean; right?: boolean }, scale?: { left?: number; right?: number }): void
   initializeSidebar(side: 'left' | 'right', visible: boolean): void
   registerChatSurface(id: string, el: HTMLDivElement | null): void

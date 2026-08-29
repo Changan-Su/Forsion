@@ -15,6 +15,13 @@ export type ViewLocation = 'main' | 'left' | 'right' | 'bottom'
 /** 可折叠区(= 除主区外的三个「有折叠钮 + stash + 尺寸记忆」的区)。左右按宽、bottom 按高。 */
 export type DockSide = 'left' | 'right' | 'bottom'
 
+/** 各区的默认内容。左右必填;bottom 可选(缺省 = 空停靠区)。 */
+export interface SidebarDefaults {
+  left: PersistedPanel[]
+  right: PersistedPanel[]
+  bottom?: PersistedPanel[]
+}
+
 /** 一个 Dockview panel 的句柄(≈ Obsidian WorkspaceLeaf)。 */
 export interface Leaf {
   readonly id: string
@@ -135,8 +142,10 @@ export interface SpaceDefinition {
   icon?: LucideIcon
   /** 构建该 Space 的默认布局(开它的几个视图)。无已存命名布局时调用。 */
   build(): void
-  /** 该 Space 的侧栏默认内容;每次切换都重设(applyNamed 不会跑 build)。 */
-  sidebarDefaults: Record<'left' | 'right', PersistedPanel[]>
+  /** 该 Space 的侧栏默认内容;每次切换都重设(applyNamed 不会跑 build)。
+   *  `bottom` 可选:底部面板默认是**空停靠区**,只有明确要预置内容的 Space 才写(如 Tangu 预置终端)。
+   *  写了也不等于展开 —— 展开与否由 build() 里的 initializeSidebar('bottom', …) 决定,缺省折叠。 */
+  sidebarDefaults: SidebarDefaults
   /** 主区关掉最后一个 view 时填充的「新页面」(不留空白)。缺省 = 打开 launcher 启动器。
    *  Amadeus 等无启动器的 Space 用它指向自己的主视图(如空白编辑器)。 */
   newPage?(): void

@@ -32,12 +32,12 @@ const PluginViewHost: React.FC<{ def: ViewContribution }> = ({ def }) => {
   return <div ref={ref} style={{ height: '100%', overflow: 'auto' }} />
 }
 
-/** 关闭工作台里该类型的全部实例(主区 + 两侧),为反注册清场。 */
+/** 关闭工作台里该类型的全部实例,为反注册清场。
+ *  ⚠️改用引擎的 closeViewsOfType(以 api.panels 为准):原来手写 `mainTabs + left + right` 三处枚举,
+ *  加了底部面板之后会漏掉停在 bottom 的实例 —— 插件被禁用后它的 cleanup 不跑、UI 继续活着,而且这个
+ *  已反注册的类型留在持久化布局里,下次启动 layoutViewsAllRegistered 判定失败 → **整份布局丢回默认**。 */
 function closeLeafsOfType(type: string): void {
-  const ws = useWorkspace.getState()
-  for (const tab of ws.mainTabs) if (tab.type === type) ws.closeLeaf(tab.id)
-  ws.closeSideView('left', type)
-  ws.closeSideView('right', type)
+  useWorkspace.getState().closeViewsOfType(type)
 }
 
 let installed = false

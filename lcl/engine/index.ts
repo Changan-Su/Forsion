@@ -13,6 +13,7 @@ export type {
   StatusItem,
   PluginContext,
   SpaceDefinition,
+  SidebarDefaults,
 } from './types'
 export { label } from './types'
 
