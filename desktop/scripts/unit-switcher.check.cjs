@@ -5,10 +5,13 @@
  *
  * 判据:
  *   1 head 区出现胶囊(折叠钮之后,不进上/下两区的拖拽序)
- *   2 展开态显示当前面(本地/云端,跟 vaultSide);点开列表 = 本地/云端/两台设备/「通过地址连接…」,
+ *   2 展开态显示当前面(本地/云端,跟 vaultSide);点开列表 = 本地/云端/设备行/「通过地址连接…」,
  *     离线设备灰显,emoji 图标生效,当前项带勾选
- *   3 LAN 优先自动择路(v2.1):探针通的设备行显「局域网直连」描述,点击打开 lanUrl;
- *     右键菜单三项 —— 改图标/「经云端中转打开」(→ 隧道页 …/proxy/ 尾斜杠)/「在系统浏览器打开」(→ /open 引导页)
+ *   3 一台设备按通路拆行(直连/P2P/中转):直连行仅探针通了才出现,P2P 行 = 在线且本端有桥,
+ *     中转行恒在(离线灰显);P2P 打洞失败**出声回落中转**;点行 = **整个主区切过去**
+ *     (远程面 .unitrs 携 webview 指向该通路地址,胶囊改显设备名,点中的那行带勾;选「本地」切回,
+ *     远程面 visibility 隐藏保活)。右键菜单两项 —— 改图标/「在系统浏览器打开」(→ openExternal
+ *     /open 引导页,唯一走外链的路)
  *   4 菜单脚部:开「允许其他设备连接本机」→ 显示本机直连地址 + 已配对设备可回收
  *   5 折叠态只显图标;菜单整体在视口内
  * 顺带产两张真实截图(交付纪律):unit-switcher-expanded.png / unit-switcher-collapsed.png
@@ -86,16 +89,21 @@ async function main() {
 
     await page.click('.unitsw-pill')
     await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
-    await page.waitForFunction(() => document.querySelectorAll('.unitsw-menu .unitsw-row').length >= 5, null, { timeout: 5000 })
+    // 探针桩异步回来才长出「MacBook Air 直连」行:等到 7 行(直连/P2P/中转三通路)再断言构成。
+    await page.waitForFunction(() => document.querySelectorAll('.unitsw-menu .unitsw-row').length >= 7, null, { timeout: 5000 })
     const rows = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).map((r) => ({
       title: r.querySelector('.unitsw-title')?.textContent?.trim() ?? '',
       off: r.classList.contains('off'),
       emoji: r.querySelector('.unitsw-emoji')?.textContent ?? '',
       on: r.classList.contains('on'),
     })))
-    check('列表 = 本地/云端/两台设备/通过地址连接', rows.length === 5 && rows[0].title === '本地' && rows[1].title === '云端' && rows[4].title.includes('地址'), JSON.stringify(rows.map((r) => r.title)))
+    check('列表 = 本地/云端/设备按通路拆行(直连/P2P/中转)/通过地址连接',
+      rows.length === 7 && rows[0].title === '本地' && rows[1].title === '云端'
+        && rows[2].title === 'MacBook Air直连' && rows[3].title === 'MacBook AirP2P' && rows[4].title === 'MacBook Air中转'
+        && rows[5].title.startsWith('书房 PC中转') && rows[6].title.includes('地址'),
+      JSON.stringify(rows.map((r) => r.title)))
     check('当前项带勾选态(本地)', !!rows[0]?.on)
-    check('离线设备灰显', rows.some((r) => r.title.startsWith('书房 PC') && r.off))
+    check('离线设备只剩中转行且灰显(无直连/P2P 行)', rows[5].off && !rows.some((r) => r.title === '书房 PC直连' || r.title === '书房 PCP2P'))
     check('设备自定义 emoji 生效', rows.some((r) => r.emoji === '🦊'))
 
     const geo = await page.evaluate(() => {
@@ -122,51 +130,89 @@ async function main() {
     await page.waitForTimeout(350) // 开关 background/transform 有 150ms 过渡,别把起始帧截进交付图
     await page.screenshot({ path: path.join(SHOT_DIR, 'unit-switcher-expanded.png') })
 
-    // LAN 优先自动择路:探针桩对 MacBook Air 的 lanUrl 回 meta → 行描述换「局域网直连」
-    await page.waitForFunction(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row'))
-      .some((r) => r.textContent.includes('MacBook Air') && r.textContent.includes('局域网')), null, { timeout: 5000 })
-    check('LAN 探通设备行显「局域网直连」描述', true)
+    // 探针通了直连行才在(上面 6 行等待已覆盖);描述文案带「局域网」
+    const lanDesc = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row'))
+      .some((r) => r.textContent.includes('MacBook Air直连') && r.textContent.includes('局域网')))
+    check('直连行显局域网描述', lanDesc)
 
-    // 设备行 = 打开对方页面(openBrowser 无浏览器视图 → openExternal 回落,stub 记账):LAN 通 → 直连地址
+    // 直连行 = 整个主区切过去:远程面 .unitrs 携 webview 指向直连地址,不开浏览器标签/外链
     await page.evaluate(() => {
-      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air'))
+      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air直连'))
       row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 5000 })
-    const opened = await page.evaluate(() => window.__unitOpened)
-    check('点 LAN 可达设备 → 直连地址(尾斜杠)', opened.length === 1 && opened[0] === 'http://192.168.1.20:8791/', JSON.stringify(opened))
+    await page.waitForSelector('.unitrs', { timeout: 5000 })
+    const surf = await page.evaluate(() => ({
+      src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
+      visible: getComputedStyle(document.querySelector('.unitrs')).visibility === 'visible',
+      external: window.__unitOpened.length,
+      pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '',
+    }))
+    check('点直连行 → 远程面指向直连地址(尾斜杠),不开外链', surf.visible && surf.src === 'http://192.168.1.20:8791/' && surf.external === 0, JSON.stringify(surf))
+    check('远程面激活时胶囊显示设备名(回来的路)', surf.pill === 'MacBook Air', surf.pill)
+    // 交付截图:远程面激活态(harness 里 webview 不渲染内容,看的是覆盖几何 + 胶囊改显设备)
+    await page.screenshot({ path: path.join(SHOT_DIR, 'unit-remote-surface.png') })
 
-    // 右键菜单:改图标 / 经云端中转(逃生口 → 隧道页) / 在系统浏览器打开(/open 引导页)
+    // 勾选态落在点中的那条通路行;同设备另一条通路行不带勾
     await page.click('.unitsw-pill')
     await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    const mbaOn = await page.evaluate(() => {
+      const find = (t) => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes(t))
+      return { lanOn: find('MacBook Air直连').classList.contains('on'), tunnelOn: find('MacBook Air中转').classList.contains('on'), localOn: document.querySelector('.unitsw-menu .unitsw-row').classList.contains('on') }
+    })
+    check('勾选态只落在点中的通路行(直连√ 中转× 本地×)', mbaOn.lanOn && !mbaOn.tunnelOn && !mbaOn.localOn, JSON.stringify(mbaOn))
     const rightClickMba = () => page.evaluate(() => {
       const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air'))
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 300, clientY: 200 }))
     })
-    await rightClickMba()
-    await page.waitForSelector('.unitsw-ctx', { timeout: 5000 })
-    const ctxTitles = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-title')).map((n) => n.textContent))
-    check('右键菜单三项(图标/中转/浏览器)', ctxTitles.length === 3 && ctxTitles.some((t) => t.includes('中转')) && ctxTitles.some((t) => t.includes('浏览器')), JSON.stringify(ctxTitles))
+    // P2P 行:第一次点(桩)打洞失败 → **出声回落中转**(远程面落在隧道页,勾选态归中转行)
     await page.evaluate(() => {
-      const item = Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-row')).find((r) => r.textContent.includes('中转'))
-      item.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook AirP2P'))
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    await page.waitForFunction(() => window.__unitOpened.length === 2, null, { timeout: 5000 })
-    const viaTunnel = await page.evaluate(() => window.__unitOpened[1])
-    check('「经云端中转」逃生口 → 隧道页(尾斜杠)', viaTunnel === 'https://cloud.test/api/units/u-mba/proxy/', viaTunnel)
+    await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'https://cloud.test/api/units/u-mba/proxy/', null, { timeout: 5000 })
+    check('P2P 打洞失败 → 回落中转(远程面=隧道页)', true)
+    // 第二次点:桩放行 → 远程面切到本机 P2P 代理地址,勾选态落在 P2P 行
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook AirP2P'))
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'http://127.0.0.1:47123/', null, { timeout: 5000 })
+    check('P2P 打洞成功 → 远程面=本机代理地址', true)
+    await page.click('.unitsw-pill')
+    await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
+    const p2pOn = await page.evaluate(() => {
+      const find = (label) => Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes(label))
+      return { p2p: find('MacBook AirP2P').classList.contains('on'), lan: find('MacBook Air直连').classList.contains('on') }
+    })
+    check('P2P 连上后勾选态落在 P2P 行', p2pOn.p2p && !p2pOn.lan, JSON.stringify(p2pOn))
+
+    // 中转是一等行:点「MacBook Air 中转」→ 远程面换隧道页(尾斜杠)
+    await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll('.unitsw-menu .unitsw-row')).find((r) => r.textContent.includes('MacBook Air中转'))
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => document.querySelector('.unitrs-web')?.getAttribute('src') === 'https://cloud.test/api/units/u-mba/proxy/', null, { timeout: 5000 })
+    check('点中转行 → 远程面换隧道页(尾斜杠)', true)
+
+    // 右键菜单两项:改图标 / 在系统浏览器打开(/open 引导页,唯一走外链的路)
     await page.click('.unitsw-pill')
     await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
     await rightClickMba()
     await page.waitForSelector('.unitsw-ctx', { timeout: 5000 })
+    const ctxTitles = await page.evaluate(() => Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-title')).map((n) => n.textContent))
+    check('右键菜单两项(图标/浏览器,中转已升一等行)', ctxTitles.length === 2 && ctxTitles.some((t) => t.includes('图标')) && ctxTitles.some((t) => t.includes('浏览器')), JSON.stringify(ctxTitles))
     await page.evaluate(() => {
       const item = Array.from(document.querySelectorAll('.unitsw-ctx .unitsw-row')).find((r) => r.textContent.includes('浏览器'))
       item.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    await page.waitForFunction(() => window.__unitOpened.length === 3, null, { timeout: 5000 })
-    const viaBrowser = await page.evaluate(() => window.__unitOpened[2])
-    check('「在系统浏览器打开」→ /open 引导页', viaBrowser === 'https://cloud.test/api/units/u-mba/open', viaBrowser)
+    await page.waitForFunction(() => window.__unitOpened.length === 1, null, { timeout: 5000 })
+    const viaBrowser = await page.evaluate(() => window.__unitOpened[0])
+    check('「在系统浏览器打开」→ /open 引导页(唯一走外链的路)', viaBrowser === 'https://cloud.test/api/units/u-mba/open', viaBrowser)
 
-    // 离线设备点了不开页
+    // 离线设备点了不切面
     await page.click('.unitsw-pill')
     await page.waitForSelector('.unitsw-menu', { timeout: 5000 })
     await page.evaluate(() => {
@@ -174,10 +220,23 @@ async function main() {
       row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await page.waitForTimeout(150)
-    const openedAfterOffline = await page.evaluate(() => window.__unitOpened.length)
-    check('离线设备不打开页面(就地提示)', openedAfterOffline === 3)
-    await page.keyboard.press('Escape')
-    await page.evaluate(() => { document.querySelector('.unitsw-backdrop')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
+    const afterOffline = await page.evaluate(() => ({
+      src: document.querySelector('.unitrs-web')?.getAttribute('src') ?? '',
+      external: window.__unitOpened.length,
+    }))
+    check('离线设备不切面(就地提示,远程面目标不变)', afterOffline.src === 'https://cloud.test/api/units/u-mba/proxy/' && afterOffline.external === 1, JSON.stringify(afterOffline))
+
+    // 选「本地」= 切回本机:远程面 visibility 隐藏(webview 保活),胶囊回「本地」
+    await page.evaluate(() => {
+      document.querySelector('.unitsw-menu .unitsw-row').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await page.waitForFunction(() => !document.querySelector('.unitsw-menu'), null, { timeout: 5000 })
+    const backLocal = await page.evaluate(() => ({
+      hidden: getComputedStyle(document.querySelector('.unitrs')).visibility === 'hidden',
+      alive: !!document.querySelector('.unitrs-web'), // 保活:webview 还挂着,切回去免重载
+      pill: document.querySelector('.unitsw-pill .unitsw-name')?.textContent?.trim() ?? '',
+    }))
+    check('选「本地」切回:远程面隐藏但保活,胶囊回「本地」', backLocal.hidden && backLocal.alive && backLocal.pill === '本地', JSON.stringify(backLocal))
 
     // 折叠态只显图标
     await page.evaluate(() => { window.__rb.setState({ expanded: false }) })

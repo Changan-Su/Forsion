@@ -51,7 +51,7 @@ interface Boot {
   close: () => void
 }
 
-async function boot(distDir: string | null = null, vaultRoot?: string): Promise<Boot> {
+async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer?: (sdp: string) => Promise<string>): Promise<Boot> {
   const engine = await fakeEngine()
   const paired: PairedDevice[] = []
   let approveFn: (ok: boolean) => void = () => {}
@@ -87,6 +87,7 @@ async function boot(distDir: string | null = null, vaultRoot?: string): Promise<
     readHostStat: async (p: string) => (p === '/ws/ok.md' ? { isDir: false, mtimeMs: 1, birthtimeMs: null } : null),
     writeConfig: async (patch: Record<string, unknown>) => ({ agentDeskEnabled: patch.agentDeskEnabled ?? true, homeDir: '/home/demo' }),
     meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9' },
+    ...(p2pAnswer ? { p2pAnswer } : {}),
     webDistDir: () => distDir,
     vault: () => vault,
     log: () => {},
@@ -118,6 +119,34 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30))
 let lastHostfileMax: number | undefined
 
 describe('unitWeb', () => {
+  it('P2P 信令三态:未鉴权 401 / 无 dep 501 / 有 dep 经内部密钥出 answer', async () => {
+    const plain = await boot()
+    try {
+      // 未鉴权
+      expect((await fetch(`${plain.base}/unit/p2p/offer`, { method: 'POST', body: JSON.stringify({ sdp: 'x' }) })).status).toBe(401)
+      // 已配对但本端没有 p2pAnswer dep → 501(旧版本/不支持,A 端据此回落中转)
+      const tok = await pairUp(plain)
+      const r501 = await fetch(`${plain.base}/unit/p2p/offer`, { method: 'POST', headers: { Authorization: `Bearer ${tok}` }, body: JSON.stringify({ sdp: 'x' }) })
+      expect(r501.status).toBe(501)
+      expect(((await r501.json()) as { code?: string }).code).toBe('P2P_UNSUPPORTED')
+    } finally { plain.close() }
+    const seen: string[] = []
+    const b = await boot(null, undefined, async (sdp) => { seen.push(sdp); return `answer-for:${sdp}` })
+    try {
+      // 隧道来路(loopback + 内部密钥)= server 已验 owner,无需配对
+      const r = await fetch(`${b.base}/unit/p2p/offer`, {
+        method: 'POST',
+        headers: { 'x-unit-internal': b.handle.internalSecret, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sdp: 'OFFER-SDP' }),
+      })
+      expect(r.status).toBe(200)
+      expect(((await r.json()) as { sdp: string }).sdp).toBe('answer-for:OFFER-SDP')
+      expect(seen).toEqual(['OFFER-SDP'])
+      // 缺 sdp → 400
+      expect((await fetch(`${b.base}/unit/p2p/offer`, { method: 'POST', headers: { 'x-unit-internal': b.handle.internalSecret }, body: '{}' })).status).toBe(400)
+    } finally { b.close() }
+  })
+
   it('公开面:meta 可读;缺构建出提示页', async () => {
     const b = await boot()
     try {

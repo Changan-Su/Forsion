@@ -74,6 +74,9 @@ export interface UnitWebDeps {
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
+  /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
+   *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
+  p2pAnswer?: (offerSdp: string) => Promise<string>
   /** web 构建目录(TANGU_UNIT_WEB_DIST / 捆包路径);null = 出「未捆构建」提示页。 */
   webDistDir: () => string | null
   /** 本地 vault 面(registerAmadeusIpc 返回;懒取 —— unitWeb 可能先于它起)。null = /vault/* 回 503。 */
@@ -324,6 +327,22 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (path === '/unit/whoami' && req.method === 'GET') {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       json(res, 200, { ok: true })
+      return
+    }
+    // P2P 信令(方案 §12):A 经隧道/配对面送 offer,这端出 answer。**信任裁决 = T2 权限等价体**:
+    // 同账号(隧道 owner 已验)或已配对设备即许,无 B 侧确认框——T1 的 6 位码是给无账号 LAN 配对的,
+    // P2P 的身份已由信令来路背书;连上之后的能力面与该来路完全一致(同一个 unitWeb)。
+    if (path === '/unit/p2p/offer' && req.method === 'POST') {
+      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      if (!deps.p2pAnswer) { json(res, 501, { detail: '本端不支持 P2P 直连', code: 'P2P_UNSUPPORTED' }); return }
+      let offer = ''
+      try { offer = String(JSON.parse(await readBody(req))?.sdp || '') } catch { /* 落空走下面的 400 */ }
+      if (!offer) { json(res, 400, { detail: '缺 offer SDP' }); return }
+      try {
+        json(res, 200, { sdp: await deps.p2pAnswer(offer) })
+      } catch (e: any) {
+        json(res, 500, { detail: `P2P 应答失败: ${e?.message || e}` })
+      }
       return
     }
     if (path === '/unit/plugins' && req.method === 'GET') {

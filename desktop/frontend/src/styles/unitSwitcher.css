@@ -13,13 +13,14 @@
 .unitsw-backdrop { position: fixed; inset: 0; z-index: 1000; }
 .unitsw-menu {
   position: fixed;
-  min-width: 232px;
-  max-width: 300px;
-  padding: 5px;
+  width: min(var(--menu-select-width, 224px), calc(100vw - 16px));
+  min-width: 0;
+  max-width: none;
+  padding: var(--menu-shell-padding, 4px);
   background: var(--bg-card);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 28px var(--shadow);
+  box-shadow: var(--card-shadow);
   font-family: var(--font-ui);
   display: flex;
   flex-direction: column;
@@ -27,8 +28,15 @@
 }
 .unitsw-row-group { display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow-y: auto; }
 /* 设备行右键小菜单:同一浮层语汇,更窄;行内只有标题一行。 */
-.unitsw-ctx { min-width: 168px; }
-.unitsw-ctx .unitsw-row { padding: 6px 9px; }
+.unitsw-menu.unitsw-ctx {
+  width: max-content;
+  min-width: var(--menu-action-min, 168px);
+  max-width: min(var(--menu-action-max, 184px), calc(100vw - 16px));
+}
+.unitsw-ctx .unitsw-row {
+  min-height: var(--menu-item-min-height, 28px);
+  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
+}
 .unitsw-row {
   display: flex;
   align-items: center;
@@ -50,6 +58,8 @@
 .unitsw-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .unitsw-title { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-off { font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--text-faint); }
+/* 通路徽标(直连/中转):同一台设备拆成两行,靠它一眼分开 —— 弱于设备名、强于「离线」注记。 */
+.unitsw-via { font-style: normal; flex: none; font-size: 10px; font-weight: 500; line-height: 15px; padding: 0 5px; border-radius: 999px; background: var(--overlay-light); color: var(--text-muted); }
 .unitsw-desc { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-check { flex: none; color: var(--accent-ink); }
 .unitsw-empty { padding: 8px 9px; font-size: 11.5px; color: var(--text-muted); }
@@ -89,3 +99,16 @@
 .unitsw-paired-name { flex: 1; min-width: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-paired-x { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
 .unitsw-paired-x:hover { background: var(--danger-light); color: var(--danger); }
+
+/* ── 设备远程面(整个主区切过去)──
+ * portal 进 .shell-work → absolute 盖满 tab 栏/内容/侧栏/状态栏,留下 ribbon 与 mac 标题条。
+ * z-index:sash 覆盖层(200)之上、菜单层(900+)之下 —— 胶囊菜单必须能开在远程面上头。
+ * no-drag:被盖住的 dockview tab 栏是拖窗区,拖窗区无视 z-index(base.css「Electron 拖窗区兜底」),
+ * 不整体 no-drag 的话对方页面顶部一条永远点不到。
+ * 隐藏用 visibility 而非 display:none —— webview 保活(切回来免重载),display:none 会把 guest 掐掉重建。 */
+.unitrs { position: absolute; inset: 0; z-index: 400; display: flex; background: var(--bg); -webkit-app-region: no-drag; }
+.unitrs-hidden { visibility: hidden; pointer-events: none; }
+.unitrs-web { flex: 1; min-width: 0; border: 0; display: flex; }
+/* 无 Shell 形态(harness / 极端兜底):没有 .shell-work 可 portal → fixed 覆盖,贴 ribbon 缺省宽。
+ * 用「父级不是 .shell-work」判形态,portal 正身(.shell-work > .unitrs)不受此条影响。 */
+:not(.shell-work) > .unitrs { position: fixed; left: 44px; }

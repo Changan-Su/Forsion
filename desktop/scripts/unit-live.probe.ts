@@ -141,7 +141,18 @@ async function main(): Promise<void> {
   const ids = (plugins.plugins || []).map((p) => p.id)
   check('unit/plugins 有货', ids.length > 0, `${ids.length} 个: ${ids.slice(0, 6).join(', ')}${ids.length > 6 ? '…' : ''}`)
 
-  // 8 清理:探针笔记进回收站
+  // 8 P2P 面冒烟(方案 §12):路由在不在 + 隐藏窗应答链活不活。垃圾 offer 的**预期**是 500
+  // (accept 走到 WebRTC 栈才对垃圾 SDP 报错=整条应答链活着);501=跑的还是没有 P2P 的旧构建;
+  // 401 不该出现(带着配对令牌)。真打洞要两台实例,这里只冒烟到应答链。
+  const p2p = await fetch(`${base}/unit/p2p/offer`, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sdp: 'v=0\r\n(garbage-probe)' }),
+  })
+  check('unit/p2p/offer 应答链活着(垃圾 offer 预期 500)', p2p.status === 500,
+    p2p.status === 501 ? '501=运行中的实例还是旧构建(无 P2P),重启 dev 再探' : `HTTP ${p2p.status}`)
+
+  // 9 清理:探针笔记进回收站
   try { await rpc('page:delete', [PROBE_NOTE]); console.log('(探针笔记已删,可在废纸篓找到)') } catch { console.log('(清理失败,库里留有 __unit探针__.md,手动删即可)') }
   await reader.cancel().catch(() => {})
   finish()

@@ -19,7 +19,9 @@ export default defineConfig({
   preload: {
     define: DEFINE,
     plugins: [externalizeDepsPlugin()],
-    build: { lib: { entry: resolve('electron/preload.ts') } },
+    // p2pPreload = 扶桑根 P2P 隐藏窗专用(RTCPeerConnection 住 renderer 侧,主进程没有);
+    // 多入口下产物名跟 entry 键走:out/preload/preload.mjs + out/preload/p2pPreload.mjs。
+    build: { lib: { entry: { preload: resolve('electron/preload.ts'), p2pPreload: resolve('electron/p2pPreload.ts') } } },
     resolve: { alias: { '@amadeus-shared': resolve('shared/amadeus') } },
   },
   renderer: {
