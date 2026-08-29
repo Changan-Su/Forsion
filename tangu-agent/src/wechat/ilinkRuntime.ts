@@ -43,7 +43,6 @@ export interface IlinkRuntimeOptions {
 
 const RETRY_DELAY_MS = 2_000;
 const BACKOFF_DELAY_MS = 30_000;
-const SESSION_EXPIRED_PAUSE_MS = 600_000;
 const DEDUP_TTL_MS = 300_000;
 const DEDUP_MAX = 2_000;
 // 出站限速:iLink 对连发有限流(ret:-2),超了会**静默丢**后续消息(微信只显示第一条)。
@@ -266,12 +265,14 @@ export class IlinkRuntime {
   }
 
   private async pollLoop(accountId: string): Promise<void> {
-    const account = this.accounts.get(accountId)!;
-    const client = this.clients.get(accountId)!;
     let timeoutMs = LONG_POLL_TIMEOUT_MS;
     let failures = 0;
     this.log('info', `poll loop started: ${accountId}`);
     while (this.running.has(accountId) && !this.shuttingDown) {
+      // 每轮重取:re-login(addAccount)会换掉 client/token,不重取会一直拿旧凭据轮询。
+      const account = this.accounts.get(accountId);
+      const client = this.clients.get(accountId);
+      if (!account || !client) break;
       try {
         const resp = await client.getUpdates(account.syncBuf, timeoutMs);
         if (typeof resp.longpolling_timeout_ms === 'number' && resp.longpolling_timeout_ms > 0) timeoutMs = resp.longpolling_timeout_ms;
@@ -279,10 +280,15 @@ export class IlinkRuntime {
         const errcode = resp.errcode ?? 0;
         if (ret !== 0 || errcode !== 0) {
           if (isSessionExpired(resp)) {
+            // 轮询期间刚 re-login → 这条过期属于旧凭据,换上新 client 接着轮。
+            if (this.clients.get(accountId) !== client) continue;
             this.opts.onSessionExpired?.(accountId);
-            this.log('error', `[${accountId}] session expired; paused until re-login`);
-            await sleep(SESSION_EXPIRED_PAUSE_MS);
-            continue;
+            this.log('error', `[${accountId}] session expired; polling stopped until re-login`);
+            // 真停掉:睡一会儿再轮只会把同一条 error 刷满日志,而 DB status 早已是 expired 终态,
+            // 重新扫码走 addAccount → start() 会重启本循环。
+            // ponytail: isSessionExpired 含 (-2 + "unknown error") 启发式,误判会停到重扫为止;
+            // 真出现误停再加「确认一次再停」的二次探测。
+            break;
           }
           failures += 1;
           this.log('warn', `[${accountId}] getUpdates ret=${ret} err=${errcode} (${failures})`);

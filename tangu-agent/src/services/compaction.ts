@@ -54,7 +54,7 @@ export function buildCompactTranscript(prevSummaryBody: string, convo: string): 
 // 机械提取 read/modified 两个集合,以固定 XML 块附加在摘要尾部;下次增量压缩先解析上一块
 // 继承、再叠加新窗口——跨任意多次压缩单调累积,清单正确性与摘要模型脱钩(pi 五件套)。
 // 工具名→路径参数映射表:新增文件类工具时在此登记(amadeus 云端笔记工具也走 path)。
-const FILE_READ_TOOLS: Record<string, string> = { read_file: 'path', read_document: 'path', view_image: 'path', amadeus_read_note: 'path' };
+const FILE_READ_TOOLS: Record<string, string> = { read_file: 'path', read_document: 'path', view_image: 'path', view_video: 'path', amadeus_read_note: 'path' };
 const FILE_WRITE_TOOLS: Record<string, string> = { write_file: 'path', edit_file: 'path', multi_edit: 'path', amadeus_write_note: 'path' };
 const FILE_OPS_CAP = 200; // 每清单封顶,防跨多次压缩无界膨胀
 

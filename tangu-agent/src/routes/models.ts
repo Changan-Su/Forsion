@@ -22,6 +22,13 @@ import { modelSupportsVision, resolveModelCapability, supportedThinkingLevels, t
 
 const router = Router();
 
+/**
+ * 托管模型的 supportsVision 标注 → 传给黑名单表的 override。**只有显式 false 算标注**:
+ * `supports_vision` 列默认 TRUE,拿 TRUE 当「admin 说了能看」会把硬编码黑名单整片架空。
+ * 与真正决定要不要走辅助识图的 mainModelSupportsVision(visionService)同一口径。
+ */
+export const visionOverrideOf = (v: unknown): false | undefined => (v === false ? false : undefined);
+
 router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
   try {
     // 本请求所属 app 的 profile(照 /agent/tools 先例;app_id / appId 两种写法都收)。
@@ -41,6 +48,10 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     // modelType 区分大语言模型 / 生图模型 / 语音识别(后端已分类;桌面模型设置据此分区,generate_image 据此选模型,语音输入据此筛 ASR)。
     // supportsVision:能不能直接「看」图。黑名单制(见 modelSupportsVision)——后端/provider 显式
     // 标了就听标注,没标就默认能看。客户端据此提示「本模型没有多模态,已启用图像识别辅助模型」。
+    // ⚠️ 只有 `false` 算标注:托管模型的 supports_vision 列默认就是 TRUE(建模型时没人会去取消勾选),
+    // 拿它当「admin 说了能看」会把硬编码黑名单整片架空 —— 真正决定要不要走辅助识图的
+    // mainModelSupportsVision 本来就只认 false(visionService),这里跟它对齐,否则会出现
+    // 「界面说这模型能看图、引擎其实在走辅助模型」的两套口径(GLM-5.3 这类纯文本模型上必现)。
     // thinkingLevels:该模型真正支持的思考档(能力表 supportedThinkingLevels;H6 思考档可见)。
     // 客户端据此把不支持的档位标灰——此前 /think 菜单全档可选,选了不支持的静默降档零提示。
     // ⚠️ baseUrl 必须带上:能力表大半规则按 host 键(xai/dashscope/moonshot…),丢了它会退到
@@ -76,7 +87,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       if (!m?.id) continue;
       // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm → 桌面把语音识别模型误当聊天模型(见 AsrModelChoice/ChatView 的 modelType 分流)。
       const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, typeof m.supportsVision === 'boolean' ? m.supportsVision : undefined), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
+      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
     }
     if (forsion.status === 'ok' && cloud.length === 0) {
       // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。

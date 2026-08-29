@@ -7,6 +7,7 @@ import type { ToolCall } from '../core/types.js';
 import type { ApprovalDecision } from '../services/approvals.js';
 import { loadEngines, engineStatus, loadEnginePrefs, saveEngineDefaultModel, type EngineDef, type EngineStatus } from './config.js';
 import { runAcpEngine, probeAcpEngine } from './acpEngine.js';
+import { seedDshFiles } from './dsh.js';
 
 /** externalEngineLoop 传入：一次外部引擎 turn 所需的上下文 + 回灌接缝。 */
 export interface EngineRunCtx {
@@ -51,6 +52,8 @@ export interface EngineListItem {
   /** 三态:available / needs-signin / not-installed(设置页据此显示「需登录」等)。 */
   status: EngineStatus;
   defaultModel?: string;
+  /** 未检测到时给用户看的一行安装命令(见 EngineDef.setup)。 */
+  setup?: string;
 }
 
 export interface EngineManager {
@@ -68,6 +71,7 @@ export interface EngineManager {
 const CAPS_TTL_MS = 10 * 60 * 1000; // 软 TTL:能力变动慢,缓存 10 分钟;进程重启即清
 
 export function createEngineManager(configFile?: string): EngineManager {
+  seedDshFiles(); // 幂等落 ~/.tangu/engines/dsh/{package.json,cordis.yml,README.md};用户跑一次 npm i 才算装上
   const engines = loadEngines(configFile);
   const byId = new Map<string, EngineDef>(engines.map((e) => [e.id, e]));
   const capsCache = new Map<string, { caps: EngineCapabilities; at: number }>();
@@ -75,7 +79,7 @@ export function createEngineManager(configFile?: string): EngineManager {
   return {
     list: () => engines.map((e) => {
       const status = engineStatus(e);
-      return { id: e.id, name: e.name, available: status === 'available', status, defaultModel: prefs[e.id]?.defaultModel };
+      return { id: e.id, name: e.name, available: status === 'available', status, defaultModel: prefs[e.id]?.defaultModel, setup: e.setup };
     }),
     has: (id) => byId.has(id),
     capabilities: async (id) => {

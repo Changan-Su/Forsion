@@ -68,9 +68,18 @@ describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
   });
 
   it('Claude 订阅拿到 thinking(改造前此路径完全无思考字段)', () => {
-    const p = { ...base(), model: 'claude-sonnet-5', [PROTOCOL_MARK]: 'anthropic-messages' };
+    // 4.6 及更早仍是手动扩展思考(budget_tokens)
+    const p = { ...base(), model: 'claude-sonnet-4-6', [PROTOCOL_MARK]: 'anthropic-messages' };
     tuneOpenAiDirectPayload(p, 'high', { baseUrl: 'https://api.anthropic.com' });
     expect(p.thinking).toEqual({ type: 'enabled', budget_tokens: 16384 });
+  });
+
+  it('⚠️Claude 5 走自适应:发 budget_tokens 或 temperature 都是 400', () => {
+    const p = { ...base(), model: 'claude-sonnet-5', [PROTOCOL_MARK]: 'anthropic-messages' };
+    tuneOpenAiDirectPayload(p, 'high', { baseUrl: 'https://api.anthropic.com' });
+    expect(p.thinking).toEqual({ type: 'adaptive' });
+    expect(p.output_config).toEqual({ effort: 'high' });
+    expect(p.temperature).toBeUndefined();
   });
 
   it('阿里 DashScope 的 Qwen3 拿到 enable_thinking(改造前是静默无效)', () => {

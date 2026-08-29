@@ -11,6 +11,7 @@
  * core 的 agentLoop 已把 agent 基底系统提示拼进 workingMessages[0],故直连面不会丢系统提示。
  */
 import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
+import { learnFromUpstreamError } from '../services/contextWindowStore.js';
 import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '../core/types.js';
 import { parseTextToolCalls } from './textToolCalls.js';
 import { applyThinking, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
@@ -189,6 +190,9 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     } catch {
       /* keep raw */
     }
+    // 超长被拒时,报错文案里几乎总写明真实上限 —— 学下来,下次按真值算预算(见 contextWindowStore)。
+    // 只学不拦:学到与否都照常抛错,失败语义一个字不变。
+    learnFromUpstreamError(streamPayload?.model, response.status, detail);
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
     throw new LlmError(status, detail || `Upstream error ${response.status}`);
   }

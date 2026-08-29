@@ -18,7 +18,7 @@ import {
 describe('modelContextWindowInfo 来源标注', () => {
   it('model 元数据 / family 族表 / default 兜底 三档来源正确', () => {
     expect(modelContextWindowInfo('m', { context_window: 200000 })).toEqual({ tokens: 200000, source: 'model' })
-    expect(modelContextWindowInfo('claude-opus-5')).toEqual({ tokens: 200_000, source: 'family' })
+    expect(modelContextWindowInfo('claude-opus-5')).toEqual({ tokens: 1_000_000, source: 'family' })
     expect(modelContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
     // 无效元数据(<4k)不算 model 档,落到后续档位
     expect(modelContextWindowInfo('whatever', { context_window: 100 }).source).toBe('default')
@@ -46,6 +46,14 @@ describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
     expect(modelContextWindow('gpt-5')).toBe(272_000);
     expect(modelContextWindow('codex-mini-latest')).toBe(200_000); // o4-mini 底,272k 会溢出
     expect(modelContextWindow('claude-sonnet-4-5')).toBe(200_000);
+    // Claude 5 家族 / Opus 4.7 起是 1M;4.6 及更早、Haiku 4.5 仍 200k(族表首命中,顺序即契约)
+    expect(modelContextWindow('claude-sonnet-5')).toBe(1_000_000);
+    expect(modelContextWindow('claude-fable-5')).toBe(1_000_000);
+    expect(modelContextWindow('claude-opus-4-7')).toBe(1_000_000);
+    expect(modelContextWindow('claude-opus-4-6')).toBe(200_000);
+    expect(modelContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
+    expect(modelContextWindow('kimi-k3')).toBe(1_000_000);
+    expect(modelContextWindow('kimi-k2-thinking')).toBe(CONTEXT_WINDOW_TOKENS);
     expect(modelContextWindow('gemini-2.5-pro')).toBe(1_000_000);
     expect(modelContextWindow('gemini-embedding-001')).toBe(CONTEXT_WINDOW_TOKENS); // 非主线 gemini 变体保守
     expect(modelContextWindow('deepseek-chat')).toBe(CONTEXT_WINDOW_TOKENS); // 未收录族维持默认
@@ -53,6 +61,12 @@ describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
     // 网关转售的 V4 也该拿 1M —— 这条族规则**刻意不锚 ^**(与能力表的 host 限定规则不同口径)
     expect(modelContextWindow('deepseek-ai/DeepSeek-V4-Pro')).toBe(1_000_000);
     expect(modelContextWindow('myv4legacy')).toBe(CONTEXT_WINDOW_TOKENS); // 只认 deepseek-v4 字面,不认裸 v4
+    // 2026-08 新族:同样不锚 ^,网关转售名也要拿到 1M
+    expect(modelContextWindow('glm-5.3')).toBe(1_000_000);
+    expect(modelContextWindow('zai-org/GLM-5.3-Flash')).toBe(1_000_000);
+    expect(modelContextWindow('glm-5.2')).toBe(CONTEXT_WINDOW_TOKENS); // 5.2 是 200k 级,不该被 5.3 规则吞
+    expect(modelContextWindow('Qwen/Qwen3.8-Max')).toBe(1_000_000);
+    expect(modelContextWindow('qwen3.8-27b')).toBe(CONTEXT_WINDOW_TOKENS); // 小尺寸变体窗口未核实 → 保守默认
     // 模型对象自带值仍然优先于族兜底
     expect(modelContextWindow('gpt-5', { context_window: 64_000 })).toBe(64_000);
   });

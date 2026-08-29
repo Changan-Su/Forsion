@@ -71,7 +71,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -249,7 +249,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -715,7 +715,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -912,7 +912,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1378,7 +1378,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1447,7 +1447,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1708,7 +1708,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1796,7 +1796,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2057,7 +2057,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2235,7 +2235,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2833,7 +2833,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3030,7 +3030,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3628,7 +3628,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3674,7 +3674,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view. When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool's final output line and only change the line number / heading. Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3831,13 +3831,21 @@
       "type": "function",
       "function": {
         "name": "read_document",
-        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
+        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. The text is split into pages marked \"--- page N ---\" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: search:\"phrase\" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:\"12-18\" to read that part in full. When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool's output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. Page anchors exist for PDFs only; for docx/xlsx/pptx the header prints a plain `[[<path>]]` form instead — use exactly what it prints, a `#page=` on those formats renders as a dead link. Keep BOTH pairs of square brackets and the path verbatim, however long it is: `[[<path>#page=12]]`, not `[<path>#page=12]` and not a shortened name. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip showing \"<file name> p.12\" that opens the document at that page — the long path is never shown to the user, so do not try to shorten it. Append `&q=<a short exact phrase>` (5-12 words copied verbatim from that page, no `&` inside) to also highlight that sentence when the reader opens it: `[[<path>#page=12&q=the aim of this book is]]`. The highlight is temporary on screen — nothing is written into the file — so a phrase that fails to match simply lands on the page with no highlight. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
               "description": "Document file path (relative to cwd or absolute), e.g. report.pdf"
+            },
+            "pages": {
+              "type": "string",
+              "description": "Read only these pages: \"12\", \"12-18\" or \"3,7,9-11\" (default: the whole document, truncated)"
+            },
+            "search": {
+              "type": "string",
+              "description": "Instead of the text, return the lines containing this phrase with their page numbers (literal substring, case-insensitive)"
             },
             "ocr": {
               "type": "boolean",
@@ -3900,7 +3908,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4780,6 +4788,37 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_video",
+        "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Video file path (relative to cwd or absolute)"
+            },
+            "time": {
+              "type": "number",
+              "description": "Extract ONE detailed frame (up to 1280px wide) at this second instead of the overview sheet"
+            },
+            "start": {
+              "type": "number",
+              "description": "Overview window start in seconds (default 0)"
+            },
+            "end": {
+              "type": "number",
+              "description": "Overview window end in seconds (default: video duration)"
+            }
+          },
+          "required": [
+            "path"
+          ]
         }
       }
     }
@@ -4856,7 +4895,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4921,7 +4960,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view. When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool's final output line and only change the line number / heading. Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5078,13 +5117,21 @@
       "type": "function",
       "function": {
         "name": "read_document",
-        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
+        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. The text is split into pages marked \"--- page N ---\" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: search:\"phrase\" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:\"12-18\" to read that part in full. When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool's output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. Page anchors exist for PDFs only; for docx/xlsx/pptx the header prints a plain `[[<path>]]` form instead — use exactly what it prints, a `#page=` on those formats renders as a dead link. Keep BOTH pairs of square brackets and the path verbatim, however long it is: `[[<path>#page=12]]`, not `[<path>#page=12]` and not a shortened name. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip showing \"<file name> p.12\" that opens the document at that page — the long path is never shown to the user, so do not try to shorten it. Append `&q=<a short exact phrase>` (5-12 words copied verbatim from that page, no `&` inside) to also highlight that sentence when the reader opens it: `[[<path>#page=12&q=the aim of this book is]]`. The highlight is temporary on screen — nothing is written into the file — so a phrase that fails to match simply lands on the page with no highlight. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
               "description": "Document file path (relative to cwd or absolute), e.g. report.pdf"
+            },
+            "pages": {
+              "type": "string",
+              "description": "Read only these pages: \"12\", \"12-18\" or \"3,7,9-11\" (default: the whole document, truncated)"
+            },
+            "search": {
+              "type": "string",
+              "description": "Instead of the text, return the lines containing this phrase with their page numbers (literal substring, case-insensitive)"
             },
             "ocr": {
               "type": "boolean",
@@ -5147,7 +5194,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6029,6 +6076,37 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_video",
+        "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Video file path (relative to cwd or absolute)"
+            },
+            "time": {
+              "type": "number",
+              "description": "Extract ONE detailed frame (up to 1280px wide) at this second instead of the overview sheet"
+            },
+            "start": {
+              "type": "number",
+              "description": "Overview window start in seconds (default 0)"
+            },
+            "end": {
+              "type": "number",
+              "description": "Overview window end in seconds (default: video duration)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:sandbox": [
@@ -6103,7 +6181,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6240,7 +6318,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6838,7 +6916,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6994,7 +7072,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7592,7 +7670,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7638,7 +7716,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view. When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool's final output line and only change the line number / heading. Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7795,13 +7873,21 @@
       "type": "function",
       "function": {
         "name": "read_document",
-        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
+        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. The text is split into pages marked \"--- page N ---\" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: search:\"phrase\" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:\"12-18\" to read that part in full. When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool's output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. Page anchors exist for PDFs only; for docx/xlsx/pptx the header prints a plain `[[<path>]]` form instead — use exactly what it prints, a `#page=` on those formats renders as a dead link. Keep BOTH pairs of square brackets and the path verbatim, however long it is: `[[<path>#page=12]]`, not `[<path>#page=12]` and not a shortened name. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip showing \"<file name> p.12\" that opens the document at that page — the long path is never shown to the user, so do not try to shorten it. Append `&q=<a short exact phrase>` (5-12 words copied verbatim from that page, no `&` inside) to also highlight that sentence when the reader opens it: `[[<path>#page=12&q=the aim of this book is]]`. The highlight is temporary on screen — nothing is written into the file — so a phrase that fails to match simply lands on the page with no highlight. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
               "description": "Document file path (relative to cwd or absolute), e.g. report.pdf"
+            },
+            "pages": {
+              "type": "string",
+              "description": "Read only these pages: \"12\", \"12-18\" or \"3,7,9-11\" (default: the whole document, truncated)"
+            },
+            "search": {
+              "type": "string",
+              "description": "Instead of the text, return the lines containing this phrase with their page numbers (literal substring, case-insensitive)"
             },
             "ocr": {
               "type": "boolean",
@@ -7864,7 +7950,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8744,6 +8830,37 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_video",
+        "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Video file path (relative to cwd or absolute)"
+            },
+            "time": {
+              "type": "number",
+              "description": "Extract ONE detailed frame (up to 1280px wide) at this second instead of the overview sheet"
+            },
+            "start": {
+              "type": "number",
+              "description": "Overview window start in seconds (default 0)"
+            },
+            "end": {
+              "type": "number",
+              "description": "Overview window end in seconds (default: video duration)"
+            }
+          },
+          "required": [
+            "path"
+          ]
         }
       }
     }
@@ -8820,7 +8937,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8885,7 +9002,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view. When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool's final output line and only change the line number / heading. Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9042,13 +9159,21 @@
       "type": "function",
       "function": {
         "name": "read_document",
-        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
+        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. The text is split into pages marked \"--- page N ---\" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: search:\"phrase\" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:\"12-18\" to read that part in full. When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool's output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. Page anchors exist for PDFs only; for docx/xlsx/pptx the header prints a plain `[[<path>]]` form instead — use exactly what it prints, a `#page=` on those formats renders as a dead link. Keep BOTH pairs of square brackets and the path verbatim, however long it is: `[[<path>#page=12]]`, not `[<path>#page=12]` and not a shortened name. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip showing \"<file name> p.12\" that opens the document at that page — the long path is never shown to the user, so do not try to shorten it. Append `&q=<a short exact phrase>` (5-12 words copied verbatim from that page, no `&` inside) to also highlight that sentence when the reader opens it: `[[<path>#page=12&q=the aim of this book is]]`. The highlight is temporary on screen — nothing is written into the file — so a phrase that fails to match simply lands on the page with no highlight. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
               "description": "Document file path (relative to cwd or absolute), e.g. report.pdf"
+            },
+            "pages": {
+              "type": "string",
+              "description": "Read only these pages: \"12\", \"12-18\" or \"3,7,9-11\" (default: the whole document, truncated)"
+            },
+            "search": {
+              "type": "string",
+              "description": "Instead of the text, return the lines containing this phrase with their page numbers (literal substring, case-insensitive)"
             },
             "ocr": {
               "type": "boolean",
@@ -9111,7 +9236,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9993,6 +10118,37 @@
           "required": []
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_video",
+        "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Video file path (relative to cwd or absolute)"
+            },
+            "time": {
+              "type": "number",
+              "description": "Extract ONE detailed frame (up to 1280px wide) at this second instead of the overview sheet"
+            },
+            "start": {
+              "type": "number",
+              "description": "Overview window start in seconds (default 0)"
+            },
+            "end": {
+              "type": "number",
+              "description": "Overview window end in seconds (default: video duration)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
     }
   ],
   "tangu-none:host+gui": [
@@ -10067,7 +10223,7 @@
       "type": "function",
       "function": {
         "name": "web_search",
-        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10113,7 +10269,7 @@
       "type": "function",
       "function": {
         "name": "read_file",
-        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view.",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view. When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool's final output line and only change the line number / heading. Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10270,13 +10426,21 @@
       "type": "function",
       "function": {
         "name": "read_document",
-        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
+        "description": "Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. The text is split into pages marked \"--- page N ---\" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: search:\"phrase\" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:\"12-18\" to read that part in full. When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool's output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. Page anchors exist for PDFs only; for docx/xlsx/pptx the header prints a plain `[[<path>]]` form instead — use exactly what it prints, a `#page=` on those formats renders as a dead link. Keep BOTH pairs of square brackets and the path verbatim, however long it is: `[[<path>#page=12]]`, not `[<path>#page=12]` and not a shortened name. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip showing \"<file name> p.12\" that opens the document at that page — the long path is never shown to the user, so do not try to shorten it. Append `&q=<a short exact phrase>` (5-12 words copied verbatim from that page, no `&` inside) to also highlight that sentence when the reader opens it: `[[<path>#page=12&q=the aim of this book is]]`. The highlight is temporary on screen — nothing is written into the file — so a phrase that fails to match simply lands on the page with no highlight. Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).",
         "parameters": {
           "type": "object",
           "properties": {
             "path": {
               "type": "string",
               "description": "Document file path (relative to cwd or absolute), e.g. report.pdf"
+            },
+            "pages": {
+              "type": "string",
+              "description": "Read only these pages: \"12\", \"12-18\" or \"3,7,9-11\" (default: the whole document, truncated)"
+            },
+            "search": {
+              "type": "string",
+              "description": "Instead of the text, return the lines containing this phrase with their page numbers (literal substring, case-insensitive)"
             },
             "ocr": {
               "type": "boolean",
@@ -10339,7 +10503,7 @@
       "type": "function",
       "function": {
         "name": "web_fetch",
-        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -11241,6 +11405,37 @@
           },
           "required": [
             "html"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_video",
+        "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Video file path (relative to cwd or absolute)"
+            },
+            "time": {
+              "type": "number",
+              "description": "Extract ONE detailed frame (up to 1280px wide) at this second instead of the overview sheet"
+            },
+            "start": {
+              "type": "number",
+              "description": "Overview window start in seconds (default 0)"
+            },
+            "end": {
+              "type": "number",
+              "description": "Overview window end in seconds (default: video duration)"
+            }
+          },
+          "required": [
+            "path"
           ]
         }
       }

@@ -1,11 +1,12 @@
 /**
  * 外部引擎品牌图标(单色 currentColor,随 pill 颜色/主题自适应)。
  * Codex = 官方 OpenAI 标记(取自 codex 仓库 openai-small.svg);Claude = Anthropic 放射状标记;
- * 其余 / Tangu 内置 = Sparkles。
+ * OpenClaw/Pi/DeepSeek Harness 无可靠的单色官方 mark(前两者没进 simple-icons)→ 用语义相近的 lucide 图标,
+ * 目的只是「icon-only pill 里彼此可分辨」,不冒充品牌标识。其余 / Tangu 内置 = Sparkles。
  * 说明:AionUI 的 claude.svg/codex.svg 由其后端 /api/assets/logos 托管、源码树未含,故此处内联同款官方标记。
  */
 import React from 'react'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, Pi, PawPrint, Waves } from 'lucide-react'
 
 const OpenAiMark: React.FC<{ size: number }> = ({ size }) => (
   <svg width={size} height={size} viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
@@ -24,5 +25,8 @@ export const EngineIcon: React.FC<{ engineId: string; size?: number }> = ({ engi
   const id = engineId.toLowerCase()
   if (id.includes('claude')) return <ClaudeMark size={size} />
   if (id.includes('codex') || id.includes('openai')) return <OpenAiMark size={size} />
+  if (id.includes('claw')) return <PawPrint size={size} />
+  if (id === 'pi' || id.startsWith('pi-')) return <Pi size={size} />
+  if (id.includes('dsh') || id.includes('deepseek')) return <Waves size={size} />
   return <Sparkles size={size} />
 }

@@ -24,7 +24,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ToolCall } from '../core/types.js';
 import type { ApprovalDecision } from '../services/approvals.js';
-import type { EngineDef } from './config.js';
+import { envWithFullPath, type EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
 
 /** createAcpClient 需要的最小上下文（EngineRunCtx 结构上即满足）。 */
@@ -41,12 +41,14 @@ const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TIMEOUT_M
 /** 跨平台起引擎子进程。Windows 上 npx/claude/codex 等是 .cmd 批处理 shim,spawn 不带 shell 无法执行
  *  (Node CVE-2024-27980 后更是硬拒 .cmd)→ win32 必须 shell:true 交 cmd.exe 解析,这正是「切换外部 CLI 在
  *  Windows 卡死」的根因。args:内置引擎为常量;自定义引擎取自用户本机 engines.json(host-only,等价用户自己
- *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。 */
+ *  在终端敲命令),非远程注入面。windowsHide 避免弹控制台窗口。POSIX 上 shell=false、detached 组杀行为照旧。
+ *  env:PATH 先补全(envWithFullPath)——GUI 启动的 Electron 只有 launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin
+ *  在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,spawn 端不补就是「检测说有、跑起来没有」。 */
 export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean }) {
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
-    env: { ...process.env, ...(def.env ?? {}) },
+    env: { ...envWithFullPath(process.env), ...(def.env ?? {}) },
     shell: process.platform === 'win32',
     windowsHide: true,
     detached: opts?.detached ?? false,

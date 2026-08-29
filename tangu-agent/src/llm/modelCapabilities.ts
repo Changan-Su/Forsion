@@ -58,8 +58,8 @@ export function normalizeThinkingLevel(v: unknown, fallback: ThinkingLevel = 'me
  *   gemini-budget      `generationConfig.thinkingConfig.thinkingBudget`(Gemini 原生 REST)
  *   qwen               `enable_thinking: <bool>` + `thinking_budget: <n>`(Qwen3 / DashScope)
  *   qwen-chat-template `chat_template_kwargs.enable_thinking`(vLLM/SGLang 托的 Qwen3)
- *   zai                `thinking: {type:'enabled'|'disabled'}`(智谱 GLM / z.ai)
- *   deepseek           同 zai 形状,但 reasoner 系自带思考走 none
+ *   zai                `thinking: {type}`(智谱 GLM / z.ai;GLM-5.3 起再带 `reasoning_effort`)
+ *   deepseek           与 zai 同形状(V4 起也带 `reasoning_effort`);reasoner 系自带思考走 none
  *   openrouter         `reasoning: {effort}`(OpenRouter 归一层)
  *   none               模型自带思考且不可调 —— 什么都不发
  *   prefix             无原生支持 —— 退到系统提示兜底(唯一不碰协议字段的形态)
@@ -103,8 +103,19 @@ export interface ModelCapability {
  * 发未知值会 400;ChatGPT 后端另有 EFFORT_CODEX。
  */
 const EFFORT_FULL: LevelMap = {
-  off: 'none', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh',
+  off: 'none', minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh',
 };
+
+/**
+ * gpt-5.x-pro:官方模型页写死 **medium(最低)/ high(缺省)/ xhigh**,且**不支持 chat/completions**
+ * (只有 Responses 与 Batch)。所以 off/minimal/low 一档都不能露 —— 露了就是确定性的 400。
+ */
+const EFFORT_PRO: LevelMap = {
+  off: null, minimal: 'medium', low: 'medium', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh',
+};
+
+/** gpt-5.6 起的公开 API:'max' 是真档(5.5 的档表到 xhigh 为止)。 */
+const EFFORT_FULL_MAX: LevelMap = { ...EFFORT_FULL, max: 'max' };
 
 /** Codex 订阅(ChatGPT 后端)。档位取自 codex-rs 的 ReasoningEffort 枚举,'max' 是真档不是别名。 */
 const EFFORT_CODEX: LevelMap = {
@@ -137,28 +148,77 @@ const CLAUDE_BUDGETS: LevelMap = {
   off: null, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 24576, max: 32768,
 };
 
-/** Claude 自适应思考档(Opus 4.7+ / Sonnet 5 起)。 */
+/**
+ * Claude 自适应思考的 effort 档。官方五档 low < medium < high(缺省)< xhigh < max
+ * —— `max` 是真档不是 xhigh 的别名(官方 effort 文档),旧表把 max 折成 xhigh 是白丢一档。
+ * `off: false` → 发 `thinking:{type:'disabled'}`:Opus 4.7/4.8、Opus 5、Sonnet 5 都支持关思考
+ * (旧表写 off:null,导致「关闭思考」这一档在 Claude 上根本点不到)。
+ */
 const CLAUDE_EFFORT: LevelMap = {
-  off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh',
+  off: false, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
 };
+
+/** Fable 5 / Mythos:官方模型表标的是 Adaptive **(always on)** —— 思考关不掉,off 只能夹到 low。 */
+const CLAUDE_EFFORT_ALWAYS_ON: LevelMap = { ...CLAUDE_EFFORT, off: null };
 
 /** Gemini thinkingBudget。-1 = 动态(模型自己决定深度),0 = 关。 */
 const GEMINI_BUDGETS: LevelMap = {
   off: 0, minimal: 512, low: 2048, medium: 8192, high: 16384, xhigh: 24576, max: -1,
 };
 
-/** Qwen3 thinking_budget(官方区间 0–38912)。off 由 enable_thinking:false 表达。 */
+/**
+ * ⚠️ Qwen3.8 系(max/flash)的 thinking_budget 是**另一个量级**:官方 OpenAI 兼容文档给的是
+ * **0–262144、缺省 131072**,并附 effort 对照 low=4096 / medium=16384 / xhigh=262144。
+ * 拿下面那张 3.x 的表(上限 32768)套 3.8,等于把最高档压到缺省值的 1/4 —— 静默降智,比报错难发现。
+ * high=65536 是文档没给的一档,按 medium 与 xhigh 之间插值取的,仍在合法区间内。
+ * ⚠️ 官方同时注明 reasoning_effort 与 thinking_budget **不能同发**(同发报错),故这里只发 budget。
+ */
+const QWEN38_BUDGETS: LevelMap = {
+  off: false, minimal: 1024, low: 4096, medium: 16384, high: 65536, xhigh: 262144, max: 262144,
+};
+
+/**
+ * Qwen3 / Qwen3.7 的 thinking_budget。官方「深度思考」文档区间 **1–32768**,
+ * 旧表的 38912 是 Qwen3 首发时的上限,已超出——超上限的值要么被静默夹、要么 400,一律按新上限发。
+ * off 由 enable_thinking:false 表达。
+ */
 const QWEN_BUDGETS: LevelMap = {
-  off: false, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 38912,
+  off: false, minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 32768, max: 32768,
+};
+
+/**
+ * 只认 low/high/max 三档的 effort 端点(DeepSeek V4 / GLM-5.3)。七档往下折,宁可少想也不发未知值。
+ * `off: null` = 思考关不掉(GLM-5.3 就是),能关的族在自己的表里把 off 覆盖回去。
+ */
+const EFFORT_LHM: LevelMap = {
+  off: null, minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: 'max', max: 'max',
 };
 
 /**
  * DeepSeek V4:`thinking:{type}` 开关 + `reasoning_effort`,官方只认 low/high/max
  * (v4-flash 三档齐全;v4-pro 目前把 low 当 high、xhigh 当 max —— 发 low 安全,不会 400)。
  */
-const DEEPSEEK_EFFORT: LevelMap = {
-  off: false, minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: 'max', max: 'max',
+const DEEPSEEK_EFFORT: LevelMap = { ...EFFORT_LHM, off: false };
+
+/**
+ * GLM-5.2 的 effort 词表是各家里最全的(none/minimal/low/medium/high/xhigh/max,缺省 **max**),
+ * 与 Tangu 七档一一对上,原样发即可(官方说明 low/medium 内部归 high、xhigh 归 max,不必预折)。
+ * off 走 thinking:{type:'disabled'}(5.2 仍可关思考),那一格的 wire 值不会真上线。
+ */
+const GLM52_EFFORT: LevelMap = {
+  off: 'none', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
 };
+
+/**
+ * 火山方舟豆包:`reasoning_effort` 认 minimal/low/medium/high(**minimal = 不思考**),**不认 'none'**。
+ * 此前 volces.com 落在 gateway-generic 的通用 effort 表上,关思考时发的恰恰是它不认的 'none'。
+ */
+const DOUBAO_EFFORT: LevelMap = {
+  off: 'minimal', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high',
+};
+
+/** 强制思考(关不掉)且深度不可调:只发 thinking:{type:'enabled'},请求 off 夹到最弱档。 */
+const TOGGLE_ALWAYS_ON: LevelMap = { ...TOGGLE, off: null };
 
 /** 全档不可调(模型自带思考)。 */
 const FIXED: LevelMap = {
@@ -171,6 +231,8 @@ interface Rule {
   id: string;
   /** baseUrl 的 hostname 匹配。 */
   host?: RegExp;
+  /** baseUrl 的**路径**匹配。同 host 不同协议面时唯一的区分手段(Gemini 原生 REST vs /v1beta/openai)。 */
+  urlPath?: RegExp;
   /** 直连 provider id / 托管 provider 名。 */
   provider?: RegExp;
   /** apiModelId(或 modelId)匹配。 */
@@ -196,6 +258,31 @@ const DEFAULT_CAP: Omit<ModelCapability, 'rule'> = {
   maxTokensField: 'max_tokens',
 };
 
+/**
+ * Claude「自适应思考」族 = Opus 4.7 起 + Claude 5 家族(Sonnet/Opus/Fable/Mythos 5)。
+ * 这些模型上手动扩展思考 `thinking:{type:'enabled',budget_tokens}` **返回 400**(官方迁移指南),
+ * 不是降级——所以命中就必须走 anthropic-effort,不能退到 budget。
+ *
+ * ⚠️ 版本段要同时认 `-` 与 `.`:官方模型 id 是**连字符**形态(`claude-opus-4-7`),旧规则只写了
+ * `opus-4\.[7-9]`(点),真 id 一个都不命中 → 静默落到 budget 规则 → 整条链路 400。
+ * `([5-9]|\d\d)` 是给两位小版本留的口子(4.10 / sonnet-10 之类),别再按单个数字钉。
+ */
+const CLAUDE_ADAPTIVE = /(sonnet|opus|fable|mythos)-([5-9]|\d\d)|opus-4[-.]([7-9]|\d\d)|mythos-preview/i;
+
+/** 其中思考常开、关不掉的那几支(官方模型表 Thinking = Adaptive (always on))。 */
+const CLAUDE_ALWAYS_ON = /(fable|mythos)-([5-9]|\d\d)|mythos-preview/i;
+
+/**
+ * 自适应族的能力(三个入口——自有 key 的 host / 订阅协议 / 托管 provider——共用同一份,
+ * 三处各写一遍正是本轮修的漂移:协议入口与托管入口此前对 Claude 5 仍发 budget_tokens)。
+ * dropTemperature:Sonnet 5 明确「temperature/top_p/top_k 非默认值返回 400」;Opus 4.7/4.8
+ * 官方没逐条写,这里按同族推断一起丢——丢了只是失去采样调节(静默),留着可能整请求 400。
+ */
+const CLAUDE_ADAPTIVE_CAP: Omit<ModelCapability, 'rule'> = {
+  format: 'anthropic-effort', levels: CLAUDE_EFFORT, maxTokensField: 'max_tokens', dropTemperature: true,
+};
+const CLAUDE_ALWAYS_ON_CAP: Omit<ModelCapability, 'rule'> = { ...CLAUDE_ADAPTIVE_CAP, levels: CLAUDE_EFFORT_ALWAYS_ON };
+
 /** 首条命中即生效 —— 特例在前,族规则居中,兜底在后。 */
 const RULES: Rule[] = [
   // ── 订阅登录(协议已定,不看 host)────────────────────────────────────────
@@ -207,7 +294,21 @@ const RULES: Rule[] = [
     cap: { format: 'openai-effort', levels: EFFORT_CODEX, maxTokensField: 'max_completion_tokens', dropTemperature: true },
   },
   {
+    id: 'anthropic-messages-always-on',
+    protocol: /^anthropic-messages$/,
+    model: CLAUDE_ALWAYS_ON,
+    cap: CLAUDE_ALWAYS_ON_CAP,
+  },
+  {
+    // Claude 5 / Opus 4.7+ 走自适应。老规则不看模型一律 budget → 这些模型上 400。
+    id: 'anthropic-messages-adaptive',
+    protocol: /^anthropic-messages$/,
+    model: CLAUDE_ADAPTIVE,
+    cap: CLAUDE_ADAPTIVE_CAP,
+  },
+  {
     // Anthropic 原生 /v1/messages(用户自有 API key)。此前**完全没有** thinking 字段。
+    // 留给 Sonnet 4.6 / Opus 4.5-4.6 / Haiku 4.5 这些仍走手动扩展思考的型号。
     id: 'anthropic-messages',
     protocol: /^anthropic-messages$/,
     cap: { format: 'anthropic-budget', levels: CLAUDE_BUDGETS, maxTokensField: 'max_tokens' },
@@ -215,7 +316,32 @@ const RULES: Rule[] = [
 
   // ── OpenAI 官方 ────────────────────────────────────────────────────────
   {
-    // gpt-5.x:chat/completions + tools 必须显式 'none';思考开只能改道 /v1/responses。
+    // gpt-5.x-pro:档位表只到 medium 起步,且**不能走 chat/completions** —— 永远改道 Responses。
+    // 必须排在下面两条 gpt-5 规则之前,否则 pro 会拿到含 off/minimal/low 的通用档表(必 400)。
+    id: 'openai-gpt5-pro',
+    host: /(^|\.)api\.openai\.com$/,
+    model: /^gpt-5(\.\d+)?-pro/i,
+    cap: {
+      format: 'openai-effort', levels: EFFORT_PRO, maxTokensField: 'max_completion_tokens',
+      dropTemperature: true, viaResponses: true,
+    },
+  },
+  {
+    // gpt-5.6 起官方 effort 表是 none/low/medium/high/xhigh/max —— `max` 成了真档(旧表折成 xhigh
+    // 是白丢一档);而 'minimal' 在 5.6 的档位表里查不到(与通用 reasoning 指南的全量列表冲突),
+    // 冲突按保守解:minimal 折到 'low' —— 少想不报错,发未知值会 400。其余 quirk 与 gpt-5 同。
+    // 刻意只认 5.6-5.9:不给还没出的 gpt-6 预支档位(未命中会落到下面的保守规则,不会失败)。
+    id: 'openai-gpt5-latest',
+    host: /(^|\.)api\.openai\.com$/,
+    model: /^gpt-5\.[6-9]/i,
+    cap: {
+      format: 'openai-effort', levels: EFFORT_FULL_MAX, maxTokensField: 'max_completion_tokens',
+      dropTemperature: true, viaResponses: true,
+    },
+  },
+  {
+    // gpt-5.0–5.5(5.6 起走上面的 openai-gpt5-latest,那边多一档真 max):
+    // chat/completions + tools 必须显式 'none';思考开只能改道 /v1/responses。
     // temperature≠1 被拒(错误文案是离谱的「insufficient permissions」);max_tokens 要换名。
     id: 'openai-gpt5',
     host: /(^|\.)api\.openai\.com$/,
@@ -242,10 +368,16 @@ const RULES: Rule[] = [
   // ── Anthropic 原生 ─────────────────────────────────────────────────────
   {
     // Opus 4.7+ / Sonnet 5 / Fable 5 起支持自适应思考档(比 budget 更贴模型自身判断)。
+    id: 'anthropic-always-on',
+    host: /(^|\.)api\.anthropic\.com$/,
+    model: CLAUDE_ALWAYS_ON,
+    cap: CLAUDE_ALWAYS_ON_CAP,
+  },
+  {
     id: 'anthropic-adaptive',
     host: /(^|\.)api\.anthropic\.com$/,
-    model: /(opus-4\.[7-9]|opus-[5-9]|sonnet-[5-9]|fable-[5-9])/i,
-    cap: { format: 'anthropic-effort', levels: CLAUDE_EFFORT, maxTokensField: 'max_tokens' },
+    model: CLAUDE_ADAPTIVE,
+    cap: CLAUDE_ADAPTIVE_CAP,
   },
   {
     id: 'anthropic-budget',
@@ -260,30 +392,56 @@ const RULES: Rule[] = [
     cap: { format: 'prefix', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
   {
-    // 托管目录里的 anthropic/claude(baseUrl 可能是代理),按 provider 名走 budget。
+    id: 'anthropic-provider-always-on',
+    provider: /^(anthropic|claude)/i,
+    model: CLAUDE_ALWAYS_ON,
+    cap: CLAUDE_ALWAYS_ON_CAP,
+  },
+  {
+    id: 'anthropic-provider-adaptive',
+    provider: /^(anthropic|claude)/i,
+    model: CLAUDE_ADAPTIVE,
+    cap: CLAUDE_ADAPTIVE_CAP,
+  },
+  {
+    // 托管目录里的 anthropic/claude(baseUrl 可能是代理),4.6 及更早按 provider 名走 budget。
     id: 'anthropic-provider',
     provider: /^(anthropic|claude)/i,
     cap: { format: 'anthropic-budget', levels: CLAUDE_BUDGETS, maxTokensField: 'max_tokens' },
   },
 
   // ── Google Gemini ──────────────────────────────────────────────────────
+  // ⚠️ 顺序:兼容层(/v1beta/openai)在前,原生 REST 在后。两者**同一个 host**,只有路径能区分;
+  // 而托管面同时传 provider 与 baseUrl —— 若把 provider 规则放前面,配了兼容层地址的直连/托管
+  // provider 会拿到原生 generationConfig 字段,兼容层根本不认(档位静默失效)。
   {
-    // 托管面走 Gemini 原生 REST(generationConfig)。2.5-pro 关不掉思考 → off:null。
-    id: 'gemini-native-pro',
+    id: 'gemini-openai-compat-3',
+    host: /(^|\.)generativelanguage\.googleapis\.com$/,
+    urlPath: /\/openai(\/|$)/,
+    model: /gemini-3/i,
+    cap: { format: 'openai-effort', levels: EFFORT_LMH, maxTokensField: 'max_tokens' },
+  },
+  {
+    // 直连走 Google 的 OpenAI 兼容层,那边只认 reasoning_effort。
+    id: 'gemini-openai-compat',
+    host: /(^|\.)generativelanguage\.googleapis\.com$/,
+    urlPath: /\/openai(\/|$)/,
+    cap: { format: 'openai-effort', levels: EFFORT_LMH_OFF, maxTokensField: 'max_tokens' },
+  },
+  {
+    // 托管面走 Gemini 原生 REST(generationConfig)。关不掉思考的那几支 → off:null:
+    // 2.5-pro,以及整个 3.x 线(官方 thinking 文档:3.1 Pro 明确不能关,3 Flash / Flash-Lite
+    // 也不支持完全关闭)。thinkingBudget 本身在 3.x 上仍向后兼容(3 系开发指南),故只改 off 一格,
+    // 不迁 thinking_level —— 那套各型号档位还不一致(3.7-flash 不认 minimal),现在迁是净增风险。
+    id: 'gemini-native-nodisable',
     provider: /^(gemini|google)/i,
-    model: /2\.5-pro/i,
+    model: /2\.5-pro|gemini-3/i,
     cap: { format: 'gemini-budget', levels: { ...GEMINI_BUDGETS, off: null }, maxTokensField: 'max_tokens' },
   },
   {
     id: 'gemini-native',
     provider: /^(gemini|google)/i,
     cap: { format: 'gemini-budget', levels: GEMINI_BUDGETS, maxTokensField: 'max_tokens' },
-  },
-  {
-    // 直连走 Google 的 OpenAI 兼容层,那边只认 reasoning_effort。
-    id: 'gemini-openai-compat',
-    host: /(^|\.)generativelanguage\.googleapis\.com$/,
-    cap: { format: 'openai-effort', levels: EFFORT_LMH_OFF, maxTokensField: 'max_tokens' },
   },
 
   // ── 中国厂商直连 ───────────────────────────────────────────────────────
@@ -311,10 +469,52 @@ const RULES: Rule[] = [
     cap: { format: 'deepseek', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
   {
-    // 智谱 GLM / z.ai:thinking:{type},**不认** reasoning_effort。
+    // GLM-5.3 / 5.3-flash:思考**强制常开** —— 官方已不支持 `thinking:{type:'disabled'}`(发了直接失败),
+    // 深度改由 `reasoning_effort: low|high|max` 控,**缺省 max**。所以这条规则有两个职责:
+    //   ① off:null —— 用户拨「关」被夹到最弱的 low,而不是发一个必然失败的 disabled;
+    //   ② 把档位真发出去 —— 不发就是每次都按最贵的 max 跑(拨了低档静默烧钱,正是本表要防的失败模式)。
+    // GLM-5.2 及更早仍可关思考,继续走下面的 zhipu-glm 老规则(它们的 effort 词表也不同,不合并)。
+    id: 'zhipu-glm53',
+    host: /(^|\.)(bigmodel\.cn|z\.ai)$/,
+    model: /glm-5\.3/i,
+    cap: { format: 'zai', levels: EFFORT_LHM, maxTokensField: 'max_tokens' },
+  },
+  {
+    // GLM-5.2:七档 effort 全支持(官方词表 none/minimal/low/medium/high/xhigh/max,缺省 max)。
+    // 不发 = 一直按最贵的 max 跑;和 5.3 是同一类静默烧钱,只是它还能关思考。
+    id: 'zhipu-glm52',
+    host: /(^|\.)(bigmodel\.cn|z\.ai)$/,
+    model: /glm-5\.2/i,
+    cap: { format: 'zai', levels: GLM52_EFFORT, maxTokensField: 'max_tokens' },
+  },
+  {
+    // GLM-4.7 / GLM-4.5V:官方深度思考对照表列为「强制思考,不可关闭」,但 5.1 及以下**不支持**
+    // reasoning_effort —— 所以只有开关的一半:能开不能关,也没有深度档。
+    id: 'zhipu-glm-always-on',
+    host: /(^|\.)(bigmodel\.cn|z\.ai)$/,
+    model: /glm-(4\.7|4\.5v)/i,
+    cap: { format: 'zai', levels: TOGGLE_ALWAYS_ON, maxTokensField: 'max_tokens' },
+  },
+  {
+    // 智谱 GLM(5.1 及更早的可关线):thinking:{type} 纯开关,**不认** reasoning_effort。
     id: 'zhipu-glm',
     host: /(^|\.)(bigmodel\.cn|z\.ai)$/,
     cap: { format: 'zai', levels: TOGGLE, maxTokensField: 'max_tokens' },
+  },
+  {
+    // 百炼上的**纯思考**模型(官方:「纯思考模型无此参数」)—— qwen3.7-max 的两支 preview 快照,
+    // 以及带 -thinking 后缀的型号。给它们发 enable_thinking 是发未知字段,一律什么都不发。
+    id: 'dashscope-qwen-pure',
+    host: /(^|\.)(dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com|bailian\.aliyuncs\.com)$/,
+    model: /qwen3\.7-max-(preview|2026-05-17)|thinking/i,
+    cap: { format: 'none', levels: FIXED, maxTokensField: 'max_tokens' },
+  },
+  {
+    // Qwen3.8 系:预算量级与 3.x 完全不同(见 QWEN38_BUDGETS)。
+    id: 'dashscope-qwen38',
+    host: /(^|\.)(dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com|bailian\.aliyuncs\.com)$/,
+    model: /qwen3\.8/i,
+    cap: { format: 'qwen', levels: QWEN38_BUDGETS, maxTokensField: 'max_tokens' },
   },
   {
     // 阿里百炼 DashScope:Qwen3 系 enable_thinking + thinking_budget。
@@ -323,7 +523,26 @@ const RULES: Rule[] = [
     cap: { format: 'qwen', levels: QWEN_BUDGETS, maxTokensField: 'max_tokens' },
   },
   {
-    // Moonshot Kimi:thinking 模型自带,普通模型无档可调;两者都不认 reasoning_effort。
+    // Kimi K3(2026-07):思考常开不可关,深度用**顶层** reasoning_effort(low/high/max,缺省 max)。
+    // 老规则把它当普通 moonshot 模型走 prefix —— 一个协议字段都不发 = 永远跑最贵的 max 档。
+    id: 'moonshot-k3',
+    host: /(^|\.)moonshot\.(cn|ai)$/,
+    model: /^kimi-k3/i,
+    cap: { format: 'openai-effort', levels: EFFORT_LHM, maxTokensField: 'max_tokens' },
+  },
+  {
+    // 火山方舟(豆包 Doubao):thinking:{type} 与 reasoning_effort 都收,但 effort 词表是
+    // minimal/low/medium/high(minimal 即不思考),**没有 'none'**。此前它只被 KNOWN_GATEWAY
+    // 的通用规则兜着,关思考时发的正是 'none'。只发 effort 一个字段,不叠 thinking:{type}。
+    // ⚠️ 必须带 model 条件:方舟上还转售 GLM / DeepSeek / Kimi / Qwen,只按 host 命中会把它们
+    // 全部吞掉(它们本该落到后面的模型族规则),等于给它们发豆包专用的 effort 词表。
+    id: 'volcengine-doubao',
+    host: /(^|\.)volces\.com$/,
+    model: /doubao/i,
+    cap: { format: 'openai-effort', levels: DOUBAO_EFFORT, maxTokensField: 'max_tokens' },
+  },
+  {
+    // Moonshot Kimi(K2 及更早):thinking 模型自带,普通模型无档可调;两者都不认 reasoning_effort。
     id: 'moonshot-thinking',
     host: /(^|\.)moonshot\.(cn|ai)$/,
     model: /thinking/i,
@@ -336,6 +555,14 @@ const RULES: Rule[] = [
   },
 
   // ── 聚合网关 ───────────────────────────────────────────────────────────
+  {
+    // OpenRouter 归一层用 effort:'none' 表达关思考,但对模型元数据里 `mandatory: true`
+    // (思考不可关)的型号会被上游拒。保持 openrouter 形态不变,只把 off 这一格关掉。
+    id: 'openrouter-mandatory-reasoning',
+    host: /(^|\.)openrouter\.ai$/,
+    model: /glm-5\.3|kimi-k3|gemini-3|grok-4\.[5-9]/i,
+    cap: { format: 'openrouter', levels: { ...EFFORT_OPENROUTER, off: null }, maxTokensField: 'max_tokens' },
+  },
   {
     id: 'openrouter',
     host: /(^|\.)openrouter\.ai$/,
@@ -353,6 +580,20 @@ const RULES: Rule[] = [
     },
   },
   {
+    // grok-4.5 / 4.6:reasoning_effort 又回来了(4.5 认 low/medium/high;4.6 起多一档 xhigh,
+    // 且官方明说不支持 xhigh 的型号**把它当 high 处理**、不报错 —— 故一条规则覆盖两代够用)。
+    // 思考不可关 → off:null。grok-4 与 grok-4.20-reasoning/non-reasoning 收到该参数会**报错**,
+    // 继续落下面的 'none' 兜底(default-deny:没实证的型号一律不发)。
+    id: 'xai-grok-effort',
+    host: /(^|\.)x\.ai$/,
+    model: /grok-4\.[5-9]/i,
+    cap: {
+      format: 'openai-effort',
+      levels: { off: null, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh' },
+      maxTokensField: 'max_tokens',
+    },
+  },
+  {
     id: 'xai-grok',
     host: /(^|\.)x\.ai$/,
     cap: { format: 'none', levels: FIXED, maxTokensField: 'max_tokens' },
@@ -360,10 +601,36 @@ const RULES: Rule[] = [
 
   // ── 族规则(仅在已知宽松网关上生效)────────────────────────────────────
   {
+    id: 'gateway-qwen38',
+    host: KNOWN_GATEWAY,
+    model: /qwen-?3\.8/i,
+    cap: { format: 'qwen', levels: QWEN38_BUDGETS, maxTokensField: 'max_tokens' },
+  },
+  {
     id: 'gateway-qwen3',
     host: KNOWN_GATEWAY,
     model: /qwen-?3|qwen3/i,
     cap: { format: 'qwen', levels: QWEN_BUDGETS, maxTokensField: 'max_tokens' },
+  },
+  {
+    // 网关转售的 GLM-5.3(`zai-org/GLM-5.3` 之类):同样关不掉思考,同样要发 effort。
+    // ⚠️ 本段整体在 `openrouter` 规则之后 —— OpenRouter 上的 glm-5.3 继续走它的 reasoning:{effort} 归一层。
+    id: 'gateway-glm53',
+    host: KNOWN_GATEWAY,
+    model: /glm-5\.3/i,
+    cap: { format: 'zai', levels: EFFORT_LHM, maxTokensField: 'max_tokens' },
+  },
+  {
+    id: 'gateway-glm52',
+    host: KNOWN_GATEWAY,
+    model: /glm-5\.2/i,
+    cap: { format: 'zai', levels: GLM52_EFFORT, maxTokensField: 'max_tokens' },
+  },
+  {
+    id: 'gateway-glm-always-on',
+    host: KNOWN_GATEWAY,
+    model: /glm-(4\.7|4\.5v)/i,
+    cap: { format: 'zai', levels: TOGGLE_ALWAYS_ON, maxTokensField: 'max_tokens' },
   },
   {
     id: 'gateway-glm',
@@ -406,9 +673,19 @@ function hostOf(baseUrl: string | undefined): string {
   }
 }
 
+function pathOf(baseUrl: string | undefined): string {
+  if (!baseUrl) return '';
+  try {
+    return new URL(baseUrl).pathname;
+  } catch {
+    return '';
+  }
+}
+
 /** 端点 + 模型 → 能力。永远返回一条(兜底 prefix),调用方无需判空。 */
 export function resolveModelCapability(q: CapabilityQuery): ModelCapability {
   const host = hostOf(q.baseUrl);
+  const urlPath = pathOf(q.baseUrl);
   const model = q.modelId || '';
   const provider = q.provider || '';
   const protocol = q.protocol || '';
@@ -416,9 +693,10 @@ export function resolveModelCapability(q: CapabilityQuery): ModelCapability {
   for (const r of RULES) {
     if (r.protocol && !r.protocol.test(protocol)) continue;
     if (r.host && !(host && r.host.test(host))) continue;
+    if (r.urlPath && !r.urlPath.test(urlPath)) continue;
     if (r.provider && !r.provider.test(provider)) continue;
     if (r.model && !r.model.test(model)) continue;
-    if (!r.protocol && !r.host && !r.provider && !r.model) continue; // 空规则不算命中
+    if (!r.protocol && !r.host && !r.provider && !r.model && !r.urlPath) continue; // 空规则不算命中
     return { rule: r.id, ...r.cap };
   }
 
@@ -565,13 +843,11 @@ export function applyThinking(
       payload.chat_template_kwargs = { enable_thinking: on, preserve_thinking: true };
       break;
 
+    // 两家线上形态字面相同(历史上分开写,DeepSeek V4 与 GLM-5.3 先后加了 effort 后已无差异)。
+    // 深度可调的族在 levels 里给字符串档;老的纯开关族 levels 是布尔 → 只发开关,不发未知字段。
     case 'zai':
-      payload.thinking = { type: on ? 'enabled' : 'disabled' };
-      break;
-
     case 'deepseek':
       payload.thinking = { type: on ? 'enabled' : 'disabled' };
-      // V4 起深度可调(levels 给字符串档);老 chat 线 levels 是布尔 → 只发开关,不发未知字段。
       if (on && typeof wire === 'string') payload.reasoning_effort = wire;
       break;
   }
@@ -597,7 +873,14 @@ const NO_VISION_PATTERNS: readonly RegExp[] = [
   /^gpt-3\.5/i,
   /^o1-(mini|preview)/i,
   /^(text|davinci|babbage|curie|ada)-/i,
-  /^deepseek-(?!vl)/i, // DeepSeek 官方线整族纯文本;唯一的视觉分支是 deepseek-vl*(不在官方 API)
+  // DeepSeek 官方线整族纯文本,除两支视觉分支:deepseek-vl*(不在官方 API)与 2026-08 上线的
+  // `deepseek-v4-flash-vision-exp`(官方 API 现役,支持图像输入)。后者被族规则吞掉 = 静默劣化
+  // (白跑辅助模型 + 丢原图),正是本表最不愿意的误判方向,故按能力反查排除而非按型号枚举。
+  /^deepseek-(?!vl|.*vision)/i,
+  // GLM-5.3 官方文档明写「目前仅支持处理文本模态信息」。**但 5.3-Flash 是原生多模态**
+  // (GLM-5 系首个原生多模态模型,收图片/视频)—— 同族里一支纯文本一支能看图,必须反查排除,
+  // 否则把 Flash 判成无视觉 = 白跑辅助模型 + 丢原图(静默劣化,本表最不愿意的方向)。
+  /^glm-5\.3(?!-flash)($|[-.])/i,
   /(^|[-_])qwq([-_.]|$)/i, // QwQ 推理模型纯文本
 ];
 

@@ -19,7 +19,7 @@ import { EngineIcon } from './EngineIcon'
 import type { TanguDesktopConfig } from '../types'
 
 type EngineStatus = 'available' | 'needs-signin' | 'not-installed'
-type EngineRow = { id: string; name: string; available?: boolean; status?: EngineStatus; defaultModel?: string }
+type EngineRow = { id: string; name: string; available?: boolean; status?: EngineStatus; defaultModel?: string; setup?: string }
 type Caps = { models: Array<{ id: string; name: string; description?: string }> }
 
 export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
@@ -130,6 +130,12 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
                   return <span className="hint">{t('settings.agentClis.notDetected')}</span>
                 })()}
               </div>
+              {/* 未检测到 → 给出该引擎的一行安装命令(语言中立,直接可复制);已装的不显示。 */}
+              {!e.available && !!e.setup && (
+                <div className="hint" style={{ marginTop: 8 }}>
+                  <code style={{ userSelect: 'text' }}>{e.setup}</code>
+                </div>
+              )}
               {e.available ? (
                 <>
                   <div className="field" style={{ margin: '10px 0 0' }}>

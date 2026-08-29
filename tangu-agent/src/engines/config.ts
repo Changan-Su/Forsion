@@ -7,6 +7,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { enginePrefsFile, enginesFile } from '../core/tanguHome.js';
+import { dshEngineDef } from './dsh.js';
 import { getRawSection, saveSection } from '../core/config.js';
 
 export interface EngineDef {
@@ -24,6 +25,8 @@ export interface EngineDef {
   commands?: Array<{ name: string; description: string; hint?: string }>;
   /** 检测提示(快速判断该 agent 是否已装/已登录;任一命中即「detected」)。无则默认可用。 */
   detect?: { dirs?: string[]; env?: string[]; bin?: string };
+  /** 未检测到时给用户看的一行安装命令(设置页「Agent CLIs」显示)。语言中立,不进 i18n。 */
+  setup?: string;
 }
 
 // 内置：Claude Code 经官方 ACP 适配器。需用户已装/已登录 Claude Code（适配器读 ANTHROPIC_API_KEY 或 ~/.claude）。
@@ -34,6 +37,7 @@ const BUILTIN: EngineDef[] = [
     command: 'npx',
     args: ['-y', '@zed-industries/claude-code-acp'],
     detect: { dirs: ['~/.claude'], env: ['ANTHROPIC_API_KEY'], bin: 'claude' },
+    setup: 'npm i -g @anthropic-ai/claude-code',
   },
   // Codex 官方 ACP 桥(内含 @openai/codex);走同一 acpEngine,零适配器。鉴权用 Codex OAuth / OPENAI_API_KEY。
   {
@@ -42,6 +46,27 @@ const BUILTIN: EngineDef[] = [
     command: 'npx',
     args: ['-y', '@agentclientprotocol/codex-acp@latest'],
     detect: { dirs: ['~/.codex'], env: ['OPENAI_API_KEY', 'CODEX_API_KEY'], bin: 'codex' },
+    setup: 'npm i -g @openai/codex',
+  },
+  // OpenClaw 官方 `openclaw acp` 桥:对我们说 ACP over stdio,对内转发给本机 OpenClaw Gateway(WebSocket)。
+  // ⚠ 必须先起网关(`openclaw gateway start`),否则握手超时——AionUi 那套自研 Gateway WS 客户端已被此桥取代。
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    command: 'openclaw',
+    args: ['acp'],
+    detect: { dirs: ['~/.openclaw'], env: ['OPENCLAW_GATEWAY_TOKEN'], bin: 'openclaw' },
+    setup: 'npm i -g openclaw && openclaw gateway start',
+  },
+  // Pi(earendil-works)自身不讲 ACP;社区适配器 pi-acp 在 ACP 与 `pi --mode rpc` 之间转译,并自己去 PATH 上找 `pi`。
+  // ⚠ 非厂商官方包 → 版本钉死,升级必须是显式改动(claude-code/codex 那两条是官方桥,故可 @latest)。
+  {
+    id: 'pi',
+    name: 'Pi',
+    command: 'npx',
+    args: ['-y', 'pi-acp@0.0.33'],
+    detect: { dirs: ['~/.pi'], bin: 'pi' },
+    setup: 'npm i -g @earendil-works/pi-coding-agent',
   },
 ];
 
@@ -65,7 +90,8 @@ export function loadEngines(configFile?: string): EngineDef[] {
     else fromFile(enginesFile());
   }
   const byId = new Map<string, EngineDef>();
-  for (const e of BUILTIN) byId.set(e.id, e);
+  // dsh 的启动命令含绝对路径(随 TANGU_HOME),故按调用时求值,不能进模块级 BUILTIN 常量。
+  for (const e of [...BUILTIN, dshEngineDef()]) byId.set(e.id, e);
   for (const e of custom) if (e?.id && e?.command) byId.set(e.id, e); // 校验 id+command 才纳入
   return [...byId.values()];
 }
@@ -80,15 +106,41 @@ function expandHome(p: string): string {
  * 仅靠 process.env.PATH 会漏检「明明装了」的 CLI(claude 常在 ~/.local/bin)。
  * ponytail: 静态常见目录足够;fnm/nvm 版本目录是动态的,交给 detect.dirs(~/.codex 等)兜底。
  */
+export function extraBinDirs(): string[] {
+  const home = os.homedir();
+  return process.platform === 'win32'
+    ? [
+        path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'npm'),
+        path.join(home, 'scoop', 'shims'),
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
+      ]
+    : [
+        path.join(home, '.local', 'bin'),
+        path.join(home, '.npm-global', 'bin'),
+        path.join(home, '.volta', 'bin'),
+        path.join(home, '.cargo', 'bin'),
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        '/usr/local/sbin',
+        '/usr/bin',
+      ];
+}
+
+/**
+ * 把 extraBinDirs() 里「真实存在且不在 PATH 上」的目录追加进 env 的 PATH。
+ * 为什么必须:引擎子进程继承的是 GUI Electron 的精简 PATH,`openclaw`(全局 bin)与 pi-acp 自己去找的 `pi`
+ * 都靠 PATH 解析 → 终端里好用、装成 App 就 ENOENT。检测(binOnPath)早就扫这些目录了,spawn 也得扫。
+ * Windows 上 env 键可能是 `Path`,按原键名回写,避免同时出现 Path/PATH 两份。
+ */
+export function envWithFullPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+  const cur = (env[key] || '').split(path.delimiter).filter(Boolean);
+  const add = extraBinDirs().filter((d) => !cur.includes(d) && existsSync(d));
+  return add.length ? { ...env, [key]: [...cur, ...add].join(path.delimiter) } : env;
+}
+
 function binOnPath(bin: string): boolean {
-  const extra = [
-    path.join(os.homedir(), '.local', 'bin'),
-    path.join(os.homedir(), '.npm-global', 'bin'),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    '/usr/bin',
-  ];
-  const dirs = [...(process.env.PATH || '').split(path.delimiter), ...extra].filter(Boolean);
+  const dirs = [...(process.env.PATH || '').split(path.delimiter), ...extraBinDirs()].filter(Boolean);
   const names = process.platform === 'win32' ? [bin, `${bin}.exe`, `${bin}.cmd`] : [bin];
   return dirs.some((d) => names.some((n) => existsSync(path.join(d, n))));
 }

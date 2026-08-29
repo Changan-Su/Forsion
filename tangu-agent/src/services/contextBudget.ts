@@ -9,9 +9,11 @@
  *    平时历史 append-only;只有越过 COMPACT_TRIGGER_RATIO 才折叠一次,缓存 miss 摊薄成偶发。
  *  - capToolResult:工具结果入列硬帽,兜底未封顶路径(host list_dir 大目录、custom provider 等)。
  *
- * 模型上下文窗口:模型库暂无 per-model 窗口字段,用 TANGU_CONTEXT_WINDOW_TOKENS(默认 128k)。
+ * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / admin 在模型上填的
+ *    context_window)> 上游实测的(contextWindowStore 从超长报错里回学)> 手写族表 > 128k 兜底。
  */
 import type { ChatMessage } from '../core/types.js';
+import { learnedWindow } from './contextWindowStore.js';
 
 /**
  * 锚定消息(借 Codex「reference context item」):注入的 system/skills/memory 块等——compactContext 永不折叠。
@@ -47,9 +49,17 @@ const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/codex-mini/i, 200_000], // 先于 gpt-5|codex:codex-mini 是 o4-mini 底,272k 会溢出
   [/gpt-5|codex/i, 272_000], // GPT-5 家族 400k 总窗,input 上限 272k(codex 模型目录同值)
   [/gpt-4\.1/i, 1_000_000],
+  // Claude 5 家族(Sonnet/Opus/Fable)与 Opus 4.7 起是 1M(官方模型表);必须排在下面那条
+  // claude 泛规则**之前**(数组首命中)。4.6 及更早、Haiku 4.5 仍是 200k,继续走泛规则。
+  [/(sonnet|opus|fable|mythos)-([5-9]|\d\d)|opus-4[-.]([7-9]|\d\d)/i, 1_000_000],
   [/claude|sonnet|opus|haiku/i, 200_000],
   [/gemini-[23]/i, 1_000_000], // 只认主线 2.x/3 聊天族;其余 gemini 变体窗口不一,留 128k 保守值
   [/deepseek-v4/i, 1_000_000], // V4 flash/pro 都是 1M;老 chat/reasoner 线窗口小得多,不收
+  [/kimi-k3/i, 1_000_000], // K3 官方 1M(K2 线 256k 以下,不收)
+  [/glm-5\.3/i, 1_000_000], // 官方 GLM-5.3 页写 1M(5.3-flash 同族);GLM-5 是 200k,故不扩到整族
+  // 百炼「推荐模型」表里 qwen3.8-max = 1M。3.8 的小尺寸变体窗口未核实,故刻意只收 -max:
+  // 窗口报大了会跳过折叠、直接撞 provider 溢出,比 128k 默认的早折叠更糟。
+  [/qwen3\.8-max/i, 1_000_000],
 ];
 
 /**
@@ -72,16 +82,26 @@ const MODEL_WINDOW_OVERRIDES: Record<string, number> = (() => {
   }
 })();
 
-/** 解析某模型的上下文窗口:覆盖表 > 模型对象自带(context_window/contextWindow) > 族兜底 > 全局默认。 */
-/** 窗口值的来源:override=env 覆盖表 / model=模型元数据 / family=按模型族推断 / default=128k 兜底。
- *  后两档是「猜的」——context 视图据此提示用户该窗口并非模型自报(H5)。 */
-export type CtxWindowSource = 'override' | 'model' | 'family' | 'default';
+/**
+ * 解析某模型的上下文窗口。优先级 = **人说的 > 上游说的 > 我们猜的**:
+ *   override  env `TANGU_MODEL_CONTEXT_WINDOWS` 覆盖表(手动兜底,最高)
+ *   model     模型元数据自带(托管面 admin 在模型上填的窗口 / provider 返回的字段)
+ *   learned   从上游「超长被拒」的报错里回学到的真实上限(自动识别,见 contextWindowStore)
+ *   family    手写模型族表(猜的)
+ *   default   128k 兜底(猜的)
+ *
+ * learned 排在 family 之前、model 之后:它是上游亲口说的实测值,比手写族表准;但人明确填过的
+ * 值不被它推翻(冲突只体现在 source 标注上,不静默改配置)。
+ */
+export type CtxWindowSource = 'override' | 'model' | 'learned' | 'family' | 'default';
 
 /** modelContextWindow 的带来源版本:值与来源一起给,供 context 视图如实标注。 */
 export function modelContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource } {
   if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return { tokens: MODEL_WINDOW_OVERRIDES[modelId], source: 'override' };
   const fromObj = Number(modelObj?.context_window ?? modelObj?.contextWindow);
   if (Number.isFinite(fromObj) && fromObj >= 4_000) return { tokens: Math.floor(fromObj), source: 'model' };
+  const learned = modelId ? learnedWindow(modelId) : undefined;
+  if (learned) return { tokens: learned, source: 'learned' };
   if (modelId) {
     for (const [re, win] of FAMILY_WINDOWS) if (re.test(modelId)) return { tokens: win, source: 'family' };
   }
