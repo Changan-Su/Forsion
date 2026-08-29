@@ -16,6 +16,7 @@
  *     坞里就该出现夹子格、成员不再单独占格、点开二级应用层能切过去,且 ribbon 上是同一份分组
  *   6 ⚠️拖拽重排写回:坞上看不见主页那一格,但 `setZoneOrder('top', …)` 写的是**整条**上区顺序 ——
  *     基准序漏掉主页 = 它从持久数组里消失 → rankIds 把未列出的排最后 → 主页图标掉进 ribbon 的「…」
+ *     释放时 DragOverlay 必须立即销毁,不能从指针处跨屏飞回落点;格子本身的让位动画仍保留。
  *   7 关掉:图标没了、主页视图不再可见、活动 Space 已切走、启动器里没有「主页」卡
  *   8 开回来:图标回来,还能再进去
  *   9 ⚠️别的 Space 的**命名布局**里留着主页面板时关插件 —— 切回去不许炸
@@ -28,7 +29,7 @@
  *  12 自定义壁纸:图片进 IndexedDB、偏好进 localStorage;reload 后仍恢复,且设置面板三种来源齐全。
  *  13 壁纸材质:只有 Chatbox 文本区进入输入模式才触发景深;玻璃总开关关掉时回到不透明材质。
  *  14 Bing 壁纸经固定目标 Electron IPC 暴露,不重新引入浏览器搜索或任意 URL 代理。
- *  15 主题背景:无图片时仍有随 token 变化的简约舞台;右键空白直接打开二级收纳层。
+ *  15 主题背景:四个随 token 变化的 Forsion 图形预设;右键空白直达紧凑、无重叠的二级收纳层。
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:homepage          截图自查(亮/暗各一张):npm run check:homepage -- --shot
@@ -189,7 +190,7 @@ async function probePointerMotion(win, fromId, toId) {
   const to = win.locator(`.hp-organizer-grid .hp-tile[data-id="${toId}"]`)
   const a = await from.boundingBox()
   const b = await to.boundingBox()
-  if (!a || !b) return { overlay: 0, shifted: 0, over: null }
+  if (!a || !b) return { overlay: 0, shifted: 0, over: null, releaseOverlay: -1, releaseMs: -1 }
   await win.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
   await win.mouse.down()
   await win.mouse.move(a.x + a.width / 2 - 10, a.y + a.height / 2, { steps: 3 })
@@ -203,8 +204,12 @@ async function probePointerMotion(win, fromId, toId) {
       e.getAttribute('data-id') !== ${JSON.stringify(fromId)} && e.style.transform && e.style.transform !== 'translate3d(0px, 0px, 0)'
     ).length,
   }))()`)
+  const releaseAt = Date.now()
   await win.mouse.up()
-  await win.waitForTimeout(500)
+  await win.waitForFunction(`document.querySelectorAll('.hp-drag-overlay').length === 0`, { timeout: 240 }).catch(() => {})
+  state.releaseMs = Date.now() - releaseAt
+  state.releaseOverlay = await win.locator('.hp-drag-overlay').count()
+  await win.waitForTimeout(260)
   return state
 }
 
@@ -382,6 +387,7 @@ async function main() {
     check(
       '6 坞里拖拽重排:顺序写回 ribbon,且主页没从持久顺序里掉出去',
       pointerMotion.overlay === 1 && pointerMotion.over === 'space:tangu' && pointerMotion.shifted > 0
+        && pointerMotion.releaseOverlay === 0 && pointerMotion.releaseMs < 240
         && ord.includes('space:home')
         && ord.indexOf('space:inbox') < ord.indexOf('space:tangu')
         && reordered.organizerTiles.indexOf('收件箱') < reordered.organizerTiles.indexOf('Tangu'),
@@ -512,12 +518,15 @@ async function main() {
         image: document.querySelector('.hp-wallpaper')?.style.backgroundImage || '',
         source: prefs.source,
         backdrop: card ? getComputedStyle(card).backdropFilter : '',
+        edgeBackdrop: getComputedStyle(document.querySelector('.hp-wallpaper-edge')).backdropFilter,
+        edgeMask: getComputedStyle(document.querySelector('.hp-wallpaper-edge')).maskImage,
       }
     })()`)
     check(
       '12 自定义壁纸:三来源齐全,原图进入设备存储并立即成为主页舞台',
       JSON.stringify(wallpaperControls.sources) === JSON.stringify(['theme', 'bing', 'custom'])
-        && custom.wallpaper === 'true' && custom.image.startsWith('url("blob:') && custom.source === 'custom',
+        && custom.wallpaper === 'true' && custom.image.startsWith('url("blob:') && custom.source === 'custom'
+        && custom.edgeBackdrop.includes('blur(') && custom.edgeMask.includes('gradient('),
       JSON.stringify({ wallpaperControls, custom }),
     )
     if (SHOT) {
@@ -601,10 +610,15 @@ async function main() {
       await win.waitForTimeout(260)
     }
 
-    // 15 关掉图片来源后,舞台仍有由 Genesis token 生成的渐变;空白右键直达同一收纳层。
+    // 15 关掉图片来源后,舞台有可选的 Forsion 图形预设;空白右键直达紧凑收纳层。
     await win.click('.hp-wallpaper-button')
     await win.waitForSelector('.hp-wallpaper-sheet')
     await win.click('.hp-wallpaper-sources button[data-source="theme"]')
+    const themePresets = await win.evaluate(`(() => ({
+      ids: [...document.querySelectorAll('.hp-theme-presets button')].map((e) => e.getAttribute('data-preset')),
+      previews: [...document.querySelectorAll('.hp-theme-preview')].every((e) => getComputedStyle(e).backgroundImage.includes('gradient(')),
+    }))()`)
+    await win.click('.hp-theme-presets button[data-preset="topography"]')
     await win.click('.hp-wallpaper-head > button')
     await win.waitForTimeout(350)
     const themeStage = await win.evaluate(`(() => {
@@ -612,27 +626,72 @@ async function main() {
       const paper = document.querySelector('.hp-wallpaper')
       return {
         wallpaper: root?.getAttribute('data-wallpaper') || '',
+        preset: root?.getAttribute('data-theme-preset') || '',
         inlineImage: paper?.style.backgroundImage || '',
         backgroundImage: paper ? getComputedStyle(paper).backgroundImage : '',
+        art: getComputedStyle(document.querySelector('.hp-wallpaper-art')).backgroundImage,
       }
     })()`)
     await win.evaluate(`document.querySelector('.hp-root')?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 90, clientY: 90 }))`)
     await win.waitForSelector('.hp-organizer-stage', { state: 'visible' })
     await win.waitForTimeout(500)
-    const rightClickOrganizer = await win.evaluate(`(() => ({
-      organizer: document.querySelectorAll('.hp-organizer-stage').length,
-      blur: getComputedStyle(document.querySelector('.hp-wallpaper')).filter,
-    }))()`)
+    const rightClickOrganizer = await win.evaluate(`(() => {
+      const grid = document.querySelector('.hp-organizer-grid')
+      const head = document.querySelector('.hp-organizer-head')
+      const panel = document.querySelector('.hp-organizer-panel')
+      const first = grid?.querySelector('.hp-tile')
+      const seed = first?.cloneNode(true)
+      while (seed && grid.querySelectorAll('.hp-tile').length < 25) {
+        const clone = seed.cloneNode(true)
+        clone.removeAttribute('style')
+        clone.setAttribute('data-id', 'dense:' + grid.querySelectorAll('.hp-tile').length)
+        grid.appendChild(clone)
+      }
+      const hs = head?.getBoundingClientRect()
+      const fs = first?.getBoundingClientRect()
+      const ps = panel?.getBoundingClientRect()
+      const style = grid ? getComputedStyle(grid) : null
+      return {
+        organizer: document.querySelectorAll('.hp-organizer-stage').length,
+        blur: getComputedStyle(document.querySelector('.hp-wallpaper')).filter,
+        panelWidth: ps?.width || 0,
+        columns: style?.gridTemplateColumns.split(' ').filter(Boolean).length || 0,
+        columnGap: Number.parseFloat(style?.columnGap || '99'),
+        tileWidth: fs?.width || 0,
+        headGap: fs && hs ? fs.top - hs.bottom : -1,
+        gridHeight: grid?.clientHeight || 0,
+        gridScrollHeight: grid?.scrollHeight || 0,
+      }
+    })()`)
     check(
-      '15 无图片时有自适应主题背景,空白右键直接进入二级收纳层',
+      '15 四套自适应主题图形可选,高密度收纳层紧凑且头部不重叠',
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
-        && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur('),
-      JSON.stringify({ themeStage, rightClickOrganizer }),
+        && themeStage.preset === 'topography' && themeStage.art.includes('gradient(')
+        && JSON.stringify(themePresets.ids) === JSON.stringify(['rings', 'topography', 'weave', 'horizon']) && themePresets.previews
+        && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur(')
+        && rightClickOrganizer.panelWidth <= 600 && rightClickOrganizer.columns === 6
+        && rightClickOrganizer.columnGap <= 8 && rightClickOrganizer.tileWidth <= 80
+        && rightClickOrganizer.headGap >= 4 && rightClickOrganizer.gridHeight <= 414,
+      JSON.stringify({ themePresets, themeStage, rightClickOrganizer }),
     )
+    if (SHOT) {
+      const denseOut = path.join(os.tmpdir(), 'forsion-homepage.organizer-dense.png')
+      await win.screenshot({ path: denseOut })
+      console.log(`  截图 → ${denseOut}`)
+    }
     await win.click('.hp-organizer-head > button')
+    await win.waitForTimeout(700)
 
     if (SHOT) {
       // 观感自查(DESIGN.md §8):无图片默认背景,亮/暗各一张。
+      await win.click('.hp-wallpaper-button')
+      await win.waitForSelector('.hp-wallpaper-sheet')
+      await win.waitForTimeout(700)
+      const presetsOut = path.join(os.tmpdir(), 'forsion-homepage.theme-presets.png')
+      await win.screenshot({ path: presetsOut })
+      console.log(`  截图 → ${presetsOut}`)
+      await win.click('.hp-wallpaper-head > button')
+      await win.waitForTimeout(700)
       for (const mode of ['light', 'dark']) {
         if (mode === 'dark') {
           await win.evaluate(`document.querySelector('.lucide-moon')?.closest('button')?.click()`)

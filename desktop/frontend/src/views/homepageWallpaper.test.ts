@@ -7,8 +7,13 @@ describe('homepage wallpaper prefs', () => {
   it('normalizes old or malformed persisted values to safe defaults', () => {
     expect(normalizeHomepageWallpaperPrefs(null)).toEqual(DEFAULT_HOMEPAGE_WALLPAPER_PREFS)
     expect(normalizeHomepageWallpaperPrefs({ source: 'javascript:', bingDaily: 0, focusBlur: 0 })).toMatchObject({
-      source: 'theme', bingDaily: true, focusBlur: true, vignette: true,
+      source: 'theme', themePreset: 'rings', bingDaily: true, focusBlur: true, vignette: true,
     })
+  })
+
+  it('keeps known theme presets and falls back from unknown ones', () => {
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'topography' }).themePreset).toBe('topography')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'something-else' }).themePreset).toBe('rings')
   })
 
   it('accepts only Bing https images from the archive', () => {

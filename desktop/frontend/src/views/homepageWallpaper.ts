@@ -6,6 +6,7 @@
  */
 
 export type HomepageWallpaperSource = 'theme' | 'bing' | 'custom'
+export type HomepageThemePreset = 'rings' | 'topography' | 'weave' | 'horizon'
 
 export interface BingWallpaper {
   id: string
@@ -18,6 +19,7 @@ export interface BingWallpaper {
 
 export interface HomepageWallpaperPrefs {
   source: HomepageWallpaperSource
+  themePreset: HomepageThemePreset
   bingDaily: boolean
   focusBlur: boolean
   vignette: boolean
@@ -29,6 +31,7 @@ export const HOMEPAGE_CUSTOM_WALLPAPER_MAX_BYTES = 32 * 1024 * 1024
 
 export const DEFAULT_HOMEPAGE_WALLPAPER_PREFS: HomepageWallpaperPrefs = {
   source: 'theme',
+  themePreset: 'rings',
   bingDaily: true,
   focusBlur: true,
   vignette: true,
@@ -69,8 +72,12 @@ export function normalizeHomepageWallpaperPrefs(value: unknown): HomepageWallpap
   if (!value || typeof value !== 'object') return { ...DEFAULT_HOMEPAGE_WALLPAPER_PREFS }
   const raw = value as Record<string, unknown>
   const source: HomepageWallpaperSource = raw.source === 'bing' || raw.source === 'custom' ? raw.source : 'theme'
+  const themePreset: HomepageThemePreset = raw.themePreset === 'topography' || raw.themePreset === 'weave' || raw.themePreset === 'horizon'
+    ? raw.themePreset
+    : 'rings'
   return {
     source,
+    themePreset,
     bingDaily: raw.bingDaily !== false,
     focusBlur: raw.focusBlur !== false,
     vignette: raw.vignette !== false,

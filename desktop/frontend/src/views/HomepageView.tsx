@@ -45,7 +45,7 @@ import { useShallow } from 'zustand/react/shallow'
 import {
   clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, readCustomWallpaper,
   saveHomepageWallpaperPrefs, writeCustomWallpaper,
-  type BingWallpaper, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
+  type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
 import './homepage.css'
 
@@ -55,6 +55,7 @@ const SELF_SPACE = 'home'
 const LEAVE_MS = 140
 /** 首屏只留一排;超出的项收进「全部 Spaces」。收纳夹本身只占一格。 */
 const COMPACT_TILE_LIMIT = 6
+const THEME_PRESETS: HomepageThemePreset[] = ['rings', 'topography', 'weave', 'horizon']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
  * 键盘拖放没有 pointerCoordinates,回落 closestCenter 保留方向键可访问性。 */
@@ -630,6 +631,7 @@ export function HomepageView(_props: ViewProps) {
       ref={rootRef}
       className={`hp-root${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
       data-wallpaper={wallpaperUrl ? 'true' : undefined}
+      data-theme-preset={wallpaperPrefs.themePreset}
       data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
       data-vignette={wallpaperPrefs.vignette ? 'true' : 'false'}
       onPointerDown={(event) => {
@@ -643,6 +645,8 @@ export function HomepageView(_props: ViewProps) {
         style={wallpaperUrl ? { backgroundImage: `url(${JSON.stringify(wallpaperUrl)})` } : undefined}
         aria-hidden
       />
+      <div className="hp-wallpaper-art" aria-hidden />
+      <div className="hp-wallpaper-edge" aria-hidden />
       <div className="hp-wallpaper-tone" aria-hidden />
       <div className="hp-glow" aria-hidden />
 
@@ -717,7 +721,7 @@ export function HomepageView(_props: ViewProps) {
                   )}
                 </div>
               </SortableContext>
-              <DragOverlay dropAnimation={reduceMotion ? null : undefined}>
+              <DragOverlay dropAnimation={null}>
                 {activeTile && !organizerOpen && (
                   <div className={`hp-tile hp-drag-overlay${activeTile.kind === 'folder' ? ' hp-folder' : ''}`}>
                     <TileVisual tile={activeTile} />
@@ -775,9 +779,24 @@ export function HomepageView(_props: ViewProps) {
             {wallpaperError && <div className="hp-wallpaper-error">{wallpaperError}</div>}
 
             {wallpaperPrefs.source === 'theme' && (
-              <div className="hp-wallpaper-empty">
-                <Image size={21} />
-                <span>{t('home.wallpaper.themeHint')}</span>
+              <div className="hp-theme-presets">
+                <p>{t('home.wallpaper.themeHint')}</p>
+                <div>
+                  {THEME_PRESETS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      className={wallpaperPrefs.themePreset === preset ? 'on' : ''}
+                      data-preset={preset}
+                      aria-pressed={wallpaperPrefs.themePreset === preset}
+                      onClick={() => patchWallpaperPrefs({ source: 'theme', themePreset: preset })}
+                    >
+                      <span className="hp-theme-preview" data-preset={preset} aria-hidden />
+                      <span>{t(`home.wallpaper.preset.${preset}`)}</span>
+                      {wallpaperPrefs.themePreset === preset && <i><Check size={11} /></i>}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -904,7 +923,7 @@ export function HomepageView(_props: ViewProps) {
                   </button>
                 </div>
               </SortableContext>
-              <DragOverlay dropAnimation={reduceMotion ? null : undefined}>
+              <DragOverlay dropAnimation={null}>
                 {activeTile && (
                   <div className={`hp-tile hp-drag-overlay${activeTile.kind === 'folder' ? ' hp-folder' : ''}`}>
                     <TileVisual tile={activeTile} />
