@@ -5,6 +5,11 @@
  * 「上次退出时的 Space」。浏览器那支 check:spacerestore 守的是 Storage 层的交接语义,但它那里
  * **只有 tangu 一个 Space 注册**(inbox/amadeus/coding… 都要 host 桥)→ 跨 Space 这件事只能在这儿验。
  *
+ * ⚠️2026-08-28:**缺省又改了** —— 变成「ribbon 主位槽指着的那个 Space」(用户要求,见 spaces.tsx
+ * 的 startupSpacePref)。「上次退出」降级为**可选的一档**,不再是不设值时的行为。
+ * 本脚本守的仍然是那一档的语义,所以现在必须**显式写 `forsion_default_space='__last__'`**
+ * 再重启;不写的话第一程就被主位槽(默认=主页)接管,两条断言必红。
+ *
  * 做法:切到第二个 Space → 再多开一张标签(让布局与该 Space 的**默认**不同,否则「还原」与「重建」
  * 长得一模一样、判不出来)→ 关掉进程 → 重开。
  *  1 活动 Space 还是退出时那个(旧缺省会被推回 tangu)
@@ -61,6 +66,9 @@ const state = (win) => win.evaluate(() => ({
   await win.waitForTimeout(2500)
   await win.locator('.dv-new-tab').first().click() // 多开一张 → 与该 Space 的默认布局不同
   await win.waitForTimeout(2500)
+  // 显式选「上次退出」那一档(2026-08-28 起它不再是缺省;不写就走主位槽,验的就不是这条语义了)。
+  await win.evaluate(() => localStorage.setItem('forsion_default_space', '__last__'))
+  await win.waitForTimeout(300)
   const before = await state(win)
   await app.close()
   await new Promise((r) => setTimeout(r, 1500))

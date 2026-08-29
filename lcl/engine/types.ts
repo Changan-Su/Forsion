@@ -9,8 +9,11 @@ import type { ComponentType, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { PersistedPanel } from './layoutPersist'
 
-/** 视图可被开在主区 / 左侧栏 / 右侧栏。 */
-export type ViewLocation = 'main' | 'left' | 'right'
+/** 视图可被开在主区 / 左侧栏 / 右侧栏 / 底部面板(VS Code 式,只在主区下方,不跨左右栏)。 */
+export type ViewLocation = 'main' | 'left' | 'right' | 'bottom'
+
+/** 可折叠区(= 除主区外的三个「有折叠钮 + stash + 尺寸记忆」的区)。左右按宽、bottom 按高。 */
+export type DockSide = 'left' | 'right' | 'bottom'
 
 /** 一个 Dockview panel 的句柄(≈ Obsidian WorkspaceLeaf)。 */
 export interface Leaf {
@@ -85,8 +88,10 @@ export interface RibbonItem {
   tooltip?: string | (() => string)
   onClick?(): void
   /** 上区(默认;Spaces)或下区(命令);两区内均可拖拽改序、可进收纳夹,跨区禁止。
-   *  'head' = 顶部固定区(折叠钮旁):不参与拖拽/收纳/溢出/持久化,宿主放全局常驻件(如 Unit 切换器)。 */
-  side?: 'top' | 'bottom' | 'head'
+   *  'head' = 顶部固定区(折叠钮旁):不参与拖拽/收纳/溢出/持久化,宿主放全局常驻件(如 Unit 切换器)。
+   *  'home' = **两区之间那段空当的正中**(垂直居中的单独槽位):同样不参与拖拽/收纳/溢出/持久化。
+   *   宿主放「主位」件 —— 桌面端放的是 Home 槽位(默认指向主页 Space,可换成别的)。 */
+  side?: 'top' | 'bottom' | 'head' | 'home'
   /** 钉死在 ribbon 最底部:不参与拖拽/收纳/溢出(账号卡)。仅对 side:'bottom' 有意义。 */
   pinned?: boolean
   /** 复合项:自定义组件渲染,拿到 ribbon 展开态(替代 icon/onClick)。用于账号卡。 */

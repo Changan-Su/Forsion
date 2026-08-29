@@ -14,7 +14,7 @@ import type {
   StackNode,
 } from '@amadeus-shared/compiler/types'
 import { pageKey, resolvePageName } from '@amadeus-shared/links'
-import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
+import { parsePdfLinkInner, parseMediaLinkInner } from '@amadeus-shared/pdfLink'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
 import { amadeus } from '../api'
@@ -278,9 +278,6 @@ interface PageState {
   setPageCover(pagePath: string, cover: string | null): Promise<void>
   /** 设置封面纵向焦点(fm cover_y: 0-100 百分比,object-position 用;拖拽调焦点落盘)。 */
   setPageCoverY(pagePath: string, y: number | null): Promise<void>
-  /** 新建笔记后请求把光标落到标题栏(Notion 式:先命名);一次性,NoteTitle 加载到该页时消费。 */
-  focusTitleFor: string | null
-  consumeTitleFocus(): void
 
   /** Refresh both the page list and the folder list from disk. */
   refreshStructure(): Promise<void>
@@ -433,17 +430,12 @@ function makePageStore() {
     linkGraphVersion: 0,
     activeNotePath: null,
     pendingWikiCreate: null,
-    focusTitleFor: null,
 
     setActiveNotePath(path) {
       if (get().activeNotePath !== path) set({ activeNotePath: path })
     },
     bumpLinkGraph() {
       set((s) => ({ linkGraphVersion: s.linkGraphVersion + 1 }))
-    },
-
-    consumeTitleFocus() {
-      set({ focusTitleFor: null })
     },
 
     setDnd(activeId, overId) {
@@ -650,11 +642,17 @@ function makePageStore() {
       await amadeus.writeTextFile(path, '')
       track('note.create'); act('note.create', { f: path })
       await get().refreshPages()
+      // 聚焦请求必须先于导航:后设时 UnifiedPage 已经挂载并跑完一次性消费 effect,
+      // 信号永远等不到下一次 path 变化,表现成"新笔记偶尔不进标题编辑"。
+      requestTitleFocus(path)
+      // ⚠️ 导航必须交给宿主的 openNote 门面,别在这里直调 loadPage:loadPage 装的是**活动 scope**,
+      // 而活动 scope 只跟着编辑器面板走(amadeusViews effect ②)—— 站在主页/聊天/新标签上新建时,
+      // 它指着一个后台的编辑器 tab:笔记静默装进看不见的那份 store(当前 view 不跳),还会被那个 tab
+      // 的 effect ③ 认领走(标题+params 被改写)。用户实报:"工作区列表里有新笔记,当前 view 没跳过去"。
+      // 无人接管(纯 amadeus 宿主 / 台架 / 单测)→ 照旧就地装载。
+      if (navigateToNote(path)) return
       // loadPage 对已存在的素文件走 importForeign(纯读不回写):店内快照一致 + effect③ 认领;
       // 视图层路由判为 unified 后会调 releasePage 把这份快照交出去。
-      // 聚焦请求必须先于 loadPage 的 activePage 更新：后设时 UnifiedPage 已经挂载并跑完一次性消费
-      // effect，信号永远等不到下一次 path 变化，表现成“新笔记偶尔不进标题编辑”。
-      set({ focusTitleFor: path })
       await get().loadPage(path)
     },
 
@@ -783,6 +781,41 @@ function makePageStore() {
         if (pdfFile) window.dispatchEvent(new CustomEvent('amadeus:open-pdf', { detail: { path: pdfFile, page: pdf.loc?.page } }))
         return // 是 PDF 链接:命中即开;未命中也不落「创建笔记」兜底(带 # 的名字无意义)
       }
+      // 媒体时刻锚 [[lecture.mp4#t=95]] → 先问本页有没有这个播放器(就地 seek,不重建元素);
+      // 没人接 → 开独立的 amadeus-media 视图(方案 P1,2026-08-28 落地)。在此之前这里回落系统
+      // 播放器,时间戳静默丢失 —— 那是本轮修掉的另一半 bug(聊天引用条是同一个病的第一半)。
+      // 必须先接住 raw:linkTarget 会砍掉 `#t=`,与上面 PDF 分支同一个坑。
+      const media = parseMediaLinkInner(raw)
+      if (media) {
+        const hit = resolveFileName(media.target, get().files, src)
+        if (hit && media.loc) {
+          // 同步派发 + handled 回执:监听器同步执行,派发完就能读到有没有人认领。
+          const ev = new CustomEvent('amadeus:media-goto', {
+            detail: { path: hit, at: media.loc.at, to: media.loc.to, handled: false },
+          })
+          window.dispatchEvent(ev)
+          if ((ev.detail as { handled: boolean }).handled) return
+        }
+        // 有时刻锚才改道应用内播放器:裸 `[[a.mp4]]` 维持原样交系统播放器(那是既有语义,
+        // 本轮只修「时间戳静默丢失」这半边;要不要把裸链也收进应用内是另一个决定)。
+        // 动态 import:amadeusNav 反向 import 本模块,静态引会绕出模块环。
+        if (hit && media.loc) {
+          const loc = media.loc
+          void import('../../amadeusNav').then((m) => m.openMedia(hit, loc))
+          return
+        }
+        if (hit) void amadeus.openVaultFile?.(hit)?.catch(() => {})
+        return // 带 # 的名字落「创建笔记」兜底无意义,同 PDF 分支
+      }
+      // 裸 URL [[https://…]] → 外链。**绝不落「创建笔记」兜底**:此前它过不了下面三道解析,
+      // 直落 pendingWikiCreate,用户点确认就会在库里造出一篇叫 `https:/x.com/a.md` 的垃圾笔记。
+      if (/^https?:\/\//i.test(raw)) {
+        // 桌面走主进程 shell:openExternal;web/移动端没有 window.tangu —— 不兜底就是**点了没反应**
+        // (降级铁律:能力缺席时必须给可点落点,绝不静默)。
+        if (window.tangu?.openExternal) void window.tangu.openExternal(raw)
+        else window.open(raw, '_blank', 'noopener')
+        return
+      }
       // 画板命名空间([[X.excalidraw]] 链接,Obsidian 惯例省 .md;listPages 不收画板 → 页面命中不可能):
       // 应用内开白板 tab(事件解耦同 open-db)。绝不落「创建笔记」兜底 —— createWikiPage 的 newPage
       // 会把已有画板文件覆盖成空笔记。
@@ -828,7 +861,8 @@ function makePageStore() {
         const page = await amadeus.newPage(path)
         track('note.create'); act('note.create', { f: path })
         await get().refreshPages()
-        set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready', focusTitleFor: path })
+        requestTitleFocus(path)
+        set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
       } catch (e) {
         set({ error: String(e) })
       }
@@ -849,7 +883,8 @@ function makePageStore() {
           const page = await amadeus.newPage(path)
           track('note.create'); act('note.create', { f: path })
           await get().refreshStructure()
-          set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready', focusTitleFor: path })
+          requestTitleFocus(path)
+          set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
           return
         }
         if (sourcePath) {
@@ -883,7 +918,7 @@ function makePageStore() {
       await amadeus.newPage(path) // mkdir -p 语义:desktop atomicWrite / cloud materializeParents / mobile 同
       track('note.create'); act('note.create', { f: path })
       await get().syncFdChildren(parentPath) // 内含 refreshStructure
-      set({ focusTitleFor: path }) // 打开后落光标到标题栏(调用方负责 loadPage 导航)
+      requestTitleFocus(path) // 打开后落光标到标题栏(调用方负责导航)
       return path
     },
 
@@ -1458,6 +1493,30 @@ function makePageStore() {
 }
 
 export type PageStoreApi = ReturnType<typeof makePageStore>
+
+// ── 新建流的两个一次性信号(跨 scope)──────────────────────────────────────
+// 「新建笔记」的落点面板由宿主的 openNote 门面现算(可能是新开的 leaf),创建方拿不到它的 scope id ——
+// 所以这两个信号都住模块级、按 path 认领,谁先挂载谁拿走。放进 store 就会锁死在创建时的那个 scope 上。
+
+/** 导航请求:交给宿主的 openNote 门面(amadeusOverlays 接;`amadeus/` 是可移植层,不 import 宿主)。
+ *  返回 true = 已被接管;false = 没人听(纯 amadeus 宿主 / 台架 / 单测)→ 调用方自己 loadPage。 */
+export function navigateToNote(path: string): boolean {
+  // cancelable + preventDefault:平台自带的「有人接管了吗」握手,不用再自己发明标志位。
+  const ev = typeof CustomEvent === 'function' ? new CustomEvent('amadeus:navigate-note', { detail: { path }, cancelable: true }) : null
+  return !!ev && window.dispatchEvent?.(ev) === false
+}
+
+/** 标题聚焦请求(Notion 式:新建即先命名)。一次性,由装到该篇的编辑器认领。 */
+let pendingTitleFocus: string | null = null
+export function requestTitleFocus(path: string): void {
+  pendingTitleFocus = path
+}
+/** 认领:命中则清掉并返回 true(NoteTitle 与 UnifiedPage 各自挂载时问一次)。 */
+export function claimTitleFocus(path: string | null): boolean {
+  if (!path || pendingTitleFocus !== path) return false
+  pendingTitleFocus = null
+  return true
+}
 
 // ── 面板作用域(分屏)────────────────────────────────────────────────────────
 // scope = 编辑器面板的 leaf id。编辑器**子树内**经 PageScopeCtx 拿到自己那份;

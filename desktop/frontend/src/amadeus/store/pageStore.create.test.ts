@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
 const writes: Array<{ path: string; text: string }> = []
+const dispatched: string[] = []
 const writeTextFile = vi.fn(async (path: string, text: string) => {
   writes.push({ path, text })
 })
@@ -32,6 +33,11 @@ async function freshStore() {
   newPage.mockClear()
   loadPage.mockClear()
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} })
+  dispatched.length = 0
+  vi.stubGlobal('CustomEvent', class { type: string; detail: unknown; defaultPrevented = false
+    constructor(type: string, init?: { detail?: unknown }) { this.type = type; this.detail = init?.detail }
+    preventDefault() { this.defaultPrevented = true }
+  })
   vi.stubGlobal('window', {
     amadeus: {
       writeTextFile,
@@ -43,6 +49,8 @@ async function freshStore() {
     },
     addEventListener: () => {},
     removeEventListener: () => {},
+    // 宿主未接管(台架/单测):dispatchEvent 返 true → createPageInFolder 退回就地 loadPage。
+    dispatchEvent: (e: { type: string; defaultPrevented: boolean }) => { dispatched.push(e.type); return !e.defaultPrevented },
   })
   return await import('./pageStore')
 }
@@ -67,14 +75,17 @@ describe('createPageInFolder 素文件出生', () => {
     expect(writes[0]?.path).toBe('untitled-2.md')
   })
 
-  it('在页面开始加载前就发布标题聚焦请求（UnifiedPage 首次挂载即可消费）', async () => {
-    const { usePageStore: store } = await freshStore()
+  it('在页面开始加载前就发布标题聚焦请求（编辑器首次挂载即可认领）', async () => {
+    const { usePageStore: store, claimTitleFocus } = await freshStore()
     store.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
     let finish!: (value: Awaited<ReturnType<typeof loadPage>>) => void
     loadPage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     const creating = store.getState().createPageInFolder('')
     await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('untitled.md'))
-    expect(store.getState().focusTitleFor).toBe('untitled.md')
+    // 信号住模块级、按 path 认领:落点面板由宿主 openNote 现算(可能是新开的 leaf),
+    // 存进创建时那个 scope 的话,跨面板导航后永远没人消费得到。
+    expect(claimTitleFocus('untitled.md')).toBe(true)
+    expect(claimTitleFocus('untitled.md')).toBe(false) // 一次性
     finish({
       manifest: {
         schema: 'amadeus.page/3', id: 'pg_t', title: 'untitled.md', createdAt: '', updatedAt: '',
@@ -83,6 +94,25 @@ describe('createPageInFolder 素文件出生', () => {
       blocks: {},
     })
     await creating
+  })
+
+  // 用户实报(2026-08-29):站在主页/聊天上点「新建笔记」,工作区列表里出现了新笔记,当前 view 却没跳过去。
+  // 根因 = 这里直调 loadPage,装的是**活动 scope**(只跟着编辑器面板走)= 一个看不见的后台 tab。
+  it('导航交给宿主 openNote 门面(发 amadeus:navigate-note),宿主接管时不再就地 loadPage', async () => {
+    const { usePageStore: store } = await freshStore()
+    store.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
+    await store.getState().createPageInFolder('')
+    expect(dispatched).toContain('amadeus:navigate-note')
+    expect(loadPage).toHaveBeenCalledWith('untitled.md') // 无监听 → 退回就地装载
+
+    // 宿主接管(preventDefault)→ 一律由 openNote 决定落点,绝不再自己 loadPage
+    const { usePageStore: s2 } = await freshStore()
+    ;(globalThis as unknown as { window: { dispatchEvent: (e: { type: string }) => boolean } }).window.dispatchEvent =
+      (e) => { dispatched.push(e.type); return false }
+    s2.setState({ vaultRoot: '/v', pages: [], status: 'ready' })
+    await s2.getState().createPageInFolder('')
+    expect(dispatched).toContain('amadeus:navigate-note')
+    expect(loadPage).not.toHaveBeenCalled()
   })
 })
 

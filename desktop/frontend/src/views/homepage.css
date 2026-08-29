@@ -1,0 +1,841 @@
+/* 主页视图(内置插件「主页」)。外层只排版,材质与高程全部消费 Genesis LCL token。
+ * Spaces 只有一个群组面;每个 tile 不画「小卡片墙」,拖拽/落点/聚焦才显示强调带。 */
+
+/* 标志性标题的离线字体。文件为 Google Fonts latin 子集,SIL OFL 1.1。 */
+@font-face {
+  font-family: 'Dancing Script';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/DancingScript-Bold-latin.woff2') format('woff2');
+}
+
+.hp-root {
+  position: relative;
+  box-sizing: border-box;
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  padding: clamp(24px, 5vh, 48px) 24px;
+  isolation: isolate;
+  background: var(--bg);
+}
+
+/* 壁纸是主页自己的真实底层,玻璃叶子才能在它上面取样。没有图片时也保留一张
+ * 由背景轴 + 强调轴生成的安静舞台:深浅模式与主题色变化会自然传进来。 */
+.hp-wallpaper,
+.hp-wallpaper-tone,
+.hp-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.hp-wallpaper {
+  z-index: -3;
+  background-position: center;
+  background-size: cover;
+  transform: scale(1.001);
+  transition: transform 520ms var(--ease-spring), filter 420ms var(--ease-out);
+}
+.hp-root:not([data-wallpaper='true']) .hp-wallpaper {
+  background:
+    radial-gradient(ellipse 72% 58% at 12% 4%, color-mix(in srgb, var(--accent-ink) 11%, transparent), transparent 72%),
+    radial-gradient(ellipse 62% 68% at 92% 92%, color-mix(in srgb, var(--accent-ink) 7%, var(--bg-card)), transparent 76%),
+    linear-gradient(145deg, color-mix(in srgb, var(--bg) 94%, var(--accent-ink) 6%), var(--bg) 48%, color-mix(in srgb, var(--bg) 96%, var(--bg-card) 4%));
+}
+.hp-wallpaper-tone {
+  z-index: -2;
+  opacity: 0;
+  background:
+    linear-gradient(to bottom, color-mix(in srgb, var(--bg) 18%, transparent), transparent 36%),
+    radial-gradient(ellipse at center, transparent 32%, color-mix(in srgb, var(--bg) 56%, transparent) 100%);
+  transition: opacity var(--duration-slow) var(--ease-out);
+}
+.hp-root[data-wallpaper='true'] .hp-wallpaper-tone { opacity: 1; }
+.hp-root[data-wallpaper='true'][data-vignette='false'] .hp-wallpaper-tone { opacity: 0.36; }
+/* 背景轴给了 --glow 才画;未声明就保持透明,不在组件里自造色。 */
+.hp-glow {
+  z-index: -1;
+  background: var(--glow, none);
+}
+
+.hp-root[data-focus-blur='true'].hp-composer-focused .hp-wallpaper,
+.hp-root[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,
+.hp-root[data-focus-blur='true'].hp-secondary-open .hp-wallpaper {
+  filter: blur(8px) brightness(0.86);
+  transform: scale(1.045);
+}
+.hp-root[data-focus-blur='true'].hp-secondary-open .hp-wallpaper {
+  filter: blur(15px) brightness(0.8) saturate(0.9);
+  transform: scale(1.065);
+}
+
+.hp-wallpaper-button {
+  position: absolute;
+  z-index: 5;
+  top: 16px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-width) solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  box-shadow: var(--icon-shadow);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
+}
+.hp-wallpaper-button:hover,
+.hp-wallpaper-button.on { color: var(--text); background: var(--bg-hover); transform: scale(1.05); }
+.hp-root .hp-wallpaper-button {
+  background: color-mix(in srgb, var(--bg-card) 64%, transparent);
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+}
+.hp-wallpaper-file { display: none; }
+.hp-wallpaper-credit {
+  position: absolute;
+  z-index: 2;
+  right: 18px;
+  bottom: 12px;
+  max-width: min(420px, 54%);
+  overflow: hidden;
+  color: var(--text-light);
+  font-size: 9.5px;
+  line-height: 1.3;
+  opacity: 0.58;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hp-stack {
+  position: relative;
+  width: min(840px, 100%);
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+}
+
+.hp-title,
+.hp-composer,
+.hp-spaces { transition: opacity 320ms var(--ease-out), transform 360ms var(--ease-spring); }
+.hp-composer-focused .hp-title { opacity: 0.58; transform: translateY(-5px) scale(0.985); }
+.hp-composer-focused .hp-composer { transform: translateY(-2px) scale(1.012); }
+.hp-composer-focused .hp-spaces { opacity: 0.74; transform: translateY(5px) scale(0.988); }
+.hp-layer-focused .hp-stack { opacity: 0.18; transform: scale(0.965); }
+.hp-secondary-open .hp-stack { opacity: 0; transform: scale(0.955); pointer-events: none; }
+
+/* 退场时长须与 HomepageView.LEAVE_MS 一致。 */
+.hp-stack.leaving { opacity: 0; transform: scale(0.985); }
+
+@keyframes hp-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.hp-title,
+.hp-composer,
+.hp-spaces { animation: hp-rise var(--duration-slow) var(--ease-out) both; }
+.hp-composer { animation-delay: 60ms; }
+.hp-spaces { animation-delay: 120ms; }
+
+/* 标题只负责时间与个性,不和主操作抢体量。 */
+.hp-title { text-align: center; user-select: none; }
+.hp-brand {
+  margin-bottom: 3px;
+  color: var(--text);
+  opacity: 0.38;
+  font-family: 'Dancing Script', 'Snell Roundhand', 'Segoe Script', cursive;
+  font-size: clamp(30px, 4vw, 42px);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.hp-clock {
+  color: var(--text);
+  font-size: clamp(48px, 6vw, 58px);
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+.hp-date { margin-top: 9px; color: var(--text-muted); font-size: 12.5px; }
+.hp-greet { margin-top: 3px; color: var(--text-light); font-size: 14px; }
+.hp-root[data-wallpaper='true'] .hp-brand { opacity: 0.62; }
+.hp-root[data-wallpaper='true'] .hp-date,
+.hp-root[data-wallpaper='true'] .hp-greet { color: var(--text); opacity: 0.7; }
+
+/* ChatView 的 Composer2 本体原样复用,只取消它在聊天列里的外围 gutter。 */
+.hp-composer { width: 100%; }
+.hp-composer .t2c-inner { width: 100%; max-width: none; padding: 0; }
+.hp-composer .t2c-card { box-shadow: var(--card-shadow); }
+
+/* Spaces 是一个 pane,内部 tile 靠间距和 hover 组织,不再每项画边框+阴影。 */
+.hp-spaces {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-lg);
+  background: var(--overlay-light, color-mix(in srgb, var(--bg-card) 72%, transparent));
+}
+
+/* 图片壁纸和主题生成舞台都支持玻璃。取样和材质落在绘制叶子,不放到定位外壳。 */
+.hp-root .hp-composer .t2c-card,
+.hp-root .hp-spaces {
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 62%, transparent);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+}
+html[data-glass='off'] .hp-root .hp-composer .t2c-card,
+html[data-glass='off'] .hp-root .hp-spaces,
+html[data-glass='off'] .hp-root .hp-wallpaper-button,
+html[data-glass='off'] .hp-root .hp-folder-head,
+html[data-glass='off'] .hp-root .hp-organizer-head,
+html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
+  background: var(--bg-card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.hp-spaces-head {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 3px 7px 7px;
+}
+.hp-spaces-title { display: inline-flex; align-items: baseline; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.hp-spaces-count { color: var(--text-faint); font-size: 10.5px; font-weight: 400; }
+.hp-spaces-actions { display: inline-flex; align-items: center; gap: 5px; }
+.hp-spaces-actions button {
+  height: 27px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-instant) var(--ease-spring);
+}
+.hp-spaces-actions button:hover { color: var(--text); background: var(--bg-hover); }
+.hp-spaces-actions button:active { transform: scale(0.96); }
+
+.hp-dock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+}
+
+.hp-tile {
+  position: relative;
+  box-sizing: border-box;
+  width: 82px;
+  min-height: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 5px 7px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition:
+    transform var(--duration-fast) var(--ease-spring),
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+.hp-tile:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-2px); }
+.hp-tile:active { cursor: grabbing; transform: scale(0.97); }
+.hp-tile.dragging { opacity: 0.16; cursor: grabbing; }
+.hp-tile-icon {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--overlay-light, color-mix(in srgb, var(--text) 7%, transparent));
+  color: var(--text-light);
+  transition: transform var(--duration-fast) var(--ease-spring), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.hp-tile:hover .hp-tile-icon { background: var(--overlay-medium, var(--bg-hover)); color: var(--text); }
+.hp-tile-name {
+  width: 100%;
+  overflow: hidden;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 落点为 1px border + 0.5px 零模糊环,不改 border-width,不让重排时尺寸跳。 */
+.hp-tile[data-over] { border-color: var(--accent); box-shadow: 0 0 0 0.5px var(--accent); }
+.hp-folder[data-over] .hp-tile-icon { transform: scale(1.12); background: color-mix(in srgb, var(--accent) 16%, var(--overlay-light)); }
+
+/* 收纳夹的 2x2 预览。 */
+.hp-fpreview {
+  display: grid;
+  grid-template-columns: repeat(2, 12px);
+  grid-auto-rows: 12px;
+  place-content: center;
+  gap: 2px;
+  background: var(--overlay-medium, var(--bg-hover));
+}
+.hp-fmini { display: inline-flex; align-items: center; justify-content: center; opacity: 0.82; }
+.hp-folder.on { color: var(--text); background: var(--bg-hover); }
+.hp-folder-count,
+.hp-more-count {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.hp-more { cursor: pointer; }
+.hp-more .hp-tile-icon { border: var(--border-width) dashed var(--border); background: transparent; }
+.hp-more-count { color: var(--accent-ink); }
+
+/* DragOverlay 跟指针走,原位 tile 降到 16% 透明;其他 tile 由 dnd-kit 用 transform 产生排斥/让位。 */
+.hp-drag-overlay {
+  pointer-events: none;
+  cursor: grabbing;
+  background: var(--bg-card);
+  border-color: var(--accent);
+  box-shadow: var(--card-shadow);
+  opacity: 0.96;
+  transform: rotate(1deg) scale(1.04);
+}
+
+.hp-spaces-empty { padding: 20px 12px 22px; color: var(--text-faint); font-size: 12px; text-align: center; }
+
+/* ── 二级应用收纳层 ─────────────────────────────────────────────────────── */
+@keyframes hp-stage-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes hp-folder-open {
+  from { opacity: 0; transform: translate(var(--hp-folder-dx), var(--hp-folder-dy)) scale(0.24); }
+  to { opacity: 1; transform: translate(0, 0) scale(1); }
+}
+.hp-folder-stage,
+.hp-organizer-stage,
+.hp-wallpaper-stage {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--overlay-scrim) 72%, transparent);
+  animation: hp-stage-in var(--duration-fast) var(--ease-out) both;
+}
+.hp-organizer-stage { z-index: 20; overflow: auto; }
+.hp-folder-panel {
+  box-sizing: border-box;
+  width: min(680px, 100%);
+  min-height: 330px;
+  max-height: min(620px, calc(100% - 16px));
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform-origin: center;
+  animation: hp-folder-open 360ms var(--ease-spring) both;
+}
+.hp-root .hp-wallpaper-sheet {
+  border-color: color-mix(in srgb, var(--border) 76%, transparent);
+  background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+  backdrop-filter: blur(34px) saturate(155%);
+  -webkit-backdrop-filter: blur(34px) saturate(155%);
+}
+.hp-folder-head {
+  width: min(480px, calc(100% - 24px));
+  margin-inline: auto;
+  padding: 6px 7px 6px 9px;
+  border: var(--border-width) solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 58%, transparent);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+}
+.hp-folder-head,
+.hp-wallpaper-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.hp-folder-head > button,
+.hp-wallpaper-head > button {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.hp-folder-head > button:hover,
+.hp-wallpaper-head > button:hover { color: var(--text); background: var(--bg-hover); }
+.hp-folder-identity { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.hp-folder-identity > span:last-child { min-width: 0; display: flex; flex-direction: column; }
+.hp-folder-identity strong { overflow: hidden; color: var(--text); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.hp-folder-identity small { color: var(--text-faint); font-size: 10.5px; }
+.hp-folder-hero { width: 44px; height: 44px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.hp-folder-hero > .hp-tile-icon { width: 44px; height: 44px; }
+.hp-folder-hero > .hp-tile-name,
+.hp-folder-hero > .hp-folder-count { display: none; }
+.hp-folder-grid {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 26px 4px 20px;
+}
+.hp-folder-app {
+  width: 96px;
+  min-width: 0;
+  min-height: 104px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 7px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-light);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: grab;
+  touch-action: none;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring), opacity var(--duration-fast) var(--ease-out);
+}
+.hp-folder-app:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-3px); }
+.hp-folder-app:active { cursor: grabbing; }
+.hp-folder-app.dragging { opacity: 0.18; }
+.hp-folder-app > span:last-child { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-folder-app-icon {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--overlay-light);
+}
+.hp-folder-empty { margin: auto; max-width: 270px; color: var(--text-faint); font-size: 12px; line-height: 1.6; text-align: center; }
+.hp-folder-panel footer { padding-top: 12px; color: var(--text-ghost); font-size: 10.5px; text-align: center; }
+
+/* 全部 Spaces:参考旧 Desktop 的 Launchpad 层级,但不是一张巨型 modal。
+ * 时钟、轻量玻璃头与应用矩阵直接落在被景深化的主页舞台上。 */
+.hp-organizer-panel {
+  box-sizing: border-box;
+  width: min(760px, 100%);
+  max-height: calc(100% - 12px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 12px 16px 8px;
+  animation: hp-rise 360ms var(--ease-spring) both;
+}
+.hp-organizer-clock {
+  margin-bottom: 18px;
+  color: var(--text);
+  font-size: clamp(42px, 6vw, 56px);
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  text-align: center;
+  user-select: none;
+}
+.hp-organizer-head {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(480px, calc(100% - 24px));
+  margin: 0 auto 14px;
+  padding: 5px 7px 5px 8px;
+  border: var(--border-width) solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 58%, transparent);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+}
+.hp-organizer-head > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.hp-organizer-head > div > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
+.hp-organizer-head strong { color: var(--text); font-size: 12px; line-height: 1.3; }
+.hp-organizer-head small { color: var(--text-faint); font-size: 9.5px; }
+.hp-organizer-mark {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--overlay-light);
+  color: var(--text-light);
+}
+.hp-organizer-head > button {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.hp-organizer-head > button:hover { color: var(--text); background: var(--bg-hover); }
+.hp-organizer-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(86px, 1fr));
+  align-content: center;
+  justify-items: center;
+  gap: 9px 12px;
+  min-height: 224px;
+  padding: 8px;
+}
+.hp-organizer-grid .hp-tile,
+.hp-organizer-new {
+  width: 104px;
+  min-height: 98px;
+}
+.hp-organizer-grid .hp-tile { color: var(--text-light); }
+.hp-organizer-grid .hp-tile-icon,
+.hp-organizer-new > span {
+  width: 48px;
+  height: 48px;
+  background: color-mix(in srgb, var(--bg-card) 54%, transparent);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  box-shadow: var(--icon-shadow);
+}
+.hp-organizer-grid .hp-tile:hover { color: var(--text); }
+.hp-organizer-new {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 9px 6px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
+}
+.hp-organizer-new > span { display: grid; place-items: center; border: var(--border-width) dashed var(--border); border-radius: var(--radius-md); box-shadow: none; }
+.hp-organizer-new small { max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.hp-organizer-new:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-2px); }
+.hp-organizer-panel > footer { padding-top: 10px; color: var(--text-ghost); font-size: 10px; text-align: center; }
+
+/* ── 壁纸面板 ──────────────────────────────────────────────────────────── */
+.hp-wallpaper-stage { z-index: 30; justify-items: end; }
+.hp-wallpaper-sheet {
+  box-sizing: border-box;
+  width: min(420px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 18px;
+  border: var(--border-width) solid var(--border);
+  border-radius: calc(var(--radius-lg) + 4px);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  animation: hp-rise var(--duration-slow) var(--ease-out) both;
+}
+.hp-wallpaper-head > div { min-width: 0; display: flex; flex-direction: column; }
+.hp-wallpaper-head strong { color: var(--text); font-size: 15px; }
+.hp-wallpaper-head span { color: var(--text-faint); font-size: 10.5px; line-height: 1.4; }
+.hp-wallpaper-sources {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  margin-top: 17px;
+  padding: 3px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--overlay-subtle);
+}
+.hp-wallpaper-sources button {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 3px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.hp-wallpaper-sources button:hover { color: var(--text); }
+.hp-wallpaper-sources button.on { background: var(--bg-card); color: var(--text); box-shadow: var(--btn-shadow); }
+.hp-wallpaper-empty,
+.hp-wallpaper-loading,
+.hp-wallpaper-error {
+  min-height: 126px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 20px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+.hp-wallpaper-error { min-height: 48px; color: var(--danger); }
+.hp-wallpaper-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 1px 9px; }
+.hp-wallpaper-switch,
+.hp-wallpaper-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.hp-wallpaper-switch > span {
+  position: relative;
+  width: 27px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--overlay-strong);
+}
+.hp-wallpaper-switch > span::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+.hp-wallpaper-switch.on > span { background: var(--action-fill); }
+.hp-wallpaper-switch.on > span::after { transform: translateX(11px); }
+.hp-wallpaper-refresh:hover { color: var(--text); }
+.hp-wallpaper-refresh:disabled { opacity: 0.45; cursor: wait; }
+.hp-wallpaper-refresh:disabled svg { animation: hp-spin 850ms linear infinite; }
+@keyframes hp-spin { to { transform: rotate(1turn); } }
+.hp-wallpaper-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+.hp-wallpaper-grid button {
+  position: relative;
+  aspect-ratio: 5 / 3;
+  overflow: hidden;
+  padding: 0;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--overlay-light);
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-spring), border-color var(--duration-fast) var(--ease-out);
+}
+.hp-wallpaper-grid button:hover { transform: translateY(-2px); }
+.hp-wallpaper-grid button.on { border-color: var(--accent-ink); }
+.hp-wallpaper-grid img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.hp-wallpaper-grid button > span {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--action-fill);
+  color: var(--on-action);
+}
+.hp-wallpaper-custom { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px 1px 6px; }
+.hp-wallpaper-custom-preview { grid-column: 1 / -1; aspect-ratio: 16 / 7; border-radius: var(--radius-md); background-color: var(--overlay-light); background-position: center; background-size: cover; }
+.hp-wallpaper-custom > div:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
+.hp-wallpaper-custom strong { color: var(--text); font-size: 11.5px; }
+.hp-wallpaper-custom span { color: var(--text-faint); font-size: 9.5px; }
+.hp-wallpaper-custom button {
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.hp-wallpaper-custom button:hover { color: var(--text); background: var(--bg-hover); }
+.hp-wallpaper-options { margin-top: 14px; padding-top: 8px; border-top: var(--border-width) solid var(--border); }
+.hp-wallpaper-options > button {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 7px 3px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hp-wallpaper-options > button > span { min-width: 0; display: flex; flex-direction: column; }
+.hp-wallpaper-options strong { font-size: 11.5px; }
+.hp-wallpaper-options small { color: var(--text-faint); font-size: 9.5px; font-weight: 400; }
+.hp-wallpaper-options i {
+  position: relative;
+  width: 27px;
+  height: 16px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--overlay-strong);
+}
+.hp-wallpaper-options i::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+.hp-wallpaper-options button.on i { background: var(--action-fill); }
+.hp-wallpaper-options button.on i::after { transform: translateX(11px); }
+
+@media (max-width: 620px) {
+  .hp-root { padding-inline: 12px; padding-block: 24px; }
+  .hp-wallpaper-button { top: 10px; right: 10px; }
+  .hp-stack { gap: 18px; }
+  .hp-clock { font-size: 46px; }
+  .hp-brand { font-size: 30px; }
+  .hp-spaces-actions button span { display: none; }
+  .hp-spaces-actions button { width: 28px; padding: 0; justify-content: center; }
+  .hp-dock { gap: 2px; }
+  .hp-tile { width: 70px; min-height: 74px; }
+  .hp-composer .t2c-card { padding-inline: 11px; }
+  .hp-folder-stage,
+  .hp-organizer-stage,
+  .hp-wallpaper-stage { padding: 10px; }
+  .hp-organizer-panel { padding-inline: 2px; }
+  .hp-organizer-grid { grid-template-columns: repeat(3, minmax(76px, 1fr)); gap: 4px; }
+  .hp-organizer-grid .hp-tile,
+  .hp-organizer-new { width: 88px; min-height: 90px; }
+  .hp-folder-panel { min-height: 300px; padding: 14px; }
+  .hp-folder-grid { gap: 5px; }
+  .hp-folder-app { width: 82px; min-height: 92px; }
+  .hp-wallpaper-sheet { width: 100%; padding: 15px; }
+  .hp-wallpaper-credit { display: none; }
+}
+
+@media (max-height: 700px) {
+  .hp-root { padding-block: 20px; }
+  .hp-stack { gap: 16px; }
+  .hp-brand { font-size: 28px; }
+  .hp-clock { font-size: 44px; }
+  .hp-date { margin-top: 6px; }
+}
+
+/* 系统偏好和 JS 一次性判定共用同一套降级。拖拽位移本身仍需 transform,只去掉补间动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .hp-title,
+  .hp-composer,
+  .hp-spaces,
+  .hp-folder-panel,
+  .hp-folder-stage,
+  .hp-organizer-panel,
+  .hp-organizer-stage,
+  .hp-wallpaper-sheet,
+  .hp-wallpaper-stage { animation: none; }
+  .hp-stack,
+  .hp-wallpaper,
+  .hp-tile,
+  .hp-tile-icon,
+  .hp-folder-app,
+  .hp-spaces-actions button { transition-duration: 0.01ms !important; }
+  .hp-root[data-focus-blur='true'].hp-composer-focused .hp-wallpaper,
+  .hp-root[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,
+  .hp-root[data-focus-blur='true'].hp-secondary-open .hp-wallpaper { filter: none; transform: none; }
+  .hp-tile:hover,
+  .hp-tile:active,
+  .hp-folder-app:hover,
+  .hp-drag-overlay { transform: none; }
+}
+
+.hp-still .hp-title,
+.hp-still .hp-composer,
+.hp-still .hp-spaces,
+.hp-still .hp-folder-panel,
+.hp-still .hp-folder-stage,
+.hp-still .hp-organizer-panel,
+.hp-still .hp-organizer-stage,
+.hp-still .hp-wallpaper-sheet,
+.hp-still .hp-wallpaper-stage { animation: none; }
+.hp-still[data-focus-blur='true'].hp-composer-focused .hp-wallpaper,
+.hp-still[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,
+.hp-still[data-focus-blur='true'].hp-secondary-open .hp-wallpaper { filter: none; transform: none; }
+.hp-still .hp-tile,
+.hp-still .hp-tile-icon,
+.hp-still .hp-folder-app { transition-duration: 0.01ms !important; }

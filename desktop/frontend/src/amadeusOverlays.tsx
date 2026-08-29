@@ -82,6 +82,20 @@ export function AmadeusOverlays() {
     window.addEventListener('amadeus:open-note', onOpenNote)
     return () => window.removeEventListener('amadeus:open-note', onOpenNote)
   }, [])
+  // 新建笔记的导航落点(pageStore.navigateToNote 发事件解耦)。**必须走 openNote 门面**:
+  // 直调 loadPage 装的是「活动 scope」,而活动 scope 只跟着编辑器面板走 —— 站在主页/聊天/新标签上
+  // 新建时它指着一个后台编辑器 tab,笔记装进看不见的那份 store(当前 view 不跳)还被那个 tab 认领走。
+  // preventDefault = 告诉发起方「已接管」,没挂本组件的宿主(台架/单测)自然退回就地装载。
+  useEffect(() => {
+    const onNav = (e: Event): void => {
+      const p = (e as CustomEvent<{ path?: string }>).detail?.path
+      if (typeof p !== 'string' || !p) return
+      e.preventDefault()
+      void openNote(p)
+    }
+    window.addEventListener('amadeus:navigate-note', onNav)
+    return () => window.removeEventListener('amadeus:navigate-note', onNav)
+  }, [])
   // [[xxx.pdf#page=N]] 点击应用内开可批注 PDF tab(pageStore 发事件解耦,同 open-db 模式)。
   useEffect(() => {
     const onOpenPdf = (e: Event): void => {

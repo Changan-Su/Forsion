@@ -11,7 +11,10 @@
  * 这支钉的是**接线**:壳真的在 buildDefault 之前问了一次存档,存档也真的在用之后写回去。
  *
  * 2026-08-13:「启动时进入」的**缺省**由 PRODUCT.defaultSpace 改成「上次退出时的 Space」(用户要求)。
- * D/E 于是显式写 forsion_default_space='tangu' 继续守固定 Space 那条路,F 守新缺省。
+ * D/E 于是显式写 forsion_default_space='tangu' 继续守固定 Space 那条路,F 守「上次退出」那一档。
+ *
+ * ⚠️2026-08-28:缺省**又改**成「ribbon 主位槽指着的 Space」(用户要求)。F 守的语义没变,
+ * 但它不再是「不设值时的行为」→ 现在显式写 '__last__'。
  *
  * 跑:npm run check:spacerestore   (需 npm run web 起着 5173)
  */
@@ -164,7 +167,7 @@ const check = (name, ok, detail) => {
     await dctx.close()
   }
 
-  // F 缺省(未设「启动时进入」)= 上次退出的那个 Space:布局键**原样**交给 tryRestoreLayout。
+  // F 「上次退出的那个 Space」这一档:布局键**原样**交给 tryRestoreLayout。
   //   2026-08-13 用户要求改的默认。旧缺省是 PRODUCT.defaultSpace='tangu' → 会把布局键换成 space:tangu
   //   的存档(全新 context 里没有 → clearLayout),上一程的记号一个不剩。独立 context:D/E 攒下的命名布局
   //   不能漏进来,否则「换掉了」也可能碰巧还有内容。
@@ -174,7 +177,7 @@ const check = (name, ok, detail) => {
       try {
         localStorage.setItem('forsion_token', 'space-restore-check')
         localStorage.setItem('lcl.uiMode', 'desktop')
-        localStorage.removeItem('forsion_default_space') // 缺省
+        localStorage.setItem('forsion_default_space', '__last__') // 「上次退出」那一档(2026-08-28 起不再是缺省)
       } catch { /* ignore */ }
     })
     const fp = await fctx.newPage()
@@ -202,8 +205,8 @@ const check = (name, ok, detail) => {
       } catch { return 'n/a' }
     })
     const fnamed = await fp.evaluate(() => { try { return Object.keys(JSON.parse(localStorage.getItem('tangu2_named_layouts') || '{}')) } catch { return [] } })
-    check('F 缺省启动设置:重启后还是上一程的现场(布局键没被换成产品默认那份)', fsurvived === `${fmarked}/${fmarked}`, `带记号的 panel ${fsurvived}(重启前 ${fmarked} 个)`)
-    check('F 缺省启动设置下仍然归档(切走再切回来时槽里是新的)', fnamed.includes('space:ghost-space'), `namedLayouts=${JSON.stringify(fnamed)}`)
+    check('F「上次退出」档:重启后还是上一程的现场(布局键没被换成产品默认那份)', fsurvived === `${fmarked}/${fmarked}`, `带记号的 panel ${fsurvived}(重启前 ${fmarked} 个)`)
+    check('F「上次退出」档下仍然归档(切走再切回来时槽里是新的)', fnamed.includes('space:ghost-space'), `namedLayouts=${JSON.stringify(fnamed)}`)
     await fctx.close()
   }
 

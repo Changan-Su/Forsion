@@ -58,6 +58,13 @@ async function main() {
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.waitForTimeout(1500)
+    // ⚠️钉住启动 Space:2026-08-28 起「启动时进入」的缺省是 ribbon 主位槽(=主页 Space),
+    // 主页既没有侧栏也没有聊天面板 —— 本脚本验的是 Tangu Space 的形态,不钉就一路等超时。
+    await win.evaluate(`localStorage.setItem('forsion_default_space', 'tangu')`)
+    await win.reload({ waitUntil: 'domcontentloaded' })
+    await win.waitForSelector('#root', { timeout: 30_000 })
+    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+    await win.waitForTimeout(2000)
 
     const before = await win.evaluate(SNAP)
     await win.click('.dv-new-tab')

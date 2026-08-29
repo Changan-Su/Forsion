@@ -72,6 +72,13 @@ async function main() {
   }
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.waitForTimeout(1500)
+  // ⚠️钉住启动 Space:2026-08-28 起「启动时进入」的缺省是 ribbon 主位槽(=主页 Space),
+  // 主页既没有侧栏也没有聊天面板 —— 本脚本验的是 Tangu Space 的形态,不钉就一路等超时。
+  await win.evaluate(`localStorage.setItem('forsion_default_space', 'tangu')`)
+  await win.reload({ waitUntil: 'domcontentloaded' })
+  await win.waitForSelector('#root', { timeout: 30_000 })
+  await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+  await win.waitForTimeout(2000)
 
   // ── 4 空状态居中(默认 Tangu Space,主区就是新对话)────────────────────────────
   const RECTS = `const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, w: b.width, h: b.height } }`
@@ -628,6 +635,12 @@ async function main() {
   }
   await w2.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await w2.waitForTimeout(1500)
+  // ⚠️同上:缺省启动 Space 已是主位槽(主页),这一程也要钉回 Tangu,否则「Tangu 启动即在」不成立。
+  await w2.evaluate(`localStorage.setItem('forsion_default_space', 'tangu')`)
+  await w2.reload({ waitUntil: 'domcontentloaded' })
+  await w2.waitForSelector('#root', { timeout: 30_000 })
+  await w2.waitForSelector('.dv-groupview', { timeout: 30_000 })
+  await w2.waitForTimeout(2000)
   // Tangu(启动即在):展开右栏 → 停在第 2 个 tab(大纲,Amadeus 右栏里也有 → 能撞上)→ 折叠
   await w2.click('.dv-edge-right').catch(() => {})
   await w2.waitForTimeout(1800)

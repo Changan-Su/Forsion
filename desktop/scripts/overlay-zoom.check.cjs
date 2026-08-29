@@ -107,6 +107,9 @@ async function editorOverlay(browser, z) {
 async function appOverlay(browser, z) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+  // ⚠️钉住启动 Space:2026-08-28 起「启动时进入」的缺省是 ribbon 主位槽(=主页 Space),
+  // 而主页没有侧栏 → 没有 `.dv-sash`,D 那半会一直等到超时。C/D 要的是有侧栏的工作区形态。
+  await page.addInitScript(() => { try { localStorage.setItem('forsion_default_space', 'tangu') } catch { /* private mode */ } })
   await page.goto(`${ORIGIN}/`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.wb-tab', { timeout: 30000 })
   await page.waitForTimeout(2500) // 布局/Space 落定,否则 tab 还会重排

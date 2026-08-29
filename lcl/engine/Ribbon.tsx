@@ -86,6 +86,7 @@ export function Ribbon() {
   const [slots, setSlots] = useState(99) // 两区合计可容纳的槽位数
   const rootRef = useRef<HTMLDivElement>(null)
   const headRef = useRef<HTMLDivElement>(null)
+  const homeRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef<HTMLDivElement>(null)
   const flyRef = useRef<HTMLDivElement>(null)
   const flyTimer = useRef<number | null>(null)
@@ -113,6 +114,8 @@ export function Ribbon() {
   const pinned = items.filter((i) => i.side === 'bottom' && i.pinned)
   // head 区:折叠钮下的固定件(zoneList 的 top/bottom 过滤天然排除它,不进拖拽/溢出/持久化)。
   const headItems = items.filter((i) => i.side === 'head')
+  // home 区:两区之间那段空当的**正中**(2026-08-28 用户要求的「主位」槽)。同 head,不进拖拽/溢出/持久化。
+  const homeItems = items.filter((i) => i.side === 'home')
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
   const slotH = (expanded ? 34 : 32) + GAP
@@ -123,7 +126,9 @@ export function Ribbon() {
       const cs = getComputedStyle(el)
       const fixed = (headRef.current?.offsetHeight ?? 0) + (pinnedRef.current?.offsetHeight ?? 0)
       // ponytail: 组间距/边角按 ~48px 粗扣(偏保守只会让「…」早一格出现,不会画半截图标)
-      const avail = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - fixed - 2 * slotH - 48
+      // 主位槽(若有)也占一格实高,不扣掉的话两区会算多一格、把「…」往后推一格才出现。
+      const avail = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - fixed
+        - (homeRef.current?.offsetHeight ?? 0) - 2 * slotH - 48
       setSlots(Math.max(2, Math.floor(avail / slotH)))
     }
     recalc()
@@ -496,6 +501,11 @@ export function Ribbon() {
         {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
       {renderZone('top', top)}
+      {/* 主位槽:**恒渲染**(空着也留),`margin-block:auto` 由它一个人吃掉全部空当 →
+          自己垂直居中,底部两组照旧贴底。没有 home 件的宿主(如 Tangu Web)高度为 0,观感与从前一致。 */}
+      <div ref={homeRef} className="rb-group rb-home">
+        {homeItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
+      </div>
       {renderZone('bottom', bot)}
       <div ref={pinnedRef} className="rb-group rb-pinned">
         {pinned.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}

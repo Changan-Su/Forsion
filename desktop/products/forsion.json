@@ -6,6 +6,7 @@
   "artifactPrefix": "Forsion",
   "defaultSpace": "tangu",
   "spaces": [
+    "home",
     "tangu",
     "inbox",
     "amadeus",
