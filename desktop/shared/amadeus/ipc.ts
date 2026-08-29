@@ -1,6 +1,7 @@
 // The IPC contract shared by main (handlers), preload (bridge), and renderer (consumer).
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
+import type { MdTask } from './mdTasks'
 
 export const IPC = {
   openVault: 'vault:open',
@@ -26,6 +27,7 @@ export const IPC = {
   exclusiveAssets: 'vault:exclusive-assets',
   reindex: 'vault:reindex',
   listTags: 'vault:tags',
+  listTasks: 'vault:tasks',
   pagesByTag: 'vault:tag-pages',
   deletePage: 'page:delete',
   movePage: 'page:move',
@@ -200,6 +202,10 @@ export interface PluginBundleInfo {
   spaces: string[]
 }
 
+/** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。 */
+export type PluginCapability = 'activeWindow'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow']
+
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
@@ -212,6 +218,8 @@ export interface ExternalPluginSource {
   nameEn?: string
   /** English description (manifest `descriptionEn`); missing → `description`. */
   descriptionEn?: string
+  /** 包根 icon.png（主进程校验后编码为 data URL）；缺失/坏图时省略，UI 回落默认字形。 */
+  iconUrl?: string
   /** The plugin's main JS source; evaluated in the renderer with a `ctx` argument. '' when blocked (never evaluated). */
   code: string
   /** Manifest apiVersion (missing → 1). */
@@ -219,6 +227,9 @@ export interface ExternalPluginSource {
   minAppVersion?: string
   /** Companion app this plugin needs (manifest.requiresApp); only ids in the host KNOWN_APPS table get install UI. */
   requiresApp?: string
+  /** 插件声明要用的宿主敏感能力(manifest `capabilities`,白名单外的一律丢)。宿主只给声明过的
+   *  插件注入对应的 ctx 接缝——没声明 = 拿不到,不是「拿到了但没用」。目前只有 'activeWindow'。 */
+  capabilities?: PluginCapability[]
   /** README.md content from the plugin folder (capped), for the settings detail page. */
   readme?: string
   /** CHANGELOG.md content from the plugin folder (capped), shown as the "更新日志" section on the detail page.
@@ -325,6 +336,9 @@ export interface LinkMeta {
   title?: string
   description?: string
   image?: string
+  /** 'photo' = og:image/twitter:image 那种真配图;'icon' = apple-touch-icon 这种**方形 logo**
+   *  —— 拉进照片位会变形,渲染端必须 contain 居中。缺省(旧数据/无图)按 photo 处理。 */
+  imageKind?: 'photo' | 'icon'
   favicon?: string
   siteName?: string
 }
@@ -421,6 +435,9 @@ export interface AmadeusApi {
   reindex(): Promise<void>
   /** All tags in the vault with their note counts. */
   listTags(): Promise<TagCount[]>
+
+  /** 全库正文里的 GFM 任务项(只读投影;主进程索引已持有全文,随 watcher 增量)。 */
+  listTasks?(): Promise<MdTask[]>
   /** Page paths that carry the given tag. */
   pagesByTag(tag: string): Promise<string[]>
   /** Delete a page and all its sidecar files. */

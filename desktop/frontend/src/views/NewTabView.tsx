@@ -2,7 +2,7 @@
  *  分区:最近使用(会话/笔记/文件/视图)→ Forsion 原生 → 每个插件一组(按视图来源分类,不再按主/侧区)。
  *  卡片单击=在其默认位置打开(多数主区 Tab;侧栏类视图在侧栏);可拖入 tab bar / side bar「落点即开」。 */
 import { type ReactNode } from 'react'
-import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard } from 'lucide-react'
+import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard, House } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { openSpecial } from './SpecialViews'
@@ -48,31 +48,29 @@ export function NewTabView({ leaf }: ViewProps) {
 
   // 门面统一在 sessionNav:站在这张空白页里点「新对话」就该开在**这个**标签,不是跳回老聊天把它清空。
   const newChat = (): void => { openNewChat() }
-  /** 编辑器是非 singleton(每笔记一 tab):已有编辑器 tab 时别再开,否则每次都多出一个空 tab。 */
-  const ensureEditor = (): void => {
-    if (!useWorkspace.getState().mainTabs.some((t) => t.type === 'amadeus-editor')) {
-      ws().openView('amadeus-editor', {}, 'main')
-    }
-  }
+  // 落点面板一律由 openNote 门面现算(createPage / openDailyNote 内部都走它):它会把**当前这个新标签**
+  // 就地切成编辑器。这里别再预开一个空编辑器 tab —— 已有编辑器时那份是白开的,新建仍落在别处。
   const newNote = (): void => {
-    ensureEditor()
     if (vaultRoot) void usePageStore.getState().createPage()
   }
 
   // Forsion 原生 —— 主区入口(跨 Space 全量列出)。动作类(新建笔记/今日)不带 drag;视图类带 drag 可拖入侧栏。
   const nativeMain: Item[] = [
+    // 主页来自「主页」内置插件:插件页关掉即反注册 → getView 落空 → 这张卡自动消失(同下面的日历/浏览器/终端)。
+    { key: 'homepage', icon: <House size={20} />, label: t('space.home'), run: () => ws().openView('homepage', {}, 'main'), show: !!getView('homepage'), drag: { type: 'homepage' } },
     // 「新对话」「新建笔记」「今日日记」是动作(清 activeId/草稿、创建文件)→ 只单击、不带 drag:
     // 拖拽走 openView 会绕过动作,chat 又是 singleton(reuseKey:'primary')→ 只会聚焦旧对话而非新建。
     { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: PRODUCT.spaces.includes('tangu') },
     { key: 'new-note', icon: <SquarePen size={20} />, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
-    { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { ensureEditor(); void openDailyNote() }, show: amadeusOn && !!vaultRoot },
+    { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { void openDailyNote() }, show: amadeusOn && !!vaultRoot },
     // 内置文件类型的「新建」入口:与文件树右键、命令面板、笔记里的斜杠项并列的第四条主路径 ——
     // 这些视图都靠 params 认领具体文件,没有「裸开一个空视图」的形态,所以只能以动作卡出现、
     // 不带 drag(拖进去会开出一个没有文件的空视图)。插件声明的创建器同理,见下面 pluginGroups。
     { key: 'new-drawing', icon: <PenTool size={20} />, label: zh ? '新建白板' : 'New whiteboard', run: () => { void createDrawing('') }, show: amadeusOn && !!vaultRoot },
     { key: 'new-dashboard', icon: <LayoutDashboard size={20} />, label: zh ? '新建仪表盘' : 'New dashboard', run: () => { void createDashboard('') }, show: amadeusOn && !!vaultRoot },
-    { key: 'calendar', icon: <CalendarDays size={20} />, label: t('view.calendar'), run: () => ws().openView('calendar', {}, 'main'), show: amadeusOn, drag: { type: 'calendar' } },
-    { key: 'todo-list', icon: <ListTodo size={20} />, label: t('view.todo'), run: () => ws().openView('todo-list', {}, 'main'), show: amadeusOn, drag: { type: 'todo-list' } },
+    // 日历/待办来自「日历」内置插件:在插件页关掉即反注册 → getView 落空 → 这两块自动消失(同下面的浏览器/终端)。
+    { key: 'calendar', icon: <CalendarDays size={20} />, label: t('view.calendar'), run: () => ws().openView('calendar', {}, 'main'), show: !!getView('calendar'), drag: { type: 'calendar' } },
+    { key: 'todo-list', icon: <ListTodo size={20} />, label: t('view.todo'), run: () => ws().openView('todo-list', {}, 'main'), show: !!getView('todo-list'), drag: { type: 'todo-list' } },
     { key: 'inbox', icon: <Mail size={20} />, label: t('inbox.reader'), run: () => ws().openView('inbox-reader', {}, 'main'), show: hasBackend, drag: { type: 'inbox-reader' } },
     { key: 'agents', icon: <Bot size={20} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
     // Coding / Automation Space 的主视图(单例);仅其注册(产品档案 + 能力门控)后出现,drag 可拖入任意区。
@@ -180,7 +178,12 @@ export function NewTabView({ leaf }: ViewProps) {
       return {
         key: r.key,
         icon: Icon ? <Icon size={20} /> : <FileText size={20} />,
-        label: (r.kind === 'chat' && s.sessions.find((x) => x.id === r.id)?.title) || r.title,
+        // kind='view' 的标题**按注册表实时求值**,不用快照:`record` 存的是当时的 `label(displayName)`,
+        // 而冷启动恢复布局那一下跑在 LocaleProvider 挂载**之前** —— 那时 appStore.tr 还是缺省的
+        // `(k) => k`,存进去的就是裸 i18n 键(实测:退出时停在日历 → 下次启动这里显示「view.calendar」)。
+        // 文件/笔记/会话的标题是真名字不是译文,照旧用快照。
+        label: (r.kind === 'chat' && s.sessions.find((x) => x.id === r.id)?.title)
+          || (r.kind === 'view' ? label(getView(vt)?.displayName ?? r.title) : r.title),
         run: () => openRecent(r),
         show: true,
       }

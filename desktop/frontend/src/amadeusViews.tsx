@@ -12,9 +12,10 @@ import {
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
-import { activePageScope, cascadeFdAfterRename, disposePageScope, flushAllScopes, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
 import { useUiOverlay } from './amadeusOverlayStore'
+import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
 import { UnifiedPage } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
@@ -22,7 +23,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, useActiveCover, UNTITL
 import { routeNote, type RouteDecision } from '@amadeus/unified/router'
 import { upgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { cursorFromSource, setModeCursor, sourceOffsetFor, takeModeCursor } from '@amadeus/lib/modeCursor'
-import { importToPage, importToFolder, pasteImagesToPage } from './amadeusImport'
+import { importToPage, importToFolder, pasteImagesToPage, filesFromHostPaths } from './amadeusImport'
 import { usePluginStore, findFileType, matchFileType, fileTypeBaseName } from '@amadeus/plugins/pluginStore'
 import { normalizePluginRename } from '@amadeus/plugins/pluginExt'
 import { resolveIcon } from '@amadeus/components/icons'
@@ -34,7 +35,7 @@ import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
-import { REF_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
+import { REF_MIME, PATHS_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
 import { useItemSelect } from './views/itemSelect'
 import { useSearchSeed } from './amadeusPanels'
 import { askString } from '@amadeus/components/askString'
@@ -67,12 +68,10 @@ import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 si
 import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
 import { OverlayAt } from '@lcl/engine'
 import { SidebarRow } from './components/SidebarRow'
+import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/treeDrop'
 
 const ps = () => usePageStore.getState()
 const baseName = (p: string): string => p.split(/[\\/]/).pop()!.replace(/\.md$/, '')
-/** buildTree 把两种分隔符都当分隔并用 '/' 连接文件夹路径;父级计算必须说同一种「方言」,
- *  否则拖拽守卫/展开集合与树节点路径对不上(Windows 反斜杠路径、含 '\' 的文件名)。 */
-const parentOf = (p: string): string => { const a = p.split(/[\\/]/).filter(Boolean); a.pop(); return a.join('/') }
 const folderName = (p: string): string => p.split('/').pop() || p
 /** 归一化并返回全部祖先前缀(含自身):'a/b/c' → ['a','a/b','a/b/c']。喂给 expanded 集合逐级展开。 */
 const prefixesOf = (p: string): string[] => {
@@ -835,16 +834,60 @@ export function AmadeusPagesView() {
   // ── OS 文件拖入文件树 → 存入库为文件(不嵌入),类似文件管理器导入 ──
   const hasFilesType = (e: RDragEvent<HTMLElement>): boolean =>
     Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  /** 应用内的路径拖拽(文件面板 / 工作区文件视图的行,载荷是主机绝对路径)。
+   *  ⚠️ 只认 PATHS_MIME:树内搬笔记走的是 REF_MIME(setChatRefDrag 只写这一种)+ 本地态 dragPath,
+   *  两者不重叠 —— 否则这条分支会抢在 dropTo 之前吃掉事件,把「拖笔记进文件夹」搞坏,
+   *  且拿到的是 vault 相对路径喂给 copyHostFiles(主机绝对路径)= 乱复制。
+   *  只在**本地库**接:copyHostFiles 是主进程 fs,云侧库根本没有可写的本地目录。
+   *  落点与 OS 文件同一套:进文件夹走 copyHostFiles;进笔记正文先经 filesFromHostPaths
+   *  (fs:readFile → File)再汇入同一条插入链。 */
+  const hasHostPaths = (e: RDragEvent<HTMLElement>): boolean =>
+    takesHostPaths(
+      Array.from(e.dataTransfer?.types ?? []),
+      !!vaultRoot && !!window.tangu?.copyHostFiles && !(window.amadeusSync && vaultSide === 'cloud'),
+      { paths: PATHS_MIME, ref: REF_MIME },
+    )
+  const readHostPaths = (e: RDragEvent<HTMLElement>): string[] => {
+    if (!hasHostPaths(e)) return []
+    try {
+      const v: unknown = JSON.parse(e.dataTransfer?.getData(PATHS_MIME) || 'null')
+      return Array.isArray(v) ? (v as string[]) : []
+    } catch { return [] /* 不是本家载荷 */ }
+  }
+  const hostPathsDrop = (e: RDragEvent<HTMLElement>, folder: string): boolean => {
+    const paths = readHostPaths(e)
+    if (!paths.length) return false
+    e.preventDefault(); e.stopPropagation()
+    setDragOver(null)
+    void window.tangu!.copyHostFiles!(paths, folder ? `${vaultRoot}/${folder}` : vaultRoot!)
+      .catch((err: unknown) => useUiStore.getState().notify(`复制失败:${err instanceof Error ? err.message : String(err)}`))
+      // ⚠️ 刷树放 finally:主进程是逐件复制,中途失败时**前面几件已经落盘了**,只在成功时刷 = 树停在旧
+      // 状态,用户照提示重试 → 已复制的那些又被复制一遍(重名副本)。(codex 评审 2026-08-25)
+      .finally(() => { void ps().refreshStructure() })
+    return true
+  }
+  /** 路径拖拽落到**笔记行**:先把主机文件读成 File,再走与 OS 文件完全同一条 importToPage。 */
+  const hostPathsToPage = (e: RDragEvent<HTMLElement>, page: string): boolean => {
+    const paths = readHostPaths(e)
+    if (!paths.length) return false
+    e.preventDefault(); e.stopPropagation()
+    setDragOver(null)
+    void openNote(page)
+      .then(() => filesFromHostPaths(paths))
+      .then((files) => { if (files.length) insertIntoPage(files, page) })
+    return true
+  }
   /** 悬停:OS 文件(无内部 dragPath)也点亮目标落区并允许 copy。返回 true=已按 Files 处理。 */
   const filesDragOver = (e: RDragEvent<HTMLElement>, target: string): boolean => {
-    if (!hasFilesType(e)) return false
+    if (!hasFilesType(e) && !hasHostPaths(e)) return false
     e.preventDefault(); e.stopPropagation()
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
     if (dragOver !== target) setDragOver(target)
     return true
   }
-  /** 落下:OS 文件 → 导入到 target 文件夹(空串=库根);否则返回 false 交内部搬动。 */
+  /** 落下:OS 文件 / 应用内路径 → 导入到 target 文件夹(空串=库根);都不是则返回 false 交内部搬动。 */
   const filesDrop = (e: RDragEvent<HTMLElement>, target: string): boolean => {
+    if (hostPathsDrop(e, target)) return true
     const files = Array.from(e.dataTransfer?.files ?? [])
     if (!files.length) return false
     e.preventDefault(); e.stopPropagation()
@@ -852,16 +895,45 @@ export function AmadeusPagesView() {
     void importToFolder(files, target)
     return true
   }
+  /** 一行的落点(用户口径「拖到准确的文件夹或文件里面」):普通笔记 = **进这篇笔记**(打开它 + 走
+   *  编辑器同一条导入链:存附件并插入嵌入/链接);白板 / 仪表盘 / 插件文件类型收不了正文,与附件行
+   *  一样归**它所在的文件夹**。合并笔记(.fd)保持既有语义:落进它的 .fd(Notion「笔记即文件夹」)。
+   *  此前普通行根本不是落区(被 rootFilesOver 的 skip 选择器当取消),拖上去毫无反应。
+   *  ponytail: 不按文件类型再细分,要「附件挂到某个 PDF 上」这种再说。 */
+  const rowTarget = (path: string, mergedFd?: string) =>
+    rowDropTarget(path, { mergedFd, pluginFile: !!findFileType(pluginFileTypes, path) })
+  /** 插进某篇笔记的正文:v4(unified 实例已挂载)经 lifecycle 递入,v3 才走 importToPage ——
+   *  ⚠️ v4 面板的 `activePage` 恒 null(真源是 activeNotePath),而 importToPage 的正文占位正是按
+   *  `activePage === page` 判活,直接调它会「附件存进去了、正文一个字没变」(e2e 2b 实证)。 */
+  const insertIntoPage = (files: File[], page: string): void => {
+    if (!insertFilesForPath(page, files)) void importToPage(files, page)
+  }
+  const rowFilesOver = (e: RDragEvent<HTMLElement>, path: string, mergedFd?: string): boolean =>
+    filesDragOver(e, dropKeyOf(rowTarget(path, mergedFd)))
+  const rowFilesDrop = (e: RDragEvent<HTMLElement>, path: string, mergedFd?: string): boolean => {
+    const tgt = rowTarget(path, mergedFd)
+    // 应用内路径拖拽:落点与 OS 文件同一套(笔记进正文,其余进文件夹)。
+    if ('page' in tgt ? hostPathsToPage(e, tgt.page) : hostPathsDrop(e, tgt.folder)) return true
+    const files = Array.from(e.dataTransfer?.files ?? [])
+    if (!files.length) return false
+    e.preventDefault(); e.stopPropagation()
+    setDragOver(null)
+    const t = rowTarget(path, mergedFd)
+    // 笔记:先打开(openNote 内含白板/仪表盘/插件类型的毁档防线,且 await 到该页真正装载),再插进正文。
+    if ('page' in t) void openNote(t.page).then(() => insertIntoPage(files, t.page))
+    else void importToFolder(files, t.folder)
+    return true
+  }
   // 根/分区空白落区:仅真空白才导入到库根;落在行/组(skip 选择器)上=取消(与内部拖拽语义一致)。
   // skip 因区而异:外层 t2s-scroll 要排掉分区体 .t2s-group-sessions,而 Vault 段体本身就是
   // .t2s-group-sessions(它是落区容器,排自己会使自身空白无法接收),故各传各的选择器。
   const rootFilesOver = (e: RDragEvent<HTMLElement>, skipSel: string): boolean => {
-    if (!hasFilesType(e)) return false
+    if (!hasFilesType(e) && !hasHostPaths(e)) return false
     if (!(e.target as HTMLElement).closest(skipSel)) filesDragOver(e, '')
     return true
   }
   const rootFilesDrop = (e: RDragEvent<HTMLElement>, skipSel: string): boolean => {
-    if (!hasFilesType(e)) return false
+    if (!hasFilesType(e) && !hasHostPaths(e)) return false
     if (!(e.target as HTMLElement).closest(skipSel)) filesDrop(e, '')
     return true
   }
@@ -937,6 +1009,9 @@ export function AmadeusPagesView() {
     })
   }
 
+  /** 落区高亮一律只看 `dragOver`(它只在「这儿可落」时才被置上)。**别再加 `dragPath &&` 的闸** ——
+   *  dragPath 只有树内搬动才有,OS 文件 / 文件面板拖来的东西一律为空,加了闸 = 拖着文件在树上走
+   *  完全没有落点反馈(e2e sidebar-drop 1b 实证)。 */
   /** 拖拽悬停在「合并笔记节点」上 = 拖进它的 .fd(Notion 语义);守卫拖自己/拖回原处/拖进自己子树。 */
   const mergedDragOver = (e: RDragEvent<HTMLElement>, notePath: string, fd: string): void => {
     if (filesDragOver(e, fd)) return
@@ -960,7 +1035,7 @@ export function AmadeusPagesView() {
   const newChild = (p: string): void => {
     void ps().createChildNote(p, '未命名').then((np) => {
       setExpanded((prev) => new Set([...prev, ...prefixesOf(fdDirOf(p))]))
-      void ps().loadPage(np)
+      void openNote(np) // 勿直调 loadPage:那装的是活动 scope,站在主页/聊天上建子笔记同样不跳(见 createPageInFolder 注)
     })
   }
 
@@ -997,7 +1072,7 @@ export function AmadeusPagesView() {
       key={path}
       as="button"
       elRef={(el) => { if (path === flash) flashRef.current = el as HTMLButtonElement | null }}
-      className={`${path === (activeViewFile ?? activePage) ? 'active' : ''}${sel.has(path) ? ' sel' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${merged && dragPath && dragOver === merged.fd ? ' amx-drop-into' : ''}`.trim() || undefined}
+      className={`${path === (activeViewFile ?? activePage) ? 'active' : ''}${sel.has(path) ? ' sel' : ''}${path === flash ? ' amx-flash' : ''}${path === dragPath ? ' dragging' : ''}${dragOver === dropKeyOf(rowTarget(path, merged?.fd)) ? ' amx-drop-into' : ''}`.trim() || undefined}
       selId={path}
       depth={depth}
       // 前导槽:**每行都有**(含文件夹行),故所有图标左边缘对齐、尺寸也一致(见 .t2s-lead)。
@@ -1006,7 +1081,9 @@ export function AmadeusPagesView() {
         {icons[path]
           ? <span className="amx-page-emoji">{icons[path]}</span>
           : ft?.icon
-          ? <span className="amx-page-emoji">{resolveIcon(ft.icon)}</span>
+          // 兜底必须给:`resolveIcon` 对**没命中词表的键名**返回兜底(见 components/icons 的三分流)
+          // —— 不给的话,插件写了个本宿主还不认识的新键,这个槽会**整个空掉**。
+          ? <span className="amx-page-emoji">{resolveIcon(ft.icon, <LeadIcon className="t2s-lead-icon t2s-dim" />)}</span>
           : <LeadIcon className="t2s-lead-icon t2s-dim" />}
         {merged && (
           <span
@@ -1035,16 +1112,29 @@ export function AmadeusPagesView() {
         // 用元素自身作拖影并按抓取点对齐光标(同会话列表:默认拖影/setState 重渲会让内容与光标错位)。
         const r = e.currentTarget.getBoundingClientRect()
         e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
-        e.dataTransfer.effectAllowed = 'move'
+        // ⚠️ copyMove:树内是移动,拖去文件面板是**复制** —— 源只声明 move 而目标声明 copy,
+        // 浏览器按交集协商会把整个投放判成不允许(codex 评审 2026-08-25)。
+        e.dataTransfer.effectAllowed = 'copyMove'
         // 拖到聊天区 = 插入 [[笔记]] 引用(树内移动仍靠 dragPath 本地态,多带一个 MIME 不影响)。
         // 拖已选中的行 = 整批(引用与树内移动都按整批走,见 dropTo)。
-        setChatRefDrag(e.dataTransfer, sel.batch(path).map((p) => ({ kind: 'note' as const, path: p })))
+        const batch = sel.batch(path)
+        setChatRefDrag(e.dataTransfer, batch.map((p) => ({ kind: 'note' as const, path: p })))
+        // 反向拖(库 → 文件面板):那边按**主机绝对路径**认,故本地库再带一份 PATHS_MIME;
+        // 合并笔记连它的 .fd 一起带走,否则子笔记会被落下。云侧库没有本机路径,不带。
+        if (vaultRoot && !(window.amadeusSync && vaultSide === 'cloud')) {
+          const abs = batch.flatMap((p) => {
+            const fd = isNoteMd(p) ? fdDirOf(p) : ''
+            return [`${vaultRoot}/${p}`, ...(fd && folders.includes(fd) ? [`${vaultRoot}/${fd}`] : [])]
+          })
+          try { e.dataTransfer.setData(PATHS_MIME, JSON.stringify(abs)) } catch { /* 降级:这次拖不出去 */ }
+        }
         setDragPath(path)
       }}
       onDragEnd={() => { setDragPath(null); setDragOver(null) }}
-      onDragOver={merged ? (e) => mergedDragOver(e, path, merged.fd) : undefined}
-      onDragLeave={merged ? () => { if (dragOver === merged.fd) setDragOver(null) } : undefined}
-      onDrop={merged ? (e) => { if (filesDrop(e, merged.fd)) return; e.preventDefault(); e.stopPropagation(); dropTo(merged.fd) } : undefined}
+      // OS 文件对**每一行**都成立(落点见 rowFilesTarget);内部搬动仍只认合并笔记行(.fd)。
+      onDragOver={(e) => { if (rowFilesOver(e, path, merged?.fd)) return; if (merged) mergedDragOver(e, path, merged.fd) }}
+      onDragLeave={() => { if (dragOver === dropKeyOf(rowTarget(path, merged?.fd))) setDragOver(null) }}
+      onDrop={(e) => { if (rowFilesDrop(e, path, merged?.fd)) return; if (!merged) return; e.preventDefault(); e.stopPropagation(); dropTo(merged.fd) }}
       {...tipProps(rowTip(path))}
     >
       {renaming === path ? (
@@ -1089,7 +1179,7 @@ export function AmadeusPagesView() {
           {row(node.path, depth, { fd, open, count: node.children.filter((c) => c.kind === 'file').length })}
           {open && (
             <div
-              className={`t2s-group-sessions${dragPath && dragOver === fd ? ' amx-drop-into' : ''}`}
+              className={`t2s-group-sessions${dragOver === fd ? ' amx-drop-into' : ''}`}
               onDragOver={(e) => mergedDragOver(e, node.path, fd)}
               onDragLeave={() => { if (dragOver === fd) setDragOver(null) }}
               onDrop={(e) => { if (filesDrop(e, fd)) return; e.preventDefault(); e.stopPropagation(); dropTo(fd) }}
@@ -1121,7 +1211,7 @@ export function AmadeusPagesView() {
       <div key={folder}>
         <div
           ref={(el) => { if (folder === flash) flashRef.current = el }}
-          className={`t2s-group${folder === flash ? ' amx-flash' : ''}${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
+          className={`t2s-group${folder === flash ? ' amx-flash' : ''}${dragOver === folder ? ' amx-drop-into' : ''}`}
           style={{ paddingLeft: folderPadLeft(depth) }}
           {...tipProps(() => [tipT('tip.folder', { files: fileCount, folders: dirCount })])}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ kind: 'folder', path: folder, x: e.clientX, y: e.clientY }) }}
@@ -1144,7 +1234,7 @@ export function AmadeusPagesView() {
         {/* 展开的文件夹内部(含其中的笔记行)也是该文件夹的落点——与文件管理器语义一致。 */}
         {!isCol && (
           <div
-            className={`t2s-group-sessions${dragPath && dragOver === folder ? ' amx-drop-into' : ''}`}
+            className={`t2s-group-sessions${dragOver === folder ? ' amx-drop-into' : ''}`}
             onDragOver={folderDragOver}
             onDragLeave={() => { if (dragOver === folder) setDragOver(null) }}
             onDrop={(e) => { if (filesDrop(e, folder)) return; e.preventDefault(); e.stopPropagation(); dropTo(folder) }}
@@ -1184,7 +1274,7 @@ export function AmadeusPagesView() {
       </button>
       {vaultOpen && (
         <div
-          className={`t2s-group-sessions${dragPath && dragOver === '' ? ' amx-drop-root' : ''}`}
+          className={`t2s-group-sessions${dragOver === '' ? ' amx-drop-root' : ''}`}
           onDragOver={(e) => {
             if (rootFilesOver(e, '.t2s-srow, .t2s-group')) return
             // 根目录落点:分区内真空白(行/文件夹自己的 handler 已 stopPropagation)。
@@ -1220,7 +1310,7 @@ export function AmadeusPagesView() {
 
         <div
           ref={scrollRef}
-          className={`t2s-scroll${dragPath && dragOver === '' ? ' amx-drop-root' : ''}`}
+          className={`t2s-scroll${dragOver === '' ? ' amx-drop-root' : ''}`}
           onClick={(e) => { if (e.target === e.currentTarget) sel.clear() }} // 点空白 = 清选中
           onContextMenu={(e) => {
             // 空白处右键 = 根目录新建。行/文件夹头/顶部特殊按钮各有自己的右键菜单(已 stopPropagation),这里只兜真空白。
@@ -1633,17 +1723,12 @@ export function NoteTitle() {
   // 新建笔记:光标落标题栏(Notion 式先命名)。一次性,消费即清。
   // 不再全选文本:整行蓝色选区看着像标题被框了一圈(实报),改为光标落行尾。
   useEffect(() => {
-    const target = sps().focusTitleFor
-    if (!target) return
-    if (target === activePage) {
-      const el = ref.current
-      if (el) {
-        el.focus()
-        const n = el.value.length
-        el.setSelectionRange(n, n)
-      }
-    }
-    sps().consumeTitleFocus()
+    if (!claimTitleFocus(activePage)) return
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    const n = el.value.length
+    el.setSelectionRange(n, n)
   }, [activePage])
   const commit = (): void => {
     const next = val.trim()
@@ -2335,6 +2420,31 @@ export function AmadeusOutlineView() {
       )}
     </div>
   )
+}
+
+/**
+ * 指定笔记的大纲(仪表盘「大纲卡」用)。
+ *
+ * ⚠️ **必须自建 PageScope**:嵌卡渲染在仪表盘的 `PageScopeCtx`(value = 仪表盘 leaf id)之下,
+ * 直接 `loadPage(path)` 会把**仪表盘那份 store 的 activePage 换掉** —— 屏幕上的表现是「加了一张
+ * 大纲卡,整个仪表盘变成了那篇笔记」。同理适用于任何将来进嵌卡白名单、又会 loadPage 的视图。
+ */
+export function ScopedPageOutline({ path, scope }: { path: string; scope: string }) {
+  return (
+    <PageScopeCtx.Provider value={scope}>
+      <ScopedPageOutlineInner path={path} scope={scope} />
+    </PageScopeCtx.Provider>
+  )
+}
+
+function ScopedPageOutlineInner({ path, scope }: { path: string; scope: string }) {
+  const store = useScopedPageStore()
+  useEffect(() => {
+    if (path && store.getState().activePage !== path) void store.getState().loadPage(path)
+  }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => disposePageScope(scope), [scope])
+  if (!path) return <div className="amx-panel"><div className="amx-panel-empty">未指定笔记</div></div>
+  return <AmadeusOutlineView />
 }
 
 export function AmadeusBacklinksView() {

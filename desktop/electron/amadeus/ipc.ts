@@ -2,7 +2,7 @@ import { promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
-import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, PLUGIN_CAPABILITIES, type DbReadResult, type DrawingReadResult, type ExternalPluginSource, type PageProps, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
@@ -35,6 +35,7 @@ import {
 import { cloudVaultMarkerPath, coversPath, rewritePathList } from '@amadeus-shared/entrySync'
 import { deleteShadowFile } from './sync/shadow'
 import type { CloudChange } from './sync/cloudClient'
+import { readPluginIconDataUrl } from '../pluginIcon'
 
 const nowIso = (): string => new Date().toISOString()
 
@@ -112,7 +113,24 @@ const sbHandle = ctx.registerStatusItem?.({
 })
 // 轮询类插件把持续状态写进状态栏（sbHandle?.update({ text: '…' })），瞬时事件才用 notify。
 void sbHandle
-return () => {}
+// Tangu 侧的只读探针：当前对话用的模型 / 当前 Space。
+// ⚠️ ctx.tangu 在非 Tangu 宿主上**整个不存在**（纯 Amadeus 壳、unit 设备页）——一律可选链，
+//    并且要有降级路径；直接 ctx.tangu.activeModel() 会让整个插件装载失败。
+ctx.registerCommand({
+  id: 'hello-amadeus-whichmodel',
+  title: 'Hello：我在跟哪个模型说话？',
+  keywords: 'model tangu 模型 shili',
+  run: () => {
+    const m = ctx.tangu?.activeModel()
+    ctx.notify?.(m ? \`\${m.name}（\${m.id}）· Space=\${ctx.tangu?.activeSpace()}\` : '这个宿主没有 Tangu 对话')
+  },
+})
+// 模型/Space 变了才回调（不是每次 store 变更）。退订宿主也会兜，但自己也收。
+const offTangu = ctx.tangu?.subscribe(() => { /* 重画你的 UI */ })
+// 想做「按某个裸字母弹出自己的全屏浮层」？两条纪律：浮层根要 -webkit-app-region:no-drag 且
+// append 到 body；按键自挂 keydown（宿主热键表没有输入焦点闸，绑裸字母会在打字时触发）。
+// 完整写法见技能 forsion-plugin 的「全屏浮层」节。
+return () => { offTangu?.() }
 `
 
 /** .db 写回票据 = 文件内容短哈希。用内容而非 mtime:程序化连写可能落在同一毫秒里。 */
@@ -1152,6 +1170,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
   handle(IPC.reindex, () => index.build())
   handle(IPC.listTags, () => index.listTags())
+  handle(IPC.listTasks, () => index.tasks())
   handle(IPC.pagesByTag, (_e, tag: string) => index.pagesByTag(tag))
 
   handle(IPC.listFolders, () => vault.listFolders())
@@ -1374,6 +1393,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           apiVersion?: number
           minAppVersion?: string
           requiresApp?: string
+          capabilities?: unknown
           onboarding?: unknown
           fileExtensions?: unknown
           events?: unknown
@@ -1398,9 +1418,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           }
         }
         // README 给设置详情页;blocked 也读(无害,帮用户了解这插件是什么)。CHANGELOG 同款,渲染成「更新日志」段。
-        const [readme, changelog] = await Promise.all([
+        const [readme, changelog, iconUrl] = await Promise.all([
           fs.readFile(path.join(pdir, 'README.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
           fs.readFile(path.join(pdir, 'CHANGELOG.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
+          readPluginIconDataUrl(pdir),
         ])
         seen.add(id)
         out.push({
@@ -1411,10 +1432,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           // 英文镜像:纯展示用,坏了就当没有(中文 canonical 永远兜底)。
           nameEn: typeof m.nameEn === 'string' && m.nameEn.trim() ? m.nameEn.trim().slice(0, 120) : undefined,
           descriptionEn: typeof m.descriptionEn === 'string' && m.descriptionEn.trim() ? m.descriptionEn.trim().slice(0, 2000) : undefined,
+          iconUrl,
           code,
           apiVersion: typeof m.apiVersion === 'number' ? m.apiVersion : 1,
           minAppVersion: typeof m.minAppVersion === 'string' ? m.minAppVersion : undefined,
           requiresApp: typeof m.requiresApp === 'string' ? m.requiresApp : undefined,
+          // 敏感能力:只认白名单里的字符串,别的静默丢(插件写什么都不能凭空造出接缝)。
+          capabilities: Array.isArray(m.capabilities)
+            ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
+            : undefined,
           readme,
           changelog,
           onboarding: sanitizeOnboarding(m.onboarding),

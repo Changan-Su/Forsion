@@ -2,6 +2,7 @@
  * Preload:contextBridge 暴露最小安全 API(配置读写 + 托管后端状态)。
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
+import type { ActiveWindowSample } from '../shared/activeWindow'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -42,6 +43,8 @@ const api = {
   },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
   unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
+  /** P2P 直连打开设备:成了回本机代理地址(webview 当 lanUrl 用);失败 reject 可读错误,UI 回落中转。 */
+  unitsP2pOpen: (id: string): Promise<{ url: string }> => ipcRenderer.invoke('units:p2pOpen', id),
   unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
     ipcRenderer.invoke('units:update', id, patch),
   unitsRemove: (id: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:remove', id),
@@ -101,6 +104,8 @@ const api = {
   act: (event: string, detail?: Record<string, unknown>): void => ipcRenderer.send('activity:append', { event, detail }),
   /** 导出近 days 天活动日志拼接文本(开发者调试/报 bug 用)。 */
   exportActivity: (days?: number): Promise<string> => ipcRenderer.invoke('activity:export', days),
+  /** 前台窗口采样(默认拒:主进程 config.activeWindowEnabled 关着时恒 null)。 */
+  activeWindow: (): Promise<ActiveWindowSample | null> => ipcRenderer.invoke('system:activeWindow'),
   /** 拖入文件 → 绝对路径(Electron≥32 File.path 已移除,必须 webUtils 在渲染层取)。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   /** 本机工作区文件浏览:列目录 / 读文件(主进程 fs)。 */
@@ -147,6 +152,9 @@ const api = {
   /** 拖 OS 文件/文件夹进 host 工作区目录 → 原生复制(重名加序号)。 */
   copyHostFiles: (srcPaths: string[], destDir: string): Promise<{ copied: number }> =>
     ipcRenderer.invoke('fs:copy', srcPaths, destDir),
+  /** 复合笔记(X.md + X.fd)成对复制:整套共用一个可用 stem,免得两半被分别改名拆散。 */
+  copyNoteBundles: (items: Array<{ md: string; fd?: string }>, destDir: string): Promise<{ copied: number }> =>
+    ipcRenderer.invoke('fs:copyBundle', items, destDir),
   /** 拖一行到文件夹 → 移动(同卷 rename)。 */
   moveHostPath: (srcPath: string, destDir: string): Promise<{ path: string }> =>
     ipcRenderer.invoke('fs:move', srcPath, destDir),
@@ -181,6 +189,8 @@ const api = {
   marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
     ipcRenderer.invoke('market:install', id),
   marketInstalled: (): Promise<Record<string, string[]>> => ipcRenderer.invoke('market:installed'),
+  marketUninstall: (type: string, slug: string): Promise<{ ok: boolean; path: string; type: string }> =>
+    ipcRenderer.invoke('market:uninstall', type, slug),
   // ── 后端插件卸载(仅 ~/.tangu/plugins 用户目录;设置清理走后端 DELETE,重启由前端触发)──
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
   pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
@@ -269,6 +279,9 @@ const api = {
   /** 拉一份外部日历订阅(.ics)。走主进程绕开 CORS —— 订阅地址一律不发 CORS 头。 */
   fetchIcs: (url: string): Promise<{ ok: boolean; text?: string; error?: string }> =>
     ipcRenderer.invoke('calendar:fetchIcs', url),
+  /** 主页的 Bing 壁纸目录。固定访问 Bing 官方 API,renderer 不能借此指定任意 URL。 */
+  wallpaperListBing: (market?: string, count?: number): Promise<{ ok: boolean; items: any[]; error?: string }> =>
+    ipcRenderer.invoke('wallpaper:listBing', market, count),
   /** 主进程回投的外链(页面里的 target=_blank / webview guest 的弹窗):渲染层决定进内置浏览器还是系统浏览器。 */
   onOpenUrl: (cb: (url: string) => void): (() => void) => {
     const listener = (_e: unknown, url: string): void => cb(url)
@@ -319,10 +332,10 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'marketInstalled'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
 
 contextBridge.exposeInMainWorld('tangu', api)

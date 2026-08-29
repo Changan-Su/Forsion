@@ -1,47 +1,45 @@
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
-import { Bot, Inbox, NotebookText, CalendarDays, Code2, Workflow, Rocket } from 'lucide-react'
-import { registerSpace, addRibbonIcon, useSpaceStore, setActiveSpace, useWorkspace, deleteNamedLayout, clearLayout, label } from '@lcl/engine'
+import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket } from 'lucide-react'
+import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
-import { useInbox } from './stores/inboxStore'
 import { installAmadeusCommands } from './amadeusCommands'
+import { SpaceButton } from './components/SpaceButton'
+import { builtinEnabled } from './builtins'
+import { calendarAvailable, calendarSpace } from './builtins/calendar'
+import { homepageAvailable, homepageSpace } from './builtins/homepage'
+import { homeSlotSpaceId, installHomeSlot } from './homeSlot'
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
 
-/** 「启动时进入的 Space」设置(设置 → Spaces)。值 = Space id | LAST_EXIT_SPACE。
- *  **缺省(未设)= LAST_EXIT_SPACE**(2026-08-13 用户要求改的默认):重启回到上次退出的那个 Space,
- *  且布局键原样交给 tryRestoreLayout → 连同上次开着的标签页一起回来。
- *  选固定某个 Space 则冷启动进**那个 Space 自己上次的布局**。实际启动决策见 bootstrapEngine.installEngine(仅主窗读取)。 */
+/** 「启动时进入的 Space」设置(设置 → Spaces)。值 = HOME_SLOT_SPACE | LAST_EXIT_SPACE | Space id。
+ *  **缺省(未设)= HOME_SLOT_SPACE**(2026-08-28 用户要求):启动进 ribbon 主位槽指着的那个 Space
+ *  (默认即主页)。⚠️这条**改过两次**:最早是固定 PRODUCT.defaultSpace,2026-08-13 改成
+ *  LAST_EXIT_SPACE,2026-08-28 再改成主位槽。从没动过这项设置的老用户,升级后启动落点会跟着变。
+ *  · LAST_EXIT_SPACE:id 不动,布局键原样交给 tryRestoreLayout → 连同上次开着的标签页一起回来。
+ *  · 固定某个 Space / 主位槽:冷启动进**那个 Space 自己上次的布局**。
+ *  实际启动决策见 bootstrapEngine.installEngine(仅主窗读取),解析一律走下面的 resolveStartupTarget。 */
 export const DEFAULT_SPACE_KEY = 'forsion_default_space'
 export const LAST_EXIT_SPACE = '__last__'
+/** 「跟随 ribbon 主位槽」这一档。`__` 前缀与 LAST_EXIT_SPACE 同款,永不与真实 Space id 相撞。 */
+export const HOME_SLOT_SPACE = '__home__'
 /** 读「启动时进入」设置的唯一入口 —— 缺省值只在这里写一次(bootstrapEngine 与设置面板都读它)。 */
 export function startupSpacePref(): string {
-  try { return localStorage.getItem(DEFAULT_SPACE_KEY) || LAST_EXIT_SPACE } catch { return LAST_EXIT_SPACE } // private mode
+  try { return localStorage.getItem(DEFAULT_SPACE_KEY) || HOME_SLOT_SPACE } catch { return HOME_SLOT_SPACE } // private mode
 }
 
-/** Space 的 ribbon 顶部图标:复用 .rb-btn,当前空间加 .on 高亮(订阅 activeSpaceId 自动刷新)。
- *  导出供用户自定义 Space(userSpaces.tsx)复用同一观感。 */
-export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expanded: boolean }) {
-  const active = useSpaceStore((s) => s.activeSpaceId === space.id)
-  // hook 无条件调用(React 规则),选择器按 space.id 归零:只有收件箱图标显示未读角标。
-  const unread = useInbox((s) => (space.id === 'inbox' ? s.unreadCount : 0))
-  const Icon = space.icon
-  const name = label(space.name)
-  return (
-    <button
-      className={`rb-btn rb-space${active ? ' on' : ''}`}
-      title={expanded ? undefined : name}
-      onClick={() => setActiveSpace(space.id)}
-    >
-      {Icon && <Icon size={18} />}
-      {expanded && <span className="rb-label">{name}</span>}
-      {unread > 0 && <span className="rb-badge">{unread > 99 ? '99+' : unread}</span>}
-    </button>
-  )
+/** 「启动时进入」→ 具体 Space id。**bootstrapEngine 的两个消费点都必须走它**:
+ *  第二处(用户 Space 异步装载完的补定位)漏了的话,主位/指定档指向一个 L0 用户 Space 时,
+ *  冷启动回落产品默认、补定位又认不出 → 永远进不去那个 Space,而且不报错。 */
+export function resolveStartupTarget(lastExit: string): string {
+  const pref = startupSpacePref()
+  if (pref === HOME_SLOT_SPACE) return homeSlotSpaceId() ?? PRODUCT.defaultSpace
+  if (pref === LAST_EXIT_SPACE) return lastExit
+  return useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
 }
 
 /** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=对话/工作区(自动→文件)/大纲/记忆/子聊天 同组 tab。 */
@@ -137,26 +135,6 @@ const amadeusSpace: SpaceDefinition = {
   },
 }
 
-/** Calendar Space:左=待办清单;主=日历;右=日历配置(颜色/显隐/默认库)。
- *  数据来自全库多维表的 todo / calendarDate 属性(dbAggregateStore)。 */
-const CALENDAR_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'todo-list', params: {} }],
-  right: [{ type: 'calendar-config', params: {} }],
-}
-
-const calendarSpace: SpaceDefinition = {
-  id: 'calendar',
-  name: () => app().tr('space.calendar'),
-  icon: CalendarDays,
-  sidebarDefaults: CALENDAR_SIDE_VIEWS,
-  build() {
-    ws().setSidebarDefaults(CALENDAR_SIDE_VIEWS)
-    ws().openView('calendar', {}, 'main')
-    ws().openView('todo-list', {}, 'left')
-    ws().openView('calendar-config', {}, 'right')
-  },
-}
-
 /** Coding Space:左=Tangu 对话(Prompt,复用 ChatView);主=Code|Preview 工作台;右=工作区文件树。
  *  模仿 Google AI Studio:左侧描述需求 → Coding Agent 生成 web app → 主区实时预览/改代码。
  *  新会话默认落 Coding Agent(不改全局 defaultSlug,只设新会话草稿)。 */
@@ -224,12 +202,16 @@ const publicSpace: SpaceDefinition = {
 export const AMADEUS_ENABLED = true // ponytail: 曾按 dev-mode 门控,现全量开放;闸只剩 window.amadeus(见各消费处的 && 前置)
 // 产品档案过滤 × 运行时能力门控 叠加:档案没点名的 Space 直接不注册(单品变体);点名的仍受能力闸约束。
 const SPACES: SpaceDefinition[] = [
+  // 主页也是**内置插件**(builtins/homepage:Space + homepage 视图随插件启停)。排第一 = ribbon 顶格,
+  // 与旧 Forsion Desktop 的「先看到桌面首页」一致;插件页关掉后下次启动即整条不出现。
+  ...(homepageAvailable() && builtinEnabled('home') ? [homepageSpace] : []),
   ...(PRODUCT.spaces.includes('tangu') ? [tanguSpace] : []),
   // Inbox 与视图注册同门控(桌面壳 backendStatus 或 移动端本地 inbox mobile;Tangu Web 两者皆无 → 不注册)。
   ...(PRODUCT.spaces.includes('inbox') && (window.tangu?.backendStatus || window.tangu?.mobile) ? [inboxSpace] : []),
   ...(PRODUCT.spaces.includes('amadeus') && window.amadeus && AMADEUS_ENABLED ? [amadeusSpace] : []),
-  // Calendar 依赖 window.amadeus(跨库聚合走 vault 文件系统桥),与 Amadeus 同门控。
-  ...(PRODUCT.spaces.includes('calendar') && window.amadeus && AMADEUS_ENABLED ? [calendarSpace] : []),
+  // Calendar 已是**内置插件**(builtins/calendar:Space + 三个视图随插件启停)。这里仍按槽位声明式带上,
+  // 保住 ribbon 默认序与「上次退出停在日历」的启动恢复;插件页关掉后下次启动即整条不出现。
+  ...(calendarAvailable() && builtinEnabled('calendar') ? [calendarSpace] : []),
   // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。
   ...(PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
@@ -243,6 +225,9 @@ export function registerSpaces(): void {
     registerSpace(sp)
     addRibbonIcon({ id: `space:${sp.id}`, side: 'top', component: ({ expanded }) => <SpaceButton space={sp} expanded={expanded} /> })
   }
+  // 主位槽:把它指着的那个 Space 的图标从上区搬到中间的 home 槽(改 side,不动持久顺序)。
+  // 必须在上面那轮 addRibbonIcon 之后 —— 它靠 upsert 覆盖刚注册的那一份。
+  installHomeSlot()
   // 活动 Space 不在本产品档案里 → 回落档案默认(单品变体首启:localStorage 可能存着全家桶的 'tangu')。
   const activeId = useSpaceStore.getState().activeSpaceId
   if (SPACES.length && !SPACES.some((sp) => sp.id === activeId)) {

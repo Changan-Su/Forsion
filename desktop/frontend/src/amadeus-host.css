@@ -64,6 +64,15 @@
   border-radius: var(--radius-sm, 6px);
 }
 .amx-imgview-scroll.actual .amx-imgview-img { max-width: none; max-height: none; cursor: zoom-out; }
+/* 独立音视频视图(AmadeusMediaView):播放器铺满整格 —— 复用的 .embed-video 是**笔记正文里**的
+ * 尺寸(max-height:420px,让视频不吃掉整屏正文),放到独立视图里就是「上下大片空白」。
+ * 这里按视图口径覆盖,不动嵌入那份。音频保持自然高度、垂直居中(音频没有画面,拉满只有空白)。 */
+.amx-mediaview { overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 12px; box-sizing: border-box; }
+.amx-mediaview .embed-video { max-height: 100%; max-width: 100%; height: 100%; object-fit: contain; }
+.amx-mediaview .embed-audio { width: 100%; }
+.amx-mediaview-box { display: flex; flex-direction: column; gap: 10px; align-items: center; max-width: 100%; max-height: 100%; }
+.amx-mediaview:has(.embed-audio) .amx-mediaview-box { width: 100%; max-width: 520px; }
+.amx-mediaview-name { font-size: 13px; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 标题与正文同处 PageView 的居中 920 框(两边各 48px 留白)。Obsidian 式:标题与正文文字都贴到内容最左边
  * (正文左侧的拖拽槽/边缘缩进被下方 .am-app 覆盖归零,拖拽手柄移进左留白)。故标题左内距仅 2px 与正文对齐。 */
 .amx-doc { max-width: 920px; margin: 0 auto; padding: 0 48px; }
@@ -303,7 +312,7 @@
   padding: 8px 14px; font-size: 13px; color: var(--text);
   background: var(--bg-glass, var(--bg-card)); backdrop-filter: var(--panel-blur, blur(8px));
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px);
-  box-shadow: 0 8px 24px var(--shadow, rgba(0, 0, 0, 0.15)); pointer-events: none;
+  box-shadow: var(--card-shadow); pointer-events: none;
 }
 
 /* ── 插件状态条项(字数统计等):编辑器工具条右侧。 ── */
@@ -429,7 +438,45 @@
 .am-app .amx-src-btn--block.amx-open-btn { right: 40px; display: inline-flex; align-items: center; justify-content: center; }
 
 /* 行内图片嵌入的包裹层(为了给 `</>` 一个定位父级);图片本身的尺寸样式仍在 .wiki-inline-img */
-.am-app .wiki-inline-img-wrap { position: relative; display: inline-block; line-height: 0; }
+/* user-select:none —— 双击图片时浏览器的原生「选词」会把选区铺到相邻块上(mousedown 的
+   preventDefault 拦不住它),于是图片当场让位给源码、双击看大图永远轮不到(2026-08-28 实测)。
+   这层本来就是 contentEditable=false,里面没有可选的文本。 */
+.am-app .wiki-inline-img-wrap { position: relative; display: inline-block; line-height: 0; user-select: none; }
+
+/* 图片选中态(点一下图片 = PM 选区精确铺在那段 `![[…]]` 源码上,见 wikilink.ts):
+   accent 描边 + 右缘缩放把手。块选中的淡底在图片上看不见,所以这里用环不用底。
+   ⚠️ 强调色必须写 `var(--primary, var(--accent, …))` 这条回退链:Amadeus 有的主题只定义
+   `--accent`,裸写 `var(--primary)` 会整条声明作废 —— 环和把手当场隐形(截图才发现)。 */
+.am-app .wiki-inline-img-wrap[data-selected] > img,
+.am-app .wiki-inline-img-wrap[data-resizing] > img {
+  outline: 2px solid var(--primary, var(--accent, #6c5ce7));
+  outline-offset: 1px;
+}
+/* `![](path)` 图片的源码行(mdImage.ts:`</>` / 双击弹出):浮在图片上方一行。
+   wrap 是 inline-block + line-height:0,输入框得自己把行高要回来。 */
+.am-app .amx-img-srcline {
+  display: block;
+  width: 100%;
+  line-height: 1.5;
+  margin-bottom: 2px;
+}
+/* 缩放把手(imageResize.ts;v3 块级图片复用同一枚)。touch-action:none —— 触屏拖动不许被滚动手势劫走。 */
+.am-app .amx-img-resize {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  z-index: 3;
+  width: 7px;
+  height: 40px;
+  max-height: 55%;
+  min-height: 16px;
+  transform: translateY(-50%);
+  border-radius: 4px;
+  background: var(--primary, var(--accent, #6c5ce7));
+  box-shadow: 0 0 0 1.5px var(--bg-card, var(--bg));
+  cursor: ew-resize;
+  touch-action: none;
+}
 
 /* 折叠块 `[!fold]`(`>` 空格触发):Notion 手感 —— 不做成有色标注框,只留 chevron + 标题,
    内容左缩进一个层级。落盘仍是标准的 Obsidian 折叠 callout,Obsidian 里能原生折叠。 */
@@ -533,6 +580,41 @@
 }
 .am-app .embed-video { display: block; width: 100%; max-height: 420px; background: #000; }
 .am-app .embed-audio { display: block; width: 100%; padding: 8px 10px; }
+/* 时刻锚徽标 `@01:35` 与「锚点无效」提示(媒体嵌入头部)。 */
+.am-app .embed-media-at {
+  flex: 0 0 auto; font-size: 11.5px; line-height: 1; padding: 3px 7px; border-radius: 999px;
+  background: var(--accent-light, rgba(108, 92, 231, 0.14)); color: var(--text); font-variant-numeric: tabular-nums;
+}
+.am-app .embed-media-warn {
+  flex: 0 0 auto; font-size: 11.5px; color: var(--warn, #b26b00);
+}
+.am-app .embed-media-foot {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+  border-top: 1px solid var(--border); background: var(--overlay-light, rgba(127, 127, 127, 0.05));
+}
+
+/* ── 网页嵌入 `![[https://…]]` ────────────────────────────────────────────────────────
+   默认冻结(书签卡 + 唤醒条),点唤醒才挂 <webview>。冻结态复用 .amx-bm 的观感,
+   这里只管外壳与那条工具条。 */
+.am-app .amx-web { border: 1px solid var(--border); border-radius: var(--radius-md, 10px); overflow: hidden; }
+/* 冻结态/降级态内部就是一张 .amx-bm 书签卡(它自带描边)—— 外层再画一圈就是双框。
+   DESIGN.md §5「内容卡不描边」+「去边写 transparent 不写 none」(保住 1px 盒模型不位移)。 */
+.am-app .amx-web-frozen,
+.am-app .amx-web-degraded { border-color: transparent; }
+.am-app .amx-web-degraded .amx-web-note { padding: 2px 10px 6px; display: block; }
+.am-app .amx-web-foot,
+.am-app .amx-web-bar {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 12.5px;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.05));
+}
+.am-app .amx-web-foot { border-top: 1px solid var(--border); }
+.am-app .amx-web-bar { border-bottom: 1px solid var(--border); }
+.am-app .amx-web-bar .amx-web-host { flex: 1 1 auto; color: var(--text-muted); }
+.am-app .amx-web-note { color: var(--text-muted); font-size: 11.5px; }
+.am-app .amx-web-blocked { padding: 10px; display: grid; gap: 8px; justify-items: start; }
+.am-app .amx-web-url { font-size: 11.5px; color: var(--text-muted); word-break: break-all; }
+/* webview 是**替换元素**,和 <video> 一样必须显式给高,否则塌成 0。 */
+.am-app .amx-web-view { display: block; width: 100%; height: 420px; border: none; background: var(--bg); }
 
 /* ── Database 嵌入(![[xxx.db]]):AFFiNE 式表格 —— 无外框与正文齐平,行线常驻、列线弱化、表头透明 ── */
 .amx-db { font-size: 13.5px; }
@@ -561,14 +643,12 @@
 .amx-db-cell[data-coltype='number'] { text-align: right; }
 .amx-db-cell[data-coltype='number'] .amx-db-input { text-align: right; }
 .amx-db-input { width: 100%; min-width: 0; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; line-height: 22px; padding: 6px; }
-/* 单元格聚焦态(Notion 式):主题色淡描边 + 淡填充 + 柔和阴影。
+/* 单元格聚焦态(Notion 式):主题色淡描边 + 淡填充。
    刻意不用实心描边/硬轮廓 —— 暗色主题里 --primary/--accent 近白,实心就是一圈刺眼白框(用户实报)。 */
 .amx-db-input:focus {
   border-radius: var(--radius-xs, 4px);
   background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 10%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 38%, transparent),
-    0 4px 12px -4px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 38%, transparent);
 }
 .amx-db-checkbox { margin: 6px; accent-color: var(--accent, #6c5ce7); }
 /* 事件卡里的完成勾选:裸原生 checkbox 曾不随主题 → 用 accent-color 上色(勾随主题变量,深浅一致可见) */
@@ -805,7 +885,7 @@
 /* 视图菜单里被隐藏的列淡显 */
 .amx-db-opt[data-dim] { opacity: 0.5; }
 /* 双链 hover 预览浮卡:只读渲染前段,可入卡滚动 */
-.amx-hoverprev { position: fixed; z-index: 90; width: 380px; max-height: 300px; display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); border-radius: 10px; box-shadow: 0 0 0 0.5px var(--border), 0 10px 34px rgba(0, 0, 0, 0.2); overflow: hidden; }
+.amx-hoverprev { position: fixed; z-index: 90; width: 380px; max-height: 300px; display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); border-radius: 10px; outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); overflow: hidden; }
 .amx-hoverprev-title { flex: 0 0 auto; padding: 8px 12px 4px; font-size: 12px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .amx-hoverprev-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 10px; font-size: 0.92em; }
 .amx-hoverprev-body .md-plain .milkdown { pointer-events: none; }
@@ -814,13 +894,13 @@
 /* 「调整位置」模式:图片解锁可上下拖(否则默认锁定不可拖);激活时工具常显 + 内描边提示激活态。 */
 .amx-cover-repo { cursor: ns-resize; box-shadow: inset 0 0 0 2px var(--accent); }
 .amx-cover-repo .amx-cover-tools { opacity: 1; }
-.amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: 11.5px; color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: 0 1px 3px var(--shadow); }
+.amx-cover-hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1; pointer-events: none; font-size: 11.5px; color: var(--text); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); padding: 3px 10px; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; }
 /* 底部柔和渐变:从中下部起逐渐融入页面背景色(--bg),与正文自然过渡;克制、不纯色底、无硬分界 */
 .amx-cover-grad { position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(to bottom, transparent 52%, color-mix(in srgb, var(--bg) 55%, transparent) 82%, var(--bg) 100%); }
 .amx-cover-tools { position: absolute; right: 14px; bottom: 10px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.15s ease; }
 .amx-cover:hover .amx-cover-tools { opacity: 1; }
-.amx-cover-tools button { border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: color-mix(in srgb, var(--bg-card) 82%, transparent); color: var(--text); font: inherit; font-size: 11.5px; padding: 3px 9px; cursor: pointer; backdrop-filter: blur(8px); box-shadow: 0 1px 3px var(--shadow); }
+.amx-cover-tools button { border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: color-mix(in srgb, var(--bg-card) 82%, transparent); color: var(--text); font: inherit; font-size: 11.5px; padding: 3px 9px; cursor: pointer; backdrop-filter: blur(8px); box-shadow: var(--btn-shadow); }
 .amx-cover-tools button:hover { background: var(--bg-card); }
 .amx-title-wrap { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .amx-title-bigicon { align-self: flex-start; border: none; background: transparent; font-size: 40px; line-height: 1.1; padding: 2px 4px; border-radius: 8px; cursor: pointer; }
@@ -869,7 +949,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--bg-card, var(--bg));
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
   z-index: 5;
 }
 .amx-mbar button {
@@ -910,7 +990,7 @@
   flex-direction: column;
   background: var(--bg-card, var(--bg));
   border-top: 1px solid var(--border);
-  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
   animation: amx-bpick-up 0.2s var(--ease-out, ease-out);
 }
 @keyframes amx-bpick-up { from { transform: translateY(100%); } to { transform: none; } }
@@ -1000,7 +1080,7 @@
 .amx-trash-entry { margin-top: 10px; opacity: 0.65; }
 .amx-trash-entry:hover { opacity: 1; }
 .amx-trash-wrap { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.18); display: grid; place-items: center; }
-.amx-trash-pop { width: min(460px, calc(100vw - 48px)); max-height: min(480px, 78vh); display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); border-radius: 12px; box-shadow: 0 0 0 0.5px var(--border), 0 12px 40px rgba(0, 0, 0, 0.22); overflow: hidden; }
+.amx-trash-pop { width: min(460px, calc(100vw - 48px)); max-height: min(480px, 78vh); display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); border-radius: 12px; outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); overflow: hidden; }
 .amx-trash-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; font-weight: 600; font-size: 13.5px; color: var(--text); }
 .amx-trash-clear { border: none; background: transparent; color: var(--danger, #e5484d); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 5px; }
 .amx-trash-clear:hover { background: color-mix(in srgb, var(--danger, #e5484d) 10%, transparent); }
@@ -1027,8 +1107,7 @@
 .amx-db-lane-add { display: inline-flex; align-items: center; gap: 4px; border: none; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 6px; cursor: pointer; text-align: left; }
 .amx-db-lane-add:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 /* 卡片(看板/画廊共用) */
-.amx-db-card { display: flex; flex-direction: column; gap: 5px; background: var(--bg-card, var(--bg)); border-radius: 8px; box-shadow: 0 0 0 0.5px var(--border), 0 1px 3px var(--shadow, rgba(66, 65, 73, 0.08)); padding: 8px 10px; cursor: pointer; user-select: none; }
-.amx-db-card:hover { box-shadow: 0 0 0 0.5px var(--border), 0 2px 8px var(--shadow, rgba(66, 65, 73, 0.14)); }
+.amx-db-card { display: flex; flex-direction: column; gap: 5px; background: var(--bg-card, var(--bg)); border-radius: 8px; box-shadow: var(--card-shadow); padding: 8px 10px; cursor: pointer; user-select: none; }
 .amx-db-card-title { font-size: 13px; font-weight: 600; color: var(--text); word-break: break-word; }
 .amx-db-card-prop { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .amx-db-card-text { color: var(--text-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
@@ -1063,9 +1142,9 @@
 .amx-db-rowed-field { display: flex; flex-direction: column; gap: 2px; }
 .amx-db-rowed-label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-faint, var(--text-muted)); font-size: 11px; }
 .amx-db-rowed-cell { border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: 6px; padding: 1px 4px; min-height: 26px; display: flex; align-items: center; }
-/* 弹层(选项池 / 列菜单):fixed,免被 amx-db-scroll 裁剪;0.5px 描边并进 box-shadow,挂载纯 opacity 淡入 */
+/* 弹层(选项池 / 列菜单):fixed,免被 amx-db-scroll 裁剪;0.5px outline + 可清零高程,挂载纯 opacity 淡入 */
 .amx-db-popwrap { position: fixed; inset: 0; z-index: 80; -webkit-app-region: no-drag; }
-.amx-db-pop { position: fixed; width: 230px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; background: var(--bg-card, var(--bg)); border-radius: 8px; box-shadow: 0 0 0 0.5px var(--border), 0 0 12px var(--shadow, rgba(66, 65, 73, 0.14)); padding: 8px; transition: opacity 120ms ease-in; }
+.amx-db-pop { position: fixed; width: 230px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; background: var(--bg-card, var(--bg)); border-radius: 8px; outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); padding: 8px; transition: opacity 120ms ease-in; }
 @starting-style {
   .amx-db-pop { opacity: 0; }
 }
@@ -1143,6 +1222,11 @@
   #amx-print-root .embed-pdf,
   #amx-print-root .embed-video,
   #amx-print-root .embed-audio,
+  #amx-print-root .amx-web-view,
+  #amx-print-root .amx-web-bar,
+  #amx-print-root .amx-web-foot,
+  #amx-print-root .amx-bm-iframe,
+  #amx-print-root .embed-media-foot,
   #amx-print-root .embed-media-btn { display: none !important; }
   #amx-print-root * { box-shadow: none !important; }
 }
@@ -1222,7 +1306,7 @@
 
 /* 月格溢出事件列表：保留格内密度，又让“还有 N 项”可操作。 */
 .amx-cal-agenda-overlay { position: fixed; inset: 0; z-index: 70; background: transparent; }
-.amx-cal-agenda { position: fixed; max-height: 344px; overflow: hidden; display: flex; flex-direction: column; padding: 6px; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md, 12px); box-shadow: 0 12px 34px var(--shadow, rgba(0, 0, 0, .24)); }
+.amx-cal-agenda { position: fixed; max-height: 344px; overflow: hidden; display: flex; flex-direction: column; padding: 6px; background: var(--bg-card, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow); }
 .amx-cal-agenda > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 6px 8px; font-size: 13px; }
 .amx-cal-agenda > header button { width: 28px; height: 28px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 18px; cursor: pointer; }
 .amx-cal-agenda > header button:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
@@ -1236,7 +1320,7 @@
 /* 承载面 = app 自己的浮层主题(--bg-card + 0.5px 描边环 + 柔投影,与 .amx-db-pop 同一套 token),
  * 刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  * 视觉对标 Notion Calendar 事件 peek:图标引导的行、时段大标题 + 时长徽章、值右对齐可就地编辑。 */
-.amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); box-shadow: 0 0 0 0.5px var(--border), 0 10px 34px var(--shadow, rgba(66, 65, 73, 0.22)); }
+.amx-cal-cardwrap { position: fixed; width: 360px; max-height: 80vh; overflow-y: auto; transform-origin: top left; animation: amx-cal-cardin 0.16s cubic-bezier(0.22, 0.61, 0.36, 1); background: var(--bg-card, var(--bg)); border-radius: var(--radius-md, 12px); outline: 0.5px solid var(--border); outline-offset: -0.5px; box-shadow: var(--card-shadow); }
 .amx-cal-cardin { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
 @keyframes amx-cal-cardin { from { opacity: 0; transform: scale(0.97) translateY(-6px); } to { opacity: 1; transform: none; } }
 
@@ -1372,36 +1456,59 @@
 .amx-cal-nowlabel { position: absolute; right: 4px; transform: translateY(-50%); font-size: 10px; font-weight: 600; color: var(--accent-ink, var(--accent, #6c5ce7)); background: var(--bg); padding: 0 3px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
 
 /* ── ToDo List View ── */
-.amx-todo { height: 100%; overflow-y: auto; background: transparent; color: var(--text); padding: 6px 0; } /* 透明融入侧栏底 */
-.amx-todo-empty { padding: 18px; color: var(--text-faint, var(--text-muted)); font-size: 13px; text-align: center; }
-/* 待办清单顶部时间窗 + 设置 */
-.amx-todo-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-.amx-todo-range-label { color: var(--text-muted); font-size: 11.5px; }
-.amx-todo-bar-sp { flex: 1; }
-.amx-todo-custom { width: 48px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 5px; background: transparent; color: var(--text); font-size: 12px; }
-.amx-todo-set { flex: none; width: 28px; height: 28px; border: none; background: transparent; color: var(--text-muted); font-size: 14px; cursor: pointer; padding: 0; border-radius: 6px; }
-.amx-todo-set:hover { background: var(--bg-hover, var(--overlay-light)); color: var(--text); }
-.amx-todo-setpop { min-width: 176px; padding: 6px; }
-.amx-todo-setrow { display: flex; align-items: center; gap: 8px; padding: 5px 6px; font-size: 12.5px; cursor: pointer; border-radius: 6px; }
-.amx-todo-setrow:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-todo-setrow input { accent-color: var(--accent, #6c5ce7); }
-.amx-todo-group { border-bottom: 1px solid var(--border); }
-.amx-todo-ghead { width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: transparent; color: var(--text); font: inherit; padding: 8px 12px; cursor: pointer; }
+/* 待办清单(左栏)。行几何三条纪律,别退回去:
+   ① `.amx-todo-main` 是 row 不是 column —— 从前名称与日期各占一行基线,窄侧栏里扫视要上下跳。
+   ② 行高 30px + `align-items: center` —— 从前 40px,280px 侧栏一屏只装得下 13 条。
+   ③ 分组不逐个描边(DESIGN.md §5 内容卡不描边),靠底色与间距分层。
+   ⚠️ 根类名 `.amx-todo` 不许改 —— styles/base.css 的移动端顶栏 padding 用后代选择器钉在它上面
+   (astryx Theme 壳 display:contents,只能这么写),改名的症状只在移动端顶栏遮挡,桌面截图看不出来。 */
+.amx-todo { height: 100%; overflow-y: auto; background: transparent; color: var(--text); padding: 0 0 6px; } /* 透明融入侧栏底 */
+.amx-todo-empty { padding: 18px; color: var(--text-faint, var(--text-muted)); font-size: 12.5px; text-align: center; line-height: 1.7; }
+.amx-todo-empty code { padding: 1px 4px; border-radius: 4px; background: var(--bg-hover, var(--overlay-light)); font-size: 11.5px; }
+
+.amx-todo-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px 6px; }
+.amx-todo-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.amx-todo-total { font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.amx-todo-group + .amx-todo-group { margin-top: 2px; }
+.amx-todo-ghead { width: 100%; display: flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--text-secondary, var(--text-muted)); font: inherit; padding: 5px 12px; cursor: pointer; }
 .amx-todo-ghead:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-todo-caret { width: 12px; color: var(--text-muted); font-size: 10px; }
-.amx-todo-gname { font-weight: 600; font-size: 13px; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.amx-todo-gcount { font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.amx-todo-list { list-style: none; margin: 0; padding: 0 0 4px; }
-.amx-todo-item { display: flex; align-items: flex-start; gap: 8px; min-height: 40px; padding: 5px 12px 5px 30px; }
+.amx-todo-caret { flex: none; color: var(--text-muted); }
+.amx-todo-gname { font-weight: 600; font-size: 11.5px; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-todo-gcount { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* 未排期桶内的来源小标题(`笔记 › 标题`) */
+.amx-todo-src { display: flex; align-items: center; gap: 6px; padding: 5px 12px 2px 22px; font-size: 11px; color: var(--text-muted); }
+.amx-todo-src { white-space: nowrap; overflow: hidden; }
+.amx-todo-srcn { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+
+.amx-todo-list { list-style: none; margin: 0; padding: 0; }
+.amx-todo-item { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 12px 2px 22px; }
 .amx-todo-item:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-todo-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; }
-.amx-todo-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; border-radius: 4px; }
+/* 正文任务的方框:同样的形状,但不是可点的勾选框(这里不回写笔记原文)。
+   ⚠️ 外框宽度必须与 astryx CheckboxInput 占的 20px 一致 —— 两类行同处一个列表,
+   差 7px 就是两条文字起始线,截图上不显眼但一眼就是「没对齐」。可见方块画在 ::before 上,
+   外框只负责占位。仪器 check:todo 第 11 条钉这个。 */
+.amx-todo-box { flex: none; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; }
+.amx-todo-box::before { content: ''; width: 14px; height: 14px; border: 1px solid var(--border-strong, var(--border)); border-radius: 4px; }
+.amx-todo-box.on::before { background: var(--text-faint, var(--text-muted)); border-color: transparent; }
+.amx-todo-main { flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 8px; border: none; background: transparent; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; }
+.amx-todo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .amx-todo-name.done { color: var(--text-faint, var(--text-muted)); text-decoration: line-through; }
-.amx-todo-due { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+/* 日期语义色:只有异常态着色 —— 逾期 danger、今天 accent、其余一律 muted。
+   靠「绝大多数行不着色」让少数红色真的跳出来;只上文字色,不铺底色不加描边。 */
+.amx-todo-due { flex: none; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .amx-todo-due.today { color: var(--accent-ink, var(--accent, #6c5ce7)); font-weight: 600; }
 .amx-todo-due.overdue { color: var(--danger, #d4604f); font-weight: 600; }
 .amx-todo-due.muted { color: var(--text-faint, var(--text-muted)); }
-.amx-todo-blank { padding: 4px 12px 4px 30px; font-size: 12px; color: var(--text-faint, var(--text-muted)); }
+.amx-todo-jump { flex: none; color: var(--text-faint, var(--text-muted)); opacity: 0; }
+.amx-todo-item:hover .amx-todo-jump { opacity: 1; }
+
+/* 底部常驻新建行(空态时也在:没有待办时它就是唯一的下一步动作) */
+.amx-todo-add { display: flex; align-items: center; gap: 7px; margin-top: 4px; padding: 5px 12px; color: var(--text-muted); }
+.amx-todo-addicon { flex: none; }
+.amx-todo-addinput { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; padding: 2px 0; outline: none; }
+.amx-todo-addinput::placeholder { color: var(--text-faint, var(--text-muted)); }
 
 @container (max-width: 650px) {
   .amx-cal-bar { gap: 6px; padding-inline: 8px; }
@@ -1422,7 +1529,7 @@
   overflow-y: auto; padding: 10px 10px 14px;
   background: var(--bg-card, var(--surface)); color: var(--text);
   border: var(--border-width, 1px) solid var(--border); border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
   font-family: var(--font-ui); font-size: 13px;
 }
 .amxc-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; font-weight: 600; font-size: 14px; }
@@ -1472,7 +1579,7 @@
   padding: 8px 12px 12px;
   background: var(--bg-card, var(--surface)); color: var(--text);
   border: var(--border-width, 1px) solid var(--border); border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--card-shadow);
   font-family: var(--font-ui); font-size: 13px;
 }
 .amxc-tabs { display: flex; align-items: center; gap: 2px; border-bottom: var(--border-width, 1px) solid var(--border); margin: 0 -4px 10px; padding: 0 4px 0; }
@@ -1597,13 +1704,26 @@
 /* ＋ 添加卡片 / ⋮ 更多 的下拉 */
 .dash-add-wrap { position: relative; display: inline-flex; }
 .dash-menu-scrim { position: fixed; inset: 0; z-index: 40; }
+/* 分区标题条(dashboard 的排版元素,不是卡片)。网格版与画布版共用。
+   ⚠️ 必须逐项压掉 `.dash-widget` 的居中语汇(align-items/justify-content/text-align):
+   分区标题是**左对齐的排版元素**,跟着挂件一起居中会读成一个孤零零的标签(截图实证)。 */
+/* ⚠️ 必须写成 `.dash-widget.dash-section`(特异性 0,2,0)。写 `.dash-section` 是 0,1,0,
+   与 `.dash-widget` 同级 —— 而 `.dash-widget` 定义在本文件更靠后的位置,靠源码顺序赢,
+   分区标题就被居中了(DESIGN.md §7-2/§7-3;2026-08-27 截图实证:改完仍居中)。 */
+.dash-widget.dash-section {
+  display: flex; align-items: baseline; justify-content: flex-start;
+  gap: 8px; padding: 10px 2px 2px; min-width: 0; height: 100%; text-align: left;
+}
+.dash-section-title { font-size: 13px; font-weight: 650; letter-spacing: 0.02em; color: var(--text); }
+.dash-section-note { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .dash-add-menu {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 41;
   min-width: 148px; padding: 4px;
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
   border-radius: var(--radius-md, 10px);
   background: var(--bg-card, var(--bg));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
 }
 .dash-add-menu button {
   display: flex; align-items: center; gap: 7px; width: 100%;
@@ -1637,6 +1757,22 @@
 /* 视图卡片:滚动交给视图自己(.wb-view 已是满高 flex 列 + overflow auto),外层别再套一层滚动条。 */
 .dash-card[data-widget='view'] .dash-card-body { overflow: hidden; }
 .dash-viewcard { font-size: 13px; }
+/* 嵌卡的 Amadeus:顶栏(笔记的面包屑/模式胶囊/分享… 与画板的工具盘)平时隐去,指针进卡才淡入。
+ * tab 里的视图不受影响 —— 选择器只挂 .dash-viewcard(ViewCard 根)。
+ * · pointer-events 跟着切:隐着的时候不许吃掉落在顶栏那条带上的点击。键盘 Tab 进来仍会 focus,
+ *   故留 :focus-within 让它自己现身。 */
+.dash-viewcard .amx-toolbar {
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.18s var(--ease-out, ease-out);
+}
+.dash-viewcard:hover .amx-toolbar,
+.dash-viewcard .amx-toolbar:focus-within { opacity: 1; pointer-events: auto; }
+/* 笔记顶栏还要把它占的那条空带还给正文:负外边距抵掉自身高度 → 正文顶到卡沿,顶栏改为悬浮盖在
+ * 正文之上(它自带不透明底 + z-index:3,遮得住)。画板工具盘不吃这条 —— 它是 excalidraw 里的
+ * 浮岛,自有定位,给它负边距只会把整块面板拽歪。
+ * ponytail: -32px 是顶栏自身高度(24 内容 + 6/2 padding),与 .plugin-note-surface 那条同一个常数。
+ * 高度若改,check:dashboard 的 D25「顶栏高度 + 负边距 = 0」会红,不会静默错位。 */
+.dash-viewcard .amx-toolbar:not(.excalidraw *) { margin-bottom: -32px; }
 .dash-webview { width: 100%; height: 100%; display: flex; border: none; }
 /* 仪表盘顶部提示条:frontmatter 读不懂 / 布局与块 id 对不上 —— 两种情况都**停止一切自动写入**,
    宁可画面不好看也不能把用户的布局覆盖掉,所以必须明说,不能默默降级。 */

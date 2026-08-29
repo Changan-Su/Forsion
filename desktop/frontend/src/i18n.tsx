@@ -95,6 +95,7 @@ const zh: Dict = {
   'workbench.noSession': '选择或新建一个会话以查看',
   'workbench.sessions': '工作会话',
   // ── Space(空间):ribbon 顶部成组、单选切换 ──
+  'space.home': '主页',
   'space.tangu': 'Tangu',
   'space.amadeus': 'Amadeus',
   // ── Calendar Space(日历)──
@@ -353,6 +354,17 @@ const zh: Dict = {
   'activityView.resume': '继续',
   'activityView.count': '{n} 行',
   'activityView.empty': '还没有活动记录。请确认开发者选项里「记录应用内活动」处于开启,然后随便操作几下。',
+  // 前台窗口采样接缝(开发者工具)
+  'command.openActiveWindow': '前台窗口采样',
+  'view.activeWindow': '前台窗口采样',
+  'activeWindowView.on': '接缝已开启',
+  'activeWindowView.off': '接缝未开启',
+  'activeWindowView.offHint': '前台窗口采样默认关闭。到 设置 → 开发者选项 打开「前台窗口采样」后,这里会实时显示当前焦点所在的应用。',
+  'activeWindowView.noSample': '开着但探不到前台窗口。Linux 上 Wayland 会话拿不到(与 ActivityWatch 同样的天花板),X11 需要 xprop。',
+  'activeWindowView.noTitle': '(本平台不提供:macOS 的窗口标题属于「屏幕录制」权限)',
+  'activeWindowView.idleMark': '挂机',
+  'activeWindowView.clear': '清空',
+  'activeWindowView.segEmpty': '正在采样。切到别的应用待一会儿再回来,下面会出现折好的焦点段(挂机段会变灰)。',
   // ── 自动化 Space ──
   'space.automation': '自动化',
   'view.automationList': '自动化列表',
@@ -507,6 +519,13 @@ const zh: Dict = {
   'market.installing': '安装中…',
   'market.installed': '已安装',
   'market.reinstall': '重新安装',
+  'market.uninstall': '卸载',
+  'market.uninstallConfirm': '卸载「{name}」?将删除它的安装目录。',
+  'market.uninstallWarnAgent': '⚠️ 这是一个智能体:它落地后有自己的记忆与日志,卸载会一并删除,且无法恢复。',
+  'market.uninstallWarnSkill': '⚠️ 若你改过这份技能,你的改动会一并删除。',
+  'market.uninstalled': '已卸载「{name}」',
+  'market.uninstalledNeedsRestart': '已卸载「{name}」· 工具与路由需重启后端才真正消失',
+  'market.uninstallFail': '卸载失败:{e}',
   'market.openSettings': '打开设置',
   'market.update': '更新',
   'market.updateTitle': '更新 v{from} → v{to}',
@@ -748,13 +767,16 @@ const zh: Dict = {
   'settings.spaces.empty': '还没有任何 Space。',
   'settings.spaces.startupTitle': '启动位置',
   'settings.spaces.startupLabel': '打开应用时进入',
-  'settings.spaces.startupHint': '默认回到上次退出的 Space 并恢复标签页，也可固定进入一个 Space。',
-  'settings.spaces.lastExit': '上次退出的 Space（默认）',
+  'settings.spaces.startupHint': '默认进入 ribbon 主位槽指着的那个 Space；也可以回到上次退出的 Space 并恢复标签页，或固定进入某一个。',
+  'settings.spaces.lastExit': '上次退出的 Space（连同标签页）',
+  'settings.spaces.homeSlotStartup': '主位槽的 Space（默认 · 当前是「{name}」）',
+  'settings.spaces.homeSlotLabel': 'Ribbon 主位槽',
+  'settings.spaces.homeSlotHint': 'ribbon 竖条正中那一格。默认放主页，也可以换成任何一个 Space；在那一格上右键同样能换。',
   'settings.spaces.libraryTitle': '已安装的 Space · {count}',
   'settings.tab.plugins': '插件',
   'settings.tab.amadeusPlugins': '插件',
   'settings.amadeusPlugins.builtinTitle': '内置插件',
-  'settings.amadeusPlugins.builtinHint': '随 App 发行、默认开启的能力(浏览器/终端是宿主原生视图,其余是编辑器增强)。关闭即从工作台、命令面板与编辑器中移除。',
+  'settings.amadeusPlugins.builtinHint': '随 App 发行、默认开启的能力(浏览器/终端/日历是宿主原生视图,其余是编辑器增强)。关闭即从工作台、命令面板与编辑器中移除 —— 日历连同它的 Space 一起撤下。',
   'settings.amadeusPlugins.externalTitle': '外置插件',
   'settings.amadeusPlugins.changelog': '更新日志',
   'settings.amadeusPlugins.hint': '启用/禁用即时生效,点击插件可查看详情。插件目录:~/.forsion/plugins/(市场安装位置)。插件可捆绑引擎插件/Agent/技能/Space(捆绑包),随本插件一并识别、启停与卸载。',
@@ -856,6 +878,8 @@ const zh: Dict = {
   'settings.developer.disable': '关闭开发者模式',
   'settings.developer.showSystemPrompt': '回复前显示 system prompt',
   'settings.developer.showSystemPromptHint': '开启后,每条 AI 回复前会显示本条消息发送给模型的完整 system prompt(可展开检查内容与结构);仅本机调试,关闭开发者模式时自动一并关闭。',
+  'settings.developer.activeWindow': '前台窗口采样(接缝)',
+  'settings.developer.activeWindowHint': '开启后,声明了 activeWindow 能力的插件可以读到「现在焦点在哪个应用」——用来替掉 ActivityWatch 这类外部依赖。数据只留本机。命令面板(⌘K)会多一条「前台窗口采样」调试面板。默认关闭,关闭开发者模式时自动一并关闭。',
   'settings.developer.mobileUiPreview': '移动端 UI 预览命令',
   'settings.developer.mobileUiPreviewHint': '开启后命令面板(⌘K)多一条「切换到移动端 UI」,运行时把桌面壳换成单列移动壳预览(会刷新页面);web 端同样可用。仅本机调试,关闭开发者模式时自动一并关闭。',
   'command.switchToMobileUi': '切换到移动端 UI',
@@ -922,12 +946,19 @@ const zh: Dict = {
   'settings.theme.fontMono': '等宽字体',
   'settings.theme.fontFollow': '跟随主题',
   'settings.theme.fontSystem': '系统默认',
-  'settings.theme.fontHint': '留空即跟随当前主题(主题本身可能就用系统字体)。可从预设里选,也可直接填任意已安装的字体名。',
+  'settings.theme.fontHint': '预设字体随应用内置,不依赖本机是否装过,每台设备观感一致。选「跟随主题」则用当前主题自带的字体栈。',
+  'settings.theme.fontPreset.inter': 'Inter(现代无衬线)',
+  'settings.theme.fontPreset.notoSans': '思源黑体 Noto Sans',
+  'settings.theme.fontPreset.wenkai': '霞鹜文楷(阅读)',
+  'settings.theme.fontPreset.jetbrains': 'JetBrains Mono',
+  'settings.theme.fontPreset.system': '系统默认',
+  'settings.theme.fontGroupBuiltin': '内置',
+  'settings.theme.fontGroupPlugin': '插件提供',
   'settings.theme.customSeedLabel': '自定义强调色',
   'settings.theme.customBgLabel': '自定义背景色',
-  'settings.theme.customBgFollow': '跟随强调色',
+  'settings.theme.customBgFollow': '跟随主题色',
   'settings.theme.customBgClear': '恢复跟随',
-  'settings.theme.customBgHint': '不设置时背景由强调色微染；设置后将所选色作为独立氛围种子，并自动调至当前明暗模式的可读范围。',
+  'settings.theme.customBgHint': '不设置时背景由主题色微染；设置后将所选色作为独立氛围种子，并自动调至当前明暗模式的可读范围。',
   // 双轴主题:设计语言(结构)× 配色(颜色)
   'settings.theme.langLabel': '设计语言',
   'settings.theme.openFolder': '打开主题文件夹',
@@ -936,6 +967,8 @@ const zh: Dict = {
   'settings.theme.options': '{name} 选项',
   'settings.theme.optionsReset': '重置',
   'settings.theme.skinLabel': '配色',
+  'settings.theme.accentLabel': '主题色',
+  'settings.theme.bgLabel': '背景色',
   'settings.theme.skin.cream': '经典',
   'settings.theme.skin.coral': '珊瑚',
   'settings.theme.skin.teal': '柔青',
@@ -1005,7 +1038,7 @@ const zh: Dict = {
   'settings.theme.previewMessage': '当前的设计语言、配色、字体和质感会实时应用到这块预览。',
   'settings.theme.previewInput': '问问 Forsion，或输入 / 使用能力',
   'settings.theme.langDescription': '选择界面的结构、圆角、排版和整体气质。',
-  'settings.theme.skinDescription': '在不改变布局的情况下切换强调色与底色。',
+  'settings.theme.skinDescription': '主题色与背景色分开选,布局不变;两边选同一个 = 原来的整套配色。',
   'settings.theme.behaviorTitle': '显示与动效',
   'settings.theme.behaviorDescription': '调整明暗、层次质感和输入时的反馈。',
   'settings.theme.flatDescription': '控制卡片与浮层是否保留空间阴影。',
@@ -1094,6 +1127,7 @@ const zh: Dict = {
   'ctx.windowSource.override': '窗口值：手动覆盖表',
   'ctx.windowSource.model': '窗口值：模型自报',
   'ctx.windowSource.family': '窗口值：按模型族推断（非模型自报）',
+  'ctx.windowSource.learned': '窗口值：从上游超长报错回学到的真实上限',
   'ctx.windowSource.default': '窗口值：128k 默认兜底（未知模型，可能偏小）',
   'ctx.sec.persona': '人格/指令',
   'ctx.sec.harness': '自进化笔记',
@@ -1386,7 +1420,7 @@ const zh: Dict = {
   'workbench.chat': '对话',
   'workbench.leftSidebar': '左侧栏',
   'workbench.rightSidebar': '右侧栏',
-  'theme.changeSkin': '切换配色',
+  'theme.changeSkin': '切换主题色',
   'theme.changeMode': '切换明暗模式',
   'theme.changeLanguage': '切换主题外观',
   'command.palette': '命令面板 (⌘K)',
@@ -1588,6 +1622,7 @@ const en: Dict = {
   'chat.you': 'You',
   'workbench.noSession': 'Select or start a session to view',
   'workbench.sessions': 'Sessions',
+  'space.home': 'Home',
   'space.tangu': 'Tangu',
   'space.amadeus': 'Amadeus',
   'space.calendar': 'Calendar',
@@ -1844,6 +1879,17 @@ const en: Dict = {
   'activityView.resume': 'Resume',
   'activityView.count': '{n} lines',
   'activityView.empty': 'No activity recorded yet. Make sure "Record in-app activity" is enabled in developer options, then do something.',
+  // Active-window sampling seam (developer tool)
+  'command.openActiveWindow': 'Active window sampling',
+  'view.activeWindow': 'Active Window',
+  'activeWindowView.on': 'Seam enabled',
+  'activeWindowView.off': 'Seam disabled',
+  'activeWindowView.offHint': 'Active-window sampling is off by default. Turn on "Active window sampling" in Settings → Developer options and the app you are focused on will show up here live.',
+  'activeWindowView.noSample': 'Enabled, but no active window could be read. Wayland sessions cannot report it (same ceiling as ActivityWatch); X11 needs xprop.',
+  'activeWindowView.noTitle': '(not available on this platform: window titles on macOS require Screen Recording)',
+  'activeWindowView.idleMark': 'idle',
+  'activeWindowView.clear': 'Clear',
+  'activeWindowView.segEmpty': 'Sampling. Switch to another app for a moment and come back — folded focus segments will appear below (idle ones greyed out).',
   // ── Automation Space ──
   'space.automation': 'Automation',
   'view.automationList': 'Automations',
@@ -1998,6 +2044,13 @@ const en: Dict = {
   'market.installing': 'Installing…',
   'market.installed': 'Installed',
   'market.reinstall': 'Reinstall',
+  'market.uninstall': 'Uninstall',
+  'market.uninstallConfirm': 'Uninstall "{name}"? Its install directory will be deleted.',
+  'market.uninstallWarnAgent': '⚠️ This is an agent: once installed it keeps its own memory and logs. Uninstalling deletes them too, and that cannot be undone.',
+  'market.uninstallWarnSkill': '⚠️ If you have edited this skill, your edits will be deleted with it.',
+  'market.uninstalled': 'Uninstalled "{name}"',
+  'market.uninstalledNeedsRestart': 'Uninstalled "{name}" · restart the backend for its tools and routes to actually disappear',
+  'market.uninstallFail': 'Uninstall failed: {e}',
   'market.openSettings': 'Open settings',
   'market.update': 'Update',
   'market.updateTitle': 'Update v{from} → v{to}',
@@ -2235,13 +2288,16 @@ const en: Dict = {
   'settings.spaces.empty': 'No Spaces yet.',
   'settings.spaces.startupTitle': 'Startup location',
   'settings.spaces.startupLabel': 'Open the app in',
-  'settings.spaces.startupHint': 'Return to your last Space and restore its tabs, or pin a specific Space.',
-  'settings.spaces.lastExit': 'Last Space on exit (default)',
+  'settings.spaces.startupHint': 'Opens the Space in the ribbon home slot by default; you can also return to your last Space with its tabs, or pin a specific one.',
+  'settings.spaces.lastExit': 'Last Space on exit (with its tabs)',
+  'settings.spaces.homeSlotStartup': 'Space in the home slot (default — now “{name}”)',
+  'settings.spaces.homeSlotLabel': 'Ribbon home slot',
+  'settings.spaces.homeSlotHint': 'The centred cell on the ribbon. Home by default; swap it for any Space here or by right-clicking the cell.',
   'settings.spaces.libraryTitle': 'Installed Spaces · {count}',
   'settings.tab.plugins': 'Plugins',
   'settings.tab.amadeusPlugins': 'Plugins',
   'settings.amadeusPlugins.builtinTitle': 'Built-in plugins',
-  'settings.amadeusPlugins.builtinHint': 'Ships with the app and is on by default (browser and terminal are native host views; the rest are editor add-ons). Turning one off removes it from the workbench, command palette and editor.',
+  'settings.amadeusPlugins.builtinHint': 'Ships with the app and is on by default (browser, terminal and calendar are native host views; the rest are editor add-ons). Turning one off removes it from the workbench, command palette and editor — calendar takes its Space with it.',
   'settings.amadeusPlugins.externalTitle': 'External plugins',
   'settings.amadeusPlugins.changelog': "What's New",
   'settings.amadeusPlugins.hint': 'Toggle takes effect instantly; click a plugin for details. Plugin folder: ~/.forsion/plugins/ (market installs). A plugin may bundle engine plugins / agents / skills / Spaces — they are discovered, toggled and uninstalled together with it.',
@@ -2343,6 +2399,8 @@ const en: Dict = {
   'settings.developer.disable': 'Disable developer mode',
   'settings.developer.showSystemPrompt': 'Show system prompt before each reply',
   'settings.developer.showSystemPromptHint': 'When on, each AI reply is preceded by the full system prompt sent to the model for that message (expand to inspect its content and structure). Local debugging only; cleared automatically when you disable developer mode.',
+  'settings.developer.activeWindow': 'Active window sampling (seam)',
+  'settings.developer.activeWindowHint': 'Lets plugins that declare the activeWindow capability read which app you are focused on — so they can drop external dependencies like ActivityWatch. Data never leaves this machine. Adds an "Active window sampling" debug panel to the command palette (⌘K). Off by default; turned off automatically when you leave developer mode.',
   'settings.developer.mobileUiPreview': 'Mobile UI preview command',
   'settings.developer.mobileUiPreviewHint': 'Adds a "Switch to mobile UI" entry to the command palette (⌘K) that swaps the desktop shell for the single-column mobile shell at runtime (reloads the page). Works on web too. Local debugging only; cleared when you disable developer mode.',
   'command.switchToMobileUi': 'Switch to mobile UI',
@@ -2409,7 +2467,14 @@ const en: Dict = {
   'settings.theme.fontMono': 'Monospace font',
   'settings.theme.fontFollow': 'Follow theme',
   'settings.theme.fontSystem': 'System default',
-  'settings.theme.fontHint': 'Leave empty to follow the current theme (which may itself use the system font). Pick a preset or type any installed font name.',
+  'settings.theme.fontHint': 'Preset fonts ship with the app, so they render the same on every machine regardless of what is installed locally. Pick "Follow theme" to use the current theme\u2019s own stack.',
+  'settings.theme.fontPreset.inter': 'Inter (modern sans)',
+  'settings.theme.fontPreset.notoSans': 'Noto Sans SC',
+  'settings.theme.fontPreset.wenkai': 'LXGW WenKai (reading)',
+  'settings.theme.fontPreset.jetbrains': 'JetBrains Mono',
+  'settings.theme.fontPreset.system': 'System default',
+  'settings.theme.fontGroupBuiltin': 'Built-in',
+  'settings.theme.fontGroupPlugin': 'From plugins',
   'settings.theme.customSeedLabel': 'Custom accent',
   'settings.theme.customBgLabel': 'Custom background',
   'settings.theme.customBgFollow': 'Follows accent',
@@ -2423,6 +2488,8 @@ const en: Dict = {
   'settings.theme.options': '{name} options',
   'settings.theme.optionsReset': 'Reset',
   'settings.theme.skinLabel': 'Color scheme',
+  'settings.theme.accentLabel': 'Accent',
+  'settings.theme.bgLabel': 'Background',
   'settings.theme.skin.cream': 'Classic',
   'settings.theme.skin.coral': 'Coral',
   'settings.theme.skin.teal': 'Teal',
@@ -2493,7 +2560,7 @@ const en: Dict = {
   'settings.theme.previewMessage': 'Your design language, color scheme, typography and material are applied to this preview in real time.',
   'settings.theme.previewInput': 'Ask Forsion, or type / for capabilities',
   'settings.theme.langDescription': 'Choose the structure, radius, typography and overall character of the interface.',
-  'settings.theme.skinDescription': 'Change accent and surface colors without changing the layout.',
+  'settings.theme.skinDescription': 'Pick accent and background separately; same id on both = the original combined scheme.',
   'settings.theme.behaviorTitle': 'Display and motion',
   'settings.theme.behaviorDescription': 'Adjust appearance mode, depth and typing feedback.',
   'settings.theme.flatDescription': 'Choose whether cards and overlays keep spatial shadows.',
@@ -2580,6 +2647,7 @@ const en: Dict = {
   'ctx.windowSource.override': 'Window: manual override table',
   'ctx.windowSource.model': 'Window: model-reported',
   'ctx.windowSource.family': 'Window: inferred from model family (not model-reported)',
+  'ctx.windowSource.learned': 'Window: learned from the provider\'s own overflow error',
   'ctx.windowSource.default': 'Window: 128k default fallback (unknown model, may be low)',
   'ctx.sec.persona': 'Persona/instructions',
   'ctx.sec.harness': 'Self-evolution notes',
@@ -2866,7 +2934,7 @@ const en: Dict = {
   'workbench.chat': 'Chat',
   'workbench.leftSidebar': 'Left sidebar',
   'workbench.rightSidebar': 'Right sidebar',
-  'theme.changeSkin': 'Change color theme',
+  'theme.changeSkin': 'Change accent color',
   'theme.changeMode': 'Toggle light/dark mode',
   'theme.changeLanguage': 'Switch theme style',
   'command.palette': 'Command palette (⌘K)',
@@ -3011,6 +3079,25 @@ export function registerMessages(fragment: Record<string, { zh: string; en: stri
   }
 }
 
+/** 查一个 key(缺失回退:目标语言 → zh → key 本身)。`translate` 与 Provider 的 `t` 共用它。 */
+function translateIn(locale: Locale, key: string, vars?: Record<string, unknown>): string {
+  return interpolate(DICTS[locale][key] ?? DICTS.zh[key] ?? key, vars)
+}
+
+/**
+ * **模块级**翻译:不依赖 React 上下文,读模块级 `_locale` 快照。
+ *
+ * ⚠️它是 `appStore.tr` 的**启动期真源**。appStore 的缺省 `tr` 是 `(k) => k`,而 `LocaleProvider`
+ * 要等 React 挂载才 setTr —— 冷启动的 `installEngine()` 跑在那之前,`registerSpaces()` → Space.build()
+ * → `openView()` 那一刻取到的 `displayName` 就是**裸 i18n 键**,并被**快照**进标签页标题。
+ * 实测(2026-08-28,把主页设成缺省启动 Space 之后):第一张标签写着 `space.home` 而不是「主页」。
+ * 同理会打中任何在冷启动被打开的视图(日历 `view.calendar`、收件箱 …)。
+ * 修法就是 main.tsx 在 installEngine 之前 `setTr(translate)`;别把这行挪到 React 里去。
+ */
+export function translate(key: string, vars?: Record<string, unknown>): string {
+  return translateIn(_locale, key, vars)
+}
+
 function interpolate(s: string, vars?: Record<string, unknown>): string {
   if (!vars) return s
   return s.replace(/\{(\w+)\}/g, (_m, k) => (k in vars ? String(vars[k]) : `{${k}}`))
@@ -3073,11 +3160,7 @@ export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const value = useMemo<I18nValue>(() => ({
     locale,
     setLocale,
-    t: (key, vars) => {
-      const d = DICTS[locale]
-      const s = d[key] ?? DICTS.zh[key] ?? key
-      return interpolate(s, vars)
-    },
+    t: (key, vars) => translateIn(locale, key, vars),
   }), [locale, setLocale])
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>

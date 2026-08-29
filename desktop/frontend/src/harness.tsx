@@ -4,6 +4,7 @@
 import type React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
 import './styles/base.css'
 import './amadeus-host.css'
@@ -15,9 +16,12 @@ import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { DashboardCanvasView } from './views/DashboardCanvasView'
+import { DashboardGridView } from './views/DashboardGridView'
+import { useDbStore } from '@amadeus/store/dbStore'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
+import { setTanguProbe } from '@amadeus/plugins/tanguSeam'
 import { applyTheme as applyRealTheme } from './theme/loader'
-import { resolveInitialLang, resolveInitialSkin } from './theme/registry'
+import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
 import { setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
 import './i18n.generated'
@@ -29,7 +33,12 @@ import { addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibb
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
+import { OutlineView, PluginListBody } from './views/WorkspaceView'
+import type { ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import { SidebarRow } from './components/SidebarRow'
+import { FileText as FileTextIcon } from 'lucide-react'
 import { QuickFind, useQuickFind } from './quickFind'
+import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
@@ -45,6 +54,10 @@ let nextId = 1
 
 // harness 调试/断言用:暴露 store,供 Playwright 注入任意 manifest(如两栏布局)验证块间方向键落点。
 ;(window as unknown as { __pageStore: typeof usePageStore }).__pageStore = usePageStore
+// 媒体嵌入仪器口:台架跑在普通 Chromium 里,没有 amadeus-asset:// 协议 —— 视频永远 load 不了,
+// 于是「起播落在 95 秒」这类断言只能量字符串。开这个口子让 check 脚本把资源 URL 换成一段真的
+// data: 媒体,`currentTime` 就能量出真值(量 currentTime 而不是量 src,是本仪器的全部意义)。
+;(window as unknown as { __assets: { setUrlBuilder: typeof setAssetUrlBuilder } }).__assets = { setUrlBuilder: setAssetUrlBuilder }
 
 /** 插件注入口 `window.__ep`:默认壳(v3 编辑器)与 `?upage`(v4 统一编辑器)两处都要 ——
  *  块表面仪器要在**真 v4 笔记**上验插件看到的东西,而那只有 ?upage 里有。走的是真 setup 路径
@@ -64,6 +77,35 @@ function installPluginInjector(): void {
           },
         },
       ])
+    },
+    /** 台架用的 `ctx.tangu` 假探针。**必须在 loadPlugin 之前调**(与生产同序:探针早于建 context)。
+     *  传 null 模拟非 Tangu 宿主 —— 插件在那种宿主上必须优雅降级而不是抛。 */
+    setTangu(
+      model: { id: string; name: string } | null,
+      space: string | null,
+      session?: { contextWindow?: number; contextTokens?: number; sessionTokens?: number; effort?: string | null },
+    ) {
+      setTanguProbe(
+        model || space
+          ? {
+              activeModel: () => model,
+              models: () => model ? [model] : [],
+              activeSpace: () => space,
+              // session 省略 = 模拟**旧宿主**:探针上整条方法不存在 → 插件那边 `session?.()` 拿到 undefined。
+              ...(session
+                ? {
+                    session: () => ({
+                      contextWindow: session.contextWindow ?? 0,
+                      contextTokens: session.contextTokens ?? 0,
+                      sessionTokens: session.sessionTokens ?? 0,
+                      effort: session.effort ?? null,
+                    }),
+                  }
+                : {}),
+              subscribe: () => () => {},
+            }
+          : null,
+      )
     },
     active: () => usePluginStore.getState().activeIds.slice(),
     /** 插件自绘的设置面板(ctx.registerSettingsView)。台架没有插件详情页,e2e 自己挂一次 ——
@@ -201,14 +243,14 @@ function PlugViewHarness() {
   const hostRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), 'light')
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), 'light')
     const w = window as unknown as { __pv: Record<string, unknown> }
     w.__pv = {
       ...(w.__pv ?? {}),
       // 明暗/配色必须走真 applyTheme:token 的选择子是 <html> 上的 [data-theme]×[data-skin]×.dark,
       // 只给容器加 data-mode 只能拿到半套变量(= 假的低对比告警)。
-      setMode: (m: 'light' | 'dark') => { applyRealTheme(resolveInitialLang(), resolveInitialSkin(), m); setMode(m) },
-      setSkin: (skin: string, m?: 'light' | 'dark') => { applyRealTheme(resolveInitialLang(), skin, m ?? mode); setNonce((n) => n + 1) },
+      setMode: (m: 'light' | 'dark') => { applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), m); setMode(m) },
+      setSkin: (skin: string, m?: 'light' | 'dark') => { applyRealTheme(resolveInitialLang(), skin, skin, m ?? mode); setNonce((n) => n + 1) },
       /** 切语言:走真广播(ctx.subscribeLocale)。**刻意不重挂视图** —— 界面要跟着变,
        *  靠的必须是插件自己订了语言变更,而不是台架替它重建 DOM。 */
       setLocale: (l: 'zh' | 'en') => setLocaleGlobal(l),
@@ -269,19 +311,61 @@ function PlugViewHarness() {
   )
 }
 
-// ── ?dashboard 模式:真 DashboardCanvasView(画布版)+ 真 pageStore + 真 BlockHost,种一张 3 卡片的仪表盘。
-//    纯逻辑(格子几何 / frontmatter 编解码 / 冲突判定)已由 shared/amadeus/dashboard.test.ts 钉死;
-//    这里钉的是**单测看不见的那一层**:CSS Grid 把 [x,y,w,h] 摆到哪里、指针位移换算成几格、
-//    「压到别人就回弹」在真 DOM 上成不成立、锁定态到底锁没锁住编辑。见 scripts/dashboard.check.cjs。
+// ── ?dashboard 模式:真 DashboardCanvasView(画布版)+ 真 pageStore + 真 BlockHost,种一张 4 卡片的仪表盘。
+//    纯逻辑(几何 / frontmatter 编解码 / 迁移)已由 shared/amadeus/dashboard.test.ts + dashboard2.test.ts
+//    钉死;这里钉的是**单测看不见的那一层**:px 矩形在真 DOM 上落到哪、指针位移 ÷ zoom 对不对、
+//    吸附/多选/视口在真浏览器里成不成立、锁定态到底锁没锁住编辑。见 scripts/dashboard.check.cjs。
 const DASH_FILE = 'Harness.dashboard.md'
 
 /** ?dashboard 里那张 view 卡片装的东西:一个真·注册视图。露出拿到的 leaf.params,并提供一个
  *  会调 leaf.setParams 的按钮 —— 仪器据此验「视图改了 params 会不会写回卡片源码」。 */
 function DashViewProbe({ leaf }: ViewProps) {
   const n = Number(leaf.params.n ?? 0)
+  const [hits, setHits] = useState(0)
   return (
-    <div data-tag="dashv" data-params={JSON.stringify(leaf.params)} data-leaf={leaf.id} style={{ padding: 12 }}>
-      <button data-act="bump" onClick={() => leaf.setParams({ ...leaf.params, n: n + 1 })}>bump {n}</button>
+    <div data-tag="dashv" data-params={JSON.stringify(leaf.params)} data-leaf={leaf.id}>
+      {/* 真嵌卡的视图(amadeus-editor / db / drawing…)自带一条 `.amx-toolbar`;台架照抄一条,
+          D25 才有东西可量 —— 「嵌卡时顶栏只在指针进卡时露出」是 CSS 契约,组件里看不到。
+          ⚠️ 按钮里必须是 **14px 的图标盒**(生产是 lucide svg),不能拿字符凑:`.amx-mode-btn` 高度
+          随内容走,用文字会撑到 29px,整条顶栏 37px ≠ 生产的 32px —— 那样 D25 量的就是台架自己。 */}
+      <div className="amx-toolbar">
+        <span className="amx-crumbs">卡内笔记</span>
+        <button className="amx-mode-btn"><svg width={14} height={14} /></button>
+      </div>
+      {/* 顶栏是悬浮盖层(负边距抵平),盖住的是卡内最上面那 32px。生产里那截是笔记的封面/标题条,
+          不是操作面 —— 台架照此摆一条惰性占位,可点的东西一律排在它下面。 */}
+      <div data-act="cover" style={{ height: 32 }} />
+      <button data-act="bump" onClick={() => leaf.setParams({ ...leaf.params, n: n + 1 })} style={{ marginLeft: 12 }}>bump {n}</button>
+      {/* **不是** CARD_CTL 的可点面(裸 div)。用来钉「单击不穿透」:没进卡片时点它一下都不该记数,
+          而卡里的按钮(上面那颗)按画布规则是放行的 —— 两者的差别正是要测的东西。 */}
+      <div data-act="hit" data-hits={hits} onClick={() => setHits((v) => v + 1)} style={{ height: 40, margin: '8px 12px 12px', background: 'rgba(127,127,127,.12)' }}>hit {hits}</div>
+    </div>
+  )
+}
+
+/** 需要「先挑一个文件」的那一档嵌卡(档 1:编辑器/多维表/白板/PDF/图片同族)。
+ *  台架给一个假的:声明 idParam + fileMatch,加卡菜单就该先开快速查找的选取面板。 */
+function DashFileProbe({ leaf }: ViewProps) {
+  return <div data-tag="dashfile" data-src={String(leaf.params.probePath ?? '')} style={{ padding: 12 }}>file: {String(leaf.params.probePath ?? '(none)')}</div>
+}
+
+/** ?dashgrid:真 DashboardGridView(结构化网格版)。钉的是单测看不见的那一层 ——
+ *  CSS Grid 的实际列数随宿主宽度怎么变、跨度比例守不守得住、外壳在两态里是不是同一张脸、
+ *  拖拽重排有没有真写进 frontmatter。见 scripts/dashgrid.check.cjs。 */
+function DashGridHarness() {
+  const [params, setParams] = useState<Record<string, unknown>>({ dashPath: DASH_FILE, locked: true })
+  const leaf = { id: 'main', params, setTitle: () => {}, setParams: (p: Record<string, unknown>) => setParams(p) }
+  // `?dashgrid&dark`:暗色也要能截图自查(观感契约两档都算数,DESIGN.md §8)。
+  // ⚠️ 必须走**真** applyTheme:卡片吃的 `--bg` / `--border` 的选择子在 <html> 的
+  //    [data-theme]×[data-skin]×.dark 上,只给容器写 data-mode 只能拿到半套变量(假绿)。
+  const dark = new URLSearchParams(location.search).has('dark')
+  useEffect(() => {
+    applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  }, [dark])
+  return (
+    <div className="amadeus-root am-app tangu-lovable" data-mode={dark ? 'dark' : 'light'} style={{ position: 'fixed', inset: 0 }}>
+      <DashboardGridView {...({ leaf, params } as unknown as ViewProps)} />
+      <QuickFind />
     </div>
   )
 }
@@ -294,6 +378,7 @@ function DashHarness() {
   return (
     <div className="amadeus-root am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0 }}>
       <DashboardCanvasView {...({ leaf, params } as unknown as ViewProps)} />
+      <QuickFind />
     </div>
   )
 }
@@ -439,7 +524,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   // ⌘P 快切面板裸挂:分类条(全部/笔记/文件/会话)与 ←/→ 切换的真键盘路径 + 一张真截图。
   // 库内容用内存表顶替(pageStore 是同一个 store,setState 即生效);会话表走 appStore。
   const qfDark = new URLSearchParams(location.search).has('dark')
-  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), qfDark ? 'dark' : 'light')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), qfDark ? 'dark' : 'light')
   usePageStore.setState({
     pages: ['月度计划.md', '子夹/会议纪要.md', 'MOC-Forsion.md'],
     files: ['报告.pdf', '图/照片.png', '库.db', '画板.excalidraw.md'],
@@ -479,14 +564,27 @@ if (new URLSearchParams(location.search).has('dock')) {
       unitHostStatus: async () => ({ running: cfg.unitHostEnabled as boolean, connected: false, unitId: null, lastError: null, webPort: 8791, lanUrl: 'http://192.168.1.5:8791' }),
       unitsPairedList: async () => (cfg.unitHostEnabled ? [{ id: 'p1', name: '客厅 iPad', createdAt: 1 }] : []),
       unitsPairedRemove: async () => ({ ok: true }),
-      // LAN 探针桩:MacBook Air 的直连地址可达(自动择路走直连),别的一律探不通。
+      // LAN 探针桩:MacBook Air 的直连地址可达,别的一律探不通。
       unitsProbeLan: async (lanUrl: string) =>
         lanUrl === 'http://192.168.1.20:8791' ? { instanceId: 'inst-mba', name: 'MacBook Air' } : null,
+      // P2P 桩:第一次打洞失败(考「出声回落中转」),之后成功回本机代理地址。
+      unitsP2pOpen: (() => {
+        let calls = 0
+        return async (_id: string) => {
+          calls += 1
+          if (calls === 1) throw new Error('打洞超时(桩)')
+          return { url: 'http://127.0.0.1:47123/' }
+        }
+      })(),
     }
     w.amadeusSync = { get: async () => ({ state: 'idle', side: 'local' }), onStatus: () => () => {} }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher }, { useApp }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore')]).then(([{ UnitSwitcher, UnitRemoteSurface }, { useApp }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
+      // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
+      const rsHost = document.createElement('div')
+      document.body.appendChild(rsHost)
+      createRoot(rsHost).render(<UnitRemoteSurface />)
     })
   }
   installHotkeys() // 裸挂 Ribbon 没有 Shell,热键分发得自己装
@@ -498,7 +596,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 模型 / Effort 菜单:真组件裸挂,肉眼/截图核对三行结构与 Max 特效(几何契约由 scripts/model-menu.check.cjs 钉)。
   const modelPillParams = new URLSearchParams(location.search)
   const modelPillMode = modelPillParams.has('dark') ? 'dark' : 'light'
-  if (modelPillParams.has('glass')) applyRealTheme('genesis-glass', resolveInitialSkin(), modelPillMode)
+  if (modelPillParams.has('glass')) applyRealTheme('genesis-glass', resolveInitialSkin(), resolveInitialBg(), modelPillMode)
   else if (modelPillMode === 'dark') {
     document.documentElement.dataset.mode = 'dark'
     document.documentElement.classList.add('dark')
@@ -539,13 +637,132 @@ if (new URLSearchParams(location.search).has('dock')) {
     )
   }
   createRoot(document.getElementById('root')!).render(<PillHarness />)
-} else if (new URLSearchParams(location.search).has('dashboard')) {
+} else if (new URLSearchParams(location.search).has('dashdata')) {
+  // ?dashdata:数据卡 + 页面级筛选。种一份真 .db 进 dbStore,三张卡都从它取数 ——
+  // 要钉的是「加一条筛选,**这一页上每一张数据卡同时变**」,那是复合 view 的定义性行为。
   const iso = new Date().toISOString()
-  registerView({ type: 'dashv', displayName: 'Dash Probe', icon: Square, factory: (p) => <DashViewProbe {...p} /> })
+  const DB = '台账.db'
+  const dataIds = ['1', '2', '3']
   usePageStore.setState({
     activePage: DASH_FILE,
     vaultRoot: '/harness',
     status: 'ready',
+    pages: [DASH_FILE],
+    files: [DB],
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-dashdata',
+      title: 'Dash Data Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: {
+        type: 'stack',
+        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: dataIds.map((ref) => ({ ref })) }] }],
+      },
+      blocks: Object.fromEntries(dataIds.map((id) => [id, { type: 'markdown' }])),
+      fmExtra: ['dashboard3:', '  "1": [0, 3, 2]', '  "2": [1, 3, 2]', '  "3": [2, 6, 4]'].join('\n'),
+    },
+    blocks: {
+      1: { id: '1', type: 'markdown', content: '```stat\nsource: 台账.db\nlabel: 总行数\n```' },
+      2: { id: '2', type: 'markdown', content: '```stat\nsource: 台账.db\ncol: 金额\nstat: sum\nlabel: 金额合计\n```' },
+      3: { id: '3', type: 'markdown', content: '```chart\nsource: 台账.db\ngroup: 状态\nkind: bar\n```' },
+    },
+  })
+  ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
+  ;(window as unknown as { __dbStore?: typeof useDbStore }).__dbStore = useDbStore
+  // ⚠️ dbStore 的种子必须**在 pageStore 之后**:`dbAggregateStore` 订了 vaultRoot,一变就
+  //    `useDbStore.setState({ entries: {} })` 清空 db 缓存(切库丢缓存的生产行为)。反过来种,
+  //    卡片会全部显示「找不到 xxx.db」—— 2026-08-27 实证,查了半天。
+  useDbStore.setState({
+    entries: {
+      [DB]: {
+        status: 'ok',
+        path: DB,
+        data: {
+          version: 1,
+          name: '台账',
+          columns: [
+            { id: 'c1', name: '状态', type: 'select', options: ['进行中', '已完成'] },
+            { id: 'c2', name: '金额', type: 'number' },
+          ],
+          rows: [
+            { id: 'r1', cells: { c1: '进行中', c2: 100 } },
+            { id: 'r2', cells: { c1: '进行中', c2: 200 } },
+            { id: 'r3', cells: { c1: '已完成', c2: 50 } },
+            { id: 'r4', cells: { c1: '已完成', c2: null } },
+          ],
+        },
+      },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(<DashGridHarness />)
+} else if (new URLSearchParams(location.search).has('dashgrid')) {
+  const iso = new Date().toISOString()
+  registerView({ type: 'dashv', kind: 'aux', embeddable: true, displayName: 'Dash Probe', icon: Square, factory: (p) => <DashViewProbe {...p} /> })
+  registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
+  const gridIds = ['1', '2', '3', '4', '5', '6', '7']
+  usePageStore.setState({
+    activePage: DASH_FILE,
+    vaultRoot: '/harness',
+    status: 'ready',
+    pages: [DASH_FILE, '笔记甲.md'],
+    files: ['手册.pdf', '图.png'],
+    manifest: {
+      schema: PAGE_SCHEMA,
+      id: 'harness-dashgrid',
+      title: 'Dash Grid Harness',
+      createdAt: iso,
+      updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: {
+        type: 'stack',
+        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: gridIds.map((ref) => ({ ref })) }] }],
+      },
+      blocks: Object.fromEntries(gridIds.map((id) => [id, { type: 'markdown' }])),
+      // 结构化布局键:[order, w, h]。第一行 3+3+6 = 12 恰好铺满 —— 默认尺寸档就该拼得上。
+      fmExtra: [
+        'tags: [harness]',
+        'dashboard3:',
+        '  "1": [0, 12, 1]',
+        '  "2": [1, 3, 2]',
+        '  "3": [2, 3, 2]',
+        '  "4": [3, 6, 5]',
+        '  "5": [4, 12, 1]',
+        '  "6": [5, 6, 3]',
+        '  "7": [6, 6, 3]',
+      ].join('\n'),
+    },
+    blocks: {
+      1: { id: '1', type: 'markdown', content: '```section\ntitle: 今天\n```' },
+      2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
+      3: { id: '3', type: 'markdown', content: '随手记:把常看的东西摆成一页。' },
+      4: { id: '4', type: 'markdown', content: '```view\ntype: dashv\nn: 1\n```' },
+      5: { id: '5', type: 'markdown', content: '```section\ntitle: 最近\n```' },
+      6: { id: '6', type: 'markdown', content: '这是一段普通文本块,在网格里和别的卡片一样有外壳。' },
+      7: { id: '7', type: 'markdown', content: '```view\ntype: dashv\nn: 2\n```' },
+    },
+  })
+  ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
+  createRoot(document.getElementById('root')!).render(<DashGridHarness />)
+} else if (new URLSearchParams(location.search).has('dashboard')) {
+  const iso = new Date().toISOString()
+  // ⚠️ 必须 `embeddable`:渲染入口按白名单复查(卡片源码是 md 文本,谁都能往里写注册键)。
+  //    不加的话卡片只会渲染成「视图 dashv 不支持嵌入卡片」—— D7 整格测的就成了那句提示。
+  registerView({ type: 'dashv', kind: 'aux', embeddable: true, displayName: 'Dash Probe', icon: Square, factory: (p) => <DashViewProbe {...p} /> })
+  // 档 1 同款声明(idParam + fileMatch)→ 加卡菜单该给它挂「…」并走选取面板。后缀借 .pdf:
+  // `pickSpecOf` 的候选判据是 `fileMatchViewType(path) === type`,台架不另造一张后缀表。
+  registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
+  // ⚠️ 这里注册的是**生产那一个** `OutlineView`(不是替身)。作用域隔离这条不变式必须由真组件
+  //    走一遍:自实现一个带 Provider 的探针只能证明「这个探针写对了」,而真正会切走仪表盘 store 的
+  //    风险在 `ScopedPageOutline` 身上(Codex 2026-08-25 评审)。
+  registerView({ type: 'outline', kind: 'aux', embeddable: true, displayName: 'Outline', icon: Square, factory: (p) => <OutlineView {...p} /> })
+  usePageStore.setState({
+    activePage: DASH_FILE,
+    vaultRoot: '/harness',
+    status: 'ready',
+    pages: [DASH_FILE, '笔记甲.md'],
+    files: ['手册.pdf', '图.png'],
     manifest: {
       schema: PAGE_SCHEMA,
       id: 'harness-dash',
@@ -560,7 +777,10 @@ if (new URLSearchParams(location.search).has('dock')) {
       blocks: { 1: { type: 'markdown' }, 2: { type: 'markdown' }, 3: { type: 'markdown' }, 4: { type: 'markdown' } },
       // 天气卡片要联网,harness 里不放(网络断言不是这支仪器的活儿)。
       // 卡片4(view)刻意摆在最右下角:D4/D6 会把卡片2/3 挪来挪去,压上就成了「回弹」而不是被测行为。
-      fmExtra: ['tags: [harness]', 'dashboard:', '  "1": [0, 0, 8, 6]', '  "2": [8, 0, 5, 4]', '  "3": [0, 6, 6, 4]', '  "4": [16, 6, 6, 4]'].join('\n'),
+      // 画布版布局键(px 自由矩形)。**别退回旧 `dashboard:` 网格键** —— 那会让视图判成「可迁移」,
+      // 出转换横幅、一张卡都不摆(2026-08-25 实证:`check:dashboard` 就是这么死了整整一轮)。
+      // 卡片刻意拉开距离:S2 的松手排斥有 18px 空气层,挨太近的两张会在拖拽断言里互相推开。
+      fmExtra: ['tags: [harness]', 'dashboard2:', '  "1": [0, 0, 300, 180]', '  "2": [360, 0, 260, 150]', '  "3": [0, 240, 300, 180]', '  "4": [700, 320, 300, 200]'].join('\n'),
     },
     blocks: {
       1: { id: '1', type: 'markdown', content: '第一张卡片' },
@@ -569,6 +789,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       4: { id: '4', type: 'markdown', content: '```view\ntype: dashv\nn: 1\n```' },
     },
   })
+  // 仪器要按 scope 取「卡片自己那份 store」,验作用域隔离(生产代码不需要这个口子)。
+  ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
   createRoot(document.getElementById('root')!).render(<DashHarness />)
 } else if (new URLSearchParams(location.search).has('board')) {
   createRoot(document.getElementById('root')!).render(<BoardHarness />)
@@ -995,6 +1217,49 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   })
   createRoot(document.getElementById('root')!).render(<DndHarness />)
+} else if (new URLSearchParams(location.search).has('listsrc')) {
+  // ── ?listsrc 模式:插件列表源(ctx.registerListSource)在**真侧栏 CSS 下**的行首图标。
+  //    单测量不到的那半:`.t2s-lead` 一族的尺寸规则全挂在 `.t2s-side` 下,而列表源的容器是
+  //    `.t2sw-plug` —— 忘了套 `.t2s-side` 的话,favicon <img> 会按 ico 的原始尺寸(32/48px)撑爆行,
+  //    lucide 也会退回自带的 24px。这里照生产的 `.t2s-side > .t2sw > .t2sw-body` 层级摆,
+  //    一并验 iconUrl 取不到时退回词表图标。见 scripts/plugin-listsrc.check.cjs。
+  // 32px 的红方块 —— 几何断言拿它量:**不依赖网络**,且原始尺寸远大于槽位,CSS 没兜住就一眼看出。
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), new URLSearchParams(location.search).has('dark') ? 'dark' : 'light')
+  const BIG = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="#e74c3c"/></svg>')
+  const ITEMS: ListItem[] = [
+    { key: 'a', title: '32px 图标(几何基准)', hint: '08-28', icon: 'link', iconUrl: BIG },
+    { key: 'b', title: 'Bilibili 视频总结', hint: '08-27', icon: 'link', iconUrl: 'https://www.bilibili.com/favicon.ico' },
+    { key: 'c', title: 'YouTube 视频总结', hint: '08-27', icon: 'link', iconUrl: 'https://www.youtube.com/favicon.ico' },
+    { key: 'd', title: '取不到图标 → 退词表', hint: '08-26', icon: 'bookmark', iconUrl: 'https://127.0.0.1:9/nope.ico' },
+    { key: 'e', title: '压根没给 iconUrl', hint: '08-25', icon: 'image' },
+    // 宿主还不认识的**键名**(插件比宿主新 / 键名拼错):必须退兜底图标,不许把键名当文案画出来。
+    { key: 'f', title: '词表里没有的键名', hint: '08-24', icon: 'some-future-key' },
+  ]
+  const SRC = {
+    id: 'harness-list', title: '台架列表源', search: true,
+    items: (f?: { query?: string }) => ITEMS.filter((i) => !f?.query || i.title.includes(f.query)),
+    open: () => {},
+    subscribe: () => () => {},
+  } as unknown as ListSourceContribution
+  createRoot(document.getElementById('root')!).render(
+    <div className="amadeus-root am-app" style={{ position: 'fixed', inset: 0, background: 'var(--bg)', display: 'flex' }}>
+      {/* ⚠️ 层级照生产**逐层**摆:WorkspaceView 是 dockview 面板,**外面没有 `.t2s-side`**
+          —— 套上它这支仪器就恒绿(量的是台架自己)。左边再摆一条真 `.t2s-side` 里的行做基准。 */}
+      <div style={{ width: 260, flex: '0 0 auto', display: 'flex', flexDirection: 'column' }}>
+        <div className="t2sw">
+          <div className="t2sw-body"><PluginListBody src={SRC} /></div>
+        </div>
+      </div>
+      {/* 基准行照生产嵌 `.t2sw > .t2s-side`(SessionsView/笔记面就长在这儿),量的才是真会话行。 */}
+      <div className="t2sw" style={{ width: 220, flex: '0 0 auto' }}>
+      <aside className="t2s-side" data-tag="ref-side">
+        <SidebarRow lead={<FileTextIcon className="t2s-lead-icon t2s-dim" />} trailing={<span className="t2s-count">08-28</span>}>
+          <span className="t2s-srow-title">基准:会话/笔记行</span>
+        </SidebarRow>
+      </aside>
+      </div>
+    </div>,
+  )
 } else {
   // 默认 harness = 真编辑器。顺带开一个插件注入口:**编辑器扩展类**插件(ctx.registerEditorExtension)
   // 没有 registerView,`?plugview` 那套挂不了它 —— 它要验的东西全在编辑器里(打字展开、按键接管、

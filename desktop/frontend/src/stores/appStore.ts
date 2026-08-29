@@ -263,6 +263,15 @@ const activeAmadeusRoot = (): string | null => usePageStore.getState().vaultRoot
 export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'>): string | undefined {
   return s.newChatModel || s.cfg.modelId || s.modelsResp?.defaultModelId || undefined
 }
+/** 主区聊天此刻**实际会用**的模型 id(有会话 → 会话的;空白新对话 → newChatModelId)。
+ *  = 输入栏药丸显示的那个(ChatView 的 mvModelId)。插件接缝 `ctx.tangu.activeModel()` 也读它 ——
+ *  这条回退链已经被就地展开过三份、出过「发出去药丸跳回默认」的 bug,**别再抄第四份**。 */
+export function activeChatModelId(
+  s: Pick<AppState, 'activeId' | 'newChatModel' | 'cfg' | 'modelsResp'> & { activeSession?: SessionRecord | null },
+): string {
+  if (!s.activeId) return newChatModelId(s) || ''
+  return s.activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || ''
+}
 /** 记住「上次用的」审批档/思考档:**新会话据此起步**。先落内存(web/mobile 无 window.tangu,
  *  至少本次会期内粘住),再异步写盘(桌面跨重启)。 */
 function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
@@ -455,7 +464,8 @@ export interface AppState {
   /** Agent Desk:清掉顶格残留的直播格(工具失败/未能落盘切换时)。 */
   deskLiveClear(sessionId: string, toolId: string): void
   /** Agent Desk:用户主动点开某文件(TaskSummary「正在编辑」入口):解除静音并上台。 */
-  deskShowFile(sessionId: string, path: string): void
+  /** view 省略 = 按文件类型自动路由;给了(如 PDF 引用要跳到第 N 页)就照它挂原生视图。 */
+  deskShowFile(sessionId: string, path: string, view?: { type: string; params?: Record<string, unknown> }, name?: string): void
   patchDesk(sessionId: string, patch: Partial<DeskState>): void
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
@@ -1592,12 +1602,25 @@ export const useApp = create<AppState>((set, get) => ({
     })
     persistDeskSoon()
   },
-  deskShowFile: (sessionId, path) => {
+  deskShowFile: (sessionId, path, view, name) => {
     if (!get().desktopConfig?.agentDeskEnabled) return
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
+      const top = c.items[0]
+      // 顶格已经是同一份文件的同类视图(点第二条引用)→ 复用原 key:key 一变整个视图重挂
+      // (PDF 重下一次、代码重建 CodeMirror)。只换 view.params(新页码/行号),没挂载完的视图
+      // 据此以正确位置开场。文件身份键 = pdfPath(PDF 阅读器)/ path(WsFileView),
+      // **必须非空才算同一份** —— 两个都没带路径参数的视图不能被判成同一个。
+      const fileKeyOf = (v?: { type: string; params?: Record<string, unknown> } | null): unknown =>
+        v?.params?.pdfPath ?? v?.params?.path
+      const sameFile = !!view && top?.view?.type === view.type
+        && fileKeyOf(view) != null && fileKeyOf(top.view) === fileKeyOf(view)
       // 顶格正是这个文件的直播格 → 别打断直播,解除静音即可
-      const items = c.items[0]?.live && c.items[0].path === path ? c.items : replaceTop(c.items, deskItemFor(path, Date.now()))
+      const items = top?.live && top.path === path
+        ? c.items
+        : replaceTop(c.items, sameFile
+          ? { ...top!, view, at: Date.now() }
+          : { ...deskItemFor(path, Date.now(), name), ...(view ? { view } : {}) })
       // 用户点了「正在编辑」入口 = 用户动作,直接展开(卡片态 → 侧板)
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, mode: 'open' as const, items } } }
     })

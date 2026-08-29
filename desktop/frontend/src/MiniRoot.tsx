@@ -7,6 +7,7 @@ import { useApp } from './stores/appStore'
 import { buildDefaultLayout } from './bootstrapEngine'
 import { useI18n } from './i18n'
 import { installFileDropGuard } from './fileDropGuard'
+import { ensureAmadeusReady } from './amadeusPlugins'
 import { miniSessionId } from './windowKind'
 
 export function MiniRoot() {
@@ -33,6 +34,10 @@ export function MiniRoot() {
     })
     return () => off?.()
   }, [])
+  // Vault 引导:mini 只挂主区 leaf(LeafHost),左栏的 AmadeusPagesView —— 主窗里唯一的
+  // ensureAmadeusReady 触发点 —— 永远不挂载,于是 Amadeus/日历/多维表在 mini 里恒显「打开 Vault
+  // 文件夹」空态。这里补一次(幂等),与 MobileRoot 同款;不延时:editor 可能就是首帧。
+  useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), []) // 全局 OS 文件拖放守卫(mini 窗也防被拖入文件冲掉)
   // 边缘吸附折叠/展开全在主进程(轮询光标位置,见 electron/main.ts onMiniSettled/pollMiniCursor)——
   // frameless 透明窗上 DOM mouseenter/leave 不可靠且无迟滞(会「一动就弹回」),故不在渲染层做。

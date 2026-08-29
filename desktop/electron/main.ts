@@ -3,7 +3,7 @@
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
@@ -27,7 +27,7 @@ import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs } from './marketInstall'
+import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir } from './marketInstall'
 import { serveDir as codePreviewServe, servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
 import {
@@ -40,10 +40,13 @@ import { computerUseLiveView } from './computerUse'
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
 import { startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
+import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p'
+import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { registerRemoteSync } from './remotesyncIpc'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
+import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
@@ -335,6 +338,8 @@ interface TanguStoredConfig {
   unitInstanceId: string
   /** 已配对设备(T1 局域网直连;令牌只存 hash,可在切换器里回收)。 */
   unitPairedDevices: PairedDevice[]
+  /** P2P 直连的 STUN 服务器(空=内置国内可达缺省)。纯连接基建,刻意不进 UNIT_CONFIG_RW。 */
+  unitP2pStun: string[]
   modelId: string
   /** 辅助模型 · LLM(后台/特殊 agent 用;落 config.json models.background;缺省=跟随 app 级槽)。 */
   backgroundModelId: string
@@ -390,6 +395,9 @@ interface TanguStoredConfig {
   activityLogEnabled: boolean
   /** 对外 MCP 端点:开=主进程起本地 HTTP MCP server,外部 agent(Claude Code)可调桌面能力。默认关(信任边界,显式开启)。 */
   mcpEnabled: boolean
+  /** 前台窗口采样接缝(electron/activeWindow.ts):开=插件可读「现在焦点在哪个 app」。
+   *  默认关,且入口只在开发者选项 —— 同 mcpEnabled 的信任边界纪律,必须用户显式开启。 */
+  activeWindowEnabled: boolean
   /** Agent Desk 演出面板:聊天右侧 agent 展示区(编辑自动上台 + desk_present/desk_screenshot 工具)。
    *  2026-07-26 转正,默认**开**——只有显式关过的人才有 false 落盘(saveConfig 只写 patch 里出现的键,
    *  没碰过开关的装机读的是这里的默认值,改默认即生效,不需要迁移)。 */
@@ -416,6 +424,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   unitWebPort: 0,
   unitInstanceId: '',
   unitPairedDevices: [],
+  unitP2pStun: [],
   modelId: '',
   backgroundModelId: '',
   visionModelId: '',
@@ -448,6 +457,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsAutoSpeak: false,
   activityLogEnabled: true,
   mcpEnabled: false,
+  activeWindowEnabled: false,
   agentDeskEnabled: true,
   summaryOpenIn: 'tab',
 }
@@ -476,16 +486,30 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
 // 其余键(cloud/sandbox/workspace/browser/wechat)以 ~/.tangu/config.json 各段为权威,落盘亦写那里。
 const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'mode', 'backendUrl', 'token', 'forsionSyncEnabled', 'forsionLastSyncedAt',
-  'unitHostEnabled', 'unitHostId', 'unitHostSecret', 'unitWebPort', 'unitInstanceId', 'unitPairedDevices', // 设备互联(本机 Unit 侧状态)
+  'unitHostEnabled', 'unitHostId', 'unitHostSecret', 'unitWebPort', 'unitInstanceId', 'unitPairedDevices', 'unitP2pStun', // 设备互联(本机 Unit 侧状态)
 
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
   'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
+  'activeWindowEnabled', // 桌面专属(前台窗口采样由 main 探)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'lastApprovalMode', 'lastThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI)
 ]
 const configPath = (): string => join(app.getPath('userData'), 'tangu-desktop-config.json')
+
+/** 前台窗口采样开关的**内存镜像**(真源 = config.activeWindowEnabled;启动时读一次,config:set 里跟着刷)。
+ *  默认 false:配置读失败、或这行还没跑到,都必须是「关」。 */
+let activeWindowOn = false
+/** 采样门面:开关 + 缓存下限 + idle 都在 activeWindow.ts 里,这里只把宿主能力喂进去。 */
+const sampleActiveWindow = createSampler({
+  isEnabled: () => activeWindowOn,
+  probe: nativeProbe,
+  // getSystemIdleTime 在某些 linux 会话下会抛;拿不到就当「没挂机」(0),不让它拖垮采样。
+  idleSeconds: () => { try { return powerMonitor.getSystemIdleTime() } catch { return 0 } },
+  now: () => Date.now(),
+  platform: process.platform,
+})
 
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
   let cur: Partial<TanguStoredConfig> = {}
@@ -692,6 +716,32 @@ let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 /** 内置浏览器注入 Authorization 的隧道前缀(effectiveConfig 刷新)。 */
 let unitTunnelPrefix = ''
+/** P2P 直连(方案 §12):隐藏窗 WebRTC 宿主,懒建;身份变化点 closeAll(站着的已鉴权信道,
+ *  不像 T2 逐请求重验 owner)。 */
+let p2pMgr: P2pManager | null = null
+/** A 侧出向连接:unitId → 本机代理。dead 由信道 onClose 打标,下次打开重建。 */
+const p2pOutgoing = new Map<string, { proxy: P2pProxyHandle; peerId: string; dead: boolean }>()
+/** 本机 P2P 代理的分区注入表:url 前缀 → Bearer 秘密(同隧道 Authorization 的机制)。 */
+const p2pProxySecrets = new Map<string, string>()
+let p2pStunCache: string[] = DEFAULT_STUN
+function getP2p(): P2pManager {
+  if (!p2pMgr) {
+    p2pMgr = new P2pManager({
+      preloadPath: join(__dirname, '../preload/p2pPreload.mjs'),
+      stunServers: () => p2pStunCache,
+      log: (m) => console.log(m),
+    })
+  }
+  return p2pMgr
+}
+/** 关掉全部 P2P(两个方向)+ 回收本机代理与注入秘密。 */
+async function closeAllP2p(): Promise<void> {
+  p2pMgr?.closeAll()
+  const closes = [...p2pOutgoing.values()].map((o) => o.proxy.close().catch(() => {}))
+  p2pOutgoing.clear()
+  p2pProxySecrets.clear()
+  await Promise.all(closes)
+}
 
 /** 本机第一个非回环 IPv4 → 局域网直连地址;拿不到给 null(名册照常,只是没有直连提示)。 */
 function unitLanUrl(): string | null {
@@ -850,6 +900,9 @@ function refreshUnitHost(): Promise<void> {
 async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
   unitHostCloudUrl = stored.cloudUrl
+  p2pStunCache = stored.unitP2pStun?.length ? stored.unitP2pStun : DEFAULT_STUN
+  // P2P 全收(advisor P0):站着的信道不逐请求重验身份,登录/登出/换号/开关变化一律推倒重连。
+  await closeAllP2p()
   unitHostPairing = stored.unitHostId && stored.unitHostSecret
     ? { unitId: stored.unitHostId, secret: stored.unitHostSecret }
     : null
@@ -964,6 +1017,20 @@ async function doRefreshUnitHost(): Promise<void> {
       return statPathImpl(real)
     },
     vault: () => amadeusVaultFace,
+    // P2P 应答(B 侧,方案 §12):acceptOffer 出 answer;DataChannel 开门后把信道接到本机 unitWeb
+    // (attachHostChannel 与 unitHost.handle 同构:盖 x-unit-internal,响应全流式)。
+    // 打洞不成(waitOpen 超时)只收对端,不影响别的通路。
+    p2pAnswer: async (offerSdp: string) => {
+      const mgr = getP2p()
+      const { peerId, sdp } = await mgr.acceptOffer(offerSdp)
+      void mgr.waitOpen(peerId, 25_000).then(() => {
+        attachHostChannel(mgr.channel(peerId), {
+          getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+          log: (m) => console.log(m),
+        })
+      }).catch(() => mgr.closePeer(peerId))
+      return sdp
+    },
     meta: { instanceId, name: hostname(), version: app.getVersion() },
     webDistDir: (): string | null => {
       const env = process.env.TANGU_UNIT_WEB_DIST
@@ -1532,9 +1599,21 @@ app.whenReady().then(async () => {
     // (隐私铁律);前缀随 effectiveConfig 刷新,其余站点请求原样放行。
     bs.webRequest.onBeforeSendHeaders((details, cb) => {
       const h = details.requestHeaders
+      // ⚠️ BROWSER_PARTITION 同时承载内置浏览器的任意第三方页面——按 URL 前缀盲注 = 把凭据发给
+      // 分区里所有人(第三方页 fetch/表单打这些前缀就白拿授权,CORS 拦不住请求本身;Codex H1)。
+      // Fetch Metadata 收口:设备页自身的子资源/接口 = same-origin;app 发起的首层导航 = none;
+      // 第三方页发起的一律 cross-site/same-site → 不注入。P2P 代理侧还有同规的 403 兜底。
+      const sfs = String(h['Sec-Fetch-Site'] || h['sec-fetch-site'] || '')
+      const trustedInitiator = !sfs || sfs === 'none' || sfs === 'same-origin'
       if (unitTunnelPrefix && details.url.startsWith(unitTunnelPrefix)) {
         const token = loadTanguCreds().token
-        if (token) h.Authorization = `Bearer ${token}`
+        if (token && trustedInitiator) h.Authorization = `Bearer ${token}`
+      } else if (trustedInitiator) {
+        // P2P 本机代理(方案 §12):同机制注入 per-proxy 秘密 —— loopback 上别的进程没有它,
+        // 打不动对端;表极小(同时开着的 P2P 设备数),线性查无所谓。
+        for (const [prefix, secret] of p2pProxySecrets) {
+          if (details.url.startsWith(prefix)) { h.Authorization = `Bearer ${secret}`; break }
+        }
       }
       cb({ requestHeaders: h })
     })
@@ -1577,6 +1656,7 @@ app.whenReady().then(async () => {
   // 用户活动日志:开关初值 + 30 天轮转 + app.start 事件(埋点面见 frontend/src/activity/log.ts)。
   try {
     setActivityLogEnabled((await loadConfig()).activityLogEnabled !== false)
+    activeWindowOn = (await loadConfig()).activeWindowEnabled === true
     void pruneActivity()
     logActivity('app.start', { v: app.getVersion() })
   } catch { /* 装饰性,不阻塞启动 */ }
@@ -1588,11 +1668,16 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('activity:export', (_e, days?: number) => exportActivity(Number(days) || 7))
 
+  // 前台窗口采样接缝:默认拒(activeWindowEnabled,开发者选项里开)。开关态缓存在这里,
+  // 与 activityLogEnabled 同款——config:set 里同步刷新,免得每次采样都读一遍盘。
+  ipcMain.handle('system:activeWindow', () => sampleActiveWindow())
+
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const before = await loadConfig()
     await saveConfig(patch)
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
+    if (patch.activeWindowEnabled !== undefined) activeWindowOn = patch.activeWindowEnabled === true
     // 模式/托管参数变化 → 重启托管后端(切到 external 则停掉)。
     const managedKeys: Array<keyof TanguStoredConfig> = [
       'mode', 'cloudUrl', 'sandbox', 'pythonMode', 'mirror',
@@ -1631,6 +1716,61 @@ app.whenReady().then(async () => {
     }
   }
   ipcMain.handle('units:list', () => unitsApi('GET', '/units'))
+
+  /** P2P 直连打开设备(A 侧,方案 §12):offer 经**现有隧道**送达对端(零 server 改动——信令即
+   *  一次普通 proxy 请求,owner 校验白得),answer 回来打洞;成了起本机代理(127.0.0.1)供
+   *  webview 当 lanUrl 用,流量一个字节不过 server。失败 throw 可读错误,UI 负责回落中转。 */
+  ipcMain.handle('units:p2pOpen', async (_e, unitId: string) => {
+    if (typeof unitId !== 'string' || !unitId) throw new Error('参数不完整')
+    const live = p2pOutgoing.get(unitId)
+    if (live && !live.dead) return { url: live.proxy.url }
+    if (live) { p2pProxySecrets.delete(live.proxy.url); p2pOutgoing.delete(unitId); void live.proxy.close().catch(() => {}) }
+    const token = loadTanguCreds().token
+    if (!token) throw new Error('未登录 Forsion 账号')
+    const stored = await loadConfig()
+    const mgr = getP2p()
+    const { peerId, sdp } = await mgr.makeOffer()
+    let answer = ''
+    try {
+      const r = await fetch(`${stored.cloudUrl.replace(/\/+$/, '')}/api/units/${unitId}/proxy/unit/p2p/offer`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sdp }),
+        signal: AbortSignal.timeout(25_000),
+      })
+      if (r.status === 404 || r.status === 501) throw new Error('对方版本不支持 P2P 直连')
+      if (!r.ok) {
+        const j = await r.json().catch(() => null) as { detail?: string } | null
+        throw new Error(j?.detail || `信令失败 HTTP ${r.status}`)
+      }
+      answer = String((await r.json() as { sdp?: string }).sdp || '')
+      if (!answer) throw new Error('对端未返回 answer')
+    } catch (e) {
+      mgr.closePeer(peerId)
+      throw e
+    }
+    mgr.finish(peerId, answer)
+    try {
+      await mgr.waitOpen(peerId, 15_000)
+    } catch (e) {
+      mgr.closePeer(peerId)
+      throw e
+    }
+    const ch = mgr.channel(peerId)
+    const proxy = await startP2pProxy(ch, { log: (m) => console.log(m) })
+    p2pProxySecrets.set(proxy.url, proxy.secret)
+    const entry = { proxy, peerId, dead: false }
+    p2pOutgoing.set(unitId, entry)
+    ch.onClose(() => { entry.dead = true; p2pProxySecrets.delete(proxy.url) })
+    if (entry.dead) {
+      // waitOpen 与此处之间信道已断(channel().onClose 对已关信道同步回调):别把死代理地址
+      // 当成功返回——渲染层拿到就是黑页,还压不出回落(Codex M7 的竞态半边)。
+      p2pOutgoing.delete(unitId)
+      void proxy.close().catch(() => {})
+      throw new Error('P2P 信道在建立后立即断开')
+    }
+    return { url: proxy.url }
+  })
   ipcMain.handle('units:update', (_e, id: string, patch: { name?: string; icon?: string }) =>
     unitsApi('PATCH', `/units/${encodeURIComponent(String(id))}`, { name: patch?.name, icon: patch?.icon }))
   ipcMain.handle('units:remove', (_e, id: string) => unitsApi('DELETE', `/units/${encodeURIComponent(String(id))}`))
@@ -1665,6 +1805,10 @@ app.whenReady().then(async () => {
     const cur = (await loadConfig()).unitPairedDevices || []
     unitPairedCache = cur.filter((d) => d.id !== String(id))
     await saveConfig({ unitPairedDevices: unitPairedCache })
+    // P2P 是站着的信道,建立后逐请求走 x-unit-internal——不收的话被撤销的设备继续全权访问,
+    // 直到信道偶然断开(Codex H2)。粗粒度全收(含账号态会话):撤销是低频动作,重连便宜。
+    // ponytail: 按主体(pairHash)定向收要把身份穿进 PeerEntry,撤销频率撑不起那台机器
+    await closeAllP2p()
     return { ok: true }
   })
 
@@ -2002,6 +2146,33 @@ app.whenReady().then(async () => {
     for (const src of srcPaths) {
       if (typeof src !== 'string' || !src) continue
       await cp(src, await uniqueDest(destDir, basename(src)), { recursive: true })
+      copied++
+    }
+    return { copied }
+  })
+  /** 复合笔记(X.md + 同名 X.fd)从库里拖出来时必须**成对同名**落地。
+   *  逐件走 fs:copy 会让两半各自 uniqueDest:目标目录已有 `X.md` 而没有 `X.fd` 时,复制出来的是
+   *  `X (1).md` + `X.fd` —— 新笔记找不到自己的子树,而那份 .fd 挂到了目标**已存在的那篇 X.md** 下
+   *  (= 把别人的子笔记混进去)。故这里先给整套预留同一个可用 stem,再逐件复制;.fd 失败回滚 .md,
+   *  不留半套结构。(codex 评审 2026-08-25) */
+  ipcMain.handle('fs:copyBundle', async (_e, items: unknown, destDir: string) => {
+    if (!Array.isArray(items) || typeof destDir !== 'string' || !destDir) throw new Error('非法的复制参数')
+    let copied = 0
+    for (const it of items) {
+      const md = (it as { md?: unknown } | null)?.md
+      const fd = (it as { fd?: unknown } | null)?.fd
+      if (typeof md !== 'string' || !md) continue
+      const name = basename(md)
+      if (!/\.md$/i.test(name)) { await cp(md, await uniqueDest(destDir, name), { recursive: true }); copied++; continue }
+      const stem = name.replace(/\.md$/i, '')
+      let s = stem
+      for (let i = 1; (await exists(join(destDir, `${s}.md`))) || (await exists(join(destDir, `${s}.fd`))); i++) s = `${stem} (${i})`
+      const mdDest = join(destDir, `${s}.md`)
+      await cp(md, mdDest, { recursive: true })
+      if (typeof fd === 'string' && fd) {
+        try { await cp(fd, join(destDir, `${s}.fd`), { recursive: true }) }
+        catch (err) { await rm(mdDest, { recursive: true, force: true }); throw err }
+      }
       copied++
     }
     return { copied }
@@ -2480,19 +2651,28 @@ app.whenReady().then(async () => {
     return [...proxies.map((p) => `${p}/${url}`), url]
   }
 
+  /** 服务端给的 iconUrl 是相对路径(它不知道自己的公网地址);渲染层的 <img> 直连,所以在这里拼成绝对地址。
+   *  base 无尾斜杠、iconUrl 以 /api 开头,直接相接即可。图标是公开端点,不带 token。 */
+  const absIcon = <T extends { iconUrl?: string | null }>(base: string, it: T): T => {
+    if (it?.iconUrl && it.iconUrl.startsWith('/')) it.iconUrl = `${base}${it.iconUrl}`
+    return it
+  }
+
   ipcMain.handle('market:list', async (_e, type?: string) => {
     const base = await marketBase()
     const q = type ? `?type=${encodeURIComponent(type)}` : ''
     const r = await fetch(`${base}/api/market/items${q}`, { headers: { 'User-Agent': MARKET_UA } })
     if (!r.ok) throw new Error(`加载失败 HTTP ${r.status}`)
-    return await r.json() // { items }
+    const data = (await r.json()) as { items?: Array<{ iconUrl?: string | null }> }
+    for (const it of data.items || []) absIcon(base, it)
+    return data // { items }
   })
 
   ipcMain.handle('market:detail', async (_e, id: string) => {
     const base = await marketBase()
     const r = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA } })
     if (!r.ok) throw new Error(`加载失败 HTTP ${r.status}`)
-    return await r.json()
+    return absIcon(base, (await r.json()) as { iconUrl?: string | null })
   })
 
   ipcMain.handle('market:install', async (_e, id: string) => {
@@ -2555,6 +2735,18 @@ app.whenReady().then(async () => {
       }
     }
     return out
+  })
+
+  // 卸载市场项:删掉安装目录。**只删 MARKET_SUBDIR 白名单里的目录**(marketItemDir 校验 type+slug,
+  // 拒绝即 null) —— 目录不存在直接报错而不是静默成功,否则用户会以为卸载了、其实装在别处。
+  // ⚠️ 插件家族:同 slug 可能因历史误标同时躺在引擎位与 Forsion 位。这里**只删调用方指明的那一个**,
+  //    渲染层按 installedInfo 算出的 realType 传值;不做跨目录清扫(那是 market:install 的职责,它有身份守卫)。
+  ipcMain.handle('market:uninstall', async (_e, type: string, slug: string) => {
+    const dir = marketItemDir(tanguHomeDir(), type, slug)
+    if (!dir) throw new Error('非法的卸载目标')
+    if (!existsSync(dir)) throw new Error('该项不在已安装目录中')
+    await rm(dir, { recursive: true, force: true })
+    return { ok: true, path: dir, type }
   })
 
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
@@ -2813,6 +3005,37 @@ app.whenReady().then(async () => {
       return { ok: true, text: Buffer.concat(chunks).toString('utf8') }
     } catch (err: unknown) {
       return { ok: false, error: (err as Error)?.message || String(err) }
+    }
+  })
+  // 主页 Bing 壁纸:与可输入 URL 的日历通道分开 —— 目标域名、路径、市场都在主进程收口,
+  // renderer 只能选语言和数量,没有 SSRF 面。图片本身由 Chromium 直接加载 Bing https URL。
+  ipcMain.handle('wallpaper:listBing', async (e, market?: string, count?: number) => {
+    if (!isTrustedSender(e)) return { ok: false, items: [], error: 'untrusted sender' }
+    const mkt = market === 'en-US' ? 'en-US' : 'zh-CN'
+    const n = Math.max(1, Math.min(8, Math.floor(Number(count) || 8)))
+    try {
+      const response = await fetch(`https://www.bing.com/HPImageArchive.aspx?format=js&idx=0&n=${n}&mkt=${mkt}`, {
+        signal: AbortSignal.timeout(15_000),
+      })
+      if (!response.ok) return { ok: false, items: [], error: `HTTP ${response.status}` }
+      const body = await response.json() as { images?: Array<Record<string, unknown>> }
+      const items = (Array.isArray(body.images) ? body.images : []).flatMap((raw) => {
+        const base = typeof raw.urlbase === 'string' && raw.urlbase.startsWith('/') ? raw.urlbase : ''
+        const relative = typeof raw.url === 'string' && raw.url.startsWith('/') ? raw.url : ''
+        const url = base ? `https://www.bing.com${base}_UHD.jpg` : relative ? `https://www.bing.com${relative}` : ''
+        if (!url) return []
+        return [{
+          id: typeof raw.startdate === 'string' ? raw.startdate : (base || url),
+          url,
+          thumbnailUrl: base ? `https://www.bing.com${base}_400x240.jpg` : url,
+          title: typeof raw.title === 'string' ? raw.title : '',
+          copyright: typeof raw.copyright === 'string' ? raw.copyright : '',
+          startDate: typeof raw.startdate === 'string' ? raw.startdate : '',
+        }]
+      })
+      return { ok: true, items }
+    } catch (error) {
+      return { ok: false, items: [], error: error instanceof Error ? error.message : String(error) }
     }
   })
   // 跨窗撕拽:实时坐标 → 命中窗口显落点预览、其余清除。

@@ -959,7 +959,9 @@ body.amx-marquee-active * {
   gap: 4px;
   background: var(--bg-card, var(--bg));
   border-radius: 8px;
-  box-shadow: 0 0 0 0.5px var(--border), 0 4px 16px rgba(0, 0, 0, 0.12);
+  outline: 0.5px solid var(--border);
+  outline-offset: -0.5px;
+  box-shadow: var(--card-shadow);
   padding: 5px 7px;
 }
 .am-app .amx-findbar input {
@@ -1058,7 +1060,8 @@ body.amx-marquee-active * {
 .am-app .amx-bm-thumb {
   flex: 0 0 auto;
   width: 130px;
-  margin: -10px -12px -10px 0;
+  /* 封面在**左**(用户 2026-08-29 指定):负边距把它贴到卡片左沿,右侧留出 12px 的 gap。 */
+  margin: -10px 0 -10px -12px;
   overflow: hidden;
 }
 .am-app .amx-bm-thumb img {
@@ -1066,6 +1069,38 @@ body.amx-marquee-active * {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* 生成封面(站点不发预览图时):渐变由 BookmarkCard 按主机名哈希内联下发,同域恒定同一张。 */
+.am-app .amx-bm-thumb-gen,
+.am-app .amx-bm-thumb-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-size: cover;
+}
+/* ⚠️ 首字母必须**绝对定位**:卡片整体是 <a>,本主题给链接画下划线,而祖先的 text-decoration
+   是**画穿后代**的 —— 子元素写 `text-decoration:none` 关不掉(CSS 规范如此),首字母底下会拖
+   一条线。绝对定位的后代不参与祖先的装饰绘制,这是唯一干净的关法。真截图才看得出来。 */
+.am-app .amx-bm-gen-letter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  opacity: 0.92;
+}
+/* apple-touch-icon 是方形 logo 不是配图:contain 居中垫在生成的渐变上,别拉变形。 */
+.am-app .amx-bm-thumb-icon img {
+  width: 62%;
+  height: 62%;
+  object-fit: contain;
+  border-radius: 6px;
 }
 .am-app .amx-bm-tools {
   position: absolute;
@@ -1129,6 +1164,10 @@ body.amx-marquee-active * {
   position: static;
   margin-left: auto;
   opacity: 1;
+}
+/* 播放器footer 的「转为书签卡」:与网页嵌入那两个按钮同一枚 .embed-media-btn,推到右端。 */
+.am-app .amx-bm-videofoot .amx-bm-tocard {
+  margin-left: auto;
 }
 /* callout 折叠([!x]-):收起只留首段;chevron 紧跟标题文字之后,折叠时不旋转 */
 .am-app .callout-chevron {
@@ -1379,6 +1418,68 @@ body.amx-marquee-active * {
   animation: pop-in 120ms var(--ease-apple);
 }
 
+/* 「粘贴为」菜单(粘贴一条 URL 之后弹,AFFiNE Paste as 对位)。摆位与 slash 同一套:
+   fixed + coordsAtPos 内联坐标,复用 .slash-backdrop 接点空白关闭。 */
+.am-app .paste-as-menu {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 176px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  padding: 5px;
+  backdrop-filter: blur(20px) saturate(140%);
+  animation: pop-in 120ms var(--ease-apple);
+  user-select: none;
+}
+.am-app .paste-as-label {
+  padding: 3px 8px 5px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.am-app .paste-as-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-apple);
+}
+.am-app .paste-as-item:hover,
+.am-app .paste-as-item[data-active] {
+  background: var(--surface);
+}
+/* 键盘选中态要压得过 hover:鼠标停在别项上时,↑↓ 选的那项仍须是唯一高亮的那个。 */
+.am-app .paste-as-item[data-active] {
+  box-shadow: inset 0 0 0 1px var(--primary, var(--accent, #6c5ce7));
+}
+.am-app .paste-as-foot {
+  display: flex;
+  gap: 10px;
+  padding: 5px 8px 2px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.am-app .paste-as-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 行内格式工具栏(选中文字上浮,同 slash 用 fixed + coordsAtPos 内联坐标;锚点=选区中点上方)。 */
 .am-app .inline-toolbar {
   position: fixed;
@@ -1498,15 +1599,15 @@ body.amx-marquee-active * {
    2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
    in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
    色值与 InlineToolbar/marks.ts 同源;品红/粉为本产品扩展,取同族明度自配。 */
-[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'] { color: #c62222 !important; }
-[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'] { color: #b9450a !important; }
-[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'] { color: #8f6203 !important; }
-[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'] { color: #117b38 !important; }
-[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'] { color: #06748f !important; }
-[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'] { color: #2159d3 !important; }
-[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'] { color: #842ed3 !important; }
+[data-mode='light'] .am-app span[data-hlc='red'], .am-app[data-mode='light'] span[data-hlc='red'] { color: #b61f1f !important; }
+[data-mode='light'] .am-app span[data-hlc='orange'], .am-app[data-mode='light'] span[data-hlc='orange'] { color: #a13c08 !important; }
+[data-mode='light'] .am-app span[data-hlc='yellow'], .am-app[data-mode='light'] span[data-hlc='yellow'] { color: #7d5603 !important; }
+[data-mode='light'] .am-app span[data-hlc='green'], .am-app[data-mode='light'] span[data-hlc='green'] { color: #0e6b31 !important; }
+[data-mode='light'] .am-app span[data-hlc='teal'], .am-app[data-mode='light'] span[data-hlc='teal'] { color: #05657e !important; }
+[data-mode='light'] .am-app span[data-hlc='blue'], .am-app[data-mode='light'] span[data-hlc='blue'] { color: #1f54c8 !important; }
+[data-mode='light'] .am-app span[data-hlc='purple'], .am-app[data-mode='light'] span[data-hlc='purple'] { color: #7c2bc7 !important; }
 [data-mode='light'] .am-app span[data-hlc='magenta'], .am-app[data-mode='light'] span[data-hlc='magenta'] { color: #941555 !important; }
-[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'] { color: #6a6a6a !important; }
+[data-mode='light'] .am-app span[data-hlc='grey'], .am-app[data-mode='light'] span[data-hlc='grey'] { color: #5c5c5c !important; }
 [data-mode='dark'] .am-app mark[data-hl='red'], .am-app[data-mode='dark'] mark[data-hl='red'] { background: #6c2727 !important; }
 [data-mode='dark'] .am-app mark[data-hl='orange'], .am-app[data-mode='dark'] mark[data-hl='orange'] { background: #703a15 !important; }
 [data-mode='dark'] .am-app mark[data-hl='yellow'], .am-app[data-mode='dark'] mark[data-hl='yellow'] { background: #6a540f !important; }
@@ -2082,11 +2183,12 @@ body.amx-marquee-active * {
 .am-app .ctx-menu {
   position: fixed;
   z-index: 120;
-  min-width: 168px;
-  max-width: calc(100vw - 16px); /* 超宽时换行而非横向溢出屏幕(配合 clampMenu 夹取) */
+  width: max-content;
+  min-width: var(--menu-action-min, 168px);
+  max-width: min(var(--menu-action-max, 184px), calc(100vw - 16px)); /* 超宽时换行而非横向溢出屏幕(配合 clampMenu 夹取) */
   max-height: calc(100vh - 16px); /* 超高时滚动而非纵向溢出屏幕 */
   overflow-y: auto;
-  padding: 5px;
+  padding: var(--menu-shell-padding, 4px);
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
@@ -2102,8 +2204,10 @@ body.amx-marquee-active * {
   background: transparent;
   color: var(--text-sec);
   border-radius: var(--radius-sm);
-  padding: 7px 10px;
+  min-height: var(--menu-item-min-height, 28px);
+  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
   font-size: 13px;
+  line-height: 1.4;
   transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app .ctx-item:hover {
@@ -2500,7 +2604,7 @@ body.amx-marquee-active * {
   height: 19px;
   border-radius: var(--radius-pill);
   background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--btn-shadow, none);
   transition: transform var(--dur-fast) var(--ease-apple);
 }
 .am-app .toggle[data-on] .toggle-knob {
@@ -2767,6 +2871,24 @@ body.amx-marquee-active * {
 .unified-body .unified-embed {
   display: block;
   max-width: 100%;
+  position: relative; /* 宽度把手的定位父级 */
+}
+/* 宽度把手(复用图片那枚 .amx-img-resize)。图片是「选中才挂」,嵌入没有选中态 → 悬停才露。
+   特异性 (0,3,0) 压得过 amadeus-host.css 里的基础规则 (0,2,0),与两份文件的先后无关。 */
+.unified-body .unified-embed > .amx-img-resize {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-apple);
+}
+.unified-body .unified-embed:hover > .amx-img-resize,
+.unified-body .unified-embed[data-resizing] > .amx-img-resize {
+  opacity: 1;
+}
+/* 拖动中让内嵌宿体别抢指针:<iframe>/<webview> 是独立文档,指针一进它的地界就归它。
+   setPointerCapture 本来就该兜住,但 guest 进程那条路上它是**不保证**的 —— 这一句是保险,
+   代价只是拖动那几百毫秒里播放器不可点。 */
+.unified-body .unified-embed[data-resizing] iframe,
+.unified-body .unified-embed[data-resizing] webview {
+  pointer-events: none;
 }
 /* 同一段既被块级嵌入接手、又被行内双链层渲了一条链接(inline 装饰藏得住文本、藏不住 widget)——
    段落上的 unified-embed-host 由 embedLayer 下发,这里把那条多余的行内链接收掉。 */
@@ -2910,7 +3032,7 @@ body.amx-marquee-active * {
   max-width: 100%;
   max-height: 100%;
   border-radius: 8px;
-  box-shadow: 0 12px 48px rgb(0 0 0 / 45%);
+  box-shadow: var(--card-shadow);
 }
 
 /* 链接悬停卡片(500ms 出 / 250ms 收)与双框编辑面板。 */
@@ -2922,7 +3044,7 @@ body.amx-marquee-active * {
   border-radius: 8px;
   background: var(--bg-elevated, var(--bg));
   border: 1px solid var(--border);
-  box-shadow: 0 6px 24px rgb(0 0 0 / 18%);
+  box-shadow: var(--card-shadow);
   font-size: 12px;
 }
 .am-app .amx-linkcard button {
@@ -2949,7 +3071,7 @@ body.amx-marquee-active * {
   border-radius: 10px;
   background: var(--bg-elevated, var(--bg));
   border: 1px solid var(--border);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 26%);
+  box-shadow: var(--card-shadow);
 }
 .am-app .amx-linkedit label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
 .am-app .amx-linkedit input {
@@ -3282,17 +3404,6 @@ body.amx-marquee-active * {
 .am-app .amx-card-size-grip.is-ne { right: -6px; top: -6px; cursor: nesw-resize; }
 .am-app .amx-card-size-grip.is-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
 .am-app .amx-card-size-grip.is-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
-.am-app .amx-grid-landing {
-  position: absolute;
-  z-index: 4;
-  box-sizing: border-box;
-  border: 2px dashed color-mix(in srgb, var(--primary) 76%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--primary) 62%, transparent);
-  pointer-events: none;
-}
-.am-app .amx-grid-landing.is-resize { background: color-mix(in srgb, var(--primary) 5%, transparent); }
 .am-app .amx-el-shape {
   position: absolute;
   box-sizing: border-box;
@@ -3368,63 +3479,6 @@ body.amx-marquee-active * {
 .am-app .amx-el-attach-target.is-sibling {
   outline-color: color-mix(in srgb, var(--primary) 32%, transparent);
   background: color-mix(in srgb, var(--text) 5%, transparent);
-}
-/* 松手后的真实落点：参考思维导图应用的占位主题，用“幽灵卡”而不是只有一条边提示。
-   盒子来自提交同一套槽位 + 避让数学；outline 不进布局，且只消费 Genesis 自己的语义 token。 */
-.am-app .amx-el-attach-slot {
-  position: absolute;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--primary) 34%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--primary) 4%, transparent);
-  color: var(--primary);
-  font-size: 10.5px;
-  font-weight: 600;
-  pointer-events: none;
-  z-index: 2;
-}
-.am-app .amx-el-attach-slot.is-sibling {
-  border-color: color-mix(in srgb, var(--primary) 26%, transparent);
-  background: color-mix(in srgb, var(--text) 3%, transparent);
-}
-/* 靠父节点一侧的短条才是“准星”：完整虚线框交代最终占位尺寸，短条交代连接真正会落在哪一口。
-   data 值沿用 attachHit 的 e/w/n/s，不再派生第二套方向。 */
-.am-app .amx-el-attach-slot::before {
-  content: '';
-  position: absolute;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--primary) 72%, transparent);
-}
-.am-app .amx-el-attach-slot[data-attach-slot='e']::before {
-  left: -2px;
-  top: 50%;
-  width: 3px;
-  height: 22px;
-  transform: translateY(-50%);
-}
-.am-app .amx-el-attach-slot[data-attach-slot='w']::before {
-  right: -2px;
-  top: 50%;
-  width: 3px;
-  height: 22px;
-  transform: translateY(-50%);
-}
-.am-app .amx-el-attach-slot[data-attach-slot='s']::before {
-  left: 50%;
-  top: -2px;
-  width: 22px;
-  height: 3px;
-  transform: translateX(-50%);
-}
-.am-app .amx-el-attach-slot[data-attach-slot='n']::before {
-  left: 50%;
-  bottom: -2px;
-  width: 22px;
-  height: 3px;
-  transform: translateX(-50%);
 }
 .am-app .amx-el-attach {
   position: absolute;
@@ -3527,12 +3581,11 @@ body.amx-marquee-active * {
   color: var(--text-muted);
   white-space: nowrap;
 }
-/* 远距概览是真正的渲染替身，不是盖在完整正文上的标签：原 PM 块退出 layout/paint，卡壳高度由
-   CanvasElements 在跨阈值前量好并以独立样式撑住；再次放大后规则与替身一起卸载。
+/* 远距概览是真正的渲染替身，不是盖在完整正文上的标签：未选中卡的 PM 块由 CanvasElements
+   生成的按卡规则退出 layout/paint，卡壳高度由跨阈值前的实测值撑住；选中卡不生成隐藏规则，
+   因而继续显示真实正文。再次放大后规则与替身一起卸载。
    普通卡是主 ProseMirror 的绝对定位后代，因此 paint containment 只能落在每张普通卡自身；
    若把主 ProseMirror 也设为 paint container，会把位于主卡盒外的所有普通卡壳一起裁掉。 */
-.am-app .amx-stage-overview .amx-ucard > *,
-.am-app .amx-stage-overview .ProseMirror:not(.unified-embed .ProseMirror) > :not(.amx-ucard) { display: none !important; }
 .am-app .amx-stage-overview .amx-ucard {
   overflow: hidden;
   contain: paint;
@@ -3727,9 +3780,16 @@ body.amx-marquee-active * {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
-  box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
+  box-shadow: var(--card-shadow);
   cursor: grab;
   overflow: auto;
+  /* ⚠️ 与上面那句 `overflow: auto` 配套,加了滚动容器就必须补这一句:auto/scroll 让这一层成为
+     **用户可滚的滚动容器**,浏览器的触摸仲裁改从这里起算,舞台那条 `touch-action: none` 就管不到
+     落在卡内的手指 —— 手指一动被判成滚动,当场发 pointercancel,canvasStage 的 onCancel 按
+     「手势被别的东西接管」把整笔拖拽作废(实测 pointerdown 后 3ms 就死:画面不跟手、松手也不落笔)。
+     `overflow: hidden` 不触发(不可用户滚),但那样卡片缩小后内容再也够不到,所以留 auto 加这一句。
+     仪器:check:canvastouch 的 T10。 */
+  touch-action: none;
 }
 .am-app .amx-canvas .amx-ucard {
   position: absolute;
@@ -3745,9 +3805,12 @@ body.amx-marquee-active * {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg);
-  box-shadow: 0 2px 10px rgb(0 0 0 / 12%);
+  box-shadow: var(--card-shadow);
   cursor: grab;
   overflow: auto;
+  /* 与主卡同一条(告警见上面那块):滚动容器会把舞台的 `touch-action: none` 隔断,
+     触屏拖卡当场被浏览器 pointercancel 掉。仪器:check:canvastouch 的 T10。 */
+  touch-action: none;
 }
 /* (拖拽中的位置与「抬起」观感**不在这里**:手势期任何 class/inline 都不能写到卡片 DOM 上 ——
    PM 的 DOMObserver 会把带陌生属性的节点按 toDOM 重画,过程样式当场蒸发(2026-08-18 C34 真实
@@ -3783,7 +3846,7 @@ body.amx-marquee-active * {
   .am-app .amx-stage-hud { padding: 4px 10px; gap: 8px; }
   /* ⚠️ HUD 的图标只有 12px,光加 padding 到不了 34(6+12+6=24,Codex 2026-08-23 实测)——
      用 min-width/min-height 把盒子撑起来,并补 justify-content(base 只写了 align-items,
-     inline-flex 撑宽之后图标会靠左)。4 颗 34 + 3 道 gap + 档位文字 + 内边距 ≈ 222px,
+     inline-flex 撑宽之后图标会靠左)。6 颗 34 + 6 道 gap + 档位文字 + 内边距 ≈ 295px,
      窄机 ≈358px 装得下。缩略图跟着再让一档(HUD 高度 34+8+2=44,112+44=156)。 */
   .am-app .amx-stage-hud button { min-width: 34px; min-height: 34px; padding: 0; justify-content: center; }
 }

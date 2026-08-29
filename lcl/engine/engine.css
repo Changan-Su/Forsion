@@ -12,7 +12,10 @@
      设值:布局先反向除掉 zoom,渲染 ×zoom 后正好满视口。未设(=1,及不接 uiZoom 的端)等价旧 100vh,零回归。 */
   height: calc(100vh / var(--uiz, 1));
   width: calc(100vw / var(--uiz, 1));
-  overflow: hidden;
+  /* ⚠️ clip 而非 hidden:hidden 照样是个**滚动容器** —— 浏览器给焦点元素做 scrollIntoView 时会把整个壳
+     横/竖滚起来(ribbon + 标题栏被推出视野、侧栏字左边被切,且没有滚动条能滚回来)。用户 2026-08-28 报的
+     「界面有时候变成这样」即此。clip 压根不建滚动容器。同一个坑的移动端版见 singleColumn.css 的 .mb-body。 */
+  overflow: clip;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
@@ -66,7 +69,11 @@
 /* 两区弹性分配:head+Spaces 靠上,命令+账号靠下(margin-top:auto 把命令区连同其后一起推到底)。 */
 .rb-head { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; }
 .rb-top { flex-shrink: 0; }
-.rb-bottom { margin-top: auto; flex-shrink: 0; }
+/* 主位槽:两个 auto 外边距由它一个人吃掉全部空当 → 自己垂直居中;于是 .rb-bottom 不再需要
+   `margin-top:auto`(留着会变成三个 auto 抢空当 = 1:1:1,主位落在 1/3 处而不是正中)。
+   宿主没注册 home 件时它高度为 0,两个 auto 照样把底部两组顶到底 —— 观感与加它之前一致。 */
+.rb-home { margin-block: auto; flex-shrink: 0; }
+.rb-bottom { flex-shrink: 0; }
 .rb-pinned { flex-shrink: 0; margin-top: 4px; }
 /* ＋ 号:比图标钮更淡,悬停才显形(不喧宾夺主)。 */
 .rb-plus { opacity: 0.4; }
@@ -195,8 +202,10 @@
 .rb-menu-backdrop { position: fixed; inset: 0; z-index: 1100; -webkit-app-region: no-drag; }
 .rb-menu {
   position: fixed;
-  min-width: 160px;
-  padding: 4px;
+  width: max-content;
+  min-width: var(--menu-action-min, 168px);
+  max-width: min(var(--menu-action-max, 184px), calc(100vw - 16px));
+  padding: var(--menu-shell-padding, 4px);
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 10px);
@@ -206,12 +215,14 @@
 }
 .rb-menu button {
   text-align: left;
-  padding: 7px 10px;
+  min-height: var(--menu-item-min-height, 28px);
+  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
   border: none;
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 13px;
+  line-height: 1.4;
   border-radius: var(--radius-sm, 8px);
   cursor: pointer;
   white-space: nowrap;
@@ -397,6 +408,20 @@
   --dv-border-radius: var(--radius-md, 12px);
 }
 .wb-dockview { width: 100%; height: 100%; }
+
+/* ⚠️ dockview 自己给浮层 host 写死尺寸(_syncFloatingOverlayHost):量 getBoundingClientRect ——
+   那是**已被 body 的 CSS zoom 乘过**的视口 px —— 再当 CSS px 写回 style.width/height,于是 zoom≠1
+   时 host 恒比 .dv-shell 大整整一个 z 倍(实测 z=1.15:壳 1149 → host 1321),壳里凭空多出
+   150×104px 的溢出;.shell 的 overflow:clip 兜住了「界面被顶歪」,但尺寸本身仍是错的。
+   百分比不吃这个双乘,直接用 !important 夺回来(inline style 只输给 !important)。
+   前提:本仓不用 edge group(addEdgeGroup 零调用)→ grid 恒满铺 .dv-shell、上游写的 left/top 恒 0;
+   哪天真用了 edge group,这条得改成按 grid 的实际位置算。仪器:npm run check:shellnoscroll 的 D。 */
+.dv-floating-overlay-host {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
 
 /* 组间分割线已去(--dv-separator-border 透明)。侧栏 / tab 栏一律保持扁平,无圆角无卡片 —— 周边即统一背景。
  * 仅「中心主区」的内容(不含 tab 栏)做成浮在背景上的圆角面板:

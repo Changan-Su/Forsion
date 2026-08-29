@@ -1,9 +1,10 @@
 /**
- * 「内置插件」:内置浏览器 + 内置终端。默认开启,可在 设置 → Forsion 插件 顶部的「内置」区关掉。
+ * 「内置插件」:内置浏览器 / 内置终端 / 日历。默认开启,可在 设置 → Forsion 插件 顶部的「内置」区关掉。
  *
  * 为什么不是真外置插件:外置插件 API 是 `new Function(setup(ctx))` + 纯 DOM mount + CSP,
- * 拿不到 <webview>(要主进程开 webviewTag)也拿不到 PTY(要原生模块 + IPC)。所以做成宿主原生视图,
- * 只在插件页以插件形态露出并可开关 —— 用户看到的形态一致,不为两个内置能力去扩插件 API 的攻击面。
+ * 拿不到 <webview>(要主进程开 webviewTag)、拿不到 PTY(要原生模块 + IPC),日历那三个视图更是
+ * 直接吃全库多维表聚合。所以做成宿主原生视图,只在插件页以插件形态露出并可开关 ——
+ * 用户看到的形态一致,不为几个内置能力去扩插件 API 的攻击面。
  *
  * 关闭 = 先关掉工作台里该类型的全部实例,再反注册视图与命令(Dockview 的 components map
  * 收缩时不能留活面板,与 pluginViews.tsx 同款纪律)。
@@ -15,7 +16,11 @@ import { registerView, unregisterView, addCommand, removeCommand, useWorkspace, 
 import { lazyRetry } from '../lazyRetry'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
+import { useUnitRemote } from '../components/UnitSwitcher'
 import { windowKind } from '../windowKind'
+import { PluginLogo } from '../components/PluginLogo'
+import { calendarAvailable, installCalendarSpace, installCalendarViews, removeCalendarSpace } from './calendar'
+import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace } from './homepage'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
 // (xterm 的 UMD 包在模块顶层就摸 `self`)。
@@ -80,19 +85,23 @@ function sideCount(type: string, side: 'left' | 'right'): number {
 
 interface BuiltinDef {
   id: string
-  /** 视图注册名 = 命令/Space 引用名。 */
-  type: string
+  /** 视图注册名(= 命令/Space 引用名);开关时按这份清单清场 + 反注册。 */
+  types: string[]
   name(): string
   description(): string
   /** 宿主具备所需能力才注册:web/移动端跑同一套渲染层,但既没有 <webview> 也没有 PTY。 */
   available(): boolean
   install(): void
+  /** 贡献 Space 的内置插件:**只在运行时开关时**调(启动那次由 registerSpaces 按槽位注册,
+   *  见 builtins/calendar 的注释)。实现须幂等。 */
+  installSpace?(): void
+  removeSpace?(): void
 }
 
 export const BUILTINS: BuiltinDef[] = [
   {
     id: 'browser',
-    type: 'browser',
+    types: ['browser'],
     name: () => tr('browser.title'),
     description: () => tr('browser.desc'),
     available: () => !!window.tangu, // Electron preload 在场 = <webview> 可用
@@ -103,7 +112,7 @@ export const BUILTINS: BuiltinDef[] = [
   },
   {
     id: 'terminal',
-    type: 'terminal',
+    types: ['terminal'],
     name: () => tr('terminal.title'),
     description: () => tr('terminal.desc'),
     available: () => !!window.tangu?.pty,
@@ -112,13 +121,42 @@ export const BUILTINS: BuiltinDef[] = [
       addCommand({ id: 'builtin-terminal-open', title: () => tr('terminal.open'), icon: TerminalSquare, keywords: 'terminal shell console 终端 命令行', run: () => openTerminal() })
     },
   },
+  {
+    id: 'home',
+    types: ['homepage'],
+    name: () => tr('space.home'),
+    description: () => tr('home.builtinDesc'),
+    available: homepageAvailable,
+    install: installHomepageViews,
+    installSpace: installHomepageSpace,
+    removeSpace: removeHomepageSpace,
+  },
+  {
+    id: 'calendar',
+    types: ['calendar', 'todo-list', 'calendar-config'],
+    name: () => tr('space.calendar'),
+    description: () => tr('calendar.builtinDesc'),
+    available: calendarAvailable,
+    install: installCalendarViews,
+    installSpace: installCalendarSpace,
+    removeSpace: removeCalendarSpace,
+  },
 ]
 
+/** 某内置插件当前开着吗(直读持久化开关):启动期 spaces.tsx 要在 store 建起来之前就问这一句。 */
+export const builtinEnabled = (id: string): boolean => readFlag(key(id))
+
 function applyBuiltin(def: BuiltinDef, on: boolean): void {
-  if (on) { if (!getView(def.type)) def.install(); return }
-  closeLeafsOfType(def.type)
-  unregisterView(def.type)
-  removeCommand(`builtin-${def.id}-open`)
+  if (on) {
+    if (!getView(def.types[0])) def.install()
+    def.installSpace?.()
+    return
+  }
+  // 先撤 Space(停在里面就切走 → 顺带把日历布局存进命名槽),再清场反注册视图:
+  // Dockview 的 components map 收缩时不能留活面板。
+  def.removeSpace?.()
+  for (const t of def.types) { closeLeafsOfType(t); unregisterView(t) }
+  removeCommand(`builtin-${def.id}-open`) // 无此命令时 no-op(日历不注册命令)
 }
 
 interface BuiltinState {
@@ -141,6 +179,20 @@ export const useBuiltins = create<BuiltinState>((set, get) => ({
   },
   setInAppLinks: (on) => { writeFlag(LINKS_KEY, on); set({ inAppLinks: on }) },
 }))
+
+/** 外链去哪:遵「应用内链接」开关 —— 开着走内置浏览器标签,否则交给系统浏览器。
+ *  主进程回投的外链(onOpenUrl)与渲染层自己拦下的链接(聊天网页引用条 Desk 走不通时)
+ *  必须**同一个出口**,否则两条路的开关语义会悄悄分叉。 */
+export function routeExternalUrl(url: string): void {
+  const s = useBuiltins.getState()
+  if (s.inAppLinks && s.enabled.browser && windowKind() !== 'mini') {
+    // 设备远程面(UnitRemoteSurface)开着时必须先退场:回投来的新标签(含远程页里 window.open
+    // 的附件,见 main.ts did-attach-webview)会开在远程面**底下**,观感=点了没反应。
+    const remote = useUnitRemote.getState()
+    if (remote.active) remote.hide()
+    openBrowser(url)
+  } else void window.tangu?.openExternal?.(url)
+}
 
 /** 在 mini 窗之外开一个内置浏览器标签;内置浏览器关着 / 无工作台 → 退回系统浏览器。 */
 export function openBrowser(url?: string): void {
@@ -191,11 +243,7 @@ export function installBuiltins(): void {
 
   // ⚠️外链路由**第一件事**就接上:主进程已经不再自己 openExternal 了,这个 listener 没装成
   // 就等于全应用外链失效。放在视图注册之前,任一 registerView 抛错也炸不到它。
-  window.tangu?.onOpenUrl?.((url) => {
-    const s = useBuiltins.getState()
-    if (s.inAppLinks && s.enabled.browser && windowKind() !== 'mini') openBrowser(url)
-    else void window.tangu?.openExternal?.(url)
-  })
+  window.tangu?.onOpenUrl?.(routeExternalUrl)
   installed = true // listener 已就位才算装上(装失败允许下次重试)
 
   // 另一个窗口改了开关 → 本窗口跟着生效(每个渲染进程各有一份 store,只读 localStorage 快照
@@ -232,6 +280,7 @@ export const BuiltinPluginsSection: React.FC = () => {
       {list.map((b) => (
         <div key={b.id} className="plugin-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <PluginLogo />
             <div style={{ flex: 1, minWidth: 0 }}>
               <b style={{ fontSize: 13 }}>{b.name()}</b>
               <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>

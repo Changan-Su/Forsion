@@ -50,7 +50,9 @@ async function main() {
   const only = (process.argv.find((a) => a.startsWith('--check=')) || '').slice('--check='.length)
   const named = (process.argv.find((a) => a.startsWith('--script=')) || '').slice('--script='.length)
   const script = named || (only ? `${only}.check.cjs` : 'editor-triggers.e2e.cjs')
-  const e2e = spawn('node', [path.join(__dirname, script)], { stdio: 'inherit' })
+  // 自己不认的参数原样转给子脚本(如 --shot[=目录];别在这儿列白名单,否则每加一个都要改两处)。
+  const passthrough = process.argv.slice(2).filter((a) => !a.startsWith('--check=') && !a.startsWith('--script='))
+  const e2e = spawn('node', [path.join(__dirname, script), ...passthrough], { stdio: 'inherit' })
   e2e.on('exit', (code) => {
     if (vite) vite.kill()
     process.exit(code ?? 1)

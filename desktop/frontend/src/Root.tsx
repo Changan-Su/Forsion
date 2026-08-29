@@ -20,6 +20,7 @@ import { AchievementsModal } from './achievements/AchievementsModal'
 import { AchievementToast } from './achievements/AchievementToast'
 import { NotificationHost } from './components/NotificationHost'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
+import { UnitRemoteSurface } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
@@ -108,6 +109,9 @@ export function Root() {
 
       {/* Amadeus 全局浮层(快速切换等):须在 shell-host 之后(拖窗区 DOM 顺序,同下)。 */}
       {window.amadeus && <AmadeusOverlays />}
+      {/* 设备远程面(Forsion Unit「整个主区切过去」):portal 进 .shell-work,未连过设备时渲染 null。
+          web 复用本 Root 也带着它 —— 没有 units 桥就永远不激活,零可见影响。 */}
+      <UnitRemoteSurface />
       <QuickFind />
       <HoverTip />
 
@@ -139,7 +143,7 @@ export function Root() {
             themeSeed={theme.seed}
             onClose={() => a.closeSettings()}
             onConfigChange={a.patchConfig}
-            onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, mode)}
+            onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
             onGlassChange={(on) => theme.setGlass(on)}
             onFlatChange={(on) => theme.setFlat(on)}
             onSeedChange={(hex) => theme.setSeedValue(hex)}
@@ -171,7 +175,7 @@ export function Root() {
             themeMode={theme.mode}
             themeModePref={theme.modePref}
             themeSeed={theme.seed}
-            onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, mode)}
+            onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, skin, mode)}
             onSeedChange={(hex) => theme.setSeedValue(hex)}
             onReconnect={() => {
               void window.tangu?.getConfig().then((c) => {

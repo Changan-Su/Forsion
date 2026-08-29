@@ -7,7 +7,7 @@
 //
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
-// 只读它的 focusTitleFor(新建流标题聚焦)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
+// 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
@@ -35,13 +35,14 @@ import { FindBar } from '../components/PageView'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
-import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename } from '../store/pageStore'
+import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, cascadeFdAfterRename, claimTitleFocus } from '../store/pageStore'
 // 模式胶囊复用 `.t2s-vaultseg`(见渲染处):样式真源是侧栏那张表。App 里 amadeusViews 已显式引过,
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
 import { docHeadings } from './outline'
+import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
 import { CanvasSegPortal } from './CanvasModeSeg'
 import { AmadeusPropertiesPanel } from '../../amadeusProperties'
@@ -89,6 +90,50 @@ async function saveOneFile(page: string, f: File): Promise<string | null> {
   } catch {
     return null
   }
+}
+
+/** 引用条落点([[笔记#标题]])的一次性提醒覆盖片。
+ *
+ *  ⚠️ **不能给 PM 渲染出来的节点直接加 class**:ProseMirror 的 DOMObserver 把 contenteditable 里的
+ *  外来 DOM 改动当脏数据,同一拍就把节点重绘回去 —— 实测类是挂上了(MutationObserver 抓得到),
+ *  但同一个元素在下一个 setTimeout(0) 里已经 isConnected:false,屏幕上一帧都没闪。
+ *  所以画一片贴在 body 上的 fixed 覆盖片(和 PDF 引语高亮同思路):不碰文档、不碰编辑器 DOM。
+ *
+ *  三条纪律(Codex 评审):①全局单例,连点两条只留最后一片;②端级 zoom 下 rect 是视口 px 而写进
+ *  style 的长度会再乘一次 zoom,必须反补偿(老坑);③fixed 跟不了滚动 —— 用户一滚就撤,比错位地
+ *  飘在无关正文上强。滚动监听要晚 300ms 再挂:reveal 自己那次 scrollIntoView 的 scroll 事件下一帧
+ *  才到,立刻挂等于自己把自己撤了。
+ */
+let citeTip: { el: HTMLElement; timer: number; arm: number; off: () => void } | null = null
+function dropCiteTip(): void {
+  if (!citeTip) return
+  clearTimeout(citeTip.timer)
+  clearTimeout(citeTip.arm)
+  citeTip.off()
+  citeTip.el.remove()
+  citeTip = null
+}
+function flashCiteTip(r: DOMRect): void {
+  dropCiteTip()
+  if (r.width < 1 || r.height < 1) return
+  const el = document.createElement('div')
+  el.className = 'am-citeflash'
+  el.style.cssText = 'position:fixed;pointer-events:none;z-index:60;left:0;top:0'
+  document.body.appendChild(el)
+  const z = (el as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
+  el.style.left = `${(r.left - 4) / z}px`
+  el.style.top = `${(r.top - 2) / z}px`
+  el.style.width = `${(r.width + 8) / z}px`
+  el.style.height = `${(r.height + 4) / z}px`
+  const off = (): void => {
+    window.removeEventListener('scroll', dropCiteTip, true)
+    window.removeEventListener('wheel', dropCiteTip, true)
+  }
+  const arm = window.setTimeout(() => {
+    window.addEventListener('scroll', dropCiteTip, true)
+    window.addEventListener('wheel', dropCiteTip, true)
+  }, 300)
+  citeTip = { el, timer: window.setTimeout(dropCiteTip, 1400), arm, off }
 }
 
 function applyMinimalDiff(view: EditorView, next: ProseNode): void {
@@ -606,7 +651,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   onRename: (next: string, focusKind: 'enter' | 'move' | null) => Promise<boolean>
   /** 'enter' = 回车确定标题(首块非空段则顶插空白首行);'move' = 方向键滑入正文(只落光标不插行)。 */
   onEnterBody: (kind: 'enter' | 'move') => void
-  /** 新建流:挂载即聚焦标题(消费 pageStore.focusTitleFor 后由父级置真)。 */
+  /** 新建流:挂载即聚焦标题(认领 pageStore 的一次性聚焦请求后由父级置真)。 */
   focusSignal: boolean
 }): ReactElement {
   const current = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
@@ -1182,10 +1227,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const [lightbox, setLightbox] = useState<string | null>(null)
   useEffect(() => {
     const onDbl = (e: MouseEvent): void => {
-      const t = e.target as HTMLElement | null
-      if (!t || t.tagName !== 'IMG') return
-      if (!t.closest('.unified-body')) return
-      const src = (t as HTMLImageElement).currentSrc || (t as HTMLImageElement).src
+      // ⚠️ 判据必须按**坐标**取元素,不能只信 `e.target`:图片若是装饰 widget(`![[pic.png]]` 那条),
+      // 第一次点击会把它的 DOM 整个重建 —— 两次点击的 target 不是同一个节点,浏览器就把 dblclick
+      // 派到公共祖先 <p> 上,`tagName === 'IMG'` 当场扑空、双击看大图时灵时不灵(2026-08-28 实测)。
+      const hit = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null) ?? (e.target as HTMLElement | null)
+      const t = hit?.tagName === 'IMG' ? (hit as HTMLImageElement) : null
+      if (!t || !t.closest('.unified-body')) return
+      const src = t.currentSrc || t.src
       if (!src) return
       e.preventDefault()
       e.stopPropagation()
@@ -1304,7 +1352,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         const v = layer.getView()
         return v ? docHeadings(v.state.doc) : []
       },
-      revealHeading: (index, text) => {
+      revealHeading: (index, text, flash) => {
         const v = layer.getView()
         if (!v) return
         // 现遍历一次:大纲那份是渲染时算的,点击之间文档可能已增删标题 → 同序号未必是同一条。
@@ -1314,8 +1362,43 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         if (!h) return
         v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(h.pos + 1))).scrollIntoView())
         v.focus()
+        // 引用条落点闪一下 —— 覆盖片走 flashCiteTip(为什么不能直接给标题节点加类,见那边的注释)。
+        // 位置同步读:dispatch 里的 scrollIntoView 是同步做完的,此刻的 rect 就是最终位置。
+        if (!flash) return
+        const el = v.nodeDOM(h.pos)
+        if (el instanceof HTMLElement) flashCiteTip(el.getBoundingClientRect())
+      },
+      revealBlock: (id, flash) => {
+        const v = layer.getView()
+        if (!v) return false
+        // Obsidian 的块锚在 v4 素文件里**没有任何结构** —— 就是块最后一行尾部的一段字面文本,
+        // 所以「按原文找」就是唯一正确的找法(现取一遍 doc,与 revealHeading 同理:点击发生在
+        // 渲染之后,期间文档可能已增删)。
+        const blocks: Array<{ pos: number; text: string; parent: unknown }> = []
+        v.state.doc.descendants((node, pos, parent) => {
+          if (!node.isTextblock) return true
+          blocks.push({ pos, text: node.textContent, parent })
+          return false // 文本块内部不必再下钻
+        })
+        let idx = blocks.findIndex((b) => trailingBlockId(b.text) === id)
+        if (idx < 0) return false // 找不到就不动(调用方据此重试/放弃),绝不静默跳到别的块
+        // 整行只有 `^id` 时,Obsidian 语义里它标注的是**上一个块** —— 往回退一格。
+        // ⚠️ 只在**同一个父节点**里退:光杆锚是引用块/列表项里的第一段时,文档序的上一块属于
+        //    另一个容器,退过去就跳到了无关内容(Codex 评审)。跨容器就停在锚自己这一段 ——
+        //    它紧贴目标内容,总比跳到别人家里强。文档首行就是光杆锚时同理。
+        if (isLoneBlockId(blocks[idx].text) && idx > 0 && blocks[idx - 1].parent === blocks[idx].parent) idx -= 1
+        const pos = blocks[idx].pos
+        v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.tr.doc.resolve(pos + 1))).scrollIntoView())
+        v.focus()
+        // 位置同步读:dispatch 里的 scrollIntoView 是同步做完的,此刻的 rect 就是最终位置(同标题锚)。
+        if (flash) {
+          const el = v.nodeDOM(pos)
+          if (el instanceof HTMLElement) flashCiteTip(el.getBoundingClientRect())
+        }
+        return true
       },
       retire: () => {
+        dropCiteTip() // 视图退休时把还挂着的落点覆盖片撤掉(它住在 body 上,不随组件卸载)
         pipe.retired = true
         if (pipe.timer) {
           clearTimeout(pipe.timer)
@@ -1340,14 +1423,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probe])
 
-  // 新建流:createPageInFolder 落 focusTitleFor → 挂载即聚焦标题(Notion 式先命名)。
+  // 新建流:createPageInFolder 落聚焦请求 → 挂载即聚焦标题(Notion 式先命名)。
+  // 信号住模块级而非本 scope:新建的落点面板由 openNote 现算,创建时那份 store 未必是这一份。
   const [titleFocus, setTitleFocus] = useState(false)
   useEffect(() => {
-    const st = scoped.getState()
-    if (st.focusTitleFor === path) {
-      st.consumeTitleFocus()
-      setTitleFocus(true)
-    }
+    if (claimTitleFocus(path)) setTitleFocus(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 

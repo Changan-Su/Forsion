@@ -6,8 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { X, ArrowLeft, ArrowUp, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
-import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
-import { applyTheme } from '../theme/loader'
+import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { UI_MODE, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
@@ -27,6 +26,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY, SMOOTH_CARET_KEY } from '../types'
 import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
+import { listFonts, getFont } from '../fontPresets'
 import { useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
@@ -60,6 +60,7 @@ import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
+import { setActiveWindowCommand } from '../activeWindowCommand'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
@@ -73,17 +74,6 @@ export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
 
-// 字体预设(datalist:选也行、手输任意 font-family 也行)。`system-ui` / `ui-monospace` 是 CSS 原生的
-// 系统字体关键字 —— 「系统默认」不用自己拼一长串栈。
-const SANS_FONTS = [
-  'system-ui', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Source Han Sans SC',
-  'Noto Sans SC', 'HarmonyOS Sans SC', 'LXGW WenKai', 'Songti SC',
-  'Inter', 'Hanken Grotesk', 'Helvetica Neue', 'Georgia',
-]
-const MONO_FONTS = [
-  'ui-monospace', 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
-  'Sarasa Mono SC', 'Menlo', 'Consolas',
-]
 
 // 侧栏项图标(固定 tab 全配;外置 agent 插件的动态 plugin:<id> 项刻意无图标)。
 const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
@@ -193,7 +183,9 @@ export const SettingsModal: React.FC<{
   // 普通入口先落一级列表;显式 deep link(initialTab)直达对应二级页。
   const [mobileMenuOpen, setMobileMenuOpen] = useState(() => mobileSettings && !p.initialTab)
   const [appVersion, setAppVersion] = useState<string>('')
-  // custom 配色的独立背景色(强调/背景双取色器;走 themeStore,不经 props 链)。
+  // 背景色轴 + 它的自定义 seed(走 themeStore,不经 props 链;主题色轴仍走 props 的 onThemeChange)。
+  const themeBg = useTheme((s) => s.bg)
+  const setBg = useTheme((s) => s.setBg)
   const themeBgSeed = useTheme((s) => s.bgSeed)
   const setBgSeedValue = useTheme((s) => s.setBgSeedValue)
   // 应用内自动更新状态(经 window.tangu.onUpdaterStatus 广播驱动;mac 仅检测引导手动下载)。
@@ -275,6 +267,21 @@ export const SettingsModal: React.FC<{
     ? rawTab
     : (tabItems[0]?.[0] ?? rawTab)
   const isPluginTab = tab.startsWith('plugin:') || tab.startsWith('fplugin:')
+  // 有天然子页面的设置项改成折叠导航。桌面初次打开时展开当前项；移动端首页从总项开始。
+  const [expandedTabs, setExpandedTabs] = useState<Set<Tab>>(() => (
+    mobileSettings ? new Set() : new Set([tab])
+  ))
+
+  // 桌面正文里的直达入口也要把对应总项带开；移动端返回首页时保留用户刚才的折叠状态。
+  useEffect(() => {
+    if (mobileSettings) return
+    setExpandedTabs((previous) => {
+      if (previous.has(tab)) return previous
+      const next = new Set(previous)
+      next.add(tab)
+      return next
+    })
+  }, [mobileSettings, tab])
 
   const [stored, setStored] = useState<StoredDesktopConfig | null>(null)
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
@@ -749,10 +756,10 @@ export const SettingsModal: React.FC<{
     return key ? t(key) : ''
   }
 
-  // 中分类:只给内容确实长、且本来就有天然分界的一级页;短页(笔记/浏览器/关于/开发者…)不加栏目条,
-  // 免得为一两项设置硬造分类。条目的显隐条件必须与下方正文块的渲染条件一一对应,否则会出现
-  // 「点得到栏目却空白」。key 全局唯一 → 换页时旧 key 落不进新列表,activeSub 自动落回第一项。
-  const subItems: Array<[string, string]> = ({
+  // 天然子页面:现在渲染在对应总项下面的折叠导航里，不再占用正文标题下的横向栏目条。
+  // 显隐条件必须与下方正文块一一对应，否则会出现「点得到子项却空白」。key 全局唯一 →
+  // 换页时旧 key 落不进新列表，activeSub 自动落回第一项。
+  const subItemsByTab = ({
     general: [
       ['g-conn', t('settings.sub.connection')],
       ...(isDesktop ? [['g-forsion', 'Forsion'] as [string, string]] : []),
@@ -794,11 +801,13 @@ export const SettingsModal: React.FC<{
       // RemoteSyncSection 在 window.remoteSync 缺位时直接 return null → 同样是白板,栏目得跟着走。
       ...(window.remoteSync ? [['s-remote', t('settings.sync.remoteSec')] as [string, string]] : []),
     ],
-  } as Record<string, Array<[string, string]>>)[tab] ?? []
-  // 单项栏目条没有意义(只剩一个分类=没分类),直接不显示;正文的 activeSub 判断照常命中那一项。
+  } as Record<string, Array<[string, string]>>)
+  const subItemsForTab = (id: Tab): Array<[string, string]> => subItemsByTab[id] ?? []
+  const subItems = subItemsForTab(tab)
   const activeSub = subItems.some(([k]) => k === sub) ? sub : (subItems[0]?.[0] ?? '')
-  // 换页/换分类后:①选中项滚到可见(移动端顶部横滑 chips 必需,initialTab 可能在条深处);
-  // ②正文回到顶部 —— ⚠️ 滚动容器是**外层** .settings-body,内层 `key` 重挂不会重置父容器的
+  const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
+  // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
+  // .settings-body,内层 `key` 重挂不会重置父容器的
   // scrollTop:在技能库往下滚过再切到另一个长分类,会直接落在新页中段(短分类则落到底)。
   useEffect(() => {
     // 一级列表打开时不再偷偷滚隐藏的旧导航;进入详情(含重新打开同一项)才复位正文。
@@ -812,10 +821,17 @@ export const SettingsModal: React.FC<{
     setSubDir(subItems.findIndex(([x]) => x === k) > subItems.findIndex(([x]) => x === activeSub) ? 1 : -1)
     setSub(k)
   }
+  const openSubPage = (id: Tab, key: string): void => {
+    if (id === tab) pickSub(key)
+    else {
+      goTab(id)
+      setSub(key)
+    }
+  }
 
   // 一级入口一个不少,但按用户目标而不是技术归属分组:先找工作区与外观,再找 AI 能力和扩展。
   // Forsion 品牌独立放在导航顶部,不再用一个额外的大类标题重复占据滚动区。
-  const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[]; brand?: boolean }> }> = [
+  const navSections: Array<{ key: string; label: string; groups: Array<{ key: string; label: string; tabs: Tab[] }> }> = [
     { key: 'settings', label: '', groups: [
       { key: 'workspace', label: t('settings.group.workspace'), tabs: ['general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
@@ -830,6 +846,24 @@ export const SettingsModal: React.FC<{
       .filter((x): x is [Tab, string] => !!x)
     // 「社区插件」组末尾追加已启用且有设置的外置插件,动态项同样进入移动端一级列表。
     return grp.key === 'extensions' ? [...base, ...forsionNavItems, ...pluginNavItems] : base
+  }
+  const toggleTab = (id: Tab): void => {
+    setExpandedTabs((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const toggleDesktopTab = (id: Tab, items: Array<[string, string]>): void => {
+    const opening = !expandedTabs.has(id)
+    toggleTab(id)
+    // 桌面端总项与右侧内容区联动：展开时默认展示它的第一个具体子页面。
+    if (opening && items[0]) openSubPage(id, items[0][0])
+  }
+  const toggleMobileTab = (id: Tab): void => {
+    // 移动端仍停留在设置首页；只有点下面的具体子项才进入二级界面。
+    toggleTab(id)
   }
 
   // Android 实体返回 / 系统侧滑:二级页先回设置首页;已在首页时再交给 MobileRoot 退出设置。
@@ -871,21 +905,47 @@ export const SettingsModal: React.FC<{
                 <h2>{grp.label}</h2>
                 <div className="settings-mobile-group-card">
                   {items.map(([id, label]) => {
+                    const children = subItemsForTab(id)
+                    const expandable = children.length > 0
+                    const expanded = expandable && expandedTabs.has(id)
+                    const childrenId = `settings-mobile-subitems-${id.replace(':', '-')}`
                     const description = descriptionForTab(id)
                     return (
-                      <button
-                        type="button"
-                        className="settings-mobile-row"
-                        key={id}
-                        onClick={() => { goTab(id); setMobileMenuOpen(false) }}
-                      >
-                        <span className="settings-mobile-row-icon" aria-hidden="true">{TAB_ICONS[id] ?? <Puzzle size={14} />}</span>
-                        <span className="settings-mobile-row-copy">
-                          <strong>{label}</strong>
-                          {description && <small>{description}</small>}
-                        </span>
-                        <ChevronRight className="settings-mobile-row-chevron" size={18} aria-hidden="true" />
-                      </button>
+                      <div className="settings-mobile-entry" key={id}>
+                        <button
+                          type="button"
+                          className="settings-mobile-row"
+                          aria-expanded={expandable ? expanded : undefined}
+                          aria-controls={expandable ? childrenId : undefined}
+                          onClick={() => {
+                            if (expandable) toggleMobileTab(id)
+                            else { goTab(id); setMobileMenuOpen(false) }
+                          }}
+                        >
+                          <span className="settings-mobile-row-icon" aria-hidden="true">{TAB_ICONS[id] ?? <Puzzle size={14} />}</span>
+                          <span className="settings-mobile-row-copy">
+                            <strong>{label}</strong>
+                            {description && <small>{description}</small>}
+                          </span>
+                          <ChevronRight className={`settings-mobile-row-chevron${expanded ? ' expanded' : ''}`} size={18} aria-hidden="true" />
+                        </button>
+                        {expanded && (
+                          <div className="settings-mobile-subitems" id={childrenId}>
+                            {children.map(([key, childLabel]) => (
+                              <button
+                                type="button"
+                                className="settings-mobile-subrow"
+                                key={key}
+                                onClick={() => { openSubPage(id, key); setMobileMenuOpen(false) }}
+                              >
+                                <span className="settings-mobile-subrow-mark" aria-hidden="true" />
+                                <span>{childLabel}</span>
+                                <ChevronRight size={16} aria-hidden="true" />
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
@@ -927,8 +987,9 @@ export const SettingsModal: React.FC<{
                 const all = navItemsForGroup(grp)
                 const items = secHit || grp.label.toLowerCase().includes(ql)
                   ? all
-                  : all.filter(([, label]) => label.toLowerCase().includes(ql))
-                return { key: grp.key, label: grp.label, brand: grp.brand, items }
+                  : all.filter(([id, label]) => label.toLowerCase().includes(ql)
+                    || subItemsForTab(id).some(([, childLabel]) => childLabel.toLowerCase().includes(ql)))
+                return { key: grp.key, label: grp.label, items }
               })
               .filter((g) => g.items.length > 0)
             if (groups.length === 0) return null
@@ -937,12 +998,45 @@ export const SettingsModal: React.FC<{
                 {sec.label && <div className="settings-nav-sectionhead">{sec.label}</div>}
                 {groups.map((grp) => (
                   <div key={grp.key} className="settings-nav-group">
-                    <div className={`settings-nav-grouphead${grp.brand ? ' brand' : ''}`}>{grp.label}</div>
-                    {grp.items.map(([id, label]) => (
-                      <button key={id} className={tab === id ? 'active' : ''} onClick={() => goTab(id)}>
-                        {TAB_ICONS[id]}{label}
-                      </button>
-                    ))}
+                    <div className="settings-nav-grouphead">{grp.label}</div>
+                    {grp.items.map(([id, label]) => {
+                      const children = subItemsForTab(id)
+                      const expandable = children.length > 0
+                      // 搜索临时展开命中总项，但不篡改用户原本的折叠选择。
+                      const expanded = expandable && (!!ql || expandedTabs.has(id))
+                      const childrenId = `settings-nav-subitems-${id.replace(':', '-')}`
+                      return (
+                        <div className="settings-nav-parent" key={id}>
+                          <button
+                            type="button"
+                            className={tab === id ? (expandable ? 'has-active' : 'active') : ''}
+                            aria-current={tab === id ? 'page' : undefined}
+                            aria-expanded={expandable ? expanded : undefined}
+                            aria-controls={expandable ? childrenId : undefined}
+                            onClick={() => expandable ? toggleDesktopTab(id, children) : goTab(id)}
+                          >
+                            {TAB_ICONS[id]}<span>{label}</span>
+                            {expandable && <ChevronRight className="settings-nav-parent-chevron" size={14} aria-hidden="true" />}
+                          </button>
+                          {expanded && (
+                            <div className="settings-nav-subitems" id={childrenId}>
+                              {children.map(([key, childLabel]) => (
+                                <button
+                                  type="button"
+                                  className={`settings-nav-subitem${tab === id && activeSub === key ? ' active' : ''}`}
+                                  aria-current={tab === id && activeSub === key ? 'page' : undefined}
+                                  key={key}
+                                  onClick={() => openSubPage(id, key)}
+                                >
+                                  <span className="settings-nav-subitem-mark" aria-hidden="true" />
+                                  <span>{childLabel}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 ))}
               </div>
@@ -955,7 +1049,7 @@ export const SettingsModal: React.FC<{
           <button type="button" onClick={() => setMobileMenuOpen(true)} aria-label={t('settings.title')} title={t('settings.title')}>
             <ArrowLeft size={20} />
           </button>
-          <strong>{activeTabLabel}</strong>
+          <strong>{activeSubLabel || activeTabLabel}</strong>
           <button type="button" onClick={p.onClose} aria-label={t('settings.backToApp')} title={t('settings.backToApp')}>
             <X size={19} />
           </button>
@@ -965,26 +1059,11 @@ export const SettingsModal: React.FC<{
             <div className="settings-main-title">{activeTabLabel}</div>
             {activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
-          {subItems.length > 1 && (
-            <div className="settings-subbar" role="tablist" aria-label={activeTabLabel}>
-              {subItems.map(([k, label]) => (
-                <button
-                  key={k}
-                  role="tab"
-                  aria-selected={activeSub === k}
-                  className={`settings-subtab${activeSub === k ? ' active' : ''}`}
-                  onClick={() => pickSub(k)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
         <div className="settings-body">
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir}>
-                {/* 小节标题(原 .settings-sec)已由标题下的中分类栏目条承担,不再在正文重复一遍。 */}
+                {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {tab === 'general' && activeSub === 'g-conn' && (
                   <>
                     <section className="settings-overview" aria-label={t('settings.overview.label')}>
@@ -2386,63 +2465,78 @@ export const SettingsModal: React.FC<{
                         <span className="settings-panel-icon"><Sparkles size={16} /></span>
                         <div><strong>{t('settings.theme.skinLabel')}</strong><p>{t('settings.theme.skinDescription')}</p></div>
                       </div>
-                      <div className="skin-row">
-                        {listSkins().map((sk) => (
-                          <button
-                            key={sk.id}
-                            type="button"
-                            className={`skin-chip${sk.id === p.themeSkin ? ' active' : ''}`}
-                            title={t(`settings.theme.skin.${sk.id}`)}
-                            onClick={() => {
-                              applyTheme(p.themeLang, sk.id, p.themeMode, { customColor: p.themeSeed })
-                              p.onThemeChange(p.themeLang, sk.id, p.themeModePref)
-                            }}
-                          >
-                            <i className="skin-dot" style={{ background: sk.id === 'custom' ? p.themeSeed : sk.accent }} />
-                            <span>{t(`settings.theme.skin.${sk.id}`)}</span>
-                          </button>
-                        ))}
+                      {/* 两根**独立**的轴:主题色只换 accent 家族,背景色只换底/文字/边线族(见 theme/skins.css)。
+                          两边选同一个 id = 拆轴前的整套配色。背景轴不走 props 链,直接读写 themeStore(同 bgSeed)。 */}
+                      <div className="settings-palette-axis">
+                        <strong>{t('settings.theme.accentLabel')}</strong>
+                        <div className="skin-row">
+                          {listSkins().map((sk) => (
+                            <button
+                              key={sk.id}
+                              type="button"
+                              className={`skin-chip${sk.id === p.themeSkin ? ' active' : ''}`}
+                              title={t(`settings.theme.skin.${sk.id}`)}
+                              onClick={() => p.onThemeChange(p.themeLang, sk.id, p.themeModePref)}
+                            >
+                              <i className="skin-dot" style={{ background: sk.id === 'custom' ? p.themeSeed : skinSwatch(sk, p.themeMode === 'dark', 'accent') }} />
+                              <span>{t(`settings.theme.skin.${sk.id}`)}</span>
+                            </button>
+                          ))}
+                        </div>
+                        {p.themeSkin === 'custom' && (
+                          <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
+                            <input
+                              type="color"
+                              value={p.themeSeed}
+                              onChange={(e) => p.onSeedChange(e.target.value)}
+                              aria-label={t('settings.theme.customSeedLabel')}
+                              style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                            />
+                            <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{p.themeSeed}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="settings-palette-axis">
+                        <strong>{t('settings.theme.bgLabel')}</strong>
+                        <div className="skin-row">
+                          {listSkins().map((sk) => (
+                            <button
+                              key={sk.id}
+                              type="button"
+                              className={`skin-chip${sk.id === themeBg ? ' active' : ''}`}
+                              title={t(`settings.theme.skin.${sk.id}`)}
+                              onClick={() => setBg(sk.id)}
+                            >
+                              <i
+                                className="skin-dot skin-dot-background"
+                                style={{ background: backgroundSwatch(sk, p.themeMode === 'dark', sk.id === 'custom' ? (themeBgSeed || p.themeSeed) : sk.bgSeed) }}
+                              />
+                              <span>{t(`settings.theme.skin.${sk.id}`)}</span>
+                            </button>
+                          ))}
+                        </div>
+                        {themeBg === 'custom' && (
+                          <>
+                            <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
+                              <input
+                                type="color"
+                                value={themeBgSeed || '#f8f7f6'}
+                                onChange={(e) => setBgSeedValue(e.target.value)}
+                                aria-label={t('settings.theme.customBgLabel')}
+                                style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                              />
+                              <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>
+                                {themeBgSeed || t('settings.theme.customBgFollow')}
+                              </span>
+                              {themeBgSeed && (
+                                <button className="btn ghost sm" onClick={() => setBgSeedValue('')}>{t('settings.theme.customBgClear')}</button>
+                              )}
+                            </div>
+                            <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.customBgHint')}</div>
+                          </>
+                        )}
                       </div>
                     </section>
-                    {p.themeSkin === 'custom' && (
-                      <div className="field">
-                        <label>{t('settings.theme.customSeedLabel')}</label>
-                        <div className="field-row" style={{ alignItems: 'center', gap: 10 }}>
-                          <input
-                            type="color"
-                            value={p.themeSeed}
-                            onChange={(e) => {
-                              applyTheme(p.themeLang, 'custom', p.themeMode, { customColor: e.target.value })
-                              p.onSeedChange(e.target.value)
-                            }}
-                            aria-label={t('settings.theme.customSeedLabel')}
-                            style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-                          />
-                          <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{p.themeSeed}</span>
-                        </div>
-                      </div>
-                    )}
-                    {p.themeSkin === 'custom' && (
-                      <div className="field">
-                        <label>{t('settings.theme.customBgLabel')}</label>
-                        <div className="field-row" style={{ alignItems: 'center', gap: 10 }}>
-                          <input
-                            type="color"
-                            value={themeBgSeed || '#f8f7f6'}
-                            onChange={(e) => setBgSeedValue(e.target.value)}
-                            aria-label={t('settings.theme.customBgLabel')}
-                            style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-                          />
-                          <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>
-                            {themeBgSeed || t('settings.theme.customBgFollow')}
-                          </span>
-                          {themeBgSeed && (
-                            <button className="btn ghost sm" onClick={() => setBgSeedValue('')}>{t('settings.theme.customBgClear')}</button>
-                          )}
-                        </div>
-                        <div className="hint" style={{ marginTop: 4 }}>{t('settings.theme.customBgHint')}</div>
-                      </div>
-                    )}
                     <section className="settings-panel settings-theme-behavior">
                       <div className="settings-panel-head">
                         <span className="settings-panel-icon"><Layers3 size={16} /></span>
@@ -2515,29 +2609,41 @@ export const SettingsModal: React.FC<{
                         <div><strong>{t('settings.theme.typographyTitle')}</strong><p>{t('settings.theme.fontHint')}</p></div>
                       </div>
                       <div className="settings-font-list">
-                        {/* 字体三档:留空 = 跟随主题(主题自己可能就写的系统字体)。预设可选,也可直接敲任意 font-family。 */}
+                        {/* 字体三档:空 = 跟随主题(uiFont 一条声明都不出)。**只能选预设** ——
+                            预设字体随包内置(build/gen-fonts.cjs),不再依赖本机装没装;插件注册的字体
+                            与内置项同形,只是分到另一个 optgroup。 */}
                         {([
-                          ['ui', 'settings.theme.fontUi', SANS_FONTS],
-                          ['body', 'settings.theme.fontBody', SANS_FONTS],
-                          ['mono', 'settings.theme.fontMono', MONO_FONTS],
-                        ] as const).map(([slot, labelKey, list]) => (
-                          <label className="settings-font-row" key={slot} htmlFor={`font-${slot}`}>
-                            <span>{t(labelKey)}</span>
-                            <input
-                              id={`font-${slot}`}
-                              list={`font-list-${slot}`}
-                              value={fonts[slot]}
-                              placeholder={t('settings.theme.fontFollow')}
-                              onChange={(e) => setFont(slot, e.target.value)}
-                              style={{ fontFamily: fonts[slot] || undefined }}
-                            />
-                            <datalist id={`font-list-${slot}`}>
-                              {list.map((f) => (
-                                <option key={f} value={f}>{f === 'system-ui' || f === 'ui-monospace' ? t('settings.theme.fontSystem') : f}</option>
-                              ))}
-                            </datalist>
-                          </label>
-                        ))}
+                          ['ui', 'settings.theme.fontUi'],
+                          ['body', 'settings.theme.fontBody'],
+                          ['mono', 'settings.theme.fontMono'],
+                        ] as const).map(([slot, labelKey]) => {
+                          const list = listFonts(slot)
+                          const builtin = list.filter((f) => f.source === 'builtin')
+                          const fromPlugins = list.filter((f) => f.source !== 'builtin')
+                          const nameOf = (f: (typeof list)[number]): string =>
+                            f.labelKey ? t(f.labelKey as Parameters<typeof t>[0]) : (f.label ?? f.id)
+                          return (
+                            <label className="settings-font-row" key={slot} htmlFor={`font-${slot}`}>
+                              <span>{t(labelKey)}</span>
+                              {/* 预览就用选中项的栈本身,选完立刻能看出长什么样 */}
+                              <select
+                                id={`font-${slot}`}
+                                value={fonts[slot]}
+                                onChange={(e) => setFont(slot, e.target.value)}
+                                style={{ fontFamily: getFont(fonts[slot])?.stack || undefined }}>
+                                <option value="">{t('settings.theme.fontFollow')}</option>
+                                <optgroup label={t('settings.theme.fontGroupBuiltin')}>
+                                  {builtin.map((f) => <option key={f.id} value={f.id}>{nameOf(f)}</option>)}
+                                </optgroup>
+                                {fromPlugins.length > 0 && (
+                                  <optgroup label={t('settings.theme.fontGroupPlugin')}>
+                                    {fromPlugins.map((f) => <option key={f.id} value={f.id}>{nameOf(f)}</option>)}
+                                  </optgroup>
+                                )}
+                              </select>
+                            </label>
+                          )
+                        })}
                       </div>
                     </section>
                   </>
@@ -3013,6 +3119,22 @@ export const SettingsModal: React.FC<{
                       <div className="hint">{t('settings.developer.activityViewCmdHint')}</div>
                     </div>
                     <div className="field">
+                      <label className="inline-check">
+                        <input
+                          type="checkbox"
+                          checked={!!stored?.activeWindowEnabled}
+                          onChange={(e) => {
+                            const on = e.target.checked
+                            // 真源在主进程配置(默认拒的实现点就在那儿);⌘K 入口同步增删,免 reload。
+                            void window.tangu!.setConfig({ activeWindowEnabled: on }).then(setStored)
+                            setActiveWindowCommand(on)
+                          }}
+                        />
+                        {t('settings.developer.activeWindow')}
+                      </label>
+                      <div className="hint">{t('settings.developer.activeWindowHint')}</div>
+                    </div>
+                    <div className="field">
                       <button
                         className="btn ghost sm"
                         onClick={() => {
@@ -3028,6 +3150,10 @@ export const SettingsModal: React.FC<{
                           try { localStorage.removeItem(ACTIVITY_VIEW_KEY) } catch { /* ignore */ }
                           setActivityViewCmd(false)
                           setActivityViewCommand(false)
+                          // 前台窗口采样必须跟着关:它是主进程配置,唯一能关掉它的 UI 就是这个 tab,
+                          // 留着开 = 用户看不见的地方一直在采样,默认拒的信任故事当场破。
+                          void window.tangu?.setConfig?.({ activeWindowEnabled: false }).then(setStored)
+                          setActiveWindowCommand(false)
                           setDevMode(false)
                           setDevClicks(0)
                           goTab('about')

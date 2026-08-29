@@ -1,4 +1,5 @@
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
+import type { ActiveWindowSample } from '../../shared/activeWindow'
 
 /**
  * 思考强度七档 —— 与引擎的 `modelCapabilities.ThinkingLevel` 同款。
@@ -588,7 +589,9 @@ export interface DisplayFile {
 /** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模(H5/H8/B2)。 */
 export interface CtxInfo {
   ctxWindow: number
-  /** 'override' | 'model' | 'family' | 'default';后两档是猜的,UI 要标注 */
+  /** 'override' | 'model' | 'learned' | 'family' | 'default';family/default 是猜的,UI 要标注。
+   *  ⚠️ 新增来源要同时加进 Composer2 的白名单与 i18n 的 ctx.windowSource.* —— 白名单外的值
+   *  会被静默当成 'default' 显示成「128k 兜底」,标注反而变成假的。 */
   ctxWindowSource: string
   sections: Array<{ k: string; tokens: number }>
   files: string[]
@@ -770,6 +773,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   activityLogEnabled?: boolean
   /** 对外 MCP 端点开关(默认 false=关;开=主进程起本地 HTTP MCP server,外部 agent 可调桌面能力)。 */
   mcpEnabled?: boolean
+  /** 前台窗口采样接缝:开=插件可读「现在焦点在哪个 app」。默认关,入口只在开发者选项。 */
+  activeWindowEnabled?: boolean
   /** Agent Desk 演出面板:聊天右侧 agent 展示区。默认开,设置→高级可关。 */
   agentDeskEnabled?: boolean
   /** 任务概览里点来源/产物文件时开在哪:'tab'=新标签页(默认)、'desk'=Agent Desk 演出格。 */
@@ -863,6 +868,8 @@ declare global {
       unitsPairedRemove?(id: string): Promise<{ ok: boolean }>
       /** LAN 直连探针(主进程发,免 CORS):是台 unitWeb 就回 meta,否则 null。 */
       unitsProbeLan?(lanUrl: string): Promise<{ instanceId: string; name: string } | null>
+      /** P2P 直连打开设备:成了回本机代理地址;失败 reject(UI 回落中转)。 */
+      unitsP2pOpen?(id: string): Promise<{ url: string }>
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>
@@ -905,6 +912,8 @@ declare global {
       act?(event: string, detail?: Record<string, unknown>): void
       /** 导出近 days 天活动日志拼接文本。 */
       exportActivity?(days?: number): Promise<string>
+      /** 前台窗口采样(host-only 接缝)。主进程 activeWindowEnabled 关着时恒 null —— 默认拒。 */
+      activeWindow?(): Promise<ActiveWindowSample | null>
       /** 拖入文件 → 绝对路径(本机模式粘贴路径用)。 */
       getPathForFile?(file: File): string
       /** 本机工作区文件浏览(host cwd)。 */
@@ -942,6 +951,8 @@ declare global {
       startHostDrag?(filePath: string): void
       /** 拖 OS 文件/文件夹进 host 工作区目录 → 复制。 */
       copyHostFiles?(srcPaths: string[], destDir: string): Promise<{ copied: number }>
+      /** 复合笔记(X.md + X.fd)成对复制:整套共用一个可用 stem(逐件复制会把两半拆散)。 */
+      copyNoteBundles?(items: Array<{ md: string; fd?: string }>, destDir: string): Promise<{ copied: number }>
       /** 拖一行到文件夹 → 移动。 */
       moveHostPath?(srcPath: string, destDir: string): Promise<{ path: string }>
       // ── 内置浏览器 / 内置终端(builtins/)──
@@ -949,6 +960,12 @@ declare global {
       openExternal?(url: string): Promise<void>
       /** 拉外部日历订阅(.ics);走主进程绕开 CORS(订阅地址一律不发 CORS 头)。 */
       fetchIcs?(url: string): Promise<{ ok: boolean; text?: string; error?: string }>
+      /** 主页 Bing 壁纸目录(主进程固定目标代理,规避浏览器 CORS;不接受任意 URL)。 */
+      wallpaperListBing?(market?: string, count?: number): Promise<{
+        ok: boolean
+        items: Array<{ id: string; url: string; thumbnailUrl: string; title: string; copyright: string; startDate: string }>
+        error?: string
+      }>
       /** 主进程回投的外链;渲染层决定进内置浏览器还是系统浏览器。返回取消订阅。 */
       onOpenUrl?(cb: (url: string) => void): () => void
       /** 内置终端 PTY;spawn 失败(原生模块未就绪)返回 { error } 而非抛。 */
@@ -1001,6 +1018,7 @@ declare global {
       marketDetail?(id: string): Promise<MarketDetail>
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }>
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
+      marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string }>
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>
@@ -1237,6 +1255,8 @@ export interface MarketCard {
   author: string
   installSlug: string
   downloads: number
+  /** 卡片图标的绝对 URL（主进程已拼上 cloudUrl）。缺省/加载失败 → 回落类型字形。 */
+  iconUrl?: string | null
   latestTag?: string | null
   /** 可比较的最新版本(github=release tag,zip=manifest/手填 version);null=不参与「可更新」判断。 */
   latestVersion?: string | null
