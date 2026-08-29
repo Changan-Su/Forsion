@@ -14,7 +14,7 @@ import {
   useWorkspace, deleteNamedLayout, getActiveSpace, getView, label, spaceLayoutName,
 } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
-import { SpaceButton } from './spaces'
+import { SpaceButton } from './components/SpaceButton'
 import { parseSpaceJson, slugifyId, uniqueId, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
@@ -22,7 +22,9 @@ import { track } from './achievements/store'
 import { act } from './activity/log'
 import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
 
-const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus'] as const
+// 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
+// 更要留着 —— 否则关掉期间被别人占了 id,重新启用时两份 Space 撞车。
+const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus', 'calendar'] as const
 /** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。 */
 const SPACE_ICONS: Record<string, LucideIcon> = {
   bot: Bot, inbox: Inbox, mail: Mail, 'notebook-text': NotebookText, 'book-open': BookOpen, briefcase: Briefcase,
