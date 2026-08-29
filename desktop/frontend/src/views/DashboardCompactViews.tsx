@@ -10,10 +10,8 @@ import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { setAggCell, firstDateCol, type AggRow } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers } from '../amadeus/store/calendarMembers'
 import { useCalendarConfig, colorForDb, isHidden } from '../amadeus/store/calendarConfigStore'
-import { useTodoPrefs, prefsOf } from '../amadeus/store/todoPrefsStore'
 import { usePageStore } from '../amadeus/store/pageStore'
-import { centeredRange, windowTotal } from './calendar/todoWindow'
-import { fmtStamp, startOfDay, toLocalDate } from './calendar/dateUtils'
+import { startOfDay, toLocalDate } from './calendar/dateUtils'
 import { todoDueMeta } from './calendar/todoMeta'
 import { useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
@@ -24,34 +22,23 @@ const limitFor = (size: DashboardCardSize, compact = 4): number =>
   size === 'full' ? compact + 4 : size === 'lg' ? compact + 2 : compact
 
 export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
-  const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const members = useCalendarMembers()
-  const byVault = useTodoPrefs((s) => s.byVault)
-  const prefs = prefsOf(vault, byVault)
   const today = useMemo(() => startOfDay(new Date()), [])
+  // 摘要卡不认时间窗偏好(todoPrefs 已随待办视图重构下线):列出全部未完成,按到期排序。
   const rows = useMemo(() => {
-    const range = centeredRange(windowTotal(prefs.win, prefs.customDays), today)
-    const start = fmtStamp(range.start, true)
-    const end = fmtStamp(range.end, true)
     const out: Array<{ db: (typeof members)[number]['db']; row: AggRow; checkCol: string; due: ReturnType<typeof todoDueMeta> }> = []
     for (const member of members) {
       if (!member.checkboxCol) continue
       const checkCol = member.checkboxCol
       for (const row of member.db.rows) {
-        const done = row.cells[checkCol] === true
-        if (prefs.hideDone && done) continue
+        if (row.cells[checkCol] === true) continue
         const raw = typeof row.cells[member.dateCol] === 'string' ? String(row.cells[member.dateCol]) : ''
-        const parsed = raw ? parseCalDate(raw) : null
-        if (parsed) {
-          const day = parsed.start.slice(0, 10)
-          if (day < start || day > end) continue
-        }
         out.push({ db: member.db, row, checkCol, due: todoDueMeta(raw, today) })
       }
     }
     return out.sort((a, b) => a.due.sortTime - b.due.sortTime || a.row.name.localeCompare(b.row.name, 'zh'))
-  }, [members, prefs.customDays, prefs.hideDone, prefs.win, today])
-  const undone = rows.filter((item) => item.row.cells[item.checkCol] !== true).length
+  }, [members, today])
+  const undone = rows.length
   const shown = rows.slice(0, limitFor(size, 4))
   return (
     <div className="dash-compact dash-compact-list">
@@ -67,7 +54,7 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
             </button>
           )
         })}
-        {!shown.length && <div className="dash-compact-empty">这个时间窗里没有待办</div>}
+        {!shown.length && <div className="dash-compact-empty">没有待完成的待办</div>}
       </div>
       {rows.length > shown.length && <div className="dash-compact-more">还有 {rows.length - shown.length} 项</div>}
     </div>
