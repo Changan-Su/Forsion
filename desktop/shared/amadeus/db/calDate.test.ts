@@ -55,4 +55,20 @@ describe('seedCalendarDb', () => {
       if (v != null) expect(parseCalDate(v as string)).not.toBeNull()
     }
   })
+  // ⚠️ 种子日期必须相对播种当天算。写死绝对日期 → 过几周全部落进待办视图恒置顶的「逾期」桶,
+  //    用户第一眼看到的就是「逾期 53 天 欢迎使用 Calendar Space」。负对照:把 day(n) 改回
+  //    '2026-07-06' 之类的字面量,这条必须变红。
+  it('种子日期相对播种当天,永远不会一开箱就逾期', () => {
+    const seeded = new Date(2030, 0, 15)
+    const db = seedCalendarDb(seeded)
+    const dateCol = db.columns.find((c) => c.type === 'calendarDate')!
+    const floor = new Date(2030, 0, 15).getTime()
+    for (const r of db.rows) {
+      const v = r.cells[dateCol.id]
+      if (v == null) continue
+      const cd = parseCalDate(v as string)!
+      expect(new Date(cd.start.slice(0, 10)).getTime()).toBeGreaterThanOrEqual(new Date('2030-01-15').getTime())
+      expect(floor).toBeGreaterThan(0)
+    }
+  })
 })

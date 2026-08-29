@@ -11,6 +11,7 @@ import { linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePag
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
 import { assetKey, assetRefs } from '@amadeus-shared/assets'
 import type { BacklinkRef, SearchHit, TagCount } from '@amadeus-shared/ipc'
+import { parseMdTasks, type MdTask } from '@amadeus-shared/mdTasks'
 import type { VaultManager } from './vaultManager'
 
 interface Entry {
@@ -232,6 +233,17 @@ export class VaultIndex {
       out.push({ path: e.path, title: e.title, snippet: e.title })
     }
     out.sort((a, b) => a.title.localeCompare(b.title))
+    return out
+  }
+
+  /** 全库正文任务(只读)。索引已持有清洗后的全文(stripForIndex 只剥 frontmatter 与注释,
+   *  `- [ ]` 与 `#` 标题原样留着)且随 watcher 逐文件增量更新 —— 这里只遍历内存字符串,不读盘、
+   *  不碰 build()。解析口径单源在 @amadeus-shared/mdTasks。 */
+  tasks(): MdTask[] {
+    const out: MdTask[] = []
+    for (const e of [...this.entries.values()].sort((a, b) => a.path.localeCompare(b.path))) {
+      out.push(...parseMdTasks(e.text, e.path, e.title))
+    }
     return out
   }
 

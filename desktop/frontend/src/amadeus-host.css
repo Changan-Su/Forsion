@@ -1473,7 +1473,19 @@
 .amx-todo-group + .amx-todo-group { margin-top: 2px; }
 .amx-todo-ghead { width: 100%; display: flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--text-secondary, var(--text-muted)); font: inherit; padding: 5px 12px; cursor: pointer; }
 .amx-todo-ghead:hover { background: var(--bg-hover, var(--overlay-light)); }
-.amx-todo-caret { flex: none; color: var(--text-muted); }
+/* 折叠动画:与 base.css 的 .cm-advanced-reveal 同一惯用法(grid 行高 0fr↔1fr 可插值,
+   height:auto 不可)。内层必须 overflow 才收得住;用 `clip` 不用 `hidden` —— hidden 会被
+   后代的 scrollIntoView 顶歪(见 check:shellnoscroll 那条),clip 不会。
+   ⚠️ 两条实测教训,别加回去:
+   ① **不要叠 opacity 过渡**。实采曲线:73ms 时高度还剩 1/6、opacity 已经 0.23 ——
+      内容先消失、空盒子在后面慢慢收,比不做动画还难看。裁剪本身就是折叠的视觉,够了。
+   ② **不要用 --ease-spring / --ease-out**(0.2,0.8,… 与 0.16,1,…)。两条都极度前载:
+      24ms 就走掉 40% 高度,读起来是「啪一下 + 尾巴拖着」。折叠要的是匀速感,用标准缓动。 */
+.amx-todo-caret { flex: none; color: var(--text-muted); transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.amx-todo-ghead.is-open .amx-todo-caret { transform: rotate(90deg); }
+.amx-todo-reveal { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.amx-todo-reveal.is-open { grid-template-rows: 1fr; }
+.amx-todo-reveal-in { overflow: clip; min-height: 0; }
 .amx-todo-gname { font-weight: 600; font-size: 11.5px; flex: 1; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .amx-todo-gcount { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
@@ -1503,6 +1515,10 @@
 .amx-todo-due.muted { color: var(--text-faint, var(--text-muted)); }
 .amx-todo-jump { flex: none; color: var(--text-faint, var(--text-muted)); opacity: 0; }
 .amx-todo-item:hover .amx-todo-jump { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .amx-todo-caret, .amx-todo-reveal { transition: none; }
+}
 
 /* 底部常驻新建行(空态时也在:没有待办时它就是唯一的下一步动作) */
 .amx-todo-add { display: flex; align-items: center; gap: 7px; margin-top: 4px; padding: 5px 12px; color: var(--text-muted); }

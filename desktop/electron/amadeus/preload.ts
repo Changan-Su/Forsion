@@ -40,6 +40,7 @@ const api: AmadeusApi = {
   exclusiveAssets: (pagePath) => ipcRenderer.invoke(IPC.exclusiveAssets, pagePath),
   reindex: () => ipcRenderer.invoke(IPC.reindex),
   listTags: () => ipcRenderer.invoke(IPC.listTags),
+  listTasks: () => ipcRenderer.invoke(IPC.listTasks),
   pagesByTag: (tag) => ipcRenderer.invoke(IPC.pagesByTag, tag),
   deletePage: (pagePath) => ipcRenderer.invoke(IPC.deletePage, pagePath),
   movePage: (pagePath, destFolder) => ipcRenderer.invoke(IPC.movePage, pagePath, destFolder),
