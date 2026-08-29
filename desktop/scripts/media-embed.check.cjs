@@ -97,22 +97,41 @@ async function dragX(p, from, dx) {
 
 const vaultOf = (p) => p.evaluate(() => String(window.__upage.vault.get('Unified.md')))
 
-/** 把光标放进一个**新的空段落**(粘贴菜单只在空段里弹)。
- *  ⚠️ 点段落中心 + End 是**不稳的**:焦点还没就位时 End 走空,光标留在文档开头,回车于是把空段
- *  插在 `开篇` **前面** —— 后面粘贴落进非空段、菜单根本不弹,报出来是一片看不懂的红(实测反复)。
- *  段落是块级、右边一大片空白,点它的**右缘**必定落到行尾。落不成就当场记红,别让它往下传染。 */
+/** 把光标放到第一段的**行尾**,并**核实真的到了**(不到就重来一次)。
+ *  ⚠️ 点段落中心 + End 是不稳的:焦点还没就位时 End 走空,光标留在段首 —— 后面无论是回车切段
+ *  还是直接粘贴,结果都错位,报出来是一片看不懂的红(实测反复)。两道保险:点段落**右缘**
+ *  (块级元素右边一大片空白,必定落到行尾)+ 落点自检 + 重试一次。 */
+async function caretToLineEnd(p) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const el = await p.$(`${PM} > p`)
+    if (!el) return false
+    const box = await el.boundingBox()
+    await p.mouse.click(box.x + box.width - 3, box.y + box.height / 2)
+    await p.waitForTimeout(180)
+    await p.keyboard.press('End')
+    await p.waitForTimeout(120)
+    const ok = await p.evaluate((sel) => {
+      const s = window.getSelection()
+      const first = document.querySelector(`${sel} > p`)
+      if (!s || !s.anchorNode || !first || !first.contains(s.anchorNode)) return false
+      return s.anchorOffset === (s.anchorNode.textContent || '').length
+    }, PM)
+    if (ok) return true
+  }
+  record('(前置)光标落到首段行尾', false, '两次都没落到')
+  return false
+}
+
+/** 把光标放进一个**新的空段落**(粘贴菜单只在空段里弹)。 */
 async function caretInNewParagraph(p) {
-  const box = await (await p.$(`${PM} > p`)).boundingBox()
-  await p.mouse.click(box.x + box.width - 3, box.y + box.height / 2)
-  await p.waitForTimeout(150)
-  await p.keyboard.press('End')
+  if (!(await caretToLineEnd(p))) return false
   await p.keyboard.press('Enter')
   await p.waitForTimeout(250)
   const ok = await p.evaluate((sel) => {
     const ps = document.querySelectorAll(`${sel} > p`)
     return ps.length === 2 && !ps[1].textContent
   }, PM)
-  if (!ok) record('(前置)光标进到新空段落', false, '点位没落到段尾')
+  if (!ok) record('(前置)光标进到新空段落', false, '回车没切出空段')
   return ok
 }
 
@@ -338,12 +357,7 @@ async function main() {
   }
   {
     const p = await open(browser, '开篇')
-    // ⚠️ 与 caretInNewParagraph 同一个坑:点段落**中心** + End 不稳(焦点没就位时 End 走空,
-    // 光标留在段首,粘出来是 `<url>开篇`)。点右缘必定落到行尾。
-    const box = await (await p.$(`${PM} > p`)).boundingBox()
-    await p.mouse.click(box.x + box.width - 3, box.y + box.height / 2)
-    await p.waitForTimeout(150)
-    await p.keyboard.press('End')
+    await caretToLineEnd(p) // 同一道前置自检:落点错了粘出来是 `<url>开篇`,报出来看不懂
     await pasteText(p, YT) // 段落非空 → 正常粘贴,不该打断
     const st = await p.evaluate((sel) => ({ menu: !!document.querySelector('.paste-as-menu'), text: document.querySelector(sel).innerText }), PM)
     record('P5 段落非空时粘贴不弹菜单(别打断正常的行内粘贴)',

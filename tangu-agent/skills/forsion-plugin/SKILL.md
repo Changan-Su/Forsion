@@ -209,7 +209,7 @@ const s = ctx.tangu?.session?.()       // {contextWindow, contextTokens, session
 const buf = await fetch(`amadeus-asset://v/${encodeURIComponent(vaultRel)}`).then((r) => r.arrayBuffer())
 ```
 
-按 vault 夹紧(越界 403)、支持 Range、`<img>`/`<video>` 也能当 `src`。⚠️**需要 Forsion ≥ 2.8.1** —— 更早版本 CSP 的 `connect-src` 没放行它,症状是「`<img>` 能显示、fetch 一律 `Failed to fetch`」。文件让用户放进 `ctx.app.workFolder()`,`ctx.app.listFiles?.()` 列出来;**别随包分发大资产或有版权的第三方资产**。仪器:desktop 的 `npm run check:assetfetch`。
+按 vault 夹紧(越界 403)、支持 Range、`<img>`/`<video>` 也能当 `src`。⚠️**需要 Forsion ≥ 2.9.0**(CSP 的 connect-src 放行它是 2.9.0 才进的,2.8.1 及更早没有)—— 更早版本 CSP 的 `connect-src` 没放行它,症状是「`<img>` 能显示、fetch 一律 `Failed to fetch`」。文件让用户放进 `ctx.app.workFolder()`,`ctx.app.listFiles?.()` 列出来;**别随包分发大资产或有版权的第三方资产**。仪器:desktop 的 `npm run check:assetfetch`。
 
 CSP 是 `default-src 'self'`(没有 CDN),依赖一律 esbuild `bundle: true` 打进单文件。`main.js` **没有大小上限**。需要 disposer 时:
 

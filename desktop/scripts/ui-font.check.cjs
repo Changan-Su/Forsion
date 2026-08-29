@@ -38,7 +38,13 @@ function check(name, ok, detail) {
 const SRC = path.join(__dirname, '../frontend/src')
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
 require('sucrase/register/ts')
-const { buildFontCss } = require(path.join(SRC, 'uiFont.ts'))
+const { buildFontCss, resolveFontStack } = require(path.join(SRC, 'uiFont.ts'))
+
+// ⚠ 探针必须是**真预设 id**,不能是字面字体名:buildFontCss 走 resolveFontStack,认不出的 id
+//   会被当成「跟随主题」一条声明都不出 —— 那样全部断言都红,且红的是仪器不是功能(2026-08-29 修)。
+const UI_ID = 'inter', MONO_ID = 'jetbrains'
+const UI_STACK = resolveFontStack(UI_ID), MONO_STACK = resolveFontStack(MONO_ID)
+if (!UI_STACK || !MONO_STACK) throw new Error('探针预设不存在,先看 fontPresets.ts 的 BUILTIN')
 
 // 真源:base.css 的 token 底 + 两个 LCL 基座(lovable 带 [data-skin] 变体、soft 用 --font/--mono 词汇)。
 const CSS = [read('styles/base.css'), read('amadeus/theme/lcl/tangu.css'), read('amadeus/theme/lcl/tanguSoft.css')].join('\n')
@@ -86,24 +92,24 @@ const PROBES = ['plain', 'lovable', 'qbird', 'custom', 'soft']
   check('C 空覆盖不产出 CSS', buildFontCss({}) === '', `css=${JSON.stringify(buildFontCss({}))}`)
 
   // ── A 界面档穿透到每一层(含高特异性的 [data-skin] 变体) ──
-  await inject(buildFontCss({ ui: 'ProbeSans' }))
+  await inject(buildFontCss({ ui: UI_ID }))
   const ui = await readVars(['--font-ui', '--font'])
   for (const id of PROBES) {
-    check(`A ${id} 的 --font-ui 被盖住`, ui[id]['--font-ui'] === 'ProbeSans', `实得=${ui[id]['--font-ui']}`)
+    check(`A ${id} 的 --font-ui 被盖住`, ui[id]['--font-ui'] === UI_STACK, `实得=${ui[id]['--font-ui']}`)
   }
   check('B soft 基座的 --font 同步被盖(十几处直接 var(--font) 消费)',
-    ui.soft['--font'] === 'ProbeSans', `实得=${ui.soft['--font']}`)
+    ui.soft['--font'] === UI_STACK, `实得=${ui.soft['--font']}`)
 
   // 真正落到文字上,而不只是变量变了(var() 链断了照样白改)。
   const applied = await p.evaluate((ids) => Object.fromEntries(
     ids.map((id) => [id, getComputedStyle(document.getElementById(id)).fontFamily])), PROBES)
   check('A 变量确实传导到 font-family(body 继承 --font-ui)',
-    applied.plain.includes('ProbeSans'), `body=${applied.plain}`)
+    applied.plain.includes('Inter Variable'), `body=${applied.plain}`)
 
   // ── B 等宽档独立生效,且不误伤界面档 ──
-  await inject(buildFontCss({ mono: 'ProbeMono' }))
+  await inject(buildFontCss({ mono: MONO_ID }))
   const mono = await readVars(['--font-mono', '--mono', '--font-ui'])
-  check('B --font-mono 与 --mono 一起被盖', mono.soft['--font-mono'] === 'ProbeMono' && mono.soft['--mono'] === 'ProbeMono',
+  check('B --font-mono 与 --mono 一起被盖', mono.soft['--font-mono'] === MONO_STACK && mono.soft['--mono'] === MONO_STACK,
     `font-mono=${mono.soft['--font-mono']} mono=${mono.soft['--mono']}`)
   check('B 只设等宽时界面字体原样不动', mono.qbird['--font-ui'] === base.qbird['--font-ui'],
     `实得=${mono.qbird['--font-ui'].slice(0, 22)}`)

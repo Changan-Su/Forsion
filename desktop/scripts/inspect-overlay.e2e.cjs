@@ -389,6 +389,27 @@ async function main() {
       (await knifeOf()) === 'butterfly' && (await motionOf()) === 'custom',
       `knife=${await knifeOf()} motion=${await motionOf()}`)
 
+    // 绑定指向的文件从库里消失(删了 / 改名了 / agent 写到了别的库)——**必须看得见**。
+    // 08-29 用户就是被这一条坑住的:两个模型绑着一份不存在的 .motion.json,面板与设置页都装作没事。
+    await page.evaluate(() => window.__vault.delete('检视台/spin.motion.json'))
+    await page.evaluate(() => {
+      const host = document.createElement('div')
+      host.id = 'inspect-settings-host2'
+      document.body.appendChild(host)
+      window.__inspectSettingsDispose = window.__ep.settingsViews().find((v) => v.id === 'model-knife-bindings')?.mount(host)
+    })
+    await page.waitForTimeout(300)
+    const motionSel = page.locator('#inspect-settings-host2 .fi-binding-motion')
+    check('T29 绑定的文件从库里消失 → 设置页显示「⚠️ 文件已丢失」,不装作「内置」',
+      (await motionSel.inputValue()) === '检视台/spin.motion.json'
+        && (await motionSel.locator('option:checked').innerText()).includes('文件已丢失'),
+      await motionSel.locator('option:checked').innerText())
+    await page.evaluate(() => {
+      window.__inspectSettingsDispose?.()
+      document.getElementById('inspect-settings-host2')?.remove()
+    })
+    await page.evaluate((v) => window.__vault.set('检视台/spin.motion.json', v), FAKE_ASSETS['检视台/spin.motion.json'])
+
     // ⚠️冷启动竞速回归(这一轮的头号 P1):插件装载那一刻库还没恢复 → listFiles 给空数组,
     //   且**连一条 problems 都不产生**(静默)。修复前短按 F 这条路永不重读,整个会话都用内置刀 +
     //   内置动作,只有长按开面板或打开设置页才会碰巧自愈。同型事故 08-28 在青鸟收藏夹上真发生过。
@@ -423,7 +444,7 @@ async function main() {
     })
     await page.keyboard.type('f')
     await page.waitForTimeout(240)
-    check('T29 负对照:拆掉输入态守卫后,在输入框打 f 必须弹出来(证明 T13/T14 不是恒绿)',
+    check('T30 负对照:拆掉输入态守卫后,在输入框打 f 必须弹出来(证明 T13/T14 不是恒绿)',
       (await page.locator('.fi-hud').count()) === 1)
     await page.close()
   }
