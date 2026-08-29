@@ -38,11 +38,42 @@ async function salvageDraft(path: string, content: string): Promise<void> {
   }
 }
 
+/** 库外音视频 + 时刻锚:`<video>/<audio>` 加一层,收到 seek 就跳过去。
+ *  ⚠️ **元数据到齐之前写 `currentTime` 是静默无效的**(浏览器直接丢弃),必须等 `loadedmetadata`;
+ *     而它**只触发一次** —— 所以 effect 依赖 seek.nonce,元数据已就绪时直接赋值。
+ *  押后的监听必须能撤:seek 连变几次会堆叠出好几个 once 监听,元数据一到按注册序依次赋值,
+ *  中间那些都是**过期时刻**(MediaPlayer 里同款,那份是库内媒体的实现)。
+ *  刻意不自动 play:引用条是「带我去那一秒」,不是「开始放」;库内那条走 MediaPlayer 的
+ *  goto 会 play —— 那是笔记里点链接的语义,两边不必一致。 */
+const MediaSeek: React.FC<{ src: string; kind: 'video' | 'audio'; seek: { t: number; to?: number; nonce: number } | null }> = ({ src, kind, seek }) => {
+  const ref = useRef<HTMLMediaElement | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !seek) return
+    const go = (): void => { try { el.currentTime = seek.t } catch { /* 源未就绪,忽略 */ } }
+    if (el.readyState >= 1 /* HAVE_METADATA */) { go(); return }
+    el.addEventListener('loadedmetadata', go, { once: true })
+    return () => el.removeEventListener('loadedmetadata', go)
+  }, [src, seek?.t, seek?.nonce])
+  // 区间锚 `#t=95,120`:到点暂停(原生 loop 不认片段,W3C bug 12426 WONTFIX)。
+  // 与库内那条(MediaPlayer)同款 —— 只有一边有的话,同一个锚点在库内库外表现不同,是更难查的坑。
+  useEffect(() => {
+    const el = ref.current
+    const to = seek?.to
+    if (!el || !to) return
+    const onTime = (): void => { if (el.currentTime >= to) el.pause() }
+    el.addEventListener('timeupdate', onTime)
+    return () => el.removeEventListener('timeupdate', onTime)
+  }, [seek?.to])
+  const common = { ref: (el: HTMLMediaElement | null) => { ref.current = el }, src, controls: true, preload: 'metadata' as const }
+  return kind === 'video' ? <video {...common} /> : <audio {...common} />
+}
+
 /** 本机 .md 编辑器:frontmatter 原样保留(剥离喂 Milkdown、保存拼回);800ms debounce 原子写回;
  *  mtime 冲突(外部修改)→ 横幅问「重新加载 / 覆盖写入」,绝不静默覆盖;
  *  卸载冲刷失败/冲突 → 另存旁路文件 + toast(绝不静默丢弃)。
  *  「源码」模式在本组件内渲染(读活草稿),编辑↔源码切换不卸载、内容永远最新。 */
-const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; view: 'edit' | 'source'; onReload: () => void }> = ({ path, text, mtimeMs, view, onReload }) => {
+const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; view: 'edit' | 'source'; onReload: () => void; focusLine?: { line: number; end?: number; nonce: number } | null }> = ({ path, text, mtimeMs, view, onReload, focusLine }) => {
   const { t } = useI18n()
   const mode = useTheme((s) => s.mode)
   const flat = useTheme((s) => s.flat)
@@ -104,7 +135,8 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
       )}
       {saveErr && <div className="wsmd-banner danger"><FileWarning size={13} /><span>{t('preview.mdSaveFail', { err: saveErr })}</span></div>}
       {view === 'source' ? (
-        cm({ value: fm + bodyRef.current, fileName: path, wrap: false })
+        // 行号锚含 frontmatter 行(read_file 读的是整份磁盘文件),这里 value 恰好也是 fm+body → 对齐
+        cm({ value: fm + bodyRef.current, fileName: path, wrap: false, focusLine })
       ) : (
         /* Amadeus 契约 token 域(bridge 取色)+ 整篇 Milkdown 宿主 */
         <div className="am-app tangu-lovable wsmd-scope" data-mode={mode} data-flat={flat ? '1' : '0'}>
@@ -122,6 +154,18 @@ export function WsFileView({ leaf }: ViewProps) {
   const name = typeof leaf.params.name === 'string' && leaf.params.name
     ? leaf.params.name
     : (path ? path.split(/[/\\]/).pop() || path : '')
+  // 行号引用(聊天里的 [[path#L42]] 条):params 里的行号供冷挂载,已挂载的实例听
+  // amadeus:wsfile-goto 就地跳(pdf-goto 同款通路);nonce 让「滚走后再点同一条」也重新居中。
+  const pLine = typeof leaf.params.line === 'number' && leaf.params.line >= 1 ? Math.trunc(leaf.params.line) : null
+  const pEnd = typeof leaf.params.endLine === 'number' && leaf.params.endLine >= 1 ? Math.trunc(leaf.params.endLine) : undefined
+  const [focus, setFocus] = useState<{ line: number; end?: number; nonce: number } | null>(pLine ? { line: pLine, end: pEnd, nonce: 0 } : null)
+  // 媒体时刻引用(**库外**音视频的 `[[/abs/a.mp4#t=95]]`;库内走 amadeus-media 视图)。
+  // 独立于 focus 而不是塞进去:focus 的载荷是 `line: number`(要原样喂给 CodeMirror 的 focusLine),
+  // 而时刻锚没有行 —— 一个文件要么是文本要么是媒体,两者永不同时存在,合并只会把类型搅浑。
+  // nonce 纪律与 focus 一致:拖走进度条后再点同一条引用,要能再跳一次。
+  const pAt = typeof leaf.params.t === 'number' && leaf.params.t >= 0 ? leaf.params.t : null
+  const pTo = typeof leaf.params.tTo === 'number' && leaf.params.tTo > (pAt ?? 0) ? leaf.params.tTo : undefined
+  const [seek, setSeek] = useState<{ t: number; to?: number; nonce: number } | null>(pAt != null ? { t: pAt, to: pTo, nonce: 0 } : null)
 
   const target = useMemo<PreviewTarget | null>(() => {
     if (path) return hostTargetFor(path, name)
@@ -137,8 +181,45 @@ export function WsFileView({ leaf }: ViewProps) {
   const [data, setData] = useState<PreviewData | null>(null)
   const [tooLarge, setTooLarge] = useState<number | null>(null)
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
-  const [docView, setDocView] = useState<'preview' | 'source'>('preview') // html / 瞬态 markdown
-  const [mdMode, setMdMode] = useState<'edit' | 'source'>('edit')          // 本机 markdown
+  // 带行号锚打开的 .md/.html 直接落源码模式:行号只在源码视图里有落点(Milkdown/预览没有行的概念)。
+  const [docView, setDocView] = useState<'preview' | 'source'>(pLine ? 'source' : 'preview') // html / 瞬态 markdown
+  const [mdMode, setMdMode] = useState<'edit' | 'source'>(pLine ? 'source' : 'edit') // 本机 markdown
+  useEffect(() => {
+    if (!path) return
+    const onGoto = (e: Event): void => {
+      const d = (e as CustomEvent).detail as { path?: string; line?: number; endLine?: number; t?: number; tTo?: number; clear?: boolean } | undefined
+      if (!d || d.path !== path) return
+      // 普通方式(不带锚点)重开同一文件 → 清掉引用高亮,csv/diff 回表格/对比视图(Codex 二审);
+      // 不动 mdMode/docView:那两个有工具栏开关,用户自己切。
+      // ⚠️ **seek 也必须一起清**(Codex 三审):区间锚 `#t=95,120` 注册的 timeupdate 监听会一直
+      //    活着 —— 从文件面板普通打开同一段视频,播到 120 秒还是会自己停,而界面上没有任何东西
+      //    说明「还在区间模式」。这与「focus 只设不清 = 永久锁死」是同一个坑的第二种形态。
+      if (d.clear) {
+        setFocus(null)
+        setSeek(null)
+        // ⚠️ 活体 state 清了还不够:params 里的 line/t 是**冷挂载的真源**(刷新、布局恢复、
+        //    面板重挂都读它)—— 不一起清,普通重开之后只要来一次重挂,上一条引用的行号/区间
+        //    就又回来了(Codex 四审)。Desk 那条路不受影响(deskShowFile 整份换 view.params),
+        //    主区 openWsFile 的「已开就激活」分支只发事件不动 params —— 在视图里清是唯一
+        //    覆盖所有派发方的地方。setParams 自带逐键相等守卫,白清一次不产生重渲。
+        leaf.setParams({ line: undefined, endLine: undefined, t: undefined, tTo: undefined })
+        return
+      }
+      // 媒体时刻:就地 seek(同一份视频不重挂 = 不重新读整份字节)。放在行号判定**之前** ——
+      // 下面那条 `d.line` 守卫会把只带 t 的事件直接 return 掉。
+      if (typeof d.t === 'number' && d.t >= 0) {
+        setSeek((p) => ({ t: d.t!, to: typeof d.tTo === 'number' && d.tTo > d.t! ? d.tTo : undefined, nonce: (p?.nonce ?? 0) + 1 }))
+        return
+      }
+      if (typeof d.line !== 'number' || d.line < 1) return
+      setFocus((p) => ({ line: Math.trunc(d.line!), end: typeof d.endLine === 'number' && d.endLine >= 1 ? Math.trunc(d.endLine) : undefined, nonce: (p?.nonce ?? 0) + 1 }))
+      // 已开在预览/编辑模式的 markdown/html 收到行锚 → 切到源码,行号才有落地处(Codex 评审)
+      setMdMode('source')
+      setDocView('source')
+    }
+    window.addEventListener('amadeus:wsfile-goto', onGoto)
+    return () => window.removeEventListener('amadeus:wsfile-goto', onGoto)
+  }, [path])
   const [reloadNonce, setReloadNonce] = useState(0)
   const [wrap, setWrap] = useState(false)
   const [diffSide, setDiffSide] = useState(true)
@@ -250,8 +331,8 @@ export function WsFileView({ leaf }: ViewProps) {
   )
   else if (kind === 'image') body = blobUrl ? <ImageView src={blobUrl} alt={name} view={imgView} setView={setImgView} /> : null
   else if (kind === 'pdf') body = <PdfView bytes={data.bytes} download={target.download} />
-  else if (kind === 'video') body = <div className="wsfile-media">{blobUrl && <video src={blobUrl} controls />}</div>
-  else if (kind === 'audio') body = <div className="wsfile-media wsfile-audio">{blobUrl && <audio src={blobUrl} controls />}</div>
+  else if (kind === 'video') body = <div className="wsfile-media">{blobUrl && <MediaSeek src={blobUrl} kind="video" seek={seek} />}</div>
+  else if (kind === 'audio') body = <div className="wsfile-media wsfile-audio">{blobUrl && <MediaSeek src={blobUrl} kind="audio" seek={seek} />}</div>
   else if (kind === 'markdown') {
     if (mdEditable) body = (
       <MdFileEditor
@@ -261,15 +342,24 @@ export function WsFileView({ leaf }: ViewProps) {
         mtimeMs={data.mtimeMs}
         view={mdMode}
         onReload={() => setReloadNonce((n) => n + 1)}
+        focusLine={focus}
       />
     )
-    else if (specialMd || docView === 'source') body = cm({ value: text, fileName: name, wrap })
+    else if (specialMd || docView === 'source') body = cm({ value: text, fileName: name, wrap, focusLine: focus })
     else body = <div className="wsfile-doc msg-content"><Markdown content={text} /></div>
   }
-  else if (kind === 'json') { let pretty = text; try { pretty = JSON.stringify(JSON.parse(text), null, 2) } catch { /* keep raw */ } body = cm({ value: pretty, fileName: 'x.json', language: 'json', wrap }) }
-  else if (kind === 'code') body = cm({ value: text, fileName: name, wrap })
-  else if (kind === 'text') body = cm({ value: text, fileName: name, wrap })
-  else if (kind === 'diff') body = <DiffView text={text} side={diffSide} />
+  // json:带行号锚时**不 pretty**——引用的行号指向磁盘原文,重排缩进后行号全体错位。
+  else if (kind === 'json') {
+    let pretty = text
+    if (!focus) { try { pretty = JSON.stringify(JSON.parse(text), null, 2) } catch { /* keep raw */ } }
+    body = cm({ value: pretty, fileName: 'x.json', language: 'json', wrap, focusLine: focus })
+  }
+  else if (kind === 'code') body = cm({ value: text, fileName: name, wrap, focusLine: focus })
+  else if (kind === 'text') body = cm({ value: text, fileName: name, wrap, focusLine: focus })
+  // diff/csv 带行锚 → 保留磁盘行号的 CodeMirror(diff 视图/表格没有「第 N 行」可落;Codex 评审:
+  // read_file 对这些文本一样教 #L,引用点开必须有落点,不能开了却不定位)。
+  else if (kind === 'diff') body = focus ? cm({ value: text, fileName: name, wrap, focusLine: focus }) : <DiffView text={text} side={diffSide} />
+  else if (kind === 'csv' && focus) body = cm({ value: text, fileName: name, wrap, focusLine: focus })
   else if (kind === 'csv') {
     const rows = parseDelimited(text, ext === 'tsv' ? '\t' : ',')
     const capped = rows.slice(0, CSV_ROW_CAP); const header = capped[0] ?? []
@@ -285,7 +375,7 @@ export function WsFileView({ leaf }: ViewProps) {
   }
   else if (kind === 'html') body = docView === 'preview'
     ? <HtmlPreview path={path ?? target.path} text={text} title={name} nonce={reloadNonce} />
-    : cm({ value: text, language: 'html', wrap })
+    : cm({ value: text, language: 'html', wrap, focusLine: focus })
   else if (kind === 'docx') body = <DocxView bytes={data.bytes} download={target.download} />
   else if (kind === 'xlsx' || kind === 'pptx') {
     body = officeErr ? <OfficeFail t={t} download={target.download} />

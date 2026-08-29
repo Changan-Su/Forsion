@@ -150,6 +150,60 @@ export function unescapeWikiOutsideFences(md: string): string {
 }
 
 /**
+ * 把 remark 序列化出来的 URL 还原成**用户写的字面**。两件事,都只发生在「文档里新写/改过」之后
+ * (从磁盘读上来没动过的那份不经过序列化器,所以「打开旧笔记看着好好的」结构性照不到这两条):
+ *
+ * 1. **反转义**:gfm 的 autolink-literal 给纯文本里的 `://` / `www.` / `a@b` 加反斜杠,免得自己再
+ *    解析成自动链接。可这三种形态在 Amadeus 里都是**有意义的语法** —— `![[https://…]]` 网页嵌入、
+ *    `[[a.md]]` 双链目标、独占一行的裸 URL = 书签卡。带着反斜杠落盘 = `URL_RE` 与后缀判定全不匹配
+ *    (嵌入变「丢失」、书签卡变一行怪字),Obsidian 那边也打不开。
+ *    三条规则是 mdast-util-gfm-autolink-literal 那三条 `unsafe` 的**逐字逆运算**(带 before/after
+ *    上下文),不会误伤散文里别的反斜杠。
+ * 2. **脱尖括号**:URL 被解析成链接节点后,若裸写会需要转义(`https://www.…` 里的 `www.`),
+ *    mdast 就改用 autolink 形态 `<url>`。`![[<https://www.youtube.com/x>]]` 我们自己照样渲染
+ *    (`textContent` 里尖括号是语法不是文本),但**Obsidian 解析不了**,而且每次保存都在改字节。
+ *    只脱两处**没有歧义**的:`[[<url>` 开头,以及整行恰好是 `<url>`(那正是书签卡的字面)。
+ *
+ * 围栏与**行内代码**内一律不碰(反引号里的反斜杠是用户真写的字节,序列化器根本不碰那儿)。
+ *
+ * ⚠️ 两条明知的取舍,不是疏漏:
+ *  - 用户**故意**写 `https\://x` 阻止自动链接的,会被还原一次(此后稳定不再翻覆)。
+ *  - 整行恰好 `<url>` 会被剥成裸 URL。这是**二选一**:mdast 对「文字===地址」的链接节点就是
+ *    输出 `<url>`,不剥的话用户写的**裸 URL**(书签卡的正典字面,远比显式 autolink 常见)每次
+ *    保存都被改成 `<url>`。两头都churn,选churn得少的那头 —— 且两种字面在我们这儿渲染完全一致。
+ *
+ * 2026-08-29 由「粘贴为」与宽度把手的台架揪出;行内代码那条由 Codex 评审补上。
+ */
+export function normalizeUrlLiterals(md: string): string {
+  if (!md.includes('\\') && !md.includes('<')) return md
+  const lines = md.split('\n')
+  let fence: '`' | '~' | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
+    if (m) {
+      const mark = m[1][0] as '`' | '~'
+      if (!fence) fence = mark
+      else if (mark === fence) fence = null
+      continue
+    }
+    if (fence) continue
+    // ⚠️ **行内代码逐字保留**:``\`https\\://host\`` 是用户真写的字节(转义示例/正则示例),
+    // 序列化器根本不碰反引号里的内容,所以那里出现的反斜杠不是它加的,不许还原
+    // (Codex 2026-08-29)。按反引号切段,只处理段外。
+    lines[i] = lines[i]
+      .split(/(`+[^`]*`+)/)
+      .map((seg, k) => (k % 2 === 1 ? seg : seg
+        .replace(/(?<=[ps])\\:(?=\/)/g, ':')
+        .replace(/(?<=[Ww])\\\.(?=[-.\w])/g, '.')
+        .replace(/(?<=[+\-.\w])\\@(?=[-.\w])/g, '@')
+        .replace(/(\[\[)<(https?:\/\/[^>\s\]]+)>/g, '$1$2')))
+      .join('')
+      .replace(/^<(https?:\/\/[^>\s]+)>$/, '$1')
+  }
+  return lines.join('\n')
+}
+
+/**
  * Strip YAML frontmatter and all HTML comments (the invisible Amadeus block/layout
  * markers) so search snippets and indexed text never surface marker noise.
  */

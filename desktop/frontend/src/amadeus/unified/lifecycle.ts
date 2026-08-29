@@ -21,7 +21,10 @@ export interface UnifiedPipeHandle {
   /** 大纲跳转:把第 index 个标题滚进视野。⚠️ 这是**另一次**遍历(点击发生在渲染之后,期间文档
    *  可能已增删标题),故必须带上记录时的 text 复核:对不上就按文本找,再找不到就不跳 ——
    *  宁可不动,也不要静默跳到另一个标题上(Codex 评审 medium)。 */
-  revealHeading?: (index: number, text: string) => void
+  revealHeading?: (index: number, text: string, flash?: boolean) => void
+  /** 块锚跳转:把尾部挂着 `^<id>` 的那个块滚进视野。**找不到返回 false**(调用方据此重试/放弃,
+   *  同标题锚:宁可不动,绝不静默跳到别处)。`^id` 是 Obsidian 互操作格式,详见 pdfLink.ts。 */
+  revealBlock?: (id: string, flash?: boolean) => boolean
   /** 外来 frontmatter 原文(插件的每页数据存这儿)。v3 那份在 manifest.fmExtra,v4 在 pipe.fm 里。
    *  **只读**:写口本轮不做(不带 bind 的块表面上零消费者,且 v4 fm 写要与结构键派生同场竞技,
    *  见 docs/ToBeImproved/块表面v4适配方案_2026-08-20.md §6.3)。 */
@@ -113,11 +116,20 @@ export function unifiedInsertMarkdown(path: string, md: string, where: 'cursor' 
   return false
 }
 
-/** 大纲点击:让 path 上那篇把第 index 个标题(文本须为 text)滚进视野;没接住返回 false。 */
-export function unifiedRevealHeading(path: string, index: number, text: string): boolean {
+/** 块锚点击:让 path 上那篇把尾部挂着 `^id` 的块滚进视野。没有 v4 实例、或那篇里没有这个块 →
+ *  false(调用方 openNoteAtBlock 据此重试几拍再放弃 —— 实例挂上但 doc 还空是常态)。 */
+export function unifiedRevealBlock(path: string, id: string, flash = false): boolean {
+  for (const h of handles) if (h.path === path && h.revealBlock) return h.revealBlock(id, flash)
+  return false
+}
+
+/** 大纲点击:让 path 上那篇把第 index 个标题(文本须为 text)滚进视野;没接住返回 false。
+ *  flash:落点闪一下(聊天里的 `[[笔记#标题]]` 引用条走这条 —— 那处没有常驻高亮,不闪等于零反馈)。
+ *  大纲点击不传:那是用户自己在导航,知道自己点了哪条,不需要提醒。 */
+export function unifiedRevealHeading(path: string, index: number, text: string, flash = false): boolean {
   for (const h of handles) {
     if (h.path === path && h.revealHeading) {
-      h.revealHeading(index, text)
+      h.revealHeading(index, text, flash)
       return true
     }
   }

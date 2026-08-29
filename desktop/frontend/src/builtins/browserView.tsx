@@ -14,6 +14,17 @@ import type { ViewProps } from '@lcl/engine'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { useI18n } from '../i18n'
 
+/** 注进 guest 的引语高亮配色:Chromium 默认的 `::target-text` 是浅紫,与本应用引用高亮的琥珀不是
+ *  一套语汇 —— 网页引用点开落在哪一句,要和 PDF 引语带子、代码行高亮长一个样。
+ *  - `#ffe14d` = 批注调色板的「黄」,与 pdfAnnotator.css 的 `.pdfa-citehl-band` **同一支笔**。
+ *    第三方页面里没有本应用的 token,只能写字面值 —— 改色要两处同改。
+ *  - **底色与字色必须一起给**:目标页的正文可能是任何颜色,只改底色会在深色站点上变成黄底白字。
+ *    这里是**不透明**琥珀 + 近黑字(物理荧光笔那种),所以不适用「暗色禁用黄底」那条纪律 ——
+ *    那条针对的是半透明黄铺在深色面上糊成橄榄色,不透明覆盖不会。
+ *  - 高亮伪元素只吃 color / background-color / text-decoration / text-shadow 这几样,**动不了动画**,
+ *    所以网页落点没有别处那种提醒脉冲(原生高亮本身就是到达信号)。 */
+const TARGET_TEXT_CSS = '::target-text { background-color: #ffe14d; color: #111; }'
+
 /** 起始页:不联网、不追踪,纯提示。 */
 export const HOME_URL = 'about:blank'
 
@@ -42,6 +53,7 @@ export function shortTitle(url: string): string {
 /** 用到的 <webview> 方法子集(electron 的 WebviewTag 类型不在渲染层 tsconfig 里)。 */
 interface WebviewEl extends HTMLElement {
   loadURL(url: string): Promise<void>
+  insertCSS(css: string): Promise<string>
   getURL(): string
   getTitle(): string
   goBack(): void
@@ -95,6 +107,9 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       if (title) leaf.setTitle(title)
     }
     const onStart = (): void => { setLoading(true); setErr(null) }
+    // insertCSS 随文档走(换页就没了)→ 每次 dom-ready 补一次。同文档只换 fragment(引用条点第二条
+    // 引语)不触发 dom-ready,那时样式还在,正好不用重注。
+    const onDomReady = (): void => { void el.insertCSS(TARGET_TEXT_CSS).catch(() => {}) }
     // 补一次标题:page-title-updated 可能早于本 effect 挂载(file:// 之类瞬时加载)就已经烧过了。
     const onStop = (): void => {
       setLoading(false)
@@ -109,6 +124,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       setLoading(false)
       setErr(d.errorDescription || String(d.errorCode))
     }
+    el.addEventListener('dom-ready', onDomReady)
     el.addEventListener('did-start-loading', onStart)
     el.addEventListener('did-stop-loading', onStop)
     el.addEventListener('did-navigate', onNavigate)
@@ -116,6 +132,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
     el.addEventListener('page-title-updated', onTitle)
     el.addEventListener('did-fail-load', onFail)
     return () => {
+      el.removeEventListener('dom-ready', onDomReady)
       el.removeEventListener('did-start-loading', onStart)
       el.removeEventListener('did-stop-loading', onStop)
       el.removeEventListener('did-navigate', onNavigate)
@@ -124,6 +141,24 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
       el.removeEventListener('did-fail-load', onFail)
     }
   }, [leaf])
+
+  // 聊天网页引用条:同一页点第二条引语 → 就地跳(不重挂 webview = 不重下整页)。
+  // ⚠️ 必须走事件,不能靠 params:Agent Desk 的 DeskShimView 只按 key memo 出 leaf,
+  //    params 变化到不了已挂载的视图(PDF/WsFileView 同款坑,见 openPdfCitation 注释)。
+  // 只有 Desk 那份带 params.path(=去 fragment 的 URL),主区普通浏览器标签天然不接。
+  // 实测同文档换 fragment 也能触发文本片段定位(scripts/text-fragment.check.cjs 的 B),
+  // 所以直接 loadURL 就够,不必 reload 整页。
+  useEffect(() => {
+    const key = typeof params.path === 'string' ? params.path : ''
+    if (!key) return
+    const on = (e: Event): void => {
+      const d = (e as CustomEvent).detail as { path?: string; url?: string } | undefined
+      if (!d?.url || d.path !== key) return
+      void ref.current?.loadURL(d.url).catch(() => {})
+    }
+    window.addEventListener('amadeus:browser-goto', on)
+    return () => window.removeEventListener('amadeus:browser-goto', on)
+  }, [params.path])
 
   // 外部改 params.url(同一 tab 里被要求导航到别处)→ 跟着走。
   useEffect(() => {

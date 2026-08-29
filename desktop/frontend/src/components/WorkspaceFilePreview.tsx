@@ -98,8 +98,9 @@ export function unescapeXml(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, '&')
 }
 
-/** 懒加载的 CodeMirror 视图(代码 / JSON / 文本 / md·html 源码)。 */
-export const cm = (props: { value: string; fileName?: string; language?: string; wrap?: boolean }) => (
+/** 懒加载的 CodeMirror 视图(代码 / JSON / 文本 / md·html 源码)。
+ *  focusLine:滚到该行(段)并高亮 —— 聊天行号引用条的落点;nonce 变化 = 重新居中。 */
+export const cm = (props: { value: string; fileName?: string; language?: string; wrap?: boolean; focusLine?: { line: number; end?: number; nonce?: number } | null }) => (
   <div className="wsfile-cmwrap"><Suspense fallback={<Spinner />}><CodeView {...props} /></Suspense></div>
 )
 

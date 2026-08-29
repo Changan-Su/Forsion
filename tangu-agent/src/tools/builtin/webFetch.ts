@@ -363,7 +363,10 @@ export const webFetchProvider: ToolProvider = {
           name: 'web_fetch',
           description:
             'Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). ' +
-            'Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses.',
+            'Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. ' +
+            'When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: ' +
+            '`[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. ' +
+            'A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.',
           parameters: {
             type: 'object',
             properties: {
@@ -406,7 +409,10 @@ export const webFetchProvider: ToolProvider = {
           const isHtml = /html/.test(ctype);
           const conv = isHtml ? convertHtml(body) : null;
           const text = conv ? conv.text : body;
-          const header = `[${finalUrl.href}${truncated ? ' · body truncated at 2MB' : ''}]\n`;
+          const header = `[${finalUrl.href}${truncated ? ' · body truncated at 2MB' : ''}]\n`
+            // 引用锚点:与 read_file/read_document 同款「把可复制的具体形态印出来」——光在 description 里
+            // 教格式,模型会把 URL 缩写掉。引语放**链接文字**位,那里天生能有空格(URL 里得 %20,模型必忘)。
+            + `Cite for the user: [<a short phrase copied verbatim from the text below>](${finalUrl.href}) — the link text is the exact sentence the reader gets scrolled to.\n`;
           let clipped = text.length > maxChars ? text.slice(0, maxChars) + `\n…[truncated at ${maxChars} chars,需更多内容可调大 max_chars 或分段抓取]` : text;
           // JS 壳提示:脚本重、静态正文空 → 提示模型可换 browser_navigate(措辞留余地,误报时不至于带偏)
           if (conv && isLikelyJsShell(conv)) {

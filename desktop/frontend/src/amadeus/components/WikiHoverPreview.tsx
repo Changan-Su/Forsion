@@ -12,6 +12,8 @@ import { OverlayAt } from '../lib/clampMenu'
 
 const SHOW_DELAY = 400
 const MAX_CHARS = 2500
+const CARD_W = 380 // 与 .amx-hoverprev 的 width/max-height 同步
+const CARD_H = 300
 
 /** 按 2D 布局顺序拼接块内容(预览只要前一段,截断即可)。 */
 function clipContent(p: LoadedPage): string {
@@ -56,7 +58,12 @@ export function WikiHoverPreview() {
       clearTimer()
       const r = el.getBoundingClientRect()
       timer.current = window.setTimeout(() => {
-        setShow({ name, path, x: Math.min(r.left, window.innerWidth - 396), y: Math.min(r.bottom + 8, window.innerHeight - 320) })
+        // ⚠️ 贴底必须**翻转到链接上方**,不能只往上夹:夹完卡片会盖住链接本身 → 盖住指针 →
+        // 链接 mouseleave 关卡 → 指针又落回链接 → 再弹……无限闪烁(聊天气泡的引用条天然
+        // 在屏幕底部,一挂就中;编辑器里链接多在中部,这坑藏了很久)。
+        const below = r.bottom + 8
+        const y = below + CARD_H <= window.innerHeight - 8 ? below : Math.max(8, r.top - 8 - CARD_H)
+        setShow({ name, path, x: Math.min(r.left, window.innerWidth - CARD_W - 16), y })
       }, SHOW_DELAY)
       const cancel = (): void => {
         el.removeEventListener('mouseleave', cancel)

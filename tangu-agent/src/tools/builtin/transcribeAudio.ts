@@ -16,9 +16,36 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { forsionSharedDir } from '../../core/tanguHome.js';
 import { contentToText } from '../../mcp/toolBridge.js';
+import { citeRefFor } from '../documentPages.js';
+import { amadeusVaultPath } from './amadeus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
 const bridgeFile = (): string => path.join(forsionSharedDir(), 'desktop-bridge.json');
+
+/** 时刻引用锚点(2026-08-28,与 read_file/read_document/web_fetch 同款「把可原样复制的具体形态
+ *  印在输出里」)。转写是**唯一**会产出时间戳的工具 —— 这里不教,`#t=` 锚点就没人会写。
+ *  ⚠️ 只教**秒**:冒号形态里 `1:35` 在渲染端判非法(shared/amadeus/pdfLink.ts 的 npt,抄 Logseq
+ *     issue #9920 的血:`10:44` 会被读成 10 小时 44 分),让模型写冒号必然踩空。秒数本来就是
+ *     segments[].start 的原值,零换算。可读时间放别名位(`|01:35`),那里怎么写都不影响跳转。
+ *  ⚠️ 转写对象常常是从视频里抽出来的**临时音轨**,引它等于给用户一条点不开的路 —— 明说要引原件。 */
+function withCiteHint(out: string, audioPath: string): string {
+  let ref = audioPath;
+  try {
+    ref = citeRefFor(audioPath, amadeusVaultPath() || null, path.sep);
+  } catch { /* vault 配置缺失 → 用绝对路径,锚点照样可点 */ }
+  const hint = `Cite a moment for the user: [[${ref}#t=<start seconds>|<mm:ss>]], e.g. [[${ref}#t=95|01:35]]. ` +
+    'Seconds only after `t=` (a clock form like "1:35" is rejected); put the readable timestamp after the `|`. ' +
+    'If this file is a temporary audio track extracted from a video, cite the original video path instead. ' +
+    'Copy BOTH bracket pairs; it renders as a clickable chip that opens the media at that moment.';
+  // ⚠️ 本工具的输出契约是**一份 JSON**(`{text, segments}`),调用方会 JSON.parse ——
+  //    像 read_file 那样在尾巴上追加一行会把它变成非法 JSON(transcribeAudio.bridge.test 当场红)。
+  //    所以锚点作为一个字段塞进去,不动外层形状。
+  try {
+    const j = JSON.parse(out);
+    if (j && typeof j === 'object' && !Array.isArray(j)) return JSON.stringify({ ...j, cite: hint });
+  } catch { /* 后端没吐 JSON → 退回尾部追加,教了总比不教强 */ }
+  return `${out}\n\n${hint}`;
+}
 
 // ASR 可能真的很慢(长音频/本地模型冷启),给到 9min——仍在 registry 默认 600s 能力位之内。
 const CALL_TIMEOUT_MS = 540_000;
@@ -48,7 +75,8 @@ export const transcribeAudioProvider: ToolProvider = {
             'Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline ' +
             '(local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. ' +
             'Use this when a transcription script reports the media has no subtitle track and hands back an audio_path ' +
-            '(e.g. source:"needs_asr"). Requires the Forsion desktop app to be running.',
+            '(e.g. source:"needs_asr"). Requires the Forsion desktop app to be running. ' +
+            'With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.',
           parameters: {
             type: 'object',
             properties: {
@@ -84,7 +112,8 @@ export const transcribeAudioProvider: ToolProvider = {
             { timeout: CALL_TIMEOUT_MS, ...(ctx.signal ? { signal: ctx.signal } : {}) },
           );
           const { text, isError } = contentToText(result);
-          return isError ? `Error: ${text}` : text;
+          // 锚点提示只在**真有时间戳**时给:没有 segments 就没有秒数,教了只会诱发编造。
+          return isError ? `Error: ${text}` : args.timestamps === true ? withCiteHint(text, p) : text;
         } catch (e: any) {
           // 凭证防漏:错误可能回显 headers,截断(与 mcp/manager 同口径)。连接被拒 = 桌面没在跑。
           const msg = String(e?.message || e).slice(0, 300);

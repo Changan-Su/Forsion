@@ -15,6 +15,8 @@ import path from 'node:path';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
 import type { ToolProvider } from './toolRegistry.js';
 import { checkWritePath } from './fsPolicy.js';
+import { citeHitFor, citeHowFor, citeRefFor, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
+import { amadeusVaultPath } from './builtin/amadeus.js';
 
 const READ_MAX_CHARS = 100_000;
 const READ_MAX_LINES = 2000;
@@ -32,6 +34,21 @@ const IMAGE_MIME: Record<string, string> = {
 };
 const VIEW_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const READ_DOC_MAX_BYTES = 50 * 1024 * 1024; // ponytail: 文本型 PDF 足够;真要超大文档再调
+// LiteParse 默认 maxPages=1000,超了**不报错**,只静默丢掉尾页(Codex 用 1002 页夹具实测)。
+// 提到 5000 并在触顶时明说截断——页码报错比慢一点危险得多。
+const READ_DOC_MAX_PAGES = 5000;
+
+/** vault 根(配置缺失/损坏时 null —— 引用锚点退回文件名,绝不让 read_document 因此失败)。 */
+function vaultRootOrNull(): string | null {
+  try {
+    return amadeusVaultPath() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 上一次 read_document 的解析结果（键=路径+mtime+size+ino+ocr）。定位→读页是两趟调用，别重解析整本书。 */
+let docMemo: { key: string; pages: DocPage[] } | null = null;
 
 /** 按扩展名判定是否受支持的图片;非图片返回 null。 */
 function imageMimeForPath(p: string): string | null {
@@ -228,7 +245,10 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       function: {
         name: 'read_file',
         description: 'Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. ' +
-          'Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that "<number>\\t" prefix — old_string must match the file\'s RAW text, not the numbered view.',
+          'Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that "<number>\\t" prefix — old_string must match the file\'s RAW text, not the numbered view. ' +
+          'When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool\'s final output line and only change the line number / heading. ' +
+          'Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. ' +
+          'In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.',
         parameters: {
           type: 'object',
           properties: {
@@ -248,6 +268,12 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         return `${relDisplay(ctx, abs)} is an image file (${imgMime}); read_file returns text only. ` +
           'To view/recognize the image, call view_image with the same path.';
       }
+      // 视频同理——引导去 view_video(ffmpeg 抽帧)。工具可能因无 ffmpeg 不可见,给一句兜底。
+      if (/\.(mp4|mov|mkv|webm|avi|m4v|flv|wmv|mpg|mpeg)$/i.test(abs)) {
+        return `${relDisplay(ctx, abs)} is a video file; read_file returns text only. ` +
+          'To see it, call view_video with the same path (frame contact sheet; pass time:<seconds> for one detailed frame). ' +
+          'If view_video is unavailable (no ffmpeg on this machine), tell the user instead of retrying.';
+      }
       const offset = Number.isFinite(Number(args.offset)) && Number(args.offset) >= 0 ? Number(args.offset) : undefined;
       const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Number(args.limit) : undefined;
       let buf: Buffer;
@@ -256,7 +282,22 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       } catch {
         return `Error: file not found: ${args.path} (check the path with list_dir or glob_files)`;
       }
-      return paginate(buf.toString('utf-8'), offset, limit, relDisplay(ctx, abs));
+      // 末行引用锚点(2026-08-28,对齐 read_document 的经验):锚点必须是**可原样复制的具体路径**,
+      // 光在 description 里教格式,模型会自己缩写路径/丢括号。vault 内的 .md 教标题锚(笔记打开在
+      // Milkdown 编辑器里,行号无处落地;标题走大纲跳转);其余一律行号锚(GitHub #L 约定)。
+      const ref = citeRefFor(abs, vaultRootOrNull(), path.sep);
+      const text = buf.toString('utf-8');
+      // 块锚 `^abc` 只在文件里**真的有**的时候才教:那是 Obsidian 的格式,只有从那边导入的笔记
+      // 才带,本仓自己一行都不产 —— 无条件教 = 教出一堆点不动的死锚(教了模型就会用)。
+      const blockIds = /\.(md|markdown)$/i.test(abs) && /(?:^|\s)\^[A-Za-z0-9-]+[ \t]*$/m.test(text);
+      const hint = /\.(pdf|docx?|xlsx?|pptx?)$/i.test(abs)
+        ? '' // 二进制文档从这读只有乱码,别教人引用乱码 —— read_document 自带页码锚点
+        : /\.(md|markdown)$/i.test(abs) && ref !== abs
+          ? `\nCite for the user: [[${ref}#<heading text>]] (a heading line in this file)`
+            + (blockIds ? ` or [[${ref}#^<block id>]] (one of the \`^id\` markers at the end of a line above)` : '')
+            + ` or [[${ref}]] — copy BOTH bracket pairs; renders as a clickable chip.`
+          : `\nCite for the user: [[${ref}#L<n>]] or a range [[${ref}#L<a>-L<b>]] (line numbers as shown) — copy BOTH bracket pairs; renders as a clickable chip opening the file at that line.`;
+      return paginate(text, offset, limit, relDisplay(ctx, abs)) + hint;
     },
   },
 
@@ -501,6 +542,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
   // 文档阅读器：把 PDF（及装了 LibreOffice/ImageMagick 时的 docx/xlsx/pptx）抽成 markdown，
   // 让 agent 真正"读到"内容。read_file 读这类二进制只会吐乱码。引擎用 LiteParse（纯 JS，
   // PDF 走内置 PDFium 无需外部二进制；OCR 默认关，省去 tesseract 模型下载与扫描件的慢）。
+  // 输出按**真页码**分页（`--- page N ---`）：模型据此写 `[[file.pdf#page=N]]`，桌面端聊天里
+  // 渲染成可点的引用条，点开就是那一页（ChatGPT 式文件引用，2026-08-27）。
   read_document: {
     mode: 'host',
     capabilities: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 120_000 },
@@ -511,11 +554,21 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         description:
           'Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). ' +
           'PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. ' +
+          'The text is split into pages marked "--- page N ---" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: ' +
+          'search:"phrase" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:"12-18" to read that part in full. ' +
+          'When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool\'s output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. ' +
+          'Page anchors exist for PDFs only; for docx/xlsx/pptx the header prints a plain `[[<path>]]` form instead — use exactly what it prints, a `#page=` on those formats renders as a dead link. ' +
+          'Keep BOTH pairs of square brackets and the path verbatim, however long it is: `[[<path>#page=12]]`, not `[<path>#page=12]` and not a shortened name. ' +
+          'Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip showing "<file name> p.12" that opens the document at that page — the long path is never shown to the user, so do not try to shorten it. ' +
+          'Append `&q=<a short exact phrase>` (5-12 words copied verbatim from that page, no `&` inside) to also highlight that sentence when the reader opens it: `[[<path>#page=12&q=the aim of this book is]]`. ' +
+          'The highlight is temporary on screen — nothing is written into the file — so a phrase that fails to match simply lands on the page with no highlight. ' +
           'Text-based PDFs need no OCR; for scanned/image-only PDFs set ocr:true (slower, fetches a small OCR model on first use).',
         parameters: {
           type: 'object',
           properties: {
             path: { type: 'string', description: 'Document file path (relative to cwd or absolute), e.g. report.pdf' },
+            pages: { type: 'string', description: 'Read only these pages: "12", "12-18" or "3,7,9-11" (default: the whole document, truncated)' },
+            search: { type: 'string', description: 'Instead of the text, return the lines containing this phrase with their page numbers (literal substring, case-insensitive)' },
             ocr: { type: 'boolean', description: 'Enable OCR for scanned/image-only PDFs (default false; off is faster and lighter)' },
           },
           required: ['path'],
@@ -529,33 +582,70 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (imageMimeForPath(abs)) {
         return `${relDisplay(ctx, abs)} is an image — use view_image to see it; read_document is for PDF/Office documents.`;
       }
-      let size: number;
+      const spec = String(args.pages ?? '').trim();
+      const want = spec ? pageFilter(spec) : null;
+      if (spec && !want) return `Error: pages must look like "12", "12-18" or "3,7,9-11" (got "${spec}").`;
+      const search = String(args.search ?? '').trim();
+      let stat: { size: number; mtimeMs: number; ino: number };
       try {
-        size = (await fs.stat(abs)).size;
+        stat = await fs.stat(abs);
       } catch {
         return `Error: file not found: ${rawPath}`;
       }
-      if (size > READ_DOC_MAX_BYTES) {
-        return `Error: document too large (${(size / 1024 / 1024).toFixed(1)}MB, limit ${Math.round(READ_DOC_MAX_BYTES / 1024 / 1024)}MB).`;
+      if (stat.size > READ_DOC_MAX_BYTES) {
+        return `Error: document too large (${(stat.size / 1024 / 1024).toFixed(1)}MB, limit ${Math.round(READ_DOC_MAX_BYTES / 1024 / 1024)}MB).`;
       }
-      let LiteParse: any;
-      try {
-        ({ LiteParse } = await import('@llamaindex/liteparse'));
-      } catch {
-        return 'Error: document parsing dependency @llamaindex/liteparse is not installed. Run `npm i @llamaindex/liteparse` inside the Tangu-Agent package and restart.';
-      }
-      try {
-        const parser = new LiteParse({ outputFormat: 'markdown', ocrEnabled: args.ocr === true });
-        const result = await parser.parse(abs);
-        const md = String(typeof result === 'string' ? result : result?.text ?? result?.markdown ?? '').trim();
-        if (!md) {
-          return `Parsed but no text extracted: ${relDisplay(ctx, abs)} may be a scanned/image-only PDF.` +
-            (args.ocr === true ? ' (still empty with OCR enabled)' : ' Retry with ocr:true to run OCR.');
+      // 定位→读页 是两趟调用，每趟重解析一遍整本书太亏；上一份解析结果留着（换文档即失效）。
+      // ponytail: 单条备忘 + 整本解析。想只解析某几页可以走 LiteParse 的 targetPages，
+      // 但那样 search 和 pages 就成了两条码路——真遇到大到解析不起的文档再拆。
+      // 备忘键带 size+ino:同步/备份还原可以保留原 mtime 换掉内容,只认 mtime 会一直吐旧正文(Codex)。
+      const memoKey = `${abs}|${stat.mtimeMs}|${stat.size}|${stat.ino}|${args.ocr === true}`;
+      let pages = docMemo?.key === memoKey ? docMemo.pages : null;
+      if (!pages) {
+        let LiteParse: any;
+        try {
+          ({ LiteParse } = await import('@llamaindex/liteparse'));
+        } catch {
+          return 'Error: document parsing dependency @llamaindex/liteparse is not installed. Run `npm i @llamaindex/liteparse` inside the Tangu-Agent package and restart.';
         }
-        return `# ${path.basename(abs)}\n\n` + truncateOutput(md);
-      } catch (e: any) {
-        return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
+        try {
+          const parser = new LiteParse({ outputFormat: 'markdown', ocrEnabled: args.ocr === true, quiet: true, maxPages: READ_DOC_MAX_PAGES });
+          const result = await parser.parse(abs);
+          const md = String(typeof result === 'string' ? result : result?.text ?? result?.markdown ?? '').trim();
+          const parsed = Array.isArray(result?.pages) ? result.pages : [];
+          // pages 缺席 → 整篇当一页，页码标记退化但正文照给。
+          // ⚠️ 会走到这的是 txt/md/csv 这类被 liteparse 直接吃掉的;docx/xlsx/pptx 只要装了
+          //    LibreOffice 就有**真 pages**（实测）。别拿本行当「非 PDF 没有页码」的依据 ——
+          //    教不教页码锚一律**按后缀**判(documentPages.citeHowFor,理由写在那儿)。
+          pages = parsed.length ? pagesOf(md, parsed) : md ? [{ page: 1, text: md }] : [];
+          docMemo = { key: memoKey, pages };
+        } catch (e: any) {
+          return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
+        }
       }
+      if (!pages.length || !pages.some((p) => p.text)) {
+        return `Parsed but no text extracted: ${relDisplay(ctx, abs)} may be a scanned/image-only PDF.` +
+          (args.ocr === true ? ' (still empty with OCR enabled)' : ' Retry with ocr:true to run OCR.');
+      }
+      // 引用锚点:同名 PDF 在库里可能有好几份,只给文件名的话点开的可能是另一份 —— vault 内一律
+      // 给**vault 相对路径**(渲染层按整路径精确匹配),vault 外给**绝对路径**(桌面端只读打开)。
+      const citeRef = citeRefFor(abs, vaultRootOrNull(), path.sep);
+      const capped = pages.length >= READ_DOC_MAX_PAGES ? ` — ⚠️ only the first ${READ_DOC_MAX_PAGES} pages were parsed` : '';
+      const head = `# ${path.basename(abs)} (${pages.length} pages${capped}) — ${citeHowFor(abs, citeRef)}\n\n`;
+      if (search) {
+        const { hits, total } = grepPages(pages, search);
+        if (!total) return `${head}No line contains "${search}". It is a literal substring match — try another wording, or read pages directly.`;
+        return `${head}${total} matching line(s) for "${search}"${hits.length < total ? `, first ${hits.length}` : ''}:\n\n` +
+          hits.join('\n') +
+          `\n\nRead a hit in context with pages:"<n>" (or a range), and cite it as ${citeHitFor(abs, citeRef)}.`;
+      }
+      if (want) {
+        const picked = pages.filter((p) => want(p.page));
+        if (!picked.length) return `${head}No such page in this document (it has pages 1-${pages[pages.length - 1].page}).`;
+        return head + truncateOutput(renderPages(picked), 16_000, 2_000);
+      }
+      return head + truncateOutput(renderPages(pages)) +
+        `\n\n(Truncated above? Use search:"phrase" to locate, then pages:"12-18" to read that part in full.)`;
     },
   },
 };

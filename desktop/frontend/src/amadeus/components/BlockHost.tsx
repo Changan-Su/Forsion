@@ -8,6 +8,10 @@ import { stripPageBasename } from '@amadeus-shared/compiler/names'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
+// 音视频后缀与时刻锚解析共用 shared 一份(三条分类链免得再漂;那份刻意不含 mkv|avi)。
+import { parseMediaLinkInner, VIDEO_EXT_RE, mediaLabel, embedUrlOf} from '@amadeus-shared/pdfLink'
+import { MediaPlayer } from './MediaPlayer'
+import { WebEmbed } from './WebEmbed'
 import type { EmbedResolved } from '@amadeus-shared/ipc'
 import { getBlockType } from '../blocks/registry'
 import { DatabaseEmbed } from '../blocks/database/DatabaseEmbed'
@@ -18,6 +22,7 @@ import { parseButtonBlock, serializeButtonBlock } from '../blocks/button/format'
 import { useBlockSelection } from '../store/blockSelection'
 import { OverlayAt } from '../lib/clampMenu'
 import { OverlayPortal } from '../lib/overlayPortal'
+import { attachResizeHandle } from '../lib/imageResize'
 import { usePageStore, useScopedPageStore } from '../store/pageStore'
 import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
 import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
@@ -54,8 +59,6 @@ const FILE_EXT_RE = /\.[a-z0-9]{1,8}$/i
 const DB_EXT_RE = /\.db$/i
 /* 可内联预览的文件类型(经 amadeus-asset:// 协议;PDF 用 Chromium 内置阅读器,音视频靠协议的 Range 支持 seek)。 */
 const PDF_EXT_RE = /\.pdf$/i
-const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i
-const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|flac)$/i
 
 /** 嵌入块“二次选中”时,预览上方浮出的可编辑源码行(![[目标]])。回车/失焦提交→重解析,Esc 取消。
  *  刻意用原生 <input>(非 mini 编辑器):就一行链接文本,所见即所得改目标即可。 */
@@ -182,9 +185,18 @@ export const BlockHost = memo(function BlockHost({
     return { url: toAssetUrl(p), width: w && /^\d+$/.test(w) ? Number(w) : undefined, name: p }
   }, [embedTarget])
 
+  // `![[https://…]]` → 网页嵌入(冻结封面 → 唤醒)。与 v4 embedLayer 同源:不加这一支,
+  // 同一份 md 在仪表盘卡片里会掉到跨笔记分支变成「嵌入丢失」。
+  const webUrl = useMemo(() => {
+    // ⚠️ 走 embedUrlOf(整条 target,只剥末段宽度)——`split('|')[0]` 会把 `?q=a|b` 这类合法 URL
+    // 拦腰截断,而「转为书签卡」再把截断的那半条写回正文 = 永久丢失(与另两条链同源)。
+    const t = embedUrlOf(embedTarget || '')
+    return t && !IMG_EXT_RE.test(t) ? t : null
+  }, [embedTarget])
+
   // `![[xxx.db]]` → Database 嵌入(交互式表格,数据在独立 .db 文件;必须先于 embedFile 判定)。
   const embedDb = useMemo(() => {
-    if (!embedTarget || embedImage) return null
+    if (!embedTarget || embedImage || webUrl) return null
     const [rawPath, viewName] = embedTarget.split('|') // `![[tasks.db|看板]]` 的管道段 = 激活视图名(存笔记 md,不碰 .db)
     const t = rawPath.trim()
     if (t.includes('#') || !DB_EXT_RE.test(t)) return null
@@ -194,33 +206,55 @@ export const BlockHost = memo(function BlockHost({
   // `![[画板.excalidraw]]` → Excalidraw 画板(文件其实是 `画板.excalidraw.md`,Obsidian 链接省略 .md 的
   // 惯例;主进程解析 ref 时会补回来)。同 embedDb:必须先于 embedFile 判定,否则被文件卡吃掉。
   const embedDraw = useMemo(() => {
-    if (!embedTarget || embedImage || embedDb) return null
+    if (!embedTarget || embedImage || webUrl || embedDb) return null
     const t = embedTarget.split('|')[0].trim()
     return !t.includes('#') && isDrawingPath(t) ? t : null
-  }, [embedTarget, embedImage, embedDb])
+  }, [embedTarget, embedImage, webUrl, embedDb])
 
   // 插件声明的文件类型嵌入(如 `![[x.mindmap.md]]`)→ 插件自渲染只读预览块。必须先于 embedFile,否则被文件卡吃掉。
   const embedPlugin = useMemo(() => {
-    if (!embedTarget || embedImage || embedDb || embedDraw) return null
+    if (!embedTarget || embedImage || webUrl || embedDb || embedDraw) return null
     // 先拿**完整 target** 问一次插件 matcher:`#` 和 `|` 也可以是文件夹/文件名的一部分
     // (笔记 `C# 日记.md` → `![[C# 日记.fd/x.mindmap.md]]`),无条件按 `#`/`|` 切断会把它误判成块锚点/别名
     // 而拒绝渲染(Codex)。完整串仍以插件声明的后缀结尾,足以与真正的 `file#block` 区分。
     const raw = embedTarget.trim()
     if (findEmbedRenderer(embedRenderers, raw)) return raw
     const t = raw.split('|')[0].trim()
-    if (t.includes('#')) return null
-    return findEmbedRenderer(embedRenderers, t) ? t : null
-  }, [embedTarget, embedImage, embedDb, embedDraw, embedRenderers])
+    // 有 `#` 时只对**媒体锚点**剥 base(与 v4 embedLayer 同源):否则插件永远认领不了
+    // `![[a.mp4#t=95]]`。`C# 日记.md` 这种文件名含 `#` 的仍拿不到 base,维持原样。
+    const base = t.includes('#') ? parseMediaLinkInner(t)?.target ?? null : t
+    return base && findEmbedRenderer(embedRenderers, base) ? base : null
+  }, [embedTarget, embedImage, webUrl, embedDb, embedDraw, embedRenderers])
 
   // Non-image file (has an extension, no block anchor) → inline preview (pdf/video/audio) or file card.
   const embedFile = useMemo(() => {
-    if (!embedTarget || embedImage || embedDb || embedDraw || embedPlugin) return null
+    if (!embedTarget || embedImage || webUrl || embedDb || embedDraw || embedPlugin) return null
     const t = embedTarget.split('|')[0].trim()
     // 裸 `.md` 是笔记,不是文件卡(与 v4 embedLayer 同源判定;见 isPlainNoteRef)。
-    if (t.includes('#') || isPlainNoteRef(t) || !FILE_EXT_RE.test(t)) return null
-    const kind = PDF_EXT_RE.test(t) ? 'pdf' : VIDEO_EXT_RE.test(t) ? 'video' : AUDIO_EXT_RE.test(t) ? 'audio' : 'other'
-    return { name: t, kind, url: kind === 'other' ? '' : toAssetUrl(t) }
-  }, [embedTarget, embedImage, embedDb, embedDraw, embedPlugin])
+    if (isPlainNoteRef(t)) return null
+    // 音视频(带或不带 `#t=` 时刻锚)—— 对 `#` 闸的精确开孔,判定与 v4 embedLayer 逐字同源。
+    const media = parseMediaLinkInner(t)
+    if (media) {
+      return {
+        name: media.target,
+        kind: VIDEO_EXT_RE.test(media.target) ? 'video' : 'audio',
+        url: toAssetUrl(media.target),
+        loc: media.loc,
+        badAnchor: t.includes('#') && !media.loc,
+      }
+    }
+    if (t.includes('#') || !FILE_EXT_RE.test(t)) return null
+    const kind = PDF_EXT_RE.test(t) ? 'pdf' : 'other'
+    return { name: t, kind, url: kind === 'other' ? '' : toAssetUrl(t), loc: null, badAnchor: false }
+  }, [embedTarget, embedImage, webUrl, embedDb, embedDraw, embedPlugin])
+  // 图片块选中 → 挂右缘缩放把手;松手把新宽度写回 `![[名|W]]`(与行内图片同一枚把手)。
+  const imgWrapRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    const wrap = imgWrapRef.current
+    const el = wrap?.firstElementChild as HTMLElement | null
+    if (!wrap || !el || !embedImage || !selected || readOnly) return
+    return attachResizeHandle(wrap, el, (w) => setBlockContent(blockId, `![[${embedImage.name}|${w}]]`))
+  }, [embedImage, selected, readOnly, blockId, setBlockContent])
   const [previewOpen, setPreviewOpen] = useState(true)
   // PDF 嵌入:链接目标(可能是裸文件名)→ vault 路径,给只读阅读器读字节;解析不出退回 iframe。
   const vaultFiles = usePageStore((s) => s.files)
@@ -245,7 +279,7 @@ export const BlockHost = memo(function BlockHost({
   // Resolve a cross-note embed; re-resolve when the link graph changes (source edited externally).
   const [embed, setEmbed] = useState<EmbedResolved | null | 'loading'>('loading')
   useEffect(() => {
-    if (!embedTarget || embedImage || embedDb || embedDraw || embedPlugin || embedFile) return
+    if (!embedTarget || embedImage || webUrl || embedDb || embedDraw || embedPlugin || embedFile) return
     let alive = true
     setEmbed('loading')
     amadeus
@@ -259,7 +293,7 @@ export const BlockHost = memo(function BlockHost({
     return () => {
       alive = false
     }
-  }, [embedTarget, embedImage, embedDb, embedDraw, embedPlugin, embedFile, linkVersion])
+  }, [embedTarget, embedImage, webUrl, embedDb, embedDraw, embedPlugin, embedFile, linkVersion])
 
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
     useSortable({ id: blockId })
@@ -459,13 +493,25 @@ export const BlockHost = memo(function BlockHost({
         {gutter}
         {embedSrcLine}
         <div className="block-body embed-image-body">
-          <img
-            className="embed-image"
-            src={embedImage.url}
-            alt={embedImage.name}
-            draggable={false}
-            style={embedImage.width ? { width: embedImage.width } : undefined}
-          />
+          {/* 包一层定位父级,给缩放把手落脚(与行内图片同一枚把手、同一套 CSS)。 */}
+          <span className="wiki-inline-img-wrap" ref={imgWrapRef}>
+            <img
+              className="embed-image"
+              src={embedImage.url}
+              alt={embedImage.name}
+              draggable={false}
+              style={embedImage.width ? { width: embedImage.width } : undefined}
+              // 单击 = 选中本块(复制/剪切/删除随块选中态白拿);双击 = 露源码行。
+              // 窗口捕获期那道 dblclick 无 shift 就早退,且注释里明说本体的普通双击留给组件自己 → 不冲突。
+              onMouseDown={(e) => {
+                if (e.button !== 0) return
+                e.preventDefault()
+                ;(document.activeElement as HTMLElement | null)?.blur?.()
+                useBlockSelection.getState().select(blockId)
+              }}
+              onDoubleClick={() => !readOnly && useBlockSelection.getState().setActiveEmbed(blockId)}
+            />
+          </span>
         </div>
         {blockMenuNode}
       </div>
@@ -473,6 +519,30 @@ export const BlockHost = memo(function BlockHost({
   }
 
   // --- 裸 URL 块 → 书签卡(✎ 就地改地址;删除走块菜单) ---
+  if (webUrl) {
+    return (
+      <div
+        ref={setNodeRef}
+        className="block-host"
+        data-block-id={blockId}
+        data-selected={selected || undefined}
+        data-embed
+        data-menu={blockMenu ? '' : undefined}
+        data-dragging={isDragging || undefined}
+        style={{ transform: CSS.Translate.toString(transform), transition }}
+        onContextMenu={onCtxMenu}
+        onFocusCapture={onBlockFocus}
+      >
+        {isDropTarget && <div className="drop-line" />}
+        {blockEdges}
+        {gutter}
+        {embedSrcLine}
+        <div className="block-body">
+          <WebEmbed url={webUrl} toCard={() => setBlockContent(blockId, webUrl)} />
+        </div>
+      </div>
+    )
+  }
   if (bookmarkUrl) {
     return (
       <div
@@ -653,6 +723,8 @@ export const BlockHost = memo(function BlockHost({
                   {embedFile.kind === 'pdf' ? '📕' : embedFile.kind === 'video' ? '🎬' : '🎵'}
                 </span>
                 <span className="embed-file-name">{embedFile.name}</span>
+                {embedFile.loc && <span className="embed-media-at" title="起播时刻">@{mediaLabel(embedFile.loc.at)}</span>}
+                {embedFile.badAnchor && <span className="embed-media-warn">锚点无效 · 从 0 秒起播</span>}
                 <button className="embed-media-btn" onClick={() => setPreviewOpen((o) => !o)}>
                   {previewOpen ? '收起' : '展开'}
                 </button>
@@ -680,11 +752,11 @@ export const BlockHost = memo(function BlockHost({
                   <iframe className="embed-pdf" src={embedFile.url} title={embedFile.name} />
                 )
               )}
-              {previewOpen && embedFile.kind === 'video' && (
-                <video className="embed-video" src={embedFile.url} controls preload="metadata" />
-              )}
-              {previewOpen && embedFile.kind === 'audio' && (
-                <audio className="embed-audio" src={embedFile.url} controls preload="metadata" />
+              {previewOpen && (embedFile.kind === 'video' || embedFile.kind === 'audio') && (
+                <MediaPlayer
+                  kind={embedFile.kind} url={embedFile.url} name={embedFile.name}
+                  pagePath={pagePath} loc={embedFile.loc ?? null}
+                />
               )}
             </div>
           )}

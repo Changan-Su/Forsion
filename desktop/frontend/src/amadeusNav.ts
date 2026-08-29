@@ -4,7 +4,8 @@
 import { activePageScope, pageStoreFor, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
-import { hasUnifiedInstance } from '@amadeus/unified/lifecycle'
+import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading } from '@amadeus/unified/lifecycle'
+import { findHeadingIndex } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
 import { BLANK_SCENE_JSON, blankDrawing, isDrawingPath } from '@amadeus-shared/excalidraw/format'
@@ -68,6 +69,52 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
   await waitForActive(path)
 }
 
+/** 打开笔记并滚到标题(聊天里的 `[[笔记#标题]]` 引用条)。匹配规则(含嵌套链的祖先校验)
+ *  见 shared 的 findHeadingIndex;找不到就只开笔记不动(与大纲跳转同语义:宁可不动,
+ *  不静默跳到别的标题)。就绪竞态:openNote 等到实例挂上,但 doc 可能还空着
+ *  (unifiedHeadings 给空)—— 重试几拍再放弃。v3 渲染的笔记没有 unified 实例,同样自然放弃。 */
+export async function openNoteAtHeading(path: string, heading: string): Promise<void> {
+  await openNote(path)
+  for (let tries = 0; tries < 5; tries++) {
+    const hs = unifiedHeadings(path)
+    if (hs && hs.length) {
+      const hit = findHeadingIndex(hs, heading)
+      if (hit >= 0) {
+        unifiedRevealHeading(path, hit, hs[hit].text)
+        // ⚠️ 编辑器刚挂载的头几百毫秒布局未稳:标题列表已齐(doc 解析完)但 PM scrollIntoView
+        // 按未测量的坐标算 = 原地不动(e2e 探针实测:立即 reveal 不滚、600ms 后 reveal 正常)。
+        // 补一跳:reveal 幂等,已在视口时第二跳视觉上是 no-op。e2e:filecite F7 钉这条。
+        // 落点提醒动画只挂在**补跳**这一次:首跳可能压根没滚(布局未稳),那时闪也闪在屏幕外;
+        // 两次都闪则是「闪到一半重来」的抖动。代价是反馈晚 600ms,换来必定闪在用户眼前。
+        setTimeout(() => unifiedRevealHeading(path, hit, hs[hit].text, true), 600)
+      }
+      return
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
+
+/** 打开笔记并滚到 Obsidian 块锚 `^abc`(聊天里的 `[[笔记#^abc]]` 引用条)。
+ *  语义与 openNoteAtHeading 一字不差(含 600ms 补跳与「找不到就只开笔记不动」),只是定位判据
+ *  从「标题文本」换成「块尾部的 `^id` 字面量」。
+ *  ⚠️ 只在 v4 渲染的笔记上有效 —— `^id` 是外来格式,来源只有从 Obsidian 导入的素文件,
+ *     而素文件恒走 UnifiedPage;v3 老笔记按构造不可能带 `^id`,unifiedRevealBlock 返 false 后
+ *     自然停在「只开了笔记」,与本轮之前的行为一致。 */
+export async function openNoteAtBlock(path: string, blockId: string): Promise<void> {
+  await openNote(path)
+  for (let tries = 0; tries < 5; tries++) {
+    // 一次调用同时回答「实例挂上了吗」与「这篇里有没有这个块」—— 两种 false 都该再等一拍
+    // (编辑器刚挂载时 doc 常常还是空的,与 openNoteAtHeading 轮询 headings 同一个理由)。
+    if (unifiedRevealBlock(path, blockId)) {
+      // 补跳同标题锚:头几百毫秒布局未稳,立即 reveal 按未测量坐标算 = 原地不动;
+      // 落点提醒动画只挂在补跳这一次(首跳可能压根没滚,那时闪也闪在屏幕外)。
+      setTimeout(() => unifiedRevealBlock(path, blockId, true), 600)
+      return
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+}
+
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
 export function openDb(dbPath: string, opts?: { newTab?: boolean }): void {
   actThrottled('view.open', { f: dbPath }, `view.open|${dbPath}`)
@@ -82,7 +129,7 @@ export function openDb(dbPath: string, opts?: { newTab?: boolean }): void {
 }
 
 /** 打开独立 PDF 视图(可批注):已有认领该文件的 tab → 激活(带页号则广播跳页);否则主区打开。page = 1-based。 */
-export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolean }): void {
+export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolean; quote?: string }): void {
   actThrottled('view.open', { f: pdfPath }, `view.open|${pdfPath}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
@@ -90,10 +137,13 @@ export function openPdf(pdfPath: string, page?: number, opts?: { newTab?: boolea
   if (hit && !opts?.newTab) {
     ws.activateLeaf(hit.id)
     // 已开着 → 广播跳页(PdfAnnotator 听 amadeus:pdf-goto,避免 navigateLeaf remount 重下 PDF)。
-    if (page && page >= 1) window.dispatchEvent(new CustomEvent('amadeus:pdf-goto', { detail: { pdfPath, page } }))
+    if (page && page >= 1) window.dispatchEvent(new CustomEvent('amadeus:pdf-goto', { detail: { pdfPath, page, q: opts?.quote } }))
     return
   }
-  ws.openView('amadeus-pdf', page ? { pdfPath, page } : { pdfPath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+  const params: Record<string, unknown> = { pdfPath }
+  if (page) params.page = page
+  if (opts?.quote) params.q = opts.quote
+  ws.openView('amadeus-pdf', params, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 打开独立图片视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openPdf 的简版,无批注)。 */
@@ -107,6 +157,38 @@ export function openImage(imagePath: string, opts?: { newTab?: boolean }): void 
     return
   }
   ws.openView('amadeus-image', { imagePath }, 'main', opts?.newTab ? { newTab: true } : undefined)
+}
+
+/** 打开独立音视频视图并停在 `loc.at` 秒:已有认领该文件的 tab → 激活 + 广播 `amadeus:media-goto`
+ *  就地跳(**绝不 navigateLeaf**:那会 remount 播放器 = 整段视频重新起流);否则主区新开。
+ *  ⚠️ 只吃 **vault 相对路径** —— 载体是 `amadeus-asset://`,它只有 `v/<vaultRel>` 一个面。
+ *  库外绝对路径的媒体请走 wsFileNav.openWsFile(见 ChatWikiLink 的 openMediaCitation 注释)。 */
+export function openMedia(vaultRel: string, loc?: { at: number; to?: number }, opts?: { newTab?: boolean }): void {
+  actThrottled('view.open', { f: vaultRel }, `view.open|${vaultRel}`)
+  const ws = useWorkspace.getState()
+  const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
+  const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-media' && p.params?.path === vaultRel)
+  if (hit && !opts?.newTab) {
+    ws.activateLeaf(hit.id)
+    if (loc) {
+      // 同步派发 + handled 回执(与 pageStore.openWikiLink 同一条通路);这里不看回执 ——
+      // 视图刚被激活,里面的 MediaPlayer 必然在场,没人接也只是「没跳」,不该再回落开第二个。
+      window.dispatchEvent(new CustomEvent('amadeus:media-goto', { detail: { path: vaultRel, at: loc.at, to: loc.to, handled: false } }))
+    }
+    // 不带 loc 地激活一个**已开着**的播放器 = 普通打开:两份状态都得清 ——
+    //  · params 里的锚(冷挂载真源:不清的话下一次重挂又按上一条引用起播、在旧终点暂停);
+    //  · 已挂载播放器里的活体 gotoTo(发一条 `clear` 的 media-goto,它只清暂停点、不动播放位置)。
+    // ⚠️ 这条路**够得着**:聊天里的媒体引用条锚点解不开时 loc 就是 null(见 openMediaCitation),
+    //    Desk 关着就走到这儿 —— 早先注释写「今天没有这种调用方」是错的(Codex 四审反证)。
+    else {
+      ws.leafById?.(hit.id)?.setParams({ at: undefined, to: undefined })
+      window.dispatchEvent(new CustomEvent('amadeus:media-goto', { detail: { path: vaultRel, clear: true, handled: false } }))
+    }
+    return
+  }
+  const params: Record<string, unknown> = { path: vaultRel }
+  if (loc) { params.at = loc.at; if (loc.to) params.to = loc.to }
+  ws.openView('amadeus-media', params, 'main', opts?.newTab ? { newTab: true } : undefined)
 }
 
 /** 打开独立白板视图(.excalidraw.md 画布,兼容 Obsidian Excalidraw 插件):已有认领该文件的 tab → 激活;否则主区打开。 */

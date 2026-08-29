@@ -56,6 +56,20 @@ describe('transcribe_audio 引擎→桥 端到端', () => {
     const j = JSON.parse(String(out));
     expect(j.text).toBe('FAKE-TRANSCRIPT');
     expect(j.segments).toHaveLength(1);
+    // 时刻引用锚点:必须是**可原样复制的具体形态**(光在 description 里教格式,模型会缩写路径),
+    // 且只教秒 —— `t=1:35` 这种钟表形态在渲染端判非法(Logseq #9920 的血)。
+    // ⚠️ 必须住在 JSON **里面**:本工具的输出契约是一份 JSON,尾部追加会把它变成非法 JSON。
+    expect(j.cite).toContain('[[/tmp/a.wav#t=95|01:35]]');
+    expect(j.cite).toMatch(/Seconds only/);
+  });
+
+  it('没要时间戳就不教时刻锚点(没有 segments = 没有秒数,教了只会诱发编造)', async () => {
+    const { transcribeAudioProvider } = await import('./transcribeAudio.js');
+    const tool = transcribeAudioProvider.tools()[0];
+    const out = await tool.execute({ path: '/tmp/a.wav' }, { userId: 'u' } as any);
+    const j = JSON.parse(String(out));
+    expect(j.text).toBe('FAKE-TRANSCRIPT');
+    expect(j.cite).toBeUndefined();
   });
 
   it('相对路径直接拒绝(不发请求)', async () => {

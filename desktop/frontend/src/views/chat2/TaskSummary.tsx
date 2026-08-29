@@ -12,6 +12,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import type { DisplayFile, UiMessage } from '../../types'
 import { findLiveEdit } from '../../stores/deskPlan'
 import { hasFacts, summarizeTask } from './taskFacts'
+import { ChatWebLink } from '../../components/ChatWikiLink'
 
 registerMessages({
   'tsum.title': { zh: '任务概览', en: 'Task overview' },
@@ -234,12 +235,15 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
                   {sc.hits > 1 && <span className="t2-tsum-hits">×{sc.hits}</span>}
                 </>
               )
-              // 网页来源用真链接:target=_blank 会被主进程的 setWindowOpenHandler 转系统浏览器
-              // (electron/main.ts denyExternal),既不用新开 IPC,又天然键盘可达。
+              // 网页来源与聊天正文里的网页引用**同一条路**:Desk 能显示就在 Desk 里开,否则退回
+              // 原出口(主区标签 / 系统浏览器,按「应用内链接」开关)。
+              // ⚠️ 早先这里是 `<a target="_blank">` 直接交给主进程转外链 —— 于是同一张卡里文件来源进
+              //    Desk、网页来源开新标签,用户实报「有时候 Desk 有时候新标签」。别改回去。
+              // quote 给空串:来源行的标签是**主机名 + ×N 命中数**,拿它当引语搜索纯属噪音。
               if (sc.kind === 'web') {
                 return (
-                  <a key={key} className="t2-tsum-row act" href={sc.id} target="_blank" rel="noreferrer"
-                    title={`${t('tsum.openWeb')}:${sc.id}`}>{body}</a>
+                  <ChatWebLink key={key} className="t2-tsum-row act" href={sc.id} quote=""
+                    title={`${t('tsum.openWeb')}:${sc.id}`}>{body}</ChatWebLink>
                 )
               }
               // 目录/搜索没有「打开」的对应物,保持纯展示。

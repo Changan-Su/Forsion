@@ -18,6 +18,11 @@ import { PluginEmbed } from '@amadeus/blocks/plugin/PluginEmbed'
 import { usePluginStore, findEmbedRenderer } from '@amadeus/plugins/pluginStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { resolveFileName, resolveVaultPath } from '@amadeus/lib/vaultFiles'
+// 判定与 embedLayer / BlockHost 同源同序:音视频后缀与 `#t=` 时刻锚都取 shared 这一份。
+import { parseMediaLinkInner, VIDEO_EXT_RE, mediaLabel, type MediaLoc, embedUrlOf} from '@amadeus-shared/pdfLink'
+import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
+import { MediaPlayer } from '@amadeus/components/MediaPlayer'
+import { BookmarkCard } from '@amadeus/components/BookmarkCard'
 import { Markdown } from '../../components/Markdown'
 import { openFile, openNote } from '../../amadeusNav'
 
@@ -28,8 +33,6 @@ const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 const FILE_EXT_RE = /\.[a-z0-9]{1,8}$/i
 const DB_EXT_RE = /\.db$/i
 const PDF_EXT_RE = /\.pdf$/i
-const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)$/i
-const AUDIO_EXT_RE = /\.(mp3|wav|ogg|m4a|flac)$/i
 const noop = (): void => {}
 
 export function InboxBody({ body }: { body: string }) {
@@ -70,6 +73,16 @@ function InboxEmbed({ target }: { target: string }) {
       </div>
     )
   }
+  // `![[https://…]]` → 收件箱是**只读流**:一律书签卡,不给唤醒(在流里给每条消息挂一个渲染进程
+  // 是灾难)。**位置与另外两条链逐字同序**:图片之后、一切文件判定之前 —— URL 里的 `.db`/`.html`
+  // 会被下面的后缀判定当成文件后缀抢走。
+  // ⚠️ 刻意与另两条链**分道**的一点:笔记里 `![[youtube…]]` 会渲成 iframe 播放器,这里不会。
+  // 同一条理由 —— 一条流几十个跨源 iframe,和几十个 webview 一样是灾难。
+  // ⚠️ 用 embedUrlOf 吃整条 target(只剥末段宽度):`split('|')[0]` 会截断 `?q=a|b` 这类合法 URL。
+  const webUrl = embedUrlOf(target)
+  if (webUrl) {
+    return <div className="block-body"><BookmarkCard url={webUrl} /></div>
+  }
   // 数据库(交互式表格,数据在独立 .db;pagePath='' 让裸名全库定位)。ponytail: 与笔记一致可交互,
   // 收件箱里编辑即改真 .db;如需纯只读再加门(叶子组件当前无 readOnly)。
   if (!p.includes('#') && DB_EXT_RE.test(p)) {
@@ -91,7 +104,13 @@ function InboxEmbed({ target }: { target: string }) {
   if (pluginTarget) {
     return <div className="block-body"><PluginEmbed target={pluginTarget} pagePath="" /></div>
   }
-  // 非图片文件(pdf/音视频/其它)
+  // 裸 `.md` = 笔记,不是文件卡。**这道闸 v4/v3 两条链 2026-08-20 就补了,收件箱一直没同步** ——
+  // 于是 `![[某笔记.md]]` 在收件箱里仍渲染成「📄 打开 ↗」文件卡(点了去调系统默认程序)。
+  if (isPlainNoteRef(p)) return <InboxNoteEmbed target={target} />
+  // 音视频(带或不带 `#t=` 时刻锚)。判定与另外两条链逐字同源。
+  const media = parseMediaLinkInner(p)
+  if (media) return <InboxFileEmbed name={media.target} loc={media.loc} badAnchor={p.includes('#') && !media.loc} />
+  // 非图片文件(pdf / 其它)
   if (!p.includes('#') && FILE_EXT_RE.test(p)) {
     return <InboxFileEmbed name={p} />
   }
@@ -115,8 +134,8 @@ function InboxPluginFileEmbed({ name }: { name: string }) {
 }
 
 /** 文件嵌入:pdf 内联只读阅读器(解析不出退回 iframe),音视频原生播放器,其它 = 打开按钮。 */
-function InboxFileEmbed({ name }: { name: string }) {
-  const kind = PDF_EXT_RE.test(name) ? 'pdf' : VIDEO_EXT_RE.test(name) ? 'video' : AUDIO_EXT_RE.test(name) ? 'audio' : 'other'
+function InboxFileEmbed({ name, loc, badAnchor }: { name: string; loc?: MediaLoc | null; badAnchor?: boolean }) {
+  const kind = PDF_EXT_RE.test(name) ? 'pdf' : VIDEO_EXT_RE.test(name) ? 'video' : /\.(mp3|wav|ogg|m4a|flac)$/i.test(name) ? 'audio' : 'other'
   const files = usePageStore((s) => s.files)
   const pdfPath = useMemo(() => (kind === 'pdf' ? resolveFileName(name, files, '') : null), [kind, name, files])
   if (kind === 'other') {
@@ -138,6 +157,8 @@ function InboxFileEmbed({ name }: { name: string }) {
         <div className="embed-media-head">
           <span className="embed-file-ic" aria-hidden>{kind === 'pdf' ? '📕' : kind === 'video' ? '🎬' : '🎵'}</span>
           <span className="embed-file-name">{name}</span>
+          {loc && <span className="embed-media-at" title="起播时刻">@{mediaLabel(loc.at)}</span>}
+          {badAnchor && <span className="embed-media-warn">锚点无效 · 从 0 秒起播</span>}
         </div>
         {kind === 'pdf' && (pdfPath ? (
           <div className="embed-pdf embed-pdf-live">
@@ -149,8 +170,10 @@ function InboxFileEmbed({ name }: { name: string }) {
           // webhost-ok: 固定已知嵌入(Chromium 内置 PDF 阅读器),无 sandbox 属性 → 不削能力
           <iframe className="embed-pdf" src={url} title={name} />
         ))}
-        {kind === 'video' && <video className="embed-video" src={url} controls preload="metadata" />}
-        {kind === 'audio' && <audio className="embed-audio" src={url} controls preload="metadata" />}
+        {/* 收件箱是只读流:不给截帧(insertAfter 缺席即隐藏按钮)。 */}
+        {(kind === 'video' || kind === 'audio') && (
+          <MediaPlayer kind={kind} url={url} name={name} pagePath="" loc={loc ?? null} />
+        )}
       </div>
     </div>
   )

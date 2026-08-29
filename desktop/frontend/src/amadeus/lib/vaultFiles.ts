@@ -33,3 +33,13 @@ export function resolveVaultPath(name: string, files: string[], sourcePath?: str
   }
   return cands[0] ?? null
 }
+
+/** 裸文件名在库里撞了多份同名吗?(带 `/` 的路径是精确的,恒 false)
+ *  用途:`amadeus:media-goto` 的认领判据 —— resolveVaultPath 撞名时取**字典序首项**,
+ *  拿它去认领等于「静默 seek 到另一份同名视频」,而时间码看着还挺合理。
+ *  纪律与聊天引用条一致:宁可不认领(让派发方走回落),也不猜。 */
+export function isAmbiguousFileRef(name: string, files: string[]): boolean {
+  const want = name.split('|')[0].split('#')[0].trim().replace(/\\/g, '/').toLowerCase()
+  if (!want || want.includes('/')) return false
+  return files.filter((f) => f.replace(/\\/g, '/').toLowerCase().split('/').pop() === want).length > 1
+}

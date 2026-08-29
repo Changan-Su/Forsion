@@ -17,7 +17,11 @@ export const webSearchProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'web_search',
-          description: 'Search the web and return summaries of relevant web pages. Use it to look up real-time or external information.',
+          description: 'Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. ' +
+            'When you then tell the user something you learned here, link the source inline as an ordinary markdown link — ' +
+            '`[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: ' +
+            'in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. ' +
+            'A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.',
           parameters: {
             type: 'object',
             properties: {
@@ -33,7 +37,11 @@ export const webSearchProvider: ToolProvider = {
           const r: any = await runSearch(String(args.query ?? ''), Number(args.max_results) || 5);
           // runSearch 返回 { provider, text, results }：落可读 text（而非盲 JSON dump）；超限则落盘+预览。
           const text = typeof r === 'string' ? r : (r?.text || JSON.stringify(r));
-          return formatToolOutput(ctx, 'web_search', String(text));
+          // 引用锚点:与 read_file / read_document / web_fetch 同款「把可复制的具体形态印出来」——
+          // 只在 description 里教,模型转述搜索结果时基本不会带链接(用户实报「经常看不到引用」)。
+          // 放**头部**:大输出会溢出落盘,makePreview 只保头尾切片,footer 会丢。
+          const head = 'Cite for the user: [<a short phrase from the snippet>](<the result URL>) — the link text is the exact sentence the reader gets scrolled to.\n\n';
+          return formatToolOutput(ctx, 'web_search', head + String(text));
         } catch (e) {
           // 错误消息即提示词:降级链全败(或云不可达)时明示模型可用的退路,别反复重试同一工具。
           const msg = e instanceof Error ? e.message : String(e);

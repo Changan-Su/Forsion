@@ -13,12 +13,15 @@ import { Copy, Check } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { normalizeMath } from '../services/mathNormalize'
 import { remarkWiki } from './wikiChat'
-import { ChatWikiLink } from './ChatWikiLink'
+import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 
-// [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;其余链接维持默认 <a>。
+// [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
+// + 链接文字当引语定位);其余(mailto/相对/锚点)维持默认 <a>。
 const WikiAnchor = ({ href, children, node: _node, ...rest }: any) =>
   typeof href === 'string' && href.startsWith('#wiki=') ? (
     <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
+  ) : typeof href === 'string' && /^https?:\/\//i.test(href) ? (
+    <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   ) : (
     <a href={href} {...rest}>{children}</a>
   )
