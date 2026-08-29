@@ -14,7 +14,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { AnnotationEditorType, AnnotationEditorParamsType } from 'pdfjs-dist/legacy/build/pdf.mjs'
 // pdf_viewer.mjs = pdf.js 官方组件包(PDFViewer 全家桶);类型在同目录 .d.mts。
-import { EventBus, PDFLinkService, PDFViewer } from 'pdfjs-dist/legacy/web/pdf_viewer.mjs'
+import { EventBus, PDFFindController, PDFLinkService, PDFViewer } from 'pdfjs-dist/legacy/web/pdf_viewer.mjs'
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 // ⚠️?inline + @scope:pdf_viewer.css 抢了 .dialog / .sidebar 等通用类名并**直接画背景色**,
 // 全局注入会接管 Amadeus 全 App 共用的 Dialogs.tsx(className="dialog",23 处)——表现为「打开过 PDF 后
@@ -25,7 +25,7 @@ import {
   BookmarkPlus, Circle, Eraser, Highlighter, Minus, MousePointer2, MoveUpRight, PanelLeft, PenLine, Square,
   StickyNote, Strikethrough, Type, Underline as UnderlineIcon, Waves,
 } from 'lucide-react'
-import { buildPdfLink } from '@amadeus-shared/pdfLink'
+import { isHostPath, buildPdfLink } from '@amadeus-shared/pdfLink'
 import { askString } from '../components/askString'
 import { amadeus } from '../api'
 import {
@@ -33,6 +33,9 @@ import {
   EDITABLE_SUBTYPES, INK_ONLY, MOVABLE_SUBTYPES, removeAnnots, setAnnotContents, translateAnnots,
   type InkStroke, type MarkupKind, type ShapeKind, type ShapeStyle,
 } from './pdfMarkup'
+import { paintHlBands } from './hlBand'
+/** 引语落地提醒动画的时长,必须与 pdfAnnotator.css 里 .pdfa-citehl-band.is-pulse 的一致。 */
+const PULSE_MS = 1000
 import { frameOf, pageAt, pointOnPage, selectionToQuads } from './selectionQuads'
 import { distToFlatSq, distToPointsSq, outlineToSvgPath, strokeOutline } from './inkStroke'
 
@@ -109,6 +112,7 @@ interface Engine {
   viewer: any
   linkService: any
   eventBus: any
+  findController: any
   uiManager: any
   doc: any
   timer: ReturnType<typeof setTimeout> | null
@@ -154,14 +158,46 @@ function pageBox(viewer: any, container: HTMLElement, pageIndex: number): { left
   }
 }
 
+/** 库外 PDF 的字节:主进程 fs 直读(base64 回传,与 wsfile 预览同一条通道)。 */
+async function readHostPdfBytes(p: string): Promise<Uint8Array> {
+  const read = window.tangu?.readHostFile
+  if (!read) throw new Error('当前环境不支持打开库外文件')
+  const r = await read(p)
+  if (!r || (r as { tooLarge?: boolean }).tooLarge) throw new Error('文件过大,无法预览')
+  const bin = atob(r.content)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
 /** readOnly:笔记内嵌预览形态——无工具栏/无侧栏/无选中编辑,绝不写盘(防与已打开的批注 tab 双实例互踩)。 */
-export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: string; initialPage?: number; readOnly?: boolean }) {
+export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: readOnlyProp }: { pdfPath: string; initialPage?: number; initialQuote?: string; readOnly?: boolean }) {
+  // 库外的 PDF(引用条给的是绝对路径):字节走主进程 fs 直读,**一律只读** —— 批注是写回 PDF 本体的,
+  // 而写盘只有 vault 通道(saveVaultBytes),库外没有落笔的地方,给了工具栏就是假编辑入口。
+  // 只读仍保留底栏(翻页/缩放),看书不受影响。外部深链进不来:deepLinkInstall 的闸对文件类 view
+  // 只放行安全的 vault 相对路径,绝对路径在那一层就被拒了。
+  const hostPdf = isHostPath(pdfPath)
+  const readOnly = readOnlyProp || hostPdf
   const viewportRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const eng = useRef<Engine | null>(null)
   const enqueueRef = useRef<((op?: WriteOp) => Promise<void>) | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [info, setInfo] = useState({ page: initialPage || 1, total: 0 })
+  // 待跳页码:amadeus:pdf-goto 可能在文档还没就绪时到(点第二条引用时阅读器正在装载),
+  // 当场跳是空操作 —— 记下来,等 pagesinit/pagesloaded 补跳。丢了就停在上一条引用的页(Codex 实证)。
+  const pendingGoto = useRef<number | null>(null)
+  // 待高亮的引语(引用条带 `&q=`):**临时高亮**,走 pdf.js 的 find —— 只在文本层加个 .highlight,
+  // 一个字节都不写进 PDF(批注才写盘)。同 pendingGoto:文档没就绪时先记下,pagesloaded 再放。
+  const pendingFind = useRef<string | null>(initialQuote || null)
+  // 引语落地时给高亮带子放一次提醒动画(见 hlBand.ts 的 pulseAge)。两段:
+  // ① pulseArm = 「已发 find,等落地」。find 到重画之间隔着 pdf.js 抽全文的异步过程(300 页几秒钟),
+  //    期间会先来几次一个命中都没有的 textlayerrendered —— 只有真画出带子的那次才算落地,
+  //    所以这里不能用固定时限,得等到 painted > 0。
+  // ② pulseStart = 落地时刻。动画期内的重画按「已播毫秒数」用负 animation-delay 接着播(不是重来);
+  //    过了 PULSE_MS 就再也不挂类 —— 滚动引发的重画绝不会二次放动画。
+  const pulseArm = useRef(false)
+  const pulseStart = useRef(0)
   const [color, setColor] = useState(PALETTE[0][1])
   const colorRef = useRef(PALETTE[0][1])
   const [tool, setTool] = useState<Tool>('mouse')
@@ -206,10 +242,12 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
 
     const eventBus = new EventBus()
     const linkService = new PDFLinkService({ eventBus })
+    const findController = new PDFFindController({ linkService, eventBus })
     const viewer = new PDFViewer({
       container,
       eventBus,
       linkService,
+      findController, // 引用条的临时高亮(见 runFind);用户可见的只是文本层的选中色
       // 只读嵌入直接 DISABLE 编辑器机器:NONE 下选中文本仍会弹 pdf.js 浮动「高亮」按钮,
       // 点了看似成功、实则被 readOnly 的 enqueue 丢弃 = 假编辑入口(codex)。
       annotationEditorMode: readOnly ? AnnotationEditorType.DISABLE : AnnotationEditorType.NONE,
@@ -219,7 +257,7 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
       // 以上几项在 v5.7 运行时被读取(pdf_viewer.mjs),.d.mts 类型未收录 → 断言。
     } as any)
     linkService.setViewer(viewer)
-    const state: Engine = { viewer, linkService, eventBus, uiManager: null, doc: null, timer: null, dirty: false, chain: Promise.resolve(), lastBytes: null, docStale: false }
+    const state: Engine = { viewer, linkService, eventBus, findController, uiManager: null, doc: null, timer: null, dirty: false, chain: Promise.resolve(), lastBytes: null, docStale: false }
     eng.current = state
 
     const flash = (msg: string): void => {
@@ -322,6 +360,15 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
      *  只在 pagesloaded 后补一个合成 scroll 让 pdf.js 按真实 scrollTop 重算页码
      *  (setDocument 会把内部页码直写回 1,不广播;scroll 监听是它自己绑在 container 上的)。
      *  keep={page}(初载):跳到目标页;pagesloaded 且用户没翻页时再钉一次(pagesinit 的页高还是占位值)。 */
+    /** 临时高亮一段引语:pdf.js find(只在文本层画高亮,绝不写盘)。空串 = 清掉上一次的高亮。 */
+    const runFind = (q: string): void => {
+      if (q) { pulseArm.current = true; pulseStart.current = 0 } // 落地那一次要放提醒动画(清高亮的空串不算)
+      eventBus.dispatch('find', {
+        source: window, type: '', query: q, caseSensitive: false, entireWord: false,
+        highlightAll: true, findPrevious: false, matchDiacritics: false,
+      })
+    }
+
     let offAttach: (() => void) | null = null
     const attach = (doc: any, keep: { page: number } | 'preserve'): void => {
       annCache.clear() // 换了文档,橡皮/选择的注释缓存全部作废
@@ -330,19 +377,27 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
       offAttach?.() // 连续换档时上一轮 attach 的 once 监听可能还没触发,不摘会拿着旧 keep 在新文档上乱跳
       viewer.setDocument(doc)
       linkService.setDocument(doc, null)
+      findController.setDocument(doc) // 不接的话 find 事件被 firstPageCapability 永远挂住
       ;(doc.annotationStorage as any).onSetModified = markDirty
       const target = keep === 'preserve' ? 0 : Math.min(doc.numPages, Math.max(1, keep.page))
+      // 装载期间到的 goto 优先于 attach 时的目标页(用户后点的那条引用才是他要看的)
+      const wanted = (): number => Math.min(doc.numPages, Math.max(1, pendingGoto.current ?? target))
       const onInit = (): void => {
         if (dead) return
         viewer.currentScaleValue = curScale
         if (!readOnly) try { viewer.annotationEditorMode = { mode: modeOf(toolRef.current) } } catch { /* ignore */ }
         applyHighlightColor()
-        if (target > 1) viewer.currentPageNumber = target
+        const want = wanted()
+        if (want > 1) viewer.currentPageNumber = want
       }
       const onLoaded = (): void => {
         if (dead) return
+        const want = wanted()
+        pendingGoto.current = null
         if (keep === 'preserve') container.dispatchEvent(new Event('scroll'))
-        else if (target > 1 && viewer.currentPageNumber === target) viewer.currentPageNumber = target // 占位高→真实高,再钉一次;用户已翻页则不打扰
+        else if (want > 1 && viewer.currentPageNumber === want) viewer.currentPageNumber = want // 占位高→真实高,再钉一次;用户已翻页则不打扰
+        // 页码先落位再找:pdf.js 从当前页往后找第一处,先跳页才不会命中前面几章的同名句子。
+        if (pendingFind.current) { runFind(pendingFind.current); pendingFind.current = null }
       }
       eventBus.on('pagesinit', onInit, { once: true })
       eventBus.on('pagesloaded', onLoaded, { once: true })
@@ -456,6 +511,47 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
       hold.arm() // 新文档已装上:此后的 pagerendered 才有资格撤快照,pagesloaded 才有资格撤垫片
       try { void old?.destroy() } catch { /* ignore */ }
     }
+
+    // 引用条临时高亮的带子几何:pdf.js 把命中段铺成行内子元素,几何得按行盒重算(见 hlBand.ts)。
+    // 挂两处:find 出结果(updatetextlayermatches)、以及缩放/翻页后文本层重建(textlayerrendered,
+    // 重建时 TextHighlighter.enable() 会同步把高亮再铺一遍)。rAF 让 pdf.js 那边先改完 DOM。
+    /** 把命中滚到容器正中。pdf.js 的 find 只把命中「弄进视野」(实测落在容器高度的 7.8% 处,
+     *  贴着顶边),用户报「没到视野中间」。滚动量是视口 px,容器可能在端级 zoom 里 → 按实测比例换算。 */
+    const centerMatch = (): void => {
+      const hl = container.querySelector<HTMLElement>('.textLayer .highlight.selected')
+        ?? container.querySelector<HTMLElement>('.textLayer .highlight')
+      if (!hl) return
+      const r = hl.getBoundingClientRect(), cr = container.getBoundingClientRect()
+      const z = container.offsetHeight > 0 ? cr.height / container.offsetHeight : 1
+      const d = ((r.top + r.height / 2) - (cr.top + cr.height / 2)) / z
+      if (Math.abs(d) > 4) container.scrollTop += d
+    }
+
+    let bandRaf = 0
+    const repaintBands = (): void => {
+      if (bandRaf) return // ⚠️ 必须合帧:highlightAll 的 find 会**逐页**发 updatetextlayermatches
+      // (300 页的书就是 300 次),不合帧 = 同一帧里跑 300 遍 querySelectorAll + 逐带 rect(读写交替
+      // 的强制重排)。实测:合帧前落地那一秒有一个 1007ms 的长帧,合帧后 6s 窗口里一个 >40ms 都没有
+      // ——「点引用后整个界面卡住」就是它。(pdfcite 的 C11 钉着。)
+      bandRaf = requestAnimationFrame(() => {
+        bandRaf = 0
+        if (dead) return
+        const now = Date.now()
+        const age = pulseArm.current ? 0 : (pulseStart.current ? now - pulseStart.current : -1)
+        const painted = paintHlBands(container, age >= 0 && age < PULSE_MS ? age : null)
+        if (painted > 0 && pulseArm.current) {
+          pulseArm.current = false
+          pulseStart.current = now
+          centerMatch()
+          // Desk 展开是有动画的:落地那一刻容器可能还在长个儿,按当时的高度算的居中会偏。
+          // 补一次(与标题引用的 600ms 补跳同理);期间有人滚过就不再动他。
+          const mark = container.scrollTop
+          window.setTimeout(() => { if (!dead && Math.abs(container.scrollTop - mark) < 2) centerMatch() }, 420)
+        }
+      })
+    }
+    eventBus.on('updatetextlayermatches', repaintBands)
+    eventBus.on('textlayerrendered', repaintBands)
 
     eventBus.on('pagechanging', (e: { pageNumber: number }) => setInfo((p) => ({ ...p, page: e.pageNumber })))
     eventBus.on('scalechanging', (e: { scale: number; presetValue?: string }) => {
@@ -1131,7 +1227,7 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
       try {
         // 读字节走 IPC 再 getDocument({data}):不能用 {url:'amadeus-asset://…'} —— dev 渲染器是
         // http://localhost 源,XHR 到自定义 scheme 被 Chromium 跨源拦(内联 iframe 走导航才不受限)。
-        const bytes = await amadeus.readVaultBytes(pdfPath)
+        const bytes = hostPdf ? await readHostPdfBytes(pdfPath) : await amadeus.readVaultBytes(pdfPath)
         if (dead) return
         // slice:getDocument 会把 buffer 转移进 worker(detach),原件要留给 lastBytes 当快照。
         const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise
@@ -1225,9 +1321,22 @@ export function PdfAnnotator({ pdfPath, initialPage, readOnly }: { pdfPath: stri
   // 已开着的 tab 被要求跳页:openPdf 激活既有 tab 后广播 amadeus:pdf-goto(避免 remount 重下 PDF)。
   useEffect(() => {
     const onGoto = (e: Event): void => {
-      const d = (e as CustomEvent<{ pdfPath?: string; page?: number }>).detail
-      if (d?.pdfPath === pdfPath && d.page && d.page >= 1 && eng.current) {
-        eng.current.viewer.currentPageNumber = d.page
+      const d = (e as CustomEvent<{ pdfPath?: string; page?: number; q?: string }>).detail
+      if (d?.pdfPath !== pdfPath || !d.page || d.page < 1) return
+      pendingGoto.current = d.page // 文档没就绪时的落点(pagesinit 补跳);就绪了下面这行立刻生效
+      pendingFind.current = d.q || null
+      if (eng.current) {
+        try { eng.current.viewer.currentPageNumber = d.page } catch { /* 装载中,交给 pagesinit */ }
+        // 就绪了就当场找;没就绪时 find 会被 pdf.js 挂在 firstPageCapability 上,同样等得到,
+        // 但那样是「先找后跳页」,命中点会被页码覆盖 —— 故只在有 doc 时立刻放,否则留给 pagesloaded。
+        if (eng.current.doc) {
+          if (d.q) { pulseArm.current = true; pulseStart.current = 0 } // 同 runFind:这条引用的落地要放提醒动画
+          eng.current.eventBus.dispatch('find', {
+            source: window, type: '', query: d.q || '', caseSensitive: false, entireWord: false,
+            highlightAll: true, findPrevious: false, matchDiacritics: false,
+          })
+          pendingFind.current = null
+        }
       }
     }
     window.addEventListener('amadeus:pdf-goto', onGoto)

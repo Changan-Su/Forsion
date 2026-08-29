@@ -237,7 +237,7 @@
   border-radius: 7px;
   background: var(--bg-elevated, var(--bg));
   border: 1px solid var(--border);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
   pointer-events: auto;
   white-space: nowrap;
 }
@@ -256,7 +256,7 @@
   background-color: var(--bg-card, var(--surface));
   color: var(--text);
   outline: 1px solid var(--border);
-  box-shadow: 0 4px 14px var(--overlay, rgba(0, 0, 0, 0.18));
+  box-shadow: var(--card-shadow);
 }
 .pdfa-container .annotationLayer .popup :is(h1, span) { color: var(--text); }
 
@@ -274,7 +274,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--bg-card, var(--surface));
-  box-shadow: 0 6px 20px var(--overlay, rgba(0, 0, 0, 0.18));
+  box-shadow: var(--card-shadow);
   z-index: 5;
   font-size: 12px;
 }
@@ -316,7 +316,7 @@
   background: var(--bg-card, var(--surface));
   color: var(--text);
   font-size: 12px;
-  box-shadow: 0 4px 14px var(--overlay, rgba(0, 0, 0, 0.15));
+  box-shadow: var(--card-shadow);
   z-index: 6;
 }
 
@@ -331,3 +331,63 @@
 }
 /* 错误态带「重试」按钮 → 必须可点(覆盖 .pdfa-state 的 pointer-events:none)。 */
 .pdfa-state-err { flex-direction: column; gap: 10px; pointer-events: auto; }
+
+/* ⚠️ pdf.js 的 `.page` 带 9px 透明边框(页间距),它那套样式是按浏览器默认 **content-box** 写的:
+   `.page` 与 `.textLayer` 被设成同一个尺寸 round(down, --total-scale-factor * 612px, ...),
+   边框在内容盒**之外**,于是 page 内容盒 = textLayer = 画布,三者同尺寸。
+   我们 app 的全局 reset 是 `box-sizing: border-box` → page 的内容盒被边框吃掉 18px,
+   画布(width/height:100%)跟着缩 7%,而 textLayer 没有边框、尺寸照旧 →
+   **整个文本层比画布大 7%**:越往页面下方,选区/查找高亮/笔迹落点偏得越多(实测 262 vs 244)。
+   只有 .page 有边框,所以只需要把它掰回 content-box。
+   ⚠️ 动完跑 `npm run check:hlband`(里面照抄了 app 的 border-box reset,专盯这条)。 */
+.pdfa-root .pdfViewer .page { box-sizing: content-box; }
+
+/* 引用条的临时高亮(pdf.js find)。四版演进史,别再往回改:
+   · v1 直接给 .highlight 铺背景:行内盒 = 字体 bounding box(>1em 且逐字体而异)→ 带子偏 → 否决;
+   · v2 写死比例渐变(62%):比例换本书就偏 → 否决;inline-block+height:1em 会动文本层布局 → 否决;
+     `::highlight()` / 原生选区画的也是行内盒 → 换不掉;
+   · v3 ::before 贴行盒 + hlBand 递宽度百分比:几何对了,但 textLayer 自成隔离组(z-index:0),
+     multiply 恒空转,只能半透明叠色 —— **墨迹被染成褐黄 rgb(173,141,35),与批注高亮一比一眼假**;
+   · v4(现行,用户点名「要和批注高亮一个效果」):文本层里**一概不画**,hlBand.ts 把命中矩形画进
+     canvasWrapper 与 textLayer 之间的 .pdfa-citehl overlay —— 与画布同层叠上下文,multiply 真混:
+     纸变黄、墨迹保持纯黑,与批注(写进 PDF 的 Multiply 外观)物理同效。配色 = 批注调色板的黄 #ffe14d。
+   这层高亮**从不写进 PDF**,与批注的高亮是两码事(那条走 pdfMarkup)。
+   ⚠️ 动完跑 `npm run check:hlband`(几何+成色)与 `node scripts/pdf-selection.check.cjs`(选区层序)。 */
+.pdfa-root .textLayer .highlight {
+  /* ⚠️ 关 pdf.js 自带的底色只能走它的变量,不能写 `background:none`:
+     pdf_viewer.css 被 ensureScopedCss 包进了 @scope(.pdfa-root),而**作用域接近度在层叠里排在
+     书写顺序之前** —— 同特异性(0,3,0)下它的 `.selected:is(.textLayer .highlight)` 压过我们,
+     墨绿(0 100 0 /.25)会继续画在字上。变量这条我们是 (0,3,0) vs 它的 (0,2,0),特异性先于接近度,稳赢。 */
+  --highlight-bg-color: transparent;
+  --highlight-selected-bg-color: transparent;
+  /* pdf.js 自带 padding:1px/margin:-1px 是给它自己那套背景用的:会把盒子撑大、还挪静态位置 */
+  padding: 0;
+  margin: 0;
+}
+/* overlay 本体:inset:0 贴 .page 的 padding box(canvasWrapper 同一原点);不带 z-index ——
+   DOM 序在 canvasWrapper 之后、textLayer 之前,恰好画在画布之上、选区之下。 */
+.pdfa-root .pdfa-citehl {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.pdfa-root .pdfa-citehl-band {
+  position: absolute;
+  background: #ffe14d; /* 批注调色板「黄」,同一支笔 */
+  mix-blend-mode: multiply;
+  border-radius: 1px;
+}
+/* 刚落地那一次的提醒动画:淡入 → 一次轻呼吸 → 停在常态(100% 帧 = 静态取值,动画结束后与不带
+   .is-pulse 的带子一模一样,所以 `both` 的残留是无害的)。类只在 hlBand 收到 pulse 时挂 ——
+   滚动引发的重画不挂,否则一滚一闪(见 hlBand.ts 顶注)。
+   opacity 动的是「整组」的 alpha,multiply 照常混进画布(opacity 不隔离元素自身与 backdrop)。 */
+@keyframes pdfa-citepulse {
+  0% { opacity: 0; }
+  18% { opacity: 1; }
+  52% { opacity: 0.3; }
+  100% { opacity: 1; }
+}
+.pdfa-root .pdfa-citehl-band.is-pulse { animation: pdfa-citepulse 1s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .pdfa-root .pdfa-citehl-band.is-pulse { animation: none; }
+}

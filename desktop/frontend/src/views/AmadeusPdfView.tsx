@@ -7,6 +7,7 @@ import type { ViewProps } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
+import { isHostPath } from '@amadeus-shared/pdfLink'
 
 const PdfAnnotator = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
@@ -15,11 +16,13 @@ const pdfBase = (p: string): string => p.split(/[\\/]/).pop() || p
 export function AmadeusPdfView({ leaf }: ViewProps) {
   const pdfPath = typeof leaf.params.pdfPath === 'string' ? leaf.params.pdfPath : ''
   const page = typeof leaf.params.page === 'number' ? leaf.params.page : undefined
+  const quote = typeof leaf.params.q === 'string' ? leaf.params.q : undefined // 引用条带的引语:临时高亮,不写盘
   const mode = useTheme((s) => s.mode)
   const flat = useTheme((s) => s.flat)
   // Vault 是否已打开(root 落地)。启动时 dockview 会恢复上次的 PDF tab,而 restoreVault 是 void 异步调用——
   // 若在 root 落地前就读字节 → 主进程「No vault is open」。gate 住:vault ready 前不挂 PdfAnnotator(不读字节)。
-  const vaultReady = usePageStore((s) => !!s.vaultRoot)
+  // 库外 PDF(引用条给的绝对路径)不经 vault 通道读字节 → 不必等 vault 落地。
+  const vaultReady = usePageStore((s) => !!s.vaultRoot) || isHostPath(pdfPath)
   // navigateLeaf 会把标题重置为 displayName,挂载/换文件后设回 PDF 名(AmadeusDbView 同款)。
   useEffect(() => {
     if (pdfPath) leaf.setTitle(pdfBase(pdfPath))
@@ -30,7 +33,7 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
     <div className="am-app tangu-lovable amx-pane amx-pdfview" data-mode={mode} data-flat={flat ? '1' : '0'} style={{ height: '100%' }}>
       {vaultReady ? (
         <Suspense fallback={<Skeleton variant="document" />}>
-          <PdfAnnotator pdfPath={pdfPath} initialPage={page} />
+          <PdfAnnotator pdfPath={pdfPath} initialPage={page} initialQuote={quote} />
         </Suspense>
       ) : (
         <div style={{ padding: 24, color: 'var(--text-muted, #888)' }}>等待 Vault 打开…</div>
