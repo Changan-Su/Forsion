@@ -171,7 +171,7 @@ export function MobileRoot() {
               themeSeed={theme.seed}
               onClose={() => a.closeSettings()}
               onConfigChange={a.patchConfig}
-              onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, mode)}
+              onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
               onGlassChange={(on) => theme.setGlass(on)}
               onFlatChange={(on) => theme.setFlat(on)}
               onSeedChange={(hex) => theme.setSeedValue(hex)}

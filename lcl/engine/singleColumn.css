@@ -8,7 +8,7 @@
   flex-direction: column;
   background: var(--bg, #fff);
   color: var(--text, #111);
-  overflow: hidden;
+  overflow: clip; /* 同 .mb-body:hidden 仍是滚动容器,会被 scrollIntoView 顶歪 */
   /* iOS 手感缓动(UIKit 系统面板曲线)+ 时长,全壳过渡统一从这两枚取。 */
   --mb-ease: cubic-bezier(0.32, 0.72, 0, 1);
   --mb-dur: 0.34s;
@@ -60,7 +60,7 @@
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
   border-radius: 999px;
   background: var(--bg-card, var(--bg, #fff));
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--card-shadow);
 }
 /* 空胶囊(没有右抽屉且只剩幽灵钮时)不画药丸,免得屏幕上杵个空壳。 */
 .mb-shell:not(.mini-shell) .mb-cap:has(> .mb-icon-btn--ghost:only-child) { border-color: transparent; background: none; box-shadow: none; }
@@ -172,13 +172,13 @@
   left: 0;
   border-radius: 0 var(--radius-lg, 16px) var(--radius-lg, 16px) 0;
   transform: translateX(-102%);
-  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--card-shadow);
 }
 .mb-drawer--right {
   right: 0;
   border-radius: var(--radius-lg, 16px) 0 0 var(--radius-lg, 16px);
   transform: translateX(102%);
-  box-shadow: -6px 0 24px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--card-shadow);
 }
 .mb-drawer.open { transform: none; visibility: visible; pointer-events: auto; transition: transform var(--mb-dur) var(--mb-ease); }
 .mb-main { transition: transform var(--mb-dur) var(--mb-ease); }
@@ -257,7 +257,7 @@
   padding: 6px 10px 10px;
   max-height: 72%;
   overflow-y: auto;
-  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.22);
+  box-shadow: var(--card-shadow);
   animation: mb-sheet-up var(--mb-dur, 0.3s) var(--mb-ease, ease-out);
 }
 @keyframes mb-sheet-up { from { transform: translateY(100%); } to { transform: none; } }
@@ -383,7 +383,7 @@
   height: min(844px, 90vh);
   border-radius: 30px;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--card-shadow);
   overflow: hidden;
   background: var(--bg, #fff);
 }

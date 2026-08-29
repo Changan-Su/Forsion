@@ -74,7 +74,7 @@ export function subscribeThemeChange(fn: ThemeListener): () => void {
     themeObserver = new MutationObserver(() => { for (const l of themeListeners) l() })
     themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-theme', 'data-skin', 'data-mode', 'data-flat', 'data-glass', 'class'],
+      attributeFilter: ['data-theme', 'data-skin', 'data-bg', 'data-mode', 'data-flat', 'data-glass', 'class'],
     })
   }
   return () => {

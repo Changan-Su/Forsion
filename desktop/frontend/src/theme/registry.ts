@@ -1,10 +1,11 @@
 /// <reference types="vite/client" />
 /**
- * 双轴主题注册表:**设计语言(data-theme)× 配色(data-skin)× 明暗(data-mode)**。
+ * 主题注册表:**设计语言(data-theme)× 主题色(data-skin)× 背景色(data-bg)× 明暗(data-mode)**。
  * - 语言 = 文件夹主题(themes/<id>/{theme.json,theme.css}),构建期 import.meta.glob 收集,只管 UI 结构(圆角/字体/阴影/布局)。
  *   bundle 语言按目录自动发现,磁盘语言在运行时合并。
- * - 配色 = 纯颜色,见 theme/skins.css 的 [data-skin]/ .dark[data-skin] 块(cream/coral/teal/lavender/zhi);custom 走内联 seed 变量。
- * 旧单轴 preset(lovable/echo/qbird/dreamer/custom)首启自动迁移到 (lang, skin)。
+ * - 主题色 / 背景色 = 纯颜色,见 theme/skins.css 的 [data-skin] / [data-bg] 两组块(cream/coral/teal/lavender/zhi);
+ *   两轴各有 custom,走内联 seed 变量。**两轴同 id = 拆轴前的整套配色**,故老用户默认观感不变。
+ * 旧单轴 preset(lovable/echo/qbird/dreamer/custom)首启自动迁移到 (lang, skin);背景色缺省承接 skin。
  */
 import type { ThemeManifest, ThemeEntry } from './manifest';
 
@@ -67,23 +68,43 @@ export const DEFAULT_LANG = 'lovable';
 export const DEFAULT_SKIN = 'cream';
 export const DEFAULT_SEED = '#8b7fd6';
 
-/** 配色条目(纯颜色;CSS 在 theme/skins.css)。swatch 仅供设置面板色卡预览。custom 用 seed 动态取色。 */
+/** 配色条目(纯颜色;CSS 在 theme/skins.css)。**同一张表供两根轴用**:主题色轴取 `accent`,背景色轴取 `bg`
+ *  —— 它们本来就是同一套调色板被拆成的两半。swatch 仅供设置面板色卡预览。custom 用 seed 动态取色。 */
 export interface SkinInfo {
   id: 'cream' | 'coral' | 'teal' | 'lavender' | 'zhi' | 'custom';
-  /** 强调色(色卡主点) */
+  /** 强调色(主题色轴的色卡点) */
   accent: string;
-  /** 浅色底(色卡背景) */
+  /** 暗色下的强调色 */
+  accentDark: string;
+  /** 舞台底色(背景色轴的色卡点) */
   bg: string;
+  /** 暗色下的舞台底色 */
+  bgDark: string;
+  /** 背景家族的完整色度种子；设置面板用它表达颜色身份，不能拿近白/近黑的最终表面代替。 */
+  bgSeed: string;
 }
 
+/** bg/bgDark 必须与 skins.css 的 --bg 对齐；bgSeed 是生成/辨认背景家族的原色，不直接铺满页面。 */
 const SKINS: SkinInfo[] = [
-  { id: 'cream', accent: '#1c1c1c', bg: '#f8f7f6' },
-  { id: 'coral', accent: '#ff8a6b', bg: '#fbf5ef' },
-  { id: 'teal', accent: '#4d8794', bg: '#f5f5f7' },
-  { id: 'lavender', accent: '#8b7fd6', bg: '#f4eef7' },
-  { id: 'zhi', accent: '#1e96eb', bg: '#ffffff' },
-  { id: 'custom', accent: DEFAULT_SEED, bg: '#f6f6f7' },
+  { id: 'cream', accent: '#1c1c1c', accentDark: '#f8f7f6', bg: '#f8f7f6', bgDark: '#2a292b', bgSeed: '#9a8f84' },
+  { id: 'coral', accent: '#ff8a6b', accentDark: '#ff9a7d', bg: '#f7e5dc', bgDark: '#292727', bgSeed: '#ff8a6b' },
+  { id: 'teal', accent: '#4d8794', accentDark: '#5fa3b2', bg: '#dff1ea', bgDark: '#272a2a', bgSeed: '#4d8794' },
+  { id: 'lavender', accent: '#8b7fd6', accentDark: '#a99cf0', bg: '#ede0f5', bgDark: '#29272c', bgSeed: '#8b7fd6' },
+  { id: 'zhi', accent: '#1e96eb', accentDark: '#1c9ee4', bg: '#dcecfb', bgDark: '#272a2e', bgSeed: '#1e96eb' },
+  { id: 'custom', accent: DEFAULT_SEED, accentDark: DEFAULT_SEED, bg: '#f6f6f7', bgDark: '#1b1b1d', bgSeed: DEFAULT_SEED },
 ];
+
+/** 色卡取当前明暗那一面 —— 暗色下拿浅色底当背景色卡会骗人。 */
+export function skinSwatch(sk: SkinInfo, dark: boolean, axis: 'accent' | 'bg'): string {
+  if (axis === 'accent') return dark ? sk.accentDark : sk.accent;
+  return dark ? sk.bgDark : sk.bg;
+}
+
+/** 背景色点同时展示「完整种子色」和「当前明暗的真实舞台面」。
+ *  主段负责可辨认，右下小段负责诚实预告落地结果；不再把六个近白/近黑点摆成同一种颜色。 */
+export function backgroundSwatch(sk: SkinInfo, dark: boolean, seed = sk.bgSeed): string {
+  return `linear-gradient(135deg, ${seed} 0 64%, ${skinSwatch(sk, dark, 'bg')} 64% 100%)`
+}
 
 /** 全部语言:lovable(bundle 基底)殿前,其余按 id 字母序(含磁盘主题)。 */
 export function listLanguages(): ThemeEntry[] {
@@ -102,7 +123,7 @@ export function hasLanguage(id: string): boolean {
   return id in themeRegistry;
 }
 
-/** 全部配色(含 custom 殿后)。 */
+/** 全部配色(含 custom 殿后)。主题色轴与背景色轴共用这张表。 */
 export function listSkins(): SkinInfo[] {
   return SKINS;
 }
@@ -157,6 +178,15 @@ export function resolveInitialSkin(): string {
   const migrated = legacyPreset();
   if (migrated && hasSkin(migrated.skin)) return migrated.skin;
   return DEFAULT_SKIN;
+}
+
+/** 启动解析背景色:新键 forsion_theme_bg 优先 → **回退到主题色 id**(= 拆轴前的整套配色,老用户观感不变)。 */
+export function resolveInitialBg(): string {
+  try {
+    const raw = localStorage.getItem('forsion_theme_bg');
+    if (raw && hasSkin(raw)) return raw;
+  } catch { /* private mode */ }
+  return resolveInitialSkin();
 }
 
 /** 明暗偏好(用户可选 system=跟随系统);真源 forsion_theme_pref,回退老键 forsion_theme(纯明暗)。 */

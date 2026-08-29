@@ -1,11 +1,11 @@
 /**
- * FOUC-safe 双轴主题加载器:语言(data-theme)走 disabled <link> 切换 + 字体懒挂;
- * 配色(data-skin)走 theme/skins.css 的 [data-skin] 块(静态全量),custom 配色走内联 seed 变量;
- * 明暗 = data-mode + .dark。preset 切换瞬间挂 theme-no-transition 抑制全树过渡抖动。
+ * FOUC-safe 主题加载器:语言(data-theme)走 disabled <link> 切换 + 字体懒挂;
+ * 主题色(data-skin)/ 背景色(data-bg)走 theme/skins.css 的两组块(静态全量),各自的 custom 走内联 seed 变量;
+ * 明暗 = data-mode + .dark。切换瞬间挂 theme-no-transition 抑制全树过渡抖动。
  */
 import './skins.css';
-import { themeRegistry, getLanguage, DEFAULT_LANG, DEFAULT_SEED } from './registry';
-import { customSkinVars, CUSTOM_SKIN_VAR_KEYS } from './lcl/lovableData';
+import { themeRegistry, getLanguage, listSkins, skinSwatch, DEFAULT_LANG, DEFAULT_SEED } from './registry';
+import { customAccentVars, customBgVars, CUSTOM_ACCENT_VAR_KEYS, CUSTOM_BG_VAR_KEYS } from './lcl/lovableData';
 import { applyThemeSettings } from './themeSettings';
 
 const LINK_ID_PREFIX = 'forsion-theme-css-';
@@ -99,12 +99,13 @@ function ensureFontLink(langId: string): void {
   document.head.appendChild(link);
 }
 
-/** 应用 语言 × 配色 × 明暗(幂等)。`custom` 配色骑当前语言结构 + 内联 seed 变量(其余中性色回退 :root)。
+/** 应用 语言 × 主题色 × 背景色 × 明暗(幂等)。两轴的 `custom` 各骑当前语言结构 + 内联 seed 变量(其余中性色回退 :root)。
  *  opts.customColor/customBg 缺省时回退已存 forsion_theme_seed / forsion_theme_bg_seed,
- *  故明暗/语言切换无需调用方再传;customBg 传空串 = 清除背景色(恢复「背景跟随强调色」单色模式)。 */
+ *  故明暗/语言切换无需调用方再传;customBg 传空串 = 清除背景色(恢复「背景跟随主题色」单色模式)。 */
 export function applyTheme(
   langId: string,
   skinId: string,
+  bgId: string,
   mode: 'light' | 'dark',
   opts?: { customColor?: string; customBg?: string },
 ): void {
@@ -114,12 +115,13 @@ export function applyTheme(
   const cssId = entry?.manifest.id ?? DEFAULT_LANG;
 
   const root = document.documentElement;
-  const nextKey = `${cssId}/${skinId}/${mode}`;
+  const nextKey = `${cssId}/${skinId}/${bgId}/${mode}`;
   const changed = currentKey !== nextKey;
   if (changed) root.classList.add('theme-no-transition');
 
   root.dataset.theme = cssId;
   root.dataset.skin = skinId;
+  root.dataset.bg = bgId;
   root.dataset.mode = mode;
   if (mode === 'dark') root.classList.add('dark');
   else root.classList.remove('dark');
@@ -132,15 +134,29 @@ export function applyTheme(
     if (prev) prev.disabled = true;
   }
 
-  // 配色:custom 用内联 seed 变量(覆盖 color/mode);命名配色用 skins.css 的 [data-skin] 块,故清掉内联。
+  // 当前落地强调色:两轴独立后,背景色的「跟随」模式也要知道它 —— 命名主题色从注册表取色卡值。
+  let seed = opts?.customColor;
+  if (!seed) { try { seed = localStorage.getItem('forsion_theme_seed') || undefined; } catch { /* ignore */ } }
+  const namedSkin = listSkins().find((s) => s.id === skinId);
+  const accentHex = skinId === 'custom' || !namedSkin
+    ? (seed || DEFAULT_SEED)
+    : skinSwatch(namedSkin, mode === 'dark', 'accent');
+
+  // 主题色:custom 用内联 accent 变量;命名主题色用 skins.css 的 [data-skin] 块,故清掉内联。
   if (skinId === 'custom') {
-    let seed = opts?.customColor;
-    if (!seed) { try { seed = localStorage.getItem('forsion_theme_seed') || undefined; } catch { /* ignore */ } }
-    let bgSeed = opts?.customBg;
-    if (bgSeed === undefined) { try { bgSeed = localStorage.getItem('forsion_theme_bg_seed') || undefined; } catch { /* ignore */ } }
-    const vars = customSkinVars(seed || DEFAULT_SEED, mode === 'dark', bgSeed || undefined);
+    const vars = customAccentVars(accentHex, mode === 'dark');
     for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
     if (opts?.customColor) { try { localStorage.setItem('forsion_theme_seed', opts.customColor); } catch { /* ignore */ } }
+  } else {
+    for (const k of CUSTOM_ACCENT_VAR_KEYS) root.style.removeProperty(k);
+  }
+
+  // 背景色:同理。custom 且未设背景 seed = 旧「跟随主题色」行为(由 accentHex 微染)。
+  if (bgId === 'custom') {
+    let bgSeed = opts?.customBg;
+    if (bgSeed === undefined) { try { bgSeed = localStorage.getItem('forsion_theme_bg_seed') || undefined; } catch { /* ignore */ } }
+    const vars = customBgVars(bgSeed || accentHex, mode === 'dark', !!bgSeed);
+    for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
     if (opts?.customBg !== undefined) {
       try {
         if (opts.customBg) localStorage.setItem('forsion_theme_bg_seed', opts.customBg);
@@ -148,7 +164,7 @@ export function applyTheme(
       } catch { /* ignore */ }
     }
   } else {
-    for (const k of CUSTOM_SKIN_VAR_KEYS) root.style.removeProperty(k);
+    for (const k of CUSTOM_BG_VAR_KEYS) root.style.removeProperty(k);
   }
 
   ensureFontLink(cssId);
@@ -162,6 +178,7 @@ export function applyTheme(
   try {
     localStorage.setItem('forsion_theme_lang', cssId);
     localStorage.setItem('forsion_theme_skin', skinId);
+    localStorage.setItem('forsion_theme_bg', bgId);
     localStorage.setItem('forsion_theme', mode);
   } catch { /* private mode */ }
 

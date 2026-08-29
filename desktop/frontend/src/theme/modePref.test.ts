@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  listSkins, resolveInitialEffectiveMode, resolveInitialMode, resolveInitialModePref, resolveInitialSkin, systemMode,
+  backgroundSwatch, listSkins, resolveInitialBg, resolveInitialEffectiveMode, resolveInitialMode, resolveInitialModePref, resolveInitialSkin, systemMode,
 } from './registry'
 
 const g = globalThis as unknown as { localStorage?: unknown; window?: unknown }
@@ -133,5 +133,34 @@ describe('知语言拆回独立配色轴', () => {
     const ids = listSkins().map((skin) => skin.id)
     expect(ids).toContain('zhi')
     expect(ids.indexOf('zhi')).toBeLessThan(ids.indexOf('custom'))
+  })
+})
+
+describe('背景色轴', () => {
+  it('未设过时承接主题色 id —— 拆轴前的整套配色,老用户观感不变', () => {
+    ls['forsion_theme_skin'] = 'coral'
+    expect(resolveInitialBg()).toBe('coral')
+  })
+
+  it('设过就用自己的值,两轴可以不同', () => {
+    ls['forsion_theme_skin'] = 'coral'
+    ls['forsion_theme_bg'] = 'zhi'
+    expect(resolveInitialBg()).toBe('zhi')
+  })
+
+  it('脏值回落到主题色 id,不留下非法轴', () => {
+    ls['forsion_theme_skin'] = 'teal'
+    ls['forsion_theme_bg'] = 'rainbow'
+    expect(resolveInitialBg()).toBe('teal')
+  })
+
+  it('色点同时带完整种子色与真实表面，不再把暗色背景都画成近黑点', () => {
+    for (const skin of listSkins()) {
+      const swatch = backgroundSwatch(skin, true)
+      expect(swatch).toContain(skin.bgSeed)
+      expect(swatch).toContain(skin.bgDark)
+    }
+    const custom = listSkins().find((skin) => skin.id === 'custom')!
+    expect(backgroundSwatch(custom, true, '#ff0000')).toContain('#ff0000')
   })
 })

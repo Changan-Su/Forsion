@@ -8,7 +8,7 @@
     <!-- /shared 由 dev 代理与 nginx 一并转到 server(同 auth/pay 等页),省一份副本、永不走样。 -->
     <link rel="icon" type="image/svg+xml" href="/shared/Forsion-LOGO3.svg" />
     <script>
-      // FOUC 防护:React 挂载前按 localStorage 设 data-theme(语言)/data-skin(配色)/.dark/data-glass,
+      // FOUC 防护:React 挂载前按 localStorage 设 data-theme(语言)/data-skin(主题色)/data-bg(背景色)/.dark/data-glass,
       // 避免主题/暗色闪烁。合法性由 registry 启动后兜底纠正。与 desktop 共用同一套 localStorage 键。
       (function () {
         try {
@@ -19,20 +19,26 @@
           var legacy = MIG[localStorage.getItem('forsion_theme_preset')] || null;
           var lang = localStorage.getItem('forsion_theme_lang') || (legacy ? legacy[0] : 'lovable');
           if (!/^[a-z0-9-]+$/.test(lang)) lang = 'lovable';
+          var SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi', 'custom'];
           var skin = localStorage.getItem('forsion_theme_skin') || (legacy ? legacy[1] : 'cream');
-          if (['cream', 'coral', 'teal', 'lavender', 'custom'].indexOf(skin) < 0) skin = 'cream';
+          if (SKINS.indexOf(skin) < 0) skin = 'cream';
+          // 背景色轴:未设过 = 承接主题色 id(= 拆轴前的整套配色),与 registry.resolveInitialBg 同口径。
+          var bg = localStorage.getItem('forsion_theme_bg') || skin;
+          if (SKINS.indexOf(bg) < 0) bg = skin;
           var root = document.documentElement;
           root.dataset.theme = lang;
           root.dataset.skin = skin;
+          root.dataset.bg = bg;
           root.dataset.mode = mode;
           root.dataset.glass = glass;
           root.dataset.flat = flat;
           if (mode === 'dark') root.classList.add('dark');
+          // 首帧安全底色:值须与 desktop/frontend/index.html 的同名表一致(那份是真源)。
           var BG = {
-            cream: ['#f7f4ed', '#1c1a16'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
-            lavender: ['#f4eef7', '#1e1a29'], custom: ['#f6f6f7', '#1b1b1d']
+            cream: ['#f8f7f6', '#2a292b'], coral: ['#fbf5ef', '#19131a'], teal: ['#f5f5f7', '#1c1c1e'],
+            lavender: ['#f4eef7', '#1e1a29'], zhi: ['#ffffff', '#141414'], custom: ['#f6f6f7', '#1b1b1d']
           };
-          root.style.background = (BG[skin] || BG.cream)[mode === 'dark' ? 1 : 0];
+          root.style.background = (BG[bg] || BG.cream)[mode === 'dark' ? 1 : 0];
         } catch (e) { /* private mode */ }
       })();
     </script>
@@ -229,6 +235,7 @@
         #tangu-splash #tree-outline { opacity: 0; }
       }
     </style>
+    <link rel="stylesheet" href="/fonts/fonts.css">
   </head>
   <body>
     <div id="tangu-splash" aria-hidden="true">

@@ -128,6 +128,7 @@ async function applyCombo(page, lang, combo, mode) {
     const root = document.documentElement
     root.dataset.theme = lang
     root.dataset.skin = skin
+    root.dataset.bg = skin    // 两轴同 id = 拆轴前的整套配色
     root.dataset.mode = mode
     root.dataset.platform = 'win'
     root.dataset.glass = 'on'

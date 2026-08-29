@@ -9,7 +9,9 @@
   border-radius: 7px;
   background: var(--bg-card, var(--bg));
   color: var(--text);
-  box-shadow: 0 0 0 0.5px var(--border), 0 6px 20px var(--shadow, rgba(0, 0, 0, 0.18));
+  outline: 0.5px solid var(--border);
+  outline-offset: -0.5px;
+  box-shadow: var(--card-shadow);
   font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.55;

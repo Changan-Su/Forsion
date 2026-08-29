@@ -69,6 +69,17 @@ const LIGHT_FAINT: RGB = [114, 108, 103]
 const DARK_FAINT: RGB = [163, 158, 152]
 
 /**
+ * 主题色与背景色是两根**独立**的轴,所以自定义强调色不知道自己会落在哪块底上。
+ * 于是不按「自己那套底」算 ink,而按全部背景选项里**最不利**的那一面算:
+ * - 浅色最不利 = 薰衣草侧栏 #e5d5ef(预设里最暗的浅色面);自定义背景更亮 —— readableSurfaces 会把它
+ *   收敛到弱信息文字仍 AA 的区间(L≥0.94),必在此之上。
+ * - 暗色最不利 = #363639(readableSurfaces 在暗色下能产出的**最亮**面);各预设暗色卡面都比它暗。
+ * 结论:对任意 主题色 × 背景色 组合,--accent-ink 都不会掉到 4.5:1 以下(代价是浅底上稍微再压深一点)。
+ */
+const LIGHT_WORST_SURFACE: RGB = [229, 213, 239]
+const DARK_WORST_SURFACE: RGB = [54, 54, 57]
+
+/**
  * A custom background is a hue seed, not permission to silently invert the selected mode.
  * Keep as much of the chosen color as possible, then move the three surfaces together toward
  * the neutral mode baseline until even the weakest informational text remains AA-readable.
@@ -89,62 +100,57 @@ function readableSurfaces(surfaces: [RGB, RGB, RGB], dark: boolean): [RGB, RGB, 
   return surfaces.map((surface, index) => mixRgb(surface, target[index], high)) as [RGB, RGB, RGB]
 }
 
-/** Accent + ambiance vars from seed colors (applied inline on the custom skin); neutrals stay from the CSS base. Pure.
- *  配色拆成两个自由度:`color`=强调色 seed(accent 族),可选 `bg`=背景色 seed(bg 族)。
- *  不给 bg = 旧单色行为(背景由强调色微染,老用户零迁移);给 bg = 背景独立于强调色,但会保留当前
- *  亮/暗模式并自动收敛到弱信息文字仍满足 AA 的最接近色,避免背景 seed 把整套中性色反转。 */
-export function customSkinVars(color: string, dark: boolean, bg?: string): Record<string, string> {
+/** 自定义**主题色**:accent 家族(内联在 :root,压过 [data-skin] 块)。纯函数。
+ *  ink 按 LIGHT/DARK_WORST_SURFACE 算 —— 背景色是另一根轴,这里不知道也不该知道它选了什么。 */
+export function customAccentVars(color: string, dark: boolean): Record<string, string> {
   const [r, g, b] = hexToRgb(color)
   const c: RGB = [r, g, b]
   const rgb = `${r},${g},${b}`
-  const bc: RGB = bg ? hexToRgb(bg) : c
   const onAccent = readableOnAccent(c)
   const hoverTarget = onAccent === '#000000' ? WHITE : BLACK
-  if (dark) {
-    const [bgColor, sidebarColor, cardColor] = readableSurfaces([
-      bg ? mixRgb(bc, [26, 26, 28], 0.88) : mixRgb(c, [26, 26, 28], 0.93),
-      bg ? mixRgb(bc, [33, 33, 36], 0.88) : mixRgb(c, [33, 33, 36], 0.92),
-      bg ? mixRgb(bc, [41, 41, 44], 0.88) : mixRgb(c, [41, 41, 44], 0.94),
-    ], true)
-    const accentInk = readableInk(c, [bgColor, sidebarColor, cardColor], true)
-    return {
-      '--accent': color,
-      // 前景强调色必须同时压住舞台/侧栏/卡面;只有真实对比度不够时才向白色移动。
-      '--accent-ink': rgbCss(accentInk),
-      '--accent-hover': readableFillVariant(c, hoverTarget, 0.12, onAccent),
-      '--accent-light': `rgba(${rgb},0.16)`,
-      '--accent-rgb': rgb,
-      '--on-accent': onAccent,
-      '--on-accent-ink': readableOnAccent(accentInk),
-      '--user-bg': `rgba(${rgb},0.16)`,
-      // graphite faintly tinted by the (bg) seed
-      '--bg': rgbCss(bgColor),
-      '--sidebar-bg': rgbCss(sidebarColor),
-      '--bg-card': rgbCss(cardColor),
-    }
-  }
-  const [bgColor, sidebarColor, cardColor] = readableSurfaces([
-    bg ? bc : mixRgb(c, [246, 246, 247], 0.96),
-    bg ? mixRgb(bc, BLACK, 0.03) : mixRgb(c, [238, 238, 240], 0.94),
-    bg ? mixRgb(bc, WHITE, 0.55) : mixRgb(c, [252, 252, 253], 0.975),
-  ], false)
-  const accentInk = readableInk(c, [bgColor, sidebarColor, cardColor], false)
+  const accentInk = readableInk(c, [dark ? DARK_WORST_SURFACE : LIGHT_WORST_SURFACE], dark)
   return {
     '--accent': color,
-    // 同上:在三种常用表面上都保证 4.5:1,避免浅色/高饱和 seed 只靠经验阈值漏掉。
     '--accent-ink': rgbCss(accentInk),
     '--accent-hover': readableFillVariant(c, hoverTarget, 0.12, onAccent),
-    '--accent-light': `rgba(${rgb},0.10)`,
+    '--accent-light': `rgba(${rgb},${dark ? '0.16' : '0.10'})`,
     '--accent-rgb': rgb,
     '--on-accent': onAccent,
     '--on-accent-ink': readableOnAccent(accentInk),
-    '--user-bg': `rgba(${rgb},0.10)`,
-    // near-white with a hint of the seed; explicit bg 也会留在亮色可读区(card 提亮/sidebar 压深一档)
+    '--user-bg': `rgba(${rgb},${dark ? '0.16' : '0.10'})`,
+  }
+}
+
+/** 自定义**背景色**:三张表面(舞台/侧栏/卡面)。纯函数。
+ *  `explicit=false` = 旧「背景跟随强调色」行为(seed 传当前强调色,微染),老用户零迁移;
+ *  `explicit=true` = seed 就是背景色本身,但仍保留当前明暗并收敛到弱信息文字仍 AA 的最接近色,
+ *  避免一个背景 seed 把整套中性色反转。 */
+export function customBgVars(seed: string, dark: boolean, explicit: boolean): Record<string, string> {
+  const c = hexToRgb(seed)
+  const [bgColor, sidebarColor, cardColor] = dark
+    ? readableSurfaces([
+      explicit ? mixRgb(c, [26, 26, 28], 0.94) : mixRgb(c, [26, 26, 28], 0.93),
+      explicit ? mixRgb(c, [33, 33, 36], 0.93) : mixRgb(c, [33, 33, 36], 0.92),
+      explicit ? mixRgb(c, [41, 41, 44], 0.95) : mixRgb(c, [41, 41, 44], 0.94),
+    ], true)
+    : readableSurfaces([
+      explicit ? c : mixRgb(c, [246, 246, 247], 0.96),
+      explicit ? mixRgb(c, BLACK, 0.03) : mixRgb(c, [238, 238, 240], 0.94),
+      explicit ? mixRgb(c, WHITE, 0.55) : mixRgb(c, [252, 252, 253], 0.975),
+    ], false)
+  return {
     '--bg': rgbCss(bgColor),
     '--sidebar-bg': rgbCss(sidebarColor),
     '--bg-card': rgbCss(cardColor),
   }
 }
 
-/** Keys customSkinVars emits — used by the theme loader to clear inline vars when leaving custom. */
-export const CUSTOM_SKIN_VAR_KEYS: string[] = Object.keys(customSkinVars('#888888', false))
+/** 两轴都取自定义时的合成(= 拆轴前的 customSkinVars 签名;检查脚本/单测仍按它逐组合验)。 */
+export function customSkinVars(color: string, dark: boolean, bg?: string): Record<string, string> {
+  return { ...customAccentVars(color, dark), ...customBgVars(bg || color, dark, !!bg) }
+}
+
+export const CUSTOM_ACCENT_VAR_KEYS: string[] = Object.keys(customAccentVars('#888888', false))
+export const CUSTOM_BG_VAR_KEYS: string[] = Object.keys(customBgVars('#888888', false, true))
+/** 两轴内联变量的并集 —— loader 离开 custom 时按轴分别清理。 */
+export const CUSTOM_SKIN_VAR_KEYS: string[] = [...CUSTOM_ACCENT_VAR_KEYS, ...CUSTOM_BG_VAR_KEYS]

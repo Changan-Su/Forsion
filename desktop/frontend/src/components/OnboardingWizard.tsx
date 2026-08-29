@@ -13,8 +13,7 @@ import { EnvProbeSection } from './EnvProbeSection'
 import type { MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
-import { listLanguages, listSkins, forcedSchemeForLanguage } from '../theme/registry'
-import { applyTheme } from '../theme/loader'
+import { listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { ThemeCard } from './ThemeCard'
 import { BrandLogo } from './BrandLogo'
 import { LocaleToggle } from './LocaleToggle'
@@ -551,9 +550,11 @@ export const OnboardingWizard: React.FC<{
                       type="button"
                       className={`skin-chip${sk.id === themeSkin ? ' active' : ''}`}
                       title={t(`settings.theme.skin.${sk.id}`)}
-                      onClick={() => { applyTheme(themeLang, sk.id, themeMode, { customColor: themeSeed }); onThemeChange(themeLang, sk.id, themeModePref) }}
+                      // 引导只给一排色卡(整套配色);Root 会把主题色轴与背景色轴一起设成这个 id,
+                      // 想拆开选是设置→外观里的事,别在第一次开机就抛两根轴给用户。
+                      onClick={() => onThemeChange(themeLang, sk.id, themeModePref)}
                     >
-                      <i className="skin-dot" style={{ background: sk.id === 'custom' ? themeSeed : sk.accent }} />
+                      <i className="skin-dot" style={{ background: sk.id === 'custom' ? themeSeed : skinSwatch(sk, themeMode === 'dark', 'accent') }} />
                       <span>{t(`settings.theme.skin.${sk.id}`)}</span>
                     </button>
                   ))}
@@ -565,7 +566,7 @@ export const OnboardingWizard: React.FC<{
                   <input
                     type="color"
                     value={themeSeed}
-                    onChange={(e) => { applyTheme(themeLang, 'custom', themeMode, { customColor: e.target.value }); onSeedChange(e.target.value) }}
+                    onChange={(e) => onSeedChange(e.target.value)}
                     aria-label={t('onboarding.theme.customSeedLabel')}
                     style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
                   />

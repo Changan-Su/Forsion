@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { customSkinVars } from './lovableData'
+import { customAccentVars, customBgVars, customSkinVars } from './lovableData'
 
 type RGB = [number, number, number]
 
@@ -59,4 +59,35 @@ describe('customSkinVars — independent background seed', () => {
       })
     }
   }
+
+  it('显式暗色背景保留色温但不会把大面积舞台染成高彩度色块', () => {
+    const [r, g, b] = rgb(customBgVars('#ff0000', true, true)['--bg'])
+    const channelDelta = r - Math.max(g, b)
+    expect(channelDelta).toBeGreaterThan(8)
+    expect(channelDelta).toBeLessThan(24)
+  })
+})
+
+describe('主题色 / 背景色两轴各管一半 token', () => {
+  it('两轴的键互不相交,合起来正好等于旧的整套自定义配色', () => {
+    const accent = Object.keys(customAccentVars('#3366ff', false))
+    const bg = Object.keys(customBgVars('#f0eef8', false, true))
+    expect(accent.filter((k) => bg.includes(k))).toEqual([])
+    expect([...accent, ...bg].sort()).toEqual(Object.keys(customSkinVars('#3366ff', false, '#f0eef8')).sort())
+  })
+
+  it('换背景色不动 accent 家族,换主题色不动表面 —— 否则两轴又耦合回去了', () => {
+    const a1 = customAccentVars('#3366ff', false)
+    const a2 = customAccentVars('#3366ff', false)
+    expect(a1).toEqual(a2)
+    expect(customBgVars('#f0eef8', false, true)).not.toEqual(customBgVars('#e8f5ee', false, true))
+    expect(customAccentVars('#3366ff', false)).not.toEqual(customAccentVars('#ff6633', false))
+  })
+
+  it('自定义主题色在任何背景预设上都保 AA:按最不利表面取 ink', () => {
+    // 预设里最暗的浅色面(薰衣草侧栏)与最亮的暗色面 —— 全部背景选项都不会比它们更难读。
+    for (const [seed, dark, surface] of [['#ffd166', false, '#e5d5ef'], ['#1b3a6b', true, '#363639']] as const) {
+      expect(contrast(customAccentVars(seed, dark)['--accent-ink'], surface)).toBeGreaterThanOrEqual(4.5)
+    }
+  })
 })
