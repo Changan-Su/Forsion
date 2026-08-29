@@ -15,6 +15,8 @@ import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { DashboardCanvasView } from './views/DashboardCanvasView'
+import { DashboardGridView } from './views/DashboardGridView'
+import { useDbStore } from '@amadeus/store/dbStore'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { resolveInitialLang, resolveInitialSkin } from './theme/registry'
@@ -30,6 +32,7 @@ import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
 import { QuickFind, useQuickFind } from './quickFind'
+import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
@@ -279,9 +282,49 @@ const DASH_FILE = 'Harness.dashboard.md'
  *  会调 leaf.setParams 的按钮 —— 仪器据此验「视图改了 params 会不会写回卡片源码」。 */
 function DashViewProbe({ leaf }: ViewProps) {
   const n = Number(leaf.params.n ?? 0)
+  const [hits, setHits] = useState(0)
   return (
     <div data-tag="dashv" data-params={JSON.stringify(leaf.params)} data-leaf={leaf.id} style={{ padding: 12 }}>
+      <div className="amx-toolbar"><span className="amx-crumbs">卡内视图</span><button className="amx-mode-btn">⋯</button></div>
       <button data-act="bump" onClick={() => leaf.setParams({ ...leaf.params, n: n + 1 })}>bump {n}</button>
+      <div data-act="hit" data-hits={hits} onClick={() => setHits((value) => value + 1)} style={{ height: 40, marginTop: 8, background: 'var(--overlay-light)' }}>hit {hits}</div>
+    </div>
+  )
+}
+
+function DashFileProbe({ leaf }: ViewProps) {
+  return <div data-tag="dashfile" data-src={String(leaf.params.probePath ?? '')} style={{ padding: 12 }}>file: {String(leaf.params.probePath ?? '(none)')}</div>
+}
+
+function DashCompactProbe({ leaf, size }: ViewProps & { size: string }) {
+  const [hits, setHits] = useState(0)
+  return (
+    <div className="dash-compact dash-compact-list" data-tag="dashcompact" data-size={size}>
+      <div className="dash-compact-kpi"><strong>6</strong><span>项正在推进</span></div>
+      <div className="dash-compact-rows">
+        {['整理 Dashboard 契约', '验证深色主题', '补齐响应式台架', '更新开发日志'].map((label, index) => (
+          <div className="dash-compact-row" key={label}><span>{label}</span><em>{index < 2 ? '今天' : '本周'}</em></div>
+        ))}
+        <button className="dash-compact-row" data-act="hit" data-hits={hits} onClick={() => setHits((value) => value + 1)}><span>交互探针</span><em>{hits}</em></button>
+      </div>
+    </div>
+  )
+}
+
+/** ?dashinteractive:模拟原生笔记编辑器的 Dashboard 全尺寸工厂。它刻意放 textarea 与按钮，
+ *  让仪器验证排版解锁后焦点、键入、点击都不会再被透明拖拽层吞掉。 */
+function DashEditorProbe({ leaf }: ViewProps) {
+  const [text, setText] = useState('Dashboard 内可编辑')
+  const [saved, setSaved] = useState(0)
+  return (
+    <div data-tag="dash-editor" data-leaf={leaf.id} style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', padding: 12, gap: 8 }}>
+      <textarea
+        data-act="editor-input"
+        value={text}
+        onChange={(event) => setText(event.currentTarget.value)}
+        style={{ minHeight: 0, flex: 1, resize: 'none' }}
+      />
+      <button data-act="editor-save" data-saved={saved} onClick={() => setSaved((value) => value + 1)}>保存 {saved}</button>
     </div>
   )
 }
@@ -294,6 +337,21 @@ function DashHarness() {
   return (
     <div className="amadeus-root am-app tangu-lovable" data-mode="light" style={{ position: 'fixed', inset: 0 }}>
       <DashboardCanvasView {...({ leaf, params } as unknown as ViewProps)} />
+      <QuickFind />
+    </div>
+  )
+}
+
+/** ?dashgrid:真结构化 Dashboard。深浅色均走主题装载器，不用容器上写几个假 token。 */
+function DashGridHarness() {
+  const [params, setParams] = useState<Record<string, unknown>>({ dashPath: DASH_FILE, locked: true })
+  const leaf = { id: 'main', params, setTitle: () => {}, setParams: (p: Record<string, unknown>) => setParams(p) }
+  const dark = new URLSearchParams(location.search).has('dark')
+  useEffect(() => { applyRealTheme(resolveInitialLang(), resolveInitialSkin(), dark ? 'dark' : 'light') }, [dark])
+  return (
+    <div className="amadeus-root am-app tangu-lovable" data-mode={dark ? 'dark' : 'light'} style={{ position: 'fixed', inset: 0 }}>
+      <DashboardGridView {...({ leaf, params } as unknown as ViewProps)} />
+      <QuickFind />
     </div>
   )
 }
@@ -539,6 +597,106 @@ if (new URLSearchParams(location.search).has('dock')) {
     )
   }
   createRoot(document.getElementById('root')!).render(<PillHarness />)
+} else if (new URLSearchParams(location.search).has('dashinteractive')) {
+  const iso = new Date().toISOString()
+  registerView({
+    type: 'amadeus-editor', kind: 'entity', embeddable: true, idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'],
+    displayName: '笔记编辑器', icon: Square, factory: (props) => <DashEditorProbe {...props} />,
+    dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+  })
+  usePageStore.setState({
+    activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: [],
+    manifest: {
+      schema: PAGE_SCHEMA, id: 'harness-dashinteractive', title: 'Dash Interactive Harness', createdAt: iso, updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: '1' }] }] }] },
+      blocks: { 1: { type: 'markdown' } },
+      fmExtra: ['dashboard3:', '  "1": [0, 12, 8]'].join('\n'),
+    },
+    blocks: { 1: { id: '1', type: 'markdown', content: '```view\ntype: amadeus-editor\nnotePath: 笔记甲.md\n```' } },
+  })
+  createRoot(document.getElementById('root')!).render(<DashGridHarness />)
+} else if (new URLSearchParams(location.search).has('dashdata')) {
+  const iso = new Date().toISOString()
+  const DB = '台账.db'
+  const dataIds = ['1', '2', '3']
+  usePageStore.setState({
+    activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE], files: [DB],
+    manifest: {
+      schema: PAGE_SCHEMA, id: 'harness-dashdata', title: 'Dash Data Harness', createdAt: iso, updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: dataIds.map((ref) => ({ ref })) }] }] },
+      blocks: Object.fromEntries(dataIds.map((id) => [id, { type: 'markdown' }])),
+      fmExtra: ['dashboard3:', '  "1": [0, 3, 2]', '  "2": [1, 3, 2]', '  "3": [2, 6, 3]'].join('\n'),
+    },
+    blocks: {
+      1: { id: '1', type: 'markdown', content: '```stat\nsource: 台账.db\nlabel: 总行数\n```' },
+      2: { id: '2', type: 'markdown', content: '```stat\nsource: 台账.db\ncol: 金额\nstat: sum\nlabel: 金额合计\n```' },
+      3: { id: '3', type: 'markdown', content: '```chart\nsource: 台账.db\ngroup: 状态\nkind: bar\n```' },
+    },
+  })
+  useDbStore.setState({
+    entries: {
+      [DB]: {
+        status: 'ok', path: DB,
+        data: {
+          version: 1, name: '台账',
+          columns: [
+            { id: 'c1', name: '状态', type: 'select', options: ['进行中', '已完成'] },
+            { id: 'c2', name: '金额', type: 'number' },
+          ],
+          rows: [
+            { id: 'r1', cells: { c1: '进行中', c2: 100 } },
+            { id: 'r2', cells: { c1: '进行中', c2: 200 } },
+            { id: 'r3', cells: { c1: '已完成', c2: 50 } },
+            { id: 'r4', cells: { c1: '已完成', c2: null } },
+          ],
+        },
+      },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(<DashGridHarness />)
+} else if (new URLSearchParams(location.search).has('dashgrid')) {
+  const iso = new Date().toISOString()
+  registerView({
+    type: 'dashv', kind: 'aux', embeddable: true, displayName: 'Dash Probe', icon: Square,
+    factory: (p) => <DashViewProbe {...p} />,
+    dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'wide', surface: 'summary', factory: (p, ctx) => <DashCompactProbe {...p} size={ctx.size} /> },
+  })
+  for (const [type, name] of [['todo-list', '待办'], ['calendar', '日历']] as const) {
+    registerView({
+      type, kind: 'collection', embeddable: true, displayName: name, icon: Square,
+      factory: (p) => <DashViewProbe {...p} />,
+      dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (p, ctx) => <DashCompactProbe {...p} size={ctx.size} /> },
+    })
+  }
+  registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
+  const gridIds = ['1', '2', '3', '4', '5', '6', '7']
+  usePageStore.setState({
+    activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: ['手册.pdf', '图.png'],
+    manifest: {
+      schema: PAGE_SCHEMA, id: 'harness-dashgrid', title: 'Dash Grid Harness', createdAt: iso, updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: gridIds.map((ref) => ({ ref })) }] }] },
+      blocks: Object.fromEntries(gridIds.map((id) => [id, { type: 'markdown' }])),
+      // 刻意把文本写成旧的小尺寸，把完整 view 与 clock 相邻：新契约必须自动约束，而不是拉成等高空盒。
+      fmExtra: [
+        'tags: [harness]', 'dashboard3:',
+        '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
+        '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+      ].join('\n'),
+    },
+    blocks: {
+      1: { id: '1', type: 'markdown', content: '```section\ntitle: 今天\n```' },
+      2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
+      3: { id: '3', type: 'markdown', content: '随手记：把常看的东西摆成一页。' },
+      4: { id: '4', type: 'markdown', content: '```view\ntype: dashv\nn: 1\n```' },
+      5: { id: '5', type: 'markdown', content: '```section\ntitle: 最近\n```' },
+      6: { id: '6', type: 'markdown', content: '这是一段普通文本块，在网格里和别的卡片一样有外壳。' },
+      7: { id: '7', type: 'markdown', content: '```view\ntype: dashv\nn: 2\n```' },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(<DashGridHarness />)
 } else if (new URLSearchParams(location.search).has('dashboard')) {
   const iso = new Date().toISOString()
   registerView({ type: 'dashv', displayName: 'Dash Probe', icon: Square, factory: (p) => <DashViewProbe {...p} /> })

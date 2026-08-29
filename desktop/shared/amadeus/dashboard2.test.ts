@@ -71,3 +71,25 @@ describe('dashboard2(画布版布局)', () => {
     expect(text).not.toContain(DASH2_FM_KEY)
   })
 })
+
+describe('readDash2Layout 的严格三态(Codex 2026-08-25 评审补齐)', () => {
+  it('标量根 / 数组根 = 读不懂 → 冻结(此前被当成「还没排过版」,自愈会当场覆盖)', () => {
+    expect(readDash2Layout('随手写的一句话').ok).toBe(false)
+    expect(readDash2Layout('- a\n- b').ok).toBe(false)
+  })
+  it('空 frontmatter 仍是「还没排过版」', () => {
+    expect(readDash2Layout('')).toEqual({ ok: true, layout: {} })
+    expect(readDash2Layout('   \n ')).toEqual({ ok: true, layout: {} })
+  })
+  it('显式 null = 写了键但没内容,按「还没排过版」放行(刻意:没有布局可丢)', () => {
+    expect(readDash2Layout('dashboard2:')).toEqual({ ok: true, layout: {} })
+    expect(readDash2Layout('dashboard2: null')).toEqual({ ok: true, layout: {} })
+  })
+  it('元组长度必须恰好 4(多出来的项写回时会被静默丢掉)', () => {
+    expect(readDash2Layout('dashboard2:\n  "1": [0, 0, 400, 200, 7]').ok).toBe(false)
+  })
+  it('必须是真数字,不做 Number() 强转(字符串/布尔一旦接受,写回就把原表示改掉了)', () => {
+    expect(readDash2Layout('dashboard2:\n  "1": ["0", 0, 400, 200]').ok).toBe(false)
+    expect(readDash2Layout('dashboard2:\n  "1": [true, 0, 400, 200]').ok).toBe(false)
+  })
+})

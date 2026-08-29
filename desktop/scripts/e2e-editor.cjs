@@ -11,7 +11,9 @@ const http = require('http')
 const path = require('path')
 const { spawn } = require('child_process')
 
-const URL = 'http://localhost:5173/harness.html'
+// ⚠️ 5173 可能被**别的检出**(主仓/其它 worktree)的 vite 占着 —— 那会静默测错树。
+// 在 worktree 里跑:自起一个 vite(--port 5199)并设 HARNESS_URL 指过去。
+const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
 
 function ping() {
   return new Promise((res) => {
@@ -30,7 +32,8 @@ function ping() {
 async function main() {
   let vite = null
   if (!(await ping())) {
-    vite = spawn('npx', ['vite', 'frontend'], {
+    const port = new (require('url').URL)(URL).port || '5173'
+    vite = spawn('npx', ['vite', 'frontend', '--port', port, '--strictPort'], {
       cwd: path.resolve(__dirname, '..'),
       stdio: 'ignore',
     })

@@ -1,0 +1,98 @@
+/* 数据卡(数字 / 图表)。颜色全部走 LCL token:同一支 --primary 按透明度分档,
+   明暗两档自动跟随 —— 图表里最容易犯的错就是写死一套色板,暗色下当场烧穿。 */
+
+/* ── 数字卡 ─────────────────────────────────────────────────────────────── */
+.dash-stat { gap: 4px; }
+.dash-stat-value {
+  font-size: clamp(26px, 7cqw, 56px);
+  font-weight: 620;
+  line-height: 1.02;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: baseline; gap: 4px;
+}
+.dash-stat-unit { font-size: 0.42em; font-weight: 500; color: var(--text-muted); }
+.dash-stat-label { font-size: 12px; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-stat-sub { font-size: 11px; color: var(--text-faint, var(--text-muted)); }
+
+/* ── 图表卡 ─────────────────────────────────────────────────────────────── */
+.dash-chart { height: 100%; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; gap: 8px; }
+.dash-chart-title { flex: 0 0 auto; font-size: 12px; font-weight: 550; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-chart-body { flex: 1 1 auto; min-height: 0; display: flex; }
+
+/* 横向条 */
+.dash-bars { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
+.dash-bar-row { display: grid; grid-template-columns: minmax(0, 5.5em) 1fr auto; align-items: center; gap: 8px; font-size: 11.5px; }
+.dash-bar-key { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-bar-track { height: 8px; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); overflow: hidden; }
+.dash-bar-fill { display: block; height: 100%; border-radius: inherit; min-width: 2px; }
+.dash-bar-val { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* 折线 */
+.dash-line { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dash-line-svg { flex: 1 1 auto; width: 100%; min-height: 0; }
+.dash-line-axis { flex: 0 0 auto; display: flex; justify-content: space-between; gap: 6px; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); }
+.dash-line-axis span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 5em; }
+
+/* 环图 */
+.dash-donut { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; gap: 12px; }
+.dash-donut-svg { flex: 0 0 auto; width: 96px; max-width: 45%; height: auto; }
+.dash-donut-legend { flex: 1 1 auto; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+.dash-donut-item { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 6px; }
+.dash-donut-item i { width: 9px; height: 9px; border-radius: 3px; }
+.dash-donut-item b { font-weight: 450; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-donut-item em { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ── 页面级筛选栏 ───────────────────────────────────────────────────────
+   一处改、全页跟随 —— 这条是「复合 view」与「一屏面板」的分界线,所以它长在页面上,
+   不长在任何一张卡里。 */
+.dash-filterbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  padding: 6px 12px;
+  border-bottom: var(--border-width, 1px) solid var(--border);
+  background: var(--bg-card, var(--bg));
+  font-size: 12px;
+}
+.dash-filterbar-label { color: var(--text-faint, var(--text-muted)); margin-right: 2px; }
+.dash-filter-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 6px 2px 8px;
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--primary) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  color: var(--text);
+}
+.dash-filter-chip b { font-weight: 550; }
+.dash-filter-chip button {
+  border: none; background: transparent; cursor: pointer; padding: 0; display: inline-flex;
+  color: var(--text-faint, var(--text-muted));
+}
+.dash-filter-chip button:hover { color: var(--danger, #e5484d); }
+.dash-filter-add {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  border: var(--border-width, 1px) dashed var(--border);
+  background: transparent; color: var(--text-muted);
+}
+.dash-filter-add:hover { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); color: var(--text); }
+
+/* 筛选编辑器(加筛选的小弹层)。控件吃 LCL token,不自造表单样式。 */
+.dash-filter-editor { display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 200px; }
+.dash-filter-editor select,
+.dash-filter-editor input {
+  width: 100%;
+  font: inherit; font-size: 12px;
+  padding: 4px 6px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg);
+  color: var(--text);
+}
+.dash-filter-editor select:focus-visible,
+.dash-filter-editor input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.dash-filter-commit {
+  border: none; border-radius: var(--radius-sm, 6px); cursor: pointer;
+  padding: 5px 8px; font-size: 12px; font-weight: 550;
+  background: var(--primary); color: var(--bg);
+}

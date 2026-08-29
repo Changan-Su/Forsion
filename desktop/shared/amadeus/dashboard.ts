@@ -201,7 +201,12 @@ export function setDashInFm(fmExtra: string, layout: DashLayout): string | null 
 // 'view' = 把宿主**任意已注册视图**(日历/待办/收件箱/活动日志/插件视图……)活化成一张卡片,
 // opts.type 记视图注册键、其余键即该视图的 params。活化逻辑在 AmadeusDashboardView(要宿主的
 // 视图注册表),不放进这层可移植的 amadeus 代码 —— 这里只管它的文本表示。
-export const DASH_WIDGETS = ['clock', 'weather', 'webview', 'view'] as const
+// 'section' = 分区标题条。它不是「一个会动的东西」,而是**排版语汇**:整行、只有一行高,
+// 把下面的卡片在视觉上归成一组。放在 widget 通道里是因为它同样要在 Obsidian 里降级成一段
+// 普通代码块,而且同样要进搜索。
+// 'stat' / 'chart' = 数据卡(见 shared/amadeus/dashboardData.ts):从一份 .db 里取数,
+// 并且**吃页面级筛选** —— 它们是「一屏面板」与「一个复合 view」的分界线。
+export const DASH_WIDGETS = ['clock', 'weather', 'webview', 'view', 'section', 'stat', 'chart'] as const
 export type WidgetKind = (typeof DASH_WIDGETS)[number]
 export interface Widget {
   kind: WidgetKind
@@ -285,9 +290,10 @@ export const DASH2_MIN_W = 80
 export const DASH2_MIN_H = 60
 export const DASH2_MAX_WH = 4000
 export const DASH2_MAX_XY = 1_000_000
-/** 新卡默认 px 尺寸(≈ 旧默认 8×6 格的观感)。 */
-export const DASH2_DEFAULT_W = 400
-export const DASH2_DEFAULT_H = 220
+/** 新卡默认 px 尺寸(≈ 旧默认 8×6 格的观感)。**取点阵步长 24 的整倍数** —— 默认落下来就能与
+ *  邻居严丝合缝地拼上(用户 2026-08-25:「卡片之间应当可以无缝衔接」)。 */
+export const DASH2_DEFAULT_W = 408
+export const DASH2_DEFAULT_H = 216
 
 export function clampRect2(r: Rect): Rect {
   const n = (v: number, lo: number, hi: number): number =>
@@ -311,15 +317,26 @@ export function readDash2Layout(fmExtra: string): DashRead {
   const doc = parseDocument(fmExtra)
   if (doc.errors.length) return { ok: false, error: doc.errors[0].message.split('\n')[0] }
   const obj = doc.toJS() as unknown
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { ok: true, layout: {} }
+  // ⚠️ 根节点必须是**映射**。标量/数组根是合法 YAML 但不是 frontmatter,当成「还没排过版」有两害
+  // (Codex 2026-08-25):①自愈当场按默认值重排并落盘,原内容被覆盖;②`setDash2InFm` 对标量根
+  // `doc.set` 会抛,异常从 effect 里冒出来。一律冻结。
+  if (obj === null || obj === undefined) return { ok: true, layout: {} } // 空 frontmatter
+  if (typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, error: 'frontmatter 根节点不是映射' }
   const raw = (obj as Record<string, unknown>)[DASH2_FM_KEY]
-  if (raw === undefined || raw === null) return { ok: true, layout: {} } // 键不存在 = 还没排过版
+  // `undefined`(键不存在)与显式 `null`(写了键但没内容)都视为「还没排过版」——**这一条是刻意的**:
+  // 两种情形下都没有布局可丢,冻结只会让用户对着一个改不动的横幅发呆。真正要冻结的是「有内容但读不懂」。
+  if (raw === undefined || raw === null) return { ok: true, layout: {} }
   if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: `${DASH2_FM_KEY} 不是映射` }
   const out: DashLayout = {}
   for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!Array.isArray(v) || v.length < 4) return { ok: false, error: `${DASH2_FM_KEY}.${id} 不是 [x, y, w, h]` }
-    const n = v.slice(0, 4).map((x) => Number(x))
-    if (!n.every((x) => Number.isFinite(x))) return { ok: false, error: `${DASH2_FM_KEY}.${id} 含非数值` }
+    // 长度必须**恰好** 4:多出来的项写回时会被静默丢掉(未来 schema 加字段时就是无声的数据损失)。
+    if (!Array.isArray(v) || v.length !== 4) return { ok: false, error: `${DASH2_FM_KEY}.${id} 不是 [x, y, w, h]` }
+    // 必须是**真数字**,不做 `Number()` 强转:'100' / true 都能转成有限值,但它们一旦被接受,
+    // 下一次写回就把原来的表示悄悄改掉了 —— 与「读不懂即冻结」同一条纪律。
+    if (!v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
+      return { ok: false, error: `${DASH2_FM_KEY}.${id} 含非数值` }
+    }
+    const n = v as number[]
     out[String(id)] = clampRect2({ x: n[0], y: n[1], w: n[2], h: n[3] })
   }
   return { ok: true, layout: out }

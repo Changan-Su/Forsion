@@ -18,7 +18,7 @@ import type { ViewProps } from '@lcl/engine'
 // ponytail: 不订阅 viewRegistry —— 能嵌卡的只有宿主 embeddable 白名单里的内置视图,它们在
 // installEngine 一次注册完;插件视图恒非 embeddable(宿主不给插件这个字段),不存在「晚注册」窗口。
 import { allViews, getView, label, useEdgeNudge, useWorkspace } from '@lcl/engine'
-import { PageScopeCtx, disposePageScope, setActivePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { PageScopeCtx, setActivePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { BlockHost } from '@amadeus/components/BlockHost'
 import { askString } from '@amadeus/components/askString'
 import { DndContext, useSensors } from '@dnd-kit/core'
@@ -27,6 +27,7 @@ import {
   parseWidget, readDash2Layout, readDashLayout, reconcileCanvas, sameRect, setDash2InFm,
   webviewUrlAllowed, widgetSource, type DashLayout, type Rect,
 } from '@amadeus-shared/dashboard'
+import { setDashModeInFm } from '@amadeus-shared/dashboard3'
 import { useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
@@ -89,7 +90,8 @@ function CanvasInner({ leaf }: ViewProps) {
   }, [dashPath]) // eslint-disable-line react-hooks/exhaustive-deps
   const isActiveLeaf = useWorkspace((s) => s.mainTabs.find((t) => t.id === leaf.id)?.active ?? false)
   useEffect(() => { if (isActiveLeaf) setActivePageScope(leaf.id) }, [isActiveLeaf, leaf.id])
-  useEffect(() => () => disposePageScope(leaf.id), [leaf.id])
+  // scope 生命周期由 DashboardView 路由统一管理。否则 grid/canvas 切换时旧子视图的
+  // cleanup 会销毁新子视图正在使用的同一份 scoped store。
 
   const ids = useMemo(() => {
     if (!manifest) return []
@@ -477,6 +479,19 @@ function CanvasInner({ leaf }: ViewProps) {
         <>
           <div className="dash-menu-scrim" onClick={() => setNoteMenu(null)} />
           <div ref={noteMenuFix.ref} className="dash-add-menu" style={{ position: 'fixed', left: noteMenu.x, top: noteMenu.y, ...noteMenuFix.style }}>
+            {/* 与网格版「切换到自由摆位」对称的回程:只写模式键,dashboard2: 原样留作回滚保险。 */}
+            <button
+              onClick={() => {
+                setNoteMenu(null)
+                const st = store.getState()
+                if (st.activePage !== dashPath) return
+                const cur = st.manifest?.fmExtra ?? ''
+                const text = setDashModeInFm(cur, 'grid')
+                if (text !== null && text !== cur) st.setFmExtra(text)
+              }}
+            >
+              切换到结构化网格
+            </button>
             <button
               onClick={() => {
                 setNoteMenu(null)

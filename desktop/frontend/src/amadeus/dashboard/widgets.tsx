@@ -3,14 +3,34 @@
 // 它就是一段普通代码块(Obsidian 打开也一样),这是有意的降级面。
 import { useEffect, useRef, useState } from 'react'
 import { webviewUrlAllowed, type Widget } from '@amadeus-shared/dashboard'
+import type { DashFilter } from '@amadeus-shared/dashboardData'
+import { ChartCard, StatCard } from '../../views/dashDataCards'
 import { BROWSER_PARTITION } from '../../../../shared/browser'
 import { Webview } from '../../builtins/browserView'
 
-export function WidgetCard({ widget }: { widget: Widget }) {
+/** `filters` = 页面级筛选(只有数据卡吃它)。画布版不传 = 空数组:那边没有筛选栏,
+ *  数据卡在那儿就是「没有任何页面筛选」的样子,而不是报错。 */
+export function WidgetCard({ widget, filters = [] }: { widget: Widget; filters?: DashFilter[] }) {
   if (widget.kind === 'clock') return <ClockWidget opts={widget.opts} />
   if (widget.kind === 'weather') return <WeatherWidget opts={widget.opts} />
   if (widget.kind === 'webview') return <WebviewWidget opts={widget.opts} />
+  if (widget.kind === 'section') return <SectionWidget opts={widget.opts} />
+  if (widget.kind === 'stat') return <StatCard opts={widget.opts} filters={filters} />
+  if (widget.kind === 'chart') return <ChartCard opts={widget.opts} filters={filters} />
   return null // 'view' 卡片在 views/dashboardViewCard.tsx 里活化(要宿主的视图注册表)
+}
+
+// ──────────────────────────────── 分区标题 ────────────────────────────────
+
+/** 分区标题条:纯排版元素,把下面的卡片归成一组。没有边框没有底色 —— 它是**页面的一部分**,
+ *  不是一张卡(所以宿主对它免去卡片外壳,见 DashboardGridView 的 isChrome 判定)。 */
+function SectionWidget({ opts }: { opts: Record<string, string> }) {
+  return (
+    <div className="dash-widget dash-section">
+      <span className="dash-section-title">{opts.title || '未命名分区'}</span>
+      {opts.note && <span className="dash-section-note">{opts.note}</span>}
+    </div>
+  )
 }
 
 // ───────────────────────────────── 时钟 ─────────────────────────────────

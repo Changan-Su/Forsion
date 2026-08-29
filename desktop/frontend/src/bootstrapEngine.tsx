@@ -25,7 +25,7 @@ import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/Spe
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
 import { AmadeusDbView } from './views/AmadeusDbView'
 import { AmadeusDrawingView } from './views/AmadeusDrawingView'
-import { DashboardCanvasView } from './views/DashboardCanvasView'
+import { DashboardView } from './views/DashboardView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { AmadeusPdfView } from './views/AmadeusPdfView'
 import { AmadeusImageView } from './views/AmadeusImageView'
@@ -46,6 +46,7 @@ import { isSmoothCaretOn, setSmoothCaretEnabled } from './smoothCaret'
 import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
 import { SMOOTH_CARET_KEY } from './types'
 import { ActivityLogView } from './views/ActivityLogView'
+import { ActivityDashboardCard, CalendarDashboardCard, InboxDashboardCard, TodoDashboardCard } from './views/DashboardCompactViews'
 import { AutomationListView } from './views/automation/AutomationListView'
 import { AutomationDetailView } from './views/automation/AutomationDetailView'
 import { AutomationRunsView } from './views/automation/AutomationRunsView'
@@ -122,7 +123,12 @@ export function installEngine(): void {
   // 「更新」标签页(更新日志 + 下载/安装):检测到新版自动弹出;任何产品变体都注册。
   registerView({ type: 'changelog', kind: 'page', displayName: () => app().tr('view.changelog'), icon: FileText, factory: () => <ChangelogView />, singleton: true })
   // 活动日志实时视图(开发者工具):恒注册,⌘K 入口由开发者选项开关控制(activityViewCommand)。
-  registerView({ type: 'activity-log', kind: 'page', displayName: () => app().tr('view.activityLog'), icon: Activity, factory: () => <ActivityLogView />, singleton: true })
+  registerView({
+    type: 'activity-log', kind: 'page', embeddable: true,
+    displayName: () => app().tr('view.activityLog'), icon: Activity,
+    factory: () => <ActivityLogView />, singleton: true,
+    dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'wide', surface: 'summary', factory: (_props, ctx) => <ActivityDashboardCard size={ctx.size} /> },
+  })
   // 空侧栏占位:侧栏关空/拖空后由 closeLeaf/dropView 自动补上,保住 group 作拖放靶(整组只剩它时 tab 条隐藏,见 engine.css)。
   registerView({ type: 'sidebar-empty', kind: 'page', displayName: () => app().tr('sidebar.emptyTitle'), icon: PanelLeft, factory: () => <SidebarEmptyView />, closable: false })
   // 主区空态占位:关掉最后一个主区 tab 后 closeLeaf 就地把该 leaf 变成它(Forsion 品牌图 + 新建;tab 条隐藏机关同 sidebar-empty)。
@@ -135,19 +141,35 @@ export function installEngine(): void {
     // 笔记库/大纲已并入统一的 workspace/outline 视图(见上);Amadeus 专属侧视图保留。
     // 编辑器 = 非 singleton 多实例(类 Obsidian 每笔记一个 tab,params.notePath 认领笔记并随布局持久化);
     // 可关闭:关到主区最后一个 → 落 launcher 启动器(见 workspaceStore.closeLeaf)。
-    registerView({ type: 'amadeus-editor', kind: 'entity', idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'], displayName: () => app().tr('amadeus.editor'), icon: FileText, factory: (props) => <AmadeusEditorView {...props} /> })
+    registerView({
+      type: 'amadeus-editor', kind: 'entity', embeddable: true, idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'],
+      displayName: () => app().tr('amadeus.editor'), icon: FileText, factory: (props) => <AmadeusEditorView {...props} />,
+      dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+    })
     // 独立 .db 数据库视图(多实例,params.dbPath 认领文件并随布局持久化;树上点 .db 打开,见 amadeusNav.openDb)。
-    registerView({ type: 'amadeus-db', kind: 'entity', idParam: 'dbPath', fileMatch: VIEW_FILE_MATCH['amadeus-db'], displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} /> })
+    registerView({
+      type: 'amadeus-db', kind: 'entity', embeddable: true, idParam: 'dbPath', fileMatch: VIEW_FILE_MATCH['amadeus-db'],
+      displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} />,
+      dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+    })
     // 独立白板视图(多实例,params.drawingPath 认领文件;树上点 .excalidraw.md / 笔记里点 [[X.excalidraw]] 打开,见 amadeusNav.openDrawing)。
-    registerView({ type: 'amadeus-drawing', kind: 'entity', idParam: 'drawingPath', fileMatch: VIEW_FILE_MATCH['amadeus-drawing'], displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} /> })
-    // 仪表盘(P3a 画布版,2026-08-25 拍板):.dashboard.md 一律开进它;文件仍是一份合法笔记
-    // (布局在外来 frontmatter 键 dashboard2:),掉进笔记编辑器也不会坏 —— 见 shared/amadeus/dashboard.ts。
-    registerView({ type: 'dashboard', kind: 'entity', idParam: 'dashPath', fileMatch: VIEW_FILE_MATCH['dashboard'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '仪表盘' : 'Dashboard'), icon: LayoutDashboard, factory: (props) => <DashboardCanvasView {...props} /> })
+    registerView({
+      type: 'amadeus-drawing', kind: 'entity', embeddable: true, idParam: 'drawingPath', fileMatch: VIEW_FILE_MATCH['amadeus-drawing'],
+      displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} />,
+      dashboard: { sizes: ['full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+    })
+    // 仪表盘按文件声明分派:新建/缺省走结构化网格,已有 dashboard2: 继续走自由画布。
+    // 两套布局都只占用外来 frontmatter 键,文件仍是一份合法笔记。
+    registerView({ type: 'dashboard', kind: 'entity', idParam: 'dashPath', fileMatch: VIEW_FILE_MATCH['dashboard'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '仪表盘' : 'Dashboard'), icon: LayoutDashboard, factory: (props) => <DashboardView {...props} /> })
     // 旧网格版 view **已移除**(用户拍板:旧 UI 不能留着让人看到)。已存布局里的 amadeus-dashboard
     // panel 由 layoutViewsAllRegistered 整份回退 → 该 Space 按新配方重建,文件本身不受影响
     // (.dashboard.md 照旧被新画布版认领,旧布局键 dashboard: 也原样留在文件里当回滚保险)。
     // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf)。
-    registerView({ type: 'amadeus-pdf', kind: 'entity', idParam: 'pdfPath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} /> })
+    registerView({
+      type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'pdfPath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'],
+      displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} />,
+      dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+    })
     // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。
     registerView({ type: 'amadeus-image', kind: 'entity', idParam: 'imagePath', fileMatch: VIEW_FILE_MATCH['amadeus-image'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '图片' : 'Image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
     // 通用「插件文件类型」视图(多实例,params.filePath 认领文件;树上点插件声明的文件类型 / 笔记里点
@@ -158,8 +180,16 @@ export function installEngine(): void {
     registerView({ type: 'amadeus-tags', kind: 'collection', displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
     registerView({ type: 'amadeus-graph', kind: 'aux', displayName: () => app().tr('amadeus.graph'), icon: Waypoints, factory: () => <AmadeusLocalGraphView />, singleton: true })
     // Calendar Space:待办清单(汇总全库 todo 属性)+ 日历(汇总全库 calendarDate 属性)。数据经 dbAggregateStore。
-    registerView({ type: 'todo-list', kind: 'collection', embeddable: true, displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <TodoListView />, singleton: true })
-    registerView({ type: 'calendar', kind: 'collection', embeddable: true, displayName: () => app().tr('view.calendar'), icon: CalendarDays, factory: () => <CalendarView />, singleton: true })
+    registerView({
+      type: 'todo-list', kind: 'collection', embeddable: true,
+      displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <TodoListView />, singleton: true,
+      dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <TodoDashboardCard size={ctx.size} /> },
+    })
+    registerView({
+      type: 'calendar', kind: 'collection', embeddable: true,
+      displayName: () => app().tr('view.calendar'), icon: CalendarDays, factory: () => <CalendarView />, singleton: true,
+      dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <CalendarDashboardCard size={ctx.size} /> },
+    })
     registerView({ type: 'calendar-config', kind: 'page', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <CalendarConfigView />, singleton: true })
   }
 
@@ -167,7 +197,11 @@ export function installEngine(): void {
   // gate = window.tangu?.backendStatus(桌面壳语义,含 external 模式;webShim 无 → Tangu Web 不注册,
   // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩)。
   if (window.tangu?.backendStatus || window.tangu?.mobile) {
-    registerView({ type: 'inbox-list', kind: 'collection', embeddable: true, displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true })
+    registerView({
+      type: 'inbox-list', kind: 'collection', embeddable: true,
+      displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true,
+      dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <InboxDashboardCard size={ctx.size} /> },
+    })
     registerView({ type: 'inbox-reader', kind: 'page', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true })
   }
 

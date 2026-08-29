@@ -12,7 +12,9 @@ export default defineConfig({
   resolve: {
     // 与 Electron renderer 保持一致：浏览器预览/Vitest 也会穿过 lcl workspace，
     // 独立 worktree 下必须强制宿主和链接源共用一份 React。
-    dedupe: ['react', 'react-dom'],
+    // dnd-kit/sortable 内部也消费 core 的 React Context；预构建若拆成两份，外层 DndContext
+    // 与 useSortable 会各拿一只 Context，表现为把手存在但 listeners 为空、拖拽完全不启动。
+    dedupe: ['react', 'react-dom', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
     // 与根 electron.vite.config.ts renderer 的 alias 保持一致(浏览器冒烟/harness 也要能解析)。
     alias: {
       '@lcl': resolve(__dirname, '../../lcl'),

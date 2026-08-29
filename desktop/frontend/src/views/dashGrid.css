@@ -1,0 +1,408 @@
+/* 结构化网格版 Dashboard(dash3)。
+ * 与画布版最大的差别:**卡片外壳在两态里完全一致** —— 圆角、描边、底色、内边距不随锁定变。
+ * 卡片是这一页的视觉单元,不是「摆在板子上的东西」;锁定只是把排版用的把手收起来。 */
+
+.dash-router-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.dash-router-page > .dash2,
+.dash-router-page > .dash3 { flex: 1 1 auto; min-height: 0; }
+
+.dash3 {
+  --dash3-page-pad-block-start: 18px;
+  --dash3-page-pad-block-end: 28px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.dash3-mode-btn { padding-inline: 8px; font-weight: 550; }
+
+.dash3-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;          /* 成品页是**会往下长的页面**,不是一块固定画板 */
+  overflow-x: hidden;        /* 跨度按比例折算 → 永不横向滚动 */
+  background: var(--bg-card, var(--bg));
+  transition: background-color var(--dur-normal, 250ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1));
+}
+.dash3-host:not([data-locked]) {
+  background: color-mix(in srgb, var(--primary) 2.5%, var(--bg-card, var(--bg)));
+}
+
+/* 单一 grid 容器 + 每卡显式 grid-row/column(由编排算出)。卡片永不换父 —— 跨行移动因此是
+ * 同一实例的位移,framer layout FLIP 才成立(多行容器 = reparent = 淡出淡入 + 退场残影)。 */
+.dash3-grid {
+  width: min(100%, 1180px);
+  margin-inline: auto;
+  display: grid;
+  grid-template-columns: repeat(var(--dash3-cols, 12), minmax(0, 1fr));
+  grid-auto-rows: var(--dash3-row, 72px);
+  gap: var(--dash3-gap, 12px);
+  padding-block-start: var(--dash3-page-pad-block-start);
+  padding-block-end: var(--dash3-page-pad-block-end);
+  padding-inline: var(--dash3-gap, 12px);
+  align-content: start;
+}
+.dash3-card-slot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+.dash3-card-slot:has(.dash3-card[data-dragging]),
+.dash3-card-slot:has(.dash3-card[data-sizing]) { z-index: 5; }
+
+/* ── 统一外壳 ───────────────────────────────────────────────────────────── */
+.dash3-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: var(--border-width, 1px) solid transparent;
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+  container-type: inline-size;
+  width: 100%;
+  height: 100%;
+  transition:
+    background-color var(--dur-normal, 250ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    border-color var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    box-shadow var(--dur-normal, 250ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    opacity var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1));
+}
+.dash3-card[data-surface='metric'] {
+  background: color-mix(in srgb, var(--primary) 6%, var(--bg));
+  box-shadow: none;
+}
+.dash3-card[data-surface='summary'] {
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+}
+.dash3-card[data-surface='workspace'] {
+  background: var(--bg-card, var(--bg));
+  box-shadow: none;
+}
+.dash3-card[data-surface='note'] {
+  background: color-mix(in srgb, var(--bg) 82%, var(--bg-card));
+  box-shadow: none;
+}
+/* 分区标题不是卡片,是页面的排版元素:不给壳、不给边、不占卡片的语汇。 */
+.dash3-card--chrome {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  /* 标题贴着它统领的那一行,而不是浮在自己那格的正中 —— 分组关系才读得出来。 */
+  align-self: end;
+}
+
+.dash3-card-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  gap: 7px;
+  padding-inline: 12px 8px;
+  border-bottom: var(--border-width, 1px) solid transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 0;
+}
+.dash3-card-icon { flex: 0 0 auto; opacity: 0.72; }
+.dash3-card-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash3-card-open {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: var(--border-width, 1px) solid transparent;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-faint, var(--text-muted));
+  padding: 0;
+  border-radius: var(--radius-sm, 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+.dash3-card:hover .dash3-card-open { opacity: 1; }
+.dash3-card-open:hover { color: var(--text); background: var(--overlay-light); }
+.dash3-card-open:focus-visible {
+  opacity: 1;
+  outline: 1.5px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.dash3-card-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.dash3-card[data-surface='workspace'] > .dash3-card-body { overflow: auto; }
+.dash3-card[data-kind='view'] > .dash3-card-body { overflow: hidden; }
+/* 文本块自己不带内边距 → 字贴着描边(截图实证)。视图/挂件卡各自有内边距,不能再叠一层。 */
+.dash3-card[data-kind='text'] > .dash3-card-body { padding: 10px 12px; }
+.dash3-card--chrome > .dash3-card-body { padding: 0; }
+
+/* 分区标题是页面排版，不继承挂件的居中语汇。 */
+.dash-widget.dash-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
+  padding: 10px 2px 2px;
+  text-align: left;
+}
+.dash-section-title { color: var(--text); font-size: 13px; font-weight: 650; letter-spacing: 0.02em; }
+.dash-section-note { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 尺寸感知的 built-in 卡片面：保留同一数据源与关键动作，去掉整页工具栏和嵌套滚动。 */
+.dash-viewcard--compact { overflow: hidden; }
+.dash-viewcard--interactive { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+.dash-viewcard--interactive > .am-app { width: 100%; height: 100%; min-height: 0; }
+.dash-compact { height: 100%; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; color: var(--text); }
+.dash-compact-kpi { min-height: 40px; display: flex; align-items: baseline; gap: 6px; flex: 0 0 auto; }
+.dash-compact-kpi strong { font-size: clamp(22px, 7cqw, 34px); line-height: 1; font-weight: 640; font-variant-numeric: tabular-nums; }
+.dash-compact-kpi span { color: var(--text-muted); font-size: 11.5px; }
+.dash-compact-kpi button { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); cursor: pointer; }
+.dash-compact-kpi button:hover { background: var(--overlay-light); color: var(--text); }
+.dash-compact-rows { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
+.dash-compact-row { min-height: 30px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 0; border: 0; border-bottom: var(--border-width, 1px) solid color-mix(in srgb, var(--border) 44%, transparent); background: transparent; color: var(--text); font: inherit; text-align: left; }
+button.dash-compact-row { cursor: pointer; }
+button.dash-compact-row {
+  transition:
+    color var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    opacity var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    background-color var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1));
+}
+button.dash-compact-row:hover { color: var(--primary); background: color-mix(in srgb, var(--primary) 4%, transparent); }
+.dash-compact-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.dash-compact-row > span b { display: block; overflow: hidden; color: var(--text-muted); font-size: 10.5px; font-weight: 550; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.dash-compact-row > span.is-done { color: var(--text-faint, var(--text-muted)); text-decoration: line-through; }
+.dash-compact-row > em { color: var(--text-faint, var(--text-muted)); font-size: 10.5px; font-style: normal; white-space: nowrap; }
+.dash-compact-row > em.overdue { color: var(--danger); }
+.dash-compact-more { padding-top: 6px; flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); font-size: 10.5px; }
+.dash-compact-empty { min-height: 80px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.dash-agenda-row > i { width: 7px; height: 7px; border-radius: 999px; }
+.dash-inbox-dot { width: 6px; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 28%, transparent); }
+.dash-inbox-dot.is-unread { background: var(--primary); }
+.dash-activity-lines { min-height: 0; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.55; }
+.dash-activity-lines > div { display: grid; grid-template-columns: 3.4em minmax(3em, auto) minmax(0, 1fr); gap: 6px; }
+.dash-activity-lines time { color: var(--text-faint, var(--text-muted)); }
+.dash-activity-lines b { overflow: hidden; color: var(--primary); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.dash-activity-lines span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 排版台(解锁)。与画布同一套拖拽语汇:整卡罩层起拖,双击进入卡片(dash2-shield 同款)。 ── */
+.dash3-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 2;                /* 低于按钮(4)与右下把手(4):罩得住内容,罩不住排版控件 */
+  cursor: grab;
+  touch-action: none;        /* 排版台的卡:拖卡 > 滚内容(触屏仲裁纪律) */
+  background: transparent;
+  border-radius: inherit;
+  transition: background-color var(--dur-fast, 180ms) var(--ease-apple, ease);
+}
+.dash3-shield:hover {
+  background: color-mix(in srgb, var(--overlay-light, rgba(127, 127, 127, 0.06)) 50%, transparent);
+}
+.dash3-shield:focus-visible {
+  outline: 1.5px solid var(--primary);
+  outline-offset: -2px;
+}
+/* 交互态(双击进入):撤罩之外给一圈 primary 描边,标出「这张卡现在归内容」。 */
+.dash3-card[data-interact] {
+  outline: 1.5px solid var(--primary);
+  outline-offset: 1px;
+}
+/* 拖拽中:原卡留在预览槽位当**落点占位**(macOS widget 的落点轮廓语汇),跟手的是 DragOverlay
+ * 里的壳。占位随预览重排一起 FLIP —— 它就是「松手后会在哪」的真实预告。 */
+.dash3-card[data-dragging] {
+  opacity: 0.35;
+  outline: 1.5px dashed color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: -1.5px;
+}
+.dash3-card[data-dragging] .dash3-shield { cursor: grabbing; }
+.dash3-card[data-dragging] .dash3-card-btn,
+.dash3-card[data-dragging] .dash3-grip { opacity: 0 !important; }
+
+/* DragOverlay 跟手壳:抬起感只在这层,不污染在格子里的任何卡。 */
+.dash3-card--lift {
+  cursor: grabbing;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 16px 40px rgba(0, 0, 0, 0.18);
+  transform: scale(1.02);
+}
+.dash3-overlay-ghost {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 4%, transparent), transparent 62%);
+}
+
+/* 菜单不是凭空闪现：轻微上移 + 淡入，保持与全局浮层相同的 ease-out 语汇。 */
+.dash3 .dash-add-menu { animation: dash3-menu-in var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1)) both; }
+.dash3 .dash-menu-scrim { animation: dash3-scrim-in var(--dur-fast, 180ms) ease both; }
+@keyframes dash3-menu-in {
+  from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dash3-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+
+.dash3-card-btn {
+  position: absolute;
+  z-index: 4;                /* ⚠️ 必须高过 .dash3-shield(2),否则按钮被罩层吃掉 */
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--bg);
+  color: var(--text-faint, var(--text-muted));
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-sm, 6px);
+  display: inline-flex;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+.dash3-card-more { right: 36px; }
+.dash3-card-del { right: 6px; }
+.dash3-card:hover .dash3-card-btn { opacity: 1; }
+.dash3-card-more:hover { color: var(--text); background: var(--overlay-light); }
+.dash3-card-del:hover { color: var(--danger); background: var(--overlay-light); }
+.dash3-card-btn:focus-visible {
+  opacity: 1;
+  outline: 1.5px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.dash3-grip {
+  position: absolute;
+  right: 0; bottom: 0;
+  width: 22px; height: 22px;
+  z-index: 4;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+  border-radius: var(--radius-sm, 6px) 0 0 0;
+  background: color-mix(in srgb, var(--bg) 76%, transparent);
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+.dash3-host:not([data-locked]) .dash3-grip { opacity: 0.5; }
+.dash3-card:hover .dash3-grip { opacity: 1; }
+.dash3-grip::after {
+  content: '';
+  position: absolute;
+  right: 5px; bottom: 5px;
+  width: 8px; height: 8px;
+  border-right: 2px solid color-mix(in srgb, var(--primary) 72%, var(--text-muted));
+  border-bottom: 2px solid color-mix(in srgb, var(--primary) 72%, var(--text-muted));
+  border-bottom-right-radius: 3px;
+}
+/* 调整中:用画布同款的 --primary 描边(不是 --accent,后者在本主题近黑)。 */
+.dash3-card[data-sizing] { outline: 1.5px solid var(--primary); outline-offset: 1px; }
+.dash3-card[data-sizing] .dash3-grip { opacity: 1; }
+
+/* 编辑布局控件是条件挂载的；starting-style 让它们从轻微上移/透明自然进入。 */
+@starting-style {
+  .dash3-host:not([data-locked]) .dash3-grip { opacity: 0; }
+}
+
+/* ── 空状态与模板 ───────────────────────────────────────────────────────── */
+.dash3-empty {
+  width: min(100%, 680px);
+  min-height: clamp(360px, 64vh, 560px);
+  margin-inline: auto;
+  padding-block: 44px;
+  padding-inline: 24px;
+  display: grid;
+  place-items: center;
+}
+.dash3-empty-panel { width: min(100%, 460px); }
+.dash3-empty-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--primary) 24%, var(--border));
+  border-radius: var(--radius-md, 12px);
+  background: color-mix(in srgb, var(--primary) 8%, var(--bg));
+  color: var(--primary);
+}
+.dash3-empty-copy { margin-top: 16px; }
+.dash3-empty-title { font-size: 17px; line-height: 1.3; font-weight: 650; color: var(--text); }
+.dash3-empty-sub { margin-top: 6px; max-width: 38ch; font-size: 13px; line-height: 1.55; color: var(--text-muted); }
+.dash3-templates {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.dash3-template {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding-block: 12px;
+  padding-inline: 12px;
+  border: var(--border-width, 1px) solid transparent;
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+  cursor: pointer;
+  text-align: left;
+  transition: transform 140ms ease, border-color 140ms ease, background-color 140ms ease;
+}
+.dash3-template:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--border));
+  background: color-mix(in srgb, var(--primary) 3%, var(--bg));
+}
+.dash3-template:active { transform: translateY(0); }
+.dash3-template:focus-visible { outline: 1.5px solid var(--primary); outline-offset: 2px; }
+.dash3-template-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm, 8px);
+  background: color-mix(in srgb, var(--primary) 8%, var(--bg-card, var(--bg)));
+  color: var(--primary);
+}
+.dash3-template-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.dash3-template-name { font-size: 13px; line-height: 1.25; font-weight: 650; color: var(--text); }
+.dash3-template-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-muted); }
+
+.dash3-size-dim { margin-left: auto; color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
+
+/* 分区标题属于页面层,用更稳的字号与留白建立组别,但仍然不画卡片外壳。 */
+.dash3-card--chrome .dash-section { padding-inline: 4px; }
+.dash3-card--chrome .dash-section-title { font-size: 14px; line-height: 1.35; font-weight: 650; letter-spacing: 0; }
+
+@media (max-width: 560px) {
+  .dash3-empty { padding-inline: 16px; }
+  .dash3-templates { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash3-host,
+  .dash3-card,
+  .dash-compact-row,
+  .dash3-template,
+  .dash3-card-open,
+  .dash3-card-btn,
+  .dash3-grip,
+  .dash3-shield { transition-duration: 0.01ms; }
+  .dash3 .dash-add-menu,
+  .dash3 .dash-menu-scrim { animation: none; }
+}
