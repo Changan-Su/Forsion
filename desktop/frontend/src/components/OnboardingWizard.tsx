@@ -15,13 +15,16 @@ import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
 import { listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { ThemeCard } from './ThemeCard'
+import { ThemePreview } from './ThemePreview'
 import { BrandLogo } from './BrandLogo'
 import { LocaleToggle } from './LocaleToggle'
 import { AsrModelChoice } from './AsrModelChoice'
+import { listFonts } from '../fontPresets'
 import { AuxModelChoice } from './AuxModelChoice'
 import { Markdown } from './Markdown'
 import { CHANGELOG } from '../changelog'
 import { track } from '../achievements/store'
+import { applyUiFonts, readFont, writeFont } from '../uiFont'
 
 /** 系统语言/时区疑似中国大陆 → 引导/设置里推荐开镜像(仅推荐,不代选)。 */
 export const likelyMainlandChina = (): boolean => {
@@ -63,6 +66,9 @@ export const OnboardingWizard: React.FC<{
   const { t } = useI18n()
   const [step, setStep] = useState<Step>('welcome')
   const stepIdx = STEP_ORDER.indexOf(step)
+
+  // 界面字体(存的是预设 id;与设置→外观同一份 localStorage,写完立刻注入生效)
+  const [uiFont, setUiFont] = useState(() => readFont('ui'))
 
   // ── ⓪ 欢迎(开机式动画 + What's New 抽屉)──
   const [appVer, setAppVer] = useState('')
@@ -526,7 +532,9 @@ export const OnboardingWizard: React.FC<{
 
           {step === 'theme' && (
             <>
-              <div className="field">
+              {/* 预览与设置→外观同一块(ThemePreview):首启还没进过应用,不给这块就是闭着眼选皮肤。 */}
+              <ThemePreview tabLabel={t('onboarding.phase.appearance')} />
+              <div className="field" style={{ marginTop: 14 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Palette size={13} /> {t('settings.theme.langLabel')}
                 </label>
@@ -542,7 +550,10 @@ export const OnboardingWizard: React.FC<{
                 </div>
               </div>
               <div className="field">
-                <label>{t('settings.theme.skinLabel')}</label>
+                {/* 主题色**一根轴**:背景色轴留在设置→外观(Root 传进来的 onThemeChange 会保住当前 bg),
+                    别在第一次开机就抛两根轴给用户。⚠️2026-08-29 前这里是旧的耦合逻辑 —— 同一个 id
+                    被同时写进两根轴,于是引导选珊瑚连背景都染色,与设置页的模型对不上。 */}
+                <label>{t('settings.theme.accentLabel')}</label>
                 <div className="skin-row">
                   {listSkins().map((sk) => (
                     <button
@@ -550,8 +561,6 @@ export const OnboardingWizard: React.FC<{
                       type="button"
                       className={`skin-chip${sk.id === themeSkin ? ' active' : ''}`}
                       title={t(`settings.theme.skin.${sk.id}`)}
-                      // 引导只给一排色卡(整套配色);Root 会把主题色轴与背景色轴一起设成这个 id,
-                      // 想拆开选是设置→外观里的事,别在第一次开机就抛两根轴给用户。
                       onClick={() => onThemeChange(themeLang, sk.id, themeModePref)}
                     >
                       <i className="skin-dot" style={{ background: sk.id === 'custom' ? themeSeed : skinSwatch(sk, themeMode === 'dark', 'accent') }} />
@@ -601,6 +610,31 @@ export const OnboardingWizard: React.FC<{
                   </div>
                 )
               })()}
+              <div className="field">
+                {/* 只给「界面字体」一档:首启一眼能看出差别的就是它。正文 / 等宽仍留在设置→外观。
+                    与上面「配色」同款一排 chip(不是下拉):每颗按自己的字体渲染,即选即预览。 */}
+                <label>{t('settings.theme.fontUi')}</label>
+                <div className="skin-row">
+                  {[{ id: '', label: t('settings.theme.fontFollow'), stack: '' },
+                    ...listFonts('ui').map((f) => ({
+                      id: f.id,
+                      label: f.labelKey ? t(f.labelKey as Parameters<typeof t>[0]) : (f.label ?? f.id),
+                      stack: f.stack,
+                    }))].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={`skin-chip${f.id === uiFont ? ' active' : ''}`}
+                      // paddingLeft:.skin-chip 的左内距是给色点留的,这里没有点。
+                      style={{ paddingLeft: 11, fontFamily: f.stack || undefined }}
+                      onClick={() => { setUiFont(f.id); writeFont('ui', f.id); applyUiFonts() }}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="hint">{t('settings.theme.fontHint')}</div>
+              </div>
             </>
           )}
 

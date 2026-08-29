@@ -3,7 +3,7 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ArrowUp, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
@@ -30,6 +30,7 @@ import { listFonts, getFont } from '../fontPresets'
 import { useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
+import { ThemePreview } from './ThemePreview'
 import { RemoteSyncSection } from './RemoteSyncSection'
 import { CHANGELOG } from '../changelog'
 import { Markdown } from './Markdown'
@@ -2388,35 +2389,7 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'theme' && (
                   <>
-                    <section className="settings-theme-live" aria-label={t('settings.theme.previewLabel')}>
-                      <div className="settings-theme-live-head">
-                        <span><i /><i /><i /></span>
-                        <strong>{t('settings.theme.previewLabel')}</strong>
-                        <small>{activeTabLabel}</small>
-                      </div>
-                      <div className="settings-theme-live-canvas">
-                        <div className="settings-theme-live-rail">
-                          <div className="settings-theme-live-brand"><BrandLogo size={18} /><strong>Forsion</strong></div>
-                          <div className="settings-theme-live-nav">
-                            <span><MessageCircle size={12} />{t('settings.theme.previewChat')}</span>
-                            <span className="active"><Palette size={12} />{t('settings.tab.theme')}</span>
-                            <span><Bot size={12} />{t('settings.tab.agents')}</span>
-                          </div>
-                        </div>
-                        <div className="settings-theme-live-paper">
-                          <span className="settings-theme-live-kicker">{t('settings.theme.previewWorkspace')}</span>
-                          <strong className="settings-theme-live-title">{t('settings.theme.previewTitle')}</strong>
-                          <div className="settings-theme-live-message">
-                            <span><Bot size={14} /></span>
-                            <p>{t('settings.theme.previewMessage')}</p>
-                          </div>
-                          <div className="settings-theme-live-composer">
-                            <span>{t('settings.theme.previewInput')}</span>
-                            <button type="button" tabIndex={-1}><ArrowUp size={12} /></button>
-                          </div>
-                        </div>
-                      </div>
-                    </section>
+                    <ThemePreview tabLabel={activeTabLabel} />
                     <section className="settings-panel settings-theme-language">
                       <div className="settings-panel-head settings-panel-head--actions">
                         <span className="settings-panel-icon"><Palette size={16} /></span>

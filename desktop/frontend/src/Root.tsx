@@ -175,7 +175,8 @@ export function Root() {
             themeMode={theme.mode}
             themeModePref={theme.modePref}
             themeSeed={theme.seed}
-            onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, skin, mode)}
+            // 与设置页同一根语义:只动主题色轴,背景色轴原样保留(引导不露出背景轴)。
+            onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
             onSeedChange={(hex) => theme.setSeedValue(hex)}
             onReconnect={() => {
               void window.tangu?.getConfig().then((c) => {
