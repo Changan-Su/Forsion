@@ -349,6 +349,39 @@ function DashFileProbe({ leaf }: ViewProps) {
   return <div data-tag="dashfile" data-src={String(leaf.params.probePath ?? '')} style={{ padding: 12 }}>file: {String(leaf.params.probePath ?? '(none)')}</div>
 }
 
+function DashCompactProbe({ leaf, size }: ViewProps & { size: string }) {
+  const [hits, setHits] = useState(0)
+  return (
+    <div className="dash-compact dash-compact-list" data-tag="dashcompact" data-size={size}>
+      <div className="dash-compact-kpi"><strong>6</strong><span>项正在推进</span></div>
+      <div className="dash-compact-rows">
+        {['整理 Dashboard 契约', '验证深色主题', '补齐响应式台架', '更新开发日志'].map((label, index) => (
+          <div className="dash-compact-row" key={label}><span>{label}</span><em>{index < 2 ? '今天' : '本周'}</em></div>
+        ))}
+        <button className="dash-compact-row" data-act="hit" data-hits={hits} onClick={() => setHits((value) => value + 1)}><span>交互探针</span><em>{hits}</em></button>
+      </div>
+    </div>
+  )
+}
+
+/** ?dashinteractive:模拟原生笔记编辑器的 Dashboard 全尺寸工厂。它刻意放 textarea 与按钮，
+ *  让仪器验证排版解锁后焦点、键入、点击都不会再被透明拖拽层吞掉。 */
+function DashEditorProbe({ leaf }: ViewProps) {
+  const [text, setText] = useState('Dashboard 内可编辑')
+  const [saved, setSaved] = useState(0)
+  return (
+    <div data-tag="dash-editor" data-leaf={leaf.id} style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', padding: 12, gap: 8 }}>
+      <textarea
+        data-act="editor-input"
+        value={text}
+        onChange={(event) => setText(event.currentTarget.value)}
+        style={{ minHeight: 0, flex: 1, resize: 'none' }}
+      />
+      <button data-act="editor-save" data-saved={saved} onClick={() => setSaved((value) => value + 1)}>保存 {saved}</button>
+    </div>
+  )
+}
+
 /** ?dashgrid:真 DashboardGridView(结构化网格版)。钉的是单测看不见的那一层 ——
  *  CSS Grid 的实际列数随宿主宽度怎么变、跨度比例守不守得住、外壳在两态里是不是同一张脸、
  *  拖拽重排有没有真写进 frontmatter。见 scripts/dashgrid.check.cjs。 */
@@ -637,31 +670,37 @@ if (new URLSearchParams(location.search).has('dock')) {
     )
   }
   createRoot(document.getElementById('root')!).render(<PillHarness />)
+} else if (new URLSearchParams(location.search).has('dashinteractive')) {
+  const iso = new Date().toISOString()
+  registerView({
+    type: 'amadeus-editor', kind: 'entity', embeddable: true, idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'],
+    displayName: '笔记编辑器', icon: Square, factory: (props) => <DashEditorProbe {...props} />,
+    dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+  })
+  usePageStore.setState({
+    activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: [],
+    manifest: {
+      schema: PAGE_SCHEMA, id: 'harness-dashinteractive', title: 'Dash Interactive Harness', createdAt: iso, updatedAt: iso,
+      compiler: { version: 'harness' },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: [{ ref: '1' }] }] }] },
+      blocks: { 1: { type: 'markdown' } },
+      fmExtra: ['dashboard3:', '  "1": [0, 12, 8]'].join('\n'),
+    },
+    blocks: { 1: { id: '1', type: 'markdown', content: '```view\ntype: amadeus-editor\nnotePath: 笔记甲.md\n```' } },
+  })
+  createRoot(document.getElementById('root')!).render(<DashGridHarness />)
 } else if (new URLSearchParams(location.search).has('dashdata')) {
-  // ?dashdata:数据卡 + 页面级筛选。种一份真 .db 进 dbStore,三张卡都从它取数 ——
-  // 要钉的是「加一条筛选,**这一页上每一张数据卡同时变**」,那是复合 view 的定义性行为。
   const iso = new Date().toISOString()
   const DB = '台账.db'
   const dataIds = ['1', '2', '3']
   usePageStore.setState({
-    activePage: DASH_FILE,
-    vaultRoot: '/harness',
-    status: 'ready',
-    pages: [DASH_FILE],
-    files: [DB],
+    activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE], files: [DB],
     manifest: {
-      schema: PAGE_SCHEMA,
-      id: 'harness-dashdata',
-      title: 'Dash Data Harness',
-      createdAt: iso,
-      updatedAt: iso,
+      schema: PAGE_SCHEMA, id: 'harness-dashdata', title: 'Dash Data Harness', createdAt: iso, updatedAt: iso,
       compiler: { version: 'harness' },
-      root: {
-        type: 'stack',
-        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: dataIds.map((ref) => ({ ref })) }] }],
-      },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: dataIds.map((ref) => ({ ref })) }] }] },
       blocks: Object.fromEntries(dataIds.map((id) => [id, { type: 'markdown' }])),
-      fmExtra: ['dashboard3:', '  "1": [0, 3, 2]', '  "2": [1, 3, 2]', '  "3": [2, 6, 4]'].join('\n'),
+      fmExtra: ['dashboard3:', '  "1": [0, 3, 2]', '  "2": [1, 3, 2]', '  "3": [2, 6, 3]'].join('\n'),
     },
     blocks: {
       1: { id: '1', type: 'markdown', content: '```stat\nsource: 台账.db\nlabel: 总行数\n```' },
@@ -669,19 +708,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       3: { id: '3', type: 'markdown', content: '```chart\nsource: 台账.db\ngroup: 状态\nkind: bar\n```' },
     },
   })
-  ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
-  ;(window as unknown as { __dbStore?: typeof useDbStore }).__dbStore = useDbStore
-  // ⚠️ dbStore 的种子必须**在 pageStore 之后**:`dbAggregateStore` 订了 vaultRoot,一变就
-  //    `useDbStore.setState({ entries: {} })` 清空 db 缓存(切库丢缓存的生产行为)。反过来种,
-  //    卡片会全部显示「找不到 xxx.db」—— 2026-08-27 实证,查了半天。
   useDbStore.setState({
     entries: {
       [DB]: {
-        status: 'ok',
-        path: DB,
+        status: 'ok', path: DB,
         data: {
-          version: 1,
-          name: '台账',
+          version: 1, name: '台账',
           columns: [
             { id: 'c1', name: '状态', type: 'select', options: ['进行中', '已完成'] },
             { id: 'c2', name: '金额', type: 'number' },
@@ -699,51 +731,44 @@ if (new URLSearchParams(location.search).has('dock')) {
   createRoot(document.getElementById('root')!).render(<DashGridHarness />)
 } else if (new URLSearchParams(location.search).has('dashgrid')) {
   const iso = new Date().toISOString()
-  registerView({ type: 'dashv', kind: 'aux', embeddable: true, displayName: 'Dash Probe', icon: Square, factory: (p) => <DashViewProbe {...p} /> })
+  registerView({
+    type: 'dashv', kind: 'aux', embeddable: true, displayName: 'Dash Probe', icon: Square,
+    factory: (p) => <DashViewProbe {...p} />,
+    dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'wide', surface: 'summary', factory: (p, ctx) => <DashCompactProbe {...p} size={ctx.size} /> },
+  })
+  for (const [type, name] of [['todo-list', '待办'], ['calendar', '日历']] as const) {
+    registerView({
+      type, kind: 'collection', embeddable: true, displayName: name, icon: Square,
+      factory: (p) => <DashViewProbe {...p} />,
+      dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (p, ctx) => <DashCompactProbe {...p} size={ctx.size} /> },
+    })
+  }
   registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
   const gridIds = ['1', '2', '3', '4', '5', '6', '7']
   usePageStore.setState({
-    activePage: DASH_FILE,
-    vaultRoot: '/harness',
-    status: 'ready',
-    pages: [DASH_FILE, '笔记甲.md'],
-    files: ['手册.pdf', '图.png'],
+    activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: ['手册.pdf', '图.png'],
     manifest: {
-      schema: PAGE_SCHEMA,
-      id: 'harness-dashgrid',
-      title: 'Dash Grid Harness',
-      createdAt: iso,
-      updatedAt: iso,
+      schema: PAGE_SCHEMA, id: 'harness-dashgrid', title: 'Dash Grid Harness', createdAt: iso, updatedAt: iso,
       compiler: { version: 'harness' },
-      root: {
-        type: 'stack',
-        children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: gridIds.map((ref) => ({ ref })) }] }],
-      },
+      root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: gridIds.map((ref) => ({ ref })) }] }] },
       blocks: Object.fromEntries(gridIds.map((id) => [id, { type: 'markdown' }])),
-      // 结构化布局键:[order, w, h]。第一行 3+3+6 = 12 恰好铺满 —— 默认尺寸档就该拼得上。
+      // 刻意把文本写成旧的小尺寸，把完整 view 与 clock 相邻：新契约必须自动约束，而不是拉成等高空盒。
       fmExtra: [
-        'tags: [harness]',
-        'dashboard3:',
-        '  "1": [0, 12, 1]',
-        '  "2": [1, 3, 2]',
-        '  "3": [2, 3, 2]',
-        '  "4": [3, 6, 5]',
-        '  "5": [4, 12, 1]',
-        '  "6": [5, 6, 3]',
-        '  "7": [6, 6, 3]',
+        'tags: [harness]', 'dashboard3:',
+        '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
+        '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
       ].join('\n'),
     },
     blocks: {
       1: { id: '1', type: 'markdown', content: '```section\ntitle: 今天\n```' },
       2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
-      3: { id: '3', type: 'markdown', content: '随手记:把常看的东西摆成一页。' },
+      3: { id: '3', type: 'markdown', content: '随手记：把常看的东西摆成一页。' },
       4: { id: '4', type: 'markdown', content: '```view\ntype: dashv\nn: 1\n```' },
       5: { id: '5', type: 'markdown', content: '```section\ntitle: 最近\n```' },
-      6: { id: '6', type: 'markdown', content: '这是一段普通文本块,在网格里和别的卡片一样有外壳。' },
+      6: { id: '6', type: 'markdown', content: '这是一段普通文本块，在网格里和别的卡片一样有外壳。' },
       7: { id: '7', type: 'markdown', content: '```view\ntype: dashv\nn: 2\n```' },
     },
   })
-  ;(window as unknown as { __pageStoreFor?: typeof pageStoreFor }).__pageStoreFor = pageStoreFor
   createRoot(document.getElementById('root')!).render(<DashGridHarness />)
 } else if (new URLSearchParams(location.search).has('dashboard')) {
   const iso = new Date().toISOString()

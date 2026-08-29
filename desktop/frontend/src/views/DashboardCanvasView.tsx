@@ -747,6 +747,19 @@ function CanvasInner({ leaf }: ViewProps) {
         <>
           <div className="dash-menu-scrim" onClick={() => setNoteMenu(null)} />
           <div ref={noteMenuFix.ref} className="dash-add-menu" style={{ position: 'fixed', left: noteMenu.x, top: noteMenu.y, ...noteMenuFix.style }}>
+            {/* 与网格版「切换到自由摆位」对称的回程:只写模式键,dashboard2: 原样留作回滚保险。 */}
+            <button
+              onClick={() => {
+                setNoteMenu(null)
+                const st = store.getState()
+                if (st.activePage !== dashPath) return
+                const cur = st.manifest?.fmExtra ?? ''
+                const text = setDashModeInFm(cur, 'grid')
+                if (text !== null && text !== cur) st.setFmExtra(text)
+              }}
+            >
+              切换到结构化网格
+            </button>
             <button
               onClick={() => {
                 setNoteMenu(null)

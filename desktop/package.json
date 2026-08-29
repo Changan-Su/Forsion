@@ -29,6 +29,7 @@
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "e2e:chatshimmer": "node scripts/chat-shimmer.e2e.cjs",
     "e2e:planlive": "node scripts/plan-live.e2e.cjs",
+    "e2e:dashdrag": "node scripts/dash3-drag.e2e.cjs",
     "check:pillbar": "node scripts/pillbar-overflow.check.cjs",
     "check:approval": "node scripts/approval-menu.check.cjs",
     "check:addmenu": "node scripts/add-menu.check.cjs",

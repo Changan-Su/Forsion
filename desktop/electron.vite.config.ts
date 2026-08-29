@@ -37,7 +37,10 @@ export default defineConfig({
     resolve: {
       // lcl 是直接链进源码的 workspace 目录。独立 worktree 下 Vite/Rollup 可能把宿主与
       // 链接源各解析一份 React，最终在打包版直接触发 invalid hook call。
-      dedupe: ['react', 'react-dom'],
+      // @dnd-kit 三件必须与 frontend/vite.config.ts 同列:sortable 消费 core 的 React Context,
+      // 预构建拆成两份后外层 DndContext 与 useSortable 各拿一只 Context —— 表现为仪表盘
+      // 拖拽把手存在但 listeners 为空、卡片完全拖不动(dev 实测,A/B 负对照坐实)。
+      dedupe: ['react', 'react-dom', '@dnd-kit/core', '@dnd-kit/sortable', '@dnd-kit/utilities'],
       // @amadeus-shared = vendored Amadeus 同构编译器/IPC 契约;@amadeus = vendored Amadeus 渲染层。
       alias: {
         '@lcl': resolve('../lcl'),

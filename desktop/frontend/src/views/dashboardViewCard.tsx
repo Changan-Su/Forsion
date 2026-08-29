@@ -4,9 +4,9 @@
  * 现由画布版 DashboardCanvasView 使用。**嵌入白名单(embeddable)在调用方复查**,不在这里。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Leaf } from '@lcl/engine'
+import type { DashboardCardSize, Leaf } from '@lcl/engine'
 import { getView, subscribeViews } from '@lcl/engine'
-import { useScopedPageStore } from '@amadeus/store/pageStore'
+import { setActivePageScope, useScopedPageStore } from '@amadeus/store/pageStore'
 import { widgetSource } from '@amadeus-shared/dashboard'
 
 /** 视图卡片:把**任意已注册视图**(日历 / 待办 / 收件箱 / 活动日志 / 插件视图……)活化在格子里。
@@ -18,11 +18,12 @@ import { widgetSource } from '@amadeus-shared/dashboard'
  *    卡片不是 tab,不该去抢活动作用域(如 setActivePageScope)、也不该被当成导航目标。
  *  · setParams 写回卡片源码 → 随笔记落盘、重启还原;**只落标量**(源码是给人读的纯文本)。
  *  · 不认 singleton:那是「开 tab」的约束;一份仪表盘里放两张日历是合理需求。 */
-export function ViewCard({ dashLeafId, dashPath, blockId, opts, onClose }: {
+export function ViewCard({ dashLeafId, dashPath, blockId, opts, size, onClose }: {
   dashLeafId: string
   dashPath: string
   blockId: string
   opts: Record<string, string>
+  size?: DashboardCardSize
   onClose: () => void
 }) {
   const store = useScopedPageStore()
@@ -65,8 +66,52 @@ export function ViewCard({ dashLeafId, dashPath, blockId, opts, onClose }: {
   if (!type) return <div className="dash-widget"><div className="dash-widget-note">卡片源码里缺 `type:`(视图注册键)</div></div>
   const def = getView(type)
   if (!def) return <div className="dash-widget"><div className="dash-widget-note">视图「{type}」不可用 —— 可能来自未启用的插件</div></div>
-  // 复用引擎的 .wb-view(满高 flex 列 + 自身滚动):视图在卡片里拿到的尺寸语义与在 tab 里一致。
-  return <div className="wb-view dash-viewcard">{def.factory({ leaf, params })}</div>
+  const cardSize = size ?? def.dashboard?.defaultSize ?? 'lg'
+  const body = def.dashboard?.factory
+    ? def.dashboard.factory({ leaf, params }, { size: cardSize })
+    : def.factory({ leaf, params })
+  // 有专用卡片面就渲染摘要；没有时只会由 Dashboard 尺寸契约放进 lg/full，再复用完整 view。
+  return (
+    <div
+      className={`wb-view dash-viewcard${def.dashboard?.factory ? ' dash-viewcard--compact' : ' dash-viewcard--interactive'}`}
+      data-view-type={type}
+      onPointerDownCapture={() => {
+        // Dashboard 外层先恢复自己的 scope；进入笔记编辑器时再把活动作用域交给这张卡，
+        // 这样斜杠菜单、全局编辑命令和保存都作用在卡内文档，而不是 Dashboard 文件。
+        if (type === 'amadeus-editor') setActivePageScope(leaf.id)
+      }}
+    >
+      {body}
+    </div>
+  )
+}
+
+// ───────────────── 嵌卡白名单与身份判定(网格版 / 画布版共用,勿各写一份) ─────────────────
+
+/** 渲染层也拒的嵌入禁区(安全 / 全局语义炸弹)。添加菜单另按 `embeddable` 白名单收窄。
+ *  ⚠️ 白名单必须在**渲染入口**复查,不能只做菜单过滤:卡片源码是 md 文本,同步/共享/手写都能
+ *  往里塞任意注册键,那样 embeddable 就只是建议而不是安全边界(Codex 2026-08-25 评审)。 */
+export const EMBED_DENY = new Set(['chat', 'browser', 'terminal', 'dashboard', 'amadeus-dashboard', 'sidebar-empty', 'home'])
+
+/** 这张视图卡需不需要先挑一个文件?返回 `{param, accept}` = 需要,把选中的路径写进 `param`。
+ *  判据来自 P0 的声明元数据,不另立表:`idParam` + `fileMatch` = 文件类实体视图。
+ *  大纲是唯一例外 —— aux 类没有 idParam,但不给身份就恒空(方案 §6.4 C 类),故显式配。 */
+export function pickSpecOf(
+  v: { type: string; idParam?: string; fileMatch?: unknown },
+  fileMatchViewType: (path: string) => string | null,
+): { param: string; accept: (kind: string, path: string) => boolean } | null {
+  if (v.type === 'outline') return { param: 'sourcePath', accept: (_k, path) => fileMatchViewType(path) === 'amadeus-editor' }
+  if (!v.idParam || !v.fileMatch) return null
+  return { param: v.idParam, accept: (_k, path) => fileMatchViewType(path) === v.type }
+}
+
+/** 一张视图卡在统一外壳上显示的标题:视图名 +(带身份时)文件名。
+ *  外壳由 Dashboard 画、标题由 Dashboard 取 —— 视图自己不再画标题栏,这是「统一」的来源。 */
+export function viewCardTitle(opts: Record<string, string>, displayName: string): string {
+  const idish = Object.entries(opts).find(([k, v]) => k !== 'type' && /path$/i.test(k) && v)
+  if (!idish) return displayName
+  const base = (idish[1].split(/[\\/]/).pop() ?? idish[1]).replace(/\.[^.]+$/, '')
+  return base ? `${displayName} · ${base}` : displayName
 }
 
 // ───────────────── 嵌卡白名单与身份判定(网格版 / 画布版共用,勿各写一份) ─────────────────

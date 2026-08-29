@@ -28,6 +28,7 @@ import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { SpaceButton } from '../components/SpaceButton'
+import { CalendarDashboardCard, TodoDashboardCard } from '../views/DashboardCompactViews'
 
 const CalendarView = lazyRetry(() => import('../views/CalendarView').then((m) => ({ default: m.CalendarView })))
 const TodoListView = lazyRetry(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
@@ -74,8 +75,19 @@ export function installCalendarViews(): void {
   //    于是 Dashboard 卡片上 `db:`/`src:` 这些键落了盘也没人读(dashboardViewCard 早就在传了)。
   //  · 去 singleton **只解锁主区多开**:侧栏是「同侧同类型唯一」(dockviewStore 的 openView),
   //    左栏仍旧一个类型一个 —— 别把这两件事说成一件。
-  registerView({ type: 'todo-list', kind: 'collection', embeddable: true, displayName: () => app().tr('view.todo'), icon: ListTodo, factory: ({ params }) => <Suspense fallback={<Skeleton variant="list" />}><TodoListView params={params} /></Suspense> })
-  registerView({ type: 'calendar', kind: 'collection', embeddable: true, displayName: () => app().tr('view.calendar'), icon: CalendarDays, factory: () => <Suspense fallback={<Skeleton variant="document" />}><CalendarView /></Suspense>, singleton: true })
+  // dashboard: 仪表盘嵌卡契约(尺寸档 + 紧凑卡面)跟着注册点走 —— 视图注册在哪,契约就声明在哪。
+  registerView({
+    type: 'todo-list', kind: 'collection', embeddable: true,
+    displayName: () => app().tr('view.todo'), icon: ListTodo,
+    factory: ({ params }) => <Suspense fallback={<Skeleton variant="list" />}><TodoListView params={params} /></Suspense>,
+    dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <TodoDashboardCard size={ctx.size} /> },
+  })
+  registerView({
+    type: 'calendar', kind: 'collection', embeddable: true,
+    displayName: () => app().tr('view.calendar'), icon: CalendarDays,
+    factory: () => <Suspense fallback={<Skeleton variant="document" />}><CalendarView /></Suspense>, singleton: true,
+    dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <CalendarDashboardCard size={ctx.size} /> },
+  })
   registerView({ type: 'calendar-config', kind: 'page', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <Suspense fallback={<Skeleton variant="list" />}><CalendarConfigView /></Suspense>, singleton: true })
 }
 

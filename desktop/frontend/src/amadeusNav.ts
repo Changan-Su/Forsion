@@ -10,8 +10,8 @@ import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
 import { BLANK_SCENE_JSON, blankDrawing, isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { DEFAULT_BOARD, writeBoard } from '@amadeus-shared/excalidraw/board'
-import { DASH2_FM_KEY, isDashboardPath, widgetSource } from '@amadeus-shared/dashboard'
-import { COMPILER_VERSION, PAGE_SCHEMA, compile, generateColumnId, generatePageId, generateRowId, type PageManifest } from '@amadeus-shared/compiler'
+import { isDashboardPath } from '@amadeus-shared/dashboard'
+import { COMPILER_VERSION, PAGE_SCHEMA, compile, generatePageId, type PageManifest } from '@amadeus-shared/compiler'
 import { matchFileType } from '@amadeus/plugins/pluginStore'
 import { extHit } from './viewFileMatch'
 import { act, actThrottled } from './activity/log'
@@ -254,12 +254,11 @@ export async function createDashboard(parent: string): Promise<string | null> {
   }
 }
 
-/** 出厂仪表盘(P3a 起产画布版:布局键 dashboard2:,单位 px)。
- *  一个标题块 + 一个时钟 + 一个天气;compile() 生成,格式与编辑器保存出来的**逐字节同源**。 */
+/** 出厂仪表盘:**空**。不种任何布局键 → 路由缺省即结构化网格(2026-08-27 拍板的默认;
+ *  dashboard2: 只属于老的自由摆位文件),空态自带「今日/工作台」模板起步,比预置卡片更好上手。
+ *  ⚠️ 曾经在这里种 dashboard2: 出厂键 —— 每个新建仪表盘都被路由进画布版,与拍板相反(08-28 修)。 */
 function blankDashboard(title: string): string {
   const now = new Date().toISOString()
-  const ids = ['1', '2', '3']
-  const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' } })()
   const manifest: PageManifest = {
     schema: PAGE_SCHEMA,
     id: generatePageId(),
@@ -267,18 +266,11 @@ function blankDashboard(title: string): string {
     createdAt: now,
     updatedAt: now,
     compiler: { version: COMPILER_VERSION },
-    root: {
-      type: 'stack',
-      children: [{ type: 'row', id: generateRowId(), columns: [{ id: generateColumnId(), width: 1, children: ids.map((ref) => ({ ref })) }] }],
-    },
-    blocks: Object.fromEntries(ids.map((i) => [i, { type: 'markdown' }])),
-    fmExtra: [`${DASH2_FM_KEY}:`, '  "1": [0, 0, 520, 200]', '  "2": [540, 0, 260, 150]', '  "3": [540, 166, 260, 150]'].join('\n'),
+    root: { type: 'stack', children: [] },
+    blocks: {},
+    fmExtra: '',
   }
-  return compile(manifest, {
-    '1': `# ${title}\n\n双击卡片进入内容;空白处拖动平移、⌘/Ctrl+滚轮缩放;解锁后可拖动/缩放卡片,右上角 ＋ 添加。`,
-    '2': widgetSource('clock', { tz }),
-    '3': widgetSource('weather', { city: '上海' }),
-  })
+  return compile(manifest, {})
 }
 
 /** 打开一个「插件文件类型」文件到通用 amadeus-plugin-file 视图:已有认领该文件的 tab

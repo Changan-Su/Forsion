@@ -40,6 +40,21 @@ export interface ViewProps {
  *  aux = 跟随活动主视图的辅助面板(大纲/双链/记忆);page = 自包含页(设置/启动器/工具)。 */
 export type ViewKind = 'entity' | 'collection' | 'aux' | 'page'
 
+/** Dashboard 不再把完整页面无差别塞进任意矩形。每个可嵌视图要声明自己真正支持的
+ *  尺寸档与卡片面；缺省仍可嵌，但只允许大/整行两档，由 Dashboard 给出安全兜底。 */
+export type DashboardCardSize = 'sm' | 'md' | 'wide' | 'tall' | 'lg' | 'full' | 'workspace'
+export type DashboardCardSurface = 'metric' | 'summary' | 'workspace'
+export interface DashboardCardContext {
+  size: DashboardCardSize
+}
+export interface DashboardCardDefinition {
+  sizes: readonly DashboardCardSize[]
+  defaultSize: DashboardCardSize
+  surface?: DashboardCardSurface
+  /** 尺寸感知的紧凑卡片面。缺席时 Dashboard 只在 lg/full 中渲染完整 factory。 */
+  factory?: (props: ViewProps, context: DashboardCardContext) => ReactNode
+}
+
 /** 注册一种视图(≈ Obsidian registerView)。 */
 export interface ViewDefinition {
   /** 注册键(= Dockview component 名)。 */
@@ -62,6 +77,8 @@ export interface ViewDefinition {
   fileMatch?: { extensions: string[]; priority?: number }
   /** 可被嵌进 Dashboard 卡片(默认 false;宿主白名单语义,插件自声明不足信)。 */
   embeddable?: boolean
+  /** Dashboard 的尺寸/表面/紧凑渲染契约。 */
+  dashboard?: DashboardCardDefinition
   /** 该 view 做活动主视图时,左栏统一工作区应自动切到的模式(如 'notes' 或 'plugin:<pid>:<srcId>')。
    *  autoWorkspaceMode 的声明式扩展位;内置硬规则仍在 workspaceMode.ts。 */
   workspaceSource?: string
