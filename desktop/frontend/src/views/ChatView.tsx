@@ -16,7 +16,7 @@ import { EditorialMessage } from './chat2/EditorialMessage'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults, newChatModelId, withAmadeusWorkspace } from '../stores/appStore'
+import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace } from '../stores/appStore'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
@@ -166,9 +166,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         cwd: s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless' ? undefined : (s.newChatWs?.path || undefined),
         ...s.newChatCfg,
       }, amadeusRoot)
-  const mvModelId = activeId
-    ? (activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || '')
-    : (newChatModelId(s) || '') // 与建会话落库、startRun 同源,勿就地展开回退链
+  const mvModelId = activeChatModelId({ ...s, activeId }) // 与建会话落库、startRun、ctx.tangu.activeModel() 同源,勿就地展开回退链
   const isCloudSession = mvCfg.execMode === 'sandbox'
   const visibleModels = !s.modelsResp?.models
     ? null

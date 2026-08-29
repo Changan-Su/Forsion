@@ -21,7 +21,8 @@ export interface SlashContribution {
    * 图标。**首选写宿主图标词表里的名字**(`'template'` / `'callout-warning'` / `'pin'` …,
    * 全表见 components/icons 的 PLUGIN_ICONS 与 docs/Function/生态内容制作指南.md)——
    * 宿主会画出和内置项完全同一套 SVG,你的插件项在 slash 菜单里不再是一枚孤零零的 emoji。
-   * 名字没命中就按字面当字形画(emoji / `✎` 等),老插件因此零改动照跑,但视觉不统一。
+   * emoji / `✎` 这类**不是词表键形状**的字符串按字面当字形画,老插件因此零改动照跑,但视觉不统一。
+   * 写了个本宿主还不认识的**键名**(形如 `[a-z0-9-]`)则退到该处的兜底图标 —— 不会把键名当文案画出来。
    */
   icon?: string
   /** Section label; defaults to "插件". */
@@ -60,6 +61,28 @@ export interface CommandContribution {
 }
 
 /** An accent theme a plugin can contribute (CSS is injected into a <style> when enabled). */
+/** A font a plugin ships with itself. Appears in 设置 → 外观 → 字体 alongside the built-in
+ *  presets, under a separate "from plugins" group.
+ *
+ *  `stack` is what actually lands in `font-family`, so give a **full stack**, not one family —
+ *  a bare Latin family leaves every CJK glyph falling back to whatever the machine has, which is
+ *  exactly what the built-in presets exist to avoid. End it with a CJK face you ship (or the
+ *  host's `'Noto Sans SC'`) plus a generic keyword.
+ *
+ *  `files` are loaded via the FontFace API. Point them at assets inside your own plugin folder;
+ *  remote URLs are rejected (the app runs under `default-src 'self'` and must work offline). */
+export interface FontContribution {
+  /** Stable slug, unique within your plugin. Host namespaces it as `plugin:<pluginId>:<id>`. */
+  id: string
+  /** Shown in the dropdown. */
+  label: string
+  /** Which of the three slots (界面/正文/等宽) may use it. Defaults to sans slots. */
+  slots?: Array<'ui' | 'body' | 'mono'>
+  /** Full `font-family` stack. */
+  stack: string
+  files?: Array<{ url: string; weight?: string; style?: string }>
+}
+
 export interface ThemeContribution {
   id: string
   label: string
@@ -124,6 +147,14 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  插件自定义文件类型。**最多 50 条且可能截断**,要穷举别靠它。
    *  `line` 是剥掉 frontmatter/标记后的行号,**不是磁盘编辑坐标**;`score` 是不透明排序值,跨版本不保证稳定。 */
   searchVault?(query: string): Promise<PluginSearchHit[]>
+  /** 在系统文件管理器里定位一个库内路径(2026-08-29+):打开它所在的目录并高亮该项。
+   *  用途:插件把用户素材放在自己的工作文件夹里(`.glb` / 配置 json …),设置页给一颗
+   *  「打开文件夹」——用户得先找得到那个目录,才谈得上往里放东西。
+   *  ⚠️**目标不存在时系统什么都不会发生**(showItemInFolder 对不存在的路径是静默 no-op)。
+   *  文件夹是首次写入才诞生的,所以正确姿势是先 `writeFile('<workFolder>/README.md', …)`
+   *  再 reveal 这个文件 —— 一步同时把目录建出来并在文件管理器里选中它。
+   *  旧宿主 / 桥缺席(web / 移动端 / 台架)时**方法整个不存在**:`ctx.app.reveal?.(p)`。 */
+  reveal?(path: string): void
   /** 当前库的**绝对路径**(没打开库时 null)。用途:把路径交给 Agent 的 host 模式工具(view_image /
    *  run_bash)—— 它们跑在真实文件系统上,只有 vault 相对路径喂不进去。读的是渲染进程已有的
    *  pageStore 状态,**不会重开库、无副作用**。
@@ -356,6 +387,10 @@ export interface ListItem {
    *  keys are [a-z0-9-]; unknown names fall back to the generic row icon). Use it to keep
    *  per-item recognisability (e.g. one icon per source platform) inside the shared row UI. */
   icon?: string
+  /** Optional image URL for the leading icon (e.g. a platform favicon) — wins over `icon`,
+   *  and the host falls back to `icon` if it fails to load. Older hosts ignore the field
+   *  and just render `icon`, so always set both. */
+  iconUrl?: string
 }
 
 /** A selectable filter row (≈ a folder). The host owns which one is active and passes the
@@ -404,6 +439,15 @@ export interface ListSourceContribution {
   groupActions?: ListAction[]
   /** Right-click menu for one row (e.g. "Move to…", "Delete"). */
   itemMenu?(item: ListItem): ListAction[]
+  /** Drop target support. **The plugin decides**: omit and the list takes no drops at all (today's
+   *  behaviour). The host owns hit-testing and the highlight, and hands over the resolved target —
+   *  a group row, an item row, or the list background (neither field set = the selected group).
+   *  `accepts` gates which payloads light up: 'files' = OS files (given as File[]), 'paths' = in-app
+   *  path drags such as rows from the file tree (given as absolute host paths). */
+  drop?: {
+    accepts: Array<'files' | 'paths'>
+    onDrop(payload: { files?: File[]; paths?: string[] }, target: { group?: string; item?: ListItem }): void | Promise<void>
+  }
 }
 
 /** A custom file type a plugin owns end-to-end (like the built-in Excalidraw whiteboard): its own tree
@@ -542,6 +586,10 @@ export interface PluginContext {
   registerSlashItem(item: SlashContribution): void
   registerCommand(command: CommandContribution): void
   registerTheme(theme: ThemeContribution): void
+  /** Contribute a font to 设置 → 外观 → 字体. Returns a disposer; the host also revokes it on
+   *  disable/reload, so plugins may ignore the return value.
+   *  Old hosts (< 2026-08-28) lack it — call as `ctx.registerFont?.(…)`. */
+  registerFont?(font: FontContribution): (() => void) | void
   /** @deprecated No live render surface — use registerView. */
   registerPanel(panel: PanelContribution): void
   /** Contribute an item to the global bottom status bar (host-namespaced `plugin:<pluginId>:<id>`;
@@ -615,6 +663,38 @@ export interface PluginContext {
     registerSeries(def: AchievementSeriesContribution): void
     track(event: string, n?: number): void
   }
+  /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
+   *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
+   *
+   *  ⚠️**整个 `ctx.tangu` 在非 Tangu 宿主上不存在**(纯 Amadeus 壳 / unit 设备页 / 云端):
+   *  一律 `ctx.tangu?.activeModel()`。这是能力探测,不是权限闸 —— 模型名不敏感,不用在 manifest
+   *  `capabilities` 里声明(那道双闸留给 `system.activeWindow` 那类敏感能力)。
+   *
+   *  `activeModel()` = 输入栏药丸显示的那个(会话已选 → 会话的;空白新对话 → 记忆/后端默认),
+   *  一个都没有时 null。`models()` 给全部对话模型(只含 llm;目录未就绪时空数组),供插件设置页做
+   *  逐模型绑定。`activeSpace()` 给 Space id(`'tangu'` / `'__home__'` / 用户 Space …)。
+   *  `subscribe()` **只在这两个值真的变了**时回调 —— 不是每次 store 变更(流式回答期间每个 SSE
+   *  增量都会动 store)。退订宿主也会在插件禁用/重载时统一收掉,但自己也 dispose。 */
+  tangu?: {
+    activeModel(): import('./tanguSeam').TanguModelInfo | null
+    models(): import('./tanguSeam').TanguModelInfo[]
+    activeSpace(): string | null
+    subscribe(cb: () => void): () => void
+    /** 主区聊天的用量/档位快照:上下文窗口、已用 tokens、生效思考档(2026-08-29+,旧宿主没有 →
+     *  `ctx.tangu.session?.()`,缺席时把这几行整段不画,别显示 0)。
+     *  ⚠️**拉取式**:这些值在流式回答里每个 SSE 增量都在动,故意不进 `subscribe` 的变更键。
+     *  要跟着动就自己 setInterval 拉,别指望订阅回调。 */
+    session?(): import('./tanguSeam').TanguSessionInfo | null // 宿主装了探针但探针不给值时返回 null
+  }
+  /** 前台窗口采样(host-only 接缝)——「现在焦点在哪个 app」。**两道闸都过了才有值**:
+   *  ① 插件在 manifest `capabilities` 里声明了 'activeWindow'(没声明 → `ctx.system` 整个不存在);
+   *  ② 用户在 设置 → 开发者选项 打开了「前台窗口采样」(主进程配置,默认关)。
+   *  任一条不满足 → 恒 null,不抛。⚠️darwin 拿不到窗口标题(title 恒 ''),Wayland 恒 null。
+   *  ⚠️`idleSeconds` 不是装饰:采样式数据里人离开后前台 app 不变,不据此丢挂机时段的话,
+   *  挂机时长会整段记到最后那个 app 头上。永远 `ctx.system?.activeWindow?.()`。 */
+  system?: {
+    activeWindow(): Promise<import('../../../../shared/activeWindow').ActiveWindowSample | null>
+  }
   /** Activity log: report user actions inside the plugin's UI to the local activity journal
    *  (feeds background agents like Muse). Events are auto-prefixed `plugin:<pluginId>:`;
    *  `detail` values are sanitized/truncated by the host (`text` key = trailing snippet). */
@@ -633,6 +713,8 @@ export interface AmadeusPlugin {
   /** English display name / description (manifest `nameEn` / `descriptionEn`). External plugins only. */
   nameEn?: string
   descriptionEn?: string
+  /** Package-root icon.png, exposed by the host as a validated data URL. */
+  iconUrl?: string
   /** Built-in plugins ship with the app and can't be uninstalled (only disabled). */
   builtin?: boolean
   /** Manifest apiVersion (missing → 1). */
@@ -640,6 +722,8 @@ export interface AmadeusPlugin {
   minAppVersion?: string
   /** Companion app id (manifest.requiresApp); detail page renders install/probe UI when whitelisted in KNOWN_APPS. */
   requiresApp?: string
+  /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
+  capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
   /** README.md content for the detail page (external plugins only). */
   readme?: string
   /** CHANGELOG.md content — rendered as the "更新日志" section on the detail page (external plugins only). */

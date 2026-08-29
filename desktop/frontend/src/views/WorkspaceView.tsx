@@ -20,8 +20,9 @@ import { useShallow } from 'zustand/react/shallow'
 import { SessionsView } from './SessionsView'
 import { TocView } from './RightViews'
 import { FilesPanel } from './chat2/FilesPanel'
+import { PATHS_MIME as DRAG_MIME } from './chat2/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
-import { AmadeusPagesView, AmadeusOutlineView } from '../amadeusViews'
+import { AmadeusPagesView, AmadeusOutlineView, ScopedPageOutline } from '../amadeusViews'
 import { usePageStore } from '@amadeus/store/pageStore'
 import type { WorkspaceDescriptor } from '../types'
 import { autoWorkspaceMode, workspaceKeyForPath, type WorkspaceMode, type WorkspaceModeEx } from './workspaceMode'
@@ -30,6 +31,7 @@ import { VaultSideSwitch } from '../components/VaultSideSwitch'
 import { PillBar } from '../components/EnginePicker'
 import { SidebarRow } from '../components/SidebarRow'
 import { resolveIcon } from '@amadeus/components/icons'
+import { ensureAmadeusReady } from '../amadeusPlugins'
 
 /** 当前活动主 leaf 的视图类型(订阅 mainTabs 驱动重算;焦点在侧栏时 activeMainPanel 有组内回退)。 */
 function useActiveMainType(): string | null {
@@ -195,13 +197,35 @@ export function WorkspaceView({ leaf }: ViewProps) {
  *  搜索、条目行、右键菜单,全部用会话/笔记列表同一套类(t2s-srow / t2s-search / t2s-lead),
  *  插件只出数据不出 UI。搜索词与选中分组由宿主持有,经 items({query, group}) 回传给插件,
  *  插件对 UI 保持无状态。
- *  ponytail: 不做拖放归档 —— 右键菜单(itemMenu)已能覆盖「移到某文件夹」,DnD 等真需求再加。 */
-function PluginListBody({ src }: { src: ListSourceContribution }) {
+ *  拖放同理:落区由宿主判形/点亮/解析落点,**接不接由插件自己声明**(可选的 `drop` 字段,
+ *  不声明就完全没有 DnD)—— 宿主不替插件决定它的列表意味着什么。 */
+/** 列表源行首图标:有 iconUrl 就画远程小图(平台 favicon),取不到再退词表图标。
+ *  key={iconUrl} 由调用方给 —— 换了地址要重新试一次,别让上一张的失败态粘住。 */
+function LeadIcon({ item }: { item: ListItem }): ReactNode {
+  const [failed, setFailed] = useState(false)
+  if (item.iconUrl && !failed) {
+    // ⚠️ 尺寸必须内联:`.t2s-lead-icon` 的宽高规则挂在 `.t2s-side` 下,而列表源容器是 `.t2sw-plug`
+    //    (dockview 面板,外面没有 `.t2s-side`)—— 只给类名,favicon 会按 .ico 原始尺寸(32/48px)撑爆行。
+    //    1em 两边都对:无 `.t2s-side` 时 = 行字号 13px(与词表 svg 同大),有则 = --t2s-icon。
+    return <img className="t2s-lead-icon" style={{ width: '1em', height: '1em', objectFit: 'contain', borderRadius: 3 }} src={item.iconUrl} alt="" onError={() => setFailed(true)} />
+  }
+  return resolveIcon(item.icon, <FileText className="t2s-lead-icon t2s-dim" />)
+}
+
+export function PluginListBody({ src }: { src: ListSourceContribution }) {
   const [, force] = useReducer((x: number) => x + 1, 0)
-  useEffect(() => src.subscribe(() => force()), [src])
+  // ⚠️vault 懒引导 × 插件在启动期激活 = 列表源恒空(2026-08-28 用户实报,青鸟收藏夹):
+  //   插件在 bootstrapEngine 就装好了,那一刻还没有活动库,它启动时那次索引读取拿到的是
+  //   `readTextFile` 的**静默 null**(主进程 `if (!vault.getRoot()) return null`),此后无人重读。
+  //   两道一起补:①这里 ensureAmadeusReady() 把库唤起来(与 AgentDesk 同一处方);
+  //   ②订阅 effect 以 vaultRoot 为键 —— 库落地/切库(Local↔Cloud)都重订阅,插件借机重读。
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
+  useEffect(() => src.subscribe(() => force()), [src, vaultRoot])
   const [query, setQuery] = useState('')
   const [group, setGroup] = useState<string | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; actions: ListAction[] } | null>(null)
+  const [dropKey, setDropKey] = useState<string | null>(null)
   // 源换了(插件切换/禁用重启)→ 过滤态跟着重置,免得拿旧源的分组键去查新源。
   useEffect(() => { setQuery(''); setGroup(null) }, [src])
 
@@ -219,13 +243,54 @@ function PluginListBody({ src }: { src: ListSourceContribution }) {
     return [...m.entries()]
   }, [items, groups.length])
 
+  // 落区接缝:dragover 阶段浏览器不让读 getData(只给 types),故点亮看 types、真取数据在 drop。
+  const canTake = (dt: DataTransfer): boolean => {
+    const acc = src.drop?.accepts ?? []
+    const types = Array.from(dt.types ?? [])
+    return (acc.includes('files') && types.includes('Files')) || (acc.includes('paths') && types.includes(DRAG_MIME))
+  }
+  const payloadOf = (dt: DataTransfer): { files?: File[]; paths?: string[] } | null => {
+    const acc = src.drop?.accepts ?? []
+    const files = Array.from(dt.files ?? [])
+    if (acc.includes('files') && files.length) return { files }
+    if (acc.includes('paths')) {
+      try {
+        const paths: unknown = JSON.parse(dt.getData(DRAG_MIME) || 'null')
+        if (Array.isArray(paths) && paths.length) return { paths: paths as string[] }
+      } catch { /* 不是本家载荷,当没有 */ }
+    }
+    return null
+  }
+  /** 一个落区的三件套;插件没声明 drop 就是空对象 = 这一层完全没有 DnD。 */
+  const dropProps = (key: string, target: { group?: string; item?: ListItem }): Record<string, unknown> =>
+    src.drop
+      ? {
+          onDragOver: (e: React.DragEvent) => {
+            if (!canTake(e.dataTransfer)) return
+            e.preventDefault(); e.stopPropagation()
+            e.dataTransfer.dropEffect = 'copy'
+            if (dropKey !== key) setDropKey(key)
+          },
+          onDragLeave: () => setDropKey((k) => (k === key ? null : k)),
+          onDrop: (e: React.DragEvent) => {
+            if (!canTake(e.dataTransfer)) return
+            e.preventDefault(); e.stopPropagation()
+            setDropKey(null)
+            const p = payloadOf(e.dataTransfer)
+            if (p) void src.drop!.onDrop(p, target)
+          },
+        }
+      : {}
+
   // 行 = 共享 SidebarRow(与会话/笔记行**同一个组件**,几何与状态类一致);插件只出数据。
   // 行首图标走宿主图标词表(resolveIcon),插件按名取 —— 既统一又保留辨识度(如平台角标)。
   const row = (it: ListItem): ReactNode => (
     <SidebarRow
       key={it.key}
       title={it.title}
-      lead={resolveIcon(it.icon, <FileText className="t2s-lead-icon t2s-dim" />)}
+      className={dropKey === `i:${it.key}` ? 'amx-drop-into' : undefined}
+      {...dropProps(`i:${it.key}`, { item: it })}
+      lead={<LeadIcon key={it.iconUrl ?? ''} item={it} />}
       trailing={it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
       onClick={(e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
       onContextMenu={(e) => {
@@ -267,8 +332,9 @@ function PluginListBody({ src }: { src: ListSourceContribution }) {
           {groups.map((g) => (
             <SidebarRow
               key={g.key}
-              className={group === g.key ? 'active' : undefined}
+              className={`${group === g.key ? 'active' : ''}${dropKey === `g:${g.key}` ? ' amx-drop-into' : ''}`.trim() || undefined}
               title={g.title}
+              {...dropProps(`g:${g.key}`, { group: g.key })}
               lead={resolveIcon(g.icon, <Folder className="t2s-lead-icon t2s-dim" />)}
               trailing={g.count !== undefined ? <span className="t2s-count">{g.count}</span> : undefined}
               onClick={() => setGroup(g.key)}
@@ -286,7 +352,10 @@ function PluginListBody({ src }: { src: ListSourceContribution }) {
         </div>
       )}
 
-      <div className="t2sw-plug-list">
+      <div
+        className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`}
+        {...dropProps('list', { group: group ?? undefined })}
+      >
         {sections
           ? sections.map(([g, list]) =>
               g === '' ? <div key="__flat">{list.map(row)}</div> : (
@@ -315,10 +384,16 @@ function PluginListBody({ src }: { src: ListSourceContribution }) {
 
 const t2sAll = (): string => (document.documentElement.lang.startsWith('zh') ? '全部' : 'All')
 
-/** 统一「大纲」视图:主视图=chat → 会话目录(DOM 扫描);=编辑器 → 笔记标题大纲(块模型);其他 → 空态。 */
-export function OutlineView() {
+/** 统一「大纲」视图:主视图=chat → 会话目录(DOM 扫描);=编辑器 → 笔记标题大纲(块模型);其他 → 空态。
+ *
+ *  `params.sourcePath` 在场 = **自带身份**(仪表盘大纲卡):不跟随活动主视图,直接给那篇笔记开大纲。
+ *  没有它的时候,这个视图在仪表盘里必然落空态(`useActiveMainType()` 读到的是 'dashboard')——
+ *  那正是 2026-08-25 用户实报的「大纲卡永远空白」,见方案 §6.4 C 类。 */
+export function OutlineView(props: Partial<ViewProps> = {}) {
   const { t } = useI18n()
   const mainType = useActiveMainType()
+  const src = typeof props.params?.sourcePath === 'string' ? props.params.sourcePath : ''
+  if (src && window.amadeus) return <ScopedPageOutline path={src} scope={`${props.leaf?.id ?? 'outline'}::src`} />
   if (mainType === 'chat') return <TocView />
   if (mainType === 'amadeus-editor' && window.amadeus) return <AmadeusOutlineView />
   return <div className="t2sw-empty">{t('outline.empty')}</div>

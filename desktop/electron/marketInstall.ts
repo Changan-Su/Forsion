@@ -63,6 +63,18 @@ export async function readInstalledVersion(type: string, dir: string): Promise<s
   return null
 }
 
+/**
+ * 市场项的安装目录(卸载/探测共用)。**返回 null = 拒绝**,调用方不得自己拼路径。
+ *
+ * 卸载是删目录的操作,所以这里是安全面:type 必须在 MARKET_SUBDIR 白名单里、slug 必须是
+ * 安全 kebab —— 两者任一不合格就返回 null,绝不把未经校验的串拼进 rm 的目标。
+ */
+export function marketItemDir(home: string, type: string, slug: string): string | null {
+  const sub = MARKET_SUBDIR[type]
+  if (!sub || !isSafeSlug(slug)) return null
+  return join(home, sub, slug)
+}
+
 /** install_slug 必须是 kebab(防目录穿越 / data-attr 注入)。 */
 export function isSafeSlug(s: unknown): s is string {
   return typeof s === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(s)

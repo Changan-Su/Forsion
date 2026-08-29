@@ -98,14 +98,20 @@ function writeProbe(pluginsDir) {
 async function openPluginsTab(win) {
   await win.keyboard.press('Meta+Comma')          // addCommand('open-settings', hotkey mod+,)
   await win.waitForTimeout(900)
-  if (!(await win.locator('.settings-sec, .settings-subbar').first().count().catch(() => 0))) {
+  if (!(await win.locator('.settings-main').first().count().catch(() => 0))) {
     await win.locator('#rb-settings, [data-ribbon-id="rb-settings"]').first().click({ timeout: 4000 }).catch(() => {})
     await win.waitForTimeout(900)
   }
+  const nav = win.locator('.settings-nav')
   for (const label of ['插件', 'Plugins']) {
-    const b = win.locator(`button:text-is("${label}")`).first()
-    if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
+    const b = nav.getByRole('button', { name: label, exact: true }).first()
+    if (await b.count().catch(() => 0)) {
+      await b.scrollIntoViewIfNeeded().catch(() => {})
+      await b.click().catch(() => {})
+      break
+    }
   }
+  await win.locator('.settings-sub--amadeus-plugins').first().waitFor({ timeout: 5000 }).catch(() => {})
   await win.waitForTimeout(900)
 }
 
@@ -170,11 +176,11 @@ async function main() {
   fs.writeFileSync(path.join(udDev, 'amadeus-config.dev.json'),
     JSON.stringify({ lastVault: vaultDir, localVault: vaultDir }, null, 2))
 
-  // 真插件:只拷运行期需要的四件,别把 node_modules / src 一起搬进来
+  // 真插件:只拷运行期需要的文件与包根身份图标,别把 node_modules / src 一起搬进来
   const latexDir = path.join(pluginsDir, 'latex-suite')
   fs.mkdirSync(latexDir, { recursive: true })
   let haveLatex = true
-  for (const f of ['main.js', 'manifest.json', 'README.md', 'CHANGELOG.md']) {
+  for (const f of ['main.js', 'manifest.json', 'README.md', 'CHANGELOG.md', 'icon.png']) {
     const src = path.join(LATEX_SRC, f)
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(latexDir, f))
     else if (f !== 'CHANGELOG.md') haveLatex = false
@@ -189,9 +195,18 @@ async function main() {
     const probeCard = await win.locator('.plugin-card--link', { hasText: 'Seam Probe' }).first().count().catch(() => 0)
     check('T1a 探针插件被磁盘发现', !!probeCard)
     if (haveLatex) {
-      const lx = await win.locator('.plugin-card--link', { hasText: 'LaTeX' }).first().count().catch(() => 0)
+      const latexCard = win.locator('.plugin-card--link', { hasText: 'LaTeX' }).first()
+      const lx = await latexCard.count().catch(() => 0)
       check('T1b latex-suite 被磁盘发现且未标「版本过低」', !!lx)
-    } else skip('T1b latex-suite 被磁盘发现', '插件源目录缺 main.js/manifest.json')
+      const iconReady = await latexCard.locator('.plugin-logo__img').evaluate((img) => (
+        img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0
+      )).catch(() => false)
+      check('T1c 插件卡读取包根 icon.png 并显示', iconReady)
+      await win.screenshot({ path: path.join(SHOT_DIR, 'seams-plugin-icons.png') }).catch(() => {})
+    } else {
+      skip('T1b latex-suite 被磁盘发现', '插件源目录缺 main.js/manifest.json/icon.png')
+      skip('T1c 插件卡显示 icon.png', '插件源目录不全')
+    }
 
     // ── T2/T3 探针:settingsView 挂载 + loadData 首次为空 + saveData 落盘
     if (!(await openDetail(win, 'Seam Probe'))) throw new Error('打不开探针详情页')

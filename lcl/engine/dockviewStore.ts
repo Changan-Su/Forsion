@@ -689,7 +689,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 展开:还原暂存内容(pinSides 跳过本侧),把该侧宽度从 ~0 补间到黄金分割目标宽。
       // stash 与 defaults 都为空(如无该侧默认的自定义 Space)→ 开占位:否则不建任何 panel,
       // syncPanelState 又按「无 panel」把 visible 复位,toggle 变成永远空转的死键。
-      const restored = get().stash[side].length ? get().stash[side] : get().sidebarDefaults[side]
+      // ⚠️**收起期间该视图可能已被反注册**(关掉内置插件 / 禁用外置插件 / 换产品档案)——
+      // 侧栏 panel 的 component 就是视图名,Dockview 的表里没有它就当场抛
+      // (「Only React.memo… are accepted as components」,一次未捕获异常打断整次展开)。
+      // 在**使用点**过滤而不是在 applyNamed/存档时剔除:stash 原样留在布局里,插件开回来即原样复活。
+      const known = (v: Stashed): boolean => !!getView(v.type)
+      const live = get().stash[side].filter(known)
+      const defaults = get().sidebarDefaults[side].filter(known)
+      const restored = live.length ? live : defaults
       const stashed: Stashed[] = restored.length ? restored : [{ type: 'sidebar-empty', params: {} }]
       set({ [visKey]: true } as Partial<WorkspaceState>)
       sidebarAnimating[side] = true

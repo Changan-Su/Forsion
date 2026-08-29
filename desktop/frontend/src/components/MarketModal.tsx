@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft, ArrowRight, Bot, Check, Clock, Compass, Download, ExternalLink,
   GitBranch, Globe, LayoutGrid, Library, Loader2, Package, PackageOpen, Palette, Puzzle,
-  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Wrench,
+  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench,
 } from 'lucide-react'
 import { Skeleton } from '@lcl/engine'
 import { useI18n } from '../i18n'
@@ -43,6 +43,14 @@ function TypeGlyph({ type, size = 20 }: { type: MarketType | 'webapp'; size?: nu
           : type === 'theme' ? Palette
             : Globe
   return <Icon size={size} strokeWidth={1.7} />
+}
+
+/** 卡片图标:投稿包里的 icon.png(服务端已校验 PNG/正方形/64~512px)。
+ *  没有图标、或图片加载失败(离线/被删)→ 回落到类型字形,绝不留白框。 */
+function ItemIcon({ url, type, size }: { url?: string | null; type: MarketType | 'webapp'; size?: number }) {
+  const [failed, setFailed] = useState(false)
+  if (!url || failed) return <TypeGlyph type={type} size={size} />
+  return <img className="mk-icon-img" src={url} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
 }
 
 /** 最新版本是否比已装的新(仅数值 semver 比较;不可比/未知已装版本 → 不提示,避免误报)。 */
@@ -83,6 +91,7 @@ export function MarketModal() {
   const [detail, setDetail] = useState<MarketDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
+  const [uninstalling, setUninstalling] = useState<string | null>(null)
   const [webApps, setWebApps] = useState<{ base: string; items: WebApp[] } | null>(null)
   const [webLoading, setWebLoading] = useState(false)
   const [webError, setWebError] = useState('')
@@ -194,6 +203,37 @@ export function MarketModal() {
     }
   }
 
+  const onUninstall = async (c: MarketCard): Promise<void> => {
+    const info = installedInfo(c)
+    if (!info) return
+    // agent 与 skill 落地后是**活体**(agent 带自己的 MEMORY/LOG,技能可能被用户改过),
+    // 删目录 = 连用户数据一起没。确认文案对这两类单独加重,别用一句通用的「确定卸载吗」糊过去。
+    const warn = info.realType === 'agent' ? t('market.uninstallWarnAgent')
+      : info.realType === 'skill' ? t('market.uninstallWarnSkill')
+      : ''
+    if (!window.confirm(t('market.uninstallConfirm', { name: c.name }) + (warn ? `\n\n${warn}` : ''))) return
+    setUninstalling(c.id)
+    try {
+      await window.tangu!.marketUninstall!(info.realType, c.installSlug)
+      act('market.uninstall', { id: c.id })
+      // 热重载与安装侧对称:装完刷新了什么,卸完就要刷新什么,否则界面上那一项还在。
+      if (info.realType === 'space') await loadUserSpaces()
+      else if (info.realType === 'theme') await useTheme.getState().reloadThemes()
+      else if (info.realType === 'amadeus-plugin') {
+        if (window.amadeus) { await usePluginStore.getState().reloadExternal(); await loadUserSpaces() }
+      }
+      // 引擎插件的工具/路由**无法运行期反注册**,删目录后仍要重启后端才真正消失(同设置页卸载口径)。
+      toast(info.realType === 'plugin'
+        ? t('market.uninstalledNeedsRestart', { name: c.name })
+        : t('market.uninstalled', { name: c.name }))
+      await scanCatalog()
+    } catch (e: any) {
+      toast(t('market.uninstallFail', { e: e?.message || String(e) }), true)
+    } finally {
+      setUninstalling(null)
+    }
+  }
+
   const openDetail = (c: MarketCard): void => {
     setDetailLoading(true)
     setDetail(null)
@@ -223,6 +263,23 @@ export function MarketModal() {
       >
         {busy ? <Loader2 size={13} className="mk-spin" /> : update ? <RefreshCw size={13} /> : done ? <Check size={13} /> : <Download size={13} />}
         {busy ? t('market.installing') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
+      </button>
+    )
+  }
+
+  /** 卸载按钮:只对已安装项出现;webapp 没有本地安装目录,不在此列。 */
+  const uninstallBtn = (c: MarketCard, extraClass = '') => {
+    if (!isInstalled(c)) return null
+    const busy = uninstalling === c.id
+    return (
+      <button
+        className={`btn sm ghost ${extraClass}`.trim()}
+        disabled={busy || installing === c.id}
+        title={t('market.uninstall')}
+        aria-label={t('market.uninstall')}
+        onClick={(e) => { e.stopPropagation(); void onUninstall(c) }}
+      >
+        {busy ? <Loader2 size={13} className="mk-spin" /> : <Trash2 size={13} />}
       </button>
     )
   }
@@ -285,7 +342,7 @@ export function MarketModal() {
 
   const card = (c: MarketCard, compact = false) => (
     <article key={c.id} className={`mk-card ${compact ? 'compact' : ''}`} onClick={() => openDetail(c)}>
-      <div className="mk-card-visual" aria-hidden="true"><TypeGlyph type={c.type} size={compact ? 20 : 24} /></div>
+      <div className="mk-card-visual" aria-hidden="true"><ItemIcon url={c.iconUrl} type={c.type} size={compact ? 20 : 24} /></div>
       <div className="mk-card-content">
         <div className="mk-card-eyeline">
           <span>{navLabel[c.type]}</span>
@@ -297,6 +354,7 @@ export function MarketModal() {
         <div className="mk-card-foot">
           <span className="mk-card-meta">{c.author}<span aria-hidden="true"> · </span>{t('market.downloadsShort', { n: c.downloads })}</span>
           {installBtn(c)}
+          {uninstallBtn(c)}
         </div>
       </div>
     </article>
@@ -354,11 +412,11 @@ export function MarketModal() {
           {detail ? (
             <div className="mk-detail">
               <button className="settings-back mk-detail-back" onClick={() => setDetail(null)}><ArrowLeft size={14} />{t('market.detailBack')}</button>
-              <div className="mk-detail-hero"><div className="mk-detail-icon"><TypeGlyph type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{navLabel[detail.type]}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{t('market.author')} {detail.author}<span aria-hidden="true"> · </span>{t('market.downloads', { n: detail.downloads })}</div></div></div>
+              <div className="mk-detail-hero"><div className="mk-detail-icon"><ItemIcon url={detail.iconUrl} type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{navLabel[detail.type]}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{t('market.author')} {detail.author}<span aria-hidden="true"> · </span>{t('market.downloads', { n: detail.downloads })}</div></div></div>
               <div className="mk-detail-layout">
                 <main className="mk-detail-main"><div className="mk-detail-section-title">{t('market.overview')}</div>{!!detail.tags?.length && <div className="mk-tags">{detail.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}<div className="mk-readme">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></main>
                 <aside className="mk-detail-sidebar">
-                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}</div>
+                  <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}</div>
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
                   <dl className="mk-facts"><div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div><div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
@@ -371,7 +429,7 @@ export function MarketModal() {
                 <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.searchResults')}</h2><p>{t('market.resultCount', { n: visibleCatalog.length })}</p></div></div>{catalogState(visibleCatalog)}</section>
               ) : catalog.length === 0 ? catalogState([]) : (
                 <div className="mk-discover">
-                  {featured && <section className="mk-featured" onClick={() => openDetail(featured)}><div className="mk-featured-copy"><span className="mk-featured-label"><Sparkles size={13} />{t('market.featured')}</span><h2>{featured.name}</h2><p>{featured.summary || t('market.summaryFallback')}</p><div className="mk-featured-meta">{navLabel[featured.type]}<span aria-hidden="true"> · </span>{featured.author}<span aria-hidden="true"> · </span>{t('market.downloadsShort', { n: featured.downloads })}</div><div className="mk-featured-actions"><button className="btn sm" onClick={(e) => { e.stopPropagation(); openDetail(featured) }}>{t('market.viewDetails')}<ArrowRight size={13} /></button>{installBtn(featured)}</div></div><div className="mk-featured-art" aria-hidden="true"><TypeGlyph type={featured.type} size={58} /><span>{navLabel[featured.type]}</span></div></section>}
+                  {featured && <section className="mk-featured" onClick={() => openDetail(featured)}><div className="mk-featured-copy"><span className="mk-featured-label"><Sparkles size={13} />{t('market.featured')}</span><h2>{featured.name}</h2><p>{featured.summary || t('market.summaryFallback')}</p><div className="mk-featured-meta">{navLabel[featured.type]}<span aria-hidden="true"> · </span>{featured.author}<span aria-hidden="true"> · </span>{t('market.downloadsShort', { n: featured.downloads })}</div><div className="mk-featured-actions"><button className="btn sm" onClick={(e) => { e.stopPropagation(); openDetail(featured) }}>{t('market.viewDetails')}<ArrowRight size={13} /></button>{installBtn(featured)}</div></div><div className="mk-featured-art" aria-hidden="true"><ItemIcon url={featured.iconUrl} type={featured.type} size={58} /><span>{navLabel[featured.type]}</span></div></section>}
                   {recent.length > 0 && <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.recent')}</h2><p>{t('market.recentHint')}</p></div><Clock size={18} /></div><div className="mk-recent-grid">{recent.map((item) => card(item, true))}</div></section>}
                   {popular.length > 0 && <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.popular')}</h2><p>{t('market.popularHint')}</p></div><Package size={18} /></div><div className="mk-grid">{popular.map((item) => card(item))}</div></section>}
                 </div>

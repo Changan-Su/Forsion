@@ -131,14 +131,25 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   button: SelectIcon,
 }
 
+/** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */
+const VOCAB_SHAPED = /^[a-z0-9-]+$/
+
 /**
- * 插件的 `icon` 字段 → 可渲染节点:命中词表就画 SVG,没命中就原样当字形。
+ * 插件的 `icon` 字段 → 可渲染节点。**三分流**:
+ *   1. 命中词表          → 画 SVG
+ *   2. 未命中,但长得像词表键(`[a-z0-9-]`)→ 兜底(调用方给的那个)
+ *   3. 未命中,且不是词表键的形状(emoji / `✎` / `·`)→ 原样当字形
  *
- * 兼容是**刻意**的:词表键全是 `[a-z0-9-]`,emoji / `✎` / `·` 永远命不中,于是
- * 已发布的老插件一行不改照跑(只是仍旧显示它自己的字形)。新插件写名字就能对齐视觉。
+ * 分支 3 的兼容是**刻意**的:词表键全是 `[a-z0-9-]`,emoji 永远命不中,于是已发布的老插件
+ * 一行不改照跑(只是仍旧显示它自己的字形)。新插件写名字就能对齐视觉。
+ *
+ * 分支 2 是**版本偏斜的唯一出口**:插件没法探测宿主词表里有什么,一旦某版往词表里加了新键
+ * (比如 `'bilibili'`),装在老宿主上就会把「bilibili」这几个**字**画进行首。宁可退兜底图标,
+ * 也不许把键名当文案显示 —— 这也正是 plugins/types.ts 对 `ListItem.icon` 写明的契约。
  */
 export function resolveIcon(icon: string | undefined, fallback: ReactNode = null): ReactNode {
   if (!icon) return fallback
   const Icon = PLUGIN_ICONS[icon]
-  return Icon ? <Icon /> : icon
+  if (Icon) return <Icon />
+  return VOCAB_SHAPED.test(icon) ? fallback : icon
 }

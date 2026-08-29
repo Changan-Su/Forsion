@@ -75,7 +75,7 @@ function makeContext(d: DiscoveredPlugin, state: HostState): TanguPluginContext 
   return {
     registerCommand: (cmd) => state.commands.set(cmd.name, cmd),
     registerToolProvider: (p) => registerToolProvider(p), // 全局注册表，append 在核心 builtin 之后
-    registerPlugin: (meta) => registerPlugin({ ...meta, source: 'folder' }), // folder 插件进统一注册表
+    registerPlugin: (meta) => registerPlugin({ ...meta, source: 'folder', iconUrl: d.iconUrl }), // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png
 
     registerProfile: (p) => state.profiles.set(p.appId, p),
     registerHostAdapter: (id, build) => state.hostAdapters.set(id, build),

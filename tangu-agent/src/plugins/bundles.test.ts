@@ -33,6 +33,14 @@ function engineManifest(id: string): object {
   return { id, name: id, version: '1.0.0', apiVersion: TANGU_PLUGIN_API, entry: 'dist/index.js' };
 }
 
+function pluginIconPng(size = 128): Buffer {
+  const buf = Buffer.alloc(24);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buf);
+  buf.writeUInt32BE(size, 16);
+  buf.writeUInt32BE(size, 20);
+  return buf;
+}
+
 beforeEach(() => {
   tmp = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'tangu-bundles-'))); // macOS /var → /private/var(对齐 forsionSharedDir 的 realpath)
   shared = path.join(tmp, 'shared');
@@ -92,10 +100,13 @@ describe('bundleDirs', () => {
 describe('内嵌引擎插件', () => {
   it('tangu-plugins/ 追加为搜索根,discoverPlugins 能发现', () => {
     const bundle = makeBundle('my-bundle');
-    writeJson(path.join(bundle, 'tangu-plugins', 'embedded-tool', 'tangu-plugin.json'), engineManifest('embedded-tool'));
+    const pluginDir = path.join(bundle, 'tangu-plugins', 'embedded-tool');
+    writeJson(path.join(pluginDir, 'tangu-plugin.json'), engineManifest('embedded-tool'));
+    writeFileSync(path.join(pluginDir, 'icon.png'), pluginIconPng());
     expect(resolvePluginsDirs()).toContain(path.join(bundle, 'tangu-plugins'));
     const found = discoverPlugins();
     expect(found.map((d) => d.manifest.id)).toContain('embedded-tool');
+    expect(found.find((d) => d.manifest.id === 'embedded-tool')?.iconUrl).toMatch(/^data:image\/png;base64,/);
   });
 
   it('顶不掉用户目录里同 id 的插件(先扫者胜)', () => {

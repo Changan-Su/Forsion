@@ -27,6 +27,8 @@ export interface PluginMeta {
   nameEn?: string;
   description: string;
   descriptionEn?: string;
+  /** Host-owned package icon data URL. Folder plugin metadata cannot override this value. */
+  iconUrl?: string;
   /** 设置作用域;缺省 ['global']。含 'agent' 时面板提供「全局 / 按 agent」切换。 */
   scopes?: SettingsScope[];
   settings?: PluginSettingsSchema;

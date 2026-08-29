@@ -14,6 +14,7 @@ const SHOTS = {
   light: '/tmp/forsion-market-discover-light.png',
   dark: '/tmp/forsion-market-discover-dark.png',
   detail: '/tmp/forsion-market-detail.png',
+  installed: '/tmp/forsion-market-installed.png',
 }
 
 function findChromium() {
@@ -88,6 +89,23 @@ async function main() {
     check('桌面宽度没有横向溢出', initial.overflow <= 0, `${initial.overflow}px`)
     await page.screenshot({ path: SHOTS.light, fullPage: true })
 
+    // 卡片图标(2026-08-26):投稿包 icon.png → 卡片显示真图;没有图 / 图解码失败 → 回落类型字形,绝不留白框。
+    const icons = await page.evaluate(() => {
+      const of = (name) => {
+        const card = [...document.querySelectorAll('.mk-card')].find((el) => el.querySelector('.mk-card-title')?.textContent?.trim() === name)
+        const box = card?.querySelector('.mk-card-visual')
+        if (!box) return null
+        const img = box.querySelector('img.mk-icon-img')
+        const rect = box.getBoundingClientRect()
+        return { img: !!img, svg: !!box.querySelector('svg'), w: rect.width, h: rect.height }
+      }
+      return { withIcon: of('LaTeX Suite'), noIcon: of('Research Companion'), broken: of('Source Check') }
+    })
+    check('有 icon.png 的商品显示自己的图标', icons.withIcon?.img === true && icons.withIcon?.svg === false, JSON.stringify(icons.withIcon))
+    check('没有图标的商品回落类型字形', icons.noIcon?.img === false && icons.noIcon?.svg === true, JSON.stringify(icons.noIcon))
+    check('图标加载失败也回落类型字形', icons.broken?.img === false && icons.broken?.svg === true, JSON.stringify(icons.broken))
+    check('图标没有把卡片图标位撑变形', icons.withIcon?.w === icons.noIcon?.w && icons.withIcon?.h === icons.noIcon?.h, `${icons.withIcon?.w}x${icons.withIcon?.h} vs ${icons.noIcon?.w}x${icons.noIcon?.h}`)
+
     await page.getByRole('button', { name: '插件', exact: true }).click()
     await page.locator('.mk-grid').waitFor()
     const pluginNames = await page.locator('.mk-grid .mk-card-title').allTextContents()
@@ -108,6 +126,16 @@ async function main() {
     await page.locator('.settings-nav-list button', { hasText: '已安装' }).click()
     await page.locator('.mk-grid').waitFor()
     check('已安装区只列出本机已有市场内容', await page.locator('.mk-grid .mk-card').count() === 2)
+
+    // 卸载(2026-08-25):此前市场只有「重新安装」,装错/不想要的东西没有出口。
+    // ⚠️ 卸载走 window.confirm,Playwright 不接管 dialog 会一直挂着 —— 这条断言最初就是这么卡住的。
+    await page.screenshot({ path: SHOTS.installed, fullPage: true })
+    page.on('dialog', (d) => { void d.accept() })
+    const beforeCount = await page.locator('.mk-grid .mk-card').count()
+    check('已安装卡上有卸载按钮', await page.locator(`.mk-grid .mk-card button[aria-label="卸载"]`).count() === beforeCount)
+    await page.locator('.mk-grid .mk-card button[aria-label="卸载"]').first().click()
+    await page.waitForFunction((n) => document.querySelectorAll('.mk-grid .mk-card').length === n - 1, beforeCount - 0, { timeout: 5000 })
+    check('卸载后该项从已安装区消失', await page.locator('.mk-grid .mk-card').count() === beforeCount - 1)
 
     await page.locator('.settings-nav-list button', { hasText: '商店首页' }).click()
     await page.evaluate(() => {

@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs, detectMarketType } from './marketInstall'
+import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs, detectMarketType, marketItemDir } from './marketInstall'
 
 async function zipOf(names: string[]): Promise<Buffer> {
   const z = new JSZip()
@@ -182,5 +182,35 @@ describe('extractZipToDir', () => {
     await extractZipToDir(buf, dest)
     expect(existsSync(join(dest, '..', 'evil.sh'))).toBe(false)
     expect(existsSync(join(dest, '..', '..', 'evil.sh'))).toBe(false)
+  })
+})
+
+// ── marketItemDir:卸载的安全面(2026-08-25)──────────────────────────────
+describe('marketItemDir', () => {
+  const HOME = '/tmp/forsion-home'
+
+  it('六类各自落到自己的安装目录', () => {
+    expect(marketItemDir(HOME, 'skill', 'my-skill')).toBe(`${HOME}/tangu/skills/my-skill`)
+    expect(marketItemDir(HOME, 'agent', 'my-agent')).toBe(`${HOME}/tangu/agents/my-agent`)
+    expect(marketItemDir(HOME, 'plugin', 'my-plugin')).toBe(`${HOME}/tangu/plugins/my-plugin`)
+    expect(marketItemDir(HOME, 'space', 'my-space')).toBe(`${HOME}/spaces/my-space`)
+    expect(marketItemDir(HOME, 'theme', 'my-theme')).toBe(`${HOME}/themes/my-theme`)
+    expect(marketItemDir(HOME, 'amadeus-plugin', 'my-fp')).toBe(`${HOME}/plugins/my-fp`)
+  })
+
+  it('未知 type 一律拒绝 —— 不许把任意子目录拼进 rm 的目标', () => {
+    for (const t of ['webapp', 'plugins', '', '..', 'Skill']) {
+      expect(marketItemDir(HOME, t, 'ok-slug')).toBeNull()
+    }
+  })
+
+  it('不安全的 slug 一律拒绝(目录穿越/绝对路径/大写/空)', () => {
+    for (const s of ['../../etc', '..', '/abs', 'a/b', 'UPPER', '', '-lead', 'x'.repeat(65)]) {
+      expect(marketItemDir(HOME, 'skill', s)).toBeNull()
+    }
+  })
+
+  it('拒绝时返回 null 而不是抛 —— 调用方靠 null 判定,不能靠 catch', () => {
+    expect(() => marketItemDir(HOME, 'nope', '../x')).not.toThrow()
   })
 })

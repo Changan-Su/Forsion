@@ -69,8 +69,10 @@
  * --t2s-icon = 图标尺寸的**唯一旋钮**,且必须是**绝对值**:各类行字号不一定相同(组头曾 11.5、行 13),
  * 用 em 跟各行字号会让图标又不一样大 —— 这正是用户报过的「文件夹图标小了一圈」。 */
 .t2s-side { --t2s-icon: 13px; }
-.t2sw .t2s-side { --t2s-icon: 16.9px; } /* = 13 × 1.3(用户:emoji 约为字体的 1.3 倍) */
-.t2s-side .t2s-lead {
+/* `.t2sw-plug` = 插件列表源的容器,它**不套 `.t2s-side`**(WorkspaceView 是 dockview 面板)——
+ * 不一并列在这儿,插件行的图标就落回 13px,比隔壁会话/笔记行小一圈(2026-08-28 用户实报)。 */
+.t2sw .t2s-side, .t2sw-plug { --t2s-icon: 16.9px; } /* = 13 × 1.3(用户:emoji 约为字体的 1.3 倍) */
+:is(.t2s-side, .t2sw-plug) .t2s-lead {
   position: relative; flex-shrink: 0;
   /* 槽跟着图标走:16.9px 图标塞不进写死的 18px 槽(emoji 字形还会略溢出 em 框)。 */
   width: calc(var(--t2s-icon) + 1.5px); height: calc(var(--t2s-icon) + 1.5px);
@@ -78,7 +80,7 @@
   display: inline-flex; align-items: center; justify-content: center;
 }
 /* lucide 默认 24px 是**表现属性**,CSS 压得过 —— 故 JSX 一律别传 size。 */
-.t2s-side .t2s-lead .t2s-lead-icon { width: 1em; height: 1em; }
+:is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-icon { width: 1em; height: 1em; }
 .t2s-side .t2s-lead .t2s-lead-chev {
   position: absolute; inset: 0; margin: 0;
   align-items: center; justify-content: center;
@@ -487,6 +489,8 @@
  * 行/搜索框复用上面的 .t2s-srow / .t2s-search;这里只补顶部动作、分区头与右键菜单。 */
 .t2sw-plug { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .t2sw-plug-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* 插件列表的落区高亮:与笔记树同一套描边(.amx-drop-into),行级的那条在 amadeus-host.css。 */
+.t2sw-plug-list.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: 8px; }
 .t2sw-plug-acts { display: flex; gap: 6px; padding: 8px 7.5px 4px; }
 .t2sw-plug-btn {
   flex: 1; padding: 6px 10px; border-radius: 8px; cursor: pointer;
@@ -506,12 +510,19 @@
 .t2sw-plug-mini:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
 .t2sw-plug-scrim { position: fixed; inset: 0; z-index: 40; }
 .t2sw-plug-menu {
-  position: fixed; z-index: 41; min-width: 140px; padding: 4px;
+  position: fixed; z-index: 41; width: max-content;
+  min-width: var(--menu-action-min, 168px);
+  max-width: min(var(--menu-action-max, 184px), calc(100vw - 16px));
+  padding: var(--menu-shell-padding, 4px);
   border-radius: 10px; background: var(--bg-elevated, var(--bg-card, var(--bg)));
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--card-shadow);
 }
-.t2sw-plug-menu div { padding: 6px 10px; border-radius: 7px; cursor: pointer; font-size: 12.5px; color: var(--text); }
+.t2sw-plug-menu div {
+  min-height: var(--menu-item-min-height, 28px);
+  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
+  border-radius: var(--radius-sm, 8px); cursor: pointer; font-size: 12.5px; line-height: 1.4; color: var(--text);
+}
 .t2sw-plug-menu div:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
 /* 档位胶囊条:复用 chat 的 PillBar(溢出检测 + ⋯ 翻页,见 components/EnginePicker.tsx),
@@ -522,3 +533,14 @@
 .t2sw > .engine-picker-bar .engine-picker-scroll { gap: 2px; flex: 1; min-width: 0; }
 .t2sw > .engine-picker-bar .engine-picker-more { width: 22px; height: 22px; right: 3px; border-radius: 7px; }
 .t2sw > .engine-picker-bar[data-more]::after { right: 3px; top: 3px; bottom: 3px; width: 40px; border-radius: 0 8px 8px 0; }
+
+/* 工作区 view 的条目纵向留白再收至约 0.65×:4.5px → 3px、6px → 4px。
+ * 只压「条目之间」的观感,不动字号、图标、横向缩进与按钮命中区;放在末尾以稳定覆盖三种内置模式
+ * 和插件列表共用的行基座。深度搜索行原本更高,仍保留相对普通行更松的两行节奏。 */
+.t2sw .t2s-srow,
+.t2sw .t2sf-row,
+.t2sw .t2s-folder-row { padding-block: 3px; }
+.t2sw .t2s-special,
+.t2sw .t2s-srow.t2s-deep { padding-block: 4px; }
+.t2sw .t2s-group-sessions,
+.t2sw .t2s-special-group { gap: 0.65px; }

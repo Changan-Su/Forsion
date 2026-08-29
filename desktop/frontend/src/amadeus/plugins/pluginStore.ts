@@ -3,6 +3,8 @@
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
+import { registerFont as registerHostFont } from '../../fontPresets'
+
 // Trust model: external plugins run with the curated `ctx.app` API (and, like Obsidian,
 // full renderer scope). Only install plugins you trust.
 
@@ -20,6 +22,7 @@ import { registerPluginSeries, track, unregisterPluginAchievements } from '../..
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { currentLocale, subscribeLocale } from '../../i18n'
+import { readTangu } from './tanguSeam'
 import { AUTO_WORK_FOLDER_KEY } from './display'
 import type {
   AmadeusPlugin,
@@ -240,6 +243,11 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     },
     // 库绝对路径:读渲染进程已有的 pageStore 状态,**不调 restoreVault**(那会重开库,有副作用)。
     vaultRoot: () => usePageStore.getState().vaultRoot || null,
+    // 在系统文件管理器里定位库内路径(2026-08-29+)。桥缺席时**整条方法不挂**,同 watchFile 的
+    // 纪律 —— 挂个空壳会让插件的「有这个方法就画按钮」分支画出一颗点了没反应的按钮。
+    ...(amadeus?.revealInFileManager
+      ? { reveal: (p: string): void => { if (ok()) void amadeus.revealInFileManager(p).catch(() => {}) } }
+      : {}),
   }
   return {
     api,
@@ -298,10 +306,12 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     version: src.version,
     description: src.description,
     descriptionEn: src.descriptionEn,
+    iconUrl: src.iconUrl,
     builtin: false,
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
+    capabilities: src.capabilities,
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
@@ -344,12 +354,24 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 语言订阅与块表面同一条纪律:插件自己能退订,但**最终责任人是宿主** —— disable/reload/setup 抛错
     // 一律统一收掉(codex 评审 2026-08-14)。
     const localeUnsubs = new Set<() => void>()
+    const tanguUnsubs = new Set<() => void>()
+    const fontDisposers = new Set<() => void>()
     revokers[pluginId] = () => {
       revokeSurface()
       for (const u of Array.from(localeUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" locale unsubscribe failed`, e) }
       }
       localeUnsubs.clear()
+      // ctx.tangu 的订阅同款纪律:禁用后的插件不许还在收模型/Space 变更回调。
+      for (const u of Array.from(tanguUnsubs)) {
+        try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" tangu unsubscribe failed`, e) }
+      }
+      tanguUnsubs.clear()
+      // 字体同理:插件不调 disposer 也得收干净,否则停用后下拉里还留着选不出效果的死项。
+      for (const d of Array.from(fontDisposers)) {
+        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" font dispose failed`, e) }
+      }
+      fontDisposers.clear()
     }
     return {
     app: appApi,
@@ -359,6 +381,29 @@ export const usePluginStore = create<PluginState>((set, get) => {
     registerTheme: (theme) => {
       injectThemeStyle(theme.id, theme.css)
       set((s) => ({ themes: [...s.themes, { pluginId, item: theme }] }))
+    },
+    // 插件字体(2026-08-28):与内置预设同形,只是 source 不同 → 设置里分到「插件提供」组。
+    // id 由宿主加命名空间前缀,插件之间不会撞;远程 URL 直接丢掉(CSP default-src 'self',且要离线可用)。
+    registerFont: (font) => {
+      const files = (font.files ?? []).filter((f) => {
+        const url = String(f?.url ?? '')
+        if (/^https?:/i.test(url)) {
+          console.warn(`[amadeus] 插件 ${pluginId} 的字体 ${font.id} 用了远程 URL,已忽略:${url}`)
+          return false
+        }
+        return !!url
+      })
+      const dispose = registerHostFont({
+        id: `plugin:${pluginId}:${font.id}`,
+        label: font.label,
+        slots: font.slots?.length ? font.slots : ['ui', 'body'],
+        stack: font.stack,
+        source: `plugin:${pluginId}`,
+        files,
+      })
+      const wrapped = (): void => { dispose(); fontDisposers.delete(wrapped) }
+      fontDisposers.add(wrapped)
+      return wrapped
     },
     registerPanel: (panel) => set((s) => ({ panels: [...s.panels, { pluginId, item: panel }] })),
     // 全局状态栏项(2026-07-23 复活):同 id 重复注册即覆盖;返回 handle 供原位更新(外置插件轮询改 text)。
@@ -477,6 +522,39 @@ export const usePluginStore = create<PluginState>((set, get) => {
     activity: {
       log: (event, detail) => act(`plugin:${pluginId}:${event}`, detail),
     },
+    // Tangu 只读探针:**探针装了才注入**(纯 Amadeus 壳 / unit 设备页上 ctx.tangu 整个不存在,
+    // 插件据此判断宿主形态)。不是权限闸 —— 模型名不敏感,不进 manifest capabilities 白名单。
+    ...(readTangu()
+      ? {
+          tangu: {
+            activeModel: () => readTangu()?.activeModel() ?? null,
+            models: () => readTangu()?.models() ?? [],
+            activeSpace: () => readTangu()?.activeSpace() ?? null,
+            session: () => readTangu()?.session?.() ?? null,
+            subscribe: (cb: () => void) => {
+              const off = readTangu()?.subscribe(cb) ?? (() => {})
+              const wrapped = (): void => { off(); tanguUnsubs.delete(wrapped) }
+              tanguUnsubs.add(wrapped)
+              return wrapped
+            },
+          },
+        }
+      : {}),
+    // 前台窗口采样:**manifest 声明过才注入**(没声明的插件连 ctx.system 都看不到)。
+    // 第二道闸在主进程:config.activeWindowEnabled 默认关,关着时下面这个调用恒回 null。
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('activeWindow')
+      ? {
+          system: {
+            activeWindow: async () => {
+              try {
+                return (await window.tangu?.activeWindow?.()) ?? null
+              } catch {
+                return null
+              }
+            },
+          },
+        }
+      : {}),
     }
   }
 

@@ -9,6 +9,7 @@ import { useApp } from '../stores/appStore'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { PluginLogo } from './PluginLogo'
 
 export const PluginsTab: React.FC<{
   cfg: TanguDesktopConfig
@@ -131,6 +132,7 @@ export const PluginsTab: React.FC<{
           : shown.map((p) => (
         <div key={p.id} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <PluginLogo url={p.iconUrl} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <b style={{ fontSize: 13 }}>{nm(p)}</b>

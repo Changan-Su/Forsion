@@ -20,6 +20,7 @@ import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
+import { PluginLogo } from './PluginLogo'
 
 /** 同一插件的级联串行链:快速连点按序执行,防两批 PUT 乱序落成「父关子开」(codex P1-4)。 */
 const cascadeChain = new Map<string, Promise<void>>()
@@ -305,6 +306,7 @@ const PluginDetail: React.FC<{
         </button>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <PluginLogo url={p.iconUrl} size={52} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <b style={{ fontSize: 15 }}>{pluginDisplayName(p, locale)}</b>
@@ -436,6 +438,7 @@ export const AmadeusPluginsTab: React.FC<{
         onClick={() => setDetail(p.id)}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <PluginLogo url={p.iconUrl} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <b style={{ fontSize: 13 }}>{pluginDisplayName(p, locale)}</b>

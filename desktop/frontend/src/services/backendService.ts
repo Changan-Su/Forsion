@@ -221,7 +221,7 @@ export const listModels = (cfg: TanguDesktopConfig) =>
 
 /** host 端外部 agent 引擎清单(含 available 检测 + 每引擎默认模型;云端/非 host → 抛或空 → 调用方回退 [])。 */
 export const listEngines = (cfg: TanguDesktopConfig) =>
-  request<{ engines: Array<{ id: string; name: string; available?: boolean; status?: 'available' | 'needs-signin' | 'not-installed'; defaultModel?: string }> }>(cfg, '/agent/engines').then((r) => r.engines || [])
+  request<{ engines: Array<{ id: string; name: string; available?: boolean; status?: 'available' | 'needs-signin' | 'not-installed'; defaultModel?: string; setup?: string }> }>(cfg, '/agent/engines').then((r) => r.engines || [])
 
 /** 设某引擎默认模型(设置页「Agent CLIs」;空串=清除)。 */
 export const setEngineDefaultModel = (cfg: TanguDesktopConfig, engineId: string, defaultModel: string) =>
@@ -557,6 +557,7 @@ export type PluginField =
   | { key: string; type: 'link'; label: string; labelEn?: string; url: string }
 export type PluginInfo = {
   id: string; name: string; nameEn?: string; description: string; descriptionEn?: string;
+  iconUrl?: string;
   scopes: Array<'global' | 'agent'>; settings: { fields: PluginField[] } | null; source: 'builtin' | 'folder'; enabled: boolean
   /** 运行期激活但贡献了路由,需重启才完整生效。 */
   needsRestart?: boolean

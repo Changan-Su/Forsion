@@ -25,6 +25,7 @@ function ensureLocal(res: any): boolean {
 function pluginView(m: ReturnType<typeof listPluginMetas>[number]) {
   return {
     id: m.id, name: m.name, nameEn: m.nameEn, description: m.description, descriptionEn: m.descriptionEn,
+    iconUrl: m.iconUrl,
     scopes: m.scopes || ['global'], settings: m.settings || null, source: m.source || 'builtin',
     enabled: isPluginEnabledSync(m.id), needsRestart: pluginsNeedingRestart.has(m.id),
   };

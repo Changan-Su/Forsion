@@ -20,6 +20,7 @@ import {
   type TanguPluginContext,
   type TanguPluginManifest,
 } from './types.js';
+import { pluginIconDataUrl } from './icon.js';
 
 const MANIFEST = 'tangu-plugin.json';
 
@@ -45,6 +46,8 @@ export function resolvePluginsDirs(): string[] {
 export interface DiscoveredPlugin {
   manifest: TanguPluginManifest;
   dir: string;
+  /** 包根 icon.png，经宿主校验后的 data URL；设置页身份图标用。 */
+  iconUrl?: string;
   /** 已构建入口的 file:// URL（动态 import 用）。 */
   entryUrl: string;
 }
@@ -95,7 +98,7 @@ export function discoverPlugins(): DiscoveredPlugin[] {
         continue;
       }
       seen.add(manifest.id);
-      found.push({ manifest, dir, entryUrl: pathToFileURL(path.resolve(dir, manifest.entry)).href });
+      found.push({ manifest, dir, iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(path.resolve(dir, manifest.entry)).href });
     }
   }
   // 确定性:按 id 排序（与 MCP 的字母序纪律一致，保证工具/路由注册顺序稳定）。
