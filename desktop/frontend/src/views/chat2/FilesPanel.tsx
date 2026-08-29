@@ -25,6 +25,7 @@ import { hostTargetFor } from '../wsFileNav'
 import { tipProps, fsTipLines } from '../../hoverTip'
 import { folderPadLeft, nameLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { useItemSelect, type ClickAct, type ItemSelect } from '../itemSelect'
+import { PATHS_MIME as DRAG_MIME, REF_MIME } from './chatDragRef' // 行拖载荷的单源(RightPanel 同值)
 import './sidebar2.css'
 
 registerMessages({
@@ -33,9 +34,9 @@ registerMessages({
 
 interface Entry { name: string; isDir: boolean; size: number; path: string }
 
-const DRAG_MIME = 'application/x-tangu-paths' // 与 RightPanel 同值,跨面板互拖也成立
 const sortEntries = (es: Entry[]): Entry[] =>
   [...es].sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+
 const dirOf = (p: string): string => p.slice(0, Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')))
 /** 单段文件名合法性(与主进程 safeName 同规):无路径分隔符、非 ./..、非空、<256。 */
 const validName = (s: string): boolean => !!s && s.length < 256 && !/[\\/]/.test(s) && !s.includes('\0') && s !== '.' && s !== '..'
@@ -105,6 +106,11 @@ function FileRow({ entry, depth, ctx }: { entry: Entry; depth: number; ctx: Tree
       draggable={canWrite()}
       onDragStart={(e) => ctx.rowDragStart(e, entry)}
       onDragEnd={ctx.dragEnd}
+      // 落在文件行上 = 落进**它所在的文件夹**(高亮的是那个目录行)。此前文件行完全不是落区,
+      // 拖到一个文件上就等于拖了个空 —— 用户口径「拖到准确的文件夹或文件里面」。
+      onDragOver={(e) => ctx.dragOverDir(e, dirOf(entry.path))}
+      onDragLeave={() => ctx.dragLeaveDir(dirOf(entry.path))}
+      onDrop={(e) => ctx.dropOnDir(e, dirOf(entry.path))}
       onClick={(e) => ctx.rowClick(e, entry)}
       onDoubleClick={() => ctx.openFile(entry)}
       onContextMenu={(e) => ctx.onMenu(e, entry)}
@@ -412,15 +418,39 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     } catch (err: any) { toast(t('panel.toast.moveFail', { err: err?.message || err }), true) }
     if (todo.length) bumpDir(destDir)
   }
-  const copyFilesInto = async (files: FileList, destDir: string): Promise<void> => {
-    if (!window.tangu?.copyHostFiles || !window.tangu?.getPathForFile) return
-    const paths = Array.from(files).map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } }).filter(Boolean)
-    if (!paths.length) return
+  const copyPathsInto = async (paths: string[], destDir: string): Promise<void> => {
+    if (!window.tangu?.copyHostFiles || !paths.length) return
     try {
       const r = await window.tangu.copyHostFiles(paths, destDir)
       toast(t('panel.toast.copied', { n: String(r.copied) }))
     } catch (err: any) { toast(t('panel.toast.copyFail', { err: err?.message || err }), true) }
     bumpDir(destDir)
+  }
+  /** 库里的行拖进来:`X.fd` 是 `X.md` 的附属,必须**成对同名**落地(见主进程 fs:copyBundle);
+   *  其余(附件/图片/无 .fd 的笔记)照旧逐件复制。老壳没有这个 IPC 就整体回退。 */
+  const copyFromVault = async (paths: string[], destDir: string): Promise<void> => {
+    const bundleApi = window.tangu?.copyNoteBundles
+    if (!bundleApi) return copyPathsInto(paths, destDir)
+    const have = new Set(paths)
+    const fdOf = (p: string): string => p.replace(/\.md$/i, '.fd')
+    const bundles = paths.filter((p) => /\.md$/i.test(p)).map((p) => ({ md: p, fd: have.has(fdOf(p)) ? fdOf(p) : undefined }))
+    const paired = new Set(bundles.flatMap((b) => (b.fd ? [b.md, b.fd] : [b.md])))
+    // 已被某个 .fd 覆盖的后代(父笔记与其子笔记一起选中)去重,免得子笔记被复制两遍。
+    const rest = paths.filter((p) => !paired.has(p) && !bundles.some((b) => b.fd && p.startsWith(`${b.fd}/`)))
+    try {
+      let n = 0
+      if (bundles.length) n += (await bundleApi(bundles, destDir)).copied
+      if (rest.length && window.tangu?.copyHostFiles) n += (await window.tangu.copyHostFiles(rest, destDir)).copied
+      toast(t('panel.toast.copied', { n: String(n) }))
+    } catch (err: any) { toast(t('panel.toast.copyFail', { err: err?.message || err }), true) }
+    bumpDir(destDir) // ⚠️ 部分成功也要刷:先复制成功的那些已经落盘了
+  }
+  const copyFilesInto = async (files: FileList, destDir: string): Promise<void> => {
+    if (!window.tangu?.getPathForFile) return
+    await copyPathsInto(
+      Array.from(files).map((f) => { try { return window.tangu!.getPathForFile!(f) } catch { return '' } }).filter(Boolean),
+      destDir,
+    )
   }
 
   // ── 右键菜单 ──
@@ -473,7 +503,9 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     const paths = sel.batch(e.path) // 拖已选中的项 = 整批搬走
     draggingRef.current = paths
     ev.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths))
-    ev.dataTransfer.effectAllowed = 'move'
+    // ⚠️ copyMove 而非 move:同一份载荷既可能在面板内移动,也可能被笔记树按**复制**接走 ——
+    // 源只允许 move 而目标声明 copy,浏览器按交集协商会把整个投放判成不允许(codex 评审 2026-08-25)。
+    ev.dataTransfer.effectAllowed = 'copyMove'
   }
   const dragEnd = (): void => { draggingRef.current = null; setDropDir(null) }
   const dragOverDir = (ev: React.DragEvent, dir: string): void => {
@@ -481,7 +513,12 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     const internal = !!draggingRef.current || ev.dataTransfer.types.includes(DRAG_MIME) // 本面板 或 其他面板的行拖
     if (!internal && !osFiles) return
     if (draggingRef.current?.includes(dir)) return
+    // 源本来就在这个目录里 = 原地移动,没意义(同笔记树 parentOf(dragPath) === fd 的守卫);
+    // 跨面板拖拽在 dragover 阶段读不到 getData(浏览器安全限制),只能守住本面板这一半。
+    if (!osFiles && draggingRef.current?.every((p) => dirOf(p) === dir)) return
     ev.preventDefault(); ev.stopPropagation()
+    // 光标要说实话:库里的行(带 REF_MIME)是复制,其余是移动/OS 复制。
+    ev.dataTransfer.dropEffect = osFiles || ev.dataTransfer.types.includes(REF_MIME) ? 'copy' : 'move'
     setDropDir(dir)
   }
   const dragLeaveDir = (dir: string): void => { setDropDir((d) => (d === dir ? null : d)) }
@@ -490,9 +527,12 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     const files = ev.dataTransfer.files
     let dg = draggingRef.current
     if (!dg) { try { dg = JSON.parse(ev.dataTransfer.getData(DRAG_MIME) || 'null') } catch { dg = null } } // 跨面板
+    // 载荷带 REF_MIME = 从笔记库那棵树拖出来的(它同时带绝对路径供这里认):**复制,绝不搬走原件** ——
+    // 库里的笔记还有 .fd / 反链 / 同步在依赖它,move 等于把它从库里挖走。
+    const fromVault = ev.dataTransfer.types.includes(REF_MIME)
     setDropDir(null); draggingRef.current = null
     if (files?.length) void copyFilesInto(files, dir)
-    else if (dg?.length) void moveInto(dir, dg)
+    else if (dg?.length) void (fromVault ? copyFromVault(dg, dir) : moveInto(dir, dg))
   }
 
   const ctx: TreeCtx = {

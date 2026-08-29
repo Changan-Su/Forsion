@@ -1,5 +1,5 @@
 /**
- * 设置界面的「描边 / 选中态 / 中分类」契约 —— 全是改 CSS 会静默塌掉、且只在某几个主题×明暗组合下才露相的东西。
+ * 设置界面的「描边 / 选中态 / 子页面折叠」契约 —— 全是改 CSS 会静默塌掉、且只在某几个主题×明暗组合下才露相的东西。
  *
  *  A 边线永远站在表面的正确一侧:浅色态比表面暗、深色态比表面亮。
  *    ⚠️ 这条是用户实报的病:`--border` 是**硬色值**,与所在卡面没有相对关系。旧的 :root.dark
@@ -9,7 +9,7 @@
  *    = 2px 实心 accent,单色配色下深色态近白、浅色态近黑(用户:「太夸张 / 深色太亮 / 浅色太黑」)。
  *  C 选中轮廓的深浅两态**观感对称**:同一张卡在 light / dark 下,轮廓对卡面的对比度不应差出一截,
  *    否则就是又回到「一边刺眼一边发闷」。
- *  D 中分类栏目条在标题下方、可横滑不换行;选中项用 overlay 底而不是满强度 accent。
+ *  D 天然子页面折叠在对应总项下方，正文标题区不再出现横向栏目条。
  *  E 切换动画:data-dir=+1 从右滑入、-1 从左滑入、0 纯淡入(换一级页无左右语义)。量首帧真实 transform。
  *
  * 改 base.css 的 --border / --sel-line / .seg / .switch / .theme-card / .skin-chip / .settings-sub* 后必跑。
@@ -70,24 +70,30 @@ body { margin: 0; }
   <header class="settings-mobile-home-head"><button>←</button><strong>设置</strong><span></span></header>
   <div class="settings-mobile-home-scroll">
     <div class="settings-mobile-hero"><span><strong>Forsion Genesis</strong><small>设置</small></span></div>
-    <section class="settings-mobile-group"><h2>外观</h2><div class="settings-mobile-group-card">
-      <button class="settings-mobile-row"><span class="settings-mobile-row-icon"></span><span class="settings-mobile-row-copy"><strong>外观</strong><small>主题、配色与字体</small></span><span>›</span></button>
-      <button class="settings-mobile-row"><span class="settings-mobile-row-icon"></span><span class="settings-mobile-row-copy"><strong>通知</strong><small>通知出口与事件提醒</small></span><span>›</span></button>
+    <section class="settings-mobile-group"><h2>AI</h2><div class="settings-mobile-group-card">
+      <div class="settings-mobile-entry">
+        <button class="settings-mobile-row" aria-expanded="true"><span class="settings-mobile-row-icon"></span><span class="settings-mobile-row-copy"><strong>模型/Provider</strong><small>模型、服务商与语音</small></span><span class="settings-mobile-row-chevron expanded">›</span></button>
+        <div class="settings-mobile-subitems">
+          <button class="settings-mobile-subrow"><span class="settings-mobile-subrow-mark"></span><span>模型</span><span>›</span></button>
+          <button class="settings-mobile-subrow"><span class="settings-mobile-subrow-mark"></span><span>服务商</span><span>›</span></button>
+        </div>
+      </div>
     </div></section>
   </div>
 </section>
 <!-- ⚠️ 侧栏不能省:.settings-page 是 grid(252px + 1fr),少了它 .settings-main 会落进 252px 那一列,
      正文被挤成一条,量出来的几何全是假的(截图里主题卡互相压在一起就是这个)。 -->
-<aside class="settings-nav"><div class="settings-nav-top"></div><div class="settings-nav-list"></div></aside>
+<aside class="settings-nav"><div class="settings-nav-top"></div><div class="settings-nav-list">
+  <div class="settings-nav-group"><div class="settings-nav-grouphead">AI</div>
+    <div class="settings-nav-parent"><button class="has-active" aria-expanded="true"><span>◉</span><span>模型/Provider</span><span class="settings-nav-parent-chevron">›</span></button>
+      <div class="settings-nav-subitems"><button class="settings-nav-subitem active"><span class="settings-nav-subitem-mark"></span><span>模型</span></button><button class="settings-nav-subitem"><span class="settings-nav-subitem-mark"></span><span>服务商</span></button></div>
+    </div>
+  </div>
+</div></aside>
 <section class="settings-main">
   <div class="settings-mobile-detail-head"><button>←</button><strong>外观</strong><button>×</button></div>
   <div class="settings-main-head">
     <div class="settings-main-title">主题</div>
-    <div class="settings-subbar" role="tablist">
-      <button class="settings-subtab active">设计语言</button>
-      <button class="settings-subtab">配色</button>
-      <button class="settings-subtab">显示</button>
-    </div>
   </div>
   <div class="settings-body"><div class="settings-sub" data-dir="0">
     <div class="field">
@@ -167,6 +173,7 @@ function surfaceUnder(el) {
     const r = document.documentElement
     r.dataset.theme = lang
     r.dataset.skin = skin
+    r.dataset.bg = skin      // 配色拆成 主题色×背景色 两轴后,「旧整套配色」= 两轴同 id
     r.dataset.mode = mode
     r.classList.toggle('dark', mode === 'dark')
     r.style.cssText = '' // 上一轮 custom 的内联 seed 变量必须清掉,否则会漏到命名配色上
@@ -284,21 +291,20 @@ function surfaceUnder(el) {
   check("A' 敌意主题(--border 被设成纯黑)下控件边线仍站对边", hostileBad.length === 0, hostileBad.join(' ; ') || '控件不吃 --border')
   await p.evaluate(() => document.head.lastElementChild.remove())
 
-  // ══ D:中分类栏目条 ══
-  const bar = await p.evaluate(() => {
-    const b = document.querySelector('.settings-subbar')
-    const title = document.querySelector('.settings-main-title')
-    const active = document.querySelector('.settings-subtab.active')
-    const body = document.querySelector('.settings-body')
-    const cs = getComputedStyle(b)
+  // ══ D:天然子页面折叠在对应总项下面，不再占正文标题区。 ══
+  const nestedNav = await p.evaluate(() => {
+    const parent = document.querySelector('.settings-nav-parent')
+    const parentButton = parent.querySelector(':scope > button')
+    const children = parent.querySelector('.settings-nav-subitems')
+    const active = children.querySelector('.settings-nav-subitem.active')
+    const chevron = parentButton.querySelector('.settings-nav-parent-chevron')
     return {
-      belowTitle: b.getBoundingClientRect().top >= title.getBoundingClientRect().bottom - 1,
-      aboveBody: b.getBoundingClientRect().bottom <= body.getBoundingClientRect().top + 1,
-      overflowX: cs.overflowX,
-      wrap: cs.flexWrap,
+      nested: parent.contains(children),
+      expanded: parentButton.getAttribute('aria-expanded'),
+      parentPad: parseFloat(getComputedStyle(parentButton).paddingLeft),
+      childPad: parseFloat(getComputedStyle(active).paddingLeft),
+      chevronTransform: getComputedStyle(chevron).transform,
       activeBg: getComputedStyle(active).backgroundColor,
-      // ⚠️ 不能拿 computed 的 `rgb(28, 28, 28)` 去和 token 原始串 `#1c1c1c` 做 !== —— 那永远不等,
-      //    等于假绿(Codex 评审指出)。先把 token 塞进一个探针元素让浏览器归一化成同一种序列化形式。
       accentInk: (() => {
         const probe = document.createElement('span')
         probe.style.color = 'var(--accent-ink)'
@@ -307,16 +313,17 @@ function surfaceUnder(el) {
         probe.remove()
         return v
       })(),
-      appRegion: cs.webkitAppRegion || cs.getPropertyValue('-webkit-app-region'),
-      leftAligned: Math.abs(b.getBoundingClientRect().left - title.getBoundingClientRect().left) < 1,
+      oldBarCount: document.querySelectorAll('.settings-subbar').length,
+      desktopDetailHead: getComputedStyle(document.querySelector('.settings-mobile-detail-head')).display,
     }
   })
-  check('D 栏目条在标题下方、正文上方', bar.belowTitle && bar.aboveBody, `belowTitle=${bar.belowTitle} aboveBody=${bar.aboveBody}`)
-  check('D 栏目条与标题左对齐(同一内容栏)', bar.leftAligned)
-  check('D 栏目条横向滚动、不换行(窄窗不会撑成两行顶掉正文)', bar.overflowX === 'auto' && bar.wrap === 'nowrap', `overflow-x=${bar.overflowX} wrap=${bar.wrap}`)
-  check('D 选中栏目用 overlay 底,不是满强度 accent', bar.activeBg !== bar.accentInk, `bg=${bar.activeBg}`)
-  // ⚠️ .settings-main-head 是拖窗区,整条栏目条(不止按钮)必须抠成 no-drag,否则横滑拖不动。
-  check('D 栏目条整条 no-drag(拖窗区会吞掉横滑)', bar.appRegion === 'no-drag', `app-region=${bar.appRegion}`)
+  check('D 子页面嵌在对应总项下面且总项标记为展开', nestedNav.nested && nestedNav.expanded === 'true',
+    `nested=${nestedNav.nested} expanded=${nestedNav.expanded}`)
+  check('D 子页面有清晰缩进，展开箭头已旋转', nestedNav.childPad > nestedNav.parentPad + 8 && nestedNav.chevronTransform !== 'none',
+    `padding ${nestedNav.parentPad}→${nestedNav.childPad} transform=${nestedNav.chevronTransform}`)
+  check('D 选中子页面用淡强调底，不是满强度 accent', nestedNav.activeBg !== nestedNav.accentInk, `bg=${nestedNav.activeBg}`)
+  check('D 正文标题区不再渲染旧横向栏目条', nestedNav.oldBarCount === 0, `oldBars=${nestedNav.oldBarCount}`)
+  check('D 桌面端不显示移动二级页头', nestedNav.desktopDetailHead === 'none', `display=${nestedNav.desktopDetailHead}`)
   // 多包一层 .settings-sub 之后,`.settings-body > *` 的 840 上限落到了包装层上,里面的 .field
   // 不再直接吃到那条规则 —— 得确认列宽没塌:正文与标题同一列、.field 撑满包装层。
   // ⚠️ 别把 840 写死:窄窗下列宽由可用宽度决定(本页 1000px 视口下是 672),写死会误报。
@@ -357,19 +364,23 @@ function surfaceUnder(el) {
     page.classList.add('settings-page--mobile', 'settings-page--mobile-menu')
     const style = (s) => getComputedStyle(document.querySelector(s))
     const row = document.querySelector('.settings-mobile-row')
+    const subrow = document.querySelector('.settings-mobile-subrow')
     return {
       home: style('.settings-mobile-home').display,
       nav: style('.settings-nav').display,
       main: style('.settings-main').display,
       rowH: row.getBoundingClientRect().height,
+      subrowH: subrow.getBoundingClientRect().height,
+      subitems: style('.settings-mobile-subitems').display,
       overflow: document.body.scrollWidth - document.body.clientWidth,
     }
   })
   check('M 移动端打开设置先显示分组列表,旧侧栏与正文隐藏',
     mobileMenu.home === 'flex' && mobileMenu.nav === 'none' && mobileMenu.main === 'none',
     `home=${mobileMenu.home} nav=${mobileMenu.nav} main=${mobileMenu.main}`)
-  check('M 一级入口满足触控行高且页面无横向溢出', mobileMenu.rowH >= 64 && mobileMenu.overflow === 0,
-    `row=${mobileMenu.rowH.toFixed(1)}px overflow=${mobileMenu.overflow}px`)
+  check('M 总项与展开后的子项满足触控行高且页面无横向溢出',
+    mobileMenu.rowH >= 64 && mobileMenu.subrowH >= 48 && mobileMenu.subitems === 'block' && mobileMenu.overflow === 0,
+    `row=${mobileMenu.rowH.toFixed(1)}px subrow=${mobileMenu.subrowH.toFixed(1)}px overflow=${mobileMenu.overflow}px`)
 
   const mobileDetail = await p.evaluate(() => {
     const page = document.querySelector('.settings-page')
@@ -380,17 +391,15 @@ function surfaceUnder(el) {
       nav: style('.settings-nav').display,
       main: style('.settings-main').display,
       head: style('.settings-mobile-detail-head').display,
-      subWrap: style('.settings-subbar').flexWrap,
-      subOverflow: style('.settings-subbar').overflowX,
+      oldBars: document.querySelectorAll('.settings-subbar').length,
       overflow: document.body.scrollWidth - document.body.clientWidth,
     }
   })
-  check('M 点一级项进入独立二级页(页头返回,不复活全局 chips)',
+  check('M 点具体子项进入独立二级页(页头返回,不复活旧横向栏目条)',
     mobileDetail.home === 'none' && mobileDetail.nav === 'none' && mobileDetail.main === 'flex' && mobileDetail.head === 'grid',
     `home=${mobileDetail.home} nav=${mobileDetail.nav} main=${mobileDetail.main} head=${mobileDetail.head}`)
-  check('M 二级页天然子栏目折行而非横滑',
-    mobileDetail.subWrap === 'wrap' && mobileDetail.subOverflow === 'visible' && mobileDetail.overflow === 0,
-    `wrap=${mobileDetail.subWrap} overflow-x=${mobileDetail.subOverflow} page-overflow=${mobileDetail.overflow}px`)
+  check('M 二级详情没有旧横向子栏目且不横向溢出', mobileDetail.oldBars === 0 && mobileDetail.overflow === 0,
+    `oldBars=${mobileDetail.oldBars} page-overflow=${mobileDetail.overflow}px`)
 
   await browser.close()
 
@@ -414,20 +423,27 @@ function surfaceUnder(el) {
     orphan.length || stray.length ? `声明了没正文: ${orphan.join(',') || '无'} / 有正文没声明: ${stray.join(',') || '无'}`
       : `${declared.length} 个栏目按 tab 一一对应`)
 
-  // ══ G:D/E 全跑在硬编码的 PAGE 复刻上 —— 真 JSX 若把栏目条挪出标题区、丢了 wrapper 的 key 或
-  //    漏传 data-dir,那些断言不会红(Codex 评审指出)。这里静态钉住真组件的这几处接线。 ══
+  // ══ G:D/E 全跑在硬编码的 PAGE 复刻上 —— 真 JSX 若没把子页接进折叠层、丢了 wrapper 的 key 或
+  //    漏传 data-dir,那些断言不会红。这里静态钉住真组件的这几处接线。 ══
   const wiring = [
-    ['栏目条渲染在 .settings-main-head 内', /settings-main-head[\s\S]{0,900}?className="settings-subbar"/],
+    ['桌面子页面渲染在总项下方', /className="settings-nav-parent"[\s\S]{0,1200}?className="settings-nav-subitems"/],
+    ['正文标题区不再渲染旧横向栏目条', !/className="settings-subbar"/.test(TSX)],
     ['包装层带 key(靠重挂触发入场动画)', /key=\{`\$\{tab\}:\$\{activeSub\}`\}[\s\S]{0,160}?className=\{`settings-sub settings-sub--\$\{tab\}`\}/],
     ['包装层传了 data-dir(方向)', /className=\{`settings-sub settings-sub--\$\{tab\}`\} data-dir=\{subDir\}/],
     ['切页/切分类后正文回顶部', /\.settings-body'\)[\s\S]{0,120}?scrollTop = 0/],
-    ['移动一级行进入二级页', /onClick=\{\(\) => \{ goTab\(id\); setMobileMenuOpen\(false\) \}\}/],
+    ['桌面总项展开时默认打开首个子页面', /const toggleDesktopTab[\s\S]{0,360}?opening[\s\S]{0,180}?openSubPage\(id, items\[0\]\[0\]\)/],
+    ['移动总项有独立折叠入口', /if \(expandable\) toggleMobileTab\(id\)/],
+    ['移动具体子项进入二级页', /openSubPage\(id, key\); setMobileMenuOpen\(false\)/],
     ['移动二级页头返回一级列表', /settings-mobile-detail-head[\s\S]{0,180}?setMobileMenuOpen\(true\)/],
     ['Android 系统返回先退一级列表', /addEventListener\('forsion:mobile-back', backToMenu\)/],
   ]
-  const brokenWiring = wiring.filter(([, re]) => !re.test(TSX)).map(([n]) => n)
+  const brokenWiring = wiring.filter(([, probe]) => typeof probe === 'boolean' ? !probe : !probe.test(TSX)).map(([n]) => n)
   check('G 真组件的接线仍在(栏目动画 / 两层移动导航 / Android 返回)', brokenWiring.length === 0,
     brokenWiring.join(' ; ') || `${wiring.length} 处接线`)
+  const mobileToggleBody = TSX.slice(TSX.indexOf('const toggleMobileTab'), TSX.indexOf('// Android 实体返回'))
+  check('G 移动总项只改折叠状态,不直接进入具体页面',
+    mobileToggleBody.includes('toggleTab(id)') && !mobileToggleBody.includes('goTab(') && !mobileToggleBody.includes('openSubPage('),
+    mobileToggleBody.includes('goTab(') || mobileToggleBody.includes('openSubPage(') ? '移动总项错误地进入了详情' : '只调用 toggleTab')
 
   // ══ H:--sel-line/--sel-fill 必须**先**有不含 color-mix 的值,再在 @supports 里升级。
   //    浏览器里模拟不了「不支持 color-mix」,只能静态钉:少了这层兜底,老浏览器(npm run web 面)

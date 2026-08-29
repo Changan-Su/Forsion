@@ -7,7 +7,9 @@
  * ③ 新对话空状态会为悬浮 composer 让位,二者不重叠;
  * ④ 标签/更多使用卡内 popover,不会变回覆盖大半窗口的 bottom sheet;
  * ⑤ 从主窗带 sessionId 打开时,Mini 复用原壳并定向到同一份正式会话;
- * ⑥ 亮暗主题都留一张真实 Electron 截图供人工复核。
+ * ⑥ 亮暗主题都留一张真实 Electron 截图供人工复核;
+ * ⑦ 切到 Amadeus 空间时 Vault 已恢复 —— mini 只挂主区 leaf,左栏那个唯一的 ensureAmadeusReady
+ *    触发点永不挂载,漏了 MiniRoot 里的补引导就恒显「打开 Vault 文件夹」空态(2026-08-27 用户实报)。
  *
  * 跑:npm run build && npm run check:minicard
  */
@@ -49,6 +51,7 @@ async function main() {
       cwd: ROOT,
       env: {
         ...process.env,
+        HOME: home, // ensureDefaultVault 按 homedir() 建默认工作区 —— 不隔离就写进用户真家目录
         TANGU_HOME: home,
         TANGU_BACKEND_URL: 'http://127.0.0.1:1',
         ELECTRON_ENABLE_LOGGING: '1',
@@ -135,6 +138,18 @@ async function main() {
     })
     await mini.waitForTimeout(100)
     await mini.screenshot({ path: darkShot })
+
+    // ⑦ 切到 Amadeus 空间:vault 必须已恢复。空库也没关系 —— 空态按钮是「新建笔记」而非「打开 Vault 文件夹」。
+    await mini.locator('.mini-card-space').click()
+    await mini.locator('.mini-card-popover .mini-card-row', { hasText: 'Amadeus' }).first().click()
+    await mini.waitForSelector('[data-view="amadeus-editor"]', { timeout: 30_000 })
+    await mini.waitForTimeout(1200)
+    const amadeus = await mini.evaluate(() => ({
+      welcome: document.querySelector('.amx-welcome-sub')?.textContent || '',
+      btn: document.querySelector('.amx-welcome-btn')?.textContent || '',
+      editor: !!document.querySelector('.amx-pane'),
+    }))
+    check('Amadeus 空间的 Vault 已引导(非「打开 Vault」空态)', amadeus.editor && !/打开 Vault/.test(amadeus.btn), JSON.stringify(amadeus))
 
     console.log(`SCREENSHOT  light ${lightShot}`)
     console.log(`SCREENSHOT  menu  ${menuShot}`)

@@ -3,7 +3,8 @@
  *
  * 病症(2026-08-13 用户实报,手机截图):聊天输入区的模型菜单连同它的子面板整块跑到屏幕左边界
  * 外面去了。真因不是某一个菜单写错,而是**一整类**浮层的共性 —— `position:absolute` 锚在按钮上
- * + 硬编码像素宽(224 / 264 / min-width:320),窄屏上按钮离边缘不够宽,菜单左/右缘直接是负数。
+ * + 固定选择面宽(统一 224px;另有少量表单 min-width:320),窄屏上按钮离边缘不够宽,
+ * 菜单左/右缘直接是负数。
  * 视口夹取的正典是 lcl/engine/menuAnchor.tsx:fixed 自定位浮层走 OverlayAt/useClampedMenu,
  * 这类「CSS 已定好位、只是会溢出」的走 useEdgeNudge。
  *
@@ -25,7 +26,7 @@ const CLAMPERS = ['useEdgeNudge', 'OverlayAt', 'useClampedMenu']
 const GUARDED = [
   'composer-menu', // 输入区 add / mode 菜单 + ModelPill 一级菜单(base.css 固定 224px)
   'cm-sub',        // ModelPill 四类子面板(右/左/叠放决定形态,useEdgeNudge 负责边界兜底)
-  'project-menu',  // New Chat 的工作区下拉(264px 左对齐)
+  'project-menu',  // New Chat 的工作区下拉(与其他选择菜单同为 224px,左对齐)
   'dash-add-menu', // 仪表盘「添加卡片」/ 右键菜单
   't2c-ctxring-pop', // 上下文占比悬停详情
 ]

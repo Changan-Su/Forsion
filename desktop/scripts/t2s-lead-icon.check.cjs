@@ -12,7 +12,7 @@
  *
  * 页面注入仓里**真实的** amadeus-host.css + sidebar2.css(不复制样式),故不会与源码漂移。
  *
- * 跑:node scripts/t2s-lead-icon.check.cjs   (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
+ * 跑:node scripts/t2s-lead-icon.check.cjs [--shot]  (需 playwright-core 自装的 chromium;CHROMIUM_EXE 可覆盖)
  */
 const fs = require('fs')
 const os = require('os')
@@ -101,7 +101,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
   <!-- 分区行的图标槽:各 section 自有行结构、没走 .t2s-lead,但必须吃同一个 --t2s-icon。
        用户连报四次「图标还是小的」都出在这一族 —— 每加一个 section 就漏一个。 -->
   <div class="t2sw" style="width:320px"><aside class="t2s-side amx-tree">
-    <button class="t2s-special"><span class="t2s-special-ic" id="ic-special">${sv()}</span><span class="t2s-special-title">新建笔记</span></button>
+    <button class="t2s-special" id="special"><span class="t2s-special-ic" id="ic-special">${sv()}</span><span class="t2s-special-title">新建笔记</span></button>
     <div class="amx-cs-row"><span class="amx-cs-ic" id="ic-cs">${sv()}</span><span class="t2s-srow-title">云同步条目</span></div>
     <div class="amx-coll-row"><span class="amx-coll-ic" id="ic-coll">${sv()}</span><span class="t2s-srow-title">集合条目</span></div>
     <div><span class="amx-trash-ic" id="ic-trash">${sv()}</span><span class="t2s-srow-title">回收站条目</span></div>
@@ -172,6 +172,14 @@ const measure = () => {
     gapFolderFolder: q('#folder2').getBoundingClientRect().top - q('#folder').getBoundingClientRect().bottom,
     gapFolderNote: q('#emoji').getBoundingClientRect().top - q('#folder2').getBoundingClientRect().bottom,
     gapNoteNote: q('#plain').getBoundingClientRect().top - q('#emoji').getBoundingClientRect().bottom,
+    // 工作区 view 的条目留白:主行 4.5→3、顶部入口 6→4,约为改前的 0.65×。
+    itemPads: {
+      note: parseFloat(getComputedStyle(q('#emoji')).paddingTop),
+      folder: parseFloat(getComputedStyle(q('#folder .t2s-folder-row')).paddingTop),
+      session: parseFloat(getComputedStyle(q('#s-row')).paddingTop),
+      file: parseFloat(getComputedStyle(q('#f-file')).paddingTop),
+      special: parseFloat(getComputedStyle(q('#special')).paddingTop),
+    },
     // 跨模式(用户报的「会话、文件里面的没有对齐」):三个 view 的组头 / 组内行各自的槽左边缘
     sGroup: lead('s-group'), sRow: lead('s-row'), sRow2: lead('s-row2'),
     fGroup: lead('f-group'), fDir: lead('f-dir'), fFile: lead('f-file'),
@@ -210,6 +218,11 @@ const measure = () => {
   check('⚠️行间距全树一致:文件夹↔文件夹 / 文件夹↔笔记 / 笔记↔笔记(用户报的「间距不统一」)',
     [m.gapFolderFolder, m.gapFolderNote].every((g) => Math.abs(g - m.gapNoteNote) < 0.1),
     `f-f=${m.gapFolderFolder} f-n=${m.gapFolderNote} n-n=${m.gapNoteNote}`)
+  check('⚠️工作区普通条目纵向留白约为改前 0.65×(会话 / 文件 / 笔记 / 文件夹)',
+    ['note', 'folder', 'session', 'file'].every((k) => Math.abs(m.itemPads[k] - 3) < 0.05),
+    Object.entries(m.itemPads).map(([k, v]) => `${k}=${v}`).join(' '))
+  check('⚠️工作区顶部入口条目纵向留白约为改前 0.65×',
+    Math.abs(m.itemPads.special - 4) < 0.05, `special=${m.itemPads.special}`)
 
   // ══ 跨模式(用户报的「会话、文件里面的没有对齐」)══
   check('⚠️三个 view 的组头图标在同一竖线(笔记 / 会话 / 文件)',
@@ -241,6 +254,13 @@ const measure = () => {
   await p.hover('#plain')
   const stay = await p.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#plain .t2s-lead-icon')).opacity))
   check('hover 不可展开的行 → 图标不让位', stay > 0, `icon=${stay}`)
+
+  if (process.argv.includes('--shot')) {
+    await p.mouse.move(880, 580)
+    const shot = path.join(os.tmpdir(), 'forsion-workspace-item-spacing.png')
+    await p.screenshot({ path: shot, fullPage: true })
+    console.log(`SHOT  ${shot}`)
+  }
 
   await browser.close()
   const failed = results.filter((r) => !r.ok)

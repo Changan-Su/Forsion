@@ -176,7 +176,7 @@ const check = (name, ok, detail) => {
     await page.keyboard.press('Escape')
   } else check('B2 找得到模型药丸', false, '选择器失效,断言落空了')
 
-  // 工作区下拉(左对齐 264px,捅右边缘)
+  // 工作区下拉(与其他选择菜单同为 224px;左对齐时仍须防止捅右边缘)
   const projPill = page.locator('.project-pill:not([disabled])').first()
   if (await projPill.count()) {
     await projPill.click()

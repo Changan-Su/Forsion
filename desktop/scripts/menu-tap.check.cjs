@@ -42,8 +42,8 @@ const page = (autofocus) => `<!doctype html><meta name=viewport content="width=d
  #app{position:fixed;inset:0;bottom:var(--kbd,0px)}      /* 安卓 adjustResize:键盘吃掉底部高度 */
  .bar{position:absolute;bottom:60px;left:24px}
  .sel{position:relative;display:inline-flex}
- .menu{position:absolute;bottom:calc(100% + 6px);left:0;width:264px;padding:6px;border:1px solid #ccc}
- .item{display:block;width:100%;padding:7px 8px;text-align:left}
+ .menu{position:absolute;bottom:calc(100% + 6px);left:0;width:224px;padding:4px;border:1px solid #ccc}
+ .item{display:block;width:100%;min-height:28px;padding:4px 8px;text-align:left}
 </style>
 <div id=app><div class=bar><div class=sel>
  <button id=pill>Tangu 默认工作区</button>

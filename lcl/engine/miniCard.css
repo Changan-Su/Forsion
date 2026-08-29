@@ -225,7 +225,7 @@
   font-size: 10.5px;
 }
 .mini-card-shell .project-pill-name { max-width: 176px; }
-.mini-card-shell .project-menu { width: min(264px, calc(100vw - 16px)); }
+.mini-card-shell .project-menu { width: min(var(--menu-select-width, 224px), calc(100vw - 16px)); }
 .mini-card-shell .t2c-inner { max-width: none; gap: 4px; padding: 4px 8px 8px; }
 .mini-card-shell .t2c-card {
   border-radius: var(--radius-md, 12px);

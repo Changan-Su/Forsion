@@ -4,6 +4,7 @@ import { amadeus } from '@amadeus/api'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
 import { useUiStore } from '@amadeus/store/uiStore'
+import { b64ToBytes } from './services/fileKinds'
 
 // 云 vault 单文件上限(server vaultService MAX_BINARY_BYTES = 5MiB);本地磁盘库无此限,不预检。
 const CLOUD_MAX_BYTES = 5 * 1024 * 1024
@@ -118,6 +119,26 @@ export async function importToFolder(files: File[], folder: string): Promise<voi
   const where = folder ? (folder.split('/').pop() || folder) : '库根目录'
   if (fails.length) notify(`${fails.length} 个文件未导入:${fails[0]}`)
   else notify(`已导入 ${ok} 个文件到「${where}」`)
+}
+
+/** 应用内路径拖拽(文件面板的行)要走进「导入」这条链,得先把主机文件读成 File —— 主进程
+ *  `fs:readFile` 给 base64(>50MB 只回 tooLarge,不读)。读不动的逐个报名字,不整批失败。
+ *  ponytail: 逐个串行读,拖十几个文件的量级不值得并发。 */
+export async function filesFromHostPaths(paths: string[]): Promise<File[]> {
+  const read = window.tangu?.readHostFile
+  if (!read) return []
+  const out: File[] = []
+  const fails: string[] = []
+  for (const p of paths) {
+    const name = p.split(/[\\/]/).pop() || p
+    try {
+      const r = await read(p)
+      if (!r || r.tooLarge) { fails.push(`${name}(${r?.tooLarge ? '超 50MB' : '读不到'})`); continue }
+      out.push(new File([b64ToBytes(r.content) as unknown as BlobPart], name, { type: r.mimeType }))
+    } catch (e) { fails.push(`${name}(${explain(e)})`) }
+  }
+  if (fails.length) notify(`${fails.length} 个文件读不了:${fails[0]}`)
+  return out
 }
 
 /** 粘贴图片:存 .amadeus/ 并以规范 markdown 图片形式插入。用 ![](.amadeus/x.png) 而非 ![[…]]:

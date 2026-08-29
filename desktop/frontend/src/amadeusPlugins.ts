@@ -63,8 +63,11 @@ export function installAmadeusPlugins(): void {
 }
 
 let amadeusBooted = false
-/** 幂等应用引导:装插件 + 恢复上次 Vault。Amadeus 编辑器 或 Calendar/ToDo 视图 任一先挂载都触发一次
- *  —— 修复「重启后直接进 Calendar Space,vault 从未恢复 → 日历/待办一直空白,须先进一次 Amadeus」。 */
+/** 幂等应用引导:装插件 + 恢复上次 Vault。
+ *  ⚠️ 触发点**不在** amadeus-editor 视图上,而是这几处宿主:左栏 AmadeusPagesView / dbAggregateStore
+ *  (日历·待办)/ Composer2 · AgentDesk · ChatWikiLink(聊天引用笔记)/ MobileRoot / MiniRoot。
+ *  新壳若只挂 amadeus-editor 则谁都不触发 —— mini 卡片就是这么栽的(只挂主区 leaf,左栏永不挂载
+ *  → Amadeus 恒显「打开 Vault 文件夹」空态)。 */
 export function ensureAmadeusReady(): void {
   if (amadeusBooted) return
   amadeusBooted = true

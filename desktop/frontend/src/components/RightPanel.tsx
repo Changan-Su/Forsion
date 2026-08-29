@@ -290,7 +290,7 @@ const HostFilesTab: React.FC<{
     const paths = sel.selected.has(en.path) ? [...sel.selected] : [en.path]
     setDragging(paths)
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify(paths))
-    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.effectAllowed = 'copyMove' // 本面板内是移动,被笔记树接走是复制(协商取交集,只写 move 会整个不许落)
   }
   const folderDragOver = (e: React.DragEvent, destPath: string) => {
     const osFiles = canWrite && e.dataTransfer.types.includes('Files')
