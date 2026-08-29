@@ -58,6 +58,10 @@ module.exports = {
     '!node_modules/electron/**',
     '!node_modules/electron-builder/**',
     '!node_modules/electron-vite/**',
+    // 字体包只在 build/gen-fonts.cjs 生成阶段用到,产物已裁进 frontend/public/fonts(约 13M)。
+    // 不排除的话整包会再进来约 130M(noto-sans-sc 75M + lxgw-wenkai 53M),体积目标全废。
+    '!node_modules/@fontsource/**',
+    '!node_modules/@fontsource-variable/**',
     '!node_modules/app-builder-lib/**',
     '!node_modules/dmg-builder/**',
     '!node_modules/esbuild/**',

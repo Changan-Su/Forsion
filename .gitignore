@@ -16,6 +16,9 @@ desktop/build/node/
 # desktop=postinstall 生成;web=`npm run prepare-board` 生成(build/dev 前置)
 desktop/frontend/public/excalidraw/
 web/public/excalidraw/
+# 内置 UI 字体:体积大、可由 build/gen-fonts.cjs 从 node_modules 再生 → 同 excalidraw,不入库
+desktop/frontend/public/fonts/
+web/public/fonts/
 
 # TypeScript
 *.tsbuildinfo

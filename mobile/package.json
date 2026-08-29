@@ -6,15 +6,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "npm run prepare-assets && vite",
+    "build": "npm run prepare-assets && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
     "e2e:drawerdrag": "node scripts/drawer-drag.e2e.cjs",
-    "e2e:spacetrap": "node scripts/space-trap.e2e.cjs"
+    "e2e:spacetrap": "node scripts/space-trap.e2e.cjs",
+    "prepare-assets": "node ../desktop/build/copy-excalidraw-assets.cjs && node ../desktop/build/gen-fonts.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",
