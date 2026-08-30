@@ -39,7 +39,10 @@ describe('writeStdin + waitForOutput (interactive shell)', () => {
     // 最终仍必须不是 running,只是不拿「慢」当「没死」。
     const { status } = await waitForOutput(p, p.output.length, { capMs: 10_000 });
     expect(status).not.toBe('running'); // SIGINT terminated cat
-  });
+    // ⚠️ 用例超时必须 > capMs:vitest 默认 5s,而 waitForOutput 在进程状态迟迟不变时会一直等到
+    // capMs。CI 上偶发就是这样(第 4 轮撞 capMs=3s 报 'running',第 7 轮撞 vitest 5s 报 timed out
+    // —— 同一个 flaky 的两副面孔)。留足余量,让「10s 内确实没退」才是红。
+  }, 20_000);
 
   it('errors for an unknown process id', () => {
     expect(writeStdin(SID, 'bg_nope', 'x', true)).toMatch(/不存在/);
