@@ -35,7 +35,9 @@ describe('writeStdin + waitForOutput (interactive shell)', () => {
   it('Ctrl-C (\\x03) sends SIGINT and the process ends', async () => {
     const p = startOk('cat');
     expect(writeStdin(SID, p.id, '\x03', false)).toMatch(/SIGINT/);
-    const { status } = await waitForOutput(p, p.output.length, { capMs: 3000 });
+    // capMs 给足:CI 的共享 runner 上 3s 曾经不够(同一份代码前一轮是绿的)。断言本身没放松 ——
+    // 最终仍必须不是 running,只是不拿「慢」当「没死」。
+    const { status } = await waitForOutput(p, p.output.length, { capMs: 10_000 });
     expect(status).not.toBe('running'); // SIGINT terminated cat
   });
 
