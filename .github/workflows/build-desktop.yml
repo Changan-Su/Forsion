@@ -93,11 +93,13 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
-      # ② 桌面壳(renderer/main/preload)→ out/
+      # ② 桌面壳(renderer/main/preload)→ out/;先出 unit-web-dist(设备页静态壳)——
+      #    electron-builder 配置**装载即验**该产物(unit 捆包闸),缺了直接 throw。
       - name: Build desktop shell
         working-directory: desktop
         run: |
           npm install --no-audit --no-fund
+          npm run build:unitweb
           npm run build
 
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI

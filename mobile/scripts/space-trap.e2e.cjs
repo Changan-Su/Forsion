@@ -74,12 +74,15 @@ async function main() {
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
-    // 冷启动直接落在「发布」Space —— 用户就是这么进去的(左抽屉里点一下 Space 条),
-    // 而 activeSpace 会被存下来,所以此后每次开机都落在这儿。
+    // 冷启动直接落在「发布」Space —— 这台仪器测的就是「左右栏配方皆空时退路还在不在」,
+    // 得先真的进到那个最坏场景里。
+    // ⚠️ 2026-08-28 起启动缺省从「上次的 Space」改成了**ribbon 主位槽**(homeSlot.tsx),
+    // 所以只设 active_space 已经压不住落点(会被主位槽顶回 home)——主位槽也要一起指过去。
     await ctx.addInitScript(() => {
       try {
         localStorage.setItem('forsion_token', 'e2e-spacetrap')
         localStorage.setItem('forsion_tangu_active_space', 'public')
+        localStorage.setItem('forsion_home_slot_space', 'public') // HOME_SLOT_KEY,缺省 'home'
       } catch { /* ignore */ }
     })
     const page = await ctx.newPage()
