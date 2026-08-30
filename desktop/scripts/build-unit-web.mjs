@@ -16,10 +16,14 @@ import { existsSync, symlinkSync, unlinkSync, rmSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// ⚠️ Windows 上 npm/npx 是 `.cmd` 批处理,spawnSync 不走 shell → ENOENT。用带扩展名的真身
-// (而不是 shell:true——那样参数要自己转义,路径带空格就炸)。CI 的 windows-2022 job 跑这支。
-const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const NPX = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+// ⚠️ Windows:npm/npx 是 `.cmd` 批处理,而 **Node 自 18 起不再允许直接 spawn `.cmd`**
+// (CVE-2024-27980 的修复),写成 'npm.cmd' 照样起不来 —— 症状是 spawnSync 瞬间返回、
+// 一行 npm 输出都没有(2026-08-30 在 CI 上实翻:194 行刚打印「先 npm ci」,0.3 秒后就跳到下一条命令)。
+// 走 `cmd /c npm ci`:由 cmd 去解析 .cmd,参数仍由 Node 按 Windows 规则加引号,
+// 不像 shell:true 那样把整条命令行交给 shell 二次解析。
+const IS_WIN = process.platform === 'win32'
+const runTool = (tool, args, opts) =>
+  spawnSync(IS_WIN ? 'cmd' : tool, IS_WIN ? ['/c', tool, ...args] : args, opts)
 
 const here = dirname(fileURLToPath(import.meta.url))
 const desktopRoot = resolve(here, '..')
@@ -34,7 +38,7 @@ if (!existsSync(resolve(webRoot, 'package.json'))) {
 // 发布机可能没装过 web 的依赖(dist 链会走到这):缺 node_modules 先装,别让 vite 直接炸。
 if (!existsSync(resolve(webRoot, 'node_modules'))) {
   console.log('[build-unit-web] web/node_modules 缺席,先 npm ci …')
-  const i = spawnSync(NPM, ['ci'], { cwd: webRoot, stdio: 'inherit' })
+  const i = runTool('npm', ['ci'], { cwd: webRoot, stdio: 'inherit' })
   if (i.status !== 0) process.exit(i.status ?? 1)
 }
 
@@ -53,7 +57,7 @@ if (!existsSync(rootNodeModules)) {
 }
 
 console.log(`[build-unit-web] vite build --base=./ → ${outDir}`)
-const r = spawnSync(NPX, ['vite', 'build', '--base=./', '--outDir', outDir, '--emptyOutDir'], {
+const r = runTool('npx', ['vite', 'build', '--base=./', '--outDir', outDir, '--emptyOutDir'], {
   cwd: webRoot,
   stdio: 'inherit',
 })

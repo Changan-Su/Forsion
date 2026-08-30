@@ -97,6 +97,10 @@ jobs:
       #    electron-builder 配置**装载即验**该产物(unit 捆包闸),缺了直接 throw。
       - name: Build desktop shell
         working-directory: desktop
+        # ⚠️ 必须钉 bash:Windows 默认 pwsh **前一条命令失败不中断**,build:unitweb 挂了照样往下跑、
+        #    步骤报 success,真正的错要等到几十行外的 Package installer 才以「缺 unit-web-dist」现形
+        #    (2026-08-30 被它误导过两轮)。bash 的 -e 让它当场红在正确的位置。
+        shell: bash
         run: |
           npm install --no-audit --no-fund
           npm run build:unitweb
