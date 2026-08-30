@@ -12,7 +12,7 @@
  * 跑:node scripts/build-unit-web.mjs
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, symlinkSync, unlinkSync, rmSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -38,11 +38,28 @@ if (!existsSync(resolve(webRoot, 'node_modules'))) {
   if (i.status !== 0) process.exit(i.status ?? 1)
 }
 
+// ⚠️ **仓根临时软链**:web 镜像把依赖装在公共祖先 `/app`,所以被复用的 mobile/src、
+// desktop/frontend 里的**裸包** import(framer-motion 等)能一路向上解析到。真仓库里依赖只在
+// `web/node_modules`,而 `mobile/` 与它是兄弟不是后代 → Rollup 当场
+// `failed to resolve import "framer-motion" from mobile/src/MobileRoot.tsx`。
+// 本机之所以从来不报,是仓根碰巧躺着一个历史遗留的 node_modules 顶着 —— CI 的干净 checkout 没有,
+// 所以这支脚本一接进 CI 就红(2026-08-30 实翻)。构建期补一份、构建完拆掉 = 等价镜像里的 /app 布局。
+const rootNodeModules = resolve(desktopRoot, '..', 'node_modules')
+let linkedRoot = false
+if (!existsSync(rootNodeModules)) {
+  symlinkSync(resolve(webRoot, 'node_modules'), rootNodeModules, 'junction') // posix 忽略 type
+  linkedRoot = true
+  console.log(`[build-unit-web] 仓根临时软链 node_modules → web/node_modules(构建后拆除)`)
+}
+
 console.log(`[build-unit-web] vite build --base=./ → ${outDir}`)
 const r = spawnSync(NPX, ['vite', 'build', '--base=./', '--outDir', outDir, '--emptyOutDir'], {
   cwd: webRoot,
   stdio: 'inherit',
 })
+if (linkedRoot) {
+  try { unlinkSync(rootNodeModules) } catch { try { rmSync(rootNodeModules, { recursive: false }) } catch { /* 留着也不致命 */ } }
+}
 if (r.status !== 0) process.exit(r.status ?? 1)
 
 console.log(`
