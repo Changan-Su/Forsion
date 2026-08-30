@@ -28,6 +28,8 @@ COPY desktop/CHANGELOG.md ./desktop/CHANGELOG.md
 # 白板引擎的自托管副本由这支脚本从 node_modules 现生成(web 的 `npm run build` 会先跑 prepare-board)。
 # ⚠️ 副本本身**不入库**,所以绝不能指望 COPY desktop/frontend 把它带进来 —— CI 里那个目录是空的。
 COPY desktop/build/copy-excalidraw-assets.cjs ./desktop/build/copy-excalidraw-assets.cjs
+# 同理:UI 字体预设的裁剪脚本(web 的 prepare-fonts 调它,产物 public/fonts 也不入库)。
+COPY desktop/build/gen-fonts.cjs ./desktop/build/gen-fonts.cjs
 COPY web ./web
 RUN cd web && npm run build   # vite 经 /app/node_modules 解析全部依赖 → /app/web/dist(base '/')
 
