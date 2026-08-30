@@ -13,7 +13,8 @@ import { EnvProbeSection } from './EnvProbeSection'
 import type { MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
-import { listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
+import { listLanguages, listSkins, skinSwatch, backgroundSwatch, forcedSchemeForLanguage } from '../theme/registry'
+import { useTheme } from '../stores/themeStore'
 import { ThemeCard } from './ThemeCard'
 import { ThemePreview } from './ThemePreview'
 import { BrandLogo } from './BrandLogo'
@@ -66,6 +67,12 @@ export const OnboardingWizard: React.FC<{
   const { t } = useI18n()
   const [step, setStep] = useState<Step>('welcome')
   const stepIdx = STEP_ORDER.indexOf(step)
+
+  // 背景色轴直接读写 themeStore(与设置→外观同一条路径);主题色轴仍走 props 的 onThemeChange。
+  const themeBg = useTheme((s) => s.bg)
+  const setBg = useTheme((s) => s.setBg)
+  const themeBgSeed = useTheme((s) => s.bgSeed)
+  const setBgSeedValue = useTheme((s) => s.setBgSeedValue)
 
   // 界面字体(存的是预设 id;与设置→外观同一份 localStorage,写完立刻注入生效)
   const [uiFont, setUiFont] = useState(() => readFont('ui'))
@@ -550,9 +557,12 @@ export const OnboardingWizard: React.FC<{
                 </div>
               </div>
               <div className="field">
-                {/* 主题色**一根轴**:背景色轴留在设置→外观(Root 传进来的 onThemeChange 会保住当前 bg),
-                    别在第一次开机就抛两根轴给用户。⚠️2026-08-29 前这里是旧的耦合逻辑 —— 同一个 id
-                    被同时写进两根轴,于是引导选珊瑚连背景都染色,与设置页的模型对不上。 */}
+                {/* 颜色**两根独立的轴**,与设置→外观逐字同款(2026-08-30 用户拍板:引导里也要都露出来)。
+                    主题色只换 accent 家族,背景色只换底/文字/边线族(见 theme/skins.css)。
+                    ⚠️ 别退回 2026-08-29 前的耦合写法 —— 那时同一个 id 被同时写进两根轴,引导选珊瑚
+                    连背景都染色,与设置页的模型对不上。背景色的**新装机缺省 = 经典**(resolveInitialBg
+                    → resolveInitialSkin → DEFAULT_SKIN);老用户重进引导时它等于其原配色,那是刻意的
+                    拆轴迁移,别在这里强行改写。 */}
                 <label>{t('settings.theme.accentLabel')}</label>
                 <div className="skin-row">
                   {listSkins().map((sk) => (
@@ -579,6 +589,44 @@ export const OnboardingWizard: React.FC<{
                     aria-label={t('onboarding.theme.customSeedLabel')}
                     style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
                   />
+                </div>
+              )}
+              <div className="field">
+                <label>{t('settings.theme.bgLabel')}</label>
+                <div className="skin-row">
+                  {listSkins().map((sk) => (
+                    <button
+                      key={sk.id}
+                      type="button"
+                      className={`skin-chip${sk.id === themeBg ? ' active' : ''}`}
+                      title={t(`settings.theme.skin.${sk.id}`)}
+                      onClick={() => setBg(sk.id)}
+                    >
+                      <i
+                        className="skin-dot skin-dot-background"
+                        style={{ background: backgroundSwatch(sk, themeMode === 'dark', sk.id === 'custom' ? (themeBgSeed || themeSeed) : sk.bgSeed) }}
+                      />
+                      <span>{t(`settings.theme.skin.${sk.id}`)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {themeBg === 'custom' && (
+                <div className="field">
+                  <label>{t('settings.theme.customBgLabel')}</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <input
+                      type="color"
+                      value={themeBgSeed || '#f8f7f6'}
+                      onChange={(e) => setBgSeedValue(e.target.value)}
+                      aria-label={t('settings.theme.customBgLabel')}
+                      style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                    />
+                    <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{themeBgSeed || t('settings.theme.customBgFollow')}</span>
+                    {themeBgSeed && (
+                      <button className="btn ghost sm" onClick={() => setBgSeedValue('')}>{t('settings.theme.customBgClear')}</button>
+                    )}
+                  </div>
                 </div>
               )}
               {(() => {

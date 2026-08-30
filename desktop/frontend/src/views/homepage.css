@@ -14,7 +14,13 @@
   position: relative;
   box-sizing: border-box;
   height: 100%;
-  overflow: auto;
+  /* ⚠️ 视角固定:主页是一张铺满的舞台,永远不滚。曾是 `auto` —— 壁纸层恒 `scale(1.001)`(开二级层时
+   * 还会推到 1.045/1.065 做景深)必然溢出,于是 mac 经典滚动条下左右上下各来一条
+   * (2026-08-30 用户实报;滑块几乎占满全长 = 只溢出 1px 的指纹)。
+   * 溢出是设计的一部分、消不掉,能改的只有「别把它当滚动容器」:与 .shell 同一处方 —— `clip` 压根
+   * 不建滚动容器;`hidden` 同样看不见溢出,但仍会被 scrollIntoView 顶歪且滚不回来
+   * (病理见 scripts/shell-noscroll.check.cjs 抬头)。闸在 check:homepage 第 16 条。 */
+  overflow: clip;
   display: flex;
   padding: clamp(24px, 5vh, 48px) 24px;
   isolation: isolate;
@@ -464,7 +470,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-folder-panel {
   box-sizing: border-box;
   width: min(680px, 100%);
-  min-height: 330px;
+  /* ⚠️ min 必须让位给可用高度:根是 clip,越出 stage 的部分会被裁掉且面板自己的 overflow 够不着。 */
+  min-height: min(330px, calc(100% - 16px));
   max-height: min(620px, calc(100% - 16px));
   overflow: auto;
   display: flex;
@@ -950,12 +957,27 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   .hp-theme-presets > div { grid-template-columns: 1fr; }
 }
 
+/* ⚠️ 矮窗口的尺寸**唯一真源就是这两档**。`.hp-root` 现在是 `overflow: clip`(见文件头),放不下就是
+ * 裁掉、没有滚动条兜底,所以档位必须真的够矮。
+ * 别回到基础规则里给 padding/gap/字号加 vh clamp —— 它们的断点(≈650px)整段落在下面这条 700px
+ * 媒体查询之内,会被逐字覆盖掉、一个像素都不生效(2026-08-30 codex 评审实翻,DESIGN.md §7 同款)。
+ * 要改自适应,改这里的档位值或再加一档。 */
 @media (max-height: 700px) {
   .hp-root { padding-block: 20px; }
   .hp-stack { gap: 16px; }
   .hp-brand { font-size: 28px; }
   .hp-clock { font-size: 44px; }
   .hp-date { margin-top: 6px; }
+}
+
+/* 横屏手机 / 被拖得很扁的窗口:标题整块让位,保住输入区与 Spaces 坞。 */
+@media (max-height: 520px) {
+  .hp-root { padding-block: 12px; }
+  .hp-stack { gap: 10px; }
+  .hp-brand { margin-bottom: 0; font-size: 20px; }
+  .hp-clock { font-size: 32px; }
+  .hp-date { margin-top: 3px; font-size: 11.5px; }
+  .hp-greet { display: none; }
 }
 
 /* 系统偏好和 JS 一次性判定共用同一套降级。拖拽位移本身仍需 transform,只去掉补间动画。 */

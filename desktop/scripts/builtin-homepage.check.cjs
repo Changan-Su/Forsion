@@ -30,6 +30,9 @@
  *  13 壁纸材质:只有 Chatbox 文本区进入输入模式才触发景深;玻璃总开关关掉时回到不透明材质。
  *  14 Bing 壁纸经固定目标 Electron IPC 暴露,不重新引入浏览器搜索或任意 URL 代理。
  *  15 主题背景:四个随 token 变化的 Forsion 图形预设;右键空白直达紧凑、无重叠的二级收纳层。
+ *  16 ⚠️主页视角固定:.hp-root 压根不是滚动容器(壁纸 scale(1.001) 曾撑出 1px → 四边滚动条);
+ *     clip 之后放不下就是裁掉,所以矮窗口(1100×420,须先放开 minimumSize)下时钟/输入区/Spaces 坞必须仍在 root 内;
+ *     且右键空白这个手势**双向**可用 —— 收纳层面板内右键空白必须原路退回主页。
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:npm run check:homepage          截图自查(亮/暗各一张):npm run check:homepage -- --shot
@@ -632,6 +635,20 @@ async function main() {
         art: getComputedStyle(document.querySelector('.hp-wallpaper-art')).backgroundImage,
       }
     })()`)
+    // ⚠️ 主页永不滚:壁纸层的 scale(1.001) 曾把滚动溢出撑出 1px,mac 经典滚动条下就是四边各来一条。
+    // 反向验证:把 homepage.css 的 .hp-root 改回 `overflow: auto` → 16 必红。
+    const noScroll = await win.evaluate(`(() => {
+      const r = document.querySelector('.hp-root')
+      const cs = getComputedStyle(r)
+      // 溢出**本来就消不掉**(壁纸恒 scale(1.001),开二级层时还会到 1.045/1.065),所以量的不是
+      // scrollWidth 而是「能不能被滚动」—— 同 shell-noscroll:强写 scrollLeft/Top 后必须原地不动。
+      r.scrollLeft = 9999
+      r.scrollTop = 9999
+      const moved = { x: Math.round(r.scrollLeft), y: Math.round(r.scrollTop) }
+      r.scrollLeft = 0
+      r.scrollTop = 0
+      return { over: r.scrollWidth - r.clientWidth, moved, ox: cs.overflowX, oy: cs.overflowY }
+    })()`)
     await win.evaluate(`document.querySelector('.hp-root')?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 90, clientY: 90 }))`)
     await win.waitForSelector('.hp-organizer-stage', { state: 'visible' })
     await win.waitForTimeout(500)
@@ -663,6 +680,51 @@ async function main() {
         gridScrollHeight: grid?.scrollHeight || 0,
       }
     })()`)
+    // ⚠️ 进来的手势必须出得去:收纳层里右键空白 = 原路退回主页(2026-08-30 用户实报「出不来」)。
+    // 派发点刻意选**面板内部的空白**(时钟那块)而不是外圈遮罩 —— 打在遮罩上时,即使把
+    // `.hp-organizer-panel` 重新写回排除表也照样绿(codex 评审指出的假绿口),打在面板里才真的钉住。
+    await win.evaluate(`(() => {
+      const el = document.querySelector('.hp-organizer-clock') || document.querySelector('.hp-organizer-stage')
+      el?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 12, clientY: 12 }))
+    })()`)
+    await win.waitForTimeout(420)
+    const backOut = await win.evaluate(`document.querySelectorAll('.hp-organizer-stage').length`)
+    // ⚠️ clip 之后放不下就是**裁掉**、没有滚动条兜底 —— 所以矮窗口下关键控件必须仍在 root 里面。
+    //    这条钉的是 homepage.css 末尾那两档按高度的覆盖块真的够矮(把 max-height:520px 那档删掉 → 必红)。
+    // ⚠️ 必须先放开 minimumSize:主窗 minHeight=600(electron/main.ts),直接 setSize 会被静默钳住 ——
+    //    量出来 h=546 看着像在测矮窗口,其实测的是桌面最小窗,520px 那档根本没跑到(实撞过一次假绿)。
+    //    420 对应的是分离窗(minHeight 360)与手机横屏那一档。
+    const winBounds = await app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0]
+      return { size: w.getSize(), min: w.getMinimumSize() }
+    })
+    await app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0]
+      w.setMinimumSize(880, 360)
+      w.setSize(1100, 420)
+    })
+    await win.waitForTimeout(600)
+    const shortWindow = await win.evaluate(`(() => {
+      const r = document.querySelector('.hp-root').getBoundingClientRect()
+      const fits = (sel) => {
+        const e = document.querySelector(sel)
+        if (!e) return null
+        const b = e.getBoundingClientRect()
+        return b.top >= r.top - 0.5 && b.bottom <= r.bottom + 0.5
+      }
+      return { h: Math.round(r.height), clock: fits('.hp-clock'), composer: fits('.hp-composer'), spaces: fits('.hp-spaces') }
+    })()`)
+    if (SHOT) {
+      const shortOut = path.join(os.tmpdir(), 'forsion-homepage.short-window.png')
+      await win.screenshot({ path: shortOut })
+      console.log(`  截图 → ${shortOut}`)
+    }
+    await app.evaluate(({ BrowserWindow }, b) => {
+      const w = BrowserWindow.getAllWindows()[0]
+      w.setSize(b.size[0], b.size[1])
+      w.setMinimumSize(b.min[0], b.min[1])
+    }, winBounds)
+    await win.waitForTimeout(500)
     check(
       '15 四套自适应主题图形可选,高密度收纳层紧凑且头部不重叠',
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
@@ -674,12 +736,19 @@ async function main() {
         && rightClickOrganizer.headGap >= 4 && rightClickOrganizer.gridHeight <= 414,
       JSON.stringify({ themePresets, themeStage, rightClickOrganizer }),
     )
+    check(
+      '16 ⚠️主页视角固定(不滚)、矮窗口不裁关键控件、右键空白能原路退出收纳层',
+      noScroll.moved.x === 0 && noScroll.moved.y === 0 && noScroll.ox === 'clip' && noScroll.oy === 'clip' && backOut === 0
+        && shortWindow.clock === true && shortWindow.composer === true && shortWindow.spaces === true,
+      JSON.stringify({ noScroll, backOut, shortWindow }),
+    )
     if (SHOT) {
       const denseOut = path.join(os.tmpdir(), 'forsion-homepage.organizer-dense.png')
       await win.screenshot({ path: denseOut })
       console.log(`  截图 → ${denseOut}`)
     }
-    await win.click('.hp-organizer-head > button')
+    // 上面那记右键通常已经把它关掉了;没关掉就走关闭钮,别把后续用例连坐。
+    await win.click('.hp-organizer-head > button', { timeout: 1500 }).catch(() => {})
     await win.waitForTimeout(700)
 
     if (SHOT) {

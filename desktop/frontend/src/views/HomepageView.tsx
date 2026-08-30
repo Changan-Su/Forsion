@@ -617,13 +617,22 @@ export function HomepageView(_props: ViewProps) {
   }
 
   /** 参考旧桌面的空白右键语义:不弹一枚孤立菜单,直接进入可见、可拖拽的二级收纳层。
-   *  控件和已打开的面板都有自己的右键/点击语义,必须排除。 */
+   *  控件和壁纸表单有自己的右键语义,必须排除(格子本身都是 <button>,已被首条挡住)。
+   *  ⚠️ 同一个手势必须能**原路退回**:二级层开着时右键空白 = 关掉当前那层,而不是再开一次
+   *  (2026-08-30 用户实报「进得去出不来」)。
+   *  层模型是**扁的不是叠的**:夹子/收纳层/壁纸面板三者互斥(openFolderTile 会 setOrganizerOpen(false),
+   *  showOrganizer 会 setOpenFolder(null)),所以下面这串 else-if 任一时刻只会命中一支,退出即回主页
+   *  —— 与点遮罩、点关闭钮的落点一致。写成链式是为了将来真叠起来时不至于一把清空。 */
   const showOrganizerFromBlank = (event: React.MouseEvent): void => {
     const target = event.target as HTMLElement
-    if (target.closest('button, input, textarea, [contenteditable="true"], .hp-composer, .ctx-menu, .hp-folder-panel, .hp-wallpaper-sheet, .hp-organizer-panel')) return
+    if (target.closest('button, input, textarea, [contenteditable="true"], .hp-composer, .ctx-menu, .hp-wallpaper-sheet')) return
     event.preventDefault()
     event.stopPropagation()
-    showOrganizer()
+    setMenu(null)
+    if (openFolder) setOpenFolder(null)
+    else if (organizerOpen) setOrganizerOpen(false)
+    else if (wallpaperOpen) setWallpaperOpen(false)
+    else showOrganizer()
   }
 
   return (

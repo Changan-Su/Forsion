@@ -175,7 +175,8 @@ export function Root() {
             themeMode={theme.mode}
             themeModePref={theme.modePref}
             themeSeed={theme.seed}
-            // 与设置页同一根语义:只动主题色轴,背景色轴原样保留(引导不露出背景轴)。
+            // 与设置页同一根语义:onThemeChange 只动主题色轴,背景色轴原样保留 ——
+            // 引导里的背景色一排直接读写 themeStore.setBg,不经这条 props 链(2026-08-30 起两轴都露出)。
             onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
             onSeedChange={(hex) => theme.setSeedValue(hex)}
             onReconnect={() => {
