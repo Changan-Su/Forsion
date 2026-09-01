@@ -78,6 +78,11 @@
 //   C81 正文主卡八向塑型:宽高落盘/点阵落点/松手动画/普通卡不被主卡 overflow 裁切
 //   C82 低倍率简略显示开关:默认开、即时切换、跨重载记忆
 //   C83 低倍率选中卡保留完整正文；取消选中后重新回到轻量替身
+//   C84 简略显示的触发阈值:缺省 = 最小缩放 25%(不再是写死的 55%),设置改完当场生效
+//   C85 卡里 /card = 子卡(2026-08-31 用户实报「在 card 里创建 card 直接 forbidden」):
+//      新卡插在父卡那一段之后 + tree 记上父子 + 文档模式当场缩进,父卡内容一个字不动
+//   C86 Shift+拖卡 = 连整支(选中它与全部子卡一起搬;Cmd/Ctrl 仍是加选)
+//   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -3952,7 +3957,13 @@ async function main() {
     '<!-- a k2 -->', '没有标题的首行。', '', '第二行内容。', '<!-- /a k2 -->', '',
   ].join('\n')
   const p78 = await open(browser, OVERVIEW78)
-  await p78.waitForTimeout(300)
+  // C78/C82/C83 测的是简略层本身(替身文案 / 卡高 / 开关记忆),不是触发阈值 —— 阈值缺省已改成
+  // MIN_Z(25%,见 canvasPrefs.canvasOverviewZoom),这里显式种回 55% 保住它们原本的四次缩小节奏。
+  // 阈值的缺省与「设置改完当场生效」由 C84 单独钉。
+  await p78.evaluate(() => localStorage.setItem('amadeus.canvas.overviewZ', '0.55'))
+  await p78.reload({ waitUntil: 'domcontentloaded' })
+  await p78.waitForSelector('.amx-stage-hud')
+  await p78.waitForTimeout(400)
   const before78 = await p78.evaluate(() => ({
     labels: document.querySelectorAll('.amx-card-overview').length,
     k1h: document.querySelector('.amx-ucard[data-anchor="k1"]')?.offsetHeight ?? 0,
@@ -4098,6 +4109,7 @@ async function main() {
     overview: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
     original: getComputedStyle(document.querySelector('.amx-ucard[data-anchor="k1"] p')).display,
   }))
+  await p78.evaluate(() => localStorage.removeItem('amadeus.canvas.overviewZ'))
   await p78.close()
   record('C78 缩到 55% 以下：原 PM 内容退出渲染，轻量替身显示标题+摘要/首行回退且保持卡高；放大后恢复正文',
     before78.labels === 0 && before78.original !== 'none' && low78.z <= 0.55 && low78.mode && low78.originalsHidden
@@ -4124,6 +4136,40 @@ async function main() {
       && !selected78.labels.includes('k1') && selected78.labels.includes('m:') && selected78.labels.includes('k2')
       && !deselected78.selected && deselected78.k1Hidden && deselected78.labels.includes('k1') && deselected78.labels.length === 3,
     JSON.stringify({ selected: selected78, deselected: deselected78 }))
+
+  // ── C84 简略显示的触发阈值:缺省 = 最小缩放,且设置改完当场生效 ────────────────────
+  //  用户实报「缩放到一定程度就变简略标题,这个程度应当能在设置里调,缺省就调到最低那档」。
+  //  阈值原是写死的 `OVERVIEW_LABEL_Z = 0.55`;现在读 `amadeus.canvas.overviewZ`,缺省 MIN_Z(0.25)。
+  //  ⚠️ 两头都要钉:只断「25% 时是简略的」会假绿(0.55 也满足);必须同时断中间那档**不是**简略的。
+  const p84 = await open(browser, OVERVIEW78)
+  await p84.waitForTimeout(300)
+  const zoomOut84 = async (n) => { for (let i = 0; i < n; i++) await p84.click('.amx-stage-hud button[title="缩小"]'); await p84.waitForTimeout(200) }
+  const state84 = () => p84.evaluate(() => ({
+    z: new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.amx-stage-inner')).transform).a,
+    overview: document.querySelector('.amx-stage')?.classList.contains('amx-stage-overview') ?? false,
+    labels: document.querySelectorAll('.amx-card-overview').length,
+    stored: localStorage.getItem('amadeus.canvas.overviewZ'),
+  }))
+  await zoomOut84(4) // ≈48%:旧缺省(55%)在这一档就已经简略了,新缺省必须还是完整正文
+  const mid84 = await state84()
+  await zoomOut84(4) // 再四下触底,被 MIN_Z 钳在 25%
+  const floor84 = await state84()
+  // 设置页把阈值改到 55%:键与事件名就是 canvasPrefs 与设置页之间的契约,改名了这里会当场红。
+  await p84.evaluate(() => {
+    localStorage.setItem('amadeus.canvas.overviewZ', '0.55')
+    window.dispatchEvent(new Event('amadeus:canvas-overview-z'))
+  })
+  await p84.waitForTimeout(200)
+  for (let i = 0; i < 3; i++) await p84.click('.amx-stage-hud button[title="放大"]') // 回到 ≈43%
+  await p84.waitForTimeout(220)
+  const raised84 = await state84()
+  await p84.evaluate(() => localStorage.removeItem('amadeus.canvas.overviewZ'))
+  await p84.close()
+  record('C84 简略显示阈值:缺省 = 最小缩放 25%(48% 那档仍是完整正文),设置改到 55% 后不重开笔记即生效',
+    mid84.z <= 0.5 && mid84.z > 0.25 && !mid84.overview && mid84.labels === 0 && mid84.stored === null
+      && Math.abs(floor84.z - 0.25) < 0.001 && floor84.overview && floor84.labels === 3
+      && raised84.z > 0.25 && raised84.z <= 0.55 && raised84.overview && raised84.labels === 3,
+    JSON.stringify({ mid: mid84, floor: floor84, raised: raised84 }))
 
   // ── C79 卡片四边/四角尺寸 + 点阵边界吸附 ─────────────────────────────────────────
   const SNAP79 = [
@@ -4529,6 +4575,696 @@ async function main() {
     neutralE1(cE1.shellStyle),
     JSON.stringify(cE1.shellStyle))
   await pE1.close()
+
+  // ── C85 卡里 /card = 子卡(2026-08-31 用户实报)────────────────────────────────────────
+  // 修前两条入口自相矛盾:slash 一路走到卡节点自己身上 → blockToCard 对卡片返回 null →「不能转换」;
+  // 块菜单却把卡内块默默搬成**顶层**卡。现在归一成:父卡 = 选中块的直接容器,新卡插在父段之后并记 tree。
+  const SUB85 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":40,"y":40,"w":260}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '', '卡一甲。', '', '卡一乙。', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p85 = await open(browser, SUB85)
+  await p85.waitForSelector('.amx-ucard[data-anchor="k1"]', { timeout: 10000 })
+  await p85.waitForTimeout(500)
+  const at85 = await p85.evaluate(() => {
+    const card = [...document.querySelectorAll('.amx-ucard')].find((x) => x.dataset.anchor === 'k1')
+    const el = [...card.querySelectorAll('p')].find((x) => (x.textContent ?? '').includes('卡一乙'))
+    const r = el.getBoundingClientRect()
+    return { x: r.right - 2, y: r.top + r.height / 2 }
+  })
+  await p85.mouse.click(at85.x, at85.y)
+  await p85.waitForTimeout(200)
+  // 前置断言:光标真落进 k1 了才谈得上「卡里建卡」——点空了的话下面测的是「顶层块变卡」,恒绿。
+  const caret85 = await p85.evaluate(() => {
+    const $f = window.__upage.probe.view().state.selection.$from
+    const chain = []
+    for (let d = $f.depth; d >= 0; d--) chain.push($f.node(d).type.name)
+    return chain.join('>')
+  })
+  await p85.keyboard.press('Enter')
+  await p85.keyboard.type('/card')
+  await p85.waitForTimeout(320)
+  const menu85 = await p85.evaluate(() => document.querySelector('.slash-menu [role="menuitem"] .slash-label')?.textContent ?? '')
+  await p85.keyboard.press('Enter')
+  await p85.waitForTimeout(600)
+  const a85 = await p85.evaluate(() => {
+    const view = window.__upage.probe.view()
+    const tops = []
+    view.state.doc.forEach((n) => tops.push(n.type.name === 'amadeusCanvasCard' ? `card:${String(n.attrs.anchor)}` : n.type.name))
+    const cards = []
+    view.state.doc.forEach((n) => { if (n.type.name === 'amadeusCanvasCard') cards.push({ a: String(n.attrs.anchor), t: n.textContent, ps: n.childCount }) })
+    window.__upage.probe.flush?.()
+    let doc = null
+    try { doc = JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { /* null */ }
+    const made = cards.find((c) => c.a !== 'k1')
+    const el = made ? [...document.querySelectorAll('.amx-ucard')].find((x) => x.dataset.anchor === made.a) : null
+    return { tops, cards, tree: doc?.tree ?? null, indent: el ? el.className : null, refs: (doc?.cards ?? []).map((c) => c.ref) }
+  })
+  const kid85 = a85.cards.find((c) => c.a !== 'k1')
+  record('C85 卡里 /card = 子卡:新卡紧跟父段、tree 记上父子、文档模式缩进一档;父卡内容原样(不再 forbidden)',
+    caret85 === 'paragraph>amadeusCanvasCard>doc' && menu85 === '卡片' && a85.cards.length === 2 && !!kid85
+      && a85.cards[0].a === 'k1' && a85.cards[0].t === '卡一甲。卡一乙。' && a85.cards[0].ps === 2
+      && a85.tops.join(',') === `paragraph,card:k1,card:${kid85.a}`
+      && JSON.stringify(a85.tree) === JSON.stringify({ [kid85.a]: 'k1' })
+      && (a85.indent ?? '').includes('amx-card-d1')
+      && a85.refs.includes(kid85.a),
+    JSON.stringify({ caret85, menu85, ...a85 }))
+  // 撤销腿:层级那一笔走宿主的 setCanvasTree(不进舞台的 fm 快照),所以 Cmd+Z 只退 PM 那半 ——
+  // 卡没了、tree 里那条**悬空一瞬**,由下一次派生剪掉(与 C41 同一条剪枝)。这是本条的**设计取舍**,
+  // 钉住它:悬空父在 depthOf/isUnder 里恒按「没有爹」处理,界面上不会画错;剪完盘上也不留垃圾。
+  await p85.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await p85.waitForTimeout(900)
+  const u85 = await p85.evaluate(() => {
+    const view = window.__upage.probe.view()
+    const cards = []
+    view.state.doc.forEach((n) => { if (n.type.name === 'amadeusCanvasCard') cards.push({ a: String(n.attrs.anchor), t: n.textContent }) })
+    window.__upage.probe.flush?.()
+    const line = /^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')
+    let doc = null
+    try { doc = line ? JSON.parse(line[1]) : null } catch { /* null */ }
+    return { cards, tree: doc?.tree ?? null, refs: (doc?.cards ?? []).map((c) => c.ref) }
+  })
+  record('C85b 子卡的撤销:卡片退回父卡内容(k1 完整),盘上不留悬空层级(派生剪枝兜底)',
+    // ⚠️ `!!kid85` 不是废话:上一格没建出卡时,下面每一条都平凡为真(负对照实测这一格会假绿)。
+    !!kid85 && u85.cards.length === 1 && u85.cards[0].a === 'k1'
+      && u85.cards[0].t.includes('卡一甲。') && u85.cards[0].t.includes('卡一乙。')
+      && JSON.stringify(u85.refs) === JSON.stringify(['k1'])
+      && !(kid85 && u85.tree && Object.prototype.hasOwnProperty.call(u85.tree, kid85.a)),
+    JSON.stringify(u85))
+  // 重做腿:**已知天花板**(Codex 08-31 high)。文档模式的 Cmd+Z/Shift+Cmd+Z 全归 PM(舞台的 fm
+  // 快照栈只在画布模式挂),而层级那一笔不在 PM 事务里 —— 重做只能把卡片节点带回来,刚被派生剪掉的
+  // 父子关系回不来:子卡变自由卡。钉住现状而不是假装覆盖了:内容一个字不丢、盘上不留脏数据,
+  // 缺的只是那一档缩进。要修得给宿主↔舞台开一条命令式接缝(把建卡与层级并成 'pair'),不值。
+  await p85.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+Shift+z')
+  await p85.waitForTimeout(900)
+  const r85 = await p85.evaluate(() => {
+    const view = window.__upage.probe.view()
+    const cards = []
+    view.state.doc.forEach((n) => { if (n.type.name === 'amadeusCanvasCard') cards.push(String(n.attrs.anchor)) })
+    window.__upage.probe.flush?.()
+    let doc = null
+    try { doc = JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { /* null */ }
+    return { cards, tree: doc?.tree ?? null, refs: (doc?.cards ?? []).map((c) => c.ref) }
+  })
+  record('C85c 重做的天花板:卡片回得来、内容不丢、盘上不留脏层级 —— 但父子关系回不来(文档模式无 fm 撤销栈)',
+    !!kid85 && r85.cards.includes('k1')
+      && JSON.stringify([...r85.refs].sort()) === JSON.stringify([...r85.cards].sort())
+      && !(r85.tree && Object.prototype.hasOwnProperty.call(r85.tree, kid85.a)),
+    JSON.stringify(r85))
+  await p85.close()
+
+  // C85d 父卡只剩一个孩子时转卡:**掏空父卡是非法的**(content=block+),必须补一个空段而不是
+  // 指望 tr.delete 自己补 —— replaceStep 拼不出合法结果时是静默不动,表现就是「点了没反应」。
+  const SOLO85 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":40,"y":40,"w":260}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '', '独苗。', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p85d = await open(browser, SOLO85)
+  await p85d.waitForSelector('.amx-ucard[data-anchor="k1"]', { timeout: 10000 })
+  await p85d.waitForTimeout(500)
+  const at85d = await p85d.evaluate(() => {
+    const el = document.querySelector('.amx-ucard[data-anchor="k1"] p')
+    const r = el.getBoundingClientRect()
+    return { x: r.right - 2, y: r.top + r.height / 2 }
+  })
+  await p85d.mouse.click(at85d.x, at85d.y)
+  await p85d.waitForTimeout(200)
+  // ⚠️ 空格不能省:'/' 前必须是空白才触发 slash(词中的 '/' 是路径)。这一格**不能**先按回车 ——
+  //    那样父卡就有两个孩子了,测的正是「只剩一个孩子」那条分支。
+  await p85d.keyboard.type(' /card')
+  await p85d.waitForTimeout(320)
+  const menu85d = await p85d.evaluate(() => document.querySelector('.slash-menu [role="menuitem"] .slash-label')?.textContent ?? '')
+  await p85d.keyboard.press('Enter')
+  await p85d.waitForTimeout(700)
+  const a85d = await p85d.evaluate(() => {
+    const view = window.__upage.probe.view()
+    const cards = []
+    view.state.doc.forEach((n) => { if (n.type.name === 'amadeusCanvasCard') cards.push({ a: String(n.attrs.anchor), t: n.textContent, ps: n.childCount }) })
+    window.__upage.probe.flush?.()
+    let doc = null
+    try { doc = JSON.parse(/^amadeus_canvas:\s*(.*)$/m.exec(window.__upage.probe.fmState?.().fm ?? '')[1]) } catch { /* null */ }
+    return { cards, tree: doc?.tree ?? null }
+  })
+  const kid85d = a85d.cards.find((c) => c.a !== 'k1')
+  record('C85d 父卡只剩一个孩子:内容整块搬进子卡,父卡留一个空段(不是静默不动、也不是非法空卡)',
+    menu85d === '卡片' && a85d.cards.length === 2 && !!kid85d && kid85d.t.trim() === '独苗。'
+      && a85d.cards[0].a === 'k1' && a85d.cards[0].t.trim() === '' && a85d.cards[0].ps === 1
+      && JSON.stringify(a85d.tree) === JSON.stringify({ [kid85d.a]: 'k1' }),
+    JSON.stringify({ menu85d, ...a85d }))
+  await p85d.close()
+
+  // ── C86 Shift+拖卡 = 连整支 ────────────────────────────────────────────────────────
+  // 修前 Shift 与 Cmd/Ctrl 一样是「加选」,而拖父卡时子卡原地不动 —— 整理一支得逐张搬。
+  const p86 = await open(browser, CHAIN) // k1 ← k2 ← k3 的三代链,画布模式
+  await p86.waitForTimeout(600)
+  const box86 = (a) => p86.evaluate((anchor) => {
+    const el = [...document.querySelectorAll('.amx-ucard')].find((x) => x.dataset.anchor === anchor)
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + 12, dx: Number(el.dataset.x), dy: Number(el.dataset.y) }
+  }, a)
+  const pre86 = { k1: await box86('k1'), k2: await box86('k2'), k3: await box86('k3') }
+  await p86.keyboard.down('Shift')
+  await p86.mouse.move(pre86.k1.x, pre86.k1.y)
+  await p86.mouse.down()
+  await p86.mouse.move(pre86.k1.x + 60, pre86.k1.y + 90, { steps: 8 })
+  await p86.waitForTimeout(250) // 整支进选中框发生在越过 slop 之后(withBranch/growSel),等一帧再读
+  const sel86 = await p86.evaluate(() => document.querySelectorAll('.amx-el-selbox[data-anchor]').length)
+  await p86.mouse.move(pre86.k1.x + 120, pre86.k1.y + 180, { steps: 8 })
+  await p86.mouse.up()
+  await p86.keyboard.up('Shift')
+  await p86.waitForTimeout(500)
+  const post86 = { k1: await box86('k1'), k2: await box86('k2'), k3: await box86('k3') }
+  const moved = (a) => ({ dx: post86[a].dx - pre86[a].dx, dy: post86[a].dy - pre86[a].dy })
+  const mv1 = moved('k1'), mv2 = moved('k2'), mv3 = moved('k3')
+  record('C86 Shift+拖卡 = 连整支:祖孙三代同一位移一起搬(修前只搬被抓的那一张)',
+    mv1.dx > 40 && mv1.dy > 40 && mv2.dx === mv1.dx && mv2.dy === mv1.dy && mv3.dx === mv1.dx && mv3.dy === mv1.dy && sel86 >= 3,
+    JSON.stringify({ mv1, mv2, mv3, sel86 }))
+  // C86b 负对照:Shift **点一下不拖** = 照旧单张加选 —— 整支展开只作用在「这一笔搬什么」上。
+  // 修前(展开写在 pointerdown 的选中里)这一格必红:没位移也会把祖孙三代收进选中集合,
+  // 随后一个 Delete / 一次方向键就误伤整支(Codex 08-31 medium)。
+  await p86.keyboard.press('Escape') // 清选中。⚠️ 别改成「点左上角空白」:那儿是模式胶囊,一点就切回文档模式
+  await p86.waitForTimeout(250)
+  const k3box = await box86('k3')
+  await p86.keyboard.down('Shift')
+  await p86.mouse.click(k3box.x, k3box.y) // 先选一张叶子,证明 Shift 仍是加选
+  const p86k1 = await box86('k1')
+  await p86.mouse.click(p86k1.x, p86k1.y) // 再 Shift 点根卡:只该多这一张,不该连整支
+  await p86.keyboard.up('Shift')
+  await p86.waitForTimeout(250)
+  const click86 = await p86.evaluate(() => [...document.querySelectorAll('.amx-el-selbox[data-anchor]')].map((e) => e.dataset.anchor).sort())
+  record('C86b Shift 点一下(不拖)= 单张加选,整支不动;Shift 逐张点出多选照旧成立',
+    JSON.stringify(click86) === JSON.stringify(['k1', 'k3']),
+    JSON.stringify({ click86 }))
+  await p86.close()
+
+  // ── C87 非编辑态点勾选框/双链 = 弹提示 ───────────────────────────────────────────────
+  // 单击在画布里被留给选中/拖动,勾选框(li 的 ::before)与双链(widget mousedown)于是恒不响应,
+  // 却仍有 hover 反馈 —— 看着像坏了。放行会让「搬卡」二义化,所以给提示,不给点击。
+  const TODO87 = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":420,"y":40,"w":300}]}',
+    '---', '', '主卡正文。', '', '<!-- a k1 -->', '', '- [ ] 待办一', '', '看看 [[别处]] 这个双链。', '', '<!-- /a k1 -->', '',
+  ].join('\n')
+  const p87 = await open(browser, TODO87)
+  await p87.waitForTimeout(600)
+  const gutter87 = await p87.evaluate(() => {
+    const li = document.querySelector('.amx-ucard[data-anchor="k1"] li[data-item-type="task"]')
+    if (!li) return null
+    const r = li.getBoundingClientRect()
+    return { x: r.left - 6, y: r.top + 10, mid: r.left + r.width / 2 }
+  })
+  // ⚠️ 台架只挂 UnifiedPage,没有 AmadeusOverlays —— 吐司**不落 DOM**。判据取事件本身(真源)。
+  await p87.evaluate(() => {
+    window.__toasts = []
+    window.addEventListener('amadeus:toast', (e) => window.__toasts.push(e.detail?.text ?? ''))
+  })
+  await p87.mouse.click(gutter87.x, gutter87.y)
+  await p87.waitForTimeout(400)
+  const hint87 = await p87.evaluate(() => ({
+    toast: window.__toasts.some((t) => t.includes('进入编辑模式')),
+    checked: document.querySelector('.amx-ucard[data-anchor="k1"] li[data-item-type="task"]')?.dataset.checked ?? null,
+    sel: document.querySelectorAll('.amx-el-selbox[data-anchor]').length,
+  }))
+  // 卡正文的普通位置不该弹(否则搬卡时满屏噪音)。
+  await p87.evaluate(() => { window.__toasts.length = 0 })
+  await p87.mouse.click(gutter87.mid, gutter87.y)
+  await p87.waitForTimeout(400)
+  const quiet87 = await p87.evaluate(() => window.__toasts.some((t) => t.includes('进入编辑模式')))
+  // 双链是 CARD_HINT 的第二支:不点它的话那一支恒绿(Codex 08-31 提醒)。
+  await p87.evaluate(() => { window.__toasts.length = 0 })
+  const wiki87 = await p87.evaluate(() => {
+    const el = document.querySelector('.amx-ucard[data-anchor="k1"] .wikilink')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  if (wiki87) await p87.mouse.click(wiki87.x, wiki87.y)
+  await p87.waitForTimeout(400)
+  const wikiHint87 = await p87.evaluate(() => window.__toasts.some((t) => t.includes('进入编辑模式')))
+  record('C87 非编辑态点勾选框 = 弹一句怎么进编辑态(照旧选中、不勾上);点卡正文别处不弹',
+    !!gutter87 && hint87.toast && hint87.checked === 'false' && hint87.sel >= 1 && !quiet87,
+    JSON.stringify({ hint87, quiet87 }))
+  record('C87b 非编辑态点卡内 [[双链]] 同样给提示(CARD_HINT 的第二支,不点它就恒绿)',
+    !!wiki87 && wikiHint87, JSON.stringify({ wiki87: !!wiki87, wikiHint87 }))
+  await p87.close()
+
+  // ── C88 文档模式卡片拖拽自管路由(2026-08-31 用户实报「文档模式拖不动卡/行块拖不进别的卡」)──
+  // 修前两条都是真实症状(历史负对照:同座席探针在修前恒红):
+  //  · 纯卡文档里整卡处处不可落 —— 精确落点把几 px 的卡缝解析进卡内,完整性闸整笔拒,指示线撒谎;
+  //  · 单行卡的行被「首子归外壳」恒抓成整卡,行块永远拖不出。
+  // 修后:blockLayer 的 executeCardDropInDoc 全接管文档模式卡拖拽(落点=顶层单元前后缝,
+  // 族段整搬,摘爹经 onCardDetach);首子改行级把手;整卡入口=把手栏抓卡钮(.card-grab)。
+  {
+    const DOC88 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":0,"y":0,"w":300},{"ref":"k2","x":0,"y":200,"w":300},{"ref":"k3","x":0,"y":400,"w":300}]}',
+      '---', '', '<!-- a k1 -->', '卡一。', '<!-- /a k1 -->', '', '<!-- a k2 -->', '卡二。', '<!-- /a k2 -->', '', '<!-- a k3 -->', '卡三。', '<!-- /a k3 -->', '',
+    ].join('\n')
+    const TREE88 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":0,"y":0,"w":300},{"ref":"k2","x":0,"y":200,"w":300},{"ref":"k3","x":0,"y":400,"w":300}],"tree":{"k2":"k1"}}',
+      '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一。', '<!-- /a k1 -->', '', '<!-- a k2 -->', '卡二。', '<!-- /a k2 -->', '', '<!-- a k3 -->', '卡三。', '<!-- /a k3 -->', '',
+    ].join('\n')
+    /** 顶层形状(卡带内容,空子块记 ∅ —— 行拖出单行卡后源卡留空壳,得看得见)。 */
+    const shape88 = (p) => p.evaluate(() => {
+      const view = window.__upage.probe.view()
+      const out = []
+      view.state.doc.forEach((n) => {
+        if (n.type.name === 'amadeusCanvasCard') {
+          const kids = []
+          n.forEach((c) => kids.push(c.textContent || '∅'))
+          out.push(`${n.attrs.anchor}(${kids.join('|')})`)
+        } else out.push(`${n.type.name}:${n.textContent || '∅'}`)
+      })
+      return out.join(' , ')
+    })
+    const line88 = (p, text) => p.evaluate(({ text }) => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => (x.textContent ?? '').trim() === text)
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, bottom: r.bottom }
+    }, { text })
+    const rect88 = (p, anchor) => p.evaluate(({ anchor }) => {
+      const el = [...document.querySelectorAll('.amx-ucard')].find((c) => c.dataset.anchor === anchor)
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { cx: r.left + r.width / 2, top: r.top, bottom: r.bottom }
+    }, { anchor })
+    /** hover 某行等把手上屏,再从抓卡钮(via='card')或行把手起一次真实 dnd 事件链;
+     *  返回 mousedown 后的选区与 dragover 时可见指示线数(诚实性断言用)。 */
+    const drag88 = async (p, hoverPt, dropPt, opts = {}) => {
+      await p.mouse.move(hoverPt.x, hoverPt.y)
+      await p.waitForTimeout(280)
+      return p.evaluate(({ dropPt, alt, via }) => {
+        const gutter = document.querySelector('.unified-gutter')
+        const handle = gutter?.querySelector(via === 'card' ? '.card-grab' : '.drag-handle:not(.card-grab)')
+        if (!gutter || !handle || gutter.dataset.show !== 'true') return { err: 'no-handle' }
+        if (via === 'card' && handle.style.display === 'none') return { err: 'card-grab-hidden' }
+        const view = window.__upage.probe.view()
+        const fire = (ev, target, o) => target.dispatchEvent(new DragEvent(ev, { bubbles: true, cancelable: true, ...o }))
+        handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        const s = view.state.selection
+        const grabbed = s.node ? `${s.node.type.name}:${s.node.attrs?.anchor ?? ''}` : s.constructor.name
+        const dt = new DataTransfer()
+        fire('dragstart', gutter, { dataTransfer: dt })
+        const el = document.elementFromPoint(dropPt.x, dropPt.y) ?? document.body
+        const o = { clientX: dropPt.x, clientY: dropPt.y, dataTransfer: dt, altKey: !!alt }
+        fire('dragover', el, o)
+        const lines = [...document.querySelectorAll('.unified-drop-line')].filter((l) => l.style.display !== 'none').length
+        fire('drop', el, o)
+        fire('dragend', gutter, { dataTransfer: dt })
+        return { grabbed, lines }
+      }, { dropPt, alt: !!opts.alt, via: opts.via })
+    }
+    const fm88 = async (p) => {
+      const line = canvasLine(await fmOf(p))
+      return line ?? ''
+    }
+
+    // a) 抓卡钮:卡内行悬停出钮、mousedown=整卡 NodeSelection;卡外行不出钮。
+    const p88a = await open(browser, TREE88)
+    const la = await line88(p88a, '卡一。')
+    await p88a.mouse.move(la.cx, la.cy)
+    await p88a.waitForTimeout(280)
+    const inCard88 = await p88a.evaluate(() => {
+      const b = document.querySelector('.unified-gutter .card-grab')
+      return b ? b.style.display !== 'none' : null
+    })
+    const lm = await line88(p88a, '主卡正文。')
+    await p88a.mouse.move(lm.cx, lm.cy)
+    await p88a.waitForTimeout(280)
+    const outCard88 = await p88a.evaluate(() => {
+      const b = document.querySelector('.unified-gutter .card-grab')
+      return b ? b.style.display !== 'none' : null
+    })
+    record('C88a 抓卡钮:卡内行出钮、卡外行不出', inCard88 === true && outCard88 === false, JSON.stringify({ inCard88, outCard88 }))
+    await p88a.close()
+
+    // b) 纯卡文档:整卡拖进相邻卡缝(前置:缝真的窄于 8px —— 宽了就测不到「解析进卡内」那条病根)。
+    const p88b = await open(browser, DOC88)
+    const b1 = await rect88(p88b, 'k1')
+    const b2 = await rect88(p88b, 'k2')
+    const gap88 = b2.top - b1.bottom
+    const lb3 = await line88(p88b, '卡三。')
+    const rb = await drag88(p88b, { x: lb3.cx, y: lb3.cy }, { x: b1.cx, y: (b1.bottom + b2.top) / 2 }, { via: 'card' })
+    await p88b.waitForTimeout(700)
+    const sb = await shape88(p88b)
+    record('C88b 纯卡文档:整卡拖进相邻卡缝(前置 缝<8px)=落在两卡之间(修前被完整性闸静默吞)',
+      gap88 < 8 && rb.grabbed === 'amadeusCanvasCard:k3' && sb === 'k1(卡一。) , k3(卡三。) , k2(卡二。)',
+      JSON.stringify({ gap: gap88.toFixed(1), rb, sb }))
+    await p88b.close()
+
+    // c) 整卡拖到另一卡体上=插到其后(Notion 语义);dragover 时**恰一条**指示线(线不撒谎:
+    //    修前是「线照画、drop 被吞」)。
+    const p88c = await open(browser, DOC88)
+    const lc1 = await line88(p88c, '卡一。')
+    const lc2 = await line88(p88c, '卡二。')
+    const rc = await drag88(p88c, { x: lc1.cx, y: lc1.cy }, { x: lc2.cx, y: lc2.bottom - 2 }, { via: 'card' })
+    await p88c.waitForTimeout(700)
+    const sc = await shape88(p88c)
+    record('C88c 整卡拖到另一卡体=插到其后;dragover 恰一条指示线',
+      rc.grabbed === 'amadeusCanvasCard:k1' && rc.lines === 1 && sc === 'k2(卡二。) , k1(卡一。) , k3(卡三。)',
+      JSON.stringify({ rc, sc }))
+    await p88c.close()
+
+    // d) 单行卡的行=行级把手(修前「首子归外壳」恒抓整卡),拖进另一卡尾;源卡留空壳。
+    const p88d = await open(browser, DOC88)
+    const ld1 = await line88(p88d, '卡一。')
+    const ld2 = await line88(p88d, '卡二。')
+    const rd = await drag88(p88d, { x: ld1.cx, y: ld1.cy }, { x: ld2.cx, y: ld2.bottom - 2 })
+    await p88d.waitForTimeout(700)
+    const sd = await shape88(p88d)
+    record('C88d 单行卡的行=行级把手拖进另一卡尾;源卡留空壳',
+      rd.grabbed === 'paragraph:' && sd === 'k1(∅) , k2(卡二。|卡一。) , k3(卡三。)',
+      JSON.stringify({ rd, sd }))
+    await p88d.close()
+
+    // e) 层级三连:拖父卡=族段整搬(tree 不动)→ 拖子卡出父段=摘爹(tree 剥)→ Alt 拖=复制族段换新锚。
+    const p88e = await open(browser, TREE88)
+    const le1 = await line88(p88e, '卡一。')
+    const re3 = await rect88(p88e, 'k3')
+    const re = await drag88(p88e, { x: le1.cx, y: le1.cy }, { x: re3.cx, y: re3.bottom - 4 }, { via: 'card' })
+    await p88e.waitForTimeout(800)
+    const se = await shape88(p88e)
+    const fe = await fm88(p88e)
+    const runMoved = re.grabbed === 'amadeusCanvasCard:k1' && se === 'paragraph:主卡正文。 , k3(卡三。) , k1(卡一。) , k2(卡二。)' && /"tree":\{"k2":"k1"\}/.test(fe)
+    // 再把子卡 k2 拖到主卡正文之前 → 摘爹(唯一一条关系,整键剥)
+    const le2 = await line88(p88e, '卡二。')
+    const lem = await line88(p88e, '主卡正文。')
+    const re2 = await drag88(p88e, { x: le2.cx, y: le2.cy }, { x: lem.cx, y: lem.cy - 8 }, { via: 'card' })
+    await p88e.waitForTimeout(800)
+    const se2 = await shape88(p88e)
+    const fe2 = await fm88(p88e)
+    const detached = re2.grabbed === 'amadeusCanvasCard:k2' && se2.startsWith('k2(卡二。) , paragraph:主卡正文。') && !/"tree"/.test(fe2)
+    record('C88e 拖父卡=族段整搬(tree 不动);拖子卡出父段=摘爹(tree 剥)',
+      runMoved && detached, JSON.stringify({ runMoved, se, fe, detached, se2, fe2 }))
+    await p88e.close()
+
+    // f) Alt 拖整卡=复制族段(原位不动、副本换新锚、tree 不动);拖回自己族段=no-op 且不画线。
+    const p88f = await open(browser, TREE88)
+    const lf1 = await line88(p88f, '卡一。')
+    const rf3 = await rect88(p88f, 'k3')
+    const rf = await drag88(p88f, { x: lf1.cx, y: lf1.cy }, { x: rf3.cx, y: rf3.bottom - 4 }, { via: 'card', alt: true })
+    await p88f.waitForTimeout(800)
+    const sf = await shape88(p88f)
+    const ff = await fm88(p88f)
+    const copied = rf.grabbed === 'amadeusCanvasCard:k1' && /"tree":\{"k2":"k1"\}/.test(ff)
+      && /^paragraph:主卡正文。 , k1\(卡一。\) , k2\(卡二。\) , k3\(卡三。\) , (?!k1|k2|k3)[A-Za-z0-9_-]+\(卡一。\) , (?!k1|k2|k3)[A-Za-z0-9_-]+\(卡二。\)$/.test(sf)
+    const lf1b = await line88(p88f, '卡一。')
+    const rf2 = await rect88(p88f, 'k2')
+    const before88f = await shape88(p88f)
+    const rSelf = await drag88(p88f, { x: lf1b.cx, y: lf1b.cy }, { x: rf2.cx, y: rf2.bottom - 4 }, { via: 'card' })
+    await p88f.waitForTimeout(600)
+    const after88f = await shape88(p88f)
+    record('C88f Alt拖=复制族段(原位不动+新锚+tree 不动);拖回自己族段=no-op 不画线',
+      copied && rSelf.grabbed === 'amadeusCanvasCard:k1' && rSelf.lines === 0 && before88f === after88f,
+      JSON.stringify({ copied, sf, rSelf, same: before88f === after88f }))
+    await p88f.close()
+
+    // f2) 副本落在原卡**之前** —— Codex 08-31 high 的方向:靠 normalizer 事后换锚的话,按 doc 序
+    //     被改名的是「后出现的」= **原卡**,tree/几何整套被副本劫走。现在副本当场铸新锚:原卡
+    //     锚位不动;且新锚已报进 ownedCards → 复制后继续编辑,派生不许 fail-closed 冻结。
+    //     ⚠️ 冻结判据必须是「复制**之后**再改一次画布,那次改动真进 fm」:光数 refs 是观测盲区 ——
+    //     derive #1 在归属判据还没破时就把含新锚的 cards 写进了 pipe.fm,冻结从 derive #2 才开始,
+    //     修没修两个世界里「refs 数」完全相同(2026-08-31 advisor 指正)。这里复制后挪 k3.x=737。
+    const p88g = await open(browser, TREE88)
+    const lg1 = await line88(p88g, '卡一。')
+    const lgm = await line88(p88g, '主卡正文。')
+    const rg = await drag88(p88g, { x: lg1.cx, y: lg1.cy }, { x: lgm.cx, y: lgm.cy - 6 }, { via: 'card', alt: true })
+    await p88g.waitForTimeout(800)
+    const sg = await shape88(p88g)
+    // 副本(前两位)拿新锚,原 k1/k2 留在原位原锚
+    const beforeSrc = /^(?!k1|k2|k3)[A-Za-z0-9_-]+\(卡一。\) , (?!k1|k2|k3)[A-Za-z0-9_-]+\(卡二。\) , paragraph:主卡正文。 , k1\(卡一。\) , k2\(卡二。\) , k3\(卡三。\)$/.test(sg)
+    const fg = await fm88(p88g)
+    let refs88g = null
+    try { refs88g = JSON.parse(fg).cards.map((c) => c.ref) } catch { /* null 兜底 */ }
+    const deriveAlive = Array.isArray(refs88g) && refs88g.length === 5 && refs88g.includes('k1') && /"tree":\{"k2":"k1"\}/.test(fg)
+    // 冻结活性探针:复制之后再挪一次 k3,这一笔必须进 fm(见顶注 —— refs 数是观测盲区)。
+    await p88g.evaluate(() => {
+      const view = window.__upage.probe.view()
+      let pos = null
+      let node = null
+      view.state.doc.forEach((n, off) => { if (n.type.name === 'amadeusCanvasCard' && String(n.attrs.anchor) === 'k3') { pos = off; node = n } })
+      if (pos != null) view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, x: 737 }).setMeta('amxCanvas', true))
+    })
+    await p88g.waitForTimeout(400)
+    let k3x88 = null
+    try { k3x88 = JSON.parse(await fm88(p88g)).cards.find((c) => c.ref === 'k3')?.x } catch { /* null 兜底 */ }
+    record('C88f2 副本落原卡之前=原卡锚不被劫走;新锚进 ownedCards → 复制后挪卡派生不冻结(k3.x 真进 fm)',
+      rg.grabbed === 'amadeusCanvasCard:k1' && beforeSrc && deriveAlive && k3x88 === 737,
+      JSON.stringify({ rg, sg, refs88g, treeKept: /"tree":\{"k2":"k1"\}/.test(fg), k3x88 }))
+    await p88g.close()
+
+    // g) 折叠标题 = 标题+隐藏小节一个落点单元(Codex 08-31 medium,语义再修正):把卡拖到折叠
+    //    标题下缘 = **先展开再插**。只挪到 foldedSectionAfter 不够 —— 小节的结构边界是下一枚同级
+    //    标题,卡不像键盘层插的同级标题那样自己终结小节,落在 after 位下次重算隐藏区照样吞回暗处。
+    const FOLD88 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":0,"y":0,"w":300}]}',
+      '---', '', '## 折我', '', '小节甲。', '', '小节乙。', '', '## 后段', '', '<!-- a k1 -->', '卡一。', '<!-- /a k1 -->', '', '尾巴。', '',
+    ].join('\n')
+    const p88h = await open(browser, FOLD88)
+    const lh = await p88h.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => (x.textContent ?? '').includes('折我'))
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }
+    })
+    await p88h.mouse.move(lh.cx, lh.cy)
+    await p88h.waitForTimeout(300)
+    await p88h.evaluate(() => document.querySelector('.unified-gutter .block-fold')?.click())
+    await p88h.waitForTimeout(400)
+    const folded88 = await p88h.evaluate(() => {
+      const secs = [...document.querySelectorAll('.unified-body .ProseMirror p')].filter((x) => /小节[甲乙]。/.test(x.textContent ?? ''))
+      return secs.length >= 2 && secs.every((el) => el.getBoundingClientRect().height === 0)
+    })
+    const lk1 = await line88(p88h, '卡一。')
+    const lh2 = await p88h.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => (x.textContent ?? '').includes('折我'))
+      const r = el.getBoundingClientRect()
+      return { cx: r.left + r.width / 2, bottom: r.bottom }
+    })
+    const rh = await drag88(p88h, { x: lk1.cx, y: lk1.cy }, { x: lh2.cx, y: lh2.bottom - 2 }, { via: 'card' })
+    await p88h.waitForTimeout(700)
+    const hres = await p88h.evaluate(() => {
+      const view = window.__upage.probe.view()
+      const tops = []
+      view.state.doc.forEach((n) => tops.push(n.type.name === 'amadeusCanvasCard' ? `card:${n.attrs.anchor}` : `${n.type.name}:${(n.textContent || '').slice(0, 3)}`))
+      const cardEl = document.querySelector('.amx-ucard[data-anchor="k1"]')
+      const visible = cardEl ? cardEl.getBoundingClientRect().height > 0 : false
+      const secVisible = [...document.querySelectorAll('.unified-body .ProseMirror p')]
+        .filter((x) => /小节[甲乙]。/.test(x.textContent ?? ''))
+        .every((el) => el.getBoundingClientRect().height > 0)
+      return { tops: tops.join(','), visible, secVisible }
+    })
+    // 期望:标题被展开,卡落在小节末(甲乙之后、后段标题之前),全体可见
+    record('C88g 折叠标题下缘落卡=先展开再插(卡在小节末可见,不掉进 display:none;前置:折叠真发生过)',
+      folded88 && rh.grabbed === 'amadeusCanvasCard:k1' && rh.lines === 1
+        && hres.tops === 'heading:折我,paragraph:小节甲,paragraph:小节乙,card:k1,heading:后段,paragraph:尾巴。' && hres.visible && hres.secVisible,
+      JSON.stringify({ folded88, rh, hres }))
+    await p88h.close()
+
+    // g2) 同一个结构位置的另一侧入口(Codex 二轮 medium):从**下一标题的上缘**落卡 —— 位置
+    //     与折叠单元下缘相同,同样必须先展开,否则卡插进小节结构内、重算隐藏区即被吞。
+    const p88i = await open(browser, FOLD88)
+    const li = await p88i.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => (x.textContent ?? '').includes('折我'))
+      const r = el.getBoundingClientRect()
+      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }
+    })
+    await p88i.mouse.move(li.cx, li.cy)
+    await p88i.waitForTimeout(300)
+    await p88i.evaluate(() => document.querySelector('.unified-gutter .block-fold')?.click())
+    await p88i.waitForTimeout(400)
+    const foldedI = await p88i.evaluate(() => {
+      const secs = [...document.querySelectorAll('.unified-body .ProseMirror p')].filter((x) => /小节[甲乙]。/.test(x.textContent ?? ''))
+      return secs.length >= 2 && secs.every((el) => el.getBoundingClientRect().height === 0)
+    })
+    const lk1i = await line88(p88i, '卡一。')
+    const hNext = await p88i.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => (x.textContent ?? '').includes('后段'))
+      const r = el.getBoundingClientRect()
+      return { cx: r.left + r.width / 2, top: r.top }
+    })
+    const ri = await drag88(p88i, { x: lk1i.cx, y: lk1i.cy }, { x: hNext.cx, y: hNext.top + 2 }, { via: 'card' })
+    await p88i.waitForTimeout(700)
+    const ires = await p88i.evaluate(() => {
+      const view = window.__upage.probe.view()
+      const tops = []
+      view.state.doc.forEach((n) => tops.push(n.type.name === 'amadeusCanvasCard' ? `card:${n.attrs.anchor}` : `${n.type.name}:${(n.textContent || '').slice(0, 3)}`))
+      const cardEl = document.querySelector('.amx-ucard[data-anchor="k1"]')
+      const visible = cardEl ? cardEl.getBoundingClientRect().height > 0 : false
+      return { tops: tops.join(','), visible }
+    })
+    record('C88g2 下一标题上缘落卡(同一结构位)=同样先展开,卡可见(前置:折叠真发生过)',
+      foldedI && ri.grabbed === 'amadeusCanvasCard:k1' && ri.lines === 1
+        && ires.tops === 'heading:折我,paragraph:小节甲,paragraph:小节乙,card:k1,heading:后段,paragraph:尾巴。' && ires.visible,
+      JSON.stringify({ foldedI, ri, ires }))
+    await p88i.close()
+  }
+
+  // ── C89 复制类插入的锚纪律(2026-08-31 画布对齐轮)。文档模式那两条 Codex high(C88f2)的
+  //    画布同类坑,台架实测坐实 —— 但**不在**当初怀疑的 executeDropInCanvas copy 支:卡的
+  //    NodeSelection 拖进画布编辑器被守门吞成 no-op(毁档防线,copy 支对卡不可达,字面假设证伪)。
+  //    真正的复制路径是**卡内跨块选区拖拽**与菜单「复制块」:topRangeOf 把卡内跨段选区爬升到
+  //    整卡边界,executeMoveBlocks / executeMoveToTail / 菜单跨块支拿裸 doc.slice 直接 insert,
+  //    绕开 transformPasted 的解壳。修前两坑(同座席探针实锤,修法=mintCardCopies 共用铸锚):
+  //    ① 副本落 doc 序更早位 → normalizer 按 doc 序改「后出现的那份」= **原卡**被改名,
+  //      tree 边/几何整套被副本劫走(C89a 的历史红:doc 首卡持有 k1 = 副本劫走原锚);
+  //    ② normalizer 铸的锚不进 ownedCards → 首次派生落盘后「stored ⊆ owned」fail-closed,
+  //      画布派生冻结到重开(C89a/C89b 的 k3.x=737 活性探针,冻结时停在 700)。
+  //    C89c 是同轮捞出的第三坑:PM 的 drop 处理器在事件冒泡到舞台**之前**就把 view.dragging
+  //    置空,extKind 的内部拖拽守门被击穿 + pmOwns 只认「正在编辑的容器」→ 编辑器内部的文字
+  //    拖拽被舞台误吃成「外部文字」在落点再建一张卡(内容双份)。
+  {
+    const CV89 = [
+      '---', 'amadeus_schema: amadeus.page/4',
+      'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":700,"y":40,"w":300},{"ref":"k2","x":700,"y":300,"w":300},{"ref":"k3","x":700,"y":560,"w":300}],"tree":{"k2":"k1"}}',
+      '---', '', '主卡正文。', '', '<!-- a k1 -->', '甲一。', '', '甲二。', '<!-- /a k1 -->', '',
+      '<!-- a k2 -->', '卡二。', '<!-- /a k2 -->', '', '<!-- a k3 -->', '卡三。', '<!-- /a k3 -->', '',
+    ].join('\n')
+    const shape89 = (p) => p.evaluate(() => {
+      const view = window.__upage.probe.view()
+      const out = []
+      view.state.doc.forEach((n) => {
+        if (n.type.name === 'amadeusCanvasCard') {
+          const kids = []
+          n.forEach((c) => kids.push(c.textContent || '∅'))
+          out.push(`${n.attrs.anchor}(${kids.join('|')})`)
+        } else out.push(`${n.type.name}:${n.textContent || '∅'}`)
+      })
+      return out.join(' , ')
+    })
+    /** k1 内跨块选区(甲一→甲二)。新开页初始选区是 TextSelection 光标,借它拿类。 */
+    const selectK1Run = (p) => p.evaluate(() => {
+      const view = window.__upage.probe.view()
+      const TS = view.state.selection.constructor
+      let cardPos = null
+      let cardNode = null
+      view.state.doc.forEach((n, off) => {
+        if (n.type.name === 'amadeusCanvasCard' && String(n.attrs.anchor) === 'k1') { cardPos = off; cardNode = n }
+      })
+      if (cardPos == null) return { err: 'no-k1' }
+      const from = cardPos + 2
+      const to = cardPos + 1 + cardNode.child(0).nodeSize + 1 + cardNode.child(1).content.size
+      view.dispatch(view.state.tr.setSelection(TS.create(view.state.doc, from, to)))
+      const sel = view.state.selection
+      return { ok: !sel.empty && !sel.$from.sameParent(sel.$to), text: view.state.doc.textBetween(sel.from, sel.to, '|') }
+    })
+    /** 主卡正文段上放一整套 drag 链(PM 文字选区拖拽的合成等价;dragstart 让 PM 挂 dragging+data)。 */
+    const dropOnMain89 = (p, alt) => p.evaluate(({ alt }) => {
+      const para = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => (x.textContent ?? '').trim() === '主卡正文。')
+      if (!para) return 'missing-para'
+      const r = para.getBoundingClientRect()
+      const at = { clientX: r.left + r.width / 2, clientY: r.top + 2, altKey: !!alt }
+      const fire = (ev, o) => para.dispatchEvent(new DragEvent(ev, { bubbles: true, cancelable: true, ...o }))
+      const dt = new DataTransfer()
+      fire('dragstart', { dataTransfer: dt, altKey: !!alt })
+      fire('dragover', { ...at, dataTransfer: dt })
+      fire('drop', { ...at, dataTransfer: dt })
+      fire('dragend', { dataTransfer: dt })
+      return 'ok'
+    }, { alt: !!alt })
+    /** 派生活性探针:挪 k3.x=737 再 flush,冻结时 fm 里停在种子值(见 C88f2 顶注,refs 数是盲区)。 */
+    const k3probe89 = async (p) => {
+      await p.evaluate(() => {
+        const view = window.__upage.probe.view()
+        let pos = null
+        let node = null
+        view.state.doc.forEach((n, off) => { if (n.type.name === 'amadeusCanvasCard' && String(n.attrs.anchor) === 'k3') { pos = off; node = n } })
+        if (pos != null) view.dispatch(view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, x: 737 }).setMeta('amxCanvas', true))
+      })
+      await p.waitForTimeout(400)
+      try { return JSON.parse(canvasLine(await fmOf(p))).cards.find((c) => c.ref === 'k3')?.x ?? null } catch { return null }
+    }
+
+    // a) 画布模式:卡内跨块选区 Alt 拖到主卡正文上半(doc 序 0 位)= 整卡复制,副本现铸新锚;
+    //    原卡 k1 锚不被劫走(修前红:doc 首卡持有 k1);复制后挪卡派生不冻结(修前红:k3.x 停 700)。
+    const p89a = await open(browser, CV89)
+    const sel89a = await selectK1Run(p89a)
+    const drove89a = await dropOnMain89(p89a, true)
+    await p89a.waitForTimeout(900)
+    const sa = await shape89(p89a)
+    const fa = canvasLine(await fmOf(p89a))
+    const k3xA = await k3probe89(p89a)
+    let refsA = null
+    try { refsA = JSON.parse(fa).cards.map((c) => c.ref) } catch { /* null 兜底 */ }
+    record('C89a 画布卡内跨块选区 Alt 拖=整卡复制现铸新锚;原卡锚不被副本劫走;复制后挪卡派生不冻结',
+      sel89a.ok === true && drove89a === 'ok'
+        && /^(?!k1|k2|k3)[A-Za-z0-9_-]+\(甲一。\|甲二。\) , paragraph:主卡正文。 , k1\(甲一。\|甲二。\) , k2\(卡二。\) , k3\(卡三。\)$/.test(sa)
+        && Array.isArray(refsA) && refsA.length === 4 && refsA.includes('k1')
+        && /"tree":\{"k2":"k1"\}/.test(fa) && k3xA === 737,
+      JSON.stringify({ sel89a, sa, refsA, k3xA }))
+    await p89a.close()
+
+    // b) 菜单「复制块」跨块选区盖到整卡(副本插在原卡之后,①天然不触发;钉的是②归属登记)。
+    //    文档模式驱动 —— 菜单路径不分模式,M3 同款开法(hover 行 → 点 ⠿ → 点「复制块」)。
+    const p89b = await open(browser, CV89.replace('"mode":"canvas"', '"mode":"doc"'))
+    const sel89b = await selectK1Run(p89b)
+    const l89b = await p89b.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror p')].find((x) => (x.textContent ?? '').trim() === '甲一。')
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.left + 20, y: r.top + r.height / 2 }
+    })
+    await p89b.mouse.move(l89b.x, l89b.y)
+    await p89b.waitForTimeout(350)
+    await p89b.evaluate(() => document.querySelector('.unified-gutter .drag-handle:not(.card-grab)')?.click())
+    await p89b.waitForTimeout(250)
+    const clicked89b = await p89b.evaluate(() => {
+      const btn = [...document.querySelectorAll('.unified-block-menu button')].find((b) => (b.textContent ?? '').includes('复制块'))
+      btn?.click()
+      return !!btn
+    })
+    await p89b.waitForTimeout(500)
+    const sb = await shape89(p89b)
+    const k3xB = await k3probe89(p89b)
+    record('C89b 菜单「复制块」跨块选区盖到卡=副本换新锚;新锚进归属集合 → 复制后挪卡派生不冻结',
+      sel89b.ok === true && clicked89b
+        && /^paragraph:主卡正文。 , k1\(甲一。\|甲二。\) , (?!k1|k2|k3)[A-Za-z0-9_-]+\(甲一。\|甲二。\) , k2\(卡二。\) , k3\(卡三。\)$/.test(sb)
+        && k3xB === 737,
+      JSON.stringify({ sel89b, clicked89b, sb, k3xB }))
+    await p89b.close()
+
+    // c) 画布模式:编辑器内部的文字选区拖拽(段内两个字)落回编辑器 = 舞台不许再建一张卡。
+    //    修前红:PM 冒泡前清掉 view.dragging,extKind 判成「外部文字」→ 落点凭空多一张内容副本卡。
+    const p89c = await open(browser, CV89)
+    const before89c = await p89c.evaluate(() => {
+      const view = window.__upage.probe.view()
+      let n89 = 0
+      view.state.doc.forEach((n) => { if (n.type.name === 'amadeusCanvasCard') n89++ })
+      return n89
+    })
+    const drove89c = await p89c.evaluate(() => {
+      const view = window.__upage.probe.view()
+      const TS = view.state.selection.constructor
+      view.dispatch(view.state.tr.setSelection(TS.create(view.state.doc, 1, 3)))
+      const para = [...document.querySelectorAll('.unified-body .ProseMirror > p')].find((x) => (x.textContent ?? '').trim() === '主卡正文。')
+      if (!para) return 'missing-para'
+      const r = para.getBoundingClientRect()
+      const at = { clientX: r.left + r.width / 2, clientY: r.top + 2, altKey: true }
+      const dt = new DataTransfer()
+      const fire = (ev, o) => para.dispatchEvent(new DragEvent(ev, { bubbles: true, cancelable: true, ...o }))
+      fire('dragstart', { dataTransfer: dt, altKey: true })
+      const dragging = view.dragging ? 'set' : 'null'
+      fire('drop', { ...at, dataTransfer: dt })
+      fire('dragend', { dataTransfer: dt })
+      return dragging
+    })
+    await p89c.waitForTimeout(900)
+    const after89c = await p89c.evaluate(() => {
+      const view = window.__upage.probe.view()
+      let n89 = 0
+      view.state.doc.forEach((n) => { if (n.type.name === 'amadeusCanvasCard') n89++ })
+      return n89
+    })
+    record('C89c 编辑器内部文字拖拽不被舞台误吃成「外部文字建卡」(前置:PM 真挂上了 dragging)',
+      drove89c === 'set' && after89c === before89c,
+      JSON.stringify({ drove89c, before89c, after89c }))
+    await p89c.close()
+  }
 
   await browser.close()
   const ok = results.filter(Boolean).length

@@ -8,6 +8,7 @@
  *  · **输入区** 直接复用 Tangu Chat View 的 `Composer2`:模型、模式、附件、引用、语音和命令
  *    一条不少;提交后切到 Tangu Space 并强制建新会话,不再兼任浏览器搜索。
  *  · **Space 收纳架** 旧版底部 Dock 那排 app,在 Genesis 里对应的东西就是 Space;
+ *    应用市场、成就和用户额外钉住的 Space 住在独立前置区,竖线后的普通区才与 Ribbon 排序同步。
  *    首屏只露出一排,其余收进参考旧 Desktop Launchpad 的二级收纳层;「全部 Spaces」和空白右键都能进入。
  *
  * ⚠️**坞 = ribbon 上区的另一个投影,不是第二份数据**:顺序、收纳夹全部读写 `useRibbonStore`
@@ -17,12 +18,12 @@
  *
  * 壁纸沿用旧 Desktop 的「舞台」语义,但不碰 Genesis 三轴主题 token:主题背景、Bing 每日壁纸、
  * IndexedDB 自定义原图是三个可切换来源;没有图片时也由 Genesis 主题 token 生成可取样的简约舞台。
- * 旧版窗口管理器、账号角与应用市场仍不搬(ribbon 的账号卡 + 商店已经在管),浏览器搜索也不再回来。
+ * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
-  useSensor, useSensors,
+  useDraggable, useDroppable, useSensor, useSensors,
   type CollisionDetection,
   type DragCancelEvent, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
@@ -34,7 +35,7 @@ import {
 } from 'lucide-react'
 import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, moveTo, OverlayAt } from '@lcl/engine'
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
-import type { SpaceDefinition, RibbonFolder, ViewProps } from '@lcl/engine'
+import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
 import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace } from '../stores/appStore'
 import type { Attachment } from '../types'
@@ -55,6 +56,11 @@ const SELF_SPACE = 'home'
 const LEAVE_MS = 140
 /** 首屏只留一排;超出的项收进「全部 Spaces」。收纳夹本身只占一格。 */
 const COMPACT_TILE_LIMIT = 6
+/** 这里只记主页额外副本,永远不参与 Ribbon 的 order/folders。 */
+const PINNED_SPACES_KEY = 'forsion.homepage.pinned-spaces.v1'
+const PINNED_DROP_ID = 'homepage:pinned-spaces'
+const PINNED_DRAG_PREFIX = 'homepage:pinned:'
+const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
 const THEME_PRESETS: HomepageThemePreset[] = ['rings', 'topography', 'weave', 'horizon']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
@@ -129,18 +135,19 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
     <div
       className="hp-composer"
       onClick={(e) => e.stopPropagation()}
-      onPointerDownCapture={(event) => {
-        if ((event.target as HTMLElement).closest?.('.t2c-ta')) onInputModeChange(true)
-      }}
-      onFocusCapture={(event) => {
-        if ((event.target as HTMLElement).matches?.('.t2c-ta')) onInputModeChange(true)
-      }}
+      // 模型/模式/附件和它们的菜单都属于输入准备,共用一个聚焦范围。
+      onPointerDownCapture={() => onInputModeChange(true)}
+      onPointerDown={(event) => event.stopPropagation()}
+      onFocusCapture={() => onInputModeChange(true)}
       onBlurCapture={(event) => {
-        if ((event.target as HTMLElement).matches?.('.t2c-ta')) onInputModeChange(false)
+        // 内部焦点转移不退场;选项卸载/点菜单空白导致的 relatedTarget=null 也保留。
+        // 真正点击外部由主页的 onPointerDown 收尾,Tab 到外部控件则在这里退出。
+        if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)) onInputModeChange(false)
       }}
       onKeyDownCapture={(event) => {
         if (event.key === 'Escape' && (event.target as HTMLElement).matches?.('.t2c-ta')) {
           ;(event.target as HTMLTextAreaElement).blur()
+          onInputModeChange(false)
         }
       }}
     >
@@ -217,6 +224,73 @@ function TileVisual({ tile }: { tile: Tile }) {
       <span className="hp-tile-name">{tile.folder.name}</span>
       <span className="hp-folder-count">{tile.members.length}</span>
     </>
+  )
+}
+
+function loadPinnedSpaceIds(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(PINNED_SPACES_KEY) || '[]')
+    return Array.isArray(value)
+      ? [...new Set(value.filter((id): id is string => typeof id === 'string' && id !== SELF_SPACE))]
+      : []
+  } catch { return [] }
+}
+
+function FixedHomeAction({ item }: { item: RibbonItem }) {
+  const Icon = item.icon
+  const name = item.tooltip ? label(item.tooltip) : ''
+  return (
+    <button
+      type="button"
+      className="hp-tile hp-pinned-action"
+      data-fixed-id={item.id}
+      draggable={false}
+      aria-label={name || undefined}
+      title={name}
+      onClick={item.onClick}
+    >
+      <span className="hp-tile-icon">{Icon && <Icon size={21} />}</span>
+      <span className="hp-tile-name">{name}</span>
+    </button>
+  )
+}
+
+function PinnedSpaceTile({ space, onLaunch }: { space: SpaceDefinition; onLaunch: (spaceId: string) => void }) {
+  const id = `${PINNED_DRAG_PREFIX}${space.id}`
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id })
+  const tile: Tile = { kind: 'space', id: `space:${space.id}`, space }
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      className={`hp-tile hp-pinned-space${isDragging ? ' dragging' : ''}`}
+      data-space-id={space.id}
+      style={{ transform: DndCSS.Transform.toString(transform) }}
+      aria-label={label(space.name)}
+      title={label(space.name)}
+      {...attributes}
+      {...listeners}
+      onClick={() => { if (!isDragging) onLaunch(space.id) }}
+    >
+      <TileVisual tile={tile} />
+    </button>
+  )
+}
+
+function PinnedSpaceZone({
+  actions, spaces, onLaunch, labelText,
+}: {
+  actions: RibbonItem[]
+  spaces: SpaceDefinition[]
+  onLaunch: (spaceId: string) => void
+  labelText: string
+}) {
+  const { isOver, setNodeRef } = useDroppable({ id: PINNED_DROP_ID })
+  return (
+    <div ref={setNodeRef} className="hp-pinned-zone" data-over={isOver || undefined} aria-label={labelText}>
+      {actions.map((item) => <FixedHomeAction key={item.id} item={item} />)}
+      {spaces.map((space) => <PinnedSpaceTile key={space.id} space={space} onLaunch={onLaunch} />)}
+    </div>
   )
 }
 
@@ -371,7 +445,9 @@ export function HomepageView(_props: ViewProps) {
   const clock = useClock(zh ? 'zh-CN' : 'en-US')
   const name = useAccountName()
   const spaces = useSpaceStore((s) => s.spaces)
+  const ribbonItems = useRibbonStore((s) => s.items)
   const { tiles, topIds, order } = useDockTiles()
+  const [pinnedSpaceIds, setPinnedSpaceIds] = useState(loadPinnedSpaceIds)
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
   const [organizerOpen, setOrganizerOpen] = useState(false)
@@ -398,6 +474,9 @@ export function HomepageView(_props: ViewProps) {
   )
 
   useEffect(() => { saveHomepageWallpaperPrefs(wallpaperPrefs) }, [wallpaperPrefs])
+  useEffect(() => {
+    try { localStorage.setItem(PINNED_SPACES_KEY, JSON.stringify(pinnedSpaceIds)) } catch { /* ignore */ }
+  }, [pinnedSpaceIds])
 
   // 自定义原图从 IndexedDB 读成临时 object URL;组件卸载/换图即回收,不泄漏 Blob 引用。
   useEffect(() => {
@@ -549,6 +628,21 @@ export function HomepageView(_props: ViewProps) {
     const moved = String(event.active.id)
     const targetId = event.over ? String(event.over.id) : null
     clearDrag()
+    if (moved.startsWith(PINNED_DRAG_PREFIX)) {
+      // 前置副本拖回前置区 = 不动;拖到普通区或任何区外 = 只删副本,不碰 Ribbon。
+      if (targetId !== PINNED_DROP_ID) {
+        const spaceId = moved.slice(PINNED_DRAG_PREFIX.length)
+        setPinnedSpaceIds((ids) => ids.filter((id) => id !== spaceId))
+      }
+      return
+    }
+    if (targetId === PINNED_DROP_ID) {
+      const tile = tiles.find((item) => item.id === moved)
+      if (tile?.kind === 'space' && tile.space.id !== SELF_SPACE) {
+        setPinnedSpaceIds((ids) => ids.includes(tile.space.id) ? ids : [...ids, tile.space.id])
+      }
+      return
+    }
     if (!targetId || moved === targetId) return
     const target = tiles.find((tile) => tile.id === targetId)
     if (!moved.startsWith('folder:') && target?.kind === 'folder') dropInto(moved, targetId)
@@ -578,6 +672,15 @@ export function HomepageView(_props: ViewProps) {
   const visibleTiles = tiles.slice(0, COMPACT_TILE_LIMIT)
   const hiddenCount = Math.max(0, tiles.length - visibleTiles.length)
   const activeTile = drag ? tiles.find((tile) => tile.id === drag) : undefined
+  const activePinnedSpace = drag?.startsWith(PINNED_DRAG_PREFIX)
+    ? spaces.find((space) => space.id === drag.slice(PINNED_DRAG_PREFIX.length))
+    : undefined
+  const pinnedSpaces = pinnedSpaceIds
+    .map((id) => spaces.find((space) => space.id === id))
+    .filter((space): space is SpaceDefinition => !!space)
+  const fixedHomeActions = FIXED_HOME_ACTIONS
+    .map((id) => ribbonItems.find((item) => item.id === id))
+    .filter((item): item is RibbonItem => !!item)
   const spaceCount = Math.max(0, spaces.length - (spaces.some((space) => space.id === SELF_SPACE) ? 1 : 0))
 
   const reorderFolderMember = (event: DragEndEvent): void => {
@@ -694,53 +797,69 @@ export function HomepageView(_props: ViewProps) {
             </div>
           </header>
 
-          {visibleTiles.length > 0 ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={dockCollision}
-              onDragStart={dragStart}
-              onDragOver={dragOver}
-              onDragCancel={dragCancel}
-              onDragEnd={dragEnd}
-            >
-              <SortableContext items={visibleTiles.map((tile) => tile.id)} strategy={rectSortingStrategy}>
-                <div className="hp-dock">
-                  {visibleTiles.map((tile) => (
-                    <SortableTile
-                      key={tile.id}
-                      tile={tile}
-                      over={over === tile.id}
-                      open={openFolder?.id === tile.id}
-                      onOpen={openFolderTile}
-                      onLaunch={(spaceId) => leaveThen(() => setActiveSpace(spaceId))}
-                      onMenu={(event, id) => menuAt(event, 'folder', id)}
-                    />
-                  ))}
-                  {hiddenCount > 0 && (
-                    <button
-                      type="button"
-                      className="hp-tile hp-more"
-                      onClick={(event) => { event.stopPropagation(); showOrganizer() }}
-                      title={t('home.showAll')}
-                    >
-                      <span className="hp-tile-icon"><Grid2X2 size={20} /></span>
-                      <span className="hp-tile-name">{t('home.showAll')}</span>
-                      <span className="hp-more-count">+{hiddenCount}</span>
-                    </button>
-                  )}
-                </div>
-              </SortableContext>
-              <DragOverlay dropAnimation={null}>
-                {activeTile && !organizerOpen && (
-                  <div className={`hp-tile hp-drag-overlay${activeTile.kind === 'folder' ? ' hp-folder' : ''}`}>
-                    <TileVisual tile={activeTile} />
-                  </div>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={dockCollision}
+            onDragStart={dragStart}
+            onDragOver={dragOver}
+            onDragCancel={dragCancel}
+            onDragEnd={dragEnd}
+          >
+            <div className="hp-space-row">
+              <PinnedSpaceZone
+                actions={fixedHomeActions}
+                spaces={pinnedSpaces}
+                labelText={t('home.pinnedSpaces')}
+                onLaunch={(spaceId) => leaveThen(() => setActiveSpace(spaceId))}
+              />
+              <span className="hp-space-divider" aria-hidden />
+              <div className="hp-space-main">
+                {visibleTiles.length > 0 ? (
+                  <SortableContext items={visibleTiles.map((tile) => tile.id)} strategy={rectSortingStrategy}>
+                    <div className="hp-dock">
+                      {visibleTiles.map((tile) => (
+                        <SortableTile
+                          key={tile.id}
+                          tile={tile}
+                          over={over === tile.id}
+                          open={openFolder?.id === tile.id}
+                          onOpen={openFolderTile}
+                          onLaunch={(spaceId) => leaveThen(() => setActiveSpace(spaceId))}
+                          onMenu={(event, id) => menuAt(event, 'folder', id)}
+                        />
+                      ))}
+                      {hiddenCount > 0 && (
+                        <button
+                          type="button"
+                          className="hp-tile hp-more"
+                          onClick={(event) => { event.stopPropagation(); showOrganizer() }}
+                          title={t('home.showAll')}
+                        >
+                          <span className="hp-tile-icon"><Grid2X2 size={20} /></span>
+                          <span className="hp-tile-name">{t('home.showAll')}</span>
+                          <span className="hp-more-count">+{hiddenCount}</span>
+                        </button>
+                      )}
+                    </div>
+                  </SortableContext>
+                ) : (
+                  <div className="hp-spaces-empty">{t('home.noSpaces')}</div>
                 )}
-              </DragOverlay>
-            </DndContext>
-          ) : (
-            <div className="hp-spaces-empty">{t('home.noSpaces')}</div>
-          )}
+              </div>
+            </div>
+            <DragOverlay dropAnimation={null}>
+              {activeTile && !organizerOpen && (
+                <div className={`hp-tile hp-drag-overlay${activeTile.kind === 'folder' ? ' hp-folder' : ''}`}>
+                  <TileVisual tile={activeTile} />
+                </div>
+              )}
+              {activePinnedSpace && !organizerOpen && (
+                <div className="hp-tile hp-drag-overlay hp-pinned-space">
+                  <TileVisual tile={{ kind: 'space', id: `space:${activePinnedSpace.id}`, space: activePinnedSpace }} />
+                </div>
+              )}
+            </DragOverlay>
+          </DndContext>
         </section>
       </div>
 
@@ -897,7 +1016,6 @@ export function HomepageView(_props: ViewProps) {
       {organizerOpen && (
         <div className="hp-organizer-stage" onClick={() => setOrganizerOpen(false)}>
           <section className="hp-organizer-panel" aria-label={t('home.organizer.title')} onClick={(event) => event.stopPropagation()}>
-            <div className="hp-organizer-clock" aria-hidden>{clock.time}</div>
             <header className="hp-organizer-head">
               <div>
                 <span className="hp-organizer-mark"><Grid2X2 size={16} /></span>

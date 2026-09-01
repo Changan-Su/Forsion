@@ -222,6 +222,27 @@ async function main() {
     await page.keyboard.press('Meta+9')
     await page.waitForTimeout(60)
     check('L5 空号(mod+9)什么也不做', (await hits()) === '', await hits())
+    // L6:收纳夹成员表里残留**解析不出来的 id**(图标退役 / 插件卸载 / 命令消失都会留下)。
+    //     计数与空态必须按活成员算 —— 否则就是「标着 (1) 打开一片空白,连空态提示都不给」。
+    await fresh(page)
+    await page.evaluate(() => {
+      window.__rb.getState().addFolder('top', 'FDEAD') // getState() 的快照是旧的,加完必须重取
+      const fs = window.__rb.getState().folders
+      window.__rb.getState().setFolderItems(fs[fs.length - 1].id, ['tA', 'rb-retired-ghost'])
+    })
+    await page.waitForTimeout(120)
+    const folderTitle = await page.$eval('.rb-top .rb-folder', (e) => e.title)
+    check('L6 收纳夹计数只算活成员(1 而非 2)', /\(1\)$/.test(folderTitle), folderTitle)
+    await page.evaluate(() => {
+      const s = window.__rb.getState()
+      window.__rb.getState().setFolderItems(s.folders[s.folders.length - 1].id, ['rb-retired-ghost'])
+    })
+    await page.waitForTimeout(120)
+    await page.hover('.rb-top .rb-folder')
+    await page.waitForSelector('.rb-fly', { timeout: 3000 })
+    check('L6b 全是死 id 的收纳夹给空态提示而不是空白', (await page.$('.rb-fly .rb-fly-empty')) !== null)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(60)
 
     // M. 槽位上的快捷键提示:只在展开态露、跟着排序走、没号的不画。绝对定位 —— 顺带确认它没把槽撑高
     //    (撑高 = slotH 常量失配 = 让位预览与落点全歪,所以这条必须量)。

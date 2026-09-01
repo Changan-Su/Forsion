@@ -22,6 +22,17 @@ export function parseCalDate(s: CellStr): CalDate | null {
   return { start, end: cleanEnd, allDay: !start.includes('T') && !(cleanEnd ?? '').includes('T') }
 }
 
+/** 形状之外再问一句:这一天在该年该月**真的存在**吗(`2026-02-29` / `2026-04-31` = 假)。
+ *  DATE_RE 只管形状 —— 形状对但不存在的日期会被 `new Date` 悄悄归一化到下个月,于是
+ *  按字符串排版的提示文案(`fmtCalDate`)与按 Date 计算的日历落点/提醒时刻**对不上**。
+ *  ⚠️ 刻意不塞进 `parseCalDate`:那是全体 calendarDate 单元格的读端,收紧它会让存量脏数据当场消失。
+ *  新写入的路径(编辑器候选、正文标记)自己调它把关。 */
+export function isRealDate(side: string): boolean {
+  const [y, m, d] = side.split('T')[0].split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d
+}
+
 export function calDateToValue(c: CalDate): string {
   return c.end ? `${c.start}/${c.end}` : c.start
 }

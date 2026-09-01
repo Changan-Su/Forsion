@@ -394,8 +394,11 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                 const u = ctxMenu.u
                 setCtxMenu(null)
                 setOpen(false)
-                // server /open 引导页:同源 localStorage 的 forsion_token 换 HttpOnly cookie 再进隧道页。
-                void window.tangu?.openExternal?.(`${(cloudUrl || '').replace(/\/+$/, '')}/api/units/${u.id}/open`)
+                // server /open 引导页换 cookie 进隧道页。首选 main 代拼 `#token=`(登录态递交:系统浏览器
+                // 多半没登录过网页版,同源 localStorage 读不到 token;forsion_token 不下发渲染层故须 IPC)。
+                // 旧 preload / harness 无该桥 → 退回裸 /open(引导页自会读 localStorage,行为同旧)。
+                void (window.tangu?.unitsOpenInBrowser?.(u.id)
+                  ?? window.tangu?.openExternal?.(`${(cloudUrl || '').replace(/\/+$/, '')}/api/units/${u.id}/open`))
               }}
             >
               <span className="unitsw-col"><span className="unitsw-title">{t('unit.menuInBrowser')}</span></span>

@@ -237,7 +237,7 @@ export function Root() {
       {/* 全屏二级界面是单任务空间:插件引导、成就与同步通知延后到回到主应用后再出现。 */}
       {!overlayOpen && <PluginOnboardingHost />}
 
-      {!overlayOpen && <AchievementToast />}
+      {!overlayOpen && <AchievementToast onOpen={() => useApp.getState().openAchievements()} />}
 
       {!overlayOpen && <NotificationHost />}
     </MobilePreviewFrame>

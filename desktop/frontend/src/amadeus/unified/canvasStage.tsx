@@ -40,18 +40,17 @@ import {
   CanvasElements, cardKey, elKey, treeKey, keyId, safeElements, safeTree, shapeBoxes, measureCards, measureMain, hitEdge, boxHits, endKey,
   MAIN_KEY, MIN_EL, type AttachPreview, type El, type ElBox, type ElGhost, type FrameEl,
 } from './canvasElements'
-import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, rawTree, setParent, childrenOf, runEndOf, type ShapeKind } from './canvasEdit'
+import { rawList, patchElement, removeElements, moveElements, freshElId, newShape, newShapeBox, newFrame, FRAME_SIZE, addConnector, setElementText, rawTree, setParent, childrenOf, isUnder, runEndOf, type ShapeKind } from './canvasEdit'
 import { freshAnchorId } from './columns'
 import { askString } from '../components/askString'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
+import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnabled, canvasOverviewEnabled, canvasOverviewZoom, onCanvasOverviewZoomChange, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled, setCanvasOverviewEnabled } from './canvasPrefs'
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
 
 /** 低于这档正文已经不可扫读，改由恒定屏幕字号的标题/首行承担概览。 */
-const OVERVIEW_LABEL_Z = 0.55
 /** Chromium 把触控板双指捏合作为 `ctrlKey + wheel` 送达；macOS 的 Cmd+滚轮则是
  *  `metaKey + wheel`。前者的原始 delta 很细，按用户实测单独放大 2 倍，后者保持既有手感。 */
 const TRACKPAD_PINCH_ZOOM_GAIN = 2
@@ -66,6 +65,18 @@ const EL_HIT = '.amx-el-shape, .amx-el-frame-bar'
 /** 卡内/主卡里的**可交互控件**:点它的语义是「用这个控件」,不是「选中或拖动这张卡」。
  *  `</>` 查看源码、嵌入卡的「打开」、待办勾选框、链接、多维表里的按钮全在这一类。 */
 const CARD_CTL = 'button, a[href], input, select, textarea'
+/** 非编辑态被两段式吞掉的「可交互但不是控件」:待办勾选框(li 左 padding 里的 ::before,靠 taskList
+ *  的 handleClick 翻转)与 [[双链]](widget 自己的 mousedown)。两者都不是 DOM 控件,进不了 CARD_CTL
+ *  的放行名单,而 pointerdown 的 preventDefault 又会抑制 mousedown/click —— 于是「有 hover 反馈、
+ *  点了没反应」。放行不是解(单击是选择/拖动,二义化就没法搬卡了),给一句提示才是(用户 2026-08-31)。 */
+const CARD_HINT = 'li[data-item-type="task"], .wikilink'
+/** 命中判定。待办的勾选框在 li 的**内容盒左侧**,判据与 taskList.ts 的 handleClick 逐字同源 ——
+ *  否则点待办那一行的任何一个字都要弹提示,搬卡时满屏噪音。 */
+function hintTarget(target: HTMLElement, clientX: number): boolean {
+  const el = target.closest<HTMLElement>(CARD_HINT)
+  if (!el) return false
+  return el.tagName !== 'LI' || clientX - el.getBoundingClientRect().left <= 2
+}
 /** 元素的文字键与弹窗抬头:连线=label、Frame=title、其余=text。四处调用共用,别再各写一遍三元。 */
 const textKeyOf = (el: El): 'text' | 'label' | 'title' => (el.kind === 'connector' ? 'label' : el.kind === 'frame' ? 'title' : 'text')
 const textTitleOf = (el: El): string => (el.kind === 'connector' ? '连线标签' : el.kind === 'frame' ? 'Frame 标题' : '元素文字')
@@ -343,6 +354,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   const [miniMapVisible, setMiniMapVisible] = useState<boolean>(canvasMiniMapEnabled)
   /** 低倍率概览同属本机渲染偏好；默认开，关闭时阈值以下仍保留完整正文。 */
   const [overviewEnabled, setOverviewEnabled] = useState<boolean>(canvasOverviewEnabled)
+  // 简略显示的触发阈值(缺省 = 最小缩放,见 canvasPrefs)。设置页改完会广播,开着的画布当场跟上。
+  const [overviewZ, setOverviewZ] = useState<number>(canvasOverviewZoom)
+  useEffect(() => onCanvasOverviewZoomChange(() => setOverviewZ(canvasOverviewZoom())), [])
   /** 点阵吸附同属本机手势偏好，默认开启；ref 给只依赖 active 的指针 effect 现读。 */
   const [snapEnabled, setSnapEnabledState] = useState<boolean>(canvasGridSnapEnabled)
   const snapRef = useRef(snapEnabled)
@@ -1951,7 +1965,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     type Drag =
       | { kind: 'pan'; x0: number; y0: number; vx: number; vy: number }
       | { kind: 'card-size'; key: string; edge: CardResizeEdge; b0: ElBox; h0: number; x0: number; y0: number; dx: number; dy: number; next: ElBox; live?: boolean }
-      | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean }
+      | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean; growSel?: string[] }
       | { kind: 'size'; id: string; corner: string; b0: ElBox; dx: number; dy: number; dw: number; dh: number; live?: boolean }
       | { kind: 'marquee'; x0: number; y0: number; additive: boolean; base: string[]; live?: boolean }
       | { kind: 'create'; tool: Tool; x0: number; y0: number; x1: number; y1: number; live?: boolean }
@@ -2040,6 +2054,49 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         pressAt = null
         if (stageMenuAt(target, clientX, clientY) === 'open') abortDrag()
       }, LONG_PRESS_MS)
+    }
+
+    /** 一张卡(或主卡)+ 它的全部后代,层级键。Shift 拖动整支用(用户 2026-08-31)。
+     *  ⚠️ alive 里要带上主卡哨兵 `m:`:isUnder 逐跳校验在场性,不带它的话主卡的子卡走到 `m:` 就
+     *     判成「链断了」,主卡永远只拖自己。悬空父仍按「没有爹」处理(与 depthOf 同规)。 */
+    const subtreeKeys = (node: string): string[] => {
+      const view = getView()
+      const all = view ? cardsOf(view).map((c) => c.anchor) : []
+      const alive = new Set([...all, MAIN_KEY])
+      const tree = rawTree(cbRef.current.tree)
+      const self = node === MAIN_KEY ? MAIN_KEY : cardKey(node)
+      return [self, ...all.filter((a) => isUnder(tree, a, node, alive)).map(cardKey)]
+    }
+
+    /** 按下某个对象时的选中集合起手 —— 卡正文 / 主卡正文 / chrome 圈三条命中分支**共用这一份**
+     *  (三份各写一遍时,下面那条「Shift 整支」漏在 chrome 圈上就等于没做:全仓真手势都从卡的左上内衬起手)。
+     *  返回本次的选中键;null = 这一下只是把它取消选中,别起拖。语义**一个字都没变**:
+     *  Shift / Cmd / Ctrl = 单个加选(在集合里就撤出),裸点 = 只选它、点组里成员不散组。 */
+    const pickSel = (key: string, e: PointerEvent): string[] | null => {
+      const cur = selRef.current
+      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        const keys = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
+        setSel(keys)
+        return keys.includes(key) ? keys : null
+      }
+      if (cur.includes(key)) return cur // 组里点一下不散组(拖不动就在 onUp 收敛成只选它)
+      setSel([key])
+      return [key]
+    }
+
+    /** **Shift 拖 = 连整支**(用户 2026-08-31)。展开只作用在「这一笔要搬什么」上,不动选中集合 ——
+     *  Codex 08-31 medium:在 pointerdown 就把选中改成整支的话,一次**没位移的 Shift 点击**也会把
+     *  整支收进选中集合,随后的 Delete / 方向键微移会误伤整支;而用户要的是「Shift + **拖动**」。
+     *  越过 slop 真的动起来之后,再把选中框同步到整支(drag.growSel,见 onMove)——「搬什么」与
+     *  「看见什么被选中」这才对得上。形状/Frame 没有层级身份,原样返回。 */
+    const withBranch = (keys: string[], e: PointerEvent): string[] => {
+      if (!e.shiftKey) return keys
+      const out = new Set(keys)
+      for (const k of keys) {
+        if (k !== MAIN_KEY && !k.startsWith('c:')) continue
+        for (const b of subtreeKeys(k === MAIN_KEY ? MAIN_KEY : keyId(k))) out.add(b)
+      }
+      return out.size === keys.length ? keys : [...out]
     }
 
     const onDown = (e: PointerEvent): void => {
@@ -2174,6 +2231,14 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         return
       }
 
+      // 点到勾选框/双链却不在编辑态:照旧选择+拖动,但说清楚怎么才能交互(见 CARD_HINT 顶注)。
+      const hintKey = card && anchor ? anchor : onMainBody ? MAIN_KEY : null
+      if (t === 'select' && hintKey && editingRef.current !== hintKey && hintTarget(target, e.clientX)) {
+        window.dispatchEvent(new CustomEvent('amadeus:toast', {
+          detail: { text: '双击卡片(或选中后按空格)进入编辑模式，才能勾选待办、点开双链' },
+        }))
+      }
+
       // ── 卡正文也是选择/拖动命中面；编辑只走「选中后按空格」────────────────────────
       // 这一段必须排在下面的 `key` 之前，否则正文区会直接让位给 PM、拖不动整卡。
       if (card && anchor && !onCardChrome && t === 'select') {
@@ -2182,20 +2247,16 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         focusStage()
         const add = e.shiftKey || e.metaKey || e.ctrlKey
         const hit = cardKey(anchor)
-        const curSel = selRef.current
-        let keys = curSel.includes(hit) ? curSel : [hit]
-        if (add) {
-          keys = curSel.includes(hit) ? curSel.filter((k) => k !== hit) : [...curSel, hit]
-          setSel(keys)
-          if (!keys.includes(hit)) return
-        } else if (!curSel.includes(hit)) setSel(keys)
+        const sel = pickSel(hit, e)
+        if (!sel) return
+        const keys = withBranch(sel, e) // Shift 拖 = 连整支(选中集合不动,见 withBranch)
         const cards: Array<{ anchor: string; ox: number; oy: number }> = []
         for (const k of keys) {
           if (!k.startsWith('c:')) continue
           const el = host.querySelector<HTMLElement>(`.amx-ucard[data-anchor="${CSS.escape(keyId(k))}"]`)
           if (el) cards.push({ anchor: keyId(k), ox: Number(el.dataset.x) || 0, oy: Number(el.dataset.y) || 0 })
         }
-        drag = { kind: 'move', cards, ids: new Set(keys), hit, x0: at.x, y0: at.y, dx: 0, dy: 0, mainStart: null, mainEl: null, additive: add }
+        drag = { kind: 'move', cards, ids: new Set(keys), hit, x0: at.x, y0: at.y, dx: 0, dy: 0, mainStart: null, mainEl: null, additive: add, growSel: keys.length > sel.length ? keys : undefined }
         capture(e.pointerId)
         return
       }
@@ -2206,13 +2267,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         e.preventDefault()
         focusStage()
         const add = e.shiftKey || e.metaKey || e.ctrlKey
-        const curSel = selRef.current
-        let keys = curSel.includes(MAIN_KEY) ? curSel : [MAIN_KEY]
-        if (add) {
-          keys = curSel.includes(MAIN_KEY) ? curSel.filter((k) => k !== MAIN_KEY) : [...curSel, MAIN_KEY]
-          setSel(keys)
-          if (!keys.includes(MAIN_KEY)) return
-        } else if (!curSel.includes(MAIN_KEY)) setSel(keys)
+        const selMain = pickSel(MAIN_KEY, e)
+        if (!selMain) return
+        const keys = withBranch(selMain, e) // 主卡完全等同卡片:Shift 拖同样连整支
         const cards: Array<{ anchor: string; ox: number; oy: number }> = []
         for (const k of keys) {
           if (!k.startsWith('c:')) continue
@@ -2222,7 +2279,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         drag = {
           kind: 'move', cards, ids: new Set(keys), hit: MAIN_KEY, x0: at.x, y0: at.y, dx: 0, dy: 0,
           mainStart: { x: cbRef.current.main.x, y: cbRef.current.main.y }, mainEl: pmEl,
-          additive: add,
+          additive: add, growSel: keys.length > selMain.length ? keys : undefined,
         }
         capture(e.pointerId)
         return
@@ -2288,16 +2345,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         e.preventDefault()
         focusStage()
         const additive = e.shiftKey || e.metaKey || e.ctrlKey
-        const cur = selRef.current
-        let keys = cur
-        if (additive) {
-          keys = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]
-          setSel(keys)
-          if (!keys.includes(key)) return // 刚被取消选中的对象不该起拖
-        } else if (!cur.includes(key)) {
-          keys = [key]
-          setSel(keys)
-        }
+        const selHit = pickSel(key, e)
+        if (!selHit) return // 刚被取消选中的对象不该起拖
+        const keys = withBranch(selHit, e) // Shift 拖 = 连整支;形状/Frame 没有层级身份,原样
         // 未选中时只保留既有的「右缘直拖调宽」。左上内衬是全仓拖卡起手点(C61 等真实手势都
         // 从 +6px 抓)，把四边都塞进这条会将搬卡误判成 NW 塑型；完整四边/四角由选中浮层负责。
         if (onCardChrome && keys.length === 1 && card.dataset.anchor) {
@@ -2345,6 +2395,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
           mainStart: withMainMove ? { x: cbRef.current.main.x, y: cbRef.current.main.y } : null,
           mainEl: withMainMove ? host.querySelector<HTMLElement>('.ProseMirror') : null,
           additive,
+          // Shift 拖整支同样要把选中框同步上(这条分支管的是 chrome 圈/形状 —— 全仓真手势的起手点)
+          growSel: moving.length > selHit.length ? [...moving] : undefined,
         }
         capture(e.pointerId)
         return
@@ -2486,6 +2538,11 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       drag.dx = Math.round(s.x - drag.x0)
       drag.dy = Math.round(s.y - drag.y0)
       if (Math.abs(drag.dx) > slop || Math.abs(drag.dy) > slop) drag.live = true
+      // Shift 拖真的动起来了 → 把整支同步进选中框(在此之前 Shift 只是加选那一张,见 withBranch)。
+      if (drag.live && drag.kind === 'move' && drag.growSel) {
+        setSel(drag.growSel)
+        drag.growSel = undefined
+      }
       const { dx, dy } = drag
       setDragRule(
         drag.cards.map((c) => ({
@@ -2803,12 +2860,23 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         ? !!t.closest('.ProseMirror') && !t.closest('.amx-ucard')
         : !!t.closest(`.amx-ucard[data-anchor="${CSS.escape(cur)}"]`)
     }
+    // PM 起的拖拽(文字选区)在 drop 冒泡到舞台**之前**就被 PM 清掉 view.dragging(prosemirror-view
+    // 的 drop 处理器第一句先 null 再处理)—— extKind 只看现值的话,内部拖拽被误判成「外部文字」,
+    // 在落点再建一张卡 = 内容双份(C89c 修前红)。dragstart 只可能从**本文档内部**起:PM 辖域内
+    // 起拖就标记,dragend/drop/blur 三连复位(与 clearDropzone 同一套手势收尾;**不能**并进
+    // clearDropzone —— onStageDrop 第一句就调它,先于 extKind 读值)。侧栏引用/gutter 拖不标记:
+    // 它们的 dragstart 不在 PM 辖域,且 gutter 系的 view.dragging 活到舞台 drop,现值守门接得住。
+    let innerDrag = false
+    const onInnerDragStart = (e: DragEvent): void => {
+      if ((e.target as HTMLElement | null)?.closest?.('.ProseMirror')) innerDrag = true
+    }
+    const endInnerDrag = (): void => { innerDrag = false }
     /** 外部拖进来的东西(OS 文件 / 侧栏笔记·文件引用 / 别的 app 的文字·链接)= 舞台自己接:落点建卡。
      *  ⚠️ dragover 阶段读不到 getData,只能看 types(chatDragRef 顶注写着这条)。 */
     const extKind = (e: DragEvent): 'files' | 'refs' | 'text' | null => {
       const dt = e.dataTransfer
       const types = dt ? Array.from(dt.types) : []
-      if (getView()?.dragging) return null // 编辑器内部拖块:归 blockLayer
+      if (innerDrag || getView()?.dragging) return null // 编辑器内部拖块/拖字:归 blockLayer/PM(innerDrag 见上)
       // ⚠️ 文件与侧栏引用**恒归舞台**,即便落在正在编辑的那张卡上 —— 它们是「往这个位置放个东西」
       //    的空间动作,而让出去的话外层 EditorScope 会按**光标**插,落点是撒谎的(实测会插到卡的
       //    旁边而不是卡里;侧栏引用更是无人接管、直接消失。Codex 评审 medium)。
@@ -2967,10 +3035,15 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     host.addEventListener('dragover', onStageDragOver)
     host.addEventListener('dragleave', onStageDragLeave)
     host.addEventListener('drop', onStageDrop)
+    host.addEventListener('dragstart', onInnerDragStart)
     // drop 不一定落回舞台,dragend/窗口失焦也可能结束手势;三条都要把瞬态 class 收干净。
+    // innerDrag 同一套收尾(window 级 = 恒排在 host 的 onStageDrop 之后,extKind 先读到值再复位)。
     window.addEventListener('dragend', clearDropzone)
     window.addEventListener('drop', clearDropzone)
     window.addEventListener('blur', clearDropzone)
+    window.addEventListener('dragend', endInnerDrag)
+    window.addEventListener('drop', endInnerDrag)
+    window.addEventListener('blur', endInnerDrag)
     host.addEventListener('copy', onCopy, true)
     host.addEventListener('cut', onCopy, true)
     host.addEventListener('paste', onPaste, true)
@@ -2991,9 +3064,13 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       host.removeEventListener('dragover', onStageDragOver)
       host.removeEventListener('dragleave', onStageDragLeave)
       host.removeEventListener('drop', onStageDrop)
+      host.removeEventListener('dragstart', onInnerDragStart)
       window.removeEventListener('dragend', clearDropzone)
       window.removeEventListener('drop', clearDropzone)
       window.removeEventListener('blur', clearDropzone)
+      window.removeEventListener('dragend', endInnerDrag)
+      window.removeEventListener('drop', endInnerDrag)
+      window.removeEventListener('blur', endInnerDrag)
       clearDropzone() // active 画布切回文档时同一 DOM 会保留;清理阶段必须主动去掉 class。
       host.removeEventListener('copy', onCopy, true)
       host.removeEventListener('cut', onCopy, true)
@@ -3126,7 +3203,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   //    往上找包含块的 —— 留着 relative 就会挑中这个没有盒子的祖先,浮层整体偏一个容器位。
   return (
     <div
-      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${tool}` : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= OVERVIEW_LABEL_Z ? ' amx-stage-overview' : ''}`}
+      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${tool}` : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
       ref={hostRef}
       tabIndex={-1}
       onKeyDownCapture={onKeyDownCapture}
@@ -3165,7 +3242,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
             ghost={ghost}
             marquee={marquee}
             attach={attach}
-            overviewScale={overviewEnabled && vp.z <= OVERVIEW_LABEL_Z ? vp.z : null}
+            overviewScale={overviewEnabled && vp.z <= overviewZ ? vp.z : null}
             mainAutoHeight={!(typeof main.h === 'number' && main.h > 0)}
             preview={connFrom && connPt ? { from: connFrom, x: connPt.x, y: connPt.y, over: connPt.over } : null}
           />
@@ -3293,10 +3370,12 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
 /** 当前 NodeSelection 的块 → 文末新卡片(单笔事务:搬迁 + 建卡,undo 一击整体还原)。
  *  返回新锚 / null(= 这一块不给成卡,调用方放行默认行为)。宿主必须把返回的锚并进归属集合,
  *  否则「本实例建的这张卡」在 deriveCanvasJson 眼里不算数,当场收回它会失效(见那边的告警)。
+ *  `under` = 父卡(卡里建卡 = 子卡,2026-08-31 用户拍板):新卡插在**父卡那一段之后**而不是文末,
+ *  「排序始终在父 Card 内」由此在建的当下就成立(层级本身由调用方写进 fm 的 tree)。
  *  ⚠️ v1 不收:list_item(做不了 `block+` 的根级子节点,得先规范化成完整列表 —— 分栏 B9 同一个坑)、
  *  卡片自身、分栏结构节点,以及**任何位于分栏 cell 之内**的块 —— 后者要把 layout 修复(cell 收缩/
  *  行解散/tail 维护)放进同一笔事务才合规(方案 §3.2),不做就会留下空列。都留给 Phase 2。 */
-export function blockToCard(view: EditorView, x: number, y: number): string | null {
+export function blockToCard(view: EditorView, x: number, y: number, under?: { parent: string; tree: Record<string, unknown> }): string | null {
   const sel = view.state.selection
   const card = view.state.schema.nodes.amadeusCanvasCard
   if (!card || !(sel instanceof NodeSelection)) return null
@@ -3308,8 +3387,16 @@ export function blockToCard(view: EditorView, x: number, y: number): string | nu
   const anchor = freshAnchorId(view.state.doc)
   const made = card.createAndFill({ anchor, x, y, w: CARD_W, h: 0 }, node)
   if (!made) return null
-  let tr = view.state.tr.delete(sel.from, sel.to)
-  tr = tr.insert(tr.doc.content.size, made)
+  // ⚠️ 把父卡**掏空**是非法的(卡的 content 是 `block+`):唯一的孩子被搬走时留一个空段,
+  //    别指望 tr.delete 自己补 —— replaceStep 拼不出合法结果时是**静默不动**,表现就是
+  //    「点了 /card 什么都没发生」。
+  const host = $at.depth >= 1 ? $at.node($at.depth) : null
+  const paragraph = view.state.schema.nodes.paragraph
+  let tr = host?.type.name === 'amadeusCanvasCard' && host.childCount === 1 && paragraph
+    ? view.state.tr.replaceWith(sel.from, sel.to, paragraph.create())
+    : view.state.tr.delete(sel.from, sel.to)
+  // 落点按**删除之后**的 doc 算:父卡刚缩了一块,拿删除前的位置插会偏。
+  tr = tr.insert(under ? tailPosUnder(tr.doc, under.tree, under.parent) : tr.doc.content.size, made)
   commitGeo(view, tr.scrollIntoView())
   return anchor
 }

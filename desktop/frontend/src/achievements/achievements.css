@@ -73,6 +73,31 @@
   will-change: transform;
 }
 .ach-toast-badge > svg { width: 22px; height: 22px; position: relative; z-index: 1; }
+/* 点击层:整条可点 → 打开成就面板。只有它 pointer-events:auto,故 toast 在场的 4.6s 里
+   只有这 340×52 会吃点击,浮层其余部分照旧穿透。 */
+.ach-toast-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 26px;
+  cursor: pointer;
+  /* 基础值 = 可点:reduced-motion 下本文件末尾把动画整个关掉,那时 toast 一上来就是终态,理应立刻能点。 */
+  pointer-events: auto;
+  /* 有动画时反过来:0~31% 信息条整条被 clip-path 藏在徽章后面(见 ach-t-body),这段时间必须让点击穿透 ——
+     否则用户点的是一块「看着什么都没有」的地方,却把成就面板点开了。 */
+  animation: ach-t-hit 4.6s step-end both;
+}
+.ach-toast-hit:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+/* 悬停/聚焦冻住淡出(出队的 5.2s 定时器由 tsx 里的 held 同步冻住)。根节点是 pointer-events:none,
+   故没有点击层时 :hover 根本不会命中 —— 不传 onOpen 的旧用法行为不变。 */
+.ach-toast:hover, .ach-toast:focus-within { animation-play-state: paused; }
+@keyframes ach-t-hit {
+  0%, 30%   { pointer-events: none; }
+  31%, 100% { pointer-events: auto; }
+}
 /* 纵向光轨:坠落期跟在徽章上方,落定即熄 */
 .ach-toast-badge::before {
   content: '';

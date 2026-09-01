@@ -61,6 +61,14 @@ function cellOf(text, id) {
   return { order: n[0], w: n[1], h: n[2] }
 }
 
+/** 手工行位(dashboard3x:)也自己解一遍,不复用被测代码。 */
+function pinOf(text, id) {
+  const body = text.split(/^dashboard3x:\s*$/m)[1]
+  if (!body) return null
+  const m = new RegExp(`^\\s*"?${id}"?:\\s*\\[(.+)\\]\\s*$`, 'm').exec(body)
+  return m ? m[1].split(',').map((v) => Number(v.trim())) : null
+}
+
 const cardRect = (page, id) => page.evaluate((k) => {
   const el = document.querySelector(`.dash3-card[data-key="${k}"]`)
   if (!el) return null
@@ -129,8 +137,11 @@ async function main() {
     const spans = await page.evaluate(() => [...document.querySelectorAll('.dash3-card')].map((el) => ({
       key: el.dataset.key, column: getComputedStyle(el).gridColumn, size: el.dataset.size,
     })))
-    check('G1 旧任意尺寸经契约自动改档(clock/text → wide，view → lg)',
-      spans[1].size === 'wide' && spans[2].size === 'wide' && spans[3].size === 'lg',
+    // 手调=硬值 / 未动=可弹(2026-08-31 打回后收窄):clock 停在默认档 → DP 仍可换挡拼行(→wide);
+    // text 是手调过的旧小尺寸(3×2)→ 只夹每轴下界呈现(4×3,bucket=md),**不许**被换成 wide;
+    // view 手调 6×5 → 原样(lg)。
+    check('G1 手调尺寸是铁的、未动的卡才归 DP(clock→wide,text 钉在 md,view=lg)',
+      spans[1].size === 'wide' && spans[2].size === 'md' && spans[3].size === 'lg',
       JSON.stringify(spans.slice(0, 4)))
 
     // 顺序 = DOM 顺序 = frontmatter 的 order(不开 dense,看到的就是排的)
@@ -138,12 +149,13 @@ async function main() {
     check('G1 DOM 顺序 = order 顺序(没开 dense,看到的顺序就是排的顺序)',
       domOrder.join(',') === '1,2,3,4,5,6,7', domOrder.join(','))
 
-    // clock + text 自动换成两个 half，完整填一行；后面的单张摘要维持 lg 并整组居中。
+    // clock(可弹)与 text(硬值 4×3)同高同住一行、顶边齐平;text 比 clock 窄(law vs flex 的签名);
+    // view 不被强塞进同行。
     const [r2, r3, r4] = await Promise.all([cardRect(page, '2'), cardRect(page, '3'), cardRect(page, '4')])
     const near = (a, b, tol = 2) => Math.abs(a - b) <= tol
-    check('G1 相邻可兼容卡自动拼满(两个 half 顶边齐平)，不把 view 强塞进同行',
-      near(r2.top, r3.top) && r4.top > r2.top + r2.height && near(r2.width, r3.width, 3),
-      JSON.stringify({ r2: r2.top, r3: r3.top, r4: r4.top }))
+    check('G1 可弹卡与硬值卡仍同住一行(顶边齐平,text 窄于 clock),不把 view 强塞进同行',
+      near(r2.top, r3.top) && r4.top > r2.top + r2.height && r3.width < r2.width - 20,
+      JSON.stringify({ r2: r2.top, r3: r3.top, r4: r4.top, w2: r2.width, w3: r3.width }))
 
     // 拍平后没有 .dash3-row 容器了:行 = gridRowStart 相同的槽位组(几何语义不变)。
     const rowUse = await page.evaluate(() => {
@@ -356,9 +368,82 @@ async function main() {
     const grip2 = { x: c2b.left + c2b.width - 6, y: c2b.top + c2b.height - 6 }
     await drag(page3, grip2, { x: grip2.x, y: grip2.y + 170 })
     const g2 = cellOf(await fm(page3), '3')
-    check('G7 拖过阈值只会跳到声明过的下一档(text:wide → lg)',
-      g2.w === 6 && g2.h === 5, JSON.stringify(g2))
+    check('G7 拖过阈值落格并写盘(4×3 → 4×5,量化到网格)',
+      g2.w === 4 && g2.h === 5, JSON.stringify(g2))
     await shot(page3, 'resized')
+
+    // ── G21 自由格(2026-08-31 拍板「只放开档位,保留 DP 编排」)────────────────
+    //     把手可停在**任意整数格**,不再吸具名档;只保每轴下界(= 声明档位的各轴最小值)。
+    //     5×4 不属于任何具名档(sm/md/wide/tall/lg/full/workspace 里没有) —— 旧代码会把它
+    //     吸回 wide/lg,这两格断言在回退白名单吸附的那天必红。
+    {
+      const c = await cardRect(page3, '3')
+      const grip = { x: c.left + c.width - 6, y: c.top + c.height - 6 }
+      await drag(page3, grip, { x: grip.x + c.width / 4, y: grip.y - 84 })
+      const g = cellOf(await fm(page3), '3')
+      check('G21 落点可以是非具名档(4×5 拖成 5×4,原样落盘不吸档)',
+        g.w === 5 && g.h === 4, JSON.stringify(g))
+      // 手调卡的 bucket = 最近具名档(5×4 → md,距离并列时取面积小者)——几何与信息密度分层。
+      const bucket = await page3.$eval('.dash3-card[data-key="3"]', (el) => el.dataset.size)
+      check('G21 摘要面 bucket = 最近具名档(5×4 → md),自定义几何不漏进信息密度层',
+        bucket === 'md', `data-size=${bucket}`)
+      // ── G22 反弹回归钉(2026-08-31 用户实报「宽度调不了」的直接对立面)──────
+      //     手调过的卡,**视觉宽度**必须就是手调的那个格数 —— 此前 DP 为拼行把 5×4 换回
+      //     lg 6×5(空列代价恒赢距离代价),拖时跟手、松手弹回,resize 形同虚设。
+      const span = await page3.$eval('.dash3-card[data-key="3"]', (el) => el.closest('.dash3-card-slot').style.gridColumn)
+      check('G22 手调尺寸是铁的:渲染 colSpan 就是 5(不被 DP 弹回 6)',
+        /span 5$/.test(span), `gridColumn=${span}`)
+    }
+    {
+      const c = await cardRect(page3, '3')
+      const grip = { x: c.left + c.width - 6, y: c.top + c.height - 6 }
+      await drag(page3, grip, { x: grip.x - 900, y: grip.y - 700 })
+      const g = cellOf(await fm(page3), '3')
+      check('G21 每轴下界:拖到再小也停在最小声明档(text → 4×3),不出 1×1 废卡',
+        g.w === 4 && g.h === 3, JSON.stringify(g))
+    }
+
+    // ── G24 落格过渡(2026-08-31 用户报「调节太生硬」)───────────────────────────
+    //     在途 resize 的每次落格走 0.16s FLIP 补间,不再瞬跳。采样点 = 跨过一格边界后
+    //     ~40ms:补间在途则 slot 有非恒等 transform(G17 的菜单改档已同款验过 settle 侧)。
+    {
+      const c = await cardRect(page3, '3')
+      const grip = { x: c.left + c.width - 6, y: c.top + c.height - 6 }
+      await page3.mouse.move(grip.x, grip.y)
+      await page3.mouse.down()
+      await page3.mouse.move(grip.x, grip.y + 90, { steps: 2 })
+      await page3.waitForTimeout(40)
+      const mid = await page3.$eval('.dash3-card[data-key="3"]', (el) => getComputedStyle(el.closest('.dash3-card-slot')).transform)
+      await page3.mouse.up()
+      await page3.waitForTimeout(450)
+      check('G24 把手落格有过渡(跨格瞬间卡片在补间中,不是瞬跳)',
+        mid !== 'none' && !/^matrix\(1, 0, 0, 1, 0, 0\)$/.test(mid), `mid-transform=${mid}`)
+      const g24 = cellOf(await fm(page3), '3')
+      check('G24 且这笔 resize 真落盘了(4×3 → 4×4;补间没吃掉手势)',
+        g24.w === 4 && g24.h === 4, JSON.stringify(g24))
+    }
+
+    // ── G23 视图卡下界放宽到 4 格(2026-08-31 用户追加「不能再变窄了吗」)────────
+    //     半宽下界(6,由声明档推导)是首轮的保守值;现视图卡通用下界 = VIEW_MIN 4×3
+    //     (≈1/3 宽,与移动端渲染宽度同量级),registry `dashboard.min` 可逐视图覆盖。
+    {
+      // ⚠️ 前一格 G24 松手后卡片还在 FLIP 滑翔;用把手元素自身定位(boundingBox 等稳定),
+      //    别拿卡片矩形角落瞎算 —— 坐标过时会点到罩层,变成一次什么都没发生的拖拽。
+      await page3.waitForTimeout(500)
+      // ⚠️ 前面的 resize 会把这张卡顶出视口(实证:把手 y=1077 > 视口 900,elementFromPoint=none,
+      //    整套鼠标事件落空)。滚进来再量;boundingBox 自己**不会**滚。
+      await page3.locator('.dash3-card[data-key="4"] .dash3-grip').scrollIntoViewIfNeeded()
+      await page3.waitForTimeout(200)
+      const gripBox = await page3.locator('.dash3-card[data-key="4"] .dash3-grip').boundingBox()
+      const grip = { x: gripBox.x + gripBox.width / 2, y: gripBox.y + gripBox.height / 2 }
+      await drag(page3, grip, { x: grip.x - 900, y: grip.y - 700 })
+      const g = cellOf(await fm(page3), '4')
+      check('G23 视图卡可以窄到 4 格(旧下界=半宽 6;声明档只剩快捷径职责)',
+        g.w === 4 && g.h === 3, JSON.stringify(g))
+      const span = await page3.$eval('.dash3-card[data-key="4"]', (el) => el.closest('.dash3-card-slot').style.gridColumn)
+      check('G23 且渲染就是 4 格(law,所见即所存)', /span 4$/.test(span), `gridColumn=${span}`)
+      await shot(page3, 'narrow-view')
+    }
     await page3.close()
     await page.close()
   }
@@ -392,15 +477,27 @@ async function main() {
   {
     const page = await open(browser, false, 1280, false, 'dashdata')
     const statTexts = () => page.$$eval('.dash-stat-value', (els) => els.map((e) => e.textContent.replace(/\s+/g, '')))
-    const barRows = () => page.$$eval('.dash-bar-row', (els) => els.map((e) => ({
+    // 图表条按卡收窄:围栏图表卡(key=3)与 db 卡里的 chart 视图(key=4)各是各的
+    const barRowsIn = (key) => page.$$eval(`.dash3-card[data-key="${key}"] .dash-bar-row`, (els) => els.map((e) => ({
       key: e.querySelector('.dash-bar-key').textContent,
       val: e.querySelector('.dash-bar-val').textContent,
     })))
+    const barRows = () => barRowsIn('3')
 
     const before = await statTexts()
     check('G10 数字卡取到真数(行数 4 / 金额合计 350)', before.join('|') === '4|350', JSON.stringify(before))
     const bars = await barRows()
     check('G11 图表卡按状态分组各 2 条', bars.length === 2 && bars.every((b) => b.val === '2'), JSON.stringify(bars))
+
+    // ── G20 图表 = 多维表的 chart 视图(Notion 模型,2026-08-31 拍板)────────────
+    //     db 卡活化真 AmadeusDbView:视图 tab 高亮在「图表」,视图体是同一套条形图。
+    const dbTabs = await page.$$eval('.dash3-card[data-key="4"] .amx-db-viewtab', (els) =>
+      els.map((e) => ({ name: e.textContent.trim(), active: e.hasAttribute('data-active') })))
+    check('G20 db 卡按 `view:` 参数激活「图表」视图(每处嵌入各记各的)',
+      dbTabs.some((t) => t.name === '图表' && t.active), JSON.stringify(dbTabs))
+    const dbBars = await barRowsIn('4')
+    check('G20 db 卡里的图表视图取到真数(按状态分组各 2 条,与围栏卡同源)',
+      dbBars.length === 2 && dbBars.every((b) => b.val === '2'), JSON.stringify(dbBars))
     await shot(page, 'data')
 
     // 经**真 UI** 加一条筛选:状态 = 进行中
@@ -419,6 +516,9 @@ async function main() {
     const barsAfter = await barRows()
     check('G12 图表卡同一条筛选也跟着走(只剩「进行中」)',
       barsAfter.length === 1 && barsAfter[0].key === '进行中', JSON.stringify(barsAfter))
+    const dbBarsAfter = await barRowsIn('4')
+    check('G20 db 卡里的图表视图也吃页面级筛选(DashFiltersCtx 下发,只剩「进行中」)',
+      dbBarsAfter.length === 1 && dbBarsAfter[0].key === '进行中', JSON.stringify(dbBarsAfter))
     const fmText = await fm(page)
     check('G12 筛选落进 frontmatter 的 dashFilter 键(刷新还在)', /dashFilter:/.test(fmText), fmText.slice(0, 160))
     await shot(page, 'data-filtered')
@@ -428,6 +528,40 @@ async function main() {
     await page.waitForTimeout(400)
     check('G12 反面:去掉筛选,数字回到 4|350(不是卡片坏了)',
       (await statTexts()).join('|') === '4|350', JSON.stringify(await statTexts()))
+    check('G20 反面:去掉筛选,db 卡图表回到 2 组(证明上一格不是视图坏了)',
+      (await barRowsIn('4')).length === 2, JSON.stringify(await barRowsIn('4')))
+
+    // G20 在卡里切视图 → 活动视图名写回卡片围栏(`view:` 参数,每处嵌入各记各的、刷新还在)。
+    // ⚠️ 必须先回成品页:排版台是整卡罩层(单击被截、双击才进卡),锁定态才是「内容单击直达」。
+    await page.locator('.amx-toolbar button[title="完成"]').click()
+    await page.waitForTimeout(250)
+    await page.locator('.dash3-card[data-key="4"] .amx-db-viewtab', { hasText: '表格' }).click()
+    await page.waitForTimeout(350)
+    const blockAfterSwitch = await page.evaluate(() => window.__pageStore.getState().blocks['4']?.content ?? '')
+    check('G20 切到「表格」→ 卡片围栏的 view: 参数跟着改(持久化的是卡,不是内存)',
+      /view: 表格/.test(blockAfterSwitch), JSON.stringify(blockAfterSwitch))
+    check('G20 切视图后视图体真的换成了表格(不是只有 tab 高亮)',
+      (await page.locator('.dash3-card[data-key="4"] .amx-db-hrow').count()) === 1
+        && (await page.locator('.dash3-card[data-key="4"] .dash-bar-row').count()) === 0)
+    await page.locator('.dash3-card[data-key="4"] .amx-db-viewtab', { hasText: '图表' }).click()
+    await page.waitForTimeout(350)
+    check('G20 切回「图表」→ 围栏参数与视图体一并复原(往返闭合)',
+      /view: 图表/.test(await page.evaluate(() => window.__pageStore.getState().blocks['4']?.content ?? ''))
+        && (await barRowsIn('4')).length === 2)
+
+    // G20 快捷加卡:添加菜单「图表(多维表)…」→ 快速查找挑 .db → 落一张 db 卡并复用已有图表视图
+    await page.locator('.amx-toolbar button[title^="编辑布局"]').click()
+    await page.waitForTimeout(250)
+    await page.locator('.amx-toolbar button[title="添加卡片"]').click()
+    await page.locator('.dash-add-menu button', { hasText: '图表(多维表)' }).click()
+    await page.waitForTimeout(250)
+    await page.locator('.amx-qf-row').first().click()
+    await page.waitForTimeout(400)
+    const quickBlocks = await page.evaluate(() => Object.values(window.__pageStore.getState().blocks).map((b) => b.content))
+    check('G20 快捷径落的是 db 视图卡(type: amadeus-db + view: 图表),不是烤死的 chart 围栏',
+      quickBlocks.filter((c) => /type: amadeus-db/.test(c) && /view: 图表/.test(c)).length >= 2, JSON.stringify(quickBlocks.slice(-1)))
+    const viewCount = await page.evaluate(() => window.__dbStore.getState().entries['台账.db'].data.views.length)
+    check('G20 快捷径复用已有图表视图,不往 .db 里重复造(views 仍是 2 个)', viewCount === 2, `views=${viewCount}`)
     await page.close()
   }
 
@@ -630,6 +764,82 @@ async function main() {
       cellOf(textAfter, '6').order === 6 && cellOf(textAfter, '7').order === 5,
       `6→order ${cellOf(textAfter, '6').order}, 7→order ${cellOf(textAfter, '7').order}`)
     await shot(page, 'drag-settled')
+    await page.close()
+  }
+
+  // ── G25 手工行位:横向留白 / 行内自由摆放 / 空白可插入 / 排斥(2026-09-01 用户拍板三条)──
+  //     押的是「松手即定」:DP 不再替你把卡拼回去,也不再把没动过的行的观感改掉。
+  {
+    const page = await open(browser, false)
+    const slotOf = (id) => page.$eval(`.dash3-card[data-key="${id}"]`, (el) => {
+      const s = el.closest('.dash3-card-slot').style
+      return { col: s.gridColumn, row: s.gridRow }
+    })
+    const autoRowBefore = JSON.stringify([await slotOf('2'), await slotOf('6'), await slotOf('7')])
+    const c4 = await cardRect(page, '4')
+    check('G25 前置:4 号独占一行且被 DP 居中(留白平摊在两侧 = 改版前的行为)',
+      (await slotOf('4')).col === '4 / span 6', (await slotOf('4')).col)
+
+    // ① 行内自由摆放:独占一行的卡往右推到贴边
+    await drag(page, { x: c4.left + c4.width / 2, y: c4.top + 40 }, { x: c4.left + c4.width / 2 + 330, y: c4.top + 40 }, 16)
+    check('G25 独占一行的卡可以在行内横向随意摆放(居中 → 靠右,左侧留白保留)',
+      (await slotOf('4')).col === '7 / span 6', (await slotOf('4')).col)
+    check('G25 落盘的是 dashboard3x 的行位,布局键仍是三元组(旧读端不冻结)',
+      JSON.stringify(pinOf(await fm(page), '4')) === '[0,6]' && cellOf(await fm(page), '4').w === 6 && cellOf(await fm(page), '4').h === 5,
+      `pin=${JSON.stringify(pinOf(await fm(page), '4'))}`)
+    await page.waitForTimeout(600)
+    check('G25 松手即定:静置后不回弹(DP 不再把手摆过的行拼回去)',
+      (await slotOf('4')).col === '7 / span 6', (await slotOf('4')).col)
+    check('G25 回归钉:没摆过的行观感与出现 pin 之前逐字一致(拍板「未动仍自动」)',
+      JSON.stringify([await slotOf('2'), await slotOf('6'), await slotOf('7')]) === autoRowBefore, autoRowBefore)
+
+    // ② 往那一行的左半空白里插一张**更矮**的卡(同高族约束只对自动行成立)
+    const c3 = await cardRect(page, '3')
+    const c4b = await cardRect(page, '4')
+    const colOneX = (await cardRect(page, '1')).left + 40 // 第 1 列的锚:整行的 section 卡左沿
+    await drag(page, { x: c3.left + c3.width / 2, y: c3.top + 40 }, { x: colOneX, y: c4b.top + 100 }, 20)
+    const s3 = await slotOf('3')
+    const s4 = await slotOf('4')
+    const rowStart = (s) => Number(s.row.split(' / ')[0])
+    check('G25 空白可插入:矮卡进了高卡那一行(band 高=最高那张,矮卡按自己的高度渲染)',
+      rowStart(s3) === rowStart(s4) && s3.row.endsWith('span 3') && s4.row.endsWith('span 5'),
+      `3:${s3.row} 4:${s4.row}`)
+    check('G25 且行内横向留白留着(4 格 + 空 2 格 + 6 格,不被拼满)',
+      s3.col === '1 / span 4' && s4.col === '7 / span 6', `3:${s3.col} 4:${s4.col}`)
+    await shot(page, 'pinned-rows') // 观感自查:不等高并排 + 行内留白
+    check('G25 两张卡都记了行位,且同属一行(row 值相同)',
+      pinOf(await fm(page), '3')[0] === pinOf(await fm(page), '4')[0],
+      JSON.stringify([pinOf(await fm(page), '3'), pinOf(await fm(page), '4')]))
+
+    // ③ 排斥:把矮卡推到高卡头上 → 行内装不下,最右的那张被挤到下一行
+    const c3b = await cardRect(page, '3')
+    await drag(page, { x: c3b.left + 60, y: c3b.top + 40 }, { x: c3b.left + 60 + 520, y: c3b.top + 40 }, 18)
+    const p3 = await slotOf('3')
+    const p4 = await slotOf('4')
+    check('G25 排斥:挤进已占的列位 → 最右那张被顶到下一行(不叠压、不缩小)',
+      rowStart(p4) > rowStart(p3) && p4.col.endsWith('span 6'), `3:${JSON.stringify(p3)} 4:${JSON.stringify(p4)}`)
+    check('G25 被顶出去的卡**丢掉行位**回自动流(不是被冻结在别处)',
+      pinOf(await fm(page), '4') === null, JSON.stringify(pinOf(await fm(page), '4')))
+
+    // ④ 窄屏:手工行位按比例折算,且**永不横向滚动**(x 与 w 各自取整会越界)
+    await page.setViewportSize({ width: 760, height: 900 })
+    await page.waitForTimeout(600)
+    check('G25 降列后手工行位不溢出(永不横向滚动)', await page.$eval('.dash3-grid', (el) => el.scrollWidth <= el.clientWidth + 1))
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.waitForTimeout(600)
+
+    // ⑤ 回头路:pin 不能是单行道
+    await page.locator('.dash3-card[data-key="3"]').scrollIntoViewIfNeeded()
+    await page.locator('.dash3-card[data-key="3"] .dash3-card-more').click()
+    await page.waitForTimeout(200)
+    const restore = page.locator('.dash-add-menu button', { hasText: '恢复自动排版' })
+    check('G25 手工行有回头路:卡片菜单给「恢复自动排版」', (await restore.count()) === 1)
+    if (await restore.count()) {
+      await restore.first().click()
+      await page.waitForTimeout(600)
+      check('G25 恢复自动排版 → 行位清干净,这一行交回编排器',
+        pinOf(await fm(page), '3') === null, await fm(page))
+    }
     await page.close()
   }
 

@@ -111,6 +111,12 @@ export function Ribbon() {
   }
   const topE = zoneList('top')
   const botE = zoneList('bottom')
+  /** 收纳夹成员表是持久化的,里面会留下**已解析不出来**的 id —— 图标退役(如 2026-08-31 撤下的
+   *  rb-search/rb-locale/rb-feedback)、插件卸载、命令消失都会造成。计数与空态一律按能解析出来的
+   *  成员算,否则用户看到「标着 (1) 的收纳夹打开却一片空白」,连「拖图标进来」的空态提示都不给。
+   *  成员**行**照旧按原数组渲染(解析不出的渲染成 null):`flyRow` 拿的下标要与原数组对齐,
+   *  过滤掉会让拖拽重排写回错位的顺序。 */
+  const liveCount = (f: RibbonFolder): number => f.items.reduce((n, id) => n + (byId.has(id) ? 1 : 0), 0)
   const pinned = items.filter((i) => i.side === 'bottom' && i.pinned)
   // head 区:折叠钮下的固定件(zoneList 的 top/bottom 过滤天然排除它,不进拖拽/溢出/持久化)。
   const headItems = items.filter((i) => i.side === 'head')
@@ -348,7 +354,7 @@ export function Ribbon() {
         // 记下按钮元素:mod+N 打开这个收纳夹时要拿它当浮层锚点(键盘路径没有 currentTarget)。
         ref={(el) => { el ? folderBtns.current.set(f.id, el) : folderBtns.current.delete(f.id) }}
         className={`rb-btn rb-folder${overFolder === f.id ? ' drag-into' : ''}`}
-        title={expanded ? undefined : `${f.name} (${f.items.length})`}
+        title={expanded ? undefined : `${f.name} (${liveCount(f)})`}
         onMouseEnter={(e) => openFly(f.id, f.zone, e.currentTarget, f.id)}
         onMouseLeave={scheduleClose}
         onContextMenu={folderCtx(f)}
@@ -523,7 +529,7 @@ export function Ribbon() {
           onDrop={(e) => { if (flyFolder && e.target === e.currentTarget) { e.preventDefault(); dropIntoFolder(flyFolder) } }}
         >
           <div className="rb-fly-head">{flyFolder ? flyFolder.name : zh() ? '更多' : 'More'}</div>
-          {flyFolder && flyFolder.items.length === 0 && <div className="rb-fly-empty">{zh() ? '拖动图标到收纳夹图标放入' : 'Drag icons onto the folder to collect'}</div>}
+          {flyFolder && liveCount(flyFolder) === 0 && <div className="rb-fly-empty">{zh() ? '拖动图标到收纳夹图标放入' : 'Drag icons onto the folder to collect'}</div>}
           {flyFolder
             ? flyFolder.items.map((id, i) => { const e = byId.get(id); return e ? flyRow(e, flyFolder, i, flyFolder.items) : null })
             : flyTail?.map((e) => e.kind === 'folder'

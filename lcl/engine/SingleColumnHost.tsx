@@ -112,8 +112,8 @@ export function LeafHost() {
  *  不能只看侧栏视图:进了没有左栏配方的 Space(内置「发布」,或 layout.left 为空的用户 Space)后
  *  leftLeaves 与 sidebarDefaults.left 双双为空 → 左胶囊塌成幽灵、抽屉拿不到 .open,连切回别的 Space
  *  的路一起断掉,且 saveCurrent 把空布局存了回去 = 重启也出不来(2026-08-25 用户实报,2.8.1 可复现)。 */
-const footAliveOf = (spaceCount: number, items: { id: string }[]): boolean =>
-  spaceCount > 1 || items.some((i) => i.id === 'rb-account' || i.id === 'rb-settings')
+const footAliveOf = (spaceCount: number, items: { id: string; mobileFoot?: boolean }[]): boolean =>
+  spaceCount > 1 || items.some((i) => i.id === 'rb-account' || i.id === 'rb-settings' || i.mobileFoot)
 function useFootAlive(): boolean {
   return footAliveOf(useSpaceStore((s) => s.spaces.length), useRibbonStore((s) => s.items))
 }
@@ -237,7 +237,10 @@ function useDrawerDrag(
       const t = e.touches[0]
       if (!t || e.touches.length > 1) return
       const target = e.target as HTMLElement | null
-      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container')
+      // 白板 / PDF / **画布**:整面都是「单指拖 = 平移」的手势面,横滑归它们。画布必须排掉
+      // `.amx-stage-off`(文档模式那份 `display: contents` 的空壳仍在 DOM 里,认它 = 普通笔记也
+      // 划不出抽屉)。屏幕边缘 24px 起手仍抢得回来,见下面的 edgeStart。
+      let exempt = !!target?.closest?.('.amx-draw, .pdfa-container, .amx-stage:not(.amx-stage-off)')
       if (!exempt) {
         for (let el = target; el && el !== body; el = el.parentElement) {
           const cs = getComputedStyle(el)
@@ -331,6 +334,8 @@ function DrawerFoot() {
   const activeId = useSpaceStore((s) => s.activeSpaceId)
   const account = useRibbonStore((s) => s.items.find((i) => i.id === 'rb-account'))
   const settings = useRibbonStore((s) => s.items.find((i) => i.id === 'rb-settings'))
+  // mobileFoot 注册项(如互联设备入口):常驻设置钮左侧,与「⋯」菜单互斥(那边按同标志滤掉)。
+  const footExtras = useRibbonStore((s) => s.items).filter((i) => i.mobileFoot)
   const AccountC = account?.component
   const SettingsIcon = settings?.icon
   const barRef = useRef<HTMLElement>(null)
@@ -364,9 +369,17 @@ function DrawerFoot() {
           })}
         </nav>
       )}
-      {(AccountC || settings) && (
+      {(AccountC || settings || footExtras.length > 0) && (
         <div className="mb-foot-row">
           <div className="mb-foot-account">{AccountC ? <AccountC expanded /> : null}</div>
+          {footExtras.map((it) => {
+            const Icon = it.icon
+            return (
+              <button key={it.id} className="mb-icon-btn" onClick={() => it.onClick?.()} aria-label={it.tooltip ? label(it.tooltip) : it.id}>
+                {Icon ? <Icon size={20} /> : null}
+              </button>
+            )
+          })}
           {settings && (
             <button className="mb-icon-btn" onClick={() => settings.onClick?.()} aria-label="settings">
               {SettingsIcon ? <SettingsIcon size={20} /> : null}
@@ -381,7 +394,7 @@ function DrawerFoot() {
 /** 底部弹出的「⋯」菜单:渲染 ribbon 底部注册项(明暗/语言/命令/反馈…)。
  *  账号(rb-account)与设置(rb-settings)已迁去左抽屉底部常驻(用户拍板 2026-08-05),此处滤掉防重复。 */
 function MoreSheet({ onClose }: { onClose: () => void }) {
-  const items = useRibbonStore((s) => s.items).filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && i.id !== 'rb-settings')
+  const items = useRibbonStore((s) => s.items).filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && i.id !== 'rb-settings' && !i.mobileFoot)
   return (
     <div className="mb-sheet-scrim" onClick={onClose}>
       <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
@@ -421,7 +434,9 @@ function TabSheet({ onClose }: { onClose: () => void }) {
       <div className="mb-sheet" onClick={(e) => e.stopPropagation()} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
         <div className="mb-sheet-grip" />
         {tabs.map((t) => {
-          const Icon = getView(t.type)?.icon
+          const tdef = getView(t.type)
+          const Icon = tdef?.icon
+          const TabIcon = tdef?.TabIcon // 与桌面 tab 同一接缝(笔记 tab 显示用户设的 emoji)
           return (
             <div
               key={t.id}
@@ -429,7 +444,9 @@ function TabSheet({ onClose }: { onClose: () => void }) {
               className={`mb-sheet-row mb-tabrow${t.active ? ' on' : ''}`}
               onClick={() => { useWorkspace.getState().activateLeaf(t.id); onClose() }}
             >
-              {Icon ? <Icon size={18} /> : null}
+              {TabIcon
+                ? <TabIcon params={{ notePath: t.filePath }} size={18} />
+                : Icon ? <Icon size={18} /> : null}
               <span className="mb-tabrow-label">{t.title}</span>
               {t.closable && tabs.length > 1 ? (
                 <span

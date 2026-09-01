@@ -63,9 +63,16 @@ function PropIcon({ col }: { col: DbColumn }) {
 
 export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onClose: () => void }) {
   const { db, row, colId, title } = ev
-  const readonly = !!db.readonly // 只读源(agent 日程):全字段展示,底部无删除
+  // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示,底部无删除。
+  // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown),但删除仍关着 ——
+  // 「删掉一个日历事件」对一行笔记来说是删整行还是只删 `@`,语义不明,不做。
+  // `readonly` 只管**时间那一行**:可编辑投影把它放开。
+  const readonly = !!db.readonly && !db.writeCell
+  // 其余一律看严格的 db.readonly —— 投影只支持改时间,标题/属性放开就是「看着能改、改了没反应」。
+  const deletable = !db.readonly
+  const fullyEditable = !db.readonly
   const nameCol = db.columns[0]
-  const titleEditable = !readonly && !(db.isNoteView && nameCol?.type === 'page')
+  const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
   const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
   const pos = cardPos(at)
   const summary = colId ? eventTimeSummary(ev.raw) : null
@@ -76,7 +83,7 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
-  const canOpenSource = !readonly
+  const canOpenSource = !db.readonly || !!db.openRow
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -184,23 +191,23 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
                     <span className="amx-cal-card-keyt">{c.name}</span>
                   </span>
                   <div className="amx-cal-card-ctl">
-                    {readonly
-                      ? <span className="amx-cal-card-val">{cellText(row.cells[c.id]) || '—'}</span>
-                      : <CardPropField db={db} row={row} col={c} />}
+                    {fullyEditable
+                      ? <CardPropField db={db} row={row} col={c} />
+                      : <span className="amx-cal-card-val">{cellText(row.cells[c.id]) || '—'}</span>}
                   </div>
                 </div>
               ))}
             </div>
           )}
 
-          {(canOpenSource || !readonly) && (
+          {(canOpenSource || deletable) && (
             <div className="amx-cal-card-foot">
               {canOpenSource && (
-                <button className="amx-cal-card-open" onClick={() => { openDb(db.path); onClose() }}>
-                  <ExternalLink size={13} /> 打开数据库
+                <button className="amx-cal-card-open" onClick={() => { db.openRow ? db.openRow(row.rowId) : openDb(db.path); onClose() }}>
+                  <ExternalLink size={13} /> {db.openRow ? '打开笔记' : '打开数据库'}
                 </button>
               )}
-              {!readonly && (
+              {deletable && (
                 <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>删除</button>
               )}
             </div>

@@ -9,15 +9,16 @@
  *  · **统计与多维表的统计行同源**(shared 层调 viewQuery 的 computeStat)—— 同一份数据不能有两个数。
  *  · **颜色只吃 token**。图表不引色板:同一支 `--primary` 按透明度分档,与桌面端的克制观感一致,
  *    而且明暗两档自动跟随(自造 hex 会在暗色里烧穿)。
- *  · **不引图表库**。三种图形手写 SVG 一共百来行,加一个依赖换不来任何东西。
+ *  · **不引图表库**。三种图形手写 SVG 住渲染层 ChartBody(多维表 chart 视图同一份实现)。
  */
 import { useEffect, useMemo } from 'react'
 import { useDbStore } from '@amadeus/store/dbStore'
 import { resolveBaseType } from '@amadeus/blocks/database/propertyTypes'
+import { Bars, Donut, Line } from '@amadeus/blocks/database/ChartBody'
 import type { ColumnType } from '@amadeus-shared/db/schema'
 import {
   computeChartCard, computeStatCard, parseChartSpec, parseStatSpec,
-  type ChartSpec, type DashFilter, type Slice, type StatSpec,
+  type ChartSpec, type DashFilter, type StatSpec,
 } from '@amadeus-shared/dashboardData'
 import './dashData.css'
 
@@ -103,96 +104,6 @@ function ChartBody({ spec, entry, filters }: { spec: ChartSpec; entry: ReturnTyp
       <div className="dash-chart-title">{title}</div>
       <div className="dash-chart-body">
         {spec.kind === 'donut' ? <Donut slices={res.slices} /> : spec.kind === 'line' ? <Line slices={res.slices} /> : <Bars slices={res.slices} />}
-      </div>
-    </div>
-  )
-}
-
-/** 数字标签:整数不带小数,小数留两位(与 viewQuery 的 trimNum 观感一致)。 */
-const fmt = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, ''))
-/** 同一支 --primary 按透明度分档:明暗两档自动跟随,不会在暗色里烧穿。 */
-const tone = (i: number, n: number): string =>
-  `color-mix(in srgb, var(--primary) ${Math.round(100 - (i / Math.max(1, n - 1)) * 62)}%, transparent)`
-
-/** 横向条:中文标签横着放才不打架(竖条得转 45° 或截断)。 */
-function Bars({ slices }: { slices: Slice[] }) {
-  const max = Math.max(...slices.map((s) => s.value), 1)
-  return (
-    <div className="dash-bars">
-      {slices.map((s, i) => (
-        <div className="dash-bar-row" key={s.key} title={`${s.key}:${fmt(s.value)}`}>
-          <span className="dash-bar-key">{s.key}</span>
-          <span className="dash-bar-track">
-            <span className="dash-bar-fill" style={{ width: `${(s.value / max) * 100}%`, background: tone(i, slices.length) }} />
-          </span>
-          <span className="dash-bar-val">{fmt(s.value)}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-/** 折线:x 轴是分组。**按 key 排序** —— 折线读的是「沿着某个次序的走势」,拿按值降序的顺序画折线
- *  是在骗人(那条线永远单调下降)。 */
-function Line({ slices }: { slices: Slice[] }) {
-  const pts = [...slices].sort((a, b) => a.key.localeCompare(b.key))
-  const max = Math.max(...pts.map((p) => p.value), 1)
-  const min = Math.min(...pts.map((p) => p.value), 0)
-  const span = max - min || 1
-  const W = 100
-  const H = 46
-  const xy = pts.map((p, i) => [pts.length === 1 ? W / 2 : (i / (pts.length - 1)) * W, H - ((p.value - min) / span) * H] as const)
-  const d = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(2)},${y.toFixed(2)}`).join(' ')
-  return (
-    <div className="dash-line">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="dash-line-svg" aria-hidden="true">
-        <path d={`${d} L${W},${H} L0,${H} Z`} fill="color-mix(in srgb, var(--primary) 14%, transparent)" />
-        <path d={d} fill="none" stroke="var(--primary)" strokeWidth="1.4" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-      </svg>
-      <div className="dash-line-axis">
-        {pts.map((p) => <span key={p.key} title={`${p.key}:${fmt(p.value)}`}>{p.key}</span>)}
-      </div>
-    </div>
-  )
-}
-
-/** 环图。总和为 0 时不画(除零会得到 NaN 的 path,SVG 直接吞掉 = 一片空白且无从排查)。 */
-function Donut({ slices }: { slices: Slice[] }) {
-  const total = slices.reduce((a, s) => a + s.value, 0)
-  if (total <= 0) return <Note>合计为 0,画不出环图</Note>
-  const R = 16
-  const C = 2 * Math.PI * R
-  let acc = 0
-  return (
-    <div className="dash-donut">
-      <svg viewBox="0 0 48 48" className="dash-donut-svg" aria-hidden="true">
-        <g transform="rotate(-90 24 24)">
-          {slices.map((s, i) => {
-            const len = (s.value / total) * C
-            const el = (
-              <circle
-                key={s.key}
-                cx="24" cy="24" r={R}
-                fill="none"
-                stroke={tone(i, slices.length)}
-                strokeWidth="9"
-                strokeDasharray={`${len.toFixed(3)} ${(C - len).toFixed(3)}`}
-                strokeDashoffset={(-acc).toFixed(3)}
-              />
-            )
-            acc += len
-            return el
-          })}
-        </g>
-      </svg>
-      <div className="dash-donut-legend">
-        {slices.map((s, i) => (
-          <span className="dash-donut-item" key={s.key} title={`${s.key}:${fmt(s.value)}`}>
-            <i style={{ background: tone(i, slices.length) }} />
-            <b>{s.key}</b>
-            <em>{fmt(s.value)}</em>
-          </span>
-        ))}
       </div>
     </div>
   )

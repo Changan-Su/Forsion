@@ -37,6 +37,7 @@ import { HOUR_PX_DEFAULT, useCalendarNav } from '../amadeus/store/calendarNavSto
 import { useAgentSchedules, useAgentCalDbs } from '../stores/agentScheduleStore'
 import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
+import { useMdCalDbs } from '../amadeus/store/mdMarkStore'
 import { useApp } from '../stores/appStore'
 import { EventCard, type Anchor } from './calendar/EventCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
@@ -105,7 +106,8 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
         start: toLocalDate(cd.start),
         end: cd.end ? toLocalDate(cd.end) : null,
         allDay: cd.allDay,
-        readonly: db.readonly,
+        // 可编辑投影(笔记 `@` 标记源)给了 writeCell → 允许拖拽/改期;删除仍由 db.readonly 关着。
+        readonly: db.readonly && !db.writeCell,
       })
     }
   })
@@ -139,6 +141,7 @@ export function CalendarView() {
   const agentDbs = useAgentCalDbs()
   const otherDbs = useOtherVaultCalDbs() // 非活动侧(Local↔Cloud 另一侧)只读日历,汇总两侧(任务1)
   const icsDbs = useIcsCalDbs() // 外部日历订阅(.ics):同为只读叠加源
+  const mdDbs = useMdCalDbs() // 笔记正文 `@2026-09-01T14:30` 标记(无勾选框的那些):同为只读叠加源
   const cfg = useApp((s) => s.cfg)
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const byVault = useCalendarConfig((s) => s.byVault)
@@ -172,9 +175,9 @@ export function CalendarView() {
   const entries = useMemo<CalEntry[]>(
     () => [
       ...members.map((m) => ({ db: m.db, dateCol: m.dateCol })),
-      ...[...agentDbs, ...otherDbs, ...icsDbs].map((db) => ({ db, dateCol: firstDateCol(db)?.id })).filter((x): x is CalEntry => !!x.dateCol),
+      ...[...agentDbs, ...otherDbs, ...icsDbs, ...mdDbs].map((db) => ({ db, dateCol: firstDateCol(db)?.id })).filter((x): x is CalEntry => !!x.dateCol),
     ],
-    [members, agentDbs, otherDbs, icsDbs],
+    [members, agentDbs, otherDbs, icsDbs, mdDbs],
   )
   const events = useMemo(() => buildEvents(entries, vault, byVault), [entries, vault, byVault])
   // 无名事件以「未命名」占位上网格(清空名字时事件块不许消失);编辑卡走 events 原值,输入框保持真实空值。

@@ -17,6 +17,8 @@ import { PageView } from './amadeus/components/PageView'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { DashboardCanvasView } from './views/DashboardCanvasView'
 import { DashboardGridView } from './views/DashboardGridView'
+import { AmadeusDbView } from './views/AmadeusDbView'
+import { DatabaseEmbed } from './amadeus/blocks/database/DatabaseEmbed'
 import { useDbStore } from '@amadeus/store/dbStore'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
 import { setTanguProbe } from '@amadeus/plugins/tanguSeam'
@@ -33,6 +35,7 @@ import { addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibb
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
+import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
 import type { ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
@@ -54,6 +57,7 @@ let nextId = 1
 
 // harness 调试/断言用:暴露 store,供 Playwright 注入任意 manifest(如两栏布局)验证块间方向键落点。
 ;(window as unknown as { __pageStore: typeof usePageStore }).__pageStore = usePageStore
+;(window as unknown as { __dbStore: typeof useDbStore }).__dbStore = useDbStore
 // 媒体嵌入仪器口:台架跑在普通 Chromium 里,没有 amadeus-asset:// 协议 —— 视频永远 load 不了,
 // 于是「起播落在 95 秒」这类断言只能量字符串。开这个口子让 check 脚本把资源 URL 换成一段真的
 // data: 媒体,`currentTime` 就能量出真值(量 currentTime 而不是量 src,是本仪器的全部意义)。
@@ -557,6 +561,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       onTabs: (cb: () => void): (() => void) =>
         useWorkspace.subscribe((s, prev) => { if (s.mainTabs !== prev.mainTabs) cb() }),
     },
+    /** 全库页面图标表(产品里由主进程索引灌进来;仪器直接摆值,见 scripts/tab-icon.check.cjs)。 */
+    setIcons: (icons: Record<string, string>): void => usePageStore.setState({ icons }),
   }
   ;(window as unknown as { __dock: typeof probe }).__dock = probe
   // 内容量必须真实:空 div 重排不要钱,量不出「展侧栏时主区卡一下」。主区喂长文(每段长度不同,
@@ -582,6 +588,11 @@ if (new URLSearchParams(location.search).has('dock')) {
   // stash/defaults 都空时必开 'sidebar-empty'(否则 toggle 成死键),没注册就当场抛「Only React.memo…」。
   // 底部面板默认就是空的,这条是它的必经之路。
   registerView({ type: 'sidebar-empty', displayName: 'empty', icon: Square, closable: false, factory: () => <Body tag="empty" rows={[]} /> })
+  // 笔记 tab 的图标替身(scripts/tab-icon.check.cjs):**真的** TabIcon 组件 + 真 WbTab 渲染路径,
+  // 只把「视图内容」换成占位。验的是「用户设的 emoji 上不上 tab、改了跟不跟」。
+  registerView({ type: 'notev', displayName: 'note', icon: Square, TabIcon: NoteTabIcon, factory: ({ params }) => (
+    <div className="notev" style={{ padding: 12 }}>{String(params.notePath ?? '')}</div>
+  ) })
   // 导航史用的「页面」替身:参数 label 即当前页,后退/前进改的就是它(断言直接读 DOM,不信 store 自证)。
   registerView({ type: 'navv', displayName: 'nav', icon: Square, factory: ({ params }) => (
     <div className="navv" data-label={String(params.label ?? '')} style={{ padding: 12 }}>{String(params.label ?? '')}</div>
@@ -731,7 +742,14 @@ if (new URLSearchParams(location.search).has('dock')) {
 } else if (new URLSearchParams(location.search).has('dashdata')) {
   const iso = new Date().toISOString()
   const DB = '台账.db'
-  const dataIds = ['1', '2', '3']
+  // 真 amadeus-db 视图:图表升格为 db 视图类型后,数据面的正路是「db 卡 + 卡内 chart 视图」,
+  // 台架必须用生产视图活化(仪器 G20 系:视图体 / 页面级筛选跟随 / 切视图写回围栏 / 快捷加卡)。
+  registerView({
+    type: 'amadeus-db', kind: 'entity', embeddable: true, idParam: 'dbPath', fileMatch: VIEW_FILE_MATCH['amadeus-db'],
+    displayName: '多维表', icon: Square, factory: (p) => <AmadeusDbView {...p} />,
+    dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
+  })
+  const dataIds = ['1', '2', '3', '4']
   usePageStore.setState({
     activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE], files: [DB],
     manifest: {
@@ -739,12 +757,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       compiler: { version: 'harness' },
       root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: dataIds.map((ref) => ({ ref })) }] }] },
       blocks: Object.fromEntries(dataIds.map((id) => [id, { type: 'markdown' }])),
-      fmExtra: ['dashboard3:', '  "1": [0, 3, 2]', '  "2": [1, 3, 2]', '  "3": [2, 6, 3]'].join('\n'),
+      fmExtra: ['dashboard3:', '  "1": [0, 3, 2]', '  "2": [1, 3, 2]', '  "3": [2, 6, 3]', '  "4": [3, 6, 5]'].join('\n'),
     },
     blocks: {
       1: { id: '1', type: 'markdown', content: '```stat\nsource: 台账.db\nlabel: 总行数\n```' },
       2: { id: '2', type: 'markdown', content: '```stat\nsource: 台账.db\ncol: 金额\nstat: sum\nlabel: 金额合计\n```' },
       3: { id: '3', type: 'markdown', content: '```chart\nsource: 台账.db\ngroup: 状态\nkind: bar\n```' },
+      4: { id: '4', type: 'markdown', content: '```view\ntype: amadeus-db\ndbPath: 台账.db\nview: 图表\n```' },
     },
   })
   useDbStore.setState({
@@ -763,11 +782,76 @@ if (new URLSearchParams(location.search).has('dock')) {
             { id: 'r3', cells: { c1: '已完成', c2: 50 } },
             { id: 'r4', cells: { c1: '已完成', c2: null } },
           ],
+          views: [
+            { id: 'v1', name: '表格', type: 'table' },
+            { id: 'v2', name: '图表', type: 'chart', groupBy: 'c1' },
+          ],
         },
       },
     },
   })
   createRoot(document.getElementById('root')!).render(<DashGridHarness />)
+} else if (new URLSearchParams(location.search).has('dbdemo')) {
+  // ?dbdemo:裸挂 DatabaseEmbed,种一张用满 2.8 新面(公式/关联表/引用/附件/表格分组/多列排序)的表
+  // + 一张被关联的目标表。观感自查与 db 新特性仪器的底座(&dark 走暗色)。
+  const dark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  // 台架没有 amadeus-asset:// 协议:附件缩略图一律回一张 2x2 PNG,让 <img> 真的能画出来。
+  setAssetUrlBuilder(() =>
+    `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="#c86458"/><circle cx="56" cy="18" r="10" fill="#f2d16b"/></svg>')}`)
+  usePageStore.setState({ vaultRoot: '/harness', status: 'ready', pages: [], files: ['任务.db', '项目.db'] })
+  useDbStore.setState({
+    entries: {
+      '项目.db': {
+        status: 'ok', path: '项目.db',
+        data: {
+          version: 1, name: '项目',
+          columns: [
+            { id: 'pn', name: '名称', type: 'text' },
+            { id: 'st', name: '状态', type: 'select', options: ['进行中', '已完成'] },
+            { id: 'bu', name: '预算', type: 'number' },
+          ],
+          rows: [
+            { id: 'p1', cells: { pn: '网站改版', st: '进行中', bu: 12000 } },
+            { id: 'p2', cells: { pn: '内部工具', st: '已完成', bu: 3000 } },
+          ],
+        },
+      },
+      '任务.db': {
+        status: 'ok', path: '任务.db',
+        data: {
+          version: 1, name: '任务',
+          columns: [
+            { id: 'c1', name: '任务', type: 'text' },
+            { id: 'c2', name: '状态', type: 'select', options: ['待办', '进行中', '完成'] },
+            { id: 'c3', name: '工时', type: 'number' },
+            { id: 'c4', name: '单价', type: 'number' },
+            { id: 'f1', name: '小计', type: 'formula', formula: '{工时}*{单价}' },
+            { id: 'r1', name: '项目', type: 'rowlink', refDb: '项目.db' },
+            { id: 'k1', name: '项目状态', type: 'lookup', lookupRel: 'r1', lookupCol: 'st' },
+            { id: 'a1', name: '附件', type: 'file' },
+          ],
+          rows: [
+            { id: 't1', cells: { c1: '首页视觉稿', c2: '进行中', c3: 8, c4: 200, r1: 'p1', a1: 'img/首页.png' } },
+            { id: 't2', cells: { c1: '接口联调', c2: '待办', c3: 5, c4: 300, r1: 'p1' } },
+            { id: 't3', cells: { c1: '数据迁移脚本', c2: '完成', c3: 3, c4: 300, r1: 'p2', a1: 'doc/迁移说明.pdf' } },
+            { id: 't4', cells: { c1: '周报整理', c2: '待办', c3: 1, c4: 100 } },
+            { id: 't5', cells: { c1: '发布检查单', c2: '进行中', c3: 2, c4: 150, r1: 'p2', a1: 'img/清单.png' } },
+          ],
+          views: [
+            { id: 'v1', name: '表格', type: 'table', groupBy: 'c2', sorts: [{ colId: 'f1', dir: 'desc' }, { colId: 'c1', dir: 'asc' }], sort: { colId: 'f1', dir: 'desc' } },
+            { id: 'v2', name: '画廊', type: 'gallery' },
+            { id: 'v3', name: '筛选', type: 'table', filterMode: 'or', filters: [{ colId: 'c2', op: 'eq', value: '进行中' }, { colId: 'c3', op: 'gt', value: 4 }] },
+          ],
+        },
+      },
+    },
+  })
+  createRoot(document.getElementById('root')!).render(
+    <div className="amadeus-root am-app tangu-lovable" data-mode={dark ? 'dark' : 'light'} style={{ position: 'fixed', inset: 0, overflow: 'auto', padding: 24, background: 'var(--bg)' }}>
+      <DatabaseEmbed target="任务.db" pagePath="demo.md" />
+    </div>,
+  )
 } else if (new URLSearchParams(location.search).has('dashgrid')) {
   const iso = new Date().toISOString()
   registerView({
@@ -791,7 +875,9 @@ if (new URLSearchParams(location.search).has('dock')) {
       compiler: { version: 'harness' },
       root: { type: 'stack', children: [{ type: 'row', id: 'r1', columns: [{ id: 'c1', width: 1, children: gridIds.map((ref) => ({ ref })) }] }] },
       blocks: Object.fromEntries(gridIds.map((id) => [id, { type: 'markdown' }])),
-      // 刻意把文本写成旧的小尺寸，把完整 view 与 clock 相邻：新契约必须自动约束，而不是拉成等高空盒。
+      // 刻意混三种来源:clock 停在默认档(sm,从没动过 → DP 可自动拼行换挡)、text 是「手调过的
+      // 旧小尺寸」(3×2 ≠ text 默认 wide → 尺寸是铁的,只被夹到每轴下界 4×3)、view 手调到 lg。
+      // 钉「手调=硬值 / 未动=可弹」的分界(2026-08-31 打回后收窄)。
       fmExtra: [
         'tags: [harness]', 'dashboard3:',
         '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
@@ -1111,6 +1197,16 @@ if (new URLSearchParams(location.search).has('dock')) {
           ? { owner: 'Embedded.md', content: EMBED_MD, type: 'markdown' }
           : null,
       ),
+    // 多维表嵌入(`![[x.db]]`)也要能在本模式里活起来:dbStore 走的是专用面 readDatabase,
+    // 不是 readTextFile —— 同一个内存 vault 顶替(JSON 存在 vault 里)。见 scripts/db-embed-keys.check.cjs。
+    readDatabase: (_page: string, ref: string) => {
+      const raw = vault.get(ref)
+      return Promise.resolve(raw ? { status: 'ok', path: ref, data: JSON.parse(raw) } : { status: 'missing' })
+    },
+    writeDatabase: (p: string, data: unknown) => {
+      vault.set(p, JSON.stringify(data))
+      return Promise.resolve()
+    },
     renamePageFile: (p: string, next: string) => {
       const dir = p.split('/').slice(0, -1).join('/')
       const np = (dir ? dir + '/' : '') + next + '.md'

@@ -37,6 +37,23 @@ describe('resolveDbTable', () => {
     const desc = resolveDbTable(db({ views: [{ id: 'v', name: 'V', type: 'table', sort: { colId: 'c2', dir: 'desc' } }] }))
     expect(desc.rows.map((r) => r.id)).toEqual(['r2', 'r1']) // 5, 2
   })
+  it('honors multi-column sorts and sorts formula columns numerically', () => {
+    const d = db({
+      columns: [
+        { id: 'c1', name: '名称', type: 'text' },
+        { id: 'c2', name: '数量', type: 'number' },
+        { id: 'f1', name: '倍数', type: 'formula', formula: '{数量}*2' },
+      ],
+      rows: [
+        { id: 'r1', cells: { c1: 'x', c2: 5 } },
+        { id: 'r2', cells: { c1: 'x', c2: 2 } },
+        { id: 'r3', cells: { c1: 'x', c2: 10 } },
+      ],
+      views: [{ id: 'v', name: 'V', type: 'table', sorts: [{ colId: 'c1', dir: 'asc' }, { colId: 'f1', dir: 'asc' }] }],
+    })
+    // 公式列物化后按数值排:4 < 10 < 20(字典序会把 10 排到 4 前面)
+    expect(resolveDbTable(d).rows.map((r) => r.cells.f1)).toEqual([4, 10, 20])
+  })
   it('note-view db (source) yields columns but no rows', () => {
     const t = resolveDbTable(db({ source: { folder: 'People' }, rows: [] }))
     expect(t.noteView).toBe(true)

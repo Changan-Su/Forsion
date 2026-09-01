@@ -160,10 +160,46 @@ export const groupLabel = (v: CellValue | undefined): string => {
   return String(v)
 }
 
+/** 视图字段的宽容归一:未知聚合回退 count、未知图形回退 bar(前向兼容,不丢配置不冻结)。 */
+export const chartAggOf = (s: string | undefined): ChartAgg =>
+  (CHART_AGGS as readonly string[]).includes((s ?? '').trim()) ? ((s as string).trim() as ChartAgg) : 'count'
+export const chartKindOf = (s: string | undefined): ChartKind =>
+  (CHART_KINDS as readonly string[]).includes((s ?? '').trim()) ? ((s as string).trim() as ChartKind) : 'bar'
+
 /**
- * 图表卡的数据。同样**先过页面级筛选**。
- * 分组按值降序;超过 CHART_MAX_GROUPS 的尾巴并成「其他」(不是截断丢掉 —— 悄悄丢数据比难看更糟)。
+ * 分组聚合的唯一实现(按列 **id**)。围栏图表卡与多维表的 chart 视图都走这里 ——
+ * 同一份数据不能有两个数。分组按值降序;超过 CHART_MAX_GROUPS 的尾巴并成「其他」
+ * (不是截断丢掉 —— 悄悄丢数据比难看更糟)。
  */
+export function computeChartSlices(rows: DbRow[], groupColId: string, valueColId: string | null, agg: ChartAgg): Slice[] {
+  const counting = agg === 'count' || !valueColId
+  const buckets = new Map<string, { sum: number; n: number }>()
+  for (const r of rows) {
+    const key = groupLabel(r.cells[groupColId])
+    const b = buckets.get(key) ?? { sum: 0, n: 0 }
+    if (counting) b.n += 1
+    else {
+      const n = numOf(r.cells[valueColId])
+      if (n === null) continue // 非数值不参与求和/平均(计数已在上面算过)
+      b.sum += n
+      b.n += 1
+    }
+    buckets.set(key, b)
+  }
+
+  const all: Slice[] = [...buckets].map(([key, b]) => ({
+    key,
+    value: counting ? b.n : agg === 'sum' ? b.sum : b.n ? b.sum / b.n : 0,
+  }))
+  all.sort((a, b) => b.value - a.value || a.key.localeCompare(b.key))
+  if (all.length <= CHART_MAX_GROUPS) return all
+  const head = all.slice(0, CHART_MAX_GROUPS - 1)
+  const tail = all.slice(CHART_MAX_GROUPS - 1)
+  head.push({ key: `其他(${tail.length})`, value: tail.reduce((a, s) => a + s.value, 0) })
+  return head
+}
+
+/** 图表卡(围栏,列按**名字**)的数据。同样**先过页面级筛选**,再交给 computeChartSlices。 */
 export function computeChartCard(
   rows: DbRow[],
   columns: DbColumn[],
@@ -177,30 +213,7 @@ export function computeChartCard(
   if (spec.agg !== 'count' && !valueCol) return { slices: [], error: `找不到列「${spec.value}」` }
 
   const scoped = applyFilters(rows, resolveDashFilters(dashFilters, columns), kindOf)
-  const buckets = new Map<string, { sum: number; n: number }>()
-  for (const r of scoped) {
-    const key = groupLabel(r.cells[groupCol.id])
-    const b = buckets.get(key) ?? { sum: 0, n: 0 }
-    if (spec.agg === 'count') b.n += 1
-    else {
-      const n = numOf(r.cells[valueCol!.id])
-      if (n === null) continue // 非数值不参与求和/平均(计数已在上面算过)
-      b.sum += n
-      b.n += 1
-    }
-    buckets.set(key, b)
-  }
-
-  const all: Slice[] = [...buckets].map(([key, b]) => ({
-    key,
-    value: spec.agg === 'count' ? b.n : spec.agg === 'sum' ? b.sum : b.n ? b.sum / b.n : 0,
-  }))
-  all.sort((a, b) => b.value - a.value || a.key.localeCompare(b.key))
-  if (all.length <= CHART_MAX_GROUPS) return { slices: all }
-  const head = all.slice(0, CHART_MAX_GROUPS - 1)
-  const tail = all.slice(CHART_MAX_GROUPS - 1)
-  head.push({ key: `其他(${tail.length})`, value: tail.reduce((a, s) => a + s.value, 0) })
-  return { slices: head }
+  return { slices: computeChartSlices(scoped, groupCol.id, valueCol?.id ?? null, spec.agg) }
 }
 
 // ─────────────────── 页面级筛选的 frontmatter 读写 ───────────────────

@@ -1,7 +1,7 @@
 // The IPC contract shared by main (handlers), preload (bridge), and renderer (consumer).
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
-import type { MdTask } from './mdTasks'
+import type { MdMark } from './mdMarks'
 
 export const IPC = {
   openVault: 'vault:open',
@@ -27,7 +27,8 @@ export const IPC = {
   exclusiveAssets: 'vault:exclusive-assets',
   reindex: 'vault:reindex',
   listTags: 'vault:tags',
-  listTasks: 'vault:tasks',
+  listMarks: 'vault:marks',
+  patchMark: 'vault:patch-mark',
   pagesByTag: 'vault:tag-pages',
   deletePage: 'page:delete',
   movePage: 'page:move',
@@ -436,8 +437,11 @@ export interface AmadeusApi {
   /** All tags in the vault with their note counts. */
   listTags(): Promise<TagCount[]>
 
-  /** 全库正文里的 GFM 任务项(只读投影;主进程索引已持有全文,随 watcher 增量)。 */
-  listTasks?(): Promise<MdTask[]>
+  /** 全库正文里带 `@` 时间标记的行(只读投影;主进程索引已持有全文,随 watcher 增量)。 */
+  listMarks?(): Promise<MdMark[]>
+  /** 按内容定位改写标记行(`raw`+`occ` 见 mdMarks.findMarkLine);找不到 = false,**绝不模糊匹配**。
+   *  成功后主进程更索引并广播 externalChange,打开着的编辑器由既有回灌机制接住。 */
+  patchMark?(pagePath: string, raw: string, occ: number, next: string): Promise<boolean>
   /** Page paths that carry the given tag. */
   pagesByTag(tag: string): Promise<string[]>
   /** Delete a page and all its sidecar files. */

@@ -118,4 +118,27 @@ describe('db schema', () => {
     const bad = { ...SAMPLE, views: [{ id: '', name: 'x', type: 'table' }] }
     expect(parseDb(JSON.stringify(bad)).ok).toBe(false)
   })
+
+  it('公式/关联表/引用列配置与 filterMode/sorts 往返无损(2.8 新字段)', () => {
+    const db: DbFile = {
+      ...SAMPLE,
+      columns: [
+        ...SAMPLE.columns,
+        { id: 'f1', name: '小计', type: 'formula', formula: '{单价}*{数量}' },
+        { id: 'l1', name: '项目', type: 'rowlink', refDb: '项目.db' },
+        { id: 'k1', name: '项目状态', type: 'lookup', lookupRel: 'l1', lookupCol: 'st', lookupAgg: 'join' },
+      ],
+      views: [
+        {
+          id: 'v1', name: '表格', type: 'table',
+          filters: [{ colId: 'c1', op: 'notempty' }], filterMode: 'or',
+          sort: { colId: 'c1', dir: 'asc' },
+          sorts: [{ colId: 'c1', dir: 'asc' }, { colId: 'f1', dir: 'desc' }],
+        },
+      ],
+    }
+    const r = parseDb(serializeDb(db))
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.data).toEqual(db)
+  })
 })

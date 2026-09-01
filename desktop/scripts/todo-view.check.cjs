@@ -1,15 +1,14 @@
 /**
  * 待办视图端到端契约(真 Electron,隔离 vault,不碰用户数据)。
  *
- * 钉的是 2026-08-29 那轮改造的判据 —— 它们全都**不是**几何断言能覆盖的:
- *  1 ⚠️**笔记正文 `- [ ]` 必须出现在待办栏**。这是整轮改造的验收判据:改造前生产库里
- *    一个合格日历成员库都没有(4 张 .db 全无日期列),待办栏渲染的是空态引导文案,
- *    而用户真实的 89 条待办躺在两篇笔记正文里,系统完全看不见。
- *  2 未排期桶按「笔记 › 标题」二级分组 —— 正文任务天然全部无日期,时间语义桶对它们
- *    不组织任何东西,来源笔记是唯一可用的维度。
+ * 钉的是 2026-08-29 那轮改造 + 2026-08-31 `@` 标记闸门的判据 —— 全都**不是**几何断言能覆盖的:
+ *  1 ⚠️**带 `@` 标记的笔记正文 `- [ ]` 必须出现在待办栏**,并按标记的日期落桶。
+ *  2 ⚠️**没有 `@` 标记的 `- [ ]` 一条都不许进**(2026-08-31 用户实报「只要有勾选框就识别进去」
+ *    的误报,`@` 是显式闸门);**没有勾选框的 `@` 行也不进待办**(那是日程,归日历)。
+ *  15 那条同轮验收:日程行必须真的出现在日历网格上。
  *  3 ⚠️**空桶不渲染**。没有明天到期的东西就不该有「明天」段头。
  *  4 桶序硬编码:逾期段的 DOM 位置必须在今天段之前(单测钉 ORDER 数组,这里钉真实渲染)。
- *  5 围栏代码块里的 `- [ ]` 不算任务(解析口径,与 shared/amadeus/mdTasks.test.ts 互锁)。
+ *  5 围栏代码块里的 `- [ ]` 不算任务(解析口径,与 shared/amadeus/mdMarks.test.ts 互锁)。
  *  6 已完成收进底部默认折叠的段,不是消失。
  *  7 快速添加:回车即落进「今天」桶(写路径 = createAggEvent,目标库须可写)。
  *  8 点正文任务 = 打开那篇笔记(**不在这里回写正文**,勾在编辑器里勾)。
@@ -33,6 +32,8 @@ const check = (name, ok, detail = '') => {
 const pad = (n) => String(n).padStart(2, '0')
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)
+/** n 分钟前的 calDate 串(用来种一条「该响了」的提醒)。 */
+const hmAgo = (n) => { const t = new Date(Date.now() - n * 60_000); return `${ymd(t)}T${pad(t.getHours())}:${pad(t.getMinutes())}` }
 
 async function clickSpace(win, names) {
   const clicked = await win.evaluate((labels) => {
@@ -83,22 +84,25 @@ async function main() {
     ],
   }, null, 2)}\n`)
 
-  // 笔记正文任务:两个标题各带任务,外加一条围栏代码块里的假任务 + 一条已完成。
+  // 笔记正文:带 `@` 标记的任务(落各自的桶)+ 三条负对照(裸勾选框 / 无勾选框的日程行 / 代码块)。
   fs.writeFileSync(path.join(vault, '开发计划.md'), [
     '# 开发计划',
     '',
     '## 平台与产品',
     '',
-    '* [ ] 考虑微信小程序',
-    '* [ ] 给 Tangu 增加命令输入',
-    '* [x] 已经发布的东西',
+    `* [ ] 考虑微信小程序 @${dm1}`,
+    `* [ ] 给 Tangu 增加命令输入 @${d0}`,
+    `* [x] 已经发布的东西 @${d0}`,
+    '* [ ] 没打标记的勾选框',
     '',
     '## 模型与体验',
     '',
-    '- [ ] 给流式输出增加渐隐效果',
+    `- [ ] 给流式输出增加渐隐效果 @${d0}`,
+    `- 产品评审会 @${d0}T11:00/${d0}T12:00`,
+    `* [ ] 吃药 @remind:${hmAgo(2)}`,
     '',
     '```md',
-    '- [ ] 代码块里的假任务',
+    `- [ ] 代码块里的假任务 @${d0}`,
     '```',
     '',
   ].join('\n'))
@@ -135,10 +139,59 @@ async function main() {
     const shown = await names(win)
     const secs = await sections(win)
 
-    check('1 笔记正文的 `- [ ]` 出现在待办栏', shown.includes('考虑微信小程序') && shown.includes('给流式输出增加渐隐效果'), JSON.stringify(shown))
+    check('1 带 @ 标记的正文 `- [ ]` 出现在待办栏', shown.includes('考虑微信小程序') && shown.includes('给流式输出增加渐隐效果'), JSON.stringify(shown))
 
-    const srcs = await win.evaluate(() => [...document.querySelectorAll('.amx-todo-reveal.is-open .amx-todo-src')].map((e) => e.firstChild?.textContent?.trim() ?? ''))
-    check('2 未排期桶按「笔记 › 标题」二级分组', srcs.includes('开发计划 › 平台与产品') && srcs.includes('开发计划 › 模型与体验'), JSON.stringify(srcs))
+    // 标记文本本身不许留在待办名里(解析器摘干净了才对)。
+    check('1b 待办名里不含 `@` 标记原文', shown.every((n) => !n.includes('@')), JSON.stringify(shown))
+
+    // ⚠️ 本轮核心验收:两条负对照。任一变绿都说明闸门没生效。
+    check('2 没有 @ 标记的 `- [ ]` 不进待办', !shown.includes('没打标记的勾选框'), JSON.stringify(shown))
+    check('2b 没有勾选框的 @ 行不进待办(它是日程)', !shown.includes('产品评审会'), JSON.stringify(shown))
+
+    // 按 @ 的日期落桶:昨天的进逾期、今天的进今天。
+    const bucketOfName = (name) => win.evaluate((n) => {
+      const g = [...document.querySelectorAll('.amx-todo-group')]
+        .find((x) => [...x.querySelectorAll('.amx-todo-name')].some((e) => e.textContent.trim() === n))
+      return g?.querySelector('.amx-todo-gname')?.textContent?.trim() ?? ''
+    }, name)
+    const bOverdue = await bucketOfName('考虑微信小程序')
+    const bToday = await bucketOfName('给 Tangu 增加命令输入')
+    check('2c 正文待办按 @ 的日期落桶(昨天→逾期、今天→今天)', bOverdue === '逾期' && bToday === '今天', `${bOverdue}/${bToday}`)
+
+    // 15 无勾选框的 `@` 行 = 日程:必须出现在日历网格上(mdCalDbs 合成只读源)。
+    // ⚠️ 必须在浅色这一趟量:后面那趟 reload 之后主区还在重挂,量到的是空数组(假红)。
+    const evTitles = await win.evaluate(() => [...document.querySelectorAll('.amx-cal-event-title')].map((e) => e.textContent.trim()))
+    check('15 无勾选框的 @ 行出现在日历网格上', evTitles.includes('产品评审会'), JSON.stringify(evTitles.slice(0, 8)))
+
+    // 16 `@remind:` 到点真的弹出通知卡(整条链:装配 → listMarks → pendingReminders → notifyApp)。
+    //    ⚠️ 必须在浅色这一趟量:①后面那趟 reload 会清掉内存里的卡;②已弹记录落 localStorage,
+    //       reload 后同一条被去重压掉 —— 在那边量是**必然假红**。
+    const ntf = await win.evaluate(() => ({
+      cards: [...document.querySelectorAll('.ntf')].map((e) => e.textContent.trim()),
+      more: document.querySelector('.ntf-more')?.textContent ?? '',
+    }))
+    check('16 `@remind:` 到点弹出通知卡', ntf.cards.some((t) => t.includes('吃药')), JSON.stringify(ntf))
+
+    // 19 日历侧可编辑投影。⚠️ 必须在 8「点待办打开笔记」**之前**跑:那一步把主区换成笔记 tab,
+    //    日历网格就不在 DOM 里了(实测踩过,`.amx-cal-event` 等 30s 超时)。
+    // 19 日历侧可编辑投影:点开笔记事件的卡片 → 有「打开笔记」且时间可改 → 改期回写 `@` 串。
+    // ⚠️ 必须真鼠标点:合成 MouseEvent(clientX/Y=0)进不了拖拽层的落点判定,卡片不会开(实测)。
+    await win.locator('.amx-cal-event', { hasText: '产品评审会' }).first().click()
+    await win.waitForTimeout(700)
+    const cardFoot = await win.evaluate(() => document.querySelector('.amx-cal-card-open')?.textContent?.trim() ?? '')
+    check('19 笔记事件的卡片指向「打开笔记」而不是假的数据库路径', cardFoot.includes('打开笔记'), JSON.stringify(cardFoot))
+    const timeBtn = win.locator('.amx-cal-card-timebtn')
+    if (await timeBtn.count()) await timeBtn.first().click()
+    await win.waitForTimeout(300)
+    const dateIn = win.locator('.amx-cal-card-timeedit input[type="date"]').first()
+    const editable = await dateIn.count()
+    const d1 = ymd(addDays(today, 3))
+    if (editable) { await dateIn.fill(d1); await win.waitForTimeout(2200) }
+    const afterCal = fs.readFileSync(path.join(vault, '开发计划.md'), 'utf8')
+    check('19b 日历上改期 → 笔记里那个 `@` 串被回写', editable > 0 && afterCal.includes(`产品评审会 @${d1}T11:00`),
+      JSON.stringify(afterCal.split('\n').find((l) => l.includes('产品评审会'))))
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(300)
 
     check('3 空桶不渲染(没有明天到期的东西 → 没有「明天」段)', !secs.includes('明天') && secs.includes('逾期') && secs.includes('今天'), JSON.stringify(secs))
     check('4 桶序硬编码:逾期段在今天段之前', secs.indexOf('逾期') >= 0 && secs.indexOf('逾期') < secs.indexOf('今天'), JSON.stringify(secs))
@@ -199,7 +252,7 @@ async function main() {
     })
     check('7 快速添加回车即落进「今天」桶', after.includes('临时加一条') && todayNames.includes('临时加一条'), JSON.stringify(todayNames))
 
-    // 8 点正文任务 = 打开那篇笔记(不回写正文)。
+    // 8 点正文任务的**名字** = 只打开那篇笔记,一个字节都不写(写盘只发生在勾选框上,见 17)。
     const before = fs.readFileSync(path.join(vault, '开发计划.md'), 'utf8')
     await win.locator('.amx-todo-name', { hasText: '考虑微信小程序' }).first().click()
     await win.waitForTimeout(2200)
@@ -207,18 +260,48 @@ async function main() {
     const afterText = fs.readFileSync(path.join(vault, '开发计划.md'), 'utf8')
     check('8 点正文任务打开那篇笔记,且一个字节都没往正文里写', opened.includes('开发计划') && afterText === before, opened.slice(0, 120))
 
-    // 两种勾选框(多维表行走 astryx CheckboxInput,正文任务是自绘方框)几何必须对得上,
-    // 否则同一列表里两类行的左边距会错开 —— 截图一眼看得出,几何断言才说得清差多少。
-    const boxes = await win.evaluate(() => {
-      const cb = document.querySelector('.amx-todo-item input[type="checkbox"]')
-      const el = cb ? (cb.offsetWidth ? cb : cb.parentElement) : null
-      const own = document.querySelector('.amx-todo-box')
-      const r = (e) => (e ? e.getBoundingClientRect() : null)
-      const a = r(el)
-      const b = r(own)
-      return a && b ? { aw: Math.round(a.width), bw: Math.round(b.width), dx: Math.round(Math.abs(a.left - b.left)) } : null
+    // 17 ⚠️ 本轮核心:待办列表里**就地勾** → 按内容回写笔记那一行(`- [ ]`→`- [x]`)。
+    //    此刻「开发计划」已被 8 打开在编辑器里 —— 顺带把「主进程写盘 → externalChange 回灌」那一段也走到。
+    const planPath = path.join(vault, '开发计划.md')
+    await win.evaluate(() => {
+      const li = [...document.querySelectorAll('.amx-todo-item')]
+        .find((e) => e.querySelector('.amx-todo-name')?.textContent?.trim() === '考虑微信小程序')
+      li?.querySelector('input[type="checkbox"]')?.click()
     })
-    check('11 两种勾选框宽度与左缘对齐(差 ≤2px)', boxes && Math.abs(boxes.aw - boxes.bw) <= 2 && boxes.dx <= 2, JSON.stringify(boxes))
+    await win.waitForTimeout(2000) // 覆盖 400ms 防抖 + IPC 往返 + 重拉
+    const patched = fs.readFileSync(planPath, 'utf8')
+    // ⚠️ 不比行数:这篇此刻正开在 v4 编辑器里,回灌之后它自己那发保存会把散装 .md 转成 unified 结构
+    //    (加 frontmatter 与块注释)。那是编辑器本来的生命周期,不是本轮的写入 —— 要钉的是
+    //    「那一行被改成 [x]、别的行一字不丢」。
+    const keep = ['给 Tangu 增加命令输入', '给流式输出增加渐隐效果', '没打标记的勾选框', '产品评审会', '吃药']
+    check('17 待办就地勾 → 笔记那一行被改写成 `- [x]`',
+      /\[x\] 考虑微信小程序 @/.test(patched),
+      `line=${JSON.stringify(patched.split('\n').find((l) => l.includes('考虑微信小程序')))}`)
+    check('17b 只改了那一行:同篇别的行一字不丢、别的任务仍未勾',
+      keep.every((k) => patched.includes(k)) && /\[ \] 给 Tangu 增加命令输入 @/.test(patched),
+      JSON.stringify(keep.filter((k) => !patched.includes(k))))
+
+    // 18 负对照:raw 对不上(行已被改)→ patchMark 返回 false,**绝不模糊匹配**、一个字节不写。
+    const beforeNc = fs.readFileSync(planPath, 'utf8')
+    const bad = await win.evaluate(() => window.amadeus.patchMark('开发计划.md', '- [ ] 这一行不存在 @2026-01-01', 0, '被改坏了'))
+    check('18 负对照:raw 对不上时 patchMark=false 且文件一个字节不变',
+      bad === false && fs.readFileSync(planPath, 'utf8') === beforeNc, `ret=${bad}`)
+
+
+
+    // 多维表行与正文任务行现在都是 astryx CheckboxInput(2026-09-01 就地勾之后不再有自绘方框),
+    // 但两类行仍出自不同分支 —— 左缘/宽度错开一眼看得出,几何断言才说得清差多少。
+    const boxes = await win.evaluate(() => {
+      const els = [...document.querySelectorAll('.amx-todo-reveal.is-open .amx-todo-item input[type="checkbox"]')]
+        .map((cb) => (cb.offsetWidth ? cb : cb.parentElement))
+        .filter(Boolean)
+        .map((e) => e.getBoundingClientRect())
+      if (els.length < 2) return null
+      const lefts = els.map((r) => Math.round(r.left))
+      const widths = els.map((r) => Math.round(r.width))
+      return { n: els.length, dx: Math.max(...lefts) - Math.min(...lefts), dw: Math.max(...widths) - Math.min(...widths) }
+    })
+    check('11 全部勾选框(表行 + 正文任务)宽度与左缘对齐(差 ≤2px)', boxes && boxes.dx <= 2 && boxes.dw <= 2, JSON.stringify(boxes))
 
     await win.screenshot({ path: path.join(OUT, 'todo-view-light.png') })
     // ⚠️ 暗色必须**重载**切,不能只改 localStorage + DOM 属性。

@@ -1,8 +1,9 @@
 /** ToDo List View —— 全库待办的统一投影。
  *
  *  两个来源合流:①「日历成员多维表」里带勾选列的行(可原地勾、点开旁弹卡编辑);
- *  ② 笔记正文里的 GFM 任务 `- [ ]`(只读投影 —— 点一行打开该笔记并定位到它所在的标题,
- *  在编辑器里勾。**刻意不在这里回写正文**:那要走渲染层安全保存 + 三级定位防线,另立一轮)。
+ *  ② 笔记正文里**带 `@` 时间标记**的勾选框行 `- [ ] 交周报 @2026-09-01`。**可就地勾** ——
+ *  按内容(raw + 同文行序号)回写笔记里那一行,真源始终只有 markdown 一份;点行名仍是打开笔记。
+ *  宿主没有 `patchMark` 接缝时(web / mobile 壳)自动退回「只读方框 + 跳转」。
  *
  *  分桶(逾期/今天/明天/本周/以后/未排期)判据与桶序单源 `calendar/todoGroups.ts`,**空桶不渲染**。
  *  已完成收进底部一个默认折叠的段(提醒事项的 Show Completed 语义)—— 取代了旧的「隐藏已完成」开关,
@@ -15,8 +16,10 @@ import { ChevronRight, ExternalLink, Plus } from 'lucide-react'
 import { AstryxScope } from '../theme/astryxBridge'
 import { createAggEvent, setAggCell } from '../amadeus/store/dbAggregateStore'
 import { useCalendarMembers, type CalMemberDb } from '../amadeus/store/calendarMembers'
-import { useMdTasks } from '../amadeus/store/mdTaskStore'
+import { patchMark, useMdMarks } from '../amadeus/store/mdMarkStore'
+import type { MdMark } from '@amadeus-shared/mdMarks'
 import { openNoteAtHeading } from '../amadeusNav'
+import { amadeus } from '../amadeus/api'
 import { fmtStamp, startOfDay } from './calendar/dateUtils'
 import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
 import { todoDueMeta } from './calendar/todoMeta'
@@ -54,12 +57,14 @@ interface Row {
   rowId?: string
   /** 正文任务的落点 */
   note?: { path: string; heading: string }
+  /** 正文任务的原始标记(就地勾选时按内容回写那一行) */
+  mark?: MdMark
 }
 
 export function TodoListView({ params }: { params?: Record<string, unknown> } = {}) {
   const opts = readTodoParams(params)
   const members = useCalendarMembers()
-  const mdTasks = useMdTasks()
+  const mdMarks = useMdMarks()
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set([...COLLAPSED_BY_DEFAULT, DONE_KEY]))
   const [card, setCard] = useState<{ dbPath: string; rowId: string; at: Anchor } | null>(null)
@@ -84,12 +89,13 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
     }
     // 正文任务只在「全部来源」或显式指定单库之外露出:限定了某个 .db 就只看那张表。
     if (opts.src !== 'db' && !opts.db) {
-      for (const t of mdTasks) {
-        out.push({ key: `md:${t.path}:${t.line}`, name: t.text, checked: t.checked, raw: '', source: t.heading ? `${t.title} › ${t.heading}` : t.title, note: { path: t.path, heading: t.heading } })
+      // 只收带勾选框的标记行:没勾选框的 `@` 行是日程,归日历(useMdCalDbs)。
+      for (const t of mdMarks.filter((m) => m.isTask)) {
+        out.push({ key: `md:${t.path}:${t.line}`, name: t.text, checked: t.checked, raw: t.due, source: t.heading ? `${t.title} › ${t.heading}` : t.title, note: { path: t.path, heading: t.heading }, mark: t })
       }
     }
     return out
-  }, [sources, mdTasks, opts.src, opts.db])
+  }, [sources, mdMarks, opts.src, opts.db])
 
   const done = useMemo(() => rows.filter((r) => r.checked), [rows])
   const buckets = useMemo(() => {
@@ -146,6 +152,9 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
     setCard({ dbPath: r.db.db.path, rowId: r.rowId, at: { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom, zoom: zoomOf(e.currentTarget) || 1 } })
   }
 
+  // 宿主有没有「按内容改写笔记某一行」这条缝(桌面有;web/mobile 壳没有 → 退回跳转)。
+  const canPatch = !!amadeus?.patchMark
+
   const renderRow = (r: Row): ReactNode => {
     const due = todoDueMeta(r.raw, today)
     return (
@@ -158,12 +167,21 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
             value={r.checked}
             onChange={(next) => setAggCell(r.db!.db, r.rowId!, r.db!.checkboxCol as string, next ? true : undefined)}
           />
+        ) : r.mark && canPatch ? (
+          // 正文任务**就地勾**:按内容回写笔记里那一行(`- [ ]`→`- [x]`),真源仍只有 markdown 一份。
+          <CheckboxInput
+            label={r.name}
+            isLabelHidden
+            size="sm"
+            value={r.checked}
+            onChange={(next) => patchMark(r.mark!, { checked: next })}
+          />
         ) : (
-          // 正文任务:画同样的方框但**不做成可点的勾选框** —— 这里不回写笔记原文,
+          // 宿主没有回写接缝(web / mobile 壳):画同样的方框但不做成可点的勾选框 ——
           // 给一个勾不动的勾选框比不给更糟。整行点击 = 打开笔记定位到它,在那儿勾。
           <span className={`amx-todo-box${r.checked ? ' on' : ''}`} aria-hidden="true" />
         )}
-        <button className="amx-todo-main" title={r.note ? '在笔记中打开并勾选' : '点击编辑'} onClick={(e) => openRow(r, e)}>
+        <button className="amx-todo-main" title={r.note ? '在笔记中打开' : '点击编辑'} onClick={(e) => openRow(r, e)}>
           <span className={`amx-todo-name${r.checked ? ' done' : ''}`}>{r.name}</span>
           {r.raw ? <span className={`amx-todo-due ${due.tone}`}>{due.label}</span> : null}
           {r.note ? <ExternalLink className="amx-todo-jump" size={12} /> : null}
@@ -222,7 +240,7 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
 
       {rows.length === 0 && (
         <div className="amx-todo-empty">
-          还没有待办。<br />在笔记里写 <code>- [ ]</code>,或在下面直接加一条。
+          还没有待办。<br />在笔记里写 <code>- [ ] 事项 @2026-09-01</code>(打 <code>@</code> 有候选),或在下面直接加一条。
         </div>
       )}
       {rows.length > 0 && openCount === 0 && (

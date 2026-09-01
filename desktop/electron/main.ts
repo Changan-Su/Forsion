@@ -1717,6 +1717,18 @@ app.whenReady().then(async () => {
   }
   ipcMain.handle('units:list', () => unitsApi('GET', '/units'))
 
+  /** 系统浏览器开中转引导页,main 代拼 `#token=`(auth.json 的 forsion_token 不下发渲染层)。
+   *  fragment 不出网络/不进 server 日志(≠ query),引导页用完即 replaceState 剥掉;没有这一手,
+   *  系统浏览器多半没登录过网页版 → /open 只能提示「请先登录」(移动端同病同轮修)。 */
+  ipcMain.handle('units:openInBrowser', async (_e, unitId: string) => {
+    if (typeof unitId !== 'string' || !/^[0-9a-zA-Z-]{8,64}$/.test(unitId)) throw new Error('参数不完整')
+    const token = loadTanguCreds().token
+    const stored = await loadConfig()
+    await shell.openExternal(
+      `${stored.cloudUrl.replace(/\/+$/, '')}/api/units/${unitId}/open${token ? `#token=${encodeURIComponent(token)}` : ''}`,
+    )
+  })
+
   /** P2P 直连打开设备(A 侧,方案 §12):offer 经**现有隧道**送达对端(零 server 改动——信令即
    *  一次普通 proxy 请求,owner 校验白得),answer 回来打洞;成了起本机代理(127.0.0.1)供
    *  webview 当 lanUrl 用,流量一个字节不过 server。失败 throw 可读错误,UI 负责回落中转。 */

@@ -11,6 +11,9 @@ const dbBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.d
 
 export function AmadeusDbView({ leaf }: ViewProps) {
   const dbPath = typeof leaf.params.dbPath === 'string' ? leaf.params.dbPath : ''
+  /** 活动视图名:与笔记嵌入 `![[db|视图名]]` 同语义 —— 每处(tab / 仪表盘卡)各记各的。
+   *  仪表盘卡经 ViewCard.setParams 落进围栏,独立 tab 随布局持久化;都是免费的。 */
+  const viewName = typeof leaf.params.view === 'string' && leaf.params.view ? leaf.params.view : null
   const mode = useTheme((s) => s.mode)
   const flat = useTheme((s) => s.flat)
   const name = useDbStore((s) => (dbPath ? s.entries[dbPath]?.data?.name : undefined))
@@ -25,7 +28,14 @@ export function AmadeusDbView({ leaf }: ViewProps) {
   return (
     /* 编辑器同款契约域(.am-app+bridge 取色,镜像 mode/flat),外层滚动由 .amx-dbview 管 */
     <div className="am-app tangu-lovable amx-pane amx-dbview" data-mode={mode} data-flat={flat ? '1' : '0'}>
-      <DatabaseEmbed target={dbPath} pagePath={dbPath} />
+      <DatabaseEmbed
+        target={dbPath}
+        pagePath={dbPath}
+        initialView={viewName}
+        // 全量传参:仪表盘卡(ViewCard.setParams)是整份替换,漏了 dbPath 卡就废;
+        // 独立 tab(Dockview)是合并,view: undefined 恰好把键清掉(布局序列化时被丢弃)。
+        onViewChange={(name) => leaf.setParams({ ...leaf.params, view: name ?? undefined })}
+      />
     </div>
   )
 }

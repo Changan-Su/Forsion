@@ -5,7 +5,7 @@
 import { Fragment, type ReactNode, type CSSProperties, type RefObject, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, type ClipboardEvent as RClipboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'zustand'
 import {
-  SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2,
+  SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
   Undo2, Redo2, ChevronsDown, Frame,
@@ -33,6 +33,7 @@ import { useAmadeusPrefs } from './amadeusPrefs'
 import type { TrashEntry } from '@amadeus-shared/ipc'
 import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
+import { openTutorial } from './amadeusTutorial'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { REF_MIME, PATHS_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
@@ -1701,6 +1702,18 @@ function EditorScope({
  *  标题栏对这些显示为空 + 「New Page」占位(Notion 式),不显示字面「未命名」。 */
 /** 可编辑笔记标题 = 文件名(manifest.title 恒取 basename),提交即 renamePage。在编辑器内联改标题。
  *  (封面/图标 chrome 组件 2026-08-13 搬去 @amadeus/chrome/pageChrome:UnifiedPage 也要用,留此即模块环。) */
+/** 笔记 tab 上的图标:用户给这篇设过 emoji 就显示 emoji,否则回退成通用文件图标。
+ *  ⚠️ 必须是**组件**(不是取值函数):emoji 的真源是 pageStore 的 icons 表,只有订阅了它,
+ *     改完图标 tab 才会自己跟上(引擎那边只负责把 params 交过来,见 ViewDefinition.TabIcon)。
+ *  icons 表本身的新鲜度由两处保证:主进程写盘即更索引(fs/pageWrite.ts)、setFm 后 refreshIcons。 */
+export function NoteTabIcon({ params, size }: { params: Record<string, unknown>; size: number }): React.ReactElement {
+  const notePath = typeof params.notePath === 'string' ? params.notePath : ''
+  const emoji = usePageStore((s) => (notePath ? s.icons[notePath] ?? null : null))
+  if (!emoji) return <FileText size={size} className="wb-tab-ic" />
+  // 字号跟着 size 走:tab 高度是固定的,emoji 用 SVG 那套尺寸才不会把行撑高。
+  return <span className="wb-tab-ic amx-tab-emoji" style={{ fontSize: size }} aria-hidden>{emoji}</span>
+}
+
 export function NoteTitle() {
   const store = useScopedPageStore() // 改名/设图标要作用在本面板这篇
   const sps = (): ReturnType<typeof store.getState> => store.getState()
@@ -2346,7 +2359,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           </p>
           <div className="amx-welcome-actions">
             {vaultRoot ? (
-              <button className="amx-welcome-btn" onClick={() => void myPs().createPage()}><SquarePen size={16} /> 新建笔记</button>
+              <>
+                <button className="amx-welcome-btn" onClick={() => void myPs().createPage()}><SquarePen size={16} /> 新建笔记</button>
+                {/* 新手的第一站:教程本身是一篇可改的笔记(生成到 vault),文档/画布两种模式都讲。 */}
+                <button className="amx-welcome-btn ghost" onClick={() => void openTutorial()}><BookOpen size={16} /> 使用教程</button>
+              </>
             ) : (
               <button className="amx-welcome-btn" onClick={() => void myPs().openVault()}><FolderOpen size={16} /> 打开 Vault 文件夹</button>
             )}

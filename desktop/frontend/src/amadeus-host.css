@@ -171,6 +171,13 @@
   color: var(--on-action, var(--on-accent-ink, #fff)); cursor: pointer; transition: filter .12s ease;
 }
 .amx-welcome-btn:hover { filter: brightness(1.06); }
+/* 笔记 tab 上的 emoji 图标:占位与 SVG 图标同宽,行高压到 1 免把固定高的 tab 撑开。 */
+.amx-tab-emoji { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+/* 空态动作是一排(新建笔记 + 使用教程):不给 flex 的话两个 inline-flex 按钮会贴在一起。 */
+.amx-welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+/* 次要动作:同尺寸不同权重,别和主按钮抢眼。 */
+.amx-welcome-btn.ghost { background: transparent; border-color: var(--border); color: var(--text-muted); }
+.amx-welcome-btn.ghost:hover { background: var(--bg-hover); filter: none; }
 .amx-welcome-tips { list-style: none; margin: 24px 0 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
 .amx-welcome-tips li { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12.5px; line-height: 1.5; }
 .amx-kbd {
@@ -1136,6 +1143,21 @@
 .amx-db-ev:hover { background: color-mix(in srgb, var(--accent, #6c5ce7) 22%, transparent); }
 /* 画廊 */
 .amx-db-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; padding: 4px 2px 8px; }
+.amx-db-card-cover { width: calc(100% + 20px); margin: -8px -10px 0; height: 110px; object-fit: cover; border-radius: 8px 8px 0 0; }
+/* 计算列(公式/引用):只读文本;#错误/#循环 哨兵标红 */
+.amx-db-computed { font-size: 13px; color: var(--text); padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-db-computed[data-err] { color: var(--warn, #c0392b); font-size: 12px; }
+/* 附件列:缩略图 / 上传入口 */
+.amx-db-filethumb { max-height: 26px; max-width: 100%; border-radius: 4px; cursor: zoom-in; display: block; }
+.amx-db-fileadd { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint, var(--text-muted)); cursor: pointer; }
+.amx-db-fileadd:hover { color: var(--text); }
+/* 公式编辑(列菜单):多行输入沿用弹层输入观感 */
+.amx-db-formula-in { resize: vertical; min-height: 56px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.5; }
+/* 表格分组:组头横条(chip + 计数,点击折叠);行仍走原网格 */
+.amx-db-grouphead { display: flex; align-items: center; gap: 7px; width: 100%; border: none; background: none; color: var(--text); font: inherit; font-size: 12.5px; padding: 8px 6px 4px; cursor: pointer; text-align: left; }
+.amx-db-grouphead:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.06)); border-radius: 6px; }
+.amx-db-groupcaret { display: inline-block; font-size: 10px; color: var(--text-faint, var(--text-muted)); transition: transform 120ms ease; }
+.amx-db-groupcaret[data-open] { transform: rotate(90deg); }
 /* 行编辑器(点卡片) */
 .amx-db-pop:has(.amx-db-roweditor) { width: 320px; max-height: min(440px, 72vh); }
 .amx-db-roweditor { display: flex; flex-direction: column; gap: 6px; }
@@ -1150,6 +1172,9 @@
 }
 .amx-db-pop-sec { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint, var(--text-muted)); padding: 4px 6px 2px; }
 .amx-db-pop-list { display: flex; flex-direction: column; gap: 1px; }
+/* 横排小档位(chart 视图的图形/聚合三选一):同一套 .amx-db-opt,只改排布 */
+.amx-db-pop-list.amx-db-pop-row { flex-direction: row; gap: 2px; }
+.amx-db-pop-list.amx-db-pop-row .amx-db-opt { flex: 1 1 0; justify-content: center; }
 .amx-db-opt { display: flex; align-items: center; gap: 7px; border: none; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; padding: 5px 7px; border-radius: 6px; cursor: pointer; text-align: left; }
 .amx-db-opt:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .amx-db-opt input[type='checkbox'] { accent-color: var(--accent, #6c5ce7); }

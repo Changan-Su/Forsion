@@ -8,6 +8,7 @@ import { $nodeSchema, $prose, $remark } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 
 export interface LayoutColumn { refs: string[]; width: number }
@@ -62,6 +63,26 @@ export function freshAnchorId(doc: ProseNode): string {
     const id = 'c' + Math.random().toString(36).slice(2, 6)
     if (!used.has(id)) return id
   }
+}
+
+/** 复制类插入(Alt 拖 / 菜单「复制块」)把片段里的画布卡**当场换成现铸新锚**,绝不留给
+ *  canvasNormalizer 事后挑:它按 doc 序给「后出现的那份」换锚,副本落在原卡之前时被改名的是
+ *  **原卡**,tree 边/连线/几何整套被副本劫走(Codex 08-31 high)。返回铸出的锚 —— 调用方必须把
+ *  它们报进宿主的归属集合(blockLayer 走 hooks.onCardsMinted,菜单直接 pipe.ownedCards.add):
+ *  漏报 = 首次派生落盘后「stored ⊆ owned」判据 fail-closed,画布派生冻结到重开。
+ *  卡恒在 doc 顶层(完整性闸),不递归;freshAnchorId 只保证不撞 doc 已有锚,批内自查重。 */
+export function mintCardCopies(doc: ProseNode, content: Fragment): { content: Fragment; minted: string[] } {
+  const minted: string[] = []
+  const nodes: ProseNode[] = []
+  content.forEach((n) => {
+    if (n.type.name === 'amadeusCanvasCard') {
+      let id = freshAnchorId(doc)
+      while (minted.includes(id)) id = freshAnchorId(doc)
+      minted.push(id)
+      nodes.push(n.type.create({ ...n.attrs, anchor: id }, n.content, n.marks))
+    } else nodes.push(n)
+  })
+  return minted.length ? { content: Fragment.fromArray(nodes), minted } : { content, minted }
 }
 
 export const columnRowSchema = $nodeSchema('amadeusColumnRow', () => ({

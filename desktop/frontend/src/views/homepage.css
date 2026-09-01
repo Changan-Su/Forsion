@@ -22,9 +22,18 @@
    * (病理见 scripts/shell-noscroll.check.cjs 抬头)。闸在 check:homepage 第 16 条。 */
   overflow: clip;
   display: flex;
-  padding: clamp(24px, 5vh, 48px) 24px;
+  /* 移动端由 base.css 注入胶囊安全间距:只让内容,壁纸仍从视图顶端开始。
+   * 断点只改原有留白,不能覆盖掉 --hp-chrome-top(含刘海安全区)。 */
+  --hp-padding-block: clamp(24px, 5vh, 48px);
+  padding: calc(var(--hp-chrome-top, 0px) + var(--hp-padding-block)) 24px var(--hp-padding-block);
   isolation: isolate;
   background: var(--bg);
+  /* 旧 Desktop 的磨砂是「底图采样 + 染色」,不能只叠一块半透明底色。
+   * 薄面用于输入区/坞,厚面用于抽屉;色值继续只取 Genesis 的背景轴。 */
+  --hp-glass-tint: color-mix(in srgb, var(--bg-card) 46%, transparent);
+  --hp-glass-thick-tint: color-mix(in srgb, var(--bg-card) 58%, transparent);
+  --hp-glass-sheen: linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 20%, transparent), transparent 48%, color-mix(in srgb, var(--accent-ink) 4%, transparent));
+  --hp-glass-filter: blur(40px) saturate(160%);
 }
 
 /* 壁纸是主页自己的真实底层,玻璃叶子才能在它上面取样。没有图片时也保留一张
@@ -179,7 +188,7 @@
 .hp-wallpaper-button {
   position: absolute;
   z-index: 5;
-  top: 16px;
+  top: calc(var(--hp-chrome-top, 0px) + 16px);
   right: 16px;
   width: 34px;
   height: 34px;
@@ -241,13 +250,13 @@
 .hp-stack.leaving { opacity: 0; transform: scale(0.985); }
 
 @keyframes hp-rise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
+  from { transform: translateY(10px); }
+  to { transform: none; }
 }
 
 .hp-title,
 .hp-composer,
-.hp-spaces { animation: hp-rise var(--duration-slow) var(--ease-out) both; }
+.hp-spaces { animation: hp-rise var(--duration-slow) var(--ease-out) backwards; }
 .hp-composer { animation-delay: 60ms; }
 .hp-spaces { animation-delay: 120ms; }
 
@@ -294,13 +303,18 @@
 /* 图片壁纸和主题生成舞台都支持玻璃。取样和材质落在绘制叶子,不放到定位外壳。 */
 .hp-root .hp-composer .t2c-card,
 .hp-root .hp-spaces {
-  border-color: color-mix(in srgb, var(--border) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-card) 62%, transparent);
-  backdrop-filter: blur(28px) saturate(150%);
-  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  border-color: transparent;
+  background: var(--hp-glass-sheen), var(--hp-glass-tint);
+  backdrop-filter: var(--hp-glass-filter);
+  -webkit-backdrop-filter: var(--hp-glass-filter);
 }
+.hp-root .hp-composer .t2c-card.dragover { border-color: var(--accent-ink); }
 html[data-glass='off'] .hp-root .hp-composer .t2c-card,
 html[data-glass='off'] .hp-root .hp-spaces,
+html[data-glass='off'] .hp-root .hp-organizer-panel::before,
+html[data-glass='off'] .hp-root .hp-folder-panel::before,
+html[data-glass='off'] .hp-root .hp-organizer-grid .hp-tile-icon,
+html[data-glass='off'] .hp-root .hp-organizer-new > span,
 html[data-glass='off'] .hp-root .hp-wallpaper-button,
 html[data-glass='off'] .hp-root .hp-wallpaper-edge,
 html[data-glass='off'] .hp-root .hp-folder-head,
@@ -339,11 +353,61 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-spaces-actions button:hover { color: var(--text); background: var(--bg-hover); }
 .hp-spaces-actions button:active { transform: scale(0.96); }
 
+/* 前置区是一份主页专属副本列表;竖线右侧才是与 Ribbon 同步的排序区。
+ * 两侧都只占一排,溢出各自在本段横向滚动,不把 pane 撑成第二行。 */
+.hp-space-row {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+}
+.hp-pinned-zone {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  width: max-content;
+  min-width: 170px;
+  max-width: min(42%, 350px);
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+.hp-pinned-zone[data-over='true'] {
+  border-color: color-mix(in srgb, var(--accent-ink) 50%, transparent);
+  background: color-mix(in srgb, var(--accent-light) 68%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-ink) 12%, transparent);
+}
+.hp-space-divider {
+  flex: 0 0 1px;
+  align-self: stretch;
+  min-height: 54px;
+  margin: 10px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
+}
+.hp-space-main {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.hp-pinned-zone .hp-tile,
+.hp-space-main .hp-tile { flex: 0 0 82px; }
+.hp-pinned-action { cursor: pointer; touch-action: auto; }
+.hp-pinned-action:active { cursor: pointer; }
+
 .hp-dock {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 4px;
 }
 
@@ -451,8 +515,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 /* ── 二级应用收纳层 ─────────────────────────────────────────────────────── */
 @keyframes hp-stage-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes hp-folder-open {
-  from { opacity: 0; transform: translate(var(--hp-folder-dx), var(--hp-folder-dy)) scale(0.24); }
-  to { opacity: 1; transform: translate(0, 0) scale(1); }
+  from { transform: translate(var(--hp-folder-dx), var(--hp-folder-dy)) scale(0.24); }
+  to { transform: none; }
 }
 .hp-folder-stage,
 .hp-organizer-stage,
@@ -462,26 +526,59 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: calc(var(--hp-chrome-top, 0px) + 24px) 24px 24px;
+}
+/* opacity/filter 在祖先上会截断玻璃的 backdrop。入场只动定位容器的 transform,
+ * 遮罩淡入放在独立叶子,绝不给抽屉/输入卡的祖先加透明度动画。 */
+.hp-folder-stage::before,
+.hp-organizer-stage::before,
+.hp-wallpaper-stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background: color-mix(in srgb, var(--overlay-scrim) 72%, transparent);
   animation: hp-stage-in var(--duration-fast) var(--ease-out) both;
 }
+.hp-folder-stage::before,
+.hp-organizer-stage::before { background: color-mix(in srgb, var(--overlay-scrim) 36%, transparent); }
 .hp-organizer-stage { z-index: 20; overflow: auto; }
+.hp-folder-panel,
+.hp-organizer-panel {
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--radius-chat-surface);
+  box-shadow: var(--card-shadow);
+}
+/* 整面磨砂画在无子节点的伪元素上。定位容器不加 backdrop-filter,
+ * 避免给 DnD 的 fixed overlay 引入新的包含块;正文/图标也不会被 filter 模糊。 */
+.hp-root .hp-folder-panel::before,
+.hp-root .hp-organizer-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--hp-glass-sheen), var(--hp-glass-thick-tint);
+  backdrop-filter: var(--hp-glass-filter);
+  -webkit-backdrop-filter: var(--hp-glass-filter);
+}
 .hp-folder-panel {
   box-sizing: border-box;
   width: min(680px, 100%);
   /* ⚠️ min 必须让位给可用高度:根是 clip,越出 stage 的部分会被裁掉且面板自己的 overflow 够不着。 */
   min-height: min(330px, calc(100% - 16px));
   max-height: min(620px, calc(100% - 16px));
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   padding: 18px;
   border: 0;
   background: transparent;
-  box-shadow: none;
   transform-origin: center;
-  animation: hp-folder-open 360ms var(--ease-spring) both;
+  animation: hp-folder-open 360ms var(--ease-spring) backwards;
 }
 .hp-root .hp-wallpaper-sheet {
   border-color: color-mix(in srgb, var(--border) 76%, transparent);
@@ -490,6 +587,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   -webkit-backdrop-filter: blur(34px) saturate(155%);
 }
 .hp-folder-head {
+  flex: none;
   width: min(480px, calc(100% - 24px));
   margin-inline: auto;
   padding: 6px 7px 6px 9px;
@@ -532,9 +630,13 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-folder-hero > .hp-folder-count { display: none; }
 .hp-folder-grid {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-wrap: wrap;
-  align-content: center;
+  /* 只滚成员,磨砂底层与标题留在原位;内容过多时从顶部排,首行不会被负向居中裁掉。 */
+  align-content: safe center;
   align-items: center;
   justify-content: center;
   gap: 18px;
@@ -574,10 +676,9 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   background: var(--overlay-light);
 }
 .hp-folder-empty { margin: auto; max-width: 270px; color: var(--text-faint); font-size: 12px; line-height: 1.6; text-align: center; }
-.hp-folder-panel footer { padding-top: 12px; color: var(--text-ghost); font-size: 10.5px; text-align: center; }
+.hp-folder-panel footer { flex: none; padding-top: 12px; color: var(--text-ghost); font-size: 10.5px; text-align: center; }
 
-/* 全部 Spaces:参考旧 Desktop 的 Launchpad 层级,但不是一张巨型 modal。
- * 时钟、轻量玻璃头与应用矩阵直接落在被景深化的主页舞台上。 */
+/* 全部 Spaces:维持紧凑矩阵,整面磨砂承载标题和图标,不再只给标题加半透。 */
 .hp-organizer-panel {
   box-sizing: border-box;
   width: min(590px, 100%);
@@ -587,19 +688,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   flex-direction: column;
   align-items: stretch;
   padding: 8px 10px 7px;
-  animation: hp-rise 360ms var(--ease-spring) both;
-}
-.hp-organizer-clock {
-  flex: none;
-  margin-bottom: 10px;
-  color: var(--text);
-  font-size: clamp(38px, 5vw, 48px);
-  font-weight: 300;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.035em;
-  line-height: 1;
-  text-align: center;
-  user-select: none;
+  animation: hp-rise 360ms var(--ease-spring) backwards;
 }
 .hp-organizer-head {
   min-height: 42px;
@@ -927,8 +1016,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-wallpaper-options button.on i::after { transform: translateX(11px); }
 
 @media (max-width: 620px) {
-  .hp-root { padding-inline: 12px; padding-block: 24px; }
-  .hp-wallpaper-button { top: 10px; right: 10px; }
+  .hp-root { padding-inline: 12px; --hp-padding-block: 24px; }
+  .hp-wallpaper-button { top: calc(var(--hp-chrome-top, 0px) + 10px); right: 10px; }
   .hp-stack { gap: 18px; }
   .hp-clock { font-size: 46px; }
   .hp-brand { font-size: 30px; }
@@ -936,10 +1025,14 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   .hp-spaces-actions button { width: 28px; padding: 0; justify-content: center; }
   .hp-dock { gap: 2px; }
   .hp-tile { width: 70px; min-height: 74px; }
+  .hp-pinned-zone { min-width: 146px; max-width: 48%; gap: 2px; }
+  .hp-pinned-zone .hp-tile,
+  .hp-space-main .hp-tile { flex-basis: 70px; }
+  .hp-space-divider { margin-inline: 3px; }
   .hp-composer .t2c-card { padding-inline: 11px; }
   .hp-folder-stage,
   .hp-organizer-stage,
-  .hp-wallpaper-stage { padding: 10px; }
+  .hp-wallpaper-stage { padding: calc(var(--hp-chrome-top, 0px) + 10px) 10px 10px; }
   .hp-organizer-panel { width: min(390px, 100%); padding-inline: 2px; }
   .hp-organizer-grid { grid-template-columns: repeat(4, 72px); grid-auto-rows: 76px; gap: 4px 6px; }
   .hp-organizer-grid .hp-tile,
@@ -963,7 +1056,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
  * 媒体查询之内,会被逐字覆盖掉、一个像素都不生效(2026-08-30 codex 评审实翻,DESIGN.md §7 同款)。
  * 要改自适应,改这里的档位值或再加一档。 */
 @media (max-height: 700px) {
-  .hp-root { padding-block: 20px; }
+  .hp-root { --hp-padding-block: 20px; }
   .hp-stack { gap: 16px; }
   .hp-brand { font-size: 28px; }
   .hp-clock { font-size: 44px; }
@@ -972,7 +1065,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 
 /* 横屏手机 / 被拖得很扁的窗口:标题整块让位,保住输入区与 Spaces 坞。 */
 @media (max-height: 520px) {
-  .hp-root { padding-block: 12px; }
+  .hp-root { --hp-padding-block: 12px; }
   .hp-stack { gap: 10px; }
   .hp-brand { margin-bottom: 0; font-size: 20px; }
   .hp-clock { font-size: 32px; }
@@ -987,10 +1080,13 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   .hp-spaces,
   .hp-folder-panel,
   .hp-folder-stage,
+  .hp-folder-stage::before,
   .hp-organizer-panel,
   .hp-organizer-stage,
+  .hp-organizer-stage::before,
   .hp-wallpaper-sheet,
-  .hp-wallpaper-stage { animation: none; }
+  .hp-wallpaper-stage,
+  .hp-wallpaper-stage::before { animation: none; }
   .hp-stack,
   .hp-wallpaper,
   .hp-wallpaper-art,
@@ -1014,10 +1110,13 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-still .hp-spaces,
 .hp-still .hp-folder-panel,
 .hp-still .hp-folder-stage,
+.hp-still .hp-folder-stage::before,
 .hp-still .hp-organizer-panel,
 .hp-still .hp-organizer-stage,
+.hp-still .hp-organizer-stage::before,
 .hp-still .hp-wallpaper-sheet,
-.hp-still .hp-wallpaper-stage { animation: none; }
+.hp-still .hp-wallpaper-stage,
+.hp-still .hp-wallpaper-stage::before { animation: none; }
 .hp-still[data-focus-blur='true'].hp-composer-focused .hp-wallpaper,
 .hp-still[data-focus-blur='true'].hp-composer-focused .hp-wallpaper-art,
 .hp-still[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,

@@ -43,6 +43,8 @@ const api = {
   },
   // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程)──
   unitsList: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('units:list'),
+  /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(token 不进渲染层)。 */
+  unitsOpenInBrowser: (id: string): Promise<void> => ipcRenderer.invoke('units:openInBrowser', id),
   /** P2P 直连打开设备:成了回本机代理地址(webview 当 lanUrl 用);失败 reject 可读错误,UI 回落中转。 */
   unitsP2pOpen: (id: string): Promise<{ url: string }> => ipcRenderer.invoke('units:p2pOpen', id),
   unitsUpdate: (id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }> =>
@@ -332,7 +334,7 @@ const AGENT_KEYS = [
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
-  'unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
+  'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]

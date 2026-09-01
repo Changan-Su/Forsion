@@ -21,13 +21,19 @@ import type { UnitInfo } from '@/types'
 
 /** 引导页基址 = mobileShim cfg.cloudUrl(已含 /api,≠桌面 cloudUrl 语义)。本组件只活在
  *  mobileShim 环境(unitsList 门控),不能 import capacitorAuth —— 会把 @capacitor/* 拖进
- *  web 构建图,撞 capacitor-stub-gate(build-unit-web 实翻)。 */
-const guideUrl = (unitId: string): string =>
-  `${String(useApp.getState().desktopConfig?.cloudUrl || '').replace(/\/+$/, '')}/units/${unitId}/open`
+ *  web 构建图,撞 capacitor-stub-gate(build-unit-web 实翻)。
+ *  `#token=`:App 登录态递交面 —— 系统浏览器没登录过 Forsion 网页版,同源 localStorage 读不到
+ *  token(用户实报「明明登录了却提示没登录」)。fragment 不出网络/不进 server 日志(≠ query),
+ *  引导页用完即 replaceState 剥掉、不落 localStorage,进隧道仍靠 HttpOnly cookie。 */
+const guideUrl = (unitId: string): string => {
+  const base = `${String(useApp.getState().desktopConfig?.cloudUrl || '').replace(/\/+$/, '')}/units/${unitId}/open`
+  const token = useApp.getState().cfg.token
+  return token ? `${base}#token=${encodeURIComponent(token)}` : base
+}
 
 registerMessages({
   'unit.mobileNone': { zh: '名下还没有可连的设备:在电脑上登录同一 Forsion 账号,并开启「允许其他设备连接本机」', en: 'No devices yet — sign in with this Forsion account on a computer and enable "Allow other devices to connect".' },
-  'unit.mobileTunnel': { zh: '经云端中转打开(浏览器内需已登录 Forsion 网页版)', en: 'Opens via cloud relay (requires Forsion web login in that browser)' },
+  'unit.mobileTunnel': { zh: '经云端中转打开(自动使用本机登录态)', en: 'Opens via cloud relay (uses this device’s login automatically)' },
 })
 
 export const useUnitsSheet = create<{ open: boolean; setOpen: (v: boolean) => void }>((set) => ({
@@ -35,13 +41,14 @@ export const useUnitsSheet = create<{ open: boolean; setOpen: (v: boolean) => vo
   setOpen: (v) => set({ open: v }),
 }))
 
-/** ⋯ 菜单入口(side:'bottom' 由 SingleColumnHost 自动搬上手机菜单)。数据桥在才上架:
- *  App=mobileShim.unitsList;设备页(unitShim)/Tangu Web(webShim)无此桥 → 自然隐藏。 */
+/** 左抽屉底部常驻入口(设置钮左侧,mobileFoot;曾住「⋯」菜单被用户报太隐蔽 2026-08-30)。
+ *  数据桥在才上架:App=mobileShim.unitsList;设备页(unitShim)/Tangu Web(webShim)无此桥 → 自然隐藏。 */
 export function installUnitsEntry(): void {
   if (!window.tangu?.unitsList) return
   addRibbonIcon({
     id: 'rb-units-mobile',
     side: 'bottom',
+    mobileFoot: true,
     icon: MonitorSmartphone,
     tooltip: () => useApp.getState().tr('unit.switcher'),
     onClick: () => useUnitsSheet.getState().setOpen(true),

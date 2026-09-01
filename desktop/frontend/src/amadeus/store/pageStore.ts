@@ -247,6 +247,9 @@ interface PageState {
   /** 启动时从主进程取当前侧(lastVault 可能落在云镜像)。 */
   initVaultSide(): Promise<void>
   refreshPages(): Promise<void>
+  /** 只刷全库页面图标(path → emoji)。⚠️ refreshPages **不碰** icons —— 这张表的真源是主进程索引,
+   *  改完 frontmatter 想让侧栏 emoji 跟上就得显式调它(2026-08-31 用户实报的一半症状)。 */
+  refreshIcons(): void
   loadPage(path: string): Promise<void>
   createPage(): Promise<void>
   /** Create a new untitled page inside `folder` (vault-relative; '' = vault root) and open it. */
@@ -590,6 +593,10 @@ function makePageStore() {
     async refreshPages() {
       const pages = await amadeus.listPages()
       set({ pages })
+    },
+
+    refreshIcons() {
+      fetchIcons(get().vaultRoot)
     },
 
     async loadPage(path) {

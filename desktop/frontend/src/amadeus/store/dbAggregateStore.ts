@@ -31,6 +31,12 @@ export interface AggDb {
   rows: AggRow[]
   /** 只读源(如 agent 日程 `agent://…` 合成库):Calendar 不可拖拽/编辑,图例无默认库星标。 */
   readonly?: boolean
+  /** **可编辑投影**的写回接缝(目前只有笔记正文 `@` 标记源 `mdnote://`):这类源在磁盘上没有 .db,
+   *  真源是别处的一行 markdown。给了这个函数 = 单元格可写(拖动/改期照常走 setAggCell),
+   *  但 `readonly` **仍然为真** —— 删除、复制、当默认库、成为快速添加目标一律照旧关着。 */
+  writeCell?(rowId: string, colId: string, value: CellValue | undefined): void
+  /** 「打开来源」的去处。合成源在磁盘上没有 .db,openDb(db.path) 是个假路径 —— 由源自己说去哪。 */
+  openRow?(rowId: string): void
   /** 所属 Vault 标签(纯展示):跨侧/多 Vault 汇总时图例淡显后缀,标注该日历归属。 */
   vaultLabel?: string
 }
@@ -125,6 +131,10 @@ export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellV
   if (col) {
     const name = colId === db.columns[0]?.id ? shortVal(value) : db.rows.find((r) => r.rowId === rowId)?.name
     actDebounced('row.edit', { db: db.name, p: col.name, v: shortVal(value), text: name }, `${db.path}|${rowId}|${colId}`)
+  }
+  if (db.writeCell) { // 可编辑投影:写回真源(那一行 markdown),不碰 useDbStore
+    db.writeCell(rowId, colId, value)
+    return
   }
   if (db.isNoteView && db.folder !== undefined) {
     useNoteViewStore.getState().setProp(db.folder, rowId, colId, value, base)

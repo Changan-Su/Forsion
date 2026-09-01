@@ -72,7 +72,10 @@ function useAndroidBack(): void {
       if (active) {
         const st = useNav.getState().stacks[active.id]
         if (st && st.idx > 0) { useNav.getState().back(active.id); return }
-        if (active.type !== 'home') { ws.closeLeaf(active.id); return } // 白板/PDF/会话等 → 关回列表/home
+        // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底,该挂起 app。
+        // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
+        // (只有 logo 的空页)并被存盘,重启也回不来 = 用户实报的「默认 Homepage 空白」。
+        if (active.type !== 'home' && active.type !== 'homepage') { ws.closeLeaf(active.id); return } // 白板/PDF/会话等 → 关回列表/home
       }
       void CapApp.minimizeApp() // 已在底:挂起(Android 默认原行为)
     })
@@ -123,10 +126,12 @@ export function MobileRoot() {
           —— 点了没反应且不报错。门控与 desktop Root 同款。 */}
       {window.amadeus && <AmadeusOverlays />}
 
-      {/* 下面三个的共同点:它们的入口 ribbon 项(rb-search / rb-achievements / rb-cmd)在
-          bootstrapEngine 里是**无条件注册**的,而 SingleColumnHost 的「⋯」菜单会把所有
-          side:'bottom' 的 ribbon 项原样搬上来并调它们的 onClick —— 也就是说移动端一直点得到,
-          只是点完没有任何东西渲染(状态置了 true,宿主不在)。属于静默死按钮,不是「移动端没这功能」。 */}
+      {/* 下面三个的共同点:它们在移动端都点得到,不挂宿主就是「点完没有任何东西渲染」的静默死按钮
+          (状态置了 true,宿主不在),不是「移动端没这功能」。到达路径两种:
+           · rb-achievements / rb-cmd 无条件注册,SingleColumnHost 的「⋯」菜单把所有 side:'bottom'
+             的 ribbon 项原样搬上来并调 onClick;
+           · QuickFind 的 ribbon 项已撤(2026-08-31,见 bootstrapEngine 那段注释),但它仍从
+             `quick-find` 命令(⋯ → 命令)与仪表盘的 openPicker 进来 —— **别跟着一起删**。 */}
       <QuickFind />
       <CommandPalette />
       {/* 互联设备弹层(Forsion Unit):入口在 ⋯ 菜单(mobileEntry 的 installUnitsEntry 按桥上架)。 */}
@@ -183,8 +188,8 @@ export function MobileRoot() {
       </AnimatePresence>
 
       {/* 成就解锁提示:埋点(track)与存档(localStorage)在移动端本就照跑,缺的只是这块弹层。
-          成就总览 AchievementsModal 仍不挂 —— 单列壳没有 ribbon 入口,挂了也进不去(见 SKIP 表)。 */}
-      <AchievementToast />
+          点它开成就总览 —— AchievementsModal 上面已挂(⋯ 菜单里的 rb-achievements 也进得去)。 */}
+      <AchievementToast onOpen={() => useApp.getState().openAchievements()} />
 
       {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}
       <NotificationHost />

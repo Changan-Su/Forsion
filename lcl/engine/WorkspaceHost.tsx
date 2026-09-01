@@ -124,6 +124,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const type = ((params as { __type?: string } | undefined)?.__type) || (api as { component?: string }).component || ''
   const def = getView(type)
   const Icon = def?.icon
+  const TabIcon = def?.TabIcon // 有就压过静态 icon(如笔记 tab 显示用户设的 emoji);回退归它自己
   const closable = def?.closable !== false
   const loc = (params as { __loc?: string } | undefined)?.__loc
   const iconOnly = loc === 'left' || loc === 'right'
@@ -152,7 +153,9 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       draggable
       onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}
     >
-      {Icon && <Icon size={iconOnly ? 15 : 13} className="wb-tab-ic" />}
+      {TabIcon
+        ? <TabIcon params={(params ?? {}) as Record<string, unknown>} size={iconOnly ? 15 : 13} />
+        : Icon && <Icon size={iconOnly ? 15 : 13} className="wb-tab-ic" />}
       {!iconOnly && <span className="wb-tab-name">{api.title}</span>}
       {/* 命名(主区)tab 加浏览器式 × 关闭钮;图标(侧栏)tab 仍走右键关闭。
        *  mousedown 阻断冒泡,避免被 Dockview 当成 tab 激活/拖拽起点。 */}

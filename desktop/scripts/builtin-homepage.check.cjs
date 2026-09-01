@@ -27,7 +27,7 @@
  *     解散夹时 `removeFolder` 再把 items 原样 splice 回去 = 同一个 id 出现两次。
  *     本条按「重排 → 拖进夹 → 解散夹」整条走一遍,每步都验不变式。
  *  12 自定义壁纸:图片进 IndexedDB、偏好进 localStorage;reload 后仍恢复,且设置面板三种来源齐全。
- *  13 壁纸材质:只有 Chatbox 文本区进入输入模式才触发景深;玻璃总开关关掉时回到不透明材质。
+ *  13 壁纸材质:Chatbox 文本区与模型/模式等控件共用聚焦景深;玻璃总开关关掉时回到不透明材质。
  *  14 Bing 壁纸经固定目标 Electron IPC 暴露,不重新引入浏览器搜索或任意 URL 代理。
  *  15 主题背景:四个随 token 变化的 Forsion 图形预设;右键空白直达紧凑、无重叠的二级收纳层。
  *  16 ⚠️主页视角固定:.hp-root 压根不是滚动容器(壁纸 scale(1.001) 曾撑出 1px → 四边滚动条);
@@ -90,8 +90,8 @@ const SNAP = `(() => {
   return {
     barSpaces: names,
     homeView: vis('.hp-root'),
-    tiles: [...document.querySelectorAll('.hp-spaces .hp-tile:not(.hp-folder) .hp-tile-name')].map((e) => (e.textContent || '').trim()),
-    folderTiles: [...document.querySelectorAll('.hp-spaces .hp-folder .hp-tile-name')].map((e) => (e.textContent || '').trim()),
+    tiles: [...document.querySelectorAll('.hp-space-main .hp-tile:not(.hp-folder) .hp-tile-name')].map((e) => (e.textContent || '').trim()),
+    folderTiles: [...document.querySelectorAll('.hp-space-main .hp-folder .hp-tile-name')].map((e) => (e.textContent || '').trim()),
     organizerTiles: [...document.querySelectorAll('.hp-organizer-grid > .hp-tile .hp-tile-name')].map((e) => (e.textContent || '').trim()),
     organizer: vis('.hp-organizer-stage'),
     ribbonFolders: document.querySelectorAll('.rb-top .rb-folder').length,
@@ -556,7 +556,7 @@ async function main() {
     await win.click('.hp-wallpaper-head > button')
     await win.waitForTimeout(320)
     // 台架故意把后端指向 127.0.0.1:1,textarea 因离线被 disabled,所以用真实 pointerdown 事件
-    // 走 HomepageChatbox 的“点文本区进入输入模式”路径。先聚焦模式按钮做负对照:它不应触发景深。
+    // 走 HomepageChatbox 的输入模式路径。模式按钮也应触发聚焦,内部切换不能闪退。
     await win.locator('.hp-composer button:not(:disabled)').first().focus()
     await win.waitForTimeout(120)
     const controlFocused = await win.locator('.hp-root').evaluate((root) => root.classList.contains('hp-composer-focused'))
@@ -576,8 +576,8 @@ async function main() {
     const glassOff = await win.evaluate(`getComputedStyle(document.querySelector('.hp-composer .t2c-card')).backdropFilter`)
     await win.evaluate(`document.documentElement.dataset.glass = 'on'`)
     check(
-      '13 只有 Chatbox 文本区进入输入模式才产生景深,玻璃可可靠降级',
-      !controlFocused && focused.active && focused.filter.includes('blur(') && focused.backdrop.includes('blur(') && glassOff === 'none',
+      '13 Chatbox 文本区与相关控件共用聚焦景深,玻璃可可靠降级',
+      controlFocused && focused.active && focused.filter.includes('blur(') && focused.backdrop.includes('blur(') && glassOff === 'none',
       JSON.stringify({ controlFocused, focused, glassOff }),
     )
     if (SHOT) {

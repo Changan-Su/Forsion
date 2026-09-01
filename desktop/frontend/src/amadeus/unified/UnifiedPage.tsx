@@ -52,9 +52,10 @@ import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId } from './columns'
-import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
+import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
+import { rawTree, setParent, childrenOf } from './canvasEdit'
 import { createEmbedLayer } from './embedLayer'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
@@ -981,9 +982,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // ── 块交互层(⠿/＋/拖拽/块选中):插件稳定引用,菜单由这里渲染。────────────────────
   const [blockMenu, setBlockMenu] = useState<{ x: number; y: number } | null>(null)
   const onBlocksDeletedRef = useRef<(content: Fragment) => void>(() => {})
+  // 文档模式卡片拖拽的层级上下文(2026-08-31)。layer 是 useMemo([]) 的终身单例,而 pipe 随
+  // path 换新 —— 闭包必须经 ref 现读(与 onBlocksDeletedRef 同一条纪律),否则捏着首篇的 fm。
+  const cardDragCtxRef = useRef<{ tree: () => Record<string, unknown>; detach: (anchors: string[]) => void; minted: (anchors: string[]) => void }>({ tree: () => ({}), detach: () => {}, minted: () => {} })
   const layer = useMemo(() => createBlockLayer({
     onMenu: (at) => setBlockMenu(at),
     onBlocksDeleted: (content) => onBlocksDeletedRef.current(content),
+    canvasTree: () => cardDragCtxRef.current.tree(),
+    onCardDetach: (anchors) => cardDragCtxRef.current.detach(anchors),
+    onCardsMinted: (anchors) => cardDragCtxRef.current.minted(anchors),
   }), [])
   /** 整块删掉的内容里若牵着只有本篇引用的磁盘文件,删完问一句(见 assetDelete 顶注)。
    *  ⚠️ 只能在删除事务**之后**调:这里读的 doc 已是删完的,「同一篇里还有没有别处引用」才算得准。 */
@@ -992,6 +999,25 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     if (view) void askDeleteRemovedAssets(path, refTextOf(content), refTextOf(view.state.doc.content))
   }
   onBlocksDeletedRef.current = onBlocksDeleted
+  cardDragCtxRef.current = {
+    tree: () => rawTree(parseCanvasJson(canvasLineOf(pipe.fm))?.tree),
+    // 摘爹(文档模式把带爹的卡拖离父段)。基底**现读**磁盘那行(setCanvasTree 是整表替换,
+    // 拿陈的当基底会抹掉别处刚写的关系);坏行由 setCanvasTree 自己的 fail-closed 挡。
+    detach: (anchors) => {
+      const tree = rawTree(parseCanvasJson(canvasLineOf(pipe.fm))?.tree)
+      let changed = false
+      for (const a of anchors) {
+        if (a in tree) {
+          delete tree[a]
+          changed = true
+        }
+      }
+      if (changed) setCanvasTree(tree)
+    },
+    // Alt 拖复制卡的新锚 → 归属集合(Codex 08-31 high:漏了它,首次派生把新锚写进盘后,
+    // 「stored ⊆ owned」判据 fail-closed,画布派生冻结到重开)。与 makeCard 的 ownedCards.add 同源。
+    minted: (anchors) => { for (const a of anchors) pipe.ownedCards.add(a) },
+  }
   // 分栏列节点 schema + per-page fold(闭包现读 pipe.fm,多页并发不串,Codex 终审 P1)+ 嵌入层。
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const editorPlugins = useMemo(
@@ -1082,11 +1108,13 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   })
 
   /** 当前块 → Canvas 卡片。slash 落点是 TextSelection，块菜单落点是 NodeSelection；两条入口先
-   *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。 */
+   *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。
+   *  **卡里建卡 = 子卡**(2026-08-31 用户拍板:此前 slash 一律 unavailable、块菜单则默默建成顶层卡,
+   *  两条入口自相矛盾)。层级写进 fm 的 tree,文档模式立刻呈现为缩进+框,画布模式是父卡右侧一支。 */
   const makeCard = (view: EditorView): boolean => {
     const unavailable = (): false => {
       window.dispatchEvent(new CustomEvent('amadeus:toast', {
-        detail: { text: '当前块不能转换为卡片；请先移出列表、分栏或已有卡片' },
+        detail: { text: '当前块不能转换为卡片；请先移出列表或分栏' },
       }))
       return false
     }
@@ -1096,23 +1124,39 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       for (let depth = $from.depth; depth >= 1; depth--) {
         if ($from.node(depth).type.name === 'list_item') return unavailable()
       }
+      // 容器一律在这一行认:doc / 分栏 cell / **卡片**。少了卡片那一项时,光标在卡内的 slash 会
+      // 一路走到卡节点自己身上,blockToCard 对卡片返回 null → 用户看到的就是「forbidden」。
       let depth = $from.depth
-      while (depth >= 1 && !['doc', 'amadeusColumnCell'].includes($from.node(depth - 1).type.name)) depth--
+      while (depth >= 1 && !['doc', 'amadeusColumnCell', 'amadeusCanvasCard'].includes($from.node(depth - 1).type.name)) depth--
       if (depth < 1) return false
       view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, $from.before(depth))))
     }
+    // 父卡 = 选中块的直接容器(两条入口归一之后,块菜单那条也自动吃到子卡语义)。
+    const sel = view.state.selection as NodeSelection
+    const $at = view.state.doc.resolve(sel.from)
+    const host = $at.depth >= 1 ? $at.node($at.depth) : null
+    const parent = host?.type.name === 'amadeusCanvasCard' ? String(host.attrs.anchor) : ''
+    // 层级的真源是磁盘那行,**现读**(canvasDoc 是渲染期的 memo,慢一拍;setCanvasTree 又是整表替换,
+    // 拿陈的当基底会把这期间别处写进去的父子关系抹掉)。
+    const tree = rawTree(parseCanvasJson(canvasLineOf(pipe.fm))?.tree)
     let count = 0
     view.state.doc.forEach((node) => { if (node.type.name === 'amadeusCanvasCard') count++ })
-    const made = blockToCard(
-      view,
-      Math.round(canvasMain.x + canvasMain.w + 80),
-      Math.round(canvasMain.y + count * 72),
-    )
+    // 子卡摆在父卡右侧、按已有兄弟错开;自由卡照旧排在主卡右侧的队列里。
+    const px = parent ? (Number(host!.attrs.x) || 0) + (Number(host!.attrs.w) || CARD_W) + 80 : canvasMain.x + canvasMain.w + 80
+    const py = parent ? (Number(host!.attrs.y) || 0) + childrenOf(tree, parent).length * 72 : canvasMain.y + count * 72
+    const made = blockToCard(view, Math.round(px), Math.round(py), parent ? { parent, tree } : undefined)
     if (!made) return unavailable()
     pipe.ownedCards.add(made)
     syncFromEditor()
     schedule()
-    if (!canvasModeRef.current) {
+    // ⚠️ 顺序:层级必须写在 syncFromEditor **之后** —— 它会按 doc 重写整行 canvas,先写就被盖掉。
+    // ponytail: 这一笔走宿主的 setCanvasTree 而不是舞台的 writeFm,所以撤销时是「卡片先回退、
+    //   tree 里那条悬空一瞬、下一次派生剪掉」(悬空父到处都按「没有爹」处理,不会画错)。
+    //   要做到卡与层级一次 Cmd+Z 齐退,得给舞台开一条命令式接缝,不值。
+    // ⚠️ 写基底**再读一次**(不是上面那份 tree):syncFromEditor 刚跑过一次派生,那一步会剪掉
+    //    悬空的层级条目 —— 拿派生前的快照当基底,等于把刚被剪掉的垃圾原样写回去。
+    if (parent) setCanvasTree(setParent(rawTree(parseCanvasJson(canvasLineOf(pipe.fm))?.tree), made, parent))
+    if (!canvasModeRef.current && !parent) {
       window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '已转换为卡片 —— 右上角切到画布模式查看' } }))
     }
     return true
@@ -1213,7 +1257,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     syncSrcDraft()
     if (immediate) {
       pipe.pending = true
-      void writeNow().then(() => { void usePageStore.getState().refreshPages() }) // 侧栏 emoji 跟上
+      void writeNow().then(() => {
+        const ps = usePageStore.getState()
+        void ps.refreshPages()
+        // ⚠️ 侧栏/树/双链补全的 emoji 走的是**另一张表**(icons,真源=主进程索引),refreshPages
+        //    只刷页面清单、一个字都不碰它 —— 老注释「侧栏 emoji 跟上」写在 refreshPages 上是错的,
+        //    图标改完在工作区一直不显示的另一半就是这里(2026-08-31 用户实报)。
+        //    主进程那半(writeTextFile 不更索引)已在 fs/pageWrite.ts 修掉,这一句才拿得到新值。
+        ps.refreshIcons()
+      })
     } else schedule()
   }
 
@@ -1702,8 +1754,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               </button>
             )}
             <button onClick={() => withBlocks(
-              // 跨块选区:整批复制(AFFiNE 的 Duplicate 也是「只选半行也复制整块」)。
-              (view, r) => view.dispatch(view.state.tr.insert(r.to, view.state.doc.slice(r.from, r.to).content).scrollIntoView()),
+              // 跨块选区:整批复制(AFFiNE 的 Duplicate 也是「只选半行也复制整块」)。范围可能盖到
+              // 整卡(topRangeOf 对卡内选区爬升到卡边界)—— 与单卡支同款:铸新锚 + 进归属集合
+              // (漏登记 = 首次派生落盘后归属判据 fail-closed,派生冻结;C89b 修前红)。
+              (view, r) => {
+                const { content, minted } = mintCardCopies(view.state.doc, view.state.doc.slice(r.from, r.to).content)
+                view.dispatch(view.state.tr.insert(r.to, content).scrollIntoView())
+                for (const a of minted) pipe.ownedCards.add(a)
+              },
               (view, sel) => {
                 // ⚠️ 画布卡片必须换新锚再复制(Codex P0-6):原样插入会得到两个 anchor=c1,派生写出
                 // 重复 ref,下次打开 parseCanvasJson 判歧义**整键作废** —— 全部画布卡一起失效。

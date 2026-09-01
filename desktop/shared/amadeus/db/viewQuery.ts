@@ -99,15 +99,42 @@ export function matchFilter(raw: CellValue | undefined, f: DbViewFilter, kind: C
   return true
 }
 
-/** 全部条件 AND;kindOf 由调用方按列折算(找不到列的条件跳过,不丢行)。 */
-export function applyFilters(rows: DbRow[], filters: DbViewFilter[] | undefined, kindOf: (colId: string) => ColumnType | null): DbRow[] {
-  if (!filters?.length) return rows
-  return rows.filter((r) =>
-    filters.every((f) => {
-      const kind = kindOf(f.colId)
-      return kind === null ? true : matchFilter(r.cells[f.colId], f, kind)
-    }),
-  )
+/** 条件组合;kindOf 由调用方按列折算。mode 缺省 'and'(全部满足),'or' = 任一满足。
+ *  找不到列、或该 kind 不认识的 op(如改列类型留下的陈旧条件)的条件都先剔除:
+ *  AND 下等价于旧的「未知恒真」;OR 下不剔会让一条废条件放行全部行。 */
+export function applyFilters(
+  rows: DbRow[],
+  filters: DbViewFilter[] | undefined,
+  kindOf: (colId: string) => ColumnType | null,
+  mode?: string,
+): DbRow[] {
+  const live = (filters ?? []).filter((f) => {
+    const kind = kindOf(f.colId)
+    return kind !== null && FILTER_OPS[kind].includes(f.op)
+  })
+  if (!live.length) return rows
+  const hit = (r: DbRow, f: DbViewFilter): boolean => matchFilter(r.cells[f.colId], f, kindOf(f.colId)!)
+  return mode === 'or'
+    ? rows.filter((r) => live.some((f) => hit(r, f)))
+    : rows.filter((r) => live.every((f) => hit(r, f)))
+}
+
+/** 多列排序(稳定;逐层比较):keyOf 把一行折算成该列的排序键(数字对数字比大小,否则中文字典序)。 */
+export function applySorts(
+  rows: DbRow[],
+  sorts: Array<{ colId: string; dir: 'asc' | 'desc' }>,
+  keyOf: (row: DbRow, colId: string) => string | number,
+): DbRow[] {
+  if (!sorts.length) return rows
+  return [...rows].sort((a, b) => {
+    for (const s of sorts) {
+      const ka = keyOf(a, s.colId)
+      const kb = keyOf(b, s.colId)
+      const cmp = typeof ka === 'number' && typeof kb === 'number' ? ka - kb : String(ka).localeCompare(String(kb), 'zh')
+      if (cmp !== 0) return s.dir === 'asc' ? cmp : -cmp
+    }
+    return 0
+  })
 }
 
 // ── 页脚统计 ────────────────────────────────────────────────────────────────

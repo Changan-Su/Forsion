@@ -6,6 +6,7 @@ import {
   DASH3_COLS, DASH3_COL_STEPS, DASH3_FM_KEY, DASH3_GAP_PX, DASH3_MAX_ROWS, DASH3_MIN_COL_PX,
   DASH3_ROW_PX, clampCell, colsForWidth, composeDash3Rows, fitDash3Cell, grid3IsStale, migrateCanvasToGrid, moveCard, orderedIds,
   packDash3Rows, readDash3Layout, readDashMode, reconcileGrid, renumber, setDash3InFm, setDashModeInFm, spanFor,
+  DASH3_PIN_KEY, colFor, dropIntoRow, fitRow, layoutDash3Rows, nextPinRow, readDash3Pins, reconcilePins, setDash3PinsInFm,
 } from './dashboard3'
 
 describe('dashboard3 读写往返', () => {
@@ -246,5 +247,107 @@ describe('卡片尺寸契约与受控分行', () => {
       { id: 'b', preferred: { order: 2, w: 6, h: 3 }, choices: [{ key: 'wide', w: 6, h: 3 }] },
     ], 1)
     expect(rows.map((row) => row.items.map((item) => item.id))).toEqual([['a'], ['section'], ['b']])
+  })
+})
+
+describe('手工行位(dashboard3x:)', () => {
+  it('写入 → 读回往返;与 dashboard3: 串在同一份 fm 上互不打扰', () => {
+    const layout = setDash3InFm('title_extra: 保留我', { '1': { order: 0, w: 6, h: 5 }, '2': { order: 1, w: 3, h: 2 } })
+    const text = setDash3PinsInFm(layout!, { '1': { row: 4, col: 0 }, '2': { row: 4, col: 8 } })
+    expect(text).not.toBe(null)
+    const back = readDash3Pins(text!)
+    expect(back.ok && back.pins).toEqual({ '1': { row: 4, col: 0 }, '2': { row: 4, col: 8 } })
+    expect(readDash3Layout(text!).ok).toBe(true)
+    expect(text).toContain('title_extra: 保留我')
+  })
+
+  it('三态:没键=空 / 坏值=冻结(不当成空) / 清空=删键', () => {
+    expect(readDash3Pins('dashboard3:\n  "1": [0, 6, 3]')).toEqual({ ok: true, pins: {} })
+    expect(readDash3Pins(`${DASH3_PIN_KEY}:\n  "1": [0, 6, 3]`).ok).toBe(false) // 三项 ≠ [row,col]
+    expect(readDash3Pins(`${DASH3_PIN_KEY}:\n  "1": [0, "x"]`).ok).toBe(false)
+    expect(readDash3Pins(`${DASH3_PIN_KEY}: 7`).ok).toBe(false)
+    const cleared = setDash3PinsInFm(`${DASH3_PIN_KEY}:\n  "1": [0, 6]\nx: 1`, {})
+    expect(cleared).not.toContain(DASH3_PIN_KEY)
+    expect(cleared).toContain('x: 1')
+  })
+
+  it('手工行:横向留白保留,且**不同高度**的卡可以并排(band 高=最高那张)', () => {
+    const rows = layoutDash3Rows([
+      { id: 'big', preferred: { order: 0, w: 6, h: 5 }, choices: [{ key: 'lg', w: 6, h: 5 }] },
+      { id: 'mini', preferred: { order: 1, w: 3, h: 2 }, choices: [{ key: 'sm', w: 3, h: 2 }] },
+    ], { big: { row: 0, col: 0 }, mini: { row: 0, col: 9 } }, 12)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].h).toBe(5) // band 高 = 最高卡;矮卡按自己的 h 渲染,下方留白
+    expect(rows[0].items.map((i) => [i.id, i.start, i.span, i.h])).toEqual([['big', 1, 6, 5], ['mini', 10, 3, 2]])
+  })
+
+  it('手工段与自动段互为硬边界:pin 的行不被自动卡挤进来,没 pin 的行行为逐字照旧', () => {
+    const auto = [
+      { id: 'a', preferred: { order: 1, w: 3, h: 2 }, choices: [{ key: 'sm' as const, w: 3, h: 2 }, { key: 'wide' as const, w: 6, h: 3 }] },
+      { id: 'b', preferred: { order: 2, w: 3, h: 2 }, choices: [{ key: 'sm' as const, w: 3, h: 2 }, { key: 'wide' as const, w: 6, h: 3 }] },
+    ]
+    const pinned = { id: 'p', preferred: { order: 0, w: 6, h: 5 }, choices: [{ key: 'lg' as const, w: 6, h: 5 }] }
+    const rows = layoutDash3Rows([pinned, ...auto], { p: { row: 0, col: 6 } }, 12)
+    expect(rows.map((r) => r.items.map((i) => i.id))).toEqual([['p'], ['a', 'b']])
+    expect(rows[0].items[0].start).toBe(7) // 独占一行、靠右摆,左半留白
+    // 回归钉:自动那一行与「页面上没有任何 pin」时逐字一致(拍板「未动仍自动」的可证伪判据)
+    expect(rows[1]).toEqual(composeDash3Rows(auto, 12)[0])
+  })
+
+  it('手工行冲突降级:重叠 / 装不下 → 挤到下一行,永不叠压', () => {
+    const item = (id: string, w: number) => ({ id, preferred: { order: 0, w, h: 3 }, choices: [{ key: 'wide' as const, w, h: 3 }] })
+    const rows = layoutDash3Rows(
+      [item('a', 6), item('b', 6), item('c', 6)],
+      { a: { row: 0, col: 0 }, b: { row: 0, col: 3 }, c: { row: 0, col: 0 } }, // b 与 a 重叠;c 想回列首
+      12,
+    )
+    expect(rows.map((r) => r.items.map((i) => `${i.id}@${i.start}`))).toEqual([['a@1', 'b@7'], ['c@1']])
+  })
+
+  it('降列不溢出:x 与 w 各自取整会越过右边界(横向滚动条的真身)', () => {
+    expect(colFor(7, spanFor(5, 6), 6)).toBe(3) // round(3.5)=4 + span 3 = 7 > 6 → 夹回 3
+    expect(colFor(6, spanFor(6, 6), 6)).toBe(3)
+    expect(colFor(11, spanFor(3, 4), 4)).toBe(3)
+    const rows = layoutDash3Rows([
+      { id: 'a', preferred: { order: 0, w: 5, h: 3 }, choices: [{ key: 'wide', w: 5, h: 3 }] },
+    ], { a: { row: 0, col: 7 } }, 6)
+    const it0 = rows[0].items[0]
+    expect((it0.start ?? 1) - 1 + it0.span).toBeLessThanOrEqual(6)
+  })
+
+  it('fitRow:后来的被推开,行尾放不下的退出这一行;平手时首位(正在拖的那张)胜出', () => {
+    expect(fitRow([{ id: 'drag', col: 0, w: 6 }, { id: 'old', col: 0, w: 6 }])).toEqual({
+      row: [{ id: 'drag', col: 0, w: 6 }, { id: 'old', col: 6, w: 6 }], spilled: [],
+    })
+    // 插到中间:左边的保持,被拖的落到它右边(左边缘定序)
+    expect(fitRow([{ id: 'drag', col: 3, w: 6 }, { id: 'old', col: 0, w: 6 }]).row)
+      .toEqual([{ id: 'old', col: 0, w: 6 }, { id: 'drag', col: 6, w: 6 }])
+    // 三张 6 宽塞一行 → 最右那张被挤出去
+    expect(fitRow([{ id: 'x', col: 0, w: 6 }, { id: 'y', col: 6, w: 6 }, { id: 'z', col: 9, w: 6 }]).spilled).toEqual(['z'])
+  })
+
+  it('dropIntoRow:视觉序连带改 order;被挤出去的卡丢掉 pin(回自动流)', () => {
+    const before = { z: { row: 0, col: 6 } }
+    const out = dropIntoRow(['a', 'b', 'z'], before, [
+      { id: 'b', col: 0, w: 6 }, // 正在拖的放首位
+      { id: 'z', col: 6, w: 6 },
+      { id: 'a', col: 6, w: 6 },
+    ], 9)
+    expect(out.ids).toEqual(['b', 'z', 'a']) // 整块落在最靠前那位成员(a)的原位
+    expect(out.pins).toEqual({ b: { row: 9, col: 0 }, z: { row: 9, col: 6 } })
+    expect(out.pins.a).toBeUndefined() // 溢出 = 回自动流,不冻结
+    expect(nextPinRow(out.pins)).toBe(10)
+  })
+
+  it('手工行的几何取**选中档**(pin 蕴含尺寸铁,那一档已夹过下界),不是裸 preferred', () => {
+    const rows = layoutDash3Rows([
+      { id: 'old', preferred: { order: 0, w: 3, h: 2 }, choices: [{ key: 'md', w: 4, h: 3 }] }, // 存量小尺寸 → 夹到 4×3
+    ], { old: { row: 0, col: 0 } }, 12)
+    expect(rows[0].items[0]).toMatchObject({ span: 4, h: 3 })
+  })
+
+  it('pin 自愈只清孤儿;行号稀疏无所谓(同值才算同行)', () => {
+    expect(reconcilePins({ '1': { row: 3, col: 0 } }, ['1'])).toBe(null)
+    expect(reconcilePins({ '1': { row: 3, col: 0 }, '9': { row: 3, col: 6 } }, ['1'])).toEqual({ '1': { row: 3, col: 0 } })
   })
 })

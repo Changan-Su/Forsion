@@ -47,6 +47,7 @@ registerMessages({
   'home.greet.evening.named': { zh: '晚上好,{name}', en: 'Good evening, {name}' },
   'home.greet.night.named': { zh: '夜深了,{name}', en: 'Working late, {name}' },
   'home.spaces': { zh: 'Spaces', en: 'Spaces' },
+  'home.pinnedSpaces': { zh: '前置 Space', en: 'Pinned Spaces' },
   'home.spaceCount': { zh: '{n} 个空间', en: '{n} spaces' },
   'home.newFolder': { zh: '新建收纳夹', en: 'New folder' },
   'home.showAll': { zh: '全部 Spaces', en: 'All Spaces' },
@@ -79,7 +80,7 @@ registerMessages({
   'home.wallpaper.invalid': { zh: '请选择可读取的图片文件', en: 'Choose a readable image file' },
   'home.wallpaper.tooLarge': { zh: '图片超过 32 MB,请先压缩后再试', en: 'The image is over 32 MB. Compress it and try again.' },
   'home.wallpaper.focusBlur': { zh: '聚焦景深', en: 'Focus depth' },
-  'home.wallpaper.focusBlurHint': { zh: '点击输入框进入输入模式时柔化背景', en: 'Soften the stage when the chat input enters input mode' },
+  'home.wallpaper.focusBlurHint': { zh: '操作输入框、模型或模式等控件时柔化背景', en: 'Soften the stage while using the chat input, model, mode, or related controls' },
   'home.wallpaper.vignette': { zh: '边缘压暗', en: 'Edge vignette' },
   'home.wallpaper.vignetteHint': { zh: '让文字和控件在明亮壁纸上保持清晰', en: 'Keep text and controls legible on bright images' },
 })

@@ -7,6 +7,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DashboardCardSize, Leaf } from '@lcl/engine'
 import { getView, subscribeViews } from '@lcl/engine'
 import { setActivePageScope, useScopedPageStore } from '@amadeus/store/pageStore'
+import { useDbStore } from '@amadeus/store/dbStore'
+import { dbId, viewsOf, type DbView } from '@amadeus-shared/db/schema'
 import { widgetSource } from '@amadeus-shared/dashboard'
 
 /** 视图卡片:把**任意已注册视图**(日历 / 待办 / 收件箱 / 活动日志 / 插件视图……)活化在格子里。
@@ -103,6 +105,26 @@ export function pickSpecOf(
   if (v.type === 'outline') return { param: 'sourcePath', accept: (_k, path) => fileMatchViewType(path) === 'amadeus-editor' }
   if (!v.idParam || !v.fileMatch) return null
   return { param: v.idParam, accept: (_k, path) => fileMatchViewType(path) === v.type }
+}
+
+/** 仪表盘「图表(多维表)」快捷径:保证这份 .db 上有一个 chart 视图,返回其名字(加卡时写进
+ *  卡片的 `view:` 参数)。已有图表视图 → 直接复用,不重复造;一个都没有 → 建一个(视图定义存
+ *  .db,该 db 的所有嵌入处都会看到 —— Notion 同语义,2026-08-31 拍板)。失败(文件缺/损坏)
+ *  返回 null,调用方照常插 db 卡(默认视图),不拦流程。 */
+export async function ensureChartView(dbPath: string): Promise<string | null> {
+  const store = useDbStore.getState()
+  await store.load(dbPath, dbPath)
+  const data = useDbStore.getState().entries[dbPath]?.data
+  if (!data) return null
+  const views = viewsOf(data)
+  const existing = views.find((v) => v.type === 'chart')
+  if (existing) return existing.name
+  const names = new Set(views.map((v) => v.name))
+  let name = '图表'
+  for (let n = 2; names.has(name); n++) name = `图表 ${n}`
+  const view: DbView = { id: dbId(), name, type: 'chart' }
+  store.mutate(dbPath, (d) => ({ ...d, views: [...viewsOf(d), view] })) // viewsOf:顺带物化隐式默认视图
+  return name
 }
 
 /** 一张视图卡在统一外壳上显示的标题:视图名 +(带身份时)文件名。

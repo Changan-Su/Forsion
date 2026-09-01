@@ -1424,6 +1424,61 @@ async function main() {
     await r.close()
   })
 
+  // T44:'@' 面板的日期候选(2026-08-31)。松散输入活在面板里,落进正文的一律是规范串
+  //      `@YYYY-MM-DDTHH:mm`(mdMarks 只认这一种)。⚠️ 插入必须补尾随空格 —— 否则新写进去的
+  //      `@…` 立刻又满足 mention 触发条件,面板当场再弹一次(自弹环)。
+  await tryTest('T44', async () => {
+    const pad = (n) => String(n).padStart(2, '0')
+    const d = new Date()
+    const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+
+    const p = await freshPage()
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('Meta+ArrowRight')
+    await p.keyboard.type('周会 @2200', { delay: 40 })
+    await p.waitForTimeout(350)
+    // 观感自查:EDITOR_SHOT_DIR=/tmp/x npm run e2e:editor → 面板截图落在那里(DESIGN.md §8)。
+    if (process.env.EDITOR_SHOT_DIR) {
+      fs.mkdirSync(process.env.EDITOR_SHOT_DIR, { recursive: true })
+      await p.screenshot({ path: path.join(process.env.EDITOR_SHOT_DIR, 'mention-date-panel.png') })
+    }
+    const rows = await p.locator('.wiki-suggest .wiki-item').allInnerTexts()
+    check('T44 "@2200" → 面板给出「日程 / 提醒」两行', rows.length >= 2 && rows[0].includes('日程') && rows[1].includes('提醒'), JSON.stringify(rows.slice(0, 3)))
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(400)
+    const t = await p.locator('.md-block .ProseMirror').first().innerText()
+    check('T44 回车插入规范串(不是 [[ ]])', t.includes(`@${today}T22:00`) && !t.includes('[['), `text=${JSON.stringify(t)}`)
+    check('T44 插入后面板不再自弹(尾随空格已退出提及语义)', (await p.locator('.wiki-suggest').count()) === 0)
+    const n = await p.locator('.md-block .ProseMirror p').count()
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(400)
+    check('T44 插入之后回车照常换行(键盘监听器已摘)', (await p.locator('.md-block .ProseMirror p').count()) === n + 1)
+    await p.close()
+
+    // 负对照:非日期查询串不许多出日期行(否则页面候选的索引会整体错位)。
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.press('Meta+ArrowRight')
+    await q.keyboard.type('@zzz', { delay: 40 })
+    await q.waitForTimeout(300)
+    check('T44 负对照:非日期查询串不出日期行', (await q.locator('.wiki-suggest').count()) === 0)
+    await q.close()
+
+    // `@remind:` 打头 → 只给提醒一条。
+    const r = await freshPage()
+    await r.locator('.md-block .ProseMirror').first().click()
+    await r.keyboard.press('Meta+ArrowRight')
+    await r.keyboard.type('吃药 @remind:2200', { delay: 40 })
+    await r.waitForTimeout(350)
+    const rrows = await r.locator('.wiki-suggest .wiki-item').allInnerTexts()
+    check('T44 "@remind:2200" → 只给提醒一行', rrows.length === 1 && rrows[0].includes('提醒'), JSON.stringify(rrows))
+    await r.keyboard.press('Enter')
+    await r.waitForTimeout(400)
+    const rt = await r.locator('.md-block .ProseMirror').first().innerText()
+    check('T44 提醒插入 @remind: 规范串', rt.includes(`@remind:${today}T22:00`), `text=${JSON.stringify(rt)}`)
+    await r.close()
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

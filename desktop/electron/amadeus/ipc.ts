@@ -14,6 +14,8 @@ import { VaultManager } from './fs/vaultManager'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { withDbLock } from './fs/dbLock'
+import { writeVaultText } from './fs/pageWrite'
+import { findMarkLine } from '@amadeus-shared/mdMarks'
 import { readConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir } from '../forsionHome'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -1075,7 +1077,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     }
   })
   handle(IPC.writeTextFile, async (_e, filePath: string, text: string) => {
-    await vault.writeTextFile(filePath, text)
+    // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
+    //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
+    await writeVaultText(vault, index, filePath, text)
   })
 
   // 「笔记视图」(Bases):行 = 目标文件夹直属笔记,frontmatter 是唯一真源。
@@ -1162,6 +1166,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
         rewrittenPages.push(p)
       }
     }
+
+    // 关联表列(rowlink)的 refDb 存的是 vault 相对路径:别的 .db 指向本表的,一并迁移,
+    // 否则改个名整列 chip 变「已失联」、lookup 全空(codex 抓的)。同一趟朴素全库扫描。
+    for (const f of await vault.listFiles()) {
+      const fRel = norm(f)
+      if (!/\.db$/i.test(fRel) || fRel === newPath) continue
+      let parsed: ReturnType<typeof parseDb>
+      try { parsed = parseDb(await fs.readFile(vault.absPath(fRel), 'utf8')) } catch { continue }
+      if (!parsed.ok) continue
+      let hit = false
+      const columns = parsed.data.columns.map((c) => {
+        if (c.refDb && norm(c.refDb) === oldRel) { hit = true; return { ...c, refDb: newPath } }
+        return c
+      })
+      if (!hit) continue
+      await vault.writeTextFile(fRel, serializeDb({ ...parsed.data, columns }))
+      notifyAll(IPC.dbChange, fRel)
+    }
     return { newPath, rewrittenPages }
   })
 
@@ -1170,7 +1192,25 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
   handle(IPC.reindex, () => index.build())
   handle(IPC.listTags, () => index.listTags())
-  handle(IPC.listTasks, () => index.tasks())
+  handle(IPC.listMarks, () => index.marks())
+  /** 改写一条 `@` 标记所在的整行(待办就地勾、日历拖动改期)。
+   *  定位**按内容**(raw + 同文行序号),不按行号 —— 行号是清洗文本的坐标系。找不到就返回 false,
+   *  由渲染层退回「跳到笔记里改」;**绝不模糊匹配**,宁可改不动也不能改错行。
+   *  写盘 → 更索引 → externalChange 广播,与 propagateRenames / renameDbFile 同一条既有路子。 */
+  handle(IPC.patchMark, async (_e, pagePath: string, raw: string, occ: number, next: string) => {
+    if (!vault.isPagePath(pagePath)) return false
+    let text: string
+    try { text = await fs.readFile(vault.absPath(pagePath), 'utf8') } catch { return false }
+    const at = findMarkLine(text, raw, occ)
+    if (at < 0) return false
+    const eol = text.includes('\r\n') ? '\r\n' : '\n'
+    const lines = text.split(/\r?\n/)
+    if (lines[at] === next) return true // 幂等:拖回原位不写盘、不惊动打开着的编辑器
+    lines[at] = next
+    await writeVaultText(vault, index, pagePath, lines.join(eol))
+    notifyAll(IPC.externalChange, pagePath)
+    return true
+  })
   handle(IPC.pagesByTag, (_e, tag: string) => index.pagesByTag(tag))
 
   handle(IPC.listFolders, () => vault.listFolders())

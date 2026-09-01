@@ -95,9 +95,15 @@ export class VaultManager {
    *  compiler 当页面解析,一存就把插件的载荷改写成 `<!-- a id -->` 块 + amadeus_* frontmatter
    *  —— 对 Obsidian 侧即毁档。页面侧的消费方(树/索引/搜索/反链/tags)全从这一个口取,挡这里就够。 */
   async listPages(): Promise<string[]> {
-    return this.collectFiles(
-      (n) => n.endsWith('.md') && !isDrawingPath(n) && !this.isPluginFile(n),
-    )
+    return this.collectFiles((n) => this.isPagePath(n))
+  }
+
+  /** 「这条路径算不算一篇笔记」的**单一判据** —— listPages 与「写盘后要不要更索引」共用这一份。
+   *  两处各写各的话,插件文件类型(`.mindmap.md` 等)一边被排掉、另一边被当页面读进索引,
+   *  正是本仓明令要挡的那件事(见 listPages 顶注:页面侧消费方全从这一个口取)。 */
+  isPagePath(rel: string): boolean {
+    const n = rel.replace(/\\/g, '/')
+    return n.endsWith('.md') && !isDrawingPath(n) && !this.isPluginFile(n)
   }
 
   /** All non-page files (attachments/.db/画板/思维导图/插件文件类型/…), vault-relative — for the vault tree. */

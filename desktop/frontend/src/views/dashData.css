@@ -15,33 +15,12 @@
 .dash-stat-label { font-size: 12px; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-stat-sub { font-size: 11px; color: var(--text-faint, var(--text-muted)); }
 
-/* ── 图表卡 ─────────────────────────────────────────────────────────────── */
+/* ── 图表卡 ───────────────────────────────────────────────────────────────
+   卡壳(标题 + 弹性体)在这;三种图形(.dash-bars/.dash-line/.dash-donut)随组件
+   下沉渲染层 amadeus/blocks/database/chartBody.css(多维表 chart 视图共用),勿在此复写。 */
 .dash-chart { height: 100%; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; gap: 8px; }
 .dash-chart-title { flex: 0 0 auto; font-size: 12px; font-weight: 550; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-chart-body { flex: 1 1 auto; min-height: 0; display: flex; }
-
-/* 横向条 */
-.dash-bars { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; justify-content: center; }
-.dash-bar-row { display: grid; grid-template-columns: minmax(0, 5.5em) 1fr auto; align-items: center; gap: 8px; font-size: 11.5px; }
-.dash-bar-key { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-bar-track { height: 8px; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); overflow: hidden; }
-.dash-bar-fill { display: block; height: 100%; border-radius: inherit; min-width: 2px; }
-.dash-bar-val { color: var(--text); font-variant-numeric: tabular-nums; }
-
-/* 折线 */
-.dash-line { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.dash-line-svg { flex: 1 1 auto; width: 100%; min-height: 0; }
-.dash-line-axis { flex: 0 0 auto; display: flex; justify-content: space-between; gap: 6px; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); }
-.dash-line-axis span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 5em; }
-
-/* 环图 */
-.dash-donut { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; gap: 12px; }
-.dash-donut-svg { flex: 0 0 auto; width: 96px; max-width: 45%; height: auto; }
-.dash-donut-legend { flex: 1 1 auto; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
-.dash-donut-item { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center; gap: 6px; }
-.dash-donut-item i { width: 9px; height: 9px; border-radius: 3px; }
-.dash-donut-item b { font-weight: 450; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-donut-item em { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* ── 页面级筛选栏 ───────────────────────────────────────────────────────
    一处改、全页跟随 —— 这条是「复合 view」与「一屏面板」的分界线,所以它长在页面上,

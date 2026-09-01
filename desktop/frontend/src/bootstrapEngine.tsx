@@ -26,6 +26,7 @@ import { NewTabView } from './views/NewTabView'
 import { HomeEmptyView } from './views/HomeEmpty'
 import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
 import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
+import { NoteTabIcon } from './amadeusViews'
 import { AmadeusDbView } from './views/AmadeusDbView'
 import { AmadeusDrawingView } from './views/AmadeusDrawingView'
 import { DashboardView } from './views/DashboardView'
@@ -152,7 +153,7 @@ export function installEngine(): void {
     // 可关闭:关到主区最后一个 → 落 launcher 启动器(见 workspaceStore.closeLeaf)。
     registerView({
       type: 'amadeus-editor', kind: 'entity', embeddable: true, idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'],
-      displayName: () => app().tr('amadeus.editor'), icon: FileText, factory: (props) => <AmadeusEditorView {...props} />,
+      displayName: () => app().tr('amadeus.editor'), icon: FileText, TabIcon: NoteTabIcon, factory: (props) => <AmadeusEditorView {...props} />,
       dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
     })
     // 独立 .db 数据库视图(多实例,params.dbPath 认领文件并随布局持久化;树上点 .db 打开,见 amadeusNav.openDb)。
@@ -362,23 +363,23 @@ export function installEngine(): void {
     }
   })
 
-  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);商店/明暗/语言/反馈/命令/设置/账号常驻底部。
+  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);商店/成就/明暗/命令/设置/账号常驻底部。
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
-  // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册。
+  // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册
+  // (商店 = ribbon 图标;反馈只剩命令面板一条路,门控照旧挂在那条 addCommand 上)。
   // 商店置于底部首位:注册序即上下序,故在 rb-mode 之前注册 → 落在底部组最上方。
   // Unit 切换器(head 常驻,折叠钮旁):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 仅真桌面(unitsList 是 agent 后端形态的 preload 能力;web/mobile 垫片无此方法 → 不注册,
   // 它们的 vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态)。
   if (window.tangu?.unitsList) addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
-  addRibbonIcon({ id: 'rb-search', side: 'bottom', icon: Search, tooltip: () => '快速查找', onClick: () => useQuickFind.getState().openPalette() })
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
   addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: Moon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
-  addRibbonIcon({ id: 'rb-locale', side: 'bottom', icon: Languages, tooltip: () => app().tr('locale.toggleTitle'), onClick: () => cycleLocale() })
-  if (window.tangu?.submitFeedback) addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => app().openFeedback() })
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
-  // 底部常驻(side:'bottom',不参与拖动排序),注册序即上下序:明暗/语言/反馈/命令 → 设置 → 账号(账号最底)。
+  // 底部常驻(side:'bottom',不参与拖动排序),注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
+  // ⚠️快速查找/语言/反馈**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,
+  //   商店与成就被埋没。三者都是低频动作 → 只留命令面板(想要的人可从 ⌘K 钉回命令区)。
   // 账号卡复用 AccountCard,随 ribbon 展开切换「完整卡 / 紧凑头像」;原聊天列表底部那份已移除,避免重复。
   addRibbonIcon({ id: 'rb-settings', side: 'bottom', icon: Settings, tooltip: () => app().tr('settings.title'), onClick: () => app().openSettings() })
   if (PRODUCT.agentBackend) addRibbonIcon({
@@ -416,6 +417,8 @@ export function installEngine(): void {
   addCommand({ id: 'theme-mode', icon: Moon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })
+  // ⚠️别与上一条混:theme-lang = 主题的「语言层」(genesis/lovable/soft),这条才是界面中英文。
+  addCommand({ id: 'toggle-locale', icon: Languages, title: () => app().tr('locale.toggleTitle'), keywords: 'locale language i18n 语言 中英文 chinese english', run: () => cycleLocale() })
   addCommand({ id: 'toggle-smooth-caret', title: () => app().tr('command.toggleSmoothCaret'), keywords: 'smooth caret cursor 光标 丝滑 word', run: () => {
     const on = !isSmoothCaretOn()
     try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
@@ -457,6 +460,10 @@ export function installEngine(): void {
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: () => app().stop() })
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
   if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
+  // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
+  if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'market store plugin theme skill agent 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
+  addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
+  if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => app().openFeedback() })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() })
   // UI 缩放:应用持久值 + 注册放大/缩小/重置命令。端默认:桌面 Electron 1 / 触屏窄屏 1.15(同
   // singleColumn.css 移动 zoom 段) / 桌面浏览器(网页端) 1.1 / 移动端平板 1。

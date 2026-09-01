@@ -11,6 +11,7 @@ import { pickWikiResults, type Cand } from './wikiRank'
 import { isFileRef } from '../../lib/vaultFiles'
 import { pageKey } from '@amadeus-shared/links'
 import { AttachmentIcon, DatabaseTableViewIcon } from '../../components/icons'
+import { dateCandidates } from './dateQuery'
 import { usePageStore } from '../../store/pageStore'
 
 interface Props {
@@ -27,6 +28,12 @@ interface Props {
   onClose: () => void
   /** false = 不提供「新建链接」行(@ 提及场景:无匹配即整体消失,不劫持 Enter)。 */
   allowCreate?: boolean
+  /** true(@ 提及场景)= 查询串同时按日期解析,命中就在页面候选**之上**多出「日程 / 提醒」两行。
+   *  Notion 的 `@` 菜单同款分区(Date / People / Link to page)。选中走 onPickRaw 而不是 onPick
+   *  —— 插入的是字面 `@2026-09-01T14:30`,不是 `[[ ]]`。 */
+  dates?: boolean
+  /** 日期候选的插入回调;调用方负责把它写进文档(见 MarkdownBlock.pickMentionRaw)。 */
+  onPickRaw?: (text: string) => void
 }
 
 function baseName(p: string): string {
@@ -46,7 +53,7 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onClose, allowCreate = true }: Props) {
+export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, allowCreate = true, dates = false }: Props) {
   const [active, setActive] = useState(0)
   const icons = usePageStore((s) => s.icons) // 页面 emoji(path 键);非 vault 候选池查不到 → 无图标,天然兼容
 
@@ -58,11 +65,12 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   for (const c of cands) dupes.set(candKey(c), (dupes.get(candKey(c)) ?? 0) + 1)
   // 排序 + 文件保底名额见 ./wikiRank(附件/数据库曾被页面整页挤掉,单测钉在 wikiRank.test.ts)。
   const results = pickWikiResults(cands, query)
+  const dateCands = dates ? dateCandidates(query) : []
   const q = query.trim()
   // 查询串本身像文件名([[xxx.db]])时不给「新建链接」:createWikiPage 会造出 xxx.db.md 怪胎。
   const showCreate =
     allowCreate && q.length > 0 && !isFileRef(q) && !cands.some((c) => candKey(c) === pageKey(q))
-  const total = results.length + (showCreate ? 1 : 0)
+  const total = dateCands.length + results.length + (showCreate ? 1 : 0)
 
   /** 「唯一即最短」:basename 全库唯一 → 裸名;重名 → `dir/Name|Name`(路径解析 + 别名显示)。 */
   const linkInner = (c: Cand): string => {
@@ -83,8 +91,9 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     // 仍在捕获阶段吞掉 Enter/Tab/↑↓(用户实报「@ 之后回车换不了行」)。见 allowCreate 注释的契约。
     if (total === 0) return
     const pick = (i: number): void => {
-      if (showCreate && i === results.length) onPick(q)
-      else if (results[i]) onPick(linkInner(results[i]))
+      if (dateCands[i]) onPickRaw?.(dateCands[i].insert)
+      else if (showCreate && i === dateCands.length + results.length) onPick(q)
+      else if (results[i - dateCands.length]) onPick(linkInner(results[i - dateCands.length]))
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'ArrowDown') {
@@ -110,23 +119,40 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   })
 
   const pick = (i: number): void => {
-    if (showCreate && i === results.length) onPick(q)
-    else if (results[i]) onPick(linkInner(results[i]))
+    if (dateCands[i]) onPickRaw?.(dateCands[i].insert)
+    else if (showCreate && i === dateCands.length + results.length) onPick(q)
+    else if (results[i - dateCands.length]) onPick(linkInner(results[i - dateCands.length]))
   }
 
   if (total === 0) return null
 
   return (
     <OverlayAt className="wiki-suggest" x={left} y={top} anchorTop={anchorTop} role="menu">
-      {results.map((c, i) => (
+      {dateCands.map((d, i) => (
         <button
-          key={(c.file ? 'f:' : 'p:') + c.path}
+          key={d.insert}
           className="wiki-item"
           data-active={i === active || undefined}
           onMouseEnter={() => setActive(i)}
           onMouseDown={(e) => {
             e.preventDefault()
             pick(i)
+          }}
+          role="menuitem"
+        >
+          <span className="wiki-item-name">{d.label}</span>
+          <span className="wiki-item-path">{d.hint}</span>
+        </button>
+      ))}
+      {results.map((c, i) => (
+        <button
+          key={(c.file ? 'f:' : 'p:') + c.path}
+          className="wiki-item"
+          data-active={i + dateCands.length === active || undefined}
+          onMouseEnter={() => setActive(i + dateCands.length)}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            pick(i + dateCands.length)
           }}
           role="menuitem"
         >
@@ -150,11 +176,11 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       {showCreate && (
         <button
           className="wiki-item wiki-create"
-          data-active={active === results.length || undefined}
-          onMouseEnter={() => setActive(results.length)}
+          data-active={active === dateCands.length + results.length || undefined}
+          onMouseEnter={() => setActive(dateCands.length + results.length)}
           onMouseDown={(e) => {
             e.preventDefault()
-            pick(results.length)
+            pick(dateCands.length + results.length)
           }}
           role="menuitem"
         >

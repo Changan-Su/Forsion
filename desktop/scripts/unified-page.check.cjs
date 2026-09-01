@@ -930,7 +930,9 @@ async function main() {
 
   // P19:slash 菜单接进统一实例。此前 unified 只传了 slashOpsRef(为的是行内工具栏),没传
   // onSlashPick → 菜单渲染条件 `slash && onSlashPick` 恒 false,打 '/' 永远不弹(spec Phase B 长尾)。
-  // 三幕:整块型插入(代码块,'/query' 不留残渣)/ 前缀型原地转换(不新建块)/「模板」在 unified 不露出。
+  // 三幕:整块型插入(代码块,'/query' 不留残渣)/ 前缀型原地转换(不新建块)/「模板」在列。
+  // (模板曾被 UNIFIED_HIDDEN_SLASH 屏蔽;2026-08-21 UnifiedPage.applySlash 接上
+  //  `amadeus:template-picker` 带 v4Path 的宿主路由后移出屏蔽集,见 MarkdownBlock.tsx 那张集合的注释。)
   {
     const seed = '# 标题\n\n首段。\n'
     const pg = await browser.newPage()
@@ -972,7 +974,7 @@ async function main() {
       const h2 = [...pm.querySelectorAll('h2')].find((x) => x.textContent.includes('首段'))
       return { h2: !!h2, residue: pm.textContent.includes('/h2'), ps: pm.querySelectorAll(':scope > p').length }
     }, PM)
-    // 幕三:空段落打 '/' 浏览全部项 —— unified 隐藏「模板」(它唯一的插入通道是 v3 块清单)。
+    // 幕三:空段落打 '/' 浏览全部项 —— 「模板」「数据库」都得在列(模板走宿主选择器路由,见段首注)。
     await pg.evaluate((s) => {
       const pm = document.querySelector(s)
       const last = pm.querySelector(':scope > p:last-of-type') ?? pm.lastElementChild
@@ -991,9 +993,9 @@ async function main() {
       return { n: labels.length, hasTemplate: labels.includes('模板'), hasDb: labels.includes('数据库') }
     })
     record(
-      'P19 slash 菜单接进统一实例:整块插入无残渣 + 前缀型原地转换 + unified 隐藏模板',
+      'P19 slash 菜单接进统一实例:整块插入无残渣 + 前缀型原地转换 + 模板/数据库在列',
       a19.open && a19.first === '代码块' && b19.pre >= 1 && !b19.text.includes('/code') && !b19.menu &&
-        c19.h2 && !c19.residue && d19.n > 10 && !d19.hasTemplate && d19.hasDb,
+        c19.h2 && !c19.residue && d19.n > 10 && d19.hasTemplate && d19.hasDb,
       JSON.stringify({ a19, b19: { ...b19, text: undefined }, c19, d19 }),
     )
     await pg.close()
@@ -2050,7 +2052,10 @@ async function main() {
         if (img) Object.assign(img.style, { display: 'block', width: '320px', height: '240px' })
       }, PM)
       await pg.waitForTimeout(100)
-      const g = await grownHandle(pg, `${PM} img`)
+      // 量 .wiki-inline-img-wrap 而不是裸 img:blockLayer.visualBlockElement 的几何契约就是这个
+      // 「可见媒体盒」,而 img 自带 0.4em(=6px)上下 margin(styles.css 的 `.ProseMirror img`),
+      // margin 算在 wrap 盒内 —— 拿裸 img 量会平白差出 6px,把「缩进 8px」误报成 2px。
+      const g = await grownHandle(pg, `${PM} .wiki-inline-img-wrap`)
       record('D2c 图片块 hover 长抓手：上下沿均缩进 8px，高图片不再把抓手顶出块外',
         !!g && g.hh > 200 && Math.abs(g.top) <= 2 && Math.abs(g.bottom) <= 2, JSON.stringify(g))
       await pg.close()
@@ -2158,18 +2163,32 @@ async function main() {
         JSON.stringify({ during, ...after }))
       await pg.close()
     }
-    // U3 双击图片开大图;Esc 关
+    // U3 双击图片开大图;Esc 关。
+    // ⚠️ 必须给坏图一个盒子 + **真鼠标双击**:handler(UnifiedPage onDbl)按 elementFromPoint
+    // 取命中(2026-08-28 起,防两击间 DOM 重建把 target 派到公共祖先)——example.test 加载失败
+    // 的 img 是 0×0,合成 dispatchEvent 不带坐标打不中,真手势也无从点起,shown 恒 false。
     {
       const pg = await openSeed('![](https://example.test/x.png)\n')
       await pg.waitForTimeout(300)
       const opened = await pg.evaluate((s) => {
         const img = document.querySelector(`${s} img`)
         if (!img) return 'no-img'
-        img.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+        Object.assign(img.style, { display: 'block', width: '320px', height: '240px' })
         return 'ok'
       }, PM)
-      await pg.waitForTimeout(250)
-      const shown = await pg.evaluate(() => !!document.querySelector('.amx-lightbox img'))
+      await pg.waitForTimeout(100)
+      // 最多两趟(每趟现取坐标):首击会触发图片选中/widget 重建,负载高时布局未稳、二击偶发落空
+      // (全量跑实测 1 红)。第二趟等于「已选中的图上再双击」—— 也是真实用户流,两趟全空才算红。
+      let shown = false
+      for (let att = 0; att < 2 && !shown && opened === 'ok'; att++) {
+        const c = await pg.evaluate((s) => {
+          const r = document.querySelector(`${s} img`).getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }, PM)
+        await pg.mouse.dblclick(c.x, c.y)
+        await pg.waitForTimeout(250)
+        shown = await pg.evaluate(() => !!document.querySelector('.amx-lightbox img'))
+      }
       await pg.keyboard.press('Escape')
       await pg.waitForTimeout(200)
       const closed = await pg.evaluate(() => !document.querySelector('.amx-lightbox'))

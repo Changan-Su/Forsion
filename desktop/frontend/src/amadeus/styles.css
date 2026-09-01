@@ -501,6 +501,7 @@
 }
 
 .am-app .drag-handle,
+.am-app .card-grab,
 .am-app .block-add,
 .am-app .block-act {
   border: none;
@@ -511,8 +512,9 @@
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-apple), color var(--dur-fast), background var(--dur-fast);
 }
-/* Notion 式六点抓手(⠿ 字形):点击=菜单/选中,按住=拖拽。 */
-.am-app .drag-handle {
+/* Notion 式六点抓手(⠿ 字形):点击=菜单/选中,按住=拖拽。card-grab(抓整卡钮)同款盒与手势光标。 */
+.am-app .drag-handle,
+.am-app .card-grab {
   cursor: grab;
   width: 20px;
   height: 24px;
@@ -521,7 +523,8 @@
   justify-content: center;
   font-size: 15px;
 }
-.am-app .drag-handle:active {
+.am-app .drag-handle:active,
+.am-app .card-grab:active {
   cursor: grabbing;
 }
 /* ＋ 在下方插入块 */
@@ -540,6 +543,7 @@
   opacity: 1;
 }
 .am-app .drag-handle:hover,
+.am-app .card-grab:hover,
 .am-app .block-add:hover,
 .am-app .block-act:hover {
   color: var(--text);
@@ -2807,13 +2811,19 @@ body.amx-marquee-active * {
   pointer-events: none;
 }
 .am-app .unified-gutter .drag-handle,
+.am-app .unified-gutter .card-grab,
 .am-app .unified-gutter .block-add {
   opacity: 1;
 }
 .am-app .unified-gutter .drag-handle:hover,
+.am-app .unified-gutter .card-grab:hover,
 .am-app .unified-gutter .block-add:hover {
   color: var(--text);
   background: var(--surface-2);
+}
+/* 抓整卡钮(2026-08-31,blockLayer cardGrab):悬停块在画布卡内时出现;点击=选卡开菜单,按住=拖整卡。 */
+.am-app .unified-gutter .card-grab {
+  font-size: 12px;
 }
 .am-app .unified-drop-line {
   position: fixed;
@@ -3357,6 +3367,29 @@ body.amx-marquee-active * {
 /* 选中的层级线(2026-08-19 晚:线可选中删除)。⚠️ 必须排在 .is-tree 之后 —— 同特异性下后来者赢,
    写在前面的话选中态会被上一条的半透明描边盖掉,点了跟没点一样(DESIGN.md §7 那条纪律)。 */
 .am-app .amx-el-conn.is-tree.is-sel path { stroke: var(--primary); stroke-width: 3.5; }
+/* 选中卡片的完整祖先链 + 子树关系线：仅这几根线越过卡片，宽而虚的底线负责“隔着卡片仍可追踪”，
+   细核心线负责保持简洁与方向感。元素层本身不设 z-index（否则会把全部形状一起抬高）；只提升命中的
+   SVG，延续认亲反馈那条已验证过的层叠契约。blur 是关系追踪的瞬时效果，不是空间高程阴影。 */
+.am-app .amx-el-conn.is-tree.is-related {
+  z-index: 2;
+}
+.am-app .amx-el-conn.is-tree.is-related path.amx-el-conn-halo {
+  stroke: color-mix(in srgb, var(--primary) 46%, transparent);
+  stroke-width: 8;
+  opacity: 0.34;
+  filter: blur(2.5px);
+}
+.am-app .amx-el-conn.is-tree.is-related path.amx-el-conn-core {
+  stroke: color-mix(in srgb, var(--primary) 88%, var(--text));
+  stroke-width: 1.75;
+  opacity: 0.92;
+}
+/* 直接点选某一根关系线时，仍要比“随卡片关联亮起”更强，维持选中 > 关联的状态顺序。 */
+.am-app .amx-el-conn.is-tree.is-related.is-sel path.amx-el-conn-core {
+  stroke: var(--primary);
+  stroke-width: 3.5;
+  opacity: 1;
+}
 /* 框选矩形(舞台坐标,跟着 stage-inner 一起缩放)。
    ⚠️ 名字**不能**用 `.amx-marquee` —— 那是 blockLayer 的块框选(挂 body、client 坐标)。 */
 .am-app .amx-el-marquee {

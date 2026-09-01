@@ -860,6 +860,8 @@ declare global {
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
       unitsList?(): Promise<{ status: number; json: { units?: UnitInfo[] } | null }>
+      /** 系统浏览器开中转引导页:main 代拼 `#token=` 登录态递交(forsion_token 不下发渲染层)。 */
+      unitsOpenInBrowser?(unitId: string): Promise<void>
       unitsUpdate?(id: string, patch: { name?: string; icon?: string }): Promise<{ status: number; json: any }>
       unitsRemove?(id: string): Promise<{ status: number; json: any }>
       unitHostStatus?(): Promise<{ running: boolean; connected: boolean; unitId: string | null; lastError: string | null; webPort: number | null; lanUrl: string | null }>

@@ -24,9 +24,10 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { zoomOf } from '@lcl/engine'
+import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
-import { executeMoveBelowRow, executePair } from './columns'
-import { foldStateAt, toggleFoldAt } from './headingFold'
+import { executeMoveBelowRow, executePair, mintCardCopies } from './columns'
+import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 import { isCoarsePointer } from '../../touch'
@@ -38,6 +39,15 @@ export interface BlockLayerHooks {
    *  剪切不发(搬家不是删除),逐字符编辑更不经过这里 —— 判据是结构性的,不靠启发式。
    *  调用时机在 dispatch **之后**:宿主要读删完的文档算「同一篇里还有没有别处引用」。 */
   onBlocksDeleted?: (content: Fragment) => void
+  /** 画布层级 tree(2026-08-31,文档模式卡片拖拽用):算「族段」(卡 + 紧随其后的后代卡)与摘爹
+   *  判据。tree 的真源在 fm(不在 doc 里),交互层只读 —— 不给 = 单卡粒度、永不摘爹。 */
+  canvasTree?: () => Record<string, unknown>
+  /** 文档模式把带爹的卡搬走之后**摘爹**(tree 写不进 PM 事务,回宿主走 fm 管线)。
+   *  调用时机在搬动 dispatch 之后;复制(Alt 拖)不发 —— 原卡没动,副本当场铸新锚(见下)。 */
+  onCardDetach?: (anchors: string[]) => void
+  /** Alt 拖复制卡时,副本**当场铸的新锚**(Codex 08-31 high):宿主必须把它们收进 ownedCards ——
+   *  否则首次派生把新锚写进盘后,归属判据(stored ⊆ owned)fail-closed,本会话画布派生整体冻结。 */
+  onCardsMinted?: (anchors: string[]) => void
 }
 
 export interface BlockLayer {
@@ -149,7 +159,9 @@ function pickBlockAt(view: EditorView, coords: { x: number; y: number }): Active
       const checkDepth =
         $pos.depth >= 1 &&
         $pos.index($pos.depth) === 0 &&
-        $pos.node($pos.depth).type.name !== 'amadeusColumnCell' // cell 内首子不归壳
+        // cell / 画布卡内首子不归壳(卡:2026-08-31,单行卡的行此前永远抓成整卡,行块拖不出去;
+        // 整卡入口 = 悬停卡 padding / Esc 阶梯 / 右键卡缘,把手粒度与 cell 对齐成逐行)。
+        !['amadeusColumnCell', 'amadeusCanvasCard'].includes($pos.node($pos.depth).type.name)
       if (!(needLookup || checkDepth)) return
       if ($pos.depth < 1) return // 无处可爬(命中骨架顶到 doc):放弃,外层判 pickable 后回 null
       const anc = $pos.before($pos.depth)
@@ -160,6 +172,24 @@ function pickBlockAt(view: EditorView, coords: { x: number; y: number }): Active
     }
     climb(!pickableNode($pos, node))
     if (!node || !pickableNode($pos, node) || !(el instanceof HTMLElement)) return null
+    // 卡片头/尾**真空带** = 抓整卡(2026-08-31)。首子改行级把手后,指针落在卡内、但在首子之上 /
+    // 末子之下的空当(层级框卡的 --amx-frame-pad、卡内末尾留白)时归整卡 —— caretPositionFromPoint
+    // 会把这些点吸进最近的行,此前是「首子归外壳」顺带救的,现在显式按几何判。
+    // ⚠️ 只认真空区:行与行之间的缝仍归最近的行;自由卡「零装饰无缝」几乎没有真空带,整卡的
+    // 主入口是把手栏的抓卡钮(cardGrab,见 handlePlugin)—— 头带取定义宽(如 12px)试过,会吃掉
+    // 紧凑单行的行中心,坐标切分是零和的,别再走那条路。
+    if ($pos.depth >= 1 && $pos.node($pos.depth).type.name === 'amadeusCanvasCard') {
+      const cardPos = $pos.before($pos.depth)
+      const cardEl = view.nodeDOM(cardPos)
+      if (cardEl instanceof HTMLElement) {
+        const first = cardEl.firstElementChild?.getBoundingClientRect()
+        const last = cardEl.lastElementChild?.getBoundingClientRect()
+        if ((first && coords.y < first.top) || (last && coords.y > last.bottom)) {
+          const cardNode = view.state.doc.nodeAt(cardPos)
+          if (cardNode) return { node: cardNode, pos: cardPos, el: cardEl }
+        }
+      }
+    }
     return { node, pos: $pos.pos, el }
   } catch {
     return null
@@ -286,7 +316,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     const range = topRangeOf(view)
     if (range) {
       if (!copy && range.to === end) return true
-      const content = state.doc.slice(range.from, range.to).content
+      let content = state.doc.slice(range.from, range.to).content
+      if (copy) {
+        // 跨块选区可能盖到整卡(topRangeOf 对卡内选区爬升到卡边界):复制必须当场铸新锚+报宿主,
+        // 绝不留给 normalizer(理由与漏报后果见 mintCardCopies 顶注,C89 系仪器)。
+        const r = mintCardCopies(state.doc, content)
+        content = r.content
+        if (r.minted.length) hooks.onCardsMinted?.(r.minted)
+      }
       let tr = state.tr
       if (!copy) tr = tr.delete(range.from, range.to)
       tr = tr.insert(tr.mapping.map(end), content)
@@ -329,7 +366,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     const r = el.getBoundingClientRect()
     const at = e.clientY > r.top + r.height / 2 ? before + node.nodeSize : before
     if (at >= range.from && at <= range.to) return true // 落回自己身上:吞掉,什么都不做
-    const content = view.state.doc.slice(range.from, range.to).content
+    let content = view.state.doc.slice(range.from, range.to).content
+    if (copy) {
+      // 同 executeMoveToTail:选区盖到整卡时,副本落在原卡**之前**是常态(画布模式 clientY 扫描
+      // 与 doc 序无关)—— 靠 normalizer 事后换锚会劫走原卡锚(C89a 修前红),必须当场铸+报宿主。
+      const r2 = mintCardCopies(view.state.doc, content)
+      content = r2.content
+      if (r2.minted.length) hooks.onCardsMinted?.(r2.minted)
+    }
     let tr = view.state.tr
     if (!copy) tr = tr.delete(range.from, range.to)
     tr = tr.insert(tr.mapping.map(at), content)
@@ -449,6 +493,158 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     return true
   }
 
+  // ── 文档模式的卡片拖拽(2026-08-31,用户实报「文档模式拖不动卡」)。─────────────────────
+  //  病根 = 「精确落点 × 完整性闸」的叠加:精确落点插件按「最近块边」取落点,而文档模式相邻卡缝
+  //  只有几 px,最近边几乎总在**卡内** —— 卡进卡 = canvasIntegrityGuard 整笔拒(嵌套卡锚进卡辖域
+  //  = 重开整篇拒折的毁档防线),于是指示线照画、松手被吞:线在撒谎,纯卡文档里整卡处处不可落。
+  //  画布模式有 executeDropInCanvas 全接管,文档模式此前没有对应物 —— 这一支就是它:
+  //   · 拖动单位 = 卡的**族段**(卡 + 紧随其后的后代卡;runEndOf 与画层级框/orderUnder 同一把尺)。
+  //     只搬卡自己会把父段劈成两半:后代还认爹、却落在父段之外,「排序始终在父 Card 内」当场破
+  //     (canvasStage.orderUnder 的 Codex 08-20 告诫,同一条)。
+  //   · 落点 = 顶层**单元**(族段 / 普通块)的前/后缝,按指针 y 对单元中线取边。永不产出
+  //     「劈开别人族段」或「卡进卡」的位置;指示线与落点出自同一函数 = 线说真话。
+  //   · 搬走带爹的卡 = **摘爹**(hooks.onCardDetach,tree 真源在 fm、交互层写不了):文档模式把卡
+  //     拖离父段就是「移出去」,留着旧关系 = 缩进框错位的潜在不变式漏洞。父是主卡哨兵 `m:` /
+  //     悬空值不摘(那条关系在文档模式不可见,别动);Alt 复制不摘(原卡没动,副本由 normalizer
+  //     换新锚,新锚无 tree 条目 = 自由卡)。
+  interface CardDocDrop { at: number; lineEl: HTMLElement; edge: 'top' | 'bottom'; expandFold?: number }
+
+  /** doc 顶层的全部卡(锚/顶层序号/位置)。idx 是**顶层子节点序号**(runEndOf 的口径,非数组下标)。 */
+  const cardItemsOf = (view: EditorView): Array<{ anchor: string; idx: number; pos: number; size: number }> => {
+    const card = view.state.schema.nodes.amadeusCanvasCard
+    const items: Array<{ anchor: string; idx: number; pos: number; size: number }> = []
+    if (!card) return items
+    view.state.doc.forEach((node, offset, index) => {
+      if (node.type === card) items.push({ anchor: String(node.attrs.anchor), idx: index, pos: offset, size: node.nodeSize })
+    })
+    return items
+  }
+
+  /** 文档模式卡拖拽的落点(dragover 画线与 drop 执行共用 —— 两边必须同源,线才诚实)。
+   *  顶层按「单元」扫:卡的族段合并成一个单元,普通块各自一单元;指针所在单元按中线取前/后缝。 */
+  const resolveCardDocDrop = (view: EditorView, e: DragEvent): CardDocDrop | null => {
+    const doc = view.state.doc
+    const card = view.state.schema.nodes.amadeusCanvasCard
+    if (!card) return null
+    const tree = hooks.canvasTree?.() ?? {}
+    const items = cardItemsOf(view)
+    const runHead = new Map<number, number>() // 族段首卡的 items 下标 → 段尾(不含)
+    for (let i = 0; i < items.length;) {
+      const end = runEndOf(items, i, tree)
+      runHead.set(i, end)
+      i = end
+    }
+    const elAt = (p: number): HTMLElement | null => {
+      const d = view.nodeDOM(p)
+      return d instanceof HTMLElement ? d : null
+    }
+    const units: Array<{ from: number; to: number; firstEl: HTMLElement | null; lastEl: HTMLElement | null; foldPos?: number }> = []
+    let pos = 0
+    let itemIdx = 0
+    let skipUntil = -1 // 折叠小节的隐藏区:整段并进标题单元,区内子节点(含卡)不再各自成单元
+    for (let i = 0; i < doc.childCount; i++) {
+      const child = doc.child(i)
+      if (pos < skipUntil) {
+        if (child.type === card) itemIdx++
+        pos += child.nodeSize
+        continue
+      }
+      if (child.type === card) {
+        const end = runHead.get(itemIdx) // 段内非首卡拿不到 = 已并入前一单元,跳过
+        if (end != null) {
+          const last = items[end - 1]
+          units.push({ from: pos, to: last.pos + last.size, firstEl: elAt(pos), lastEl: elAt(last.pos) })
+        }
+        itemIdx++
+      } else {
+        // 折叠标题 = 标题 + 隐藏小节一个单元(Codex 08-31 medium):各自独立对待的话,标题下缘的
+        // 落点恰好落进 display:none 的小节里 —— 线画在明处、卡掉进暗处「当场消失」。
+        // ⚠️ 只挪到 foldedSectionAfter 还不够:小节的结构边界是「下一枚同级标题」,卡不像
+        //    键盘层插的同级标题那样自己终结小节 —— 落在 after 位下次重算隐藏区照样把卡吞回暗处。
+        //    所以下缘落卡 = **先展开该标题再插**(Notion 收起态 toggle 的同款语义;expandFold
+        //    由 executeCardDropInDoc 消费);隐藏区里的块一概不可当落点。
+        let to = pos + child.nodeSize
+        let foldPos: number | undefined
+        if (child.type.name === 'heading' && foldStateAt(view, pos) === 'folded') {
+          const after = foldedSectionAfter(view.state, pos)
+          if (after != null) {
+            to = after
+            skipUntil = after
+            foldPos = pos
+          }
+        }
+        units.push({ from: pos, to, firstEl: elAt(pos), lastEl: elAt(pos), foldPos })
+      }
+      pos += child.nodeSize
+    }
+    let lastSeen: CardDocDrop | null = null
+    for (let ui = 0; ui < units.length; ui++) {
+      const u = units[ui]
+      if (!u.firstEl || !u.lastEl) continue // 元素刚被换掉:跳过这一单元
+      const top = u.firstEl.getBoundingClientRect().top
+      const bottom = u.lastEl.getBoundingClientRect().bottom
+      lastSeen = { at: u.to, lineEl: u.lastEl, edge: 'bottom', expandFold: u.foldPos }
+      if (e.clientY > bottom) continue
+      // ⚠️ 上缘与「前一单元的下缘」是同一个结构位置(顶层节点连续):前一单元是折叠标题时,
+      //    这里也得带上它的 expandFold —— 否则从缝隙上半/下一标题上半落卡,插进的还是小节
+      //    结构之内,重算隐藏区照样吞卡(Codex 二轮 medium)。位置在自己小节之外的普通上缘,
+      //    positional 前驱不是折叠单元,expandFold 自然是 undefined。
+      const before = ui > 0 ? units[ui - 1] : null
+      return e.clientY <= (top + bottom) / 2
+        ? { at: u.from, lineEl: u.firstEl, edge: 'top', expandFold: before && before.foldPos != null && before.to === u.from ? before.foldPos : undefined }
+        : lastSeen
+    }
+    return lastSeen // 指针在末单元之下 = 插到文末
+  }
+
+  /** 完整落点计划:落点 + 被拖族段范围 + 是否落回自己(no-op)。非卡拖拽 → null。 */
+  const planCardDocDrop = (view: EditorView, e: DragEvent): { drop: CardDocDrop; range: { from: number; to: number }; self: boolean } | null => {
+    const sel = view.state.selection
+    const card = view.state.schema.nodes.amadeusCanvasCard
+    if (!card || !(sel instanceof NodeSelection) || sel.node.type !== card) return null
+    const drop = resolveCardDocDrop(view, e)
+    if (!drop) return null
+    const tree = hooks.canvasTree?.() ?? {}
+    const items = cardItemsOf(view)
+    const di = items.findIndex((it) => it.pos === sel.from)
+    if (di < 0) return null
+    const last = items[runEndOf(items, di, tree) - 1]
+    const range = { from: sel.from, to: last.pos + last.size }
+    return { drop, range, self: drop.at >= range.from && drop.at <= range.to }
+  }
+
+  const executeCardDropInDoc = (view: EditorView, e: DragEvent, copy: boolean): boolean => {
+    const sel = view.state.selection
+    const card = view.state.schema.nodes.amadeusCanvasCard
+    if (!card || !(sel instanceof NodeSelection) || sel.node.type !== card) return false
+    const plan = planCardDocDrop(view, e)
+    if (!plan || plan.self) return true // 吞掉:no-op 远好过退回默认路径塞进非法位再被闸拒
+    let content = view.state.doc.slice(plan.range.from, plan.range.to).content
+    if (copy) {
+      // Alt 复制:副本**此刻就铸新锚**+报宿主(理由与漏报后果见 mintCardCopies 顶注,Codex 08-31
+      // high ×2)。原卡锚永不动;副本不带 tree 条目 = 自由卡(既定口径)。
+      const r = mintCardCopies(view.state.doc, content)
+      content = r.content
+      if (r.minted.length) hooks.onCardsMinted?.(r.minted)
+    }
+    // 折叠标题下缘的落点在小节结构之内 —— 先展开再插,否则卡进了 display:none(见 resolver 注释)。
+    // toggleFoldAt 只动会话态 deco,不产生 doc step,at 不用重算。
+    if (plan.drop.expandFold != null && foldStateAt(view, plan.drop.expandFold) === 'folded') toggleFoldAt(view, plan.drop.expandFold)
+    let tr = view.state.tr
+    if (!copy) tr = tr.delete(plan.range.from, plan.range.to)
+    tr = tr.insert(tr.mapping.map(plan.drop.at), content)
+    tr.setMeta('amxColumns', true)
+    view.dispatch(tr.scrollIntoView())
+    if (!copy) {
+      const anchor = String(sel.node.attrs.anchor)
+      const tree = hooks.canvasTree?.() ?? {}
+      const parent = tree[anchor]
+      // 只摘「父是在场卡锚」的关系:主卡哨兵/悬空父在文档模式本就不可见,别动(canvasEdit.depthOf 同口径)。
+      if (typeof parent === 'string' && cardItemsOf(view).some((it) => it.anchor === parent)) hooks.onCardDetach?.([anchor])
+    }
+    return true
+  }
+
   /** OS 文件拖入时的落点(与块拖拽两套指示互斥:文件那条只画线、不参与块路由)。 */
   // ⚠️ 浮层几何的两个补偿量(2026-08-15 PM-under-transform spike 实测后加,仪器 unified-scale.check.cjs):
   //    编辑器将来住在画布卡片里 = `transform: scale(k)` 的子树,而这层原来只除 zoomOf。
@@ -473,14 +669,15 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     ;(view.dom.parentElement ?? document.body).appendChild(hline)
     return hline
   }
-  const showHline = (view: EditorView, rowEl: HTMLElement, indent = 0): void => {
+  const showHline = (view: EditorView, rowEl: HTMLElement, indent = 0, edge: 'bottom' | 'top' = 'bottom'): void => {
     const dom = ensureHline(view)
     const z = visualScale(view.dom)
     const o = overlayOrigin(dom)
     const r = rowEl.getBoundingClientRect()
+    const y = edge === 'top' ? r.top - 6 : r.bottom + 6 // top:卡拖拽的「插到单元之前」画在上缘
     dom.style.display = 'block'
     dom.style.width = `${Math.max(0, r.width - indent) / z}px`
-    dom.style.transform = `translate(${Math.round((r.left + indent - o.x) / z)}px, ${Math.round((r.bottom + 6 - o.y) / z)}px)`
+    dom.style.transform = `translate(${Math.round((r.left + indent - o.x) / z)}px, ${Math.round((y - o.y) / z)}px)`
   }
   const hideHline = (): void => {
     if (hline) hline.style.display = 'none'
@@ -513,6 +710,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!editorView.editable) return // 只读文档不给把手(AFFiNE 同):看得见拖不动比没有更糟
           activeRef = a
           syncFold(a)
+          cardGrab.style.display = cardHostOf(a) ? '' : 'none' // 卡内块才出「抓整卡」钮
           // 绝对定位(布局 px):视口 rect ÷ 累计视觉缩放反补偿,把手压到块首行行高中点(AFFiNE 手感)。
           // `.milkdown` 在画布模式是 position:static 且宽度为 0；拿它量 visualScale 会退化成
           // 仅 CSS zoom、漏掉 stage-inner 的 transform scale。PM 根始终有实体宽度，能同时量到两级缩放。
@@ -753,7 +951,56 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           hide()
         })
 
-        content.append(drag, add, fold)
+        // 卡片抓手(2026-08-31):悬停块在某张画布卡**里**时,把手栏多出这一颗「抓整卡」。
+        // 首子改行级把手后,自由卡(零装饰无缝)失去了可发现的整卡鼠标入口 —— 头/尾真空带只有
+        // 几 px,定义宽的头带又会吃掉紧凑单行的行中心(坐标切分是零和的)。与折叠钮同一先例:
+        // 按上下文出现的 gutter 钮。点击 = 选中整卡开菜单;拖动 = 整卡拖拽(mousedown 把
+        // NodeSelection 与 activeRef 都换成卡,dragstart 序列化/按压框/拖影全部顺着既有链路走)。
+        const cardGrab = document.createElement('button')
+        cardGrab.type = 'button'
+        // ⚠️ 类名不能带 drag-handle:既有仪器/辅助函数全按「gutter 里唯一一颗 .drag-handle」取钮,
+        //    共用类名 = querySelector 抓到这颗隐藏钮,拖拽起手全体失灵(unified-page/C2 双红实测)。
+        cardGrab.className = 'card-grab'
+        cardGrab.textContent = '❏'
+        cardGrab.draggable = true
+        cardGrab.title = '选中所在卡片,按住拖动整卡 / Select card, hold to drag it'
+        cardGrab.style.display = 'none'
+        /** 悬停块所在的卡(自身就是卡 → null,主把手已经是它)。 */
+        const cardHostOf = (a: ActiveBlock | null): ActiveBlock | null => {
+          const view = viewRef
+          if (!view || !a || a.node.type.name === 'amadeusCanvasCard') return null
+          try {
+            const $p = view.state.doc.resolve(a.pos)
+            for (let d = $p.depth; d >= 1; d--) {
+              if ($p.node(d).type.name !== 'amadeusCanvasCard') continue
+              const pos = $p.before(d)
+              const node = view.state.doc.nodeAt(pos)
+              const el = view.nodeDOM(pos)
+              return node && el instanceof HTMLElement ? { node, pos, el } : null
+            }
+          } catch { /* 块刚被换掉 */ }
+          return null
+        }
+        cardGrab.addEventListener('mousedown', (e) => {
+          const view = viewRef
+          const host = cardHostOf(activeRef)
+          if (!view || !host) return // 没有宿主卡(不该可见):放行给 content 走行级老路
+          // 不给 content 的 mousedown 把选区收回行级;按压框改由这里画(它也被 stopPropagation 挡了)。
+          e.stopPropagation()
+          activeRef = host // 拖影 / 按压框 / update 失效守卫全按卡走
+          view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, host.pos)))
+          view.focus()
+          showHoverRect()
+        })
+        cardGrab.addEventListener('click', (e) => {
+          e.stopPropagation()
+          if (!activeRef) return
+          const r = cardGrab.getBoundingClientRect()
+          hooks.onMenu({ x: r.left, y: r.bottom + 4 })
+          if (!isCoarsePointer()) viewRef?.focus()
+        })
+
+        content.append(cardGrab, drag, add, fold)
 
         // ── 空白处框选多块(AFFiNE:dragStart 命中 root/note 本身才起框,块正文上按下走文字选区)。──
         // 选区语义仍是原生跨块 TextSelection —— 框选只是换一种「圈定范围」的手势,圈完之后的
@@ -965,6 +1212,25 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             return
           }
           if (!view || view.dom.dataset.dragging !== 'true') return
+          // 文档模式的卡片拖拽:整支自管(见 executeCardDropInDoc 顶注)。精确落点/尾巴/分栏配对
+          // 全让路;指示线画在将要执行的顶层缝上(与 drop 同一个 plan 函数 = 线说真话)。
+          // 落回自己族段 = 不画线不 preventDefault(真机上浏览器给「不可放」光标,drop 不会发)。
+          {
+            const selNow = view.state.selection
+            if (!inCanvas(view) && selNow instanceof NodeSelection && selNow.node.type === view.state.schema.nodes.amadeusCanvasCard) {
+              tailRef = false
+              pairRef = null
+              childRef = null
+              belowRef = null
+              hideVline()
+              const plan = planCardDocDrop(view, e)
+              if (plan && !plan.self) {
+                showHline(view, plan.drop.lineEl, 0, plan.drop.edge)
+                e.preventDefault()
+              } else hideHline()
+              return
+            }
+          }
           // 末块之下(NodeSelection 与跨块选区都收;画布模式不适用,卡是绝对定位):
           tailRef = false
           if (!inCanvas(view)) {
@@ -1064,9 +1330,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           // 行下方:对仍连接的行元素**现场**重解析 pos(悬停期事务把缓存 pos 弄脏的话,
           // 旧 pos 可能指到别的行;元素断连/解析失败=放行默认落点)。
           const copy = dragCopies(e)
-          // 画布模式的落点全归这一支(不变式见 executeDropInCanvas);它只在「不是 NodeSelection /
-          // posAtDOM 失效」时返回 false,那时才退回普通笔记那套。
-          let done = inCanvas(view) && executeDropInCanvas(view, e, copy)
+          // 画布模式的落点全归 executeDropInCanvas(不变式见其顶注);文档模式的**卡片**拖拽全归
+          // executeCardDropInDoc(非卡拖拽它返回 false,照旧走下面的普通路由)。
+          let done = inCanvas(view)
+            ? executeDropInCanvas(view, e, copy)
+            : executeCardDropInDoc(view, e, copy)
           if (!done) {
             if (tl) {
               done = executeMoveToTail(view, copy)
@@ -1227,6 +1495,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // 走 PM 默认落点 —— 精确落点插件会把行内文字硬插到块边界,还 preventDefault 抢默认 drop。
         if (!view.dragging) return false
         if (!(view.state.selection instanceof NodeSelection)) return false
+        // 文档模式的卡片拖拽整支归 onRootDragOver / executeCardDropInDoc 自管(2026-08-31):
+        // 「最近块边」对卡是撒谎源(相邻卡缝几 px,最近边常在卡内 → 完整性闸整笔拒),
+        // 这里全让路,线由那边画在合法顶层缝上。
+        if (view.state.selection.node.type === view.state.schema.nodes.amadeusCanvasCard) return false
         // 行下方落点归 root 级捕获期 dragover 检测(handlePlugin 的 onRootDragOver:指针多半在
         // view.dom **之外**的 pane 空白区,本插件只挂 view.dom 收不到)——命中期本层全让路。
         if (belowRef) {

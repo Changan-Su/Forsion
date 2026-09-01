@@ -1043,6 +1043,14 @@ a:hover { color: var(--accent-ink); }
 /* 丝滑光标(默认关;smoothCaret.ts):隐藏原生 caret,自绘覆盖层平滑跟随 */
 html.sc-on .milkdown .ProseMirror,
 html.sc-on textarea.t2c-ta { caret-color: transparent; }
+/* ⚠️ 编辑器里住着**真表单控件**:嵌入体的多维表搜索框/公式框/单元格、插件表单、结构源码前缀……
+   上面那条 transparent 会**继承**进它们,而自绘覆盖层对 input/textarea 一律不画
+   (smoothCaret.ts caretInfo() 直接 return null,免得在原生 caret 之外多出一根假的)——
+   两下一夹,开了丝滑光标这些框里就一个光标都没有(2026-09-01 用户实报)。
+   这些控件本来就该用自己的原生 caret,在这里把它还回去。
+   (`.amx-struct-prefix` 早先单独打过同款补丁,它自设的 --primary 特异性更高,不受本条影响。) */
+html.sc-on .milkdown .ProseMirror input,
+html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .sc-caret {
   position: fixed;
   left: 0;
@@ -4494,13 +4502,16 @@ body[data-file-drag] .shell-work::after {
 /* ① 退订默认让位 —— 下面逐个把留白还给「视图顶端那个元素」。不在这张名单里的视图(以及将来新加的、
       插件注册的)一律走默认让位:失败方向是「多留一条白」,不是「内容被盖住」。 */
 .mb-shell:not(.mini-shell) .mb-main > .mb-view:is(
-  [data-view='chat'], [data-view='launcher'], [data-view='home'],
+  [data-view='chat'], [data-view='launcher'], [data-view='home'], [data-view='homepage'],
   [data-view='workspace-detail'], [data-view='agents-detail'],
   [data-view='amadeus-editor'], [data-view='amadeus-dashboard'],
   [data-view='amadeus-db'], [data-view='amadeus-image'], [data-view='amadeus-pdf'],
   [data-view='inbox-reader'], [data-view='todo-list'], [data-view='automation-detail'],
   [data-view='calendar'], [data-view='public-view'], [data-view='code-studio'], [data-view='wsfile']
 ) { padding-top: 0; }
+
+/* 主页壁纸也铺到胶囊背后;内容、壁纸按钮与二级面板在视图内部保留安全间距。 */
+.mb-shell:not(.mini-shell) .mb-view[data-view='homepage'] .hp-root { --hp-chrome-top: var(--mb-top); }
 
 /* ② 滚动器就在视图顶端:内距进滚动器内部 —— 面顶满,字不被压。 */
 .mb-shell:not(.mini-shell) .mb-view[data-view='chat'] .t2-stream { padding-top: var(--mb-top); }

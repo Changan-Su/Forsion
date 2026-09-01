@@ -8,8 +8,10 @@
 //       "2": [1, 3, 2]
 //
 // 三条与前两版的根本差别,正是「简单拼出统一美观」的全部来源:
-//  ① **没有坐标**。卡片按 order 顺序流进 CSS Grid,位置由排版算出来,用户只决定「放什么、多大」。
-//     → 永远不会歪、不会叠、不会留洞;新卡自动接在末尾,不需要「找空位」。
+//  ① **缺省没有坐标**。卡片按 order 顺序流进 CSS Grid,位置由排版算出来,用户只决定「放什么、多大」。
+//     → 永远不会歪、不会叠;新卡自动接在末尾,不需要「找空位」。
+//     2026-09-01 起开了一道口子:**手摆过的行**在 `dashboard3x:` 里另记 [row, col](见 Dash3Pin),
+//     那一行改由 packPinnedRows 确定性装填、横向留白照留 —— 「你摆过的行归你,没摆过的行归编排器」。
 //  ② **跨度是相对的**。w 记的是「占 12 分之几」,实际列数由容器宽度在 {12,6,4,3,2,1} 里挑
 //     (全是 12 的因数 → 半宽恒是半宽、三分之一恒是三分之一,比例在任何窗宽下都不变形)。
 //     → 成品页是**会重排的页面**,不是按 x/y 各自百分比拉伸的海报(旧版第一张截图那个洞)。
@@ -33,8 +35,11 @@ export const DASH3_COLS = 12
  *  半宽是最常见的跨度,只有偶数列才能让 6/12 折算成整数格。3 列会把半宽算成 1.5 → 2,
  *  半宽在那一档变成三分之二,比例就变形了 —— 这正是本版要消灭的东西,故刻意不给 3。 */
 export const DASH3_COL_STEPS = [12, 6, 4, 2, 1] as const
-/** 一列的最小可用宽度;低于它就降到下一档列数。 */
-export const DASH3_MIN_COL_PX = 76
+/** 一列的最小可用宽度;低于它就降到下一档列数。
+ *  2026-08-31 76→56(用户报「调节等级太少」):列是**对齐单位**不是内容单位(最小卡=3~4 列
+ *  ≈ 200px+),76 让常见面板宽(主区 ~900-1040px,旁边有 ribbon/侧栏)掉到 6 列 —— 宽度档位
+ *  瞬间减半,这才是「等级少」的真身。56 把 12 列的覆盖下限从 1044px 降到 804px。 */
+export const DASH3_MIN_COL_PX = 56
 /** 行高与间距(px)。CSS 变量 --dash3-row / --dash3-gap 必须与这两个数一致。 */
 export const DASH3_ROW_PX = 72
 export const DASH3_GAP_PX = 12
@@ -50,8 +55,9 @@ export interface Cell {
 }
 export type Dash3Layout = Record<string, Cell>
 
-/** 尺寸档位。无级 resize 是「统一」的敌人(Apple widget 那条);把手也按格量化,
- *  这张表只是给菜单/键盘一个不用比划的入口。 */
+/** 具名尺寸档。2026-08-31 起不再是 resize 的硬白名单(把手可停任意整数格,下界见
+ *  dash3MinCell),只留两个职责:①卡片菜单的快捷入口;②摘要面的 density bucket
+ *  (ctx.size 传给 dashboard.factory 的仍是最近具名档,见 dash3BucketOf)。 */
 export const DASH3_SIZES = [
   { key: 'sm', label: '小', w: 3, h: 2 },
   { key: 'md', label: '中', w: 4, h: 3 },
@@ -65,18 +71,52 @@ export type Dash3SizeKey = (typeof DASH3_SIZES)[number]['key']
 
 export const dash3Size = (key: Dash3SizeKey) => DASH3_SIZES.find((size) => size.key === key) ?? DASH3_SIZES[1]
 
-/** 把任意/旧布局约束到卡片真正支持的离散尺寸。距离相同时优先面积更小的档，避免升级后
- *  静默制造一个更大的空盒。只影响呈现；用户下一次改尺寸时才写回 frontmatter。 */
-export function fitDash3Cell(cell: Cell, allowed: readonly Dash3SizeKey[]): Cell {
+/** 任意几何 → 最近的具名档(摘要面的 density bucket)。距离相同时优先面积更小的档,
+ *  避免把小卡按进更大的信息密度。 */
+export function dash3BucketOf(cell: Pick<Cell, 'w' | 'h'>, allowed: readonly Dash3SizeKey[]): Dash3SizeKey | null {
   const choices = DASH3_SIZES.filter((size) => allowed.includes(size.key))
-  if (!choices.length) return cell
+  if (!choices.length) return null
   const exact = choices.find((size) => size.w === cell.w && size.h === cell.h)
   const best = exact ?? [...choices].sort((a, b) => {
     const da = Math.abs(a.w - cell.w) + Math.abs(a.h - cell.h) * 1.25
     const db = Math.abs(b.w - cell.w) + Math.abs(b.h - cell.h) * 1.25
     return da - db || a.w * a.h - b.w * b.h
   })[0]
-  return { ...cell, w: best.w, h: best.h }
+  return best.key
+}
+
+/** 把任意/旧布局吸到最近具名档的**几何**。resize 已不走这条(自由格,2026-08-31 拍板
+ *  「只放开档位,保留 DP 编排」);留给需要具名几何的场合(默认值/测试)。 */
+export function fitDash3Cell(cell: Cell, allowed: readonly Dash3SizeKey[]): Cell {
+  const key = dash3BucketOf(cell, allowed)
+  if (!key) return cell
+  const size = dash3Size(key)
+  return { ...cell, w: size.w, h: size.h }
+}
+
+/** resize 的每轴下界 = 声明档位里各轴的最小值:比最小档更窄/更矮的形状,这张卡的内容面
+ *  没有承诺能装下。上界恒为 12×DASH3_MAX_ROWS(自由格)。 */
+export function dash3MinCell(allowed: readonly Dash3SizeKey[]): { w: number; h: number } {
+  const choices = DASH3_SIZES.filter((size) => allowed.includes(size.key))
+  if (!choices.length) return { w: 1, h: 1 }
+  return { w: Math.min(...choices.map((s) => s.w)), h: Math.min(...choices.map((s) => s.h)) }
+}
+
+/** 手工行位(2026-08-31 用户拍板「横向允许留白 + 行内自由摆放 + 空白可插入 + 排斥」)。
+ *  `row` 只需在**连续 pinned 段内**可比(同值 = 同一行,落笔时取全局 max+1 保证不与邻行撞);
+ *  `col` = 12 列参考系的起始列(0-based),与 w 共用比例守恒的映射。
+ *  ⚠️ 另开一个键而不是给 [order,w,h] 加第 4 项:三元组恰好三项是旧读端的冻结判据
+ *  (readDash3Layout 的 `v.length !== 3`),加一项 = 存量应用整份布局冻结;未知键旧端一律忽略。 */
+export const DASH3_PIN_KEY = 'dashboard3x'
+export interface Dash3Pin { row: number; col: number }
+export type Dash3Pins = Record<string, Dash3Pin>
+
+/** 12 列参考列 → 当前列数下的起始列。**必须与 span 一起夹右边界**:x 与 w 各自取整会溢出
+ *  (x=7,w=5,cols=6 → 3+3 > 6),那就是一条横向滚动条(G2 押着「永不横向滚动」)。 */
+export function colFor(x: number, span: number, cols: number): number {
+  const ref = clampInt(x, 0, DASH3_COLS - 1, 0)
+  const n = Math.max(1, Math.min(DASH3_COLS, Math.round(cols)))
+  return Math.max(0, Math.min(n - span, Math.round((ref * n) / DASH3_COLS)))
 }
 
 export interface Dash3PackItem { id: string; span: number; h: number; chrome?: boolean; start?: number }
@@ -199,6 +239,107 @@ export function composeDash3Rows(items: Dash3ComposeItem[], cols: number): Dash3
   }
   flushSegment()
   return out
+}
+
+/**
+ * 手工行的确定性装填。与 DP 段的分工:**你摆过的行归你,没摆过的行归编排器**(用户拍板)。
+ *
+ *  · 同 `row` 值 = 同一行(band)。band 高 = 行内最高卡,矮卡按自己的 h 渲染、下方留白 ——
+ *    同高族约束**只对 DP 段成立**:手工行必须能把 3×2 的挂件放进 6×5 大卡右边的空白,
+ *    那正是这轮的头号场景。
+ *  · 行内不重叠:想要的列被前一张占了就右移;右移到放不下,整张挪到下一行(拍板:
+ *    「把最右的邻居挤到下一行」)。坏值/降列/改尺寸后的冲突全走这一条,不 throw。
+ */
+function packPinnedRows(entries: Array<{ item: Dash3ComposeItem; pin: Dash3Pin }>, cols: number): Dash3ComposedRow[] {
+  const rows: Dash3ComposedRow[] = []
+  let row: Dash3ComposedRow | null = null
+  let rowKey: number | null = null
+  let cursor = 0
+  for (const { item, pin } of entries) {
+    // ⚠️ 几何取**选中档**不是 preferred:pin 蕴含尺寸铁 → choices 只有一项,而那一项已经夹过
+    //    每轴下界(存量里 3×2 的旧文本卡该按 4×3 渲染)。直接用 preferred 就绕过了下界。
+    const pick = item.choices[0]
+    const cell: Cell = pick ? { ...item.preferred, w: pick.w, h: pick.h } : item.preferred
+    const span = spanFor(cell.w, cols)
+    const want = colFor(pin.col, span, cols)
+    const keep = row !== null && pin.row === rowKey && Math.max(want, cursor) + span <= cols
+    const start = keep ? Math.max(want, cursor) : want
+    if (!keep) {
+      if (row) rows.push(row)
+      row = { h: 0, items: [] }
+      rowKey = pin.row
+    }
+    const cur = row as Dash3ComposedRow
+    cur.items.push({ id: item.id, span, h: cell.h, cell, size: item.choices[0]?.key ?? 'md', start: start + 1 })
+    cur.h = Math.max(cur.h, cell.h)
+    cursor = start + span
+  }
+  if (row) rows.push(row)
+  return rows
+}
+
+/** 排版总入口:有 pin 的连续段走手工装填,其余段照旧交给 DP(自动拼行/换档/居中一并保留)。
+ *  两种段互为硬边界 —— 你摆的那一行不会被别的卡自动挤进来,这就是「松手即定」。 */
+export function layoutDash3Rows(items: Dash3ComposeItem[], pins: Dash3Pins, cols: number): Dash3ComposedRow[] {
+  const out: Dash3ComposedRow[] = []
+  let auto: Dash3ComposeItem[] = []
+  let manual: Array<{ item: Dash3ComposeItem; pin: Dash3Pin }> = []
+  const flushAuto = (): void => { if (auto.length) { out.push(...composeDash3Rows(auto, cols)); auto = [] } }
+  const flushManual = (): void => { if (manual.length) { out.push(...packPinnedRows(manual, cols)); manual = [] } }
+  for (const item of items) {
+    const pin = item.chrome ? undefined : pins[item.id]
+    if (pin) { flushAuto(); manual.push({ item, pin }) } // 分区标题恒整行,不接受 pin
+    else { flushManual(); auto.push(item) }
+  }
+  flushManual()
+  flushAuto()
+  return out
+}
+
+export interface Dash3Slot { id: string; col: number; w: number }
+
+/** 一行之内的让位(「排斥」的全部数学)。按**想要的列**从左往右装:后来的被前面的推开,
+ *  行尾放不下的**退出这一行**(调用方把它退回自动流 = 视觉上落到下一行)。
+ *  ⚠️ 平手(想要同一列)时靠输入次序定胜负 —— 调用方把正在拖的那张放数组首位,
+ *  「我挤进来、你让开」才成立。12 列参考系,纯几何。 */
+export function fitRow(slots: Dash3Slot[], cols = DASH3_COLS): { row: Dash3Slot[]; spilled: string[] } {
+  const row: Dash3Slot[] = []
+  const spilled: string[] = []
+  let cursor = 0
+  for (const s of [...slots].sort((a, b) => a.col - b.col)) {
+    const w = Math.max(1, Math.min(cols, Math.round(s.w)))
+    const col = Math.max(cursor, Math.max(0, Math.min(cols - w, Math.round(s.col))))
+    if (col + w > cols) { spilled.push(s.id); continue }
+    row.push({ id: s.id, col, w })
+    cursor = col + w
+  }
+  return { row, spilled }
+}
+
+/** 把一张卡摆进某一行:让位 → 新的顺序 + 新的 pin。视觉序恒等于 order,所以行内让位会连带
+ *  改 order;被挤出行尾的卡**丢掉 pin** = 回自动流(不 pin 就不冻结,拍板「未动仍自动」)。 */
+export function dropIntoRow(
+  ids: string[], pins: Dash3Pins, slots: Dash3Slot[], rowKey: number,
+): { ids: string[]; pins: Dash3Pins } {
+  const { row, spilled } = fitRow(slots)
+  const members = [...row.map((s) => s.id), ...spilled]
+  const inRow = new Set(members)
+  const out: string[] = []
+  let dropped = false
+  for (const id of ids) {
+    if (!inRow.has(id)) { out.push(id); continue }
+    if (!dropped) { out.push(...members); dropped = true } // 整块落在最靠前那位成员的原位
+  }
+  if (!dropped) out.push(...members)
+  const nextPins: Dash3Pins = { ...pins }
+  for (const id of spilled) delete nextPins[id]
+  for (const s of row) nextPins[s.id] = { row: rowKey, col: s.col }
+  return { ids: out, pins: nextPins }
+}
+
+/** 下一个可用的行号:与任何现存行都不相等即可(同值才算同行,单调性不是契约)。 */
+export function nextPinRow(pins: Dash3Pins): number {
+  return Object.values(pins).reduce((m, p) => Math.max(m, p.row + 1), 0) % (DASH3_MAX_ORDER + 1)
 }
 
 /** 新卡默认尺寸(按内容类型分档:小挂件方一点,视图卡要能看见内容)。 */
@@ -333,6 +474,63 @@ export function setDash3InFm(fmExtra: string, layout: Dash3Layout): string | nul
     doc.set(DASH3_FM_KEY, node)
   }
   return String(doc).replace(/\n+$/, '')
+}
+
+export type Dash3PinRead = { ok: true; pins: Dash3Pins } | { ok: false; error: string }
+
+/** 读手工行位。三态与 readDash3Layout 逐条同构,但**失守的代价小一档**:pin 读不懂 =
+ *  这一页按自动排版渲染(布局键还在,卡一张不少),视图只要停掉 pin 的写入即可。 */
+export function readDash3Pins(fmExtra: string): Dash3PinRead {
+  if (!fmExtra.trim()) return { ok: true, pins: {} }
+  const doc = parseDocument(fmExtra)
+  if (doc.errors.length) return { ok: false, error: doc.errors[0].message.split('\n')[0] }
+  const obj = doc.toJS() as unknown
+  if (obj === null || obj === undefined) return { ok: true, pins: {} }
+  if (typeof obj !== 'object' || Array.isArray(obj)) return { ok: false, error: 'frontmatter 根节点不是映射' }
+  const raw = (obj as Record<string, unknown>)[DASH3_PIN_KEY]
+  if (raw === undefined || raw === null) return { ok: true, pins: {} }
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: `${DASH3_PIN_KEY} 不是映射` }
+  const out: Dash3Pins = {}
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(v) || v.length !== 2) return { ok: false, error: `${DASH3_PIN_KEY}.${id} 不是 [row, col]` }
+    if (!v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
+      return { ok: false, error: `${DASH3_PIN_KEY}.${id} 含非数值` }
+    }
+    const n = v as number[]
+    out[String(id)] = { row: clampInt(n[0], 0, DASH3_MAX_ORDER, 0), col: clampInt(n[1], 0, DASH3_COLS - 1, 0) }
+  }
+  return { ok: true, pins: out }
+}
+
+/** 写手工行位(与 setDash3InFm 同构,可串在同一份 fmExtra 上 —— 一次落笔、一个 undo 步)。 */
+export function setDash3PinsInFm(fmExtra: string, pins: Dash3Pins): string | null {
+  const doc = fmExtra.trim() ? parseDocument(fmExtra) : new Document({})
+  if (doc.errors.length) return null
+  const ids = Object.keys(pins).sort((a, b) => (Number(a) || 0) - (Number(b) || 0) || a.localeCompare(b))
+  if (!ids.length) {
+    doc.delete(DASH3_PIN_KEY)
+  } else {
+    const obj: Record<string, number[]> = {}
+    for (const id of ids) obj[id] = [pins[id].row, pins[id].col]
+    const node = doc.createNode(obj)
+    if ('items' in node) for (const it of (node as { items: Array<{ value?: unknown }> }).items) {
+      const v = it.value as { flow?: boolean } | undefined
+      if (v && typeof v === 'object') v.flow = true
+    }
+    doc.set(DASH3_PIN_KEY, node)
+  }
+  return String(doc).replace(/\n+$/, '')
+}
+
+/** pin 的自愈:只清孤儿(块没了)。行号不压缩 —— 同值才算同行,稀疏毫无代价。
+ *  返回 null = 无需改动。 */
+export function reconcilePins(pins: Dash3Pins, ids: string[]): Dash3Pins | null {
+  const present = new Set(ids)
+  const keys = Object.keys(pins)
+  if (!keys.some((id) => !present.has(id))) return null
+  const out: Dash3Pins = {}
+  for (const id of keys) if (present.has(id)) out[id] = pins[id]
+  return out
 }
 
 /** 读布局模式。`null` = 文件没表态(新文件 → 网格;有 dashboard2: 的老文件 → 由视图给迁移横幅)。 */

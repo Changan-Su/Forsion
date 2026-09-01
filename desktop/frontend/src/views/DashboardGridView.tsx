@@ -24,7 +24,7 @@ import type { DashboardCardSize, DashboardCardSurface, ViewProps } from '@lcl/en
 import { allViews, getView, label, useEdgeNudge, useWorkspace } from '@lcl/engine'
 import {
   DndContext, DragOverlay, MeasuringStrategy, MouseSensor, TouchSensor, pointerWithin, useSensor, useSensors,
-  type DragOverEvent, type DragStartEvent,
+  type DragMoveEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, type SortingStrategy } from '@dnd-kit/sortable'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
@@ -36,10 +36,12 @@ import { askString } from '@amadeus/components/askString'
 import { dashBaseName, parseWidget, webviewUrlAllowed, widgetSource } from '@amadeus-shared/dashboard'
 import {
   DASH3_COLS, DASH3_DEFAULT, DASH3_DEFAULT_MINI, DASH3_DEFAULT_TEXT, DASH3_GAP_PX,
-  DASH3_MAX_ROWS, DASH3_ROW_PX, DASH3_SIZES, colsForWidth, dash3Size, fitDash3Cell,
-  composeDash3Rows, grid3IsStale, orderedIds, readDash3Layout, reconcileGrid, renumber,
-  setDash3InFm, setDashModeInFm, spanFor, type Cell, type Dash3Layout, type Dash3SizeKey,
+  DASH3_MAX_ROWS, DASH3_ROW_PX, DASH3_SIZES, colsForWidth, dash3BucketOf, dash3MinCell, dash3Size,
+  dropIntoRow, grid3IsStale, layoutDash3Rows, nextPinRow, orderedIds, readDash3Layout, readDash3Pins,
+  reconcileGrid, reconcilePins, renumber, setDash3InFm, setDash3PinsInFm, setDashModeInFm, spanFor,
+  type Cell, type Dash3Layout, type Dash3Pins, type Dash3SizeKey,
 } from '@amadeus-shared/dashboard3'
+import { DashFiltersCtx } from '@amadeus/dashboard/dashFiltersCtx'
 import { useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
@@ -47,7 +49,7 @@ import { Breadcrumb } from '../amadeusViews'
 import { importToPage } from '../amadeusImport'
 import { WidgetCard, localTimeZone } from '@amadeus/dashboard/widgets'
 import { readDashFilters, setDashFiltersInFm, type DashFilter } from '@amadeus-shared/dashboardData'
-import { EMBED_DENY, ViewCard, pickSpecOf, viewCardTitle } from './dashboardViewCard'
+import { EMBED_DENY, ViewCard, ensureChartView, pickSpecOf, viewCardTitle } from './dashboardViewCard'
 import { DashFilterBar } from './dashFilterBar'
 import '@amadeus/blocks'
 import './dashGrid.css'
@@ -55,7 +57,7 @@ import './dashGrid.css'
 const ADD_MENU = [
   { key: 'section', label: '分区标题', icon: Heading },
   { key: 'stat', label: '数字卡…', icon: Hash },
-  { key: 'chart', label: '图表卡…', icon: BarChart3 },
+  { key: 'chart', label: '图表(多维表)…', icon: BarChart3 },
   { key: 'text', label: '文本块', icon: Type },
   { key: 'clock', label: '时钟', icon: Clock },
   { key: 'weather', label: '天气', icon: CloudSun },
@@ -100,25 +102,35 @@ interface CardProfile {
   sizes: readonly Dash3SizeKey[]
   defaultSize: Dash3SizeKey
   surface: CardSurface
+  /** resize 每轴下界覆盖;缺省 = 声明档各轴最小(dash3MinCell)。 */
+  min?: { w: number; h: number }
 }
 
-const DEFAULT_VIEW_PROFILE: CardProfile = { sizes: ['lg', 'full'], defaultSize: 'lg', surface: 'workspace' }
+/** 视图卡的通用下界 = 4 格(≈1/3 宽)。判据:整个渲染层本就支持移动端 ~380px 宽,
+ *  嵌进 4 格的视图与手机上是同一量级 —— 半宽下界(6)是 08-31 首轮的保守值,用户要更窄。 */
+const VIEW_MIN = { w: 4, h: 3 }
+const DEFAULT_VIEW_PROFILE: CardProfile = { sizes: ['lg', 'full'], defaultSize: 'lg', surface: 'workspace', min: VIEW_MIN }
 const WIDGET_PROFILES: Record<string, CardProfile> = {
   section: { sizes: ['full'], defaultSize: 'full', surface: 'chrome' },
   clock: { sizes: ['sm', 'wide'], defaultSize: 'sm', surface: 'metric' },
   weather: { sizes: ['sm', 'wide'], defaultSize: 'sm', surface: 'metric' },
   stat: { sizes: ['sm', 'md', 'wide'], defaultSize: 'sm', surface: 'metric' },
-  chart: { sizes: ['wide', 'lg', 'full'], defaultSize: 'wide', surface: 'summary' },
-  webview: { sizes: ['lg', 'full'], defaultSize: 'lg', surface: 'workspace' },
+  chart: { sizes: ['wide', 'lg', 'full'], defaultSize: 'wide', surface: 'summary', min: { w: 4, h: 2 } },
+  webview: { sizes: ['lg', 'full'], defaultSize: 'lg', surface: 'workspace', min: VIEW_MIN },
   text: { sizes: ['md', 'wide', 'lg', 'full'], defaultSize: 'wide', surface: 'note' },
 }
 
-/** 卡片类型 → 真正支持的尺寸与视觉表面。未知 view 只给 lg/full，完整页面永远不会被压进小格。 */
+/** 该卡 resize 的每轴下界:registry/profile 显式覆盖优先,否则取声明档各轴最小。 */
+const minOf = (profile: CardProfile): { w: number; h: number } => profile.min ?? dash3MinCell(profile.sizes)
+
+/** 卡片类型 → 真正支持的尺寸与视觉表面。未知 view 缺省 lg/full 两档 + 视图通用下界。 */
 function profileOf(content: string): CardProfile {
   const widget = parseWidget(content)
   if (widget?.kind === 'view') {
     const card = getView(widget.opts.type ?? '')?.dashboard
-    return card ? { sizes: card.sizes, defaultSize: card.defaultSize, surface: card.surface ?? 'workspace' } : DEFAULT_VIEW_PROFILE
+    return card
+      ? { sizes: card.sizes, defaultSize: card.defaultSize, surface: card.surface ?? 'workspace', min: card.min ?? VIEW_MIN }
+      : DEFAULT_VIEW_PROFILE
   }
   return WIDGET_PROFILES[widget?.kind ?? 'text'] ?? WIDGET_PROFILES.text
 }
@@ -143,8 +155,19 @@ function reorderSeq(seq: string[], from: string, over: string): string[] {
   return next
 }
 
+/** 几何 → 摘要面 bucket:自由格下尺寸多半不等于任何具名档,取**最近**那档喂给卡片面。 */
 const sizeOfCell = (cell: Cell, allowed: readonly Dash3SizeKey[]): Dash3SizeKey =>
-  (DASH3_SIZES.find((size) => allowed.includes(size.key) && size.w === cell.w && size.h === cell.h)?.key ?? allowed[0] ?? 'lg')
+  dash3BucketOf(cell, allowed) ?? allowed[0] ?? 'lg'
+
+/** 页面级筛选的稳定空值:别让 `?? []` 每帧换身份把全部图表卡拖着重渲染。 */
+const NO_FILTERS: DashFilter[] = []
+const NO_PINS: Dash3Pins = {}
+
+const samePins = (a: Dash3Pins | null, b: Dash3Pins): boolean => {
+  if (!a) return false
+  const ka = Object.keys(a)
+  return ka.length === Object.keys(b).length && ka.every((k) => b[k] && a[k].row === b[k].row && a[k].col === b[k].col)
+}
 
 export function DashboardGridView(props: ViewProps) {
   return (
@@ -196,9 +219,12 @@ function GridInner({ leaf }: ViewProps) {
   // 「自由摆位 → 自动排版」的迁移横幅住在**画布版**里(路由把带 dashboard2: 的老文件送去那边),
   // 这里不会遇到待迁移的文件。
   const stale = read3.ok && grid3IsStale(layout, ids)
+  /** 手工行位。读不懂只**停掉 pin 的写入**、整页按自动排版渲染 —— 卡一张不少,不像布局键那样必须冻结。 */
+  const readPins = useMemo(() => readDash3Pins(fmExtra), [fmExtra])
+  const pins: Dash3Pins = readPins.ok ? readPins.pins : NO_PINS
   /** 页面级筛选:一处改、全页跟随。读不懂就当没有筛选 —— 它只影响取数,不像布局那样丢了就回不来。 */
   const readFilters = useMemo(() => readDashFilters(fmExtra), [fmExtra])
-  const dashFilters: DashFilter[] = readFilters.ok ? readFilters.filters : []
+  const dashFilters: DashFilter[] = readFilters.ok ? readFilters.filters : NO_FILTERS
 
   /** 这一笔改动归谁 = **这一份文档的整页装载身份**(`pageStore.loadNonce`,每次整页 hydrate ——
    *  换页 / 改名 / 外部回灌 —— 都换新对象)。
@@ -229,12 +255,18 @@ function GridInner({ leaf }: ViewProps) {
   }
 
   // 自愈:补新块(接末尾)、清孤儿、稠密重编号。迁移待决 / 坏 YAML / 布局对不上 → 一律停手。
+  // 布局与 pin 串在**同一份 fmExtra** 上一次写完:两笔会拆两个 undo 步,中间态还会被外部回灌撞上。
   useEffect(() => {
     if (!manifest || activePage !== dashPath || !ids.length) return
     if (!read3.ok || stale) return
-    const next = reconcileGrid(layout, ids)
-    if (next) applyLayout(next)
-  }, [ids, layout, manifest, activePage, dashPath, read3.ok, stale]) // eslint-disable-line react-hooks/exhaustive-deps
+    const nextLayout = reconcileGrid(layout, ids)
+    const nextPins = readPins.ok ? reconcilePins(pins, ids) : null
+    if (!nextLayout && !nextPins) return
+    let fm = store.getState().manifest?.fmExtra ?? ''
+    if (nextLayout) fm = setDash3InFm(fm, nextLayout) ?? fm
+    if (nextPins) fm = setDash3PinsInFm(fm, nextPins) ?? fm
+    writeFm(fm)
+  }, [ids, layout, pins, manifest, activePage, dashPath, read3.ok, readPins.ok, stale]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 响应式列数:唯一的「几何计算」。窗口宽度 → 12 的偶因数里放得下的最大那档。
   const hostRef = useRef<HTMLDivElement>(null)
@@ -270,7 +302,9 @@ function GridInner({ leaf }: ViewProps) {
     const profile = profileOf(blocks[id]?.content ?? '')
     // 自动编排可能让「存下的偏好」临时换成更合群的一档；resize 必须从屏幕上这档起步，
     // 否则按下把手的一瞬间卡片会先跳回存储尺寸，再开始拖。
-    const cur = visualCellsRef.current.get(id) ?? fitDash3Cell(layout[id] ?? cellForSize(profile.defaultSize), profile.sizes)
+    const min = minOf(profile)
+    const base = layout[id] ?? cellForSize(profile.defaultSize)
+    const cur = visualCellsRef.current.get(id) ?? { ...base, w: Math.max(min.w, base.w), h: Math.max(min.h, base.h) }
     sizeRef.current = { id, pointerId: e.pointerId, nonce: identity(), x: e.clientX, y: e.clientY, w: cur.w, h: cur.h }
     sizingRef.current = { id, w: cur.w, h: cur.h }
     setSizing({ id, w: cur.w, h: cur.h })
@@ -287,7 +321,10 @@ function GridInner({ leaf }: ViewProps) {
     const pxH = s.h * DASH3_ROW_PX + (s.h - 1) * DASH3_GAP_PX + (e.clientY - s.y)
     const h = Math.max(1, Math.min(DASH3_MAX_ROWS, Math.round((pxH + DASH3_GAP_PX) / (DASH3_ROW_PX + DASH3_GAP_PX))))
     const profile = profileOf(blocks[s.id]?.content ?? '')
-    const fitted = fitDash3Cell({ order: 0, w, h }, profile.sizes)
+    // 自由格(2026-08-31 拍板):把手可停任意整数格,只保每轴下界 —— 比最小声明档更小的
+    // 形状,这张卡的内容面没有承诺能装下。不再吸具名档。
+    const min = minOf(profile)
+    const fitted = { w: Math.max(min.w, w), h: Math.max(min.h, h) }
     sizingRef.current = { id: s.id, w: fitted.w, h: fitted.h }
     setSizing((cur) => (cur && cur.w === fitted.w && cur.h === fitted.h ? cur : { id: s.id, w: fitted.w, h: fitted.h }))
   }
@@ -303,6 +340,16 @@ function GridInner({ leaf }: ViewProps) {
     const cur = freshLayout()
     if (!cur || !cur[s.id]) return // 手势期间这张卡没了 → 别把它写回来
     applyLayout({ ...cur, [s.id]: { ...cur[s.id], w: live.w, h: live.h } }, s.nonce)
+  }
+
+  /** 手工行的回头路(pin 否则是单行道):把这一行整行交回自动编排器。 */
+  const releaseRow = (id: string): void => {
+    const cur = readDash3Pins(store.getState().manifest?.fmExtra ?? '')
+    if (!cur.ok || !cur.pins[id]) return
+    const row = cur.pins[id].row
+    const next: Dash3Pins = {}
+    for (const [k, v] of Object.entries(cur.pins)) if (v.row !== row) next[k] = v
+    writeFm(setDash3PinsInFm(store.getState().manifest?.fmExtra ?? '', next))
   }
 
   const setCardSize = (id: string, w: number, h: number): void => {
@@ -327,6 +374,13 @@ function GridInner({ leaf }: ViewProps) {
   useLayoutEffect(() => { if (locked) setInteractId(null) }, [locked])
   const [previewSeq, setPreviewSeq] = useState<string[] | null>(null)
   const previewRef = useRef<string[] | null>(null)
+  const [previewPins, setPreviewPins] = useState<Dash3Pins | null>(null)
+  const previewPinsRef = useRef<Dash3Pins | null>(null)
+  /** 这一笔拖拽新占的行号(拖动全程恒定,否则每帧换号 = pin 抖动);落点格的滞回也在这。 */
+  const dragRowKeyRef = useRef(0)
+  const dropRef = useRef<{ band: number; col: number } | null>(null)
+  /** 渲染算好的行带与各卡的 12 列参考位 —— 坐标路要读它把指针换成 (行, 列)。 */
+  const geomRef = useRef<{ bands: Array<{ top: number; h: number; ids: string[] }>; byId: Map<string, { col: number; w: number }> }>({ bands: [], byId: new Map() })
   /** 拖起那一刻冻结各卡的观感档位当 preferred:预览重排时 DP 少改档,画面噪声小。 */
   const dragCellsRef = useRef<Map<string, Cell> | null>(null)
   const dragNonce = useRef<unknown>(null)
@@ -341,12 +395,26 @@ function GridInner({ leaf }: ViewProps) {
     const el = gridRef.current
     const z = el && el.offsetWidth > 0 ? el.getBoundingClientRect().width / el.offsetWidth : 1
     overlayZoomRef.current = Math.abs(z - 1) < 0.005 ? 1 : z
+    dragRowKeyRef.current = nextPinRow(pins)
+    dropRef.current = null
+    previewPinsRef.current = null
     setDragId(String(e.active.id))
+  }
+  const setPreviewPinsIfNew = (next: Dash3Pins): void => {
+    if (samePins(previewPinsRef.current, next)) return
+    previewPinsRef.current = next
+    setPreviewPins(next)
   }
   const onDragOver = (e: DragOverEvent): void => {
     const from = String(e.active.id)
     const over = e.over ? String(e.over.id) : null
     if (!over || over === from) return
+    // 落在别的卡身上 = 老的顺序重排语义(G19 七条押着,一个字节不改)。被拖的那张顺势
+    // **退出手工行**回自动流 —— 它已经离开原来那一行了,留着 pin 就是两条路打架。
+    dropRef.current = null
+    const cleared = { ...pins }
+    delete cleared[from]
+    setPreviewPinsIfNew(cleared)
     // diff 短路:目标序没变就不 setState(实时重排的 re-render 风暴由这一行挡住)。
     const seq = previewRef.current ?? ordered
     const next = reorderSeq(seq, from, over)
@@ -354,31 +422,87 @@ function GridInner({ leaf }: ViewProps) {
     previewRef.current = next
     setPreviewSeq(next)
   }
+  /** 空白落点(这轮新增):指针不在任何卡上时,把它换算成 (行带, 列) 摆进那一行,同行邻居
+   *  实时让位、行尾放不下的退回自动流 = 视觉上挤到下一行(用户拍板三条)。
+   *  ⚠️ 两个坐标系:cellW 来自 contentRect(CSS px),rect 来自 getBoundingClientRect(视觉 px)。
+   *  端级 zoom ≠ 1 时混算就是 DragOverlay 那次 ×1.25 漂移的同族 —— 一律先除掉起手实测的倍率。 */
+  const onDragMove = (e: DragMoveEvent): void => {
+    const id = String(e.active.id)
+    if (e.over && String(e.over.id) !== id) return // 卡上归 order 路(自己的占位不算)
+    if (isChrome(parseWidget(blocks[id]?.content ?? '')?.kind)) return // 分区标题恒整行,给它记行位是死键
+    if (!readPins.ok) return // 行位读不懂 = 这一笔落不了盘;别让手势看着能用、松手弹回
+    const rect = e.active.rect.current.translated
+    const host = gridRef.current
+    const grid = host?.getBoundingClientRect()
+    const self = geomRef.current.byId.get(id)
+    if (!rect || !host || !grid || !self || cellW <= 0) return
+    // 行/列的原点是**内容盒**,不是边框盒:`.dash3-grid` 两侧有页面留白(gridW 也是扣掉它量的)。
+    const cs = getComputedStyle(host)
+    const z = overlayZoomRef.current
+    // 列锚 = 卡片左沿(它就是要落进的那一格),行锚 = **指针**:高卡的几何中心离手指能有两百多像素,
+    // 拿中心判行会挑中手指根本没在的那一行(探针实证)。指针也正是 pointerWithin 判「在不在卡上」
+    // 用的点 —— 两条路同一个锚才不会互相打架。
+    const act = e.activatorEvent as { clientY?: number; touches?: ArrayLike<{ clientY: number }> } | null
+    const startY = typeof act?.clientY === 'number' ? act.clientY : act?.touches?.[0]?.clientY // 触屏是 TouchEvent
+    const pointerY = typeof startY === 'number' ? startY + e.delta.y : rect.top + rect.height / 2
+    const x = (rect.left - grid.left) / z - parseFloat(cs.paddingLeft || '0')
+    const y = (pointerY - grid.top) / z - parseFloat(cs.paddingTop || '0')
+    const unit = DASH3_ROW_PX + DASH3_GAP_PX
+    const band = geomRef.current.bands.findIndex((b) => y >= b.top && y < b.top + b.h * unit)
+    if (band < 0) return
+    const actual = Math.round(x / (cellW + DASH3_GAP_PX))
+    const col = Math.max(0, Math.min(DASH3_COLS - self.w, Math.round((actual * DASH3_COLS) / cols)))
+    // 滞回:落点格没变就不重算(band 边界会随预览重排移动,不挡就是 A↔B 振荡 —— closestCenter
+    // 当年 Maximum update depth 的同族,坐标路里没有 pointerWithin 的自稳性可借)。
+    if (dropRef.current && dropRef.current.band === band && dropRef.current.col === col) return
+    dropRef.current = { band, col }
+    const members = geomRef.current.bands[band].ids.filter((m) => m !== id)
+    if (members.some((m) => isChrome(parseWidget(blocks[m]?.content ?? '')?.kind))) return // 分区标题恒整行
+    // ⚠️ 基线取**上一帧的预览**而不是磁盘那份:被顶出行尾的卡下一帧就不在这个 band 里了,
+    //    拿磁盘基线重算等于把它的旧行位又发回去 —— 渲染上它已经在下一行,存的却还是老列位
+    //    (仪器实证:pin 该没了却还是 [1,6])。逐出是累积的,与「松手即定」同向。
+    const next = dropIntoRow(previewRef.current ?? ordered, previewPinsRef.current ?? pins, [
+      { id, col, w: self.w }, // 正在拖的放首位:平手时「我挤进来、你让开」
+      ...members.map((m) => ({ id: m, col: geomRef.current.byId.get(m)?.col ?? 0, w: geomRef.current.byId.get(m)?.w ?? 1 })),
+    ], dragRowKeyRef.current)
+    setPreviewPinsIfNew(next.pins)
+    if (next.ids.join('\n') === (previewRef.current ?? ordered).join('\n')) return
+    previewRef.current = next.ids
+    setPreviewSeq(next.ids)
+  }
   /** Esc 取消拖拽:预览序整份丢弃,卡片 FLIP 回原位;不清 dragId 的话那张卡会一直挂着
    *  data-dragging 的透明度与层级(Codex 评审)。 */
-  const onDragCancel = (): void => {
+  const endDrag = (): { nonce: unknown; seq: string[] | null; pins: Dash3Pins | null } => {
+    const out = { nonce: dragNonce.current, seq: previewRef.current, pins: previewPinsRef.current }
     dragNonce.current = null
     previewRef.current = null
+    previewPinsRef.current = null
     dragCellsRef.current = null
+    dropRef.current = null
     setDragId(null)
     setPreviewSeq(null)
+    setPreviewPins(null)
+    return out
   }
+  const onDragCancel = (): void => { endDrag() }
   const onDragEnd = (): void => {
-    const nonce = dragNonce.current
-    const seq = previewRef.current
-    dragNonce.current = null
-    previewRef.current = null
-    dragCellsRef.current = null
-    setDragId(null)
-    setPreviewSeq(null)
-    if (!seq) return // 没经过任何 over → 顺序没动
+    const { nonce, seq, pins: nextPins } = endDrag()
+    // ⚠️ 「行内平移」这一支顺序压根没变(previewSeq 恒 null),不能被 `if (!seq) return` 吞掉 ——
+    //    实证:第一版就是这样把 pin 落盘整个丢了(探针里 frontmatter 一个字节没动)。
+    if (!seq && !nextPins) return // 没经过任何 over / 空白落点 → 什么都没动
     const cur = freshLayout()
     if (!cur) return
     // 预览序 → 落盘:只认当下真实存在的块,拖拽期间新出现的块接末尾,renumber 保 order 稠密。
-    const present = seq.filter((id) => ids.includes(id))
+    const present = (seq ?? ordered).filter((id) => ids.includes(id))
     for (const id of ids) if (!present.includes(id)) present.push(id)
-    if (present.join('\n') === ordered.join('\n')) return
-    applyLayout(renumber(cur, present), nonce)
+    const orderMoved = present.join('\n') !== ordered.join('\n')
+    // 行内平移不改顺序,只改 pin —— 这一支不能被 order 短路吞掉。
+    const pinMoved = !!nextPins && readPins.ok && !samePins(nextPins, pins)
+    if (!orderMoved && !pinMoved) return
+    let fm = store.getState().manifest?.fmExtra ?? ''
+    if (orderMoved) fm = setDash3InFm(fm, renumber(cur, present)) ?? fm
+    if (pinMoved) fm = setDash3PinsInFm(fm, nextPins!) ?? fm
+    writeFm(fm, nonce) // 两个键一次落笔:一个 undo 步,没有能被回灌撞上的中间态
   }
 
   // ── 加卡
@@ -413,7 +537,8 @@ function GridInner({ leaf }: ViewProps) {
         insertCard(widgetSource('weather', { city: city.trim() }), DASH3_DEFAULT_MINI)
         return
       }
-      if (kindKey === 'stat' || kindKey === 'chart') { await addDataCard(kindKey); return }
+      if (kindKey === 'stat') { await addDataCard(); return }
+      if (kindKey === 'chart') { await addChartCard(); return }
       const url = await askString('网页卡片 — 地址', 'https://')
       if (!url?.trim()) return
       if (!webviewUrlAllowed(url.trim())) {
@@ -424,29 +549,38 @@ function GridInner({ leaf }: ViewProps) {
     })()
   }
 
-  /** 数据卡:先挑一份 `.db`(复用快速查找,勿另造 picker),再问最少的两个参数。
-   *  ponytail: 只问必填项;更细的配置去笔记里改那段围栏 —— 它本来就是给人读的纯文本。 */
-  const addDataCard = async (kind: 'stat' | 'chart'): Promise<void> => {
-    const path = await new Promise<string | null>((resolve) => {
+  /** 挑一份 `.db`(复用快速查找,勿另造 picker)。 */
+  const pickDb = (title: string): Promise<string | null> =>
+    new Promise((resolve) => {
       useQuickFind.getState().openPicker({
-        title: kind === 'stat' ? '数字卡 — 选一份多维表(.db)…' : '图表卡 — 选一份多维表(.db)…',
+        title,
         accept: (_k: string, p: string) => fileMatchViewType(p) === 'amadeus-db',
         onPick: (p: string) => resolve(p),
       })
     })
+
+  /** 数字卡:挑 `.db` 后只问必填项;更细的配置去笔记里改那段围栏 —— 给人读的纯文本。 */
+  const addDataCard = async (): Promise<void> => {
+    const path = await pickDb('数字卡 — 选一份多维表(.db)…')
     if (!path) return
-    if (kind === 'stat') {
-      const col = (await askString('统计哪一列?(留空 = 数行数)', ''))?.trim() ?? ''
-      if (!col) { insertCard(widgetSource('stat', { source: path }), DASH3_DEFAULT_MINI); return }
-      const stat = (await askString('统计方式(count/sum/avg/min/max)', 'sum'))?.trim()
-      if (!stat) return
-      insertCard(widgetSource('stat', { source: path, col, stat }), DASH3_DEFAULT_MINI)
-      return
-    }
-    const group = (await askString('按哪一列分组?', ''))?.trim()
-    if (!group) return
-    const shape = (await askString('图形(bar/line/donut)', 'bar'))?.trim() || 'bar'
-    insertCard(widgetSource('chart', { source: path, group, kind: shape }), DASH3_DEFAULT)
+    const col = (await askString('统计哪一列?(留空 = 数行数)', ''))?.trim() ?? ''
+    if (!col) { insertCard(widgetSource('stat', { source: path }), DASH3_DEFAULT_MINI); return }
+    const stat = (await askString('统计方式(count/sum/avg/min/max)', 'sum'))?.trim()
+    if (!stat) return
+    insertCard(widgetSource('stat', { source: path, col, stat }), DASH3_DEFAULT_MINI)
+  }
+
+  /** 图表 = 多维表的 chart 视图(Notion 模型,2026-08-31 拍板):挑 `.db` → 保证其上有一个
+   *  图表视图 → 插一张 db 视图卡并激活该视图。配置(分组/聚合/图形)在卡里用真实下拉改,
+   *  告别盲打列名;旧 chart 围栏卡照常渲染,只从加卡菜单退场。 */
+  const addChartCard = async (): Promise<void> => {
+    const path = await pickDb('图表 — 选一份多维表(.db)…')
+    if (!path) return
+    const viewName = await ensureChartView(path)
+    insertCard(
+      widgetSource('view', { type: 'amadeus-db', dbPath: path, ...(viewName ? { view: viewName } : {}) }),
+      cellForSize('lg'),
+    )
   }
 
   /** 可嵌视图清单:宿主 `embeddable` 白名单(插件自声明不足信 → 插件 view 目前恒不在列)。 */
@@ -546,18 +680,30 @@ function GridInner({ leaf }: ViewProps) {
     return present
   })()
 
-  const composedRows = composeDash3Rows(displaySeq.map((id) => {
+  const effPins = previewPins ?? pins
+  const composedRows = layoutDash3Rows(displaySeq.map((id) => {
     const profile = profileOf(blocks[id]?.content ?? '')
     const stored = layout[id] ?? cellForSize(profile.defaultSize)
     const frozen = dragCellsRef.current?.get(id)
     const base = frozen ? { ...stored, w: frozen.w, h: frozen.h } : stored
     const live = sizing?.id === id ? { ...base, ...sizing } : base
     const chrome = isChrome(parseWidget(blocks[id]?.content ?? '')?.kind)
-    const choices = sizing?.id === id
-      ? [{ key: sizeOfCell(live, profile.sizes), w: live.w, h: live.h }]
-      : profile.sizes.map((key) => dash3Size(key))
+    // ⚠️ 自定义档必须夹每轴下界:存量布局里低于最小声明档的尺寸(旧文件/手写)不许被
+    //    「合法化」,否则内容面没承诺装下的形状会渲染出来,把手还会在起拖瞬间幽灵进档。
+    const min = minOf(profile)
+    const custom = { key: sizeOfCell(live, profile.sizes), w: Math.max(min.w, live.w), h: Math.max(min.h, live.h) }
+    // **手调过的卡,尺寸是铁的**(2026-08-31 打回后收窄):存值 ≠ 该卡默认档 = 用户表过态,
+    // choices 只剩它自己 —— DP 只排版,绝不把手调宽高换成「更合群」的档(此前空列代价 2.25/列
+    // vs 距离 2/格,拼行几乎恒赢 → 松手弹回,resize 形同虚设 = 用户实报)。
+    // 还在默认档的卡(从没动过/模板刚落)保留具名档备选,自动拼行照旧(拍板保留的 DP 观感)。
+    // 摆过位置(有 pin)同样蕴含「尺寸是铁的」:DP 换档会当场把手工行的列位算错。
+    const def = dash3Size(profile.defaultSize)
+    const untouched = !effPins[id] && (!layout[id] || (layout[id].w === def.w && layout[id].h === def.h))
+    const choices = sizing?.id === id || !untouched
+      ? [custom]
+      : [custom, ...profile.sizes.map((key) => dash3Size(key)).filter((s) => s.w !== custom.w || s.h !== custom.h)]
     return { id, preferred: live, choices, chrome }
-  }), cols)
+  }), effPins, cols)
 
   /** 编排行 → 单一 CSS Grid 的显式坐标。**只有一个 grid 容器、卡片永不换父** —— 跨行移动
    *  因此是同一实例的位移,framer layout FLIP 天然成立(多行容器时代的「淡出+淡入」与
@@ -565,15 +711,24 @@ function GridInner({ leaf }: ViewProps) {
   const placed: Array<{ id: string; rowStart: number; rowSpan: number; colStart: number; colSpan: number; size: DashboardCardSize; cell: Cell; chrome?: boolean }> = []
   {
     let unit = 1
+    const bands: Array<{ top: number; h: number; ids: string[] }> = []
+    const byId = new Map<string, { col: number; w: number }>()
     for (const row of composedRows) {
       let cursor = 1
+      const members: string[] = []
       for (const item of row.items) {
         const colStart = item.start ?? cursor
-        placed.push({ id: item.id, rowStart: unit, rowSpan: row.h, colStart, colSpan: item.span, size: item.size, cell: item.cell, chrome: item.chrome })
+        // ⚠️ rowSpan 用**每卡自己的** h,不是行高:手工行允许不等高并排(band 高 = 最高那张,
+        //    矮卡下方留白),这一条是「6×5 大卡右边塞得下 3×2 小挂件」的全部落点。
+        placed.push({ id: item.id, rowStart: unit, rowSpan: item.h, colStart, colSpan: item.span, size: item.size, cell: item.cell, chrome: item.chrome })
         cursor = colStart + item.span
+        members.push(item.id)
+        byId.set(item.id, { col: Math.round(((colStart - 1) * DASH3_COLS) / cols), w: item.cell.w })
       }
+      bands.push({ top: (unit - 1) * (DASH3_ROW_PX + DASH3_GAP_PX), h: row.h, ids: members })
       unit += row.h
     }
+    geomRef.current = { bands, byId }
   }
   visualCellsRef.current = new Map(placed.map((f) => [f.id, f.cell]))
 
@@ -708,6 +863,9 @@ function GridInner({ leaf }: ViewProps) {
 
       <DashFilterBar filters={dashFilters} editable={!locked} onChange={setFilters} />
 
+      {/* 页面级筛选下发接缝:卡里的多维表 chart 视图经 DashFiltersCtx 消费(围栏数据卡走
+          WidgetCard 的 filters prop,两条都吃 —— 一处改、全页跟随)。 */}
+      <DashFiltersCtx.Provider value={dashFilters}>
       <motion.div layoutScroll ref={hostRef} className="dash3-host" data-locked={locked || undefined} onPointerMove={onGripMove} onPointerUp={onGripUp} onPointerCancel={onGripUp}>
         <DndContext
           sensors={sensors}
@@ -717,6 +875,7 @@ function GridInner({ leaf }: ViewProps) {
           collisionDetection={pointerWithin}
           measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragStart={onDragStart}
+          onDragMove={onDragMove}
           onDragOver={onDragOver}
           onDragEnd={onDragEnd}
           onDragCancel={onDragCancel}
@@ -802,6 +961,7 @@ function GridInner({ leaf }: ViewProps) {
           </div>
         )}
       </motion.div>
+      </DashFiltersCtx.Provider>
 
       {cardMenu && !locked && (
         <>
@@ -813,6 +973,12 @@ function GridInner({ leaf }: ViewProps) {
                 {s.label} <span className="dash3-size-dim">{s.w}×{s.h}</span>
               </button>
             ))}
+            {pins[cardMenu.id] && (
+              <>
+                <div className="dash-menu-sep" />
+                <button onClick={() => { releaseRow(cardMenu.id); setCardMenu(null) }}>恢复自动排版</button>
+              </>
+            )}
             <div className="dash-menu-sep" />
             <button className="dash-danger" onClick={() => { removeCard(cardMenu.id); setCardMenu(null) }}>删除卡片</button>
           </div>
@@ -899,14 +1065,16 @@ function GridCard({
   return (
     <motion.div
       ref={setNodeRef}
-      // 在途 resize 的卡几何要跟手,瞬时落格;其余一切位移/改档都走 FLIP。
-      layout={!sizing}
+      // 一切几何变化(重排/改档/在途 resize 的每次落格)都走 FLIP。在途 resize 用更短的补间:
+      // 首版「瞬时落格」被用户报「太生硬」(2026-08-31)—— 指针数学始终对起手几何算(onGripMove
+      // 不读 DOM rect),补间不会形成反馈环。
+      layout
       className="dash3-card-slot"
       style={slotStyle}
       initial={reduceMotion ? false : { opacity: 0, scale: 0.97, y: 8 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: -6 }}
-      transition={{ duration: reduceMotion ? 0 : 0.28, ease: [0.16, 1, 0.3, 1] }}
+      transition={{ duration: reduceMotion ? 0 : sizing ? 0.16 : 0.28, ease: [0.16, 1, 0.3, 1] }}
     >
       <div
         className={`dash3-card${chrome ? ' dash3-card--chrome' : ''}`}

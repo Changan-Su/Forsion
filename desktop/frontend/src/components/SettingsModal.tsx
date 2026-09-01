@@ -65,7 +65,7 @@ import { setActiveWindowCommand } from '../activeWindowCommand'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
-import { canvasDoubleClickFocusEnabled, setCanvasDoubleClickFocusEnabled } from '@amadeus/unified/canvasPrefs'
+import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
@@ -207,6 +207,7 @@ export const SettingsModal: React.FC<{
   const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
+  const [canvasOverviewZ, setCanvasOverviewZ] = useState<number>(canvasOverviewZoom)
   // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
     ui: readFont('ui'), body: readFont('body'), mono: readFont('mono'),
@@ -1453,6 +1454,20 @@ export const SettingsModal: React.FC<{
                           label={t('settings.notes.canvasDoubleClickFocusLabel')}
                           description={t('settings.notes.canvasDoubleClickFocusHint')}
                           control={<SettingsSwitch checked={canvasDoubleClickFocus} onChange={(on) => { setCanvasDoubleClickFocus(on); setCanvasDoubleClickFocusEnabled(on) }} label={t('settings.notes.canvasDoubleClickFocusLabel')} />}
+                        />
+                        <SettingsRow
+                          label={t('settings.notes.canvasOverviewZLabel')}
+                          description={t('settings.notes.canvasOverviewZHint')}
+                          control={(
+                            <select
+                              value={String(canvasOverviewZ)}
+                              onChange={(e) => { const z = Number(e.target.value); setCanvasOverviewZ(z); setCanvasOverviewZoom(z) }}
+                            >
+                              {[0.25, 0.4, 0.55, 0.7, 1].map((z) => (
+                                <option key={z} value={String(z)}>{Math.round(z * 100)}%</option>
+                              ))}
+                            </select>
+                          )}
                         />
                         <SettingsRow
                           label={t('settings.notes.deleteAssetsLabel')}

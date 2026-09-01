@@ -21,6 +21,16 @@ export interface DbColumn {
   options?: string[]
   /** 列宽 px,拖拽落盘;缺=弹性列。 */
   width?: number
+  /** type='formula':表达式源码(语法见 db/formula.ts);单元格值为计算结果,不落盘。 */
+  formula?: string
+  /** type='rowlink'(关联表):目标 .db 的 vault 相对路径;cell 存目标行 id。 */
+  refDb?: string
+  /** type='lookup'(引用):本表中 rowlink 列的 id(沿它找到目标行)。 */
+  lookupRel?: string
+  /** type='lookup':目标表中要引用的列 id。 */
+  lookupCol?: string
+  /** type='lookup':聚合方式(first/count/sum/avg/join);缺 = first。 */
+  lookupAgg?: string
 }
 
 export interface DbRow {
@@ -29,7 +39,7 @@ export interface DbRow {
 }
 
 /** 核心视图类型;DbView.type 放行任意字符串(前向兼容),渲染端未知类型回退表格。 */
-export type DbViewType = 'table' | 'kanban' | 'calendar' | 'gallery'
+export type DbViewType = 'table' | 'kanban' | 'calendar' | 'gallery' | 'chart'
 
 /** 视图筛选条件(扁平 AND;op 语义见 viewQuery.ts,未知 op 视为恒真不丢行)。 */
 export interface DbViewFilter {
@@ -44,14 +54,24 @@ export interface DbView {
   id: string
   name: string
   type: string
-  /** kanban:分组列 id(select);缺 = 渲染端自动挑第一个 select 列。 */
+  /** kanban:分组列 id(select);chart:分组列 id(任意列)。缺 = 渲染端自动挑。 */
   groupBy?: string
+  /** chart:图形(bar/line/donut);未知值渲染端回退 bar,不丢配置。 */
+  chartKind?: string
+  /** chart:聚合方式(count/sum/avg);缺 = count。 */
+  agg?: string
+  /** chart:聚合数值列 id(agg=sum/avg 时用;缺失或列已删 = 回退 count)。 */
+  valueCol?: string
   /** calendar:日期列 id(基类 date 或 calendarDate);缺 = 自动挑第一个日期列。 */
   dateCol?: string
   /** 每视图筛选(全部满足才显示);缺 = 不筛。 */
   filters?: DbViewFilter[]
+  /** 筛选逻辑:'or' = 任一条件满足;缺/其他 = 全部满足(AND)。 */
+  filterMode?: string
   /** 每视图排序(落盘持久,不再是临时视图态);缺 = 文件行序。 */
   sort?: { colId: string; dir: 'asc' | 'desc' }
+  /** 多列排序(按序逐层比较);写端保持 sort = sorts[0] 镜像(旧应用只认 sort,读端优先 sorts)。 */
+  sorts?: Array<{ colId: string; dir: 'asc' | 'desc' }>
   /** 本视图隐藏的列 id(首列身份列不可隐藏,渲染端强制)。 */
   hidden?: string[]
   /** 表格视图页脚统计:colId → 统计方式(count/sum/avg/min/max/checked/unchecked)。 */
@@ -90,6 +110,11 @@ const dbColumnSchema = z.object({
   type: z.string().min(1),
   options: z.array(z.string()).optional(),
   width: z.number().positive().optional(),
+  formula: z.string().optional(),
+  refDb: z.string().optional(),
+  lookupRel: z.string().optional(),
+  lookupCol: z.string().optional(),
+  lookupAgg: z.string().optional(),
 })
 const dbRowSchema = z.object({
   id: z.string().min(1),
@@ -100,11 +125,16 @@ const dbViewSchema = z.object({
   name: z.string(),
   type: z.string().min(1), // 未知类型放行:渲染端回退表格,不丢配置
   groupBy: z.string().optional(),
+  chartKind: z.string().optional(),
+  agg: z.string().optional(),
+  valueCol: z.string().optional(),
   dateCol: z.string().optional(),
   filters: z
     .array(z.object({ colId: z.string().min(1), op: z.string().min(1), value: cellValueSchema.optional() }))
     .optional(),
+  filterMode: z.string().optional(),
   sort: z.object({ colId: z.string().min(1), dir: z.enum(['asc', 'desc']) }).optional(),
+  sorts: z.array(z.object({ colId: z.string().min(1), dir: z.enum(['asc', 'desc']) })).optional(),
   hidden: z.array(z.string()).optional(),
   stats: z.record(z.string(), z.string()).optional(),
 })
@@ -119,6 +149,14 @@ export const dbFileSchema = z.object({
 
 /** 短随机 id(列/行):8 位 base36,表格规模下碰撞可忽略。 */
 export const dbId = (): string => Math.random().toString(36).slice(2, 10)
+
+/** 隐式默认视图:views 缺/空 = 单「表格」(旧文件零迁移;首次增改视图时才物化)。 */
+export const DEFAULT_DB_VIEW: DbView = { id: 'v-default', name: '表格', type: 'table' }
+export const viewsOf = (d: DbFile): DbView[] => (d.views?.length ? d.views : [DEFAULT_DB_VIEW])
+
+/** 读端排序解析:sorts 优先,回落单列 sort(写端保持 sort = sorts[0] 镜像,旧应用仍可读)。 */
+export const sortsOf = (v: DbView): Array<{ colId: string; dir: 'asc' | 'desc' }> =>
+  v.sorts?.length ? v.sorts : v.sort ? [v.sort] : []
 
 /** 新数据库种子:1 个文本列 + 1 个空行(创建即可打字,不是空壳)。 */
 export function emptyDb(name: string): DbFile {

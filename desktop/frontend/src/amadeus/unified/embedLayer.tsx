@@ -429,6 +429,15 @@ export function createEmbedLayer(opts: { path: string }): MilkdownPlugin[] {
               key: dkey,
               side: -1,
               ignoreSelection: true,
+              // ⚠️ 嵌入体里的输入控件(多维表公式框/单元格/搜索、插件表单、嵌入笔记的第二个编辑器)按键
+              // **必须止步于此**:widget 装饰默认不拦事件,PM 的 eventBelongsToView 一路走到 view.dom,
+              // 于是 baseKeymap 的 Backspace 拿**外层**选区跑 joinBackward —— 段落被合并、选区落进本节点,
+              // 上面那句「光标在节点内 → 让位露源码」随即生效:整个嵌入退化成 `![[…]]` 源文。
+              // (2026-09-01 用户实报「公式框里按删除键,整张多维表变源码」。这洞比 2.8 那批列型早,
+              //  只是公式框是第一个让人连按删除键的地方。Enter 没事只因各控件自己 preventDefault 了,
+              //  普通字母没事只因它压根没进 keymap —— 都不是防线。)
+              // 只拦键盘/输入/剪贴板族:鼠标族留给 PM(块拖拽、宽度把手、双击进源码都在这层附近)。
+              stopEvent: (e: Event) => /^(key|composition|beforeinput|input|paste|cut|copy)/.test(e.type),
               destroy: () => {
                 const entry = roots.get(dkey)
                 if (!entry) return

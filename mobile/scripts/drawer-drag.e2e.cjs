@@ -194,6 +194,54 @@ async function main() {
     await lift()
     await wait(400)
 
+    // ── 7~9 画布(.amx-stage)是自己的手势面:单指横拖 = 平移,不许被抽屉抢 ────────────
+    //  用户实报「画布里单指拖动和左右面板划出冲突了」。画布是 pointer 事件 + touch-action:none,
+    //  而本控制器听的是原生 touch —— 两者互不知情,于是一次平移同时也是一次抽屉拖拽。
+    //  台架不便真开一篇画布笔记(要有 vault),但**判据全在选择器上**:往主区塞一个真的
+    //  `.amx-stage` 元素,让真控制器去命中它。三条一起钉,少一条都会假绿:
+    //   7 画布内非边缘起手 → 不进入拖拽;
+    //   8 **文档模式的 `.amx-stage-off`(display:contents 的空壳,普通笔记里恒在)照旧能划**
+    //     —— 只写 `.amx-stage` 会把所有 v4 笔记的抽屉手势一起废掉;
+    //   9 屏幕边缘 24px 起手仍抢得回来(与白板/PDF 同一条退路)。
+    const stage = async (cls) => {
+      await page.evaluate((c) => {
+        document.getElementById('e2e-stage')?.remove()
+        const main = document.querySelector('.mb-main')
+        const el = document.createElement('div')
+        el.id = 'e2e-stage'
+        el.className = c
+        el.style.cssText = 'position:absolute;inset:60px 0 0 0;z-index:5;background:transparent'
+        main.appendChild(el)
+      }, cls)
+      await wait(80)
+    }
+    const dragFromStage = async (x0) => {
+      await resetClosed()
+      await down(x0, Y)
+      await move(x0 + 30, Y)
+      await move(x0 + Math.round(W * 0.6), Y)
+      const st = await probe()
+      await lift()
+      await wait(600)
+      return st
+    }
+    await stage('amx-stage')
+    const onStage = await dragFromStage(120)
+    ok('7 ⚠️ 画布内(非边缘)单指横拖 → 抽屉一动不动,整段让给画布平移',
+      onStage.drag === null && !onStage.open, JSON.stringify({ drag: onStage.drag, p: onStage.p }))
+
+    await stage('amx-stage amx-stage-off')
+    const onDocMode = await dragFromStage(120)
+    ok('8 ⚠️ 负对照:文档模式的 .amx-stage-off 空壳不算画布,普通笔记照旧划得出抽屉',
+      onDocMode.drag === 'left', JSON.stringify({ drag: onDocMode.drag, p: onDocMode.p }))
+
+    await stage('amx-stage')
+    const fromEdge = await dragFromStage(8)
+    ok('9 画布里从屏幕边缘 24px 起手仍能划出抽屉(与白板/PDF 同一条退路)',
+      fromEdge.drag === 'left', JSON.stringify({ drag: fromEdge.drag, p: fromEdge.p }))
+    await page.evaluate(() => document.getElementById('e2e-stage')?.remove())
+    await resetClosed()
+
     const shotDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-drawerdrag-'))
     await resetClosed()
     await down(8, Y)
@@ -209,7 +257,7 @@ async function main() {
     killPreview()
   }
   if (fails.length) { console.error('❌ e2e:drawerdrag\n' + fails.map((f) => '  - ' + f).join('\n')); process.exit(1) }
-  console.log('✅ e2e:drawerdrag —— 中间态 / 位置吸附 / 速度吸附 / 无 snap-back / 纵向不被抢')
+  console.log('✅ e2e:drawerdrag —— 中间态 / 位置吸附 / 速度吸附 / 无 snap-back / 纵向不被抢 / 画布让位')
 }
 
 main()

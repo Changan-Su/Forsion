@@ -58,6 +58,9 @@ export interface DashboardCardDefinition {
   sizes: readonly DashboardCardSize[]
   defaultSize: DashboardCardSize
   surface?: DashboardCardSurface
+  /** resize 的每轴下界(12 列参考格)。缺省 = 声明档各轴最小值。声明它可以把下界放得比
+   *  最小具名档更小(具名档只是菜单快捷径与信息密度 bucket,不再是几何白名单)。 */
+  min?: { w: number; h: number }
   /** 尺寸感知的紧凑卡片面。缺席时 Dashboard 只在 lg/full 中渲染完整 factory。 */
   factory?: (props: ViewProps, context: DashboardCardContext) => ReactNode
 }
@@ -69,6 +72,10 @@ export interface ViewDefinition {
   /** 标签名;函数形式支持 i18n 懒求值。 */
   displayName: string | (() => string)
   icon?: LucideIcon
+  /** tab 上的图标(可选,压过 `icon`)。**组件**而不是取值函数:它要按 params 认领的那个对象去订阅
+   *  自己的数据(如笔记的 emoji 图标),值变了得自己重渲 —— 引擎不知道也不该知道那份数据在哪。
+   *  没有可显示的东西时由它自己回退(引擎不做 fallback:回退成什么样是 feature 层的事)。 */
+  TabIcon?: ComponentType<{ params: Record<string, unknown>; size: number }>
   factory: (props: ViewProps) => ReactNode
   /** true = 全局至多一个实例(再开则聚焦已存在的)。 */
   singleton?: boolean
@@ -118,6 +125,9 @@ export interface RibbonItem {
   side?: 'top' | 'bottom' | 'head' | 'home'
   /** 钉死在 ribbon 最底部:不参与拖拽/收纳/溢出(账号卡)。仅对 side:'bottom' 有意义。 */
   pinned?: boolean
+  /** 手机单列壳:提升到左抽屉底部常驻行(设置钮左侧)的图标钮,同时从「⋯」菜单滤掉。
+   *  引擎按此标志取用不 import feature(同 rb-account/rb-settings 的常驻口径);桌面 Ribbon 忽略。 */
+  mobileFoot?: boolean
   /** 复合项:自定义组件渲染,拿到 ribbon 展开态(替代 icon/onClick)。用于账号卡。 */
   component?: ComponentType<{ expanded: boolean }>
 }

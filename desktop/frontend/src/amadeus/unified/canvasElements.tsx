@@ -189,6 +189,49 @@ export function safeTree(raw: unknown): Array<[string, string]> {
   return out
 }
 
+/** 选中卡片的层级线强调范围：向上收齐祖先链，向下收齐自己的整棵子树，但不把祖先的其他
+ * 分支（兄弟/叔伯）误算成“相关”。返回值是层级线的 child id —— 一条 tree 关系由 child 唯一命名。
+ * 盘上数据允许被手改，所以上下两路各自带 visited，遇到环也必须收敛。 */
+export function relatedTreeEdgeChildren(edges: ReadonlyArray<readonly [string, string]>, sel: ReadonlySet<string>): Set<string> {
+  const starts = [...sel].flatMap((key) => key === MAIN_KEY ? [MAIN_KEY] : key.startsWith('c:') ? [keyId(key)] : [])
+  if (!starts.length || !edges.length) return new Set()
+
+  const parentOf = new Map<string, string>()
+  const childrenOf = new Map<string, string[]>()
+  for (const [child, parent] of edges) {
+    parentOf.set(child, parent)
+    const children = childrenOf.get(parent)
+    if (children) children.push(child)
+    else childrenOf.set(parent, [child])
+  }
+
+  const related = new Set<string>()
+  for (const start of starts) {
+    const seenUp = new Set<string>()
+    let node = start
+    while (!seenUp.has(node)) {
+      seenUp.add(node)
+      const parent = parentOf.get(node)
+      if (!parent) break
+      related.add(node)
+      node = parent
+    }
+
+    const queue = [start]
+    const seenDown = new Set<string>()
+    while (queue.length) {
+      const parent = queue.shift()!
+      if (seenDown.has(parent)) continue
+      seenDown.add(parent)
+      for (const child of childrenOf.get(parent) ?? []) {
+        related.add(child)
+        queue.push(child)
+      }
+    }
+  }
+  return related
+}
+
 /** 两盒相交(框选判定)。 */
 export const boxHits = (a: ElBox, b: ElBox): boolean =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
@@ -319,6 +362,7 @@ export interface CanvasElementsProps {
 export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
   const els = useMemo(() => safeElements(elements), [elements])
   const edges = useMemo(() => safeTree(tree), [tree])
+  const relatedTreeEdges = useMemo(() => relatedTreeEdgeChildren(edges, sel), [edges, sel])
   const [ver, setVer] = useState(0)
   const n = els.length + edges.length
   /** 选中的卡锚。⚠️ 卡片的选中框**画在本层**,不是给卡片 DOM 加 class —— 卡片 DOM 归 PM 所有,
@@ -442,14 +486,14 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
       {sel.size === 1 && [...sel][0].startsWith('e:') && shapes.has(keyId([...sel][0]))
         ? <Grips id={keyId([...sel][0])} box={shapes.get(keyId([...sel][0]))!} />
         : null}
-      {/* 层级线:由 tree **现算**,盘上没有对应的连线条目(见 canvasEdit 那一节)。故意不可选中 ——
-          它不是一个对象,是父子关系的影子;要断开就改层级,不是删线。 */}
+      {/* 层级线由 tree **现算**，盘上没有对应连线条目；选中键只是关系引用，删除它实际改的是层级，
+          不会向 elements 里物化第二份会分叉的数据（见 treeKey 与 canvasEdit）。 */}
       {edges.map(([child, parent]) => {
         // 父位可以是主卡的哨兵 `m:`(2026-08-19):主卡也能长子节点,层级线得画到正文那一盒上。
         const a = parent === MAIN_KEY ? mainBox : boxes.get(parent)
         const b = boxes.get(child)
         const from: EndRef = parent === MAIN_KEY ? { main: true } : { ref: parent }
-        return a && b ? <Connector key={`t:${child}`} el={{ kind: 'connector', id: `t:${child}`, from, to: { ref: child }, label: null }} a={a} b={b} sel={sel.has(treeKey(child))} tree /> : null
+        return a && b ? <Connector key={`t:${child}`} el={{ kind: 'connector', id: `t:${child}`, from, to: { ref: child }, label: null }} a={a} b={b} sel={sel.has(treeKey(child))} related={relatedTreeEdges.has(child)} tree /> : null
       })}
       {selCards.map((a) => {
         const b = boxes.get(a)
@@ -638,7 +682,7 @@ function Shape({ el, box, sel }: { el: ShapeEl; box: ElBox; sel: boolean }): Rea
  *  剪枝是写侧的活,而且必须与删除同属一笔事务(否则撤销删卡时连线不会回来)—— 只读渲染
  *  越权去剪,等于让「看一眼」变成一次静默改档。(删**形状**时的剪枝在 canvasEdit.removeElements,
  *  那一笔与删除同进同出,所以那边剪是对的。) */
-function Connector({ el, a, b, sel, tree, preview }: { el: ConnEl; a: ElBox | null; b: ElBox | null; sel: boolean; tree?: boolean; preview?: boolean }): React.ReactElement | null {
+function Connector({ el, a, b, sel, related, tree, preview }: { el: ConnEl; a: ElBox | null; b: ElBox | null; sel: boolean; related?: boolean; tree?: boolean; preview?: boolean }): React.ReactElement | null {
   if (!a || !b) return null
   const p = edgePath(a, b)
   const PAD = 14 // 箭头与描边要在画布内,不然被 svg 视口裁掉
@@ -658,12 +702,13 @@ function Connector({ el, a, b, sel, tree, preview }: { el: ConnEl; a: ElBox | nu
     <>
       {/* viewBox 直接吃舞台坐标 → path 的 d 不用做任何平移换算。 */}
       <svg
-        className={`amx-el-conn${sel ? ' is-sel' : ''}${tree ? ' is-tree' : ''}${preview ? ' is-preview' : ''}`}
+        className={`amx-el-conn${sel ? ' is-sel' : ''}${related ? ' is-related' : ''}${tree ? ' is-tree' : ''}${preview ? ' is-preview' : ''}`}
         data-el={el.id}
         style={{ left: `${box.x}px`, top: `${box.y}px`, width: `${box.w}px`, height: `${box.h}px` }}
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
       >
-        <path d={p.d} />
+        {related ? <path className="amx-el-conn-halo" d={p.d} /> : null}
+        <path className="amx-el-conn-core" d={p.d} />
         {/* 层级线不带箭头(mindmap 惯例:父子关系靠位置读,不靠指向) */}
         {tree ? null : <polygon points={tri} />}
       </svg>

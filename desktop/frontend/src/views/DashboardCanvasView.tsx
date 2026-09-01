@@ -13,7 +13,7 @@
  * 落盘防线与旧版同源:换页不写 / 坏 YAML 冻结 / 布局与块全不相交停手 / 落点对当下布局判。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Check, Clock, CloudSun, Globe, LayoutGrid, Maximize2, MoreHorizontal, Pencil, Pin, Plus, Trash2, Type } from 'lucide-react'
+import { BarChart3, Check, Clock, CloudSun, Globe, LayoutGrid, Maximize2, MoreHorizontal, Pencil, Pin, Plus, Trash2, Type } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 // ponytail: 不订阅 viewRegistry —— 能嵌卡的只有宿主 embeddable 白名单里的内置视图,它们在
 // installEngine 一次注册完;插件视图恒非 embeddable(宿主不给插件这个字段),不存在「晚注册」窗口。
@@ -42,7 +42,7 @@ import { Breadcrumb } from '../amadeusViews'
 import { importToPage } from '../amadeusImport'
 import { WidgetCard, localTimeZone } from '@amadeus/dashboard/widgets'
 // 嵌卡白名单/身份判定/标题取法与网格版共用一份(勿再各写一份)。
-import { EMBED_DENY, ViewCard, pickSpecOf } from './dashboardViewCard'
+import { EMBED_DENY, ViewCard, ensureChartView, pickSpecOf } from './dashboardViewCard'
 import '@amadeus/blocks'
 import './dashCanvas.css'
 
@@ -137,6 +137,7 @@ const MINI_CARD_H = 144
 
 const ADD_MENU = [
   { key: 'text', label: '文本块', icon: Type },
+  { key: 'chart', label: '图表(多维表)…', icon: BarChart3 },
   { key: 'clock', label: '时钟', icon: Clock },
   { key: 'weather', label: '天气', icon: CloudSun },
   { key: 'webview', label: '网页', icon: Globe },
@@ -397,6 +398,23 @@ function CanvasInner({ leaf }: ViewProps) {
   const addCard = (kindKey: (typeof ADD_MENU)[number]['key']): void => {
     setAddMenu(false)
     void (async () => {
+      // 图表 = 多维表的 chart 视图(Notion 模型,与网格版同流):挑 .db → 保证图表视图 → 插 db 卡。
+      if (kindKey === 'chart') {
+        const path = await new Promise<string | null>((resolve) => {
+          useQuickFind.getState().openPicker({
+            title: '图表 — 选一份多维表(.db)…',
+            accept: (_k: string, p: string) => fileMatchViewType(p) === 'amadeus-db',
+            onPick: (p: string) => resolve(p),
+          })
+        })
+        if (!path) return
+        const viewName = await ensureChartView(path)
+        insertCard(
+          widgetSource('view', { type: 'amadeus-db', dbPath: path, ...(viewName ? { view: viewName } : {}) }),
+          VIEW_CARD_W, VIEW_CARD_H,
+        )
+        return
+      }
       let content = ''
       if (kindKey === 'clock') content = widgetSource('clock', { tz: localTimeZone() })
       else if (kindKey === 'weather') {

@@ -108,7 +108,10 @@ export function restoreSingleColumnLayout(): boolean {
 function applySCBlob(raw: unknown): boolean {
   if (!isBlob(raw)) return false
   const main = knownLeaves(raw.main)
-  if (main.length === 0) return false // 主区空 = 没什么可还原的,交回 buildDefault
+  // 主区空、或只剩 `home` 空态占位 = 没什么可还原的,交回 buildDefault(= 该 Space 的落地页)。
+  // ⚠️ 占位也要算「空」:主页 Space 的落地页被关掉后就地变成占位,存盘再还原 = 每次开机都是
+  // 那张只有 logo 的空页,而且自己再也回不来(2026-08-30 用户实报「默认 Homepage 空白」)。
+  if (main.every((r) => r.type === 'home')) return false
   const left = knownLeaves(raw.left)
   const right = knownLeaves(raw.right)
   const pick = (want: string | null, pool: LeafRec[]): string | null =>
