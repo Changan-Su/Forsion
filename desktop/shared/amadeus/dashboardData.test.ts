@@ -67,21 +67,21 @@ describe('数字卡:先筛选再统计', () => {
   })
 
   it('页面级筛选真的收窄了统计范围(负对照:不加筛选是 4/350)', () => {
-    const spec = { source: 'a.db', col: '金额', stat: 'sum', label: '', unit: '' }
+    const spec = { source: 'a.db', col: '金额', stat: 'sum', label: '', unit: '', literal: null }
     expect(computeStatCard(rows, cols, spec, noFilter, kindOf).text).toBe('350')
     expect(computeStatCard(rows, cols, spec, onlyRunning, kindOf).text).toBe('300')
-    const rowSpec = { source: 'a.db', col: null, stat: STAT_ROWS, label: '', unit: '' }
+    const rowSpec = { source: 'a.db', col: null, stat: STAT_ROWS, label: '', unit: '', literal: null }
     expect(computeStatCard(rows, cols, rowSpec, noFilter, kindOf).text).toBe('4')
     expect(computeStatCard(rows, cols, rowSpec, onlyRunning, kindOf).text).toBe('2')
   })
 
   it('列名找不到 → 显示 –,不抛', () => {
-    const spec = { source: 'a.db', col: '不存在', stat: 'sum', label: '', unit: '' }
+    const spec = { source: 'a.db', col: '不存在', stat: 'sum', label: '', unit: '', literal: null }
     expect(computeStatCard(rows, cols, spec, noFilter, kindOf).text).toBe('–')
   })
 
   it('统计与多维表的统计行同源(computeStat),不另算一份', () => {
-    const spec = { source: 'a.db', col: '金额', stat: 'avg', label: '', unit: '' }
+    const spec = { source: 'a.db', col: '金额', stat: 'avg', label: '', unit: '', literal: null }
     // 三个非空数值 100/200/50 → 平均 116.67(trimNum 两位)
     expect(computeStatCard(rows, cols, spec, noFilter, kindOf).text).toBe('116.67')
   })

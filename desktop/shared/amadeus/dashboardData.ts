@@ -38,17 +38,27 @@ export interface StatSpec {
   label: string
   /** 单位后缀(纯装饰,如「件」「元」)。 */
   unit: string
+  /**
+   * literal 档(2026-09-01):`value:` 直给展示值 —— 面向「数字不在任何 .db 里」的场合
+   * (外部系统 KPI:服务器统计、第三方接口……)。有 value 就不需要 source,
+   * 不拉 .db、**不吃页面级筛选**(没有行可筛)。null = 常规 .db 统计档。
+   */
+  literal: string | null
 }
 
 export type SpecResult<T> = { ok: true; spec: T } | { ok: false; error: string }
 
 export function parseStatSpec(opts: Record<string, string>): SpecResult<StatSpec> {
+  const label = (opts.label || '').trim()
+  const unit = (opts.unit || '').trim()
+  const literal = (opts.value || '').trim()
+  if (literal) return { ok: true, spec: { source: '', col: null, stat: STAT_ROWS, label, unit, literal } }
   const source = (opts.source || '').trim()
-  if (!source) return { ok: false, error: '缺 source:(.db 文件路径)' }
+  if (!source) return { ok: false, error: '缺 source:(.db 文件路径)或 value:(直给数值)' }
   const stat = (opts.stat || STAT_ROWS).trim()
   const col = (opts.col || '').trim() || null
   if (stat !== STAT_ROWS && !col) return { ok: false, error: `统计「${stat}」需要 col:(列名)` }
-  return { ok: true, spec: { source, col, stat, label: (opts.label || '').trim(), unit: (opts.unit || '').trim() } }
+  return { ok: true, spec: { source, col, stat, label, unit, literal: null } }
 }
 
 // ───────────────────────────── 图表卡 ─────────────────────────────

@@ -43,9 +43,22 @@ function kindOfFactory(columns: { id: string; type: string }[]): (id: string) =>
 
 export function StatCard({ opts, filters }: { opts: Record<string, string>; filters: DashFilter[] }) {
   const parsed = useMemo(() => parseStatSpec(opts), [JSON.stringify(opts)]) // eslint-disable-line react-hooks/exhaustive-deps
-  const path = parsed.ok ? parsed.spec.source : ''
+  const path = parsed.ok ? parsed.spec.source : '' // literal 档 source 恒空 → useDb 不拉任何 .db
   const entry = useDb(path)
   if (!parsed.ok) return <Note>数字卡:{parsed.error}</Note>
+  // literal 档:值即所见,不碰 entry、不渲「已按页面筛选」副行(没有行可筛)。
+  if (parsed.spec.literal !== null) {
+    const s = parsed.spec
+    return (
+      <div className="dash-widget dash-stat">
+        <div className="dash-stat-value">
+          {s.literal}
+          {s.unit && <span className="dash-stat-unit">{s.unit}</span>}
+        </div>
+        <div className="dash-stat-label">{s.label || '—'}</div>
+      </div>
+    )
+  }
   return <StatBody spec={parsed.spec} entry={entry} filters={filters} />
 }
 

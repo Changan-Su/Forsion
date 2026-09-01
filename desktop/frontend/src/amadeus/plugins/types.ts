@@ -655,6 +655,19 @@ export interface PluginContext {
   loadData?<T = unknown>(): Promise<T | null>
   /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
   saveData?(value: unknown): Promise<void>
+  /** Dashboard 配方编译(2026-09-01+):声明式配方 → 一份真 `.dashboard.md` 字节。
+   *  插件自己经 `ctx.app.writeFile` 落进 workFolder、`ctx.app.openFile` 打开 —— 宿主的
+   *  amadeusNav 会把 `.dashboard.md` 路由到原生 Dashboard tab(网格/卡片/排版台全套)。
+   *  围栏与 frontmatter 词表**留在宿主**(格式无版本契约,手抄=将来破兼容);再生成时把
+   *  现有文件字节传 `existingFileText`,用户手排的布局(dashboard3/3x)与页面筛选会存活,
+   *  读不懂的现有布局会拒编译(ok:false)——绝不拿默认值覆盖用户布局。
+   *  旧宿主没有:`ctx.dashboard?.source(…)`。 */
+  dashboard?: {
+    source(
+      recipe: import('../../../../shared/amadeus/dashboardRecipe').DashboardRecipe,
+      opts?: { existingFileText?: string },
+    ): import('../../../../shared/amadeus/dashboardRecipe').RecipeResult
+  }
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
   registerPropertyType(def: PropertyTypeContribution): void
   /** Achievements: register a series and bump its counters. Series/achievement ids and events

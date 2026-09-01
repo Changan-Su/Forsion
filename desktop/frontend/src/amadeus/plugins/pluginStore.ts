@@ -43,6 +43,7 @@ import type {
   ListSourceContribution,
 } from './types'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
+import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 
 const DISABLED_KEY = 'amadeus.plugins.disabled'
 
@@ -508,6 +509,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
       await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
+    },
+    // Dashboard 配方编译:纯函数,格式(围栏/frontmatter 词表)留在宿主 —— 插件手抄格式
+    // 就是没版本契约的公开 API(接缝评审 P8)。写盘/打开由插件走既有 ctx.app 面。
+    dashboard: {
+      source: (recipe, sourceOpts) => compileDashboardRecipe(recipe, { existingFileText: sourceOpts?.existingFileText }),
     },
     registerPropertyType: (def) => {
       registerPropType(def)
