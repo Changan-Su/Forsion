@@ -39,6 +39,9 @@ describe('compileDashboardRecipe:配方 → 真 .dashboard.md 字节', () => {
     const blocks = parseBody(stripFrontmatter(r.text))
     expect(blocks.map((b) => b.id)).toEqual(['sec-kpi', 's-users', 's-req', 'v-cal', 't-note'])
     // 围栏层:widget 逐张可反解,literal stat 契约成立
+    const sec = parseWidget(blocks[0].content)
+    expect(sec?.kind).toBe('section')
+    expect(sec?.opts.title).toBe('服务器状态') // ⚠️渲染层读 title: 不是 label:(发错键=恒「未命名分区」)
     const stat = parseWidget(blocks[1].content)
     expect(stat?.kind).toBe('stat')
     const spec = parseStatSpec(stat!.opts)

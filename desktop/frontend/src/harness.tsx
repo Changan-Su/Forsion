@@ -43,6 +43,10 @@ import { FileText as FileTextIcon } from 'lucide-react'
 import { QuickFind, useQuickFind } from './quickFind'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
+import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
+import { parseBody } from '@amadeus-shared/compiler/markers'
+import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from '@amadeus-shared/compiler/split'
+import { parseLayout } from '@amadeus-shared/compiler/manifest'
 import ExcalidrawCanvas from './amadeus/blocks/excalidraw/ExcalidrawCanvas'
 import { DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
 import { UnifiedSpikeHarness } from './amadeus/unified/UnifiedSpike'
@@ -852,6 +856,52 @@ if (new URLSearchParams(location.search).has('dock')) {
       <DatabaseEmbed target="任务.db" pagePath="demo.md" />
     </div>,
   )
+} else if (new URLSearchParams(location.search).has('dashrecipe')) {
+  // ?dashrecipe:**配方编译器的真渲染面**——compileDashboardRecipe 的字节经真解码器
+  // (parseBody/parseFrontmatter/parseLayout)进 pageStore,再由真 DashboardGridView 渲染。
+  // 钉「编译出的文件在真 Dashboard 里长对样」:literal stat 卡有值、section 键名对
+  // (title: 不是 label:,发错=恒「未命名分区」)。夹具形状=server-admin 插件的总览配方。
+  const iso = new Date().toISOString()
+  const t5 = (prefix: string, names: string[], counts: string[]) =>
+    names.map((n, i) => ({ kind: 'stat' as const, id: `${prefix}-${i + 1}`, label: `${i + 1} · ${n}`, value: counts[i], unit: '次' }))
+  const compiled = compileDashboardRecipe({
+    cards: [
+      { kind: 'section', id: 'sec-kpi', label: '服务器状态 · demo-host' },
+      { kind: 'stat', id: 'kpi-users', label: '总用户数', value: '1,234' },
+      { kind: 'stat', id: 'kpi-req', label: 'API 请求(30天)', value: '56,789' },
+      { kind: 'stat', id: 'kpi-tok', label: 'Token 总量(30天)', value: '123,456,789' },
+      { kind: 'stat', id: 'kpi-ok', label: '成功调用(30天)', value: '56,000' },
+      { kind: 'stat', id: 'kpi-rate', label: '成功率(30天)', value: '98.6%' },
+      { kind: 'stat', id: 'kpi-pts', label: '积分消耗(30天)', value: '321.5' },
+      { kind: 'section', id: 'sec-models', label: '模型用量 TOP 5(30天)' },
+      ...t5('m', ['gpt-x', 'claude-y', 'deepseek-z', 'qwen-w', 'glm-v'], ['3,000', '2,000', '500', '120', '45']),
+      { kind: 'section', id: 'sec-users', label: '用户用量 TOP 5(30天)' },
+      ...t5('u', ['alice', 'bob', 'carol', 'dave', 'eve'], ['4,000', '1,600', '900', '77', '12']),
+    ],
+  }, { pageId: 'harness-dashrecipe', now: iso })
+  if (!compiled.ok) {
+    document.body.textContent = 'RECIPE-FAIL:' + compiled.error
+  } else {
+    const text = compiled.text
+    ;(window as unknown as { __recipeBytes: string }).__recipeBytes = text
+    const fm = parseFrontmatter(text)
+    const parsed = parseBody(stripFrontmatter(text))
+    const ids: string[] = []
+    const blocks: Record<string, { id: string; type: string; content: string }> = {}
+    for (const b of parsed) if (b.id) { ids.push(b.id); blocks[b.id] = { id: b.id, type: 'markdown', content: b.content } }
+    usePageStore.setState({
+      activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE], files: [],
+      manifest: {
+        schema: PAGE_SCHEMA, id: fm.amadeus_page || 'harness-dashrecipe', title: 'Recipe', createdAt: iso, updatedAt: iso,
+        compiler: { version: 'harness' },
+        root: parseLayout(fm.amadeus_layout),
+        blocks: Object.fromEntries(ids.map((id) => [id, { type: 'markdown' }])),
+        fmExtra: extractFrontmatterExtra(text),
+      },
+      blocks,
+    })
+    createRoot(document.getElementById('root')!).render(<DashGridHarness />)
+  }
 } else if (new URLSearchParams(location.search).has('dashgrid')) {
   const iso = new Date().toISOString()
   registerView({

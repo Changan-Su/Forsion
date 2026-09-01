@@ -64,7 +64,8 @@ function cardContent(card: RecipeCard): string {
       ...(card.unit ? { unit: oneLine(card.unit) } : {}),
     })
   }
-  if (card.kind === 'section') return widgetSource('section', { label: oneLine(card.label) })
+  // ⚠️ section 渲染层读 `title:`(widgets.tsx SectionWidget),不是 label —— 键名错=恒「未命名分区」
+  if (card.kind === 'section') return widgetSource('section', { title: oneLine(card.label) })
   if (card.kind === 'view') {
     const opts: Record<string, string> = { type: oneLine(card.type) }
     for (const [k, v] of Object.entries(card.params ?? {})) {
