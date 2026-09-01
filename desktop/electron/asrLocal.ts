@@ -7,6 +7,7 @@ import { createWriteStream, existsSync, statSync } from 'node:fs'
 import { mkdir, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import type { OfflineRecognizer } from 'sherpa-onnx-node'
@@ -39,8 +40,17 @@ function loadSherpa(): typeof import('sherpa-onnx-node') {
 
 // 官方 SenseVoice sherpa 模型(zh/en/ja/ko/yue);int8 ~230MB,tokens 极小。
 const REPO = 'csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17'
-const HOSTS: Record<string, string> = { default: 'https://huggingface.co', china: 'https://hf-mirror.com' }
+// 候选主机**有序列表**,依次回退(同 market 安装的 githubMirrorCandidates 家法):中国大陆直连 huggingface.co
+// 常被拦成 `TypeError: fetch failed` 或干脆 SYN 挂起,而主进程 fetch 又不读系统代理 → 挂了 VPN 也照样死。
+// 所以不管用户有没有把「网络环境」切到中国大陆,两个地址都试,只是顺序不同。
+const HOSTS: Record<string, string[]> = {
+  default: ['https://huggingface.co', 'https://hf-mirror.com'],
+  china: ['https://hf-mirror.com', 'https://huggingface.co'],
+}
 const FILES = ['model.int8.onnx', 'tokens.txt']
+// 两个 env 既是单测把 15s/30s 压到毫秒级的旋钮,也是现场排障(慢到爆的网络)调宽的旋钮。
+const CONNECT_TIMEOUT_MS = Number(process.env.FORSION_ASR_CONNECT_TIMEOUT_MS) || 15_000 // 连接阶段;被墙时是挂起而非快速失败,没这个就永远等不到回退
+const STALL_TIMEOUT_MS = Number(process.env.FORSION_ASR_STALL_TIMEOUT_MS) || 30_000 // 下载中「多久没收到字节」算断流(整段不能设超时,230MB 慢网合法)
 const MIN_MODEL_BYTES = 100_000_000 // int8 ~230MB;< 100MB 视为半截/损坏
 const APPROX_TOTAL = 240 * 1024 * 1024 // 进度条用的近似总量
 
@@ -60,33 +70,66 @@ export function localModelSize(): number {
 }
 
 async function downloadOne(url: string, dest: string, onBytes: (n: number) => void): Promise<void> {
-  const res = await fetch(url)
-  if (!res.ok || !res.body) throw new Error(`下载失败 ${res.status}: ${url}`)
   const tmp = dest + '.part'
-  const out = createWriteStream(tmp)
-  const nodeStream = Readable.fromWeb(res.body as never)
-  nodeStream.on('data', (c: Buffer) => onBytes(c.length))
-  await new Promise<void>((resolve, reject) => {
-    nodeStream.pipe(out)
-    out.on('finish', () => resolve())
-    out.on('error', reject)
-    nodeStream.on('error', reject)
-  })
-  await rename(tmp, dest) // 整段落盘后再改名 → 半截不会被 localModelReady 误判就绪
+  const ac = new AbortController()
+  let timer = setTimeout(() => ac.abort(), CONNECT_TIMEOUT_MS)
+  const arm = (ms: number): void => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), ms) }
+  try {
+    const res = await fetch(url, { signal: ac.signal })
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+    arm(STALL_TIMEOUT_MS) // 响应头到手 → 改判「断流」看门狗,每收到一块字节续一次
+    const nodeStream = Readable.fromWeb(res.body as never)
+    nodeStream.on('data', (c: Buffer) => { onBytes(c.length); arm(STALL_TIMEOUT_MS) })
+    await pipeline(nodeStream, createWriteStream(tmp)) // 出错时 pipeline 负责销毁写流(手写 pipe 会漏 fd)
+    await rename(tmp, dest) // 整段落盘后再改名 → 半截不会被 localModelReady 误判就绪
+  } catch (e) {
+    await unlink(tmp).catch(() => {}) // 换下一个候选前清掉半截,免得攒一堆 .part
+    throw new Error((e as Error)?.name === 'AbortError' ? '连接超时/断流' : (e as Error)?.message || String(e))
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
-/** 下载 SenseVoice int8 模型(带累计字节进度)。mirror='china' 走 hf-mirror.com。 */
+/**
+ * 按候选主机顺序下载整组文件,前一个整组失败才试下一个。
+ * 抽成导出函数只为可单测(不碰 electron、不碰 230MB 的大小校验);真身入口是 downloadLocalModel。
+ */
+export async function downloadFromHosts(
+  hosts: string[],
+  dir: string,
+  onProgress: (received: number, total: number) => void,
+  verify: () => boolean,
+): Promise<void> {
+  const errs: string[] = []
+  for (const host of hosts) {
+    let received = 0
+    try {
+      for (const f of FILES) {
+        const dest = join(dir, f)
+        // 已经下全的大文件不重下:230MB 在慢网上重来一遍太贵(tokens.txt 极小,不值得判)
+        if (f === 'model.int8.onnx' && existsSync(dest) && statSync(dest).size >= MIN_MODEL_BYTES) {
+          received += statSync(dest).size
+          onProgress(received, APPROX_TOTAL)
+          continue
+        }
+        await downloadOne(`${host}/${REPO}/resolve/main/${f}`, dest, (n) => { received += n; onProgress(received, APPROX_TOTAL) })
+      }
+      if (!verify()) throw new Error('下载完成但模型校验未通过(大小异常)')
+      return
+    } catch (e) {
+      errs.push(`${host.replace(/^https?:\/\//, '')} — ${(e as Error)?.message || String(e)}`)
+    }
+  }
+  throw new Error(`模型下载失败,已尝试 ${hosts.length} 个地址:${errs.join(' ; ')}。若在中国大陆,请连上代理(注意:主进程不读系统 HTTP 代理,需 TUN/全局模式)后重试。`)
+}
+
+/** 下载 SenseVoice int8 模型(带累计字节进度)。mirror 只决定候选主机的**顺序**,两个都会试。 */
 export async function downloadLocalModel(
   mirror: 'default' | 'china',
   onProgress: (received: number, total: number) => void,
 ): Promise<void> {
   await mkdir(modelDir(), { recursive: true })
-  const base = `${HOSTS[mirror] || HOSTS.default}/${REPO}/resolve/main`
-  let received = 0
-  for (const f of FILES) {
-    await downloadOne(`${base}/${f}`, join(modelDir(), f), (n) => { received += n; onProgress(received, APPROX_TOTAL) })
-  }
-  if (!localModelReady()) throw new Error('下载完成但模型校验未通过(大小异常),请重试')
+  await downloadFromHosts(HOSTS[mirror] || HOSTS.default, modelDir(), onProgress, localModelReady)
 }
 
 export async function removeLocalModel(): Promise<void> {

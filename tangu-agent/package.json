@@ -1,6 +1,6 @@
 {
   "name": "@forsion/tangu-agent",
-  "version": "2.9.1",
+  "version": "2.9.2",
   "license": "SEE LICENSE IN LICENSE",
   "description": "Tangu Agent — 与宿主无关的服务端 agent runtime;可作为 Forsion 微后端插件,也可独立运行(云端大脑客户端)。",
   "type": "module",
