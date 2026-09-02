@@ -4794,6 +4794,33 @@
     {
       "type": "function",
       "function": {
+        "name": "transcribe_audio",
+        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local audio file (wav/mp3/m4a/ogg/flac/webm…)."
+            },
+            "timestamps": {
+              "type": "boolean",
+              "description": "Also return timed segments [{start,end,text}] when the backend can provide them."
+            },
+            "language": {
+              "type": "string",
+              "description": "Optional language hint, e.g. \"zh\" or \"en\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "view_video",
         "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
         "parameters": {
@@ -6074,6 +6101,33 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "transcribe_audio",
+        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local audio file (wav/mp3/m4a/ogg/flac/webm…)."
+            },
+            "timestamps": {
+              "type": "boolean",
+              "description": "Also return timed segments [{start,end,text}] when the backend can provide them."
+            },
+            "language": {
+              "type": "string",
+              "description": "Optional language hint, e.g. \"zh\" or \"en\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
         }
       }
     },
@@ -8836,6 +8890,33 @@
     {
       "type": "function",
       "function": {
+        "name": "transcribe_audio",
+        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local audio file (wav/mp3/m4a/ogg/flac/webm…)."
+            },
+            "timestamps": {
+              "type": "boolean",
+              "description": "Also return timed segments [{start,end,text}] when the backend can provide them."
+            },
+            "language": {
+              "type": "string",
+              "description": "Optional language hint, e.g. \"zh\" or \"en\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "view_video",
         "description": "View a video file on the machine by sampling its frames (decoded locally with ffmpeg). Without `time`: returns ONE contact-sheet image of up to 16 evenly sampled frames so you can see what happens across the whole video; each cell's timestamp in seconds is listed in the text output (read cells left-to-right, top-to-bottom). With `time`: returns a single detailed frame (up to 1280px wide) at that second — use it after an overview to inspect a moment closely. Use `start`/`end` (seconds) to re-sample a narrower window more densely. Supports any format the local ffmpeg can decode (mp4/mov/mkv/webm/avi/...). The soundtrack is NOT included — for speech, extract the audio track (e.g. run_bash: ffmpeg -i video -vn out.m4a) and use transcribe_audio if available.",
         "parameters": {
@@ -10116,6 +10197,33 @@
             }
           },
           "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "transcribe_audio",
+        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local audio file (wav/mp3/m4a/ogg/flac/webm…)."
+            },
+            "timestamps": {
+              "type": "boolean",
+              "description": "Also return timed segments [{start,end,text}] when the backend can provide them."
+            },
+            "language": {
+              "type": "string",
+              "description": "Optional language hint, e.g. \"zh\" or \"en\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
         }
       }
     },
@@ -11405,6 +11513,33 @@
           },
           "required": [
             "html"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "transcribe_audio",
+        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local audio file (wav/mp3/m4a/ogg/flac/webm…)."
+            },
+            "timestamps": {
+              "type": "boolean",
+              "description": "Also return timed segments [{start,end,text}] when the backend can provide them."
+            },
+            "language": {
+              "type": "string",
+              "description": "Optional language hint, e.g. \"zh\" or \"en\"."
+            }
+          },
+          "required": [
+            "path"
           ]
         }
       }
