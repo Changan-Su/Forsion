@@ -110,18 +110,84 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
 | `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
 | `registerTheme` | 强调色主题 | 与磁盘主题包(`~/.forsion/themes/`)是两件事 |
+| `registerFont` | 设置 → 外观 → 字体 | 2026-08-28 起;**返回 disposer**(宿主在禁用/重载时也会自己撤销,返回值可以不接);旧宿主没有 → `ctx.registerFont?.(…)` |
 | `registerPanel` | 右侧栏面板 | ⚠️收 **React 组件** —— 外置插件得自带一份 React(mindmap 有先例),多数场景改用 `registerView` |
 | `registerPropertyType` | 多维表自定义列类型 | ⚠️同上,`Cell` 是 React 组件;`baseType` 决定落盘形状 |
 | `ctx.notify(msg, {level})` | 右上角通知 | 自动标插件名,用户可按插件静音 |
 | `ctx.achievements` | 成就系列 + `track(event, n)` | 宿主强制 `plugin:<id>:` 前缀,伪造不了官方成就 |
 | `ctx.activity.log(event, detail)` | 写进活动日志(Muse 读得到) | 同款前缀纪律 |
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
+| `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量(只读) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;见下「当前模型」 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
 | manifest `onboarding` | 装完的首启引导卡 | **别 recommends 自家已内嵌的 agent/skill**(会引导去市场重复装) |
 
 `ctx.app` 上另有三组:**整库文件读写**、**只读全库查询**、**块表面** —— 各占下面一节。
+
+### ⚠️「没有活动库」时的统一行为(2026-09-02 立规)
+
+上面三组里**凡走库内路径**的方法(`readFile / writeFile / watchFile / openFile / loadPage /
+createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已打开**的笔记库。
+没有活动库时它们**各自失败得不一样**,而且大半是静默的:
+
+| 方法 | 没有活动库时 |
+|---|---|
+| `readFile(p)` | **静默返回 `null`**(与「文件不存在」同形,try/catch 照不到) |
+| `writeFile(p, t)` | **reject** —— 主进程抛 `Error('No vault is open')` |
+| `listPages()` / `listFiles()` / `searchVault(q)` | 一律**给空数组、不 reject** |
+| `vaultRoot()` | `null` —— **唯一的可用性探针** |
+| `workFolder()` | **照常返值**(它只是一条设置项的值)—— ⚠️**不是可用性探针**,拿到字符串不代表写得进去 |
+
+- ⚠️**库是惰性恢复的**:`vaultRoot()` 为 null 只说明「当前没有**打开着的**库」,不代表用户没有库 ——
+  用户这一程还没进过 Amadeus 之前它就是 null。插件在宿主**启动期**装载,setup 里那一发读写多半正撞在这上面。
+- **结论(2026-09-02 起规,起因:服务器总览面板误依赖笔记库,用户实报「太奇怪了」)**:
+  **与笔记无关的功能(仪表盘 / 远程系统面板 / 工具面)不得建立在这些方法上** ——
+  用 `ctx.dashboard.mount`(见下节)、`ctx.loadData` / `ctx.saveData`、以及自己视图里的 DOM。
+- **启动期的写一律 try/catch**;要按「库在不在」分支就读 `vaultRoot()`,别去试探 `readFile` 的 null。
+- 与列表源那条纪律是同一个病根:`registerListSource` 的 `subscribe()` 必须顺手重读一次(见下)。
+
+### 仪表盘 ctx.dashboard(2026-09-01 起)
+
+插件能拿到**真的** Dashboard(dashboard3 网格 / 卡片 / 排版台,不是自己画的仿制品)。
+**两条路线,按「要不要住进笔记库」分**:`ctx.dashboard.mount(el, opts)` 渲在插件自己的容器里、**不依赖笔记库**;
+`ctx.dashboard.source(recipe, opts)` 把配方编译成真 `.dashboard.md` 字节、**需要已打开的笔记库**。
+
+```js
+// 路线 A —— 在插件自己的视图容器里渲染,**不依赖笔记库**(库开没开、有没有库都能用)
+ctx.registerView?.({ id: 'overview', title: '总览', mount(el) {
+  return ctx.dashboard?.mount?.(el, {
+    recipe,                                   // 配方见下
+    layoutText: saved,                        // 上次存下的整页文本;首次传 null
+    onLayout: (text) => ctx.saveData?.({ layout: text }),   // 用户在排版台手排后交出整页文本
+    locked: true,                             // true=成品页(只看);false=排版台(可拖可改)
+  })                                          // 返回卸载函数 —— 正好当 mount 的 disposer
+}})
+
+// 路线 B —— 编译成一份真 `.dashboard.md` 字节,落进库、用原生 tab 打开(**需要已打开的笔记库**)
+const r = ctx.dashboard?.source(recipe, { existingFileText })   // {ok:true,text} | {ok:false,error}
+if (r?.ok) {
+  const p = `${ctx.app.workFolder()}/总览.dashboard.md`
+  await ctx.app.writeFile(p, r.text)          // ⚠️无库会 reject,见上表
+  ctx.app.openFile?.(p)                       // amadeusNav 把 .dashboard.md 路由到原生 Dashboard tab
+}
+```
+
+**配方(`recipe`)的卡片只有四种**:
+
+| kind | 字段 | 说明 |
+|---|---|---|
+| `stat` | `id / label / value / unit?` | 数字卡。`value` 是**字面值**(插件自己算好的字符串),不是查询表达式 |
+| `section` | `id / label` | 分节标题 |
+| `text` | `id / md` | 一段 markdown |
+| `view` | `id / type / params?` | 嵌一个视图 |
+
+- ⚠️**卡 `id` 是跨次稳定契约**:手排布局按卡 id 保留。id 变了 = 那张卡的位置/尺寸丢失,用户白排一次。
+  别拿数组下标或本地化字符串当 id。
+- 路线 B 再生成时**把现有文件字节传 `existingFileText`**:用户手排的布局(`dashboard3`/`dashboard3x`)与页面筛选会存活;
+  读不懂的现有布局会**拒编译**(`ok:false`)—— 宿主绝不拿默认值覆盖用户布局,所以 `ok:false` 要如实报给用户,别静默重写。
+- 围栏格式与 frontmatter 词表**留在宿主**(格式无版本契约,手抄 = 将来破兼容)—— 只出配方,别自己拼 `.dashboard.md` 文本。
+- 旧宿主没有,两条都要可选链:`ctx.dashboard?.mount?.(…)` / `ctx.dashboard?.source(…)`,并备一条降级 UI。
 
 ### 只读全库查询(2026-08-14 起)
 
@@ -224,7 +290,13 @@ globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 
 ```js
 const folder = ctx.app.workFolder ? ctx.app.workFolder() : '<插件名>'
-await ctx.app.writeFile(`${folder}/笔记.md`, markdown)
+// ⚠️workFolder() 照常返值 ≠ 写得进去:没有活动库时 writeFile 会 reject('No vault is open')。
+//    启动期的写一律 try/catch(见上「没有活动库时的统一行为」表)。
+try {
+  await ctx.app.writeFile(`${folder}/笔记.md`, markdown)
+} catch (e) {
+  ctx.notify?.(`没写成:${e?.message || e}(先打开一个笔记库)`, { level: 'warn' })
+}
 ```
 
 要自定义这条设置的 label/描述,setup 里自注册同 key 的 setting(同 key 重注册即覆盖标准行);用户改文件夹不迁移旧文件,读端自己做旧夹兜底。范例:`bluebird` 1.3.0(分析完自动保存 + 旧夹兜底 + check.mjs 迁移断言)。Session 同款约定:Tangu 会话默认工作区在笔记库 `Sessions/`——插件产物与会话产物同库,都能被笔记引用。

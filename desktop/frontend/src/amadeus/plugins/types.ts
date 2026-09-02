@@ -116,10 +116,14 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Show a transient toast. */
   notify(message: string): void
   /** Read a vault file's UTF-8 text by its exact vault-relative path; null if missing/out-of-vault.
-   *  For plugin file types (registerFileType) to load their file. */
+   *  For plugin file types (registerFileType) to load their file.
+   *  ⚠️需要活动库。**没有活动库时静默返回 `null`,不抛异常** —— 与「文件不存在」同形,
+   *  try/catch 照不到;别拿它当可用性探针(用 `vaultRoot()`)。 */
   readFile(path: string): Promise<string | null>
   /** Atomically write a vault file's UTF-8 text by its exact vault-relative path (self-write ledger →
-   *  the app's own saves don't bounce back as external changes). Creates the file if absent. */
+   *  the app's own saves don't bounce back as external changes). Creates the file if absent.
+   *  ⚠️需要活动库。没有活动库时**reject**(主进程 `vaultManager` 抛 `Error('No vault is open')`)——
+   *  与只读侧的静默 null 不同形,启动期的写一律 try/catch。 */
   writeFile(path: string, text: string): Promise<void>
   /** 订阅某个 vault 文件的**外部**内容改动(2026-08-15+),返回退订。用途:插件把配置/片段库写成
    *  库里的一个文件,用户拿别的编辑器改完要能热重载。
