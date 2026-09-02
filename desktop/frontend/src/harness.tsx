@@ -856,6 +856,42 @@ if (new URLSearchParams(location.search).has('dock')) {
       <DatabaseEmbed target="任务.db" pagePath="demo.md" />
     </div>,
   )
+} else if (new URLSearchParams(location.search).has('dashmount')) {
+  // ?dashmount:**插件仪表盘挂载接缝的真渲染面**(mountPluginDashboard,不依赖笔记库)。
+  // 钉:① vaultRoot 恒 null 也能把真 GridView 挂进裸 div;② 手排(setFmExtra)经内存 sink 回到
+  // onLayout(而不是写库);③ 卸载后再挂,layoutText 传回 → 手排存活。见 scripts/dashmount.check.cjs。
+  const dark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  const kpi = (id: string, label: string, value: string) => ({ kind: 'stat' as const, id, label, value, w: 4, h: 2 })
+  const recipe = {
+    cards: [
+      { kind: 'section' as const, id: 'sec-kpi', label: '服务器状态 · mount-host' },
+      kpi('kpi-users', '总用户数', '14'), kpi('kpi-req', 'API 请求(30天)', '244'), kpi('kpi-tok', 'Token 总量(30天)', '585.8 万'),
+      kpi('kpi-ok', '成功调用(30天)', '244'), kpi('kpi-rate', '成功率(30天)', '100%'), kpi('kpi-pts', '积分消耗(30天)', '5,859.39'),
+      { kind: 'text' as const, id: 'tbl-models', w: 6, h: 5, md: '### 模型 TOP 5\n\n| # | 模型 | 调用 | Token |\n|--:|------|----:|------:|\n| 1 | DeepSeek-V4-Pro | 244 | 585.8 万 |' },
+    ],
+  }
+  const host = document.getElementById('root')!
+  host.style.cssText = 'position:fixed;inset:0;overflow:auto' // 模拟 PluginViewHost 的 overflow:auto 容器
+  const layouts: string[] = []
+  let current: { dispose: () => void; scope: string } | null = null
+  const w = window as unknown as { __dashMount: unknown; __layouts: string[] }
+  w.__layouts = layouts
+  const mount = (layoutText?: string | null): void => {
+    void import('./amadeus/plugins/dashboardSurface').then((m) => {
+      current = m.mountPluginDashboard('harness-plugin', host, { recipe, layoutText, onLayout: (t) => { layouts.push(t) } })
+      ;(w.__dashMount as { scope: string }).scope = current.scope
+    })
+  }
+  w.__dashMount = {
+    scope: '',
+    remountWithLastLayout: () => { current?.dispose(); current = null; mount(layouts[layouts.length - 1] ?? null) },
+    dispose: () => { current?.dispose(); current = null },
+    // 仪器用:直接对内存作用域 store 写 fmExtra(模拟排版台的一次手排),不经 UI 拖拽
+    setFmExtra: (text: string) => pageStoreFor((w.__dashMount as { scope: string }).scope).getState().setFmExtra(text),
+    fmExtra: () => pageStoreFor((w.__dashMount as { scope: string }).scope).getState().manifest?.fmExtra ?? '',
+  }
+  mount(null)
 } else if (new URLSearchParams(location.search).has('dashrecipe')) {
   // ?dashrecipe:**配方编译器的真渲染面**——compileDashboardRecipe 的字节经真解码器
   // (parseBody/parseFrontmatter/parseLayout)进 pageStore,再由真 DashboardGridView 渲染。

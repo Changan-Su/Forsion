@@ -357,8 +357,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const localeUnsubs = new Set<() => void>()
     const tanguUnsubs = new Set<() => void>()
     const fontDisposers = new Set<() => void>()
+    // 插件仪表盘挂载(ctx.dashboard.mount):与视图表面同一条纪律 —— 插件禁用/重载时宿主统一卸掉,
+    // 否则内存作用域的 pageStore 与 React 树在插件死后还活着。
+    const dashMounts = new Set<() => void>()
     revokers[pluginId] = () => {
       revokeSurface()
+      for (const d of Array.from(dashMounts)) {
+        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" dashboard dispose failed`, e) }
+      }
+      dashMounts.clear()
       for (const u of Array.from(localeUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" locale unsubscribe failed`, e) }
       }
@@ -514,6 +521,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 就是没版本契约的公开 API(接缝评审 P8)。写盘/打开由插件走既有 ctx.app 面。
     dashboard: {
       source: (recipe, sourceOpts) => compileDashboardRecipe(recipe, { existingFileText: sourceOpts?.existingFileText }),
+      // 不依赖笔记库的原生仪表盘挂载。动态 import:dashboardSurface → views/DashboardGridView → …→
+      // amadeusNav → 本文件,静态引就是环(openFile 同款破法)。返回的卸载函数同步可用,
+      // 挂载还在飞时调用 = 取消。
+      mount: (el, o) => {
+        let disposeMounted: (() => void) | null = null
+        let cancelled = false
+        const dispose = (): void => {
+          cancelled = true
+          dashMounts.delete(dispose)
+          disposeMounted?.()
+          disposeMounted = null
+        }
+        dashMounts.add(dispose)
+        void import('./dashboardSurface').then((m) => {
+          if (cancelled || !el.isConnected) { dashMounts.delete(dispose); return }
+          disposeMounted = m.mountPluginDashboard(pluginId, el, o).dispose
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" dashboard mount failed`, e) })
+        return dispose
+      },
     },
     registerPropertyType: (def) => {
       registerPropType(def)

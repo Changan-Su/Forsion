@@ -92,6 +92,16 @@ export interface ThemeContribution {
 }
 
 /** App actions exposed to plugins (no direct store access). */
+/**
+ * ⚠️ 库依赖契约(2026-09-02 立规,起因:服务器总览误依赖笔记库,用户实报「太奇怪了」):
+ * 下面**凡走库内路径**的方法都要求一个**已打开**的笔记库 —— `readFile / writeFile / watchFile /
+ * openFile / loadPage / createPage / listPages / listFiles / searchVault / reveal / workFolder(的落点)`。
+ * 没有活动库时:写类方法 reject、只读查询给空数组、`vaultRoot()` 给 null(**用它探测**)。
+ * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。
+ * 结论:与笔记无关的插件功能(仪表盘/远程系统面板/工具面)**不得**建立在这些方法上 ——
+ * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / 自己的视图 DOM)。
+ * 新增方法时把「需库 / 无需库」写进它的注释,别让下一个人再踩。
+ */
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -667,6 +677,22 @@ export interface PluginContext {
       recipe: import('../../../../shared/amadeus/dashboardRecipe').DashboardRecipe,
       opts?: { existingFileText?: string },
     ): import('../../../../shared/amadeus/dashboardRecipe').RecipeResult
+    /** 在插件自己的容器里渲染一页**原生** Dashboard(真 dashboard3 网格/卡片/排版台),
+     *  **不依赖笔记库**(库开没开、有没有库都能用 —— 与 source+writeFile 那条「住在库里」的路线
+     *  刻意区分)。`el` 通常就是 registerView 的 mount(el) 给的容器。返回卸载函数;插件禁用时
+     *  宿主也会统一卸掉。
+     *  布局持久化归插件:用户在排版台手排后 `onLayout(text)` 交出整页文本,存进 `ctx.saveData`
+     *  之类;下次挂载把它作 `layoutText` 传回,手排的卡按卡 id 保留、数据照常刷新。
+     *  旧宿主没有:`ctx.dashboard?.mount?.(…)`。 */
+    mount?(
+      el: HTMLElement,
+      opts: {
+        recipe: import('../../../../shared/amadeus/dashboardRecipe').DashboardRecipe
+        layoutText?: string | null
+        onLayout?: (text: string) => void
+        locked?: boolean
+      },
+    ): () => void
   }
   /** Register a custom Database property/column type (Obsidian-style open extension point). */
   registerPropertyType(def: PropertyTypeContribution): void

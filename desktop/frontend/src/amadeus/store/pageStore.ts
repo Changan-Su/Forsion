@@ -363,7 +363,15 @@ function hydrate(page: LoadedPage): {
  * ⚠️ 保存定时器 / 载入序号 / 在途写这几个可变量必须住在**实例闭包**里:留在模块级就会被另一个
  * 面板清掉,表现为「一边打字另一边的保存被取消」。
  */
-function makePageStore() {
+/** 作用域级选项(pageStoreFor 首次建店时传入)。
+ *  sink = **内存作用域**:save() 不写库,把编译输入(manifest + 块内容)交给它 —— 插件仪表盘挂载
+ *  (dashboardSurface)用它把「渲染仪表盘」与「住在库里」解耦:没有打开的笔记库也能开,手排的布局
+ *  由插件自己持久化。有 sink 的作用域**绝不**碰 amadeus.savePage/loadPage。 */
+export interface PageStoreOptions {
+  sink?: (path: string, manifest: PageManifest, contents: Record<string, string>) => Promise<void> | void
+}
+
+function makePageStore(opts: PageStoreOptions = {}) {
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   let loadSeq = 0
   // 在途保存(save() 进行中):loadPage 并行化后,仅当目标 path 与在途写同文件时才需等待。
@@ -1410,7 +1418,9 @@ function makePageStore() {
           const contents: Record<string, string> = {}
           for (const [id, b] of Object.entries(blocks)) contents[id] = b.content
           const toSave: PageManifest = { ...manifest, updatedAt: new Date().toISOString() }
-          await amadeus.savePage(savedPath, toSave, contents)
+          // 内存作用域(插件仪表盘):写盘出口换成 sink,库是否打开与本作用域无关
+          if (opts.sink) await opts.sink(savedPath, toSave, contents)
+          else await amadeus.savePage(savedPath, toSave, contents)
           // 并行时代守卫:完成时若已导航去别页,绝不把旧页 manifest/status 盖回画面
           // 保存期间(await savePage)若有结构操作改了 manifest(加删块 / setFmExtra),完成时绝不能把
           // in-memory manifest 整个换回启动快照 toSave,否则那次改动被回滚、下一次防抖又把回滚态存盘 =
@@ -1638,13 +1648,13 @@ function mirrorVault(src: PageStoreApi): void {
 // (评审 P0,2026-08-14)。修法 = 重领养即取消:pageStoreFor 命中已有实例就清掉在途摘表标记。
 const pendingDispose = new Map<string, object>()
 
-export function pageStoreFor(scope: string): PageStoreApi {
+export function pageStoreFor(scope: string, opts?: PageStoreOptions): PageStoreApi {
   let s = stores.get(scope)
   if (s) {
     pendingDispose.delete(scope) // 重领养:取消在途摘表,旧 finalizer 作废
     return s
   }
-  s = makePageStore()
+  s = makePageStore(opts) // opts 只在首次建店时生效(内存作用域由挂载方先建、再被子树 useScopedPageStore 领用)
   const seed = stores.values().next().value // 任取一个已有的:仓库级字段在它们之间恒等
   if (seed) s.setState(vaultSlice(seed.getState()))
   stores.set(scope, s)
