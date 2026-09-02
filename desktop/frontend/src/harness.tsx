@@ -862,21 +862,24 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 钉「编译出的文件在真 Dashboard 里长对样」:literal stat 卡有值、section 键名对
   // (title: 不是 label:,发错=恒「未命名分区」)。夹具形状=server-admin 插件的总览配方。
   const iso = new Date().toISOString()
-  const t5 = (prefix: string, names: string[], counts: string[]) =>
-    names.map((n, i) => ({ kind: 'stat' as const, id: `${prefix}-${i + 1}`, label: `${i + 1} · ${n}`, value: counts[i], unit: '次' }))
+  // 与 server-admin 插件 0.3.x 的总览配方同形:KPI 六卡 w4(三列两整行)+ 排行两张表格文本卡并排 + 页脚
+  const table = (title: string, nameCol: string, rows: Array<[string, string, string]>) =>
+    `### ${title}\n\n| # | ${nameCol} | 调用 | Token |\n|--:|------|----:|------:|\n` +
+    rows.map((r, i) => `| ${i + 1} | ${r[0]} | ${r[1]} | ${r[2]} |`).join('\n')
+  const kpi = (id: string, label: string, value: string) => ({ kind: 'stat' as const, id, label, value, w: 4, h: 2 })
   const compiled = compileDashboardRecipe({
     cards: [
       { kind: 'section', id: 'sec-kpi', label: '服务器状态 · demo-host' },
-      { kind: 'stat', id: 'kpi-users', label: '总用户数', value: '1,234' },
-      { kind: 'stat', id: 'kpi-req', label: 'API 请求(30天)', value: '56,789' },
-      { kind: 'stat', id: 'kpi-tok', label: 'Token 总量(30天)', value: '123,456,789' },
-      { kind: 'stat', id: 'kpi-ok', label: '成功调用(30天)', value: '56,000' },
-      { kind: 'stat', id: 'kpi-rate', label: '成功率(30天)', value: '98.6%' },
-      { kind: 'stat', id: 'kpi-pts', label: '积分消耗(30天)', value: '321.5' },
-      { kind: 'section', id: 'sec-models', label: '模型用量 TOP 5(30天)' },
-      ...t5('m', ['gpt-x', 'claude-y', 'deepseek-z', 'qwen-w', 'glm-v'], ['3,000', '2,000', '500', '120', '45']),
-      { kind: 'section', id: 'sec-users', label: '用户用量 TOP 5(30天)' },
-      ...t5('u', ['alice', 'bob', 'carol', 'dave', 'eve'], ['4,000', '1,600', '900', '77', '12']),
+      kpi('kpi-users', '总用户数', '1,234'),
+      kpi('kpi-req', 'API 请求(30天)', '5.7 万'),
+      kpi('kpi-tok', 'Token 总量(30天)', '1.23 亿'),
+      kpi('kpi-ok', '成功调用(30天)', '5.6 万'),
+      kpi('kpi-rate', '成功率(30天)', '98.6%'),
+      kpi('kpi-pts', '积分消耗(30天)', '321.5'),
+      { kind: 'section', id: 'sec-rank', label: '用量排行(30天)' },
+      { kind: 'text', id: 'tbl-models', w: 6, h: 5, md: table('模型 TOP 5', '模型', [['gpt-x', '3,000', '8,520 万'], ['claude-y', '2,000', '3,100 万'], ['deepseek-z', '500', '620 万'], ['qwen-w', '120', '88 万'], ['glm-v', '45', '12 万']]) },
+      { kind: 'text', id: 'tbl-users', w: 6, h: 5, md: table('用户 TOP 5', '用户', [['alice', '4,000', '9,000 万'], ['bob', '1,600', '2,900 万'], ['carol', '900', '400 万'], ['dave', '77', '30 万'], ['eve', '12', '2 万']]) },
+      { kind: 'text', id: 'meta', w: 12, h: 1, md: '数字取自打开一刻;再点一次「总览」即刷新,手动排过的布局会保留。' },
     ],
   }, { pageId: 'harness-dashrecipe', now: iso })
   if (!compiled.ok) {
