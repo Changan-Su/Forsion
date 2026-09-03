@@ -1,5 +1,10 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { usePageStore } from '../store/pageStore'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'colresizer.dragHint': { zh: '拖动调整列宽', en: 'Drag to resize columns' },
+})
 
 /** Draggable divider between two adjacent columns; sets their relative widths. */
 export function ColumnResizer({
@@ -12,6 +17,7 @@ export function ColumnResizer({
   rightColId: string
 }) {
   const resizeColumns = usePageStore((s) => s.resizeColumns)
+  const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
 
   const onPointerDown = (e: ReactPointerEvent): void => {
@@ -36,5 +42,5 @@ export function ColumnResizer({
     window.addEventListener('pointerup', up)
   }
 
-  return <div ref={ref} className="col-resizer" onPointerDown={onPointerDown} title="拖动调整列宽" />
+  return <div ref={ref} className="col-resizer" onPointerDown={onPointerDown} title={t('colresizer.dragHint')} />
 }

@@ -112,7 +112,7 @@ const record = (name, ok, detail) => {
  *  用户永远看不到的形态。满铺的两个真风险(脱不出纸面 / 盖住顶栏)也只有这个壳能暴露。
  *  (unified-page / unified-columns 仍吃默认壳,别去动它们的几何。) */
 async function open(browser, seed, keepSurfaceMemory = false) {
-  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   if (!keepSurfaceMemory) {
     await p.addInitScript(() => {
@@ -1053,7 +1053,7 @@ async function main() {
   //     笔记时胶囊必不显示,点过别的笔记才出来」)。生产里顶栏整块挂在 `barPath` 这道门后面,而
   //     barPath 要等一次异步分类才落定 —— 插槽比 UnifiedPage 晚出现是常态。`&udelay` 把这个时序
   //     固定下来;去掉 CanvasSegPortal 的 MutationObserver 这一格立刻红(跑过负对照)。
-  const p26 = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const p26 = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   await p26.goto(`${URL}?upage&upane&udelay&useed=${encodeURIComponent('# 还原页\n\n正文一段。\n')}`, { waitUntil: 'domcontentloaded' })
   await p26.waitForSelector(PM, { timeout: 20000 })
   await p26.waitForTimeout(900)
@@ -3923,7 +3923,7 @@ async function main() {
     pressed: document.querySelector('.amx-stage-hud button[title="显示缩略图"]')?.getAttribute('aria-pressed'),
     stored: localStorage.getItem('amadeus.canvas.minimap'),
   }))
-  // browser.newPage() 便利 API 会给每页新建独立 context，不能拿另一页测 localStorage。
+  // browser.newPage({ locale: 'zh-CN' }) 便利 API 会给每页新建独立 context，不能拿另一页测 localStorage。
   // 在同一真实 origin/context 内重载，才是应用重启/重开页面的持久化边界。
   await p70.reload({ waitUntil: 'domcontentloaded' })
   await p70.waitForSelector('.amx-stage-hud')

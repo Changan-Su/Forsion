@@ -63,7 +63,7 @@ const syntaxCount = (p) => p.evaluate(() => document.querySelectorAll('.unified-
 /** 一组断言跑在独立页面上;组中途页面被 vite 重载(令牌消失)→ 丢弃本组结果重试。 */
 async function group(browser, name, fn, retries = 2) {
   for (let attempt = 0; ; attempt++) {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?unified&useed=${encodeURIComponent(SEED)}`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector(PM, { timeout: 20000 })

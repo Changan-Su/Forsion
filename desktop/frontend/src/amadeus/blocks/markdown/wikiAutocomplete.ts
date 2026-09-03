@@ -7,6 +7,11 @@ import { $inputRule, $prose } from '@milkdown/kit/utils'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { Plugin, NodeSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { blockLabel, type BlockNode } from './blockTriggers'
+import { registerMessages, translate } from '../../../i18n'
+
+registerMessages({
+  'wikiac.multiBlocks': { zh: '多个块', en: 'Multiple blocks' },
+})
 
 /** 全角【【 当场换成半角 [[(AFFiNE 的 convertTriggerKey 同款,它的触发键表就是 ['@','[[','【【'])。
  *  中文输入法下打 `[` 得先切回英文键盘 —— 不给这条,双链在中文写作里天然多两次切换。
@@ -237,7 +242,7 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               aligns.add($from.parent.attrs.align === 'center' || $from.parent.attrs.align === 'right' ? $from.parent.attrs.align : 'left')
             }
             const align = aligns.size === 1 ? [...aligns][0] as 'left' | 'center' | 'right' : undefined
-            report({ from, to, active, align, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? '多个块' : blockLabel(chain) })
+            report({ from, to, active, align, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
           },
         }),
       }),

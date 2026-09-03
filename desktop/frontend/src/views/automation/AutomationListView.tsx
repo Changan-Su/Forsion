@@ -9,35 +9,12 @@ import { useApp } from '../../stores/appStore'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
 import { deleteAgentScheduleEntry, deleteMuseTrigger, saveAgentScheduleEntry, saveMuseTrigger, saveSpecialConfig } from '../../services/backendService'
 import { useI18n } from '../../i18n'
-import { actionsText, condText, fmtTime, isFinishedTrigger, parseLocalDatetime } from './lib'
+import { actionsText, condText, fmtTime, isFinishedTrigger, parseLocalDatetime, triggerToUpsert } from './lib'
 import type { AgentScheduleEntry, MuseTriggerInfo } from '../../types'
 import './automation.css'
 
-/** 规则 → upsert 全量入参(启停翻转时其余字段原样带回,upsert 语义要求全字段;actions 显式回传防抹链)。 */
-export function triggerToUpsert(t: MuseTriggerInfo): Parameters<typeof saveMuseTrigger>[1] {
-  return {
-    id: t.id,
-    desc: t.desc,
-    cond_type: t.cond.type,
-    // ⚠️ cond 的每个字段都必须原样带回:upsert 是**整量**语义,漏一个后端就 400。
-    // db_changed 的 path/event/vault/column_id 漏掉过一次——表现是「DB 规则的启停开关点不动」。
-    path: t.cond.type === 'file_chars_gte' || t.cond.type === 'db_changed' ? t.cond.path : undefined,
-    n: t.cond.type === 'file_chars_gte' ? t.cond.n : undefined,
-    match: t.cond.type === 'event_seen' ? t.cond.match : undefined,
-    time: t.cond.type === 'daily_at' ? t.cond.time : undefined,
-    datetime: t.cond.type === 'at' ? t.cond.datetime : undefined,
-    interval: t.cond.type === 'every' ? t.cond.interval : undefined,
-    event: t.cond.type === 'db_changed' ? t.cond.event : undefined,
-    vault: t.cond.type === 'db_changed' ? t.cond.vault : undefined,
-    column_id: t.cond.type === 'db_changed' ? t.cond.columnId : undefined,
-    equals: t.cond.type === 'db_changed' ? t.cond.equals : undefined,
-    prompt: t.prompt,
-    cooldown_hours: t.cooldownHours || undefined,
-    agent_slug: t.agentSlug,
-    enabled: t.enabled,
-    actions: t.actions?.length ? t.actions : null,
-  }
-}
+// triggerToUpsert 搬去 lib.ts(纯模块,pluginStore 禁用插件时也要用);这里保留出口,老引用不断。
+export { triggerToUpsert }
 
 export const AutomationListView: React.FC = () => {
   const { t } = useI18n()
@@ -70,7 +47,8 @@ export const AutomationListView: React.FC = () => {
   const toggleTrigger = async (tr: MuseTriggerInfo, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
     try {
-      await saveMuseTrigger(cfg, { ...triggerToUpsert(tr), enabled: !tr.enabled })
+      // actor='user':面板拨开关是显式意图,可以把引擎自动停用的规则开回来(插件的幂等重放则不行)。
+      await saveMuseTrigger(cfg, { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })
       st.bump()
     } catch (e) { oops(e) }
   }

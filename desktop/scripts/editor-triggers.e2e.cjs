@@ -32,7 +32,7 @@ function check(name, ok, detail) {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.goto(URL, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
@@ -247,7 +247,7 @@ async function main() {
   // ─── F4:行内工具栏 + 自定义标记(下划线/文字色/背景色)往返 ───
   // 每项独立 page(干净起点),try 包裹:一项抛异常记 FAIL 但不中断后续。
   const freshPage = async (seed) => {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(seed ? `${URL}?seed=${encodeURIComponent(seed)}` : URL, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
@@ -388,7 +388,7 @@ async function main() {
 
   // T18: shift+点击任意块 → 整块选中(F1;?dnd 的真 PageView,含 BlockSelectionKeys 全局监听)
   await tryTest('T18', async () => {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?dnd`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector('.block-host', { timeout: 20000 })
@@ -449,7 +449,7 @@ async function main() {
   const LONG = (t) =>
     `${t} this is a deliberately long block that wraps across several visual lines so we can test exactly where the caret lands when crossing between blocks with the arrow keys now indeed ok yes`
   const dndPage = async () => {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?dnd`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector('.block-host .ProseMirror', { timeout: 20000 })
@@ -797,11 +797,11 @@ async function main() {
 
   // T30:复制。整行待办要带 `- [ ]`(checkbox 是 CSS ::before,不在文档里);只选几个字仍是纯文本。
   await tryTest('T30', async () => {
-    const ctx2 = await browser.newContext()
+    const ctx2 = await browser.newContext({ locale: 'zh-CN' })
     // 本文件顶上的 `const URL` 遮住了全局的 URL 构造器,别用 new URL() —— 手拼源即可。
     await ctx2.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: URL.split('/').slice(0, 3).join('/') })
     const copy = async (seed, keys) => {
-      const p = await ctx2.newPage()
+      const p = await ctx2.newPage({ locale: 'zh-CN' })
       await p.goto(`${URL}?seed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
       await p.waitForTimeout(400)
@@ -847,7 +847,7 @@ async function main() {
   await tryTest('T32', async () => {
     // 光标落点看不见 → 打一个 '|' 当探针,看它插在哪。
     const type = async (seed, anchor) => {
-      const p = await browser.newPage()
+      const p = await browser.newPage({ locale: 'zh-CN' })
       await p.goto(`${URL}?seed=${encodeURIComponent(seed)}&anchor=${encodeURIComponent(anchor)}`, { waitUntil: 'domcontentloaded' })
       await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
       await p.waitForTimeout(700)
@@ -1060,7 +1060,7 @@ async function main() {
   // T37:标题折叠(?fold harness:真 PageView,H1/正文/H2/正文/H1 各占一行)。
   //     折叠 UI 本来就有(PageView 的 .amx-hfold),本轮补的是**持久化 + 按笔记分桶**。
   await tryTest('T37', async () => {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?fold`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })

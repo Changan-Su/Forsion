@@ -25,6 +25,22 @@ import { EventCard, type Anchor, type CardTarget } from './calendar/EventCard'
 import { todoDueMeta } from './calendar/todoMeta'
 import { BUCKET_LABEL, COLLAPSED_BY_DEFAULT, ORDER, bucketOf, sortTimeOf, type TodoBucket } from './calendar/todoGroups'
 import { zoomOf } from '@lcl/engine'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'todolist.title': { zh: '待办', en: 'To-dos' },
+  'todolist.untitled': { zh: '未命名', en: 'Untitled' },
+  'todolist.done': { zh: '已完成', en: 'Completed' },
+  'todolist.openInNote': { zh: '在笔记中打开', en: 'Open in note' },
+  'todolist.clickToEdit': { zh: '点击编辑', en: 'Click to edit' },
+  'todolist.addPlaceholder': { zh: '新建待办', en: 'New to-do' },
+  'todolist.allDone': { zh: '全部完成了。', en: 'All done.' },
+  'todolist.emptyTitle': { zh: '还没有待办。', en: 'No to-dos yet.' },
+  'todolist.emptyHintA': { zh: '在笔记里写 ', en: 'Write ' },
+  'todolist.emptyExample': { zh: '- [ ] 事项 @2026-09-01', en: '- [ ] Task @2026-09-01' },
+  'todolist.emptyHintB': { zh: '(打 ', en: ' in a note (type ' },
+  'todolist.emptyHintC': { zh: ' 有候选),或在下面直接加一条。', en: ' for suggestions), or add one below.' },
+})
 
 const DONE_KEY = 'done'
 
@@ -63,6 +79,7 @@ interface Row {
 
 export function TodoListView({ params }: { params?: Record<string, unknown> } = {}) {
   const opts = readTodoParams(params)
+  const { t } = useI18n()
   const members = useCalendarMembers()
   const mdMarks = useMdMarks()
 
@@ -83,19 +100,20 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
         const checkCol = m.checkboxCol as string
         for (const r of m.db.rows) {
           const raw = typeof r.cells[m.dateCol] === 'string' ? (r.cells[m.dateCol] as string) : ''
-          out.push({ key: `db:${m.db.path}:${r.rowId}`, name: r.name || '未命名', checked: r.cells[checkCol] === true, raw, source: m.db.name, db: m, rowId: r.rowId })
+          out.push({ key: `db:${m.db.path}:${r.rowId}`, name: r.name || t('todolist.untitled'), checked: r.cells[checkCol] === true, raw, source: m.db.name, db: m, rowId: r.rowId })
         }
       }
     }
     // 正文任务只在「全部来源」或显式指定单库之外露出:限定了某个 .db 就只看那张表。
     if (opts.src !== 'db' && !opts.db) {
       // 只收带勾选框的标记行:没勾选框的 `@` 行是日程,归日历(useMdCalDbs)。
-      for (const t of mdMarks.filter((m) => m.isTask)) {
-        out.push({ key: `md:${t.path}:${t.line}`, name: t.text, checked: t.checked, raw: t.due, source: t.heading ? `${t.title} › ${t.heading}` : t.title, note: { path: t.path, heading: t.heading }, mark: t })
+      // ⚠️ 循环变量不叫 `t`:那会遮住 useI18n 的 `t`(本 memo 里就在用)。
+      for (const mk of mdMarks.filter((m) => m.isTask)) {
+        out.push({ key: `md:${mk.path}:${mk.line}`, name: mk.text, checked: mk.checked, raw: mk.due, source: mk.heading ? `${mk.title} › ${mk.heading}` : mk.title, note: { path: mk.path, heading: mk.heading }, mark: mk })
       }
     }
     return out
-  }, [sources, mdMarks, opts.src, opts.db])
+  }, [sources, mdMarks, opts.src, opts.db, t])
 
   const done = useMemo(() => rows.filter((r) => r.checked), [rows])
   const buckets = useMemo(() => {
@@ -181,7 +199,7 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
           // 给一个勾不动的勾选框比不给更糟。整行点击 = 打开笔记定位到它,在那儿勾。
           <span className={`amx-todo-box${r.checked ? ' on' : ''}`} aria-hidden="true" />
         )}
-        <button className="amx-todo-main" title={r.note ? '在笔记中打开' : '点击编辑'} onClick={(e) => openRow(r, e)}>
+        <button className="amx-todo-main" title={r.note ? t('todolist.openInNote') : t('todolist.clickToEdit')} onClick={(e) => openRow(r, e)}>
           <span className={`amx-todo-name${r.checked ? ' done' : ''}`}>{r.name}</span>
           {r.raw ? <span className={`amx-todo-due ${due.tone}`}>{due.label}</span> : null}
           {r.note ? <ExternalLink className="amx-todo-jump" size={12} /> : null}
@@ -234,31 +252,31 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
     <AstryxScope>
     <div className="amx-todo">
       <div className="amx-todo-bar">
-        <span className="amx-todo-title">待办</span>
+        <span className="amx-todo-title">{t('todolist.title')}</span>
         {openCount > 0 && <span className="amx-todo-total">{openCount}</span>}
       </div>
 
       {rows.length === 0 && (
         <div className="amx-todo-empty">
-          还没有待办。<br />在笔记里写 <code>- [ ] 事项 @2026-09-01</code>(打 <code>@</code> 有候选),或在下面直接加一条。
+          {t('todolist.emptyTitle')}<br />{t('todolist.emptyHintA')}<code>{t('todolist.emptyExample')}</code>{t('todolist.emptyHintB')}<code>@</code>{t('todolist.emptyHintC')}
         </div>
       )}
       {rows.length > 0 && openCount === 0 && (
-        <div className="amx-todo-empty">全部完成了。</div>
+        <div className="amx-todo-empty">{t('todolist.allDone')}</div>
       )}
 
       {ORDER.map((b) => {
         const list = buckets.get(b)
         return list && list.length ? section(b, BUCKET_LABEL[b], list, renderBucketBody(b, list)) : null
       })}
-      {done.length > 0 && section(DONE_KEY, '已完成', done, <ul className="amx-todo-list">{done.map(renderRow)}</ul>)}
+      {done.length > 0 && section(DONE_KEY, t('todolist.done'), done, <ul className="amx-todo-list">{done.map(renderRow)}</ul>)}
 
       {addTarget && (
         <div className="amx-todo-add">
           <Plus className="amx-todo-addicon" size={13} />
           <input
             className="amx-todo-addinput"
-            placeholder="新建待办"
+            placeholder={t('todolist.addPlaceholder')}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {

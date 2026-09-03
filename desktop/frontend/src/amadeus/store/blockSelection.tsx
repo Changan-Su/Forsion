@@ -9,6 +9,14 @@ import { useUiStore } from './uiStore'
 import { marqueeHits } from '../lib/marquee'
 import { isEmbedBlock, isWidgetBlock } from '../lib/blockKind'
 import { zoomOf } from '../lib/clampMenu'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'blocksel.copiedN': { zh: '已复制 {n} 块', en: '{n} blocks copied' },
+  'blocksel.copiedOne': { zh: '已复制块内容', en: 'Block copied' },
+  'blocksel.cutN': { zh: '已剪切 {n} 块', en: '{n} blocks cut' },
+  'blocksel.cutOne': { zh: '已剪切块', en: 'Block cut' },
+})
 
 export const useBlockSelection = create<{
   ids: Set<string>
@@ -110,14 +118,18 @@ export function BlockSelectionKeys() {
       } else if (mod && (e.key === 'c' || e.key === 'C')) {
         stop()
         void navigator.clipboard.writeText(joined())
-        useUiStore.getState().notify(ids.length > 1 ? `已复制 ${ids.length} 块` : '已复制块内容')
+        useUiStore
+          .getState()
+          .notify(ids.length > 1 ? translate('blocksel.copiedN', { n: ids.length }) : translate('blocksel.copiedOne'))
       } else if (mod && (e.key === 'x' || e.key === 'X')) {
         stop()
         void navigator.clipboard.writeText(joined()).then(() => {
           useBlockSelection.getState().clear()
           void deleteSerial(ids)
         })
-        useUiStore.getState().notify(ids.length > 1 ? `已剪切 ${ids.length} 块` : '已剪切块')
+        useUiStore
+          .getState()
+          .notify(ids.length > 1 ? translate('blocksel.cutN', { n: ids.length }) : translate('blocksel.cutOne'))
       } else if (mod && (e.key === 'v' || e.key === 'V') && ids.length === 1) {
         stop()
         void navigator.clipboard.readText().then((t) => {

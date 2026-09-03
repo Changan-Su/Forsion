@@ -13,19 +13,34 @@
  */
 import { diffDays, sameDay, startOfDay, toLocalDate } from './dateUtils'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'todogroups.overdue': { zh: '逾期', en: 'Overdue' },
+  'todogroups.today': { zh: '今天', en: 'Today' },
+  'todogroups.tomorrow': { zh: '明天', en: 'Tomorrow' },
+  'todogroups.week': { zh: '本周', en: 'This week' },
+  'todogroups.later': { zh: '以后', en: 'Later' },
+  'todogroups.undated': { zh: '未排期', en: 'Unscheduled' },
+})
 
 export type TodoBucket = 'overdue' | 'today' | 'tomorrow' | 'week' | 'later' | 'undated'
 
 /** 渲染顺序。⚠️ 硬编码,勿改成按标题排序;新桶必须插进这里。 */
 export const ORDER: TodoBucket[] = ['overdue', 'today', 'tomorrow', 'week', 'later', 'undated']
 
+/**
+ * 桶标题。⚠️ 惰性 getter —— 读一次算一次,语言切换后立即跟上。
+ * 勿改回字面量常量表(那会在模块加载时把文案冻在启动语言上),也勿对它做
+ * spread / JSON 快照后缓存 —— 那等于把 getter 展平成一次性快照,同样冻死。
+ */
 export const BUCKET_LABEL: Record<TodoBucket, string> = {
-  overdue: '逾期',
-  today: '今天',
-  tomorrow: '明天',
-  week: '本周',
-  later: '以后',
-  undated: '未排期',
+  get overdue() { return translate('todogroups.overdue') },
+  get today() { return translate('todogroups.today') },
+  get tomorrow() { return translate('todogroups.tomorrow') },
+  get week() { return translate('todogroups.week') },
+  get later() { return translate('todogroups.later') },
+  get undated() { return translate('todogroups.undated') },
 }
 
 /** 默认折叠的桶:长尾两个。逾期/今天恒展开 —— 它们是这个面板存在的理由。 */

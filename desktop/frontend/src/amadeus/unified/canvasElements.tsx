@@ -20,6 +20,15 @@
 //  2. **逐项容错只在本层**。读侧 parseCanvasJson 的整键 fail-closed 绝不放宽(canvas.ts:85):
 //     一条手改坏的形状不许带走全部卡片几何。反过来,一条坏形状也不该让别的元素跟着不画。
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'canvasel.attach.count': { zh: '{n} 张', en: '{n} cards' },
+  'canvasel.attach.child': { zh: '设为子节点', en: 'Attach as child' },
+  'canvasel.attach.sibling': { zh: '设为同级节点', en: 'Attach as sibling' },
+  'canvasel.add.child': { zh: '新建子卡片(Tab)', en: 'New child card (Tab)' },
+  'canvasel.add.sibling': { zh: '新建兄弟卡片(回车)', en: 'New sibling card (Enter)' },
+})
 
 export interface ElBox { x: number; y: number; w: number; h: number }
 interface Pt { x: number; y: number }
@@ -189,12 +198,21 @@ export function safeTree(raw: unknown): Array<[string, string]> {
   return out
 }
 
-/** 选中卡片的层级线强调范围：向上收齐祖先链，向下收齐自己的整棵子树，但不把祖先的其他
- * 分支（兄弟/叔伯）误算成“相关”。返回值是层级线的 child id —— 一条 tree 关系由 child 唯一命名。
+export type RelatedTreeFocus = {
+  /** 保持完整显示的卡片 id（主卡用 MAIN_KEY）。 */
+  nodes: Set<string>
+  /** 保持强调的层级线 child id —— 一条 tree 关系由 child 唯一命名。 */
+  edgeChildren: Set<string>
+}
+
+/** 选中卡片的关系焦点：向上收齐祖先链，向下收齐自己的整棵子树，但不把祖先的其他分支
+ * （兄弟/叔伯）误算成“相关”。选中的是孤立卡片时 nodes 仍包含它，画布也能进入轻聚焦。
  * 盘上数据允许被手改，所以上下两路各自带 visited，遇到环也必须收敛。 */
-export function relatedTreeEdgeChildren(edges: ReadonlyArray<readonly [string, string]>, sel: ReadonlySet<string>): Set<string> {
+export function relatedTreeFocus(edges: ReadonlyArray<readonly [string, string]>, sel: ReadonlySet<string>): RelatedTreeFocus {
   const starts = [...sel].flatMap((key) => key === MAIN_KEY ? [MAIN_KEY] : key.startsWith('c:') ? [keyId(key)] : [])
-  if (!starts.length || !edges.length) return new Set()
+  const nodes = new Set(starts)
+  const edgeChildren = new Set<string>()
+  if (!starts.length || !edges.length) return { nodes, edgeChildren }
 
   const parentOf = new Map<string, string>()
   const childrenOf = new Map<string, string[]>()
@@ -205,15 +223,16 @@ export function relatedTreeEdgeChildren(edges: ReadonlyArray<readonly [string, s
     else childrenOf.set(parent, [child])
   }
 
-  const related = new Set<string>()
   for (const start of starts) {
     const seenUp = new Set<string>()
     let node = start
     while (!seenUp.has(node)) {
       seenUp.add(node)
+      nodes.add(node)
       const parent = parentOf.get(node)
       if (!parent) break
-      related.add(node)
+      edgeChildren.add(node)
+      nodes.add(parent)
       node = parent
     }
 
@@ -224,12 +243,18 @@ export function relatedTreeEdgeChildren(edges: ReadonlyArray<readonly [string, s
       if (seenDown.has(parent)) continue
       seenDown.add(parent)
       for (const child of childrenOf.get(parent) ?? []) {
-        related.add(child)
+        edgeChildren.add(child)
+        nodes.add(child)
         queue.push(child)
       }
     }
   }
-  return related
+  return { nodes, edgeChildren }
+}
+
+/** 兼容只关心连线的调用方。 */
+export function relatedTreeEdgeChildren(edges: ReadonlyArray<readonly [string, string]>, sel: ReadonlySet<string>): Set<string> {
+  return relatedTreeFocus(edges, sel).edgeChildren
 }
 
 /** 两盒相交(框选判定)。 */
@@ -360,9 +385,11 @@ export interface CanvasElementsProps {
 }
 
 export function CanvasElements({ elements, hostRef, documentKey, sel, editing, tree, ghost, marquee, attach, overviewScale, mainAutoHeight = true, preview }: CanvasElementsProps): React.ReactElement | null {
+  const { t } = useI18n()
   const els = useMemo(() => safeElements(elements), [elements])
   const edges = useMemo(() => safeTree(tree), [tree])
-  const relatedTreeEdges = useMemo(() => relatedTreeEdgeChildren(edges, sel), [edges, sel])
+  const relatedFocus = useMemo(() => relatedTreeFocus(edges, sel), [edges, sel])
+  const relatedTreeEdges = relatedFocus.edgeChildren
   const [ver, setVer] = useState(0)
   const n = els.length + edges.length
   /** 选中的卡锚。⚠️ 卡片的选中框**画在本层**,不是给卡片 DOM 加 class —— 卡片 DOM 归 PM 所有,
@@ -462,6 +489,31 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
         ]
       }).join('\n')
     : ''
+  /** 关系焦点同样走舞台作用域样式，不给 PM 管辖的卡片 DOM 塞 class/style。相关卡片保持原样；
+   * 其他卡片只退透明度，仍能接收指针并被一击切成新焦点。主卡包含所有绝对定位卡片，不能直接
+   * opacity（会连相关卡一起变淡），所以只淡化它自己的内容和壳，不影响内部卡节点。 */
+  const focusCss = relatedFocus.nodes.size > 0 && overviewScope
+    ? (() => {
+        const root = `.amx-stage[data-amx-dragscope="${CSS.escape(overviewScope)}"]:not(.amx-stage-off)`
+        const dimCards = [...boxes.keys()]
+          .filter((anchor) => !relatedFocus.nodes.has(anchor))
+          .flatMap((anchor) => [
+            `${root} .amx-ucard[data-anchor="${CSS.escape(anchor)}"]`,
+            `${root} .amx-card-overview[data-card-label="${CSS.escape(anchor)}"]`,
+          ])
+        const rules = dimCards.length ? [`${dimCards.join(',\n')}{opacity:0.44;}`] : []
+        if (!relatedFocus.nodes.has(MAIN_KEY)) {
+          const main = `${root} .ProseMirror:not(.unified-embed .ProseMirror)`
+          rules.push(
+            `${main}{background-color:color-mix(in srgb,var(--bg) 44%,transparent);border-color:color-mix(in srgb,var(--border) 44%,transparent);box-shadow:none;}`,
+            `${main}>:not(.amx-ucard){opacity:0.44;}`,
+            `${root} .amx-card-overview[data-card-label="${CSS.escape(MAIN_KEY)}"]{opacity:0.44;}`,
+          )
+        }
+        rules.push(`${root} .amx-el-conn.is-tree:not(.is-related){opacity:0.18;}`)
+        return rules.join('\n')
+      })()
+    : ''
 
   const boxOf = (r: EndRef): ElBox | null =>
     r.ref != null ? boxes.get(r.ref) ?? null : r.id != null ? shapes.get(r.id) ?? null : r.main ? mainBox : null
@@ -470,6 +522,7 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
   return (
     <div className="amx-el-layer">
       {overviewCss ? <style data-amx-overview-rules>{overviewCss}</style> : null}
+      {focusCss ? <style data-amx-related-focus-rules>{focusCss}</style> : null}
       {/* Frame 先画 = 垫在最底下(同为 absolute 且都没 z-index,绘制序即 DOM 序)。 */}
       {els.filter((e): e is FrameEl => e.kind === 'frame').map((e) => (
         <Frame key={e.id} el={e} box={shapes.get(e.id)!} sel={sel.has(elKey(e.id))} />
@@ -593,7 +646,7 @@ export function CanvasElements({ elements, hostRef, documentKey, sel, editing, t
               }}
             />
             <div className={`amx-el-attach-label is-${attach.rel}`} style={{ left: `${lx}px`, top: `${ly}px` }}>
-              {attach.count && attach.count > 1 ? `${attach.count} 张 · ` : ''}{attach.rel === 'child' ? '设为子节点' : '设为同级节点'}
+              {attach.count && attach.count > 1 ? `${t('canvasel.attach.count', { n: attach.count })} · ` : ''}{attach.rel === 'child' ? t('canvasel.attach.child') : t('canvasel.attach.sibling')}
             </div>
           </>
         )
@@ -643,10 +696,11 @@ function Grips({ id, box }: { id: string; box: ElBox }): React.ReactElement {
  *  ⚠️ 点击不走 React onClick:舞台的 pointerdown 在冒泡路上会把这一下当「点空白」→ 清选中 →
  *  选中框连同按钮当场卸载,click 永远等不到。判据交给 `data-add`,由 onDown 优先认领。 */
 function AddButtons({ node }: { node: string }): React.ReactElement {
+  const { t } = useI18n()
   return (
     <>
-      <div className="amx-el-add is-child" data-add="child" data-node={node} title="新建子卡片(Tab)">+</div>
-      <div className="amx-el-add is-sibling" data-add="sibling" data-node={node} title="新建兄弟卡片(回车)">+</div>
+      <div className="amx-el-add is-child" data-add="child" data-node={node} title={t('canvasel.add.child')}>+</div>
+      <div className="amx-el-add is-sibling" data-add="sibling" data-node={node} title={t('canvasel.add.sibling')}>+</div>
     </>
   )
 }

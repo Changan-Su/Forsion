@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
+import { setLocaleGlobal } from '../../i18n'
 import { toLocalDate, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, WEEK_START, eventTimeSummary, fmtDur } from './dateUtils'
 
 describe('toLocalDate', () => {
@@ -65,6 +66,9 @@ describe('startOfWeek', () => {
 })
 
 describe('fmtDur', () => {
+  // fmtDur 已跟随界面语言 → 显式钉住 zh,断言才有确定含义(en 侧由 dateUtilsLocale.test.ts 钉)
+  beforeEach(() => { setLocaleGlobal('zh') })
+
   it('分 / 时 / 时分 / 天', () => {
     expect(fmtDur(30)).toBe('30分钟')
     expect(fmtDur(60)).toBe('1小时')

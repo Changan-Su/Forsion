@@ -87,7 +87,7 @@ async function main() {
   }
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1400, height: 900 } })
     await page.goto(URL)
     await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
     await page.waitForTimeout(500)

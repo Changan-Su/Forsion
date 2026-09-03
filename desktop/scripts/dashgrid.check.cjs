@@ -98,7 +98,7 @@ const shellOf = (page, id) => page.evaluate((k) => {
 }, id)
 
 async function open(browser, locked, width = 1280, dark = false, mode = 'dashgrid') {
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   page.on('pageerror', (e) => check(`页面无未捕获异常(${e.message.slice(0, 80)})`, false))
   await page.setViewportSize({ width, height: 900 })
   await page.goto(`${BASE}?${mode}${dark ? '&dark' : ''}`, { waitUntil: 'domcontentloaded' })

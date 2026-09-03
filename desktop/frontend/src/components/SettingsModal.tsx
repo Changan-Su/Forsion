@@ -27,7 +27,7 @@ import { SHOW_SYSTEM_PROMPT_KEY, SMOOTH_CARET_KEY } from '../types'
 import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { listFonts, getFont } from '../fontPresets'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
@@ -68,6 +68,34 @@ import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDe
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 
+// 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
+registerMessages({
+  'settingsmodal.model.providerSep': { zh: '、', en: ', ' },
+  'settingsmodal.advanced.resetLayout': { zh: '恢复默认布局', en: 'Restore default layout' },
+  'settingsmodal.advanced.resetLayoutHint': {
+    zh: '把工作区面板还原为默认黄金分割布局(中间 0.618 / 左右各 0.191),并清除已保存的自定义布局。',
+    en: 'Restores the workspace panels to the default golden-ratio layout (0.618 in the middle, 0.191 on each side) and clears any saved custom layout.',
+  },
+  // 系统音色候选的显示名。⚠️ 只有**标签**进字典,音色 id(Cherry/Dylan/alloy…)是接口标识符,永不翻译。
+  'settingsmodal.tts.voice.cherry': { zh: '百炼 芊悦(女)', en: 'Bailian · Qianyue (female)' },
+  'settingsmodal.tts.voice.serena': { zh: '百炼 苏瑶(女)', en: 'Bailian · Suyao (female)' },
+  'settingsmodal.tts.voice.ethan': { zh: '百炼 晨煦(男)', en: 'Bailian · Chenxu (male)' },
+  'settingsmodal.tts.voice.chelsie': { zh: '百炼 千雪(女)', en: 'Bailian · Qianxue (female)' },
+  'settingsmodal.tts.voice.nofish': { zh: '百炼(男·不会翘舌)', en: 'Bailian (male, no retroflex)' },
+  'settingsmodal.tts.voice.jennifer': { zh: '百炼(英语女)', en: 'Bailian (English, female)' },
+  'settingsmodal.tts.voice.ryan': { zh: '百炼(英语男)', en: 'Bailian (English, male)' },
+  'settingsmodal.tts.voice.katerina': { zh: '百炼(俄语女)', en: 'Bailian (Russian, female)' },
+  'settingsmodal.tts.voice.dylan': { zh: '百炼 北京话', en: 'Bailian · Beijing dialect' },
+  'settingsmodal.tts.voice.jada': { zh: '百炼 上海话', en: 'Bailian · Shanghai dialect' },
+  'settingsmodal.tts.voice.sunny': { zh: '百炼 四川话', en: 'Bailian · Sichuan dialect' },
+  'settingsmodal.tts.voice.rocky': { zh: '百炼 粤语', en: 'Bailian · Cantonese' },
+  'settingsmodal.tts.voice.kiki': { zh: '百炼 粤语(女)', en: 'Bailian · Cantonese (female)' },
+  'settingsmodal.tts.voice.marcus': { zh: '百炼 陕西话', en: 'Bailian · Shaanxi dialect' },
+  'settingsmodal.tts.voice.roy': { zh: '百炼 闽南语', en: 'Bailian · Hokkien' },
+  'settingsmodal.tts.voice.peter': { zh: '百炼 天津话', en: 'Bailian · Tianjin dialect' },
+  'settingsmodal.tts.voice.openai': { zh: 'OpenAI', en: 'OpenAI' },
+})
+
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
@@ -101,12 +129,20 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
 }
 
 // 系统音色候选(datalist 可输可选;百炼无音色列表 API,静态维护常用项;全量见百炼「Qwen-TTS 音色列表」文档)。
+// ⚠️ 表在模块作用域,只能存**文案 key**:写死字面量会在模块加载时冻结,切语言不会更新。
+// 第一列是音色 id(发给接口的标识符,永不翻译),第二列是显示名的 key,渲染时 t() 解析。
 const TTS_VOICE_SUGGESTIONS: Array<[string, string]> = [
-  ['Cherry', '百炼 芊悦(女)'], ['Serena', '百炼 苏瑶(女)'], ['Ethan', '百炼 晨煦(男)'], ['Chelsie', '百炼 千雪(女)'],
-  ['Nofish', '百炼(男·不会翘舌)'], ['Jennifer', '百炼(英语女)'], ['Ryan', '百炼(英语男)'], ['Katerina', '百炼(俄语女)'],
-  ['Dylan', '百炼 北京话'], ['Jada', '百炼 上海话'], ['Sunny', '百炼 四川话'], ['Rocky', '百炼 粤语'],
-  ['Kiki', '百炼 粤语(女)'], ['Marcus', '百炼 陕西话'], ['Roy', '百炼 闽南语'], ['Peter', '百炼 天津话'],
-  ['alloy', 'OpenAI'], ['echo', 'OpenAI'], ['fable', 'OpenAI'], ['onyx', 'OpenAI'], ['nova', 'OpenAI'], ['shimmer', 'OpenAI'],
+  ['Cherry', 'settingsmodal.tts.voice.cherry'], ['Serena', 'settingsmodal.tts.voice.serena'],
+  ['Ethan', 'settingsmodal.tts.voice.ethan'], ['Chelsie', 'settingsmodal.tts.voice.chelsie'],
+  ['Nofish', 'settingsmodal.tts.voice.nofish'], ['Jennifer', 'settingsmodal.tts.voice.jennifer'],
+  ['Ryan', 'settingsmodal.tts.voice.ryan'], ['Katerina', 'settingsmodal.tts.voice.katerina'],
+  ['Dylan', 'settingsmodal.tts.voice.dylan'], ['Jada', 'settingsmodal.tts.voice.jada'],
+  ['Sunny', 'settingsmodal.tts.voice.sunny'], ['Rocky', 'settingsmodal.tts.voice.rocky'],
+  ['Kiki', 'settingsmodal.tts.voice.kiki'], ['Marcus', 'settingsmodal.tts.voice.marcus'],
+  ['Roy', 'settingsmodal.tts.voice.roy'], ['Peter', 'settingsmodal.tts.voice.peter'],
+  ['alloy', 'settingsmodal.tts.voice.openai'], ['echo', 'settingsmodal.tts.voice.openai'],
+  ['fable', 'settingsmodal.tts.voice.openai'], ['onyx', 'settingsmodal.tts.voice.openai'],
+  ['nova', 'settingsmodal.tts.voice.openai'], ['shimmer', 'settingsmodal.tts.voice.openai'],
 ]
 
 const ECO_LABEL: Record<string, string> = {
@@ -1595,7 +1631,7 @@ export const SettingsModal: React.FC<{
                       )}
                       {models?.directProviders.length ? (
                         <div className="hint">
-                          {t('settings.model.directProviders')}{models.directProviders.map((d) => d.providerId).join('、')}
+                          {t('settings.model.directProviders')}{models.directProviders.map((d) => d.providerId).join(t('settingsmodal.model.providerSep'))}
                         </div>
                       ) : null}
                     </div>
@@ -2072,7 +2108,7 @@ export const SettingsModal: React.FC<{
                           />
                           {/* 系统音色候选(可输可选;百炼无音色列表 API,静态表);复刻/设计音色经下方工作室「使用」自动填入 */}
                           <datalist id="tts-voice-options">
-                            {TTS_VOICE_SUGGESTIONS.map(([v, label]) => <option key={v} value={v} label={label} />)}
+                            {TTS_VOICE_SUGGESTIONS.map(([v, labelKey]) => <option key={v} value={v} label={t(labelKey)} />)}
                           </datalist>
                         </div>
                         <div className="field">
@@ -2923,14 +2959,14 @@ export const SettingsModal: React.FC<{
                     )}
 
                     <div className="field" style={{ marginTop: 14 }}>
-                      <label>恢复默认布局</label>
-                      <div className="hint" style={{ marginBottom: 8 }}>把工作区面板还原为默认黄金分割布局(中间 0.618 / 左右各 0.191),并清除已保存的自定义布局。</div>
+                      <label>{t('settingsmodal.advanced.resetLayout')}</label>
+                      <div className="hint" style={{ marginBottom: 8 }}>{t('settingsmodal.advanced.resetLayoutHint')}</div>
                       <button
                         className="btn ghost sm"
                         onClick={() => { useWorkspace.getState().resetLayout(); p.onClose() }}
                       >
                         <RotateCcw size={13} />
-                        恢复默认布局
+                        {t('settingsmodal.advanced.resetLayout')}
                       </button>
                     </div>
 

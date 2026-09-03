@@ -1,0 +1,53 @@
+/* 多维表单元格的两块新观感:数字显示格式(.amx-db-numfmt)与多附件(.amx-db-files)。
+   独立文件、由 DatabaseEmbed.tsx import —— 别往 amadeus-host.css 里塞(那份是共用正典,并行改动会撞车)。
+   颜色/间距一律走既有 token(--text / --text-faint / --border),不新造变量。 */
+
+/* 数字只读显示:内边距与 .amx-db-input 对齐(6px),否则点进编辑态文字会横跳一格。
+   右对齐跟随 .amx-db-cell[data-coltype='number'] .amx-db-input 的既有约定。 */
+.amx-db-numfmt {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  font-size: 13.5px;
+  line-height: 22px;
+  color: var(--text);
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.amx-db-cell[data-coltype='number'] .amx-db-numfmt { text-align: right; }
+
+/* 多附件:一行里并排若干枚 chip,末尾一个「＋」追加。整格仍是 .amx-db-urlcell(继承它的 padding/flex)。 */
+.amx-db-files { flex-wrap: nowrap; overflow: hidden; gap: 6px; }
+.amx-db-file { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.amx-db-file .amx-db-wikilink { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 每枚 chip 的 ✕ 平时半隐,悬浮整格才亮(与 .amx-db-urlcell .amx-db-edit 同款克制) */
+.amx-db-file .amx-db-edit { opacity: 0; transition: opacity 0.12s; }
+.amx-db-files:hover .amx-db-edit { opacity: 1; }
+
+/* 「＋」追加按钮:label 包着隐藏的 file input,所以要自己长得像按钮 */
+.amx-db-filemore {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px dashed var(--border, rgba(127, 127, 127, 0.35));
+  color: var(--text-faint, var(--text-muted));
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.amx-db-files:hover .amx-db-filemore { opacity: 1; }
+.amx-db-filemore:hover { color: var(--text); border-style: solid; }
+
+/* 列菜单里的「数字显示」三个输入:标签 + 输入框一行一条 */
+.amx-db-numfmt-cfg label { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.amx-db-numfmt-cfg label > span { flex: none; width: 44px; font-size: 12px; color: var(--text-faint, var(--text-muted)); }
+.amx-db-numfmt-cfg .amx-db-pop-input { flex: 1; min-width: 0; margin: 0; }

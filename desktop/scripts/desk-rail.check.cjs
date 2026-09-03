@@ -103,7 +103,7 @@ async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1600, height: 900 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1600, height: 900 } })
   await p.setContent(HTML)
 
   // ① 概览在场:两卡高度固定 50/50(概览卡撑满上半、内容内滚);Desk 卡底缘=列底-16=输入框底线

@@ -36,7 +36,7 @@ async function main() {
   try {
     app = await electron.launch({
       // ⚠️独立 userData:与开发者自己的 dev 实例共用目录会卡死在 requestSingleInstanceLock(无窗口无日志)。
-      args: [`--user-data-dir=${path.join(home, 'userdata')}`, ROOT],
+      args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1', ELECTRON_ENABLE_LOGGING: '1' },
     })

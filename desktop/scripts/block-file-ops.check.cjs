@@ -40,7 +40,7 @@ const record = (name, ok, detail) => {
 }
 
 async function open(browser, seed) {
-  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })

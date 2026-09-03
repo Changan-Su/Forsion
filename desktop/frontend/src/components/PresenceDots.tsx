@@ -4,10 +4,17 @@
  */
 import React, { useEffect, useState } from 'react'
 import { usePageStore } from '@amadeus/store/pageStore'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'presencedots.viewing': { zh: '{name} 正在看 {page}', en: '{name} is viewing {page}' },
+  'presencedots.online': { zh: '{name} 在线', en: '{name} is online' },
+})
 
 interface P { userId: string; username: string; page: string | null; at: number }
 
 export function PresenceDots(): React.ReactElement | null {
+  const { t } = useI18n()
   const collab = window.amadeusCollab
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
   const vaultSide = usePageStore((s) => s.vaultSide)
@@ -33,7 +40,13 @@ export function PresenceDots(): React.ReactElement | null {
   return (
     <span className="amxc-presence" title={others.map((p) => `${p.username}${p.page ? ` · ${p.page.replace(/\.md$/i, '')}` : ''}`).join('\n')}>
       {others.slice(0, 5).map((p) => (
-        <span key={p.userId} className={`amxc-dot${p.page && p.page === activePage ? ' same' : ''}`} title={`${p.username}${p.page ? ` 正在看 ${p.page.replace(/\.md$/i, '')}` : ' 在线'}`}>
+        <span
+          key={p.userId}
+          className={`amxc-dot${p.page && p.page === activePage ? ' same' : ''}`}
+          title={p.page
+            ? t('presencedots.viewing', { name: p.username, page: p.page.replace(/\.md$/i, '') })
+            : t('presencedots.online', { name: p.username })}
+        >
           {(p.username || '?').slice(0, 1).toUpperCase()}
         </span>
       ))}

@@ -42,6 +42,7 @@ import {
   type Cell, type Dash3Layout, type Dash3Pins, type Dash3SizeKey,
 } from '@amadeus-shared/dashboard3'
 import { DashFiltersCtx } from '@amadeus/dashboard/dashFiltersCtx'
+import { registerMessages, useI18n, translate } from '../i18n'
 import { useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
@@ -54,25 +55,118 @@ import { DashFilterBar } from './dashFilterBar'
 import '@amadeus/blocks'
 import './dashGrid.css'
 
+registerMessages({
+  // 加卡菜单
+  'dashgrid.add.section': { zh: '分区标题', en: 'Section heading' },
+  // 落盘默认名:会写进 .dashboard.md 的 widget 参数。跟随语言,不是标识符(无处比较它)。
+  'dashgrid.default.section': { zh: '新分区', en: 'New section' },
+  'dashgrid.tpl.today': { zh: '今天', en: 'Today' },
+  'dashgrid.tpl.doing': { zh: '在办', en: 'In progress' },
+  'dashgrid.tpl.recent': { zh: '最近', en: 'Recent' },
+  'dashgrid.add.stat': { zh: '数字卡…', en: 'Stat card…' },
+  'dashgrid.add.chart': { zh: '图表(多维表)…', en: 'Chart (database)…' },
+  'dashgrid.add.text': { zh: '文本块', en: 'Text block' },
+  'dashgrid.add.clock': { zh: '时钟', en: 'Clock' },
+  'dashgrid.add.weather': { zh: '天气', en: 'Weather' },
+  'dashgrid.add.webview': { zh: '网页', en: 'Web page' },
+  // 开箱模板
+  'dashgrid.tpl.today.name': { zh: '今日', en: 'Today' },
+  'dashgrid.tpl.today.hint': { zh: '时钟 · 天气 · 待办 · 日历', en: 'Clock · Weather · To-dos · Calendar' },
+  'dashgrid.tpl.work.name': { zh: '工作台', en: 'Workbench' },
+  'dashgrid.tpl.work.hint': { zh: '收件箱 · 待办 · 活动日志', en: 'Inbox · To-dos · Activity log' },
+  'dashgrid.tpl.blank.name': { zh: '空白', en: 'Blank' },
+  'dashgrid.tpl.blank.hint': { zh: '自己拼', en: 'Build your own' },
+  // 卡片尺寸档(几何真源在 shared/amadeus/dashboard3.ts,这里只是它的中英文面)
+  'dashgrid.size.sm': { zh: '小', en: 'Small' },
+  'dashgrid.size.md': { zh: '中', en: 'Medium' },
+  'dashgrid.size.wide': { zh: '宽', en: 'Wide' },
+  'dashgrid.size.tall': { zh: '高', en: 'Tall' },
+  'dashgrid.size.lg': { zh: '大', en: 'Large' },
+  'dashgrid.size.full': { zh: '整行', en: 'Full row' },
+  'dashgrid.size.workspace': { zh: '工作区', en: 'Workspace' },
+  // 工具条
+  'dashgrid.pin': { zh: '置顶', en: 'Pin' },
+  'dashgrid.unpin': { zh: '取消置顶', en: 'Unpin' },
+  'dashgrid.editLayout': { zh: '编辑布局', en: 'Edit layout' },
+  'dashgrid.editLayoutTip': { zh: '编辑布局(拖动排序 / 改大小 / 增删卡片)', en: 'Edit layout (drag to reorder, resize, add or remove cards)' },
+  'dashgrid.done': { zh: '完成', en: 'Done' },
+  'dashgrid.addCard': { zh: '添加卡片', en: 'Add card' },
+  'dashgrid.menuViews': { zh: '视图', en: 'Views' },
+  'dashgrid.more': { zh: '更多操作', en: 'More actions' },
+  // 横幅与空态
+  'dashgrid.noFile': { zh: '未指定仪表盘文件。', en: 'No dashboard file specified.' },
+  'dashgrid.fmBroken': { zh: '这份笔记的 frontmatter 无法解析({error}),布局已冻结、不会自动改写。请先修好 YAML。', en: "Could not parse this note's frontmatter ({error}). The layout is frozen and will not be rewritten — please fix the YAML first." },
+  'dashgrid.staleBanner': { zh: '布局记录的块 id 与当前块对不上(笔记可能被重编号过),已停止自动重排以免丢失布局。', en: 'The block ids in the saved layout do not match the current blocks (the note may have been renumbered), so automatic reflow is off to avoid losing the layout.' },
+  'dashgrid.reflowNow': { zh: '按当前顺序重排', en: 'Reflow in current order' },
+  'dashgrid.emptyTitle': { zh: '从模板开始', en: 'Start from a template' },
+  'dashgrid.emptySub': { zh: '先放下常用组合,再拖动排序、按格调整大小。', en: 'Drop in a common combination first, then drag to reorder and resize by the grid.' },
+  'dashgrid.templatesLabel': { zh: '仪表盘模板', en: 'Dashboard templates' },
+  // 加卡流程里的询问与提示
+  'dashgrid.prompt.weather': { zh: '天气卡片 — 城市', en: 'Weather card — city' },
+  'dashgrid.prompt.webview': { zh: '网页卡片 — 地址', en: 'Web card — address' },
+  'dashgrid.webviewRejected': { zh: '只允许公网 http(s) 地址(拒绝 file/data、localhost 与内网)', en: 'Only public http(s) addresses are allowed — file/data, localhost and private networks are rejected' },
+  'dashgrid.pickDbStat': { zh: '数字卡 — 选一份多维表(.db)…', en: 'Stat card — pick a database (.db)…' },
+  'dashgrid.prompt.statCol': { zh: '统计哪一列?(留空 = 数行数)', en: 'Which column to measure? (leave empty to count rows)' },
+  'dashgrid.prompt.statFn': { zh: '统计方式(count/sum/avg/min/max)', en: 'Aggregation (count/sum/avg/min/max)' },
+  'dashgrid.pickDbChart': { zh: '图表 — 选一份多维表(.db)…', en: 'Chart — pick a database (.db)…' },
+  'dashgrid.pickFileFor': { zh: '选择要放进「{name}」卡片的文件…', en: 'Pick a file for the "{name}" card…' },
+  'dashgrid.layoutUnreadable': { zh: '这份笔记的布局读不出来,已停手 —— 请先修好 frontmatter', en: "Could not read this note's layout, so nothing was changed — please fix the frontmatter first" },
+  // 卡片与笔记菜单
+  'dashgrid.menuSize': { zh: '大小', en: 'Size' },
+  'dashgrid.restoreAuto': { zh: '恢复自动排版', en: 'Restore automatic layout' },
+  'dashgrid.deleteCard': { zh: '删除卡片', en: 'Delete card' },
+  'dashgrid.switchToCanvas': { zh: '切换到自由摆位(高级)', en: 'Switch to free-form canvas (advanced)' },
+  'dashgrid.renameTitle': { zh: '重命名仪表盘', en: 'Rename dashboard' },
+  'dashgrid.rename': { zh: '重命名', en: 'Rename' },
+  'dashgrid.delete': { zh: '删除', en: 'Delete' },
+  'dashgrid.confirmDelete': { zh: '删除仪表盘「{name}」?', en: 'Delete the dashboard "{name}"?' },
+  'dashgrid.deleteFailed': { zh: '删除失败:{error}', en: 'Delete failed: {error}' },
+  'dashgrid.deleted': { zh: '已删除', en: 'Deleted' },
+  // 卡片外壳
+  'dashgrid.viewUnavailable': { zh: '视图「{type}」不可用', en: 'View "{type}" is unavailable' },
+  'dashgrid.viewNotEmbeddable': { zh: '视图「{type}」不支持嵌入卡片', en: 'View "{type}" cannot be embedded in a card' },
+  'dashgrid.openInTab': { zh: '在标签页里打开', en: 'Open in a tab' },
+  'dashgrid.openInTabAria': { zh: '在标签页里打开{title}', en: 'Open {title} in a tab' },
+  'dashgrid.dragToReorder': { zh: '拖动排序', en: 'Drag to reorder' },
+  'dashgrid.dragOrEnter': { zh: '拖动排序;双击进入卡片', en: 'Drag to reorder; double-click to enter the card' },
+  'dashgrid.sizeAndMore': { zh: '大小与更多', en: 'Size and more' },
+  'dashgrid.setCardSize': { zh: '设置卡片大小', en: 'Set card size' },
+  'dashgrid.deleteThisCard': { zh: '删除这张卡片', en: 'Delete this card' },
+  'dashgrid.resize': { zh: '调整大小', en: 'Resize' },
+})
+
+/** ⚠️ 模块级表只存**键**,渲染时才 `t()` —— 存文案会在模块加载那一刻冻死,切语言不跟。 */
 const ADD_MENU = [
-  { key: 'section', label: '分区标题', icon: Heading },
-  { key: 'stat', label: '数字卡…', icon: Hash },
-  { key: 'chart', label: '图表(多维表)…', icon: BarChart3 },
-  { key: 'text', label: '文本块', icon: Type },
-  { key: 'clock', label: '时钟', icon: Clock },
-  { key: 'weather', label: '天气', icon: CloudSun },
-  { key: 'webview', label: '网页', icon: LayoutGrid },
+  { key: 'section', labelKey: 'dashgrid.add.section', icon: Heading },
+  { key: 'stat', labelKey: 'dashgrid.add.stat', icon: Hash },
+  { key: 'chart', labelKey: 'dashgrid.add.chart', icon: BarChart3 },
+  { key: 'text', labelKey: 'dashgrid.add.text', icon: Type },
+  { key: 'clock', labelKey: 'dashgrid.add.clock', icon: Clock },
+  { key: 'weather', labelKey: 'dashgrid.add.weather', icon: CloudSun },
+  { key: 'webview', labelKey: 'dashgrid.add.webview', icon: LayoutGrid },
 ] as const
 
+/** 尺寸档的中英文面。`Record<Dash3SizeKey, string>` 是刻意的:shared 里新增一档而这里没跟,
+ *  tsc 当场红,不会静默漏一个档位的文案。 */
+const SIZE_LABEL_KEY: Record<Dash3SizeKey, string> = {
+  sm: 'dashgrid.size.sm',
+  md: 'dashgrid.size.md',
+  wide: 'dashgrid.size.wide',
+  tall: 'dashgrid.size.tall',
+  lg: 'dashgrid.size.lg',
+  full: 'dashgrid.size.full',
+  workspace: 'dashgrid.size.workspace',
+}
+
 /** 开箱模板。只用**不需要挑文件**的全局视图 —— 模板要一键就成型,中途弹选择器就不是模板了。 */
-const TEMPLATES: Array<{ key: string; name: string; hint: string; cards: Array<{ content: string; w: number; h: number }> }> = [
+const TEMPLATES: Array<{ key: string; nameKey: string; hintKey: string; cards: Array<{ content: string; w: number; h: number }> }> = [
   {
     key: 'today',
-    name: '今日',
-    hint: '时钟 · 天气 · 待办 · 日历',
+    nameKey: 'dashgrid.tpl.today.name',
+    hintKey: 'dashgrid.tpl.today.hint',
     // 视图卡由 Dashboard 卡片面负责摘要；受控分行会把不同高度族自然拆行。
     cards: [
-      { content: widgetSource('section', { title: '今天' }), w: 12, h: 1 },
+      { content: widgetSource('section', { title: translate('dashgrid.tpl.today') }), w: 12, h: 1 },
       { content: widgetSource('clock', {}), w: 6, h: 2 },
       { content: widgetSource('weather', { city: '上海' }), w: 6, h: 2 },
       { content: widgetSource('view', { type: 'todo-list' }), w: 6, h: 5 },
@@ -81,17 +175,17 @@ const TEMPLATES: Array<{ key: string; name: string; hint: string; cards: Array<{
   },
   {
     key: 'work',
-    name: '工作台',
-    hint: '收件箱 · 待办 · 活动日志',
+    nameKey: 'dashgrid.tpl.work.name',
+    hintKey: 'dashgrid.tpl.work.hint',
     cards: [
-      { content: widgetSource('section', { title: '在办' }), w: 12, h: 1 },
+      { content: widgetSource('section', { title: translate('dashgrid.tpl.doing') }), w: 12, h: 1 },
       { content: widgetSource('view', { type: 'inbox-list' }), w: 6, h: 5 },
       { content: widgetSource('view', { type: 'todo-list' }), w: 6, h: 5 },
-      { content: widgetSource('section', { title: '最近' }), w: 12, h: 1 },
+      { content: widgetSource('section', { title: translate('dashgrid.tpl.recent') }), w: 12, h: 1 },
       { content: widgetSource('view', { type: 'activity-log' }), w: 12, h: 5 },
     ],
   },
-  { key: 'blank', name: '空白', hint: '自己拼', cards: [] },
+  { key: 'blank', nameKey: 'dashgrid.tpl.blank.name', hintKey: 'dashgrid.tpl.blank.hint', cards: [] },
 ]
 
 /** 分区标题不是卡片,是页面的排版元素 —— 不给外壳、不给描边、恒整行。 */
@@ -178,6 +272,7 @@ export function DashboardGridView(props: ViewProps) {
 }
 
 function GridInner({ leaf }: ViewProps) {
+  const { t } = useI18n()
   const store = useScopedPageStore()
   const dashPath = typeof leaf.params.dashPath === 'string' ? leaf.params.dashPath : ''
   const locked = leaf.params.locked !== false
@@ -525,24 +620,26 @@ function GridInner({ leaf }: ViewProps) {
     void (async () => {
       if (kindKey === 'text') { insertCard('', DASH3_DEFAULT_TEXT); return }
       if (kindKey === 'section') {
-        const title = await askString('分区标题', '新分区')
+        // ⚠️ 第二参数是**落盘的分区标题**默认值(写进笔记的 widget 围栏),不是界面文案 —— 不翻。
+        const title = await askString(t('dashgrid.add.section'), t('dashgrid.default.section'))
         if (!title?.trim()) return
         insertCard(widgetSource('section', { title: title.trim() }), { order: 0, w: 12, h: 1 })
         return
       }
       if (kindKey === 'clock') { insertCard(widgetSource('clock', { tz: localTimeZone() }), DASH3_DEFAULT_MINI); return }
       if (kindKey === 'weather') {
-        const city = await askString('天气卡片 — 城市', '上海')
+        // ⚠️ 「上海」是落盘的 city 值 + 地理编码查询串,不是界面文案 —— 不翻。
+        const city = await askString(t('dashgrid.prompt.weather'), '上海')
         if (!city?.trim()) return
         insertCard(widgetSource('weather', { city: city.trim() }), DASH3_DEFAULT_MINI)
         return
       }
       if (kindKey === 'stat') { await addDataCard(); return }
       if (kindKey === 'chart') { await addChartCard(); return }
-      const url = await askString('网页卡片 — 地址', 'https://')
+      const url = await askString(t('dashgrid.prompt.webview'), 'https://')
       if (!url?.trim()) return
       if (!webviewUrlAllowed(url.trim())) {
-        useApp.getState().toast('只允许公网 http(s) 地址(拒绝 file/data、localhost 与内网)', true)
+        useApp.getState().toast(t('dashgrid.webviewRejected'), true)
         return
       }
       insertCard(widgetSource('webview', { url: url.trim() }), DASH3_DEFAULT)
@@ -561,11 +658,11 @@ function GridInner({ leaf }: ViewProps) {
 
   /** 数字卡:挑 `.db` 后只问必填项;更细的配置去笔记里改那段围栏 —— 给人读的纯文本。 */
   const addDataCard = async (): Promise<void> => {
-    const path = await pickDb('数字卡 — 选一份多维表(.db)…')
+    const path = await pickDb(t('dashgrid.pickDbStat'))
     if (!path) return
-    const col = (await askString('统计哪一列?(留空 = 数行数)', ''))?.trim() ?? ''
+    const col = (await askString(t('dashgrid.prompt.statCol'), ''))?.trim() ?? ''
     if (!col) { insertCard(widgetSource('stat', { source: path }), DASH3_DEFAULT_MINI); return }
-    const stat = (await askString('统计方式(count/sum/avg/min/max)', 'sum'))?.trim()
+    const stat = (await askString(t('dashgrid.prompt.statFn'), 'sum'))?.trim()
     if (!stat) return
     insertCard(widgetSource('stat', { source: path, col, stat }), DASH3_DEFAULT_MINI)
   }
@@ -574,7 +671,7 @@ function GridInner({ leaf }: ViewProps) {
    *  图表视图 → 插一张 db 视图卡并激活该视图。配置(分组/聚合/图形)在卡里用真实下拉改,
    *  告别盲打列名;旧 chart 围栏卡照常渲染,只从加卡菜单退场。 */
   const addChartCard = async (): Promise<void> => {
-    const path = await pickDb('图表 — 选一份多维表(.db)…')
+    const path = await pickDb(t('dashgrid.pickDbChart'))
     if (!path) return
     const viewName = await ensureChartView(path)
     insertCard(
@@ -599,23 +696,23 @@ function GridInner({ leaf }: ViewProps) {
     if (!item.spec) { insertCard(widgetSource('view', { type: item.type }), initial); return }
     const { param, accept } = item.spec
     useQuickFind.getState().openPicker({
-      title: `选择要放进「${item.name}」卡片的文件…`,
+      title: t('dashgrid.pickFileFor', { name: item.name }),
       accept,
       onPick: (path) => { insertCard(widgetSource('view', { type: item.type, [param]: path }), initial) },
     })
   }
 
-  const applyTemplate = (t: (typeof TEMPLATES)[number]): void => {
+  const applyTemplate = (tpl: (typeof TEMPLATES)[number]): void => {
     const st = store.getState()
-    if (st.activePage !== dashPath || !t.cards.length) return
+    if (st.activePage !== dashPath || !tpl.cards.length) return
     // ⚠️ 读不懂就**停手**。`freshLayout() ?? {}` 会把「合法 YAML 的坏布局」当成空布局,插完块再整份
     //    重写 —— 用户原来的布局当场永久丢失,正是三态冻结要挡的那件事(Codex 2026-08-27 评审)。
     const base = freshLayout()
-    if (!base) { useApp.getState().toast('这份笔记的布局读不出来,已停手 —— 请先修好 frontmatter', true); return }
+    if (!base) { useApp.getState().toast(t('dashgrid.layoutUnreadable'), true); return }
     let after: string | null = ids[ids.length - 1] ?? null
     const next: Dash3Layout = { ...base }
     let order = Object.values(next).reduce((m, c) => Math.max(m, c.order + 1), 0)
-    for (const card of t.cards) {
+    for (const card of tpl.cards) {
       const id = st.insertBlockAfter(after, undefined, card.content)
       if (!id) break
       next[id] = { order: order++, w: card.w, h: card.h }
@@ -639,31 +736,31 @@ function GridInner({ leaf }: ViewProps) {
     writeFm(setDashModeInFm(store.getState().manifest?.fmExtra ?? '', 'canvas'))
   }
 
-  if (!dashPath) return <div className="amx-draw-state">未指定仪表盘文件。</div>
+  if (!dashPath) return <div className="amx-draw-state">{t('dashgrid.noFile')}</div>
 
   const cardOf = (id: string): { widget: ReturnType<typeof parseWidget>; title: string | null; Icon: typeof LayoutGrid | null; openable: null | (() => void) } => {
     const widget = parseWidget(blocks[id]?.content ?? '')
     if (widget?.kind !== 'view') return { widget, title: null, Icon: null, openable: null }
-    const t = widget.opts.type ?? ''
-    const def = getView(t)
-    if (!def) return { widget, title: `视图「${t}」不可用`, Icon: LayoutGrid, openable: null }
+    const vt = widget.opts.type ?? ''
+    const def = getView(vt)
+    if (!def) return { widget, title: t('dashgrid.viewUnavailable', { type: vt }), Icon: LayoutGrid, openable: null }
     const { type: _t, ...params } = widget.opts
     return {
       widget,
       title: viewCardTitle(widget.opts, label(def.displayName)),
       Icon: def.icon ?? LayoutGrid,
-      openable: () => useWorkspace.getState().openView(t, params, 'main', { newTab: true }),
+      openable: () => useWorkspace.getState().openView(vt, params, 'main', { newTab: true }),
     }
   }
 
   const renderBody = (id: string, size: DashboardCardSize): ReactNode => {
     const widget = parseWidget(blocks[id]?.content ?? '')
     if (widget?.kind === 'view') {
-      const t = widget.opts.type ?? ''
+      const vt = widget.opts.type ?? ''
       // ⚠️ 白名单必须在**渲染入口**复查:卡片源码是 md 文本,同步/共享/手写都能塞任意注册键。
-      const def = getView(t)
-      if (!def || EMBED_DENY.has(t) || !def.embeddable) {
-        return <div className="dash-widget"><div className="dash-widget-note">视图「{t}」不支持嵌入卡片</div></div>
+      const def = getView(vt)
+      if (!def || EMBED_DENY.has(vt) || !def.embeddable) {
+        return <div className="dash-widget"><div className="dash-widget-note">{t('dashgrid.viewNotEmbeddable', { type: vt })}</div></div>
       }
       return <ViewCard dashLeafId={leaf.id} dashPath={dashPath} blockId={id} opts={widget.opts} size={size} onClose={() => removeCard(id)} />
     }
@@ -790,18 +887,18 @@ function GridInner({ leaf }: ViewProps) {
         <Breadcrumb />
         <button
           className={`amx-mode-btn amx-pin-btn${pinned ? ' amx-pin-on' : ''}`}
-          title={pinned ? '取消置顶' : '置顶'}
+          title={pinned ? t('dashgrid.unpin') : t('dashgrid.pin')}
           onClick={() => useAmadeusPrefs.getState().togglePin(dashPath)}
         >
           <Pin size={14} />
         </button>
         <button
           className={`amx-mode-btn dash3-mode-btn${locked ? '' : ' amx-pin-on'}`}
-          title={locked ? '编辑布局(拖动排序 / 改大小 / 增删卡片)' : '完成'}
+          title={locked ? t('dashgrid.editLayoutTip') : t('dashgrid.done')}
           onClick={() => leaf.setParams({ ...leaf.params, locked: !locked })}
         >
           {locked ? <Pencil size={13} /> : <Check size={14} />}
-          <span>{locked ? '编辑布局' : '完成'}</span>
+          <span>{locked ? t('dashgrid.editLayout') : t('dashgrid.done')}</span>
         </button>
         <AnimatePresence initial={false}>
           {!locked && (
@@ -812,7 +909,7 @@ function GridInner({ leaf }: ViewProps) {
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, x: -4 }}
             transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.16, 1, 0.3, 1] }}
           >
-            <button className="amx-mode-btn" title="添加卡片" onClick={(e) => { e.stopPropagation(); setAddMenu((v) => !v) }}>
+            <button className="amx-mode-btn" title={t('dashgrid.addCard')} onClick={(e) => { e.stopPropagation(); setAddMenu((v) => !v) }}>
               <Plus size={14} />
             </button>
             {addMenu && (
@@ -821,10 +918,10 @@ function GridInner({ leaf }: ViewProps) {
                 <div ref={addMenuFix.ref} className="dash-add-menu" style={addMenuFix.style}>
                   {ADD_MENU.map((a) => (
                     <button key={a.key} onClick={() => addCard(a.key)}>
-                      <a.icon size={13} /> {a.label}
+                      <a.icon size={13} /> {t(a.labelKey)}
                     </button>
                   ))}
-                  {viewItems.length > 0 && <div className="dash-menu-sep">视图</div>}
+                  {viewItems.length > 0 && <div className="dash-menu-sep">{t('dashgrid.menuViews')}</div>}
                   {viewItems.map((v) => (
                     <button key={v.type} onClick={() => addViewCard(v)} title={v.type}>
                       <v.Icon size={13} /> {v.name}{v.spec ? '…' : ''}
@@ -838,7 +935,7 @@ function GridInner({ leaf }: ViewProps) {
         </AnimatePresence>
         <button
           className="amx-mode-btn amx-more-btn"
-          title="更多操作"
+          title={t('dashgrid.more')}
           onClick={(e) => {
             e.stopPropagation()
             const r = e.currentTarget.getBoundingClientRect()
@@ -851,13 +948,13 @@ function GridInner({ leaf }: ViewProps) {
 
       {!read3.ok && (
         <div className="dash-banner dash-banner-warn">
-          这份笔记的 frontmatter 无法解析({read3.error}),布局已冻结、不会自动改写。请先修好 YAML。
+          {t('dashgrid.fmBroken', { error: read3.error })}
         </div>
       )}
       {stale && (
         <div className="dash-banner">
-          布局记录的块 id 与当前块对不上(笔记可能被重编号过),已停止自动重排以免丢失布局。
-          <button onClick={() => applyLayout(reconcileGrid({}, ids) ?? {})}>按当前顺序重排</button>
+          {t('dashgrid.staleBanner')}
+          <button onClick={() => applyLayout(reconcileGrid({}, ids) ?? {})}>{t('dashgrid.reflowNow')}</button>
         </div>
       )}
 
@@ -940,18 +1037,18 @@ function GridInner({ leaf }: ViewProps) {
             <div className="dash3-empty-panel">
               <div className="dash3-empty-mark" aria-hidden="true"><LayoutGrid size={18} /></div>
               <div className="dash3-empty-copy">
-                <div className="dash3-empty-title">从模板开始</div>
-                <div className="dash3-empty-sub">先放下常用组合,再拖动排序、按格调整大小。</div>
+                <div className="dash3-empty-title">{t('dashgrid.emptyTitle')}</div>
+                <div className="dash3-empty-sub">{t('dashgrid.emptySub')}</div>
               </div>
-              <div className="dash3-templates" aria-label="仪表盘模板">
-                {TEMPLATES.filter((t) => t.cards.length).map((t) => {
-                  const TemplateIcon = t.key === 'today' ? Clock : LayoutGrid
+              <div className="dash3-templates" aria-label={t('dashgrid.templatesLabel')}>
+                {TEMPLATES.filter((tpl) => tpl.cards.length).map((tpl) => {
+                  const TemplateIcon = tpl.key === 'today' ? Clock : LayoutGrid
                   return (
-                    <button key={t.key} type="button" className="dash3-template" onClick={() => applyTemplate(t)}>
+                    <button key={tpl.key} type="button" className="dash3-template" onClick={() => applyTemplate(tpl)}>
                       <span className="dash3-template-icon" aria-hidden="true"><TemplateIcon size={16} /></span>
                       <span className="dash3-template-copy">
-                        <span className="dash3-template-name">{t.name}</span>
-                        <span className="dash3-template-hint">{t.hint}</span>
+                        <span className="dash3-template-name">{t(tpl.nameKey)}</span>
+                        <span className="dash3-template-hint">{t(tpl.hintKey)}</span>
                       </span>
                     </button>
                   )
@@ -967,20 +1064,20 @@ function GridInner({ leaf }: ViewProps) {
         <>
           <div className="dash-menu-scrim" onClick={() => setCardMenu(null)} />
           <div ref={cardMenuFix.ref} className="dash-add-menu" style={{ position: 'fixed', left: cardMenu.x, top: cardMenu.y, ...cardMenuFix.style }}>
-            <div className="dash-menu-sep">大小</div>
+            <div className="dash-menu-sep">{t('dashgrid.menuSize')}</div>
             {DASH3_SIZES.filter((s) => profileOf(blocks[cardMenu.id]?.content ?? '').sizes.includes(s.key)).map((s) => (
               <button key={s.key} onClick={() => { setCardSize(cardMenu.id, s.w, s.h); setCardMenu(null) }}>
-                {s.label} <span className="dash3-size-dim">{s.w}×{s.h}</span>
+                {t(SIZE_LABEL_KEY[s.key])} <span className="dash3-size-dim">{s.w}×{s.h}</span>
               </button>
             ))}
             {pins[cardMenu.id] && (
               <>
                 <div className="dash-menu-sep" />
-                <button onClick={() => { releaseRow(cardMenu.id); setCardMenu(null) }}>恢复自动排版</button>
+                <button onClick={() => { releaseRow(cardMenu.id); setCardMenu(null) }}>{t('dashgrid.restoreAuto')}</button>
               </>
             )}
             <div className="dash-menu-sep" />
-            <button className="dash-danger" onClick={() => { removeCard(cardMenu.id); setCardMenu(null) }}>删除卡片</button>
+            <button className="dash-danger" onClick={() => { removeCard(cardMenu.id); setCardMenu(null) }}>{t('dashgrid.deleteCard')}</button>
           </div>
         </>
       )}
@@ -989,12 +1086,12 @@ function GridInner({ leaf }: ViewProps) {
         <>
           <div className="dash-menu-scrim" onClick={() => setNoteMenu(null)} />
           <div ref={noteMenuFix.ref} className="dash-add-menu" style={{ position: 'fixed', left: noteMenu.x, top: noteMenu.y, ...noteMenuFix.style }}>
-            <button onClick={switchToCanvas}>切换到自由摆位(高级)</button>
+            <button onClick={switchToCanvas}>{t('dashgrid.switchToCanvas')}</button>
             <button
               onClick={() => {
                 setNoteMenu(null)
                 void (async () => {
-                  const name = (await askString('重命名仪表盘', dashBaseName(dashPath)))?.trim().replace(/[\\/]/g, '')
+                  const name = (await askString(t('dashgrid.renameTitle'), dashBaseName(dashPath)))?.trim().replace(/[\\/]/g, '')
                   if (!name) return
                   const ok = await store.getState().renamePage(`${name}.dashboard`)
                   const next = store.getState().activePage
@@ -1002,22 +1099,22 @@ function GridInner({ leaf }: ViewProps) {
                 })()
               }}
             >
-              重命名
+              {t('dashgrid.rename')}
             </button>
             <button
               className="dash-danger"
               onClick={() => {
                 setNoteMenu(null)
-                if (!window.confirm(`删除仪表盘「${dashBaseName(dashPath)}」?`)) return
+                if (!window.confirm(t('dashgrid.confirmDelete', { name: dashBaseName(dashPath) }))) return
                 void store.getState().deletePage(dashPath).then(() => {
                   const err = store.getState().error
-                  if (err) { useApp.getState().toast(`删除失败:${err}`, true); return }
-                  useApp.getState().toast('已删除')
+                  if (err) { useApp.getState().toast(t('dashgrid.deleteFailed', { error: err }), true); return }
+                  useApp.getState().toast(t('dashgrid.deleted'))
                   useWorkspace.getState().closeLeaf(leaf.id) // leaf 攥着已删路径必须关
                 })
               }}
             >
-              删除
+              {t('dashgrid.delete')}
             </button>
           </div>
         </>
@@ -1055,6 +1152,7 @@ function GridCard({
   onMenu: (x: number, y: number) => void
   onGripDown: (e: React.PointerEvent) => void
 }) {
+  const { t } = useI18n()
   // transition: null = 把 transform 的主权整个交给 framer(dnd-kit 官方混用示例的铁律);
   // strategy 恒 null,所以这里也不再消费 transform —— 位移一律是真实布局变化 + layout FLIP。
   const { attributes, listeners, setNodeRef, isDragging } = useSortable({ id, disabled: locked, transition: null })
@@ -1091,7 +1189,7 @@ function GridCard({
             {Icon && <Icon size={13} className="dash3-card-icon" />}
             <span className="dash3-card-title">{title}</span>
             {locked && onOpen && (
-              <button type="button" className="dash3-card-open" title="在标签页里打开" aria-label={`在标签页里打开${title}`} onClick={onOpen}>
+              <button type="button" className="dash3-card-open" title={t('dashgrid.openInTab')} aria-label={t('dashgrid.openInTabAria', { title })} onClick={onOpen}>
                 <ExternalLink size={12} />
               </button>
             )}
@@ -1109,16 +1207,16 @@ function GridCard({
                   {...attributes}
                   {...listeners}
                   onDoubleClick={chrome ? undefined : onInteract}
-                  title={chrome ? '拖动排序' : '拖动排序;双击进入卡片'}
+                  title={chrome ? t('dashgrid.dragToReorder') : t('dashgrid.dragOrEnter')}
                 />
               )}
-              <button type="button" className="dash3-card-btn dash3-card-more" title="大小与更多" aria-label="设置卡片大小" onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); onMenu(Math.max(8, Math.min(r.left - 60, window.innerWidth - 196)), r.bottom + 4) }}>
+              <button type="button" className="dash3-card-btn dash3-card-more" title={t('dashgrid.sizeAndMore')} aria-label={t('dashgrid.setCardSize')} onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); onMenu(Math.max(8, Math.min(r.left - 60, window.innerWidth - 196)), r.bottom + 4) }}>
                 <MoreHorizontal size={12} />
               </button>
-              <button type="button" className="dash3-card-btn dash3-card-del" title="删除这张卡片" aria-label="删除这张卡片" onClick={(e) => { e.stopPropagation(); onDelete() }}>
+              <button type="button" className="dash3-card-btn dash3-card-del" title={t('dashgrid.deleteThisCard')} aria-label={t('dashgrid.deleteThisCard')} onClick={(e) => { e.stopPropagation(); onDelete() }}>
                 <Trash2 size={12} />
               </button>
-              {!chrome && <div className="dash3-grip" title="调整大小" onPointerDown={onGripDown} />}
+              {!chrome && <div className="dash3-grip" title={t('dashgrid.resize')} onPointerDown={onGripDown} />}
           </>
         )}
       </div>

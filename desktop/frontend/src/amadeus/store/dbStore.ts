@@ -4,6 +4,7 @@
  *  外部改动经 watcher 的 onDbExternalChange → reloadByPath 热重载;missing/corrupt 态另有「重试」手动 reload。 */
 import { create } from 'zustand'
 import type { DbFile } from '@amadeus-shared/db/schema'
+import { stampUpdatedRows } from '@amadeus-shared/db/stamp'
 import { amadeus } from '../api'
 import { kickAutomation } from './automationKick'
 
@@ -19,6 +20,13 @@ export interface DbEntry {
 
 interface DbStoreState {
   entries: Record<string, DbEntry>
+  /** 缓存代次:**整片作废**时 +1(目前只有切库,见 dbAggregateStore 末尾的 vaultRoot 订阅)。
+   *  存在的理由:消费者的加载 effect 依赖的是 `[pagePath, ref]`,清空 entries 不会让它们重跑 ——
+   *  于是「启动时 vault 还没打开就挂上的多维表」被清成 undefined 后**永远**停在「读取数据库…」
+   *  (用户实报:一进 ERP Space 就一直显示在加载)。把 gen 写进 deps,清空即重读。
+   *  **重读必然读得到**:清空是 restoreVault/switchSide 那一次 `set({ vaultRoot })` 触发的,而那时
+   *  IPC 早已返回 —— 主进程的 root 在 activateRoot 里就设好了。所以 gen 触发的这一发不会再撞空根。 */
+  gen: number
   /** 幂等加载:已 ok 的 ref 跳过(多个嵌入共用一次载入)。 */
   load(pagePath: string, ref: string): Promise<void>
   /** 强制重读(missing/corrupt 态「重试」)。 */
@@ -126,6 +134,7 @@ function set0(ref: string, fn: (e: DbEntry) => DbEntry): void {
 
 export const useDbStore = create<DbStoreState>((set, get) => ({
   entries: {},
+  gen: 0,
 
   async load(pagePath, ref) {
     const cur = get().entries[ref]
@@ -169,8 +178,11 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
   mutate(ref, fn) {
     const e = get().entries[ref]
     if (!e || e.status !== 'ok' || !e.data) return
-    const next = fn(e.data)
-    pendingOps.set(ref, [...(pendingOps.get(ref) ?? []), fn]) // 冲突时按同样的顺序重放到最新磁盘数据上
+    // `updated`(修改时间)列的盖章点:所有写口(setCell / 行操作 / 日历改期 / 看板拖动)都汇到这里。
+    // 盖章包在 op **里面**而不是只盖一次结果:CAS 冲突重放 / 外部热重载重放的是 op,裸 fn 重放会把章丢掉。
+    const op = (d: DbFile): DbFile => stampUpdatedRows(d, fn(d))
+    const next = op(e.data)
+    pendingOps.set(ref, [...(pendingOps.get(ref) ?? []), op]) // 冲突时按同样的顺序重放到最新磁盘数据上
     set((s) => ({ entries: { ...s.entries, [ref]: { ...e, data: next } } }))
     arm(ref)
   },

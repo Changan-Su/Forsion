@@ -74,8 +74,8 @@ async function main() {
   fs.writeFileSync(file, PNG)
 
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] })
-  const p = await ctx.newPage()
+  const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] })
+  const p = await ctx.newPage({ locale: 'zh-CN' })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent('# 真输入画布\n\n主卡一段。\n')}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })

@@ -26,6 +26,20 @@ import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGua
 import { flushUnifiedScopes, retireUnifiedPath } from '../unified/lifecycle'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'pagestore.error.renameUnsupportedType': { zh: '该文件类型不支持在标题栏改名', en: 'This file type cannot be renamed from the title bar' },
+  'pagestore.error.fdNameTaken': { zh: '目标名称已被同名 .fd 文件夹占用', en: 'That name is already taken by a .fd folder' },
+  'pagestore.error.moveIntoOwnSubpage': { zh: '不能移动到该笔记自己的子页面里', en: "A note can't be moved into its own subpages" },
+  'pagestore.error.fdExistsAtDest': { zh: '目标位置已存在同名 .fd 文件夹', en: 'A .fd folder with the same name already exists at the destination' },
+  'pagestore.error.fdMoveFailed': { zh: '子页面文件夹未跟随移动:{err}', en: "The subpage folder didn't move along with the note: {err}" },
+  'pagestore.notify.movedToTrash': { zh: '已移入回收站', en: 'Moved to trash' },
+  'pagestore.confirm.deleteEmbeddedBlock': {
+    zh: '有 {n} 处笔记嵌入了这个块，删除后那些嵌入会显示「丢失」。仍要删除？',
+    en: 'This block is embedded in {n} place(s). Those embeds will show as missing once it is deleted. Delete anyway?',
+  },
+})
 
 export interface BlockState {
   id: BlockId
@@ -695,7 +709,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         if (ext) {
           // 本 IPC 恒产出 .md 路径:非 .md 类插件后缀(注册面允许 '.xyz')走这条必然改坏类型,直接拒。
           if (!/\.md$/i.test(ext)) {
-            set({ error: '该文件类型不支持在标题栏改名' })
+            set({ error: translate('pagestore.error.renameUnsupportedType') })
             return false
           }
           newName = normalizePluginRename(newName, ext)
@@ -712,7 +726,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           const newFd = dir ? `${dir}/${base}.fd` : `${base}.fd`
           const { pages, folders, files } = get()
           if (newFd !== oldFd && (folders.includes(newFd) || pages.includes(newFd) || files.includes(newFd))) {
-            set({ error: '目标名称已被同名 .fd 文件夹占用' })
+            set({ error: translate('pagestore.error.fdNameTaken') })
             return false
           }
         }
@@ -920,7 +934,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
     async createChildNote(parentPath, name) {
       await get().flushSave() // 父笔记先落盘(正文与新子文件同批可见)
       const fd = fdDirOf(parentPath)
-      const stem = name.trim().replace(/[\\/]/g, '').replace(/\.md$/i, '') || '未命名'
+      const stem = name.trim().replace(/[\\/]/g, '').replace(/\.md$/i, '') || translate('amadeus.default.note')
       const { pages, files } = get()
       // 双重去重:全库 pageKey(保证父笔记里插入的 [[base]] 唯一解析到新子笔记)+ .fd 内同名文件。
       const globalKeys = new Set(pages.map(pageKey))
@@ -1008,7 +1022,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           set({ error: String(e) }) // 失败 = 孤儿 .fd,树里按普通文件夹可见,可手动处理
         }
       }
-      if (trash) useUiStore.getState().notify('已移入回收站')
+      if (trash) useUiStore.getState().notify(translate('pagestore.notify.movedToTrash'))
       await get().refreshStructure()
       await get().syncFdParentsOf([pagePath]) // 删的若是别人的 .fd 子文件,更新那位父亲的 children
       if (activeInside) {
@@ -1027,7 +1041,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const dst = destFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       if (hasFd) {
         if (dst === fd || dst.startsWith(`${fd}/`)) {
-          set({ error: '不能移动到该笔记自己的子页面里' })
+          set({ error: translate('pagestore.error.moveIntoOwnSubpage') })
           return
         }
         // 预检目标位置的同名 .fd,避免 .md 移完文件夹移不动的半级联。
@@ -1035,7 +1049,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         const fdDst = dst ? `${dst}/${fdName}` : fdName
         const { pages, folders, files } = get()
         if (fdDst !== fd && (folders.includes(fdDst) || pages.includes(fdDst) || files.includes(fdDst))) {
-          set({ error: '目标位置已存在同名 .fd 文件夹' })
+          set({ error: translate('pagestore.error.fdExistsAtDest') })
           return
         }
       }
@@ -1057,7 +1071,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
             if (activeInFd) set({ activePage: newFd + active.slice(fd.length) })
             remapScopePaths(fd, newFd, 'prefix')
           } catch (e) {
-            set({ error: `子页面文件夹未跟随移动:${String(e)}` })
+            set({ error: translate('pagestore.error.fdMoveFailed', { err: String(e) }) })
           }
         }
         await get().refreshStructure()
@@ -1108,7 +1122,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       try {
         if (amadeus.trashEntry) {
           await amadeus.trashEntry(folderPath)
-          useUiStore.getState().notify('已移入回收站')
+          useUiStore.getState().notify(translate('pagestore.notify.movedToTrash'))
         } else {
           await amadeus.deleteFolder(folderPath)
         }
@@ -1212,7 +1226,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           const refs = await amadeus.blockBacklinks(`${stripPageBasename(page)}#${id}`)
           if (refs.length > 0) {
             const ok = window.confirm(
-              `有 ${refs.length} 处笔记嵌入了这个块，删除后那些嵌入会显示「丢失」。仍要删除？`,
+              translate('pagestore.confirm.deleteEmbeddedBlock', { n: refs.length }),
             )
             if (!ok) return
           }

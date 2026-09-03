@@ -60,14 +60,14 @@ async function settle(page, want, ms = 9000) {
 }
 
 async function open(browser, { seed, ua } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...(ua ? { userAgent: ua } : {}) })
+  const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 800 }, ...(ua ? { userAgent: ua } : {}) })
   await ctx.addInitScript((sd) => {
     try {
       localStorage.setItem('forsion_token', 'uimode-check')
       if (sd) for (const [k, v] of sd) localStorage.setItem(k, v)
     } catch { /* ignore */ }
   }, seed || null)
-  const page = await ctx.newPage()
+  const page = await ctx.newPage({ locale: 'zh-CN' })
   await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"c"}' }))
   return { ctx, page }
 }

@@ -52,7 +52,7 @@ async function main() {
   }
 
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(shared, 'userdata')}`, ROOT],
+    args: [`--user-data-dir=${path.join(shared, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home }, // 不设 TANGU_BACKEND_URL → 桌面自己拉起真引擎
   })

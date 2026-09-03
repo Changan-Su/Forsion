@@ -37,6 +37,7 @@ import {
 import { canvasGridSnapEnabled, canvasMiniMapEnabled, setCanvasGridSnapEnabled, setCanvasMiniMapEnabled } from '@amadeus/unified/canvasPrefs'
 import { useTheme } from '../stores/themeStore'
 import { useApp } from '../stores/appStore'
+import { registerMessages, useI18n } from '../i18n'
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { Breadcrumb } from '../amadeusViews'
 import { importToPage } from '../amadeusImport'
@@ -45,6 +46,76 @@ import { WidgetCard, localTimeZone } from '@amadeus/dashboard/widgets'
 import { EMBED_DENY, ViewCard, ensureChartView, pickSpecOf } from './dashboardViewCard'
 import '@amadeus/blocks'
 import './dashCanvas.css'
+
+registerMessages({
+  'dashcanvas.add.text': { zh: '文本块', en: 'Text block' },
+  'dashcanvas.add.chart': { zh: '图表(多维表)…', en: 'Chart (database)…' },
+  'dashcanvas.add.clock': { zh: '时钟', en: 'Clock' },
+  'dashcanvas.add.weather': { zh: '天气', en: 'Weather' },
+  'dashcanvas.add.webview': { zh: '网页', en: 'Web page' },
+  'dashcanvas.pick.chartTitle': { zh: '图表 — 选一份多维表(.db)…', en: 'Chart — pick a database (.db)…' },
+  'dashcanvas.pick.viewCardTitle': { zh: '选择要放进「{name}」卡片的文件…', en: 'Pick the file to put in the "{name}" card…' },
+  'dashcanvas.ask.weatherTitle': { zh: '天气卡片 — 城市', en: 'Weather card — city' },
+  'dashcanvas.ask.webviewTitle': { zh: '网页卡片 — 地址', en: 'Web page card — address' },
+  'dashcanvas.ask.renameTitle': { zh: '重命名仪表盘', en: 'Rename dashboard' },
+  'dashcanvas.toast.webviewBlocked': {
+    zh: '只允许公网 http(s) 地址(拒绝 file/data、localhost 与内网)',
+    en: 'Only public http(s) addresses are allowed (file/data, localhost and private networks are rejected)',
+  },
+  'dashcanvas.toast.gridUnreadable': {
+    zh: '这份笔记里已有一份读不出来的网格布局,已停手 —— 请先修好 frontmatter',
+    en: 'This note already contains a grid layout that cannot be read, so nothing was changed — please fix the frontmatter first',
+  },
+  'dashcanvas.toast.deleteFailed': { zh: '删除失败:{error}', en: 'Delete failed: {error}' },
+  'dashcanvas.toast.deleted': { zh: '已删除', en: 'Deleted' },
+  'dashcanvas.confirm.delete': { zh: '删除仪表盘「{name}」?', en: 'Delete the dashboard "{name}"?' },
+  'dashcanvas.noFile': { zh: '未指定仪表盘文件。', en: 'No dashboard file specified.' },
+  'dashcanvas.embedUnsupported': { zh: '视图「{type}」不支持嵌入卡片', en: 'The "{type}" view cannot be embedded in a card' },
+  'dashcanvas.card.delete': { zh: '删除这张卡片', en: 'Delete this card' },
+  'dashcanvas.card.resize': { zh: '调整大小', en: 'Resize' },
+  'dashcanvas.toolbar.unpin': { zh: '取消置顶', en: 'Unpin' },
+  'dashcanvas.toolbar.pin': { zh: '置顶', en: 'Pin' },
+  'dashcanvas.toolbar.resetView': { zh: '重置画板视图(100%)', en: 'Reset board view (100%)' },
+  'dashcanvas.toolbar.unlock': { zh: '解锁编辑(可拖动/缩放/改内容)', en: 'Unlock for editing (drag, resize, change content)' },
+  'dashcanvas.toolbar.lock': { zh: '锁定(浏览模式)', en: 'Lock (browse mode)' },
+  'dashcanvas.toolbar.editLayout': { zh: '编辑布局', en: 'Edit layout' },
+  'dashcanvas.toolbar.done': { zh: '完成', en: 'Done' },
+  'dashcanvas.toolbar.addCard': { zh: '添加卡片', en: 'Add card' },
+  'dashcanvas.toolbar.more': { zh: '更多操作', en: 'More actions' },
+  'dashcanvas.menu.viewsSep': { zh: '视图', en: 'Views' },
+  'dashcanvas.menu.enterCard': { zh: '进入卡片', en: 'Enter card' },
+  'dashcanvas.menu.deleteN': { zh: '删除 {n} 张卡片', en: 'Delete {n} cards' },
+  'dashcanvas.menu.addCard': { zh: '添加卡片…', en: 'Add card…' },
+  'dashcanvas.menu.fitContent': { zh: '适应内容', en: 'Fit to content' },
+  'dashcanvas.menu.switchToGrid': { zh: '切换到结构化网格', en: 'Switch to structured grid' },
+  'dashcanvas.menu.rename': { zh: '重命名', en: 'Rename' },
+  'dashcanvas.action.delete': { zh: '删除', en: 'Delete' },
+  'dashcanvas.banner.badFrontmatter': {
+    zh: '这份笔记的 frontmatter 无法解析({error}),布局已冻结、不会自动改写。请先修好 YAML。',
+    en: 'The frontmatter of this note cannot be parsed ({error}), so the layout is frozen and will not be rewritten. Please fix the YAML first.',
+  },
+  'dashcanvas.banner.legacy': {
+    zh: '这是旧版(网格)仪表盘。转换为画布版后卡片可自由摆放;原网格布局键保留在文件里作为回滚保险。',
+    en: 'This is a legacy (grid) dashboard. Convert it to the canvas version to place cards freely; the original grid layout key stays in the file as a rollback safety net.',
+  },
+  'dashcanvas.banner.legacyBtn': { zh: '转换为画布版', en: 'Convert to canvas' },
+  'dashcanvas.banner.canvasA': {
+    zh: '这份仪表盘是自由摆位的。转成自动排版后,卡片按顺序流进网格、随窗口重排,不会再出现拉伸和空洞;原布局键',
+    en: 'This dashboard uses free positioning. Switch to auto layout and the cards flow into a grid in order and reflow with the window, so stretching and gaps disappear. The original layout key',
+  },
+  'dashcanvas.banner.canvasB': {
+    zh: '保留在文件里,随时可以从「更多 → 切换到自由摆位」切回来。',
+    en: 'stays in the file, so you can switch back any time from More → Switch to free positioning.',
+  },
+  'dashcanvas.banner.canvasBtnGrid': { zh: '转成自动排版', en: 'Switch to auto layout' },
+  'dashcanvas.banner.canvasBtnKeep': { zh: '保持自由摆位', en: 'Keep free positioning' },
+  'dashcanvas.banner.stale': {
+    zh: '布局记录的块 id 与当前块对不上(笔记可能被重编号过),已停止自动重排以免丢失布局。',
+    en: 'The block ids recorded in the layout do not match the current blocks (the note may have been renumbered), so auto-reflow stopped to avoid losing the layout.',
+  },
+  'dashcanvas.banner.staleBtn': { zh: '按当前顺序重排', en: 'Reflow in current order' },
+  'dashcanvas.empty': { zh: '空仪表盘 —— 解锁后用 ＋ 添加卡片。', en: 'Empty dashboard — unlock it and use ＋ to add a card.' },
+})
 
 const NARROW_PX = 720
 /** 仪表盘的起始/重置视口；实际 x/y 会按宿主尺寸居中并受固定画板边界约束。 */
@@ -135,12 +206,13 @@ const VIEW_CARD_H = 336
 const MINI_CARD_W = 264
 const MINI_CARD_H = 144
 
+/** ⚠️ 模块级表只存**键**,文案在渲染时 `t()` —— 存字面量会冻在模块加载那一刻,切语言不更新。 */
 const ADD_MENU = [
-  { key: 'text', label: '文本块', icon: Type },
-  { key: 'chart', label: '图表(多维表)…', icon: BarChart3 },
-  { key: 'clock', label: '时钟', icon: Clock },
-  { key: 'weather', label: '天气', icon: CloudSun },
-  { key: 'webview', label: '网页', icon: Globe },
+  { key: 'text', labelKey: 'dashcanvas.add.text', icon: Type },
+  { key: 'chart', labelKey: 'dashcanvas.add.chart', icon: BarChart3 },
+  { key: 'clock', labelKey: 'dashcanvas.add.clock', icon: Clock },
+  { key: 'weather', labelKey: 'dashcanvas.add.weather', icon: CloudSun },
+  { key: 'webview', labelKey: 'dashcanvas.add.webview', icon: Globe },
 ] as const
 
 export function DashboardCanvasView(props: ViewProps) {
@@ -152,6 +224,7 @@ export function DashboardCanvasView(props: ViewProps) {
 }
 
 function CanvasInner({ leaf }: ViewProps) {
+  const { t } = useI18n()
   const store = useScopedPageStore()
   const dashPath = typeof leaf.params.dashPath === 'string' ? leaf.params.dashPath : ''
   const locked = leaf.params.locked !== false // 缺席即锁(旧版同款):锁上=不能拖/加/删,双击看内容照旧
@@ -331,8 +404,8 @@ function CanvasInner({ leaf }: ViewProps) {
     // **都会通过**,旧几何就写进了新页;②A→B→A 往返后路径相同但已是另一份文档(Codex 评审;
     // 与 pageStore 里 deleteBlock 反链确认的那条同源纪律)。
     identity: () => { const st = store.getState(); return st.activePage === dashPath ? st.loadNonce : {} },
-    hitKey: (t) => (t.closest('.dash2-card') as HTMLElement | null)?.dataset.key ?? null,
-    hitEdge: (t) => ((t.closest('[data-edge]') as HTMLElement | null)?.dataset.edge as ResizeEdge | undefined) ?? null,
+    hitKey: (el) => (el.closest('.dash2-card') as HTMLElement | null)?.dataset.key ?? null,
+    hitEdge: (el) => ((el.closest('[data-edge]') as HTMLElement | null)?.dataset.edge as ResizeEdge | undefined) ?? null,
     // ⚠️ 这里**不能**加 `!locked`:成品页也有交互态(双击进卡片),加上就等于「进去了也点不动」。
     //    Codex 评审提的「锁定时 isEditing 还是 true」那条,正解是下面那个 **useLayoutEffect**:
     //    locked 一翻真就把 interactId / 选区 / 菜单一次清干净,让这个函数自然回到 false。
@@ -402,7 +475,7 @@ function CanvasInner({ leaf }: ViewProps) {
       if (kindKey === 'chart') {
         const path = await new Promise<string | null>((resolve) => {
           useQuickFind.getState().openPicker({
-            title: '图表 — 选一份多维表(.db)…',
+            title: t('dashcanvas.pick.chartTitle'),
             accept: (_k: string, p: string) => fileMatchViewType(p) === 'amadeus-db',
             onPick: (p: string) => resolve(p),
           })
@@ -418,14 +491,15 @@ function CanvasInner({ leaf }: ViewProps) {
       let content = ''
       if (kindKey === 'clock') content = widgetSource('clock', { tz: localTimeZone() })
       else if (kindKey === 'weather') {
-        const city = await askString('天气卡片 — 城市', '上海')
+        // '上海' 是**落盘值**的种子(写进 `weather` 围栏并当作地理编码查询串),不翻译。
+        const city = await askString(t('dashcanvas.ask.weatherTitle'), '上海')
         if (!city?.trim()) return
         content = widgetSource('weather', { city: city.trim() })
       } else if (kindKey === 'webview') {
-        const url = await askString('网页卡片 — 地址', 'https://')
+        const url = await askString(t('dashcanvas.ask.webviewTitle'), 'https://')
         if (!url?.trim()) return
         if (!webviewUrlAllowed(url.trim())) {
-          useApp.getState().toast('只允许公网 http(s) 地址(拒绝 file/data、localhost 与内网)', true)
+          useApp.getState().toast(t('dashcanvas.toast.webviewBlocked'), true)
           return
         }
         content = widgetSource('webview', { url: url.trim() })
@@ -451,7 +525,7 @@ function CanvasInner({ leaf }: ViewProps) {
     if (!item.spec) { insertCard(widgetSource('view', { type: item.type }), VIEW_CARD_W, VIEW_CARD_H); return }
     const { param, accept } = item.spec
     useQuickFind.getState().openPicker({
-      title: `选择要放进「${item.name}」卡片的文件…`,
+      title: t('dashcanvas.pick.viewCardTitle', { name: item.name }),
       accept,
       onPick: (path) => { insertCard(widgetSource('view', { type: item.type, [param]: path }), VIEW_CARD_W, VIEW_CARD_H) },
     })
@@ -468,7 +542,7 @@ function CanvasInner({ leaf }: ViewProps) {
     // ⚠️ 文件里可能已经有一份**读不懂**的 dashboard3(合法 YAML、非法布局)。不先要求它读得通就写,
     //    等于用迁移结果把用户原来的网格布局永久盖掉 —— 与「读不懂即冻结」正好相反(Codex 评审 P1)。
     if (!readDash3Layout(cur).ok) {
-      useApp.getState().toast('这份笔记里已有一份读不出来的网格布局,已停手 —— 请先修好 frontmatter', true)
+      useApp.getState().toast(t('dashcanvas.toast.gridUnreadable'), true)
       return
     }
     const withLayout = setDash3InFm(cur, migrateCanvasToGrid(fresh.layout))
@@ -495,7 +569,7 @@ function CanvasInner({ leaf }: ViewProps) {
 
   const noSensors = useSensors()
 
-  if (!dashPath) return <div className="amx-draw-state">未指定仪表盘文件。</div>
+  if (!dashPath) return <div className="amx-draw-state">{t('dashcanvas.noFile')}</div>
 
   const orderedIds = narrow
     ? [...ids].sort((a, b) => (layout[a]?.y ?? 0) - (layout[b]?.y ?? 0) || (layout[a]?.x ?? 0) - (layout[b]?.x ?? 0))
@@ -504,12 +578,12 @@ function CanvasInner({ leaf }: ViewProps) {
   const renderBody = (id: string): ReactNode => {
     const widget = parseWidget(blocks[id]?.content ?? '')
     if (widget?.kind === 'view') {
-      const t = widget.opts.type ?? ''
+      const vt = widget.opts.type ?? ''
       // ⚠️ 白名单必须在**渲染入口**复查,不能只做添加菜单的过滤:卡片源码是 md 文本,同步/共享/
       // 手写都能塞进任意注册键,那样 embeddable 就只是建议而不是安全边界(Codex 评审)。
-      const def = getView(t)
-      if (!def || EMBED_DENY.has(t) || !def.embeddable) {
-        return <div className="dash-widget"><div className="dash-widget-note">视图「{t}」不支持嵌入卡片</div></div>
+      const def = getView(vt)
+      if (!def || EMBED_DENY.has(vt) || !def.embeddable) {
+        return <div className="dash-widget"><div className="dash-widget-note">{t('dashcanvas.embedUnsupported', { type: vt })}</div></div>
       }
       return <ViewCard dashLeafId={leaf.id} dashPath={dashPath} blockId={id} opts={widget.opts} onClose={() => removeCard(id)} />
     }
@@ -546,13 +620,13 @@ function CanvasInner({ leaf }: ViewProps) {
             `isEditing` / CARD_CTL 放行)。双态都不再另铺一层透明罩。 */}
         <div className="dash-card-body dash2-card-body">{renderBody(id)}</div>
         {!locked && !interacting && (
-          <button className="dash-card-del dash2-del" title="删除这张卡片" onClick={() => removeCard(id)}>
+          <button className="dash-card-del dash2-del" title={t('dashcanvas.card.delete')} onClick={() => removeCard(id)}>
             <Trash2 size={12} />
           </button>
         )}
         {/* 八向把手直接复用画布的 `.amx-card-size-grip`。 */}
         {!locked && !interacting && selected && RESIZE_EDGES.map((edge) => (
-          <div key={edge} className={`amx-card-size-grip is-${edge}`} data-edge={edge} title="调整大小" />
+          <div key={edge} className={`amx-card-size-grip is-${edge}`} data-edge={edge} title={t('dashcanvas.card.resize')} />
         ))}
       </div>
     )
@@ -582,27 +656,27 @@ function CanvasInner({ leaf }: ViewProps) {
         <Breadcrumb />
         <button
           className={`amx-mode-btn amx-pin-btn${pinned ? ' amx-pin-on' : ''}`}
-          title={pinned ? '取消置顶' : '置顶'}
+          title={pinned ? t('dashcanvas.toolbar.unpin') : t('dashcanvas.toolbar.pin')}
           onClick={() => useAmadeusPrefs.getState().togglePin(dashPath)}
         >
           <Pin size={14} />
         </button>
         {!locked && (
-          <button className="amx-mode-btn" title="重置画板视图(100%)" onClick={() => view.reset()}>
+          <button className="amx-mode-btn" title={t('dashcanvas.toolbar.resetView')} onClick={() => view.reset()}>
             <Maximize2 size={14} />
           </button>
         )}
         <button
           className={`amx-mode-btn dash2-mode-btn${locked ? '' : ' amx-pin-on'}`}
-          title={locked ? '解锁编辑(可拖动/缩放/改内容)' : '锁定(浏览模式)'}
+          title={locked ? t('dashcanvas.toolbar.unlock') : t('dashcanvas.toolbar.lock')}
           onClick={() => leaf.setParams({ ...leaf.params, locked: !locked })}
         >
           {locked ? <Pencil size={13} /> : <Check size={14} />}
-          <span>{locked ? '编辑布局' : '完成'}</span>
+          <span>{locked ? t('dashcanvas.toolbar.editLayout') : t('dashcanvas.toolbar.done')}</span>
         </button>
         {!locked && (
           <div className="dash-add-wrap">
-            <button className="amx-mode-btn" title="添加卡片" onClick={(e) => { e.stopPropagation(); setAddMenu((v) => !v) }}>
+            <button className="amx-mode-btn" title={t('dashcanvas.toolbar.addCard')} onClick={(e) => { e.stopPropagation(); setAddMenu((v) => !v) }}>
               <Plus size={14} />
             </button>
             {addMenu && (
@@ -611,10 +685,10 @@ function CanvasInner({ leaf }: ViewProps) {
                 <div ref={addMenuFix.ref} className="dash-add-menu" style={addMenuFix.style}>
                   {ADD_MENU.map((a) => (
                     <button key={a.key} onClick={() => addCard(a.key)}>
-                      <a.icon size={13} /> {a.label}
+                      <a.icon size={13} /> {t(a.labelKey)}
                     </button>
                   ))}
-                  {viewItems.length > 0 && <div className="dash-menu-sep">视图</div>}
+                  {viewItems.length > 0 && <div className="dash-menu-sep">{t('dashcanvas.menu.viewsSep')}</div>}
                   {viewItems.map((v) => (
                     <button key={v.type} onClick={() => addViewCard(v)} title={v.type}>
                       <v.Icon size={13} /> {v.name}{v.spec ? '…' : ''}
@@ -627,7 +701,7 @@ function CanvasInner({ leaf }: ViewProps) {
         )}
         <button
           className="amx-mode-btn amx-more-btn"
-          title="更多操作"
+          title={t('dashcanvas.toolbar.more')}
           onClick={(e) => {
             e.stopPropagation()
             const r = e.currentTarget.getBoundingClientRect()
@@ -640,27 +714,27 @@ function CanvasInner({ leaf }: ViewProps) {
 
       {!read2.ok && (
         <div className="dash-banner dash-banner-warn">
-          这份笔记的 frontmatter 无法解析({read2.error}),布局已冻结、不会自动改写。请先修好 YAML。
+          {t('dashcanvas.banner.badFrontmatter', { error: read2.error })}
         </div>
       )}
       {migratable && (
         <div className="dash-banner">
-          这是旧版(网格)仪表盘。转换为画布版后卡片可自由摆放;原网格布局键保留在文件里作为回滚保险。
-          <button onClick={() => { if (readLegacy.ok) applyLayout(migrateGridToCanvas(readLegacy.layout)) }}>转换为画布版</button>
+          {t('dashcanvas.banner.legacy')}
+          <button onClick={() => { if (readLegacy.ok) applyLayout(migrateGridToCanvas(readLegacy.layout)) }}>{t('dashcanvas.banner.legacyBtn')}</button>
         </div>
       )}
       {read2.ok && Object.keys(layout).length > 0 && (
         <div className="dash-banner">
-          这份仪表盘是自由摆位的。转成自动排版后,卡片按顺序流进网格、随窗口重排,不会再出现拉伸和空洞;
-          原布局键 <code>dashboard2:</code> 保留在文件里,随时可以从「更多 → 切换到自由摆位」切回来。
-          <button onClick={upgradeToGrid}>转成自动排版</button>
-          <button onClick={keepCanvas}>保持自由摆位</button>
+          {/* ⚠️ 这一行不要折行:JSX 会吃掉贴着换行的空格,`<code>` 两侧就粘成一坨。 */}
+          {t('dashcanvas.banner.canvasA')} <code>dashboard2:</code> {t('dashcanvas.banner.canvasB')}
+          <button onClick={upgradeToGrid}>{t('dashcanvas.banner.canvasBtnGrid')}</button>
+          <button onClick={keepCanvas}>{t('dashcanvas.banner.canvasBtnKeep')}</button>
         </div>
       )}
       {stale && (
         <div className="dash-banner">
-          布局记录的块 id 与当前块对不上(笔记可能被重编号过),已停止自动重排以免丢失布局。
-          <button onClick={() => applyLayout(reconcileCanvas({}, ids) ?? {})}>按当前顺序重排</button>
+          {t('dashcanvas.banner.stale')}
+          <button onClick={() => applyLayout(reconcileCanvas({}, ids) ?? {})}>{t('dashcanvas.banner.staleBtn')}</button>
         </div>
       )}
 
@@ -679,13 +753,13 @@ function CanvasInner({ leaf }: ViewProps) {
               {orderedIds.map((id) => (
                 <div key={id} className="dash2-list-card">{renderBody(id)}</div>
               ))}
-              {!ids.length && <div className="dash2-empty">空仪表盘 —— 解锁后用 ＋ 添加卡片。</div>}
+              {!ids.length && <div className="dash2-empty">{t('dashcanvas.empty')}</div>}
             </div>
           ) : locked ? (
             /* 成品页直接占满宿主。卡片用逻辑画板百分比定位，宽高随 View 各自响应，文字不被 scale。 */
             <div className="dash2-stage dash2-stage--responsive">
               {ids.map((id) => renderCanvasCard(id, true))}
-              {!ids.length && <div className="dash2-empty dash2-empty-stage">空仪表盘 —— 解锁后用 ＋ 添加卡片。</div>}
+              {!ids.length && <div className="dash2-empty dash2-empty-stage">{t('dashcanvas.empty')}</div>}
             </div>
           ) : (
             <>
@@ -707,7 +781,7 @@ function CanvasInner({ leaf }: ViewProps) {
                   {gest.marquee && (
                     <div className="amx-el-marquee" style={{ left: gest.marquee.x, top: gest.marquee.y, width: gest.marquee.w, height: gest.marquee.h }} />
                   )}
-                  {!ids.length && <div className="dash2-empty dash2-empty-stage">空仪表盘 —— 解锁后用 ＋ 添加卡片。</div>}
+                  {!ids.length && <div className="dash2-empty dash2-empty-stage">{t('dashcanvas.empty')}</div>}
                 </div>
               </div>
               {!locked && mini && (
@@ -746,15 +820,17 @@ function CanvasInner({ leaf }: ViewProps) {
           <div ref={menuFix.ref} className="dash-add-menu" style={{ position: 'fixed', left: menu.x, top: menu.y, ...menuFix.style }}>
             {menu.key ? (
               <>
-                <button onClick={() => { const k = menu.key!; setMenu(null); setInteractId(k); gest.setSel([k]) }}>进入卡片</button>
+                <button onClick={() => { const k = menu.key!; setMenu(null); setInteractId(k); gest.setSel([k]) }}>{t('dashcanvas.menu.enterCard')}</button>
                 <button className="dash-danger" onClick={() => { const keys = gest.sel.includes(menu.key!) ? gest.sel : [menu.key!]; setMenu(null); keys.forEach(removeCard) }}>
-                  删除{gest.sel.length > 1 && gest.sel.includes(menu.key) ? ` ${gest.sel.length} 张卡片` : ''}
+                  {gest.sel.length > 1 && gest.sel.includes(menu.key)
+                    ? t('dashcanvas.menu.deleteN', { n: gest.sel.length })
+                    : t('dashcanvas.action.delete')}
                 </button>
               </>
             ) : (
               <>
-                <button onClick={() => { setMenu(null); setAddMenu(true) }}>添加卡片…</button>
-                <button onClick={() => { setMenu(null); const boxes = ids.map((id) => layout[id]).filter(Boolean); boxes.length ? view.fitTo(boxes) : view.reset() }}>适应内容</button>
+                <button onClick={() => { setMenu(null); setAddMenu(true) }}>{t('dashcanvas.menu.addCard')}</button>
+                <button onClick={() => { setMenu(null); const boxes = ids.map((id) => layout[id]).filter(Boolean); boxes.length ? view.fitTo(boxes) : view.reset() }}>{t('dashcanvas.menu.fitContent')}</button>
               </>
             )}
           </div>
@@ -776,13 +852,13 @@ function CanvasInner({ leaf }: ViewProps) {
                 if (text !== null && text !== cur) st.setFmExtra(text)
               }}
             >
-              切换到结构化网格
+              {t('dashcanvas.menu.switchToGrid')}
             </button>
             <button
               onClick={() => {
                 setNoteMenu(null)
                 void (async () => {
-                  const name = (await askString('重命名仪表盘', dashBaseName(dashPath)))?.trim().replace(/[\\/]/g, '')
+                  const name = (await askString(t('dashcanvas.ask.renameTitle'), dashBaseName(dashPath)))?.trim().replace(/[\\/]/g, '')
                   if (!name) return
                   const ok = await store.getState().renamePage(`${name}.dashboard`)
                   const next = store.getState().activePage
@@ -790,22 +866,22 @@ function CanvasInner({ leaf }: ViewProps) {
                 })()
               }}
             >
-              重命名
+              {t('dashcanvas.menu.rename')}
             </button>
             <button
               className="dash-danger"
               onClick={() => {
                 setNoteMenu(null)
-                if (!window.confirm(`删除仪表盘「${dashBaseName(dashPath)}」?`)) return
+                if (!window.confirm(t('dashcanvas.confirm.delete', { name: dashBaseName(dashPath) }))) return
                 void store.getState().deletePage(dashPath).then(() => {
                   const err = store.getState().error
-                  if (err) { useApp.getState().toast(`删除失败:${err}`, true); return }
-                  useApp.getState().toast('已删除')
+                  if (err) { useApp.getState().toast(t('dashcanvas.toast.deleteFailed', { error: err }), true); return }
+                  useApp.getState().toast(t('dashcanvas.toast.deleted'))
                   useWorkspace.getState().closeLeaf(leaf.id) // leaf 攥着已删路径必须关(旧版 Codex 实证)
                 })
               }}
             >
-              删除
+              {t('dashcanvas.action.delete')}
             </button>
           </div>
         </>

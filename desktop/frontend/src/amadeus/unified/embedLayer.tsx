@@ -39,6 +39,40 @@ import { amadeus } from '../api'
 import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
 import { getAttachmentPrefs } from '../lib/attachments'
+import { registerMessages, subscribeLocale, translate } from '../../i18n'
+
+registerMessages({
+  'uembed.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
+  'uembed.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the system default app' },
+  'uembed.openPdfInTab': { zh: '在 Forsion 标签页中打开(可批注)', en: 'Open in a Forsion tab (with annotations)' },
+  'uembed.open': { zh: '打开 ↗', en: 'Open ↗' },
+  'uembed.startAt': { zh: '起播时刻', en: 'Start time' },
+  'uembed.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
+  'uembed.badAnchorTip': {
+    zh: '只认 #t=95 / #t=01:35 / #t=1:02:30(MM 与 SS 须两位)',
+    en: 'Only #t=95 / #t=01:35 / #t=1:02:30 are recognized (MM and SS must be two digits)',
+  },
+  'uembed.collapse': { zh: '收起', en: 'Collapse' },
+  'uembed.expand': { zh: '展开', en: 'Expand' },
+  'uembed.loadingPdf': { zh: '加载 PDF…', en: 'Loading PDF…' },
+  'uembed.crossNote': { zh: '跨笔记嵌入（只读）', en: 'Cross-note embed (read-only)' },
+  'uembed.badge': { zh: '↪ 嵌入', en: '↪ Embed' },
+  'uembed.editAtSource': { zh: '去源头编辑', en: 'Edit at the source' },
+  'uembed.resolving': { zh: '解析中…', en: 'Resolving…' },
+  'uembed.embedMissing': { zh: '嵌入丢失：', en: 'Embed missing: ' },
+})
+
+/**
+ * ⚠️ 本层的组件挂在 `createRoot` 建的**独立 React 树**上(装饰 widget,见下方 buildDecos),
+ * LocaleProvider 的 context 跨不过 root 边界 —— 在这里调 `useI18n()` 会命中它的「无 Provider」
+ * 降级分支,**恒返回中文**,英文界面下静默失效。所以走模块级 `translate()`(读的是 Provider
+ * 同步维护的 `_locale` 快照)+ `subscribeLocale` 订阅,切语言时把这棵独立树重渲一遍。
+ */
+function useT(): (key: string, vars?: Record<string, unknown>) => string {
+  const [, bump] = useState(0)
+  useEffect(() => subscribeLocale(() => bump((n) => n + 1)), [])
+  return translate
+}
 
 const PdfEmbedViewer = lazyRetry(() => import('../pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 const noop = (): void => {}
@@ -132,6 +166,7 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
   /** 截帧要在本块之后插入「图片 + 回源锚点」两段。 */
   insertAfter?: (md: string) => void
 }): ReactElement {
+  const t = useT()
   const files = usePageStore((s) => s.files)
   const openWikiLink = usePageStore((s) => s.openWikiLink)
   const [open, setOpen] = useState(true)
@@ -144,11 +179,11 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
           if (/\.[a-z0-9]+\.md$/i.test(name)) openWikiLink(name, pagePath)
           else void amadeus.openAttachment(pagePath, name)
         }}
-        title={/\.[a-z0-9]+\.md$/i.test(name) ? '在 Forsion 标签页中打开' : '用系统默认程序打开'}
+        title={/\.[a-z0-9]+\.md$/i.test(name) ? t('uembed.openInTab') : t('uembed.openWithSystem')}
       >
         <span className="embed-file-ic" aria-hidden>📄</span>
         <span className="embed-file-name">{name}</span>
-        <span className="embed-file-open">打开 ↗</span>
+        <span className="embed-file-open">{t('uembed.open')}</span>
       </button>
     )
   }
@@ -160,26 +195,26 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
       <div className="embed-media-head">
         <span className="embed-file-ic" aria-hidden>{fileKind === 'pdf' ? '📕' : fileKind === 'video' ? '🎬' : '🎵'}</span>
         <span className="embed-file-name">{name}</span>
-        {loc && <span className="embed-media-at" title="起播时刻">@{mediaLabel(loc.at)}{loc.to ? `–${mediaLabel(loc.to)}` : ''}</span>}
+        {loc && <span className="embed-media-at" title={t('uembed.startAt')}>@{mediaLabel(loc.at)}{loc.to ? `–${mediaLabel(loc.to)}` : ''}</span>}
         {badAnchor && (
-          <span className="embed-media-warn" title="只认 #t=95 / #t=01:35 / #t=1:02:30(MM 与 SS 须两位)">锚点无效 · 从 0 秒起播</span>
+          <span className="embed-media-warn" title={t('uembed.badAnchorTip')}>{t('uembed.badAnchor')}</span>
         )}
-        <button className="embed-media-btn" onClick={() => setOpen((o) => !o)}>{open ? '收起' : '展开'}</button>
+        <button className="embed-media-btn" onClick={() => setOpen((o) => !o)}>{open ? t('uembed.collapse') : t('uembed.expand')}</button>
         <button
           className="embed-media-btn"
-          title={fileKind === 'pdf' ? '在 Forsion 标签页中打开(可批注)' : '用系统默认程序打开'}
+          title={fileKind === 'pdf' ? t('uembed.openPdfInTab') : t('uembed.openWithSystem')}
           onClick={() => {
             if (fileKind === 'pdf') openWikiLink(name, pagePath)
             else void amadeus.openAttachment(pagePath, name)
           }}
         >
-          打开 ↗
+          {t('uembed.open')}
         </button>
       </div>
       {open && fileKind === 'pdf' && (
         pdfVaultPath ? (
           <div className="embed-pdf embed-pdf-live">
-            <Suspense fallback={<div className="embed-pdf-loading">加载 PDF…</div>}>
+            <Suspense fallback={<div className="embed-pdf-loading">{t('uembed.loadingPdf')}</div>}>
               <PdfEmbedViewer pdfPath={pdfVaultPath} readOnly />
             </Suspense>
           </div>
@@ -196,6 +231,7 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
 }
 
 function CrossNoteEmbed({ target }: { target: string }): ReactElement {
+  const t = useT()
   const openWikiLink = usePageStore((s) => s.openWikiLink)
   const loadPage = usePageStore((s) => s.loadPage)
   const pages = usePageStore((s) => s.pages)
@@ -215,15 +251,15 @@ function CrossNoteEmbed({ target }: { target: string }): ReactElement {
   return (
     <div className="embed-body">
       <div className="embed-head">
-        <span className="embed-badge" title="跨笔记嵌入（只读）">↪ 嵌入</span>
+        <span className="embed-badge" title={t('uembed.crossNote')}>{t('uembed.badge')}</span>
         {embed && embed !== 'loading' && (
-          <button className="embed-src" onClick={() => void loadPage(embed.owner)} title="去源头编辑">
+          <button className="embed-src" onClick={() => void loadPage(embed.owner)} title={t('uembed.editAtSource')}>
             {stripPageBasename(embed.owner)} ↗
           </button>
         )}
       </div>
       {embed === 'loading' ? (
-        <div className="embed-loading">解析中…</div>
+        <div className="embed-loading">{t('uembed.resolving')}</div>
       ) : embed && EmbedEditor ? (
         <EmbedEditor
           blockId="uembed"
@@ -243,7 +279,7 @@ function CrossNoteEmbed({ target }: { target: string }): ReactElement {
           getPageNames={() => pages}
         />
       ) : (
-        <div className="embed-missing">嵌入丢失：<code>{target}</code></div>
+        <div className="embed-missing">{t('uembed.embedMissing')}<code>{target}</code></div>
       )}
     </div>
   )

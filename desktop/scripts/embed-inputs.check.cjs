@@ -50,7 +50,7 @@ const record = (name, ok, detail) => {
 
 /** 每例一张干净的页:?upage 起 → 种 .db 与正文 → 等表格画出来。extra 追加查询串(如 '&caret')。 */
 async function fresh(browser, extra = '') {
-  const p = await browser.newPage()
+  const p = await browser.newPage({ locale: 'zh-CN' })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage${extra}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })

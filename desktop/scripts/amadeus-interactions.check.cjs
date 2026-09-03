@@ -59,7 +59,7 @@ async function main() {
 
   // 用户从普通段落输入触发符后的第一拍：必须已经是渲染态，而不是因为编辑器仍聚焦就把
   // Markdown 源码 input 常驻在行首。空列表项尤其能暴露光标是否被这个装饰挤偏。
-  const triggerPage = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const triggerPage = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   triggerPage.on('pageerror', (error) => console.log('[pageerror:trigger]', error.message))
   await triggerPage.goto(`${URL}?upage&upane&caret&useed=${encodeURIComponent('触发行\n')}`, { waitUntil: 'domcontentloaded' })
   await triggerPage.waitForSelector(`${PM} > p`, { timeout: 20000 })
@@ -122,7 +122,7 @@ async function main() {
   await triggerPage.close()
 
   // 精确复现用户截图：空列表本来带 slash 占位提示；进入 `- ` 字面源码后，提示不能压住连字符。
-  const emptyListPage = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const emptyListPage = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   await emptyListPage.goto(`${URL}?upage&upane&caret&useed=${encodeURIComponent('\n')}`, { waitUntil: 'domcontentloaded' })
   await emptyListPage.waitForSelector(PM, { timeout: 20000 })
   await emptyListPage.click(PM)
@@ -160,7 +160,7 @@ async function main() {
   await emptyListPage.screenshot({ path: path.join(os.tmpdir(), 'amadeus-empty-list-prefix.png'), fullPage: true })
   await emptyListPage.close()
 
-  const orderedSourcePage = await browser.newPage({ viewport: { width: 1000, height: 500 } })
+  const orderedSourcePage = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 500 } })
   await orderedSourcePage.goto(`${URL}?upage&upane&useed=${encodeURIComponent('1. 有序项\n')}`, { waitUntil: 'domcontentloaded' })
   await orderedSourcePage.waitForSelector(`${PM} li p`, { timeout: 20000 })
   await orderedSourcePage.click(`${PM} li p`)
@@ -193,7 +193,7 @@ async function main() {
   // 偶发只同步选区、第二下才删边界空格。连续重开覆盖这条竞态，不能靠单次碰巧通过。
   const headingBackspaceRuns = []
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    const p = await browser.newPage({ viewport: { width: 1000, height: 500 } })
+    const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 500 } })
     await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent('## 标题\n')}`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector(`${PM} h2`, { timeout: 20000 })
     await p.click(`${PM} h2`)
@@ -215,7 +215,7 @@ async function main() {
 
   // 空格是 Markdown 结构的渲染边界：`- ` 已成列表后在正文起点退格，第一下只删边界空格，
   // 但必须立刻退出结构并还原字面 `-`；光标不能继续困在一个已经无效的前缀 input 里。
-  const unrenderPage = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const unrenderPage = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   await unrenderPage.goto(`${URL}?upage&upane&caret&useed=${encodeURIComponent('触发行\n')}`, { waitUntil: 'domcontentloaded' })
   await unrenderPage.waitForSelector(`${PM} > p`, { timeout: 20000 })
   await unrenderPage.click(`${PM} > p`)
@@ -314,7 +314,7 @@ async function main() {
     { name: '待办', input: '[] ', selector: `${PM} > ul > li[data-item-type="task"]`, marker: 'task' },
     { name: '引用', input: '| ', selector: `${PM} > blockquote`, marker: 'quote' },
   ]) {
-    const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
     await p.goto(`${URL}?upage&upane&caret&useed=${encodeURIComponent('触发行\n')}`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector(`${PM} > p`, { timeout: 20000 })
     await p.click(`${PM} > p`)
@@ -368,7 +368,7 @@ async function main() {
     await p.close()
   }
 
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   page.on('pageerror', (error) => console.log('[pageerror]', error.message))
   await page.goto(`${URL}?upage&upane&useed=${encodeURIComponent(SEED)}`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector(`${PM} h3`, { timeout: 20000 })

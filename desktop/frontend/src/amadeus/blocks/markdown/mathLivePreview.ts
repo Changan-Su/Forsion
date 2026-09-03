@@ -11,6 +11,12 @@ import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { attachSourceButton } from './sourceToggle'
+import { registerMessages, translate } from '../../../i18n'
+
+registerMessages({
+  'mathlive.renderFailedTitle': { zh: 'LaTeX 无法渲染', en: 'LaTeX could not be rendered' },
+  'mathlive.renderFailedBadge': { zh: '公式无法渲染', en: 'Formula could not be rendered' },
+})
 
 export interface MathSpan { from: number; to: number; latex: string; display: boolean }
 
@@ -86,12 +92,12 @@ function katexInto(el: HTMLElement, latex: string, display: boolean): void {
     katex.render(latex, el, { throwOnError: false, displayMode: display, errorColor: '#e5484d' })
     const err = el.querySelector('.katex-error')
     if (err) {
-      const msg = err.getAttribute('title') || 'LaTeX 无法渲染'
+      const msg = err.getAttribute('title') || translate('mathlive.renderFailedTitle')
       el.replaceChildren()
       const badge = document.createElement('span')
       badge.className = 'math-error'
       badge.title = msg
-      badge.textContent = display ? '⚠ 公式无法渲染' : '⚠'
+      badge.textContent = display ? `⚠ ${translate('mathlive.renderFailedBadge')}` : '⚠'
       el.appendChild(badge)
     }
   } catch {

@@ -2,6 +2,15 @@
 // and folder picker (move a page). They share the .dialog-* styles.
 
 import { useEffect, useState } from 'react'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'amdlg.delete': { zh: '删除', en: 'Delete' },
+  'amdlg.cancel': { zh: '取消', en: 'Cancel' },
+  'amdlg.confirm': { zh: '确定', en: 'OK' },
+  'amdlg.rootFolder': { zh: '（根目录）', en: '(Root folder)' },
+  'amdlg.noOtherFolders': { zh: '没有其它可移动到的文件夹', en: 'No other folders to move to' },
+})
 
 export function useEscape(onClose: () => void): void {
   useEffect(() => {
@@ -16,7 +25,7 @@ export function useEscape(onClose: () => void): void {
 export function ConfirmDialog({
   title,
   message,
-  confirmLabel = '删除',
+  confirmLabel,
   danger = true,
   onConfirm,
   onClose,
@@ -29,6 +38,7 @@ export function ConfirmDialog({
   onClose: () => void
 }) {
   useEscape(onClose)
+  const { t } = useI18n()
   return (
     <div className="dialog-overlay" onMouseDown={onClose}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
@@ -36,7 +46,7 @@ export function ConfirmDialog({
         {message && <div className="dialog-msg">{message}</div>}
         <div className="dialog-actions">
           <button className="dialog-btn" onClick={onClose}>
-            取消
+            {t('amdlg.cancel')}
           </button>
           <button
             className="dialog-btn"
@@ -48,7 +58,7 @@ export function ConfirmDialog({
               onClose()
             }}
           >
-            {confirmLabel}
+            {confirmLabel ?? t('amdlg.delete')}
           </button>
         </div>
       </div>
@@ -60,7 +70,7 @@ export function PromptDialog({
   title,
   label,
   initial = '',
-  confirmLabel = '确定',
+  confirmLabel,
   onConfirm,
   onClose,
 }: {
@@ -71,6 +81,7 @@ export function PromptDialog({
   onConfirm: (value: string) => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const [value, setValue] = useState(initial)
   const submit = (): void => {
     const v = value.trim()
@@ -99,10 +110,10 @@ export function PromptDialog({
         />
         <div className="dialog-actions">
           <button className="dialog-btn" onClick={onClose}>
-            取消
+            {t('amdlg.cancel')}
           </button>
           <button className="dialog-btn" data-primary onClick={submit}>
-            {confirmLabel}
+            {confirmLabel ?? t('amdlg.confirm')}
           </button>
         </div>
       </div>
@@ -124,6 +135,7 @@ export function FolderPickerDialog({
   onClose: () => void
 }) {
   useEscape(onClose)
+  const { t } = useI18n()
   const options = ['', ...folders].filter((f) => f !== currentFolder)
   return (
     <div className="dialog-overlay" onMouseDown={onClose}>
@@ -139,14 +151,14 @@ export function FolderPickerDialog({
                 onPick(f)
               }}
             >
-              {f === '' ? '（根目录）' : f}
+              {f === '' ? t('amdlg.rootFolder') : f}
             </button>
           ))}
-          {options.length === 0 && <div className="dialog-msg">没有其它可移动到的文件夹</div>}
+          {options.length === 0 && <div className="dialog-msg">{t('amdlg.noOtherFolders')}</div>}
         </div>
         <div className="dialog-actions">
           <button className="dialog-btn" onClick={onClose}>
-            取消
+            {t('amdlg.cancel')}
           </button>
         </div>
       </div>

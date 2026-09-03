@@ -1,0 +1,21 @@
+/* 多维表 form 视图体(嵌入块 / 独立 tab 共用)。字段纵排,单格观感沿用行编辑器(.amx-db-rowed-cell 那套描边);
+   颜色只吃 token,明暗两档自动跟随。⚠️ 根不用 .amx-db-scroll(那是表格的 grid 容器,另一会话正在改它)。 */
+.amx-db-form { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 16px; max-width: 520px; }
+.amx-db-form-title { font-size: 15px; font-weight: 600; color: var(--text); padding-bottom: 2px; }
+.amx-db-form-field { display: flex; flex-direction: column; gap: 3px; }
+.amx-db-form-label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 12px; }
+.amx-db-form-req { color: var(--danger, #e5484d); font-weight: 600; }
+.amx-db-form-desc { color: var(--text-faint, var(--text-muted)); font-size: 11.5px; }
+.amx-db-form-cell { border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: 6px; padding: 2px 6px; min-height: 30px; display: flex; align-items: center; background: var(--surface-1, transparent); }
+.amx-db-form-field[data-err] .amx-db-form-cell { border-color: var(--danger, #e5484d); }
+.amx-db-form-err { color: var(--danger, #e5484d); font-size: 11.5px; }
+.amx-db-form-foot { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
+.amx-db-form-submit { padding: 6px 16px; font-size: 13px; }
+.amx-db-form-done { color: var(--text-muted); font-size: 12px; }
+
+/* 视图菜单里的表单字段配置行(必填钮 + 默认值 + 说明) */
+.amx-db-formcfg { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.amx-db-formcfg:last-child { border-bottom: none; }
+.amx-db-formcfg .amx-db-pop-input { margin: 0 2px; padding: 3px 6px; font-size: 12px; }
+.amx-db-formcfg-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-muted); padding: 2px 4px; }
+.amx-db-formcfg-na { font-size: 11.5px; padding: 2px 4px; }

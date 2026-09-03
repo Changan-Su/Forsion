@@ -28,6 +28,7 @@ import {
 import { isHostPath, buildPdfLink } from '@amadeus-shared/pdfLink'
 import { askString } from '../components/askString'
 import { amadeus } from '../api'
+import { registerMessages, translate, useI18n } from '../../i18n'
 import {
   addBookmark, addInk, addNote, addShape, addTextMarkup,
   EDITABLE_SUBTYPES, INK_ONLY, MOVABLE_SUBTYPES, removeAnnots, setAnnotContents, translateAnnots,
@@ -38,6 +39,71 @@ import { paintHlBands } from './hlBand'
 const PULSE_MS = 1000
 import { frameOf, pageAt, pointOnPage, selectionToQuads } from './selectionQuads'
 import { distToFlatSq, distToPointsSq, outlineToSvgPath, strokeOutline } from './inkStroke'
+
+// ⚠️模块级的 PALETTE / TOOLS / ZOOMS 只存**键**,渲染时才 t()/translate() —— 存字面量会在模块加载
+// 那一刻冻住,切语言不再更新(工具提示/颜色名/缩放档全是模块级表)。
+registerMessages({
+  'pdfa.colorYellow': { zh: '黄', en: 'Yellow' },
+  'pdfa.colorGreen': { zh: '绿', en: 'Green' },
+  'pdfa.colorBlue': { zh: '蓝', en: 'Blue' },
+  'pdfa.colorPink': { zh: '粉', en: 'Pink' },
+  'pdfa.colorOrange': { zh: '橙', en: 'Orange' },
+  'pdfa.colorRed': { zh: '红', en: 'Red' },
+  'pdfa.colorBlack': { zh: '黑', en: 'Black' },
+  'pdfa.toolMouse': { zh: '鼠标(选择文字/滚动)', en: 'Pointer (select text, scroll)' },
+  'pdfa.toolHighlight': { zh: '高亮(选中文本;空白处拖拽=自由高亮)', en: 'Highlight (select text; drag on a blank area for a free-form highlight)' },
+  'pdfa.toolUnderline': { zh: '下划线(选中文本即标)', en: 'Underline (select text to mark it)' },
+  'pdfa.toolSquiggly': { zh: '波浪线(选中文本即标)', en: 'Squiggly underline (select text to mark it)' },
+  'pdfa.toolStrikeout': { zh: '删除线(选中文本即标)', en: 'Strikethrough (select text to mark it)' },
+  'pdfa.toolText': { zh: '添加文字(点击页面输入)', en: 'Add text (click the page to type)' },
+  'pdfa.toolNote': { zh: '便签评论(点击页面放置)', en: 'Sticky note (click the page to place one)' },
+  'pdfa.toolPen': { zh: '手写笔(压感笔迹写进 PDF;支持数位笔)', en: 'Pen (pressure-sensitive ink written into the PDF; stylus supported)' },
+  'pdfa.toolEraser': { zh: '橡皮(拖过手写笔迹即擦除)', en: 'Eraser (drag across ink to erase it)' },
+  'pdfa.toolRect': { zh: '矩形(在页面上拖拽)', en: 'Rectangle (drag on the page)' },
+  'pdfa.toolCircle': { zh: '圆形/椭圆(在页面上拖拽)', en: 'Ellipse (drag on the page)' },
+  'pdfa.toolLine': { zh: '直线(在页面上拖拽)', en: 'Line (drag on the page)' },
+  'pdfa.toolArrow': { zh: '箭头(在页面上拖拽)', en: 'Arrow (drag on the page)' },
+  'pdfa.zoomFitWidth': { zh: '适宽', en: 'Fit width' },
+  'pdfa.zoomFitPage': { zh: '适页', en: 'Fit page' },
+  'pdfa.writeFailed': { zh: '写入失败:此 PDF 可能受保护或已损坏', en: 'Could not save — this PDF may be protected or damaged' },
+  'pdfa.noteTitle': { zh: '便签评论', en: 'Sticky note' },
+  'pdfa.add': { zh: '添加', en: 'Add' },
+  'pdfa.editNoteTitle': { zh: '编辑便签', en: 'Edit note' },
+  'pdfa.save': { zh: '保存', en: 'Save' },
+  'pdfa.bookmarkTitle': { zh: '添加书签(写进 PDF 目录)', en: 'Add bookmark (written into the PDF outline)' },
+  'pdfa.pageN': { zh: '第 {n} 页', en: 'Page {n}' },
+  'pdfa.sidebar': { zh: '侧栏(缩略图/目录)', en: 'Sidebar (thumbnails and outline)' },
+  'pdfa.colorTitle': { zh: '批注颜色', en: 'Annotation color' },
+  'pdfa.colorNamed': { zh: '颜色:{name}', en: 'Color: {name}' },
+  'pdfa.fillToHollow': { zh: '实心(点击改为空心)', en: 'Filled (click for outline only)' },
+  'pdfa.hollowToFill': { zh: '空心(点击改为实心)', en: 'Outline (click to fill)' },
+  'pdfa.filled': { zh: '实心', en: 'Filled' },
+  'pdfa.hollow': { zh: '空心', en: 'Outline' },
+  'pdfa.strokeWidth': { zh: '线宽', en: 'Stroke width' },
+  'pdfa.opacity': { zh: '不透明度', en: 'Opacity' },
+  'pdfa.penWidth': { zh: '笔迹粗细', en: 'Pen thickness' },
+  'pdfa.addBookmark': { zh: '添加书签(写进 PDF 目录,任何阅读器可见)', en: 'Add bookmark (written into the PDF outline, visible in any reader)' },
+  'pdfa.copyLinkTitle': { zh: '复制指向本页的笔记链接', en: 'Copy a note link to this page' },
+  'pdfa.copied': { zh: '已复制', en: 'Copied' },
+  'pdfa.copyPageLink': { zh: '复制本页链接', en: 'Copy link to this page' },
+  'pdfa.thumbnails': { zh: '缩略图', en: 'Thumbnails' },
+  'pdfa.outline': { zh: '目录', en: 'Outline' },
+  'pdfa.zoomOut': { zh: '缩小', en: 'Zoom out' },
+  'pdfa.zoomTitle': { zh: '缩放(⌘/Ctrl+滚轮 或 触控板捏合)', en: 'Zoom (⌘/Ctrl + scroll wheel, or trackpad pinch)' },
+  'pdfa.zoomIn': { zh: '放大', en: 'Zoom in' },
+  'pdfa.prevPage': { zh: '上一页', en: 'Previous page' },
+  'pdfa.pageInput': { zh: '页码(回车跳转)', en: 'Page number (press Enter to jump)' },
+  'pdfa.nextPage': { zh: '下一页', en: 'Next page' },
+  'pdfa.loading': { zh: '加载中…', en: 'Loading…' },
+  'pdfa.loadError': { zh: '无法加载此 PDF', en: 'Could not load this PDF' },
+  'pdfa.retry': { zh: '重试', en: 'Retry' },
+  'pdfa.edit': { zh: '编辑', en: 'Edit' },
+  'pdfa.delete': { zh: '删除', en: 'Delete' },
+  'pdfa.deleteN': { zh: '删除 {n} 条', en: 'Delete {n}' },
+  'pdfa.outlineEmpty': { zh: '无目录/书签', en: 'No outline or bookmarks' },
+  'pdfa.outlineEmptyHint': { zh: '工具栏「+书签」可添加', en: 'Add one with the bookmark button in the toolbar' },
+  'pdfa.untitled': { zh: '(无标题)', en: '(untitled)' },
+})
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
@@ -58,10 +124,11 @@ function ensureScopedCss(): void {
   document.head.append(el)
 }
 
-/** 调色板(名→色);annotationEditorHighlightColors 需 `k=#hex,` 串。高亮/标记/便签/形状共用。 */
+/** 调色板(名的 i18n 键→色);annotationEditorHighlightColors 需 `k=#hex,` 串。高亮/标记/便签/形状共用。 */
 const PALETTE: ReadonlyArray<readonly [string, string]> = [
-  ['黄', '#ffe14d'], ['绿', '#8ce99a'], ['蓝', '#74c0fc'], ['粉', '#ffa8c5'], ['橙', '#ffc078'], ['红', '#ff6b6b'],
-  ['黑', '#1e1e1e'], // Excalidraw 默认墨色,主要给手写笔用
+  ['pdfa.colorYellow', '#ffe14d'], ['pdfa.colorGreen', '#8ce99a'], ['pdfa.colorBlue', '#74c0fc'],
+  ['pdfa.colorPink', '#ffa8c5'], ['pdfa.colorOrange', '#ffc078'], ['pdfa.colorRed', '#ff6b6b'],
+  ['pdfa.colorBlack', '#1e1e1e'], // Excalidraw 默认墨色,主要给手写笔用
 ]
 const HIGHLIGHT_COLORS = PALETTE.map(([, hex], i) => `c${i}=${hex}`).join(',')
 
@@ -77,23 +144,25 @@ const TOOL_MODE: Partial<Record<Tool, number>> = {
 }
 const modeOf = (t: Tool): number => TOOL_MODE[t] ?? AnnotationEditorType.NONE
 
+/** tip = i18n 键(模块级表不能存已翻好的文案,见 registerMessages 上方注释),渲染时 t(tip)。 */
 const TOOLS: ReadonlyArray<{ id: Tool; tip: string; Icon: typeof MousePointer2; gap?: boolean }> = [
-  { id: 'mouse', tip: '鼠标(选择文字/滚动)', Icon: MousePointer2 },
-  { id: 'highlight', tip: '高亮(选中文本;空白处拖拽=自由高亮)', Icon: Highlighter },
-  { id: 'underline', tip: '下划线(选中文本即标)', Icon: UnderlineIcon },
-  { id: 'squiggly', tip: '波浪线(选中文本即标)', Icon: Waves },
-  { id: 'strikeout', tip: '删除线(选中文本即标)', Icon: Strikethrough },
-  { id: 'text', tip: '添加文字(点击页面输入)', Icon: Type },
-  { id: 'note', tip: '便签评论(点击页面放置)', Icon: StickyNote },
-  { id: 'pen', tip: '手写笔(压感笔迹写进 PDF;支持数位笔)', Icon: PenLine, gap: true },
-  { id: 'eraser', tip: '橡皮(拖过手写笔迹即擦除)', Icon: Eraser },
-  { id: 'rect', tip: '矩形(在页面上拖拽)', Icon: Square, gap: true },
-  { id: 'circle', tip: '圆形/椭圆(在页面上拖拽)', Icon: Circle },
-  { id: 'line', tip: '直线(在页面上拖拽)', Icon: Minus },
-  { id: 'arrow', tip: '箭头(在页面上拖拽)', Icon: MoveUpRight },
+  { id: 'mouse', tip: 'pdfa.toolMouse', Icon: MousePointer2 },
+  { id: 'highlight', tip: 'pdfa.toolHighlight', Icon: Highlighter },
+  { id: 'underline', tip: 'pdfa.toolUnderline', Icon: UnderlineIcon },
+  { id: 'squiggly', tip: 'pdfa.toolSquiggly', Icon: Waves },
+  { id: 'strikeout', tip: 'pdfa.toolStrikeout', Icon: Strikethrough },
+  { id: 'text', tip: 'pdfa.toolText', Icon: Type },
+  { id: 'note', tip: 'pdfa.toolNote', Icon: StickyNote },
+  { id: 'pen', tip: 'pdfa.toolPen', Icon: PenLine, gap: true },
+  { id: 'eraser', tip: 'pdfa.toolEraser', Icon: Eraser },
+  { id: 'rect', tip: 'pdfa.toolRect', Icon: Square, gap: true },
+  { id: 'circle', tip: 'pdfa.toolCircle', Icon: Circle },
+  { id: 'line', tip: 'pdfa.toolLine', Icon: Minus },
+  { id: 'arrow', tip: 'pdfa.toolArrow', Icon: MoveUpRight },
 ]
-const ZOOMS: ReadonlyArray<{ v: string; label: string }> = [
-  { v: 'page-width', label: '适宽' }, { v: 'page-fit', label: '适页' },
+/** k = i18n 键(两个预设档);百分比档与语言无关,直接用 label。 */
+const ZOOMS: ReadonlyArray<{ v: string; label?: string; k?: string }> = [
+  { v: 'page-width', k: 'pdfa.zoomFitWidth' }, { v: 'page-fit', k: 'pdfa.zoomFitPage' },
   { v: '0.5', label: '50%' }, { v: '0.75', label: '75%' }, { v: '1', label: '100%' },
   { v: '1.25', label: '125%' }, { v: '1.5', label: '150%' }, { v: '2', label: '200%' }, { v: '3', label: '300%' },
 ]
@@ -176,6 +245,9 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
   // 而写盘只有 vault 通道(saveVaultBytes),库外没有落笔的地方,给了工具栏就是假编辑入口。
   // 只读仍保留底栏(翻页/缩放),看书不受影响。外部深链进不来:deepLinkInstall 的闸对文件类 view
   // 只放行安全的 vault 相对路径,绝对路径在那一层就被拒了。
+  // ⚠️只在下面的 return JSX / addBm 里用这个 t —— 大 effect 内部到处有叫 `t` 的局部量(工具/变换矩阵/
+  // 轨迹点),且 effect 不随语言重跑,闭包里的 t 会是旧语言;effect 内一律用模块级 translate()。
+  const { t } = useI18n()
   const hostPdf = isHostPath(pdfPath)
   const readOnly = readOnlyProp || hostPdf
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -331,7 +403,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
       }).catch((e: unknown) => {
         state.dirty = true // 失败留脏,下次编辑再试
         console.error('[pdf] 写入失败', e)
-        if (!dead) flash('写入失败:此 PDF 可能受保护或已损坏')
+        if (!dead) flash(translate('pdfa.writeFailed'))
         fire(written) // 写盘成功只是 swap/回调环节炸了 → 对记账而言就是「已落盘」,绝不能退回去重写一遍
       })
       state.chain = run
@@ -580,7 +652,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
       if ((ev.target as HTMLElement).closest?.('.annotationLayer section')) return // 点在已有注释上=看弹窗,不新建
       const hit = pageAt(state.viewer, ev.clientX, ev.clientY)
       if (!hit) return
-      void askString('便签评论', '', { confirmLabel: '添加' }).then((text) => {
+      void askString(translate('pdfa.noteTitle'), '', { confirmLabel: translate('pdfa.add') }).then((text) => {
         if (dead || !text?.trim()) return
         void enqueue((b) => addNote(b, hit.pageIndex, hit.x, hit.y, text.trim(), colorRef.current))
       })
@@ -931,7 +1003,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
       const sel = selRef.current
       const it = sel && sel.items.length === 1 ? sel.items[0] : null
       if (!it || it.subtype !== 'Text') return
-      void askString('编辑便签', it.contents || '', { confirmLabel: '保存' }).then((text) => {
+      void askString(translate('pdfa.editNoteTitle'), it.contents || '', { confirmLabel: translate('pdfa.save') }).then((text) => {
         if (dead || text === null) return
         const trimmed = text.trim()
         if (!trimmed || trimmed === it.contents) return
@@ -1343,20 +1415,21 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
     return () => window.removeEventListener('amadeus:pdf-goto', onGoto)
   }, [pdfPath])
 
-  const selectTool = (t: Tool): void => {
+  // 形参旧名 `t`,与 useI18n 的 t 撞名故改 next。
+  const selectTool = (next: Tool): void => {
     // 切出 手写/橡皮 这一对 → 立即落盘攒着的笔画;笔↔橡皮之间切换不落盘(橡皮可即时擦预览层)。
-    if (INK_PAIR.has(toolRef.current) && !INK_PAIR.has(t)) commitInkRef.current?.()
-    if (t === 'eraser' || t === 'mouse') warmAnnsRef.current?.() // 预热可见页注释缓存(橡皮命中/点选/框选都要)
-    if (t !== 'mouse') { // 隐形选中还能被 Delete 删=事故;冷缓存框选待结算的槽、悬停手型标一并清
+    if (INK_PAIR.has(toolRef.current) && !INK_PAIR.has(next)) commitInkRef.current?.()
+    if (next === 'eraser' || next === 'mouse') warmAnnsRef.current?.() // 预热可见页注释缓存(橡皮命中/点选/框选都要)
+    if (next !== 'mouse') { // 隐形选中还能被 Delete 删=事故;冷缓存框选待结算的槽、悬停手型标一并清
       selApiRef.current?.clear() // 走 effect 内的 clearSel:refs + 手势局部态 + pendingMarq + 便签位移复位
       if (containerRef.current) delete containerRef.current.dataset.annhover
     }
-    setTool(t)
-    toolRef.current = t
+    setTool(next)
+    toolRef.current = next
     const e = eng.current
     if (e?.doc) {
-      try { e.viewer.annotationEditorMode = { mode: modeOf(t) } } catch { /* ignore */ }
-      if (t === 'highlight') {
+      try { e.viewer.annotationEditorMode = { mode: modeOf(next) } } catch { /* ignore */ }
+      if (next === 'highlight') {
         try { e.uiManager?.updateParams(AnnotationEditorParamsType.HIGHLIGHT_COLOR, colorRef.current) } catch { /* ignore */ }
       }
     }
@@ -1402,9 +1475,11 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
     const e = eng.current
     if (!e?.doc || !enqueueRef.current) return
     const pg = e.viewer.currentPageNumber || 1
-    const title = await askString('添加书签(写进 PDF 目录)', `第 ${pg} 页`, { confirmLabel: '添加' })
+    // 缺省标题只是写进 PDF 目录的**显示文案**(不参与任何比较/查找),按界面语言给即可。
+    const fallback = t('pdfa.pageN', { n: pg })
+    const title = await askString(t('pdfa.bookmarkTitle'), fallback, { confirmLabel: t('pdfa.add') })
     if (title === null) return
-    void enqueueRef.current((b) => addBookmark(b, pg - 1, title.trim() || `第 ${pg} 页`))
+    void enqueueRef.current((b) => addBookmark(b, pg - 1, title.trim() || fallback))
   }
 
   const ready = status === 'ready'
@@ -1419,7 +1494,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
         <button
           className={`pdfa-btn pdfa-tool${side ? ' on' : ''}`}
           onClick={() => setSide((s) => (s ? null : 'thumbs'))}
-          title="侧栏(缩略图/目录)"
+          title={t('pdfa.sidebar')}
         ><PanelLeft size={15} /></button>
         <span className="pdfa-sep" />
         {TOOLS.map(({ id, tip, Icon, gap }) => (
@@ -1427,19 +1502,19 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
             {gap && <span className="pdfa-sep" />}
             <button
               className={`pdfa-btn pdfa-tool${tool === id ? ' on' : ''}`}
-              title={tip}
+              title={t(tip)}
               onClick={() => selectTool(id)}
             ><Icon size={15} /></button>
           </span>
         ))}
         <span className="pdfa-sep" />
-        <span className="pdfa-swatches" title="批注颜色">
-          {PALETTE.map(([name, hex]) => (
+        <span className="pdfa-swatches" title={t('pdfa.colorTitle')}>
+          {PALETTE.map(([nameKey, hex]) => (
             <button
               key={hex}
               className={`pdfa-swatch${color === hex ? ' on' : ''}`}
               style={{ background: hex }}
-              title={`颜色:${name}`}
+              title={t('pdfa.colorNamed', { name: t(nameKey) })}
               onClick={() => pickColor(hex)}
             />
           ))}
@@ -1449,14 +1524,14 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
             <span className="pdfa-sep" />
             <button
               className={`pdfa-btn pdfa-tool${shape.fill ? ' on' : ''}`}
-              title={shape.fill ? '实心(点击改为空心)' : '空心(点击改为实心)'}
+              title={shape.fill ? t('pdfa.fillToHollow') : t('pdfa.hollowToFill')}
               onClick={() => setShapeOpt({ fill: !shape.fill })}
               disabled={tool === 'line' || tool === 'arrow'}
-            >{shape.fill ? '实心' : '空心'}</button>
-            <select className="pdfa-mini" value={shape.width} onChange={(e) => setShapeOpt({ width: Number(e.target.value) })} title="线宽">
+            >{shape.fill ? t('pdfa.filled') : t('pdfa.hollow')}</button>
+            <select className="pdfa-mini" value={shape.width} onChange={(e) => setShapeOpt({ width: Number(e.target.value) })} title={t('pdfa.strokeWidth')}>
               {WIDTHS.map((w) => <option key={w} value={w}>{w} pt</option>)}
             </select>
-            <select className="pdfa-mini" value={shape.opacity} onChange={(e) => setShapeOpt({ opacity: Number(e.target.value) })} title="不透明度">
+            <select className="pdfa-mini" value={shape.opacity} onChange={(e) => setShapeOpt({ opacity: Number(e.target.value) })} title={t('pdfa.opacity')}>
               {OPACITIES.map((o) => <option key={o} value={o}>{Math.round(o * 100)}%</option>)}
             </select>
           </>
@@ -1464,21 +1539,21 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
         {isPen && (
           <>
             <span className="pdfa-sep" />
-            <select className="pdfa-mini" value={penOpt.width} onChange={(e) => setPen({ width: Number(e.target.value) })} title="笔迹粗细">
+            <select className="pdfa-mini" value={penOpt.width} onChange={(e) => setPen({ width: Number(e.target.value) })} title={t('pdfa.penWidth')}>
               {PEN_WIDTHS.map((w) => <option key={w} value={w}>{w} pt</option>)}
             </select>
-            <select className="pdfa-mini" value={penOpt.opacity} onChange={(e) => setPen({ opacity: Number(e.target.value) })} title="不透明度">
+            <select className="pdfa-mini" value={penOpt.opacity} onChange={(e) => setPen({ opacity: Number(e.target.value) })} title={t('pdfa.opacity')}>
               {OPACITIES.map((o) => <option key={o} value={o}>{Math.round(o * 100)}%</option>)}
             </select>
           </>
         )}
         <span className="pdfa-sep" />
-        <button className="pdfa-btn pdfa-tool" title="添加书签(写进 PDF 目录,任何阅读器可见)" onClick={() => void addBm()}>
+        <button className="pdfa-btn pdfa-tool" title={t('pdfa.addBookmark')} onClick={() => void addBm()}>
           <BookmarkPlus size={15} />
         </button>
         <span className="pdfa-flex" />
-        <button className="pdfa-btn pdfa-copy" onClick={() => void copyLink()} title="复制指向本页的笔记链接">
-          {copied ? '已复制' : '复制本页链接'}
+        <button className="pdfa-btn pdfa-copy" onClick={() => void copyLink()} title={t('pdfa.copyLinkTitle')}>
+          {copied ? t('pdfa.copied') : t('pdfa.copyPageLink')}
         </button>
       </div>
       )}
@@ -1486,8 +1561,8 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
         {side && (
           <div className="pdfa-side">
             <div className="pdfa-sidetabs">
-              <button className={side === 'thumbs' ? 'on' : ''} onClick={() => setSide('thumbs')}>缩略图</button>
-              <button className={side === 'outline' ? 'on' : ''} onClick={() => setSide('outline')}>目录</button>
+              <button className={side === 'thumbs' ? 'on' : ''} onClick={() => setSide('thumbs')}>{t('pdfa.thumbnails')}</button>
+              <button className={side === 'outline' ? 'on' : ''} onClick={() => setSide('outline')}>{t('pdfa.outline')}</button>
             </div>
             <div className="pdfa-sidebody">
               {ready && doc ? (
@@ -1530,19 +1605,19 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
           )}
           {ready && (
             <div className="pdfa-bottombar">
-              <button className="pdfa-btn" onClick={() => zoom(-1)} title="缩小">−</button>
+              <button className="pdfa-btn" onClick={() => zoom(-1)} title={t('pdfa.zoomOut')}>−</button>
               <select
                 className="pdfa-zoomsel"
                 value={zoomSel}
                 onChange={(e) => setZoomPreset(e.target.value)}
-                title="缩放(⌘/Ctrl+滚轮 或 触控板捏合)"
+                title={t('pdfa.zoomTitle')}
               >
                 {!ZOOMS.some((z) => z.v === zoomSel) && <option value={zoomSel}>{fmtZoom(zoomSel)}</option>}
-                {ZOOMS.map((z) => <option key={z.v} value={z.v}>{z.label}</option>)}
+                {ZOOMS.map((z) => <option key={z.v} value={z.v}>{z.k ? t(z.k) : z.label}</option>)}
               </select>
-              <button className="pdfa-btn" onClick={() => zoom(1)} title="放大">＋</button>
+              <button className="pdfa-btn" onClick={() => zoom(1)} title={t('pdfa.zoomIn')}>＋</button>
               <span className="pdfa-sep" />
-              <button className="pdfa-btn" onClick={() => go(-1)} disabled={info.page <= 1} title="上一页">‹</button>
+              <button className="pdfa-btn" onClick={() => go(-1)} disabled={info.page <= 1} title={t('pdfa.prevPage')}>‹</button>
               <input
                 key={info.page}
                 className="pdfa-pageinput"
@@ -1550,18 +1625,18 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') goTo(parseInt((e.target as HTMLInputElement).value, 10) || 0)
                 }}
-                title="页码(回车跳转)"
+                title={t('pdfa.pageInput')}
               />
               <span className="pdfa-pagetotal">/ {info.total || '…'}</span>
-              <button className="pdfa-btn" onClick={() => go(1)} disabled={!info.total || info.page >= info.total} title="下一页">›</button>
+              <button className="pdfa-btn" onClick={() => go(1)} disabled={!info.total || info.page >= info.total} title={t('pdfa.nextPage')}>›</button>
             </div>
           )}
           {notice && <div className="pdfa-notice">{notice}</div>}
-          {status === 'loading' && <div className="pdfa-state">加载中…</div>}
+          {status === 'loading' && <div className="pdfa-state">{t('pdfa.loading')}</div>}
           {status === 'error' && (
             <div className="pdfa-state pdfa-state-err">
-              <span>无法加载此 PDF</span>
-              <button className="pdfa-btn" onClick={() => setReloadNonce((n) => n + 1)}>重试</button>
+              <span>{t('pdfa.loadError')}</span>
+              <button className="pdfa-btn" onClick={() => setReloadNonce((n) => n + 1)}>{t('pdfa.retry')}</button>
             </div>
           )}
         </div>
@@ -1679,10 +1754,11 @@ function SelOverlay({ viewer, container, sel, drag, api }: {
   drag: { dx: number; dy: number } | null
   api: { del: () => void; edit: () => void } | null
 }) {
+  const { t } = useI18n() // hook 必须在 early return 之上
   const box = pageBox(viewer, container, sel.pageIndex)
   if (!box) return null
-  const t = box.t
-  const proj = (x: number, y: number): [number, number] => [t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]]
+  const mt = box.t // 页面变换矩阵(旧名 `t`,与 i18n 的 t 撞名故改)
+  const proj = (x: number, y: number): [number, number] => [mt[0] * x + mt[2] * y + mt[4], mt[1] * x + mt[3] * y + mt[5]]
   let minL = Infinity, minT = Infinity, maxB = -Infinity
   const boxes = sel.items.map((it) => {
     const movable = MOVABLE_SUBTYPES.has(it.subtype)
@@ -1699,13 +1775,13 @@ function SelOverlay({ viewer, container, sel, drag, api }: {
   const single = sel.items.length === 1 ? sel.items[0] : null
   return (
     <div className="pdfa-selov" style={{ left: box.left, top: box.top }}>
-      {drag && <DragGhost items={sel.items.filter((it) => MOVABLE_SUBTYPES.has(it.subtype) && it.subtype !== 'Text')} drag={drag} t={t} />}
+      {drag && <DragGhost items={sel.items.filter((it) => MOVABLE_SUBTYPES.has(it.subtype) && it.subtype !== 'Text')} drag={drag} t={mt} />}
       {boxes.map((b) => <div key={b.key} className="pdfa-selbox" style={{ left: b.left, top: b.top, width: b.width, height: b.height }} />)}
       {!drag && (
         <div className="pdfa-selbar" style={{ left: minL, top: minT < 34 ? maxB + 6 : minT - 30 }}>
-          {single?.subtype === 'Text' && <button className="pdfa-btn" onClick={() => api?.edit()}>编辑</button>}
+          {single?.subtype === 'Text' && <button className="pdfa-btn" onClick={() => api?.edit()}>{t('pdfa.edit')}</button>}
           <button className="pdfa-btn" onClick={() => api?.del()}>
-            {sel.items.length > 1 ? `删除 ${sel.items.length} 条` : '删除'}
+            {sel.items.length > 1 ? t('pdfa.deleteN', { n: sel.items.length }) : t('pdfa.delete')}
           </button>
         </div>
       )}
@@ -1795,6 +1871,7 @@ function Thumbs({ doc, current, onPick }: { doc: any; current: number; onPick: (
 
 /** PDF 大纲(目录/书签):点击跳转;「添加书签」写进这里。 */
 function Outline({ doc, onGo }: { doc: any; onGo: (dest: unknown) => void }) {
+  const { t } = useI18n() // hook 必须在下面两处 early return 之上
   const [items, setItems] = useState<any[] | null>(null)
   useEffect(() => {
     let alive = true
@@ -1803,14 +1880,14 @@ function Outline({ doc, onGo }: { doc: any; onGo: (dest: unknown) => void }) {
       .catch(() => { if (alive) setItems([]) })
     return () => { alive = false }
   }, [doc])
-  if (!items) return <div className="pdfa-side-empty">加载中…</div>
-  if (!items.length) return <div className="pdfa-side-empty">无目录/书签<br />工具栏「+书签」可添加</div>
+  if (!items) return <div className="pdfa-side-empty">{t('pdfa.loading')}</div>
+  if (!items.length) return <div className="pdfa-side-empty">{t('pdfa.outlineEmpty')}<br />{t('pdfa.outlineEmptyHint')}</div>
   const render = (list: any[], depth: number): ReactElement[] => list.flatMap((it, i) => [
     <button
       key={`${depth}-${i}`}
       style={{ paddingLeft: 8 + depth * 12 }}
       onClick={() => { if (it.dest) onGo(it.dest) }}
-    >{it.title || '(无标题)'}</button>,
+    >{it.title || t('pdfa.untitled')}</button>,
     ...(it.items?.length ? render(it.items, depth + 1) : []),
   ])
   return <div className="pdfa-outline">{render(items, 0)}</div>

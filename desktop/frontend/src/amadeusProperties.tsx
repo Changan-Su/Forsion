@@ -14,6 +14,21 @@ import { Plus, X } from 'lucide-react'
 import { usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { matchFileType } from '@amadeus/plugins/pluginStore'
 import { askString } from '@amadeus/components/askString'
+import { registerMessages, useI18n } from './i18n'
+
+registerMessages({
+  'amprops.add': { zh: '添加属性', en: 'Add property' },
+  'amprops.addLabel': { zh: '写入笔记 frontmatter 的键名', en: 'Key name written to the note frontmatter' },
+  'amprops.reservedKey': { zh: 'amadeus_* 是保留键', en: 'amadeus_* keys are reserved' },
+  'amprops.pluginManaged': { zh: '该键由插件管理', en: 'This key is managed by a plugin' },
+  'amprops.chipRaw': { zh: '属性(原文)', en: 'Properties (raw)' },
+  'amprops.chipCount': { zh: '属性 {n}', en: 'Properties {n}' },
+  'amprops.empty': { zh: '还没有属性。', en: 'No properties yet.' },
+  'amprops.delete': { zh: '删除属性', en: 'Delete property' },
+  'amprops.pluginKeysWarn': { zh: '⚠️ 本文件含插件数据键({keys}),修复 YAML 时请勿改动那几行。', en: '⚠️ This file contains plugin data keys ({keys}) — leave those lines untouched while fixing the YAML.' },
+  'amprops.nestedHint': { zh: '嵌套结构请在源码模式编辑', en: 'Edit nested values in source mode' },
+  'amprops.chipsPlaceholder': { zh: '回车添加…', en: 'Press Enter to add…' },
+})
 
 export interface FmEntry { key: string; value: unknown }
 type Entry = FmEntry
@@ -50,6 +65,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
   fmExtra?: string
   onCommit?: (yaml: string) => void
 } = {}) {
+  const { t } = useI18n()
   const activePage = usePageStore((s) => s.activePage)
   const storeFm = usePageStore((s) => s.manifest?.fmExtra ?? '')
   // 写操作走本面板的 store:插件文件视图(画布文档模式)也挂这面板,活动面板门面
@@ -84,10 +100,10 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
   }
 
   const addProp = async (): Promise<void> => {
-    const name = (await askString('添加属性', '', { label: '写入笔记 frontmatter 的键名' }))?.trim()
+    const name = (await askString(t('amprops.add'), '', { label: t('amprops.addLabel') }))?.trim()
     if (!name) return
-    if (/^amadeus_/.test(name)) { window.alert('amadeus_* 是保留键'); return }
-    if (hiddenKeys.has(name)) { window.alert('该键由插件管理'); return }
+    if (/^amadeus_/.test(name)) { window.alert(t('amprops.reservedKey')); return }
+    if (hiddenKeys.has(name)) { window.alert(t('amprops.pluginManaged')); return }
     if (parsed.entries.some((e) => e.key === name)) return
     commit([...parsed.entries, { key: name, value: '' }])
     setOpen(true)
@@ -99,13 +115,13 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
     <div className="amx-props">
       <div className="amx-props-bar">
         <button className="amx-props-chip" onClick={() => setOpen((o) => !o)}>
-          {count === null ? '属性(原文)' : `属性 ${count}`}{open ? ' ▾' : ' ▸'}
+          {count === null ? t('amprops.chipRaw') : t('amprops.chipCount', { n: count })}{open ? ' ▾' : ' ▸'}
         </button>
-        <button className="amx-props-add" title="添加属性" onClick={() => void addProp()}><Plus size={12} /></button>
+        <button className="amx-props-add" title={t('amprops.add')} onClick={() => void addProp()}><Plus size={12} /></button>
       </div>
       {open && (parsed.ok ? (
         <div className="amx-props-rows">
-          {visible.length === 0 && <div className="amx-props-empty">还没有属性。</div>}
+          {visible.length === 0 && <div className="amx-props-empty">{t('amprops.empty')}</div>}
           {visible.map((e) => (
             <div className="amx-prop-row" key={`${activePage}:${e.idx}:${e.key}`}>
               <input
@@ -122,7 +138,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
                 }}
               />
               <ValueEditor value={e.value} onCommit={(v) => commit(parsed.entries.map((x, j) => (j === e.idx ? { ...x, value: v } : x)))} />
-              <button className="amx-prop-del" title="删除属性" onClick={() => commit(parsed.entries.filter((_, j) => j !== e.idx))}><X size={12} /></button>
+              <button className="amx-prop-del" title={t('amprops.delete')} onClick={() => commit(parsed.entries.filter((_, j) => j !== e.idx))}><X size={12} /></button>
             </div>
           ))}
         </div>
@@ -132,7 +148,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
         // 覆盖会静默抹键)—— 保持全透明 + 插件文件给一行警示,修复责任交还用户。
         <>
           {hiddenKeys.size > 0 && (
-            <div className="amx-props-empty">⚠️ 本文件含插件数据键({[...hiddenKeys].join(', ')}),修复 YAML 时请勿改动那几行。</div>
+            <div className="amx-props-empty">{t('amprops.pluginKeysWarn', { keys: [...hiddenKeys].join(', ') })}</div>
           )}
           <textarea
             className="amx-props-raw"
@@ -147,6 +163,7 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
 }
 
 function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknown) => void }) {
+  const { t } = useI18n()
   if (typeof value === 'boolean') {
     return <input type="checkbox" className="amx-prop-check" checked={value} onChange={(e) => onCommit(e.target.checked)} />
   }
@@ -159,10 +176,10 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
         className="amx-prop-input"
         defaultValue={String(value)}
         onBlur={(e) => {
-          const t = e.target.value.trim()
-          if (t === String(value)) return // 未改不提交
-          const n = Number(t)
-          onCommit(t !== '' && !Number.isNaN(n) ? n : t)
+          const raw = e.target.value.trim()
+          if (raw === String(value)) return // 未改不提交
+          const n = Number(raw)
+          onCommit(raw !== '' && !Number.isNaN(n) ? n : raw)
         }}
       />
     )
@@ -173,16 +190,17 @@ function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknow
   if (typeof value === 'string' || value == null) {
     return <input className="amx-prop-input" defaultValue={value ?? ''} onBlur={(e) => { if (e.target.value !== (value ?? '')) onCommit(e.target.value) }} />
   }
-  return <span className="amx-prop-nested" title="嵌套结构请在源码模式编辑">{stringifyYaml(value).trimEnd()}</span>
+  return <span className="amx-prop-nested" title={t('amprops.nestedHint')}>{stringifyYaml(value).trimEnd()}</span>
 }
 
 /** 字符串数组(tags 等):chips + 回车追加、× 移除。 */
 function ChipsEditor({ items, onCommit }: { items: string[]; onCommit: (v: string[]) => void }) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState('')
   const add = (): void => {
-    const t = draft.trim()
+    const next = draft.trim()
     setDraft('')
-    if (t && !items.includes(t)) onCommit([...items, t])
+    if (next && !items.includes(next)) onCommit([...items, next])
   }
   const onKey = (e: KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add() }
@@ -190,13 +208,13 @@ function ChipsEditor({ items, onCommit }: { items: string[]; onCommit: (v: strin
   }
   return (
     <div className="amx-prop-chips">
-      {items.map((t, i) => (
-        <span className="amx-chip" key={`${i}:${t}`}>
-          {t}
+      {items.map((tag, i) => (
+        <span className="amx-chip" key={`${i}:${tag}`}>
+          {tag}
           <button className="amx-chip-x" onClick={() => onCommit(items.filter((_, j) => j !== i))}><X size={10} /></button>
         </span>
       ))}
-      <input value={draft} placeholder={items.length ? '' : '回车添加…'} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} onBlur={add} />
+      <input value={draft} placeholder={items.length ? '' : t('amprops.chipsPlaceholder')} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} onBlur={add} />
     </div>
   )
 }

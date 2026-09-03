@@ -125,6 +125,14 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️需要活动库。没有活动库时**reject**(主进程 `vaultManager` 抛 `Error('No vault is open')`)——
    *  与只读侧的静默 null 不同形,启动期的写一律 try/catch。 */
   writeFile(path: string, text: string): Promise<void>
+  /** 读-改-写一张多维表(2026-09-02+):**比对交换**,不是整文件覆盖。`fn` 拿到宿主校验过的 DbFile,
+   *  返回新对象即写、返回 `null` 不写(幂等升级「已是最新」就该返 null);写入撞上别人的新版本会重读再套一次
+   *  fn(≤3 次),所以 fn 必须是纯函数。宿主认为 corrupt 的文件**不进 fn**(`{ ok:false, corrupt:true }`)。
+   *  ⚠️改活表(升级列属性、补视图)一律走这条 —— `readFile` + `writeFile` 整文件覆盖会盖掉读写之间
+   *  自动化/用户刚写进去的行,而且零报错。
+   *  ⚠️需要活动库且需要桌面桥的 CAS 写口:没有活动库 → `{ ok:false, error }`(不抛);云端/移动端桥没有
+   *  CAS → 同样 `{ ok:false, error }`,插件自己决定回落还是放弃。旧宿主没有这个方法:`ctx.app.mutateDb?.(…)`。 */
+  mutateDb?(path: string, fn: (db: import('../../../../shared/amadeus/db/schema').DbFile) => import('../../../../shared/amadeus/db/schema').DbFile | null): Promise<{ ok: boolean; conflict?: boolean; corrupt?: boolean; error?: string }>
   /** 订阅某个 vault 文件的**外部**内容改动(2026-08-15+),返回退订。用途:插件把配置/片段库写成
    *  库里的一个文件,用户拿别的编辑器改完要能热重载。
    *  ⚠️只报「内容变了」这一类事件 —— 新建/删除/改名不报(那是文件树的事)。
@@ -440,6 +448,9 @@ export interface ListSourceContribution {
   items(filter?: { query?: string; group?: string }): ListItem[]
   /** Notify the host when items() changed. Return an unsubscribe. */
   subscribe(cb: () => void): () => void
+  /** Stable key of the item currently open in the main view. The host applies its shared `active`
+   *  row state; notify the subscriber when this value changes. Keep this synchronous and cheap. */
+  activeKey?(): string | null
   /** Open one item (the plugin decides what that means — usually ctx.openView / ctx.app.openFile). */
   open(item: ListItem, opts?: { newTab?: boolean }): void
   /** Render the shared search box above the list; the text arrives via `items({ query })`. */
@@ -744,6 +755,50 @@ export interface PluginContext {
   activity?: {
     log(event: string, detail?: Record<string, unknown>): void
   }
+  /** 自动化规则播种(2026-09-02+,Tangu 宿主 only)。插件给一批**多维表触发**规则,宿主幂等 upsert
+   *  到引擎(`POST /agent/special/muse/triggers`),每次 setup 都可以重放:
+   *  - 规则 id 由**宿主**拼 `plugin:<pluginId>:<key>`(插件只给 key,`[a-z0-9-]+`;伪造不了别家的规则);
+   *  - `vault` 由宿主绑当前库;`path` 是库相对路径(插件自己拼 `${ctx.app.workFolder()}/x.db`,宿主**不**替你前缀),
+   *    归一口径与引擎同(反斜杠→正斜杠、去首尾斜杠与空段);
+   *  - actions 只许 notify / db_row_add / db_row_edit —— `agent_run` / `tool_call` 该条被拒(引擎路由同样兜底);
+   *  - **异步等待**:后端就绪(cfg 已加载且连通)且库已恢复才发,最多等 60s;超时 / 没开库 → 整批不发,
+   *    errors 里 `No vault is open`;单条坏规则(key 形态 / path / where / actions)只拒那一条,其余照发;
+   *  - 恒传 `enabled:true`:用户在自动化面板里单独关掉的插件规则,下次插件重载会被开回来;
+   *  - 插件被用户**禁用** → 本插件全部规则 `enabled=false`(不删);再启用时引擎重新播种游标(停用期间的行不爆发)。
+   *  ⚠️**非 Tangu 宿主上整个 `ctx.automation` 不存在**(纯 Amadeus 壳 / unit 设备页 / 云端 / 台架)——一律
+   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。 */
+  automation?: {
+    ensure(rules: PluginAutomationRule[]): Promise<{ ok: boolean; errors: string[] }>
+  }
+  /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
+   *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
+   *  已是成员 → no-op(不覆盖用户改过的列映射);库还没恢复 → 等库恢复后再登记(最多 60s),
+   *  同步返回 void。旧宿主没有:`ctx.calendar?.ensureMember(…)`。 */
+  calendar?: {
+    ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
+  }
+}
+
+/** `ctx.automation.ensure` 的一条规则 = 引擎 upsert 入参的**子集**(只有 db_changed 触发;id / vault /
+ *  agent_slug / prompt 由宿主定或不开放)。字段含义见 `MuseTriggerUpsert` / `AutomationActionSpec`。 */
+export interface PluginAutomationRule {
+  /** 规则键,`[a-z0-9-]+`;宿主拼成 `plugin:<pluginId>:<key>`。同 key 重放 = 幂等更新。 */
+  key: string
+  desc: string
+  cond_type: 'db_changed'
+  /** 触发表,库相对路径,须以 .db 结尾。 */
+  path: string
+  event: 'row_added' | 'cell_changed'
+  /** cell_changed 必填:被盯那列的 id。 */
+  column_id?: string
+  /** cell_changed 可选:只有变成这个值才算数。 */
+  equals?: string
+  /** 附加条件(与 equals AND;≤10 条)。 */
+  where?: import('../../types').AutomationWhere[]
+  /** 动作链(1–24 步),只许 notify / db_row_add / db_row_edit。 */
+  actions: Array<Extract<import('../../types').AutomationActionSpec, { type: 'notify' | 'db_row_add' | 'db_row_edit' }>>
+  /** 冷却小时;纯动作链缺省 0(链式规则需要),可显式给 0。 */
+  cooldown_hours?: number
 }
 
 export interface AmadeusPlugin {

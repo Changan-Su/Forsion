@@ -24,7 +24,7 @@ export interface PairedDevice { id: string; name: string; tokenHash: string; cre
 /**
  * /vault/rpc 可远程调用的通道白名单(default-deny,同 sketch 工具的 GUI 门禁范式)。
  * 排除项都是「在 B 的机器上弹对话框/开 shell」类桌面 UX 通道:openVault(目录选择框)、
- * openAttachment/openVaultFile(shell.openPath)、exportPdf(保存框+printToPDF)、
+ * openAttachment/openVaultFile(shell.openPath)、exportPdf / exportCsv(保存框 + 往库外落盘)、
  * revealInFileManager、插件管理(listPlugins 走 /unit/plugins;scaffold/uninstall/open-folder 不给远端)。
  * 文件类通道全部经 VaultManager.resolveInVault 钳制在库根内,越界即抛。
  */

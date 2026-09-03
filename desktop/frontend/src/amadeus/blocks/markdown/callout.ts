@@ -8,6 +8,12 @@ import { Plugin, PluginKey, TextSelection, type Selection } from '@milkdown/kit/
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import type { EditorState } from '@milkdown/kit/prose/state'
 import type { ResolvedPos, Node as PMNode } from '@milkdown/kit/prose/model'
+import { registerMessages, translate } from '../../../i18n'
+
+registerMessages({
+  'mdcallout.expand': { zh: '展开', en: 'Expand' },
+  'mdcallout.collapse': { zh: '折叠', en: 'Collapse' },
+})
 
 /**
  * 落盘前把 callout 令牌的 `\[` 还原成 `[`。
@@ -259,7 +265,7 @@ export function calloutPlugin() {
                       // ⚠️ 类名不能叫 callout-fold —— 那是 `[!fold]` 类型加在 blockquote 上的类,
                       // 同名会让「chevron 旋转 90°」的规则命中整个引用块。
                       b.className = `callout-chevron${collapsed ? ' collapsed' : ''}`
-                      b.title = collapsed ? '展开' : '折叠'
+                      b.title = collapsed ? translate('mdcallout.expand') : translate('mdcallout.collapse')
                       b.textContent = '›'
                       b.contentEditable = 'false'
                       b.addEventListener('mousedown', (e) => {

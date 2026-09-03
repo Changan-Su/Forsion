@@ -28,6 +28,7 @@ const api: AmadeusApi = {
   openAttachment: (pagePath, ref) => ipcRenderer.invoke(IPC.openAttachment, pagePath, ref),
   openVaultFile: (vaultRel) => ipcRenderer.invoke(IPC.openVaultFile, vaultRel),
   exportPdf: (defaultName) => ipcRenderer.invoke(IPC.exportPdf, defaultName),
+  exportCsv: (defaultName, csv) => ipcRenderer.invoke(IPC.exportCsv, defaultName, csv),
   onExternalChange: (cb) => {
     const listener = (_event: IpcRendererEvent, pagePath: string): void => cb(pagePath)
     ipcRenderer.on(IPC.externalChange, listener)

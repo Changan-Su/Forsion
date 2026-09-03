@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateTriggers, buildTriggerKickoff, validateTriggerInput, nextRunAt, type MuseTrigger, type EventCursor } from './museTriggers.js';
+import {
+  evaluateTriggers, buildTriggerKickoff, validateTriggerInput, nextRunAt, condSummary,
+  cursorFor, cursorFits, keyParts, replaceKeyPart, watchedCols, MAX_WATCH_COLS,
+  type MuseTrigger, type EventCursor, type DbLike,
+} from './museTriggers.js';
 
 function rule(over: Partial<MuseTrigger>): MuseTrigger {
   return {
@@ -15,6 +19,8 @@ function rule(over: Partial<MuseTrigger>): MuseTrigger {
 }
 
 const NOW = new Date(2026, 6, 11, 12, 0); // 本地 2026-07-11 12:00
+/** 游标身份三件套(cursorFor 一律写全;造入参 / 拼期望值共用这一处,手写等于把闸门抄错)。 */
+const idy = (event: 'row_added' | 'cell_changed' = 'cell_changed') => ({ v: 2 as const, path: 't.db', vault: '/v', event });
 
 describe('evaluateTriggers', () => {
   it('file_chars_gte:达标命中,未达/不可读不命中', async () => {
@@ -146,6 +152,14 @@ describe('buildTriggerKickoff', () => {
     expect(out).toContain('Remind the user.');
     expect(out).toContain('100+ non-whitespace chars');
   });
+
+  it('同一规则多行命中(fired 含重复引用)→ 按 id 去重,不挤占 5 条名额', () => {
+    const same = rule({ id: 'w-db', desc: '订单加行', cond: { type: 'db_changed', path: 'a.db', vault: '/v', event: 'row_added' } });
+    const others = Array.from({ length: 4 }, (_, i) => rule({ id: `w-o${i}`, desc: `其它${i}` }));
+    const out = buildTriggerKickoff([same, same, same, same, same, ...others]);
+    expect(out.match(/订单加行/g)).toHaveLength(1);
+    expect(out).toContain('其它3'); // 负对照:不去重时 5 个 same 占满 slice(0,5),其它3 被挤掉
+  });
 });
 
 describe('validateTriggerInput', () => {
@@ -203,6 +217,94 @@ describe('validateTriggerInput', () => {
     expect(validateTriggerInput({ ...base, actions: [{ type: 'tool_call', tool: 'run_bash', args: {} }] }, { allowToolCall: true }).ok).toBe(true);
   });
 
+  it('E6 db_changed 纯动作链:默认 0、显式 0 认、显式 2 保留、下限不抬到 0.25;含 agent_run 仍 ≥1h;不含 actions 的 Muse 唤醒路照旧 24', () => {
+    const base = { desc: 'erp', cond_type: 'db_changed', path: '订单.db', event: 'row_added', vault: '/v' };
+    const chain = [{ type: 'db_row_add', path: '出库.db', cells: { a: '1' } }];
+    const dflt = validateTriggerInput({ ...base, actions: chain });
+    expect(dflt.ok && dflt.value.cooldownHours).toBe(0);
+    const zero = validateTriggerInput({ ...base, actions: chain, cooldown_hours: 0 });
+    expect(zero.ok && zero.value.cooldownHours).toBe(0); // 从前 `> 0` 会把显式 0 当没传 → 24
+    const two = validateTriggerInput({ ...base, actions: chain, cooldown_hours: 2 });
+    expect(two.ok && two.value.cooldownHours).toBe(2);
+    const tiny = validateTriggerInput({ ...base, actions: chain, cooldown_hours: 0.1 });
+    expect(tiny.ok && tiny.value.cooldownHours).toBeCloseTo(0.1); // 纯直执链 0.25 下限对 db 链不适用
+    const llm = validateTriggerInput({ ...base, actions: [{ type: 'agent_run', agentSlug: 'coder', prompt: 'x' }], cooldown_hours: 0.1 });
+    expect(llm.ok && llm.value.cooldownHours).toBe(1);
+    const muse = validateTriggerInput({ ...base });
+    expect(muse.ok && muse.value.cooldownHours).toBe(24);
+  });
+
+  it('E6 evaluate 侧:db 纯动作链显式设了冷却就要认(期内不复触)', async () => {
+    const t = rule({
+      cond: { type: 'db_changed', path: 't.db', vault: '/v', event: 'row_added' },
+      actions: [{ type: 'notify', title: 'x' }],
+      cooldownHours: 2,
+      lastFiredAt: new Date(NOW.getTime() - 3600_000).toISOString(),
+    });
+    const env = { now: NOW, currentVault: '/v', dbCursors: { 'w-test01': { ...idy('row_added'), rowIds: [] } }, readDbFile: async () => ({ columns: [], rows: [{ id: 'r1', cells: {} }] }) };
+    expect(await evaluateTriggers([t], env)).toHaveLength(0);
+    expect(await evaluateTriggers([{ ...t, cooldownHours: 0 }], env)).toHaveLength(1);
+  });
+
+  it('E5 where 校验:≤10 条、column 非空、op 白名单、空数组视同无', () => {
+    const base = { desc: 'w', cond_type: 'db_changed', path: 't.db', event: 'row_added', vault: '/v' };
+    const ok = validateTriggerInput({ ...base, where: [{ column: '配件', op: 'notempty' }, { column: 'c2', op: 'eq', value: '已确认' }] });
+    expect(ok.ok && ok.value.cond).toMatchObject({ where: [{ column: '配件', op: 'notempty' }, { column: 'c2', op: 'eq', value: '已确认' }] });
+    const empty = validateTriggerInput({ ...base, where: [] });
+    expect(empty.ok && (empty.value.cond as any).where).toBeUndefined();
+    expect(validateTriggerInput({ ...base, where: [{ column: '', op: 'eq', value: 'x' }] }).ok).toBe(false);
+    expect(validateTriggerInput({ ...base, where: [{ column: 'a', op: 'like', value: 'x' }] }).ok).toBe(false);
+    expect(validateTriggerInput({ ...base, where: Array.from({ length: 11 }, () => ({ column: 'a', op: 'empty' })) }).ok).toBe(false);
+    expect(validateTriggerInput({ ...base, where: 'nope' }).ok).toBe(false);
+  });
+
+  it('F1 column_id/column_ids 归一:单列只落 columnId;多列 columnId=首列 + columnIds 排序去重;缺/超限/非数组拒', () => {
+    const base = { desc: 'w', cond_type: 'db_changed', path: 't.db', event: 'cell_changed', vault: '/v' };
+    // 单列(老入参形状)→ 存盘形状逐字不变:没有 columnIds 键(存量规则 / 游标 / 桌面 KNOWN_COND_KEYS 零迁移)
+    const one = validateTriggerInput({ ...base, column_id: ' c2 ' });
+    expect(one.ok && one.value.cond).toEqual({ type: 'db_changed', path: 't.db', vault: '/v', event: 'cell_changed', columnId: 'c2', equals: undefined });
+    expect(one.ok && 'columnIds' in one.value.cond).toBe(false);
+    // column_ids 单元素 + 同名 column_id → 仍是单列形状
+    const dup = validateTriggerInput({ ...base, column_id: 'c2', column_ids: ['c2'] });
+    expect(dup.ok && (dup.value.cond as any).columnIds).toBeUndefined();
+    // 多列:并集、去重、**排序**(桌面勾选顺序不同的同一集合不能被 JSON 比对当成 cond 变了 → 丢游标)
+    const multi = validateTriggerInput({ ...base, column_id: 'st', column_ids: ['cust', ' st ', 'cust', ''] });
+    expect(multi.ok && multi.value.cond).toMatchObject({ columnId: 'cust', columnIds: ['cust', 'st'] });
+    const reorder = validateTriggerInput({ ...base, column_ids: ['st', 'cust'] });
+    expect(reorder.ok && multi.ok && JSON.stringify(reorder.value.cond)).toBe(JSON.stringify(multi.value.cond));
+    // 只给 column_ids 不给 column_id 也行
+    expect(validateTriggerInput({ ...base, column_ids: ['a', 'b'] }).ok).toBe(true);
+    // 缺 / 全空 / 非数组 / 超限 → 拒
+    expect(validateTriggerInput({ ...base }).ok).toBe(false);
+    expect(validateTriggerInput({ ...base, column_ids: [' ', ''] }).ok).toBe(false);
+    expect(validateTriggerInput({ ...base, column_ids: 'a,b' }).ok).toBe(false);
+    expect(validateTriggerInput({ ...base, column_ids: Array.from({ length: MAX_WATCH_COLS + 1 }, (_, i) => `c${i}`) }).ok).toBe(false);
+    // row_added 不看列
+    expect(validateTriggerInput({ ...base, event: 'row_added', column_ids: 'junk' }).ok).toBe(true);
+    // 负对照(实跑过):parseColumnIds 去掉 out.sort() → reorder 用例 JSON 不等 → 红
+  });
+
+  it('E3/E4 动作校验:rowFrom/match/skipIfEmpty 解析;skipIfEmpty 键必须在 cells 里;MAX_ACTIONS=24', () => {
+    const base = { desc: 'a', cond_type: 'db_changed', path: 't.db', event: 'row_added', vault: '/v' };
+    const v = validateTriggerInput({ ...base, actions: [
+      { type: 'db_row_add', path: '出库.db', cells: { 配件: '{{row.CPU}}', 订单: '{{row.id}}' }, skipIfEmpty: '配件' },
+      { type: 'db_row_edit', path: '库存.db', rowFrom: '配件', cells: { 数量: '{{= {target.数量} - 1 }}' } },
+      { type: 'db_row_edit', path: '出库.db', match: { column: '订单总表', value: '{{row.id}}' }, cells: { 状态: '{{row.状态}}' } },
+    ] });
+    expect(v.ok && v.value.actions).toEqual([
+      { type: 'db_row_add', path: '出库.db', cells: { 配件: '{{row.CPU}}', 订单: '{{row.id}}' }, skipIfEmpty: '配件' },
+      { type: 'db_row_edit', path: '库存.db', rowId: undefined, rowFrom: '配件', cells: { 数量: '{{= {target.数量} - 1 }}' } },
+      { type: 'db_row_edit', path: '出库.db', rowId: undefined, match: { column: '订单总表', value: '{{row.id}}' }, cells: { 状态: '{{row.状态}}' } },
+    ]);
+    const badKey = validateTriggerInput({ ...base, actions: [{ type: 'db_row_add', path: 'x.db', cells: { a: '1' }, skipIfEmpty: 'b' }] });
+    expect(badKey.ok).toBe(false); // 写错键 = 每行都被静默跳过,比 400 糟
+    const badMatch = validateTriggerInput({ ...base, actions: [{ type: 'db_row_edit', path: 'x.db', match: { value: '1' }, cells: { a: '1' } }] });
+    expect(badMatch.ok).toBe(false);
+    const many = (n: number) => Array.from({ length: n }, () => ({ type: 'notify', title: 't' }));
+    expect(validateTriggerInput({ ...base, actions: many(24) }).ok).toBe(true);
+    expect(validateTriggerInput({ ...base, actions: many(25) }).ok).toBe(false);
+  });
+
   it('manual:巡检永不命中、无下次时刻、cooldown 强制 0(含 agent_run 也是)', async () => {
     // 按钮类规则的全部执行入口是 fire 端点。巡检若命中它,笔记里的按钮就变成了后台定时任务。
     const t = rule({ cond: { type: 'manual' }, cooldownHours: 0 });
@@ -214,5 +316,135 @@ describe('validateTriggerInput', () => {
       actions: [{ type: 'agent_run', agentSlug: 'coder', prompt: 'tidy' }],
     });
     expect(v.ok && v.value.cooldownHours).toBe(0);
+  });
+});
+
+describe('F1 多列监听:游标 key 拼装与形状判定', () => {
+  const cond = (over: Record<string, unknown>) => ({ type: 'db_changed' as const, path: 't.db', vault: '/v', event: 'cell_changed' as const, ...over });
+  const tbl: DbLike = {
+    columns: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }],
+    rows: [{ id: 'r1', cells: { a: 'x', b: ['m', 'n'] } }, { id: 'r2', cells: {} }],
+  };
+
+  it('watchedCols = columnIds ∪ columnId 去重保序;两键只带一个也能取到', () => {
+    expect(watchedCols(cond({ columnId: 'a' }))).toEqual(['a']);
+    expect(watchedCols(cond({ columnIds: ['a', 'b'] }))).toEqual(['a', 'b']);
+    expect(watchedCols(cond({ columnId: 'a', columnIds: ['a', 'b'] }))).toEqual(['a', 'b']);
+    expect(watchedCols(cond({ columnId: 'c', columnIds: ['a', 'b'] }))).toEqual(['a', 'b', 'c']); // 手改文件两键不一致 → 并集
+    expect(watchedCols(cond({}))).toEqual([]);
+  });
+
+  it('cursorFor:游标一律带 cols(n=1 也带);多列复合 key(缺列位空串)', () => {
+    expect(cursorFor(cond({ columnId: 'a' }), tbl)).toEqual({ ...idy(), cols: ['a'], cells: { r1: 'x', r2: '' } });
+    // 钉新契约:单列也写 cols —— 没有它,改列后 B 的当前值 × A 的历史值逐行比 = 满表误触发
+    expect(JSON.stringify(cursorFor(cond({ columnId: 'a' }), tbl)))
+      .toBe('{"v":2,"path":"t.db","event":"cell_changed","vault":"/v","cols":["a"],"cells":{"r1":"x","r2":""}}');
+    const two = cursorFor(cond({ columnId: 'a', columnIds: ['a', 'b'] }), tbl)!;
+    expect(two).toEqual({ ...idy(), cols: ['a', 'b'], cells: { r1: 'x\u001fmn', r2: '\u001f' } });
+    expect(keyParts(two.cells!.r1, 2)).toEqual(['x', 'mn']);
+    expect(keyParts(two.cells!.r2, 2)).toEqual(['', '']);
+    expect(keyParts('bare', 1)).toEqual(['bare']);
+    expect(keyParts('short', 3)).toEqual(['short', '', '']); // 位数不足补空
+    expect(replaceKeyPart(two.cells!.r1, 2, 1, 'Q')).toBe('x\u001fQ');
+    expect(replaceKeyPart('old', 1, 0, 'new')).toBe('new');
+    expect(cursorFor(cond({}), tbl)).toBeNull();
+  });
+
+  it('cursorFits:任何列数都须 cols 同序同集;单列换了列 = 不符;旧的无 cols 游标 = 不符', () => {
+    expect(cursorFits({ ...idy(), cols: ['a'], cells: {} }, ['a'])).toBe(true);
+    expect(cursorFits({ ...idy(), cols: ['a', 'b'], cells: {} }, ['a', 'b'])).toBe(true);
+    // 头号 bug:单列 a 的游标遇上改成盯 b 的规则 —— 从前判「相符」,B 的当前值 × A 的历史值逐行比 = 满表误触发
+    expect(cursorFits({ ...idy(), cols: ['a'], cells: {} }, ['b'])).toBe(false);
+    expect(cursorFits({ ...idy(), cells: {} }, ['a'])).toBe(false); // 旧的无 cols 单列游标 → 只重播种(fail-closed 一次性代价)
+    expect(cursorFits({ ...idy(), cells: {} }, ['a', 'b'])).toBe(false); // 旧单列游标 × 改成多列
+    expect(cursorFits({ ...idy(), cols: ['b', 'a'], cells: {} }, ['a', 'b'])).toBe(false); // 序不同(排序后不该出现,出现即不认)
+    expect(cursorFits({ ...idy(), cols: ['a', 'b'], cells: {} }, ['a'])).toBe(false); // 多列游标 × 改回单列
+    expect(cursorFits({ ...idy(), cols: ['a', 'b', 'c'], cells: {} }, ['a', 'b'])).toBe(false);
+    expect(cursorFits(undefined, ['a'])).toBe(false);
+    expect(cursorFits({ ...idy('row_added'), rowIds: [] }, ['a'])).toBe(false);
+  });
+
+  it('evaluate 多列:任一列变化即命中;equals 按变了的那列比;旧单列游标遇多列规则只重播种不误触', async () => {
+    const t = rule({ cooldownHours: 0, cond: cond({ columnId: 'a', columnIds: ['a', 'b'] }) });
+    const seeded = { 'w-test01': { ...idy(), cols: ['a', 'b'], cells: { r1: 'x\u001fmn', r2: '\u001f' } } };
+    const run = async (rows: DbLike['rows'], cursors: any, over: Partial<MuseTrigger> = {}, cols?: DbLike['columns']) => {
+      const outDbCursors: Record<string, any> = {};
+      const outHits: Array<{ id: string; ctx: any }> = [];
+      const logs: string[] = [];
+      const fired = await evaluateTriggers([{ ...t, ...over }], {
+        now: NOW, currentVault: '/v', dbCursors: cursors, outDbCursors, outHits, log: (m) => logs.push(m),
+        readDbFile: async () => ({ ...tbl, ...(cols ? { columns: cols } : {}), rows }),
+      });
+      return { fired: fired.length, hits: outHits.map((h) => h.ctx.row?.id), next: outDbCursors['w-test01'], logs };
+    };
+    // 只有 b 列变 → 命中(单列版盯 a 永远看不见)
+    let r = await run([{ id: 'r1', cells: { a: 'x', b: ['m', 'z'] } }, { id: 'r2', cells: {} }], seeded);
+    expect(r.hits).toEqual(['r1']);
+    expect(r.next).toEqual({ ...idy(), cols: ['a', 'b'], cells: { r1: 'x\u001fmz', r2: '\u001f' } });
+    // 只有 a 列变 → 也命中;两行同时各变一列 → 两条 hit
+    r = await run([{ id: 'r1', cells: { a: 'y', b: ['m', 'n'] } }, { id: 'r2', cells: { b: 'k' } }], seeded);
+    expect(r.hits).toEqual(['r1', 'r2']);
+    // 都没变 → 不命中,游标原样
+    r = await run(tbl.rows, seeded);
+    expect(r.hits).toEqual([]);
+    expect(r.next).toEqual(seeded['w-test01']);
+    // equals 按列:b 变成 'done' 命中;a 变成 'done' 也命中;b 变了但不是 'done'、而 a 恰好一直是 'done'(没变)→ 不命中
+    const eq = { cond: cond({ columnId: 'a', columnIds: ['a', 'b'], equals: 'done' }) };
+    expect((await run([{ id: 'r1', cells: { a: 'x', b: 'done' } }, { id: 'r2', cells: {} }], seeded, eq)).hits).toEqual(['r1']);
+    expect((await run([{ id: 'r1', cells: { a: 'done', b: ['m', 'n'] } }, { id: 'r2', cells: {} }], seeded, eq)).hits).toEqual(['r1']);
+    const stale = { 'w-test01': { ...idy(), cols: ['a', 'b'], cells: { r1: 'done\u001fmn', r2: '\u001f' } } };
+    r = await run([{ id: 'r1', cells: { a: 'done', b: 'other' } }, { id: 'r2', cells: {} }], stale, eq);
+    expect(r.hits).toEqual([]);
+    expect(r.next.cells.r1).toBe('done\u001fother'); // equals 不符照样推进游标
+    // 负对照(实跑过):候选过滤改回 `now2 === c.equals`(整串比)→ 上面两条 equals 命中用例得 [] → 红
+    // 缺 cols 的游标 × 多列规则:不比对、只播种;满表现有行一个都不报
+    r = await run([{ id: 'r1', cells: { a: 'CHANGED', b: 'CHANGED' } }, { id: 'r2', cells: { a: 'q' } }], { 'w-test01': { ...idy(), cells: { r1: 'x', r2: '' } } });
+    expect(r.hits).toEqual([]);
+    expect(r.next).toEqual({ ...idy(), cols: ['a', 'b'], cells: { r1: 'CHANGED\u001fCHANGED', r2: 'q\u001f' } });
+    // 负对照(实跑过):evaluate 把 `!cursorFits(cur, cols)` 换回 `!cur?.cells` → 此处 hits 得 ['r1','r2'](满表误触发)→ 红
+    // 含 LLM 的规则每 tick 取一行:回填的游标必须仍带 cols(丢了下轮当未播种,第二行永远排不到)
+    r = await run([{ id: 'r1', cells: { a: 'y', b: ['m', 'n'] } }, { id: 'r2', cells: { b: 'k' } }], seeded, { agentSlug: 'worker' });
+    expect(r.hits).toEqual(['r1']);
+    expect(r.next).toEqual({ ...idy(), cols: ['a', 'b'], cells: { r1: 'y\u001fmn', r2: '\u001f' } });
+    // 监听列全被删 → 规则错误:不触发、游标冻住、log 留痕
+    r = await run([{ id: 'r1', cells: { a: 'y' } }], seeded, { cond: cond({ columnIds: ['zz', 'yy'] }) });
+    expect(r.fired).toBe(0);
+    expect(r.next).toBeUndefined();
+    expect(r.logs.some((l) => l.includes('w-test01') && l.includes('监听列已不存在'))).toBe(true);
+  });
+
+  it('多列监听删掉其中一列 = 规则错误:零触发 + 游标冻住 + log;列一回来照常续上', async () => {
+    // 盯 [a,b] 删掉 b:游标 cols 没变仍判「相符」,但所有原先 b 非空的行 key 从「a␟b」塌成「a␟」——
+    // 从前只要求「至少一列还在」,无 equals 时整表成候选,纯 DB 动作链一次跑完全表(codex 抓的)。
+    const t = rule({ cooldownHours: 0, cond: cond({ columnId: 'a', columnIds: ['a', 'b'] }) });
+    // 删列的真实落盘形态:列从 columns 里没了,**每行的 cells[b] 也被删掉**(DatabaseEmbed.delCol 两件一起做)。
+    const withB: DbLike['rows'] = [{ id: 'r1', cells: { a: 'x', b: ['m', 'n'] } }, { id: 'r2', cells: { a: 'p', b: 'q' } }];
+    const noB: DbLike['rows'] = [{ id: 'r1', cells: { a: 'x' } }, { id: 'r2', cells: { a: 'p' } }];
+    const seeded = { 'w-test01': { ...idy(), cols: ['a', 'b'], cells: { r1: 'x\u001fmn', r2: 'p\u001fq' } } };
+    const run = async (columns: DbLike['columns'], rows: DbLike['rows']) => {
+      const outDbCursors: Record<string, any> = {};
+      const outHits: Array<{ id: string; ctx: any }> = [];
+      const logs: string[] = [];
+      const fired = await evaluateTriggers([t], {
+        now: NOW, currentVault: '/v', dbCursors: seeded, outDbCursors, outHits, log: (m) => logs.push(m),
+        readDbFile: async () => ({ columns, rows }),
+      });
+      return { fired: fired.length, hits: outHits.map((h) => h.ctx.row?.id), next: outDbCursors['w-test01'], logs };
+    };
+    // b 被删:每行 key 从「a␟b」塌成「a␟」= 满表都「变了」
+    const gone = await run([{ id: 'a', name: 'A' }], noB);
+    expect(gone.hits).toEqual([]); // 负对照(实跑过):`missing.length` 换回 `!cols.some(...)` → hits 得 ['r1','r2'](一次满表变更)→ 红
+    expect(gone.fired).toBe(0);
+    expect(gone.next).toBeUndefined(); // 游标冻住:一格都没被消费
+    expect(gone.logs.some((l) => l.includes('w-test01') && l.includes('监听列已不存在') && l.includes('b'))).toBe(true);
+    // 列回来(schema 迁移的中间态过去了)→ 从原游标续上,一个事件都没丢
+    const back = await run([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], withB);
+    expect(back.hits).toEqual([]); // 值本来就没变
+    expect(back.next).toEqual(seeded['w-test01']);
+  });
+
+  it('condSummary:单列文案不变;多列列出全部列', () => {
+    expect(condSummary(cond({ columnId: 'st', equals: '已确认' }))).toBe('column st changed to "已确认" in t.db');
+    expect(condSummary(cond({ columnId: 'cust', columnIds: ['cust', 'st'] }))).toBe('any of columns cust, st changed in t.db');
   });
 });

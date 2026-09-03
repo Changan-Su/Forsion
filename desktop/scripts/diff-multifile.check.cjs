@@ -59,7 +59,7 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 720, height: 900 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 720, height: 900 } })
   await page.setContent(HTML)
   await page.waitForTimeout(200)
 

@@ -49,6 +49,16 @@ const F = {
   engine: path.join(GENESIS, 'desktop/frontend/src/bootstrapEngine.tsx'),
 }
 
+/** D 段扫「host 门控」的文件集。原先只有 bootstrapEngine —— 但门控并不只住在启动期:
+ *  功能面里「这个端有没有这条 IPC」的判断同样是一条「移动端会静默少一块」的通道,写在哪里都得进台账。
+ *  2026-09-02 加入 csvExport.ts(导出 CSV 的落盘门控:desktop=IPC / web=浏览器下载 / mobile=不渲染按钮)。
+ *  新增文件的规矩:门控字面量必须**逐字**写成 `window.tangu?.X` / `window.amadeus?.X`(别解构、别起别名),
+ *  否则正则扫不到 = 假登记。 */
+const GATE_FILES = [
+  F.engine,
+  path.join(GENESIS, 'desktop/frontend/src/amadeus/blocks/database/csvExport.ts'),
+]
+
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
 const SKIP = {
   // —— 启动序列 ——
@@ -95,6 +105,7 @@ const KNOWN_GATES = {
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
   'window.tangu?.unitsList': 'Unit 切换器(Ribbon head)— 仅真桌面:名册/配对回收走桌面 IPC,设备行=打开对方设备页(B 端渲染,方案 §11);web/mobile 无此 IPC,vault 切换仍走 VaultSideSwitch mobile 分支',
   'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变',
+  'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
 }
 
 /**
@@ -156,11 +167,16 @@ function diff(deskFile, mobFiles, label, problems) {
 }
 
 function checkGates(problems) {
-  const src = read(F.engine)
   const found = new Set()
-  for (const m of src.matchAll(/window\.tangu\?\.[A-Za-z_$][\w$]*|window\.amadeus(?![\w$])/g)) found.add(m[0])
+  // ⚠️ 交替分支的**顺序**是有意义的:`window.amadeus?.X` 必须排在裸 `window.amadeus` 前面,
+  //    否则正则先命中裸的那支,`?.exportCsv` 被吞掉 → 细粒度门控永远登记不上(假绿)。
+  const RE = /window\.tangu\?\.[A-Za-z_$][\w$]*|window\.amadeus\?\.[A-Za-z_$][\w$]*|window\.amadeus(?![\w$?])/g
+  for (const f of GATE_FILES) {
+    if (!fs.existsSync(f)) continue // 文件被重构掉 → 由下面的自检报「解析失效」,不在这里静默
+    for (const m of read(f).matchAll(RE)) found.add(m[0])
+  }
   const undeclared = [...found].filter((g) => !(g in KNOWN_GATES)).sort()
-  if (undeclared.length) problems.push({ label: 'D. host 门控台账', deskFile: F.engine, mobFile: null, missing: undeclared })
+  if (undeclared.length) problems.push({ label: 'D. host 门控台账', deskFile: GATE_FILES.join(' + '), mobFile: null, missing: undeclared })
   const stale = Object.keys(KNOWN_GATES).filter((g) => !found.has(g)).sort()
   return { found, undeclared, stale }
 }

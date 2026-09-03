@@ -120,6 +120,8 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 | `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量(只读) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;见下「当前模型」 |
+| `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
+| `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
 | manifest `onboarding` | 装完的首启引导卡 | **别 recommends 自家已内嵌的 agent/skill**(会引导去市场重复装) |
 
@@ -135,6 +137,7 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 |---|---|
 | `readFile(p)` | **静默返回 `null`**(与「文件不存在」同形,try/catch 照不到) |
 | `writeFile(p, t)` | **reject** —— 主进程抛 `Error('No vault is open')` |
+| `mutateDb(p, fn)`(2026-09-02+) | `{ ok:false, error }`,**不抛**;云端/移动端桥没有 CAS 写口时同样 `{ ok:false }`。⚠️**改活表(补列属性、加视图)一律走它**:比对交换 + 冲突重读重放,`fn` 返 `null` 不写;`readFile`+`writeFile` 整文件覆盖会盖掉读写之间自动化/用户刚写的行且零报错。旧宿主没有 → `ctx.app.mutateDb?.(…)` 再走自己的回落路 |
 | `listPages()` / `listFiles()` / `searchVault(q)` | 一律**给空数组、不 reject** |
 | `vaultRoot()` | `null` —— **唯一的可用性探针** |
 | `workFolder()` | **照常返值**(它只是一条设置项的值)—— ⚠️**不是可用性探针**,拿到字符串不代表写得进去 |
@@ -248,6 +251,55 @@ const s = ctx.tangu?.session?.()       // {contextWindow, contextTokens, session
 - `session()` **拉取式**:这几个值流式回答里每帧都在动,**故意不进 `subscribe` 的变更键**(进去 = 把订阅插件按帧敲一遍)。要跟着动就自己定时拉,或"开面板那一刻读一次"。`contextWindow` 未知给 **0**、`effort` 未知给 **null** —— 别把 0/空串当档位画出来。
 - **能力探测,不是权限闸**:模型名不敏感,**不用**写 manifest `capabilities`(那道双闸给 `system.activeWindow` 那类)。
 - 只读。要换模型 / 发消息,走引擎侧 agent(通用纪律 5),别指望这里。
+
+## 自动化规则播种:ctx.automation(2026-09-02 起)
+
+插件给一批**多维表触发**(`db_changed`)的规则,宿主幂等 upsert 到引擎(`POST /agent/special/muse/triggers`),
+每次 `setup` 重放即可 —— 同 `key` = 同一条规则(更新),不会越种越多。
+
+```js
+// setup 里:别 await —— ensure 会等后端与库就绪(最多 60s),阻塞 setup 等于把整个插件挂住
+void ctx.automation?.ensure([
+  {
+    key: 'out-added',                       // [a-z0-9-]+;宿主拼成 plugin:<pluginId>:out-added
+    desc: '出库新增 → 扣库存',
+    cond_type: 'db_changed',
+    path: `${ctx.app.workFolder()}/出库记录.db`,   // 库相对路径,**自己拼** workFolder,宿主不替你前缀
+    event: 'row_added',                     // 或 'cell_changed' + column_id(+ equals)
+    where: [{ column: '配件', op: 'notempty' }],   // 可选,≤10 条,与 equals AND;op: eq/ne/empty/notempty
+    actions: [                              // 只许 notify / db_row_add / db_row_edit(agent_run / tool_call 该条被拒)
+      { type: 'db_row_edit', path: `${ctx.app.workFolder()}/库存表.db`, rowFrom: '配件',
+        cells: { 数量: '{{= {target.数量} - {row.出库数量} }}' } },
+    ],
+    // cooldown_hours 可省略:纯动作链缺省 0(链式规则需要);要冷却就显式给
+  },
+]).then(({ ok, errors }) => { if (!ok) console.warn('[pc-erp] automation', errors) })
+```
+
+- **返回** `{ ok, errors }`,永不抛。单条坏规则(key 形态 / path 不是库内 .db / where 超限 / actions 含 agent_run|tool_call /
+  `skipIfEmpty` 不在 cells 键里)只拒那一条,其余照发;**没开库(等 60s 仍没有)→ 整批不发**,errors 里是 `No vault is open`;
+  后端没起来(托管后端启动中)→ 整批不发。**失败的 ensure 宿主会自动重放**:后端下次从「未就绪」翻到「就绪」
+  (托管引擎起来 / 重连 / 换 token 后重新连通)时,对上次失败且插件仍启用的规则集原样再发一次(同插件两次重放至少隔
+  30s,最多 3 次);成功过的不重发。插件不必自己盯后端状态重试。
+- `vault` 由宿主绑**当前库**,规则只在那个库里触发;`path` 归一与引擎同口径(反斜杠→正斜杠、去首尾斜杠与空段),
+  拼法要稳定 —— path 一变引擎就认为条件变了、重新播种游标,期间新增的行不再触发。
+- **恒 `enabled:true`**:用户在自动化面板里单独关掉你的某条规则,下次插件重载 ensure 会把它开回来;要"可关"就把开关做成自己的设置项、按设置项决定发不发。
+- 用户**禁用插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删);再启用时 ensure 置回 true,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
+- 聊天里的 agent 经 `manage_automation` **不能改/删** `plugin:` 前缀的规则;用户能在自动化 Space 里看、编辑(构建器认得 where / rowFrom / match / skipIfEmpty)。
+- 动作字段速查:`db_row_add.skipIfEmpty`(cells 的一个键,展开为空则跳过本步);`db_row_edit` 目标行 `rowId` > `rowFrom`(触发行的关联列,多值逐行)> `match {column, value}`(目标表全部命中行)> 触发行;
+  单元格值支持 `{{row.X}}` / `{{target.X}}` / `{{= 算术 }}`。形状正典 = `desktop/frontend/src/types.ts` 的 `MuseTriggerUpsert` / `AutomationActionSpec`。
+
+## 日历成员登记:ctx.calendar(2026-09-02 起)
+
+Calendar Space 是**显式成员制**:有 `calendarDate` 列的表不会自动出现在日历里,得登记。插件种下任务表后:
+
+```js
+ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* 日期列 id */, 'c-done' /* 可选:完成勾选列 id */)
+```
+
+- 同步返回 void。已是成员 → **no-op**(不覆盖用户改过的列映射);库还没恢复 → 等库恢复后再登记(最多 60s)。
+- 列给的是**列 id**(不是列名);日期列用 `calendarDate` 类型。
+- 与 `ctx.automation` 不同,这条不需要 Tangu 宿主 —— 纯 Amadeus 壳也有;旧宿主没有,可选链。
 
 ## 全屏浮层:三条纪律(没有 API,但踩了就静默出事)
 

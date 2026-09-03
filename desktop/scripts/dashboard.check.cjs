@@ -150,7 +150,7 @@ const tp = (x, y, id) => ({ x: Math.round(x), y: Math.round(y), id, radiusX: 8, 
 const sendTouch = (cdp, type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts })
 
 async function openTouch(browser, locked) {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, hasTouch: true })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 900 }, hasTouch: true })
   page.on('pageerror', (e) => check(`页面无未捕获异常(${e.message.slice(0, 80)})`, false))
   await page.goto(`${BASE}?dashboard`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.dash2-host .dash2-card', { timeout: 20000 })
@@ -164,7 +164,7 @@ async function openTouch(browser, locked) {
 }
 
 async function open(browser, locked) {
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   // ⚠️ 光 console.log 就是假绿:页面抛异常照样 0 退出。收进 results,收尾一起判。
   page.on('pageerror', (e) => check(`页面无未捕获异常(${e.message.slice(0, 80)})`, false))
   await page.setViewportSize({ width: 1280, height: 900 })

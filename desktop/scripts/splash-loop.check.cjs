@@ -58,7 +58,7 @@ const state = () => {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1200, height: 820 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 820 } })
 
   // ── ①+② 首帧迟迟不来 → 一直循环;首帧一到 → 撤走 ──
   await page.setContent(HTML)

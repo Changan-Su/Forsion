@@ -46,7 +46,7 @@ const tabIcon = (p) => p.evaluate(() => {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1200, height: 800 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 800 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?dock`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector('.dv-tab', { timeout: 20000 })

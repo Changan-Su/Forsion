@@ -8,6 +8,7 @@
 import { useSpaceStore } from '@lcl/engine'
 import { setTanguProbe, type TanguModelInfo, type TanguSessionInfo } from '@amadeus/plugins/tanguSeam'
 import { activeChatModelId, stickyDefaults, useApp } from './stores/appStore'
+import type { TanguDesktopConfig } from './types'
 
 function readActiveModel(): TanguModelInfo | null {
   const s = useApp.getState()
@@ -57,12 +58,52 @@ function readSession(): TanguSessionInfo {
   }
 }
 
+/** 后端就绪判据 = `cfgLoaded && connState === 'ok'`(不是「cfg 对象存在」——初值就是个假地址)。 */
+function readyCfg(): TanguDesktopConfig | null {
+  const s = useApp.getState()
+  return s.cfgLoaded && s.connState === 'ok' ? s.cfg : null
+}
+
+/** 等后端就绪;就绪即刻 resolve,否则订阅 store 直到就绪或超时(超时 null,不抛)。 */
+export function waitBackend(timeoutMs: number): Promise<TanguDesktopConfig | null> {
+  const now = readyCfg()
+  if (now) return Promise.resolve(now)
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (v: TanguDesktopConfig | null): void => {
+      if (done) return
+      done = true
+      off()
+      clearTimeout(timer)
+      resolve(v)
+    }
+    const off = useApp.subscribe(() => {
+      const c = readyCfg()
+      if (c) finish(c)
+    })
+    const timer = setTimeout(() => finish(null), Math.max(0, timeoutMs))
+  })
+}
+
+/** 后端就绪边沿:`!!readyCfg()` 从 false 翻到 true 才回调(判据与 waitBackend 共用 readyCfg,两边永远一致)。
+ *  订阅那一刻已就绪不补发;ok→err→ok 再响一次(那正是「引擎重启 / 换 token 重连」要重放 ensure 的时刻)。 */
+export function subscribeReady(cb: () => void): () => void {
+  let last = !!readyCfg()
+  return useApp.subscribe(() => {
+    const now = !!readyCfg()
+    if (now && !last) cb()
+    last = now
+  })
+}
+
 export function installTanguProbe(): void {
   setTanguProbe({
     activeModel: readActiveModel,
     models: readModels,
     activeSpace: readActiveSpace,
     session: readSession,
+    waitBackend,
+    subscribeReady,
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

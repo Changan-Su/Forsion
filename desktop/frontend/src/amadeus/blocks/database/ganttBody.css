@@ -1,0 +1,33 @@
+/* 多维表 gantt 视图体(嵌入块 / 独立 tab 共用)。颜色只吃 token,明暗两档自动跟随;调色板照 amadeus-host.css 的日历段。
+   时间轴在自己的 overflow-x:auto 容器里滚(页面不横滚);行高 --gantt-row 由左侧标题列与右侧条行共用 → 逐行对齐。
+   ⚠️ 根不用 .amx-db-scroll(那是表格的 grid 容器,另一会话正在改它)。 */
+.amx-db-gantt { --gantt-row: 28px; --gantt-labels: 200px; padding: 4px 2px 8px; }
+.amx-db-gantt-nav { display: flex; align-items: center; gap: 6px; padding: 2px 2px 8px; }
+.amx-db-gantt-scale { border: 1px solid var(--border); background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; line-height: 1; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+.amx-db-gantt-scale:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
+.amx-db-gantt-scale[data-on] { background: var(--action-fill, var(--accent-ink, #6c5ce7)); color: var(--on-action, var(--on-accent-ink, #fff)); border-color: transparent; }
+.amx-db-gantt-colhint { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--text-faint, var(--text-muted)); font-size: 11.5px; }
+
+.amx-db-gantt-body { display: grid; grid-template-columns: var(--gantt-labels) minmax(0, 1fr); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.amx-db-gantt-labels { min-width: 0; border-right: 1px solid var(--border); }
+.amx-db-gantt-lhead,
+.amx-db-gantt-label { box-sizing: border-box; height: var(--gantt-row); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.amx-db-gantt-lhead { display: flex; align-items: center; padding: 0 10px; color: var(--text-faint, var(--text-muted)); font-size: 11px; background: var(--overlay-light, rgba(127, 127, 127, 0.04)); }
+.amx-db-gantt-label { display: block; width: 100%; border-top: none; border-left: none; border-right: none; background: transparent; color: var(--text); font: inherit; font-size: 12.5px; line-height: calc(var(--gantt-row) - 1px); padding: 0 10px; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-db-gantt-label:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.amx-db-gantt-label[data-undated] { color: var(--text-faint, var(--text-muted)); }
+.amx-db-gantt-nodate { margin-left: 6px; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); opacity: 0.8; }
+
+.amx-db-gantt-scroll { min-width: 0; overflow-x: auto; overflow-y: hidden; }
+/* 竖网格线按 --gantt-unit(日档 = 一天宽,周档 = 一周宽)重复,canvas 上由 JS 写入 */
+.amx-db-gantt-canvas { position: relative; background-image: repeating-linear-gradient(to right, color-mix(in srgb, var(--border) 45%, transparent) 0 1px, transparent 1px var(--gantt-unit, 28px)); }
+.amx-db-gantt-head { display: flex; height: var(--gantt-row); box-sizing: border-box; border-bottom: 1px solid var(--border); background: var(--overlay-light, rgba(127, 127, 127, 0.04)); }
+.amx-db-gantt-tick { flex: none; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); }
+.amx-db-gantt-tick[data-major] { justify-content: flex-start; padding-left: 4px; color: var(--text-muted); font-weight: 600; }
+.amx-db-gantt-tick[data-weekend] { background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
+.amx-db-gantt-row { position: relative; height: var(--gantt-row); box-sizing: border-box; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.amx-db-gantt-row[data-undated] { background: var(--overlay-light, rgba(127, 127, 127, 0.04)); }
+.amx-db-gantt-bar { position: absolute; top: 6px; height: calc(var(--gantt-row) - 12px); box-sizing: border-box; min-width: 4px; border: none; border-radius: 4px; background: color-mix(in srgb, var(--accent, #6c5ce7) 55%, transparent); color: var(--text); font: inherit; font-size: 11px; line-height: 1; padding: 0 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.amx-db-gantt-bar:hover { background: color-mix(in srgb, var(--accent, #6c5ce7) 75%, transparent); }
+.amx-db-gantt-today { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--danger, #e5484d); pointer-events: none; z-index: 1; }
+.amx-db-gantt-today::before { content: ''; position: absolute; top: 0; left: -3px; width: 8px; height: 8px; border-radius: 999px; background: var(--danger, #e5484d); }

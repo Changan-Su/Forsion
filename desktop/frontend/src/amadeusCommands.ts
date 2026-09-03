@@ -12,33 +12,34 @@ import { openTutorial } from './amadeusTutorial'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { createDashboard, createDrawing } from './amadeusNav'
 import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
+import { translate } from './i18n'
 
 const ps = () => usePageStore.getState()
 const ws = () => useWorkspace.getState()
 const cs = () => useCommandStore.getState()
 
 const CMDS: Command[] = [
-  { id: 'amadeus-new-note', title: '新建笔记', keywords: 'new note create 新建 笔记', hotkey: 'mod+n', run: () => { if (ps().vaultRoot) void ps().createPage() } },
-  { id: 'amadeus-new-drawing', title: '新建白板', keywords: 'new drawing whiteboard canvas excalidraw 新建 白板 画板 baiban', run: () => { if (ps().vaultRoot) void createDrawing('') } },
-  { id: 'amadeus-new-dashboard', title: '新建仪表盘', keywords: 'new dashboard canvas grid widget 新建 仪表盘 面板 看板 yibiaopan', run: () => { if (ps().vaultRoot) void createDashboard('') } },
-  { id: 'amadeus-quick-switcher', title: '快速切换笔记', keywords: 'quick switcher open jump 快速 切换 跳转', hotkey: 'mod+p', run: () => useUiOverlay.getState().open('switcher') },
-  { id: 'amadeus-search', title: '搜索笔记(全文)', keywords: 'search full text 搜索 全文', hotkey: 'mod+shift+f', run: () => openSearchView() },
-  { id: 'amadeus-tutorial', title: '打开使用教程', keywords: 'tutorial guide help onboarding 教程 使用教程 帮助 入门 新手 jiaocheng bangzhu', run: () => void openTutorial() },
-  { id: 'amadeus-daily-note', title: '打开今天的日记', keywords: 'daily note today journal 日记 今天 riji', run: () => void openDailyNote() },
-  { id: 'amadeus-toggle-star', title: '收藏 / 取消收藏当前笔记', keywords: 'star favorite bookmark 收藏 星标 shoucang', run: () => { const p = ps().activePage; if (p) useAmadeusPrefs.getState().toggleStar(p) } },
-  { id: 'amadeus-toggle-source', title: '切换 源码 / 可视 编辑', keywords: 'source markdown wysiwyg toggle 源码 可视', run: () => useUiOverlay.getState().toggleEditorMode() },
-  { id: 'amadeus-open-vault', title: '打开 Vault…', keywords: 'vault open folder 打开 仓库 文件夹', run: () => void ps().openVault() },
-  { id: 'amadeus-reveal', title: '在文件管理器中显示当前笔记', keywords: 'reveal finder explorer 文件管理器 显示', run: () => { const p = ps().activePage; if (p) void amadeus.revealInFileManager(p) } },
-  { id: 'amadeus-reindex', title: '重建全文索引', keywords: 'reindex search index 索引 重建', run: () => void amadeus.reindex() },
+  { id: 'amadeus-new-note', title: () => translate('amadeus.new.note'), keywords: 'new note create 新建 笔记', hotkey: 'mod+n', run: () => { if (ps().vaultRoot) void ps().createPage() } },
+  { id: 'amadeus-new-drawing', title: () => translate('amadeus.new.drawing'), keywords: 'new drawing whiteboard canvas excalidraw 新建 白板 画板 baiban', run: () => { if (ps().vaultRoot) void createDrawing('') } },
+  { id: 'amadeus-new-dashboard', title: () => translate('amadeus.new.dashboard'), keywords: 'new dashboard canvas grid widget 新建 仪表盘 面板 看板 yibiaopan', run: () => { if (ps().vaultRoot) void createDashboard('') } },
+  { id: 'amadeus-quick-switcher', title: () => translate('amadeus.cmd.quickSwitch'), keywords: 'quick switcher open jump 快速 切换 跳转', hotkey: 'mod+p', run: () => useUiOverlay.getState().open('switcher') },
+  { id: 'amadeus-search', title: () => translate('amadeus.cmd.search'), keywords: 'search full text 搜索 全文', hotkey: 'mod+shift+f', run: () => openSearchView() },
+  { id: 'amadeus-tutorial', title: () => translate('amadeus.cmd.tutorial'), keywords: 'tutorial guide help onboarding 教程 使用教程 帮助 入门 新手 jiaocheng bangzhu', run: () => void openTutorial() },
+  { id: 'amadeus-daily-note', title: () => translate('amadeus.cmd.dailyNote'), keywords: 'daily note today journal 日记 今天 riji', run: () => void openDailyNote() },
+  { id: 'amadeus-toggle-star', title: () => translate('amadeus.cmd.toggleStar'), keywords: 'star favorite bookmark 收藏 星标 shoucang', run: () => { const p = ps().activePage; if (p) useAmadeusPrefs.getState().toggleStar(p) } },
+  { id: 'amadeus-toggle-source', title: () => translate('amadeus.cmd.toggleSource'), keywords: 'source markdown wysiwyg toggle 源码 可视', run: () => useUiOverlay.getState().toggleEditorMode() },
+  { id: 'amadeus-open-vault', title: () => translate('amadeus.cmd.openVault'), keywords: 'vault open folder 打开 仓库 文件夹', run: () => void ps().openVault() },
+  { id: 'amadeus-reveal', title: () => translate('amadeus.cmd.reveal'), keywords: 'reveal finder explorer 文件管理器 显示', run: () => { const p = ps().activePage; if (p) void amadeus.revealInFileManager(p) } },
+  { id: 'amadeus-reindex', title: () => translate('amadeus.cmd.reindex'), keywords: 'reindex search index 索引 重建', run: () => void amadeus.reindex() },
   {
     id: 'amadeus-toggle-wiki-files',
-    title: '切换 双链补全是否包含附件与数据库',
+    title: () => translate('amadeus.cmd.toggleWikiFiles'),
     keywords: 'wikilink attachment database toggle 双链 附件 数据库 补全 切换 fujian shujuku',
     run: () => {
       const next = !wikiFilesEnabled()
       setWikiFilesEnabled(next) // 先就地生效,再落盘(设置页读的是 config)
       void window.tangu?.setConfig?.({ notesWikiIncludeFiles: next })
-      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: next ? '双链补全已包含附件与数据库' : '双链补全只包含笔记' } }))
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate(next ? 'amadeus.cmd.wikiFilesOn' : 'amadeus.cmd.wikiFilesOff') } }))
     },
   },
 ]

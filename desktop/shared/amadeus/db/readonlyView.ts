@@ -4,6 +4,7 @@
 import { applyFilters, applySorts } from './viewQuery'
 import { evalRowFormulas } from './formula'
 import { coerceForDisplay, sortsOf, type CellValue, type ColumnType, type DbColumn, type DbFile, type DbRow } from './schema'
+import { orderColumns } from './viewCols'
 
 const ALL_TYPES = new Set<ColumnType>(['text', 'number', 'checkbox', 'date', 'select', 'multiselect', 'url', 'page'])
 
@@ -15,7 +16,7 @@ export function baseKind(type: string | undefined): ColumnType {
 export function resolveDbTable(db: DbFile): { columns: DbColumn[]; rows: DbRow[]; noteView: boolean } {
   const view = db.views?.[0] // 首视图 = 默认呈现(激活视图不落盘,公开侧取第一个)
   const hidden = new Set(view?.hidden ?? [])
-  const columns = db.columns.filter((c) => !hidden.has(c.id))
+  const columns = orderColumns(db.columns, view?.order).filter((c) => !hidden.has(c.id)) // 首视图的独立列序(缺 = 全局序)
   if (db.source) return { columns, rows: [], noteView: true }
   const kindOf = (colId: string): ColumnType => baseKind(db.columns.find((c) => c.id === colId)?.type)
   // 公式列物化(lookup 要跨表数据,公开侧拿不到 → 留空)。

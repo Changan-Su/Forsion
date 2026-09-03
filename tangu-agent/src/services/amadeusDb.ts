@@ -25,12 +25,33 @@ import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 
 export type CellValue = string | number | boolean | string[] | null;
 
+/** 与 desktop/shared/amadeus/db/schema.ts 的 DbColumn 对齐(引擎只认它需要的字段;字段语义见那边)。
+ *  计算列(formula/lookup)相关字段给 dbLookup/dbFormula(vendor 自 desktop)物化用;multiple 给 coerceCell。 */
 export interface DbColumn {
   id: string;
   name: string;
   type: string;
   options?: string[];
   width?: number;
+  /** type='formula':表达式源码。 */
+  formula?: string;
+  /** type='rowlink':目标表路径;type='lookup' 反向模式(与 lookupBackCol 同在):要扫的目标表。 */
+  refDb?: string;
+  /** type='rowlink':多选(cell 为 string[]);缺 = 单选(cell 为 string)。 */
+  multiple?: boolean;
+  /** type='lookup' 正向:本表 rowlink 列 id。 */
+  lookupRel?: string;
+  /** type='lookup' 反向:目标表里指回本表的 rowlink 列 id。 */
+  lookupBackCol?: string;
+  /** type='lookup':目标表里要引用的列 id。 */
+  lookupCol?: string;
+  /** type='lookup':聚合(first/count/sum/avg/join);缺 = first。 */
+  lookupAgg?: string;
+  /** type='lookup' 反向模式:'links' = 可编辑投影列(值 = 指回本行的目标行 id 数组,cell 不落盘;
+   *  动作写它 = 翻译成对侧表的 rowlink 写,见 automationDbAction)。 */
+  lookupKind?: 'links';
+  /** type='autonumber':显示前缀(cell 仍存纯数字)。 */
+  prefix?: string;
 }
 export interface DbRow {
   id: string;
@@ -102,6 +123,20 @@ export async function readDb(rel: string): Promise<ParsedDb> {
     throw new Error(`not a valid .db file: ${rel}`);
   }
   return { db: data as DbFile, raw };
+}
+
+/**
+ * 读表的「缺席 vs 失败」口径(自动化评估 / DB 动作 / 依赖表预载共用):**不存在 → null,其它一律抛**
+ * (坏 JSON / 结构不对 / 越界 / 权限)。从前 `.catch(() => null)` 把坏文件也折成 null,评估侧据此
+ * 算出空 lookup、0 公式,再把事件当成已消费 —— 失败必须是失败,不能长得像「表是空的」。
+ */
+export async function readDbOrNull(rel: string): Promise<DbFile | null> {
+  try {
+    return (await readDb(rel)).db;
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return null;
+    throw e;
+  }
 }
 
 /** 自动化能不能碰这张表(笔记视图的行是笔记不是 JSON 行,按普通表改会写出无效数据)。 */
@@ -237,6 +272,7 @@ export function baseTypeOf(type: string): string {
   if (['text', 'number', 'checkbox', 'date', 'select', 'multiselect', 'url', 'page'].includes(t)) return t;
   if (t === 'todo') return 'checkbox';
   if (t === 'calendarDate') return 'text'; // 'start[/end]' 字符串
+  if (t === 'autonumber') return 'number'; // 自动编号:cell 存纯数字(prefix 只在渲染层拼);created 是 'YYYY-MM-DDTHH:mm' 串 → 文本
   return 'text';
 }
 
@@ -255,6 +291,9 @@ export function coerceCell(col: DbColumn, raw: string): CellValue {
     case 'multiselect':
       return v.split(',').map((x) => x.trim()).filter(Boolean);
     default:
+      // 多选关联列(rowlink + multiple)的 cell 是 id 数组:按逗号拆,与 multiselect 同款——
+      // 否则模板展开出的 "a, b" 会整串写成一个 string,渲染层把它当单个(不存在的)行 id。
+      if (col.type === 'rowlink' && col.multiple) return v.split(',').map((x) => x.trim()).filter(Boolean);
       return v;
   }
 }

@@ -35,7 +35,7 @@ async function main() {
       // ⚠️必须给独立 userData:与开发者自己的 dev 实例共用目录时,Chromium 的进程单例
       // (SingletonLock/Socket)会让本次启动**卡死在 requestSingleInstanceLock**——没有窗口、
       // 没有日志、evaluate 也不回,极难诊断。main.ts 会再补一个 `-dev` 后缀,无所谓。
-      args: [`--user-data-dir=${path.join(home, 'userdata')}`, ROOT],
+      args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       env: {
         ...process.env,

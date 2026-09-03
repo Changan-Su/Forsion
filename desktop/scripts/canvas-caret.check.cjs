@@ -46,7 +46,7 @@ function check(name, ok, detail) {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.goto(`${URL}?upage&upane&caret&useed=${encodeURIComponent(SEED)}`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.amx-ucard[data-anchor="k1"] p', { timeout: 20000 })

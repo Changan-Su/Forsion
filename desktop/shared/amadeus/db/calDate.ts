@@ -44,12 +44,17 @@ export function splitSide(side: string): { date: string; time: string } {
 }
 
 /** 人类可读(zh):`7月6日 10:00–11:00` / 全天 `7月6日` / 跨天 `7月6日 → 7月8日`。 */
-export function fmtCalDate(c: CalDate | null): string {
+/** 月日文案的格式化口径。shared 层不依赖 i18n(server/引擎也用这份),所以做成参数:
+ *  渲染层传 fmtCalDateL(见 amadeus/lib/calDateFmt)拿到跟随语言的版本;不传即原中文。 */
+export type MdFormatter = (month: number, day: number) => string
+const MD_ZH: MdFormatter = (m, d) => `${m}月${d}日`
+
+export function fmtCalDate(c: CalDate | null, mdFmt: MdFormatter = MD_ZH): string {
   if (!c) return ''
   const a = splitSide(c.start)
   const md = (d: string): string => {
     const [, m, day] = d.split('-')
-    return `${Number(m)}月${Number(day)}日`
+    return mdFmt(Number(m), Number(day))
   }
   if (!c.end) return a.time ? `${md(a.date)} ${a.time}` : md(a.date)
   const b = splitSide(c.end)

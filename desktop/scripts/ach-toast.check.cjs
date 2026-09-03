@@ -25,7 +25,7 @@ const atCenter = (win) => win.evaluate(() => {
 ;(async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-toast-'))
   const stub = await startStubEngine()
-  const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, ROOT], cwd: ROOT,
+  const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
   const win = await app.firstWindow()
   const errors = []; win.on('pageerror', (e) => errors.push(e.message))

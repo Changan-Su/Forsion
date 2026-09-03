@@ -57,7 +57,7 @@ const ping = (url) =>
   })
 
 async function run(browser, z) {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 800 } })
   await page.addInitScript((v) => localStorage.setItem('forsion_ui_zoom', String(v)), z)
   await page.goto(ORIGIN, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.shell', { timeout: 30000 })

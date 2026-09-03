@@ -141,7 +141,7 @@ async function applyCombo(page, lang, combo, mode) {
 
 async function makeSheet(browser, lang, shots, outDir) {
   const width = 7 * 360 + 6 * 8 + 24
-  const page = await browser.newPage({ viewport: { width, height: 650 }, deviceScaleFactor: 1 })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width, height: 650 }, deviceScaleFactor: 1 })
   const cards = shots.map((shot) => `<figure><figcaption>${shot.label} · ${shot.mode === 'dark' ? '暗' : '亮'}</figcaption><img src="data:image/png;base64,${shot.data}" /></figure>`).join('')
   await page.setContent(`<!doctype html><style>*{box-sizing:border-box}body{margin:0;padding:12px;background:#777;font:12px system-ui;color:#fff}.grid{display:grid;grid-template-columns:repeat(7,360px);gap:8px}figure{margin:0;background:#555}figcaption{height:24px;padding:5px 8px;font-weight:650}img{display:block;width:360px;height:280px}</style><div class="grid">${cards}</div>`)
   const file = path.join(outDir, `${lang}.png`)
@@ -154,7 +154,7 @@ async function makeSheet(browser, lang, shots, outDir) {
   const outDir = process.env.THEME_AUDIT_DIR || path.join(os.tmpdir(), 'forsion-theme-audit')
   fs.mkdirSync(outDir, { recursive: true })
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 360, height: 280 }, deviceScaleFactor: 1 })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 360, height: 280 }, deviceScaleFactor: 1 })
   await page.setContent(pageHtml)
   const files = []
   for (const lang of LANGS) {

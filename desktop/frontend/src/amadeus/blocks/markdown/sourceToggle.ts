@@ -6,6 +6,11 @@
 // 「编辑光标离开这片区域才复渲染」因此是白拿的 —— 逐行显隐本来就这么判。
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { registerMessages, translate } from '../../../i18n'
+
+registerMessages({
+  'srctoggle.viewSource': { zh: '查看源码', en: 'View source' },
+})
 
 /** 把光标送进 srcFrom 处的源码(开定界符之后),该行随即露出字面源码。 */
 export function revealSource(view: EditorView, srcFrom: number): void {
@@ -29,8 +34,8 @@ export function attachSourceButton(host: HTMLElement, view: EditorView, reveal: 
   const b = document.createElement('button')
   b.type = 'button'
   b.className = `amx-src-btn${inline ? ' amx-src-btn--inline' : ''}`
-  b.title = '查看源码'
-  b.setAttribute('aria-label', '查看源码')
+  b.title = translate('srctoggle.viewSource')
+  b.setAttribute('aria-label', translate('srctoggle.viewSource'))
   b.contentEditable = 'false'
   b.textContent = '</>'
   // mousedown 必须吞掉:否则 ProseMirror 先按坐标改选区,再轮到 click,光标落点就不是我们要的。

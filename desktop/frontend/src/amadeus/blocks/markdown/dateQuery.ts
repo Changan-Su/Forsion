@@ -6,7 +6,14 @@
  *
  *  刻意不做:chrono 那种自然语言库(「下周三下午三点」)。要那种表达力再说,先把 5 条数字写法做对。
  */
-import { fmtCalDate, isRealDate, parseCalDate } from '@amadeus-shared/db/calDate'
+import { isRealDate, parseCalDate } from '@amadeus-shared/db/calDate'
+import { fmtCalDateL } from '@amadeus/lib/calDateFmt'
+import { registerMessages, translate } from '../../../i18n'
+
+registerMessages({
+  'dateq.schedule': { zh: '日程', en: 'Schedule' },
+  'dateq.remind': { zh: '提醒', en: 'Reminder' },
+})
 
 export interface DateCand {
   /** 插入正文的字面文本(含前导 `@`,不含尾随空格) */
@@ -69,7 +76,7 @@ export function dateCandidates(query: string, now = new Date()): DateCand[] {
   if (!side) return []
   // 全天日期配提醒:午夜响没意义,按 09:00 给(Notion 的 "Tomorrow 9am" 同款)。
   const remindSide = side.includes('T') ? side : `${side}T09:00`
-  const hint = (v: string): string => fmtCalDate(parseCalDate(v))
-  const remind: DateCand = { insert: `@remind:${remindSide}`, label: '提醒', hint: hint(remindSide) }
-  return forced ? [remind] : [{ insert: `@${side}`, label: '日程', hint: hint(side) }, remind]
+  const hint = (v: string): string => fmtCalDateL(parseCalDate(v))
+  const remind: DateCand = { insert: `@remind:${remindSide}`, label: translate('dateq.remind'), hint: hint(remindSide) }
+  return forced ? [remind] : [{ insert: `@${side}`, label: translate('dateq.schedule'), hint: hint(side) }, remind]
 }

@@ -19,6 +19,7 @@ import { query } from '../src/core/db.js';
 import { registerToolProvider } from '../src/tools/toolRegistry.js';
 import { runActions, listExecutions, isAutomationTool } from '../src/services/automation.js';
 import { validateTriggerInput, upsertTrigger, loadTriggers, type MuseTrigger } from '../src/services/museTriggers.js';
+import { setCursors, loadCursors } from '../src/services/dbCursors.js';
 
 const USER = 'local'; // automationUserId() 缺省
 
@@ -170,5 +171,30 @@ describe('upsertTrigger actions 保留语义', () => {
     const v3 = validateTriggerInput({ desc: 'keep me', cond_type: 'event_seen', match: 'z', actions: null });
     const cleared = v3.ok ? await upsertTrigger(v3.value, id) : null;
     expect(cleared && cleared.ok && cleared.trigger.actions).toBeUndefined();
+  });
+});
+
+describe('upsertTrigger cond 变化 → db 游标一起作废(真源在 upsertTrigger,不在 HTTP 路由)', () => {
+  it('换表 → 游标清;只改描述 → 游标留', async () => {
+    // manage_automation(tools/builtin/manageAutomation.ts)直接调 upsertTrigger,从前**不丢游标** ——
+    // 「cond 变了 → dropCursors」只写在 routes/special.ts。于是经工具换表:拿 A 表的基线去比 B 表,
+    // B 的满表现有行全被当成「刚加的」当场误触发。读端的 cursorFits 只自证「哪几列」,换 path / row_added
+    // 换表它一点忙都帮不上 —— 这条只能靠写端。
+    const mk = (path: string, desc = 'erp rule') =>
+      validateTriggerInput({ desc, cond_type: 'db_changed', path, vault: '/v', event: 'row_added' });
+    const v1 = mk('订单.db');
+    const created = v1.ok ? await upsertTrigger(v1.value) : null;
+    const id = created && created.ok ? created.trigger.id : '';
+    expect(id).toBeTruthy();
+    await setCursors({ [id]: { v: 1, rowIds: ['o1', 'o2'] } });
+    // 只改描述(cond 同值)→ 游标必须留着,否则改个名字就重播种、丢一窗事件
+    const vDesc = mk('订单.db', '改个名字');
+    expect(vDesc.ok && (await upsertTrigger(vDesc.value, id)).ok).toBe(true);
+    expect((await loadCursors())[id]).toEqual({ v: 1, rowIds: ['o1', 'o2'] });
+    // 换表 → 游标清空(下一 tick 按新表重播种)
+    const vPath = mk('出库.db');
+    expect(vPath.ok && (await upsertTrigger(vPath.value, id)).ok).toBe(true);
+    // 负对照(实跑过):删掉 upsertTrigger 里 cond 变化分支的 `await dropCursors([cur.id])` → 此断言拿到旧的 {rowIds:['o1','o2']} → 红
+    expect((await loadCursors())[id]).toBeUndefined();
   });
 });

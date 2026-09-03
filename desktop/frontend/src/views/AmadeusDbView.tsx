@@ -17,9 +17,10 @@ export function AmadeusDbView({ leaf }: ViewProps) {
   const mode = useTheme((s) => s.mode)
   const flat = useTheme((s) => s.flat)
   const name = useDbStore((s) => (dbPath ? s.entries[dbPath]?.data?.name : undefined))
+  const gen = useDbStore((s) => s.gen) // 缓存整片作废后重读(见 dbStore 的 gen)
   useEffect(() => {
     if (dbPath) void useDbStore.getState().load(dbPath, dbPath)
-  }, [dbPath])
+  }, [dbPath, gen])
   // navigateLeaf 会把标题重置为 displayName,挂载/参数/名称变化后设回 db 名(WsFileView 同款)。
   useEffect(() => {
     if (dbPath) leaf.setTitle(name || dbBase(dbPath))

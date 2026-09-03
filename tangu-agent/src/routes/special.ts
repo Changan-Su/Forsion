@@ -29,11 +29,12 @@ import { query } from '../core/db.js';
 import { createRun } from '../services/runStore.js';
 import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt } from '../services/specialAgentsConfig.js';
-import { museStatus, kickMuse } from '../services/muse.js';
-import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt } from '../services/museTriggers.js';
+import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
+import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
+import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
-import { listAutomationSessions, runActions, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
+import { listAutomationSessions, fireTrigger, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
 import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, removeEntry } from '../services/agentSchedule.js';
@@ -219,7 +220,10 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
   if (!ensureLocal(res)) return;
   try {
     const list = await loadTriggers();
-    res.json({ triggers: list.map((t) => ({ ...t, nextRunAt: nextRunAt(t) })) });
+    // notice = 引擎侧**不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);
+    // 与 disabledReason 互补:那条是「已经停了,为什么」,这条是「还开着,但为什么不动」(H3)。
+    const notices = getAutomationNotices();
+    res.json({ triggers: list.map((t) => ({ ...t, nextRunAt: nextRunAt(t), ...(notices[t.id] ? { notice: notices[t.id] } : {}) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
   }
@@ -240,14 +244,27 @@ router.delete('/agent/special/muse/triggers/:id', authMiddleware, async (req: Au
 
 // upsert 规则(桌面「自动化」构建器;校验与 manage_automation 工具共用)。HTTP 无 cwd → path 需绝对路径(~ 展开可用)。
 // tool_call 步骤只在这条 UI 通道放行(allowToolCall:保存即人工预批);agent 经工具只能建 notify/agent_run。
+// 插件种子规则(id `plugin:<插件id>:<key>`,宿主 ctx.automation.ensure 下发):**先读 id 再校验**——
+// 插件规则 allowToolCall:false 且拒 agent_run(引擎侧兜底,不只靠宿主);id 不存在时按该 id 幂等创建(allowPluginCreate 只在这条路由开)。
 router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     const body = req.body || {};
-    const v = validateTriggerInput(body, { allowToolCall: true, vaultPath: amadeusVaultPath() });
+    const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : undefined;
+    const isPlugin = !!id && isPluginTriggerId(id);
+    // 调用来源(H1):'user'=面板开关/构建器保存/manage_automation 这类**显式**操作;
+    // 'plugin-ensure'=插件 ctx.automation.ensure 的幂等重放(每次 setup 全量重发)。
+    // 只影响停用簿记(见 upsertTrigger 的 blockedEnable):重放不许开回 engine/user 关掉的规则。
+    // 插件传不了这个字段 —— ensure 的 payload 由 pluginAutomation.buildPluginTriggerUpsert 整个重建,
+    // 插件给的 rule 对象里多余的键一进一出即蒸发。
+    const actor = body.actor === 'plugin-ensure' ? 'plugin-ensure' : body.actor === 'user' ? 'user' : undefined;
+    const v = validateTriggerInput(body, { allowToolCall: !isPlugin, vaultPath: amadeusVaultPath() });
     if (!v.ok) return res.status(400).json({ detail: v.error });
     if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
       return res.status(400).json({ detail: `agent "${v.value.agentSlug}" 不存在` });
+    }
+    if (isPlugin && (v.value.agentSlug || v.value.actions?.some((a) => a.type === 'agent_run'))) {
+      return res.status(400).json({ detail: '插件规则不能起 agent run(只许 notify / db_row_add / db_row_edit)' });
     }
     for (const a of v.value.actions || []) {
       if (a.type === 'agent_run' && !(await getAgent(a.agentSlug))) {
@@ -257,13 +274,25 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
         return res.status(400).json({ detail: `工具 "${a.tool}" 不可作自动化动作(不在白名单且未声明 automationSafe)` });
       }
     }
-    const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim() : undefined;
-    // cond 换了(换表/换列/换事件)→ 旧的 db 快照必须一起作废,否则下一轮拿 A 表的基线去比 B 表,
-    // 满表现有行会被当成「刚加的」当场误触发。upsertTrigger 只管 triggers.json 里的 lastEventCursor。
-    const prevCond = id ? (await loadTriggers()).find((t) => t.id === id)?.cond : undefined;
-    const r = await upsertTrigger(v.value, id);
-    if (!r.ok) return res.status(id ? 404 : 400).json({ detail: r.error });
-    if (id && JSON.stringify(prevCond) !== JSON.stringify(v.value.cond)) await dropCursors([id]).catch(() => {});
+    // 监听列不能是公式/引用/投影列:它们的值不落盘,游标恒空 → 规则一次都不会触发(桌面构建器已经过滤,
+    // 这是引擎侧的对等闸,兜住手改/插件/别的客户端)。
+    // ⚠️ H2(2026-09-02):预检**只挂在「让规则更活跃」的那几条路上** —— 新建 / cond 实质变化 / 本次要置为 enabled:true。
+    // 从前对**每一次** POST 都跑,而面板启停就是整量 upsert:一条监听列后来被改成公式列的规则,连「关掉」都被 400 挡回,
+    // 用户无法停用它。更糟的是 pluginStore 禁用插件时逐条 upsert 成 enabled:false 走同一条路由,而那边的待停用重放
+    // **刻意不封顶**(关不掉 = 用户以为停了、引擎里照跑),400 会让它无限重试成风暴。
+    // **关规则永远不许被预检挡住。**
+    // 判据单源在 museTriggers.needsWatchColPrecheck(那里有断言;内联一份 = 两处会漂)。
+    const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
+    if (needsWatchColPrecheck(prev, v.value)) {
+      const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
+      if (badCol) return res.status(400).json({ detail: badCol });
+    }
+    // ⚠️ 游标作废(cond 换了 / 停用→启用)的**唯一真源在 upsertTrigger**,且跑在 saveTriggers **之前**。
+    // 这里从前还有一份「保存后再 dropCursors」的双保险 —— 顺序是反的(规则先上线、游标后清,中间任何一次
+    // evaluate 都会把积压打出去),而且它兜不住换表那类身份变化(drain 的 setCursors 会把删掉的键合并写回)。
+    // 真正与时序无关的防线是读端 museTriggers.cursorMismatch(游标自证 path/event/vault/cols)。
+    const r = await upsertTrigger(v.value, id, { allowPluginCreate: isPlugin, actor });
+    if (!r.ok) return res.status(id && !isPlugin ? 404 : 400).json({ detail: r.error });
     kickMuse(); // 新/改规则尽快被下一次巡检评估
     res.json({ trigger: r.trigger, created: r.created });
   } catch (e: any) {
@@ -289,7 +318,9 @@ router.post('/agent/special/automation/triggers/:id/fire', authMiddleware, async
       if (!t.enabled) return res.status(409).json({ detail: '该自动化已停用' });
     }
     if (t.actions?.length) {
-      const r = await runActions(t, origin);
+      // ⚠️ 必须走 fireTrigger(= runActions + advanceSelfCursors):直接 runActions 会丢掉 touched,
+      // 「写自己盯的那张表」的规则点一次试跑,下一 tick 会把试跑写的行当成真事件再跑一遍整条链(M5)。
+      const r = await fireTrigger(t, origin);
       // busy=上一次点击还在跑(单飞);409 让前端显示「正在执行」而不是伪装成失败。
       if (r.status === 'busy') return res.status(409).json({ detail: '上一次执行还没结束', status: 'busy' });
       return res.json({ ok: r.status === 'done', execId: r.execId, status: r.status, steps: r.steps });

@@ -29,6 +29,11 @@ import { parseBody } from '@amadeus-shared/compiler/markers'
 import { parseLayout } from '@amadeus-shared/compiler/manifest'
 import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from '@amadeus-shared/compiler/split'
 import { COMPILER_VERSION, PAGE_SCHEMA, type PageManifest } from '@amadeus-shared/compiler/types'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'plugindash.recipeInvalid': { zh: '仪表盘配方无效:{err}', en: 'Invalid dashboard recipe: {err}' },
+})
 
 export interface PluginDashboardOptions {
   recipe: DashboardRecipe
@@ -99,7 +104,7 @@ export function mountPluginDashboard(pluginId: string, el: HTMLElement, o: Plugi
     pageId: `plugin-dash-${pluginId}`,
   })
   if (!compiled.ok) {
-    el.textContent = `仪表盘配方无效:${compiled.error}`
+    el.textContent = translate('plugindash.recipeInvalid', { err: compiled.error })
     return { dispose: () => { el.replaceChildren() }, scope: '' }
   }
   const scope = `plugin:${pluginId}:dashboard:${++seq}`

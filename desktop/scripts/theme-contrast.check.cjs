@@ -270,7 +270,7 @@ function filesUnder(dir, out = []) {
       && !themeCardSource.includes('preview.swatches'))
 
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 960, height: 520 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 960, height: 520 } })
   await page.setContent(PAGE)
   await page.addScriptTag({ content: COLOR_UTILS })
 

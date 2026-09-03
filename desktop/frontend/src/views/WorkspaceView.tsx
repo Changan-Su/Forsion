@@ -8,14 +8,14 @@
  * Amadeus 文档家族(编辑器/图/多维表/PDF)→ 左=笔记、右=文件,定位到笔记所在目录;code-studio → 文件);
  * 无硬规则 → 落**本 Space 的默认档**(SpaceDefinition.autoWorkspaceMode,如 Amadeus → 笔记)。右栏恒为文件。
  */
-import { useMemo, useState, useEffect, useReducer, type ReactNode } from 'react'
+import { useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { useWorkspace, activeMainPanel, scheduleWorkspaceSave, useSpaceStore, getView } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
-import { FileText, Folder, Search } from 'lucide-react'
+import { Check, ChevronDown, FileText, Folder, Search } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListAction, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { useApp } from '../stores/appStore'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
 import { SessionsView } from './SessionsView'
 import { TocView } from './RightViews'
@@ -25,13 +25,17 @@ import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { AmadeusPagesView, AmadeusOutlineView, ScopedPageOutline } from '../amadeusViews'
 import { usePageStore } from '@amadeus/store/pageStore'
 import type { WorkspaceDescriptor } from '../types'
-import { autoWorkspaceMode, workspaceKeyForPath, type WorkspaceMode, type WorkspaceModeEx } from './workspaceMode'
+import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath, type WorkspaceMode, type WorkspaceModeEx } from './workspaceMode'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { VaultSideSwitch } from '../components/VaultSideSwitch'
-import { PillBar } from '../components/EnginePicker'
 import { SidebarRow } from '../components/SidebarRow'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from '../amadeusPlugins'
+
+registerMessages({
+  'wsview.all': { zh: '全部', en: 'All' },
+  'wsview.noMatches': { zh: '没有匹配项', en: 'No matches' },
+})
 
 /** 当前活动主 leaf 的视图类型(订阅 mainTabs 驱动重算;焦点在侧栏时 activeMainPanel 有组内回退)。 */
 function useActiveMainType(): string | null {
@@ -114,6 +118,9 @@ const MODE_KEYS: Array<{ id: WorkspaceMode | 'auto'; label: string }> = [
 
 export function WorkspaceView({ leaf }: ViewProps) {
   const { t } = useI18n()
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
+  const modePickerRef = useRef<HTMLDivElement>(null)
+  const modeTriggerRef = useRef<HTMLButtonElement>(null)
   const hasNotes = !!window.amadeus
   const mainType = useActiveMainType()
   const loc = leaf.loc
@@ -134,7 +141,7 @@ export function WorkspaceView({ leaf }: ViewProps) {
   const declared = mainType ? getView(mainType)?.workspaceSource ?? null : null
   const declaredLive = declared && (!declared.startsWith('plugin:') || sourceAlive(declared)) ? declared : null
   const auto = autoWorkspaceMode(loc, mainType, spaceAuto, declaredLive)
-  const mode: WorkspaceModeEx = override === 'auto' ? (auto === 'notes' && !hasNotes ? 'files' : auto) : override
+  const { automatic: automaticMode, active: mode } = resolveWorkspaceModes(override, auto, hasNotes)
 
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
@@ -154,6 +161,63 @@ export function WorkspaceView({ leaf }: ViewProps) {
     ? liveSources.find((o) => `plugin:${o.pluginId}:${o.item.id}` === mode)?.item ?? null
     : null
 
+  const modeOptions = [
+    ...MODE_KEYS.filter((m) => m.id !== 'notes' || hasNotes).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
+    ...liveSources.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}` as WorkspaceModeEx, text: o.item.title })),
+  ]
+  const effectiveModeText = pluginSrc?.title ?? t(`workspace.mode.${mode}`)
+  const automaticPluginSrc = automaticMode.startsWith('plugin:')
+    ? liveSources.find((o) => `plugin:${o.pluginId}:${o.item.id}` === automaticMode)?.item ?? null
+    : null
+  const automaticModeText = automaticPluginSrc?.title ?? t(`workspace.mode.${automaticMode}`)
+  const modeTriggerText = override === 'auto'
+    ? `${t('workspace.mode.auto')} · ${automaticModeText}`
+    : effectiveModeText
+
+  // 选择菜单沿用其它 app 内下拉的行为:点外部 / Esc 关闭；打开后把焦点交给当前项，
+  // 方向键可在选项间移动。菜单就地叠在工作区 body 上方，不参与纵向布局。
+  useEffect(() => {
+    if (!modeMenuOpen) return
+    const raf = requestAnimationFrame(() => {
+      modePickerRef.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')?.focus()
+    })
+    const closeOutside = (event: MouseEvent): void => {
+      if (!modePickerRef.current?.contains(event.target as Node)) setModeMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setModeMenuOpen(false)
+      modeTriggerRef.current?.focus()
+    }
+    document.addEventListener('mousedown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('mousedown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [modeMenuOpen])
+
+  const moveModeFocus = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const options = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="option"]'))
+    if (!options.length) return
+    event.preventDefault()
+    const current = options.indexOf(document.activeElement as HTMLElement)
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? options.length - 1
+      : event.key === 'ArrowUp' ? (current <= 0 ? options.length - 1 : current - 1)
+      : (current + 1) % options.length
+    options[next]?.focus()
+  }
+
+  const pickMode = (id: WorkspaceModeEx | 'auto'): void => {
+    leaf.setParams({ mode: id })
+    scheduleWorkspaceSave()
+    setModeMenuOpen(false)
+    modeTriggerRef.current?.focus()
+  }
+
   const body: ReactNode =
     pluginSrc ? <PluginListBody src={pluginSrc} />
     : mode === 'sessions' ? <SessionsView sideFilter={sideFilter} />
@@ -164,30 +228,60 @@ export function WorkspaceView({ leaf }: ViewProps) {
   return (
     <div className="t2sw">
       {loc === 'left' && <VaultSideSwitch />}
-      {/* 档位 = 内置三档 + **每个活着的插件列表源各一档**(P2),源随插件启停增减 → 动态生成。
-          放不下时**只有胶囊层横向滚动 + ⋯ 翻页**,绝不让整个侧栏跟着横滚(用户实报)——
-          复用 chat 的 PillBar(同一套溢出检测与翻页数学 pillBar.ts,仪器 check:pillbar)。 */}
-      <PillBar label={t('workspace.mode.auto')}>
-        {[
-          ...MODE_KEYS.filter((m) => m.id !== 'notes' || hasNotes).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
-          ...liveSources.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}` as WorkspaceModeEx, text: o.item.title })),
-        ].map((m) => (
+      {/* Sub list = 内置三档 + **每个活着的插件列表源各一项**(P2),源随插件启停动态增减。
+          单个选择器替代横向胶囊条：名称再多也只在菜单内纵向滚动，不撑宽工作区。 */}
+      <div className="t2sw-mode-slot">
+        <div className={`t2sw-mode-picker${modeMenuOpen ? ' is-open' : ''}`} ref={modePickerRef}>
           <button
-            key={m.id}
+            ref={modeTriggerRef}
             type="button"
-            role="radio"
-            aria-checked={override === m.id}
-            className={`t2sw-seg${override === m.id ? ' on' : ''}`}
-            title={m.id === 'auto' ? t('workspace.mode.autoTip') : m.text}
-            onClick={() => { leaf.setParams({ mode: m.id }); scheduleWorkspaceSave() }}
+            className={`t2sw-mode-trigger${modeMenuOpen ? ' is-open' : ''}`}
+            title={modeTriggerText}
+            aria-haspopup="listbox"
+            aria-expanded={modeMenuOpen}
+            onClick={() => setModeMenuOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+              event.preventDefault()
+              setModeMenuOpen(true)
+            }}
           >
-            {m.text}
-            {m.id === 'auto' && override === 'auto' && (
-              <span className="t2sw-auto-now">·{pluginSrc ? pluginSrc.title : t(`workspace.mode.${mode}`)}</span>
-            )}
+            <span className="t2sw-mode-label">{modeTriggerText}</span>
+            <ChevronDown size={13} aria-hidden />
           </button>
-        ))}
-      </PillBar>
+          {/* 常驻 DOM 才能同时拥有展开与收起动画；关闭时 aria-hidden + tabIndex=-1 隔离交互。 */}
+          <div className={`t2sw-mode-reveal${modeMenuOpen ? ' is-open' : ''}`} aria-hidden={!modeMenuOpen}>
+            <div className="t2sw-mode-clip">
+              <div
+                className="t2sw-mode-menu"
+                role="listbox"
+                aria-label={t('view.workspace')}
+                onKeyDown={moveModeFocus}
+              >
+                {modeOptions.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="option"
+                    data-workspace-mode={option.id}
+                    tabIndex={modeMenuOpen ? 0 : -1}
+                    aria-selected={override === option.id}
+                    className={`project-menu-item t2sw-mode-item${override === option.id ? ' is-selected' : ''}`}
+                    title={option.id === 'auto' ? t('workspace.mode.autoTip') : option.text}
+                    onClick={() => pickMode(option.id)}
+                  >
+                    <span className="project-menu-name">
+                      {option.text}
+                      {option.id === 'auto' && <span className="t2sw-auto-now">· {automaticModeText}</span>}
+                    </span>
+                    <span className="project-menu-check">{override === option.id ? <Check size={13} /> : null}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="t2sw-body">{body}</div>
     </div>
   )
@@ -213,6 +307,7 @@ function LeadIcon({ item }: { item: ListItem }): ReactNode {
 }
 
 export function PluginListBody({ src }: { src: ListSourceContribution }) {
+  const { t } = useI18n()
   const [, force] = useReducer((x: number) => x + 1, 0)
   // ⚠️vault 懒引导 × 插件在启动期激活 = 列表源恒空(2026-08-28 用户实报,青鸟收藏夹):
   //   插件在 bootstrapEngine 就装好了,那一刻还没有活动库,它启动时那次索引读取拿到的是
@@ -231,6 +326,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
 
   const groups = src.groups?.() ?? []
   const items = src.items({ query: query || undefined, group: group ?? undefined })
+  const activeKey = src.activeKey?.() ?? null
   // 无 groups() 声明时,退回按 item.group 的静态分区(老契约行为)。
   const sections = useMemo(() => {
     if (groups.length) return null
@@ -288,7 +384,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
     <SidebarRow
       key={it.key}
       title={it.title}
-      className={dropKey === `i:${it.key}` ? 'amx-drop-into' : undefined}
+      className={`${activeKey === it.key ? 'active' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}`.trim() || undefined}
       {...dropProps(`i:${it.key}`, { item: it })}
       lead={<LeadIcon key={it.iconUrl ?? ''} item={it} />}
       trailing={it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
@@ -327,7 +423,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
             lead={<Folder className="t2s-lead-icon t2s-dim" />}
             onClick={() => setGroup(null)}
           >
-            <span className="t2s-srow-title">{t2sAll()}</span>
+            <span className="t2s-srow-title">{t('wsview.all')}</span>
           </SidebarRow>
           {groups.map((g) => (
             <SidebarRow
@@ -365,7 +461,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
                 </div>
               ))
           : items.map(row)}
-        {items.length === 0 && <div className="t2sw-empty">{query ? '没有匹配项' : src.title}</div>}
+        {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : src.title}</div>}
       </div>
 
       {menu && (
@@ -381,8 +477,6 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
     </div>
   )
 }
-
-const t2sAll = (): string => (document.documentElement.lang.startsWith('zh') ? '全部' : 'All')
 
 /** 统一「大纲」视图:主视图=chat → 会话目录(DOM 扫描);=编辑器 → 笔记标题大纲(块模型);其他 → 空态。
  *

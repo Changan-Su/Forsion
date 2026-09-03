@@ -7,6 +7,7 @@ import type { PageProps } from '@amadeus-shared/ipc'
 import { cellToFmValue } from '@amadeus-shared/db/pageFrontmatter'
 import type { CellValue, ColumnType } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
+import { translate } from '../../i18n'
 import { cascadeFdAfterRename, flushAllScopes, remapScopePaths, usePageStore } from './pageStore'
 
 export interface FolderView {
@@ -90,9 +91,12 @@ export const useNoteViewStore = create<NoteViewState>((set, get) => ({
 
   async addNote(folder) {
     const titles = new Set((get().folders[folder]?.props ?? []).map((p) => p.title.toLowerCase()))
-    let name = '未命名'
+    // 默认名会变成**真实文件名**,必须跟当前语言走(i18n.tsx「落盘产物的默认名」一节的规矩);
+    // 编号名从同一个 base 派生,防两者词干漂移(第一行「未命名」第二行「Untitled 2」)。
+    const base = translate('amadeus.default.note')
+    let name = base
     let i = 1
-    while (titles.has(name.toLowerCase())) name = `未命名 ${++i}`
+    while (titles.has(name.toLowerCase())) name = `${base} ${++i}`
     const notePath = folder ? `${folder}/${name}.md` : `${name}.md`
     await amadeus.newPage(notePath)
     await get().refresh(folder)

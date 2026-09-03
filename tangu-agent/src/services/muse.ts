@@ -25,11 +25,12 @@ import { MUSE_AGENT_SLUG, ensureMuseAgent, listAgents, resolveMemorySlug } from 
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { readActivityLines } from './userActivity.js';
-import { loadTriggers, evaluateTriggers, markTriggersFired, buildTriggerKickoff, type MuseTrigger, type EventCursor, type TriggerContext } from './museTriggers.js';
-import { loadCursors, setCursors, pruneCursors, type DbCursor } from './dbCursors.js';
-import { readDb } from './amadeusDb.js';
+import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
+import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
+import { readDbOrNull } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
-import { launchAutomationTriggers, launchDueSchedules } from './automation.js';
+import { launchAutomationTriggers, launchDueSchedules, advanceSelfCursors } from './automation.js';
+import { drainAutomation } from './automationDrain.js';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
@@ -295,67 +296,55 @@ function rollWindow(cfg: MuseConfig): void {
 }
 
 let ticking = false;
+/** drain 期间到达的 kick 不能丢(桌面写完表踢一下 → 单发闸吃掉 = 退化成等满 5 分钟):记一笔,tick 结束后自唤醒一次。 */
+let pendingKick = false;
+/** 规则 id → **不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);每 tick 整份替换。
+ *  面板经 GET /agent/special/muse/triggers 的 `notice` 字段读它 —— 从前这些情况一律静默,
+ *  规则显示「已启用」却一次都不评估,用户零信号(H3)。 */
+let automationNotices: Record<string, string> = {};
+export function getAutomationNotices(): Record<string, string> { return automationNotices; }
 
 async function tick(): Promise<void> {
   // interval 与 kickMuse 的 setTimeout 会重叠(tick 内多处 await);重入=重复评估/重复起 run。
-  if (ticking) return;
+  if (ticking) { pendingKick = true; return; }
   ticking = true;
   try {
     if (!isLocal()) return;
     // ── 盯任务规则评估(零 token 代码判定)。刻意放在 muse.enabled/activeHours 闸**之前**:
     // 带 agentSlug 的规则属于任意 agent 的自动化,关掉 Muse 不应连它们一起灭。
+    // 评估 → 分流 → 起跑 → 提交游标 → (有 db 写入就)重评估,整段在 automationDrain 里循环到无命中/封顶。
     let museFired: MuseTrigger[] = [];
-    const trigCursors: Record<string, EventCursor> = {};
+    let trigCursors: Record<string, EventCursor> = {};
     try {
       const triggers = await loadTriggers();
       if (triggers.length) {
         const activityLines = await readActivityLines({ hours: 24, limit: 500 });
         // db_changed 的快照游标单独存文件(不进 triggers.json——那是全表规模的派生数据)。
         const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
-        const dbCursors = hasDb ? await loadCursors() : {};
-        const outDbCursors: Record<string, DbCursor> = {};
-        const contexts: Record<string, TriggerContext> = {};
-        const fired = await evaluateTriggers(triggers, {
+        const r = await drainAutomation({
+          loadTriggers,
+          loadCursors,
+          setCursors,
+          evaluate: evaluateTriggers,
+          launch: launchAutomationTriggers,
+          advanceSelfCursors,
+          markTriggersFired,
+          disableTriggers,
+          disableTriggersWithReasons,
           activityLines,
-          outCursors: trigCursors,
-          outContexts: contexts,
-          ...(hasDb ? {
-            currentVault: amadeusVaultPath(),
-            dbCursors,
-            outDbCursors,
-            readDbFile: async (rel: string) => readDb(rel).then((r) => r.db).catch(() => null),
-          } : {}),
+          currentVault: amadeusVaultPath(),
+          // 缺 → null(表没了,静默);坏 → 抛(评估侧按规则留痕、不推游标)。折成 null 会让坏表长得像空表。
+          readDbFile: async (rel: string): Promise<DbLike | null> => readDbOrNull(rel).then((db) => db as DbLike | null),
+          log,
         });
-        // 游标提交时机是有讲究的(codex 抓的 S0):
-        //  · **没命中**的规则 → 立刻提交(纯基线推进,包括「变了但 equals 不匹配」那一轮的新值——
-        //    不提交的话下一轮还拿更旧的快照去比,结论必错);
-        //  · **命中**的规则 → 必须等动作被**接受**(launcher 真起跑 / Muse 那路已 mark)才提交。
-        //    否则让位、单飞 busy、无模型这些「本轮没跑成」的路径会把事件当成已消费,
-        //    下一轮 diff 为空 —— 「下轮重试」对 db_changed 是假的,事件永久丢。
-        const firedIds = new Set(fired.map((t) => t.id));
-        const baselineCursors: Record<string, DbCursor> = {};
-        const pendingCursors: Record<string, DbCursor> = {};
-        for (const [id, cur] of Object.entries(outDbCursors)) {
-          (firedIds.has(id) ? pendingCursors : baselineCursors)[id] = cur;
-        }
-        if (Object.keys(baselineCursors).length) await setCursors(baselineCursors);
-        if (hasDb) await pruneCursors(triggers.map((t) => t.id)).catch(() => {});
-        // 动作链规则与旧式 agentSlug 规则都走 automation launcher;两者皆无 → 老路唤醒 Muse。
-        const agentFired = fired.filter((t) => (t.actions && t.actions.length) || (t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG));
-        museFired = fired.filter((t) => !agentFired.includes(t));
-        const ackIds: string[] = [];
-        if (agentFired.length) {
-          log(`agent 自动化命中 ${agentFired.length} 条:${agentFired.map((t) => t.id).join(', ')}`);
-          // launcher 自带让位/防重入/模型守卫;只对**实际起跑**的规则烧 cooldown(与 Muse 老路同语义)。
-          const launched = await launchAutomationTriggers(agentFired, contexts);
-          if (launched.length) await markTriggersFired(launched, undefined, trigCursors);
-          ackIds.push(...launched);
-        }
-        // museFired 在本函数末尾无条件 markTriggersFired,那条路视同已接受。
-        ackIds.push(...museFired.map((t) => t.id));
-        const ackCursors: Record<string, DbCursor> = {};
-        for (const id of ackIds) if (pendingCursors[id]) ackCursors[id] = pendingCursors[id];
-        if (Object.keys(ackCursors).length) await setCursors(ackCursors);
+        museFired = r.museFired;
+        trigCursors = r.trigCursors;
+        // H3:**暂时性**状态位只住内存(每 tick 整份替换),不写 triggers.json —— 那是每 5 分钟一次整文件落盘,
+        // 而这些状态本来就只在「引擎还活着」的语境下有意义。GET /muse/triggers 合并进 notice 字段给面板。
+        automationNotices = r.notices;
+        // ⚠️ 名册必须**重读**:tick 起始那份快照是 drain 之前的,期间用户删掉的规则在快照里还活着 ——
+        // 按它 prune 等于把已删规则的游标留着,id 复用时下一条规则捡到上一条的基线(满表误触发)。
+        if (hasDb) await loadTriggers().then((alive) => pruneCursors(alive.map((t) => t.id))).catch(() => {});
       }
     } catch (e: any) {
       log(`盯任务评估失败:${e?.message || e}`);
@@ -412,6 +401,7 @@ async function tick(): Promise<void> {
     log(`tick 失败:${lastError}`);
   } finally {
     ticking = false;
+    if (pendingKick) { pendingKick = false; kickMuse(); }
   }
 }
 

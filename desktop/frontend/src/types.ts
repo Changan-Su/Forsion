@@ -164,9 +164,20 @@ export type AutomationActionSpec =
   | { type: 'notify'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
-  /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} 模板)。rowId 缺省=触发命中的那一行。 */
-  | { type: 'db_row_add'; path: string; cells: Record<string, string> }
-  | { type: 'db_row_edit'; path: string; rowId?: string; cells: Record<string, string> }
+  /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} / {{= 算术 }} 模板)。
+   *  db_row_add.skipIfEmpty = cells 里的一个键:该值展开后为空 → 本步跳过(记 skipped,不算失败)。
+   *  db_row_edit 目标行:rowId > rowFrom(沿触发行的关联列,列 id 或列名;多值关联逐行)>
+   *  match(目标表里 column == value 的全部行,value 可模板)> 触发命中的那一行。
+   *  ⚠️与引擎 museTriggers.ActionSpec 是手抄镜像,字段名逐字对齐(抄错 TS 不报,运行时被引擎丢掉)。 */
+  | { type: 'db_row_add'; path: string; cells: Record<string, string>; skipIfEmpty?: string }
+  | { type: 'db_row_edit'; path: string; rowId?: string; rowFrom?: string; match?: { column: string; value: string }; cells: Record<string, string> }
+/** db_changed 的附加条件一条(引擎 DbWhere 镜像):column = 列 id 或列名;eq/ne 要 value,empty/notempty 不要。
+ *  比的是触发行**物化后**的模板字符串值(公式/引用列也能比;数组列是 'a, b' 形)。 */
+export interface AutomationWhere {
+  column: string
+  op: 'eq' | 'ne' | 'empty' | 'notempty'
+  value?: string
+}
 /** 自动化规则(manage_automation 工具/构建器写入 agents/muse/triggers.json)。 */
 export interface MuseTriggerInfo {
   id: string
@@ -179,13 +190,16 @@ export interface MuseTriggerInfo {
     | { type: 'every'; interval: string }
     /** 手动:巡检永不命中,只能由 Amadeus 按钮块点击(origin=button)或面板试跑起跑。 */
     | { type: 'manual' }
-    /** Amadeus 多维表变化(vault 钉住建规则时那个库;columnId 存列 id——列名不唯一也会改)。 */
-    | { type: 'db_changed'; path: string; vault: string; event: 'row_added' | 'cell_changed'; columnId?: string; equals?: string }
+    /** Amadeus 多维表变化(vault 钉住建规则时那个库;columnId 存列 id——列名不唯一也会改)。
+     *  columnIds:多列监听(引擎归一:≥2 列才有此键,columnId=首列;任一列变化即命中)。读端一律经 lib.watchedColumnIds 取并集。 */
+    | { type: 'db_changed'; path: string; vault: string; event: 'row_added' | 'cell_changed'; columnId?: string; columnIds?: string[]; equals?: string; where?: AutomationWhere[] }
   prompt?: string
   cooldownHours: number
   lastFiredAt: string | null
   enabled: boolean
   createdAt: string
+  /** 引擎自动停用的原因(排空封顶断环 / tool_call 不可用);用户手动启用时引擎清掉。缺席 = 用户自己停的或在跑。 */
+  disabledReason?: string
   /** 旧式单动作:命中后执行的 agent(缺省=唤醒 Muse)。actions 存在时此字段为空。 */
   agentSlug?: string
   /** 动作链(有则取代 agentSlug/Muse 旧语义)。 */
@@ -197,6 +211,13 @@ export interface MuseTriggerInfo {
  *  actions:数组=设置;null=显式清空(回到 Muse/agentSlug 旧语义);缺席=保留旧值。 */
 export interface MuseTriggerUpsert {
   id?: string
+  /** 谁发起的这次 upsert(引擎按它决定「能不能把停用的规则开回来」):
+   *  'plugin-ensure' = 插件每次 setup 的**幂等重放**(不是用户意图)—— 引擎自动停用(排空封顶断环 / 配置错误)
+   *  与用户显式停用都不许被它开回来,否则安全闸每次启动自动松开、停用原因还被抹掉;
+   *  'user' = 面板启停 / 构建器保存这种**显式**操作,可以开回来,且停用会记成 disabledBy='user';
+   *  缺席 = 「没人认领」的停用(如宿主禁用插件时逐条关的),照旧能被后续 ensure 开回来 ——
+   *  那正是「用户重新启用插件 → setup 再 ensure 一次 → 规则复活」这条既有生命周期,别给它加 actor。 */
+  actor?: 'plugin-ensure' | 'user'
   desc: string
   cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every' | 'manual' | 'db_changed'
   path?: string
@@ -208,7 +229,12 @@ export interface MuseTriggerUpsert {
   event?: 'row_added' | 'cell_changed'
   vault?: string
   column_id?: string
+  /** cell_changed 多列监听(与 column_id 取并集;引擎去重排序,单列归回 columnId)。⚠️与 column_id 同为整量 upsert 的一部分,漏发即抹列。 */
+  column_ids?: string[]
   equals?: string
+  /** db_changed 附加条件(与 equals AND;row_added / cell_changed 都可用)。⚠️空数组一律发 undefined,
+   *  否则引擎按 JSON 比对认为 cond 变了 → 每次保存都重置游标/冷却。 */
+  where?: AutomationWhere[]
   prompt?: string
   cooldown_hours?: number
   agent_slug?: string

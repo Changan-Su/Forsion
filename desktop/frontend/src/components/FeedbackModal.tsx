@@ -2,10 +2,17 @@
 import React, { useState } from 'react'
 import { X, MessageSquare, Loader2, MessagesSquare } from 'lucide-react'
 import { useWorkspace } from '@lcl/engine'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type { SessionRecord, TanguDesktopConfig } from '../types'
+
+registerMessages({
+  'feedback.diagnosePrompt': {
+    zh: '我在使用 Tangu 时遇到一个问题，想请你帮我诊断：\n\n{description}\n\n请结合当前会话的上下文分析可能的原因，并给出排查步骤。',
+    en: 'I ran into a problem while using Tangu and would like your help diagnosing it:\n\n{description}\n\nUsing the context of this session, analyze the likely causes and suggest troubleshooting steps.',
+  },
+})
 
 export const FeedbackModal: React.FC<{
   cfg: TanguDesktopConfig
@@ -50,7 +57,7 @@ export const FeedbackModal: React.FC<{
   const diagnoseViaChat = (): void => {
     const description = text.trim()
     if (!description) return
-    const prompt = `我在使用 Tangu 时遇到一个问题，想请你帮我诊断：\n\n${description}\n\n请结合当前会话的上下文分析可能的原因，并给出排查步骤。`
+    const prompt = t('feedback.diagnosePrompt', { description })
     useApp.getState().setPendingDraft(prompt)
     useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
     onClose()

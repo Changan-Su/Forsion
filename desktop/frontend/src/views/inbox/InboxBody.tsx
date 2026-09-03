@@ -25,6 +25,23 @@ import { MediaPlayer } from '@amadeus/components/MediaPlayer'
 import { BookmarkCard } from '@amadeus/components/BookmarkCard'
 import { Markdown } from '../../components/Markdown'
 import { openFile, openNote } from '../../amadeusNav'
+import { registerMessages, useI18n } from '../../i18n'
+
+// 收件箱嵌入卡片的文案。与 BlockHost / embedLayer 是同一套界面的三条链,措辞刻意保持一致,
+// 但键各自独立(同键不同文案会被覆盖检查判红,见 i18nCoverage.test.ts 的 D 断言)。
+registerMessages({
+  'inboxbody.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
+  'inboxbody.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the default app' },
+  'inboxbody.open': { zh: '打开 ↗', en: 'Open ↗' },
+  'inboxbody.startAt': { zh: '起播时刻', en: 'Start time' },
+  'inboxbody.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
+  'inboxbody.loadingPdf': { zh: '加载 PDF…', en: 'Loading PDF…' },
+  'inboxbody.embedBadgeTitle': { zh: '跨笔记嵌入(只读)', en: 'Cross-note embed (read-only)' },
+  'inboxbody.embedBadge': { zh: '↪ 嵌入', en: '↪ Embed' },
+  'inboxbody.gotoSource': { zh: '去源头', en: 'Go to the source' },
+  'inboxbody.resolving': { zh: '解析中…', en: 'Resolving…' },
+  'inboxbody.embedMissing': { zh: '嵌入丢失:', en: 'Embed missing: ' },
+})
 
 const PdfEmbedViewer = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
@@ -120,14 +137,15 @@ function InboxEmbed({ target }: { target: string }) {
 
 /** 思维导图嵌入:收件箱不渲染画布(单活页 pageStore 装不下第二张图),给一张在应用内打开的卡片。 */
 function InboxPluginFileEmbed({ name }: { name: string }) {
+  const { t } = useI18n()
   const files = usePageStore((s) => s.files)
   const full = useMemo(() => resolveVaultPath(name, files, '') ?? name, [name, files])
   return (
     <div className="block-body">
-      <button className="embed-file" onClick={() => openFile(full)} title="在 Forsion 标签页中打开">
+      <button className="embed-file" onClick={() => openFile(full)} title={t('inboxbody.openInTab')}>
         <span className="embed-file-ic" aria-hidden>🧠</span>
         <span className="embed-file-name">{name}</span>
-        <span className="embed-file-open">打开 ↗</span>
+        <span className="embed-file-open">{t('inboxbody.open')}</span>
       </button>
     </div>
   )
@@ -136,16 +154,17 @@ function InboxPluginFileEmbed({ name }: { name: string }) {
 /** 文件嵌入:pdf 内联只读阅读器(解析不出退回 iframe),音视频原生播放器,其它 = 打开按钮。 */
 function InboxFileEmbed({ name, loc, badAnchor }: { name: string; loc?: MediaLoc | null; badAnchor?: boolean }) {
   const kind = PDF_EXT_RE.test(name) ? 'pdf' : VIDEO_EXT_RE.test(name) ? 'video' : /\.(mp3|wav|ogg|m4a|flac)$/i.test(name) ? 'audio' : 'other'
+  const { t } = useI18n()
   const files = usePageStore((s) => s.files)
   const pdfPath = useMemo(() => (kind === 'pdf' ? resolveFileName(name, files, '') : null), [kind, name, files])
   if (kind === 'other') {
     const full = resolveFileName(name, files, '') ?? name
     return (
       <div className="block-body">
-        <button className="embed-file" onClick={() => void amadeus.openVaultFile(full).catch(() => {})} title="用系统默认程序打开">
+        <button className="embed-file" onClick={() => void amadeus.openVaultFile(full).catch(() => {})} title={t('inboxbody.openWithSystem')}>
           <span className="embed-file-ic" aria-hidden>📄</span>
           <span className="embed-file-name">{name}</span>
-          <span className="embed-file-open">打开 ↗</span>
+          <span className="embed-file-open">{t('inboxbody.open')}</span>
         </button>
       </div>
     )
@@ -157,12 +176,12 @@ function InboxFileEmbed({ name, loc, badAnchor }: { name: string; loc?: MediaLoc
         <div className="embed-media-head">
           <span className="embed-file-ic" aria-hidden>{kind === 'pdf' ? '📕' : kind === 'video' ? '🎬' : '🎵'}</span>
           <span className="embed-file-name">{name}</span>
-          {loc && <span className="embed-media-at" title="起播时刻">@{mediaLabel(loc.at)}</span>}
-          {badAnchor && <span className="embed-media-warn">锚点无效 · 从 0 秒起播</span>}
+          {loc && <span className="embed-media-at" title={t('inboxbody.startAt')}>@{mediaLabel(loc.at)}</span>}
+          {badAnchor && <span className="embed-media-warn">{t('inboxbody.badAnchor')}</span>}
         </div>
         {kind === 'pdf' && (pdfPath ? (
           <div className="embed-pdf embed-pdf-live">
-            <Suspense fallback={<div className="embed-pdf-loading">加载 PDF…</div>}>
+            <Suspense fallback={<div className="embed-pdf-loading">{t('inboxbody.loadingPdf')}</div>}>
               <PdfEmbedViewer pdfPath={pdfPath} readOnly />
             </Suspense>
           </div>
@@ -182,6 +201,7 @@ function InboxFileEmbed({ name, loc, badAnchor }: { name: string; loc?: MediaLoc
 /** 跨笔记块/笔记引用:resolveEmbed → 用被引块自己的 BlockType.Editor 只读渲染(markdown 块自带
  *  Milkdown 实例,可独立挂载);头部「去源头」在编辑器打开该笔记。目标须在当前 Vault 已索引才解析得出。 */
 function InboxNoteEmbed({ target }: { target: string }) {
+  const { t } = useI18n()
   const blockId = useId()
   const [embed, setEmbed] = useState<EmbedResolved | null | 'loading'>('loading')
   useEffect(() => {
@@ -196,15 +216,15 @@ function InboxNoteEmbed({ target }: { target: string }) {
   return (
     <div className="block-body embed-body">
       <div className="embed-head">
-        <span className="embed-badge" title="跨笔记嵌入(只读)">↪ 嵌入</span>
+        <span className="embed-badge" title={t('inboxbody.embedBadgeTitle')}>{t('inboxbody.embedBadge')}</span>
         {embed && embed !== 'loading' && (
-          <button className="embed-src" onClick={() => void openNote(embed.owner)} title="去源头">
+          <button className="embed-src" onClick={() => void openNote(embed.owner)} title={t('inboxbody.gotoSource')}>
             {stripPageBasename(embed.owner)} ↗
           </button>
         )}
       </div>
       {embed === 'loading' ? (
-        <div className="embed-loading">解析中…</div>
+        <div className="embed-loading">{t('inboxbody.resolving')}</div>
       ) : embed && EmbedEditor ? (
         <EmbedEditor
           blockId={blockId}
@@ -224,7 +244,7 @@ function InboxNoteEmbed({ target }: { target: string }) {
           getPageNames={() => usePageStore.getState().pages}
         />
       ) : (
-        <div className="embed-missing">嵌入丢失:<code>{target}</code></div>
+        <div className="embed-missing">{t('inboxbody.embedMissing')}<code>{target}</code></div>
       )}
     </div>
   )

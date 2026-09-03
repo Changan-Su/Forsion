@@ -44,6 +44,15 @@ export interface TanguProbe {
   session?(): TanguSessionInfo
   /** 仅在 (模型 id, Space id) 这对值**真的变了**时回调。返回退订。 */
   subscribe(cb: () => void): () => void
+  /** 等引擎后端可用(cfg 已从主进程回填且连通检查通过),给出那一刻的连接配置;超时给 null(2026-09-02+)。
+   *  `ctx.automation` 的有无就看这条在不在 —— 台架假探针 / 旧宿主不给 = 非 Tangu 宿主口径。
+   *  为什么是等待而不是同步读:插件 setup 在 `installEngine()` 模块期就跑完了,那一刻 appStore 的 cfg
+   *  还是 localhost:8787 + 空 token 的初值(boot() 在 React effect 里才回填)。**调用时才读 store**,别在装配时捕获。 */
+  waitBackend?(timeoutMs: number): Promise<import('../../types').TanguDesktopConfig | null>
+  /** 后端就绪**边沿**(与 waitBackend 同一判据:cfgLoaded && connState 'ok',从「非就绪」翻到「就绪」那一刻)回调;
+   *  订阅时已就绪不补发,只认边沿。返回退订。宿主用它重放上次失败的 `ctx.automation.ensure`(2026-09-02+);
+   *  可选:台架假探针 / 旧宿主不给 = 没有自动重放,ensure 的语义不变。 */
+  subscribeReady?(cb: () => void): () => void
 }
 
 let probe: TanguProbe | null = null

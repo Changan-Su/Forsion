@@ -1,5 +1,10 @@
 import type { ThemeManifest } from '../../engine'
 import { hexToRgb, mix, onAccent } from '../../color'
+import { registerMessages, translate } from '../../../../i18n'
+
+registerMessages({
+  'themeOrigin.label': { zh: 'Origin · 本源', en: 'Origin' },
+})
 
 // Custom accent: the seed becomes --primary; --bg/--bg-alt/--surface take a faint graphite
 // tint of it (Origin stays paper-restrained — neutrals/text/border keep the theme base).
@@ -27,7 +32,11 @@ function custom(seed: string, dark: boolean): Record<string, string> {
 
 const manifest: ThemeManifest = {
   id: 'origin',
-  label: 'Origin · 本源',
+  // 取值器而非字面量:THEMES 在模块加载期就冻结成数组,写死的 label 切语言不会更新;
+  // ThemeManifest.label 的类型是 string(engine.ts 共用,不改),accessor 正好满足且每次读都重算。
+  get label() {
+    return translate('themeOrigin.label')
+  },
   swatch: '#1c1c1c',
   order: 0,
   custom,

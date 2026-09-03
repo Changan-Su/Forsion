@@ -4,12 +4,23 @@
  *  - Cmd/Ctrl+C/V 复制/粘贴选中事件、Delete/Backspace 删除(任务2)。
  *  输入控件劫持排除留在调用方(依赖 DOM,这里只认键)。 */
 import type { CalMode } from '../../amadeus/store/calendarNavStore'
+import { registerMessages, translate } from '../../i18n'
 
+registerMessages({
+  'calkeys.modeDay': { zh: '日', en: 'Day' },
+  'calkeys.modeWeek': { zh: '周', en: 'Week' },
+  'calkeys.mode3day': { zh: '3 日', en: '3 days' },
+  'calkeys.modeMonth': { zh: '月', en: 'Month' },
+})
+
+/** ⚠️ label 必须是 getter,不能写字面量:模块级表在加载时求值一次,写死的文案会**冻结**在
+ *  首屏语言上,切语言不更新。getter 让调用方(CalendarView 读 `m.label`)在渲染时才求值,
+ *  同时保住 `label: string` 的调用契约。`key`/`id` 是标识符(键盘映射 + 模式枚举),永不翻译。 */
 export const MODE_ITEMS: Array<{ id: CalMode; label: string; key: string }> = [
-  { id: 'day', label: '日', key: 'd' },
-  { id: 'week', label: '周', key: 'w' },
-  { id: '3day', label: '3 日', key: '3' },
-  { id: 'month', label: '月', key: 'm' },
+  { id: 'day', get label() { return translate('calkeys.modeDay') }, key: 'd' },
+  { id: 'week', get label() { return translate('calkeys.modeWeek') }, key: 'w' },
+  { id: '3day', get label() { return translate('calkeys.mode3day') }, key: '3' },
+  { id: 'month', get label() { return translate('calkeys.modeMonth') }, key: 'm' },
 ]
 
 export type CalKeyAction =

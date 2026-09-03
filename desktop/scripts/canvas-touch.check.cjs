@@ -17,6 +17,7 @@
 //   T11 card/text 工具下,捏合与长按都不许平白建出一张卡(触屏的一击建推迟到抬手)
 //   T12 三指 → 抬掉原始两指之一 → 视口零跳变(pinch 触点对换人必须重建基线)
 //   T9 空白**单指**拖 = 平移(不是框选;2026-08-23 用户拍板),而鼠标那条路仍是框选
+//   T13 触屏两段式(2026-09-02):未选中的卡上拖 = 平移画布 / 点一下才选中 / 选中后拖才搬卡
 //   T8 (pointer: coarse) 下的命中面与层叠:工具按钮 ≥34px、工具条不溢出舞台、HUD 不再压在
 //      悬浮编辑胶囊那 46px 里、三条 chrome 互不重叠(**工具条与 HUD 的按钮逐颗量**)
 //
@@ -51,7 +52,7 @@ const record = (name, ok, detail) => {
 /** ⚠️ `hasTouch` 是整套仪器的地基:没有它 CDP 的触摸事件不落地,`pointer: coarse` 也不命中。
  *  视口按窄机取(412×860),与 `.amx-mbar` 那条「360pt ÷ zoom 装得下吗」的账同一个量级。 */
 async function open(browser) {
-  const p = await browser.newPage({ viewport: { width: 412, height: 860 }, hasTouch: true })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 412, height: 860 }, hasTouch: true })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(SEED)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
@@ -251,6 +252,85 @@ const pickTool = async (p, title) => {
     record('T3 第二根手指落下 = 在途拖拽整笔作废(落盘几何不变**且画面回位**)',
       geo1.x === geo0.x && geo1.y === geo0.y && Math.abs(geo1.px - geo1.x) < 1 && Math.abs(geo1.py - geo1.y) < 1,
       JSON.stringify({ geo0, geo1 }))
+    await p.close()
+  }
+
+  // ── T13 触屏两段式:未选中的卡上单指拖 = 平移画布(2026-09-02 用户实报)────────────
+  //    ①未选中 → 拖 = 平移,卡的落盘几何一字不变、也不被选中;②轻点 = 选中;③选中后再拖 = 搬卡。
+  //    负对照实跑过:把 onDown 里的 touchKey 那道闸注释掉,①当场红(卡被拖走、视口没动)。
+  {
+    const { p, cdp } = await open(browser)
+    const blank = await blankPoint(p)
+    await doubleTap(cdp, p, blank.x, blank.y) // 建一张卡(建完是选中态)
+    await wait(p, 700)
+    await p.keyboard.press('Escape') // 取消选中(点空白也行,但这一带全是卡,Esc 没有歧义)
+    await wait(p, 250)
+    const selBefore = await p.evaluate(() => document.querySelectorAll('.amx-el-selbox').length)
+    const card = await rectOf(p, '.amx-ucard')
+    const mid = { x: Math.round(card.x + card.w / 2), y: Math.round(card.y + card.h / 2) }
+    const u = await p.evaluate(() => document.querySelector('.amx-stage').currentCSSZoom || 1)
+
+    // ① 未选中的卡上拖 = 平移
+    const geo0 = (await cardsOf(p))[0]
+    const vp0 = await vpOf(p)
+    await send(cdp, 'touchStart', [tp(mid.x, mid.y, 1)])
+    await wait(p, 30)
+    for (const k of [1, 2, 3]) {
+      await send(cdp, 'touchMove', [tp(mid.x + k * 20, mid.y + k * 12, 1)])
+      await wait(p, 25)
+    }
+    await send(cdp, 'touchEnd', [])
+    await wait(p, 250)
+    const geo1 = (await cardsOf(p))[0]
+    const vp1 = await vpOf(p)
+    const selAfterPan = await p.evaluate(() => document.querySelectorAll('.amx-el-selbox').length)
+    const panned = Math.abs(vp1.x - vp0.x - 60 / u) < 1.5 && Math.abs(vp1.y - vp0.y - 36 / u) < 1.5
+    record('T13a 未选中的卡上单指拖 = 平移画布(卡不动、也不被选中)',
+      panned && geo1.x === geo0.x && geo1.y === geo0.y && selAfterPan === 0 && selBefore === 0,
+      JSON.stringify({ selBefore, selAfterPan, dx: vp1.x - vp0.x, dy: vp1.y - vp0.y, want: [60 / u, 36 / u], geo0, geo1 }))
+
+    // ② 轻点 = 选中(几何仍不落笔)
+    const card2 = await rectOf(p, '.amx-ucard')
+    const mid2 = { x: Math.round(card2.x + card2.w / 2), y: Math.round(card2.y + card2.h / 2) }
+    await tap(cdp, p, mid2.x, mid2.y)
+    await wait(p, 300)
+    const selAfterTap = await p.evaluate(() => document.querySelectorAll('.amx-el-selbox').length)
+    const geo2 = (await cardsOf(p))[0]
+    record('T13b 轻点未选中的卡 = 选中它(几何不落笔)',
+      selAfterTap === 1 && geo2.x === geo0.x && geo2.y === geo0.y,
+      JSON.stringify({ selAfterTap, geo2 }))
+
+    // ③ 选中之后再拖 = 搬卡(视口不动)
+    const vp2 = await vpOf(p)
+    await send(cdp, 'touchStart', [tp(mid2.x, mid2.y, 1)])
+    await wait(p, 30)
+    for (const k of [1, 2, 3]) {
+      await send(cdp, 'touchMove', [tp(mid2.x + k * 20, mid2.y + k * 12, 1)])
+      await wait(p, 25)
+    }
+    await send(cdp, 'touchEnd', [])
+    await wait(p, 350)
+    const geo3 = (await cardsOf(p))[0]
+    const vp3 = await vpOf(p)
+    record('T13c 选中之后再拖 = 搬卡(这一笔视口不动)',
+      (geo3.x !== geo2.x || geo3.y !== geo2.y) && Math.abs(vp3.x - vp2.x) < 0.6 && Math.abs(vp3.y - vp2.y) < 0.6,
+      JSON.stringify({ geo2, geo3, dvp: { x: vp3.x - vp2.x, y: vp3.y - vp2.y } }))
+    await p.close()
+  }
+
+  // ── T13d 未选中的卡上双击仍进编辑(回归护栏:两段式把「选中」从 pointerdown 挪到了 pointerup,
+  //    而 T6 测的是新建即选中那张 —— 手机上唯一的进编辑入口不能因此丢在未选中态上)。
+  {
+    const { p, cdp } = await open(browser)
+    const blank = await blankPoint(p)
+    await doubleTap(cdp, p, blank.x, blank.y)
+    await wait(p, 700)
+    await p.keyboard.press('Escape') // 取消选中
+    await wait(p, 250)
+    const card = await rectOf(p, '.amx-ucard')
+    await doubleTap(cdp, p, Math.round(card.x + card.w / 2), Math.round(card.y + card.h / 2))
+    const editing = await p.evaluate(() => !!document.querySelector('.amx-el-selbox.is-editing'))
+    record('T13d 未选中的卡上双击仍进编辑(两段式没吃掉手机端的进编辑入口)', editing, JSON.stringify({ editing }))
     await p.close()
   }
 

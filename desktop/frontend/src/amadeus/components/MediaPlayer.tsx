@@ -4,6 +4,16 @@ import { usePageStore } from '../store/pageStore'
 import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { amadeus } from '../api'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'mediaplayer.grabTitle': { zh: '把当前画面存成图片,并在下方插入回源时间戳', en: 'Save the current frame as an image and insert a timestamp link back to this moment' },
+  'mediaplayer.grabUnavailable': { zh: '本端拿不到帧(视频以无跨源模式加载)', en: 'Frames are unavailable here — the video loaded without cross-origin access' },
+  'mediaplayer.grabbing': { zh: '截帧中…', en: 'Capturing…' },
+  'mediaplayer.grab': { zh: '✂ 截这一帧', en: '✂ Capture this frame' },
+  'mediaplayer.errCrossOrigin': { zh: '跨源视频无法截帧', en: 'Cannot capture a frame from a cross-origin video' },
+  'mediaplayer.errFailed': { zh: '截帧失败', en: 'Frame capture failed' },
+})
 
 /** 本地音视频播放器 —— 时间锚点的**唯一**消费点(v3/Inbox 两份也复用本组件)。
  *
@@ -22,8 +32,10 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
   loc: MediaLoc | null
   insertAfter?: (md: string) => void
 }): ReactElement {
+  const { t } = useI18n()
   const files = usePageStore((s) => s.files)
   const ref = useRef<HTMLMediaElement | null>(null)
+  // ⚠️ 存的是**键**不是文案:存翻译好的字符串会在切换语言时冻在旧语言里。
   const [shot, setShot] = useState<string | null>(null)
   // crossOrigin 是**截帧**要的(canvas 不被污染);协议端已回 ACAO:*。万一某端没这个头,
   // 视频会直接 load 失败 —— onError 里降级重挂一次无 crossOrigin 的,宁可丢截帧也不能丢播放。
@@ -109,7 +121,7 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
       insertAfter(`![[${saved.base}]]\n\n${buildMediaLink(name, { at })}`)
       setShot(null)
     } catch (err) {
-      setShot(err instanceof DOMException && err.name === 'SecurityError' ? '跨源视频无法截帧' : '截帧失败')
+      setShot(err instanceof DOMException && err.name === 'SecurityError' ? 'mediaplayer.errCrossOrigin' : 'mediaplayer.errFailed')
       setTimeout(() => setShot(null), 3000)
     }
   }
@@ -128,10 +140,10 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
       {kind === 'video' && insertAfter && (
         <div className="embed-media-foot">
           <button className="embed-media-btn" onClick={() => void grab()} disabled={shot === 'working' || !anon}
-            title={anon ? '把当前画面存成图片,并在下方插入回源时间戳' : '本端拿不到帧(视频以无跨源模式加载)'}>
-            {shot === 'working' ? '截帧中…' : '✂ 截这一帧'}
+            title={anon ? t('mediaplayer.grabTitle') : t('mediaplayer.grabUnavailable')}>
+            {shot === 'working' ? t('mediaplayer.grabbing') : t('mediaplayer.grab')}
           </button>
-          {shot && shot !== 'working' && <span className="embed-media-warn">{shot}</span>}
+          {shot && shot !== 'working' && <span className="embed-media-warn">{t(shot)}</span>}
         </div>
       )}
     </>

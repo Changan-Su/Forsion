@@ -28,7 +28,7 @@ const results = []
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   for (const [name, contents] of SETS) {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     p.on('pageerror', (e) => console.log('  [pageerror]', e.message))
     await p.goto(`${URL}?fold`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })

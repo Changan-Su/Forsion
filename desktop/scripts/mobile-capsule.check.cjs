@@ -37,7 +37,7 @@ const check = (name, ok, detail) => {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const ctx = await browser.newContext({
+  const ctx = await browser.newContext({ locale: 'zh-CN',
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2,
     hasTouch: true,
@@ -50,7 +50,7 @@ const check = (name, ok, detail) => {
   await ctx.addInitScript(() => {
     try { localStorage.setItem('forsion_token', 'capsule-check'); localStorage.setItem('lcl.uiMode', 'mobile') } catch { /* ignore */ }
   })
-  const page = await ctx.newPage()
+  const page = await ctx.newPage({ locale: 'zh-CN' })
   await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"check"}' }))
   page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
   await page.goto(`${ORIGIN}/?ui=mobile`, { waitUntil: 'domcontentloaded' })

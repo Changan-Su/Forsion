@@ -28,6 +28,35 @@ import { usePluginStore, findEmbedRenderer } from '../plugins/pluginStore'
 import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
 import { amadeus } from '../api'
 import { resolveFileName } from '../lib/vaultFiles'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'blockhost.openTitle': { zh: '打开(⌘/Ctrl+点击在新标签页打开)', en: 'Open (⌘/Ctrl+click to open in a new tab)' },
+  'blockhost.openAria': { zh: '打开引用的内容', en: 'Open the referenced content' },
+  'blockhost.viewSource': { zh: '查看源码', en: 'View source' },
+  'blockhost.dragHandle': { zh: '点击打开菜单,按住拖动', en: 'Click for menu, hold to drag' },
+  'blockhost.addBelow': { zh: '在下方插入块', en: 'Add block below' },
+  'blockhost.copyEmbedRef': { zh: '复制嵌入引用', en: 'Copy embed reference' },
+  'blockhost.duplicate': { zh: '复制块', en: 'Duplicate block' },
+  'blockhost.moveToColumn': { zh: '移到新列', en: 'Move to new column' },
+  'blockhost.removeEmbed': { zh: '移除嵌入', en: 'Remove embed' },
+  'blockhost.delete': { zh: '删除', en: 'Delete' },
+  'blockhost.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
+  'blockhost.openInTabAnnotate': { zh: '在 Forsion 标签页中打开(可批注)', en: 'Open in a Forsion tab (with annotations)' },
+  'blockhost.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the default app' },
+  'blockhost.open': { zh: '打开 ↗', en: 'Open ↗' },
+  'blockhost.startAt': { zh: '起播时刻', en: 'Start time' },
+  'blockhost.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
+  'blockhost.collapse': { zh: '收起', en: 'Collapse' },
+  'blockhost.expand': { zh: '展开', en: 'Expand' },
+  'blockhost.loadingPdf': { zh: '加载 PDF…', en: 'Loading PDF…' },
+  'blockhost.embedBadgeTitle': { zh: '跨笔记嵌入（只读）', en: 'Cross-note embed (read-only)' },
+  'blockhost.embedBadge': { zh: '↪ 嵌入', en: '↪ Embed' },
+  'blockhost.editAtSource': { zh: '去源头编辑', en: 'Edit at the source' },
+  'blockhost.resolving': { zh: '解析中…', en: 'Resolving…' },
+  'blockhost.embedMissing': { zh: '嵌入丢失：', en: 'Embed missing: ' },
+  'blockhost.unknownType': { zh: '未知块类型：{type}', en: 'Unknown block type: {type}' },
+})
 
 // PDF 预览用自家可批注阅读器的只读形态(Chromium 内置 iframe 阅读器观感突兀且不认主题)。
 // 懒加载:pdf.js viewer 较重,chunk 与独立 PDF 视图共用,笔记里真有 PDF 块才拉。
@@ -138,6 +167,7 @@ export const BlockHost = memo(function BlockHost({
    *  在行壳里绝对定位怎么算都会压到 ⠿ 上(2026-08-08 实测)。 */
   gutterLead?: ReactNode
 }) {
+  const { t } = useI18n()
   const ps = useScopedPageStore() // 本面板那份文档 store:写操作绝不能落到隔壁半屏那篇去
   const block = usePageStore((s) => s.blocks[blockId])
   const setBlockContent = usePageStore((s) => s.setBlockContent)
@@ -374,8 +404,8 @@ export const BlockHost = memo(function BlockHost({
               新标签走事件解耦(同 amadeus:open-db):amadeus/ 是可移植层,不 import 宿主的 openNote。 */}
           <button
             className="amx-src-btn amx-src-btn--block amx-open-btn"
-            title="打开(⌘/Ctrl+点击在新标签页打开)"
-            aria-label="打开引用的内容"
+            title={t('blockhost.openTitle')}
+            aria-label={t('blockhost.openAria')}
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation()
@@ -388,8 +418,8 @@ export const BlockHost = memo(function BlockHost({
           </button>
           <button
             className="amx-src-btn amx-src-btn--block"
-            title="查看源码"
-            aria-label="查看源码"
+            title={t('blockhost.viewSource')}
+            aria-label={t('blockhost.viewSource')}
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation()
@@ -427,7 +457,7 @@ export const BlockHost = memo(function BlockHost({
           const r = e.currentTarget.getBoundingClientRect()
           setBlockMenu({ x: r.left, y: r.bottom + 4 })
         }}
-        title="点击打开菜单,按住拖动 / Click for menu, hold to drag"
+        title={t('blockhost.dragHandle')}
         aria-label="block menu / drag"
       >
         ⠿
@@ -439,7 +469,7 @@ export const BlockHost = memo(function BlockHost({
           e.stopPropagation()
           insertBlockAfter(blockId, undefined, '') // 自带 requestFocus,新块聚焦
         }}
-        title="在下方插入块 / Add block below"
+        title={t('blockhost.addBelow')}
         aria-label="add block below"
       >
         ＋
@@ -454,19 +484,19 @@ export const BlockHost = memo(function BlockHost({
     <OverlayAt x={blockMenu.x} y={blockMenu.y} className="ctx-menu" onClick={(e) => e.stopPropagation()}>
       {!embedTarget && (
         <button onClick={() => { void navigator.clipboard?.writeText(`![[${stripPageBasename(pagePath)}#${blockId}]]`); setBlockMenu(null) }}>
-          <Link2 size={13} /> 复制嵌入引用
+          <Link2 size={13} /> {t('blockhost.copyEmbedRef')}
         </button>
       )}
       {/* 结构类动作在「宿主接管结构」的面(思维导图)上一律不出现:它们直接调 store,会绕过宿主的
           关系图维护 —— 删除留下悬空的父子/关系线、复制出一个没有父级的游离节点、分栏更是笔记专属
           排版。这些操作在导图里由节点自己的菜单负责(Codex)。 */}
       {!embedTarget && !surface && (
-        <button onClick={() => { duplicateBlock(blockId); setBlockMenu(null) }}><Copy size={13} /> 复制块</button>
+        <button onClick={() => { duplicateBlock(blockId); setBlockMenu(null) }}><Copy size={13} /> {t('blockhost.duplicate')}</button>
       )}
-      {!surface && <button onClick={() => { splitToColumn(blockId, 'right'); setBlockMenu(null) }}><Columns2 size={13} /> 移到新列</button>}
+      {!surface && <button onClick={() => { splitToColumn(blockId, 'right'); setBlockMenu(null) }}><Columns2 size={13} /> {t('blockhost.moveToColumn')}</button>}
       {!surface && (
         <button className="danger" onClick={() => { setBlockMenu(null); deleteBlock(blockId) }}>
-          <Trash2 size={13} /> {embedTarget ? '移除嵌入' : '删除'}
+          <Trash2 size={13} /> {embedTarget ? t('blockhost.removeEmbed') : t('blockhost.delete')}
         </button>
       )}
     </OverlayAt>
@@ -710,11 +740,11 @@ export const BlockHost = memo(function BlockHost({
                 if (/\.[a-z0-9]+\.md$/i.test(embedFile.name)) openWikiLink(embedFile.name, pagePath)
                 else if (pagePath) void amadeus.openAttachment(pagePath, embedFile.name)
               }}
-              title={/\.[a-z0-9]+\.md$/i.test(embedFile.name) ? '在 Forsion 标签页中打开' : '用系统默认程序打开'}
+              title={/\.[a-z0-9]+\.md$/i.test(embedFile.name) ? t('blockhost.openInTab') : t('blockhost.openWithSystem')}
             >
               <span className="embed-file-ic" aria-hidden>📄</span>
               <span className="embed-file-name">{embedFile.name}</span>
-              <span className="embed-file-open">打开 ↗</span>
+              <span className="embed-file-open">{t('blockhost.open')}</span>
             </button>
           ) : (
             <div className="embed-media">
@@ -723,27 +753,27 @@ export const BlockHost = memo(function BlockHost({
                   {embedFile.kind === 'pdf' ? '📕' : embedFile.kind === 'video' ? '🎬' : '🎵'}
                 </span>
                 <span className="embed-file-name">{embedFile.name}</span>
-                {embedFile.loc && <span className="embed-media-at" title="起播时刻">@{mediaLabel(embedFile.loc.at)}</span>}
-                {embedFile.badAnchor && <span className="embed-media-warn">锚点无效 · 从 0 秒起播</span>}
+                {embedFile.loc && <span className="embed-media-at" title={t('blockhost.startAt')}>@{mediaLabel(embedFile.loc.at)}</span>}
+                {embedFile.badAnchor && <span className="embed-media-warn">{t('blockhost.badAnchor')}</span>}
                 <button className="embed-media-btn" onClick={() => setPreviewOpen((o) => !o)}>
-                  {previewOpen ? '收起' : '展开'}
+                  {previewOpen ? t('blockhost.collapse') : t('blockhost.expand')}
                 </button>
                 <button
                   className="embed-media-btn"
-                  title={embedFile.kind === 'pdf' ? '在 Forsion 标签页中打开(可批注)' : '用系统默认程序打开'}
+                  title={embedFile.kind === 'pdf' ? t('blockhost.openInTabAnnotate') : t('blockhost.openWithSystem')}
                   onClick={() => {
                     // PDF 在应用内新 tab 打开可批注阅读器(openWikiLink 的 .pdf 分支);音视频仍交给系统播放器。
                     if (embedFile.kind === 'pdf') openWikiLink(embedFile.name, pagePath)
                     else if (pagePath) void amadeus.openAttachment(pagePath, embedFile.name)
                   }}
                 >
-                  打开 ↗
+                  {t('blockhost.open')}
                 </button>
               </div>
               {previewOpen && embedFile.kind === 'pdf' && (
                 pdfVaultPath ? (
                   <div className="embed-pdf embed-pdf-live">
-                    <Suspense fallback={<div className="embed-pdf-loading">加载 PDF…</div>}>
+                    <Suspense fallback={<div className="embed-pdf-loading">{t('blockhost.loadingPdf')}</div>}>
                       <PdfEmbedViewer pdfPath={pdfVaultPath} readOnly />
                     </Suspense>
                   </div>
@@ -789,21 +819,21 @@ export const BlockHost = memo(function BlockHost({
         {embedSrcLine}
         <div className="block-body embed-body">
           <div className="embed-head">
-            <span className="embed-badge" title="跨笔记嵌入（只读）">
-              ↪ 嵌入
+            <span className="embed-badge" title={t('blockhost.embedBadgeTitle')}>
+              {t('blockhost.embedBadge')}
             </span>
             {embed && embed !== 'loading' && (
               <button
                 className="embed-src"
                 onClick={() => void ps.getState().loadPage(embed.owner)} // 已持有全路径,不走 basename 往返(重名会开错)
-                title="去源头编辑"
+                title={t('blockhost.editAtSource')}
               >
                 {stripPageBasename(embed.owner)} ↗
               </button>
             )}
           </div>
           {embed === 'loading' ? (
-            <div className="embed-loading">解析中…</div>
+            <div className="embed-loading">{t('blockhost.resolving')}</div>
           ) : embed && EmbedEditor ? (
             <EmbedEditor
               blockId={blockId}
@@ -824,7 +854,7 @@ export const BlockHost = memo(function BlockHost({
             />
           ) : (
             <div className="embed-missing">
-              嵌入丢失：<code>{embedTarget}</code>
+              {t('blockhost.embedMissing')}<code>{embedTarget}</code>
             </div>
           )}
         </div>
@@ -879,7 +909,7 @@ export const BlockHost = memo(function BlockHost({
             getPageNames={() => ps.getState().pages}
           />
         ) : (
-          <div className="block-unknown">未知块类型：{block.type}</div>
+          <div className="block-unknown">{t('blockhost.unknownType', { type: block.type })}</div>
         )}
       </div>
       {blockMenuNode}

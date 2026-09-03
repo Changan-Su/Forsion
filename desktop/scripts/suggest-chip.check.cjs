@@ -88,7 +88,7 @@ function contrast(a, b) {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   await page.setContent(PAGE)
 
   for (const mode of ['light', 'dark']) {

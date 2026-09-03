@@ -63,7 +63,7 @@ const toggle = (on) => `(() => {
 
 async function boot() {
   const app = await electron.launch({
-    args: [`--user-data-dir=${UD}`, ROOT],
+    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
   })

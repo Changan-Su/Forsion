@@ -6,6 +6,34 @@ import { create } from 'zustand'
 import { Cloud, FileText, ListTree, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { isExcludedPath, useEntrySync } from '../stores/entrySyncStore'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'csd.title': { zh: '开启云同步', en: 'Turn on cloud sync' },
+  'csd.failed': { zh: '开启云同步失败', en: 'Could not turn on cloud sync' },
+  'csd.enabled': { zh: '已开启云同步:云端「{name}」', en: 'Cloud sync is on — cloud folder “{name}”' },
+  'csd.selectAll': { zh: '全选', en: 'Select all' },
+  'csd.selectNone': { zh: '全不选', en: 'Deselect all' },
+  'csd.conflictMsg': {
+    zh: '云端工作区根目录已有「{name}」。可以换一个云端文件夹名,或把本 Vault 的同步内容合并进现有文件夹(换机后重新开启同步时选「合并」)。',
+    en: 'The cloud workspace root already has a folder called “{name}”. Pick a different name for the cloud folder, or merge this vault’s synced content into the existing one (choose Merge when you turn sync back on after switching machines).',
+  },
+  'csd.newNamePlaceholder': { zh: '新的云端文件夹名', en: 'New cloud folder name' },
+  'csd.cancel': { zh: '取消', en: 'Cancel' },
+  'csd.mergeInto': { zh: '合并进「{name}」', en: 'Merge into “{name}”' },
+  'csd.useNewName': { zh: '用新名字开启', en: 'Use new name' },
+  'csd.intro': {
+    zh: '「{name}」将带完整相对路径同步到云端工作区(双向)。子页面与库内关联默认一并纳入,保留 Vault 里的相对位置;取消勾选即不同步:',
+    en: '“{name}” will sync to the cloud workspace with its full relative path (two-way). Subpages and in-vault links are included by default and keep their position in the vault; uncheck anything you do not want synced:',
+  },
+  'csd.analyzing': { zh: '正在分析关联…', en: 'Analyzing links…' },
+  'csd.groupSubPages': { zh: '子页面', en: 'Subpages' },
+  'csd.groupLinkedPages': { zh: '关联笔记', en: 'Linked notes' },
+  'csd.groupAssets': { zh: '附件', en: 'Attachments' },
+  'csd.nothingElse': { zh: '没有子页面与库内关联,仅同步此条目。', en: 'No subpages or in-vault links — only this item will sync.' },
+  'csd.enabling': { zh: '开启中…', en: 'Turning on…' },
+  'csd.enable': { zh: '开启同步', en: 'Turn on sync' },
+})
 
 interface Req {
   path: string
@@ -35,6 +63,7 @@ export function CloudSyncDialogHost() {
 }
 
 function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
+  const { t } = useI18n()
   const [closure, setClosure] = useState<{ pages: string[]; files: string[]; subPages: string[] } | null>(null)
   const [pagesOn, setPagesOn] = useState<Set<string>>(new Set())
   const [filesOn, setFilesOn] = useState<Set<string>>(new Set())
@@ -88,10 +117,10 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
       return
     }
     if (r?.error || !r?.ok) {
-      useApp.getState().toast(r?.error || '开启云同步失败', true)
+      useApp.getState().toast(r?.error || t('csd.failed'), true)
       return
     }
-    useApp.getState().toast(`已开启云同步:云端「${r.cloudName}」`)
+    useApp.getState().toast(t('csd.enabled', { name: r.cloudName ?? '' }))
     void useEntrySync.getState().refresh()
     onClose()
   }
@@ -145,7 +174,7 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
             {label}({on.size}/{items.length})
           </span>
           <button className="amx-csd-all" onClick={() => flipAll(on.size < items.length)}>
-            {on.size < items.length ? '全选' : '全不选'}
+            {on.size < items.length ? t('csd.selectAll') : t('csd.selectNone')}
           </button>
         </div>
         <div className="amx-csd-list">
@@ -165,56 +194,50 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
       <div className="dialog amx-csd" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">
           <Cloud size={15} style={{ verticalAlign: -2, marginRight: 6 }} />
-          开启云同步
+          {t('csd.title')}
         </div>
         {conflict ? (
           <>
-            <div className="dialog-msg">
-              云端工作区根目录已有「{conflict}」。可以换一个云端文件夹名,或把本 Vault 的同步内容合并进现有文件夹
-              (换机后重新开启同步时选「合并」)。
-            </div>
+            <div className="dialog-msg">{t('csd.conflictMsg', { name: conflict })}</div>
             <input
               className="dialog-input"
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}
-              placeholder="新的云端文件夹名"
+              placeholder={t('csd.newNamePlaceholder')}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && nameDraft.trim()) void submit({ cloudName: nameDraft.trim() })
                 if (e.key === 'Escape') onClose()
               }}
             />
             <div className="dialog-actions">
-              <button className="dialog-btn" onClick={onClose}>取消</button>
+              <button className="dialog-btn" onClick={onClose}>{t('csd.cancel')}</button>
               <button className="dialog-btn" disabled={busy} onClick={() => void submit({ cloudName: conflict, merge: true })}>
-                合并进「{conflict}」
+                {t('csd.mergeInto', { name: conflict })}
               </button>
               <button className="dialog-btn" data-primary disabled={busy || !nameDraft.trim()} onClick={() => void submit({ cloudName: nameDraft.trim() })}>
-                用新名字开启
+                {t('csd.useNewName')}
               </button>
             </div>
           </>
         ) : (
           <>
-            <div className="dialog-msg">
-              「{base(req.path)}」将带完整相对路径同步到云端工作区(双向)。子页面与库内关联默认一并纳入,
-              保留 Vault 里的相对位置;取消勾选即不同步:
-            </div>
+            <div className="dialog-msg">{t('csd.intro', { name: base(req.path) })}</div>
             {closure === null ? (
-              <div className="dialog-msg">正在分析关联…</div>
+              <div className="dialog-msg">{t('csd.analyzing')}</div>
             ) : (
               <>
-                {group(<ListTree size={12} />, '子页面', closure.subPages, subOn, toggleSub, (all) => setSubOn(all ? new Set(closure.subPages) : new Set()))}
-                {group(<FileText size={12} />, '关联笔记', closure.pages, pagesOn, (p) => setPagesOn((s) => toggleIn(s, p)), (all) => setPagesOn(all ? new Set(closure.pages) : new Set()))}
-                {group(<Paperclip size={12} />, '附件', closure.files, filesOn, (p) => setFilesOn((s) => toggleIn(s, p)), (all) => setFilesOn(all ? new Set(closure.files) : new Set()))}
+                {group(<ListTree size={12} />, t('csd.groupSubPages'), closure.subPages, subOn, toggleSub, (all) => setSubOn(all ? new Set(closure.subPages) : new Set()))}
+                {group(<FileText size={12} />, t('csd.groupLinkedPages'), closure.pages, pagesOn, (p) => setPagesOn((s) => toggleIn(s, p)), (all) => setPagesOn(all ? new Set(closure.pages) : new Set()))}
+                {group(<Paperclip size={12} />, t('csd.groupAssets'), closure.files, filesOn, (p) => setFilesOn((s) => toggleIn(s, p)), (all) => setFilesOn(all ? new Set(closure.files) : new Set()))}
                 {!closure.pages.length && !closure.files.length && !closure.subPages.length && (
-                  <div className="dialog-msg" style={{ opacity: 0.6 }}>没有子页面与库内关联,仅同步此条目。</div>
+                  <div className="dialog-msg" style={{ opacity: 0.6 }}>{t('csd.nothingElse')}</div>
                 )}
               </>
             )}
             <div className="dialog-actions">
-              <button className="dialog-btn" onClick={onClose}>取消</button>
+              <button className="dialog-btn" onClick={onClose}>{t('csd.cancel')}</button>
               <button className="dialog-btn" data-primary disabled={busy || closure === null} onClick={() => void submit()}>
-                {busy ? '开启中…' : '开启同步'}
+                {busy ? t('csd.enabling') : t('csd.enable')}
               </button>
             </div>
           </>

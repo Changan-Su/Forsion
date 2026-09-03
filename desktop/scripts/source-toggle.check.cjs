@@ -37,7 +37,7 @@ const btnState = (p, sel) =>
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const open = async (query) => {
-    const p = await browser.newPage({ viewport: { width: 900, height: 600 } })
+    const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 600 } })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?${query}`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector('.md-block .ProseMirror, .block-host', { timeout: 20000 })

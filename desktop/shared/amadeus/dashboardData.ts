@@ -9,9 +9,13 @@
 //  ② **页面级筛选按「属性名」而不是 colId 匹配**。一张仪表盘上的卡片来自不同的 .db,colId 各是各的;
 //     按名字找、找不到就**这张卡不受该条筛选影响**(Notion 的规则:widget 里有这个属性才跟着变)。
 //  ③ 数据源只认 `.db` 文件。笔记 YAML 属性的查询是 Obsidian Bases 那个体量,不在本轮。
+//  ④ **卡可以绑一个 .db 已存视图**(`view:`,2026-09-02 对齐飞书 source:CUSTOM):数据源先过该视图
+//     自己的 filters/filterMode,再吃页面级筛选,再算 —— 筛选在表里配一次、卡片白拿,不在围栏里
+//     另写一套条件语法。视图按**名字**找(与 `view` 卡的 `view:` 参数同口径),id 兜底;
+//     找不到 = 报错,**绝不静默回退到全表**(无声错数比报错糟)。
 
 import { Document, parseDocument } from 'yaml'
-import type { CellValue, ColumnType, DbColumn, DbRow, DbViewFilter } from './db/schema'
+import type { CellValue, ColumnType, DbColumn, DbRow, DbView, DbViewFilter } from './db/schema'
 import { applyFilters, computeStat } from './db/viewQuery'
 
 /** frontmatter 里的页面级筛选键(外来键,与 dashboard3: 同族)。 */
@@ -44,6 +48,8 @@ export interface StatSpec {
    * 不拉 .db、**不吃页面级筛选**(没有行可筛)。null = 常规 .db 统计档。
    */
   literal: string | null
+  /** 绑定的 .db 视图(名字或 id);null = 不绑,拿全表。 */
+  view: string | null
 }
 
 export type SpecResult<T> = { ok: true; spec: T } | { ok: false; error: string }
@@ -52,13 +58,13 @@ export function parseStatSpec(opts: Record<string, string>): SpecResult<StatSpec
   const label = (opts.label || '').trim()
   const unit = (opts.unit || '').trim()
   const literal = (opts.value || '').trim()
-  if (literal) return { ok: true, spec: { source: '', col: null, stat: STAT_ROWS, label, unit, literal } }
+  if (literal) return { ok: true, spec: { source: '', col: null, stat: STAT_ROWS, label, unit, literal, view: null } }
   const source = (opts.source || '').trim()
   if (!source) return { ok: false, error: '缺 source:(.db 文件路径)或 value:(直给数值)' }
   const stat = (opts.stat || STAT_ROWS).trim()
   const col = (opts.col || '').trim() || null
   if (stat !== STAT_ROWS && !col) return { ok: false, error: `统计「${stat}」需要 col:(列名)` }
-  return { ok: true, spec: { source, col, stat, label, unit, literal: null } }
+  return { ok: true, spec: { source, col, stat, label, unit, literal: null, view: viewOptOf(opts) } }
 }
 
 // ───────────────────────────── 图表卡 ─────────────────────────────
@@ -79,6 +85,8 @@ export interface ChartSpec {
   agg: ChartAgg
   kind: ChartKind
   label: string
+  /** 绑定的 .db 视图(名字或 id);null = 不绑,拿全表。 */
+  view: string | null
 }
 
 export function parseChartSpec(opts: Record<string, string>): SpecResult<ChartSpec> {
@@ -92,7 +100,34 @@ export function parseChartSpec(opts: Record<string, string>): SpecResult<ChartSp
   if (agg !== 'count' && !value) return { ok: false, error: `聚合「${agg}」需要 value:(列名)` }
   const kind = (opts.kind || 'bar').trim() as ChartKind
   if (!CHART_KINDS.includes(kind)) return { ok: false, error: `不认识的图形「${kind}」(bar/line/donut)` }
-  return { ok: true, spec: { source, group, value, agg, kind, label: (opts.label || '').trim() } }
+  return { ok: true, spec: { source, group, value, agg, kind, label: (opts.label || '').trim(), view: viewOptOf(opts) } }
+}
+
+// ───────────────────── 视图绑定(`view:`) ─────────────────────
+
+const viewOptOf = (opts: Record<string, string>): string | null => (opts.view || '').trim() || null
+
+/** 按名字找视图(与 `view` 卡 `view:` 参数、DatabaseEmbed 的 initialView 同口径:名字精确匹配),
+ *  id 兜底(围栏是手写的,记不住名字改了的人可以写 id)。 */
+export function viewByName(views: DbView[] | undefined, name: string): DbView | null {
+  const want = name.trim()
+  if (!want) return null
+  const list = views ?? []
+  return list.find((v) => v.name === want) ?? list.find((v) => v.id === want) ?? null
+}
+
+/** 视图绑定的落地:`spec.view` 缺 = 原样;找到 = 过该视图自己的 filters(带它的 filterMode);
+ *  找不到 = 报错 —— 回退全表是无声错数。视图 filters 已是 colId 制,直接进 applyFilters,不走属性名解析。 */
+export function scopeByView(
+  rows: DbRow[],
+  views: DbView[] | undefined,
+  viewName: string | null,
+  kindOf: (colId: string) => ColumnType | null,
+): { rows: DbRow[]; error?: string } {
+  if (!viewName) return { rows }
+  const v = viewByName(views, viewName)
+  if (!v) return { rows: [], error: `找不到视图「${viewName}」` }
+  return { rows: applyFilters(rows, v.filters, kindOf, v.filterMode) }
 }
 
 // ───────────────────── 属性名 → 列(页面级筛选的落地点) ─────────────────────
@@ -131,17 +166,23 @@ export interface StatValue {
   text: string
   /** 参与统计的行数(卡片副标题用:「共 N 行」)。 */
   rows: number
+  /** 绑定的视图找不到等配置错;有它时 text 恒 '–'。 */
+  error?: string
 }
 
-/** 数字卡的值。**先过页面级筛选,再统计** —— 顺序反了,筛选就等于没有。 */
+/** 数字卡的值。**先过视图筛选、再过页面级筛选,再统计** —— 顺序反了,筛选就等于没有。
+ *  两次 applyFilters 刻意不合并:视图是 or 模式时,合成一个数组会把页面级条件也 or 掉。 */
 export function computeStatCard(
   rows: DbRow[],
   columns: DbColumn[],
   spec: StatSpec,
   dashFilters: DashFilter[],
   kindOf: (colId: string) => ColumnType | null,
+  views?: DbView[],
 ): StatValue {
-  const scoped = applyFilters(rows, resolveDashFilters(dashFilters, columns), kindOf)
+  const viewed = scopeByView(rows, views, spec.view, kindOf)
+  if (viewed.error) return { text: '–', rows: 0, error: viewed.error }
+  const scoped = applyFilters(viewed.rows, resolveDashFilters(dashFilters, columns), kindOf)
   if (spec.stat === STAT_ROWS) return { text: String(scoped.length), rows: scoped.length }
   const col = spec.col ? columnByName(columns, spec.col) : null
   if (!col) return { text: '–', rows: scoped.length }
@@ -209,20 +250,23 @@ export function computeChartSlices(rows: DbRow[], groupColId: string, valueColId
   return head
 }
 
-/** 图表卡(围栏,列按**名字**)的数据。同样**先过页面级筛选**,再交给 computeChartSlices。 */
+/** 图表卡(围栏,列按**名字**)的数据。同样**先过视图筛选、再过页面级筛选**,再交给 computeChartSlices。 */
 export function computeChartCard(
   rows: DbRow[],
   columns: DbColumn[],
   spec: ChartSpec,
   dashFilters: DashFilter[],
   kindOf: (colId: string) => ColumnType | null,
+  views?: DbView[],
 ): { slices: Slice[]; error?: string } {
   const groupCol = columnByName(columns, spec.group)
   if (!groupCol) return { slices: [], error: `找不到列「${spec.group}」` }
   const valueCol = spec.value ? columnByName(columns, spec.value) : null
   if (spec.agg !== 'count' && !valueCol) return { slices: [], error: `找不到列「${spec.value}」` }
 
-  const scoped = applyFilters(rows, resolveDashFilters(dashFilters, columns), kindOf)
+  const viewed = scopeByView(rows, views, spec.view, kindOf)
+  if (viewed.error) return { slices: [], error: viewed.error }
+  const scoped = applyFilters(viewed.rows, resolveDashFilters(dashFilters, columns), kindOf)
   return { slices: computeChartSlices(scoped, groupCol.id, valueCol?.id ?? null, spec.agg) }
 }
 

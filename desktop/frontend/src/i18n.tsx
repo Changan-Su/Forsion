@@ -11,7 +11,35 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 export type Locale = 'zh' | 'en'
 
 const LS_KEY = 'tangu_locale'
+/** IP 区域缓存(ISO 国家码)。探到就存,之后开机不再外呼。 */
+const LS_REGION = 'forsion_region'
 
+/**
+ * 系统语言 → locale。`zh-*` 判中文,其余任何有效值判英文;完全拿不到返回 null。
+ * ⚠️ 只看语言不看地区:`zh-TW`/`zh-HK` 也归 zh(我们只有简中一套 zh 词条,给中文读者
+ * 看简中远好过看英文)。
+ */
+function systemLocale(): Locale | null {
+  try {
+    const langs = navigator.languages?.length ? navigator.languages : [navigator.language]
+    for (const raw of langs) {
+      const l = String(raw || '').toLowerCase()
+      if (!l) continue
+      return l.startsWith('zh') ? 'zh' : 'en'
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+/**
+ * 首屏语言(纯同步,永不等网络)。优先级:
+ *   ① 用户手选(localStorage) → 永不覆盖
+ *   ② 系统语言 zh* → zh(定论,连 IP 都不用查)
+ *   ③ IP 区域缓存 → CN=zh / 其余=en
+ *   ④ 回落系统语言(非 zh ⇒ en);连 navigator 都没有 ⇒ zh
+ * ③ 的**首次**探测是异步的,见 correctLocaleByRegion():它只负责把「中国用户跑英文系统」
+ * 这一类判错掰回中文,其余情形同步链已经答对,不会有语言闪烁。
+ */
 export function resolveInitialLocale(): Locale {
   try {
     const v = localStorage.getItem(LS_KEY)
@@ -19,7 +47,49 @@ export function resolveInitialLocale(): Locale {
   } catch {
     /* ignore */
   }
-  return 'zh' // 默认中文
+  const sys = systemLocale()
+  if (sys === 'zh') return 'zh'
+  try {
+    const region = localStorage.getItem(LS_REGION)
+    if (region) return region === 'CN' ? 'zh' : 'en'
+  } catch { /* ignore */ }
+  return sys ?? 'zh'
+}
+
+/**
+ * IP 区域一次性校正。只在「用户从未手选 + 从未探到过区域」时外呼一次 `/auth/region`。
+ *
+ * 为什么还需要 IP:光看系统语言,**国内开发者跑英文系统**会被判成英文界面(今天他们拿到的是
+ * 中文)—— 这是唯一会伤到现有用户基本盘的回归,靠 IP=CN 兜住。代价是「在华外国人 + 英文系统」
+ * 会先拿到中文,切一次即持久化。要让系统语言绝对优先,把下面 `country === 'CN'` 那行删掉即可。
+ *
+ * ⚠️ cloudUrl 两种形态:desktop 是纯源(`https://api.forsion.net`),web/mobile 垫片给的
+ * 已经含 `/api`(见 mobileShim 注释)。拼错就是 404,所以按后缀分流。
+ */
+export async function correctLocaleByRegion(): Promise<void> {
+  // ⚠️ 系统中文 = 第②档定论,IP **不得**推翻它。少了这行,「中文用户出国」会在启动后一秒
+  //    被 IP 翻成英文 —— 正是本设计声称要避免的事(2026-09-03 实测抓到:en-GB 机器 IP 归属 GB,
+  //    强制 --lang=zh-CN 后界面仍被翻回英文)。同步链与异步校正必须用同一套优先级。
+  if (systemLocale() === 'zh') return
+  try {
+    if (localStorage.getItem(LS_KEY)) return // 用户手选过 → 永不覆盖
+    if (localStorage.getItem(LS_REGION)) return // 已探测过
+  } catch { return } // 无 localStorage(隐私模式)= 存不下结果,探了也白探
+  let base = ''
+  try { base = String((await window.tangu?.getConfig?.())?.cloudUrl || '').replace(/\/+$/, '') } catch { /* ignore */ }
+  if (!base) return
+  const url = /\/api$/.test(base) ? `${base}/auth/region` : `${base}/api/auth/region`
+  try {
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), 3000)
+    const res = await fetch(url, { signal: ctl.signal }).finally(() => clearTimeout(timer))
+    if (!res.ok) return
+    const country = (await res.json() as { country?: string | null })?.country
+    if (!country) return // 私网/geo 失败 → 不缓存,下次再探,同步链结论不动
+    try { localStorage.setItem(LS_REGION, country) } catch { /* ignore */ }
+    const want: Locale = country === 'CN' ? 'zh' : 'en'
+    if (want !== currentLocale()) setLocaleGlobal(want)
+  } catch { /* 离线/超时:保持同步链结论 */ }
 }
 
 type Dict = Record<string, string>
@@ -406,6 +476,7 @@ const zh: Dict = {
   'automation.cond.manual': '手动 · 按钮',
   'automation.cond.dbRow': '{path} 新增行',
   'automation.cond.dbCell': '{path} 单元格变化',
+  'automation.cond.dbWhereN': '条件 ×{n}',
   'automation.nextRun': '下次 {time}',
   'automation.detail.empty': '在左侧选择一个自动化',
   'automation.detail.latest': '最近运行',
@@ -417,6 +488,10 @@ const zh: Dict = {
   'automation.fact.runner': '执行:',
   'automation.fact.prompt': '指令:',
   'automation.fact.cooldown': '冷却:',
+  'automation.fact.where': '条件:',
+  'automation.fact.columns': '监听列:',
+  'automation.fact.noCooldown': '无(0h)',
+  'automation.fact.disabledReason': '已被引擎自动停用:{reason}',
   'automation.fact.lastRun': '上次运行:',
   'automation.fact.nextRun': '下次触发:',
   'automation.fire.btn': '试跑',
@@ -456,7 +531,8 @@ const zh: Dict = {
   'automation.builder.dbEvent': '监听事件',
   'automation.builder.dbEventRow': '新增行',
   'automation.builder.dbEventCell': '单元格变化',
-  'automation.builder.dbColumn': '监听列',
+  'automation.builder.dbColumn': '监听列(可多选)',
+  'automation.builder.dbColumnsHint': '勾选多列时任一列变化即触发;「新值等于」按变化的那一列比。',
   'automation.builder.dbPickCol': '选择列…',
   'automation.builder.dbColsLoading': '表读取中…',
   'automation.builder.dbEquals': '且新值等于(可选)',
@@ -470,6 +546,23 @@ const zh: Dict = {
   'automation.builder.dbCellVal': '值(可用 {{row.列名}} 模板)',
   'automation.builder.dbCellAdd': '添加字段',
   'automation.builder.dbCellsHint': '多维表触发时,值里的 {{row.列名}} 会替换成触发行对应单元格。',
+  'automation.builder.dbCellValPh': '{{= {target.数量} - {row.出库数量} }}',
+  'automation.builder.dbWhere': '附加条件(可选)',
+  'automation.builder.dbWhereAdd': '添加条件',
+  'automation.builder.dbWhereOpEq': '等于',
+  'automation.builder.dbWhereOpNe': '不等于',
+  'automation.builder.dbWhereOpEmpty': '为空',
+  'automation.builder.dbWhereOpNotEmpty': '不为空',
+  'automation.builder.dbWhereValPh': '值',
+  'automation.builder.dbWhereHint': '与上面的条件 AND;比对触发行物化后的值,公式/引用列也可比;最多 10 条。',
+  'automation.builder.dbRowFrom': '沿关联列取目标行(可选)',
+  'automation.builder.dbRowFromPh': '触发表里的关联列名或列 id;留空 = 用上面的行 id',
+  'automation.builder.dbMatch': '按列值匹配多行(可选)',
+  'automation.builder.dbMatchValPh': '值,可用 {{row.id}} 模板',
+  'automation.builder.dbTargetHint': '目标行优先级:行 id > 关联列 > 列值匹配 > 触发命中的那一行。',
+  'automation.builder.dbSkipIfEmpty': '此字段为空则跳过(可选)',
+  'automation.builder.dbSkipIfEmptyPh': '填一个上面的列名/列 id',
+  'automation.builder.cooldownDbHint': '多维表触发的纯动作链可设 0 = 不冷却(链式规则需要)',
   'automation.builder.dbNoteView': '选中的是「笔记视图」库(行来自文件夹里的笔记)——自动化只支持经典多维表,请换一张。',
   'automation.builder.timerMode': '定时方式',
   'automation.builder.timerDaily': '每天',
@@ -1583,6 +1676,46 @@ const zh: Dict = {
   'sb.syncOffline': '离线',
   'sb.chars': '{n} 字',
   'sb.backlinks': '{n} 反链',
+
+  // ── 落盘产物的默认名 ────────────────────────────────────────────────────
+  // ⚠️ 这些串会变成**真实文件名 / 文档标题**,不是纯界面文案 —— 必须走 translate()
+  // 跟随当前语言,禁止在调用点硬编码任一语言(切了英文还生出「未命名.md」正是被投诉的点)。
+  // 参照物:createPageInFolder 早就用的是 `untitled.md`,这批是当年漏掉的。
+  'amadeus.default.note': '未命名',
+  'amadeus.default.dashboard': '未命名仪表盘',
+  'amadeus.default.drawing': '未命名白板',
+  'amadeus.default.database': '未命名数据库',
+  'amadeus.default.folder': '新文件夹',
+  'amadeus.default.section': '新分区',
+  'amadeus.default.pdfBookmark': '第 {page} 页',
+
+  // 新建弹窗标题(`*In` = 指定了父文件夹的那一档)
+  'amadeus.new.note': '新建笔记',
+  'amadeus.new.childNote': '新建子笔记',
+  'amadeus.new.dashboard': '新建仪表盘',
+  'amadeus.new.dashboardIn': '在「{folder}」中新建仪表盘',
+  'amadeus.new.drawing': '新建白板',
+  'amadeus.new.drawingIn': '在「{folder}」中新建白板',
+  'amadeus.new.folder': '新建文件夹',
+  'amadeus.new.folderIn': '在「{folder}」中新建文件夹',
+  'amadeus.new.database': '新建 Base',
+  'amadeus.new.databaseIn': '在「{folder}」中新建 Base',
+  'amadeus.exists': '「{name}」已存在',
+
+  // 命令面板条目。⚠️ 必须以 `title: () => translate(...)` 注册 —— CMDS 是模块级常量,
+  // 写死字符串就永远停在注册那一刻的语言(引擎 label() 是渲染期求值,给它函数才跟得上切换)。
+  'amadeus.cmd.quickSwitch': '快速切换笔记',
+  'amadeus.cmd.search': '搜索笔记(全文)',
+  'amadeus.cmd.tutorial': '打开使用教程',
+  'amadeus.cmd.dailyNote': '打开今天的日记',
+  'amadeus.cmd.toggleStar': '收藏 / 取消收藏当前笔记',
+  'amadeus.cmd.toggleSource': '切换 源码 / 可视 编辑',
+  'amadeus.cmd.openVault': '打开 Vault…',
+  'amadeus.cmd.reveal': '在文件管理器中显示当前笔记',
+  'amadeus.cmd.reindex': '重建全文索引',
+  'amadeus.cmd.toggleWikiFiles': '切换 双链补全是否包含附件与数据库',
+  'amadeus.cmd.wikiFilesOn': '双链补全已包含附件与数据库',
+  'amadeus.cmd.wikiFilesOff': '双链补全只包含笔记',
 }
 
 const en: Dict = {
@@ -1961,6 +2094,7 @@ const en: Dict = {
   'automation.cond.manual': 'Manual · button',
   'automation.cond.dbRow': 'Row added to {path}',
   'automation.cond.dbCell': 'Cell changed in {path}',
+  'automation.cond.dbWhereN': '{n} condition(s)',
   'automation.nextRun': 'next {time}',
   'automation.detail.empty': 'Select an automation on the left',
   'automation.detail.latest': 'Latest run',
@@ -1972,6 +2106,10 @@ const en: Dict = {
   'automation.fact.runner': 'Runs:',
   'automation.fact.prompt': 'Prompt:',
   'automation.fact.cooldown': 'Cooldown:',
+  'automation.fact.where': 'Conditions:',
+  'automation.fact.columns': 'Watched columns:',
+  'automation.fact.noCooldown': 'none (0h)',
+  'automation.fact.disabledReason': 'Auto-disabled by the engine: {reason}',
   'automation.fact.lastRun': 'Last run:',
   'automation.fact.nextRun': 'Next run:',
   'automation.fire.btn': 'Test run',
@@ -2011,7 +2149,8 @@ const en: Dict = {
   'automation.builder.dbEvent': 'Event',
   'automation.builder.dbEventRow': 'Row added',
   'automation.builder.dbEventCell': 'Cell changed',
-  'automation.builder.dbColumn': 'Watched column',
+  'automation.builder.dbColumn': 'Watched columns',
+  'automation.builder.dbColumnsHint': 'With several columns checked, a change in any of them fires; “new value equals” is compared on the column that changed.',
   'automation.builder.dbPickCol': 'Pick a column…',
   'automation.builder.dbColsLoading': 'Loading table…',
   'automation.builder.dbEquals': 'And new value equals (optional)',
@@ -2025,6 +2164,23 @@ const en: Dict = {
   'automation.builder.dbCellVal': 'Value ({{row.Column}} templates allowed)',
   'automation.builder.dbCellAdd': 'Add field',
   'automation.builder.dbCellsHint': 'With a database trigger, {{row.Column}} in values is replaced from the triggering row.',
+  'automation.builder.dbCellValPh': '{{= {target.qty} - {row.out_qty} }}',
+  'automation.builder.dbWhere': 'Extra conditions (optional)',
+  'automation.builder.dbWhereAdd': 'Add condition',
+  'automation.builder.dbWhereOpEq': 'equals',
+  'automation.builder.dbWhereOpNe': 'not equals',
+  'automation.builder.dbWhereOpEmpty': 'is empty',
+  'automation.builder.dbWhereOpNotEmpty': 'is not empty',
+  'automation.builder.dbWhereValPh': 'value',
+  'automation.builder.dbWhereHint': 'ANDed with the condition above; compared against the materialised row, so formula/lookup columns work too; up to 10.',
+  'automation.builder.dbRowFrom': 'Target rows via relation column (optional)',
+  'automation.builder.dbRowFromPh': 'A relation column (name or id) of the triggering table; empty = use the row id above',
+  'automation.builder.dbMatch': 'Match rows by column value (optional)',
+  'automation.builder.dbMatchValPh': 'value, {{row.id}} templates allowed',
+  'automation.builder.dbTargetHint': 'Target precedence: row id > relation column > column match > the triggering row.',
+  'automation.builder.dbSkipIfEmpty': 'Skip when this field is empty (optional)',
+  'automation.builder.dbSkipIfEmptyPh': 'One of the column names/ids above',
+  'automation.builder.cooldownDbHint': 'Pure action chains on a database trigger may use 0 = no cooldown (needed for chained rules)',
   'automation.builder.dbNoteView': 'That is a note-view database (rows come from notes in a folder) — automations only work on classic tables, pick another.',
   'automation.builder.timerMode': 'Timer mode',
   'automation.builder.timerDaily': 'Daily',
@@ -2792,6 +2948,9 @@ const en: Dict = {
   'settings.agents.title': 'Normal Agents (custom personas)',
   'settings.agents.hint': 'Define reusable conversational personas (system prompt + model + settings) for different tasks. Agents can also self-author via the manage_agent tool.',
   'settings.agents.new': 'New agent',
+  'settings.agents.brainSection': 'Brain (memory / journal / library)',
+  'settings.agents.brainSectionHint': "View and edit this agent's long-term memory, daily journal and library files.",
+  'settings.agents.openBrain': 'Open brain',
   'settings.agents.createViaChat': 'Create with AI',
   'settings.agents.createViaChatHint': 'Open a new chat and let an agent build the new agent for you',
   'settings.agents.empty': 'No agents yet — click "New agent" to create one.',
@@ -3127,6 +3286,40 @@ const en: Dict = {
   'sb.syncOffline': 'Offline',
   'sb.chars': '{n} chars',
   'sb.backlinks': '{n} backlinks',
+
+  // ── Default names for on-disk artifacts (see the zh block for the discipline) ──
+  'amadeus.default.note': 'Untitled',
+  'amadeus.default.dashboard': 'Untitled dashboard',
+  'amadeus.default.drawing': 'Untitled whiteboard',
+  'amadeus.default.database': 'Untitled database',
+  'amadeus.default.folder': 'New folder',
+  'amadeus.default.section': 'New section',
+  'amadeus.default.pdfBookmark': 'Page {page}',
+
+  'amadeus.new.note': 'New note',
+  'amadeus.new.childNote': 'New sub-note',
+  'amadeus.new.dashboard': 'New dashboard',
+  'amadeus.new.dashboardIn': 'New dashboard in “{folder}”',
+  'amadeus.new.drawing': 'New whiteboard',
+  'amadeus.new.drawingIn': 'New whiteboard in “{folder}”',
+  'amadeus.new.folder': 'New folder',
+  'amadeus.new.folderIn': 'New folder in “{folder}”',
+  'amadeus.new.database': 'New base',
+  'amadeus.new.databaseIn': 'New base in “{folder}”',
+  'amadeus.exists': '“{name}” already exists',
+
+  'amadeus.cmd.quickSwitch': 'Quick switch note',
+  'amadeus.cmd.search': 'Search notes (full text)',
+  'amadeus.cmd.tutorial': 'Open the tutorial',
+  'amadeus.cmd.dailyNote': "Open today's daily note",
+  'amadeus.cmd.toggleStar': 'Star / unstar current note',
+  'amadeus.cmd.toggleSource': 'Toggle source / visual editing',
+  'amadeus.cmd.openVault': 'Open vault…',
+  'amadeus.cmd.reveal': 'Reveal current note in file manager',
+  'amadeus.cmd.reindex': 'Rebuild full-text index',
+  'amadeus.cmd.toggleWikiFiles': 'Toggle attachments & databases in wikilink autocomplete',
+  'amadeus.cmd.wikiFilesOn': 'Wikilink autocomplete now includes attachments and databases',
+  'amadeus.cmd.wikiFilesOff': 'Wikilink autocomplete now covers notes only',
 }
 
 const DICTS: Record<Locale, Dict> = { zh, en }
@@ -3137,6 +3330,11 @@ export function registerMessages(fragment: Record<string, { zh: string; en: stri
     if (val.zh != null) zh[key] = val.zh
     if (val.en != null) en[key] = val.en
   }
+}
+
+/** 仅供仪器(i18nCoverage.test.ts)读字典快照:en 缺键会**静默回落中文**,只能靠外部比对抓。 */
+export function __dictSnapshot(): Record<Locale, Dict> {
+  return { zh: { ...zh }, en: { ...en } }
 }
 
 /** 查一个 key(缺失回退:目标语言 → zh → key 本身)。`translate` 与 Provider 的 `t` 共用它。 */
@@ -3216,6 +3414,11 @@ export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     try { document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }
   }, [locale])
+
+  // IP 区域校正:挂载后一次(内部自带「手选过/探过就跳过」双闸)。挂在 Provider 而不是 Root,
+  // 是为了让 desktop / web / mobile 三端**自动同覆盖** —— mobileEntry 各写了一份 MobileRoot,
+  // 加在 Root.tsx 里移动端不会跟上(见 CLAUDE.md 三端同步准则)。
+  useEffect(() => { void correctLocaleByRegion() }, [])
 
   const value = useMemo<I18nValue>(() => ({
     locale,

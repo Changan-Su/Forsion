@@ -47,7 +47,7 @@ const check = (name, actual, expected) => {
 ;(async () => {
   const css = fs.readFileSync(CSS_PATH, 'utf8')
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   // 复刻真实处境:Amadeus 自己的 .dialog 样式 + pdf.js 样式表 + 一个阅读器根
   await page.setContent(`
     <style>.dialog{background:rgb(1,2,3)}</style>

@@ -27,6 +27,12 @@ describe('resolveDbTable', () => {
     const t = resolveDbTable(db({ views: [{ id: 'v', name: 'V', type: 'table', hidden: ['c2'] }] }))
     expect(t.columns.map((c) => c.id)).toEqual(['c1', 'c3'])
   })
+  it('honors the first view.order (首列固定;order 先排、hidden 再滤)', () => {
+    const t = resolveDbTable(db({ views: [{ id: 'v', name: 'V', type: 'table', order: ['c3', 'c1', 'c2'] }] }))
+    expect(t.columns.map((c) => c.id)).toEqual(['c1', 'c3', 'c2'])
+    const h = resolveDbTable(db({ views: [{ id: 'v', name: 'V', type: 'table', order: ['c3', 'c2'], hidden: ['c3'] }] }))
+    expect(h.columns.map((c) => c.id)).toEqual(['c1', 'c2'])
+  })
   it('applies the view filter', () => {
     const t = resolveDbTable(db({ views: [{ id: 'v', name: 'V', type: 'table', filters: [{ colId: 'c3', op: 'checked' }] }] }))
     expect(t.rows.map((r) => r.id)).toEqual(['r1']) // only the checked row

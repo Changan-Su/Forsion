@@ -15,7 +15,19 @@ import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
 import type { CellValue, DbColumn } from '@amadeus-shared/db/schema'
 import type { AggDb } from '../amadeus/store/dbAggregateStore'
+import { registerMessages, translate, useI18n } from '../i18n'
 import { icsCalendarName, looksLikeIcs, parseIcs, type IcsEvent } from '../views/calendar/ics'
+
+registerMessages({
+  'ics.colEvent': { zh: '事件', en: 'Event' },
+  'ics.colDate': { zh: '日期', en: 'Date' },
+  'ics.importedCalendar': { zh: '导入的日历', en: 'Imported calendar' },
+  'ics.externalCalendar': { zh: '外部日历', en: 'External calendar' },
+  'ics.errUnsupported': { zh: '当前端不支持订阅外部日历', en: 'This client cannot subscribe to external calendars' },
+  'ics.errFetchFailed': { zh: '拉取失败', en: 'Fetch failed' },
+  'ics.errNotCalendar': { zh: '返回的不是日历文件(地址可能已失效)', en: 'The response is not a calendar file (the address may no longer be valid)' },
+  'ics.untitledEvent': { zh: '(无标题)', en: '(untitled)' },
+})
 
 export interface IcsSub {
   id: string
@@ -24,12 +36,15 @@ export interface IcsSub {
   url: string
 }
 
-/** 合成 AggDb 的固定两列:名称 + 日期。列 id 定死,buildEvents 用 firstDateCol 找日期列。 */
+/**
+ * 合成 AggDb 的固定两列:名称 + 日期。列 id 定死,buildEvents 用 firstDateCol 找日期列。
+ * ⚠️ 列名是**展示文案**,必须每次求值:写成模块级常量会把语言冻结在模块加载那一刻,切英文不更新。
+ */
 export const ICS_NAME_COL = 'name'
 export const ICS_DATE_COL = 'date'
-const ICS_COLUMNS: DbColumn[] = [
-  { id: ICS_NAME_COL, name: '事件', type: 'text' },
-  { id: ICS_DATE_COL, name: '日期', type: 'date' },
+const icsColumns = (): DbColumn[] => [
+  { id: ICS_NAME_COL, name: translate('ics.colEvent'), type: 'text' },
+  { id: ICS_DATE_COL, name: translate('ics.colDate'), type: 'date' },
 ]
 
 const KEY = 'amadeus.calendar.ics'
@@ -41,11 +56,11 @@ export const MAX_IMPORT_BYTES = 8 * 1024 * 1024
 /** 展示名:URL 里可能带密钥(Google/Outlook 的「私密地址」),**绝不整条显示** —— 截图/录屏就泄了。 */
 export function displayName(sub: IcsSub): string {
   if (sub.name && sub.name !== sub.url) return sub.name
-  if (!sub.url) return '导入的日历'
+  if (!sub.url) return translate('ics.importedCalendar')
   try {
     return new URL(sub.url.replace(/^webcal:\/\//i, 'https://')).host
   } catch {
-    return '外部日历'
+    return translate('ics.externalCalendar')
   }
 }
 
@@ -126,7 +141,7 @@ export const useIcsCalendars = create<IcsState>((set, get) => ({
     if (!sub || !sub.url) return // 本地导入的快照没有 url,不刷新
     const fetchIcs = window.tangu?.fetchIcs
     if (!fetchIcs) {
-      set((s) => ({ errors: { ...s.errors, [id]: '当前端不支持订阅外部日历' } }))
+      set((s) => ({ errors: { ...s.errors, [id]: translate('ics.errUnsupported') } }))
       return
     }
     const ticket = (inflight.get(id) ?? 0) + 1 // 自动刷新与手点刷新可能同时在飞:后发的说了算
@@ -137,9 +152,9 @@ export const useIcsCalendars = create<IcsState>((set, get) => ({
     set((s) => {
       const loading = { ...s.loading, [id]: false }
       const fail = (msg: string): Partial<IcsState> => ({ loading, errors: { ...s.errors, [id]: msg } })
-      if (!res.ok || !('text' in res) || !res.text) return fail(res.error || '拉取失败')
+      if (!res.ok || !('text' in res) || !res.text) return fail(res.error || translate('ics.errFetchFailed'))
       // 订阅地址失效后常见的是「200 + 登录页 HTML」。当成功处理会把已有事件清空 —— 宁可留旧数据。
-      if (!looksLikeIcs(res.text)) return fail('返回的不是日历文件(地址可能已失效)')
+      if (!looksLikeIcs(res.text)) return fail(translate('ics.errNotCalendar'))
       const { [id]: _drop, ...errors } = s.errors
       // 名字还是占位的地址 → 用日历自己报的 X-WR-CALNAME(用户手动改过就不动)
       const calName = icsCalendarName(res.text)
@@ -161,7 +176,9 @@ export const useIcsCalendars = create<IcsState>((set, get) => ({
 
   importText(name, text) {
     if (!looksLikeIcs(text)) return null
-    const sub: IcsSub = { id: newId(), name: name.trim() || '导入的日历', url: '' }
+    // 无名时**存空串**而不是落一句本地化文案:落盘的名字会把语言冻在导入那一刻,
+    // 留空则由 displayName() 每次按当前语言给回退名(url 也为空,不会被当成占位地址)。
+    const sub: IcsSub = { id: newId(), name: name.trim(), url: '' }
     const subs = [...get().subs, sub]
     const events = { ...get().events, [sub.id]: parseIcs(text) }
     save(KEY, subs)
@@ -182,7 +199,7 @@ export function icsToAggDb(sub: IcsSub, events: IcsEvent[]): AggDb {
     name: displayName(sub),
     isNoteView: false,
     readonly: true,
-    columns: ICS_COLUMNS,
+    columns: icsColumns(),
     rows: events.map((e, i) => {
       const base = e.uid || `e${i}`
       let rowId = base
@@ -190,7 +207,7 @@ export function icsToAggDb(sub: IcsSub, events: IcsEvent[]): AggDb {
       seen.add(rowId)
       return {
         rowId,
-        name: e.summary || '(无标题)',
+        name: e.summary || translate('ics.untitledEvent'),
         cells: {
           [ICS_NAME_COL]: e.summary as CellValue,
           [ICS_DATE_COL]: (e.end ? `${e.start}/${e.end}` : e.start) as CellValue,
@@ -204,10 +221,11 @@ export function icsToAggDb(sub: IcsSub, events: IcsEvent[]): AggDb {
 export function useIcsCalDbs(): AggDb[] {
   const subs = useIcsCalendars((s) => s.subs)
   const events = useIcsCalendars((s) => s.events)
+  const { locale } = useI18n() // 列名/回退名/(无标题)都是本地化文案 → 必须进 memo 依赖,否则切语言不刷新
   useEffect(() => {
     void useIcsCalendars.getState().refreshAll()
     const t = window.setInterval(() => void useIcsCalendars.getState().refreshAll(), REFRESH_MS)
     return () => window.clearInterval(t)
   }, [])
-  return useMemo(() => subs.map((s) => icsToAggDb(s, events[s.id] ?? [])), [subs, events])
+  return useMemo(() => subs.map((s) => icsToAggDb(s, events[s.id] ?? [])), [subs, events, locale])
 }

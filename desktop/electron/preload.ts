@@ -26,7 +26,11 @@ const api = {
   onBackendStatus: (cb: (st: BackendStatus) => void): (() => void) => {
     const listener = (_e: unknown, st: BackendStatus): void => cb(st)
     ipcRenderer.on('backend:status', listener)
-    return () => ipcRenderer.removeListener('backend:status', listener)
+    // 注册即回放当前状态:渲染层 boot 里注册前有 await,ready 广播若落在那道缝里就丢了(快照 starting 永远停在
+    // 「后端启动中」)。回放走 invoke(异步),与真广播同样在注册之后到达;订阅方已退订则不回放。
+    let off = false
+    ipcRenderer.invoke('backend:getStatus').then((st: BackendStatus) => { if (!off) cb(st) }).catch(() => { /* 主进程未就绪:等真广播 */ })
+    return () => { off = true; ipcRenderer.removeListener('backend:status', listener) }
   },
   // ── 收件箱:系统通知 + dock 角标(仅 mac)+ 通知点击回跳订阅 ──
   notifyInbox: (title: string, body: string): Promise<void> => ipcRenderer.invoke('inbox:notify', title, body),

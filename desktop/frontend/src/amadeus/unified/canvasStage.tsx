@@ -49,6 +49,37 @@ import { canvasDoubleClickFocusEnabled, canvasGridSnapEnabled, canvasMiniMapEnab
 import { resolveCardRepulsion } from './canvasGeometry'
 import { hasChatRef, readChatRefs, type ChatRef } from '../../views/chat2/chatDragRef'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
+import { registerMessages, translate, useI18n } from '../../i18n'
+
+registerMessages({
+  'canvasstage.textTitle.connector': { zh: '连线标签', en: 'Connector label' },
+  'canvasstage.textTitle.frame': { zh: 'Frame 标题', en: 'Frame title' },
+  'canvasstage.textTitle.element': { zh: '元素文字', en: 'Element text' },
+  'canvasstage.upload.fileN': { zh: '文件{n}', en: 'File {n}' },
+  'canvasstage.upload.uploading': { zh: '上传中 {name}', en: 'Uploading {name}' },
+  'canvasstage.toast.needEdit': { zh: '双击卡片(或选中后按空格)进入编辑模式，才能勾选待办、点开双链', en: 'Double-click a card (or select it and press Space) to edit — then you can tick to-dos and open backlinks' },
+  'canvasstage.toolbar.label': { zh: '画布工具', en: 'Canvas tools' },
+  'canvasstage.tool.select': { zh: '选择 (Esc)', en: 'Select (Esc)' },
+  'canvasstage.tool.pan': { zh: '抓手(或按住 Alt 拖)', en: 'Pan (or hold Alt and drag)' },
+  'canvasstage.tool.card': { zh: '新建卡片(双击空白同)', en: 'New card (or double-click empty space)' },
+  'canvasstage.tool.frame': { zh: 'Frame:拖出范围(或点一下取默认大小)', en: 'Frame: drag to size (or click for the default size)' },
+  'canvasstage.tool.conn': { zh: '箭头:依次点父节点、子节点(Shift 或形状=自由连线)', en: 'Arrow: click the parent, then the child (Shift or a shape = free connector)' },
+  'canvasstage.shape.rect': { zh: '矩形', en: 'Rectangle' },
+  'canvasstage.shape.ellipse': { zh: '椭圆', en: 'Ellipse' },
+  'canvasstage.shape.text': { zh: '文本', en: 'Text' },
+  'canvasstage.conn.hint': { zh: '再点一个对象:卡片/正文 = 收它作子节点(按住 Shift = 改画自由连线),形状 = 自由连线;Esc 取消', en: 'Now click another object: a card or the body text becomes a child node (hold Shift to draw a free connector instead), a shape gets a free connector. Esc cancels.' },
+  'canvasstage.overview.label': { zh: '低倍率简略显示', en: 'Low-zoom overview' },
+  'canvasstage.overview.off': { zh: '关闭低倍率简略显示', en: 'Turn off low-zoom overview' },
+  'canvasstage.overview.on': { zh: '开启低倍率简略显示', en: 'Turn on low-zoom overview' },
+  'canvasstage.menu.editText': { zh: '编辑文字', en: 'Edit text' },
+  'canvasstage.menu.connectTo': { zh: '连线到…', en: 'Connect to…' },
+  'canvasstage.menu.arrange': { zh: '一键整理', en: 'Auto-arrange' },
+  'canvasstage.menu.groupFrame': { zh: '成组为 Frame', en: 'Group into a frame' },
+  'canvasstage.menu.unwrap': { zh: '收回文档', en: 'Unwrap into document' },
+  'canvasstage.menu.delete': { zh: '删除', en: 'Delete' },
+  'canvasstage.menu.newCard': { zh: '新建卡片', en: 'New card' },
+  'canvasstage.menu.fit': { zh: '适应内容', en: 'Fit to content' },
+})
 
 /** 低于这档正文已经不可扫读，改由恒定屏幕字号的标题/首行承担概览。 */
 /** Chromium 把触控板双指捏合作为 `ctrlKey + wheel` 送达；macOS 的 Cmd+滚轮则是
@@ -79,7 +110,7 @@ function hintTarget(target: HTMLElement, clientX: number): boolean {
 }
 /** 元素的文字键与弹窗抬头:连线=label、Frame=title、其余=text。四处调用共用,别再各写一遍三元。 */
 const textKeyOf = (el: El): 'text' | 'label' | 'title' => (el.kind === 'connector' ? 'label' : el.kind === 'frame' ? 'title' : 'text')
-const textTitleOf = (el: El): string => (el.kind === 'connector' ? '连线标签' : el.kind === 'frame' ? 'Frame 标题' : '元素文字')
+const textTitleOf = (el: El): string => translate(el.kind === 'connector' ? 'canvasstage.textTitle.connector' : el.kind === 'frame' ? 'canvasstage.textTitle.frame' : 'canvasstage.textTitle.element')
 
 export type { Viewport }
 
@@ -347,6 +378,9 @@ export interface CanvasStageProps {
 
 export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, onBlocksDeleted, revealSelection = 0, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
+  //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
+  const { t } = useI18n()
   const [vp, setVp] = useState<Viewport>(() => recallViewport(path) ?? { x: 0, y: 0, z: 1 })
   const vpRef = useRef(vp)
   vpRef.current = vp
@@ -950,8 +984,10 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     const save = cbRef.current.saveFile
     if (!save) return
     files.forEach((f, i) => {
-      const name = f.name || `文件${i + 1}`
-      const hold = `上传中 ${name}`
+      const name = f.name || translate('canvasstage.upload.fileN', { n: i + 1 })
+      // ⚠️ `hold` 是**同一个闭包变量**:建卡写它、认卡比它、setCardText 的乐观锁也用它 ——
+      //    三处同源,切语言也不会让占位与比对错开(别改成两处各自 translate 一次)。
+      const hold = translate('canvasstage.upload.uploading', { name })
       const anchor = actRef.current.addCardAt(at.x - CARD_W / 2 + i * 24, at.y - 24 + i * 24, undefined, hold)
       if (!anchor) return
       void save(f).then((md) => {
@@ -1963,7 +1999,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     host.addEventListener('wheel', onWheel, { passive: false })
 
     type Drag =
-      | { kind: 'pan'; x0: number; y0: number; vx: number; vy: number }
+      | { kind: 'pan'; x0: number; y0: number; vx: number; vy: number; tapKey?: string }
       | { kind: 'card-size'; key: string; edge: CardResizeEdge; b0: ElBox; h0: number; x0: number; y0: number; dx: number; dy: number; next: ElBox; live?: boolean }
       | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean; growSel?: string[] }
       | { kind: 'size'; id: string; corner: string; b0: ElBox; dx: number; dy: number; dw: number; dh: number; live?: boolean }
@@ -2235,8 +2271,24 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       const hintKey = card && anchor ? anchor : onMainBody ? MAIN_KEY : null
       if (t === 'select' && hintKey && editingRef.current !== hintKey && hintTarget(target, e.clientX)) {
         window.dispatchEvent(new CustomEvent('amadeus:toast', {
-          detail: { text: '双击卡片(或选中后按空格)进入编辑模式，才能勾选待办、点开双链' },
+          detail: { text: translate('canvasstage.toast.needEdit') },
         }))
+      }
+
+      // ── 触屏两段式:**没选中的对象上单指拖 = 平移画布**,点一下才选中(2026-09-02 用户实报
+      //    「想拖画布,手指刚好落在卡上就把卡拖走了」)。手指没有鼠标的精度,而画布上卡片铺得很满,
+      //    「空白处才能平移」在手机上等于平移不了。选中之后再拖才是搬它 —— Figma / Miro 手机端同款。
+      //    鼠标一字未动(直接拖未选中的对象仍是桌面端的通用语义)。
+      //    必须在下面三条起 move 的分支(卡正文 / 主卡正文 / chrome 圈+形状)**之前**统一拦,
+      //    键的算法与它们逐字同源;编辑态那张卡照旧整片让位给 PM。
+      const touchKey = e.pointerType === 'touch' && t === 'select'
+        ? (shape?.dataset.el ? elKey(shape.dataset.el) : anchor ? cardKey(anchor) : !card && pmEl ? MAIN_KEY : null)
+        : null
+      if (touchKey && !selRef.current.includes(touchKey) && editingRef.current !== (anchor ?? MAIN_KEY)) {
+        e.preventDefault()
+        drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y, tapKey: touchKey }
+        capture(e.pointerId)
+        return
       }
 
       // ── 卡正文也是选择/拖动命中面；编辑只走「选中后按空格」────────────────────────
@@ -2601,7 +2653,13 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       const d = drag
       drag = null
       release(e.pointerId)
-      if (!d || d.kind === 'pan') return
+      if (!d) return
+      if (d.kind === 'pan') {
+        // 触屏两段式的第一段:落在对象上但没真拖动 = 一次点选(见 onDown 的 touchKey)。
+        // 阈值用**屏幕像素**的 TOUCH_SLOP —— pan 的 x0/y0 就是 clientX/Y,不过舞台的 z。
+        if (d.tapKey && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < TOUCH_SLOP) setSel([d.tapKey])
+        return
+      }
       // 建形状/Frame:拖出了框就用框,没拖动(或框比 MIN_EL 还小)回落成默认尺寸的一击建 ——
       // 所以这一支排在下面的 `!d.live` **之前**:那道闸拦的是「落笔会给撤销栈灌垃圾」的手势,
       // 而一击建本来就是修前的既有行为,不能被当成取消吞掉。
@@ -2807,7 +2865,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         return !!ba && !!bb && hitEdge(ba, bb, at, 8 / vpRef.current.z)
       })
       e.preventDefault()
-      if (hit) void actRef.current.editText(hit.id, 'label', '连线标签')
+      if (hit) void actRef.current.editText(hit.id, 'label', translate('canvasstage.textTitle.connector'))
       else actRef.current.addCardAt(at.x - CARD_W / 2, at.y - 24)
     }
 
@@ -3180,14 +3238,14 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   }
 
   const TOOLS: Array<{ id: Tool; icon: React.ReactNode; title: string }> = [
-    { id: 'select', icon: <MousePointer2 size={14} />, title: '选择 (Esc)' },
-    { id: 'pan', icon: <Hand size={14} />, title: '抓手(或按住 Alt 拖)' },
-    { id: 'card', icon: <StickyNote size={14} />, title: '新建卡片(双击空白同)' },
-    { id: 'rect', icon: <Square size={14} />, title: '矩形' },
-    { id: 'ellipse', icon: <Circle size={14} />, title: '椭圆' },
-    { id: 'text', icon: <Type size={14} />, title: '文本' },
-    { id: 'frame', icon: <Frame size={14} />, title: 'Frame:拖出范围(或点一下取默认大小)' },
-    { id: 'conn', icon: <Spline size={14} />, title: '箭头:依次点父节点、子节点(Shift 或形状=自由连线)' },
+    { id: 'select', icon: <MousePointer2 size={14} />, title: t('canvasstage.tool.select') },
+    { id: 'pan', icon: <Hand size={14} />, title: t('canvasstage.tool.pan') },
+    { id: 'card', icon: <StickyNote size={14} />, title: t('canvasstage.tool.card') },
+    { id: 'rect', icon: <Square size={14} />, title: t('canvasstage.shape.rect') },
+    { id: 'ellipse', icon: <Circle size={14} />, title: t('canvasstage.shape.ellipse') },
+    { id: 'text', icon: <Type size={14} />, title: t('canvasstage.shape.text') },
+    { id: 'frame', icon: <Frame size={14} />, title: t('canvasstage.tool.frame') },
+    { id: 'conn', icon: <Spline size={14} />, title: t('canvasstage.tool.conn') },
   ]
 
   // 点阵层的相位算法搬进了 canvasKit(与仪表盘共用同一份;见 gridLayerStyle 顶注)。
@@ -3260,26 +3318,27 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
         />
       ) : null}
       {active ? (
-        <div className="amx-stage-tools" role="toolbar" aria-label="画布工具">
-          {TOOLS.map((t) => (
+        <div className="amx-stage-tools" role="toolbar" aria-label={t('canvasstage.toolbar.label')}>
+          {/* ⚠️ 形参不叫 `t`:那会把 useI18n 的 `t` 遮住(rule 6 的原型陷阱)。 */}
+          {TOOLS.map((item) => (
             <button
-              key={t.id}
+              key={item.id}
               type="button"
-              title={t.title}
-              className={tool === t.id ? 'on' : ''}
-              aria-pressed={tool === t.id}
+              title={item.title}
+              className={tool === item.id ? 'on' : ''}
+              aria-pressed={tool === item.id}
               onClick={() => {
-                setTool(t.id)
+                setTool(item.id)
                 setConnFrom(null)
                 hostRef.current?.focus({ preventScroll: true })
               }}
             >
-              {t.icon}
+              {item.icon}
             </button>
           ))}
         </div>
       ) : null}
-      {active && connFrom ? <div className="amx-stage-hint">再点一个对象:卡片/正文 = 收它作子节点(按住 Shift = 改画自由连线),形状 = 自由连线;Esc 取消</div> : null}
+      {active && connFrom ? <div className="amx-stage-hint">{t('canvasstage.conn.hint')}</div> : null}
       {active ? (
         // 缩放胶囊 / 吸附 / 缩略图开关 —— 与仪表盘共用同一份 chrome(View 基座方案 §6.4 S2)。
         <CanvasChrome
@@ -3295,8 +3354,8 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
               type="button"
               className={overviewEnabled ? 'is-on' : ''}
               aria-pressed={overviewEnabled}
-              aria-label="低倍率简略显示"
-              title={overviewEnabled ? '关闭低倍率简略显示' : '开启低倍率简略显示'}
+              aria-label={t('canvasstage.overview.label')}
+              title={overviewEnabled ? t('canvasstage.overview.off') : t('canvasstage.overview.on')}
               onClick={() => {
                 const next = !overviewEnabled
                 setOverviewEnabled(next)
@@ -3319,17 +3378,17 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
                     const el = els.find((x) => x.id === keyId(menu.key!))
                     setMenu(null)
                     if (el) void editText(el.id, textKeyOf(el), textTitleOf(el))
-                  }}>编辑文字</button>
+                  }}>{t('canvasstage.menu.editText')}</button>
                 )}
-                <button onClick={() => { setConnFrom(menu.key); setTool('conn'); setMenu(null) }}>连线到…</button>
+                <button onClick={() => { setConnFrom(menu.key); setTool('conn'); setMenu(null) }}>{t('canvasstage.menu.connectTo')}</button>
                 {(menu.key === MAIN_KEY || menu.key.startsWith('c:')) && childrenOf(rawTree(tree), menu.key === MAIN_KEY ? MAIN_KEY : keyId(menu.key)).length > 0 && (
                   <button onClick={() => {
                     const root = menu.key === MAIN_KEY ? MAIN_KEY : keyId(menu.key!)
                     setMenu(null)
                     arrangeChildren(root)
-                  }}>一键整理</button>
+                  }}>{t('canvasstage.menu.arrange')}</button>
                 )}
-                <button onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); groupIntoFrame(keys) }}>成组为 Frame</button>
+                <button onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); groupIntoFrame(keys) }}>{t('canvasstage.menu.groupFrame')}</button>
                 {menu.key.startsWith('c:') && (
                   <button onClick={() => {
                     const a = keyId(menu.key!)
@@ -3342,22 +3401,22 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
                     setSel([])
                     onCommit()
                     if (ckpt) mergePair()
-                  }}>收回文档</button>
+                  }}>{t('canvasstage.menu.unwrap')}</button>
                 )}
                 {/* 选中集合优先:右键那一下已经把没选中的对象设成了唯一选中,所以两者恒一致。
                     主卡没有「删除」—— 它就是文档本身。 */}
                 {menu.key !== MAIN_KEY && (
-                  <button className="danger" onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); removeSel(keys) }}>删除</button>
+                  <button className="danger" onClick={() => { const keys = sel.length ? sel : [menu.key!]; setMenu(null); removeSel(keys) }}>{t('canvasstage.menu.delete')}</button>
                 )}
               </>
             ) : (
               <>
-                <button onClick={() => { const at = menu.at; setMenu(null); addCardAt(at.x - CARD_W / 2, at.y - 24) }}>新建卡片</button>
-                <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('rect', at.x, at.y) }}>矩形</button>
-                <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('ellipse', at.x, at.y) }}>椭圆</button>
-                <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('text', at.x, at.y) }}>文本</button>
+                <button onClick={() => { const at = menu.at; setMenu(null); addCardAt(at.x - CARD_W / 2, at.y - 24) }}>{t('canvasstage.menu.newCard')}</button>
+                <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('rect', at.x, at.y) }}>{t('canvasstage.shape.rect')}</button>
+                <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('ellipse', at.x, at.y) }}>{t('canvasstage.shape.ellipse')}</button>
+                <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('text', at.x, at.y) }}>{t('canvasstage.shape.text')}</button>
                 <button onClick={() => { const at = menu.at; setMenu(null); addFrame(at.x, at.y) }}>Frame</button>
-                <button onClick={() => { setMenu(null); fit() }}>适应内容</button>
+                <button onClick={() => { setMenu(null); fit() }}>{t('canvasstage.menu.fit')}</button>
               </>
             )}
           </OverlayAt>

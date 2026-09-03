@@ -7,7 +7,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { Rocket, Globe, FileText, Users, RotateCw, ExternalLink, Copy, Check, Trash2, Loader2, Store, CircleMinus } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'publicview.opFailed': { zh: '操作失败', en: 'Something went wrong' },
+  'publicview.unpublishFailed': { zh: '下架失败', en: 'Could not unpublish' },
+})
 
 interface Row {
   key: string
@@ -83,7 +88,7 @@ function Section(props: {
                           onClick={async () => {
                             setBusyL(r.key); setRowErr((e) => (e?.key === r.key ? null : e))
                             try { await r.listing!.action!.run() }
-                            catch (e) { setRowErr({ key: r.key, msg: (e as Error)?.message || '操作失败' }) }
+                            catch (e) { setRowErr({ key: r.key, msg: (e as Error)?.message || t('publicview.opFailed') }) }
                             finally { setBusyL((b) => (b === r.key ? null : b)) }
                           }}
                         >
@@ -104,7 +109,7 @@ function Section(props: {
                             if (confirm !== r.key) { setConfirm(r.key); setTimeout(() => setConfirm((c) => (c === r.key ? null : c)), 2500); return }
                             setConfirm(null); setBusy(r.key); setRowErr((e) => (e?.key === r.key ? null : e))
                             try { await r.onRemove!() }
-                            catch (e) { setRowErr({ key: r.key, msg: (e as Error)?.message || '操作失败' }) }
+                            catch (e) { setRowErr({ key: r.key, msg: (e as Error)?.message || t('publicview.opFailed') }) }
                             finally { setBusy((b) => (b === r.key ? null : b)) }
                           }}
                         >
@@ -155,7 +160,7 @@ export function PublicView(_: ViewProps) {
                     title: ls === 'approved' ? t('coding.listingDelist') : t('coding.listingWithdraw'), kind: 'withdraw',
                     run: async () => {
                       const rr = await window.tangu!.connectListingWithdraw?.(a.slug)
-                      if (rr && !rr.ok) throw new Error(rr.detail || '操作失败')
+                      if (rr && !rr.ok) throw new Error(rr.detail || t('publicview.opFailed'))
                       await loadSites()
                     },
                   }
@@ -169,7 +174,7 @@ export function PublicView(_: ViewProps) {
                       )
                       if (!summary) return
                       const rr = await window.tangu!.connectListingApply?.({ slug: a.slug, summary })
-                      if (rr && !rr.ok) throw new Error(rr.detail || '操作失败')
+                      if (rr && !rr.ok) throw new Error(rr.detail || t('publicview.opFailed'))
                       await loadSites()
                     },
                   },
@@ -182,7 +187,7 @@ export function PublicView(_: ViewProps) {
           url: base && handle ? `${base}/apps/${handle}/${a.slug}/` : null,
           disabled: a.status !== 'active',
           listing,
-          onRemove: async () => { const rr = await window.tangu!.connectUnpublish?.(a.slug); if (rr && !rr.ok) throw new Error(rr.detail || '下架失败'); await loadSites() },
+          onRemove: async () => { const rr = await window.tangu!.connectUnpublish?.(a.slug); if (rr && !rr.ok) throw new Error(rr.detail || t('publicview.unpublishFailed')); await loadSites() },
         }
       }))
     } catch { setSites([]) } finally { setSitesLoading(false) }

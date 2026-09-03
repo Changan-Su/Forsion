@@ -29,7 +29,7 @@ const record = (name, ok, detail) => {
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const seed = '段甲。\n\n段乙。\n\n段丙。\n'
-  const p = await browser.newPage()
+  const p = await browser.newPage({ locale: 'zh-CN' })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
@@ -147,7 +147,7 @@ async function main() {
     const fm = '---\namadeus_schema: amadeus.page/4\namadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["a1"],"width":0.6},{"refs":["a2"],"width":0.4}]}]}\n---\n'
     // 手写行无 tail:末列辖域到文件尾(规范口径)→ 行放文件尾;行后有内容的场景由带 tail 的 C6 覆盖。
     const seed = fm + '开场段。\n\n<!-- a a1 -->\n\n左列内容。\n\n<!-- a a2 -->\n\n右列内容。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -187,7 +187,7 @@ async function main() {
     )
     await pg.close()
 
-    const bad = await browser.newPage()
+    const bad = await browser.newPage({ locale: 'zh-CN' })
     const badSeed = fm.replace('"refs":["a2"]', '"refs":["aX"]') + '<!-- a a1 -->\n\n甲。\n\n<!-- a a2 -->\n\n乙。\n'
     await bad.goto(`${URL}?upage&useed=${encodeURIComponent(badSeed)}`, { waitUntil: 'domcontentloaded' })
     await bad.waitForSelector(PM, { timeout: 20000 })
@@ -203,7 +203,7 @@ async function main() {
   // C6:拖到块左缘 → 竖直指示线 + 成两列;落盘生出 fm layout。
   // C7:把列里的块拖出(拖到底部)→ 单列行解散;锚转惰性标记保留(永不回收)。
   {
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent('段甲。\n\n段乙。\n\n段丙。\n')}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -293,7 +293,7 @@ async function main() {
   {
     const fm = '---\namadeus_schema: amadeus.page/4\namadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["a1"],"width":0.5},{"refs":["a2"],"width":0.5}],"tail":"t9"}]}\n---\n'
     const seed = fm + '<!-- a a1 -->\n\n左块。\n\n<!-- a a2 -->\n\n右块。\n\n<!-- a t9 -->\n\n行后段。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -345,7 +345,7 @@ async function main() {
   {
     const fm = '---\namadeus_schema: amadeus.page/4\namadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["b1"],"width":0.5},{"refs":["b2"],"width":0.5}],"tail":"t1"}]}\n---\n'
     const seed = fm + '首段。\n\n<!-- a b1 -->\n\n左块一。\n\n左块二。\n\n<!-- a b2 -->\n\n右块。\n\n<!-- a t1 -->\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -432,7 +432,7 @@ async function main() {
   // 自定路由(成列 executePair / 行下方 executeMoveBelowRow)此前恒 move —— 同一个 Alt 在同一个
   // 编辑器里两种结果。判据与 prosemirror-view 的 dragCopyModifier 同源(blockLayer.dragCopies)。
   {
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent('段甲。\n\n段乙。\n\n段丙。\n')}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })

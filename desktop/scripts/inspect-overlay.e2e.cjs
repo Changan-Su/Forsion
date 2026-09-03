@@ -71,7 +71,7 @@ async function main() {
 
   /** 每条用例开一张干净的页:插件在 window 上挂 keydown,复用同一页会叠好几份。 */
   const fresh = async (tangu = [MODEL, 'tangu', SESSION], src = code) => {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 800 } })
     page.on('pageerror', (e) => errors.push(String(e)))
     await page.goto(BASE, { waitUntil: 'domcontentloaded' })
     await page.waitForFunction('!!window.__ep')
@@ -331,7 +331,7 @@ async function main() {
     }),
   }
   {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 800 } })
     page.on('pageerror', (e) => errors.push(String(e)))
     await page.addInitScript(() => {
       window.amadeus = {

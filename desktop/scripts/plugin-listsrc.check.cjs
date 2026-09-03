@@ -55,7 +55,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: findChromium() })
   try {
     for (const mode of ['light', 'dark']) {
-      const page = await browser.newPage({ viewport: { width: 460, height: 320 } })
+      const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 460, height: 320 } })
       await page.goto(`${BASE}?listsrc${mode === 'dark' ? '&dark' : ''}`, { waitUntil: 'load' })
       await page.waitForSelector('.t2sw-plug .t2s-srow')
       await page.waitForTimeout(1200) // 远程 favicon + onError 兜底都跑完
@@ -83,6 +83,19 @@ async function main() {
       check(`${mode} 无 iconUrl → 词表 svg`, own.tag === 'svg', JSON.stringify(own))
       // 词表里没有的键名:退兜底 svg。**不许**变成一段字面文本(那样 firstElementChild 会是 null)。
       check(`${mode} 未知键名 → 兜底 svg,不是字面文本`, unknown.tag === 'svg' && Math.abs(unknown.w - ref.w) <= 1, JSON.stringify(unknown))
+      const active = await page.evaluate(() => {
+        const rows = Array.from(document.querySelectorAll('.t2sw-plug .t2s-srow'))
+        const selected = rows.filter((r) => r.classList.contains('active'))
+        const row = selected[0]
+        const mark = row ? getComputedStyle(row, '::before') : null
+        return {
+          count: selected.length,
+          title: row ? (row.textContent || '').trim() : '',
+          markWidth: mark ? mark.width : '',
+          markContent: mark ? mark.content : '',
+        }
+      })
+      check(`${mode} activeKey → 唯一原生选中行 + 左侧色条`, active.count === 1 && active.title.includes('32px 图标') && active.markWidth === '2px' && active.markContent !== 'none', JSON.stringify(active))
       await page.close()
     }
     // ── 数据接线的源码闸(几何管不着,但正是 2026-08-28 「明明有记录列表却是空」的那半)──

@@ -47,7 +47,7 @@ const check = (name, actual, expected) => {
   const pdfCss = fs.readFileSync(R('node_modules/pdfjs-dist/legacy/web/pdf_viewer.css'), 'utf8')
   const ourCss = fs.readFileSync(R('frontend/src/amadeus/pdf/pdfAnnotator.css'), 'utf8')
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
 
   // 复刻 pdf.js 的真实页内层序:.page > .textLayer + .annotationLayer > section(各类注释)
   // section 的位置/内联 z-index 也照抄 pdf.js(style.zIndex = parent.zIndex++)。

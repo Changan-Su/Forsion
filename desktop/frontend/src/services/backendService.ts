@@ -10,6 +10,11 @@ import type {
 import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
+import { registerMessages, translate } from '../i18n'
+
+registerMessages({
+  'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
+})
 
 function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
@@ -611,8 +616,10 @@ export const injectMuseTodos = (cfg: TanguDesktopConfig, todoIds: string[], sess
 export const getMuseStatus = (cfg: TanguDesktopConfig) =>
   request<{ status: MuseStatusInfo }>(cfg, '/agent/special/muse/status').then((r) => r.status)
 
+// ⚠️ 这两条是控制面(非流式),必须带超时:插件的「登记规则 / 停用规则」把它们放进了每插件串行链,
+// 后端半死时一笔永不 settle 的请求会把整条链焊住 —— 停用永远排不上,等于 codex 抓的那条 bug 换了触发条件。
 export const getMuseTriggers = (cfg: TanguDesktopConfig) =>
-  request<{ triggers: MuseTriggerInfo[] }>(cfg, '/agent/special/muse/triggers').then((r) => r.triggers)
+  request<{ triggers: MuseTriggerInfo[] }>(cfg, '/agent/special/muse/triggers', undefined, { timeoutMs: 30000 }).then((r) => r.triggers)
 
 export const deleteMuseTrigger = (cfg: TanguDesktopConfig, id: string) =>
   request<{ ok: boolean }>(cfg, `/agent/special/muse/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -621,7 +628,7 @@ export const deleteMuseTrigger = (cfg: TanguDesktopConfig, id: string) =>
 export const saveMuseTrigger = (cfg: TanguDesktopConfig, input: MuseTriggerUpsert) =>
   request<{ trigger: MuseTriggerInfo; created: boolean }>(cfg, '/agent/special/muse/triggers', {
     method: 'POST', body: JSON.stringify(input),
-  }).then((r) => r.trigger)
+  }, { timeoutMs: 30000 }).then((r) => r.trigger)
 
 export const getAutomationSessions = (cfg: TanguDesktopConfig, triggerId?: string) =>
   request<{ sessions: AutomationSessionInfo[] }>(
@@ -739,7 +746,7 @@ export const workspaceDownloadUrl = (cfg: TanguDesktopConfig, sessionId: string,
 /** 下载工作区文件(fetch 带 Bearer → blob → 触发保存)。 */
 export async function downloadWorkspaceFile(cfg: TanguDesktopConfig, sessionId: string, path: string, project?: string): Promise<void> {
   const r = await authFetch(workspaceDownloadUrl(cfg, sessionId, path, project), { headers: headers(cfg.token) })
-  if (!r.ok) throw new Error(`下载失败 (${r.status})`)
+  if (!r.ok) throw new Error(translate('backendsvc.downloadFailed', { status: r.status }))
   const blob = await r.blob()
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)

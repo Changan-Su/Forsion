@@ -53,7 +53,7 @@ async function main() {
   try {
     await waitForServer()
     browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-    const page = await browser.newPage({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1 })
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1 })
     const errors = []
     page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()) })
     page.on('pageerror', (error) => errors.push(error.message))

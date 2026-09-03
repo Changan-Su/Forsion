@@ -121,7 +121,7 @@ async function readShadows(page, ids) {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const page = await browser.newPage({ viewport: { width: 1180, height: 760 }, deviceScaleFactor: 1 })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1180, height: 760 }, deviceScaleFactor: 1 })
   await page.setContent(PAGE, { waitUntil: 'load' })
 
   const ids = surfaces.map(([id]) => id)

@@ -15,8 +15,14 @@ import {
   validateTriggerInput,
   upsertTrigger,
   condSummary,
+  isPluginTriggerId,
+  precheckWatchCols,
+  MAX_ACTIONS,
   type MuseTrigger,
+  type DbLike,
 } from '../../services/museTriggers.js';
+import { readDbOrNull } from '../../services/amadeusDb.js';
+import { dropCursors } from '../../services/dbCursors.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { amadeusVaultPath } from './amadeus.js';
 
@@ -51,7 +57,7 @@ export const manageAutomationProvider: ToolProvider = {
             'Triggers: at (one-time local datetime), every (recurring interval like "30m"/"2h"/"1d"), daily_at (once a day after HH:MM), ' +
             'event_seen (a new in-app activity line contains `match`), file_chars_gte (file reaches n non-whitespace chars), ' +
             'manual (never fires on its own — the user runs it by clicking a button block in a note; use this when asked for "a button that does X"), ' +
-            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event). ' +
+            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event; cell_changed watches one column via column_id or several via column_ids, any of them changing fires). ' +
             'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
             'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
             'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.',
@@ -64,7 +70,21 @@ export const manageAutomationProvider: ToolProvider = {
               cond_type: { type: 'string', enum: ['at', 'every', 'daily_at', 'event_seen', 'file_chars_gte', 'manual', 'db_changed'], description: 'set: trigger type' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
               column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
+              column_ids: { type: 'array', items: { type: 'string' }, description: 'set(db_changed + cell_changed): watch several columns at once (column IDs; the rule fires when ANY of them changes; max 10). May be combined with column_id — the union is watched. Prefer this over creating one rule per column.' },
               equals: { type: 'string', description: 'set(db_changed + cell_changed): only fire when the cell becomes exactly this value (omit = any change)' },
+              where: {
+                type: 'array',
+                description: 'set(db_changed): extra AND conditions on the matched row, compared as strings after computed columns (lookup/formula) are resolved. Max 10.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    column: { type: 'string', description: 'column ID or name' },
+                    op: { type: 'string', enum: ['eq', 'ne', 'empty', 'notempty'] },
+                    value: { type: 'string', description: 'for eq/ne' },
+                  },
+                  required: ['column', 'op'],
+                },
+              },
               datetime: { type: 'string', description: 'set(at): one-time local datetime "YYYY-MM-DD HH:mm"' },
               interval: { type: 'string', description: 'set(every): interval like "30m"/"2h"/"1d" (min 15m; min 1h when any agent runs)' },
               time: { type: 'string', description: 'set(daily_at): local time "HH:MM"' },
@@ -74,13 +94,14 @@ export const manageAutomationProvider: ToolProvider = {
               actions: {
                 type: 'array',
                 description:
-                  'set: ordered action steps. Max 10. Each item is one of: ' +
+                  `set: ordered action steps. Max ${MAX_ACTIONS}. Each item is one of: ` +
                   '{type:"notify", title, body?} — inbox message; ' +
                   '{type:"agent_run", agentSlug, prompt} — run that agent unattended; ' +
-                  '{type:"db_row_add", path, cells} — append a row to an Amadeus database; ' +
-                  '{type:"db_row_edit", path, cells, rowId?} — update a row (rowId defaults to the row the trigger matched). ' +
-                  'cells maps a column ID (or name) to a value. Values may use {{row.<column>}} / {{now}} / {{today}} templates; ' +
-                  'templates are ONLY expanded in notify text and db cell values — never in prompts, paths or tool arguments.',
+                  '{type:"db_row_add", path, cells, skipIfEmpty?} — append a row to an Amadeus database (skipIfEmpty = a cells key; the step is skipped when that value expands to empty); ' +
+                  '{type:"db_row_edit", path, cells, rowId? | rowFrom? | match?} — update rows: rowId = one row; rowFrom = a relation column of the trigger row (each linked row is edited, available as {{target.X}}); match = {column, value} edits every row whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
+                  'cells maps a column ID (or name) to a value. Values may use {{row.<column>}} / {{target.<column>}} / {{now}} / {{today}} templates and arithmetic {{= {target.qty} - {row.qty} }} (formula syntax, column refs in single braces); ' +
+                  'templates are ONLY expanded in notify text and db cell values — never in prompts, paths or tool arguments. ' +
+                  'Computed columns (lookup/formula) of the trigger row are resolved before templating.',
                 items: {
                   type: 'object',
                   properties: {
@@ -91,13 +112,16 @@ export const manageAutomationProvider: ToolProvider = {
                     prompt: { type: 'string', description: 'agent_run: task prompt for the agent' },
                     path: { type: 'string', description: 'db_row_add/db_row_edit: vault-relative .db path' },
                     rowId: { type: 'string', description: 'db_row_edit: target row id (omit = the row the trigger matched)' },
+                    rowFrom: { type: 'string', description: 'db_row_edit: relation column (ID or name) of the trigger row; edits the linked row(s) in the target table' },
+                    match: { type: 'object', description: 'db_row_edit: {column, value} — edit every row of the target table whose column equals value (template allowed)', properties: { column: { type: 'string' }, value: { type: 'string' } }, required: ['column', 'value'] },
+                    skipIfEmpty: { type: 'string', description: 'db_row_add: a cells key; skip this step when that value expands to empty' },
                     cells: { type: 'object', description: 'db_row_add/db_row_edit: column ID (or name) → value' },
                   },
                   required: ['type'],
                 },
               },
               prompt: { type: 'string', description: 'set(legacy, no actions): extra instruction for the runner when the rule fires' },
-              cooldown_hours: { type: 'number', description: 'set: hours before the rule may fire again (default 24; min 1 with agent runs, min 0.25 for pure notify chains; ignored for timed triggers at/every/daily_at)' },
+              cooldown_hours: { type: 'number', description: 'set: hours before the rule may fire again (default 24; min 1 with agent runs, min 0.25 for pure notify chains; db_changed rules with only notify/db actions default to 0 and allow 0 — they fire per row; ignored for timed triggers at/every/daily_at)' },
               agent: { type: 'string', description: 'set(legacy shorthand, no actions): agent slug to run the prompt unattended when the rule fires (omit = wake Muse)' },
             },
             required: ['action'],
@@ -113,7 +137,13 @@ export const manageAutomationProvider: ToolProvider = {
         if (action === 'remove') {
           const id = String(args.id || '').trim();
           if (!id) return 'Error: id 必填(先 list 查看)';
-          return (await removeTrigger(id)) ? `已删除规则 ${id}。` : `Error: 未找到规则 ${id}`;
+          if (isPluginTriggerId(id)) return `Error: 规则 ${id} 由插件管理,请在插件设置里禁用`;
+          const gone = await removeTrigger(id);
+          // L13(2026-09-02):派生游标随规则一起走 —— HTTP DELETE 一直这么做,这条路从前漏了。
+          // 兜底的 pruneCursors 被 tick 起始的「名册里还有 db 规则吗」门控:删掉最后一条 db 规则后 prune
+          // 再也不跑 → 孤儿游标永久留在 db-cursors.json 里(文件长胖;id 复用时读端自证兜住误触发)。
+          if (gone) await dropCursors([id]).catch(() => {});
+          return gone ? `已删除规则 ${id}。` : `Error: 未找到规则 ${id}`;
         }
         if (action !== 'set') return 'Error: action 须为 set/list/remove';
 
@@ -129,7 +159,19 @@ export const manageAutomationProvider: ToolProvider = {
           }
         }
         const id = String(args.id || '').trim() || undefined;
-        const r = await upsertTrigger(v.value, id);
+        // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
+        if (id && isPluginTriggerId(id)) return `Error: 规则 ${id} 由插件管理,不能经本工具修改`;
+        // 监听列必须是落盘列:公式/引用/投影列的值不落盘,游标恒空 → 规则一次都不触发、零日志、面板正常。
+        // 桌面构建器早就把它们过滤掉了,引擎侧从前没有对等闸(这条工具能建出这种「永远不响」的规则)。
+        // ⚠️ H2 同款闸(与 HTTP 路由对齐):只在新建 / cond 实质变化 / 本次要置为 enabled:true 时体检。
+        // set 是**整量** upsert,agent 要「把这条规则关掉」也走这里 —— 关规则永远不许被预检挡住。
+        const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
+        if (!prev || JSON.stringify(prev.cond) !== JSON.stringify(v.value.cond) || (v.value.enabled && !prev.enabled)) {
+          const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
+          if (badCol) return `Error: ${badCol}`;
+        }
+        // actor='user':agent 经本工具的启停是**显式**操作(与面板同档),不是插件 ensure 那种幂等重放。
+        const r = await upsertTrigger(v.value, id, { actor: 'user' });
         if (!r.ok) return `Error: ${r.error}`;
         const c = v.value.cond;
         const note = c.type === 'manual'

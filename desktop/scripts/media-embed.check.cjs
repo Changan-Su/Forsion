@@ -64,7 +64,7 @@ function silentWavDataUrl(seconds) {
 }
 
 async function open(browser, seed) {
-  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&upane&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
@@ -248,7 +248,7 @@ async function main() {
     // 断言「冻结态有唤醒按钮、且此时仍无活网页宿体;点了唤醒才挂 webview」。
     // ⚠️ 普通 Chromium 里 <webview> 只是个未知标签(不会真加载)—— 这条测的是**挂载路径对不对**,
     // 真页面能不能跑必须去真 Electron 点(见 docs 的三端矩阵)。
-    const q = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+    const q = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } })
     await q.addInitScript(() => { window.tangu = { openExternal: () => {} } })
     await q.goto(`${URL}?upage&upane&useed=${encodeURIComponent('开篇\n\n![[https://example.com/page]]')}`, { waitUntil: 'domcontentloaded' })
     await q.waitForSelector(PM, { timeout: 20000 })
@@ -465,7 +465,7 @@ async function main() {
     // harness 的 `Object.assign(g.amadeus ?? …)` 是**合并**进来,所以这个桩活得下来。
     const wide = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="600" height="315"><rect width="600" height="315" fill="#4f8cff"/></svg>')
     const sq = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><rect width="180" height="180" rx="34" fill="#0b84ff"/></svg>')
-    const q = await browser.newPage({ viewport: { width: 1440, height: 760 } })
+    const q = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 760 } })
     await q.addInitScript(([w, i]) => {
       window.amadeus = {
         fetchLinkMeta: async (u) => {

@@ -16,6 +16,18 @@ import { FILTER_OPS, OP_LABEL, UNARY_OPS } from '@amadeus-shared/db/viewQuery'
 import type { ColumnType } from '@amadeus-shared/db/schema'
 import type { DashFilter } from '@amadeus-shared/dashboardData'
 import { useEdgeNudge } from '@lcl/engine'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'dashfilter.label': { zh: '筛选', en: 'Filter' },
+  'dashfilter.remove': { zh: '去掉这条', en: 'Remove this filter' },
+  'dashfilter.addTitle': { zh: '加一条筛选', en: 'Add a filter' },
+  'dashfilter.noCards': { zh: '这一页还没有可筛的数据卡', en: 'No filterable data cards on this page yet' },
+  'dashfilter.add': { zh: '加筛选', en: 'Add filter' },
+  'dashfilter.pickOne': { zh: '选一个…', en: 'Pick one…' },
+  'dashfilter.valuePlaceholder': { zh: '值', en: 'Value' },
+  'dashfilter.commit': { zh: '加上', en: 'Add' },
+})
 
 interface PropOption {
   name: string
@@ -48,6 +60,7 @@ export function DashFilterBar({ filters, editable, onChange }: {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<{ prop: string; op: string; value: string } | null>(null)
   const fix = useEdgeNudge(open)
+  const { t } = useI18n()
 
   // 锁定态没有筛选、也没得加 → 整条不占位(成品页不该顶着一条空工具条)。
   if (!filters.length && !editable) return null
@@ -73,14 +86,14 @@ export function DashFilterBar({ filters, editable, onChange }: {
   return (
     <div className="dash-filterbar">
       <Filter size={12} className="dash-filterbar-label" />
-      <span className="dash-filterbar-label">筛选</span>
+      <span className="dash-filterbar-label">{t('dashfilter.label')}</span>
       {filters.map((f, i) => (
         <span className="dash-filter-chip" key={`${f.prop}-${f.op}-${i}`}>
           <b>{f.prop}</b>
           <span>{OP_LABEL[f.op] ?? f.op}</span>
           {f.value !== undefined && <span>{f.value}</span>}
           {editable && (
-            <button title="去掉这条" onClick={() => onChange(filters.filter((_, j) => j !== i))}>
+            <button title={t('dashfilter.remove')} onClick={() => onChange(filters.filter((_, j) => j !== i))}>
               <X size={11} />
             </button>
           )}
@@ -88,8 +101,8 @@ export function DashFilterBar({ filters, editable, onChange }: {
       ))}
       {editable && (
         <span style={{ position: 'relative', display: 'inline-flex' }}>
-          <button className="dash-filter-add" onClick={start} disabled={!props.length} title={props.length ? '加一条筛选' : '这一页还没有可筛的数据卡'}>
-            <Plus size={11} /> 加筛选
+          <button className="dash-filter-add" onClick={start} disabled={!props.length} title={props.length ? t('dashfilter.addTitle') : t('dashfilter.noCards')}>
+            <Plus size={11} /> {t('dashfilter.add')}
           </button>
           {open && draft && (
             <>
@@ -108,13 +121,13 @@ export function DashFilterBar({ filters, editable, onChange }: {
                   cur?.options.length
                     ? (
                       <select value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })}>
-                        <option value="">选一个…</option>
+                        <option value="">{t('dashfilter.pickOne')}</option>
                         {cur.options.map((o) => <option key={o} value={o}>{o}</option>)}
                       </select>
                     )
-                    : <input value={draft.value} placeholder="值" onChange={(e) => setDraft({ ...draft, value: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') commit() }} autoFocus />
+                    : <input value={draft.value} placeholder={t('dashfilter.valuePlaceholder')} onChange={(e) => setDraft({ ...draft, value: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') commit() }} autoFocus />
                 )}
-                <button className="dash-filter-commit" onClick={commit}>加上</button>
+                <button className="dash-filter-commit" onClick={commit}>{t('dashfilter.commit')}</button>
               </div>
             </>
           )}

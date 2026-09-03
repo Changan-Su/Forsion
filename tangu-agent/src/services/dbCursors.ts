@@ -13,13 +13,37 @@ import { join } from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 
-/** 一条 db_changed 规则的游标。带 v 是为了将来换形状时能认出旧的直接丢弃重播种。 */
+/** 落盘游标的形状版本。**读端硬闸**(museTriggers.cursorMismatch):版本不等一律判不符 → 只重播种不触发。
+ *  v1 → v2(2026-09-02):新增自证身份三件套 path/event/vault。旧 v1 游标各重播种一次(fail-closed)。 */
+export const CURSOR_V = 2;
+
+/**
+ * 一条 db_changed 规则的游标。
+ *
+ * **path / event / vault 是必填的自证身份**,不是装饰:游标文件按 triggerId 索引,而 triggerId 说不出
+ * 这份快照是「哪个库的哪张表的哪种事件」的。规则换表(cond.path A.db → B.db)时,写端那道 dropCursors 与
+ * drain 的 `loadCursors() → … → setCursors()` 读-改-写窗口是并发的,而 setCursors 是 Object.assign **合并**,
+ * 会把刚删掉的键原样写回 —— 于是下一 tick 拿 A 表的 rowIds 基线去比 B 表,B 表满表现有行全被当成「刚加的」,
+ * 纯 DB 动作链同 tick 全表执行。读端自证与时序无关:游标自己说得清它是谁的,拿错就是拿错。
+ * 必填(而非可选)是为了让 tsc 把每一个写入点都指出来 —— 少写一个字段就是少一份身份,静默退回旧 bug。
+ */
 export interface DbCursor {
-  v: 1;
+  v: typeof CURSOR_V;
+  /** 快照来自哪张表(vault 相对路径,与 cond.path 同经 normalizeVaultRel 归一后逐字比)。 */
+  path: string;
+  /** 快照记的是哪种事件(row_added 的 rowIds 与 cell_changed 的 cells 语义完全不同,混用=满表误触发)。 */
+  event: 'row_added' | 'cell_changed';
+  /** 快照来自哪个库(cond.vault 逐字;规则文件是全局的,path 却是库内相对路径)。 */
+  vault: string;
   /** row_added:上次见过的全部行 id。 */
   rowIds?: string[];
-  /** cell_changed:rowId → 该列值的稳定字符串(cellKey)。 */
+  /** cell_changed:rowId → 该列值的稳定字符串(cellKey);多列监听时是各列 key 按 cols 顺序用 U+001F 拼的复合串。 */
   cells?: Record<string, string>;
+  /** cell_changed 的监听列 id(**一律写,n=1 也写**;多列时同时是复合 key 的列序)。
+   *  评估侧(cursorMismatch)拿它与规则当前监听列逐字比对,不符 = 视为未播种重新播种。
+   *  n=1 也带的原因:`manage_automation` 改列不清游标,若单列游标不自证是哪一列,把 A 改成 B 之后
+   *  B 的当前值 × A 的历史值逐行比 → 满表误触发。 */
+  cols?: string[];
 }
 
 type CursorMap = Record<string, DbCursor>;

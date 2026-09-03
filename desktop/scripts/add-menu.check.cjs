@@ -76,7 +76,7 @@ button { font:inherit; border:0; }
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1100, height: 760 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 760 } })
   await page.setContent(PAGE)
   const box = (sel) => page.evaluate((s) => {
     const r = document.querySelector(s).getBoundingClientRect()

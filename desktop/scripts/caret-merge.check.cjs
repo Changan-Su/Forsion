@@ -63,7 +63,7 @@ async function caretAt(page, bi, li, off) {
 }
 
 async function open(browser, seed) {
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.goto(`${BASE}?caret&seed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })

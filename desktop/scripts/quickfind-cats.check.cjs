@@ -49,7 +49,7 @@ const caret = (p) => p.evaluate(() => { const i = document.querySelector('.amx-q
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const p = await browser.newPage({ viewport: { width: 900, height: 620 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 620 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${BASE}?qf`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector('.amx-qf-seg', { timeout: 20000 })

@@ -110,6 +110,37 @@ describe('compileDashboardRecipe:配方 → 真 .dashboard.md 字节', () => {
     expect(future.ok).toBe(false)
   })
 
+  it('db 数字卡透传 source/col/stat/view(2026-09-02 指标卡绑视图);缺 value 又缺 source 编译期拒', () => {
+    const r = compileDashboardRecipe({
+      cards: [
+        { kind: 'stat', id: 's-db', label: '进行中金额', source: '台账.db', col: '金额', stat: 'sum', view: '进行中', unit: '元' },
+        { kind: 'stat', id: 's-rows', label: '行数', source: '台账.db' },
+      ],
+    }, { pageId: 'p_db', now: NOW })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const blocks = parseBody(stripFrontmatter(r.text))
+    const w = parseWidget(blocks[0].content)
+    expect(w?.kind).toBe('stat')
+    expect(w?.opts.value).toBeUndefined() // 空 value 不落围栏(否则 parseStatSpec 走 literal 档)
+    const spec = parseStatSpec(w!.opts)
+    expect(spec.ok).toBe(true)
+    if (!spec.ok) return
+    expect([spec.spec.source, spec.spec.col, spec.spec.stat, spec.spec.view, spec.spec.unit, spec.spec.literal])
+      .toEqual(['台账.db', '金额', 'sum', '进行中', '元', null])
+    const rowsSpec = parseStatSpec(parseWidget(blocks[1].content)!.opts)
+    expect(rowsSpec.ok && [rowsSpec.spec.stat, rowsSpec.spec.view]).toEqual(['rows', null])
+    // 拒绝面
+    const bad = compileDashboardRecipe({ cards: [{ kind: 'stat', id: 's-none', label: 'x' }] })
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.error).toContain('s-none')
+    expect(compileDashboardRecipe({ cards: [{ kind: 'stat', id: 's-ws', label: 'x', value: ' \n ' }] }).ok).toBe(false)
+    // 走的是真 parseStatSpec:sum 缺 col 同样在编译期拒(不是只查 value/source)
+    const noCol = compileDashboardRecipe({ cards: [{ kind: 'stat', id: 's-nocol', label: 'x', source: 'a.db', stat: 'sum' }] })
+    expect(noCol.ok).toBe(false)
+    if (!noCol.ok) expect(noCol.error).toContain('col')
+  })
+
   it('值消毒:换行折成空格,含反引号的值不拆围栏', () => {
     const r = compileDashboardRecipe({
       cards: [{ kind: 'stat', id: 's1', label: '两\n行', value: '```' }],

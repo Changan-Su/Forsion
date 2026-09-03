@@ -36,6 +36,22 @@ export function autoWorkspaceMode(
 }
 
 /**
+ * 自动目标与当前生效档必须分开：手动切到 notes 时，Tangu Space 的自动目标仍是 sessions。
+ * notes 不可用时只修正自动目标；合法的手动覆盖已由调用方在解析 leaf params 时过滤。
+ */
+export function resolveWorkspaceModes(
+  override: WorkspaceModeEx | 'auto',
+  automatic: WorkspaceModeEx,
+  hasNotes: boolean,
+): { automatic: WorkspaceModeEx; active: WorkspaceModeEx } {
+  const resolvedAutomatic = automatic === 'notes' && !hasNotes ? 'files' : automatic
+  return {
+    automatic: resolvedAutomatic,
+    active: override === 'auto' ? resolvedAutomatic : override,
+  }
+}
+
+/**
  * 路径落在哪个工作区里 —— 文件面板据此把「当前打开文件所在的工作区」置顶。
  *
  * 取**最长匹配**:工作区允许嵌套(同时加了 `~/code` 与 `~/code/forsion`),文件属于更具体的那个。

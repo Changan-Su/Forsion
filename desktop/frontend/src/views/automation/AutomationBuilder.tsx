@@ -8,19 +8,22 @@
  * 保存 = POST /agent/special/muse/triggers upsert(校验在引擎端与 manage_automation 工具同源;
  * tool_call 只有这条 UI 通道能建=保存即人工预批)。
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, Bell, Bot, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation } from '../../stores/automationStore'
 import { saveMuseTrigger } from '../../services/backendService'
 import { useI18n } from '../../i18n'
-import { BUILTIN_EVENTS, isFinishedTrigger, parseLocalDatetime } from './lib'
+import {
+  BUILTIN_EVENTS, MAX_WHERE, WHERE_OPS, blankStep, cooldownPayload, hasUnsupportedParts, initialCooldown,
+  isFinishedTrigger, parseLocalDatetime, stepsFrom, toSpec, watchedColumnIds, whereDraftFrom, whereToUpsert, type StepDraft, type WhereDraft,
+} from './lib'
 import { listPluginAutomationEvents } from '../../amadeus/plugins/pluginStore'
 import { useShallow } from 'zustand/react/shallow'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
-import type { AutomationActionCatalogItem, AutomationActionSpec, MuseTriggerInfo } from '../../types'
+import type { MuseTriggerInfo } from '../../types'
 
 type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed'
 type TimerMode = 'daily_at' | 'at' | 'every'
@@ -35,63 +38,9 @@ export interface AutomationBuilderProps {
   onCancel?: () => void
 }
 
-interface StepDraft {
-  key: number
-  type: 'notify' | 'agent_run' | 'tool_call' | 'db_row_add' | 'db_row_edit'
-  title: string
-  body: string
-  agentSlug: string
-  prompt: string
-  tool: string
-  /** 工具参数原始输入(全字符串;boolean 存 'true'/'')。 */
-  argValues: Record<string, string>
-  /** db 动作:目标 .db(vault 相对路径)。 */
-  dbPath: string
-  /** db_row_edit:行 id;空 = 触发命中的那一行(仅多维表触发下有)。 */
-  rowId: string
-  /** db 动作:写入的 列名/列id → 值(值可含 {{row.X}} 模板)。 */
-  cells: Array<{ k: string; v: string }>
-}
-
-/** 本版构建器能编辑的全部步骤类型(2.8 起含 DB 动作)。 */
-function isEditableStep(a: AutomationActionSpec): boolean {
-  return a.type === 'notify' || a.type === 'agent_run' || a.type === 'tool_call' || a.type === 'db_row_add' || a.type === 'db_row_edit'
-}
-
-/** 这条规则里有本版构建器还不认识的部分吗(将来引擎新增的动作类型;不静默降级 —— 那等于
- *  用户点开看一眼、按保存就把动作抹了)。 */
-export function hasUnsupportedParts(t?: MuseTriggerInfo): boolean {
-  if (!t) return false
-  return !!t.actions?.some((a) => !isEditableStep(a))
-}
-
-let stepKey = 1
-const blankStep = (type: StepDraft['type']): StepDraft =>
-  ({ key: stepKey++, type, title: '', body: '', agentSlug: '', prompt: '', tool: '', argValues: {}, dbPath: '', rowId: '', cells: [{ k: '', v: '' }] })
-
-/** editing → 表单初值(旧式 agentSlug 规则转成一个 agent_run 步骤)。 */
-function stepsFrom(editing?: MuseTriggerInfo): StepDraft[] {
-  if (editing?.actions?.length) {
-    return editing.actions.filter(isEditableStep).map((a) => ({
-      ...blankStep(a.type as StepDraft['type']),
-      title: a.type === 'notify' ? a.title : '',
-      body: a.type === 'notify' ? a.body || '' : '',
-      agentSlug: a.type === 'agent_run' ? a.agentSlug : '',
-      prompt: a.type === 'agent_run' ? a.prompt : '',
-      tool: a.type === 'tool_call' ? a.tool : '',
-      argValues: a.type === 'tool_call'
-        ? Object.fromEntries(Object.entries(a.args || {}).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))
-        : {},
-      dbPath: a.type === 'db_row_add' || a.type === 'db_row_edit' ? a.path : '',
-      rowId: a.type === 'db_row_edit' ? a.rowId || '' : '',
-      cells: a.type === 'db_row_add' || a.type === 'db_row_edit'
-        ? [...Object.entries(a.cells || {}).map(([k, v]) => ({ k, v })), { k: '', v: '' }]
-        : [{ k: '', v: '' }],
-    }))
-  }
-  if (editing?.agentSlug) return [{ ...blankStep('agent_run'), agentSlug: editing.agentSlug, prompt: editing.prompt || '' }]
-  return []
-}
+// StepDraft / stepsFrom / toSpec / hasUnsupportedParts 住 lib.ts(纯模块才进得了 vitest:往返不丢字段有仪器);
+// 这里只留 React 与表单。hasUnsupportedParts 仍从本模块出口,老引用不断。
+export { hasUnsupportedParts }
 
 /** 本地 datetime-local 初值:整点下一小时。 */
 function defaultDatetime(): string {
@@ -99,21 +48,6 @@ function defaultDatetime(): string {
   d.setMinutes(0, 0, 0)
   const p = (x: number): string => String(x).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:00`
-}
-
-/** 参数原始输入 → 工具 args(按 schema 类型转换;空值省略;非原语字段尝试 JSON)。 */
-function buildToolArgs(cat: AutomationActionCatalogItem | undefined, vals: Record<string, string>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  const props = cat?.parameters?.properties || {}
-  for (const [k, raw] of Object.entries(vals)) {
-    if (raw === undefined || raw === '') continue
-    const ty = props[k]?.type
-    if (ty === 'number') out[k] = Number(raw)
-    else if (ty === 'boolean') out[k] = raw === 'true'
-    else if (ty === 'string' || ty === undefined) out[k] = raw
-    else { try { out[k] = JSON.parse(raw) } catch { out[k] = raw } }
-  }
-  return out
 }
 
 export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, fixedManual, onSaved, onCancel }) => {
@@ -150,8 +84,15 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
   // 多维表触发(db_changed):表路径 / 事件 / 监听列(cell_changed 必填)/ 可选等值条件。
   const [dbPath, setDbPath] = useState(initCond?.type === 'db_changed' ? initCond.path : '')
   const [dbEvent, setDbEvent] = useState<'row_added' | 'cell_changed'>(initCond?.type === 'db_changed' ? initCond.event : 'row_added')
-  const [dbColumnId, setDbColumnId] = useState(initCond?.type === 'db_changed' ? initCond.columnId || '' : '')
+  // 监听列可多选(任一列变化即命中);保存时 column_id=首列 + column_ids=全部(引擎归一排序,单列归回 columnId)。
+  const [dbColumnIds, setDbColumnIds] = useState<string[]>(() => watchedColumnIds(initCond))
+  const toggleDbColumn = (id: string, on: boolean): void =>
+    setDbColumnIds((ids) => (on ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter((x) => x !== id)))
   const [dbEquals, setDbEquals] = useState(initCond?.type === 'db_changed' ? initCond.equals || '' : '')
+  // 附加条件 where(row_added / cell_changed 都可用;与 equals AND)。
+  const [dbWhere, setDbWhere] = useState<WhereDraft[]>(() => whereDraftFrom(initCond))
+  const patchWhere = (i: number, patch: Partial<WhereDraft>): void =>
+    setDbWhere((ws) => ws.map((w, j) => (j === i ? { ...w, ...patch } : w)))
   // vault 里的 .db 清单 + 选中表的列(监听列下拉);Automation Space 可能先于 Amadeus 打开,先确保 vault 已恢复。
   useEffect(() => {
     ensureAmadeusReady()
@@ -170,7 +111,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
   const dbCols = useMemo(() => dbColsRaw?.filter((c) => c.type !== 'formula' && c.type !== 'lookup'), [dbColsRaw])
   const [steps, setSteps] = useState<StepDraft[]>(() => stepsFrom(editing))
   const [musePrompt, setMusePrompt] = useState(editing && !editing.actions?.length && !editing.agentSlug ? editing.prompt || '' : '')
-  const [cooldown, setCooldown] = useState(String(editing?.cooldownHours || 24))
+  const [cooldown, setCooldown] = useState(() => initialCooldown(editing, kind))
+  // 新建规则时切触发类型,冷却初值跟着换(db_changed → 0);用户已亲手改过的值不动。
+  const cooldownTouched = useRef(false)
+  useEffect(() => {
+    if (!editing && !cooldownTouched.current) setCooldown(initialCooldown(null, kind))
+  }, [kind, editing])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -208,8 +154,14 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
     if (s.type === 'db_row_add' || s.type === 'db_row_edit') {
       if (!/\.db$/i.test(s.dbPath.trim())) return false
       if (!s.cells.some((c) => c.k.trim())) return false
-      // 改行:不是多维表触发就没有「触发命中的那一行」可缺省,必须显式给行 id。
-      if (s.type === 'db_row_edit' && kind !== 'db_changed' && !s.rowId.trim()) return false
+      if (s.type === 'db_row_edit') {
+        // 改行:不是多维表触发就没有「触发命中的那一行」可缺省,必须显式给行 id 或按列值匹配(match 不靠触发行)。
+        if (kind !== 'db_changed' && !s.rowId.trim() && !s.matchColumn.trim()) return false
+        // rowFrom 沿的是触发行的关联列,没有触发行就是一条死配置。
+        if (s.rowFrom.trim() && kind !== 'db_changed') return false
+        // 有匹配列没匹配值 = 匹配空串,几乎必是误填。
+        if (s.matchColumn.trim() && !s.matchValue.trim()) return false
+      }
       return true
     }
     const cat = catalog.find((c) => c.name === s.tool)
@@ -228,13 +180,16 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
     if (kind === 'file_chars_gte' && (!path.trim() || !(Number(n) > 0))) return false
     if (kind === 'db_changed') {
       if (!/\.db$/i.test(dbPath.trim())) return false
-      if (dbEvent === 'cell_changed' && !dbColumnId.trim()) return false
+      if (dbEvent === 'cell_changed' && !dbColumnIds.length) return false
+      // where 默认放行(可选),只挡明显坏行:超条数 / eq·ne 选了列却没给值(没选列的行保存时直接丢)。
+      if (dbWhere.length > MAX_WHERE) return false
+      if (dbWhere.some((w) => w.column.trim() && (w.op === 'eq' || w.op === 'ne') && !w.value.trim())) return false
     }
     // 手动类没有 Muse 兜底语义:0 步骤的按钮点了什么也不会发生,直接不让存。
     if (kind === 'manual' && !steps.length) return false
     return steps.every(stepValid)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid 闭包只另依赖 kind/catalog(已在列)
-  }, [desc, kind, timerMode, time, datetime, ivlN, match, path, n, dbPath, dbEvent, dbColumnId, steps, catalog])
+  }, [desc, kind, timerMode, time, datetime, ivlN, match, path, n, dbPath, dbEvent, dbColumnIds, dbWhere, steps, catalog])
 
   const save = async (): Promise<void> => {
     const condType = kind === 'timer' ? timerMode : kind
@@ -255,17 +210,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
     }
     setBusy(true)
     setError('')
-    const cellsOf = (s: StepDraft): Record<string, string> =>
-      Object.fromEntries(s.cells.filter((c) => c.k.trim()).map((c) => [c.k.trim(), c.v]))
-    const actions: AutomationActionSpec[] = steps.map((s) =>
-      s.type === 'notify' ? { type: 'notify', title: s.title.trim(), body: s.body.trim() || undefined }
-      : s.type === 'agent_run' ? { type: 'agent_run', agentSlug: s.agentSlug, prompt: s.prompt.trim() }
-      : s.type === 'db_row_add' ? { type: 'db_row_add', path: s.dbPath.trim(), cells: cellsOf(s) }
-      : s.type === 'db_row_edit' ? { type: 'db_row_edit', path: s.dbPath.trim(), rowId: s.rowId.trim() || undefined, cells: cellsOf(s) }
-      : { type: 'tool_call', tool: s.tool, args: buildToolArgs(catalog.find((c) => c.name === s.tool), s.argValues) })
+    const actions = toSpec(steps, catalog)
     try {
       const saved = await saveMuseTrigger(cfg, {
         id: editing?.id,
+        // actor='user':构建器保存是显式意图(与面板拨开关同档),可以把引擎自动停用的规则开回来。
+        actor: 'user',
         desc: desc.trim(),
         cond_type: condType,
         time: condType === 'daily_at' ? time : undefined,
@@ -275,12 +225,16 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
         path: condType === 'file_chars_gte' ? path.trim() : condType === 'db_changed' ? dbPath.trim() : undefined,
         n: condType === 'file_chars_gte' ? Number(n) : undefined,
         event: condType === 'db_changed' ? dbEvent : undefined,
-        column_id: condType === 'db_changed' && dbEvent === 'cell_changed' ? dbColumnId.trim() : undefined,
+        column_id: condType === 'db_changed' && dbEvent === 'cell_changed' ? dbColumnIds[0] : undefined,
+        // ≥2 列才发 column_ids(单列只发 column_id,存量规则形状不变 → 不被引擎当成 cond 变了重置游标)
+        column_ids: condType === 'db_changed' && dbEvent === 'cell_changed' && dbColumnIds.length > 1 ? dbColumnIds : undefined,
         equals: condType === 'db_changed' && dbEvent === 'cell_changed' && dbEquals.trim() ? dbEquals.trim() : undefined,
+        // where 对 row_added 也有效;空数组送 undefined(见 whereToUpsert 注释)。
+        where: condType === 'db_changed' ? whereToUpsert(dbWhere) : undefined,
         // 编辑既有 db 规则:钉回建规则时的 vault(省略会被引擎重钉到**当前** vault,切库编辑会静默改靶)。
         vault: condType === 'db_changed' && editing?.cond.type === 'db_changed' ? editing.cond.vault : undefined,
         prompt: steps.length ? undefined : musePrompt.trim() || undefined,
-        cooldown_hours: kind === 'timer' || kind === 'manual' ? undefined : Number(cooldown) > 0 ? Number(cooldown) : undefined,
+        cooldown_hours: cooldownPayload(kind, cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
         actions: steps.length ? actions : null,
         enabled: expiredAt ? true : editing?.enabled ?? true,
@@ -328,7 +282,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
           <>
             <div className="field">
               <label>{t('automation.builder.dbPath')}</label>
-              <select value={dbPath} onChange={(e) => { setDbPath(e.target.value); setDbColumnId('') }}>
+              <select value={dbPath} onChange={(e) => { setDbPath(e.target.value); setDbColumnIds([]) }}>
                 <option value="">{t('automation.builder.dbPickDb')}</option>
                 {dbFiles.map((f) => <option key={f} value={f}>{f}</option>)}
                 {dbPath && !dbFiles.includes(dbPath) && <option value={dbPath}>{dbPath}</option>}
@@ -345,11 +299,23 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
               <>
                 <div className="field">
                   <label>{t('automation.builder.dbColumn')}</label>
-                  <select value={dbColumnId} onChange={(e) => setDbColumnId(e.target.value)}>
-                    <option value="">{dbCols ? t('automation.builder.dbPickCol') : t('automation.builder.dbColsLoading')}</option>
-                    {(dbCols ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    {dbColumnId && !(dbCols ?? []).some((c) => c.id === dbColumnId) && <option value={dbColumnId}>({dbColumnId})</option>}
-                  </select>
+                  <div className="auto-checks">
+                    {(dbCols ?? []).map((c) => (
+                      <label className="auto-check" key={c.id}>
+                        <input type="checkbox" checked={dbColumnIds.includes(c.id)} onChange={(e) => toggleDbColumn(c.id, e.target.checked)} />
+                        {c.name}
+                      </label>
+                    ))}
+                    {/* 规则里存着、当前表里已没有(或表还没加载)的列 id:照旧显示成 (id),可以取消勾选,别静默丢 */}
+                    {dbColumnIds.filter((id) => !(dbCols ?? []).some((c) => c.id === id)).map((id) => (
+                      <label className="auto-check" key={id}>
+                        <input type="checkbox" checked onChange={() => toggleDbColumn(id, false)} />
+                        ({id})
+                      </label>
+                    ))}
+                    {!dbCols && <span className="auto-hint">{t('automation.builder.dbColsLoading')}</span>}
+                  </div>
+                  <div className="auto-hint">{t('automation.builder.dbColumnsHint')}</div>
                 </div>
                 <div className="field">
                   <label>{t('automation.builder.dbEquals')}</label>
@@ -357,6 +323,44 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
                 </div>
               </>
             )}
+            {/* 附加条件放在 cell_changed 块**之外**:row_added 也能用(ERP「出库 row_added 且 配件 不为空」)。
+                列下拉用 dbColsRaw 不用 dbCols:监听列要求落盘列(游标比得到),where 比的是物化后的值,公式/引用列也行。 */}
+            <div className="field">
+              <label>{t('automation.builder.dbWhere')}</label>
+              {dbWhere.map((w, wi) => (
+                <div className="auto-inline" key={wi}>
+                  <select value={w.column} onChange={(e) => patchWhere(wi, { column: e.target.value })}>
+                    <option value="">{dbColsRaw ? t('automation.builder.dbPickCol') : t('automation.builder.dbColsLoading')}</option>
+                    {(dbColsRaw ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {w.column && !(dbColsRaw ?? []).some((c) => c.id === w.column) && <option value={w.column}>({w.column})</option>}
+                  </select>
+                  <select value={w.op} onChange={(e) => patchWhere(wi, { op: e.target.value as WhereDraft['op'] })}>
+                    {WHERE_OPS.map((op) => (
+                      <option key={op} value={op}>
+                        {op === 'eq' ? t('automation.builder.dbWhereOpEq') : op === 'ne' ? t('automation.builder.dbWhereOpNe')
+                          : op === 'empty' ? t('automation.builder.dbWhereOpEmpty') : t('automation.builder.dbWhereOpNotEmpty')}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={w.value}
+                    maxLength={200}
+                    disabled={w.op === 'empty' || w.op === 'notempty'}
+                    placeholder={t('automation.builder.dbWhereValPh')}
+                    onChange={(e) => patchWhere(wi, { value: e.target.value })}
+                  />
+                  <button className="icon-btn" title={t('common.delete')} onClick={() => setDbWhere((ws) => ws.filter((_, j) => j !== wi))}><Trash2 size={12} /></button>
+                </div>
+              ))}
+              <button
+                className="icon-btn"
+                title={t('automation.builder.dbWhereAdd')}
+                disabled={dbWhere.length >= MAX_WHERE}
+                onClick={() => setDbWhere((ws) => [...ws, { column: '', op: 'eq', value: '' }])}
+              >＋</button>
+              <div className="auto-hint">{t('automation.builder.dbWhereHint')}</div>
+            </div>
             <div className="auto-hint">{t('automation.builder.dbHint')}</div>
           </>
         )}
@@ -486,6 +490,42 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
                     />
                   </div>
                 )}
+                {s.type === 'db_row_edit' && (
+                  <>
+                    {/* 自由文本不做下拉:rowFrom 的列属于触发表、match.column 属于目标表,两个列源各异且目标表没有响应式 selector。 */}
+                    <div className="field">
+                      <label>{t('automation.builder.dbRowFrom')}</label>
+                      <input
+                        type="text"
+                        value={s.rowFrom}
+                        maxLength={200}
+                        placeholder={t('automation.builder.dbRowFromPh')}
+                        onChange={(e) => patchStep(s.key, { rowFrom: e.target.value })}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>{t('automation.builder.dbMatch')}</label>
+                      <div className="auto-inline">
+                        <input
+                          type="text"
+                          value={s.matchColumn}
+                          maxLength={200}
+                          placeholder={t('automation.builder.dbCellKey')}
+                          style={{ width: 120 }}
+                          onChange={(e) => patchStep(s.key, { matchColumn: e.target.value })}
+                        />
+                        <input
+                          type="text"
+                          value={s.matchValue}
+                          maxLength={2000}
+                          placeholder={t('automation.builder.dbMatchValPh')}
+                          onChange={(e) => patchStep(s.key, { matchValue: e.target.value })}
+                        />
+                      </div>
+                      <div className="auto-hint">{t('automation.builder.dbTargetHint')}</div>
+                    </div>
+                  </>
+                )}
                 <div className="field">
                   <label>{t('automation.builder.dbCells')}</label>
                   {s.cells.map((c, ci) => (
@@ -500,7 +540,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
                       <input
                         type="text"
                         value={c.v}
-                        placeholder={t('automation.builder.dbCellVal')}
+                        placeholder={ci === 0 ? t('automation.builder.dbCellValPh') : t('automation.builder.dbCellVal')}
                         onChange={(e) => patchStep(s.key, { cells: s.cells.map((x, j) => (j === ci ? { ...x, v: e.target.value } : x)) })}
                       />
                       <button className="icon-btn" title={t('common.delete')} disabled={s.cells.length <= 1} onClick={() => patchStep(s.key, { cells: s.cells.filter((_, j) => j !== ci) })}><Trash2 size={12} /></button>
@@ -509,6 +549,18 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
                   <button className="icon-btn" title={t('automation.builder.dbCellAdd')} onClick={() => patchStep(s.key, { cells: [...s.cells, { k: '', v: '' }] })}>＋</button>
                   <div className="auto-hint">{t('automation.builder.dbCellsHint')}</div>
                 </div>
+                {s.type === 'db_row_add' && (
+                  <div className="field">
+                    <label>{t('automation.builder.dbSkipIfEmpty')}</label>
+                    <input
+                      type="text"
+                      value={s.skipIfEmpty}
+                      maxLength={200}
+                      placeholder={t('automation.builder.dbSkipIfEmptyPh')}
+                      onChange={(e) => patchStep(s.key, { skipIfEmpty: e.target.value })}
+                    />
+                  </div>
+                )}
               </>
             )}
             {s.type === 'tool_call' && (
@@ -576,8 +628,11 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
       {kind !== 'timer' && kind !== 'manual' && (
         <div className="auto-guard">
           <label>{t('automation.builder.cooldown')}</label>
-          <input type="number" value={cooldown} min={hasAgentStep ? 1 : 0.25} step="1" onChange={(e) => setCooldown(e.target.value)} />
-          <span className="auto-hint">{hasAgentStep ? t('automation.builder.cooldownAgentHint') : t('automation.builder.cooldownHint')}</span>
+          {/* E6:多维表触发的纯动作链下限 0(链式规则要能不冷却);含 agent 步仍 1h。 */}
+          <input type="number" value={cooldown} min={hasAgentStep ? 1 : kind === 'db_changed' ? 0 : 0.25} step="1" onChange={(e) => { cooldownTouched.current = true; setCooldown(e.target.value) }} />
+          <span className="auto-hint">
+            {hasAgentStep ? t('automation.builder.cooldownAgentHint') : kind === 'db_changed' ? t('automation.builder.cooldownDbHint') : t('automation.builder.cooldownHint')}
+          </span>
         </div>
       )}
 

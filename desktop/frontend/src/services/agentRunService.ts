@@ -5,7 +5,15 @@
  */
 import type { AgentConfig, AgentRunEvent, Attachment, StartRunResult, TanguDesktopConfig } from '../types'
 import { CHANGELOG } from '../changelog'
+import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
+
+registerMessages({
+  'agentrun.authFailed': { zh: '鉴权失败(401):令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
+  'agentrun.connected': { zh: '已连接 · sandbox={sandbox}', en: 'Connected · sandbox={sandbox}' },
+  'agentrun.connectFailed': { zh: '连接失败', en: 'Connection failed' },
+  'agentrun.subscribeFailed': { zh: '订阅失败 ({status})', en: 'Event stream subscription failed ({status})' },
+})
 
 function headers(token: string): Record<string, string> {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
@@ -32,16 +40,23 @@ export function currentClientId(): string {
   return `${platform}/${CHANGELOG[0]?.version || '0'}`
 }
 
-export async function testConnection(cfg: TanguDesktopConfig): Promise<{ ok: boolean; message: string }> {
+/** /health 之后追打的带鉴权探针:任一需要 authMiddleware 的轻量 GET 即可(special/config 无副作用、体积小)。 */
+export const AUTH_PROBE_PATH = '/agent/special/config'
+
+/** authRejected:探针 401(令牌被拒)。凭证问题不是瞬态连接故障 —— 调用方(boot 重试环)见它即停,自愈归 handleAuthExpired。 */
+export async function testConnection(cfg: TanguDesktopConfig): Promise<{ ok: boolean; message: string; authRejected?: boolean }> {
   try {
     const r = await authFetch(`${cfg.backendUrl}/health`, { headers: headers(cfg.token) }, { timeoutMs: 15000 })
-    if (r.ok) {
-      const j = await r.json().catch(() => ({}))
-      return { ok: true, message: `已连接 · sandbox=${j.sandbox ?? '?'}` }
-    }
-    return { ok: false, message: `HTTP ${r.status}` }
+    if (!r.ok) return { ok: false, message: `HTTP ${r.status}` }
+    const j = await r.json().catch(() => ({}))
+    // /health 不鉴权(standalone/main.ts 直接 res.json)—— 令牌漂了它照样 200,connState 假绿,随后每个真请求
+    // 各自 401(真机一轮 9 次)。再追一次带鉴权的 GET:**只认 401**(凭证被拒);403 / 404 / 5xx / 网络错是别的
+    // 问题(云端面没有这条路由、配额、后端半启动),不把连接判死。authFetch 的 401 拦截器照常触发重登录自愈。
+    const probe = await authFetch(`${cfg.backendUrl}${AUTH_PROBE_PATH}`, { headers: headers(cfg.token) }, { timeoutMs: 15000 }).catch(() => null)
+    if (probe && probe.status === 401) return { ok: false, message: translate('agentrun.authFailed'), authRejected: true }
+    return { ok: true, message: translate('agentrun.connected', { sandbox: j.sandbox ?? '?' }) }
   } catch (e: any) {
-    return { ok: false, message: e?.message || '连接失败' }
+    return { ok: false, message: e?.message || translate('agentrun.connectFailed') }
   }
 }
 
@@ -192,7 +207,7 @@ export async function subscribeRunEvents(
       await delay(1000 * failures)
       continue
     }
-    if (res.status >= 400 && res.status < 500) throw new Error(`订阅失败 (${res.status})`)
+    if (res.status >= 400 && res.status < 500) throw new Error(translate('agentrun.subscribeFailed', { status: res.status }))
     if (!res.ok || !res.body) {
       if (++failures > MAX) throw new Error(`HTTP ${res.status}`)
       await delay(1000 * failures)

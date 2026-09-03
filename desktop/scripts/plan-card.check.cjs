@@ -138,7 +138,7 @@ const measure = () => {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1100, height: 900 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 900 } })
   await p.setContent(HTML)
   const m = await p.evaluate(measure)
 

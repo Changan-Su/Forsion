@@ -12,6 +12,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    setupFiles: ['frontend/src/testSetup.ts'], // 语言钉成 zh,见文件内注释
     include: ['frontend/src/**/*.test.ts', 'electron/**/*.test.ts', 'shared/**/*.test.ts', 'products/**/*.test.ts', '../lcl/engine/**/*.test.ts', '../lcl/spaces/**/*.test.ts'],
   },
 })

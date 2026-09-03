@@ -5,6 +5,18 @@
  * modelId 缺省 → 主进程用设置里的默认 asr 模型。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { registerMessages, translate } from '../i18n'
+
+// 文案在**报错发生时**解析(translate 而非 useI18n):这些串都进 state 当错误信息用,
+// 且本文件里 `t` 已被 `getTracks().forEach((t) => …)` 占用,别再引入同名绑定。
+registerMessages({
+  'voiceinput.silent': { zh: '没采集到声音(输入电平≈0):检查系统输入设备是否选对、麦克风没被静音', en: 'No audio captured (input level ≈ 0): check that the right input device is selected and that the microphone is not muted' },
+  'voiceinput.unsupported': { zh: '此环境不支持语音输入', en: 'Voice input is not supported in this environment' },
+  'voiceinput.denied': { zh: '麦克风权限被拒绝(打开 系统设置 › 隐私与安全 › 麦克风,允许本 App)', en: 'Microphone access was denied (open System Settings › Privacy & Security › Microphone and allow this app)' },
+  'voiceinput.noDevice': { zh: '没检测到麦克风设备', en: 'No microphone found' },
+  'voiceinput.openFailed': { zh: '麦克风打不开:{e}', en: 'Could not open the microphone: {e}' },
+  'voiceinput.unclear': { zh: '没听清,再试一次', en: "Didn't catch that — try again" },
+})
 
 /**
  * 录音 Blob → 16kHz 单声道 WAV 的 base64。渲染端(Chromium)解码 + 重采样,
@@ -27,7 +39,7 @@ async function blobToWav16kBase64(blob: Blob): Promise<string> {
   let peak = 0, sum = 0
   for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; sum += pcm[i] * pcm[i] }
   console.warn(`[voice] captured ${pcm.length} samples @16k, ${(pcm.length / 16000).toFixed(2)}s, peak=${peak.toFixed(4)} rms=${Math.sqrt(sum / (pcm.length || 1)).toFixed(4)}`)
-  if (peak < 0.005) throw new Error('没采集到声音(输入电平≈0):检查系统输入设备是否选对、麦克风没被静音')
+  if (peak < 0.005) throw new Error(translate('voiceinput.silent'))
   return wavBase64(pcm, 16000)
 }
 
@@ -95,16 +107,16 @@ export function useVoiceInput(onResult: (text: string) => void, modelId?: string
 
   const start = useCallback(async () => {
     setError(null)
-    if (!supported) { setError('此环境不支持语音输入'); return }
+    if (!supported) { setError(translate('voiceinput.unsupported')); return }
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch (e: any) {
       console.warn('[voice] getUserMedia failed:', e?.name, e?.message || e)
       setError(
-        e?.name === 'NotAllowedError' ? '麦克风权限被拒绝(打开 系统设置 › 隐私与安全 › 麦克风,允许本 App)'
-          : e?.name === 'NotFoundError' ? '没检测到麦克风设备'
-          : `麦克风打不开:${e?.name || e?.message || e}`,
+        e?.name === 'NotAllowedError' ? translate('voiceinput.denied')
+          : e?.name === 'NotFoundError' ? translate('voiceinput.noDevice')
+          : translate('voiceinput.openFailed', { e: e?.name || e?.message || e }),
       )
       return
     }
@@ -138,7 +150,7 @@ export function useVoiceInput(onResult: (text: string) => void, modelId?: string
           modelId,
         })
         if (text) onResult(text)
-        else setError('没听清,再试一次')
+        else setError(translate('voiceinput.unclear'))
       } catch (e: any) {
         console.warn('[voice] transcribe failed:', e?.message || e)
         setError(e?.message || String(e))

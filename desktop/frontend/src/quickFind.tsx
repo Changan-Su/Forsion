@@ -19,6 +19,29 @@ import { useAllDatabases } from './amadeus/store/dbAggregateStore'
 import { fuzzyScore } from './amadeus/lib/fuzzy'
 import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
+import { registerMessages, useI18n } from './i18n'
+
+registerMessages({
+  'quickfind.catAll': { zh: '全部', en: 'All' },
+  'quickfind.catNote': { zh: '笔记', en: 'Notes' },
+  'quickfind.catFile': { zh: '文件', en: 'Files' },
+  'quickfind.catSession': { zh: '会话', en: 'Sessions' },
+  'quickfind.subSession': { zh: '会话', en: 'Session' },
+  'quickfind.untitledSession': { zh: '未命名会话', en: 'Untitled session' },
+  'quickfind.placeholder': { zh: '搜索笔记、文件、会话…', en: 'Search notes, files and sessions…' },
+  'quickfind.scopeLabel': { zh: '搜索范围', en: 'Search scope' },
+  'quickfind.secPickable': { zh: '可选', en: 'Available' },
+  'quickfind.secRecent': { zh: '最近', en: 'Recent' },
+  'quickfind.emptyNoMatch': { zh: '无匹配', en: 'No matches' },
+  'quickfind.emptyNoPickable': { zh: '库里没有可选的文件', en: 'No selectable files in this vault' },
+  'quickfind.emptyNoRecent': { zh: '还没有最近项', en: 'No recent items yet' },
+  'quickfind.footSelect': { zh: '选择', en: 'Select' },
+  'quickfind.footChoose': { zh: '选中', en: 'Choose' },
+  'quickfind.footCancel': { zh: '取消', en: 'Cancel' },
+  'quickfind.footScope': { zh: '分类', en: 'Scope' },
+  'quickfind.footOpen': { zh: '打开', en: 'Open' },
+  'quickfind.footClose': { zh: '关闭', en: 'Close' },
+})
 
 /** 选取模式(2026-08-25,仪表盘嵌卡要「挑一个文件」):同一个面板,回车不导航而是回调给调用方。
  *  刻意复用本面板而不另造 picker —— 模糊搜索 / 键盘 / 样式 / 最近项这一整套已经在这儿了。 */
@@ -43,13 +66,14 @@ type Kind = 'note' | 'db' | 'session' | 'file'
 
 /** 可走的分类格(顺序即 ←/→ 的顺序)。「全部」不在其中 —— 见顶注:它是「光标还在正文里」。 */
 type Cat = 'all' | 'note' | 'file' | 'session'
-const CATS: Array<{ id: Exclude<Cat, 'all'>; label: string }> = [
-  { id: 'note', label: '笔记' },
-  { id: 'file', label: '文件' },
-  { id: 'session', label: '会话' },
+/** ⚠️ 存的是 i18n **键**不是文案:模块作用域求值一次,写死文案会在切语言时不更新。 */
+const CATS: Array<{ id: Exclude<Cat, 'all'>; labelKey: string }> = [
+  { id: 'note', labelKey: 'quickfind.catNote' },
+  { id: 'file', labelKey: 'quickfind.catFile' },
+  { id: 'session', labelKey: 'quickfind.catSession' },
 ]
-/** 胶囊上真正画出来的四格(第 0 格 = 全部 = pos -1)。 */
-const SEGS: Array<{ id: Cat; label: string }> = [{ id: 'all', label: '全部' }, ...CATS]
+/** 胶囊上真正画出来的四格(第 0 格 = 全部 = pos -1)。同样只存键,渲染时 `t()`。 */
+const SEGS: Array<{ id: Cat; labelKey: string }> = [{ id: 'all', labelKey: 'quickfind.catAll' }, ...CATS]
 const catOf = (k: Kind): Cat => (k === 'note' ? 'note' : k === 'session' ? 'session' : 'file')
 /** 光标位置 → 当前分类。-1 = 还在正文里 = 全部。 */
 export const catAt = (pos: number): Cat => (pos < 0 ? 'all' : CATS[Math.min(pos, CATS.length - 1)].id)
@@ -103,6 +127,7 @@ export function QuickFind() {
 }
 
 function QuickFindInner() {
+  const { t } = useI18n()
   const close = useQuickFind((s) => s.close)
   const pick = useQuickFind((s) => s.pick)
   const pages = usePageStore((s) => s.pages)
@@ -129,13 +154,13 @@ function QuickFindInner() {
     const sess: Item[] = sessions.map((s) => ({
       kind: 'session',
       id: s.id,
-      title: s.title || '未命名会话',
-      sub: '会话',
+      title: s.title || t('quickfind.untitledSession'),
+      sub: t('quickfind.subSession'),
       emoji: s.emoji ?? undefined,
       open: () => openSession(s.id),
     }))
     return [...notes, ...dbItems, ...fileItems, ...sess]
-  }, [pages, files, dbs, sessions])
+  }, [pages, files, dbs, sessions, t])
 
   const results = useMemo<Item[]>(() => {
     const needle = q.trim()
@@ -208,7 +233,7 @@ function QuickFindInner() {
           <input
             ref={inputRef}
             className="amx-qf-input"
-            placeholder={pick ? pick.title : '搜索笔记、文件、会话…'}
+            placeholder={pick ? pick.title : t('quickfind.placeholder')}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             /* 用鼠标把光标点回正文里 = 离开分类格(同一条线上的位置变了),胶囊滑回「全部」。 */
@@ -221,7 +246,7 @@ function QuickFindInner() {
         {!pick && <div
           className="t2s-vaultseg amx-qf-seg"
           role="tablist"
-          aria-label="搜索范围"
+          aria-label={t('quickfind.scopeLabel')}
           style={{ '--seg-n': SEGS.length, '--seg-i': pos + 1 } as React.CSSProperties}
         >
           <div className="t2s-vaultseg-thumb" />
@@ -235,12 +260,12 @@ function QuickFindInner() {
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => { setPos(i - 1); inputRef.current?.focus() }}
             >
-              {c.label}
+              {t(c.labelKey)}
             </button>
           ))}
         </div>}
         <div className="amx-qf-list">
-          {!q.trim() && results.length > 0 && <div className="amx-qf-sec">{pick ? '可选' : '最近'}</div>}
+          {!q.trim() && results.length > 0 && <div className="amx-qf-sec">{t(pick ? 'quickfind.secPickable' : 'quickfind.secRecent')}</div>}
           {results.map((it, i) => (
             <button
               key={`${it.kind}:${it.id}`}
@@ -253,11 +278,11 @@ function QuickFindInner() {
               <span className="amx-qf-sub">{it.sub}</span>
             </button>
           ))}
-          {results.length === 0 && <div className="amx-qf-empty">{q.trim() ? '无匹配' : pick ? '库里没有可选的文件' : '还没有最近项'}</div>}
+          {results.length === 0 && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
         </div>
         <div className="amx-qf-foot">{pick
-          ? <><kbd>↑↓</kbd> 选择 · <kbd>↵</kbd> 选中 · <kbd>esc</kbd> 取消</>
-          : <><kbd>↑↓</kbd> 选择 · <kbd>←→</kbd> 分类 · <kbd>↵</kbd> 打开 · <kbd>esc</kbd> 关闭</>}</div>
+          ? <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>↵</kbd> {t('quickfind.footChoose')} · <kbd>esc</kbd> {t('quickfind.footCancel')}</>
+          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>
       </div>
     </div>
   )

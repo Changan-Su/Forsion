@@ -26,6 +26,13 @@ import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { DESK_EDIT_TOOLS, DESK_PERSIST_KEY, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { registerMessages, translate } from '../i18n'
+
+// 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
+// store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
+registerMessages({
+  'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
+})
 
 export type { SettingsTab }
 
@@ -279,6 +286,21 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
   void window.tangu?.setConfig?.(patch).catch(() => {})
 }
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
+/** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
+ *  **只 connect 不 restart**,上限 8 次;每次 ready 广播重新计数。 */
+export const BOOT_RETRY_MS = 15_000
+export const BOOT_RETRY_MAX = 8
+let bootRetryTimer: ReturnType<typeof setTimeout> | null = null
+/** 上次 connect 因鉴权被拒(探针 401)。重试环见它即停:15s 一次的重试 > handleAuthExpired 的 10s 去抖,
+ *  否则每次重试都再触发一次「重启引擎 / 弹设置页」,8 次。引擎 ready 广播(带新 token 重启)才清掉。 */
+let lastConnectAuthRejected = false
+/** 同一 (url, token) 的 connect 正在飞时复用它:boot 快照 ready 与 preload 回放 ready 会各叫一次。 */
+let connectInflight: { key: string; p: Promise<void> } | null = null
+/** connect 代数:每次 connectOnce 递增,await 回来后只有**最新代**才许写 connState / 记录 authRejected / 选会话。
+ *  否则老 token 那次 connectOnce 晚到的 401 会盖掉新 token 已成功的 ok,还把 lastConnectAuthRejected 置真停掉重试环(Codex 评审抓的)。 */
+let connectGen = 0
+let lastOkConnectKey = ''
+const connectKey = (c: { backendUrl: string; token: string }): string => `${c.backendUrl}|${c.token}`
 let lastEngineResyncAt = 0 // 凭据不同步时的引擎重启节流:401 持续不断也不许变成重启风暴
 const MAX_MSG_CHARS = 1_500_000 // 单条助手正文软上限(防超长正文+markdown 重渲染撑爆渲染进程)
 const MAX_LIVE_SESSIONS = 8 // 内存中保留消息的会话数上限(LRU,切走的旧会话淘汰,下次进入重新拉)
@@ -298,7 +320,8 @@ function enterWorkspace(s: { openWorkspaceKeys: string[] }, key: string | null):
 }
 /** 单条正文超上限则截断 + 标注(后端仍完整落库;仅界面侧防 OOM)。 */
 function capContent(s: string): string {
-  return s.length >= MAX_MSG_CHARS ? s.slice(0, MAX_MSG_CHARS) + '\n\n[输出过长,界面已截断显示]' : s
+  // 取词在调用时发生(不是模块加载时),切语言后新截断的消息立刻用新语言。
+  return s.length >= MAX_MSG_CHARS ? s.slice(0, MAX_MSG_CHARS) + '\n\n' + translate('appstore.contentTruncated') : s
 }
 
 type ConnState = 'idle' | 'ok' | 'err'
@@ -411,6 +434,8 @@ export interface AppState {
   /** 新建云端 Project 并选为 new chat 目标。 */
   addCloudProject(name: string): Promise<void>
   connect(c: TanguDesktopConfig): Promise<void>
+  /** connect 的本体(不去重);外部一律调 connect。 */
+  connectOnce(c: TanguDesktopConfig): Promise<void>
   refreshSpecialEnabled(c: TanguDesktopConfig): Promise<void>
   /** 把 Background Session(@讨论/Historian 辅助讨论等,经 /background 端点轮询)合并进该会话的子聊天列表。 */
   mergeBackgroundSubChats(sessionId: string, items: Array<{ runId: string; title: string; status: string }>): void
@@ -1071,12 +1096,26 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   connect: async (c) => {
+    const key = connectKey(c)
+    if (connectInflight?.key === key) return connectInflight.p
+    const p = get().connectOnce(c).finally(() => { if (connectInflight?.p === p) connectInflight = null })
+    connectInflight = { key, p }
+    return p
+  },
+
+  connectOnce: async (c) => {
     const t = get().tr
+    const gen = ++connectGen
+    const latest = (): boolean => gen === connectGen
     const r = await testConnection(c)
+    if (!latest()) return // 已有更新的 connect 在飞/已完成:这条的结果(尤其老 token 的 401)一律作废
     set({ connState: r.ok ? 'ok' : 'err', connMessage: r.message })
+    lastConnectAuthRejected = !!r.authRejected
     if (!r.ok) return
+    lastOkConnectKey = connectKey(c)
     try {
       const act = await get().refreshSessions(c)
+      if (!latest()) return
       const cur = get().activeId
       // ⚠️ activeId 为 null 往往是**故意**的空白新对话(用户点了「新对话」/ 按 Space 分账给这个 Space 的
       //    起手,见 bootstrapEngine 的 planSpaceSwitch 订阅)。兜底选第一条只在本窗口首次连上时做 ——
@@ -1086,10 +1125,12 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e: any) {
       get().toast(t('app.sessionListLoadFail', { e: e?.message || e }), true)
     }
+    if (!latest()) return
     void get().refreshCloudProjects(c)
-    void api.listModels(c).then((m) => set({ modelsResp: m })).catch(() => set({ modelsResp: null }))
-    void api.listSkills(c).then((s) => set({ skillsList: s })).catch(() => set({ skillsList: null }))
-    void api.listEngines(c).then((e) => set({ engines: e })).catch(() => set({ engines: [] }))
+    // 后续三条列表也只认最新代:老 token 的 401 会把 modelsResp/skillsList 置空,盖掉新 token 刚拉到的
+    void api.listModels(c).then((m) => { if (latest()) set({ modelsResp: m }) }).catch(() => { if (latest()) set({ modelsResp: null }) })
+    void api.listSkills(c).then((s) => { if (latest()) set({ skillsList: s }) }).catch(() => { if (latest()) set({ skillsList: null }) })
+    void api.listEngines(c).then((e) => { if (latest()) set({ engines: e }) }).catch(() => { if (latest()) set({ engines: [] }) })
     void get().refreshSpecialEnabled(c)
     get().refreshAgents()
     void window.tangu?.authStatus?.().then((a) => set({ authInfo: a })).catch(() => set({ authInfo: null }))
@@ -1140,6 +1181,46 @@ export const useApp = create<AppState>((set, get) => ({
 
   boot: async () => {
     const t = get().tr
+    // ⚠️ 先订阅再 await:ready 广播若落在下面 getConfig 的 await 期间,晚注册的监听器收不到 → 快照 starting
+    //    永远停在「后端启动中」(preload 侧还会注册即回放当前状态,双保险;见 preload.onBackendStatus)。
+    const connectFromStatus = (): void => {
+      void window.tangu!.getConfig().then((c) => {
+        const eff = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId }
+        set({ desktopConfig: c, cfg: eff, cfgLoaded: true })
+        // 快照 ready 那条已连上同一 (url,token) → 这条(preload 回放 / 重复广播)不再打一遍;
+        // 引擎重启会先广播 starting 把 connState 压回 idle,所以真正的换 token 重启仍会连。
+        if (get().connState === 'ok' && lastOkConnectKey === connectKey(eff)) return
+        void get().connect(eff)
+      })
+    }
+    const armRetry = (n: number): void => {
+      if (bootRetryTimer) clearTimeout(bootRetryTimer)
+      bootRetryTimer = null
+      if (n >= BOOT_RETRY_MAX) return
+      bootRetryTimer = setTimeout(() => {
+        bootRetryTimer = null
+        void (async () => {
+          const s = get()
+          if (s.desktopMode !== 'managed' || s.connState === 'ok' || lastConnectAuthRejected) return
+          // 只在引擎自报 ready 时才打:starting 期打过去必 ECONNREFUSED,会把「启动中」顶成「错误」
+          const st = await window.tangu?.backendStatus?.().catch(() => null)
+          if (st?.state === 'ready') await s.connect(s.cfg)
+          armRetry(n + 1)
+        })()
+      }, BOOT_RETRY_MS)
+    }
+    window.tangu?.onBackendStatus?.((st) => {
+      if (st.state === 'ready') {
+        lastConnectAuthRejected = false // 重启后是新 token,重新给机会
+        connectFromStatus()
+        armRetry(0)
+      } else if (st.state === 'starting') {
+        set({ connState: 'idle', connMessage: t('app.managedBackendStarting') })
+      } else if (st.state === 'crashed') {
+        set({ connState: 'err', connMessage: st.lastError || t('app.managedBackendExited') })
+      }
+    })
+    lastConnectAuthRejected = false
     const stored = await window.tangu?.getConfig()
     set({
       desktopConfig: stored || null,
@@ -1156,7 +1237,8 @@ export const useApp = create<AppState>((set, get) => ({
     set({ cfg: merged, cfgLoaded: true })
     if (stored?.mode === 'managed') {
       if (stored.backendState?.state === 'ready') void get().connect(merged)
-      else set({ connState: 'idle', connMessage: t('app.managedBackendStarting') })
+      else if (get().connState !== 'ok') set({ connState: 'idle', connMessage: t('app.managedBackendStarting') })
+      armRetry(0)
     } else if (merged.token) {
       void get().connect(merged)
     }
@@ -1167,11 +1249,13 @@ export const useApp = create<AppState>((set, get) => ({
     if (stored && window.tangu?.envCheck) {
       try {
         if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) {
-          const [auth, provs] = await Promise.all([
+          // void 不 await:两条 IPC 只决定要不要弹引导,不该拖住 boot 的 resolve(bootstrap 等 boot 完才往下走)。
+          void Promise.all([
             window.tangu.authStatus?.().catch(() => null) ?? null,
             window.tangu.listProviders?.().catch(() => []) ?? [],
-          ])
-          if (!auth?.loggedIn && !(provs && provs.length)) set({ onboarding: true })
+          ]).then(([auth, provs]) => {
+            if (!auth?.loggedIn && !(provs && provs.length)) set({ onboarding: true })
+          }).catch(() => { /* 引导判定失败不阻断 */ })
         }
       } catch { /* 引导判定失败不阻断 */ }
     }
@@ -1183,20 +1267,6 @@ export const useApp = create<AppState>((set, get) => ({
       try { seen = localStorage.getItem(ONBOARDING_VERSION_KEY) } catch { seen = null }
       if (seen !== ver) set({ onboarding: true })
     }).catch(() => {})
-    window.tangu?.onBackendStatus?.((st) => {
-      if (st.state === 'ready') {
-        void window.tangu!.getConfig().then((c) => {
-          set({ desktopConfig: c })
-          const eff = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId }
-          set({ cfg: eff })
-          void get().connect(eff)
-        })
-      } else if (st.state === 'starting') {
-        set({ connState: 'idle', connMessage: t('app.managedBackendStarting') })
-      } else if (st.state === 'crashed') {
-        set({ connState: 'err', connMessage: st.lastError || t('app.managedBackendExited') })
-      }
-    })
     // 登录态变化(含 CLI tangu login 等外部来源,主进程 auth.json watcher 广播)→ 刷新 authInfo。
     // managed 后端的重连由上面 onBackendStatus 的 ready 分支承接(登录变化会触发后端带新 token 重启)。
     window.tangu?.onAuthChanged?.(() => {

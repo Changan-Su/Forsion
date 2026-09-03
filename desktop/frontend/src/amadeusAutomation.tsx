@@ -16,7 +16,13 @@ import { setAutomationKick } from '@amadeus/store/automationKick'
 import { useApp } from './stores/appStore'
 import { useAutomation } from './stores/automationStore'
 import { fireAutomationTrigger, getMuseTriggers, kickAutomation } from './services/backendService'
+import { registerMessages, translate, useI18n } from './i18n'
 import type { MuseTriggerInfo } from './types'
+
+registerMessages({
+  'amauto.noBackend': { zh: '后端未连接', en: 'Backend not connected' },
+  'amauto.loadingBuilder': { zh: '载入构建器…', en: 'Loading builder…' },
+})
 
 const AutomationBuilder = lazyRetry(() =>
   import('./views/automation/AutomationBuilder').then((m) => ({ default: m.AutomationBuilder })),
@@ -52,13 +58,13 @@ export function installAmadeusAutomationBridge(): void {
     },
     async run(triggerId) {
       const c = cfg()
-      if (!c) throw new Error('后端未连接')
+      if (!c) throw new Error(translate('amauto.noBackend'))
       const r = await fireAutomationTrigger(c, triggerId, 'button')
       return { status: (r.status as 'done' | 'failed' | 'busy') ?? 'failed', steps: r.steps ?? [] }
     },
     async editRule(triggerId) {
       const c = cfg()
-      if (!c) throw new Error('后端未连接')
+      if (!c) throw new Error(translate('amauto.noBackend'))
       // 构建器读 automationStore 的动作目录/规则表,而那个 store 只有「自动化」Space 在轮询。
       // 从笔记里开构建器时没人拉过 → 工具步骤会是空目录(表现为「调工具」按钮恒灰)。这里补一次。
       await useAutomation.getState().refresh(c).catch(() => { /* 拉不到就退化成只有通知/跑 Agent 两种步骤 */ })
@@ -74,6 +80,7 @@ export function installAmadeusAutomationBridge(): void {
 /** 构建器弹层宿主(挂在 AmadeusOverlays 里;.am-app.tangu-lovable = .dialog-* 取色桥,同 askString)。 */
 export function AutomationBuilderHost() {
   const req = useBuilderReq((s) => s.req)
+  const { t } = useI18n()
   if (!req) return null
   const finish = (r: AutomationRuleInfo | null): void => {
     useBuilderReq.getState().clear()
@@ -83,7 +90,7 @@ export function AutomationBuilderHost() {
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
       <div className="dialog-overlay" onMouseDown={() => finish(null)}>
         <div className="dialog amx-btnblock-dialog" onMouseDown={(e) => e.stopPropagation()}>
-          <Suspense fallback={<div className="dialog-msg">载入构建器…</div>}>
+          <Suspense fallback={<div className="dialog-msg">{t('amauto.loadingBuilder')}</div>}>
             <AutomationBuilder
               editing={req.editing}
               fixedManual

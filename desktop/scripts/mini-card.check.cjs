@@ -47,7 +47,7 @@ async function main() {
   let app
   try {
     app = await electron.launch({
-      args: [`--user-data-dir=${path.join(home, 'userdata')}`, ROOT],
+      args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       env: {
         ...process.env,

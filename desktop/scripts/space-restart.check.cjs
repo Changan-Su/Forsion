@@ -29,7 +29,7 @@ const UD = path.join(home, 'userdata') // 同一份 user-data-dir = 同一份 lo
 
 async function boot() {
   const app = await electron.launch({
-    args: [`--user-data-dir=${UD}`, ROOT],
+    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
   })

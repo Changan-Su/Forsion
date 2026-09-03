@@ -5,6 +5,37 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { b64ToBytes } from './services/fileKinds'
+import { registerMessages, translate } from './i18n'
+
+registerMessages({
+  'fileimport.tooLargeCloud': { zh: '超过云端单文件上限 5MB', en: 'Over the 5 MB cloud file limit' },
+  'fileimport.vaultFull': { zh: '云端库容量已满', en: 'The cloud vault is full' },
+  'fileimport.unknownError': { zh: '未知错误', en: 'Unknown error' },
+  'fileimport.over5mb': { zh: '超 5MB', en: 'over 5 MB' },
+  'fileimport.over50mb': { zh: '超 50MB', en: 'over 50 MB' },
+  'fileimport.unreadable': { zh: '读不到', en: 'unreadable' },
+  'fileimport.withReason': { zh: '{name}({reason})', en: '{name} ({reason})' },
+  'fileimport.uploading': { zh: '正在上传 {name}… {pct}%', en: 'Uploading {name}… {pct}%' },
+  'fileimport.placeholder': { zh: '⏳ 正在上传 {name}…', en: '⏳ Uploading {name}…' },
+  'fileimport.placeholderFailed': { zh: '⚠️ 上传失败:{name}', en: '⚠️ Upload failed: {name}' },
+  'fileimport.notImportedOne': { zh: '{n} 个文件未导入:{first}', en: '{n} file was not imported: {first}' },
+  'fileimport.notImportedMany': { zh: '{n} 个文件未导入:{first}', en: '{n} files were not imported: {first}' },
+  'fileimport.movedAway': { zh: '文件已存入原笔记(已切换页,占位行未替换)', en: 'The file was saved to the original note (you switched pages, so the placeholder line was left as is)' },
+  'fileimport.imageMovedAway': { zh: '图片已存入原笔记(已切换页,占位行未替换)', en: 'The image was saved to the original note (you switched pages, so the placeholder line was left as is)' },
+  'fileimport.importedOne': { zh: '已导入 {n} 个文件', en: 'Imported {n} file' },
+  'fileimport.importedMany': { zh: '已导入 {n} 个文件', en: 'Imported {n} files' },
+  'fileimport.uploadedOne': { zh: '已上传 {name}', en: 'Uploaded {name}' },
+  'fileimport.vaultRoot': { zh: '库根目录', en: 'Vault root' },
+  'fileimport.importedToOne': { zh: '已导入 {n} 个文件到「{where}」', en: 'Imported {n} file to “{where}”' },
+  'fileimport.importedToMany': { zh: '已导入 {n} 个文件到「{where}」', en: 'Imported {n} files to “{where}”' },
+  'fileimport.unreadableOne': { zh: '{n} 个文件读不了:{first}', en: 'Could not read {n} file: {first}' },
+  'fileimport.unreadableMany': { zh: '{n} 个文件读不了:{first}', en: 'Could not read {n} files: {first}' },
+  'fileimport.imageOver5mb': { zh: '图片超 5MB', en: 'Image is over 5 MB' },
+  'fileimport.pasteFailed': { zh: '粘贴图片:{first}', en: 'Could not paste image: {first}' },
+})
+
+/** `名字(原因)` 的统一拼法(中文用全角括号,英文用半角+空格)。 */
+const withReason = (name: string, reason: string): string => translate('fileimport.withReason', { name, reason })
 
 // 云 vault 单文件上限(server vaultService MAX_BINARY_BYTES = 5MiB);本地磁盘库无此限,不预检。
 const CLOUD_MAX_BYTES = 5 * 1024 * 1024
@@ -35,14 +66,14 @@ function embedOrLink(base: string, name: string, pageRel: string, preview: boole
 /** 把服务端/本地错误折成用户能懂的一句话。 */
 function explain(e: unknown): string {
   const s = e instanceof Error ? e.message : String(e)
-  if (/TOO_LARGE|\b413\b/.test(s)) return '超过云端单文件上限 5MB'
-  if (/VAULT_FULL/.test(s)) return '云端库容量已满'
-  return s || '未知错误'
+  if (/TOO_LARGE|\b413\b/.test(s)) return translate('fileimport.tooLargeCloud')
+  if (/VAULT_FULL/.test(s)) return translate('fileimport.vaultFull')
+  return s || translate('fileimport.unknownError')
 }
 
 /** 云端直写才卡 5MB(本地/移动本地无限)。返回被跳过的原因串,或 null=放行。 */
 function overLimit(f: File): string | null {
-  return isCloudDirectWrite() && f.size > CLOUD_MAX_BYTES ? '超 5MB' : null
+  return isCloudDirectWrite() && f.size > CLOUD_MAX_BYTES ? translate('fileimport.over5mb') : null
 }
 
 async function refreshTree(): Promise<void> {
@@ -54,7 +85,7 @@ function progressNotifier(name: string): (sent: number, total: number) => void {
   let last = -1
   return (sent, total) => {
     const pct = total > 0 ? Math.min(100, Math.floor((sent / total) * 100)) : 0
-    if (pct !== last) { last = pct; notify(`正在上传 ${name}… ${pct}%`) }
+    if (pct !== last) { last = pct; notify(translate('fileimport.uploading', { name, pct })) }
   }
 }
 
@@ -66,13 +97,15 @@ function progressNotifier(name: string): (sent: number, total: number) => void {
  *  ponytail: 占位插入/替换是两步 undo(完成后 undo 一次回到 ⏳ 文本),pageStore 无免历史突变,不值得加;
  *  切页场景占位行随自动保存留在原页,由吐司提示,不做跨页读改写回收。 */
 function placeholder(page: string, name: string): { done(text: string): boolean; fail(): void } {
-  const marker = `⏳ 正在上传 ${name}…`
+  // ⚠️ marker 只在这里求值一次:alive() 拿它与块内容逐字比对,若改成每次现调 translate(),
+  // 上传途中切语言就会比对不上(占位永远替换不掉)。翻译对这条自比对是不变量,勿内联。
+  const marker = translate('fileimport.placeholder', { name })
   const pid = ps().activePage === page ? ps().insertBlockAfter(null, undefined, marker) : null
   const alive = (): boolean => !!pid && ps().activePage === page && ps().blocks[pid!]?.content === marker
   return {
     // false = 占位已不可替换(切了页,或用户删/改了占位——后者尊重用户操作,不再硬插)。
     done: (text) => { if (!alive()) return false; ps().setBlockContent(pid!, text); return true },
-    fail: () => { if (alive()) ps().setBlockContent(pid!, `⚠️ 上传失败:${name}`) },
+    fail: () => { if (alive()) ps().setBlockContent(pid!, translate('fileimport.placeholderFailed', { name })) },
   }
 }
 
@@ -85,7 +118,7 @@ export async function importToPage(files: File[], page: string): Promise<void> {
   const fails: string[] = []
   for (const f of files) {
     const over = overLimit(f)
-    if (over) { fails.push(`${f.name}(${over})`); continue }
+    if (over) { fails.push(withReason(f.name, over)); continue }
     const ph = placeholder(page, f.name)
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
@@ -93,12 +126,13 @@ export async function importToPage(files: File[], page: string): Promise<void> {
       // 占位原地换成真实引用;占位被用户删了 = 尊重删除(文件已在库,树里可见);切页才计 movedAway。
       if (ph.done(embedOrLink(base, f.name, pageRel, preview)) || ps().activePage === page) ok++
       else movedAway++
-    } catch (e) { ph.fail(); fails.push(`${f.name}(${explain(e)})`) }
+    } catch (e) { ph.fail(); fails.push(withReason(f.name, explain(e))) }
   }
   await refreshTree()
-  if (fails.length) notify(`${fails.length} 个文件未导入:${fails[0]}`)
-  else if (movedAway) notify(`文件已存入原笔记(已切换页,占位行未替换)`)
-  else notify(files.length > 1 ? `已导入 ${ok} 个文件` : `已上传 ${files[0].name}`)
+  if (fails.length) notify(translate(fails.length === 1 ? 'fileimport.notImportedOne' : 'fileimport.notImportedMany', { n: fails.length, first: fails[0] }))
+  else if (movedAway) notify(translate('fileimport.movedAway'))
+  else if (files.length > 1) notify(translate(ok === 1 ? 'fileimport.importedOne' : 'fileimport.importedMany', { n: ok }))
+  else notify(translate('fileimport.uploadedOne', { name: files[0].name }))
 }
 
 /** 拖到文件树 / 库侧栏:把文件写进库里的目标文件夹(空串=库根,不插入嵌入),类似文件管理器导入。 */
@@ -108,17 +142,17 @@ export async function importToFolder(files: File[], folder: string): Promise<voi
   const fails: string[] = []
   for (const f of files) {
     const over = overLimit(f)
-    if (over) { fails.push(`${f.name}(${over})`); continue }
+    if (over) { fails.push(withReason(f.name, over)); continue }
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
       await amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, progressNotifier(f.name))
       ok++
-    } catch (e) { fails.push(`${f.name}(${explain(e)})`) }
+    } catch (e) { fails.push(withReason(f.name, explain(e))) }
   }
   await refreshTree()
-  const where = folder ? (folder.split('/').pop() || folder) : '库根目录'
-  if (fails.length) notify(`${fails.length} 个文件未导入:${fails[0]}`)
-  else notify(`已导入 ${ok} 个文件到「${where}」`)
+  const where = folder ? (folder.split('/').pop() || folder) : translate('fileimport.vaultRoot')
+  if (fails.length) notify(translate(fails.length === 1 ? 'fileimport.notImportedOne' : 'fileimport.notImportedMany', { n: fails.length, first: fails[0] }))
+  else notify(translate(ok === 1 ? 'fileimport.importedToOne' : 'fileimport.importedToMany', { n: ok, where }))
 }
 
 /** 应用内路径拖拽(文件面板的行)要走进「导入」这条链,得先把主机文件读成 File —— 主进程
@@ -133,11 +167,11 @@ export async function filesFromHostPaths(paths: string[]): Promise<File[]> {
     const name = p.split(/[\\/]/).pop() || p
     try {
       const r = await read(p)
-      if (!r || r.tooLarge) { fails.push(`${name}(${r?.tooLarge ? '超 50MB' : '读不到'})`); continue }
+      if (!r || r.tooLarge) { fails.push(withReason(name, translate(r?.tooLarge ? 'fileimport.over50mb' : 'fileimport.unreadable'))); continue }
       out.push(new File([b64ToBytes(r.content) as unknown as BlobPart], name, { type: r.mimeType }))
-    } catch (e) { fails.push(`${name}(${explain(e)})`) }
+    } catch (e) { fails.push(withReason(name, explain(e))) }
   }
-  if (fails.length) notify(`${fails.length} 个文件读不了:${fails[0]}`)
+  if (fails.length) notify(translate(fails.length === 1 ? 'fileimport.unreadableOne' : 'fileimport.unreadableMany', { n: fails.length, first: fails[0] }))
   return out
 }
 
@@ -148,7 +182,7 @@ export async function pasteImagesToPage(imgs: File[], page: string): Promise<voi
   let movedAway = 0
   const fails: string[] = []
   for (const f of imgs) {
-    if (overLimit(f)) { fails.push('图片超 5MB'); continue }
+    if (overLimit(f)) { fails.push(translate('fileimport.imageOver5mb')); continue }
     const name = (f.name || 'pasted.png').replace(/\s+/g, '_')
     const ph = placeholder(page, name)
     try {
@@ -159,6 +193,6 @@ export async function pasteImagesToPage(imgs: File[], page: string): Promise<voi
     } catch (e) { ph.fail(); fails.push(explain(e)) }
   }
   await refreshTree()
-  if (fails.length) notify(`粘贴图片:${fails[0]}`)
-  else if (movedAway) notify('图片已存入原笔记(已切换页,占位行未替换)')
+  if (fails.length) notify(translate('fileimport.pasteFailed', { first: fails[0] }))
+  else if (movedAway) notify(translate('fileimport.imageMovedAway'))
 }

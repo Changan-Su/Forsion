@@ -99,7 +99,7 @@ async function main() {
   }
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const page = await browser.newPage({ viewport: { width: 900, height: 800 } })
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 800 } })
     page.on('pageerror', (e) => console.log('[pageerror]', e.message))
     // ribbon 顺序/展开态/收纳夹都落 localStorage → 每次导航前清掉,用例之间才互不串味。
     await page.addInitScript(() => localStorage.clear())

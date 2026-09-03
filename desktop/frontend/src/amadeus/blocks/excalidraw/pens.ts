@@ -9,6 +9,7 @@
  *    这里是**固定 7 支笔**,改参数请直接用引擎自己的属性面板(线宽/颜色/填充都还在)。
  *  - `freedrawOnly` 保留:它决定离开自由画笔时要不要把颜色/填充还回去(见 ExcalidrawCanvas 的还原 effect)。
  */
+import { registerMessages, translate } from '../../../i18n'
 import type { ObsidianPenStyle } from '@excalidraw/excalidraw/obsidianTypes'
 
 export type PenType = ObsidianPenStyle['type']
@@ -16,15 +17,30 @@ export type PenStyle = ObsidianPenStyle
 
 export const PEN_ORDER: PenType[] = ['default', 'finetip', 'fountain', 'marker', 'highlighter', 'thick-thin', 'thin-thick-thin']
 
-/** UI 文案。图标在 ExcalidrawCanvas 里挑(lucide),这里只管数据。 */
+registerMessages({
+  'excalipen.default': { zh: '默认', en: 'Default' },
+  'excalipen.finetip': { zh: '细尖笔', en: 'Fine tip' },
+  'excalipen.fountain': { zh: '钢笔', en: 'Fountain pen' },
+  'excalipen.marker': { zh: '马克笔', en: 'Marker' },
+  'excalipen.highlighter': { zh: '荧光笔', en: 'Highlighter' },
+  'excalipen.thickThin': { zh: '粗到细', en: 'Thick to thin' },
+  'excalipen.thinThickThin': { zh: '两头细', en: 'Tapered ends' },
+})
+
+/** UI 文案。图标在 ExcalidrawCanvas 里挑(lucide),这里只管数据。
+ *
+ *  ⚠️ 必须是 **getter**,别「简化」成一张普通的字符串表:模块作用域的字面量在
+ *  import 那一刻就定死成启动时的语言,用户切中/英之后再也不会变(不报错、不崩,
+ *  只是静默显示旧语言)。写成 getter,`PEN_LABELS[type]` 每次读取都现查字典,
+ *  消费方(PenRow 的 title/aria-label)一行不用改。 */
 export const PEN_LABELS: Record<PenType, string> = {
-  default: '默认',
-  finetip: '细尖笔',
-  fountain: '钢笔',
-  marker: '马克笔',
-  highlighter: '荧光笔',
-  'thick-thin': '粗到细',
-  'thin-thick-thin': '两头细',
+  get default() { return translate('excalipen.default') },
+  get finetip() { return translate('excalipen.finetip') },
+  get fountain() { return translate('excalipen.fountain') },
+  get marker() { return translate('excalipen.marker') },
+  get highlighter() { return translate('excalipen.highlighter') },
+  get 'thick-thin'() { return translate('excalipen.thickThin') },
+  get 'thin-thick-thin'() { return translate('excalipen.thinThickThin') },
 }
 
 export const PENS: Record<PenType, PenStyle> = {

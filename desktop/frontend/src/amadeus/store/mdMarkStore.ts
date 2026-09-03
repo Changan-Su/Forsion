@@ -13,7 +13,20 @@ import type { CellValue, DbColumn } from '@amadeus-shared/db/schema'
 import { amadeus } from '../api'
 import { usePageStore } from './pageStore'
 import { notifyApp } from '../../stores/notificationStore'
+import { registerMessages, translate, useI18n } from '../../i18n'
 import type { AggDb } from './dbAggregateStore'
+
+registerMessages({
+  'mdmark.patchFailed': {
+    zh: '改不动「{name}」—— 笔记里那一行已经变了',
+    en: 'Can’t update “{name}” — that line in the note has changed',
+  },
+  'mdmark.openNote': { zh: '打开笔记', en: 'Open note' },
+  'mdmark.colName': { zh: '事项', en: 'Item' },
+  'mdmark.colDate': { zh: '时间', en: 'Time' },
+  'mdmark.colNote': { zh: '来源笔记', en: 'Source note' },
+  'mdmark.calName': { zh: '笔记', en: 'Notes' },
+})
 
 /** 一条标记行的乐观改动(还没落盘 / 正在落盘)。 */
 interface MarkPatch { due?: string; checked?: boolean }
@@ -86,9 +99,9 @@ async function flush(key: string, fallback: MdMark): Promise<void> {
       if (!ok) {
         notifyApp({
           event: 'system.generic', level: 'warning',
-          text: `改不动「${cur.text}」—— 笔记里那一行已经变了`,
+          text: translate('mdmark.patchFailed', { name: cur.text }),
           action: {
-            label: '打开笔记',
+            label: translate('mdmark.openNote'),
             // 动态 import:store 层不静态依赖导航层,免得绕出模块环。
             run: () => { void import('../../amadeusNav').then((n) => n.openNoteAtHeading(cur.path, cur.heading)) },
           },
@@ -145,10 +158,12 @@ export const useMdMarksReady = (): boolean => useMdMarkStore((s) => s.ready)
 amadeus?.onStructureChange?.(() => { void useMdMarkStore.getState().load() })
 
 const MD_CAL_PATH = 'mdnote://vault-notes'
-const MD_CAL_COLS: DbColumn[] = [
-  { id: 'name', name: '事项', type: 'text' },
-  { id: 'date', name: '时间', type: 'calendarDate' },
-  { id: 'note', name: '来源笔记', type: 'text' },
+/** ⚠️ 列名是**展示文案**,必须每次求值:写成模块级常量会把语言冻结在模块加载那一刻,切英文不更新。
+ *  列 id 定死(buildEvents 用 firstDateCol 找日期列),只有 name 是本地化的。 */
+const mdCalColumns = (): DbColumn[] => [
+  { id: 'name', name: translate('mdmark.colName'), type: 'text' },
+  { id: 'date', name: translate('mdmark.colDate'), type: 'calendarDate' },
+  { id: 'note', name: translate('mdmark.colNote'), type: 'text' },
 ]
 
 /** 笔记正文标记合成的日历源(与 useAgentCalDbs / useOtherVaultCalDbs / useIcsCalDbs 同族)。
@@ -159,6 +174,7 @@ const MD_CAL_COLS: DbColumn[] = [
  *  日历上拖动/改期会回写笔记里那个 `@` 串。真源始终只有 markdown 一份,不存在两边不一致。 */
 export function useMdCalDbs(): AggDb[] {
   const marks = useMdMarks()
+  const { locale } = useI18n() // 库名/列名都是本地化文案 → 必须进 memo 依赖,否则切语言不刷新
   return useMemo(() => {
     const events = marks.filter((m) => !m.isTask)
     if (!events.length) return []
@@ -170,10 +186,10 @@ export function useMdCalDbs(): AggDb[] {
     }))
     return [{
       path: MD_CAL_PATH,
-      name: '笔记',
+      name: translate('mdmark.calName'),
       isNoteView: false,
       readonly: true,
-      columns: MD_CAL_COLS,
+      columns: mdCalColumns(),
       rows,
       writeCell: amadeus?.patchMark
         ? (rowId, colId, value) => {
@@ -187,5 +203,5 @@ export function useMdCalDbs(): AggDb[] {
         if (m) void import('../../amadeusNav').then((n) => n.openNoteAtHeading(m.path, m.heading))
       },
     }]
-  }, [marks])
+  }, [marks, locale])
 }

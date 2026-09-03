@@ -1,10 +1,10 @@
 /** 仪表盘数据层:规格解析 / 属性名解析 / 页面级筛选真的生效 / 图表分组与「其他」/ frontmatter 三态。 */
 import { describe, expect, it } from 'vitest'
-import type { ColumnType, DbColumn, DbRow } from './db/schema'
+import type { ColumnType, DbColumn, DbRow, DbView } from './db/schema'
 import {
   CHART_MAX_GROUPS, DASH_FILTER_FM_KEY, STAT_ROWS, columnByName, computeChartCard, computeStatCard,
   filtersUnderstoodBy, groupLabel, parseChartSpec, parseStatSpec, readDashFilters, resolveDashFilters,
-  setDashFiltersInFm, type DashFilter,
+  scopeByView, setDashFiltersInFm, viewByName, type DashFilter,
 } from './dashboardData'
 
 const cols: DbColumn[] = [
@@ -67,28 +67,28 @@ describe('数字卡:先筛选再统计', () => {
   })
 
   it('页面级筛选真的收窄了统计范围(负对照:不加筛选是 4/350)', () => {
-    const spec = { source: 'a.db', col: '金额', stat: 'sum', label: '', unit: '', literal: null }
+    const spec = { source: 'a.db', col: '金额', stat: 'sum', label: '', unit: '', literal: null, view: null }
     expect(computeStatCard(rows, cols, spec, noFilter, kindOf).text).toBe('350')
     expect(computeStatCard(rows, cols, spec, onlyRunning, kindOf).text).toBe('300')
-    const rowSpec = { source: 'a.db', col: null, stat: STAT_ROWS, label: '', unit: '', literal: null }
+    const rowSpec = { source: 'a.db', col: null, stat: STAT_ROWS, label: '', unit: '', literal: null, view: null }
     expect(computeStatCard(rows, cols, rowSpec, noFilter, kindOf).text).toBe('4')
     expect(computeStatCard(rows, cols, rowSpec, onlyRunning, kindOf).text).toBe('2')
   })
 
   it('列名找不到 → 显示 –,不抛', () => {
-    const spec = { source: 'a.db', col: '不存在', stat: 'sum', label: '', unit: '', literal: null }
+    const spec = { source: 'a.db', col: '不存在', stat: 'sum', label: '', unit: '', literal: null, view: null }
     expect(computeStatCard(rows, cols, spec, noFilter, kindOf).text).toBe('–')
   })
 
   it('统计与多维表的统计行同源(computeStat),不另算一份', () => {
-    const spec = { source: 'a.db', col: '金额', stat: 'avg', label: '', unit: '', literal: null }
+    const spec = { source: 'a.db', col: '金额', stat: 'avg', label: '', unit: '', literal: null, view: null }
     // 三个非空数值 100/200/50 → 平均 116.67(trimNum 两位)
     expect(computeStatCard(rows, cols, spec, noFilter, kindOf).text).toBe('116.67')
   })
 })
 
 describe('图表卡', () => {
-  const spec = { source: 'a.db', group: '状态', value: null, agg: 'count' as const, kind: 'bar' as const, label: '' }
+  const spec = { source: 'a.db', group: '状态', value: null, agg: 'count' as const, kind: 'bar' as const, label: '', view: null }
 
   it('按分组计数,降序;同值时按 key 排(顺序必须**确定**,不能每次渲染换位置)', () => {
     const got = computeChartCard(rows, cols, spec, [], kindOf)
@@ -129,6 +129,75 @@ describe('图表卡', () => {
 
   it('找不到分组列 → 给出错误而不是空图', () => {
     expect(computeChartCard(rows, cols, { ...spec, group: '不存在' }, [], kindOf).error).toContain('不存在')
+  })
+})
+
+describe('卡绑视图(view:):数据源先过该视图的 filters/filterMode', () => {
+  const views: DbView[] = [
+    { id: 'v1', name: '表格', type: 'table' },
+    { id: 'v2', name: '进行中', type: 'table', filters: [{ colId: 'c1', op: 'eq', value: '进行中' }] },
+    // or 判别:两条互斥 eq 条件 —— or 放行全部 4 行,and 一行都不剩(只有 mode 真传到才分得开)
+    { id: 'v3', name: '任一', type: 'table', filterMode: 'or', filters: [{ colId: 'c1', op: 'eq', value: '进行中' }, { colId: 'c1', op: 'eq', value: '已完成' }] },
+    { id: 'v4', name: '都要', type: 'table', filters: [{ colId: 'c1', op: 'eq', value: '进行中' }, { colId: 'c1', op: 'eq', value: '已完成' }] },
+  ]
+  const sumSpec = { source: 'a.db', col: '金额', stat: 'sum', label: '', unit: '', literal: null, view: null }
+  const rowSpec = { source: 'a.db', col: null, stat: STAT_ROWS, label: '', unit: '', literal: null, view: null }
+
+  it('parse:view: 进 spec(掐空白);缺 = null', () => {
+    const r = parseStatSpec({ source: 'a.db', view: ' 进行中 ' })
+    expect(r.ok && r.spec.view).toBe('进行中')
+    const none = parseStatSpec({ source: 'a.db' })
+    expect(none.ok && none.spec.view).toBe(null)
+    const c = parseChartSpec({ source: 'a.db', group: '状态', view: 'v2' })
+    expect(c.ok && c.spec.view).toBe('v2')
+  })
+
+  it('按名字找,id 兜底;找不到 null', () => {
+    expect(viewByName(views, '进行中')?.id).toBe('v2')
+    expect(viewByName(views, 'v2')?.id).toBe('v2')
+    expect(viewByName(views, '不存在')).toBe(null)
+    expect(viewByName(undefined, '进行中')).toBe(null)
+  })
+
+  it('数字卡真的过了视图筛选(负对照:不绑是 4/350)', () => {
+    expect(computeStatCard(rows, cols, rowSpec, [], kindOf, views).text).toBe('4')
+    expect(computeStatCard(rows, cols, { ...rowSpec, view: '进行中' }, [], kindOf, views).text).toBe('2')
+    expect(computeStatCard(rows, cols, { ...sumSpec, view: '进行中' }, [], kindOf, views).text).toBe('300')
+    expect(computeStatCard(rows, cols, { ...sumSpec, view: 'v2' }, [], kindOf, views).text).toBe('300') // id 兜底同样生效
+  })
+
+  it('视图的 filterMode 真传到了 applyFilters(or 放行 4 行;同条件 and 是 0 行)', () => {
+    expect(computeStatCard(rows, cols, { ...rowSpec, view: '任一' }, [], kindOf, views).text).toBe('4')
+    expect(computeStatCard(rows, cols, { ...rowSpec, view: '都要' }, [], kindOf, views).text).toBe('0')
+    expect(scopeByView(rows, views, '任一', kindOf).rows.length).toBe(4)
+  })
+
+  it('视图筛选与页面级筛选叠加(交集,页面级不被视图的 or 吃掉)', () => {
+    // 视图 or(全放行)+ 页面级 状态=已完成 → 只剩 2 行;若两组条件被合成一个 or 数组,页面级就失效成 4
+    const pageDone: DashFilter[] = [{ prop: '状态', op: 'eq', value: '已完成' }]
+    expect(computeStatCard(rows, cols, { ...rowSpec, view: '任一' }, pageDone, kindOf, views).text).toBe('2')
+    // 视图 进行中 + 页面级 负责人=甲 → r1 一行
+    const owner: DashFilter[] = [{ prop: '负责人', op: 'eq', value: '甲' }]
+    expect(computeStatCard(rows, cols, { ...sumSpec, view: '进行中' }, owner, kindOf, views).text).toBe('100')
+  })
+
+  it('⚠️找不到视图 = 报错,绝不静默回退到全表', () => {
+    const got = computeStatCard(rows, cols, { ...rowSpec, view: '不存在' }, [], kindOf, views)
+    expect(got.error).toContain('不存在')
+    expect(got.text).toBe('–')
+    expect(got.rows).not.toBe(4)
+    // 渲染端没传 views(旧调用面)而围栏写了 view: → 同样报错而不是全表
+    expect(computeStatCard(rows, cols, { ...rowSpec, view: '进行中' }, [], kindOf).error).toBeTruthy()
+    expect(scopeByView(rows, views, '不存在', kindOf).error).toBeTruthy()
+  })
+
+  it('图表卡同款:先过视图筛选;找不到视图给 error', () => {
+    const spec = { source: 'a.db', group: '状态', value: null, agg: 'count' as const, kind: 'bar' as const, label: '', view: '进行中' }
+    expect(computeChartCard(rows, cols, spec, [], kindOf, views).slices).toEqual([{ key: '进行中', value: 2 }])
+    expect(computeChartCard(rows, cols, { ...spec, view: null }, [], kindOf, views).slices.length).toBe(2)
+    const bad = computeChartCard(rows, cols, { ...spec, view: '不存在' }, [], kindOf, views)
+    expect(bad.error).toContain('不存在')
+    expect(bad.slices).toEqual([])
   })
 })
 

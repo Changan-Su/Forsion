@@ -3,7 +3,7 @@
  * set 一次 state,裸转发订阅等于把每个订阅了 ctx.tangu 的插件按帧敲一遍(浮层类插件当场掉帧)。
  * 这是本次唯一没有别的仪器覆盖的宿主逻辑:e2e 里插件用的是台架假探针,绕开了这一层。
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useSpaceStore } from '@lcl/engine'
 import { installTanguProbe } from './tanguProbe'
 import { readTangu } from './amadeus/plugins/tanguSeam'
@@ -147,6 +147,75 @@ describe('ctx.tangu 探针', () => {
     off()
     useApp.setState({ newChatModel: 'm10' })
     useSpaceStore.setState({ activeSpaceId: 'amadeus' })
+    expect(n).toBe(2)
+  })
+})
+
+describe('waitBackend(ctx.automation 的后端等待)', () => {
+  // 判据是 cfgLoaded && connState==='ok',不是「cfg 对象存在」——初值就是个假地址。
+  // 负对照(已实跑红):readyCfg 改成只看 cfgLoaded → 「connState 不是 ok 不 resolve」红。
+  const cfg = { backendUrl: 'http://t', token: 'tok', modelId: '' }
+  it('已就绪即刻 resolve 当前 cfg', async () => {
+    installTanguProbe()
+    useApp.setState({ cfg, cfgLoaded: true, connState: 'ok' } as never)
+    await expect(readTangu()!.waitBackend!(1000)).resolves.toEqual(cfg)
+  })
+  it('未就绪则等到就绪;connState 不是 ok 不算就绪;调用时才读 store', async () => {
+    vi.useFakeTimers()
+    try {
+      installTanguProbe()
+      useApp.setState({ cfg: { ...cfg, token: '' }, cfgLoaded: false, connState: 'idle' } as never)
+      let got: unknown = 'pending'
+      const p = readTangu()!.waitBackend!(60_000).then((v) => { got = v })
+      await vi.advanceTimersByTimeAsync(1000)
+      useApp.setState({ cfgLoaded: true, connState: 'err', cfg } as never)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(got).toBe('pending')
+      useApp.setState({ connState: 'ok' } as never)
+      await p
+      expect(got).toEqual(cfg)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('超时给 null,不抛', async () => {
+    vi.useFakeTimers()
+    try {
+      installTanguProbe()
+      useApp.setState({ cfgLoaded: false, connState: 'idle' } as never)
+      const p = readTangu()!.waitBackend!(500)
+      await vi.advanceTimersByTimeAsync(500)
+      await expect(p).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('subscribeReady(宿主重放 ensure 的边沿)', () => {
+  // 判据与 waitBackend 共用 readyCfg。负对照(已实跑红):subscribeReady 改成「就绪即回调」(去掉 !last)→ 「已就绪重复 set 不响」红。
+  const cfg = { backendUrl: 'http://t', token: 'tok', modelId: '' }
+  it('只在 !ok→ok 边沿响一次;订阅时已就绪不补发;ok 期间无关 set 不响;err→ok 再响;退订后不响', () => {
+    installTanguProbe()
+    useApp.setState({ cfg, cfgLoaded: true, connState: 'ok' } as never)
+    let n = 0
+    const off = readTangu()!.subscribeReady!(() => { n++ })
+    expect(n).toBe(0)
+    useApp.setState({ toastMsg: 'x' } as never)
+    useApp.setState({ connState: 'ok' } as never)
+    expect(n).toBe(0)
+    useApp.setState({ connState: 'err' } as never)
+    expect(n).toBe(0)
+    useApp.setState({ connState: 'ok' } as never)
+    expect(n).toBe(1)
+    useApp.setState({ connState: 'idle' } as never)
+    useApp.setState({ cfgLoaded: false, connState: 'ok' } as never) // cfg 没回填不算就绪
+    expect(n).toBe(1)
+    useApp.setState({ cfgLoaded: true } as never)
+    expect(n).toBe(2)
+    off()
+    useApp.setState({ connState: 'err' } as never)
+    useApp.setState({ connState: 'ok' } as never)
     expect(n).toBe(2)
   })
 })

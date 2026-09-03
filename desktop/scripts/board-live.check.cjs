@@ -68,7 +68,7 @@ async function probes(p, pts) {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1000, height: 760 }, deviceScaleFactor: 1 })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 760 }, deviceScaleFactor: 1 })
   p.on('pageerror', (e) => console.log('  [pageerror]', e.message))
   await p.goto(`${BASE}?board`)
   await p.waitForSelector('.excalidraw canvas.excalidraw__canvas.interactive', { timeout: 20000 })

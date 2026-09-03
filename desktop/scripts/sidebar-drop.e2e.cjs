@@ -118,6 +118,17 @@ async function main() {
     console.error('缺 out/main/main.js —— 先跑 npm run build')
     process.exit(1)
   }
+
+  /** 工作区 sub list 已改为下拉菜单；按第几个工作区面板选中精确档位。 */
+  const selectWorkspaceMode = async (win, index, modeId) => {
+    const picker = win.locator('.t2sw-mode-picker').nth(index)
+    const item = picker.locator(`[data-workspace-mode="${modeId}"]`)
+    // 前序拖放可能让菜单保留在展开态；只在目标项不可见时打开，避免反手把已开的菜单关掉。
+    if (!(await item.isVisible().catch(() => false))) {
+      await picker.locator('.t2sw-mode-trigger').click({ timeout: 10_000 })
+    }
+    await item.click({ timeout: 10_000 })
+  }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-sbdrop-'))
   const userData = path.join(home, 'userdata')
   const vault = path.join(home, 'Vault')
@@ -146,7 +157,7 @@ async function main() {
   let app
   try {
     app = await electron.launch({
-      args: [`--user-data-dir=${userData}`, ROOT],
+      args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
     })
@@ -225,7 +236,7 @@ async function main() {
 
     // ── 6 文件档:拖到**文件行** → 落进它所在的目录(此前文件行不是落区,会一路冒泡到工作区根)──
     // 编辑器开着时,库本身就是文件面板里的一个工作区(WorkspaceView.FilesBody 的 vaultCtx 合并)。
-    await win.locator('.t2sw-seg', { hasText: '文件' }).first().click({ timeout: 10_000 })
+    await selectWorkspaceMode(win, 0, 'files')
     await win.waitForTimeout(1500)
     // 逐层展开:工作区头 → 子文件夹(懒加载,各等一拍)
     // 工作区头是 .t2s-group(与笔记树同构),其下的目录行才是 .t2sf-row —— 逐层展开各等一拍(懒加载)。
@@ -275,7 +286,7 @@ async function main() {
         && viewsSrc.includes("effectAllowed = 'copyMove'"),
       'FilesPanel / RightPanel / 笔记树行拖三处')
     // 复合笔记的行拖要把自己的 .fd 一起带上,否则子笔记会被落下(9 的前置)。
-    await win.locator('.t2sw-seg', { hasText: '笔记' }).last().click({ timeout: 10_000 })
+    await selectWorkspaceMode(win, (await win.locator('.t2sw-mode-picker').count()) - 1, 'notes')
     await win.waitForTimeout(1500)
     const noteSrc = await win.evaluate(DRAG_START, { sel: '.t2s-srow', rowText: '合并', pathsMime: PATHS_MIME })
     check('8b 笔记树的行拖:复合笔记连自己的 .fd 一起带走',
@@ -283,7 +294,7 @@ async function main() {
       JSON.stringify(noteSrc))
 
     // ── 9 复合笔记落进**已有同名 .md** 的目录:两半必须拿同一个 stem ────────────────
-    await win.locator('.t2sw-seg', { hasText: '文件' }).first().click({ timeout: 10_000 })
+    await selectWorkspaceMode(win, 0, 'files')
     await win.waitForTimeout(1500)
     await expandUntil('.t2s-group:has-text("Vault") .t2s-group-toggle', '.t2sf-row')
     const d9 = await win.evaluate(DROP_STAGED, { sel: '.t2sf-row:not(.t2sf-file)', rowText: '子文件夹' })
@@ -298,6 +309,10 @@ async function main() {
       fs.readFileSync(path.join(sub, '合并.md'), 'utf8').includes('目标里本来就有'),
       '被覆盖 = 用户的文件被拖拽吃掉了')
 
+    // 交付截图顺带覆盖新的 sub list 下拉展开态：菜单应叠在列表上方，不把工作区 body 顶下去。
+    await win.locator('.t2sw-mode-picker').first().locator('.t2sw-mode-trigger').click({ timeout: 10_000 })
+    await win.locator('.t2sw-mode-menu').first().waitFor({ state: 'visible', timeout: 10_000 })
+    await win.waitForTimeout(280) // 等 220ms 弹性展开结束；中途截图会把整张菜单连文字一起拍成半透明
     await win.screenshot({ path: shot })
     console.log(`\n截图:${shot}`)
   } finally {

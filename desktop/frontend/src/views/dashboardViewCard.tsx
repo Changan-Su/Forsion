@@ -10,6 +10,12 @@ import { setActivePageScope, useScopedPageStore } from '@amadeus/store/pageStore
 import { useDbStore } from '@amadeus/store/dbStore'
 import { dbId, viewsOf, type DbView } from '@amadeus-shared/db/schema'
 import { widgetSource } from '@amadeus-shared/dashboard'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'viewcard.missingType': { zh: '卡片源码里缺 `type:`(视图注册键)', en: 'The card source is missing `type:` (the view registration key)' },
+  'viewcard.unavailable': { zh: '视图「{type}」不可用 —— 可能来自未启用的插件', en: 'View "{type}" is unavailable — it may come from a plugin that is not enabled' },
+})
 
 /** 视图卡片:把**任意已注册视图**(日历 / 待办 / 收件箱 / 活动日志 / 插件视图……)活化在格子里。
  *  卡片源码 = ```view 围栏,`type:` 记注册键,其余键即该视图的 params。
@@ -29,6 +35,7 @@ export function ViewCard({ dashLeafId, dashPath, blockId, opts, size, onClose }:
   onClose: () => void
 }) {
   const store = useScopedPageStore()
+  const { t } = useI18n()
   const type = opts.type ?? ''
   const [, force] = useState(0)
   // 插件视图可能晚于本卡片注册(插件在运行期 registerView)→ 订阅注册表,否则永远停在「不可用」。
@@ -65,9 +72,9 @@ export function ViewCard({ dashLeafId, dashPath, blockId, opts, size, onClose }:
     close: () => closeRef.current(),
   }), [dashLeafId, dashPath, blockId, type, params, store])
 
-  if (!type) return <div className="dash-widget"><div className="dash-widget-note">卡片源码里缺 `type:`(视图注册键)</div></div>
+  if (!type) return <div className="dash-widget"><div className="dash-widget-note">{t('viewcard.missingType')}</div></div>
   const def = getView(type)
-  if (!def) return <div className="dash-widget"><div className="dash-widget-note">视图「{type}」不可用 —— 可能来自未启用的插件</div></div>
+  if (!def) return <div className="dash-widget"><div className="dash-widget-note">{t('viewcard.unavailable', { type })}</div></div>
   const cardSize = size ?? def.dashboard?.defaultSize ?? 'lg'
   const body = def.dashboard?.factory
     ? def.dashboard.factory({ leaf, params }, { size: cardSize })

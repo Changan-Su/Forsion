@@ -992,6 +992,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return filePath
   })
 
+  // 导出 CSV(多维表当前视图):文本已由渲染层算好(含 BOM),这里只负责保存对话框 + 落盘。
+  // ⚠️ 落点是**用户自己选的路径**,不经 vault —— 所以不走 vault.writeTextFile 那套(它会钳到库内)。
+  handle(IPC.exportCsv, async (_e, defaultName: string, csv: string) => {
+    const win = getWindow()
+    if (!win) return null
+    const safe = (defaultName || 'database').replace(/[\\/:*?"<>|]/g, ' ').trim() || 'database'
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      defaultPath: `${safe}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+    })
+    if (canceled || !filePath) return null
+    await fs.writeFile(filePath, typeof csv === 'string' ? csv : '', 'utf8')
+    shell.showItemInFolder(filePath)
+    return filePath
+  })
+
   // Database(.db JSON):read 按 ref 解析(与附件同一 basename 语义),write 按 read 返回的精确相对路径。
   handle(IPC.dbRead, async (_e, pagePath: string, ref: string): Promise<DbReadResult> => {
     const abs = await vault.resolveAttachment(pagePath, ref)

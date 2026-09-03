@@ -5,6 +5,20 @@
 import { useState } from 'react'
 import { create } from 'zustand'
 import { useEscape } from './Dialogs'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'delassets.blockTitle': { zh: '引用块已删除', en: 'Reference block deleted' },
+  'delassets.noteTitle': { zh: '删除「{name}」', en: 'Delete "{name}"' },
+  'delassets.blockMsg': { zh: '这 {n} 个文件只被这条笔记引用，要一并从磁盘删除吗？', en: 'These {n} files are only referenced by this note. Delete them from disk too?' },
+  'delassets.noteMsg': { zh: '有 {n} 个附件只被这条笔记引用，要一并删除吗？', en: '{n} attachments are only referenced by this note. Delete them too?' },
+  'delassets.more': { zh: '…还有 {n} 个', en: '…and {n} more' },
+  'delassets.remember': { zh: '下次不再问（设置→笔记可改回）', en: "Don't ask again (change it back in Settings → Notes)" },
+  'delassets.keepFiles': { zh: '保留文件', en: 'Keep files' },
+  'delassets.cancel': { zh: '取消', en: 'Cancel' },
+  'delassets.noteOnly': { zh: '只删笔记', en: 'Delete note only' },
+  'delassets.deleteAll': { zh: '一并删除', en: 'Delete them too' },
+})
 
 export type DeleteAssetsChoice = 'with' | 'only' | null
 
@@ -61,6 +75,7 @@ export function DeleteAssetsHost() {
 }
 
 function Dialog({ req }: { req: Req }) {
+  const { t } = useI18n()
   const [remember, setRemember] = useState(false)
   const settle = (v: DeleteAssetsChoice): void => {
     if (useStore.getState().req !== req) return
@@ -73,32 +88,32 @@ function Dialog({ req }: { req: Req }) {
   return (
     <div className="dialog-overlay" onMouseDown={() => settle(null)}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="dialog-title">{req.block ? '引用块已删除' : `删除「${req.note}」`}</div>
+        <div className="dialog-title">{req.block ? t('delassets.blockTitle') : t('delassets.noteTitle', { name: req.note })}</div>
         <div className="dialog-msg">
           {req.block
-            ? `这 ${req.assets.length} 个文件只被这条笔记引用，要一并从磁盘删除吗？`
-            : `有 ${req.assets.length} 个附件只被这条笔记引用，要一并删除吗？`}
+            ? t('delassets.blockMsg', { n: req.assets.length })
+            : t('delassets.noteMsg', { n: req.assets.length })}
           <ul style={{ margin: '6px 0 0', paddingLeft: 18, opacity: 0.8 }}>
             {shown.map((a) => <li key={a}>{a}</li>)}
-            {req.assets.length > shown.length && <li>…还有 {req.assets.length - shown.length} 个</li>}
+            {req.assets.length > shown.length && <li>{t('delassets.more', { n: req.assets.length - shown.length })}</li>}
           </ul>
         </div>
         {!req.block && (
           <label className="inline-check" style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 10 }}>
             <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-            下次不再问（设置→笔记可改回）
+            {t('delassets.remember')}
           </label>
         )}
         <div className="dialog-actions">
           {req.block
-            ? <button className="dialog-btn" autoFocus onClick={() => settle('only')}>保留文件</button>
+            ? <button className="dialog-btn" autoFocus onClick={() => settle('only')}>{t('delassets.keepFiles')}</button>
             : (
               <>
-                <button className="dialog-btn" onClick={() => settle(null)}>取消</button>
-                <button className="dialog-btn" onClick={() => settle('only')}>只删笔记</button>
+                <button className="dialog-btn" onClick={() => settle(null)}>{t('delassets.cancel')}</button>
+                <button className="dialog-btn" onClick={() => settle('only')}>{t('delassets.noteOnly')}</button>
               </>
             )}
-          <button className="dialog-btn" data-danger autoFocus={!req.block} onClick={() => settle('with')}>一并删除</button>
+          <button className="dialog-btn" data-danger autoFocus={!req.block} onClick={() => settle('with')}>{t('delassets.deleteAll')}</button>
         </div>
       </div>
     </div>

@@ -12,6 +12,11 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'listfold.expandChildren': { zh: '展开子项', en: 'Expand children' },
+})
 
 interface ListFoldState {
   folded: number[]
@@ -47,7 +52,10 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           b.className = 'amx-fold-caret'
           b.textContent = '▸'
           b.contentEditable = 'false'
-          b.title = '展开子项 / Expand children'
+          b.title = translate('listfold.expandChildren')
+          // widget 带 key,装饰重建时 DOM 会被复用 —— 切语言不会重造这颗按钮,
+          // 所以在 hover(tooltip 真正要显示的那一刻)重取一次文案。
+          b.addEventListener('mouseenter', () => { b.title = translate('listfold.expandChildren') })
           b.addEventListener('mousedown', (e) => {
             e.preventDefault()
             e.stopPropagation()

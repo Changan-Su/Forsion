@@ -96,7 +96,7 @@ const stubClipboard = (p) =>
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const open = async (query, ready) => {
-    const p = await browser.newPage({ viewport: { width: 900, height: 700 } })
+    const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 700 } })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?${query}`, { waitUntil: 'domcontentloaded' })
     await p.waitForSelector(ready, { timeout: 20000 })

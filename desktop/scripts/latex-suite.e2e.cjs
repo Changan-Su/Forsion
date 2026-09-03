@@ -52,7 +52,7 @@ async function main() {
   const code = fs.readFileSync(mainJs, 'utf8')
 
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.goto(URL, { waitUntil: 'domcontentloaded' })

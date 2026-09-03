@@ -12,6 +12,11 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'headfold.expandSection': { zh: '展开小节', en: 'Expand section' },
+})
 
 interface FoldState {
   folded: number[]
@@ -92,7 +97,7 @@ function build(doc: ProseNode, folded: number[]): DecorationSet {
           b.className = 'amx-fold-caret'
           b.textContent = '▸'
           b.contentEditable = 'false'
-          b.title = '展开小节 / Expand section'
+          b.title = translate('headfold.expandSection')
           b.addEventListener('mousedown', (e) => {
             e.preventDefault()
             e.stopPropagation()

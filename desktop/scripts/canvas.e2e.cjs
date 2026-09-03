@@ -80,7 +80,7 @@ async function main() {
     if (!up) { console.error('vite 没起来(5173 被占用或 vite.config 有问题)'); vite.kill(); process.exit(1) }
   }
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 860 } })
   const errors = []
   page.on('pageerror', (e) => errors.push(String(e)))
   try {

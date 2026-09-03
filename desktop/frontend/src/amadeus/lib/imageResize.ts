@@ -8,6 +8,12 @@
  *  别退回 `zoomOf()` —— currentCSSZoom **不含 transform**,画布 z=0.5 时拖 60px 只加 60 布局 px
  *  (该加 120),把手跟不上指针、写进 md 的宽度也是错的(Codex 评审实证)。 */
 
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'imgresize.dragWidth': { zh: '拖动调整宽度', en: 'Drag to resize' },
+})
+
 /** 再窄就抓不住把手了。 */
 export const MIN_IMG_WIDTH = 40
 
@@ -20,7 +26,7 @@ export function attachResizeHandle(
   const h = document.createElement('span')
   h.className = 'amx-img-resize'
   h.contentEditable = 'false'
-  h.title = '拖动调整宽度'
+  h.title = translate('imgresize.dragWidth')
   let active = false
   let startX = 0
   let startW = 0

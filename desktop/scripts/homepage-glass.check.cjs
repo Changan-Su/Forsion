@@ -62,7 +62,7 @@ async function main() {
   ] })
   try {
     app = await electron.launch({
-      args: [`--user-data-dir=${path.join(testHome, 'userdata')}`, ROOT], cwd: ROOT,
+      args: [`--user-data-dir=${path.join(testHome, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: testHome, TANGU_BACKEND_URL: stub.url },
     })
     const win = await app.firstWindow()

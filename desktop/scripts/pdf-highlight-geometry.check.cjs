@@ -271,7 +271,7 @@ const HTML = (pdfCss, ourCss) => `<!doctype html><html><head><meta charset="utf-
   const port = server.address().port
 
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1000, height: 900 }, deviceScaleFactor: 1 })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 900 }, deviceScaleFactor: 1 })
   page.on('pageerror', (e) => console.log('  [page error]', e.message))
   await page.goto(`http://127.0.0.1:${port}/`)
   if (process.env.DBG) await page.evaluate(() => { window.__debug = true })

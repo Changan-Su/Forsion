@@ -3,6 +3,18 @@ import { webviewUrlAllowed } from '@amadeus-shared/dashboard'
 import { Webview } from '../../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../../shared/browser'
 import { BookmarkCard, VideoIframe, youtubeId, bilibiliRef } from './BookmarkCard'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'webembed.blocked': { zh: '已拦截:网页嵌入只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。', en: 'Blocked: web embeds only allow public http(s) addresses — file/data/javascript, localhost and private networks are rejected.' },
+  'webembed.toCard': { zh: '转为书签卡', en: 'Convert to bookmark card' },
+  'webembed.toCardTitle': { zh: '改回裸 URL 一行(书签卡)', en: 'Turn it back into a plain URL line (bookmark card)' },
+  'webembed.unsupported': { zh: '此端不支持内嵌网页，已降级为书签卡。', en: 'Embedded web pages are not supported here, so this fell back to a bookmark card.' },
+  'webembed.wake': { zh: '▶ 唤醒网页', en: '▶ Wake page' },
+  'webembed.pausedNote': { zh: '编辑本段时会自动暂停', en: 'Pauses automatically while you edit this paragraph' },
+  'webembed.freeze': { zh: '⏸ 冻结', en: '⏸ Freeze' },
+  'webembed.openExternal': { zh: '在浏览器打开 ↗', en: 'Open in browser ↗' },
+})
 
 /** 网页嵌入 `![[https://…]]` —— **默认冻结**(封面卡),点「唤醒」才挂 <webview>。
  *
@@ -16,6 +28,7 @@ import { BookmarkCard, VideoIframe, youtubeId, bilibiliRef } from './BookmarkCar
  *  (YouTube / B 站)走下面那道分流去 `VideoIframe`。 */
 export function WebEmbed({ url, toCard }: { url: string; toCard: () => void }): ReactElement {
   const [live, setLive] = useState(false)
+  const { t } = useI18n()
   // 视频平台分流放在**最前**:iframe 播放器不需要 <webview>,web/移动端同样能放
   //(2026-08-29 起裸 URL 只渲书签卡,播放器只在这条嵌入形态上出现)。
   if (youtubeId(url) || bilibiliRef(url)) return <VideoIframe url={url} toCard={toCard} />
@@ -24,9 +37,9 @@ export function WebEmbed({ url, toCard }: { url: string; toCard: () => void }): 
   if (!webviewUrlAllowed(url)) {
     return (
       <div className="amx-web amx-web-blocked">
-        <div className="amx-web-note">已拦截:网页嵌入只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。</div>
+        <div className="amx-web-note">{t('webembed.blocked')}</div>
         <code className="amx-web-url">{url.slice(0, 160)}</code>
-        <button className="embed-media-btn" onClick={toCard}>转为书签卡</button>
+        <button className="embed-media-btn" onClick={toCard}>{t('webembed.toCard')}</button>
       </div>
     )
   }
@@ -35,7 +48,7 @@ export function WebEmbed({ url, toCard }: { url: string; toCard: () => void }): 
     return (
       <div className="amx-web amx-web-degraded">
         <BookmarkCard url={url} />
-        <div className="amx-web-note">此端不支持内嵌网页，已降级为书签卡。</div>
+        <div className="amx-web-note">{t('webembed.unsupported')}</div>
       </div>
     )
   }
@@ -44,9 +57,9 @@ export function WebEmbed({ url, toCard }: { url: string; toCard: () => void }): 
       <div className="amx-web amx-web-frozen">
         <BookmarkCard url={url} />
         <div className="amx-web-foot">
-          <button className="embed-media-btn" onClick={() => setLive(true)}>▶ 唤醒网页</button>
-          <span className="amx-web-note">编辑本段时会自动暂停</span>
-          <button className="embed-media-btn" onClick={toCard} title="改回裸 URL 一行(书签卡)">转为书签卡</button>
+          <button className="embed-media-btn" onClick={() => setLive(true)}>{t('webembed.wake')}</button>
+          <span className="amx-web-note">{t('webembed.pausedNote')}</span>
+          <button className="embed-media-btn" onClick={toCard} title={t('webembed.toCardTitle')}>{t('webembed.toCard')}</button>
         </div>
       </div>
     )
@@ -57,8 +70,8 @@ export function WebEmbed({ url, toCard }: { url: string; toCard: () => void }): 
     <div className="amx-web amx-web-live">
       <div className="amx-web-bar">
         <span className="amx-web-host">{hostOf(url)}</span>
-        <button className="embed-media-btn" onClick={() => setLive(false)}>⏸ 冻结</button>
-        <button className="embed-media-btn" onClick={() => void window.tangu?.openExternal?.(url)}>在浏览器打开 ↗</button>
+        <button className="embed-media-btn" onClick={() => setLive(false)}>{t('webembed.freeze')}</button>
+        <button className="embed-media-btn" onClick={() => void window.tangu?.openExternal?.(url)}>{t('webembed.openExternal')}</button>
       </div>
       <Webview src={url} partition={BROWSER_PARTITION} className="amx-web-view" />
     </div>

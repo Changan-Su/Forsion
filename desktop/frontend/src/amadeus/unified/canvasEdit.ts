@@ -7,6 +7,14 @@
 // 元素」明令禁止的那件事,而且**静默**(界面上一切照常,只有文件被削了)。
 // 所以这里全部签名吃 `unknown[]` 吐 `unknown[]`:认不出的条目原位留着,只有被点名的那一条
 // 按键 patch。仪器 C19 直接钉这条(移动带未知字段的形状后,`"note"` 与顶层 `futureKey` 逐字还在)。
+import { registerMessages, translate } from '../../i18n'
+
+/** ⚠️ 这里只有**一条**文案:新建文本元素的缺省内容。它是**用户内容**(建完立刻可改),不是标识符 ——
+ *  全仓无任何一处拿它做等值比较(读侧只把 `text` 原样渲染/落盘),所以换语言不改变任何判定。 */
+registerMessages({
+  'canvasedit.textDefault': { zh: '文本', en: 'Text' },
+})
+
 export type RawEl = Record<string, unknown>
 
 /** 条目 id(对象 + 非空字符串 id 才算);认不出 → null,调用方一律「跳过但保留」。 */
@@ -99,7 +107,8 @@ export function newShapeBox(id: string, kind: ShapeKind, b: { x: number; y: numb
     y: Math.round(b.y),
     w: Math.round(b.w),
     h: Math.round(b.h),
-    ...(kind === 'text' ? { text: '文本' } : {}),
+    // 建的那一刻现取(函数体内 → 随语言走);写进盘的是当时的字面内容,与用户手打的等价。
+    ...(kind === 'text' ? { text: translate('canvasedit.textDefault') } : {}),
   }
 }
 

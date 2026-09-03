@@ -25,7 +25,7 @@ const record = (name, ok, detail) => {
 }
 
 async function fresh(browser) {
-  const p = await browser.newPage()
+  const p = await browser.newPage({ locale: 'zh-CN' })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded' })
   await p.waitForSelector(PM, { timeout: 20000 })
@@ -105,7 +105,7 @@ async function main() {
   {
     const fm = '---\nicon: "📘"\ncover: assets/x.png\ntags:\n  - alpha\n---\n'
     const seed = `${fm}# 有fm标题\n\n首段。\n`
-    const p5p = await browser.newPage()
+    const p5p = await browser.newPage({ locale: 'zh-CN' })
     p5p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p5p.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await p5p.waitForSelector(PM, { timeout: 20000 })
@@ -141,7 +141,7 @@ async function main() {
     )
 
     // P6:chrome 写 fm(设图标)→ 立即落盘,fm 增 icon 键、正文原样。
-    const p6p = await browser.newPage()
+    const p6p = await browser.newPage({ locale: 'zh-CN' })
     await p6p.goto(`${URL}?upage&useed=${encodeURIComponent('# 素文件\n\n正文。\n')}`, { waitUntil: 'domcontentloaded' })
     await p6p.waitForSelector(PM, { timeout: 20000 })
     await p6p.waitForTimeout(300)
@@ -161,7 +161,7 @@ async function main() {
   {
     const seed = '# 标题\n\n段一。\n\n- 列表甲\n- 列表乙\n\n段二。\n'
     const open = async () => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -202,7 +202,7 @@ async function main() {
     )
 
     // 只抵消当前列表自身的 marker gutter；嵌套列表与字面 Tab 段落仍是实际层级，手柄必须右移。
-    const p7c = await browser.newPage()
+    const p7c = await browser.newPage({ locale: 'zh-CN' })
     await p7c.goto(`${URL}?upage&useed=${encodeURIComponent('正文\n\n- 父\n  - 子\n\n\t缩进段\n')}`, { waitUntil: 'domcontentloaded' })
     await p7c.waitForSelector(PM, { timeout: 20000 })
     await p7c.waitForTimeout(300)
@@ -350,7 +350,7 @@ async function main() {
   //  c code_block 内 Tab=插两空格  d 无处可缩 Tab=吞掉(焦点绝不放走)
   {
     const seed = '- 甲\n- 乙\n\n尾段。\n\n```\nline\n```\n\n孤段。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -449,7 +449,7 @@ async function main() {
   //        Mod+Backspace     → 一步归零
   //        列表里            → 一格都不受影响(反向断言:防这层截胡 list 的 lift/split 语义)
   {
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent('甲段。\n\n乙段。\n')}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -547,7 +547,7 @@ async function main() {
 
   // K14:列表里一格都不受影响 —— 缩进层截胡 list 语义是这轮最可能的回归面,单开一页反向断言。
   {
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent('- 甲\n- 乙\n')}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -594,7 +594,7 @@ async function main() {
   //  b 方向键进嵌入段 → 装饰让位露源码(编辑入口)  c Esc 块选中 + Delete 删嵌入 + 撤销还原
   {
     const seed = '首段。\n\nhttps://example.com/x\n\n![[不存在的笔记]]\n\n尾段。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -646,7 +646,7 @@ async function main() {
   {
     // ⚠️ 首块不能放嵌入:挂载时光标就在首块,装饰会让位露源码(那是编辑入口,不是 bug)。
     const seed = '首段。\n\n![[某笔记.md]]\n\n![[子夹/另一篇.md]]\n\n![[图.excalidraw.md]]\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -698,7 +698,7 @@ async function main() {
   // unified 首版漏带 v3 的 grow → 长文尾部被裁掉且滚不到,「粘贴图片后源码后面的内容不显示」)。
   {
     const seed = Array.from({ length: 60 }, (_, i) => `长文段${i + 1}。`).join('\n\n') + '\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -747,7 +747,7 @@ async function main() {
   // 同级后文不受累、**零写盘**;折叠标题行首常驻展开钮点击还原。
   {
     const seed = '# 甲\n\n甲一。\n\n## 乙\n\n乙一。\n\n# 丙\n\n丙一。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -832,7 +832,7 @@ async function main() {
       '---', '', '# 顶层甲', '', '顶层甲一。', '', '## 顶层乙', '', '顶层乙一。', '',
       '<!-- a k1 -->', '# 卡内甲', '', '卡内甲一。', '', '## 卡内乙', '', '卡内乙一。', '<!-- /a k1 -->', '',
     ].join('\n')
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -900,7 +900,7 @@ async function main() {
       '---', '', '# 标题甲', '', '<!-- /a kold -->', '', '上面那行是收回卡片留下的惰性锚字面。', '',
       '<!-- a kc -->', '卡内一句。', '<!-- /a kc -->', '',
     ].join('\n')
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -935,7 +935,7 @@ async function main() {
   //  `amadeus:template-picker` 带 v4Path 的宿主路由后移出屏蔽集,见 MarkdownBlock.tsx 那张集合的注释。)
   {
     const seed = '# 标题\n\n首段。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1006,7 +1006,7 @@ async function main() {
   // 计数走 UNIFIED_FIND_ID 单格(flatOrder 恒空,求和法在这里恒 0)。
   {
     const seed = '# 查找页\n\n苹果一号。\n\n香蕉。\n\n苹果二号,苹果三号。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1053,7 +1053,7 @@ async function main() {
   // (选区仍是 TextSelection,删除/复制走原生)。块内选字必须**不受影响**,仍是原生高亮。
   {
     const seed = '甲段落文字。\n\n乙段落文字。\n\n丙段落文字。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1100,7 +1100,7 @@ async function main() {
   // 想全选本段却会把全文一起吞掉(块世界里每块一实例时不存在这问题)。
   {
     const seed = '- 甲项\n- 乙项\n\n尾段。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1135,7 +1135,7 @@ async function main() {
   // `if (unified) return false` 让给了原生 → 键盘搬块在 v4 页面上直接消失,只剩鼠标拖 ⠿。
   {
     const seed = '段甲。\n\n段乙。\n\n段丙。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1162,7 +1162,7 @@ async function main() {
     const b23 = await pg.evaluate((s) =>
       [...document.querySelector(s).querySelectorAll(':scope > p')].map((x) => x.textContent).join('|'), PM)
     // 列表项里搬的是**这一项**,不是整只列表(AFFiNE 项级;爬到顶层会把整个列表搬走)。
-    const pg2 = await browser.newPage()
+    const pg2 = await browser.newPage({ locale: 'zh-CN' })
     pg2.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg2.goto(`${URL}?upage&useed=${encodeURIComponent('- 甲项\n- 乙项\n- 丙项\n\n尾段。\n')}`, { waitUntil: 'domcontentloaded' })
     await pg2.waitForSelector(PM, { timeout: 20000 })
@@ -1194,7 +1194,7 @@ async function main() {
   // 整页一实例后不会再有「序列化→重解析」把它救活);② 选中文字上粘 URL = 加链接不覆盖文字。
   {
     const seed = '正文一段。\n\n关键词在这里。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1250,7 +1250,7 @@ async function main() {
   // 空块;标题报自己的级别;引用/callout 内恒不提示。
   {
     const seed = '首段。\n\n> 引用里\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1297,7 +1297,7 @@ async function main() {
   // 块选区 store —— 单实例里没有块 id 可挂,那条路是死的。
   {
     const seed = '段甲。\n\n段乙。\n\n段丙。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1335,7 +1335,7 @@ async function main() {
   // 与 Mod-Alt-X;下划线(自有 mark)、Mod-Shift-S 删除线、Mod-K 链接三个一直没有键位。
   {
     const seed = '一段可选的文字。\n'
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1364,7 +1364,7 @@ async function main() {
   //  b 标题栏 IME 守卫(拼音选词的 Enter 会当场跳进正文、候选词也丢了;正文侧由 PM 自己挡)
   //  c 标题栏吞 Tab(与 blockLayer「编辑器内按 Tab 绝不把焦点放走」同口径,标题此前漏了)
   {
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent('首段。\n')}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1415,7 +1415,7 @@ async function main() {
   // 这四族此前全部落回 PM base + commonmark preset 的通用实现,不认我们的折叠/callout/嵌入。
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1667,7 +1667,7 @@ async function main() {
   // ── M 系列:块选区能力(仍是原生跨块 TextSelection 模型,不另造选区对象)。────────────
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1833,7 +1833,7 @@ async function main() {
   // ── L 系列:列表项折叠(unified/listFold.ts,与标题小节折叠同一套会话态取舍)。────────
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -1930,7 +1930,7 @@ async function main() {
   // ── D 系列:拖拽落点精细化 + 把手视觉。────────────────────────────────────────
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -2064,7 +2064,7 @@ async function main() {
 
   // ── C 系列(代码块工具条):行号 / 折叠八行 / 语言最近使用。三者都是会话视图态,零写盘。──
   {
-    const pg = await browser.newPage()
+    const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     const code = '```js\n' + Array.from({ length: 12 }, (_, i) => `line${i + 1}`).join('\n') + '\n```\n'
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(code)}`, { waitUntil: 'domcontentloaded' })
@@ -2100,7 +2100,7 @@ async function main() {
   // ── U 系列:粘贴/上传/零散项。────────────────────────────────────────────────
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -2231,7 +2231,7 @@ async function main() {
   // ── N 系列:行内层(链接卡片 / 全覆盖激活态 / 符号键包裹)。──────────────────────
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })
@@ -2321,7 +2321,7 @@ async function main() {
   // ── R 系列:Opus 终审查出的缺陷回归关(每条都对应一个实测触发路径)。────────────────
   {
     const openSeed = async (seed) => {
-      const pg = await browser.newPage()
+      const pg = await browser.newPage({ locale: 'zh-CN' })
       pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
       await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
       await pg.waitForSelector(PM, { timeout: 20000 })

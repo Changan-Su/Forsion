@@ -19,6 +19,30 @@ import { linkTarget, pageKey, resolvePageName } from '@amadeus-shared/links'
 import { fuzzyRank } from '@lcl/engine/fuzzy'
 import { openDb, openDrawing, openFile, openNote, openPdf } from './amadeusNav'
 import { insertTemplate, listTemplates } from './amadeusTemplates'
+import { registerMessages, useI18n } from './i18n'
+
+// ⚠️ `amoverlay.noTemplates` 值里的 {{date}} 之类是**给用户看的模板变量**,不是 i18n 占位符 ——
+//    这条永远不带 vars 调用(interpolate 无 vars 时原样返回);一旦给它传 vars,`{date}` 会被吃掉。
+registerMessages({
+  'amoverlay.newNote': { zh: '创建新笔记', en: 'New note' },
+  'amoverlay.wikiCreateMsg': { zh: '“{name}” 尚不存在。要在 {dest} 创建吗？', en: '“{name}” does not exist yet. Create it at {dest}?' },
+  'amoverlay.create': { zh: '创建', en: 'Create' },
+  'amoverlay.templatePlaceholder': { zh: '选择模板…', en: 'Choose a template…' },
+  'amoverlay.noTemplates': {
+    zh: '还没有模板。把笔记放进 vault 的 templates/ 文件夹即可,支持 {{date}} {{time}} {{title}} 变量。',
+    en: 'No templates yet. Put notes in the templates/ folder of your vault to use them here — the {{date}} {{time}} {{title}} variables are supported.',
+  },
+  'amoverlay.createTemplatesFolder': { zh: '创建 templates 文件夹', en: 'Create templates folder' },
+  'amoverlay.templateCount': { zh: '{n} 个模板', en: '{n} templates' },
+  'amoverlay.switcherPlaceholder': { zh: '跳转到笔记…', en: 'Jump to note…' },
+  'amoverlay.createNamed': { zh: '新建 “{name}”', en: 'Create “{name}”' },
+  'amoverlay.noMatch': { zh: '无匹配笔记', en: 'No matching notes' },
+  'amoverlay.resultCount': { zh: '{n} 项', en: '{n} results' },
+  'amoverlay.footSelect': { zh: '选择', en: 'Select' },
+  'amoverlay.footInsert': { zh: '插入', en: 'Insert' },
+  'amoverlay.footOpen': { zh: '打开', en: 'Open' },
+  'amoverlay.footClose': { zh: '关闭', en: 'Close' },
+})
 
 const baseName = (p: string): string => (p.split(/[\\/]/).pop() ?? p).replace(/\.md$/i, '')
 
@@ -145,6 +169,7 @@ export function AmadeusOverlays() {
  *  .tangu-lovable = 取色桥,少了它弹窗吃到 html 上钉死的 Origin 色(理由见 askString Host 注释)。 */
 function WikiCreateConfirm() {
   const pending = usePageStore((s) => s.pendingWikiCreate)
+  const { t } = useI18n()
   if (!pending) return null
   const dest = /[\\/]/.test(pending.name)
     ? `${pending.name.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\.md$/i, '')}.md`
@@ -154,9 +179,9 @@ function WikiCreateConfirm() {
   return (
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
       <ConfirmDialog
-        title="创建新笔记"
-        message={`“${pending.name}” 尚不存在。要在 ${dest} 创建吗？`}
-        confirmLabel="创建"
+        title={t('amoverlay.newNote')}
+        message={t('amoverlay.wikiCreateMsg', { name: pending.name, dest })}
+        confirmLabel={t('amoverlay.create')}
         danger={false}
         onConfirm={() => void usePageStore.getState().confirmWikiCreate()}
         onClose={() => usePageStore.getState().cancelWikiCreate()}
@@ -169,16 +194,17 @@ function WikiCreateConfirm() {
 function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
   const pages = usePageStore((s) => s.pages)
   const close = useUiOverlay((s) => s.close)
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   void pages // 订阅 pages 让「创建模板文件夹」后列表随结构刷新
 
   const templates = fuzzyRank(query, listTemplates(), (p) => pageKey(p))
   const choose = (i: number): void => {
-    const t = templates[i]
+    const tpl = templates[i] // ⚠️ 别叫 `t`:会遮住上面 useI18n 的翻译函数
     close()
     // 模板可能在列表刷新前被删(readPage 只读、缺文件即抛)——吞掉即可,不留幽灵文件。
-    if (t) insertTemplate(t, ctx).catch(() => { /* ignore */ })
+    if (tpl) insertTemplate(tpl, ctx).catch(() => { /* ignore */ })
   }
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, templates.length - 1)) }
@@ -193,7 +219,7 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
         <input
           className="cmd-input"
           autoFocus
-          placeholder="选择模板…"
+          placeholder={t('amoverlay.templatePlaceholder')}
           value={query}
           onChange={(e) => { setQuery(e.target.value); setActive(0) }}
           onKeyDown={onKeyDown}
@@ -209,18 +235,18 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
           ))}
           {templates.length === 0 && (
             <div className="cmd-empty">
-              还没有模板。把笔记放进 vault 的 templates/ 文件夹即可,支持 {'{{date}} {{time}} {{title}}'} 变量。
+              {t('amoverlay.noTemplates')}
               <div style={{ marginTop: 10 }}>
                 <button className="btn ghost sm" onClick={() => { void usePageStore.getState().createFolder('', 'templates'); close() }}>
-                  创建 templates 文件夹
+                  {t('amoverlay.createTemplatesFolder')}
                 </button>
               </div>
             </div>
           )}
         </div>
         <div className="cmd-foot">
-          <span><kbd>↑↓</kbd> 选择 <kbd>↵</kbd> 插入 <kbd>esc</kbd> 关闭</span>
-          <span className="cmd-foot-count">{templates.length} 个模板</span>
+          <span><kbd>↑↓</kbd> {t('amoverlay.footSelect')} <kbd>↵</kbd> {t('amoverlay.footInsert')} <kbd>esc</kbd> {t('amoverlay.footClose')}</span>
+          <span className="cmd-foot-count">{t('amoverlay.templateCount', { n: templates.length })}</span>
         </div>
       </div>
     </div>
@@ -231,6 +257,7 @@ function TemplatePicker({ ctx }: { ctx: TemplateCtx }) {
 function QuickSwitcher() {
   const pages = usePageStore((s) => s.pages)
   const close = useUiOverlay((s) => s.close)
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
 
@@ -259,7 +286,7 @@ function QuickSwitcher() {
         <input
           className="cmd-input"
           autoFocus
-          placeholder="跳转到笔记…"
+          placeholder={t('amoverlay.switcherPlaceholder')}
           value={query}
           onChange={(e) => { setQuery(e.target.value); setActive(0) }}
           onKeyDown={onKeyDown}
@@ -276,16 +303,16 @@ function QuickSwitcher() {
           {showCreate && (
             <button className="cmd-item" data-active={active === results.length || undefined} onMouseEnter={() => setActive(results.length)} onClick={() => choose(results.length)}>
               <span className="cmd-row">
-                <span className="cmd-title">新建 “{q}”</span>
-                <span className="cmd-path">创建新笔记</span>
+                <span className="cmd-title">{t('amoverlay.createNamed', { name: q })}</span>
+                <span className="cmd-path">{t('amoverlay.newNote')}</span>
               </span>
             </button>
           )}
-          {total === 0 && <div className="cmd-empty">无匹配笔记</div>}
+          {total === 0 && <div className="cmd-empty">{t('amoverlay.noMatch')}</div>}
         </div>
         <div className="cmd-foot">
-          <span><kbd>↑↓</kbd> 选择 <kbd>↵</kbd> 打开 <kbd>esc</kbd> 关闭</span>
-          <span className="cmd-foot-count">{total} 项</span>
+          <span><kbd>↑↓</kbd> {t('amoverlay.footSelect')} <kbd>↵</kbd> {t('amoverlay.footOpen')} <kbd>esc</kbd> {t('amoverlay.footClose')}</span>
+          <span className="cmd-foot-count">{t('amoverlay.resultCount', { n: total })}</span>
         </div>
       </div>
     </div>

@@ -72,7 +72,7 @@ async function main() {
   }
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 720 } })
     page.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await page.addInitScript(() => localStorage.clear())
     await page.goto(URL, { waitUntil: 'domcontentloaded' })

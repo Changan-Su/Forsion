@@ -65,13 +65,13 @@ const check = (name, ok, detail) => {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const ctx = await browser.newContext({
+  const ctx = await browser.newContext({ locale: 'zh-CN',
     viewport: { width: 390, height: 844 },
     hasTouch: true,
     isMobile: true,
     deviceScaleFactor: 3,
   })
-  const page = await ctx.newPage()
+  const page = await ctx.newPage({ locale: 'zh-CN' })
   await page.setContent(HTML)
 
   // 元素自身到根的累积 zoom(getBoundingClientRect 已含,font-size 没有)

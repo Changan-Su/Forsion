@@ -17,6 +17,27 @@ import { extHit } from './viewFileMatch'
 import { act, actThrottled } from './activity/log'
 import { track } from './achievements/store'
 import { openLocalHtml } from './builtins'
+import { registerMessages, translate } from './i18n'
+
+// 本文件自己的文案(命名空间 `amnav.*`,勿与 i18n.tsx 的 `amadeus.*` 基础词条混用)。
+registerMessages({
+  'amnav.dashboardCreateFailedRenamed': {
+    zh: '新建仪表盘失败:文件名被占用,系统改成了「{name}」(后缀已破)。请换个名字重试。',
+    en: 'Could not create the dashboard: that name is taken, so it was saved as “{name}” and the suffix is no longer valid. Try a different name.',
+  },
+  'amnav.dashboardCreateFailed': {
+    zh: '新建仪表盘失败:{msg}',
+    en: 'Could not create the dashboard: {msg}',
+  },
+  'amnav.drawingRenamedSuffixBroken': {
+    zh: '已存在同名文件,新建的白板被改名成「{name}」,后缀已破坏。请重命名为 .excalidraw.md 后再打开。',
+    en: 'A file with that name already exists, so the new whiteboard was saved as “{name}” and its suffix is broken. Rename it to .excalidraw.md before opening it.',
+  },
+  'amnav.drawingCreateFailed': {
+    zh: '新建白板失败:{msg}',
+    en: 'Could not create the whiteboard: {msg}',
+  },
+})
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
@@ -224,13 +245,16 @@ export function openDashboard(dashPath: string, opts?: { unlocked?: boolean; new
  *  `x.dashboard.md` 会变成 `x.dashboard-1.md`,复合后缀一破就掉出仪表盘判定、混回普通笔记。 */
 export async function createDashboard(parent: string): Promise<string | null> {
   const dir = parent.replace(/\\/g, '/').replace(/\/+$/, '')
-  const name = (await askString(dir ? `在「${dir.split('/').pop()}」中新建仪表盘` : '新建仪表盘', '未命名仪表盘'))
+  const name = (await askString(
+    dir ? translate('amadeus.new.dashboardIn', { folder: dir.split('/').pop() }) : translate('amadeus.new.dashboard'),
+    translate('amadeus.default.dashboard'),
+  ))
     ?.trim().replace(/[\\/]/g, '').replace(/\.dashboard(\.md)?$/i, '')
   if (!name) return null
   const rel = dir ? `${dir}/${name}.dashboard.md` : `${name}.dashboard.md`
   const ps = usePageStore.getState()
   if ([...ps.files, ...ps.pages].some((f) => f.replace(/\\/g, '/') === rel)) {
-    window.alert(`「${name}.dashboard.md」已存在`)
+    window.alert(translate('amadeus.exists', { name: `${name}.dashboard.md` }))
     return null
   }
   try {
@@ -241,7 +265,7 @@ export async function createDashboard(parent: string): Promise<string | null> {
     const saved = await amadeus.saveAttachment('', `${name}.dashboard.md`, bytes, { mode: 'vault', folder: dir })
     const actual = dir ? `${dir}/${saved.base}` : saved.base
     if (!isDashboardPath(actual)) {
-      window.alert(`新建仪表盘失败:文件名被占用,系统改成了「${saved.base}」(后缀已破)。请换个名字重试。`)
+      window.alert(translate('amnav.dashboardCreateFailedRenamed', { name: saved.base }))
       return null
     }
     act('dashboard.create', { f: actual })
@@ -249,7 +273,7 @@ export async function createDashboard(parent: string): Promise<string | null> {
     openDashboard(actual, { unlocked: true })
     return actual
   } catch (e) {
-    window.alert(`新建仪表盘失败:${e instanceof Error ? e.message : String(e)}`)
+    window.alert(translate('amnav.dashboardCreateFailed', { msg: e instanceof Error ? e.message : String(e) }))
     return null
   }
 }
@@ -320,12 +344,15 @@ export function openFile(path: string, opts?: { newTab?: boolean }): void {
  *  `x.excalidraw.md` 会变成 `x.excalidraw-1.md`,后缀一破就掉出白板判定、混回笔记树。 */
 export async function createDrawing(parent: string): Promise<string | null> {
   const dir = parent.replace(/\\/g, '/').replace(/\/+$/, '')
-  const picked = await askNewDrawing(dir ? `在「${dir.split('/').pop()}」中新建白板` : '新建白板', '未命名白板')
+  const picked = await askNewDrawing(
+    dir ? translate('amadeus.new.drawingIn', { folder: dir.split('/').pop() }) : translate('amadeus.new.drawing'),
+    translate('amadeus.default.drawing'),
+  )
   const name = picked?.name.trim().replace(/[\\/]/g, '').replace(/\.excalidraw(\.md)?$/i, '')
   if (!picked || !name) return null
   const rel = dir ? `${dir}/${name}.excalidraw.md` : `${name}.excalidraw.md`
   if (usePageStore.getState().files.some((f) => f.replace(/\\/g, '/') === rel)) {
-    window.alert(`「${name}.excalidraw.md」已存在`)
+    window.alert(translate('amadeus.exists', { name: `${name}.excalidraw.md` }))
     return null
   }
   try {
@@ -337,7 +364,7 @@ export async function createDrawing(parent: string): Promise<string | null> {
     const final = dir ? `${dir}/${saved.base}` : saved.base
     if (!isDrawingPath(final)) {
       // `-N` 插在最后一个扩展名前 → `x.excalidraw-1.md`,后缀一破就掉出白板判定、混回笔记树。
-      window.alert(`已存在同名文件,新建的白板被改名成「${saved.base}」,后缀已破坏。请重命名为 .excalidraw.md 后再打开。`)
+      window.alert(translate('amnav.drawingRenamedSuffixBroken', { name: saved.base }))
       await usePageStore.getState().refreshStructure()
       return null
     }
@@ -347,7 +374,7 @@ export async function createDrawing(parent: string): Promise<string | null> {
     openDrawing(final)
     return final
   } catch (e) {
-    window.alert(`新建白板失败:${e instanceof Error ? e.message : String(e)}`)
+    window.alert(translate('amnav.drawingCreateFailed', { msg: e instanceof Error ? e.message : String(e) }))
     return null
   }
 }

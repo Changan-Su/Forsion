@@ -49,6 +49,8 @@
 .auto-facts { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-light); }
 .auto-facts .auto-fact { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .auto-facts .auto-fact b { font-weight: 500; color: var(--text-faint); }
+/* 引擎自动停用(断环 / 工具不可用)的原因行:用警示色,别混在普通 fact 里被扫过去 */
+.auto-facts .auto-fact-warn { color: var(--warning); }
 .auto-transcript-head {
   font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--text-faint); margin: 4px 0 10px;
@@ -158,3 +160,5 @@
 }
 .auto-grouphead.clickable { display: flex; align-items: center; gap: 3px; cursor: pointer; user-select: none; }
 .auto-grouphead.clickable:hover { color: var(--text); }
+/* 监听列多选(构建器 db_changed):.auto-check 复用,横向流式换行 */
+.auto-checks { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 4px 0; }

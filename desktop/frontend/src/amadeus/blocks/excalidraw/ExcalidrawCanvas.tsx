@@ -18,6 +18,7 @@ import type { ObsidianResetCustomPenState } from '@excalidraw/excalidraw/obsidia
 import type { AppState, ExcalidrawInitialDataState, ExcalidrawImperativeAPI, BinaryFileData } from '@excalidraw/excalidraw/types'
 import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import { reconcileElements, sameElements, type SceneElement, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
+import { registerMessages, useI18n } from '../../../i18n'
 import {
   clampViewport,
   elementBounds,
@@ -30,6 +31,28 @@ import {
   type BoardSettings,
   type Bounds,
 } from '@amadeus-shared/excalidraw/board'
+
+registerMessages({
+  'excalicanvas.addPage': { zh: '＋ 新建页面', en: '+ New page' },
+  'excalicanvas.delBlankPage': { zh: '删掉这张空白页', en: 'Delete this blank page' },
+  'excalicanvas.modeFull': { zh: '常规', en: 'Standard' },
+  'excalicanvas.modeCompact': { zh: '紧凑', en: 'Compact' },
+  'excalicanvas.paper': { zh: '纸张', en: 'Paper' },
+  'excalicanvas.paperNone': { zh: '无限', en: 'Infinite' },
+  'excalicanvas.portrait': { zh: '纵向', en: 'Portrait' },
+  'excalicanvas.landscape': { zh: '横向', en: 'Landscape' },
+  'excalicanvas.flow': { zh: '页面排布', en: 'Page layout' },
+  'excalicanvas.flowV': { zh: '上下', en: 'Top to bottom' },
+  'excalicanvas.flowH': { zh: '左右', en: 'Left to right' },
+  'excalicanvas.grid': { zh: '网格', en: 'Grid' },
+  'excalicanvas.gridH': { zh: '横线', en: 'Horizontal' },
+  'excalicanvas.gridV': { zh: '竖线', en: 'Vertical' },
+  'excalicanvas.opacity': { zh: '淡浓', en: 'Opacity' },
+  'excalicanvas.uiMode': { zh: '属性面板', en: 'Properties panel' },
+  'excalicanvas.allBoards': { zh: '所有白板', en: 'All boards' },
+  'excalicanvas.toolbar': { zh: '工具栏', en: 'Toolbar' },
+  'excalicanvas.resetOrder': { zh: '恢复默认顺序', en: 'Reset to default order' },
+})
 
 /** 线距小于这个屏幕像素就不画:再密就是一片糊(excalidraw 自带网格同款下限)。 */
 const MIN_VISIBLE_PX = 4
@@ -139,6 +162,7 @@ export default function ExcalidrawCanvas({
   /** drawingStore 的远端应用器挂钩:外部变更(watcher/SSE)到达时把远端场景元素级合并进活画布。 */
   registerApplier?: (fn: (remote: SceneLike) => void) => () => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const gridRefs = useRef<(HTMLDivElement | null)[]>([])
@@ -192,9 +216,9 @@ export default function ExcalidrawCanvas({
     const onKey = (e: KeyboardEvent): void => {
       if (e.metaKey || e.ctrlKey || e.altKey || !/^[0-9]$/.test(e.key)) return
       const el = hostRef.current?.querySelector('.excalidraw')
-      const t = e.target as HTMLElement | null
-      if (!el || !t || !el.contains(t)) return
-      if (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return // 正在打字
+      const tgt = e.target as HTMLElement | null
+      if (!el || !tgt || !el.contains(tgt)) return
+      if (tgt.isContentEditable || tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA') return // 正在打字
       const id = getToolbarLayout().mid[e.key === '0' ? 9 : Number(e.key) - 1]
       if (!id) return
       e.preventDefault()
@@ -294,10 +318,10 @@ export default function ExcalidrawCanvas({
       const put = (el: HTMLDivElement | null, r: { x: number; y: number; w: number; h: number }, after: boolean): void => {
         if (!el) return
         const l = (r.x + st.scrollX) * z
-        const t = (r.y + st.scrollY) * z
+        const ty = (r.y + st.scrollY) * z
         const pad = 22
         const ax = settings.flow === 'h' ? (after ? l + r.w * z + pad : l - pad) : l + (r.w * z) / 2
-        const ay = settings.flow === 'h' ? t + (r.h * z) / 2 : after ? t + r.h * z + pad : t - pad
+        const ay = settings.flow === 'h' ? ty + (r.h * z) / 2 : after ? ty + r.h * z + pad : ty - pad
         el.style.left = `${ax}px`
         el.style.top = `${ay}px`
       }
@@ -307,11 +331,11 @@ export default function ExcalidrawCanvas({
         const r = pageRect(settings, range.min + i)
         if (!r) continue
         const l = (r.x + st.scrollX) * z
-        const t = (r.y + st.scrollY) * z
+        const ty = (r.y + st.scrollY) * z
         const w = r.w * z
         const h = r.h * z
-        Object.assign(grids[i].style, { left: `${l}px`, top: `${t}px`, width: `${w}px`, height: `${h}px` })
-        holes.push(`M${l.toFixed(1)} ${t.toFixed(1)}H${(l + w).toFixed(1)}V${(t + h).toFixed(1)}H${l.toFixed(1)}Z`)
+        Object.assign(grids[i].style, { left: `${l}px`, top: `${ty}px`, width: `${w}px`, height: `${h}px` })
+        holes.push(`M${l.toFixed(1)} ${ty.toFixed(1)}H${(l + w).toFixed(1)}V${(ty + h).toFixed(1)}H${l.toFixed(1)}Z`)
       }
       const firstR = pageRect(settings, range.min)
       const lastR = pageRect(settings, range.max)
@@ -508,17 +532,17 @@ export default function ExcalidrawCanvas({
             {!!paperSize(settings) && (
               <>
                 <div className="amx-pageadd" data-end="before" data-flow={settings.flow} ref={addBeforeRef}>
-                  <button onClick={() => onSettings({ pageFirst: settings.pageFirst - 1 })}>＋ 新建页面</button>
+                  <button onClick={() => onSettings({ pageFirst: settings.pageFirst - 1 })}>{t('excalicanvas.addPage')}</button>
                   {settings.pageFirst < floor.min && (
-                    <button className="amx-pageadd-del" title="删掉这张空白页" onClick={() => onSettings({ pageFirst: settings.pageFirst + 1 })}>
+                    <button className="amx-pageadd-del" title={t('excalicanvas.delBlankPage')} onClick={() => onSettings({ pageFirst: settings.pageFirst + 1 })}>
                       −
                     </button>
                   )}
                 </div>
                 <div className="amx-pageadd" data-end="after" data-flow={settings.flow} ref={addAfterRef}>
-                  <button onClick={() => onSettings({ pageLast: settings.pageLast + 1 })}>＋ 新建页面</button>
+                  <button onClick={() => onSettings({ pageLast: settings.pageLast + 1 })}>{t('excalicanvas.addPage')}</button>
                   {settings.pageLast > floor.max && (
-                    <button className="amx-pageadd-del" title="删掉这张空白页" onClick={() => onSettings({ pageLast: settings.pageLast - 1 })}>
+                    <button className="amx-pageadd-del" title={t('excalicanvas.delBlankPage')} onClick={() => onSettings({ pageLast: settings.pageLast - 1 })}>
                       −
                     </button>
                   )}
@@ -554,9 +578,11 @@ function forwardWheel(e: React.WheelEvent<HTMLDivElement>): void {
   )
 }
 
-const UI_MODES: { id: BoardUiMode; label: string }[] = [
-  { id: 'full', label: '常规' },
-  { id: 'compact', label: '紧凑' },
+/** ⚠️ 存的是 i18n **键**不是文案:模块级常量在加载时就定死了,写死字面量会让切语言之后这两颗 chip
+ *  永远停在旧语言上(hook 不能在模块作用域调,只能在渲染时 t(labelKey) 求值)。 */
+const UI_MODES: { id: BoardUiMode; labelKey: string }[] = [
+  { id: 'full', labelKey: 'excalicanvas.modeFull' },
+  { id: 'compact', labelKey: 'excalicanvas.modeCompact' },
 ]
 
 function BoardPanel({
@@ -570,13 +596,14 @@ function BoardPanel({
   uiMode: BoardUiMode
   onUiMode: (v: BoardUiMode) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const patch = onSettings
   return (
     <div className="amx-bs">
-      <div className="amx-bs-h">纸张</div>
+      <div className="amx-bs-h">{t('excalicanvas.paper')}</div>
       <div className="amx-bs-row">
         <button className="amx-bs-chip" data-on={!settings.paper || undefined} onClick={() => patch({ paper: null })}>
-          无限
+          {t('excalicanvas.paperNone')}
         </button>
         {PAPER_IDS.map((p) => (
           <button key={p} className="amx-bs-chip" data-on={settings.paper === p || undefined} onClick={() => patch({ paper: p })}>
@@ -588,36 +615,36 @@ function BoardPanel({
         <>
           <div className="amx-bs-row">
             <button className="amx-bs-chip" data-on={!settings.landscape || undefined} onClick={() => patch({ landscape: false })}>
-              纵向
+              {t('excalicanvas.portrait')}
             </button>
             <button className="amx-bs-chip" data-on={settings.landscape || undefined} onClick={() => patch({ landscape: true })}>
-              横向
+              {t('excalicanvas.landscape')}
             </button>
           </div>
-          <div className="amx-bs-h">页面排布</div>
+          <div className="amx-bs-h">{t('excalicanvas.flow')}</div>
           <div className="amx-bs-row">
             <button className="amx-bs-chip" data-on={settings.flow === 'v' || undefined} onClick={() => patch({ flow: 'v' })}>
-              上下
+              {t('excalicanvas.flowV')}
             </button>
             <button className="amx-bs-chip" data-on={settings.flow === 'h' || undefined} onClick={() => patch({ flow: 'h' })}>
-              左右
+              {t('excalicanvas.flowH')}
             </button>
           </div>
         </>
       )}
-      <div className="amx-bs-h">网格</div>
-      <GridRow label="横线" value={settings.gridH} onChange={(v) => patch({ gridH: v })} />
-      <GridRow label="竖线" value={settings.gridV} onChange={(v) => patch({ gridV: v })} />
+      <div className="amx-bs-h">{t('excalicanvas.grid')}</div>
+      <GridRow label={t('excalicanvas.gridH')} value={settings.gridH} onChange={(v) => patch({ gridH: v })} />
+      <GridRow label={t('excalicanvas.gridV')} value={settings.gridV} onChange={(v) => patch({ gridV: v })} />
       <OpacityRow
         value={settings.gridOpacity}
         disabled={settings.gridH <= 0 && settings.gridV <= 0}
         onCommit={(v) => patch({ gridOpacity: v })}
       />
-      <div className="amx-bs-h">属性面板 <span className="amx-bs-note">所有白板</span></div>
+      <div className="amx-bs-h">{t('excalicanvas.uiMode')} <span className="amx-bs-note">{t('excalicanvas.allBoards')}</span></div>
       <div className="amx-bs-row">
         {UI_MODES.map((m) => (
           <button key={m.id} className="amx-bs-chip" data-on={uiMode === m.id || undefined} onClick={() => onUiMode(m.id)}>
-            {m.label}
+            {t(m.labelKey)}
           </button>
         ))}
       </div>
@@ -628,14 +655,15 @@ function BoardPanel({
 
 /** 工具栏顺序是拖出来的,总得有条路回去。默认顺序时不显示 —— 没得可恢复就别占一行。 */
 function ToolbarResetRow(): React.JSX.Element | null {
+  const { t } = useI18n()
   const layout = useSyncExternalStore(subscribeToolbarLayout, getToolbarLayout, getToolbarLayout)
   if (isDefaultLayout(layout)) return null
   return (
     <>
-      <div className="amx-bs-h">工具栏 <span className="amx-bs-note">所有白板</span></div>
+      <div className="amx-bs-h">{t('excalicanvas.toolbar')} <span className="amx-bs-note">{t('excalicanvas.allBoards')}</span></div>
       <div className="amx-bs-row">
         <button className="amx-bs-chip" onClick={() => resetToolbarLayout()}>
-          恢复默认顺序
+          {t('excalicanvas.resetOrder')}
         </button>
       </div>
     </>
@@ -644,11 +672,12 @@ function ToolbarResetRow(): React.JSX.Element | null {
 
 /** 网格淡浓。拖动时直接改这几层的 opacity 拿实时预览,**松手才写盘** —— 每动一格写一次文件太蠢。 */
 function OpacityRow({ value, disabled, onCommit }: { value: number; disabled: boolean; onCommit: (v: number) => void }): React.JSX.Element {
+  const { t } = useI18n()
   const [v, setV] = useState(value)
   useEffect(() => setV(value), [value])
   return (
     <label className="amx-bs-check">
-      <span className="amx-bs-lbl">淡浓</span>
+      <span className="amx-bs-lbl">{t('excalicanvas.opacity')}</span>
       <input
         className="amx-bs-range"
         type="range"

@@ -1,0 +1,47 @@
+/* 表格层级树(DbView.treeCol)的缩进条与折叠钮。只加在首个数据格内部,不碰 .amx-db-row / .amx-db-cell
+   的网格轨道 —— 表头 / 数据行 / 页脚是三个独立 grid,动轨道会把列边界错开(erp.check E9)。
+   ⚠️ 别把这些规则搬进 amadeus-host.css(那份是别人的正典;新样式一律独立文件 + import,见 ganttBody.css)。 */
+
+/* 缩进条:paddingLeft 由 depth 在行内算(每级 14px);flex 里不许被压缩,否则深层缩进会被长文案吃掉 */
+.amx-db-treelead {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
+  align-self: stretch;
+  padding-right: 2px;
+}
+
+.amx-db-treecaret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  /* 比分组头的 caret 重一档:它是**每行**的控件,--text-faint 的小三角在真机截图里读作句点 */
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+.amx-db-treecaret:hover {
+  background: var(--overlay-light, rgba(127, 127, 127, 0.1));
+  color: var(--text);
+}
+
+/* 展开态转 90°(与分组头 .amx-db-groupcaret 同一语汇:▸ → ▾) */
+.amx-db-treecaret[data-open] { transform: rotate(90deg); }
+
+/* 叶子节点的占位:与折叠钮同宽,保证同一层的标题左边界对齐(否则有子/无子的行会差 16px) */
+.amx-db-treedot {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}

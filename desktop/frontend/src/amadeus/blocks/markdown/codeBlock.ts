@@ -7,6 +7,27 @@ import { $prose } from '@milkdown/kit/utils'
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { common, createLowlight } from 'lowlight'
+import { currentLocale, registerMessages, translate } from '../../../i18n'
+
+/** 工具条文案。⚠️ 按钮字面**必须短**(和中文的两字一样):工具条绝对定位盖在代码块右上,
+ *  英文写长了(实测 "Line numbers"/"Collapse" 一套 375px)会盖住短代码块的水平中心,点进去
+ *  落到 select 上而不是代码里 —— e2e T42「代码块 Tab → 行首两空格」就是这么红的。完整说明放 title。 */
+registerMessages({
+  'amxcode.langTitle': { zh: '语言', en: 'Language' },
+  'amxcode.plainText': { zh: '纯文本', en: 'Plain text' },
+  'amxcode.copy': { zh: '复制', en: 'Copy' },
+  'amxcode.copyTitle': { zh: '复制代码', en: 'Copy code' },
+  'amxcode.copied': { zh: '已复制', en: 'Copied' },
+  'amxcode.wrap': { zh: '折行', en: 'Wrap' },
+  'amxcode.wrapTitle': { zh: '切换自动折行(视图态,不改内容)', en: 'Toggle line wrap (view only, does not change content)' },
+  'amxcode.linenoOff': { zh: '取消行号', en: 'Hide numbers' },
+  'amxcode.lineno': { zh: '行号', en: 'Numbers' },
+  'amxcode.linenoDisabled': { zh: '折行开着时不显示行号(软换行无独立行号)', en: 'Line numbers are unavailable while wrapping is on (soft-wrapped lines have no number of their own)' },
+  'amxcode.linenoTitle': { zh: '切换行号(视图态,不改内容)', en: 'Toggle line numbers (view only, does not change content)' },
+  'amxcode.expand': { zh: '展开', en: 'Unfold' },
+  'amxcode.collapse': { zh: '折叠', en: 'Fold' },
+  'amxcode.collapseTitle': { zh: '折叠代码块(限高 8 行,视图态)', en: 'Fold the code block (8-line limit, view only)' },
+})
 
 const lowlight = createLowlight(common)
 
@@ -136,10 +157,10 @@ export function codeBlockPlugin() {
                     // 语言选择
                     const sel = document.createElement('select')
                     sel.className = 'amx-code-lang'
-                    sel.title = '语言'
+                    sel.title = translate('amxcode.langTitle')
                     const opt0 = document.createElement('option')
                     opt0.value = ''
-                    opt0.textContent = '纯文本'
+                    opt0.textContent = translate('amxcode.plainText')
                     sel.appendChild(opt0)
                     const known = LANGS.includes(lang) || !lang
                     // 最近用过的排最前(会话内),其余保持原序 —— AFFiNE 选中即 unshift 的同款手感。
@@ -167,22 +188,22 @@ export function codeBlockPlugin() {
                     // 复制
                     const copy = document.createElement('button')
                     copy.className = 'amx-code-btn'
-                    copy.textContent = '复制'
-                    copy.title = '复制代码'
+                    copy.textContent = translate('amxcode.copy')
+                    copy.title = translate('amxcode.copyTitle')
                     copy.addEventListener('click', () => {
                       const at = nodeAt()
                       const n = at === null ? null : view.state.doc.nodeAt(at)
                       if (!n) return
                       void navigator.clipboard.writeText(n.textContent).then(() => {
-                        copy.textContent = '已复制'
-                        setTimeout(() => { copy.textContent = '复制' }, 1200)
+                        copy.textContent = translate('amxcode.copied')
+                        setTimeout(() => { copy.textContent = translate('amxcode.copy') }, 1200)
                       })
                     })
                     // 折行
                     const wrap = document.createElement('button')
                     wrap.className = `amx-code-btn${isWrap ? ' on' : ''}`
-                    wrap.textContent = '折行'
-                    wrap.title = '切换自动折行(视图态,不改内容)'
+                    wrap.textContent = translate('amxcode.wrap')
+                    wrap.title = translate('amxcode.wrapTitle')
                     wrap.addEventListener('click', () => {
                       const at = nodeAt()
                       if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at }))
@@ -190,8 +211,8 @@ export function codeBlockPlugin() {
                     // 行号(与折行互斥:软换行没有自己的号,开着折行时行号必然错位)
                     const nums = document.createElement('button')
                     nums.className = `amx-code-btn${isNo ? ' on' : ''}`
-                    nums.textContent = isNo ? '取消行号' : '行号'
-                    nums.title = isWrap ? '折行开着时不显示行号(软换行无独立行号)' : '切换行号(视图态,不改内容)'
+                    nums.textContent = isNo ? translate('amxcode.linenoOff') : translate('amxcode.lineno')
+                    nums.title = isWrap ? translate('amxcode.linenoDisabled') : translate('amxcode.linenoTitle')
                     nums.disabled = isWrap
                     nums.addEventListener('click', () => {
                       const at = nodeAt()
@@ -200,8 +221,8 @@ export function codeBlockPlugin() {
                     // 折叠(限高 8 行 + 底部渐隐,AFFiNE 同款)
                     const fold = document.createElement('button')
                     fold.className = `amx-code-btn${isCollapsed ? ' on' : ''}`
-                    fold.textContent = isCollapsed ? '展开' : '折叠'
-                    fold.title = '折叠代码块(限高 8 行,视图态)'
+                    fold.textContent = isCollapsed ? translate('amxcode.expand') : translate('amxcode.collapse')
+                    fold.title = translate('amxcode.collapseTitle')
                     fold.addEventListener('click', () => {
                       const at = nodeAt()
                       if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'collapse' }))
@@ -209,8 +230,9 @@ export function codeBlockPlugin() {
                     bar.append(sel, copy, wrap, nums, fold)
                     return bar
                   },
-                  // key 带语言与折行态:变更即重建(select 值/按钮态才会刷新)
-                  { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ct${pos}:${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}` },
+                  // key 带语言与折行态:变更即重建(select 值/按钮态才会刷新)。
+                  // 末尾的界面语言同理:切了中英文后下一次重绘会重建工具条,不至于留着旧语言的按钮文案。
+                  { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ct${pos}:${lang}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}` },
                 ),
               )
               return false

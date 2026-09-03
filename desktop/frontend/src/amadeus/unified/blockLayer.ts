@@ -31,6 +31,19 @@ import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 import { isCoarsePointer } from '../../touch'
+import { registerMessages, subscribeLocale, translate } from '../../i18n'
+
+registerMessages({
+  'blocklayer.dragHandle': { zh: '点击打开菜单,按住拖动', en: 'Click for menu, hold to drag' },
+  'blocklayer.addBelow': { zh: '在下方插入块', en: 'Add block below' },
+  'blocklayer.cardGrab': { zh: '选中所在卡片,按住拖动整卡', en: 'Select card, hold to drag it' },
+  'blocklayer.expandChildren': { zh: '展开子项', en: 'Expand children' },
+  'blocklayer.foldChildren': { zh: '折叠子项', en: 'Collapse children' },
+  'blocklayer.expandSection': { zh: '展开小节', en: 'Expand section' },
+  'blocklayer.foldSection': { zh: '折叠小节', en: 'Collapse section' },
+  'blocklayer.phParagraph': { zh: "输入 '/' 唤起命令", en: "Type '/' for commands" },
+  'blocklayer.phHeading': { zh: '标题 {n}', en: 'Heading {n}' },
+})
 
 export interface BlockLayerHooks {
   /** 点 ⠿ → 由宿主(UnifiedPage)在该坐标弹块菜单;此刻 NodeSelection 已在(mousedown 设的)。 */
@@ -751,7 +764,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         drag.className = 'drag-handle'
         drag.textContent = '⠿'
         drag.draggable = true
-        drag.title = '点击打开菜单,按住拖动 / Click for menu, hold to drag'
+        drag.title = translate('blocklayer.dragHandle')
         drag.addEventListener('click', (e) => {
           e.stopPropagation()
           const r = drag.getBoundingClientRect()
@@ -913,8 +926,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const fs = !view || !a || !kind ? null : kind === 'heading' ? (hp == null ? null : foldStateAt(view, hp)) : lp == null ? null : listFoldStateAt(view, lp)
           fold.style.display = fs ? '' : 'none'
           fold.textContent = fs === 'folded' ? '▸' : '▾'
-          const what = kind === 'list' ? '子项 / children' : '小节 / section'
-          fold.title = `${fs === 'folded' ? '展开' : '折叠'}${what}`
+          // 四个字面键(别拼 key):i18nCoverage 的 C 断言只认字面量,动态拼出来的键漏了也不会红。
+          fold.title =
+            kind === 'list'
+              ? fs === 'folded' ? translate('blocklayer.expandChildren') : translate('blocklayer.foldChildren')
+              : fs === 'folded' ? translate('blocklayer.expandSection') : translate('blocklayer.foldSection')
         }
         fold.addEventListener('click', (e) => {
           e.stopPropagation()
@@ -935,7 +951,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         add.type = 'button'
         add.className = 'block-add'
         add.textContent = '＋'
-        add.title = '在下方插入块 / Add block below'
+        add.title = translate('blocklayer.addBelow')
         add.addEventListener('click', (e) => {
           e.stopPropagation()
           const view = viewRef
@@ -963,7 +979,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         cardGrab.className = 'card-grab'
         cardGrab.textContent = '❏'
         cardGrab.draggable = true
-        cardGrab.title = '选中所在卡片,按住拖动整卡 / Select card, hold to drag it'
+        cardGrab.title = translate('blocklayer.cardGrab')
         cardGrab.style.display = 'none'
         /** 悬停块所在的卡(自身就是卡 → null,主把手已经是它)。 */
         const cardHostOf = (a: ActiveBlock | null): ActiveBlock | null => {
@@ -1424,6 +1440,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         container.addEventListener('pointerdown', onPointerDown)
 
+        // 三颗常驻钮的 title 只在建 DOM 时写过一次 —— 切语言不重建编辑器,不订阅就永远停在旧语言。
+        // (fold.title 每次 syncFold 重算、空块 placeholder 随 decorations 重算,都不用管。)
+        const offLocale = subscribeLocale(() => {
+          drag.title = translate('blocklayer.dragHandle')
+          add.title = translate('blocklayer.addBelow')
+          cardGrab.title = translate('blocklayer.cardGrab')
+        })
+
         return {
           // 锚点块被删/被整节点替换 → 把手立刻失效(否则它还指着一个已经不在的 pos,
           // 接下来的拖拽/菜单会作用到错的地方)。
@@ -1445,6 +1469,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             root.removeEventListener('drop', onDropCapture, true)
             root.removeEventListener('mouseleave', onLeave)
             container.removeEventListener('pointerdown', onPointerDown)
+            offLocale()
             resizeCleanup?.()
             window.removeEventListener('scroll', onScroll, { capture: true })
             window.removeEventListener('dragover', onDragOver)
@@ -1687,8 +1712,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!node.isTextblock || node.content.size > 0) return null
           for (let d = $f.depth; d >= 1; d--) if ($f.node(d).type.name === 'blockquote') return null
           const text =
-            node.type.name === 'paragraph' ? "输入 '/' 唤起命令"
-            : node.type.name === 'heading' ? `标题 ${node.attrs.level ?? 1}`
+            node.type.name === 'paragraph' ? translate('blocklayer.phParagraph')
+            : node.type.name === 'heading' ? translate('blocklayer.phHeading', { n: node.attrs.level ?? 1 })
             : null
           if (!text) return null
           return DecorationSet.create(state.doc, [

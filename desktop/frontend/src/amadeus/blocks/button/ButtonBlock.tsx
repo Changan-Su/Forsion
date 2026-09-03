@@ -24,7 +24,34 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { OverlayPortal } from '../../lib/overlayPortal'
 import { useEscape } from '../../components/Dialogs'
 import { getAutomationBridge, type AutomationRuleInfo } from './automationBridge'
+import { registerMessages, useI18n } from '../../../i18n'
 import type { ButtonSpec } from './format'
+
+registerMessages({
+  'btnblock.running': { zh: '⏳ 执行中…', en: '⏳ Running…' },
+  'btnblock.setup': { zh: '＋ 配置按钮', en: '＋ Set up button' },
+  'btnblock.untitled': { zh: '未命名按钮', en: 'Untitled button' },
+  'btnblock.confirmPrompt': { zh: '{text} — 再点一次确认', en: '{text} — click again to confirm' },
+  'btnblock.cancel': { zh: '取消', en: 'Cancel' },
+  'btnblock.gearTitle': { zh: '配置', en: 'Configure' },
+  'btnblock.errBusy': { zh: '上一次执行还没结束', en: 'The previous run is still going' },
+  'btnblock.errFailed': { zh: '执行失败', en: 'Run failed' },
+  'btnblock.noBridge': { zh: '当前环境不支持自动化按钮(需要本地引擎)', en: 'Automation buttons are not supported here (a local engine is required)' },
+  'btnblock.missing': { zh: '引用的自动化不存在(可能已删除,或这篇笔记来自别处)', en: 'The linked automation no longer exists (it may have been deleted, or this note came from elsewhere)' },
+  'btnblock.disabled': { zh: '这条自动化已停用,先在自动化面板启用', en: 'This automation is disabled — enable it in the Automation panel first' },
+  'btnblock.doneAgent': { zh: '已执行 {n} 步 · Agent 已启动(仍在后台跑)', en: 'Ran {n} steps · agent started (still running in the background)' },
+  'btnblock.done': { zh: '已执行 {n} 步', en: 'Ran {n} steps' },
+  'btnblock.dialogTitle': { zh: '按钮', en: 'Button' },
+  'btnblock.action': { zh: '动作:{desc}', en: 'Action: {desc}' },
+  'btnblock.noRule': { zh: '(规则不存在)', en: '(rule not found)' },
+  'btnblock.editActions': { zh: '编辑动作', en: 'Edit actions' },
+  'btnblock.fieldName': { zh: '名称', en: 'Name' },
+  'btnblock.fieldIcon': { zh: '图标', en: 'Icon' },
+  'btnblock.fieldConfirm': { zh: '点击前确认', en: 'Confirm before running' },
+  'btnblock.namePlaceholder': { zh: '整理今天的笔记', en: "Organize today's notes" },
+  'btnblock.confirmPlaceholder': { zh: '留空 = 点了直接执行', en: 'Leave blank to run immediately' },
+  'btnblock.save': { zh: '保存', en: 'Save' },
+})
 
 type RunState =
   | { k: 'idle' }
@@ -37,6 +64,7 @@ export const ButtonBlock: React.FC<{
   spec: ButtonSpec
   onChange(next: ButtonSpec): void
 }> = ({ spec, onChange }) => {
+  const { t } = useI18n()
   const bridge = getAutomationBridge()
   const [cfgOpen, setCfgOpen] = useState(false)
   const [run, setRun] = useState<RunState>({ k: 'idle' })
@@ -79,9 +107,9 @@ export const ButtonBlock: React.FC<{
     try {
       const r = await bridge.run(spec.triggerId)
       if (!alive.current) return
-      if (r.status === 'busy') { setRun({ k: 'error', msg: '上一次执行还没结束' }); return }
+      if (r.status === 'busy') { setRun({ k: 'error', msg: t('btnblock.errBusy') }); return }
       if (r.status === 'failed') {
-        setRun({ k: 'error', msg: r.steps.find((s) => !s.ok)?.summary || '执行失败' })
+        setRun({ k: 'error', msg: r.steps.find((s) => !s.ok)?.summary || t('btnblock.errFailed') })
         return
       }
       // agent_run 步骤只等到「排队成功」,不等 agent 跑完 —— 文案必须说「已启动」而非「已完成」。
@@ -99,16 +127,18 @@ export const ButtonBlock: React.FC<{
     void fire()
   }
 
+  // ⚠️ `t` 必须进依赖:切语言时 bridge/missing/off/run 都不变,漏了它这段文案会冻在旧语言里
+  // (`t` 的身份随 locale 变,见 i18n.tsx 的 Provider value useMemo)。
   const status = useMemo(() => {
-    if (!bridge) return { cls: 'warn', text: '当前环境不支持自动化按钮(需要本地引擎)' }
-    if (missing) return { cls: 'warn', text: '引用的自动化不存在(可能已删除,或这篇笔记来自别处)' }
-    if (off) return { cls: 'warn', text: '这条自动化已停用,先在自动化面板启用' }
+    if (!bridge) return { cls: 'warn', text: t('btnblock.noBridge') }
+    if (missing) return { cls: 'warn', text: t('btnblock.missing') }
+    if (off) return { cls: 'warn', text: t('btnblock.disabled') }
     if (run.k === 'error') return { cls: 'warn', text: run.msg }
     if (run.k === 'done') {
-      return { cls: 'ok', text: run.agentStarted ? `已执行 ${run.steps} 步 · Agent 已启动(仍在后台跑)` : `已执行 ${run.steps} 步` }
+      return { cls: 'ok', text: run.agentStarted ? t('btnblock.doneAgent', { n: run.steps }) : t('btnblock.done', { n: run.steps }) }
     }
     return null
-  }, [bridge, missing, off, run])
+  }, [bridge, missing, off, run, t])
 
   return (
     <div className="amx-btnblock">
@@ -120,16 +150,16 @@ export const ButtonBlock: React.FC<{
           disabled={run.k === 'running' || !bridge}
           onClick={onClick}
         >
-          {run.k === 'running' ? '⏳ 执行中…'
-            : run.k === 'confirm' ? `${spec.confirm} — 再点一次确认`
-            : unconfigured ? '＋ 配置按钮'
-            : `${spec.icon || '⚡'} ${spec.label || '未命名按钮'}`}
+          {run.k === 'running' ? t('btnblock.running')
+            : run.k === 'confirm' ? t('btnblock.confirmPrompt', { text: spec.confirm })
+            : unconfigured ? t('btnblock.setup')
+            : `${spec.icon || '⚡'} ${spec.label || t('btnblock.untitled')}`}
         </button>
         {run.k === 'confirm' && (
-          <button className="amx-btnblock-cancel" onClick={() => setRun({ k: 'idle' })}>取消</button>
+          <button className="amx-btnblock-cancel" onClick={() => setRun({ k: 'idle' })}>{t('btnblock.cancel')}</button>
         )}
         {!unconfigured && (
-          <button className="amx-btnblock-gear" title="配置 / Configure" onClick={() => setCfgOpen(true)}>⚙</button>
+          <button className="amx-btnblock-gear" title={t('btnblock.gearTitle')} onClick={() => setCfgOpen(true)}>⚙</button>
         )}
       </div>
       {status && <div className={`amx-btnblock-status ${status.cls}`}>{status.text}</div>}
@@ -156,6 +186,7 @@ const ButtonConfig: React.FC<{
   onEditActions(): void
   onClose(): void
 }> = ({ spec, ruleDesc, onChange, onEditActions, onClose }) => {
+  const { t } = useI18n()
   useEscape(onClose)
   const [label, setLabel] = useState(spec.label)
   const [icon, setIcon] = useState(spec.icon || '')
@@ -170,19 +201,19 @@ const ButtonConfig: React.FC<{
     <OverlayPortal>
       <div className="dialog-overlay" onMouseDown={onClose}>
         <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
-          <div className="dialog-title">按钮 / Button</div>
+          <div className="dialog-title">{t('btnblock.dialogTitle')}</div>
           <div className="dialog-msg">
-            动作:{ruleDesc || '(规则不存在)'}
-            <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={onEditActions}>编辑动作</button>
+            {t('btnblock.action', { desc: ruleDesc || t('btnblock.noRule') })}
+            <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={onEditActions}>{t('btnblock.editActions')}</button>
           </div>
           <div className="amx-btnblock-fields">
-            <label>名称<input className="dialog-input" value={label} maxLength={60} placeholder="整理今天的笔记" onChange={(e) => setLabel(e.target.value)} /></label>
-            <label>图标<input className="dialog-input icon" value={icon} maxLength={4} placeholder="✨" onChange={(e) => setIcon(e.target.value)} /></label>
-            <label>点击前确认<input className="dialog-input" value={confirm} maxLength={200} placeholder="留空 = 点了直接执行" onChange={(e) => setConfirm(e.target.value)} /></label>
+            <label>{t('btnblock.fieldName')}<input className="dialog-input" value={label} maxLength={60} placeholder={t('btnblock.namePlaceholder')} onChange={(e) => setLabel(e.target.value)} /></label>
+            <label>{t('btnblock.fieldIcon')}<input className="dialog-input icon" value={icon} maxLength={4} placeholder="✨" onChange={(e) => setIcon(e.target.value)} /></label>
+            <label>{t('btnblock.fieldConfirm')}<input className="dialog-input" value={confirm} maxLength={200} placeholder={t('btnblock.confirmPlaceholder')} onChange={(e) => setConfirm(e.target.value)} /></label>
           </div>
           <div className="dialog-actions">
-            <button className="dialog-btn" onClick={onClose}>取消</button>
-            <button className="dialog-btn" data-primary onClick={commit}>保存</button>
+            <button className="dialog-btn" onClick={onClose}>{t('btnblock.cancel')}</button>
+            <button className="dialog-btn" data-primary onClick={commit}>{t('btnblock.save')}</button>
           </div>
         </div>
       </div>

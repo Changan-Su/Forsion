@@ -9,10 +9,21 @@ import { listAgents, saveAgentDef, deleteAgentDef, listModels, uploadAgentAvatar
 import { AgentMemoryModal } from './AgentMemoryModal'
 import { THINKING_LEVELS } from '../types'
 import type { ModelInfo, NormalAgentDef, TanguDesktopConfig, ThinkingLevel } from '../types'
-import { useI18n } from '../i18n'
+import { registerMessages, translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
+
+registerMessages({
+  'agentstab.userMdTemplate': {
+    zh: '# 用户画像\n\n## 名字 / 称呼\n{nick}\n\n## 偏好\n- \n\n## 水平 / 背景\n\n## 长期需求 / 目标\n',
+    en: '# User profile\n\n## Name / what to call me\n{nick}\n\n## Preferences\n- \n\n## Level / background\n\n## Long-term needs / goals\n',
+  },
+  'agentstab.createViaChatDraft': {
+    zh: '帮我创建一个新的 Agent。先问我几个关键点（人设/用途、默认模型、审批级别、要不要特定技能或工具），然后用 manage_agent 工具把它创建出来。',
+    en: 'Help me create a new agent. Ask me a few key questions first (persona/purpose, default model, approval level, whether it needs specific skills or tools), then use the manage_agent tool to create it.',
+  },
+})
 
 type Draft = {
   slug?: string
@@ -68,7 +79,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
       if (content.trim()) { setUserMd(content); return }
       let nick = ''
       try { const a = await window.tangu?.authStatus?.(); nick = a?.nickname || a?.username || '' } catch { /* ignore */ }
-      setUserMd(`# 用户画像\n\n## 名字 / 称呼\n${nick}\n\n## 偏好\n- \n\n## 水平 / 背景\n\n## 长期需求 / 目标\n`)
+      setUserMd(translate('agentstab.userMdTemplate', { nick }))
     }).catch(() => { /* ignore */ })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -89,7 +100,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
   // 「让 AI 帮我配置」:开新会话 + 预填一段创建意图,交给默认 agent(桌面 host 会话本就带 manage_agent 工具)对话式建 agent。
   const createViaChat = (): void => {
     const app = useApp.getState()
-    app.setPendingDraft('帮我创建一个新的 Agent。先问我几个关键点（人设/用途、默认模型、审批级别、要不要特定技能或工具），然后用 manage_agent 工具把它创建出来。')
+    app.setPendingDraft(t('agentstab.createViaChatDraft'))
     void app.newSession()
     app.closeSettings()
     useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')

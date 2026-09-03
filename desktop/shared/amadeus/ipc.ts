@@ -21,6 +21,7 @@ export const IPC = {
   openAttachment: 'attachment:open',
   openVaultFile: 'vault:open-file',
   exportPdf: 'page:export-pdf',
+  exportCsv: 'db:export-csv',
   externalChange: 'page:external-change',
   search: 'vault:search',
   backlinks: 'vault:backlinks',
@@ -424,6 +425,10 @@ export interface AmadeusApi {
   /** 把当前窗口按 @media print 样式打成 PDF(渲染端先挂好 #amx-print-root 克隆);
    *  弹保存对话框,成功返回保存路径并在文件管理器中显示,取消返回 null。 */
   exportPdf(defaultName: string): Promise<string | null>
+  /** 多维表「导出 CSV」:弹保存对话框把 `csv` 文本写盘,成功返回保存路径并在文件管理器中显示,取消返回 null。
+   *  **可选**:只有 Electron 桌面端有;web / 移动端的桥没有这一项,渲染层据此降级成浏览器下载或隐藏按钮
+   *  (门控与降级口径在 blocks/database/csvExport.ts,已登记进 check:parity)。 */
+  exportCsv?(defaultName: string, csv: string): Promise<string | null>
   /** Subscribe to external main.md changes. Returns an unsubscribe function. */
   onExternalChange(cb: (pagePath: string) => void): () => void
   /** Full-text search across the vault (main-process index). */

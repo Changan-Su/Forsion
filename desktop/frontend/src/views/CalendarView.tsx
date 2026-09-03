@@ -39,13 +39,15 @@ import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useMdCalDbs } from '../amadeus/store/mdMarkStore'
 import { useApp } from '../stores/appStore'
+import { registerMessages, useI18n } from '../i18n'
 import { EventCard, type Anchor } from './calendar/EventCard'
 import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
 import { layoutTimedEvents } from './calendar/eventLayout'
 import { deleteCalendarRow } from './calendar/eventActions'
 import {
   HOURS,
-  WEEKDAYS,
+  weekdays,
+  dowLabel,
   addDays,
   addMinutes,
   coversDay,
@@ -62,6 +64,37 @@ import {
   startOfWeek,
   toLocalDate,
 } from './calendar/dateUtils'
+
+// 文案:本文件独占 `calview.*` 命名空间(其余日历文件各自持有自己的前缀,勿共用键)。
+registerMessages({
+  'calview.untitled': { zh: '未命名', en: 'Untitled' },
+  'calview.newEventTitle': { zh: '新事件', en: 'New event' },
+  'calview.new': { zh: '新建', en: 'New' },
+  'calview.newInto': { zh: '新建到「{name}」', en: 'New event in "{name}"' },
+  'calview.noDbHint': { zh: '请先在右栏添加一个日历数据库', en: 'Add a calendar database in the right panel first' },
+  'calview.today': { zh: '今天', en: 'Today' },
+  'calview.prevPage': { zh: '上一页', en: 'Previous' },
+  'calview.nextPage': { zh: '下一页', en: 'Next' },
+  'calview.density': { zh: '密度', en: 'Density' },
+  'calview.zoomOut': { zh: '缩小时间轴', en: 'Zoom out timeline' },
+  'calview.zoomIn': { zh: '放大时间轴', en: 'Zoom in timeline' },
+  'calview.densityReset': { zh: '恢复默认密度', en: 'Reset to default density' },
+  'calview.empty': {
+    zh: '还没有日历事件。点「新建」，或在右栏添加一个含日期属性的数据库。',
+    en: 'No calendar events yet. Click "New", or add a database with a date property in the right panel.',
+  },
+  'calview.allDay': { zh: '全天', en: 'All-day' },
+  'calview.a11yAllDayEvent': { zh: '{title}，全天事件', en: '{title}, all-day event' },
+  'calview.allDayDragHint': { zh: '{title}（可拖入时间格设为定时）', en: '{title} (drag into a time slot to schedule it)' },
+  'calview.a11yEvent': { zh: '{title}，{time}', en: '{title}, {time}' },
+  'calview.a11yEventRange': { zh: '{title}，{start} 至 {end}', en: '{title}, {start} to {end}' },
+  'calview.monthFirst': { zh: '{m}月1', en: '{m}/1' },
+  'calview.moreItems': { zh: '还有 {n} 项', en: '{n} more' },
+  'calview.a11yMoreEvents': { zh: '查看 {m} 月 {d} 日全部 {n} 个事件', en: 'View all {n} events on {m}/{d}' },
+  'calview.a11yDayEvents': { zh: '{m} 月 {d} 日事件', en: 'Events on {m}/{d}' },
+  'calview.dayHeading': { zh: '{m} 月 {d} 日', en: '{m}/{d}' },
+  'calview.closeAgenda': { zh: '关闭日程列表', en: 'Close agenda list' },
+})
 
 // 小时高度改为可缩放状态(calendarNavStore.hourPx);CSS 网格线经 --amx-hour-px 变量同步(TimeScroll 根注入)。
 const HEAD_H = 26
@@ -137,6 +170,7 @@ const daySpanClass = (ev: CalEvent, day: Date): string => {
 }
 
 export function CalendarView() {
+  const { t } = useI18n()
   const members = useCalendarMembers()
   const agentDbs = useAgentCalDbs()
   const otherDbs = useOtherVaultCalDbs() // 非活动侧(Local↔Cloud 另一侧)只读日历,汇总两侧(任务1)
@@ -167,8 +201,8 @@ export function CalendarView() {
   useEffect(() => {
     const pull = (): void => void useAgentSchedules.getState().refresh(cfg)
     pull()
-    const t = window.setInterval(pull, 60_000)
-    return () => window.clearInterval(t)
+    const timer = window.setInterval(pull, 60_000)
+    return () => window.clearInterval(timer)
   }, [cfg])
 
   // 成员库 + agent 只读源汇入事件流;resolveDefaultDb 只吃成员库(双击新建绝不落到 agent:// 假路径)。
@@ -181,7 +215,7 @@ export function CalendarView() {
   )
   const events = useMemo(() => buildEvents(entries, vault, byVault), [entries, vault, byVault])
   // 无名事件以「未命名」占位上网格(清空名字时事件块不许消失);编辑卡走 events 原值,输入框保持真实空值。
-  const visible = useMemo(() => events.map((e) => (e.title ? e : { ...e, title: '未命名' })), [events])
+  const visible = useMemo(() => events.map((e) => (e.title ? e : { ...e, title: t('calview.untitled') })), [events, t])
   const selected = card ? events.find((e) => e.key === card.key) ?? null : null
   selRef.current = selected
   const openCard = (key: string, at: Anchor): void => setCard({ key, at })
@@ -202,7 +236,7 @@ export function CalendarView() {
       const start = addMinutes(startOfDay(day), min)
       value = `${fmtStamp(start, false)}/${fmtStamp(addMinutes(start, 30), false)}`
     }
-    const newId = await createAggEvent(db, dateCol, value, '新事件')
+    const newId = await createAggEvent(db, dateCol, value, t('calview.newEventTitle'))
     openCard(`${db.path}::${newId}`, at)
   }
 
@@ -210,8 +244,8 @@ export function CalendarView() {
   // Delete/Backspace 删除(任务2)。输入控件不劫持;选中/剪贴板经 ref(effect 常驻,免闭包读旧值)。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const t = e.target as HTMLElement | null
-      if (t && t.closest('input, textarea, select, [contenteditable]')) return
+      const target = e.target as HTMLElement | null
+      if (target && target.closest('input, textarea, select, [contenteditable]')) return
       const act = classifyCalKey(e)
       if (!act) return
       const sel = selRef.current
@@ -258,9 +292,9 @@ export function CalendarView() {
               size="sm"
               variant="primary"
               icon={<CalendarPlus size={14} />}
-              label="新建"
+              label={t('calview.new')}
               isDisabled={!defaultEntry}
-              tooltip={defaultEntry ? `新建到「${defaultEntry.db.name}」` : '请先在右栏添加一个日历数据库'}
+              tooltip={defaultEntry ? t('calview.newInto', { name: defaultEntry.db.name }) : t('calview.noDbHint')}
               onClick={(e) => {
                 const now = new Date()
                 const next = addMinutes(startOfDay(now), snap15(now.getHours() * 60 + now.getMinutes() + 15))
@@ -268,9 +302,9 @@ export function CalendarView() {
                 void create(startOfDay(next), next.getHours() * 60 + next.getMinutes(), at)
               }}
             />
-            <Button size="sm" variant="secondary" label="今天" onClick={() => api.current?.today()} />
-            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronLeft size={14} />} label="上一页" onClick={() => api.current?.prev()} />
-            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronRight size={14} />} label="下一页" onClick={() => api.current?.next()} />
+            <Button size="sm" variant="secondary" label={t('calview.today')} onClick={() => api.current?.today()} />
+            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronLeft size={14} />} label={t('calview.prevPage')} onClick={() => api.current?.prev()} />
+            <Button size="sm" variant="ghost" isIconOnly icon={<ChevronRight size={14} />} label={t('calview.nextPage')} onClick={() => api.current?.next()} />
             <DropdownMenu button={{ label: MODE_ITEMS.find((m) => m.id === mode)?.label ?? '周', variant: 'secondary', size: 'sm' }} menuWidth={168}>
               {MODE_ITEMS.map((m) => (
                 <DropdownMenuItem
@@ -284,10 +318,10 @@ export function CalendarView() {
             </DropdownMenu>
             {mode !== 'month' && (
               <span className="amx-cal-density">
-                <DropdownMenu button={{ label: '密度', variant: 'ghost', size: 'sm' }} menuWidth={176}>
-                  <DropdownMenuItem icon={<ZoomOut size={14} />} label="缩小时间轴" onClick={() => setHourPx(hourPx - 8)} />
-                  <DropdownMenuItem icon={<ZoomIn size={14} />} label="放大时间轴" onClick={() => setHourPx(hourPx + 8)} />
-                  <DropdownMenuItem icon={<RotateCcw size={14} />} label="恢复默认密度" endContent={`${hourPx}px`} onClick={() => setHourPx(HOUR_PX_DEFAULT)} />
+                <DropdownMenu button={{ label: t('calview.density'), variant: 'ghost', size: 'sm' }} menuWidth={176}>
+                  <DropdownMenuItem icon={<ZoomOut size={14} />} label={t('calview.zoomOut')} onClick={() => setHourPx(hourPx - 8)} />
+                  <DropdownMenuItem icon={<ZoomIn size={14} />} label={t('calview.zoomIn')} onClick={() => setHourPx(hourPx + 8)} />
+                  <DropdownMenuItem icon={<RotateCcw size={14} />} label={t('calview.densityReset')} endContent={`${hourPx}px`} onClick={() => setHourPx(HOUR_PX_DEFAULT)} />
                 </DropdownMenu>
               </span>
             )}
@@ -296,7 +330,7 @@ export function CalendarView() {
       </AstryxScope>
 
       {visible.length === 0 && (
-        <div className="amx-cal-empty">还没有日历事件。点「新建」，或在右栏添加一个含日期属性的数据库。</div>
+        <div className="amx-cal-empty">{t('calview.empty')}</div>
       )}
 
       {mode === 'month' ? (
@@ -320,6 +354,7 @@ interface TimeProps {
   titleRef: RefObject<HTMLSpanElement | null>
 }
 const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events, selectedKey, onPick, onCreate, titleRef }, ref) {
+  const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const gutterHours = useRef<HTMLDivElement>(null) // 表头/全天常驻；仅小时轴随正文纵向滚动。
   const [colw, setColw] = useState(0)
@@ -597,7 +632,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
       <div className="amx-cal-gutterfixed">
         <div className="amx-cal-gutterinner">
           <div className="amx-cal-gcorner" style={{ height: HEAD_H + 14 }} />
-          <div className="amx-cal-gallday" style={{ height: alldayH }}>全天</div>
+          <div className="amx-cal-gallday" style={{ height: alldayH }}>{t('calview.allDay')}</div>
           <div className="amx-cal-ghours" ref={gutterHours}>
             {HOURS.map((h) => (
               <div key={h} className="amx-cal-hour" style={{ height: hourPx }}>
@@ -618,7 +653,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
       >
         {days.map((d) => (
           <div key={+d} className={`amx-cal-thead2${sameDay(d, today) ? ' today' : ''}`}>
-            <span className="amx-cal-tdow">周{WEEKDAYS[d.getDay()]}</span>
+            <span className="amx-cal-tdow">{dowLabel(d.getDay())}</span>
             <span className="amx-cal-tdate">{d.getMonth() + 1}/{d.getDate()}</span>
           </div>
         ))}
@@ -631,8 +666,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
                   key={e.key}
                   className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${daySpanClass(e, d)}`}
                   style={eventColorStyle(e.color)}
-                  aria-label={`${e.title}，全天事件`}
-                  title={e.readonly ? e.title : `${e.title}（可拖入时间格设为定时）`}
+                  aria-label={t('calview.a11yAllDayEvent', { title: e.title })}
+                  title={e.readonly ? e.title : t('calview.allDayDragHint', { title: e.title })}
                   onPointerDown={allDown}
                   onPointerUp={(pe) => allUp(e, pe)}
                 >
@@ -671,7 +706,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
                       left: `calc(${layout.leftPct}% + 2px)`,
                       width: `calc(${layout.widthPct}% - 4px)`,
                     }}
-                    aria-label={`${e.title}，${hhmm(e.start)}${e.end ? ` 至 ${hhmm(e.end)}` : ''}`}
+                    aria-label={e.end
+                      ? t('calview.a11yEventRange', { title: e.title, start: hhmm(e.start), end: hhmm(e.end) })
+                      : t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })}
                     title={e.title}
                     onPointerDown={(pe) => down(e, pe)}
                     onPointerMove={move}
@@ -705,6 +742,7 @@ interface MonthProps {
   titleRef: RefObject<HTMLSpanElement | null>
 }
 const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events, selectedKey, onPick, onCreate, titleRef }, ref) {
+  const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const [rowH, setRowH] = useState(0)
   const setVisibleRange = useCalendarNav((s) => s.setVisibleRange)
@@ -795,7 +833,7 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
   return (
     <div className="amx-cal-mscroll" ref={wrap} onScroll={updateTitle}>
       <div className="amx-cal-weekhead2">
-        {WEEKDAYS.map((w) => (
+        {weekdays().map((w) => (
           <div key={w}>{w}</div>
         ))}
       </div>
@@ -814,14 +852,16 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
                     onCreate(day, { left: e.clientX, top: e.clientY, right: e.clientX, bottom: e.clientY, zoom: zoomOf(e.currentTarget) || 1 })
                   }}
                 >
-                  <div className="amx-cal-mnum">{day.getDate() === 1 ? `${day.getMonth() + 1}月1` : day.getDate()}</div>
+                  <div className="amx-cal-mnum">{day.getDate() === 1 ? t('calview.monthFirst', { m: day.getMonth() + 1 }) : day.getDate()}</div>
                   {dayEvents.slice(0, 3).map((e) => (
                     <button
                       key={e.key}
                       className={`amx-cal-chip-ev${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${daySpanClass(e, day)}`}
                       style={eventColorStyle(e.color)}
                       title={e.title}
-                      aria-label={`${e.title}${!e.allDay && sameDay(e.start, day) ? `，${hhmm(e.start)}` : ''}`}
+                      aria-label={!e.allDay && sameDay(e.start, day)
+                        ? t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })
+                        : e.title}
                       onPointerDown={chipDown}
                       onPointerUp={(pe) => chipUp(e, pe)}
                     >
@@ -831,10 +871,10 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
                   {dayEvents.length > 3 && (
                     <button
                       className="amx-cal-more"
-                      aria-label={`查看 ${day.getMonth() + 1} 月 ${day.getDate()} 日全部 ${dayEvents.length} 个事件`}
+                      aria-label={t('calview.a11yMoreEvents', { m: day.getMonth() + 1, d: day.getDate(), n: dayEvents.length })}
                       onClick={(e) => setAgenda({ day, events: dayEvents, at: rectOf(e) })}
                     >
-                      还有 {dayEvents.length - 3} 项
+                      {t('calview.moreItems', { n: dayEvents.length - 3 })}
                     </button>
                   )}
                 </div>
@@ -869,6 +909,7 @@ function DayAgendaPopover({
   onPick: (key: string, at: Anchor) => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const width = 292
   const zoom = at.zoom || 1
   const margin = 12 * zoom
@@ -895,18 +936,18 @@ function DayAgendaPopover({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`${day.getMonth() + 1} 月 ${day.getDate()} 日事件`}
+        aria-label={t('calview.a11yDayEvents', { m: day.getMonth() + 1, d: day.getDate() })}
         style={{ left, top, width }}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header>
-          <strong>{day.getMonth() + 1} 月 {day.getDate()} 日</strong>
-          <button onClick={onClose} aria-label="关闭日程列表">×</button>
+          <strong>{t('calview.dayHeading', { m: day.getMonth() + 1, d: day.getDate() })}</strong>
+          <button onClick={onClose} aria-label={t('calview.closeAgenda')}>×</button>
         </header>
         <div className="amx-cal-agenda-list">
           {events.map((ev) => (
             <button key={ev.key} style={eventColorStyle(ev.color)} onClick={(e) => onPick(ev.key, rectOf(e))}>
-              <span className="amx-cal-agenda-time">{ev.allDay ? '全天' : hhmm(ev.start)}</span>
+              <span className="amx-cal-agenda-time">{ev.allDay ? t('calview.allDay') : hhmm(ev.start)}</span>
               <span>{ev.title}</span>
             </button>
           ))}

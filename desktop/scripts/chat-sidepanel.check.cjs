@@ -55,7 +55,7 @@ async function main() {
   let app
   try {
     app = await electron.launch({
-      args: [`--user-data-dir=${path.join(home, 'userdata')}`, ROOT],
+      args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
     })
@@ -622,7 +622,7 @@ async function main() {
   // 实例**:上面那轮已经把 Amadeus 的右栏展开并存进命名布局了,同一实例里再走一遍打不到这条。
   const home2 = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatside2-'))
   const app2 = await electron.launch({
-    args: [`--user-data-dir=${path.join(home2, 'userdata')}`, ROOT],
+    args: [`--user-data-dir=${path.join(home2, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home2, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
   })

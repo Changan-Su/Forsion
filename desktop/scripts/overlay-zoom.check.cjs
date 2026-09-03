@@ -56,7 +56,7 @@ const setZoom = (page, z) => page.evaluate((v) => { document.body.style.zoom = v
 
 /** A/B:编辑器 slash 菜单(harness) */
 async function editorOverlay(browser, z) {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 900 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await page.goto(`${ORIGIN}/harness.html`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.md-block .ProseMirror', { timeout: 20000 })
@@ -105,7 +105,7 @@ async function editorOverlay(browser, z) {
 
 /** C/D:工作区 tab 右键菜单 + sash 刻度(真 app) */
 async function appOverlay(browser, z) {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1400, height: 900 } })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
   // ⚠️钉住启动 Space:2026-08-28 起「启动时进入」的缺省是 ribbon 主位槽(=主页 Space),
   // 而主页没有侧栏 → 没有 `.dv-sash`,D 那半会一直等到超时。C/D 要的是有侧栏的工作区形态。

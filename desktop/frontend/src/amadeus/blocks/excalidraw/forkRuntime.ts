@@ -18,7 +18,19 @@ import * as ReactDOMLegacy from 'react-dom'
 import * as ReactDOMClient from 'react-dom/client'
 import * as ReactJSXRuntime from 'react/jsx-runtime'
 import type * as ExcalidrawLib from '@excalidraw/excalidraw'
+import { registerMessages, translate } from '../../../i18n'
 import { getBoardUiMode } from './boardUiMode'
+
+registerMessages({
+  'boardengine.assetLoadFailed': {
+    zh: '画板引擎资源加载失败:{url}(自托管副本缺失?重跑 npm run postinstall)',
+    en: 'Whiteboard engine assets failed to load: {url} (self-hosted copy missing? Re-run npm run postinstall)',
+  },
+  'boardengine.libMissing': {
+    zh: '画板引擎已加载但没挂上 ExcalidrawLib',
+    en: 'Whiteboard engine loaded but did not expose ExcalidrawLib',
+  },
+})
 
 /** fork 的 obsidian 档还会伸手去全局 `app` 里拿宿主插件要配置(缩放上下限 / 笔模式手势 / 画布上限 /
  *  UI 模式)。我们不是 Obsidian,给它一份**纯配置**的假宿主:标量值逐个抄自插件的 DEFAULT_SETTINGS
@@ -100,7 +112,7 @@ const base = new URL('excalidraw/', document.baseURI).href
 const load = (el: HTMLLinkElement | HTMLScriptElement, url: string): Promise<void> =>
   new Promise((resolve, reject) => {
     el.onload = () => resolve()
-    el.onerror = () => reject(new Error(`画板引擎资源加载失败:${url}(自托管副本缺失?重跑 npm run postinstall)`))
+    el.onerror = () => reject(new Error(translate('boardengine.assetLoadFailed', { url })))
     document.head.appendChild(el)
   })
 
@@ -116,6 +128,6 @@ js.src = `${base}excalidraw.js`
 await Promise.all([load(css, css.href), load(js, js.src)])
 
 const lib = g.ExcalidrawLib as typeof ExcalidrawLib | undefined
-if (!lib) throw new Error('画板引擎已加载但没挂上 ExcalidrawLib')
+if (!lib) throw new Error(translate('boardengine.libMissing'))
 
 export const { Excalidraw, MainMenu, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction } = lib

@@ -94,9 +94,10 @@ async function main() {
   //    看着像有会话、其实一条都点不出聊天面板。必须先把分类切到「会话」。
   // ⚠️ 这段只为**新建流程**铺路;--reuse 下跑它会把你刚切好的会话挤掉(点第一行 = 换 activeId)。
   if (!REUSE) {
-    const seg = page.locator('.t2sw-seg', { hasText: '会话' }).first()
-    if (await seg.count().catch(() => 0)) {
-      await seg.click().catch(() => {})
+    const picker = page.locator('.t2sw-mode-picker').first()
+    if (await picker.count().catch(() => 0)) {
+      await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
+      await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
       await page.waitForTimeout(1200)
     }
     const anyRow = page.locator('.t2s-srow').first()

@@ -11,6 +11,29 @@ import { usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { parseFmObject } from '@amadeus-shared/db/pageFrontmatter'
 import { joinRel, toAssetUrl } from '@amadeus-shared/assets'
 import { EMOJI_ALL, EMOJI_GROUPS, searchEmoji } from '@amadeus/lib/emoji'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'pgchrome.coverDragHint': { zh: '上下拖动图片调整位置', en: 'Drag the image up or down to reposition' },
+  'pgchrome.coverDone': { zh: '完成', en: 'Done' },
+  'pgchrome.coverChange': { zh: '更换封面', en: 'Change cover' },
+  'pgchrome.coverReposition': { zh: '调整位置', en: 'Reposition' },
+  'pgchrome.coverRemove': { zh: '移除', en: 'Remove' },
+  'pgchrome.tabGallery': { zh: '图库', en: 'Gallery' },
+  'pgchrome.tabUrl': { zh: '链接', en: 'Link' },
+  'pgchrome.tabUpload': { zh: '上传', en: 'Upload' },
+  'pgchrome.searchPlaceholder': { zh: '搜索在线图库(Openverse),或从下方精选挑…', en: 'Search the online image library (Openverse), or pick a featured cover below…' },
+  'pgchrome.search': { zh: '搜索', en: 'Search' },
+  'pgchrome.searchUnavailable': { zh: '图库接口暂不可达,可从上方精选挑,或用「链接/上传」。', en: 'The image library is unreachable right now — pick a featured cover above, or use Link or Upload.' },
+  'pgchrome.searchEmpty': { zh: '没搜到结果,上方为精选封面。', en: 'No results — the covers above are our featured picks.' },
+  'pgchrome.urlPlaceholder': { zh: '粘贴图片地址(https://…)', en: 'Paste an image URL (https://…)' },
+  'pgchrome.setCover': { zh: '设为封面', en: 'Set as cover' },
+  'pgchrome.chooseLocal': { zh: '选择本地图片…', en: 'Choose a local image…' },
+  'pgchrome.uploadHint': { zh: '按「设置 → 笔记」的附件位置存入 vault。', en: 'Saved to the vault at the attachment location set in Settings → Notes.' },
+  'pgchrome.emojiPlaceholder': { zh: '搜索 emoji(中/英),或粘贴任意字符后回车…', en: 'Search emoji (Chinese or English), or paste any character and press Enter…' },
+  'pgchrome.emojiEmpty': { zh: '没有匹配的 emoji —— 回车可直接用你输入的字符', en: 'No matching emoji — press Enter to use what you typed' },
+  'pgchrome.removeIcon': { zh: '移除图标', en: 'Remove icon' },
+})
 
 export const UNTITLED_RE = /^(未命名|untitled)(-\d+)?$/i
 
@@ -43,6 +66,7 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   onSetCover?: (cover: string | null) => void
   onSetCoverY?: (y: number) => void
 } = {}) {
+  const { t } = useI18n()
   const activePage = usePageStore((s) => s.activePage)
   const storeCover = useActiveCover()
   const storeY = useActiveCoverY()
@@ -86,15 +110,15 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
         onError={(e) => { (e.target as HTMLElement).style.opacity = '0.15' }}
       />
       <div className="amx-cover-grad" />
-      {reposition && <div className="amx-cover-hint">上下拖动图片调整位置</div>}
+      {reposition && <div className="amx-cover-hint">{t('pgchrome.coverDragHint')}</div>}
       <div className="amx-cover-tools">
         {reposition ? (
-          <button onClick={() => setReposition(false)}>完成</button>
+          <button onClick={() => setReposition(false)}>{t('pgchrome.coverDone')}</button>
         ) : (
           <>
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>更换封面</button>
-            <button onClick={() => setReposition(true)}>调整位置</button>
-            <button onClick={() => setCover(null)}>移除</button>
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>{t('pgchrome.coverChange')}</button>
+            <button onClick={() => setReposition(true)}>{t('pgchrome.coverReposition')}</button>
+            <button onClick={() => setCover(null)}>{t('pgchrome.coverRemove')}</button>
           </>
         )}
       </div>
@@ -119,6 +143,7 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   /** 缺省 = pageStore.setPageCover(v3);unified 传自己的 fm 管线写法。 */
   onApply?: (cover: string) => void
 }) {
+  const { t } = useI18n()
   const hasSearch = !!amadeus.searchImages
   const scoped = useScopedPageStore() // 写本面板的 store(理由同 NoteCover:插件视图里 ps() 会写到隔壁)
   const [tab, setTab] = useState<'gallery' | 'url' | 'upload'>('gallery')
@@ -180,34 +205,34 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="amx-coverpick-tabs">
-          <button data-on={tab === 'gallery' || undefined} onClick={() => setTab('gallery')}>图库</button>
-          <button data-on={tab === 'url' || undefined} onClick={() => setTab('url')}>链接</button>
-          <button data-on={tab === 'upload' || undefined} onClick={() => setTab('upload')}>上传</button>
+          <button data-on={tab === 'gallery' || undefined} onClick={() => setTab('gallery')}>{t('pgchrome.tabGallery')}</button>
+          <button data-on={tab === 'url' || undefined} onClick={() => setTab('url')}>{t('pgchrome.tabUrl')}</button>
+          <button data-on={tab === 'upload' || undefined} onClick={() => setTab('upload')}>{t('pgchrome.tabUpload')}</button>
         </div>
         {tab === 'gallery' && (
           <div className="amx-coverpick-body">
             {hasSearch && (
               <div className="amx-coverpick-search">
                 <Search size={13} className="t2s-dim" />
-                <input autoFocus placeholder="搜索在线图库(Openverse),或从下方精选挑…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
-                <button className="amx-coverpick-go" onClick={search}>{busy ? '…' : '搜索'}</button>
+                <input autoFocus placeholder={t('pgchrome.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
+                <button className="amx-coverpick-go" onClick={search}>{busy ? '…' : t('pgchrome.search')}</button>
               </div>
             )}
             {grid(hits && hits.length > 0 ? hits : FEATURED_COVERS)}
-            {!busy && err && <div className="amx-coverpick-hint">图库接口暂不可达,可从上方精选挑,或用「链接/上传」。</div>}
-            {!busy && !err && hits?.length === 0 && <div className="amx-coverpick-hint">没搜到结果,上方为精选封面。</div>}
+            {!busy && err && <div className="amx-coverpick-hint">{t('pgchrome.searchUnavailable')}</div>}
+            {!busy && !err && hits?.length === 0 && <div className="amx-coverpick-hint">{t('pgchrome.searchEmpty')}</div>}
           </div>
         )}
         {tab === 'url' && (
           <div className="amx-coverpick-body amx-coverpick-url">
-            <input autoFocus placeholder="粘贴图片地址(https://…)" value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && /^https?:\/\//i.test(url.trim())) apply(url.trim()) }} />
-            <button className="amx-coverpick-go" onClick={() => { if (/^https?:\/\//i.test(url.trim())) apply(url.trim()) }}>设为封面</button>
+            <input autoFocus placeholder={t('pgchrome.urlPlaceholder')} value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && /^https?:\/\//i.test(url.trim())) apply(url.trim()) }} />
+            <button className="amx-coverpick-go" onClick={() => { if (/^https?:\/\//i.test(url.trim())) apply(url.trim()) }}>{t('pgchrome.setCover')}</button>
           </div>
         )}
         {tab === 'upload' && (
           <div className="amx-coverpick-body">
-            <button className="amx-coverpick-go amx-coverpick-upload" onClick={upload}>选择本地图片…</button>
-            <div className="amx-coverpick-hint">按「设置 → 笔记」的附件位置存入 vault。</div>
+            <button className="amx-coverpick-go amx-coverpick-upload" onClick={upload}>{t('pgchrome.chooseLocal')}</button>
+            <div className="amx-coverpick-hint">{t('pgchrome.uploadHint')}</div>
           </div>
         )}
       </OverlayAt>
@@ -227,6 +252,7 @@ export function IconPicker({ x, y, current, onPick, onClose }: {
   onPick: (icon: string | null) => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState('')
   // 输入框一框两用:命中关键词 → 当搜索;一个字都搜不到(如直接粘贴 emoji)→ 回车按原样采用。
   const hits = searchEmoji(draft)
@@ -236,7 +262,7 @@ export function IconPicker({ x, y, current, onPick, onClose }: {
         <input
           className="amx-db-pop-input"
           autoFocus
-          placeholder="搜索 emoji(中/英),或粘贴任意字符后回车…"
+          placeholder={t('pgchrome.emojiPlaceholder')}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -263,10 +289,10 @@ export function IconPicker({ x, y, current, onPick, onClose }: {
                   ))}
                 </Fragment>
               ))}
-          {hits && hits.length === 0 && <div className="amx-iconpick-empty">没有匹配的 emoji —— 回车可直接用你输入的字符</div>}
+          {hits && hits.length === 0 && <div className="amx-iconpick-empty">{t('pgchrome.emojiEmpty')}</div>}
         </div>
         {current && (
-          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>移除图标</button>
+          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>{t('pgchrome.removeIcon')}</button>
         )}
       </OverlayAt>
     </div>

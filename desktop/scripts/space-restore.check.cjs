@@ -46,13 +46,13 @@ const check = (name, ok, detail) => {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true })
+  const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true })
   const ORIGIN = process.env.CAPSULE_ORIGIN || 'http://localhost:5173'
   // 与 check:capsule 同一套「未登录不跳登录页」的起手式。
   await ctx.addInitScript(() => {
     try { localStorage.setItem('forsion_token', 'space-restore-check'); localStorage.setItem('lcl.uiMode', 'mobile') } catch { /* ignore */ }
   })
-  const page = await ctx.newPage()
+  const page = await ctx.newPage({ locale: 'zh-CN' })
   await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"check"}' }))
   page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
 
@@ -110,7 +110,7 @@ const check = (name, ok, detail) => {
   //   冷启动都被抹掉,「上次退出那个 Space」的命名槽也从来没人补,于是重启必回干净默认。
   //   判据取「上次退出的 Space 有没有被归档」:那件事只有新代码会做,buildDefault 那条路做不出来。
   {
-    const dctx = await browser.newContext({ viewport: { width: 1280, height: 860 } })
+    const dctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 860 } })
     await dctx.addInitScript(() => {
       try {
         localStorage.setItem('forsion_token', 'space-restore-check')
@@ -118,7 +118,7 @@ const check = (name, ok, detail) => {
         localStorage.setItem('forsion_default_space', 'tangu') // D/E 钉的是**固定启动 Space**那条路(缺省已改成「上次退出」,见 F)
       } catch { /* ignore */ }
     })
-    const dp = await dctx.newPage()
+    const dp = await dctx.newPage({ locale: 'zh-CN' })
     await dp.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"check"}' }))
     dp.on('pageerror', (e) => console.log('  [pageerror]', e.message))
     const dboot = async () => {
@@ -172,7 +172,7 @@ const check = (name, ok, detail) => {
   //   的存档(全新 context 里没有 → clearLayout),上一程的记号一个不剩。独立 context:D/E 攒下的命名布局
   //   不能漏进来,否则「换掉了」也可能碰巧还有内容。
   {
-    const fctx = await browser.newContext({ viewport: { width: 1280, height: 860 } })
+    const fctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 860 } })
     await fctx.addInitScript(() => {
       try {
         localStorage.setItem('forsion_token', 'space-restore-check')
@@ -180,7 +180,7 @@ const check = (name, ok, detail) => {
         localStorage.setItem('forsion_default_space', '__last__') // 「上次退出」那一档(2026-08-28 起不再是缺省)
       } catch { /* ignore */ }
     })
-    const fp = await fctx.newPage()
+    const fp = await fctx.newPage({ locale: 'zh-CN' })
     await fp.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"check"}' }))
     fp.on('pageerror', (e) => console.log('  [pageerror]', e.message))
     const fboot = async () => {

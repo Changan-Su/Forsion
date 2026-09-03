@@ -106,7 +106,7 @@ async function at(p, width, cls) {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1600, height: 800 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1600, height: 800 } })
   await p.setContent(HTML)
 
   // ① 够宽 + 有事实 → 车道占 --tsum-w,正文让出同宽,输入框同步让位

@@ -11,6 +11,23 @@ import { openNote } from './amadeusNav'
 import { create } from 'zustand'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
+import { registerMessages, useI18n } from './i18n'
+
+registerMessages({
+  'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
+  'amxpanel.searchPlaceholder': { zh: '搜索全部笔记…', en: 'Search all notes…' },
+  'amxpanel.saveCollection': { zh: '存为集合', en: 'Save as collection' },
+  'amxpanel.saveCollectionTip': { zh: '存为集合(左栏可一键回放这次搜索)', en: 'Save as a collection (replay this search from the sidebar in one click)' },
+  'amxpanel.saveCollectionHint': { zh: '集合会出现在左栏,点击即重放这次搜索。', en: 'The collection shows up in the sidebar — click it to replay this search.' },
+  'amxpanel.noVault': { zh: '先打开一个 Vault。', en: 'Open a vault first.' },
+  'amxpanel.searchEmpty': { zh: '输入关键词,搜遍全部笔记内容。', en: 'Type a keyword to search the contents of every note.' },
+  'amxpanel.noResults': { zh: '无结果', en: 'No results' },
+  'amxpanel.tagsHead': { zh: '标签 · {n}', en: 'Tags · {n}' },
+  'amxpanel.tagsEmpty': { zh: '还没有 #标签。在笔记里写 #灵感 这样的行内标签即可出现在这里。', en: 'No #tags yet. Write an inline tag like #idea in a note and it will show up here.' },
+  'amxpanel.graphHead': { zh: '关系图 · 当前笔记', en: 'Graph · current note' },
+  'amxpanel.graphNoNote': { zh: '未打开笔记', en: 'No note open' },
+  'amxpanel.graphEmpty': { zh: '这篇笔记还没有链接(出链 [[…]] 或反链)。', en: 'This note has no links yet — no outgoing [[…]] links and no backlinks.' },
+})
 
 const ps = () => usePageStore.getState()
 const baseName = (p: string): string => (p.split(/[\\/]/).pop() ?? p).replace(/\.md$/i, '')
@@ -24,6 +41,7 @@ export const useSearchSeed = create<{ seed: { q: string; n: number } | null; req
 }))
 
 export function AmadeusSearchView() {
+  const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const [query, setQuery] = useState('')
   const seed = useSearchSeed((s) => s.seed)
@@ -39,8 +57,8 @@ export function AmadeusSearchView() {
     const q = query.trim()
     if (!q) { setHits([]); return }
     const id = ++seq.current
-    const t = setTimeout(() => { void amadeus.search(q).then((r) => { if (id === seq.current) setHits(r) }) }, 120)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => { void amadeus.search(q).then((r) => { if (id === seq.current) setHits(r) }) }, 120)
+    return () => clearTimeout(timer)
   }, [query])
 
   // 命中 → 打开笔记 → 滚到首个含关键词的块并短暂高亮。
@@ -63,31 +81,31 @@ export function AmadeusSearchView() {
 
   return (
     <div className="amx-panel">
-      <div className="amx-panel-head">全文搜索</div>
+      <div className="amx-panel-head">{t('amxpanel.searchHead')}</div>
       <div className="t2s-search amx-search-box">
         <Search size={13} className="t2s-dim" />
-        <input autoFocus value={query} placeholder="搜索全部笔记…" onChange={(e) => setQuery(e.target.value)} />
+        <input autoFocus value={query} placeholder={t('amxpanel.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />
         {query.trim() && (
           <button
             className="amx-search-save"
-            title="存为集合(左栏可一键回放这次搜索)"
+            title={t('amxpanel.saveCollectionTip')}
             onClick={() => {
-              void askString('存为集合', query.trim(), { label: '集合会出现在左栏,点击即重放这次搜索。' }).then((name) => {
+              void askString(t('amxpanel.saveCollection'), query.trim(), { label: t('amxpanel.saveCollectionHint') }).then((name) => {
                 const n = name?.trim()
                 if (n) useAmadeusPrefs.getState().saveCollection(n, query.trim())
               })
             }}
           >
-            存为集合
+            {t('amxpanel.saveCollection')}
           </button>
         )}
       </div>
       {!vaultRoot ? (
-        <div className="amx-panel-empty">先打开一个 Vault。</div>
+        <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
       ) : !query.trim() ? (
-        <div className="amx-panel-empty">输入关键词,搜遍全部笔记内容。</div>
+        <div className="amx-panel-empty">{t('amxpanel.searchEmpty')}</div>
       ) : hits.length === 0 ? (
-        <div className="amx-panel-empty">无结果</div>
+        <div className="amx-panel-empty">{t('amxpanel.noResults')}</div>
       ) : (
         <div className="amx-list">
           {hits.map((h) => (
@@ -118,6 +136,7 @@ function highlight(snippet: string, q: string): ReactNode {
 // ─────────────────────────────── 标签(左栏 tab;#tag 计数 + 展开跳转) ───────────────────────────────
 
 export function AmadeusTagsView() {
+  const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const version = usePageStore((s) => s.linkGraphVersion)
   const [tags, setTags] = useState<TagCount[]>([])
@@ -127,7 +146,7 @@ export function AmadeusTagsView() {
   useEffect(() => {
     let live = true
     if (!vaultRoot) { setTags([]); return }
-    void amadeus.listTags().then((t) => { if (live) setTags(t) })
+    void amadeus.listTags().then((list) => { if (live) setTags(list) })
     return () => { live = false }
   }, [vaultRoot, version])
   useEffect(() => {
@@ -139,23 +158,23 @@ export function AmadeusTagsView() {
 
   return (
     <div className="amx-panel">
-      <div className="amx-panel-head">标签 · {tags.length}</div>
+      <div className="amx-panel-head">{t('amxpanel.tagsHead', { n: tags.length })}</div>
       {!vaultRoot ? (
-        <div className="amx-panel-empty">先打开一个 Vault。</div>
+        <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
       ) : tags.length === 0 ? (
-        <div className="amx-panel-empty">还没有 #标签。在笔记里写 #灵感 这样的行内标签即可出现在这里。</div>
+        <div className="amx-panel-empty">{t('amxpanel.tagsEmpty')}</div>
       ) : (
         <div className="amx-list">
-          {tags.map((t) => (
-            <div key={t.tag}>
+          {tags.map((tc) => (
+            <div key={tc.tag}>
               <button
-                className={`amx-list-item amx-tag${openTag === t.tag ? ' active' : ''}`}
-                onClick={() => setOpenTag((cur) => (cur === t.tag ? null : t.tag))}
+                className={`amx-list-item amx-tag${openTag === tc.tag ? ' active' : ''}`}
+                onClick={() => setOpenTag((cur) => (cur === tc.tag ? null : tc.tag))}
               >
-                <span className="amx-tag-name">#{t.tag}</span>
-                <span className="amx-tag-count">{t.count}</span>
+                <span className="amx-tag-name">#{tc.tag}</span>
+                <span className="amx-tag-count">{tc.count}</span>
               </button>
-              {openTag === t.tag && tagPages.map((p) => (
+              {openTag === tc.tag && tagPages.map((p) => (
                 <button key={p} className="amx-list-item amx-tag-page" onClick={() => void openNote(p)} title={p}>
                   {baseName(p)}
                 </button>
@@ -215,6 +234,7 @@ function step(nodes: GNode[], edges: GEdge[], alpha: number): void {
 }
 
 export function AmadeusLocalGraphView() {
+  const { t } = useI18n()
   // v4/unified 笔记不设 activePage(见 pageStore.activeNotePath)→ 回落到它,否则本视图对 v4 全空。
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath)
   const version = usePageStore((s) => s.linkGraphVersion)
@@ -393,11 +413,11 @@ export function AmadeusLocalGraphView() {
 
   return (
     <div className="amx-panel">
-      <div className="amx-panel-head">关系图 · 当前笔记</div>
+      <div className="amx-panel-head">{t('amxpanel.graphHead')}</div>
       {!activePage ? (
-        <div className="amx-panel-empty">未打开笔记</div>
+        <div className="amx-panel-empty">{t('amxpanel.graphNoNote')}</div>
       ) : !graph || !hasGraph ? (
-        <div className="amx-panel-empty">这篇笔记还没有链接(出链 [[…]] 或反链)。</div>
+        <div className="amx-panel-empty">{t('amxpanel.graphEmpty')}</div>
       ) : (
         <svg
           ref={svgRef}

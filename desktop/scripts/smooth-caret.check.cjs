@@ -81,7 +81,7 @@ line two</div></div>`
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1000, height: 760 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 760 } })
   await page.setContent(HTML)
   await page.addScriptTag({ content: SC_JS })
   await page.evaluate(() => {

@@ -162,7 +162,7 @@ function surfaceUnder(el) {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1000, height: 800 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 800 } })
   await p.setContent(PAGE)
   await p.addScriptTag({ content: COLOR_UTILS })
 

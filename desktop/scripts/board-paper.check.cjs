@@ -83,7 +83,7 @@ paint('#ffffff', '#000000'); place()
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 640, height: 440 }, deviceScaleFactor: 1 })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 640, height: 440 }, deviceScaleFactor: 1 })
   await p.setContent(PAGE)
 
   /** 截图后回灌进页面读像素 —— mix-blend-mode 的合成结果 JS 直接读不到,只有截图看得见。 */

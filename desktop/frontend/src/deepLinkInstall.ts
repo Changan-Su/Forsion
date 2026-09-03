@@ -13,6 +13,12 @@ import { openSession, openNewChat } from './sessionNav'
 import { parseDeepLink, isSafeVaultPath, isSafeId, type DeepLinkIntent } from './deepLinkPlan'
 import { fileMatchViewType } from './viewFileMatch'
 import { windowKind } from './windowKind'
+import { registerMessages, translate } from './i18n'
+
+registerMessages({
+  'deeplink.unrecognized': { zh: '无法识别的 Forsion 链接', en: 'Unrecognized Forsion link' },
+  'deeplink.unavailable': { zh: '链接目标不可用(视图未启用或参数非法)', en: 'Link target unavailable (view disabled or bad params)' },
+})
 
 const VIEW_DENY = new Set(['browser', 'terminal'])
 
@@ -36,8 +42,6 @@ export function entityParamsSafe(def: ViewDefinition, params: Record<string, str
   if (def.fileMatch) return isSafeVaultPath(v) && fileMatchViewType(v) === def.type
   return isSafeId(v, 256)
 }
-
-const zh = (): boolean => document.documentElement.lang.startsWith('zh')
 
 /** 冷启动 drain 到的 URL 会先于 Dockview 就绪到达 → 等 api 上线再落地(封顶 8s,超时按当前状态硬试)。 */
 function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
@@ -119,10 +123,10 @@ export function installDeepLinks(): void {
     void (async () => {
       const toast = useApp.getState().toast
       const intent = parseDeepLink(url)
-      if (!intent) { toast(zh() ? '无法识别的 Forsion 链接' : 'Unrecognized Forsion link'); return }
+      if (!intent) { toast(translate('deeplink.unrecognized')); return }
       await whenWorkspaceReady()
       const ok = await resolveDeepLink(intent).catch(() => false)
-      if (!ok) toast(zh() ? '链接目标不可用(视图未启用或参数非法)' : 'Link target unavailable (view disabled or bad params)')
+      if (!ok) toast(translate('deeplink.unavailable'))
     })()
   }
   w.tangu.onDeepLink(handle)

@@ -18,7 +18,7 @@ import { UnitSwitcher } from './components/UnitSwitcher'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
-import { cycleLocale, useI18n } from './i18n'
+import { cycleLocale, registerMessages, translate, useI18n } from './i18n'
 import { ChatView } from './views/ChatView'
 import { MemoryPanelView, SubchatsView, SessionFilesView } from './views/RightViews'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
@@ -56,6 +56,19 @@ import { AutomationDetailView } from './views/automation/AutomationDetailView'
 import { AutomationRunsView } from './views/automation/AutomationRunsView'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { installDeepLinks } from './deepLinkInstall'
+
+// 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
+// **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
+registerMessages({
+  'bootengine.view.chatPanel': { zh: '对话面板', en: 'Chat panel' },
+  'bootengine.view.dashboard': { zh: '仪表盘', en: 'Dashboard' },
+  'bootengine.view.image': { zh: '图片', en: 'Image' },
+  'bootengine.view.media': { zh: '媒体', en: 'Media' },
+  'bootengine.view.pluginFile': { zh: '插件文件', en: 'Plugin file' },
+  'bootengine.cmd.quickFind': { zh: '快速查找', en: 'Quick find' },
+  'bootengine.cmd.showChatPanel': { zh: '显示对话面板', en: 'Show chat panel' },
+  'bootengine.cmd.openMini': { zh: '打开 Mini 卡片', en: 'Open mini card' },
+})
 
 const ws = () => useWorkspace.getState()
 const app = () => useApp.getState()
@@ -104,7 +117,7 @@ export function installEngine(): void {
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat', kind: 'entity', idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat-panel', kind: 'aux', displayName: () => (document.documentElement.lang.startsWith('zh') ? '对话面板' : 'Chat panel'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
+  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
   // 右栏视图(可关,可重开)
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
   if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
@@ -171,7 +184,7 @@ export function installEngine(): void {
     // 仪表盘:.dashboard.md 一律开进 DashboardView,由它按文件里的 `dashLayout:` 分派 ——
     // 缺省 = 结构化网格(dashboard3:,2026-08-27 拍板的默认),`canvas` = 自由摆位(dashboard2:)。
     // 文件仍是一份合法笔记(布局都在外来 frontmatter 键里),掉进笔记编辑器也不会坏。
-    registerView({ type: 'dashboard', kind: 'entity', idParam: 'dashPath', fileMatch: VIEW_FILE_MATCH['dashboard'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '仪表盘' : 'Dashboard'), icon: LayoutDashboard, factory: (props) => <DashboardView {...props} /> })
+    registerView({ type: 'dashboard', kind: 'entity', idParam: 'dashPath', fileMatch: VIEW_FILE_MATCH['dashboard'], displayName: () => translate('bootengine.view.dashboard'), icon: LayoutDashboard, factory: (props) => <DashboardView {...props} /> })
     // 旧网格版 view **已移除**(用户拍板:旧 UI 不能留着让人看到)。已存布局里的 amadeus-dashboard
     // panel 由 layoutViewsAllRegistered 整份回退 → 该 Space 按新配方重建,文件本身不受影响
     // (.dashboard.md 照旧被新画布版认领,旧布局键 dashboard: 也原样留在文件里当回滚保险)。
@@ -182,15 +195,15 @@ export function installEngine(): void {
       dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
     })
     // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。
-    registerView({ type: 'amadeus-image', kind: 'entity', embeddable: true, idParam: 'imagePath', fileMatch: VIEW_FILE_MATCH['amadeus-image'], displayName: () => (document.documentElement.lang.startsWith('zh') ? '图片' : 'Image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
+    registerView({ type: 'amadeus-image', kind: 'entity', embeddable: true, idParam: 'imagePath', fileMatch: VIEW_FILE_MATCH['amadeus-image'], displayName: () => translate('bootengine.view.image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
     // 独立音视频视图(多实例,params.path 认领文件;聊天里的时刻引用条 `[[a.mp4#t=95]]`、
     // 笔记里点了但本页没播放器的媒体锚,见 amadeusNav.openMedia)。
     // ⚠️ 刻意**不给 fileMatch**:openFile 里的 extHit 排在插件 matchFileType **之前**,认领了
     //    `.mp4` 就抢掉插件对音视频的认领(方案「媒体锚点」§6 不变式 5)。树上双击照旧交系统播放器。
-    registerView({ type: 'amadeus-media', kind: 'entity', embeddable: true, idParam: 'path', displayName: () => (document.documentElement.lang.startsWith('zh') ? '媒体' : 'Media'), icon: FileVideo, factory: (props) => <AmadeusMediaView {...props} /> })
+    registerView({ type: 'amadeus-media', kind: 'entity', embeddable: true, idParam: 'path', displayName: () => translate('bootengine.view.media'), icon: FileVideo, factory: (props) => <AmadeusMediaView {...props} /> })
     // 通用「插件文件类型」视图(多实例,params.filePath 认领文件;树上点插件声明的文件类型 / 笔记里点
     // ![[x.ext]] 打开,见 amadeusNav.openFile + 插件的 ctx.registerFileType)。一个视图服务所有插件文件类型。
-    registerView({ type: 'amadeus-plugin-file', kind: 'entity', idParam: 'filePath', displayName: () => (document.documentElement.lang.startsWith('zh') ? '插件文件' : 'Plugin File'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
+    registerView({ type: 'amadeus-plugin-file', kind: 'entity', idParam: 'filePath', displayName: () => translate('bootengine.view.pluginFile'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
     registerView({ type: 'amadeus-backlinks', kind: 'aux', displayName: () => app().tr('amadeus.backlinks'), icon: Link2, factory: () => <AmadeusBacklinksView />, singleton: true })
     registerView({ type: 'amadeus-search', kind: 'collection', embeddable: true, displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
     registerView({ type: 'amadeus-tags', kind: 'collection', embeddable: true, displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
@@ -407,7 +420,7 @@ export function installEngine(): void {
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
   // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。
   addCommand({ id: 'toggle-left', icon: PanelLeft, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
-  addCommand({ id: 'quick-find', icon: Search, title: () => '快速查找', keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
+  addCommand({ id: 'quick-find', icon: Search, title: () => translate('bootengine.cmd.quickFind'), keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
   addCommand({ id: 'toggle-right', icon: PanelLeft, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
   // mod+j 与 VS Code 的面板热键对齐;app 命令表与编辑器 keymap 皆空闲(mod+/ 已被左栏占,见上)。
   // ⚠️仅桌面壳:移动单列壳没有底部面板,而 singleColumnStore.toggleSidebar 是
@@ -437,12 +450,12 @@ export function installEngine(): void {
   if (PRODUCT.spaces.includes('tangu')) addCommand({
     id: 'show-chat-panel',
     icon: MessageCircle,
-    title: () => (document.documentElement.lang.startsWith('zh') ? '显示对话面板' : 'Show chat panel'),
+    title: () => translate('bootengine.cmd.showChatPanel'),
     keywords: 'chat panel side conversation 侧栏 对话 面板',
     run: () => ws().showSideView('right', 'chat-panel'),
   })
   // Mini 悬浮卡片(全局快捷键 ⌘/Ctrl+⇧+M 亦可):仅桌面(openMini 存在)。
-  if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => (document.documentElement.lang.startsWith('zh') ? '打开 Mini 卡片' : 'Open mini card'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => window.tangu?.openMini?.({ sessionId: app().activeId || undefined }) })
+  if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => translate('bootengine.cmd.openMini'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => window.tangu?.openMini?.({ sessionId: app().activeId || undefined }) })
   // 另存为 Space:当前布局序列化成 ~/.tangu/spaces/<slug>/space.json 并注册(仅桌面)。
   if (window.tangu?.spacesSave) addCommand({ id: 'save-as-space', title: () => app().tr('command.saveAsSpace'), keywords: 'space 空间 另存 保存 custom', run: () => {
     void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void saveCurrentAsSpace(name) })

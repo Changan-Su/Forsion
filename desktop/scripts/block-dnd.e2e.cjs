@@ -91,7 +91,7 @@ async function main() {
   }
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
-    const page = await browser.newPage()
+    const page = await browser.newPage({ locale: 'zh-CN' })
     page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 
     // A. 核心实报:text 块拖到另一 text 块右边缘 → 与其并排成两栏

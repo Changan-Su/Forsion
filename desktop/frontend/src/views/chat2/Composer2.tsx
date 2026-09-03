@@ -18,7 +18,7 @@ const CTX_SEC_KEYS = new Set(['persona', 'harness', 'guidance', 'profile', 'proj
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
-import { useI18n } from '../../i18n'
+import { registerMessages, useI18n } from '../../i18n'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
 import { GroupChatSetup } from '../../components/GroupChatSetup'
 import { track } from '../../achievements/store'
@@ -32,6 +32,13 @@ import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import './composer2.css'
+
+registerMessages({
+  // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
+  'composer2.exportRoleUser': { zh: '我', en: 'Me' },
+  // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
+  'composer2.listSep': { zh: '、', en: ', ' },
+})
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
 type OpenMenu = 'add' | 'mode' | 'model' | 'ctx' | null
@@ -393,7 +400,7 @@ export const Composer2: React.FC<{
       const body = (m.content || '').trim()
       const calls = Array.isArray(m.tool_calls) ? m.tool_calls : []
       if (!body && !calls.length) continue
-      md.push(role === 'user' ? '## 我' : '## Tangu', '')
+      md.push(role === 'user' ? `## ${t('composer2.exportRoleUser')}` : '## Tangu', '')
       if (body) md.push(body, '')
       for (const c of calls) {
         const name = c?.function?.name || (c as any)?.name || 'tool'
@@ -970,7 +977,7 @@ export const Composer2: React.FC<{
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
       next.push({ name: f.name, mimeType: f.type, data: btoa(bin), size: f.size })
     }
-    setHint(skipped.length ? t('input.skip.imageHint', { items: skipped.join('、') }) : null)
+    setHint(skipped.length ? t('input.skip.imageHint', { items: skipped.join(t('composer2.listSep')) }) : null)
     setAttachments((prev) => [...prev, ...next])
   }
 
@@ -986,7 +993,7 @@ export const Composer2: React.FC<{
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
       next.push({ name: f.name, mimeType: f.type || 'application/octet-stream', data: btoa(bin), size: f.size })
     }
-    setHint(skipped.length ? t('input.skip.simple', { items: skipped.join('、') }) : null)
+    setHint(skipped.length ? t('input.skip.simple', { items: skipped.join(t('composer2.listSep')) }) : null)
     setWsFiles((prev) => [...prev, ...next])
   }
 

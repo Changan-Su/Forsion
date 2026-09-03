@@ -57,6 +57,44 @@ describe('evalFormula', () => {
     expect(evalFormula('days({due}, today())', get({ due: '2026-09-04' }), opts)).toBe(3)
     expect(evalFormula('days({due}, today())', get({ due: '2026-08-30T10:00/2026-08-31' }), opts)).toBe(-2)
   })
+  it('format(date, pattern):YYYY/MM/DD 替换、其余字符原样、calendarDate 区间取前 10 位;非日期抛错', () => {
+    const g = get({ d: '2026-09-02', r: '2026-01-05T10:00/2026-01-06T11:00', bad: '昨天', n: null })
+    expect(evalFormula('format({d}, "YYYY-MM")', g)).toBe('2026-09')
+    expect(evalFormula('format({d}, "YYYY年MM月DD日")', g)).toBe('2026年09月02日')
+    expect(evalFormula('format({d}, "DD/MM/YYYY")', g)).toBe('02/09/2026')
+    expect(evalFormula('format({r}, "MM-DD")', g)).toBe('01-05')
+    expect(evalFormula('format({d}, "no placeholders")', g)).toBe('no placeholders')
+    expect(() => evalFormula('format({bad}, "YYYY")', g)).toThrow(FormulaError)
+    expect(() => evalFormula('format({n}, "YYYY")', g)).toThrow(FormulaError)
+    expect(() => evalFormula('format({d})', g)).toThrow(FormulaError) // 缺 pattern
+  })
+  it('value(x):数字化(飞书 VALUE);非数字串抛错、空按 0', () => {
+    const g = get({ s: '12.5', bad: 'abc', n: null, b: true })
+    expect(evalFormula('value({s})+1', g)).toBe(13.5)
+    expect(evalFormula('VALUE("7")*2', g)).toBe(14) // 大小写无关
+    expect(evalFormula('value({n})', g)).toBe(0)
+    expect(evalFormula('value({b})', g)).toBe(1)
+    expect(() => evalFormula('value({bad})', g)).toThrow('不是数字')
+    expect(() => evalFormula('value()', g)).toThrow('需要 1 个参数')
+  })
+  it('text(x) 单参转字符串;text(date, pattern) 二参 = format(飞书 TEXT 二参不再被静默吞掉)', () => {
+    const g = get({ d: '2026-09-02T10:00', bad: '昨天' })
+    expect(evalFormula('text(12)', g)).toBe('12')
+    expect(evalFormula('text({d}, "YYYY-MM")', g)).toBe('2026-09')
+    expect(evalFormula('TEXT({d}, "YYYY年MM月DD日")', g)).toBe('2026年09月02日')
+    expect(evalFormula('text({d}, "YYYY-MM")', g)).not.toBe('2026-09-02T10:00') // 负对照:旧行为是返回整串
+    expect(() => evalFormula('text({bad}, "YYYY")', g)).toThrow('不是日期')
+    expect(() => evalFormula('text({d}, "YYYY", 1)', g)).toThrow('最多接受 2 个参数')
+  })
+  it('参数个数上界:多给参数抛错而非静默吞掉;变参函数不受限', () => {
+    expect(() => evalFormula('abs(1, 2)', get({}))).toThrow('只接受 1 个参数')
+    expect(() => evalFormula('today(1)', get({}))).toThrow('只接受 0 个参数')
+    expect(() => evalFormula('round(1.234, 2, 9)', get({}))).toThrow('最多接受 2 个参数')
+    expect(() => evalFormula('if(true, 1)', get({}))).toThrow('需要 3 个参数')
+    expect(evalFormula('min(3,1,2,0)', get({}))).toBe(0)
+    expect(evalFormula('max(3,1,2,9)', get({}))).toBe(9)
+    expect(evalFormula('concat("a","b","c")', get({}))).toBe('abc')
+  })
   it('错误:语法/未知列/未知函数/除零/非数字算术', () => {
     expect(() => evalFormula('1+', get({}))).toThrow(FormulaError)
     expect(() => evalFormula('{没有}', get({}))).toThrow('未知列')

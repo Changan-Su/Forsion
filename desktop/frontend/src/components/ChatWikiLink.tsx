@@ -6,10 +6,17 @@ import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { isHostPath, mediaLabel, parseBlockSubpath, parseLineSubpath, parseMediaLinkInner, parsePdfLinkInner, splitLinkInner, webCiteKey, withTextFragment, type LineLoc, type MediaLoc } from '@amadeus-shared/pdfLink'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { registerMessages, useI18n } from '../i18n'
 import { splitWiki, wikiLabel } from './wikiChat'
 import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
 
+registerMessages({
+  'chatwiki.mediaTipBadAnchor': { zh: '{path}(时刻锚点无效,从头播放)', en: '{path} (invalid time anchor — playing from the start)' },
+  'chatwiki.mediaTipBadRangeEnd': { zh: '{path} {stamp}(区间终点无效,已忽略)', en: '{path} {stamp} (invalid range end — ignored)' },
+})
+
 export function ChatWikiLink({ inner }: { inner: string }) {
+  const { t } = useI18n()
   const pages = usePageStore((s) => s.pages)
   const files = usePageStore((s) => s.files)
   const root = usePageStore((s) => s.vaultRoot)
@@ -138,8 +145,8 @@ export function ChatWikiLink({ inner }: { inner: string }) {
     const stamp = media.loc ? `@${mediaLabel(media.loc.at)}${media.loc.to ? `–${mediaLabel(media.loc.to)}` : ''}` : ''
     const text = inner.includes('|') ? label : stamp ? `${short} ${stamp}` : short
     // 「降级 ≠ 静默」:用户写了终点但它坏掉(`t=95,80`)时,起点照用、终点忽略,但 title 得说一声。
-    const tip = !media.loc ? `${media.abs}(时刻锚点无效,从头播放)`
-      : media.loc.badTo ? `${media.abs} ${stamp}(区间终点无效,已忽略)`
+    const tip = !media.loc ? t('chatwiki.mediaTipBadAnchor', { path: media.abs })
+      : media.loc.badTo ? t('chatwiki.mediaTipBadRangeEnd', { path: media.abs, stamp })
         : `${media.abs} ${stamp}`
     return (
       <a className="wikilink" data-wiki={media.abs} title={tip} onClick={() => { void openMediaCitation(media) }}>

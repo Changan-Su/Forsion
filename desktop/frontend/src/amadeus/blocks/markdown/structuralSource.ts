@@ -13,6 +13,11 @@ import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { applyTrigger, triggerFromStructuralPrefix } from './blockTriggers'
+import { registerMessages, translate } from '../../../i18n'
+
+registerMessages({
+  'structsrc.prefixAriaLabel': { zh: 'Markdown 标记', en: 'Markdown marker' },
+})
 
 interface StructuralSourceState {
   /** 正在逐字符编辑的结构前缀位置；null = 正常渲染态。 */
@@ -187,7 +192,7 @@ function prefixInput(view: EditorView, info: PrefixInfo): HTMLInputElement {
   input.dataset.original = info.source
   input.dataset.structuralPrefix = info.kind
   input.dataset.widgetPos = String(info.widgetPos)
-  input.setAttribute('aria-label', 'Markdown 标记')
+  input.setAttribute('aria-label', translate('structsrc.prefixAriaLabel'))
   input.setAttribute('autocomplete', 'off')
   input.setAttribute('autocapitalize', 'off')
   input.spellcheck = false

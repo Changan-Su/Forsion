@@ -81,7 +81,7 @@ const popShown = () => getComputedStyle(document.querySelector('.t2c-ctxring-pop
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 900, height: 600 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 600 } })
   await p.setContent(PAGE)
 
   check('初始不显示详情浮层', !(await p.evaluate(popShown)))

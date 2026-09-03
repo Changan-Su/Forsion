@@ -65,7 +65,7 @@ const PROBES = ['plain', 'lovable', 'qbird', 'custom', 'soft']
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 900, height: 600 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 600 } })
   await p.setContent(PAGE)
 
   /** 给每个探针挂上要读的变量,回读 computed 值。 */

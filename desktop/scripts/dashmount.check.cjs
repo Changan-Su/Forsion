@@ -42,7 +42,7 @@ async function shot(page, name) {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' })
   const errors = []
   page.on('pageerror', (e) => errors.push(String(e)))
   try {

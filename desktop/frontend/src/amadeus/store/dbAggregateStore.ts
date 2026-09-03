@@ -6,7 +6,8 @@
 import { useEffect, useMemo } from 'react'
 import { coerceForDisplay, dbId, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { fmValueToCell } from '@amadeus-shared/db/pageFrontmatter'
-import { resolveBaseType } from '../blocks/database/propertyTypes'
+import { isStamped, newRowCells, resolveBaseType } from '../blocks/database/propertyTypes'
+import { dropSelfRefs, type DroppedRef } from '../blocks/database/rowLink'
 import '../blocks/database/propertyTypes.builtins' // 确保内置 todo/calendarDate 在场
 import { useDbStore } from './dbStore'
 import { useNoteViewStore } from './noteViewStore'
@@ -14,6 +15,14 @@ import { usePageStore } from './pageStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { amadeus } from '../api'
 import { actDebounced, shortVal } from '../../activity/log'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'dbagg.confirmDeleteNote': {
+    zh: '删除此事件会一并删除对应的笔记文件,确定?',
+    en: 'Deleting this event also deletes its note file. Continue?',
+  },
+})
 
 const DB_RE = /\.db$/i
 
@@ -107,11 +116,14 @@ export function useAggregatedDatabases(type: string): AggDb[] {
   return useMemo(() => all.filter((db) => db.columns.some((c) => c.type === type)), [all, type])
 }
 
-/** 日历锚点日期列 = primitive/自定义 baseType=date,或富类型 calendarDate(baseType=text)。 */
-export const isDateCol = (c: DbColumn): boolean => resolveBaseType(c.type) === 'date' || c.type === 'calendarDate'
+/** 日历锚点日期列 = primitive/自定义 baseType=date,或富类型 calendarDate / created(baseType=text;
+ *  created 存 `YYYY-MM-DDTHH:mm` 与 calendarDate 单侧串同款)。 */
+export const isDateCol = (c: DbColumn): boolean => resolveBaseType(c.type) === 'date' || c.type === 'calendarDate' || c.type === 'created'
 /** 完成/待办勾选列 = baseType=checkbox(含 primitive checkbox 与旧 todo 类型)。 */
 export const isCheckboxCol = (c: DbColumn): boolean => resolveBaseType(c.type) === 'checkbox'
-export const firstDateCol = (db: AggDb): DbColumn | undefined => db.columns.find(isDateCol)
+/** 缺省日期列:created 只当兜底 —— 它排在真日期列前面时不能抢走日历锚点。 */
+export const firstDateCol = (db: AggDb): DbColumn | undefined =>
+  db.columns.find((c) => isDateCol(c) && c.type !== 'created') ?? db.columns.find(isDateCol)
 export const firstCheckboxCol = (db: AggDb): DbColumn | undefined => db.columns.find(isCheckboxCol)
 
 /** 全库 .db 是否都已「落定」(非 loading)——一次性迁移前用它等齐,防只迁到先加载好的那几个。 */
@@ -125,6 +137,7 @@ export function useDatabasesReady(): boolean {
 /** 写回一格:经典表 → dbStore.mutate;笔记视图 → noteViewStore.setProp。自定义类型按 baseType 落盘。 */
 export function setAggCell(db: AggDb, rowId: string, colId: string, value: CellValue | undefined): void {
   const col = db.columns.find((c) => c.id === colId)
+  if (isStamped(col?.type ?? '')) return // 盖章列(自动编号/创建时间)建行即定,与 DatabaseEmbed.setCell 同一道闸
   const base = resolveBaseType(col?.type ?? 'text')
   // 活动日志:行属性变更(通用,任何列类型)——row.edit db+p=列名+v=新值+行标题;同格 10s 防抖取末态
   // (日期拖拽实时更新高频调用)。Calendar/Todo List/事件卡全走此收口。待办勾选即 p=待办 v=true。
@@ -165,25 +178,57 @@ export async function createAggEvent(db: AggDb, calColId: string, value: string,
   const rowId = dbId()
   const cells: Record<string, CellValue> = { [calColId]: value }
   if (nameCol && nameCol.id !== calColId && name) cells[nameCol.id] = name
-  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: [...d.rows, { id: rowId, cells }] }))
+  // 盖章(自动编号/创建时间)在回调**内**按 d.rows 算(CAS 重放拿最新行,见 propertyTypes.newRowCells)。
+  // 盖章压在**最后**:created 也算日期列(兜底),日历若以它为锚建事件,点击日不得伪造成创建时间
+  // (codex 抓的)—— 这种表上新事件落在「现在」,与该列只读语义一致;真日期列不受影响(盖章键与它不重叠)。
+  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: [...d.rows, { id: rowId, cells: { ...cells, ...newRowCells(d) } }] }))
   return rowId
 }
 
-/** 删除一个事件行:经典表删行;笔记视图删对应笔记(二次确认,删的是文件)。 */
-export function deleteAggRow(db: AggDb, rowId: string): void {
+/** 删除一个事件行:经典表删行;笔记视图删对应笔记(二次确认,删的是文件)。
+ *  返回本次从同文件自引用列里摘掉的引用清单(笔记视图 / 无人引用 = 空数组),交给 restoreAggRow 撤销时条件回填 ——
+ *  否则撤销只回来一行孤儿,别的行指向它的关联已经丢了(Codex 评审抓的)。
+ *  ⚠️ 清单在 mutate 回调**内**收集(CAS 冲突重放会再跑一次回调,以最后一次为准),返回的是同一个数组引用。 */
+export function deleteAggRow(db: AggDb, rowId: string): DroppedRef[] {
+  const removed: DroppedRef[] = []
   if (db.isNoteView && db.folder !== undefined) {
-    if (window.confirm('删除此事件会一并删除对应的笔记文件,确定?')) void useNoteViewStore.getState().deleteNote(db.folder, rowId)
-    return
+    if (window.confirm(translate('dbagg.confirmDeleteNote'))) void useNoteViewStore.getState().deleteNote(db.folder, rowId)
+    return removed
   }
-  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }))
+  // 与 DatabaseEmbed.delRow 同一道清理:只摘同文件内的自引用,跨文件悬空刻意不级联(rowLink.dropSelfRefs)
+  useDbStore.getState().mutate(db.path, (d) => {
+    removed.length = 0 // 重放从头记
+    return dropSelfRefs({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }, rowId, [db.path], removed)
+  })
+  return removed
 }
 
-/** Calendar 删除后的轻量撤销：仅经典表可无损恢复原 row；笔记视图仍走文件删除确认，不伪造文件级撤销。 */
-export function restoreAggRow(db: AggDb, row: AggRow): void {
+const sameCell = (a: CellValue | undefined, b: CellValue | undefined): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+
+/** Calendar 删除后的轻量撤销：仅经典表可无损恢复原 row；笔记视图仍走文件删除确认，不伪造文件级撤销。
+ *  ⚠️ **不盖章**(不调 newRowCells):恢复的是原来那一行(连 rowId 都复用),重新盖章会把原编号/原创建时间
+ *  改掉 —— 撤销就不再是撤销了。别在「统一走 newRowCells」的重构里顺手把这里一起改了。
+ *  removed = deleteAggRow 返回的自引用清单:逐格**条件**回填 —— 该格现在的值仍等于「摘除后的值」才写回原值,
+ *  用户在删与撤销之间改过那一格就不动它(撤销不能吞掉用户的新编辑)。 */
+export function restoreAggRow(db: AggDb, row: AggRow, removed: DroppedRef[] = []): void {
   if (db.readonly || db.isNoteView) return
   useDbStore.getState().mutate(db.path, (d) => {
     if (d.rows.some((r) => r.id === row.rowId)) return d
-    return { ...d, rows: [...d.rows, { id: row.rowId, cells: { ...row.cells } }] }
+    const byRow = new Map<string, DroppedRef[]>()
+    for (const x of removed) byRow.set(x.rowId, [...(byRow.get(x.rowId) ?? []), x])
+    const rows = byRow.size ? d.rows.map((r) => {
+      const list = byRow.get(r.id)
+      if (!list) return r
+      let cells: Record<string, CellValue> | null = null
+      for (const x of list) {
+        if (!sameCell(r.cells[x.colId], x.after)) continue // 此后被改过:保留用户的值
+        cells ??= { ...r.cells }
+        if (x.before === undefined) delete cells[x.colId]
+        else cells[x.colId] = Array.isArray(x.before) ? [...x.before] : x.before
+      }
+      return cells ? { ...r, cells } : r
+    }) : d.rows
+    return { ...d, rows: [...rows, { id: row.rowId, cells: { ...row.cells } }] }
   })
 }
 
@@ -203,7 +248,8 @@ export async function duplicateAggRow(db: AggDb, rowId: string): Promise<string 
     return notePath
   }
   const newId = dbId()
-  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: [...d.rows, { id: newId, cells: { ...src.cells } }] }))
+  // 合并序与新建**相反**:盖章压掉从源行复制来的自动编号/创建时间,否则粘贴一次就重号、创建时间还是老的。
+  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: [...d.rows, { id: newId, cells: { ...src.cells, ...newRowCells(d) } }] }))
   return newId
 }
 
@@ -223,6 +269,8 @@ export function setAggName(db: AggDb, rowId: string, value: string): void {
 if (typeof window !== 'undefined' && window.amadeus) {
   amadeus.onStructureChange?.(() => void usePageStore.getState().refreshStructure())
   usePageStore.subscribe((s, p) => {
-    if (s.vaultRoot !== p.vaultRoot) useDbStore.setState({ entries: {} })
+    // gen 必须跟着 +1:光清 entries 的话,已经挂着的嵌入/独立 db 视图不会重读(它们的 effect 只依赖路径),
+    // 界面永远停在「读取数据库…」。启动时 vaultRoot 从 null 变成真根也走这条,所以这不是切库才有的边角。
+    if (s.vaultRoot !== p.vaultRoot) useDbStore.setState((d) => ({ entries: {}, gen: d.gen + 1 }))
   })
 }

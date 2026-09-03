@@ -140,7 +140,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
   const { origin } = await servePathRoot(dir)
 
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage()
+  const p = await browser.newPage({ locale: 'zh-CN' })
   await p.goto(origin + '/index.html')
   const r = await p.evaluate(() => window.__report)
 

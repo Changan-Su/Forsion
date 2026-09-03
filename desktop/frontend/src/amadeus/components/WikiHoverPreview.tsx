@@ -9,6 +9,11 @@ import { usePageStore } from '../store/pageStore'
 import { isFileRef } from '../lib/vaultFiles'
 import { PlainMarkdownEditor } from '../blocks/markdown/MarkdownBlock'
 import { OverlayAt } from '../lib/clampMenu'
+import { registerMessages, translate } from '../../i18n'
+
+registerMessages({
+  'wikihover.emptyNote': { zh: '(空笔记)', en: '(Empty note)' },
+})
 
 const SHOW_DELAY = 400
 const MAX_CHARS = 2500
@@ -30,7 +35,7 @@ function clipContent(p: LoadedPage): string {
       }
     }
   }
-  return parts.join('\n\n') || '(空笔记)'
+  return parts.join('\n\n') || translate('wikihover.emptyNote')
 }
 
 export function WikiHoverPreview() {

@@ -62,7 +62,7 @@ for (const event of ['dragend', 'drop', 'blur']) {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1000, height: 700 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 700 } })
   await page.setContent(`<!doctype html>
     <style>
       :root { --primary: rgb(45, 170, 190); --accent: rgb(45, 170, 190); --bg: rgb(24, 24, 24); --border: transparent; }

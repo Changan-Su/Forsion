@@ -71,8 +71,8 @@ const page = (autofocus) => `<!doctype html><meta name=viewport content="width=d
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const got = {}
   for (const autofocus of [true, false]) {
-    const ctx = await browser.newContext({ viewport: { width: 412, height: 915 }, hasTouch: true, isMobile: true })
-    const p = await ctx.newPage()
+    const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 412, height: 915 }, hasTouch: true, isMobile: true })
+    const p = await ctx.newPage({ locale: 'zh-CN' })
     await p.setContent(page(autofocus))
     const cdp = await ctx.newCDPSession(p)
     const tap = async (sel) => {

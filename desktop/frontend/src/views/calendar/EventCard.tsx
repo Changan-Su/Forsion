@@ -13,14 +13,31 @@ import { ExternalLink } from 'lucide-react'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { getPropertyType, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
+import { linkLabel, rowLinkIds } from '../../amadeus/blocks/database/rowLink'
 import { setAggCell, setAggName, cellText, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
+import { useDbStore } from '../../amadeus/store/dbStore'
 import { openDb } from '../../amadeusNav'
 import { eventTimeSummary } from './dateUtils'
 import { deleteCalendarRow } from './eventActions'
+import { registerMessages, useI18n } from '../../i18n'
 import {
   PageIcon, DateTimeIcon, TextIcon, NumberIcon,
   SingleSelectIcon, MultiSelectIcon, LinkIcon, CheckBoxCheckLinearIcon,
 } from '../../amadeus/components/icons'
+
+// 文案:本文件独占 `evcard.*` 命名空间(日历各文件各持自己的前缀,勿共用键)。
+registerMessages({
+  'evcard.editEvent': { zh: '编辑事件：{title}', en: 'Edit event: {title}' },
+  'evcard.untitled': { zh: '未命名', en: 'Untitled' },
+  'evcard.close': { zh: '关闭', en: 'Close' },
+  'evcard.name': { zh: '名称', en: 'Name' },
+  'evcard.done': { zh: '完成', en: 'Done' },
+  'evcard.openNote': { zh: '打开笔记', en: 'Open note' },
+  'evcard.openDb': { zh: '打开数据库', en: 'Open database' },
+  'evcard.delete': { zh: '删除', en: 'Delete' },
+  'evcard.rowlinkReadonly': { zh: '关联表列请在表格里编辑', en: 'Edit related rows in the table' },
+  'evcard.noOptions': { zh: '（无选项,请在表格里添加）', en: '(No options — add them in the table)' },
+})
 
 export interface Anchor { left: number; top: number; right: number; bottom: number; zoom?: number }
 
@@ -62,6 +79,7 @@ function PropIcon({ col }: { col: DbColumn }) {
 }
 
 export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onClose: () => void }) {
+  const { t } = useI18n()
   const { db, row, colId, title } = ev
   // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示,底部无删除。
   // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown),但删除仍关着 ——
@@ -120,7 +138,7 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`编辑事件：${title || '未命名'}`}
+        aria-label={t('evcard.editEvent', { title: title || t('evcard.untitled') })}
         style={pos}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -131,7 +149,7 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
               <span className="amx-cal-card-dot" style={{ background: accent }} />
               {db.name}
             </span>
-            <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label="关闭">×</button>
+            <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>
           </div>
 
           {/* 标题 */}
@@ -140,13 +158,13 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
             {titleEditable ? (
               <input
                 className="amx-cal-card-title"
-                aria-label="名称"
+                aria-label={t('evcard.name')}
                 value={title}
-                placeholder="未命名"
+                placeholder={t('evcard.untitled')}
                 onChange={(e) => setAggName(db, row.rowId, e.target.value)}
               />
             ) : (
-              <div className="amx-cal-card-title amx-cal-card-title-ro">{title || '未命名'}</div>
+              <div className="amx-cal-card-title amx-cal-card-title-ro">{title || t('evcard.untitled')}</div>
             )}
           </div>
 
@@ -173,7 +191,7 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
                   <div className="amx-cal-card-timeedit">
                     <CalDateFields value={ev.raw} onChange={(v) => setAggCell(db, row.rowId, colId, v)} autoFocus={editTime} />
                     {summary && (
-                      <button type="button" className="amx-cal-card-timedone" onClick={() => setEditTime(false)}>完成</button>
+                      <button type="button" className="amx-cal-card-timedone" onClick={() => setEditTime(false)}>{t('evcard.done')}</button>
                     )}
                   </div>
                 )}
@@ -204,11 +222,11 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
             <div className="amx-cal-card-foot">
               {canOpenSource && (
                 <button className="amx-cal-card-open" onClick={() => { db.openRow ? db.openRow(row.rowId) : openDb(db.path); onClose() }}>
-                  <ExternalLink size={13} /> {db.openRow ? '打开笔记' : '打开数据库'}
+                  <ExternalLink size={13} /> {db.openRow ? t('evcard.openNote') : t('evcard.openDb')}
                 </button>
               )}
               {deletable && (
-                <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>删除</button>
+                <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>{t('evcard.delete')}</button>
               )}
             </div>
           )}
@@ -218,15 +236,32 @@ export function EventCard({ ev, at, onClose }: { ev: CardTarget; at: Anchor; onC
   )
 }
 
+/** 只读展示的嵌入层扩展类型:它们的 baseType 折算成 text,default 分支会渲成可编辑输入框 ——
+ *  rowlink 的数组一敲键就被写成 "id1, id2" 字符串(关联不可逆丢失),formula/lookup 是物化值不该落盘,
+ *  file 是路径。卡片里一律只读文本;要改去表格里改。 */
+const READONLY_EXTRA = new Set(['rowlink', 'lookup', 'formula', 'file'])
+
 /** 卡片里一个属性的编辑器:自定义类型复用注册表 Cell,primitive 各给紧凑原生编辑器。 */
 function CardPropField({ db, row, col }: { db: AggDb; row: AggRow; col: DbColumn }) {
+  const { t } = useI18n() // hook 无条件调,别放到下面的分支返回之后
   const custom = getPropertyType(col.type)
   const base = resolveBaseType(col.type)
   const v = coerceForDisplay(row.cells[col.id], base)
   const set = (nv: CellValue | undefined): void => setAggCell(db, row.rowId, col.id, nv)
+  // 关联表列的目标库(已加载才有;不在这里触发加载 —— 只读展示,读不到就退回 id 串)。hook 无条件调,别放分支里。
+  const refDb = useDbStore((s) => (col.type === 'rowlink' && col.refDb ? s.entries[col.refDb]?.data ?? null : null))
   if (custom) {
     const Custom = custom.Cell
-    return <Custom value={v} onChange={set} />
+    return <Custom value={v} column={col} onChange={set} />
+  }
+  if (READONLY_EXTRA.has(col.type)) {
+    const raw = row.cells[col.id]
+    let text = cellText(raw)
+    if (col.type === 'rowlink' && refDb) {
+      // 芯片文案与表格同源:按列的 titleCol(缺省首列),别在这里再抄一遍 columns[0]
+      text = rowLinkIds(raw).map((id) => { const hit = refDb.rows.find((r) => r.id === id); return hit ? linkLabel(refDb, hit, col.titleCol) : '已失联' }).join(', ')
+    }
+    return <span className="amx-cal-card-val" title={col.type === 'rowlink' ? t('evcard.rowlinkReadonly') : undefined}>{text || '—'}</span>
   }
   switch (base) {
     case 'checkbox':
@@ -272,7 +307,7 @@ function CardPropField({ db, row, col }: { db: AggDb; row: AggRow; col: DbColumn
               </button>
             )
           })}
-          {(col.options ?? []).length === 0 && <span className="amx-cal-card-key">（无选项,请在表格里添加）</span>}
+          {(col.options ?? []).length === 0 && <span className="amx-cal-card-key">{t('evcard.noOptions')}</span>}
         </div>
       )
     }

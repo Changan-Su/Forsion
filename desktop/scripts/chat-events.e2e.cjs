@@ -77,7 +77,7 @@ async function main() {
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatev-'))
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, ROOT],
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
   })

@@ -20,6 +20,7 @@ import { DashboardGridView } from './views/DashboardGridView'
 import { AmadeusDbView } from './views/AmadeusDbView'
 import { DatabaseEmbed } from './amadeus/blocks/database/DatabaseEmbed'
 import { useDbStore } from '@amadeus/store/dbStore'
+import type { DbFile } from '@amadeus-shared/db/schema'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
 import { setTanguProbe } from '@amadeus/plugins/tanguSeam'
 import { applyTheme as applyRealTheme } from './theme/loader'
@@ -814,6 +815,8 @@ if (new URLSearchParams(location.search).has('dock')) {
             { id: 'pn', name: '名称', type: 'text' },
             { id: 'st', name: '状态', type: 'select', options: ['进行中', '已完成'] },
             { id: 'bu', name: '预算', type: 'number' },
+            // 反向引用(rollup):扫 任务.db 的 r1 列,含本行 id 的任务标题拼接
+            { id: 'bk', name: '任务', type: 'lookup', refDb: '任务.db', lookupBackCol: 'r1', lookupCol: 'c1', lookupAgg: 'join' },
           ],
           rows: [
             { id: 'p1', cells: { pn: '网站改版', st: '进行中', bu: 12000 } },
@@ -831,16 +834,19 @@ if (new URLSearchParams(location.search).has('dock')) {
             { id: 'c3', name: '工时', type: 'number' },
             { id: 'c4', name: '单价', type: 'number' },
             { id: 'f1', name: '小计', type: 'formula', formula: '{工时}*{单价}' },
-            { id: 'r1', name: '项目', type: 'rowlink', refDb: '项目.db' },
-            { id: 'k1', name: '项目状态', type: 'lookup', lookupRel: 'r1', lookupCol: 'st' },
+            { id: 'r1', name: '项目', type: 'rowlink', refDb: '项目.db', multiple: true },
+            { id: 'k1', name: '项目状态', type: 'lookup', lookupRel: 'r1', lookupCol: 'st', lookupAgg: 'join' },
             { id: 'a1', name: '附件', type: 'file' },
+            // 2026-09-02 追加(只追加、不改既有列名:db-colorder.check 按表头名找列):自动编号(带前缀)+ 创建时间
+            { id: 'n1', name: '编号', type: 'autonumber', prefix: 'T-' },
+            { id: 'd1', name: '创建时间', type: 'created' },
           ],
           rows: [
-            { id: 't1', cells: { c1: '首页视觉稿', c2: '进行中', c3: 8, c4: 200, r1: 'p1', a1: 'img/首页.png' } },
-            { id: 't2', cells: { c1: '接口联调', c2: '待办', c3: 5, c4: 300, r1: 'p1' } },
-            { id: 't3', cells: { c1: '数据迁移脚本', c2: '完成', c3: 3, c4: 300, r1: 'p2', a1: 'doc/迁移说明.pdf' } },
-            { id: 't4', cells: { c1: '周报整理', c2: '待办', c3: 1, c4: 100 } },
-            { id: 't5', cells: { c1: '发布检查单', c2: '进行中', c3: 2, c4: 150, r1: 'p2', a1: 'img/清单.png' } },
+            { id: 't1', cells: { c1: '首页视觉稿', c2: '进行中', c3: 8, c4: 200, r1: ['p1', 'p2'], a1: 'img/首页.png', n1: 1, d1: '2026-09-01T09:30' } },
+            { id: 't2', cells: { c1: '接口联调', c2: '待办', c3: 5, c4: 300, r1: 'p1', n1: 2, d1: '2026-09-01T10:00' } },
+            { id: 't3', cells: { c1: '数据迁移脚本', c2: '完成', c3: 3, c4: 300, r1: 'p2', a1: 'doc/迁移说明.pdf', n1: 3, d1: '2026-09-01T11:15' } },
+            { id: 't4', cells: { c1: '周报整理', c2: '待办', c3: 1, c4: 100, n1: 4, d1: '2026-09-02T08:00' } },
+            { id: 't5', cells: { c1: '发布检查单', c2: '进行中', c3: 2, c4: 150, r1: 'p2', a1: 'img/清单.png', n1: 5, d1: '2026-09-02T08:45' } },
           ],
           views: [
             { id: 'v1', name: '表格', type: 'table', groupBy: 'c2', sorts: [{ colId: 'f1', dir: 'desc' }, { colId: 'c1', dir: 'asc' }], sort: { colId: 'f1', dir: 'desc' } },
@@ -856,6 +862,178 @@ if (new URLSearchParams(location.search).has('dock')) {
       <DatabaseEmbed target="任务.db" pagePath="demo.md" />
     </div>,
   )
+} else if (new URLSearchParams(location.search).has('erp')) {
+  // ?erp:电脑销售ERP 捆绑包(Forsion-Instrumentality-Project/pc-erp)的渲染面仪器(scripts/erp.check.cjs)。
+  // 台架开不了 bundle Space(没有 window.tangu.spacesList),所以这里只挂 DatabaseEmbed:内联一份**形状忠实**的
+  // 迷你夹具(库存 / 出库 / 订单三张,裸名路径;含多值关联、反向引用、autonumber、created、format 公式、看板),
+  // 外层类名照 AmadeusDbView 摆(像生产 tab)。`&db=<路径>` 选表、`&view=<视图中文名>` 选视图、`&dark` 走真主题。
+  // 注入口 window.__erp.load(entries) 整份换表并重挂(检查脚本的负对照 / 将来读真种子用)。
+  // ⚠️ 夹具字段名跟 shared/amadeus/db/schema.ts:13 的 DbColumn 走(multiple / lookupBackCol / prefix);
+  //    refDb 必须逐字等于 entries 的键;反向 join 分隔符是顿号 `、`。
+  //    不打 readDatabase/writeDatabase 桩会进 dbStore 的 500ms 重试环(看板拖卡就触发),照 ?upage 打内存桩。
+  const erpQs = new URLSearchParams(location.search)
+  const dark = erpQs.has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  const g = window as unknown as { amadeus?: Record<string, unknown>; __erp?: unknown }
+  const mem = new Map<string, string>()
+  Object.assign(g.amadeus ?? (g.amadeus = {}), {
+    readDatabase: (_page: string, ref: string) => {
+      const raw = mem.get(ref)
+      return Promise.resolve(raw ? { status: 'ok', path: ref, data: JSON.parse(raw) } : { status: 'missing' })
+    },
+    writeDatabase: (p: string, data: unknown) => { mem.set(p, JSON.stringify(data)); return Promise.resolve() },
+  })
+  const STOCK = '库存表.db', OUT = '出库记录.db', ORDER = '订单总表.db', TASK = '任务表.db'
+  // 任务表的日期相对今天算(seedCalendarDb 同款):甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
+  const erpDay = (n: number): string => {
+    const t = new Date()
+    const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const ERP_FIXTURE: Record<string, DbFile> = {
+    [STOCK]: {
+      version: 1, name: '库存表',
+      columns: [
+        { id: 's_name', name: '货物名称', type: 'text' },
+        { id: 's_sku', name: '唯一编号', type: 'autonumber', prefix: 'SKU-' },
+        { id: 's_type', name: '硬件类型', type: 'select', options: ['cpu', '显卡', '内存', '硬盘'] },
+        { id: 's_price', name: '单价/JPY', type: 'number' },
+        { id: 's_qty', name: '数量', type: 'number' },
+        { id: 's_locked', name: '锁单数量', type: 'number' },
+        { id: 's_out', name: '出库行', type: 'lookup', refDb: OUT, lookupBackCol: 'x_part', lookupCol: 'x_title', lookupAgg: 'join' },
+        // 可编辑投影列(W2-A,erp.check L3/L4):出库记录里 x_part 指回本行的行,渲 chip、picker 改**出库记录**的 x_part;本表磁盘无 cell
+        { id: 's_links', name: '出库(投影)', type: 'lookup', refDb: OUT, lookupBackCol: 'x_part', lookupKind: 'links' },
+      ],
+      rows: [
+        { id: 's01', cells: { s_name: 'Intel i5-12400F', s_sku: 1, s_type: 'cpu', s_price: 22000, s_qty: 5, s_locked: 1 } },
+        { id: 's02', cells: { s_name: 'RTX 4060 8G', s_sku: 2, s_type: '显卡', s_price: 48000, s_qty: 4, s_locked: 1 } },
+        { id: 's03', cells: { s_name: 'DDR5 32G', s_sku: 3, s_type: '内存', s_price: 15000, s_qty: 6, s_locked: 0 } },
+        { id: 's04', cells: { s_name: '1T SSD', s_sku: 4, s_type: '硬盘', s_price: 9000, s_qty: 8, s_locked: 0 } },
+      ],
+      views: [{ id: 'v1', name: '表格', type: 'table' }, { id: 'v2', name: '按类型', type: 'table', groupBy: 's_type' }],
+    },
+    [OUT]: {
+      version: 1, name: '出库记录',
+      columns: [
+        { id: 'x_title', name: '备注', type: 'text' },
+        { id: 'x_part', name: '配件', type: 'rowlink', refDb: STOCK },
+        // 芯片显示列(L1):订单总表首列是「客户」,芯片要显示订单号 ORD-x 而不是客户名
+        { id: 'x_order', name: '订单总表', type: 'rowlink', refDb: ORDER, titleCol: 'o_no' },
+        { id: 'x_qty', name: '出库数量', type: 'number' },
+        { id: 'x_status', name: '订单状态', type: 'select', options: ['未确认', '已确认', '已取消', '已完成'] },
+        { id: 'x_time', name: '时间', type: 'created' },
+        { id: 'x_price', name: '单价/JPY', type: 'lookup', lookupRel: 'x_part', lookupCol: 's_price' },
+      ],
+      rows: [
+        { id: 'x1', cells: { x_title: '张三-CPU', x_part: 's01', x_order: 'o1', x_qty: 1, x_status: '未确认', x_time: '2026-03-15T09:31' } },
+        { id: 'x2', cells: { x_title: '张三-显卡', x_part: 's02', x_order: 'o1', x_qty: 1, x_status: '未确认', x_time: '2026-03-15T09:31' } },
+        { id: 'x3', cells: { x_title: '李四-内存', x_part: 's03', x_order: 'o2', x_qty: 1, x_status: '已确认', x_time: '2026-03-20T10:01' } },
+        // 刻意长的备注(19 字;单独一行,别动 x1-x3 的文案:别的断言按 x_title 取键):订单总表 李四「出库行」= x3、x4
+        // 顿号拼接共 25 字,以 nowrap 显示,外层 grid 会把全表列宽拉到它 —— erp.check E9c/E9d 钉宽度上界用;出库记录看板因此是 4 卡
+        { id: 'x4', cells: { x_title: 'DDR5 32G 6000MHz 套条', x_part: 's03', x_order: 'o2', x_qty: 1, x_status: '已确认', x_time: '2026-03-20T10:02' } },
+      ],
+      views: [{ id: 'v1', name: '表格', type: 'table' }, { id: 'v2', name: '看板', type: 'kanban', groupBy: 'x_status' }],
+    },
+    [ORDER]: {
+      version: 1, name: '订单总表',
+      columns: [
+        { id: 'o_customer', name: '客户', type: 'text' },
+        { id: 'o_no', name: '订单号', type: 'autonumber', prefix: 'ORD-' },
+        { id: 'o_status', name: '订单状态', type: 'select', options: ['未确认', '已确认', '已完成', '已取消'] },
+        { id: 'o_created', name: '创建日期', type: 'created' },
+        { id: 'o_ship', name: '运费', type: 'number' },
+        // 候选限定(L2):三个硬件槽位各只列对应「硬件类型」的 SKU(飞书那侧的 filterInfo)
+        { id: 'o_cpu', name: 'CPU', type: 'rowlink', refDb: STOCK, refFilter: [{ colId: 's_type', op: 'eq', value: 'cpu' }] },
+        { id: 'o_gpu', name: '显卡', type: 'rowlink', refDb: STOCK, refFilter: [{ colId: 's_type', op: 'eq', value: '显卡' }] },
+        { id: 'o_ssd1', name: '硬盘1', type: 'rowlink', refDb: STOCK, refFilter: [{ colId: 's_type', op: 'eq', value: '硬盘' }] },
+        { id: 'o_ssd1n', name: '硬盘1/数量', type: 'number' },
+        // 多值关联(D1):一格挂多枚 chip;正向多值 lookup sum(D1)
+        { id: 'o_extra', name: '配件(多选)', type: 'rowlink', refDb: STOCK, multiple: true },
+        { id: 'o_p_cpu', name: 'CPU单价/JPY', type: 'lookup', lookupRel: 'o_cpu', lookupCol: 's_price' },
+        { id: 'o_p_gpu', name: '显卡单价/JPY', type: 'lookup', lookupRel: 'o_gpu', lookupCol: 's_price' },
+        { id: 'o_p_ssd1', name: '硬盘1单价/JPY', type: 'lookup', lookupRel: 'o_ssd1', lookupCol: 's_price' },
+        { id: 'o_p_extra', name: '配件总价/JPY', type: 'lookup', lookupRel: 'o_extra', lookupCol: 's_price', lookupAgg: 'sum' },
+        { id: 'o_hw', name: '硬件总额/JPY', type: 'formula', formula: '{CPU单价/JPY}+{显卡单价/JPY}+{硬盘1单价/JPY}*max({硬盘1/数量},1)+{配件总价/JPY}' },
+        { id: 'o_fee', name: '服务费/JPY', type: 'formula', formula: '8000+{硬件总额/JPY}*0.03*1.1' },
+        { id: 'o_total', name: '总计/JPY', type: 'formula', formula: '{运费}+{硬件总额/JPY}+{服务费/JPY}' },
+        { id: 'o_deposit', name: '定金/JPY', type: 'formula', formula: 'round({总计/JPY}*0.2)' },
+        // format 公式(D3):created 串取前 10 位;日期写死,别依赖 today()
+        { id: 'o_month', name: '月份', type: 'formula', formula: 'if({创建日期}=="","",format({创建日期},"YYYY-MM"))' },
+        // 反向引用(D2):出库记录里 x_order 指回本行的备注,顿号拼接
+        { id: 'o_lines', name: '出库行', type: 'lookup', refDb: OUT, lookupBackCol: 'x_order', lookupCol: 'x_title', lookupAgg: 'join' },
+      ],
+      rows: [
+        // 硬件 22000+48000+9000*2+(15000+9000)=112000;服务费 11696;总计 125196;定金 25039
+        { id: 'o1', cells: { o_customer: '张三', o_no: 1, o_status: '未确认', o_created: '2026-03-15T09:30', o_ship: 1500, o_cpu: 's01', o_gpu: 's02', o_ssd1: 's04', o_ssd1n: 2, o_extra: ['s03', 's04'] } },
+        { id: 'o2', cells: { o_customer: '李四', o_no: 2, o_status: '已确认', o_created: '2026-03-20T10:00', o_cpu: 's01' } },
+        { id: 'o3', cells: { o_customer: '王五', o_no: 3, o_status: '已完成', o_created: '2026-04-01T08:00' } },
+      ],
+      views: [
+        { id: 'v1', name: '订单总表', type: 'table' },
+        { id: 'v2', name: '看板', type: 'kanban', groupBy: 'o_status' },
+        // 表单视图(F1-F3):必填客户,默认状态未确认;字段集由渲染端按列类型算(计算列/盖章列不进)
+        { id: 'v3', name: '下单表单', type: 'form', form: { required: ['o_customer'], defaults: { o_status: '未确认' }, desc: { o_customer: '客户姓名' }, submitText: '提交订单' } },
+      ],
+    },
+    // 任务表(形状照 pc-erp seed 的 TASK 缩):甘特视图仪器(erp.check G 系列)+ 层级树 / 日期分组仪器(T 系列)。
+    // 5 行 = 区间(已过)/ 今天单日 / 带时刻单日 / 区间(将来)/ 无日期;
+    // 「甘特」只设 startCol(区间写在同一格,endCol 缺 = 同列);「甘特(截止)」走独立结束列 t_due + 周档。
+    // t_parent = **自指**关联列(refDb 就是本表):k1 ← k2 ← k3 一条三级链,k4/k5 各自为根 —— 层级树(T1/T2)靠它。
+    // ⚠️ 四个日期恰好落在四个不同的日子(−3 / 0 / +2 / +5),日档分组恒为 4 组 + 未设置,T4 的组数才是个定数。
+    [TASK]: {
+      version: 1, name: '任务表',
+      columns: [
+        { id: 't_title', name: '文本', type: 'text' },
+        { id: 't_type', name: '任务类型', type: 'multiselect', options: ['装机', '送货', '维修', '采购'] },
+        { id: 't_status', name: '任务状态', type: 'select', options: ['待执行', '已完成'] },
+        { id: 't_date', name: '日期', type: 'calendarDate' },
+        { id: 't_due', name: '截止', type: 'calendarDate' },
+        { id: 't_staff', name: '工作人员', type: 'text' },
+        { id: 't_parent', name: '父任务', type: 'rowlink', refDb: TASK },
+      ],
+      rows: [
+        { id: 'k1', cells: { t_title: '装机任务-张三', t_type: ['装机'], t_status: '已完成', t_date: `${erpDay(-3)}/${erpDay(-1)}`, t_staff: '阿强' } },
+        { id: 'k2', cells: { t_title: '送货-张三', t_type: ['送货'], t_status: '待执行', t_date: erpDay(0), t_staff: '阿强', t_parent: 'k1' } },
+        { id: 'k3', cells: { t_title: '维修-李四', t_type: ['维修'], t_status: '待执行', t_date: `${erpDay(2)}T10:00/${erpDay(2)}T11:30`, t_parent: 'k2' } },
+        { id: 'k4', cells: { t_title: '采购-配件', t_type: ['采购'], t_status: '待执行', t_date: `${erpDay(5)}/${erpDay(9)}`, t_due: erpDay(12) } },
+        { id: 'k5', cells: { t_title: '待排期-王五', t_type: ['装机'], t_status: '待执行' } },
+      ],
+      views: [
+        { id: 'v1', name: '表格', type: 'table' },
+        { id: 'v2', name: '甘特', type: 'gantt', gantt: { startCol: 't_date' } },
+        { id: 'v3', name: '甘特(截止)', type: 'gantt', gantt: { startCol: 't_date', endCol: 't_due', scale: 'week' } },
+        { id: 'v4', name: '层级', type: 'table', treeCol: 't_parent' },
+        { id: 'v5', name: '按日', type: 'table', groupBy: 't_date' }, // groupUnit 缺 = 日档(读端 dateGroupUnitOf)
+        { id: 'v6', name: '按月', type: 'table', groupBy: 't_date', groupUnit: 'month' },
+      ],
+    },
+  }
+  const loadErp = (entries: Record<string, DbFile>) => {
+    mem.clear()
+    for (const [k, v] of Object.entries(entries)) mem.set(k, JSON.stringify(v))
+    usePageStore.setState({ vaultRoot: '/harness', status: 'ready', pages: [], files: Object.keys(entries) })
+    useDbStore.setState({ entries: Object.fromEntries(Object.entries(entries).map(([k, v]) => [k, { status: 'ok' as const, path: k, data: v }])) })
+  }
+  const erpTarget = erpQs.get('db') ?? ORDER
+  const erpView = erpQs.get('view')
+  function ErpHarness() {
+    const [gen, setGen] = useState(0)
+    useEffect(() => {
+      g.__erp = {
+        load: (entries: Record<string, DbFile>) => { loadErp(entries); setGen((x) => x + 1) },
+        fixture: () => JSON.parse(JSON.stringify(ERP_FIXTURE)) as Record<string, DbFile>,
+        dbs: () => Object.keys(useDbStore.getState().entries),
+        current: () => erpTarget,
+      }
+    }, [])
+    return (
+      <div className="am-app tangu-lovable amx-pane amx-dbview" data-mode={dark ? 'dark' : 'light'} data-flat="0" style={{ position: 'fixed', inset: 0, overflow: 'auto' }}>
+        <DatabaseEmbed key={gen} target={erpTarget} pagePath={erpTarget} initialView={erpView} />
+      </div>
+    )
+  }
+  loadErp(ERP_FIXTURE)
+  createRoot(document.getElementById('root')!).render(<ErpHarness />)
 } else if (new URLSearchParams(location.search).has('dashmount')) {
   // ?dashmount:**插件仪表盘挂载接缝的真渲染面**(mountPluginDashboard,不依赖笔记库)。
   // 钉:① vaultRoot 恒 null 也能把真 GridView 挂进裸 div;② 手排(setFmExtra)经内存 sink 回到
@@ -1487,6 +1665,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   const SRC = {
     id: 'harness-list', title: '台架列表源', search: true,
     items: (f?: { query?: string }) => ITEMS.filter((i) => !f?.query || i.title.includes(f.query)),
+    activeKey: () => 'a',
     open: () => {},
     subscribe: () => () => {},
   } as unknown as ListSourceContribution

@@ -20,6 +20,7 @@ import { extractFrontmatterExtra, parseFrontmatter, schemaMajorOf } from './comp
 import { generatePageId } from './compiler/names'
 import { COMPILER_VERSION, PAGE_SCHEMA, type BlockId, type PageManifest, type StackNode } from './compiler/types'
 import { widgetSource } from './dashboard'
+import { parseStatSpec } from './dashboardData'
 import {
   DASH3_COLS, DASH3_DEFAULT_MINI, DASH3_DEFAULT_TEXT, DASH3_DEFAULT_VIEW,
   clampCell, readDash3Layout, setDash3InFm, type Cell, type Dash3Layout,
@@ -28,7 +29,9 @@ import {
 /** 配方里的一张卡。id = 块 id(BLOCK_MARKER_RE 字符集),**跨次编译必须稳定** ——
  *  再生成时按它对上用户手排的布局。w/h 用 12 列参考系,缺省按卡类分档。 */
 export type RecipeCard =
-  | { kind: 'stat'; id: string; label: string; value: string; unit?: string; w?: number; h?: number }
+  /** 数字卡两档:`value` = literal 直给;`source`(+ col/stat)= 从 .db 取数,`view` 绑该表已存视图
+   *  (名字或 id,数据源先过它的筛选)。两者至少给一个;都给时 value 优先(与 parseStatSpec 同序)。 */
+  | { kind: 'stat'; id: string; label: string; value?: string; source?: string; col?: string; stat?: string; view?: string; unit?: string; w?: number; h?: number }
   | { kind: 'section'; id: string; label: string }
   | { kind: 'view'; id: string; type: string; params?: Record<string, string>; w?: number; h?: number }
   | { kind: 'text'; id: string; md: string; w?: number; h?: number }
@@ -56,14 +59,19 @@ function defaultCell(card: RecipeCard, order: number): Cell {
   return clampCell({ order, w, h })
 }
 
+/** 数字卡围栏 opts:键名与 parseStatSpec 逐字同(value/source/col/stat/view/unit);空值由 widgetSource 滤掉。 */
+const statOpts = (card: Extract<RecipeCard, { kind: 'stat' }>): Record<string, string> => ({
+  label: oneLine(card.label),
+  value: oneLine(card.value ?? ''),
+  source: oneLine(card.source ?? ''),
+  col: oneLine(card.col ?? ''),
+  stat: oneLine(card.stat ?? ''),
+  view: oneLine(card.view ?? ''),
+  unit: oneLine(card.unit ?? ''),
+})
+
 function cardContent(card: RecipeCard): string {
-  if (card.kind === 'stat') {
-    return widgetSource('stat', {
-      label: oneLine(card.label),
-      value: oneLine(card.value),
-      ...(card.unit ? { unit: oneLine(card.unit) } : {}),
-    })
-  }
+  if (card.kind === 'stat') return widgetSource('stat', statOpts(card))
   // ⚠️ section 渲染层读 `title:`(widgets.tsx SectionWidget),不是 label —— 键名错=恒「未命名分区」
   if (card.kind === 'section') return widgetSource('section', { title: oneLine(card.label) })
   if (card.kind === 'view') {
@@ -89,6 +97,11 @@ export function compileDashboardRecipe(
     }
     if (seen.has(c.id)) return { ok: false, error: `卡 id 重复:${c.id}` }
     seen.add(c.id)
+    // 编译期就用真解析器验数字卡(无 value 无 source / sum 缺 col……):渲染时才报等于把坏配方写进用户文件
+    if (c.kind === 'stat') {
+      const parsed = parseStatSpec(statOpts(c))
+      if (!parsed.ok) return { ok: false, error: `数字卡 ${c.id}:${parsed.error}` }
+    }
   }
 
   // 现有文件:提取外来 frontmatter(pins/filters/mode 全在里面,逐字保留)+ 既有布局 + 页 id。

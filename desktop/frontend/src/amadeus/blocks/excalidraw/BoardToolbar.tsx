@@ -37,8 +37,28 @@ import {
   type ToolId,
   type ToolbarLayout,
 } from './toolbarOrder'
+import { registerMessages, translate, useI18n } from '../../../i18n'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { BoardUi } from './boardUi'
+
+registerMessages({
+  'boardtoolbar.shapeRectangle': { zh: '矩形', en: 'Rectangle' },
+  'boardtoolbar.shapeDiamond': { zh: '菱形', en: 'Diamond' },
+  'boardtoolbar.shapeEllipse': { zh: '椭圆', en: 'Ellipse' },
+  'boardtoolbar.lineArrow': { zh: '箭头', en: 'Arrow' },
+  'boardtoolbar.lineSegment': { zh: '线段', en: 'Line' },
+  'boardtoolbar.toolLock': { zh: '保持工具选中', en: 'Keep tool selected' },
+  'boardtoolbar.toolHand': { zh: '抓手', en: 'Hand' },
+  'boardtoolbar.toolSelection': { zh: '选择', en: 'Selection' },
+  'boardtoolbar.toolShape': { zh: '形状', en: 'Shape' },
+  'boardtoolbar.toolLine': { zh: '线', en: 'Line' },
+  'boardtoolbar.toolFreedraw': { zh: '画笔', en: 'Draw' },
+  'boardtoolbar.toolHighlighter': { zh: '荧光笔', en: 'Highlighter' },
+  'boardtoolbar.toolText': { zh: '文字', en: 'Text' },
+  'boardtoolbar.toolEraser': { zh: '橡皮', en: 'Eraser' },
+  'boardtoolbar.toolFrame': { zh: '画框', en: 'Frame' },
+  'boardtoolbar.toolLaser': { zh: '激光笔', en: 'Laser pointer' },
+})
 
 /** 合并按钮的成员。用户选的语义是「记忆最近用过的那个 + 数字键不循环」——
  *  换成员只能去左侧属性面板(见 PanelExtras),所以这里只需要记住当前是哪个。 */
@@ -52,26 +72,38 @@ export const newGroupState = (): GroupState => ({ shape: 'rectangle', line: 'arr
 const SHAPE_ICON: Record<ShapeMember, typeof Square> = { rectangle: Square, diamond: Diamond, ellipse: Circle }
 const LINE_ICON: Record<LineMember, typeof Square> = { arrow: ArrowRight, line: Minus }
 
-export const SHAPE_LABELS: Record<ShapeMember, string> = { rectangle: '矩形', diamond: '菱形', ellipse: '椭圆' }
-export const LINE_LABELS: Record<LineMember, string> = { arrow: '箭头', line: '线段' }
+/** ⚠️ 这两张表**必须惰性求值**(getter),不能是字面量:模块作用域的字面量在加载那一刻就冻住,
+ *  切语言不会跟着变。写成 getter 后类型仍是 `Record<…, string>`,消费方(PanelExtras)按下标读
+ *  的写法一字不用改,只是取值时机挪到了渲染那一刻。 */
+export const SHAPE_LABELS: Record<ShapeMember, string> = {
+  get rectangle() { return translate('boardtoolbar.shapeRectangle') },
+  get diamond() { return translate('boardtoolbar.shapeDiamond') },
+  get ellipse() { return translate('boardtoolbar.shapeEllipse') },
+}
+export const LINE_LABELS: Record<LineMember, string> = {
+  get arrow() { return translate('boardtoolbar.lineArrow') },
+  get line() { return translate('boardtoolbar.lineSegment') },
+}
 
 export type ToolRefs = {
   pen: React.RefObject<PenState>
   group: React.RefObject<GroupState>
 }
 
-const LABELS: Record<ToolId, string> = {
-  lock: '保持工具选中',
-  hand: '抓手',
-  selection: '选择',
-  shape: '形状',
-  line: '线',
-  freedraw: '画笔',
-  highlighter: '荧光笔',
-  text: '文字',
-  eraser: '橡皮',
-  frame: '画框',
-  laser: '激光笔',
+/** 存**键**不存文案:模块作用域的文案字面量会在加载时冻住,切语言不更新(见 SHAPE_LABELS 注释)。
+ *  真正的文案在渲染时用 `t(LABEL_KEYS[id])` 求。 */
+const LABEL_KEYS: Record<ToolId, string> = {
+  lock: 'boardtoolbar.toolLock',
+  hand: 'boardtoolbar.toolHand',
+  selection: 'boardtoolbar.toolSelection',
+  shape: 'boardtoolbar.toolShape',
+  line: 'boardtoolbar.toolLine',
+  freedraw: 'boardtoolbar.toolFreedraw',
+  highlighter: 'boardtoolbar.toolHighlighter',
+  text: 'boardtoolbar.toolText',
+  eraser: 'boardtoolbar.toolEraser',
+  frame: 'boardtoolbar.toolFrame',
+  laser: 'boardtoolbar.toolLaser',
 }
 
 /** 点一颗工具。工具栏按钮和数字快捷键**共用这一份** —— 分两处写迟早会分叉。 */
@@ -161,6 +193,7 @@ export default function BoardToolbar({
   ui: BoardUi
   refs: ToolRefs
 }): React.JSX.Element | null {
+  const { t } = useI18n()
   const saved = useSyncExternalStore(subscribeToolbarLayout, getToolbarLayout, getToolbarLayout)
   // 拖动中渲染的是**预览布局**:每次 pointermove 直接算出新布局并渲染,让位效果就自然有了,
   // 不用再单独做一套「占位槽」的几何。松手才落盘。
@@ -255,6 +288,7 @@ export default function BoardToolbar({
             const Icon = iconOf(id, g)
             const on = isActive(id, ui, pen)
             const digit = seg === 'mid' ? digitFor(i) : null
+            const label = t(LABEL_KEYS[id])
             return (
               <button
                 key={id}
@@ -263,8 +297,8 @@ export default function BoardToolbar({
                 data-on={on || undefined}
                 data-drag={drag?.id === id || undefined}
                 className="amx-tool"
-                title={digit ? `${LABELS[id]} — ${digit}` : LABELS[id]}
-                aria-label={LABELS[id]}
+                title={digit ? `${label} — ${digit}` : label}
+                aria-label={label}
                 aria-pressed={on}
                 onPointerDown={(e) => onDown(e, id)}
                 onPointerMove={onMove}

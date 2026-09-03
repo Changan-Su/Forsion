@@ -23,7 +23,7 @@ fs.cpSync(PLUGIN_SRC, path.join(home, 'plugins/server-admin'), { recursive: true
 
 async function boot() {
   const app = await electron.launch({
-    args: [`--user-data-dir=${UD}`, ROOT],
+    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,
     // ELECTRON_RENDERER_URL:复用正在跑的 vite dev 渲染层(与用户 dev 实例同款代码与时序);
     // user-data-dir 隔离 → 同源不同 profile,localStorage 互不可见。

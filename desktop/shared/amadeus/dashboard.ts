@@ -206,6 +206,7 @@ export function setDashInFm(fmExtra: string, layout: DashLayout): string | null 
 // 普通代码块,而且同样要进搜索。
 // 'stat' / 'chart' = 数据卡(见 shared/amadeus/dashboardData.ts):从一份 .db 里取数,
 // 并且**吃页面级筛选** —— 它们是「一屏面板」与「一个复合 view」的分界线。
+// 可带 `view:`(该 .db 已存视图的名字/id)—— 数据源先过那个视图自己的筛选(2026-09-02)。
 export const DASH_WIDGETS = ['clock', 'weather', 'webview', 'view', 'section', 'stat', 'chart'] as const
 export type WidgetKind = (typeof DASH_WIDGETS)[number]
 export interface Widget {

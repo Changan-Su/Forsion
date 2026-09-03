@@ -79,7 +79,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1000, height: 700 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 700 } })
   await page.setContent(html)
   const box = (sel) => page.evaluate((s) => {
     const r = document.querySelector(s).getBoundingClientRect()

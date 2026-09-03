@@ -5,6 +5,16 @@
 import { useEffect, useState, type MouseEvent } from 'react'
 import { Users, Globe2 } from 'lucide-react'
 import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'sharestatus.collabTitle': { zh: '本页正在协作共享 · 点击管理', en: 'This page is being shared for collaboration — click to manage' },
+  'sharestatus.collab': { zh: '协作中', en: 'Collaborating' },
+  'sharestatus.inheritedTitle': { zh: '已通过上级《{name}》发布 · 点击查看', en: 'Published via the parent "{name}" — click to view' },
+  'sharestatus.pubTitle': { zh: '本页已公开发布 · 点击管理', en: 'This page is published publicly — click to manage' },
+  'sharestatus.inherited': { zh: '已随文件夹发布', en: 'Published via folder' },
+  'sharestatus.published': { zh: '已发布', en: 'Published' },
+})
 
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
@@ -16,6 +26,7 @@ export function ShareStatus({ path, refreshKey, onOpen }: {
   const collab = window.amadeusCollab
   const [shared, setShared] = useState(false)
   const [pub, setPub] = useState<PublishState>({ kind: 'none' })
+  const { t } = useI18n()
 
   useEffect(() => {
     if (!collab || !path) { setShared(false); setPub({ kind: 'none' }); return }
@@ -38,17 +49,17 @@ export function ShareStatus({ path, refreshKey, onOpen }: {
   return (
     <span className="amx-sharestat">
       {shared && (
-        <button className="amx-sharestat-chip is-collab" title="本页正在协作共享 · 点击管理" onClick={open}>
-          <Users size={12} /> 协作中
+        <button className="amx-sharestat-chip is-collab" title={t('sharestatus.collabTitle')} onClick={open}>
+          <Users size={12} /> {t('sharestatus.collab')}
         </button>
       )}
       {isPub && (
         <button
           className="amx-sharestat-chip is-pub"
-          title={pub.kind === 'inherited' ? `已通过上级《${baseName(pub.via)}》发布 · 点击查看` : '本页已公开发布 · 点击管理'}
+          title={pub.kind === 'inherited' ? t('sharestatus.inheritedTitle', { name: baseName(pub.via) }) : t('sharestatus.pubTitle')}
           onClick={open}
         >
-          <Globe2 size={12} /> {pub.kind === 'inherited' ? '已随文件夹发布' : '已发布'}
+          <Globe2 size={12} /> {pub.kind === 'inherited' ? t('sharestatus.inherited') : t('sharestatus.published')}
         </button>
       )}
     </span>

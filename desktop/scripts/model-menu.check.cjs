@@ -100,7 +100,7 @@ const box = (sel) => {
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1000, height: 700 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 700 } })
   await p.setContent(PAGE)
 
   // ── B:开 / 收**各采样一遍宽度轨迹**。只查「有没有过渡对象」是不够的:min-width 那版

@@ -88,7 +88,11 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
     sidebarDefaults: sides,
     build() {
       ws().setSidebarDefaults(sides)
-      for (const p of spec.layout.main) ws().openView(p.type, p.params ?? {}, 'main')
+      // 主区多面板:openView 在主区默认是「替换活动面板」(浏览器式,dockviewStore.openView 的 !newTab 分支),
+      // 逐个 openView 只会剩配方最后一项 —— pc-erp 的三面板配方真机实测只开出「库存表」(e2e:erp S4b)。
+      // 第 2 项起显式 newTab;开完把第 1 项激活:配方第一项 = 进 Space 的默认落点。
+      const opened = spec.layout.main.map((p, i) => ws().openView(p.type, p.params ?? {}, 'main', { newTab: i > 0 }))
+      if (opened.length > 1 && opened[0]) ws().activateLeaf(opened[0].id)
       for (const side of ['left', 'right'] as const) {
         for (const p of sides[side]) ws().openView(p.type, p.params, side)
         if (!sides[side].length) ws().initializeSidebar(side, false) // 无默认内容 → 收起(toggle 展开落占位)

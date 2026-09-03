@@ -62,6 +62,50 @@ import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
+import { registerMessages, translate, useI18n } from '../../i18n'
+
+registerMessages({
+  'unipage.upload.uploading': { zh: '上传中 {name}', en: 'Uploading {name}' },
+  'unipage.upload.fileN': { zh: '文件{n}', en: 'File {n}' },
+  'unipage.toast.insertPointLost': { zh: '文件已创建，但原插入位置已失效（笔记已切换）', en: 'The file was created, but the original insertion point is gone (the note was switched).' },
+  'unipage.plugin.notString': { zh: 'run() 必须返回字符串,实际是 {type}', en: 'run() must return a string, but returned {type}' },
+  'unipage.plugin.tooLong': { zh: 'run() 返回内容过长', en: 'run() returned too much content' },
+  'unipage.plugin.controlChars': { zh: 'run() 返回内容含控制字符', en: 'run() returned content containing control characters' },
+  'unipage.plugin.failed': { zh: '「{label}」失败：{err}', en: '"{label}" failed: {err}' },
+  'unipage.toast.columnTopLevelOnly': { zh: '分栏只能对顶层块使用，请先把这一块拖出当前列/列表', en: 'Columns only work on top-level blocks — move this block out of its current column or list first.' },
+  'unipage.file.drawing': { zh: '画板', en: 'Whiteboard' },
+  'unipage.file.noteView': { zh: '笔记视图', en: 'Note view' },
+  'unipage.file.noteViewN': { zh: '笔记视图 {n}', en: 'Note view {n}' },
+  'unipage.file.untitledView': { zh: '未命名视图', en: 'Untitled view' },
+  'unipage.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
+  'unipage.bookmark.label': { zh: '粘贴链接地址(https:// 开头);YouTube 链接会直接内嵌播放器。', en: 'Paste a link starting with https:// — YouTube links turn into an embedded player.' },
+  'unipage.embed.title': { zh: '嵌入块引用', en: 'Embed a block reference' },
+  'unipage.embed.label': { zh: '形如 笔记名#块ID(块菜单「复制嵌入引用」可得);也可只填笔记名嵌整篇首块。', en: 'Looks like NoteName#blockId — the block menu item "Copy embed reference" gives you one. A note name on its own embeds the first block of that note.' },
+  'unipage.embed.confirm': { zh: '嵌入', en: 'Embed' },
+  'unipage.title.iconAction': { zh: '更换/移除页面图标', en: 'Change or remove the page icon' },
+  'unipage.title.addIcon': { zh: '☺ 添加图标', en: '☺ Add icon' },
+  'unipage.title.addCover': { zh: '🖼 添加封面', en: '🖼 Add cover' },
+  'unipage.toast.canvasElementsFailed': { zh: '画布改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', en: 'Canvas changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
+  'unipage.toast.canvasTreeFailed': { zh: '层级改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', en: 'Hierarchy changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
+  'unipage.toast.canvasMainFailed': { zh: '主卡改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', en: 'Main card changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
+  'unipage.toast.cardUnavailable': { zh: '当前块不能转换为卡片；请先移出列表或分栏', en: 'This block cannot be turned into a card — move it out of the list or columns first.' },
+  'unipage.toast.cardMade': { zh: '已转换为卡片 —— 右上角切到画布模式查看', en: 'Turned into a card — switch to canvas mode at the top right to see it.' },
+  'unipage.menu.turnInto': { zh: '转换为', en: 'Turn into' },
+  'unipage.menu.text': { zh: '正文', en: 'Text' },
+  'unipage.menu.h1': { zh: '标题 1', en: 'Heading 1' },
+  'unipage.menu.h2': { zh: '标题 2', en: 'Heading 2' },
+  'unipage.menu.h3': { zh: '标题 3', en: 'Heading 3' },
+  'unipage.menu.bullet': { zh: '无序列表', en: 'Bulleted list' },
+  'unipage.menu.ordered': { zh: '有序列表', en: 'Numbered list' },
+  'unipage.menu.task': { zh: '待办', en: 'To-do list' },
+  'unipage.menu.quote': { zh: '引用', en: 'Quote' },
+  'unipage.menu.fold': { zh: '折叠', en: 'Toggle' },
+  'unipage.menu.card': { zh: '卡片', en: 'Card' },
+  'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
+  'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
+  'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
+  'unipage.menu.delete': { zh: '删除', en: 'Delete' },
+})
 
 const SAVE_DEBOUNCE_MS = 800 // WsFileView 同款节奏(外部文件不抢 400ms 的 pageStore 节拍)
 
@@ -344,7 +388,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     // 先出占位块再上传(AFFiNE 同):大文件时用户立刻看到「东西已经落在这儿了」,而不是盯着
     // 一个没反应的编辑器等几秒。占位文本带零宽标记,替换时按标记找回位置 —— 期间用户照常打字,
     // 位置会跟着事务走(靠文本定位而不是缓存 pos,回灌/外部改动都不会把它对错地方)。
-    const marks = files.map((f, i) => `\u200b上传中 ${f.name || `文件${i + 1}`}\u200b`)
+    const marks = files.map((f, i) => `\u200b${translate('unipage.upload.uploading', { name: f.name || translate('unipage.upload.fileN', { n: i + 1 }) })}\u200b`)
     getInstance()?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const paragraph = view.state.schema.nodes.paragraph
@@ -429,7 +473,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
    *  统一实例只需一道 —— 编辑器还活着就还是同一篇(实例与路径同生共死,pipe.retired 会拆掉它)。 */
   const insertAsync = (md: string): void => {
     if (!apiRef.current) {
-      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '文件已创建，但原插入位置已失效（笔记已切换）' } }))
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.insertPointLost') } }))
       return
     }
     insertMd(md)
@@ -481,18 +525,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         try {
           const md = await item.run!({ pagePath: path, folder: fdDirOf(path) })
           if (md === '' || md == null) return
-          if (typeof md !== 'string') throw new Error(`run() 必须返回字符串,实际是 ${typeof md}`)
-          if (md.length > 8192) throw new Error('run() 返回内容过长')
+          if (typeof md !== 'string') throw new Error(translate('unipage.plugin.notString', { type: typeof md }))
+          if (md.length > 8192) throw new Error(translate('unipage.plugin.tooLong'))
           // 控制字符逐码点判(放行 \t \n):正则字面量写法会把真控制字节带进源文件。
           if (Array.from(md).some((c) => c.charCodeAt(0) < 32 && c !== String.fromCharCode(9) && c !== String.fromCharCode(10))) {
-            throw new Error('run() 返回内容含控制字符')
+            throw new Error(translate('unipage.plugin.controlChars'))
           }
           insertAsync(md)
           void store.getState().syncFdChildren(path)
         } catch (e) {
           console.error('[plugin] slash item failed', e)
           window.dispatchEvent(new CustomEvent('amadeus:toast', {
-            detail: { text: `「${item.label}」失败：${e instanceof Error ? e.message : String(e)}`, error: true },
+            detail: { text: translate('unipage.plugin.failed', { label: item.label, err: e instanceof Error ? e.message : String(e) }), error: true },
           }))
         }
       })()
@@ -524,7 +568,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         if ($from.depth !== 1) {
           // 已在列内/列表里:分栏只做顶级(与 ⠿ 菜单同规)。'/query' 此刻已被 consume 删掉 ——
           // 什么都不说等于「打了字、字没了、也没分栏」,必须给一句。
-          window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '分栏只能对顶层块使用，请先把这一块拖出当前列/列表' } }))
+          window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.columnTopLevelOnly') } }))
           return
         }
         splitToColumn(view, $from.before(1), $from.after(1), $from.node(1))
@@ -537,7 +581,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       void (async () => {
         try {
           const st = store.getState()
-          const newPath = await st.createChildNote(path, '未命名')
+          const newPath = await st.createChildNote(path, translate('amadeus.default.note'))
           insertAsync(`[[${newPath.split('/').pop()!.replace(/\.md$/i, '')}]]`)
           void st.loadPage(newPath) // 本实例随之退休,onFinalFlush 把刚插的链接一并落盘
         } catch { /* 创建失败静默跳过 */ }
@@ -545,12 +589,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       return
     }
     if (item.scaffold === S.database) {
-      void createFdFile('未命名数据库.db', new TextEncoder().encode(serializeDb(emptyDb('未命名数据库'))))
+      const dbName = translate('amadeus.default.database')
+      void createFdFile(`${dbName}.db`, new TextEncoder().encode(serializeDb(emptyDb(dbName))))
       return
     }
     if (item.scaffold === S.drawing) {
       // Obsidian Excalidraw 插件同款 .excalidraw.md(同一个库两边可互开);时间戳命名照抄它。
-      void createFdFile(`${stampedFileName('画板')}.excalidraw.md`, new TextEncoder().encode(blankDrawing(BLANK_SCENE_JSON)), true)
+      void createFdFile(`${stampedFileName(translate('unipage.file.drawing'))}.excalidraw.md`, new TextEncoder().encode(blankDrawing(BLANK_SCENE_JSON)), true)
       return
     }
     if (item.scaffold === S.noteview) {
@@ -560,11 +605,12 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         let folderRel: string | null = null
         for (let i = 1; i <= 20 && folderRel === null; i++) {
           try {
-            folderRel = await amadeus.createFolder(fdDir, i === 1 ? '笔记视图' : `笔记视图 ${i}`)
+            folderRel = await amadeus.createFolder(fdDir, i === 1 ? translate('unipage.file.noteView') : translate('unipage.file.noteViewN', { n: i }))
           } catch { /* 撞名,试下一个 */ }
         }
         if (folderRel === null) return
-        await createFdFile('未命名视图.db', new TextEncoder().encode(serializeDb(emptyNoteView('未命名视图', folderRel))))
+        const viewName = translate('unipage.file.untitledView')
+        await createFdFile(`${viewName}.db`, new TextEncoder().encode(serializeDb(emptyNoteView(viewName, folderRel))))
       })()
       return
     }
@@ -574,7 +620,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     if (item.scaffold === S.bookmark) {
       // 整块 = 一行裸 URL → 嵌入层渲染为书签卡(og 元数据/YouTube 播放器);md 零私有语法。
-      void askString('插入书签', '', { label: '粘贴链接地址(https:// 开头);YouTube 链接会直接内嵌播放器。' }).then((raw) => {
+      void askString(translate('unipage.bookmark.title'), '', { label: translate('unipage.bookmark.label') }).then((raw) => {
         const url = raw?.trim()
         if (url && /^https?:\/\/\S+$/i.test(url)) insertAsync(url)
       })
@@ -588,9 +634,9 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const m = /!\[\[([^\]\n]+)\]\]/.exec(await navigator.clipboard.readText())
           if (m) prefill = m[1].trim()
         } catch { /* clipboard unavailable */ }
-        const raw = await askString('嵌入块引用', prefill, {
-          label: '形如 笔记名#块ID(块菜单「复制嵌入引用」可得);也可只填笔记名嵌整篇首块。',
-          confirmLabel: '嵌入',
+        const raw = await askString(translate('unipage.embed.title'), prefill, {
+          label: translate('unipage.embed.label'),
+          confirmLabel: translate('unipage.embed.confirm'),
         })
         const target = raw?.trim().replace(/^!?\[\[/, '').replace(/\]\]$/, '').trim()
         if (target) insertAsync(`![[${target}]]`)
@@ -655,6 +701,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   /** 新建流:挂载即聚焦标题(认领 pageStore 的一次性聚焦请求后由父级置真)。 */
   focusSignal: boolean
 }): ReactElement {
+  const { t } = useI18n()
   const current = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
   const shown = UNTITLED_RE.test(current) ? '' : current
   const [val, setVal] = useState(shown)
@@ -685,7 +732,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
       {icon && (
         <button
           className="amx-title-bigicon"
-          title="更换/移除页面图标"
+          title={t('unipage.title.iconAction')}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
             setPick({ x: r.left, y: r.bottom + 6 })
@@ -696,9 +743,9 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
       )}
       {(!icon || !cover) && (
         <div className="amx-title-actions">
-          {!icon && <button onClick={() => onSetIcon(randomEmoji())}>☺ 添加图标</button>}
+          {!icon && <button onClick={() => onSetIcon(randomEmoji())}>{t('unipage.title.addIcon')}</button>}
           {!cover && (
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}>🖼 添加封面</button>
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}>{t('unipage.title.addCover')}</button>
           )}
         </div>
       )}
@@ -765,6 +812,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const scoped = useScopedPageStore()
   const vaultRoot = scoped.getState().vaultRoot
   const mode = useUiOverlay((s) => s.editorMode)
+  const { t } = useI18n()
 
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
@@ -878,7 +926,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const stored = canvasLineOf(pipe.fm)
     if (stored != null && parseCanvasJson(stored) == null) {
       window.dispatchEvent(new CustomEvent('amadeus:toast', {
-        detail: { text: '画布改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', error: true },
+        detail: { text: translate('unipage.toast.canvasElementsFailed'), error: true },
       }))
       return
     }
@@ -892,7 +940,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const stored = canvasLineOf(pipe.fm)
     if (stored != null && parseCanvasJson(stored) == null) {
       window.dispatchEvent(new CustomEvent('amadeus:toast', {
-        detail: { text: '层级改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', error: true },
+        detail: { text: translate('unipage.toast.canvasTreeFailed'), error: true },
       }))
       return
     }
@@ -907,7 +955,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     const stored = canvasLineOf(pipe.fm)
     if (stored != null && parseCanvasJson(stored) == null) {
       window.dispatchEvent(new CustomEvent('amadeus:toast', {
-        detail: { text: '主卡改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', error: true },
+        detail: { text: translate('unipage.toast.canvasMainFailed'), error: true },
       }))
       return
     }
@@ -1114,7 +1162,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const makeCard = (view: EditorView): boolean => {
     const unavailable = (): false => {
       window.dispatchEvent(new CustomEvent('amadeus:toast', {
-        detail: { text: '当前块不能转换为卡片；请先移出列表或分栏' },
+        detail: { text: translate('unipage.toast.cardUnavailable') },
       }))
       return false
     }
@@ -1157,7 +1205,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     //    悬空的层级条目 —— 拿派生前的快照当基底,等于把刚被剪掉的垃圾原样写回去。
     if (parent) setCanvasTree(setParent(rawTree(parseCanvasJson(canvasLineOf(pipe.fm))?.tree), made, parent))
     if (!canvasModeRef.current && !parent) {
-      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: '已转换为卡片 —— 右上角切到画布模式查看' } }))
+      window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.cardMade') } }))
     }
     return true
   }
@@ -1283,9 +1331,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       // 第一次点击会把它的 DOM 整个重建 —— 两次点击的 target 不是同一个节点,浏览器就把 dblclick
       // 派到公共祖先 <p> 上,`tagName === 'IMG'` 当场扑空、双击看大图时灵时不灵(2026-08-28 实测)。
       const hit = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null) ?? (e.target as HTMLElement | null)
-      const t = hit?.tagName === 'IMG' ? (hit as HTMLImageElement) : null
-      if (!t || !t.closest('.unified-body')) return
-      const src = t.currentSrc || t.src
+      const img = hit?.tagName === 'IMG' ? (hit as HTMLImageElement) : null
+      if (!img || !img.closest('.unified-body')) return
+      const src = img.currentSrc || img.src
       if (!src) return
       e.preventDefault()
       e.stopPropagation()
@@ -1708,16 +1756,16 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       {blockMenu && (
         <OverlayPortal>
           <OverlayAt className="ctx-menu unified-block-menu" x={blockMenu.x} y={blockMenu.y} onClick={(e) => e.stopPropagation()}>
-            <div className="ubm-label">转换为</div>
-            <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> 正文</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> 标题 1</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> 标题 2</button>
-            <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> 标题 3</button>
-            <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> 无序列表</button>
-            <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> 有序列表</button>
-            <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> 待办</button>
-            <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> 引用</button>
-            <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> 折叠</button>
+            <div className="ubm-label">{t('unipage.menu.turnInto')}</div>
+            <button onClick={() => turnInto({ kind: 'text' })}><Pilcrow size={13} /> {t('unipage.menu.text')}</button>
+            <button onClick={() => turnInto({ kind: 'heading', level: 1 })}><Heading1 size={13} /> {t('unipage.menu.h1')}</button>
+            <button onClick={() => turnInto({ kind: 'heading', level: 2 })}><Heading2 size={13} /> {t('unipage.menu.h2')}</button>
+            <button onClick={() => turnInto({ kind: 'heading', level: 3 })}><Heading3 size={13} /> {t('unipage.menu.h3')}</button>
+            <button onClick={() => turnInto({ kind: 'bullet' })}><List size={13} /> {t('unipage.menu.bullet')}</button>
+            <button onClick={() => turnInto({ kind: 'ordered' })}><ListOrdered size={13} /> {t('unipage.menu.ordered')}</button>
+            <button onClick={() => turnInto({ kind: 'task' })}><ListTodo size={13} /> {t('unipage.menu.task')}</button>
+            <button onClick={() => turnInto({ kind: 'quote' })}><TextQuote size={13} /> {t('unipage.menu.quote')}</button>
+            <button onClick={() => turnInto({ kind: 'fold' })}><ChevronsDown size={13} /> {t('unipage.menu.fold')}</button>
             {/* 卡片也是块类型，放在“转换为”内与 /card 保持同一信息架构；不支持的节点不露入口。 */}
             {(() => {
               const view = layer.getView()
@@ -1730,7 +1778,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               }
               return (
                 <button onClick={() => withSelectedNode((current) => { makeCard(current) })}>
-                  <StickyNote size={13} /> 卡片
+                  <StickyNote size={13} /> {t('unipage.menu.card')}
                 </button>
               )
             })()}
@@ -1738,7 +1786,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             <button onClick={() => withSelectedNode((view, sel) => {
               splitToColumn(view, sel.from, sel.to, sel.node) // 与 slash「分栏」共用(columns.ts)
             })}>
-              <Columns2 size={13} /> 移到新列
+              <Columns2 size={13} /> {t('unipage.menu.toNewColumn')}
             </button>
             {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。
                 条件渲染而不是「点了才 return」:对普通段落也显示一个点了没反应的菜单项是纯噪音。 */}
@@ -1750,7 +1798,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 syncFromEditor()
                 schedule()
               })}>
-                <Undo2 size={13} /> 收回文档
+                <Undo2 size={13} /> {t('unipage.menu.backToDoc')}
               </button>
             )}
             <button onClick={() => withBlocks(
@@ -1777,7 +1825,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 view.dispatch(view.state.tr.insert(sel.to, sel.node))
               },
             )}>
-              <Copy size={13} /> 复制块
+              <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
             <button className="danger" onClick={() => withBlocks(
               (view, r) => {
@@ -1791,7 +1839,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 onBlocksDeleted(removed)
               },
             )}>
-              <Trash2 size={13} /> 删除
+              <Trash2 size={13} /> {t('unipage.menu.delete')}
             </button>
           </OverlayAt>
         </OverlayPortal>

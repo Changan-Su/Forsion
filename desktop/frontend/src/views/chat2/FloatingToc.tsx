@@ -4,6 +4,11 @@
  *  扫 [data-toc-msg-role="user"](用户提问轮次=level 0)+ h1/h2/h3[data-toc-level](助手标题,Markdown anchorPrefix 产出),
  *  按文档顺序排好——这样即便回复没有 markdown 标题,多轮对话也有目录(对齐右栏 ChatToc)。 */
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'ftoc.label': { zh: '目录', en: 'Table of contents' },
+})
 
 interface TocItem { id: string; level: number; text: string }
 
@@ -11,6 +16,7 @@ export function FloatingToc({ scrollContainerRef, scanTrigger }: {
   scrollContainerRef: RefObject<HTMLElement | null>
   scanTrigger?: number
 }) {
+  const { t } = useI18n()
   const [items, setItems] = useState<TocItem[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [hovered, setHovered] = useState(false)
@@ -77,7 +83,7 @@ export function FloatingToc({ scrollContainerRef, scanTrigger }: {
   if (items.length < 2) return null
 
   return (
-    <div className={`t2-ftoc${hovered ? ' open' : ''}`} onMouseEnter={enter} onMouseLeave={leave} aria-label="目录">
+    <div className={`t2-ftoc${hovered ? ' open' : ''}`} onMouseEnter={enter} onMouseLeave={leave} aria-label={t('ftoc.label')}>
       {items.map((it) => {
         const isActive = activeId === it.id
         // level 0=用户轮次(最长/最左),1/2/3=助手标题逐级缩进、刻度渐短。

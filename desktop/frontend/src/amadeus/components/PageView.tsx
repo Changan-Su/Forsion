@@ -23,10 +23,31 @@ import { activePageScope, pageStoreFor, usePageScope, useScopedPageStore, type P
 import { foldedSet, headingLevel, sectionBoundaryLevel, useHeadingFold } from '../store/headingFoldStore'
 import { Row } from './Row'
 import { BacklinksPanel } from './BacklinksPanel'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'amxpv.findPlaceholder': { zh: '在本页查找…', en: 'Find in page…' },
+  'amxpv.findPrev': { zh: '上一个(Shift+Enter)', en: 'Previous (Shift+Enter)' },
+  'amxpv.findNext': { zh: '下一个(Enter)', en: 'Next (Enter)' },
+  'amxpv.findClose': { zh: '关闭(Esc)', en: 'Close (Esc)' },
+  'amxpv.statusSaving': { zh: '保存中…', en: 'Saving…' },
+  'amxpv.statusLoading': { zh: '加载中…', en: 'Loading…' },
+  'amxpv.statusReady': { zh: '已保存', en: 'Saved' },
+  'amxpv.emptyBlock': { zh: '空块', en: 'Empty block' },
+  'amxpv.openVault': { zh: '打开一个 Vault，或新建页面开始。', en: 'Open a vault, or create a page to get started.' },
+  'amxpv.renameTitle': { zh: '点击重命名页面', en: 'Click to rename the page' },
+  'amxpv.expandSection': { zh: '展开小节({n} 行)', en: 'Expand section ({n} rows)' },
+  'amxpv.foldSection': { zh: '折叠小节', en: 'Collapse section' },
+  'amxpv.addBlock': { zh: '＋ 新块', en: '＋ New block' },
+  'amxpv.dndHint': { zh: '拖动 ⠿ 到列边缘可分栏 · 拖到行间可新建行', en: 'Drag ⠿ to a column edge to split into columns · drop between rows to add a row' },
+})
+
+type TFn = ReturnType<typeof useI18n>['t']
 
 /** 页内查找浮条(Cmd/Ctrl+F 在编辑器内呼出):输入 / x/y 计数 / 上下条 / 关闭。
  *  v4 统一页(UnifiedPage)不经 PageView,自己渲染这一份 —— 别再造第二个查找条。 */
 export function FindBar() {
+  const { t } = useI18n()
   const query = useFindStore((s) => s.query)
   const active = useFindStore((s) => s.active)
   const counts = useFindStore((s) => s.counts)
@@ -43,7 +64,7 @@ export function FindBar() {
     <div className="amx-findbar">
       <input
         autoFocus
-        placeholder="在本页查找…"
+        placeholder={t('amxpv.findPlaceholder')}
         value={query}
         onChange={(e) => useFindStore.getState().setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -53,21 +74,21 @@ export function FindBar() {
         }}
       />
       <span className="amx-findbar-count">{total ? `${Math.min(active + 1, total)}/${total}` : query ? '0' : ''}</span>
-      <button onClick={() => useFindStore.getState().step(-1)} title="上一个(Shift+Enter)" aria-label="previous match">‹</button>
-      <button onClick={() => useFindStore.getState().step(1)} title="下一个(Enter)" aria-label="next match">›</button>
-      <button onClick={() => useFindStore.getState().close()} title="关闭(Esc)" aria-label="close find">✕</button>
+      <button onClick={() => useFindStore.getState().step(-1)} title={t('amxpv.findPrev')} aria-label="previous match">‹</button>
+      <button onClick={() => useFindStore.getState().step(1)} title={t('amxpv.findNext')} aria-label="next match">›</button>
+      <button onClick={() => useFindStore.getState().close()} title={t('amxpv.findClose')} aria-label="close find">✕</button>
     </div>
   )
 }
 
-function statusLabel(s: Status): string {
-  return s === 'saving' ? '保存中…' : s === 'loading' ? '加载中…' : s === 'ready' ? '已保存' : ''
+function statusLabel(s: Status, t: TFn): string {
+  return s === 'saving' ? t('amxpv.statusSaving') : s === 'loading' ? t('amxpv.statusLoading') : s === 'ready' ? t('amxpv.statusReady') : ''
 }
 
-function previewText(content?: string): string {
-  if (!content) return '空块'
+function previewText(content: string | undefined, t: TFn): string {
+  if (!content) return t('amxpv.emptyBlock')
   const line = content.replace(/[#>*_`\-[\]]/g, '').trim().split('\n')[0]
-  return line.length > 48 ? line.slice(0, 48) + '…' : line || '空块'
+  return line.length > 48 ? line.slice(0, 48) + '…' : line || t('amxpv.emptyBlock')
 }
 
 function RowGap({ index }: { index: number }) {
@@ -116,6 +137,7 @@ const cancelIdleMount: (h: number) => void =
   typeof cancelIdleCallback === 'function' ? cancelIdleCallback : clearTimeout
 
 export function PageView({ bare = false }: { bare?: boolean } = {}) {
+  const { t } = useI18n()
   const manifest = usePageStore((s) => s.manifest)
   const blocks = usePageStore((s) => s.blocks)
   const status = usePageStore((s) => s.status)
@@ -153,8 +175,8 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
       if (!(e.metaKey || e.ctrlKey)) return
       const k = e.key.toLowerCase()
       if (k !== 'z' && k !== 'y') return
-      const t = e.target as HTMLElement | null
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      const tgt = e.target as HTMLElement | null
+      if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return
       // 别人已处理的键不再兜底:画布/导图插件视图自己 preventDefault 后撤销**自己 scope** 的历史,
       // 这里若继续,一次 Cmd-Z 会把后台普通笔记也回退一步(评审 P1,2026-08-14)。
       if (e.defaultPrevented) return
@@ -181,7 +203,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
     return () => cancelIdleMount(h)
   }, [mountedRows, totalRows])
 
-  if (!manifest) return <div className="empty-state">打开一个 Vault，或新建页面开始。</div>
+  if (!manifest) return <div className="empty-state">{t('amxpv.openVault')}</div>
   const root = manifest.root
 
   // 标题小节折叠:每行取首块的标题级别;被某个折叠标题覆盖的行整行隐藏(拖拽中临时全展开,防拖进黑洞)。
@@ -333,12 +355,12 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
             }}
           />
         ) : (
-          <div className="page-title" onClick={startTitleEdit} title="点击重命名页面">
+          <div className="page-title" onClick={startTitleEdit} title={t('amxpv.renameTitle')}>
             {titleText}
           </div>
         )}
         <div className="page-status" data-status={status}>
-          {statusLabel(status)}
+          {statusLabel(status, t)}
         </div>
       </header>
       )}
@@ -380,7 +402,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
                       span > 0 && meta.firstId ? (
                         <button
                           className={`amx-hfold${folded ? ' folded' : ''}`}
-                          title={folded ? `展开小节(${span} 行)` : '折叠小节'}
+                          title={folded ? t('amxpv.expandSection', { n: span }) : t('amxpv.foldSection')}
                           onClick={(e) => {
                             e.stopPropagation() // 手柄同族:别顺带触发块选中
                             useHeadingFold.getState().toggle(activePage ?? '', meta.firstId!)
@@ -398,7 +420,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
           })}
         </div>
         <DragOverlay dropAnimation={null}>
-          {activeId ? <div className="drag-overlay">{previewText(blocks[activeId]?.content)}</div> : null}
+          {activeId ? <div className="drag-overlay">{previewText(blocks[activeId]?.content, t)}</div> : null}
         </DragOverlay>
       </DndContext>
 
@@ -408,9 +430,9 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
       {!bare && (
         <div className="page-footer">
           <button className="add-block" onClick={() => insertBlockAfter(null)}>
-            ＋ 新块
+            {t('amxpv.addBlock')}
           </button>
-          <span className="hint-inline">拖动 ⠿ 到列边缘可分栏 · 拖到行间可新建行</span>
+          <span className="hint-inline">{t('amxpv.dndHint')}</span>
         </div>
       )}
 

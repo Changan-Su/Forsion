@@ -1,4 +1,4 @@
-// 选中卡片的层级线强调：祖先链 + 自己的子树浮到卡片之上，兄弟分支保持安静。
+// 选中卡片的关系焦点：祖先链 + 自己的子树与连线保持清晰，其余卡片/层级线轻退。
 // 用法：node scripts/e2e-editor.cjs --check=canvas-related-lines [--shot=/tmp/related-lines.png]
 const fs = require('fs')
 const os = require('os')
@@ -41,7 +41,7 @@ function check(name, ok, detail = '') {
 
 async function main() {
   const browser = await chromium.launch({ headless: true, executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
   try {
     await page.addInitScript(() => {
       for (let i = localStorage.length - 1; i >= 0; i--) {
@@ -55,7 +55,7 @@ async function main() {
 
     await page.click('.amx-ucard[data-anchor="child"]', { position: { x: 16, y: 16 } })
     await page.waitForSelector('.amx-el-selbox[data-anchor="child"]')
-    await page.waitForTimeout(180)
+    await page.waitForTimeout(260)
 
     const state = await page.evaluate(() => {
       const line = (id) => {
@@ -69,9 +69,20 @@ async function main() {
           haloFilter: halo ? getComputedStyle(halo).filter : '',
           haloWidth: halo ? getComputedStyle(halo).strokeWidth : '',
           coreWidth: core ? getComputedStyle(core).strokeWidth : '',
+          opacity: svg ? Number(getComputedStyle(svg).opacity) : -1,
         }
       }
-      return { parent: line('t:child'), child: line('t:grandchild'), sibling: line('t:sibling') }
+      const cardOpacity = (anchor) => {
+        const card = document.querySelector(`.amx-ucard[data-anchor="${anchor}"]`)
+        return card ? Number(getComputedStyle(card).opacity) : -1
+      }
+      return {
+        parent: line('t:child'),
+        child: line('t:grandchild'),
+        sibling: line('t:sibling'),
+        cards: Object.fromEntries(['root', 'child', 'grandchild', 'sibling', 'cover'].map((anchor) => [anchor, cardOpacity(anchor)])),
+        focusRules: document.querySelectorAll('style[data-amx-related-focus-rules]').length,
+      }
     })
 
     check('选中中间卡：父级线与子级线都进入 related 态', state.parent.related && state.child.related, JSON.stringify(state))
@@ -79,16 +90,35 @@ async function main() {
     check('相关线提升到卡片上方', state.parent.z === '2' && state.child.z === '2', `parent=${state.parent.z} child=${state.child.z}`)
     check('相关线由虚化底线 + 清晰核心线组成', state.parent.paths === 2 && state.child.paths === 2
       && state.parent.haloFilter.includes('blur') && parseFloat(state.parent.haloWidth) > parseFloat(state.parent.coreWidth), JSON.stringify(state.parent))
+    check('选中卡、全部父级和子级卡片保持完整显示', state.cards.root === 1 && state.cards.child === 1 && state.cards.grandchild === 1, JSON.stringify(state.cards))
+    check('兄弟与无关遮挡卡柔和淡出', state.cards.sibling > 0.4 && state.cards.sibling < 0.5 && state.cards.cover > 0.4 && state.cards.cover < 0.5, JSON.stringify(state.cards))
+    check('无关层级线同步后退', state.sibling.opacity > 0.1 && state.sibling.opacity < 0.25, JSON.stringify(state.sibling))
 
     if (SHOT) {
       await page.screenshot({ path: SHOT, fullPage: false })
       console.log(`SHOT  ${SHOT}`)
     }
 
+    await page.click('.amx-ucard[data-anchor="cover"]', { position: { x: 16, y: 16 } })
+    await page.waitForSelector('.amx-el-selbox[data-anchor="cover"]')
+    await page.waitForTimeout(260)
+    const switched = await page.evaluate(() => {
+      const opacity = (anchor) => {
+        const card = document.querySelector(`.amx-ucard[data-anchor="${anchor}"]`)
+        return card ? Number(getComputedStyle(card).opacity) : -1
+      }
+      return { cover: opacity('cover'), child: opacity('child'), related: document.querySelectorAll('.amx-el-conn.is-related').length }
+    })
+    check('淡出卡仍可一击切换为新焦点', switched.cover === 1 && switched.child > 0.4 && switched.child < 0.5 && switched.related === 0, JSON.stringify(switched))
+
     await page.keyboard.press('Escape')
-    await page.waitForTimeout(120)
-    const afterEscape = await page.locator('.amx-el-conn.is-related').count()
-    check('取消选中后强调完整收起', afterEscape === 0, `related=${afterEscape}`)
+    await page.waitForTimeout(260)
+    const afterEscape = await page.evaluate(() => ({
+      related: document.querySelectorAll('.amx-el-conn.is-related').length,
+      focusRules: document.querySelectorAll('style[data-amx-related-focus-rules]').length,
+      opacities: [...document.querySelectorAll('.amx-ucard')].map((card) => Number(getComputedStyle(card).opacity)),
+    }))
+    check('取消选中后聚焦完整收起', afterEscape.related === 0 && afterEscape.focusRules === 0 && afterEscape.opacities.every((opacity) => opacity === 1), JSON.stringify(afterEscape))
   } finally {
     await browser.close()
   }

@@ -27,7 +27,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const results = []
   for (const [name, contents, idx, times, want] of SETS) {
-    const p = await browser.newPage()
+    const p = await browser.newPage({ locale: 'zh-CN' })
     const errs = []
     p.on('pageerror', (e) => errs.push(e.message))
     await p.goto(`${URL}?fold`, { waitUntil: 'domcontentloaded' })

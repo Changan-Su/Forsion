@@ -13,10 +13,19 @@ import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
 import { deleteAgentScheduleEntry, fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
-import { actionsText, condText, fmtTime, isFinishedTrigger } from './lib'
+import { useDbStore } from '../../amadeus/store/dbStore'
+import { actionsText, condText, fmtTime, isFinishedTrigger, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
 import type { AgentScheduleEntry, HistorianActivityItem, MuseTriggerInfo } from '../../types'
 import './automation.css'
+
+/** 监听列名单(cell_changed):表已加载就显示列名,否则/列已删显示 (id);多列 = 任一变化即命中。
+ *  单独成组件:列名要订阅 dbStore,而 DetailView 主体在 tr 之前有多处早退,hook 不能放那里。 */
+const WatchedColumns: React.FC<{ cond: Extract<MuseTriggerInfo['cond'], { type: 'db_changed' }> }> = ({ cond }) => {
+  const cols = useDbStore((s) => s.entries[cond.path]?.data?.columns)
+  const ids = watchedColumnIds(cond)
+  return <>{ids.map((id) => cols?.find((c) => c.id === id)?.name ?? `(${id})`).join(' · ') || '—'}</>
+}
 
 /** 试跑按钮:同一执行器立即执行动作链(旧式规则=起一次无人值守 run),结果行内展示。 */
 const FireButton: React.FC<{ tr: MuseTriggerInfo }> = ({ tr }) => {
@@ -295,10 +304,21 @@ export const AutomationDetailView: React.FC = () => {
         </div>
         <div className="auto-facts">
           {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}
+          {/* 引擎自动停用(排空封顶断环 / tool_call 不可用)会写 disabledReason;用户手动启用即清。不显示的话用户只能从日志感知「规则怎么停了」 */}
+          {!tr.enabled && tr.disabledReason && <span className="auto-fact auto-fact-warn"><b>{t('automation.fact.status')}</b>{t('automation.fact.disabledReason', { reason: tr.disabledReason })}</span>}
           <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{condText(t, tr.cond)}</span>
+          {tr.cond.type === 'db_changed' && tr.cond.event === 'cell_changed' && (
+            <span className="auto-fact"><b>{t('automation.fact.columns')}</b><WatchedColumns cond={tr.cond} /></span>
+          )}
+          {tr.cond.type === 'db_changed' && !!tr.cond.where?.length && (
+            <span className="auto-fact"><b>{t('automation.fact.where')}</b>{whereText(t, tr.cond.where)}</span>
+          )}
           <span className="auto-fact"><b>{t('automation.fact.actions')}</b>{actionsText(t, agentDefs, tr)}</span>
           {tr.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{tr.prompt.slice(0, 80)}</span>}
-          {tr.cooldownHours > 0 && <span className="auto-fact"><b>{t('automation.fact.cooldown')}</b>{tr.cooldownHours}h</span>}
+          {/* db_changed 的 0 = 「不冷却」是有意义的配置(链式规则),别藏;其它触发类型 0 只是引擎默认,照旧不显示。 */}
+          {(tr.cooldownHours > 0 || tr.cond.type === 'db_changed') && (
+            <span className="auto-fact"><b>{t('automation.fact.cooldown')}</b>{tr.cooldownHours > 0 ? `${tr.cooldownHours}h` : t('automation.fact.noCooldown')}</span>
+          )}
           <span className="auto-fact"><b>{t('automation.fact.lastRun')}</b>{fmtTime(tr.lastFiredAt)}</span>
           {tr.enabled && tr.nextRunAt && <span className="auto-fact"><b>{t('automation.fact.nextRun')}</b>{fmtTime(tr.nextRunAt)}</span>}
         </div>

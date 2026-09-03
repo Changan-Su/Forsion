@@ -7,6 +7,31 @@ import type { DashFilter } from '@amadeus-shared/dashboardData'
 import { ChartCard, StatCard } from '../../views/dashDataCards'
 import { BROWSER_PARTITION } from '../../../../shared/browser'
 import { Webview } from '../../builtins/browserView'
+import { registerMessages, translate, useI18n } from '../../i18n'
+
+registerMessages({
+  'dashwidget.sectionUntitled': { zh: '未命名分区', en: 'Untitled section' },
+  'dashwidget.clockBadTz': { zh: '时区「{tz}」无效,已按本机时间显示', en: 'Time zone "{tz}" is invalid, showing local time instead' },
+  'dashwidget.wmoClear': { zh: '晴', en: 'Clear' },
+  'dashwidget.wmoPartly': { zh: '多云', en: 'Partly cloudy' },
+  'dashwidget.wmoOvercast': { zh: '阴', en: 'Overcast' },
+  'dashwidget.wmoFog': { zh: '雾', en: 'Fog' },
+  'dashwidget.wmoDrizzle': { zh: '毛毛雨', en: 'Drizzle' },
+  'dashwidget.wmoRain': { zh: '雨', en: 'Rain' },
+  'dashwidget.wmoSnow': { zh: '雪', en: 'Snow' },
+  'dashwidget.wmoShowers': { zh: '阵雨', en: 'Showers' },
+  'dashwidget.wmoSnowShowers': { zh: '阵雪', en: 'Snow showers' },
+  'dashwidget.wmoThunder': { zh: '雷暴', en: 'Thunderstorm' },
+  'dashwidget.weatherNoCity': { zh: '未指定城市', en: 'No city specified' },
+  'dashwidget.weatherCityNotFound': { zh: '找不到「{city}」', en: 'Could not find "{city}"' },
+  'dashwidget.weatherBadResponse': { zh: '返回数据异常', en: 'Unexpected response from the weather service' },
+  'dashwidget.weatherError': { zh: '天气不可用:{msg}', en: 'Weather unavailable: {msg}' },
+  'dashwidget.weatherWind': { zh: '风 {n} km/h', en: 'Wind {n} km/h' },
+  'dashwidget.loading': { zh: '加载中…', en: 'Loading…' },
+  'dashwidget.webviewNoUrl': { zh: '未指定 url', en: 'No url specified' },
+  'dashwidget.webviewBlocked': { zh: '已拦截:网页卡片只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。', en: 'Blocked: web cards only allow public http(s) addresses (file, data and javascript URLs, localhost and private networks are rejected).' },
+  'dashwidget.webviewUnsupported': { zh: '此端不支持内嵌网页', en: 'Embedded web pages are not supported on this platform' },
+})
 
 /** `filters` = 页面级筛选(只有数据卡吃它)。画布版不传 = 空数组:那边没有筛选栏,
  *  数据卡在那儿就是「没有任何页面筛选」的样子,而不是报错。 */
@@ -25,9 +50,10 @@ export function WidgetCard({ widget, filters = [] }: { widget: Widget; filters?:
 /** 分区标题条:纯排版元素,把下面的卡片归成一组。没有边框没有底色 —— 它是**页面的一部分**,
  *  不是一张卡(所以宿主对它免去卡片外壳,见 DashboardGridView 的 isChrome 判定)。 */
 function SectionWidget({ opts }: { opts: Record<string, string> }) {
+  const { t } = useI18n()
   return (
     <div className="dash-widget dash-section">
-      <span className="dash-section-title">{opts.title || '未命名分区'}</span>
+      <span className="dash-section-title">{opts.title || t('dashwidget.sectionUntitled')}</span>
       {opts.note && <span className="dash-section-note">{opts.note}</span>}
     </div>
   )
@@ -45,16 +71,17 @@ export function localTimeZone(): string {
 }
 
 function ClockWidget({ opts }: { opts: Record<string, string> }) {
+  const { t } = useI18n()
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     // 对齐到整秒再起跳,秒数不会因为挂载时刻不同而抖。
     let iv: number | undefined
-    const t = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setNow(new Date())
       iv = window.setInterval(() => setNow(new Date()), 1000)
     }, 1000 - (Date.now() % 1000))
     return () => {
-      clearTimeout(t)
+      clearTimeout(timer)
       if (iv) clearInterval(iv)
     }
   }, [])
@@ -78,7 +105,7 @@ function ClockWidget({ opts }: { opts: Record<string, string> }) {
         {date}
         {(opts.label || tz) && <span className="dash-clock-tz">{opts.label || tz.split('/').pop()}</span>}
       </div>
-      {bad && <div className="dash-widget-note">时区「{tz}」无效,已按本机时间显示</div>}
+      {bad && <div className="dash-widget-note">{t('dashwidget.clockBadTz', { tz })}</div>}
     </div>
   )
 }
@@ -86,17 +113,17 @@ function ClockWidget({ opts }: { opts: Record<string, string> }) {
 // ───────────────────────────────── 天气 ─────────────────────────────────
 
 /** WMO weather code → 图标 + 说明(粗分档;完整表 100+ 条,仪表盘上没人分得清雨夹雪的三个亚型)。 */
-function wmo(code: number): { icon: string; text: string } {
-  if (code === 0) return { icon: '☀️', text: '晴' }
-  if (code <= 2) return { icon: '🌤️', text: '多云' }
-  if (code === 3) return { icon: '☁️', text: '阴' }
-  if (code <= 49) return { icon: '🌫️', text: '雾' }
-  if (code <= 59) return { icon: '🌦️', text: '毛毛雨' }
-  if (code <= 69) return { icon: '🌧️', text: '雨' }
-  if (code <= 79) return { icon: '🌨️', text: '雪' }
-  if (code <= 84) return { icon: '🌧️', text: '阵雨' }
-  if (code <= 94) return { icon: '🌨️', text: '阵雪' }
-  return { icon: '⛈️', text: '雷暴' }
+function wmo(code: number): { icon: string; key: string } {
+  if (code === 0) return { icon: '☀️', key: 'dashwidget.wmoClear' }
+  if (code <= 2) return { icon: '🌤️', key: 'dashwidget.wmoPartly' }
+  if (code === 3) return { icon: '☁️', key: 'dashwidget.wmoOvercast' }
+  if (code <= 49) return { icon: '🌫️', key: 'dashwidget.wmoFog' }
+  if (code <= 59) return { icon: '🌦️', key: 'dashwidget.wmoDrizzle' }
+  if (code <= 69) return { icon: '🌧️', key: 'dashwidget.wmoRain' }
+  if (code <= 79) return { icon: '🌨️', key: 'dashwidget.wmoSnow' }
+  if (code <= 84) return { icon: '🌧️', key: 'dashwidget.wmoShowers' }
+  if (code <= 94) return { icon: '🌨️', key: 'dashwidget.wmoSnowShowers' }
+  return { icon: '⛈️', key: 'dashwidget.wmoThunder' }
 }
 
 interface WeatherData {
@@ -113,14 +140,14 @@ async function fetchWeather(opts: Record<string, string>, signal: AbortSignal): 
   let place = opts.label || opts.city || ''
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     const city = opts.city || opts.label
-    if (!city) throw new Error('未指定城市')
+    if (!city) throw new Error(translate('dashwidget.weatherNoCity'))
     const geo = await fetch(
       `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`,
       { signal },
     )
     const gj = (await geo.json()) as { results?: Array<{ latitude: number; longitude: number; name: string }> }
     const hit = gj.results?.[0]
-    if (!hit) throw new Error(`找不到「${city}」`)
+    if (!hit) throw new Error(translate('dashwidget.weatherCityNotFound', { city }))
     lat = hit.latitude
     lon = hit.longitude
     place = place || hit.name
@@ -130,13 +157,14 @@ async function fetchWeather(opts: Record<string, string>, signal: AbortSignal): 
     { signal },
   )
   const j = (await r.json()) as { current?: { temperature_2m: number; weather_code: number; wind_speed_10m: number } }
-  if (!j.current) throw new Error('返回数据异常')
+  if (!j.current) throw new Error(translate('dashwidget.weatherBadResponse'))
   return { temp: j.current.temperature_2m, code: j.current.weather_code, wind: j.current.wind_speed_10m, place }
 }
 
 const WEATHER_REFRESH_MS = 15 * 60 * 1000
 
 function WeatherWidget({ opts }: { opts: Record<string, string> }) {
+  const { t } = useI18n()
   const [data, setData] = useState<WeatherData | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const key = JSON.stringify(opts)
@@ -160,8 +188,8 @@ function WeatherWidget({ opts }: { opts: Record<string, string> }) {
       clearInterval(iv)
     }
   }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
-  if (err) return <div className="dash-widget dash-weather"><div className="dash-widget-note">天气不可用:{err}</div></div>
-  if (!data) return <div className="dash-widget dash-weather"><div className="dash-widget-note">加载中…</div></div>
+  if (err) return <div className="dash-widget dash-weather"><div className="dash-widget-note">{t('dashwidget.weatherError', { msg: err })}</div></div>
+  if (!data) return <div className="dash-widget dash-weather"><div className="dash-widget-note">{t('dashwidget.loading')}</div></div>
   const w = wmo(data.code)
   return (
     <div className="dash-widget dash-weather">
@@ -170,7 +198,7 @@ function WeatherWidget({ opts }: { opts: Record<string, string> }) {
         <span className="dash-weather-temp">{Math.round(data.temp)}°</span>
       </div>
       <div className="dash-clock-sub">
-        {w.text} · 风 {Math.round(data.wind)} km/h
+        {t(w.key)} · {t('dashwidget.weatherWind', { n: Math.round(data.wind) })}
         {data.place && <span className="dash-clock-tz">{data.place}</span>}
       </div>
     </div>
@@ -180,9 +208,10 @@ function WeatherWidget({ opts }: { opts: Record<string, string> }) {
 // ─────────────────────────────── 网页嵌入 ───────────────────────────────
 
 function WebviewWidget({ opts }: { opts: Record<string, string> }) {
+  const { t } = useI18n()
   const url = opts.url || ''
   const ref = useRef<HTMLElement | null>(null)
-  if (!url) return <div className="dash-widget"><div className="dash-widget-note">未指定 url</div></div>
+  if (!url) return <div className="dash-widget"><div className="dash-widget-note">{t('dashwidget.webviewNoUrl')}</div></div>
   // ⚠️ 这个 url 来自 .md 文件正文 —— 仪表盘可能是同步/导入/别人分享来的,是**不可信输入**,
   // 而 <webview src> 一挂就自动导航(无需用户任何操作)。默认拒:非 http(s)、localhost、私网。
   // 见 webviewUrlAllowed 的注释(DNS 重绑定不在这层拦)。
@@ -190,7 +219,7 @@ function WebviewWidget({ opts }: { opts: Record<string, string> }) {
     return (
       <div className="dash-widget">
         <div className="dash-widget-note">
-          已拦截:网页卡片只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。
+          {t('dashwidget.webviewBlocked')}
           <br />
           <code>{url.slice(0, 120)}</code>
         </div>
@@ -202,7 +231,7 @@ function WebviewWidget({ opts }: { opts: Record<string, string> }) {
     return (
       <div className="dash-widget">
         <div className="dash-widget-note">
-          此端不支持内嵌网页 · <a href={url} target="_blank" rel="noreferrer">{url}</a>
+          {t('dashwidget.webviewUnsupported')} · <a href={url} target="_blank" rel="noreferrer">{url}</a>
         </div>
       </div>
     )

@@ -102,7 +102,7 @@ const CSS = [
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage()
+  const page = await browser.newPage({ locale: 'zh-CN' })
   await page.setContent(
     `<!doctype html><style>${CSS}</style>
      <div class="am-app"><div class="amx-coverpick-search"><input id="q"></div>

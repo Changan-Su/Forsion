@@ -334,7 +334,7 @@ describe('unitWeb', () => {
           body: JSON.stringify({ ch, args }),
         })
       // 白名单外(桌面 UX 通道)一律拒,handler 根本不被触达
-      for (const denied of [IPC.openVault, IPC.openAttachment, IPC.exportPdf, IPC.revealInFileManager, IPC.uninstallPlugin, 'made:up']) {
+      for (const denied of [IPC.openVault, IPC.openAttachment, IPC.exportPdf, IPC.exportCsv, IPC.revealInFileManager, IPC.uninstallPlugin, 'made:up']) {
         const r = await call(denied)
         expect(r.status).toBe(400)
         expect(((await r.json()) as any).code).toBe('VAULT_CH_DENIED')

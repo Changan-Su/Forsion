@@ -6,8 +6,14 @@
  */
 import { useRef } from 'react'
 import { zoomOf } from '@lcl/engine'
+import { registerMessages, useI18n } from '../../../i18n'
 import type { Box } from './geometry'
 import type { Viewport } from './viewport'
+
+registerMessages({
+  'cvminimap.aria': { zh: '画布缩略图', en: 'Canvas minimap' },
+  'cvminimap.hint': { zh: '画布缩略图:点击或拖动以导航', en: 'Canvas minimap: click or drag to navigate' },
+})
 
 export const MINI_W = 184
 export const MINI_H = 112
@@ -22,6 +28,7 @@ export function CanvasMiniMap({ hostRef, vp, items, onCenter }: {
   onCenter: (worldX: number, worldY: number) => void
 }): React.ReactElement | null {
   const dragging = useRef(false)
+  const { t } = useI18n()
   const host = hostRef.current
   if (!host || !items.length) return null
 
@@ -58,8 +65,8 @@ export function CanvasMiniMap({ hostRef, vp, items, onCenter }: {
     <div
       className="amx-stage-minimap"
       role="navigation"
-      aria-label="画布缩略图"
-      title="画布缩略图:点击或拖动以导航"
+      aria-label={t('cvminimap.aria')}
+      title={t('cvminimap.hint')}
       onPointerDown={(e) => {
         e.preventDefault()
         e.stopPropagation()

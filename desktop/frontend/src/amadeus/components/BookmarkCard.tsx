@@ -7,6 +7,17 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import type { LinkMeta } from '@amadeus-shared/ipc'
 import { amadeus } from '../api'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'bmcard.embedVideo': { zh: '内嵌播放器', en: 'Embed the player' },
+  'bmcard.embedPage': { zh: '内嵌这个网页(活页,默认冻结)', en: 'Embed this page (live page, frozen by default)' },
+  'bmcard.editUrl': { zh: '编辑链接地址', en: 'Edit link URL' },
+  'bmcard.startAt': { zh: '起播时刻', en: 'Start time' },
+  'bmcard.openInBrowser': { zh: '在浏览器打开', en: 'Open in browser' },
+  'bmcard.toCardTitle': { zh: '改回裸 URL 一行(书签卡)', en: 'Change back to a plain URL line (bookmark card)' },
+  'bmcard.toCard': { zh: '转为书签卡', en: 'Convert to bookmark card' },
+})
 
 const metaCache = new Map<string, LinkMeta | null>()
 
@@ -86,6 +97,7 @@ export function BookmarkCard({ url, onChangeUrl, onEmbed }: {
   /** 「内嵌」按钮:把这一行改写成 `![[url]]`(活网页形态)。不传 = 不显示该按钮(只读语境)。 */
   onEmbed?: () => void
 }) {
+  const { t } = useI18n()
   const [meta, setMeta] = useState<LinkMeta | null | 'loading'>(metaCache.get(url) ?? 'loading')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(url)
@@ -144,7 +156,7 @@ export function BookmarkCard({ url, onChangeUrl, onEmbed }: {
           {onEmbed && (
             <button
               className="amx-bm-tool"
-              title={isVideo ? '内嵌播放器' : '内嵌这个网页(活页,默认冻结)'}
+              title={isVideo ? t('bmcard.embedVideo') : t('bmcard.embedPage')}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -157,7 +169,7 @@ export function BookmarkCard({ url, onChangeUrl, onEmbed }: {
           {onChangeUrl && (
             <button
               className="amx-bm-tool"
-              title="编辑链接地址"
+              title={t('bmcard.editUrl')}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -236,6 +248,7 @@ export function BookmarkCard({ url, onChangeUrl, onEmbed }: {
  *  且旧安装版会是静默黑框(1.4.1 的 B 站前科)。别顺手加 Vimeo/抖音。
  *  非这两家的网页嵌入一律 <webview>(WebEmbed),见 webhost.test.ts。 */
 export function VideoIframe({ url, toCard }: { url: string; toCard?: () => void }): ReactElement | null {
+  const { t } = useI18n()
   const yt = youtubeId(url)
   const bili = yt ? null : bilibiliRef(url)
   if (!yt && !bili) return null
@@ -258,9 +271,9 @@ export function VideoIframe({ url, toCard }: { url: string; toCard?: () => void 
       />
       <div className="amx-bm-videofoot">
         <span className="amx-bm-host">{host}</span>
-        {start != null && <span className="amx-bm-at" title="起播时刻">@{Math.floor(start / 60)}:{String(start % 60).padStart(2, '0')}</span>}
-        <a className="amx-bm-open" href={url} target="_blank" rel="noreferrer">在浏览器打开</a>
-        {toCard && <button className="embed-media-btn amx-bm-tocard" onClick={toCard} title="改回裸 URL 一行(书签卡)">转为书签卡</button>}
+        {start != null && <span className="amx-bm-at" title={t('bmcard.startAt')}>@{Math.floor(start / 60)}:{String(start % 60).padStart(2, '0')}</span>}
+        <a className="amx-bm-open" href={url} target="_blank" rel="noreferrer">{t('bmcard.openInBrowser')}</a>
+        {toCard && <button className="embed-media-btn amx-bm-tocard" onClick={toCard} title={t('bmcard.toCardTitle')}>{t('bmcard.toCard')}</button>}
       </div>
     </div>
   )

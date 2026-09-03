@@ -3390,6 +3390,28 @@ body.amx-marquee-active * {
   stroke-width: 3.5;
   opacity: 1;
 }
+/* 卡片关系焦点只改变层级，不新增装饰：无关卡片/层级线柔和退场，仍保留点击与完整内容。
+   主卡不能整体 opacity（所有绝对定位卡片都住在它的 PM DOM 中），所以只过渡自身内容与壳。
+   具体命中集合由 canvasElements 的舞台作用域 style 下发，避免给 PM DOM 塞瞬时 class。 */
+.am-app .unified-body.amx-canvas .ProseMirror .amx-ucard,
+.am-app .unified-body.amx-canvas .ProseMirror:not(.unified-embed .ProseMirror) > :not(.amx-ucard),
+.am-app .amx-card-overview {
+  transition: background-color 250ms var(--ease-apple, ease-out),
+    opacity 180ms var(--ease-apple, ease-out);
+}
+.am-app .amx-el-conn.is-tree { transition: opacity 180ms var(--ease-apple, ease-out); }
+.am-app .amx-canvas .ProseMirror:not(.unified-embed .ProseMirror) {
+  transition: background-color 180ms var(--ease-apple, ease-out),
+    border-color 180ms var(--ease-apple, ease-out),
+    box-shadow 180ms var(--ease-apple, ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .unified-body.amx-canvas .ProseMirror .amx-ucard,
+  .am-app .amx-canvas .ProseMirror:not(.unified-embed .ProseMirror),
+  .am-app .unified-body.amx-canvas .ProseMirror:not(.unified-embed .ProseMirror) > :not(.amx-ucard),
+  .am-app .amx-card-overview,
+  .am-app .amx-el-conn.is-tree { transition-duration: 0ms; }
+}
 /* 框选矩形(舞台坐标,跟着 stage-inner 一起缩放)。
    ⚠️ 名字**不能**用 `.amx-marquee` —— 那是 blockLayer 的块框选(挂 body、client 坐标)。 */
 .am-app .amx-el-marquee {

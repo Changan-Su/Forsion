@@ -17,20 +17,28 @@
 // 没有先后(插槽找不到就等 MutationObserver,找到即挂)。
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { registerMessages, useI18n } from '../../i18n'
+
+registerMessages({
+  'canvasseg.aria': { zh: '编辑模式', en: 'Editing mode' },
+  'canvasseg.doc': { zh: '文档', en: 'Document' },
+  'canvasseg.canvas': { zh: '画布', en: 'Canvas' },
+})
 
 /** 顶栏里给胶囊留的空位(amadeusViews / harness 各画一个)。 */
 export const SEG_SLOT = 'amx-modeseg-slot'
 
 export function CanvasModeSeg({ on, toggle }: { on: boolean; toggle: () => void }): React.ReactElement {
+  const { t } = useI18n()
   return (
-    <div className="t2s-vaultseg amx-modeseg" role="tablist" aria-label="编辑模式">
+    <div className="t2s-vaultseg amx-modeseg" role="tablist" aria-label={t('canvasseg.aria')}>
       <div className="t2s-vaultseg-thumb" data-side={on ? 'canvas' : 'doc'} />
       <button type="button" role="tab" aria-selected={!on} className={on ? '' : 'on'}
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => { if (on) toggle() }}>文档</button>
+        onClick={() => { if (on) toggle() }}>{t('canvasseg.doc')}</button>
       <button type="button" role="tab" aria-selected={on} className={on ? 'on' : ''}
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => { if (!on) toggle() }}>画布</button>
+        onClick={() => { if (!on) toggle() }}>{t('canvasseg.canvas')}</button>
     </div>
   )
 }

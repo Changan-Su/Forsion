@@ -1,6 +1,6 @@
 /** 统一工作区视图的自动模式规则 + 布局迁移(退役视图改名/主区 frame 化)。 */
 import { describe, it, expect } from 'vitest'
-import { autoWorkspaceMode, workspaceKeyForPath } from './workspaceMode'
+import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath } from './workspaceMode'
 import { migrateLayoutBlob } from '@lcl/engine/dockviewStore'
 import { ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey } from '../types'
 
@@ -44,6 +44,20 @@ describe('autoWorkspaceMode', () => {
   it('⚠️右栏恒为文件:Space 默认档改不动它(右栏 = 参考/附件栏)', () => {
     expect(autoWorkspaceMode('right', 'launcher', 'notes')).toBe('files')
     expect(autoWorkspaceMode('right', null, 'notes')).toBe('files')
+  })
+})
+
+describe('resolveWorkspaceModes', () => {
+  it('⚠️手动切档不污染自动目标:Tangu 手动看笔记时「自动」仍指向会话', () => {
+    expect(resolveWorkspaceModes('notes', 'sessions', true)).toEqual({
+      automatic: 'sessions',
+      active: 'notes',
+    })
+  })
+
+  it('选择自动才跟随自动目标；笔记能力不可用时自动目标降级到文件', () => {
+    expect(resolveWorkspaceModes('auto', 'sessions', true).active).toBe('sessions')
+    expect(resolveWorkspaceModes('auto', 'notes', false)).toEqual({ automatic: 'files', active: 'files' })
   })
 })
 

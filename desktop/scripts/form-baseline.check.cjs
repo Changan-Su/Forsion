@@ -105,7 +105,7 @@ const SNAP = () => Object.fromEntries(Object.entries(window.__probes).map(([k, e
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const p = await browser.newPage({ viewport: { width: 1200, height: 900 } })
+  const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
   await p.setContent(PAGE)
   await p.evaluate(BUILD, [...NAKED, ...BOXED, 'input', 'select', 'textarea',
     'input[type="checkbox"]', 'input[type="radio"]', 'input[type="range"]', 'input[type="file"]'])

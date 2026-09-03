@@ -114,7 +114,7 @@ async function main() {
   fs.mkdirSync(SHOTS, { recursive: true })
   const code = fs.readFileSync(mainPath, 'utf8')
   const browser = await chromium.launch({ executablePath: findChromium() })
-  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } })
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: 860 } })
   const errors = []
   const consoleErrors = []
   page.on('pageerror', (e) => errors.push(String(e)))

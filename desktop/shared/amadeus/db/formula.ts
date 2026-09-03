@@ -5,8 +5,14 @@
  *  - 运算 + - * / %、比较 == != > < >= <=、逻辑 && || !、括号
  *  - `+` 两侧都是数值系(number/null/boolean)才做加法,否则字符串拼接
  *  - 空单元格(null)参与算术按 0、参与拼接按 ''(飞书口径)
- *  - 函数(小写):if(c,a,b) and or not empty round(n[,d]) floor ceil abs min max
- *    len lower upper trim contains(a,b) replace(s,a,b) concat number text today() days(a,b)
+ *  - 函数(大小写无关,按 lower 匹配)—— 完整清单(改这里的同时改 switch,反之亦然):
+ *      逻辑    if(c,a,b) and(…) or(…) not(x) empty(x)
+ *      数学    round(n[,d]) floor(n) ceil(n) abs(n) min(…) max(…)
+ *      文本    len(x) lower(s) upper(s) trim(s) contains(a,b) replace(s,a,b) concat(…)
+ *      转换    number(x) value(x)(同义:数字化,非数字抛错;飞书 VALUE)
+ *              text(x) → 字符串;text(date, pattern) → 同 format(飞书 TEXT 二参)
+ *      日期    today() days(a,b) format(date, pattern)(pattern 里 YYYY/MM/DD 替换,其余字符原样;非日期抛错)
+ *    参数个数按各函数上下界校验(多给/少给都抛错,不再静默吞掉多余参数)
  *
  *  错误(未知列/未知函数/语法/非数字算术/循环引用)抛 FormulaError;
  *  evalRowFormulas 把单列错误折算成 '#错误' 字符串,不连坐整行。 */
@@ -200,6 +206,14 @@ const dateMs = (v: CellValue): number => {
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
 }
 
+/** format(date, pattern):'YYYY-MM-DD…'(取前 10 位,与 dateMs 同口径)按 pattern 排版;
+ *  只认 YYYY / MM / DD 三个占位,其余字符原样保留(如 "YYYY年MM月");非日期抛错。 */
+const formatDate = (v: CellValue, pattern: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(toStr(v).slice(0, 10))
+  if (!m) throw new FormulaError(`「${toStr(v)}」不是日期`)
+  return pattern.replace(/YYYY|MM|DD/g, (k) => (k === 'YYYY' ? m[1] : k === 'MM' ? m[2] : m[3]))
+}
+
 function evalAst(ast: Ast, get: (name: string) => CellValue, opts: EvalOpts): CellValue {
   const ev = (a: Ast): CellValue => evalAst(a, get, opts)
   switch (ast.t) {
@@ -243,8 +257,11 @@ function evalAst(ast: Ast, get: (name: string) => CellValue, opts: EvalOpts): Ce
       const args = ast.args
       const n = (i: number): number => toNum(ev(args[i]))
       const s = (i: number): string => toStr(ev(args[i]))
-      const need = (k: number): void => {
+      /** 参数个数校验:下界 k、上界 max(缺省 = k,即恰好 k 个)。多余参数以前被静默吞掉
+       *  (text(d,"YYYY-MM") 返回整个日期串 —— 错值不报错),现在一律抛错。 */
+      const need = (k: number, max: number = k): void => {
         if (args.length < k) throw new FormulaError(`${fn} 需要 ${k} 个参数`)
+        if (args.length > max) throw new FormulaError(max === k ? `${fn} 只接受 ${k} 个参数` : `${fn} 最多接受 ${max} 个参数`)
       }
       switch (fn) {
         case 'if': need(3); return toBool(ev(args[0])) ? ev(args[1]) : ev(args[2])
@@ -252,12 +269,12 @@ function evalAst(ast: Ast, get: (name: string) => CellValue, opts: EvalOpts): Ce
         case 'or': return args.some((a) => toBool(ev(a)))
         case 'not': need(1); return !toBool(ev(args[0]))
         case 'empty': need(1); return isEmptyV(ev(args[0]))
-        case 'round': { need(1); const d = args.length > 1 ? n(1) : 0; const f = 10 ** d; return Math.round(n(0) * f) / f }
+        case 'round': { need(1, 2); const d = args.length > 1 ? n(1) : 0; const f = 10 ** d; return Math.round(n(0) * f) / f }
         case 'floor': need(1); return Math.floor(n(0))
         case 'ceil': need(1); return Math.ceil(n(0))
         case 'abs': need(1); return Math.abs(n(0))
-        case 'min': need(1); return Math.min(...args.map((_, i) => n(i)))
-        case 'max': need(1); return Math.max(...args.map((_, i) => n(i)))
+        case 'min': need(1, Infinity); return Math.min(...args.map((_, i) => n(i)))
+        case 'max': need(1, Infinity); return Math.max(...args.map((_, i) => n(i)))
         case 'len': { need(1); const v = ev(args[0]); return Array.isArray(v) ? v.length : toStr(v).length }
         case 'lower': need(1); return s(0).toLowerCase()
         case 'upper': need(1); return s(0).toUpperCase()
@@ -266,9 +283,12 @@ function evalAst(ast: Ast, get: (name: string) => CellValue, opts: EvalOpts): Ce
         case 'replace': need(3); return s(0).split(s(1)).join(s(2))
         case 'concat': return args.map((_, i) => s(i)).join('')
         case 'number': need(1); return toNum(ev(args[0]))
-        case 'text': need(1); return toStr(ev(args[0]))
-        case 'today': return opts.today ?? todayStr()
+        case 'value': need(1); return toNum(ev(args[0])) // 飞书 VALUE():与 number 同义,非数字串抛错
+        // 飞书 TEXT(日期, "YYYY-MM") 二参 = 日期排版(同 format);单参照旧转字符串
+        case 'text': need(1, 2); return args.length > 1 ? formatDate(ev(args[0]), s(1)) : toStr(ev(args[0]))
+        case 'today': need(0); return opts.today ?? todayStr()
         case 'days': need(2); return Math.round((dateMs(ev(args[0])) - dateMs(ev(args[1]))) / 86400000)
+        case 'format': need(2); return formatDate(ev(args[0]), s(1))
         default:
           throw new FormulaError(`未知函数 ${fn}`)
       }
