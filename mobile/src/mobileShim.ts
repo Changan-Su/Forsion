@@ -10,6 +10,8 @@
  * 其余 host 能力(文件系统/providers/mcp/market/更新…)缺省 → 共享组件 `window.tangu?.X` 可选链自然隐藏。
  */
 import { Browser } from '@capacitor/browser'
+import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
+import { translate } from '@/i18n'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 
 const TOKEN_KEY = 'forsion_token'
@@ -75,6 +77,54 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     else window.open(url, '_blank', 'noopener')
     return { ok: true }
   }
+
+  /** 设备页(Forsion Unit)专用:开在**本 app 内的 WebView**,不是系统浏览器。
+   *
+   *  与 openExternal 分家的理由:账号中心 / 付费页是 Forsion 自己的网页,交给系统浏览器天经地义;
+   *  而设备页是「用另一台设备的 Forsion」——被弹进 Chrome 自定义标签页(带 ✕ ∨ 分享 翻译 那条壳)
+   *  观感上就是**离开了 App**,与桌面端「整个主区切过去」(UnitRemoteSurface)完全不是一回事,
+   *  用户 2026-09-03 实报。
+   *
+   *  为什么必须是插件而不是 iframe:app 自己跑在 `https://localhost`(androidScheme),LAN 页是
+   *  `http://<ip>:<port>` → mixed content 直接被拦;中转那侧的隧道 cookie 是 `SameSite=Lax`,
+   *  跨站 iframe 根本不发 → 框里恒 401。插件开的是**顶级导航**,两条路都天然成立。
+   *
+   *  ⚠️ clearCache / clearSessionCache 必须为 false:中转是靠引导页换来的 HttpOnly cookie 进隧道的,
+   *     清了 = 每次开都退回「请先登录」。
+   *  ⚠️ android.hardwareBack:true —— 返回键先在 WebView 历史里后退,没得退了才关掉。这是原生视图、
+   *     不是 DOM 浮层,`forsion:mobile-back` 那条契约管不到它。 */
+  const openUnitPage = async (url: string): Promise<{ ok: boolean }> => {
+    if (!native) { window.open(url, '_blank', 'noopener'); return { ok: true } }
+    // ⚠️ 地址栏(showURL)只对**我们自己的中转页**关:那条 URL 带 `#token=`,显出来等于把登录态
+    //    摆在屏幕上。LAN 直连 / 手输地址是**明文 http 的第三方来源**,名册里的 lanUrl 是对方设备
+    //    自报的、手输的更是用户现敲的 —— 把它们塞进一个没有地址栏的 Forsion 外壳里,等于替一个
+    //    来源不明的页面背书(Codex 评审 medium)。这两种一律露出 scheme + host。
+    await InAppBrowser.openInWebView({
+      url,
+      options: {
+        showURL: !url.startsWith(backendUrl),
+        showToolbar: true,       // 只为那枚关闭钮:全屏无出口 = 只能杀进程
+        clearCache: false,
+        clearSessionCache: false,
+        mediaPlaybackRequiresUserAction: false,
+        closeButtonText: translate('common.close'),
+        toolbarPosition: ToolbarPosition.TOP,
+        showNavigationButtons: false, // 设备页自带导航;前进/后退钮只会和它打架
+        leftToRight: false,
+        android: { allowZoom: false, hardwareBack: true, pauseMedia: true },
+        iOS: {
+          allowOverScroll: false,
+          enableViewportScale: false,
+          allowInLineMediaPlayback: true,
+          surpressIncrementalRendering: false,
+          viewStyle: iOSViewStyle.FULL_SCREEN,
+          animationEffect: iOSAnimation.COVER_VERTICAL,
+          allowsBackForwardNavigationGestures: true,
+        },
+      },
+    })
+    return { ok: true }
+  }
   // 账号菜单的云端调用(电文形状对齐 electron 的 account:quota / account:useResetCard —— AccountCard 靠
   // `window.tangu?.accountQuota` 探测本能力,此前移动端缺席 → 点头像走 openAccountCenter 也缺席 = 点了没反应)。
   // ⚠️ backendUrl 已经含 `/api`(= apiBase()),path 一律从 `/api` **之后**写起。
@@ -116,6 +166,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     forsionLogout: logout,
     accountQuota: () => cloudJson('GET', '/token-quota/my'),
     openExternal,
+    openUnitPage,
     // 账号名下设备名册(Forsion Unit):互联入口 UnitsSheet 的数据面;与桌面 units:list IPC 同形 {status,json}。
     unitsList: () => cloudJson('GET', '/units'),
     accountUseResetCard: (type?: string) => {

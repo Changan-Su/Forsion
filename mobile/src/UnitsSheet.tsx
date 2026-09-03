@@ -1,6 +1,6 @@
 /**
- * 互联设备(Forsion Unit)移动端入口:底部弹层列账号名下设备,点开 = 系统浏览器(Custom Tab)
- * 打开对方设备页。**一台设备按通路拆成多行**(直连 / 中转各一行,同桌面 UnitSwitcher 口径):
+ * 互联设备(Forsion Unit)移动端入口:底部弹层列账号名下设备,点开 = **app 内的 WebView**
+ * 打开对方设备页(2026-09-03 由系统浏览器改;理由见 mobileShim.openUnitPage)。**一台设备按通路拆成多行**(直连 / 中转各一行,同桌面 UnitSwitcher 口径):
  * 直连 = 设备自报的 lanUrl(T1 配对流在浏览器里走、无需账号);中转 = server 引导页(同源
  * localStorage 读 forsion_token 换 cookie 进隧道,未登录页内会提示)。
  * ⚠️ 早先是一行 + 「有 lanUrl 就走直连」,于是**报了地址的设备根本够不着中转** —— 移动端没有
@@ -55,8 +55,21 @@ export function installUnitsEntry(): void {
   })
 }
 
+/** 设备页一律开在**本 app 内的 WebView**(mobileShim.openUnitPage):被弹去系统浏览器观感上就是
+ *  离开了 App,与桌面「整个主区切过去」不是一回事(用户 2026-09-03 实报)。三级回落:
+ *  app 内 WebView → 系统浏览器 → 新标签页,任一档缺席或失败都不至于「点了没反应」。
+ *
+ *  ⚠️ 必须逐级 **await**,不能写成 `a?.(url) ?? b?.(url) ?? c()`:`??` 判的是**同步返回值**,而这些
+ *  桥返回的是 Promise —— 永远非空,后面两档等于死代码;桥一旦 reject 还会变成未处理拒绝,表现正好
+ *  就是「点了没反应」(Codex 评审 medium)。 */
 const openUrl = (url: string): void => {
-  void (window.tangu?.openExternal?.(url) ?? window.open(url, '_blank', 'noopener'))
+  void (async () => {
+    for (const open of [window.tangu?.openUnitPage, window.tangu?.openExternal]) {
+      if (!open) continue
+      try { await open(url); return } catch { /* 这一档不成,落下一档 */ }
+    }
+    window.open(url, '_blank', 'noopener')
+  })()
 }
 /** 设备页直连地址必须带尾斜杠(页面用相对 base,同桌面口径)。⚠️只用于 lanUrl/手输地址 ——
  *  引导页 /open 加了尾斜杠反而把页内相对路径(../session、./proxy/)整个解歪。 */

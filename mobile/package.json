@@ -26,6 +26,7 @@
     "@capacitor/browser": "^7.0.5",
     "@capacitor/core": "^7.6.7",
     "@capacitor/filesystem": "^7.1.8",
+    "@capacitor/inappbrowser": "^2.5.5",
     "@capacitor/preferences": "^7.0.4",
     "@codemirror/language-data": "^6.5.1",
     "@dnd-kit/core": "^6.3.1",

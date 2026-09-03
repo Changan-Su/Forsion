@@ -986,6 +986,9 @@ declare global {
       // ── 内置浏览器 / 内置终端(builtins/)──
       /** 用系统浏览器打开(主进程只放 http(s))。 */
       openExternal?(url: string): Promise<void>
+      /** 设备页开在 app 内的 WebView(移动端垫片独有;桌面走 UnitRemoteSurface,web 无此桥)。
+       *  缺席即回落 openExternal —— 消费点必须保留那条链,否则旧壳上点了没反应。 */
+      openUnitPage?(url: string): Promise<{ ok: boolean }>
       /** 拉外部日历订阅(.ics);走主进程绕开 CORS(订阅地址一律不发 CORS 头)。 */
       fetchIcs?(url: string): Promise<{ ok: boolean; text?: string; error?: string }>
       /** 主页 Bing 壁纸目录(主进程固定目标代理,规避浏览器 CORS;不接受任意 URL)。 */

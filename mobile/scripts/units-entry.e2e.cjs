@@ -128,6 +128,25 @@ async function main() {
 
     // ② 点入口 → 设备弹层打开(名册拉不到也得开壳:/api 全 abort 时显示空态/未登录文案)
     if (foot.unitIdx >= 0) {
+      // 造一台带 lanUrl 的假设备,好让「直连 / 中转」两行都渲染出来(④ 要点它们)。
+      // ⚠️ 后注册的 route 优先,所以这条压得住上面 `**/api/**` 的 abort。
+      await page.route('**/api/units', (r) => r.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ units: [{ id: 'u1', name: 'E2E Mac', platform: 'darwin', online: true, lanUrl: 'http://10.0.0.9:8791' }] }),
+      }))
+      // ③′ 生产垫片**真的**导出了这座桥 —— 必须先断言再覆盖。
+      //    只覆盖不断言 = 仪器自己把桥现场补出来:把 mobileShim 里整段 InAppBrowser 实现删掉,
+      //    下面的断言照样全绿(Codex 评审 medium 抓的假绿)。
+      const bridgeReal = await page.evaluate(() => typeof window.tangu?.openUnitPage === 'function')
+      if (bridgeReal) pass('mobileShim 导出 openUnitPage 桥')
+      else fail('mobileShim 导出 openUnitPage 桥', '垫片里没有这座桥,下面的断言只是在测仪器自己')
+      // 换成记录器:web 形态下 openUnitPage 与 openExternal 都落到 window.open,
+      // 光看「有没有开窗」区分不了这两条路 —— 而「有没有走 openUnitPage」正是本仪器要钉的东西。
+      await page.evaluate(() => {
+        window.__unitOpened = []
+        const t = window.tangu
+        if (t) t.openUnitPage = (u) => { window.__unitOpened.push(String(u)); return Promise.resolve({ ok: true }) }
+      })
       await tap(page.locator(`.mb-foot-row .mb-icon-btn[aria-label="${(foot.btns || [])[foot.unitIdx]}"]`))
       const sheetOn = await page.evaluate((labels) => {
         const strongs = [...document.querySelectorAll('strong')]
@@ -135,6 +154,48 @@ async function main() {
       }, UNIT_LABELS)
       if (sheetOn) pass('点入口打开设备弹层')
       else fail('点入口打开设备弹层')
+
+      // ④ 两条通路行都必须走 **app 内 WebView**(openUnitPage),不是系统浏览器。
+      //    2026-09-03 用户实报「直连开在浏览器里,不是替换应用界面」——回归了就是又被弹出去。
+      //    行按 DOM 序取(vias = ['lan','tunnel']),不按文案,免得机器语言不同就假红。
+      const rows = page.locator('button').filter({ hasText: 'E2E Mac' })
+      const rowCount = await rows.count()
+      if (rowCount !== 2) {
+        fail('一台设备拆成直连/中转两行', `实得 ${rowCount} 行`)
+      } else {
+        await tap(rows.nth(0))
+        await tap(rows.nth(1))
+        const opened = await page.evaluate(() => window.__unitOpened || [])
+        if (opened.length !== 2) {
+          fail('两行都经 openUnitPage 开(而非系统浏览器)', JSON.stringify(opened))
+        } else {
+          pass('两行都经 openUnitPage 开(而非系统浏览器)')
+          // 直连必须带尾斜杠(设备页用相对 base);引导页**不能**带(带了 ../session、./proxy/ 整个解歪)
+          if (opened[0] === 'http://10.0.0.9:8791/') pass('直连地址补尾斜杠', opened[0])
+          else fail('直连地址补尾斜杠', opened[0])
+          // 中转必须递交本机登录态:少了 #token= 就退回「请先在此浏览器登录网页版」(server 2.2.11 那条)
+          if (/\/units\/u1\/open#token=e2e-units-entry$/.test(opened[1])) pass('中转带 #token= 登录态递交', opened[1])
+          else fail('中转带 #token= 登录态递交', opened[1])
+        }
+      }
+
+      // ⑤ 上一档**失败**时必须真的落到下一档。`??` 写法在这里是死代码(Promise 永远非空),
+      //    桥一 reject 就变成未处理拒绝 = 用户眼里的「点了没反应」。
+      await page.evaluate(() => {
+        window.__extOpened = []
+        const t = window.tangu
+        if (t) {
+          t.openUnitPage = () => Promise.reject(new Error('e2e: 插件打不开'))
+          t.openExternal = (u) => { window.__extOpened.push(String(u)); return Promise.resolve({ ok: true }) }
+        }
+      })
+      if (rowCount === 2) {
+        await tap(rows.nth(0))
+        const ext = await page.evaluate(() => window.__extOpened || [])
+        if (ext.length === 1) pass('openUnitPage 失败时落到系统浏览器', ext[0])
+        else fail('openUnitPage 失败时落到系统浏览器', JSON.stringify(ext))
+      }
+
       // 关掉弹层(点遮罩),别让它盖住下一步的顶栏
       await tapBox({ x: 195, y: 60, width: 0, height: 0 })
     }
@@ -157,7 +218,7 @@ async function main() {
     console.error(`\n✗ e2e:unitsentry ${fails.length} 项失败:\n- ${fails.join('\n- ')}`)
     process.exit(1)
   }
-  console.log('\n✅ e2e:unitsentry —— 入口位置 / 弹层开合 / ⋯菜单滤除')
+  console.log('\n✅ e2e:unitsentry —— 入口位置 / 弹层开合 / 通路行走 app 内 WebView / ⋯菜单滤除')
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })
