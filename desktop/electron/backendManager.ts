@@ -107,6 +107,7 @@ export class BackendManager {
   private listeners = new Set<(st: BackendStatus) => void>()
   private spawnedEntry: string | null = null
   private spawnedAt = 0
+  private spawnToken: string | null = null
 
   onStatus(cb: (st: BackendStatus) => void): () => void {
     this.listeners.add(cb)
@@ -133,11 +134,24 @@ export class BackendManager {
     }
   }
 
-  /** renderer 鉴权用的有效 token:~/.forsion/auth.json(登录态唯一真源)> 本地回退令牌。
+  /** 桌面 ↔ 托管引擎的共享密钥:**引擎在跑时恒返回它 spawn 时拿到的那枚**(= env 快照)。
+   *
+   *  ⚠️ 不许实时重读 auth.json:引擎的本地端点鉴权是**逐字比对** `TANGU_TOKEN` 那枚快照,而 auth.json
+   *  会被 24h 滑动续期改写(refreshAuthSliding 刻意不重启引擎 —— 它假定「两边同为旧串所以照样对得上」)。
+   *  渲染层的 cfg.token 确实是 boot 时的同一次快照,该假定成立;但 unitWeb 的 /engine 反代是**每个请求
+   *  现取**,于是设备页把新串发给只认旧串的引擎 → `/engine/agent/*` 整片 401,页面报「会话列表加载失败:
+   *  Unauthorized」,而免鉴权的 /engine/health 照常 200。2026-09-03 在连开三天的安装版上实测复现。
+   *
+   *  没有托管子进程时(external 形态 / 已停 / 重启窗口)回落实时值 —— 那时没有要对齐的对面。 */
+  getToken(): string {
+    return this.child && this.spawnToken ? this.spawnToken : this.freshToken()
+  }
+
+  /** 实时登录态:~/.forsion/auth.json(登录态唯一真源)> 本地回退令牌。
    *  最后一档保证 **未登录 Forsion 也能独立运行**:standalone 后端 validate 强制要 token(没 token 直接
    *  exit),且本地端点用同一 token 鉴权。无 Forsion 凭证时回退一个持久化的本地随机令牌——后端照常启动、
    *  端点仍鉴权(不裸奔),云端调用会 401 但已优雅降级(/agent/models 只少了 forsion 模型,BYOK/订阅照常)。 */
-  getToken(): string {
+  private freshToken(): string {
     try {
       const creds = JSON.parse(readFileSync(join(forsionHomeDir(), 'auth.json'), 'utf8'))
       if (creds.token) return String(creds.token)
@@ -225,7 +239,7 @@ export class BackendManager {
       // 凭证走 env,不出现在 ps 输出。用 getToken()(auth.json > 本地回退令牌)——
       // **始终非空**,保证后端 validate(强制要 token)通过、无 Forsion 登录也能独立启动(BYOK/订阅可用)。
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
-      env.TANGU_TOKEN = this.getToken()
+      env.TANGU_TOKEN = this.spawnToken = this.freshToken() // 钉住这一枚:getToken() 此后恒返回它
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'
       env.TANGU_BROWSER_ENGINE = s.browserEngine || 'auto'
       env.TANGU_BROWSER_SEARCH_ENGINE = s.browserSearchEngine || 'duckduckgo'
