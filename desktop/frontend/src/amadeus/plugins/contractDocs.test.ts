@@ -8,6 +8,8 @@
  *     tangu-agent/skills/forsion-plugin/SKILL.md 里出现过 —— 加接缝不补手册,这里就红;
  *  ② PluginAppApi 里凡走库内路径的方法,手册必须有「无活动库」行为表(关键字锁定);
  *  ③ 手册与正典(docs/Function/生态内容制作指南.md)都得提到 ctx.dashboard。
+ *     ⚠️ 正典住**外层 Forsion 目录**,不在本仓 —— CI 只 checkout 本仓,该文件必然缺席。
+ *     涉及它的两条断言按存在性门控(HAS_GUIDE):本机照跑,CI 显式 skip,不静默混过去。
  * 只查「提到没提到」,不查措辞 —— 这是漂移探针,不是文风警察。
  */
 import { describe, expect, it } from 'vitest'
@@ -37,9 +39,14 @@ describe('插件契约 ↔ 作者手册漂移', () => {
   const types = readFileSync(TYPES, 'utf8')
   const skill = existsSync(SKILL) ? readFileSync(SKILL, 'utf8') : ''
   const guide = existsSync(GUIDE) ? readFileSync(GUIDE, 'utf8') : ''
+  /** 正典在仓外(见文件头 ③):CI 上恒 false。门控只作用于正典那两条,手册侧照常硬断言。 */
+  const HAS_GUIDE = existsSync(GUIDE)
 
-  it('手册与正典文件都在(路径变了先来改这里)', () => {
+  it('手册文件在(路径变了先来改这里)', () => {
     expect(existsSync(SKILL), SKILL).toBe(true)
+  })
+
+  it.skipIf(!HAS_GUIDE)('正典文件在(仓外 —— CI 上恒 skip)', () => {
     expect(existsSync(GUIDE), GUIDE).toBe(true)
   })
 
@@ -56,9 +63,12 @@ describe('插件契约 ↔ 作者手册漂移', () => {
     expect(types).toMatch(/No vault is open/) // 真源注释同步
   })
 
-  it('③ ctx.dashboard 两条路线(mount 不依赖库 / source 需要库)手册与正典都有', () => {
+  it('③ ctx.dashboard 两条路线(mount 不依赖库 / source 需要库)手册都有', () => {
     expect(skill).toMatch(/dashboard\.mount/)
     expect(skill).toMatch(/dashboard\.source/)
+  })
+
+  it.skipIf(!HAS_GUIDE)('③ 正典也提到 ctx.dashboard(仓外 —— CI 上恒 skip)', () => {
     expect(guide).toMatch(/ctx\.dashboard/)
   })
 })
