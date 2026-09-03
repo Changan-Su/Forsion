@@ -15,6 +15,7 @@
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
     "e2e:drawerdrag": "node scripts/drawer-drag.e2e.cjs",
     "e2e:spacetrap": "node scripts/space-trap.e2e.cjs",
+    "e2e:settingscfg": "node scripts/settings-config.e2e.cjs",
     "prepare-assets": "node ../desktop/build/copy-excalidraw-assets.cjs && node ../desktop/build/gen-fonts.cjs",
     "e2e:homeback": "node scripts/home-back.e2e.cjs",
     "e2e:unitsentry": "node scripts/units-entry.e2e.cjs"

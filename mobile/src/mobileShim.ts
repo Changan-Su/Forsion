@@ -13,6 +13,19 @@ import { Browser } from '@capacitor/browser'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 
 const TOKEN_KEY = 'forsion_token'
+// 本机偏好(默认模型 / 生图模型 / 上次审批档与思考档…)。移动端没有引擎的 ~/.tangu/config.json,
+// 缺了这份落盘,设置页每一项都是「点了有勾、重启回默认」的假保存(mobileEntry 的丝滑光标同款病)。
+const PREFS_KEY = 'forsion_mobile_config'
+// 连接身份一律由垫片现算,永不接受落盘覆盖:native 的 token 刻意住 Capacitor Preferences,
+// 放任 `{token}` 的 patch 镜像进 localStorage 等于自己开一道后门。
+const IDENTITY_KEYS = ['mode', 'backendUrl', 'token', 'cloudUrl', 'sandbox']
+
+function readPrefs(): Record<string, unknown> {
+  try {
+    const v = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch { return {} }
+}
 
 function readWebToken(): string {
   try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
@@ -80,13 +93,24 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     }
   }
 
+  // 身份字段压在最后:落盘偏好(可能是旧号 / 被人改过的 localStorage)绝不该盖掉连接与鉴权。
+  const config = (): Record<string, unknown> => ({
+    modelId: '', ...readPrefs(),
+    mode: 'external', backendUrl, token, cloudUrl: backendUrl, sandbox: 'none',
+  })
+
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
-    getConfig: async () => ({
-      mode: 'external', backendUrl, token, modelId: '',
-      cloudUrl: backendUrl, sandbox: 'none',
-    }),
+    getConfig: async () => config(),
+    // 契约同 electron 的 config:set —— 并入并回全份快照。共享渲染层的 patchConfig / rememberDefaults /
+    // setDefaultModel 都打这里,移动端此前整个缺席(可选链不短路 → 直接 TypeError,见 e2e:settingscfg)。
+    setConfig: async (patch: Record<string, unknown>) => {
+      const next = { ...readPrefs(), ...(patch || {}) }
+      for (const k of IDENTITY_KEYS) delete next[k]
+      try { localStorage.setItem(PREFS_KEY, JSON.stringify(next)) } catch { /* private mode:本次会期内仍生效 */ }
+      return config()
+    },
     authStatus,
     forsionLogin: login,
     forsionLogout: logout,

@@ -225,6 +225,7 @@ jobs:
           npm run e2e:spacetrap
           npm run e2e:noteopen
           npm run e2e:unitsentry
+          npm run e2e:settingscfg
 
       - name: Build APK
         working-directory: mobile/android

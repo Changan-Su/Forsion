@@ -28,6 +28,7 @@ const desktopConfig = {
   mode: 'external', backendUrl: `${location.origin}/api`, token: 'harness', sandbox: 'none',
   cloudUrl: '', inboxNotifyEnabled: true,
 }
+const mobileConfig = { mode: 'external', backendUrl: `${location.origin}/api`, token: 'harness', modelId: '', sandbox: 'none' }
 ;(window as unknown as { tangu: Record<string, unknown> }).tangu = desktop ? {
   mobile: false,
   cloudWeb: false,
@@ -39,6 +40,10 @@ const desktopConfig = {
   mobile: true,
   cloudWeb: true,
   appVersion: async () => 'harness',
+  // 与生产 mobileShim 同面(那边落 localStorage,台架只在会期内并):少了它,共享层里
+  // `window.tangu?.setConfig(…)` 那类漏写方法可选链的调用点在台架上照样绿,漏掉真机上的 TypeError。
+  getConfig: async () => mobileConfig,
+  setConfig: async (patch: Record<string, unknown>) => Object.assign(mobileConfig, patch),
 }
 applyTheme(initialLang, initialSkin, initialBg, initialMode)
 document.documentElement.dataset.flat = '1'

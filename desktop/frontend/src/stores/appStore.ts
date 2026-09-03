@@ -1185,7 +1185,7 @@ export const useApp = create<AppState>((set, get) => ({
     //    永远停在「后端启动中」(preload 侧还会注册即回放当前状态,双保险;见 preload.onBackendStatus)。
     const connectFromStatus = (): void => {
       void window.tangu!.getConfig().then((c) => {
-        const eff = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId }
+        const eff = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId, imageModelId: c.imageModelId }
         set({ desktopConfig: c, cfg: eff, cfgLoaded: true })
         // 快照 ready 那条已连上同一 (url,token) → 这条(preload 回放 / 重复广播)不再打一遍;
         // 引擎重启会先广播 starting 把 connState 压回 idle,所以真正的换 token 重启仍会连。
@@ -1233,6 +1233,9 @@ export const useApp = create<AppState>((set, get) => ({
       backendUrl: stored?.backendUrl || prev.backendUrl,
       token: stored?.token ?? prev.token,
       modelId: stored?.modelId ?? prev.modelId,
+      // 生图模型也得回灌:run 透传的是 cfg.imageModelId,不回灌就是「设置里选了、重启后设置页空着、
+      // 发出去还是 ''」—— 设置页那一行看着存上了其实没有(移动端尤其:云端没有本机 config.json 兜底)。
+      imageModelId: stored?.imageModelId ?? prev.imageModelId,
     }
     set({ cfg: merged, cfgLoaded: true })
     if (stored?.mode === 'managed') {
@@ -2176,7 +2179,7 @@ export const useApp = create<AppState>((set, get) => ({
   setFilePreview: (p, opts) => { if (p) openWsFile(p, opts); else set({ filePreview: null }) },
 
   patchConfig: (patch) => {
-    set((s) => { void window.tangu?.setConfig(patch); return { cfg: { ...s.cfg, ...patch } } })
+    set((s) => { void window.tangu?.setConfig?.(patch).catch(() => {}); return { cfg: { ...s.cfg, ...patch } } })
   },
 
   setDefaultModel: (slot, modelId) => {
