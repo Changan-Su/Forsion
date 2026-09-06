@@ -20,7 +20,9 @@ export class ErrorBoundary extends React.Component<Props, State> {
     const zh = (document.documentElement.lang || '').startsWith('zh')
     const detail = `${error.message}\n\n${error.stack || ''}`.trim()
     return (
-      <div style={{ padding: 24, maxWidth: 720, margin: '0 auto', overflow: 'auto', height: '100%', boxSizing: 'border-box' }}>
+      // data-error-boundary = 台架的唯一判据。别改成按标题文案找:「What's New」会把整份
+      // CHANGELOG 渲进 DOM,里面就有历史版本引用过的「界面渲染出错」字样(2026-09-06 假红)。
+      <div data-error-boundary style={{ padding: 24, maxWidth: 720, margin: '0 auto', overflow: 'auto', height: '100%', boxSizing: 'border-box' }}>
         <h3 style={{ margin: '8px 0' }}>{zh ? '界面渲染出错' : 'Something broke while rendering'}</h3>
         <p style={{ opacity: 0.8, fontSize: 13, margin: '4px 0 12px' }}>
           {zh ? '这一部分崩溃了。可重试、或切换/新建会话避开它;请把下面的错误发给开发者。'

@@ -113,12 +113,12 @@ async function main() {
     await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await page.waitForTimeout(4000) // 给懒加载 chunk + store 初始化留时间
 
-    // 错误边界标题出现 = 渲染塌了。中英两版都查(ErrorBoundary 按语言切,别只钉中文)。
-    const boundary =
-      (await page.locator('text=界面渲染出错').count()) +
-      (await page.locator('text=Something broke while rendering').count())
-    if (boundary > 0) {
-      const detail = await page.locator('pre, code').first().innerText().catch(() => '(取不到详情)')
+    // 错误边界出现 = 渲染塌了。判据是 ErrorBoundary 根节点的 data-error-boundary,
+    // ⚠️ 别按标题文案找:「What's New」把整份 CHANGELOG 渲进 DOM,历史版本里就引用过
+    // 「界面渲染出错」这几个字 —— 按文案找到的是更新日志,不是崩溃(2026-09-06 假红一轮)。
+    const boundary = page.locator('[data-error-boundary]')
+    if ((await boundary.count()) > 0) {
+      const detail = await boundary.first().locator('pre').first().innerText().catch(() => '(取不到详情)')
       fails.push(`渲染出了错误边界:\n${detail.slice(0, 600)}`)
     }
     // 正向断言:外壳真的挂上了(只查"没报错"会把白屏放过去)。
