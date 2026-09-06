@@ -78,6 +78,9 @@ async function main() {
   /** 一个干净的会话:seed 写进 localStorage,返回 page。 */
   const session = async (seed) => {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    // ⚠️ 首启引导是 inset:0 / zIndex 60 的全屏覆盖层,没跳过就把后面所有点击全接走了
+    // (2.9.4 起 web/移动端也有)。台架一律当「老用户」跑,首启那条自有 e2e:boot 覆盖。
+    await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
     await ctx.addInitScript((s) => {
       try {
         localStorage.setItem('forsion_token', 'e2e-homeback')

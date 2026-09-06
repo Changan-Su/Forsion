@@ -69,7 +69,12 @@ async function main() {
     if (!up) throw new Error(`vite preview 没起来\n${previewErr.slice(-500)}`)
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    // ⚠️ 钉住 zh-CN:本脚本按中文文案找元素(「新建笔记」等),而 2.9.3 起首屏语言随系统/地区判定,
+    //    英文系统上跑就整片找不着。浏览器台架只有 newContext({locale}) 有效(--lang 无效)。
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: 'zh-CN' })
+    // ⚠️ 首启引导是 inset:0 / zIndex 60 的全屏覆盖层,没跳过就把后面所有点击全接走了
+    // (2.9.4 起 web/移动端也有)。台架一律当「老用户」跑,首启那条自有 e2e:boot 覆盖。
+    await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
     await ctx.addInitScript(() => {
       try { localStorage.setItem('forsion_token', 'e2e-capsule'); localStorage.setItem('amadeus_vault_mode', 'local') } catch { /* ignore */ }
     })
@@ -108,8 +113,10 @@ async function main() {
     // ⚠️ 不走 window.amadeus.newPage():那条只写库、不通知侧栏刷新结构,列表里根本不出现(实测)。
     await tap(page.locator('.mb-topbar .mb-icon-btn').first())
     await page.waitForTimeout(600)
-    const tabs = await page.$$eval('.mb-drawer-foot .mb-tab', (els) => els.map((e) => e.textContent.trim()))
-    const idx = tabs.findIndex((t) => /amadeus|笔记/i.test(t))
+    // ⚠️ 按 data-space 选,别按标签文案:显示名会随界面语言翻译,而且改过名
+    //    (2026-09-06 Amadeus→Note)—— 原来的 /amadeus|笔记/ 在英文界面下当场找不着。
+    const tabs = await page.$$eval('.mb-drawer-foot .mb-tab', (els) => els.map((e) => e.dataset.space || ''))
+    const idx = tabs.indexOf('amadeus')
     if (idx < 0) throw new Error(`左抽屉底部没有 Amadeus space tab(现有: ${tabs.join(',')})`)
     await tap(page.locator(`.mb-drawer-foot .mb-tab >> nth=${idx}`))
     await page.waitForTimeout(900)

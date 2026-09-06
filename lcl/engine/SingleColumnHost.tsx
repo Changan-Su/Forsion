@@ -360,6 +360,9 @@ function DrawerFoot() {
               <button
                 key={sp.id}
                 className={`mb-tab${on ? ' on' : ''}`}
+                /* 台架按它选 Space,别按 mb-tab-label 的文案 —— 显示名会翻译、也改过名
+                   (2026-09-06 Amadeus→Note),按文案找的仪器当天就红。 */
+                data-space={sp.id}
                 onClick={() => switchSpaceKeepDrawer(sp.id)}
                 /* 长按 = 把这个 Space 固定到系统桌面(安卓 WebView 的长按就是 contextmenu)。
                    宿主没实现(桌面 / web)时 pinSpaceToHome 返回 false —— 那就当普通长按,

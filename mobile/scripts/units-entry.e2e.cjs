@@ -85,6 +85,9 @@ async function main() {
 
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
     const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    // ⚠️ 首启引导是 inset:0 / zIndex 60 的全屏覆盖层,没跳过就把后面所有点击全接走了
+    // (2.9.4 起 web/移动端也有)。台架一律当「老用户」跑,首启那条自有 e2e:boot 覆盖。
+    await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
     await ctx.addInitScript(() => { try { localStorage.setItem('forsion_token', 'e2e-units-entry') } catch { /* ignore */ } })
     const page = await ctx.newPage()
     await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))

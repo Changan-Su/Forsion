@@ -78,6 +78,9 @@ async function main() {
     // 得先真的进到那个最坏场景里。
     // ⚠️ 2026-08-28 起启动缺省从「上次的 Space」改成了**ribbon 主位槽**(homeSlot.tsx),
     // 所以只设 active_space 已经压不住落点(会被主位槽顶回 home)——主位槽也要一起指过去。
+    // ⚠️ 首启引导是 inset:0 / zIndex 60 的全屏覆盖层,没跳过就把后面所有点击全接走了
+    // (2.9.4 起 web/移动端也有)。台架一律当「老用户」跑,首启那条自有 e2e:boot 覆盖。
+    await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
     await ctx.addInitScript(() => {
       try {
         localStorage.setItem('forsion_token', 'e2e-spacetrap')
