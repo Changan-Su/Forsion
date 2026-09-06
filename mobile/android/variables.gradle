@@ -1,5 +1,8 @@
 ext {
-    minSdkVersion = 23
+    // 26 = Android 8.0。@capacitor/inappbrowser 的 ioninappbrowser-android 硬性要求 ≥26
+    // (设备页要在 app 内开 WebView 就得用它),清单合并在 23 上直接失败。
+    // 别用 tools:overrideLibrary 强压 —— 那是把编译期错误换成老机器上的运行期崩溃。
+    minSdkVersion = 26
     compileSdkVersion = 35
     targetSdkVersion = 35
     androidxActivityVersion = '1.9.2'
