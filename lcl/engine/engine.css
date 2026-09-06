@@ -227,7 +227,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.rb-menu button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+.rb-menu button:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 
 /* ===== 图标选择器(收纳夹 / 命令项自定义图标):图标网格浮层,复用菜单卡片观感。 ===== */
 .rb-iconpick {
@@ -353,7 +353,7 @@
   border-radius: var(--radius-sm, 8px);
   cursor: pointer;
 }
-.cmd-item[data-active] { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); }
+.cmd-item[data-active] { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 .cmd-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmd-hotkey, .cmd-foot kbd {
   font-size: 11px;
@@ -651,6 +651,15 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   -webkit-app-region: no-drag;
   background: var(--sidebar-bg);
 }
+/* 恢复默认布局钮:再往左退一格(26 + 2 = 28)。resetLayout 重建的是**当前 Space** 的 build()。 */
+.dv-edge-reset {
+  position: absolute;
+  top: 5px;
+  right: 62px;
+  z-index: 6;
+  -webkit-app-region: no-drag;
+  background: var(--sidebar-bg);
+}
 /* 展开态高亮:底部面板不像左右栏那样一眼可见「有没有开」(它可能被拖得很矮),故钮自己表达开合。 */
 .dv-edge-bottom.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
 
@@ -699,8 +708,13 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 }
 
 /* ── 空侧栏占位(sidebar-empty):侧栏关空/拖空后自动补的占位视图。
- *    整组只剩占位 tab 时隐藏 tab 条(贴 Obsidian 无 tab 的空侧栏观感;拖入真实 tab 后占位退位、tab 条复现)。 ── */
-.dockview-theme-lcl .dv-group:has(.wb-tab--empty):not(:has(.wb-tab:not(.wb-tab--empty))) .dv-tabs-and-actions-container { display: none; }
+ *    整组只剩占位 tab 时隐藏 tab 条(贴 Obsidian 无 tab 的空侧栏观感;拖入真实 tab 后占位退位、tab 条复现)。
+ *    ⚠️两处易错,都不报错只静默失效:
+ *      ① dockview 的组元素类名是 `.dv-groupview`,**没有** `.dv-group`(本行原来写错,空侧栏一直挂着
+ *         一枚 PanelLeft 图标 tab —— 长得跟侧栏折叠钮一模一样、点了又没反应);
+ *      ② 限侧栏(`.wb-tab--icon` 只有左右栏 tab 有)。主区 home 空态的 tab 条要留着:
+ *         前进/后退、＋、左栏折叠钮、以及 mac 的拖窗区全在这条上。 ── */
+.dockview-theme-lcl .dv-groupview:has(.wb-tab--icon.wb-tab--empty):not(:has(.wb-tab:not(.wb-tab--empty))) .dv-tabs-and-actions-container { display: none; }
 .wb-sidebar-empty {
   height: 100%; display: flex; align-items: center; justify-content: center;
   padding: 24px; text-align: center; font-size: 12.5px; line-height: 1.6;
@@ -708,7 +722,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 }
 
 /* ── 主区空态(home):关掉最后一个主区 tab 后就地填充,Forsion 品牌图 + 「新建」按钮。
- *    tab 条隐藏机关同上(WbTab 给 home 挂 wb-tab--empty)→ 呈现为纯背景。 ── */
+ *    与空侧栏不同:主区 tab 条**保留**(见上条规则的 ②)。 ── */
 .wb-home {
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 20px; padding: 40px; user-select: none;

@@ -10,6 +10,8 @@
  * 布局序列化 / 命名布局 / Dockview api 在移动端退化为 no-op / 空(见各方法注释)。
  */
 import { create } from 'zustand'
+import type { ExtendViewPresenter } from './extendView'
+import { nativeExtendTargets } from './nativeExtendView'
 import type { Leaf, ViewLocation, SidebarDefaults } from './types'
 import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
@@ -132,10 +134,15 @@ function applySCBlob(raw: unknown): boolean {
 
 function snapshot(): SCBlob {
   const s = useWorkspace.getState()
+  const active = (side: 'left' | 'right'): string | null => {
+    const leaves = s[bucketOf(side)].filter((r) => r.type !== '__extend')
+    return leaves.find((r) => r.id === s[activeKeyOf(side)])?.id
+      ?? leaves.find((r) => r.id === drawerExtensions[side]?.previousId)?.id ?? leaves[0]?.id ?? null
+  }
   return {
     v: 1,
-    main: s.mainLeaves, left: s.leftLeaves, right: s.rightLeaves,
-    activeMainId: s.activeMainId, leftActiveId: s.leftActiveId, rightActiveId: s.rightActiveId,
+    main: s.mainLeaves, left: s.leftLeaves.filter((r) => r.type !== '__extend'), right: s.rightLeaves.filter((r) => r.type !== '__extend'),
+    activeMainId: s.activeMainId, leftActiveId: active('left'), rightActiveId: active('right'),
   }
 }
 
@@ -431,6 +438,10 @@ export const useWorkspace = create<WS>((set, get) => {
     closeLeaf(id) {
       const rec = find(id)
       if (!rec) return
+      if (rec.type === '__extend') {
+        const lease = drawerExtensions[rec.loc as 'left' | 'right']
+        lease?.dismiss(); lease?.dispose(); return
+      }
       if (rec.type === 'home') return // 主区空态占位,不可关
       // 主区关掉最后一个 → 就地变 home 空态(不销毁主屏)
       if (rec.loc === 'main' && get().mainLeaves.length <= 1) { get().navigateLeaf(id, 'home'); return }
@@ -474,3 +485,49 @@ export const useWorkspace = create<WS>((set, get) => {
 // 自动存盘:订阅整个 store(节流 200ms),而不是往每个 mutation 里插一行 save。
 // 发令枪是 restoreSingleColumnLayout(),见其注释。
 useWorkspace.subscribe(saveSoon)
+
+/** The mobile host puts the same temporary leaf in its ordinary drawer View selector. */
+const drawerExtensions: Partial<Record<'left' | 'right', { previousId: string | null; dismiss(): void; dispose(): void }>> = {}
+let extensionSerial = 0
+export const presentDrawerExtension: ExtendViewPresenter = (options, dismiss) => {
+  // The mobile shell has two panels. Bottom requests use its right drawer.
+  const side = options.side === 'left' ? 'left' : 'right'
+  drawerExtensions[side]?.dismiss()
+  drawerExtensions[side]?.dispose()
+  const before = useWorkspace.getState()
+  const bucket = side === 'left' ? 'leftLeaves' : 'rightLeaves'
+  const activeKey = side === 'left' ? 'leftActiveId' : 'rightActiveId'
+  const visibleKey = side === 'left' ? 'leftVisible' : 'rightVisible'
+  const id = `__extend-mobile-${++extensionSerial}`
+  const element = document.createElement('div')
+  element.className = 'wb-extend-target'
+  const rec: LeafRec = { id, type: '__extend', loc: side, params: {}, title: typeof options.title === 'function' ? options.title() : options.title }
+  let disposed = false
+  let unsubscribe: (() => void) | undefined
+  const lease = { previousId: before[activeKey], dismiss, dispose() {
+    if (disposed) return
+    disposed = true
+    unsubscribe?.()
+    if (drawerExtensions[side] === lease) delete drawerExtensions[side]
+    nativeExtendTargets.delete(id)
+    element.remove()
+    const current = useWorkspace.getState()
+    // A navigation/reset may already have replaced this bucket. Never restore the old Space.
+    if (!current[bucket].some((r) => r.id === id)) return
+    const rest = current[bucket].filter((r) => r.id !== id)
+    useWorkspace.setState({ [bucket]: rest,
+      [activeKey]: current[activeKey] === id ? (rest.find((r) => r.id === before[activeKey])?.id ?? rest[0]?.id ?? null) : current[activeKey],
+      [visibleKey]: current[visibleKey] && (before[visibleKey] || rest.length > before[bucket].length),
+    })
+    useWorkspace.getState().refreshTabs()
+  } }
+  drawerExtensions[side] = lease
+  nativeExtendTargets.set(id, element)
+  useWorkspace.setState({ [bucket]: [...before[bucket], rec], [activeKey]: id,
+    ...(side === 'left' ? { leftVisible: true, rightVisible: false } : { rightVisible: true, ...(!before.wideMode ? { leftVisible: false } : {}) }) })
+  useWorkspace.getState().refreshTabs()
+  unsubscribe = useWorkspace.subscribe((current) => {
+    if (!current[visibleKey] || !current[bucket].some((r) => r.id === id)) { dismiss(); lease.dispose() }
+  })
+  return { element, titled: true, activate: () => { if (!disposed) useWorkspace.getState().activateLeaf(id) }, dispose: lease.dispose }
+}

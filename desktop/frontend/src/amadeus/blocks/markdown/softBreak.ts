@@ -173,6 +173,54 @@ export function expand(node: MdNode): void {
 export const softBreakJoin = (left: MdNode, right: MdNode): number | undefined =>
   left?.type === 'paragraph' && right?.type === 'paragraph' ? 0 : undefined
 
+// ── v4 统一编辑器:空段落 ⇄ 空行 ──────────────────────────────────────────────
+//
+// v4 刻意不挂 softBreakRemark(标准 md 分段落盘,见 MarkdownBlock 的 `unified ? … : softBreakRemark`),
+// 于是空段落被 remark 序列化成**一条什么都没有的行**,加上前后两个 join 各一条空行 ——
+// N 个连续空段落在文件里就是 2N+1 条空行。读侧却没人反着来(remark 直接丢空行),
+// 于是「敲的空行切走再切回来全没了」(用户 2026-09-05 实报)。这里补上读侧那一半。
+//
+// ⚠️ 只在**根一层**还原:list / table 的 children 不收 paragraph,插进去违反 PM schema。
+//    引用/列表项内部的空行不还原 —— 那一格罕见,不值得为它把 schema 判定搬进来。
+
+/** N 个空段落落盘后留下的空行条数(join 恒 1 条,空段落自身 1 条):
+ *  文中 2N+1 ｜ 文首 2N(前面没有 join)｜ 文末 2N−1(末尾那条是文件结束,不算行)。
+ *  反解一律向下取整:外来 md 的偶数条空行不臆造空段落,标准的 1 条空行恒 → 0。 */
+const midParas = (blanks: number): number => Math.max(0, Math.floor((blanks - 1) / 2))
+const headParas = (blanks: number): number => Math.max(0, Math.floor(blanks / 2))
+const tailParas = (blanks: number): number => Math.max(0, Math.floor((blanks + 1) / 2))
+
+/** 节点的起/止行号;拿不到位置信息返回 null(宁可少还原,绝不臆造)。 */
+function lineOf(node: MdNode, side: 'start' | 'end'): number | null {
+  const n = node?.position?.[side]?.line
+  return typeof n === 'number' ? n : null
+}
+
+/** 按空行距在根一层还原空段落(纯函数,就地改 tree.children;导出仅供单测)。 */
+export function restoreBlankParagraphs(tree: MdNode): void {
+  const kids: MdNode[] = Array.isArray(tree?.children) ? tree.children : []
+  if (!kids.length) return
+  const blank = (): MdNode => ({ type: 'paragraph', children: [] })
+  const push = (out: MdNode[], n: number): void => { for (let i = 0; i < n; i++) out.push(blank()) }
+  const out: MdNode[] = []
+  const rootStart = lineOf(tree, 'start')
+  const first = lineOf(kids[0], 'start')
+  if (rootStart != null && first != null) push(out, headParas(first - rootStart))
+  let prevEnd: number | null = null
+  for (const child of kids) {
+    const start = lineOf(child, 'start')
+    if (prevEnd != null && start != null) push(out, midParas(start - prevEnd - 1))
+    out.push(child)
+    prevEnd = lineOf(child, 'end')
+  }
+  const rootEnd = lineOf(tree, 'end')
+  if (rootEnd != null && prevEnd != null) push(out, tailParas(rootEnd - prevEnd - 1))
+  tree.children = out
+}
+
+export const blankLineRemark = $remark('amadeusBlankLine', () => () => (tree: MdNode): void =>
+  restoreBlankParagraphs(tree))
+
 export const softBreakRemark = $remark('amadeusSoftBreak', () =>
   function softBreak(this: any) {
     const data = this.data()

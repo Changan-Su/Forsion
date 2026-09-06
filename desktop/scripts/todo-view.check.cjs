@@ -128,7 +128,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
 
     // 先进 Amadeus 让 vaultRoot 与全库扫描就绪(同 calendar-ui.check.cjs)。
-    await clickSpace(win, ['Amadeus'])
+    await clickSpace(win, ['Note'])
     await win.waitForSelector('.am-app', { timeout: 30_000 })
     await win.waitForTimeout(2400)
     await clickSpace(win, ['日历', 'Calendar'])

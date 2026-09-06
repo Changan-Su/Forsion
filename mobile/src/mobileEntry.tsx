@@ -18,6 +18,7 @@ import { installEngine } from '@/bootstrapEngine'
 import { installSmoothCaret } from '@/smoothCaret'
 import { installViewportLock } from '@/viewportLock'
 import { applyUiFonts } from '@/uiFont'
+import { recordError } from '@/diag'
 import { installSpaceShortcuts } from './spaceShortcuts'
 import { installUnitsEntry } from './UnitsSheet'
 
@@ -60,6 +61,7 @@ try {
   installUnitsEntry()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
+  recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'
 }
 
 createRoot(document.getElementById('root')!).render(

@@ -1,0 +1,33 @@
+/* 插件原生表(ctx.table.mount)的两件外壳样式。表体本身全走 amadeus-host.css 的 .amx-db-*,
+ * 这里只管「嵌在插件面板里」多出来的那点事。新增样式一律不进 amadeus-host.css(仓规)。 */
+
+/* 表面本体:插件面板自己是滚动容器,这里只占内容高度,横向溢出交给 .amx-db-scroll(别再套一层滚动)。 */
+.amx-plugtable {
+  min-width: 0;
+}
+
+.amx-plugtable-empty,
+.amx-plugtable-error {
+  padding: 14px 10px;
+  font-size: 13px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.amx-plugtable-error {
+  color: var(--danger, #e5484d);
+}
+
+/* body 级弹层宿主:零尺寸、不设 pointer-events(设了子层跟着继承就点不动了),
+ * 只负责给传送过来的 .amx-db-popwrap(自带 position:fixed;inset:0;z-index:80)一个
+ * **不被插件皮肤的 container-type / overflow 裁剪**的落点,并把层级抬到 dockview/扩展视图之上。
+ * 1200:高于 ribbon 菜单(engine.css 1100/1101)与模态遮罩(1000),低于拖拽幽灵(9998/9999)。 */
+.amx-plugtable-pops {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  z-index: 1200;
+}

@@ -39,6 +39,9 @@
   --bg-alt: var(--sidebar-bg);
   --surface: var(--bg-card);
   --surface-2: var(--bg-card);
+  /* ⚠️ --surface 与 --surface-2 同值 → 菜单「选中 = --surface 压 --surface-2」是零对比;菜单行一律改消费
+     --menu-hover。这里再声明一次是为了按本作用域的 --overlay-medium 解析(旧 tangu.css 词表层会在此改它)。 */
+  --menu-hover: var(--overlay-medium);
   --border-strong: var(--overlay-strong);
   --text-sec: var(--text-light);
   --primary: var(--accent-ink);

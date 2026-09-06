@@ -45,7 +45,7 @@ const SRC = path.join(__dirname, '../frontend/src')
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
 // 真源:base.css + 所有会给表单控件上样式的视图/主题 CSS(壳画框那批散在这些文件里)。
 const FILES = [
-  'styles/base.css', 'amadeus-host.css', 'quickFind.css', 'amadeus/styles.css',
+  'styles/base.css', 'amadeus-host.css', 'quickFind.css', 'findInPage.css', 'amadeus/styles.css',
   'amadeus/theme/lcl/tangu.css', 'amadeus/theme/lcl/tanguSoft.css',
   'views/chat2/chat2.css', 'views/chat2/composer2.css', 'views/chat2/sidebar2.css',
   'views/automation/automation.css', 'views/dashData.css', 'views/homepage.css',
@@ -166,7 +166,7 @@ const SNAP = () => Object.fromEntries(Object.entries(window.__probes).map(([k, e
       }
     }
   }
-  // 归零块里的写法与 CSS 源里的写法可能差个祖先(如 `.am-app .amx-findbar input`),按末段比对。
+  // 归零块里的写法与 CSS 源里的写法可能差个祖先(如 `.t2s-side .t2s-search input`),按整条比对。
   // ⚠️ 按**整条**选择器比(允许祖先前缀差异),别退化成比末段:那样 `.zz-x input` 会被
   //    `.t2s-search input` 的末段 "input" 认领,C 组永远绿(写这条检查时真踩过)。
   const ok = (s) => NAKED.some((n) => n === s || n.endsWith(' ' + s) || s.endsWith(' ' + n))

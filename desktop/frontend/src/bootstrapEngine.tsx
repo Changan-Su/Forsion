@@ -6,6 +6,7 @@ import { useEffect } from 'react'
 import { windowKind } from './windowKind'
 import { askString } from '@amadeus/components/askString'
 import { useQuickFind } from './quickFind'
+import { findSupported, openFindBar } from './findInPage'
 import { useRecentViews } from './recentViews'
 import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget } from './spaces'
@@ -66,6 +67,9 @@ registerMessages({
   'bootengine.view.media': { zh: '媒体', en: 'Media' },
   'bootengine.view.pluginFile': { zh: '插件文件', en: 'Plugin file' },
   'bootengine.cmd.quickFind': { zh: '快速查找', en: 'Quick find' },
+  'bootengine.cmd.openNote': { zh: '打开笔记', en: 'Open note' },
+  'bootengine.cmd.setActiveSpace': { zh: '切换空间', en: 'Switch Space' },
+  'bootengine.cmd.findInPage': { zh: '页内查找', en: 'Find in page' },
   'bootengine.cmd.showChatPanel': { zh: '显示对话面板', en: 'Show chat panel' },
   'bootengine.cmd.openMini': { zh: '打开 Mini 卡片', en: 'Open mini card' },
 })
@@ -416,11 +420,32 @@ export function installEngine(): void {
   })
 
   // commands
-  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat })
+  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
+    description: 'Start a new, empty chat in the window the user is talking to you from. Use it when the user asks to start over or open a fresh conversation.',
+  } })
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
   // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。
   addCommand({ id: 'toggle-left', icon: PanelLeft, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
   addCommand({ id: 'quick-find', icon: Search, title: () => translate('bootengine.cmd.quickFind'), keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
+  // 页内查找(Cmd/Ctrl+F):壳级浮条 + 活动 View 的 DOM 扫描,见 findInPage.tsx。
+  //  · 注册成命令而不是某个组件上的 onKeyDown —— 这样它自动进命令面板、进设置里的快捷键表、
+  //    可改键,而且**所有 View 都够得着**(老实现只绑在 Amadeus 编辑器宿主 div 上,三十多个
+  //    View 一个都没有)。
+  //  · hotkey 按能力挂:浏览器不支持 CSS 自定义高亮时不注册 mod+f,让浏览器原生查找接管
+  //    (命令本身仍在面板里)。这是 CSS 特性探测,不是 window.tangu 门控,不进 KNOWN_GATES。
+  //  · run() 里让开自带查找的面:CodeMirror(searchKeymap)与 <webview> 客体各有自己的 Cmd+F。
+  addCommand({
+    id: 'find-in-page',
+    icon: Search,
+    title: () => translate('bootengine.cmd.findInPage'),
+    keywords: 'find search page 页内 查找 搜索 本页',
+    hotkey: findSupported ? 'mod+f' : undefined,
+    run: () => {
+      const el = document.activeElement
+      if (el instanceof Element && el.closest('.cm-editor, webview')) return
+      openFindBar()
+    },
+  })
   addCommand({ id: 'toggle-right', icon: PanelLeft, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
   // mod+j 与 VS Code 的面板热键对齐;app 命令表与编辑器 keymap 皆空闲(mod+/ 已被左栏占,见上)。
   // ⚠️仅桌面壳:移动单列壳没有底部面板,而 singleColumnStore.toggleSidebar 是
@@ -477,7 +502,88 @@ export function installEngine(): void {
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'market store plugin theme skill agent 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => app().openFeedback() })
-  addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() })
+  addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
+    description: "Open the Forsion settings window, optionally straight to one page. Use it to show the user where a control lives when you cannot change it yourself.",
+    params: {
+      type: 'object',
+      properties: { tab: { type: 'string', description: 'Settings page to open, e.g. theme, model, shortcuts, notifications, about. Omit for the default page.' } },
+    },
+    run: (a) => app().openSettings(typeof a.tab === 'string' && a.tab ? (a.tab as never) : undefined),
+  } })
+  // ── agent 面专属命令(不进命令面板的人类语汇,而是补上模型独缺的两个原语)──────────────
+  // 为什么这两条是新增而不是给现有命令加 invoke:命令表里 22 条「开面板」对模型价值极低,
+  // 真正缺的是「把我刚写的东西摆到用户眼前」和「切到那个 Space」。二者都有现成函数,只是从来
+  // 没被声明成命令(因为 run(): void 收不了参数)。
+  addCommand({
+    id: 'open-note',
+    title: () => translate('bootengine.cmd.openNote'),
+    keywords: 'note open 打开 笔记',
+    run: () => { /* 人类走侧栏点开,命令面板里这条只作 agent 面载体 */ },
+    invoke: {
+      description:
+        'Open a note (or drawing, dashboard, PDF, database — it routes by file type) in front of the user, '
+        + 'in the window they are talking to you from. Call this right after you create or edit a note so they '
+        + 'can see it, instead of only telling them the path. Optionally land on a heading or a block anchor.',
+      params: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Vault-relative path, e.g. "Projects/plan.md" — the same path amadeus_write_note takes.' },
+          heading: { type: 'string', description: 'Scroll to this heading text.' },
+          block_id: { type: 'string', description: 'Scroll to this block anchor id.' },
+          new_tab: { type: 'boolean', description: 'Open in a new tab instead of the active one. Ignored when heading or block_id is given.' },
+        },
+        required: ['path'],
+      },
+      run: async (a) => {
+        const path = String(a.path || '').trim()
+        if (!path) throw new Error('path is required')
+        // ⚠️ 开之前先验存在:openNote / openFile 都把「打不开」吞掉(waitForActive 超时也算 resolve),
+        //    不验的话拿一个拼错的路径过来会静静地什么都不发生,然后回报「已打开」(Codex 评审 P2-10)。
+        const { usePageStore } = await import('./amadeus/store/pageStore')
+        const norm = path.replace(/\\/g, '/').replace(/^\/+/, '')
+        const files = usePageStore.getState().files
+        if (files.length && !files.some((f) => f.replace(/\\/g, '/') === norm)) {
+          throw new Error(`no such file in the vault: ${norm}`)
+        }
+        const nav = await import('./amadeusNav')
+        const newTab = a.new_tab === true ? { newTab: true } : undefined
+        if (typeof a.heading === 'string' && a.heading) await nav.openNoteAtHeading(norm, a.heading)
+        else if (typeof a.block_id === 'string' && a.block_id) await nav.openNoteAtBlock(norm, String(a.block_id))
+        // ⚠️ 非 .md 一律交 openFile 路由:PDF / .db / 图片 / 媒体的分派都在那儿,openNote 接不住。
+        //    描述里承诺了按类型路由,就得真的路由(同上条评审)。
+        else if (/\.md$/i.test(norm)) await nav.openNote(norm, newTab)
+        else nav.openFile(norm, newTab)
+      },
+    },
+  })
+  addCommand({
+    id: 'set-active-space',
+    title: () => translate('bootengine.cmd.setActiveSpace'),
+    keywords: 'space switch 空间 切换',
+    run: () => { /* 人类走 ribbon / 底部条,这条只作 agent 面载体 */ },
+    invoke: {
+      description:
+        'Switch the window the user is talking to you from to another Space (workspace layout). '
+        + 'Only ids listed in `state` exist on this device — Spaces differ per device and per install.',
+      params: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'Space id, one of the ids listed in this entry\'s state.' } },
+        required: ['id'],
+      },
+      // ⚠️ 必须自校验:setActiveSpace 对未知 id 会走 resetLayout→build(),把用户的布局清成空白。
+      run: (a) => {
+        const id = String(a.id || '').trim()
+        const known = useSpaceStore.getState().spaces.map((sp) => sp.id)
+        if (!known.includes(id)) throw new Error(`no such Space "${id}" here. Available: ${known.join(', ')}`)
+        setActiveSpace(id)
+      },
+      state: () => {
+        const st = useSpaceStore.getState()
+        return `active=${st.activeSpaceId}; available=${st.spaces.map((sp) => sp.id).join(',')}`
+      },
+    },
+  })
+
   // UI 缩放:应用持久值 + 注册放大/缩小/重置命令。端默认:桌面 Electron 1 / 触屏窄屏 1.15(同
   // singleColumn.css 移动 zoom 段) / 桌面浏览器(网页端) 1.1 / 移动端平板 1。
   {

@@ -18,19 +18,26 @@ type Con = { minimumWidth?: number; maximumWidth?: number; minimumHeight?: numbe
 
 /** 最小 Dockview 桩:group 的 width/height 可读写,panels 可增删。 */
 function mkApi(width: number, height: number) {
-  const mkGroup = () => ({
-    api: {
-      width: 0,
-      height: 0,
-      setSize(s: { width?: number; height?: number }) {
-        if (typeof s.width === 'number') this.width = s.width
-        if (typeof s.height === 'number') this.height = s.height
+  const moves: Array<{ from: unknown; group: unknown; position?: string }> = []
+  const mkGroup = () => {
+    const g = {
+      api: {
+        width: 0,
+        height: 0,
+        setSize(s: { width?: number; height?: number }) {
+          if (typeof s.width === 'number') this.width = s.width
+          if (typeof s.height === 'number') this.height = s.height
+        },
+        constraints: null as Con,
+        setConstraints(c: Con) { this.constraints = c },
+        activePanel: null,
+        // 网格换位:桩不真的重排(几何由 scripts/bottom-panel.check.cjs 在真 Dockview 里量),
+        // 这里只记「有没有挪、挪去哪」—— 对齐契约在 store 这一层就是这一次调用。
+        moveTo(o: { group: unknown; position?: string }) { moves.push({ from: g, group: o.group, position: o.position }) },
       },
-      constraints: null as Con,
-      setConstraints(c: Con) { this.constraints = c },
-      activePanel: null,
-    },
-  })
+    }
+    return g
+  }
   const panels: Array<{ id: string; title: string; params: Record<string, unknown>; group: ReturnType<typeof mkGroup>; api: Record<string, unknown> }> = []
   const mkP = (id: string, params: Record<string, unknown>) => {
     const p = {
@@ -54,7 +61,7 @@ function mkApi(width: number, height: number) {
     },
     addPanel: (o: { id: string; params: Record<string, unknown> }) => { const p = mkP(o.id, o.params); panels.push(p); return p },
   } as unknown as DockviewApi
-  return { api, panels }
+  return { api, panels, moves }
 }
 
 const bottoms = (panels: { params: Record<string, unknown> }[]): { params: Record<string, unknown> }[] =>
@@ -276,6 +283,50 @@ describe('底部面板:反注册前的清场必须覆盖它', () => {
     expect(panels.filter((p) => p.params.__type === 'termv')).toHaveLength(0) // 两个区都清干净
     expect(bottoms(panels)).toHaveLength(0)                                   // 底部随之收起
     expect(useWorkspace.getState().stash.bottom).toEqual([])                  // 也不许留在 stash 里复活
+  })
+})
+
+describe('底部面板:与右栏的对齐(与开合顺序无关)', () => {
+  // 用户实报:右栏与底部先开哪个,布局就不一样(Dockview 只在**引用 panel 那个槽位**里嵌套)。
+  // 目标布局恒定为 [左栏满高] | [ [主区|右栏] / 底部横跨这两者 ]。真几何在 check:bottompanel 量,
+  // 这里钉的是 store 侧的那一步补偿:底部诞生时把已在场的右栏挪到主区右边。
+  it('⚠️先右栏后底部:底部诞生时把右栏挪到主区右边', () => {
+    const { api, panels, moves } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('logv', {}, 'main')
+    useWorkspace.getState().openView('logv', {}, 'right')
+    expect(moves).toHaveLength(0) // 右栏自己开出来时不该挪任何东西
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    vi.runAllTimers()
+
+    const mainGroup = panels.find((p) => p.params.__loc === 'main')!.group
+    const rightGroup = panels.find((p) => p.params.__loc === 'right')!.group
+    expect(moves).toHaveLength(1)
+    expect(moves[0].from).toBe(rightGroup)
+    expect(moves[0].group).toBe(mainGroup)
+    expect(moves[0].position).toBe('right')
+  })
+
+  it('先底部后右栏:右栏后开,Dockview 天然把它嵌进主区那一行 → 不挪组', () => {
+    const { api, moves } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('logv', {}, 'main')
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('logv', {}, 'right')
+    vi.runAllTimers()
+    expect(moves).toHaveLength(0)
+  })
+
+  it('没有右栏时不空挪(底部单独开)', () => {
+    const { api, moves } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('logv', {}, 'main')
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    vi.runAllTimers()
+    expect(moves).toHaveLength(0)
   })
 })
 

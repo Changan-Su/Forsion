@@ -13,7 +13,7 @@ interface CommandState {
   pickCb: ((id: string) => void) | null
   addCommand(cmd: Command): void
   removeCommand(id: string): void
-  run(id: string): void
+  run(id: string, args?: Record<string, unknown>): void
   setPaletteOpen(open: boolean): void
 }
 
@@ -24,9 +24,12 @@ export const useCommandStore = create<CommandState>((set, get) => ({
   addCommand: (cmd) =>
     set((s) => ({ commands: [...s.commands.filter((c) => c.id !== cmd.id), cmd] })),
   removeCommand: (id) => set((s) => ({ commands: s.commands.filter((c) => c.id !== id) })),
-  run: (id) => {
+  run: (id, args) => {
     const cmd = get().commands.find((c) => c.id === id)
-    if (cmd) cmd.run()
+    if (!cmd) return
+    // agent 派发(带 args)优先走 invoke.run —— 它接显式值,绕开 toggle/cycle 的盲翻。
+    if (args && cmd.invoke?.run) { void cmd.invoke.run(args); return }
+    void cmd.run(args)
   },
   setPaletteOpen: (open) => set(open ? { paletteOpen: true } : { paletteOpen: false, pickCb: null }),
 }))
@@ -63,6 +66,10 @@ function hotkeyMatches(hotkey: string, e: KeyboardEvent): boolean {
 export function installHotkeys(): () => void {
   const onKey = (e: KeyboardEvent): void => {
     if (useShortcuts.getState().recording) return // 录制快捷键时暂停分发,避免误触发
+    // 已被下游处理掉的键不再分发。这是**冒泡**监听:内层组件(CodeMirror 的 searchKeymap、
+    // xterm、各种输入框)只 preventDefault 不 stopPropagation,少这一行就会「内层处理完,
+    // 全局命令再跑一遍」—— 在 CodeMirror 里按 Cmd+F 会同时弹它自己的查找条和应用的查找条。
+    if (e.defaultPrevented) return
     const st = useCommandStore.getState()
     // 命令面板:可被设置里改键的伪命令 'command-palette'(默认 mod+k)。
     const paletteKey = effectiveHotkey({ id: 'command-palette', hotkey: 'mod+k' })

@@ -12,7 +12,9 @@ import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
   'dateq.schedule': { zh: '日程', en: 'Schedule' },
-  'dateq.remind': { zh: '提醒', en: 'Reminder' },
+  'dateq.remind': { zh: '提醒', en: 'Remind me' },
+  'dateq.today': { zh: '今天', en: 'Today' },
+  'dateq.tomorrow': { zh: '明天', en: 'Tomorrow' },
 })
 
 export interface DateCand {
@@ -69,14 +71,42 @@ export function parseDateQuery(q: string, now = new Date()): string | null {
   return null
 }
 
-/** `@` 面板顶部的日期候选。查询以 `remind:` 打头 = 用户已经写明要提醒,只给提醒那一条。 */
+/** 关键词行(Notion 的 `@tod` → Today / `@r` → Remind me 同款):查询串是词的前缀就给,空查询(刚打完 `@`)全给。
+ *  label 存 key、渲染期再 translate —— 模块级定格会让切语言纹丝不动。 */
+const KEYWORDS: Array<{ key: string; words: string[]; days: number }> = [
+  { key: 'dateq.today', words: ['today', '今天'], days: 0 },
+  { key: 'dateq.tomorrow', words: ['tomorrow', '明天'], days: 1 },
+]
+const REMIND_WORDS = ['remind', '提醒']
+
+/** `@` 面板顶部的日期候选。三档,先命中先返回:
+ *  1. `remind:` 打头 = 用户已写明要提醒,只给提醒那一条(没写时刻 → 明天 09:00);
+ *  2. 关键词前缀(`@t`/`@明` → 今天/明天,`@r`/`@提` → 提醒);空查询三条全给;
+ *  3. 数字写法(`@2200` / `@9-1`)→「日程 + 提醒」两行。 */
 export function dateCandidates(query: string, now = new Date()): DateCand[] {
-  const forced = /^remind:/i.test(query.trim())
-  const side = parseDateQuery(forced ? query.trim().slice(7) : query, now)
-  if (!side) return []
-  // 全天日期配提醒:午夜响没意义,按 09:00 给(Notion 的 "Tomorrow 9am" 同款)。
-  const remindSide = side.includes('T') ? side : `${side}T09:00`
+  const q = query.trim()
   const hint = (v: string): string => fmtCalDateL(parseCalDate(v))
-  const remind: DateCand = { insert: `@remind:${remindSide}`, label: translate('dateq.remind'), hint: hint(remindSide) }
-  return forced ? [remind] : [{ insert: `@${side}`, label: translate('dateq.schedule'), hint: hint(side) }, remind]
+  // 全天日期配提醒:午夜响没意义,按 09:00 给(Notion 的 "Tomorrow 9am" 同款)。
+  const remindOf = (side: string): DateCand => {
+    const s = side.includes('T') ? side : `${side}T09:00`
+    return { insert: `@remind:${s}`, label: translate('dateq.remind'), hint: hint(s) }
+  }
+  const tomorrow = ymd(plusDays(now, 1))
+  if (/^remind:/i.test(q)) {
+    const side = q.length === 7 ? tomorrow : parseDateQuery(q.slice(7), now)
+    return side ? [remindOf(side)] : []
+  }
+  const s = q.toLowerCase()
+  const hit = (words: string[]): boolean => !s || words.some((w) => w.startsWith(s))
+  const out: DateCand[] = []
+  for (const k of KEYWORDS) {
+    if (!hit(k.words)) continue
+    const d = ymd(plusDays(now, k.days))
+    out.push({ insert: `@${d}`, label: translate(k.key), hint: hint(d) })
+  }
+  if (hit(REMIND_WORDS)) out.push(remindOf(tomorrow))
+  if (out.length) return out
+  const side = parseDateQuery(q, now)
+  if (!side) return []
+  return [{ insert: `@${side}`, label: translate('dateq.schedule'), hint: hint(side) }, remindOf(side)]
 }

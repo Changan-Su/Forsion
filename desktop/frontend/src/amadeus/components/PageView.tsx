@@ -15,7 +15,6 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core'
 import { usePageStore, type Status } from '../store/pageStore'
-import { findTotal, useFindStore } from '../blocks/markdown/findInPage'
 import { BlockSelectionKeys, useBlockSelection } from '../store/blockSelection'
 import { edgeBlock } from '../lib/blockEdges'
 import { takeModeCursor } from '../lib/modeCursor'
@@ -26,10 +25,6 @@ import { BacklinksPanel } from './BacklinksPanel'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
-  'amxpv.findPlaceholder': { zh: '在本页查找…', en: 'Find in page…' },
-  'amxpv.findPrev': { zh: '上一个(Shift+Enter)', en: 'Previous (Shift+Enter)' },
-  'amxpv.findNext': { zh: '下一个(Enter)', en: 'Next (Enter)' },
-  'amxpv.findClose': { zh: '关闭(Esc)', en: 'Close (Esc)' },
   'amxpv.statusSaving': { zh: '保存中…', en: 'Saving…' },
   'amxpv.statusLoading': { zh: '加载中…', en: 'Loading…' },
   'amxpv.statusReady': { zh: '已保存', en: 'Saved' },
@@ -43,43 +38,6 @@ registerMessages({
 })
 
 type TFn = ReturnType<typeof useI18n>['t']
-
-/** 页内查找浮条(Cmd/Ctrl+F 在编辑器内呼出):输入 / x/y 计数 / 上下条 / 关闭。
- *  v4 统一页(UnifiedPage)不经 PageView,自己渲染这一份 —— 别再造第二个查找条。 */
-export function FindBar() {
-  const { t } = useI18n()
-  const query = useFindStore((s) => s.query)
-  const active = useFindStore((s) => s.active)
-  const counts = useFindStore((s) => s.counts)
-  void counts // 订阅计数变化以刷新 x/y
-  const total = findTotal()
-  // 激活命中变化 → 滚到可视区(等装饰画完一帧)。
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      document.querySelector('.amx-find-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    })
-    return () => cancelAnimationFrame(id)
-  }, [active, query, total])
-  return (
-    <div className="amx-findbar">
-      <input
-        autoFocus
-        placeholder={t('amxpv.findPlaceholder')}
-        value={query}
-        onChange={(e) => useFindStore.getState().setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') useFindStore.getState().step(e.shiftKey ? -1 : 1)
-          else if (e.key === 'Escape') useFindStore.getState().close()
-          e.stopPropagation()
-        }}
-      />
-      <span className="amx-findbar-count">{total ? `${Math.min(active + 1, total)}/${total}` : query ? '0' : ''}</span>
-      <button onClick={() => useFindStore.getState().step(-1)} title={t('amxpv.findPrev')} aria-label="previous match">‹</button>
-      <button onClick={() => useFindStore.getState().step(1)} title={t('amxpv.findNext')} aria-label="next match">›</button>
-      <button onClick={() => useFindStore.getState().close()} title={t('amxpv.findClose')} aria-label="close find">✕</button>
-    </div>
-  )
-}
 
 function statusLabel(s: Status, t: TFn): string {
   return s === 'saving' ? t('amxpv.statusSaving') : s === 'loading' ? t('amxpv.statusLoading') : s === 'ready' ? t('amxpv.statusReady') : ''
@@ -166,7 +124,6 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
   const [titleDraft, setTitleDraft] = useState('')
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
   const foldsByPage = useHeadingFold((s) => s.byPage)
-  const findOpen = useFindStore((s) => s.open)
 
   // 兜底:焦点不在块编辑器里(块选中态/空白处)时的 Cmd+Z / Cmd+Shift+Z / Cmd+Y → 文档级撤销。
   // 焦点在块内时块自身 handleKeyDown 已处理并 stopPropagation;输入框/整篇编辑器(contenteditable)留原生撤销。
@@ -315,15 +272,7 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
     <div
       className="page-view"
       data-bare={bare || undefined}
-      onKeyDownCapture={(e) => {
-        // 编辑器内 Cmd/Ctrl+F → 页内查找(焦点在编辑器里才接管,别抢应用全局的查找)
-        if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F') && !e.shiftKey && !e.altKey) {
-          e.preventDefault()
-          useFindStore.getState().openBar()
-        }
-      }}
     >
-      {findOpen && <FindBar />}
       <BlockSelectionKeys />
       {!bare && (
       <header className="page-header">

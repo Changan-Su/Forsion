@@ -7,6 +7,7 @@ import type { AgentConfig, AgentRunEvent, Attachment, StartRunResult, TanguDeskt
 import { CHANGELOG } from '../changelog'
 import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
+import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 
 registerMessages({
   'agentrun.authFailed': { zh: '鉴权失败(401):令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
@@ -78,6 +79,11 @@ export async function startRun(
       model_id: params.modelId || cfg.modelId || undefined,
       app_id: AGENT_APP_ID,
       client: currentClientId(),
+      // 界面面能力握手 + 目录/设置快照(引擎侧 input.uiCommands/uiSettings → ToolContext)。
+      // ⚠️ 字段**在场即代表本端会处理 `ui_cmd` 事件**,引擎据此 default-deny 三个界面工具;
+      //    所以哪怕目录为空也要送(送空数组 ≠ 不送)。目录随端而异是正确行为。
+      ui_commands: buildCommandCatalog(),
+      ui_settings: readUiSettings(),
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
@@ -151,6 +157,36 @@ export async function resolveInquiry(
     { method: 'POST', headers: headers(cfg.token), body: JSON.stringify({ answer }) },
   )
   return { ok: r.ok, gone: r.status === 410 }
+}
+
+/**
+ * 兑现一次界面动作请求(`ui_cmd`)。**成败都要发** —— 引擎那头在等,不发就是让用户干等 8 秒超时。
+ *
+ * ⚠️ 走的是 `/inquiries/:ackId` 而不是自开一条路由:云端网关只代理 runs/abort/approvals/inquiries
+ *    四条,新路由在 web 与移动端根本到不了 worker。引擎按 `ui_` 前缀分流(routes/approvals.ts)。
+ * 网络异常吞掉:重试没意义(引擎 8s 就超时了),这是纯附加能力,不该冒泡打断会话。
+ */
+export async function sendUiAck(
+  cfg: TanguDesktopConfig,
+  runId: string,
+  ackId: string,
+  body: { ok: boolean; error?: string; state?: string; settings?: Record<string, string> },
+): Promise<string> {
+  const url = `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(ackId)}`
+  // ⚠️ 界面已经改完了才发这条回执,所以「发丢了」= 用户看见变化、模型被告知失败(Codex 评审 P1-5)。
+  //    重试一次是安全的:引擎侧先到先得,重复的那次拿 410,而 410 恰恰说明前一次已被消费。
+  //    只重试网络异常与 5xx;4xx(含 410)是终局,再打没有意义。
+  // 返回值 = HTTP 状态或 'network',只进诊断缓冲(diag.ts);永不抛。
+  let outcome = 'network'
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await authFetch(url, { method: 'POST', headers: headers(cfg.token), body: JSON.stringify(body) })
+      outcome = String(r.status)
+      if (r.ok || (r.status >= 400 && r.status < 500)) return outcome
+    } catch { outcome = 'network' /* 网络异常 → 落到下面重试一次 */ }
+    if (attempt === 0) await delay(400)
+  }
+  return outcome
 }
 
 /** 兑现一次 Agent Desk 截屏请求(desk_screenshot)。失败也要发——引擎那头在等,不发就是干等超时。

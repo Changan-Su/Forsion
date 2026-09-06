@@ -165,7 +165,7 @@
   text-align: left;
   cursor: pointer;
 }
-.mini-card-row:hover, .mini-card-row.active { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text, #111); }
+.mini-card-row:hover, .mini-card-row.active { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); color: var(--text, #111); }
 .mini-card-row.active { font-weight: 600; }
 .mini-card-row > svg { flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); }
 .mini-card-row.active > svg, .mini-card-row-new > svg { color: var(--accent-ink, var(--accent)); }

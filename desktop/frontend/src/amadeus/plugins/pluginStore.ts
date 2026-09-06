@@ -51,7 +51,9 @@ import type {
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
+  TableSpec,
 } from './types'
+import { validateTableSpec } from './tableSpec'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 
@@ -625,12 +627,18 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 插件仪表盘挂载(ctx.dashboard.mount):与视图表面同一条纪律 —— 插件禁用/重载时宿主统一卸掉,
     // 否则内存作用域的 pageStore 与 React 树在插件死后还活着。
     const dashMounts = new Set<() => void>()
+    // 插件原生表挂载(ctx.table.mount):同上;另有 body 级弹层宿主要收,漏了就是页面上一堆空 div。
+    const tableMounts = new Set<() => void>()
     revokers[pluginId] = () => {
       revokeSurface()
       for (const d of Array.from(dashMounts)) {
         try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" dashboard dispose failed`, e) }
       }
       dashMounts.clear()
+      for (const d of Array.from(tableMounts)) {
+        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" table dispose failed`, e) }
+      }
+      tableMounts.clear()
       for (const u of Array.from(localeUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" locale unsubscribe failed`, e) }
       }
@@ -806,6 +814,41 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return dispose
       },
     },
+    // 面板里的原生多维表(只读、内存行)。与 dashboard.mount 同款三件套:动态 import 破环、
+    // cancelled 标志 + el.isConnected 复检、每插件一份 tableMounts 由 revoker 排空。
+    // ⚠️校验**同步**先做:tableSurface 还在飞的时候抛出去,插件才来得及降级(抛进 then 里 = 插件
+    // 永远收不到,容器空着还没有报错)。import 落地前来的 update 只换 pending 规格。
+    // 宿主没有 DOM(SSR / 台架式 node 环境)时整条省略 —— 哑桩会让插件走进原生分支然后什么都不画。
+    ...(typeof document !== 'undefined' ? { table: {
+      mount: (el: HTMLElement, spec: TableSpec) => {
+        validateTableSpec(spec)
+        let handle: { update(s: TableSpec): void; dispose(): void } | null = null
+        let pending = spec
+        let cancelled = false
+        const dispose = (): void => {
+          cancelled = true
+          tableMounts.delete(dispose)
+          handle?.dispose()
+          handle = null
+        }
+        tableMounts.add(dispose)
+        void import('./tableSurface').then((m) => {
+          // 只认 cancelled,**不看 el.isConnected**:面板每次重渲都会把容器掀掉再由 panel-lib 认领回来,
+          // import 落地那一刻容器多半正游离着 —— 此时放弃 = 句柄永远为空、容器永远空白且不回落。
+          // React 往游离节点上挂根是合法的,认领回 DOM 就显示。
+          if (cancelled) { tableMounts.delete(dispose); return }
+          handle = m.mountPluginTable(pluginId, el, pending)
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" table mount failed`, e) })
+        return {
+          update: (s: TableSpec) => {
+            validateTableSpec(s)
+            pending = s
+            handle?.update(s)
+          },
+          dispose,
+        }
+      },
+    } } : {}),
     registerPropertyType: (def) => {
       registerPropType(def)
       set((s) => ({ propertyTypes: [...s.propertyTypes, { pluginId, item: def }] }))

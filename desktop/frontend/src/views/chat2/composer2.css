@@ -77,7 +77,7 @@
   box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18)); padding: 6px;
 }
 .t2c-menu-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: none; background: transparent; color: var(--text); text-align: left; border-radius: var(--radius-sm, 8px); cursor: pointer; }
-.t2c-menu-item[data-active] { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+.t2c-menu-item[data-active] { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 .t2c-menu-cmd { font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .t2c-menu-desc { font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2c-menu-sec { padding: 5px 10px 3px; font-size: 10px; color: var(--text-faint, var(--text-muted)); }

@@ -123,7 +123,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
 
     // Amadeus 编辑器先挂一次，让 vaultRoot 与全库扫描正式就绪。
-    await clickSpace(win, ['Amadeus'])
+    await clickSpace(win, ['Note'])
     await win.waitForSelector('.am-app', { timeout: 30_000 })
     await win.waitForTimeout(2200)
     await clickSpace(win, ['日历', 'Calendar'])

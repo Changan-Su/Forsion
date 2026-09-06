@@ -3,9 +3,10 @@
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, powerMonitor, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, powerMonitor, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
+import { resolveCloudApiUrl } from './cloudApiPath.js'
 import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
@@ -1162,6 +1163,15 @@ export function isHttpUrl(url: unknown): boolean {
 /** IPC 可信来源:必须是我们自己开的窗口的**顶层** WebContents。
  *  webview guest / 子 frame / 已销毁的 sender 一律拒 —— 否则一旦 renderer 逃逸,
  *  `pty:spawn` 就是白送一个登录 shell(Electron 安全须知 #17:校验每条 IPC 的 sender)。 */
+/** 屏幕共享的**预选源**:webContents.id → { 源 id, 存入时刻 }。渲染层选完先存这儿,
+ *  setDisplayMediaRequestHandler 取用即删(见 app.whenReady 里那段)。按 wc 分桶,
+ *  免得 mini 窗与主窗互相顶掉对方的选择。
+ *  ⚠️ 两条清理都必要:①「选了源但没调 getDisplayMedia 就关窗」会永久留条目,而 webContents.id
+ *  是**会被复用**的 —— 新窗口可能捡到上一个窗口的预选(共享出用户没选的屏幕);② 超时作废,
+ *  预选只在「选完立刻调用」这一瞬有意义,留久了同样是给复用留口子。 */
+const SHARE_PRESELECT_TTL_MS = 60_000
+const pendingShareSource = new Map<number, { id: string; at: number }>()
+
 export function isTrustedSender(e: { sender: Electron.WebContents; senderFrame?: Electron.WebFrameMain | null }): boolean {
   const wc = e.sender
   if (!wc || wc.isDestroyed()) return false
@@ -1574,6 +1584,48 @@ app.whenReady().then(async () => {
   // 「未设 handler=全放行」的既有默认,不回归其他权限(通知等)。macOS 仍受系统隐私设置门控(拒了要去设置改)。
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))
   session.defaultSession.setPermissionCheckHandler(() => true)
+  // 屏幕共享:上面那条 permission handler **管不着** getDisplayMedia —— 它走的是另一条闸,
+  // 没装 setDisplayMediaRequestHandler 时逐字报 `NotSupportedError: Not supported`(实测,check:rtc C6),
+  // 界面上长得就是「点了共享没反应」。这里补上这条闸。
+  //
+  // 选源 UI **不焊进壳**:渲染层先 screenShareSources() 拿到带缩略图的源列表、自己画选择器,
+  // 选定后 screenShareSelect(id) 存下预选,再调 getDisplayMedia —— 本 handler 只负责兑现那个预选。
+  // 好处是不必主进程反向驱动渲染层弹窗(那样没人应答就永远挂着),也不必把选择器做进宿主 UI。
+  // macOS 15+ 存在系统原生选择器:useSystemPicker 让系统接管,此时本 handler 根本不会被调用。
+  //
+  // ⚠️「拒绝」这条路 Electron **没有**干净出口:请求要了 video 而回调没给,它就同步抛
+  // `TypeError: Video was requested, but no video stream was provided`。渲染层拿到的结果是对的
+  // (AbortError),但这个异常会从 handler 冒出去变成主进程的 UnhandledPromiseRejection 噪音。
+  // 所以拒绝必须包 try/catch —— 不是防御性编程,是这条 API 唯一的拒绝姿势。
+  const denyShare = (callback: (s: Electron.Streams) => void): void => {
+    try { callback({} as Electron.Streams) } catch { /* 见上:拒绝必抛,吞掉 */ }
+  }
+  session.defaultSession.setDisplayMediaRequestHandler(
+    (request, callback) => {
+      void (async () => {
+        const wc = request.frame ? webContents.fromFrame(request.frame) : undefined
+        // ⚠️ 必须确认请求来自该 WebContents 的**顶层** frame:预选是顶层(插件所在的主世界)存下的,
+        // 不校验的话同一 WebContents 里的子 frame 能抢先消费掉它 —— 拿到用户为别处选的屏幕,
+        // 而合法的那次请求反被拒。与 screenShare:select 的 isTrustedSender 同一口径。
+        const fromTop = !!wc && !!request.frame && request.frame === wc.mainFrame
+        const entry = wc && fromTop ? pendingShareSource.get(wc.id) : undefined
+        // 预选是**一次性**的:用掉即弃,否则下一次共享会静默沿用上一次选的窗口。
+        if (wc && fromTop) pendingShareSource.delete(wc.id)
+        const wanted = entry && Date.now() - entry.at < SHARE_PRESELECT_TTL_MS ? entry.id : undefined
+        if (!wanted) return denyShare(callback) // 没预选/已过期 → 渲染层拿到 AbortError,提示「请先选择共享内容」
+        try {
+          const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] })
+          const src = sources.find((x) => x.id === wanted)
+          if (!src) return denyShare(callback) // 源已消失(窗口被关) → 同样按取消处理
+          // loopback(带系统声音)只有 Windows 支持,别的平台传了会被拒。
+          callback(process.platform === 'win32' ? { video: src, audio: 'loopback' } : { video: src })
+        } catch {
+          denyShare(callback)
+        }
+      })()
+    },
+    { useSystemPicker: true },
+  )
   // 内置浏览器的 guest 走独立分区:上面那条「全放行」是为 App 自己的麦克风语音输入开的,
   // 任意第三方站点不该白拿麦克风/摄像头/定位/通知 —— 该分区**默认全拒**(且 cookie 与 App 隔离),
   // 只放行 GUEST_ALLOWED_PERMISSIONS(指针锁/全屏:必须有手势、Esc 可退、不泄露数据)。
@@ -1716,6 +1768,55 @@ app.whenReady().then(async () => {
     }
   }
   ipcMain.handle('units:list', () => unitsApi('GET', '/units'))
+
+  /**
+   * 插件调 Forsion 云端 API 的**通用接缝**(`cloud:fetch`)。
+   *
+   * 为什么必须由 main 代打:`forsion_token` 刻意不下发渲染层(与 units 名册、/open 引导页同一铁律)。
+   * 而插件跑在渲染进程里,`getConfig().token` 在 managed 模式下是**托管子进程**的 token,
+   * 打云端一律 401 —— 这条不给,插件就只能去猜,猜出来的是个 404/401 的哑弹。
+   *
+   * 为什么是通用接缝而不是逐功能 IPC:Forsion 是壳,一切皆插件;把某个插件的后端路径写进主进程
+   * 就是焊进宿主。这里给的是「以当前用户身份调你自己的 Forsion 服务端」这一条能力,谁都能用。
+   *
+   * 边界(缺一条这就成了「拿用户云端 token 打任意主机」的枪):
+   *  · 只收**相对路径**,绝对 URL / 协议相对 `//host` 一律拒 —— 用 URL 解析后比对 origin,不靠正则;
+   *  · 解析后的 pathname 必须仍在 `/api/` 之下 —— 挡掉 `/../` 逃出前缀;
+   *  · token 只进请求头,绝不回给渲染层。
+   */
+  ipcMain.handle('cloud:fetch', async (e, raw: unknown) => {
+    if (!isTrustedSender(e)) return { status: 0, error: 'untrusted' }
+    const req = (raw ?? {}) as { path?: unknown; method?: unknown; body?: unknown }
+    const path = typeof req.path === 'string' ? req.path : ''
+    const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
+    if (!/^(GET|POST|PUT|PATCH|DELETE)$/.test(method)) return { status: 0, error: 'bad_method' }
+    if (!path.startsWith('/')) return { status: 0, error: 'bad_path' }
+
+    const stored = await loadConfig()
+    if (!String(stored.cloudUrl || '')) return { status: 0, error: 'no_cloud_url' }
+    const target = resolveCloudApiUrl(stored.cloudUrl, path) // 安全边界,见该函数注释
+    if (!target) return { status: 0, error: 'bad_path' }
+
+    const token = loadTanguCreds().token
+    if (!token) return { status: 401, error: 'not_signed_in' }
+
+    const hasBody = req.body !== undefined && method !== 'GET' && method !== 'DELETE'
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), 15_000)
+    try {
+      const r = await fetch(target, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, ...(hasBody ? { 'Content-Type': 'application/json' } : {}) },
+        body: hasBody ? JSON.stringify(req.body) : undefined,
+        signal: ctl.signal,
+      })
+      return { status: r.status, json: await r.json().catch(() => null) }
+    } catch (err: any) {
+      return { status: 0, error: String(err?.message || err) }
+    } finally {
+      clearTimeout(timer)
+    }
+  })
 
   /** 系统浏览器开中转引导页,main 代拼 `#token=`(auth.json 的 forsion_token 不下发渲染层)。
    *  fragment 不出网络/不进 server 日志(≠ query),引导页用完即 replaceState 剥掉;没有这一手,
@@ -2972,6 +3073,31 @@ app.whenReady().then(async () => {
   ipcMain.handle('shell:openExternal', (e, url: string) => {
     if (!isTrustedSender(e)) return
     if (isHttpUrl(url)) void shell.openExternal(url)
+  })
+  // 屏幕共享选源:把可共享的屏幕/窗口连缩略图交给渲染层,由它画选择器(见上面的 handler)。
+  ipcMain.handle('screenShare:sources', async (e) => {
+    if (!isTrustedSender(e)) return []
+    const sources = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 320, height: 180 },
+    })
+    return sources.map((s) => ({
+      id: s.id,
+      name: s.name,
+      // 缩略图转 dataURL:渲染层 CSP 的 img-src 放行 data:,直接 <img src> 即可。
+      thumbnail: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL(),
+      isScreen: s.id.startsWith('screen:'),
+    }))
+  })
+  ipcMain.on('screenShare:select', (e, id: unknown) => {
+    if (!isTrustedSender(e)) return
+    const wcId = e.sender.id
+    if (typeof id === 'string' && id) {
+      pendingShareSource.set(wcId, { id, at: Date.now() })
+      // 窗口没走完共享流程就关掉时把条目带走 —— webContents.id 会被复用,留着等于把
+      // 上一个窗口选的屏幕交给下一个窗口。once:同一 wc 多次 select 不会堆监听。
+      if (!e.sender.isDestroyed()) e.sender.once('destroyed', () => pendingShareSource.delete(wcId))
+    } else pendingShareSource.delete(wcId)
   })
   // 外部日历订阅(.ics)必须在主进程拉:Google / Outlook / Apple 的订阅地址都不发 CORS 头,
   // 渲染层直接 fetch 一律被浏览器拦下。`webcal://` 是历史别名,等价 https。

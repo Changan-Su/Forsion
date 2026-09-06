@@ -1071,7 +1071,7 @@
 .amx-iconpick { width: 288px; max-height: 320px; }
 .amx-iconpick-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; overflow-y: auto; padding: 4px 2px; }
 .amx-iconpick-item { border: none; background: transparent; font-size: 17px; line-height: 1; padding: 5px 0; border-radius: 6px; cursor: pointer; }
-.amx-iconpick-item:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.amx-iconpick-item:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 .amx-iconpick-item.active { background: color-mix(in srgb, var(--accent, #6c5ce7) 15%, transparent); }
 /* 分组标题占满整行(网格 8 列);搜索态没有分组,只出扁平结果。 */
 .amx-iconpick-group { grid-column: 1 / -1; padding: 6px 4px 2px; font-size: 11px; opacity: 0.55; position: sticky; top: 0; background: var(--bg-elevated, var(--bg, #fff)); }
@@ -1783,7 +1783,7 @@
   font: inherit; font-size: 12.5px; text-align: left;
   padding: 5px 8px; border-radius: 6px; cursor: pointer;
 }
-.dash-add-menu button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.dash-add-menu button:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 .dash-add-menu button.dash-danger:hover { color: var(--danger, #e5484d); }
 /* 「视图」区是注册表全量(几十条,还会随插件长)→ 菜单必须能滚,不能顶穿窗口。 */
 .dash-add-menu { max-height: min(62vh, 460px); overflow-y: auto; }

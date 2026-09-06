@@ -5,7 +5,7 @@
 import { Fragment, type ReactNode, type CSSProperties, type RefObject, type DragEvent as RDragEvent, type MouseEvent as RMouseEvent, type ClipboardEvent as RClipboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'zustand'
 import {
-  SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen,
+  SquarePen, FolderOpen, Folder, FolderPlus, Plus, MoreHorizontal, Pencil, Trash2, BookOpen, BookMarked,
   ChevronRight, Search, Code2, Eye, Star, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
   Undo2, Redo2, ChevronsDown, Frame,
@@ -34,6 +34,7 @@ import type { TrashEntry } from '@amadeus-shared/ipc'
 import type { AmadeusSyncStatus } from './types'
 import { openNote, openDb, openPdf, openImage, openDrawing, openDashboard, openFile, createDrawing, createDashboard, openSearch } from './amadeusNav'
 import { openTutorial } from './amadeusTutorial'
+import { openManual } from './amadeusManual'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { REF_MIME, PATHS_MIME, readChatRefs, setChatRefDrag } from './views/chat2/chatDragRef'
@@ -179,6 +180,7 @@ registerMessages({
   'amxv.welcome.pickNote': { zh: '从左栏选一篇笔记开始,或新建一篇。', en: 'Pick a note in the sidebar to get started, or create a new one.' },
   'amxv.welcome.noVault': { zh: '把任意文件夹选作你的笔记库(Vault)就能开写 —— 所见即所得,像 Obsidian 一样用双链把想法连起来。', en: 'Choose any folder as your vault and start writing — WYSIWYG editing, with Obsidian-style wikilinks to connect your ideas.' },
   'amxv.welcome.tutorial': { zh: '使用教程', en: 'Tutorial' },
+  'amxv.welcome.manual': { zh: '使用手册', en: 'User manual' },
   'amxv.welcome.openVaultFolder': { zh: '打开 Vault 文件夹', en: 'Open a vault folder' },
   'amxv.welcome.tip1': { zh: '引用其它笔记,自动生成反向链接', en: 'links to another note, and backlinks are generated automatically' },
   'amxv.welcome.tip2': { zh: '拖入图片 / 文件直接插入;支持数据库块、LaTeX、代码高亮', en: 'Drop in images or files to insert them; database blocks, LaTeX and syntax highlighting are all supported' },
@@ -2500,6 +2502,8 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
                 <button className="amx-welcome-btn" onClick={() => void myPs().createPage()}><SquarePen size={16} /> {t('amadeus.new.note')}</button>
                 {/* 新手的第一站:教程本身是一篇可改的笔记(生成到 vault),文档/画布两种模式都讲。 */}
                 <button className="amx-welcome-btn ghost" onClick={() => void openTutorial()}><BookOpen size={16} /> {t('amxv.welcome.tutorial')}</button>
+                {/* 教程之后的第二站:全量参考(中英各一份落进 vault),想查什么翻什么。 */}
+                <button className="amx-welcome-btn ghost" onClick={() => void openManual()}><BookMarked size={16} /> {t('amxv.welcome.manual')}</button>
               </>
             ) : (
               <button className="amx-welcome-btn" onClick={() => void myPs().openVault()}><FolderOpen size={16} /> {t('amxv.welcome.openVaultFolder')}</button>

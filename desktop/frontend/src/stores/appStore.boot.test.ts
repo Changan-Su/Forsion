@@ -21,7 +21,7 @@ type St = { state: 'stopped' | 'starting' | 'ready' | 'crashed'; url: string | n
 const ready: St = { state: 'ready', url: 'http://127.0.0.1:1', pid: 1, lastError: null }
 
 /** 假 window.tangu:getConfig 延迟 resolve;broadcast() 只送给当下已注册的监听器(没人订阅就丢,与真 IPC 同)。 */
-function arm(opts: { mode?: 'managed' | 'external'; snapshot?: St['state']; getConfigDelayMs?: number; status?: St; listProvidersNever?: boolean }) {
+function arm(opts: { mode?: 'managed' | 'external'; snapshot?: St['state']; getConfigDelayMs?: number; status?: St; listProvidersNever?: boolean; host?: boolean }) {
   const listeners = new Set<(st: St) => void>()
   const cfg = { mode: opts.mode ?? 'managed', backendUrl: 'http://127.0.0.1:1', token: 'tok', modelId: '', backendState: { state: opts.snapshot ?? 'starting' } }
   const tangu = {
@@ -32,6 +32,8 @@ function arm(opts: { mode?: 'managed' | 'external'; snapshot?: St['state']; getC
     listProviders: () => (opts.listProvidersNever ? new Promise(() => {}) : Promise.resolve([])),
     envCheck: () => Promise.resolve({}),
   }
+  // host=false 摹 web/mobile 的 shim:没有 envCheck(preload 只在 !PRODUCT.agentBackend 时删它)。
+  if (opts.host === false) delete (tangu as Record<string, unknown>).envCheck
   ;(globalThis as any).window = { tangu }
   useApp.setState({ ...initial, tr: (k: string) => k, toast: () => {} }, true)
   return { broadcast: (st: St) => listeners.forEach((cb) => cb(st)), listeners }
@@ -150,5 +152,33 @@ describe('appStore.boot:ready 广播缺口 + managed 重连', () => {
     await bootNow()
     await vi.advanceTimersByTimeAsync(BOOT_RETRY_MS * 3)
     expect(testConnection).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('appStore.boot:非 host(web/移动端)的首启引导', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    testConnection.mockReset()
+    testConnection.mockResolvedValue({ ok: true, message: 'ok' })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    delete (globalThis as any).window
+  })
+
+  it('无 envCheck 且没跳过过 → 弹引导(不查 authStatus/provider:登录在挂载前已完成)', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
+    arm({ mode: 'external', host: false })
+    await bootNow()
+    expect(useApp.getState().onboarding).toBe(true)
+  })
+
+  it('负对照:同样无 envCheck,但已记过 dismiss → 不弹', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => '1', setItem: () => {} })
+    arm({ mode: 'external', host: false })
+    await bootNow()
+    expect(useApp.getState().onboarding).toBe(false)
   })
 })

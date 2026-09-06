@@ -10,6 +10,7 @@ import './styles/base.css'
 import './amadeus-host.css'
 import './amadeus/styles.css'
 import { MarkdownBlock } from './amadeus/blocks/markdown/MarkdownBlock'
+import { FindBar, openFindBar } from './findInPage'
 import { AskStringHost } from './amadeus/components/askString'
 import { DeleteAssetsHost } from './amadeus/components/askDeleteAssets'
 import type { FocusPlace } from './amadeus/blocks/registry'
@@ -24,6 +25,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
 import { setTanguProbe } from '@amadeus/plugins/tanguSeam'
 import { applyTheme as applyRealTheme } from './theme/loader'
+import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
 import { setLocaleGlobal } from './i18n'
 import { Square } from 'lucide-react'
@@ -38,7 +40,7 @@ import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
 import { NoteTabIcon } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
-import type { ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
 import { FileText as FileTextIcon } from 'lucide-react'
 import { QuickFind, useQuickFind } from './quickFind'
@@ -1070,6 +1072,65 @@ if (new URLSearchParams(location.search).has('dock')) {
     fmExtra: () => pageStoreFor((w.__dashMount as { scope: string }).scope).getState().manifest?.fmExtra ?? '',
   }
   mount(null)
+} else if (new URLSearchParams(location.search).has('tablemount')) {
+  // ?tablemount:**插件原生表接缝的真渲染面**(ctx.table.mount → mountPluginTable,只读 + 内存行)。
+  // 挂载点故意套一层复刻插件皮肤 `.fsa-adm` 的盒子(`container-type: inline-size` + `overflow: auto`)——
+  // 那两条正是把 `position:fixed` 弹层锚歪并裁掉的元凶,不套上就恒绿。见 scripts/tablemount.check.cjs。
+  const dark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  useTheme.setState({ mode: dark ? 'dark' : 'light' }) // 表面读的是 store 的 mode,不是文档属性
+  const rootEl = document.getElementById('root')!
+  rootEl.style.cssText = 'position:fixed;inset:0;overflow:auto;padding:32px 24px'
+  const skin = document.createElement('div')
+  skin.setAttribute('data-hook', 'plug-skin')
+  skin.style.cssText = 'container-type:inline-size;overflow:auto;max-height:340px;border:1px solid rgba(127,127,127,.35);border-radius:8px'
+  const host = document.createElement('div')
+  skin.appendChild(host)
+  rootEl.appendChild(skin)
+  const ROWS: TableSpec['rows'] = [
+    { id: 'm1', cells: { name: { text: 'DeepSeek-V4-Pro', sub: 'deepseek/v4-pro', avatar: { letter: 'D', attrs: { 'data-hook': 'fb-avatar' } } }, calls: { text: '58.5 万', sortValue: 585000 }, day: '2026-09-05', state: 'on', pub: true, site: { text: 'deepseek.com', href: 'https://deepseek.com' } } },
+    { id: 'm2', cells: { name: { text: 'Qwen3-Max', sub: 'qwen/qwen3-max', dot: 'green' }, calls: { text: '9', sortValue: 9 }, day: '2026-09-01', state: 'off', pub: false, site: null } },
+    { id: 'm3', cells: { name: { text: 'moon/shot 1', mono: true, title: '带斜杠的 id' }, calls: { text: '1.2 万', sortValue: 12000 }, day: '2026-08-20', state: 'on', pub: true, site: null } },
+    { id: 'm4', cells: { name: 'Claude-Fable', calls: { text: '77', sortValue: 77 }, day: '2026-08-11', state: { value: 'off' }, pub: false, site: null } },
+    { id: 'm5', cells: { name: { text: 'Aeon-mini', tone: 'muted' }, calls: { text: '3', sortValue: 3 }, day: '2026-07-30', state: 'on', pub: true, site: null } },
+  ]
+  const w = window as unknown as {
+    __tableMount: { opened: string[]; rendered: number; renderedRows: number[]; sorts: Array<{ key: string; dir: string } | null>; acts: string[]; mounted: boolean; update(n: number): void; dispose(): void }
+  }
+  w.__tableMount = { opened: [], rendered: 0, renderedRows: [], sorts: [], acts: [], mounted: false, update: () => {}, dispose: () => {} }
+  // 面板既有的**委托点击**必须照样收得到原生操作按钮(整个接缝的兼容承诺)。
+  document.addEventListener('click', (e) => {
+    const el = (e.target as HTMLElement | null)?.closest?.('[data-act]') as HTMLElement | null
+    if (el) w.__tableMount.acts.push(el.getAttribute('data-act') || '')
+  })
+  const specOf = (n: number): TableSpec => ({
+    id: 'models',
+    columns: [
+      { key: 'name', label: '模型', kind: 'text', width: 200 },
+      { key: 'calls', label: '调用', kind: 'number' },
+      { key: 'day', label: '日期', kind: 'date', format: 'day' },
+      { key: 'state', label: '状态', kind: 'select', options: [{ value: 'on', label: '启用', color: 'green' }, { value: 'off', label: '停用', color: 'gray' }] },
+      { key: 'pub', label: '公开', kind: 'check' },
+      { key: 'site', label: '主页', kind: 'url' },
+    ],
+    rows: ROWS.slice(0, n),
+    actionsLabel: '操作',
+    actions: (row) => [{ act: 'm-edit', label: '编辑', attrs: { 'data-id': row.id } }],
+    rowAttrs: (row) => ({ 'data-act': 'm-row', 'data-id': row.id }),
+    selectedId: 'm2',
+    empty: '没有模型',
+    onRowOpen: (row) => { w.__tableMount.opened.push(row.id) },
+    onSort: (s) => { w.__tableMount.sorts.push(s) },
+    // ⚠️提交后取行数:H1 若把 db→local 的同步放进 useEffect,这一发就会读到**上一批**行,
+    //   下面 T9 的 renderedRows 断言正是为了抓这种「onRender 早于数据落地」的静默错位。
+    onRender: (el) => { w.__tableMount.rendered += 1; w.__tableMount.renderedRows.push(el.querySelectorAll('.amx-db-row:not(.amx-db-hrow):not(.amx-db-statsrow)').length) },
+  })
+  void import('./amadeus/plugins/tableSurface').then((m) => {
+    const handle = m.mountPluginTable('harness-plugin', host, specOf(5))
+    w.__tableMount.update = (n) => handle.update(specOf(n))
+    w.__tableMount.dispose = () => handle.dispose()
+    w.__tableMount.mounted = true
+  })
 } else if (new URLSearchParams(location.search).has('dashrecipe')) {
   // ?dashrecipe:**配方编译器的真渲染面**——compileDashboardRecipe 的字节经真解码器
   // (parseBody/parseFrontmatter/parseLayout)进 pageStore,再由真 DashboardGridView 渲染。
@@ -1595,16 +1656,23 @@ if (new URLSearchParams(location.search).has('dock')) {
     //    做成 opt-in 而不是改默认壳:`unified-page` / `unified-columns` 两套仪器也吃 ?upage,
     //    换掉默认纸面宽度会连带动它们的几何。
     const upane = new URLSearchParams(location.search).has('upane')
+    // 页内查找:生产里浮条挂 Root、由 `find-in-page` 命令(mod+f)开;台架没有 Shell 也没有
+    // installEngine,所以这里手动挂条 + 把开条函数露出来给仪器直接调 —— 仪器验的是**查找引擎**
+    // (扫描/计数/步进/定位/收尾),热键与命令注册那半在真 Electron 里人工过(见 DESIGN.md §8)。
+    ;(window as unknown as { __openFind?: () => void }).__openFind = openFindBar
     createRoot(document.getElementById('root')!).render(
-      upane ? (
-        <div className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
-          <UPageHost />
-        </div>
-      ) : (
-        <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
-          <UPageHost />
-        </div>
-      ),
+      <>
+        <FindBar />
+        {upane ? (
+          <div className="am-app tangu-lovable amx-pane amx-editor" data-mode="light" data-flat="0" style={{ position: 'fixed', inset: 0 }}>
+            <UPageHost />
+          </div>
+        ) : (
+          <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
+            <UPageHost />
+          </div>
+        )}
+      </>,
     )
   })
 } else if (new URLSearchParams(location.search).has('unified')) {

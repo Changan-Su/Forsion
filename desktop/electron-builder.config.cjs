@@ -99,7 +99,19 @@ module.exports = {
       : []),
   ],
   linux: { target: 'AppImage', icon: 'build/icon.png' },
-  mac: { target: 'dmg', icon: 'build/icon.icns', identity: null, extendInfo: { NSMicrophoneUsageDescription: 'Forsion 需要访问麦克风以进行语音输入(将语音转写为文字)。' } },
+  mac: {
+    target: 'dmg',
+    icon: 'build/icon.icns',
+    identity: null,
+    // 三条 TCC 用途说明。缺了对应那条 = 首次请求权限时**直接崩**(不是弹窗被拒,是进程挂掉)。
+    // NSCamera 不写的话 Electron 基础 plist 里那句英文默认文案会顶上来,英文出现在中文界面里。
+    extendInfo: {
+      NSMicrophoneUsageDescription: 'Forsion 需要访问麦克风,用于语音输入与通话。',
+      NSCameraUsageDescription: 'Forsion 需要访问摄像头,用于视频通话。',
+      // 屏幕共享:macOS 的「屏幕录制」授权走系统设置,不经 plist 弹窗,但写清用途便于审核与用户理解。
+      NSScreenCaptureUsageDescription: 'Forsion 需要录制屏幕,用于在通话中共享屏幕。',
+    },
+  },
   dmg: {
     window: { width: 560, height: 440 },
     contents: [

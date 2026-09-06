@@ -500,7 +500,7 @@
   padding: 0 var(--menu-shell-padding, 4px) var(--menu-shell-padding, 4px);
 }
 .project-menu-item.t2sw-mode-item.is-selected { background: var(--accent-light); color: var(--accent-ink); }
-.project-menu-item.t2sw-mode-item:focus-visible { outline: none; background: var(--overlay-light); color: var(--text); }
+.project-menu-item.t2sw-mode-item:focus-visible { outline: none; background: var(--menu-hover, rgba(127, 127, 127, 0.12)); color: var(--text); }
 .project-menu-item.t2sw-mode-item.is-selected:focus-visible { background: var(--accent-light); color: var(--accent-ink); }
 .t2sw-mode-item .project-menu-check { display: inline-flex; width: 14px; justify-content: center; }
 @media (prefers-reduced-motion: reduce) {
@@ -575,7 +575,7 @@
   padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
   border-radius: var(--radius-sm, 8px); cursor: pointer; font-size: 12.5px; line-height: 1.4; color: var(--text);
 }
-.t2sw-plug-menu div:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+.t2sw-plug-menu div:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 
 /* 工作区 view 的条目纵向留白再收至约 0.65×:4.5px → 3px、6px → 4px。
  * 只压「条目之间」的观感,不动字号、图标、横向缩进与按钮命中区;放在末尾以稳定覆盖三种内置模式

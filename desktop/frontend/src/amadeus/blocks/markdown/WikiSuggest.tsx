@@ -1,6 +1,7 @@
 // Popup for [[ autocomplete. Suggests pages AND vault files (fuzzy) and lets the user insert one.
-// Obsidian 式:候选不按 basename 去重 —— 每个路径一行(名字加粗 + 目录副标题),重名时插入
-// 带路径的链接 `dir/Name|Name`(「唯一即最短」);onPick 收到的就是最终 [[ ]] 内文。
+// 候选不按 basename 去重 —— 每个路径一行,重名时插入带路径的链接 `dir/Name|Name`(「唯一即最短」);
+// onPick 收到的就是最终 [[ ]] 内文。行是单行密排(与 slash / ctx 菜单同一 28px 正典),目录**只在重名时**
+// 作右侧灰字 —— 不然两个 README 长得一样而 linkInner 悄悄选了一个(用户 09-05:「路径可以去掉」)。
 // 文件(.db/附件)候选保留扩展名(文件命名空间凭扩展名区分页面,见 lib/vaultFiles),带小图标。
 // Only intercepts navigation keys (Arrow/Enter/Tab/Esc) in the capture phase — letters
 // and Backspace fall through to ProseMirror so the in-document query keeps updating.
@@ -13,6 +14,13 @@ import { pageKey } from '@amadeus-shared/links'
 import { AttachmentIcon, DatabaseTableViewIcon } from '../../components/icons'
 import { dateCandidates } from './dateQuery'
 import { usePageStore } from '../../store/pageStore'
+import { registerMessages, useI18n } from '../../../i18n'
+
+registerMessages({
+  'wiki.sec.date': { zh: '日期', en: 'Date' },
+  'wiki.sec.page': { zh: '链接到页面', en: 'Link to page' },
+  'wiki.create': { zh: '新建链接 “{q}”', en: 'New link “{q}”' },
+})
 
 interface Props {
   query: string
@@ -28,9 +36,10 @@ interface Props {
   onClose: () => void
   /** false = 不提供「新建链接」行(@ 提及场景:无匹配即整体消失,不劫持 Enter)。 */
   allowCreate?: boolean
-  /** true(@ 提及场景)= 查询串同时按日期解析,命中就在页面候选**之上**多出「日程 / 提醒」两行。
-   *  Notion 的 `@` 菜单同款分区(Date / People / Link to page)。选中走 onPickRaw 而不是 onPick
-   *  —— 插入的是字面 `@2026-09-01T14:30`,不是 `[[ ]]`。 */
+  /** true(@ 提及场景)= 查询串同时喂给 dateCandidates,命中就在页面候选**之上**多出日期行
+   *  (`@r` → 提醒、`@t` → 今天/明天、`@2200` → 日程/提醒;裸 `@` 三条全给)。Notion 的 `@` 菜单
+   *  同款分区(Date / Link to page)。选中走 onPickRaw 而不是 onPick —— 插入的是字面
+   *  `@2026-09-01T14:30`,不是 `[[ ]]`。 */
   dates?: boolean
   /** 日期候选的插入回调;调用方负责把它写进文档(见 MarkdownBlock.pickMentionRaw)。 */
   onPickRaw?: (text: string) => void
@@ -55,6 +64,7 @@ const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.
 
 export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, allowCreate = true, dates = false }: Props) {
   const [active, setActive] = useState(0)
+  const { t } = useI18n()
   const icons = usePageStore((s) => s.icons) // 页面 emoji(path 键);非 vault 候选池查不到 → 无图标,天然兼容
 
   const cands: Cand[] = [
@@ -126,13 +136,19 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
 
   if (total === 0) return null
 
+  // 键盘选中项滚进可视区(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳);同 slash。
+  const reveal = (i: number) => (i === active ? (el: HTMLButtonElement | null) => el?.scrollIntoView({ block: 'nearest' }) : undefined)
+
   return (
     <OverlayAt className="wiki-suggest" x={left} y={top} anchorTop={anchorTop} role="menu">
+      {/* 分组标签只在 @ 提及场景(Notion 的 Date / Link to page);[[ 只有页面,标签是噪音。 */}
+      {dates && dateCands.length > 0 && <div className="slash-group-label">{t('wiki.sec.date')}</div>}
       {dateCands.map((d, i) => (
         <button
           key={d.insert}
           className="wiki-item"
           data-active={i === active || undefined}
+          ref={reveal(i)}
           onMouseEnter={() => setActive(i)}
           onMouseDown={(e) => {
             e.preventDefault()
@@ -141,14 +157,16 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
           role="menuitem"
         >
           <span className="wiki-item-name">{d.label}</span>
-          <span className="wiki-item-path">{d.hint}</span>
+          <span className="wiki-item-hint">{d.hint}</span>
         </button>
       ))}
+      {dates && results.length > 0 && <div className="slash-group-label">{t('wiki.sec.page')}</div>}
       {results.map((c, i) => (
         <button
           key={(c.file ? 'f:' : 'p:') + c.path}
           className="wiki-item"
           data-active={i + dateCands.length === active || undefined}
+          ref={reveal(i + dateCands.length)}
           onMouseEnter={() => setActive(i + dateCands.length)}
           onMouseDown={(e) => {
             e.preventDefault()
@@ -170,13 +188,14 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
             )}
             {c.base}
           </span>
-          <span className="wiki-item-path">{dirOf(c.path) || '/'}</span>
+          {(dupes.get(candKey(c)) ?? 0) > 1 && <span className="wiki-item-hint">{dirOf(c.path) || '/'}</span>}
         </button>
       ))}
       {showCreate && (
         <button
           className="wiki-item wiki-create"
           data-active={active === dateCands.length + results.length || undefined}
+          ref={reveal(dateCands.length + results.length)}
           onMouseEnter={() => setActive(dateCands.length + results.length)}
           onMouseDown={(e) => {
             e.preventDefault()
@@ -184,7 +203,9 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
           }}
           role="menuitem"
         >
-          新建链接 “{q}”
+          {/* 同其余行包进 .wiki-item-name 拿 ellipsis:裸文本是匿名 flex item,min-width:auto 不可收缩,
+              长查询串会把面板顶出横向滚动(评审实测 panel scrollWidth 354 > clientWidth 318)。 */}
+          <span className="wiki-item-name">{t('wiki.create', { q })}</span>
         </button>
       )}
     </OverlayAt>

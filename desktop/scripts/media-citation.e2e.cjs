@@ -191,7 +191,7 @@ async function main() {
     await win.waitForTimeout(1200)
     // ⚠️ e2e 与用户 dev 实例共用 renderer 存储(dev userData 恒为 forsion-desktop-dev),
     // 「上次 Space」谁最后用谁说了算 —— 不显式切,断言会跑在根本没有聊天侧栏的界面上。
-    const spaceBtn = win.locator('.rb-space[title="Tangu"]').first()
+    const spaceBtn = win.locator('.rb-space[title="Agent"]').first()
     if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
     if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})

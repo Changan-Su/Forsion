@@ -145,7 +145,7 @@ async function main() {
     check('S1 ribbon 出现「电脑销售ERP」Space(bundle spaces/ 从磁盘装载)', hasSpace)
 
     // ── S2 进 Amadeus 让 vault 落地 → 插件按库播种 ───────────────────────────────
-    check('S2a 能点进 Amadeus', await clickSpace(win, ['Amadeus']))
+    check('S2a 能点进 Amadeus', await clickSpace(win, ['Note']))
     await win.waitForSelector('.am-app', { timeout: 30_000 }).catch(() => {})
     const seeded = await until(() => ['库存表.db', '入库记录.db', '出库记录.db', '订单总表.db', '任务表.db', '财务表.db', '财务仪表盘.dashboard.md'].every((f) => fs.existsSync(erp(f))), 60_000)
     check('S2 六张 .db + 财务仪表盘 真落进库的 电脑销售ERP/', seeded, seeded ? '' : `已有:${fs.existsSync(path.join(vault, FOLDER)) ? fs.readdirSync(path.join(vault, FOLDER)).join(',') : '(无文件夹)'}`)

@@ -57,6 +57,23 @@ describe('插件契约 ↔ 作者手册漂移', () => {
     expect(missing, `手册没提这些接缝:${missing.join(', ')}`).toEqual([])
   })
 
+  it('①b CommandContribution 每个字段都在 SKILL.md 露过面', () => {
+    // 规则 ① 只枚举 PluginContext 顶层成员,给 **贡献点类型** 加字段是静默绿 —— 2026-09-04 加
+    // `invoke` 时踩到:插件作者按手册写,永远不知道有这个字段。贡献点类型也得有一条。
+    const members = membersOf(types, 'CommandContribution')
+    expect(members.length, '抽取失效自检:CommandContribution 至少 4 个字段').toBeGreaterThanOrEqual(4)
+    const missing = members.filter((m) => !skill.includes(m))
+    expect(missing, `手册没提这些字段:${missing.join(', ')}`).toEqual([])
+  })
+
+  it('①c registerCommand 的「只做导航」旧规不许与 invoke 并存', () => {
+    // 两句话直接打架:声明了 invoke 的命令就是动作面。留着旧规 = 手册自相矛盾,
+    // 插件作者按哪句写都可能被打回。
+    if (skill.includes('invoke')) {
+      expect(skill, 'SKILL.md 同时写着「只做导航」和 invoke —— 二者必须收敛').not.toMatch(/\*\*只做导航\*\*/)
+    }
+  })
+
   it('② 库依赖行为表:手册必须写明 writeFile 无库会 reject、vaultRoot 是探测口', () => {
     expect(skill).toMatch(/No vault is open/)
     expect(skill).toMatch(/vaultRoot/)

@@ -127,7 +127,7 @@ async function main() {
     const order0 = JSON.stringify(seeded.order)
     await win.click('.rb-home .rb-space', { button: 'right' })
     await win.waitForTimeout(500)
-    await win.click('.ctx-menu button:has-text("Tangu")')
+    await win.click('.ctx-menu button:has-text("Agent")')
     await win.waitForTimeout(900)
     const swapped = await win.evaluate(SNAP)
     await win.click('.rb-home .rb-space', { button: 'right' })
@@ -140,9 +140,9 @@ async function main() {
     const homeAt = swapped.top.indexOf('主页')
     check(
       '3 右键换主位:新的进槽/旧的回上区且回到原格,持久顺序一个字没变',
-      swapped.slot[0] === 'Tangu' && !swapped.top.includes('Tangu') && swapped.slotPref === 'tangu'
-        && homeAt === swapped.top.indexOf('收件箱') + 1 && homeAt === swapped.top.indexOf('Amadeus') - 1
-        && back.slot[0] === '主页' && back.top.includes('Tangu') && !back.top.includes('主页')
+      swapped.slot[0] === 'Agent' && !swapped.top.includes('Agent') && swapped.slotPref === 'tangu'
+        && homeAt === swapped.top.indexOf('收件箱') + 1 && homeAt === swapped.top.indexOf('Note') - 1
+        && back.slot[0] === '主页' && back.top.includes('Agent') && !back.top.includes('主页')
         && JSON.stringify(swapped.order) === order0 && JSON.stringify(back.order) === order0
         && seeded.order.length === SEED.length,
       JSON.stringify({ swappedTop: swapped.top, homeAt, backSlot: back.slot, backTop: back.top, orderStable: JSON.stringify(back.order) === order0 }),
@@ -153,11 +153,11 @@ async function main() {
     await win.waitForTimeout(300)
     ;({ app, win } = await restart(app))
     const b4 = await win.evaluate(SNAP)
-    check('4 启动档「主位槽」(缺省):重启落在主位所指的 Space', b4.active === 'amadeus' && b4.slot[0] === 'Amadeus', JSON.stringify({ active: b4.active, slot: b4.slot }))
+    check('4 启动档「主位槽」(缺省):重启落在主位所指的 Space', b4.active === 'amadeus' && b4.slot[0] === 'Note', JSON.stringify({ active: b4.active, slot: b4.slot }))
 
     // 5 启动档「上次退出」:切到 Tangu 再重启,应回 Tangu(而不是主位的 Amadeus)
     await win.evaluate(`localStorage.setItem('forsion_default_space', '__last__')`)
-    await win.click('.rb-top .rb-space[title="Tangu"]')
+    await win.click('.rb-top .rb-space[title="Agent"]')
     await win.waitForTimeout(1800)
     ;({ app, win } = await restart(app))
     const b5 = await win.evaluate(SNAP)

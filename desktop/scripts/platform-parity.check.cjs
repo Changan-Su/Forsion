@@ -71,7 +71,6 @@ const SKIP = {
   // —— 根组件 ——
   Root: '移动端的对位物就是 MobileRoot 自己',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
-  OnboardingWizard: '引导做的是 setConfig({mode:managed})/providerLogin/envCheck,全是 host 概念;移动端只有云端一条路,登录在挂载前已由 mobileShim 深链完成',
   MarketModal: '入口 rb-market 门控在 window.tangu?.marketList,移动 shim 无此方法 → 该 ribbon 项根本不注册,没有可点入口',
   FeedbackModal: '同上:入口(2026-08-31 起是 open-feedback 命令,此前是 rb-feedback 图标)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',
   PluginOnboardingHost: '引导就绪卡只对「刚装好的」插件弹,而装插件是 host 能力(移动端装不了)。注:内建插件(callout/字数统计)在移动端照常启用,但它们不声明 onboarding',

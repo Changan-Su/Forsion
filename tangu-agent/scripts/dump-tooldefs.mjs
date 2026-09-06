@@ -42,6 +42,10 @@ const all = {
   all['tangu-none:host+gui'] = getToolDefinitions({
     userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
     execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0',
+    // 界面面(list_ui_commands / set_ui_setting / run_ui_command)另有一道能力握手闸:客户端
+    // 上报过命令目录才注册。不给这个字段,三个工具在快照里就是零覆盖——绿得没有意义。
+    uiCommands: [],
+
   });
 }
 process.stdout.write(JSON.stringify(all, null, 2) + '\n');

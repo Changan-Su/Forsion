@@ -11,6 +11,7 @@ import { TopBar } from './views/TopBar'
 import { SettingsModal } from './components/SettingsModal'
 import { AmadeusOverlays } from './amadeusOverlays'
 import { QuickFind } from './quickFind'
+import { FindBar } from './findInPage'
 import { HoverTip } from './hoverTip'
 import { MarketModal } from './components/MarketModal'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
@@ -113,6 +114,8 @@ export function Root() {
           web 复用本 Root 也带着它 —— 没有 units 桥就永远不激活,零可见影响。 */}
       <UnitRemoteSurface />
       <QuickFind />
+      {/* 页内查找浮条(mod+f)。挂在这里而不是编辑器里 —— 它服务所有 View。 */}
+      <FindBar />
       <HoverTip />
 
 

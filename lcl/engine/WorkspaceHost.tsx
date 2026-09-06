@@ -12,13 +12,15 @@ import {
   type IDockviewHeaderActionsProps,
   type DockviewTheme,
 } from 'dockview-react'
-import { X, Plus, PanelLeft, PanelRight, PanelBottom, ArrowLeft, ArrowRight, AppWindow } from 'lucide-react'
+import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
-import { label } from './types'
+import { label, identitySig } from './types'
+import { ExtendViewHost } from './ExtendViewHost'
+import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension } from './dockviewStore'
 import { useNav } from './navStore'
 import { getActiveSpace } from './spaceRegistry'
 import { computeDropTarget, locOf, type DropTarget } from './dropModel'
@@ -32,7 +34,7 @@ function viewRefFromParams(params: Record<string, unknown> | undefined, componen
   const { __loc, __type, ...userParams } = raw
   void __loc
   const type = (typeof __type === 'string' && __type) || component || ''
-  return type ? { type, params: userParams } : null
+  return type && type !== '__extend' ? { type, params: userParams } : null
 }
 
 /** 从 Dockview panel props 造引擎 Leaf。 */
@@ -83,7 +85,9 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       >
         <ViewErrorBoundary>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
-            {def.factory({ leaf, params: leaf.params })}
+            {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={`${leaf.id}:${leaf.type}:${identitySig(leaf.params)}`}>
+              {(extendView) => def.factory({ leaf, params: leaf.params, extendView })}
+            </ExtendViewHost> : def.factory({ leaf, params: leaf.params })}
           </Suspense>
         </ViewErrorBoundary>
       </div>
@@ -123,7 +127,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   }, [api])
   const type = ((params as { __type?: string } | undefined)?.__type) || (api as { component?: string }).component || ''
   const def = getView(type)
-  const Icon = def?.icon
+  const Icon = type === '__extend' ? AppWindow : def?.icon
   const TabIcon = def?.TabIcon // 有就压过静态 icon(如笔记 tab 显示用户设的 emoji);回退归它自己
   const closable = def?.closable !== false
   const loc = (params as { __loc?: string } | undefined)?.__loc
@@ -140,7 +144,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   // 原生 dragstart(非 React prop):须先于祖先 .dv-tab 的 Dockview 监听截断,见 onTabDragStart 注释。
   useEffect(() => {
     const el = tabRef.current
-    if (!el) return
+    if (!el || type === '__extend') return // 临时 View 不可拖去别处:它归属主视图,搬进主区会让「独占组」判断失真(评审抓到)
     const onDragStart = (e: DragEvent): void => onTabDragStart(e, el, api.id)
     el.addEventListener('dragstart', onDragStart)
     return () => el.removeEventListener('dragstart', onDragStart)
@@ -150,7 +154,8 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       ref={tabRef}
       className={`wb-tab${iconOnly ? ' wb-tab--icon' : ''}${loc === 'left' ? ' wb-tab--left' : ''}${type === 'sidebar-empty' || type === 'home' ? ' wb-tab--empty' : ''}`}
       title={api.title}
-      draggable
+      data-transient={type === '__extend' ? 'true' : undefined}
+      draggable={type !== '__extend'}
       onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}
     >
       {TabIcon
@@ -174,7 +179,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
           {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。 */}
-          {getDetachApi() && (
+          {type !== '__extend' && getDetachApi() && (
             <button onClick={() => {
               const ref = viewRefFromParams(params as Record<string, unknown> | undefined, (api as { component?: string }).component)
               const d = getDetachApi()
@@ -376,6 +381,7 @@ export const WorkspaceHost: React.FC<{
   const components = useMemo(() => {
     const map: Record<string, React.FC<IDockviewPanelProps>> = {}
     for (const def of allViews()) map[def.type] = makeComponent(def)
+    map['__extend'] = (props) => <NativeExtendView id={props.api.id} side={props.params.__loc} />
     map['__frame'] = makeFrameHost(new Map()) // 主区统一宿主(见 makeFrameHost)
     return map
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -515,7 +521,14 @@ export const WorkspaceHost: React.FC<{
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */
         onReady={onReady}
       />
-      {/* 右上角浮层两枚折叠钮:底部面板钮在左、右栏钮在右(用户指定的次序);两者收起后都仍在原处,可重开。 */}
+      {/* 右上角浮层三枚:恢复默认布局 → 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}
+      <button
+        className="dv-edge-toggle dv-edge-reset"
+        title={document.documentElement.lang.startsWith('zh') ? '恢复本 Space 默认布局' : 'Restore default layout for this Space'}
+        onClick={() => useWorkspace.getState().resetLayout()}
+      >
+        <RotateCcwSquare size={15} />
+      </button>
       <button
         className={`dv-edge-toggle dv-edge-bottom${bottomVisible ? ' is-on' : ''}`}
         title={document.documentElement.lang.startsWith('zh') ? '底部面板 (⌘/Ctrl+J)' : 'Toggle bottom panel (Ctrl/Cmd+J)'}

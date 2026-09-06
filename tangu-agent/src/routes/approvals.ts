@@ -18,6 +18,8 @@ import { saveSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { resolveDeskShot } from '../services/deskCapture.js';
+import { resolveUiAction } from '../services/uiAck.js';
+import { normalizeUiValues, sanitizeText } from './runs.js';
 
 const router = Router();
 
@@ -113,6 +115,27 @@ router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (r
 router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
+    // 界面动作回执(set_ui_setting / run_ui_command)搭这条路进来 —— **只借路由,不借电文**。
+    // 为什么不自开一条:云端网关(server/microserver/agent-core/fleetDispatch.ts)只代理
+    // runs / abort / approvals / inquiries 四条,新路由在 web 与移动端根本到不了 worker。
+    // 为什么不复用 inquiry 电文:老客户端收到未知 kind 的 inquiry_request 会渲染一张用户可见的
+    // 提问卡,且 requestInquiry 没有超时会把 run 挂死。所以出向是独立的 `ui_cmd` 事件,
+    // 只有回程借这条路由,靠 ackId 前缀分流(登记表在 services/uiAck.ts)。
+    if (req.params.inquiryId.startsWith('ui_')) {
+      const run0 = await getRunForUser(req.params.runId, userId);
+      if (!run0) return res.status(404).json({ detail: 'Run not found' });
+      const b = req.body || {};
+      // settings = 渲染端在 setter 落地后读的全份设置值,会进后续 list_ui_commands 的模型上下文 → 同 run 起步的消毒上限。
+      const settings = normalizeUiValues(b.settings);
+      const okUi = resolveUiAction(req.params.runId, req.params.inquiryId, {
+        ok: b.ok === true,
+        ...(typeof b.error === 'string' ? { error: sanitizeText(b.error, 500) } : {}),
+        ...(typeof b.state === 'string' ? { state: sanitizeText(b.state, 200) } : {}),
+        ...(settings ? { settings } : {}),
+      });
+      if (!okUi) return res.status(410).json({ detail: 'ui action is no longer pending' });
+      return res.json({ ok: true });
+    }
     const answer = typeof req.body?.answer === 'string' ? req.body.answer.trim() : '';
     if (!answer) return res.status(400).json({ detail: 'answer required' });
     const run = await getRunForUser(req.params.runId, userId);

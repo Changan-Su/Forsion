@@ -2,7 +2,8 @@
  *  数据经 dbStore 按 ref 共享 → 同一 db 的多处嵌入(同页多块/多标签)实时互通、写穿防抖落盘。
  *  排序仅视图态不写盘(文件 rows 顺序即规范顺序);列类型切换非破坏(coerceForDisplay 宽容显示)。
  *  弹层(选项/列菜单)用 fixed 定位:表格外层是 overflow 滚动层,absolute 会被裁剪。 */
-import { useEffect, useMemo, useRef, useState, type ChangeEvent as ReactChangeEvent, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ChangeEvent as ReactChangeEvent, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   COLUMN_TYPES,
   DEFAULT_DB_VIEW,
@@ -30,6 +31,7 @@ import { formatNumber, hasNumberFormat, PRECISION_MAX, PRECISION_MIN } from '@am
 import { addFileRefs, fileRefs, removeFileAt } from '@amadeus-shared/db/fileCell'
 import { buildDbCsv, csvExportMode, exportCsvFile } from './csvExport'
 import './cellFormat.css'
+import './readOnlyCells.css'
 import { buildTree } from '@amadeus-shared/db/tree'
 import { dateGroupUnitOf, groupRowsByDate, type DateGroupUnit } from '@amadeus-shared/db/groupDate'
 import { joinRel, toAssetUrl } from '@amadeus-shared/assets'
@@ -399,12 +401,25 @@ const fileSrc = (dbPath: string, raw: string): string =>
 /** 单元格环境:附件列要 .db 路径定位资源,关联表列要目标库数据(注册表 PropCellProps 给不了这些)。 */
 interface CellEnv {
   dbPath: string
+  /** 只读挂载:附件上传/移除这类**不经 setCell** 的入口自己关(RowEditor 那条路会用到)。 */
+  readOnly?: boolean
   /** 关联表列 / 投影列(反向 lookup)的目标库(未加载给 null)。 */
   targetOf(col: DbColumn): { path: string; db: DbFile } | null
   /** 投影列(可编辑反向关联)专用写口:让**目标表** targetRowId 那行的 backCol 含 / 不含本行 —— 对侧表一次 mutate(见 db/backlink.ts)。 */
   backLinkEdit(col: DbColumn, rowId: string, targetRowId: string, add: boolean): void
   /** 投影列配置体检文案(null = 配好了,渲 chip;否则渲提示)。 */
   projectionIssue(col: DbColumn): string | null
+}
+
+/** `.amx-db-pop` 的 portal 落点。宿主容器带 `container-type`(插件面板就是)时,`position:fixed` 的包含块
+ *  变成那个容器 —— 弹层会锚到面板而不是视口,还被面板的 overflow 裁掉。给了落点就整个弹层壳(遮罩 + 浮层)
+ *  一起 portal 出去:**只搬浮层不搬遮罩**的话,「点面板外面」关不掉菜单。
+ *  ⚠️ 点外关闭走的是遮罩的 React onMouseDown —— 合成事件穿 portal 照常冒泡到 DbTable,所以 portal 之后
+ *  「点弹层里面」仍被 stopPropagation 挡住,不会被当成外面。 */
+const PopHostCtx = createContext<HTMLElement | null>(null)
+function PopLayer({ children }: { children: ReactNode }): ReactNode {
+  const host = useContext(PopHostCtx)
+  return host ? createPortal(children, host) : children
 }
 
 interface Pop {
@@ -418,14 +433,79 @@ interface Pop {
   anchorTop?: number
 }
 
-export function DatabaseEmbed({ target, pagePath, initialView, onViewChange }: {
-  target: string
-  pagePath: string
+/** 只读单元格的**装饰**数据:宿主(插件表)按 rowId/colId 给,不进 DbFile 的 cells ——
+ *  cells 只放参与排序/筛选的原始值,富文本(头像/双行/色调/动作按钮)一律走这里。 */
+export interface CellMeta {
+  /** 覆盖显示文本(复合格:cell 里放的是排序键,屏幕上另有其字)。 */
+  text?: string
+  /** 第二行弱化文字。 */
+  sub?: string
+  tone?: 'muted' | 'green' | 'red' | 'amber' | 'blue' | 'accent'
+  dot?: 'green' | 'red' | 'yellow' | 'gray'
+  mono?: boolean
+  title?: string
+  /** 头像:src 缺失/加载失败回落字母(两者互为 hidden,宿主的 data-hook 探针成对可见)。 */
+  avatar?: { src?: string | null; letter?: string; attrs?: Record<string, string> }
+  href?: string
+  /** 日期列的显示档位(date 列的落盘串可能是 ISO datetime,coerceForDisplay 会判空)。 */
+  format?: 'datetime' | 'day'
+  attrs?: Record<string, string>
+  actions?: Array<{ act: string; label: string; tone?: 'muted' | 'red' | 'primary'; attrs?: Record<string, string>; disabled?: boolean; title?: string }>
+}
+/** rowId → colId → 装饰。 */
+export type DbCellMeta = Record<string, Record<string, CellMeta>>
+/** 动作列的固定列 id:这一列不渲值,渲 meta.actions 的按钮(原生 <button>,宿主的委托监听照常收得到)。 */
+export const ACTIONS_COL_ID = '__actions'
+/** 内存源没有磁盘锚,给一个合成 ref 只为当 React key / 自引用判据用(store 里永远查不到它,也不该去查)。 */
+const MEM_REF = '__mem__'
+
+/** 内存源 / 只读 / 行点击 等「宿主挂载面」用的可选 prop(4 个既有消费者一个都不传 → 零破坏)。 */
+interface DbSurfaceProps {
+  /** 内存源:给了就整段绕过 dbStore(不 load、不查 entries、不 mutate),行列由 props 给,视图态存本地。 */
+  db?: DbFile
+  /** 只读闸,**UI 层**:写口在函数体首行 return,绝不指望 store 自己 no-op(合成 ref 的 mutate 是静默失败的)。 */
+  readOnly?: boolean
+  /** 给了则表格行可点/可回车开行,并接管卡片视图的 openRow(不再弹 RowEditor)。 */
+  onRowOpen?: (row: DbRow) => void
+  /** 额外挂在行元素上的属性(宿主用 `[data-act]` 之类做事件委托)。 */
+  rowAttrs?: (row: DbRow) => Record<string, string>
+  cellMeta?: DbCellMeta
+  /** `.amx-db-pop` 的 portal 落点:宿主容器带 container-type 时 fixed 会锚到容器而不是视口。 */
+  popHost?: HTMLElement | null
+  /** 隐藏标题行 + 新建/加视图/以页面打开(筛选、搜索、视图菜单照留 —— 那才是用原生表的理由)。 */
+  hideHead?: boolean
+  /** 藏掉视图条整条工具栏(视图 tab / 筛选 / 搜索 / 导出 / 视图设置):数据只是分页的一片时这些功能会说谎。 */
+  hideTools?: boolean
+  /** 高亮行(`.amx-db-row--selected`)。 */
+  selectedRowId?: string | null
+  /** 初始排序(只在挂载时吃一次;之后表头点击就地重排)。 */
+  initialSort?: { colId: string; dir: 'asc' | 'desc' } | null
+  /** 排序变化回调(宿主要跟着记状态,免得它自己重渲一次就把排序丢了)。 */
+  onSort?: (s: { colId: string; dir: 'asc' | 'desc' } | null) => void
+}
+
+/** 分发器:内存源直挂 DbTable,其余走 store 四态分支。
+ *  ⚠️ 这里**一个 hook 都不能有** —— 条件调用 hook 会炸(check:hooks),所以 store 那半整体挪进 StoreDatabaseEmbed。 */
+export function DatabaseEmbed({ target, pagePath, initialView, onViewChange, db, ...surface }: {
+  target?: string
+  pagePath?: string
   /** 嵌入语法 `![[db|视图名]]` 里的激活视图名(存笔记 md,每处嵌入各记各的;不落 .db、不参与云同步)。 */
   initialView?: string | null
   /** 用户切视图时回写笔记的嵌入块 md(改成 `![[db|新视图名]]`);null = 回到默认(去掉管道段)。 */
   onViewChange?: (viewName: string | null) => void
-}) {
+} & DbSurfaceProps) {
+  if (db) {
+    return <DbTable {...surface} dbRef={target || MEM_REF} db={db} pagePath={pagePath ?? ''} memory initialView={initialView} onViewChange={onViewChange} />
+  }
+  return <StoreDatabaseEmbed {...surface} target={target ?? ''} pagePath={pagePath ?? ''} initialView={initialView} onViewChange={onViewChange} />
+}
+
+function StoreDatabaseEmbed({ target, pagePath, initialView, onViewChange, ...surface }: {
+  target: string
+  pagePath: string
+  initialView?: string | null
+  onViewChange?: (viewName: string | null) => void
+} & Omit<DbSurfaceProps, 'db'>) {
   const { t } = useI18n()
   const entry = useDbStore((s) => s.entries[target])
   // gen:缓存被整片作废(切库 / 启动时 vault 落地)后重读 —— 见 dbStore 的 gen 注释。
@@ -458,17 +538,42 @@ export function DatabaseEmbed({ target, pagePath, initialView, onViewChange }: {
       </div>
     )
   }
-  return <DbTable dbRef={target} db={entry.data} pagePath={pagePath} initialView={initialView} onViewChange={onViewChange} />
+  return <DbTable {...surface} dbRef={target} db={entry.data} pagePath={pagePath} initialView={initialView} onViewChange={onViewChange} />
 }
 
-function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
+/** initialSort 只作用在**首个视图**上(内存表恒一个视图;真文件挂只读时也只可能看首个)。 */
+const applyInitialSort = (d: DbFile, s?: { colId: string; dir: 'asc' | 'desc' } | null): DbFile => {
+  if (!s) return d
+  return { ...d, views: viewsOf(d).map((v, i) => (i === 0 ? { ...v, sorts: [{ ...s }], sort: { ...s } } : v)) }
+}
+/** props 换了新数据时的合流:**行列来自 props、视图态与列宽来自本地** —— 唯一不会二选一出事的切法
+ *  (整份 db 塞本地 → 轮询回来要么冲掉用户排序、要么冲不掉新数据)。 */
+const mergeIncoming = (next: DbFile, prev: DbFile): DbFile => ({
+  ...next,
+  views: prev.views,
+  columns: next.columns.map((c) => ({ ...c, width: prev.columns.find((p) => p.id === c.id)?.width ?? c.width })),
+})
+
+function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memory, readOnly, onRowOpen, rowAttrs, cellMeta, popHost, hideHead, hideTools, selectedRowId, initialSort, onSort }: {
   dbRef: string
   db: DbFile
   pagePath: string
   initialView?: string | null
   onViewChange?: (viewName: string | null) => void
-}) {
+  /** 内存源(由 DatabaseEmbed 分发器置):dbStore 整段不碰。 */
+  memory?: boolean
+} & Omit<DbSurfaceProps, 'db'>) {
   const { t } = useI18n()
+  // 本地数据:内存源自不必说;真文件**只读挂载**也走本地 —— 排序/筛选/隐藏列/列宽这些「视图手势」在
+  // 现行实现里全是落盘配置(patchView→m),只读挂载下它们必须可用又绝不能改到别人的文件。
+  const localMode = !!memory || !!readOnly
+  const [local, setLocal] = useState<DbFile>(() => applyInitialSort(dbProp, initialSort))
+  const lastProp = useRef(dbProp)
+  if (lastProp.current !== dbProp) {
+    lastProp.current = dbProp
+    if (localMode) setLocal((prev) => mergeIncoming(dbProp, prev))
+  }
+  const db = localMode ? local : dbProp
   const [pop, setPop] = useState<Pop | null>(null)
   const [q, setQ] = useState('') // 工具栏搜索:按行标题过滤
   // 拖拽改宽的过程态:pointermove 只写这里驱动 gridTemplateColumns 即时反馈,pointerup 才落进 column。
@@ -485,8 +590,11 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     if (isNoteView) void useNoteViewStore.getState().load(noteFolder as string)
   }, [isNoteView, noteFolder])
 
-  const m = (fn: (d: DbFile) => DbFile): void => useDbStore.getState().mutate(dbRef, fn)
-  const dbPath = useDbStore((s) => s.entries[dbRef]?.path) ?? dbRef // 规范文件路径(= 日历成员键 / openDb 用)
+  const m = (fn: (d: DbFile) => DbFile): void => {
+    if (localMode) { setLocal(fn); return } // 内存源 / 只读挂载:视图态写本地,永不落盘
+    useDbStore.getState().mutate(dbRef, fn)
+  }
+  const dbPath = useDbStore((s) => (memory ? undefined : s.entries[dbRef]?.path)) ?? dbRef // 规范文件路径(= 日历成员键 / openDb 用)
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const calByVault = useCalendarConfig((s) => s.byVault)
   const addMember = useCalendarConfig((s) => s.addMember)
@@ -502,6 +610,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   // 用户显式切/建视图:置激活 + 把视图名回写进笔记的嵌入块 md(持久化,每处嵌入各记各的)。
   const pickView = (v: DbView): void => { setViewId(v.id); onViewChange?.(v.name) }
   const addView = (type: DbViewType): void => {
+    if (readOnly) return
     const v: DbView = { id: dbId(), name: t(VIEW_META[type].labelKey), type }
     m((d) => ({ ...d, views: [...viewsOf(d), v] }))
     pickView(v)
@@ -512,6 +621,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     if (id === viewId && patch.name) onViewChange?.(patch.name) // 改名活动视图 → 同步嵌入引用,免下次重挂失配
   }
   const delView = (id: string): void => {
+    if (readOnly) return
     m((d) => {
       const rest = viewsOf(d).filter((v) => v.id !== id)
       return { ...d, views: rest.length ? rest : [DEFAULT_DB_VIEW] }
@@ -539,8 +649,9 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     [db.columns],
   )
   useEffect(() => {
+    if (memory) return // 内存源没有磁盘锚:关联列的目标库无从加载,也不该去动 store
     for (const p of refPaths) void useDbStore.getState().load(p, p)
-  }, [refPaths])
+  }, [memory, refPaths])
   const refDbs = useDbStore(useShallow((s) => refPaths.map((p) => s.entries[p]?.data ?? null)))
   const targetOf = (col: DbColumn): { path: string; db: DbFile } | null => {
     // 反向 lookup(含投影列)的 refDb 也在 refPaths 里:投影 cell 渲 chip / 开 picker 要目标库整份
@@ -583,6 +694,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
    *  (单文件、原子、无跨文件事务);先 load 确认目标库在 store 里。fn 在回调内按最新目标表算(CAS 冲突重放语义),
    *  不用渲染期闭包里的 ids;没变化返 null → 不产生保存/撤销点。本表磁盘永不落投影 cell。 */
   const mutateBackLinks = (col: DbColumn, fn: (target: DbFile) => DbRow[] | null): void => {
+    if (readOnly || memory) return // ⚠️ 它**不经 m**,直调 store 写的还是**另一张表** —— 必须自己带闸
     const ref = col.refDb as string
     void useDbStore.getState().load(ref, ref).then(() => {
       useDbStore.getState().mutate(ref, (t) => { const rows = fn(t); return rows ? { ...t, rows } : t })
@@ -592,6 +704,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     mutateBackLinks(col, (t) => backLinkEdit(t, col.lookupBackCol as string, rowId, targetRowId, add))
 
   const setCell = (rowId: string, colId: string, v: CellValue | undefined): void => {
+    if (readOnly) return // ⚠️ 必须在下面的活动日志之前:否则只读表也会记一串幽灵编辑
     const col0 = db.columns.find((c) => c.id === colId)
     const colType = col0?.type ?? ''
     // 投影列:isComputed 闸对它放行到专用写口(整格赋值 = 指回本行的目标行集合恰好 = v 里的 id;undefined/[] = 全摘);其余计算列照旧拒
@@ -629,6 +742,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   }
   /** 新行,可带初值(看板加卡入组/日历日格加行);笔记视图 = 建笔记后逐键写 frontmatter。 */
   const addRow = (initial?: Record<string, CellValue>): void => {
+    if (readOnly) return // ⚠️ 同 setCell:要在下面的 act() 之前
     // 活动日志:含 todo 列=任务、日期列=日程,其余=普通行(标题此刻必空,由 setCell 的 task.name 补)
     // created(创建时间)虽算日期列,但一张只有它的表不是日程表 → 不算 event.new
     act(db.columns.some((c) => c.type === 'todo') ? 'task.new' : db.columns.some((c) => isDateish(c) && c.type !== 'created') ? 'event.new' : 'row.new', { db: dbRef })
@@ -653,12 +767,14 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   }
   /** 拖拽重排:把 dragId 挪到 targetId 之前/之后。顺序就是 db.rows 的数组序,直接落盘。 */
   const reorderRow = (dragId: string, targetId: string, after: boolean): void => {
+    if (readOnly) return
     m((d) => {
       const rows = moveRow(d.rows, dragId, targetId, after)
       return rows === d.rows ? d : { ...d, rows } // 引用没变 = 没动 → 不产生保存/撤销点
     })
   }
   const delRow = (rowId: string): void => {
+    if (readOnly) return
     if (isNoteView) {
       if (window.confirm(t('dbembed.deleteNoteConfirm'))) void nv().deleteNote(noteFolder as string, rowId)
       return
@@ -668,6 +784,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     m((d) => dropSelfRefs({ ...d, rows: d.rows.filter((r) => r.id !== rowId) }, rowId, [dbPath, dbRef]))
   }
   const addCol = (): void => {
+    if (readOnly) return
     const newId = dbId() // 同 addRow:回调外定 id,重放才是确定的
     m((d) => {
       // 笔记视图:新列 id = frontmatter 键(取唯一默认键);普通表:随机 id + 显示名。
@@ -686,7 +803,8 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
    *  ⚠️ 关联列**改成别的类型不清**:切类型本就是非破坏式的(列自己的 refDb 留着),依赖它的 lookup 只是**休眠**——lookup.ts 只沿
    *  type==='rowlink' 的列取值,期间显示空、ColMenu 提示「原关联列已失效」;改回关联表即原样恢复。之前一改类型就清是不可逆的
    *  (Codex 评审抓的),真正的 detach 只剩换 refDb 与删列(delCol)两处。 */
-  const patchCol = (colId: string, patch: Partial<DbColumn>): void =>
+  const patchCol = (colId: string, patch: Partial<DbColumn>): void => {
+    if (readOnly) return
     m((d) => {
       const old = d.columns.find((c) => c.id === colId)
       if (!old) return d
@@ -695,8 +813,10 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
       if (refDbChanged) columns = detachLookups(columns.map((c) => (c.id === colId ? { ...c, titleCol: undefined, refFilter: undefined, refFilterMode: undefined } : c)), colId)
       return { ...d, columns }
     })
+  }
   // 列改名:笔记视图的属性列 → 跨该文件夹所有笔记重写 frontmatter 键(列 id = 键);其余仅改显示名。
   const renameCol = (col: DbColumn, name: string): void => {
+    if (readOnly) return
     if (isNoteView && col.type !== 'page' && name !== col.id) {
       if (db.columns.some((c) => c.id === name)) return // 目标键已是某列,避免撞键覆盖 + 重复列 id
       void nv().renameProp(noteFolder as string, col.id, name)
@@ -721,6 +841,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     return sameOrder(next, cur) ? null : next.map((c) => c.id)
   }
   const reorderCol = (dragId: string, targetId: string, after: boolean): void => {
+    if (readOnly) return
     // 先按当前快照挡掉「看着什么也没发生」的手势(拖到自己身上、拖到已相邻的那一侧)。必须挡在 m()
     // **之前**:mutate 是无条件把回调排进 pendingOps 的,而 pendingOps 会在 CAS 冲突后重放到别人
     // 刚写的新数据上 —— 一次视觉空操作到那时就成了真改动,把对方的列序顶回去(Codex 抓的)。
@@ -743,12 +864,14 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   }
   /** 列菜单的「← 左移 / 右移 →」:按**可见**相邻列算落点,否则相邻列恰好被隐藏时点了看着像没反应。 */
   const moveColBy = (colId: string, dir: -1 | 1): void => {
+    if (readOnly) return
     const i = visCols.findIndex((c) => c.id === colId)
     const target = visCols[i + dir]
     if (i < 0 || !target) return
     reorderCol(colId, target.id, dir > 0)
   }
   const delCol = (colId: string): void => {
+    if (readOnly) return
     if (isIdentity(colId)) return // 首列(Name)不可删除
     m((d) => ({
       ...d,
@@ -761,13 +884,15 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
       }),
     }))
   }
-  const createOption = (colId: string, label: string): void =>
+  const createOption = (colId: string, label: string): void => {
+    if (readOnly) return
     m((d) => ({
       ...d,
       columns: d.columns.map((c) =>
         c.id === colId && !(c.options ?? []).includes(label) ? { ...c, options: [...(c.options ?? []), label] } : c,
       ),
     }))
+  }
 
   /** 卡片/事件标题 = 首列(身份列)显示值。 */
   const rowTitle = (r: DbRow): string => dbRowTitle(db, r) || t('dbembed.untitled')
@@ -775,10 +900,11 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- targetOf 闭包依赖 refPaths/refDbs/db.columns(已在列)
   const cellEnv = useMemo<CellEnv>(() => ({
     dbPath,
+    readOnly,
     targetOf,
     backLinkEdit: editBackLink,
     projectionIssue: (c) => projectionIssue(c, refDbByPath, [dbPath, dbRef])?.detail ?? null,
-  }), [dbPath, refDbs, refPaths, db.columns])
+  }), [dbPath, readOnly, refDbs, refPaths, db.columns])
   const allFiles = usePageStore((s) => s.files)
   const dbFiles = useMemo(() => allFiles.filter((f) => /\.db$/i.test(f) && f !== dbPath), [allFiles, dbPath])
   /** 目标表列清单(lookup 配置用;目标库没加载完给空)。 */
@@ -794,11 +920,18 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   /** 弹层落点 = 按钮下沿(放不下时 OverlayAt 自会翻到 anchorTop=按钮上沿之上)。
    *  ⚠️别在这里按「估算高度」预夹 y:预夹过的 y 会被当成真锚点再翻一次面(codex#2)。 */
   const openRow = (e: ReactMouseEvent, rowId: string): void => {
+    // 宿主接管开行(插件面板打开自己的编辑抽屉):一处分流,看板/日历/画廊/甘特四个既有调用点自动跟上。
+    if (onRowOpen) {
+      const r = rows.find((x) => x.id === rowId)
+      if (r) onRowOpen(r)
+      return
+    }
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setPop({ kind: 'row', rowId, x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
   /** 看板/日历引导:一键补齐可分组/可上历的列(笔记视图列 id = frontmatter 键,撞键则不动)。 */
   const addStatusCol = (): void => {
+    if (readOnly) return
     const rid = dbId()
     m((d) => {
       const id = isNoteView ? '状态' : rid
@@ -807,6 +940,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     })
   }
   const addDateCol = (): void => {
+    if (readOnly) return
     const rid = dbId()
     m((d) => {
       const id = isNoteView ? '日期' : rid
@@ -817,6 +951,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
 
   // 笔记视图:切换数据来源文件夹 → 并集推导列(导入该文件夹笔记的 frontmatter 键)。
   const setFolder = async (folder: string): Promise<void> => {
+    if (readOnly) return
     const props = await amadeus.listPageProps(folder)
     m((d) => ({ ...d, source: { folder }, columns: deriveColumns(d.columns, props.map((p) => p.fm)) }))
     void nv().refresh(folder)
@@ -824,8 +959,15 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   }
 
   /** 单列排序入口(列菜单/表头):设为唯一排序;null = 清空。多列走 cycleSort。 */
-  const setColSort = (colId: string, dir: 'asc' | 'desc' | null): void =>
+  const setColSort = (colId: string, dir: 'asc' | 'desc' | null): void => {
     patchView(view.id, dir === null ? { sorts: undefined, sort: undefined } : { sorts: [{ colId, dir }], sort: { colId, dir } })
+    onSort?.(dir === null ? null : { colId, dir }) // 宿主自己也记一份:它重渲一次不至于把排序丢了
+  }
+  /** 只读表的表头左键:就地循环 升→降→清(配置项都收进了右键的列菜单)。 */
+  const cycleColSortLocal = (colId: string): void => {
+    const cur = sortOf(colId)
+    setColSort(colId, cur === null ? 'asc' : cur.dir === 'asc' ? 'desc' : null)
+  }
   /** 视图菜单多列排序:点击循环 升→降→移除;新列追加末位。sort 恒 = sorts[0] 镜像。 */
   const cycleSort = (colId: string): void => {
     const i = sorts.findIndex((s) => s.colId === colId)
@@ -865,7 +1007,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   // 树序更是如此(父子交错),把落点当数组下标会把整棵树打散。
   // 笔记视图的行是文件夹里的笔记,没有数组序可言,一并排除。
   const [drag, setDrag] = useState<{ id: string; overId: string; after: boolean } | null>(null)
-  const canReorder = !isNoteView && !sorts.length && !q.trim() && !(view.filters ?? []).length && !tableGroupCol && !treeCol
+  const canReorder = !readOnly && !isNoteView && !sorts.length && !q.trim() && !(view.filters ?? []).length && !tableGroupCol && !treeCol
   // 列拖拽:与行不同,**不受排序/筛选/分组影响** —— 列序是 db.columns 的数组序,和呈现出来的行没关系。
   const [colDrag, setColDrag] = useState<{ id: string; overId: string; after: boolean } | null>(null)
 
@@ -918,6 +1060,14 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
     return out
   }, [tree, collapsedNodes, view.id])
 
+  /** 表格视图今天没有开行入口(行首 28px 那格只放拖柄+删除,再塞第二个子元素会让表头/统计行错列)。
+   *  所以只读表把「开行」挂到整行上:点/回车即开,落在按钮/链接/输入控件上的那些不算。 */
+  const canOpenRow = !!readOnly && !!onRowOpen
+  const hitInteractive = (e: ReactMouseEvent): boolean => {
+    const el = (e.target as HTMLElement).closest('button,a,input,select,textarea,[data-act]')
+    return !!el && el !== e.currentTarget // rowAttrs 可能就把 data-act 挂在行上 —— 命中行自己不算「点了控件」
+  }
+
   const openPop = (e: ReactMouseEvent, p: Omit<Pop, 'x' | 'y' | 'anchorTop'>): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setPop({ ...p, x: r.left, y: r.bottom + 4, anchorTop: r.top })
@@ -926,6 +1076,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   /** title 提交(blur/Enter)→ 文件名跟随(renameDb:文件+内部name+全库引用+日历配置一起动)。
    *  onChange 仍只走内存防抖;空名/同名 no-op(空名=文件留旧名,title 显示空由 placeholder 兜)。 */
   const commitTitleRename = (): void => {
+    if (readOnly || memory) return
     const path = useDbStore.getState().entries[dbRef]?.path
     if (!path) return
     const name = db.name.trim().replace(/[\\/]/g, '')
@@ -950,7 +1101,8 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
       return { ...d, columns: d.columns.map((c) => (c.id === colId ? { ...c, width: w } : c)) }
     })
   /** 视图菜单「本视图独立列序/列宽」开关:开 = 把当前全局序 / 全局宽拷进视图(从此拖列拖宽只写视图);关 = 清掉两字段回到跟全局。 */
-  const toggleOwnCols = (viewId: string): void =>
+  const toggleOwnCols = (viewId: string): void => {
+    if (readOnly) return
     m((d) => {
       const v = viewsOf(d).find((x) => x.id === viewId)
       if (!v) return d
@@ -960,6 +1112,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         : { order: d.columns.map((c) => c.id), widths: Object.fromEntries(d.columns.filter((c) => c.width !== undefined).map((c) => [c.id, c.width as number])) }
       return { ...d, views: viewsOf(d).map((x) => (x.id === viewId ? { ...x, ...patch } : x)) }
     })
+  }
 
   /** 列宽拖拽:实时改宽即反馈(ponytail:不做 AFFiNE 的全局竖直指示线);pointerup 经与列改名
    *  同一条 mutate 写路径把 width 落进 column / 视图 widths(复用 500ms 防抖落盘);双击命中区清除 width 恢复弹性。 */
@@ -1001,12 +1154,16 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
   const popView = pop?.viewId ? views.find((v) => v.id === pop.viewId) : undefined
 
   return (
+    <PopHostCtx.Provider value={popHost ?? null}>
     <div className="amx-db">
+      {/* hideHead:插件面板自己有标题栏,再顶一行库名 + 行数只是重复(筛选/搜索/视图菜单照留,那才是用原生表的理由)。 */}
+      {!hideHead && (
       <div className="amx-db-head">
         <span className="amx-db-headicon" aria-hidden>{isNoteView ? <DatabaseListViewIcon /> : <DatabaseTableViewIcon />}</span>
         <input
           className="amx-db-name"
           value={db.name}
+          readOnly={readOnly}
           placeholder={isNoteView ? t('dbembed.namePlaceholderView') : t('dbembed.namePlaceholderDb')}
           onChange={(e) => m((d) => ({ ...d, name: e.target.value }))}
           onBlur={commitTitleRename}
@@ -1019,9 +1176,12 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         )}
         <span className="amx-db-count">{t('dbembed.rowCount', { n: rows.length })}</span>
       </div>
+      )}
 
+      {!hideTools && (
       <div className="amx-db-viewbar" role="tablist">
-        {views.map((v) => (
+        {/* 只读且只有一个视图:tab 条只剩一枚假 tab,不如不占一行 */}
+        {!(readOnly && views.length === 1) && views.map((v) => (
           <button
             key={v.id}
             className="amx-db-viewtab"
@@ -1036,9 +1196,11 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
             <span>{v.name}</span>
           </button>
         ))}
-        <button className="amx-db-viewadd" onClick={(e) => openPop(e, { kind: 'addview' })} title={t('dbembed.addView')} aria-label="add view">
-          <PlusIcon />
-        </button>
+        {!readOnly && !hideHead && (
+          <button className="amx-db-viewadd" onClick={(e) => openPop(e, { kind: 'addview' })} title={t('dbembed.addView')} aria-label="add view">
+            <PlusIcon />
+          </button>
+        )}
         <span className="amx-db-viewbar-sp" />
         <button
           className="amx-db-filterbtn"
@@ -1050,7 +1212,10 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
           {t('dbembed.filter')}{(view.filters?.length ?? 0) > 0 && ` ${view.filters!.length}`}
         </button>
         <input className="amx-db-search" placeholder={t('dbembed.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('dbembed.searchRows')} />
-        <button className="amx-db-iconbtn" onClick={() => openDb(dbPath)} title={t('dbembed.openAsPage')} aria-label="open as page"><ExternalLink size={15} /></button>
+        {/* 内存源没有 dbPath 可开;插件面板里这颗按钮也只会把用户弹去别处 */}
+        {!memory && !hideHead && (
+          <button className="amx-db-iconbtn" onClick={() => openDb(dbPath)} title={t('dbembed.openAsPage')} aria-label="open as page"><ExternalLink size={15} /></button>
+        )}
         {/* 导出 CSV:导的是**当前视图看到的那张表**(visCols × 已筛选/排序的 rows),不是整表。
             移动端 csvExportMode()='off' → 整个按钮不渲染(WebView 里 `<a download>` 不落盘,留个死按钮更糟)。 */}
         {csvExportMode() !== 'off' && (
@@ -1064,25 +1229,26 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
         )}
         <button className="amx-db-iconbtn" onClick={(e) => openPop(e, { kind: 'viewmenu', viewId: view.id })} title={t('dbembed.viewSettings')} aria-label="view settings"><Settings2 size={15} /></button>
         {/* 表单视图没有通用「新建」:直接 addRow() 会绕过表单的必填与默认值,建行只走 FormBody 的提交(Codex 评审抓的) */}
-        {view.type !== 'form' && <button className="amx-db-newbtn" onClick={() => addRow()} title={t('dbembed.new')}><Plus size={14} /> {t('dbembed.new')}</button>}
+        {view.type !== 'form' && !readOnly && <button className="amx-db-newbtn" onClick={() => addRow()} title={t('dbembed.new')}><Plus size={14} /> {t('dbembed.new')}</button>}
       </div>
+      )}
 
       {db.columns.length === 0 ? (
         <div className="amx-db-state">
           {t('dbembed.noColumns')}
-          <button className="amx-db-linkbtn" onClick={addCol}>{t('dbembed.addColumn')}</button>
+          {!readOnly && <button className="amx-db-linkbtn" onClick={addCol}>{t('dbembed.addColumn')}</button>}
         </div>
       ) : view.type === 'kanban' ? (
-        <KanbanBody db={db} rows={rows} view={view} visCols={visCols} setCell={setCell} addRow={addRow} openRow={openRow} rowTitle={rowTitle} addStatusCol={addStatusCol} />
+        <KanbanBody db={db} rows={rows} view={view} visCols={visCols} setCell={setCell} addRow={addRow} openRow={openRow} rowTitle={rowTitle} addStatusCol={addStatusCol} readOnly={readOnly} rowAttrs={rowAttrs} />
       ) : view.type === 'calendar' ? (
-        <CalendarBody db={db} rows={rows} view={view} addRow={addRow} openRow={openRow} rowTitle={rowTitle} addDateCol={addDateCol} />
+        <CalendarBody db={db} rows={rows} view={view} addRow={addRow} openRow={openRow} rowTitle={rowTitle} addDateCol={addDateCol} readOnly={readOnly} rowAttrs={rowAttrs} />
       ) : view.type === 'gallery' ? (
-        <GalleryBody db={db} rows={rows} visCols={visCols} addRow={addRow} openRow={openRow} rowTitle={rowTitle} coverOf={coverOf} />
+        <GalleryBody db={db} rows={rows} visCols={visCols} addRow={addRow} openRow={openRow} rowTitle={rowTitle} coverOf={coverOf} readOnly={readOnly} rowAttrs={rowAttrs} />
       ) : view.type === 'chart' ? (
         <ChartViewBody db={db} rows={rows} view={view} kindOf={kindOf} />
       ) : view.type === 'gantt' ? (
         <GanttBody db={db} rows={rows} view={view} openRow={openRow} rowTitle={rowTitle} addDateCol={addDateCol} patchView={(p) => patchView(view.id, p)} colIcon={(ct) => colMeta(ct).icon} />
-      ) : view.type === 'form' ? (
+      ) : view.type === 'form' && !readOnly ? ( // 只读不给表单视图:它渲的是可编辑 Cell,提交还会假报成功
         <FormBody
           key={view.id}
           db={db}
@@ -1127,17 +1293,19 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
                   }}
                 >
                   {/* draggable 挂在按钮上而不是整个 .amx-db-th:宽度拖杆是它的兄弟节点,整格可拖会和
-                      拖宽抢 mousedown。放不动的首列不给 draggable(浏览器自己就不会起拖)。 */}
+                      拖宽抢 mousedown。放不动的首列不给 draggable(浏览器自己就不会起拖)。
+                      只读表:左键就是排序(配置项都没了,再弹一个只剩排序的菜单纯属绕路),列菜单退到右键。 */}
                   <button
                     className="amx-db-thbtn"
-                    draggable={!isIdentity(col.id)}
+                    draggable={!isIdentity(col.id) && !readOnly}
                     onDragStart={(e) => {
                       e.dataTransfer.effectAllowed = 'move'
                       e.dataTransfer.setData('text/plain', col.id)
                       setColDrag({ id: col.id, overId: col.id, after: false })
                     }}
                     onDragEnd={() => setColDrag(null)}
-                    onClick={(e) => openPop(e, { kind: 'colmenu', colId: col.id })}
+                    onClick={(e) => (readOnly ? cycleColSortLocal(col.id) : openPop(e, { kind: 'colmenu', colId: col.id }))}
+                    onContextMenu={readOnly ? (e) => { e.preventDefault(); openPop(e, { kind: 'colmenu', colId: col.id }) } : undefined}
                     title={isIdentity(col.id) ? t('dbembed.colMenuHintFixed', { type: typeLabel }) : t('dbembed.colMenuHint', { type: typeLabel })}
                   >
                     <span className="amx-db-th-icon" aria-hidden>{colMeta(col.type).icon}</span>
@@ -1153,19 +1321,28 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
                 </div>
               )
             })}
-            <button className="amx-db-addcol" onClick={addCol} title={t('dbembed.addColumnTitle')}>＋</button>
+            {/* ⚠️ 只读也必须留一个末位子元素:`.amx-db-th:nth-last-child(2)` 的「末列不画竖线」靠它数位置 */}
+            {readOnly ? <div /> : <button className="amx-db-addcol" onClick={addCol} title={t('dbembed.addColumnTitle')}>＋</button>}
           </div>
 
           {(() => {
             /** 树节点(平铺 / 非树时为 null):只影响首个数据格里的缩进条 + 折叠钮,行本身的结构一格不动。 */
-            const renderRow = (row: DbRow, node?: { depth: number; hasKids: boolean } | null): ReactNode => (
+            const renderRow = (row: DbRow, node?: { depth: number; hasKids: boolean } | null): ReactNode => {
+              // rowAttrs 里的 `class` 并进行的 className(与降级路径的 `<tr class>` 同语义),不能原样摊给 React。
+              const { class: extraClass, ...extraAttrs } = (rowAttrs?.(row) ?? {}) as Record<string, string>
+              return (
               <div
-                className="amx-db-row"
+                {...extraAttrs}
+                className={`amx-db-row${selectedRowId === row.id ? ' amx-db-row--selected' : ''}${extraClass ? ' ' + extraClass : ''}`}
                 key={row.id}
                 data-row={row.id}
                 data-depth={node ? node.depth : undefined}
                 data-haskids={node?.hasKids || undefined}
                 style={{ gridTemplateColumns: gridCols }}
+                role={canOpenRow ? 'button' : undefined}
+                tabIndex={canOpenRow ? 0 : undefined}
+                onClick={canOpenRow ? (e) => { if (!hitInteractive(e)) onRowOpen!(row) } : undefined}
+                onKeyDown={canOpenRow ? (e: ReactKeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter' && e.target === e.currentTarget) onRowOpen!(row) } : undefined}
                 data-drop={drag?.overId === row.id ? (drag.after ? 'below' : 'above') : undefined}
                 onDragOver={canReorder ? (e) => {
                   if (!drag) return
@@ -1182,8 +1359,10 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
               >
                 {/* 手柄和删除同处**一个**网格单元(首列 28px):行首必须只有一个子元素,
                     否则表头/统计行(各自只放一个占位 div)与数据行的列就错开了。
-                    手柄单独 draggable、整行不 draggable —— 整行可拖会让单元格里的文字选不中。 */}
+                    手柄单独 draggable、整行不 draggable —— 整行可拖会让单元格里的文字选不中。
+                    ⚠️ 只读时这一格照样要在(空着),否则整行的网格轨道相对表头整体左移一格。 */}
                 <div className="amx-db-rowgutter">
+                  {!readOnly && (
                   <div
                     className="amx-db-rowdrag"
                     draggable={canReorder}
@@ -1193,10 +1372,13 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
                   >
                     ⠿
                   </div>
-                  <button className="amx-db-rowdel" onClick={() => delRow(row.id)} title={t('dbembed.deleteRow')} aria-label="delete row">✕</button>
+                  )}
+                  {!readOnly && <button className="amx-db-rowdel" onClick={() => delRow(row.id)} title={t('dbembed.deleteRow')} aria-label="delete row">✕</button>}
                 </div>
-                {visCols.map((col, ci) => (
-                  <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)}>
+                {visCols.map((col, ci) => {
+                  const meta = cellMeta?.[row.id]?.[col.id]
+                  return (
+                  <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)} {...(meta?.attrs ?? {})}>
                     {/* 缩进条 + 折叠钮只挂在**首个数据格**(标题列):行首 28px 那格已被拖柄/删除占满,
                         再塞东西会让表头/统计行与数据行的网格轨道对不上(E9 那条对齐断言守的就是它)。 */}
                     {node && ci === 0 && (
@@ -1225,18 +1407,22 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
                         )}
                       </span>
                     )}
-                    <Cell row={row} col={col} pagePath={pagePath} env={cellEnv} setCell={setCell} openOptions={(e) => openPop(e, { kind: 'options', colId: col.id, rowId: row.id })} />
+                    {readOnly
+                      ? <ReadOnlyCell row={row} col={col} env={cellEnv} meta={meta} pagePath={pagePath} />
+                      : <Cell row={row} col={col} pagePath={pagePath} env={cellEnv} setCell={setCell} openOptions={(e) => openPop(e, { kind: 'options', colId: col.id, rowId: row.id })} />}
                   </div>
-                ))}
+                  )
+                })}
                 <div />
               </div>
-            )
+              )
+            }
             // 层级树:按树序渲染(父在前、子紧随、折叠隐藏后代)。treeNodes=null 即 buildTree 判了平铺 —— 走下面的老路。
             if (treeNodes) {
               return (
                 <>
                   {treeNodes.map((n) => renderRow(n.row, n))}
-                  <button className="amx-db-addrow" onClick={() => addRow()}>{t('dbembed.addRow')}</button>
+                  {!readOnly && <button className="amx-db-addrow" onClick={() => addRow()}>{t('dbembed.addRow')}</button>}
                 </>
               )
             }
@@ -1244,7 +1430,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
               return (
                 <>
                   {rows.map((r) => renderRow(r))}
-                  <button className="amx-db-addrow" onClick={() => addRow()}>{t('dbembed.addRow')}</button>
+                  {!readOnly && <button className="amx-db-addrow" onClick={() => addRow()}>{t('dbembed.addRow')}</button>}
                 </>
               )
             }
@@ -1293,7 +1479,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
                     <span className="amx-db-lane-count">{g.rows.length}</span>
                   </button>
                   {!collapsed && g.rows.map((r) => renderRow(r))}
-                  {!collapsed && (
+                  {!collapsed && !readOnly && (
                     <button className="amx-db-addrow" onClick={() => addRow(g.add)}>{t('dbembed.addRow')}</button>
                   )}
                 </div>
@@ -1334,6 +1520,7 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
             onSetType={(type) => patchCol(popCol.id, { type })}
             onDelete={() => { delCol(popCol.id); setPop(null) }}
             locked={isIdentity(popCol.id)}
+            readOnly={readOnly}
             onMove={(dir) => moveColBy(popCol.id, dir)}
             canMoveLeft={!isIdentity(popCol.id) && visCols.findIndex((c) => c.id === popCol.id) > 1}
             canMoveRight={!isIdentity(popCol.id) && visCols.findIndex((c) => c.id === popCol.id) < visCols.length - 1}
@@ -1377,7 +1564,8 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
             onOpenFilters={() => setPop({ kind: 'filters', x: pop.x, y: pop.y })}
             onOpenCalendar={() => setPop({ kind: 'calendar', x: pop.x, y: pop.y })}
             calendarActive={!!memberOf(vault, calByVault, dbPath)}
-            onDelete={views.length > 1 ? () => delView(popView.id) : undefined}
+            readOnly={readOnly}
+            onDelete={views.length > 1 && !readOnly ? () => delView(popView.id) : undefined}
           />
         </PopShell>
       )}
@@ -1451,17 +1639,42 @@ function DbTable({ dbRef, db, pagePath, initialView, onViewChange }: {
             env={cellEnv}
             setCell={setCell}
             createOption={createOption}
+            readOnly={readOnly}
             onDelete={() => { delRow(popRow.id); setPop(null) }}
           />
         </PopShell>
       )}
     </div>
+    </PopHostCtx.Provider>
   )
 }
 
 // ── 单元格(七/八类型) ────────────────────────────────────────────────────────
 
 const CELL_WIKI_RE = /(\[\[[^\]\n]+\]\])/
+/** `[[双链]]` 富文本片段(展示态与只读态共用一份;点击冒泡挡在按钮上,免得连带触发外层的进编辑/开行)。 */
+const wikiSegments = (s: string, onOpen: (inner: string) => void): ReactNode[] =>
+  s.split(CELL_WIKI_RE).map((seg, i) => {
+    const m = /^\[\[([^\]\n]+)\]\]$/.exec(seg)
+    if (!m) return <span key={i}>{seg}</span>
+    const inner = m[1]
+    const label = (inner.split('|')[1] ?? inner.split('|')[0]).trim()
+    return (
+      <button key={i} className="amx-db-wikilink" onClick={(e) => { e.stopPropagation(); onOpen(inner) }} title={inner}>
+        {label}
+      </button>
+    )
+  })
+/** `[[目标]]` 点击:linkTarget 剥 |别名 与 #锚点(与 Markdown 块同语义);已存在页面优先
+ *  (v2.1 这类带点号页名不被误判为附件),未命中且带非 .md/.db 扩展名才当附件系统打开
+ *  (.db 落给 openWikiLink 的文件分支 → 应用内 db tab,不再被系统程序打开原始 JSON)。 */
+const openCellLink = (ps: ReturnType<typeof useScopedPageStore>, pagePath: string, raw: string): void => {
+  const target = linkTarget(raw)
+  const st = ps.getState()
+  if (resolvePageName(target, st.pages, pagePath)) return void st.openWikiLink(target.replace(/\.md$/i, ''), pagePath)
+  if (/\.[a-z0-9]{1,8}$/i.test(target) && !/\.(md|db)$/i.test(target)) return void amadeus.openAttachment(pagePath, target)
+  st.openWikiLink(target.replace(/\.md$/i, ''), pagePath) // 未解析 → 询问创建(源 = 本 .db 所在处)
+}
 /** 光标处一对**未闭合**的 [[(中文输入法打出的【【同收):补全触发判据 + 选中后被替换的那一段。 */
 const WIKI_OPEN_RE = /(?:\[\[|【【)([^[\]【】\n]*)$/
 
@@ -1490,16 +1703,7 @@ function Cell({
   const custom = getPropertyType(col.type)
   const v = coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))
 
-  /** [[目标]] 点击:linkTarget 剥 |别名 与 #锚点(与 Markdown 块同语义);已存在页面优先
-   *  (v2.1 这类带点号页名不被误判为附件),未命中且带非 .md/.db 扩展名才当附件系统打开
-   *  (.db 落给 openWikiLink 的文件分支 → 应用内 db tab,不再被系统程序打开原始 JSON)。 */
-  const openLink = (raw: string): void => {
-    const target = linkTarget(raw)
-    const st = ps.getState()
-    if (resolvePageName(target, st.pages, pagePath)) return void st.openWikiLink(target.replace(/\.md$/i, ''), pagePath)
-    if (/\.[a-z0-9]{1,8}$/i.test(target) && !/\.(md|db)$/i.test(target)) return void amadeus.openAttachment(pagePath, target)
-    st.openWikiLink(target.replace(/\.md$/i, ''), pagePath) // 未解析 → 询问创建(源 = 本 .db 所在处)
-  }
+  const openLink = (raw: string): void => openCellLink(ps, pagePath, raw)
 
   // 自定义注册类型:交给注册表的 Cell(value 已按 baseType 折算)。
   if (custom) {
@@ -1535,19 +1739,7 @@ function Cell({
       if (!editing && !wikiPick && CELL_WIKI_RE.test(s)) {
         return (
           <div className="amx-db-urlcell" onClick={() => setEditing(true)}>
-            <span className="amx-db-richtext">
-              {s.split(CELL_WIKI_RE).map((seg, i) => {
-                const m = /^\[\[([^\]\n]+)\]\]$/.exec(seg)
-                if (!m) return <span key={i}>{seg}</span>
-                const inner = m[1]
-                const label = (inner.split('|')[1] ?? inner.split('|')[0]).trim()
-                return (
-                  <button key={i} className="amx-db-wikilink" onClick={(e) => { e.stopPropagation(); openLink(inner) }} title={inner}>
-                    {label}
-                  </button>
-                )
-              })}
-            </span>
+            <span className="amx-db-richtext">{wikiSegments(s, openLink)}</span>
             <button className="amx-db-edit" onClick={(e) => { e.stopPropagation(); setEditing(true) }} title={t('dbembed.edit')} aria-label="edit cell">✎</button>
           </div>
         )
@@ -1747,6 +1939,150 @@ function Cell({
   }
 }
 
+/** `YYYY-MM-DD` / ISO 串按 cellMeta.format 显示(coerceForDisplay 的 'date' 只认纯日期,ISO datetime 会被判空)。 */
+const fmtMetaDate = (raw: CellValue | undefined, format: 'datetime' | 'day'): string => {
+  if (typeof raw !== 'string' || !raw) return ''
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00` : raw)
+  if (Number.isNaN(d.getTime())) return raw // 解析不了就原样给,绝不吞数据
+  const day = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+  return format === 'day' ? day : `${day} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+/** 只读单元格。两条纪律:
+ *  ① **绝不分发给自定义注册类型**(PropCellProps 没有 readOnly 字段,老插件照样会写)—— 零信任,这里自己渲;
+ *  ② 值只从 cells 取,富文本(头像/双行/色调/状态点/动作按钮)一律从 cellMeta 叠 —— cells 只放参与排序的原始值。 */
+function ReadOnlyCell({ row, col, env, meta, pagePath }: {
+  row: DbRow
+  col: DbColumn
+  env: CellEnv
+  meta?: CellMeta
+  pagePath: string
+}) {
+  const { t } = useI18n()
+  const ps = useScopedPageStore()
+  // 动作列:不渲值,渲原生 <button> —— 宿主挂在祖先上的委托监听照常收得到。
+  // 刻意**不** stopPropagation:开行那侧自己按 closest('button,a,input,…') 忽略。
+  if (col.id === ACTIONS_COL_ID) {
+    return (
+      <span className="amx-db-rocell amx-db-roactions">
+        {(meta?.actions ?? []).map((a, i) => (
+          <button
+            key={`${a.act}#${i}`}
+            {...(a.attrs ?? {})}
+            type="button"
+            className="amx-db-actbtn"
+            data-act={a.act}
+            data-tone={a.tone}
+            disabled={a.disabled}
+            title={a.title}
+          >
+            {a.label}
+          </button>
+        ))}
+      </span>
+    )
+  }
+  const base = resolveBaseType(col.type)
+  const raw = row.cells[col.id]
+  const v = coerceForDisplay(raw, base)
+  const blank = <span className="amx-db-blank">{t('dbembed.blank')}</span>
+  const chips = (arr: string[]): ReactNode => arr.map((x) => <span key={x} className={`amx-db-chip ${chipClass(x)}`}>{x}</span>)
+
+  const body = ((): ReactNode => {
+    // select 芯片:meta.text 只换文案(option 的 label),不换形态 —— 放在下面那条短路之前,否则「显示 label」把芯片压成裸文本。
+    // 宿主声明了 option 颜色(meta.tone)就按语义色取芯片底色,别按 label 哈希 —— 「失败」落到绿芯片是真事故。
+    if (base === 'select') {
+      const label = meta?.text !== undefined ? String(meta.text) : (v as string)
+      if (!label) return blank
+      return meta?.tone ? <span className={`amx-db-chip amx-db-chip--${meta.tone}`}>{label}</span> : chips([label])
+    }
+    // meta.text 压过一切:复合格(cell 里放的是排序键)的显示只能由宿主给。
+    if (meta?.text !== undefined) return String(meta.text)
+    if (col.type === 'rowlink' || isLinksProjection(col)) {
+      const tgt = env.targetOf(col)
+      const ids = rowLinkIds(raw)
+      // ponytail: 只读态只渲芯片、不给选择器/↗ —— 换目标行是编辑动作。
+      return ids.length ? chips(ids.map((id) => { const hit = tgt?.db.rows.find((x) => x.id === id); return hit ? linkLabel(tgt!.db, hit, col.titleCol) : id })) : blank
+    }
+    if (col.type === 'file') {
+      // ponytail: 只读态渲文件名,不给上传/移除/缩略图点击(内存源根本没有磁盘锚可解析)。
+      const refs = fileRefs(raw)
+      return refs.length ? refs.map((r, i) => <span className="amx-db-rofile" key={`${r}#${i}`}>{r.replace(/\\/g, '/').split('/').pop() || r}</span>) : blank
+    }
+    if (isComputed(col.type)) {
+      const sV = raw == null ? '' : Array.isArray(raw) ? raw.join(', ') : typeof raw === 'boolean' ? (raw ? '✓' : '✗') : typeof raw === 'number' ? formatNumber(raw, col) : String(raw)
+      return sV || blank
+    }
+    // ⚠️ checkbox 给了 checked 就必须给 onChange:`readOnly` 只对文本框消警,勾选框照样每次渲染都往控制台
+    //    刷一条 React 警告(插件面板里 = check:extendview 的「零 console 错误」直接红)。空 onChange 是正解,
+    //    defaultChecked 不行 —— props 换新数据时同 key 的行会显示陈旧勾选。
+    if (base === 'checkbox') return <input className="amx-db-checkbox" type="checkbox" checked={v === true} disabled onChange={() => undefined} />
+    // 只读数字:列没配数字格式就按本地千分位分组(与 panel-lib 回落路径的 num() 同口径);配了格式照 formatNumber。
+    if (base === 'number') {
+      if (v === null) return blank
+      const plain = col.precision == null && !col.unitPrefix && !col.unitSuffix
+      return plain && typeof v === 'number' ? v.toLocaleString() : formatNumber(v as number, col)
+    }
+    if (base === 'multiselect') return (v as string[]).length ? chips(v as string[]) : blank
+    if (base === 'date') {
+      if (meta?.format) return fmtMetaDate(raw, meta.format) || blank
+      if (col.type === 'calendarDate') return fmtCalDateL(parseCalDate(typeof raw === 'string' ? raw : '')) || blank
+      return (v as string) || blank
+    }
+    if (base === 'url') {
+      const href = meta?.href ?? (v as string)
+      if (!href) return blank
+      return /^https?:\/\//i.test(href)
+        ? <a className="amx-db-url" href={href} target="_blank" rel="noreferrer" title={href}>{(v as string) || href}</a>
+        : <span className="amx-db-urltext">{(v as string) || href}</span>
+    }
+    const sV = v as string
+    // text:富文本展示照留(链接可点),只是没有编辑入口。
+    if (CELL_WIKI_RE.test(sV)) return <span className="amx-db-richtext">{wikiSegments(sV, (r) => openCellLink(ps, pagePath, r))}</span>
+    return sV || blank
+  })()
+
+  const avatar = meta?.avatar
+  // data-hook 留给 img / 字母面那对探针;其余 attrs(如懒加载的 data-avatar)一律落在**恒可见的外壳**上 ——
+  // 落在 hidden 的 img 上 IntersectionObserver 永远不相交,懒加载头像一张都不会来。
+  const { 'data-hook': fbHook, ...avatarAttrs } = (avatar?.attrs ?? {}) as Record<string, string>
+  return (
+    <span
+      className={`amx-db-rocell${meta?.tone ? ` amx-db-tone-${meta.tone}` : ''}${meta?.mono ? ' amx-db-romono' : ''}`}
+      title={meta?.title}
+    >
+      {avatar && (
+        <span className="amx-db-avatar" {...avatarAttrs}>
+          {/* img 与字母回落成对渲染、互为 hidden:onError 一到就换面(宿主的 data-hook 探针两侧都在 DOM 里)。 */}
+          <img
+            src={avatar.src ?? ''}
+            alt=""
+            hidden={!avatar.src}
+            loading="lazy"
+            {...(fbHook ? { 'data-hook': fbHook } : {})}
+            onError={(e) => {
+              const img = e.currentTarget
+              img.hidden = true
+              const fb = img.nextElementSibling as HTMLElement | null
+              if (fb) fb.hidden = false
+            }}
+          />
+          <span className="amx-db-avatar-fb" hidden={!!avatar.src} {...(fbHook ? { 'data-hook': `${fbHook}-fb` } : {})}>
+            {avatar.letter ?? ''}
+          </span>
+        </span>
+      )}
+      <span className="amx-db-rotext">
+        <span className="amx-db-roprimary">
+          {meta?.dot && <span className={`amx-db-dot amx-db-dot--${meta.dot}`} aria-hidden />}
+          {body}
+        </span>
+        {meta?.sub && <span className="amx-db-rosub">{meta.sub}</span>}
+      </span>
+    </span>
+  )
+}
+
 /** 关联表单元格:cell 存目标 .db 的行 id(单选 string / 多选 string[]);每个 id 一枚 chip 显示目标行标题,
  *  点开选择器换行(多选 = 切换、不关弹层),↗ 打开目标表。
  *  ⚠️ 数组值必须先归一再渲染 —— 旧版按 `typeof === 'string'` 判,数组会落到「空」:数据在盘上、界面说空。 */
@@ -1900,6 +2236,7 @@ function RowLinkPicker({ x, y, anchorTop, target, multi, titleCol, refFilter, re
     .sort((a, b) => (needle ? 0 : Number(b.on) - Number(a.on)))
     .slice(0, 12)
   return (
+    <PopLayer>
     <div className="amx-db-popwrap" onMouseDown={onClose}>
       <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
         <input
@@ -1925,6 +2262,7 @@ function RowLinkPicker({ x, y, anchorTop, target, multi, titleCol, refFilter, re
         <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>{t('dbembed.clearRelation')}</button>
       </OverlayAt>
     </div>
+    </PopLayer>
   )
 }
 
@@ -1952,10 +2290,12 @@ function FileCell({ row, col, env, setCell }: {
     e.target.value = ''
   }
   const addBtn = (label: string): ReactNode => (
+    env.readOnly ? null : (
     <label className={label ? 'amx-db-cellbtn amx-db-fileadd' : 'amx-db-filemore'} title={label ? t('dbembed.uploadAttachment') : t('dbembed.appendAttachment')}>
       {label ? <><Paperclip size={13} /> {label}</> : '＋'}
       <input type="file" hidden multiple onChange={pick} />
     </label>
+    )
   )
   if (!refs.length) return addBtn(t('dbembed.type.file'))
   const openFile = (ref: string): void => {
@@ -1974,7 +2314,7 @@ function FileCell({ row, col, env, setCell }: {
               <button className="amx-db-wikilink" onClick={() => openFile(ref)} title={ref}><Paperclip size={12} /> {base}</button>
             )}
             {/* 删到空写 undefined(删键),不是空数组:见 shared/db/fileCell.ts 的口径说明 */}
-            <button className="amx-db-edit" onClick={() => setCell(row.id, col.id, removeFileAt(row.cells[col.id], i))} title={t('dbembed.removeAttachment')} aria-label="clear file">✕</button>
+            {!env.readOnly && <button className="amx-db-edit" onClick={() => setCell(row.id, col.id, removeFileAt(row.cells[col.id], i))} title={t('dbembed.removeAttachment')} aria-label="clear file">✕</button>}
           </span>
         )
       })}
@@ -1993,11 +2333,13 @@ function PopShell({ x, y, anchorTop, onClose, children }: { x: number; y: number
     onClose()
   }
   return (
-    <div className="amx-db-popwrap" onMouseDown={close}>
-      <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
-        {children}
-      </OverlayAt>
-    </div>
+    <PopLayer>
+      <div className="amx-db-popwrap" onMouseDown={close}>
+        <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
+          {children}
+        </OverlayAt>
+      </div>
+    </PopLayer>
   )
 }
 
@@ -2077,6 +2419,7 @@ function ColMenu({
   targetColsOf,
   targetDbOf,
   onPatchCol,
+  readOnly,
 }: {
   col: DbColumn
   sort: 'asc' | 'desc' | null
@@ -2101,18 +2444,71 @@ function ColMenu({
   /** 目标库整份(rowlink 的芯片显示列 / 候选限定要目标表的列与行;未加载给 null)。 */
   targetDbOf: (refDb: string) => DbFile | null
   onPatchCol: (patch: Partial<DbColumn>) => void
+  /** 只读表:只留排序区(改名/移动/类型/公式/关联/删除全砍)。 */
+  readOnly?: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <>
+      {!readOnly && (
+      <input
+        className="amx-db-pop-input"
+        autoFocus
+        defaultValue={col.name}
+        onBlur={(e) => { const n = e.target.value.trim(); if (n && n !== col.name) onRename(n) }}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      />
+      )}
+      <div className="amx-db-pop-sec">{t('dbembed.sortSec')}</div>
+      <div className="amx-db-pop-list">
+        <button className="amx-db-opt" onClick={() => onSort('asc')}>
+          {t('dbembed.sortAsc')}{sort === 'asc' && <span className="amx-db-opt-check">✓</span>}
+        </button>
+        <button className="amx-db-opt" onClick={() => onSort('desc')}>
+          {t('dbembed.sortDesc')}{sort === 'desc' && <span className="amx-db-opt-check">✓</span>}
+        </button>
+        {sort !== null && (
+          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onSort(null)}>{t('dbembed.clearSort')}</button>
+        )}
+      </div>
+      {readOnly ? null : (
+        <ColMenuConfig
+          col={col} locked={locked} onRename={onRename} onSetType={onSetType} onDelete={onDelete}
+          onMove={onMove} canMoveLeft={canMoveLeft} canMoveRight={canMoveRight}
+          columns={columns} dbPath={dbPath} dbFiles={dbFiles} targetColsOf={targetColsOf} targetDbOf={targetDbOf} onPatchCol={onPatchCol}
+        />
+      )}
+    </>
+  )
+}
+
+/** ColMenu 的配置区(改名之外的一切:列序/公式/数字格式/关联/引用/类型/删除)。只读表整段不渲染。 */
+function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, canMoveRight, columns, dbPath, dbFiles, targetColsOf, targetDbOf, onPatchCol }: {
+  col: DbColumn
+  locked?: boolean
+  onRename: (name: string) => void
+  onSetType: (type: string) => void
+  onDelete: () => void
+  onMove: (dir: -1 | 1) => void
+  canMoveLeft: boolean
+  canMoveRight: boolean
+  columns: DbColumn[]
+  dbPath: string
+  dbFiles: string[]
+  targetColsOf: (refDb: string) => DbColumn[]
+  targetDbOf: (refDb: string) => DbFile | null
+  onPatchCol: (patch: Partial<DbColumn>) => void
 }) {
   const { t } = useI18n()
   const relCols = columns.filter((c) => c.type === 'rowlink')
   // 引用列的正向/反向模式。isBackLookup 只认「配完了」的列(refDb+lookupBackCol 同在);半配置态(点了反向、
   // 还没选指回列)得靠本地 state 记住,初值:配完的反向列 / 有 refDb 没 lookupRel 的都算反向。
   const [back, setBack] = useState<boolean>(() => isBackLookup(col) || (!!col.refDb && !col.lookupRel))
-  // 正向关联列**显式未选态**:不回落 relCols[0](回落只在菜单里装作选了、盘上没有 → 物化侧照样空;关联列被删/改类型后 lookupRel 被清,这里显示「待重新配置」)。
+  // 正向关联列**显式未选态**:不回落 relCols[0](回落只在菜单里装作选了、盘上没有 → 物化侧照样空)。
   const lookupRelCol = col.type === 'lookup' && !back ? relCols.find((c) => c.id === col.lookupRel) : undefined
   // 目标列不给嵌套 lookup(跨库链会引出环,物化侧也按 null 处理);公式列可选(读取时物化目标行)。
   const lookupTargetDb = back ? col.refDb : lookupRelCol?.refDb
   const lookupTargets = (lookupTargetDb ? targetColsOf(lookupTargetDb) : []).filter((c) => c.type !== 'lookup')
-  // 反向:目标表里的关联表列(候选「指回本表」的列);refDb 指向本表的排前面并标出,别的也列(路径口径不一时不至于配不出来)。
   const norm = normDbPath
   const backCols = (back && col.refDb ? targetColsOf(col.refDb) : [])
     .filter((c) => c.type === 'rowlink')
@@ -2127,25 +2523,6 @@ function ColMenu({
   const isProj = col.lookupKind === 'links'
   return (
     <>
-      <input
-        className="amx-db-pop-input"
-        autoFocus
-        defaultValue={col.name}
-        onBlur={(e) => { const n = e.target.value.trim(); if (n && n !== col.name) onRename(n) }}
-        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-      />
-      <div className="amx-db-pop-sec">{t('dbembed.sortSec')}</div>
-      <div className="amx-db-pop-list">
-        <button className="amx-db-opt" onClick={() => onSort('asc')}>
-          {t('dbembed.sortAsc')}{sort === 'asc' && <span className="amx-db-opt-check">✓</span>}
-        </button>
-        <button className="amx-db-opt" onClick={() => onSort('desc')}>
-          {t('dbembed.sortDesc')}{sort === 'desc' && <span className="amx-db-opt-check">✓</span>}
-        </button>
-        {sort !== null && (
-          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onSort(null)}>{t('dbembed.clearSort')}</button>
-        )}
-      </div>
       {/* 列顺序(拖表头的等价入口:触屏拖不动、键盘也用得上;菜单不关,可以连点挪好几格) */}
       <div className="amx-db-pop-sec">{locked ? t('dbembed.colOrderFixed') : t('dbembed.colOrder')}</div>
       {!locked && (
@@ -2470,7 +2847,7 @@ function OptionsPop({ x, y, col, row, setCell, createOption, onClose }: {
 }
 
 /** 视图 tab 菜单:改名 + 按类型的配置(看板/表格分组列/日历日期列)+ 列显隐 + 多列排序 + 删除。 */
-function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, onClearSorts, onRename, onPatch, onPickGroupBy, onPickDateCol, onToggleHidden, onToggleOwnCols, onOpenFilters, onOpenCalendar, calendarActive, onDelete }: {
+function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, onClearSorts, onRename, onPatch, onPickGroupBy, onPickDateCol, onToggleHidden, onToggleOwnCols, onOpenFilters, onOpenCalendar, calendarActive, readOnly, onDelete }: {
   view: DbView
   columns: DbColumn[]
   sorts: Array<{ colId: string; dir: 'asc' | 'desc' }>
@@ -2491,6 +2868,8 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
   onOpenFilters: () => void
   onOpenCalendar: () => void
   calendarActive: boolean
+  /** 只读表:砍改名 / 「本视图独立列序」/「加入日历」/ 删除;分组、隐藏列、排序、筛选照留(纯视图态)。 */
+  readOnly?: boolean
   onDelete?: () => void
 }) {
   const { t } = useI18n()
@@ -2514,6 +2893,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
   )
   return (
     <>
+      {!readOnly && (
       <input
         className="amx-db-pop-input"
         autoFocus
@@ -2521,6 +2901,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
         onBlur={(e) => { const n = e.target.value.trim(); if (n && n !== view.name) onRename(n) }}
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
       />
+      )}
       {view.type === 'kanban' && (
         <>
           <div className="amx-db-pop-sec">{t('dbembed.kanbanGroupSec')}</div>
@@ -2692,7 +3073,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
           </>
         )
       })()}
-      {(() => {
+      {!readOnly && (() => {
         // 开态 = 两字段任一存在(`{}` 是「开了没拖过」,不是空值;别按键数判)
         const own = view.order !== undefined || view.widths !== undefined
         return (
@@ -2739,11 +3120,11 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
         {sorts.length > 0 && <button className="amx-db-opt amx-db-opt-clear" onClick={onClearSorts}>{t('dbembed.clearSort')}</button>}
       </div>
       <button className="amx-db-opt" onClick={onOpenFilters}>{t('dbembed.filterMore')}{(view.filters?.length ?? 0) > 0 && <span className="amx-db-opt-check">{view.filters!.length}</span>}</button>
-      <button className="amx-db-opt" onClick={onOpenCalendar}>{calendarActive ? t('dbembed.calendarSettings') : t('dbembed.addToCalendar')}</button>
+      {!readOnly && <button className="amx-db-opt" onClick={onOpenCalendar}>{calendarActive ? t('dbembed.calendarSettings') : t('dbembed.addToCalendar')}</button>}
       {onDelete ? (
         <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{t('dbembed.deleteView')}</button>
       ) : (
-        <div className="amx-db-pop-sec">{t('dbembed.lastViewLocked')}</div>
+        !readOnly && <div className="amx-db-pop-sec">{t('dbembed.lastViewLocked')}</div>
       )}
     </>
   )
@@ -2882,13 +3263,15 @@ function FilterRowsEditor({ filters, mode, columns, kindOf, targetOf, onChange, 
 }
 
 /** 行详情编辑:全列纵排,复用表格同款 Cell(看板/日历/画廊点卡即编辑);select 选项开嵌套弹层。 */
-function RowEditor({ db, row, pagePath, env, setCell, createOption, onDelete }: {
+function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, onDelete }: {
   db: DbFile
   row: DbRow
   pagePath: string
   env: CellEnv
   setCell: (rowId: string, colId: string, v: CellValue | undefined) => void
   createOption: (colId: string, label: string) => void
+  /** 只读挂载:格子换只读渲染 + 砍掉删除行(只读表若没给 onRowOpen,卡片视图仍会开到这里)。 */
+  readOnly?: boolean
   onDelete: () => void
 }) {
   const { t } = useI18n()
@@ -2903,6 +3286,7 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, onDelete }: 
             {col.name}
           </span>
           <div className="amx-db-rowed-cell">
+            {readOnly ? <ReadOnlyCell row={row} col={col} env={env} pagePath={pagePath} /> : (
             <Cell
               row={row}
               col={col}
@@ -2914,10 +3298,11 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, onDelete }: 
                 setOpt({ colId: col.id, x: Math.min(r.left, window.innerWidth - 250), y: Math.min(r.bottom + 4, window.innerHeight - 260) })
               }}
             />
+            )}
           </div>
         </div>
       ))}
-      <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{t('dbembed.deleteRow')}</button>
+      {!readOnly && <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{t('dbembed.deleteRow')}</button>}
       {opt && optCol && (
         <OptionsPop x={opt.x} y={opt.y} col={optCol} row={row} setCell={setCell} createOption={createOption} onClose={() => setOpt(null)} />
       )}
@@ -2944,11 +3329,13 @@ function cellPreview(col: DbColumn, v: CellValue | undefined): ReactNode | null 
 }
 
 /** 看板/画廊共用卡片:可选封面 + 标题 + 前几个非空属性预览。 */
-function RowCard({ db, row, title, onClick, cols, skipColId, max = 3, draggable, onDragStart, cover }: {
+function RowCard({ db, row, title, onClick, cols, skipColId, max = 3, draggable, onDragStart, cover, attrs }: {
   db: DbFile
   row: DbRow
   title: string
   onClick: (e: ReactMouseEvent) => void
+  /** 宿主挂在卡片上的属性(事件委托用;与表格行的 rowAttrs 同源)。 */
+  attrs?: Record<string, string>
   /** 预览用的列集(视图可见列);缺 = 全列。首列(标题)恒跳过。 */
   cols?: DbColumn[]
   /** 不预览的列(看板分组列,泳道本身已表达)。 */
@@ -2967,7 +3354,7 @@ function RowCard({ db, row, title, onClick, cols, skipColId, max = 3, draggable,
     if (node) previews.push(<div className="amx-db-card-prop" key={col.id}>{node}</div>)
   }
   return (
-    <div className="amx-db-card" role="button" tabIndex={0} draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
+    <div {...(attrs ?? {})} className="amx-db-card" role="button" tabIndex={0} draggable={draggable} onDragStart={onDragStart} onClick={onClick}>
       {cover}
       <div className="amx-db-card-title">{title}</div>
       {previews}
@@ -2976,7 +3363,7 @@ function RowCard({ db, row, title, onClick, cols, skipColId, max = 3, draggable,
 }
 
 /** 看板:按单选列分组为泳道(选项序 + 未分组),HTML5 拖卡跨道改组值;组内顺序 = 行序。 */
-function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitle, addStatusCol }: {
+function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitle, addStatusCol, readOnly, rowAttrs }: {
   db: DbFile
   rows: DbRow[]
   view: DbView
@@ -2986,6 +3373,8 @@ function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitl
   openRow: (e: ReactMouseEvent, rowId: string) => void
   rowTitle: (r: DbRow) => string
   addStatusCol: () => void
+  readOnly?: boolean
+  rowAttrs?: (row: DbRow) => Record<string, string>
 }) {
   const { t } = useI18n()
   const groupCol =
@@ -3016,7 +3405,7 @@ function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitl
       {lanes.map((opt) => {
         const cards = laneRows(opt)
         return (
-          <div key={opt ?? '__none'} className="amx-db-lane" onDragOver={(e) => e.preventDefault()} onDrop={onDrop(opt)}>
+          <div key={opt ?? '__none'} className="amx-db-lane" onDragOver={readOnly ? undefined : (e) => e.preventDefault()} onDrop={readOnly ? undefined : onDrop(opt)}>
             <div className="amx-db-lane-head">
               {opt ? <span className={`amx-db-chip ${chipClass(opt)}`}>{opt}</span> : <span className="amx-db-lane-none">{t('dbembed.laneNone')}</span>}
               <span className="amx-db-lane-count">{cards.length}</span>
@@ -3030,15 +3419,18 @@ function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitl
                   title={rowTitle(r)}
                   cols={visCols}
                   skipColId={groupCol.id}
-                  draggable
+                  attrs={rowAttrs?.(r)}
+                  draggable={!readOnly}
                   onDragStart={(e) => { e.dataTransfer.setData('text/plain', r.id); e.dataTransfer.effectAllowed = 'move' }}
                   onClick={(e) => openRow(e, r.id)}
                 />
               ))}
             </div>
-            <button className="amx-db-lane-add" onClick={() => addRow(opt ? { [groupCol.id]: opt } : undefined)}>
-              <PlusIcon /> {t('dbembed.newCard')}
-            </button>
+            {!readOnly && (
+              <button className="amx-db-lane-add" onClick={() => addRow(opt ? { [groupCol.id]: opt } : undefined)}>
+                <PlusIcon /> {t('dbembed.newCard')}
+              </button>
+            )}
           </div>
         )
       })}
@@ -3051,7 +3443,7 @@ const fmtYmd = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)
 
 /** 日历:按日期列(date / calendarDate)铺月栅格,周日起始(与 Calendar Space 一致);
  *  区间值逐日铺条;日格 ＋ 新行带当日初值。42 格恒定,月份切换高度不跳。 */
-function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol }: {
+function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol, readOnly, rowAttrs }: {
   db: DbFile
   rows: DbRow[]
   view: DbView
@@ -3059,6 +3451,8 @@ function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol }:
   openRow: (e: ReactMouseEvent, rowId: string) => void
   rowTitle: (r: DbRow) => string
   addDateCol: () => void
+  readOnly?: boolean
+  rowAttrs?: (row: DbRow) => Record<string, string>
 }) {
   const { t } = useI18n()
   const [ym, setYm] = useState(() => {
@@ -3123,12 +3517,14 @@ function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol }:
             <div className={`amx-db-cal-day${inMonth ? '' : ' amx-db-cal-out'}${k === todayK ? ' amx-db-cal-today' : ''}`} key={k}>
               <div className="amx-db-cal-dayhead">
                 <span className="amx-db-cal-num">{d.getDate()}</span>
-                <button className="amx-db-cal-add" onClick={() => addRow({ [dateCol.id]: k })} title={t('dbembed.addOnDay')} aria-label={`add row on ${k}`}>
-                  <PlusIcon />
-                </button>
+                {!readOnly && (
+                  <button className="amx-db-cal-add" onClick={() => addRow({ [dateCol.id]: k })} title={t('dbembed.addOnDay')} aria-label={`add row on ${k}`}>
+                    <PlusIcon />
+                  </button>
+                )}
               </div>
               {dayRows.map((r) => (
-                <button className="amx-db-ev" key={r.id} onClick={(e) => openRow(e, r.id)} title={rowTitle(r)}>{rowTitle(r)}</button>
+                <button {...(rowAttrs?.(r) ?? {})} className="amx-db-ev" key={r.id} onClick={(e) => openRow(e, r.id)} title={rowTitle(r)}>{rowTitle(r)}</button>
               ))}
             </div>
           )
@@ -3139,7 +3535,7 @@ function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol }:
 }
 
 /** 画廊:卡片栅格,点卡开行编辑;首个附件列的图片作封面。 */
-function GalleryBody({ db, rows, visCols, addRow, openRow, rowTitle, coverOf }: {
+function GalleryBody({ db, rows, visCols, addRow, openRow, rowTitle, coverOf, readOnly, rowAttrs }: {
   db: DbFile
   rows: DbRow[]
   visCols: DbColumn[]
@@ -3147,16 +3543,20 @@ function GalleryBody({ db, rows, visCols, addRow, openRow, rowTitle, coverOf }: 
   openRow: (e: ReactMouseEvent, rowId: string) => void
   rowTitle: (r: DbRow) => string
   coverOf: (r: DbRow) => ReactNode
+  readOnly?: boolean
+  rowAttrs?: (row: DbRow) => Record<string, string>
 }) {
   const { t } = useI18n()
   return (
     <div className="amx-db-gallery">
       {rows.map((r) => (
-        <RowCard key={r.id} db={db} row={r} title={rowTitle(r)} cols={visCols} max={4} cover={coverOf(r)} onClick={(e) => openRow(e, r.id)} />
+        <RowCard key={r.id} db={db} row={r} title={rowTitle(r)} cols={visCols} max={4} cover={coverOf(r)} attrs={rowAttrs?.(r)} onClick={(e) => openRow(e, r.id)} />
       ))}
-      <button className="amx-db-card amx-db-card-add" onClick={() => addRow()}>
-        <PlusIcon /> {t('dbembed.newCard')}
-      </button>
+      {!readOnly && (
+        <button className="amx-db-card amx-db-card-add" onClick={() => addRow()}>
+          <PlusIcon /> {t('dbembed.newCard')}
+        </button>
+      )}
     </div>
   )
 }

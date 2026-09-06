@@ -26,14 +26,119 @@ export function normalizeClientTag(v: unknown): string | undefined {
   return typeof v === 'string' && CLIENT_TAG_RE.test(v) ? v : undefined;
 }
 
+/**
+ * GUI 自报的可派发命令目录 + 设置快照(信任边界:值来自客户端,且**会进模型上下文**)。
+ * 与 client tag 同一条链:白名单消毒后随 input 落 JSONB,不加列、不动 stateStore 接缝。
+ *
+ * 消毒不是洁癖 —— 目录是模型每轮可读的文本,不封顶就等于给了客户端一个无限长的提示词注入位。
+ * 条目数、字段长度、参数 schema 体积全部封顶;超出即截断,不报错(老客户端多送字段不该起不了 run)。
+ */
+// ⚠️ 必须容得下渲染端真实的 id 形态:插件命令是 `amadeus:<pluginId>:<命令 id>` 三段拼的,
+// 而插件 id 本身就能到 64 字符,且插件作者常在 id 里用 `.`。收窄成 64/无点会让**合法**的插件
+// 命令在这里被静默丢掉 —— 目录里有、派发时说不存在(Codex 评审 2026-09-04 P2-13)。
+const UI_CMD_ID_RE = /^[A-Za-z0-9:._-]{1,160}$/;
+// 排除 __proto__:`out[k] = …` 对它是改原型链不是加键(客户端可控的键名进 Object 字面量,必须挡)。
+const UI_KEY_RE = /^(?!__proto__$)[A-Za-z0-9_]{1,64}$/;
+
+/**
+ * 目录文本进模型上下文 = 提示词注入面(插件作者写的字符串,宿主只是搬运工)。
+ * 截断挡不住指令,只挡得住体积。这里额外做两件事:剥掉换行与控制字符(含 bidi 覆写),
+ * 让一条 description 无法伪造出新的段落/小节去冒充系统指令。
+ */
+export function sanitizeText(v: string, max: number): string {
+  return v
+    .replace(/[\u0000-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+const MAX_UI_COMMANDS = 200;
+const MAX_UI_DESC = 300;
+const MAX_UI_PARAMS_CHARS = 2000;
+const MAX_UI_SETTINGS = 40;
+/** 目录**总**字节预算。⚠️ 只有逐项上限时,200 条 × (300 描述 + 2000 params + 300 state) ≈ 520KB,
+ *  离通用工具结果上限还很远,足够把有用的上下文整片挤出去(Codex 评审 2026-09-04 P1-7 的量级那半)。
+ *  超出即停止收录,并在末尾留一条 truncated 记号 —— 静默截断会让模型以为它看到的就是全部。 */
+const MAX_UI_CATALOG_CHARS = 24_000;
+
+export function normalizeUiCommands(v: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(v)) return undefined; // 字段缺席 = 老客户端 → 界面面工具整体不注册
+  const out: Array<Record<string, unknown>> = [];
+  let budget = MAX_UI_CATALOG_CHARS;
+  for (const raw of v.slice(0, MAX_UI_COMMANDS)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const id = typeof o.id === 'string' ? o.id : '';
+    const description = typeof o.description === 'string' ? sanitizeText(o.description, MAX_UI_DESC) : '';
+    if (!UI_CMD_ID_RE.test(id) || !description) continue;
+    const entry: Record<string, unknown> = { id, description };
+    if (o.params && typeof o.params === 'object' && !Array.isArray(o.params)) {
+      try {
+        if (JSON.stringify(o.params).length <= MAX_UI_PARAMS_CHARS) entry.params = o.params;
+      } catch { /* 带环的对象:丢掉 params,保留命令本身 */ }
+    }
+    if (typeof o.state === 'string' && o.state) {
+      const st = sanitizeText(o.state, MAX_UI_DESC);
+      if (st) entry.state = st;
+    }
+    const cost = id.length + description.length + (entry.params ? JSON.stringify(entry.params).length : 0) + String(entry.state ?? '').length;
+    if (cost > budget) {
+      out.push({ id: '_truncated', description: `catalog truncated: ${v.length - out.length} more command(s) not listed` });
+      break;
+    }
+    budget -= cost;
+    out.push(entry);
+  }
+  return out;
+}
+
+/** 每项设置上送 `{value, allowed}`。
+ *  ⚠️ **合法值必须由渲染端给**,引擎不许自己维护一份枚举:主题包与插件字体是可上盘的,
+ *  三个内置设计语言的真实 id 也是 `genesis-glass|lovable|zhi`(不是 genesis|soft)。
+ *  引擎侧硬编码提示 = 保证会漂,而漂了的表现是模型照着提示发一个必被拒的值(Codex 评审 P2-11)。 */
+export function normalizeUiSettings(v: unknown): Record<string, { value: string; allowed?: string[] }> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, { value: string; allowed?: string[] }> = {};
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>).slice(0, MAX_UI_SETTINGS)) {
+    if (!UI_KEY_RE.test(k) || !raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const value = typeof o.value === 'string' || typeof o.value === 'number' || typeof o.value === 'boolean'
+      ? sanitizeText(String(o.value), MAX_UI_DESC) : '';
+    const entry: { value: string; allowed?: string[] } = { value };
+    if (Array.isArray(o.allowed)) {
+      const allowed = o.allowed
+        .filter((x): x is string => typeof x === 'string')
+        .slice(0, 60)
+        .map((x) => sanitizeText(x, 64))
+        .filter(Boolean);
+      if (allowed.length) entry.allowed = allowed;
+    }
+    out[k] = entry;
+  }
+  return out;
+}
+
+/** 界面动作回执里的设置新值(key → value):键/条数/长度与 normalizeUiSettings 同一套上限;值域不收(run 内不变)。 */
+export function normalizeUiValues(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, raw] of Object.entries(v as Record<string, unknown>).slice(0, MAX_UI_SETTINGS)) {
+    if (!UI_KEY_RE.test(k) || typeof raw !== 'string') continue;
+    out[k] = sanitizeText(raw, MAX_UI_DESC);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // 起一个 run
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings } = req.body || {};
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
     const clientTag = normalizeClientTag(client);
+    const uiCommandsNorm = normalizeUiCommands(ui_commands);
+    const uiSettingsNorm = normalizeUiSettings(ui_settings);
     // 接缝①(G1):app_id 经请求流入(缺省=本进程装配的 profile);未知 app_id 拒绝。
     const profile = resolveProfile(app_id);
     if (!profile) {
@@ -77,7 +182,13 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       appId: profile.appId,
       modelId,
       assistantMessageId,
-      input: { message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {}, ...(clientTag ? { client: clientTag } : {}) },
+      input: {
+        message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {},
+        ...(clientTag ? { client: clientTag } : {}),
+        // 界面面能力握手:字段在场(哪怕空数组)= 渲染端够新,会处理 ui_cmd 事件。缺席 → 工具不注册。
+        ...(uiCommandsNorm ? { uiCommands: uiCommandsNorm } : {}),
+        ...(uiSettingsNorm ? { uiSettings: uiSettingsNorm } : {}),
+      },
     });
 
     enqueueRun(session_id, runId); // 同会话已有在飞 run 则排队，否则立刻起；均不 await

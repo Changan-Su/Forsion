@@ -102,7 +102,7 @@ async function main() {
     // ⚠️ e2e 与用户 dev 实例共用 renderer 存储(dev 模式 userData 恒为 forsion-desktop-dev),
     // 「上次 Space」是谁最后用谁说了算 —— 用户停在主页/Amadeus,这里就会开在那儿,聊天侧栏根本不存在
     // (08-28 深夜三连红的真相,失败截图= 主页 Space)。确定性切到 Tangu 聊天 Space 再断言,幂等。
-    const spaceBtn = win.locator('.rb-space[title="Tangu"]').first()
+    const spaceBtn = win.locator('.rb-space[title="Agent"]').first()
     if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
     if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})

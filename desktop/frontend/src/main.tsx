@@ -18,6 +18,7 @@ import { installMultiWindow } from './multiWindow'
 import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
 import { applyUiFonts } from './uiFont'
+import { recordError } from './diag'
 
 // 全局错误兜底:ErrorBoundary 只接 React 渲染期异常,接不到事件回调/异步里的未捕获错误,
 // 也接不到渲染进程级崩溃。这里至少把它们记到 console(配合主进程崩溃自愈),便于诊断白屏。
@@ -68,6 +69,7 @@ try {
   applyUiFonts()
 } catch (err) {
   console.error('[tangu] init failed, continue to mount:', err)
+  recordError('init', err) // 被 catch 吞掉的启动错误不派发 window 'error',手动记进导出日志
 }
 
 // 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。

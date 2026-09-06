@@ -146,15 +146,15 @@ async function main() {
     // 5 别的 Space 的**命名布局**里留着日历面板:关插件后切回去不许炸。
     //   造夹具全靠点击(不合成拖拽):Tangu Space → 启动器 → 「日历」卡 = 在主区开一张日历,
     //   再切走(切走即 saveNamed('space:tangu'),那份布局里就带着 calendar 面板了)。
-    await enterSpace(win, ['Tangu'])
+    await enterSpace(win, ['Agent'])
     await openLauncher(win)
     const carded = await clickCard(win, ['日历', 'Calendar'])
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['Amadeus'])
+    await enterSpace(win, ['Note'])
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Tangu']) // ← applyNamed 吃到含 calendar 的命名布局
+    await enterSpace(win, ['Agent']) // ← applyNamed 吃到含 calendar 的命名布局
     await win.waitForTimeout(1200)
     const back = await win.evaluate(SNAP)
     const aliveNow = await win.evaluate(`(() => ({
@@ -172,7 +172,7 @@ async function main() {
     // 6 侧栏面板那半:把引擎刚存下的 space:calendar 布局(左 todo-list / 右 calendar-config)
     //   搬进 space:tangu 的命名槽 —— 真实 blob,不手搓;再关插件、切回 Tangu 让 applyNamed 吃它。
     await enterCalendar(win)
-    await enterSpace(win, ['Amadeus']) // 切走 = saveNamed('space:calendar')
+    await enterSpace(win, ['Note']) // 切走 = saveNamed('space:calendar')
     const cloned = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -187,7 +187,7 @@ async function main() {
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Tangu'])
+    await enterSpace(win, ['Agent'])
     await win.waitForTimeout(1500)
     const side = await win.evaluate(SNAP)
     const aliveSide = await win.evaluate(`(() => ({
@@ -222,7 +222,7 @@ async function main() {
       }
     })()`)
     await win.waitForTimeout(1500)
-    await enterSpace(win, ['Amadeus'])
+    await enterSpace(win, ['Note'])
     const stashFix = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -241,7 +241,7 @@ async function main() {
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Tangu'])   // applyNamed 成功(活体都在),stash 悄悄带着死视图
+    await enterSpace(win, ['Agent'])   // applyNamed 成功(活体都在),stash 悄悄带着死视图
     await win.waitForTimeout(1200)
     await win.click('.dv-edge-right') // ← 展开:stash 里的死视图会被 openView
     await win.waitForTimeout(1500)

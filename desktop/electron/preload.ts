@@ -282,6 +282,25 @@ const api = {
   // ── 内置浏览器 / 内置终端 ────────────────────────────────────────────────────
   /** 用系统浏览器打开(主进程只放 http(s))。 */
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
+
+  /**
+   * 以当前用户身份调 Forsion 云端 API。**只收相对路径**(如 '/meeting/rooms'),主进程拼 cloudUrl
+   * 并盖上 forsion_token —— token 不下发渲染层,所以渲染层自己拼 URL 打云端一定 401。
+   * 返回 { status, json } 或 { status: 0, error }(status 0 = 没发出去:未登录/地址非法/网络断)。
+   */
+  cloudFetch: (req: { path: string; method?: string; body?: unknown }): Promise<{ status: number; json?: any; error?: string }> =>
+    ipcRenderer.invoke('cloud:fetch', req),
+
+  // ── 屏幕共享 ────────────────────────────────────────────────────────────────
+  /** 可共享的屏幕/窗口(带 dataURL 缩略图)。选源 UI 由调用方自己画 —— 宿主不提供选择器。 */
+  screenShareSources: (): Promise<Array<{ id: string; name: string; thumbnail: string; isScreen: boolean }>> =>
+    ipcRenderer.invoke('screenShare:sources'),
+  /**
+   * 记下本次要共享的源,**然后**再调 getDisplayMedia()。顺序反了会拿到 AbortError。
+   * 预选是一次性的(主进程用掉即弃),每次共享都要重新选。传空串=撤销预选。
+   * macOS 15+ 走系统原生选择器,此时本调用可省略。
+   */
+  screenShareSelect: (sourceId: string): void => ipcRenderer.send('screenShare:select', sourceId),
   /** 拉一份外部日历订阅(.ics)。走主进程绕开 CORS —— 订阅地址一律不发 CORS 头。 */
   fetchIcs: (url: string): Promise<{ ok: boolean; text?: string; error?: string }> =>
     ipcRenderer.invoke('calendar:fetchIcs', url),

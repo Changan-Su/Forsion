@@ -9,6 +9,7 @@
 import React, { useEffect, useRef } from 'react'
 import { registerView, unregisterView, useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import type { ExtendViewController } from '@lcl/engine'
 import type { ViewContribution } from '@amadeus/plugins/types'
 import { registerMessages, translate } from './i18n'
 
@@ -17,14 +18,14 @@ registerMessages({
 })
 
 /** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。 */
-const PluginViewHost: React.FC<{ def: ViewContribution }> = ({ def }) => {
+const PluginViewHost: React.FC<{ def: ViewContribution; extendView?: ExtendViewController }> = ({ def, extendView }) => {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = ref.current
     if (!el) return
     let cleanup: (() => void) | void
     try {
-      cleanup = def.mount(el)
+      cleanup = def.mount(el, { extendView })
     } catch (e) {
       console.error(`[plugin-view] mount "${def.id}" failed`, e)
       el.textContent = translate('pluginview.mountFailed')
@@ -33,7 +34,7 @@ const PluginViewHost: React.FC<{ def: ViewContribution }> = ({ def }) => {
       try { if (typeof cleanup === 'function') cleanup() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
       el.replaceChildren()
     }
-  }, [def])
+  }, [def, extendView])
   return <div ref={ref} style={{ height: '100%', overflow: 'auto' }} />
 }
 
@@ -77,7 +78,7 @@ export function syncPluginViews(): void {
         type,
         kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
         displayName: () => def.title,
-        factory: () => <PluginViewHost def={def} />,
+        factory: ({ extendView }) => <PluginViewHost def={def} extendView={extendView} />,
         singleton: def.singleton !== false,
         closable: true,
         // P2 联动声明:插件内相对 id → 补全命名空间(type 形如 plugin:<pid>:<vid>,pid 取中段;

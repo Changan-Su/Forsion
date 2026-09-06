@@ -7,6 +7,8 @@
 import type { ComponentType } from 'react'
 import type { PropertyTypeDef } from '../blocks/database/propertyTypes'
 import type { PluginOnboardingSpec } from '@amadeus-shared/ipc'
+import type { ExtendViewController } from '@lcl/engine/extendView'
+import type { CommandInvoke } from '@lcl/engine/types'
 
 /** A custom multi-dimensional-table (Database) property/column type a plugin can register.
  *  Provides render+edit + a primitive baseType for storage; see blocks/database/propertyTypes. */
@@ -56,8 +58,24 @@ export interface SlashContribution {
 export interface CommandContribution {
   id: string
   title: string
-  run(): void
+  run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
+  /**
+   * Agent opt-in. Declaring it puts this command in the model's `list_ui_commands` catalog and
+   * lets `run_ui_command` dispatch it; without it the command stays human-only.
+   *
+   * `description` MUST be English (the model reads it) and MUST be written here rather than
+   * reusing `title`, which is rendered in the user's current interface language.
+   *
+   * Prefer `invoke.run(args)` with an explicit value over a toggle: the agent cannot see current
+   * UI state, and the dispatch event is replayed on reconnect, so a toggle can fire twice.
+   *
+   * Nothing dangerous may opt in — deleting or overwriting user data, credentials and security
+   * settings, outbound send/publish/purchase, install/upgrade/restart/quit, or irreversible bulk
+   * operations. On web and mobile there is no approval gate at all, so this allowlist IS the
+   * safety boundary.
+   */
+  invoke?: CommandInvoke
 }
 
 /** An accent theme a plugin can contribute (CSS is injected into a <style> when enabled). */
@@ -380,6 +398,12 @@ export interface StatusItemHandle {
  *  Spaces can compose it (and declare it under `requires.views`), and the plugin's own commands
  *  can open it via `ctx.openView(viewId)`. Unregistered again when the plugin is disabled
  *  (open instances are closed first). */
+/** Bound to this mounted instance, revoked on close/navigation/plugin disable.
+ *  Available for Main Views; feature-detect view?.extendView on older hosts. Rules and opt-in agent commands can call open(). */
+export interface PluginViewContext {
+  extendView?: ExtendViewController
+}
+
 export interface ViewContribution {
   /** View id, unique within the plugin (kebab-case recommended). */
   id: string
@@ -387,7 +411,7 @@ export interface ViewContribution {
   title: string
   /** Build the view's DOM into the host-provided element; called once per opened instance.
    *  Return a cleanup to run when the instance closes (clear timers/observers here). */
-  mount(el: HTMLElement): (() => void) | void
+  mount(el: HTMLElement, view?: PluginViewContext): (() => void) | void
   /** Default true: at most one instance app-wide (re-opening focuses the existing one). */
   singleton?: boolean
   /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main
@@ -777,6 +801,115 @@ export interface PluginContext {
   calendar?: {
     ensureMember(dbPath: string, dateColId: string, checkboxColId?: string): void
   }
+  /** 在插件自己的容器里渲染一张**原生多维表**(只读、内存行,2026-09-05 起)。**不依赖笔记库** ——
+   *  与 `ctx.dashboard.mount` 同一路线:远程系统面板(服务器管理台之流)的表格终于能拿到筛选 / 搜索 /
+   *  隐藏列 / 排序 / 统计这套原生表能力,而不必各自手搓 `<table>`。
+   *
+   *  `mount(el, spec)` 同步返回 `{ update(spec), dispose() }`:
+   *  · 数据刷新调 `update(spec)` —— **原地重渲染**,用户的排序/筛选/列宽存活,别 dispose 了重挂;
+   *  · `dispose()` 幂等;插件禁用/重载时宿主也会统一卸掉。
+   *  · **规格非法(没列 / 行缺 id / 单元格文案不是基元)当场同步抛** —— 调用方按「抛 = 宿主不收」
+   *    降级到自己的经典表格(panel-lib 的 `L.table` 就是这么写的)。别把它当 no-op。
+   *
+   *  ⚠️**老宿主没有这个成员**(整个 `ctx.table` 不存在,不是空壳)—— 一律
+   *  `if (ctx.table && ctx.table.mount) { … } else { 画自己的表 }`。宿主给不了就整条省略、绝不留哑桩,
+   *  留了哑桩插件会走进原生分支然后什么都不画(与 `ctx.app.watchFile` / `reveal` 同一条纪律)。 */
+  table?: {
+    mount(el: HTMLElement, spec: TableSpec): { update(spec: TableSpec): void; dispose(): void }
+  }
+}
+
+/** 一张只读表的完整描述(**纯数据**,除注明外不放函数;任何位置都不许放 HTML 字符串)。 */
+export interface TableSpec {
+  /** 槽位键,同一面板里每张表稳定唯一(如 'models' / 'usage')——同 id 再来即「更新」而非重挂。 */
+  id: string
+  /** 行只是分页 / 截断后的一片(服务端分页的订单、按页切的用量):原生表隐藏筛选·搜索·统计·导出整条工具栏,
+   *  它们只会作用于本页并给出错误的数据视图;表头排序照留(本页内排序)。降级路径无此概念。 */
+  partial?: boolean
+  columns: TableColumn[]
+  rows: TableRow[]
+  /** 空状态文案(插件自己本地化好)。 */
+  empty?: string
+  /** 表级错误文案(整表替换成它)。 */
+  error?: string
+  /** 高亮行 id。 */
+  selectedId?: string | null
+  /** 逐行操作按钮 → 渲染成尾列(表头 = `actionsLabel`,可为空串)。 */
+  actions?: (row: TableRow) => TableAction[]
+  actionsLabel?: string
+  /** 挂到行元素上的附加属性(如 `{ 'data-act': 'open-user' }`),让插件既有的事件委托继续生效。 */
+  rowAttrs?: (row: TableRow) => Record<string, string>
+  /** 行点击 / Enter(点在按钮、链接、输入控件上时不触发)。用事件委托的面板可以不给。 */
+  onRowOpen?: (row: TableRow) => void
+  /** 每次 DOM 提交后回调(两条路径都有),用来挂懒加载观察器一类**只读**逻辑。
+   *  ⚠️原生表是 React 自己的树:**绝不许**在这里往里塞/删节点,下一次 `update()` 会把它对账掉。 */
+  onRender?: (root: HTMLElement) => void
+  /** 初始排序(仅首次生效;之后用户在表头改的排序由表自己记,`update()` 不会把它冲掉)。 */
+  sort?: { key: string; dir: 'asc' | 'desc' } | null
+  /** 用户改排序时回调 —— 面板把它存进自己的状态,重渲染时姿态一致。 */
+  onSort?: (s: { key: string; dir: 'asc' | 'desc' } | null) => void
+}
+
+export interface TableColumn {
+  key: string
+  /** 表头文案(插件自己本地化好)。 */
+  label: string
+  kind: 'text' | 'number' | 'date' | 'select' | 'check' | 'url'
+  /** 整列等宽字体(代码 / id)。 */
+  mono?: boolean
+  /** kind='select':徽章词表(color = green|red|yellow|gray|blue|amber|accent)。 */
+  options?: Array<{ value: string; label?: string; color?: string }>
+  /** kind='date' 的显示档;缺省 'datetime'。 */
+  format?: 'datetime' | 'day'
+  align?: 'left' | 'right'
+  /** 列宽 px(建议值)。 */
+  width?: number
+  nowrap?: boolean
+  /** 降级路径:表头可点 + ▲/▼;原生路径恒可排序。 */
+  sortable?: boolean
+}
+
+/** 一格:基元即文案;要装饰(两行 / 色调 / 状态点 / 头像 / 链接 / 排序键)就给对象。 */
+export type TableCell = string | number | boolean | null | undefined | {
+  /** 主文案(check 列用 `checked`)。 */
+  text?: string | number | null
+  checked?: boolean
+  /** 第二行(弱化)。 */
+  sub?: string
+  tone?: 'muted' | 'green' | 'red' | 'amber' | 'blue' | 'accent'
+  /** 文案前的状态点。 */
+  dot?: 'green' | 'red' | 'yellow' | 'gray'
+  mono?: boolean
+  title?: string
+  /** 文案前的头像;`src` 取不到时退回 `letter`。 */
+  avatar?: { src?: string | null; letter?: string; attrs?: Record<string, string> }
+  /** kind='select':选项值(缺省取 text)。 */
+  value?: string
+  /** kind='url'。 */
+  href?: string
+  /** 排序键覆盖(复合文案的真值;给了它显示仍走 text)。 */
+  sortValue?: string | number
+  /** 挂到单元格元素上的附加属性(测试钩子)。 */
+  attrs?: Record<string, string>
+}
+
+export interface TableRow {
+  id: string
+  cells: Record<string, TableCell>
+  /** 挂到行元素上的附加属性(与 `spec.rowAttrs` 合并,后者优先)。 */
+  attrs?: Record<string, string>
+  /** 两条路径都认:降级路径写进 `<tr class>`,原生路径经 rowAttrs 的 `class` 键并进行的 className。 */
+  className?: string
+}
+
+/** 行内操作按钮:`data-act="<act>"` + `attrs` 原样落到按钮上,面板既有的委托点击不用改。 */
+export interface TableAction {
+  act: string
+  label: string
+  tone?: 'muted' | 'red' | 'primary'
+  attrs?: Record<string, string>
+  disabled?: boolean
+  title?: string
 }
 
 /** `ctx.automation.ensure` 的一条规则 = 引擎 upsert 入参的**子集**(只有 db_changed 触发;id / vault /

@@ -9,6 +9,7 @@ import { useUiOverlay } from './amadeusOverlayStore'
 import { amadeus } from '@amadeus/api'
 import { openDailyNote } from './amadeusTemplates'
 import { openTutorial } from './amadeusTutorial'
+import { openManual } from './amadeusManual'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { createDashboard, createDrawing } from './amadeusNav'
 import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
@@ -25,6 +26,7 @@ const CMDS: Command[] = [
   { id: 'amadeus-quick-switcher', title: () => translate('amadeus.cmd.quickSwitch'), keywords: 'quick switcher open jump 快速 切换 跳转', hotkey: 'mod+p', run: () => useUiOverlay.getState().open('switcher') },
   { id: 'amadeus-search', title: () => translate('amadeus.cmd.search'), keywords: 'search full text 搜索 全文', hotkey: 'mod+shift+f', run: () => openSearchView() },
   { id: 'amadeus-tutorial', title: () => translate('amadeus.cmd.tutorial'), keywords: 'tutorial guide help onboarding 教程 使用教程 帮助 入门 新手 jiaocheng bangzhu', run: () => void openTutorial() },
+  { id: 'amadeus-manual', title: () => translate('amadeus.cmd.manual'), keywords: 'manual handbook reference docs help 手册 使用手册 说明书 参考 帮助 文档 shouce cankao', run: () => void openManual() },
   { id: 'amadeus-daily-note', title: () => translate('amadeus.cmd.dailyNote'), keywords: 'daily note today journal 日记 今天 riji', run: () => void openDailyNote() },
   { id: 'amadeus-toggle-star', title: () => translate('amadeus.cmd.toggleStar'), keywords: 'star favorite bookmark 收藏 星标 shoucang', run: () => { const p = ps().activePage; if (p) useAmadeusPrefs.getState().toggleStar(p) } },
   { id: 'amadeus-toggle-source', title: () => translate('amadeus.cmd.toggleSource'), keywords: 'source markdown wysiwyg toggle 源码 可视', run: () => useUiOverlay.getState().toggleEditorMode() },

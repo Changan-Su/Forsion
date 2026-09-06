@@ -12,10 +12,10 @@
  *  CARDS 只存 i18n 键与几何,课文一律在 tutorialSource() 里 translate() —— 那是「按下生成」
  *  的时刻,取到的才是用户当下的界面语言。 */
 import { compileV4 } from '@amadeus-shared/compiler/v4'
-import { amadeus } from '@amadeus/api'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { registerMessages, translate } from './i18n'
 import { openNote } from './amadeusNav'
+import { seedNoteIfAbsent } from './amadeusSeedNote'
 
 /** ⚠️ 文件名,不是文案:它同时是 listPages 的比对键、readTextFile/writeTextFile 的路径、
  *  openNote 的目标,还落在用户磁盘上。翻译它 = 换语言就多生成一份教程、且旧的那份再也认不出来。 */
@@ -113,13 +113,13 @@ A card is not another kind of file, just a shell around a chunk of content: in t
 
 - 选中一张卡：\`Tab\` 加子卡，\`Enter\` 加同级卡（思维导图的手感）。
 - 把一张卡拖到另一张卡边上松手 = 认爹，自动排进它旁边的队列。
-- **按住 \`Shift\` 拖动：连同它的全部子卡一起搬**，整支不散架。
+- **按住 \`Shift\` 点击或拖动：连同它的全部子卡一起选中／搬走**，整支不散架（只要那一张就用 \`Cmd\`／\`Ctrl\` 点）。
 - 认了爹的卡在文档里也跟着父卡走 —— 源码里永远排在父卡那一段之内。`,
     en: `### What the parent-child link is good for
 
 - With a card selected: \`Tab\` adds a child card, \`Enter\` adds a sibling — the mind-map feel.
 - Drop a card next to another one and it becomes that card's child, slotting into the queue beside it.
-- **Hold \`Shift\` while dragging to move a card together with every one of its children** — the whole branch stays intact.
+- **Hold \`Shift\` and click or drag to take a card together with every one of its children** — the whole branch stays intact (hold \`Cmd\`/\`Ctrl\` instead to pick just that one card).
 - A card with a parent follows that parent in the document too: in the source it always sits inside the parent's section.`,
   },
   'amtut.card.t7': {
@@ -214,17 +214,8 @@ export async function openTutorial(): Promise<void> {
     return
   }
   try {
-    // ⚠️「不存在」必须**两个独立信号都说不存在**才算数(Codex 08-31 high):readTextFile 的 null
-    //    既是「没有这个文件」也是「这次读失败」,只认它的话一次读失败就把用户改过的教程整篇覆盖 ——
-    //    而 writeTextFile 是原子 rename,覆盖即永久。名册(listPages)取不到时一律保守当「已存在」。
-    // ponytail: 真解是主进程开一条 O_EXCL 的「不存在才建」IPC(check-then-write 本身不原子);
-    //    为一篇教程开 IPC(preload + ipc + unitWeb 白名单 + 类型)不值,两信号已把窗口收到极小。
-    const listed = await amadeus.listPages().catch(() => [TUTORIAL_PATH])
-    const exists = listed.includes(TUTORIAL_PATH) || (await amadeus.readTextFile(TUTORIAL_PATH)) != null
-    if (!exists) {
-      await amadeus.writeTextFile(TUTORIAL_PATH, tutorialSource())
-      await ps.refreshPages()
-    }
+    // 「有则不动,无则生成」与那条两信号安全规则都在 seedNoteIfAbsent 里(手册与教程共用一份)。
+    if (await seedNoteIfAbsent(TUTORIAL_PATH, tutorialSource())) await ps.refreshPages()
   } catch (e) {
     toast(translate('amtut.toast.failed', { err: e instanceof Error ? e.message : String(e) }), true)
     return

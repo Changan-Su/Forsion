@@ -46,7 +46,9 @@ export function installAmadeusPlugins(): void {
     for (const o of usePluginStore.getState().commands) {
       const id = `amadeus:${o.pluginId}:${o.item.id}`
       bridged.push(id)
-      addCommand({ id, title: o.item.title, keywords: o.item.keywords, run: o.item.run })
+      // ⚠️ 这里是**逐字段重建**,不是透传 —— 给 CommandContribution 加字段必须同步加到这一行,
+      //    否则插件声明了也永远到不了命令表(2026-09-04 加 invoke 时踩点)。
+      addCommand({ id, title: o.item.title, keywords: o.item.keywords, run: o.item.run, invoke: o.item.invoke })
     }
   }
   sync()

@@ -2,7 +2,8 @@
  * 底部面板(第四个 ViewLocation)的 DOM 几何仪器 —— 真 Chromium + 真 Dockview + 真 dockviewStore
  * (harness.html?dock)。单测(lcl/engine/bottomPanel.test.ts)钉的是 store 契约,mock 掉了 Dockview;
  * 这里钉的是**只有真几何才能证**的三件事:
- *   ① 底部只落在**主区那一列**下方 —— 左右侧栏仍满高,不被它横跨(用户拍板的 panel alignment);
+ *   ① 底部横跨「主区 + 右栏」、左栏仍满高,且**与开合顺序无关**(2026-09-05 用户拍板的 panel
+ *      alignment,推翻此前「底部只落在主区那一列下方」那版:右栏当时满高,先开谁就长成什么样);
  *   ② 展开后确实到达目标高(≈ 容器 32%),不是停在 dockview 的默认最小高;
  *   ③ 收起后左右栏**宽度纹丝不动**(底部吞吐的高只在主区那一列内流动)。
  *
@@ -50,6 +51,24 @@ const results = []
 function check(name, ok, detail) {
   results.push({ name, ok })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
+}
+
+/** 底部面板的对齐契约(与开合顺序无关):底部左边界贴主区、右边界贴**右栏**右边界,右栏坐在底部之上;
+ *  左栏不被横跨、仍然满高。两种开合顺序各调一次 —— 这正是用户实报的「顺序不同布局不同」。 */
+function alignChecks(order, snap) {
+  const b = snap.bottom, m = snap.main, l = snap.left, r = snap.right
+  check(`前置[${order}]:主区/左栏/右栏/底部四者都在场`, !!b && !!m && !!l && !!r,
+    `main ${!!m} / left ${!!l} / right ${!!r} / bottom ${!!b}`)
+  check(`⚠️[${order}]底部左边界贴主区(不横跨左栏)`,
+    !!b && !!m && Math.abs(b.x - m.x) <= 2, b && m ? `bottom.x ${b.x} / main.x ${m.x}` : 'n/a')
+  check(`⚠️[${order}]底部右边界贴**右栏**右边界(横跨主区+右栏)`,
+    !!b && !!r && Math.abs((b.x + b.w) - (r.x + r.w)) <= 2,
+    b && r ? `bottom右 ${b.x + b.w} / right右 ${r.x + r.w}` : 'n/a')
+  check(`⚠️[${order}]右栏坐在底部之上(底边贴底部顶边),不是满高`,
+    !!r && !!b && Math.abs((r.y + r.h) - b.y) <= 8,
+    r && b ? `right底 ${r.y + r.h} / bottom顶 ${b.y}` : 'n/a')
+  check(`⚠️[${order}]左栏仍满高(不被底部横跨)`,
+    !!l && !!b && (l.y + l.h) > b.y + 10, l && b ? `left底 ${l.y + l.h} / bottom顶 ${b.y}` : 'n/a')
 }
 
 /** 驱动一次 toggle,rAF 逐帧采底部组高,收尾回几何快照。 */
@@ -119,14 +138,8 @@ async function main() {
     check('⚠️展开:起步贴 0,不被 dockview 的 100px 最小高钳住(用户报的「上面面板闪一下」)',
       open.h[0] <= 20, `首帧 ${open.h[0]}(被钳则 ≈100)`)
 
-    // ① 只在主区下方:底部的左边界 = 主区左边界,右边界 = 主区右边界;且左右栏仍比它高。
-    const b = open.bottom, m = open.main, l = open.left, r = open.right
-    check('⚠️展开:底部只在**主区那一列**下方(左右边界与主区对齐)',
-      !!b && !!m && Math.abs(b.x - m.x) <= 2 && Math.abs((b.x + b.w) - (m.x + m.w)) <= 2,
-      b && m ? `bottom [${b.x},${b.x + b.w}] / main [${m.x},${m.x + m.w}]` : 'n/a')
-    check('⚠️展开:左右侧栏没有被底部横跨(两侧仍比底部顶边更低地延伸到底)',
-      !!l && !!r && !!b && (l.y + l.h) > b.y + 10 && (r.y + r.h) > b.y + 10,
-      l && r && b ? `left底 ${l.y + l.h} / right底 ${r.y + r.h} / bottom顶 ${b.y}` : 'n/a')
+    // ① 对齐契约(下面 alignChecks 一次讲清),这一轮量的是「先右栏、后底部」这个顺序。
+    alignChecks('先右栏后底部', open)
 
     if (SHOT) {
       await page.screenshot({ path: '/tmp/bottom-panel-open.png' })
@@ -228,6 +241,41 @@ async function main() {
     })
     check('⚠️负对照:真正切视图时**仍然**淡入(否则「不闪」= 把动画删了的假绿)',
       fade < 0.9, `切视图最低 opacity ${fade.toFixed(3)}(该淡入 → 应接近 0)`)
+
+    // ── 反序:先开底部,再开左右栏 ─────────────────────────────────────────────
+    // 用户实报的病灶:Dockview 的 addPanel 只在**引用 panel 那个槽位**里嵌套,先开谁决定谁被嵌进去
+    // → 同样三个面板长出两种布局。整页重载重来一遍(localStorage 每次加载即清,布局不串味)。
+    await page.goto(URL, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
+    await page.waitForTimeout(500)
+    await page.evaluate(() => window.__dock.toggle('bottom'))
+    await page.waitForTimeout(700)
+    await page.evaluate(() => { window.__dock.open('sidev', {}, false, 'left'); window.__dock.open('sidev', {}, false, 'right') })
+    await page.waitForTimeout(700)
+    const rev = await page.evaluate(() => ({
+      main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
+      right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom'),
+    }))
+    alignChecks('先底部后右栏', rev)
+    if (SHOT) {
+      await page.screenshot({ path: '/tmp/bottom-panel-reverse.png' })
+      console.log('      截图 → /tmp/bottom-panel-reverse.png')
+    }
+
+    // ── 二次展开:收起再开,布局必须还是同一个 ──────────────────────────────────
+    // 关掉底部会让网格把那一支收支/摊平,再开时**引用 panel 所在槽位的深度可能已经变了** ——
+    // 用户开合终端是日常动作,只验首次展开等于漏掉一半。
+    await page.goto(URL, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector('.dockh-body[data-tag="main"]', { timeout: 20000 })
+    await page.waitForTimeout(500)
+    await page.evaluate(() => { window.__dock.open('sidev', {}, false, 'left'); window.__dock.open('sidev', {}, false, 'right') })
+    await page.waitForTimeout(600)
+    for (const _ of [0, 1, 2]) { await page.evaluate(() => window.__dock.toggle('bottom')); await page.waitForTimeout(700) }
+    const again = await page.evaluate(() => ({
+      main: window.__dock.rectOf('main'), left: window.__dock.rectOf('left'),
+      right: window.__dock.rectOf('right'), bottom: window.__dock.rectOf('bottom'),
+    }))
+    alignChecks('收起后二次展开', again)
 
     const bad = results.filter((x) => !x.ok)
     console.log(`\n${results.length - bad.length}/${results.length} 通过`)

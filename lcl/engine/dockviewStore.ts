@@ -6,6 +6,9 @@
  * 视图「参数驱动可重建」:panel 存 {component:type, params} → 刷新/恢复时 Dockview 据此重建。
  */
 import { create } from 'zustand'
+import type { ExtendViewPresenter } from './extendView'
+import { nativeExtendTargets } from './nativeExtendView'
+import { withoutTransientPanels } from './transientLayout'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
@@ -40,6 +43,12 @@ function nextId(api: DockviewApi, type: string): string {
 /** 侧栏开合补间动画期间,pinSides 跳过该侧 —— 让 tween 独占其宽度,免被钉宽 setSize 打断。
  *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
 const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
+const toggleReleases: Partial<Record<DockSide, () => void>> = {}
+const extensions: Partial<Record<DockSide, { dismiss(): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string }>> = {}
+const dismissExtensions = (): void => {
+  for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss(); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
+}
+
 
 /** 布局结构一变(加/减一个组),Dockview 会把幸存的那一支**摘下来重新挂**到新的父节点上 ——
  *  DOM 节点、React 树都不变,但**元素重新入 DOM 会让其中所有 CSS 动画从头重播**。于是各视图自己的
@@ -166,6 +175,9 @@ export function captureSideWidths(api: DockviewApi): void {
   }
 }
 
+/** 可在网格里换位的组(dockview 7 的 group api;跨版本可能没有 → 调用点先探 typeof)。 */
+type MovableGroup = { api: { moveTo?: (o: { group: unknown; position: string; skipSetActive?: boolean }) => void } }
+
 type SizableGroup = { api: { setSize: (s: { width?: number; height?: number }) => void; width?: number; height?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number; minimumHeight?: number; maximumHeight?: number }) => void } }
 
 /** 临时锁住指定侧栏的宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收 ——
@@ -272,16 +284,38 @@ export function activeMainPanel(api: DockviewApi): IDockviewPanel | null {
   return mains.find((p) => (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id) ?? mains[0] ?? null
 }
 
-/** 给某 location 计算新 panel 的放置位置。 */
+/** 给某 location 计算新 panel 的放置位置。
+ *  ⚠️Dockview 的「按方向开」是**在引用 panel 所在的那个槽位里嵌套**,所以先开谁会决定长成什么样
+ *  (用户实报:右栏与底部的开合顺序不同 → 两种布局)。目标布局恒定为
+ *      [左栏满高] | [ [主区 | 右栏] / 底部横跨这两者 ]
+ *  三处协同保证它与顺序无关:① 左栏不给引用 panel,直接开在**根一级最左**(orthogonalize)→ 永远满高,
+ *  哪怕底部已经在场;② 右栏锚在主区上 —— 底部已在场时它会自动嵌进主区那一行(= 坐在底部之上);
+ *  ③ 反序(先右栏后底部)由 alignRightAboveBottom 在底部诞生时把右栏挪进来补上这次嵌套。 */
 function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknown> | undefined {
   const sameLoc = panelsAt(api, loc)
   if (sameLoc.length) return { referencePanel: sameLoc[0].id, direction: 'within' }
   if (loc === 'main') return undefined // 首个主区 panel
+  if (loc === 'left') return { direction: 'left' } // 无引用 = 根一级最左,满高(见上 ①)
   const main = panelsAt(api, 'main')[0] ?? api.panels[0]
   // ponytail: 底部锚在 panelsAt('main')[0] 上向下开 → 主区若已左右分屏成两列,底部只落在**第一列**下方
   //   (而非横跨整个主区)。真需要「跨整个主区」时再换成锚到主区那一支的 gridview 分支。
-  if (main) return { referencePanel: main.id, direction: loc === 'left' ? 'left' : loc === 'right' ? 'right' : 'below' }
+  if (main) return { referencePanel: main.id, direction: loc === 'right' ? 'right' : 'below' }
   return undefined
+}
+
+/** 底部刚诞生时,把已在场的右栏挪到主区右边 —— 补上「先右栏后底部」这个顺序缺的那次嵌套,
+ *  使底部横跨「主区 + 右栏」(见 positionFor 的目标布局)。反序天然就是这样,故只在建底部时做一次。
+ *  ⚠️挪组 = 右栏子树被摘下重挂(滚动位置 / 入场动画),故照收起路径的先例包 preserveAcrossRestructure;
+ *  ⚠️pinSides 必须**先**调:moveTo 同步触发布局事件,而右栏此刻是 Dockview 默认的 ~50% 宽,
+ *    captureSideWidths 会把这个过渡宽当成用户拖出来的记进 localStorage(= 侧栏抽风根因 R1)。 */
+function alignRightAboveBottom(api: DockviewApi): void {
+  const right = (panelsAt(api, 'right')[0] as { group?: MovableGroup } | undefined)?.group
+  const main = (panelsAt(api, 'main')[0] as { group?: MovableGroup } | undefined)?.group
+  if (!right || !main || typeof right.api.moveTo !== 'function') return
+  const restore = preserveAcrossRestructure()
+  pinSides(api)
+  try { right.api.moveTo({ group: main, position: 'right', skipSetActive: true }) } catch { /* 跨版本兜底 */ }
+  restore()
 }
 
 type Stashed = PersistedPanel
@@ -289,12 +323,12 @@ type Stashed = PersistedPanel
 function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 'rightVisible' | 'stash'>): LayoutEnvelopeV4 {
   return {
     version: 4,
-    dockview: api.toJSON(),
+    dockview: withoutTransientPanels(api.toJSON(), Object.fromEntries(Object.values(extensions).filter((lease) => lease.previousId).map((lease) => [lease.id, lease.previousId!]))),
     sidebars: {
       // 真实 panel 是唯一真源；状态事件可能落后于 Dockview 的异步布局沉降。
-      left: { visible: panelsAt(api, 'left').length > 0, stash: state.stash.left },
-      right: { visible: panelsAt(api, 'right').length > 0, stash: state.stash.right },
-      bottom: { visible: panelsAt(api, 'bottom').length > 0, stash: state.stash.bottom },
+      left: { visible: panelsAt(api, 'left').some((p) => panelType(p) !== '__extend'), stash: state.stash.left },
+      right: { visible: panelsAt(api, 'right').some((p) => panelType(p) !== '__extend'), stash: state.stash.right },
+      bottom: { visible: panelsAt(api, 'bottom').some((p) => panelType(p) !== '__extend'), stash: state.stash.bottom },
     },
   }
 }
@@ -534,7 +568,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (visible) {
         return panelsAt(api, side).map((p) => {
           const grp = (p as { group?: { activePanel?: { id?: string } } }).group
-          return mk(panelType(p), grp?.activePanel?.id === p.id)
+          return { ...mk(panelType(p), grp?.activePanel?.id === p.id), title: p.title ?? panelType(p) }
         })
       }
       const stashed = get().stash[side].length ? get().stash[side] : get().sidebarDefaults[side]
@@ -555,6 +589,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const api = get().api
     const panel = api?.getPanel(id)
     if (!api || !panel) return
+    if (panelType(panel) === '__extend') {
+      const lease = Object.values(extensions).find((entry) => entry?.id === id)
+      lease?.dismiss(); lease?.dispose()
+      return
+    }
     if (panelType(panel) === 'home') return // home 是主区空态占位,不可关(无 close 入口,防御性)
     const loc = ((panel.params ?? {}) as PanelMeta).__loc ?? 'main'
     // 主区关掉「最后一个」view → 就地把它变成 home 空态占位(Forsion 品牌图 + 新建),而非
@@ -664,6 +703,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   resetLayout() {
     const api = get().api
     if (!api) return
+    dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
@@ -725,7 +765,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 侧栏首个 panel 创建了新组 → Dockview 默认 ~50/50 太宽,按黄金分割钉两侧 0.191×容器宽。
     // 底部走纵向的那一版(settleBottomHeight):**不能借 pinSides** —— 它只管横向,还会开 pinPending
     // 窗口白白冻住 60ms 的侧栏宽记忆。两者都在补间动画期自动让位(sidebarAnimating)。
-    if (firstOfSide) { if (loc === 'bottom') settleBottomHeight(api); else pinSides(api) }
+    // (alignRightAboveBottom 内部**确实**调 pinSides:那是给被它挪过位的右栏重新钉宽,不是给底部。)
+    if (firstOfSide) { if (loc === 'bottom') { alignRightAboveBottom(api); settleBottomHeight(api) } else pinSides(api) }
     if (loc !== 'main') set({ [visKeyOf(loc)]: true } as Partial<WorkspaceState>)
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
     scheduleWorkspaceSave()
@@ -774,6 +815,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const active = api?.activePanel
     if (!api || !active) return null
     const type = panelType(active)
+    if (type === '__extend') return null // 临时 View 没有可重建的内容(无 lease / 挂载目标),分屏只会克隆出一块关不掉的空白
     const { __loc, __type, ...userParams } = (active.params ?? {}) as PanelMeta & Record<string, unknown>
     void __type
     // 左右侧栏严禁左右分屏(与拖拽路径 dropModel.splitDirection 同一铁律):焦点在侧栏时向右分一律折叠成向下。
@@ -817,7 +859,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (visible) {
       // 收起:暂存内容,先把该区尺寸补间到 0(丝滑),动画结束再移除 panel。占位不入 stash
       // (空 stash 展开时回落 sidebarDefaults —— 折叠空侧栏再展开会复活默认视图,有意为之)。
-      const stashed: Stashed[] = panels.filter((p) => panelType(p) !== 'sidebar-empty').map((p) => {
+      const stashed: Stashed[] = panels.filter((p) => !['sidebar-empty', '__extend'].includes(panelType(p))).map((p) => {
         const { __loc, __type, ...userParams } = (p.params ?? {}) as PanelMeta & Record<string, unknown>
         void __loc
         void __type
@@ -828,12 +870,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         const grp = (p as { group?: { activePanel?: { id?: string } } }).group
         return grp?.activePanel?.id === p.id
       })
-      const activeType = activeP && panelType(activeP) !== 'sidebar-empty' ? panelType(activeP) : null
+      const activeType = activeP && !['sidebar-empty', '__extend'].includes(panelType(activeP)) ? panelType(activeP) : get().stashActive[side]
+      // Folding a temporary-only group must not replace the user's collapsed-panel recipe.
+      if (panels.every((p) => panelType(p) === '__extend')) stashed.push(...get().stash[side])
       set((s) => ({ stash: { ...s.stash, [side]: stashed }, stashActive: { ...s.stashActive, [side]: activeType }, [visKey]: false } as Partial<WorkspaceState>))
       const group = (panels[0] as { group?: SizableGroup }).group
       // 另一侧**全程**锁死:补间每帧吐出的宽和 close 释放的空白都会被 Dockview 按比例摊给所有组,
       // 只锁 close 那一下的话,对侧仍会在这 200ms 里一路鼓起来、收尾再被 pinSides 弹回 = 抽闪。
-      const release = lockNeighbour()
+      toggleReleases[side]?.()
+      const unlock = lockNeighbour()
+      const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+      toggleReleases[side] = release
       const finish = (): void => {
         if (stale()) return // 已被后一次点击接管:那一轮会自己收尾,这里再动手就是去关别人的 panel
         // 逐个 try:这批 panel 可能已被新一轮 / closeLeaf 关掉,dockview 对重复 close 抛 'invalid operation'。
@@ -871,7 +918,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       sidebarAnimating[side] = true
       // ⚠️同样必须在 openView **之前**锁对侧:新组按 ~50% 诞生、紧接着被 setSize(1) 压回去,这一进一出
       // 都是按比例摊给所有组的 → 对侧先被顶宽,补间收尾 pinSides 再把它弹回,就是「左栏抽闪一下」。
-      const release = lockNeighbour()
+      toggleReleases[side]?.()
+      const unlock = lockNeighbour()
+      const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+      toggleReleases[side] = release
       const restoreOpen = preserveAcrossRestructure() // 同收起:新增组一样会让主区被摘下重挂
       stashed.forEach((v) => get().openView(v.type, v.params, side))
       restoreOpen()
@@ -924,6 +974,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api || !blob) return false
     try {
       migrateLayoutBlob(blob)
+      dismissExtensions()
       api.fromJSON(blob.dockview as never)
       useNav.getState().reset() // 布局整体更换,旧 leaf id 全失效
       set({
@@ -1021,3 +1072,137 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
 }
 
 export { LAYOUT_KEY }
+
+/** Create a native temporary leaf. The owner retains its content across ordinary side-tab switches.
+ *  A brand-new side group opens with the same 200ms tween as the sidebar toggle, and collapses with it when the
+ *  temporary View was the group's only panel; joining a group that already has Views is instant, like adding a tab. */
+let extensionSerial = 0
+export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) => {
+  const api = useWorkspace.getState().api
+  if (!api) throw new Error('Workbench is not ready')
+  const side = options.side ?? 'right'
+  extensions[side]?.dismiss()
+  extensions[side]?.dispose(true) // replacing: swap in place, never a collapse/expand pair
+  ++toggleGen[side]
+  toggleReleases[side]?.()
+  const cutTween = sidebarAnimating[side] // a sidebar toggle was mid-tween: its group is parked at an intermediate size
+  sidebarAnimating[side] = false
+  const existing = panelsAt(api, side)
+  const previous = existing.find((p) => p.group.activePanel === p)
+  const element = document.createElement('div')
+  element.className = 'wb-extend-target'
+  const id = `__extend-${++extensionSerial}`
+  const vert = side === 'bottom'
+  const sizeKey = vert ? 'height' : 'width'
+  const minOff = vert ? { minimumHeight: 0 } : { minimumWidth: 0 }
+  const minOn = vert ? { minimumHeight: DV_GROUP_MIN } : { minimumWidth: DV_GROUP_MIN }
+  const canTween = typeof requestAnimationFrame === 'function'
+  /** Hold the neighbouring panels while this side changes size; released after the layout settles (same as toggleSidebar). */
+  const holdNeighbour = (): (() => void) => {
+    toggleReleases[side]?.()
+    const unlock = vert ? lockSides(api, ['left', 'right'], true) : lockOtherSide(api, side)
+    const release = (): void => { unlock(); if (toggleReleases[side] === release) delete toggleReleases[side] }
+    toggleReleases[side] = release
+    return release
+  }
+  let panel: IDockviewPanel | undefined
+  let removed: { dispose(): void } | undefined
+  let disposed = false
+  let opening = false
+  let closing: Promise<void> | null = null
+  let release: (() => void) | null = null // the neighbour hold taken for the open tween; assigned before addPanel
+  const lease = {
+    id, dismiss, previousId: previous?.id,
+    dispose(instant = false): void | Promise<void> {
+      if (disposed) return closing ?? undefined
+      disposed = true
+      removed?.dispose()
+      if (opening) { opening = false; sidebarAnimating[side] = false; ++toggleGen[side]; release?.() } // stop the expand tween and free the neighbour lock it held
+      const wasActive = panel?.group.activePanel === panel
+      if (extensions[side] === lease) delete extensions[side]
+      nativeExtendTargets.delete(id)
+      const finish = (): void => {
+        pinSides(api)
+        const restore = preserveAcrossRestructure()
+        if (panel && api.getPanel(id) === panel) panel.api.close()
+        if (wasActive && previous && api.getPanel(previous.id) === previous) previous.api.setActive()
+        restore()
+        element.remove()
+        useWorkspace.getState().syncPanelState()
+        useWorkspace.getState().refreshTabs()
+        pinSides(api)
+        scheduleWorkspaceSave()
+      }
+      // Only a group about to vanish collapses with a tween; a tab leaving a shared group just closes.
+      const group = panel?.group as unknown as SizableGroup | undefined
+      // Judge by the panel's real group, not by side params: an empty side would make every() vacuously true.
+      const solo = !!panel && api.getPanel(id) === panel && ((panel.group as unknown as { panels?: unknown[] }).panels?.length ?? 0) === 1
+      const from = group ? ((vert ? group.api.height : group.api.width) ?? 0) : 0
+      if (instant || !solo || !group || from < 2 || !canTween) { finish(); return }
+      const gen = ++toggleGen[side]
+      const stale = (): boolean => gen !== toggleGen[side]
+      const closeRelease = holdNeighbour()
+      sidebarAnimating[side] = true
+      try { group.api.setConstraints?.(minOff) } catch { /* 跨版本兜底 */ }
+      closing = new Promise<void>((resolve) => {
+        let settled = false
+        const done = (): void => {
+          if (settled) return
+          settled = true
+          sidebarAnimating[side] = false
+          finish()
+          setTimeout(closeRelease, 180)
+          resolve()
+        }
+        tweenGroupSize(group, sizeKey, from, 0, done, stale)
+        setTimeout(done, 260) // taken over by a sidebar toggle mid-tween: still close, so the owner drops its content
+      })
+      return closing
+    },
+  }
+  extensions[side] = lease
+  nativeExtendTargets.set(id, element)
+  const restore = preserveAcrossRestructure()
+  release = holdNeighbour()
+  try {
+    // A real leaf in the ordinary native tab group, even when that group already has other Views.
+    panel = api.addPanel({ id, component: '__extend',
+      title: typeof options.title === 'function' ? options.title() : options.title,
+      params: { __loc: side, __type: '__extend' }, position: positionFor(api, side) as never })
+    if (!existing.length) {
+      // Born at Dockview's default (~50%): start near 0 and tween to the target, exactly like toggleSidebar's expand
+      // (min size released first, or setSize(1) is clamped to 100 and the main area jumps by that much in one frame).
+      const group = panel.group as unknown as SizableGroup
+      if (vert) alignRightAboveBottom(api)
+      const gen = toggleGen[side]
+      const stale = (): boolean => gen !== toggleGen[side] || disposed
+      const target = vert ? bottomTargetHeight(api) : sideTargetWidth(api, side)
+      opening = canTween
+      sidebarAnimating[side] = canTween
+      try { group.api.setConstraints?.(minOff) } catch { /* 跨版本兜底 */ }
+      try { group.api.setSize({ [sizeKey]: 1 }) } catch { /* 跨版本兜底 */ }
+      tweenGroupSize(group, sizeKey, 1, target, () => {
+        if (stale()) return
+        opening = false
+        sidebarAnimating[side] = false
+        try { group.api.setConstraints?.(minOn) } catch { /* 跨版本兜底 */ }
+        if (vert) settleBottomHeight(api); else pinSides(api)
+        setTimeout(() => release?.(), 180)
+        scheduleWorkspaceSave()
+      }, stale)
+    } else {
+      panel.group.api.setConstraints(minOn)
+      if (cutTween) { // finish the interrupted toggle: park the group at its target instead of the clamped mid-tween size
+        try { (panel.group as unknown as SizableGroup).api.setSize({ [sizeKey]: vert ? bottomTargetHeight(api) : sideTargetWidth(api, side) }) } catch { /* 跨版本兜底 */ }
+        if (vert) settleBottomHeight(api); else pinSides(api)
+      }
+    }
+    removed = api.onDidRemovePanel((event) => { if (event === panel) { dismiss(); lease.dispose() } })
+    useWorkspace.getState().syncPanelState()
+    useWorkspace.getState().refreshTabs()
+    scheduleWorkspaceSave()
+    // Bottom tabs are named and closable; left/right tabs are icon-only, so the extension draws its own header there.
+    return { element, titled: vert, activate: () => { if (!disposed) panel?.api.setActive() }, dispose: lease.dispose }
+  } catch (error) { lease.dispose(true); throw error }
+  finally { restore(); if (!opening) release?.() }
+}

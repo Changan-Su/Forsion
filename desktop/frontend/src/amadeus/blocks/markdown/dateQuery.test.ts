@@ -60,7 +60,37 @@ describe('dateCandidates', () => {
   })
 
   it('认不出 → 空(面板照旧只显示页面候选)', () => {
-    expect(dateCandidates('会议纪要', NOW)).toEqual([])
+    for (const q of ['会议纪要', 'z', 'foo', 'x']) expect(dateCandidates(q, NOW)).toEqual([])
+  })
+
+  // 2026-09-05 用户实报「@ 后面没有轻易触发日期」:对标 Notion 的 `@r` → Remind me / `@tod` → Today。
+  it('关键词前缀直达:@r → 提醒(明天 09:00);@t → 今天 + 明天;中文同款', () => {
+    expect(dateCandidates('r', NOW).map((x) => [x.label, x.insert])).toEqual([['提醒', '@remind:2026-09-02T09:00']])
+    expect(dateCandidates('REM', NOW).map((x) => x.insert)).toEqual(['@remind:2026-09-02T09:00'])
+    expect(dateCandidates('t', NOW).map((x) => [x.label, x.insert])).toEqual([
+      ['今天', '@2026-09-01'],
+      ['明天', '@2026-09-02'],
+    ])
+    expect(dateCandidates('tom', NOW).map((x) => x.insert)).toEqual(['@2026-09-02'])
+    expect(dateCandidates('明', NOW).map((x) => x.label)).toEqual(['明天'])
+    expect(dateCandidates('提', NOW).map((x) => x.label)).toEqual(['提醒'])
+  })
+
+  it('裸 @(空查询)= 今天 / 明天 / 提醒 三条全给;整词 today 与前缀 toda 同一条(标签不在最后一字翻脸)', () => {
+    expect(dateCandidates('', NOW).map((x) => x.label)).toEqual(['今天', '明天', '提醒'])
+    expect(dateCandidates('today', NOW)).toEqual(dateCandidates('toda', NOW))
+  })
+
+  it('@remind: 后面什么都没写 → 明天 09:00;写了认不出的 → 空', () => {
+    expect(dateCandidates('remind:', NOW).map((x) => x.insert)).toEqual(['@remind:2026-09-02T09:00'])
+    expect(dateCandidates('remind:foo', NOW)).toEqual([])
+  })
+
+  it('关键词行插入串也必须能被正文解析器认出(与 mdMarks 互锁)', async () => {
+    const { parseMdMarks } = await import('@amadeus-shared/mdMarks')
+    const [today, , remind] = dateCandidates('', NOW)
+    expect(parseMdMarks(`周会 ${today.insert}`, 'n.md', 'n')[0]).toMatchObject({ due: '2026-09-01', isTask: false })
+    expect(parseMdMarks(`- [ ] 吃药 ${remind.insert}`, 'n.md', 'n')[0]).toMatchObject({ remind: '2026-09-02T09:00', isTask: true })
   })
 
   it('插入串必须能被正文解析器认出(与 mdMarks 互锁)', async () => {

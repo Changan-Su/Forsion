@@ -1,6 +1,7 @@
 /**
  * Dev-only 移动设置视觉台架:
- *   PORT=5284 npm run dev → /settings-harness.html (加 ?dark 看暗色，?desktop 看桌面设置侧栏)
+ *   PORT=5284 npm run dev → /settings-harness.html (加 ?dark 看暗色，?desktop 看桌面设置侧栏，
+ *   ?onboarding 看首启引导——台架 window.tangu 无 envCheck，走的正是 web/移动端的收缩步骤序)
  *
  * 裸挂生产 SettingsModal + 生产主题/CSS,绕过移动端登录与后端启动,供两层 IA 截图和触控回归。
  * Vite 的 build 入口只有 index.html,本文件不进 APK 产物。
@@ -9,6 +10,7 @@ import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '@/styles/base.css'
 import { SettingsModal } from '@/components/SettingsModal'
+import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { LocaleProvider } from '@/i18n'
 import '@/i18n.generated'
 import { applyTheme } from '@/theme/loader'
@@ -17,6 +19,7 @@ import type { TanguDesktopConfig } from '@/types'
 
 const dark = new URLSearchParams(location.search).has('dark')
 const desktop = new URLSearchParams(location.search).has('desktop')
+const onboarding = new URLSearchParams(location.search).has('onboarding')
 const initialMode = dark ? 'dark' : 'light'
 const initialLang = resolveInitialLang()
 const initialSkin = resolveInitialSkin()
@@ -57,6 +60,32 @@ function SettingsHarness() {
   const [flat, setFlat] = useState(true)
   const [seed, setSeed] = useState('#8b7fd6')
 
+  const onTheme = (nextLang: string, nextSkin: string, nextMode: 'light' | 'dark' | 'system'): void => {
+    const effective = nextMode === 'system' ? mode : nextMode
+    setLang(nextLang)
+    setSkin(nextSkin)
+    setMode(effective)
+    applyTheme(nextLang, nextSkin, initialBg, effective)
+  }
+
+  if (onboarding) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'var(--bg)' }}>
+        <OnboardingWizard
+          themeLang={lang}
+          themeSkin={skin}
+          themeMode={mode}
+          themeModePref={mode}
+          themeSeed={seed}
+          onThemeChange={onTheme}
+          onSeedChange={setSeed}
+          onReconnect={() => undefined}
+          onFinish={() => undefined}
+        />
+      </div>
+    )
+  }
+
   return (
     <SettingsModal
       open
@@ -70,13 +99,7 @@ function SettingsHarness() {
       themeSeed={seed}
       onClose={() => undefined}
       onConfigChange={(patch) => setCfg((value) => ({ ...value, ...patch }))}
-      onThemeChange={(nextLang, nextSkin, nextMode) => {
-        const effective = nextMode === 'system' ? mode : nextMode
-        setLang(nextLang)
-        setSkin(nextSkin)
-        setMode(effective)
-        applyTheme(nextLang, nextSkin, initialBg, effective)
-      }}
+      onThemeChange={onTheme}
       onGlassChange={(on) => {
         setGlass(on)
         document.documentElement.dataset.glass = on ? 'on' : 'off'

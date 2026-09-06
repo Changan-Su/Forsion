@@ -81,7 +81,7 @@
 //   C84 简略显示的触发阈值:缺省 = 最小缩放 25%(不再是写死的 55%),设置改完当场生效
 //   C85 卡里 /card = 子卡(2026-08-31 用户实报「在 card 里创建 card 直接 forbidden」):
 //      新卡插在父卡那一段之后 + tree 记上父子 + 文档模式当场缩进,父卡内容一个字不动
-//   C86 Shift+拖卡 = 连整支(选中它与全部子卡一起搬;Cmd/Ctrl 仍是加选)
+//   C86 Shift+点/拖卡 = 连整支(选中它与全部子卡;Cmd/Ctrl 仍是单张加选)
 //   C87 非编辑态点待办勾选框/双链 = 弹一句「怎么进编辑态」(照旧选中,不静默吞)
 const fs = require('fs')
 const os = require('os')
@@ -2497,8 +2497,10 @@ async function main() {
   await p49c.close()
 
   // ── C49d/e 改名竞态(Codex 深夜 F2:档位必须逐次 commit 绑定,不许时间窗推断)──────────────
-  // d) 回车(未改名)后紧接着点走 blur 改名:不许插首行、不许抢焦点(旧 5 秒窗会把它误判成回车改名)。
-  //    (回车插的空首段在改名落盘时被序列化丢弃 —— 空段本非内容,重开 n 回到 1 是预期。)
+  // d) 回车(未改名)后紧接着点走 blur 改名:不许**再**插首行、不许抢焦点(旧 5 秒窗会把它误判成回车改名)。
+  //    ⚠️ 2026-09-05 改判据:空段落现在能往返(blankLineRemark —— 用户实报「敲的空行切走就没」),
+  //    于是 a) 那一下回车插的空首段重开后**还在**,n 恒 2。竞态的判据落在 pmFocus(body-enter 会抢焦点)
+  //    与「不多插一行」上,不再借「空段会被序列化丢弃」这个副作用。
   const p49d = await open(browser, DOC49)
   await p49d.waitForTimeout(400)
   await p49d.click('.amx-title-input')
@@ -2516,6 +2518,7 @@ async function main() {
       title: document.querySelector('.amx-title-input')?.value ?? '',
       n: view.state.doc.childCount,
       firstText: first?.textContent ?? '',
+      bodyText: view.state.doc.child(view.state.doc.childCount - 1)?.textContent ?? '',
       pmFocus: !!document.activeElement?.closest?.('.ProseMirror'),
     }
   })
@@ -2540,7 +2543,7 @@ async function main() {
   })
   await p49e.close()
   record('C49d/e 改名竞态:点走 blur 改名不插行不抢焦点;回车改名跨重建恰插一行',
-    d49.title === 'Renamed49' && d49.n === 1 && d49.firstText === '主正文。' && !d49.pmFocus
+    d49.title === 'Renamed49' && d49.n === 2 && d49.firstText === '' && d49.bodyText === '主正文。' && !d49.pmFocus
       && e49r.title.endsWith('X') && e49r.n === 2 && e49r.firstEmpty && e49r.pmFocus,
     JSON.stringify({ blurRename: d49, enterRename: e49r }))
 
@@ -4368,15 +4371,22 @@ async function main() {
    *  `reuse` = 复用上一次 copy/cut 那个 DataTransfer —— **系统剪贴板就是这个语义**:复制时写进去的
    *  自定义 MIME(整卡令牌)粘贴时还在。每次现造一个空 dt 的话,令牌永远对不上,这一格测的就变成
    *  「纯文本兜底」而不是整卡粘贴了(真剪贴板那层由 check:canvasreal 的 R5 独立钉)。 */
-  const fire71 = async (page, kind, text, reuse = false) => page.evaluate(({ kind, text, reuse }) => {
+  const CLIP71 = 'application/x-amx-canvas'
+  const fire71 = async (page, kind, text, reuse = false, mine = null) => page.evaluate(({ kind, text, reuse, mine, MIME }) => {
     const dt = reuse && window.__clip71 ? window.__clip71 : new DataTransfer()
     if (text != null) dt.setData('text/plain', text)
+    if (mine != null) dt.setData(MIME, mine)
     const ev = new ClipboardEvent(kind, { bubbles: true, cancelable: true, clipboardData: dt })
     const el = document.activeElement ?? document.body
     el.dispatchEvent(ev)
     if (kind === 'copy' || kind === 'cut') window.__clip71 = dt
-    return { focus: `${el.tagName}.${el.className}`.slice(0, 60), prevented: ev.defaultPrevented, text: dt.getData('text/plain') }
-  }, { kind, text, reuse })
+    return {
+      focus: `${el.tagName}.${el.className}`.slice(0, 60),
+      prevented: ev.defaultPrevented,
+      text: dt.getData('text/plain'),
+      mine: dt.getData(MIME),
+    }
+  }, { kind, text, reuse, mine, MIME: CLIP71 })
 
   const paste71 = await fire71(p71, 'paste', '# 粘来的标题\n\n粘来的正文。')
   await p71.waitForTimeout(400)
@@ -4410,16 +4420,20 @@ async function main() {
       && b71.n === 2 && b71.h1 === 2 && new Set(b71.anchors).size === 2,
     JSON.stringify({ copied: copied71.text.length, ...b71 }))
 
-  // e:复制完卡片,又在**别的 app** 复制了一模一样的字 → 必须给纯文本,不许静默粘回旧卡
+  // e:复制完卡片,又在**别的 app** 复制了别的东西 → 必须落**那份外部文字**,不许静默粘回旧卡
   //   (Codex 评审 medium:只比文本的话镜像永不失效)。新 DataTransfer = 没有令牌 = 外部剪贴板。
-  const foreign71 = await fire71(p71, 'paste', copied71.text)
+  //   ⚠️ 2026-09-05 起 text/plain 本身就是 markdown(见 onCopy),原来那版「外部文字 = 与卡
+  //   一模一样的字」两条路结果已无法区分 —— 改用明显不同的外部文字,判据回到「粘的是谁」。
+  const foreign71 = await fire71(p71, 'paste', '外部复制的一段字。')
   await p71.waitForTimeout(400)
   const e71 = await p71.evaluate(() => {
     const cards = [...document.querySelectorAll('.amx-ucard')]
-    return { n: cards.length, h1: cards.filter((c) => !!c.querySelector('h1')).length }
+    const last = cards[cards.length - 1]
+    return { n: cards.length, lastText: last?.textContent ?? '', lastH1: !!last?.querySelector('h1') }
   })
-  record('C71e 别处复制了一模一样的字 → 走纯文本兜底(不粘回旧卡的格式)',
-    foreign71.prevented && e71.n === 3 && e71.h1 === 2, JSON.stringify({ ...foreign71, ...e71 }))
+  record('C71e 别处复制的东西 → 落那份外部文字(不静默粘回旧卡的内容/格式)',
+    foreign71.prevented && e71.n === 3 && e71.lastText.includes('外部复制的一段字') && !e71.lastH1,
+    JSON.stringify({ ...foreign71, ...e71 }))
 
   // c:侧栏笔记引用拖到**卡片上**(真实落点走 elementFromPoint,与 dragBlockOnto 同款)
   const drop71 = await p71.evaluate(() => {
@@ -4457,7 +4471,33 @@ async function main() {
   }))
   record('C71d 卡内编辑时粘贴让路给 PM(字落进卡里,舞台不另建卡)',
     d71.n === 4 && d71.inCard, JSON.stringify({ ...paste71d, ...d71 }))
+
+  // f **跨文件**粘贴(2026-09-05 用户实报「两个 tab 之间粘贴丢格式」):镜像里的 PM 节点绑在
+  //   复制时那个 schema 上,换一篇笔记 = 换一个编辑器实例 = 换一套 NodeType,插不进对面的 doc;
+  //   换一个窗口连 `cardClip` 这个模块变量都不共享。修前两档都退到 textBetween 的**纯文本**,
+  //   标题/列表/链接全变字面 —— 这里开**另一个 page**(= 另一个 JS realm,比换 tab 更严),
+  //   只把系统剪贴板真能带走的两样(text/plain + 自定义 MIME)搬过去。
+  await p71.keyboard.press('Escape') // C71d 停在卡内编辑态:退回舞台 + 选中那张卡(见 onKeyDownCapture)
+  await p71.waitForTimeout(250)
+  const cross71 = await fire71(p71, 'copy', null)
+  // g 剪贴板的 text/plain 必须是 **markdown**:粘进文档笔记 / 别的库 / 外部编辑器时,它是唯一
+  //   幸存的载荷。修前给的是 textBetween(标记剥光)—— 从画布复制卡片粘进文档 = 格式全丢成纯文本。
+  record('C71g 复制卡片写进剪贴板的纯文本 = markdown(不是剥光标记的 textBetween)',
+    cross71.text.startsWith('# '), JSON.stringify({ text: cross71.text.slice(0, 60) }))
   await p71.close()
+  const p71f = await open(browser, '# 另一篇\n\n另一篇正文。\n')
+  await p71f.click('.amx-modeseg button:nth-child(3)')
+  await p71f.waitForTimeout(1000)
+  const f71paste = await fire71(p71f, 'paste', cross71.text, false, cross71.mine)
+  await p71f.waitForTimeout(500)
+  const f71 = await p71f.evaluate(() => {
+    const cards = [...document.querySelectorAll('.amx-ucard')]
+    return { n: cards.length, h1: cards.filter((c) => !!c.querySelector('h1')).length, text: cards.map((c) => c.textContent ?? '').join('|') }
+  })
+  await p71f.close()
+  record('C71f 跨文件(另一个实例)粘贴卡片 = 格式活着(标题仍是 h1;修前 textBetween 只剩光秃秃的字)',
+    !!cross71.mine && f71paste.prevented && f71.n === 1 && f71.h1 === 1 && f71.text.includes('粘来的标题'),
+    JSON.stringify({ mineLen: cross71.mine.length, plain: cross71.text.slice(0, 40), ...f71 }))
 
   // ── C72 卡内可交互控件照常可点(2026-08-20 用户实报「画布里点图片的 `</>` 没反应」)──────
   // ⚠️ 根因是**指针事件**不是按钮:舞台的 pointerdown 一 preventDefault,浏览器就不再补发
@@ -4741,22 +4781,36 @@ async function main() {
   record('C86 Shift+拖卡 = 连整支:祖孙三代同一位移一起搬(修前只搬被抓的那一张)',
     mv1.dx > 40 && mv1.dy > 40 && mv2.dx === mv1.dx && mv2.dy === mv1.dy && mv3.dx === mv1.dx && mv3.dy === mv1.dy && sel86 >= 3,
     JSON.stringify({ mv1, mv2, mv3, sel86 }))
-  // C86b 负对照:Shift **点一下不拖** = 照旧单张加选 —— 整支展开只作用在「这一笔搬什么」上。
-  // 修前(展开写在 pointerdown 的选中里)这一格必红:没位移也会把祖孙三代收进选中集合,
-  // 随后一个 Delete / 一次方向键就误伤整支(Codex 08-31 medium)。
+  // C86b Shift **点一下**(不拖)也连整支(用户 2026-09-04:本意就是点击选中带子卡)。
+  // ⚠️ 08-31 这一格原本钉的是反面(点击只加单张),被用户明确推翻 —— 单张加选改由 Cmd/Ctrl 承担(C86c)。
   await p86.keyboard.press('Escape') // 清选中。⚠️ 别改成「点左上角空白」:那儿是模式胶囊,一点就切回文档模式
   await p86.waitForTimeout(250)
   const k3box = await box86('k3')
   await p86.keyboard.down('Shift')
-  await p86.mouse.click(k3box.x, k3box.y) // 先选一张叶子,证明 Shift 仍是加选
+  await p86.mouse.click(k3box.x, k3box.y) // 先 Shift 点叶子:它没有后代,只该有自己
+  const leaf86 = await p86.evaluate(() => [...document.querySelectorAll('.amx-el-selbox[data-anchor]')].map((e) => e.dataset.anchor).sort())
   const p86k1 = await box86('k1')
-  await p86.mouse.click(p86k1.x, p86k1.y) // 再 Shift 点根卡:只该多这一张,不该连整支
+  await p86.mouse.click(p86k1.x, p86k1.y) // 再 Shift 点根卡:整支(k1/k2/k3)一起进选中
   await p86.keyboard.up('Shift')
   await p86.waitForTimeout(250)
   const click86 = await p86.evaluate(() => [...document.querySelectorAll('.amx-el-selbox[data-anchor]')].map((e) => e.dataset.anchor).sort())
-  record('C86b Shift 点一下(不拖)= 单张加选,整支不动;Shift 逐张点出多选照旧成立',
-    JSON.stringify(click86) === JSON.stringify(['k1', 'k3']),
-    JSON.stringify({ click86 }))
+  record('C86b Shift 点一下(不拖)= 连整支进选中;叶子卡只有自己',
+    JSON.stringify(leaf86) === JSON.stringify(['k3']) && JSON.stringify(click86) === JSON.stringify(['k1', 'k2', 'k3']),
+    JSON.stringify({ leaf86, click86 }))
+  // C86c 负对照:Cmd/Ctrl 点 = **单张**加选,整支不动 —— 「点完随手 Delete 误伤整支」有解的那把钥匙
+  // (Codex 08-31 medium 的顾虑改由这个键承接;两个键各代表一种意图,不是一个键两义)。
+  await p86.keyboard.press('Escape')
+  await p86.waitForTimeout(250)
+  const MOD86 = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await p86.keyboard.down(MOD86)
+  await p86.mouse.click(k3box.x, k3box.y)
+  await p86.mouse.click(p86k1.x, p86k1.y) // Cmd 点根卡:只该多它自己
+  await p86.keyboard.up(MOD86)
+  await p86.waitForTimeout(250)
+  const mod86 = await p86.evaluate(() => [...document.querySelectorAll('.amx-el-selbox[data-anchor]')].map((e) => e.dataset.anchor).sort())
+  record('C86c Cmd/Ctrl 点根卡 = 单张加选,整支不动(精确点名那一张仍有键可用)',
+    JSON.stringify(mod86) === JSON.stringify(['k1', 'k3']),
+    JSON.stringify({ mod86 }))
   await p86.close()
 
   // ── C87 非编辑态点勾选框/双链 = 弹提示 ───────────────────────────────────────────────
@@ -5265,6 +5319,51 @@ async function main() {
       JSON.stringify({ drove89c, before89c, after89c }))
     await p89c.close()
   }
+
+  // ── C90 页内查找在画布上「能露出命中」(2026-09-03 用户实报「Canvas 好像也没有支持」)────
+  //  真因不是匹配不到 —— 画布的卡片是**同一个 PM 文档**的顶层节点,DOM 就在舞台里,一直扫得到。
+  //  坏的是**定位**:舞台拿 `transform: translate/scale` 当视口,`.amx-stage` 又是 overflow:hidden,
+  //  实测(Electron 40.10.2 / Chromium 144)任何滚动 API 都推不动它 —— 命中高亮好端端地画在
+  //  视口外,用户看到的就是「查找对画布没用」。修法:查找 reveal 前先派 `amx-reveal` 事件,
+  //  画布接住并把命中折回舞台坐标居中(canvasStage 里那个 useEffect,gate 在 active 上)。
+  //  ⚠️ 三条断言缺一不可:
+  //   a. 命中数对(证明扫描确实进了卡片,不是「什么都没找到所以什么都没动」——那会静默假绿);
+  //   b. 舞台 transform **变了**(证明真的接手平移了);
+  //   c. 命中矩形最终落在舞台视口内(证明平移的方向/量是对的,不只是「动了一下」)。
+  const FIND_FARCARDS = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"f1","x":40,"y":40,"w":300},{"ref":"f2","x":40,"y":4200,"w":300}]}',
+    '---', '', '主卡正文。', '', '<!-- a f1 -->', '近处卡片。', '', '<!-- a f2 -->', '远方的柠檬。', '',
+  ].join('\n')
+  const pFind = await open(browser, FIND_FARCARDS)
+  await pFind.waitForTimeout(800)
+  const tFind0 = await pFind.evaluate(() => getComputedStyle(document.querySelector('.amx-stage-inner')).transform)
+  // 前置:命中那张卡此刻确实在视口外(否则「已经看得见」会让 c 平凡成立)。
+  const offFind = await pFind.evaluate(() => {
+    const stage = document.querySelector('.amx-stage').getBoundingClientRect()
+    const card = [...document.querySelectorAll('.amx-ucard')].find((e) => e.textContent.includes('柠檬'))
+    if (!card) return null
+    const r = card.getBoundingClientRect()
+    return r.top > stage.bottom || r.bottom < stage.top || r.left > stage.right || r.right < stage.left
+  })
+  await pFind.evaluate(() => window.__openFind())
+  await pFind.waitForTimeout(150)
+  await pFind.keyboard.type('柠檬')
+  await pFind.waitForTimeout(600)
+  const aFind = await pFind.evaluate(() => {
+    const all = [...(CSS.highlights.get('amx-find') ?? [])]
+    const stage = document.querySelector('.amx-stage').getBoundingClientRect()
+    const r = all[0]?.getBoundingClientRect()
+    return {
+      hits: all.length,
+      transform: getComputedStyle(document.querySelector('.amx-stage-inner')).transform,
+      inView: !!r && r.top >= stage.top - 2 && r.bottom <= stage.bottom + 2 && r.left >= stage.left - 2 && r.right <= stage.right + 2,
+    }
+  })
+  record('C90 页内查找:画布上的命中被平移进视口(scrollIntoView 推不动 transform 视口)',
+    offFind === true && aFind.hits === 1 && aFind.transform !== tFind0 && aFind.inView,
+    JSON.stringify({ wasOffscreen: offFind, ...aFind, tFind0 }))
+  await pFind.close()
 
   await browser.close()
   const ok = results.filter(Boolean).length

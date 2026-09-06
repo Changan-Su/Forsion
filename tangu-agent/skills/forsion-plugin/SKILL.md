@@ -98,14 +98,93 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 | 贡献点 | 给用户的入口 | 备注 |
 |---|---|---|
-| `registerCommand` | 命令面板 | id 处于全局命名空间,裸名会互顶;**只做导航**——动作性能力走引擎侧 agent/技能(通用纪律 5) |
+| `registerCommand` | 命令面板(+ 可选 agent 面) | id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
-| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el)` 返 disposer),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表 |
+| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表 |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下 |
 | `registerFileType` | 自定义 `.x.md` 文件类型 | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
+| `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
+
+#### Extend View:随主视图挂载的临时扩展(2026-09-05)
+
+`registerView.mount(el, view?)` 在 Main View 中的第二参提供 **`view.extendView`**。用它承载新增/编辑表单、详情或临时工具;
+宿主创建临时原生 View,加入现有 Left / Right / Bottom Panel 的标签组,由主视图管理生命周期。
+不需要为每个插件 `registerView` 第二个常驻视图,不进永久视图目录、导航历史或布局存档。
+原生标签栏保持可见,可在原有 View 与临时 View 间切换且保留草稿;宽度/高度沿用 Panel 设置。
+侧栏原先收起时按需展开;关闭临时 View 后返回原有 View,仅有临时 View 的面板随之收起。
+使用原生折叠按钮会收起整个 Panel 并销毁临时 View;再次展开仅还原常规 View。
+内置 React 主视图从 `ViewProps.extendView` 取同一接口;侧栏 View、Dashboard 嵌卡和无侧栏的 mini 窗口没有这个接口。
+
+```js
+ctx.registerView({ id: 'items', title: 'Items', mount(el, view) {
+  const button = document.createElement('button')
+  button.textContent = ctx.getLocale().startsWith('zh') ? '编辑' : 'Edit'
+  button.onclick = () => view?.extendView?.open({
+    id: 'editor',
+    title: () => ctx.getLocale().startsWith('zh') ? '编辑条目' : 'Edit item',
+    side: 'right', // left / right / bottom;默认 right
+    mount(body, handle) {
+      const input = document.createElement('input')
+      input.setAttribute('aria-label', 'Item name')
+      body.appendChild(input)
+      // 保存成功可调用 handle.close();失败时保留输入并提示。
+      return () => { input.remove() } // 清理订阅/监听器/计时器
+    },
+    onClose(reason) { /* dismiss(原生关闭/折叠/Esc/系统返回) / close / replace / owner */ },
+  })
+  el.appendChild(button)
+  return () => { button.remove() }
+} })
+```
+
+每个主视图同时至多一份扩展,同一个 Panel 也只容纳一份临时内容(后来者替换前者)。
+移动端临时 View 进入原生左右抽屉的视图选择器;请求 bottom 时回落到右抽屉。
+每个主视图内,相同 `id` 再次 `open` 只聚焦,**不重新 mount、不替换参数**,保留输入;
+要切对象就换 id 或先 close。不同 id 替换前一份;旧 handle 的 close 无法关掉后来者。
+`handle.isOpen` 可探测是否还活着。`view.extendView.close()` 收当前扩展。
+主视图关闭、切 tab/Space、换实体参数或插件禁用会卸载内容;旧 controller 的异步 open 会抛错,
+调用方应取消自己的请求或处理失败。扩展里的未保存草稿由主视图自行管理,不要把凭据写入布局。
+
+**规则/Agent 入口**调用与按钮相同的 `open` 函数即可;Agent 入口仍须在 `registerCommand` 上声明下面的
+`invoke` 白名单,传显式目标和稳定 id,不做 toggle。须先确保拥有这份扩展的主视图已经挂载,
+不要把过期 `view` 存成跨视图的全局控制器。旧宿主需检查 `view?.extendView`,按需保留原来的内联表单。
+
+#### `invoke`:把一条命令开给 agent(2026-09-04)
+
+给 `registerCommand` 的条目加一个 `invoke`,这条命令就进 Tangu 的 `list_ui_commands` 目录、
+可被 `run_ui_command` 派发。**存在即白名单** —— 不声明就对模型完全不可见。
+
+```js
+ctx.registerCommand({
+  id: 'myplugin-open-report',
+  title: () => t('报告'),
+  keywords: 'report weekly 报告 周报',   // 命令面板的模糊搜索别名(中文/拼音都可以,不进模型面)
+  run: () => openReport(),
+  invoke: {
+    // 英文,给模型看。**不要复用 title** —— title 跟随界面语言,中文用户的目录会整份变中文。
+    description: 'Open the weekly report view.',
+    // 有参数就给 JSON Schema;并且**一定要接显式值,不要做 toggle**:
+    // 模型看不到当前界面状态,而派发事件在重连时会重放,toggle 会被翻两次。
+    params: { type: 'object', properties: { week: { type: 'string' } } },
+    run: (args) => openReport(String(args.week || '')),
+    state: () => currentWeek(),           // 可选:当前值探针,省得模型靠猜
+  },
+})
+```
+
+三条硬纪律:
+
+1. **危险类不许 opt-in** —— 删除或覆盖用户数据、凭据与安全设置、对外发送/发布/购买、
+   安装升级重启退出、不可逆的批量操作。理由不是洁癖:**web 与移动端的云 run 根本不经过审批闸**
+   (引擎对非 host 执行档直接 approve),你这份声明就是那两端的全部安全边界。
+2. **先想清楚是导航还是动作。** 模型「帮用户开一个面板」几乎没有价值;有价值的是把它刚做出来的
+   东西摆到用户眼前、或者改一个用户用话说出来的设置。
+3. **插件命令只在桌面存在**(web 与 mobile 的 `listPlugins` 都返回 `[]`)。声明了 `invoke` 也不会
+   出现在手机的目录里 —— 这是正确行为,不是 bug,别为此写特例。
+
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
 | `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
@@ -191,6 +270,55 @@ if (r?.ok) {
   读不懂的现有布局会**拒编译**(`ok:false`)—— 宿主绝不拿默认值覆盖用户布局,所以 `ok:false` 要如实报给用户,别静默重写。
 - 围栏格式与 frontmatter 词表**留在宿主**(格式无版本契约,手抄 = 将来破兼容)—— 只出配方,别自己拼 `.dashboard.md` 文本。
 - 旧宿主没有,两条都要可选链:`ctx.dashboard?.mount?.(…)` / `ctx.dashboard?.source(…)`,并备一条降级 UI。
+
+### 原生多维表 ctx.table.mount(2026-09-05 起)
+
+面板里的表格不用再手搓 `<table>`:给**一份规格**,宿主用真的多维表渲(筛选 / 搜索 / 隐藏列 / 排序 / 统计
+一样不少),**不依赖笔记库** —— 与 `ctx.dashboard.mount` 同一路线(远程系统面板也能用)。
+表是**只读**的:没有加行 / 加列 / 删行,单元格也编辑不了。
+
+```js
+const spec = {
+  id: 'models',                                   // 槽位键:同 id 再来 = 更新,不是重挂
+  columns: [
+    { key: 'name',  label: '模型', kind: 'text', width: 200 },
+    { key: 'calls', label: '调用', kind: 'number' },
+    { key: 'state', label: '状态', kind: 'select', options: [{ value: 'on', label: '启用', color: 'green' }] },
+  ],
+  rows: models.map((m) => ({
+    id: m.id,
+    attrs: { 'data-id': m.id },                   // 落到行元素上,既有的事件委托照常收得到
+    cells: {
+      name:  { text: m.name, sub: m.slug, avatar: { src: m.icon, letter: m.name[0] } },
+      calls: { text: '58.5 万', sortValue: 585000 },   // 显示归 text,排序归 sortValue
+      state: m.enabled ? 'on' : 'off',
+    },
+  })),
+  actionsLabel: '操作',
+  actions: (row) => [{ act: 'm-edit', label: '编辑', attrs: { 'data-id': row.id } }],  // 真 <button data-act>
+  empty: '还没有模型',
+  onRowOpen: (row) => openDetail(row.id),         // 行点击 / Enter(点在按钮、链接上时不触发)
+  onSort: (s) => { state.sort = s },              // 用户改了排序 → 面板自己记一份
+}
+
+const h = ctx.table.mount(el, spec)               // 同步返回 { update, dispose }
+refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排序/筛选/列宽存活
+// 视图卸载时 h.dispose()(幂等;插件禁用时宿主也会统一卸掉)
+```
+
+- **数据刷新一律 `update(spec)`,不要 dispose 了重挂** —— 用户当前的排序 / 筛选 / 隐藏列 / 列宽住在表自己的
+  状态里,重挂就全没了(面板每次重绘都清一次 = 用户没法用)。
+- **单元格里不许出现 HTML 字符串**:`text` 只收字符串/数字,装饰走 `sub` / `tone` / `dot` / `mono` / `title` /
+  `avatar` / `href` 这些字段。规格非法(没列 / 行缺 id / `text` 不是基元)**当场同步抛**。
+- `sortValue` 是给复合文案用的:显示 `58.5 万`、排序按 `585000`。不给就按字面排(「585000 < 9」那种)。
+- `onRender(root)` 是**只读**回调(挂懒加载观察器一类):表是宿主的 React 树,**往里塞/删节点会在下一次
+  `update()` 的对账里被抹掉**。头像懒加载的正确姿势是「拿到 src → 改规格 → `update()`」。
+- `sort` 只吃首份规格;之后用户在表头改的排序归表自己记,`update()` 不冲掉它(所以要在 `onSort` 里同步面板状态)。
+- 列的 `align` / `nowrap` 只有降级路径认(原生表有自己的列宽 / 对齐语汇);`row.className` 两条路径都认(原生路径并进行的 className)。
+- 行只是分页 / 截断的一片(服务端分页、按页切)就标 `partial: true`:原生表整条工具栏(筛选 / 搜索 / 导出 / 视图设置)不给 —— 它们只会看到本页并给出错误的数据视图;表头排序照留(本页内)。
+- 规格里的 `attrs`(行 / 格 / 头像 / 动作)只放行 `data-*` / `aria-*` / `title` / `id` / `role` / `tabindex` / `lang` / `dir` / `hidden` / `class`;`on*` / `style` / `src` / `href` 一律丢弃,`data-act` / `type` / `disabled` 这类固定属性不可被 attrs 覆盖。
+- 旧宿主没有:`if (ctx.table && ctx.table.mount) { … } else { 画自己的经典表格 }`。整个 `ctx.table` 会**不存在**
+  (不是空壳),抛出来的错也当「宿主不收」处理 —— 两种情况都走降级 UI。
 
 ### 只读全库查询(2026-08-14 起)
 

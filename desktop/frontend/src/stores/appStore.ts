@@ -15,6 +15,7 @@ import { DEFAULT_CLOUD_PROJECT, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, session
 import * as api from '../services/backendService'
 import { abortRun, cancelSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
+import { recordUiAction } from '../diag'
 import { splitSuggestions } from '../views/chat2/suggest'
 import type { ChatRef } from '../views/chat2/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
@@ -210,6 +211,34 @@ const stoppedRuns = new Set<string>()
 // ⚠️ 按 runId 记而非 sessionId(Codex 评审 #4):按会话记的话,用户 stop 掉计划 run 后标记泄漏,
 // 该会话下一个无关 run 的 done 会莫名自动「开始执行」。所有终结路径统一在 endRun 清理。
 const planAutoStart = new Set<string>()
+/**
+ * G2 · 界面动作的**发起窗口**登记表:只有起这条 run 的这个渲染实例才执行 `ui_cmd`。
+ *
+ * ⚠️ 少了这道闸会出两种错,而且都不报错、只是行为诡异:
+ *  ① **重放** —— run 事件是「回放 + 实时」,客户端永远从 seq 0 订阅(agentRunService 的
+ *     subscribeRunEvents),而 loadHistory / pollSession 会对在飞 run 重新订阅。run 还没结束时
+ *     用户刷新一下或切走再切回来,历史里那条 ui_cmd 会被**再执行一遍**,把用户手动改回去的值
+ *     又压掉。
+ *  ② **扇出** —— subscribedRuns 是模块级的,只在**单个 JS realm 内**去重;每个 BrowserWindow /
+ *     浏览器标签页 / 手机各持一份,同一条 run 会被 N 个窗口各执行一次。
+ * deskCapture 不需要这道闸是因为它的效果朝**引擎**去(截图 POST 回去),引擎侧先到先得、其余
+ * 410;而界面动作是终局的、朝渲染端去,引擎那边没有可仲裁的位置。
+ *
+ * ⚠️ 已知降级(接受):渲染端 reload 会连着模块级 Set 一起没,该 run 后续的界面动作在所有窗口
+ *    都不会执行 → 引擎 8s 超时,超时文案已写明「回到那个窗口 / 让用户自己去设置里改」。
+ * 所有终结路径统一在 endRun 清理(同 planAutoStart)。
+ */
+const uiActionOwnedRuns = new Set<string>()
+/**
+ * G3 · 已处理过的 ackId。**G2 的按 run 归属挡不住这一格**:
+ * 云端 worker 上报事件是**至少一次**语义 —— `httpStateStore` 的注释写得很直白:server 已提交但
+ * 响应丢失时会重发,而事件表 append-only 无幂等键,重复那条会拿到**新的 seq**。所以按 seq 去重
+ * 也没用,只有按 ackId 去重才准(Codex 评审 2026-09-04 P1-1)。
+ * 桌面直连基本碰不到,这是一个只在 web/安卓上炸的故障 —— 本机跑一万次都正常。
+ * 不随 run 清理:ackId 全局唯一且带随机段,留着比误清一次重放便宜得多;上限兜底防无限增长。
+ */
+const uiActionDoneAcks = new Set<string>()
+const MAX_DONE_ACKS = 2000
 // run 级预支:撞限的 run 服务端放行到跑完,跑完这里立刻查一次额度并提示「已用尽」。
 // 判定用 remaining<=0 而非取整后的 percent(99.5% 会被四舍五入成 100 误报,codex2#9);
 // 只在「未耗尽→耗尽」的状态迁移上弹一次(时间节流会吞真通知又重复旧通知,codex2#10);
@@ -746,6 +775,41 @@ export const useApp = create<AppState>((set, get) => ({
         get().deskPresent(sessionId, pl)
         break
       // desk_screenshot:引擎在等一张图 —— 截 Desk 面板回传(懒加载防 store↔views 循环依赖)。
+      case 'ui_cmd': {
+        // 界面动作(set_ui_setting / run_ui_command)。三道闸,缺一个都会在真实网络下出错:
+        //  G2 归属 —— 非本窗口发起的一律不执行,**也不回执**(回了等于替别的窗口答,引擎会把
+        //             「没人执行」误判成成功)。
+        //  G3 去重 —— 云端至少一次投递会把同一条 ui_cmd 送两遍(见 uiActionDoneAcks 头注)。
+        //  先占后做 —— 标记必须在 await 之前落,否则两条重复事件会在动态 import 期间双双穿过。
+        // 每个出口都记进 diag.uiActionLog(含被闸拦掉的):静默丢弃正是导出日志最该照出来的那格。
+        const ackId = typeof pl.ackId === 'string' ? pl.ackId : ''
+        const req = pl.kind === 'setting'
+          ? { kind: 'setting', key: String(pl.key ?? ''), value: String(pl.value ?? '') }
+          : { kind: 'command', id: String(pl.id ?? ''), args: pl.args }
+        const drop = !ackId ? 'no-ackId' : !uiActionOwnedRuns.has(runId) ? 'not-owner' : uiActionDoneAcks.has(ackId) ? 'duplicate' : ''
+        if (drop) { recordUiAction({ runId, ackId, ...req, drop }); break }
+        if (uiActionDoneAcks.size >= MAX_DONE_ACKS) uiActionDoneAcks.clear()
+        uiActionDoneAcks.add(ackId)
+        const cfg = get().cfg
+        void (async () => {
+          const [{ applyUiSetting, runAgentCommand, readUiValues }, { sendUiAck }] = await Promise.all([
+            import('../agentCommands'),
+            import('../services/agentRunService'),
+          ])
+          // ⚠️ await 之后必须**重查**:安卓 WebView 挂起超过 8s、或用户按了停止,这条事件仍会在
+          //    恢复后落地。不重查 = 引擎早已报失败/run 已结束,界面却在几十秒后自己动了一下
+          //    (Codex 评审 P1-4)。
+          if (stoppedRuns.has(runId) || !uiActionOwnedRuns.has(runId)) { recordUiAction({ runId, ackId, ...req, drop: 'stopped' }); return }
+          const r = pl.kind === 'setting'
+            ? await applyUiSetting(pl.key, pl.value)
+            : await runAgentCommand(pl.id, pl.args && typeof pl.args === 'object' ? pl.args : undefined)
+          // 回执带全份设置新值(在 setter 落地**之后**读):引擎据此刷新 run 内快照,同 run 里再 list 才是新值。
+          // pending(setter 没在时限内落地)就不带:那一刻读到的还是旧值,写进引擎等于把病换个出口再犯一次。
+          const ack = await sendUiAck(cfg, runId, ackId, { ok: r.ok, error: r.error, state: r.state, ...(r.pending ? {} : { settings: readUiValues() }) })
+          recordUiAction({ runId, ackId, ...req, ok: r.ok, error: r.error, state: r.state, ack })
+        })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
+        break
+      }
       case 'desk_capture_request':
         if (pl.shotId) {
           const cfg = get().cfg
@@ -1261,8 +1325,15 @@ export const useApp = create<AppState>((set, get) => ({
           }).catch(() => { /* 引导判定失败不阻断 */ })
         }
       } catch { /* 引导判定失败不阻断 */ }
+    } else if (stored) {
+      // web / 移动端(无 envCheck):登录早在挂载前由 webShim / mobileShim 完成(无 token 直接跳
+      // /auth),也没有 provider / 本机环境这些概念 —— 「首启」的唯一信号就是没跳过过。
+      // 步骤序同步收缩到 welcome/theme/done,见 OnboardingWizard.stepOrder。
+      try { if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) set({ onboarding: true }) } catch { /* 私密模式 */ }
     }
     // 版本更新后再进一次引导(展示 What's New);完成时记录版本(见 OnboardingWizard.finish)。
+    // 只在 host 生效(web/移动端没有 appVersion,这条自然 no-op):web 每次发版都全屏拦一次
+    // 所有在线用户,代价与收益不成比例 —— 更新日志那边从欢迎页的抽屉照样看得到。
     // seen 与当前版本不同(含老用户首次启用本功能,seen 为空)→ 弹一次,弹完即标记不再重复。
     void window.tangu?.appVersion?.().then((ver) => {
       if (!ver) return
@@ -1795,6 +1866,12 @@ export const useApp = create<AppState>((set, get) => ({
       try {
         const sr = await steerRun(get().cfg, activeRunId, { message: text, attachments })
         if (sr.ok) {
+          // G2 所有权转移:用户此刻在**这个**窗口/这台设备说话,界面动作就该落在这里。
+          // 只在 startRun 处认领的话,「A 设备起 run、用户换到 B 设备追一句」会让 A 替 B 执行并
+          // 回报成功,而 B 什么都不动;A 已关闭时 B 则永远超时(Codex 评审 2026-09-04 P1-3)。
+          // 转向是显式的用户动作,拿它当归属信号是安全的 —— 不会像「恢复订阅也认领」那样把
+          // 扇出放回来。
+          uiActionOwnedRuns.add(activeRunId)
           // 不直接上屏:消息进「steer 等待区」,引擎在迭代边界注入并发 turn_boundary 后才进对话
           // (此前的立即上屏是谎报——引擎此刻还没读到它)。入队即记 ↑ 历史(类 pi):删/撤回后仍可找回。
           set((s) => steerAcceptPatch(s, sessionId, activeRunId, { id: sr.userMessageId || `u-${Date.now()}`, text, attachments }))
@@ -1809,6 +1886,7 @@ export const useApp = create<AppState>((set, get) => ({
       : (get().sessions.find((s) => s.id === sessionId)?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || undefined)
     try {
       const r = await startRun(get().cfg, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
+      uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
       const stamp = agentStamp(get(), agentConfig)
       set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [
@@ -2308,6 +2386,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 计划自动开始的兜底清理:done 路径在调 endRun **之前**已消费;其余一切终结路径(stop/错误/看门狗)
   // 在此作废,防止标记泄漏到该会话后续无关 run(Codex 评审 #4)。
   planAutoStart.delete(runId)
+  uiActionOwnedRuns.delete(runId) // G2 归属标记随 run 终结释放(同 planAutoStart,统一在此清理)
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
   set((s) => {

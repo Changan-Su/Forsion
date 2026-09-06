@@ -37,6 +37,8 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
       all['tangu-none:host+gui'] = getToolDefinitions({
         userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
         execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0',
+        uiCommands: [], // 界面面三工具的能力握手闸;与 scripts/dump-tooldefs.mjs 的同名上下文必须一致
+
       } as any);
     }
     const here = dirname(fileURLToPath(import.meta.url));

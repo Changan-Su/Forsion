@@ -92,7 +92,8 @@ export interface BackendStatus {
   staleDist: boolean
 }
 
-const LOG_CAP = 200
+// 500 行:导出会话日志会整份带走这段缓冲;200 行在微信/TG 轮询报错刷屏时只够几分钟。查看器是一次性取回的 <pre>,没有持续开销。
+const LOG_CAP = 500
 
 export class BackendManager {
   private child: ChildProcess | null = null

@@ -1,7 +1,7 @@
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
- * 设置浮层(账号/登录)+ Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的桌面专属浮层
- * (引导/商店/反馈/插件引导/QuickFind);哪些故意不要、为什么,以 `desktop/scripts/platform-parity.check.cjs`
+ * 设置浮层(账号/登录)+ 首启引导 + Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的桌面专属浮层
+ * (商店/反馈/插件引导/QuickFind);哪些故意不要、为什么,以 `desktop/scripts/platform-parity.check.cjs`
  * 的 SKIP 表为准 —— 那张表是唯一台账,别只在这里凭记忆增删。
  *
  * ⚠️ 本文件消费的是 **desktop 的 appStore/组件**,而 vite build 不做类型检查 —— 桌面侧删个字段
@@ -16,11 +16,13 @@ import { useBootstrap } from '@/stores/bootstrap'
 import { useInbox } from '@/stores/inboxStore'
 import { pullInbox } from '@/services/backendService'
 import { SettingsModal } from '@/components/SettingsModal'
+import { OnboardingWizard } from '@/components/OnboardingWizard'
 import { NotificationHost } from '@/components/NotificationHost'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
 import { QuickFind } from '@/quickFind'
+import { FindBar } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -64,6 +66,9 @@ function useAndroidBack(): void {
       window.dispatchEvent(shellEv)
       if (shellEv.defaultPrevented) return
       const app = useApp.getState()
+      // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
+      // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
+      if (app.onboarding) return
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }
@@ -106,6 +111,8 @@ export function MobileRoot() {
     activeId: s.activeId,
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
+    onboarding: s.onboarding,
+    setOnboarding: s.setOnboarding,
     achievementsOpen: s.achievementsOpen,
     cfg: s.cfg,
     closeSettings: s.closeSettings,
@@ -133,6 +140,9 @@ export function MobileRoot() {
            · QuickFind 的 ribbon 项已撤(2026-08-31,见 bootstrapEngine 那段注释),但它仍从
              `quick-find` 命令(⋯ → 命令)与仪表盘的 openPicker 进来 —— **别跟着一起删**。 */}
       <QuickFind />
+      {/* 页内查找浮条:移动端没物理键盘(installHotkeys 整个不装),但 `find-in-page`
+          命令从「⋯ → 命令」点得到 —— 不挂宿主就是那种「点完什么都不出来」的静默死按钮。 */}
+      <FindBar />
       <CommandPalette />
       {/* 互联设备弹层(Forsion Unit):入口在 ⋯ 菜单(mobileEntry 的 installUnitsEntry 按桥上架)。 */}
       <MobileUnitsSheet />
@@ -182,6 +192,34 @@ export function MobileRoot() {
               onSeedChange={(hex) => theme.setSeedValue(hex)}
               onReloadThemes={() => theme.reloadThemes()}
               onReconnect={(patch) => void a.connect({ ...a.cfg, ...(patch || {}) })}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 首启引导:移动端只走通用步(欢迎/外观/完成)—— 连接、模型、工作区、环境检测的落盘全靠
+          window.tangu 的 host 方法,mobileShim 没有,步骤序在 OnboardingWizard.stepOrder 里已收缩。
+          onFinish 不重连:移动端没有 connect 步,配置在引导里不会变。 */}
+      <AnimatePresence>
+        {a.onboarding && (
+          <motion.div
+            key="onboarding"
+            style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, scale: 1.06 }}
+            transition={{ duration: 0.45, ease: [0.2, 0.8, 0.2, 1] }}
+          >
+            <OnboardingWizard
+              themeLang={theme.lang}
+              themeSkin={theme.skin}
+              themeMode={theme.mode}
+              themeModePref={theme.modePref}
+              themeSeed={theme.seed}
+              onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
+              onSeedChange={(hex) => theme.setSeedValue(hex)}
+              onReconnect={() => { /* 无 connect 步 */ }}
+              onFinish={() => a.setOnboarding(false)}
             />
           </motion.div>
         )}

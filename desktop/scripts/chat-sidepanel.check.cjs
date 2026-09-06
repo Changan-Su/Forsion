@@ -373,7 +373,7 @@ async function main() {
   )
 
   // ── 1 Amadeus 右栏默认 = 对话 ────────────────────────────────────────────────
-  const spaceBtn = win.locator('.rb-space[title="Amadeus"], .rb-space:has-text("Amadeus")').first()
+  const spaceBtn = win.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first()
   await spaceBtn.click({ timeout: 10_000 })
   await win.waitForTimeout(2500)
   await win.click('.dv-edge-right', { timeout: 10_000 })
@@ -658,7 +658,7 @@ async function main() {
   await w2.waitForTimeout(800)
   await w2.click('.dv-edge-right').catch(() => {}) // 折叠 → 写 stashActive.right = 第 2 个视图的 type
   await w2.waitForTimeout(1600)
-  await w2.locator('.rb-space[title="Amadeus"], .rb-space:has-text("Amadeus")').first().click().catch(() => {})
+  await w2.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first().click().catch(() => {})
   await w2.waitForTimeout(2800)
   await w2.click('.dv-edge-right').catch(() => {}) // Amadeus 右栏**首次**展开
   await w2.waitForTimeout(2200)

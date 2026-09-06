@@ -83,6 +83,10 @@
   --menu-item-min-height: 28px;
   --menu-item-pad-block: 4px;
   --menu-item-pad-inline: 8px;
+  /* 菜单行 hover / 键盘选中底:所有二级菜单(右键 / slash / @ / 命令面板 / composer 下拉 / ribbon)统一消费。
+   * 取 --overlay-medium(明 0.07 / 暗 0.08,Notion 选中底 0.08)而非 --overlay-light:0.04 在浅底上几乎看不见
+   * (用户 09-05 实报);须保持中性色,不许换成 accent 调。 */
+  --menu-hover: var(--overlay-medium);
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
   --duration-slow: 0.25s;
@@ -250,7 +254,7 @@ input, textarea, select { font: inherit; color: var(--text); }
   .t2s-search input, .model-search input, .mk-search input, .mk-sort select,
   .project-menu-search input, .add-menu-search input,
   .composer-box textarea, .t2c-ta,
-  .amx-qf-input, .am-app .amx-findbar input, .amx-coverpick-search input, .amx-prop-chips input
+  .amx-qf-input, .amx-findbar input, .amx-coverpick-search input, .amx-prop-chips input
 ) { padding: 0; border-radius: 0; }
 /* form-baseline:end */
 a { color: var(--accent-ink); text-decoration: none; }
@@ -451,7 +455,7 @@ a:hover { color: var(--accent-ink); }
   border-radius: var(--radius-sm); color: var(--text-light);
   font-size: 13px; line-height: 1.4; text-align: left; cursor: pointer; background: none; border: none;
 }
-.project-menu-item:hover { background: var(--overlay-light); }
+.project-menu-item:hover { background: var(--menu-hover); }
 .project-menu-item > svg:first-child { color: var(--text-faint); flex-shrink: 0; }
 .project-menu-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-menu-check { color: var(--accent-ink); flex-shrink: 0; }
@@ -742,7 +746,7 @@ a:hover { color: var(--accent-ink); }
   line-height: 1.4;
   color: var(--text-light);
 }
-.ctx-menu button:hover { background: var(--overlay-light); color: var(--text); }
+.ctx-menu button:hover { background: var(--menu-hover); color: var(--text); }
 .ctx-menu button.danger { color: var(--danger); }
 .ctx-menu button.danger:hover { background: var(--danger-light); }
 /* 菜单小节标题(说明这一串选项是干什么的);`.ctx-menu` 是右键菜单外壳的唯一正典,变体写在它旁边。 */
@@ -1571,7 +1575,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   color: var(--text-light);
   text-align: left;
 }
-.composer-menu .menu-item:hover { background: var(--overlay-light); color: var(--text); }
+.composer-menu .menu-item:hover { background: var(--menu-hover); color: var(--text); }
 .composer-menu .menu-item.active { color: var(--accent-ink); }
 /* 当前模型不支持的思考档:标灰但可点(引擎自动降档,选了不出错) */
 .composer-menu .menu-item.mi-dim { color: var(--text-faint); }
@@ -1696,7 +1700,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
    overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
 .composer-menu--model { right: 0; width: var(--menu-select-width); min-width: 0; max-width: none; max-height: none; overflow: visible; }
 .cm-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border-radius: var(--radius-md); font-size: var(--t2c-font-control, 12px); line-height: 1.4; color: var(--text-light); text-align: left; }
-.cm-row:hover, .cm-row.is-open { background: var(--overlay-light); color: var(--text); }
+.cm-row:hover, .cm-row.is-open { background: var(--menu-hover); color: var(--text); }
 .cm-row-k { flex: none; }
 .cm-row-v { flex: 1; min-width: 0; text-align: right; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cm-row svg { flex: none; color: var(--text-faint); }
@@ -3807,7 +3811,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   border-radius: var(--radius-sm);
   text-align: left;
 }
-.ctx-item:hover { background: var(--overlay-light); }
+.ctx-item:hover { background: var(--menu-hover); }
 .ctx-item.danger { color: var(--danger); }
 .ctx-item.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .ctx-item svg { flex-shrink: 0; opacity: 0.8; }
@@ -3854,7 +3858,7 @@ html.dark .brand-logo--dark { display: inline-block; }
   border-radius: var(--radius-sm);
   text-align: left;
 }
-.account-pop .ap-item:hover { background: var(--overlay-light); }
+.account-pop .ap-item:hover { background: var(--menu-hover); }
 .account-pop .ap-item:disabled { opacity: 0.55; cursor: default; }
 .account-pop .ap-item svg { flex-shrink: 0; opacity: 0.8; }
 .account-pop .ap-danger { color: var(--danger); }

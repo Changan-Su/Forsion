@@ -171,7 +171,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
 
     // Amadeus Space:左栏 = 笔记树(window.amadeus 在才注册这个 Space)。
-    const spaceBtn = win.locator('.rb-space[title="Amadeus"], .rb-space:has-text("Amadeus")').first()
+    const spaceBtn = win.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first()
     await spaceBtn.click({ timeout: 15_000 })
     await win.waitForTimeout(3000)
     await win.waitForSelector('.t2s-srow, .t2s-group', { timeout: 20_000 })

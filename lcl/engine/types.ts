@@ -7,6 +7,7 @@
  */
 import type { ComponentType, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import type { ExtendViewController } from './extendView'
 import type { PersistedPanel } from './layoutPersist'
 
 /** 视图可被开在主区 / 左侧栏 / 右侧栏 / 底部面板(VS Code 式,只在主区下方,不跨左右栏)。 */
@@ -38,6 +39,8 @@ export interface Leaf {
 
 /** 视图渲染时拿到的 props。 */
 export interface ViewProps {
+  /** Temporary native panel View owned by this Main View. Absent in side views, embedded cards and mini windows. */
+  extendView?: ExtendViewController
   leaf: Leaf
   params: Record<string, unknown>
 }
@@ -98,6 +101,30 @@ export interface ViewDefinition {
   workspaceSource?: string
 }
 
+/**
+ * 命令的 **agent 面**声明(opt-in)。声明了它,这条命令才会进 `list_ui_commands` 的目录、
+ * 才允许 `run_ui_command` 派发 —— **存在即白名单**,不声明的命令对模型完全不可见。
+ *
+ * ⚠️ 为什么 description 必须单独写、不能复用 `Command.title`:title 是 `string | (() => string)`,
+ *    求值结果**跟随当前界面语言** —— 中文用户的目录会整份变成中文,模型面必须是英文
+ *    (见 CLAUDE.md「模型读取的一律英文」)。
+ *
+ * ⚠️ 为什么 `run` 要单独一份、不复用 `Command.run`:命令面板里的设置类命令几乎全是
+ *    toggle / cycle(`toggleMode()` / `cycleSkin()` / `cycleLocale()`)。模型带着「切成英文」
+ *    的意图去调 toggle,界面本来就是英文时会翻成中文;再叠加 run 事件的 SSE 重放,
+ *    一次 cycle 会被放成两次翻转。agent 面**必须**是接显式值的 setter。
+ */
+export interface CommandInvoke {
+  /** 英文,给模型看。存在与否 = 是否 opt-in。 */
+  description: string
+  /** 参数的 JSON Schema(`{type:'object',properties:{…},required:[…]}`);无参命令省略。 */
+  params?: Record<string, unknown>
+  /** 接显式值的处理函数;缺省时回落 `Command.run()`(仅适用于真正无参且幂等的命令)。 */
+  run?(args: Record<string, unknown>): void | Promise<void>
+  /** 当前值探针,随目录一起回给模型,省得它靠猜(如当前语言 / 当前明暗档)。 */
+  state?(): string
+}
+
 /** 命令面板(Cmd/Ctrl+K)里的一条命令(≈ Obsidian addCommand)。 */
 export interface Command {
   id: string
@@ -107,7 +134,10 @@ export interface Command {
   hotkey?: string
   /** 命令面板行首 + 钉进 ribbon 命令区时的图标;缺省用通用图标。 */
   icon?: LucideIcon
-  run(): void
+  /** agent 面 opt-in(见 CommandInvoke)。不声明 = 模型看不见这条命令。 */
+  invoke?: CommandInvoke
+  /** 人类面执行。args 只在 agent 派发且未声明 `invoke.run` 时传入。 */
+  run(args?: Record<string, unknown>): void | Promise<void>
 }
 
 /** ribbon 竖条上的一个图标(≈ Obsidian addRibbonIcon)。 */

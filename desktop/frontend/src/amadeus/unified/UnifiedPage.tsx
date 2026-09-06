@@ -30,8 +30,6 @@ import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
 import { fdDirOf } from '../lib/fd'
 import { askString } from '../components/askString'
-import { useFindStore } from '../blocks/markdown/findInPage'
-import { FindBar } from '../components/PageView'
 import { resolvePageName } from '@amadeus-shared/links'
 import { resolveFileName } from '../lib/vaultFiles'
 import { wikiFilesEnabled } from '../lib/wikiFiles'
@@ -238,6 +236,10 @@ interface HostApi {
   insertMarkdown: (md: string, where: 'cursor' | 'start' | 'end') => boolean
   /** markdown → 块内容(画布粘贴/拖入用)。解析不出东西 = null。 */
   parseMd: (md: string) => Fragment | null
+  /** 块内容 → markdown(parseMd 的反向;画布跨实例复制卡用)。编辑器未挂载 = null。
+   *  给的是**显示形**(asset 协议 URL 原样),对面 parseMd 的 toDisplayMarkdown 会原样放行 ——
+   *  换成 stored 形的话页相对路径会按目标笔记重解析,跨文件夹粘贴的图片当场断链。 */
+  serializeMd: (content: Fragment) => string | null
   focusStart: () => void
   focusEnd: () => void
   /** 尾部空白区点击(AFFiNE 语义):末行有内容 → 追加一个普通空段并落光标;已是空段 → 直接落。
@@ -315,6 +317,23 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const parsed = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
           out = parsed?.childCount ? parsed.content : null
         })
+        return out
+      },
+      serializeMd: (content) => {
+        let out: string | null = null
+        // ⚠️ 必须吞异常:序列化器碰上没有 toMarkdown handler 的节点会**抛**(columns.ts 顶注:
+        //    amadeusColumnRow 折进序列化树必炸)。本方法的调用方之一是画布的 cut —— 让它抛出去
+        //    的话 preventDefault 与「删掉被剪的卡」两步一起没执行,剪切当场变成什么都没发生。
+        //    交回 null,调用方自己兜底(舞台退回 textBetween)。
+        try {
+          getInstance()?.action((ctx) => {
+            const view = ctx.get(editorViewCtx)
+            const doc = view.state.schema.topNodeType.createAndFill(undefined, content)
+            if (doc) out = normalizeSerializedMd(ctx.get(serializerCtx)(doc))
+          })
+        } catch {
+          return null
+        }
         return out
       },
       focusStart: () => {
@@ -984,25 +1003,44 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return () => pane.classList.remove('amx-canvas-pane')
   }, [fullCanvas])
 
-  /** 文档位置补齐与 Canvas viewport 对称的会话记忆。滚动容器是 `.amx-pane`，不是正文 div；
-   * 切进画布的 cleanup 先记住 scrollTop，切回后等绝对布局摘掉再恢复，避免被浏览器锚定归零。 */
+  /** 文档位置补齐与 Canvas viewport 对称的会话记忆。滚动容器是 `.amx-pane` —— **它是宿主壳的
+   * 元素,换笔记时不重建**,本记忆的两个坑都长在这上头(2026-09-05 用户实报「同一个 tab 里切换
+   * 之后没有上次位置的记忆」,check:notescroll 实测):
+   *  ① 换笔记的次序是「新正文提交进同一个 pane(scrollTop 被内容顶成 0)→ 旧 effect 的 cleanup」。
+   *     cleanup 里那句 remember() 于是把 0 写进**旧笔记**的槽位,记忆当场抹掉;两者之间浏览器
+   *     补发的 scroll 事件同样落到旧路径上。⇒ cleanup 不再写(实时监听已经逐笔记着),且恢复
+   *     落位之前一律不记账(armed)。
+   *  ② 只等 2 帧不够:正文是异步装载的,那两帧里 pane 还没高度,`scrollTop = 700` 被夹回 0,
+   *     之后再没人补一刀。⇒ 重试到真落位或 1.5s 到点为止;用户中途自己滚了就立刻交还。 */
   useEffect(() => {
     if (canvasOn) return
     const pane = segAnchorRef.current?.closest<HTMLElement>('.amx-pane')
     if (!pane) return
-    let raf2 = 0
-    const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => { pane.scrollTop = readDocumentScroll(vaultRoot, path) })
-    })
-    const remember = (): void => writeDocumentScroll(vaultRoot, path, pane.scrollTop)
+    const want = readDocumentScroll(vaultRoot, path)
+    let armed = false
+    let raf = 0
+    const deadline = performance.now() + 1500
+    const settle = (): void => {
+      pane.scrollTop = want
+      if (pane.scrollTop !== want && performance.now() < deadline) { raf = requestAnimationFrame(settle); return }
+      armed = true
+    }
+    raf = requestAnimationFrame(settle)
+    /** 用户自己动手 = 恢复期结束(别跟他抢),之后照常记账。
+     *  keydown 也算:PageDown/空格/方向键翻页同样是「用户在滚」,漏了它重试循环会在这 1.5s 里
+     *  把他翻的页抢回去(Codex 评审)。打字触发的 keydown 提前 armed 无害 —— 记账只在 scroll 上发生。 */
+    const yieldToUser = (): void => { cancelAnimationFrame(raf); armed = true }
+    const remember = (): void => { if (armed) writeDocumentScroll(vaultRoot, path, pane.scrollTop) }
     pane.addEventListener('scroll', remember, { passive: true })
+    pane.addEventListener('wheel', yieldToUser, { passive: true })
+    pane.addEventListener('pointerdown', yieldToUser)
+    pane.addEventListener('keydown', yieldToUser)
     return () => {
-      cancelAnimationFrame(raf1)
-      cancelAnimationFrame(raf2)
+      cancelAnimationFrame(raf)
       pane.removeEventListener('scroll', remember)
-      // 切进画布已在 toggleCanvas 的同步路径记过；此时 DOM 提交可能已经让 scrollTop 归零，
-      // 不用这个晚到的零覆盖真值。卸载/换页时仍照常记。
-      if (!canvasModeRef.current) remember()
+      pane.removeEventListener('wheel', yieldToUser)
+      pane.removeEventListener('pointerdown', yieldToUser)
+      pane.removeEventListener('keydown', yieldToUser)
     }
   }, [canvasOn, path, vaultRoot])
 
@@ -1349,11 +1387,6 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return () => window.removeEventListener('keydown', onKey, true)
   }, [lightbox])
 
-  // 页内查找:卸载/换页必须 close() —— UNIFIED_FIND_ID 那一格若留在 counts 里,
-  // findTotal 会一直走统一实例的捷径,v3 页面的跨块计数全被它顶掉(见 findInPage 注)。
-  const findOpen = useFindStore((s) => s.open)
-  useEffect(() => () => useFindStore.getState().close(), [path])
-
   // 外部回灌:等静默 → 重读 → fm 换状态 + 正文同实例最小差异。回灌期间冻结保存。
   useEffect(() => {
     const reconcile = async (): Promise<void> => {
@@ -1681,16 +1714,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-bare
           onFocusCapture={() => setFocusedBlockApply(stableApply)}
-          onKeyDownCapture={(e) => {
-            // 编辑器内 Cmd/Ctrl+F → 页内查找(与 v3 PageView 同一道门:焦点在编辑器里才接管,
-            // 别抢应用全局查找)。统一实例整篇一个编辑器,命中计数走 UNIFIED_FIND_ID 单格。
-            if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F') && !e.shiftKey && !e.altKey) {
-              e.preventDefault()
-              useFindStore.getState().openBar()
-            }
-          }}
         >
-          {findOpen && <FindBar />}
           {/* 模式钮(AFFiNE 同位:页面右上)。整篇零画布数据时也照常显示 —— 画布是任意笔记随时
               可用的能力,不是某种文件类型的特权;点进去只是换视角,不写盘(见 toggleCanvas)。 */}
           <CanvasStage
@@ -1709,6 +1733,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             saveFile={(f) => saveOneFile(path, f)}
             // 粘贴/拖入画布的文字走宿主的同一条解析链(与 insertMd 逐字同源:显示形 → parserCtx)。
             parseMd={(md) => hostApi.current?.parseMd(md) ?? null}
+            serializeMd={(frag) => hostApi.current?.serializeMd(frag) ?? null}
             onBlocksDeleted={onBlocksDeleted}
             onCommit={(newRef) => {
               if (newRef) pipe.ownedCards.add(newRef) // 本实例建的卡也算「负责得起」,见 deriveCanvasJson

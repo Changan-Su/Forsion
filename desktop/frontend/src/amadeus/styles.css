@@ -948,65 +948,10 @@ body.amx-marquee-active,
 body.amx-marquee-active * {
   user-select: none !important;
 }
-/* 页内查找:浮条 + 命中高亮 */
+/* 主视图纸卡:块浮层(拖柄、行内工具栏)按它定位。原「页内查找」那段样式已随查找条上移到
+   壳级 findInPage.css —— 查找不再是 Amadeus 专属能力。 */
 .am-app .page-view {
   position: relative;
-}
-.am-app .amx-findbar {
-  position: sticky;
-  top: 8px;
-  z-index: 30;
-  margin-left: auto;
-  width: fit-content;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: var(--bg-card, var(--bg));
-  border-radius: 8px;
-  outline: 0.5px solid var(--border);
-  outline-offset: -0.5px;
-  box-shadow: var(--card-shadow);
-  padding: 5px 7px;
-}
-.am-app .amx-findbar input {
-  width: 180px;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-}
-.am-app .amx-findbar-count {
-  color: var(--text-faint, var(--text-muted));
-  font-size: 11px;
-  min-width: 32px;
-  text-align: right;
-}
-.am-app .amx-findbar button {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.am-app .amx-findbar button:hover {
-  background: var(--overlay-light, rgba(127, 127, 127, 0.1));
-  color: var(--text);
-}
-.am-app .amx-find-hit {
-  background: color-mix(in srgb, var(--accent-ink, #6c5ce7) 22%, transparent);
-  border-radius: 2px;
-}
-.am-app .amx-find-active {
-  background: color-mix(in srgb, #f5a623 55%, transparent);
-  outline: 1px solid color-mix(in srgb, #f5a623 80%, transparent);
 }
 /* 书签卡(裸 URL 块):og 卡 / YouTube 嵌入 / 就地编辑 */
 .am-app .amx-bm {
@@ -1461,7 +1406,7 @@ body.amx-marquee-active * {
 }
 .am-app .paste-as-item:hover,
 .am-app .paste-as-item[data-active] {
-  background: var(--surface);
+  background: var(--menu-hover);
 }
 /* 键盘选中态要压得过 hover:鼠标停在别项上时,↑↓ 选的那项仍须是唯一高亮的那个。 */
 .am-app .paste-as-item[data-active] {
@@ -1551,7 +1496,7 @@ body.amx-marquee-active * {
   cursor: pointer;
 }
 .am-app .itb-menu-item:hover {
-  background: var(--surface);
+  background: var(--menu-hover);
   color: var(--text);
 }
 .am-app .itb-color-head {
@@ -1664,8 +1609,10 @@ body.amx-marquee-active * {
   line-height: 1.35;
   transition: background var(--dur-fast) var(--ease-apple);
 }
+/* 选中底一律 --menu-hover(base.css):此前写 --surface,而 lovable 桥里 --surface ≡ --surface-2 ≡ --bg-card,
+   选中行与面板同色 = 看不见(用户 09-05 实报「二级菜单选中效果不明显」)。 */
 .am-app .slash-item[data-active] {
-  background: var(--surface);
+  background: var(--menu-hover);
   color: var(--text);
 }
 .am-app .slash-icon {
@@ -1783,7 +1730,7 @@ body.amx-marquee-active * {
   padding: 8px 10px;
 }
 .am-app .cmd-item[data-active] {
-  background: var(--surface);
+  background: var(--menu-hover);
   color: var(--text);
 }
 .am-app .cmd-row {
@@ -1884,10 +1831,16 @@ body.amx-marquee-active * {
   padding: 6px 0;
 }
 
-/* ── [[ wiki autocomplete ────────────────────────────────── */
+/* ── [[ / @ 补全面板 ─────────────────────────────────────── */
+/* 行与 slash / ctx 菜单同一套 28px 正典(--menu-item-*),面板内距 5px + 行距 1px 同 .slash-menu。
+   原 Obsidian 式两段行(名字加粗 + 目录副标题)收成单行,目录只在重名时作右侧灰字
+   (用户 09-05:「信息密度不高,行距高度和其他二级面板不统一,路径可以去掉」)。 */
 .am-app .wiki-suggest {
   position: fixed;
   z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   min-width: 200px;
   max-width: 320px;
   max-height: 260px;
@@ -1896,34 +1849,35 @@ body.amx-marquee-active * {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  padding: 6px;
+  padding: 5px;
   backdrop-filter: blur(20px) saturate(140%);
 }
 .am-app .wiki-item {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   border: none;
   background: transparent;
   color: var(--text-sec);
   border-radius: var(--radius-sm);
-  padding: 6px 10px;
+  min-height: var(--menu-item-min-height, 28px);
+  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
   font-size: 13px;
+  line-height: 1.4;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app .wiki-item[data-active] {
-  background: var(--surface);
+  background: var(--menu-hover);
   color: var(--text);
 }
-/* Obsidian 式两段行:名字加粗 + 目录副标题(重名不合并,靠路径区分)。 */
+/* 名字占满余宽才截断;右侧灰字(日期 / 重名目录)不被挤没。 */
 .am-app .wiki-item-name {
-  font-weight: 600;
-  max-width: 100%;
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1937,10 +1891,15 @@ body.amx-marquee-active * {
 .am-app .wiki-item-ficon svg {
   font-size: 13px;
 }
-.am-app .wiki-item-path {
+/* 上限是给重名行的长目录留的(hint flex:none、name min-width:0,不设上限会把名字挤成 0 宽);
+   60% 而非 45%:面板停在 200px 地板时行内容 172px,zh 最长日期串「12月26日 09:00」回退字体下 82px,
+   45%=77px 会切掉分钟位(opus 评审实测)。 */
+.am-app .wiki-item-hint {
+  flex: none;
+  margin-left: auto;
+  max-width: 60%;
   font-size: 11px;
   color: var(--text-muted);
-  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2215,7 +2174,7 @@ body.amx-marquee-active * {
   transition: background var(--dur-fast) var(--ease-apple);
 }
 .am-app .ctx-item:hover {
-  background: var(--surface);
+  background: var(--menu-hover);
   color: var(--text);
 }
 .am-app .ctx-item[data-danger] {
@@ -2290,7 +2249,7 @@ body.amx-marquee-active * {
   font-size: 13px;
 }
 .am-app .dialog-listitem:hover {
-  background: var(--surface);
+  background: var(--menu-hover);
   color: var(--text);
 }
 .am-app .dialog-actions {

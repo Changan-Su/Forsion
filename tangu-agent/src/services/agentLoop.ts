@@ -11,6 +11,7 @@ import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '.
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
 import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { publish, drain, cleanup } from './eventBus.js';
+import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
@@ -398,6 +399,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
   // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
+  // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
+  // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
+  const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
+  // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
+  const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
+    ? input.uiSettings : (uiCommands ? {} : undefined);
   setRunClientTag(clientTag);
   // standalone/desktop host 的 Agent 文件必须先与云端镜像对齐，再从本地激活。headless worker 没有
   // 桌面设置页去触发 /agent/sync；若跳过此步，云端人格虽可经 brain.agents 兜底加载，Library/ 却仍为空。
@@ -1088,7 +1095,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // load_tools 解锁 → 置脏,下一迭代重算 defs(解锁那一刻打一次前缀缓存,之后稳定)。
     let toolDefsDirty = false;
     const toolCtx: ToolContext = {
-      userId, sessionId, appId, runId, client: clientTag, signal: ac.signal, customTools, mcpTools, channelSession, preset,
+      userId, sessionId, appId, runId, client: clientTag, signal: ac.signal, customTools, mcpTools, channelSession, preset, uiCommands, uiSettings,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
@@ -1103,6 +1110,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         for (const n of names) if (!unlockedTools.has(n)) { unlockedTools.add(n); changed = true; }
         if (changed) toolDefsDirty = true;
       },
+      // 界面动作回执 → 就地刷新 run 级设置快照(闭包捕获原对象,不受 registry 的 ctx 浅拷贝影响)。
+      // 少了这一步,同 run 里 set 之后再 list 仍是 run 开始的旧值,模型把它当「没生效」的证据(2026-09-05 实报)。
+      // ⚠️ 这一行被 uiCommands.test.ts 按源码文本钉住(装配本身没有可跑的测试路径)。
+      updateUiSettings: makeUiSettingsUpdater(uiSettings),
       // 激活的 agent 定义 slug → start_discussion 的「分身」据此取主 agent 人设(memScopeSlug 可能是共用默认,不可混用)。
       agentSlug: activeAgentSlug,
       collectImage: (img) => {
@@ -1137,12 +1148,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const caps = getToolCapabilities(call.function.name, toolCtx);
       return caps.parallel === true && caps.sideEffect !== 'write' && caps.sideEffect !== 'system' && caps.sideEffect !== 'browser';
     };
-    const artifactPathFromText = (text: string, explicit?: string): string | undefined => {
+    // 从工具输出文本里猜「产物路径」(截图/写文件)。只读类工具不猜:它们不产生文件,而任何提到 "path" 的
+    // 描述行都会被这条松散启发式咬住(list_ui_commands 的 open-note 说明曾被抓成 artifactPath="/plan.md\\")。
+    // 字符类排除反斜杠:JSON 转义的 \" 会把 \ 一起吞进路径。
+    const artifactPathFromText = (name: string, text: string, explicit?: string): string | undefined => {
       if (explicit) return explicit;
+      if (getToolCapabilities(name, toolCtx).sideEffect === 'read') return undefined;
       const jsonish = text.match(/"screenshot_path"\s*:\s*"([^"]+)"/) || text.match(/"artifactPath"\s*:\s*"([^"]+)"/);
       if (jsonish?.[1]) return jsonish[1];
       const line = text.split('\n').find((l) => /(?:saved|wrote|path|文件|输出).*\/[^ \n]+/i.test(l));
-      return line?.match(/(\/[^\s"'<>]+)/)?.[1];
+      return line?.match(/(\/[^\s"'<>\\]+)/)?.[1];
     };
     // 拒绝/拦截时的统一工具结果（用户审批 reject 与 PreToolUse hook block 共用）。
     const mkRejected = async (call: ToolCall, startedAt: number, parallelGroup: string | undefined, msg: string): Promise<ExecutedToolCall> => {
@@ -1198,7 +1213,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (host list_dir 大目录、custom provider 等),保证单条结果不可能把上下文炸穿。
       const capped = capToolResult(result.result);
       const elapsedMs = Date.now() - startedAt;
-      const artifactPath = artifactPathFromText(capped, result.artifactPath);
+      const artifactPath = artifactPathFromText(result.name, capped, result.artifactPath);
       const payload = {
         id: call.id,
         name: result.name,

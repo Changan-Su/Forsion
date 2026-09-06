@@ -92,6 +92,22 @@ export interface ToolContext {
   /** 父 run 的思考档(self_brainstorm 分身须同档:无原生思考的模型档位是注进 system 的文本,档不同=前缀不同)。 */
   thinkingLevel?: string;
   /**
+   * 本 run 发起端(GUI)自报的**可派发命令目录**(input.uiCommands,随 run 请求体上送,与 client
+   * tag 同一条链)。字段**在场即代表渲染端够新、会处理 `ui_cmd` 事件** —— 界面面三工具据此
+   * default-deny(见 tools/builtin/uiCommands.ts)。
+   * ⚠️ 内容随端而异是正确行为:插件命令只在桌面注册,web/移动端拿到的目录本就更短。
+   * ⚠️ 绝不注入 system prompt —— 只作 list_ui_commands 的返回值(前缀缓存纪律)。
+   */
+  uiCommands?: UiCommandEntry[];
+  /** 同上,发起端自报的界面设置当前值快照(run 开始那一刻;之后由 updateUiSettings 就地刷新)。 */
+  uiSettings?: Record<string, UiSettingEntry>;
+  /**
+   * 就地刷新 uiSettings 的值(界面动作回执带来的新值)。
+   * ⚠️ registry 给每次工具调用一份 ctx **浅拷贝**(withTimeoutSignal),工具里写 `ctx.uiSettings = …`
+   *    是静默 no-op —— 必须经这条闭包写进 run 级那份(同 unlockTools 的形状)。
+   */
+  updateUiSettings?: (values: Record<string, string>) => void;
+  /**
    * 当前 run 的在存工作消息数组冻结快照(self_brainstorm 用):返回主 loop workingMessages 的浅拷贝。
    * 分身补全的共享前缀**必须**取自这里而非 DB 重建——脚手架消息不落库、运行内折叠、pin 锚定都会让
    * 重建序列字节不一致,provider 前缀缓存全 miss(这是该工具「命中缓存」承诺的唯一真源)。
@@ -153,4 +169,21 @@ export interface ToolImpl {
   /** 工具可见性域：'sandbox'=仅云沙箱模式，'host'=仅本地直连模式，缺省='both'=两者皆可。 */
   mode?: 'sandbox' | 'host' | 'both';
   capabilities?: ToolCapabilities;
+}
+
+/** GUI 客户端上报的一条可派发命令(渲染端 `Command.invoke` 的投影)。 */
+export interface UiCommandEntry {
+  id: string;
+  /** 英文,给模型看(渲染端 invoke.description;**不是** title —— title 跟随界面语言)。 */
+  description: string;
+  /** 参数 JSON Schema;无参命令省略。 */
+  params?: Record<string, unknown>;
+  /** 当前值探针的结果,省得模型靠猜。 */
+  state?: string;
+}
+
+/** 一项界面设置的当前值 + 本端合法值(合法值由渲染端给,引擎不维护枚举——主题包/插件字体可上盘)。 */
+export interface UiSettingEntry {
+  value: string;
+  allowed?: string[];
 }

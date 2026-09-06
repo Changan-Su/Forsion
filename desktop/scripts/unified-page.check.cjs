@@ -1001,50 +1001,87 @@ async function main() {
     await pg.close()
   }
 
-  // P20:页内查找 Cmd+F 接进统一实例。v3 的 FindBar 住 PageView,统一页不经 PageView;且 findPlugin
-  // 与重绘订阅都以 blockId 为门,统一实例没有块 id → 打 Cmd+F 什么都不会发生(spec Phase B 长尾)。
-  // 计数走 UNIFIED_FIND_ID 单格(flatOrder 恒空,求和法在这里恒 0)。
+  // P20:页内查找。2026-09-03 从「PM 装饰 + blockId 计数」整个换成壳级 DOM 扫描 + CSS 自定义高亮
+  //  —— 用户实报三条:大多数 View 没有查找、Amadeus 卡片没有、画布没有。这里钉住换实现后**必须
+  //  成立**的四件事,前三条各对应一条实报:
+  //   a. 正文跨段命中 + x/y 计数 + Enter 下一条 + Esc 收干净(老 P20 的全部内容,不许退化);
+  //   b. **跨行内标记**命中(`苹**果**` = 文本节点 + <strong> 两段)。老实现按 textblock 的
+  //      textContent 匹配所以能中;逐个 text node indexOf 会**静默**少一半命中 —— 这条是本轮
+  //      最容易悄悄丢掉的行为,必须有负对照(见 b2:故意只数单节点命中会数不足);
+  //   c. **嵌入卡**(`![[Embedded]]`)里的字算命中。卡片是独立 createRoot 的 React 树,不在本篇
+  //      PM 文档里 —— 老实现结构上永远够不着,这条从 0 到 1;
+  //   d. 命中不跨块:`二号\n苹果` 这种跨段串不该有命中(拼串时块边界插了 '\n')。
+  //  ⚠️ 断言看的是 CSS.highlights,不再是 .amx-find-hit 元素 —— 新实现刻意不往 React/PM 管的
+  //     DOM 里插节点(插了 PM 当场判外部改动)。
   {
-    const seed = '# 查找页\n\n苹果一号。\n\n香蕉。\n\n苹果二号,苹果三号。\n'
+    const seed = '# 查找页\n\n苹果一号。\n\n香蕉。\n\n苹**果**二号,苹果三号。\n\n![[Embedded]]\n'
     const pg = await browser.newPage({ locale: 'zh-CN' })
     pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
     await pg.waitForSelector(PM, { timeout: 20000 })
-    await pg.waitForTimeout(400)
-    const c = await pg.evaluate((s) => {
-      const el = [...document.querySelector(s).querySelectorAll(':scope > p')].find((x) => x.textContent.includes('香蕉'))
-      const r = el.getBoundingClientRect()
-      return { x: r.right - 2, y: r.top + r.height / 2 }
-    }, PM)
-    await pg.mouse.click(c.x, c.y)
-    await pg.keyboard.press('Meta+f')
+    await pg.waitForTimeout(600) // 嵌入卡是异步读盘 + 独立 createRoot,要等它挂上
+    await pg.evaluate(() => window.__openFind())
     await pg.waitForTimeout(200)
     const barOpen = await pg.evaluate(() => !!document.querySelector('.amx-findbar input'))
     await pg.keyboard.type('苹果')
-    await pg.waitForTimeout(300)
-    const a20 = await pg.evaluate(() => ({
-      hits: document.querySelectorAll('.amx-find-hit').length,
-      active: document.querySelectorAll('.amx-find-active').length,
-      count: document.querySelector('.amx-findbar-count')?.textContent ?? '',
-      firstActive: document.querySelector('.amx-find-active')?.closest('p')?.textContent ?? '',
-    }))
-    await pg.keyboard.press('Enter') // 下一条
+    await pg.waitForTimeout(350)
+    /** 高亮命中数 + 当前命中所在段落文字。CSS.highlights 里存的是 Range,取 startContainer 回溯。 */
+    const readHits = () =>
+      pg.evaluate(() => {
+        const all = [...(CSS.highlights.get('amx-find') ?? [])]
+        const cur = [...(CSS.highlights.get('amx-find-active') ?? [])][0]
+        const textOf = (r) => r?.startContainer?.parentElement?.closest('p,li,h1,h2,h3')?.textContent ?? ''
+        return {
+          hits: all.length,
+          active: cur ? 1 : 0,
+          count: document.querySelector('.amx-findbar-count')?.textContent ?? '',
+          activeIn: textOf(cur),
+          // b2 负对照:单个 text node 内部能数到的命中。跨 <strong> 那条不在其中 → 必须 < hits。
+          singleNode: all.filter((r) => r.startContainer === r.endContainer).length,
+          // c:命中里有没有落在嵌入卡(.amx-uembed / 卡片容器)内的
+          inEmbed: all.filter((r) => !!r.startContainer?.parentElement?.closest('.embed-body')).length,
+        }
+      })
+    const a20 = await readHits()
+    await pg.keyboard.press('Enter')
     await pg.waitForTimeout(250)
-    const b20 = await pg.evaluate(() => ({
+    const b20 = await readHits()
+    // c:嵌入卡里的字算命中。卡片是 Decoration.widget + createRoot 的独立 React 树,不在本篇 PM
+    //    文档里 —— 老的 PM 装饰实现结构上永远够不着它,这条是本轮从 0 到 1 的那半。
+    const typeQuery = async (q) => {
+      await pg.evaluate((v) => {
+        const inp = document.querySelector('.amx-findbar input')
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(inp, v)
+        inp.dispatchEvent(new Event('input', { bubbles: true }))
+      }, q)
+      await pg.waitForTimeout(300)
+    }
+    await typeQuery('被嵌入')
+    const e20 = await readHits()
+
+    // d:跨块串不该命中
+    await typeQuery('香蕉苹果')
+    const d20 = await pg.evaluate(() => ({
+      hits: [...(CSS.highlights.get('amx-find') ?? [])].length,
       count: document.querySelector('.amx-findbar-count')?.textContent ?? '',
-      activeIn: document.querySelector('.amx-find-active')?.closest('p')?.textContent ?? '',
     }))
     await pg.keyboard.press('Escape')
     await pg.waitForTimeout(250)
     const c20 = await pg.evaluate(() => ({
       bar: !!document.querySelector('.amx-findbar'),
-      hits: document.querySelectorAll('.amx-find-hit').length,
+      hits: [...(CSS.highlights.get('amx-find') ?? [])].length,
     }))
     record(
-      'P20 Cmd+F 页内查找:跨段高亮 + x/y 计数 + Enter 下一条 + Esc 收干净',
-      barOpen && a20.hits === 3 && a20.active === 1 && a20.count === '1/3' && a20.firstActive.includes('苹果一号') &&
-        b20.count === '2/3' && b20.activeIn.includes('苹果二号') && !c20.bar && c20.hits === 0,
-      JSON.stringify({ barOpen, a20, b20, c20 }),
+      'P20 页内查找:跨段 + 跨行内标记 + 嵌入卡 + 不跨块 + Enter 下一条 + Esc 收干净',
+      barOpen &&
+        a20.hits === 3 && a20.active === 1 && a20.count === '1/3' && a20.activeIn.includes('苹果一号') &&
+        a20.singleNode < a20.hits && // 负对照:确实有一条是跨节点拼出来的
+        b20.count === '2/3' && b20.activeIn.includes('二号') &&
+        e20.hits === 2 && e20.inEmbed === 2 && // c:两段嵌入正文都命中,且都在卡片里
+        d20.hits === 0 && d20.count === '0' &&
+        !c20.bar && c20.hits === 0,
+      JSON.stringify({ barOpen, a20, b20, e20, d20, c20 }),
     )
     await pg.close()
   }

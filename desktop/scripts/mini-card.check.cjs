@@ -141,7 +141,7 @@ async function main() {
 
     // ⑦ 切到 Amadeus 空间:vault 必须已恢复。空库也没关系 —— 空态按钮是「新建笔记」而非「打开 Vault 文件夹」。
     await mini.locator('.mini-card-space').click()
-    await mini.locator('.mini-card-popover .mini-card-row', { hasText: 'Amadeus' }).first().click()
+    await mini.locator('.mini-card-popover .mini-card-row', { hasText: 'Note' }).first().click()
     await mini.waitForSelector('[data-view="amadeus-editor"]', { timeout: 30_000 })
     await mini.waitForTimeout(1200)
     const amadeus = await mini.evaluate(() => ({

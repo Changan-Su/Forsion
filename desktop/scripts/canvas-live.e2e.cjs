@@ -136,7 +136,7 @@ async function main() {
     await win.waitForTimeout(1500)
 
     // ── 打开那篇笔记(先进 Amadeus 空间,再从侧栏文件行点开 —— 与 chat-sidepanel.check 同一条路)──
-    await win.locator('.rb-space[title="Amadeus"], .rb-space:has-text("Amadeus")').first()
+    await win.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first()
       .click({ timeout: 10_000 }).catch(() => {})
     await win.waitForTimeout(2500)
     if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {

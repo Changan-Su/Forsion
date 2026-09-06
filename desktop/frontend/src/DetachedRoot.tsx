@@ -9,6 +9,7 @@ import { useTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
 import { useI18n } from './i18n'
 import { AmadeusOverlays } from './amadeusOverlays'
+import { FindBar } from './findInPage'
 import { detachedId } from './windowKind'
 import { installFileDropGuard } from './fileDropGuard'
 
@@ -51,6 +52,8 @@ export function DetachedRoot() {
         />
       </div>
       {window.amadeus && <AmadeusOverlays />}
+      {/* 分离窗口也是完整的 Shell(installHotkeys 照跑),不挂就只有 mod+f 没反应。 */}
+      <FindBar />
     </>
   )
 }

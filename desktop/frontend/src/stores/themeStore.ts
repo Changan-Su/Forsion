@@ -27,12 +27,24 @@ function persistPref(pref: ModePref): void {
   try { localStorage.setItem('forsion_theme_pref', pref) } catch { /* private mode */ }
 }
 
-/** 明暗切换走 View Transition(整页交叉淡入,连 logo 明暗也一起淡);不支持/reduced-motion 时直接执行。 */
-function withModeTransition(fn: () => void): void {
-  const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown }
+/**
+ * 明暗切换走 View Transition(整页交叉淡入,连 logo 明暗也一起淡);不支持/reduced-motion 时直接执行。
+ * 返回「fn 已经跑完」的 promise:startViewTransition 的回调是**下一帧**才跑,同步读 store 拿到的是旧值
+ * (2026-09-05 实报:agent 把明暗切成 light,回执却报「now dark」,模型据此判定失败反复翻)。
+ * ⚠️ 别改成 ready / finished:连续切换会把前一个过渡 skip 成 AbortError,那两个 promise 会 reject,
+ *    而 fn 其实照样跑了(规范:skip 仍调度 update callback)。所以在自己的回调里 resolve,不依赖返回对象的形状。
+ */
+function withModeTransition(fn: () => void): Promise<void> {
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => { ready?: Promise<void> } | undefined }
   const reduce = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } })()
-  if (typeof doc.startViewTransition === 'function' && !reduce) doc.startViewTransition(fn)
-  else fn()
+  if (typeof doc.startViewTransition === 'function' && !reduce) {
+    return new Promise<void>((resolve, reject) => {
+      const vt = doc.startViewTransition!(() => { try { fn(); resolve() } catch (e) { reject(e); throw e } })
+      vt?.ready?.catch(() => { /* 被下一次切换 skip 时 reject(AbortError),不是错误;不接会变成 unhandledrejection 噪音 */ })
+    })
+  }
+  fn()
+  return Promise.resolve()
 }
 
 interface ThemeState {
@@ -57,8 +69,8 @@ interface ThemeState {
   setLang(lang: string): void
   setSkin(skin: string): void
   setBg(bg: string): void
-  /** 设明暗偏好(light|dark|system);主题锁定 colorScheme 时忽略。 */
-  setModePref(pref: ModePref): void
+  /** 设明暗偏好(light|dark|system);主题锁定 colorScheme 时忽略。resolve = 已真正落地(store 与 DOM 都写完)。 */
+  setModePref(pref: ModePref): Promise<void>
   /** lang+skin+bg+偏好一次设定;末参是**偏好**(可 system),非落地明暗。 */
   setTheme(lang: string, skin: string, bg: string, pref: ModePref): void
   setSeed(seed: string): void
@@ -67,7 +79,8 @@ interface ThemeState {
   setBgSeedValue(bg: string): void
   setGlass(on: boolean): void
   setFlat(on: boolean): void
-  toggleMode(): void
+  /** 快捷明暗翻转;resolve = 已落地(同 setModePref)。 */
+  toggleMode(): Promise<void>
   cycleSkin(): void
   cycleLang(): void
   /** 启动后合并磁盘主题;persistedLang=首屏被 FOUC 回退前的原始持久化语言(承接磁盘语言)。 */
@@ -119,7 +132,7 @@ export const useTheme = create<ThemeState>((set, get) => {
       if (eff !== 'system') return
       const next = systemMode()
       if (next === s.mode) return
-      withModeTransition(() => {
+      void withModeTransition(() => {
         applyTheme(s.lang, s.skin, s.bg, next, { customColor: s.skin === 'custom' ? s.seed : undefined })
         set({ mode: next })
       })
@@ -148,10 +161,10 @@ export const useTheme = create<ThemeState>((set, get) => {
     // 主题锁定 colorScheme 时,用户改不动明暗(setModePref 忽略);过渡动画仅在真正切换时放。
     // 用户显式动作 → persistPref 写入偏好(apply 不写,见 Medium-1)。
     setModePref: (pref) => {
-      if (langForcedScheme(get().lang)) return
-      if (pref === get().modePref) return
+      if (langForcedScheme(get().lang)) return Promise.resolve()
+      if (pref === get().modePref) return Promise.resolve()
       persistPref(pref)
-      withModeTransition(() => apply(get().lang, get().skin, get().bg, pref, get().seed))
+      return withModeTransition(() => apply(get().lang, get().skin, get().bg, pref, get().seed))
     },
     setTheme: (lang, skin, bg, pref) => { track('theme.change'); persistPref(pref); apply(lang, skin, bg, pref, get().seed) },
     setSeed: (seed) => apply(get().lang, 'custom', get().bg, get().modePref, seed),
@@ -185,7 +198,7 @@ export const useTheme = create<ThemeState>((set, get) => {
       set({ flat: on })
     },
     // 快捷明暗(ribbon/命令面板/插件):主题锁定时静默无效;否则翻到当前落地明暗的反面(显式覆盖 system)。
-    toggleMode: () => { if (get().modeLocked) return; get().setModePref(get().mode === 'dark' ? 'light' : 'dark') },
+    toggleMode: () => { if (get().modeLocked) return Promise.resolve(); return get().setModePref(get().mode === 'dark' ? 'light' : 'dark') },
     cycleSkin: () => {
       const i = SKIN_IDS.indexOf(get().skin)
       get().setSkin(SKIN_IDS[(i + 1) % SKIN_IDS.length])

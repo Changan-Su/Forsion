@@ -1,0 +1,144 @@
+/* 只读单元格(插件面板里的原生多维表)。
+ * 与可编辑格的观感对齐:.amx-db-input 是 padding 6px / line-height 22px,这里逐字照抄,
+ * 否则只读表与可编辑表并排时行高差 2-3px,一眼就看得出是两套东西。
+ * ⚠️ 新样式一律进本文件,不往 amadeus-host.css 里加(DESIGN.md §7)。
+ * 阴影只走 token(--card-shadow / --btn-shadow),check:shadowcontract 守这条。 */
+
+.amx-db-rocell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  padding: 6px;
+  font-size: 13.5px;
+  line-height: 22px;
+  color: var(--text);
+}
+/* 数字列右对齐(与 .amx-db-cell[data-coltype='number'] 的既有规则同轴) */
+.amx-db-cell[data-coltype='number'] .amx-db-rocell { justify-content: flex-end; }
+
+.amx-db-rotext { display: flex; flex-direction: column; min-width: 0; }
+.amx-db-roprimary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 第二行:弱化 + 更小,与卡片属性预览同一档 */
+.amx-db-rosub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+.amx-db-romono .amx-db-roprimary,
+.amx-db-romono .amx-db-rosub { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+.amx-db-rofile { color: var(--text-muted); }
+
+/* 语义色调。muted 之外都取主题变量,深浅模式各自成立;没有对应 token 的用 color-mix 兑出来,
+   不硬编码十六进制(与 chip 色板刻意不同:那是内容色,这是状态色)。 */
+.amx-db-tone-muted .amx-db-roprimary { color: var(--text-muted); }
+.amx-db-tone-red .amx-db-roprimary { color: var(--danger, #e5484d); }
+.amx-db-tone-accent .amx-db-roprimary { color: var(--accent-ink, var(--accent, #6c5ce7)); }
+.amx-db-tone-green .amx-db-roprimary { color: var(--ok, #2e9e63); }
+.amx-db-tone-amber .amx-db-roprimary { color: var(--warn, #b7791f); }
+.amx-db-tone-blue .amx-db-roprimary { color: var(--info, #2b7fd4); }
+.am-app[data-mode='dark'] .amx-db-tone-green .amx-db-roprimary { color: var(--ok, #4ec98a); }
+.am-app[data-mode='dark'] .amx-db-tone-amber .amx-db-roprimary { color: var(--warn, #e0a94a); }
+.am-app[data-mode='dark'] .amx-db-tone-blue .amx-db-roprimary { color: var(--info, #6ab4f5); }
+
+/* 状态点:文字前一颗圆点。flex 里必须 flex:0 0 —— 否则窄列时会被压成椭圆。 */
+.amx-db-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint, var(--text-muted));
+}
+.amx-db-dot--green { background: #2fbf71; }
+.amx-db-dot--red { background: var(--danger, #e5484d); }
+.amx-db-dot--yellow { background: #e2b33c; }
+.amx-db-dot--gray { background: var(--text-faint, var(--text-muted)); }
+
+/* 头像:img 与字母回落成对存在(互为 hidden),宿主的 data-hook 探针两侧都能查到。 */
+.amx-db-avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+}
+.amx-db-avatar img,
+.amx-db-avatar-fb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.amx-db-avatar-fb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+/* 动作列按钮:原生 <button>,宿主祖先上的委托监听照常收得到。
+   ⚠️ 插件面板的 mini-preflight(`.fsa-adm button {padding:0;border:0}`)特异性 (0,1,1) 会压过
+   单类选择器,所以这里连同 .amx-db-rocell 一起写成 (0,2,0) 才压得住。 */
+.amx-db-roactions { flex-wrap: wrap; gap: 4px; }
+.amx-db-rocell .amx-db-actbtn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs, 4px);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.amx-db-rocell .amx-db-actbtn:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.amx-db-rocell .amx-db-actbtn[data-tone='red'] { color: var(--danger, #e5484d); }
+.amx-db-rocell .amx-db-actbtn[data-tone='muted'] { color: var(--text-muted); }
+.amx-db-rocell .amx-db-actbtn[data-tone='primary'] {
+  color: var(--accent-ink, var(--accent, #6c5ce7));
+  border-color: color-mix(in srgb, var(--accent-ink, var(--accent, #6c5ce7)) 45%, transparent);
+}
+.amx-db-rocell .amx-db-actbtn:disabled { opacity: 0.45; cursor: default; }
+
+/* 选中行:淡填充。用 .amx-db-row.amx-db-row--selected 提到 (0,2,0),压得过同文件里的 .amx-db-row 基础规则。 */
+.amx-db-row.amx-db-row--selected { background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 10%, transparent); }
+/* 可开行的只读行:整行可点,给个手势提示(hover 底色沿用 overlay-light,不另造一层)。 */
+.amx-db-row[role='button'] { cursor: pointer; }
+.amx-db-row[role='button']:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.05)); }
+.amx-db-row.amx-db-row--selected:hover { background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 14%, transparent); }
+
+/* 语义色芯片(只读 select 列按宿主声明的 option 颜色取色;底色沿用 amx-chip 色板的同一组值,不按 label 哈希) */
+.amx-db-chip.amx-db-chip--green { background: #dff4de; }
+.amx-db-chip.amx-db-chip--red { background: #ffe4e0; }
+.amx-db-chip.amx-db-chip--amber { background: #fff3c7; }
+.amx-db-chip.amx-db-chip--blue { background: #ddedfb; }
+.amx-db-chip.amx-db-chip--accent { background: #ebe3fd; }
+.amx-db-chip.amx-db-chip--muted { background: #ececec; }
+.am-app[data-mode='dark'] .amx-db-chip.amx-db-chip--green { background: rgba(64, 182, 109, 0.22); }
+.am-app[data-mode='dark'] .amx-db-chip.amx-db-chip--red { background: rgba(244, 87, 71, 0.22); }
+.am-app[data-mode='dark'] .amx-db-chip.amx-db-chip--amber { background: rgba(255, 199, 31, 0.2); }
+.am-app[data-mode='dark'] .amx-db-chip.amx-db-chip--blue { background: rgba(30, 150, 235, 0.22); }
+.am-app[data-mode='dark'] .amx-db-chip.amx-db-chip--accent { background: rgba(139, 92, 246, 0.22); }
+.am-app[data-mode='dark'] .amx-db-chip.amx-db-chip--muted { background: rgba(255, 255, 255, 0.1); }
+
+/* 头像成对面的 hidden 必须由作者层兑现:上面的 .amx-db-avatar-fb { display:inline-flex } 会压过 UA 的 [hidden]。放文件末尾(同特异性覆盖块纪律)。 */
+.amx-db-avatar img[hidden],
+.amx-db-avatar .amx-db-avatar-fb[hidden] { display: none; }

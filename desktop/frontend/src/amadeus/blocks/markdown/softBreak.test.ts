@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { expand, softBreakJoin, splitParagraph, stripEmptyLineBr } from './softBreak'
+import { expand, restoreBlankParagraphs, softBreakJoin, splitParagraph, stripEmptyLineBr } from './softBreak'
 
 const P = (...children: unknown[]) => ({ type: 'paragraph', children })
 const T = (value: string) => ({ type: 'text', value })
@@ -144,5 +144,89 @@ describe('expand — 空行按行距还原成空段落', () => {
     const tree = { type: 'root', children: [{ type: 'paragraph', children: [T('a')] }, { type: 'paragraph', children: [T('b')] }] }
     expand(tree)
     expect(texts(tree.children as never)).toEqual(['a', 'b'])
+  })
+})
+
+// v4 统一编辑器(不挂 softBreakRemark)的空行还原:N 个空段落落盘 = 文中 2N+1 / 文首 2N / 文末 2N−1 条空行。
+// 行号取自真实落盘串(见 scripts/enter-semantics.check.cjs 打出来的 disk)。
+describe('restoreBlankParagraphs — v4 按空行距还原空段落', () => {
+  const para = (l1: number, l2: number, ...children: unknown[]) =>
+    ({ type: 'paragraph', children, position: { start: { line: l1 }, end: { line: l2 } } })
+  const head = (l: number, t: string) =>
+    ({ type: 'heading', depth: 2, children: [T(t)], position: { start: { line: l }, end: { line: l } } })
+  const root = (endLine: number, ...children: unknown[]) =>
+    ({ type: 'root', children, position: { start: { line: 1 }, end: { line: endLine } } })
+  const kinds = (tree: { children: unknown[] }): string[] =>
+    (tree.children as { type: string; children?: unknown[] }[])
+      .map((c) => (c.type === 'paragraph' && !c.children?.length ? '' : c.type))
+
+  it("标准 md 的一条空行不臆造空段落('a\n\nb')", () => {
+    const tree = root(4, para(1, 1, T('a')), para(3, 3, T('b')))
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['paragraph', 'paragraph'])
+  })
+
+  it("段⏎⏎段:三条空行 → 一个空段落('a\n\n\n\nb')", () => {
+    const tree = root(6, para(1, 1, T('a')), para(5, 5, T('b')))
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['paragraph', '', 'paragraph'])
+  })
+
+  it('五条空行 → 两个空段落', () => {
+    const tree = root(8, para(1, 1, T('a')), para(7, 7, T('b')))
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['paragraph', '', '', 'paragraph'])
+  })
+
+  it('邻居不是段落也照样还原(病灶:空行挨着标题/列表就没人管)', () => {
+    const tree = root(6, para(1, 1, T('a')), head(5, 'H'))
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['paragraph', '', 'heading'])
+    const t2 = root(6, head(1, 'H'), head(5, 'H2'))
+    restoreBlankParagraphs(t2)
+    expect(kinds(t2)).toEqual(['heading', '', 'heading'])
+  })
+
+  it("文首空行:2N 条('\n\n\n\nalpha\n' → 两个空段落)", () => {
+    const tree = root(6, para(5, 5, T('alpha')))
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['', '', 'paragraph'])
+  })
+
+  it("文末空行:2N−1 条('alpha\n\n\n\n' → 两个空段落;'alpha\n' → 零)", () => {
+    const tree = root(5, para(1, 1, T('alpha')))
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['paragraph', '', ''])
+    const t2 = root(2, para(1, 1, T('alpha')))
+    restoreBlankParagraphs(t2)
+    expect(kinds(t2)).toEqual(['paragraph'])
+  })
+
+  // Codex 评审 F1 的实证:相邻间距必须用「前一个节点的 **end** 行」——多行节点(围栏/表格/setext)
+  // 若误用 start 行,节点自己的行数会被算进空行,重开就凭空长出空段落。
+  it('多行节点(代码围栏)相邻:内部行数不算进空行', () => {
+    const fence = (l1: number, l2: number) =>
+      ({ type: 'code', value: 'x', position: { start: { line: l1 }, end: { line: l2 } } })
+    const tight = root(8, fence(1, 5), para(7, 7, T('b'))) // 常态:围栏后一条空行
+    restoreBlankParagraphs(tight)
+    expect(kinds(tight)).toEqual(['code', 'paragraph'])
+    const gap = root(10, fence(1, 5), para(9, 9, T('b'))) // 三条空行 = 一个空段落
+    restoreBlankParagraphs(gap)
+    expect(kinds(gap)).toEqual(['code', '', 'paragraph'])
+  })
+
+  it('外来 md 的偶数条空行向下取整(不臆造)', () => {
+    const tree = root(5, para(1, 1, T('a')), para(4, 4, T('b'))) // 'a\n\n\nb'
+    restoreBlankParagraphs(tree)
+    expect(kinds(tree)).toEqual(['paragraph', 'paragraph'])
+  })
+
+  it('空文档 / 缺 position 一律不动(宁可少还原)', () => {
+    const empty = { type: 'root', children: [] as unknown[] }
+    restoreBlankParagraphs(empty)
+    expect(empty.children).toEqual([])
+    const noPos = { type: 'root', children: [{ type: 'paragraph', children: [T('a')] }] }
+    restoreBlankParagraphs(noPos)
+    expect(noPos.children).toHaveLength(1)
   })
 })

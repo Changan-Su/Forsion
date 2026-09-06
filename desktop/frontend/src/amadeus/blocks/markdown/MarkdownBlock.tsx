@@ -44,7 +44,7 @@ import {
   toggleUnderlineCommand,
   underlineSchema,
 } from './marks'
-import { softBreakRemark, stripEmptyLineBr } from './softBreak'
+import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
@@ -92,7 +92,6 @@ import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
-import { findPlugin, useFindStore, UNIFIED_FIND_ID } from './findInPage'
 import { askString } from '../../components/askString'
 import { linkInputRule, normalizeHref } from './linkHref'
 import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
@@ -422,7 +421,7 @@ export function MilkdownInner({
   /** 源码模式切回时带来的「光标前文本」:块内按它找回落点(见 lib/modeCursor)。 */
   focusAnchor?: string
   onFocused: () => void
-  /** 页内查找的块身份;缺 = 查找插件休眠(整篇宿主)。 */
+  /** 块身份;缺 = 整篇宿主 PlainMarkdownEditor(走自带 history、不接块选中)。 */
   blockId?: string
   /** slash 选中时由外部(MarkdownBlock)驱动编辑器:消费触发 '/' / 原地转换(单事务,见 blockTriggers)。 */
   slashOpsRef?: { current: SlashOps | null }
@@ -460,9 +459,6 @@ export function MilkdownInner({
   const wikiOpenRef = useRef(false)
   const mentionOpenRef = useRef(false)
   const [loading, getInstance] = useInstance()
-  // 页内查找的上报 id:块世界一块一格;v4 统一实例整篇一个编辑器 → 走 UNIFIED_FIND_ID 单格
-  // (整篇宿主 PlainMarkdownEditor 两者皆无 → undefined = 插件休眠,与原先一致)。
-  const findId = blockId ?? (unified ? UNIFIED_FIND_ID : undefined)
   const ps = useScopedPageStore() // 本面板那份文档 store(撤销/重做、库存订阅都必须对着自己那篇)
 
   /** 用 Milkdown 自己的序列化器把任意节点转成 markdown(自定义 mark / 待办 attrs 一并认)。 */
@@ -767,8 +763,9 @@ export function MilkdownInner({
       .use(inlineHtmlMarksRemark)
       // 块内换行 = 单个 '\n'(Obsidian 语义),不再「空行分段」。必须晚于 inlineHtmlMarksRemark:
       // 折叠先跑完,跨行的 <u>…</u> 才不会被拆段撕成开合分家的两半(见 softBreak.ts 注释)。
-      // unified(v4)不挂:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
-      .use(unified ? [] : softBreakRemark)
+      // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
+      // 换 blankLineRemark —— 只补读侧的「空行 → 空段落」还原(写侧本来就落成空行,见 softBreak.ts 顶注)。
+      .use(unified ? blankLineRemark : softBreakRemark)
       .use(underlineSchema)
       .use(colorSchema)
       .use(bgSchema)
@@ -840,7 +837,6 @@ export function MilkdownInner({
       ))
       .use(linkInputRule) // 打完 `[文字](地址)` 当场成链接(commonmark 预设没这条行内规则)
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
-      .use(findPlugin(findId)) // 页内查找高亮(共享 findStore,空事务重绘)
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
       .use(pluginEditorExtensions())
@@ -1034,18 +1030,6 @@ export function MilkdownInner({
       })
     })
   }, [loading, getInstance])
-
-  // 页内查找态变化 → 空事务重绘命中高亮(同上模式)。
-  useEffect(() => {
-    if (!findId) return
-    return useFindStore.subscribe((s, prev) => {
-      if ((s.open === prev.open && s.query === prev.query && s.active === prev.active) || loading) return
-      getInstance()?.action((ctx) => {
-        const view = ctx.get(editorViewCtx)
-        view.dispatch(view.state.tr)
-      })
-    })
-  }, [findId, loading, getInstance])
 
   const pickWiki = (name: string): void => {
     const w = wiki

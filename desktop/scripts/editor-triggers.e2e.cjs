@@ -1479,6 +1479,102 @@ async function main() {
     await r.close()
   })
 
+  // T45:'@' 关键词直达 + 面板密度(2026-09-05)。用户实报「@ 后面没有轻易触发日期」(对标 Notion 的
+  //      `@r` → Remind me)、「面板信息密度不高,行高和别的二级面板不统一,路径可以去掉」。
+  await tryTest('T45', async () => {
+    const pad = (n) => String(n).padStart(2, '0')
+    const d0 = new Date()
+    const d1 = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + 1)
+    const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+
+    const p = await freshPage()
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('Meta+ArrowRight')
+    await p.keyboard.type('吃药 @r', { delay: 40 })
+    await p.waitForTimeout(350)
+    const rows = await p.locator('.wiki-suggest .wiki-item').allInnerTexts()
+    check('T45 "@r" → 提醒行直达(不必先打出完整日期)', rows.length >= 1 && rows[0].includes('提醒'), JSON.stringify(rows))
+    // 右侧日期灰字不许被自己的 max-width 切掉(评审实测 45% 时「12月26日 09:00」丢分钟位;今天的串更短,只钉常态不倒退)。
+    const hintClip = await p.locator('.wiki-suggest .wiki-item-hint').first().evaluate((el) => el.scrollWidth - el.clientWidth)
+    check('T45 日期灰字不被截断', hintClip <= 0, `overflow=${hintClip}px`)
+    if (process.env.EDITOR_SHOT_DIR) await p.screenshot({ path: path.join(process.env.EDITOR_SHOT_DIR, 'mention-keyword-panel.png') })
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(400)
+    const t = await p.locator('.md-block .ProseMirror').first().innerText()
+    check('T45 回车插入 @remind:明天 09:00 规范串', t.includes(`@remind:${ymd(d1)}T09:00`), `text=${JSON.stringify(t)}`)
+    await p.close()
+
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.press('Meta+ArrowRight')
+    await q.keyboard.type('周会 @明', { delay: 40 })
+    await q.waitForTimeout(350)
+    const qrows = await q.locator('.wiki-suggest .wiki-item').allInnerTexts()
+    check('T45 "@明" → 明天行', qrows.length >= 1 && qrows[0].includes('明天'), JSON.stringify(qrows))
+    await q.keyboard.press('Enter')
+    await q.waitForTimeout(400)
+    const qt = await q.locator('.md-block .ProseMirror').first().innerText()
+    check('T45 回车插入 @明天 的规范日期', qt.includes(`@${ymd(d1)}`) && !qt.includes('[['), `text=${JSON.stringify(qt)}`)
+    await q.close()
+
+    // 密度:裸 `@` = 日期三条 + 页面候选;页面行没有目录副标题(不重名不给路径);行高与 slash 菜单同一正典。
+    const r = await freshPage()
+    await r.locator('.md-block .ProseMirror').first().click()
+    await r.keyboard.press('Meta+ArrowRight')
+    await r.keyboard.type('/', { delay: 40 })
+    await r.waitForTimeout(350)
+    const slashRow = await r.locator('.slash-item').first().boundingBox()
+    // 选中底必须真的比面板深:此前 .slash-item[data-active] 写 --surface,lovable 桥里 --surface ≡ --surface-2,
+    // 真 app 里两者都算成 --bg-card、台架里(没加载 bridge.css)两者都是 transparent —— 无论哪边,旧代码下
+    // row === panel,这条按构造必红(负对照免跑)。alpha ≥ 0.06 钉的是「看得见」(--menu-hover = overlay-medium 0.07)。
+    const contrast = (rowSel, panelSel) => r.evaluate(([a, b]) => {
+      const bg = (el) => getComputedStyle(el).backgroundColor
+      const row = document.querySelector(a), panel = document.querySelector(b)
+      const m = /rgba?\(([^)]+)\)/.exec(bg(row)) || []
+      const parts = (m[1] || '').split(',').map((x) => parseFloat(x))
+      return { row: bg(row), panel: bg(panel), alpha: parts.length === 4 ? parts[3] : parts.length === 3 ? 1 : 0 }
+    }, [rowSel, panelSel])
+    const sc = await contrast('.slash-item[data-active]', '.slash-menu')
+    check('T45 slash 选中底 ≠ 面板底且 alpha ≥ 0.06', sc.row !== sc.panel && sc.alpha >= 0.06, JSON.stringify(sc))
+    await r.keyboard.press('Backspace')
+    await r.keyboard.type('@', { delay: 40 })
+    await r.waitForTimeout(350)
+    if (process.env.EDITOR_SHOT_DIR) await r.screenshot({ path: path.join(process.env.EDITOR_SHOT_DIR, 'mention-bare-panel.png') })
+    const labels = await r.locator('.wiki-suggest .slash-group-label').allInnerTexts()
+    check('T45 裸 @ → 分组标签「日期 / 链接到页面」', labels.length === 2 && labels[0] === '日期' && labels[1] === '链接到页面', JSON.stringify(labels))
+    const nDate = await r.locator('.wiki-suggest .wiki-item .wiki-item-hint').count()
+    const nRows = await r.locator('.wiki-suggest .wiki-item').count()
+    check('T45 裸 @ → 三条日期行 + 页面行;页面行无路径副标题', nDate === 3 && nRows === 4, `hints=${nDate} rows=${nRows}`)
+    const wikiRow = await r.locator('.wiki-suggest .wiki-item').first().boundingBox()
+    const wc = await contrast('.wiki-item[data-active]', '.wiki-suggest')
+    check('T45 @ 面板选中底 ≠ 面板底且 alpha ≥ 0.06', wc.row !== wc.panel && wc.alpha >= 0.06, JSON.stringify(wc))
+    check('T45 @ 面板行高 = slash 菜单行高(同一 28px 正典)', !!slashRow && !!wikiRow && Math.abs(slashRow.height - wikiRow.height) <= 1, `slash=${slashRow && slashRow.height} wiki=${wikiRow && wikiRow.height}`)
+    const pageRow = await r.locator('.wiki-suggest .wiki-item').nth(3).boundingBox()
+    check('T45 页面行也是同一高度(不再是两段行)', !!pageRow && Math.abs(pageRow.height - wikiRow.height) <= 1, `page=${pageRow && pageRow.height}`)
+    await r.close()
+
+    // 负对照:不是关键词前缀、也不是页面 → 面板整个不出现(键盘陷阱那条契约不许倒退)。
+    const z = await freshPage()
+    await z.locator('.md-block .ProseMirror').first().click()
+    await z.keyboard.press('Meta+ArrowRight')
+    await z.keyboard.type('@z', { delay: 40 })
+    await z.waitForTimeout(300)
+    check('T45 负对照:"@z" 面板不出现', (await z.locator('.wiki-suggest').count()) === 0)
+    await z.close()
+
+    // [[ 面板的「新建链接」行:超长查询串必须在行内省略,不许把整个面板顶出横向滚动
+    // (评审实测:裸文本节点是匿名 flex item,min-width:auto 不可收缩 → panel scrollWidth 354 > clientWidth 318)。
+    const w = await freshPage()
+    await w.locator('.md-block .ProseMirror').first().click()
+    await w.keyboard.press('Meta+ArrowRight')
+    await w.keyboard.type('[[这是一个相当长的新页面标题用来测试溢出行为溢出行为', { delay: 20 })
+    await w.waitForTimeout(350)
+    const geo = await w.locator('.wiki-suggest').evaluate((el) => ({ panel: el.scrollWidth - el.clientWidth, create: (() => { const n = el.querySelector('.wiki-create .wiki-item-name'); return n ? n.scrollWidth - n.clientWidth : -1 })() }))
+    check('T45 [[ 超长查询:面板无横向溢出', geo.panel <= 0, `panelOverflow=${geo.panel}px`)
+    check('T45 [[ 超长查询:新建链接行在行内省略(文字确实比行宽)', geo.create > 0, `createOverflow=${geo.create}px`)
+    await w.close()
+  })
+
   const fails = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

@@ -286,6 +286,45 @@ async function main() {
       JSON.stringify({ spaces: s0.spaces, tiles: s0.tiles, homeView: s0.homeView, active: s0.active, brand: s0.brand }),
     )
 
+    // 1b ⚠️主页 Space 的左右栏都没有视图(HOME_SIDE_VIEWS 为空)→ 展开后两侧只剩 sidebar-empty 占位,
+    //   tab 条必须整条隐藏。engine.css 那条规则原来写成 `.dv-group`(dockview 实际类名是 `.dv-groupview`),
+    //   从未命中 → 空侧栏顶上各挂一枚 PanelLeft 图标 tab:长得跟侧栏折叠钮一模一样、还是 accent 蓝,
+    //   点了又没反应(用户实报)。CSS 选择器写错不报错不崩,只能靠这条断言抓。
+    //   顺带钉两件事:① 主区 tab 条不许被同一条规则误伤(前进后退/＋/左栏折叠钮/mac 拖窗区都在上面);
+    //   ② 隐藏后内容区按 flex-grow 补满,侧栏底部不许留出 tab 条高度的空洞。
+    //   ⚠️必须先把两侧展开:全新 profile 下侧栏是收起的,不展开则整条断言在「没有侧栏组」上恒绿(假绿)。
+    await win.click('.dv-prefix .dv-edge-toggle')
+    await win.click('.dv-edge-right')
+    await win.waitForTimeout(600)
+    const bars = await win.evaluate(`(() => [...document.querySelectorAll('.dv-groupview')].map((g) => {
+      const tabs = [...g.querySelectorAll('.wb-tab')]
+      const row = g.querySelector('.dv-tabs-and-actions-container')
+      const content = g.querySelector('.dv-content-container')
+      return {
+        tabs: tabs.length,
+        icons: tabs.filter((t) => t.classList.contains('wb-tab--icon')).length,
+        empties: tabs.filter((t) => t.classList.contains('wb-tab--empty')).length,
+        barVisible: !!(row && row.offsetParent !== null && row.getBoundingClientRect().height > 0),
+        bottomGap: content ? Math.round(g.getBoundingClientRect().bottom - content.getBoundingClientRect().bottom) : null,
+      }
+    }))()`)
+    if (SHOT) {
+      const out = path.join(os.tmpdir(), 'forsion-homepage.empty-sides.png')
+      await win.screenshot({ path: out })
+      console.log(`  截图 → ${out}`)
+    }
+    const emptySides = bars.filter((b) => b.tabs > 0 && b.icons === b.tabs && b.empties === b.tabs)
+    const mainBars = bars.filter((b) => b.tabs > 0 && b.icons === 0)
+    check(
+      '1b 空左右栏不挂占位 tab 条(主区 tab 条保留、侧栏底部无空洞)',
+      emptySides.length === 2 && emptySides.every((b) => !b.barVisible && b.bottomGap !== null && Math.abs(b.bottomGap) <= 1)
+        && mainBars.length >= 1 && mainBars.every((b) => b.barVisible),
+      JSON.stringify(bars),
+    )
+    await win.click('.dv-prefix .dv-edge-toggle') // 收回原状,后面的用例照旧从「无侧栏的主页」开始
+    await win.click('.dv-edge-right')
+    await win.waitForTimeout(400)
+
     // 2 默认只露一排;二级收纳层 = spaceRegistry 完整投影,且主页自己不在坞里。
     //   ⚠️分母不能用**可见的** .rb-space:ribbon 装不下会把尾部收进收纳夹(实测只剩 6 个,坞里 7 个),
     //   拿它当等式两边只会得到一个恒红的断言。判据改成「展开后 ribbon 上看得见的(除主页)都在坞里」。
@@ -299,7 +338,7 @@ async function main() {
       && ribbonOthers.every((n) => expanded.organizerTiles.includes(n)) && !expanded.organizerTiles.some((n) => HOME_NAMES.includes(n))
     const jumped = await win.evaluate(`(() => {
       const t = [...document.querySelectorAll('.hp-organizer-grid .hp-tile')].find((x) =>
-        (x.querySelector('.hp-tile-name')?.textContent || '').trim() === 'Tangu')
+        (x.querySelector('.hp-tile-name')?.textContent || '').trim() === 'Agent')
       if (!t) return false
       t.click(); return true
     })()`)
@@ -393,7 +432,7 @@ async function main() {
         && pointerMotion.releaseOverlay === 0 && pointerMotion.releaseMs < 240
         && ord.includes('space:home')
         && ord.indexOf('space:inbox') < ord.indexOf('space:tangu')
-        && reordered.organizerTiles.indexOf('收件箱') < reordered.organizerTiles.indexOf('Tangu'),
+        && reordered.organizerTiles.indexOf('收件箱') < reordered.organizerTiles.indexOf('Agent'),
       JSON.stringify({ pointerMotion, ribbonOrder: ord, organizerTiles: reordered.organizerTiles }),
     )
     // 夹具清场:后面几条按「没有用户自定义排列」的默认态判定
@@ -427,7 +466,7 @@ async function main() {
 
     // 9 别的 Space 的命名布局里留着主页面板:关插件后切回去不许炸。
     //   夹具全靠点击:Tangu Space → 启动器 →「主页」卡 = 在主区开一张主页,再切走(saveNamed)。
-    await enterSpace(win, ['Tangu'])
+    await enterSpace(win, ['Agent'])
     await openLauncher(win)
     const carded = await win.evaluate(`(() => {
       const c = [...document.querySelectorAll('.newtab-card')].find((x) =>
@@ -437,11 +476,11 @@ async function main() {
     })()`)
     await win.waitForTimeout(1800)
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['Amadeus'])
+    await enterSpace(win, ['Note'])
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Tangu']) // ← applyNamed 吃到含 homepage 的命名布局
+    await enterSpace(win, ['Agent']) // ← applyNamed 吃到含 homepage 的命名布局
     await win.waitForTimeout(1200)
     const back = await win.evaluate(SNAP)
     const alive = await win.evaluate(`(() => ({
@@ -771,6 +810,52 @@ async function main() {
         console.log(`  截图 → ${out}`)
       }
     }
+
+    // 17 ⚠️空侧栏藏起 tab 条之后,拖入必须照旧能落。computeDropTarget 的「tab 栏」分支靠 tab 条的 rect 命中,
+    //   display:none 后 rect 全 0 → 该分支永不命中,落点全交给「正文半屏分屏」分支;落成后占位退位、tab 条复现。
+    //   这两步都在隐藏规则的下游,所以必须真拖一次:合成受控拖放层那三个原生事件(dragstart 在 .wb-tab 上,
+    //   dragover/drop 落在左栏正文中心;落点由全局监听按 elementFromPoint 自己算,与 dispatch 目标无关)。
+    //   ⚠️先用 ＋ 多开一个主区 tab:把主区**唯一**的 tab 拖走会顺带销毁主区组、home 空态占位并进同一个组,
+    //   断言就得在一堆与本题无关的收支里辨认目标(实测踩过)。
+    await enterHome(win)
+    await win.click('.dv-new-tab')
+    await win.waitForTimeout(500)
+    await win.click('.dv-prefix .dv-edge-toggle')
+    await win.waitForTimeout(600)
+    const dropped = await win.evaluate(`(async () => {
+      const nap = (ms) => new Promise((r) => setTimeout(r, ms))
+      const icons = () => [...document.querySelectorAll('.wb-tab--icon')]
+      const tab = [...document.querySelectorAll('.wb-tab:not(.wb-tab--icon)')].find((t) => !t.classList.contains('wb-tab--empty'))
+      const side = [...document.querySelectorAll('.dv-groupview')].find((g) => g.querySelector('.wb-tab--icon'))
+      const body = side && side.querySelector('.dv-content-container')
+      if (!tab || !body) return { err: 'no tab / no empty side' }
+      const before = icons().filter((t) => t.classList.contains('wb-tab--empty')).length
+      const r = body.getBoundingClientRect()
+      const at = { clientX: Math.round(r.left + r.width / 2), clientY: Math.round(r.top + r.height / 2) }
+      const dataTransfer = new DataTransfer()
+      tab.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer, clientX: 0, clientY: 0 }))
+      await nap(80)
+      body.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer, ...at }))
+      await nap(80)
+      const hinted = document.querySelectorAll('.wb-drop-line, .wb-drop-zone').length
+      body.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer, ...at }))
+      await nap(900)
+      const sideGroups = [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.wb-tab--icon'))
+      return {
+        before,
+        hinted,
+        placeholderTabs: icons().filter((t) => t.classList.contains('wb-tab--empty')).length,
+        sideTabs: icons().length,
+        bars: sideGroups.map((g) => !!g.querySelector('.dv-tabs-and-actions-container').offsetParent),
+      }
+    })()`)
+    check(
+      '17 空侧栏(无 tab 条)仍能拖入:提示在、占位退位、tab 条复现',
+      !dropped.err && dropped.before === 1 && dropped.hinted > 0
+        && dropped.placeholderTabs === 0 && dropped.sideTabs === 1
+        && dropped.bars.length === 1 && dropped.bars.every(Boolean),
+      JSON.stringify(dropped),
+    )
   } finally {
     await app.close().catch(() => {})
   }

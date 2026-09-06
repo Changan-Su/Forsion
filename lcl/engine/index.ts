@@ -55,3 +55,6 @@ export { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 export type { SkeletonVariant } from './Skeleton'
 export { setDetachApi, getDetachApi } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
+
+export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendViewSide, ExtendViewCloseReason } from './extendView'
+export { ExtendViewHost } from './ExtendViewHost'

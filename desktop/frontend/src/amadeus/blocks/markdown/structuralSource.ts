@@ -230,7 +230,18 @@ function prefixInput(view: EditorView, info: PrefixInfo): HTMLInputElement {
       && (input.selectionStart ?? 0) >= Math.max(0, input.value.length - 1)
     if (event.key === 'Enter' || rightAcrossBoundary) {
       event.preventDefault()
+      // 前缀原样没改时的回车 = 用户就是要换行:提交(回到渲染态、光标落回行首)之后把这一下
+      // **原样交回 PM 的键位链**。widget 的 stopEvent 恒真,PM 自己收不到这个事件 —— 不补这一转发,
+      // 「光标 ← 移到序号/井号前面按回车」就毫无反应(用户 2026-09-05 实报)。
+      // 改过前缀的那一下属于「确认转换」(`1. `→`- `),转换已在 commitPrefix 里发生,不再多劈一行
+      // —— `unchanged` 同时就是「commitPrefix 这一趟没动过文档」的判据(它只在 source !== original 时
+      // 才 applyTrigger / insertLiteralPrefix),所以不会出现「提交转换 + 再劈一行」的双重变更。
+      // 组合态(拼音选词)的 Enter 是「确认候选词」,绝不能当换行转发出去(台架抓不到这一格)。
+      const unchanged = input.value === (input.dataset.original ?? '')
       commitPrefix(view, input, true)
+      if (event.key === 'Enter' && unchanged && !event.isComposing) {
+        view.someProp('handleKeyDown', (f) => f(view, event))
+      }
     }
   })
   input.addEventListener('blur', () => {

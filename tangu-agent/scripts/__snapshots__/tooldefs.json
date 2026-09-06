@@ -11574,6 +11574,78 @@
           ]
         }
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_ui_commands",
+        "description": "List what you can change in the user's Forsion interface right now: the current value of every interface setting, plus the commands this client exposes to you. The list differs per device — desktop exposes plugin commands that web and mobile do not — so read it instead of assuming. Values reflect the latest set_ui_setting / run_ui_command you made in this run. Call this before `run_ui_command` when you do not already know a command id.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_ui_setting",
+        "description": "Change one setting in the user's Forsion interface — this is how you switch the interface language, light/dark mode, colours, fonts or zoom when the user asks for it in words. Applies to the window the user is talking to you from, immediately and reversibly. Always pass an explicit target value; never try to \"toggle\". locale = interface language. theme_lang = design language, NOT the interface language. accent = accent colour, background = page background. ui_zoom takes \"reset\" or a number. Call `list_ui_commands` for this device's allowed values — they are not fixed (the user can install theme packs and fonts). Note: setting `locale` counts as the user hand-picking their language, which permanently turns off automatic language detection for them — only do it when they actually asked.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "enum": [
+                "locale",
+                "color_mode",
+                "accent",
+                "background",
+                "theme_lang",
+                "flat",
+                "font_ui",
+                "font_body",
+                "font_mono",
+                "ui_zoom",
+                "smooth_caret"
+              ],
+              "description": "Which setting to change."
+            },
+            "value": {
+              "type": "string",
+              "description": "The target value. See the allowed values in this description."
+            }
+          },
+          "required": [
+            "key",
+            "value"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_ui_command",
+        "description": "Run one of the commands this Forsion client exposes to you — for example opening a note you just wrote so the user can see it, switching Space, or opening a settings page. Only ids returned by `list_ui_commands` work; anything else is refused. This acts on the window the user is talking to you from. Use it to finish a task in front of the user, not to move their interface around unasked.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Command id, exactly as returned by list_ui_commands."
+            },
+            "args": {
+              "type": "object",
+              "description": "Arguments, matching that command's declared params. Omit for commands that take none."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
     }
   ]
 }

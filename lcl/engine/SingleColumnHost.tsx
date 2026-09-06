@@ -15,8 +15,10 @@ import { PanelLeft, PanelRight, X, MoreHorizontal, Plus } from 'lucide-react'
 import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome } from './spaceRegistry'
 import { useRibbonStore } from './ribbonRegistry'
 import { getView } from './viewRegistry'
-import { label } from './types'
-import { useWorkspace, restoreSingleColumnLayout } from './singleColumnStore'
+import { label, identitySig } from './types'
+import { ExtendViewHost } from './ExtendViewHost'
+import { NativeExtendView } from './nativeExtendView'
+import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension } from './singleColumnStore'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
 // ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
@@ -77,7 +79,7 @@ function useChromeAutoHide(ref: React.RefObject<HTMLElement | null>, enabled: bo
   return off
 }
 
-export function LeafHost() {
+export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
   // 订阅 active 的 id、type、以及 **params 的对象身份**。标题变化仍不重渲染宿主——视图渲染期
   // 调 leaf.setTitle 会触发宿主重渲染→再调 setTitle→无限循环(React #185)。
   // params 必须订阅:主区「就地导航」在同 id 同 type 时只换 params(amadeus-editor 换 notePath、
@@ -100,7 +102,9 @@ export function LeafHost() {
     <div className="mb-view" data-view={active.type} key={`${active.id}:${active.type}`}>
       <ViewErrorBoundary>
         <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
-          {def.factory({ leaf: active, params: activeParams ?? active.params })}
+          {extendable ? <ExtendViewHost present={presentDrawerExtension} ownerKey={identitySig(activeParams ?? active.params)}>
+            {(extendView) => def.factory({ leaf: active, params: activeParams ?? active.params, extendView })}
+          </ExtendViewHost> : def.factory({ leaf: active, params: activeParams ?? active.params })}
         </Suspense>
       </ViewErrorBoundary>
     </div>
@@ -149,16 +153,16 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
           >
             {leaves.map((r) => {
               const d = getView(r.type)
-              return <option key={r.id} value={r.id}>{d ? label(d.displayName) : r.type}</option>
+              return <option key={r.id} value={r.id}>{r.type === '__extend' ? r.title : d ? label(d.displayName) : r.type}</option>
             })}
           </select>
         ) : (
-          <div className="mb-drawer-title">{def ? label(def.displayName) : ''}</div>
+          <div className="mb-drawer-title">{active?.type === '__extend' ? leaves.find((r) => r.id === active.id)?.title : def ? label(def.displayName) : ''}</div>
         )}
         <button className="mb-icon-btn" onClick={close} aria-label="close"><X size={20} /></button>
       </div>
       <div className="mb-drawer-body">
-        {def && active ? (
+        {active?.type === '__extend' ? <NativeExtendView id={active.id} side={side} /> : def && active ? (
           <div className="mb-view" key={`${active.id}:${active.type}`}>
             <ViewErrorBoundary>
               <Suspense fallback={<Skeleton variant="list" />}>

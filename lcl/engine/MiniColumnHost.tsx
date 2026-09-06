@@ -192,7 +192,7 @@ export const MiniColumnHost: React.FC<{ buildDefault?: () => void }> = ({ buildD
         </button>
       </header>
 
-      <main className="mb-main mini-card-main"><LeafHost /></main>
+      <main className="mb-main mini-card-main"><LeafHost extendable={false} /></main>
 
       {panel ? <button className="mini-card-dismiss" aria-label={zh ? '关闭菜单' : 'Close menu'} onClick={closePanel} /> : null}
       {panel === 'spaces' ? <MiniSpacePanel onClose={closePanel} /> : null}

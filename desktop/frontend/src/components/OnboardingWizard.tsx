@@ -42,9 +42,16 @@ export const ONBOARDING_DISMISS_KEY = 'forsion_tangu_onboarding_done'
 export const ONBOARDING_VERSION_KEY = 'forsion_tangu_onboarding_version'
 
 type Step = 'welcome' | 'connect' | 'theme' | 'model' | 'speech' | 'agents' | 'workspace' | 'env' | 'done'
-const STEP_ORDER: Step[] = PRODUCT.agentBackend
-  ? ['welcome', 'connect', 'theme', 'model', 'speech', 'agents', 'workspace', 'env', 'done']
-  : ['welcome', 'theme', 'done'] // 无 agent 后端的单品变体:只留通用步(connect/model/agents/workspace/env 均属 agent)
+/** 步骤序。两种收缩到通用步(welcome/theme/done)的情形:
+ *  · 无 agent 后端的单品变体(connect/model/agents/workspace/env 均属 agent);
+ *  · 非 host 宿主(web / 移动端)—— 这几步的落盘全走 window.tangu 的 setConfig / envCheck /
+ *    pickDirectory,shim 里没有这些方法,留着就是「选了不保存」的死步骤;登录也早在挂载前
+ *    由 webShim / mobileShim 完成(无 token 直接跳 /auth)。判定信号与 appStore.boot 的引导
+ *    触发同一个(envCheck 在不在),别另起一个 flag。 */
+const stepOrder = (): Step[] =>
+  PRODUCT.agentBackend && !!window.tangu?.envCheck
+    ? ['welcome', 'connect', 'theme', 'model', 'speech', 'agents', 'workspace', 'env', 'done']
+    : ['welcome', 'theme', 'done']
 
 /** 订阅 provider 的友好名(id 见 src/llm/providerOAuth.ts OAUTH_PROVIDERS);未知 id 回退原值。 */
 // Claude 不在此列:订阅登录已删,走「运行引擎」直接跑本机 Claude Code(见 tangu-agent/src/engines/)。
@@ -66,7 +73,10 @@ export const OnboardingWizard: React.FC<{
 }> = ({ themeLang, themeSkin, themeMode, themeModePref, themeSeed, onThemeChange, onSeedChange, onReconnect, onFinish }) => {
   const { t } = useI18n()
   const [step, setStep] = useState<Step>('welcome')
+  const STEP_ORDER = stepOrder()
   const stepIdx = STEP_ORDER.indexOf(step)
+  /** host(桌面)完整流程 vs web/移动端的通用流程 —— 从步骤序推,不另立信号。 */
+  const isHost = STEP_ORDER.includes('env')
 
   // 背景色轴直接读写 themeStore(与设置→外观同一条路径);主题色轴仍走 props 的 onThemeChange。
   const themeBg = useTheme((s) => s.bg)
@@ -361,7 +371,7 @@ export const OnboardingWizard: React.FC<{
             <h1 className="ob-hero-title">{t('onboarding.welcome.title', { name: PRODUCT_DISPLAY_NAME })}</h1>
             <p className="ob-hero-subtitle">{t('onboarding.welcome.subtitle')}</p>
             <div className="ob-hero-actions">
-              <button className="btn primary" onClick={() => setStep('connect')}>
+              <button className="btn primary" onClick={() => setStep(STEP_ORDER[1])}>
                 {t('onboarding.welcome.continue')} <ArrowRight size={15} />
               </button>
               <button className={`btn ghost${showChangelog ? ' active' : ''}`} onClick={() => setShowChangelog((v) => !v)}>
@@ -919,10 +929,21 @@ export const OnboardingWizard: React.FC<{
           {step === 'done' && (
             <div className="field">
               <label>{t('onboarding.done.label')}</label>
+              {/* 收尾指路要跟着宿主走:导入其他 Agent、Provider/MCP、「本机」执行都是桌面能力,
+                  在 web/移动端照抄会指向根本打不开的入口。 */}
               <div className="panel-note" style={{ lineHeight: 1.8 }}>
-                {t('onboarding.done.line1')}<br />
-                {t('onboarding.done.line2')}<br />
-                {t('onboarding.done.line3')}
+                {isHost ? (
+                  <>
+                    {t('onboarding.done.line1')}<br />
+                    {t('onboarding.done.line2')}<br />
+                    {t('onboarding.done.line3')}
+                  </>
+                ) : (
+                  <>
+                    {t('onboarding.done.cloudLine1')}<br />
+                    {t('onboarding.done.cloudLine2')}
+                  </>
+                )}
               </div>
             </div>
           )}

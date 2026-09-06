@@ -50,7 +50,7 @@
   text-align: left;
   color: var(--text);
 }
-.unitsw-row:hover { background: var(--overlay-light); }
+.unitsw-row:hover { background: var(--menu-hover); }
 .unitsw-row.on { background: var(--accent-light); }
 .unitsw-row.off { opacity: 0.55; }
 .unitsw-row .unitsw-ic { flex: none; display: inline-flex; width: 18px; justify-content: center; color: var(--text-muted); }
