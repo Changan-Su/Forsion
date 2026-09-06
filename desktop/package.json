@@ -70,6 +70,7 @@
     "check:assetfetch": "electron scripts/asset-fetch.check.cjs",
     "check:rtc": "electron scripts/rtc-capability.check.cjs",
     "check:rtcsdk": "electron scripts/rtc-sdk.check.cjs",
+    "probe:rtc": "electron scripts/rtc-live.probe.cjs",
     "e2e:inspect": "node scripts/inspect-overlay.e2e.cjs",
     "e2e:mediacite": "node scripts/media-citation.e2e.cjs",
     "e2e:webcite": "node scripts/web-citation.e2e.cjs",
