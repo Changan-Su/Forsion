@@ -134,6 +134,15 @@ const api = {
   codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
+  codeStudioWatch: (root: string | null) => ipcRenderer.invoke('codeStudio:watch', root),
+  onCodeStudioChanged: (cb: (change: { root: string; path: string | null; error?: string }) => void) => {
+    const listener = (_e: unknown, change: { root: string; path: string | null; error?: string }) => cb(change)
+    ipcRenderer.on('codeStudio:changed', listener)
+    return () => ipcRenderer.removeListener('codeStudio:changed', listener)
+  },
+  codeStudioVersions: (root: string) => ipcRenderer.invoke('codeStudio:versions', root),
+  codeStudioSnapshot: (root: string, name: string) => ipcRenderer.invoke('codeStudio:snapshot', root, name),
+  codeStudioRestore: (root: string, id: string) => ipcRenderer.invoke('codeStudio:restore', root, id),
   // ── Forsion Connect:Coding Space 项目发布到云端托管(token 留主进程) ──
   connectMeta: (dir: string): Promise<{ slug?: string }> => ipcRenderer.invoke('connect:meta', dir),
   connectList: (): Promise<any> => ipcRenderer.invoke('connect:list'),
@@ -256,12 +265,20 @@ const api = {
     ipcRenderer.invoke('window:detachedReady', id),
   openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }> =>
     ipcRenderer.invoke('window:openDetached', views, at),
-  openMini: (opts?: { sessionId?: string }): void => ipcRenderer.send('window:openMini', opts),
-  onMiniTarget: (cb: (opts: { sessionId?: string }) => void): (() => void) => {
-    const listener = (_e: unknown, opts: { sessionId?: string }): void => cb(opts)
+  openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:openMini', opts),
+  onMiniTarget: (cb: (opts: import('../shared/miniPanel').MiniOpenOptions) => void): (() => void) => {
+    const listener = (_e: unknown, opts: import('../shared/miniPanel').MiniOpenOptions): void => cb(opts)
     ipcRenderer.on('window:miniTarget', listener)
     return () => ipcRenderer.removeListener('window:miniTarget', listener)
   },
+  miniReady: (): void => ipcRenderer.send('window:miniReady'),
+  showMainPanel: (target: import('../shared/miniPanel').MainPanelTarget): void => ipcRenderer.send('window:showMainPanel', target),
+  onMainPanelTarget: (cb: (target: import('../shared/miniPanel').MainPanelTarget) => void): (() => void) => {
+    const listener = (_e: unknown, target: import('../shared/miniPanel').MainPanelTarget): void => cb(target)
+    ipcRenderer.on('window:mainPanelTarget', listener)
+    return () => ipcRenderer.removeListener('window:mainPanelTarget', listener)
+  },
+  mainPanelReady: (): void => ipcRenderer.send('window:mainPanelReady'),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>

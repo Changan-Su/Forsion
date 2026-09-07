@@ -7,9 +7,11 @@
  * 故 mobile 不经这里选壳(MobileRoot 直接渲染 SingleColumnHost)。
  */
 const KEY = 'lcl.uiMode'
+export const IS_MINI_PANEL = typeof location !== 'undefined' && new URLSearchParams(location.search).get('window') === 'mini'
 export type UiMode = 'desktop' | 'mobile'
 
 function read(): UiMode {
+  if (IS_MINI_PANEL) return 'desktop'
   try {
     // URL 参数优先:卫星窗口(mini 卡片)按窗注入模式,**不读也不写 localStorage** —— 同源多窗口共享
     // localStorage,若写 lcl.uiMode 会污染主窗;故用 ?ui= 逐窗定模式(见 windowKind / main 进程开窗)。

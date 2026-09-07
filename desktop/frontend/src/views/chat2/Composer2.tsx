@@ -10,6 +10,8 @@ import {
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, type LucideIcon,
 } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
+import { useCodeStudio } from '../../stores/codeStudioStore'
+import { normPath } from '../coding/studioModel'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
 
@@ -193,6 +195,7 @@ export const Composer2: React.FC<{
   /** 只给桌面首页等高意图入口开;触屏不应自动弹软键盘。 */
   autoFocus?: boolean
   disabled: boolean
+  disabledPlaceholder?: string
   running: boolean
   execConfig: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>
   models?: ModelInfo[] | null
@@ -268,7 +271,7 @@ export const Composer2: React.FC<{
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
 }> = ({
-  sessionId, autoFocus, disabled, running, execConfig,
+  sessionId, autoFocus, disabled, disabledPlaceholder, running, execConfig,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
@@ -328,6 +331,7 @@ export const Composer2: React.FC<{
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+
 
   /** 命令描述直接取 catalog 的 zh/en —— 不再另建一套 input.slash.* key(那正是两端文案漂移的来源)。 */
   const describe = useMemo(() => {
@@ -804,6 +808,17 @@ export const Composer2: React.FC<{
   const chatSessions = useApp((s) => s.sessions)
   const storeActiveSessionId = useApp((s) => s.activeId)
   const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
+  const studioPrompt = useCodeStudio(s => s.pendingPrompt)
+  // Studio references append to this project's visible composer. Claim once before updating:
+  // hidden / secondary chat views must not consume another project's request or erase its draft.
+  useEffect(() => {
+    if (!studioPrompt || !cardRef.current?.getClientRects().length) return
+    const app = useApp.getState()
+    const path = activeSessionId ? app.sessions.find(s => s.id === activeSessionId)?.project_path : app.newChatWs?.path
+    if (normPath(path || '') !== normPath(studioPrompt.project) || !useCodeStudio.getState().consumePrompt(studioPrompt.seq)) return
+    setDraft(previous => previous.trim() ? `${previous}\n\n${studioPrompt.text}` : studioPrompt.text)
+    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+  }, [studioPrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   const refMatches = useMemo<RefCand[]>(() => {
     if (!fileRefCtx) return []
     const q = fileRefCtx.query.toLowerCase()
@@ -1221,7 +1236,7 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={disabled ? t('input.placeholderDisabled') : t('input.placeholder')}
+            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : t('input.placeholder')}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)

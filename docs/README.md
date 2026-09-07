@@ -83,6 +83,7 @@ Forsion(扶桑)是一个**本地优先的 AI 工作台**。它以 **Tangu** 智�
 - [浏览器版与移动端](reference/web-and-mobile.md) — Forsion Web 与 Android 版
 - [数据与隐私](reference/data-and-privacy.md) — 数据存在哪、什么会上云
 - [常见问题](reference/faq.md) — 排障速查
+- [Coding Studio 升级调研](research/coding-studio-upgrade.md) — 能力对照、工作流设计与实际验证范围
 
 ## 还是没找到答案
 

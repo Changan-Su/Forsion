@@ -1,0 +1,14 @@
+.mini-panel-view, .mini-native { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
+.mini-panel-empty { display: grid; flex: 1; place-content: center; padding: 20px; font-size: 13px; color: var(--text-muted); }
+.mini-native-bar { display: flex; flex: 0 0 34px; gap: 6px; align-items: center; padding: 0 10px; }
+.mini-native-bar select { flex: 1; min-width: 0; border: 1px solid transparent; border-radius: var(--radius-sm); padding: 4px; background: var(--bg); color: var(--text-muted); font: inherit; font-size: 12px; }
+.mini-native-bar button { display: grid; place-items: center; width: 26px; height: 26px; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--text-muted); cursor: pointer; }
+.mini-native-bar button:hover { background: var(--menu-hover); color: var(--text); }
+.mini-native-bar button:disabled { opacity: .45; cursor: default; }
+.mini-native-error { padding: 8px 12px; font-size: 12px; color: var(--danger); }
+.mini-tangu .t2-empty { font-size: 13px; color: var(--text-muted); }
+.mini-amadeus .amx-editor { padding-bottom: 16px; }
+.mini-amadeus .amx-doc, .mini-amadeus .am-app .page-view { padding-inline: 24px; }
+.mini-amadeus .amx-title-input { font-size: 18px; margin-top: 6px; }
+.mini-todo .amx-todo { padding: 8px 12px; }
+.mini-todo .amx-todo-bar { display: none; }

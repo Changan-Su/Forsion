@@ -1,6 +1,7 @@
+import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, PanelBottom, Code2, Database, PenTool, Trophy, Activity, AppWindow, Workflow, Network, Rocket, LayoutDashboard, FileVideo } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -230,6 +231,7 @@ export function installEngine(): void {
 
   // Space:注册(注册序 = ribbon 顶部默认序,排在商店等功能图标之上;每个 Space 贡献一个可拖动的 ribbon 顶部图标)。
   // 同时按当前活动 Space 设侧栏默认,使恢复的非 Tangu Space 在首次 toggle 前即正确。
+  registerMiniViews()
   registerSpaces()
   // 启动策略(仅主窗、非移动端)。「设置 → Spaces → 启动时进入」:
   //  · 缺省 = 上次退出的那个 Space(LAST_EXIT_SPACE):id 不动,布局键原样交给 tryRestoreLayout
@@ -480,7 +482,12 @@ export function installEngine(): void {
     run: () => ws().showSideView('right', 'chat-panel'),
   })
   // Mini 悬浮卡片(全局快捷键 ⌘/Ctrl+⇧+M 亦可):仅桌面(openMini 存在)。
-  if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => translate('bootengine.cmd.openMini'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => window.tangu?.openMini?.({ sessionId: app().activeId || undefined }) })
+  if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => translate('bootengine.cmd.openMini'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => {
+    const space = getActiveSpace(), leaf = ws().getActiveLeaf()
+    window.tangu?.openMini?.(space && supportsMiniPanel(space)
+      ? { spaceId: space.id, params: leaf?.type === space.mini!.mainView.type ? leaf.params : undefined }
+      : { sessionId: app().activeId || undefined })
+  } })
   // 另存为 Space:当前布局序列化成 ~/.tangu/spaces/<slug>/space.json 并注册(仅桌面)。
   if (window.tangu?.spacesSave) addCommand({ id: 'save-as-space', title: () => app().tr('command.saveAsSpace'), keywords: 'space 空间 另存 保存 custom', run: () => {
     void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void saveCurrentAsSpace(name) })

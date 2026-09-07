@@ -175,6 +175,8 @@ export interface StatusItem {
  * 刻意只含落地所需字段;plugins/commands/dataContext/permissions 等愿景项待真有第三方 Space 再加。
  */
 export interface SpaceDefinition {
+  /** Explicit Mini Panel adapter. Omitted = absent from Mini's Space switcher. */
+  mini?: import('./miniPanel').MiniPanelDefinition
   /** 稳定键:localStorage 活动空间 + 命名布局键("space:<id>")。 */
   id: string
   /** 名称;函数形式支持 i18n 懒求值(同 ViewDefinition.displayName)。 */

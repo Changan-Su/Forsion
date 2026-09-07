@@ -53,6 +53,7 @@ const CALENDAR_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
 
 export const calendarSpace: SpaceDefinition = {
   id: 'calendar',
+  mini: { name: 'ToDo List', view: { type: 'mini-todo' }, mainView: { type: 'todo-list' } },
   name: () => app().tr('space.calendar'),
   icon: CalendarDays,
   sidebarDefaults: CALENDAR_SIDE_VIEWS,

@@ -1,5 +1,5 @@
 # Dependencies
-node_modules/
+node_modules
 
 #designs
 designs/
@@ -14,10 +14,10 @@ desktop/build/python/
 desktop/build/node/
 # 从 node_modules 拷出的白板引擎自托管副本(引擎 6.3M + 字体 13M,可再生,不入库)
 # desktop=postinstall 生成;web=`npm run prepare-board` 生成(build/dev 前置)
-desktop/frontend/public/excalidraw/
+desktop/frontend/public/excalidraw
 web/public/excalidraw/
 # 内置 UI 字体:体积大、可由 build/gen-fonts.cjs 从 node_modules 再生 → 同 excalidraw,不入库
-desktop/frontend/public/fonts/
+desktop/frontend/public/fonts
 web/public/fonts/
 
 # TypeScript
@@ -48,3 +48,6 @@ Thumbs.db
 
 # agent worktree 检出(.claude/worktrees/<名>/ 是整份工作副本或 gitlink,绝不进库)
 .claude/worktrees/
+
+# Isolated Coding Studio Electron acceptance artifacts
+/outputs/coding-studio-*

@@ -3,12 +3,14 @@
  *  存出当前 Space 的命名布局 → 设新 Space 侧栏默认 → 还原其命名布局(无则 build)。
  *  只依赖引擎自身(useWorkspace),不 import feature 代码。 */
 import { create } from 'zustand'
+import { IS_MINI_PANEL } from './uiMode'
+import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
 import { useWorkspace } from './workspaceStore'
 import { useNav } from './navStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout } from './layoutPersist'
 
-const ACTIVE_KEY = 'forsion_tangu_active_space'
+const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
 /** 每个 Space 的布局存进既有命名布局表,用此前缀的保留名。 */
 export const spaceLayoutName = (id: string): string => `space:${id}`
 
@@ -49,11 +51,18 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     if (toId === fromId) return
     const toSpace = spaces.find((s) => s.id === toId)
     if (!toSpace) return
+    if (IS_MINI_PANEL && !supportsMiniPanel(toSpace)) return
     const ws = useWorkspace.getState()
 
-    ws.saveNamed(spaceLayoutName(fromId)) // 1. 存出当前 Space 布局
+    if (!IS_MINI_PANEL) ws.saveNamed(spaceLayoutName(fromId)) // 1. 存出当前 Space 布局
     set({ activeSpaceId: toId })           // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
     try { localStorage.setItem(ACTIVE_KEY, toId) } catch { /* ignore */ }
+    if (IS_MINI_PANEL) {
+      // Never restore the old Mini/mobile workspace blob or build desktop sidebars.
+      ws.resetLayout()
+      useNav.getState().reset()
+      return
+    }
     ws.setSidebarDefaults(toSpace.sidebarDefaults) // 3. 两路都需(applyNamed 不跑 build)
     ws.setSideProfile(toId, toSpace.resizableSides ?? {}, toSpace.sideDefaultScale) // 载入该 Space 记住的可拖宽侧栏宽度(须先于 applyNamed/build 的 pinSides)
 

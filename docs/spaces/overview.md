@@ -40,3 +40,9 @@ Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、�
 - [工作区与界面](../getting-started/workspace.md)
 - [自动化](automation.md)
 - [应用市场](../customization/market.md)
+
+## Mini Panel
+
+已适配的 Space 可在独立悬浮面板中使用，当前包括 Tangu、Amadeus 和 ToDo List。详见 [Mini Panel](./mini-panel.md)。插件作者可阅读 [适配契约](../customization/mini-panel-development.md)。
+
+Adapted Spaces can also provide a compact floating panel. Current built-in adapters cover Tangu, Amadeus and ToDo List.

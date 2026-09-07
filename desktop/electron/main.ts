@@ -1,3 +1,5 @@
+import { startMiniCursorFollow, readComputerUseForeground } from './miniCursorFollow'
+import { normalizeMiniOpenOptions, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -7,7 +9,8 @@ import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, powerMonito
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { resolveCloudApiUrl } from './cloudApiPath.js'
-import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
+import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
+import { writeHostTextFile } from './hostTextWrite'
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
@@ -29,7 +32,8 @@ import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from '.
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir } from './marketInstall'
-import { serveDir as codePreviewServe, servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
 import {
   collectProjectFiles, readConnectMeta, writeConnectMeta, cloudJson, makePreviewProxy, type CloudCreds,
@@ -1257,7 +1261,7 @@ function createWindow(): void {
   hardenNav(mainWindow.webContents)
   // deep link 推送门:reload(Cmd+R)换掉渲染层监听者但 webContents 不变 → 每次开载都翻回「未就绪」,
   // 等新一代渲染层来 drain(否则 push 进虚空,URL 丢失)。
-  mainWindow.webContents.on('did-start-loading', () => { deepLinkReady = false })
+  mainWindow.webContents.on('did-start-loading', () => { deepLinkReady = false; mainPanelReady = false })
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -1376,9 +1380,12 @@ async function restoreDetachedWindows(): Promise<void> {
   for (const { id, bounds } of [...persistedDetached]) createDetachedWindow({ id, bounds })
 }
 
-interface MiniOpenOptions { sessionId?: string }
+let pendingMainPanelTarget: MainPanelTarget | null = null
+let mainPanelReady = false
 
 let miniWindow: BrowserWindow | null = null
+let miniFollowing = false
+let stopMiniFollow: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
 let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
@@ -1393,13 +1400,6 @@ const MINI_CARD_HEIGHT = 420
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
-
-function normalizeMiniOpenOptions(raw: unknown): MiniOpenOptions | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const id = (raw as { sessionId?: unknown }).sessionId
-  if (typeof id !== 'string' || !id.trim()) return undefined
-  return { sessionId: id.trim() }
-}
 
 function createMiniWindow(opts?: MiniOpenOptions): void {
   miniTarget = opts
@@ -1424,18 +1424,34 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
-    if (miniTarget?.sessionId && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+    if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+  })
+  stopMiniFollow = startMiniCursorFollow(miniWindow, {
+    readActive: readComputerUseForeground,
+    cursor: () => screen.getCursorScreenPoint(),
+    workArea: (cursor) => screen.getDisplayNearestPoint(cursor).workArea,
+    onFollowing: (following) => {
+      miniFollowing = following
+      if (following) {
+        miniDock = null; miniDragging = false
+        if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
+        stopMiniPoll()
+      } else {
+        suppressMiniMoved = true
+        setTimeout(() => { suppressMiniMoved = false }, 100)
+      }
+    },
   })
   miniWindow.on('moved', onMiniMoved)
-  miniWindow.on('closed', () => { console.log('[win] mini closed'); miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
+  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniFollow?.(); stopMiniFollow = null; miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
   console.log('[win] mini open')
-  loadRendererWith(miniWindow, { window: 'mini', ui: 'mobile', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
+  loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
 
 function toggleMiniWindow(opts?: MiniOpenOptions): void {
   if (miniWindow && !miniWindow.isDestroyed()) {
     // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
-    if (opts?.sessionId) {
+    if (opts?.sessionId || opts?.spaceId) {
       miniTarget = opts
       if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
       miniWindow.show()
@@ -1455,7 +1471,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
-  if (!miniWindow || suppressMiniMoved) return // 程序化移动不算用户拖拽
+  if (!miniWindow || miniFollowing || suppressMiniMoved) return // 程序化移动不算用户拖拽
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
   miniSettleTimer = setTimeout(onMiniSettled, 200)
@@ -1463,7 +1479,7 @@ function onMiniMoved(): void {
 
 function onMiniSettled(): void {
   miniDragging = false
-  if (!miniWindow || miniWindow.isDestroyed()) return
+  if (!miniWindow || miniWindow.isDestroyed() || miniFollowing) return
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
   const edge = nearestEdge(b, wa)
@@ -1486,7 +1502,7 @@ function stopMiniPoll(): void {
   if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
 }
 function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniDragging || suppressMiniMoved) return
+  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniFollowing || miniDragging || suppressMiniMoved) return
   const pt = screen.getCursorScreenPoint()
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
@@ -2033,9 +2049,43 @@ app.whenReady().then(async () => {
     return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
   })
   // ── Coding Space:本地静态预览服务器(整 cwd 挂 127.0.0.1 随机端口;渲染端 iframe 加载多文件 web app)──
-  ipcMain.handle('codePreview:serve', async (_e, rootDir: string) => {
+  ipcMain.handle('codePreview:serve', async (e, rootDir: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
     if (!rootDir || typeof rootDir !== 'string') throw new Error('非法的预览根目录')
-    return codePreviewServe(rootDir)
+    if (!(await stat(rootDir)).isDirectory()) throw new Error('Preview root is not a directory')
+    // Each project gets its own origin: localStorage and simultaneous preview windows stay isolated.
+    return servePathRoot(realpathSync(rootDir))
+  })
+  const studioWatchers = new Map<number, ReturnType<typeof createCodeStudioProjectWatcher>>()
+  ipcMain.handle('codeStudio:watch', async (e, rootDir: string | null) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    if (rootDir !== null && (typeof rootDir !== 'string' || !rootDir)) throw new Error('Invalid project root')
+    let watcher = studioWatchers.get(e.sender.id)
+    if (!watcher) {
+      watcher = createCodeStudioProjectWatcher(
+        change => { if (!e.sender.isDestroyed()) e.sender.send('codeStudio:changed', change) },
+        (error, root) => {
+          if (root && !e.sender.isDestroyed()) e.sender.send('codeStudio:changed', { root, path: null, error: error.message })
+        },
+      )
+      studioWatchers.set(e.sender.id, watcher)
+      const id = e.sender.id
+      e.sender.once('destroyed', () => { studioWatchers.get(id)?.close(); studioWatchers.delete(id) })
+    }
+    await watcher.setRoot(rootDir)
+    return { root: rootDir ? realpathSync(rootDir) : null }
+  })
+  ipcMain.handle('codeStudio:versions', async (e, rootDir: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return listCodeStudioSnapshots(rootDir, join(forsionHomeDir(), 'coding-history'))
+  })
+  ipcMain.handle('codeStudio:snapshot', async (e, rootDir: string, name: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return createCodeStudioSnapshot(rootDir, join(forsionHomeDir(), 'coding-history'), name)
+  })
+  ipcMain.handle('codeStudio:restore', async (e, rootDir: string, id: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return restoreCodeStudioSnapshot(rootDir, join(forsionHomeDir(), 'coding-history'), id)
   })
   ipcMain.handle('codePreview:stop', () => { stopCodePreview(); return { ok: true } })
   // 单文件 HTML 预览(wsfile / Agent Desk / 笔记内嵌):把该文件**所在目录**挂到一个不可猜的令牌根下。
@@ -2186,35 +2236,9 @@ app.whenReady().then(async () => {
     const err = await shell.openPath(p)
     return err ? { ok: false, error: err } : { ok: true }
   })
-  // 写回文本文件(工作区 .md 编辑 / 新建文件):写 tmp → fsync → rename 原子替换,失败清理 tmp;
-  // expectedMtimeMs 不符**或文件已消失(被删/改名)** → 冲突不写(外部修改保护,防复活旧路径);
-  // createNew=O_EXCL 内核原子独占创建(新建绝不覆盖,无 TOCTOU)。
-  ipcMain.handle('fs:writeFile', async (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) => {
-    if (!filePath || typeof filePath !== 'string' || filePath.includes('\0') || typeof content !== 'string')
-      throw new Error('非法的写入参数')
-    if (createNew) {
-      try { await writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' }) }
-      catch (e: any) { throw e?.code === 'EEXIST' ? new Error('同名文件/文件夹已存在') : e }
-      const st0 = await stat(filePath)
-      return { ok: true, mtimeMs: st0.mtimeMs }
-    }
-    if (typeof expectedMtimeMs === 'number') {
-      const cur = await stat(filePath).catch(() => null)
-      if (!cur) return { conflict: true, mtimeMs: 0 } // 基准文件已不在:视作冲突,别在旧路径复活
-      if (Math.abs(cur.mtimeMs - expectedMtimeMs) > 1) return { conflict: true, mtimeMs: cur.mtimeMs }
-    }
-    const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
-    try {
-      const fh = await fsOpen(tmp, 'w')
-      try { await fh.writeFile(content, 'utf8'); await fh.sync() } finally { await fh.close() }
-      await rename(tmp, filePath)
-    } catch (e) {
-      await unlink(tmp).catch(() => {}) // 半写残留清理(ENOSPC/rename 失败等)
-      throw e
-    }
-    const st = await stat(filePath)
-    return { ok: true, mtimeMs: st.mtimeMs }
-  })
+  // 按路径串行,精确 mtime CAS 在 tmp fsync 后、rename 前再检查;新建仍走 wx。
+  ipcMain.handle('fs:writeFile', (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) =>
+    writeHostTextFile(filePath, content, expectedMtimeMs, createNew))
 
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   // 安全:重命名/新建只接受**单段名字**(无路径分隔符、非 . / ..),结果始终落在原目录内,杜绝越权写。
@@ -3068,6 +3092,26 @@ app.whenReady().then(async () => {
   ipcMain.on('window:openMini', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return
     toggleMiniWindow(normalizeMiniOpenOptions(raw))
+  })
+  ipcMain.on('window:miniReady', (e) => {
+    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
+  })
+  ipcMain.on('window:showMainPanel', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || !raw || typeof raw !== 'object') return
+    const target = raw as MainPanelTarget
+    if (typeof target.type !== 'string' || !target.type || target.type.length > 256) return
+    pendingMainPanelTarget = { type: target.type, spaceId: typeof target.spaceId === 'string' ? target.spaceId : undefined,
+      params: target.params && typeof target.params === 'object' && !Array.isArray(target.params) ? target.params : {} }
+    showMainWindow()
+    if (mainPanelReady && mainWindow) {
+      mainWindow.webContents.send('window:mainPanelTarget', pendingMainPanelTarget)
+      pendingMainPanelTarget = null
+    }
+  })
+  ipcMain.on('window:mainPanelReady', (e) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
+    mainPanelReady = true
+    if (pendingMainPanelTarget) { e.sender.send('window:mainPanelTarget', pendingMainPanelTarget); pendingMainPanelTarget = null }
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),

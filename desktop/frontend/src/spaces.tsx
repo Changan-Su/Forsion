@@ -59,6 +59,7 @@ const TANGU_SIDE_VIEWS: SidebarDefaults = {
 
 const tanguSpace: SpaceDefinition = {
   id: 'tangu',
+  mini: { name: 'Tangu', view: { type: 'mini-tangu', params: { followActive: true } }, mainView: { type: 'chat' } },
   name: () => app().tr('space.tangu'),
   icon: Bot,
   sidebarDefaults: TANGU_SIDE_VIEWS,
@@ -117,6 +118,7 @@ const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
 
 const amadeusSpace: SpaceDefinition = {
   id: 'amadeus',
+  mini: { name: 'Amadeus', view: { type: 'mini-amadeus' }, mainView: { type: 'amadeus-editor' } },
   name: () => app().tr('space.amadeus'),
   icon: NotebookText,
   sidebarDefaults: AMADEUS_SIDE_VIEWS,
@@ -143,9 +145,10 @@ const amadeusSpace: SpaceDefinition = {
 /** Coding Space:左=Tangu 对话(Prompt,复用 ChatView);主=Code|Preview 工作台;右=工作区文件树。
  *  模仿 Google AI Studio:左侧描述需求 → Coding Agent 生成 web app → 主区实时预览/改代码。
  *  新会话默认落 Coding Agent(不改全局 defaultSlug,只设新会话草稿)。 */
-const CODING_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'chat', params: { followActive: true, reuseKey: 'primary' } }],
+const CODING_SIDE_VIEWS: SidebarDefaults = {
+  left: [{ type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }],
   right: [{ type: 'workspace', params: {} }],
+  bottom: [{ type: 'terminal', params: {} }],
 }
 
 const codingSpace: SpaceDefinition = {
@@ -161,8 +164,9 @@ const codingSpace: SpaceDefinition = {
     ws().setSidebarDefaults(CODING_SIDE_VIEWS)
     app().selectNewChatAgent?.('coding') // 新会话默认 Coding agent
     ws().openView('code-studio', {}, 'main')
-    ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'left')
-    ws().openView('workspace', {}, 'right')
+    ws().openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left')
+    ws().initializeSidebar('right', false)
+    ws().initializeSidebar('bottom', false)
   },
 }
 
@@ -234,6 +238,7 @@ export function registerSpaces(): void {
   // 必须在上面那轮 addRibbonIcon 之后 —— 它靠 upsert 覆盖刚注册的那一份。
   installHomeSlot()
   // 活动 Space 不在本产品档案里 → 回落档案默认(单品变体首启:localStorage 可能存着全家桶的 'tangu')。
+  if (new URLSearchParams(location.search).get('window') === 'mini') return
   const activeId = useSpaceStore.getState().activeSpaceId
   if (SPACES.length && !SPACES.some((sp) => sp.id === activeId)) {
     const fallback = SPACES.some((sp) => sp.id === PRODUCT.defaultSpace) ? PRODUCT.defaultSpace : SPACES[0].id

@@ -1,7 +1,7 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, MessageSquarePlus, Quote } from 'lucide-react'
+import { ArrowDown, Folder, MessageSquarePlus, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { EnginePicker } from '../components/EnginePicker'
@@ -19,7 +19,7 @@ import { TaskSummary } from './chat2/TaskSummary'
 import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
-import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -28,6 +28,9 @@ import { useShallow } from 'zustand/react/shallow'
 import './chat2/chat2.css'
 import { zoomOf } from '@lcl/engine'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { useCodeStudio } from '../stores/codeStudioStore'
+import { projectName } from './coding/studioModel'
+import './coding/studioMessages'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -44,6 +47,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const pendingCountRef = useRef(0)
   const globalActiveId = useApp((state) => state.activeId)
   const followActive = params.followActive !== false
+  // Saved Coding layouts predate the studio param; the active Space supplies the same scope.
+  const inCodingSpace = useSpaceStore(state => state.activeSpaceId === 'coding')
+  const studioChat = followActive && (!!params.studio || inCodingSpace)
+  const studioRoot = useCodeStudio(state => state.activeProject)
   const pinnedSessionId = typeof params.sessionId === 'string' ? params.sessionId : null
   const activeId = followActive ? globalActiveId : pinnedSessionId
   // 历史在拉:空消息 ≠ 空会话 —— 拉取期间显示会话骨架屏,别把有消息的会话先亮成空状态(EmptyState2)。
@@ -370,7 +377,7 @@ export function ChatView({ leaf, params }: ViewProps) {
 
   const hasMessages = activeMessages.length > 0
   // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
-  const deskEnabled = UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+  const deskEnabled = !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -528,14 +535,14 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 新对话空状态:铺满整个聊天列的绝对定位层 → 品牌图+标语落在 **view 的竖向中心**
           (2026-08-14 用户要求)。放在滚动流里只能在「输入框以上那段」居中,整体偏高。
           pointer-events:none:它盖在下面的 agent/引擎选择器与输入框之上,不能吃掉它们的点击。 */}
-      {!hasMessages && !historyLoading && <EmptyState2 />}
+      {!hasMessages && !historyLoading && (params.miniSurface ? <div className="t2-empty">{t('mini.chatHint')}</div> : <EmptyState2 title={studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />)}
 
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
       <div className="composer-anchor" ref={composerRef}>
         {/* Agent 选择不 gate execMode:云会话(sandbox,web/桌面云端)同样有 agent;引擎=本地 ACP 子进程,仍 host-only。 */}
-        {!hasMessages && !mvCfg.groupChat && (
+        {!params.miniSurface && !hasMessages && !mvCfg.groupChat && (
           <div className="newchat-pickers">
             {mvCfg.execMode === 'host' && availableEngines.length > 0 && (
               <EnginePicker
@@ -557,17 +564,17 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
   
-        {/* chat 无项目:模式为 chat 时不露出项目选择器(留着会让人选个项目、悄悄建成 work 会话)。 */}
-        {!activeId && mvCfg.preset !== 'chat' && (
+        {/* Chat 无项目:不露项目选择器，否则会悄悄建成 Work 会话。Coding Studio 另要求先选定项目。 */}
+        {!activeId && mvCfg.preset !== 'chat' && (!studioChat || studioRoot) && (
           <div className="newchat-projectbar">
             <div className="newchat-projectbar-inner">
-              <ProjectSelector
+              {studioChat && studioRoot ? <div className="project-pill" title={studioRoot} data-studio-project={studioRoot}><Folder size={13} /><span className="project-pill-name">{projectName(studioRoot)}</span></div> : <ProjectSelector
                 workspaces={s.workspaces()}
                 value={s.newChatWs?.key ?? null}
                 onChange={(w) => s.setNewChatWs(w)}
                 onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
                 onAddCloudProject={(name) => void s.addCloudProject(name)}
-              />
+              />}
             </div>
           </div>
         )}
@@ -578,7 +585,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           )}
         </AnimatePresence>
         <Composer2
-          disabled={s.connState !== 'ok'}
+          disabled={s.connState !== 'ok' || (studioChat && !studioRoot)}
+          disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
           running={running}
           execConfig={mvCfg}
           models={visibleModels}
@@ -623,7 +631,14 @@ export function ChatView({ leaf, params }: ViewProps) {
           onBranch={activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
           onOpenSettings={() => s.openSettings('skills')}
           onExecConfigChange={(patch) => s.setExecConfig(patch, activeId)}
-          onSend={(text, attachments, workspaceFiles, skillIds, mentions) => s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)}
+          onSend={async (text, attachments, workspaceFiles, skillIds, mentions) => {
+            if (studioChat) {
+              const target = useCodeStudio.getState().prepareRun()
+              if (!target) return false
+              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId)
+            }
+            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)
+          }}
           onStop={() => s.stop(activeId)}
           quotedText={quotedText}
           onClearQuote={() => setQuotedText('')}

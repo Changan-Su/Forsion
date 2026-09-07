@@ -19,6 +19,7 @@ import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { DEFAULT_AGENT_AVATAR_B64, DEFAULT_AGENT_AVATAR_MIME } from './defaultAvatar.js';
+import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codingPrompt.js';
 import { loadSpecialAgentsConfig, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import type { ThinkingLevel } from '../core/types.js';
@@ -323,27 +324,11 @@ export const DEFAULT_AGENTS: Array<Pick<NormalAgentDef, 'slug' | 'name' | 'descr
     // .ts/.tsx/.jsx(sucrase,vite-dev 式,无打包/无 npm install),裸依赖走 importmap→esm.sh。
     slug: 'coding',
     name: 'Coding',
-    version: '1.1.0', // 提示词更新即 bump → refreshBuiltinAgent 覆盖旧版(保留用户 model/thinking)
-    description: 'AI Studio 式网页应用构建者:多文件 + JSX/TSX + CDN 包,即时预览',
+    version: CODING_AGENT_VERSION, // 提示词更新即 bump → refreshBuiltinAgent 覆盖旧版(保留用户 model/thinking)
+    description: 'Build and refine working web apps with a project brief, live preview, Forsion AI, and verified repairs',
     thinkingLevel: 'medium',
-    systemPrompt:
-      "You are a web app builder, like Google AI Studio's app builder. When the user describes an app, BUILD it as real files in the current working directory, then briefly say what you made. " +
-      'The live preview runs a dev-server that resolves relative imports and transpiles .ts/.tsx/.jsx on the fly (like Vite dev) — so there is NO build step and NO npm install, yet you get a real multi-file project. Follow these rules: ' +
-      '(1) Always create an "index.html" entry at the project root. It declares an ESM importmap for every npm package you use (resolved from the https://esm.sh/ CDN) and loads your entry module. ' +
-      '(2) STRUCTURE IT LIKE A REAL PROJECT — multiple files: split components/hooks/utils/styles into separate files (e.g. index.tsx, App.tsx, components/*.tsx, styles.css) and import them with relative paths. Do NOT cram everything into one index.html. ' +
-      '(3) USE PACKAGES instead of writing from scratch — pull in React, and any npm library (state, routing, charts, animation, UI kits, icons, date, etc.) via the importmap → esm.sh. You may write modern JSX/TSX/TypeScript freely; the preview transpiles it. ' +
-      '(4) For React with automatic JSX runtime, the importmap MUST include "react/jsx-runtime". Link CSS with <link rel="stylesheet"> in index.html (do not `import` .css from JS). ' +
-      '(5) Prefer clean, modern, responsive UI. ' +
-      'Minimal React starter to follow:\n' +
-      '```html\n<!-- index.html -->\n<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="./styles.css">\n' +
-      '<script type="importmap">{"imports":{"react":"https://esm.sh/react@18","react-dom/client":"https://esm.sh/react-dom@18/client","react/jsx-runtime":"https://esm.sh/react@18/jsx-runtime"}}</script>\n' +
-      '</head><body><div id="root"></div><script type="module" src="./index.tsx"></script></body></html>\n```\n' +
-      '```tsx\n// index.tsx\nimport { createRoot } from "react-dom/client";\nimport App from "./App.tsx";\ncreateRoot(document.getElementById("root")!).render(<App />);\n```\n' +
-      'Add more packages by adding importmap entries (e.g. "zustand":"https://esm.sh/zustand@4"). ' +
-      'Use write_file / edit_file to create and update files; the preview refreshes automatically after each write. Iterate on the user\'s feedback by editing files. Reply in the user\'s language.',
-    soul:
-      '# Coding\n\nA fast, tasteful front-end builder. Turns an idea into a real, well-structured multi-file app you can see immediately — reaching for the right npm package instead of reinventing it, ' +
-      'writing clean modern JSX/TSX. Ships something runnable first, then refines.',
+    systemPrompt: CODING_SYSTEM_PROMPT,
+    soul: CODING_SOUL,
   },
 ];
 
@@ -379,7 +364,7 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
 }
 
 /** 内置(系统维护)agent 的提示词升级:磁盘版本 ≠ 预设版本时,用预设覆盖 systemPrompt/soul/version/描述,
- *  但**保留用户可调项**(model / thinkingLevel / maxIterations / approvalMode / tools)。仅对预设声明了 version 的 agent 生效。 */
+ *  但**保留全部用户配置**(含工具权限、头像、同步与记忆作用域)。仅对预设声明了 version 的 agent 生效。 */
 async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<void> {
   if (!a.version) return;
   const adir = path.join(agentsDir(), a.slug);
@@ -389,12 +374,9 @@ async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<
   const cur = parseAgentConfig(a.slug, txt, '');
   if (cur.version === a.version) return; // 已是最新
   const def: NormalAgentDef = {
+    ...cur, // 白名单覆盖维护字段，避免未来新增用户配置在升级时被静默清空。
     slug: a.slug, name: a.name, version: a.version, description: a.description || '',
-    model: cur.model || a.model || '', tools: cur.tools?.length ? cur.tools : (a.tools || []),
-    thinkingLevel: cur.thinkingLevel || a.thinkingLevel || '', maxIterations: cur.maxIterations ?? a.maxIterations ?? null,
-    approvalMode: cur.approvalMode || a.approvalMode || '',
-    createdBy: cur.createdBy || 'user', createdAt: cur.createdAt || new Date().toISOString(),
-    systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: cur.libraryOrder || [],
+    systemPrompt: a.systemPrompt, soul: a.soul || '',
   };
   await fs.writeFile(cfgPath, serializeAgentConfig(def), 'utf-8');
   await fs.writeFile(path.join(adir, 'SOUL.md'), a.soul || '', 'utf-8');

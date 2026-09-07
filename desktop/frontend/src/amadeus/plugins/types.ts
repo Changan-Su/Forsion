@@ -401,6 +401,16 @@ export interface StatusItemHandle {
 /** Bound to this mounted instance, revoked on close/navigation/plugin disable.
  *  Available for Main Views; feature-detect view?.extendView on older hosts. Rules and opt-in agent commands can call open(). */
 export interface PluginViewContext {
+  /** Mount location. Mini receives no extendView/full workspace chrome. Feature-detect on older hosts. */
+  surface?: 'main' | 'mini'
+  /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
+  getParams?(): Readonly<Record<string, unknown>>
+  /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
+  setParams?(patch: Record<string, unknown>): void
+  /** Subscribe without remounting the DOM or losing in-progress input. Returns unsubscribe. */
+  onParamsChanged?(listener: (params: Readonly<Record<string, unknown>>) => void): () => void
+  /** Mini only: opens the Space's mainView with the current params. Revoked after unmount. */
+  showInMainPanel?(): void
   extendView?: ExtendViewController
 }
 

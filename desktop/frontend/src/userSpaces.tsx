@@ -1,3 +1,4 @@
+import { windowKind } from './windowKind'
 /** 用户自定义 Space(L0 数据 Space):~/.tangu/spaces/<slug>/space.json → registerSpace。
  *  设计:Space=纯数据布局配方(只组合已注册视图,无信任问题,可自建/market 分发);
  *  新视图代码/后端能力属于 Space App(L1:前端编进主包由包门控,后端走 tangu-plugin),不在此层。
@@ -62,6 +63,7 @@ const toPanels = (list: SpacePanelSpec[]): PersistedPanel[] => list.map((p) => (
  *  只在 version 真的变化时动手:用户自己调的布局照常保存,不受影响。 */
 const RECIPE_VER_KEY = 'forsion_space_recipe_ver'
 function migrateRecipeLayout(spec: SpaceSpec): void {
+  if (windowKind() === 'mini') return // Mini never migrates or resets full workspace layouts.
   if (!spec.version) return // 没声明版本 = 老配方,不介入(丢布局的代价比不更新大)
   let map: Record<string, string> = {}
   try { map = JSON.parse(localStorage.getItem(RECIPE_VER_KEY) || '{}') } catch { /* 坏值当空 */ }
@@ -83,6 +85,7 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
   const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right) }
   return {
     id: spec.id,
+    mini: spec.mini ? { ...spec.mini, name: spec.mini.name ? specName({ ...spec, name: spec.mini.name }) : undefined } : undefined,
     name: specName(spec),
     icon: SPACE_ICONS[spec.icon ?? ''] ?? Boxes,
     sidebarDefaults: sides,

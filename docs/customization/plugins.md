@@ -54,3 +54,9 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 - [应用市场](market.md) — 找现成的插件
 - [工具与审批](../chat/tools-and-approvals.md) — 插件工具怎么被管住
 - [自动化](../spaces/automation.md) — 用插件事件触发规则
+
+## Mini Panel 扩展
+
+插件内的 Space 可以声明专用 Mini 视图，只提供当前能力的快捷操作；宿主的“在主面板显示”会携带当前实体参数。未适配的 Space 不出现在 Mini 中，随插件禁用的适配会自动撤下。见 [Mini Panel 开发](./mini-panel-development.md)。
+
+Plugin Spaces can opt into Mini Panel with a dedicated compact view. The host preserves current entity parameters when opening the main panel. See [the development contract](./mini-panel-development.md).

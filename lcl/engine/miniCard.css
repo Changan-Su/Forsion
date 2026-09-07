@@ -4,7 +4,9 @@
  */
 .mini-card-shell {
   position: fixed;
-  inset: 0;
+  inset: 0 auto auto 0;
+  width: calc(100vw / var(--uiz, 1));
+  height: calc(100vh / var(--uiz, 1));
   display: grid;
   grid-template-rows: 44px minmax(0, 1fr);
   overflow: hidden;
@@ -86,19 +88,6 @@
   padding: 0;
   border-radius: var(--radius-sm, 9px);
 }
-.mini-card-tab-count {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  min-width: 12px;
-  height: 12px;
-  padding: 0 2px;
-  border-radius: 999px;
-  background: var(--action-fill, var(--accent-ink));
-  color: var(--on-action, var(--on-accent-ink, #fff));
-  font: 700 8px/12px var(--font-ui, sans-serif);
-  text-align: center;
-}
 .mini-card-close:hover { background: color-mix(in srgb, var(--danger, #e0564b) 12%, transparent); color: var(--danger, #e0564b); }
 
 .mini-card-main {
@@ -172,23 +161,6 @@
 .mini-card-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-card-row-fallback { flex: 0 0 auto; width: 15px; }
 .mini-card-row-current { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 999px; background: var(--accent, var(--accent-ink)); }
-.mini-card-row-close {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-faint, var(--text-muted));
-  cursor: pointer;
-}
-.mini-card-row-close:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--danger, #e0564b); }
-.mini-card-row-new { color: var(--accent-ink, var(--accent)); }
-.mini-card-component-row { padding: 4px; }
-
 /* Chat 是 mini 的主路径:保留完整发送能力,但把“开新对话配置台”收成快速输入卡。 */
 .mini-card-shell .t2-toolbar { display: none; }
 .mini-card-shell .t2-stream-inner {

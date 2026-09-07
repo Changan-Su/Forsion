@@ -10,6 +10,8 @@
  * 布局序列化 / 命名布局 / Dockview api 在移动端退化为 no-op / 空(见各方法注释)。
  */
 import { create } from 'zustand'
+import { routeMiniView } from './miniPanel'
+import { IS_MINI_PANEL } from './uiMode'
 import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import type { Leaf, ViewLocation, SidebarDefaults } from './types'
@@ -209,6 +211,7 @@ interface WS {
   showSideView(side: 'left' | 'right', type: string): void
   activateLeaf(id: string): void
   closeLeaf(id: string): void
+  closeViewsOfType(type: string): void
   resetLayout(): void
   saveCurrent(): void
   saveNamed(name: string): void
@@ -328,6 +331,14 @@ export const useWorkspace = create<WS>((set, get) => {
     },
 
     openView(type, params = {}, loc = 'main', opts) {
+      if (IS_MINI_PANEL) {
+        const target = routeMiniView({ type, params })
+        if (!target) return null
+        type = target.type
+        params = target.params ?? {}
+        loc = 'main'
+        opts = undefined // Mini has one content surface, never tabs or drawers.
+      }
       const def = getView(type)
       // singleton 复用(跨桶;reuseKey 语义对齐桌面)
       if (def?.singleton) {
@@ -338,7 +349,7 @@ export const useWorkspace = create<WS>((set, get) => {
           return r.params.reuseKey === reuseKey || (reuseKey === 'primary' && r.params.reuseKey === undefined && r.params.followActive !== false)
         })
         if (existing) {
-          if (reuseKey === 'primary') { set((s) => ({ [bucketOf(existing.loc)]: s[bucketOf(existing.loc)].map((r) => r.id === existing.id ? { ...r, params: { ...r.params, ...params } } : r) } as Partial<WS>)) }
+          if (IS_MINI_PANEL || reuseKey === 'primary') { set((s) => ({ [bucketOf(existing.loc)]: s[bucketOf(existing.loc)].map((r) => r.id === existing.id ? { ...r, params: { ...r.params, ...params } } : r) } as Partial<WS>)) }
           setActive(existing.loc, existing.id)
           if (existing.loc === 'main') autoCloseDrawers()
           get().refreshTabs()
@@ -369,6 +380,12 @@ export const useWorkspace = create<WS>((set, get) => {
     },
 
     navigateLeaf(leafId, type, params = {}) {
+      if (IS_MINI_PANEL) {
+        const target = routeMiniView({ type, params })
+        if (!target) return null
+        type = target.type
+        params = target.params ?? {}
+      }
       const rec = find(leafId)
       const def = getView(type)
       if (!rec || !def) return null
@@ -444,7 +461,7 @@ export const useWorkspace = create<WS>((set, get) => {
       }
       if (rec.type === 'home') return // 主区空态占位,不可关
       // 主区关掉最后一个 → 就地变 home 空态(不销毁主屏)
-      if (rec.loc === 'main' && get().mainLeaves.length <= 1) { get().navigateLeaf(id, 'home'); return }
+      if (!IS_MINI_PANEL && rec.loc === 'main' && get().mainLeaves.length <= 1) { get().navigateLeaf(id, 'home'); return }
       const bkey = bucketOf(rec.loc)
       const rest = get()[bkey].filter((r) => r.id !== id)
       set({ [bkey]: rest } as Partial<WS>)
@@ -456,6 +473,10 @@ export const useWorkspace = create<WS>((set, get) => {
         set({ focusedChatLeafId: otherChat?.id ?? null })
       }
       get().refreshTabs()
+    },
+
+    closeViewsOfType(type) {
+      for (const rec of allRecs().filter((r) => r.type === type)) get().closeLeaf(rec.id)
     },
 
     resetLayout() {
