@@ -2376,7 +2376,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
       {/* 顶栏(路径 + 右侧动作)只在桌面渲染。移动端整行隐去,动作全并进底栏胶囊的「⋯」
           (用户拍板 2026-08-13)。这里用 JSX 门而不是 CSS media:`.amx-toolbar` 还被
           AmadeusDashboardView 用着,CSS 一刀切会连仪表盘的顶栏(含「解锁编辑」)一起藏掉。 */}
-      {barPath && !isCoarsePointer() && (
+      {barPath && !isCoarsePointer() && !leaf.params.miniSurface && (
         // 顶栏与编辑器融为一体:实色纸面底(var(--bg)),滚动时正文从其后穿过被遮住(见 CSS)。
         <div className="amx-toolbar">
           <Breadcrumb path={barPath} />
@@ -2466,6 +2466,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         /* v4 统一实例编辑器:不碰 pageStore(activePage 不设),故必须排在骨架屏判定之前。
            页面 chrome(封面/图标/标题/属性)在 UnifiedPage 内部;顶栏/菜单走上面的 barPath 门。 */
         <UnifiedPage
+          compact={!!leaf.params.miniSurface}
           key={notePath}
           path={notePath}
           initial={unifiedRoute.initial}

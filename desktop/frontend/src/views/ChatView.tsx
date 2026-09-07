@@ -527,14 +527,14 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 新对话空状态:铺满整个聊天列的绝对定位层 → 品牌图+标语落在 **view 的竖向中心**
           (2026-08-14 用户要求)。放在滚动流里只能在「输入框以上那段」居中,整体偏高。
           pointer-events:none:它盖在下面的 agent/引擎选择器与输入框之上,不能吃掉它们的点击。 */}
-      {!hasMessages && !historyLoading && <EmptyState2 title={studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
+      {!hasMessages && !historyLoading && (params.miniSurface ? <div className="t2-empty">{t('mini.chatHint')}</div> : <EmptyState2 title={studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />)}
 
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
       <div className="composer-anchor" ref={composerRef}>
         {/* Agent 选择不 gate execMode:云会话(sandbox,web/桌面云端)同样有 agent;引擎=本地 ACP 子进程,仍 host-only。 */}
-        {!hasMessages && !mvCfg.groupChat && (
+        {!params.miniSurface && !hasMessages && !mvCfg.groupChat && (
           <div className="newchat-pickers">
             {mvCfg.execMode === 'host' && availableEngines.length > 0 && (
               <EnginePicker

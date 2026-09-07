@@ -131,6 +131,8 @@ interface PluginState {
   enable(id: string): void
   disable(id: string): void
   toggle(id: string): void
+  /** Reconcile another window's persisted preference without replaying user-side automation effects. */
+  syncDisabledPreferences(): void
   isActive(id: string): boolean
   loadExternal(): Promise<void>
   reloadExternal(): Promise<void>
@@ -1067,6 +1069,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (readTangu()?.waitBackend) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
       }
+    },
+
+    syncDisabledPreferences() {
+      const disabledIds = readDisabled()
+      set({ disabledIds })
+      for (const id of [...get().activeIds]) if (disabledIds.includes(id)) teardown(id)
+      for (const plugin of get().plugins) if (!disabledIds.includes(plugin.id)) applyPref(plugin.id)
     },
 
     toggle(id) {

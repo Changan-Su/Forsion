@@ -258,7 +258,7 @@ export function TodoListView({ params }: { params?: Record<string, unknown> } = 
 
       {rows.length === 0 && (
         <div className="amx-todo-empty">
-          {t('todolist.emptyTitle')}<br />{t('todolist.emptyHintA')}<code>{t('todolist.emptyExample')}</code>{t('todolist.emptyHintB')}<code>@</code>{t('todolist.emptyHintC')}
+          {t('todolist.emptyTitle')}{!params?.miniSurface && <><br />{t('todolist.emptyHintA')}<code>{t('todolist.emptyExample')}</code>{t('todolist.emptyHintB')}<code>@</code>{t('todolist.emptyHintC')}</>}
         </div>
       )}
       {rows.length > 0 && openCount === 0 && (

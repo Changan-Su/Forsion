@@ -20,3 +20,38 @@ ctx.registerCommand({
     }
   },
 })
+
+// Mini Panel example: both surfaces use the same data and entity parameter.
+// Current hosts supply live per-view params; all optional context methods are feature-detected.
+for (const id of ['counter', 'mini-counter']) {
+  ctx.registerView({
+    id,
+    title: 'Counter',
+    mount(el, view) {
+      const zh = document.documentElement.lang.startsWith('zh')
+      let disposed = false
+      let count = 0
+      const root = document.createElement('section')
+      root.style.cssText = 'padding:16px;color:var(--text);font:13px var(--font-ui);display:grid;gap:12px;'
+      const label = document.createElement('label')
+      label.textContent = zh ? '计数器名称' : 'Counter name'
+      const input = document.createElement('input')
+      input.value = String(view?.getParams?.().counterId || 'daily')
+      input.addEventListener('input', () => view?.setParams?.({ counterId: input.value }))
+      label.append(input)
+      const value = document.createElement('output')
+      const button = document.createElement('button')
+      button.textContent = zh ? '加一' : 'Add one'
+      const render = () => { value.textContent = String(count) }
+      button.onclick = async () => {
+        button.disabled = true
+        try { await ctx.saveData({ count: count + 1 }); count++; if (!disposed) render() }
+        finally { if (!disposed) button.disabled = false }
+      }
+      root.append(label, value, button); el.append(root); render()
+      const off = view?.onParamsChanged?.((params) => { input.value = String(params.counterId || 'daily') })
+      Promise.resolve(ctx.loadData()).then((data) => { if (!disposed) { count = Number(data?.count) || 0; render() } })
+      return () => { disposed = true; off?.(); root.remove() }
+    },
+  })
+}

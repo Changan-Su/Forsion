@@ -1,3 +1,4 @@
+import { windowKind } from './windowKind'
 /**
  * 插件视图桥:pluginStore.views(平台中立的 DOM-mount 契约)→ LCL 视图注册表。
  * 桌面差异全部收在这里(与 amadeusPlugins.ts 同款纪律,vendored pluginStore 不 import @lcl):
@@ -6,10 +7,9 @@
  *    ——Dockview 的 components map 收缩时不能留活面板;
  *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区)。
  */
-import React, { useEffect, useRef } from 'react'
-import { registerView, unregisterView, useWorkspace } from '@lcl/engine'
+import React, { useEffect, useLayoutEffect, useRef } from 'react'
+import { registerView, unregisterView, useWorkspace, getActiveSpace, showInMainPanel, type ViewProps } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ExtendViewController } from '@lcl/engine'
 import type { ViewContribution } from '@amadeus/plugins/types'
 import { registerMessages, translate } from './i18n'
 
@@ -18,19 +18,39 @@ registerMessages({
 })
 
 /** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。 */
-const PluginViewHost: React.FC<{ def: ViewContribution; extendView?: ExtendViewController }> = ({ def, extendView }) => {
+const PluginViewHost: React.FC<ViewProps & { def: ViewContribution }> = ({ def, extendView, leaf, params }) => {
   const ref = useRef<HTMLDivElement>(null)
+  const current = useRef({ leaf, params })
+  current.current = { leaf, params }
+  const listeners = useRef(new Set<(params: Readonly<Record<string, unknown>>) => void>())
+  useLayoutEffect(() => { for (const notify of listeners.current) notify(params) }, [params])
   useEffect(() => {
     const el = ref.current
     if (!el) return
     let cleanup: (() => void) | void
+    let alive = true
+    const check = (): void => { if (!alive) throw new Error('View has been disposed') }
+    const isMini = windowKind() === 'mini'
     try {
-      cleanup = def.mount(el, { extendView })
+      cleanup = def.mount(el, {
+        extendView, surface: isMini ? 'mini' : 'main',
+        getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
+        setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
+        onParamsChanged: (listener) => { check(); listeners.current.add(listener); return () => { listeners.current.delete(listener) } },
+        showInMainPanel: isMini ? () => {
+          check()
+          const space = getActiveSpace()
+          if (space?.mini) showInMainPanel({ spaceId: space.id, type: space.mini.mainView.type,
+            params: { ...space.mini.mainView.params, ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } })
+        } : undefined,
+      })
     } catch (e) {
       console.error(`[plugin-view] mount "${def.id}" failed`, e)
       el.textContent = translate('pluginview.mountFailed')
     }
     return () => {
+      alive = false
+      listeners.current.clear()
       try { if (typeof cleanup === 'function') cleanup() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
       el.replaceChildren()
     }
@@ -78,7 +98,7 @@ export function syncPluginViews(): void {
         type,
         kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
         displayName: () => def.title,
-        factory: ({ extendView }) => <PluginViewHost def={def} extendView={extendView} />,
+        factory: (props) => <PluginViewHost def={def} {...props} />,
         singleton: def.singleton !== false,
         closable: true,
         // P2 联动声明:插件内相对 id → 补全命名空间(type 形如 plugin:<pid>:<vid>,pid 取中段;

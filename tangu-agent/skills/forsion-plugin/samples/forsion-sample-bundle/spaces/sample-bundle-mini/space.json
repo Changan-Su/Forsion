@@ -1,0 +1,11 @@
+{
+  "id": "sample-bundle-mini",
+  "name": { "zh": "计数器", "en": "Counter" },
+  "icon": "boxes",
+  "version": "1.0.0",
+  "layout": { "main": [{ "type": "plugin:sample-bundle:counter" }], "left": [], "right": [] },
+  "mini": {
+    "view": { "type": "plugin:sample-bundle:mini-counter", "params": { "counterId": "daily" } },
+    "mainView": { "type": "plugin:sample-bundle:counter" }
+  }
+}

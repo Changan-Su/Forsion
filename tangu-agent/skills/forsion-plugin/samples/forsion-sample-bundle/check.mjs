@@ -8,10 +8,12 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url))
 const src = readFileSync(path.join(ROOT, 'main.js'), 'utf8')
 if (/^\s*(import|export)\s/m.test(src)) { console.error('❌ main.js 必须是裸 setup 体,不得有顶层 import/export'); process.exit(1) }
 
+const views = []
 const commands = []
 const notifications = []
 const ctx = {
   registerCommand: (c) => commands.push(c),
+  registerView: (v) => views.push(v),
   notify: (m, o) => notifications.push({ m, o }),
 }
 new Function('ctx', src)(ctx)
@@ -26,6 +28,7 @@ const writes = []
 const newCommands = []
 new Function('ctx', src)({
   registerCommand: (c) => newCommands.push(c),
+  registerView: () => {},
   notify: () => {},
   app: { notify: () => {}, workFolder: () => '示例捆绑包', writeFile: async (p, t) => writes.push({ p, t }), openFile: () => {} },
 })
@@ -35,7 +38,11 @@ if (writes.length !== 1 || writes[0].p !== '示例捆绑包/你好.md') { consol
 // 旧宿主兼容:没有可选 ctx.notify 时必须回退 ctx.app.notify(且无 workFolder 时跳过写文件),不得 TypeError
 const legacyNotes = []
 const legacyCommands = []
-new Function('ctx', src)({ registerCommand: (c) => legacyCommands.push(c), app: { notify: (m) => legacyNotes.push(m) } })
+new Function('ctx', src)({ registerView: () => {}, registerCommand: (c) => legacyCommands.push(c), app: { notify: (m) => legacyNotes.push(m) } })
 await legacyCommands[0].run()
 if (legacyNotes.length !== 1) { console.error('❌ 旧宿主(无 ctx.notify)回退失败'); process.exit(1) }
 console.log('check ok — 1 cmd 注册(id 带包前缀);无 app 宿主不炸;新宿主 workFolder 落盘;旧宿主 notify 回退通过')
+
+const mini = JSON.parse(readFileSync(path.join(ROOT, 'spaces/sample-bundle-mini/space.json'), 'utf8')).mini
+if (views.length !== 2 || mini.view.type === mini.mainView.type || !views.some((v) => mini.view.type.endsWith(':' + v.id)) || !views.some((v) => mini.mainView.type.endsWith(':' + v.id))) throw new Error('Mini recipe must resolve distinct registered views')
+console.log('Mini recipe resolves both dedicated surfaces')

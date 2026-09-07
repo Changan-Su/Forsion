@@ -1,3 +1,5 @@
+import { startMiniCursorFollow, readComputerUseForeground } from './miniCursorFollow'
+import { normalizeMiniOpenOptions, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -1256,7 +1258,7 @@ function createWindow(): void {
   hardenNav(mainWindow.webContents)
   // deep link 推送门:reload(Cmd+R)换掉渲染层监听者但 webContents 不变 → 每次开载都翻回「未就绪」,
   // 等新一代渲染层来 drain(否则 push 进虚空,URL 丢失)。
-  mainWindow.webContents.on('did-start-loading', () => { deepLinkReady = false })
+  mainWindow.webContents.on('did-start-loading', () => { deepLinkReady = false; mainPanelReady = false })
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -1375,9 +1377,12 @@ async function restoreDetachedWindows(): Promise<void> {
   for (const { id, bounds } of [...persistedDetached]) createDetachedWindow({ id, bounds })
 }
 
-interface MiniOpenOptions { sessionId?: string }
+let pendingMainPanelTarget: MainPanelTarget | null = null
+let mainPanelReady = false
 
 let miniWindow: BrowserWindow | null = null
+let miniFollowing = false
+let stopMiniFollow: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
 let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
@@ -1392,13 +1397,6 @@ const MINI_CARD_HEIGHT = 420
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
-
-function normalizeMiniOpenOptions(raw: unknown): MiniOpenOptions | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const id = (raw as { sessionId?: unknown }).sessionId
-  if (typeof id !== 'string' || !id.trim()) return undefined
-  return { sessionId: id.trim() }
-}
 
 function createMiniWindow(opts?: MiniOpenOptions): void {
   miniTarget = opts
@@ -1423,18 +1421,34 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
-    if (miniTarget?.sessionId && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+    if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+  })
+  stopMiniFollow = startMiniCursorFollow(miniWindow, {
+    readActive: readComputerUseForeground,
+    cursor: () => screen.getCursorScreenPoint(),
+    workArea: (cursor) => screen.getDisplayNearestPoint(cursor).workArea,
+    onFollowing: (following) => {
+      miniFollowing = following
+      if (following) {
+        miniDock = null; miniDragging = false
+        if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
+        stopMiniPoll()
+      } else {
+        suppressMiniMoved = true
+        setTimeout(() => { suppressMiniMoved = false }, 100)
+      }
+    },
   })
   miniWindow.on('moved', onMiniMoved)
-  miniWindow.on('closed', () => { console.log('[win] mini closed'); miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
+  miniWindow.on('closed', () => { console.log('[win] mini closed'); stopMiniFollow?.(); stopMiniFollow = null; miniWindow = null; miniTarget = undefined; miniDock = null; stopMiniPoll() })
   console.log('[win] mini open')
-  loadRendererWith(miniWindow, { window: 'mini', ui: 'mobile', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
+  loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
 }
 
 function toggleMiniWindow(opts?: MiniOpenOptions): void {
   if (miniWindow && !miniWindow.isDestroyed()) {
     // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
-    if (opts?.sessionId) {
+    if (opts?.sessionId || opts?.spaceId) {
       miniTarget = opts
       if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
       miniWindow.show()
@@ -1454,7 +1468,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
-  if (!miniWindow || suppressMiniMoved) return // 程序化移动不算用户拖拽
+  if (!miniWindow || miniFollowing || suppressMiniMoved) return // 程序化移动不算用户拖拽
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
   miniSettleTimer = setTimeout(onMiniSettled, 200)
@@ -1462,7 +1476,7 @@ function onMiniMoved(): void {
 
 function onMiniSettled(): void {
   miniDragging = false
-  if (!miniWindow || miniWindow.isDestroyed()) return
+  if (!miniWindow || miniWindow.isDestroyed() || miniFollowing) return
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
   const edge = nearestEdge(b, wa)
@@ -1485,7 +1499,7 @@ function stopMiniPoll(): void {
   if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
 }
 function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniDragging || suppressMiniMoved) return
+  if (!miniWindow || miniWindow.isDestroyed() || !miniDock || miniFollowing || miniDragging || suppressMiniMoved) return
   const pt = screen.getCursorScreenPoint()
   const b = miniWindow.getBounds()
   const wa = screen.getDisplayMatching(b).workArea
@@ -3075,6 +3089,26 @@ app.whenReady().then(async () => {
   ipcMain.on('window:openMini', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return
     toggleMiniWindow(normalizeMiniOpenOptions(raw))
+  })
+  ipcMain.on('window:miniReady', (e) => {
+    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
+  })
+  ipcMain.on('window:showMainPanel', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || !raw || typeof raw !== 'object') return
+    const target = raw as MainPanelTarget
+    if (typeof target.type !== 'string' || !target.type || target.type.length > 256) return
+    pendingMainPanelTarget = { type: target.type, spaceId: typeof target.spaceId === 'string' ? target.spaceId : undefined,
+      params: target.params && typeof target.params === 'object' && !Array.isArray(target.params) ? target.params : {} }
+    showMainWindow()
+    if (mainPanelReady && mainWindow) {
+      mainWindow.webContents.send('window:mainPanelTarget', pendingMainPanelTarget)
+      pendingMainPanelTarget = null
+    }
+  })
+  ipcMain.on('window:mainPanelReady', (e) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
+    mainPanelReady = true
+    if (pendingMainPanelTarget) { e.sender.send('window:mainPanelTarget', pendingMainPanelTarget); pendingMainPanelTarget = null }
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),

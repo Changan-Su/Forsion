@@ -1074,10 +1074,14 @@ declare global {
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }>
       /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
-      openMini?(opts?: { sessionId?: string }): void
+      openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
       /** 已存在的 Mini 窗收到新的会话定向。返回取消订阅。 */
-      onMiniTarget?(cb: (opts: { sessionId?: string }) => void): () => void
+      onMiniTarget?(cb: (opts: import('../../shared/miniPanel').MiniOpenOptions) => void): () => void
       /** 关闭当前(卫星)窗口。 */
+      miniReady?(): void
+      showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void
+      onMainPanelTarget?(cb: (target: import('../../shared/miniPanel').MainPanelTarget) => void): () => void
+      mainPanelReady?(): void
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void

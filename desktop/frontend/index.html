@@ -296,6 +296,8 @@
       (function () {
         var s = document.getElementById('tangu-splash');
         if (!s) return;
+        // Mini is an extension panel: no full-application brand splash.
+        if (new URLSearchParams(location.search).get('window') === 'mini') { s.remove(); return; }
         var CYCLE = 1600;  // 与 --p2m-duration 一致
         var LEAD = 300;    // 提前于循环接缝淡出:在 logo「落定」那一刻淡出,别在接缝的空档里淡出
         var CEIL = 10000;  // 天花板:首帧永远画不出来(初始化抛错)也不能把用户锁在闪屏后面

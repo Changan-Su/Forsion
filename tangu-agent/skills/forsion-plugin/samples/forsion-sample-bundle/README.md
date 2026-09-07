@@ -69,3 +69,9 @@ sample-bundle/
 zip 整个目录(单顶层文件夹)上架市场 **amadeus-plugin** 类;桌面安装路由按包内 manifest 实测
 (最浅的 manifest.json 优先),bundle 自然落到 `~/.forsion/plugins/<slug>/`。
 真实范例:`Forsion-Instrumentality-Project/bluebird/`(视频分析四件套的捆绑化)。
+
+## Mini Panel
+
+模板附带一个显式适配的计数器 Space，`counter` 为完整视图，`mini-counter` 为紧凑视图。两者通过 `counterId` 定位，复用 `ctx.loadData/saveData`；顶部“在主面板显示”会携带当前参数。未提供 `mini` 的旧 Space 不会出现在 Mini 中。
+
+The sample includes an opt-in counter Space. Its full and compact views share data and the `counterId` parameter. The host's “Show in main panel” action preserves that parameter. Legacy Spaces remain absent from Mini until adapted.

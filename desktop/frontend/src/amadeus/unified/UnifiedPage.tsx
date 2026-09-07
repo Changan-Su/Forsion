@@ -705,7 +705,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
 }
 
 /** 行内标题 + emoji 图标 + 添加图标/封面动作(与 v3 NoteTitle 同 DOM/同 CSS,数据走 fm 管线)。 */
-function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal }: {
+function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal, compact = false }: {
+  compact?: boolean
   path: string
   icon: string | null
   cover: string | null
@@ -748,7 +749,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   }
   return (
     <div className="amx-title-wrap">
-      {icon && (
+      {!compact && icon && (
         <button
           className="amx-title-bigicon"
           title={t('unipage.title.iconAction')}
@@ -760,7 +761,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
           {icon}
         </button>
       )}
-      {(!icon || !cover) && (
+      {!compact && (!icon || !cover) && (
         <div className="amx-title-actions">
           {!icon && <button onClick={() => onSetIcon(randomEmoji())}>{t('unipage.title.addIcon')}</button>}
           {!cover && (
@@ -812,7 +813,9 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   )
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false }: {
+  /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
+  compact?: boolean
   path: string
   /** router 已读到的源文(打开即升场景是升级后的 v4 源)。 */
   initial: string
@@ -1656,7 +1659,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       {/* 画布模式满铺(用户 2026-08-17 拍板「像 AFFiNE 一样整个 view 显示」):封面/标题/属性整层
           不渲染,笔记体脱出 920px 纸面铺满面板。⚠️ 这几个槽位用 `x ? <A/> : null` 而不是把它们
           挪走 —— 静态 JSX 的子节点按位置对位,槽位在场就不会把后面的编辑器挤到别的 index 上重挂。 */}
-      {fullCanvas ? null : (
+      {fullCanvas || compact ? null : (
         <NoteCover
           page={path}
           cover={cover}
@@ -1668,6 +1671,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       {fullCanvas ? null : (
       <div className="amx-doc unified-page" data-unified-path={path}>
         <UnifiedTitle
+          compact={compact}
           path={path}
           icon={icon}
           cover={cover}
@@ -1677,7 +1681,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           onEnterBody={(kind) => setBodyFocus(kind === 'enter' ? 'body-enter' : 'start')}
           focusSignal={titleFocus}
         />
-        <AmadeusPropertiesPanel
+        {!compact && <AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
           onCommit={(yaml) => {
             pipe.fm = setForeignFm(pipe.fm, yaml)
@@ -1686,7 +1690,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             pipe.pending = true
             void writeNow()
           }}
-        />
+        />}
       </div>
       )}
       {mode === 'source' ? (

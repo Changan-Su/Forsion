@@ -23,6 +23,13 @@ export function installAmadeusPlugins(): void {
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
   installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
   installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
+  // Mini/detached renderers share preferences but own plugin instances. Revoke local views
+  // immediately when another window disables their owner; do not repeat automation mutations.
+  window.addEventListener('storage', (event) => {
+    if (event.key !== 'amadeus.plugins.disabled' && event.key !== null) return
+    usePluginStore.getState().syncDisabledPreferences()
+    void import('./userSpaces').then((m) => m.loadUserSpaces())
+  })
   const store = usePluginStore.getState()
   store.init([calloutBlocks, wordCount])
   void store.loadExternal().then(() => {

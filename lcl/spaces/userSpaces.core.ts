@@ -16,6 +16,8 @@ export interface SpaceSpec {
    *  改了 layout 的新版对**用过该 Space 的用户永远不生效**。 */
   version?: string
   minAppVersion?: string
+  /** Explicit compact surface; distinct view type, with a full-panel destination. */
+  mini?: { view: SpacePanelSpec; mainView: SpacePanelSpec; name?: string | { zh?: string; en?: string } }
   layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[] }
   requires?: { views?: string[]; plugin?: string | null }
 }
@@ -90,6 +92,22 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
   for (const r of [main, left, right]) if (typeof r === 'string') return { ok: false, error: r }
   if (!(main as SpacePanelSpec[]).length) return { ok: false, error: 'layout.main 至少要有一个视图' }
 
+  let mini: SpaceSpec['mini']
+  if (d.mini !== undefined) {
+    if (!d.mini || typeof d.mini !== 'object' || Array.isArray(d.mini)) return { ok: false, error: 'mini 必须是 {view, mainView} 对象' }
+    const m = d.mini as Record<string, unknown>
+    const view = panelList([m.view], 'mini.view')
+    const mainView = panelList([m.mainView], 'mini.mainView')
+    if (typeof view === 'string') return { ok: false, error: view }
+    if (typeof mainView === 'string') return { ok: false, error: mainView }
+    if (view[0].type === mainView[0].type) return { ok: false, error: 'mini.view 必须单独适配，不能复用 mainView 的视图类型' }
+    if (m.name !== undefined && !(typeof m.name === 'string' && m.name.trim())
+      && !(m.name && typeof m.name === 'object' && !Array.isArray(m.name)
+        && Object.values(m.name).some((v) => typeof v === 'string' && v.trim()))) return { ok: false, error: 'mini.name 必须是名称或双语对象' }
+    mini = { view: view[0], mainView: mainView[0], name: m.name as SpaceSpec['name'] | undefined }
+    // Optional adapter availability is checked dynamically; older/mobile hosts can still load the full Space.
+  }
+
   const req = d.requires as { views?: unknown } | undefined
   const reqViews = Array.isArray(req?.views) ? (req!.views as unknown[]).filter((v): v is string => typeof v === 'string') : []
   const allTypes = [...(main as SpacePanelSpec[]), ...(left as SpacePanelSpec[]), ...(right as SpacePanelSpec[])].map((p) => p.type).concat(reqViews)
@@ -103,6 +121,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
       name: name as SpaceSpec['name'],
       icon: typeof d.icon === 'string' ? d.icon : undefined,
       version: typeof d.version === 'string' ? d.version : undefined,
+      mini,
       minAppVersion: typeof d.minAppVersion === 'string' ? d.minAppVersion : undefined,
       layout: { main: main as SpacePanelSpec[], left: left as SpacePanelSpec[], right: right as SpacePanelSpec[] },
       requires: reqViews.length ? { views: reqViews } : undefined,
