@@ -7,7 +7,8 @@ import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, powerMonito
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { resolveCloudApiUrl } from './cloudApiPath.js'
-import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, open as fsOpen, unlink, rm } from 'fs/promises'
+import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
+import { writeHostTextFile } from './hostTextWrite'
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
@@ -29,7 +30,8 @@ import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from '.
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir } from './marketInstall'
-import { serveDir as codePreviewServe, servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
 import {
   collectProjectFiles, readConnectMeta, writeConnectMeta, cloudJson, makePreviewProxy, type CloudCreds,
@@ -2030,9 +2032,43 @@ app.whenReady().then(async () => {
     return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
   })
   // ── Coding Space:本地静态预览服务器(整 cwd 挂 127.0.0.1 随机端口;渲染端 iframe 加载多文件 web app)──
-  ipcMain.handle('codePreview:serve', async (_e, rootDir: string) => {
+  ipcMain.handle('codePreview:serve', async (e, rootDir: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
     if (!rootDir || typeof rootDir !== 'string') throw new Error('非法的预览根目录')
-    return codePreviewServe(rootDir)
+    if (!(await stat(rootDir)).isDirectory()) throw new Error('Preview root is not a directory')
+    // Each project gets its own origin: localStorage and simultaneous preview windows stay isolated.
+    return servePathRoot(realpathSync(rootDir))
+  })
+  const studioWatchers = new Map<number, ReturnType<typeof createCodeStudioProjectWatcher>>()
+  ipcMain.handle('codeStudio:watch', async (e, rootDir: string | null) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    if (rootDir !== null && (typeof rootDir !== 'string' || !rootDir)) throw new Error('Invalid project root')
+    let watcher = studioWatchers.get(e.sender.id)
+    if (!watcher) {
+      watcher = createCodeStudioProjectWatcher(
+        change => { if (!e.sender.isDestroyed()) e.sender.send('codeStudio:changed', change) },
+        (error, root) => {
+          if (root && !e.sender.isDestroyed()) e.sender.send('codeStudio:changed', { root, path: null, error: error.message })
+        },
+      )
+      studioWatchers.set(e.sender.id, watcher)
+      const id = e.sender.id
+      e.sender.once('destroyed', () => { studioWatchers.get(id)?.close(); studioWatchers.delete(id) })
+    }
+    await watcher.setRoot(rootDir)
+    return { root: rootDir ? realpathSync(rootDir) : null }
+  })
+  ipcMain.handle('codeStudio:versions', async (e, rootDir: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return listCodeStudioSnapshots(rootDir, join(forsionHomeDir(), 'coding-history'))
+  })
+  ipcMain.handle('codeStudio:snapshot', async (e, rootDir: string, name: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return createCodeStudioSnapshot(rootDir, join(forsionHomeDir(), 'coding-history'), name)
+  })
+  ipcMain.handle('codeStudio:restore', async (e, rootDir: string, id: string) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return restoreCodeStudioSnapshot(rootDir, join(forsionHomeDir(), 'coding-history'), id)
   })
   ipcMain.handle('codePreview:stop', () => { stopCodePreview(); return { ok: true } })
   // 单文件 HTML 预览(wsfile / Agent Desk / 笔记内嵌):把该文件**所在目录**挂到一个不可猜的令牌根下。
@@ -2183,35 +2219,9 @@ app.whenReady().then(async () => {
     const err = await shell.openPath(p)
     return err ? { ok: false, error: err } : { ok: true }
   })
-  // 写回文本文件(工作区 .md 编辑 / 新建文件):写 tmp → fsync → rename 原子替换,失败清理 tmp;
-  // expectedMtimeMs 不符**或文件已消失(被删/改名)** → 冲突不写(外部修改保护,防复活旧路径);
-  // createNew=O_EXCL 内核原子独占创建(新建绝不覆盖,无 TOCTOU)。
-  ipcMain.handle('fs:writeFile', async (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) => {
-    if (!filePath || typeof filePath !== 'string' || filePath.includes('\0') || typeof content !== 'string')
-      throw new Error('非法的写入参数')
-    if (createNew) {
-      try { await writeFile(filePath, content, { encoding: 'utf8', flag: 'wx' }) }
-      catch (e: any) { throw e?.code === 'EEXIST' ? new Error('同名文件/文件夹已存在') : e }
-      const st0 = await stat(filePath)
-      return { ok: true, mtimeMs: st0.mtimeMs }
-    }
-    if (typeof expectedMtimeMs === 'number') {
-      const cur = await stat(filePath).catch(() => null)
-      if (!cur) return { conflict: true, mtimeMs: 0 } // 基准文件已不在:视作冲突,别在旧路径复活
-      if (Math.abs(cur.mtimeMs - expectedMtimeMs) > 1) return { conflict: true, mtimeMs: cur.mtimeMs }
-    }
-    const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
-    try {
-      const fh = await fsOpen(tmp, 'w')
-      try { await fh.writeFile(content, 'utf8'); await fh.sync() } finally { await fh.close() }
-      await rename(tmp, filePath)
-    } catch (e) {
-      await unlink(tmp).catch(() => {}) // 半写残留清理(ENOSPC/rename 失败等)
-      throw e
-    }
-    const st = await stat(filePath)
-    return { ok: true, mtimeMs: st.mtimeMs }
-  })
+  // 按路径串行,精确 mtime CAS 在 tmp fsync 后、rename 前再检查;新建仍走 wx。
+  ipcMain.handle('fs:writeFile', (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) =>
+    writeHostTextFile(filePath, content, expectedMtimeMs, createNew))
 
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   // 安全:重命名/新建只接受**单段名字**(无路径分隔符、非 . / ..),结果始终落在原目录内,杜绝越权写。

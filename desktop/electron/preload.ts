@@ -134,6 +134,15 @@ const api = {
   codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
+  codeStudioWatch: (root: string | null) => ipcRenderer.invoke('codeStudio:watch', root),
+  onCodeStudioChanged: (cb: (change: { root: string; path: string | null; error?: string }) => void) => {
+    const listener = (_e: unknown, change: { root: string; path: string | null; error?: string }) => cb(change)
+    ipcRenderer.on('codeStudio:changed', listener)
+    return () => ipcRenderer.removeListener('codeStudio:changed', listener)
+  },
+  codeStudioVersions: (root: string) => ipcRenderer.invoke('codeStudio:versions', root),
+  codeStudioSnapshot: (root: string, name: string) => ipcRenderer.invoke('codeStudio:snapshot', root, name),
+  codeStudioRestore: (root: string, id: string) => ipcRenderer.invoke('codeStudio:restore', root, id),
   // ── Forsion Connect:Coding Space 项目发布到云端托管(token 留主进程) ──
   connectMeta: (dir: string): Promise<{ slug?: string }> => ipcRenderer.invoke('connect:meta', dir),
   connectList: (): Promise<any> => ipcRenderer.invoke('connect:list'),

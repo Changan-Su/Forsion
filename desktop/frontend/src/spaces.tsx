@@ -143,9 +143,10 @@ const amadeusSpace: SpaceDefinition = {
 /** Coding Space:左=Tangu 对话(Prompt,复用 ChatView);主=Code|Preview 工作台;右=工作区文件树。
  *  模仿 Google AI Studio:左侧描述需求 → Coding Agent 生成 web app → 主区实时预览/改代码。
  *  新会话默认落 Coding Agent(不改全局 defaultSlug,只设新会话草稿)。 */
-const CODING_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'chat', params: { followActive: true, reuseKey: 'primary' } }],
+const CODING_SIDE_VIEWS: SidebarDefaults = {
+  left: [{ type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }],
   right: [{ type: 'workspace', params: {} }],
+  bottom: [{ type: 'terminal', params: {} }],
 }
 
 const codingSpace: SpaceDefinition = {
@@ -161,8 +162,9 @@ const codingSpace: SpaceDefinition = {
     ws().setSidebarDefaults(CODING_SIDE_VIEWS)
     app().selectNewChatAgent?.('coding') // 新会话默认 Coding agent
     ws().openView('code-studio', {}, 'main')
-    ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'left')
+    ws().openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left')
     ws().openView('workspace', {}, 'right')
+    ws().initializeSidebar('bottom', false)
   },
 }
 

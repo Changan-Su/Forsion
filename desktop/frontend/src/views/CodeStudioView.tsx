@@ -1,358 +1,280 @@
-/** Coding Space 主界面 —— 模仿 Google AI Studio 的 Code | Preview 双切换工作台。
- *  项目:`~/Forsion/Project/<项目>`,每个项目一个子文件夹。activeProject 为空 → 显示项目选择器(列已有 + 新建)。
- *  选/建项目即绑定一个 Coding 会话(cwd=项目);主区把项目目录挂本地静态服务器,<webview> 加载 entry(多文件真解析)。
- *  ⚠️宿体必须是 <webview>,别改回 <iframe sandbox>:sandbox 缺一个 token 就静默废掉一整类网页能力
- *  (实报:`Blocked pointer lock … 'allow-pointer-lock' permission is not set` —— FPS 项目直接不能玩),
- *  且跨源子框架被 Chromium 硬禁 file picker(「导入文件」全废)。与 wsfile / Agent Desk 的 HtmlPreview 同宿体同分区。
- *  Code:可编辑 CodeMirror,防抖写回(mtime CAS);右栏文件树点文件 → 进 Code 选中。
- *  实时跟随:Coding Agent 每写一个文件 → 刷新预览;首个 .html 自动设为入口。纯渲染端,host 缺失降级为占位。 */
+/** Coding Studio: project brief → build → real preview → evidence-based iteration → source versions. */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft } from 'lucide-react'
+import { getView, useWorkspace, type ViewProps } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
-import { Code2, Eye, RotateCw, Folder, FolderPlus, Globe, Loader2, ExternalLink } from 'lucide-react'
-import type { ViewProps } from '@lcl/engine'
-import { BROWSER_PARTITION } from '../../../shared/browser'
-import { Webview } from '../builtins/browserView'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
-import { useCodeStudio } from '../stores/codeStudioStore'
+import { useCodeStudio, type StudioMode } from '../stores/codeStudioStore'
 import { useI18n } from '../i18n'
-import { b64ToBytes } from '../services/fileKinds'
 import { parseStreamingWrite } from './streamingWrite'
-import type { UiMessage, ToolEvent } from '../types'
-
+import { ProjectLaunchpad } from './coding/ProjectLaunchpad'
+import { buildStudioDraft, type StudioBrief } from './coding/projectBrief'
+import { saveStudioBriefFile } from './coding/briefFile'
+import { StudioEditor } from './coding/StudioEditor'
+import { flushStudioEditors, getUnsavedStudioEditorPaths } from './coding/editorSession'
+import { StudioPreview } from './coding/StudioPreview'
+import { BriefPanel, ChecksPanel, HistoryPanel, PanelHeader, type StudioPanel } from './coding/StudioPanels'
+import { collectStudioWrites, inflightStudioWrite, issuePrompt, elementPrompt, joinProjectPath, projectName, projectRelative, normPath, normalizeDevUrl, type StudioIssue, type SelectedElement, type PreviewDevice } from './coding/studioModel'
+import type { UiMessage } from '../types'
+import './coding/studioMessages'
+import './coding/studio.css'
 const CodeView = lazyRetry(() => import('../components/CodeView'))
-
-/** 节流:限制值更新频率(流式代码喂给 CodeMirror ~15fps,避免每 token 全量重渲。 */
-function useThrottledValue<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value)
-  const last = useRef(0)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    const wait = ms - (Date.now() - last.current)
-    if (wait <= 0) { last.current = Date.now(); setV(value) }
-    else { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => { last.current = Date.now(); setV(value) }, wait) }
-    return () => { if (timer.current) clearTimeout(timer.current) }
-  }, [value, ms])
-  return v
-}
-const isAbsPath = (p: string): boolean => p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p)
-/** 最近一条 assistant 消息里进行中的写文件工具调用(流式源码就在它的 arguments 里)。 */
-function findInflightWrite(messages?: UiMessage[]): ToolEvent | null {
-  if (!messages) return null
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== 'assistant') continue
-    return messages[i].toolEvents?.find((e) => WRITE_TOOLS.has(e.name) && !e.done) ?? null
-  }
-  return null
-}
-
-// ── 文件写入探测(实时刷新预览)──
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'create_file', 'str_replace_editor', 'str_replace_based_edit_tool'])
-function writePathOf(ev: ToolEvent): string | null {
-  if (!ev.done || !WRITE_TOOLS.has(ev.name)) return null
-  if (ev.artifactPath) return ev.artifactPath
-  try {
-    const a = JSON.parse(ev.arguments || '{}') as Record<string, unknown>
-    const p = a.path ?? a.file_path ?? a.filename ?? a.file
-    return typeof p === 'string' ? p : null
-  } catch { return null }
-}
-const normSep = (p: string): string => p.replace(/\\/g, '/')
-const baseName = (p: string): string => normSep(p).replace(/\/$/, '').split('/').pop() || p
-function toRel(root: string, abs: string): string | null {
-  const r = normSep(root).replace(/\/$/, ''); const a = normSep(abs)
-  if (a === r) return ''
-  return a.startsWith(r + '/') ? a.slice(r.length + 1) : null
-}
-function collectWrites(messages: UiMessage[], root: string): string[] {
-  const out: string[] = []
-  for (const m of messages) for (const ev of m.toolEvents || []) {
-    const p = writePathOf(ev); if (!p) continue
-    const rel = toRel(root, p); if (rel) out.push(rel)
-  }
-  return out
-}
-const joinPath = (root: string, rel: string): string => normSep(root).replace(/\/$/, '') + '/' + rel
-
-// depth 限深 + 跳过重目录:扫描项目里的 html 作为预览入口候选。
-async function scanHtml(root: string): Promise<string[]> {
-  const found: string[] = []
-  const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', 'coverage'])
-  const walk = async (dir: string, rel: string, depth: number): Promise<void> => {
-    if (depth > 4 || found.length > 200) return
-    const entries = (await window.tangu?.listDir?.(dir).catch(() => [])) || []
-    for (const e of entries) {
-      if (e.isDir) { if (!SKIP.has(e.name) && !e.name.startsWith('.')) await walk(e.path, rel ? `${rel}/${e.name}` : e.name, depth + 1) }
-      else if (e.name.toLowerCase().endsWith('.html')) found.push(rel ? `${rel}/${e.name}` : e.name)
+const EMPTY_MESSAGES: UiMessage[] = []
+const SKIP = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', 'coverage', 'vendor'])
+async function scanFiles(root: string): Promise<string[]> {
+  const files: string[] = []
+  async function walk(dir: string, prefix: string, depth: number): Promise<void> {
+    if (depth > 6 || files.length >= 600) return
+    const list = await window.tangu!.listDir!(dir)
+    for (const item of list) {
+      if (files.length >= 600) break
+      if (item.name.startsWith('.') || SKIP.has(item.name)) continue
+      const relative = prefix + item.name
+      if (!projectRelative(root, item.path)) continue
+      if (item.isDir) await walk(item.path, relative + '/', depth + 1)
+      else files.push(relative)
     }
   }
   await walk(root, '', 0)
-  return found.sort()
+  return files.sort((a, b) => a.localeCompare(b))
 }
-const pickEntry = (list: string[]): string | null =>
-  list.find((f) => f === 'index.html' || f.endsWith('/index.html')) || list[0] || null
-
-// ── 项目选择器(activeProject 为空时的空态)──
-/** 预览宿体。重载脉冲走 `reload()`,不靠换 key 重挂:`<webview>` 是**独立进程**,每次保存/写盘
- *  重开一个进程是实打实的开销(iframe 时代换 key 无所谓)。URL 变了才重挂——那本来就是全新加载。
- *  ⚠️必须是**独立组件**:CodeStudioView 里 `if (!root) return <ProjectPicker/>` 在前,把这几个
- *  hook 写在它后面 = Hooks 顺序违规,选项目那一下必崩(codex High-1 实报)。 */
-function PreviewFrame({ url, nonce }: { url: string; nonce: number }) {
-  const frame = useRef<HTMLElement | null>(null)
-  const seen = useRef({ url, nonce })
+function useThrottled<T>(value: T): T {
+  const [display, setDisplay] = useState(value)
+  const last = useRef(0)
   useEffect(() => {
-    const prev = seen.current
-    seen.current = { url, nonce }
-    if (prev.url !== url || prev.nonce === nonce) return
-    try { (frame.current as unknown as { reload(): void } | null)?.reload() } catch { /* 尚未附着 */ }
-  }, [url, nonce])
-  return (
-    <Webview
-      ref={frame} key={url} className="csx-frame" src={url}
-      partition={BROWSER_PARTITION} allowpopups="true" style={{ display: 'flex' }}
-    />
-  )
+    const wait = Math.max(0, 80 - (Date.now() - last.current))
+    const timer = setTimeout(() => { last.current = Date.now(); setDisplay(value) }, wait)
+    return () => clearTimeout(timer)
+  }, [value])
+  return display
 }
-
-function ProjectPicker({ root }: { root: string | null }) {
-  const { t } = useI18n()
-  const openProject = useCodeStudio((s) => s.openProject)
-  const [projects, setProjects] = useState<Array<{ name: string; path: string }>>([])
-  const [creating, setCreating] = useState(false)
-  const [name, setName] = useState('')
-  const [err, setErr] = useState<string | null>(null)
-
-  const refresh = useCallback(async () => {
-    if (!root) { setProjects([]); return }
-    const entries = (await window.tangu?.listDir?.(root).catch(() => [])) || []
-    setProjects(entries.filter((e) => e.isDir && !e.name.startsWith('.')).map((e) => ({ name: e.name, path: e.path })))
-  }, [root])
-  useEffect(() => { void refresh() }, [refresh])
-
-  const create = async (): Promise<void> => {
-    const n = name.trim()
-    if (!n || !root) return
-    try {
-      const r = await window.tangu?.mkdirHost?.(root, n)
-      setCreating(false); setName(''); setErr(null)
-      if (r?.path) openProject(r.path, n)
-    } catch (e) { setErr((e as Error)?.message || String(e)) }
-  }
-
-  return (
-    <div className="csx-picker">
-      <div className="csx-picker-head">
-        <span className="csx-picker-title">{t('coding.projects')}</span>
-        {/* 设备页无 mkdirHost:新建工程是通向空处的死控件,藏掉 */}
-        {!!window.tangu?.mkdirHost && (
-          <button className="csx-newproj" onClick={() => { setCreating(true); setErr(null) }}><FolderPlus size={14} />{t('coding.newProject')}</button>
-        )}
-      </div>
-      {creating && (
-        <div className="csx-newrow">
-          <input
-            autoFocus className="csx-newinput" placeholder={t('coding.projectName')} value={name}
-            onChange={(e) => { setName(e.target.value); setErr(null) }}
-            onKeyDown={(e) => { if (e.key === 'Enter') void create(); else if (e.key === 'Escape') { setCreating(false); setName(''); setErr(null) } }}
-          />
-          <button className="csx-newok" onClick={() => void create()}>{t('coding.create')}</button>
-        </div>
-      )}
-      {err && <div className="csx-newerr">{err}</div>}
-      {projects.length === 0 && !creating
-        ? <div className="csx-empty">{t('coding.noProjects')}</div>
-        : (
-          <div className="csx-projlist">
-            {projects.map((p) => (
-              <button key={p.path} className="csx-projcard" onClick={() => openProject(p.path, p.name)}>
-                <Folder size={16} /><span>{p.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
-    </div>
-  )
-}
-
 export function CodeStudioView(_: ViewProps) {
   const { t } = useI18n()
-  const activeId = useApp((s) => s.activeId)
-  const messages = useApp((s) => (activeId ? s.messagesBySession[activeId] : undefined))
-
-  const projectsRoot = useCodeStudio((s) => s.projectsRoot)
-  const setProjectsRoot = useCodeStudio((s) => s.setProjectsRoot)
-  const root = useCodeStudio((s) => s.activeProject) // 预览/文件根 = 当前项目
-  const closeProject = useCodeStudio((s) => s.closeProject)
-  const mode = useCodeStudio((s) => s.mode)
-  const setMode = useCodeStudio((s) => s.setMode)
-  const entry = useCodeStudio((s) => s.entry)
-  const setEntry = useCodeStudio((s) => s.setEntry)
-  const activeFile = useCodeStudio((s) => s.activeFile)
-  const reloadNonce = useCodeStudio((s) => s.reloadNonce)
-  const reload = useCodeStudio((s) => s.reload)
-
-  const [origin, setOrigin] = useState<string | null>(null)
-  const [htmlFiles, setHtmlFiles] = useState<string[]>([])
-  const [showPublish, setShowPublish] = useState(false)
-  const hasHost = !!window.tangu?.codePreviewServe
-
-  // 首次解析项目根 ~/Forsion/Project。
+  const root = useCodeStudio(s => s.activeProject)
+  const projectsRoot = useCodeStudio(s => s.projectsRoot)
+  const projects = useCodeStudio(s => s.projects)
+  const recentProjects = useMemo(() => Object.entries(projects).sort((a, b) => b[1].openedAt - a[1].openedAt).map(([path]) => ({ path, name: projectName(path) })), [projects])
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const [briefSaveError, setBriefSaveError] = useState<{ root: string; message: string } | null>(null)
+  const briefWrites = useRef(new Set<string>())
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   useEffect(() => {
+    let live = true
     if (projectsRoot || !window.tangu?.codeProjectsRoot) return
-    void window.tangu.codeProjectsRoot().then((r) => setProjectsRoot(r)).catch(() => {})
-  }, [projectsRoot, setProjectsRoot])
-
-  // 左侧对话跟随当前项目:切回 Coding Space(或活动会话在别处漂移过)时,把对话重绑回本项目;
-  // 没选项目(项目选择器态)→ 左侧回「新对话」待机,不显示别处漂来的旧会话。
-  useEffect(() => {
-    if (root) useCodeStudio.getState().bindChatToProject(root, baseName(root))
-    else useCodeStudio.getState().idleChat()
-  }, [root])
-
-  // 项目变 → 起/切静态服务器,重扫入口。切根后 origin 不变(同端口),同名 index.html 会导致 src 不变 → 主动 reload。
-  useEffect(() => {
-    if (!root || !hasHost) { setOrigin(null); setHtmlFiles([]); return }
-    let cancel = false
-    void window.tangu!.codePreviewServe!(root).then((r) => { if (!cancel) { setOrigin(r.origin); reload() } }).catch(() => {})
-    void scanHtml(root).then((list) => {
-      if (cancel) return
-      setHtmlFiles(list)
-      const cur = useCodeStudio.getState().entry
-      if (!cur || !list.includes(cur)) setEntry(pickEntry(list))
-    })
-    return () => { cancel = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root, hasHost])
-
-  // 实时跟随 agent 写盘:新 html 补入口、刷新预览。
-  const writeSig = useMemo(() => (root && messages ? collectWrites(messages, root).join('|') : ''), [messages, root])
-  useEffect(() => {
-    if (!root || !messages) return
-    const rel = collectWrites(messages, root)
-    if (!rel.length) return
-    const htmls = rel.filter((r) => r.endsWith('.html'))
-    if (htmls.length) {
-      setHtmlFiles((prev) => Array.from(new Set([...prev, ...htmls])).sort())
-      if (!useCodeStudio.getState().entry) setEntry(htmls.find((h) => h.endsWith('index.html')) || htmls[0])
-    }
-    reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [writeSig])
-
-  // ── 流式:agent 正在写的文件,边写边在 Code 面板显示(AI Studio 式)──
-  const inflight = useMemo(() => findInflightWrite(messages), [messages])
-  const inflightId = inflight?.id ?? null
-  const throttledArgs = useThrottledValue(inflight?.arguments ?? '', 66)
-  const streaming = useMemo(() => {
-    if (!inflightId) return null
-    const { path, content } = parseStreamingWrite(throttledArgs)
-    if (content == null) return null
-    const abs = path ? (isAbsPath(path) ? path : root ? joinPath(root, path) : path) : null
-    if (abs && root && toRel(root, abs) == null) return null // 写到本项目之外 → 不显示
-    const rel = abs && root ? toRel(root, abs) : path ?? null
-    return { abs, rel, content: content.length > 500_000 ? content.slice(-500_000) : content }
-  }, [inflightId, throttledArgs, root])
-  const isStreaming = !!streaming
-  const streamAbs = streaming?.abs ?? null
-  // 开始流式 → 切到 Code 看生成;选中该文件(流式结束后无缝接上磁盘可编辑版)。
-  useEffect(() => {
-    if (isStreaming && useCodeStudio.getState().mode !== 'code') useCodeStudio.getState().setMode('code')
-  }, [isStreaming])
-  useEffect(() => {
-    if (streamAbs) useCodeStudio.getState().setActiveFile(streamAbs)
-  }, [streamAbs])
-
-  // ── Code 面板:内容加载 + 防抖写回 ──
-  const codeFile = activeFile || (entry && root ? joinPath(root, entry) : null)
-  const [text, setText] = useState('')
-  const [mtime, setMtime] = useState<number | undefined>(undefined)
-  const loadedRef = useRef<string | null>(null)
-  const dirtyRef = useRef(false)
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => {
-    let cancel = false
-    loadedRef.current = null; dirtyRef.current = false
-    if (isStreaming || !codeFile || !window.tangu?.readHostFile) { setText(''); return } // 流式期间不读盘(文件尚未落定);结束(isStreaming→false)后本 effect 重跑读最终版
-    void window.tangu.readHostFile(codeFile).then((r) => {
-      if (cancel || !r) return
-      if (r.tooLarge) { setText(''); loadedRef.current = null; return }
-      setText(new TextDecoder().decode(b64ToBytes(r.content)))
-      setMtime(r.mtimeMs); loadedRef.current = codeFile
-    }).catch(() => {})
-    return () => { cancel = true }
-  }, [codeFile, isStreaming])
-
-  const onCode = (v: string): void => {
-    setText(v)
-    if (loadedRef.current !== codeFile || !codeFile) return
-    dirtyRef.current = true
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(async () => {
-      const r = await window.tangu?.writeHostFile?.(codeFile, v, mtime).catch(() => null)
-      dirtyRef.current = false
-      if (r?.conflict) {
-        // 外部(agent)已改盘:以磁盘为准重载(丢本地编辑)。ponytail: dev 预览的可接受权衡,同时编辑罕见。
-        const fresh = await window.tangu?.readHostFile?.(codeFile).catch(() => null)
-        if (fresh && !fresh.tooLarge) { setText(new TextDecoder().decode(b64ToBytes(fresh.content))); setMtime(fresh.mtimeMs) }
-        return
-      }
-      if (r?.mtimeMs) { setMtime(r.mtimeMs); reload() } // 保存成功 → 刷新预览
-    }, 800)
+    void window.tangu.codeProjectsRoot().then(path => { if (live) { useCodeStudio.getState().setProjectsRoot(path); setError('') } }).catch(e => { if (live) setError(String(e.message || e)) })
+    return () => { live = false }
+  }, [projectsRoot, retry])
+  useEffect(() => { if (!root) useCodeStudio.getState().idleChat() }, [root])
+  const saveCreatedBrief = async (path: string, brief: StudioBrief): Promise<void> => {
+    path = normPath(path)
+    if (briefWrites.current.has(path)) return
+    briefWrites.current.add(path)
+    setBriefSaveError(old => old?.root === path ? null : old)
+    try {
+      // Queue only after the portable brief is durable. Project switches must never hand this prompt to another project.
+      await saveStudioBriefFile(path, brief)
+      if (alive.current && useCodeStudio.getState().activeProject === path) useCodeStudio.getState().queuePrompt(buildStudioDraft(brief))
+    } catch (e) {
+      if (alive.current) setBriefSaveError({ root: path, message: String((e as Error).message || e) })
+    } finally { briefWrites.current.delete(path) }
   }
-  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current) }, [])
+  const create = (path: string, name: string, brief: StudioBrief) => {
+    useCodeStudio.getState().openProject(path, name)
+    useCodeStudio.getState().updateProject({ brief })
+    void saveCreatedBrief(path, brief)
+  }
+  if (root) return <ProjectStudio key={root} root={root} briefSaveError={briefSaveError?.root === root ? briefSaveError.message : ''} retryBrief={() => {
+    const brief = useCodeStudio.getState().projects[root]?.brief
+    if (brief) void saveCreatedBrief(root, brief)
+  }} />
+  return <div className="csu-launch-root">{error && <div className="csu-error" role="alert">{t('studio.loadError', { error })}<button onClick={() => setRetry(n => n + 1)}>{t('studio.retry')}</button></div>}<ProjectLaunchpad root={projectsRoot} recentProjects={recentProjects} onOpen={(path, name) => useCodeStudio.getState().openProject(path, name)} onCreate={create} /></div>
+}
+function ProjectStudio({ root, briefSaveError, retryBrief }: { root: string; briefSaveError: string; retryBrief(): void }) {
+  const { t } = useI18n()
+  const activeId = useApp(s => s.activeId)
+  const session = useApp(s => s.sessions.find(item => item.id === s.activeId))
+  const messages = useApp(s => activeId && normPath(session?.project_path || '') === normPath(root) ? s.messagesBySession[activeId] || EMPTY_MESSAGES : EMPTY_MESSAGES)
+  const running = useApp(s => s.sessions.some(item => normPath(item.project_path || '') === normPath(root) && !!s.runningBySession[item.id]))
+  const mode = useCodeStudio(s => s.mode)
+  const entry = useCodeStudio(s => s.entry)
+  const activeFile = useCodeStudio(s => s.activeFile)
+  const prefs = useCodeStudio(s => s.projects[root])
+  const reloadNonce = useCodeStudio(s => s.reloadNonce)
+  const [origin, setOrigin] = useState<string | null>(null)
+  const [files, setFiles] = useState<string[]>([])
+  const [serveError, setServeError] = useState('')
+  const [scanError, setScanError] = useState('')
+  const [watchError, setWatchError] = useState('')
+  const [panel, setPanel] = useState<StudioPanel>(null)
+  const [issues, setIssues] = useState<StudioIssue[]>([])
+  const [description, setDescription] = useState('')
+  const [inspecting, setInspecting] = useState(false)
+  const [selected, setSelected] = useState<SelectedElement | null>(null)
+  const [change, setChange] = useState('')
+  const [previewStatus, setPreviewStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [pendingChanges, setPendingChanges] = useState(false)
+  const [fileRevision, setFileRevision] = useState(0)
+  const [showPublish, setShowPublish] = useState(false)
+  const [urlDraft, setUrlDraft] = useState(prefs.devUrl)
+  const [urlError, setUrlError] = useState('')
+  const [scanNonce, setScanNonce] = useState(0)
+  const [serveNonce, setServeNonce] = useState(0)
+  const [watchNonce, setWatchNonce] = useState(0)
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
-  // 未选项目 → 项目选择器。
-  if (!root) return <ProjectPicker root={projectsRoot} />
-
-  const previewUrl = origin && entry ? `${origin}/${entry.split('/').map(encodeURIComponent).join('/')}` : null
-
-  return (
-    <div className="csx">
-      <div className="csx-head">
-        <button className="csx-proj" title={t('coding.switchProject')} onClick={() => closeProject()}><Folder size={13} />{baseName(root)}</button>
-        <div className="csx-seg">
-          <button className={mode === 'code' ? 'active' : ''} onClick={() => setMode('code')}><Code2 size={13} />{t('coding.code')}</button>
-          <button className={mode === 'preview' ? 'active' : ''} onClick={() => setMode('preview')}><Eye size={13} />{t('coding.preview')}</button>
-        </div>
-        <div className="csx-title">
-          {isStreaming
-            ? <span className="csx-genbadge"><Loader2 size={13} className="csx-spin" />{t('coding.generating')}{streaming?.rel ? ` · ${streaming.rel}` : ''}</span>
-            : mode === 'preview'
-              ? (htmlFiles.length > 1
-                ? <select className="csx-entry" value={entry || ''} onChange={(e) => setEntry(e.target.value || null)}>
-                    {htmlFiles.map((f) => <option key={f} value={f}>{f}</option>)}
-                  </select>
-                : <span className="csx-path">{entry || t('coding.noEntry')}</span>)
-              : <span className="csx-path">{codeFile ? (toRel(root, codeFile) ?? codeFile) : t('coding.noFile')}</span>}
-        </div>
-        {mode === 'preview' && !isStreaming && <button className="icon-btn" title={t('coding.reload')} onClick={() => reload()}><RotateCw size={15} /></button>}
-        {/* 在系统浏览器里调试:同一台本地预览服务器(window.forsion 同样可用,走桌面登录态) */}
-        {mode === 'preview' && !isStreaming && !!previewUrl && !!window.tangu?.openExternal && (
-          <button className="icon-btn" title={t('preview.openInBrowser')} onClick={() => void window.tangu!.openExternal!(previewUrl)}><ExternalLink size={15} /></button>
-        )}
-        {!!window.tangu?.connectPublish && (
-          <button className="icon-btn" title={t('coding.publish')} onClick={() => setShowPublish(true)}><Globe size={15} /></button>
-        )}
+  useEffect(() => { useCodeStudio.getState().bindChatToProject(root, projectName(root)) }, [root, activeId])
+  useEffect(() => {
+    let live = true
+    setServeError('')
+    void window.tangu?.codePreviewServe?.(root).then(result => { if (live) setOrigin(result.origin) }).catch(e => { if (live) setServeError(String(e.message || e)) })
+    return () => { live = false }
+  }, [root, serveNonce])
+  useEffect(() => {
+    let live = true
+    void scanFiles(root).then(list => {
+      if (!live) return
+      setFiles(list); setScanError('')
+      const html = list.filter(path => /\.html?$/i.test(path))
+      const current = useCodeStudio.getState().entry
+      if (!current || !html.includes(current)) useCodeStudio.getState().setEntry(html.find(path => path === 'index.html') || html.find(path => path.endsWith('/index.html')) || html[0] || null)
+    }).catch(e => { if (live) setScanError(String(e.message || e)) })
+    return () => { live = false }
+  }, [root, scanNonce])
+  const refreshForChange = useCallback(() => {
+    if (!mounted.current) return
+    setFileRevision(n => n + 1); setScanNonce(n => n + 1)
+    const studio = useCodeStudio.getState()
+    if (studio.activeProject !== root) return
+    studio.updateProject({ checks: {} })
+    if (studio.projects[root]?.autoRefresh) { studio.reload(); setPendingChanges(false) }
+    else setPendingChanges(true)
+  }, [root])
+  useEffect(() => {
+    if (!window.tangu?.codeStudioWatch || !window.tangu.onCodeStudioChanged) return
+    let live = true
+    setWatchError('')
+    let canonicalRoot: string | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = window.tangu.onCodeStudioChanged(event => {
+      if (!live || normPath(event.root) !== normPath(canonicalRoot || root)) return
+      if (event.error) { setWatchError(event.error); return }
+      setWatchError('')
+      clearTimeout(timer); timer = setTimeout(refreshForChange, 400)
+    })
+    void window.tangu.codeStudioWatch(root).then(r => { if (live) canonicalRoot = r.root }).catch(e => { if (live) setWatchError(String(e.message || e)) })
+    return () => { live = false; clearTimeout(timer); off(); void window.tangu?.codeStudioWatch?.(null).catch(() => {}) }
+  }, [root, refreshForChange, watchNonce])
+  const changedFiles = useMemo(() => collectStudioWrites(messages, root), [messages, root])
+  const writeSig = changedFiles.join('|') + messages.flatMap(m => m.toolEvents || []).filter(e => e.done).map(e => e.id).join('|')
+  const previousWrite = useRef(writeSig)
+  useEffect(() => {
+    if (previousWrite.current === writeSig) return
+    previousWrite.current = writeSig
+    // The filesystem watcher also covers shell tools / external editors. Tool events are a fallback for old hosts.
+    if (!window.tangu?.codeStudioWatch) refreshForChange()
+  }, [writeSig, refreshForChange])
+  const inflight = useMemo(() => inflightStudioWrite(messages), [messages])
+  const streamArgs = useThrottled(inflight?.arguments || '')
+  const streaming = useMemo(() => {
+    if (!inflight) return null
+    const parsed = parseStreamingWrite(streamArgs)
+    if (!parsed.path || parsed.content == null) return null
+    const relative = projectRelative(root, parsed.path)
+    return relative ? { file: relative, content: parsed.content.slice(-500_000) } : null
+  }, [inflight, streamArgs, root])
+  const htmlFiles = files.filter(path => /\.html?$/i.test(path))
+  const previewUrl = prefs.devUrl || (origin && entry ? `${origin}/${entry.split('/').map(encodeURIComponent).join('/')}` : null)
+  const codeFile = activeFile || (entry ? joinProjectPath(root, entry) : files[0] ? joinProjectPath(root, files[0]) : null)
+  const waiting = messages.some(m => m.approvals?.some(a => a.status === 'pending') || m.inquiries?.some(q => q.status === 'pending'))
+  const addIssue = useCallback((issue: StudioIssue) => setIssues(old => {
+    if (old.some(item => item.message === issue.message && item.source === issue.source)) return old
+    return [...old.slice(-49), issue]
+  }), [])
+  const onPrompt = (text: string, plan?: boolean) => {
+    if (useCodeStudio.getState().activeProject !== root) return
+    const app = useApp.getState()
+    useCodeStudio.getState().bindChatToProject(root, projectName(root))
+    const id = useApp.getState().activeId
+    if (plan !== undefined) {
+      if (id) app.setSessionPlanMode(plan, id)
+      else app.setNewChatCfg(config => ({ ...config, planMode: plan }))
+    }
+    useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left')
+    useCodeStudio.getState().queuePrompt(text)
+    app.toast(t('studio.promptReady'))
+  }
+  const reload = () => { setPendingChanges(false); setIssues([]); setScanNonce(n => n + 1); setFileRevision(n => n + 1); useCodeStudio.getState().reload() }
+  const openTerminal = () => {
+    if (getView('terminal')) useWorkspace.getState().openView('terminal', { cwd: root, reuseKey: `studio:${root}` }, 'bottom')
+  }
+  const publish = async () => {
+    const saved = await flushStudioEditors(root)
+    if (!mounted.current || useCodeStudio.getState().activeProject !== root) return
+    if (!saved) {
+      const pending = getUnsavedStudioEditorPaths(root)[0]
+      if (pending) useCodeStudio.getState().openFile(pending)
+      useApp.getState().toast(t('studio.saveFirst'), true); return
+    }
+    if (prefs.devUrl) { setPanel('setup'); useApp.getState().toast(t('studio.publishStaticOnly'), true); return }
+    const projectsRoot = useCodeStudio.getState().projectsRoot
+    if (projectsRoot && !projectRelative(projectsRoot, root)) { useApp.getState().toast(t('studio.publishImported'), true); return }
+    setShowPublish(true)
+  }
+  const togglePanel = (next: StudioPanel) => setPanel(old => old === next ? null : next)
+  const panelTitles = { brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup' }
+  return <div className="csx csu" data-mode={mode}>
+    <header className="csx-head csu-head">
+      <button className="csu-project" title={t('coding.switchProject')} onClick={() => useCodeStudio.getState().closeProject()}><ArrowLeft size={15} /><span>{projectName(root)}</span></button>
+      <div className="csu-modes" role="group" aria-label={t('coding.preview')}>
+        {([['preview', Eye, 'coding.preview'], ['code', Code2, 'coding.code'], ['split', Columns2, 'studio.split']] as const).map(([value, Icon, key]) => <button key={value} aria-pressed={mode === value} onClick={() => { useCodeStudio.getState().setMode(value as StudioMode); if (value === 'code') setInspecting(false) }}><Icon size={14} /><span>{t(key)}</span></button>)}
       </div>
-      <div className="csx-body">
-        {isStreaming
-          ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={streaming!.content} fileName={streaming!.abs || streaming!.rel || 'file.txt'} autoScroll /></Suspense>
-          : mode === 'preview'
-            ? (previewUrl
-              ? <PreviewFrame url={previewUrl} nonce={reloadNonce} />
-              : <div className="csx-empty">{t('coding.emptyPreview')}</div>)
-            : (codeFile
-              // 设备页只读桥无 writeHostFile:必须锁只读 —— 否则编辑器照常吃输入而防抖保存静默蒸发(丢档假象)
-              ? <Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={text} fileName={codeFile} editable={!!window.tangu?.writeHostFile} onChange={onCode} /></Suspense>
-              : <div className="csx-empty">{t('coding.pickFile')}</div>)}
+      <div className="csu-head-actions"><button title={t('studio.project')} aria-label={t('studio.project')} aria-pressed={panel === 'brief'} onClick={() => togglePanel('brief')}><FileText size={16} /></button>
+        {!!window.tangu?.codeStudioVersions && <button title={t('studio.history')} aria-label={t('studio.history')} aria-pressed={panel === 'history'} onClick={() => togglePanel('history')}><History size={16} /></button>}
+        <button title={t('studio.checks')} aria-label={t('studio.checks')} aria-pressed={panel === 'checks'} onClick={() => togglePanel('checks')}><CheckSquare size={16} /></button>
+        {!!window.tangu?.connectPublish && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}
       </div>
-      {showPublish && (
-        <ConnectPublishDialog
-          root={root} projectName={baseName(root)} entry={entry} htmlFiles={htmlFiles}
-          onClose={() => setShowPublish(false)}
-        />
-      )}
+    </header>
+    <div className="csu-tools">
+      <div className="csu-device" role="group" aria-label={t('coding.preview')}>{([['desktop', Monitor], ['tablet', Tablet], ['phone', Smartphone]] as const).map(([device, Icon]) => <button key={device} aria-label={t(`studio.${device}`)} title={t(`studio.${device}`)} aria-pressed={prefs.device === device} onClick={() => useCodeStudio.getState().updateProject({ device: device as PreviewDevice })}><Icon size={15} /></button>)}</div>
+      <button className="csu-address" title={previewUrl || t('studio.setup')} onClick={() => togglePanel('setup')}><span>{prefs.devUrl || entry || t('studio.staticPreview')}</span><Settings2 size={13} /></button>
+      <button title={t('coding.reload')} aria-label={t('coding.reload')} onClick={reload}><RotateCw size={15} /></button>
+      <button title={t('studio.inspect')} aria-label={t('studio.inspect')} disabled={!previewUrl || mode === 'code' || previewStatus !== 'ready'} aria-pressed={inspecting} onClick={() => setInspecting(value => !value)}><MousePointer2 size={15} /></button>
+      {!!window.tangu?.openExternal && <button title={t('preview.openInBrowser')} aria-label={t('preview.openInBrowser')} disabled={!previewUrl} onClick={() => { if (previewUrl) void window.tangu!.openExternal!(previewUrl) }}><ExternalLink size={15} /></button>}
+      {!!getView('terminal') && <button title={t('studio.terminal')} aria-label={t('studio.terminal')} onClick={openTerminal}><TerminalSquare size={15} /></button>}
+      {!!window.tangu?.revealHostPath && <button title={t('studio.reveal')} aria-label={t('studio.reveal')} onClick={() => void window.tangu!.revealHostPath!(root)}><Folder size={15} /></button>}
     </div>
-  )
+    <div className="csu-status" role="status"><span className={running ? 'csu-status-running' : ''}>{running ? <Loader2 size={13} className="csx-spin" /> : <Eye size={13} />}{waiting ? t('studio.waiting') : running ? t('studio.building') : previewUrl ? t(previewStatus === 'ready' ? 'studio.previewReady' : previewStatus === 'error' ? 'studio.previewFailed' : 'studio.loading') : t('studio.previewIdle')}</span>
+      {changedFiles.length > 0 && <span className="csu-changed">{t('studio.filesChanged', { count: changedFiles.length })}</span>}
+      <span className="csu-grow" />{pendingChanges && <button onClick={reload}>{t('studio.pendingChanges')}</button>}
+      <label className="csu-live"><input type="checkbox" checked={prefs.autoRefresh} onChange={e => { useCodeStudio.getState().updateProject({ autoRefresh: e.target.checked }); if (e.target.checked && pendingChanges) reload() }} />{t('studio.autoRefresh')}</label>
+      {running && <button title={t('studio.stopped')} aria-label={t('studio.stopped')} onClick={() => { const app = useApp.getState(); for (const item of app.sessions) if (normPath(item.project_path || '') === normPath(root) && app.runningBySession[item.id]) app.stop(item.id) }}><Square size={12} /></button>}
+      <button className={issues.length ? 'csu-issue-count' : ''} onClick={() => togglePanel('issues')} aria-label={t('studio.issues')}><AlertCircle size={13} />{issues.length || t('studio.issues')}</button>
+    </div>
+    {(serveError || scanError || watchError) && <div role="alert" className="csu-error">{serveError || scanError ? t('studio.loadError', { error: [serveError, scanError].filter(Boolean).join('\n') }) : t('studio.watchError', { error: watchError })}<button onClick={() => { setScanNonce(n => n + 1); setServeNonce(n => n + 1); setWatchNonce(n => n + 1) }}>{t('studio.retry')}</button></div>}
+    {briefSaveError && <div role="alert" className="csu-error">{t('studio.loadError', { error: briefSaveError })}<button onClick={retryBrief}>{t('studio.retry')}</button></div>}
+    <div className="csu-workspace">
+      <div className="csu-edit-preview">
+        <section className="csu-code-pane" hidden={mode === 'preview'} aria-label={t('coding.code')}>
+          <div className="csu-filebar"><Code2 size={13} /><select aria-label={t('studio.files')} value={codeFile ? projectRelative(root, codeFile) || '' : ''} onChange={e => useCodeStudio.getState().setActiveFile(joinProjectPath(root, e.target.value))}><option value="" disabled>{t('coding.noFile')}</option>{files.map(file => <option key={file} value={file}>{file}</option>)}</select></div>
+          {streaming && (!activeFile || projectRelative(root, activeFile) === streaming.file) ? <><div className="csu-writing"><Loader2 size={13} className="csx-spin" />{t('studio.streaming', { file: streaming.file })}</div><Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={streaming.content} fileName={streaming.file} autoScroll /></Suspense></> : codeFile ? <StudioEditor path={codeFile} reloadNonce={fileRevision} onSaved={refreshForChange} /> : <div className="csx-empty">{t('coding.pickFile')}</div>}
+        </section>
+        <section className="csu-preview-pane" hidden={mode === 'code'} aria-label={t('coding.preview')}>
+          {previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => setPanel('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
+        </section>
+      </div>
+      {panel && <aside className="csu-panel"><PanelHeader title={t(panelTitles[panel])} close={() => setPanel(null)} />
+        {panel === 'brief' && <BriefPanel root={root} onPrompt={onPrompt} />}
+        {panel === 'checks' && <ChecksPanel root={root} onPrompt={text => onPrompt(text, true)} />}
+        {panel === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} />}
+        {panel === 'issues' && <div className="csu-panel-body"><p className="csu-hint">{issues.length ? t('studio.errorCount', { count: issues.length }) : t('studio.noIssues')}</p>{issues.map(issue => <div className="csu-issue" key={issue.id}><AlertCircle size={14} /><div><pre>{issue.message}</pre>{issue.source && <small>{issue.source}</small>}</div></div>)}<label className="csu-field"><span>{t('studio.issueDescription')}</span><textarea rows={4} value={description} onChange={e => setDescription(e.target.value)} /></label><div className="csu-actions"><button className="csu-primary" onClick={() => onPrompt(issuePrompt(issues, description, previewUrl), false)}>{t('studio.diagnose')}</button><button onClick={() => setIssues([])}>{t('studio.clearIssues')}</button></div></div>}
+        {panel === 'setup' && <div className="csu-panel-body"><label className="csu-field"><span>{t('studio.entry')}</span><select value={entry || ''} onChange={e => { useCodeStudio.getState().setEntry(e.target.value); useCodeStudio.getState().updateProject({ devUrl: '' }); setUrlDraft('') }}><option value="" disabled>{t('coding.noEntry')}</option>{htmlFiles.map(file => <option key={file}>{file}</option>)}</select></label><h3>{t('studio.devServer')}</h3><p className="csu-hint">{t('studio.devHint')}</p><label className="csu-field"><span>{t('studio.devUrl')}</span><input placeholder="http://localhost:5173" value={urlDraft} onChange={e => { setUrlDraft(e.target.value); setUrlError('') }} /></label>{urlError && <p className="csu-error">{urlError}</p>}<div className="csu-actions"><button className="csu-primary" onClick={() => { const url = normalizeDevUrl(urlDraft); if (url === null) { setUrlError(t('studio.invalidUrl')); return } useCodeStudio.getState().updateProject({ devUrl: url }); setIssues([]); setPanel(null) }}>{t('studio.apply')}</button><button onClick={() => { setUrlDraft(''); useCodeStudio.getState().updateProject({ devUrl: '' }); setIssues([]) }}>{t('studio.useStatic')}</button></div>{!!getView('terminal') && <button onClick={openTerminal}><TerminalSquare size={14} />{t('studio.terminal')}</button>}</div>}
+      </aside>}
+    </div>
+    {selected && <div className="csu-selection"><div className="csu-selection-head"><MousePointer2 size={15} /><strong>{t('studio.selection')}</strong><code>{selected.selector}</code><button title={t('studio.close')} aria-label={t('studio.close')} onClick={() => { setSelected(null); setChange('') }}><X size={15} /></button></div>{selected.text && <p>{selected.text.slice(0, 180)}</p>}<div className="csu-actions"><input aria-label={t('studio.changePlaceholder')} placeholder={t('studio.changePlaceholder')} value={change} onChange={e => setChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && change.trim()) { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') } }} /><button className="csu-primary" disabled={!change.trim()} onClick={() => { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') }}>{t('studio.addToChat')}</button></div></div>}
+    {showPublish && <ConnectPublishDialog root={root} projectName={projectName(root)} entry={entry} htmlFiles={htmlFiles} onClose={() => setShowPublish(false)} />}
+  </div>
 }

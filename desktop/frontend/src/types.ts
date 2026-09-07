@@ -961,6 +961,11 @@ declare global {
       codePreviewStop?(): Promise<{ ok: boolean }>
       /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
       codeProjectsRoot?(): Promise<string>
+      codeStudioWatch?(root: string | null): Promise<{ root: string | null }>
+      onCodeStudioChanged?(cb: (change: { root: string; path: string | null; error?: string }) => void): () => void
+      codeStudioVersions?(root: string): Promise<Array<{ id: string; name: string; createdAt: number; files: number }>>
+      codeStudioSnapshot?(root: string, name: string): Promise<{ id: string; name: string; createdAt: number; files: number }>
+      codeStudioRestore?(root: string, id: string): Promise<{ restored: string[]; deleted: string[]; conflicts: string[]; backupId: string }>
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>
       connectList?(): Promise<{ ok: boolean; code?: string; detail?: string; base?: string; handle?: string | null; apps?: Array<{ slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string; listing_status?: string | null; listing_summary?: string | null; listing_note?: string | null }>; used?: number; limit?: number; tier?: string }>
