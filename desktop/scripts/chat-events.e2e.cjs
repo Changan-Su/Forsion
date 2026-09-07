@@ -92,7 +92,7 @@ async function main() {
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.waitForTimeout(1200)
-    if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
+    if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
     }
@@ -112,8 +112,7 @@ async function main() {
         path: 'src/app.ts', old_string: 'const a = 1\nconst b = 2', new_string: 'const a = 42\nconst b = 2',
       }) } },
       { type: 'tool_result', payload: { id: 't1', result: 'edited src/app.ts', elapsedMs: 12 } },
-      // 同一轮里再来一次**多文件** apply_patch:A1b/A1c 靠它,且不必额外发一条消息
-      //(多发一条会让悬浮侧栏收回去,后面 A6 用不了搜索框 —— 实测点 .dv-edge-left 请不回来)
+      // 同一轮里再来一次**多文件** apply_patch:A1b/A1c 靠它,且不必额外发一条消息。
       { type: 'tool_call', payload: { id: 't9', name: 'apply_patch', arguments: JSON.stringify({
         patch: '*** Begin Patch\n*** Update File: a.txt\n@@\n baseline\n+MULTI-A\n*** Add File: c.txt\n+MULTI-C\n*** End Patch',
       }) } },
@@ -196,27 +195,6 @@ async function main() {
     check('A5 思考档降档可见(菜单里标出 → 实际生效档)', /→/.test(effortRow || ''), `effort=${JSON.stringify(effortRow)}`)
     await win.keyboard.press('Escape').catch(() => {})
     await win.waitForTimeout(300)
-
-    // ── 场景 A2:内容搜索失败 ≠ 无结果(Codex 真机走查提的:静默转空会让人以为库里真没有)
-    stub.state.failSearch = true
-    // 侧栏是悬浮边缘态,点过聊天区后会自己收回去 —— 用之前先把它请回来(否则这里 30s 超时)。
-    // 点一次不一定成(动画/焦点),轮询几轮再放弃。
-    // A1b 已并进 A1 的剧本,不再多发消息,侧栏理应还在;保险起见留个轻量守卫
-    if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
-      await win.click('.dv-edge-left').catch(() => {})
-      await win.waitForTimeout(900)
-    }
-    const box = win.locator('.t2s-search input').first()
-    await box.click()
-    await box.fill('localstorage')
-    await win.waitForTimeout(1500)
-    const failHint = await win.locator('.t2s-hint').allTextContents().catch(() => [])
-    check('A6 内容搜索失败时如实提示(不伪装成「无匹配」)',
-      failHint.some((x) => /没跑成|failed/i.test(x)) && !failHint.some((x) => /^没有匹配|no result/i.test(x)),
-      JSON.stringify(failHint))
-    stub.state.failSearch = false
-    await box.fill('')
-    await win.waitForTimeout(500)
 
     // 把 A 场景展开的两段 diff 收回去:它们撑得页面很长,后面计划卡的按钮会被 diff 行号与悬浮输入区
     // 轮流挡住(playwright 一路重试到 30s 超时,报 "subtree intercepts pointer events")。

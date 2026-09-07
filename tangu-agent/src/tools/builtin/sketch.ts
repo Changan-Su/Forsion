@@ -15,6 +15,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
+import { presetOf } from '../../core/presetTable.js';
 
 /** GUI 客户端面(routes/runs.ts CLIENT_TAG_RE 的子集;移动原生 App 见头注刻意排除)。 */
 const GUI_CLIENT_RE = /^(desktop|web)\//;
@@ -27,8 +28,11 @@ const MAX_SKETCH_HTML_CHARS = 262_144;
  *  ⚠️planMode:计划模式有一道**集中的只读工具过滤**,sketch 本来就不在其白名单里 —— 这里跟着
  *  排除,是为了让「提示段在场 ⟺ 工具在场」这条不变式在计划模式下也成立(否则模型照着提示段
  *  去调一个不存在的工具,白烧一轮)。单测钉住两边配对。 */
-export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDepth' | 'planMode' | 'channelSession'>): boolean {
-  return GUI_CLIENT_RE.test(ctx.client || '') && !((ctx.subAgentDepth ?? 0) >= 1) && !ctx.planMode && !ctx.channelSession;
+export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDepth' | 'planMode' | 'channelSession' | 'preset'>): boolean {
+  // preset 位(PRESET_TABLE.sketch):chat 今天保留 sketch(D15),TTFT 验收线不达标时第一刀就是翻这一位——
+  // 段与工具经同一判定一起关,不许只裁一头。
+  return GUI_CLIENT_RE.test(ctx.client || '') && !((ctx.subAgentDepth ?? 0) >= 1) && !ctx.planMode && !ctx.channelSession
+    && presetOf(ctx.preset).sketch;
 }
 
 /**

@@ -161,6 +161,8 @@
    右段的语义名不同,滑块方向一样 —— 放在这里而不是那边,是为了让「本组件认哪些 data-side」
    只有一处答案。 */
 .t2s-vaultseg-thumb[data-side='canvas'] { transform: translateX(100%); }
+/* 第三个双段消费者:侧栏「Chat | Work」;Work 是右段。 */
+.t2s-vaultseg-thumb[data-side='work'] { transform: translateX(100%); }
 .t2s-vaultseg button {
   position: relative;
   z-index: 1;
@@ -587,3 +589,17 @@
 .t2sw .t2s-srow.t2s-deep { padding-block: 4px; }
 .t2sw .t2s-group-sessions,
 .t2sw .t2s-special-group { gap: 0.65px; }
+
+/* ── 侧栏 Chat/Work 模式胶囊(新对话行右侧):复用 Local/Cloud 的 `.t2s-vaultseg` 正典,
+ *    包括凹轨道、弹性滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
+.t2s-special-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.t2s-special-row .t2s-special { flex: 1; min-width: 0; }
+.t2s-side .t2s-vaultseg.t2s-mode {
+  width: 94px;
+  height: 26px;
+  flex-shrink: 0;
+  margin: 0 4px 0 0;
+}
+.t2s-side .t2s-vaultseg.t2s-mode button { padding: 0; font-size: 11.5px; line-height: 16px; }
+/* 平铺(Chat 模式)的会话列表:没有组头,与新对话行之间留一口气。 */
+.t2s-flat { padding-top: 2px; }

@@ -398,6 +398,9 @@ export interface AgentConfig {
   verifyCommand?: string
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */
   planMode?: boolean
+  /** 工作预设(**会话事实**,与引擎 core/presetTable.ts 同源):'chat'=轻聊天(正向工具面、临时工作区、答完即停、不写笔记)/
+   *  'coding'=编码 / 缺省=work。建会话时定,跑过一轮后引擎锁定(run 带别的值只警告不切)—— 换模式 = 新建会话。 */
+  preset?: 'coding' | 'chat'
   /** 群聊模式:≥2 个 Normal Agent 轮流发言、投票、可总结。host-only。 */
   groupChat?: boolean
   /** 群聊参与者 slug(≥2;含已存 Normal Agent 与临时 Agent,按顺序)。 */
@@ -432,6 +435,8 @@ export interface WorkspaceDescriptor {
   project?: string
   /** 通道种类(kind='channel')。 */
   channel?: ChannelKind
+  /** 会话分组键别名。默认本地目录在启动期变更时，旧 project_path 仍归入当前默认组。 */
+  sessionKeys?: string[]
 }
 
 /** 「Cloud 工作区」分组键哨兵(project_path 为空的会话归此组;真实本地路径永不为此值)。 */
@@ -439,6 +444,9 @@ export const CLOUD_WORKSPACE_KEY = '__cloud__'
 
 /** 「不在项目中工作」会话组。单独列哨兵,不与旧的默认 Cloud Project 会话混淆。 */
 export const ROOTLESS_WORKSPACE_KEY = '__rootless__'
+
+/** 默认本地工作区还未解析出绝对路径时的占位键。 */
+export const DEFAULT_LOCAL_WORKSPACE_KEY = '__default_ws__'
 
 /** 默认云 Project 名(新会话未选时的「Tangu」默认工作区项目;与引擎 DEFAULT_PROJECT_NAME 一致)。 */
 export const DEFAULT_CLOUD_PROJECT = 'Tangu'
@@ -449,8 +457,13 @@ export const cloudProjectKey = (project?: string | null): string =>
 
 /** 会话 → 工作区分组键:本地按 project_path;云会话按 project_name 归组(旧会话
  *  project_name 为空 → 归默认 Tangu 组,文件视图仍走其 per-session 工作区,不迁移)。 */
-export const sessionWorkspaceKey = (s: { project_path?: string | null; project_name?: string | null; projectless?: boolean }): string =>
-  s.projectless ? ROOTLESS_WORKSPACE_KEY : s.project_path || cloudProjectKey(s.project_name)
+export const sessionWorkspaceKey = (
+  s: { project_path?: string | null; project_name?: string | null; projectless?: boolean },
+  workspaces?: ReadonlyArray<Pick<WorkspaceDescriptor, 'key' | 'sessionKeys'>>,
+): string => {
+  const raw = s.projectless ? ROOTLESS_WORKSPACE_KEY : s.project_path || cloudProjectKey(s.project_name)
+  return workspaces?.find((ws) => ws.key === raw || ws.sessionKeys?.includes(raw))?.key ?? raw
+}
 
 export interface MessageRecord {
   id: string
@@ -825,6 +838,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   lastThinkingLevel?: ThinkingLevel
+  /** chat 会话上次用的思考档 —— 与 work 的 lastThinkingLevel **分槽**(D36):chat 缺省 off;在 chat 里调高不污染下一个 work 会话。 */
+  lastChatThinkingLevel?: ThinkingLevel
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string

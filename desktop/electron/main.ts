@@ -355,6 +355,8 @@ interface TanguStoredConfig {
   /** 上次用的审批档 / 思考档:渲染层新建会话时据此起步(纯 UI 记忆,不进 config.json 段)。 */
   lastApprovalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   lastThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
+  /** chat 模式的思考档记忆(按 preset 分槽,与 lastThinkingLevel 互不污染)。 */
+  lastChatThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
   /** Python 来源:bundled=内置解释器(默认,免装/隔离);system=用系统已装 python。 */
@@ -434,6 +436,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
   lastThinkingLevel: '',
+  lastChatThinkingLevel: '',
   cloudUrl: '',
   sandbox: 'auto',
   pythonMode: 'bundled',
@@ -495,7 +498,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'activeWindowEnabled', // 桌面专属(前台窗口采样由 main 探)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
-  'lastApprovalMode', 'lastThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI)
+  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
 const configPath = (): string => join(app.getPath('userData'), 'tangu-desktop-config.json')
 
@@ -799,7 +802,7 @@ const UNIT_CONFIG_RW = [
   'modelId', 'asrModelId', 'visionModelId', 'visionMode', 'backgroundModelId',
   'agentDeskEnabled', 'summaryOpenIn',
   'ttsModelId', 'ttsVoice', 'ttsSpeed', 'ttsAutoSpeak', 'asrBackend',
-  'lastApprovalMode', 'lastThinkingLevel',
+  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel',
   'notesAttachmentMode', 'notesAttachmentFolder', 'notesImportPreview', 'notesDailyFolder',
   'notesWikiIncludeFiles', 'notesUpgradeV4',
 ] as const

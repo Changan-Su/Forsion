@@ -123,6 +123,7 @@
     "check:focusring": "node scripts/focus-ring.check.cjs",
     "check:dropfeedback": "node scripts/drop-feedback.check.cjs",
     "check:chatside": "node scripts/chat-sidepanel.check.cjs",
+    "check:sessionmode": "node scripts/session-mode.check.cjs",
     "check:canvas": "node scripts/e2e-editor.cjs --check=unified-canvas",
     "check:tutorial": "node scripts/e2e-editor.cjs --check=tutorial-note",
     "check:tabicon": "node scripts/e2e-editor.cjs --check=tab-icon",

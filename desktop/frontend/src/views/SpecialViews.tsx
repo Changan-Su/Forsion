@@ -68,15 +68,16 @@ export function WorkspaceDetailSpecialView() {
     deleteSession: state.deleteSession,
   })))
   const key = s.detailWsKey
-  const workspace = s.workspaces().find((w) => w.key === key) || s.defaultWorkspace()
-  const sessions = [...s.sessions, ...s.archivedSessions].filter((x) => sessionWorkspaceKey(x) === key)
+  const workspaces = s.workspaces()
+  const workspace = workspaces.find((w) => w.key === key) || s.defaultWorkspace()
+  const sessions = [...s.sessions, ...s.archivedSessions].filter((x) => sessionWorkspaceKey(x, workspaces) === key)
   return (
     <WorkspaceDetailView
       workspace={workspace}
       sessions={sessions}
       onOpenSession={focusSession}
       onNewChat={() => {
-        const w = s.workspaces().find((x) => x.key === key) || null
+        const w = workspaces.find((x) => x.key === key) || null
         s.setActiveId(null)
         s.setNewChatWs(w)
         s.setNewChatCfg(() => ({}))

@@ -6,6 +6,7 @@ import type { Tool } from '../core/types.js';
 import type { LoadedCustomTool } from './customTools.js';
 import type { LoadedMcpTool } from '../mcp/toolBridge.js';
 import type { AppProfile } from '../seams/appProfile.js';
+import type { Preset } from '../core/presetTable.js';
 
 export interface ToolContext {
   userId: string;
@@ -55,9 +56,9 @@ export interface ToolContext {
   toolsList?: string[];
   /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。 */
   channelSession?: boolean;
-  /** 工作预设:'coding'=编码任务形态(Coding Space / bench / CLI 项目模式显式传入)。
-   *  产品面工具(浏览器/笔记/收件箱等)转 deferred,提示词换 coding 契约——见 registry CODING_PRESET_DEFERRED。 */
-  preset?: 'coding';
+  /** 工作预设(会话事实,由 agentLoop 解析+锁定后传入):'coding'=编码任务形态(Coding Space / bench / CLI 项目模式),
+   *  'chat'=轻聊天形态(正向工具面 + Conversation Contract);缺省=work。分档真源 core/presetTable.ts。 */
+  preset?: Preset;
   /** 已解锁的 deferred 工具名(P0-2):**严格 run-local**,每 run 从空集起步、本 run 内经 load_tools 增量;
    *  不从历史恢复(hydrate 不带 tool_calls)。 */
   unlockedTools?: ReadonlySet<string>;

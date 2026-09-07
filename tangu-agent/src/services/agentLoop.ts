@@ -21,7 +21,8 @@ import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from 
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
-import { AUTONOMY_SECTION, CODING_CONTRACT_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, responseStyleSection } from '../profiles/promptSections.js';
+import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
@@ -180,6 +181,23 @@ function advanceQueue(sessionId: string): void {
  * 分流:有 engineId 且本形态支持(hostExec)且引擎已注册 → 委托外部 agent 引擎(ACP);否则走 Tangu 自有 loop。
  * 双取 run(此处 + runLoop 内)是有意为之:保持 runLoop 签名与缺失处理不变,getRun 为索引点查,成本可忽略。
  */
+/** chat 会话绝不委托外部引擎:ACP 分流发生在 preset 锁之前,外部 CLI 直接打真实磁盘/shell(creview 09-07 E1/F1)。
+ *  run 声明 chat、或会话存值已锁为 chat 都算;存值读不到按最严处理(不走外部引擎,回落 runLoop 由锁裁决)。
+ *  只在带 engineId 的 run 上多一次读,稳态零开销。 */
+/** run.input.agentConfig 只认普通对象;字符串/数组/数字(路由已 400,老数据兜底)一律当 {}。 */
+function plainObject(v: unknown): any {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+}
+
+export async function chatPresetLocked(sessionId: string, agentConfig: any): Promise<boolean> {
+  if (parsePreset(agentConfig?.preset) === 'chat') return true;
+  try {
+    const raw = await deps().state.getAgentConfig(sessionId);
+    const stored = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return parsePreset(stored?.preset) === 'chat';
+  } catch { return true; }
+}
+
 async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
   try {
     const run = await getRun(runId);
@@ -189,7 +207,7 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       const profile = resolveProfile((run as any).app_id) ?? deps().profile;
       const engines = deps().engines;
       // 红线:未声明 hostExec 的 profile(云端形态)→ engines 不注入/为空 → 一律回落 runLoop。
-      if (engineId && profile.capabilities.hostExec && engines?.has(engineId)) {
+      if (engineId && profile.capabilities.hostExec && engines?.has(engineId) && !(await chatPresetLocked(run.session_id, input?.agentConfig))) {
         return await externalEngineLoop(runId, ac, run, engineId);
       }
     }
@@ -210,7 +228,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   const modelId = run.model_id || '';
   const assistantId = run.assistant_message_id;
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
-  const agentConfig = input.agentConfig || {};
+  const agentConfig = plainObject(input.agentConfig);
   const engines = deps().engines!;
   let finalContent = '';
   try {
@@ -395,7 +413,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   enterRunContext(userId, runId);
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
-  const agentConfig = input.agentConfig || {};
+  const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段
   // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
   // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
@@ -422,20 +440,44 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // (老客户端/其他发起入口);run 带了而会话没存 → 把 slug 写回会话(只补这一个键,不动其余)。
   // 否则「会话生效的 agent」只活在前端易变状态里:前后轮可能换人、Historian 辅助讨论等
   // 后台消费方也解析不到正确的讨论对象。
+  // preset 是**会话事实**(借 DSH agent-preset-locked,替换方案 D9 的原地切换):空白会话由本 run 定并写进
+  // agent_config(建会话时客户端也会写);跑过一轮后存值权威——run 输入不一致时**不切**,只发一条 status 警告
+  // (中途抽换工具面 = 缓存三层全 miss + 历史 tool_use 引用的工具不在 tools 里,S2)。
+  // 稳态(存值 == run 值)零额外查询;只有缺键/不一致时才数一次消息判「空白」。
+  let preset: Preset | undefined = parsePreset(agentConfig.preset);
   try {
     const rawStored = await deps().state.getAgentConfig(sessionId);
     const stored = rawStored ? (typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored) : null;
+    const patch: Record<string, unknown> = {};
     if (!agentConfig.agentSlug && stored?.agentSlug) {
       agentConfig.agentSlug = stored.agentSlug;
     } else if (agentConfig.agentSlug && stored?.agentSlug !== agentConfig.agentSlug) {
       // 写穿(不只补空):run 带的 slug 是前端「此刻生效」的真值(显式选择都会同步 PUT),
       // 存值缺失或不一致(如曾被竞速污染成默认 agent)都以 run 为准纠偏。
-      await deps().state.setAgentConfig(
-        sessionId,
-        JSON.stringify({ ...(stored || {}), agentSlug: agentConfig.agentSlug }),
-      );
+      patch.agentSlug = agentConfig.agentSlug;
     }
-  } catch { /* 兜底失败不阻断 run */ }
+    const storedHasPreset = !!stored && Object.prototype.hasOwnProperty.call(stored, 'preset');
+    const storedPreset = parsePreset(stored?.preset);
+    if (!storedHasPreset || storedPreset !== preset) {
+      const blank = (await deps().state.countSessionMessages(sessionId)) === 0;
+      if (!blank && storedHasPreset) {
+        console.warn(`[agent-core] run=${runId} preset locked: session=${storedPreset ?? 'work'} requested=${preset ?? 'work'} (session already has messages)`);
+        void publish(runId, 'status', { warning: 'preset_locked', preset: storedPreset ?? 'work', requested: preset ?? 'work' });
+        preset = storedPreset;
+      } else {
+        patch.preset = preset ?? null; // null = 显式锁定为 work;只有缺键(老会话)才允许后来者改写一次
+      }
+    }
+    if (Object.keys(patch).length) {
+      await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...(stored || {}), ...patch }));
+    }
+  } catch (e: any) {
+    // 兜底失败不阻断 run,但要留痕:此时按 run 值跑(客户端自己声明的 preset),不是静默的
+    console.warn(`[agent-core] preset lock read/write failed, using run value session=${sessionId}:`, e?.message || e);
+  }
+  // 下游按 agentConfig.preset 读的消费方(skillLoadout / 子代理透传)拿到的必须是锁定后的有效值。
+  agentConfig.preset = preset;
+  const ps = presetOf(preset);
 
   const { activeAgentSlug, memScopeSlug } = await applyAgentActivation(
     agentConfig,
@@ -465,9 +507,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 能力闸门(红线②/④):未声明 hostExec 的 profile(云端形态)一律强制回 sandbox,杜绝云端拿到真实 FS/shell。
   const execMode: 'sandbox' | 'host' =
     agentConfig.execMode === 'host' && profile.capabilities.hostExec ? 'host' : 'sandbox';
-  // 工作预设(显式传入,不从 cwd 推断):'coding' → 编码契约替代陪伴人格、产品面工具转 deferred。
-  // 入口:bench 适配器 / 桌面 Coding Space / CLI 项目模式。缺省 undefined = 行为零变化。
-  const preset: 'coding' | undefined = agentConfig.preset === 'coding' ? 'coding' : undefined;
+  // 工作预设(preset / ps)已在上面按「会话事实」解析并锁定;分档一律查 core/presetTable,不在此处开 if。
   const cwd: string | undefined =
     typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
@@ -489,7 +529,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // 计划模式(类 Claude plan mode):工具集收敛为只读 + exit_plan_mode(toolRegistry 集中过滤),
   // custom/MCP 工具整体跳过;run 级冻结——批准退出后下一轮 run 才拿到完整工具集。
-  const planMode = !!agentConfig.planMode && profile.capabilities.hostExec;
+  const planMode = !!agentConfig.planMode && profile.capabilities.hostExec && ps.planMode;
 
   // —— Lifecycle Hooks 派发上下文（host-only；云端因 hostExec:false 在 runHooks 顶部即空判定，绝不 spawn）——
   const hookCtx = (): HookRunContext => ({ profile, execMode, cwd, sessionId, runId, agentSlug: activeAgentSlug, signal: ac.signal });
@@ -560,7 +600,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 访问,内部 agent 仍按 execMode=sandbox 过滤工具,不破 hostExec 红线。云端参与者用 inline groupTempAgents
     // (getAgent 本地文件在云端拿不到,优雅降级)。在 try 内 return → runLoop 的 finally 仍跑(flush +
     // advanceQueue + cleanup),runGroupChat 自管终态(done/failed/aborted),不碰会话队列。
-    if (agentConfig.groupChat && profile.capabilities.groupChat) {
+    // chat 预设不进群聊(PRESET_TABLE.groupChat=false):参与者的工具面不带 preset,会绕过 chat 硬闸。
+    if (agentConfig.groupChat && profile.capabilities.groupChat && ps.groupChat) {
       await runGroupChat({
         runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
         message: input.message ? String(input.message) : '',
@@ -663,7 +704,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // coding 预设 × 默认 agent:播种的陪伴人格(Tangu Arioso,"use log_event to record completed work")
     // 对编码任务是行为毒药(WB-Bench:80/80 题每题浪费一轮 log_event、分析题答成用户报告)→ 整段跳过,
     // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
-    const suppressCompanionPersona = preset === 'coding' && activeAgentSlug === DEFAULT_AGENT_SLUG;
+    const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
     if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
@@ -683,19 +724,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       } catch { /* 读失败不阻断 run */ }
     }
     ctxMark('harness');
-    // 2c) 编码契约(preset:'coding';引擎级契约,不进 guidance——同 PERSISTENCE_SECTION 的理由)
-    if (preset === 'coding') systemParts.push(CODING_CONTRACT_SECTION);
+    // 2c) preset 契约段(coding=编码契约 / chat=Conversation Contract;引擎级契约,不进 guidance——同 PERSISTENCE_SECTION 的理由)。
+    //     chat 按 D11 两形态分裁:无 docker 不提 run_python、host 形态不提工作区(与 efficiencySection(false) 保持一致)。
+    const presetContract = presetContractSection(preset, { pyExec: profile.features.sandbox, workspace: execMode === 'sandbox' });
+    if (presetContract) systemParts.push(presetContract);
     // 3) 静态指引(记忆与日志用法),置于记忆块之前以稳定前缀
     systemParts.push(...promptSections.guidance);
     // 3b) 引擎级契约段(失败恢复 + 自治校准 + 输出风格):直接注入而非经 guidance——per-app promptGuidance
     //     覆盖是整段替换,放 guidance 会被自定义 app 静默丢掉(Codex 评审 #1)。所有 run 强制在场。
-    systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, preset === 'coding' ? { noPreamble: true } : undefined));
-    // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段)。
-    if (!planMode) systemParts.push(PERSISTENCE_SECTION);
+    systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
+    // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
+    // chat 不注入(PRESET_TABLE.persistence=false:一轮=一次发言,Conversation Contract 反向要求「答完就停」)。
+    if (!planMode && ps.persistence) systemParts.push(PERSISTENCE_SECTION);
     // 3c) 可视化卡片段:与 sketch 工具**同一个判定源**(sketchEnabledFor),CLI/TUI run 两者一起缺席。
     //     常驻段管「什么时候该画 + 怎么画到下限之上」;本轮信号对比较/流程/数据形状再加一次定向提醒,
     //     不等用户必须说「画」。子代理走 subAgent.ts 自己的提示装配,天然不经过这里。
-    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession });
+    const sketchEnabled = sketchEnabledFor({ client: clientTag, planMode, channelSession, preset });
     const sketchTurnSignal = sketchEnabled ? sketchTurnSignalFor(String(input.message || '')) : undefined;
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
@@ -714,13 +758,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     专属文件夹之前:它随 cwd 变化(半稳定),且应当压过通用指引、但不越过用户本轮的话。
     //     仅 host —— 云端 sandbox 的 cwd 是临时工作区,没有用户的项目约定可读。
     //     分步读取(loadProjectDocSafe + wrapProjectDoc)是为了拿 sources/truncated 给 context 视图(H8)。
-    const projectDocInfo = execMode === 'host' ? loadProjectDocSafe(cwd) : null;
+    const projectDocInfo = execMode === 'host' && ps.hostWorkspace ? loadProjectDocSafe(cwd) : null;
     if (projectDocInfo) systemParts.push(wrapProjectDoc(projectDocInfo));
     ctxMark('project');
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
-    if (execMode === 'host' && preset !== 'coding') {
+    if (execMode === 'host' && ps.hostExtras) {
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
       let folderBlock =
@@ -805,7 +849,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     // 8b) host:注入工作区(cwd)顶层文件清单,让 agent 主动认知现有文件(修「工作区文件意识弱」)。
     //     ephemeral——随系统块每 run 重建,绝不落库。sandbox/云端不在此预拉(保留懒 hydrate),靠环境段提示按需 list_files。
-    if (execMode === 'host') {
+    //     chat(hostWorkspace=false)不注入:D11 形态(ii)下这是用户真实磁盘的文件名。
+    if (execMode === 'host' && ps.hostWorkspace) {
       try {
         const listing = await listFilesLocal(cwd || process.cwd(), '/');
         if (listing && listing !== '(empty directory)') {
@@ -819,7 +864,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 8c) host:注入该 agent 的近期日程(agents/<slug>/SCHEDULE.db;manage_schedule 工具维护)。
     //     放易变区(8b 之后)防打穿前缀缓存;文本刻意不含相对时间/lastRun——只在条目集变化或跨天时变。
     //     sandbox/云端不注入(SCHEDULE.db 不进 agentFileSync,云端读不到);coding 预设同样不注入。
-    if (execMode === 'host' && preset !== 'coding') {
+    if (execMode === 'host' && ps.hostExtras) {
       try {
         const schedDb = await loadSchedule(activeAgentSlug);
         const upcoming = schedDb ? upcomingScheduleLines(entriesOf(schedDb)) : [];
@@ -835,7 +880,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 9) 插件:已启用且带 promptSection 的插件注入各自系统提示片段(如表情包清单)。放在环境段后,
     //    随插件内容(如表情库)变化只失效最短后缀。读失败不阻断 run。
     for (const p of listPluginMetas()) {
-      if (!p.promptSection || !isPluginEnabledSync(p.id)) continue;
+      if (!ps.externalTools || !p.promptSection || !isPluginEnabledSync(p.id)) continue; // chat:插件工具进不了面,其提示段一并不注入
       try {
         const sec = await p.promptSection({ slug: activeAgentSlug, userId, execMode });
         if (sec && sec.trim()) systemParts.push(sec.trim());
@@ -977,7 +1022,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const mentionSlugs: string[] = Array.isArray(agentConfig.mentionedAgentSlugs)
       ? agentConfig.mentionedAgentSlugs.map(String)
       : [];
-    if (mentionSlugs.length && profile.capabilities.hostExec) {
+    if (mentionSlugs.length && profile.capabilities.hostExec && ps.groupChat) { // chat 无 delegate/start_discussion,指令不注入
       const mentioned = (await Promise.all(mentionSlugs.map((s) => getAgent(s).catch(() => null))))
         .filter(Boolean) as Array<{ slug: string; name: string; description?: string }>;
       if (mentioned.length) {
@@ -1008,7 +1053,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const rcTodos = await loadSessionTodos(sessionId).catch(() => [] as TodoItem[]);
       const rc = formatRuntimeContext([
         renderTodoState(rcTodos),
-        execMode === 'host' ? await collectGitState(cwd) : null,
+        execMode === 'host' && ps.hostWorkspace ? await collectGitState(cwd) : null,
       ]);
       if (rc) {
         for (let i = workingMessages.length - 1; i >= 0; i--) {
@@ -1054,9 +1099,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
 
     // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
-    // 计划模式下整体跳过(外部副作用不可知,不属于只读集)。
+    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
     let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode) {
+    if (!planMode && ps.externalTools) {
       try {
         const loaded = await loadCustomTools(appId, agentConfig);
         if (loaded.length) {
@@ -1072,7 +1117,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
     // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
     let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
-    if (deps().mcp && !planMode) {
+    if (deps().mcp && !planMode && ps.externalTools) {
       const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
       const snapshot = deps().mcp!.toolsForRun(enabledMcp);
       if (snapshot.size) {
@@ -1398,7 +1443,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
         // coding 预设:可见正文 verbosity=low(对齐 codex 模型默认,削输出);headless 调用方
         // (bench/自动化)可经 agentConfig.reasoningSummary='none' 关思考摘要。仅 Responses 直连上 wire。
-        ...(preset === 'coding' ? { verbosity: 'low' as const } : {}),
+        ...(ps.verbosity ? { verbosity: ps.verbosity } : {}),
         ...(agentConfig.reasoningSummary === 'none' ? { reasoningSummary: 'none' as const } : {}),
         signal: ac.signal,
         }),

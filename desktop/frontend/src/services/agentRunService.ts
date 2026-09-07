@@ -33,12 +33,18 @@ export const AGENT_APP_ID = 'tangu'
  * admin 的 /client-stats 按它分组。必须在**请求时**读取宿主垫片:共享模块可能比 web/mobile
  * shim 更早求值,若在模块加载时冻结,该进程之后所有请求都会被永久误记成 desktop。
  */
-export function currentClientId(): string {
-  const platform = typeof window === 'undefined' ? 'desktop' // node 环境(vitest)兜底,浏览器里恒有 window
+export type ClientPlatform = 'desktop' | 'web' | 'mobile'
+/** 端判定**单源**(方案 D6):新会话默认档(desktop→work,web/mobile→chat)据此派生。每次调用现算——同上,
+ *  提到模块级常量会把之后所有判定永久冻成 desktop;别处不许再写第二份 `window.tangu?.X` 判定,也不许
+ *  拿 currentClientId().split('/')[0] 绕。本文件在 platform-parity 的 GATE_FILES 台账里。 */
+export function currentPlatform(): ClientPlatform {
+  return typeof window === 'undefined' ? 'desktop' // node 环境(vitest)兜底,浏览器里恒有 window
     : window.tangu?.mobile ? 'mobile'
     : window.tangu?.cloudWeb ? 'web'
     : 'desktop'
-  return `${platform}/${CHANGELOG[0]?.version || '0'}`
+}
+export function currentClientId(): string {
+  return `${currentPlatform()}/${CHANGELOG[0]?.version || '0'}`
 }
 
 /** /health 之后追打的带鉴权探针:任一需要 authMiddleware 的轻量 GET 即可(special/config 无副作用、体积小)。 */

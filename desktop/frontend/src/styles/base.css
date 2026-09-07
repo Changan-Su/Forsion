@@ -4558,3 +4558,7 @@ body[data-file-drag] .shell-work::after {
       · changelog      根就是滚动器,但 `style={{padding:24}}` 是内联的,样式表改不动它的 padding-top。
       · amadeus-drawing Excalidraw 在画布顶部自绘浮动 UI 岛,是第三方 DOM,压不住也不该压。
       · amadeus-plugin-file 内容整块由插件 mount() 画,宿主不知道里面是什么。 */
+
+/* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
+.composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }
+.composer-menu .menu-item:disabled:hover { background: none; }

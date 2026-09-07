@@ -77,7 +77,7 @@ export const listSessions = (cfg: TanguDesktopConfig, archived = false) =>
 
 export const createSession = (
   cfg: TanguDesktopConfig,
-  init?: { title?: string; model_id?: string; emoji?: string; project_path?: string; project_name?: string; projectless?: boolean },
+  init?: { title?: string; model_id?: string; emoji?: string; project_path?: string; project_name?: string; projectless?: boolean; agent_config?: AgentConfig },
 ) =>
   request<{ session: SessionRecord }>(cfg, '/agent/sessions', {
     method: 'POST',

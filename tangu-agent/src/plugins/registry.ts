@@ -51,7 +51,7 @@ export const pluginsNeedingRestart = new Set<string>();
 export function registerPlugin(meta: PluginMeta): void {
   const m: PluginMeta = { source: 'builtin', scopes: ['global'], ...meta };
   REGISTRY.set(m.id, m);
-  if (m.toolProvider) registerToolProvider(m.toolProvider);
+  if (m.toolProvider) registerToolProvider({ ...m.toolProvider, origin: 'plugin' }); // 打 plugin 标:chat 正向面只认核心 provider
 }
 
 /** 注销插件元数据(卸载用)。tool provider 无法反注册 —— 完整移除需重启;删 meta 后 isPluginEnabledSync 不再落回 defaultEnabled,工具门禁即刻失效。 */

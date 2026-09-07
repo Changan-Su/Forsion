@@ -37,7 +37,8 @@ import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, mov
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace } from '../stores/appStore'
+import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
+import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { Composer2 } from './chat2/Composer2'
@@ -96,6 +97,8 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
     newChatWs: state.newChatWs,
     newChatCfg: state.newChatCfg,
     newChatModel: state.newChatModel,
+    sessionMode: state.sessionMode,
+    setSessionMode: state.setSessionMode,
     engines: state.engines,
     engineCaps: state.engineCaps,
     agentDefs: state.agentDefs,
@@ -114,13 +117,15 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
     openSettings: state.openSettings,
   })))
 
-  const cloud = s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless'
-  const config = useMemo(() => withAmadeusWorkspace({
+  // 模式先于工作区(与 ChatView 空态、send() 同源 newSessionPreset):chat 恒 sandbox + 无根。
+  const preset = newSessionPreset(s.sessionMode, s.newChatWs, currentPlatform())
+  const cloud = preset === 'chat' || s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless'
+  const config = useMemo(() => withAmadeusWorkspace(applyPreset({
     execMode: cloud ? 'sandbox' : 'host',
-    ...stickyDefaults(s.desktopConfig, !cloud),
+    ...stickyDefaults(s.desktopConfig, !cloud, preset),
     cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
     ...s.newChatCfg,
-  }, vaultRoot), [cloud, s.desktopConfig, s.newChatCfg, s.newChatWs?.path, vaultRoot])
+  }, preset), vaultRoot), [cloud, preset, s.desktopConfig, s.newChatCfg, s.newChatWs?.path, vaultRoot])
   const modelId = newChatModelId(s) || ''
   const visibleModels = !s.modelsResp?.models
     ? null
@@ -181,6 +186,8 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         onVerifyCommandChange={(cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
         planMode={config.planMode}
         onPlanModeChange={(on) => s.setNewChatCfg((c) => ({ ...c, planMode: on }))}
+        preset={config.preset}
+        onPresetChange={(p) => s.setSessionMode(p)}
         voiceMode={voiceOn}
         onVoiceModeChange={agentSlug ? (on) => void s.setVoiceMode(agentSlug, on) : undefined}
         groupChat={config.groupChat}

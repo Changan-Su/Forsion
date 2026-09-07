@@ -95,7 +95,7 @@ async function backToChat(win) {
   if (process.env.MEDIACITE_DEBUG) {
     const d = await win.evaluate(() => ({
       srows: document.querySelectorAll('.t2s-srow').length,
-      search: document.querySelectorAll('.t2s-search input').length,
+      sessionMode: document.querySelectorAll('.t2s-mode').length,
       t2: document.querySelectorAll('.t2-content').length,
       back: [...document.querySelectorAll('button,[role=button]')].map((b) => b.className?.toString?.() || '').filter((c) => /back|nav|prev/i.test(c)).slice(0, 8),
     }))
@@ -193,7 +193,7 @@ async function main() {
     // 「上次 Space」谁最后用谁说了算 —— 不显式切,断言会跑在根本没有聊天侧栏的界面上。
     const spaceBtn = win.locator('.rb-space[title="Agent"]').first()
     if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
-    if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
+    if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
     }

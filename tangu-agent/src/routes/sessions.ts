@@ -23,6 +23,18 @@ const router = Router();
 
 const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
 
+/** preset 合法值:缺省/null(= work)、'coding'、'chat'。写接口对非法值 400,不静默折成 work(creview 09-07 E5)。 */
+export function validPreset(v: unknown): boolean {
+  return v == null || v === 'coding' || v === 'chat';
+}
+
+/** 空白会话锁的服务端不变量(creview 09-07 E4/F3):会话一旦有消息,存值里的 preset 不可被整对象写接口改掉——
+ *  客户端加载窗口里从 {} 起步的 PUT、漏传 preset、或写 work 都改不了;空白会话与无 preset 键的老会话照旧整体替换。 */
+export function applyPresetLock(stored: unknown, cfg: Record<string, unknown>, messageCount: number): Record<string, unknown> {
+  if (!stored || typeof stored !== 'object' || !Object.prototype.hasOwnProperty.call(stored, 'preset')) return cfg;
+  return messageCount > 0 ? { ...cfg, preset: (stored as any).preset } : cfg;
+}
+
 function parseMaybeJson(v: any): any {
   if (v == null) return null;
   if (typeof v !== 'string') return v;
@@ -67,20 +79,25 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
 router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { title, model_id, emoji, app_id, project_path, project_name, projectless } = req.body || {};
+    const { title, model_id, emoji, app_id, project_path, project_name, projectless, agent_config } = req.body || {};
     const profile = resolveProfile(app_id);
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${app_id}` });
+    // 初始 agent_config 与建会话同一条 INSERT(原子):客户端不必再补一次 PUT——补 PUT 失败会留下没有 preset/execMode 的
+    // chat 会话,重载后被当 work 初始化(creview 09-07 F2)。老客户端不传 → null,行为不变。
+    const initCfg = agent_config && typeof agent_config === 'object' && !Array.isArray(agent_config) ? agent_config : null;
+    if (initCfg && !validPreset(initCfg.preset)) return res.status(400).json({ detail: 'invalid preset' });
     const id = uuidv4();
     await query(
-      `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, project_path, project_name, projectless)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, project_path, project_name, projectless, agent_config)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, userId, profile.appId,
        typeof title === 'string' && title.trim() ? title.trim().slice(0, 200) : 'New Chat',
        typeof model_id === 'string' && model_id ? model_id : profile.defaultModelId || null,
        typeof emoji === 'string' && emoji ? emoji.slice(0, 16) : null,
        typeof project_path === 'string' && project_path ? project_path.slice(0, 1000) : null,
        typeof project_name === 'string' && project_name ? project_name.slice(0, 255) : null,
-       projectless === true],
+       projectless === true,
+       initCfg ? JSON.stringify(initCfg) : null],
     );
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [id]);
     res.json({ session: rowToSession(rows[0]) });
@@ -374,7 +391,14 @@ router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const cfg = req.body && typeof req.body === 'object' ? req.body : {};
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    if (!validPreset(body.preset)) return res.status(400).json({ detail: 'invalid preset' });
+    const stored = parseMaybeJson(s.agent_config);
+    const hasPresetKey = !!stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, 'preset');
+    const msgCount = hasPresetKey
+      ? Number((await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [req.params.id]))[0]?.n || 0)
+      : 0;
+    const cfg = applyPresetLock(stored, body, msgCount);
     await query(`UPDATE chat_sessions SET agent_config = ?, updated_at = ${getNowSql()} WHERE id = ?`, [
       JSON.stringify(cfg), req.params.id,
     ]);

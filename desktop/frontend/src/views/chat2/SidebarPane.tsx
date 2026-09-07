@@ -1,13 +1,13 @@
 /**
  * 侧栏(编辑式新视觉,全量重写——非换肤)。完整复刻旧 Sidebar 的行为:
- * 按工作区分组(Cloud / Tangu 默认 常驻 + 本地)、组拖拽排序、折叠持久化、会话搜索、
+ * 按工作区分组(Cloud / Tangu 默认 常驻 + 本地)、组拖拽排序、折叠持久化、
  * 内联重命名、右键/省略号菜单(归档/删除/微信设为连接)、工作区菜单(改名/移除)、
  * 微信组连接状态、归档区、每区会话上限 + View More。底部常驻个人中心卡片 + 设置(品牌在全局顶栏)。
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, FolderX, Cloud, FolderPlus, SquarePen, Search, Smartphone, Send, MessagesSquare, MessageSquare } from 'lucide-react'
-import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, FolderX, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare } from 'lucide-react'
+import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
 import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
@@ -15,8 +15,7 @@ import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
 import { useItemSelect } from '../itemSelect'
 import { tipProps, tipT } from '../../hoverTip'
-import { searchSessions as apiSearchSessions, setChannelConnectedSession, type SessionSearchHit } from '../../services/backendService'
-import { useApp } from '../../stores/appStore'
+import { setChannelConnectedSession } from '../../services/backendService'
 import { useChannels } from '../../stores/channelsStore'
 import { setChatRefDrag } from './chatDragRef'
 import './sidebar2.css'
@@ -25,14 +24,15 @@ import { OverlayAt } from '@lcl/engine'
 const CHANNEL_ICONS: Record<ChannelKind, typeof Smartphone> = { wechat: Smartphone, telegram: Send, qq: MessagesSquare }
 
 registerMessages({
-  'sidebar.search.inContent': { zh: '内容匹配', en: 'In conversation' },
-  'sidebar.search.searching': { zh: '正在搜索内容…', en: 'Searching contents…' },
-  'sidebar.search.contentFailed': { zh: '内容搜索没跑成(标题匹配仍可用);改动输入可重试', en: 'Content search failed (title matches still work) — edit the query to retry' },
   'sidebar.openInNewTab': { zh: '在新标签页打开', en: 'Open in new tab' },
   'sidebar.archiveN': { zh: '归档 {n} 项', en: 'Archive {n}' },
   'sidebar.unarchiveN': { zh: '取消归档 {n} 项', en: 'Unarchive {n}' },
   'sidebar.deleteN': { zh: '删除 {n} 项', en: 'Delete {n}' },
   'sidebar.deleteConfirmN': { zh: '删除选中的 {n} 个会话?不可撤销。', en: 'Delete {n} selected chats? This cannot be undone.' },
+  // Chat / Work 是产品词,中英同形;侧栏胶囊是唯一可见切换入口。
+  'sidebar.mode.chat': { zh: 'Chat', en: 'Chat' },
+  'sidebar.mode.work': { zh: 'Work', en: 'Work' },
+  'sidebar.mode.tip': { zh: 'Chat:轻聊天,只列聊天会话;Work:完整工具面,列出全部项目', en: 'Chat: light conversations, chat sessions only. Work: full toolset, all projects' },
 })
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
@@ -80,6 +80,14 @@ export interface SidebarPaneProps {
   /** 共享「进入的工作区」key(与文件面板联动展开;不收其余)。 */
   activeWorkspaceKey?: string | null
   onEnterWorkspace?: (key: string) => void
+  /** Chat/Work 模式胶囊(新对话行右侧);两者都给才渲染。 */
+  mode?: 'chat' | 'work' | null
+  onModeChange?: (m: 'chat' | 'work') => void
+  /** 平铺:不画组头、不折叠、不限条数(Chat 模式只有一个无根组,组头是废话)。 */
+  flat?: boolean
+  /** 右键菜单、拖拽引用和工作区计数用的全集(sessions 可能被模式过滤过);缺省 = sessions / archivedSessions。 */
+  allSessions?: SessionRecord[]
+  allArchived?: SessionRecord[]
 }
 
 /** ids = 本次菜单的作用集合(右键落在多选里 → 整批;否则就它自己);archived 取被右键那条的状态。 */
@@ -101,6 +109,8 @@ const SpecialRow: React.FC<{
 export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const { t } = useI18n()
   const rootRef = useRef<HTMLElement>(null)
+  const allSessions = p.allSessions ?? p.sessions
+  const allArchived = p.allArchived ?? p.archivedSessions
   // 会话行的多选(判据与文件树/笔记树同源,见 views/itemSelect)。范围选按 DOM 顺序 → 要整个 aside
   // 作用域:归档区在 sticky footer 里,不在 .t2s-scroll 内。
   const sel = useItemSelect(rootRef)
@@ -116,7 +126,6 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     return () => window.removeEventListener('tangu:wslimit', onChange)
   }, [])
   const [showArchived, setShowArchived] = useState(false)
-  const [query, setQuery] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
   const [wsOrder, setWsOrder] = useState<string[]>(loadWsOrder)
   const [dragKey, setDragKey] = useState<string | null>(null)
@@ -138,7 +147,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     const byKey = new Map<string, SessionRecord[]>()
     for (const ws of p.workspaces) byKey.set(ws.key, [])
     for (const s of p.sessions) {
-      const key = sessionWorkspaceKey(s)
+      const key = sessionWorkspaceKey(s, p.workspaces)
       if (!byKey.has(key)) byKey.set(key, [])
       byKey.get(key)!.push(s)
     }
@@ -168,40 +177,6 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     setWsOrder(next)
     saveWsOrder(next)
   }
-
-  const q = query.trim().toLowerCase()
-  const matchAll = useMemo(
-    () => (q ? [...p.sessions, ...p.archivedSessions].filter((s) => (s.title || '').toLowerCase().includes(q)) : []),
-    [q, p.sessions, p.archivedSessions],
-  )
-
-  // 内容级召回(P3):标题匹配是本地即时的,正文匹配要问引擎(与模型侧 search_sessions 同一条 SQL)。
-  // 去抖 250ms + AbortController:每键一发会把长会话库的 LIKE 扫描打满,且回包乱序会让结果闪回旧的。
-  const [deepHits, setDeepHits] = useState<SessionSearchHit[] | null>(null)
-  const [deepBusy, setDeepBusy] = useState(false)
-  // 检索失败 ≠ 没搜到:后端出错时若也渲染成「无结果」,用户会以为库里真没有(Codex 真机走查提的)。
-  const [deepErr, setDeepErr] = useState(false)
-  useEffect(() => {
-    const raw = query.trim()
-    if (raw.length < 2) { setDeepHits(null); setDeepBusy(false); setDeepErr(false); return }
-    const ac = new AbortController()
-    setDeepBusy(true)
-    const timer = window.setTimeout(() => {
-      apiSearchSessions(p.cfg, raw, { limit: 20, signal: ac.signal })
-        .then((hits) => { if (!ac.signal.aborted) { setDeepHits(hits); setDeepErr(false); setDeepBusy(false) } })
-        // 中止是常态(下一次输入),不当错误;真失败**如实说搜不了**,别伪装成「无匹配」——
-        // 标题匹配不受影响,照常可用。
-        .catch(() => { if (!ac.signal.aborted) { setDeepHits([]); setDeepErr(true); setDeepBusy(false) } })
-    }, 250)
-    return () => { window.clearTimeout(timer); ac.abort() }
-  }, [query, p.cfg])
-
-  // 标题匹配已在上面列过 → 正文命中只留没重复的那些。
-  const contentHits = useMemo(() => {
-    if (!deepHits) return []
-    const shown = new Set(matchAll.map((s) => s.id))
-    return deepHits.filter((h) => !shown.has(h.id))
-  }, [deepHits, matchAll])
 
   const toggleGroup = (key: string): void => {
     setCollapsedGroups((prev) => {
@@ -284,8 +259,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       selId={s.id}
       // Historian 会话摘要 → 悬停预览(无摘要回落标题本身,长标题被截断时仍可读全)。
       title={s.summary || s.title || undefined}
-      // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts。
-      depth={1}
+      // 组内行缩进一级(组头 depth 0)—— 与笔记树「文件夹内的笔记」同档,见 treeIndent.ts;平铺(Chat 模式)没有组头,顶格。
+      depth={p.flat ? 0 : 1}
       // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
       // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
       lead={<>
@@ -300,7 +275,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         const act = sel.click(s.id, e)
         if (act.open === 'none') return
         p.onSelect(s.id, act.open === 'new' ? { newTab: true } : undefined)
-        enterGroup(sessionWorkspaceKey(s))
+        enterGroup(sessionWorkspaceKey(s, p.workspaces))
       }}
       onContextMenu={(e) => openMenu(e, s)}
       // 拖到聊天区 = 插入 [[session:id]] 引用(agent 用 read_session 读)。重命名中不拖,否则选不了文字。
@@ -310,7 +285,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
         e.dataTransfer.effectAllowed = 'copy'
         // 拖已选中的会话 = 整批带走(引用块支持多条)。
-        const all = [...p.sessions, ...p.archivedSessions]
+        const all = [...allSessions, ...allArchived]
         const refs = sel.batch(s.id).map((id) => {
           const x = all.find((y) => y.id === id)
           return { kind: 'session' as const, id, title: x?.title || 'New Chat' }
@@ -336,59 +311,35 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
   return (
     <aside className="t2s-side" ref={rootRef}>
-      <div className="t2s-search">
-        <Search size={13} className="t2s-dim" />
-        <input value={query} placeholder={t('sidebar.search.placeholder')} onChange={(e) => setQuery(e.target.value)} />
-      </div>
-
       <div
         className="t2s-scroll"
         // 拖组时整列表放行 drop:落在组间外边距 / 列表空白处也提交到当前落点,不再「松手什么都没发生」。
         onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move' } }}
         onDrop={(e) => { if (dragKey && dragOverKey) { e.preventDefault(); dropWorkspace(dragOverKey) } }}
       >
-        {q ? (
-          <>
-            {matchAll.map(renderItem)}
-            {/* 正文命中(问引擎):标题匹配之下单独一组,带命中片段;点了直接跳到那条消息。 */}
-            {!!contentHits.length && (
-              <>
-                <div className="t2s-hint t2s-deep-head">{t('sidebar.search.inContent')}</div>
-                {contentHits.map((h) => (
-                  <button
-                    key={h.id}
-                    className="t2s-srow t2s-deep"
-                    title={h.hit?.snippet || h.summary || h.title}
-                    style={{ paddingLeft: rowPadLeft(1) }}
-                    onClick={() => { useApp.getState().setJumpTarget(h.id, h.hit?.messageId); p.onSelect(h.id) }}
-                  >
-                    <span className="t2s-lead"><MessageSquare className="t2s-lead-icon t2s-dim" /></span>
-                    <span className="t2s-deep-col">
-                      <span className="t2s-srow-title">{h.title || 'New Chat'}</span>
-                      <span className="t2s-deep-snip">{h.hit?.snippet || h.summary}</span>
-                    </span>
-                    <span className="t2s-deep-date">{h.updatedAt}</span>
-                  </button>
-                ))}
-              </>
-            )}
-            {deepBusy && <div className="t2s-hint">{t('sidebar.search.searching')}</div>}
-            {deepErr && !deepBusy && <div className="t2s-hint">{t('sidebar.search.contentFailed')}</div>}
-            {!matchAll.length && !contentHits.length && !deepBusy && !deepErr && (
-              <div className="t2s-hint">{t('sidebar.search.noResults')}</div>
-            )}
-          </>
-        ) : (
-          <>
-            {p.showSpecial && (
-              <div className="t2s-special-group">
-                {/* 尺寸由 .t2s-special-ic > svg 的 --t2s-icon 接管,故不传 size(传了也无效)。 */}
-                <SpecialRow icon={<SquarePen />} title={t('sidebar.newChat')} active={false} onClick={p.onNewChat} />
-              </div>
-            )}
+        {p.showSpecial && (
+          <div className="t2s-special-group">
+            {/* 尺寸由 .t2s-special-ic > svg 的 --t2s-icon 接管,故不传 size(传了也无效)。 */}
+            <div className="t2s-special-row">
+              <SpecialRow icon={<SquarePen />} title={t('sidebar.newChat')} active={false} onClick={p.onNewChat} />
+              {p.mode && p.onModeChange && (
+                <div className="t2s-vaultseg t2s-mode" role="tablist" aria-label={t('sidebar.mode.tip')} title={t('sidebar.mode.tip')}>
+                  <div className="t2s-vaultseg-thumb" data-side={p.mode} />
+                  {(['chat', 'work'] as const).map((m) => (
+                    <button key={m} type="button" role="tab" aria-selected={p.mode === m} data-mode={m} className={p.mode === m ? 'on' : undefined} onClick={() => p.onModeChange!(m)}>
+                      {t(m === 'chat' ? 'sidebar.mode.chat' : 'sidebar.mode.work')}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-            {orderedWorkspaces.map((ws, wi) => {
+        {orderedWorkspaces.map((ws, wi) => {
               const items = grouped.get(ws.key) || []
+              // 平铺(Chat 模式):整组直接铺开,不画组头、不折叠、不限条数(聊天列表就该是整份)。
+              if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{items.map(renderItem)}</div>
               const isCollapsed = collapsedGroups.has(ws.key)
               // 组内会话行也认这一组的落点(否则松手落在会话行上 = 什么都没发生)。
               // 刻意不挂 dragLeave:落点粘住最后悬停过的组,松手落在组间那 4.5px 外边距里也照样成立
@@ -414,6 +365,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                 <React.Fragment key={ws.key}>
                   <div
                     className={`t2s-group${overCls}${dragKey === ws.key ? ' dragging' : ''}`}
+                    data-workspace-key={ws.key}
                     // 组头 = depth 0;减掉 toggle 自带内边距,槽才与组内会话行落在同一竖线(见 treeIndent.ts)。
                     style={{ paddingLeft: folderPadLeft(0) }}
                     {...tipProps(() => [
@@ -475,16 +427,14 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                   </AnimatedCollapse>
                 </React.Fragment>
               )
-            })}
-
-          </>
-        )}
+        })}
       </div>
 
       {/* 「添加本地工作区」+「已归档」常驻侧栏底部(sticky footer),不随会话列表滚走。 */}
-      {(window.tangu?.pickDirectory || p.archivedSessions.length > 0) && (
+      {/* 「添加本地工作区」是 Work 的事:Chat 模式(平铺)不露出,列表里也没有其它项目。 */}
+      {((window.tangu?.pickDirectory && !p.flat) || p.archivedSessions.length > 0) && (
         <div className="t2s-foot">
-          {window.tangu?.pickDirectory && <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>}
+          {window.tangu?.pickDirectory && !p.flat && <button className="t2s-add-ws" onClick={p.onAddWorkspace}><FolderPlus size={14} /> {t('sidebar.addLocalWorkspace')}</button>}
           {p.archivedSessions.length > 0 && (
             <>
               <button className="t2s-srow t2s-archived-toggle" onClick={() => setShowArchived(!showArchived)}>
@@ -508,7 +458,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             </button>
           )}
           {menu.ids.length === 1 && (
-            <button onClick={() => { const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
+            <button onClick={() => { const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id); setDraft(s?.title || ''); setRenaming(menu.id); setMenu(null) }}>
               <Pencil size={13} /> {t('sidebar.rename')}
             </button>
           )}
@@ -520,7 +470,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           </button>
           {menu.ids.length === 1 && (() => {
             // 通道会话 → 「设为正在连接」(该通道的入站消息改走此会话)。
-            const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id)
+            const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id)
             const chWs = s?.project_path ? p.workspaces.find((w) => w.kind === 'channel' && w.key === s.project_path) : null
             if (!s || !chWs?.channel) return null
             const Ic = CHANNEL_ICONS[chWs.channel]
@@ -539,7 +489,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           {menu.ids.every((id) => p.archivedSessions.some((x) => x.id === id)) && (
             <button className="danger" onClick={() => {
               const ids = menu.ids
-              const s = [...p.sessions, ...p.archivedSessions].find((x) => x.id === menu.id)
+              const s = [...allSessions, ...allArchived].find((x) => x.id === menu.id)
               setMenu(null)
               const ok = ids.length > 1
                 ? window.confirm(t('sidebar.deleteConfirmN', { n: String(ids.length) }))
@@ -561,7 +511,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           </button>
           <button className="danger" onClick={() => {
             const ws = wsMenu.ws
-            const count = [...p.sessions, ...p.archivedSessions].filter((s) => s.project_path === ws.key).length
+            const count = [...allSessions, ...allArchived].filter((s) => s.project_path === ws.key).length
             setWsMenu(null)
             if (window.confirm(t('sidebar.ws.removeConfirm', { name: ws.name, count }))) p.onRemoveWorkspace(ws)
           }}>

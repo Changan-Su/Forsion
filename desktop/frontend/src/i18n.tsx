@@ -3349,6 +3349,12 @@ export function __dictSnapshot(): Record<Locale, Dict> {
   return { zh: { ...zh }, en: { ...en } }
 }
 
+/** 某个 key 的全部本地化值。主要给需要识别旧落盘文案的兼容层用：
+ * 例如会话在中文界面下存了 project_name，后来切英文仍应归到同一系统工作区。 */
+export function translationValues(key: string): string[] {
+  return [...new Set(Object.values(DICTS).map((dict) => dict[key]).filter((value): value is string => !!value))]
+}
+
 /** 查一个 key(缺失回退:目标语言 → zh → key 本身)。`translate` 与 Provider 的 `t` 共用它。 */
 function translateIn(locale: Locale, key: string, vars?: Record<string, unknown>): string {
   return interpolate(DICTS[locale][key] ?? DICTS.zh[key] ?? key, vars)

@@ -11647,5 +11647,1115 @@
         }
       }
     }
+  ],
+  "ai-studio:sandbox+chat": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_datetime",
+        "description": "Get the current date and time (server timezone).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Number of results to return, default 5"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_files",
+        "description": "List the files and subdirectories under a directory in the agent workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Directory path, root is '/'"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path, e.g. /notes/a.txt"
+            },
+            "offset": {
+              "type": "number",
+              "description": "Starting line (0-based), default 0"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of lines to return (default reads to the end, capped at a limit)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path, e.g. /out/result.py"
+            },
+            "content": {
+              "type": "string",
+              "description": "Text content of the file"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "pip_install",
+        "description": "Install missing Python packages on demand for the cloud sandbox (binary wheels only). Once installed, run_python can import them; common libraries (python-docx/openpyxl/python-pptx/reportlab/pandas/numpy/matplotlib/Pillow, etc.) are preinstalled and need no installation. Installs are globally cached, so each package only needs to be installed once.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "packages": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of package names, optionally with versions, e.g. [\"openpyxl\", \"tqdm==4.66.5\"]"
+            }
+          },
+          "required": [
+            "packages"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python",
+        "description": "Execute Python 3.12 code in an isolated cloud sandbox (no network) and return stdout/stderr. Before execution the session workspace is synced into /workspace (the current directory); after execution, newly created/modified files are written back to the workspace automatically — you can read and write existing files directly. \n⚠️ Files are only kept if saved in the workspace: save outputs using **relative paths** (i.e. the current directory /workspace, equivalent to /mnt/data). Do not write to /tmp, HOME (~/...) or other absolute paths — those directories are not synced back and files will be lost. \nThe sandbox is pure Python (no node / pandoc / libreoffice), so generate documents directly with the preinstalled libraries: Word→python-docx, Excel→openpyxl/XlsxWriter, PPT→python-pptx, PDF→reportlab/pypdf/pdfplumber, data→pandas/numpy, plotting→matplotlib, images→Pillow. If an import raises ModuleNotFoundError, call pip_install to install the missing package first, then retry.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The Python code to execute"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_fetch",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The full URL to fetch (http/https)"
+            },
+            "max_chars": {
+              "type": "number",
+              "description": "Max number of characters to return (default 20000, capped at 60000)"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "display_file",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Workspace file path to display (relative to cwd, or absolute on local sessions)."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "load_tools",
+        "description": "Load the full definitions of tools listed in the \"Additional Tools (load on demand)\" section. Call once with ALL the tool names you need, wait for the result, then call those tools normally. Already-loaded or unknown names are harmless.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Exact tool names from the Additional Tools catalog, e.g. [\"manage_automation\"]"
+            }
+          },
+          "required": [
+            "names"
+          ]
+        }
+      }
+    }
+  ],
+  "ai-studio:sandbox+gui": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_datetime",
+        "description": "Get the current date and time (server timezone).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "remember",
+        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information (such as long-term preferences, background, how to address the user); do not record one-off task details or temporary context. Duplicate content is ignored automatically.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "fact": {
+              "type": "string",
+              "description": "A one-sentence fact/preference to remember long-term"
+            }
+          },
+          "required": [
+            "fact"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "log_event",
+        "description": "Append a noteworthy event/progress from this interaction to the user's \"today\" activity log (archived by date, viewable by the user in the account center). Use to record completed work, conclusions reached, files produced, etc.; do not record trivial chit-chat.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "A one-sentence event/progress to record in today's log"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_log",
+        "description": "Read the user's activity log for a given day (markdown). Date format YYYY-MM-DD; defaults to today.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "date": {
+              "type": "string",
+              "description": "Date YYYY-MM-DD; defaults to today"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Number of results to return, default 5"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_files",
+        "description": "List the files and subdirectories under a directory in the agent workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Directory path, root is '/'"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path, e.g. /notes/a.txt"
+            },
+            "offset": {
+              "type": "number",
+              "description": "Starting line (0-based), default 0"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of lines to return (default reads to the end, capped at a limit)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path, e.g. /out/result.py"
+            },
+            "content": {
+              "type": "string",
+              "description": "Text content of the file"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "pip_install",
+        "description": "Install missing Python packages on demand for the cloud sandbox (binary wheels only). Once installed, run_python can import them; common libraries (python-docx/openpyxl/python-pptx/reportlab/pandas/numpy/matplotlib/Pillow, etc.) are preinstalled and need no installation. Installs are globally cached, so each package only needs to be installed once.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "packages": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of package names, optionally with versions, e.g. [\"openpyxl\", \"tqdm==4.66.5\"]"
+            }
+          },
+          "required": [
+            "packages"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python",
+        "description": "Execute Python 3.12 code in an isolated cloud sandbox (no network) and return stdout/stderr. Before execution the session workspace is synced into /workspace (the current directory); after execution, newly created/modified files are written back to the workspace automatically — you can read and write existing files directly. \n⚠️ Files are only kept if saved in the workspace: save outputs using **relative paths** (i.e. the current directory /workspace, equivalent to /mnt/data). Do not write to /tmp, HOME (~/...) or other absolute paths — those directories are not synced back and files will be lost. \nThe sandbox is pure Python (no node / pandoc / libreoffice), so generate documents directly with the preinstalled libraries: Word→python-docx, Excel→openpyxl/XlsxWriter, PPT→python-pptx, PDF→reportlab/pypdf/pdfplumber, data→pandas/numpy, plotting→matplotlib, images→Pillow. If an import raises ModuleNotFoundError, call pip_install to install the missing package first, then retry.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The Python code to execute"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_files",
+        "description": "Search file contents by regex (grep-style) under the working directory, returning file:line:content. Supports an include glob to restrict files (e.g. *.ts, src/**/*.py). Automatically skips .git/node_modules/binary files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Search regular expression (JS syntax; matched per line)"
+            },
+            "include": {
+              "type": "string",
+              "description": "Optional: filename glob filter, e.g. *.ts or src/**/*.py"
+            },
+            "case_sensitive": {
+              "type": "boolean",
+              "description": "Case-sensitive (default false)"
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "glob_files",
+        "description": "List file paths under the working directory matching a glob pattern (e.g. **/*.test.ts, src/*.py). Use this to find files; use search_files to search contents.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern: ** across directories, * within a segment, ? single character, {a,b} alternation"
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_fetch",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The full URL to fetch (http/https)"
+            },
+            "max_chars": {
+              "type": "number",
+              "description": "Max number of characters to return (default 20000, capped at 60000)"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_write",
+        "description": "Maintain this session's todo list (replaces the whole list). Write a list before planning a multi-step task; update the status after each step before continuing. status ∈ pending | in_progress | completed; at most one item in_progress at a time.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "description": "The complete todo list (replaces the old list in full)",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "Task description (imperative)"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ],
+                    "description": "Task status"
+                  }
+                },
+                "required": [
+                  "content",
+                  "status"
+                ]
+              }
+            }
+          },
+          "required": [
+            "todos"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_read",
+        "description": "Read this session's current todo list (use it to restore context or check remaining steps).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "Make structured patch edits to one or more files (context-anchored, better than full overwrite / single-string replace; multiple files and multiple edits in one atomic commit). The patch parameter is a block of patch text, in the format:\n*** Begin Patch\n*** Update File: relative path\n@@ optional locating context (class/function name)\n unchanged context line (leading space)\n-line to delete\n+line to add\n*** Add File: relative path\n+every line of the new file (each starts with +)\n*** Delete File: relative path\n*** End Patch\nKey points: always include a few unchanged context lines (starting with a space) around each change to locate it; use Add to create, Delete to remove, and to rename put a line \"*** Move to: new path\" right under Update File. The cloud workspace currently supports only Add/Update.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "Complete patch text (*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "display_file",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Workspace file path to display (relative to cwd, or absolute on local sessions)."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_read_note",
+        "description": "CLOUD VAULTS ONLY. Read one cloud Amadeus note as plain markdown (frontmatter and internal block markers are stripped, so structured formats come back incomplete). On this machine the vault is a real directory — use the ordinary file tools instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_write_note",
+        "description": "CLOUD VAULTS ONLY. Create or overwrite a cloud Amadeus note with plain markdown; overwriting RESETS the note to a simple linear layout (so never use it on `.mindmap.md` / `.excalidraw.md` / `.db`). On this machine, write the file directly with the ordinary file tools instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Vault-relative note path, e.g. \"Notes/ideas.md\" (\".md\" appended if missing)."
+            },
+            "content": {
+              "type": "string",
+              "description": "The full markdown content of the note."
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_calendars",
+        "description": "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_events",
+        "description": "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name or path to restrict to."
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional inclusive start date filter, YYYY-MM-DD."
+            },
+            "to": {
+              "type": "string",
+              "description": "Optional inclusive end date filter, YYYY-MM-DD."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_create_event",
+        "description": "Add an event to the user's calendar. Times are \"YYYY-MM-DD\" (all-day) or \"YYYY-MM-DDTHH:mm\" (with a time).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Event title."
+            },
+            "start": {
+              "type": "string",
+              "description": "Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "Optional end, same format as start."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Optional; force all-day (drops any time component)."
+            },
+            "calendar": {
+              "type": "string",
+              "description": "Optional calendar name/path; defaults to the first calendar."
+            },
+            "props": {
+              "type": "object",
+              "description": "Optional extra column values, keyed by column name."
+            }
+          },
+          "required": [
+            "title",
+            "start"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_edit_event",
+        "description": "Edit an existing calendar event by id. Only the fields you pass are changed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id (from amadeus_list_events)."
+            },
+            "title": {
+              "type": "string",
+              "description": "New title."
+            },
+            "start": {
+              "type": "string",
+              "description": "New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm."
+            },
+            "end": {
+              "type": "string",
+              "description": "New end, same format; pass empty string to clear."
+            },
+            "allDay": {
+              "type": "boolean",
+              "description": "Force all-day (drops time)."
+            },
+            "props": {
+              "type": "object",
+              "description": "Extra column values to set, keyed by column name."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_delete_event",
+        "description": "Delete a calendar event by id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "calendar": {
+              "type": "string",
+              "description": "Calendar name or path the event is in."
+            },
+            "eventId": {
+              "type": "string",
+              "description": "The event id to delete."
+            }
+          },
+          "required": [
+            "calendar",
+            "eventId"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "load_tools",
+        "description": "Load the full definitions of tools listed in the \"Additional Tools (load on demand)\" section. Call once with ALL the tool names you need, wait for the result, then call those tools normally. Already-loaded or unknown names are harmless.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Exact tool names from the Additional Tools catalog, e.g. [\"manage_automation\"]"
+            }
+          },
+          "required": [
+            "names"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_session",
+        "description": "Read the transcript of ANOTHER chat session of the same user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Only the current user's own sessions are reachable. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Session id, e.g. the `<id>` inside a `[[session:<id>|title]]` reference"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max messages returned, newest kept (default 60, max 300)"
+            },
+            "chars_per_message": {
+              "type": "number",
+              "description": "Truncate each message body to this many chars (default 600, max 4000)"
+            }
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sketch",
+        "description": "Draw a visual card inline in the conversation, rendered from self-contained HTML. Use it to show the USER charts, diagrams, tables, comparisons, timelines, proposed layouts, or small interactive widgets directly in the chat flow, instead of describing them in prose.\nSANDBOX: the card renders in a sandboxed frame — JavaScript runs, but there is NO network access, NO host API, and NO navigation. Inline all CSS/JS, embed images as data: URIs, never reference external scripts/styles/fonts/URLs (charting libraries and web fonts are unavailable — draw charts with inline SVG or divs), and do not use eval/new Function. Links and form submissions do nothing; handle interactions with inline JS.\nTHEME: the host injects its live theme as CSS variables — use them and never hardcode colors, or the card will clash in dark mode and on other skins. Available: --fs-bg (transparent card canvas), --fs-surface (subtle fill), --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and a 5-step data series ramp --fs-s1..--fs-s5 (s1 is the accent, s2..s5 fade — use s1 for the value in focus and the rest for context). The canvas stays transparent so it inherits whichever chat surface is behind it; the other variables update live when the user switches theme, and body already inherits background/color/font.\nFOUNDATION: the wrapper includes polished responsive classes; use them instead of rebuilding basic typography every time: fs-header, fs-eyebrow, fs-title, fs-subtitle, fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, fs-chip, fs-bar-track, and fs-bar-fill. The four-part default is <header class=\"fs-header\">title + subtitle</header>, <figure class=\"fs-plot\">visual</figure>, then <footer class=\"fs-source\">source/method</footer>.\nSTYLE: editorial and restrained — conclusion-led hierarchy, real data units over decoration, useful density, generous whitespace, hairline guides over boxes and fills, and one focal accent per card. Labels, units and a source/caption line are mandatory chart parts. Prefer direct labels on the data over a separate legend. Add quiet structure (guides, ticks, annotations, alignment) so sparse data does not look unfinished. No gradients, no shadows, no emoji as data marks, at most 5 categorical series.\nSIZE: the card is ~700px wide and auto-sizes to its content height. Anything taller than about half the chat area is folded behind an expand toggle, so put the headline number or the point of the card at the top. Each call appends a NEW card (cards cannot be updated — call again with revised HTML). The result is only a confirmation; the user sees the rendered card.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "html": {
+              "type": "string",
+              "description": "Self-contained HTML for the card (body content; the host wraps it in a sandboxed document with a strict CSP and the theme variables)."
+            },
+            "title": {
+              "type": "string",
+              "description": "Optional short label for the card, e.g. \"Revenue chart\"."
+            }
+          },
+          "required": [
+            "html"
+          ]
+        }
+      }
+    }
+  ],
+  "ai-studio:sandbox+gui+chat": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_datetime",
+        "description": "Get the current date and time (server timezone).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Number of results to return, default 5"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_files",
+        "description": "List the files and subdirectories under a directory in the agent workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Directory path, root is '/'"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read the text content of a file in the agent workspace. For large files, use offset/limit to read by line in pages. Output is cat -n style: every line is prefixed with its line number and a tab. When you feed text back to apply_patch, strip that \"<number>\\t\" prefix — a patch's context/old lines must match the file's RAW text.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path, e.g. /notes/a.txt"
+            },
+            "offset": {
+              "type": "number",
+              "description": "Starting line (0-based), default 0"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of lines to return (default reads to the end, capped at a limit)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write/overwrite a text file in the agent workspace (intermediate directories are created automatically). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path, e.g. /out/result.py"
+            },
+            "content": {
+              "type": "string",
+              "description": "Text content of the file"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "pip_install",
+        "description": "Install missing Python packages on demand for the cloud sandbox (binary wheels only). Once installed, run_python can import them; common libraries (python-docx/openpyxl/python-pptx/reportlab/pandas/numpy/matplotlib/Pillow, etc.) are preinstalled and need no installation. Installs are globally cached, so each package only needs to be installed once.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "packages": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "List of package names, optionally with versions, e.g. [\"openpyxl\", \"tqdm==4.66.5\"]"
+            }
+          },
+          "required": [
+            "packages"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python",
+        "description": "Execute Python 3.12 code in an isolated cloud sandbox (no network) and return stdout/stderr. Before execution the session workspace is synced into /workspace (the current directory); after execution, newly created/modified files are written back to the workspace automatically — you can read and write existing files directly. \n⚠️ Files are only kept if saved in the workspace: save outputs using **relative paths** (i.e. the current directory /workspace, equivalent to /mnt/data). Do not write to /tmp, HOME (~/...) or other absolute paths — those directories are not synced back and files will be lost. \nThe sandbox is pure Python (no node / pandoc / libreoffice), so generate documents directly with the preinstalled libraries: Word→python-docx, Excel→openpyxl/XlsxWriter, PPT→python-pptx, PDF→reportlab/pypdf/pdfplumber, data→pandas/numpy, plotting→matplotlib, images→Pillow. If an import raises ModuleNotFoundError, call pip_install to install the missing package first, then retry.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "description": "The Python code to execute"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_fetch",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The full URL to fetch (http/https)"
+            },
+            "max_chars": {
+              "type": "number",
+              "description": "Max number of characters to return (default 20000, capped at 60000)"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "display_file",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). To read/analyze an image yourself, use view_image instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Workspace file path to display (relative to cwd, or absolute on local sessions)."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "load_tools",
+        "description": "Load the full definitions of tools listed in the \"Additional Tools (load on demand)\" section. Call once with ALL the tool names you need, wait for the result, then call those tools normally. Already-loaded or unknown names are harmless.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Exact tool names from the Additional Tools catalog, e.g. [\"manage_automation\"]"
+            }
+          },
+          "required": [
+            "names"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sketch",
+        "description": "Draw a visual card inline in the conversation, rendered from self-contained HTML. Use it to show the USER charts, diagrams, tables, comparisons, timelines, proposed layouts, or small interactive widgets directly in the chat flow, instead of describing them in prose.\nSANDBOX: the card renders in a sandboxed frame — JavaScript runs, but there is NO network access, NO host API, and NO navigation. Inline all CSS/JS, embed images as data: URIs, never reference external scripts/styles/fonts/URLs (charting libraries and web fonts are unavailable — draw charts with inline SVG or divs), and do not use eval/new Function. Links and form submissions do nothing; handle interactions with inline JS.\nTHEME: the host injects its live theme as CSS variables — use them and never hardcode colors, or the card will clash in dark mode and on other skins. Available: --fs-bg (transparent card canvas), --fs-surface (subtle fill), --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and a 5-step data series ramp --fs-s1..--fs-s5 (s1 is the accent, s2..s5 fade — use s1 for the value in focus and the rest for context). The canvas stays transparent so it inherits whichever chat surface is behind it; the other variables update live when the user switches theme, and body already inherits background/color/font.\nFOUNDATION: the wrapper includes polished responsive classes; use them instead of rebuilding basic typography every time: fs-header, fs-eyebrow, fs-title, fs-subtitle, fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, fs-chip, fs-bar-track, and fs-bar-fill. The four-part default is <header class=\"fs-header\">title + subtitle</header>, <figure class=\"fs-plot\">visual</figure>, then <footer class=\"fs-source\">source/method</footer>.\nSTYLE: editorial and restrained — conclusion-led hierarchy, real data units over decoration, useful density, generous whitespace, hairline guides over boxes and fills, and one focal accent per card. Labels, units and a source/caption line are mandatory chart parts. Prefer direct labels on the data over a separate legend. Add quiet structure (guides, ticks, annotations, alignment) so sparse data does not look unfinished. No gradients, no shadows, no emoji as data marks, at most 5 categorical series.\nSIZE: the card is ~700px wide and auto-sizes to its content height. Anything taller than about half the chat area is folded behind an expand toggle, so put the headline number or the point of the card at the top. Each call appends a NEW card (cards cannot be updated — call again with revised HTML). The result is only a confirmation; the user sees the rendered card.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "html": {
+              "type": "string",
+              "description": "Self-contained HTML for the card (body content; the host wraps it in a sandboxed document with a strict CSP and the theme variables)."
+            },
+            "title": {
+              "type": "string",
+              "description": "Optional short label for the card, e.g. \"Revenue chart\"."
+            }
+          },
+          "required": [
+            "html"
+          ]
+        }
+      }
+    }
   ]
 }

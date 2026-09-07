@@ -41,6 +41,15 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
 
       } as any);
     }
+    // chat 预设三档——与 scripts/dump-tooldefs.mjs 的同名块逐字同改;绝不复用现存键名 `ai-studio:sandbox`。
+    {
+      const p = createAiStudioProfile();
+      configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+      const base = { userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {}, execMode: 'sandbox' } as any;
+      all['ai-studio:sandbox+chat'] = getToolDefinitions({ ...base, preset: 'chat' });
+      all['ai-studio:sandbox+gui'] = getToolDefinitions({ ...base, client: 'web/0.0.0' });
+      all['ai-studio:sandbox+gui+chat'] = getToolDefinitions({ ...base, client: 'web/0.0.0', preset: 'chat' });
+    }
     const here = dirname(fileURLToPath(import.meta.url));
     const snapshotPath = join(here, '../scripts/__snapshots__/tooldefs.json');
     const expected = JSON.parse(readFileSync(snapshotPath, 'utf8'));

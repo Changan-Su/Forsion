@@ -34,6 +34,10 @@ import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import './composer2.css'
 
 registerMessages({
+  // Chat / Work 是会话事实;可见切换统一放在侧栏胶囊。
+  'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
+  'input.presetWork': { zh: 'Work', en: 'Work' },
+  'input.presetLocked': { zh: '模式在创建会话时确定;换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
   'composer2.exportRoleUser': { zh: '我', en: 'Me' },
   // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
@@ -213,6 +217,9 @@ export const Composer2: React.FC<{
   onVerifyCommandChange?: (cmd: string) => void
   planMode?: boolean
   onPlanModeChange?: (on: boolean) => void
+  /** 工作预设(会话事实):'chat' 轻聊天 / 缺省 work。onPresetChange 仅供空态 /chat、/work 命令;可见切换在侧栏胶囊。 */
+  preset?: AgentConfig['preset']
+  onPresetChange?: (p: 'chat' | 'work') => void
   voiceMode?: boolean
   onVoiceModeChange?: (on: boolean) => void
   groupChat?: boolean
@@ -268,7 +275,7 @@ export const Composer2: React.FC<{
   defaultModelIds, onDefaultModelChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
-  planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
+  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
   groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
   agents, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
@@ -439,6 +446,7 @@ export const Composer2: React.FC<{
   }, [voice.recording, voice.busy])
 
   const isHost = execConfig.execMode === 'host'
+  const isChat = preset === 'chat'
   const approval = execConfig.approvalMode || 'auto-edit'
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
@@ -557,7 +565,10 @@ export const Composer2: React.FC<{
       '/new': onNewSession ? () => { onNewSession(); close() } : undefined,
       '/branch': onBranch ? () => { onBranch(); close() } : undefined,
       '/compact': onCompact ? () => { onCompact(); close() } : undefined,
-      '/plan': onPlanModeChange ? () => { onPlanModeChange(!planMode); close() } : undefined,
+      '/plan': onPlanModeChange && !isChat ? () => { onPlanModeChange(!planMode); close() } : undefined,
+      // 下一个新会话的模式(只在空态可选;创建后锁定)
+      '/chat': onPresetChange ? () => { onPresetChange('chat'); close() } : () => { app().toast(t('input.presetLocked')); close() },
+      '/work': onPresetChange ? () => { onPresetChange('work'); close() } : () => { app().toast(t('input.presetLocked')); close() },
       '/voice': onVoiceModeChange ? () => { onVoiceModeChange(!voiceMode); close() } : undefined,
       '/model': onModelChange && models?.length
         ? () => { setSlashSubMenu({ start: replaceSlash('/model ') }); setSlashIndex(0) }
@@ -589,7 +600,7 @@ export const Composer2: React.FC<{
       // Historian / Muse 的桌面入口在「特殊 Agent」名册页(没有各自独立的视图)。
       '/historian': () => { app().setActiveSpecial('agents'); close() },
       '/muse': () => { app().setActiveSpecial('agents'); close() },
-      '/groupchat': onGroupChange ? () => { setGroupSetupOpen(true); close() } : undefined,
+      '/groupchat': onGroupChange && !isChat ? () => { setGroupSetupOpen(true); close() } : undefined,
       '/sessions': () => { app().setActiveId(null); close() },
       '/cost': () => {
         const st = app()
@@ -678,7 +689,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
@@ -1080,13 +1091,14 @@ export const Composer2: React.FC<{
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })
-    : planMode ? t('input.planMode') : (isHost ? t(curApproval.key) : t('input.normal'))
+    : planMode && !isChat ? t('input.planMode') : isChat ? t('input.presetChat') : (isHost ? t(curApproval.key) : t('input.normal'))
   // 收窄时药丸只剩图标,故图标随当前模式变(群聊/计划/审批档位),窄屏也能一眼看出状态。
   const ModeIcon = groupActive ? Users
-    : planMode ? ClipboardList
+    : planMode && !isChat ? ClipboardList
     : isHost ? curApproval.Icon
     : MessageSquare
-  const showModeChip = !!onPlanModeChange || isHost || !!onGroupChange
+  // Chat 是轻量对话，不露出 Work 才需要的计划/群聊/审批模式入口。
+  const showModeChip = !isChat && (!!onPlanModeChange || isHost || !!onGroupChange)
   const currentEngine = (engines || []).find((e) => e.id === engineId)
   const engineLabel = currentEngine?.name || t('input.engineDefault')
   const isEngine = !!engineId
@@ -1373,7 +1385,7 @@ export const Composer2: React.FC<{
             {showModeChip && (
               <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
                 <button
-                  className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode ? ' active' : ''}`}
+                  className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
                   title={t('input.modeChipTitle')}
                   aria-expanded={openMenu === 'mode'}
                   onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}
@@ -1384,7 +1396,7 @@ export const Composer2: React.FC<{
                 </button>
                 {openMenu === 'mode' && (
                   <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
-                    {onPlanModeChange && (
+                    {onPlanModeChange && !isChat && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>
                         <button className={`menu-item${planMode ? ' active' : ''}`} onClick={() => { onPlanModeChange(!planMode); setOpenMenu(null) }}>
@@ -1394,7 +1406,7 @@ export const Composer2: React.FC<{
                         </button>
                       </>
                     )}
-                    {onGroupChange && !isEngine && (
+                    {onGroupChange && !isEngine && !isChat && (
                       <>
                         <div className="menu-section">{t('group.menu.section')}</div>
                         <button className={`menu-item${groupActive ? ' active' : ''}`} onClick={() => { setGroupSetupOpen(true); setOpenMenu(null) }}>
@@ -1439,7 +1451,7 @@ export const Composer2: React.FC<{
               </span>
             )}
             <span className="t2c-grow" />
-            {!!contextWindow && contextWindow > 0 && (() => {
+            {!isChat && !!contextWindow && contextWindow > 0 && (() => {
               const pct = Math.min(100, Math.round(((ctxTokens || 0) / contextWindow) * 100))
               const warn = pct >= 80
               const R = 9

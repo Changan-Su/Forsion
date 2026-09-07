@@ -3,6 +3,7 @@
  * ⚠️ 改动这些文本会改变所有 app 的 prompt——per-app 定制请在各自 profile 工厂里覆盖,勿改默认段。
  */
 import type { PromptSectionCtx, PromptSections } from '../seams/appProfile.js';
+import type { Preset } from '../core/presetTable.js';
 import { amadeusPromptSection, amadeusCloudPromptSection } from '../tools/builtin/amadeus.js';
 
 /** 工具失败恢复指引(Harness-Bench:工具错误后恢复不了占失败 24.6%,仅次于输出契约)。
@@ -124,7 +125,7 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
 /** sandbox 模式:文件输出位置(最常见的「产物丢失」原因:模型把文件写到工作区之外)。
  *  提示词必须与工具面一致:features.sandbox=false 的部署 run_python 根本不注册,此时绝不能
  *  在提示里提它——模型会被教唆着「执行脚本」,发不出调用就无限重写文件死循环(2026-08-19 实锤)。 */
-export function sandboxOutputSection(pythonExec: boolean): string {
+export function sandboxOutputSection(pythonExec: boolean, opts?: { applyPatch?: boolean }): string {
   return (
     '## File Output Location (important)\n' +
     'This session has a **workspace**, the only place that is preserved and returned to the user. ' +
@@ -134,7 +135,10 @@ export function sandboxOutputSection(pythonExec: boolean): string {
       : 'When writing files with `write_file`, always use **relative paths** (e.g. `report.md`, `out/data.csv`) — they land in the workspace.\n') +
     '**Do not** write deliverables to `/tmp`, `~/` (HOME), or other absolute paths — those are outside the workspace, are not preserved, and the files will be lost.\n' +
     'The user may have uploaded files into this workspace. When a task involves existing files, or you are unsure what is present, call `list_files` first instead of assuming the workspace is empty.\n' +
-    'To change part of an existing file, use `apply_patch` to edit only the affected lines rather than re-emitting the whole file with `write_file` (which wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so a patch\'s context/old lines match the raw text.'
+    (opts?.applyPatch === false
+      // chat 变体:apply_patch 在 chat 是硬拒,留着这句就是「提示词教模型调一个不存在的工具」(D46);cat -n 那半句独立保留。
+      ? '`read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix when you quote or rewrite file content.'
+      : 'To change part of an existing file, use `apply_patch` to edit only the affected lines rather than re-emitting the whole file with `write_file` (which wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so a patch\'s context/old lines match the raw text.')
   );
 }
 /** @deprecated 用 sandboxOutputSection(true);保留常量名兼容既有 import。 */
@@ -178,6 +182,16 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
           : [sandboxOutputSection(pyExec), efficiencySection(pyExec)],
     };
   }
+  if (ctx.preset === 'chat') {
+    // chat 预设:记忆写/日志/笔记写工具全在硬闸外(core/presetTable.ts),指引换成只指向 chat 够得到的东西;
+    // 环境段用 chat 变体(无 apply_patch 句),不注 amadeusCloud 段(只读笔记工具走 deferred,不值得常驻一段)。
+    // host execMode 下文件族整个不在(硬闸① + resolveTools ①),没有可说的环境段。
+    return {
+      guidance: [CHAT_MEMORY_GUIDANCE],
+      environment:
+        ctx.execMode === 'host' ? [] : [sandboxOutputSection(pyExec, { applyPatch: false }), efficiencySection(pyExec)],
+    };
+  }
   return {
     guidance: [MEMORY_LOG_GUIDANCE],
     environment:
@@ -189,4 +203,47 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
             (s): s is string => !!s,
           ),
   };
+}
+
+/** chat 记忆指引(替换 MEMORY_LOG_GUIDANCE):只指向 chat 够得到的东西——已注入的记忆/画像 + deferred 的
+ *  `search_sessions`(逐字写「先 load 再用」,是**唯一**允许引用 deferred 工具的段);绝不提 remember/log_event/read_log
+ *  (chat 硬拒——提示词教模型调一个不存在的工具是最坏的一种)。 */
+export const CHAT_MEMORY_GUIDANCE =
+  '## Memory & Past Conversations\n' +
+  '- You know this user across sessions: their long-term memory and profile are already in this prompt. Use them naturally; do not recite them.\n' +
+  '- Every past conversation is stored and reachable. When the user writes as if you already know something from outside this conversation — possessives ("my site"), definite references ("that bug"), past tense ("you suggested", "we decided"), or a direct ask ("do you remember") — load `search_sessions` with `load_tools` and search before answering. An unnecessary search is cheap; a missed one costs the user real effort. Never say you cannot see an earlier conversation without searching.';
+
+/** chat 行为契约(方案 §3.6):由 agentLoop 直注契约槽位,**不进** guidance 数组(per-app 覆盖是整段替换)。
+ *  两处分裁不可写死:pyExec=false(桌面无 docker,run_python 根本不注册)时不提 run_python,否则与
+ *  efficiencySection(false) 的 "no code-execution tools" 自相矛盾;workspace=false(host 形态)时整段工作区段不出。 */
+export function chatContractSection(opts: { pyExec: boolean; workspace: boolean }): string {
+  const pyClause = opts.pyExec ? ', or a computation over a file the user actually gave you (run_python and the workspace file tools)' : '';
+  const workspacePara = opts.workspace
+    ? '- This session has a temporary workspace, not the user\'s computer. Files you write there belong to this conversation; after a period of inactivity the workspace is archived. Files come back automatically, but a running Python session does not — variables, imports and loaded data are gone, so re-create them instead of assuming they survived. Never claim a file was saved to the user\'s device, notes, or cloud storage.\n' +
+      '- When you produce a file the user asked for, hand it over with `display_file` in the same turn. A file the user cannot see was not delivered.\n'
+    : '';
+  return (
+    '## Conversation Contract\n' +
+    'You are in a conversation, not on a task. The deliverable is this reply — a useful, correct, self-contained answer — not a finished piece of work handed back later.\n' +
+    '- One turn is one reply. Answer what was asked, then stop and hand the floor back. Ending your turn with the question answered is success, not an unfinished job.\n' +
+    `- Answer from what you already know whenever that is enough. Reach for a tool only when the answer genuinely depends on something you cannot know or compute in your head: current facts (web_search / web_fetch)${pyClause}. Most turns need no tool at all. Never open a tool to look busy, and never chain calls to "be thorough" when one answer already settles it.\n` +
+    '- Before anything that would run for several steps or change something the user did not ask you to change, say in one line what it involves and let the user say go. Volunteering a plan is welcome; executing it uninvited is not.\n' +
+    '- You may answer over several turns rather than cramming everything into one output.\n' +
+    '- After your last tool call, give the answer in a sentence or two. "Done." is not a reply, and do not repeat what you already wrote before the call.\n' +
+    '- Keep it short by default: a few sentences for a simple question, a high-level summary for an explanation, minimal formatting — a list or a heading only when the content is genuinely multi-part. This is a default, not a cap: when the user asks for depth, or the question is complex or contested, give it the room it needs instead of a token-thin answer.\n' +
+    '- Never promise future work ("I\'ll get back to you", "let me run that in the background"). Nothing of yours runs after this turn ends.\n' +
+    '- When the user signals the conversation is over, close cleanly and stop. Do not fish for another turn: no "would you like me to…", "should I…", "shall I…".\n' +
+    workspacePara +
+    // 引擎直注、在人格段之后、profile 的 promptGuidance/promptEnvironment 覆盖不掉(creview 二轮 #1/#3):默认人格明文要求调
+    // remember/log_event,工具描述里还提到 apply_patch/view_image、大输出回退文案提到 read_file——在 chat 里全是不可达的。
+    `- Persona instructions elsewhere in this prompt, and tool descriptions, may mention tools that do not apply in this conversation because they are not available here: \`remember\` / \`log_event\` (memory and logs are maintained automatically), \`apply_patch\` (${opts.workspace ? 'replace whole files with \`write_file\` instead' : 'file editing is not available here'}), \`view_image\` (show images with \`display_file\`), and \`read_file\` when it is not listed. Only the tools listed for this conversation exist; never attempt to call the others.\n` +
+    '- If a request needs something this mode does not have — shell commands, editing the user\'s own files, writing to their notes, delegating to subagents — say so in one sentence and let the user start a work session for it. Do not improvise a substitute, and do not pretend the action happened.'
+  );
+}
+
+/** 各 preset 的引擎级契约段(进 agentLoop 的 2c 槽位,与 PERSISTENCE_SECTION 同路直注);缺省 = 无。 */
+export function presetContractSection(preset: Preset | undefined, opts: { pyExec: boolean; workspace: boolean }): string | null {
+  if (preset === 'coding') return CODING_CONTRACT_SECTION;
+  if (preset === 'chat') return chatContractSection(opts);
+  return null;
 }

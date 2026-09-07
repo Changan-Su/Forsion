@@ -14,6 +14,7 @@ export const DESKTOP_IMPLEMENTED: string[] = [
   '/branch',
   '/compact',
   '/plan',
+  '/chat', '/work', // 下一个新会话的模式(只在空态露出;创建后锁定)
   '/voice',
   '/model',
   '/loop',

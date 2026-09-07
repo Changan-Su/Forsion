@@ -16,7 +16,8 @@ import { EditorialMessage } from './chat2/EditorialMessage'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace } from '../stores/appStore'
+import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
+import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
@@ -64,6 +65,8 @@ export function ChatView({ leaf, params }: ViewProps) {
     newChatWs: state.newChatWs,
     newChatCfg: state.newChatCfg,
     newChatModel: state.newChatModel,
+    sessionMode: state.sessionMode,
+    setSessionMode: state.setSessionMode,
     pendingDraft: state.pendingDraft,
     setPendingDraft: state.setPendingDraft,
     pendingChatQuote: state.pendingChatQuote,
@@ -160,12 +163,17 @@ export function ChatView({ leaf, params }: ViewProps) {
       })
     // 空态:药丸显示的必须是这条消息**实际会用**的档位 —— 即 stickyDefaults(上次用的),
     // 否则会出现「显示自动编辑、发出去却是全自动」的错位。
-    : {
-        execMode: s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless' ? 'sandbox' : 'host',
-        ...stickyDefaults(s.desktopConfig, s.newChatWs?.kind !== 'cloud' && s.newChatWs?.kind !== 'rootless'),
-        cwd: s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless' ? undefined : (s.newChatWs?.path || undefined),
-        ...s.newChatCfg,
-      }, amadeusRoot)
+    : (() => {
+        // 模式先于工作区:chat 会话恒 sandbox + 无根(方案 §2.1 接缝 0),与 send() 的建会话规则同源(newSessionPreset)。
+        const preset = newSessionPreset(s.sessionMode, s.newChatWs, currentPlatform())
+        const cloud = preset === 'chat' || s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless'
+        return applyPreset({
+          execMode: cloud ? 'sandbox' : 'host',
+          ...stickyDefaults(s.desktopConfig, !cloud, preset),
+          cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
+          ...s.newChatCfg,
+        }, preset) as AgentConfig
+      })(), amadeusRoot)
   const mvModelId = activeChatModelId({ ...s, activeId }) // 与建会话落库、startRun、ctx.tangu.activeModel() 同源,勿就地展开回退链
   const isCloudSession = mvCfg.execMode === 'sandbox'
   const visibleModels = !s.modelsResp?.models
@@ -549,7 +557,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
   
-        {!activeId && (
+        {/* chat 无项目:模式为 chat 时不露出项目选择器(留着会让人选个项目、悄悄建成 work 会话)。 */}
+        {!activeId && mvCfg.preset !== 'chat' && (
           <div className="newchat-projectbar">
             <div className="newchat-projectbar-inner">
               <ProjectSelector
@@ -598,6 +607,8 @@ export function ChatView({ leaf, params }: ViewProps) {
             : (cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
           planMode={mvCfg.planMode}
           onPlanModeChange={activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
+          preset={mvCfg.preset}
+          onPresetChange={activeId ? undefined : (p) => s.setSessionMode(p)}
           voiceMode={voiceOn}
           onVoiceModeChange={chatAgentSlug ? (on) => void s.setVoiceMode(chatAgentSlug, on) : undefined}
           groupChat={mvCfg.groupChat}

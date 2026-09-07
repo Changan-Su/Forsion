@@ -7,6 +7,7 @@ import type { Tool, ToolCall } from '../core/types.js';
 import { deps } from '../seams/runtime.js';
 import { executeCustomTool } from './customTools.js';
 import { registerToolProvider, resolveTools, isDeferredIn, type ToolDef } from './toolRegistry.js';
+import { presetOf } from '../core/presetTable.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
 import { webSearchProvider } from './builtin/webSearch.js';
@@ -238,7 +239,10 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   }
   defs.push(...unlockedDeferred);
   const taken = new Set<string>(tools.keys());
-  if (ctx.customTools && ctx.customTools.size) {
+  // 自定义/MCP 工具按 PRESET_TABLE.externalTools 在此再拒一次:主 loop 对 chat 本就不构造这两个 Map,
+  // 这里让 getToolDefinitions/executeTool 自身也满足默认拒(内部调用方带 Map 也绕不过;creview 09-07 E8)。
+  const externalOk = presetOf(ctx.preset).externalTools;
+  if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
       if (taken.has(t.name)) continue; // 内置同名优先
       taken.add(t.name);
@@ -246,7 +250,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
     }
   }
   // MCP 工具(ctx 运行时注入,manager 已按 (server, tool) 排序 → defs 字节级稳定)
-  if (ctx.mcpTools && ctx.mcpTools.size) {
+  if (externalOk && ctx.mcpTools && ctx.mcpTools.size) {
     for (const t of ctx.mcpTools.values()) {
       if (taken.has(t.name)) continue; // mcp__ 前缀理论上不冲突,保险跳过
       taken.add(t.name);
@@ -325,7 +329,8 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     }
   }
 
-  const custom = ctx.customTools?.get(name);
+  const externalOk = presetOf(ctx.preset).externalTools; // 与 getToolDefinitions 同判:chat 下自定义/MCP 工具执行边界也拒
+  const custom = externalOk ? ctx.customTools?.get(name) : undefined;
   if (custom) {
     try {
       const result = await executeCustomTool(custom, args, ctx);
@@ -337,7 +342,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   }
 
   // 第三级 fallback:MCP 工具(经 deps().mcp 调远端;仅 standalone/TUI 装配了 mcp)。
-  const mcpTool = ctx.mcpTools?.get(name);
+  const mcpTool = externalOk ? ctx.mcpTools?.get(name) : undefined;
   if (mcpTool && deps().mcp) {
     const r = await deps().mcp!.callTool(mcpTool, args, ctx.signal);
     return { toolCallId: call.id, name, result: r.text, isError: r.isError };

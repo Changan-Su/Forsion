@@ -57,6 +57,8 @@ const F = {
 const GATE_FILES = [
   F.engine,
   path.join(GENESIS, 'desktop/frontend/src/amadeus/blocks/database/csvExport.ts'),
+  // 2026-09-07 加入 agentRunService.ts:端判定单源 currentPlatform()(chat/work 新会话默认档据此派生)。
+  path.join(GENESIS, 'desktop/frontend/src/services/agentRunService.ts'),
 ]
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
@@ -96,6 +98,7 @@ const KNOWN_GATES = {
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
   'window.tangu?.backendStatus': '桌面壳语义(含 external 模式)',
   'window.tangu?.mobile': '移动端标志',
+  'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话默认档(desktop→work,web/mobile→chat)据此派生,不是功能门控',
   'window.tangu?.spacesList': '用户自定义 Space 读盘 — 仅桌面',
   'window.tangu?.spacesSave': '用户自定义 Space 写盘 — 仅桌面',
   'window.tangu?.getConfig': '前台窗口采样调试面板的 ⌘K 入口 — 开关真源是主进程配置(默认关,只在开发者选项里能开);移动端/web 没有 host 进程,这个能力整体不存在,命令不注册是对的',

@@ -7,6 +7,7 @@
  */
 import { deps } from './runtime.js';
 import type { ToolProvider } from '../tools/toolRegistry.js';
+import type { Preset } from '../core/presetTable.js';
 
 export interface PromptSectionCtx {
   execMode: 'sandbox' | 'host';
@@ -15,8 +16,9 @@ export interface PromptSectionCtx {
   extraRoots?: string[];
   /** 本会话是否经消息通道(微信等)转发——通道端只渲染纯文本,回复风格段据此分裁。 */
   channelSession?: boolean;
-  /** 工作预设:'coding' 时陪伴式指引(记忆日志/浏览器/笔记)退场,与工具面的 deferred 收敛保持一致。 */
-  preset?: 'coding';
+  /** 工作预设:'coding' 时陪伴式指引(记忆日志/浏览器/笔记)退场;'chat' 时指引换 CHAT_MEMORY_GUIDANCE、
+   *  环境段换 chat 变体——都与 core/presetTable.ts 的工具面保持一致。 */
+  preset?: Preset;
   /** sandbox 模式下 run_python/pip_install 是否实际注册(profile.features.sandbox)。
    *  显式 false 时环境段不得提及代码执行——提示词与工具面必须一致,否则模型会
    *  反复宣称「现在执行脚本」却发不出调用而死循环。未传视为 true(既有调用点零影响)。 */

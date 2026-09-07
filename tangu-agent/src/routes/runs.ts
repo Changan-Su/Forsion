@@ -134,6 +134,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
     const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings } = req.body || {};
+    if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
+      return res.status(400).json({ detail: 'agent_config must be an object' });
+    }
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
     const clientTag = normalizeClientTag(client);

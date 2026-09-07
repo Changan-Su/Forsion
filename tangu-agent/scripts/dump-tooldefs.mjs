@@ -48,4 +48,14 @@ const all = {
 
   });
 }
+// chat 预设三档(方案 §3.8):追加在末尾,旧键零扰动。⚠️ 绝不复用现存键名 `ai-studio:sandbox`(同名写入会覆盖旧键,
+// toEqual 深等比对立刻红,与「旧键逐字节不变」自相矛盾)。与 test/tooldefs.snapshot.test.ts 的同名块逐字同改。
+{
+  const p = createAiStudioProfile();
+  configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+  const base = { userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {}, execMode: 'sandbox' };
+  all['ai-studio:sandbox+chat'] = getToolDefinitions({ ...base, preset: 'chat' }); // chat 云端真形态(无 sketch):≤7,000 B
+  all['ai-studio:sandbox+gui'] = getToolDefinitions({ ...base, client: 'web/0.0.0' }); // work 对照:sketch 在云端 work 也在场
+  all['ai-studio:sandbox+gui+chat'] = getToolDefinitions({ ...base, client: 'web/0.0.0', preset: 'chat' }); // chat GUI 真形态:≤10,400 B
+}
 process.stdout.write(JSON.stringify(all, null, 2) + '\n');

@@ -526,7 +526,10 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 辅助模式(assist):LOG/memory 不由 Historian 写,分支(branch)出后台群聊讨论交主 Agent 定夺;
     // 标题仍由 Historian 独立维护(主 Agent 没有改标题的工具,标题也非记忆资产)。
     // 首轮(roundN===1)始终走独立模式:首轮要立即出标题+初始日志,也没有可供讨论的积累。
-    const assistMode = cfg.mode === 'assist' && roundN > 1;
+    // chat 会话不拉辅助讨论:讨论 run 不带 preset,被空白会话锁按存值降成普通 chat 面的 run,讨论提示会以可见消息
+    // 出现在用户会话里(creview 09-07 E2)。判据取会话事实 sk.agent_config(hook 否决路径不传 seed,靠 seed 会漏)。
+    const sessionPreset = (() => { try { const c = typeof sk.agent_config === 'string' ? JSON.parse(sk.agent_config) : sk.agent_config; return c?.preset; } catch { return undefined; } })();
+    const assistMode = cfg.mode === 'assist' && roundN > 1 && sessionPreset !== 'chat';
     // fork 模式:快照缺席(群聊/外部引擎/hook 否决路径不传 seed)→ 自动回落 independent 判断。
     const forkMode = cfg.mode === 'fork' && !!forkSeed;
     const judgeLog = logDue && !assistMode;

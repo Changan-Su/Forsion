@@ -86,7 +86,7 @@ async function main() {
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.waitForTimeout(1000)
-    if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
+    if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
     }

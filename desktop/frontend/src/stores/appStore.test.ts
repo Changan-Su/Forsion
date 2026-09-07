@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentRunEvent, AuthStatusInfo, UiMessage } from '../types'
-import { ROOTLESS_WORKSPACE_KEY } from '../types'
+import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '../types'
+import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
 import { useApp, recordToUi, withAmadeusWorkspace, type AppState } from './appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 
@@ -40,6 +40,40 @@ describe('recordToUi agent 身份', () => {
 const initial = useApp.getState()
 const assistant = (): UiMessage => ({
   id: 'a1', role: 'assistant', content: '', status: 'streaming', timestamp: 1,
+})
+
+describe('默认本地工作区分组', () => {
+  const legacyDefaultSession: SessionRecord = {
+    id: 'legacy-default', title: '旧默认会话', summary: null, model_id: null, archived: false, emoji: null, agent_config: null,
+    project_path: '/old-default', project_name: 'app.defaultWorkspace', projectless: false, created_at: '', updated_at: '',
+  }
+
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    usePageStore.setState({ vaultRoot: null })
+    useApp.setState({
+      tr: ((key: string) => key) as AppState['tr'],
+      defaultWsDir: '', homeDir: undefined,
+      sessions: [legacyDefaultSession], archivedSessions: [], cloudProjects: [], channelWorkspaces: [],
+    })
+  })
+
+  it('配置未到时用占位 key 承接旧会话，配置到达后换真实 key 仍只有一个同名组', () => {
+    const early = useApp.getState().workspaces()
+    const earlyDefault = early.filter((w) => w.name === 'app.defaultWorkspace')
+    expect(earlyDefault).toHaveLength(1)
+    expect(earlyDefault[0].key).toBe(DEFAULT_LOCAL_WORKSPACE_KEY)
+    expect(sessionWorkspaceKey(legacyDefaultSession, early)).toBe(DEFAULT_LOCAL_WORKSPACE_KEY)
+
+    useApp.setState({ defaultWsDir: '/new-default' })
+    const loaded = useApp.getState().workspaces()
+    const loadedDefault = loaded.filter((w) => w.name === 'app.defaultWorkspace')
+    expect(loadedDefault).toHaveLength(1)
+    expect(loadedDefault[0]).toMatchObject({ key: '/new-default', path: '/new-default' })
+    expect(loadedDefault[0].sessionKeys).toEqual(['/new-default', '/old-default'])
+    expect(sessionWorkspaceKey(legacyDefaultSession, loaded)).toBe('/new-default')
+    expect(loaded.some((w) => w.key === '/old-default')).toBe(false)
+  })
 })
 
 describe('appStore.reduceEvent', () => {

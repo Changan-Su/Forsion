@@ -126,7 +126,7 @@ async function main() {
     // (08-28 深夜三连红的真相,失败截图= 主页 Space)。确定性切到 Tangu 聊天 Space 再断言,幂等。
     const spaceBtn = win.locator('.rb-space[title="Agent"]').first()
     if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
-    if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
+    if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
     }

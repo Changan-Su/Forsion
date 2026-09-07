@@ -8,6 +8,7 @@
  */
 import type { ToolImpl, ToolContext } from './toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
+import { presetOf } from '../core/presetTable.js';
 
 export interface ToolDef extends ToolImpl {
   name: string;
@@ -26,27 +27,20 @@ export interface ToolDef extends ToolImpl {
 export interface ToolProvider {
   id: string;
   tools(): ToolDef[];
+  /** 'plugin' = 插件注册(plugins/bootstrap、plugins/registry 打标)。chat 正向面只认核心 provider:
+   *  插件同名 web_search/write_file 也进不了 chat 面(creview 09-07 E6);work/coding 面为空,不受影响。 */
+  origin?: 'plugin';
 }
 
-/** coding 预设下追加转 deferred 的产品面工具(仍在「Additional Tools」目录里,load_tools 可解锁):
- *  WB-Bench 取证——48 工具全暴露时,封闭 bench 里模型调了 107 次 web、80 次 log_event、139 次
- *  use_skill,纯烧迭代/带偏任务。coding 任务的常驻面只留文件/shell/进程/todo/委派。 */
-export const CODING_PRESET_DEFERRED = new Set([
-  'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type',
-  'browser_scroll', 'browser_back', 'browser_press', 'browser_console', 'browser_screenshot',
-  'browser_task', 'web_search', 'web_fetch',
-  'amadeus_list_notes', 'amadeus_list_calendars', 'amadeus_list_events',
-  'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
-  'inbox_send', 'display_file', 'read_session', 'search_sessions', 'read_document',
-  'remember', 'log_event', 'read_log',
-]);
+// 各 preset 的情境 deferred 集合住 core/presetTable.ts(单源);这里 re-export 保持既有 import 路径。
+export { CODING_PRESET_DEFERRED } from '../core/presetTable.js';
 
-/** 工具在本 ctx 下是否按 deferred 处理:静态标记 ∪ coding 预设的产品面集合。
+/** 工具在本 ctx 下是否按 deferred 处理:静态标记 ∪ 本 preset 的情境集合(PRESET_TABLE.toolFace.deferred)。
  *  目录(listDeferredTools)、defs 过滤(getToolDefinitions)、解锁(load_tools)三处必须
  *  共用本判定——2026-08-09 前 load_tools 只认静态 deferred:true,coding 预设的情境 deferred
  *  工具在目录里被广而告之却解锁不了("Unknown/not loadable"),Codex 评审抓到的存量 bug。 */
 export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean): boolean {
-  return !!deferred || (ctx.preset === 'coding' && CODING_PRESET_DEFERRED.has(name));
+  return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name);
 }
 
 // ── 全局(内置)provider 注册表。注册顺序即工具喂给 LLM 的顺序——不可随意调换。──
@@ -109,17 +103,27 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
   // 否则目录还在、唯一解锁入口没了,deferred 工具永久不可达(还可能被同名 custom 工具顶替)。
   if (builtins !== 'all' && !builtins.includes('load_tools')) {
     const wl = new Set(builtins);
-    const hasDeferred = providers.some((p) => p.tools().some((t) => t.deferred && wl.has(t.name)));
+    const hasDeferred = providers.some((p) => p.tools().some((t) => isDeferredIn(ctx, t.name, t.deferred) && wl.has(t.name)));
     if (hasDeferred) builtins = [...builtins, 'load_tools'];
   }
   const out = new Map<string, ToolDef>();
-  const add = (t: ToolDef, isBuiltin: boolean): void => {
+  const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false): void => {
     const m = t.mode || 'both';
     if (host && m === 'sandbox') return;
     if (!host && m === 'host') return;
     // 计划模式:只读集中过滤。Muse 例外:remember 只写它自己记忆域(agents/muse/MEMORY.md)的自我校准
     // 洞察,不触达用户资产——「对用户的唯一写」仍是 add_muse_todo;普通 plan mode 行为零变化。
     if (ctx.planMode && !PLAN_MODE_TOOLS.has(t.name) && !((ctx as any).muse && t.name === 'remember')) return;
+    // preset 硬闸(PRESET_TABLE.toolFace;chat 用):planMode 之后、isEnabledFor 之前——工具根本不进 out map,
+    // defs / 目录 / load_tools 三处同时看不见。work/coding 的集合为空 → 零行为变化(旧快照逐字节不动)。
+    // ① host 族按 t.mode 整族拒,不靠名单:host 侧同名的 read_file/write_file 打的是用户真实磁盘(D45);
+    // ② 正向面:不在常驻 ∪ 按需集合里的一律拒(默认拒,明天新加的工具不会自动漏进 chat);且只认核心 provider——
+    //    插件 provider(origin:'plugin')与 app 工具(isBuiltin=false)同名顶替也进不来;
+    // ③ host execMode 下再拒按 cwd 爬真实磁盘的只读 both 工具(D11 纵深防御)。
+    const face = presetOf(ctx.preset).toolFace;
+    if (face.rejectHostMode && m === 'host') return;
+    if (face.face.size && (!isBuiltin || fromPlugin || !face.face.has(t.name))) return;
+    if (host && face.hostDiskHidden.has(t.name)) return;
     if (isBuiltin && builtins !== 'all' && !builtins.includes(t.name)) return;
     // 每-agent 内置工具黑白名单(config.toml tools_mode/tools_list):只约束**无门禁**的内置工具——
     // 门禁工具(isEnabledFor)可见性归引擎逻辑且不在 UI 目录里(allow 模式不误伤 Muse/inbox 系);
@@ -132,7 +136,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     if (t.isEnabledFor && !t.isEnabledFor(profile, ctx)) return;
     out.set(t.name, t);
   };
-  for (const p of providers) for (const t of p.tools()) add(t, true);
+  for (const p of providers) for (const t of p.tools()) add(t, true, p.origin === 'plugin');
   for (const p of profile.toolLoadout.providers ?? []) for (const t of p.tools()) add(t, false);
   return out;
 }
