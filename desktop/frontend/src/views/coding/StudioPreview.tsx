@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, MousePointer2 } from 'lucide-react'
+import { StudioGuestSurface } from './StudioGuestSurface'
 import { Webview } from '../../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../../shared/browser'
 import { useI18n } from '../../i18n'
@@ -12,6 +13,8 @@ interface Props {
   nonce: number
   device: PreviewDevice
   inspecting: boolean
+  visible?: boolean
+  onActivate?(): void
   onInspectEnd(): void
   onSelect(element: SelectedElement): void
   onIssue(issue: StudioIssue): void
@@ -50,6 +53,9 @@ export function inspectorScript(marker: string, enabled: boolean): string {
 export function StudioPreview(props: Props) {
   const { t } = useI18n()
   const frame = useRef<Guest | null>(null)
+  const anchor = useRef<HTMLDivElement>(null)
+  const [guest, setGuest] = useState<Guest | null>(null)
+  const attachGuest = useCallback((element: HTMLElement | null) => { frame.current = element as Guest | null; setGuest(element as Guest | null) }, [])
   const callbacks = useRef(props); callbacks.current = props
   const marker = useRef(`__forsion_studio_${Math.random().toString(36).slice(2)}:`)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -57,7 +63,7 @@ export function StudioPreview(props: Props) {
   const loaded = useRef(false)
   const priorNonce = useRef(props.nonce)
   useEffect(() => {
-    const el = frame.current
+    const el = guest
     if (!el) return
     function report(next: 'loading' | 'ready' | 'error') { setStatus(next); callbacks.current.onStatus(next) }
     const start = () => { loaded.current = false; setError(''); report('loading') }
@@ -99,7 +105,7 @@ export function StudioPreview(props: Props) {
       el.removeEventListener('did-start-loading', start); el.removeEventListener('dom-ready', ready)
       el.removeEventListener('did-fail-load', fail); el.removeEventListener('console-message', consoleMessage)
     }
-  }, [props.url])
+  }, [props.url, guest])
   useEffect(() => {
     if (priorNonce.current === props.nonce) return
     priorNonce.current = props.nonce
@@ -113,10 +119,10 @@ export function StudioPreview(props: Props) {
       void el.executeJavaScript(inspectorScript(marker.current, props.inspecting)).catch(() => props.onInspectEnd())
     } catch { props.onInspectEnd() }
   }, [props.inspecting, props.url]) // callbacks read only when the inspect toggle changes
-  return <div className="csp-stage" data-device={props.device}>
+  return <><div ref={anchor} className="csp-anchor" /><StudioGuestSurface anchorRef={anchor} enabled={props.visible !== false} onActivate={props.onActivate}><div className="csu csu-guest-content"><div className="csp-stage" data-device={props.device}>
     {props.inspecting && <div className="csp-inspect-hint" role="status"><MousePointer2 size={14} />{t('studio.inspectHint')}</div>}
     {status === 'loading' && <div className="csp-loading" role="status"><Loader2 size={14} className="csx-spin" />{t('studio.loading')}</div>}
     {status === 'error' && <div className="csp-failure" role="alert"><strong>{t('studio.previewFailed')}</strong><code>{error}</code><button onClick={() => frame.current?.reload()}>{t('studio.retry')}</button></div>}
-    <div className="csp-viewport"><Webview ref={el => { frame.current = el as Guest | null }} className="csx-frame" src={props.url} partition={BROWSER_PARTITION} allowpopups="true" style={{ display: 'flex' }} /></div>
-  </div>
+    <div className="csp-viewport"><Webview ref={attachGuest} className="csx-frame" src={props.url} partition={BROWSER_PARTITION} allowpopups="true" style={{ display: 'flex' }} /></div>
+  </div></div></StudioGuestSurface></>
 }

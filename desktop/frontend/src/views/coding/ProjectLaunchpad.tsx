@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
-import { ArrowRight, Bot, Check, ChevronDown, Folder, FolderOpen, Image, LayoutDashboard, Lightbulb, Loader2, MessageSquare, Palette, Search, UserRound, WandSparkles, X, RotateCw } from 'lucide-react'
+import { ArrowRight, Bot, Check, ChevronDown, Code2, Folder, FolderOpen, Image, LayoutDashboard, Lightbulb, Loader2, MessageSquare, Palette, Search, UserRound, WandSparkles, X, RotateCw } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { projectBasename, STUDIO_CAPABILITIES, STUDIO_TEMPLATES, validateProjectName, type StudioBrief, type StudioCapability, type StudioTemplate } from './projectBrief'
 import './launchpadMessages'
@@ -33,12 +33,14 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
   const [errorKey, setErrorKey] = useState<string | null>(null)
   const [listError, setListError] = useState(false)
   const [nameTouched, setNameTouched] = useState(false)
+  const ideaInput = useRef<HTMLTextAreaElement>(null)
   const inFlight = useRef(false)
   const listRequest = useRef(0)
   const canCreate = !!window.tangu?.mkdirHost && !!window.tangu?.listDir
   const canImport = !!window.tangu?.pickDirectory
   const canList = !!window.tangu?.listDir
   const nameIssue = nameTouched ? validateProjectName(name, existingNames) : null
+  const selectedTemplate = STUDIO_TEMPLATES.find((template) => template.id === templateId)
 
   const refresh = useCallback(async () => {
     const request = ++listRequest.current
@@ -83,6 +85,8 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
     setCapabilities([...template.capabilities])
     setTemplateId(template.id)
     setNameTouched(false); setErrorKey(null)
+    ideaInput.current?.focus({ preventScroll: true })
+    ideaInput.current?.scrollIntoView?.({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
   }
 
   function toggleCapability(capability: StudioCapability) {
@@ -131,15 +135,20 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
     <div className="csl-launchpad">
       <div className="csl-inner">
         <header className="csl-header">
-          <span className="csl-eyebrow">{t('csl.eyebrow')}</span>
-          <h1>{t('csl.title')}</h1>
-          <p>{t('csl.subtitle')}</p>
+          <div className="csl-heading"><Code2 size={21} aria-hidden="true" /><div><h1>{t('csl.title')}</h1><p>{t('csl.subtitle')}</p></div></div>
+          {canImport && <button className="csl-import" type="button" onClick={() => void importProject()} disabled={!!busy}>
+            {busy === 'import' ? <Loader2 size={15} className="csl-spin" /> : <FolderOpen size={15} />}
+            {t(busy === 'import' ? 'csl.importing' : 'csl.import')}
+          </button>}
         </header>
         <div className="csl-layout">
           <main className="csl-main">
             <form className="csl-brief" onSubmit={(e) => void create(e)}>
-              <label className="csl-idea-label" htmlFor={`${id}-idea`}>{t('csl.idea')}</label>
-              <textarea id={`${id}-idea`} className="csl-idea" placeholder={t('csl.ideaPlaceholder')}
+              <div className="csl-idea-head">
+                <label className="csl-idea-label" htmlFor={`${id}-idea`}>{t('csl.idea')}</label>
+                {selectedTemplate && <span className="csl-template-status" role="status" title={t('csl.templateSelected')}><Check size={12} />{t(selectedTemplate.nameKey)}</span>}
+              </div>
+              <textarea ref={ideaInput} id={`${id}-idea`} className="csl-idea" placeholder={t('csl.ideaPlaceholder')}
                 value={idea} maxLength={16000} onChange={(e) => { setIdea(e.target.value); setErrorKey(null) }} disabled={!!busy} />
               <details className="csl-details">
                 <summary><ChevronDown size={14} />{t('csl.details')}<span>{t('csl.optional')}</span></summary>
@@ -180,8 +189,10 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
               {nameIssue && <p id={`${id}-name-error`} className="csl-error">{t(`csl.name.${nameIssue}`)}</p>}
               {errorKey && errorKey !== `csl.name.${nameIssue}` && <p role="alert" className="csl-error">{t(errorKey)}</p>}
               {canCreate ? <>
-                <p className="csl-location" title={root || undefined}>{root ? t('csl.location', { path: root }) : t('csl.rootLoading')}</p>
                 <p className="csl-draft-hint">{t('csl.draftHint')}</p>
+                <details className="csl-save-location"><summary><Folder size={11} /><span>{t('csl.saveLocation')}</span><ChevronDown size={11} /></summary>
+                  <p className="csl-location">{root ? t('csl.location', { path: root }) : t('csl.rootLoading')}</p>
+                </details>
               </> : <p className="csl-host-hint">{t('csl.hostUnavailable')}</p>}
             </form>
             <section className="csl-templates" aria-labelledby={`${id}-templates`}>
@@ -200,14 +211,10 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
             </section>
           </main>
           <aside className="csl-projects" aria-labelledby={`${id}-projects`}>
-            <div className="csl-projects-head"><h2 id={`${id}-projects`}>{t('csl.projects')}</h2>
+            <div className="csl-projects-head"><h2 id={`${id}-projects`}>{t('csl.projects')}{allProjects.length > 0 && <span className="csl-project-count">{allProjects.length}</span>}</h2>
               {canList && <button type="button" className="csl-icon-button" title={t('csl.refresh')} aria-label={t('csl.refresh')}
                 onClick={() => void refresh()} disabled={loading || !!busy || !root}><RotateCw size={14} className={loading ? 'csl-spin' : undefined} /></button>}
             </div>
-            {canImport && <button className="csl-import" type="button" onClick={() => void importProject()} disabled={!!busy}>
-              {busy === 'import' ? <Loader2 size={15} className="csl-spin" /> : <FolderOpen size={15} />}
-              {t(busy === 'import' ? 'csl.importing' : 'csl.import')}
-            </button>}
             {allProjects.length > 0 && <div className="csl-search"><Search size={14} />
               <input type="search" aria-label={t('csl.search')} placeholder={t('csl.search')} value={search} onChange={(e) => setSearch(e.target.value)} />
               {search && <button className="csl-icon-button" type="button" aria-label={t('csl.clearSearch')} onClick={() => setSearch('')}><X size={12} /></button>}

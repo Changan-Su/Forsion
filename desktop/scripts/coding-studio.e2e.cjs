@@ -18,6 +18,7 @@ const OUTPUT = path.resolve(ROOT, '../outputs')
 const results = []
 const rendererErrors = []
 const geometry = []
+const motion = []
 const SAMPLE = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Studio fixture</title>
 <style>body{margin:0;padding:32px;font:16px system-ui;background:#f7f6f2;color:#172b2b}main{max-width:640px;margin:30px auto}h1{font-size:38px;line-height:1.15}p{line-height:1.6}button{font:inherit;background:#244b43;color:white;border:0;border-radius:10px;padding:12px 20px;cursor:pointer}small{display:block;margin-top:24px}</style></head>
 <body><main><small>CODING STUDIO · LOCAL PROJECT</small><h1 id="headline">A working first version</h1><p>Preview this project, try the button, then make a focused change.</p><button id="counter">Count: 0</button><small id="version">BASELINE</small></main>
@@ -35,6 +36,72 @@ async function until(read, timeout = 12000) {
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   return false
+}
+/** Record actual rendered geometry every animation frame across an ordinary UI action. */
+async function traceMotion(win, name, selector, action, dimension = 'width', closest = '') {
+  await win.evaluate(({ selector, dimension, closest }) => {
+    window.__studioMotion = new Promise(resolve => {
+      const samples = [], start = performance.now()
+      const tick = now => {
+        const element = document.querySelector(selector)
+        const target = closest ? element?.closest(closest) : element
+        const value = target?.getBoundingClientRect()[dimension] || 0
+        const surface = selector === '.csu-code-pane' ? document.querySelector('.csu-guest-surface') : null
+        samples.push({ ms: Math.round(now - start), value: Math.round(value * 10) / 10,
+          ...(surface ? { previewOpacity: Number(getComputedStyle(surface).opacity), previewVisible: getComputedStyle(surface).visibility === 'visible' } : {}) })
+        if (now - start < 900) requestAnimationFrame(tick)
+        else resolve(samples)
+      }
+      requestAnimationFrame(tick)
+    })
+  }, { selector, dimension, closest })
+  await action()
+  const samples = await win.evaluate(() => window.__studioMotion)
+  const values = samples.map(s => s.value)
+  const min = Math.min(...values), max = Math.max(...values)
+  const middle = samples.filter(s => s.value > min + 2 && s.value < max - 2)
+  const result = { name, dimension, min, max, intermediateFrames: middle.length, samples }
+  motion.push(result)
+  check(name, max - min > 12 && middle.length >= 3, JSON.stringify({ min, max, intermediateFrames: middle.length }))
+  return result
+}
+async function closeStudioTool(win) {
+  const placement = win.locator('.csu-tool-placement button').first()
+  await placement.focus()
+  await win.keyboard.press('Escape')
+  await win.waitForSelector('.csu-tool-view', { state: 'detached' })
+}
+/** A short native-compositor recording makes the delivered motion directly reviewable. */
+async function recordMotionDemo(app, win) {
+  if (process.env.STUDIO_MOTION_VIDEO !== '1') return
+  const directory = path.join(OUTPUT, 'coding-studio-motion-frames')
+  fs.mkdirSync(directory, { recursive: true })
+  const recording = (async () => {
+    const start = Date.now()
+    for (let i = 0; i < 120; i++) {
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, start + i * 50 - Date.now())))
+      const png = await app.evaluate(async ({ BrowserWindow }) => {
+        const frame = await BrowserWindow.getAllWindows()[0].capturePage()
+        return frame.resize({ width: 1400 }).toPNG().toString('base64')
+      })
+      fs.writeFileSync(path.join(directory, `${String(i).padStart(4, '0')}.png`), Buffer.from(png, 'base64'))
+    }
+  })()
+  const pause = () => win.waitForTimeout(650)
+  await pause()
+  await win.locator('.csu-tool-nav').getByRole('button', { name: 'Project brief', exact: true }).click()
+  await pause()
+  await win.getByRole('button', { name: 'Move to bottom panel', exact: true }).click()
+  await pause()
+  await closeStudioTool(win)
+  await pause()
+  await win.locator('.csu-modes').getByRole('button', { name: 'Split', exact: true }).click()
+  await pause()
+  await win.getByRole('button', { name: 'Phone · 390', exact: true }).click()
+  await pause()
+  await win.locator('.csu-modes').getByRole('button', { name: 'Preview', exact: true }).click()
+  await recording
+  await win.getByRole('button', { name: 'Responsive', exact: true }).click()
 }
 async function guestEval(win, script) {
   return win.locator('webview.csx-frame').evaluate((view, code) => view.executeJavaScript(code), script)
@@ -151,7 +218,7 @@ async function main() {
   try {
     app = await electron.launch({
       args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-      env: { ...process.env, TANGU_HOME: testDir, TANGU_BACKEND_URL: stub.url }, timeout: 45000,
+      env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1', TANGU_HOME: testDir, TANGU_BACKEND_URL: stub.url }, timeout: 45000,
     })
     win = await app.firstWindow()
     win.setDefaultTimeout(12000)
@@ -176,6 +243,8 @@ async function main() {
     await openCodingSpace(win)
     await win.waitForSelector('.csl-launchpad')
     await shoot(app, win, 'launchpad')
+    await traceMotion(win, 'Optional brief details expand through intermediate heights', '.csl-details', () => win.locator('.csl-details summary').click(), 'height')
+    await traceMotion(win, 'Optional brief details collapse through intermediate heights', '.csl-details', () => win.locator('.csl-details summary').click(), 'height')
     check('Launchpad has six editable templates and a real import action', await win.locator('.csl-template').count() === 6 && await win.locator('.csl-import').isEnabled())
     check('Studio requires a project before accepting a build request', await win.locator('.t2c-ta').first().isDisabled()
       && (await win.locator('.t2c-ta').first().getAttribute('placeholder')).includes('创建或打开'))
@@ -185,18 +254,64 @@ async function main() {
     check('Import renders the actual project file in an Electron guest', ready)
     if (!ready) throw new Error('Guest did not load the imported project')
     check('Import does not rewrite the existing source', fs.readFileSync(path.join(project, 'index.html'), 'utf8') === SAMPLE)
+    const beforeToolsGuest = await guestId(win)
+    await guestEval(win, 'window.studioLayoutSentinel="survive-panel-changes"')
+    await traceMotion(win, 'Brief opens with a real native right panel tween', '.csu-tool-view', () => win.locator('.csu-tool-nav').getByRole('button', { name: '项目简报', exact: true }).click(), 'width', '.dv-groupview')
+    check('Brief joins a real native right panel instead of an internal aside', await win.locator('.wb-extend[data-side=right] .csu-tool-view[data-tool=brief]').count() === 1 && await win.locator('.csu-panel').count() === 0)
+    const briefGoal = win.getByLabel('项目目标', { exact: true })
+    await briefGoal.fill('Preserve this unsaved brief while moving panels.')
+    await briefGoal.evaluate(el => { el.dataset.qaIdentity = 'original-brief' })
+    await win.locator('.csu-tool-nav').getByRole('button', { name: '项目简报', exact: true }).click()
+    check('Repeated tool trigger focuses the same form and preserves its draft', await briefGoal.getAttribute('data-qa-identity') === 'original-brief' && (await briefGoal.inputValue()).includes('unsaved brief'))
+    for (const [side, label] of [['left', '移至左侧面板'], ['bottom', '移至底部面板'], ['right', '移至右侧面板']]) {
+      await win.getByRole('button', { name: label, exact: true }).click()
+      await win.waitForSelector(`.wb-extend[data-side=${side}] .csu-tool-view`)
+      check(`Moving the tool to ${side} preserves the actual form DOM and draft`, await briefGoal.getAttribute('data-qa-identity') === 'original-brief' && (await briefGoal.inputValue()).includes('unsaved brief'))
+    }
+    await shoot(app, win, 'temp-view-right')
+    await traceMotion(win, 'Closing a solo Temp View keeps content through the collapse tween', '.csu-tool-view', () => closeStudioTool(win), 'width', '.dv-groupview')
+    check('Closing the tool restores the original chat and leaves no temporary tab', await win.locator('.t2c-ta').first().isVisible() && await win.locator('[data-transient-view]').count() === 0)
+    await win.locator('.csu-tool-nav').getByRole('button', { name: '项目简报', exact: true }).click()
+    check('Reopening the brief preserves the project draft', await briefGoal.getAttribute('data-qa-identity') === 'original-brief')
+    await closeStudioTool(win)
+    check('Opening, moving and closing native Temp panels preserve the guest and page memory', await guestId(win) === beforeToolsGuest && await guestEval(win, 'window.studioLayoutSentinel') === 'survive-panel-changes')
     const initialGuestId = await guestId(win)
-    await guestEval(win, 'document.getElementById("counter").click()')
-    await win.getByRole('button', { name: '手机 · 390', exact: true }).click()
+    await win.locator('.t2c-ta').first().focus()
+    check('Focusing chat first selects its native panel', await win.locator('.t2c-ta').first().evaluate(el => el.closest('.dv-groupview').classList.contains('dv-active-group')))
+    const counter = await guestEval(win, '(()=>{const r=document.getElementById("counter").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()')
+    const guestBox = await win.locator('webview.csx-frame').boundingBox()
+    await win.mouse.click(guestBox.x + counter.x, guestBox.y + counter.y)
+    const focusReturns = !!await until(async () => await guestEval(win, 'window.studioCounter') === 1 && await win.locator('.csu-workspace').evaluate(el => el.closest('.dv-groupview').classList.contains('dv-active-group')))
+    check('A real preview click activates its owner panel and reaches the guest button', focusReturns, JSON.stringify(await win.evaluate(() => ({ activeElement: document.activeElement?.tagName, insideSurface: document.querySelector('.csu-guest-surface').contains(document.activeElement), ownerActive: document.querySelector('.csu-workspace').closest('.dv-groupview').classList.contains('dv-active-group') }))))
+    // Drive the real native tab drag listeners, then inspect the same browser hit test
+    // used by computeDropTarget. Do not mutate the internal dragging marker or store.
+    const dragHit = await win.evaluate(async () => {
+      const owner = document.querySelector('.csu-workspace').closest('.dv-groupview')
+      const tab = owner.querySelector('.wb-tab'), transfer = new DataTransfer()
+      tab.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer }))
+      await new Promise(requestAnimationFrame)
+      const r = document.querySelector('.csp-anchor').getBoundingClientRect()
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+      const during = hit?.closest('.dv-groupview') === owner
+      hit?.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }))
+      const indicator = document.querySelector('.wb-drop-zone')
+      const dropTarget = !!indicator && getComputedStyle(indicator).display !== 'none' && indicator.getBoundingClientRect().width > 0
+      tab.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: transfer }))
+      await new Promise(requestAnimationFrame)
+      return { during, dropTarget, restored: document.querySelector('.csu-guest-surface').contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)) }
+    })
+    check('Native tab dragging shows a split target over the preview and restores guest interaction afterwards', dragHit.during && dragHit.dropTarget && dragHit.restored && await guestId(win) === initialGuestId, JSON.stringify(dragHit))
+    await traceMotion(win, 'Phone width changes continuously instead of snapping', '.csp-viewport', () => win.getByRole('button', { name: '手机 · 390', exact: true }).click())
     const phoneWidth = await until(async () => {
       const width = await guestEval(win, 'window.innerWidth')
       return width <= 391 && width >= 350 ? width : false
     })
     check('Phone preset applies a real guest viewport of 390 CSS pixels', !!phoneWidth, String(phoneWidth))
     await previewDiagnostic(app, win, 'phone')
-    await win.locator('.csu-modes').getByRole('button', { name: '代码', exact: true }).click()
+    const previewExit = await traceMotion(win, 'Preview to code animates the actual pane width', '.csu-code-pane', () => win.locator('.csu-modes').getByRole('button', { name: '代码', exact: true }).click())
+    check('The real preview remains painted during its exit fade', previewExit.samples.filter(sample => sample.previewVisible && sample.previewOpacity > 0.05 && sample.previewOpacity < 0.95).length >= 3)
     check('Code mode displays the actual project editor', await win.locator('.csu-code-pane').isVisible())
-    await win.locator('.csu-modes').getByRole('button', { name: '并排', exact: true }).click()
+    await traceMotion(win, 'Code to split animates the actual pane width', '.csu-code-pane', () => win.locator('.csu-modes').getByRole('button', { name: '并排', exact: true }).click())
     check('Split mode displays code and preview together', await win.locator('.csu-code-pane').isVisible() && await win.locator('.csu-preview-pane').isVisible())
     check('Code / split / device changes preserve the preview guest and app state', await guestId(win) === initialGuestId && await guestEval(win, 'window.studioCounter') === 1)
     await previewDiagnostic(app, win, 'split')
@@ -224,17 +339,17 @@ async function main() {
     if (!inspecting) throw new Error('Inspector was not installed into the preview guest')
     // A real guest mouse event, not a fabricated console payload or host selection callback.
     const point = await guestEval(win, '(()=>{const r=document.getElementById("headline").getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()')
-    await app.evaluate(({ webContents }, { id, point }) => {
+    await traceMotion(win, 'Selecting an element expands the focused edit form continuously', '.csu-reveal', () => app.evaluate(({ webContents }, { id, point }) => {
       const guest = webContents.fromId(id)
       guest.sendInputEvent({ type: 'mouseMove', ...point })
       guest.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...point })
       guest.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...point })
-    }, { id: initialGuestId, point })
+    }, { id: initialGuestId, point }), 'height')
     await win.waitForSelector('.csu-selection')
     check('Inspector produces a source-context selection from the real guest', (await win.locator('.csu-selection').textContent()).includes('#headline'))
     await win.locator('.csu-selection input').fill('Make this heading larger and preserve the current colors.')
     await previewDiagnostic(app, win, 'focused-edit')
-    await win.getByRole('button', { name: '加入对话', exact: true }).click()
+    await traceMotion(win, 'Adding an edit to chat collapses the form continuously', '.csu-reveal', () => win.getByRole('button', { name: '加入对话', exact: true }).click(), 'height')
     const draft = await until(async () => {
       const value = await win.locator('.t2c-ta').first().inputValue().catch(() => '')
       return value.includes('Make this heading larger') && value.includes('#headline') ? value : false
@@ -243,7 +358,8 @@ async function main() {
     check('Import and draft actions never send a model request', stub.seen.runs.length === 0)
 
     await guestEval(win, 'console.error("CODING_STUDIO_TEST_ERROR")')
-    await win.getByRole('button', { name: '问题', exact: true }).click()
+    await traceMotion(win, 'Issues opens with a real native bottom panel tween', '.csu-tool-view', () => win.getByRole('button', { name: '问题', exact: true }).click(), 'height', '.dv-groupview')
+    check('Issues lives in a native bottom Temp View outside the preview', await win.locator('.wb-extend[data-side=bottom] .csu-tool-view[data-tool=issues]').count() === 1 && await win.locator('.csu-workspace .wb-extend').count() === 0)
     check('Actual guest console errors appear in the Issues panel', !!await until(async () => (await win.locator('.csu-issue').allTextContents()).some(text => text.includes('CODING_STUDIO_TEST_ERROR'))))
     await shoot(app, win, 'issues')
     await win.getByRole('button', { name: '版本', exact: true }).click()
@@ -268,6 +384,9 @@ async function main() {
 
     await win.locator('.csu-project').click()
     await win.waitForSelector('.csl-launchpad')
+    check('Leaving the project removes all of its temporary native views', !!await until(async () => await win.locator('[data-transient-view]').count() === 0))
+    check('Leaving the project disposes its stable preview surface and guest', !!await until(async () => await win.locator('.csu-guest-surface').count() === 0 && await win.locator('webview').count() === 0))
+    check('Temporary Studio tools never enter saved workspace layouts', await win.evaluate(() => Object.entries(localStorage).filter(([key]) => /layout/i.test(key)).every(([,value]) => !value.includes('__extend-') && !value.includes('coding-tool:'))))
     check('An imported project remains discoverable on the launchpad', !!await until(async () => (await win.locator('.csl-project').allTextContents()).some(text => text.includes('Imported studio project'))))
 
     // Use the real persisted preferences + startup loader. Do not synthesize theme tokens
@@ -291,7 +410,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
     await openCodingSpace(win)
     await win.waitForSelector('.csl-launchpad', { timeout: 45000 })
-    check('English preference translates the live launchpad', !!await until(async () => await win.getByRole('heading', { name: 'Make your idea work.', exact: true }).isVisible().catch(() => false))
+    check('English preference translates the live launchpad', !!await until(async () => await win.getByRole('heading', { name: 'Coding Studio', exact: true }).isVisible().catch(() => false))
       && await win.getByRole('button', { name: 'Create project', exact: true }).isVisible()
       && await win.getByRole('button', { name: 'Open local folder', exact: true }).isVisible())
     await win.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
@@ -303,7 +422,70 @@ async function main() {
     check('English preference translates the live project toolbar', await win.getByRole('button', { name: 'Select an element', exact: true }).isVisible()
       && await win.getByRole('button', { name: 'Versions', exact: true }).isVisible())
     await previewDiagnostic(app, win, 'workspace-dark-en')
-
+    await win.emulateMedia({ reducedMotion: 'reduce' })
+    const reduced = await win.evaluate(async () => {
+      const button = document.querySelector('button[aria-label="Phone · 390"]')
+      const before = document.querySelector('.csp-viewport').getBoundingClientRect().width
+      button.click()
+      const samples = []
+      for (let i = 0; i < 8; i++) {
+        await new Promise(requestAnimationFrame)
+        samples.push(document.querySelector('.csp-viewport').getBoundingClientRect().width)
+      }
+      return { before, samples }
+    })
+    motion.push({ name: 'Reduced motion phone width', ...reduced })
+    check('Reduced motion changes device width without a tween', reduced.samples.every(value => Math.abs(value - reduced.samples.at(-1)) < 1))
+    const reducedPanel = await win.evaluate(async () => {
+      document.querySelector('.csu-tool-nav button')?.click()
+      const samples = []
+      for (let i = 0; i < 8; i++) {
+        await new Promise(requestAnimationFrame)
+        samples.push(document.querySelector('.wb-extend[data-side=right]')?.closest('.dv-groupview').getBoundingClientRect().width ?? 0)
+      }
+      return samples
+    })
+    motion.push({ name: 'Reduced motion native panel', samples: reducedPanel })
+    check('Reduced motion also disables the native Temp View size tween', reducedPanel[0] > 50 && reducedPanel.every(value => Math.abs(value - reducedPanel.at(-1)) < 1))
+    await closeStudioTool(win)
+    await win.getByRole('button', { name: 'Responsive', exact: true }).click()
+    await win.emulateMedia({ reducedMotion: 'no-preference' })
+    await recordMotionDemo(app, win)
+    // Stable browser surfaces must follow shell zoom and leave overlays above them.
+    await win.locator('.csu-modes').getByRole('button', { name: 'Preview', exact: true }).focus()
+    await win.keyboard.press('Meta+k')
+    await win.locator('.cmd-panel input').fill('Coding Studio · Versions')
+    const commandAbovePreview = await win.locator('.cmd-panel').evaluate(el => {
+      const r = el.getBoundingClientRect()
+      return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(100, r.height / 2)))
+    })
+    check('The command palette remains above and interactive over the stable preview', commandAbovePreview)
+    await win.locator('.cmd-item').filter({ hasText: 'Coding Studio · Versions' }).click()
+    check('A real command palette action opens the same native Studio tool', !!await until(async () => await win.locator('.wb-extend[data-side=bottom] .csu-tool-view[data-tool=history]').count() === 1))
+    await closeStudioTool(win)
+    await win.locator('.csu-modes').getByRole('button', { name: 'Preview', exact: true }).focus()
+    await win.keyboard.press('Meta+=')
+    const zoomAligned = await until(() => win.evaluate(() => {
+      const anchor = document.querySelector('.csp-anchor'), stage = document.querySelector('.csp-stage')
+      if (!anchor || !stage || Number(getComputedStyle(document.body).zoom) <= 1) return false
+      const a = anchor.getBoundingClientRect(), b = stage.getBoundingClientRect()
+      return ['left','top','width','height'].every(key => Math.abs(a[key] - b[key]) < 2)
+    }))
+    check('Stable preview geometry follows the real application zoom command', zoomAligned)
+    await shoot(app, win, 'zoomed-preview')
+    await win.keyboard.press('Meta+0')
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 800))
+    await win.waitForTimeout(450)
+    check('A narrower workspace keeps the project toolbar and footer within the view', await win.evaluate(() => {
+      const parent = document.querySelector('.csx.csu').getBoundingClientRect()
+      return ['.csu-head','.csu-tool-nav','.csu-status'].every(selector => {
+        const el = document.querySelector(selector), r = el.getBoundingClientRect()
+        return r.left >= parent.left - 1 && r.right <= parent.right + 1 && el.scrollWidth <= el.clientWidth + 1
+      })
+    }))
+    await shoot(app, win, 'narrow-workspace')
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1540, 1040))
+    await win.waitForTimeout(350)
     // Create through the production launchpad and brief panel. A prepared request must
     // remain a draft; no sample app or stub response is substituted for generation.
     await win.locator('.csu-project').click()
@@ -369,7 +551,8 @@ async function main() {
   } finally {
     if (app) await app.close().catch(() => {})
     stub.close()
-    fs.writeFileSync(path.join(OUTPUT, 'coding-studio-results.json'), JSON.stringify({ testDir, results, rendererErrors, geometry }, null, 2))
+    fs.writeFileSync(path.join(OUTPUT, 'coding-studio-results.json'), JSON.stringify({ testDir, results, rendererErrors, geometry, motion }, null, 2))
+    fs.writeFileSync(path.join(OUTPUT, 'coding-studio-motion.json'), JSON.stringify(motion, null, 2))
     const failed = results.filter(result => !result.ok)
     console.log(`\n${results.length - failed.length}/${results.length} passed; fixture: ${testDir}`)
     if (failed.length) process.exitCode = 1

@@ -163,7 +163,7 @@ const codingSpace: SpaceDefinition = {
     app().selectNewChatAgent?.('coding') // 新会话默认 Coding agent
     ws().openView('code-studio', {}, 'main')
     ws().openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left')
-    ws().openView('workspace', {}, 'right')
+    ws().initializeSidebar('right', false)
     ws().initializeSidebar('bottom', false)
   },
 }

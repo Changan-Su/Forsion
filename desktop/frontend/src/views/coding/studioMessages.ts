@@ -1,5 +1,13 @@
 import { registerMessages } from '../../i18n'
 registerMessages({
+  'studio.openTool': { zh: 'Coding Studio · 打开项目工具', en: 'Coding Studio · Open project tool' },
+  'studio.projectTools': { zh: '项目工具', en: 'Project tools' },
+  'studio.panelPosition': { zh: '面板位置', en: 'Panel position' },
+  'studio.move.left': { zh: '移至左侧面板', en: 'Move to left panel' },
+  'studio.move.right': { zh: '移至右侧面板', en: 'Move to right panel' },
+  'studio.move.bottom': { zh: '移至底部面板', en: 'Move to bottom panel' },
+  'studio.inspectShort': { zh: '点选修改', en: 'Select to edit' },
+  'studio.filesShort': { zh: '文件', en: 'Files' },
   'studio.chatTitle': { zh: '一起把想法做出来', en: 'Build your idea together' },
   'studio.chatHint': { zh: '描述目标，或在预览中点选要修改的地方。', en: 'Describe your goal, or select something in the preview to change.' },
   'studio.chooseProject': { zh: '先在工作台创建或打开一个项目。', en: 'Create or open a project in the studio first.' },

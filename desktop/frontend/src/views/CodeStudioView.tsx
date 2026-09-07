@@ -1,7 +1,8 @@
 /** Coding Studio: project brief → build → real preview → evidence-based iteration → source versions. */
+import { createPortal } from 'react-dom'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft } from 'lucide-react'
-import { getView, useWorkspace, type ViewProps } from '@lcl/engine'
+import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft, PanelLeft, PanelRight, PanelBottom, FolderTree } from 'lucide-react'
+import { getView, useWorkspace, type ViewProps, type ExtendViewController } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
@@ -14,8 +15,11 @@ import { saveStudioBriefFile } from './coding/briefFile'
 import { StudioEditor } from './coding/StudioEditor'
 import { flushStudioEditors, getUnsavedStudioEditorPaths } from './coding/editorSession'
 import { StudioPreview } from './coding/StudioPreview'
-import { BriefPanel, ChecksPanel, HistoryPanel, PanelHeader, type StudioPanel } from './coding/StudioPanels'
+import { BriefPanel, ChecksPanel, HistoryPanel } from './coding/StudioPanels'
 import { collectStudioWrites, inflightStudioWrite, issuePrompt, elementPrompt, joinProjectPath, projectName, projectRelative, normPath, normalizeDevUrl, type StudioIssue, type SelectedElement, type PreviewDevice } from './coding/studioModel'
+import { useStudioTools } from './coding/useStudioTools'
+import { StudioReveal } from './coding/StudioReveal'
+import { registerStudioCommands } from './coding/studioCommands'
 import type { UiMessage } from '../types'
 import './coding/studioMessages'
 import './coding/studio.css'
@@ -49,8 +53,9 @@ function useThrottled<T>(value: T): T {
   }, [value])
   return display
 }
-export function CodeStudioView(_: ViewProps) {
+export function CodeStudioView({ extendView, leaf }: ViewProps) {
   const { t } = useI18n()
+  const activate = useCallback(() => useWorkspace.getState().activateLeaf(leaf.id), [leaf.id])
   const root = useCodeStudio(s => s.activeProject)
   const projectsRoot = useCodeStudio(s => s.projectsRoot)
   const projects = useCodeStudio(s => s.projects)
@@ -86,13 +91,13 @@ export function CodeStudioView(_: ViewProps) {
     useCodeStudio.getState().updateProject({ brief })
     void saveCreatedBrief(path, brief)
   }
-  if (root) return <ProjectStudio key={root} root={root} briefSaveError={briefSaveError?.root === root ? briefSaveError.message : ''} retryBrief={() => {
+  if (root) return <ProjectStudio key={root} root={root} extendView={extendView} onActivate={activate} briefSaveError={briefSaveError?.root === root ? briefSaveError.message : ''} retryBrief={() => {
     const brief = useCodeStudio.getState().projects[root]?.brief
     if (brief) void saveCreatedBrief(root, brief)
   }} />
   return <div className="csu-launch-root">{error && <div className="csu-error" role="alert">{t('studio.loadError', { error })}<button onClick={() => setRetry(n => n + 1)}>{t('studio.retry')}</button></div>}<ProjectLaunchpad root={projectsRoot} recentProjects={recentProjects} onOpen={(path, name) => useCodeStudio.getState().openProject(path, name)} onCreate={create} /></div>
 }
-function ProjectStudio({ root, briefSaveError, retryBrief }: { root: string; briefSaveError: string; retryBrief(): void }) {
+function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrief }: { root: string; extendView?: ExtendViewController; onActivate(): void; briefSaveError: string; retryBrief(): void }) {
   const { t } = useI18n()
   const activeId = useApp(s => s.activeId)
   const session = useApp(s => s.sessions.find(item => item.id === s.activeId))
@@ -108,7 +113,9 @@ function ProjectStudio({ root, briefSaveError, retryBrief }: { root: string; bri
   const [serveError, setServeError] = useState('')
   const [scanError, setScanError] = useState('')
   const [watchError, setWatchError] = useState('')
-  const [panel, setPanel] = useState<StudioPanel>(null)
+  const tools = useStudioTools(extendView, root, { embeddedFallback: true })
+  const panel = tools.active?.kind ?? null
+  const openTool = tools.open
   const [issues, setIssues] = useState<StudioIssue[]>([])
   const [description, setDescription] = useState('')
   const [inspecting, setInspecting] = useState(false)
@@ -126,6 +133,7 @@ function ProjectStudio({ root, briefSaveError, retryBrief }: { root: string; bri
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
 
+  useEffect(() => registerStudioCommands(root, openTool, () => mounted.current && useCodeStudio.getState().activeProject === root), [root, openTool])
   useEffect(() => { useCodeStudio.getState().bindChatToProject(root, projectName(root)) }, [root, activeId])
   useEffect(() => {
     let live = true
@@ -219,62 +227,70 @@ function ProjectStudio({ root, briefSaveError, retryBrief }: { root: string; bri
       if (pending) useCodeStudio.getState().openFile(pending)
       useApp.getState().toast(t('studio.saveFirst'), true); return
     }
-    if (prefs.devUrl) { setPanel('setup'); useApp.getState().toast(t('studio.publishStaticOnly'), true); return }
+    if (prefs.devUrl) { openTool('setup'); useApp.getState().toast(t('studio.publishStaticOnly'), true); return }
     const projectsRoot = useCodeStudio.getState().projectsRoot
     if (projectsRoot && !projectRelative(projectsRoot, root)) { useApp.getState().toast(t('studio.publishImported'), true); return }
     setShowPublish(true)
   }
-  const togglePanel = (next: StudioPanel) => setPanel(old => old === next ? null : next)
-  const panelTitles = { brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup' }
+  const openFiles = () => useWorkspace.getState().openView('workspace', {}, 'right')
   return <div className="csx csu" data-mode={mode}>
     <header className="csx-head csu-head">
       <button className="csu-project" title={t('coding.switchProject')} onClick={() => useCodeStudio.getState().closeProject()}><ArrowLeft size={15} /><span>{projectName(root)}</span></button>
       <div className="csu-modes" role="group" aria-label={t('coding.preview')}>
         {([['preview', Eye, 'coding.preview'], ['code', Code2, 'coding.code'], ['split', Columns2, 'studio.split']] as const).map(([value, Icon, key]) => <button key={value} aria-pressed={mode === value} onClick={() => { useCodeStudio.getState().setMode(value as StudioMode); if (value === 'code') setInspecting(false) }}><Icon size={14} /><span>{t(key)}</span></button>)}
       </div>
-      <div className="csu-head-actions"><button title={t('studio.project')} aria-label={t('studio.project')} aria-pressed={panel === 'brief'} onClick={() => togglePanel('brief')}><FileText size={16} /></button>
-        {!!window.tangu?.codeStudioVersions && <button title={t('studio.history')} aria-label={t('studio.history')} aria-pressed={panel === 'history'} onClick={() => togglePanel('history')}><History size={16} /></button>}
-        <button title={t('studio.checks')} aria-label={t('studio.checks')} aria-pressed={panel === 'checks'} onClick={() => togglePanel('checks')}><CheckSquare size={16} /></button>
+      <div className="csu-head-actions">
         {!!window.tangu?.connectPublish && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}
       </div>
     </header>
     <div className="csu-tools">
       <div className="csu-device" role="group" aria-label={t('coding.preview')}>{([['desktop', Monitor], ['tablet', Tablet], ['phone', Smartphone]] as const).map(([device, Icon]) => <button key={device} aria-label={t(`studio.${device}`)} title={t(`studio.${device}`)} aria-pressed={prefs.device === device} onClick={() => useCodeStudio.getState().updateProject({ device: device as PreviewDevice })}><Icon size={15} /></button>)}</div>
-      <button className="csu-address" title={previewUrl || t('studio.setup')} onClick={() => togglePanel('setup')}><span>{prefs.devUrl || entry || t('studio.staticPreview')}</span><Settings2 size={13} /></button>
+      <button className="csu-address" title={previewUrl || t('studio.setup')} onClick={() => openTool('setup')}><span>{prefs.devUrl || entry || t('studio.staticPreview')}</span><Settings2 size={13} /></button>
       <button title={t('coding.reload')} aria-label={t('coding.reload')} onClick={reload}><RotateCw size={15} /></button>
-      <button title={t('studio.inspect')} aria-label={t('studio.inspect')} disabled={!previewUrl || mode === 'code' || previewStatus !== 'ready'} aria-pressed={inspecting} onClick={() => setInspecting(value => !value)}><MousePointer2 size={15} /></button>
+      <button className="csu-inspect" title={t('studio.inspect')} aria-label={t('studio.inspect')} disabled={!previewUrl || mode === 'code' || previewStatus !== 'ready'} aria-pressed={inspecting} onClick={() => setInspecting(value => !value)}><MousePointer2 size={15} /><span>{t('studio.inspectShort')}</span></button>
       {!!window.tangu?.openExternal && <button title={t('preview.openInBrowser')} aria-label={t('preview.openInBrowser')} disabled={!previewUrl} onClick={() => { if (previewUrl) void window.tangu!.openExternal!(previewUrl) }}><ExternalLink size={15} /></button>}
-      {!!getView('terminal') && <button title={t('studio.terminal')} aria-label={t('studio.terminal')} onClick={openTerminal}><TerminalSquare size={15} /></button>}
-      {!!window.tangu?.revealHostPath && <button title={t('studio.reveal')} aria-label={t('studio.reveal')} onClick={() => void window.tangu!.revealHostPath!(root)}><Folder size={15} /></button>}
-    </div>
-    <div className="csu-status" role="status"><span className={running ? 'csu-status-running' : ''}>{running ? <Loader2 size={13} className="csx-spin" /> : <Eye size={13} />}{waiting ? t('studio.waiting') : running ? t('studio.building') : previewUrl ? t(previewStatus === 'ready' ? 'studio.previewReady' : previewStatus === 'error' ? 'studio.previewFailed' : 'studio.loading') : t('studio.previewIdle')}</span>
-      {changedFiles.length > 0 && <span className="csu-changed">{t('studio.filesChanged', { count: changedFiles.length })}</span>}
-      <span className="csu-grow" />{pendingChanges && <button onClick={reload}>{t('studio.pendingChanges')}</button>}
-      <label className="csu-live"><input type="checkbox" checked={prefs.autoRefresh} onChange={e => { useCodeStudio.getState().updateProject({ autoRefresh: e.target.checked }); if (e.target.checked && pendingChanges) reload() }} />{t('studio.autoRefresh')}</label>
-      {running && <button title={t('studio.stopped')} aria-label={t('studio.stopped')} onClick={() => { const app = useApp.getState(); for (const item of app.sessions) if (normPath(item.project_path || '') === normPath(root) && app.runningBySession[item.id]) app.stop(item.id) }}><Square size={12} /></button>}
-      <button className={issues.length ? 'csu-issue-count' : ''} onClick={() => togglePanel('issues')} aria-label={t('studio.issues')}><AlertCircle size={13} />{issues.length || t('studio.issues')}</button>
     </div>
     {(serveError || scanError || watchError) && <div role="alert" className="csu-error">{serveError || scanError ? t('studio.loadError', { error: [serveError, scanError].filter(Boolean).join('\n') }) : t('studio.watchError', { error: watchError })}<button onClick={() => { setScanNonce(n => n + 1); setServeNonce(n => n + 1); setWatchNonce(n => n + 1) }}>{t('studio.retry')}</button></div>}
     {briefSaveError && <div role="alert" className="csu-error">{t('studio.loadError', { error: briefSaveError })}<button onClick={retryBrief}>{t('studio.retry')}</button></div>}
     <div className="csu-workspace">
       <div className="csu-edit-preview">
-        <section className="csu-code-pane" hidden={mode === 'preview'} aria-label={t('coding.code')}>
+        <section className="csu-code-pane" aria-hidden={mode === 'preview'} inert={mode === 'preview'} aria-label={t('coding.code')}>
           <div className="csu-filebar"><Code2 size={13} /><select aria-label={t('studio.files')} value={codeFile ? projectRelative(root, codeFile) || '' : ''} onChange={e => useCodeStudio.getState().setActiveFile(joinProjectPath(root, e.target.value))}><option value="" disabled>{t('coding.noFile')}</option>{files.map(file => <option key={file} value={file}>{file}</option>)}</select></div>
           {streaming && (!activeFile || projectRelative(root, activeFile) === streaming.file) ? <><div className="csu-writing"><Loader2 size={13} className="csx-spin" />{t('studio.streaming', { file: streaming.file })}</div><Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={streaming.content} fileName={streaming.file} autoScroll /></Suspense></> : codeFile ? <StudioEditor path={codeFile} reloadNonce={fileRevision} onSaved={refreshForChange} /> : <div className="csx-empty">{t('coding.pickFile')}</div>}
         </section>
-        <section className="csu-preview-pane" hidden={mode === 'code'} aria-label={t('coding.preview')}>
-          {previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => setPanel('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
+        <section className="csu-preview-pane" aria-hidden={mode === 'code'} inert={mode === 'code'} aria-label={t('coding.preview')}>
+          {previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} visible={!showPublish && (!!extendView || !tools.active)} onActivate={onActivate} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => openTool('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
         </section>
       </div>
-      {panel && <aside className="csu-panel"><PanelHeader title={t(panelTitles[panel])} close={() => setPanel(null)} />
-        {panel === 'brief' && <BriefPanel root={root} onPrompt={onPrompt} />}
-        {panel === 'checks' && <ChecksPanel root={root} onPrompt={text => onPrompt(text, true)} />}
-        {panel === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} />}
-        {panel === 'issues' && <div className="csu-panel-body"><p className="csu-hint">{issues.length ? t('studio.errorCount', { count: issues.length }) : t('studio.noIssues')}</p>{issues.map(issue => <div className="csu-issue" key={issue.id}><AlertCircle size={14} /><div><pre>{issue.message}</pre>{issue.source && <small>{issue.source}</small>}</div></div>)}<label className="csu-field"><span>{t('studio.issueDescription')}</span><textarea rows={4} value={description} onChange={e => setDescription(e.target.value)} /></label><div className="csu-actions"><button className="csu-primary" onClick={() => onPrompt(issuePrompt(issues, description, previewUrl), false)}>{t('studio.diagnose')}</button><button onClick={() => setIssues([])}>{t('studio.clearIssues')}</button></div></div>}
-        {panel === 'setup' && <div className="csu-panel-body"><label className="csu-field"><span>{t('studio.entry')}</span><select value={entry || ''} onChange={e => { useCodeStudio.getState().setEntry(e.target.value); useCodeStudio.getState().updateProject({ devUrl: '' }); setUrlDraft('') }}><option value="" disabled>{t('coding.noEntry')}</option>{htmlFiles.map(file => <option key={file}>{file}</option>)}</select></label><h3>{t('studio.devServer')}</h3><p className="csu-hint">{t('studio.devHint')}</p><label className="csu-field"><span>{t('studio.devUrl')}</span><input placeholder="http://localhost:5173" value={urlDraft} onChange={e => { setUrlDraft(e.target.value); setUrlError('') }} /></label>{urlError && <p className="csu-error">{urlError}</p>}<div className="csu-actions"><button className="csu-primary" onClick={() => { const url = normalizeDevUrl(urlDraft); if (url === null) { setUrlError(t('studio.invalidUrl')); return } useCodeStudio.getState().updateProject({ devUrl: url }); setIssues([]); setPanel(null) }}>{t('studio.apply')}</button><button onClick={() => { setUrlDraft(''); useCodeStudio.getState().updateProject({ devUrl: '' }); setIssues([]) }}>{t('studio.useStatic')}</button></div>{!!getView('terminal') && <button onClick={openTerminal}><TerminalSquare size={14} />{t('studio.terminal')}</button>}</div>}
-      </aside>}
+
     </div>
-    {selected && <div className="csu-selection"><div className="csu-selection-head"><MousePointer2 size={15} /><strong>{t('studio.selection')}</strong><code>{selected.selector}</code><button title={t('studio.close')} aria-label={t('studio.close')} onClick={() => { setSelected(null); setChange('') }}><X size={15} /></button></div>{selected.text && <p>{selected.text.slice(0, 180)}</p>}<div className="csu-actions"><input aria-label={t('studio.changePlaceholder')} placeholder={t('studio.changePlaceholder')} value={change} onChange={e => setChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && change.trim()) { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') } }} /><button className="csu-primary" disabled={!change.trim()} onClick={() => { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') }}>{t('studio.addToChat')}</button></div></div>}
-    {showPublish && <ConnectPublishDialog root={root} projectName={projectName(root)} entry={entry} htmlFiles={htmlFiles} onClose={() => setShowPublish(false)} />}
+    <StudioReveal open={!!selected}>{selected && <div className="csu-selection"><div className="csu-selection-head"><MousePointer2 size={15} /><strong>{t('studio.selection')}</strong><code>{selected.selector}</code><button title={t('studio.close')} aria-label={t('studio.close')} onClick={() => { setSelected(null); setChange('') }}><X size={15} /></button></div>{selected.text && <p>{selected.text.slice(0, 180)}</p>}<div className="csu-actions"><input aria-label={t('studio.changePlaceholder')} placeholder={t('studio.changePlaceholder')} value={change} onChange={e => setChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && change.trim()) { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') } }} /><button className="csu-primary" disabled={!change.trim()} onClick={() => { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') }}>{t('studio.addToChat')}</button></div></div>}</StudioReveal>
+    <footer className="csu-footer">
+      <nav className="csu-tool-nav" aria-label={t('studio.projectTools')}>
+        {([['brief', FileText, 'studio.project'], ['history', History, 'studio.history'], ['checks', CheckSquare, 'studio.checks']] as const).filter(([kind]) => kind !== 'history' || !!window.tangu?.codeStudioVersions).map(([kind, Icon, key]) => <button key={kind} aria-label={t(key)} title={t(key)} aria-pressed={panel === kind} onClick={() => openTool(kind)}><Icon size={14} /><span>{t(key)}</span></button>)}
+        <span className="csu-tool-divider" />
+        <button title={t('studio.files')} aria-label={t('studio.files')} onClick={openFiles}><FolderTree size={14} /><span>{t('studio.filesShort')}</span></button>
+        {!!getView('terminal') && <button title={t('studio.terminal')} aria-label={t('studio.terminal')} onClick={openTerminal}><TerminalSquare size={14} /></button>}
+        {!!window.tangu?.revealHostPath && <button title={t('studio.reveal')} aria-label={t('studio.reveal')} onClick={() => void window.tangu!.revealHostPath!(root)}><Folder size={14} /></button>}
+      </nav>
+    <div className="csu-status" role="status"><span className={running ? 'csu-status-running' : ''}>{running ? <Loader2 size={13} className="csx-spin" /> : <Eye size={13} />}{waiting ? t('studio.waiting') : running ? t('studio.building') : previewUrl ? t(previewStatus === 'ready' ? 'studio.previewReady' : previewStatus === 'error' ? 'studio.previewFailed' : 'studio.loading') : t('studio.previewIdle')}</span>
+      {changedFiles.length > 0 && <span className="csu-changed">{t('studio.filesChanged', { count: changedFiles.length })}</span>}
+      <span className="csu-grow" />{pendingChanges && <button onClick={reload}>{t('studio.pendingChanges')}</button>}
+      <label className="csu-live"><input type="checkbox" checked={prefs.autoRefresh} onChange={e => { useCodeStudio.getState().updateProject({ autoRefresh: e.target.checked }); if (e.target.checked && pendingChanges) reload() }} />{t('studio.autoRefresh')}</label>
+      {running && <button title={t('studio.stopped')} aria-label={t('studio.stopped')} onClick={() => { const app = useApp.getState(); for (const item of app.sessions) if (normPath(item.project_path || '') === normPath(root) && app.runningBySession[item.id]) app.stop(item.id) }}><Square size={12} /></button>}
+      <button className={issues.length ? 'csu-issue-count' : ''} onClick={() => openTool('issues')} aria-label={t('studio.issues')}><AlertCircle size={13} />{issues.length || t('studio.issues')}</button>
+    </div>
+    </footer>
+    {tools.render((tool, side) => <div className="csu csu-tool-view" data-tool={tool} data-side={side}>
+      <div className="csu-tool-placement"><span>{projectName(root)}</span><div role="group" aria-label={t('studio.panelPosition')}>
+        {([['left', PanelLeft], ['bottom', PanelBottom], ['right', PanelRight]] as const).map(([next, Icon]) => <button key={next} aria-label={t(`studio.move.${next}`)} title={t(`studio.move.${next}`)} aria-pressed={side === next} onClick={() => openTool(tool, next)}><Icon size={13} /></button>)}
+      </div></div>
+        {tool === 'brief' && <BriefPanel root={root} onPrompt={onPrompt} />}
+        {tool === 'checks' && <ChecksPanel root={root} onPrompt={text => onPrompt(text, true)} />}
+        {tool === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} />}
+        {tool === 'issues' && <div className="csu-panel-body csu-issues-layout"><section className="csu-issue-evidence"><p className="csu-hint">{issues.length ? t('studio.errorCount', { count: issues.length }) : t('studio.noIssues')}</p>{issues.map(issue => <div className="csu-issue" key={issue.id}><AlertCircle size={14} /><div><pre>{issue.message}</pre>{issue.source && <small>{issue.source}</small>}</div></div>)}</section><section className="csu-issue-request"><label className="csu-field"><span>{t('studio.issueDescription')}</span><textarea rows={4} value={description} onChange={e => setDescription(e.target.value)} /></label><div className="csu-actions"><button className="csu-primary" onClick={() => onPrompt(issuePrompt(issues, description, previewUrl), false)}>{t('studio.diagnose')}</button><button onClick={() => setIssues([])}>{t('studio.clearIssues')}</button></div></section></div>}
+        {tool === 'setup' && <div className="csu-panel-body"><label className="csu-field"><span>{t('studio.entry')}</span><select value={entry || ''} onChange={e => { useCodeStudio.getState().setEntry(e.target.value); useCodeStudio.getState().updateProject({ devUrl: '' }); setUrlDraft('') }}><option value="" disabled>{t('coding.noEntry')}</option>{htmlFiles.map(file => <option key={file}>{file}</option>)}</select></label><h3>{t('studio.devServer')}</h3><p className="csu-hint">{t('studio.devHint')}</p><label className="csu-field"><span>{t('studio.devUrl')}</span><input placeholder="http://localhost:5173" value={urlDraft} onChange={e => { setUrlDraft(e.target.value); setUrlError('') }} /></label>{urlError && <p className="csu-error">{urlError}</p>}<div className="csu-actions"><button className="csu-primary" onClick={() => { const url = normalizeDevUrl(urlDraft); if (url === null) { setUrlError(t('studio.invalidUrl')); return } useCodeStudio.getState().updateProject({ devUrl: url }); setIssues([]); tools.close() }}>{t('studio.apply')}</button><button onClick={() => { setUrlDraft(''); useCodeStudio.getState().updateProject({ devUrl: '' }); setIssues([]) }}>{t('studio.useStatic')}</button></div>{!!getView('terminal') && <button onClick={openTerminal}><TerminalSquare size={14} />{t('studio.terminal')}</button>}</div>}
+    </div>)}
+    {showPublish && createPortal(<ConnectPublishDialog root={root} projectName={projectName(root)} entry={entry} htmlFiles={htmlFiles} onClose={() => setShowPublish(false)} />, document.body)}
   </div>
 }
