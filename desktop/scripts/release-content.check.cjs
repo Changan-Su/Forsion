@@ -22,7 +22,8 @@ check(resources.length > 0, 'No packaged app.asar found')
 for (const dir of resources) {
   const archive = path.join(dir, 'app.asar')
   const readArchive = (file) => {
-    try { return asar.extractFile(archive, file).toString('utf8') }
+    // asar 在 Windows 内部按 path.sep 分目录；只用 '/' 会把存在的文件误报为缺失。
+    try { return asar.extractFile(archive, path.normalize(file)).toString('utf8') }
     catch { errors.push(`${dir}: missing ${file}`); return '' }
   }
   const readJson = (file) => {
