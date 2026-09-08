@@ -33,6 +33,7 @@ interface FixtureOptions {
   requires?: string[]
   failStart?: boolean
   ui?: boolean
+  account?: boolean
 }
 
 async function fixture(id: string, options: FixtureOptions = {}): Promise<string> {
@@ -56,6 +57,10 @@ async function fixture(id: string, options: FixtureOptions = {}): Promise<string
     export default (ctx) => {
       const event = (kind) => appendFile(ctx.config.eventLog || join(ctx.dataDir, 'events'), ${JSON.stringify(id)} + ':' + kind + '\\n');
       return {
+        account: ${options.account ? `{ metadata: { apiBase: '/api', loginPath: '/auth' }, async resolve(token) {
+          if (token !== 'alice' && token !== 'bob') return null;
+          return { userId: token, username: token, role: 'USER', tenantId: 'personal:' + token, workspaceId: 'personal:' + token };
+        } }` : 'undefined'},
         mounts: ${JSON.stringify(options.mounts ?? ['/api'])},
         async start() {
           await event('start');
@@ -95,6 +100,32 @@ const get = (handle: Unit, path: string) => fetch(base(handle) + path)
 const metadata = (handle: Unit) => get(handle, '/admin/unit/meta').then((r) => r.json())
 
 describe('composed Unit package lifecycle', () => {
+  it('keeps two visitor accounts and plugin data separate across concurrent writes and plugin restart', async () => {
+    const pack = await fixture('accounts', { account: true })
+    const app = await unit([pack])
+    const request = (token: string, path: string, body?: unknown, headers?: Record<string, string>) =>
+      fetch(base(app) + '/admin/unit/' + path, { method: body ? 'PUT' : 'GET',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...headers },
+        body: body ? JSON.stringify(body) : undefined })
+    try {
+      expect((await metadata(app)).account).toEqual({ apiBase: '/api', loginPath: '/auth' })
+      expect((await request('', 'account')).status).toBe(401)
+      expect((await request('forged', 'plugin-data/accounts')).status).toBe(401)
+      const identities = await Promise.all(['alice', 'bob'].map((id) => request(id, 'account').then((r) => r.json())))
+      expect(identities.map((r) => r.workspaceId)).toEqual(['personal:alice', 'personal:bob'])
+      await Promise.all(['alice', 'bob'].flatMap((id) => [
+        request(id, 'config', { modelId: id, token: 'DO_NOT_STORE', homeDir: '/private' }),
+        request(id, 'plugin-data/accounts', { data: id }),
+      ]))
+      await app.restart('accounts')
+      expect(await request('alice', 'config').then((r) => r.json())).toEqual({ config: { modelId: 'alice' } })
+      expect(await request('bob', 'config').then((r) => r.json())).toEqual({ config: { modelId: 'bob' } })
+      expect(await request('bob', 'plugin-data/accounts?userId=alice', undefined,
+        { 'x-user-id': 'alice', 'x-tenant-id': 'personal:alice' }).then((r) => r.json())).toEqual({ data: 'bob' })
+      expect((await request('alice', 'plugin-data/not-installed')).status).toBe(404)
+      expect((await request('alice', 'hostfile?path=/private')).status).toBe(403)
+    } finally { await close(app) }
+  })
   it('owns one port and identity across disable/enable while keeping projection and backend configuration separate', async () => {
     const pack = await fixture('server-fixture', { mounts: ['/', '/admin/legacy', '/admin/panel-lib.js'] })
     const app = await unit([{ path: pack, config: { secret: PRIVATE }, env: { UNIT_RUNTIME_TEST_SECRET: PRIVATE } }], 'server-fixture')

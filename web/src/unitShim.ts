@@ -10,7 +10,7 @@
  *   3. 绝不跳 Forsion 登录页;未配对时页内走配对流(纯 DOM,先于 React 挂载)。
  */
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public'; browserStorage?: boolean }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public'; browserStorage?: boolean; account?: { apiBase: string; loginPath: string } }
 
 const base = (): URL => new URL('.', document.baseURI)
 
@@ -74,6 +74,8 @@ export async function installUnitShim(): Promise<boolean> {
   if (!meta) return false
   const tokenKey = `unit_pair_${meta.instanceId}`
   const published = meta.projection === 'public'
+  const visitor = published && meta.account
+    ? await (await import('./unitAccount')).installUnitAccount({ ...meta, account: meta.account }, base()) : null
   let token = ''
   try { token = localStorage.getItem(tokenKey) || '' } catch { /* private mode */ }
 
@@ -101,7 +103,23 @@ export async function installUnitShim(): Promise<boolean> {
   const fixedToken = token
   window.amadeus = await createUnitAmadeusBridge({
     base: base().href,
-    browserStorage: published ? meta.instanceId : undefined,
+    browserStorage: published ? visitor?.scope || meta.instanceId : undefined,
+    pluginData: visitor ? {
+      read: async (id: string) => {
+        if (!visitor.account.getIdentity()) return null
+        const response = await visitor.request(`unit/plugin-data/${encodeURIComponent(id)}`)
+        if (!response.ok) throw new Error(`Plugin data HTTP ${response.status}`)
+        return (await response.json()).data
+      },
+      write: async (id: string, data: string) => {
+        if (!visitor.account.getIdentity()) throw new Error('Sign in to save plugin data')
+        const response = await visitor.request(`unit/plugin-data/${encodeURIComponent(id)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data }),
+        })
+        if (!response.ok) throw new Error(`Plugin data HTTP ${response.status}`)
+        await response.json()
+      },
+    } : undefined,
     getToken: () => fixedToken,
     onAuthError: () => {
       // 配对被对方回收:清本地令牌,重进配对流(T1);隧道形态不会 401 到这。
@@ -119,6 +137,13 @@ export async function installUnitShim(): Promise<boolean> {
    *  门控的功能靠它长出来 —— 体验跟随对方设置(2026-08-24 拍板);写回走同一张白名单。 */
   let remotePrefs: Record<string, unknown> = {}
   const pullConfig = async (): Promise<void> => {
+    if (visitor) {
+      if (!visitor.account.getIdentity()) { remotePrefs = {}; return }
+      const response = await visitor.request('unit/config')
+      if (!response.ok) throw new Error(`Preferences HTTP ${response.status}`)
+      remotePrefs = (await response.json()).config || {}
+      return
+    }
     if (published) {
       remotePrefs = JSON.parse(sessionStorage.getItem(`unit:${meta.instanceId}:preferences`) || '{}')
       return
@@ -132,6 +157,13 @@ export async function installUnitShim(): Promise<boolean> {
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
+    ...(visitor ? {
+      account: visitor.capability,
+      forsionLogin: visitor.login,
+      forsionLogout: async () => { await visitor.account.logout(); return { ok: true } },
+      onAuthChanged: visitor.capability.subscribe,
+      onAuthWillChange: visitor.onAuthWillChange,
+    } : {}),
     appVersion: async () => meta.version,
     platform: undefined,
     getConfig: async () => {
@@ -139,6 +171,15 @@ export async function installUnitShim(): Promise<boolean> {
       return mergedConfig()
     },
     setConfig: async (patch: Record<string, unknown>) => {
+      if (visitor) {
+        if (!visitor.account.getIdentity()) return mergedConfig()
+        const response = await visitor.request('unit/config', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
+        })
+        if (!response.ok) throw new Error(`Preferences HTTP ${response.status}`)
+        remotePrefs = (await response.json()).config || {}
+        return mergedConfig()
+      }
       if (published) {
         remotePrefs = { ...remotePrefs, ...patch }
         sessionStorage.setItem(`unit:${meta.instanceId}:preferences`, JSON.stringify(remotePrefs))
@@ -154,7 +195,7 @@ export async function installUnitShim(): Promise<boolean> {
       } catch { remotePrefs = { ...remotePrefs, ...patch } } // 掉线:本地先并,下次 getConfig 对齐
       return mergedConfig()
     },
-    authStatus: async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null }),
+    authStatus: visitor?.account.authStatus || (async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null })),
     // 直连 provider 元数据(对方已剥 apiKey/baseUrl):模型选择器据此认出直连模型 ——
     // 缺了它直连模型不进清单,选择器显示「选择模型」(2026-08-24 用户实报)。
     listProviders: async () => {

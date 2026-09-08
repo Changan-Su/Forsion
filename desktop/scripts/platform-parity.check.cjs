@@ -96,6 +96,7 @@ const SKIP = {
 
 /** bootstrapEngine 里已知的 host 门控。新增门控 = 又一条「web/移动端会静默少一块」的通道,必须登记。 */
 const KNOWN_GATES = {
+  'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品继续由 PRODUCT.agentBackend 显示相同组件。',
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
   'window.tangu?.backendStatus': '桌面壳语义(含 external 模式)',
   'window.tangu?.mobile': '移动端标志',

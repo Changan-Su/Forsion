@@ -8,6 +8,7 @@ import { resolveProduct } from '../desktop/shared/product'
 import basic from '../desktop/products/basic.json'
 import { readPackage, type InstalledPackage } from './packages'
 import { startBackend, migrateBackend } from './backendRunner'
+import { createAccountHttp } from './accountHttp'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -95,6 +96,9 @@ export async function startBasicUnit(config: UnitConfig) {
       if (rec.package.backendEntry) {
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
         backend = await startBackend(options(id, rec))
+        if (backend.account && [...records.values()].some((r) => r !== rec && r.state === 'active' && r.backend?.account)) {
+          throw new Error('A Unit can activate only one account authority')
+        }
         if (rec.state as State === 'failed') throw new Error('Plugin stopped during startup')
         const mounts = backend.mounts.map((p) => p === '/' ? p : p.replace(/\/$/, ''))
         for (const mount of mounts) {
@@ -128,7 +132,14 @@ export async function startBasicUnit(config: UnitConfig) {
     return winner && (!matches(path, prefix) || winner.length > prefix.length) ? winner.rec.backend : undefined
   }
   refreshProduct()
+  const accountProvider = () => {
+    const record = [...records.entries()].find(([, r]) => r.state === 'active' && r.backend?.account)
+    return record ? { id: record[0], account: record[1].backend!.account! } : undefined
+  }
+  const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
+    pluginActive: (id) => records.get(id)?.state === 'active' })
   const web = await startUnitWeb({
+    account: { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
     projection: { mode: 'public', basePath: config.basePath, product },
     routeRequest: (req, res) => {

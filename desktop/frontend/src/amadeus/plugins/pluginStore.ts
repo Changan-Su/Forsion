@@ -665,6 +665,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     return {
     app: appApi,
+    account: window.tangu?.account ? {
+      ...window.tangu.account,
+      subscribe: (listener) => {
+        const off = window.tangu!.account!.subscribe(listener)
+        const dispose = () => { off(); tanguUnsubs.delete(dispose) }
+        tanguUnsubs.add(dispose)
+        return dispose
+      },
+    } : undefined,
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerCommand: (command) =>
       set((s) => ({ commands: [...s.commands, { pluginId, item: command }] })),

@@ -14,6 +14,24 @@ export interface BackendContext {
 
 export type BackendUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => void
 
+/** A verified visitor identity. It never represents the Unit host's own account. */
+export interface BackendIdentity {
+  userId: string
+  username: string
+  role: string
+  /** Account providers choose these scopes from trusted server state, never request headers. */
+  tenantId?: string
+  workspaceId?: string
+  nickname?: string
+  avatar?: string
+}
+
+export interface BackendAccount {
+  /** Public, same-origin endpoints used by the shared browser Account adapter. */
+  metadata?: { apiBase: string; loginPath: string }
+  resolve: (token: string, options?: { signal?: AbortSignal }) => Promise<BackendIdentity | null>
+}
+
 export interface BackendPlugin {
   /** Absolute URL prefixes. The Unit checks ownership before publishing them. */
   mounts: string[]
@@ -22,6 +40,7 @@ export interface BackendPlugin {
   start?: () => void | Promise<void>
   stop?: () => void | Promise<void>
   migrate?: () => void | Promise<void>
+  account?: BackendAccount
 }
 
 export type BackendFactory = (context: BackendContext) => BackendPlugin | Promise<BackendPlugin>
@@ -41,6 +60,8 @@ export interface BackendOptions {
   onLog?: (message: string) => void
   startTimeoutMs?: number
   stopTimeoutMs?: number
+  /** Account calls are individually bounded, including providers which ignore abort. */
+  accountTimeoutMs?: number
   /** Cancel startup or migration, awaiting bounded plugin cleanup before rejecting. */
   signal?: AbortSignal
 }
@@ -51,6 +72,7 @@ export interface BackendHandle {
   handle: RequestListener
   upgrade: BackendUpgrade
   stop: () => Promise<void>
+  readonly account?: BackendAccount
 }
 
 export interface SocketMetadata {
@@ -74,9 +96,13 @@ export interface BackendWorkerData {
 export type BackendWorkerCommand =
   | { type: 'connection'; port: MessagePort; socket: SocketMetadata }
   | { type: 'stop' }
+  | { type: 'account-resolve'; requestId: string; token: string }
+  | { type: 'account-cancel'; requestId: string }
 
 export type BackendWorkerEvent =
-  | { type: 'ready'; mounts: string[] }
+  | { type: 'ready'; mounts: string[]; hasAccount?: boolean; accountMetadata?: BackendAccount['metadata'] }
+  | { type: 'account-result'; requestId: string; identity: BackendIdentity | null }
+  | { type: 'account-error'; requestId: string }
   | { type: 'migrated' }
   | { type: 'stopped' }
   | { type: 'failure'; message: string; stack?: string }

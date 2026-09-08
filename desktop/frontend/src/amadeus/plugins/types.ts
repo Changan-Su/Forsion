@@ -657,7 +657,26 @@ export interface PluginFloatingTocHandle {
   dispose(): void
 }
 
+export interface PluginAccountStatus {
+  loggedIn: boolean
+  userId?: string
+  username?: string | null
+  role?: string
+  tenantId?: string
+  workspaceId?: string
+}
+
+/** Host-owned account; credentials never form part of this plugin API. */
+export interface PluginAccount {
+  status(): Promise<PluginAccountStatus>
+  login(): Promise<unknown>
+  logout(): Promise<unknown>
+  request(path: string, init?: RequestInit): Promise<Response>
+  subscribe(listener: (status: PluginAccountStatus) => void): () => void
+}
+
 export interface PluginContext {
+  account?: PluginAccount
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
   registerCommand(command: CommandContribution): void

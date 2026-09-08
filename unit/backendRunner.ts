@@ -2,10 +2,11 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import { isAbsolute } from 'node:path'
 import type { Duplex } from 'node:stream'
 import { MessageChannel, Worker } from 'node:worker_threads'
+import { randomUUID } from 'node:crypto'
 import { PortDuplex } from './portDuplex'
-import type { BackendHandle, BackendOptions, BackendState, BackendWorkerCommand, BackendWorkerData, BackendWorkerEvent, SocketMetadata } from './backendTypes'
+import type { BackendAccount, BackendHandle, BackendIdentity, BackendOptions, BackendState, BackendWorkerCommand, BackendWorkerData, BackendWorkerEvent, SocketMetadata } from './backendTypes'
 
-export type { BackendHandle, BackendOptions, BackendState } from './backendTypes'
+export type { BackendAccount, BackendHandle, BackendIdentity, BackendOptions, BackendState } from './backendTypes'
 
 function environment(overrides: BackendOptions['env']): NodeJS.ProcessEnv {
   const env = { ...process.env }
@@ -31,6 +32,8 @@ function unavailable(response: ServerResponse): void {
 class BackendSession {
   state: BackendState
   mounts: string[] = []
+  hasAccount = false
+  accountMetadata?: BackendAccount['metadata']
   readonly worker: Worker
   readonly completion: Promise<void>
   private resolveCompletion!: () => void
@@ -47,12 +50,18 @@ class BackendSession {
   private cancellationError?: Error
   private cancellationFinish?: Promise<void>
   private readonly active = new Set<PortDuplex>()
+  private readonly accountCalls = new Map<string, {
+    finish: (identity: BackendIdentity | null, error?: Error) => void
+  }>()
 
   constructor(readonly options: BackendOptions, readonly mode: 'start' | 'migrate') {
     for (const path of [options.entry, options.packageDir, options.dataDir, options.workerFile]) {
       if (!isAbsolute(path)) throw new Error('Backend runtime paths must be absolute')
     }
     if (options.signal?.aborted) throw this.abortReason()
+    if (options.accountTimeoutMs !== undefined && (!Number.isFinite(options.accountTimeoutMs) || options.accountTimeoutMs <= 0)) {
+      throw new Error('Backend account timeout must be positive and finite')
+    }
     this.state = mode === 'start' ? 'starting' : 'migrating'
     this.completion = new Promise((resolve, reject) => { this.resolveCompletion = resolve; this.rejectCompletion = reject })
     const data: BackendWorkerData = { id: options.id, entry: options.entry, packageDir: options.packageDir,
@@ -133,6 +142,8 @@ class BackendSession {
         return
       }
       this.mounts = Object.freeze([...event.mounts]) as unknown as string[]
+      this.hasAccount = event.hasAccount === true
+      this.accountMetadata = event.accountMetadata && Object.freeze({ ...event.accountMetadata })
       this.state = 'running'
       this.finish()
     } else if (event.type === 'migrated' && this.state === 'migrating') {
@@ -149,6 +160,10 @@ class BackendSession {
         this.state = 'stopped'
         this.resolveStop?.()
       }, (error) => this.fail(error))
+    } else if (event.type === 'account-result') {
+      this.accountCalls.get(event.requestId)?.finish(event.identity)
+    } else if (event.type === 'account-error') {
+      this.accountCalls.get(event.requestId)?.finish(null, new Error('Account provider unavailable'))
     } else if (event.type === 'restart' && this.state === 'running') {
       this.callback(this.options.onRestart)
     } else if (event.type === 'log' && typeof event.message === 'string') {
@@ -191,6 +206,37 @@ class BackendSession {
   private closeConnections(): void {
     for (const socket of this.active) socket.destroy(new Error('Backend plugin unavailable'))
     this.active.clear()
+    for (const call of this.accountCalls.values()) call.finish(null, new Error('Account provider unavailable'))
+  }
+
+  resolveAccount: BackendAccount['resolve'] = async (token, options = {}) => {
+    if (this.state !== 'running' || !this.hasAccount) throw new Error('Account provider unavailable')
+    if (typeof token !== 'string' || !token || token.length > 16_384) return null
+    if (options.signal?.aborted) throw new Error('Account resolution cancelled')
+    if (this.accountCalls.size >= 256) throw new Error('Account provider busy')
+    const requestId = randomUUID()
+    return new Promise<BackendIdentity | null>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = (identity: BackendIdentity | null, error?: Error) => {
+        if (!this.accountCalls.delete(requestId)) return
+        clearTimeout(timer)
+        options.signal?.removeEventListener('abort', cancel)
+        if (error) reject(error)
+        else resolve(identity)
+      }
+      const abort = (message: string) => {
+        finish(null, new Error(message))
+        try { this.worker.postMessage({ type: 'account-cancel', requestId } satisfies BackendWorkerCommand) } catch { /* worker already gone */ }
+      }
+      const cancel = () => abort('Account resolution cancelled')
+      this.accountCalls.set(requestId, { finish })
+      timer = setTimeout(() => abort('Account resolution timed out'), Math.min(this.options.accountTimeoutMs ?? 5000, 30_000))
+      timer.unref()
+      options.signal?.addEventListener('abort', cancel, { once: true })
+      if (options.signal?.aborted) { cancel(); return }
+      try { this.worker.postMessage({ type: 'account-resolve', requestId, token } satisfies BackendWorkerCommand) }
+      catch { finish(null, new Error('Account provider unavailable')) }
+    })
   }
 
   private connection(metadata: SocketMetadata): PortDuplex {
@@ -261,6 +307,7 @@ class BackendSession {
     if (this.state === 'stopped') return Promise.resolve()
     if (this.state === 'failed') return this.worker.terminate().then(() => {})
     this.state = 'stopping'
+    this.closeConnections()
     this.stopPromise = new Promise<void>((resolve, reject) => { this.resolveStop = resolve; this.rejectStop = reject })
     this.stopTimer = setTimeout(() => this.fail(new Error('Backend stop timed out')), this.options.stopTimeoutMs ?? 10_000)
     this.stopTimer.unref()
@@ -273,6 +320,7 @@ export async function startBackend(options: BackendOptions): Promise<BackendHand
   const session = new BackendSession(options, 'start')
   await session.completion
   return { get mounts() { return session.mounts }, get state() { return session.state },
+    account: session.hasAccount ? { metadata: session.accountMetadata, resolve: session.resolveAccount } : undefined,
     handle: session.handle, upgrade: session.upgrade, stop: session.stop }
 }
 

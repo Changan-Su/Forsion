@@ -10,12 +10,26 @@
  * 共享组件的 `window.tangu?.X` 可选链自然 no-op / 隐藏。
  */
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
+import { AccountChangedError, createBrowserAccount, type BrowserAccount } from './account'
 
 const TOKEN_KEY = 'forsion_token'
 
-function readToken(): string {
-  try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
+let webAccount: BrowserAccount | undefined
+
+/** The regular Web and the Unit projection share Account behavior, with different storage scopes. */
+export function getWebAccount(): BrowserAccount {
+  if (!webAccount) {
+    let storage: Storage | undefined
+    try { storage = localStorage } catch { /* Private mode can still use an in-memory session. */ }
+    webAccount = createBrowserAccount({
+      apiBase: getApiBase(), storage, tokenKey: TOKEN_KEY,
+      onChange: () => syncCloudAccountCache(getApiBase(), webAccount?.getToken() || ''),
+    })
+  }
+  return webAccount
 }
+
+function readToken(): string { return getWebAccount().getToken() }
 
 function gotoLogin(returnUrl?: string, force = false): void {
   const ret = returnUrl ?? location.origin + (import.meta.env.BASE_URL || '/')
@@ -23,24 +37,31 @@ function gotoLogin(returnUrl?: string, force = false): void {
 }
 
 /** 捕获 /auth 回跳的 ?token=(落盘 + 清 URL)。邀请页等非主应用入口复用。 */
-export function captureTokenFromUrl(): void {
+export async function captureTokenFromUrl(): Promise<boolean> {
+  const u = new URL(location.href)
+  const tok = u.searchParams.get('token')
+  if (!tok) return true
+  // Remove credentials before making any request or loading the application.
+  u.searchParams.delete('token')
+  history.replaceState(null, '', u.toString())
   try {
-    const u = new URL(location.href)
-    const tok = u.searchParams.get('token')
-    if (tok) {
-      syncCloudAccountCache(getApiBase(), tok)
-      localStorage.setItem(TOKEN_KEY, tok)
-      u.searchParams.delete('token')
-      history.replaceState(null, '', u.toString())
-    }
-  } catch { /* private mode / 老浏览器 */ }
+    await getWebAccount().adoptToken(tok)
+    return true
+  } catch {
+    gotoLogin(undefined, true)
+    return false
+  }
 }
 
-/** 需要登录的独立页(如 /invite/*):有 token → true;无 → 跳登录并回到当前页,返回 false。 */
-export function requireLoginForPage(): boolean {
-  captureTokenFromUrl()
+/** Require the same server-verified account for standalone authenticated pages. */
+export async function requireLoginForPage(): Promise<boolean> {
+  if (!(await captureTokenFromUrl())) return false
   const token = readToken()
-  if (token) { syncCloudAccountCache(getApiBase(), token); return true }
+  if (token) {
+    const status = await getWebAccount().authStatus()
+    if (status.tokenValid !== false) { syncCloudAccountCache(getApiBase(), token); return true }
+    await getWebAccount().clearSession(token)
+  }
   gotoLogin(location.origin + location.pathname)
   return false
 }
@@ -59,20 +80,28 @@ export function getApiBase(): string {
 
 /** 清 token 并跳 Forsion 登录页(带回跳)。 */
 export function redirectToLogin(): void {
-  try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
-  clearCloudAccountCache()
-  gotoLogin(undefined, true)
+  const account = getWebAccount()
+  const rejectedToken = account.getToken()
+  void account.clearSession({ expectedToken: rejectedToken, prepare: false }).then(() => {
+    // A late 401 must not remove a newer session established in the meantime.
+    if (account.getToken()) return
+    clearCloudAccountCache()
+    gotoLogin(undefined, true)
+  }).catch((error) => console.error('[account] Could not leave the expired session:', error))
 }
 
 /**
  * 装垫片。返回 true=已就绪可挂载;false=未登录已跳转,调用方应停止挂载。
  */
-export function installWebShim(): boolean {
+export async function installWebShim(): Promise<boolean> {
   // 1) 捕获 /auth 回跳的 ?token=,落盘到与 account/admin 共享的键并清理 URL。
-  captureTokenFromUrl()
+  if (!(await captureTokenFromUrl())) return false
 
-  const token = readToken()
+  const account = getWebAccount()
+  const token = account.getToken()
   if (!token) { gotoLogin(); return false }
+  const status = await account.authStatus()
+  if (status.tokenValid === false) { await account.clearSession(token); gotoLogin(undefined, true); return false }
 
   // 2) API 基址(同 AI Studio 约定):VITE_API_URL 覆盖,否则同源 location.origin+/api
   //    —— dev 经 vite proxy、prod 经本 app 自己的 nginx 把 /api 代理到 Forsion server(→ tangu worker)。
@@ -81,24 +110,8 @@ export function installWebShim(): boolean {
 
   const origFetch = window.fetch.bind(window)
 
-  // 登录态:桌面端由 electron 的 window.tangu.authStatus() 提供;web 无主进程 → 用共享 token 打 Forsion
-  // /auth/me(200=有效、401/403=过期、无 token=未登录),映射成 AccountCard 认的 AuthStatusInfo。
-  // 缺了它 AccountCard 恒显「未登录」、forsionLogin 缺失则登录按钮点了没反应(见 components/AccountCard)。
-  const authStatus = async (): Promise<Record<string, unknown>> => {
-    const tok = readToken()
-    const base = { cloudUrl: backendUrl, tokenSource: 'config' as const }
-    if (!tok) return { ...base, loggedIn: false, tokenValid: null, username: null, tokenSource: null }
-    try {
-      const r = await origFetch(`${backendUrl}/auth/me`, { headers: { Authorization: `Bearer ${tok}` } })
-      if (r.status === 401 || r.status === 403) return { ...base, loggedIn: false, tokenValid: false, username: null }
-      if (!r.ok) return { ...base, loggedIn: true, tokenValid: null, username: null } // 网络/5xx:不确定,别误判过期
-      const u = await r.json().catch(() => ({} as any))
-      if (readToken() !== tok) return { ...base, loggedIn: false, tokenValid: null, username: null }
-      return { ...base, loggedIn: true, tokenValid: true, userId: u.id ?? u.userId ?? null, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: null }
-    } catch {
-      return { ...base, loggedIn: true, tokenValid: null, username: null } // 离线:保守当已登录、待过期检测校准
-    }
-  }
+  // AccountCard and desktop renderer consume the same account status/events.
+  const authStatus = account.authStatus
 
   /** `?token=…` / `&token=…`(无 token 则空串)。跨域 302 之后靠它交接登录态。 */
   const tokenQuery = (sep = '?'): string => {
@@ -119,7 +132,7 @@ export function installWebShim(): boolean {
     const tok = readToken()
     if (!tok) return { status: 401, json: null }
     try {
-      const r = await origFetch(`${backendUrl}${path}`, {
+      const r = await account.request(path, {
         method,
         headers: { Authorization: `Bearer ${tok}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -138,8 +151,13 @@ export function installWebShim(): boolean {
       cloudUrl: backendUrl, sandbox: 'none',
     }),
     authStatus,
-    forsionLogin: async () => { gotoLogin(undefined, true) },
-    forsionLogout: async () => { redirectToLogin() },
+    forsionLogin: async () => {
+      if (account.getToken()) await account.logout()
+      gotoLogin(undefined, true)
+    },
+    forsionLogout: async () => { await account.logout(); gotoLogin(undefined, true) },
+    onAuthWillChange: account.beforeChange,
+    onAuthChanged: account.subscribe,
     // ⚠️ 手机壳(@mobile/mobileEntry)装的也是本垫片,不是 mobileShim —— 手机上没有「新标签」这回事,
     //    `_blank` 还常被拦掉,于是点头像/个人中心「毫无反应」(用户实报)。移动布局下同标签跳走,
     //    返回键能回来。section 此前被整个丢掉,积分兑换/投稿两个入口都落错页,一并接上。
@@ -168,16 +186,30 @@ export function installWebShim(): boolean {
     },
   }
 
-  // 4) 401 兜底:任一 /api/agent/* 或 /api/amadeus/*(Amadeus 云端桥)鉴权失败 → 清 token 重新登录。
+  // Route this API's fetches through the same generation/body guard. Unrelated
+  // origins retain native fetch and never receive this account's credentials.
+  const api = new URL(backendUrl)
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const requestToken = readToken()
-    const res = await origFetch(input, init)
-    try {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (requestToken === readToken() && res.status === 401 && (url.includes('/api/agent/') || url.includes('/api/amadeus/'))) {
-        redirectToLogin()
-      }
-    } catch { /* ignore */ }
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
+    const apiPath = api.pathname.replace(/\/+$/, '')
+    const insideApi = url.origin === api.origin && (url.pathname === apiPath || url.pathname.startsWith(apiPath + '/'))
+    if (!insideApi) return origFetch(input, init)
+    const requestToken = account.getToken()
+    const requestGeneration = account.generation
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+    const supplied = headers.get('Authorization')
+    if (supplied && supplied !== `Bearer ${requestToken}`) throw new AccountChangedError()
+    let options = init
+    if (input instanceof Request) {
+      const merged = new Request(input, init)
+      options = { method: merged.method, headers: merged.headers, signal: merged.signal, body: merged.body,
+        ...(merged.body ? { duplex: 'half' } : {}) } as RequestInit
+    }
+    const res = await account.request(url.href, options)
+    if (requestToken === account.getToken() && requestGeneration === account.generation && res.status === 401 &&
+      (url.pathname.startsWith(apiPath + '/agent/') || url.pathname.startsWith(apiPath + '/amadeus/'))) {
+      redirectToLogin()
+    }
     return res
   }
 

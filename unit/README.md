@@ -83,7 +83,33 @@ MessageChannel/Duplex流转发，无第二个TCP监听端口。停止时先中�
 由同一个 Unit 监听端口分发。`/admin/unit`、`/admin/vault`、`/admin/engine` 保留给宿主，
 插件不能覆盖。浏览器只获取UI字段和Space配方，不获取backend入口、依赖、env或私密配置。
 业务鉴权由插件自己的API执行。引擎、主机文件、vault、配对和宿主配置写入不向公开访问者开放；
-桌面Unit原有配对模式保持兼容。浏览器数据按Unit identity隔离。
+桌面Unit原有配对模式保持兼容。
+
+## 账号与访问者数据
+
+Unit 是框架宿主。账号接口属于宿主能力，具体身份验证由已安装的后端插件提供；
+目前 Server 插件复用现有 Forsion 用户、密码校验、JWT 和撤销记录，不创建第二套账号表。
+后端可贡献 `account: { metadata: { apiBase, loginPath }, resolve(token, { signal }) }`；
+同一 Unit 仅允许一个账号提供方激活。`resolve` 返回经过验证的 userId、username、role
+及 tenantId/workspaceId，私密字段不会进入网页。管理员权限取已签发令牌与当前数据库角色
+的交集；降权、停用与退出不等待缓存失效。
+
+网页复用 Web 的 BrowserAccount 和桌面 AccountCard；登录仍走现有 `/auth` 页面。
+Unit 使用每实例、每标签页的 sessionStorage，登录回跳需匹配该标签发起的 state。
+普通 Web 保留其既有账号存储方式。插件通过可选 `ctx.account` 使用 status/login/logout/
+request/subscribe，不再自行保存投射访问者的登录令牌。Admin 插件原有远程连接模式继续可用。
+
+`/admin/unit/account` 返回当前访问者身份，`/admin/unit/config` 的 GET/PUT 读取或更新
+此访问者的偏好白名单，`/admin/unit/plugin-data/:id` 的 GET/PUT 读写插件文本数据
+（PUT `{data:string}`，最大 1 MB）。每次请求验证身份，存储按账号提供方、用户、tenant、
+workspace 与插件隔离，目录标识由宿主计算，客户端传入的用户/租户字段不能选择所有者。
+数据位于 Unit dataDir 的 accounts 子目录；不读写宿主自己的偏好、vault 或凭据。
+退出成功后吊销当前会话并刷新页面；换号重新挂载应用，旧请求、响应体和延迟回调均不能
+进入新账号。退出网络失败会保留会话并报告错误。内容布局按访问者完整 scope 隔离。
+
+当前交付的是个人 workspace（`personal:<userId>`）以及 Admin API 的角色边界，
+不等同于组织、成员、共享资源 ACL 或所有业务插件已完成多租户迁移。后端插件仍须校验
+其业务数据权限；已签发的独立 MCP 凭据不因网页登录退出而自动撤销。
 
 ## 验证
 

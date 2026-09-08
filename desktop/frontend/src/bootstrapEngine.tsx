@@ -401,7 +401,7 @@ export function installEngine(): void {
   //   商店与成就被埋没。三者都是低频动作 → 只留命令面板(想要的人可从 ⌘K 钉回命令区)。
   // 账号卡复用 AccountCard,随 ribbon 展开切换「完整卡 / 紧凑头像」;原聊天列表底部那份已移除,避免重复。
   addRibbonIcon({ id: 'rb-settings', side: 'bottom', icon: Settings, tooltip: () => app().tr('settings.title'), onClick: () => app().openSettings() })
-  if (PRODUCT.agentBackend) addRibbonIcon({
+  if (PRODUCT.agentBackend || window.tangu?.account) addRibbonIcon({
     id: 'rb-account',
     side: 'bottom',
     pinned: true, // 账号卡钉死最底:不参与拖拽/收纳/溢出
@@ -409,7 +409,7 @@ export function installEngine(): void {
       <AccountCard
         compact={!expanded}
         onToast={app().toast}
-        onAuthChange={() => setTimeout(() => void app().connect(app().cfg), 1500)}
+        onAuthChange={PRODUCT.agentBackend ? () => setTimeout(() => void app().connect(app().cfg), 1500) : undefined}
       />
     ),
   })

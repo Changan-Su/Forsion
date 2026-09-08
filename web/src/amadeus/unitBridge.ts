@@ -28,6 +28,7 @@ export interface UnitBridgeCfg {
   base: string
   /** Published websites keep each visitor's plugin state in their own browser tab. */
   browserStorage?: string
+  pluginData?: { read(id: string): Promise<string | null>; write(id: string, data: string): Promise<void> }
   getToken(): string
   /** 401(配对被回收):由 unitShim 清掉本地令牌并重进配对流。 */
   onAuthError(): void
@@ -61,8 +62,9 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   const rpc = async <T>(ch: string, args: unknown[] = []): Promise<T> => {
     if (cfg.browserStorage) {
       const key = `unit:${cfg.browserStorage}:plugin:${String(args[0])}`
-      if (ch === IPC.pluginDataRead) return sessionStorage.getItem(key) as T
+      if (ch === IPC.pluginDataRead) return (cfg.pluginData ? await cfg.pluginData.read(String(args[0])) : sessionStorage.getItem(key)) as T
       if (ch === IPC.pluginDataWrite) {
+        if (cfg.pluginData) return await cfg.pluginData.write(String(args[0]), String(args[1])) as T
         sessionStorage.setItem(key, String(args[1]))
         return undefined as T
       }

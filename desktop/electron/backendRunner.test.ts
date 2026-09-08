@@ -123,6 +123,94 @@ async function cleanDetachedFixture(options: BackendOptions): Promise<void> {
 }
 
 describe('Unit backend workers', () => {
+  it('resolves concurrent accounts without crossing identities or exposing provider private fields', async () => {
+    const options = await fixture(`
+      export default () => ({ mounts: ['/api'], handle(_req, res) { res.end('available'); },
+        account: { metadata: { apiBase: '/api', loginPath: '/auth' }, async resolve(token) {
+          await new Promise((done) => setTimeout(done, token === 'alice' ? 40 : 1));
+          if (token === 'invalid') return null;
+          if (token === 'error') throw new Error('PRIVATE_TOKEN_SENTINEL');
+          if (token === 'malformed') return { userId: 17, username: 'wrong', role: 'ADMIN' };
+          return { userId: token, username: token, role: token === 'alice' ? 'ADMIN' : 'USER',
+            tenantId: 'personal:' + token, workspaceId: 'personal:' + token,
+            password: 'PRIVATE_PASSWORD_SENTINEL', token: 'PRIVATE_TOKEN_SENTINEL' };
+        } }
+      });
+    `)
+    const backend = await startBackend(options)
+    const app = await gateway(backend)
+    try {
+      expect(backend.account).toBeDefined()
+      expect(backend.account?.metadata).toEqual({ apiBase: '/api', loginPath: '/auth' })
+      const tokens = Array.from({ length: 30 }, (_, index) => index % 2 ? 'bob' : 'alice')
+      const identities = await Promise.all(tokens.map((token) => backend.account!.resolve(token)))
+      identities.forEach((identity, index) => expect(identity).toEqual({ userId: tokens[index], username: tokens[index],
+        role: tokens[index] === 'alice' ? 'ADMIN' : 'USER', tenantId: 'personal:' + tokens[index], workspaceId: 'personal:' + tokens[index] }))
+      await expect(backend.account!.resolve('invalid')).resolves.toBeNull()
+      await expect(backend.account!.resolve('error')).rejects.toThrow('Account provider unavailable')
+      await expect(backend.account!.resolve('malformed')).rejects.toThrow('Account provider unavailable')
+      expect(await (await fetch(app.base + '/api')).text()).toBe('available')
+      expect(backend.state).toBe('running')
+    } finally { await app.close() }
+  })
+
+  it('bounds account calls, cancels individually, and rejects all pending identities before stopping', async () => {
+    const options = await fixture(`
+      import { appendFile } from 'node:fs/promises';
+      import { join } from 'node:path';
+      export default (ctx) => ({ mounts: ['/api'], handle(_req, res) { res.end('available'); },
+        account: { async resolve(token, { signal }) {
+          if (token === 'quick') return { userId: token, username: token, role: 'USER' };
+          signal.addEventListener('abort', () => { void appendFile(join(ctx.dataDir, 'account-aborted'), token + '\\n'); }, { once: true });
+          await appendFile(join(ctx.dataDir, 'account-started'), token + '\\n');
+          return new Promise(() => {});
+        } }
+      });
+    `, { accountTimeoutMs: 100 })
+    const backend = await startBackend(options)
+    try {
+      await expect(backend.account!.resolve('deadline')).rejects.toThrow('timed out')
+      await eventually(async () => expect(await readFile(join(options.dataDir, 'account-aborted'), 'utf8')).toContain('deadline'))
+      const controller = new AbortController()
+      const cancelled = expect(backend.account!.resolve('cancelled', { signal: controller.signal })).rejects.toThrow('cancelled')
+      await eventually(async () => expect(await readFile(join(options.dataDir, 'account-started'), 'utf8')).toContain('cancelled'))
+      controller.abort()
+      await cancelled
+      await eventually(async () => expect(await readFile(join(options.dataDir, 'account-aborted'), 'utf8')).toContain('cancelled'))
+      await expect(backend.account!.resolve('quick')).resolves.toMatchObject({ userId: 'quick' })
+      const stopped = expect(backend.account!.resolve('stopping')).rejects.toThrow('unavailable')
+      await backend.stop()
+      await stopped
+      await expect(backend.account!.resolve('quick')).rejects.toThrow('unavailable')
+    } finally { await backend.stop() }
+  })
+
+  it('rejects pending account calls if the worker crashes while preserving plugins without accounts', async () => {
+    const plain = await startBackend(await fixture(LIFECYCLE))
+    expect(plain.account).toBeUndefined()
+    await plain.stop()
+    const backend = await startBackend(await fixture(`
+      export default () => ({ mounts: ['/api'], handle() {}, account: {
+        resolve() { setTimeout(() => process.exit(9), 10); return new Promise(() => {}); }
+      } });
+    `))
+    try {
+      await expect(backend.account!.resolve('waiting')).rejects.toThrow('unavailable')
+      expect(backend.state).toBe('failed')
+    } finally { await backend.stop() }
+  })
+
+  it('refuses login descriptors which could send browser credentials to another origin', async () => {
+    for (const loginPath of ['https://account.example/auth', '//account.example/auth', '/\\\\account.example/auth']) {
+      await expect(startBackend(await fixture(`
+        export default () => ({ mounts: ['/api'], handle() {}, account: {
+          metadata: { apiBase: '/api', loginPath: ${JSON.stringify(loginPath)} },
+          async resolve() { return null; }
+        } });
+      `))).rejects.toThrow('Account endpoints must be absolute same-origin paths')
+    }
+  })
+
   it('runs handlers in the Unit process with a worker-local environment and normal HTTP metadata', async () => {
     const options = await fixture(LIFECYCLE, { env: { UNIT_FIXTURE_SETTING: 'worker-only' }, config: { secret: 'PRIVATE_CONFIG_SENTINEL' } })
     const backend = await startBackend(options)
