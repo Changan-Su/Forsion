@@ -74,6 +74,14 @@ for (const dir of resources) {
       check(binary.length > 100_000 && binary.subarray(0, 2).toString() === 'MZ', 'Windows native helper missing/invalid')
     } catch { errors.push(`Missing ${file}`) }
   }
+  if (process.platform === 'linux') {
+    const file = path.join(cu, 'prebuilt', 'linux', process.arch, 'linux-bridge')
+    try {
+      const binary = fs.readFileSync(file)
+      check(binary.length > 100_000 && binary.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])), 'Linux native helper missing/invalid')
+      check((fs.statSync(file).mode & 0o111) !== 0, 'Linux native helper is not executable')
+    } catch { errors.push(`Missing ${file}`) }
+  }
   console.log(`Checked packaged content: ${dir}`)
 }
 if (errors.length) {

@@ -114,6 +114,11 @@ jobs:
         shell: bash
         run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform windows
 
+      - name: Build bundled Computer Use Linux helper
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform linux
+
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
       # GITHUB_TOKEN:beforeBuild 的 fetch-python 调 GitHub API 拉内置 Python,未鉴权在 runner 上会 403 限流。
       - name: Package installer
