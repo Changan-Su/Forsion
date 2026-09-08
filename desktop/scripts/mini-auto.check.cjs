@@ -105,8 +105,34 @@ async function main() {
     check('opens current streaming conversation without ever opening manual Mini', true)
     check('automatic window never steals external app focus', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow() === null))
     await mini.screenshot({ path: path.join(shots, 'automatic-current-conversation.png') })
+    // Hold focus in the companion process, control only the cursor samples, and record real OS window positions.
+    await app.evaluate(({ screen }) => {
+      const area = screen.getPrimaryDisplay().workArea
+      globalThis.__miniMotionCursor = { x: area.x + 80, y: area.y + 80 }
+      screen.getCursorScreenPoint = () => globalThis.__miniMotionCursor
+    })
+    await pause(1000)
+    const move = async (dx) => {
+      await app.evaluate(({ BrowserWindow }, dx) => {
+        const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1'))
+        globalThis.__miniMotionSamples = [{ ...win.getBounds(), at: performance.now() }]
+        globalThis.__miniMotionCursor.x += dx
+        globalThis.__miniMotionTimer = setInterval(() => globalThis.__miniMotionSamples.push({ ...win.getBounds(), at: performance.now() }), 8)
+      }, dx)
+      await pause(650)
+      return app.evaluate(() => { clearInterval(globalThis.__miniMotionTimer); return globalThis.__miniMotionSamples })
+    }
+    const shortMove = await move(48)
+    fs.writeFileSync(path.join(shots, 'motion-short.json'), JSON.stringify(shortMove))
+    const moving = shortMove.filter((p, i) => i && p.x !== shortMove[i - 1].x)
+    const shortTransitionVisible = moving.length >= 6 && moving.at(-1).at - moving[0].at >= 140
     stopInput(); await pause(700)
     check('remains visible between foreground calls in the same run', !!await autoVisible())
+    const gapMove = await move(240)
+    fs.writeFileSync(path.join(shots, 'motion-between-calls.json'), JSON.stringify(gapMove))
+    console.log('MOTION', JSON.stringify({ shortFrames: moving.length, shortDurationMs: moving.at(-1)?.at - moving[0]?.at, betweenCallsPixels: gapMove.at(-1).x - gapMove[0].x }))
+    check('short cursor moves have a visible linear transition over at least 140ms', shortTransitionVisible)
+    check('the visible foreground conversation continues following between calls', gapMove.at(-1).x - gapMove[0].x === 240)
     backend.emit(run, 'token', { delta: ' Progress continues between calls.' })
     await mini.getByText('Working in the foreground (r1). Progress continues between calls.', { exact: true }).waitFor()
     check('same session continues streaming in the temporary window', true)

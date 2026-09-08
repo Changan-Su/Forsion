@@ -14,11 +14,16 @@ interface AutoMiniDeps {
 export function startMiniAutoPanel(deps: AutoMiniDeps) {
   let stopped = false, checking = false, foreground = false
   let episode: string | null = null, suppressed: string | null = null
+  let foregroundRun: string | null = null
   let requested: string | null = null
   const refresh = (): void => {
     if (stopped) return
     const { sessionId, runId } = deps.session()
     const key = sessionId && runId ? JSON.stringify([sessionId, runId]) : null
+    // The foreground session lasts across short HID leases, for manual and automatic Mini alike.
+    if (!key || deps.hasForsionFocus()) foregroundRun = null
+    else if (foreground) foregroundRun = key
+    else if (foregroundRun !== key) foregroundRun = null
     if (suppressed !== key) suppressed = null
     if (!key || deps.hasForsionFocus() || deps.manualMiniVisible()) episode = null
     else if (foreground && suppressed !== key) episode = key
@@ -49,7 +54,11 @@ export function startMiniAutoPanel(deps: AutoMiniDeps) {
       if (requested) { requested = null; deps.close() }
     },
     wants(sessionId: string): boolean { return !stopped && requested === sessionId },
-    following(): boolean { return !stopped && foreground && !deps.hasForsionFocus() },
-    stop(): void { stopped = true; clearInterval(timer); requested = episode = null; deps.close() },
+    following(): boolean {
+      const { sessionId, runId } = deps.session()
+      const sameRun = !!foregroundRun && foregroundRun === JSON.stringify([sessionId, runId])
+      return !stopped && (foreground || sameRun) && !deps.hasForsionFocus()
+    },
+    stop(): void { stopped = true; clearInterval(timer); requested = episode = foregroundRun = null; deps.close() },
   }
 }

@@ -43,6 +43,14 @@ export function linearCursorStep(from: Point, to: Point, elapsedMs: number, spee
   return { x: from.x + dx * ratio, y: from.y + dy * ratio }
 }
 
+/** Give each new destination a perceptible linear segment, including small pointer jumps.
+ * Freeze its speed until the pointer changes destination; never ease on each frame. */
+export function cursorTransitionSpeed(from: Point, to: Point): number {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y)
+  const durationMs = Math.max(220, Math.min(420, distance / 2400 * 1000))
+  return distance * 1000 / durationMs
+}
+
 interface MiniWindow {
   isDestroyed(): boolean
   isVisible(): boolean
@@ -59,6 +67,7 @@ interface FollowDeps {
 export function startMiniCursorFollow(win: MiniWindow, deps: FollowDeps): () => void {
   let stopped = false, checking = false, active = false, following = false
   let position: Point | null = null, target: Point | null = null
+  let speed = 0
   let last = performance.now()
   const setFollowing = (value: boolean): void => {
     if (following === value) return
@@ -82,11 +91,18 @@ export function startMiniCursorFollow(win: MiniWindow, deps: FollowDeps): () => 
     if (active) {
       if (!following) { position = win.getBounds(); setFollowing(true) }
       const cursor = deps.cursor()
-      target = cursorPanelTarget(cursor, win.getBounds(), deps.workArea(cursor))
+      const next = cursorPanelTarget(cursor, win.getBounds(), deps.workArea(cursor))
+      if (position && (!target || next.x !== target.x || next.y !== target.y)) {
+        speed = cursorTransitionSpeed(position, next)
+        target = next
+      }
     }
     if (!following || !position || !target) return
-    position = linearCursorStep(position, target, dt)
-    win.setPosition(Math.round(position.x), Math.round(position.y), false)
+    const previous = position
+    position = linearCursorStep(position, target, dt, speed)
+    if (Math.round(previous.x) !== Math.round(position.x) || Math.round(previous.y) !== Math.round(position.y)) {
+      win.setPosition(Math.round(position.x), Math.round(position.y), false)
+    }
     if (!active && Math.hypot(position.x - target.x, position.y - target.y) < 1) {
       setFollowing(false); position = target = null
     }

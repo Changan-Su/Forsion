@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { cursorPanelTarget, foregroundSignalActive, linearCursorStep, startMiniCursorFollow } from './miniCursorFollow'
+import { cursorPanelTarget, cursorTransitionSpeed, foregroundSignalActive, linearCursorStep, startMiniCursorFollow } from './miniCursorFollow'
 
 afterEach(() => vi.useRealTimers())
 describe('Mini foreground following', () => {
@@ -25,6 +25,19 @@ describe('Mini foreground following', () => {
     const target = cursorPanelTarget({ x: -10, y: 880 }, { x: 0, y: 0, width: 320, height: 420 }, work)
     expect(target).toEqual({ x: -354, y: 436 })
     expect(cursorPanelTarget({ x: -1435, y: 5 }, { x: 0, y: 0, width: 320, height: 420 }, work)).toEqual({ x: -1411, y: 29 })
+  })
+  it('makes short jumps visible with equal displacement per frame, then retargets from the current position', () => {
+    const from = { x: 100, y: 100 }, target = { x: 148, y: 100 }
+    const speed = cursorTransitionSpeed(from, target)
+    const a = linearCursorStep(from, target, 20, speed), b = linearCursorStep(a, target, 20, speed)
+    expect(a.x - from.x).toBeCloseTo(b.x - a.x)
+    expect(b.x).toBeLessThan(120) // 48px must not complete in two frames.
+    const reversed = { x: 80, y: 100 }
+    const next = linearCursorStep(b, reversed, 16, cursorTransitionSpeed(b, reversed))
+    expect(next.x).toBeLessThan(b.x); expect(next.x).toBeGreaterThan(reversed.x)
+    let end = from
+    for (let i = 0; i < 11; i++) end = linearCursorStep(end, target, 20, speed)
+    expect(end.x).toBeCloseTo(target.x); expect(end.y).toBe(target.y)
   })
   it('is inactive in background, restores hit testing, and cleans up pending polls on close', async () => {
     vi.useFakeTimers()
