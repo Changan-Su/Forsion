@@ -100,7 +100,12 @@ module.exports = {
           // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 vendor/*.tgz 装进
           // node_modules 的随包 npm 包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
           // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定。
-          { from: 'node_modules/@forsion/tangu-computer-use', to: 'bundled-plugins/tangu-computer-use' },
+          {
+            from: 'node_modules/@forsion/tangu-computer-use',
+            to: 'bundled-plugins/tangu-computer-use',
+            // CI 原生编译会留下数百 MB 的 Rust 中间文件；只交付 prebuilt 和源码。
+            filter: ['**/*', '!native/**/target{,/**}'],
+          },
         ]
       : []),
   ],

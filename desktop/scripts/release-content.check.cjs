@@ -59,6 +59,9 @@ for (const dir of resources) {
   check(manifest.version === installed.version && cuPkg.version === installed.version, 'Packaged CU version differs from build dependency')
   check(fs.existsSync(path.join(cu, 'tangu-plugins', 'computer-use', 'dist', 'index.js')), 'CU engine bundle missing')
   check(fs.existsSync(path.join(cu, 'scripts', 'setup-helper.mjs')), 'CU setup script missing')
+  for (const platform of ['windows', 'linux']) {
+    check(!fs.existsSync(path.join(cu, 'native', platform, 'bridge-rs', 'target')), `Rust build cache leaked into packaged CU (${platform})`)
+  }
   for (const arch of ['arm64', 'x64']) {
     const file = path.join(cu, 'prebuilt', 'macos', arch, 'bridge')
     try {
