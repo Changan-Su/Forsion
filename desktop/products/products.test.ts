@@ -2,10 +2,20 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { resolveProduct } from '../shared/product'
 
 const load = (id: string): Record<string, unknown> => JSON.parse(readFileSync(join(__dirname, `${id}.json`), 'utf8'))
 
 describe('产品档案', () => {
+  it('部署档案可在运行时选择,显式发行档案优先;Unit 不依赖 agent 引擎', () => {
+    const runtime = { id: 'basic', displayName: 'Basic', defaultSpace: 'admin', spaces: [], agentBackend: false, market: false, unit: true }
+    expect(resolveProduct(undefined, runtime)).toEqual(runtime)
+    const release = { ...runtime, id: 'standalone', unit: false }
+    expect(resolveProduct(release, runtime)).toEqual(release)
+    expect(resolveProduct().spaces).toEqual(load('forsion').spaces)
+    expect(resolveProduct().unit).toBe(true)
+  })
+
   it('默认档案 forsion = 现状全家桶(值级锁死)', () => {
     expect(load('forsion')).toEqual({
       id: 'forsion',

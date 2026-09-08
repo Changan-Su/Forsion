@@ -26,6 +26,8 @@ import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 export interface UnitBridgeCfg {
   /** 设备页基址(尾斜杠;局域网根或隧道子路径 —— 相对 base 两用)。 */
   base: string
+  /** Published websites keep each visitor's plugin state in their own browser tab. */
+  browserStorage?: string
   getToken(): string
   /** 401(配对被回收):由 unitShim 清掉本地令牌并重进配对流。 */
   onAuthError(): void
@@ -57,6 +59,18 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     return out
   }
   const rpc = async <T>(ch: string, args: unknown[] = []): Promise<T> => {
+    if (cfg.browserStorage) {
+      const key = `unit:${cfg.browserStorage}:plugin:${String(args[0])}`
+      if (ch === IPC.pluginDataRead) return sessionStorage.getItem(key) as T
+      if (ch === IPC.pluginDataWrite) {
+        sessionStorage.setItem(key, String(args[1]))
+        return undefined as T
+      }
+      if (ch === IPC.restoreVault) return null as T
+      if ([IPC.listPages, IPC.listFiles, IPC.listFolders].includes(ch as never)) return [] as T
+      if (ch === IPC.pageIcons) return {} as T
+      throw new Error('This Unit does not publish a vault')
+    }
     const hasBytes = args.some((a) => a instanceof Uint8Array)
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), hasBytes ? 120_000 : 30_000)
@@ -164,7 +178,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
   }
   window.addEventListener('beforeunload', () => { es?.close(); if (assetTimer) clearTimeout(assetTimer) })
 
-  await refreshAssetToken() // 首枚等到手再交出桥(失败已排了 30s 重试,降级不阻塞挂载);成功即起 SSE
+  if (!cfg.browserStorage) await refreshAssetToken() // Published shells have no shared vault or event stream.
   setAssetUrlBuilder((ref) => assetUrl(ref))
 
   const notSupported = (what: string) => (): never => { throw new Error(`${what}:请在对方设备上操作`) }

@@ -10,9 +10,9 @@
  *   3. 绝不跳 Forsion 登录页;未配对时页内走配对流(纯 DOM,先于 React 挂载)。
  */
 
-interface UnitMeta { instanceId: string; name: string; version: string }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public'; browserStorage?: boolean }
 
-const base = (): URL => new URL('.', location.href)
+const base = (): URL => new URL('.', document.baseURI)
 
 /** 未配对时的页内配对流:请求 → 双侧展示同一 6 位码 → 轮询 → 拿到令牌。取消/失败返回 null。 */
 async function pairFlow(meta: UnitMeta): Promise<string | null> {
@@ -73,6 +73,7 @@ export async function installUnitShim(): Promise<boolean> {
   const meta = (window as unknown as { __FORSION_UNIT_PAGE__?: UnitMeta }).__FORSION_UNIT_PAGE__
   if (!meta) return false
   const tokenKey = `unit_pair_${meta.instanceId}`
+  const published = meta.projection === 'public'
   let token = ''
   try { token = localStorage.getItem(tokenKey) || '' } catch { /* private mode */ }
 
@@ -80,7 +81,8 @@ export async function installUnitShim(): Promise<boolean> {
   const probe = await fetch(new URL('unit/whoami', base()), {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   }).catch(() => null)
-  if (!probe || probe.status === 401) {
+  if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
+  if (!published && (!probe || probe.status === 401)) {
     const fresh = await pairFlow(meta)
     if (!fresh) return false
     token = fresh
@@ -99,6 +101,7 @@ export async function installUnitShim(): Promise<boolean> {
   const fixedToken = token
   window.amadeus = await createUnitAmadeusBridge({
     base: base().href,
+    browserStorage: published ? meta.instanceId : undefined,
     getToken: () => fixedToken,
     onAuthError: () => {
       // 配对被对方回收:清本地令牌,重进配对流(T1);隧道形态不会 401 到这。
@@ -109,13 +112,17 @@ export async function installUnitShim(): Promise<boolean> {
 
   const engineBase = new URL('engine', base()).href
   // 连接键恒为本页值(对方的 mode/backendUrl/token 绝不进来 —— 服务端白名单也不会下发它们)。
-  const cfg = { mode: 'external' as const, backendUrl: engineBase, token, cloudUrl: '', sandbox: 'none' as const }
+  const cfg = { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', sandbox: 'none' as const }
   const authHeaders = (): Record<string, string> | undefined =>
     fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined
   /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig
    *  门控的功能靠它长出来 —— 体验跟随对方设置(2026-08-24 拍板);写回走同一张白名单。 */
   let remotePrefs: Record<string, unknown> = {}
   const pullConfig = async (): Promise<void> => {
+    if (published) {
+      remotePrefs = JSON.parse(sessionStorage.getItem(`unit:${meta.instanceId}:preferences`) || '{}')
+      return
+    }
     const r = await fetch(new URL('unit/config', base()), { headers: authHeaders() })
     if (r.ok) remotePrefs = ((await r.json()) as { config?: Record<string, unknown> }).config || {}
   }
@@ -125,12 +132,18 @@ export async function installUnitShim(): Promise<boolean> {
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
+    appVersion: async () => meta.version,
     platform: undefined,
     getConfig: async () => {
       try { await pullConfig() } catch { /* 掉线用上次值 */ }
       return mergedConfig()
     },
     setConfig: async (patch: Record<string, unknown>) => {
+      if (published) {
+        remotePrefs = { ...remotePrefs, ...patch }
+        sessionStorage.setItem(`unit:${meta.instanceId}:preferences`, JSON.stringify(remotePrefs))
+        return mergedConfig()
+      }
       try {
         const r = await fetch(new URL('unit/config', base()), {
           method: 'PUT',

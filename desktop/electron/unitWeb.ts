@@ -16,8 +16,9 @@ import { extname, normalize, sep } from 'node:path'
 import { readFile, realpath } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
-import { IPC } from '@amadeus-shared/ipc'
+import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
+import { PRODUCT, type ProductProfile } from './product'
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
 
@@ -74,6 +75,8 @@ export interface UnitWebDeps {
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
+  /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
+  projection?: { mode: 'public'; basePath: string; product: ProductProfile }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
    *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
   p2pAnswer?: (offerSdp: string) => Promise<string>
@@ -121,6 +124,9 @@ const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Forsion Unit</t
 <p>或设置环境变量 <code>TANGU_UNIT_WEB_DIST</code> 指向已有的 web 构建目录后重启 Forsion。</p></body>`
 
 export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?: string }): Promise<UnitWebHandle> {
+  if (deps.projection && !/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(deps.projection.basePath)) {
+    throw new Error('Projection basePath must be an absolute path ending in /')
+  }
   const internalSecret = randomUUID()
   const pending = new Map<string, PendingPair>()
   const pendingByIp = new Map<string, string>()
@@ -235,11 +241,16 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     const norm = normalize(rel).replace(/^([/\\])+/, '')
     if (norm.startsWith('..')) { json(res, 400, { detail: 'bad path' }); return }
     try {
-      let buf = await readFile(`${dist}/${norm}`)
+      const [rootReal, fileReal] = await Promise.all([realpath(dist), realpath(`${dist}/${norm}`)])
+      if (!fileReal.startsWith(rootReal + sep)) { json(res, 404, { detail: 'not found' }); return }
+      let buf = await readFile(fileReal)
       const ext = extname(norm)
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
-        const inject = `<script>window.__FORSION_UNIT_PAGE__=${JSON.stringify({ instanceId: deps.meta.instanceId, name: deps.meta.name, version: deps.meta.version })}</script>`
+        const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
+        const meta = { ...deps.meta, ...(deps.projection ? { projection: 'public', browserStorage: true } : {}) }
+        const baseTag = deps.projection ? `<base href="${deps.projection.basePath}">` : ''
+        const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
         // ⚠️ 设备页必须放行 'unsafe-eval':插件宿主用 new Function 求值插件代码,而 web 构建的
         // CSP(script-src 'self' 'unsafe-inline')没它 —— 19 个插件会**全部** setup 失败,页面看起来
@@ -270,9 +281,29 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     gc()
-    const url = req.url || '/'
+    let url = req.url || '/'
+    if (deps.projection) {
+      const prefix = deps.projection.basePath.replace(/\/$/, '')
+      if (url === prefix || url.startsWith(prefix + '?')) {
+        res.writeHead(308, { Location: prefix + '/' + url.slice(prefix.length) }); res.end(); return
+      }
+      if (url.startsWith(prefix + '/')) url = url.slice(prefix.length)
+    }
     const path = url.split('?')[0]
     const ip = req.socket.remoteAddress || 'unknown'
+
+    // A published shell is a website. It publishes installed plugin code and layouts,
+    // never the publisher's vault, engine, credentials, settings, or pairing endpoints.
+    if (deps.projection) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { detail: 'Read-only projection' }); return }
+      if (path === '/unit/whoami') { json(res, 200, { ok: true, scope: 'shell' }); return }
+      if (path === '/unit/plugins') { json(res, 200, { appVersion: deps.meta.version, plugins: await deps.readPlugins() }); return }
+      if (path === '/unit/spaces') { json(res, 200, { spaces: await deps.readSpaces() }); return }
+      if (path === '/unit/config') { json(res, 200, { config: {} }); return }
+      if (path === '/unit/providers') { json(res, 200, { providers: [] }); return }
+      if (path === '/unit/meta') { json(res, 200, { ...deps.meta, pair: false, projection: 'public' }); return }
+      if (/^\/(?:unit|vault|engine)(?:\/|$)/.test(path)) { json(res, 403, { detail: 'Host capability is not published' }); return }
+    }
 
     // ── 公开面(无鉴权):元数据 / 配对流 / 静态壳(壳只是代码,数据面全在鉴权后) ──
     if (path === '/unit/meta' && req.method === 'GET') {
