@@ -1,4 +1,5 @@
 import { windowKind } from './windowKind'
+import { useApp } from './stores/appStore'
 /** 桌面多窗接线:把引擎的 detach 缝(detachSeam)接到 window.tangu 多窗 IPC;订阅跨窗拖入(accept-view)
  *  与实时落点预览(drag-preview)。非桌面(web/移动)window.tangu.openDetached 缺省 → 整体 no-op。
  *  三种窗口(主/独立/mini)都调:mini 不是 dockview 落点(主进程 windowAtPoint 已排除),订阅空转无害。 */
@@ -24,6 +25,20 @@ export function installMultiWindow(): void {
   const t = window.tangu
   if (!t?.openDetached) return // 非桌面 → 无 OS 窗口,跳过
   if (windowKind() === 'main') {
+    // Keep the OS process informed even before a Mini window has ever existed.
+    let lastSession = ''
+    const reportSession = (): void => {
+      const state = useApp.getState()
+      const sessionId = state.activeId
+      const context = { sessionId, runId: sessionId ? state.runningBySession[sessionId] ?? null : null }
+      const key = JSON.stringify(context)
+      if (key === lastSession) return
+      lastSession = key
+      t.reportMiniSession?.(context)
+    }
+    useApp.subscribe(reportSession)
+    reportSession()
+
     // Wait for Dockview before acknowledging, including a main window recreated from Mini.
     let pending: import('../../shared/miniPanel').MainPanelTarget | null = null
     const apply = (): void => {

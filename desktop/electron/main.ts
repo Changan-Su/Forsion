@@ -1,5 +1,6 @@
-import { startMiniCursorFollow, readComputerUseForeground } from './miniCursorFollow'
-import { normalizeMiniOpenOptions, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
+import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
+import { startMiniAutoPanel } from './miniAutoPanel'
+import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -1255,7 +1256,10 @@ function createWindow(): void {
   hardenNav(mainWindow.webContents)
   // deep link 推送门:reload(Cmd+R)换掉渲染层监听者但 webContents 不变 → 每次开载都翻回「未就绪」,
   // 等新一代渲染层来 drain(否则 push 进虚空,URL 丢失)。
-  mainWindow.webContents.on('did-start-loading', () => { deepLinkReady = false; mainPanelReady = false })
+  mainWindow.webContents.on('did-start-loading', () => {
+    deepLinkReady = false; mainPanelReady = false
+    miniSession = { sessionId: null, runId: null }; miniAutoPanel?.refresh()
+  })
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -1378,6 +1382,10 @@ let pendingMainPanelTarget: MainPanelTarget | null = null
 let mainPanelReady = false
 
 let miniWindow: BrowserWindow | null = null
+let miniSession: MiniSessionContext = { sessionId: null, runId: null }
+let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
+let autoMiniWindow: BrowserWindow | null = null
+let autoMiniSessionId: string | null = null
 let miniFollowing = false
 let stopMiniFollow: (() => void) | null = null
 /** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
@@ -1394,6 +1402,49 @@ const MINI_CARD_HEIGHT = 420
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
+
+function closeAutoMini(): void {
+  const win = autoMiniWindow
+  autoMiniWindow = null; autoMiniSessionId = null
+  if (win && !win.isDestroyed()) win.destroy()
+}
+
+/** A temporary observer owns no saved Mini layout and never activates the app. */
+function openAutoMini(sessionId: string): void {
+  closeAutoMini()
+  autoMiniSessionId = sessionId
+  const cursor = screen.getCursorScreenPoint()
+  const size = { x: 0, y: 0, width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
+  const position = cursorPanelTarget(cursor, size, screen.getDisplayNearestPoint(cursor).workArea)
+  const win = new BrowserWindow({
+    ...size, ...position, show: false, focusable: false,
+    frame: false, transparent: true, resizable: false, alwaysOnTop: true,
+    skipTaskbar: true, hasShadow: true, backgroundColor: '#00000000',
+    webPreferences: satelliteWebPreferences(),
+  })
+  autoMiniWindow = win
+  win.setAlwaysOnTop(true, 'floating')
+  if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true })
+  win.setIgnoreMouseEvents(true)
+  win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
+  hardenNav(win.webContents)
+  const stop = startMiniCursorFollow({
+    isDestroyed: () => win.isDestroyed(), isVisible: () => win.isVisible(), getBounds: () => win.getBounds(),
+    setPosition: (x, y, animate) => win.setPosition(x, y, animate),
+    // Keep the automatic observer passive between calls, too. Manual Mini remains interactive.
+    setIgnoreMouseEvents: () => { if (!win.isDestroyed()) win.setIgnoreMouseEvents(true) },
+  }, {
+    readActive: async () => miniAutoPanel?.following() ?? false,
+    cursor: () => screen.getCursorScreenPoint(),
+    workArea: (point) => screen.getDisplayNearestPoint(point).workArea,
+    onFollowing: () => {},
+  })
+  win.on('closed', () => {
+    stop()
+    if (autoMiniWindow === win) { autoMiniWindow = null; autoMiniSessionId = null; miniAutoPanel?.dismiss() }
+  })
+  loadRendererWith(win, { window: 'mini', transient: '1', sessionId })
+}
 
 function createMiniWindow(opts?: MiniOpenOptions): void {
   miniTarget = opts
@@ -1421,7 +1472,7 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
   })
   stopMiniFollow = startMiniCursorFollow(miniWindow, {
-    readActive: readComputerUseForeground,
+    readActive: async () => miniAutoPanel?.following() ?? false,
     cursor: () => screen.getCursorScreenPoint(),
     workArea: (cursor) => screen.getDisplayNearestPoint(cursor).workArea,
     onFollowing: (following) => {
@@ -1443,6 +1494,8 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
 }
 
 function toggleMiniWindow(opts?: MiniOpenOptions): void {
+  if (!opts && autoMiniSessionId) opts = { sessionId: autoMiniSessionId }
+  miniAutoPanel?.dismiss()
   if (miniWindow && !miniWindow.isDestroyed()) {
     // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
     if (opts?.sessionId || opts?.spaceId) {
@@ -3187,6 +3240,17 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('window:miniReady', (e) => {
     if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
+    if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
+  })
+  ipcMain.on('window:miniSession', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
+    miniSession = normalizeMiniSessionContext(raw)
+    miniAutoPanel?.refresh()
+  })
+  ipcMain.on('window:miniSessionReady', (e, sessionId: unknown) => {
+    if (!isTrustedSender(e) || e.sender !== autoMiniWindow?.webContents || typeof sessionId !== 'string') return
+    miniAutoPanel?.refresh()
+    if (sessionId === autoMiniSessionId && miniAutoPanel?.wants(sessionId)) autoMiniWindow?.showInactive()
   })
   ipcMain.on('window:showMainPanel', (e, raw: unknown) => {
     if (!isTrustedSender(e) || !raw || typeof raw !== 'object') return
@@ -3355,6 +3419,16 @@ app.whenReady().then(async () => {
   // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,
   // 那时 handler 还没注册的话 IPC 直接「No handler registered」,视图落进已退出态且不会重试。
   registerPtyIpc(isTrustedSender)
+  if (PRODUCT.agentBackend && process.platform === 'darwin') {
+    miniAutoPanel = startMiniAutoPanel({
+      readForeground: readComputerUseForeground,
+      hasForsionFocus: () => BrowserWindow.getFocusedWindow() !== null,
+      manualMiniVisible: () => !!miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible(),
+      session: () => miniSession,
+      open: openAutoMini, close: closeAutoMini,
+    })
+    app.on('browser-window-focus', () => miniAutoPanel?.refresh())
+  }
   createWindow()
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
@@ -3383,6 +3457,7 @@ app.whenReady().then(async () => {
 app.on('before-quit', (e) => {
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
+  miniAutoPanel?.stop(); miniAutoPanel = null
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。
   const st = backend.getStatus().state

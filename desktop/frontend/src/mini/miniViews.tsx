@@ -1,5 +1,5 @@
 /** Native adapters share domain data/editors; each owns its compact interactions. */
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Bot, ListTodo, NotebookText, Plus } from 'lucide-react'
 import { registerView, type ViewProps } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
@@ -21,6 +21,15 @@ registerMessages({
   'mini.chatHint': { zh: '有什么需要帮忙的？', en: 'How can I help?' },
 })
 
+/** Under the Suspense boundary: acknowledge only once the actual Chat has mounted. */
+function MiniChat(props: ViewProps) {
+  const sessionId = props.params.sessionId
+  useEffect(() => {
+    if (typeof sessionId === 'string') window.tangu?.miniSessionReady?.(sessionId)
+  }, [sessionId])
+  return <Chat {...props} />
+}
+
 function MiniTangu({ leaf, params }: ViewProps) {
   const { t } = useI18n()
   const sessions = useApp((s) => s.sessions)
@@ -39,7 +48,7 @@ function MiniTangu({ leaf, params }: ViewProps) {
       </select>
       <button aria-label={t('mini.newChat')} title={t('mini.newChat')} onClick={() => select('')}><Plus size={15} /></button>
     </div>
-    <Suspense fallback={null}><Chat leaf={{ ...leaf, type: 'chat' }} params={{ ...params, miniSurface: true }} /></Suspense>
+    <Suspense fallback={null}><MiniChat leaf={{ ...leaf, type: 'chat' }} params={{ ...params, miniSurface: true }} /></Suspense>
   </div>
 }
 

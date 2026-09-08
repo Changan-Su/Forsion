@@ -65,11 +65,14 @@ Forsion(扶桑)是一个**本地优先的 AI 工作台**。它以 **Tangu** 智�
 ## 空间(Spaces)
 
 - [Space 总览](spaces/overview.md) — 功能空间的概念与管理
+- [Mini Panel](spaces/mini-panel.md) — Space 紧凑适配、Computer Use 自动会话面板
 - [自动化](spaces/automation.md) — 触发 × 动作链,让 Agent 自己干活
 - [收件箱](spaces/inbox.md) — Agent 主动发给你的消息
 - [编码空间与发布](spaces/coding.md) — 写网页立即预览,一键发布成网页应用
 
 ## 个性化
+
+- [Mini Panel 开发](customization/mini-panel-development.md) — 插件适配、实体参数交接与自动前台面板契约
 
 - [外观与主题](customization/themes.md) — 设计语言、配色、玻璃、字体三档
 - [插件](customization/plugins.md) — 桌面插件与引擎插件、捆绑包、扩展点、安全模型

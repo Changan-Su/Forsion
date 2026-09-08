@@ -90,6 +90,7 @@
     "check:uifont": "node scripts/ui-font.check.cjs",
     "check:topchrome": "node scripts/top-chrome.check.cjs",
     "check:minicard": "node scripts/mini-card.check.cjs",
+    "check:miniauto": "node scripts/mini-auto.check.cjs",
     "check:board": "node scripts/board-paper.check.cjs",
     "check:boardlive": "node scripts/e2e-editor.cjs --check=board-live",
     "check:scrollbar": "node scripts/scrollbar-overlay.check.cjs",

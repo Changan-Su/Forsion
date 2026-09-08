@@ -9,3 +9,12 @@ export function normalizeMiniOpenOptions(raw: unknown): MiniOpenOptions | undefi
   const params = r.params && typeof r.params === 'object' && !Array.isArray(r.params) ? r.params as Record<string, unknown> : undefined
   return sessionId || spaceId ? { sessionId, spaceId, params } : undefined
 }
+
+/** Reported only by the main renderer; no message text or credentials cross this IPC. */
+export interface MiniSessionContext { sessionId: string | null; runId: string | null }
+export function normalizeMiniSessionContext(raw: unknown): MiniSessionContext {
+  const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  const id = (v: unknown): string | null => typeof v === 'string' && v.trim() && v.length <= 256 ? v.trim() : null
+  const sessionId = id(value.sessionId)
+  return { sessionId, runId: sessionId ? id(value.runId) : null }
+}

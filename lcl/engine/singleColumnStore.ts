@@ -11,7 +11,7 @@
  */
 import { create } from 'zustand'
 import { routeMiniView } from './miniPanel'
-import { IS_MINI_PANEL } from './uiMode'
+import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL } from './uiMode'
 import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import type { Leaf, ViewLocation, SidebarDefaults } from './types'
@@ -78,6 +78,7 @@ function readJSON<T>(key: string): T | null {
   } catch { return null } // 私密模式 / 坏 JSON
 }
 function writeJSON(key: string, value: unknown): void {
+  if (IS_TRANSIENT_MINI_PANEL) return // Automatic panels never overwrite the user's Mini layout.
   // 出声再吞:配额满 / 私密模式 / 某个 leaf 的 params 塞了循环引用 —— 任一情形都是「布局从此不再持久化」,
   // 静默失败的话下次只会收到一句「进去又是新页」,查无对证。
   try { localStorage.setItem(key, JSON.stringify(value)) } catch (e) { console.warn('[lcl] 单列布局存盘失败', key, e) }

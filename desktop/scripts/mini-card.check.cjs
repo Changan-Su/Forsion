@@ -126,6 +126,9 @@ async function main() {
     await mini.screenshot({ path: path.join(shots, 'new-note-dark.png') })
 
     await app.evaluate(({ screen, BrowserWindow }) => {
+      // This section isolates geometry; mini-auto.check.cjs covers real cross-process OS focus.
+      globalThis.__miniOriginalFocusedWindow = BrowserWindow.getFocusedWindow
+      BrowserWindow.getFocusedWindow = () => null
       const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')), area = screen.getPrimaryDisplay().workArea
       w.setPosition(area.x + 40, area.y + 40)
       globalThis.__miniCursor = { x: area.x + 430, y: area.y + 220 }; screen.getCursorScreenPoint = () => globalThis.__miniCursor
@@ -143,6 +146,7 @@ async function main() {
     const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')).getBounds())
     const before = await bounds(); await app.evaluate(() => { globalThis.__miniCursor.x += 100 }); await pause(250)
     check('completed/background calls stop following', JSON.stringify(before) === JSON.stringify(await bounds()))
+    await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getFocusedWindow = globalThis.__miniOriginalFocusedWindow })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     check('hit testing restored after following', true); check('no renderer errors', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${shots}`)

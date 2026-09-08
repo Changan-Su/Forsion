@@ -1128,6 +1128,8 @@ declare global {
       onMiniTarget?(cb: (opts: import('../../shared/miniPanel').MiniOpenOptions) => void): () => void
       /** 关闭当前(卫星)窗口。 */
       miniReady?(): void
+      reportMiniSession?(context: import('../../shared/miniPanel').MiniSessionContext): void
+      miniSessionReady?(sessionId: string): void
       showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void
       onMainPanelTarget?(cb: (target: import('../../shared/miniPanel').MainPanelTarget) => void): () => void
       mainPanelReady?(): void

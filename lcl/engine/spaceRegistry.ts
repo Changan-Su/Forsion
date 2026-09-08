@@ -3,7 +3,7 @@
  *  存出当前 Space 的命名布局 → 设新 Space 侧栏默认 → 还原其命名布局(无则 build)。
  *  只依赖引擎自身(useWorkspace),不 import feature 代码。 */
 import { create } from 'zustand'
-import { IS_MINI_PANEL } from './uiMode'
+import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
 import { useWorkspace } from './workspaceStore'
@@ -15,6 +15,7 @@ const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_
 export const spaceLayoutName = (id: string): string => `space:${id}`
 
 function loadActive(): string {
+  if (IS_TRANSIENT_MINI_PANEL) return 'tangu'
   try { return localStorage.getItem(ACTIVE_KEY) || 'tangu' } catch { return 'tangu' }
 }
 
@@ -56,7 +57,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
 
     if (!IS_MINI_PANEL) ws.saveNamed(spaceLayoutName(fromId)) // 1. 存出当前 Space 布局
     set({ activeSpaceId: toId })           // 2. 先切 id(defaultBuilder 经 getActiveSpace 取新 Space)
-    try { localStorage.setItem(ACTIVE_KEY, toId) } catch { /* ignore */ }
+    try { if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, toId) } catch { /* ignore */ }
     if (IS_MINI_PANEL) {
       // Never restore the old Mini/mobile workspace blob or build desktop sidebars.
       ws.resetLayout()
@@ -88,7 +89,7 @@ export function setActiveSpaceCold(id: string): void {
   const { spaces } = useSpaceStore.getState()
   if (!spaces.some((s) => s.id === id)) return
   useSpaceStore.setState({ activeSpaceId: id })
-  try { localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
+  try { if (!IS_TRANSIENT_MINI_PANEL) localStorage.setItem(ACTIVE_KEY, id) } catch { /* ignore */ }
 }
 
 /** 冷启动的每-Space 布局交接。**纯 Storage 搬运**,故可以跑在 Dockview api 就绪之前(onReady 之前

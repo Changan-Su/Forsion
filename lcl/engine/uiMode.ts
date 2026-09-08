@@ -8,6 +8,7 @@
  */
 const KEY = 'lcl.uiMode'
 export const IS_MINI_PANEL = typeof location !== 'undefined' && new URLSearchParams(location.search).get('window') === 'mini'
+export const IS_TRANSIENT_MINI_PANEL = IS_MINI_PANEL && new URLSearchParams(location.search).get('transient') === '1'
 export type UiMode = 'desktop' | 'mobile'
 
 function read(): UiMode {

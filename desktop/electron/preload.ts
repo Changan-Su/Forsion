@@ -289,6 +289,8 @@ const api = {
     return () => ipcRenderer.removeListener('window:miniTarget', listener)
   },
   miniReady: (): void => ipcRenderer.send('window:miniReady'),
+  reportMiniSession: (context: import('../shared/miniPanel').MiniSessionContext): void => ipcRenderer.send('window:miniSession', context),
+  miniSessionReady: (sessionId: string): void => ipcRenderer.send('window:miniSessionReady', sessionId),
   showMainPanel: (target: import('../shared/miniPanel').MainPanelTarget): void => ipcRenderer.send('window:showMainPanel', target),
   onMainPanelTarget: (cb: (target: import('../shared/miniPanel').MainPanelTarget) => void): (() => void) => {
     const listener = (_e: unknown, target: import('../shared/miniPanel').MainPanelTarget): void => cb(target)

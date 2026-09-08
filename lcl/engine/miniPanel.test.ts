@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PanelTop } from 'lucide-react'
-vi.mock('./uiMode', () => ({ IS_MINI_PANEL: true, UI_MODE: 'desktop' }))
+vi.mock('./uiMode', () => ({ IS_MINI_PANEL: true, IS_TRANSIENT_MINI_PANEL: false, UI_MODE: 'desktop' }))
 import { supportsMiniPanel, setMiniViewRouter } from './miniPanel'
 import { registerView, unregisterView } from './viewRegistry'
 import { useWorkspace } from './singleColumnStore'
