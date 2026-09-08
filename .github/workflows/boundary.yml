@@ -1,0 +1,15 @@
+name: boundary
+
+# 开源边界闸:私有插件 / 真实 env / gitlink / 私仓 checkout 一律不许进本公开仓。
+# 规则与起因见 scripts/public-boundary.check.sh 头注释。纯 git + grep,秒级,每次 push / PR 都跑。
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/public-boundary.check.sh
