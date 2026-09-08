@@ -3,7 +3,7 @@
  *  钉住的都是「静默」那类坏法:数组值被显示成「空」/ 反向 rollup 因目标库没进 refPaths 恒空 /
  *  新行没盖章 / 按 id 串而非标题排序 / 关联列筛选值控件是空下拉。
  *  ponytail: 用 createElement 而非 JSX,免为一个用例把 vitest include 扩到 .tsx。 */
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, beforeAll, vi } from 'vitest'
 import { setLocaleGlobal } from '../../../i18n'
 import * as React from 'react'
 import { act, createElement } from 'react'
@@ -51,6 +51,14 @@ const ordersDb = (views?: DbView[]): DbFile => ({
 
 let root: Root | null = null
 const host = (): HTMLElement => document.getElementById('host')!
+
+// 首次加载完整编辑器依赖图属于准备阶段，不能占首条交互断言的 5s 预算。
+// 否则 CI 冷启动超时后 mount 仍继续执行，会与后续用例争用 root 并连带报空 DOM。
+beforeAll(async () => {
+  await import('./DatabaseEmbed')
+  await import('../../store/dbStore')
+  await import('../../store/pageStore')
+})
 
 async function mount(db: DbFile = ordersDb(), parts: DbFile = partsDb(), files: string[] = [ORDERS, PARTS]): Promise<void> {
   const { DatabaseEmbed } = await import('./DatabaseEmbed')

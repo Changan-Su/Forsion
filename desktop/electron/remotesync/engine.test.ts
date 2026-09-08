@@ -209,7 +209,10 @@ describe('remotesync engine 双设备', () => {
     const run = () => runSync({ localRoot: rootA, remote: spy, statePath: stateA(), fingerprint: FP })
     await write(rootA, 'c.md', 'v1')
     await run() // create
+    const beforeUpdate = await fs.stat(path.join(rootA, 'c.md'))
     await write(rootA, 'c.md', 'v2')
+    // 同长度写入可能落在同一毫秒；本例验证条件写身份，显式推进时间以触发下一轮扫描。
+    await fs.utimes(path.join(rootA, 'c.md'), beforeUpdate.atime, new Date(beforeUpdate.mtimeMs + 1000))
     await run() // update
     await fs.rm(path.join(rootA, 'c.md'))
     await run() // delete
