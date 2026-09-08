@@ -151,7 +151,16 @@ export function writeStdin(sessionId: string, id: string, data: string, appendNe
   if (!p) return `Error: 进程 ${id} 不存在`;
   if (p.status !== 'running' || !p.child) return `Error: 进程 ${id} 已结束(status=${p.status}),无法写入`;
   if (data === CTRL_C) {
-    try { killTree(p.child, 'SIGINT'); } catch { /* 已退出 */ }
+    const child = p.child;
+    try { killTree(child, 'SIGINT'); } catch { /* 已退出 */ }
+    // ⚠️ 信号会打空:此刻 shell 多半还没 exec 成目标命令,SIGINT 丢在 fork/exec 之间,进程一直活着
+    // (Linux 实测零延迟发信号:空载 8 轮丢 2;4 路 CPU 负载下 20 轮丢 4 —— 活下来的是 `sh` 本身,
+    //  信号掩码全空,不是被忽略。CI 上表现为 Ctrl-C 用例卡满 capMs 报 status=running)。
+    // 补发一次即可,那时 exec 必已完成(同负载下 20/20 全终止)。计时器 unref,不吊住进程退出。
+    const again = setTimeout(() => {
+      if (p.status === 'running' && p.child) { try { killTree(p.child, 'SIGINT'); } catch { /* 已退出 */ } }
+    }, 150);
+    again.unref?.();
     return `sent SIGINT to ${id}`;
   }
   const stdin = p.child.stdin;
