@@ -11,13 +11,13 @@ describe('Basic Unit public projection', () => {
     await mkdir(join(root, 'web/assets'), { recursive: true })
     await writeFile(join(root, 'web/index.html'), '<html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\'"></head><body></body></html>')
     await writeFile(join(root, 'web/assets/app.js'), 'console.log("shared shell")')
-    await writeFile(join(root, 'plugin/manifest.json'), JSON.stringify({ id: 'test-admin', name: 'Admin', main: 'main.js', apiVersion: 1, token: 'PRIVATE_MANIFEST_VALUE' }))
+    await writeFile(join(root, 'plugin/manifest.json'), JSON.stringify({ id: 'test-admin', version: '1.0.0', name: 'Admin', main: 'main.js', apiVersion: 1, token: 'PRIVATE_MANIFEST_VALUE' }))
     await writeFile(join(root, 'plugin/main.js'), 'ctx.registerView({id:"admin"})')
     await writeFile(join(root, 'plugin/secrets.json'), 'PRIVATE_PACKAGE_DATA')
     await symlink(join(root, 'plugin/secrets.json'), join(root, 'web/private.json'))
     await writeFile(join(root, 'plugin/spaces/admin/space.json'), JSON.stringify({ id: 'admin', layout: { main: [] } }))
     const handle = await startBasicUnit({ instanceId: 'test-unit', name: '</script><script>bad()</script>', version: '3.0.0',
-      port: 0, basePath: '/admin/', plugins: [join(root, 'plugin')], webDist: join(root, 'web'), defaultSpace: 'admin' })
+      dataDir: join(root, 'data'), port: 0, basePath: '/admin/', plugins: [join(root, 'plugin')], webDist: join(root, 'web'), defaultSpace: 'admin' })
     const base = `http://127.0.0.1:${handle.port}`
     try {
       const html = await fetch(base + '/admin/models/detail').then((r) => r.text())
@@ -48,10 +48,10 @@ describe('Basic Unit public projection', () => {
     const root = await mkdtemp(join(tmpdir(), 'unit-plugin-'))
     await mkdir(join(root, 'plugin'))
     await writeFile(join(root, 'private.js'), 'SECRET')
-    await writeFile(join(root, 'plugin/manifest.json'), JSON.stringify({ id: 'test', main: '../private.js' }))
+    await writeFile(join(root, 'plugin/manifest.json'), JSON.stringify({ id: 'test', version: '1.0.0', apiVersion: 1, main: '../private.js' }))
     try {
       await expect(loadPackages([join(root, 'plugin')])).rejects.toThrow('escapes')
-      await writeFile(join(root, 'plugin/manifest.json'), JSON.stringify({ id: 'test', main: 'linked.js' }))
+      await writeFile(join(root, 'plugin/manifest.json'), JSON.stringify({ id: 'test', version: '1.0.0', apiVersion: 1, main: 'linked.js' }))
       await symlink(join(root, 'private.js'), join(root, 'plugin/linked.js'))
       await expect(loadPackages([join(root, 'plugin')])).rejects.toThrow('escapes')
     } finally { await rm(root, { recursive: true, force: true }) }

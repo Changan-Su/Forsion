@@ -16,6 +16,7 @@ import { extname, normalize, sep } from 'node:path'
 import { readFile, realpath } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { PRODUCT, type ProductProfile } from './product'
@@ -51,6 +52,9 @@ const encodeRpcResult = (r: unknown): unknown =>
   r instanceof Uint8Array ? { __u8: Buffer.from(r).toString('base64') } : r
 
 export interface UnitWebDeps {
+  /** Optional generic backend contributions. true means the request was accepted. */
+  routeRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>
+  routeUpgrade?: (req: http.IncomingMessage, socket: Duplex, head: Buffer) => boolean
   /** 本机 managed 引擎(未就绪 url=null → /engine 回 503)。 */
   getEngine: () => { url: string | null; token: string }
   /** B 侧原生确认框:展示设备名+6 位码,用户点允许=true。 */
@@ -280,6 +284,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   }
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (await deps.routeRequest?.(req, res)) return
     gc()
     let url = req.url || '/'
     if (deps.projection) {
@@ -534,13 +539,18 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   })
 
   return new Promise((resolve, reject) => {
+    if (deps.routeUpgrade) server.on('upgrade', (req, socket, head) => {
+      if (!deps.routeUpgrade!(req, socket, head)) socket.destroy()
+    })
+    const sockets = new Set<Duplex>()
+    server.on('connection', (socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
     server.once('error', reject)
     server.listen(opts.port, opts.bindHost ?? '0.0.0.0', () => {
       const { port } = server.address() as AddressInfo
       resolve({
         port,
         internalSecret,
-        close: () => new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections?.() }),
+        close: () => new Promise<void>((r) => { server.close(() => r()); for (const socket of sockets) socket.destroy() }),
       })
     })
   })
