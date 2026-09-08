@@ -9,15 +9,17 @@
  * 其余所有 host 能力(文件系统/providers/mcp/market/特殊Agent/更新…)在 window.tangu 上缺省,
  * 共享组件的 `window.tangu?.X` 可选链自然 no-op / 隐藏。
  */
+import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
+
 const TOKEN_KEY = 'forsion_token'
 
 function readToken(): string {
   try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
 }
 
-function gotoLogin(returnUrl?: string): void {
+function gotoLogin(returnUrl?: string, force = false): void {
   const ret = returnUrl ?? location.origin + (import.meta.env.BASE_URL || '/')
-  location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-web')
+  location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-web' + (force ? '&logout=1' : ''))
 }
 
 /** 捕获 /auth 回跳的 ?token=(落盘 + 清 URL)。邀请页等非主应用入口复用。 */
@@ -26,6 +28,7 @@ export function captureTokenFromUrl(): void {
     const u = new URL(location.href)
     const tok = u.searchParams.get('token')
     if (tok) {
+      syncCloudAccountCache(getApiBase(), tok)
       localStorage.setItem(TOKEN_KEY, tok)
       u.searchParams.delete('token')
       history.replaceState(null, '', u.toString())
@@ -36,7 +39,8 @@ export function captureTokenFromUrl(): void {
 /** 需要登录的独立页(如 /invite/*):有 token → true;无 → 跳登录并回到当前页,返回 false。 */
 export function requireLoginForPage(): boolean {
   captureTokenFromUrl()
-  if (readToken()) return true
+  const token = readToken()
+  if (token) { syncCloudAccountCache(getApiBase(), token); return true }
   gotoLogin(location.origin + location.pathname)
   return false
 }
@@ -56,7 +60,8 @@ export function getApiBase(): string {
 /** 清 token 并跳 Forsion 登录页(带回跳)。 */
 export function redirectToLogin(): void {
   try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
-  gotoLogin()
+  clearCloudAccountCache()
+  gotoLogin(undefined, true)
 }
 
 /**
@@ -64,15 +69,7 @@ export function redirectToLogin(): void {
  */
 export function installWebShim(): boolean {
   // 1) 捕获 /auth 回跳的 ?token=,落盘到与 account/admin 共享的键并清理 URL。
-  try {
-    const u = new URL(location.href)
-    const tok = u.searchParams.get('token')
-    if (tok) {
-      localStorage.setItem(TOKEN_KEY, tok)
-      u.searchParams.delete('token')
-      history.replaceState(null, '', u.toString())
-    }
-  } catch { /* private mode / 老浏览器 */ }
+  captureTokenFromUrl()
 
   const token = readToken()
   if (!token) { gotoLogin(); return false }
@@ -80,6 +77,7 @@ export function installWebShim(): boolean {
   // 2) API 基址(同 AI Studio 约定):VITE_API_URL 覆盖,否则同源 location.origin+/api
   //    —— dev 经 vite proxy、prod 经本 app 自己的 nginx 把 /api 代理到 Forsion server(→ tangu worker)。
   const backendUrl = String(import.meta.env.VITE_API_URL || (location.origin + '/api')).replace(/\/$/, '')
+  syncCloudAccountCache(backendUrl, token)
 
   const origFetch = window.fetch.bind(window)
 
@@ -95,7 +93,8 @@ export function installWebShim(): boolean {
       if (r.status === 401 || r.status === 403) return { ...base, loggedIn: false, tokenValid: false, username: null }
       if (!r.ok) return { ...base, loggedIn: true, tokenValid: null, username: null } // 网络/5xx:不确定,别误判过期
       const u = await r.json().catch(() => ({} as any))
-      return { ...base, loggedIn: true, tokenValid: true, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: null }
+      if (readToken() !== tok) return { ...base, loggedIn: false, tokenValid: null, username: null }
+      return { ...base, loggedIn: true, tokenValid: true, userId: u.id ?? u.userId ?? null, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: null }
     } catch {
       return { ...base, loggedIn: true, tokenValid: null, username: null } // 离线:保守当已登录、待过期检测校准
     }
@@ -135,22 +134,12 @@ export function installWebShim(): boolean {
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     getConfig: async () => ({
-      mode: 'external', backendUrl, token, modelId: '',
+      mode: 'external', backendUrl, token: readToken(), modelId: '',
       cloudUrl: backendUrl, sandbox: 'none',
     }),
     authStatus,
-    forsionLogin: async () => { gotoLogin() },
-    forsionLogout: async () => {
-      try {
-        localStorage.removeItem(TOKEN_KEY)
-        // 云端痕迹一并清(评审 P1:树快照是全局键,换号登录会先看到上一位用户的笔记树)。
-        // 键名与 cloudBridge 的 TREE_SNAP_KEY / ACTIVE_VAULT_KEY / lastPageKey 对应。
-        localStorage.removeItem('amadeus_tree_snap')
-        localStorage.removeItem('amadeus.cloudVaultId')
-        for (const k of Object.keys(localStorage)) if (k.startsWith('amadeus_last_page:')) localStorage.removeItem(k)
-      } catch { /* ignore */ }
-      gotoLogin()
-    },
+    forsionLogin: async () => { gotoLogin(undefined, true) },
+    forsionLogout: async () => { redirectToLogin() },
     // ⚠️ 手机壳(@mobile/mobileEntry)装的也是本垫片,不是 mobileShim —— 手机上没有「新标签」这回事,
     //    `_blank` 还常被拦掉,于是点头像/个人中心「毫无反应」(用户实报)。移动布局下同标签跳走,
     //    返回键能回来。section 此前被整个丢掉,积分兑换/投稿两个入口都落错页,一并接上。
@@ -181,16 +170,23 @@ export function installWebShim(): boolean {
 
   // 4) 401 兜底:任一 /api/agent/* 或 /api/amadeus/*(Amadeus 云端桥)鉴权失败 → 清 token 重新登录。
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const requestToken = readToken()
     const res = await origFetch(input, init)
     try {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (res.status === 401 && (url.includes('/api/agent/') || url.includes('/api/amadeus/'))) {
-        try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
-        gotoLogin()
+      if (requestToken === readToken() && res.status === 401 && (url.includes('/api/agent/') || url.includes('/api/amadeus/'))) {
+        redirectToLogin()
       }
     } catch { /* ignore */ }
     return res
   }
+
+  // A different tab can replace the shared token without calling this window's logout hook.
+  window.addEventListener('storage', (event) => {
+    if (event.key !== TOKEN_KEY || event.oldValue === event.newValue) return
+    syncCloudAccountCache(backendUrl, readToken())
+    location.reload()
+  })
 
   return true
 }

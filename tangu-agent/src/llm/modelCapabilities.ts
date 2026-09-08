@@ -117,6 +117,9 @@ const EFFORT_PRO: LevelMap = {
 /** gpt-5.6 起的公开 API:'max' 是真档(5.5 的档表到 xhigh 为止)。 */
 const EFFORT_FULL_MAX: LevelMap = { ...EFFORT_FULL, max: 'max' };
 
+/** GPT-6 Astra 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal。 */
+const EFFORT_ASTRA: LevelMap = { ...EFFORT_FULL_MAX, off: null, minimal: null };
+
 /** Codex 订阅(ChatGPT 后端)。档位取自 codex-rs 的 ReasoningEffort 枚举,'max' 是真档不是别名。 */
 const EFFORT_CODEX: LevelMap = {
   off: 'none', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
@@ -283,9 +286,30 @@ const CLAUDE_ADAPTIVE_CAP: Omit<ModelCapability, 'rule'> = {
 };
 const CLAUDE_ALWAYS_ON_CAP: Omit<ModelCapability, 'rule'> = { ...CLAUDE_ADAPTIVE_CAP, levels: CLAUDE_EFFORT_ALWAYS_ON };
 
+// 官方迁移指南要求带工具时走 Responses,并移除 temperature/top_p/top_logprobs。
+// Responses 转换器按白名单重建请求,只需在这里保证所有档位(包括旧会话的 off)都改道。
+const ASTRA_CAP: Omit<ModelCapability, 'rule'> = {
+  format: 'openai-effort', levels: EFFORT_ASTRA, maxTokensField: 'max_completion_tokens',
+  dropTemperature: true, viaResponses: true,
+};
+
 /** 首条命中即生效 —— 特例在前,族规则居中,兜底在后。 */
 const RULES: Rule[] = [
   // ── 订阅登录(协议已定,不看 host)────────────────────────────────────────
+  {
+    id: 'codex-astra',
+    protocol: /^openai-responses$/,
+    model: /^gpt-6-astra$/i,
+    cap: ASTRA_CAP,
+  },
+  {
+    // 模型目录只有 baseUrl、尚无协议标记,也须给 UI 同一份档位表。
+    id: 'codex-astra',
+    host: /(^|\.)chatgpt\.com$/,
+    urlPath: /^\/backend-api\/codex(?:\/|$)/,
+    model: /^gpt-6-astra$/i,
+    cap: ASTRA_CAP,
+  },
   {
     // Codex 订阅(ChatGPT 额度)走 chatgpt.com/backend-api/codex/responses,支持完整 effort 档。
     // 此前 tuneOpenAiDirectPayload 见到 PROTOCOL_MARK 直接 return,导致订阅路径**永远拿不到档位**。
@@ -316,6 +340,12 @@ const RULES: Rule[] = [
 
   // ── OpenAI 官方 ────────────────────────────────────────────────────────
   {
+    id: 'openai-astra',
+    host: /(^|\.)api\.openai\.com$/,
+    model: /^gpt-6-astra$/i,
+    cap: ASTRA_CAP,
+  },
+  {
     // gpt-5.x-pro:档位表只到 medium 起步,且**不能走 chat/completions** —— 永远改道 Responses。
     // 必须排在下面两条 gpt-5 规则之前,否则 pro 会拿到含 off/minimal/low 的通用档表(必 400)。
     id: 'openai-gpt5-pro',
@@ -330,7 +360,7 @@ const RULES: Rule[] = [
     // gpt-5.6 起官方 effort 表是 none/low/medium/high/xhigh/max —— `max` 成了真档(旧表折成 xhigh
     // 是白丢一档);而 'minimal' 在 5.6 的档位表里查不到(与通用 reasoning 指南的全量列表冲突),
     // 冲突按保守解:minimal 折到 'low' —— 少想不报错,发未知值会 400。其余 quirk 与 gpt-5 同。
-    // 刻意只认 5.6-5.9:不给还没出的 gpt-6 预支档位(未命中会落到下面的保守规则,不会失败)。
+    // 刻意只认 5.6-5.9:GPT-6 Astra 的思考常开约束由上面的专用规则处理。
     id: 'openai-gpt5-latest',
     host: /(^|\.)api\.openai\.com$/,
     model: /^gpt-5\.[6-9]/i,

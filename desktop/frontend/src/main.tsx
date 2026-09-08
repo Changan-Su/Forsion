@@ -19,6 +19,10 @@ import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
 import { applyUiFonts } from './uiFont'
 import { recordError } from './diag'
+import { installAccountTransition } from './services/accountTransition'
+
+// Register for all desktop windows before workspace/Amadeus initialization.
+installAccountTransition()
 
 // 全局错误兜底:ErrorBoundary 只接 React 渲染期异常,接不到事件回调/异步里的未捕获错误,
 // 也接不到渲染进程级崩溃。这里至少把它们记到 console(配合主进程崩溃自愈),便于诊断白屏。

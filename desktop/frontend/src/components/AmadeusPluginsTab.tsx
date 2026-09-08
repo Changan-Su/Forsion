@@ -311,7 +311,7 @@ const PluginDetail: React.FC<{
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <b style={{ fontSize: 15 }}>{pluginDisplayName(p, locale)}</b>
             <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
-            <span style={badge}>{p.builtin ? t('settings.amadeusPlugins.builtin') : t('settings.amadeusPlugins.external')}</span>
+            <span style={badge}>{p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : t('settings.amadeusPlugins.external')}</span>
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
             )}
@@ -326,7 +326,8 @@ const PluginDetail: React.FC<{
           <button className="btn ghost sm" onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
         )}
         {/* 设备页 uninstallPlugin 是 notSupported 桩(truthy)——按标志再挡一道,免得按钮点了才报不支持 */}
-        {!p.builtin && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
+        {/* 随 App 播种的(preinstalled)同样不给卸载:删了下次启动会种回来,想不用就关开关 */}
+        {!p.builtin && !p.preinstalled && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
           <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>

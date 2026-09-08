@@ -183,7 +183,7 @@ export function LinkHoverCard({ getView }: { getView: () => EditorView | null })
   } catch {
     /* 相对路径/站内链接:原样显示 */
   }
-  const editable = hover.from >= 0
+  const editable = hover.from >= 0 && (getView()?.editable ?? true) // 只读视图(分享页):只给打开/复制
   return (
     <OverlayPortal>
       <OverlayAt

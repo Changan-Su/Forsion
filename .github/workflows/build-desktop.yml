@@ -106,6 +106,14 @@ jobs:
           npm run build:unitweb
           npm run build
 
+      # 本机 vendor 含 macOS 双架构 helper；Windows 的 Rust bridge 在原生 runner 构建后随包交付。
+      # 不能让终端用户首次使用时才安装 Rust/cargo。
+      - name: Build bundled Computer Use Windows helper
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        shell: bash
+        run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform windows
+
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
       # GITHUB_TOKEN:beforeBuild 的 fetch-python 调 GitHub API 拉内置 Python,未鉴权在 runner 上会 403 限流。
       - name: Package installer
@@ -113,6 +121,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: npx electron-builder --config electron-builder.config.cjs ${{ matrix.ebargs }} --publish never
+
+      - name: Verify permission and Computer Use delivery
+        working-directory: desktop
+        run: node scripts/release-content.check.cjs
 
       # 防回归:v2.3.3~v2.6.0 曾因 beforeBuild 钩子返回 undefined(electron-builder 语义=「node_modules
       # 外部处理」)打出零依赖的空 asar——安装版启动即 ERR_MODULE_NOT_FOUND,且三平台静默过 CI。

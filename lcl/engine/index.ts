@@ -55,6 +55,15 @@ export { setEngineI18n, useEngineI18n } from './i18nSeam'
 /** 骨架屏(list/document/chat 三变体)+ 面板级错误边界:加载分支/懒视图兜底统一用它,别再各写空白或转圈。 */
 export { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 export type { SkeletonVariant } from './Skeleton'
+/** Shared collapsed-rail / expanded-list table of contents for scrollable feature surfaces. */
+export { FloatingToc, defaultFloatingTocItem } from './FloatingToc'
+export type {
+  FloatingTocElementSource,
+  FloatingTocItemDescriptor,
+  FloatingTocItemReader,
+  FloatingTocOptions,
+  FloatingTocProps,
+} from './FloatingToc'
 export { setDetachApi, getDetachApi } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
 

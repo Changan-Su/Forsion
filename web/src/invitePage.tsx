@@ -6,6 +6,9 @@ import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { getApiBase, getToken } from './webShim'
 import { ACTIVE_VAULT_KEY } from './amadeus/cloudBridge'
+import { contentStorageKey } from '@lcl/engine/contentStorageScope'
+
+const activeVaultKey = contentStorageKey(ACTIVE_VAULT_KEY)
 
 const CSS = `
 :root { color-scheme: light dark; }
@@ -57,7 +60,7 @@ function InviteApp({ token }: { token: string }): React.ReactElement {
         return
       }
       const { vaultId } = (await r.json()) as { vaultId: string; path: string }
-      try { localStorage.setItem(ACTIVE_VAULT_KEY, vaultId) } catch { /* ignore */ }
+      try { localStorage.setItem(activeVaultKey, vaultId) } catch { /* ignore */ }
       location.replace('/') // 进应用:活动库=对方库,树只显示共享范围(服务端过滤)
     }).catch(() => { setErr('网络错误'); setBusy(false) })
   }

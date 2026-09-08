@@ -60,10 +60,12 @@ export function fmEntriesToYaml(entries: FmEntry[]): string {
 
 const isScalarArray = (v: unknown): v is unknown[] => Array.isArray(v) && v.every((x) => x === null || typeof x !== 'object')
 
-export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
+export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit, readOnly = false }: {
   /** 缺省 = pageStore.manifest.fmExtra(v3 老路径);unified 传显式 fm 文本 + onCommit 走自己的管线。 */
   fmExtra?: string
   onCommit?: (yaml: string) => void
+  /** 只读(公开分享页):只展示键值,不出添加/删除/编辑控件;坏 YAML 原文也只展示不可改。 */
+  readOnly?: boolean
 } = {}) {
   const { t } = useI18n()
   const activePage = usePageStore((s) => s.activePage)
@@ -117,12 +119,17 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
         <button className="amx-props-chip" onClick={() => setOpen((o) => !o)}>
           {count === null ? t('amprops.chipRaw') : t('amprops.chipCount', { n: count })}{open ? ' ▾' : ' ▸'}
         </button>
-        <button className="amx-props-add" title={t('amprops.add')} onClick={() => void addProp()}><Plus size={12} /></button>
+        {!readOnly && <button className="amx-props-add" title={t('amprops.add')} onClick={() => void addProp()}><Plus size={12} /></button>}
       </div>
       {open && (parsed.ok ? (
         <div className="amx-props-rows">
           {visible.length === 0 && <div className="amx-props-empty">{t('amprops.empty')}</div>}
-          {visible.map((e) => (
+          {visible.map((e) => readOnly ? (
+            <div className="amx-prop-row amx-prop-row-ro" key={`${activePage}:${e.idx}:${e.key}`}>
+              <span className="amx-prop-key">{e.key}</span>
+              <ValueStatic value={e.value} />
+            </div>
+          ) : (
             <div className="amx-prop-row" key={`${activePage}:${e.idx}:${e.key}`}>
               <input
                 className="amx-prop-key"
@@ -154,12 +161,28 @@ export function AmadeusPropertiesPanel({ fmExtra: fmProp, onCommit }: {
             className="amx-props-raw"
             defaultValue={fmExtra}
             spellCheck={false}
-            onBlur={(e) => { if (e.target.value !== fmExtra) commitYaml(e.target.value) }}
+            readOnly={readOnly}
+            onBlur={(e) => { if (!readOnly && e.target.value !== fmExtra) commitYaml(e.target.value) }}
           />
         </>
       ))}
     </div>
   )
+}
+
+/** 只读展示一个属性值(分享页):布尔 → 勾选符,标量数组 → chips,其余 → 文本;嵌套结构按 JSON 一行。 */
+function ValueStatic({ value }: { value: unknown }) {
+  if (typeof value === 'boolean') return <span className="amx-prop-check" aria-hidden>{value ? '☑' : '☐'}</span>
+  if (isScalarArray(value)) {
+    return (
+      <span className="amx-prop-chips">
+        {value.map((x, i) => <span key={i} className="amx-chip">{String(x ?? '')}</span>)}
+      </span>
+    )
+  }
+  if (value === null || value === undefined) return <span className="amx-prop-input" />
+  if (typeof value === 'object') return <span className="amx-prop-input">{JSON.stringify(value)}</span>
+  return <span className="amx-prop-input">{String(value)}</span>
 }
 
 function ValueEditor({ value, onCommit }: { value: unknown; onCommit: (v: unknown) => void }) {

@@ -3,6 +3,7 @@
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
 import type { ActiveWindowSample } from '../shared/activeWindow'
+import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -18,6 +19,10 @@ export interface BackendStatus {
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
   platform: process.platform as string,
+  desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
+  desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
+  desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),
+  desktopPermissionsCloseGuide: (): Promise<void> => ipcRenderer.invoke('permissions:closeGuide'),
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
   setConfig: (patch: Record<string, any>): Promise<any> => ipcRenderer.invoke('config:set', patch),
   backendStatus: (): Promise<BackendStatus> => ipcRenderer.invoke('backend:getStatus'),
@@ -63,6 +68,8 @@ const api = {
   authStatus: (): Promise<any> => ipcRenderer.invoke('auth:status'),
   forsionLogin: (cloudUrl?: string): Promise<any> => ipcRenderer.invoke('auth:forsionLogin', cloudUrl),
   forsionLogout: (): Promise<any> => ipcRenderer.invoke('auth:logout'),
+  authAccounts: (): Promise<any> => ipcRenderer.invoke('auth:accounts'),
+  forsionSwitchAccount: (accountId: string): Promise<any> => ipcRenderer.invoke('auth:switchAccount', accountId),
   authProviders: (): Promise<Array<{ id: string; loggedIn: boolean }>> => ipcRenderer.invoke('auth:providers'),
   providerLogin: (id: string): Promise<any> => ipcRenderer.invoke('auth:providerLogin', id),
   openAccountCenter: (section?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openAccountCenter', section),
@@ -98,6 +105,16 @@ const api = {
     const listener = (_e: unknown, info: { loggedIn: boolean }): void => cb(info)
     ipcRenderer.on('auth:changed', listener)
     return () => ipcRenderer.removeListener('auth:changed', listener)
+  },
+  onAuthWillChange: (cb: () => Promise<void>): (() => void) => {
+    const listener = (_e: unknown, info: { requestId: string }): void => {
+      void Promise.resolve().then(cb).then(
+        () => ipcRenderer.send('auth:ready', info.requestId),
+        (error) => ipcRenderer.send('auth:ready', info.requestId, error instanceof Error ? error.message : String(error)),
+      )
+    }
+    ipcRenderer.on('auth:will-change', listener)
+    return () => ipcRenderer.removeListener('auth:will-change', listener)
   },
   /** 本机模式工作目录选择;取消返回 null。 */
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory'),

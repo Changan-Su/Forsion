@@ -23,6 +23,9 @@ export interface SyncShadow {
   lastSyncAt: number | null
   /** key = 服务端路径(NFC,'/' 分隔)。 */
   files: Record<string, ShadowEntry>
+  /** 被删除保护拦下、等用户确认的删除(serverPath → 哪一侧将被删)。持久化 = 重启绕不过确认
+   *  (Codex 终审:重启后首轮全量对账只看到低于阈值的残余,会直接执行)。 */
+  pending?: Record<string, 'local' | 'remote'>
 }
 
 /** name:每个同步绑定一份 shadow('amadeus-sync'=自己的云库;'amadeus-sync-share-<id>'=与我共享)。 */
@@ -45,18 +48,22 @@ export async function loadShadow(name: string): Promise<SyncShadow | null> {
 export function createShadowSaver(name: string): { save: (s: SyncShadow) => void; flush: () => Promise<void> } {
   let pending: SyncShadow | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
-  const write = async (): Promise<void> => {
-    if (!pending) return
+  let writing: Promise<void> = Promise.resolve()
+  const write = (): Promise<void> => {
+    if (!pending) return writing
     const snapshot = JSON.stringify(pending)
     pending = null
-    try {
-      const f = file(name)
-      const tmp = `${f}.tmp-${process.pid}-${Date.now()}-0`
-      await fs.writeFile(tmp, snapshot, 'utf8')
-      await fs.rename(tmp, f)
-    } catch {
-      /* best-effort;下次保存重试 */
-    }
+    writing = writing.then(async () => {
+      try {
+        const f = file(name)
+        const tmp = `${f}.tmp-${process.pid}-${Date.now()}-0`
+        await fs.writeFile(tmp, snapshot, 'utf8')
+        await fs.rename(tmp, f)
+      } catch {
+        /* best-effort;下次保存重试 */
+      }
+    })
+    return writing
   }
   return {
     save(s: SyncShadow) {

@@ -5,6 +5,7 @@
  */
 import { subscribePresence, type PresenceUser } from './cloudPresence'
 import { ensureActiveVault, ACTIVE_VAULT_KEY } from './cloudBridge'
+import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 
 export interface CollabCfg {
   apiBase: string
@@ -24,6 +25,7 @@ const j = async <T>(res: Response): Promise<T> => {
 }
 
 export function installCloudCollab(cfg: CollabCfg): void {
+  const activeVaultKey = contentStorageKey(ACTIVE_VAULT_KEY)
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
     j<T>(await fetch(`${cfg.apiBase}/amadeus${path}`, {
       method,
@@ -86,7 +88,7 @@ export function installCloudCollab(cfg: CollabCfg): void {
     listVaults: () => call<{ vaults: any[] }>('GET', '/vaults').then((r) => r.vaults),
     activeVaultId: vid,
     switchVault(id: string) {
-      try { localStorage.setItem(ACTIVE_VAULT_KEY, id) } catch { /* ignore */ }
+      try { localStorage.setItem(activeVaultKey, id) } catch { /* ignore */ }
       location.reload()
     },
     // ── 同步共享(owner)──

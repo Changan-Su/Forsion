@@ -58,8 +58,15 @@ describe('routeNote', () => {
     expect(routeNote('板.canvas.md', plugin, false, NOW)).toEqual({ editor: 'block' })
   })
 
-  it('future schema → block(futureSchemaPage 原样只读在那边);读不到(新建流)→ block', () => {
+  it('future schema → block(futureSchemaPage 原样只读在那边)', () => {
     expect(routeNote('note.md', '---\namadeus_schema: amadeus.page/5\n---\n未来\n', true, NOW)).toEqual({ editor: 'block' })
-    expect(routeNote('note.md', null, true, NOW)).toEqual({ editor: 'block' })
+  })
+
+  it('读不到(当前库没有这个文件)→ missing:绝不判 block 去装载(装载=缺文件即 newPage 落盘)', () => {
+    // 2026-09-06 实翻:Local/Cloud 两侧同一篇的相对路径不同(X.md vs <云名>/X.md),跨侧带过去的
+    // 标签页/最近访问/前进后退/带路径 [[链接]] 都是不存在的路径,判 block 就会在本地库里凭空造出
+    // `<云名>/X.md` 空文件、改名后反复复活旧名空白页。新建流全都先落盘再导航,不经这里。
+    expect(routeNote('note.md', null, true, NOW)).toEqual({ editor: 'missing' })
+    expect(routeNote('WMOSv11/note.md', null, false, NOW)).toEqual({ editor: 'missing' })
   })
 })

@@ -6,7 +6,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare } from 'lucide-react'
 import * as api from '../../services/backendService'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg, InquiryRequest, SketchItem } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
@@ -296,18 +296,6 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     const name = userName || t('chat.you')
     return (
       <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={msg.content}>
-        <div className="t2-actions">
-          <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
-          <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
-          {handlers?.onRewind && (
-            <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
-              <button className="t2-iconbtn" title={t('rewind.title')} onClick={() => setRewindOpen((v) => !v)}><HistoryIcon size={14} /></button>
-              {rewindOpen && (
-                <RewindMenu at={msg.timestamp} ctx={fileCtx} onPick={(mode) => { setRewindOpen(false); handlers.onRewind?.(mode) }} />
-              )}
-            </span>
-          )}
-        </div>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           <div className="t2-user">
@@ -319,6 +307,18 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               </div>
             )}
             <WikiText text={msg.content} />
+          </div>
+          <div className="t2-actions">
+            <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
+            <button className="t2-iconbtn" title={t('chat.action.edit')} onClick={() => handlers?.onEdit?.()}><Pencil size={14} /></button>
+            {handlers?.onRewind && (
+              <span style={{ position: 'relative', display: 'inline-flex' }} data-cmenu>
+                <button className="t2-iconbtn" title={t('rewind.title')} onClick={() => setRewindOpen((v) => !v)}><HistoryIcon size={14} /></button>
+                {rewindOpen && (
+                  <RewindMenu at={msg.timestamp} ctx={fileCtx} onPick={(mode) => { setRewindOpen(false); handlers.onRewind?.(mode) }} />
+                )}
+              </span>
+            )}
           </div>
         </div>
         <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined}>
@@ -418,7 +418,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.todos?.length && <TodoList todos={msg.todos} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
-        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && (
+        {/* 等模型实况:每次调用(含工具轮之后)都画「发送 N KB / 等首帧 + 已等秒数」;老引擎没有 llm_call 事件时退回下面那行 */}
+        {msg.status === 'streaming' && msg.live && <LiveWaitLine live={msg.live} />}
+        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && !msg.live && (
           <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
             {t('chat.thinking')}
           </div>
@@ -449,6 +451,32 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** 每秒刷新的已等待秒数(since=本次模型调用起点)。 */
+function useElapsedSec(since: number): number {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [since])
+  return Math.max(0, Math.floor((now - since) / 1000))
+}
+
+/** 等模型期间的实况行:正在发送上下文 N KB → 等待模型首帧,2 秒起带已等待秒数。
+ *  2026-09-06 取证:本机 52% 墙钟在这段静默里,原先只有一行不动的 shimmer,用户报「卡住」。 */
+function LiveWaitLine({ live }: { live: LiveWait }) {
+  const { t } = useI18n()
+  const sec = useElapsedSec(live.since)
+  const kb = Math.max(1, Math.round((live.bytes || 0) / 1024))
+  const label = live.phase === 'sending' && live.bytes ? t('chat.wait.sending', { kb }) : t('chat.wait.firstToken')
+  return (
+    <div className="t2-dim chat-thinking-live" role="status" aria-live="polite">
+      <span className="chat-run-shimmer-text">{label}</span>
+      {sec >= 2 && <span className="chat-wait-elapsed"> · {t('chat.wait.elapsed', { s: sec })}</span>}
     </div>
   )
 }

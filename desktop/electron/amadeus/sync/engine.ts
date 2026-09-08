@@ -16,12 +16,12 @@
  */
 
 import { createHash } from 'node:crypto'
-import { promises as fs, existsSync, renameSync } from 'node:fs'
+import { promises as fs, existsSync, renameSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { defaultWorkspaceDir, forsionHomeDir } from '../../forsionHome'
-import { readConfig, writeConfig } from '../settings'
+import { cloudAccountNamespace, currentCloudAccountId, readConfig, writeConfig } from '../settings'
 import { conflictCopyPath, decide, mergeText3, shouldTripMassDelete } from './reconcile'
 import {
   isIgnoredName,
@@ -43,12 +43,28 @@ const MERGE_MAX_BYTES = 1024 * 1024 // markdown 机会性三方合并的单侧�
 const MASS_DELETE_ABS = 200
 const DELETE_STORM_WINDOW_MS = 60_000
 const DELETE_STORM_MAX = 50
+/** 远端删除落到本地时的软删目录(<root>/.sync-trash/<日期>/<路径>);两个方向都被 isIgnoredName 忽略。 */
+const SYNC_TRASH_DIR = '.sync-trash'
 
 /** 云 vault 的本地镜像目录:固定、应用管理,与用户自选 vault 无关(胶囊滑块的 Cloud 侧)。
  *  放在隐藏应用数据目录(~/.forsion),彻底不出现在任何工作区文件夹里——本地 vault 若选在
  *  工作区(如 ~/Forsion)也不会把云端内容混进本地模式的笔记树。 */
-export function cloudVaultDir(): string {
+export function cloudVaultDir(accountId = currentCloudAccountId()): string {
+  return path.join(forsionHomeDir(), 'Amadeus Accounts', cloudAccountNamespace(accountId), 'Cloud')
+}
+/** Previous unscoped mirror is retained for recovery; it is never a new account's upload source. */
+export function unscopedCloudVaultDir(): string {
   return path.join(forsionHomeDir(), 'Amadeus Cloud')
+}
+export function isManagedCloudVault(root: string): boolean {
+  const canonical = (value: string): string => {
+    try { return realpathSync.native(value) } catch { return path.resolve(value) }
+  }
+  const roots = [unscopedCloudVaultDir(), legacyCloudVaultDir(), path.join(forsionHomeDir(), 'Amadeus Accounts')]
+  return roots.some((base) => {
+    const relative = path.relative(canonical(base), canonical(root))
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+  })
 }
 /** 旧位置(工作区内可见目录)。已迁至隐藏目录;仅迁移与 restoreVault 兼容判定用。 */
 export function legacyCloudVaultDir(): string {
@@ -61,7 +77,7 @@ export function legacyCloudVaultDir(): string {
  */
 export function migrateCloudMirrorDir(log: (m: string) => void = console.log): void {
   const oldDir = legacyCloudVaultDir()
-  const newDir = cloudVaultDir()
+  const newDir = unscopedCloudVaultDir()
   if (oldDir === newDir || !existsSync(oldDir) || existsSync(newDir)) return
   try {
     renameSync(oldDir, newDir)
@@ -98,6 +114,8 @@ interface EngineDeps {
 
 /** 绑定配置:一个引擎实例同步「一个本地目录 ↔ 一个云 vault 的一个范围」。 */
 export interface EngineBinding {
+  /** Owner fixed for this instance. Account changes create new instances. */
+  accountId?: string | null
   /** 本地根目录(绝对路径)。own=cloudVaultDir();共享=cloudVaultDir()/与我共享/<slug>。 */
   localRoot: string
   /** shadow 文件名(userData 下,每绑定一份)。 */
@@ -127,7 +145,7 @@ const sha256 = (data: string | Buffer): string => createHash('sha256').update(da
 
 export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   localRoot: cloudVaultDir(),
-  shadowName: 'amadeus-sync',
+  shadowName: `amadeus-sync-${cloudAccountNamespace()}`,
   vaultId: 'first',
   serverDir: '',
   excludePrefixes: ['与我共享/'],
@@ -144,20 +162,34 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     return full
   }
   const fromServer = (serverPath: string): string | null => {
+    let rel: string
     if (!binding.serverDir) {
       for (const ex of binding.excludePrefixes ?? []) if (serverPath.startsWith(ex)) return null
-      return serverPath
+      rel = serverPath
+    } else {
+      if (!serverPath.startsWith(`${binding.serverDir}/`)) return null
+      rel = serverPath.slice(binding.serverDir.length + 1)
     }
-    if (!serverPath.startsWith(`${binding.serverDir}/`)) return null
-    return serverPath.slice(binding.serverDir.length + 1)
+    // 绑定内相对路径任一段是忽略名(.sync-trash / 临时文件 / 系统杂物 / 绑定的 ignoreNames)→ 不参与同步。
+    // 否则会拉进本地忽略目录,下轮扫描看不见它 → 判「本地已删」→ 反把云端那份删掉(Codex 终审 P1/P0)。
+    // 只看剥掉 serverDir 之后的相对段:云名本身叫 `.sync-trash` 之类不该让整个绑定失明。
+    if (rel.split('/').some((seg) => isIgnoredName(seg) || !!binding.ignoreNames?.includes(seg))) return null
+    return rel
   }
   const scoped = (serverPath: string, kind: string): boolean => !binding.inScope || binding.inScope(serverPath, kind)
+
+  const accountId = binding.accountId ?? currentCloudAccountId()
+  let accepting = false
+  let generation = 0
+  let lifecycle: Promise<void> = Promise.resolve()
+  const pumpWaiters = new Set<() => void>()
 
   let state: SyncState = 'disabled'
   let error: string | null = null
   let shadow: SyncShadow | null = null
   let client: CloudClient | null = null
   let sse: SseHandle | null = null
+  let sessionCreds: { cloudUrl: string; token: string } | null = null
   let boundRoot: string | null = null
   let conflicts = 0
   const skipped = new Map<string, string>()
@@ -165,11 +197,32 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   /** 删除保护:待确认的删除(serverPath → 哪一侧将被删)。shadow 保留 → 确认后 fullReconcile 重新推导执行。 */
   const pendingDeletions = new Map<string, 'local' | 'remote'>()
   let allowMassDeleteOnce = false
+  /** 删除风暴闩:一旦触发(60s/50 条限流 或 计划级阈值),此后**每一条**删除都进待确认,直到用户确认
+   *  (confirmMassDeletions)或待确认名单自己清空(文件被放回来)。以前只是限流:窗口一过又放 50 条,
+   *  一台镜像目录被清空的设备就这样分批把云端删光(2026-09-06 实翻);Codex 终审再钉:待确认必须粘性,
+   *  不能因为下一轮低于阈值就放行。 */
+  let stormLatched = false
   const recentDeleteStamps: number[] = []
+  /** 待确认名单落盘(shadow.pending):restart/stop 只清内存,重启后按它恢复名单与闩。 */
+  const persistPending = (): void => {
+    if (!shadow) return
+    shadow.pending = pendingDeletions.size ? Object.fromEntries(pendingDeletions) : undefined
+    saver.save(shadow)
+  }
+  /** 闩解除 = 风暴过去:同时清限流窗口,否则 60s 内下一次正常单删又因旧时间戳立刻重新落闩。 */
+  const releaseLatch = (): void => {
+    stormLatched = false
+    recentDeleteStamps.length = 0
+  }
   const deleteStorm = (): boolean => {
+    if (stormLatched) return true
     const now = Date.now()
     while (recentDeleteStamps.length && now - recentDeleteStamps[0] > DELETE_STORM_WINDOW_MS) recentDeleteStamps.shift()
-    return recentDeleteStamps.length >= DELETE_STORM_MAX
+    if (recentDeleteStamps.length >= DELETE_STORM_MAX) {
+      stormLatched = true
+      return true
+    }
+    return false
   }
 
   // ── job 队列(严格串行)────────────────────────────────────────────────────
@@ -185,7 +238,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   let statusTimer: ReturnType<typeof setTimeout> | null = null
 
   const emitStatus = (): void => {
-    if (statusTimer) return
+    if (!accepting || statusTimer) return
     statusTimer = setTimeout(() => {
       statusTimer = null
       deps.onStatus(getStatus())
@@ -199,6 +252,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   }
 
   const enqueue = (job: Job, front = false): void => {
+    if (!accepting) return
     if (job.key) {
       if (queuedKeys.has(job.key)) return
       queuedKeys.add(job.key)
@@ -224,6 +278,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         try {
           await job.run()
         } catch (e) {
+          if (!accepting) return
           if (isAuthErr(e)) {
             jobs.length = 0
             queuedKeys.clear()
@@ -245,7 +300,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
           emitStatus()
         }
       }
-      if (state === 'syncing') {
+      if (accepting && state === 'syncing') {
         if (shadow) {
           shadow.lastSyncAt = Date.now()
           saver.save(shadow)
@@ -254,11 +309,13 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       }
     } finally {
       pumping = false
+      for (const resolve of pumpWaiters) resolve()
+      pumpWaiters.clear()
     }
   }
 
   const scheduleRetry = (): void => {
-    if (retryTimer) return
+    if (!accepting || retryTimer) return
     retryTimer = setTimeout(() => {
       retryTimer = null
       void restart()
@@ -452,6 +509,26 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     emitStatus()
   }
 
+  /** 远端删除落到本地 = 挪进 <root>/.sync-trash/<日期>/<相对路径>,不再 fs.rm。
+   *  2026-09-06 实翻:另一台设备的镜像目录被清空,它推了 50 条删除,本机照单把用户本地库里的真文件
+   *  (MOC-Tisy.md 及其子笔记)硬删了。软删后至少还能从这里捞回来;跨卷等挪不动时才退回硬删。 */
+  const trashLocal = async (serverPath: string): Promise<void> => {
+    if (!boundRoot) return
+    const abs = localAbs(serverPath)
+    const rel = fromServer(serverPath) ?? serverPath
+    const base = path.join(boundRoot, SYNC_TRASH_DIR, new Date().toISOString().slice(0, 10), ...rel.split('/'))
+    const dst = existsSync(base) ? `${base}.${Date.now()}` : base
+    try {
+      await fs.mkdir(path.dirname(dst), { recursive: true })
+      await fs.rename(abs, dst)
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return // 本地已不在
+      // 归档失败(ENOSPC/EACCES/目的地被占)绝不退化成硬删:抛错让本轮 job 失败、shadow 与源文件都留着,
+      // 下轮重试。同一根内的 rename 本不该失败;真失败时最后一份本地内容比对账进度重要。
+      throw new Error(`软删失败,保留本地文件 ${abs}: ${(e as Error)?.message ?? String(e)}`)
+    }
+  }
+
   const applyRemoteDelete = async (serverPath: string): Promise<void> => {
     if (!shadow) return
     const local = await localHashOf(serverPath)
@@ -461,15 +538,12 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       if (!allowMassDeleteOnce && deleteStorm()) {
         // 远端删除风暴:保住本地与 shadow,记待确认;确认后 fullReconcile 重新推导收敛。
         pendingDeletions.set(serverPath, 'local')
+        persistPending()
         emitStatus()
         return
       }
       recentDeleteStamps.push(Date.now())
-      try {
-        await fs.rm(localAbs(serverPath), { force: true })
-      } catch {
-        /* 已不在 */
-      }
+      await trashLocal(serverPath)
       dropShadowEntry(serverPath)
     } else if (d.kind === 'pushCreate') {
       dropShadowEntry(serverPath) // 编辑胜删除:洗掉旧基线,按新文件重推
@@ -495,6 +569,9 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   const applyRemoteChange = async (ev: CloudChange): Promise<void> => {
     if (!client || !shadow) return
     if (ev.seq <= shadow.cursor) return // 已应用过
+    // 根目录不见了(挪走/拔盘):入站写会经 atomicWrite 的 mkdir 凭空造出只有一个文件的空根,
+    // 下一轮对账把其余已跟踪文件全判成本地已删。不推游标,恢复后 fullReconcile 补课。
+    if (!(await rootAlive())) return
     if (ev.origin.client && client.clientId === ev.origin.client) {
       shadow.cursor = ev.seq // 自己的回声:只推游标
       saver.save(shadow)
@@ -702,15 +779,15 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   /** requireRootExists 绑定的防线:根目录不在(外置盘拔了)时禁止一切推断——
    *  否则空目录会被解读成「本地全删」→ pushDelete 级联清空云端。 */
   const rootAlive = async (): Promise<boolean> => {
-    if (!binding.requireRootExists) return true
     if (!boundRoot) return false
-    try {
-      return (await fs.stat(boundRoot)).isDirectory()
-    } catch {
-      setState('error', `vault 目录不存在: ${boundRoot}`)
-      scheduleRetry()
-      return false
-    }
+    const alive = await fs.stat(boundRoot).then((s) => s.isDirectory()).catch(() => false)
+    if (alive) return true
+    // 镜像根(own 引擎)不要求预先存在;但 shadow 已跟踪过文件时根却不见了 = 目录被人挪走/清空,
+    // 绝不能解读成「本地全删」推给服务端(2026-09-06 另一台设备就是这样把云端删掉 50 个文件的)。
+    if (!binding.requireRootExists && !Object.keys(shadow?.files ?? {}).length) return true
+    setState('error', `vault 目录不存在: ${boundRoot}`)
+    scheduleRetry()
+    return false
   }
 
   /** 本地触发的单路径对账(远端视角用 shadow 基线近似;真变更由 PUT 409 兜住)。 */
@@ -737,9 +814,10 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         else await pushBinary(serverPath, 0)
         break
       case 'pushDelete':
-        if (!allowMassDeleteOnce && deleteStorm()) {
-          // 本地删除风暴(误删镜像目录/watcher 级联):暂不删云端,等确认。
+        if (!allowMassDeleteOnce && (pendingDeletions.has(serverPath) || deleteStorm())) {
+          // 本地删除风暴(误删镜像目录/watcher 级联)或已在待确认名单:暂不删云端,等确认。
           pendingDeletions.set(serverPath, 'remote')
+          persistPending()
           emitStatus()
           break
         }
@@ -755,16 +833,21 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   }
 
   // ── 扫描与全量对账 ─────────────────────────────────────────────────────────
-  /** 遍历本地子树(含点目录如 .amadeus 资产;跳过忽略名)。返回 serverPath → stat。 */
-  const walkLocal = async (): Promise<Map<string, { size: number; mtimeMs: number }>> => {
+  /** 遍历本地子树(含点目录如 .amadeus 资产;跳过忽略名)。返回 serverPath → stat。
+   *  任何一层 readdir 失败 → 返回 null,调用方本轮放弃推断:读不到的目录若按「空」处理,里面每个
+   *  已跟踪文件都会被判成本地删除 → pushDelete 级联清空云端(小子树还不够触发计划级删除保护)。 */
+  const walkLocal = async (): Promise<Map<string, { size: number; mtimeMs: number }> | null> => {
     const out = new Map<string, { size: number; mtimeMs: number }>()
     if (!boundRoot || !shadow) return out
     const rootAbs = boundRoot
+    let failed: string | null = null
     const walk = async (dir: string): Promise<void> => {
+      if (failed) return
       let entries: import('node:fs').Dirent[]
       try {
         entries = await fs.readdir(dir, { withFileTypes: true })
-      } catch {
+      } catch (e) {
+        failed = `${dir}: ${(e as Error)?.message ?? String(e)}`
         return
       }
       for (const e of entries) {
@@ -777,12 +860,24 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
           const rel = path.relative(rootAbs, abs).split(path.sep).join('/')
           const sp = toServer(rel)
           if (!sp) continue
-          const st = await statOf(abs)
-          if (st) out.set(sp, st)
+          try {
+            const s = await fs.stat(abs)
+            if (!s.isFile()) continue
+            out.set(sp, { size: s.size, mtimeMs: Math.floor(s.mtimeMs) })
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') continue // readdir 与 stat 之间被删:真的不在了
+            failed = `${abs}: ${(err as Error)?.message ?? String(err)}` // EIO/EACCES ≠ 不存在:本轮不推断删除
+            return
+          }
         }
       }
     }
     await walk(rootAbs)
+    if (failed) {
+      setState('error', `本地目录读取失败,本轮不推断删除: ${failed}`)
+      scheduleRetry()
+      return null
+    }
     return out
   }
 
@@ -791,14 +886,34 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     if (!shadow) return
     if (!(await rootAlive())) return
     const seen = await walkLocal()
+    if (!seen) return
+    // 待确认里已无破坏性动作可做的条目撤销:本地删除(remote)而文件已被放回来;远端删除(local)而本地
+    // 文件自己也没了。名单清空 = 风暴过去,闩解除(远端恢复了文件的情况由 fullReconcile 重新推导)。
+    let pendingChanged = false
+    for (const [sp, side] of [...pendingDeletions]) {
+      if ((side === 'remote' && seen.has(sp)) || (side === 'local' && !seen.has(sp))) { pendingDeletions.delete(sp); pendingChanged = true }
+    }
+    if (!pendingDeletions.size) releaseLatch()
     for (const [sp, st] of seen) {
       const entry = shadow.files[sp]
       if (entry && entry.size === st.size && entry.mtimeMs === st.mtimeMs) continue
       enqueue({ key: sp, run: () => reconcileLocal(sp) })
     }
-    for (const sp of Object.keys(shadow.files)) {
-      if (!seen.has(sp)) enqueue({ key: sp, run: () => reconcileLocal(sp) })
+    const tracked = Object.keys(shadow.files)
+    const missing = tracked.filter((sp) => !seen.has(sp))
+    // 增量路径同样要过计划级删除保护:60s/50 条的风暴闸只是限流,每次 SSE 重连/目录事件再扫一遍就
+    // 再放行一批 —— 一台镜像目录被清空的设备就这样分批把云端删光(2026-09-06 实翻,恰好 50 条)。
+    // 过阈值(或闩已落下)→ 全部记待确认(状态条「确认删除」放行后 fullReconcile 按真实三方重推),一个都不推。
+    // 粘性:已在名单里的路径不因下一轮低于阈值放行(10 个缺 5 个 → 放回 1 个 → 剩 4 个照样等确认)。
+    if (missing.length && !allowMassDeleteOnce && (stormLatched || shouldTripMassDelete(missing.length, tracked.length, MASS_DELETE_ABS))) {
+      stormLatched = true
+      for (const sp of missing) pendingDeletions.set(sp, 'remote')
+      persistPending()
+      emitStatus()
+      return
     }
+    if (pendingChanged) { persistPending(); emitStatus() }
+    for (const sp of missing) if (!pendingDeletions.has(sp)) enqueue({ key: sp, run: () => reconcileLocal(sp) })
   }
 
   /** 全量三方对账(首次启用 / reset / 追赶缺口 / 手动 syncNow)。 */
@@ -813,6 +928,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
 
     const localStats = await walkLocal()
+    if (!localStats) return
     const paths = new Set<string>([...remote.keys(), ...localStats.keys(), ...Object.keys(shadow.files)])
 
     // 先出全量计划(纯判定),过删除保护阈值,再执行——否则级联删除(空根/坏 tree/误删镜像)
@@ -832,7 +948,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       plan.push({ sp, d: decide(localHash, entry, r ? { seq: r.seq, hash: r.hash } : null), rSeq: r?.seq ?? null, localHash })
     }
     const delCount = plan.filter((p) => p.d.kind === 'deleteLocal' || p.d.kind === 'pushDelete').length
-    const tripped = !allowMassDeleteOnce && shouldTripMassDelete(delCount, tracked, MASS_DELETE_ABS)
+    const tripped = !allowMassDeleteOnce && (stormLatched || shouldTripMassDelete(delCount, tracked, MASS_DELETE_ABS))
+    if (tripped && delCount) stormLatched = true
     pendingDeletions.clear()
 
     for (const { sp, d, rSeq, localHash } of plan) {
@@ -868,11 +985,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
           await pushDelete(sp)
           break
         case 'deleteLocal':
-          try {
-            await fs.rm(localAbs(sp), { force: true })
-          } catch {
-            /* 已不在 */
-          }
+          await trashLocal(sp)
           dropShadowEntry(sp)
           break
         case 'conflict':
@@ -889,6 +1002,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       allowMassDeleteOnce = false // 一次性放行已消费
       recentDeleteStamps.length = 0
     }
+    if (!pendingDeletions.size) releaseLatch() // 计划里已无删除(文件放回来了)→ 闩解除
+    persistPending()
     if (tripped) emitStatus()
 
     // 服务端文件夹 → 本地补目录(空文件夹也可见);本地空目录刻意不上推。
@@ -924,13 +1039,14 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   // ── 镜像目录自带 watcher(引擎独立于活动 vault,外部改动/非活动期改动全靠它)────
   let watcher: FSWatcher | null = null
 
+  const watcherClosures: Promise<unknown>[] = []
   const stopWatcher = (): void => {
-    void watcher?.close()
+    if (watcher) watcherClosures.push(watcher.close())
     watcher = null
   }
 
   const startWatcher = (): void => {
-    if (watcher || !boundRoot) return
+    if (!accepting || watcher || !boundRoot) return
     // 与 VaultWatcher 不同:点目录(.amadeus 资产)必须纳入;只滤原子写临时文件与系统杂物。
     watcher = chokidar.watch(boundRoot, {
       ignoreInitial: true,
@@ -950,7 +1066,9 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
     watcher.on('change', onPath)
     watcher.on('add', onPath)
-    watcher.on('unlink', onPath)
+    // 文件删除不逐条对账:逐条 = 每个 unlink 各自 pushDelete,只受 50/分钟限流,整目录被清空时恰好
+    // 放掉 50 条(2026-09-06 事故主路径,Codex 终审钉出)。改走防抖扫描,让缺失集整体过计划级阈值。
+    watcher.on('unlink', () => scanLater())
     watcher.on('unlinkDir', () => scanLater()) // 目录整删:前缀内容靠扫描对账
   }
 
@@ -961,9 +1079,9 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   }
 
   const startSseLoop = (): void => {
-    if (!client || !shadow || sse) return
-    const creds = deps.loadCreds()
-    if (!creds.cloudUrl || !creds.token) return
+    if (!accepting || !client || !shadow || sse) return
+    const creds = sessionCreds
+    if (!creds) return
     sse = startSse(
       { baseUrl: creds.cloudUrl, vaultId: shadow.vaultId, token: creds.token },
       {
@@ -992,27 +1110,24 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
 
   // ── 生命周期 ───────────────────────────────────────────────────────────────
   const ensureDeviceId = async (): Promise<string> => {
-    const cfg = await readConfig()
+    const cfg = await readConfig(accountId)
     if (cfg.cloudSync?.deviceId) return cfg.cloudSync.deviceId
     const id = `desk-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
-    await writeConfig({ cloudSync: { ...(cfg.cloudSync ?? {}), deviceId: id } })
+    await writeConfig({ cloudSync: { ...(cfg.cloudSync ?? {}), deviceId: id } }, accountId)
     return id
   }
 
-  /** restart 代际:换绑期间旧代的异步收尾不得再往队列塞任务(跨 vault 污染防线)。 */
-  let generation = 0
-
   /** 依据 config + 登录态决定启动/停止。镜像目录固定,与用户自选 vault 无关。幂等。 */
-  const restart = async (): Promise<void> => {
-    const gen = ++generation
+  const initialize = async (gen: number): Promise<void> => {
     stopSse()
     stopWatcher()
     jobs.length = 0
     queuedKeys.clear()
     pendingDeletions.clear()
     allowMassDeleteOnce = false
+    stormLatched = false
     recentDeleteStamps.length = 0
-    const cfg = await readConfig()
+    const cfg = await readConfig(accountId)
     if (gen !== generation) return
     const cs = cfg.cloudSync
     if (cs?.enabled === false) {
@@ -1022,19 +1137,25 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       setState('disabled', null)
       return
     }
+    if (!accountId || accountId !== currentCloudAccountId()) {
+      setState('auth-required', '未登录 Forsion 账号')
+      return
+    }
     boundRoot = binding.localRoot
     if (binding.requireRootExists) {
       // 指向用户 vault 的绑定:根不在(外置盘拔了/目录被移走)绝不 mkdir——
       // 空根会被当成「本地全删」推给服务端。停在 error 态定时重试。
       const alive = await fs.stat(boundRoot).then((s) => s.isDirectory()).catch(() => false)
+      if (gen !== generation) return
       if (!alive) {
         setState('error', `vault 目录不存在: ${boundRoot}`)
         scheduleRetry()
         return
       }
-    } else {
-      await fs.mkdir(boundRoot, { recursive: true })
     }
+    // own 镜像根的 mkdir 挪到 shadow 装载之后:shadow 已跟踪文件而根不见了 = 目录被挪走/清空,
+    // 凭空造空根会让全量对账把「本地全没了」当成删除(小 shadow 够不到阈值就真删云端)。
+    if (gen !== generation) return
     const creds = deps.loadCreds()
     if (!creds.cloudUrl || !creds.token) {
       client = null // 丢弃旧账号的 client:登出后绝不能拿旧 token 继续同步
@@ -1043,20 +1164,24 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
     setState('starting', null)
     const deviceId = cs?.deviceId ?? (await ensureDeviceId())
+    if (gen !== generation) return
     // 按条目绑定带后缀:与 own 镜像引擎同挂一个云 vault,同 clientId 会被互相当自回声。
     const clientId = binding.clientIdSuffix ? `${deviceId}#${binding.clientIdSuffix}` : deviceId
+    sessionCreds = { cloudUrl: creds.cloudUrl, token: creds.token }
     client = createCloudClient({ baseUrl: creds.cloudUrl, token: creds.token, clientId })
 
     try {
       let vaultId = binding.vaultId === 'first' ? cs?.vaultId : binding.vaultId
       if (!vaultId) {
         const vaults = await client.listVaults()
+        if (gen !== generation) return
         if (!vaults.length) throw new Error('云端无可用 vault')
         vaultId = vaults[0].id
-        await writeConfig({ cloudSync: { ...(cs ?? {}), vaultId } })
+        await writeConfig({ cloudSync: { ...(cs ?? {}), vaultId } }, accountId)
       }
       if (gen !== generation) return
       const prev = await loadShadow(binding.shadowName)
+      if (gen !== generation) return
       shadow =
         prev && prev.vaultRoot === boundRoot && prev.vaultId === vaultId && prev.folder === ''
           ? prev
@@ -1069,6 +1194,22 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
               files: {},
             }
       if (gen !== generation) return
+      // 上次没确认完的待确认名单:恢复名单并落闩 —— 不然重启就是绕过确认的后门。
+      for (const [sp, side] of Object.entries(shadow.pending ?? {})) pendingDeletions.set(sp, side)
+      if (pendingDeletions.size) stormLatched = true
+      if (!binding.requireRootExists) {
+        const alive = await fs.stat(boundRoot).then((s) => s.isDirectory()).catch(() => false)
+        if (gen !== generation) return
+        if (!alive) {
+          if (Object.keys(shadow.files).length) {
+            setState('error', `镜像目录不存在(已跟踪 ${Object.keys(shadow.files).length} 个文件,不造空根): ${boundRoot}`)
+            scheduleRetry()
+            return
+          }
+          await fs.mkdir(boundRoot, { recursive: true })
+          if (gen !== generation) return
+        }
+      }
       startWatcher()
       enqueue({ run: fullReconcile })
       enqueue({
@@ -1077,6 +1218,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         },
       })
     } catch (e) {
+      if (gen !== generation) return
       if (isAuthErr(e)) setState('auth-required', '登录已失效,请重新登录 Forsion 账号')
       else {
         setState('offline', (e as Error)?.message || String(e))
@@ -1085,11 +1227,58 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
   }
 
-  app.once('before-quit', () => {
+  // Stop invalidates startup immediately, then drains the one active job before
+  // credentials or roots may change. Queued jobs and delayed callbacks cannot
+  // resurrect the retired engine. This also serializes overlapping restarts.
+  const pause = (): void => {
+    accepting = false
     stopSse()
     stopWatcher()
-    void saver.flush()
-  })
+    jobs.length = 0
+    queuedKeys.clear()
+    for (const timer of [retryTimer, scanTimer, statusTimer]) if (timer) clearTimeout(timer)
+    retryTimer = scanTimer = statusTimer = null
+  }
+  const drain = async (): Promise<void> => {
+    if (pumping) await new Promise<void>((resolve) => pumpWaiters.add(resolve))
+    await Promise.all(watcherClosures.splice(0))
+    await saver.flush()
+    shadow = null
+    client = null
+    sessionCreds = null
+    boundRoot = null
+    conflicts = 0
+    skipped.clear()
+    pendingDeletions.clear()
+    allowMassDeleteOnce = false
+    stormLatched = false
+    recentDeleteStamps.length = 0
+    state = 'disabled'
+    error = null
+  }
+  const onQuit = (): void => { void stop() }
+  const restart = (): Promise<void> => {
+    app.removeListener('before-quit', onQuit)
+    app.once('before-quit', onQuit)
+    const gen = ++generation
+    pause()
+    const next = lifecycle.catch(() => {}).then(async () => {
+      await drain()
+      if (gen !== generation) return
+      accepting = true
+      await initialize(gen)
+    })
+    lifecycle = next
+    return next
+  }
+  const stop = (): Promise<void> => {
+    app.removeListener('before-quit', onQuit)
+    ++generation
+    pause()
+    const next = lifecycle.catch(() => {}).then(drain)
+    lifecycle = next
+    return next
+  }
 
   // ── 对外 API ───────────────────────────────────────────────────────────────
   const getStatus = (): SyncStatus => ({
@@ -1193,8 +1382,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     },
 
     async setEnabled(on: boolean): Promise<SyncStatus> {
-      const cfg = await readConfig()
-      await writeConfig({ cloudSync: { ...(cfg.cloudSync ?? {}), enabled: on } })
+      const cfg = await readConfig(accountId)
+      await writeConfig({ cloudSync: { ...(cfg.cloudSync ?? {}), enabled: on } }, accountId)
       await restart()
       return getStatus()
     },
@@ -1221,20 +1410,19 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     confirmMassDeletions(): SyncStatus {
       if (!pendingDeletions.size) return getStatus()
       allowMassDeleteOnce = true
+      stormLatched = false
       pendingDeletions.clear()
       recentDeleteStamps.length = 0
+      persistPending()
       enqueue({ run: fullReconcile })
       return getStatus()
     },
 
-    stop(): void {
-      stopSse()
-      stopWatcher()
-      void saver.flush()
-    },
+    stop,
   }
 
   function scanLater(): void {
+    if (!accepting) return
     if (scanTimer) clearTimeout(scanTimer)
     scanTimer = setTimeout(() => {
       scanTimer = null

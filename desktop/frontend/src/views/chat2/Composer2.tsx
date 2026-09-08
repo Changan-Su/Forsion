@@ -1551,7 +1551,7 @@ export const Composer2: React.FC<{
                 defaultModelIds={isEngine ? undefined : defaultModelIds}
                 onDefaultModelChange={isEngine ? undefined : onDefaultModelChange}
                 emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
-                footnote={!isEngine && !isHost ? t('input.cloudModelHint') : undefined}
+                footnote={!isEngine && !isHost && !models?.some((m) => m.source === 'direct') ? t('input.cloudModelHint') : undefined}
               />
             )}
             <button

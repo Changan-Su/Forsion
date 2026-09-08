@@ -305,6 +305,65 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
 });
 
 // 手动压缩上下文（slash / 按钮触发）：生成并持久化一个总结检查点，后续 run 起步即精简。
+// ── 时间线骨架:会话内各 run 的事件序列(不含正文),供「设置→高级→导出日志」与
+//    scripts/stall-timeline.mjs 归属「秒数去哪了」(2026-09-06 取证:本机 52% 墙钟在等首帧)。
+//    token/reasoning/tool_stream 连续同类折叠成一段(首末时刻+条数);其余事件只留定位字段
+//    (工具名/耗时/阶段/用量/首帧毫秒)。最近 40 个 run,单会话导出可控。──
+function timelineFields(type: string, p: any): Record<string, unknown> {
+  switch (type) {
+    case 'tool_call': return { name: p?.name };
+    case 'tool_result': return { name: p?.name, elapsedMs: p?.elapsedMs, isError: !!p?.isError, outputChars: p?.outputChars };
+    case 'status': return { phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, attempt: p?.attempt, waitMs: p?.waitMs, iteration: p?.iteration };
+    case 'usage': return { prompt: p?.prompt, completion: p?.completion, cached: p?.cached, ttftMs: p?.ttftMs, uploadMs: p?.uploadMs, llmMs: p?.llmMs, requestBytes: p?.requestBytes, iteration: p?.iteration };
+    case 'error': return { error: String(p?.error ?? '').slice(0, 200), aborted: !!p?.aborted };
+    case 'approval_request': return { name: p?.name };
+    case 'approval_result': return { action: p?.action };
+    default: return {};
+  }
+}
+function timelineIso(v: any): string {
+  if (v instanceof Date) return v.toISOString();
+  const s = String(v ?? '');
+  // SQLite CURRENT_TIMESTAMP 是无时区标记的 UTC;PG 侧已是 Date。带时区的原样解析。
+  const d = new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+  return Number.isNaN(d.getTime()) ? s : d.toISOString();
+}
+router.get('/agent/sessions/:id/timeline', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const runs = await query<any[]>(
+      `SELECT id, status, model_id, error, created_at FROM agent_runs WHERE session_id = ? ORDER BY created_at DESC LIMIT 40`,
+      [req.params.id],
+    );
+    runs.reverse(); // 时间正序
+    const out: any[] = [];
+    for (const r of runs) {
+      // 流式帧只取时刻不取正文(payload 置 NULL):一个长 run 几万条 token 行,正文既没用又占传输。
+      const rows = await query<any[]>(
+        `SELECT seq, type, CASE WHEN type IN ('token','reasoning','tool_stream') THEN NULL ELSE payload END AS payload, created_at
+         FROM agent_run_events WHERE run_id = ? ORDER BY seq`,
+        [r.id],
+      );
+      const events: any[] = [];
+      for (const row of rows) {
+        const t = timelineIso(row.created_at);
+        const last = events[events.length - 1];
+        if (row.type === 'token' || row.type === 'reasoning' || row.type === 'tool_stream') {
+          if (last && last.type === row.type && last.n) { last.tEnd = t; last.n++; continue; }
+          events.push({ seq: row.seq, type: row.type, t, tEnd: t, n: 1 });
+          continue;
+        }
+        events.push({ seq: row.seq, type: row.type, t, ...timelineFields(row.type, parseMaybeJson(row.payload)) });
+      }
+      out.push({ id: r.id, status: r.status, model_id: r.model_id, error: r.error || null, created_at: timelineIso(r.created_at), events });
+    }
+    res.json({ runs: out });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'timeline failed' });
+  }
+});
+
 router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;

@@ -22,6 +22,7 @@ import { friendlyUpstreamError } from './upstreamError.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
 import { currentAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
+import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -149,6 +150,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         body: JSON.stringify({ modelId, payload: opts.payload }),
         signal: guard.signal,
       });
+      opts.onResponseStart?.(); // 服务端设完 SSE 头即 flush:头到达 = 整份上下文已送达服务端
       if (!r.ok || !r.body) {
         const detail = await r.text().catch(() => '');
         throw new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail));
@@ -200,7 +202,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     }
   }
 
-  return {
+  const brain: CloudBrainServices = {
     llm: {
       resolveModelAndKey: async (modelId: string) => {
         const r = await postJson<{ model: any; apiModelId: string }>('/api/brain/llm/resolve', { modelId });
@@ -468,4 +470,6 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
   };
+  if (brain.agentFiles) registerAgentSyncIdentity(brain.agentFiles, base, cfg.token);
+  return brain;
 }

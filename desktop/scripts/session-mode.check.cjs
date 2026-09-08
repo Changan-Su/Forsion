@@ -4,10 +4,11 @@
  *   1 桌面端默认 Work:复用 Local/Cloud 滑块胶囊、Work 亮且滑块在右;列表按项目分组(≥2 组,含「不在项目中工作」),chat 与 work 会话都在
  *     会话面自身不再画搜索框(搜索统一走全局快速查找)
  *   2 切 Chat:只剩 chat 会话、平铺(0 个组头,.t2s-flat 在);work 会话不在列表里;空态项目选择器不露出
- *     且输入区不显示模式胶囊和上下文圆环
+ *     且输入区不显示模式胶囊、上下文圆环和 Agent 选择器
  *   3 reload 恢复模式，且工作区组的 name/key 均唯一
  *   4 模式跟着打开的会话走:在 Chat 里打开 work 会话 → 胶囊切回 Work、组头回来
  *   5 截图(亮/暗各一张侧栏)—— DESIGN.md §8:几何断言全绿 ≠ 看起来对,自己看
+ *   6 本地 managed Chat 的模型菜单保留本机直连 Provider(不能再把 sandbox 等同于云 worker)
  * 跑法:npm run build && npm run check:sessionmode(单实例锁:先退掉 dev 版 Electron)。
  * 会话靠 window.__forsionStore(appStore 暴露的 zustand 句柄)直接 createInWorkspace,不依赖模型/网络。
  */
@@ -49,6 +50,7 @@ const SIDEBAR_STATE = () => {
     activeRow: ((document.querySelector('.t2s-side .t2s-srow.active') || {}).textContent || '').trim().slice(0, 30),
     composerModeChips: visibleCount('.t2c .mode-pill-btn'),
     contextRings: visibleCount('.t2c .t2c-ctxring'),
+    agentPickers: visibleCount('.t2c .agent-picker'),
   }
 }
 
@@ -65,6 +67,11 @@ async function main() {
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-sessionmode-'))
   const userData = path.join(home, 'userdata')
+  // 本地 managed Chat 虽然是 sandbox，但仍由本机 Tangu 后端执行，应拿到本机 Provider 目录。
+  // 用不可达假端点即可：本仪器只验证模型目录，不发推理请求，也不会泄露真实凭证。
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+    providers: [{ providerId: 'local-check', baseUrl: 'http://127.0.0.1:9/v1', apiKey: 'instrument-only', modelIds: ['direct-chat-check'] }],
+  }), 'utf8')
   // 全新家目录必须预置 mode:managed(否则停在引导页 / 没有本地引擎,建不了会话);未打包时主进程用 `<dir>-dev`,两份都种。
   for (const dir of [userData, `${userData}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })
@@ -171,8 +178,17 @@ async function main() {
       JSON.stringify(st))
     check('2b 开着 work 会话切 Chat → 主区变成新对话空态,且不露出项目选择器', st.activeRow === '' && st.projectBar === 0, JSON.stringify({ activeRow: st.activeRow, projectBar: st.projectBar }))
     check('2c Chat 模式不露出「添加本地工作区」(Work 的事)', st.addWs === 0, `addWs=${st.addWs}`)
-    check('2d Chat 输入区不显示模式胶囊和上下文圆环', st.composerModeChips === 0 && st.contextRings === 0,
-      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings }))
+    check('2d Chat 输入区不显示模式胶囊、上下文圆环和 Agent 选择器', st.composerModeChips === 0 && st.contextRings === 0 && st.agentPickers === 0,
+      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings, agentPickers: st.agentPickers }))
+    await win.locator('.model-pill-btn').click()
+    await win.locator('.cm-model-row').hover()
+    await win.waitForSelector('.cm-sub[data-pane="model"]', { timeout: 5_000 })
+    const chatModels = await win.locator('.cm-sub[data-pane="model"] .menu-item').evaluateAll((items) => items.map((item) => (item.textContent || '').trim()))
+    const directItem = win.locator('.cm-sub[data-pane="model"] .menu-item', { hasText: 'direct-chat-check' }).first()
+    if (await directItem.count()) await directItem.click()
+    const selectedDirect = ((await win.locator('.model-pill-btn').textContent().catch(() => '')) || '').includes('direct-chat-check')
+    check('2e 本地 managed Chat 能拿到并选择本机直连 Provider 模型', chatModels.some((name) => name.includes('direct-chat-check')) && selectedDirect,
+      JSON.stringify({ chatModels, selectedDirect }))
     await win.locator('.t2s-side').screenshot({ path: shots.chat })
     await win.screenshot({ path: shots.full })
 
@@ -218,8 +234,8 @@ async function main() {
     await sleep(1500)
     st = await stateOf()
     check('5b 开着(最近更新的)chat 会话 reload → 恢复它、模式仍 Chat(localStorage 持久)', st.active === 'chat' && st.stored === 'chat' && st.groups === 0, JSON.stringify({ active: st.active, stored: st.stored, groups: st.groups, activeRow: st.activeRow }))
-    check('5c reload 后 Chat 输入区仍不显示模式胶囊和上下文圆环', st.composerModeChips === 0 && st.contextRings === 0,
-      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings }))
+    check('5c reload 后 Chat 输入区仍不显示模式胶囊、上下文圆环和 Agent 选择器', st.composerModeChips === 0 && st.contextRings === 0 && st.agentPickers === 0,
+      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings, agentPickers: st.agentPickers }))
     // 暗色:用户明暗偏好的真源是 forsion_theme_pref(themeStore persistPref;forced_scheme 只是首屏防闪的派生提示,会被 apply 抹掉),
     // 落盘后 reload,装载器按它重算 token(只改 html[data-mode] 不重算,截出来还是亮的)。
     await win.evaluate(`localStorage.setItem('forsion_theme_pref', 'dark')`)

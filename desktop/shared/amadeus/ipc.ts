@@ -249,6 +249,10 @@ export interface ExternalPluginSource {
   blocked?: 'api' | 'minApp'
   /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
   bundle?: PluginBundleInfo
+  /** 随 App 内置(主进程 builtinPlugins.ts 播种的捆绑包):设置页标「内置」、不给卸载按钮(只能停用)。
+   *  ⚠️ 名字不叫 builtin:渲染层 pluginStore 用 `builtin` 区分「代码里注册的内置插件」与外置来源(reload 时按它筛),
+   *  播种来的仍是外置来源,只是不可卸载。 */
+  preinstalled?: boolean
 }
 
 /** Semver-ish comparator (copied from lcl/spaces/userSpaces.core.ts — main process has no @lcl alias). */
@@ -517,8 +521,10 @@ export interface AmadeusApi {
   writeDrawing(drawingPath: string, source: string): Promise<void>
   /** 读取 vault 内确切相对路径的 UTF-8 文本(供插件文件类型);越界/不存在返回 null。 */
   readTextFile(path: string): Promise<string | null>
-  /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。 */
-  writeTextFile(path: string, text: string): Promise<void>
+  /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。
+   *  `create: true` = 新建意图(素文件出生等):云桥据此绕过「本会话见过、现 404 = 别处删了」的重建禁令;
+   *  桌面/移动端本地写盘无此区分,忽略。 */
+  writeTextFile(path: string, text: string, opts?: { create?: boolean }): Promise<void>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */
   listPageProps(folder: string): Promise<PageProps[]>
   /** 外科式写笔记 frontmatter(值 = undefined 删该键):保留 amadeus_* 与正文,原子写。 */

@@ -1,62 +1,110 @@
-// Tiny persisted config in the app's userData dir — remembers the last vault & page
-// so Amadeus reopens where you left off.
-
+// Local vault preferences belong to this device. Cloud bindings belong to one
+// stable Forsion account at one cloud origin, independent of token renewal.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { app } from 'electron'
 import { isDevMode } from '../forsionHome'
+import { loadTanguCreds } from '../forsionAuth'
+import { forsionAccountId } from '../../shared/forsionAccount'
 
 export interface AmadeusCloudSyncConfig {
-  /** 缺省视为启用(登录即同步);仅显式 false 停用。 */
   enabled?: boolean
-  /** 云端 vault id(首次启用时解析并固定)。 */
   vaultId?: string
-  /** 回声抑制用设备标识(X-Amadeus-Client)。 */
   deviceId?: string
 }
 
-export interface AmadeusConfig {
-  /** 当前活动 vault 根(= 渲染端所见;agent 的 amadeus_* 工具实时跟随它)。 */
-  lastVault?: string
-  /** 最近一次的「本地侧」vault 根;活动侧切到云镜像时靠它切回来。 */
-  localVault?: string
-  lastPage?: string
+interface CloudAccountConfig {
   cloudSync?: AmadeusCloudSyncConfig
-  /** 按条目云同步注册表(每个本地 vault 一条:云名 + 已勾选条目)。 */
   entrySync?: import('./sync/entryRegistry').EntrySyncVault[]
 }
 
-let cache: AmadeusConfig | null = null
+export interface AmadeusConfig extends CloudAccountConfig {
+  /** Local paths stay device scoped, even when signed out. */
+  lastVault?: string
+  localVault?: string
+  lastPage?: string
+  /** Read snapshot owner; pass it back on asynchronous cloud config writes. */
+  cloudAccountId?: string | null
+}
+
+interface StoredConfig extends Omit<AmadeusConfig, 'cloudAccountId'> {
+  cloudAccounts?: Record<string, CloudAccountConfig>
+  /** Pre-account-scoping state has no reliable owner. Keep it for recovery,
+   * never silently enroll these notes into whichever account signs in next. */
+  legacyCloudState?: CloudAccountConfig
+}
+
+let cache: StoredConfig | null = null
+let loading: Promise<StoredConfig> | null = null
+let writes: Promise<void> = Promise.resolve()
+
+export function currentCloudAccountId(): string | null {
+  const creds = loadTanguCreds()
+  return forsionAccountId(creds.cloudUrl ?? '', creds.token ?? '')
+}
+
+/** Safe, non-identifying directory/file suffix (no username, origin or token). */
+export function cloudAccountNamespace(accountId: string | null = currentCloudAccountId()): string {
+  return accountId ? createHash('sha256').update(accountId).digest('hex') : 'signed-out'
+}
 
 function configFile(): string {
-  // dev(未打包)与正式版分用不同配置文件:dev 永不继承正式版历史写入的 lastVault,
-  // 两边 Amadeus vault 彻底隔离(dev→~/Forsion-Dev/Amadeus,正式版→~/Forsion/Amadeus)。
   return path.join(app.getPath('userData'), isDevMode() ? 'amadeus-config.dev.json' : 'amadeus-config.json')
 }
 
-/** Absolute path of the persisted Amadeus config (lastVault/lastPage). The agent's
- *  amadeus_* tools read `lastVault` from here live, so they follow the desktop's
- *  actual current vault (custom paths + runtime vault switching). */
-export function amadeusConfigPath(): string {
-  return configFile()
-}
+export function amadeusConfigPath(): string { return configFile() }
 
-export async function readConfig(): Promise<AmadeusConfig> {
+async function storedConfig(): Promise<StoredConfig> {
   if (cache) return cache
-  try {
-    cache = JSON.parse(await fs.readFile(configFile(), 'utf8')) as AmadeusConfig
-  } catch {
-    cache = {}
-  }
-  return cache
+  if (!loading) loading = (async () => {
+    let stored: StoredConfig
+    try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch { stored = {} }
+    // Quarantine unknown-owner legacy bindings. Their files and old shadow files
+    // are deliberately left intact; no automatic upload/delete is authorized.
+    if (stored.cloudSync || stored.entrySync) {
+      stored.legacyCloudState ??= { cloudSync: stored.cloudSync, entrySync: stored.entrySync }
+      delete stored.cloudSync
+      delete stored.entrySync
+    }
+    cache = stored
+    return stored
+  })()
+  return loading
 }
 
-export async function writeConfig(patch: Partial<AmadeusConfig>): Promise<void> {
-  const next = { ...(await readConfig()), ...patch }
-  cache = next
-  try {
-    await fs.writeFile(configFile(), JSON.stringify(next, null, 2), 'utf8')
-  } catch {
-    /* best-effort */
-  }
+export async function readConfig(accountId = currentCloudAccountId()): Promise<AmadeusConfig> {
+  const stored = await storedConfig()
+  const own = accountId ? stored.cloudAccounts?.[cloudAccountNamespace(accountId)] : undefined
+  // Callers mutate entries while preparing changes. A snapshot prevents old
+  // asynchronous work from modifying the persisted owner map behind our back.
+  return structuredClone({
+    lastVault: stored.lastVault, localVault: stored.localVault, lastPage: stored.lastPage,
+    cloudSync: own?.cloudSync, entrySync: own?.entrySync ?? [], cloudAccountId: accountId,
+  })
+}
+
+export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCloudAccountId()): Promise<void> {
+  const snapshot = structuredClone(patch)
+  const work = writes.then(async () => {
+    const stored = await storedConfig()
+    const { cloudSync, entrySync, cloudAccountId: _owner, ...local } = snapshot
+    const next = { ...stored, ...local }
+    if (accountId && ('cloudSync' in snapshot || 'entrySync' in snapshot)) {
+      const key = cloudAccountNamespace(accountId)
+      next.cloudAccounts = { ...stored.cloudAccounts, [key]: {
+        ...stored.cloudAccounts?.[key],
+        ...('cloudSync' in snapshot ? { cloudSync: { ...stored.cloudAccounts?.[key]?.cloudSync, ...cloudSync } } : {}),
+        ...('entrySync' in snapshot ? { entrySync } : {}),
+      } }
+    }
+    const file = configFile()
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    const tmp = `${file}.tmp-${process.pid}`
+    await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
+    await fs.rename(tmp, file)
+    cache = next
+  })
+  writes = work.catch(() => {})
+  return work
 }

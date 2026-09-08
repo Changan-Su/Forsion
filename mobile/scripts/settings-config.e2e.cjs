@@ -38,6 +38,8 @@ const MODELS_BODY = JSON.stringify({
 /** 一级项「模型/Provider」与它的子项「模型」——两语都认(台架不钉语言)。 */
 const TAB_LABELS = ['模型/Provider', 'Model / Provider']
 const SUB_LABELS = ['模型', 'Models']
+const ABOUT_LABELS = ['关于', 'About']
+const FILING_NUMBER = '浙ICP备2026001145号-2A'
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -178,6 +180,35 @@ async function main() {
     if (stored.token && stored.token !== 'e2e-settings-cfg') fail('token 未被落盘偏好污染', String(stored.token))
     else pass('token 未被落盘偏好污染')
 
+    // C. 移动端关于页必须展示 App 备案号与法律文档入口，且都走系统外部浏览器。
+    await tap(page.locator('.settings-mobile-detail-head > button').first(), '返回设置首页')
+    const aboutRow = page.locator('.settings-mobile-row', { hasText: new RegExp(`^\\s*(${ABOUT_LABELS.join('|')})`) }).first()
+    await aboutRow.scrollIntoViewIfNeeded()
+    await tap(aboutRow, '关于')
+    const compliance = page.locator('[data-testid="mobile-compliance"]')
+    await compliance.waitFor({ state: 'visible', timeout: 8000 })
+    const complianceText = (await compliance.innerText()).replace(/\s+/g, ' ')
+    if (complianceText.includes(FILING_NUMBER)) pass('About 展示 App 备案号', FILING_NUMBER)
+    else fail('About 展示 App 备案号', complianceText)
+    if (/隐私政策|Privacy policy/.test(complianceText) && /服务条款|Terms of service/.test(complianceText)) pass('About 展示隐私政策与服务条款')
+    else fail('About 展示隐私政策与服务条款', complianceText)
+
+    await page.evaluate(() => {
+      window.__forsionOpenedUrls = []
+      window.open = (url) => { window.__forsionOpenedUrls.push(String(url)); return null }
+    })
+    for (const id of ['mobile-filing-link', 'mobile-privacy-link', 'mobile-terms-link']) {
+      await tap(page.locator(`[data-testid="${id}"]`), id)
+    }
+    const openedUrls = await page.evaluate(() => window.__forsionOpenedUrls || [])
+    const wantedUrls = [
+      'https://beian.miit.gov.cn/',
+      'https://forsion.net/legal/privacy',
+      'https://forsion.net/legal/terms',
+    ]
+    if (JSON.stringify(openedUrls) === JSON.stringify(wantedUrls)) pass('备案与协议入口指向正确官方地址')
+    else fail('备案与协议入口指向正确官方地址', JSON.stringify(openedUrls))
+
     const shot = path.join(os.tmpdir(), 'forsion-settings-config.png')
     await page.screenshot({ path: shot })
     console.log(`screenshot → ${shot}`)
@@ -192,7 +223,7 @@ async function main() {
     console.error(`\n✗ e2e:settingscfg ${fails.length} 项失败:\n- ${fails.join('\n- ')}`)
     process.exit(1)
   }
-  console.log('\n✅ e2e:settingscfg —— 设置改配置不崩 + 重启仍在')
+  console.log('\n✅ e2e:settingscfg —— 设置持久化 + 移动端合规公示')
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

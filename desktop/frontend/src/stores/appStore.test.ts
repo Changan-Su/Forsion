@@ -141,6 +141,30 @@ describe('appStore.reduceEvent', () => {
     expect(state.subChatsBySession.s1[0].segs).toHaveLength(2)
   })
 
+  it('status llm_call 落 live(sending→accepted 续用 since);首帧/工具/收尾即清', () => {
+    const ref = { current: 'a1' }
+    let seq = 0
+    const emit = (type: string, payload: Record<string, unknown> = {}) => {
+      useApp.getState().reduceEvent('s1', 'r1', ref, { seq: ++seq, type, payload } as AgentRunEvent)
+    }
+    const msg = () => useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')!
+    emit('status', { phase: 'llm_call', stage: 'sending', iteration: 0, bytes: 300_000 })
+    expect(msg().live).toMatchObject({ phase: 'sending', bytes: 300_000 })
+    const since = msg().live!.since
+    emit('status', { phase: 'llm_call', stage: 'accepted', iteration: 0, bytes: 300_000, uploadMs: 1200 })
+    expect(msg().live).toMatchObject({ phase: 'accepted', uploadMs: 1200, since }) // 已送达仍算同一次等待
+    emit('reasoning', { delta: '…' })
+    expect(msg().live).toBeUndefined() // 首帧到 → 清
+    emit('status', { phase: 'llm_call', stage: 'sending', iteration: 1, bytes: 10 })
+    expect(msg().live?.phase).toBe('sending')
+    emit('tool_call', { id: 't9', name: 'run_bash', arguments: '{}' })
+    expect(msg().live).toBeUndefined() // 工具开跑 → 清
+    emit('status', { phase: 'llm_call', stage: 'sending', iteration: 2, bytes: 10 })
+    emit('done', { content: 'ok' })
+    expect(msg().live).toBeUndefined() // 收尾 → 清
+    expect(msg().status).toBe('done')
+  })
+
   it('usage 事件存 runCost/costLimit,越 80% 提示一次;status compacted 落一条系统提示', () => {
     const ref = { current: 'a1' }
     let seq = 0 // per-run 单调:compacted/costwarn 的消息 id 掺 seq 防撞

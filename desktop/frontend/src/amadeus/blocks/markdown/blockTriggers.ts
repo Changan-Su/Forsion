@@ -31,6 +31,17 @@ export interface Trigger {
   lang?: string
 }
 
+/**
+ * 键盘行首前缀是否应在当前块里自动转换。
+ *
+ * 标题正文允许以编号开头（例如 `1. 背景`）。若标题已经由 `### ` 等前缀设好，随后输入
+ * `1. `，应保留为标题文字，而不是悄悄把整行降级成有序列表。只收窄这一种自动触发；
+ * 普通段落的编号列表、标题里的其他前缀，以及斜杠菜单/工具栏的显式转换仍走 applyTrigger。
+ */
+export function canAutoTriggerFromBlock(blockType: string, trig: Trigger): boolean {
+  return blockType !== 'heading' || trig.kind !== 'ordered'
+}
+
 /** 光标前的行内文本;leaf 节点占 1 位占位符,保证字符串下标 == 文档偏移(行内有图片/公式也不错位)。 */
 export function textBeforeCursor($from: ResolvedPos): string {
   return $from.parent.textBetween(0, $from.parentOffset, undefined, '￼')

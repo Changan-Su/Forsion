@@ -395,10 +395,13 @@ export interface CanvasStageProps {
   onBlocksDeleted?: (content: Fragment) => void
   /** 文档中正编辑着光标时切进画布：递增一次，舞台把同一 PM 选区所属卡带回视野。 */
   revealSelection?: number
+  /** 只读舞台(公开分享页):任何按下都只是平移视口,没有选中/搬卡/建形/连线/删除/双击编辑/右键菜单/
+   *  拖入/粘贴/键盘搬动;工具栏不出,缩放胶囊与缩略图照旧。 */
+  readOnly?: boolean
   children: React.ReactNode
 }
 
-export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, children }: CanvasStageProps): React.ReactElement {
+export function CanvasStage({ path, active, getView, main, mainStored, elements, tree, onElements, onTree, onMain, timeline, onCommit, saveFile, parseMd, serializeMd, onBlocksDeleted, revealSelection = 0, readOnly = false, children }: CanvasStageProps): React.ReactElement {
   const hostRef = useRef<HTMLDivElement | null>(null)
   // ⚠️ 渲染期的文案走 `t`(切语言即时重渲);**只依赖 [active] 的指针 effect 里一律用模块级
   //    `translate()`** —— 那些闭包不会随语言重建,读 t 拿到的是旧语言那份。
@@ -428,6 +431,9 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   //    把自己当成了起点),以及框选后按删除什么都没删。渲染仍读 state(ref 变了不会触发重渲)。
   const [tool, setToolState] = useState<Tool>('select')
   const toolRef = useRef<Tool>('select')
+  // 只读闸给只依赖 [active] 的指针/键盘 effect 现读(与 toolRef 同一条纪律)。
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
   const setTool = useCallback((v: Tool): void => { toolRef.current = v; setToolState(v) }, [])
   const [sel, setSelState] = useState<string[]>([])
   const selRef = useRef<string[]>([])
@@ -2201,6 +2207,16 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       //    下一次单击那张卡直接落光标(实测:`a` 打成 `ax`)。
       //  · 抓手 / Alt / 中键只是移动视口，必须保留编辑与 PM 焦点；丝滑 caret 由 vp layout effect 同帧跟随。
       //  · select 工具下才按位置判:点回正在编辑的那张卡是继续编辑,点别处才退出。
+      // 只读舞台:一切按下 = 平移(触屏两指捏合已在上面归 pinch)。唯一放行的是卡内的真控件与双链
+      // (a / button / .wikilink):pointerdown 一旦 preventDefault,浏览器就不再补发 mousedown/click,
+      // 分享页里的双链就点不动了 —— 与下面 CARD_CTL 那条「必须在 preventDefault 之前放行」同一个坑。
+      if (readOnlyRef.current) {
+        if (target.closest(`${CARD_CTL}, .wikilink`)) return
+        e.preventDefault()
+        drag = { kind: 'pan', x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y }
+        capture(e.pointerId)
+        return
+      }
       const cur = editingRef.current
       const panIntent = t === 'pan' || e.altKey || middle
       const otherIntent = t !== 'select' && !panIntent
@@ -2857,6 +2873,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     // 双击:卡片/主卡 = **进编辑 + 居中缩放同时发生**(聚焦那半可在设置里关);形状 = 改文字;
     // 连线 = 改标签;空白 = 新建卡片。单击永远不改变视口。
     const onDblClick = (e: MouseEvent): void => {
+      if (readOnlyRef.current) return // 只读:双击不进编辑、不建卡、不改文字
       // ⚠️ e.target 不可信:两段式在 pointerdown 里 setPointerCapture,派生的 click/dblclick 被
       // 重定向到 host —— 「双击卡片」于是被 isBlank 误判成「双击空白」,凭空建卡;双击形状同族,
       // 该进文字编辑的也建了卡(2026-08-18 用户实报,复现 R1/R1b)。按坐标现场取真实命中,
@@ -2912,6 +2929,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     /** 命中判定与开菜单本身(右键与触屏长按**共用这一份**,别再各写一遍)。
      *  'skip' = 不归舞台管(交给原生/别人),'native' = 明确让位给 PM/原生菜单,'open' = 已开画布菜单。 */
     const stageMenuAt = (target: HTMLElement, x: number, y: number): 'skip' | 'native' | 'open' => {
+      if (readOnlyRef.current) return 'skip' // 只读:右键/长按都不开舞台菜单(交还浏览器原生菜单)
       if (target.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')) return 'skip'
       const shape = target.closest<HTMLElement>(EL_HIT)
       const card = target.closest<HTMLElement>('.amx-ucard')
@@ -2980,6 +2998,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
       return null
     }
     const onStageDragOver = (e: DragEvent): void => {
+      if (readOnlyRef.current) return // 只读:不 preventDefault → 浏览器不会派发 drop
       const view = getView()
       // ⚠️ 每一种 drop 会接的类型,dragover 都必须 preventDefault —— 不然浏览器压根不发 drop。
       if (extKind(e)) {
@@ -3000,6 +3019,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
     const onStageDrop = (e: DragEvent): void => {
       clearDropzone()
+      if (readOnlyRef.current) { e.preventDefault(); return }
       const view = getView()
       // ⚠️ 外部这一支必须 stopPropagation:外层 EditorScope 的 onDrop 也收 Files,不挡的话
       //    同一批文件会被再导入一遍(一份进卡片、一份插到主卡光标处)。
@@ -3076,7 +3096,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
     }
     /** 粘贴到画布 = 落一张卡(文件走附件那条链)。卡内编辑时同样让路给 PM。 */
     const onPaste = (e: ClipboardEvent): void => {
-      if (editingRef.current || !e.clipboardData) return
+      if (readOnlyRef.current || editingRef.current || !e.clipboardData) return
       const files = Array.from(e.clipboardData.files ?? [])
       const text = e.clipboardData.getData('text/plain') ?? ''
       if (!files.length && !text.trim()) return // 空剪贴板:什么都不做,别吞掉事件
@@ -3188,7 +3208,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
    *  是**卡内打字时**焦点在 PM 里,冒泡期第一句就让路了 —— 而统一时间线的意义恰恰是「卡内卡外
    *  一条时序」,在卡里按 Cmd+Z 也必须先问时间线(评审 P0-1 的「交替操作」场景就在卡内)。 */
   const onKeyDownCapture = (e: React.KeyboardEvent): void => {
-    if (!active || e.nativeEvent.isComposing) return // 组字中的键归输入法(Codex P2-4)
+    if (!active || readOnly || e.nativeEvent.isComposing) return // 组字中的键归输入法(Codex P2-4);只读没有撤销栈可退
     const t = e.target as HTMLElement
     if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return // 弹窗输入框的撤销归原生
@@ -3210,7 +3230,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   /** 画布态键盘(冒泡期)。⚠️ 第一句就得放行卡内打字 —— keydown 从 PM 冒泡到舞台,不挡的话在
    *  卡里按 Backspace 会把「选中的形状」删掉。(Cmd+Z 已在捕获期由统一时间线接管,这里没有它。) */
   const onKeyDown = (e: React.KeyboardEvent): void => {
-    if (!active) return
+    if (!active || readOnly) return // 只读:没有选中集合,删除/搬动/建子卡/进编辑一律不接
     const t = e.target as HTMLElement
     if (t.closest('.ProseMirror') || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
     const mod = e.metaKey || e.ctrlKey
@@ -3308,7 +3328,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
   //    往上找包含块的 —— 留着 relative 就会挑中这个没有盒子的祖先,浮层整体偏一个容器位。
   return (
     <div
-      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${tool}` : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
+      className={`amx-stage${active ? '' : ' amx-stage-off'}${active ? ` amx-tool-${readOnly ? 'pan' : tool}` : ''}${readOnly ? ' amx-stage-ro' : ''}${focusMotion ? ' amx-vp-focus' : ''}${active && overviewEnabled && vp.z <= overviewZ ? ' amx-stage-overview' : ''}`}
       ref={hostRef}
       tabIndex={-1}
       onKeyDownCapture={onKeyDownCapture}
@@ -3364,7 +3384,7 @@ export function CanvasStage({ path, active, getView, main, mainStored, elements,
           onCenter={centerFromMiniMap}
         />
       ) : null}
-      {active ? (
+      {active && !readOnly ? (
         <div className="amx-stage-tools" role="toolbar" aria-label={t('canvasstage.toolbar.label')}>
           {/* ⚠️ 形参不叫 `t`:那会把 useI18n 的 `t` 遮住(rule 6 的原型陷阱)。 */}
           {TOOLS.map((item) => (

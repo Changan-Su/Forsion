@@ -6,7 +6,7 @@
  * 子代理后端可换成外部 agent CLI(engine 参数,借 DSH 的 subagent-provider 思路):
  * 复用已有的 deps().engines(ACP 管理器),不新建注册表。装了引擎才暴露该参数。
  */
-import { runSubAgent } from '../../services/subAgent.js';
+import { runSubAgent, SUB_MAX_ITERATIONS } from '../../services/subAgent.js';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
@@ -50,7 +50,7 @@ export const delegateProvider: ToolProvider = {
           function: {
             name: 'delegate',
             description:
-              'Delegate an independent subtask to a subagent (its own context, the same set of tools, up to 8 turns) and return its final report. ' +
+              `Delegate an independent subtask to a subagent (its own context, the same set of tools, up to ${SUB_MAX_ITERATIONS} turns) and return its final report. ` +
               'This is the quick, one-shot mode: fire-and-forget, no back-and-forth (for genuine multi-round deliberation with a peer, use start_discussion instead). ' +
               'Good for tasks with long intermediate steps such as broad searches or batch file analysis — the process does not consume your context, you only get the conclusion. ' +
               'Independent subtasks can run in parallel: issue several delegate calls in one turn and they execute concurrently (keep their write scopes disjoint). ' +

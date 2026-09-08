@@ -349,7 +349,7 @@ interface PageState {
 
   save(): Promise<void>
   /** Force any pending debounced save to disk now, so the main index is fresh before navigating/searching. */
-  flushSave(): Promise<void>
+  flushSave(strict?: boolean): Promise<void>
   reconcileExternal(path: string): Promise<void>
 
   /** 文档级撤销/重做(Cmd+Z / Cmd+Shift+Z / Cmd+Y):覆盖块内文字 + 块的增删/合并/移动/斜杠转换。 */
@@ -392,6 +392,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
   // ponytail: 单槽记账——并发 save 罕见(防抖+flush 都走这里),槽被覆盖时最坏退回旧的「读到略旧内容」现状。
   let flushingPath: string | null = null
   let inflightSave: Promise<void> | null = null
+  let saveFailure: { path: string; error: string } | null = null
   // 外部回灌的合流闸(每面板一份):打字静默期内押后,期间来的事件排进待办集合逐个补做。
   // ⚠️ reconcileGate 不只是记账 —— save() 必须等它,见 save() 顶部那段(评审 P0)。
   const reconcilePending = new Set<string>()
@@ -531,7 +532,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       try {
         // 与 switchVaultSide 同理:换根前先把各面板的待存内容写回【旧根】。
         // 这里的 flush 放在弹目录选择框之前,用户取消了也无害(本来就该落盘)。
-        await flushAllScopes()
+        await flushVaultEditors()
         const info = await amadeus.openVault()
         if (!info) return
         resetAllScopeDocs()
@@ -571,8 +572,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         // 切根前必须先把待存内容在【旧根】落盘并等掉在途写:保存走「相对路径 + 当前根」,
         // 根先换会把旧库活动页原样写进新库(本地页凭空复制进云端库、再被在线同步推上服务器)。
         // **所有面板**都要 flush —— 分屏后隔壁面板各有一份 store 和一个防抖定时器。
-        await flushAllScopes()
-        await inflightSave?.catch(() => {})
+        await flushVaultEditors()
         const info = await api.switchSide(side)
         if (!info) return
         set({
@@ -668,7 +668,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       // v4(2026-08-13):新建笔记以**素文件**出生(空纯 md,零 frontmatter 零标记)——
       // amadeusViews 的绞杀者路由把它送进统一实例编辑器,不再用 newPage 造 v3(amadeus_page+标记)。
       // 素文件对旧端=外来 md(照常可编辑,混装矩阵见 spec §5.2),不受「手机闸」限制。
-      await amadeus.writeTextFile(path, '')
+      await amadeus.writeTextFile(path, '', { create: true })
       track('note.create'); act('note.create', { f: path })
       await get().refreshPages()
       // 聚焦请求必须先于导航:后设时 UnifiedPage 已经挂载并跑完一次性消费 effect,
@@ -1435,14 +1435,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
           // 内存作用域(插件仪表盘):写盘出口换成 sink,库是否打开与本作用域无关
           if (opts.sink) await opts.sink(savedPath, toSave, contents)
           else await amadeus.savePage(savedPath, toSave, contents)
+          if (saveFailure?.path === savedPath) saveFailure = null
           // 并行时代守卫:完成时若已导航去别页,绝不把旧页 manifest/status 盖回画面
           // 保存期间(await savePage)若有结构操作改了 manifest(加删块 / setFmExtra),完成时绝不能把
           // in-memory manifest 整个换回启动快照 toSave,否则那次改动被回滚、下一次防抖又把回滚态存盘 =
           // 静默丢新块/关系(Codex)。只把这次写盘的 updatedAt 合并进【当前】manifest,保住期间的改动。
           set((s) => (s.activePage === savedPath
-            ? { manifest: s.manifest ? { ...s.manifest, updatedAt: toSave.updatedAt } : toSave, status: 'ready' as const, linkGraphVersion: s.linkGraphVersion + 1 }
+            ? { manifest: s.manifest ? { ...s.manifest, updatedAt: toSave.updatedAt } : toSave, status: 'ready' as const, error: null, linkGraphVersion: s.linkGraphVersion + 1 }
             : { linkGraphVersion: s.linkGraphVersion + 1 }))
         } catch (e) {
+          saveFailure = { path: savedPath, error: String(e) }
           set((s) => (s.activePage === savedPath ? { status: 'ready' as const, error: String(e) } : { error: String(e) }))
         } finally {
           flushingPath = null
@@ -1452,16 +1454,16 @@ function makePageStore(opts: PageStoreOptions = {}) {
       await inflightSave
     },
 
-    async flushSave() {
-      if (saveTimer) {
-        clearTimeout(saveTimer)
+    async flushSave(strict = false) {
+      if (saveTimer || (strict && saveFailure?.path === get().activePage)) {
+        if (saveTimer) clearTimeout(saveTimer)
         saveTimer = null
         await get().save() // save() 自己会先等在途写
-        return
+      } else {
+        // No timer does not mean no write: an earlier save may still be in flight.
+        await inflightSave?.catch(() => {})
       }
-      // 没有待发的防抖 ≠ 没有在途写:更早发出的 save 可能仍在飞。路径操作(改名/移动/重写)
-      // 必须等它落地,否则旧路径的写盘在移动之后完成 = 旧文件复活(Codex 评审 P1)。
-      await inflightSave?.catch(() => {})
+      if (strict && saveFailure?.path === get().activePage) throw new Error(saveFailure.error)
     },
 
     async reconcileExternal(path) {
@@ -1578,12 +1580,19 @@ const vaultSlice = (s: PageState): VaultSlice =>
  * 表现就是「切换本地/云端后,本地库里凭空多出一篇云端的笔记」(用户实报)。分屏之前只有一份 store,
  * 所以这条链是分屏引入的:switchVaultSide 里的单份 flush + 作废,分屏后只护住了当前面板。
  */
-export async function flushAllScopes(): Promise<void> {
+export async function flushAllScopes(strict = false): Promise<void> {
   await Promise.all([
-    ...[...stores.values()].map((s) => s.getState().flushSave().catch(() => {})),
+    ...[...stores.values()].map((s) => strict ? s.getState().flushSave(true) : s.getState().flushSave().catch(() => {})),
     // unified(v4)实例的写盘管线不在 scope store 里,经登记处一起落盘(Codex P0:换库竞态)。
-    flushUnifiedScopes(),
+    flushUnifiedScopes(strict),
   ])
+}
+
+/** Files embedded in notes have their own debounce/write queues. Drain all of
+ * them against the old root before any local/cloud directory switch. */
+async function flushVaultEditors(): Promise<void> {
+  const [{ useDbStore }, { useDrawStore }] = await Promise.all([import('./dbStore'), import('./drawingStore')])
+  await Promise.all([flushAllScopes(true), useDbStore.getState().flushAll(true), useDrawStore.getState().flushAll(true)])
 }
 
 /**

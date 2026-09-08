@@ -6,7 +6,7 @@
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
  */
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OverlayAt } from '@lcl/engine'
 import { LogOut, Loader2, Gauge, ChevronDown, ChevronRight, Send, UserRound, ExternalLink, RotateCcw } from 'lucide-react'
@@ -14,6 +14,7 @@ import type { AuthStatusInfo } from '../types'
 import { useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
+import { AccountSwitcher } from './AccountSwitcher'
 
 /** /api/token-quota/my 透传里本菜单消费的字段(percent 是「已用」百分比,展示用 100-x)。 */
 interface QuotaJson {
@@ -45,10 +46,18 @@ export const AccountCard: React.FC<{
   const [usageOpen, setUsageOpen] = useState(false)
   const [confirmReset, setConfirmReset] = useState<ResetScope | ''>('')
   const [busyReset, setBusyReset] = useState(false)
+  const authRequest = useRef(0)
+  const authAction = useRef(0)
+  const actionBusy = useRef(false)
+  const quotaRequest = useRef(0)
+  const resetRequest = useRef(0)
 
   const refresh = useCallback(() => {
+    const request = ++authRequest.current
     setImgError(false)
-    void window.tangu?.authStatus?.().then(setAuth).catch(() => setAuth(null))
+    void window.tangu?.authStatus?.().then((value) => {
+      if (request === authRequest.current) setAuth(value)
+    }).catch(() => { if (request === authRequest.current) setAuth(null) })
   }, [])
 
   useEffect(() => {
@@ -57,7 +66,16 @@ export const AccountCard: React.FC<{
       if (info?.url) onToast?.(`${t('sidebar.account.center')}: ${info.url}${info.userCode ? ` (${info.userCode})` : ''}`)
     })
     // 登录态变化(本窗/他窗登录登出、CLI tangu login 等外部来源经主进程 auth.json watcher 广播)→ 重拉。
-    const offAuth = window.tangu?.onAuthChanged?.(() => refresh())
+    const offAuth = window.tangu?.onAuthChanged?.(() => {
+      ++quotaRequest.current
+      ++resetRequest.current
+      setAuth(null)
+      setMenu(null)
+      setQuota(null)
+      setConfirmReset('')
+      setBusyReset(false)
+      refresh()
+    })
     // 引擎进程态变化(启动/就绪/崩溃)→ 重拉:authStatus.backendState 是本卡「引擎未运行」轴的数据源。
     const offBackend = window.tangu?.onBackendStatus?.(() => refresh())
     // token 过期(handleAuthExpired 派发)→ 重拉 authStatus,使本卡显示过期态 + 点击改走重新登录。
@@ -68,30 +86,56 @@ export const AccountCard: React.FC<{
     const onFocus = (): void => refresh()
     window.addEventListener('focus', onFocus)
     return () => {
+      ++authRequest.current
+      ++quotaRequest.current
       off?.(); offAuth?.(); offBackend?.()
       window.removeEventListener('tangu:auth-expired', onExpired)
       window.removeEventListener('focus', onFocus)
     }
   }, [refresh, onToast, t])
 
-  const login = async (): Promise<void> => {
+  const login = async (accountId?: string): Promise<void> => {
     if (!window.tangu?.forsionLogin) return
+    if (actionBusy.current) return
+    actionBusy.current = true
+    const action = ++authAction.current
+    ++authRequest.current
+    ++quotaRequest.current
     setLoggingIn(true)
+    setMenu(null)
+    setQuota(null)
     try {
-      await window.tangu.forsionLogin()
+      if (accountId) await window.tangu.forsionSwitchAccount!(accountId)
+      else await window.tangu.forsionLogin()
+      if (action !== authAction.current) return
       track('account.login')
       refresh()
       onAuthChange?.()
     } catch (e: any) {
-      onToast?.(t('sidebar.account.loginFail', { e: e?.message || e }), true)
+      if (action === authAction.current) onToast?.(t('sidebar.account.loginFail', { e: e?.message || e }), true)
     } finally {
-      setLoggingIn(false)
+      if (action === authAction.current) { actionBusy.current = false; setLoggingIn(false) }
     }
   }
   const logout = async (): Promise<void> => {
-    await window.tangu?.forsionLogout?.().catch(() => {})
-    refresh()
-    onAuthChange?.()
+    const action = ++authAction.current
+    ++authRequest.current
+    ++quotaRequest.current
+    actionBusy.current = true
+    setLoggingIn(true)
+    setMenu(null)
+    setQuota(null)
+    try {
+      await window.tangu?.forsionLogout?.()
+      if (action !== authAction.current) return
+      setAuth(null)
+      refresh()
+      onAuthChange?.()
+    } catch (e: any) {
+      onToast?.(t('accountSwitcher.failed', { error: String(e?.message || e) }), true)
+    } finally {
+      if (action === authAction.current) { actionBusy.current = false; setLoggingIn(false) }
+    }
   }
   const openCenter = (): void => { void window.tangu?.openAccountCenter?.() }
 
@@ -103,9 +147,14 @@ export const AccountCard: React.FC<{
     setConfirmReset('')
     setQuotaErr(false)
     setQuota(null) // 每次打开都从「加载中」起步,别让上一次的旧数据把失败盖成正常(codex#10)
+    const request = ++quotaRequest.current
+    if (!auth?.loggedIn) return
     void window.tangu?.accountQuota?.()
-      .then((res) => { if (res?.status === 200 && res.json) setQuota(res.json as QuotaJson); else setQuotaErr(true) })
-      .catch(() => setQuotaErr(true))
+      .then((res) => {
+        if (request !== quotaRequest.current) return
+        if (res?.status === 200 && res.json) setQuota(res.json as QuotaJson); else setQuotaErr(true)
+      })
+      .catch(() => { if (request === quotaRequest.current) setQuotaErr(true) })
   }
   useEffect(() => {
     if (!menu) return
@@ -125,8 +174,11 @@ export const AccountCard: React.FC<{
     if (busyReset) return
     if (confirmReset !== scope) { setConfirmReset(scope); return } // 两击确认,且换行即重新确认
     setBusyReset(true)
+    const request = quotaRequest.current
+    const reset = ++resetRequest.current
     try {
       const r = await window.tangu?.accountUseResetCard?.(scope)
+      if (request !== quotaRequest.current) return
       if (r?.status === 200 && r.json?.success) {
         setQuota({
           ...(r.json.quota || {}),
@@ -141,10 +193,12 @@ export const AccountCard: React.FC<{
         onToast?.(String(r?.json?.detail || t('sidebar.account.menu.resetFail')), true)
       }
     } catch (e: any) {
-      onToast?.(String(e?.message || e), true)
+      if (request === quotaRequest.current) onToast?.(String(e?.message || e), true)
     } finally {
-      setBusyReset(false)
-      setConfirmReset('')
+      if (reset === resetRequest.current) {
+        setBusyReset(false)
+        setConfirmReset('')
+      }
     }
   }
 
@@ -167,9 +221,10 @@ export const AccountCard: React.FC<{
   const initial = display.trim().charAt(0).toUpperCase() || 'F'
   // 引擎未运行 → 点击重启引擎;过期 → 重新登录;已登录(有效)→ 弹账号菜单(无 IPC 则直开账号中心);未登录 → 登录。
   const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
+    if (window.tangu?.authAccounts) { openMenu(e.currentTarget as HTMLElement); return }
     if (engineDown) { void window.tangu?.backendRestart?.().finally(refresh); return }
     if (!loggedIn || expired) { void login(); return }
-    if (window.tangu?.accountQuota) openMenu(e.currentTarget as HTMLElement)
+    if (window.tangu?.accountQuota || window.tangu?.forsionLogin) openMenu(e.currentTarget as HTMLElement)
     else openCenter()
   }
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
@@ -199,6 +254,10 @@ export const AccountCard: React.FC<{
         <span className="ap-name">{display}</span>
         <TierBadge tier={auth?.membershipTier} />
       </div>
+      {engineDown && <button className="ap-item" onClick={() => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) }}>
+        <RotateCcw size={14} /><span>{t('sidebar.account.engineDown')}</span>
+      </button>}
+      {loggedIn && <>
       <button className="ap-item" onClick={() => setUsageOpen((v) => !v)}>
         <Gauge size={14} /><span>{t('sidebar.account.menu.usage')}</span><span className="grow" />
         {usageOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -243,9 +302,11 @@ export const AccountCard: React.FC<{
       <button className="ap-item" onClick={() => { openCenter(); setMenu(null) }}>
         <UserRound size={14} /><span>{t('sidebar.account.menu.center')}</span><span className="grow" /><ExternalLink size={12} />
       </button>
-      <button className="ap-item ap-danger" onClick={() => { setMenu(null); void logout() }}>
+      </>}
+      <AccountSwitcher menu busy={loggingIn} onSelect={(id) => void login(id)} onAdd={() => void login()} />
+      {loggedIn && <button className="ap-item ap-danger" onClick={() => { setMenu(null); void logout() }}>
         <LogOut size={14} /><span>{t('sidebar.account.logout')}</span>
-      </button>
+      </button>}
     </OverlayAt>,
     document.body,
   ) : null

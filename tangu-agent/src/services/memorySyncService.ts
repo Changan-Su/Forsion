@@ -16,15 +16,21 @@ import { runAgentFilesSync, type AgentFileSyncResult } from './agentFileSync.js'
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { join } from 'node:path';
+import { agentSyncPermission, agentSyncScope } from './cloudSyncAccount.js';
 
 let brain: CloudBrainServices | null = null;
 let running = false;
+let runningScope: string | null = null;
+let lastScope: string | null = null;
 let lastAt: number | null = null;
 let lastResult: SyncRunResult | null = null;
 
 /** buildBrain 装配时注入云端 brain(httpBrain:有 agentFiles + memory 端点)。 */
 export function setSyncSources(s: { brain: CloudBrainServices }): void {
   brain = s.brain;
+  lastAt = null;
+  lastResult = null;
+  lastScope = null;
 }
 
 export interface SyncRunResult {
@@ -46,8 +52,9 @@ export interface SyncStatus {
   lastResult: SyncRunResult | null;
 }
 
-export function getSyncStatus(): SyncStatus {
-  return { available: !!brain, running, lastAt, lastResult };
+export function getSyncStatus(userId = 'local'): SyncStatus {
+  const scope = agentSyncScope(brain?.agentFiles, userId);
+  return { available: !!scope, running: running && runningScope === scope, lastAt: lastScope === scope ? lastAt : null, lastResult: lastScope === scope ? lastResult : null };
 }
 
 function noCloud(): SyncRunResult {
@@ -57,14 +64,18 @@ function noCloud(): SyncRunResult {
 /** 跑一次同步。并发保护:已在跑则返回上次结果。无云端源 → ok:false。 */
 export async function syncNow(userId: string): Promise<SyncRunResult> {
   if (!brain) return noCloud();
-  if (running) return lastResult ?? noCloud();
+  const activeBrain = brain;
+  const scope = agentSyncScope(activeBrain.agentFiles, userId);
+  if (!scope) return noCloud();
+  if (running) return (lastScope === scope ? lastResult : null) ?? noCloud();
   running = true;
+  runningScope = scope;
   try {
     // 1) 每-agent 文件镜像(cloudSync 开的 agent)。
     let af: AgentFileSyncResult = { ok: true, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0 };
-    if (brain.agentFiles) {
+    if (activeBrain.agentFiles) {
       try {
-        af = await runAgentFilesSync(brain.agentFiles, userId);
+        af = await runAgentFilesSync(activeBrain.agentFiles, userId);
       } catch (e: any) {
         af = { ok: false, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0, error: String(e?.message || e) };
       }
@@ -73,20 +84,28 @@ export async function syncNow(userId: string): Promise<SyncRunResult> {
     let memory: SyncResult['memory'] = 'skipped';
     let logs: SyncResult['logs'] = [];
     try {
-      const xyraStore = createLocalMemoryStore(join(agentsDir(), DEFAULT_AGENT_SLUG));
-      const r = await runMemorySync(xyraStore, brain.memory, { userId });
-      memory = r.memory;
-      logs = r.logs;
+      // The historical global path is also an upload. It needs this account's explicit permission.
+      const permission = agentSyncPermission(DEFAULT_AGENT_SLUG, scope);
+      if (brain === activeBrain && permission.enabled && permission.shared) {
+        const xyraStore = createLocalMemoryStore(join(agentsDir(), DEFAULT_AGENT_SLUG), scope);
+        const r = await runMemorySync(xyraStore, activeBrain.memory, { userId });
+        memory = r.memory;
+        logs = r.logs;
+      }
     } catch { /* 旧路径失败不阻断 */ }
 
     const res: SyncRunResult = {
       ok: af.ok, agents: af.agents, pushed: af.pushed, pulled: af.pulled, deleted: af.deleted, skipped: af.skipped,
       memory, logs, error: af.error,
     };
-    lastResult = res;
-    lastAt = Date.now();
+    if (brain === activeBrain) {
+      lastResult = res;
+      lastAt = Date.now();
+      lastScope = scope;
+    }
     return res;
   } finally {
     running = false;
+    runningScope = null;
   }
 }

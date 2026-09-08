@@ -76,10 +76,11 @@ function activeAgentDir(): string {
  * fixedBaseDir 显式传入(同步服务/测试/Historian)→ 固定目录;省略 → 每次调用按当前 run 上下文的
  * active agent 解析(MEMORY.md / LOG/<date>.md / .sync.json 落 ~/.tangu/agents/<slug>/)。
  */
-export function createLocalMemoryStore(fixedBaseDir?: string): LocalMemoryStore {
+export function createLocalMemoryStore(fixedBaseDir?: string, syncScope?: string): LocalMemoryStore {
   const base = (): string => fixedBaseDir ?? activeAgentDir();
   const memFile = (): string => join(base(), 'MEMORY.md');
-  const metaFile = (): string => join(base(), '.sync.json');
+  const metaFile = (): string => join(base(), syncScope ? `.sync-${syncScope}.json` : '.sync.json');
+  const baseFile = (): string => join(base(), syncScope ? `.MEMORY-${syncScope}.base.md` : '.MEMORY.base.md');
   const logDir = (): string => join(base(), 'LOG');
   const logFile = (date: string): string => join(logDir(), `${date}.md`);
 
@@ -132,11 +133,11 @@ export function createLocalMemoryStore(fixedBaseDir?: string): LocalMemoryStore 
     memoryLocalUpdatedAt: () => readMeta().memory.localUpdatedAt,
     logLocalUpdatedAt: (date: string) => readMeta().logs[date]?.localUpdatedAt ?? 0,
     readMemoryBase() {
-      try { return readFileSync(join(base(), '.MEMORY.base.md'), 'utf8'); } catch { return null; }
+      try { return readFileSync(baseFile(), 'utf8'); } catch { return null; }
     },
     writeMemoryBase(content: string) {
       ensureDir(base());
-      try { writeFileSync(join(base(), '.MEMORY.base.md'), content, 'utf8'); } catch { /* best-effort */ }
+      try { writeFileSync(baseFile(), content, 'utf8'); } catch { /* best-effort */ }
     },
     archiveMemoryConflict(content: string): boolean {
       ensureDir(base());

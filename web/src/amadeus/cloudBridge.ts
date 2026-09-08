@@ -25,6 +25,7 @@ import {
   type PageManifest,
 } from '@amadeus-shared/compiler'
 import { joinRel } from '@amadeus-shared/assets'
+import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { cloudVaultNamesFrom } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
 import { parseDrawing, withSceneJson } from '@amadeus-shared/excalidraw/format'
@@ -109,6 +110,10 @@ export function ensureActiveVault(): Promise<string> {
 
 /** 同步工厂:内部状态全在闭包;网络在各方法内 ensureVault() 后才发生。 */
 export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
+  // Capture once: callbacks from an older bridge must only update its own account's cache.
+  const activeVaultKey = contentStorageKey(ACTIVE_VAULT_KEY)
+  const TREE_SNAP_KEY = contentStorageKey('amadeus_tree_snap')
+  const LAST_PAGE_KEY = contentStorageKey('amadeus_last_page')
   // randomUUID 需要 secure context(https/localhost);http 内网部署兜底随机串,别让工厂抛挂白屏。
   const clientId =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -134,7 +139,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // P2:localStorage 可指定活动 vault(含别人共享给我的);不在列表 → 可能是共享库(listVaults 只回自有),
       // 经 shared-with-me 验证后采用;仍无 → 静默回落自己的(被移出共享/失效)。
       let want: string | null = null
-      try { want = localStorage.getItem(ACTIVE_VAULT_KEY) } catch { /* ignore */ }
+      try { want = localStorage.getItem(activeVaultKey) } catch { /* ignore */ }
       if (want && !r.vaults.some((x) => x.id === want)) {
         try {
           const shared = await http.get<{ items: Array<{ vaultId: string }> }>('/amadeus/shared-with-me')
@@ -166,14 +171,92 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- path → seq(乐观并发基准;只由自己的 GET/PUT 更新) ---------------------
   const seqMap = new Map<string, number>()
-  const noteSeq = (path: string, seq: number): void => { seqMap.set(path, seq) }
-  const forgetSeq = (path: string): void => { seqMap.delete(path); pageCache.delete(path) }
+  /** 本会话从服务端拿到过 seq 的路径。只由**本端**的删除/改名(forgetSeq/migrateSeq)清掉,别处的删除不清。
+   *  用途:自动保存撞上 404 时区分「新文件」与「别处删掉了」—— 后者绝不能按 baseSeq 0 重建。
+   *  2026-09-05 幽灵旧名空白页的真因:桌面把 A 改名成 B 后,手机端开着 A 的编辑器一保存,
+   *  baseSeqFor(A) 404 → 0 → 把 A 重新造出来;桌面删一次它造一次。 */
+  const everKnown = new Set<string>()
+  /** 别处改名/移走:旧路径 → 新路径(SSE move 明细)。写到旧路径的自动保存改投新路径。 */
+  const movedTo = new Map<string, string>()
+  /** 已提示过「别处删了/挪了」的路径,免得每次防抖保存都弹一条。 */
+  const vanishedToasted = new Set<string>()
+  class VanishedError extends Error { constructor(readonly path: string) { super(`vanished elsewhere: ${path}`) } }
+  const noteSeq = (path: string, seq: number): void => { seqMap.set(path, seq); everKnown.add(path); movedTo.delete(path) }
+  const forgetSeq = (path: string): void => { seqMap.delete(path); pageCache.delete(path); everKnown.delete(path) }
   const migrateSeq = (from: string, to: string, seq?: number): void => {
     const s = seq ?? seqMap.get(from)
-    seqMap.delete(from)
-    if (s !== undefined) seqMap.set(to, s)
+    seqMap.delete(from) // everKnown(from) **保留**:旧路径此后 404 = 挪走了,任何打开/回灌都不许当新文件重建
+    if (s !== undefined) { seqMap.set(to, s); everKnown.add(to) }
     pageCache.delete(from) // 缓存值内嵌 pagePath,迁移会带错路径 → 两端直接作废
     pageCache.delete(to)
+  }
+  /** 自动保存的落点:别处挪走了 → 跟到新路径;别处删了 → 抛 VanishedError(调用方提示 + 不写)。 */
+  const writeTargetFor = async (path: string): Promise<{ target: string; base: number }> => {
+    const target = resolveMoved(path)
+    if (target !== path && !vanishedToasted.has(path)) {
+      vanishedToasted.add(path)
+      notify(`这篇笔记已在别处改名为「${target.split('/').pop()}」,本次修改已保存到新名字`)
+    }
+    return { target, base: await baseSeqFor(target) }
+  }
+  const noteVanished = (path: string): void => {
+    if (vanishedToasted.has(path)) return
+    vanishedToasted.add(path)
+    notify('这篇笔记已在别处被删除或移走,本次修改没有写到云端(请另存为新笔记)', true)
+  }
+  /** 别名链跟到底(A→B→C;有环/超长即止)。 */
+  const resolveMoved = (path: string): string => {
+    let cur = path
+    const seen = new Set<string>([path])
+    for (let i = 0; i < 16; i++) {
+      const next = movedTo.get(cur)
+      if (!next || seen.has(next)) break
+      seen.add(next)
+      cur = next
+    }
+    return cur
+  }
+  /** 写队列锁键:旧路径与其别名落点共用一把锁 —— 否则旧编辑器按 A 排队、新编辑器按 B 排队,实际都写 B,
+   *  同一 baseSeq 并发 PUT,一方 409 丢改动(Codex 终审 P0)。 */
+  const keysFor = (path: string): string[] => {
+    const t = resolveMoved(path)
+    return t === path ? [path] : [path, t]
+  }
+  /** 目标被删/复用时清掉所有指向它的别名:旧编辑器此后按自己的路径 404 → vanished,不会写进复用者。 */
+  const dropAliasesTo = (target: string): void => {
+    for (const k of [...movedTo.keys()]) if (resolveMoved(k) === target) movedTo.delete(k) // 整条上游链(A→B→C 删 C 也清 A)
+  }
+  /** 落点锁:入队时按当时的别名取锁,任务真正跑时别名可能已变(排队期间收到 A→B)。目标不在手里的锁里
+   *  → 再按目标排一次队,否则与 B 的编辑器同 baseSeq 并发 PUT(Codex 终审 P0)。 */
+  const underTarget = <T,>(held: string[], target: string, fn: () => Promise<T>): Promise<T> =>
+    held.includes(target) ? fn() : enqueue([target], fn)
+  /** 别处删掉了、本端还有未保存正文:另存为「X (recovered 日期 时分).md」,此后这个编辑器的保存都落到那份
+   *  (别名)。不按原路径重建 —— 那就是用户报的「删了还会出现」;空白正文没什么可保,提示后放弃。 */
+  const recoverVanished = async (path: string, text: string, meaningful: boolean): Promise<string | null> => {
+    if (!meaningful) { noteVanished(path); return null }
+    const d = new Date()
+    const two = (n: number): string => String(n).padStart(2, '0')
+    const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}${two(d.getMinutes())}`
+    const stem = path.replace(/\.md$/i, '')
+    for (let n = 0; n < 5; n++) {
+      const rp = `${stem} (recovered ${stamp}${n ? `-${n + 1}` : ''}).md`
+      try {
+        await putFile(rp, text, 0)
+      } catch (e) {
+        if (is409(e)) continue // 同名已存在(同一分钟第二次)→ 换后缀
+        throw e
+      }
+      movedTo.set(path, rp)
+      invalidateTree()
+      if (!vanishedToasted.has(path)) {
+        vanishedToasted.add(path)
+        notify(`这篇笔记已在别处被删除或移走,本端未保存的修改已另存为「${rp.split('/').pop()}」`, true)
+      }
+      return rp
+    }
+    // 同一分钟五个候选都撞了:抛错让调用方保留脏状态(返回 null 会被当成保存成功,草稿随卸载丢失)。
+    noteVanished(path)
+    throw new VanishedError(path)
   }
   const migrateSeqPrefix = (fromDir: string, toDir: string): void => {
     const fromPrefix = `${fromDir}/`
@@ -184,11 +267,24 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
     }
     for (const k of [...pageCache.keys()]) if (k.startsWith(fromPrefix)) pageCache.delete(k)
+    // 前缀下见过的路径:新路径也算见过,旧路径记别名 —— 否则文件夹改名后旧路径的编辑器一保存就按 404→0 重建。
+    for (const k of [...everKnown]) {
+      if (!k.startsWith(fromPrefix) || movedTo.has(k)) continue // 已别名到别处的旧路径(docs/A→other/B)不许被前缀迁移改指
+      const nk = `${toDir}/${k.slice(fromPrefix.length)}`
+      everKnown.add(nk)
+      movedTo.set(k, nk)
+    }
   }
   const forgetSeqPrefix = (dir: string): void => {
     const prefix = `${dir}/`
     for (const k of [...seqMap.keys()]) if (k === dir || k.startsWith(prefix)) seqMap.delete(k)
     for (const k of [...pageCache.keys()]) if (k === dir || k.startsWith(prefix)) pageCache.delete(k)
+    for (const k of [...everKnown]) if (k === dir || k.startsWith(prefix)) { everKnown.delete(k); dropAliasesTo(k) } // 本端删的文件夹:同名可重建
+  }
+  /** 别处删了整个文件夹:前缀下 seq/缓存作废、指向它们的别名清掉,everKnown 保留(不许按旧路径重建)。 */
+  const vanishPrefix = (dir: string): void => {
+    const prefix = `${dir}/`
+    for (const k of [...seqMap.keys()]) if (k === dir || k.startsWith(prefix)) { seqMap.delete(k); pageCache.delete(k); dropAliasesTo(k) }
   }
 
   // ---- 树缓存(60s;SSE onStructureChange 即时 invalidate,写路径各自 invalidate) ----
@@ -215,7 +311,6 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // ---- 树的 localStorage 快照(冷启动 SWR:先渲染上次的树,真启动后台跑) ----------
   // 单 blob 含 vault id;每次 fetchTree 成功即覆盖。陈旧窗口=到 revalidate 完成的几秒;
   // 期间点开远端已删的笔记会 create-on-open 复活它(与 wikilink 点击建页同语义,接受的天花板)。
-  const TREE_SNAP_KEY = 'amadeus_tree_snap'
   const saveTreeSnap = (v: string, tree: TreeDto): void => {
     try { localStorage.setItem(TREE_SNAP_KEY, JSON.stringify({ v, tree })) } catch { /* 配额/私有模式 */ }
   }
@@ -225,7 +320,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       if (!raw) return null
       const blob = JSON.parse(raw) as { v?: unknown; tree?: { pages?: unknown; files?: unknown; folders?: unknown } }
       if (typeof blob.v !== 'string' || !blob.tree || !Array.isArray(blob.tree.pages) || !Array.isArray(blob.tree.files) || !Array.isArray(blob.tree.folders)) return null
-      const want = localStorage.getItem(ACTIVE_VAULT_KEY)
+      const want = localStorage.getItem(activeVaultKey)
       if (want && want !== blob.v) return null // 刚切过库:旧库快照不认
       return blob as { v: string; tree: TreeDto }
     } catch { return null }
@@ -259,7 +354,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- lastPage(localStorage,按 vault 分键)+ 资源 URL 的活动页基准 ------------
   let lastLoadedPage: string | null = null
-  const lastPageKey = (): string => `amadeus_last_page:${vid()}`
+  const lastPageKey = (vault = vid()): string => `${LAST_PAGE_KEY}:${vault}`
   const rememberPage = (p: string): void => {
     lastLoadedPage = p
     try { localStorage.setItem(lastPageKey(), p) } catch { /* private mode */ }
@@ -310,6 +405,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       lastLoadedPage: () => lastLoadedPage,
       onPageChange: (p) => { pageCache.delete(p); fireExternal(p) },
       onDbChange: (p) => fireDb(p),
+      // 别处改名:seq 随路径迁移,旧路径记「已挪走」→ 开着旧路径的编辑器下一次保存跟到新路径,而不是
+      // 按旧路径 404→baseSeq 0 把旧名文件重新造出来。别处删除:忘掉 seq 但**留着** everKnown,
+      // 使 baseSeqFor 对它抛 VanishedError 而不是当新文件创建。
+      onPageMoved: (from, to, seq) => { movedTo.set(from, to); migrateSeq(from, to, seq ?? undefined) },
+      onPageDeleted: (p) => { seqMap.delete(p); pageCache.delete(p); dropAliasesTo(p) },
+      onFolderMoved: (from, to) => migrateSeqPrefix(from, to),
+      onFolderDeleted: (dir) => vanishPrefix(dir),
       // 结构事件不带明细 → 页面缓存整体作废(300ms 防抖 + 回声抑制,频率低,代价=切回多一发 GET)
       onStructureChange: () => { invalidateTree(); pageCache.clear(); fireStructure() },
       onPresence: pushPresence,
@@ -334,7 +436,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return r
   }
 
-  /** 已知 seq 用之;未知(本会话没 GET 过)先 GET 学习;404 = 创建(baseSeq 0)。 */
+  /** 已知 seq 用之;未知(本会话没 GET 过)先 GET 学习;404 = 创建(baseSeq 0)——
+   *  **除非**本会话见过这个路径(everKnown):那是别处删掉/挪走了,抛 VanishedError,绝不重建。 */
   const baseSeqFor = async (path: string): Promise<number> => {
     const known = seqMap.get(path)
     if (known !== undefined) return known
@@ -342,8 +445,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const f = await getFile(path)
       return f.seq
     } catch (e) {
-      if (is404(e)) return 0
-      throw e
+      if (!is404(e)) throw e
+      if (everKnown.has(path)) throw new VanishedError(path)
+      return 0
     }
   }
 
@@ -392,11 +496,16 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return page
   }
 
+  /** 「打开即创建」只对本会话从未见过的路径成立:见过(everKnown)、现 404 = 别处删掉/挪走了,抛 VanishedError。
+   *  否则陈旧标签页/后退/reconcilePage 都会把刚删的页原样造回云端;显式新建走 newPage,不受此限。 */
   const loadOrCreate = async (pagePath: string): Promise<LoadedPage> => {
     try {
       return await fetchAndParse(pagePath)
     } catch (e) {
-      if (is404(e)) return createViaCompiler(pagePath)
+      if (is404(e)) {
+        if (everKnown.has(pagePath)) throw new VanishedError(pagePath)
+        return createViaCompiler(pagePath)
+      }
       throw e
     }
   }
@@ -489,7 +598,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         }
       })()
       let lp: string | undefined
-      try { lp = localStorage.getItem(`amadeus_last_page:${snap.v}`) || undefined } catch { /* ignore */ }
+      try { lp = localStorage.getItem(lastPageKey(snap.v)) || undefined } catch { /* ignore */ }
       const pages = snap.tree.pages.filter(visiblePath)
       return {
         root: `cloud://${snap.v}`,
@@ -557,20 +666,37 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       return page
     },
 
-    savePage: (pagePath, manifest: PageManifest, contents) =>
-      enqueue([pagePath], async () => {
+    savePage: (pagePath, manifest: PageManifest, contents) => {
+      const held = keysFor(pagePath)
+      return enqueue(held, async () => {
         await ensureVault()
         const content = compile(manifest, contents)
-        const base = await baseSeqFor(pagePath)
+        const meaningful = Object.values(contents).some((c) => typeof c === 'string' && c.trim().length > 0)
+        let target: string
+        let base: number
         try {
-          await putFile(pagePath, content, base)
-          cachePage(pagePath, parsePageSource(pagePath, content, nowIso())) // 写后回填,切回零请求
+          ({ target, base } = await writeTargetFor(pagePath))
+        } catch (e) {
+          // 别处删了:不按原路径重建、不 reconcile(那条会 404→newPage 又造回来);有正文就另存为 recovered 副本
+          if (e instanceof VanishedError) { await recoverVanished(pagePath, content, meaningful); return }
+          throw e
+        }
+        await underTarget(held, target, async () => {
+        try {
+          await putFile(target, content, base)
+          cachePage(target, parsePageSource(target, content, nowIso())) // 写后回填,切回零请求
         } catch (e) {
           if (is409(e)) {
+            const body = (e as HttpError).body as ConflictBody | null
+            if (body?.code === 'CONFLICT' && body.seq === 0) {
+              // 基线还在、文件已不在 = 别处删掉/挪走了(SSE 还没到)。采纳 seq 0 就是下一次保存把它重建。
+              seqMap.delete(target)
+              await recoverVanished(pagePath, content, meaningful)
+              return
+            }
             // 云端已被别处更新(EXISTS/CONFLICT 同治):采纳服务端 seq,走既有 LWW 通道
             // (onExternalChange → pageStore.reconcileExternal 重载服务端版本)。
-            const body = (e as HttpError).body as ConflictBody | null
-            if (body && typeof body.seq === 'number') noteSeq(pagePath, body.seq)
+            if (body && typeof body.seq === 'number') noteSeq(target, body.seq)
             pageCache.delete(pagePath) // 服务端为准,reconcile 会重拉
             notify(CONFLICT_TOAST, true)
             // 必须晚于 pageStore.save() 的收尾 set(否则本地旧 manifest 会盖回 reconcile 结果)。
@@ -582,7 +708,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           }
           throw e
         }
-      }),
+        })
+      })
+    },
 
     renamePage: (oldPath, newName, manifest: PageManifest, contents) =>
       enqueue(
@@ -1068,20 +1196,53 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         throw e
       }
     },
-    writeTextFile: (p, text) =>
-      enqueue([p], async () => {
+    writeTextFile: (p, text, opts) => {
+      const held = keysFor(p)
+      return enqueue(held, async () => {
         await ensureVault()
+        if (opts?.create) {
+          // 新建意图(素文件出生 / 模板 / 种子笔记):按新文件创建,绕过「本会话见过、现 404 = 别处删了」的
+          // 重建禁令 —— 别处删了 untitled.md 后本端再新建一篇同名是合法的。已存在(别处刚建了同名)→ 落回普通写。
+          try {
+            await putFile(p, text, 0)
+            movedTo.delete(p)
+            invalidateTree()
+            return
+          } catch (e) {
+            if (!is409(e)) throw e
+          }
+        }
+        // v4/unified 笔记的唯一落盘通道也是它:别处挪走 → 跟到新路径;别处删了 → 有正文就另存为 recovered 副本
+        // (此后这个编辑器的保存都落到那份),绝不按 baseSeq 0 把旧路径重新造出来。
+        const meaningful = text.trim().length > 0
+        let target: string
+        let base: number
         try {
-          await putFile(p, text, await baseSeqFor(p))
+          ({ target, base } = await writeTargetFor(p))
+        } catch (e) {
+          if (e instanceof VanishedError) { await recoverVanished(p, text, meaningful); return }
+          throw e
+        }
+        await underTarget(held, target, async () => {
+        try {
+          await putFile(target, text, base)
         } catch (e) {
           // 409 = 预读 seq 后被别人抢先写了。纯文本没有 drawing 那种元素级可合并结构,
           // 所以按桌面语义(本地原子写,后写胜)拉最新 seq 重写一次 —— 不能就这么抛给插件调用方,
           // 那等于用户这次修改静默消失(插件未必展示错误、更未必重试)。
           if (!is409(e)) throw e
-          const f = await getFile(p) // 顺带对齐 noteSeq
-          await putFile(p, text, f.seq, true)
+          let f: FileDto
+          try {
+            f = await getFile(target) // 顺带对齐 noteSeq
+          } catch (e2) {
+            if (is404(e2)) { await recoverVanished(p, text, meaningful); return } // 基线在、文件没了 = 别处删掉
+            throw e2
+          }
+          await putFile(target, text, f.seq, true)
         }
-      }),
+        })
+      })
+    },
 
     // ---- 笔记视图(Bases) -------------------------------------------------------
     listPageProps: async (folder): Promise<PageProps[]> => {

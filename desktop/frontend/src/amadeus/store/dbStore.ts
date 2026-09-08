@@ -7,6 +7,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import { stampUpdatedRows } from '@amadeus-shared/db/stamp'
 import { amadeus } from '../api'
 import { kickAutomation } from './automationKick'
+import { usePageStore } from './pageStore'
 
 export interface DbEntry {
   status: 'loading' | 'ok' | 'missing' | 'corrupt'
@@ -20,7 +21,7 @@ export interface DbEntry {
 
 interface DbStoreState {
   entries: Record<string, DbEntry>
-  /** 缓存代次:**整片作废**时 +1(目前只有切库,见 dbAggregateStore 末尾的 vaultRoot 订阅)。
+  /** 缓存代次:**整片作废**时 +1(切库,见本模块末尾的 vaultRoot 订阅)。
    *  存在的理由:消费者的加载 effect 依赖的是 `[pagePath, ref]`,清空 entries 不会让它们重跑 ——
    *  于是「启动时 vault 还没打开就挂上的多维表」被清成 undefined 后**永远**停在「读取数据库…」
    *  (用户实报:一进 ERP Space 就一直显示在加载)。把 gen 写进 deps,清空即重读。
@@ -35,7 +36,8 @@ interface DbStoreState {
   reloadByPath(dbPath: string): Promise<void>
   /** 纯函数换 data + 防抖写穿;非 ok 态 no-op(损坏文件绝不回写)。 */
   mutate(ref: string, fn: (d: DbFile) => DbFile): void
-  flushAll(): Promise<void>
+  /** strict is the account-switch barrier: unresolved writes must reject. */
+  flushAll(strict?: boolean): Promise<void>
   /** 文件改名后清场:清 timer + 删所有解析到该路径的条目,不落盘(防 stale entry 把数据写回旧路径)。 */
   dropByPath(dbPath: string): void
 }
@@ -51,7 +53,7 @@ const pendingOps = new Map<string, ((d: DbFile) => DbFile)[]>()
 
 /** per-ref 单飞:persist 是异步的,没有它两次落盘会并发跑,第二次可能把第一次已提交的 op 再应用一遍
  *  (append 类 op 重复应用 = 凭空多一行)。 */
-const inFlight = new Set<string>()
+const inFlight = new Map<string, Promise<void>>()
 
 /** 只删**本次真正提交进去**的那些 op(按前缀 ack)。整队列 delete 会把 CAS 等待期间用户新加的
  *  改动一起丢掉 —— 那些 op 还没被写进任何一次提交。 */
@@ -70,19 +72,18 @@ function applyOps(data: DbFile, ops: ((d: DbFile) => DbFile)[]): DbFile {
   return ops.reduce((d, fn) => fn(d), data)
 }
 
-async function persist(ref: string, attempt = 0): Promise<void> {
-  if (attempt === 0) {
-    if (inFlight.has(ref)) return // 上一次落盘还在飞;它结束时若还有余量会被下一次 mutate 的 timer 接走
-    inFlight.add(ref)
-  }
-  try {
-    await persistInner(ref, attempt)
-  } finally {
-    if (attempt === 0) inFlight.delete(ref)
-  }
+function persist(ref: string): Promise<void> {
+  const existing = inFlight.get(ref)
+  if (existing) return existing // Flush must wait for the real write, not merely observe it.
+  const running = persistInner(ref, 0).finally(() => {
+    if (inFlight.get(ref) === running) inFlight.delete(ref)
+  })
+  inFlight.set(ref, running)
+  return running
 }
 
-async function persistInner(ref: string, attempt: number): Promise<void> {
+async function persistInner(ref: string, attempt: number, gen = useDbStore.getState().gen): Promise<void> {
+  if (gen !== useDbStore.getState().gen) return
   const e = useDbStore.getState().entries[ref]
   if (!e || e.status !== 'ok' || !e.path || !e.data) return
   const ops = [...(pendingOps.get(ref) ?? [])] // 快照:CAS 等待期间用户可能又 mutate,那些不属于本批
@@ -90,10 +91,12 @@ async function persistInner(ref: string, attempt: number): Promise<void> {
     // 宿主没有比对交换写(云端 / 移动端桥),或这份数据没有票据 → 老路无条件写。
     if (!amadeus.writeDatabaseCas || !e.version) {
       await amadeus.writeDatabase(e.path, e.data)
+      if (gen !== useDbStore.getState().gen) return
       ackOps(ref, ops)
       return
     }
     const r = await amadeus.writeDatabaseCas(e.path, e.data, e.version)
+    if (gen !== useDbStore.getState().gen) return
     if (r.ok) {
       ackOps(ref, ops)
       set0(ref, (cur) => ({ ...cur, version: r.version }))
@@ -105,15 +108,16 @@ async function persistInner(ref: string, attempt: number): Promise<void> {
     // 冲突:磁盘上已是别人的新版本。重读 → 把本地这批改动重放上去 → 再写。
     if (attempt >= MAX_CAS_RETRY) { arm(ref); return } // 重试耗尽:重新武装 timer,别把改动困在内存里
     await useDbStore.getState().reload(e.path, ref)
+    if (gen !== useDbStore.getState().gen) return
     const fresh = useDbStore.getState().entries[ref]
     if (!fresh || fresh.status !== 'ok' || !fresh.data) return
     // 重放**当前全部** pending(含等待期间新加的),而不是本批快照 —— 重读已经把内存态换成磁盘版了。
     set0(ref, (cur) => ({ ...cur, data: applyOps(fresh.data as DbFile, pendingOps.get(ref) ?? []) }))
-    await persistInner(ref, attempt + 1)
+    await persistInner(ref, attempt + 1, gen)
   } catch {
     // 主进程校验拒写/磁盘错误:内存态与 pendingOps 都保留,并重新武装 timer
     // (只靠「下次 mutate 再试」的话,用户停手不动这批改动就永远不落盘)。
-    arm(ref)
+    if (gen === useDbStore.getState().gen) arm(ref)
   }
 }
 
@@ -143,9 +147,11 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
   },
 
   async reload(pagePath, ref) {
+    const gen = get().gen
     set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, data: null } } }))
     try {
       const r = await amadeus.readDatabase(pagePath, ref)
+      if (gen !== get().gen) return
       const entry: DbEntry =
         r.status === 'ok'
           ? { status: 'ok', path: r.path, data: r.data, version: r.version }
@@ -154,17 +160,20 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
             : { status: 'missing', path: null, data: null }
       set((s) => ({ entries: { ...s.entries, [ref]: entry } }))
     } catch {
+      if (gen !== get().gen) return
       set((s) => ({ entries: { ...s.entries, [ref]: { status: 'missing', path: null, data: null } } }))
     }
   },
 
   async reloadByPath(dbPath) {
+    const gen = get().gen
     // entry.path 是 readDatabase 解析出的确切 vault 相对路径;传它作 pagePath 让 basename ref 也能正确重解析。
     const refs = Object.entries(get().entries)
       .filter(([, e]) => e.path === dbPath)
       .map(([ref]) => ref)
     await Promise.all(refs.map(async (ref) => {
       await get().reload(dbPath, ref)
+      if (gen !== get().gen) return
       // 外部改动落地时,本地可能还有没落盘的改动(防抖窗口里)。重读会把它们冲掉 —— 重放回去,
       // 否则「自动化加了一行」会顺手吃掉用户此刻正在敲的那个格子。
       const ops = pendingOps.get(ref)
@@ -187,12 +196,17 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     arm(ref)
   },
 
-  async flushAll() {
+  async flushAll(strict = false) {
     // 也要冲刷「有 pending 但 timer 已消失」的 ref(CAS 重试耗尽/异常路径),否则这批改动只留在内存。
-    const refs = [...new Set([...saveTimers.keys(), ...pendingOps.keys()])]
+    const refs = [...new Set([...saveTimers.keys(), ...pendingOps.keys(), ...inFlight.keys()])]
     for (const t of saveTimers.values()) clearTimeout(t)
     saveTimers.clear()
     await Promise.all(refs.map((r) => persist(r)))
+    if (strict && pendingOps.size) {
+      // persistInner preserves pending operations on disk errors/CAS exhaustion.
+      // A resolved promise is therefore not proof that it is safe to switch roots.
+      throw new Error(`Database changes could not be saved: ${[...pendingOps.keys()].join(', ')}`)
+    }
   },
 
   dropByPath(dbPath) {
@@ -213,6 +227,19 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     })
   },
 }))
+
+// Own this invalidation here so every database consumer is protected, including
+// views that never import dbAggregateStore. Root switches flush before this reset.
+usePageStore.subscribe((s, p) => {
+  if (s.vaultRoot !== p.vaultRoot) useDbStore.setState((d) => ({ entries: {}, gen: d.gen + 1 }))
+})
+useDbStore.subscribe((s, p) => {
+  if (s.gen === p.gen) return
+  for (const timer of saveTimers.values()) clearTimeout(timer)
+  saveTimers.clear()
+  pendingOps.clear()
+  inFlight.clear()
+})
 
 // 退出前 best-effort 冲刷(与 pageStore 400ms 防抖同级的既有丢尾窗口,尽力缩小)。
 if (typeof window !== 'undefined') {

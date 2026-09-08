@@ -65,6 +65,7 @@ const GATE_FILES = [
 const SKIP = {
   // —— 启动序列 ——
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
+  installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',
   windowKind: '多窗分流(?window=detached/mini);移动端只有一个 WebView',
   DetachedRoot: '同上:拖出来的独立窗',
   MiniRoot: '同上:悬浮 mini 卡片',
@@ -98,7 +99,7 @@ const KNOWN_GATES = {
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
   'window.tangu?.backendStatus': '桌面壳语义(含 external 模式)',
   'window.tangu?.mobile': '移动端标志',
-  'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话默认档(desktop→work,web/mobile→chat)据此派生,不是功能门控',
+  'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话现已全端默认 Work，此标志用于工作区落点等端差异，不是功能门控',
   'window.tangu?.spacesList': '用户自定义 Space 读盘 — 仅桌面',
   'window.tangu?.spacesSave': '用户自定义 Space 写盘 — 仅桌面',
   'window.tangu?.getConfig': '前台窗口采样调试面板的 ⌘K 入口 — 开关真源是主进程配置(默认关,只在开发者选项里能开);移动端/web 没有 host 进程,这个能力整体不存在,命令不注册是对的',

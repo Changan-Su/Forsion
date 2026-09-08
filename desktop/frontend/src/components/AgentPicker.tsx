@@ -6,6 +6,7 @@
 import React from 'react'
 import { useI18n } from '../i18n'
 import { PillBar } from './EnginePicker'
+import { CompactChatPicker } from './CompactChatPicker'
 import { DEFAULT_AGENT_SLUG } from '../types'
 import type { NormalAgentDef } from '../types'
 
@@ -24,8 +25,18 @@ export const AgentPicker: React.FC<{
   const { t } = useI18n()
   if (!agents.length) return null
   const effective = selectedSlug || defaultSlug || DEFAULT_AGENT_SLUG
+  const selected = agents.find((agent) => agent.slug === effective)
   return (
     <div className="engine-picker agent-picker">
+      <CompactChatPicker
+        label={t('chatPicker.agent')}
+        value={effective}
+        icon={avatars[effective]
+          ? <img className="agent-pill-avatar" src={avatars[effective]} alt="" />
+          : <span className="agent-pill-initial">{firstChar(selected?.name || '')}</span>}
+        options={agents.map((agent) => ({ value: agent.slug, name: agent.name, description: agent.description }))}
+        onChange={onSelect}
+      />
       <PillBar label={t('agent.pickTitle')}>
         {agents.map((a) => {
           const selected = a.slug === effective

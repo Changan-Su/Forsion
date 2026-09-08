@@ -12,6 +12,7 @@
 import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
 import { translate } from '@/i18n'
+import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 
 const TOKEN_KEY = 'forsion_token'
@@ -32,39 +33,40 @@ function readPrefs(): Record<string, unknown> {
 function readWebToken(): string {
   try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
 }
-function gotoWebLogin(): void {
+function gotoWebLogin(force = false): void {
   const ret = location.origin + (import.meta.env.BASE_URL || '/')
-  location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-mobile')
+  location.replace('/auth?redirect=' + encodeURIComponent(ret) + '&app=tangu-mobile' + (force ? '&logout=1' : ''))
 }
 
 /** 用 token + 后端基址装 window.tangu(两条路共用)。login/logout 落点按 native/web 分。 */
 function setWindowTangu(backendUrl: string, token: string, native: boolean): void {
   const origFetch = window.fetch.bind(window)
+  syncCloudAccountCache(backendUrl, token)
+  const authListeners = new Set<() => void>()
 
   const authStatus = async (): Promise<Record<string, unknown>> => {
     const base = { cloudUrl: backendUrl, tokenSource: 'config' as const }
     if (!token) return { ...base, loggedIn: false, tokenValid: null, username: null, tokenSource: null }
+    const requestToken = token
     try {
       const r = await origFetch(`${backendUrl}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       if (r.status === 401 || r.status === 403) return { ...base, loggedIn: false, tokenValid: false, username: null }
       if (!r.ok) return { ...base, loggedIn: true, tokenValid: null, username: null }
       const u = await r.json().catch(() => ({} as Record<string, unknown>))
-      return { ...base, loggedIn: true, tokenValid: true, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: (u as { membershipTier?: unknown }).membershipTier ?? null }
+      if (requestToken !== token) return { ...base, loggedIn: false, tokenValid: null, username: null }
+      return { ...base, loggedIn: true, tokenValid: true, userId: u.id ?? u.userId ?? null, username: u.username ?? null, nickname: u.nickname ?? null, avatar: u.avatar ?? null, membershipTier: (u as { membershipTier?: unknown }).membershipTier ?? null }
     } catch {
       return { ...base, loggedIn: true, tokenValid: null, username: null }
     }
   }
 
-  const login = async (): Promise<void> => { if (native) await startNativeLogin(); else gotoWebLogin() }
+  const login = async (): Promise<void> => { if (native) await startNativeLogin(true); else gotoWebLogin(true) }
   const logout = async (): Promise<void> => {
+    token = ''
+    clearCloudAccountCache()
+    authListeners.forEach((listener) => listener())
     if (native) await clearStoredToken()
     else { try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ } }
-    // 云端痕迹一并清(与 webShim.forsionLogout 同款;树快照是全局键,换号会看到上一位用户的树)。
-    try {
-      localStorage.removeItem('amadeus_tree_snap')
-      localStorage.removeItem('amadeus.cloudVaultId')
-      for (const k of Object.keys(localStorage)) if (k.startsWith('amadeus_last_page:')) localStorage.removeItem(k)
-    } catch { /* ignore */ }
     await login()
   }
 
@@ -162,6 +164,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       return config()
     },
     authStatus,
+    onAuthChanged: (listener: () => void) => { authListeners.add(listener); return () => authListeners.delete(listener) },
     forsionLogin: login,
     forsionLogout: logout,
     accountQuota: () => cloudJson('GET', '/token-quota/my'),
@@ -185,13 +188,19 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
 
   // 401 兜底:/api/agent/* 鉴权失败 → 清 token 重新登录。
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const requestToken = token
     const res = await origFetch(input, init)
     try {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (res.status === 401 && url.includes('/api/agent/')) { void logout() }
+      if (requestToken && requestToken === token && res.status === 401 && (url.includes('/api/agent/') || url.includes('/api/amadeus/'))) { void logout() }
     } catch { /* ignore */ }
     return res
   }
+  if (!native) window.addEventListener('storage', (event) => {
+    if (event.key !== TOKEN_KEY || event.oldValue === event.newValue) return
+    syncCloudAccountCache(backendUrl, readWebToken())
+    location.reload()
+  })
 }
 
 /** 装垫片。返回 true=已就绪可挂载;false=未登录(已发起登录/跳转),调用方停止挂载。 */

@@ -5,6 +5,7 @@
  */
 import { createHash } from 'node:crypto'
 import { loadTanguCreds } from '../../forsionAuth'
+import { forsionAccountId } from '../../../shared/forsionAccount'
 import { pageScopeOf, inPageScope } from './pageScopeMirror'
 
 export interface SharedItem {
@@ -49,13 +50,23 @@ export function planOf(item: { vaultId: string; path: string; title: string }): 
 }
 
 export function createCollabMain() {
-  const base = (): string => {
+  const initial = loadTanguCreds()
+  const accountId = forsionAccountId(initial.cloudUrl ?? '', initial.token ?? '')
+  const controller = new AbortController()
+  const sessionCreds = () => {
     const c = loadTanguCreds()
+    if (controller.signal.aborted || !accountId || forsionAccountId(c.cloudUrl ?? '', c.token ?? '') !== accountId) {
+      throw Object.assign(new Error('Cloud account changed; retry from the current account'), { status: 401 })
+    }
+    return c
+  }
+  const base = (): string => {
+    const c = sessionCreds()
     if (!c.cloudUrl || !c.token) throw Object.assign(new Error('未登录 Forsion 账号'), { status: 401 })
     return c.cloudUrl.replace(/\/+$/, '')
   }
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-    const c = loadTanguCreds()
+    const c = sessionCreds()
     if (!c.cloudUrl || !c.token) throw Object.assign(new Error('未登录 Forsion 账号'), { status: 401 })
     const res = await fetch(`${c.cloudUrl.replace(/\/+$/, '')}/api/amadeus${path}`, {
       method,
@@ -64,18 +75,21 @@ export function createCollabMain() {
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]),
     })
     if (!res.ok) {
       let parsed: any = null
       try { parsed = await res.json() } catch { /* non-json */ }
       throw Object.assign(new Error(parsed?.detail || `http ${res.status}`), { status: res.status, code: parsed?.code })
     }
-    return res.json() as Promise<T>
+    const result = await res.json() as T
+    sessionCreds() // An old response must not repopulate caches after a switch.
+    return result
   }
 
   let ownVaultId: string | null = null
   const ensureOwnVault = async (): Promise<string> => {
+    sessionCreds()
     if (ownVaultId) return ownVaultId
     const r = await call<{ vaults: Array<{ id: string }> }>('GET', '/vaults')
     ownVaultId = r.vaults[0]?.id ?? 'default'
@@ -84,7 +98,7 @@ export function createCollabMain() {
 
   const myUserId = (): string | null => {
     try {
-      const payload = (loadTanguCreds().token ?? '').split('.')[1]
+      const payload = (sessionCreds().token ?? '').split('.')[1]
       const json = JSON.parse(Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString())
       return typeof json.userId === 'string' ? json.userId : null
     } catch {
@@ -104,6 +118,7 @@ export function createCollabMain() {
   let linkBaseCache: string | null = null
 
   return {
+    stop: () => controller.abort(),
     call,
     ensureOwnVault,
     myUserId,
@@ -113,6 +128,7 @@ export function createCollabMain() {
      * 取 server 端 AMADEUS_WEB_ORIGIN 配置;未配置时回退 cloudUrl(链接会 404,提示运维补配置)。
      */
     linkBase: async (): Promise<string> => {
+      sessionCreds()
       if (linkBaseCache) return linkBaseCache
       try {
         const r = await call<{ webOrigin?: string }>('GET', '/collab/link-base')

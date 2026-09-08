@@ -4,6 +4,8 @@
  * 走 window.fetch(webShim 的 401 兜底拦截器同样生效,双保险)。
  */
 
+import { cloudAccountIdentity } from '@/services/cloudAccountCache'
+
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
@@ -38,13 +40,22 @@ export interface CloudHttp {
 }
 
 export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
+  const initialToken = cfg.getToken()
+  const owner = cloudAccountIdentity(cfg.apiBase, initialToken)
+  const assertAccount = (): string => {
+    const token = cfg.getToken()
+    if (!token || (owner ? cloudAccountIdentity(cfg.apiBase, token) !== owner : token !== initialToken)) {
+      throw new HttpError(409, { code: 'ACCOUNT_CHANGED' }, 'Cloud account changed')
+    }
+    return token
+  }
   const request = async <T>(
     method: string,
     path: string,
     opts?: { query?: Record<string, string>; json?: unknown; form?: FormData },
   ): Promise<T> => {
     const qs = opts?.query ? `?${new URLSearchParams(opts.query).toString()}` : ''
-    const headers: Record<string, string> = { Authorization: `Bearer ${cfg.getToken()}` }
+    const headers: Record<string, string> = { Authorization: `Bearer ${assertAccount()}` }
     if (method !== 'GET') headers['X-Amadeus-Client'] = cfg.clientId
     let body: BodyInit | undefined
     if (opts?.form) {
@@ -68,12 +79,14 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     } finally {
       clearTimeout(timer)
     }
+    assertAccount()
     if (res.status === 401) {
       cfg.onUnauthorized()
       throw new HttpError(401, null)
     }
     // 响应体统一宽容解析:非 JSON / 空体 → undefined(DELETE 200 等)。
     const text = await res.text().catch(() => '')
+    assertAccount()
     let parsed: unknown
     try { parsed = text ? JSON.parse(text) : undefined } catch { parsed = text }
     if (!res.ok) throw new HttpError(res.status, parsed)
@@ -84,11 +97,13 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
   const postFormXhr = <T>(path: string, form: FormData, onProgress: (sent: number, total: number) => void): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
+      const token = assertAccount()
       xhr.open('POST', `${cfg.apiBase}${path}`)
-      xhr.setRequestHeader('Authorization', `Bearer ${cfg.getToken()}`)
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
       xhr.setRequestHeader('X-Amadeus-Client', cfg.clientId)
       xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) onProgress(ev.loaded, ev.total) }
       xhr.onload = () => {
+        try { assertAccount() } catch (error) { reject(error); return }
         if (xhr.status === 401) { cfg.onUnauthorized(); reject(new HttpError(401, null)); return }
         let parsed: unknown
         try { parsed = xhr.responseText ? JSON.parse(xhr.responseText) : undefined } catch { parsed = xhr.responseText }

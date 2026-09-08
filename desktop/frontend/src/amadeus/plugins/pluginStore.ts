@@ -372,6 +372,7 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     descriptionEn: src.descriptionEn,
     iconUrl: src.iconUrl,
     builtin: false,
+    preinstalled: !!src.preinstalled,
     apiVersion: src.apiVersion,
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
@@ -631,6 +632,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const dashMounts = new Set<() => void>()
     // 插件原生表挂载(ctx.table.mount):同上;另有 body 级弹层宿主要收,漏了就是页面上一堆空 div。
     const tableMounts = new Set<() => void>()
+    // 插件宿主原生 UI(ctx.ui.*):插件没接 disposer 时也由 disable/reload 统一收掉。
+    const uiMounts = new Set<() => void>()
     revokers[pluginId] = () => {
       revokeSurface()
       for (const d of Array.from(dashMounts)) {
@@ -641,6 +644,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
         try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" table dispose failed`, e) }
       }
       tableMounts.clear()
+      for (const d of Array.from(uiMounts)) {
+        try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" UI dispose failed`, e) }
+      }
+      uiMounts.clear()
       for (const u of Array.from(localeUnsubs)) {
         try { u() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" locale unsubscribe failed`, e) }
       }
@@ -792,6 +799,39 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (!amadeus?.writePluginData) return
       await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
     },
+    // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
+    // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
+    ...(typeof document !== 'undefined' ? { ui: {
+      mountFloatingToc: (shell, opts) => {
+        if (!(shell instanceof HTMLElement)) throw new TypeError('mountFloatingToc shell must be an HTMLElement')
+        if (!opts || !(opts.scrollContainer instanceof HTMLElement)) throw new TypeError('mountFloatingToc scrollContainer must be an HTMLElement')
+        if (opts.contentRoot != null && !(opts.contentRoot instanceof HTMLElement)) throw new TypeError('mountFloatingToc contentRoot must be an HTMLElement')
+        if (opts.selector != null) opts.scrollContainer.querySelector(String(opts.selector)) // 同步校验 selector 语法
+        let mounted: import('./types').PluginFloatingTocHandle | null = null
+        let cancelled = false
+        let pendingRefresh = false
+        const dispose = (): void => {
+          cancelled = true
+          uiMounts.delete(dispose)
+          mounted?.dispose()
+          mounted = null
+        }
+        uiMounts.add(dispose)
+        void import('./floatingTocSurface').then((m) => {
+          if (cancelled) { uiMounts.delete(dispose); return }
+          mounted = m.mountPluginFloatingToc(shell, opts)
+          if (pendingRefresh) mounted.refresh()
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" Floating TOC mount failed`, e) })
+        return {
+          refresh: () => {
+            if (cancelled) return
+            if (mounted) mounted.refresh()
+            else pendingRefresh = true
+          },
+          dispose,
+        }
+      },
+    } } : {}),
     // Dashboard 配方编译:纯函数,格式(围栏/frontmatter 词表)留在宿主 —— 插件手抄格式
     // 就是没版本契约的公开 API(接缝评审 P8)。写盘/打开由插件走既有 ctx.app 面。
     dashboard: {

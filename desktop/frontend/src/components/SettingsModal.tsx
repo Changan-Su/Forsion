@@ -3,11 +3,12 @@
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2 } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
+import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage } from '../theme/registry'
-import { UI_MODE, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
+import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import {
@@ -26,6 +27,7 @@ import type {
 import { SHOW_SYSTEM_PROMPT_KEY, SMOOTH_CARET_KEY } from '../types'
 import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
+import { getUiZoom, setUiZoom } from '../uiZoom'
 import { listFonts, getFont } from '../fontPresets'
 import { registerMessages, useI18n } from '../i18n'
 import { LocaleToggle } from './LocaleToggle'
@@ -57,9 +59,16 @@ import { AgentClisTab } from './AgentClisTab'
 import { QrImage } from './QrImage'
 import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
+import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
+import {
+  FORSION_PRIVACY_URL,
+  FORSION_TERMS_URL,
+  MIIT_APP_FILING_URL,
+  MOBILE_APP_FILING_NUMBER,
+} from '../appCompliance'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
 import { setActiveWindowCommand } from '../activeWindowCommand'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
@@ -96,7 +105,7 @@ registerMessages({
   'settingsmodal.tts.voice.openai': { zh: 'OpenAI', en: 'OpenAI' },
 })
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
 export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
@@ -116,6 +125,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   sync: <RefreshCw size={14} />,
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
+  permissions: <MonitorCog size={14} />,
   developer: <Bug size={14} />,
   about: <Info size={14} />,
   model: <Brain size={14} />,
@@ -248,6 +258,14 @@ export const SettingsModal: React.FC<{
   const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
     ui: readFont('ui'), body: readFont('body'), mono: readFont('mono'),
   }))
+  // 界面缩放与快捷键/命令面板共用 uiZoom 单一真源。设置页只订阅已有的缩放事件，
+  // 以便面板开着时按 ⌘/Ctrl +/- 也能当场刷新百分比与预设选中态。
+  const [uiZoom, setUiZoomState] = useState<number>(getUiZoom)
+  useEffect(() => {
+    const syncUiZoom = (): void => setUiZoomState(getUiZoom())
+    window.addEventListener(UI_ZOOM_EVENT, syncUiZoom)
+    return () => window.removeEventListener(UI_ZOOM_EVENT, syncUiZoom)
+  }, [])
   const setFont = (slot: FontSlot, v: string): void => {
     setFonts((f) => ({ ...f, [slot]: v }))
     writeFont(slot, v)
@@ -294,6 +312,7 @@ export const SettingsModal: React.FC<{
     ['notifications', t('settings.tab.notifications')],
     ['statusbar', t('settings.tab.statusbar')],
     ['advanced', t('settings.tab.advanced')],
+    ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     ...((isDesktop || cloudWeb) && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
     ['about', t('settings.tab.about')],
   ] as Array<[Tab, string]>
@@ -327,6 +346,10 @@ export const SettingsModal: React.FC<{
   // Forsion 账号 / provider OAuth 登录态
   const [authSt, setAuthSt] = useState<AuthStatusInfo | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
+  const authRequest = useRef(0)
+  const syncRequest = useRef(0)
+  const authAction = useRef(0)
+  const authBusy = useRef(false)
   const [device, setDevice] = useState<{ url: string; userCode: string } | null>(null)
   const [providers, setProviders] = useState<Array<{ id: string; loggedIn: boolean }> | null>(null)
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
@@ -511,7 +534,10 @@ export const SettingsModal: React.FC<{
 
   const refreshAuth = (): void => {
     if (!window.tangu?.authStatus) return
-    void window.tangu.authStatus().then(setAuthSt).catch(() => setAuthSt(null))
+    const request = ++authRequest.current
+    void window.tangu.authStatus().then((value) => {
+      if (request === authRequest.current) setAuthSt(value)
+    }).catch(() => { if (request === authRequest.current) setAuthSt(null) })
     void window.tangu.authProviders?.().then(setProviders).catch(() => setProviders([]))
   }
 
@@ -526,40 +552,61 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     const api = window.amadeusSync
     if (!api) return
-    void api.get().then(setNoteSync).catch(() => {})
-    return api.onStatus(setNoteSync)
+    let pending = true
+    void api.get().then((value) => { if (pending) setNoteSync(value) }).catch(() => {})
+    const off = api.onStatus((value) => { pending = false; setNoteSync(value) })
+    return () => { pending = false; off() }
   }, [])
 
   const doForsionLogout = async (): Promise<void> => {
     if (!window.tangu?.forsionLogout) return
+    const action = ++authAction.current
+    ++authRequest.current
+    ++syncRequest.current
+    authBusy.current = true
     setLoggingIn(true)
+    setDevice(null)
     try {
       await window.tangu.forsionLogout()
+      if (action !== authAction.current) return
+      setAuthSt(null)
+      setSyncSt(null)
+      setSyncMsg('')
       refreshAuth()
       p.onReconnect()
+    } catch (e: any) {
+      setTestResult(t('accountSwitcher.failed', { error: String(e?.message || e) }))
     } finally {
-      setLoggingIn(false)
+      if (action === authAction.current) { authBusy.current = false; setLoggingIn(false) }
     }
   }
 
   const refreshSyncStatus = (): void => {
-    backendGetSyncStatus(p.cfg).then(setSyncSt).catch(() => setSyncSt(null))
+    const request = ++syncRequest.current
+    backendGetSyncStatus(p.cfg).then((value) => {
+      if (request === syncRequest.current) setSyncSt(value)
+    }).catch(() => { if (request === syncRequest.current) setSyncSt(null) })
   }
 
   const doSyncNow = async (): Promise<void> => {
+    const request = ++syncRequest.current
+    const accountId = stored?.forsionSyncAccountId
     setSyncing(true)
     setSyncMsg('')
     try {
       const r = await backendSyncNow(p.cfg)
+      if (request !== syncRequest.current) return
       if (r.ok) {
         setSyncMsg(t('settings.forsion.syncOk', { memory: r.memory, logs: r.logs.length }) + (r.agents ? ` · ${r.agents} agent ↑${r.pushed ?? 0} ↓${r.pulled ?? 0}` : ''))
-        if (window.tangu?.setConfig) void window.tangu.setConfig({ forsionLastSyncedAt: Date.now() }).then(setStored)
+        if (window.tangu?.setConfig) void window.tangu.setConfig({ forsionLastSyncedAt: Date.now(), forsionSyncAccountId: accountId }).then((value) => {
+          if (request === syncRequest.current) setStored(value)
+        })
       } else {
         setSyncMsg(t('settings.forsion.syncFail', { e: r.error || '?' }))
       }
       refreshSyncStatus()
     } catch (e: any) {
-      setSyncMsg(t('settings.forsion.syncFail', { e: e?.message || e }))
+      if (request === syncRequest.current) setSyncMsg(t('settings.forsion.syncFail', { e: e?.message || e }))
     } finally {
       setSyncing(false)
     }
@@ -642,26 +689,55 @@ export const SettingsModal: React.FC<{
     if (!p.open || !isDesktop) return
     const off1 = window.tangu!.onBackendStatus?.((st) => setBackendSt(st))
     const off2 = window.tangu!.onAuthDevice?.((info) => setDevice(info))
+    const off3 = window.tangu!.onAuthChanged?.(() => {
+      ++authRequest.current
+      ++syncRequest.current
+      setAuthSt(null)
+      setSyncSt(null)
+      setSyncMsg('')
+      setSyncing(false)
+      setDevice(null)
+      refreshAuth()
+      const request = authRequest.current
+      void window.tangu!.getConfig().then((value) => {
+        if (request === authRequest.current) setStored(value)
+      }).catch(() => {})
+    })
     return () => {
+      ++authRequest.current
+      ++syncRequest.current
       off1?.()
       off2?.()
+      off3?.()
     }
   }, [p.open, isDesktop])
 
-  const doForsionLogin = async (): Promise<void> => {
+  const doForsionLogin = async (accountId?: string): Promise<void> => {
     if (!window.tangu?.forsionLogin) return
+    if (authBusy.current) return
+    authBusy.current = true
+    const action = ++authAction.current
+    ++authRequest.current
+    ++syncRequest.current
     setLoggingIn(true)
     setDevice(null)
+    setTestResult('')
     try {
-      const r = await window.tangu.forsionLogin(stored?.cloudUrl || undefined)
+      const r = accountId
+        ? await window.tangu.forsionSwitchAccount!(accountId)
+        : await window.tangu.forsionLogin(stored?.cloudUrl || undefined)
+      if (action !== authAction.current) return
       setStored((s) => (s ? { ...s, cloudUrl: r.cloudUrl } : s))
       refreshAuth()
       p.onReconnect()
     } catch (e: any) {
-      setTestResult(String(e?.message || e).replace(/^Error invoking remote method '[^']+': Error: /, ''))
+      if (action === authAction.current) setTestResult(String(e?.message || e).replace(/^Error invoking remote method '[^']+': Error: /, ''))
     } finally {
-      setLoggingIn(false)
-      setDevice(null)
+      if (action === authAction.current) {
+        authBusy.current = false
+        setLoggingIn(false)
+        setDevice(null)
+      }
     }
   }
 
@@ -780,6 +856,7 @@ export const SettingsModal: React.FC<{
     browser: 'settings.page.browserDescription',
     'amadeus-plugins': 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
+    permissions: 'desktopPermissions.description',
     developer: 'settings.page.developerDescription',
     about: 'settings.page.aboutDescription',
   }
@@ -811,7 +888,7 @@ export const SettingsModal: React.FC<{
         ...(stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
       ] as Array<[string, string]>) : []),
     ],
-    // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/阴影/玻璃/光标 各自一张小卡就够,
+    // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
     // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
     agents: [
       ['ag-roster', t('settings.tab.agents')],
@@ -875,7 +952,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1101,6 +1178,7 @@ export const SettingsModal: React.FC<{
         <div className="settings-body">
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir}>
+                {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {tab === 'general' && activeSub === 'g-conn' && (
                   <>
@@ -1348,7 +1426,7 @@ export const SettingsModal: React.FC<{
                           <span className="conn-pill ok"><span className="dot" />
                             {t('settings.forsion.loggedInAs', { name: authSt.nickname || authSt.username || '' })}
                           </span>
-                          <button className="btn ghost sm" onClick={() => void doForsionLogout()} disabled={loggingIn}>
+                          <button className="btn ghost sm" onClick={() => void doForsionLogout()}>
                             {loggingIn ? <Loader2 size={12} className="spin" /> : <LogOut size={12} />} {t('settings.forsion.logout')}
                           </button>
                         </div>
@@ -1371,6 +1449,12 @@ export const SettingsModal: React.FC<{
                         </div>
                       )}
                     </div>
+
+                    <AccountSwitcher busy={loggingIn} onSelect={(id) => void doForsionLogin(id)} onAdd={() => void doForsionLogin()} />
+                    {authSt?.loggedIn && device && (
+                      <div className="field"><QrImage value={device.url} /><div className="hint">{device.url} · {device.userCode}</div></div>
+                    )}
+                    {testResult && <div className="hint" role="status">{testResult}</div>}
 
                     {/* 云端地址(一等设置;原仅在开发者选项) */}
                     {stored && (
@@ -1403,7 +1487,7 @@ export const SettingsModal: React.FC<{
                           <input
                             type="checkbox"
                             checked={!!stored.forsionSyncEnabled}
-                            onChange={(e) => void window.tangu!.setConfig({ forsionSyncEnabled: e.target.checked }).then(setStored)}
+                            onChange={(e) => void window.tangu!.setConfig({ forsionSyncEnabled: e.target.checked, forsionSyncAccountId: stored.forsionSyncAccountId }).then(setStored)}
                           />
                           {t('settings.forsion.autoSync')}
                         </label>
@@ -2567,6 +2651,26 @@ export const SettingsModal: React.FC<{
                         <div><strong>{t('settings.theme.behaviorTitle')}</strong><p>{t('settings.theme.behaviorDescription')}</p></div>
                       </div>
                       <div className="settings-control-list">
+                        <div className="settings-control-row">
+                          <div className="settings-control-copy"><Scaling size={14} /><span><strong>{t('settings.theme.zoomLabel')}</strong><small>{t('settings.theme.zoomHint', { percent: Math.round(uiZoom * 100) })}</small></span></div>
+                          <div className="seg settings-zoom-presets" role="group" aria-label={t('settings.theme.zoomPresetLabel')}>
+                            {([
+                              [0.8, 'settings.theme.zoomSmall'],
+                              [1, 'settings.theme.zoomStandard'],
+                              [1.2, 'settings.theme.zoomLarge'],
+                            ] as const).map(([value, labelKey]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                className={Math.abs(uiZoom - value) < 0.001 ? 'active' : ''}
+                                aria-pressed={Math.abs(uiZoom - value) < 0.001}
+                                onClick={() => setUiZoom(value)}
+                              >
+                                {t(labelKey)} {Math.round(value * 100)}%
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                         {(() => {
                           // 主题若锁定 colorScheme(如 Glass 固定 system),明暗不可手动改:高亮强制值 + 禁用按钮。
                           // 用校验版(与 store 同一判定):脏 manifest 值(如 "auto")不会让按钮禁用而 store 却没锁。
@@ -3197,7 +3301,7 @@ export const SettingsModal: React.FC<{
                     </div>
                     <div className="field" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div>
-                        <div style={{ fontWeight: 600 }}>{t('about.builtWith')}</div>
+                        <div style={{ fontWeight: 600 }}>{window.tangu?.mobile ? t('about.builtWithMobile') : t('about.builtWith')}</div>
                         <div
                           className="hint"
                           style={{ marginTop: 2, cursor: 'pointer', userSelect: 'none' }}
@@ -3255,6 +3359,49 @@ export const SettingsModal: React.FC<{
                           {t('about.update.beta')}
                         </label>
                         <div className="hint" style={{ marginTop: 4 }}>{t('about.update.betaHint')}</div>
+                      </div>
+                    ) : null}
+                    {window.tangu?.mobile ? (
+                      <div className="field" data-testid="mobile-compliance">
+                        <label>{t('about.complianceTitle')}</label>
+                        <div className="settings-control-list about-compliance-list">
+                          <button
+                            type="button"
+                            className="settings-control-row about-compliance-row"
+                            data-testid="mobile-filing-link"
+                            onClick={() => void window.tangu?.openExternal?.(MIIT_APP_FILING_URL)}
+                          >
+                            <div className="settings-control-copy">
+                              <Globe2 size={14} />
+                              <span><strong>{t('about.appFiling')}</strong><small>{MOBILE_APP_FILING_NUMBER}</small></span>
+                            </div>
+                            <ChevronRight size={16} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-control-row about-compliance-row"
+                            data-testid="mobile-privacy-link"
+                            onClick={() => void window.tangu?.openExternal?.(FORSION_PRIVACY_URL)}
+                          >
+                            <div className="settings-control-copy">
+                              <KeyRound size={14} />
+                              <span><strong>{t('about.privacy')}</strong><small>forsion.net/legal/privacy</small></span>
+                            </div>
+                            <ChevronRight size={16} aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-control-row about-compliance-row"
+                            data-testid="mobile-terms-link"
+                            onClick={() => void window.tangu?.openExternal?.(FORSION_TERMS_URL)}
+                          >
+                            <div className="settings-control-copy">
+                              <NotebookPen size={14} />
+                              <span><strong>{t('about.terms')}</strong><small>forsion.net/legal/terms</small></span>
+                            </div>
+                            <ChevronRight size={16} aria-hidden="true" />
+                          </button>
+                        </div>
                       </div>
                     ) : null}
                     <div className="field">

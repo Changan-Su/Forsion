@@ -98,8 +98,18 @@ async function main() {
   check('T2 h1 上 "### " → H3', k[0] === 'H3', `kind=${k[0]}`)
   check('T2 文本仍是 Hello', t[0] === 'Hello', `text=${JSON.stringify(t[0])}`)
 
-  // T2b: 标题行上 "- " → 列表(先降段落再转,Notion 语义)
+  // T2a:标题正文允许以编号开头；只排除 ordered 自动触发，不能牵连下一条 bullet 既有语义。
   await page.keyboard.press('Meta+ArrowLeft')
+  await page.keyboard.type('1. ', { delay: 60 })
+  await page.waitForTimeout(400)
+  k = await kinds(); t = await texts()
+  check('T2a h3 上 "1. " 保留标题', k[0] === 'H3', `kind=${k[0]}`)
+  check('T2a 编号是字面标题文字', t[0] === '1. Hello', `text=${JSON.stringify(t[0])}`)
+  await page.keyboard.press('Backspace')
+  await page.keyboard.press('Backspace')
+  await page.keyboard.press('Backspace')
+
+  // T2b: 标题行上 "- " → 列表(先降段落再转,Notion 语义)
   await page.keyboard.type('- ', { delay: 60 })
   await page.waitForTimeout(400)
   k = await kinds(); t = await texts()
@@ -1573,6 +1583,48 @@ async function main() {
     check('T45 [[ 超长查询:面板无横向溢出', geo.panel <= 0, `panelOverflow=${geo.panel}px`)
     check('T45 [[ 超长查询:新建链接行在行内省略(文字确实比行宽)', geo.create > 0, `createOverflow=${geo.create}px`)
     await w.close()
+  })
+
+  // T46:`@` 日期输入格式对齐 Notion。此前解析器只认连字符(`9-1`)，官方示例的斜杠日期
+  //      (`1/12`)以及中文年月日 / 单独日号都会静默落成零日期候选。
+  await tryTest('T46', async () => {
+    const pad = (n) => String(n).padStart(2, '0')
+    const now = new Date()
+    const year = now.getFullYear()
+
+    const p = await freshPage()
+    await p.locator('.md-block .ProseMirror').first().click()
+    await p.keyboard.press('Meta+ArrowRight')
+    await p.keyboard.type('@12/25', { delay: 40 })
+    await p.waitForTimeout(350)
+    const slashRows = await p.locator('.wiki-suggest .wiki-item').allInnerTexts()
+    check('T46 "@12/25" → 日程 / 提醒两条日期候选', slashRows.length === 2 && slashRows[0].includes('日程') && slashRows[1].includes('提醒'), JSON.stringify(slashRows))
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(400)
+    const slashText = await p.locator('.md-block .ProseMirror').first().innerText()
+    check('T46 斜杠日期插成规范串', slashText.includes(`@${year}-12-25`), `text=${JSON.stringify(slashText)}`)
+    await p.close()
+
+    const q = await freshPage()
+    await q.locator('.md-block .ProseMirror').first().click()
+    await q.keyboard.press('Meta+ArrowRight')
+    await q.keyboard.type('@12月25日', { delay: 40 })
+    await q.waitForTimeout(350)
+    const zhRows = await q.locator('.wiki-suggest .wiki-item').allInnerTexts()
+    check('T46 "@12月25日" → 日期候选', zhRows.length === 2 && zhRows[0].includes('12月25日'), JSON.stringify(zhRows))
+    await q.close()
+
+    const r = await freshPage()
+    await r.locator('.md-block .ProseMirror').first().click()
+    await r.keyboard.press('Meta+ArrowRight')
+    await r.keyboard.type(`@${now.getDate()}`, { delay: 40 })
+    await r.waitForTimeout(350)
+    await r.keyboard.press('Enter')
+    await r.waitForTimeout(400)
+    const dayText = await r.locator('.md-block .ProseMirror').first().innerText()
+    const today = `${year}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    check('T46 单独日号 → 最近一次该日', dayText.includes(`@${today}`), `text=${JSON.stringify(dayText)}`)
+    await r.close()
   })
 
   const fails = results.filter((r) => !r.ok).length

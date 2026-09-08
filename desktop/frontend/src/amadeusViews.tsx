@@ -50,7 +50,7 @@ import { fdDirOf, isNoteMd } from '@amadeus/lib/fd'
 import { useSectionOpen } from '@amadeus/lib/sectionOpen'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { compile, parsePageSource } from '@amadeus-shared/compiler'
-import { recordNav, useWorkspace, activeMainPanel, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
+import { recordNav, useWorkspace, activeMainPanel, FloatingToc, Skeleton, zoomOf, UI_MODE } from '@lcl/engine'
 import { useNoteOutline } from '@amadeus/lib/activeNote'
 import { isCoarsePointer } from './touch'
 import type { ViewProps } from '@lcl/engine'
@@ -92,6 +92,10 @@ registerMessages({
   'amxv.trash.restore': { zh: '恢复', en: 'Restore' },
   'amxv.trash.confirmDelete': { zh: '彻底删除「{name}」?不可恢复。', en: 'Permanently delete “{name}”? This cannot be undone.' },
   'amxv.trash.emptyHint': { zh: '回收站是空的。', en: 'The trash is empty.' },
+
+  'amxv.missing.title': { zh: '当前库里没有这篇笔记', en: 'This note is not in the current vault' },
+  'amxv.missing.sub': { zh: '「{path}」在这一侧不存在 —— 它可能属于另一侧(本地/云端)、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” does not exist on this side. It may belong to the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
+  'amxv.missing.close': { zh: '关闭标签页', en: 'Close tab' },
 
   'amxv.sec.starred': { zh: '收藏', en: 'Starred' },
   'amxv.sec.collections': { zh: '集合', en: 'Collections' },
@@ -185,6 +189,8 @@ registerMessages({
   'amxv.welcome.tip1': { zh: '引用其它笔记,自动生成反向链接', en: 'links to another note, and backlinks are generated automatically' },
   'amxv.welcome.tip2': { zh: '拖入图片 / 文件直接插入;支持数据库块、LaTeX、代码高亮', en: 'Drop in images or files to insert them; database blocks, LaTeX and syntax highlighting are all supported' },
   'amxv.welcome.tip3': { zh: '顶栏切「可视 / 源码」,右上角 ⋮ 可导出 PDF', en: 'Toggle visual / source mode in the top bar; export to PDF from the ⋮ menu' },
+
+  'amxv.floatingToc': { zh: '笔记目录', en: 'Note table of contents' },
 
   'amxv.outline.empty': { zh: '没有标题', en: 'No headings' },
   'amxv.outline.noNote': { zh: '未指定笔记', en: 'No note specified' },
@@ -2119,16 +2125,27 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // UnifiedPage(统一实例),v3 标记文件 → 下面的 PageView 老路。分类必须**先于** effect ①:
   // 外来 md 一旦进了 pageStore,首次防抖保存就会把它改写成 v3(注 amadeus_page+标记)= 毁档类。
   // route 以 forPath 配对防陈旧:快速切换笔记时,旧文件的分类绝不套在新路径上。
-  const [route, setRoute] = useState<{ forPath: string; decision: RouteDecision } | null>(null)
-  /** 已按真实内容(读到了字节)定过案的路径。库根回填触发重跑时靠它挡住二次读,免得重挂编辑器。 */
-  const routedFor = useRef<string | null>(null)
+  const [route, setRoute] = useState<{ forPath: string; decision: RouteDecision; root: string | null; unreadable?: boolean } | null>(null)
+  const [retryTick, setRetryTick] = useState(0)
+  /** 已按真实内容(读到了字节)定过案的路径 + 定案时的库根。库根**回填**(null→同一根)靠它挡住二次读,
+   *  免得重挂编辑器;库根**换了**(Local↔Cloud、换 vault)则必须重验 —— 同一相对路径在另一棵树里多半
+   *  不存在(`X.md` vs `<云名>/X.md`),继续挂着旧库的编辑器 = 它的下一次写盘落进新库。 */
+  const routedFor = useRef<{ path: string; root: string | null } | null>(null)
+  // 文件在当前库出现/消失(pages 随结构事件刷新)也要重判:missing 占位不能永远停在那里。
+  const noteKnown = usePageStore((s) => (notePath ? s.pages.includes(notePath) : false))
   useEffect(() => {
     if (!notePath) {
       setRoute(null)
       return
     }
-    // 已经按**真实内容**给这篇定过案 → 不再重读:库根变动(切库/回填)不该把活着的编辑器重挂。
-    if (routedFor.current === notePath) return
+    // 已经按**真实内容**给这篇定过案且库根未变 → 不再重读:库根回填不该把活着的编辑器重挂。
+    const done = routedFor.current
+    // 同根 / 库根回填(定案时 store 里还是 null,主进程根已就绪读到了真内容)→ 不重读、不换实例:
+    // 冷启动的回填不是换根,退休会清掉用户刚敲的字(Codex 终审 P0)。
+    if (done && done.path === notePath && (done.root === vaultRoot || done.root === null)) return
+    // 库根换了(Local↔Cloud / 换 vault):先退休旧根上这篇的实例 —— 同一相对路径两侧都有时判定仍是 unified,
+    // 不退休的话旧实例继续活着,它下一次写盘就把旧库正文落进新库的同名文件(Codex 终审 P0)。
+    if (done && done.path === notePath) retireUnifiedPath(notePath)
     let alive = true
     void (async () => {
       let raw = await amadeus.readTextFile(notePath).catch(() => null)
@@ -2147,14 +2164,34 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
         raw = await amadeus.readTextFile(notePath).catch(() => null)
       }
       if (!alive) return
-      if (raw != null) routedFor.current = notePath
-      setRoute({ forPath: notePath, decision: routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString()) })
+      const decision = routeNote(notePath, raw, upgradeV4Enabled(), new Date().toISOString())
+      if (decision.editor === 'missing' && myPs().pages.includes(notePath)) {
+        // 名册里有、却读不到 = 瞬时读失败(IPC 未就位 / 网络 / 权限),不是「不存在」:不退休任何实例
+        // (别的标签可能正编辑着这篇)、不占位成 missing,给一个重试按钮。
+        routedFor.current = null
+        setRoute({ forPath: notePath, decision, root: myPs().vaultRoot, unreadable: true })
+        return
+      }
+      if (decision.editor === 'missing') {
+        // 当前库里没有这个文件:退休它名下所有 unified 实例(切侧后仍活着的旧库编辑器会把旧库内容
+        // /空文档写进新库),并且**不装载** —— 装载 = 主进程 loadPage 缺文件即 newPage 落盘,本地库里
+        // 凭空出现的 `<云名>/X.md`、改名后反复复活的旧名空白页都是这么来的(2026-09-06 实翻)。
+        retireUnifiedPath(notePath)
+        routedFor.current = null
+      } else {
+        routedFor.current = { path: notePath, root: myPs().vaultRoot }
+      }
+      setRoute({ forPath: notePath, decision, root: myPs().vaultRoot })
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notePath, vaultRoot])
+  }, [notePath, vaultRoot, noteKnown, retryTick])
   const routed = route && route.forPath === notePath ? route.decision : null
   const unifiedRoute = routed?.editor === 'unified' ? routed : null
+  const unreadableNote = !!notePath && !!route?.unreadable && route.forPath === notePath
+  const missingNote = routed?.editor === 'missing' && !!notePath && !unreadableNote
+  // 编辑器实例身份 = 库根 + 路径:切侧后同路径的判定即使仍是 unified 也必须换实例(旧实例持有旧库正文)。
+  const routeRoot = route && route.forPath === notePath ? route.root ?? '' : ''
 
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
   // → 文档骨架屏。此前这个窗口期亮的是「欢迎页」(fresh 面板)或旧笔记,云端慢网下就是「点了没反应」。
@@ -2164,7 +2201,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   //    v4 自 2026-08-14 起是缺省路由,等于手机上从那天起就没有底栏了(没有「+」/撤销/上传/「⋯」,
   //    自然也没有画布入口)。2026-08-20 用户实报「移动端没有画布」时查出。
   //    (声明也随之从 route 之前挪到了这里 —— 它只被下面的 JSX 用,没有前移的必要。)
-  const loadingNote = !unifiedRoute
+  const loadingNote = !unifiedRoute && !missingNote && !unreadableNote
     && ((!!pendingPage && pendingPage !== activePage) || (!!notePath && !loadError && notePath !== activePage))
 
   // 顶栏/菜单/移动端胶囊的「当前笔记」:v3 = activePage;unified 不设 activePage,用 leaf 认领的路径。
@@ -2357,6 +2394,18 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   return (
     <>
     <EditorScope rootRef={printHostRef} dragging={dragging} onDrop={(e) => void onDrop(e)} onDragOver={onDragOver} onDragLeave={onDragLeave} onClick={onClick} onPaste={onPaste}>
+      {/* 与 Chat View 同一份 LCL FloatingToc。只给文档模式:源码没有可导航标题,画布有自己的空间导航;
+          mini / coarse pointer 则把稀缺横向空间留给正文。根就是本 leaf 的滚动 EditorScope,分屏互不串页。 */}
+      {barPath && mode !== 'source' && !canvasSeg?.on && !leaf.params.miniSurface && !isCoarsePointer() && (
+        <FloatingToc
+          scrollContainer={printHostRef}
+          contentRoot={printHostRef}
+          selector=".page-view h1, .page-view h2, .page-view h3"
+          label={t('amxv.floatingToc')}
+          scanTrigger={barPath}
+          placement="sticky"
+        />
+      )}
       {/* ⚠️ 上传用的隐藏 input **必须住在顶栏外面**:移动端整条顶栏不渲染,而底栏胶囊的「上传」
           仍旧 uploadInputRef.current?.click() —— 留在顶栏里 = 手机上 ref 恒 null,上传静默失效。 */}
       <input
@@ -2467,7 +2516,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
            页面 chrome(封面/图标/标题/属性)在 UnifiedPage 内部;顶栏/菜单走上面的 barPath 门。 */
         <UnifiedPage
           compact={!!leaf.params.miniSurface}
-          key={notePath}
+          key={`${routeRoot}\u0000${notePath}`}
           path={notePath}
           initial={unifiedRoute.initial}
           diskRaw={unifiedRoute.diskRaw}
@@ -2478,6 +2527,24 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
             retargetEditorLeaves(notePath, np) // 其他标签开着同一篇:一并换参(它们的实例已被退休)
           }}
         />
+      ) : unreadableNote && notePath ? (
+        /* 名册里有但读不到:瞬时故障,给重试(不能判 missing —— 那会退休别的标签里正在编辑的实例)。 */
+        <div className="amx-welcome">
+          <div className="amx-welcome-title">{t('amxv.welcome.loadFailed')}</div>
+          <p className="amx-welcome-sub">{notePath}</p>
+          <div className="amx-welcome-actions">
+            <button className="amx-welcome-btn" onClick={() => setRetryTick((n) => n + 1)}>{t('amxv.retry')}</button>
+          </div>
+        </div>
+      ) : missingNote && notePath ? (
+        /* 当前库没有这篇(另一侧的路径 / 已改名 / 已删):只占位,绝不装载、绝不造文件。 */
+        <div className="amx-welcome">
+          <div className="amx-welcome-title">{t('amxv.missing.title')}</div>
+          <p className="amx-welcome-sub">{t('amxv.missing.sub', { path: notePath })}</p>
+          <div className="amx-welcome-actions">
+            <button className="amx-welcome-btn" onClick={() => useWorkspace.getState().closeLeaf(leaf.id)}>{t('amxv.missing.close')}</button>
+          </div>
+        </div>
       ) : loadingNote ? (
         <Skeleton variant="document" />
       ) : !activePage ? (

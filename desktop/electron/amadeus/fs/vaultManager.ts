@@ -7,6 +7,7 @@ import { dialog } from 'electron'
 import type { CompilerIO } from '@amadeus-shared/compiler'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
+import { logActivity } from '../../activityLog'
 
 export class VaultManager {
   private root: string | null = null
@@ -135,11 +136,16 @@ export class VaultManager {
   }
 
   private async atomicWrite(abs: string, data: string): Promise<void> {
+    // 仪器(2026-09-06):凭空出现的文件(本地库里的 `<云名>/X.md`、改名后复活的旧名空白页)全是
+    // 应用自己写出来的 0 字节/骨架文件,但活动日志只记 note.create/note.edit,看不见「谁在往一个不存在
+    // 的路径写」。这里对**新建**(写前不存在)记一条 file.create f=… b=字节数,下次不用再推演世界。
+    const existed = await fs.access(abs).then(() => true, () => false)
     await fs.mkdir(path.dirname(abs), { recursive: true })
     const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
     await fs.writeFile(tmp, data, 'utf8')
     await fs.rename(tmp, abs)
     this.lastWritten.set(abs, data)
+    if (!existed && this.root) logActivity('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
     this.emitMutate(abs, 'write')
   }
 

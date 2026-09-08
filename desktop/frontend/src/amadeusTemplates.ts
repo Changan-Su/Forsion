@@ -98,7 +98,7 @@ export async function openDailyNote(): Promise<void> {
     // 素文件出生(与 createPageInFolder 同规)。老路 openOrCreate → 主进程 newPage 生的是 v3
     // (amadeus_page + 块标记),而「打开即升」默认开 → 路由当场把它交给 UnifiedPage,模板往
     // 交出去的 v3 store 里写,写完即被冲掉:日记建出来但一个字都没有(2026-08-21 真机实测)。
-    await amadeus.writeTextFile(path, '')
+    await amadeus.writeTextFile(path, '', { create: true })
     await ps().refreshStructure()
   }
   await openNote(path) // 内部等就绪:v3 等 activePage,v4 等 unified 实例登记

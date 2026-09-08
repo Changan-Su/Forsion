@@ -158,3 +158,57 @@ describe('dbStore.mutate 对 updated 列盖章', () => {
     expect(useDbStore.getState().entries['T.db'].data).toBe(ret)
   })
 })
+
+describe('dbStore account transition barrier', () => {
+  beforeEach(async () => {
+    disk = base(); version = 'v0'
+    useDbStore.setState({ entries: {} })
+    await useDbStore.getState().reload('T.db', 'T.db')
+  })
+  afterEach(async () => { await useDbStore.getState().flushAll() })
+
+  it('strict flush rejects failed persistence and retains edits for a successful retry', async () => {
+    writeDatabaseCas.mockRejectedValueOnce(new Error('Disk full'))
+    useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: [...d.rows, row('pending', 'must survive')] }))
+    await expect(useDbStore.getState().flushAll(true)).rejects.toThrow()
+    expect(useDbStore.getState().entries['T.db'].data!.rows.some((r) => r.id === 'pending')).toBe(true)
+    expect(disk.rows.some((r) => r.id === 'pending')).toBe(false)
+    await useDbStore.getState().flushAll(true)
+    expect(disk.rows.some((r) => r.id === 'pending')).toBe(true)
+  })
+
+  it('strict flush waits for the already running write whose debounce timer has fired', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    writeDatabaseCas.mockImplementationOnce(async (_p, data) => { await gate; disk = structuredClone(data); bump(); return { ok: true, version } })
+    useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: [...d.rows, row('inflight', 'must finish')] }))
+    const running = useDbStore.getState().flushAll()
+    let done = false
+    const barrier = useDbStore.getState().flushAll(true).then(() => { done = true })
+    await new Promise((r) => setTimeout(r, 15))
+    const early = done
+    release()
+    await Promise.all([running, barrier])
+    expect(early).toBe(false)
+    expect(disk.rows.some((r) => r.id === 'inflight')).toBe(true)
+  })
+
+  it.each(['resolve', 'reject'] as const)('ignores a previous vault read that arrives late (%s)', async (outcome) => {
+    const { usePageStore } = await import('./pageStore')
+    usePageStore.setState({ vaultRoot: '/account-A' })
+    let resolve!: (value: Awaited<ReturnType<typeof readDatabase>>) => void
+    let reject!: (reason: Error) => void
+    readDatabase.mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no }))
+    const oldRead = useDbStore.getState().reload('T.db', 'T.db')
+    usePageStore.setState({ vaultRoot: '/account-B' })
+    disk = { ...base(), name: 'B private table' }
+    await useDbStore.getState().reload('T.db', 'T.db')
+    if (outcome === 'resolve') resolve({ status: 'ok', path: 'T.db', data: { ...base(), name: 'A private table' }, version: 'a1' })
+    else reject(new Error('Old account disconnected'))
+    await oldRead
+    expect(useDbStore.getState().entries['T.db'].data!.name).toBe('B private table')
+    useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: [...d.rows, row('B', 'B edit')] }))
+    await useDbStore.getState().flushAll(true)
+    expect(disk.name).toBe('B private table')
+  })
+})

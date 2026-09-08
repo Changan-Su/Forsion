@@ -5,6 +5,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { blankDrawing, BLANK_SCENE_JSON, parseDrawing } from '@amadeus-shared/excalidraw/format'
 
+const vault = vi.hoisted(() => ({ root: '/account-a', listeners: [] as Array<(s: { vaultRoot: string | null }, p: { vaultRoot: string | null }) => void> }))
+vi.mock('./pageStore', () => ({ usePageStore: {
+  getState: () => ({ vaultRoot: vault.root }),
+  subscribe: (listener: (s: { vaultRoot: string | null }, p: { vaultRoot: string | null }) => void) => { vault.listeners.push(listener); return () => {} },
+} }))
+function switchRoot(root: string): void {
+  const previous = vault.root
+  vault.root = root
+  for (const listener of vault.listeners) listener({ vaultRoot: root }, { vaultRoot: previous })
+}
+
 const REF = '未命名白板.excalidraw.md'
 const SCENE2 = JSON.stringify({
   type: 'excalidraw', version: 2, source: 'test',
@@ -19,6 +30,8 @@ let extCb: ((p: string) => void) | null = null
 let mod: typeof import('./drawingStore')
 async function freshStore() {
   vi.resetModules()
+  vault.root = '/account-a'
+  vault.listeners = []
   extCb = null
   vi.stubGlobal('window', {
     amadeus: {
@@ -143,5 +156,75 @@ describe('drawingStore 跨端同步(元素级合并)', () => {
     const [, written] = writeDrawing.mock.calls[0] as unknown as [string, string]
     const payload = JSON.parse(parseDrawing(written)!.sceneJson) as { elements: Array<{ id: string }> }
     expect(payload.elements.map((e) => e.id)).toEqual(['L', 'R'])
+  })
+})
+
+describe('drawingStore account transition barrier', () => {
+  it('strict flush rejects failed persistence and keeps the latest scene available to retry', async () => {
+    const store = await freshStore()
+    readDrawing.mockResolvedValue({ status: 'ok', path: REF, source: blankDrawing(BLANK_SCENE_JSON) })
+    await store.getState().load(REF, REF)
+    writeDrawing.mockRejectedValueOnce(new Error('Disk full'))
+    store.getState().save(REF, SCENE2)
+    await expect(store.getState().flushAll(true)).rejects.toThrow()
+    expect((store.getState().seedFor(REF) as any).elements[0].id).toBe('e1')
+    await store.getState().flushAll(true)
+    expect(parseDrawing(store.getState().entries[REF].source!)?.sceneJson).toBe(SCENE2)
+  })
+
+  it('strict flush includes a write that has already consumed its debounce timer', async () => {
+    const store = await freshStore()
+    readDrawing.mockResolvedValue({ status: 'ok', path: REF, source: blankDrawing(BLANK_SCENE_JSON) })
+    await store.getState().load(REF, REF)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    writeDrawing.mockImplementationOnce(async () => { await gate })
+    store.getState().save(REF, SCENE2)
+    await vi.advanceTimersByTimeAsync(800)
+    let done = false
+    const barrier = store.getState().flushAll(true).then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(1)
+    const early = done
+    release()
+    await barrier
+    expect(early).toBe(false)
+    expect(parseDrawing(store.getState().entries[REF].source!)?.sceneJson).toBe(SCENE2)
+  })
+})
+
+
+describe('drawingStore account-owned caches', () => {
+  it('same-named drawings in A and B load their own scenes and never merge A into B', async () => {
+    const store = await freshStore()
+    readDrawing.mockResolvedValue({ status: 'ok', path: REF, source: blankDrawing(sceneOf([elL])) })
+    await store.getState().load(REF, REF)
+    await store.getState().flushAll(true)
+    switchRoot('/account-b')
+    readDrawing.mockResolvedValue({ status: 'ok', path: REF, source: blankDrawing(sceneOf([elR])) })
+    await store.getState().load(REF, REF)
+    const seed = store.getState().seedFor(REF) as { elements: Array<{ id: string }> }
+    expect(seed.elements.map((e) => e.id)).toEqual(['R'])
+    const edited = { ...elR, version: 2 }
+    store.getState().save(REF, sceneOf([edited]))
+    await store.getState().flushAll(true)
+    const last = writeDrawing.mock.calls.at(-1) as unknown as [string, string]
+    expect(JSON.parse(parseDrawing(last[1])!.sceneJson).elements.map((e: { id: string }) => e.id)).toEqual(['R'])
+    switchRoot('/account-a')
+    readDrawing.mockResolvedValue({ status: 'ok', path: REF, source: blankDrawing(sceneOf([elL])) })
+    await store.getState().load(REF, REF)
+    expect((store.getState().seedFor(REF) as any).elements.map((e: any) => e.id)).toEqual(['L'])
+  })
+
+  it('an A read completing after B has loaded cannot replace B’s same-named cache entry', async () => {
+    const store = await freshStore()
+    let release!: (value: { status: string; path: string; source: string }) => void
+    readDrawing.mockImplementationOnce(() => new Promise((r) => { release = r }))
+    const oldRead = store.getState().reload(REF, REF)
+    switchRoot('/account-b')
+    readDrawing.mockResolvedValue({ status: 'ok', path: REF, source: blankDrawing(sceneOf([elR])) })
+    await store.getState().load(REF, REF)
+    release({ status: 'ok', path: REF, source: blankDrawing(sceneOf([elL])) })
+    await oldRead
+    expect((store.getState().seedFor(REF) as any).elements.map((e: any) => e.id)).toEqual(['R'])
   })
 })

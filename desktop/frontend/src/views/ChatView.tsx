@@ -31,6 +31,7 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { projectName } from './coding/studioModel'
 import './coding/studioMessages'
+import { selectableChatModels } from './chatModelCatalog'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -182,10 +183,9 @@ export function ChatView({ leaf, params }: ViewProps) {
         }, preset) as AgentConfig
       })(), amadeusRoot)
   const mvModelId = activeChatModelId({ ...s, activeId }) // 与建会话落库、startRun、ctx.tangu.activeModel() 同源,勿就地展开回退链
-  const isCloudSession = mvCfg.execMode === 'sandbox'
   const visibleModels = !s.modelsResp?.models
     ? null
-    : s.modelsResp.models.filter((m) => (m.modelType || 'llm') === 'llm' && (!isCloudSession || m.source === 'forsion'))
+    : selectableChatModels(s.modelsResp.models)
   const availableEngines = s.engines.filter((e) => e.available)
   const curEngineId = activeId ? execConfig.engineId : s.newChatCfg.engineId
   const streamingId = useMemo(() => activeMessages.find((m) => m.status === 'streaming')?.id ?? null, [activeMessages])
@@ -228,7 +228,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     const el = composerRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const col = el.parentElement
-    const apply = (): void => col?.style.setProperty('--t2-composer-h', `${Math.round(el.getBoundingClientRect().height)}px`)
+    const apply = (): void => col?.style.setProperty('--t2-composer-h', `${el.offsetHeight}px`)
     apply()
     const ro = new ResizeObserver(apply)
     ro.observe(el)
@@ -532,17 +532,15 @@ export function ChatView({ leaf, params }: ViewProps) {
         </div>
       </ErrorBoundary>
 
-      {/* 新对话空状态:铺满整个聊天列的绝对定位层 → 品牌图+标语落在 **view 的竖向中心**
-          (2026-08-14 用户要求)。放在滚动流里只能在「输入框以上那段」居中,整体偏高。
-          pointer-events:none:它盖在下面的 agent/引擎选择器与输入框之上,不能吃掉它们的点击。 */}
-      {!hasMessages && !historyLoading && (params.miniSurface ? <div className="t2-empty">{t('mini.chatHint')}</div> : <EmptyState2 title={studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />)}
+      {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
+      {!hasMessages && !historyLoading && <EmptyState2 compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
 
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
       <div className="composer-anchor" ref={composerRef}>
-        {/* Agent 选择不 gate execMode:云会话(sandbox,web/桌面云端)同样有 agent;引擎=本地 ACP 子进程,仍 host-only。 */}
-        {!params.miniSurface && !hasMessages && !mvCfg.groupChat && (
+        {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。 */}
+        {!params.miniSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.groupChat && (
           <div className="newchat-pickers">
             {mvCfg.execMode === 'host' && availableEngines.length > 0 && (
               <EnginePicker

@@ -23,6 +23,7 @@ import { agentsDir, readUserMd, writeUserMd } from '../core/tanguHome.js';
 import { listLoadoutTools } from '../tools/toolRegistry.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
+import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit } from '../agents/harnessStore.js';
 
 const router = Router();
@@ -41,7 +42,8 @@ router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   try {
     if (cloudAgentsEnabled()) return void res.json({ agents: await cloudListAgents(req.user!.userId) });
     if (!ensureLocal(res)) return;
-    res.json({ agents: await listAgents() });
+    const scope = agentSyncScope(deps().brain.agentFiles, req.user!.userId);
+    res.json({ agents: (await listAgents()).map((a) => ({ ...a, cloudSync: agentSyncPermission(a.slug, scope).enabled })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list agents failed' });
   }
@@ -60,6 +62,8 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     const b = req.body || {};
     if (!b.name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
     const uid = req.user!.userId;
+    const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, uid);
+    if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     const getDef = (s: string): Promise<unknown> => (cloud ? cloudGetAgent(uid, s) : getAgent(s));
     // POST=新建语义,但 saveAgent 是按 slug 的 upsert:派生 slug 已存在时若直接传入会**静默覆盖**
     // 既有 agent(中文等非 ASCII 名全部派生为兜底 'agent',极易相撞)→ 这里先唯一化,撞了递增后缀。
@@ -90,6 +94,8 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       createdBy: 'user' as const,
     };
     const agent = cloud ? await cloudSaveAgent(uid, slug, input) : await saveAgent(input);
+    if (!cloud && scope && b.cloudSync != null) setAgentSyncPermission(slug, scope, !!b.cloudSync);
+    if (!cloud) agent.cloudSync = agentSyncPermission(slug, scope).enabled;
     res.json({ agent });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'create agent failed' });
@@ -104,6 +110,8 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     const cur = cloud ? await cloudGetAgent(req.user!.userId, slug) : await getAgent(slug);
     if (!cur) return res.status(404).json({ detail: 'Agent not found' });
     const b = req.body || {};
+    const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
+    if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     const input = {
       slug,
       name: b.name != null ? String(b.name) : cur.name,
@@ -116,13 +124,15 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
       systemPrompt: b.systemPrompt != null ? String(b.systemPrompt) : cur.systemPrompt,
       soul: b.soul != null ? String(b.soul) : cur.soul,
       shareDefaultMemory: b.shareDefaultMemory != null ? !!b.shareDefaultMemory : cur.shareDefaultMemory,
-      cloudSync: b.cloudSync != null ? !!b.cloudSync : cur.cloudSync,
+      cloudSync: cloud ? (b.cloudSync != null ? !!b.cloudSync : cur.cloudSync) : (!!b.cloudSync || cur.cloudSync),
       activityAccess: b.activityAccess != null ? !!b.activityAccess : cur.activityAccess,
       // null=显式清除(saveAgent 收 null → undefined 落盘);缺省保留现值
       toolsMode: b.toolsMode !== undefined ? b.toolsMode : cur.toolsMode,
       toolsList: b.toolsList !== undefined ? b.toolsList : cur.toolsList,
     };
     const agent = cloud ? await cloudSaveAgent(req.user!.userId, slug, input) : await saveAgent(input);
+    if (!cloud && scope && b.cloudSync != null) setAgentSyncPermission(slug, scope, !!b.cloudSync);
+    if (!cloud) agent.cloudSync = agentSyncPermission(slug, scope).enabled;
     res.json({ agent });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'update agent failed' });

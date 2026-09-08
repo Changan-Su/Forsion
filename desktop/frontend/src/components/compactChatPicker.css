@@ -1,0 +1,25 @@
+.compact-chat-picker { display: none; }
+
+@container (max-width: 520px) {
+  .t2-chat-col .newchat-pickers { flex-direction: row; align-items: stretch; gap: 8px; padding-inline: 12px; }
+  .newchat-pickers > .engine-picker { flex: 1 1 0; min-width: 0; animation: none; }
+  .newchat-pickers > .engine-picker > .engine-picker-bar,
+  .newchat-pickers > .engine-picker > .engine-picker-hint { display: none; }
+  .newchat-pickers .compact-chat-picker {
+    position: relative; display: flex; align-items: center; gap: 7px;
+    width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; box-sizing: border-box;
+    border-radius: var(--radius-md, 12px); background: var(--bg-card); color: var(--text);
+    font-size: 13px; line-height: 1.4; cursor: pointer;
+  }
+  .compact-chat-picker:hover { background: var(--overlay-medium); }
+  .compact-chat-picker:focus-within { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+  .compact-chat-picker-kind { flex: none; color: var(--text-muted); font-size: 12px; }
+  .compact-chat-picker-icon { display: inline-flex; flex: none; }
+  .compact-chat-picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .compact-chat-picker > svg { flex: none; color: var(--text-muted); }
+  .compact-chat-picker select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+}
+
+@container (max-width: 360px) {
+  .t2-chat-col .newchat-pickers { flex-direction: column; gap: 6px; }
+}

@@ -16,6 +16,8 @@ export function taskCheckboxPlugin() {
             const target = event.target as HTMLElement | null
             const li = target?.closest('li[data-item-type="task"]') as HTMLElement | null
             if (!li) return false
+            // 只读视图(分享页/嵌入体):PM 对 handleClick 不看 editable,这里自己挡,勾选框不翻转。
+            if (!view.editable) return false
             // Only toggle when the click lands in the checkbox gutter (left of the content box).
             const rect = li.getBoundingClientRect()
             if (event.clientX - rect.left > 2) return false

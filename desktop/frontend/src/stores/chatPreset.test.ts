@@ -1,7 +1,7 @@
 /**
  * chat / work 模式(客户端侧,方案 D5 / D7 / D8 / D36,D9 已替换为「空白会话锁」):
- * ① newSessionPreset 是新会话模式的唯一判定源(项目会话恒 work / 无根恒 chat / 侧栏模式 / 按端默认);
- * ② 新建 chat 会话恒 projectless + sandbox、不带 workspaceProject、不带外部引擎/计划/群聊残值(applyPreset 唯一物化点),
+ * ① newSessionPreset 是新会话模式的唯一判定源(项目会话恒 work / 无根恒 chat / 侧栏模式 / 全端默认 work);
+ * ② 新建 chat 会话恒 projectless + sandbox、不带 workspaceProject、不带自选 Agent/外部引擎/计划/群聊残值(applyPreset 唯一物化点),
  *    初始配置随 POST 原子落库(老引擎回空 → 补 PUT);
  * ③ 思考档按 preset 分槽(chat 缺省 off,chat 里调高不污染 work);④ 端判定每次现算;
  * ⑤ 三条建会话路(空态 send / createInWorkspace / newSession)同一条默认规则;⑥ 列表 agent_config 预填。
@@ -12,6 +12,7 @@ import { useApp, newSessionPreset, stickyDefaults, applyPreset, type AppState } 
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from '../views/sessionMode'
 import { currentPlatform } from '../services/agentRunService'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { selectableChatModels } from '../views/chatModelCatalog'
 
 const createSessionMock = vi.hoisted(() => vi.fn())
 const putSessionConfigMock = vi.hoisted(() => vi.fn())
@@ -43,19 +44,35 @@ describe('newSessionPreset(唯一判定源)', () => {
     expect(newSessionPreset('work', rootless, 'web')).toBe('chat')
     expect(newSessionPreset('work', null, 'mobile')).toBeUndefined()
   })
-  it('未选工作区且没手选模式 → 按端默认(desktop→work,web/mobile→chat)', () => {
+  it('未选工作区且没手选模式 → 全端默认 Work', () => {
     expect(newSessionPreset(null, rootless, 'desktop')).toBe('chat')
     expect(newSessionPreset(null, null, 'desktop')).toBeUndefined()
-    expect(newSessionPreset(null, null, 'web')).toBe('chat')
-    expect(newSessionPreset(null, null, 'mobile')).toBe('chat')
+    expect(newSessionPreset(null, null, 'web')).toBeUndefined()
+    expect(newSessionPreset(null, null, 'mobile')).toBeUndefined()
+  })
+})
+
+describe('Chat 模型目录', () => {
+  it('本地 sandbox Chat 保留当前后端返回的直连 Provider，只剔除非 LLM 模型', () => {
+    const models = [
+      { id: 'forsion/gpt', name: 'GPT', provider: 'forsion', source: 'forsion' as const, modelType: 'llm' as const },
+      { id: 'local/qwen', name: 'Qwen', provider: 'local', source: 'direct' as const, modelType: 'llm' as const },
+      { id: 'local/image', name: 'Image', provider: 'local', source: 'direct' as const, modelType: 'image_gen' as const },
+    ]
+    expect(selectableChatModels(models).map((m) => m.id)).toEqual(['forsion/gpt', 'local/qwen'])
+  })
+
+  it('云 worker 没返回 direct 模型时，目录自然仍只有 Forsion 托管模型', () => {
+    const models = [{ id: 'forsion/gpt', name: 'GPT', provider: 'forsion', source: 'forsion' as const }]
+    expect(selectableChatModels(models).map((m) => m.id)).toEqual(['forsion/gpt'])
   })
 })
 
 describe('侧栏 Chat/Work 模式:端默认解析 + 列表过滤(views/sessionMode.ts)', () => {
-  it('effectiveSessionMode:手选优先;没选按端默认', () => {
+  it('effectiveSessionMode:手选优先;没选全端默认 Work', () => {
     expect(effectiveSessionMode(null, 'desktop')).toBe('work')
-    expect(effectiveSessionMode(null, 'web')).toBe('chat')
-    expect(effectiveSessionMode(null, 'mobile')).toBe('chat')
+    expect(effectiveSessionMode(null, 'web')).toBe('work')
+    expect(effectiveSessionMode(null, 'mobile')).toBe('work')
     expect(effectiveSessionMode('chat', 'desktop')).toBe('chat')
     expect(effectiveSessionMode('work', 'mobile')).toBe('work')
   })
@@ -73,10 +90,10 @@ describe('侧栏 Chat/Work 模式:端默认解析 + 列表过滤(views/sessionMo
 })
 
 describe('applyPreset(唯一物化点,creview F1/F6)', () => {
-  it('chat:强制 sandbox/无 cwd,剥掉外部引擎/计划/群聊残值;work 原样', () => {
-    const draft = { execMode: 'host', cwd: '/x', engineId: 'codex', engineModelId: 'm', planMode: true, groupChat: true, thinkingLevel: 'high' } as never
+  it('chat:强制 sandbox/无 cwd,剥掉自选 Agent/外部引擎/计划/群聊残值;work 原样', () => {
+    const draft = { execMode: 'host', cwd: '/x', agentSlug: 'qinche', engineId: 'codex', engineModelId: 'm', planMode: true, groupChat: true, thinkingLevel: 'high' } as never
     expect(applyPreset(draft, 'chat')).toMatchObject({ preset: 'chat', execMode: 'sandbox', thinkingLevel: 'high' })
-    for (const k of ['cwd', 'engineId', 'engineModelId', 'planMode', 'groupChat']) expect((applyPreset(draft, 'chat') as Record<string, unknown>)[k]).toBeUndefined()
+    for (const k of ['cwd', 'agentSlug', 'engineId', 'engineModelId', 'planMode', 'groupChat']) expect((applyPreset(draft, 'chat') as Record<string, unknown>)[k]).toBeUndefined()
     expect(applyPreset(draft, undefined)).toBe(draft)
   })
 })
@@ -135,25 +152,26 @@ describe('新建 chat 会话:恒 projectless + sandbox,初始配置随 POST 原�
   })
   afterEach(() => { delete g.window })
 
-  it('send():web 端未选工作区 → 按端默认 chat → projectless、sandbox、无 Project、preset=chat 随 POST 落库;暂存选择被消费;引擎回显配置则不补 PUT', async () => {
+  it('send():web 端未选工作区 → 默认 Work → 默认云项目、sandbox、无 preset', async () => {
     g.window = { tangu: { cloudWeb: true } }
     await useApp.getState().send('你好', [])
     expect(createSessionMock).toHaveBeenCalledTimes(1)
     const init = createdInit()
-    expect(init).toMatchObject({ projectless: true })
-    expect(init).not.toHaveProperty('project_name')
+    expect(init).toMatchObject({ project_name: DEFAULT_CLOUD_PROJECT })
     expect(init).not.toHaveProperty('project_path')
-    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat', thinkingLevel: 'off' })
-    expect(createdCfg()).not.toHaveProperty('workspaceProject')
+    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', workspaceProject: DEFAULT_CLOUD_PROJECT })
+    expect(createdCfg()).not.toHaveProperty('preset')
     const cfg = startRunMock.mock.calls[0]?.[1].agentConfig
-    expect(cfg).toMatchObject({ execMode: 'sandbox', preset: 'chat', thinkingLevel: 'off' })
-    expect(useApp.getState().sessionMode).toBeNull() // 模式是持久状态,建会话不消费它(null = 端默认)
+    expect(cfg).toMatchObject({ execMode: 'sandbox', workspaceProject: DEFAULT_CLOUD_PROJECT })
+    expect(cfg).not.toHaveProperty('preset')
+    expect(useApp.getState().sessionMode).toBeNull() // 模式是持久状态,建会话不消费它(null = 默认 Work)
     expect(putSessionConfigMock).not.toHaveBeenCalled()
   })
 
   it('老引擎(POST 忽略 agent_config)→ 回来的 agent_config 为空 → 补一次 PUT,内容同 init', async () => {
     oldServer = true
     g.window = { tangu: { cloudWeb: true } }
+    useApp.setState({ sessionMode: 'chat' })
     await useApp.getState().send('你好', [])
     expect(putSessionConfigMock).toHaveBeenCalledTimes(1)
     expect(putSessionConfigMock.mock.calls[0][2]).toEqual(createdCfg())
@@ -178,12 +196,12 @@ describe('新建 chat 会话:恒 projectless + sandbox,初始配置随 POST 原�
 
   it('creview F1:草稿残留的外部引擎/计划/host 审批在 chat 下被剥掉(否则 chat 走 ACP 直打真实磁盘)', async () => {
     useApp.setState({
-      desktopMode: 'managed', defaultWsDir: '/default', sessionMode: 'chat',
-      newChatCfg: { engineId: 'codex', engineModelId: 'gpt', planMode: true, groupChat: true, execMode: 'host', approvalMode: 'full-auto' } as never,
+      desktopMode: 'managed', defaultWsDir: '/default', sessionMode: 'chat', defaultAgentSlug: 'xyra',
+      newChatCfg: { agentSlug: 'qinche', engineId: 'codex', engineModelId: 'gpt', planMode: true, groupChat: true, execMode: 'host', approvalMode: 'full-auto' } as never,
     })
     await useApp.getState().send('你好', [])
     const cfg = createdCfg()
-    expect(cfg).toMatchObject({ preset: 'chat', execMode: 'sandbox' })
+    expect(cfg).toMatchObject({ preset: 'chat', execMode: 'sandbox', agentSlug: 'xyra' })
     for (const k of ['engineId', 'engineModelId', 'planMode', 'groupChat', 'cwd']) expect(cfg[k]).toBeUndefined()
     expect(startRunMock.mock.calls[0]?.[1].agentConfig.engineId).toBeUndefined()
   })
@@ -197,9 +215,10 @@ describe('新建 chat 会话:恒 projectless + sandbox,初始配置随 POST 原�
   })
 
   it('createInWorkspace(无根)→ chat 会话:projectless + sandbox + preset 随 POST;云项目 → work', async () => {
+    useApp.setState({ defaultAgentSlug: 'xyra' })
     await useApp.getState().createInWorkspace(rootless)
     expect(createdInit()).toMatchObject({ projectless: true })
-    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat', thinkingLevel: 'off' })
+    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat', thinkingLevel: 'off', agentSlug: 'xyra' })
     expect(createdCfg()).not.toHaveProperty('workspaceProject')
     expect(putSessionConfigMock).not.toHaveBeenCalled()
 
@@ -210,21 +229,21 @@ describe('新建 chat 会话:恒 projectless + sandbox,初始配置随 POST 原�
     expect(createdCfg()).not.toHaveProperty('preset')
   })
 
-  it('newSession()(/new、侧栏按钮)三种落点:web 默认 → 无根 chat;web 显式 work → 默认云项目(与 send 同落点);桌面 → 默认工作区', async () => {
+  it('newSession()(/new、侧栏按钮)三种落点:web 默认 → 默认云项目;web 显式 chat → 无根;桌面 → 默认工作区', async () => {
     g.window = { tangu: { cloudWeb: true } }
-    await useApp.getState().newSession()
-    expect(createdInit()).toMatchObject({ projectless: true })
-    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat' })
-
-    createSessionMock.mockClear()
-    useApp.setState({ activeId: null, sessionMode: 'work' })
     await useApp.getState().newSession()
     expect(createdInit()).toMatchObject({ project_name: DEFAULT_CLOUD_PROJECT })
     expect(createdCfg()).toMatchObject({ execMode: 'sandbox', workspaceProject: DEFAULT_CLOUD_PROJECT })
     expect(createdCfg()).not.toHaveProperty('preset')
 
+    createSessionMock.mockClear()
+    useApp.setState({ activeId: null, sessionMode: 'chat' })
+    await useApp.getState().newSession()
+    expect(createdInit()).toMatchObject({ projectless: true })
+    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat' })
+
     delete g.window; createSessionMock.mockClear()
-    useApp.setState({ desktopMode: 'managed', defaultWsDir: '/default', activeId: null })
+    useApp.setState({ desktopMode: 'managed', defaultWsDir: '/default', activeId: null, sessionMode: null })
     await useApp.getState().newSession()
     expect(createdInit()).toMatchObject({ project_path: '/default' })
     expect(createdCfg()).not.toHaveProperty('preset')

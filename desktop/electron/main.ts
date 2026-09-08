@@ -20,17 +20,23 @@ import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
+import { envWithFullPath } from './envPath'
 import { startForsionMcp, publishExternalEndpoint, unpublishExternalEndpoint } from './mcpServer'
 import { randomBytes } from 'node:crypto'
 import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
   forsionRefreshToken, shouldRefreshToken,
+  cancelForsionLogin, forsionAccounts, savedForsionAccount, rememberForsionAccount, forsionAccountId,
+  loadAccountCloudSettings, saveAccountCloudSettings,
+  forgetForsionAccount,
 } from './forsionAuth'
 import type { WhoamiResult } from './forsionAuth'
+import { waitForAccountRenderers } from './accountTransition'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
+import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
@@ -41,6 +47,7 @@ import {
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView } from './computerUse'
+import { registerDesktopPermissions } from './desktopPermissions'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
@@ -186,33 +193,6 @@ interface EnvProbe {
 
 /** env:check 登记的可执行安装命令(id → command);env:run 仅从此表取,防 renderer 注入任意命令。 */
 const pendingInstallCommands = new Map<string, string>()
-
-/** GUI 启动的 Electron 只拿到 launchd/桌面会话的精简 PATH(mac 上不含 /opt/homebrew/bin 等),
- *  Homebrew/用户目录装的 node/git/docker 会被误判「未检测到」。环境探测与引导安装统一用补全 PATH。 */
-function envWithFullPath(extra?: Record<string, string>): NodeJS.ProcessEnv {
-  const sep = process.platform === 'win32' ? ';' : ':'
-  const home = homedir()
-  // Windows 上 GUI Electron 拿到的 PATH 常缺 nvm/scoop/winget/npm-global 等 per-user 目录 → node/npm/docker 误判未装。
-  // 补进最常见的安装位置(存在才补)。真正让 npm.cmd 等 .cmd shim 能被探测到的是 probeVersion 的 shell:true。
-  const additions = process.platform === 'win32'
-    ? [
-        join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'npm'),
-        join(home, 'scoop', 'shims'),
-        join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Microsoft', 'WindowsApps'),
-        join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
-        join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'cmd'),
-      ]
-    : [
-        '/opt/homebrew/bin', '/usr/local/bin', '/usr/local/sbin',
-        join(home, '.local', 'bin'), join(home, '.volta', 'bin'),
-        join(home, '.pyenv', 'shims'), join(home, '.cargo', 'bin'),
-      ]
-  const cur = (process.env.PATH || '').split(sep).filter(Boolean)
-  // 只补「真实存在且尚不在 PATH」的目录(existsSync 过滤,避免塞进不存在的路径 + 无意义查找)。
-  const add = additions.filter((p) => existsSync(p) && !cur.includes(p))
-  const PATH = [...cur, ...add].join(sep)
-  return { ...process.env, PATH, ...(extra || {}) }
-}
 
 /** 「中国大陆」网络下给引导安装子进程注入的镜像 env(brew/pip/npm;不写用户 dotfile,可逆)。 */
 function chinaInstallEnv(): Record<string, string> {
@@ -378,6 +358,7 @@ interface TanguStoredConfig {
   forsionSyncEnabled: boolean
   /** 上次成功同步时刻(epoch ms)。 */
   forsionLastSyncedAt: number
+  forsionSyncAccountId?: string | null
   /** 笔记(Amadeus)拖入附件存放方式:attachments=同目录 attachments/;same=与笔记同目录;vault=固定文件夹。 */
   notesAttachmentMode: 'attachments' | 'same' | 'vault'
   /** notesAttachmentMode==='vault' 时的 vault 相对文件夹(如 "assets")。 */
@@ -493,7 +474,7 @@ async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<str
 // desktop-shell 专属键(留 userData/tangu-desktop-config.json):连哪个后端 + 同步开关。CLI 无此概念。
 // 其余键(cloud/sandbox/workspace/browser/wechat)以 ~/.tangu/config.json 各段为权威,落盘亦写那里。
 const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
-  'mode', 'backendUrl', 'token', 'forsionSyncEnabled', 'forsionLastSyncedAt',
+  'mode', 'backendUrl', 'token',
   'unitHostEnabled', 'unitHostId', 'unitHostSecret', 'unitWebPort', 'unitInstanceId', 'unitPairedDevices', 'unitP2pStun', // 设备互联(本机 Unit 侧状态)
 
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
@@ -585,6 +566,12 @@ async function loadConfig(): Promise<TanguStoredConfig> {
   }
   // v1→v2 迁移:mode='unit'(A 渲染器 attach 远端)已废除,遗留值一律迁回 managed,防悬空启动态。
   if ((merged.mode as unknown) === 'unit') merged.mode = 'managed'
+  // Account credentials and their server form one identity. A remembered endpoint
+  // from settings must never send an active account's token to another server.
+  const accountCreds = loadTanguCreds()
+  if (accountCreds.token && accountCreds.cloudUrl) merged.cloudUrl = accountCreds.cloudUrl
+  Object.assign(merged, loadAccountCloudSettings(accountCreds))
+  merged.forsionSyncAccountId = forsionAccountId(accountCreds.cloudUrl || '', accountCreds.token || '')
   // 环境变量兜底:TANGU_CLOUD_URL(managed/登录默认)、TANGU_BACKEND_URL(external 外部地址)。
   if (!merged.cloudUrl) {
     merged.cloudUrl = process.env.TANGU_CLOUD_URL || loadTanguCreds().cloudUrl || DEFAULT_CLOUD_URL
@@ -596,7 +583,14 @@ async function loadConfig(): Promise<TanguStoredConfig> {
 }
 
 /** patch 按键分流:shell 键 → desktop 文件;config-backed 键 → config.json 对应段(唯一真源)。 */
-async function saveConfig(patch: Partial<TanguStoredConfig>): Promise<TanguStoredConfig> {
+async function saveConfig(patch: Partial<TanguStoredConfig>, accountCreds = loadTanguCreds()): Promise<TanguStoredConfig> {
+  const accountPatch: Partial<ReturnType<typeof loadAccountCloudSettings>> = {}
+  if ('forsionSyncEnabled' in patch) accountPatch.forsionSyncEnabled = patch.forsionSyncEnabled === true
+  if ('forsionLastSyncedAt' in patch) accountPatch.forsionLastSyncedAt = patch.forsionLastSyncedAt || 0
+  const accountId = forsionAccountId(accountCreds.cloudUrl || '', accountCreds.token || '')
+  if (Object.keys(accountPatch).length && (patch.forsionSyncAccountId === undefined || patch.forsionSyncAccountId === accountId)) {
+    saveAccountCloudSettings(accountPatch, accountCreds)
+  }
   // shell 键
   const shell = await readShellConfig()
   let shellTouched = false
@@ -1597,6 +1591,7 @@ if (process.platform !== 'darwin') {
 registerAmadeusAssetSchemes()
 
 app.whenReady().then(async () => {
+  registerDesktopPermissions({ isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow })
   // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
   app.setAppUserModelId('com.forsion.tangu')
   // 媒体权限(麦克风,语音输入):Electron 层放行——部分平台/版本默认拒 getUserMedia。callback(true) 沿用
@@ -1712,6 +1707,14 @@ app.whenReady().then(async () => {
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
   await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
+  // 内置插件捆绑包(电脑操作 等)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
+  // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆引擎 → 不播。
+  if (PRODUCT.agentBackend) {
+    await seedBuiltinBundles(
+      join(forsionHomeDir(), 'plugins'),
+      builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+    ).catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
+  }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
   if (PRODUCT.agentBackend) void ensureCliInstalled({
     isPackaged: app.isPackaged,
@@ -1745,8 +1748,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
+    const accountCreds = loadTanguCreds() // Capture before loadConfig's first await.
     const before = await loadConfig()
-    await saveConfig(patch)
+    await saveConfig(patch, accountCreds)
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
     if (patch.activeWindowEnabled !== undefined) activeWindowOn = patch.activeWindowEnabled === true
     // 模式/托管参数变化 → 重启托管后端(切到 external 则停掉)。
@@ -2583,7 +2587,42 @@ app.whenReady().then(async () => {
   }
   // 登录态变更处理的去重锚:桌面登录/登出 IPC 与 auth.json watcher 都会触发「广播 + 重启后端」,
   // 以「上次已处理的 token 值」判重,IPC 路径先行更新它 → watcher 随后触发时识别为已处理。
-  let lastAuthToken = loadTanguCreds().token || ''
+  const credKey = (url: string, tok: string): string => `${url.replace(/\/+$/, '')}\u0000${tok}`
+  const currentAuthKey = (): string => { const c = loadTanguCreds(); return credKey(c.cloudUrl || '', c.token || '') }
+  let lastAuthCreds = loadTanguCreds()
+  let lastAuthKey = currentAuthKey()
+  const updateLastAuth = (): void => {
+    lastAuthCreds = loadTanguCreds()
+    lastAuthKey = credKey(lastAuthCreds.cloudUrl || '', lastAuthCreds.token || '')
+  }
+  let authIntent = 0
+  let authTransitions: Promise<unknown> = Promise.resolve()
+  const runAuthTransition = <T,>(fn: () => Promise<T>): Promise<T> => {
+    const task = authTransitions.then(fn, fn)
+    authTransitions = task.catch(() => {})
+    return task
+  }
+  const prepareAccountTransition = async (): Promise<void> => {
+    const renderers = [mainWindow, miniWindow, ...detachedWindows.values()]
+      .filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
+      .map((w) => w.webContents)
+      .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame())
+    try { await waitForAccountRenderers(renderers, ipcMain) } catch (error) {
+      broadcast('auth:changed', { loggedIn: !!loadTanguCreds().token })
+      throw error
+    }
+  }
+  const withPreparedAccount = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    await prepareAccountTransition()
+    try {
+      await stopAmadeusSync?.()
+      return await fn()
+    } finally {
+      try { await restartAmadeusSync?.() } finally {
+        broadcast('auth:changed', { loggedIn: !!loadTanguCreds().token })
+      }
+    }
+  }
 
   /**
    * 登录态滑动续期:启动时(及运行中每 24h)拿旧 token 静默换一枚新的 → 「离上次进入软件不满
@@ -2591,6 +2630,8 @@ app.whenReady().then(async () => {
    * 失败一律静默(离线/老版本 server/已失效),绝不在这里清凭证。
    */
   const refreshAuthSliding = async (timeoutMs?: number): Promise<void> => {
+    const intent = authIntent
+    const originalKey = currentAuthKey()
     const creds = loadTanguCreds()
     const token = creds.token || ''
     if (!shouldRefreshToken(token)) return
@@ -2600,9 +2641,9 @@ app.whenReady().then(async () => {
     // 留痕:日后「又被登出了」的第一个排查问题就是「续期到底跑没跑」,没日志只能靠猜。
     if (!fresh) { console.log('[auth] 滑动续期未成功(离线/老版本 server/这枚已失效),继续用旧 token'); return }
     // 竞态防线:换新在途期间可能已并发登录/登出换了凭证——绝不拿旧链条换来的 token 盖掉新的。
-    if ((loadTanguCreds().token || '') !== token) return
-    lastAuthToken = fresh // 先更新去重锚:watcher 随后比对相同即跳过,不会白重启一次后端
-    saveTanguCreds({ ...loadTanguCreds(), token: fresh })
+    if (intent !== authIntent || currentAuthKey() !== originalKey) return
+    saveTanguCreds({ ...loadTanguCreds(), cloudUrl: base, token: fresh })
+    updateLastAuth() // 同步更新凭据快照:watcher 随后识别相同即跳过。
     console.log('[auth] 登录态已滑动续期(有效期重新计满 2 周)')
     // ponytail: 只写文件,不重启 managed 后端 / 同步引擎。启动那次由调用点排序保证(spawn 排在续期
     // 之后),运行中每 24h 这次留下的漂移是良性的:渲染层的 cfg.token 也是「boot / 后端 ready」时的
@@ -2614,8 +2655,9 @@ app.whenReady().then(async () => {
   // 头像/昵称/会员标全抹成 null(loggedIn 还是 true),表现就是「头像时不时消失」。
   // 换号/登出/换云端地址一律不复用;whoami 在途期间凭据变了则整份作废(见下方 fresh 复核)。
   let whoProfileCache: { key: string; user: NonNullable<WhoamiResult['user']> } | null = null
-  const credKey = (url: string, tok: string): string => `${url.replace(/\/+$/, '')}\u0000${tok}`
   ipcMain.handle('auth:status', async () => {
+    const statusIntent = authIntent
+    const requestAuthKey = currentAuthKey()
     const stored = await loadConfig()
     const creds = loadTanguCreds()
     const cloudUrl = stored.cloudUrl || creds.cloudUrl || ''
@@ -2623,10 +2665,15 @@ app.whenReady().then(async () => {
     const who = token ? await forsionWhoami(cloudUrl, token) : null
     // ⚠️ whoami 最长 5s;这期间用户完全可能登出/换号。回来先复核当下的凭据还是不是我查的那份 ——
     //    不复核的话,A 账号的迟到响应会把 A 的头像写进(或读出)B 的位置上(Codex 评审 medium)。
+    const nowStored = await loadConfig()
     const nowCreds = loadTanguCreds()
-    const stale = credKey(stored.cloudUrl || nowCreds.cloudUrl || '', nowCreds.token || '') !== credKey(cloudUrl, token)
+    const currentUrl = nowStored.cloudUrl || nowCreds.cloudUrl || ''
+    const stale = credKey(currentUrl, nowCreds.token || '') !== credKey(cloudUrl, token)
     const key = credKey(cloudUrl, token)
-    if (!stale && who?.status === 'ok' && who.user) whoProfileCache = { key, user: who.user }
+    if (!stale && who?.status === 'ok' && who.user) {
+      whoProfileCache = { key, user: who.user }
+      rememberForsionAccount({ ...nowCreds, cloudUrl }, who.user)
+    }
     // 离线沿用同一凭据的上次资料;ok 用新的;其余(未登录/换号/凭据已漂)一律留空。
     const u = stale
       ? undefined
@@ -2636,30 +2683,38 @@ app.whenReady().then(async () => {
     // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
     // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
     const backendState = PRODUCT.agentBackend && stored.mode === 'managed' ? backend.getStatus().state : null
+    // A late whoami response describes an old session. Return the current session
+    // even when the old token was valid; otherwise a completed sign-out looks signed in again.
+    if (stale) return {
+      loggedIn: !!nowCreds.token, tokenValid: null, cloudUrl: currentUrl,
+      accountId: forsionAccountId(currentUrl, nowCreds.token || ''),
+      username: null, nickname: null, avatar: null, membershipTier: null,
+      tokenSource: nowCreds.token ? 'tangu-login' : null, backendState,
+    }
     if (who?.status === 'expired') {
       // token 已被服务端吊销(账号中心「退出登录」按 jti 吊销桌面这枚也走到这)或自然过期:
       // 就地转真登出——清 auth.json、后端重启丢弃旧 token、踢同步引擎,所有表面一致回「未登录」,
       // 而不是挂着一个服务端早已不认的僵尸登录态。仅 401/403 走这里,离线(offline)绝不误清。
       // 竞态防线:whoami 在途期间可能已并发登录换新凭证(auth.json 里已不是验失败的那枚)——绝不清新 token。
-      const nowTok = loadTanguCreds().token || ''
-      if (nowTok && nowTok !== token) {
-        return {
-          loggedIn: true, tokenValid: null, cloudUrl,
-          username: null, nickname: null, avatar: null, membershipTier: null,
-          tokenSource: 'tangu-login', backendState,
-        }
-      }
-      console.log('[auth] token 已失效(服务端 401/403),自动登出')
-      forsionLogout()
-      lastAuthToken = ''
-      if (stored.mode === 'managed') void ensureBackend()
-      restartAmadeusSync?.()
-      void refreshUnitHost() // 身份没了 → 互联通道不许再以旧账号挂着(Codex P1:账号隔离)
-      broadcast('auth:changed', { loggedIn: false })
+      await runAuthTransition(async () => {
+        if (statusIntent !== authIntent || currentAuthKey() !== requestAuthKey) return
+        await withPreparedAccount(async () => {
+          if (statusIntent !== authIntent || currentAuthKey() !== requestAuthKey) return
+          console.log('[auth] token 已失效(服务端 401/403),自动登出')
+          ++authIntent
+          forsionLogout()
+          whoProfileCache = null
+          updateLastAuth()
+          if (stored.mode === 'managed') await ensureBackend()
+          void refreshUnitHost()
+        })
+      })
+      const current = loadTanguCreds()
       return {
-        loggedIn: false, tokenValid: null, cloudUrl,
+        loggedIn: !!current.token, tokenValid: null, cloudUrl: current.cloudUrl || cloudUrl,
+        accountId: forsionAccountId(current.cloudUrl || cloudUrl, current.token || ''),
         username: null, nickname: null, avatar: null, membershipTier: null,
-        tokenSource: null, backendState,
+        tokenSource: current.token ? 'tangu-login' : null, backendState,
       }
     }
     return {
@@ -2667,6 +2722,7 @@ app.whenReady().then(async () => {
       // null=未校验/离线(不确定);true=有效。失效(401/403)已在上面就地转登出,不再返回 false。
       tokenValid: who ? (who.status === 'ok' ? true : null) : null,
       cloudUrl,
+      accountId: forsionAccountId(cloudUrl, token),
       username: u?.username || null,
       nickname: u?.nickname || null,
       avatar: u?.avatar || null,
@@ -2965,47 +3021,76 @@ app.whenReady().then(async () => {
 
   // 登录成功后踢一次 Amadeus 云同步引擎(值由下方 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
   // auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
-  let restartAmadeusSync: (() => void) | null = null
+  let restartAmadeusSync: (() => Promise<void>) | null = null
+  let stopAmadeusSync: (() => Promise<void>) | null = null
+  const activateAccount = async (creds: ReturnType<typeof loadTanguCreds>, assertCurrent: () => void): Promise<void> => {
+    assertCurrent()
+    await withPreparedAccount(async () => {
+      assertCurrent()
+      // Finish endpoint persistence before committing the new credential. loadConfig
+      // keeps using the old active credential's endpoint while this write is pending.
+      await saveConfig({ cloudUrl: creds.cloudUrl })
+      assertCurrent()
+      saveTanguCreds({ ...loadTanguCreds(), ...creds })
+      updateLastAuth()
+      whoProfileCache = null
+      const stored = await loadConfig()
+      if (stored.mode === 'managed') await ensureBackend()
+      void refreshUnitHost()
+    })
+  }
+
+  ipcMain.handle('auth:accounts', () => forsionAccounts())
+  ipcMain.handle('auth:switchAccount', async (_e, accountId: string) => {
+    if (typeof accountId !== 'string') throw new Error('Invalid account.')
+    const intent = ++authIntent
+    cancelForsionLogin()
+    return runAuthTransition(async () => {
+      const creds = savedForsionAccount(accountId)
+      await activateAccount(creds, () => { if (intent !== authIntent) throw new Error('Account switch cancelled.') })
+      return { ok: true, cloudUrl: creds.cloudUrl || '' }
+    })
+  })
   ipcMain.handle('auth:forsionLogin', async (_e, cloudUrl?: string) => {
+    const intent = ++authIntent
+    cancelForsionLogin()
     const stored = await loadConfig()
+    if (intent !== authIntent) throw new Error('Sign-in cancelled.')
     const url = (cloudUrl || stored.cloudUrl || '').trim()
-    const r = await forsionDeviceLogin(url, (info) => broadcast('auth:device', info))
-    // 登录成功:cloudUrl 记进配置;token 由 forsionDeviceLogin 写进 auth.json(登录态唯一真源)。
-    lastAuthToken = r.token
-    // cloudUrl 记忆是锦上添花:写失败(磁盘满等)绝不能中断下面的传播(后端重启/广播),
-    // 否则 lastAuthToken 已更新会让 watcher 也跳过,后端就卡在旧 token 上。
-    try { await saveConfig({ cloudUrl: r.cloudUrl }) } catch (e) { console.error('[auth] cloudUrl 记忆写入失败(忽略):', e) }
-    // 关键:await(非 void)等后端带新 token 重启就绪后才返回,这样渲染端登录后的 onReconnect/onAuthChange
-    // 必命中「已就绪 + 已鉴权」的后端。否则后端尚在重启时渲染端就 connect → 失败,只能靠异步 ready 广播
-    // 自愈(竞态;新用户引导里常表现为登录后一直「连接后端」、模型加载不出,得手动去设置重启)。
-    if (stored.mode === 'managed') await ensureBackend()
-    restartAmadeusSync?.() // 登录成功:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)
-    void refreshUnitHost() // 互联通道换新身份重建(旧账号的通道不许滞留;配对行不属新账号会 404 自愈重入册)
-    broadcast('auth:changed', { loggedIn: true }) // 其余窗口的账号卡也同步刷新
+    const r = await forsionDeviceLogin(url, (info) => broadcast('auth:device', info), (creds, assertCurrent) =>
+      runAuthTransition(() => activateAccount(creds, () => {
+        assertCurrent()
+        if (intent !== authIntent) throw new Error('Sign-in cancelled.')
+      })))
     return { ok: true, cloudUrl: r.cloudUrl }
   })
 
   ipcMain.handle('auth:logout', async () => {
-    // 先请求服务端吊销本机这一枚 token(jti 单枚吊销:网页独立会话/其他设备不受影响;
-    // 从本机跳转出去的账号中心页持有的同为这枚,一并失效)。
-    // 离线/失败不阻断本地登出——本地清了、服务端 token 还活着,靠 30d 自然过期兜底。
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    const base = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    if (base && creds.token) {
-      void fetch(`${base}/api/auth/logout`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${creds.token}` },
-        signal: AbortSignal.timeout(5000),
-      }).catch(() => {})
-    }
-    forsionLogout()                 // 清 auth.json 的 token(唯一真源;config.json 不再存 token)
-    lastAuthToken = ''
-    if (stored.mode === 'managed') void ensureBackend()
-    restartAmadeusSync?.() // 硬重启同步引擎丢弃旧账号 client:否则登出后仍拿旧 token 继续同步
-    void refreshUnitHost() // 同上:登出即重建互联通道(未登录态下 unitWeb 局域网面照常,云通道退避等登录)
-    broadcast('auth:changed', { loggedIn: false })
-    return { ok: true }
+    ++authIntent
+    cancelForsionLogin()
+    return runAuthTransition(async () => {
+      // 先请求服务端吊销本机这一枚 token(jti 单枚吊销:网页独立会话/其他设备不受影响;
+      // 从本机跳转出去的账号中心页持有的同为这枚,一并失效)。
+      // 离线/失败不阻断本地登出——本地清了、服务端 token 还活着,靠 14d 自然过期兜底。
+      const stored = await loadConfig()
+      const creds = loadTanguCreds()
+      const base = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
+      return withPreparedAccount(async () => {
+        forsionLogout()                 // Clear the active account and its restorable credential.
+        updateLastAuth()
+        whoProfileCache = null
+        if (base && creds.token) {
+          void fetch(`${base}/api/auth/logout`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${creds.token}` },
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => {})
+        }
+        if (stored.mode === 'managed') await ensureBackend()
+        void refreshUnitHost() // 同上:登出即重建互联通道(未登录态下 unitWeb 局域网面照常,云通道退避等登录)
+        return { ok: true }
+      })
+    })
   })
 
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
@@ -3054,21 +3139,28 @@ app.whenReady().then(async () => {
   // ~/.forsion/auth.json 是登录态唯一真源(桌面与 CLI `tangu login` 共写)。watch 它:任何来源的凭证
   // 变化(终端 tangu login / logout、手工改文件)也走与桌面登录同一条传播链——广播渲染层 + managed
   // 后端带新 token 重启(token 经 env 快照注入,重启是唯一传播手段)+ 踢 Amadeus 云同步。
-  // 桌面自己的登录/登出 IPC 已先行处理并更新 lastAuthToken,watcher 比对相同即跳过,不会二次重启。
+  // 桌面自己的登录/登出 IPC 已先行处理并更新 lastAuthKey,watcher 比对相同即跳过,不会二次重启。
   let authWatchTimer: ReturnType<typeof setTimeout> | null = null
   const onAuthFileMaybeChanged = (): void => {
     if (authWatchTimer) clearTimeout(authWatchTimer)
     authWatchTimer = setTimeout(() => {
-      void (async () => {
-        const tok = loadTanguCreds().token || ''
-        if (tok === lastAuthToken) return
-        lastAuthToken = tok
-        broadcast('auth:changed', { loggedIn: !!tok })
-        const stored = await loadConfig()
-        if (stored.mode === 'managed') void ensureBackend()
-        restartAmadeusSync?.()
-        void refreshUnitHost() // 外部来源(CLI tangu login/logout)换身份 → 互联通道同步重建
-      })()
+      void runAuthTransition(async () => {
+        if (currentAuthKey() === lastAuthKey) return
+        ++authIntent
+        cancelForsionLogin()
+        const current = loadTanguCreds()
+        if (lastAuthCreds.token && !current.token) forgetForsionAccount(lastAuthCreds)
+        // Old clients are bound to their original account and root. Editors must
+        // flush before stopSync moves a cloud vault back to the local folder.
+        await withPreparedAccount(async () => {
+          updateLastAuth()
+          whoProfileCache = null
+          rememberForsionAccount(loadTanguCreds())
+          const stored = await loadConfig()
+          if (stored.mode === 'managed') await ensureBackend()
+          void refreshUnitHost()
+        })
+      }).catch((e) => console.error('[auth] external account change failed:', e))
     }, 300) // 防抖:登录流程对 auth.json 的连续写只触发一次
   }
   try {
@@ -3272,11 +3364,12 @@ app.whenReady().then(async () => {
     quit: () => { isQuitting = true; app.quit() },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, restartSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow)
+  const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow)
   amadeusReadPlugins = readExternalPlugins
   amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
+  stopAmadeusSync = stopSync
   registerAmadeusAssetProtocol(getVaultRoot)
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建

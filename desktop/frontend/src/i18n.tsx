@@ -98,6 +98,10 @@ type Dict = Record<string, string>
 // 注:这里先放基础设施会用到的键 + 任务新增键;其余界面文案由全量翻译批次补入。
 const zh: Dict = {
   'common.save': '保存',
+  // 等模型期间的实况行(EditorialMessage LiveWaitLine)
+  'chat.wait.sending': '正在发送上下文 {kb} KB',
+  'chat.wait.firstToken': '等待模型首帧',
+  'chat.wait.elapsed': '已等待 {s} 秒',
   // 内置 Python / 网络镜像(设置 + 引导)
   'settings.python.label': 'Python',
   'settings.python.bundled': '内置(推荐)',
@@ -764,6 +768,11 @@ const zh: Dict = {
   'app.update.bannerDismiss': '忽略',
   'about.changelogTitle': '最新更新',
   'about.builtWith': 'Forsion Desktop · 扶桑',
+  'about.builtWithMobile': 'Forsion 移动端 · 扶桑',
+  'about.complianceTitle': '备案与协议',
+  'about.appFiling': 'App 备案号',
+  'about.privacy': '隐私政策',
+  'about.terms': '服务条款',
 
   // 设置 - 连接(云端地址改为只读/环境变量)
   'settings.cloud.envOnly': 'Forsion 云端地址由环境变量 TANGU_CLOUD_URL 设置(此处只读)。',
@@ -1063,6 +1072,12 @@ const zh: Dict = {
   'settings.theme.system': '跟随系统',
   'settings.theme.modeLocked': '该主题固定跟随系统明暗',
   'settings.theme.modeLockedHint': 'Glass 等主题的明暗由系统决定,不可手动切换。',
+  'settings.theme.zoomLabel': '界面大小',
+  'settings.theme.zoomHint': '缩放整个界面,当前 {percent}%。也可用 ⌘/Ctrl + ＋/− 按 10% 微调。',
+  'settings.theme.zoomPresetLabel': '界面大小预设',
+  'settings.theme.zoomSmall': '小',
+  'settings.theme.zoomStandard': '标准',
+  'settings.theme.zoomLarge': '大',
   'settings.theme.smoothCaret': '丝滑光标',
   'settings.theme.smoothCaretHint': '编辑器与聊天输入框的文字光标平滑滑动到新位置(Word 手感)。默认关闭,需要时手动打开。',
   'settings.theme.fontUi': '界面字体',
@@ -1120,7 +1135,7 @@ const zh: Dict = {
   'settings.page.spacesDescription': '选择启动位置，查看或移除已安装的工作空间。',
   'settings.page.notesDescription': '统一管理附件位置、笔记行为与删除安全选项。',
   'settings.page.syncDescription': '查看云端状态并配置笔记与远程同步。',
-  'settings.page.themeDescription': '预览并组合设计语言、配色、明暗与字体。',
+  'settings.page.themeDescription': '预览并组合设计语言、配色、明暗、界面大小与字体。',
   'settings.page.shortcutsDescription': '搜索命令并录制、解绑或恢复快捷键。',
   'settings.page.notificationsDescription': '控制通知出口，以及每类事件与插件是否提醒。',
   'settings.page.statusbarDescription': '选择底部状态项，并拖动调整显示顺序。',
@@ -1164,7 +1179,7 @@ const zh: Dict = {
   'settings.theme.langDescription': '选择界面的结构、圆角、排版和整体气质。',
   'settings.theme.skinDescription': '主题色与背景色分开选,布局不变;两边选同一个 = 原来的整套配色。',
   'settings.theme.behaviorTitle': '显示与动效',
-  'settings.theme.behaviorDescription': '调整明暗、层次质感和输入时的反馈。',
+  'settings.theme.behaviorDescription': '调整明暗、界面大小、层次质感和输入时的反馈。',
   'settings.theme.flatDescription': '控制卡片与浮层是否保留空间阴影。',
   'settings.theme.glassDescription': '为支持的表面加入半透明模糊效果。',
   'settings.theme.typographyTitle': '字体',
@@ -1727,6 +1742,10 @@ const zh: Dict = {
 
 const en: Dict = {
   'common.save': 'Save',
+  // Live wait line while calling the model (EditorialMessage LiveWaitLine)
+  'chat.wait.sending': 'Sending context ({kb} KB)',
+  'chat.wait.firstToken': 'Waiting for the model',
+  'chat.wait.elapsed': '{s}s elapsed',
   // Bundled Python / network mirror (settings + onboarding)
   'settings.python.label': 'Python',
   'settings.python.bundled': 'Bundled (recommended)',
@@ -2387,6 +2406,11 @@ const en: Dict = {
   'app.update.bannerDismiss': 'Dismiss',
   'about.changelogTitle': "What's New",
   'about.builtWith': 'Forsion Desktop',
+  'about.builtWithMobile': 'Forsion Mobile',
+  'about.complianceTitle': 'Compliance',
+  'about.appFiling': 'App filing number',
+  'about.privacy': 'Privacy policy',
+  'about.terms': 'Terms of service',
 
   'settings.cloud.envOnly': 'The Forsion cloud URL is set via the TANGU_CLOUD_URL environment variable (read-only here).',
   'settings.cloud.label': 'Forsion cloud URL (brain: memory/skills/hosted models)',
@@ -2679,6 +2703,12 @@ const en: Dict = {
   'settings.theme.system': 'Follow system',
   'settings.theme.modeLocked': 'This theme follows the system appearance',
   'settings.theme.modeLockedHint': 'Themes like Glass take light/dark from the system; it can’t be switched manually.',
+  'settings.theme.zoomLabel': 'Interface size',
+  'settings.theme.zoomHint': 'Scales the whole interface. Currently {percent}%. You can also fine-tune it in 10% steps with ⌘/Ctrl + +/−.',
+  'settings.theme.zoomPresetLabel': 'Interface size presets',
+  'settings.theme.zoomSmall': 'Small',
+  'settings.theme.zoomStandard': 'Standard',
+  'settings.theme.zoomLarge': 'Large',
   'settings.theme.flatLabel': 'Shadow',
   'settings.theme.flatOff': 'Raised',
   'settings.theme.flatOn': 'Flat',
@@ -2740,7 +2770,7 @@ const en: Dict = {
   'settings.page.spacesDescription': 'Choose a startup location and manage installed workspaces.',
   'settings.page.notesDescription': 'Manage attachment locations, note behavior and deletion safeguards.',
   'settings.page.syncDescription': 'Review cloud status and configure note and remote sync.',
-  'settings.page.themeDescription': 'Preview and combine design language, color, appearance mode and typography.',
+  'settings.page.themeDescription': 'Preview and combine design language, color, appearance mode, interface size and typography.',
   'settings.page.shortcutsDescription': 'Find commands and record, unbind or restore shortcuts.',
   'settings.page.notificationsDescription': 'Control delivery and choose which events and plugins can notify you.',
   'settings.page.statusbarDescription': 'Choose bottom-bar items and drag them into display order.',
@@ -2784,7 +2814,7 @@ const en: Dict = {
   'settings.theme.langDescription': 'Choose the structure, radius, typography and overall character of the interface.',
   'settings.theme.skinDescription': 'Pick accent and background separately; same id on both = the original combined scheme.',
   'settings.theme.behaviorTitle': 'Display and motion',
-  'settings.theme.behaviorDescription': 'Adjust appearance mode, depth and typing feedback.',
+  'settings.theme.behaviorDescription': 'Adjust appearance mode, interface size, depth and typing feedback.',
   'settings.theme.flatDescription': 'Choose whether cards and overlays keep spatial shadows.',
   'settings.theme.glassDescription': 'Add translucent blur to surfaces that support it.',
   'settings.theme.typographyTitle': 'Typography',

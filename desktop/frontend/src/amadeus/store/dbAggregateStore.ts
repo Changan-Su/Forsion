@@ -264,13 +264,7 @@ export function setAggName(db: AggDb, rowId: string, value: string): void {
 }
 
 // 结构变更(新增/删除文件,含 .db)→ 刷新 pageStore.files(paths 反应式跟随;Calendar-only 空间下
-// 也生效,不依赖 Amadeus 编辑器视图挂载)。vault 切换 → 清跨库缓存(entries 按 ref 不含 vault,同名 .db 跨库会串;
-// files 会随 restore 重新到位)。
+// 也生效,不依赖 Amadeus 编辑器视图挂载)。vault 切换的缓存作废由 dbStore 自身负责。
 if (typeof window !== 'undefined' && window.amadeus) {
   amadeus.onStructureChange?.(() => void usePageStore.getState().refreshStructure())
-  usePageStore.subscribe((s, p) => {
-    // gen 必须跟着 +1:光清 entries 的话,已经挂着的嵌入/独立 db 视图不会重读(它们的 effect 只依赖路径),
-    // 界面永远停在「读取数据库…」。启动时 vaultRoot 从 null 变成真根也走这条,所以这不是切库才有的边角。
-    if (s.vaultRoot !== p.vaultRoot) useDbStore.setState((d) => ({ entries: {}, gen: d.gen + 1 }))
-  })
 }

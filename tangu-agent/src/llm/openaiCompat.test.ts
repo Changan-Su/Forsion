@@ -1,11 +1,44 @@
 import { describe, it, expect } from 'vitest';
-import { tuneOpenAiDirectPayload, PROTOCOL_MARK } from './openaiCompat.js';
+import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, PROTOCOL_MARK, ACCOUNT_MARK } from './openaiCompat.js';
+import { openaiToResponsesBody } from './openaiResponses.js';
+import { createProviderRegistry } from './providerRegistry.js';
 
 // 直连面的档位下发契约。「哪个模型该发什么」的矩阵在 modelCapabilities.test.ts;
 // 这里只守 tune 这一层的职责:查表 → 写 payload → 需要时打改道标记。
 describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
   const base = () => ({ model: 'gpt-5.6-luna', temperature: 0.7, messages: [], tools: [{}] }) as any;
   const OFFICIAL = 'https://api.openai.com/v1';
+
+  it.each(['codex', 'openai'])('GPT-6 Astra 经 %s 注册表→payload→Responses 保留工具与有效档位', (providerId) => {
+    const subscription = providerId === 'codex';
+    const reg = createProviderRegistry([{
+      providerId, baseUrl: subscription ? 'https://chatgpt.com/backend-api/codex' : OFFICIAL,
+      ...(subscription ? { protocol: 'openai-responses' as const, accountId: 'test-account' } : {}),
+      modelIds: ['gpt-6-astra'],
+    }]);
+    const resolved = reg.resolve(`${providerId}/gpt-6-astra`)!;
+    for (const requested of [undefined, 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      const p = buildOpenAiCompatPayload({
+        model: resolved.model, apiModelId: resolved.apiModelId,
+        messages: [{ role: 'system', content: 'SYSTEM' }, { role: 'user', content: 'read file' }],
+        maxTokens: 1200,
+        tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: {} } } }],
+      });
+      Object.assign(p, { top_p: 0.8, top_logprobs: 2, logprobs: true, include: ['message.output_text.logprobs'] });
+      const effective = tuneOpenAiDirectPayload(p, requested, { baseUrl: resolved.baseUrl, apiModelId: resolved.apiModelId });
+      const expected = !requested || ['off', 'minimal'].includes(requested) ? 'low' : requested;
+      expect(effective).toBe(expected);
+      expect(p[PROTOCOL_MARK]).toBe('openai-responses');
+      const wire = openaiToResponsesBody(p);
+      expect(wire.model).toBe('gpt-6-astra');
+      expect(wire.reasoning.effort).toBe(expected);
+      expect(wire.instructions).toBe('SYSTEM');
+      expect(wire.tools[0]).toMatchObject({ type: 'function', name: 'read_file' });
+      expect(wire.include).toEqual(['reasoning.encrypted_content']);
+      for (const key of ['temperature', 'top_p', 'top_logprobs', 'logprobs', PROTOCOL_MARK, ACCOUNT_MARK]) expect(wire).not.toHaveProperty(key);
+      expect(wire.max_output_tokens).toBe(subscription ? undefined : 1200);
+    }
+  });
 
   it('思考关 → 补 reasoning_effort:none + 剥 temperature,仍走 chat/completions', () => {
     const p = base();

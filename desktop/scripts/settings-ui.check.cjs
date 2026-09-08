@@ -479,6 +479,18 @@ function surfaceUnder(el) {
   check('I 其余设置页共用面板/开关/紧凑列表，且不再重复主标题', !duplicateHeadings && compactWiring.every(Boolean),
     duplicateHeadings ? '仍有正文重复标题' : `${compactWiring.filter(Boolean).length}/${compactWiring.length} 处结构接线`)
 
+  // ══ J:外观页的三档界面大小不许变成另一套本地状态。点击必须走 uiZoom setter，并订阅
+  //    UI_ZOOM_EVENT，否则快捷键调整后设置页的百分比/选中态会留在旧值。 ══
+  const presetValues = [...TSX.matchAll(/\[(0\.8|1|1\.2), 'settings\.theme\.zoom(?:Small|Standard|Large)'\]/g)].map((m) => Number(m[1]))
+  const zoomWiring = [
+    /import \{ getUiZoom, setUiZoom \} from '\.\.\/uiZoom'/.test(TSX),
+    /addEventListener\(UI_ZOOM_EVENT, syncUiZoom\)/.test(TSX),
+    /onClick=\{\(\) => setUiZoom\(value\)\}/.test(TSX),
+  ]
+  check('J 外观页有 80% / 100% / 120% 三档预设，与快捷键共用 uiZoom 真源',
+    JSON.stringify(presetValues) === JSON.stringify([0.8, 1, 1.2]) && zoomWiring.every(Boolean),
+    `presets=${JSON.stringify(presetValues)} wiring=${zoomWiring.filter(Boolean).length}/${zoomWiring.length}`)
+
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)
   process.exit(failed.length ? 1 : 0)

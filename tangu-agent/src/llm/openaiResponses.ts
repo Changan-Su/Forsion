@@ -153,6 +153,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     body: JSON.stringify(body),
     signal: guard.signal,
   });
+  opts.onResponseStart?.();
 
   if (!response.ok || !response.body) {
     let detail = '';

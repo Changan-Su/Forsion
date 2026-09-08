@@ -23,6 +23,11 @@ const apply = (q: Parameters<typeof resolveModelCapability>[0], level: ThinkingL
 
 describe('resolveModelCapability — 路由矩阵', () => {
   const cases: Array<[string, Parameters<typeof resolveModelCapability>[0], string]> = [
+    ['OpenAI GPT-6 Astra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' }, 'openai-astra'],
+    ['Codex GPT-6 Astra 请求', { protocol: 'openai-responses', modelId: 'gpt-6-astra' }, 'codex-astra'],
+    ['Codex GPT-6 Astra 目录(无协议标记)', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6-astra' }, 'codex-astra'],
+    ['未知网关不预支 Astra 协议', { baseUrl: 'https://proxy.example/v1', modelId: 'gpt-6-astra' }, 'default'],
+    ['未知 GPT-6 变体不预支 Astra 档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-other' }, 'openai-nonreasoning'],
     ['OpenAI gpt-5.6+', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5.6-luna' }, 'openai-gpt5-latest'],
     ['OpenAI gpt-5.5', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5.5' }, 'openai-gpt5'],
     ['OpenAI gpt-5.5-pro', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5.5-pro' }, 'openai-gpt5-pro'],
@@ -143,6 +148,24 @@ describe('applyThinking — 各家线上形态', () => {
     expect(payload.max_tokens).toBeUndefined();
     expect(payload.max_completion_tokens).toBe(1200);
     expect(viaResponses).toBe(true);
+  });
+
+  it('GPT-6 Astra 的目录与请求都只允许 low 起步,保留 max 真档', () => {
+    for (const q of [
+      { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' },
+      { protocol: 'openai-responses', modelId: 'gpt-6-astra' },
+      { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6-astra' },
+    ]) {
+      expect(supportedThinkingLevels(cap(q))).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+      for (const level of ['off', 'minimal', 'low'] as const) {
+        const result = apply(q, level, { temperature: 0.7 });
+        expect(result.effective).toBe('low');
+        expect(result.payload.reasoning_effort).toBe('low');
+        expect(result.payload.temperature).toBeUndefined();
+        expect(result.viaResponses).toBe(true);
+      }
+      expect(apply(q, 'max').payload.reasoning_effort).toBe('max');
+    }
   });
 
   it('Codex 订阅拿得到档位(改造前这里永远是空的)', () => {

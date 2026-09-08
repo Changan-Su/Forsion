@@ -18,6 +18,7 @@ import type { Leaf, ViewLocation, SidebarDefaults } from './types'
 import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
 import type { PersistedPanel } from './layoutPersist'
+import { contentStorageKey } from './contentStorageScope'
 
 /** 主区 leaf 快照(供顶栏/读者)。字段与桌面同名以兼容读者 —— ⚠️ 桌面 dockviewStore 那份加字段时
  *  这里必须同步:移动构建把整个 workspaceStore 换成本文件,漏一个字段就是静默少功能(typecheck 也不红,
@@ -57,8 +58,8 @@ function scKey(base: string): string {
     return w && w !== 'main' ? `${base}_${w}` : base
   } catch { return base } // node 测试无 location
 }
-const SC_LAYOUT_KEY = scKey('lcl_sc_layout_v1')
-const SC_NAMED_KEY = scKey('lcl_sc_named_layouts_v1')
+const SC_LAYOUT_KEY = contentStorageKey(scKey('lcl_sc_layout_v1'))
+const SC_NAMED_KEY = contentStorageKey(scKey('lcl_sc_named_layouts_v1'))
 
 interface SCBlob {
   v: 1

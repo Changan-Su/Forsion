@@ -6,6 +6,7 @@
  * i18n 是 hook,store 在 React 外 → 持 tr 函数,由 bootstrap 从 useI18n 注入。
  */
 import { create } from 'zustand'
+import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
@@ -42,7 +43,7 @@ export type { SettingsTab }
 export type SpecialKind = 'agents' | 'workspace'
 
 const VOICE_MESSAGE_PLUGIN_ID = 'voice-message' // 语音消息插件 id(与 plugins/voice-message 一致)
-const UNREAD_KEY = 'forsion_tangu_unread_sessions'
+const UNREAD_KEY = contentStorageKey('forsion_tangu_unread_sessions')
 function loadUnread(): Set<string> {
   try { return new Set(JSON.parse(localStorage.getItem(UNREAD_KEY) || '[]')) } catch { return new Set() }
 }
@@ -246,11 +247,14 @@ const MAX_DONE_ACKS = 2000
 // busy 闸防并发 done 重复请求。直连 key 的 run 不消耗托管额度,查询本身无副作用。
 let quotaCheckBusy = false
 let lastQuotaExhaustState = ''
+let authGeneration = 0
 function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: string) => string): void {
   if (typeof window === 'undefined' || !window.tangu?.accountQuota) return
   if (quotaCheckBusy) return
   quotaCheckBusy = true
+  const generation = authGeneration
   void window.tangu.accountQuota().then((r) => {
+    if (generation !== authGeneration) return
     const j = r?.status === 200 ? r.json : null
     if (!j) return
     const weekly = j.weeklyLimit >= 0 && Number(j.weeklyRemaining) <= 0
@@ -262,7 +266,7 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
       else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
     }
     lastQuotaExhaustState = state
-  }).catch(() => {}).finally(() => { quotaCheckBusy = false })
+  }).catch(() => {}).finally(() => { if (generation === authGeneration) quotaCheckBusy = false })
 }
 // 卡死兜底:SSE 偶尔丢「终止帧」(后端 run 挂死/被 orphan janitor 标失败但事件没进流)→ 助手消息永远停在
 // streaming。看门狗周期性查:该 run 已不在后端活跃集 → 重载消息收尾(有内容标 done,无则 error),解除卡死。
@@ -285,14 +289,15 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, pr
 
 /** 下一个新会话的模式(**唯一**判定源;空态药丸、send() 隐式建会话、createInWorkspace 三处同源):
  *  ① 项目会话(cloud/local)恒 work —— chat 按定义不带 Project;② 用户在空态显式选过就听他的;
- *  ③ 无根会话默认 chat;④ 没选工作区:按端默认(desktop→work,web/mobile→chat,方案 D5)。
+ *  ③ 无根会话默认 chat;④ 没选工作区:全端默认 Work(方案 D5)。
  *  ⚠️ platform 由调用方每次现算传入(currentPlatform()),别在模块级冻结。 */
 /** 模式感知的配置物化(**唯一一处**,四个建会话/空态点都走它,放在 `...newChatCfg` 之后):chat 会话恒 sandbox、无 cwd,
- *  不带外部引擎/计划/群聊——草稿残留的 engineId 会让「chat」跑 ACP 外部 CLI 直打真实磁盘(creview 09-07 F1/E1);
+ *  不带自选 Agent/外部引擎/计划/群聊——Chat 固定使用创建时的当前默认 Agent；草稿残留的 engineId 会让
+ *  「chat」跑 ACP 外部 CLI 直打真实磁盘(creview 09-07 F1/E1);
  *  草稿里 work 下改出的 execMode:'host' 也压不过它(F6)。work 原样返回。 */
 export function applyPreset(cfg: AgentConfig, preset: 'chat' | undefined): AgentConfig {
   if (preset !== 'chat') return cfg
-  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined }
+  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined }
 }
 
 /** 「不在项目中工作」无根工作区描述符(项目列表底部常驻项、选 chat 时的落点、web 端 /new 的落点)。 */
@@ -313,7 +318,7 @@ function saveSessionMode(m: SessionMode): void {
 
 /** 新会话模式的唯一判定源。矩阵:项目工作区 ⇒ work(显式选 chat 也压不过,chat 按定义不带 Project);
  *  无根工作区 ⇒ chat(用户 09-07 拍板:「不在项目中工作」这一个无根项目**就是** Chat 的项目,Work 模式里它的 + 建的也是 chat);
- *  没选工作区 ⇒ 侧栏模式(用户手选),再无 ⇒ 端默认(web/mobile chat,desktop work)。 */
+ *  没选工作区 ⇒ 侧栏模式(用户手选),再无 ⇒ 全端默认 Work。 */
 export function newSessionPreset(
   choice: SessionMode | null,
   ws: WorkspaceDescriptor | null | undefined,
@@ -448,9 +453,9 @@ export interface AppState {
   channelWorkspaces: WorkspaceDescriptor[]
   newChatCfg: AgentConfig
   newChatModel: string | null
-  /** 空态暂存的「下一个新会话」模式(DSH staged pick):null = 按端/工作区默认;建会话时消费并清空。 */
+  /** 空态暂存的「下一个新会话」模式(DSH staged pick):null = Work/工作区默认;建会话时消费并清空。 */
   /** 侧栏 Chat/Work 模式(新对话行右侧胶囊;持久化 localStorage,web/mobile 也有):决定新会话的 preset 与侧栏列表的过滤。
-   *  null = 用户没手选过 → 端默认(effectiveSessionMode),读时解析。已创建会话的模式仍是会话事实(空白会话锁),不随它变。 */
+   *  null = 用户没手选过 → 默认 Work(effectiveSessionMode),读时解析。已创建会话的模式仍是会话事实(空白会话锁),不随它变。 */
   sessionMode: SessionMode | null
   /** 瞬态:外部入口(反馈诊断/对话建 agent/插件)预填聊天框的草稿;Composer2 mount 消费一次即清,不落盘。 */
   pendingDraft: string | null
@@ -764,11 +769,12 @@ export const useApp = create<AppState>((set, get) => ({
           // 单条正文软上限:超长正文 + markdown 重渲染会持续吃渲染进程内存(白屏 OOM 诱因之一)。
           if (m.content.length >= MAX_MSG_CHARS) return m // 已达上限,停止累积(后端仍完整落库)
           // ponytail: 顺序段用原始 delta;极长消息 capContent 后 segments 文字或略长于 content——罕见且已降级,不特殊处理。
-          return { ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || '') }
+          // 首帧到达:清掉等待实况(live 只在没有任何帧时存在,这里的条件展开让常态 token 零开销)
+          return { ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), ...(m.live ? { live: undefined } : {}) }
         })
         break
       case 'reasoning':
-        patchMessage(sessionId, assistantId, (m) => ({ ...m, reasoning: (m.reasoning || '') + (pl.delta || '') }))
+        patchMessage(sessionId, assistantId, (m) => ({ ...m, reasoning: (m.reasoning || '') + (pl.delta || ''), ...(m.live ? { live: undefined } : {}) }))
         break
       case 'system_prompt':
         patchMessage(sessionId, assistantId, (m) => ({ ...m, systemPrompt: pl.content || '' }))
@@ -777,9 +783,9 @@ export const useApp = create<AppState>((set, get) => ({
         patchMessage(sessionId, assistantId, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
-          if (i >= 0) { evs[i] = { ...evs[i], arguments: (evs[i].arguments || '') + (pl.delta || '') }; return { ...m, toolEvents: evs } }
+          if (i >= 0) { evs[i] = { ...evs[i], arguments: (evs[i].arguments || '') + (pl.delta || '') }; return { ...m, toolEvents: evs, ...(m.live ? { live: undefined } : {}) } }
           evs.push({ id: pl.id, name: pl.name || 'tool', arguments: pl.delta || '', done: false })
-          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id) }
+          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...(m.live ? { live: undefined } : {}) }
         })
         // Agent Desk 直播:编辑参数还在流式生成就上台(state 只动上台/路径就位两次,内容 LivePane 自己订)。
         if (pl.name && DESK_EDIT_TOOLS.has(String(pl.name))) get().deskLiveSync(sessionId, assistantId, String(pl.id), String(pl.name))
@@ -790,9 +796,9 @@ export const useApp = create<AppState>((set, get) => ({
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
           const item = { id: pl.id, name: pl.name, arguments: pl.arguments, done: false, startedAt: pl.startedAt, parallelGroup: pl.parallelGroup }
-          if (i >= 0) { evs[i] = { ...evs[i], ...item }; return { ...m, toolEvents: evs } }
+          if (i >= 0) { evs[i] = { ...evs[i], ...item }; return { ...m, toolEvents: evs, ...(m.live ? { live: undefined } : {}) } }
           evs.push(item)
-          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id) }
+          return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...(m.live ? { live: undefined } : {}) }
         })
         break
       case 'tool_result':
@@ -877,7 +883,7 @@ export const useApp = create<AppState>((set, get) => ({
           }
           : undefined
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId, name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
+          ...m, live: undefined, approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId, name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
         }))
         break
       }
@@ -1044,7 +1050,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       case 'done':
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, content: capContent(pl.content || m.content), status: 'done' as const,
+          ...m, content: capContent(pl.content || m.content), status: 'done' as const, live: undefined,
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
@@ -1082,7 +1088,7 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'error':
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, content: pl.content || m.content,
+          ...m, content: pl.content || m.content, live: undefined,
           status: pl.aborted ? ('stopped' as const) : ('error' as const),
           error: pl.aborted ? undefined : (pl.error || 'error'),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
@@ -1148,6 +1154,20 @@ export const useApp = create<AppState>((set, get) => ({
           }))
           break
         }
+        // 模型调用等待实况:sending(正在上传上下文)→ accepted(已送达,等首帧)。首帧/工具/结束即清(见 token 等分支)。
+        // since 续用上一条(重试后引擎重发 sending 不归零):用户看到的是「这次调用总共等了多久」。
+        if (pl.phase === 'llm_call') {
+          patchMessage(sessionId, assistantId, (m) => ({
+            ...m,
+            live: {
+              phase: pl.stage === 'accepted' ? ('accepted' as const) : ('sending' as const),
+              since: m.live?.since ?? Date.now(),
+              ...(Number(pl.bytes) > 0 ? { bytes: Number(pl.bytes) } : {}),
+              ...(pl.uploadMs != null && Number(pl.uploadMs) >= 0 ? { uploadMs: Number(pl.uploadMs) } : {}),
+            },
+          }))
+          break
+        }
         // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
         if (pl.phase === 'llm_retry') {
           set((s) => ({
@@ -1204,7 +1224,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   refreshSessions: async (c) => {
+    const generation = authGeneration
     const [act, arch] = await Promise.all([api.listSessions(c, false), api.listSessions(c, true)])
+    if (generation !== authGeneration) return []
     set((s) => {
       // 列表行自带 agent_config:本地还没有的会话先用它预填。重载/切入会话时 loadSessionHistory 到达前不再按 {} 渲染成 work,
       // 加载窗口里的任何配置写也从存值起步而不是从 {} 起步把 preset 冲掉(creview 09-07 F3;服务端 PUT 另有锁兜底)。
@@ -1253,15 +1275,17 @@ export const useApp = create<AppState>((set, get) => ({
     void api.listEngines(c).then((e) => { if (latest()) set({ engines: e }) }).catch(() => { if (latest()) set({ engines: [] }) })
     void get().refreshSpecialEnabled(c)
     get().refreshAgents()
-    void window.tangu?.authStatus?.().then((a) => set({ authInfo: a })).catch(() => set({ authInfo: null }))
+    void window.tangu?.authStatus?.().then((a) => { if (latest()) set({ authInfo: a }) }).catch(() => { if (latest()) set({ authInfo: null }) })
   },
 
   refreshSpecialEnabled: async (c) => {
+    const generation = authGeneration
     try {
       const r = await api.getSpecialConfig(c)
+      if (generation !== authGeneration) return
       set({ specialEnabled: { historian: !!r.config?.historian?.enabled, muse: !!r.config?.muse?.enabled } })
     } catch {
-      set({ specialEnabled: { historian: false, muse: false } })
+      if (generation === authGeneration) set({ specialEnabled: { historian: false, muse: false } })
     }
   },
 
@@ -1288,15 +1312,21 @@ export const useApp = create<AppState>((set, get) => ({
 
   refreshAgents: () => {
     const c = get().cfg
+    const generation = authGeneration
     void api.listAgents(c).then((defs) => {
+      if (generation !== authGeneration) return
       set({ agentDefs: defs })
       void Promise.all(defs.filter((a) => a.avatar).map(async (a) => [a.slug, await api.fetchAgentAvatar(c, a.slug)] as const))
         .then((pairs) => set((s) => {
+          if (generation !== authGeneration) {
+            pairs.forEach(([, url]) => { if (url) URL.revokeObjectURL(url) })
+            return {}
+          }
           Object.values(s.agentAvatars).forEach((u) => { try { URL.revokeObjectURL(u) } catch { /* ignore */ } })
           return { agentAvatars: Object.fromEntries(pairs.filter(([, u]) => u) as Array<[string, string]>) }
         }))
-    }).catch(() => set({ agentDefs: [] }))
-    void api.getAgentsMeta(c).then((m) => set({ defaultAgentSlug: m.defaultSlug || 'xyra' })).catch(() => { /* ignore */ })
+    }).catch(() => { if (generation === authGeneration) set({ agentDefs: [] }) })
+    void api.getAgentsMeta(c).then((m) => { if (generation === authGeneration) set({ defaultAgentSlug: m.defaultSlug || 'xyra' }) }).catch(() => { /* ignore */ })
   },
 
   boot: async () => {
@@ -1304,7 +1334,9 @@ export const useApp = create<AppState>((set, get) => ({
     // ⚠️ 先订阅再 await:ready 广播若落在下面 getConfig 的 await 期间,晚注册的监听器收不到 → 快照 starting
     //    永远停在「后端启动中」(preload 侧还会注册即回放当前状态,双保险;见 preload.onBackendStatus)。
     const connectFromStatus = (): void => {
+      const generation = authGeneration
       void window.tangu!.getConfig().then((c) => {
+        if (generation !== authGeneration) return
         const eff = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId, imageModelId: c.imageModelId }
         set({ desktopConfig: c, cfg: eff, cfgLoaded: true })
         // 快照 ready 那条已连上同一 (url,token) → 这条(preload 回放 / 重复广播)不再打一遍;
@@ -1400,11 +1432,45 @@ export const useApp = create<AppState>((set, get) => ({
     // 登录态变化(含 CLI tangu login 等外部来源,主进程 auth.json watcher 广播)→ 刷新 authInfo。
     // managed 后端的重连由上面 onBackendStatus 的 ready 分支承接(登录变化会触发后端带新 token 重启)。
     window.tangu?.onAuthChanged?.(() => {
-      void window.tangu?.authStatus?.().then((a) => set({ authInfo: a })).catch(() => set({ authInfo: null }))
+      const generation = ++authGeneration
+      ++connectGen
+      connectInflight = null
+      lastOkConnectKey = ''
+      quotaCheckBusy = false
+      lastQuotaExhaustState = ''
+      loadedHistory.clear()
+      Object.values(get().agentAvatars).forEach((url) => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } })
+      const managed = get().desktopMode === 'managed'
+      set((s) => ({
+        authInfo: null, modelsResp: null, skillsList: null, agentDefs: [], agentAvatars: {}, cloudProjects: [],
+        connState: 'idle', connMessage: '', cfg: { ...s.cfg, token: '' }, historyLoading: {},
+        ...(!managed ? {
+          sessions: [], archivedSessions: [], activeId: null, messagesBySession: {}, configBySession: {},
+          historyLoading: {}, deskBySession: {}, unread: new Set<string>(),
+        } : {}),
+      }))
+      if (!managed) {
+        runAborts.forEach((controller) => controller.abort())
+        runAborts.clear()
+        subscribedRuns.clear()
+      }
+      void window.tangu?.authStatus?.().then((a) => { if (generation === authGeneration) set({ authInfo: a }) }).catch(() => {})
+      // Some transitions await the engine restart before emitting auth:changed, so
+      // ready may already have arrived. Other paths still reconnect from the later broadcast.
+      if (managed) void window.tangu?.backendStatus?.().then((status) => {
+        if (generation === authGeneration && status.state === 'ready') connectFromStatus()
+      }).catch(() => {})
+      else void window.tangu?.getConfig?.().then((c) => {
+        if (generation !== authGeneration) return
+        const effective = { backendUrl: c.backendUrl, token: c.token, modelId: c.modelId, imageModelId: c.imageModelId }
+        set({ desktopConfig: c, cfg: effective })
+        if (effective.token) void get().connect(effective)
+      })
     })
   },
 
   loadSessionHistory: async (sessionId) => {
+    const generation = authGeneration
     const t = get().tr
     if (!sessionId || get().connState !== 'ok') return
     if (get().unread.has(sessionId)) {
@@ -1423,6 +1489,7 @@ export const useApp = create<AppState>((set, get) => ({
         api.getSessionConfig(c, sessionId).catch(() => ({} as AgentConfig)),
         listActiveRuns(c, sessionId),
       ])
+      if (generation !== authGeneration) return
       // 配置拉取失败/为空时,别把本机(project_path)会话降级成非 host——否则 execMode 缺失,拖文件走
       // 「上传工作区(25MB 限制)」而非本机路径插入,且因 loadedHistory 已标记不再重拉 → 刷新前一直卡住。
       // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
@@ -1460,9 +1527,11 @@ export const useApp = create<AppState>((set, get) => ({
         }
       }
     } catch (e: any) {
+      if (generation !== authGeneration) return
       loadedHistory.delete(sessionId)
       get().toast(t('app.historyLoadFail', { e: e?.message || e }), true)
     } finally {
+      if (generation !== authGeneration) return
       set((s) => {
         const historyLoading = { ...s.historyLoading }
         delete historyLoading[sessionId]
@@ -1626,6 +1695,9 @@ export const useApp = create<AppState>((set, get) => ({
       const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
         ? { ...sticky, execMode: 'host', cwd: path }
         : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
+      // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
+      // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
+      if (preset === 'chat' && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
       const s = await api.createSession(get().cfg, {
         ...(path
           ? { project_path: path, project_name: ws.name }
@@ -1662,9 +1734,10 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   refreshCloudProjects: async (c) => {
+    const generation = authGeneration
     try {
       const names = await api.listProjects(c)
-      set({ cloudProjects: names })
+      if (generation === authGeneration) set({ cloudProjects: names })
     } catch { /* 云端不可用/standalone → 保持现值(workspaces() 恒补默认 Tangu) */ }
   },
 

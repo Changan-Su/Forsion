@@ -79,6 +79,8 @@ export interface StreamOpts {
     args: string;
     argsDelta: string;
   }) => void;
+  /** 响应头已到达(请求体上传完毕、上游/服务端已受理),早于首帧。agentLoop 据此拆分「上传」与「等首帧」两段耗时。 */
+  onResponseStart?: () => void;
   signal?: AbortSignal;
   /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
   provider?: string;

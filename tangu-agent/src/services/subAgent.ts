@@ -5,7 +5,7 @@
  *
  * 约束:
  *   - 深度上限 1(子代理内 delegate 不可见,见 ToolContext.subAgentDepth)
- *   - maxIterations 8,单工具结果照旧 capToolResult 由各工具自管
+ *   - maxIterations 24,单工具结果照旧 capToolResult 由各工具自管
  *   - 工具集 = 主 registry 按 subCtx 过滤(delegate 自动滤掉);审批闸门照走(host 模式)
  *   - 仅 hostExec profile 暴露(本地形态;云端待计费/配额按子轮次核验后再开)——故计费走
  *     noopBilling,这里不重复扣点;usage 经 `subagent` 事件上报给父 run 的订阅者
@@ -28,7 +28,11 @@ import { loadCustomTools } from '../tools/customTools.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
 import type { ChatMessage } from '../core/types.js';
 
-const SUB_MAX_ITERATIONS = 8;
+// 24(原 8):8 轮连一条常规链路都跑不完 —— 09-06 青鸟视频那次,子代理第 8 轮刚诊断出根因就被截断
+// (use_skill → 定位脚本 → 转录 → ASR → 落盘 → 报告 已占 7 轮,一次报错就没了)。
+// 为什么不照父循环的 90:父循环有 TANGU_MAX_RUN_COST 逐轮累加兜底,而子代理走 noopBilling、
+// 其 token 不进 costTotal —— 这个常数就是子代理**唯一**的失控闸,且 delegate 可并行多开。
+export const SUB_MAX_ITERATIONS = 24;
 const SUB_RESULT_CAP = 12_000;
 
 /** 具名子代理的技能装载:临时以该 agent 的身份圈 ALS 作用域(listLocalSkills 据此叠加
@@ -277,6 +281,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   }
 
   let finalContent = '';
+  let lastTool: { name: string; isError: boolean; preview: string } | null = null;
+  let pendingCall: string | null = null;
+  let hitCap = false;
   for (let iteration = 0; iteration < SUB_MAX_ITERATIONS; iteration++) {
     if (parentCtx.signal?.aborted) throw new Error('aborted');
     const lastIter = iteration === SUB_MAX_ITERATIONS - 1;
@@ -294,7 +301,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       thinkingLevel: thinking,
       stream: true,
       // 子代理用独立缓存路由键:消息序列与父会话完全不同,蹭父会话的键反而打散其缓存。
-      // 按 subId 细分:并行多个子代理时互不打散彼此的前缀(各自 8 轮迭代内的自相似才是缓存收益点)。
+      // 按 subId 细分:并行多个子代理时互不打散彼此的前缀(各自迭代轮次内的自相似才是缓存收益点)。
       cacheKey: `${parentCtx.sessionId}:sub:${subId}`,
     });
 
@@ -324,6 +331,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
 
     if (!res.toolCalls?.length || lastIter) {
       finalContent = res.content || finalContent;
+      // 触顶那轮不发 tools,但模型仍可能吐出工具调用(文本兜底会解析出来)且正文为空 ——
+      // 照原样收尾父代理只拿到一句「没有结论」,113s 的排查与真正的报错全丢(2026-09-06 青鸟事故)。
+      if (!finalContent) { pendingCall = res.toolCalls?.[0]?.function?.name || null; hitCap = lastIter; }
       break;
     }
 
@@ -368,11 +378,29 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           preview: content.slice(0, 400),
         });
       }
+      lastTool = { name: call.function.name, isError, preview: content.slice(0, 600) };
       messages.push({ role: 'tool', content, tool_call_id: call.id } as ChatMessage);
     }
   }
 
-  const result = (finalContent || '(the sub-agent produced no conclusion)').slice(0, SUB_RESULT_CAP);
+  const result = (finalContent || exhaustedReport(lastTool, pendingCall, hitCap)).slice(0, SUB_RESULT_CAP);
   if (runId) void publish(runId, 'subagent', { phase: 'done', subId, resultChars: result.length });
   return result;
+}
+
+/** 没拿到结论时交回**发生过什么**,而不是一句空话:父代理据此决定接手还是换路。导出仅为测试。 */
+export function exhaustedReport(
+  lastTool: { name: string; isError: boolean; preview: string } | null,
+  pendingCall: string | null,
+  hitCap = false,
+): string {
+  if (!lastTool && !pendingCall) return '(the sub-agent produced no conclusion)';
+  // 触顶与「模型这轮什么都没回」是两种收尾,别对父代理谎报原因。
+  const why = hitCap ? `hit the ${SUB_MAX_ITERATIONS}-iteration cap` : 'stopped';
+  const lines = [`(the sub-agent ${why} without a final report — take over from here)`];
+  if (lastTool) {
+    lines.push(`- last tool: ${lastTool.name}${lastTool.isError ? ' (failed)' : ''} → ${lastTool.preview.replace(/\s+/g, ' ').slice(0, 400)}`);
+  }
+  if (pendingCall) lines.push(`- it was about to call: ${pendingCall}`);
+  return lines.join('\n');
 }

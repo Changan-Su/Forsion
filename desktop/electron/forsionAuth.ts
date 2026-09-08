@@ -5,10 +5,11 @@
  * 登录态对全家共享:tangu / tangu-server / 桌面 managed 后端都读这份 auth.json。
  */
 import { shell } from 'electron'
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { forsionHomeDir } from './forsionHome'
+import { forsionAccountId } from '../shared/forsionAccount'
+export { forsionAccountId } from '../shared/forsionAccount'
 
 export interface TanguCreds {
   cloudUrl?: string
@@ -17,6 +18,94 @@ export interface TanguCreds {
 }
 
 const credsFile = (): string => join(forsionHomeDir(), 'auth.json')
+const accountsFile = (): string => join(forsionHomeDir(), 'auth-accounts.json')
+const accountSettingsFile = (): string => join(forsionHomeDir(), 'cloud-account-settings.json')
+
+export interface AccountCloudSettings {
+  forsionSyncEnabled: boolean
+  forsionLastSyncedAt: number
+}
+function readAccountSettings(): Record<string, AccountCloudSettings> {
+  try {
+    const data = JSON.parse(readFileSync(accountSettingsFile(), 'utf8'))
+    return data.accounts && typeof data.accounts === 'object' ? data.accounts : {}
+  } catch { return {} }
+}
+export function loadAccountCloudSettings(creds = loadTanguCreds()): AccountCloudSettings {
+  const id = forsionAccountId(creds.cloudUrl || '', creds.token || '')
+  const settings = id ? readAccountSettings()[id] : undefined
+  return {
+    forsionSyncEnabled: settings?.forsionSyncEnabled === true,
+    forsionLastSyncedAt: typeof settings?.forsionLastSyncedAt === 'number' ? settings.forsionLastSyncedAt : 0,
+  }
+}
+export function saveAccountCloudSettings(patch: Partial<AccountCloudSettings>, creds = loadTanguCreds()): void {
+  const id = forsionAccountId(creds.cloudUrl || '', creds.token || '')
+  if (!id) return
+  const accounts = readAccountSettings()
+  accounts[id] = { ...loadAccountCloudSettings(creds), ...patch }
+  writePrivateJson(accountSettingsFile(), { version: 1, accounts })
+}
+
+export interface AuthAccountInfo {
+  id: string
+  cloudUrl: string
+  username?: string
+  nickname?: string
+  active: boolean
+}
+interface SavedAccount extends Omit<AuthAccountInfo, 'active'> { token: string }
+
+function readAccounts(): SavedAccount[] {
+  try {
+    const data = JSON.parse(readFileSync(accountsFile(), 'utf8'))
+    return Array.isArray(data.accounts) ? data.accounts.filter((a: SavedAccount) =>
+      a && typeof a.token === 'string' && a.id === forsionAccountId(a.cloudUrl, a.token)) : []
+  } catch { return [] }
+}
+
+function writePrivateJson(file: string, data: unknown): void {
+  mkdirSync(forsionHomeDir(), { recursive: true })
+  const temp = `${file}.tmp`
+  writeFileSync(temp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 })
+  chmodSync(temp, 0o600)
+  renameSync(temp, file)
+}
+
+export function rememberForsionAccount(c: TanguCreds, profile?: { username?: string; nickname?: string }): void {
+  const id = forsionAccountId(c.cloudUrl || '', c.token || '')
+  if (!id || !c.token || !c.cloudUrl) return
+  const accounts = readAccounts()
+  const existing = accounts.find((a) => a.id === id)
+  const claims = tokenClaims(c.token) as { username?: string } | null
+  const account: SavedAccount = {
+    ...existing, id, cloudUrl: c.cloudUrl.replace(/\/+$/, ''), token: c.token,
+    username: profile?.username || existing?.username || claims?.username,
+    nickname: profile?.nickname || existing?.nickname,
+  }
+  if (JSON.stringify(existing) === JSON.stringify(account)) return
+  writePrivateJson(accountsFile(), { version: 1, accounts: [...accounts.filter((a) => a.id !== id), account] })
+}
+
+export function forsionAccounts(): AuthAccountInfo[] {
+  const current = loadTanguCreds()
+  rememberForsionAccount(current) // Upgrade the existing single-account auth.json lazily.
+  const activeId = forsionAccountId(current.cloudUrl || '', current.token || '')
+  return readAccounts().map(({ token: _token, ...account }) => ({ ...account, active: account.id === activeId }))
+}
+
+/** Lookup stays in the main process; the renderer only receives AuthAccountInfo. */
+export function savedForsionAccount(id: string): TanguCreds {
+  const account = readAccounts().find((a) => a.id === id)
+  if (!account) throw new Error('Account is no longer signed in. Sign in again.')
+  return { cloudUrl: account.cloudUrl, token: account.token }
+}
+
+/** External sign-out has already cleared auth.json, so forget the previous snapshot. */
+export function forgetForsionAccount(creds: TanguCreds): void {
+  const id = forsionAccountId(creds.cloudUrl || '', creds.token || '')
+  if (id) writePrivateJson(accountsFile(), { version: 1, accounts: readAccounts().filter((a) => a.id !== id) })
+}
 
 export function loadTanguCreds(): TanguCreds {
   try {
@@ -27,14 +116,15 @@ export function loadTanguCreds(): TanguCreds {
 }
 
 export function saveTanguCreds(c: TanguCreds): void {
-  mkdirSync(forsionHomeDir(), { recursive: true })
-  writeFileSync(credsFile(), JSON.stringify(c, null, 2), 'utf8')
-  try { chmodSync(credsFile(), 0o600) } catch { /* best-effort */ }
+  rememberForsionAccount(c)
+  writePrivateJson(credsFile(), c)
 }
 
 /** 登出:只清 token(保留 cloudUrl/model 记忆)。 */
 export function forsionLogout(): void {
+  cancelForsionLogin()
   const c = loadTanguCreds()
+  forgetForsionAccount(c)
   delete c.token
   saveTanguCreds(c)
 }
@@ -113,9 +203,26 @@ export interface DeviceLoginStart {
   userCode: string
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number, signal: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
+  const abort = (): void => {
+    clearTimeout(timer)
+    reject(new Error('Sign-in cancelled.'))
+  }
+  const timer = setTimeout(() => {
+    signal.removeEventListener('abort', abort)
+    resolve()
+  }, ms)
+  if (signal.aborted) abort()
+  else signal.addEventListener('abort', abort, { once: true })
+})
 
-let loginInFlight = false
+let pendingLogin: AbortController | null = null
+
+/** Cancel synchronously, before awaiting backend/sync teardown during sign-out. */
+export function cancelForsionLogin(): void {
+  pendingLogin?.abort()
+  pendingLogin = null
+}
 
 /**
  * 跑完整 device flow。onStart 在拿到授权链接时回调(渲染层据此显示链接 + 验证码,
@@ -124,10 +231,15 @@ let loginInFlight = false
 export async function forsionDeviceLogin(
   cloudUrl: string,
   onStart?: (info: DeviceLoginStart) => void,
+  commit?: (creds: TanguCreds, assertCurrent: () => void) => Promise<void>,
 ): Promise<{ token: string; cloudUrl: string }> {
-  if (loginInFlight) throw new Error('已有一次登录在进行中,请先在浏览器完成或稍候重试')
+  if (pendingLogin) throw new Error('A sign-in is already in progress.')
   if (!cloudUrl) throw new Error('请先填写 Forsion 云端地址(或设置环境变量 TANGU_CLOUD_URL)')
-  loginInFlight = true
+  const login = new AbortController()
+  pendingLogin = login
+  const assertCurrent = (): void => {
+    if (login.signal.aborted || pendingLogin !== login) throw new Error('Sign-in cancelled.')
+  }
   try {
     const base = cloudUrl.replace(/\/+$/, '')
     let start: any
@@ -136,40 +248,57 @@ export async function forsionDeviceLogin(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
+        signal: AbortSignal.any([login.signal, AbortSignal.timeout(15000)]),
       }).then((r) => r.json())
     } catch (e: any) {
       throw new Error(`无法连接 ${base}:${e?.message || e}`)
     }
+    assertCurrent()
     if (!start?.device_code) throw new Error(`云端不支持 CLI 登录(/api/auth/cli/start 返回异常)`)
 
-    const url = start.verification_uri_complete || `${start.verification_uri}?code=${start.user_code}`
+    const verification = start.verification_uri_complete || `${start.verification_uri}?code=${start.user_code}`
+    // /auth?logout=1 is supported by existing servers: an old browser session must
+    // never silently pair the account the user just signed out of in the desktop app.
+    const loginUrl = new URL(`${base}/auth`)
+    loginUrl.searchParams.set('logout', '1')
+    loginUrl.searchParams.set('app', 'forsion-desktop')
+    loginUrl.searchParams.set('redirect', verification)
+    const url = loginUrl.toString()
     onStart?.({ url, userCode: String(start.user_code || '') })
     void shell.openExternal(url)
 
     const deadline = Date.now() + (start.expires_in || 600) * 1000
     const interval = (start.interval || 2) * 1000
     while (Date.now() < deadline) {
-      await sleep(interval)
+      await sleep(interval, login.signal)
+      assertCurrent()
       let resp: Response | null = null
       try {
         resp = await fetch(`${base}/api/auth/cli/poll`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ device_code: start.device_code }),
+          signal: AbortSignal.any([login.signal, AbortSignal.timeout(15000)]),
         })
       } catch {
+        assertCurrent()
         continue
       }
+      assertCurrent()
       if (resp.status === 410) throw new Error('登录码已过期,请重新发起登录')
       const j: any = await resp.json().catch(() => ({ status: 'pending' }))
+      assertCurrent()
       if (j.status === 'approved' && j.token) {
-        saveTanguCreds({ ...loadTanguCreds(), cloudUrl: base, token: j.token })
+        const creds = { ...loadTanguCreds(), cloudUrl: base, token: j.token }
+        if (commit) await commit(creds, assertCurrent)
+        else saveTanguCreds(creds)
+        assertCurrent()
         return { token: j.token, cloudUrl: base }
       }
     }
     throw new Error('登录超时,请重试')
   } finally {
-    loginInFlight = false
+    if (pendingLogin === login) pendingLogin = null
   }
 }
 

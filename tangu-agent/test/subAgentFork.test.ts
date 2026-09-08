@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
-import { buildForkTranscript } from '../src/services/subAgent.js';
+import { buildForkTranscript, exhaustedReport } from '../src/services/subAgent.js';
 import { getToolCapabilities } from '../src/tools/registry.js';
 import type { ToolContext } from '../src/tools/registry.js';
 
@@ -61,5 +61,28 @@ describe('withWriteLock — 写工具全局单链(Codex 评审 #1:并行子代�
     await expect(failing).rejects.toThrow('boom');
     await expect(fast).resolves.toBe('c');
     expect(order).toEqual(['a-in', 'a-out', 'b', 'c']); // b/c 不得插进 a 的临界区
+  });
+});
+
+/**
+ * 09-06 青鸟事故:子代理排查了 113s、第 8 轮(触顶那轮不发 tools)只吐出一个工具调用、正文为空 →
+ * 父代理收到的是一句「(no conclusion)」,ffmpeg not found 这个真报错整个丢了,于是父代理从零重来。
+ */
+describe('exhaustedReport', () => {
+  it('触顶时把最后一次工具结果与待发调用交回父代理', () => {
+    const r = exhaustedReport({ name: 'run_bash', isError: false, preview: 'ERROR: ffprobe and ffmpeg not found' }, 'run_bash', true);
+    expect(r).toContain('iteration cap');
+    expect(r).toContain('ffmpeg not found'); // 真报错必须带回去
+    expect(r).toContain('about to call: run_bash');
+  });
+
+  it('没触顶就别谎报触顶(模型这轮直接空手而归也走这条)', () => {
+    const r = exhaustedReport({ name: 'read_file', isError: true, preview: 'ENOENT' }, null);
+    expect(r).not.toContain('iteration cap');
+    expect(r).toContain('ENOENT');
+  });
+
+  it('什么都没发生过才回落到原来那句空话', () => {
+    expect(exhaustedReport(null, null)).toBe('(the sub-agent produced no conclusion)');
   });
 });

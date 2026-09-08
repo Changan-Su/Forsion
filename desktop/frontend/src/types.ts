@@ -1,5 +1,7 @@
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
 import type { ActiveWindowSample } from '../../shared/activeWindow'
+import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
+export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 
 /**
  * 思考强度七档 —— 与引擎的 `modelCapabilities.ThinkingLevel` 同款。
@@ -715,6 +717,14 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed'
 }
 
+/** 等模型期间的实况(status:llm_call 事件;仅内存不持久化)。since=本次调用起点(重试续用),bytes=上传字节。 */
+export interface LiveWait {
+  phase: 'sending' | 'accepted'
+  bytes?: number
+  uploadMs?: number
+  since: number
+}
+
 export interface UiMessage {
   id: string
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
@@ -737,6 +747,8 @@ export interface UiMessage {
   displayFiles?: DisplayFile[]
   /** sketch 工具画的 HTML 卡片;按 callId 嵌回对应顺序段,旧历史无锚点时才回退到消息末尾。 */
   sketches?: SketchItem[]
+  /** 模型调用等待期:sending=正在上传上下文,accepted=已送达等首帧;首帧/工具/结束即清(见 appStore reduceEvent)。 */
+  live?: LiveWait
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
   timestamp: number
@@ -793,6 +805,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   forsionSyncEnabled?: boolean
   /** 上次成功同步时刻(epoch ms;UI 展示)。 */
   forsionLastSyncedAt?: number
+  /** Account owning sync settings; include with asynchronous sync updates. */
+  forsionSyncAccountId?: string | null
   /** 笔记拖入附件存放方式:attachments=同目录 attachments/;same=与笔记同目录;vault=固定文件夹。 */
   notesAttachmentMode?: 'attachments' | 'same' | 'vault'
   /** notesAttachmentMode==='vault' 时的 vault 相对文件夹(如 "assets")。 */
@@ -866,7 +880,16 @@ export interface UnitPairedDevice {
   createdAt: number
 }
 
+export interface AuthAccountInfo {
+  id: string
+  cloudUrl: string
+  username?: string
+  nickname?: string
+  active: boolean
+}
+
 export interface AuthStatusInfo {
+  accountId?: string | null
   loggedIn: boolean
   /** token 是否仍有效:true=有效,false=已失效(401/403),null=未校验/离线(不确定)。用于检测登录过期。 */
   tokenValid?: boolean | null
@@ -886,6 +909,14 @@ declare global {
     tangu?: {
       /** 宿主平台('darwin' | 'win32' | 'linux');静态值,渲染层据此调标题栏留白。 */
       platform?: string
+      /** 只读状态检查:不安装 helper、不触发系统授权。 */
+      desktopPermissionsStatus?(): Promise<DesktopPermissionsSnapshot>
+      /** 仅由用户点击触发:打开系统授权引导;Computer Use 缺失时安装/启动。 */
+      desktopPermissionRequest?(id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot>
+      /** 用户主动验证 Computer Use,可能探测实际屏幕访问。 */
+      desktopPermissionsVerify?(): Promise<DesktopPermissionsSnapshot>
+      /** 离开权限页关闭指导窗;main 同时处理尚未完成的 request 取消竞态。 */
+      desktopPermissionsCloseGuide?(): Promise<void>
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
       cloudWeb?: boolean
       /** 移动端(Capacitor/Android)标志:由 mobile 垫片注入;Inbox 等据此走设备本地存储实现。 */
@@ -916,6 +947,8 @@ declare global {
       authStatus?(): Promise<AuthStatusInfo>
       forsionLogin?(cloudUrl?: string): Promise<{ ok: boolean; cloudUrl: string }>
       forsionLogout?(): Promise<{ ok: boolean }>
+      authAccounts?(): Promise<AuthAccountInfo[]>
+      forsionSwitchAccount?(accountId: string): Promise<{ ok: boolean; cloudUrl: string }>
       authProviders?(): Promise<Array<{ id: string; loggedIn: boolean }>>
       providerLogin?(id: string): Promise<{ ok: boolean; id: string }>
       openAccountCenter?(section?: string): Promise<{ ok: boolean }>
@@ -944,6 +977,7 @@ declare global {
       onAuthDevice?(cb: (info: { url: string; userCode: string }) => void): () => void
       /** 登录态变化(桌面登录/登出、CLI `tangu login` 等外部来源)→ 刷新账号卡/authInfo。 */
       onAuthChanged?(cb: (info: { loggedIn: boolean }) => void): () => void
+      onAuthWillChange?(cb: () => Promise<void>): () => void
       /** 截当前窗口的一块视口矩形(Agent Desk 截屏 → 引擎 desk_screenshot);失败返回 null。 */
       captureRect?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>
       pickDirectory?(): Promise<string | null>

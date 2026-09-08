@@ -6,7 +6,7 @@
  * 2026-09-05 一份只有对话的导出,看得见模型说「还是深色」,看不见界面其实已经是浅色 —— 没有渲染端
  * 的真相就只能相信模型的转述。⚠️ 一律手挑字段:cfg / stored 里有 token,绝不整份序列化。
  */
-import { listMessages, getSessionConfig, getSessionUsage } from './backendService'
+import { listMessages, getSessionConfig, getSessionUsage, getSessionTimeline } from './backendService'
 import { currentClientId } from './agentRunService'
 import { readUiSettings, buildCommandCatalog } from '../agentCommands'
 import { rendererErrors, uiActionLog } from '../diag'
@@ -37,7 +37,7 @@ function snapshotClient(): Record<string, unknown> {
 }
 
 export async function buildSessionLogPayload(cfg: TanguDesktopConfig, session: SessionRecord): Promise<any> {
-  const [messages, agentConfig, backendLogs, stored, appVersion, backendStatus, usage] = await Promise.all([
+  const [messages, agentConfig, backendLogs, stored, appVersion, backendStatus, usage, timeline] = await Promise.all([
     listMessages(cfg, session.id, 500).catch(() => []),
     getSessionConfig(cfg, session.id).catch(() => ({})),
     window.tangu?.backendLogs?.().catch(() => []) ?? Promise.resolve([]),
@@ -47,6 +47,8 @@ export async function buildSessionLogPayload(cfg: TanguDesktopConfig, session: S
     window.tangu?.backendStatus?.().catch(() => null) ?? Promise.resolve(null),
     // 回到路由的原始字段名({tokensTotal, contextTokens}),方便对着 /agent/sessions/:id/usage 核对。
     getSessionUsage(cfg, session.id).then((u) => ({ tokensTotal: u.base, contextTokens: u.ctx })).catch(() => null),
+    // 事件时间线骨架(无正文):回答「秒数去哪了」——没有它,导出只能看见模型说了什么,看不见等在哪。
+    getSessionTimeline(cfg, session.id).catch(() => null),
   ])
   const connectionMode = stored?.mode || 'external'
   return {
@@ -62,6 +64,7 @@ export async function buildSessionLogPayload(cfg: TanguDesktopConfig, session: S
     backendStatusAvailable: !!window.tangu?.backendStatus,
     backendStatus,
     usage,
+    timeline,
     session: {
       id: session.id, title: session.title, model_id: session.model_id,
       project_path: session.project_path ?? null, project_name: session.project_name ?? null,

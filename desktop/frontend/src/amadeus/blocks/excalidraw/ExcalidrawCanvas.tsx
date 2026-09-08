@@ -151,6 +151,7 @@ export default function ExcalidrawCanvas({
   onSettings,
   onSceneChange,
   registerApplier,
+  viewMode = false,
 }: {
   initialData: ExcalidrawInitialDataState
   theme: 'light' | 'dark'
@@ -161,6 +162,8 @@ export default function ExcalidrawCanvas({
   onSceneChange: (sceneJson: string) => void
   /** drawingStore 的远端应用器挂钩:外部变更(watcher/SSE)到达时把远端场景元素级合并进活画布。 */
   registerApplier?: (fn: (remote: SceneLike) => void) => () => void
+  /** 只读(公开分享页):引擎的 viewModeEnabled —— 能平移缩放看,不能画;onSceneChange 也不会因用户操作而来。 */
+  viewMode?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
@@ -464,6 +467,7 @@ export default function ExcalidrawCanvas({
         initialData={initialData}
         theme={theme}
         langCode={langCode}
+        viewModeEnabled={viewMode}
         // serializeAsJSON 出的正是 .excalidraw 的规范形状({type,version,source,elements,appState,files}),
         // 且自带 appState 裁剪(去掉 collaborators/选中态等瞬时字段)—— 别自己拼,拼不全也裁不干净。
         // 顺带一提:裁剪把 scrollX/zoom 也剪掉了,所以视口纠偏不会额外触发写盘。

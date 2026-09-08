@@ -6,8 +6,7 @@
  * 首发 xAI Grok:公开 client_id + 完全 OpenAI 兼容(api.x.ai/v1/chat/completions)→ 零适配,
  * 拿到的 token 直接当 DirectProvider.apiKey 用。其他 provider 加进 OAUTH_PROVIDERS 即可复用本流程。
  *
- * 注:Codex/OpenAI 不在此——它要自注册 OpenAI OAuth app 且后端非 OpenAI 兼容(responses API),
- * 需单独适配,见 docs/Log。
+ * Codex/OpenAI 订阅在此登录,推理由 openaiResponses.ts 适配原生 Responses API。
  */
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
@@ -30,6 +29,10 @@ export interface OAuthProvider {
   modelIds?: string[]; // 模型选择器提示(实际可填任意 <id>/<model>)
   extraAuthParams?: Record<string, string>; // 追加到 authorize URL(如 Codex 的 id_token_add_organizations)
 }
+
+// 2026-09-06 同账号实测:0.150.0 的目录隐藏 GPT-6 Astra,0.153.4 才返回。
+// 与缓存版本一起推进,升级后立即重拉,不能复用旧客户端过滤过的 24h 缓存。
+export const CODEX_MODELS_CLIENT_VERSION = '0.153.4';
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
   xai: {
@@ -73,8 +76,8 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     baseUrl: 'https://chatgpt.com/backend-api/codex',
     protocol: 'openai-responses',
     // 仅兜底提示(实拉 /models 失败时才用),快照会过时——真实列表以 fetchProviderModels 实拉为准。
-    // 2026-07-17 实测 list 集;gpt-5.3-codex/gpt-5.2 已从订阅通道下线。
-    modelIds: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'],
+    // 2026-09-06 实测 list 集;真实目录仍按当前账号返回,不把兜底提示合并进成功的响应。
+    modelIds: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
     extraAuthParams: { id_token_add_organizations: 'true', codex_cli_simplified_flow: 'true' },
   },
 };
@@ -139,7 +142,7 @@ export async function fetchProviderModels(p: OAuthProvider, accessToken: string,
     let url: string;
     if (p.protocol === 'openai-responses') {
       // Codex 后端强制要求 client_version query(缺=400),后端还按它 gate 新模型——太老的版本号看不到新 slug。
-      url = `${base}/models?client_version=0.150.0`;
+      url = `${base}/models?client_version=${CODEX_MODELS_CLIENT_VERSION}`;
       if (accountId) headers['chatgpt-account-id'] = accountId;
     } else {
       url = `${base}/models`; // OpenAI 兼容
@@ -230,7 +233,11 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
   }
   // 登录即问 /models 拿真实模型列表(失败则后续 load 时再懒补;再不行回退硬编提示)。
   const models = await fetchProviderModels(p, creds.access_token, creds.account_id);
-  if (models) { creds.modelIds = models; creds.modelIdsAt = Date.now(); }
+  if (models) {
+    creds.modelIds = models;
+    creds.modelIdsAt = Date.now();
+    if (p.id === 'codex') creds.modelIdsClientVersion = CODEX_MODELS_CLIENT_VERSION;
+  }
   saveProviderCred(p.id, creds);
   return creds;
 }
@@ -268,11 +275,13 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
     }
     // 模型列表懒刷:缓存为空或超过 24h(provider 会上新模型,冻结的缓存=用户「看不到最新模型」)→
     // 拉一次回写;失败保留旧缓存下次再试。
-    const stale = !tok.modelIds?.length || (tok.modelIdsAt ?? 0) < Date.now() - 24 * 3600_000;
+    const stale = !tok.modelIds?.length || (tok.modelIdsAt ?? 0) < Date.now() - 24 * 3600_000
+      || (id === 'codex' && tok.modelIdsClientVersion !== CODEX_MODELS_CLIENT_VERSION);
     if (stale) {
       const models = await fetchProviderModels(cfg, tok.access_token, tok.account_id);
       if (models) {
         tok = { ...tok, modelIds: models, modelIdsAt: Date.now() };
+        if (id === 'codex') tok.modelIdsClientVersion = CODEX_MODELS_CLIENT_VERSION;
         saveProviderCred(id, tok);
       }
     }

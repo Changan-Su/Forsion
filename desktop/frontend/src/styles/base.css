@@ -1261,6 +1261,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   animation: chat-run-shimmer 2.1s linear infinite;
 }
 .chat-thinking-live { width: fit-content; max-width: 100%; }
+.chat-wait-elapsed { font-variant-numeric: tabular-nums; opacity: 0.8; }
 @media (prefers-reduced-motion: reduce) {
   .chat-run-shimmer-text {
     animation: none;
@@ -1895,11 +1896,10 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* bar = 外框(圆角/底色/边框);内层 .engine-picker-scroll 才是滚动容器,「⋯」钉在外框上不随内容滚。
    ⚠️ max-width:100% 是「放不下」的前提:bar 原本 inline-flex 按内容自适应 → scrollWidth 恒等于 clientWidth,溢出永远测不出来。 */
 .engine-picker-bar { position: relative; display: inline-flex; align-items: center; padding: 6px; border-radius: 30px; background: var(--bg-card); border: var(--border-width) solid var(--border); max-width: 100%; min-width: 0; }
-.engine-picker-scroll { display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.engine-picker-scroll { display: flex; align-items: center; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .engine-picker-scroll::-webkit-scrollbar { display: none; }
-/* 溢出时:右端渐隐 + 「⋯」。渐隐让 pill 从「⋯」下面滚过去而不是被硬切一刀。 */
-.engine-picker-bar[data-more]::after { content: ''; position: absolute; right: 6px; top: 6px; bottom: 6px; width: 64px; pointer-events: none; border-radius: 0 24px 24px 0; background: linear-gradient(to right, transparent, var(--bg-card) 60%); }
-.engine-picker-more { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); z-index: 1; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 20px; color: var(--text-muted); background: var(--overlay-light); transition: color 0.2s ease; }
+/* 「⋯」独占空间,末尾选项滚到边缘后仍完整可见、可点。 */
+.engine-picker-more { flex: 0 0 32px; margin-left: 4px; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 20px; color: var(--text-muted); background: var(--overlay-light); transition: color 0.2s ease; }
 .engine-picker-more:hover { color: var(--text); }
 /* flex-shrink:0 —— 默认可压缩会让 pill 在放不下时被挤扁(内容宽 = 容器宽 → 永远不溢出、⋯ 永不出现),
    要的是保持原尺寸然后横向溢出去翻页。 */
@@ -2753,6 +2753,20 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-sub--advanced > .field + .field,
 .settings-sub--developer > .field + .field,
 .settings-sub--about > .field + .field { border-top: var(--border-width) solid var(--border); }
+.about-compliance-list { margin: 2px -15px -13px; }
+.settings-sub--about .about-compliance-row {
+  width: 100%;
+  align-items: center;
+  flex-direction: row;
+  color: var(--text);
+  text-align: left;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.about-compliance-row:hover { background: var(--overlay-light); }
+.about-compliance-row:active { background: var(--overlay-medium); }
+.about-compliance-row > svg { flex: 0 0 auto; color: var(--text-faint); }
+.about-compliance-row .settings-control-copy > svg { flex: 0 0 auto; margin-top: 2px; }
+.about-compliance-row .settings-control-copy small { overflow-wrap: anywhere; }
 
 @media (max-width: 820px) {
   .settings-page { grid-template-columns: 190px minmax(0, 1fr); }

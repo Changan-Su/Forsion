@@ -9,7 +9,8 @@
 
 export interface UnifiedPipeHandle {
   path: string
-  flush: () => Promise<void>
+  /** strict=true must reject write failures and drain all pending edits before retiring. */
+  flush: (strict?: boolean) => Promise<void>
   retire: () => void
   /** OS 拖入/上传按钮的文件走这里进 unified(存附件 + 光标处插 `![[base]]`);可选。 */
   insertFiles?: (files: File[]) => void
@@ -63,8 +64,13 @@ export function registerUnifiedPipe(h: UnifiedPipeHandle): () => void {
 }
 
 /** 全部 unified 实例待写落盘(单实例失败不拖累别家)。 */
-export async function flushUnifiedScopes(): Promise<void> {
-  await Promise.all([...handles].map((h) => h.flush().catch(() => {})))
+export async function flushUnifiedScopes(strict = false): Promise<void> {
+  await Promise.all([...handles].map((h) => strict ? h.flush(true) : h.flush().catch(() => {})))
+}
+
+/** Account changes retire every cloud editor before its vault root can change. */
+export function retireAllUnifiedScopes(): void {
+  for (const handle of handles) handle.retire()
 }
 
 /** 把文件递给 path 上活着的 unified 实例(宿主的 OS 拖入/上传按钮用);没有实例 → false。 */

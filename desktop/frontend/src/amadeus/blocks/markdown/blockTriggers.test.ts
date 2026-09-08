@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blockLabel, matchTrigger, triggerFromStructuralPrefix } from './blockTriggers'
+import { blockLabel, canAutoTriggerFromBlock, matchTrigger, triggerFromStructuralPrefix } from './blockTriggers'
 
 describe('matchTrigger(光标前文本 → 块触发)', () => {
   it('标题 1-6 级;7 个 # 不触发', () => {
@@ -49,6 +49,17 @@ describe('triggerFromStructuralPrefix(实况源码 → 块类型)', () => {
     expect(triggerFromStructuralPrefix('> ')).toEqual({ kind: 'quote' })
     expect(triggerFromStructuralPrefix('- [] ')).toBeNull()
     expect(triggerFromStructuralPrefix('>')).toBeNull()
+  })
+})
+
+describe('canAutoTriggerFromBlock(键盘前缀触发范围)', () => {
+  it('标题里的编号前缀保留为字面标题文字', () => {
+    expect(canAutoTriggerFromBlock('heading', { kind: 'ordered', order: 1 })).toBe(false)
+  })
+  it('只排除标题里的有序列表，不影响其他既有判断', () => {
+    expect(canAutoTriggerFromBlock('paragraph', { kind: 'ordered', order: 1 })).toBe(true)
+    expect(canAutoTriggerFromBlock('heading', { kind: 'bullet' })).toBe(true)
+    expect(canAutoTriggerFromBlock('heading', { kind: 'heading', level: 2 })).toBe(true)
   })
 })
 

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { listModels, testProviderConnection, listAgents, saveAgentDef, getSpecialConfig, saveSpecialConfig } from '../services/backendService'
 import { EnvProbeSection } from './EnvProbeSection'
+import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import type { MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
@@ -41,17 +42,21 @@ export const ONBOARDING_DISMISS_KEY = 'forsion_tangu_onboarding_done'
 /** 上次完成引导时的应用版本号;与当前版本不同 → 版本更新后再进一次引导(展示 What's New)。 */
 export const ONBOARDING_VERSION_KEY = 'forsion_tangu_onboarding_version'
 
-type Step = 'welcome' | 'connect' | 'theme' | 'model' | 'speech' | 'agents' | 'workspace' | 'env' | 'done'
-/** 步骤序。两种收缩到通用步(welcome/theme/done)的情形:
+type Step = 'welcome' | 'connect' | 'theme' | 'model' | 'permissions' | 'speech' | 'agents' | 'workspace' | 'env' | 'done'
+/** 基础步骤序。两种收缩到通用步(welcome/theme/done)的情形(宿主权限能力另行插入):
  *  · 无 agent 后端的单品变体(connect/model/agents/workspace/env 均属 agent);
  *  · 非 host 宿主(web / 移动端)—— 这几步的落盘全走 window.tangu 的 setConfig / envCheck /
  *    pickDirectory,shim 里没有这些方法,留着就是「选了不保存」的死步骤;登录也早在挂载前
  *    由 webShim / mobileShim 完成(无 token 直接跳 /auth)。判定信号与 appStore.boot 的引导
  *    触发同一个(envCheck 在不在),别另起一个 flag。 */
-const stepOrder = (): Step[] =>
-  PRODUCT.agentBackend && !!window.tangu?.envCheck
+const stepOrder = (): Step[] => {
+  const steps: Step[] = PRODUCT.agentBackend && !!window.tangu?.envCheck
     ? ['welcome', 'connect', 'theme', 'model', 'speech', 'agents', 'workspace', 'env', 'done']
     : ['welcome', 'theme', 'done']
+  // 权限属于宿主能力,不依赖 Agent 后端。Web/mobile 保留原通用流程。
+  if (hasDesktopPermissions()) steps.splice(steps.includes('speech') ? steps.indexOf('speech') : steps.indexOf('done'), 0, 'permissions')
+  return steps
+}
 
 /** 订阅 provider 的友好名(id 见 src/llm/providerOAuth.ts OAUTH_PROVIDERS);未知 id 回退原值。 */
 // Claude 不在此列:订阅登录已删,走「运行引擎」直接跑本机 Claude Code(见 tangu-agent/src/engines/)。
@@ -301,7 +306,7 @@ export const OnboardingWizard: React.FC<{
   const phaseItems = [
     { id: 'connect', label: t('onboarding.phase.connect'), icon: Cloud, steps: ['connect'] as Step[] },
     { id: 'appearance', label: t('onboarding.phase.appearance'), icon: Palette, steps: ['theme'] as Step[] },
-    { id: 'capabilities', label: t('onboarding.phase.capabilities'), icon: Sparkles, steps: ['model', 'speech', 'agents'] as Step[] },
+    { id: 'capabilities', label: t('onboarding.phase.capabilities'), icon: Sparkles, steps: ['model', 'permissions', 'speech', 'agents'] as Step[] },
     { id: 'workspace', label: t('onboarding.phase.workspace'), icon: FolderOpen, steps: ['workspace', 'env', 'done'] as Step[] },
   ].filter((phase) => phase.steps.some((s) => STEP_ORDER.includes(s)))
   const activePhaseIdx = Math.max(0, phaseItems.findIndex((phase) => phase.steps.includes(step)))
@@ -309,6 +314,7 @@ export const OnboardingWizard: React.FC<{
     connect: { title: t('onboarding.step.connect.title'), description: t('onboarding.step.connect.description') },
     theme: { title: t('onboarding.step.theme.title'), description: t('onboarding.step.theme.description') },
     model: { title: t('onboarding.step.model.title'), description: t('onboarding.step.model.description') },
+    permissions: { title: t('desktopPermissions.title'), description: t('desktopPermissions.description') },
     speech: { title: t('onboarding.step.speech.title'), description: t('onboarding.step.speech.description') },
     agents: { title: t('onboarding.step.agents.title'), description: t('onboarding.step.agents.description') },
     workspace: { title: t('onboarding.step.workspace.title'), description: t('onboarding.step.workspace.description') },
@@ -729,6 +735,8 @@ export const OnboardingWizard: React.FC<{
             </>
           )}
 
+          {step === 'permissions' && <DesktopPermissions mode={themeMode} />}
+
           {step === 'speech' && (
             <div className="field">
               <label>{t('onboarding.speech.choiceLabel')}</label>
@@ -955,8 +963,8 @@ export const OnboardingWizard: React.FC<{
               </button>
             )}
             <span className="grow" />
-            <button className="btn ghost sm" onClick={finish}>
-              <SkipForward size={12} /> {t('onboarding.nav.skip')}
+            <button className="btn ghost sm" onClick={step === 'permissions' ? () => setStep(STEP_ORDER[stepIdx + 1]) : finish}>
+              <SkipForward size={12} /> {t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}
             </button>
             {step !== 'done' ? (
               <button

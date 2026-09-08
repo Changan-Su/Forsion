@@ -1,0 +1,96 @@
+/* Shared LCL floating TOC: Chat, Amadeus, and ctx.ui.mountFloatingToc use this exact skin. */
+.lcl-ftoc-mount-layer { position: absolute; inset: 0; pointer-events: none; }
+.lcl-ftoc-frame {
+  z-index: 20;
+  pointer-events: none;
+}
+.lcl-ftoc-frame.is-overlay { position: absolute; inset: 0; }
+.lcl-ftoc-frame.is-sticky { position: sticky; top: 50%; height: 0; width: 100%; }
+.lcl-ftoc {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  box-sizing: border-box;
+  width: 28px;
+  max-height: 70vh;
+  overflow: clip;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: var(--border-width, 1px) solid transparent;
+  border-radius: var(--radius-md, 12px);
+  background: transparent;
+  transition: width var(--duration-fast, 0.2s) ease;
+  will-change: width;
+}
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc { left: auto; right: 8px; }
+.lcl-ftoc-frame.is-sticky .lcl-ftoc { top: 0; }
+.lcl-ftoc.open {
+  width: min(248px, calc(100% - 16px));
+  gap: 2px;
+  padding: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg-card, var(--bg));
+  border-color: var(--border);
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(8px);
+}
+[data-glass='off'] .lcl-ftoc.open { backdrop-filter: none; }
+.lcl-ftoc-item {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-height: 2px;
+  padding: 0;
+  border: 0;
+  text-align: start;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.35;
+  border-radius: var(--radius-sm, 8px);
+}
+.lcl-ftoc.open .lcl-ftoc-item { gap: 8px; padding-block: 5px; padding-inline-end: 8px; }
+.lcl-ftoc.open .lcl-ftoc-item:hover { background: var(--overlay-light); color: var(--text); }
+.lcl-ftoc.open .lcl-ftoc-item.active {
+  background: var(--accent-light, var(--overlay-light));
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.lcl-ftoc-bar {
+  height: 2px;
+  width: 4px;
+  flex: none;
+  border-radius: var(--radius-pill, 9999px);
+  transform-origin: left;
+  background: var(--text-muted);
+  opacity: 0.35;
+  transition: transform var(--duration-fast, 0.2s) ease, background var(--duration-fast, 0.2s) ease, opacity var(--duration-fast, 0.2s) ease;
+  will-change: transform;
+}
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc-bar { transform-origin: right; }
+.lcl-ftoc-item.active .lcl-ftoc-bar { background: var(--accent-ink); opacity: 0.85; }
+.lcl-ftoc-item.primary .lcl-ftoc-bar { opacity: 0.6; }
+.lcl-ftoc.open .lcl-ftoc-item.primary .lcl-ftoc-text { font-weight: 600; }
+.lcl-ftoc-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity var(--duration-fast, 0.15s) ease;
+  will-change: opacity;
+}
+.lcl-ftoc.open .lcl-ftoc-text { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .lcl-ftoc,
+  .lcl-ftoc-bar,
+  .lcl-ftoc-text { transition: none; }
+}

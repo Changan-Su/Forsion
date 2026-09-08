@@ -14,6 +14,7 @@ import { parseDrawing, withSceneJson, isDrawingPath } from '@amadeus-shared/exca
 import { readBoard, writeBoard, DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
 import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
 import { amadeus } from '../api'
+import { usePageStore } from './pageStore'
 
 export interface DrawEntry {
   status: 'loading' | 'ok' | 'missing' | 'corrupt'
@@ -30,6 +31,8 @@ export interface DrawEntry {
 }
 
 interface DrawStoreState {
+  /** Root generation; mounted canvases must remount when same paths change owners. */
+  gen: number
   entries: Record<string, DrawEntry>
   /** 幂等加载:已 ok 的 ref 跳过(多处嵌入共用一次载入)。 */
   load(pagePath: string, ref: string): Promise<void>
@@ -41,13 +44,15 @@ interface DrawStoreState {
   seedFor(ref: string): ExcalidrawInitialDataState | null
   /** 立即冲刷单个画板(画布卸载时调):清防抖计时器,pending 场景即刻落盘。 */
   flush(ref: string): Promise<void>
-  flushAll(): Promise<void>
+  /** strict is the account-switch barrier: unresolved writes must reject. */
+  flushAll(strict?: boolean): Promise<void>
   /** 改纸张/网格:写 frontmatter,**不碰 Drawing 段**。
    *  收的是**增量**而不是整份快照:面板连点两下(先改纸张、紧接着开网格)时,第二下手里的 settings
    *  还是没落盘的旧值,传整份就会把第一下带回去。增量落在「刚读到的盘面」上合并,两下都留得住。 */
   setSettings(ref: string, patch: Partial<BoardSettings>): Promise<void>
 }
 
+let generation = 0
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 /** ref → 待落盘的场景 JSON(只留最后一次)。 */
 const pendingScene = new Map<string, string>()
@@ -69,7 +74,7 @@ export function registerDrawingApplier(ref: string, fn: DrawingRemoteApplier): (
   set.add(fn)
   return () => {
     set.delete(fn)
-    if (!set.size) appliers.delete(ref)
+    if (!set.size && appliers.get(ref) === set) appliers.delete(ref)
   }
 }
 
@@ -94,6 +99,7 @@ const tryParseScene = (json: string): SceneLike | null => {
 /** 外部变更(watcher/SSE,自写回声已在事件源过滤)→ 重读文件,元素级合并进内存态与活画布。
  *  同一路径可能挂多个 ref(独立视图用全路径、笔记嵌入用 `![[X.excalidraw]]` 原文)→ 逐个处理。 */
 async function applyExternal(rawPath: string): Promise<void> {
+  const gen = generation
   const p = rawPath.replace(/\\/g, '/')
   if (!isDrawingPath(p)) return
   const s = useDrawStore.getState()
@@ -105,6 +111,7 @@ async function applyExternal(rawPath: string): Promise<void> {
     }
     try {
       const r = await amadeus.readDrawing(e.path, e.path)
+      if (gen !== generation) return
       if (r.status !== 'ok') continue // 删除/移动交给 structureChange/树
       const parsed = parseDrawing(r.source)
       const remote = parsed ? tryParseScene(parsed.sceneJson) : null
@@ -137,7 +144,9 @@ const writeChain = new Map<string, Promise<unknown>>()
 function serialize<T>(ref: string, fn: () => Promise<T>): Promise<T> {
   const key = useDrawStore.getState().entries[ref]?.path ?? ref
   const prev = writeChain.get(key) ?? Promise.resolve()
-  const run = prev.then(fn, fn) // 前一次失败也接着跑,别把队列卡死
+  const gen = generation
+  const guarded = (): Promise<T> | T => gen === generation ? fn() : undefined as T
+  const run = prev.then(guarded, guarded) // Retired-root queued work cannot start against a new root.
   const tail = run.catch(() => {})
   writeChain.set(key, tail)
   void tail.then(() => {
@@ -149,8 +158,8 @@ function serialize<T>(ref: string, fn: () => Promise<T>): Promise<T> {
 const persist = (ref: string): Promise<void> => serialize(ref, () => persistNow(ref))
 
 async function persistNow(ref: string): Promise<void> {
+  const gen = generation
   const queued = pendingScene.get(ref)
-  pendingScene.delete(ref)
   const e = useDrawStore.getState().entries[ref]
   if (queued === undefined || !e || e.status !== 'ok' || !e.path || !e.source) return
   let base = e.source
@@ -159,6 +168,7 @@ async function persistNow(ref: string): Promise<void> {
   // 笔画;读-合并-写把竞态窗缩到毫秒级,web 侧还顺带对齐 CAS seq(readDrawing 会 noteSeq)。
   try {
     const fresh = await amadeus.readDrawing(e.path, e.path)
+    if (gen !== generation) return
     if (fresh.status === 'ok') {
       base = fresh.source
       if (fresh.source !== e.source) {
@@ -174,11 +184,14 @@ async function persistNow(ref: string): Promise<void> {
   } catch {
     /* 预读失败(离线/瞬时):按原样写,旧行为 */
   }
+  if (gen !== generation) return
   const next = withSceneJson(base, sceneJson)
   if (!next) return // 定位不到 Drawing 段 → 拒写,绝不把一个不认识的文件覆盖成画板
   try {
     await amadeus.writeDrawing(e.path, next)
+    if (gen !== generation) return
     lastSceneJson.set(ref, sceneJson)
+    if (pendingScene.get(ref) === queued) pendingScene.delete(ref)
     // 原文与场景种子一起推进:source 供下次换段,scene 供下一次挂载定种(见字段注释)。
     const scene = tryParseScene(sceneJson)
     useDrawStore.setState((s) => {
@@ -188,12 +201,13 @@ async function persistNow(ref: string): Promise<void> {
         : s
     })
   } catch {
-    /* 磁盘错误:内存态保留,下次编辑再试 */
+    /* Keep pendingScene for retry; an account-switch flush must detect failure. */
   }
 }
 
 export const useDrawStore = create<DrawStoreState>((set, get) => ({
   entries: {},
+  gen: generation,
 
   async load(pagePath, ref) {
     const cur = get().entries[ref]
@@ -202,11 +216,14 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
   },
 
   async reload(pagePath, ref) {
+    if (!usePageStore.getState().vaultRoot) return
+    const gen = generation
     set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, source: null, scene: null, settings: DEFAULT_BOARD } } }))
     let entry: DrawEntry = { status: 'missing', path: null, source: null, scene: null, settings: DEFAULT_BOARD }
     lastSceneJson.delete(ref)
     try {
       const r = await amadeus.readDrawing(pagePath, ref)
+      if (gen !== generation) return
       if (r.status === 'ok') {
         const parsed = parseDrawing(r.source)
         // 段能定位 ≠ 里面是合法 JSON(手改坏的、被别的工具截断的)→ 一并算 corrupt,只读保护。
@@ -220,6 +237,7 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
     } catch {
       /* 保持 missing */
     }
+    if (gen !== generation) return
     set((s) => ({ entries: { ...s.entries, [ref]: entry } }))
   },
 
@@ -256,15 +274,23 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
     await persist(ref)
   },
 
-  async flushAll() {
-    const refs = [...saveTimers.keys()]
+  async flushAll(strict = false) {
+    // Timers are removed before asynchronous IO starts. Wait for the path queues
+    // as well, including scene/settings writes already in progress.
     for (const t of saveTimers.values()) clearTimeout(t)
     saveTimers.clear()
+    await Promise.all([...writeChain.values()])
+    const refs = [...pendingScene.keys()]
     await Promise.all(refs.map((r) => persist(r)))
+    if (strict && pendingScene.size) {
+      throw new Error(`Drawing changes could not be saved: ${[...pendingScene.keys()].join(', ')}`)
+    }
   },
 
   async setSettings(ref, patch) {
+    const gen = generation
     await get().flush(ref) // 待写的场景先落盘:下面这次写基于 flush 后的原文,不会把笔画倒回去
+    if (gen !== generation) return
     return serialize(ref, async () => {
       const e = get().entries[ref]
       if (!e || e.status !== 'ok' || !e.path || !e.source) return
@@ -275,11 +301,13 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
       } catch {
         /* 预读失败:按内存原文写 */
       }
+      if (gen !== generation) return
       // 增量合到**刚读到的盘面**上,而不是调用方手里那份可能已过期的快照
       const src = writeBoard(base, { ...readBoard(base), ...patch })
       if (src === base) return // 值没变 / 源没有 frontmatter(writeBoard 原样返回)→ 无可写
       try {
         await amadeus.writeDrawing(e.path, src)
+        if (gen !== generation) return
         set((s) => {
           const cur = s.entries[ref]
           return cur ? { entries: { ...s.entries, [ref]: { ...cur, source: src, settings: readBoard(src) } } } : s
@@ -302,3 +330,18 @@ amadeus?.onExternalChange?.((p) => {
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', () => { void useDrawStore.getState().flushAll() })
 }
+
+
+// Account transitions flush before changing this root. Cache keys are relative
+// refs, so retaining either scenes or deduplication baselines across roots would
+// show A’s same-named drawing in B and merge A’s elements into B on the next edit.
+usePageStore.subscribe((next, previous) => {
+  if (next.vaultRoot === previous.vaultRoot) return
+  ++generation
+  for (const timer of saveTimers.values()) clearTimeout(timer)
+  saveTimers.clear()
+  pendingScene.clear()
+  lastSceneJson.clear()
+  appliers.clear()
+  useDrawStore.setState({ entries: {}, gen: generation })
+})

@@ -30,11 +30,12 @@ if (typeof window !== 'undefined') {
 
 const ExcalidrawCanvas = lazyRetry(() => import('./ExcalidrawCanvas'))
 
-export function ExcalidrawEmbed({ target, pagePath }: { target: string; pagePath: string }): React.JSX.Element {
+export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target: string; pagePath: string; readOnly?: boolean }): React.JSX.Element {
   const entry = useDrawStore((s) => s.entries[target])
+  const generation = useDrawStore((s) => s.gen)
   useEffect(() => {
     void useDrawStore.getState().load(pagePath, target) // 幂等,多处嵌入共用一次载入
-  }, [pagePath, target])
+  }, [pagePath, target, generation])
 
   if (!entry || entry.status === 'loading') {
     return <div className="amx-draw amx-draw-state">读取画板…</div>
@@ -60,16 +61,19 @@ export function ExcalidrawEmbed({ target, pagePath }: { target: string; pagePath
       </div>
     )
   }
-  return <Board target={target} settings={entry.settings} />
+  return <Board key={`${generation}:${target}`} target={target} settings={entry.settings} generation={generation} readOnly={readOnly} />
 }
 
 /** 只在 entry 成 ok 后挂载,好把 initialData 一次性定种:<Excalidraw> 挂载后自持编辑态,
  *  initialData 之后再变它也不看。种子必须取 seedFor(最新落盘态,含防抖窗内的 pending)——
  *  取初次载入的旧 scene 就是「白板关掉重开回到旧内容」,旧种子再画一笔还会盖掉磁盘新内容。 */
-function Board({ target, settings }: { target: string; settings: BoardSettings }): React.JSX.Element {
+function Board({ target, settings, generation, readOnly = false }: { target: string; settings: BoardSettings; generation: number; readOnly?: boolean }): React.JSX.Element {
   const [seed] = useState(() => useDrawStore.getState().seedFor(target) ?? {})
   // 卸载即冲刷:防抖里的最后一笔立即落盘,scene 种子随之推进,下次挂载才拿得到最新内容。
-  useEffect(() => () => { void useDrawStore.getState().flush(target) }, [target])
+  // 只读(分享页)一笔都没写过,不冲刷也不接任何写回调 —— 桥的 writeDrawing 本就会拒,这里在源头就不发。
+  useEffect(() => () => {
+    if (!readOnly && useDrawStore.getState().gen === generation) void useDrawStore.getState().flush(target)
+  }, [target, generation, readOnly])
   const mode = useTheme((s) => s.mode) // 注意:themeStore 的 lang 是**设计语言**(lovable/echo…),不是界面语言
   const { locale } = useI18n()
   return (
@@ -82,9 +86,10 @@ function Board({ target, settings }: { target: string; settings: BoardSettings }
           // 而本 App 的 i18n(i18n.tsx:1910)也在写 html[lang] —— 必须喂同一个 locale,两边才不打架。
           langCode={locale === 'zh' ? 'zh-CN' : 'en'}
           settings={settings}
-          onSettings={(patch) => void useDrawStore.getState().setSettings(target, patch)}
-          onSceneChange={(sceneJson) => useDrawStore.getState().save(target, sceneJson)}
-          registerApplier={(fn) => registerDrawingApplier(target, fn)}
+          viewMode={readOnly}
+          onSettings={(patch) => { if (!readOnly && useDrawStore.getState().gen === generation) void useDrawStore.getState().setSettings(target, patch) }}
+          onSceneChange={(sceneJson) => { if (!readOnly && useDrawStore.getState().gen === generation) useDrawStore.getState().save(target, sceneJson) }}
+          registerApplier={(fn) => useDrawStore.getState().gen === generation ? registerDrawingApplier(target, fn) : () => {}}
         />
       </Suspense>
     </div>

@@ -47,6 +47,17 @@ void installMobileShim().then(async (ok) => {
 
   let side = vaultMode()
   let impl = makeBridge(side)
+  window.tangu?.onAuthChanged?.(() => {
+    // The bridge and collaboration callbacks close over cfg; revoke that credential immediately.
+    cfg.token = ''
+    window.amadeusCollab?.stopHeartbeat?.()
+    if (side !== 'cloud') return
+    impl = makeBridge('cloud')
+    void import('@/amadeus/store/pageStore').then((ps) => {
+      ps.resetAllScopeDocs()
+      ps.usePageStore.setState({ vaultRoot: null, pages: [], folders: [], files: [], icons: {} })
+    })
+  })
   // 恒定壳:`in` 也要转发 —— 渲染层多处用 `'x' in window.amadeus` 探能力(云/本地两桥方法集不同)。
   ;(window as unknown as { amadeus: unknown }).amadeus = new Proxy({} as Bridge, {
     get: (_t, k) => impl[k as string],

@@ -1463,10 +1463,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       let res!: Awaited<ReturnType<typeof streamProviderCompletion>>;
       let partialText = ''; // 本次尝试已流出的正文(中流断线恢复时回灌上下文用)
       let resumedMidstream = false;
+      // 首帧计时仪器(2026-09-06 取证:本机 52% 墙钟在等首帧,用户报「卡住」):requestBytes=本轮上传体量,
+      // uploadMs=响应头到达(托管面即上下文送达服务端),ttftMs=首帧,llmMs=整次调用。随 usage 事件落库,
+      // scripts/stall-timeline.mjs 据此归属;status:llm_call 让客户端把等待画成「发送 N KB / 等首帧 + 秒数」。
+      let requestBytes = 0;
+      try { requestBytes = Buffer.byteLength(JSON.stringify(payload), 'utf-8'); } catch { /* ignore */ }
+      let llmTiming: { ttftMs?: number; uploadMs?: number; llmMs?: number } = {};
       for (let attempt = 0; ; attempt++) {
         let emitted = false;
         partialText = '';
         const attemptStart = Date.now();
+        let acceptedAt = 0;
+        let firstFrameAt = 0;
+        const markFrame = (): void => { if (!firstFrameAt) firstFrameAt = Date.now(); };
+        void publish(runId, 'status', { phase: 'llm_call', stage: 'sending', iteration, bytes: requestBytes });
         try {
           res = await streamProviderCompletion({
             apiKey,
@@ -1474,10 +1484,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             payload,
             provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
             signal: ac.signal,
-            onToken: (d) => { emitted = true; partialText += d; void publish(runId, 'token', { delta: d }); },
-            onReasoning: (d) => { emitted = true; void publish(runId, 'reasoning', { delta: d }); },
+            onResponseStart: () => {
+              acceptedAt = Date.now();
+              void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
+            },
+            onToken: (d) => { emitted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onReasoning: (d) => { emitted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             onToolCallDelta: (info) => {
               emitted = true;
+              markFrame();
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
               if (info.argsDelta) {
@@ -1490,6 +1505,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               }
             },
           });
+          llmTiming = {
+            llmMs: Date.now() - attemptStart,
+            ...(firstFrameAt ? { ttftMs: firstFrameAt - attemptStart } : {}),
+            ...(acceptedAt ? { uploadMs: acceptedAt - attemptStart } : {}),
+          };
           break;
         } catch (err) {
           if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
@@ -1556,6 +1576,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         prompt: res.usage.prompt_tokens || 0,
         completion: res.usage.completion_tokens || 0,
         cached: cachedTokens,
+        // 首帧/上传/整次调用毫秒 + 上传字节:scripts/stall-timeline.mjs 据此把「等模型」的秒数归属到上传 vs 上游
+        ...llmTiming,
+        requestBytes,
         // 隐藏思考量单列(Responses 上报;计量拆账——output 到底花在推理还是正文,没有它无从谈优化)
         ...(res.usage.reasoning_tokens ? { reasoning: res.usage.reasoning_tokens } : {}),
         total: tokensTotal,

@@ -44,6 +44,39 @@ afterEach(() => {
 })
 
 describe('pageStore.switchVaultSide 写入泄漏防线', () => {
+  it('a failed embedded database save cancels the root switch', async () => {
+    const { usePageStore: store } = await freshStore()
+    const { useDbStore } = await import('./dbStore')
+    store.setState({ vaultSide: 'local', vaultRoot: '/local-root', activePage: 'private.md' })
+    const flush = vi.spyOn(useDbStore.getState(), 'flushAll').mockRejectedValueOnce(new Error('Database disk full'))
+    await store.getState().switchVaultSide('cloud')
+    expect(flush).toHaveBeenCalledWith(true)
+    expect(switchSide).not.toHaveBeenCalled()
+    expect(store.getState().vaultRoot).toBe('/local-root')
+    expect(store.getState().activePage).toBe('private.md')
+    expect(store.getState().error).toContain('Database disk full')
+    flush.mockRestore()
+  })
+
+  it('strict account flush rejects a failed save, preserves edits and allows retry', async () => {
+    const { usePageStore: store, flushAllScopes } = await freshStore()
+    store.setState({ vaultRoot: '/local-root', activePage: 'private.md', manifest: { blocks: {} } as never, blocks: {} })
+    store.getState()._commit({ blocks: {} } as never)
+    savePage.mockRejectedValueOnce(new Error('Disk full'))
+    await expect(flushAllScopes(true)).rejects.toThrow('Disk full')
+    expect(store.getState().activePage).toBe('private.md')
+    expect(store.getState().manifest).not.toBeNull()
+    await expect(flushAllScopes(true)).resolves.toBeUndefined()
+    expect(savePage).toHaveBeenCalledTimes(2)
+  })
+
+  it('unrelated historical UI errors do not block an otherwise successful account flush', async () => {
+    const { usePageStore: store, flushAllScopes } = await freshStore()
+    store.setState({ vaultRoot: '/local-root', activePage: 'private.md', error: 'Link lookup failed' })
+    await expect(flushAllScopes(true)).resolves.toBeUndefined()
+    expect(savePage).not.toHaveBeenCalled()
+  })
+
   it('待存内容先在旧根落盘(savePage 先于 switchSide),切根后绝无再写', async () => {
     vi.useFakeTimers()
     const { usePageStore: store } = await freshStore()

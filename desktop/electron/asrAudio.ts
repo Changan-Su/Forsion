@@ -11,16 +11,19 @@
  */
 export function wavToSamples(buf: Buffer): { samples: Float32Array; sampleRate: number } {
   let off = 12, sampleRate = 16000, channels = 1, bits = 16, dataOff = -1, dataLen = 0
-  if (buf.length >= 44 && buf.toString('ascii', 0, 4) === 'RIFF') {
-    while (off + 8 <= buf.length) {
-      const id = buf.toString('ascii', off, off + 4)
-      const sz = buf.readUInt32LE(off + 4)
-      if (id === 'fmt ') { channels = buf.readUInt16LE(off + 10); sampleRate = buf.readUInt32LE(off + 12); bits = buf.readUInt16LE(off + 22) }
-      else if (id === 'data') { dataOff = off + 8; dataLen = sz; break }
-      off += 8 + sz + (sz & 1)
-    }
+  // 不是 WAV 就**报错**,不要当裸 PCM 硬解:m4a/mp3 解出来是噪声,SenseVoice 回一串「. . . .」——
+  // 静默的错答案比报错难查得多(2026-09-06 实测:模型直接把 m4a 喂进来,只当是模型不行)。
+  if (buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF') {
+    throw new Error('Local speech recognition accepts WAV (PCM) only. Convert first: ffmpeg -i <input> -ac 1 -ar 16000 out.wav')
   }
-  if (dataOff < 0) { dataOff = 44; dataLen = Math.max(0, buf.length - 44) } // 兜底
+  while (off + 8 <= buf.length) {
+    const id = buf.toString('ascii', off, off + 4)
+    const sz = buf.readUInt32LE(off + 4)
+    if (id === 'fmt ') { channels = buf.readUInt16LE(off + 10); sampleRate = buf.readUInt32LE(off + 12); bits = buf.readUInt16LE(off + 22) }
+    else if (id === 'data') { dataOff = off + 8; dataLen = sz; break }
+    off += 8 + sz + (sz & 1)
+  }
+  if (dataOff < 0) { dataOff = 44; dataLen = Math.max(0, buf.length - 44) } // 有 RIFF 头但没找到 data 块:按标准 44 字节头兜底
   const frameBytes = Math.max(1, bits >> 3) * Math.max(1, channels)
   const n = Math.floor(Math.max(0, dataLen) / frameBytes)
   const samples = new Float32Array(n) // V8 拥有(非 external)

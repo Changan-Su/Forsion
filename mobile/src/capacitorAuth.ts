@@ -97,8 +97,8 @@ export function bindDeepLinkAuth(onToken: (t: string) => void): void {
 }
 
 /** 打开系统内浏览器到 Forsion 登录页,redirect 指回自定义 scheme。 */
-export async function startNativeLogin(): Promise<void> {
+export async function startNativeLogin(force = false): Promise<void> {
   const redirect = 'tangu://auth-callback'
-  const url = `${forsionWebOrigin()}/auth?redirect=${encodeURIComponent(redirect)}&app=tangu-mobile`
+  const url = `${forsionWebOrigin()}/auth?redirect=${encodeURIComponent(redirect)}&app=tangu-mobile${force ? '&logout=1' : ''}`
   try { await Browser.open({ url }) } catch { /* ignore */ }
 }

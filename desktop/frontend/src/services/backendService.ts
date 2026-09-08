@@ -211,6 +211,10 @@ export const getSessionUsage = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ tokensTotal: number; contextTokens?: number }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/usage`)
     .then((r) => ({ base: Number(r.tokensTotal) || 0, ctx: Number(r.contextTokens) || 0 }))
 
+/** 会话事件时间线骨架(无正文;流式帧折叠成段):导出日志携带,tangu-agent 的 scripts/stall-timeline.mjs 据此归属秒数。 */
+export const getSessionTimeline = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ runs: any[] }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/timeline`).then((r) => r.runs || [])
+
 /** 手动压缩上下文(生成并持久化总结检查点;后续 run 起步即精简)。 */
 export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, modelId?: string) =>
   request<{ ok: boolean; reason?: string; summarizedCount?: number }>(

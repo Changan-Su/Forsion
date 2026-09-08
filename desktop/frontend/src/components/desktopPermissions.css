@@ -1,0 +1,31 @@
+.desktop-permissions { display: flex; flex-direction: column; gap: 18px; min-width: 0; color: var(--text); }
+.desktop-permissions p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.desktop-permissions-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.desktop-permissions-section { min-width: 0; padding: 18px; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-lg); background: var(--bg-card); }
+.desktop-permissions-section h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; font-weight: 650; }
+.desktop-permissions-section header p + p { margin-top: 5px; }
+.desktop-permissions-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.desktop-permissions-row { display: flex; align-items: flex-start; gap: 10px; padding-block: 14px; flex-wrap: wrap; }
+.desktop-permissions-icon { flex: none; margin-top: 2px; color: var(--text-muted); }
+.desktop-permissions-copy { flex: 1 1 180px; min-width: 0; }
+.desktop-permissions-copy h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.desktop-permissions-row-actions { display: flex; align-items: flex-end; flex-direction: column; gap: 8px; margin-left: auto; }
+.desktop-permissions-state { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted); }
+.desktop-permissions-state[data-state='granted'] { color: var(--green); }
+.desktop-permissions-state[data-state='unverified'], .desktop-permissions p.desktop-permissions-unverified { color: var(--warning); }
+.desktop-permissions p.desktop-permissions-unverified { margin-top: 6px; }
+.desktop-permissions-verify { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-top: 8px; }
+.desktop-permissions-verify p { flex: 1 1 230px; }
+.desktop-permissions-progress { display: flex; align-items: center; gap: 8px; }
+.desktop-permissions-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px; border: var(--border-width, 1px) solid var(--danger); border-radius: var(--radius-md); background: var(--danger-light); }
+.desktop-permissions-error > div { flex: 1 1 200px; min-width: 0; }
+.desktop-permissions-error p, .desktop-permissions p.desktop-permissions-helper-error { color: var(--danger); }
+.desktop-permissions p.desktop-permissions-error-detail { margin-top: 4px; }
+.desktop-permissions p.desktop-permissions-note, .desktop-permissions p.desktop-permissions-helper-error { margin-top: 12px; }
+.desktop-permissions .btn { white-space: normal; overflow-wrap: anywhere; max-width: 100%; justify-content: center; }
+.desktop-permissions .btn svg, .desktop-permissions h2 svg { flex: none; }
+
+@media (max-width: 600px) {
+  .desktop-permissions-section { padding-inline: 12px; }
+  .desktop-permissions-row-actions { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; padding-left: 28px; }
+}

@@ -7,9 +7,9 @@ import type { WorkspaceDescriptor } from '../types'
 
 export type SessionMode = 'chat' | 'work'
 
-/** null = 用户没手选过 → 端默认(web/mobile 主打 chat,desktop 主打 work),读时解析、不落盘。 */
-export function effectiveSessionMode(mode: SessionMode | null | undefined, platform: 'desktop' | 'web' | 'mobile'): SessionMode {
-  return mode ?? (platform === 'desktop' ? 'work' : 'chat')
+/** null = 用户没手选过 → 全端默认 Work；显式选择仍持久并优先。保留 platform 参数以维持调用契约。 */
+export function effectiveSessionMode(mode: SessionMode | null | undefined, _platform: 'desktop' | 'web' | 'mobile'): SessionMode {
+  return mode ?? 'work'
 }
 
 /** chat 模式只看无根会话(chat 会话都住那,**不分本地/云端侧**;存量的无根 work 会话也在,打开即锁定的 work 会话,如实);

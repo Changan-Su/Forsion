@@ -50,6 +50,11 @@ describe('splitOnSilence(SenseVoice 是短句模型,长音频必须切;切点即
 })
 
 describe('wavToSamples', () => {
+  it('不是 WAV 就报错 —— 别把 m4a 当裸 PCM 硬解成噪声(SenseVoice 会回一串点号)', () => {
+    const m4a = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypM4A '), Buffer.alloc(64)])
+    expect(() => wavToSamples(m4a)).toThrow(/WAV \(PCM\) only/)
+  })
+
   it('解析 16-bit 单声道 WAV 头', () => {
     const n = 8, header = Buffer.alloc(44)
     header.write('RIFF', 0); header.write('WAVE', 8); header.write('fmt ', 12)

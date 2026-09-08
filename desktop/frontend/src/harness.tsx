@@ -1604,6 +1604,8 @@ if (new URLSearchParams(location.search).has('dock')) {
             path={st.path}
             initial={st.initial}
             probe={upageProbe}
+            // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
+            readOnly={new URLSearchParams(location.search).has('uro')}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
           />
           <AskStringHost />{/* 画布元素文字编辑走 askString(双击形状/连线标签);不挂它,仪器测不到弹窗 */}

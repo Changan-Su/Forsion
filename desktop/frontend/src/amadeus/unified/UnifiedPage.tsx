@@ -221,6 +221,9 @@ interface Pipe {
   /** 写盘串行链(Codex P0):并发 writeNow 一律排队,且**执行时**才 compose——
    *  旧内容的大写入绝不可能后完成盖掉新状态。 */
   chain: Promise<void>
+  /** 只读实例(公开分享页):writeNow / 生命周期 flush 在此短路。挂在 pipe 上而不是闭包读 prop ——
+   *  writeFailures.test 把 writeNow 与 flush 两段源码切出来单独求值,闭包里的自由标识符会让它炸。 */
+  readOnly: boolean
 }
 
 interface HostApi {
@@ -253,7 +256,7 @@ interface HostApi {
   revealSelection: () => void
 }
 
-function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard }: {
+function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFinalFlush, apiRef, probe, extraPlugins, focusPlace, onFocused, onCard, readOnly = false }: {
   path: string
   pageDir: string
   body: string
@@ -272,6 +275,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   onFocused: () => void
   /** `/card`：消费 slash 查询后，把当前顶层块交给 Canvas 卡片事务。 */
   onCard: (view: EditorView) => void
+  /** 只读:PM `editable=false`、不挂键盘/粘贴/slash/工具栏(MilkdownInner 同一道门)。 */
+  readOnly?: boolean
 }): ReactElement {
   const [, getInstance] = useInstance()
   const store = useScopedPageStore()
@@ -690,6 +695,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         onFocused={onFocused}
         unified
         extraPlugins={extraPlugins}
+        readOnly={readOnly}
       />
       {dbPick && (
         <OverlayPortal><DbLinkPicker
@@ -705,11 +711,13 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
 }
 
 /** 行内标题 + emoji 图标 + 添加图标/封面动作(与 v3 NoteTitle 同 DOM/同 CSS,数据走 fm 管线)。 */
-function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal, compact = false }: {
+function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEnterBody, focusSignal, compact = false, readOnly = false }: {
   compact?: boolean
   path: string
   icon: string | null
   cover: string | null
+  /** 只读(公开分享页):标题是静态文本,没有图标/封面动作,也不改名。 */
+  readOnly?: boolean
   onSetIcon: (em: string | null) => void
   onSetCover: (cover: string) => void
   /** 返回改名是否成功:失败(撞名/非法名)时输入框还原旧名,不留「显示新名实为旧名」的假象。 */
@@ -746,6 +754,18 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
     const next = val.trim()
     if (next && next !== current) void onRename(next, kind).then((ok) => { if (!ok) setVal(shown) })
     else setVal(shown)
+  }
+  if (readOnly) {
+    // 同一套 DOM 类名(.amx-title-wrap / .amx-title-bigicon / .amx-title-input)保证观感与编辑态逐字同源;
+    // 只是把 input 换成静态标题、按钮换成 span。未命名笔记直接显示文件名,不显示「New Page」占位。
+    return (
+      <div className="amx-title-wrap amx-title-ro">
+        {icon && <span className="amx-title-bigicon" aria-hidden>{icon}</span>}
+        <div className="amx-title-row">
+          <h1 className="amx-title-input amx-title-static">{shown || current}</h1>
+        </div>
+      </div>
+    )
   }
   return (
     <div className="amx-title-wrap">
@@ -813,7 +833,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   )
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false, readOnly = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -829,6 +849,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  改由宿主(NoteView)把它放进底栏胶囊的「⋯」。交给**父组件**而不是全局槽:结构上就是同一篇
    *  笔记,旧写法「uiOverlay 单槽 + 路径比对」栽过的那三条歧路(见 CanvasModeSeg 顶注)一条都不沾。 */
   onCanvasMode?: (s: { on: boolean; toggle: () => void } | null) => void
+  /** 只读实例(公开分享页 /share/<token>,2026-09-07):同一套渲染(块/分栏/卡片/画布/嵌入/chrome),
+   *  但**一个字节都不写**:PM editable=false,writeNow/schedule/setFm/改名/生命周期 flush 全部短路,
+   *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
+   *  桥是第二道;两道缺一不可(桥拒了会 toast「保存失败」,用户以为自己在编辑)。 */
+  readOnly?: boolean
 }): ReactElement {
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
@@ -839,7 +864,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve() }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
@@ -1127,7 +1152,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         // 折叠失败时这个回调根本不会被调,清零动作放在它里面就永远等不到。
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
-      ...createEmbedLayer({ path }),
+      ...createEmbedLayer({ path, readOnly }),
       // 画布模式的两个编辑器侧插件(2026-08-18):跨卡选区夹断 + 统一撤销时间线的 PM 记账。
       // 都经闭包/共享对象现读状态,文档模式下零行为(夹断有 inCanvas 闸,记账在文档模式照记 ——
       // 时间线只在画布模式被查询,顺序跨模式仍然成立)。
@@ -1141,7 +1166,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...listFoldPlugins,
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [layer, path],
+    [layer, path, readOnly],
   )
   useEffect(() => {
     if (!blockMenu) return
@@ -1251,27 +1276,34 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return true
   }
 
-  const writeNow = (): Promise<void> => {
+  const writeNow = (strict = false): Promise<void> => {
+    if (pipe.readOnly) return Promise.resolve() // 只读实例:唯一的写盘出口在此封死(见 readOnly prop 注)
     const run = async (): Promise<void> => {
-      if (pipe.retired) return
-      const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
-      if (text === pipe.lastSaved) {
-        pipe.pending = false
-        return
-      }
-      try {
-        await amadeus.writeTextFile(path, text)
-        pipe.lastSaved = text
-        scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
-        // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
-        // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
-        if (composeFm(pipe.fm, pipe.body) === text) pipe.pending = false
-      } catch {
-        pipe.pending = true // 写失败:下一次编辑/卸载再试
+      while (!pipe.retired) {
+        const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
+        if (text === pipe.lastSaved) {
+          pipe.pending = false
+          return
+        }
+        try {
+          await amadeus.writeTextFile(path, text)
+          pipe.lastSaved = text
+          scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
+          // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
+          // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
+          if (composeFm(pipe.fm, pipe.body) === text) pipe.pending = false
+        } catch (error) {
+          pipe.pending = true // 写失败保留草稿;严格切号屏障必须拒绝,不能随后 retire 丢掉待写内容。
+          if (strict) throw error
+          return // 普通自动保存仍按原行为,下一次编辑/卸载再试。
+        }
+        // 严格落盘同时排尽在途 I/O 期间新增的编辑;否则 pending=true 也会被成功 ack 后退休。
+        if (!strict) return
       }
     }
-    pipe.chain = pipe.chain.then(run)
-    return pipe.chain
+    const task = pipe.chain.then(run, run)
+    pipe.chain = task.catch(() => {}) // 失败对本次调用可见,但不能毒死后续重试的串行链。
+    return task
   }
 
   /** 从编辑器 doc 派生 layout + canvas 进 fm(两者的真源都是 doc,Codex A13);仅可视模式有 view。
@@ -1320,7 +1352,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }
 
   const schedule = (): void => {
-    if (pipe.dead || pipe.retired) return
+    if (pipe.dead || pipe.retired || readOnly) return
     if (composeFm(pipe.fm, pipe.body) === pipe.lastSaved) return
     pipe.pending = true
     if (pipe.timer) clearTimeout(pipe.timer)
@@ -1341,6 +1373,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   /** chrome 写 fm(值 undefined = 删键)。图标/封面是单击动作(非打字流)→ 立即落盘。 */
   const setFm = (patch: Record<string, unknown>, immediate = true): void => {
+    if (readOnly) return
     pipe.fm = patchFm(pipe.fm, patch)
     setFmVer((v) => v + 1)
     syncSrcDraft()
@@ -1468,13 +1501,14 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   useEffect(() => {
     return registerUnifiedPipe({
       path,
-      flush: () => {
+      flush: (strict = false) => {
+        if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
         syncFromEditor()
         if (pipe.timer) {
           clearTimeout(pipe.timer)
           pipe.timer = null
         }
-        return writeNow()
+        return writeNow(strict)
       },
       insertFiles: (files) => {
         hostApi.current?.insertFiles(files)
@@ -1568,6 +1602,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   }, [path])
 
   const doRename = async (next: string, focusKind: 'enter' | 'move' | null = null): Promise<boolean> => {
+    if (readOnly) return false
     try {
       syncFromEditor() // 快打字后立刻回车改名:先拉平防抖窗里的最后几击(Codex A4)
       await writeNow() // 待写先落旧路径(chain 串行:在途写全部排完)
@@ -1664,6 +1699,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           page={path}
           cover={cover}
           coverY={coverY}
+          readOnly={readOnly}
           onSetCover={(c) => setFm({ cover: c ?? undefined, ...(c ? {} : { cover_y: undefined }) })}
           onSetCoverY={(y) => setFm({ cover_y: y })}
         />
@@ -1675,6 +1711,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           path={path}
           icon={icon}
           cover={cover}
+          readOnly={readOnly}
           onSetIcon={(em) => setFm({ icon: em ?? undefined })}
           onSetCover={(c) => setFm({ cover: c })}
           onRename={doRename}
@@ -1683,6 +1720,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         />
         {!compact && <AmadeusPropertiesPanel
           fmExtra={foreignFmText(pipe.fm)}
+          readOnly={readOnly}
           onCommit={(yaml) => {
             pipe.fm = setForeignFm(pipe.fm, yaml)
             setFmVer((v) => v + 1)
@@ -1724,6 +1762,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           <CanvasStage
             path={path}
             active={canvasOn}
+            readOnly={readOnly}
             revealSelection={canvasReveal}
             getView={() => layer.getView()}
             main={canvasMain}
@@ -1745,7 +1784,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
               schedule()
             }}
           >
-            <MilkdownProvider key={`${path}:${editorKey}:${extGen}`}>
+            <MilkdownProvider key={`${path}:${editorKey}:${extGen}${readOnly ? ':ro' : ''}`}>
               <UnifiedEditorHost
                 path={path}
                 pageDir={pageDir}
@@ -1768,10 +1807,11 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                 focusPlace={bodyFocus}
                 onFocused={() => setBodyFocus(null)}
                 onCard={makeCard}
+                readOnly={readOnly}
               />
             </MilkdownProvider>
           </CanvasStage>
-          {!canvasOn && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
+          {!canvasOn && !readOnly && <div className="page-tail" onClick={() => hostApi.current?.focusTail()} />}
         </div>
       )}
       <LinkHoverCard getView={() => layer.getView()} />

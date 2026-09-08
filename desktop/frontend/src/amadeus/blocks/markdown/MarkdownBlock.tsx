@@ -79,7 +79,7 @@ import {
 import { wikilinkPlugin } from './wikilink'
 import { mdImagePlugin } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
-import { applyTrigger, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
+import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, type ToolbarAction } from './InlineToolbar'
 import { OverlayPortal } from '../../lib/overlayPortal'
@@ -496,10 +496,12 @@ export function MilkdownInner({
       // 块级 markdown 触发:行首触发符(#{1,6} / - * + / 1. / > / [])+ 空格 → 单事务
       // 「删触发符 + 原地转换」(blockTriggers.ts)。preventDefault 抢在 Milkdown 内置 input rules
       // 前 —— 内置标题规则是「叠加」(h1 打 ## 变 h3),列表/引用规则在标题节点里根本不触发。
-      // 统一 Notion 语义:# 设级别(同级幂等)、标题上 -/1./> 先降段落再转、[] 直接成待办。
+      // 统一 Notion 语义:# 设级别(同级幂等)、标题上 -/> 先降段落再转、[] 直接成待办。
+      // 唯一例外:标题正文允许以 `1. ` 开头；这里保留字面文字，不自动降成有序列表。
       if (event.key === ' ' && sel.empty && !event.metaKey && !event.ctrlKey && !event.altKey) {
         const trig = matchTrigger(textBeforeCursor(sel.$from))
-        if (trig && applyTrigger(view, trig, { from: sel.$from.start(), to: sel.$from.pos })) {
+        if (trig && canAutoTriggerFromBlock(sel.$from.parent.type.name, trig)
+          && applyTrigger(view, trig, { from: sel.$from.start(), to: sel.$from.pos })) {
           event.preventDefault()
           return true
         }

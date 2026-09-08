@@ -1,7 +1,7 @@
 ---
 name: Forsion 扩展开发
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.12.0
+version: 1.14.0
 author: Forsion
 category: Forsion
 ---
@@ -100,6 +100,14 @@ Space 需要显式声明 `mini` 才会出现在 Mini Panel。它是一块扩展�
 
 包根 `skills/`(全局技能)是原地扫描、不落盘拷贝,不在上表内。因此 onboarding 里**不要** recommends 自家已内嵌的 agent/skill(会引导去市场重复装)。真实范例:`Forsion-Instrumentality-Project/bluebird/`。
 
+### 插件能自带 MCP 吗?——不能,也别绕(2026-09-06 立规)
+
+标志文件只有上面五种,**没有 MCP 这一类**;引擎的 MCP 配置是 `~/.tangu/config.json` 的 `mcp` 段,进程启动时冻结(改了要重启引擎),插件也没有写它的接缝。要给 agent 工具,按能力住在哪选路,不要造第三条:
+
+- **能力在引擎/本机可跑** → 捆绑包 `tangu-plugins/<pid>/` 里的引擎插件 `registerToolProvider`,工具原地进工具面、自动过审批闸(computer-use / stickers 都是这样)。
+- **能力在某台服务端**(如 Forsion server 的后台管理)→ **服务端自己出 MCP 端点**,插件只做「接入卡」:探测端点、签长效令牌、给出 `claude mcp add …` 命令与 Forsion 设置 → MCP 可粘贴的 JSON。先例 = server-admin 0.7.0 的「接入 Agent(MCP)」+ server `microserver/admin-mcp/`(`/api/admin/mcp`)。这样 Tangu / Claude Code / Codex 吃同一个端点,插件不持有任何监听。
+- 声明式 `mcp.json` 标志**刻意没加**:服务器地址与令牌是运行期数据,写不进 manifest;真有静态 stdio MCP 要随包发时再议(约 30 行,在 `plugins/bundles.ts` + `mcp/config.ts` 合并)。
+
 ### 把动作搬进引擎侧:三档路由(通用纪律 5 的落地写法)
 
 发现某个能力「只有点命令面板才能用」时,把它做成 bundle 的引擎侧资产(形态按纪律 5 选:默认包根 `skills/`,真需要专属人设/上下文预算/自动化入口才加 `agents/<slug>/`),然后在**通用技能**里写一张降级路由表(照抄 `bluebird/skills/bluebird-link/SKILL.md`)。**只发全局技能时第 2 档不适用**,直接写「自己做 / 指去工作台」两档即可:
@@ -125,6 +133,7 @@ Space 需要显式声明 `mini` 才会出现在 Mini Panel。它是一块扩展�
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
+| `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;老宿主没有 → 可选链 |
 | `ctx.table.mount` | 面板里的原生多维表(只读) | 一份规格 → 真 DbTable(筛选/搜索/隐藏列/排序/统计全套),**不依赖笔记库**;老宿主没有 → 可选链 + 自己的表格降级(见下) |
 
 #### Extend View:随主视图挂载的临时扩展(2026-09-05)
@@ -247,6 +256,47 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
   用 `ctx.dashboard.mount`(见下节)、`ctx.loadData` / `ctx.saveData`、以及自己视图里的 DOM。
 - **启动期的写一律 try/catch**;要按「库在不在」分支就读 `vaultRoot()`,别去试探 `readFile` 的 null。
 - 与列表源那条纪律是同一个病根:`registerListSource` 的 `subscribe()` 必须顺手重读一次(见下)。
+
+### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
+
+长内容视图不用复制 Chat View 的目录实现。`ctx.ui.mountFloatingToc(shell, opts)` 在插件自己的
+`shell` 上叠一层宿主原生 Floating TOC(默认左侧刻度条、hover / 键盘聚焦展开),正文 DOM 与滚动仍归插件。
+宿主负责 MutationObserver 增量扫描、当前段高亮、平滑跳转、窄栏隐藏、明暗 / 配色 / 扁平模式与键盘可达性。
+
+```js
+ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
+  el.innerHTML = `
+    <div data-role="shell" style="height:100%;min-height:0">
+      <article data-role="scroll" style="height:100%;overflow:auto">
+        <h1>Getting started</h1><p>…</p>
+        <h2>Configuration</h2><p>…</p>
+      </article>
+    </div>`
+  const shell = el.querySelector('[data-role="shell"]')
+  const scroll = el.querySelector('[data-role="scroll"]')
+  const toc = ctx.ui?.mountFloatingToc(shell, {
+    scrollContainer: scroll,
+    contentRoot: scroll,               // 省略时就是 scrollContainer
+    selector: 'h1, h2, h3',
+    label: ctx.getLocale?.() === 'en' ? 'Table of contents' : '目录',
+    minItems: 2,                       // 缺省 2;只有一个标题时不占边栏
+    hideBelow: 520,                    // 缺省 520 CSS px
+    topOffset: 24,
+    side: 'left',                      // 也可 right
+  })
+  return () => toc?.dispose()
+} })
+```
+
+- `shell` 是**非滚动**定位外壳,`scrollContainer` 是里面真正滚动的元素;宿主只在 `shell` 追加覆盖层,
+  不会清空或接管插件正文。两者写成同一个滚动元素会让覆盖层跟着正文滚,不要这样搭。
+- 普通标题不用额外标记。非 `h1-h3` 条目可加 `data-lcl-toc-title="显示名"`、
+  `data-lcl-toc-level="2"`;需要强层级样式再加空属性 `data-lcl-toc-primary`。
+- 特殊 DOM 可传 `itemFromElement(element, index) → {text, level, primary?, onSelect?} | null`。
+  回调抛错会被宿主隔离;不传 `onSelect` 就按元素位置在 `scrollContainer` 内平滑滚动。
+- DOM 的增删和文字变化会自动重扫;只有 Shadow DOM / 第三方画布等观察不到的变化才调返回句柄的 `refresh()`。
+  `dispose()` 幂等,插件禁用 / 重载时宿主也会统一卸载。
+- 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
 
 ### 仪表盘 ctx.dashboard(2026-09-01 起)
 

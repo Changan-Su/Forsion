@@ -17,6 +17,7 @@ import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 import { amadeusConfigPath } from './amadeus/settings'
+import { composeEnginePath, pathKeyOf } from './envPath'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
@@ -254,28 +255,15 @@ export class BackendManager {
       // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
       env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
 
-      // 内置 Python:bundled(默认)+ 拿得到内置解释器 → 前置 PATH + TANGU_PYTHON_BIN,
-      // 让 run_bash 里的 python/pip 落到隔离的内置解释器(免装、不与用户 python 冲突);'system' 用系统 PATH。
-      // Windows 上环境变量键名是 'Path' 而非 'PATH'——按大小写不敏感找回真实键,否则前置无效。
-      if (s.pythonMode !== 'system') {
-        const py = resolveBundledPython()
-        if (py) {
-          const sep = process.platform === 'win32' ? ';' : ':'
-          const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH'
-          env[pathKey] = [...py.pathDirs, env[pathKey] || ''].filter(Boolean).join(sep)
-          env.TANGU_PYTHON_BIN = py.pythonBin
-        }
-      }
-
-      // 内置 Node/npm:**追加**到 PATH 末尾而非前置 —— 与 Python 相反是刻意的。目的只是「用户没装
-      // 也能用」,不是接管:用户自己的 nvm/volta/系统 node 常绑着项目要求的版本与全局包,抢在前面
-      // 会让 run_bash 里的 node 悄悄换版本。系统有 node 就用系统的,没有才落到内置这份。
+      // PATH 装配(内置 Python 前置 / 用户 bin 目录补全 / 内置 Node 末尾兜底)一次算完,顺序见
+      // composeEnginePath。⚠️ 补全用户 bin 目录这步不能省:GUI 启动的 app 只有精简 PATH,
+      // agent 的 run_bash 继承之 → /opt/homebrew/bin 里的 ffmpeg/git 一律 command not found
+      //(2026-09-06 青鸟转录事故);dev 从终端起继承完整 PATH,复现不出来。
+      const py = s.pythonMode !== 'system' ? resolveBundledPython() : null
       const nodeRt = resolveBundledNode()
-      if (nodeRt) {
-        const sep = process.platform === 'win32' ? ';' : ':'
-        const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH'
-        env[pathKey] = [env[pathKey] || '', ...nodeRt.pathDirs].filter(Boolean).join(sep)
-      }
+      const pathKey = pathKeyOf(env)
+      env[pathKey] = composeEnginePath(env[pathKey] || '', py?.pathDirs || [], nodeRt?.pathDirs || [])
+      if (py) env.TANGU_PYTHON_BIN = py.pythonBin
 
       // 中国大陆镜像(可逆:仅注入子进程 env,不改用户全局 dotfile;关掉即恢复直连)。pip/npm/git 子进程继承之。
       if (s.mirror === 'china') {

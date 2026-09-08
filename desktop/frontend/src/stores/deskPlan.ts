@@ -1,4 +1,5 @@
 /** Agent Desk 纯决策(对标 sessionOpenPlan.ts:策略进纯函数可单测,appStore 只执行)。 */
+import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 
 /** Agent Desk 一格演出项。磁盘态=WsFileView/原生 view 渲染;live 存在=流式演出格(正在生成中的编辑,
  *  LivePane 直接订阅 toolEvent.arguments 渲染,不经 desk state 复制内容);view 存在=任意注册视图
@@ -85,7 +86,7 @@ export function extractLiveBody(args: string, tool: string): string {
  *  供 TaskSummary 的置顶入口;path 已按 cwd 解析。 */
 /** Desk 会话快照持久化(localStorage,单键存全 map)。直播格是流式瞬态,落盘时剔除;
  *  空且无任何用户痕迹(fraction/mode/note)的条目不落;超容量按「最近展示时间」截断。 */
-export const DESK_PERSIST_KEY = 'forsion.deskBySession'
+export const DESK_PERSIST_KEY = contentStorageKey('forsion.deskBySession')
 export const DESK_PERSIST_CAP = 40
 
 export interface DeskSnapshot {

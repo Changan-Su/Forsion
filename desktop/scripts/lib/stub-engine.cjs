@@ -148,6 +148,10 @@ async function startStubEngine(data = {}) {
     if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
     if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id });
+    if (p === '/agent/agents') return json({ agents: data.agents || [] });
+    if (p === '/agent/agents-meta') return json({ defaultSlug: 'xyra', order: [] });
+    if (p === '/agent/engines') return json({ engines: data.engines || [] });
+    if (/^\/agent\/engines\/[^/]+\/capabilities$/.test(p)) return json({ models: [], commands: [] });
     // 通道轮询(15s):不给这个端点的话 catch-all 缺 channels 字段,毒化 channelsStore → 侧栏崩「not iterable」
     if (p === '/agent/channels') return json({ channels: [], available: false });
 

@@ -1251,6 +1251,7 @@
     padding: 0 8px;
   }
   #amx-print-root .amx-toolbar,
+  #amx-print-root .lcl-ftoc-frame,
   #amx-print-root .ctx-menu,
   #amx-print-root .block-gutter,
   #amx-print-root .drag-handle { display: none !important; }
@@ -1844,3 +1845,14 @@
   padding: 3px 9px; border-radius: 6px; cursor: pointer;
 }
 .dash-banner button:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+
+/* ── 只读实例(公开分享页 /share/<token>,UnifiedPage readOnly,2026-09-07)──
+ * 静态标题 / 只读属性行沿用编辑态的类名取字号与间距,只去掉交互态;只读舞台的指针语义 = 抓手。 */
+.amx-title-ro .amx-title-bigicon { cursor: default; }
+.amx-title-ro .amx-title-bigicon:hover { background: transparent; }
+.amx-title-static { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.amx-prop-row-ro .amx-prop-key { cursor: default; }
+.amx-prop-row-ro .amx-prop-key:hover, .amx-prop-row-ro .amx-prop-input:hover { background: transparent; }
+.amx-prop-row-ro .amx-prop-input { display: inline-flex; align-items: center; min-height: 24px; }
+.amx-stage-ro .amx-stage-inner { cursor: grab; }
+.amx-stage-ro .amx-stage-inner:active { cursor: grabbing; }

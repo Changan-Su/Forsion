@@ -180,6 +180,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     body: JSON.stringify(streamPayload),
     signal: guard.signal,
   });
+  opts.onResponseStart?.();
 
   if (!response.ok || !response.body) {
     const errorText = await response.text().catch(() => '');

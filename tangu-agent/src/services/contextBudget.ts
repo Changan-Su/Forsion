@@ -47,6 +47,7 @@ export const FORCE_COMPACT_RATIO = 0.95;
  */
 const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/codex-mini/i, 200_000], // 先于 gpt-5|codex:codex-mini 是 o4-mini 底,272k 会溢出
+  [/(^|\/)gpt-6-astra$/i, 272_000], // Codex 2026-09-06 目录的默认输入预算;长上下文仍由显式覆盖启用
   [/gpt-5|codex/i, 272_000], // GPT-5 家族 400k 总窗,input 上限 272k(codex 模型目录同值)
   [/gpt-4\.1/i, 1_000_000],
   // Claude 5 家族(Sonnet/Opus/Fable)与 Opus 4.7 起是 1M(官方模型表);必须排在下面那条

@@ -4,6 +4,8 @@
 
 import { useEffect, useState, type MouseEvent } from 'react'
 import { Users, Globe2 } from 'lucide-react'
+import { usePageStore } from '@amadeus/store/pageStore'
+import { useEntrySync, cloudPathFor } from '../stores/entrySyncStore'
 import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
 import { registerMessages, useI18n } from '../i18n'
 
@@ -18,7 +20,7 @@ registerMessages({
 
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
-export function ShareStatus({ path, refreshKey, onOpen }: {
+export function ShareStatus({ path: localPath, refreshKey, onOpen }: {
   path: string
   refreshKey?: number // ShareCard 关闭后 bump 一下重新拉取
   onOpen: (x: number, y: number) => void
@@ -27,6 +29,11 @@ export function ShareStatus({ path, refreshKey, onOpen }: {
   const [shared, setShared] = useState(false)
   const [pub, setPub] = useState<PublishState>({ kind: 'none' })
   const { t } = useI18n()
+  // 共享/发布记录键的是**云端路径**;本地侧要先按注册表翻成 `<云名>/<path>`,未同步的页没有云端对象。
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const vaultSide = usePageStore((s) => s.vaultSide)
+  const vaults = useEntrySync((s) => s.vaults)
+  const path = cloudPathFor(vaults, vaultRoot, vaultSide, localPath)
 
   useEffect(() => {
     if (!collab || !path) { setShared(false); setPub({ kind: 'none' }); return }

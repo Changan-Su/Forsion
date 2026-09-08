@@ -29,7 +29,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed } from './embedLayer'
 import { foldedSectionAfter, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
-import { applyTrigger, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
+import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
 
 /** 光标所在「顶层块」的深度:doc 或分栏 cell 的直接子节点(与 blockLayer / insertMd 同一判定)。 */
@@ -119,7 +119,7 @@ const enterRunsTrigger: Command = (state, dispatch, view) => {
   const { $from, empty } = state.selection
   if (!empty || !view || !dispatch) return false
   const trig = matchTrigger(textBeforeCursor($from))
-  if (!trig) return false
+  if (!trig || !canAutoTriggerFromBlock($from.parent.type.name, trig)) return false
   return applyTrigger(view, trig, { from: $from.start(), to: $from.pos })
 }
 

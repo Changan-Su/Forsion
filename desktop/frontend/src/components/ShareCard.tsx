@@ -8,7 +8,7 @@ import React, { useEffect, useState } from 'react'
 import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
-import { useEntrySync, isSyncedEntry } from '../stores/entrySyncStore'
+import { useEntrySync, isSyncedEntry, cloudPathFor } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from './CloudSyncDialog'
 import { OverlayAt } from '@lcl/engine'
 import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
@@ -65,15 +65,23 @@ registerMessages({
   'share.opFailed': { zh: '操作失败', en: 'Something went wrong' },
   'share.syncOff': { zh: '关闭云同步(云端副本保留)', en: 'Turn off cloud sync (the cloud copy is kept)' },
   'share.syncOn': { zh: '开启云同步(同步到云端工作区)', en: 'Turn on cloud sync (sync to the cloud workspace)' },
+  'share.notUploaded': { zh: '云端还没有这一页(同步尚未完成或失败),稍后再试', en: 'This page is not in the cloud yet (sync pending or failed). Try again later.' },
+  'share.notInCloud': { zh: '这一页还没有同步到云端 —— 共享和发布的都是云端副本,先在下方开启云同步,再回来生成链接。', en: 'This page is not synced to the cloud yet. Sharing and publishing work on the cloud copy, so turn on cloud sync below first, then come back for a link.' },
 })
 
 const fmtQuota = (n: number): string => (Number.isFinite(n) ? String(n) : translate('share.unlimited'))
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
-export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x: number; y: number }; onClose: () => void }): React.ReactElement | null {
+export function ShareCard({ path: localPath, anchor, onClose }: { path: string; anchor: { x: number; y: number }; onClose: () => void }): React.ReactElement | null {
   const collab = window.amadeusCollab
   const { t } = useI18n()
   const toast = (msg: string, err = false): void => useApp.getState().toast(msg, err)
+  // 共享/发布操作的对象是**云端文件**:本地侧路径要按注册表翻成 `<云名>/<path>`(服务端不校验路径
+  // 存在性,拿本地路径建 share 会生成一条 404 的链接);没开同步的页根本没有云端对象 → 只给引导。
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const vaultSide = usePageStore((s) => s.vaultSide)
+  const entryVaults = useEntrySync((s) => s.vaults)
+  const path = cloudPathFor(entryVaults, vaultRoot, vaultSide, localPath) ?? ''
   const [tab, setTab] = useState<'share' | 'publish'>('share')
   const [share, setShare] = useState<AmadeusPageShare | null>(null)
   const [quota, setQuota] = useState<AmadeusCollabQuota | null>(null)
@@ -86,7 +94,7 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
   const [notOwner, setNotOwner] = useState(false)
 
   const refresh = (): void => {
-    if (!collab) return
+    if (!collab || !path) return
     void collab.pageShare(path)
       .then((r) => { setShare(r.share); setQuota(r.quota); setNotOwner(false) })
       .catch((e) => { if ((e as any)?.status === 404) setNotOwner(true) })
@@ -111,7 +119,8 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
     })
   }
   const err = (e: unknown, fallback: string): void => {
-    const anyE = e as { code?: string; message?: string }
+    const anyE = e as { code?: string; message?: string; status?: number }
+    if (anyE?.status === 404) { toast(t('share.notUploaded'), true); return } // 注册表说在范围内 ≠ 已上传:服务端校验存在性
     toast(anyE?.code === 'QUOTA' ? (anyE.message || t('share.quotaReached')) : fallback, true)
   }
   const run = (p: Promise<unknown>, ok?: string, fallback = t('share.opFailed')): void => {
@@ -129,7 +138,9 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
           <button className="amxc-x" onClick={onClose}><X size={14} /></button>
         </div>
 
-        {notOwner ? (
+        {!path ? (
+          <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.notInCloud')}</div>
+        ) : notOwner ? (
           <div className="amxc-hint" style={{ padding: '18px 8px' }}>{t('share.ownerOnly')}</div>
         ) : tab === 'share' ? (
           !share ? (
@@ -244,7 +255,7 @@ export function ShareCard({ path, anchor, onClose }: { path: string; anchor: { x
             {quota && <div className="amxc-hint">{t('share.publishCount', { used: pubCount, total: fmtQuota(quota.publish) })}</div>}
           </div>
         )}
-        <CloudSyncRow path={path} onClose={onClose} />
+        <CloudSyncRow path={localPath} onClose={onClose} />
       </OverlayAt>
     </div>
   )

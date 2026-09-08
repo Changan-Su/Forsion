@@ -285,14 +285,18 @@ function CrossNoteEmbed({ target }: { target: string }): ReactElement {
   )
 }
 
-function EmbedBody({ kind, pagePath, replaceText, insertAfter }: {
+function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false }: {
   kind: EmbedKind
   pagePath: string
   /** 组件要求改写源文本(书签改 URL / db 换视图 / 按钮改配置)→ 单事务替换节点内文。 */
   replaceText: (next: string) => void
   /** 在本块之后插入若干段(截帧的「图片 + 回源锚点」)。 */
   insertAfter: (md: string) => void
+  /** 只读宿主(公开分享页):嵌入体只展示 —— 多维表/画板进各自的只读态,一切改写源文本的回调都不接。 */
+  readOnly?: boolean
 }): ReactElement {
+  // 只读时源文本一律不改:回调本体是 PM 事务,PM 在 editable=false 下照样接受 dispatch,不在这里挡就会改内存 doc。
+  const rewrite = readOnly ? () => {} : replaceText
   switch (kind.k) {
     case 'db':
       return (
@@ -300,31 +304,35 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter }: {
           target={kind.name}
           pagePath={pagePath}
           initialView={kind.view ?? undefined}
-          onViewChange={(v) => replaceText(v ? `![[${kind.name}|${v}]]` : `![[${kind.name}]]`)}
+          readOnly={readOnly}
+          onViewChange={(v) => rewrite(v ? `![[${kind.name}|${v}]]` : `![[${kind.name}]]`)}
         />
       )
     case 'draw':
-      return <ExcalidrawEmbed target={kind.target} pagePath={pagePath} />
+      return <ExcalidrawEmbed target={kind.target} pagePath={pagePath} readOnly={readOnly} />
     case 'plugin':
       return <PluginEmbed target={kind.target} pagePath={pagePath} />
     case 'file':
       return (
         <FileEmbed
           name={kind.name} fileKind={kind.fileKind} pagePath={pagePath}
-          loc={kind.loc} badAnchor={kind.badAnchor} insertAfter={insertAfter}
+          loc={kind.loc} badAnchor={kind.badAnchor} insertAfter={readOnly ? () => {} : insertAfter}
         />
       )
     case 'note':
       return <CrossNoteEmbed target={kind.target} />
     case 'bookmark':
       // 卡片 ⇄ 内嵌互转就是同一行文本的两种字面,可逆无损(Notion / AFFiNE 的三态互转同款)。
-      return <BookmarkCard url={kind.url} onChangeUrl={(next) => replaceText(next)} onEmbed={() => replaceText(`![[${wikiSafeUrl(kind.url)}]]`)} />
+      // 只读语境按 BookmarkCard 的契约**不传**回调(传 noop = 铅笔照给、改完静默丢,见其 props 注)。
+      return readOnly
+        ? <BookmarkCard url={kind.url} />
+        : <BookmarkCard url={kind.url} onChangeUrl={(next) => replaceText(next)} onEmbed={() => replaceText(`![[${wikiSafeUrl(kind.url)}]]`)} />
     case 'web':
-      return <WebEmbed url={kind.url} toCard={() => replaceText(kind.url)} />
+      return <WebEmbed url={kind.url} toCard={() => rewrite(kind.url)} />
     case 'button': {
       const spec = parseButtonBlock('```forsion-button\n' + kind.src + '\n```')
       if (!spec) return <span /> // JSON 坏:装饰层不该到这(classify 已过),兜底空
-      return <ButtonBlock spec={spec} onChange={(next: ButtonSpec) => replaceText(codeBody(serializeButtonBlock(next)))} />
+      return <ButtonBlock spec={spec} onChange={(next: ButtonSpec) => rewrite(codeBody(serializeButtonBlock(next)))} />
     }
   }
 }
@@ -341,7 +349,7 @@ interface WidgetEntry {
   dom: HTMLElement
 }
 
-export function createEmbedLayer(opts: { path: string }): MilkdownPlugin[] {
+export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): MilkdownPlugin[] {
   const plugin = $prose(() => {
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
@@ -443,6 +451,7 @@ export function createEmbedLayer(opts: { path: string }): MilkdownPlugin[] {
                 <EmbedBody
                   kind={kind}
                   pagePath={opts.path}
+                  readOnly={!!opts.readOnly}
                   insertAfter={(md) => {
                     // 本层的语法(`![[x]]` / `[[x#t=95|01:35]]`)都是**段落里的纯文本**,所以插入
                     // 不需要 markdown parser —— 直接建段落节点,序列化回磁盘就是原样那几行。

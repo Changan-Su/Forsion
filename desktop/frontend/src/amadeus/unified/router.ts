@@ -12,14 +12,20 @@ export type RouteDecision =
   /** diskRaw = 磁盘原始字节:UnifiedPage 的回灌基线必须用它(升级场景 initial=升级后源 ≠ 盘上 v3;
    *  基线错了,挂载补读会把盘上 v3 原文当外部更新灌回编辑器,升级当场被冲掉 —— Codex 终审)。 */
   | { editor: 'unified'; initial: string; diskRaw: string; upgradedFromV3: boolean }
+  /** 当前库里没有这个文件:只展示占位,**绝不装载**(装载=主进程 loadPage 缺文件即 newPage 落盘)。
+   *  2026-09-06 实翻:Local/Cloud 两侧同一篇笔记的相对路径不同(`X.md` vs `<云名>/X.md`),标签页/
+   *  最近访问/前进后退/带路径的 [[链接]] 跨侧带过去就是一个不存在的路径,过去一律静默造出一个空文件
+   *  —— 本地库里凭空出现的 `<云名>/` 嵌套文件夹、改名后反复复活的旧名空白页,根子都在这。 */
+  | { editor: 'missing' }
 
 /**
- * raw == null(文件尚不存在,新建流)→ block:现有 loadPage 负责 newPage。
+ * raw == null(当前库没有这个文件)→ missing:占位,不装载。新建流(createPageInFolder/newPage/
+ * 模板/子笔记/[[链接]]确认创建)全都**先落盘再导航**,所以走到这里的 null 一律是别处的路径。
  * future schema → block:futureSchemaPage 的原样只读展示在那边。
  * v3 + 升级开关 + 升级被拒(mindmap:/dashboard 键等)→ block,文件留在 v3。
  */
 export function routeNote(path: string, raw: string | null, upgradeV3: boolean, now: string): RouteDecision {
-  if (raw == null) return { editor: 'block' }
+  if (raw == null) return { editor: 'missing' }
   const cls = classifyPageSource(raw)
   if (cls === 'v4-plain' || cls === 'v4-structured') return { editor: 'unified', initial: raw, diskRaw: raw, upgradedFromV3: false }
   if (cls === 'v3' && upgradeV3) {

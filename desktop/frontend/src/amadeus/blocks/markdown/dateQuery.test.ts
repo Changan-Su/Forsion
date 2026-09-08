@@ -16,6 +16,34 @@ describe('parseDateQuery', () => {
     expect(p('12-25T20:00')).toBe('2026-12-25T20:00')
   })
 
+  it('Notion 式常用日期写法:斜杠 / 点号 / 中文年月日 / 8 位数字', () => {
+    expect(p('9/10')).toBe('2026-09-10')
+    expect(p('9.10')).toBe('2026-09-10')
+    expect(p('9月10日')).toBe('2026-09-10')
+    expect(p('2027/1/3')).toBe('2027-01-03')
+    expect(p('2027.1.3')).toBe('2027-01-03')
+    expect(p('2027年1月3日')).toBe('2027-01-03')
+    expect(p('20270103')).toBe('2027-01-03')
+    expect(p('９／１０')).toBe('2026-09-10')
+  })
+
+  it('只输日号 → 最近一次该日（已经过去则顺延到下月）', () => {
+    expect(p('9')).toBe('2026-09-09')
+    expect(p('9日')).toBe('2026-09-09')
+    expect(p('9号')).toBe('2026-09-09')
+    expect(p('1')).toBe('2026-09-01')
+    expect(parseDateQuery('9', new Date(2026, 8, 10))).toBe('2026-10-09')
+    expect(p('31')).toBe('2026-10-31')
+  })
+
+  it('常用时刻写法和日期 + 时刻组合', () => {
+    expect(p('9点')).toBe('2026-09-01T09:00')
+    expect(p('9点30')).toBe('2026-09-01T09:30')
+    expect(p('9pm')).toBe('2026-09-01T21:00')
+    expect(p('9/10T14:30')).toBe('2026-09-10T14:30')
+    expect(p('9月10日14点30分')).toBe('2026-09-10T14:30')
+  })
+
   it('完整日期原样规范化', () => {
     expect(p('2027-1-3')).toBe('2027-01-03')
     expect(p('2026-09-01T14:30')).toBe('2026-09-01T14:30')
@@ -29,13 +57,13 @@ describe('parseDateQuery', () => {
   })
 
   it('负对照:认不出的一律 null(不许瞎猜)', () => {
-    for (const q of ['', 'foo', '25:00', '13-40', '9', '99999', '下周三']) expect(p(q)).toBeNull()
+    for (const q of ['', 'foo', '25:00', '24点', '13pm', '13-40', '0', '32', '99999', '下周三']) expect(p(q)).toBeNull()
   })
 
   // ⚠️ 只查 1–12 / 1–31 是不够的:造出来的日期会被 Date 归一化到下个月,
   //    提示文案(按字符串排版)与日历落点(按 Date)当场对不上(Codex 对抗评审)。
   it('负对照:不存在的日期不许造出来(平年 2-29 / 4-31 / 6-31)', () => {
-    for (const q of ['2-29', '4-31', '6-31', '2026-02-30']) expect(p(q)).toBeNull()
+    for (const q of ['2-29', '4/31', '6.31', '2026-02-30', '20260230', '2026年2月29日']) expect(p(q)).toBeNull()
     expect(dateCandidates('2-29', NOW)).toEqual([])
   })
 
@@ -49,6 +77,14 @@ describe('dateCandidates', () => {
     const c = dateCandidates('9-1', NOW)
     expect(c.map((x) => x.insert)).toEqual(['@2026-09-01', '@remind:2026-09-01T09:00'])
     expect(c[0].hint).toBe('9月1日')
+  })
+
+  it('斜杠日期与裸日号也能直接给日期选项', () => {
+    expect(dateCandidates('9/10', NOW).map((x) => x.insert)).toEqual([
+      '@2026-09-10',
+      '@remind:2026-09-10T09:00',
+    ])
+    expect(dateCandidates('9', NOW)[0].insert).toBe('@2026-09-09')
   })
 
   it('带时刻时提醒就用那个时刻', () => {

@@ -195,6 +195,7 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
     body: JSON.stringify(body),
     signal: guard.signal,
   });
+  opts.onResponseStart?.();
 
   if (!response.ok || !response.body) {
     let detail = '';

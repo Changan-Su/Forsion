@@ -73,7 +73,7 @@ const HELPER_TIMEOUT_MS = 12_000
 let requestSeq = 0
 
 /** 一问一答:连 socket → 发一行 JSON → 读一行 JSON → 关。与 vendor daemonCommand 同款线协议。 */
-function askHelper(socketPath: string, payload: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+export function askHelper(socketPath: string, payload: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath)
     let buffer = ''
@@ -91,6 +91,10 @@ function askHelper(socketPath: string, payload: Record<string, unknown>, timeout
     socket.on('connect', () => socket.write(`${JSON.stringify({ id: `fv_${++requestSeq}`, ...payload })}\n`))
     socket.on('data', (chunk: string) => {
       buffer += chunk
+      if (buffer.length > 16 * 1024 * 1024) {
+        finish(() => reject(new Error('helper response too large')))
+        return
+      }
       const nl = buffer.indexOf('\n')
       if (nl < 0) return
       finish(() => {

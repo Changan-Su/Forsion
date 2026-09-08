@@ -281,7 +281,7 @@ A tab can be moved out into a window of its own, and tabs can be dragged between
 | Merging back | Drag a tab onto another Forsion window | The drop hint is a highlight around the whole window, not down to a single pane |
 | Mini card | `⌘/Ctrl + ⇧ + M` (global), or palette → "Open mini card" | Chat only, no note views; if another app already owns that combination, the palette entry is the only way in |
 
-- UI zoom: `⌘/Ctrl + =`, `⌘/Ctrl + -`, `⌘/Ctrl + 0`, from 50% to 200% in 10% steps. It scales the whole interface, not just the text. There is no Settings page for it — the shortcuts (desktop app only) and the palette commands "Zoom in", "Zoom out" and "Reset zoom" are the entire set of entry points.
+- UI zoom: `⌘/Ctrl + =`, `⌘/Ctrl + -`, `⌘/Ctrl + 0`, from 50% to 200% in 10% steps. It scales the whole interface, not just the text. Settings → Appearance also offers Small (80%), Standard (100%) and Large (120%) presets; the shortcuts (desktop app only) and palette commands still fine-tune or reset it.
 - Themes live under Settings → Appearance → Appearance, split into independent axes: "Design language" (Genesis, Genesis Glass · 「琉璃」, 「知」, plus anything you drop into the themes folder), "Color scheme" ("Accent" and "Background" are two separate axes, each offering Classic, Coral, Teal, Lavender, Zhi Blue, Custom), "Light / Dark" (Light, Dark, Follow system), "Shadow" (Raised, Flat) and "Frosted glass" (On, Off (low-power mode)).
 - Light and dark also flip in one click: the moon icon at the bottom of the ribbon, or palette → "Toggle light/dark mode".
 - The status bar is the last line of the window: current Space (click = open the palette), cloud-sync state (click = sync now), backlink count, word count. The master switch and the per-item visibility list are under Settings → Appearance → Status Bar, and the order is draggable.
@@ -575,6 +575,7 @@ Type a prefix at the start of a line and press space: the line converts on the s
 > `>` + space gives you a collapsible Toggle block, not a quote. A plain quote is `|` + space.
 
 - Headings are set, not stacked: typing `# ` on a level-2 heading gives you a level-1 heading, and repeating the same level does nothing.
+- Heading text may start with a number: once a heading is active, typing `1. xxx` keeps `1. ` as literal heading text instead of turning the heading into a numbered list. `1. ` in a paragraph and other prefixes in a heading still convert as before.
 - Inside a list item, `-` / `1.` / `[ ]` change the current list's type or checkbox state rather than nesting another list.
 - Enter fires the same conversions as space: type a single `#` and press `↵` to get a heading.
 
@@ -3295,6 +3296,7 @@ Settings → "Appearance" → "Appearance" → the "Typography" panel. Three slo
 - Fonts contributed by plugins appear under a "From plugins" group in the dropdown; disable the plugin and that slot falls back to "Follow theme".
 
 Interface zoom is a separate thing: it scales the whole interface in 10% steps between 50% and 200%, remembered across launches.
+The "Display and motion" panel under Settings → Appearance offers Small (80%), Standard (100%) and Large (120%) presets and shows the current zoom percentage.
 
 | Action | Hotkey | Command |
 |---|---|---|
@@ -3302,7 +3304,7 @@ Interface zoom is a separate thing: it scales the whole interface in 10% steps b
 | Zoom out | `⌘/Ctrl + -` | "Zoom out" |
 | Reset | `⌘/Ctrl + 0` | "Reset zoom" |
 
-> [!note] Interface zoom has no settings page — only the three hotkeys and three commands above, and the hotkeys are bound in the desktop app only. It scales the entire shell: sidebar, tabs and note text all move together. It is not a note font-size control.
+> [!note] The three presets and the hotkeys use the same zoom path, and the hotkeys are bound in the desktop app only. Interface zoom scales the entire shell: sidebar, tabs and note text all move together. It is not a note font-size control.
 
 ### Startup location and Spaces
 

@@ -58,13 +58,15 @@ export function useActiveCoverY(): number {
 
 /** Notion/pixel-banner 式封面横幅:收进正文区、四角圆角裁切;上下拖动图片调纵向焦点(存 fm cover_y);
  *  底部柔和渐变逐渐融入页面背景色,与正文自然过渡;悬停出「更换/移除」。 */
-export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCoverY }: {
+export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCoverY, readOnly = false }: {
   /** 缺省 = pageStore.activePage(v3 老路径);unified 传显式路径。 */
   page?: string
   cover?: string | null
   coverY?: number
   onSetCover?: (cover: string | null) => void
   onSetCoverY?: (y: number) => void
+  /** 只读(公开分享页):只展示封面,不出「更换/调整/移除」工具条,也不许拖焦点。 */
+  readOnly?: boolean
 } = {}) {
   const { t } = useI18n()
   const activePage = usePageStore((s) => s.activePage)
@@ -111,17 +113,19 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
       />
       <div className="amx-cover-grad" />
       {reposition && <div className="amx-cover-hint">{t('pgchrome.coverDragHint')}</div>}
-      <div className="amx-cover-tools">
-        {reposition ? (
-          <button onClick={() => setReposition(false)}>{t('pgchrome.coverDone')}</button>
-        ) : (
-          <>
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>{t('pgchrome.coverChange')}</button>
-            <button onClick={() => setReposition(true)}>{t('pgchrome.coverReposition')}</button>
-            <button onClick={() => setCover(null)}>{t('pgchrome.coverRemove')}</button>
-          </>
-        )}
-      </div>
+      {!readOnly && (
+        <div className="amx-cover-tools">
+          {reposition ? (
+            <button onClick={() => setReposition(false)}>{t('pgchrome.coverDone')}</button>
+          ) : (
+            <>
+              <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPick({ x: r.right, y: r.bottom + 6 }) }}>{t('pgchrome.coverChange')}</button>
+              <button onClick={() => setReposition(true)}>{t('pgchrome.coverReposition')}</button>
+              <button onClick={() => setCover(null)}>{t('pgchrome.coverRemove')}</button>
+            </>
+          )}
+        </div>
+      )}
       {pick && <CoverPicker page={target} x={pick.x} y={pick.y} onApply={onSetCover ?? undefined} onClose={() => setPick(null)} />}
     </div>
   )

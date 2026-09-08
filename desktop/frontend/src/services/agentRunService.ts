@@ -34,7 +34,7 @@ export const AGENT_APP_ID = 'tangu'
  * shim 更早求值,若在模块加载时冻结,该进程之后所有请求都会被永久误记成 desktop。
  */
 export type ClientPlatform = 'desktop' | 'web' | 'mobile'
-/** 端判定**单源**(方案 D6):新会话默认档(desktop→work,web/mobile→chat)据此派生。每次调用现算——同上,
+/** 端判定**单源**(方案 D6):新会话现已全端默认 Work，但工作区落点等逻辑仍需识别端。每次调用现算——同上,
  *  提到模块级常量会把之后所有判定永久冻成 desktop;别处不许再写第二份 `window.tangu?.X` 判定,也不许
  *  拿 currentClientId().split('/')[0] 绕。本文件在 platform-parity 的 GATE_FILES 台账里。 */
 export function currentPlatform(): ClientPlatform {

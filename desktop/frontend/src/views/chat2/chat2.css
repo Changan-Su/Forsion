@@ -59,81 +59,6 @@
   min-height: 100%; /* 撑满滚动视口 → 空状态 .t2-empty 的 flex:1 才能真正垂直居中(否则贴顶) */
 }
 
-/* ====== 浮动目录(贴正文左侧,默认刻度条 → hover 展开标题列表) ====== */
-.t2-ftoc {
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 20;
-  width: 28px;
-  max-height: 70vh;
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px;
-  border: var(--border-width, 1px) solid transparent;
-  border-radius: var(--radius-md, 12px);
-  background: transparent;
-  transition: width 0.2s ease;
-  will-change: width;
-  scrollbar-width: none;
-}
-.t2-ftoc::-webkit-scrollbar { display: none; }
-.t2-ftoc.open {
-  width: 248px;
-  gap: 2px;
-  padding: 8px;
-  background: var(--bg-card, var(--bg));
-  border-color: var(--border);
-  box-shadow: var(--card-shadow, 0 8px 24px rgba(0, 0, 0, 0.18));
-  backdrop-filter: blur(8px);
-}
-.t2-ftoc-item {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  width: 100%;
-  padding: 0;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  cursor: pointer;
-  color: var(--text-muted);
-  font-size: 11.5px;
-  border-radius: var(--radius-sm, 8px);
-}
-.t2-ftoc.open .t2-ftoc-item { gap: 8px; padding: 5px 8px; }
-.t2-ftoc.open .t2-ftoc-item:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
-.t2-ftoc.open .t2-ftoc-item.active { background: var(--accent-light, var(--overlay-light)); color: var(--accent-ink); font-weight: 600; }
-.t2-ftoc-bar {
-  height: 2px;
-  width: 4px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  transform-origin: left;
-  background: var(--text-muted);
-  opacity: 0.35;
-  transition: transform 0.2s ease, background 0.2s ease, opacity 0.2s ease;
-  will-change: transform;
-}
-.t2-ftoc-item.active .t2-ftoc-bar { background: var(--accent-ink); opacity: 0.85; }
-/* 用户提问轮次(level 0):刻度更实,展开列表里更醒目 */
-.t2-ftoc-item.turn .t2-ftoc-bar { opacity: 0.6; }
-.t2-ftoc.open .t2-ftoc-item.turn .t2-ftoc-text { font-weight: 600; }
-.t2-ftoc-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  will-change: opacity;
-}
-.t2-ftoc.open .t2-ftoc-text { opacity: 1; }
-/* 仅在真正窄栏(≤520px)隐藏,免遮正文;720px 太激进——侧栏+右栏都开时聊天列常≈700px 会被误藏(.t2-chat-view 是 inline-size 容器) */
-@container (max-width: 520px) { .t2-ftoc { display: none; } }
-
 /* ====== 助手消息(纸面流动) ====== */
 .t2-asst { display: flex; gap: 12px; align-items: flex-start; }
 .t2-avatar {
@@ -217,7 +142,9 @@
 
 /* 悬浮动作行 */
 .t2-actions { display: flex; gap: 4px; opacity: 0; transition: opacity var(--duration-fast, .15s); }
-.t2-asst:hover .t2-actions, .t2-userwrap:hover .t2-actions { opacity: 1; }
+.t2-asst:hover .t2-actions, .t2-userwrap:hover .t2-actions,
+.t2-actions:focus-within { opacity: 1; }
+@media (hover: none) { .t2-actions { opacity: 1; } }
 .t2-iconbtn {
   width: 28px; height: 28px; border: none; background: transparent;
   color: var(--text-faint, var(--text-muted)); border-radius: 50%;
@@ -240,7 +167,7 @@
   font-size: 14px; line-height: 1.6;
   white-space: pre-wrap; word-break: break-word;
 }
-.t2-userwrap .t2-actions { align-self: center; }
+.t2-user-col > .t2-actions { align-self: flex-end; margin-top: 2px; }
 .t2-user .msg-attach-grid { margin-bottom: 8px; }
 
 /* ====== 系统行(分隔/提示) ====== */
@@ -381,10 +308,15 @@
 }
 .t2-empty-title { font-size: 16px; font-weight: 500; color: var(--text); }
 .t2-empty-sub { font-size: 12px; color: var(--text-muted); }
-/* 聊天列直属的那份 = 新对话空状态(ChatView):盖满整列 → 在 **view 的竖向中心**,
-   而不是「输入框以上那段」的中心(2026-08-14)。直接子选择器:留在流里的用法
-   (ChatPreview、其他调用点)照旧走上面那条 flex:1 居中。 */
-.t2-chat-col > .t2-empty { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+/* ChatView 空状态由 EmptyState2 实测内容与 composer 高度:优先整列居中,碰撞前向上避让。
+   流内的 ChatPreview 仍使用 flex 居中。 */
+.t2-chat-col > .t2-empty { position: absolute; inset: 0 0 auto; z-index: 1; pointer-events: none; padding: 0 24px; }
+.t2-chat-col > .t2-empty .t2-empty-title { max-width: 100%; line-height: 1.5; text-wrap: balance; overflow-wrap: anywhere; }
+.t2-chat-col > .t2-empty .t2-empty-sub { max-width: 38ch; line-height: 1.6; text-wrap: pretty; overflow-wrap: anywhere; }
+.t2-chat-col > .t2-empty[data-density="compact"] { gap: 10px; }
+.t2-chat-col > .t2-empty[data-density="compact"] .brand-logo { width: 42px; height: 42px; }
+.t2-chat-col > .t2-empty[data-density="minimal"] .t2-empty-mark,
+.t2-chat-col > .t2-empty[data-density="minimal"] .t2-empty-sub { display: none; }
 
 /* 锚在 .t2-chat-body(现在满列高)→ 得自己抬过悬浮的输入卡。
    ⚠️ 必须写成 `.t2-jump.jump-bottom`(0,2,0):base.css 的 `.jump-bottom` 也定 bottom:16px 且同为
@@ -447,7 +379,7 @@
   .t2c-inner { padding: 7px 10px 12px; }
   .t2c-row { gap: 4px; }
   .t2c-pill-label { max-width: 92px; }
-  .t2-user-col { max-width: 88%; }
+  .t2-user-col { max-width: 100%; }
 }
 
 /* ====== 合成器(悬浮圆角卡) ====== */

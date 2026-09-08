@@ -9,11 +9,12 @@ import { Loader2, MoreHorizontal } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { EngineIcon } from './EngineIcon'
 import { isOverflowing, nextPageLeft } from './pillBar'
+import { CompactChatPicker } from './CompactChatPicker'
 
 /**
  * pill 选择条外壳:宽度放不下时右端钉一个「⋯」,点击平滑翻到下一页(落点对齐 pill 边界),
  * 末页再点循环回第一页(用户拍板)。AgentPicker 复用。
- * ⋯ 与渐隐挂在外框(非滚动容器)上,故 pill 是从它下面滚过去的,⋯ 始终在原位。
+ * ⋯ 在滚动容器外独占一列,不覆盖末尾选项;滚动宽度即完整可点击的宽度。
  */
 export const PillBar: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => {
   const { t } = useI18n()
@@ -24,7 +25,13 @@ export const PillBar: React.FC<{ label: string; children: React.ReactNode }> = (
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    const sync = (): void => setMore(isOverflowing(el.scrollWidth, el.clientWidth))
+    const sync = (): void => {
+      const bar = el.parentElement
+      const style = bar && getComputedStyle(bar)
+      // 按整条 bar 的可用宽度判断,不扣已显示的「⋯」:否则它自己占掉的 36px 会让按钮收不回去。
+      const available = bar && style ? bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) : el.clientWidth
+      setMore(isOverflowing(el.scrollWidth, available))
+    }
     sync()
     const ro = new ResizeObserver(sync)
     ro.observe(el)
@@ -80,6 +87,14 @@ export const EnginePicker: React.FC<{
   const warmingName = warmingId ? options.find((o) => o.id === warmingId)?.name || '' : ''
   return (
     <div className="engine-picker">
+      <CompactChatPicker
+        label={t('chatPicker.engine')}
+        value={selectedId}
+        icon={warmingId ? <Loader2 size={16} className="spin" /> : <EngineIcon engineId={selectedId} size={16} />}
+        options={options.map((option) => ({ value: option.id, name: option.name, disabled: !!warmingId && option.id !== warmingId }))}
+        onChange={(id) => { if (!warmingId) onSelect(id) }}
+        busy={!!warmingId}
+      />
       <PillBar label={t('engine.pickTitle')}>
         {options.map((o) => {
           const selected = o.id === selectedId

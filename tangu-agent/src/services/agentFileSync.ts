@@ -22,9 +22,10 @@ import { join, dirname, extname } from 'node:path';
 import { deps } from '../seams/runtime.js';
 import { agentsDir, userMdFile } from '../core/tanguHome.js';
 import { getDeviceId } from '../core/deviceId.js';
-import { listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { isValidSlug, listAgents, parseAgentConfig, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks } from './memorySync.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta } from '../seams/cloudBrain.js';
+import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from './cloudSyncAccount.js';
 
 const TEXT_EXTS = new Set(['.md', '.toml', '.txt', '.json', '.yaml', '.yml', '.csv', '.html', '.xml', '.js', '.ts', '.py']);
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -77,15 +78,15 @@ function enumerateLocal(dir: string, categories: Set<Category>): Map<string, Loc
 /** per-file 基线:seq+hash = 三方对账(2026-07+);仅 lastCloudMtimeMs = 旧 mtime-LWW 时代的水位(渐进升级)。 */
 interface PrevEntry { seq?: number; hash?: string; size?: number; mtimeMs?: number; lastCloudMtimeMs?: number }
 interface PrevState { files: Record<string, PrevEntry>; lastSyncAt?: number }
-function prevFile(dir: string): string { return join(dir, '.cloudsync.json'); }
-function readPrev(dir: string): PrevState {
+function prevFile(dir: string, scope: string): string { return join(dir, `.cloudsync-${scope}.json`); }
+function readPrev(dir: string, scope: string): PrevState {
   try {
-    const j = JSON.parse(readFileSync(prevFile(dir), 'utf8'));
+    const j = JSON.parse(readFileSync(prevFile(dir, scope), 'utf8'));
     return { files: j.files ?? {}, lastSyncAt: j.lastSyncAt };
   } catch { return { files: {} }; }
 }
-function writePrev(dir: string, st: PrevState): void {
-  try { mkdirSync(dir, { recursive: true }); writeFileSync(prevFile(dir), JSON.stringify(st, null, 2), 'utf8'); } catch { /* best-effort */ }
+function writePrev(dir: string, scope: string, st: PrevState): void {
+  try { mkdirSync(dir, { recursive: true }); writeFileSync(prevFile(dir, scope), JSON.stringify(st, null, 2), 'utf8'); } catch { /* best-effort */ }
 }
 
 function nowMs(): number { return Math.floor(Date.now()); }
@@ -176,6 +177,8 @@ export async function runAgentFilesSync(
 ): Promise<AgentFileSyncResult> {
   const deviceId = getDeviceId();
   const agg: AgentFileSyncResult = { ok: true, agents: 0, pushed: 0, pulled: 0, deleted: 0, skipped: 0, conflicts: 0 };
+  const scope = agentSyncScope(cloud, userId);
+  if (!scope) return { ...agg, ok: false, error: 'cloud account identity unavailable' };
   const onlySlug = typeof opts?.onlySlug === 'string' && opts.onlySlug ? opts.onlySlug : undefined;
 
   // 云端清单一次拉全,按 slug 索引。
@@ -186,10 +189,15 @@ export async function runAgentFilesSync(
   // 本地已存在的 cloudSync agent 之外，还要发现「只存在云端」的 agent。否则全新的
   // standalone worker 本地只有内置 agent，永远不会进入后面的 bucket，自然也拉不到 Library。
   // 以云端 config.toml 的 cloud_sync=true 为 opt-in；特殊哨兵桶没有 config，自动跳过。
-  const agents: NormalAgentDef[] = (await listAgents()).filter((a) => a.cloudSync && (!onlySlug || a.slug === onlySlug));
+  const localAgents = await listAgents();
+  const agents: NormalAgentDef[] = localAgents.filter((a) => agentSyncPermission(a.slug, scope).enabled && (!onlySlug || a.slug === onlySlug));
   const known = new Set(agents.map((a) => a.slug));
   for (const [slug, files] of cloudBySlug) {
-    if ((onlySlug && slug !== onlySlug) || known.has(slug) || slug.startsWith('__')) continue;
+    if (!isValidSlug(slug) || (onlySlug && slug !== onlySlug) || known.has(slug) || slug.startsWith('__')) continue;
+    // An existing local folder may belong to another account. Cloud discovery never opts it in.
+    const localDir = join(agentsDir(), slug);
+    const alreadyOwned = agentSyncPermission(slug, scope).enabled;
+    if (existsSync(localDir) && !alreadyOwned) continue;
     const cfgMeta = files.find((f) => f.relPath === 'config.toml' && !f.deleted);
     if (!cfgMeta) continue;
     try {
@@ -197,6 +205,20 @@ export async function runAgentFilesSync(
       if (!cfg || cfg.deleted || cfg.isBinary || !cfg.content) continue;
       const def = parseAgentConfig(slug, cfg.content, '');
       if (!def.cloudSync) continue;
+      if (alreadyOwned) {
+        // It may have been removed/replaced or disabled while the cloud request was pending.
+        if (!agentSyncPermission(slug, scope).enabled) continue;
+      } else {
+        // Claim a genuinely new directory atomically. Another account or a local create may
+        // have populated this slug during getFile; neither may be silently enrolled here.
+        mkdirSync(agentsDir(), { recursive: true });
+        try { mkdirSync(localDir); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+          throw error;
+        }
+        // Remote discovery authorizes this folder only, never unrelated local USER/shared memory.
+        setAgentSyncPermission(slug, scope, true, false);
+      }
       agents.push(def);
       known.add(slug);
     } catch (e: any) {
@@ -211,15 +233,19 @@ export async function runAgentFilesSync(
     const s = buckets.get(slug) ?? new Set<Category>();
     s.add(cat); buckets.set(slug, s);
   };
-  for (const a of agents) { add(a.slug, 'DEF'); add(resolveMemorySlug(a), 'MEM'); }
+  for (const a of agents) {
+    add(a.slug, 'DEF');
+    const memorySlug = resolveMemorySlug(a);
+    if (memorySlug === a.slug || agentSyncPermission(a.slug, scope).shared) add(memorySlug, 'MEM');
+  }
 
   for (const [slug, cats] of buckets) {
-    await syncBucket(slug, join(agentsDir(), slug), cats, cloudBySlug.get(slug) ?? [], cloud, userId, deviceId, agg);
+    await syncBucket(slug, join(agentsDir(), slug), cats, cloudBySlug.get(slug) ?? [], cloud, userId, deviceId, agg, scope);
   }
 
   // USER.md(全局,所有同步 agent 可见)。基线存 agents/.cloudsync.json(不属于任何 agent 目录)。
-  if (agents.length) {
-    await syncGlobalFile(USER_SENTINEL, 'USER.md', userMdFile(), cloudBySlug.get(USER_SENTINEL) ?? [], cloud, userId, deviceId, agg);
+  if (agents.some((a) => agentSyncPermission(a.slug, scope).shared)) {
+    await syncGlobalFile(USER_SENTINEL, 'USER.md', userMdFile(), cloudBySlug.get(USER_SENTINEL) ?? [], cloud, userId, deviceId, agg, scope);
   }
   return agg;
 }
@@ -227,9 +253,9 @@ export async function runAgentFilesSync(
 /** 同步一个云端 slug 桶(只处理 categories 内的 relPath)。 */
 async function syncBucket(
   cloudSlug: string, localDir: string, categories: Set<Category>, cloudFiles: AgentFileMeta[],
-  cloud: AgentFilesBrain, userId: string, deviceId: string, agg: AgentFileSyncResult,
+  cloud: AgentFilesBrain, userId: string, deviceId: string, agg: AgentFileSyncResult, scope: string,
 ): Promise<void> {
-  const prev = readPrev(localDir);
+  const prev = readPrev(localDir, scope);
   const local = enumerateLocal(localDir, categories);
   const cloudByPath = new Map<string, AgentFileMeta>();
   for (const f of cloudFiles) if (categories.has(categoryOf(f.relPath))) cloudByPath.set(f.relPath, f);
@@ -249,7 +275,7 @@ async function syncBucket(
     }
   }
   prev.lastSyncAt = nowMs();
-  writePrev(localDir, prev);
+  writePrev(localDir, scope, prev);
 }
 
 /** 该云端条目是否具备三方对账所需版本信息(旧服务端/迁移前二进制行 → 否,回退 mtime-LWW)。 */
@@ -503,11 +529,11 @@ async function reconcileLog(
 /** 全局单文件(USER.md)三方对账镜像(基线存 agents/.cloudsync.json;冲突副本落在同目录)。 */
 async function syncGlobalFile(
   slug: string, relPath: string, absPath: string, cloudFiles: AgentFileMeta[],
-  cloud: AgentFilesBrain, userId: string, deviceId: string, agg: AgentFileSyncResult,
+  cloud: AgentFilesBrain, userId: string, deviceId: string, agg: AgentFileSyncResult, scope: string,
 ): Promise<void> {
   const C = cloudFiles.find((f) => f.relPath === relPath);
   const stateDir = agentsDir();
-  const prev = readPrev(stateDir);
+  const prev = readPrev(stateDir, scope);
   const key = `${slug}/${relPath}`;
   const pe = prev.files[key];
   try {
@@ -588,7 +614,7 @@ async function syncGlobalFile(
   } catch (e: any) {
     console.warn(`[agentFileSync] ${slug}/${relPath} 失败:`, e?.message || e);
   } finally {
-    writePrev(stateDir, prev);
+    writePrev(stateDir, scope, prev);
   }
 }
 

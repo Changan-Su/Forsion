@@ -15,6 +15,7 @@ import type { ChannelKind, WorkspaceDescriptor } from '../types'
 export type { ChannelStatus }
 
 let pollTimer: number | null = null
+let unsubConn: (() => void) | null = null
 
 const cfg = () => useApp.getState().cfg
 
@@ -81,15 +82,24 @@ export const useChannels = create<ChannelsState>((set, get) => ({
 
   startPolling: () => {
     if (pollTimer != null) return
-    const tick = () => {
+    const tickBody = () => {
       if (useApp.getState().connState !== 'ok') return
       void get().refresh()
     }
-    pollTimer = window.setInterval(tick, 15_000)
-    tick()
+    pollTimer = window.setInterval(tickBody, 15_000)
+    // bootstrap 与轮询 effect 同时挂载时后端通常仍是 idle。监听首次连通边沿，
+    // 让 Channel 工作区立即进入侧栏，而不是漏掉首拉后再等完整 15s。
+    let prev = useApp.getState().connState
+    unsubConn = useApp.subscribe((s) => {
+      if (s.connState === 'ok' && prev !== 'ok') void get().refresh()
+      prev = s.connState
+    })
+    tickBody()
   },
 
   stopPolling: () => {
     if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null }
+    unsubConn?.()
+    unsubConn = null
   },
 }))

@@ -9,6 +9,7 @@ import type { PropertyTypeDef } from '../blocks/database/propertyTypes'
 import type { PluginOnboardingSpec } from '@amadeus-shared/ipc'
 import type { ExtendViewController } from '@lcl/engine/extendView'
 import type { CommandInvoke } from '@lcl/engine/types'
+import type { FloatingTocOptions } from '@lcl/engine/FloatingToc'
 
 /** A custom multi-dimensional-table (Database) property/column type a plugin can register.
  *  Provides render+edit + a primitive baseType for storage; see blocks/database/propertyTypes. */
@@ -640,6 +641,22 @@ export interface EditorExtensionOptions {
   priority?: 'high' | 'normal'
 }
 
+/** DOM-facing options for the host-native floating TOC. The plugin supplies the two surfaces;
+ *  the host owns scanning, active-section tracking, navigation, theme, and accessibility. */
+export interface PluginFloatingTocOptions extends FloatingTocOptions {
+  /** The element that actually scrolls. */
+  scrollContainer: HTMLElement
+  /** Where headings/items live; defaults to scrollContainer. */
+  contentRoot?: HTMLElement
+}
+
+export interface PluginFloatingTocHandle {
+  /** Force a rescan after a DOM change that MutationObserver cannot see. */
+  refresh(): void
+  /** Idempotent. The host also disposes every mount when the plugin is disabled/reloaded. */
+  dispose(): void
+}
+
 export interface PluginContext {
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
@@ -714,6 +731,14 @@ export interface PluginContext {
   loadData?<T = unknown>(): Promise<T | null>
   /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。 */
   saveData?(value: unknown): Promise<void>
+  /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
+   *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member. */
+  ui?: {
+    mountFloatingToc(
+      shell: HTMLElement,
+      opts: PluginFloatingTocOptions,
+    ): PluginFloatingTocHandle
+  }
   /** Dashboard 配方编译(2026-09-01+):声明式配方 → 一份真 `.dashboard.md` 字节。
    *  插件自己经 `ctx.app.writeFile` 落进 workFolder、`ctx.app.openFile` 打开 —— 宿主的
    *  amadeusNav 会把 `.dashboard.md` 路由到原生 Dashboard tab(网格/卡片/排版台全套)。
@@ -958,6 +983,9 @@ export interface AmadeusPlugin {
   iconUrl?: string
   /** Built-in plugins ship with the app and can't be uninstalled (only disabled). */
   builtin?: boolean
+  /** External source that the app seeds itself (electron/builtinPlugins.ts): shown as 「内置」, no uninstall,
+   *  but still an external source for load/reload purposes (never set `builtin` for these). */
+  preinstalled?: boolean
   /** Manifest apiVersion (missing → 1). */
   apiVersion?: number
   minAppVersion?: string

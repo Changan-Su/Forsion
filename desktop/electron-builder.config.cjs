@@ -69,6 +69,8 @@ module.exports = {
     '!node_modules/rollup/**',
     '!node_modules/@rollup/**',
     '!node_modules/@types/**',
+    // 内置插件捆绑包走 extraResources(见下),不进 asar 双份。
+    '!node_modules/@forsion/tangu-computer-use/**',
   ],
   // sherpa-onnx-node(本地语音识别)是原生插件:.node + onnxruntime 动态库不能从 asar 内加载,整体解包。
   // node-pty(内置终端)同理,且它还要 **exec** spawn-helper / winpty-agent.exe —— asar 里的文件不能执行。
@@ -95,6 +97,10 @@ module.exports = {
           { from: 'build/node', to: 'node' },
           // 设备页 web 构建(unitWeb 静态壳;webDistDir 读 resourcesPath/unit-web)
           { from: 'unit-web-dist', to: 'unit-web' },
+          // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 vendor/*.tgz 装进
+          // node_modules 的随包 npm 包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
+          // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定。
+          { from: 'node_modules/@forsion/tangu-computer-use', to: 'bundled-plugins/tangu-computer-use' },
         ]
       : []),
   ],

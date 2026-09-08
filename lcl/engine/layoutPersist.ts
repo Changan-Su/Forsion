@@ -5,6 +5,8 @@
  */
 
 /** 侧栏收起时必须一并持久化的可重建 panel。 */
+import { contentStorageKey } from './contentStorageScope'
+
 export interface PersistedPanel {
   type: string
   params: Record<string, unknown>
@@ -48,9 +50,9 @@ function computeLayoutKey(): string {
   } catch { /* 无 location(node/测试)*/ }
   return 'tangu2_layout_v4'
 }
-export const LAYOUT_KEY = computeLayoutKey()
-export const LEGACY_LAYOUT_KEY = 'tangu2_layout_v3'
-export const NAMED_LAYOUTS_KEY = 'tangu2_named_layouts'
+export const LAYOUT_KEY = contentStorageKey(computeLayoutKey())
+export const LEGACY_LAYOUT_KEY = contentStorageKey('tangu2_layout_v3')
+export const NAMED_LAYOUTS_KEY = contentStorageKey('tangu2_named_layouts')
 
 function isPanelList(value: unknown): value is PersistedPanel[] {
   return Array.isArray(value) && value.every((p) => !!p && typeof p === 'object' && typeof (p as PersistedPanel).type === 'string')

@@ -12,7 +12,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
-import { cloudVaultDir } from './amadeus/sync/engine'
+import { cloudVaultDir, isManagedCloudVault } from './amadeus/sync/engine'
 import { hash8 } from './amadeus/sync/entryRegistry'
 import { forsionWhoami, loadTanguCreds } from './forsionAuth'
 import { isDevMode } from './forsionHome'
@@ -152,7 +152,7 @@ async function canon(p: string): Promise<string> {
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
 
 /** 同步根 = 本地库;云镜像根拒绝(按 realpath 比较)。 */
-async function resolveRoot(): Promise<{ root: string } | { error: string }> {
+export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error: string }> {
   const am = await readAmadeusConfig()
   const root = am.localVault ?? am.lastVault
   if (!root) return { error: 'no-local-vault' }
@@ -163,7 +163,7 @@ async function resolveRoot(): Promise<{ root: string } | { error: string }> {
   }
   const r = await canon(root)
   const cloud = await canon(cloudVaultDir())
-  if (overlaps(r, cloud)) return { error: 'cloud-vault-forbidden' }
+  if (isManagedCloudVault(r) || overlaps(r, cloud)) return { error: 'cloud-vault-forbidden' }
   return { root: r }
 }
 
@@ -229,7 +229,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if (cfg.backend === 'off') return fail('backend-off')
     const built = await buildRemote(cfg)
     if ('error' in built) return fail(built.error)
-    const rooted = await resolveRoot()
+    const rooted = await resolveLocalSyncRoot()
     if ('error' in rooted) return fail(rooted.error)
     if (cfg.backend === 'folder' && cfg.folder?.path) {
       // folder 后端与同步根互相嵌套 = 递归自我复制,拒绝
@@ -348,7 +348,7 @@ async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: s
 export function registerRemoteSync(): void {
   ipcMain.handle('remotesync:get', async () => {
     const cfg = await loadConfig()
-    const rooted = await resolveRoot()
+    const rooted = await resolveLocalSyncRoot()
     return {
       config: cfg,
       running,

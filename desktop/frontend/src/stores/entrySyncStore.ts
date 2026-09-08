@@ -54,6 +54,23 @@ export function isSyncedEntry(vaultRoot: string | null, path: string): boolean {
   return !!rec && coversPath(rec.entries, rec.exclude, path)
 }
 
+/** 本地侧路径 → 云端 vault 里的真实路径(`<云名>/<path>`);未开启按条目同步 → null。
+ *  共享/发布的对象是**云端文件**:本地侧直接拿 `path` 去建 share,服务端不校验存在性,链接生成了
+ *  却 404(2026-09-06 用户实报「本地文件能点发布,链接没权限」)。云侧(桌面 Cloud / web / mobile)
+ *  路径本来就是云端路径,原样返回。纯函数,vaults 由调用方从 store 取(便于单测)。 */
+export function cloudPathFor(
+  vaults: AmadeusEntrySyncVault[],
+  vaultRoot: string | null,
+  vaultSide: 'local' | 'cloud',
+  path: string,
+): string | null {
+  if (!window.amadeusSync || vaultSide === 'cloud') return nfcRel(path) // 云侧路径已是云端路径,但仍钉 NFC/去前导 ./
+  if (!vaultRoot) return null
+  const rec = vaults.find((v) => v.vaultRoot === vaultRoot)
+  if (!rec || !coversPath(rec.entries, rec.exclude, path)) return null
+  return `${rec.cloudName}/${nfcRel(path)}`
+}
+
 /** path 是否落在某条排除项的子树里(开启弹窗据此把上次剔除的子页面显示成未勾选,而不是一律全勾)。 */
 export function isExcludedPath(vaultRoot: string | null, path: string): boolean {
   const rec = vaultRoot ? useEntrySync.getState().vaults.find((v) => v.vaultRoot === vaultRoot) : null

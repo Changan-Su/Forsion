@@ -69,8 +69,8 @@ router.post('/agent/sync', authMiddleware, async (req: AuthRequest, res) => {
   }
 });
 
-router.get('/agent/sync/status', authMiddleware, (_req: AuthRequest, res) => {
-  res.json(getSyncStatus());
+router.get('/agent/sync/status', authMiddleware, (req: AuthRequest, res) => {
+  res.json(getSyncStatus(req.user!.userId));
 });
 
 export default router;

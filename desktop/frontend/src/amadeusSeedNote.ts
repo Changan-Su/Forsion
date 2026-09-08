@@ -17,6 +17,6 @@ export async function seedNoteIfAbsent(path: string, source: string): Promise<bo
   const listed = await amadeus.listPages().catch(() => [path])
   const exists = listed.includes(path) || (await amadeus.readTextFile(path)) != null
   if (exists) return false
-  await amadeus.writeTextFile(path, source)
+  await amadeus.writeTextFile(path, source, { create: true })
   return true
 }
