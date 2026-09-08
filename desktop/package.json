@@ -167,7 +167,8 @@
     "check:manual": "node scripts/e2e-editor.cjs --check=manual-note",
     "shot:manual": "node scripts/e2e-editor.cjs --check=manual-note --shot",
     "e2e:coding": "node scripts/coding-studio.e2e.cjs",
-    "check:permissions": "node scripts/permissions.check.cjs"
+    "check:permissions": "node scripts/permissions.check.cjs",
+    "check:mininative": "node scripts/mini-auto.check.cjs --native-helper"
   },
   "dependencies": {
     "@forsion/tangu-computer-use": "file:vendor/tangu-computer-use.tgz",

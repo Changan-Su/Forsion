@@ -45,14 +45,15 @@ Electron 在应用启动后每 60ms 读信号，不依赖手动 Mini 窗口存�
 
 约每 16ms 计算直线位移。每个新目标从窗口当前位置开始，时长为 `clamp(distance / 2400 × 1000, 220, 420)` ms，确定该段速度后保持匀速；目标变化才重新计算，不逐帧缓动，不使用原生 `animate=true` 或弹簧。同一运行第一次有效外部前台输入后，临时与手动 Mini 都在调用间隙继续跟随，避免 350ms 点击租约导致停顿。面板避开光标并夹紧到目标显示器的工作区；运行结束、换会话或 Forsion 重新获焦后退出持续跟随，手动窗口完成剩余位移并恢复交互。隐藏或关闭后不再移动。
 
-Genesis 与 `tangu-computer-use` 是独立仓库，交付时需要配套更新并重新构建 helper。当前信号实现针对 macOS；旧 helper 与其他平台继续保持静止面板。
+Genesis 与 `tangu-computer-use` 是独立仓库，交付时需要配套更新并重新构建 helper。内置捆绑包至少使用 0.5.2；改变随包 helper 内容时必须提升 manifest 版本，桌面有意跳过同版本副本。helper 更新成功后还要重启常驻进程，协议号与路径相同不代表运行中的二进制已更新。当前信号实现针对 macOS；旧 helper 与其他平台继续保持静止面板。
 
 ## 验证 / Verification
 
 - `desktop`: `npm run typecheck`、`npm run check:parity`、`npm run check:cssvar`、`npm run build && npm run check:minicard && npm run check:miniauto`。
 - 单测：`miniAutoPanel.test.ts`、`miniCursorFollow.test.ts`、`lcl/spaces/miniPanel.test.ts`、Space 注册表及国际化覆盖测试。
-- Computer Use 插件：`npm run check:mini-foreground`；完整 Swift 类型检查覆盖新增文件与所有原生源文件。
+- Computer Use 插件：`npm run check:helper-refresh`、`npm run check:helper-signal`、`npm run check:mini-foreground`；完整 Swift 类型检查覆盖新增文件与所有原生源文件。
 - Electron 测试使用临时后端、Vault、磁盘插件和前台信号，验证真实 BrowserWindow 位移及截图；不向用户应用发送物理输入。真实 HID 到信号由 native reporter 测试与收口接线检查覆盖。
+- `npm run check:mininative` 使用已安装并授权的真实 macOS helper，只操作隔离 Electron 测试窗口：通过实际 `act` 移动鼠标激活前台，验证原生信号、自动会话窗口、不抢焦点、调用间隙持续显示、真实鼠标过渡与结束收起。无需真实模型；会话 SSE 使用夹具。它不注入 `foreground.json` 或覆盖光标 API，防止源码/模拟信号全绿但交付的旧 helper 根本不发信号。
 - `check:miniauto` 用另一个隔离 Electron 进程持有真实 OS 焦点，验证从未打开手动 Mini 的自动弹出、同会话 SSE 续显、调用间隙保留、结束/回焦收起，以及手动窗口与存盘数据不被覆盖。`check:minicard` 的几何段固定光标与焦点输入，真实焦点行为由前者覆盖。
 - 轨迹断言固定光标采样值、记录真实窗口坐标：48px 短距离须有多帧可见过渡，输入间隙继续跟随 240px 位移。`motion-short.json` / `motion-between-calls.json` 保存逐帧证据；修复前对照为 2 帧约 19ms、间隙位移 0px。
 
@@ -63,3 +64,5 @@ Declare distinct registered `mini.view` and `mini.mainView` targets on the Space
 DOM plugins receive an optional live context with `surface`, `getParams`, `setParams`, `onParamsChanged`, and (Mini only) `showInMainPanel`. Parameter updates preserve the mounted DOM; contexts are revoked on disposal. Reuse domain data, keep entity keys consistent, and clean up subscriptions.
 
 On macOS the companion helper emits a bounded, data-only foreground lease beside its socket when it actually posts physical input. An app-wide monitor combines that lease with external focus and the main renderer's current run to open a temporary Tangu observer automatically. It waits for the targeted Chat to mount, shows without activation, preserves manual Mini state, and closes when Forsion regains focus or the run ends. Following continues through input gaps in that same run, for both automatic and manual Mini. Each destination uses a 220–420ms constant-speed segment from the current position. Plugins keep the existing Mini adapter contract. Missing, expired or unsupported signals never start an automatic panel. Use the compatible helper to enable following.
+
+Delivery requires Computer Use bundle 0.5.2 or later. Bump its manifest version when replacing helper artifacts, and restart the running helper after installation. Genesis intentionally preserves same-version installed bundles. Use `check:helper-signal` to verify the packaged executable and `check:mininative` to exercise real native foreground input and Mini motion; simulated signal tests alone do not cover delivery.

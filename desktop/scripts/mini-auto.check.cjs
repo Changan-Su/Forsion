@@ -1,9 +1,12 @@
 /** Automatic Mini: real IPC, two isolated Electron processes and a replayable running session.
- * The companion process owns OS focus; only the helper lease is simulated (no physical HID).
- * npm run build && npm run check:miniauto */
+ * Default: companion process owns OS focus; helper lease is simulated (no physical HID).
+ * npm run build && npm run check:miniauto
+ * --native-helper [executable]: real helper/HID path against our own fixture window. */
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const nativeArg = process.argv.indexOf('--native-helper')
+const nativeExecutable = nativeArg < 0 ? null : (process.argv[nativeArg + 1] || '/Applications/tangu-computer-use.app/Contents/MacOS/bridge')
 const ROOT = path.resolve(__dirname, '..'), temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-mini-auto-'))
 const pause = (ms) => new Promise((r) => setTimeout(r, ms)), results = []
 function check(name, ok) { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); if (!ok) throw new Error(name) }
@@ -60,9 +63,9 @@ async function main() {
   const externalEntry = path.join(temp, 'external.cjs')
   fs.writeFileSync(externalEntry, `const { app, BrowserWindow } = require('electron'); app.whenReady().then(() => {
     const w = new BrowserWindow({ width: 540, height: 240, title: 'Mini automatic test — foreground fixture' });
-    w.loadURL('data:text/html,<h2>Computer Use foreground fixture</h2><p>Isolated test window. No physical input is emitted.</p>');
+    w.loadURL('data:text/html,<h2>Computer Use foreground fixture</h2><p>Isolated test window for Mini Panel.</p>');
   });`)
-  let app, external, heartbeat
+  let app, external, heartbeat, nativeHelper, nativeAsk
   const signal = () => { const now = Date.now(); fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify({ v: 1, active: true, updatedAt: now, expiresAt: now + 2500, helperPid: process.pid })) }
   const startInput = () => { signal(); heartbeat = setInterval(signal, 500) }
   const stopInput = () => { clearInterval(heartbeat); heartbeat = null; fs.rmSync(path.join(temp, 'foreground.json'), { force: true }) }
@@ -88,9 +91,11 @@ async function main() {
     const autoVisible = async () => (await autoWindows()).find((w) => w.visible)
     let run = await send()
     await win.waitForSelector(`[data-chat-surface="chat"][data-session-id="${run.sessionId}"]`)
-    await focusMain(); startInput(); await pause(700)
-    check('foreground calls inside Forsion do not open Mini', (await autoWindows()).length === 0)
-    stopInput()
+    if (!nativeExecutable) {
+      await focusMain(); startInput(); await pause(700)
+      check('foreground calls inside Forsion do not open Mini', (await autoWindows()).length === 0)
+      stopInput()
+    }
     external = await electron.launch({ args: [`--user-data-dir=${path.join(temp, 'external-data')}`, externalEntry], cwd: ROOT })
     const focusExternal = async () => {
       await external.evaluate(({ app, BrowserWindow }) => { app.focus({ steal: true }); BrowserWindow.getAllWindows()[0].focus() })
@@ -99,6 +104,66 @@ async function main() {
     await external.firstWindow(); await focusExternal(); await pause(500)
     check('external focus without physical input does not open Mini', (await autoWindows()).length === 0)
     const savedMini = await win.evaluate(() => { localStorage.setItem('forsion_mini_active_space', 'amadeus'); return Object.fromEntries(Object.entries(localStorage).filter(([k]) => /mini/.test(k))) })
+    if (nativeExecutable) {
+      // The native executable alone owns foreground.json and the physical cursor.
+      // Keep a real running-session SSE fixture so no model/provider is needed.
+      const net = require('net'), { spawn } = require('child_process')
+      nativeAsk = (payload) => new Promise((resolve, reject) => {
+        const socket = net.createConnection(path.join(temp, 'bridge.sock')); let data = ''
+        const finish = (error, value) => { clearTimeout(timer); socket.destroy(); error ? reject(error) : resolve(value) }
+        const timer = setTimeout(() => finish(new Error(`Native timeout: ${payload.cmd}`)), 20000)
+        socket.on('error', (error) => finish(error))
+        socket.on('connect', () => socket.write(JSON.stringify({ id: 'mini-native', ...payload }) + '\n'))
+        socket.on('data', (chunk) => {
+          data += chunk; if (!data.includes('\n')) return
+          try { const response = JSON.parse(data.split('\n')[0]); finish(response.ok ? null : new Error(JSON.stringify(response.error)), response.result) }
+          catch (error) { finish(error) }
+        })
+      })
+      nativeHelper = spawn(nativeExecutable, ['serve', '--socket', path.join(temp, 'bridge.sock')], { stdio: 'ignore' })
+      let nativeError; nativeHelper.on('error', (error) => { nativeError = error })
+      const diagnostics = await until(async () => { if (nativeError) throw nativeError; return nativeAsk({ cmd: 'diagnostics' }).catch(() => false) })
+      check('real helper has Accessibility permission', diagnostics.accessibility === true)
+      const initial = JSON.parse(fs.readFileSync(path.join(temp, 'foreground.json'), 'utf8'))
+      check('packaged helper creates its own idle signal', initial.v === 1 && !initial.active && initial.helperPid === nativeHelper.pid)
+      const pid = await external.evaluate(() => process.pid)
+      const roots = await nativeAsk({ cmd: 'listWindows', pid })
+      const target = roots.find((w) => w.windowId)
+      check('native helper resolves only the owned fixture window', !!target)
+      const look = await nativeAsk({ cmd: 'look', pid, windowId: target.windowId, includeImage: true, readText: 'never' })
+      await focusMain()
+      check('Mini is absent before real foreground activation', (await autoWindows()).length === 0)
+      const move = (x) => nativeAsk({ cmd: 'act', pid, lookId: look.lookId, action: 'moveMouse', target: { x, y: 100 }, policy: 'foreground', cursorOverlay: false, deferRootDelta: true })
+      const action = await move(100)
+      check('real physical input activates the external fixture', action.performed?.delivery === 'hid' && (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid)
+      await until(autoVisible)
+      const mini = await until(() => app.windows().find((w) => w.url().includes('transient=1')))
+      await mini.getByText('Working in the foreground (r1).', { exact: true }).waitFor()
+      check('native foreground input automatically opens the current conversation', true)
+      check('automatic Mini leaves focus in the external app', (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid)
+      await pause(700)
+      const lease = JSON.parse(fs.readFileSync(path.join(temp, 'foreground.json'), 'utf8'))
+      check('real short-input lease expires while Mini keeps the current run visible', lease.expiresAt < Date.now() && !!await autoVisible())
+      await app.evaluate(({ BrowserWindow }) => {
+        const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('transient=1'))
+        globalThis.__nativeSamples = []
+        globalThis.__nativeTimer = setInterval(() => globalThis.__nativeSamples.push({ ...w.getBounds(), at: performance.now() }), 8)
+      })
+      await move(148); await pause(650)
+      const samples = await app.evaluate(() => { clearInterval(globalThis.__nativeTimer); return globalThis.__nativeSamples })
+      fs.writeFileSync(path.join(shots, 'native-motion.json'), JSON.stringify(samples))
+      const moving = samples.filter((p, i) => i && p.x !== samples[i - 1].x)
+      check('real mouse movement produces a visible window transition', moving.length >= 6 && moving.at(-1).at - moving[0].at >= 140)
+      await mini.screenshot({ path: path.join(shots, 'native-current-conversation.png') })
+      backend.emit(run, 'token', { delta: ' Real native input completed.' })
+      await mini.getByText('Working in the foreground (r1). Real native input completed.', { exact: true }).waitFor()
+      check('current conversation continues streaming after native input', true)
+      backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0)
+      check('run completion closes native-triggered Mini', true)
+      check('no renderer errors', errors.length === 0)
+      console.log(`SCREENSHOTS ${shots}\n${results.filter(Boolean).length}/${results.length} passed (real native helper)`)
+      return
+    }
     startInput(); await until(autoVisible)
     const mini = await until(() => app.windows().find((w) => w.url().includes('transient=1')))
     await mini.getByText('Working in the foreground (r1).', { exact: true }).waitFor()
@@ -167,7 +232,14 @@ async function main() {
   } catch (e) {
     if (app) for (const [i, page] of app.windows().entries()) { await page.screenshot({ path: path.join(shots, `failure-${i}.png`) }).catch(() => {}); console.log((await page.locator('body').innerText().catch(() => '')).slice(0, 2200)) }
     console.error(`FAILURE_SCREENSHOTS ${shots}`); throw e
-  } finally { stopInput(); if (external) await external.close().catch(() => {}); if (app) await app.close().catch(() => {}); await backend.close() }
+  } finally {
+    if (nativeHelper) {
+      await nativeAsk({ cmd: 'shutdown' }).catch(() => {}); await pause(300)
+      if (nativeHelper.exitCode === null) nativeHelper.kill('SIGTERM')
+    }
+    if (!nativeExecutable) stopInput()
+    if (external) await external.close().catch(() => {}); if (app) await app.close().catch(() => {}); await backend.close()
+  }
   console.log(`${results.filter(Boolean).length}/${results.length} passed`)
 }
 main().catch((e) => { console.error(e); process.exitCode = 1 })
