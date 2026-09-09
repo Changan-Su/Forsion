@@ -670,3 +670,11 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 ### 共享账号 `ctx.account`（可选）
 
 发布到 Unit 网页且安装账号提供方时，宿主提供 `ctx.account`：`status()` 返回经过服务端验证的 `loggedIn/userId/username/role/tenantId/workspaceId`，`login()` 打开共享 Forsion 登录页，`logout()` 吊销当前会话后退出，`request(path, init)` 在账号 API 基址下发送请求（例如 `/admin/users`），`subscribe(listener)` 订阅账号变化并返回退订函数。宿主在插件禁用或重载时自动退订。账号变更会取消旧请求，并使尚未消费的响应体失败；调用方仍需释放自己的视图与任务。不要保存凭据或从其他页面的 localStorage 导入令牌。个人 workspace 由服务端身份提供方确定，不接受客户端指定；组织与成员关系不在当前契约内。旧宿主与远程独立管理模式应先判断能力存在性。
+
+### Unit 与浏览器资源路径（2026-09-09）
+
+插件应以能力判断运行环境；Forsion Unit 是框架宿主。
+- `ctx.app.assetUrl?.(vaultRelativePath)` 将库内相对路径转换为当前宿主可加载的资源 URL；Web/Unit 带资源授权，不要硬编码 `amadeus-asset://`。需要活动库；没有活动库时不要绘制库资源。
+- `ctx.app.hostPath?.(vaultRelativePath)` 只在当前引擎和真实笔记库共享文件系统时返回绝对输出路径；无活动库、云库、浏览器虚拟库、远程引擎或未声明能力时返回 `null`。返回 null 时不要拼接 `vaultRoot()` 强行写本机路径。
+- `window.tangu.executionCapabilities?.host` 是 Unit 对主机执行能力的声明；不存在不证明可用。网络视频分析还需网络、媒体工具和模型。
+- 本地 Unit 通过安装包 `runtime: { apiVersion: 1, main: "runtime.mjs" }` 加载本地能力，公开多用户投射不加载该入口。业务包无需依赖 Server 才能显示 UI 或使用本地能力。

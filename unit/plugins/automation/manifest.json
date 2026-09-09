@@ -1,6 +1,6 @@
 {
   "id": "automation",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 1,
   "minAppVersion": "2.9.9",
   "name": "Automation",
@@ -8,7 +8,6 @@
   "description": "自动化规则",
   "descriptionEn": "Automation for Forsion Unit",
   "requires": [
-    "server-admin",
     "tangu"
   ],
   "frontend": {

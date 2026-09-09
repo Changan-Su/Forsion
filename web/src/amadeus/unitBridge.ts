@@ -198,6 +198,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     readPage: (pagePath) => rpc(IPC.readPage, [pagePath]),
     newPage: (pagePath) => rpc(IPC.newPage, [pagePath]),
     savePage: (pagePath, manifest, contents) => rpc(IPC.savePage, [pagePath, manifest, contents]),
+    patchMark: (pagePath, raw, occ, next) => rpc(IPC.patchMark, [pagePath, raw, occ, next]),
     renamePage: (oldPath, newName, manifest, contents) => rpc(IPC.renamePage, [oldPath, newName, manifest, contents]),
     reconcilePage: (pagePath, prevManifest, prevContents) => rpc(IPC.reconcilePage, [pagePath, prevManifest, prevContents]),
     saveAsset: (pagePath, fileName, bytes) => rpc(IPC.saveAsset, [pagePath, fileName, bytes]),

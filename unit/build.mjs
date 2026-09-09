@@ -21,4 +21,5 @@ if (process.argv.includes('--package')) {
   await mkdir(resolve(root, 'dist/web'), { recursive: true })
   await cp(resolve(root, '../desktop/unit-web-dist'), resolve(root, 'dist/web'), { recursive: true })
 }
+if (process.argv.includes('--local-plugins')) await (await import('./build-local-plugins.mjs')).buildLocalPlugins()
 console.log('[unit] Built standalone runtime and backend worker (no Electron or runtime npm dependencies).')

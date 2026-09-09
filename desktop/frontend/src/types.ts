@@ -924,6 +924,8 @@ declare global {
       /** unit 设备页标志(B 端渲染,unitShim 注入):本页是另一台设备曝出来的 Forsion 面 ——
        *  插件清单走对方的 unit/plugins,无 vault 桥(本地 vault 面 = v2.1)。 */
       unitPage?: boolean
+      /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
+      executionCapabilities?: { host: boolean }
       /** Explicit host filesystem availability; published cloud Units set false. */
       hostFiles?: boolean
       /** Verified account config installed synchronously before stores initialize. */

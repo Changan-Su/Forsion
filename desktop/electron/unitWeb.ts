@@ -40,7 +40,7 @@ export const VAULT_RPC_ALLOW: ReadonlySet<string> = new Set([
   IPC.emptyTrash, IPC.pageIcons, IPC.fetchLinkMeta, IPC.searchImages, IPC.dbRead, IPC.dbWrite,
   IPC.dbWriteCas, IPC.drawingRead, IPC.drawingWrite, IPC.readTextFile, IPC.writeTextFile,
   IPC.listPageProps, IPC.setPageFrontmatter, IPC.renamePageFile, IPC.renameDbFile,
-  IPC.pluginDataRead, IPC.pluginDataWrite,
+  IPC.pluginDataRead, IPC.pluginDataWrite, IPC.patchMark,
 ])
 
 /** RPC 里字节参数/返回值的 JSON 包裹形态(Uint8Array ↔ base64)。 */
@@ -84,7 +84,7 @@ export interface UnitWebDeps {
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
-  projection?: { mode: 'public'; basePath: string; product: ProductProfile; capabilities?: () => object }
+  projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
    *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
   p2pAnswer?: (offerSdp: string) => Promise<string>
@@ -256,7 +256,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
         const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
-        const meta = { ...deps.meta, ...(deps.projection ? { projection: 'public', browserStorage: true, account: deps.account?.metadata(), capabilities: deps.projection?.capabilities?.() } : {}) }
+        const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined } : {}) }
         const baseTag = deps.projection ? `<base href="${deps.projection.basePath}">` : ''
         const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
@@ -303,7 +303,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
     // A published shell is a website. It publishes installed plugin code and layouts,
     // never the publisher's vault, engine, credentials, settings, or pairing endpoints.
-    if (deps.projection) {
+    if (deps.projection?.mode === 'public') {
       if (await deps.account?.handle(path, req, res)) return
       if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { detail: 'Read-only projection' }); return }
       if (path === '/unit/whoami') { json(res, 200, { ok: true, scope: 'shell' }); return }
@@ -317,9 +317,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
 
     // ── 公开面(无鉴权):元数据 / 配对流 / 静态壳(壳只是代码,数据面全在鉴权后) ──
     if (path === '/unit/meta' && req.method === 'GET') {
-      json(res, 200, { ...deps.meta, pair: true })
+      json(res, 200, { ...deps.meta, pair: !deps.projection, ...(deps.projection?.mode === 'local' ? { projection: 'local', localCapabilities: deps.projection.localCapabilities?.() } : {}) })
       return
     }
+    if (deps.projection?.mode === 'local' && path.startsWith('/unit/pair/')) { json(res, 403, { detail: 'Use the workspace owner access key' }); return }
     if (path === '/unit/pair/request' && req.method === 'POST') {
       const prevId = pendingByIp.get(ip)
       if (prevId && pending.get(prevId)?.status === 'pending') { json(res, 429, { detail: '已有待确认的配对请求', code: 'PAIR_PENDING' }); return }

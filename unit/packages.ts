@@ -1,6 +1,7 @@
 /** A backend is an optional capability of the existing Forsion plugin package. */
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
+import { isSafePluginExt } from '../desktop/shared/amadeus/pluginFiles'
 import { isNativeFeatureId, nativeFeatureSpaceIds, type NativeFeatureId } from '../desktop/shared/nativeFeatures'
 
 export interface CloudServices {
@@ -18,6 +19,9 @@ export interface PluginManifest {
   descriptionEn?: string
   minAppVersion?: string
   main?: string
+  onboarding?: unknown
+  fileExtensions?: string[]
+  runtime?: { apiVersion: 1; main: string; dependencies?: NonNullable<PluginManifest['backend']>['dependencies'] }
   requires?: string[]
   frontend?: { features: NativeFeatureId[]; services?: CloudServices }
   backend?: {
@@ -30,6 +34,7 @@ export interface InstalledPackage {
   root: string
   manifest: PluginManifest
   backendEntry?: string
+  runtimeEntry?: string
   ui?: Record<string, unknown>
   spaces: Array<{ slug: string; json: string; plugin: string }>
   spaceIds: Set<string>
@@ -78,12 +83,19 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
     // Only UI fields enter the public projection. Backend entries/config are private.
     result.ui = { id: manifest.id, name: manifest.name, nameEn: manifest.nameEn, version: manifest.version,
       apiVersion: manifest.apiVersion, minAppVersion: manifest.minAppVersion,
-      description: manifest.description, descriptionEn: manifest.descriptionEn, code }
+      description: manifest.description, descriptionEn: manifest.descriptionEn, onboarding: manifest.onboarding, fileExtensions: Array.isArray(manifest.fileExtensions) ? manifest.fileExtensions.filter(isSafePluginExt).map((v) => v.trim().toLowerCase()).slice(0, 8) : [], code }
+  }
+  if (manifest.runtime) {
+    if (manifest.runtime.apiVersion !== 1) throw new Error('Unsupported local runtime API')
+    if (manifest.runtime.dependencies?.mode === 'npm-ci') throw new Error('Local runtime dependencies must be bundled')
+    result.runtimeEntry = await packagePath(root, manifest.runtime.main)
   }
   if (manifest.backend) {
     if (manifest.backend.apiVersion !== 1) throw new Error('Unsupported backend plugin API')
     result.backendEntry = await packagePath(root, manifest.backend.main)
-    const deps = manifest.backend.dependencies
+
+  }
+  for (const deps of [manifest.backend?.dependencies, manifest.runtime?.dependencies]) {
     if (deps && !['bundled', 'npm-ci'].includes(deps.mode)) throw new Error('Unsupported dependency mode')
     const libc = process.platform === 'linux' ? ((process.report?.getReport() as { header?: { glibcVersionRuntime?: string } })?.header?.glibcVersionRuntime ? 'glibc' : 'musl') : undefined
     if (deps?.mode === 'bundled' && ((deps.platform && deps.platform !== process.platform)
@@ -91,7 +103,7 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
       throw new Error('Plugin dependencies were built for a different OS, architecture, Node ABI, or libc')
     }
   }
-  if (!result.ui && !result.backendEntry && !manifest.frontend) throw new Error('Plugin has no UI or backend entry')
+  if (!result.ui && !result.backendEntry && !result.runtimeEntry && !manifest.frontend) throw new Error('Plugin has no UI or backend entry')
   const entries = await readdir(resolve(root, 'spaces'), { withFileTypes: true }).catch((error) => {
     if (error.code === 'ENOENT') return []
     throw error

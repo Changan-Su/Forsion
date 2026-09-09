@@ -135,7 +135,7 @@ Tangu 的 AI 执行仍需配置现有 fleet 执行节点和模型；Unit 不会�
 ```json
 {
   "id": "calendar", "version": "1.0.0", "apiVersion": 1,
-  "requires": ["server-admin", "amadeus"],
+  "requires": ["amadeus"],
   "frontend": { "features": ["calendar"] }
 }
 ```
@@ -157,8 +157,74 @@ Genesis Web 默认对 Server 使用此选项；原 `/admin/` 组合照旧。它�
 事件流随会话失效关闭。公开分享使用 `/web/share/:token`，邀请使用 `/web/invite/:token`，
 其公开性或协作权限仍由原 Amadeus 服务判定。
 
-Server 重启/更新会按依赖顺序暂停并恢复启用的前端包，坏包恢复上一版本和原组合；
-主动禁用一个依赖时，仍需先禁用依赖它的插件。UI 中的原生功能列表是安装状态展示，
+Server 重启/更新只暂停其提供的云服务，Amadeus/Tangu 等功能入口保持已安装状态；
+没有可用账号提供方时不开放云数据，也不回落到宿主本地数据。包显式声明的真正依赖
+（例如 Calendar → Amadeus）仍按依赖顺序启停，更新失败恢复上一版本和原组合。UI 中的原生功能列表是安装状态展示，
 部署级启停由本机 Unit CLI 管理，不给普通访问者宿主管理权限。
 
 当前 Web 默认组合不含 Automation；定时执行、Inbox 及本地文件能力并未作为云端功能开放。
+
+## 本地设备：无需 Forsion Server
+
+Unit 是基础宿主。`workspace.mode = "local"` 表示一个设备所有者的工作区；公开站点
+继续用既有 Forsion Account 的访问者隔离。两种模式需要显式配置，不随网络状态切换。
+
+```sh
+# 构建一次，再搬运 unit/dist 到目标设备；必须匹配目标 OS / 架构 / Node ABI。
+node unit/build.mjs --package --local-plugins
+
+# 以下命令在发行包所在目录执行，安装位置可在源码仓外。
+node main.mjs init /absolute/path/my-unit --mode local --port 3002 --base /web/
+node main.mjs install /absolute/path/my-unit/unit.json ./plugins/amadeus
+node main.mjs install /absolute/path/my-unit/unit.json ./plugins/tangu
+node main.mjs install /absolute/path/my-unit/unit.json ./plugins/calendar
+node main.mjs install /absolute/path/my-unit/unit.json /path/to/bluebird
+node main.mjs run /absolute/path/my-unit/unit.json
+# 另一终端取得设备所有者访问链接；浏览器也可手动输入设备访问密钥。
+node main.mjs access /absolute/path/my-unit/unit.json
+```
+
+默认仅监听 `127.0.0.1`。访问密钥存于私有 `data/owner-token`；链接中的密钥位于
+fragment，页面消费后立即移除，仅存本标签会话，不进入请求 URL。它复用设备投射的
+Bearer 边界，不是另一套用户账号系统。删除并重新生成密钥后重启可撤销旧密钥。
+对外部署多用户站点应选择公开投射并安装账号提供方，不要共享设备所有者密钥。
+
+本地 Amadeus 包复用桌面 VaultManager、VaultIndex、编译器和同一套页/文件/数据库
+处理器，在 `data/workspace/vault` 保存笔记、Calendar.db 和附件。插件数据在该插件
+运行时的私有目录保存。没有安装 Amadeus 时，Unit 不自行创建业务笔记库。
+
+本地 Tangu 包启动现有 standalone 引擎，单独的本机进程与 SQLite，不需要 PostgreSQL
+或 Forsion 登录；引擎只监听 loopback，由 Unit 验证访问密钥后代理。安装的 bundle
+使用桌面同一套 agents/skills/tangu-plugins 加载器；启停和更新时重新装配，已有用户
+人格和会话按桌面语义保留。没有安装 Tangu 时，Unit 不启动引擎。
+
+模型配置复用 Tangu 原生配置：首次可在安装项 `config.engine` 提供 `providers` 等，
+之后修改 `data/plugins/tangu/config.json` 并执行 `restart ... tangu`。供应商密钥留在
+引擎侧，网页只读模型 ID 元数据。无模型也能显示聊天和插件 UI；生成内容需要可用的
+本地模型或模型服务。下载网页/视频需要网络及相应工具，这与依赖 Forsion Server 无关。
+
+Qbird/青鸟收藏夹的“收藏链接”可不联网写入本地笔记和收藏索引。浏览器资源使用
+`ctx.app.assetUrl`；主机输出路径使用 `ctx.app.hostPath`，虚拟/云端路径不会当成本机
+目录。分析还需要可用模型及媒体工具；无字幕音频转写需要相应桥能力，缺失会明确提示。
+
+### 本地 runtime 契约
+
+可信安装包可声明 `runtime: { apiVersion: 1, main: "runtime.mjs", dependencies? }`。
+入口导出 `createRuntime(context)`，返回 `runtimeTypes.ts` 定义的能力及 `close()`，
+可接收 `setPackages(roots)` 以同步已启用 bundle。Unit 只在 local 工作区加载入口，
+不会把入口、真实引擎令牌或配置投射给浏览器。每种本地能力同时只允许一个提供方。
+运行时依赖需捆在包内；当前本地运行时不执行 npm-ci。
+
+本地 runtime 与已安装的桌面插件采用同一可信代码模型，在宿主进程中装配；Tangu
+引擎单独运行。它不提供恶意代码隔离。Server 后端插件仍使用原来的 worker 生命周期。
+
+源 `unit/plugins/*/manifest.json` 是可直接安装的前端描述；带本地运行实现的完整包位于
+`unit/dist/plugins`。不可只复制前端描述便声称具备本地存储或执行能力。第三方 JS 插件
+继续使用原有 `main` 和 Space 配方，无需改写成“Unit 插件”。
+
+验证命令：`node unit/verify-local.mjs` 使用发行产物，隔离安装到临时目录，执行真实
+CLI/HTTP/重启持久化检查；`--serve` 保留独立预览。桌面测试还包括
+`unitLocalVault.test.ts`、`unitLocalEngine.test.ts`、`unitLocalWorkspace.test.ts`。
+
+构建机的原生 SQLite ABI 不匹配时，可通过 `UNIT_SQLITE_PACKAGE` 指向同一锁定版本、
+匹配目标 Node 的已构建包；构建器仅复制到输出目录，并实际打开输出的 SQLite 验证 ABI。

@@ -9,6 +9,7 @@ export async function readConfig(file: string): Promise<UnitConfig> {
   if (!Array.isArray(config.plugins)) throw new Error('unit.json plugins must be an array')
   config.webDist = resolve(root, config.webDist)
   config.dataDir = resolve(root, config.dataDir || 'data')
+  if (config.workspace?.path) config.workspace.path = resolve(root, config.workspace.path)
   if (config.workerFile) config.workerFile = resolve(root, config.workerFile)
   config.plugins = config.plugins.map((p) => typeof p === 'string' ? { path: resolve(root, p) } : { ...p, path: resolve(root, p.path) })
   return config

@@ -1,15 +1,21 @@
 // Owns the filesystem and the vault security boundary: path clamping, atomic writes,
 // page discovery, and a self-write ledger so the watcher can ignore our own writes.
 
-import { promises as fs } from 'node:fs'
+import { promises as fs, lstatSync } from 'node:fs'
 import path from 'node:path'
-import { dialog } from 'electron'
 import type { CompilerIO } from '@amadeus-shared/compiler'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
-import { logActivity } from '../../activityLog'
+
+export interface VaultManagerHost {
+  openDirectory?: () => Promise<string | null>
+  logActivity?: (action: 'file.create', data: { f: string; b: number }) => void
+  /** Network-facing local hosts must reject symlinks as well as lexical traversal. */
+  strictPaths?: boolean
+}
 
 export class VaultManager {
+  constructor(private readonly host: VaultManagerHost = {}) {}
   private root: string | null = null
   private counter = 0
   /** absolutePath -> last content WE wrote, used to suppress echo events in the watcher. */
@@ -44,12 +50,9 @@ export class VaultManager {
   }
 
   async openDialog(): Promise<string | null> {
-    const res = await dialog.showOpenDialog({
-      title: '打开 Vault 文件夹',
-      properties: ['openDirectory', 'createDirectory'],
-    })
-    if (res.canceled || !res.filePaths[0]) return null
-    this.root = res.filePaths[0]
+    const selected = await this.host.openDirectory?.()
+    if (!selected) return null
+    this.root = selected
     return this.root
   }
 
@@ -66,7 +69,27 @@ export class VaultManager {
     if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
       if (abs !== root) throw new Error('Path escapes vault: ' + abs)
     }
+    this.assertStrictPath(abs)
     return abs
+  }
+
+  /** Resolve each existing component before an I/O operation. The Unit root is
+   * canonicalized once at construction; children may not redirect into host state. */
+  private assertStrictPath(abs: string): void {
+    if (!this.host.strictPaths) return
+    const root = this.requireRoot()
+    const rel = path.relative(root, abs)
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new Error('Path escapes vault')
+    let current = root
+    for (const part of [root, ...rel.split(path.sep).filter(Boolean)]) {
+      current = part === root ? root : path.join(current, part)
+      try {
+        if (lstatSync(current).isSymbolicLink()) throw new Error('Symlinks are not available in this vault')
+      } catch (error: any) {
+        if (error?.code === 'ENOENT') break
+        throw error
+      }
+    }
   }
 
   /** All files passing `pred`, vault-relative, ignoring dot-sidecars and node_modules. */
@@ -145,7 +168,7 @@ export class VaultManager {
     await fs.writeFile(tmp, data, 'utf8')
     await fs.rename(tmp, abs)
     this.lastWritten.set(abs, data)
-    if (!existed && this.root) logActivity('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
+    if (!existed && this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
     this.emitMutate(abs, 'write')
   }
 
@@ -184,6 +207,7 @@ export class VaultManager {
 
     const rel = path.relative(root, fileAbs)
     if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Asset escapes vault')
+    this.assertStrictPath(fileAbs)
 
     await fs.mkdir(assetsAbs, { recursive: true })
     await fs.writeFile(fileAbs, bytes)
@@ -246,6 +270,7 @@ export class VaultManager {
     }
     const rel = path.relative(root, abs)
     if (rel.startsWith('..') || path.isAbsolute(rel)) return null
+    try { this.assertStrictPath(abs) } catch { return null }
     return abs
   }
 
@@ -373,7 +398,7 @@ export class VaultManager {
   //    布局:扁平存放(撞名加 " (N)")+ .meta.json 记原相对路径与删除时间,恢复按 meta 回原位。 ──
 
   private trashDir(): string {
-    return path.join(this.requireRoot(), '.trash')
+    return this.resolveInVault('.trash')
   }
 
   /** trash 条目名来自渲染端,须为纯 basename(防路径穿越)。 */
@@ -381,7 +406,7 @@ export class VaultManager {
     if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
       throw new Error('Bad trash entry name')
     }
-    return path.join(this.trashDir(), name)
+    return this.resolveInVault(path.join('.trash', name))
   }
 
   private async readTrashMeta(): Promise<Record<string, { original: string; deletedAt: number }>> {
@@ -503,6 +528,7 @@ export class VaultManager {
       if (rel.startsWith('..') || path.isAbsolute(rel)) {
         throw new Error('Block path escapes page folder: ' + name)
       }
+      this.assertStrictPath(abs)
       return abs
     }
     return {

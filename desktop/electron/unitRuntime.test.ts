@@ -101,7 +101,7 @@ const get = (handle: Unit, path: string) => fetch(base(handle) + path)
 const metadata = (handle: Unit) => get(handle, '/admin/unit/meta').then((r) => r.json())
 
 describe('composed Unit package lifecycle', () => {
-  it('composes native packages, suppresses unpublished Admin UI and preserves dependents through backend updates', async () => {
+  it('composes native packages, suppresses unpublished Admin UI and preserves cloud services through backend updates', async () => {
     const server = await fixture('server-admin', { account: true })
     const amadeus = resolve('../unit/plugins/amadeus'), calendar = resolve('../unit/plugins/calendar')
     const app = await unit([{ path: server, publish: false }, amadeus, calendar], 'calendar')
@@ -129,7 +129,7 @@ describe('composed Unit package lifecycle', () => {
     } finally { await close(app) }
   })
 
-  it('restores the intended native dependents after a failed backend restart is repaired', async () => {
+  it('keeps native UI available during a failed Server restart and restores only its cloud capabilities after repair', async () => {
     const server = await fixture('server-admin', { account: true })
     const backend = join(server, 'backend.mjs')
     const workingSource = await readFile(backend, 'utf8')
@@ -140,13 +140,16 @@ describe('composed Unit package lifecycle', () => {
       { path: resolve('../unit/plugins/public'), enabled: false },
     ], 'calendar')
     try {
-      // Changing only this temporary fixture simulates a transient startup failure;
-      // the second restart must retain the operator's original enable choices.
+      // Cloud account availability must not determine whether native UI is installed.
+      // Repair also retains the operator's independent enable choices.
       await writeFile(backend, workingSource.replace('if (false) throw', 'if (true) throw'))
       await expect(app.restart('server-admin')).rejects.toThrow()
       expect(app.status().find((p) => p.id === 'server-admin')?.state).toBe('failed')
-      expect(app.status().filter((p) => p.id !== 'server-admin').every((p) => p.state === 'disabled')).toBe(true)
-      expect(await get(app, '/admin/').then((r) => r.text())).toContain('"nativeFeatures":[]')
+      expect(app.status().filter((p) => p.id === 'amadeus' || p.id === 'calendar').every((p) => p.state === 'active')).toBe(true)
+      expect(app.status().find((p) => p.id === 'public')?.state).toBe('disabled')
+      const offlineHtml = await get(app, '/admin/').then((r) => r.text())
+      expect(offlineHtml).toContain('"nativeFeatures":["amadeus","calendar"]')
+      expect(offlineHtml).toContain('"defaultSpace":"calendar"')
       expect((await metadata(app)).capabilities).toEqual({})
       expect((await get(app, '/api/health')).status).toBe(404)
 
@@ -159,6 +162,28 @@ describe('composed Unit package lifecycle', () => {
       expect(html).toContain('"defaultSpace":"calendar"')
       expect((await metadata(app)).capabilities.amadeus.apiBase).toBe('/api')
       expect((await get(app, '/api/health')).status).toBe(200)
+
+      await app.disable('server-admin')
+      expect(app.status().filter((p) => p.id === 'amadeus' || p.id === 'calendar').every((p) => p.state === 'active')).toBe(true)
+      expect((await metadata(app)).capabilities).toEqual({})
+      await app.enable('server-admin')
+      expect((await metadata(app)).capabilities.amadeus.apiBase).toBe('/api')
+      expect(app.status().find((p) => p.id === 'public')?.state).toBe('disabled')
+    } finally { await close(app) }
+  })
+
+  it('loads native UI without a Server package while public projection keeps host data unavailable', async () => {
+    const app = await unit([resolve('../unit/plugins/amadeus'), resolve('../unit/plugins/calendar')], 'calendar')
+    try {
+      expect(app.status().map((p) => p.id)).toEqual(['amadeus', 'calendar'])
+      expect(app.status().every((p) => p.state === 'active')).toBe(true)
+      const html = await get(app, '/admin/').then((r) => r.text())
+      expect(html).toContain('"nativeFeatures":["amadeus","calendar"]')
+      expect(html).toContain('"defaultSpace":"calendar"')
+      expect((await metadata(app)).capabilities).toEqual({})
+      for (const path of ['/admin/engine/health', '/admin/vault/asset', '/admin/unit/hostfile']) {
+        expect((await get(app, path)).status).toBe(403)
+      }
     } finally { await close(app) }
   })
 

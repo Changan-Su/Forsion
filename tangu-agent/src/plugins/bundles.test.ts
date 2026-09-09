@@ -46,7 +46,7 @@ beforeEach(() => {
   shared = path.join(tmp, 'shared');
   const home = path.join(shared, 'tangu');
   mkdirSync(home, { recursive: true });
-  for (const k of ['TANGU_HOME', 'TANGU_PLUGINS', 'TANGU_PLUGINS_DIR']) {
+  for (const k of ['TANGU_HOME', 'TANGU_PLUGINS', 'TANGU_PLUGINS_DIR', 'TANGU_BUNDLE_DIRS']) {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
@@ -77,6 +77,23 @@ describe('bundleDirs', () => {
     delete process.env.TANGU_PLUGINS;
     process.env.TANGU_PLUGINS_DIR = tmp;
     expect(bundleDirs()).toEqual([]);
+  });
+
+  it('Unit explicit roots include only enabled packages and an empty list disables discovery', () => {
+    const active = makeBundle('active');
+    makeBundle('disabled');
+    process.env.TANGU_BUNDLE_DIRS = JSON.stringify([active, active]);
+    expect(bundleDirs()).toEqual([active]);
+    process.env.TANGU_BUNDLE_DIRS = '[]';
+    expect(bundleDirs()).toEqual([]);
+  });
+
+  it('Unit malformed roots fail closed rather than scanning the shared directory', () => {
+    makeBundle('disabled');
+    process.env.TANGU_BUNDLE_DIRS = '["relative/path"]';
+    expect(() => bundleDirs()).toThrow('absolute package paths');
+    process.env.TANGU_BUNDLE_DIRS = 'broken';
+    expect(() => bundleDirs()).toThrow('JSON array');
   });
 
   it('无共享域 plugins/ 目录 → 空数组(无桌面常态)', () => {

@@ -147,8 +147,12 @@ async function main(): Promise<void> {
   app.use('/', mod.userRouter); // /agent/runs、/agent/runs/:id/events、/agent/workspace/*、审批
   app.use('/', mod.dataRouter); // /agent/sessions、/agent/models、/agent/memory、/agent/skills、/agent/tools
 
-  app.listen(cfg.port, cfg.host, () => {
-    console.log(`[tangu] standalone 已启动 http://${cfg.host}:${cfg.port}`);
+  const server = app.listen(cfg.port, cfg.host, () => {
+    const address = server.address();
+    const port = address && typeof address === 'object' ? address.port : cfg.port;
+    // Embedded hosts use port 0 and IPC readiness, avoiding a probe/listen race.
+    if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version });
+    console.log(`[tangu] standalone 已启动 http://${cfg.host}:${port}`);
     console.log(`[tangu] cloud=${cfg.cloudUrl} 存储=${storage} sandbox=${sandboxMode} model=${cfg.defaultModelId || '(run 指定)'}`);
     if (providers.length) {
       console.log(`[tangu] 直连 provider: ${providers.map((p) => p.providerId).join(', ')}(其余 LLM 走 Forsion 托管面)`);
@@ -171,6 +175,8 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+  // A Unit crash must not leave an orphan engine listening with access to its workspace.
+  if (process.send) process.on('disconnect', shutdown);
 }
 
 main().catch((e) => {

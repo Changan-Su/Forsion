@@ -90,7 +90,7 @@ export async function setupHost(
   cfg: StandaloneConfig,
 ): Promise<{ host: HostServices; runBaseSchema: () => Promise<void>; storage: string }> {
   if (cfg.databaseUrl) {
-    const { host, pool } = createLocalHost({ databaseUrl: cfg.databaseUrl, localToken: cfg.token, userId: cfg.userId });
+    const { host, pool } = createLocalHost({ databaseUrl: cfg.databaseUrl, localToken: cfg.localToken || cfg.token, userId: cfg.userId });
     return { host, runBaseSchema: async () => { await pool.query(STANDALONE_SCHEMA); }, storage: '外部 Postgres' };
   }
   const inMemory = cfg.dataDir === 'memory';
@@ -98,12 +98,12 @@ export async function setupHost(
   if (process.env.TANGU_EMBED === 'pglite') {
     const dataDir = inMemory ? undefined : (cfg.dataDir || pgdataDir());
     if (dataDir) mkdirSync(dataDir, { recursive: true });
-    const { host, db } = await createEmbeddedHost({ dataDir, localToken: cfg.token, userId: cfg.userId });
+    const { host, db } = await createEmbeddedHost({ dataDir, localToken: cfg.localToken || cfg.token, userId: cfg.userId });
     return { host, runBaseSchema: async () => { await db.exec(STANDALONE_SCHEMA); }, storage: inMemory ? 'PGlite(内存)' : `PGlite(${dataDir})` };
   }
   // 默认:原生 SQLite(WAL)。dataDir 是文件路径('memory'=内存库);三端默认同指 ~/.tangu/state.db。
   const dbPath = inMemory ? 'memory' : (cfg.dataDir || stateDbPath());
-  const { host, db } = createSqliteHost({ dataDir: dbPath, localToken: cfg.token, userId: cfg.userId });
+  const { host, db } = createSqliteHost({ dataDir: dbPath, localToken: cfg.localToken || cfg.token, userId: cfg.userId });
   return {
     host,
     runBaseSchema: async () => { db.exec(toSqliteDDL(STANDALONE_SCHEMA)); },

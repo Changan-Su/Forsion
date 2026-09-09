@@ -139,6 +139,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️需要活动库。**没有活动库时静默返回 `null`,不抛异常** —— 与「文件不存在」同形,
    *  try/catch 照不到;别拿它当可用性探针(用 `vaultRoot()`)。 */
   readFile(path: string): Promise<string | null>
+  /** Browser-safe vault asset URL. Requires an active vault. */
+  assetUrl?(path: string): string
+  /** Absolute output path only for a real vault sharing the host engine filesystem; otherwise null. */
+  hostPath?(path: string): string | null
   /** Atomically write a vault file's UTF-8 text by its exact vault-relative path (self-write ledger →
    *  the app's own saves don't bounce back as external changes). Creates the file if absent.
    *  ⚠️需要活动库。没有活动库时**reject**(主进程 `vaultManager` 抛 `Error('No vault is open')`)——

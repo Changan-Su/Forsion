@@ -1,3 +1,4 @@
+import { UNIT_PREFERENCE_KEYS } from '../shared/unitPreferences'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
@@ -795,16 +796,7 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
  *  RW = 设备页可读可写回(纯 UI/体验/笔记偏好,写回无本机副作用);RO = 只读展示。
  *  ⚠️ default-deny:token/backendUrl/cloudUrl/mode/sandbox/unitHostEnabled/forsionMcp(含 token)
  *  等连接与本机治理键**读写都绝不透传**;browser 系/mirror/pythonMode 属 managedKeys(写=重启对方后端)只读不写。 */
-const UNIT_CONFIG_RW = [
-  // 每键必须在 saveConfig 分流表或 SHELL_KEYS 里有真实落盘路径,否则 PUT 静默丢弃、下次 GET 消失
-  // (Codex P2:imageModelId/notesDeleteAssets/inboxNotifyEnabled 是渲染层 localStorage 偏好,主进程不存,已剔)。
-  'modelId', 'asrModelId', 'visionModelId', 'visionMode', 'backgroundModelId',
-  'agentDeskEnabled', 'summaryOpenIn',
-  'ttsModelId', 'ttsVoice', 'ttsSpeed', 'ttsAutoSpeak', 'asrBackend',
-  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel',
-  'notesAttachmentMode', 'notesAttachmentFolder', 'notesImportPreview', 'notesDailyFolder',
-  'notesWikiIncludeFiles', 'notesUpgradeV4',
-] as const
+const UNIT_CONFIG_RW = UNIT_PREFERENCE_KEYS
 const UNIT_CONFIG_RO = ['homeDir', 'defaultWorkspaceDir', 'activityLogEnabled', 'browserSearchEngine'] as const
 function pickUnitConfig(src: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}

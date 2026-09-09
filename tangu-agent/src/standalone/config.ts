@@ -7,7 +7,8 @@ import { getRawSection } from '../core/config.js';
 
 export interface StandaloneConfig {
   cloudUrl: string; // Forsion 云端地址(brain API 所在),如 https://api.forsion.app
-  token: string; // forsion_token(既用于调云端,也作本地端点鉴权)
+  token: string; // Forsion cloud credential; local authentication may use a separate host token.
+  localToken?: string; // Optional private local HTTP credential (Unit never reuses its cloud account token).
   databaseUrl: string; // 可选:外部 Postgres 连接串;留空则用嵌入式 SQLite/WAL(零安装,落 state.db)
   dataDir: string; // 嵌入式 SQLite 落盘文件(databaseUrl 为空时用;默认 ~/.tangu/state.db,'memory'=内存)
   defaultModelId: string; // CLI 配的模型(run 未指定时用)
@@ -52,6 +53,7 @@ export function parseConfig(argv: string[]): StandaloneConfig {
   const cfg: StandaloneConfig = {
     cloudUrl: process.env.TANGU_CLOUD_URL ?? cloud.url ?? '',
     token: process.env.TANGU_TOKEN ?? cloud.token ?? '',
+    localToken: process.env.TANGU_LOCAL_TOKEN || undefined,
     databaseUrl: process.env.TANGU_DATABASE_URL ?? process.env.DATABASE_URL ?? db.url ?? '',
     dataDir: process.env.TANGU_DATA_DIR ?? db.dataDir ?? '',
     defaultModelId: process.env.TANGU_MODEL ?? cloud.defaultModel ?? '',
@@ -119,8 +121,9 @@ export const HELP = `Tangu Agent — standalone(云端大脑客户端，HTTP/SSE
 
 用法: tangu-server [options]   (交互式 TUI 用 \`tangu\`)
 
-  --cloud-url <url>   Forsion 云端地址(brain API),env TANGU_CLOUD_URL
-  --token <token>     forsion_token(调云端 + 本地端点鉴权),env TANGU_TOKEN
+  --cloud-url <url>   可选 Forsion 云端地址(brain API),env TANGU_CLOUD_URL
+  --token <token>     forsion_token(调云端 + 缺省本地鉴权),env TANGU_TOKEN
+                     宿主可用 TANGU_LOCAL_TOKEN 单独提供本地鉴权,无需云端账号
   --db <url>          可选:外部 Postgres 连接串;留空=嵌入式 SQLite/WAL,env TANGU_DATABASE_URL
   --data-dir <path>   嵌入式 SQLite 落盘文件(默认 ~/.tangu/state.db,'memory'=内存),env TANGU_DATA_DIR
   --model <id>        默认模型 id,env TANGU_MODEL
@@ -145,10 +148,10 @@ LLM 多 provider(直连用户自有 provider;未配则 LLM 全走 Forsion 托管
 run 通过 HTTP 起(同 microserver 契约): POST /agent/runs,SSE GET /agent/runs/:id/events。
 `;
 
-/** 校验必填项,缺失返回错误信息列表。databaseUrl 不再必填(留空走嵌入式 PGlite)。 */
+/** Local HTTP authentication is mandatory; cloud services and a separate database are optional. */
 export function validate(cfg: StandaloneConfig): string[] {
   const errs: string[] = [];
-  if (!cfg.cloudUrl) errs.push('缺少 --cloud-url / TANGU_CLOUD_URL');
-  if (!cfg.token) errs.push('缺少 --token / TANGU_TOKEN');
+  // A local engine, its persisted sessions and direct providers do not require Forsion Server.
+  if (!cfg.localToken && !cfg.token) errs.push('Missing --token / TANGU_TOKEN or TANGU_LOCAL_TOKEN');
   return errs;
 }

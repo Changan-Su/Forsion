@@ -6,7 +6,7 @@
 
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public'; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
 const base = (): URL => new URL('.', document.baseURI)
 
@@ -68,7 +68,10 @@ async function pairFlow(meta: UnitMeta): Promise<string | null> {
 export async function installUnitShim(): Promise<boolean> {
   const meta = (window as unknown as { __FORSION_UNIT_PAGE__?: UnitMeta }).__FORSION_UNIT_PAGE__
   if (!meta) return false
-  const tokenKey = `unit_pair_${meta.instanceId}`
+  const local = meta.projection === 'local'
+  const tokenKey = local ? `unit_owner_${meta.instanceId}` : `unit_pair_${meta.instanceId}`
+  let tokenStorage: Storage | undefined
+  try { tokenStorage = local ? sessionStorage : localStorage } catch { /* Memory-only access remains usable. */ }
   const published = meta.projection === 'public'
   const visitor = published && meta.account
     ? await (await import('./unitAccount')).installUnitAccount({ ...meta, account: meta.account }, base()) : null
@@ -76,7 +79,12 @@ export async function installUnitShim(): Promise<boolean> {
   if (hasCloud && !visitor) throw new Error('Cloud services require the Unit account provider')
   if (hasCloud && !visitor!.account.getIdentity()) { await visitor!.login(); return false }
   let token = ''
-  try { token = localStorage.getItem(tokenKey) || '' } catch { /* private mode */ }
+  try { token = tokenStorage?.getItem(tokenKey) || '' } catch { /* private mode */ }
+
+  if (local && location.hash.startsWith('#unit-owner=')) {
+    token = new URLSearchParams(location.hash.slice(1)).get('unit-owner') || ''
+    history.replaceState(null, '', location.pathname + location.search)
+  }
 
   // 探针:隧道来的(桌面壳分区注入,unitHost 加内部密钥)直接 200;局域网未配对 → 401 → 配对流。
   const probe = await fetch(new URL('unit/whoami', base()), {
@@ -84,11 +92,12 @@ export async function installUnitShim(): Promise<boolean> {
   }).catch(() => null)
   if (published && !probe?.ok) throw new Error('Unit projection is unavailable')
   if (!published && (!probe || probe.status === 401)) {
-    const fresh = await pairFlow(meta)
+    const fresh = local ? await (await import('./unitOwnerAccess')).ownerAccess(meta.name, base()) : await pairFlow(meta)
     if (!fresh) return false
     token = fresh
-    try { localStorage.setItem(tokenKey, token) } catch { /* ignore */ }
+    try { tokenStorage?.setItem(tokenKey, token) } catch { /* ignore */ }
   }
+  if (local && token) { try { tokenStorage?.setItem(tokenKey, token) } catch { /* Keep the validated key in memory. */ } }
   // T2 隧道:whoami 靠壳注入的 Authorization + 内部密钥豁免过闸,本页无配对令牌 ——
   // 但 appStore.boot 只在 token 非空时才 connect(空 token = 未配置形态),给一枚非机密哨兵;
   // 隧道请求的 Authorization 反正会被桌面壳在分区层整个换成 forsion token(unitWeb 不看它)。
@@ -122,12 +131,12 @@ export async function installUnitShim(): Promise<boolean> {
     const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
     window.amadeus = await createUnitAmadeusBridge({
       base: base().href,
-      browserStorage: published ? visitor?.scope || meta.instanceId : undefined,
+      browserStorage: published || (local && !meta.localCapabilities?.vault) ? visitor?.scope || meta.instanceId : undefined,
       pluginData,
       getToken: () => fixedToken,
       onAuthError: () => {
         // Paired-device tokens and visitor accounts stay separate.
-        try { localStorage.removeItem(tokenKey) } catch { /* private mode */ }
+        try { tokenStorage?.removeItem(tokenKey) } catch { /* private mode */ }
         location.reload()
       },
     })
@@ -163,6 +172,7 @@ export async function installUnitShim(): Promise<boolean> {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
     hostFiles: !published,
+    executionCapabilities: { host: local ? !!meta.localCapabilities?.host : !published },
     ...(cloud ? { cloudWeb: true } : {}),
     initialConfig: mergedConfig(),
     ...(visitor ? {
@@ -172,6 +182,12 @@ export async function installUnitShim(): Promise<boolean> {
       onAuthChanged: visitor.capability.subscribe,
       onAuthWillChange: visitor.onAuthWillChange,
     } : {}),
+    ...(local ? { backendStatus: async () => {
+      const response = await fetch(new URL('unit/meta', base()))
+      if (!response.ok) throw new Error('Unit status unavailable')
+      const live = await response.json()
+      return { state: live.localCapabilities?.engine ? 'ready' : 'stopped', url: live.localCapabilities?.engine ? engineBase : null, pid: null, lastError: null }
+    } } : {}),
     appVersion: async () => meta.version,
     platform: undefined,
     getConfig: async () => {

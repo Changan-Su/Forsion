@@ -1,15 +1,12 @@
 {
   "id": "amadeus",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 1,
   "minAppVersion": "2.9.9",
   "name": "Amadeus",
   "nameEn": "Amadeus",
   "description": "笔记与知识库",
   "descriptionEn": "Amadeus for Forsion Unit",
-  "requires": [
-    "server-admin"
-  ],
   "frontend": {
     "features": [
       "amadeus"

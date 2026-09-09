@@ -9,6 +9,8 @@ import { registerFont as registerHostFont } from '../../fontPresets'
 // full renderer scope). Only install plugins you trust.
 
 import { create } from 'zustand'
+import { toAssetUrl } from '@amadeus-shared/assets'
+import { pluginHostPath } from './hostPaths'
 import { noteOf, usePageStore } from '../store/pageStore'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
@@ -255,6 +257,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     ...surface.api, // 真块表面(mountBlocks/getPage/…):内置与外置插件同一份能力,见 blockSurface.tsx
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
+    assetUrl: (p) => toAssetUrl(p),
+    hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? window.tangu?.executionCapabilities?.host ?? false } }),
     writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
     // 多维表比对交换写口(2026-09-02):与 dbStore 同一条 db:write-cas 路。写成功后让渲染端已加载的
     // 那份热重载(否则表格要等 VaultWatcher 一拍),并踢一下引擎(让盯这张表的 db_changed 规则 ~2s 内看到)。

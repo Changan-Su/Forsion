@@ -1,14 +1,17 @@
 /** Basic Unit owns the listener, packages, and backend plugin lifecycle. */
 import { readFile, mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { startUnitWeb } from '../desktop/electron/unitWeb'
 import { resolveProduct } from '../desktop/shared/product'
 import basic from '../desktop/products/basic.json'
 import { readPackage, type InstalledPackage, type CloudServices } from './packages'
 import { startBackend, migrateBackend } from './backendRunner'
 import { createAccountHttp } from './accountHttp'
+import { createLocalWorkspace } from './localWorkspace'
+import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -16,10 +19,11 @@ export interface UnitConfig {
   instanceId: string; name: string; version: string; port: number; bindHost?: string
   basePath: string; webDist: string; plugins: Array<string | PluginInstallation>
   defaultSpace?: string; dataDir?: string; workerFile?: string
+  workspace?: { mode: 'local'; path?: string }
 }
 type Backend = Awaited<ReturnType<typeof startBackend>>
 type State = 'disabled' | 'starting' | 'active' | 'stopping' | 'failed'
-interface RecordState { package: InstalledPackage; installation: PluginInstallation; state: State; backend?: Backend; mounts: string[] }
+interface RecordState { package: InstalledPackage; installation: PluginInstallation; state: State; backend?: Backend; runtime?: LocalRuntime; mounts: string[] }
 const matches = (path: string, prefix: string) => prefix === '/' || path === prefix || path.startsWith(prefix + '/')
 const pathname = (url: string | undefined) => (url || '/').split('?')[0]
 
@@ -29,7 +33,13 @@ export async function startBasicUnit(config: UnitConfig) {
   const dataDir = resolve(config.dataDir || resolve(homedir(), '.forsion', 'units', config.instanceId))
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const workerFile = config.workerFile || fileURLToPath(new URL('./backendWorker.mjs', import.meta.url))
+  if (config.workspace && config.workspace.mode !== 'local') throw new Error('Invalid workspace mode')
+  const local = config.workspace?.mode === 'local'
+  const workspaceDir = resolve(config.workspace?.path || resolve(dataDir, 'workspace'))
   const records = new Map<string, RecordState>()
+  const runtimeVault = () => [...records.values()].find((r) => usable(r) && r.runtime?.vault)?.runtime?.vault || null
+  const runtimeEngine = () => [...records.values()].find((r) => usable(r) && r.runtime?.engine)?.runtime?.engine
+  const localWorkspace = local ? await createLocalWorkspace(dataDir, workspaceDir, () => runtimeVault()?.root() || null) : null
   const prefix = config.basePath.replace(/\/$/, '') || '/'
   const protectedPaths = ['unit', 'vault', 'engine'].map((name) => (prefix === '/' ? '' : prefix) + '/' + name)
   for (const entry of config.plugins) {
@@ -87,6 +97,7 @@ export async function startBasicUnit(config: UnitConfig) {
   const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
   const capabilities = (): CloudServices => {
     const services: CloudServices = {}
+    if (local) return services
     for (const rec of published()) Object.assign(services, rec.package.manifest.frontend?.services)
     // A cloud adapter is only usable with an active authority on this Unit.
     const account = [...records.values()].find((r) => usable(r) && r.backend?.account)?.backend?.account
@@ -105,7 +116,11 @@ export async function startBasicUnit(config: UnitConfig) {
     product.spaces = spaces.length ? [] : ['home']
     product.defaultSpace = spaces.includes(config.defaultSpace || '') ? config.defaultSpace! : spaces[0] || 'home'
   }
-  let chain = Promise.resolve(), closing = false
+  let chain = Promise.resolve(), closing = false, started = false
+  const syncRuntimes = async () => {
+    const roots = [...records.values()].filter(usable).map((r) => r.package.root)
+    for (const rec of records.values()) if (usable(rec)) await rec.runtime?.setPackages?.(roots, [...records.values()].map((r) => r.package.root))
+  }
   const serialize = <T>(action: () => Promise<T>): Promise<T> => {
     const job = chain.then(action)
     chain = job.then(() => {}, () => {})
@@ -127,8 +142,17 @@ export async function startBasicUnit(config: UnitConfig) {
     if (rec.state === 'active') return
     for (const dep of rec.package.manifest.requires || []) if (mustGet(dep).state !== 'active') throw new Error(`Plugin dependency is not active: ${dep}`)
     rec.state = 'starting'
-    let backend: Backend | undefined
+    let backend: Backend | undefined, runtime: LocalRuntime | undefined
     try {
+      if (local && rec.package.runtimeEntry) {
+        const module = await import(pathToFileURL(rec.package.runtimeEntry).href + '?generation=' + randomUUID())
+        const factory: RuntimeFactory = module.createRuntime || module.default
+        if (typeof factory !== 'function') throw new Error('Local runtime has no factory')
+        await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
+        runtime = await factory({ packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), workspaceDir, config: rec.installation.config || {}, log: (m) => console.log(`[plugin:${id}] ${m}`) })
+        if (!runtime || typeof runtime.close !== 'function') throw new Error('Invalid local runtime')
+        if ((runtime.vault && runtimeVault()) || (runtime.engine && runtimeEngine())) throw new Error('Local capability already has a provider')
+      }
       if (rec.package.backendEntry) {
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
         backend = await startBackend(options(id, rec))
@@ -144,19 +168,20 @@ export async function startBasicUnit(config: UnitConfig) {
         }
         rec.mounts = [...new Set(mounts)]
       }
-      rec.backend = backend; rec.state = 'active'; rec.installation.enabled = true
+      rec.backend = backend; rec.runtime = runtime; rec.state = 'active'; rec.installation.enabled = true
+      if (started) await syncRuntimes()
     } catch (error) {
-      rec.state = 'failed'; rec.backend = undefined
-      if (backend) await backend.stop()
+      rec.state = 'failed'; rec.backend = undefined; rec.runtime = undefined
+      try { if (typeof runtime?.close === 'function') await runtime.close() } finally { await backend?.stop() }
       throw error
     } finally { refreshProduct() }
   }
   async function deactivate(id: string, force = false, preserveIntent = false) {
     const rec = mustGet(id)
     if (!force && [...records.values()].some((r) => r.state === 'active' && r.package.manifest.requires?.includes(id))) throw new Error('Disable dependent plugins first')
-    const backend = rec.backend
-    rec.backend = undefined; rec.state = 'stopping'; refreshProduct()
-    try { await backend?.stop() } finally { rec.state = 'disabled'; if (!preserveIntent) rec.installation.enabled = false; refreshProduct() }
+    const backend = rec.backend, runtime = rec.runtime
+    rec.backend = undefined; rec.runtime = undefined; rec.state = 'stopping'; refreshProduct()
+    try { try { await runtime?.close() } finally { await backend?.stop() } } finally { rec.state = 'disabled'; if (!preserveIntent) rec.installation.enabled = false; refreshProduct(); if (started && !closing) await syncRuntimes() }
   }
   const activeTree = (id: string) => {
     const affected = new Set([id])
@@ -185,9 +210,9 @@ export async function startBasicUnit(config: UnitConfig) {
   const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
     pluginActive: (id) => { const rec = records.get(id); return !!rec && usable(rec) } })
   const web = await startUnitWeb({
-    account: { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
+    account: local ? undefined : { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
-    projection: { mode: 'public', basePath: config.basePath, product, capabilities },
+    projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities, localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
     routeRequest: (req, res) => {
       const path = pathname(req.url), backend = select(path)
       if (backend) { backend.handle(req, res); return true }
@@ -198,17 +223,24 @@ export async function startBasicUnit(config: UnitConfig) {
       return false
     },
     routeUpgrade: (req, socket, head) => { const backend = select(pathname(req.url)); if (!backend?.upgrade) return false; backend.upgrade(req, socket, head); return true },
-    getEngine: () => ({ url: null, token: '' }),
-    pairedDevices: { list: () => [], add: async () => { throw new Error('Pairing is disabled') } },
+    getEngine: () => runtimeEngine()?.endpoint() || { url: null, token: '' },
+    pairedDevices: { list: () => localWorkspace ? [localWorkspace.device] : [], add: async () => { throw new Error('Pairing is disabled') } },
     confirmPair: async () => false,
     readPlugins: async () => published().flatMap((r) => r.package.ui ? [r.package.ui] : []),
     readSpaces: async () => published().flatMap((r) => r.package.spaces),
-    readConfig: async () => ({}), writeConfig: async () => { throw new Error('Host configuration is not published') },
-    readProviders: async () => [], readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
-    webDistDir: () => config.webDist, vault: () => null, log: (message) => console.log(message),
+    readConfig: localWorkspace?.readConfig || (async () => ({})), writeConfig: localWorkspace?.writeConfig || (async () => { throw new Error('Host configuration is not published') }),
+    readProviders: async () => { const rec = [...records.values()].find((r) => usable(r) && r.runtime?.readProviders); return await rec?.runtime?.readProviders?.() || [] },
+    readHostFile: localWorkspace?.readHostFile || (async () => null), readHostDir: localWorkspace?.readHostDir || (async () => null), readHostStat: localWorkspace?.readHostStat || (async () => null),
+    webDistDir: () => config.webDist, vault: runtimeVault, log: (message) => console.log(message),
   }, { port: config.port, bindHost: config.bindHost ?? '127.0.0.1' })
   for (const id of ordered) if (mustGet(id).installation.enabled !== false) {
     try { await activate(id) } catch { console.error(`[unit] Plugin ${id} failed to activate; Unit remains available`) }
+  }
+  started = true
+  try { await syncRuntimes() } catch (error) {
+    await web.close()
+    await Promise.allSettled([...records.values()].map(async (rec) => { try { await rec.runtime?.close() } finally { await rec.backend?.stop() } }))
+    throw error
   }
   return { ...web,
     status: () => [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state })),

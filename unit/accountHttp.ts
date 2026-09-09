@@ -7,10 +7,8 @@ import type { BackendAccount } from './backendTypes'
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 class AccountChanged extends Error {}
-const preferences = new Set(['modelId', 'asrModelId', 'visionModelId', 'visionMode', 'backgroundModelId',
-  'agentDeskEnabled', 'summaryOpenIn', 'ttsModelId', 'ttsVoice', 'ttsSpeed', 'ttsAutoSpeak', 'asrBackend',
-  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'notesAttachmentMode', 'notesAttachmentFolder',
-  'notesImportPreview', 'notesDailyFolder', 'notesWikiIncludeFiles', 'notesUpgradeV4'])
+import { UNIT_PREFERENCE_KEYS } from '../desktop/shared/unitPreferences'
+const preferences = new Set<string>(UNIT_PREFERENCE_KEYS)
 
 export function createAccountHttp(options: {
   dataDir: string

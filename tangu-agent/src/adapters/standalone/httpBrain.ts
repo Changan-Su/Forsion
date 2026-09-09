@@ -34,7 +34,7 @@ export interface HttpBrainConfig {
 }
 
 export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
-  const base = cfg.cloudUrl.replace(/\/+$/, '');
+  const base = cfg.cloudUrl.trim().replace(/\/+$/, '');
   const authHeaders = (): Record<string, string> => ({
     Authorization: `Bearer ${typeof cfg.token === 'function' ? cfg.token() : cfg.token}`,
     'Content-Type': 'application/json',
@@ -470,6 +470,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
   };
+  // Optional capabilities describe configured services. Local Inbox storage uses
+  // the host database independently; advertising this cloud-only seam starts the
+  // broadcast poller even on an offline Unit with no Server or cloud credential.
+  if (!base || (typeof cfg.token === 'string' && !cfg.token.trim())) delete brain.inbox;
   if (brain.agentFiles) registerAgentSyncIdentity(brain.agentFiles, base, cfg.token);
   return brain;
 }

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { startBasicUnit, type UnitConfig } from './host'
 import { readConfig, writeConfig, installations } from './config'
 import { readPackage } from './packages'
+import { localOwnerToken } from './localWorkspace'
 import { installPackage } from './install'
 import { migrateBackend } from './backendRunner'
 import { sendControl, startControl, unitIsOffline, type ControlCommand } from './control'
@@ -12,7 +13,7 @@ import desktop from '../desktop/package.json'
 
 const dist = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
-const commands = ['init', 'install', 'run', 'migrate', 'enable', 'disable', 'restart', 'status']
+const commands = ['init', 'install', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access']
 const action = commands.includes(args[0]) ? args.shift()! : 'run'
 const file = resolve(args.shift() || (action === 'init' ? 'forsion-unit' : 'unit.json'))
 const print = (result: unknown) => console.log(JSON.stringify(result, null, 2))
@@ -24,12 +25,14 @@ async function findInstallation(config: UnitConfig, id?: string) {
 async function run() {
   if (action === 'init') {
     const option = (key: string, fallback: string) => { const i = args.indexOf(key); return i < 0 ? fallback : args[i + 1] }
-    const port = Number(option('--port', '3001')), basePath = option('--base', '/admin/')
+    const mode = option('--mode', 'public')
+    if (!['public', 'local'].includes(mode)) throw new Error('Mode must be public or local')
+    const port = Number(option('--port', '3001')), basePath = option('--base', mode === 'local' ? '/' : '/admin/')
     if (!Number.isInteger(port) || port < 0 || port > 65535 || !basePath?.startsWith('/')) throw new Error('Invalid port or projection base path')
     await mkdir(file, { recursive: true, mode: 0o700 })
     const path = resolve(file, 'unit.json')
     const config: UnitConfig = { instanceId: randomUUID(), name: 'Forsion Unit', version: desktop.version,
-      port, bindHost: option('--host', '127.0.0.1'), basePath, webDist: resolve(dist, 'web'), workerFile: resolve(dist, 'backendWorker.mjs'), dataDir: resolve(file, 'data'), plugins: [] }
+      port, bindHost: option('--host', '127.0.0.1'), basePath, webDist: resolve(dist, 'web'), workerFile: resolve(dist, 'backendWorker.mjs'), dataDir: resolve(file, 'data'), plugins: [], ...(mode === 'local' ? { workspace: { mode: 'local' as const } } : {}) }
     const handle = await open(path, 'wx', 0o600)
     try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n') } finally { await handle.close() }
     print({ config: path, instanceId: config.instanceId }); return
@@ -37,6 +40,11 @@ async function run() {
   if (action === 'install') { if (!args[0]) throw new Error('A plugin package directory is required'); print(await installPackage(file, resolve(args[0]))); return }
   const config = await readConfig(file)
   config.workerFile ||= resolve(dist, 'backendWorker.mjs')
+  if (action === 'access') {
+    if (config.workspace?.mode !== 'local') throw new Error('Public sites use their Account provider')
+    const token = await localOwnerToken(config.dataDir!)
+    print({ url: `http://${config.bindHost || '127.0.0.1'}:${config.port}${config.basePath}#unit-owner=${token}` }); return
+  }
   if (action !== 'run') {
     try { print(await sendControl(config.dataDir!, { action: action as ControlCommand['action'], id: args[0] })); return }
     catch (error) { if (!unitIsOffline(error)) throw error }
