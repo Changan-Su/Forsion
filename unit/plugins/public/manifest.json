@@ -1,0 +1,19 @@
+{
+  "id": "public",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "minAppVersion": "2.9.9",
+  "name": "Public",
+  "nameEn": "Public",
+  "description": "发布与协作",
+  "descriptionEn": "Public for Forsion Unit",
+  "requires": [
+    "server-admin",
+    "amadeus"
+  ],
+  "frontend": {
+    "features": [
+      "public"
+    ]
+  }
+}

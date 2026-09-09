@@ -1,3 +1,4 @@
+import { amadeusAvailable } from './features/runtime'
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -109,7 +110,7 @@ export function Root() {
       </div>
 
       {/* Amadeus 全局浮层(快速切换等):须在 shell-host 之后(拖窗区 DOM 顺序,同下)。 */}
-      {window.amadeus && <AmadeusOverlays />}
+      {amadeusAvailable() && <AmadeusOverlays />}
       {/* 设备远程面(Forsion Unit「整个主区切过去」):portal 进 .shell-work,未连过设备时渲染 null。
           web 复用本 Root 也带着它 —— 没有 units 桥就永远不激活,零可见影响。 */}
       <UnitRemoteSurface />

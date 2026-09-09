@@ -1,3 +1,5 @@
+import { hasNativeFeature } from '../features/runtime'
+import { PRODUCT } from '../product'
 /**
  * 「内置插件」:内置浏览器 / 内置终端 / 日历。默认开启,可在 设置 → Forsion 插件 顶部的「内置」区关掉。
  *
@@ -91,7 +93,7 @@ export const BUILTINS: BuiltinDef[] = [
     types: ['browser'],
     name: () => tr('browser.title'),
     description: () => tr('browser.desc'),
-    available: () => !!window.tangu, // Electron preload 在场 = <webview> 可用
+    available: () => PRODUCT.nativeFeatures === undefined && !!window.tangu, // Electron preload 在场 = <webview> 可用
     install() {
       registerView({ type: 'browser', kind: 'page', displayName: () => tr('browser.title'), icon: Globe, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><BrowserView {...props} /></Suspense>, closable: true, singleton: false })
       addCommand({ id: 'builtin-browser-open', title: () => tr('browser.open'), icon: Globe, keywords: 'browser web url 浏览器 网页', run: () => openBrowser() })
@@ -102,7 +104,7 @@ export const BUILTINS: BuiltinDef[] = [
     types: ['terminal'],
     name: () => tr('terminal.title'),
     description: () => tr('terminal.desc'),
-    available: () => !!window.tangu?.pty,
+    available: () => PRODUCT.nativeFeatures === undefined && !!window.tangu?.pty,
     install() {
       registerView({ type: 'terminal', kind: 'page', displayName: () => tr('terminal.title'), icon: TerminalSquare, factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><TerminalView {...props} /></Suspense>, closable: true, singleton: false })
       addCommand({ id: 'builtin-terminal-open', title: () => tr('terminal.open'), icon: TerminalSquare, keywords: 'terminal shell console 终端 命令行', run: () => openTerminal() })
@@ -131,7 +133,8 @@ export const BUILTINS: BuiltinDef[] = [
 ]
 
 /** 某内置插件当前开着吗(直读持久化开关):启动期 spaces.tsx 要在 store 建起来之前就问这一句。 */
-export const builtinEnabled = (id: string): boolean => readFlag(key(id))
+export const builtinEnabled = (id: string): boolean =>
+  id === 'calendar' && PRODUCT.nativeFeatures !== undefined ? hasNativeFeature('calendar') : readFlag(key(id))
 
 function applyBuiltin(def: BuiltinDef, on: boolean): void {
   if (on) {
@@ -155,9 +158,10 @@ interface BuiltinState {
 }
 
 export const useBuiltins = create<BuiltinState>((set, get) => ({
-  enabled: Object.fromEntries(BUILTINS.map((b) => [b.id, readFlag(key(b.id))])),
+  enabled: Object.fromEntries(BUILTINS.map((b) => [b.id, builtinEnabled(b.id)])),
   inAppLinks: readFlag(LINKS_KEY),
   toggle: (id, on) => {
+    if (id === 'calendar' && PRODUCT.nativeFeatures !== undefined) return
     const def = BUILTINS.find((b) => b.id === id)
     if (!def || !def.available()) return
     writeFlag(key(id), on)
@@ -238,7 +242,7 @@ export function installBuiltins(): void {
   window.addEventListener('storage', (e) => {
     if (e.key === LINKS_KEY) { useBuiltins.setState({ inAppLinks: readFlag(LINKS_KEY) }); return }
     const def = BUILTINS.find((b) => key(b.id) === e.key)
-    if (!def || !def.available()) return
+    if (!def || !def.available() || (def.id === 'calendar' && PRODUCT.nativeFeatures !== undefined)) return
     const on = readFlag(key(def.id))
     if (useBuiltins.getState().enabled[def.id] === on) return
     applyBuiltin(def, on)
@@ -259,7 +263,7 @@ export const BuiltinPluginsSection: React.FC = () => {
   const inAppLinks = useBuiltins((s) => s.inAppLinks)
   const toggle = useBuiltins((s) => s.toggle)
   const setInAppLinks = useBuiltins((s) => s.setInAppLinks)
-  const list = BUILTINS.filter((b) => b.available())
+  const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined))
   if (!list.length) return null // web/移动端没有 webview/PTY,这几张卡整个不出现
 
   return (

@@ -6,12 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { startUnitWeb } from '../desktop/electron/unitWeb'
 import { resolveProduct } from '../desktop/shared/product'
 import basic from '../desktop/products/basic.json'
-import { readPackage, type InstalledPackage } from './packages'
+import { readPackage, type InstalledPackage, type CloudServices } from './packages'
 import { startBackend, migrateBackend } from './backendRunner'
 import { createAccountHttp } from './accountHttp'
 export { loadPackages } from './packages'
 
-export interface PluginInstallation { path: string; enabled?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
+export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
 export interface UnitConfig {
   instanceId: string; name: string; version: string; port: number; bindHost?: string
   basePath: string; webDist: string; plugins: Array<string | PluginInstallation>
@@ -63,9 +63,45 @@ export async function startBasicUnit(config: UnitConfig) {
     spaceOwners.add(id)
   }
   if (config.defaultSpace && !spaceOwners.has(config.defaultSpace)) throw new Error('The default Space must be supplied by an installed plugin')
-  const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false })
+  // Native features belong to installed packages, never to the Basic profile.
+  const validateFeatures = (replacement?: { id: string; package: InstalledPackage }) => {
+    const packs = [...records.entries()].map(([id, rec]) => replacement?.id === id ? replacement.package : rec.package)
+    const features = new Set(packs.flatMap((p) => p.manifest.frontend?.features || []))
+    if (features.has('calendar') && !features.has('amadeus')) throw new Error('Calendar requires the Amadeus frontend')
+    if (features.has('automation') && !features.has('tangu')) throw new Error('Automation requires the Tangu frontend')
+    for (const pack of packs) {
+      const owns = pack.manifest.frontend?.features || []
+      for (const [feature, dependency] of [['calendar', 'amadeus'], ['automation', 'tangu']] as const) {
+        if (!owns.includes(feature) || owns.includes(dependency)) continue
+        const owner = packs.find((p) => p.manifest.frontend?.features.includes(dependency))!
+        if (!pack.manifest.requires?.includes(owner.manifest.id)) throw new Error(`${feature} must require the ${dependency} package`)
+      }
+    }
+  }
+  validateFeatures()
+  const usable = (rec: RecordState): boolean => rec.state === 'active'
+    && (rec.package.manifest.requires || []).every((id) => usable(mustGet(id)))
+  const visible = (rec: RecordState): boolean => usable(rec) && rec.installation.publish !== false
+    && (rec.package.manifest.requires || []).every((id) => !mustGet(id).package.manifest.frontend || visible(mustGet(id)))
+  const published = () => [...records.values()].filter(visible)
+  const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
+  const capabilities = (): CloudServices => {
+    const services: CloudServices = {}
+    for (const rec of published()) Object.assign(services, rec.package.manifest.frontend?.services)
+    // A cloud adapter is only usable with an active authority on this Unit.
+    const account = [...records.values()].find((r) => usable(r) && r.backend?.account)?.backend?.account
+    if (!account?.metadata) return {}
+    for (const [id, service] of Object.entries(services)) {
+      const base = account.metadata.apiBase.replace(/\/$/, '')
+      if (service.apiBase !== base && !service.apiBase.startsWith(base + '/')) delete services[id as keyof CloudServices]
+    }
+    return services
+  }
   const refreshProduct = () => {
-    const spaces = [...records.values()].filter((r) => r.state === 'active').flatMap((r) => [...r.package.spaceIds])
+    const visible = published()
+    const spaces = visible.flatMap((r) => [...r.package.spaceIds])
+    product.nativeFeatures = visible.flatMap((r) => r.package.manifest.frontend?.features || [])
+    product.agentBackend = product.nativeFeatures.includes('tangu')
     product.spaces = spaces.length ? [] : ['home']
     product.defaultSpace = spaces.includes(config.defaultSpace || '') ? config.defaultSpace! : spaces[0] || 'home'
   }
@@ -96,7 +132,7 @@ export async function startBasicUnit(config: UnitConfig) {
       if (rec.package.backendEntry) {
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
         backend = await startBackend(options(id, rec))
-        if (backend.account && [...records.values()].some((r) => r !== rec && r.state === 'active' && r.backend?.account)) {
+        if (backend.account && [...records.values()].some((r) => r !== rec && usable(r) && r.backend?.account)) {
           throw new Error('A Unit can activate only one account authority')
         }
         if (rec.state as State === 'failed') throw new Error('Plugin stopped during startup')
@@ -115,17 +151,27 @@ export async function startBasicUnit(config: UnitConfig) {
       throw error
     } finally { refreshProduct() }
   }
-  async function deactivate(id: string, force = false) {
+  async function deactivate(id: string, force = false, preserveIntent = false) {
     const rec = mustGet(id)
     if (!force && [...records.values()].some((r) => r.state === 'active' && r.package.manifest.requires?.includes(id))) throw new Error('Disable dependent plugins first')
     const backend = rec.backend
     rec.backend = undefined; rec.state = 'stopping'; refreshProduct()
-    try { await backend?.stop() } finally { rec.state = 'disabled'; rec.installation.enabled = false; refreshProduct() }
+    try { await backend?.stop() } finally { rec.state = 'disabled'; if (!preserveIntent) rec.installation.enabled = false; refreshProduct() }
   }
-  async function restart(id: string) { await deactivate(id); await activate(id) }
+  const activeTree = (id: string) => {
+    const affected = new Set([id])
+    for (const candidate of ordered) if (mustGet(candidate).package.manifest.requires?.some((dep) => affected.has(dep))) affected.add(candidate)
+    return ordered.filter((candidate) => affected.has(candidate) && (mustGet(candidate).state === 'active' || mustGet(candidate).installation.enabled !== false))
+  }
+  async function restart(id: string) {
+    mustGet(id)
+    const active = activeTree(id)
+    for (const candidate of [...active].reverse()) await deactivate(candidate, false, true)
+    for (const candidate of ordered.filter((candidate) => candidate === id || active.includes(candidate))) await activate(candidate)
+  }
   const select = (path: string) => {
     if (protectedPaths.some((p) => matches(path, p))) return undefined
-    const candidates = [...records.values()].filter((r) => r.state === 'active' && r.backend)
+    const candidates = [...records.values()].filter((r) => usable(r) && r.backend)
       .flatMap((r) => r.mounts.filter((m) => matches(path, m)).map((m) => ({ rec: r, length: m.length })))
       .sort((a, b) => b.length - a.length)
     const winner = candidates[0]
@@ -133,15 +179,15 @@ export async function startBasicUnit(config: UnitConfig) {
   }
   refreshProduct()
   const accountProvider = () => {
-    const record = [...records.entries()].find(([, r]) => r.state === 'active' && r.backend?.account)
+    const record = [...records.entries()].find(([, r]) => usable(r) && r.backend?.account)
     return record ? { id: record[0], account: record[1].backend!.account! } : undefined
   }
   const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
-    pluginActive: (id) => records.get(id)?.state === 'active' })
+    pluginActive: (id) => { const rec = records.get(id); return !!rec && usable(rec) } })
   const web = await startUnitWeb({
     account: { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
-    projection: { mode: 'public', basePath: config.basePath, product },
+    projection: { mode: 'public', basePath: config.basePath, product, capabilities },
     routeRequest: (req, res) => {
       const path = pathname(req.url), backend = select(path)
       if (backend) { backend.handle(req, res); return true }
@@ -155,8 +201,8 @@ export async function startBasicUnit(config: UnitConfig) {
     getEngine: () => ({ url: null, token: '' }),
     pairedDevices: { list: () => [], add: async () => { throw new Error('Pairing is disabled') } },
     confirmPair: async () => false,
-    readPlugins: async () => [...records.values()].flatMap((r) => r.state === 'active' && r.package.ui ? [r.package.ui] : []),
-    readSpaces: async () => [...records.values()].flatMap((r) => r.state === 'active' ? r.package.spaces : []),
+    readPlugins: async () => published().flatMap((r) => r.package.ui ? [r.package.ui] : []),
+    readSpaces: async () => published().flatMap((r) => r.package.spaces),
     readConfig: async () => ({}), writeConfig: async () => { throw new Error('Host configuration is not published') },
     readProviders: async () => [], readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
     webDistDir: () => config.webDist, vault: () => null, log: (message) => console.log(message),
@@ -174,12 +220,20 @@ export async function startBasicUnit(config: UnitConfig) {
       for (const dep of next.manifest.requires || []) if (mustGet(dep).state !== 'active') throw new Error('New dependency is not active')
       for (const other of records.values()) if (other !== rec) for (const space of next.spaceIds) if (other.package.spaceIds.has(space)) throw new Error('Duplicate Space id')
       const nextOrder = dependencyOrder({ id, package: next })
+      validateFeatures({ id, package: next })
       if (config.defaultSpace && rec.package.spaceIds.has(config.defaultSpace) && !next.spaceIds.has(config.defaultSpace)) throw new Error('Update removes the Unit default Space')
-      const previous = rec.package, active = rec.state === 'active'
-      if (active) await deactivate(id)
+      const previous = rec.package, active = activeTree(id)
+      for (const candidate of [...active].reverse()) await deactivate(candidate, false, true)
       rec.package = next
-      try { if (active) await activate(id); rec.installation.path = next.root; ordered.splice(0, ordered.length, ...nextOrder) }
-      catch (error) { rec.package = previous; if (active) await activate(id); throw error }
+      try {
+        for (const candidate of nextOrder.filter((candidate) => active.includes(candidate))) await activate(candidate)
+        rec.installation.path = next.root; ordered.splice(0, ordered.length, ...nextOrder)
+      } catch (error) {
+        for (const candidate of [...nextOrder].reverse().filter((candidate) => active.includes(candidate))) await deactivate(candidate, true, true)
+        rec.package = previous
+        for (const candidate of active) await activate(candidate)
+        throw error
+      }
       finally { refreshProduct() }
     }),
     migrate: (id: string) => serialize(async () => {

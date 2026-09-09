@@ -1,3 +1,4 @@
+import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
 /**
  * 内置插件「日历」= Calendar Space + 日历 / 待办清单 / 日历设置 三个视图。
  *
@@ -67,10 +68,11 @@ export const calendarSpace: SpaceDefinition = {
 
 /** 宿主具备条件才谈得上装:产品档案点名 + Amadeus 文件系统桥(跨库聚合走 vault)。
  *  Tangu Web / 单品档案没有它 → 插件卡整个不出现,SPACES 里也不带。 */
-export const calendarAvailable = (): boolean => PRODUCT.spaces.includes('calendar') && !!window.amadeus
+export const calendarAvailable = (): boolean => hasNativeFeature('calendar') && amadeusAvailable()
 
 /** 三个视图的注册(启动 + 运行时开启共用)。 */
 export function installCalendarViews(): void {
+  if (!calendarAvailable()) return
   // ⚠️ 待办视图**吃 params 且非 singleton**(与另外两个不同,刻意的):
   //  · factory 必须把 params 透传下去 —— 从前写的是 `() => <TodoListView />`,把 ViewProps 整个丢了,
   //    于是 Dashboard 卡片上 `db:`/`src:` 这些键落了盘也没人读(dashboardViewCard 早就在传了)。
@@ -94,6 +96,7 @@ export function installCalendarViews(): void {
 
 /** Space + ribbon 图标(幂等:启动那次由 registerSpaces 按槽位注册过就不重复)。 */
 export function installCalendarSpace(): void {
+  if (!calendarAvailable()) return
   if (useSpaceStore.getState().spaces.some((s) => s.id === calendarSpace.id)) return
   registerSpace(calendarSpace)
   addRibbonIcon({

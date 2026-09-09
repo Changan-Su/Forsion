@@ -1,6 +1,10 @@
+import { registerAmadeusViews } from './features/amadeus'
+import { registerTanguViews } from './features/tangu'
+import { registerOperationsViews } from './features/operations'
+import { hasNativeFeature, amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, FolderOpen, BookOpen, Bot, Store, Settings, FileText, FileImage, ListTree, Link2, Search, Hash, Waypoints, Inbox, Mail, PanelLeft, PanelBottom, Code2, Database, PenTool, Trophy, Activity, AppWindow, Workflow, Network, Rocket, LayoutDashboard, FileVideo } from 'lucide-react'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelBottom, Code2, Trophy, Activity, AppWindow } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
@@ -21,27 +25,13 @@ import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
 import { cycleLocale, registerMessages, translate, useI18n } from './i18n'
-import { ChatView } from './views/ChatView'
-import { MemoryPanelView, SubchatsView, SessionFilesView } from './views/RightViews'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
 import { HomeEmptyView } from './views/HomeEmpty'
-import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from './views/SpecialViews'
-import { AmadeusEditorView, AmadeusBacklinksView } from './amadeusViews'
-import { NoteTabIcon } from './amadeusViews'
-import { AmadeusDbView } from './views/AmadeusDbView'
-import { AmadeusDrawingView } from './views/AmadeusDrawingView'
-import { DashboardView } from './views/DashboardView'
-import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
-import { AmadeusPdfView } from './views/AmadeusPdfView'
-import { AmadeusImageView } from './views/AmadeusImageView'
-import { AmadeusMediaView } from './views/AmadeusMediaView'
-import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from './amadeusPanels'
 import { InboxListView } from './views/inbox/InboxListView'
 import { InboxReaderView } from './views/inbox/InboxReaderView'
 import { WsFileView } from './views/WsFileView'
 import { CodeStudioView } from './views/CodeStudioView'
-import { PublicView } from './views/PublicView'
 import { ChangelogView } from './views/ChangelogView'
 import { setMobileUiCommand, MOBILE_UI_KEY } from './mobileUiCommand'
 import { initUiZoom } from './uiZoom'
@@ -53,10 +43,6 @@ import { SMOOTH_CARET_KEY } from './types'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
-import { AutomationListView } from './views/automation/AutomationListView'
-import { AutomationDetailView } from './views/automation/AutomationDetailView'
-import { AutomationRunsView } from './views/automation/AutomationRunsView'
-import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { installDeepLinks } from './deepLinkInstall'
 
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
@@ -118,18 +104,7 @@ export function installEngine(): void {
   registerView({ type: 'workspace', kind: 'collection', displayName: () => app().tr('view.workspace'), icon: Folder, factory: (props) => <WorkspaceView {...props} /> })
   // 统一「大纲」视图(合并 原目录/Amadeus 大纲):随活动主视图切换采集器。
   registerView({ type: 'outline', kind: 'aux', embeddable: true, displayName: () => app().tr('view.outline'), icon: ListTree, factory: (props) => <OutlineView {...props} />, singleton: true })
-  // chat 可关闭(浏览器式):关掉主区最后一个 view → 显示「新建标签页」启动器(见 workspaceStore.closeLeaf)。
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat', kind: 'entity', idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
-  // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
-  // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
-  // 右栏视图(可关,可重开)
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'session-files', kind: 'aux', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
-  // 主区特殊视图(按需从侧栏打开,不进默认布局)。旧 'wechat' 视图已退役:恢复布局时未注册类型被引擎自动剔除。
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'agents-detail', kind: 'page', displayName: () => app().tr('special.agents.title'), icon: Bot, factory: () => <AgentsDetailSpecialView />, singleton: true })
-  if (PRODUCT.spaces.includes('tangu')) registerView({ type: 'workspace-detail', kind: 'page', displayName: () => app().tr('app.workspace'), icon: FolderOpen, factory: () => <WorkspaceDetailSpecialView />, singleton: true })
+  registerTanguViews()
   // 新建标签页(空白启动器):列出所有视图按 主区/侧区 分类,选中即在对应区打开。
   registerView({ type: 'launcher', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: (props) => <NewTabView {...props} /> })
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,
@@ -137,15 +112,8 @@ export function installEngine(): void {
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
   registerView({ type: 'wsfile', kind: 'entity', idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
-  if (PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
-  // Public Space:管理已发布网站(Forsion Connect)+ 已公开发布/协作共享的笔记。档案点名 public 时注册。
-  if (PRODUCT.spaces.includes('public')) registerView({ type: 'public-view', kind: 'page', displayName: () => app().tr('view.publicHub'), icon: Rocket, factory: (props) => <PublicView {...props} />, singleton: true })
-  // Automation Space 三件套(左=列表/主=详情+构建器/右=触发记录);仅档案点名 automation 时注册。
-  if (PRODUCT.spaces.includes('automation')) {
-    registerView({ type: 'automation-list', kind: 'collection', embeddable: true, displayName: () => app().tr('view.automationList'), icon: Workflow, factory: () => <AutomationListView />, singleton: true })
-    registerView({ type: 'automation-detail', kind: 'page', displayName: () => app().tr('view.automationDetail'), icon: Workflow, factory: () => <AutomationDetailView />, singleton: true })
-    registerView({ type: 'automation-runs', kind: 'aux', displayName: () => app().tr('view.automationRuns'), icon: ListTree, factory: () => <AutomationRunsView />, singleton: true })
-  }
+  if (PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+  registerOperationsViews()
   // 「更新」标签页(更新日志 + 下载/安装):检测到新版自动弹出;任何产品变体都注册。
   registerView({ type: 'changelog', kind: 'page', embeddable: true, displayName: () => app().tr('view.changelog'), icon: FileText, factory: () => <ChangelogView />, singleton: true })
   // 活动日志实时视图(开发者工具):恒注册,⌘K 入口由开发者选项开关控制(activityViewCommand)。
@@ -162,65 +130,12 @@ export function installEngine(): void {
   // 主区空态占位:关掉最后一个主区 tab 后 closeLeaf 就地把该 leaf 变成它(Forsion 品牌图 + 新建;tab 条隐藏机关同 sidebar-empty)。
   registerView({ type: 'home', kind: 'page', displayName: () => app().tr('newtab.title'), icon: Plus, factory: () => <HomeEmptyView />, closable: false })
 
-  // Amadeus Space:原生可停靠视图(左 笔记列表 / 主 编辑器 / 右 大纲+反链),共享 pageStore。
-  // Amadeus 依赖 electron 预载的 window.amadeus 文件系统桥;Tangu Web(无 host)下缺省 → 整个 Space 不注册,
-  // 与 market/feedback 的 window.tangu?.X 门控同纪律。否则视图挂载即 deref undefined amadeus 崩溃。
-  if (window.amadeus) {
-    // 笔记库/大纲已并入统一的 workspace/outline 视图(见上);Amadeus 专属侧视图保留。
-    // 编辑器 = 非 singleton 多实例(类 Obsidian 每笔记一个 tab,params.notePath 认领笔记并随布局持久化);
-    // 可关闭:关到主区最后一个 → 落 launcher 启动器(见 workspaceStore.closeLeaf)。
-    registerView({
-      type: 'amadeus-editor', kind: 'entity', embeddable: true, idParam: 'notePath', fileMatch: VIEW_FILE_MATCH['amadeus-editor'],
-      displayName: () => app().tr('amadeus.editor'), icon: FileText, TabIcon: NoteTabIcon, factory: (props) => <AmadeusEditorView {...props} />,
-      dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
-    })
-    // 独立 .db 数据库视图(多实例,params.dbPath 认领文件并随布局持久化;树上点 .db 打开,见 amadeusNav.openDb)。
-    registerView({
-      type: 'amadeus-db', kind: 'entity', embeddable: true, idParam: 'dbPath', fileMatch: VIEW_FILE_MATCH['amadeus-db'],
-      displayName: () => app().tr('view.db'), icon: Database, factory: (props) => <AmadeusDbView {...props} />,
-      dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
-    })
-    // 独立白板视图(多实例,params.drawingPath 认领文件;树上点 .excalidraw.md / 笔记里点 [[X.excalidraw]] 打开,见 amadeusNav.openDrawing)。
-    registerView({
-      type: 'amadeus-drawing', kind: 'entity', embeddable: true, idParam: 'drawingPath', fileMatch: VIEW_FILE_MATCH['amadeus-drawing'],
-      displayName: () => app().tr('view.drawing'), icon: PenTool, factory: (props) => <AmadeusDrawingView {...props} />,
-      dashboard: { sizes: ['full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
-    })
-    // 仪表盘:.dashboard.md 一律开进 DashboardView,由它按文件里的 `dashLayout:` 分派 ——
-    // 缺省 = 结构化网格(dashboard3:,2026-08-27 拍板的默认),`canvas` = 自由摆位(dashboard2:)。
-    // 文件仍是一份合法笔记(布局都在外来 frontmatter 键里),掉进笔记编辑器也不会坏。
-    registerView({ type: 'dashboard', kind: 'entity', idParam: 'dashPath', fileMatch: VIEW_FILE_MATCH['dashboard'], displayName: () => translate('bootengine.view.dashboard'), icon: LayoutDashboard, factory: (props) => <DashboardView {...props} /> })
-    // 旧网格版 view **已移除**(用户拍板:旧 UI 不能留着让人看到)。已存布局里的 amadeus-dashboard
-    // panel 由 layoutViewsAllRegistered 整份回退 → 该 Space 按新配方重建,文件本身不受影响
-    // (.dashboard.md 照旧被新画布版认领,旧布局键 dashboard: 也原样留在文件里当回滚保险)。
-    // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf)。
-    registerView({
-      type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'pdfPath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'],
-      displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} />,
-      dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
-    })
-    // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。
-    registerView({ type: 'amadeus-image', kind: 'entity', embeddable: true, idParam: 'imagePath', fileMatch: VIEW_FILE_MATCH['amadeus-image'], displayName: () => translate('bootengine.view.image'), icon: FileImage, factory: (props) => <AmadeusImageView {...props} /> })
-    // 独立音视频视图(多实例,params.path 认领文件;聊天里的时刻引用条 `[[a.mp4#t=95]]`、
-    // 笔记里点了但本页没播放器的媒体锚,见 amadeusNav.openMedia)。
-    // ⚠️ 刻意**不给 fileMatch**:openFile 里的 extHit 排在插件 matchFileType **之前**,认领了
-    //    `.mp4` 就抢掉插件对音视频的认领(方案「媒体锚点」§6 不变式 5)。树上双击照旧交系统播放器。
-    registerView({ type: 'amadeus-media', kind: 'entity', embeddable: true, idParam: 'path', displayName: () => translate('bootengine.view.media'), icon: FileVideo, factory: (props) => <AmadeusMediaView {...props} /> })
-    // 通用「插件文件类型」视图(多实例,params.filePath 认领文件;树上点插件声明的文件类型 / 笔记里点
-    // ![[x.ext]] 打开,见 amadeusNav.openFile + 插件的 ctx.registerFileType)。一个视图服务所有插件文件类型。
-    registerView({ type: 'amadeus-plugin-file', kind: 'entity', idParam: 'filePath', displayName: () => translate('bootengine.view.pluginFile'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
-    registerView({ type: 'amadeus-backlinks', kind: 'aux', displayName: () => app().tr('amadeus.backlinks'), icon: Link2, factory: () => <AmadeusBacklinksView />, singleton: true })
-    registerView({ type: 'amadeus-search', kind: 'collection', embeddable: true, displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
-    registerView({ type: 'amadeus-tags', kind: 'collection', embeddable: true, displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
-    registerView({ type: 'amadeus-graph', kind: 'aux', displayName: () => app().tr('amadeus.graph'), icon: Waypoints, factory: () => <AmadeusLocalGraphView />, singleton: true })
-    // Calendar Space 的三个视图已随「日历」内置插件走(builtins/calendar):随插件启停注册/反注册。
-    // 仪表盘紧凑卡面(dashboard 契约)也在那里声明 —— 契约跟注册点走,别在这儿补。
-  }
+  registerAmadeusViews()
 
   // Inbox Space:收件箱(左 邮件列表 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
   // gate = window.tangu?.backendStatus(桌面壳语义,含 external 模式;webShim 无 → Tangu Web 不注册,
   // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩)。
-  if (window.tangu?.backendStatus || window.tangu?.mobile) {
+  if (PRODUCT.nativeFeatures === undefined && (window.tangu?.backendStatus || window.tangu?.mobile)) {
     registerView({
       type: 'inbox-list', kind: 'collection', embeddable: true,
       displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true,
@@ -263,7 +178,7 @@ export function installEngine(): void {
   // 对方设备的插件清单经 unit/plugins 分发,视图/命令类插件不依赖 vault 即可工作(方案 §11.4)。
   // 插件的 Tangu 只读探针(ctx.tangu:当前模型 / 当前 Space)。**必须早于 installAmadeusPlugins**:
   // ctx.tangu 的有无是在建 plugin context 那一刻定的。见 amadeus/plugins/tanguSeam.ts。
-  installTanguProbe()
+  if (PRODUCT.nativeFeatures === undefined || hasNativeFeature('tangu') || hasNativeFeature('automation')) installTanguProbe()
   if (window.amadeus || window.tangu?.unitPage) installAmadeusPlugins()
   // 用户自定义 Space(L0 数据 Space):~/.tangu/spaces 异步装载(注册完成后 ribbon 自动出现);仅桌面。
   // 上面的同步策略跑在装载之前,若目标是某个用户 Space,那时它还没注册 → 装载完成后补定位。两种补法:
@@ -422,7 +337,7 @@ export function installEngine(): void {
   })
 
   // commands
-  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
+  if (hasNativeFeature('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
     description: 'Start a new, empty chat in the window the user is talking to you from. Use it when the user asks to start over or open a fresh conversation.',
   } })
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
@@ -464,7 +379,7 @@ export function installEngine(): void {
     try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
     setSmoothCaretEnabled(on)
   } })
-  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
+  if (hasNativeFeature('tangu')) addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
   // per-tab 前进/后退(Ctrl/⌘+{ 与 }):只走当前活动主 leaf 的历史栈;与主区左上角箭头同源。
   const navGo = (dir: 'back' | 'forward'): void => {
     const api = ws().api
@@ -474,7 +389,7 @@ export function installEngine(): void {
   addCommand({ id: 'nav-back', title: () => app().tr('command.navBack'), keywords: 'back history 后退 历史', hotkey: 'mod+shift+[', run: () => navGo('back') })
   addCommand({ id: 'nav-forward', title: () => app().tr('command.navForward'), keywords: 'forward history 前进 历史', hotkey: 'mod+shift+]', run: () => navGo('forward') })
   addCommand({ id: 'reset-layout', title: () => app().tr('command.resetLayout'), keywords: 'layout reset default 布局 默认 黄金分割', run: () => ws().resetLayout() })
-  if (PRODUCT.spaces.includes('tangu')) addCommand({
+  if (hasNativeFeature('tangu')) addCommand({
     id: 'show-chat-panel',
     icon: MessageCircle,
     title: () => translate('bootengine.cmd.showChatPanel'),
@@ -502,9 +417,9 @@ export function installEngine(): void {
     const name = window.prompt(app().tr('layout.applyPrompt', { names: names.join(', ') }), names[0])?.trim()
     if (name && names.includes(name)) ws().applyNamed(name)
   } })
-  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: () => app().stop() })
-  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
-  if (PRODUCT.spaces.includes('tangu')) addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
+  if (hasNativeFeature('tangu')) addCommand({ id: 'stop-run', title: () => app().tr('command.stop'), keywords: 'stop 停止', run: () => app().stop() })
+  if (hasNativeFeature('tangu')) addCommand({ id: 'compact', title: () => app().tr('command.compact'), keywords: 'compact 压缩', run: () => void app().compact() })
+  if (hasNativeFeature('tangu')) addCommand({ id: 'branch', title: () => app().tr('command.branch'), keywords: 'branch 分支', run: () => void app().branchFromMessage() })
   // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'market store plugin theme skill agent 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
@@ -521,7 +436,7 @@ export function installEngine(): void {
   // 为什么这两条是新增而不是给现有命令加 invoke:命令表里 22 条「开面板」对模型价值极低,
   // 真正缺的是「把我刚写的东西摆到用户眼前」和「切到那个 Space」。二者都有现成函数,只是从来
   // 没被声明成命令(因为 run(): void 收不了参数)。
-  addCommand({
+  if (amadeusAvailable()) addCommand({
     id: 'open-note',
     title: () => translate('bootengine.cmd.openNote'),
     keywords: 'note open 打开 笔记',

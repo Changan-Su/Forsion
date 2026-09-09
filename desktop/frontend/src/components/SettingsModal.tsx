@@ -1,3 +1,4 @@
+import { PRODUCT } from '../product'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
@@ -854,7 +855,7 @@ export const SettingsModal: React.FC<{
     hooks: 'settings.page.hooksDescription',
     channels: 'settings.page.channelsDescription',
     browser: 'settings.page.browserDescription',
-    'amadeus-plugins': 'settings.page.pluginsDescription',
+    'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
     developer: 'settings.page.developerDescription',

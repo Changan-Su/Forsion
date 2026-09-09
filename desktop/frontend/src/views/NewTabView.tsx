@@ -4,7 +4,7 @@
 import { type ReactNode } from 'react'
 import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard, House } from 'lucide-react'
 import { useApp } from '../stores/appStore'
-import { PRODUCT } from '../product'
+import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
 import { openSpecial } from './SpecialViews'
 import { useWorkspace, useSpaceStore, getActiveSpace, getView, label, startOpenDrag } from '@lcl/engine'
 import { AMADEUS_ENABLED } from '../spaces'
@@ -43,7 +43,7 @@ export function NewTabView({ leaf }: ViewProps) {
   const vaultRoot = usePageStore((state) => state.vaultRoot)
   const pages = usePageStore((state) => state.pages)
   const hasBackend = !!window.tangu?.backendStatus
-  const amadeusOn = !!window.amadeus && AMADEUS_ENABLED // 笔记/文件项跟随 Amadeus 门控(与 Space 注册同纪律)
+  const amadeusOn = amadeusAvailable() && AMADEUS_ENABLED // 笔记/文件项跟随 Amadeus 门控(与 Space 注册同纪律)
   const ws = () => useWorkspace.getState()
 
   // 门面统一在 sessionNav:站在这张空白页里点「新对话」就该开在**这个**标签,不是跳回老聊天把它清空。
@@ -60,7 +60,7 @@ export function NewTabView({ leaf }: ViewProps) {
     { key: 'homepage', icon: <House size={20} />, label: t('space.home'), run: () => ws().openView('homepage', {}, 'main'), show: !!getView('homepage'), drag: { type: 'homepage' } },
     // 「新对话」「新建笔记」「今日日记」是动作(清 activeId/草稿、创建文件)→ 只单击、不带 drag:
     // 拖拽走 openView 会绕过动作,chat 又是 singleton(reuseKey:'primary')→ 只会聚焦旧对话而非新建。
-    { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: PRODUCT.spaces.includes('tangu') },
+    { key: 'chat', icon: <MessageCircle size={20} />, label: t('sidebar.newChat'), run: newChat, show: hasNativeFeature('tangu') },
     { key: 'new-note', icon: <SquarePen size={20} />, label: t('newtab.newNote'), run: newNote, show: amadeusOn },
     { key: 'daily', icon: <CalendarDays size={20} />, label: t('newtab.today'), run: () => { void openDailyNote() }, show: amadeusOn && !!vaultRoot },
     // 内置文件类型的「新建」入口:与文件树右键、命令面板、笔记里的斜杠项并列的第四条主路径 ——

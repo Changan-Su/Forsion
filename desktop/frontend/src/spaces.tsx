@@ -1,3 +1,4 @@
+import { hasNativeFeature, amadeusAvailable } from './features/runtime'
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
@@ -101,7 +102,7 @@ const inboxSpace: SpaceDefinition = {
  *  (见 Composer2 的「已选择」引用条)。**排第一位就是默认选中**——展开时无记忆则取 stash 首项(dockviewStore.toggleSidebar)。
  *  `chat-panel` 视图只在含 tangu 的产品档案里注册(bootstrapEngine),Amadeus 单品档案没有它 → 那儿不排进来,
  *  否则侧栏会多出一个渲染不出内容的空 tab。 */
-const AMADEUS_HAS_CHAT = PRODUCT.spaces.includes('tangu')
+const AMADEUS_HAS_CHAT = hasNativeFeature('tangu')
 const AMADEUS_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
   left: [
     { type: 'workspace', params: {} },
@@ -204,29 +205,28 @@ const publicSpace: SpaceDefinition = {
   },
 }
 
-/** 注册序 = ribbon 顶部默认序(在商店之上)。在 installEngine 内、商店图标注册之前调用。
- *  Amadeus 需 electron 的 window.amadeus 文件系统桥;Tangu Web(无 host)下不注册该 Space。
- *  2026-07-04 起对所有桌面用户开放(此前仅开发者模式 localStorage forsion_tangu_dev_mode='1');
- *  唯一闸改为 window.amadeus(host 文件系统桥)—— 消费处仍写 `window.amadeus && AMADEUS_ENABLED`,故 Web 端照常不注册。 */
-export const AMADEUS_ENABLED = true // ponytail: 曾按 dev-mode 门控,现全量开放;闸只剩 window.amadeus(见各消费处的 && 前置)
+/** 注册序 = ribbon 顶部默认序。在 installEngine 内、商店图标注册之前调用。
+ * Amadeus 需要可用的文件桥；Unit 还必须由安装包显式声明该功能。
+ * 没有安装清单的旧桌面/Web 档案保留原有能力判断。 */
+export const AMADEUS_ENABLED = PRODUCT.nativeFeatures === undefined || hasNativeFeature('amadeus')
 // 产品档案过滤 × 运行时能力门控 叠加:档案没点名的 Space 直接不注册(单品变体);点名的仍受能力闸约束。
 const SPACES: SpaceDefinition[] = [
   // 主页也是**内置插件**(builtins/homepage:Space + homepage 视图随插件启停)。排第一 = ribbon 顶格,
   // 与旧 Forsion Desktop 的「先看到桌面首页」一致;插件页关掉后下次启动即整条不出现。
   ...(homepageAvailable() && builtinEnabled('home') ? [homepageSpace] : []),
-  ...(PRODUCT.spaces.includes('tangu') ? [tanguSpace] : []),
+  ...(hasNativeFeature('tangu') ? [tanguSpace] : []),
   // Inbox 与视图注册同门控(桌面壳 backendStatus 或 移动端本地 inbox mobile;Tangu Web 两者皆无 → 不注册)。
-  ...(PRODUCT.spaces.includes('inbox') && (window.tangu?.backendStatus || window.tangu?.mobile) ? [inboxSpace] : []),
-  ...(PRODUCT.spaces.includes('amadeus') && window.amadeus && AMADEUS_ENABLED ? [amadeusSpace] : []),
+  ...(PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('inbox') && (window.tangu?.backendStatus || window.tangu?.mobile) ? [inboxSpace] : []),
+  ...(hasNativeFeature('amadeus') && amadeusAvailable() && AMADEUS_ENABLED ? [amadeusSpace] : []),
   // Calendar 已是**内置插件**(builtins/calendar:Space + 三个视图随插件启停)。这里仍按槽位声明式带上,
   // 保住 ribbon 默认序与「上次退出停在日历」的启动恢复;插件页关掉后下次启动即整条不出现。
   ...(calendarAvailable() && builtinEnabled('calendar') ? [calendarSpace] : []),
   // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。
-  ...(PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
+  ...(PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
-  ...(PRODUCT.spaces.includes('automation') && window.tangu?.backendStatus ? [automationSpace] : []),
+  ...(hasNativeFeature('automation') && window.tangu?.backendStatus ? [automationSpace] : []),
   // Public:管理已发布网站/笔记。需 Connect 发布桥或 Amadeus 协作桥其一(Tangu Web 两者皆无 → 不注册)。
-  ...(PRODUCT.spaces.includes('public') && (window.tangu?.connectPublish || window.amadeusCollab) ? [publicSpace] : []),
+  ...(hasNativeFeature('public') && (window.tangu?.connectPublish || window.amadeusCollab) ? [publicSpace] : []),
 ]
 
 export function registerSpaces(): void {
@@ -258,7 +258,7 @@ export function registerSpaces(): void {
       localStorage.setItem('forsion_rightpanel_collapse_v1', '1')
     }
   } catch { /* ignore */ }
-  if (window.amadeus && AMADEUS_ENABLED) {
+  if (amadeusAvailable() && AMADEUS_ENABLED) {
     installAmadeusCommands()
     // 旧 space:amadeus 命名布局没有新加的 搜索/标签/关系图 侧栏 tab → 一次性删除,下次进入按新默认重建。
     try {

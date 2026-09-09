@@ -131,23 +131,38 @@ export function createBrowserAccount(options: BrowserAccountOptions) {
   const identityUrl = options.identityUrl ? new URL(options.identityUrl, base) : apiUrl('/auth/me')
   if (identityUrl.origin !== base.origin || identityUrl.username || identityUrl.password || identityUrl.hash) throw new Error('Identity endpoint must use the account API origin')
 
-  function guardedResponse(response: Response, check: () => void, release: () => void): Response {
+  function guardedResponse(response: Response, check: () => void, release: () => void, signal: AbortSignal): Response {
     const reader = response.body?.getReader()
+    let abortBody: (() => void) | undefined
+    const finish = () => {
+      if (abortBody) signal.removeEventListener('abort', abortBody)
+      release()
+    }
     const body = reader ? new ReadableStream<Uint8Array>({
+      start(controller) {
+        abortBody = () => {
+          const reason = signal.reason ?? new AccountChangedError()
+          controller.error(reason)
+          void reader.cancel(reason).catch(() => {})
+          finish()
+        }
+        signal.addEventListener('abort', abortBody, { once: true })
+        if (signal.aborted) abortBody()
+      },
       async pull(controller) {
         try {
           check()
           const part = await reader.read()
           check()
-          if (part.done) { controller.close(); release() }
+          if (part.done) { controller.close(); finish() }
           else controller.enqueue(part.value)
         } catch (error) {
           controller.error(error)
           void reader.cancel(error).catch(() => {})
-          release()
+          finish()
         }
       },
-      async cancel(reason) { release(); await reader.cancel(reason) },
+      async cancel(reason) { finish(); await reader.cancel(reason) },
     }, { highWaterMark: 0 }) : null
     if (!reader) release()
     const guarded = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
@@ -161,7 +176,7 @@ export function createBrowserAccount(options: BrowserAccountOptions) {
       Object.defineProperty(guarded, method, { value: async () => { check(); const value = await consume(); check(); return value } })
     }
     const clone = guarded.clone.bind(guarded)
-    Object.defineProperty(guarded, 'clone', { value: () => { check(); return guardedResponse(clone(), check, () => {}) } })
+    Object.defineProperty(guarded, 'clone', { value: () => { check(); return guardedResponse(clone(), check, () => {}, signal) } })
     return guarded
   }
 
@@ -185,7 +200,7 @@ export function createBrowserAccount(options: BrowserAccountOptions) {
       check()
       const response = await fetcher(url.href, { ...init, headers, signal: controller.signal, redirect: 'error', credentials: 'omit', cache: 'no-store' })
       check()
-      return guardedResponse(response, check, release)
+      return guardedResponse(response, check, release, controller.signal)
     } catch (error) { release(); check(); throw error }
   }
   function request(path: string, init?: RequestInit): Promise<Response> {

@@ -120,3 +120,45 @@ npx vitest run electron/unitWeb.test.ts electron/basicUnit.test.ts electron/back
 ```
 
 完整 Server 的独立 PostgreSQL 验收脚本位于 Server 仓 `scripts/verify-unit-installation.mjs`。
+
+## Genesis Web 组合
+
+Server 仓执行 `node scripts/prepare-unit-release.mjs --web`，产出可搬运的
+`runtime/genesis-web/`，包括 Unit、Server 和 Amadeus/Tangu/Calendar/Public
+安装包。部署机执行 `node install.mjs /absolute/path/instance --port 3001`，配置 Server
+环境变量、迁移数据库，再用 Unit CLI 启动；网页入口是 `/web/`。登录、退出与个人
+workspace 复用同一套 Forsion Account。无需独立 Web 服务或独立 Server 监听进程。
+Tangu 的 AI 执行仍需配置现有 fleet 执行节点和模型；Unit 不会隐式打开主机执行权限。
+
+官方前端包可声明共享原生功能，而不必伪造一个空的 JavaScript 入口：
+
+```json
+{
+  "id": "calendar", "version": "1.0.0", "apiVersion": 1,
+  "requires": ["server-admin", "amadeus"],
+  "frontend": { "features": ["calendar"] }
+}
+```
+
+`frontend.features` 支持 `amadeus`、`tangu`、`calendar`、`automation`、`public`。
+渲染实现由 Unit 的共享前端提供，安装包是实际注册这些视图、Space、入口的依据。
+没有声明的功能不能由本地旧开关开启；卸载/禁用后刷新页面即消失。新增原生实现仍需
+更新 Unit。第三方 JavaScript 插件继续使用 `main` 与既有插件 API。
+`frontend.services` 只允许已声明功能对应的 `forsion-cloud-v1` 适配器，声明同源
+`apiBase`；Amadeus 可带 `collaboration:true`，Tangu 使用 `execution:"fleet"`。
+Unit 仅投射依赖全部活跃且账号服务可用的云服务描述，不投射私密后端配置。
+
+插件安装项的 `publish:false` 保持后端工作但不将其管理 UI 加入当前投射。
+Genesis Web 默认对 Server 使用此选项；原 `/admin/` 组合照旧。它只控制 UI 组合，
+不是授权边界：Server API 仍逐项检查角色和数据所有者。旧管理兼容入口仍可访问。
+
+笔记、Calendar.db、会话、消息和任务使用现有后端数据；访问者不能用资源 ID 或
+伪造请求字段选择别人的数据。资源链接绑定当前会话，退出/撤销后不能继续使用；
+事件流随会话失效关闭。公开分享使用 `/web/share/:token`，邀请使用 `/web/invite/:token`，
+其公开性或协作权限仍由原 Amadeus 服务判定。
+
+Server 重启/更新会按依赖顺序暂停并恢复启用的前端包，坏包恢复上一版本和原组合；
+主动禁用一个依赖时，仍需先禁用依赖它的插件。UI 中的原生功能列表是安装状态展示，
+部署级启停由本机 Unit CLI 管理，不给普通访问者宿主管理权限。
+
+当前 Web 默认组合不含 Automation；定时执行、Inbox 及本地文件能力并未作为云端功能开放。

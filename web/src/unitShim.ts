@@ -1,16 +1,12 @@
 /**
- * unitShim —— 「设备页」垫片(方案 §11.4):本页面 = 某台设备(unitWeb)曝出来的 Forsion。
- *
- * 与 webShim 的三点不同:
- *   1. 不是 Forsion 账号态:局域网直连(T1)靠**配对令牌**(6 位码双侧比对,unitWeb 发放,
- *      localStorage 按对方 instanceId 存);server 隧道(T2)由桌面壳在浏览器分区注入
- *      Authorization,页面自身无需令牌(unit/whoami 探针直接过)。
- *   2. API 基址是**相对 base**(new URL('.', location.href)):局域网 `http://ip:port/` 与
- *      隧道子路径 `…/api/units/<id>/proxy/` 同一套写法 —— 构建必须 `--base=./`。
- *   3. 绝不跳 Forsion 登录页;未配对时页内走配对流(纯 DOM,先于 React 挂载)。
+ * Unit 的网页投射:设备使用配对身份与远端文件桥;服务端投射使用既有 Account 的
+ * tab 会话,按已安装插件声明装配云服务。两种形态共用 desktop renderer。
+ * 投射 API 相对 document.baseURI 定位,支持 /web/ 与设备隧道子路径。
  */
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public'; browserStorage?: boolean; account?: { apiBase: string; loginPath: string } }
+import type { UnitCloudCapabilities } from './unitCloudTransport'
+
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public'; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
 const base = (): URL => new URL('.', document.baseURI)
 
@@ -76,6 +72,9 @@ export async function installUnitShim(): Promise<boolean> {
   const published = meta.projection === 'public'
   const visitor = published && meta.account
     ? await (await import('./unitAccount')).installUnitAccount({ ...meta, account: meta.account }, base()) : null
+  const hasCloud = published && !!(meta.capabilities?.amadeus || meta.capabilities?.tangu)
+  if (hasCloud && !visitor) throw new Error('Cloud services require the Unit account provider')
+  if (hasCloud && !visitor!.account.getIdentity()) { await visitor!.login(); return false }
   let token = ''
   try { token = localStorage.getItem(tokenKey) || '' } catch { /* private mode */ }
 
@@ -96,41 +95,47 @@ export async function installUnitShim(): Promise<boolean> {
   if (!token) token = 'tunnel'
   ;(window as unknown as { __FORSION_UNIT_TOKEN__?: string }).__FORSION_UNIT_TOKEN__ = token
 
-  // 本地 vault 面(v2.1):设备页里的 Amadeus = 对方的本地笔记库。必须先于 '@/main' 挂上
-  // window.amadeus(amadeus/api.ts 模块求值时捕获,dbStore 等也在模块级订阅事件);
-  // 工厂是 async 的:首枚资源令牌等到手才交桥,首屏资源 URL 不缺 at。
-  const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
+  // 桥必须先于 '@/main' 挂载:amadeus/api.ts 与 dbStore 在模块求值时捕获它。
   const fixedToken = token
-  window.amadeus = await createUnitAmadeusBridge({
-    base: base().href,
-    browserStorage: published ? visitor?.scope || meta.instanceId : undefined,
-    pluginData: visitor ? {
-      read: async (id: string) => {
-        if (!visitor.account.getIdentity()) return null
-        const response = await visitor.request(`unit/plugin-data/${encodeURIComponent(id)}`)
-        if (!response.ok) throw new Error(`Plugin data HTTP ${response.status}`)
-        return (await response.json()).data
-      },
-      write: async (id: string, data: string) => {
-        if (!visitor.account.getIdentity()) throw new Error('Sign in to save plugin data')
-        const response = await visitor.request(`unit/plugin-data/${encodeURIComponent(id)}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data }),
-        })
-        if (!response.ok) throw new Error(`Plugin data HTTP ${response.status}`)
-        await response.json()
-      },
-    } : undefined,
-    getToken: () => fixedToken,
-    onAuthError: () => {
-      // 配对被对方回收:清本地令牌,重进配对流(T1);隧道形态不会 401 到这。
-      try { localStorage.removeItem(tokenKey) } catch { /* private mode */ }
-      location.reload()
+  const pluginData = visitor ? {
+    read: async (id: string) => {
+      if (!visitor.account.getIdentity()) return null
+      const response = await visitor.request(`unit/plugin-data/${encodeURIComponent(id)}`)
+      if (!response.ok) throw new Error(`Plugin data HTTP ${response.status}`)
+      return (await response.json()).data
     },
-  })
+    write: async (id: string, data: string) => {
+      if (!visitor.account.getIdentity()) throw new Error('Sign in to save plugin data')
+      const response = await visitor.request(`unit/plugin-data/${encodeURIComponent(id)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data }),
+      })
+      if (!response.ok) throw new Error(`Plugin data HTTP ${response.status}`)
+      await response.json()
+    },
+  } : undefined
+  const cloud = hasCloud ? (await import('./unitCloudTransport')).installUnitCloudTransport({
+    capabilities: meta.capabilities!, accountApiBase: meta.account!.apiBase, projectionBase: base().href,
+    visitor: visitor!, pluginData: pluginData!,
+  }) : null
+  if (cloud?.amadeus) window.amadeus = cloud.amadeus
+  else {
+    const { createUnitAmadeusBridge } = await import('./amadeus/unitBridge')
+    window.amadeus = await createUnitAmadeusBridge({
+      base: base().href,
+      browserStorage: published ? visitor?.scope || meta.instanceId : undefined,
+      pluginData,
+      getToken: () => fixedToken,
+      onAuthError: () => {
+        // Paired-device tokens and visitor accounts stay separate.
+        try { localStorage.removeItem(tokenKey) } catch { /* private mode */ }
+        location.reload()
+      },
+    })
+  }
 
   const engineBase = new URL('engine', base()).href
   // 连接键恒为本页值(对方的 mode/backendUrl/token 绝不进来 —— 服务端白名单也不会下发它们)。
-  const cfg = { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', sandbox: 'none' as const }
+  const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', sandbox: 'none' as const }
   const authHeaders = (): Record<string, string> | undefined =>
     fixedToken && fixedToken !== 'tunnel' ? { Authorization: `Bearer ${fixedToken}` } : undefined
   /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig
@@ -157,6 +162,9 @@ export async function installUnitShim(): Promise<boolean> {
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
+    hostFiles: !published,
+    ...(cloud ? { cloudWeb: true } : {}),
+    initialConfig: mergedConfig(),
     ...(visitor ? {
       account: visitor.capability,
       forsionLogin: visitor.login,
@@ -196,6 +204,7 @@ export async function installUnitShim(): Promise<boolean> {
       return mergedConfig()
     },
     authStatus: visitor?.account.authStatus || (async () => ({ loggedIn: false, cloudUrl: '', username: meta.name, nickname: meta.name, tokenSource: null })),
+    ...(!published ? {
     // 直连 provider 元数据(对方已剥 apiKey/baseUrl):模型选择器据此认出直连模型 ——
     // 缺了它直连模型不进清单,选择器显示「选择模型」(2026-08-24 用户实报)。
     listProviders: async () => {
@@ -226,6 +235,7 @@ export async function installUnitShim(): Promise<boolean> {
         return r.json()
       } catch { return null }
     },
+    } : {}),
     // Space 配方(只读):loadUserSpaces 按本方法存在性门控 —— 缺了它插件 Space 全不装,
     // Ribbon 上一个插件图标都没有(2026-08-24 实测)。spacesSave/Delete 刻意不给:设备页不写对方布局。
     spacesList: async () => {

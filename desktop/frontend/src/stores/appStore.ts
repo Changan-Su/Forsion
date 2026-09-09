@@ -307,7 +307,7 @@ export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
 
 /** 引擎有真实 host FS:managed 桌面,或设备页(unitPage,引擎是对方的 managed 引擎)。 */
 const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
-  s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage)
+  s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
 
 const SESSION_MODE_KEY = 'forsion_tangu_session_mode'
 function loadSessionMode(): SessionMode | null {
@@ -645,10 +645,10 @@ export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
   // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
   // localhost:8787(控制台 ERR_CONNECTION_REFUSED 红噪音)。壳在挂载前已装好
-  // window.tangu.cloudWeb + localStorage token(统一键 forsion_token),同步读即得正确初值。
-  cfg: typeof window !== 'undefined' && (window as any).tangu?.cloudWeb
+  // window.tangu.initialConfig 提供已验证账号初值；旧 Web/mobile 保留既有回退。
+  cfg: (typeof window !== 'undefined' && window.tangu?.initialConfig) || (typeof window !== 'undefined' && window.tangu?.cloudWeb
     ? { backendUrl: location.origin + '/api', token: (() => { try { return localStorage.getItem('forsion_token') || '' } catch { return '' } })(), modelId: '' }
-    : { backendUrl: 'http://localhost:8787', token: '', modelId: '' },
+    : { backendUrl: 'http://localhost:8787', token: '', modelId: '' }),
   desktopConfig: null,
   cfgLoaded: false,
   connState: 'idle',

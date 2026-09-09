@@ -1,11 +1,14 @@
 /** Product identity is shared by desktop, browser projection, and the headless Unit. */
 import full from '../products/forsion.json'
+import type { NativeFeatureId } from './nativeFeatures'
 
 export interface ProductProfile {
   id: string
   displayName: string
   defaultSpace: string
   spaces: string[]
+  /** Explicit installed native UI contributions. Undefined preserves legacy product profiles. */
+  nativeFeatures?: NativeFeatureId[]
   agentBackend: boolean
   market: boolean
   unit?: boolean

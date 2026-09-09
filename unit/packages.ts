@@ -1,6 +1,12 @@
 /** A backend is an optional capability of the existing Forsion plugin package. */
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
+import { isNativeFeatureId, nativeFeatureSpaceIds, type NativeFeatureId } from '../desktop/shared/nativeFeatures'
+
+export interface CloudServices {
+  amadeus?: { adapter: 'forsion-cloud-v1'; apiBase: string; collaboration?: boolean }
+  tangu?: { adapter: 'forsion-cloud-v1'; apiBase: string; execution: 'fleet' }
+}
 
 export interface PluginManifest {
   id: string
@@ -13,6 +19,7 @@ export interface PluginManifest {
   minAppVersion?: string
   main?: string
   requires?: string[]
+  frontend?: { features: NativeFeatureId[]; services?: CloudServices }
   backend?: {
     apiVersion: number
     main: string
@@ -50,6 +57,22 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
   if (manifest.minAppVersion && appVersion && !versionAtLeast(appVersion, manifest.minAppVersion)) throw new Error(`Plugin ${manifest.id} requires Unit ${manifest.minAppVersion}`)
   if (manifest.requires && (!Array.isArray(manifest.requires) || !manifest.requires.every(validId))) throw new Error('Invalid plugin dependencies')
   const result: InstalledPackage = { root, manifest, spaces: [], spaceIds: new Set() }
+  if (manifest.frontend) {
+    const { features, services = {} } = manifest.frontend
+    if (!Array.isArray(features) || !features.length || !features.every(isNativeFeatureId)
+      || new Set(features).size !== features.length) throw new Error('Invalid native frontend features')
+    for (const [id, service] of Object.entries(services)) {
+      if (!['amadeus', 'tangu'].includes(id) || !features.includes(id as NativeFeatureId)
+        || !service || service.adapter !== 'forsion-cloud-v1'
+        || typeof service.apiBase !== 'string' || !/^\/(?:[A-Za-z0-9_-]+\/?)+$/.test(service.apiBase)
+        || (id === 'tangu' && service.execution !== 'fleet')
+        || (id === 'amadeus' && service.collaboration !== undefined && typeof service.collaboration !== 'boolean')) {
+        throw new Error('Invalid frontend cloud service')
+      }
+    }
+    for (const id of nativeFeatureSpaceIds(features)) result.spaceIds.add(id)
+  }
+
   if (manifest.main) {
     const code = await readFile(await packagePath(root, manifest.main), 'utf8')
     // Only UI fields enter the public projection. Backend entries/config are private.
@@ -68,7 +91,7 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
       throw new Error('Plugin dependencies were built for a different OS, architecture, Node ABI, or libc')
     }
   }
-  if (!result.ui && !result.backendEntry) throw new Error('Plugin has no UI or backend entry')
+  if (!result.ui && !result.backendEntry && !manifest.frontend) throw new Error('Plugin has no UI or backend entry')
   const entries = await readdir(resolve(root, 'spaces'), { withFileTypes: true }).catch((error) => {
     if (error.code === 'ENOENT') return []
     throw error

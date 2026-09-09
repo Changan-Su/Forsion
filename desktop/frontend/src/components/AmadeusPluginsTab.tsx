@@ -1,3 +1,4 @@
+import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
 /**
  * 设置 → Forsion 插件:列表(卡片可点击)+ 详情页(manifest 信息/启停/依赖应用一键安装/插件命令/README)。
  * 依赖应用安全模型:manifest 只声明 requiresApp id,安装命令文本在宿主 KNOWN_APPS 白名单表,
@@ -10,7 +11,8 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending } from '../stores/pluginOnboardingStore'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
@@ -21,6 +23,15 @@ import { useApp } from '../stores/appStore'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import { PluginLogo } from './PluginLogo'
+
+registerMessages({
+  'settings.amadeusPlugins.unitIntro': { zh: '查看已安装的功能和编辑器扩展。', en: 'View installed features and editor extensions.' },
+  'settings.amadeusPlugins.unitBuiltinTitle': { zh: '编辑器扩展', en: 'Editor extensions' },
+  'settings.amadeusPlugins.unitBuiltinHint': { zh: '此处开关仅控制编辑器扩展。Unit 已安装功能由部署配置管理。', en: 'These toggles control editor extensions. Installed Unit features are managed through deployment configuration.' },
+  'settings.amadeusPlugins.unitExternalTitle': { zh: '额外插件', en: 'Additional plugins' },
+  'settings.amadeusPlugins.unitHint': { zh: '由当前 Unit 发布的额外插件，点击可查看详情。', en: 'Additional plugins published by this Unit. Click a plugin for details.' },
+  'settings.amadeusPlugins.unitEmpty': { zh: '此 Unit 暂未发布额外插件。', en: 'No additional plugins published.' },
+})
 
 /** 同一插件的级联串行链:快速连点按序执行,防两批 PUT 乱序落成「父关子开」(codex P1-4)。 */
 const cascadeChain = new Map<string, Promise<void>>()
@@ -426,6 +437,7 @@ export const AmadeusPluginsTab: React.FC<{
 
   // 内置 vs 外置分两区:Callout 标注/字数统计 是 builtin,过去和外置插件混在同一串里,
   // 而浏览器/终端(宿主原生)又单挂在最上面 —— 同样是「内置」却分三处,用户实报看不出章法。
+  const managedFeatures = PRODUCT.nativeFeatures !== undefined
   const builtins = plugins.filter((p) => p.builtin)
   const externals = plugins.filter((p) => !p.builtin)
 
@@ -469,21 +481,22 @@ export const AmadeusPluginsTab: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div className="settings-sec">{t('settings.amadeusPlugins.builtinTitle')}</div>
-      <div className="hint">{t('settings.amadeusPlugins.builtinHint')}</div>
+      <NativeFeaturesSection />
+      <div className="settings-sec">{t(managedFeatures ? 'settings.amadeusPlugins.unitBuiltinTitle' : 'settings.amadeusPlugins.builtinTitle')}</div>
+      <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitBuiltinHint' : 'settings.amadeusPlugins.builtinHint')}</div>
       {/* 宿主原生能力(浏览器/终端)与编辑器内置插件排同一列 —— 来源不同,对用户是一回事。 */}
       <BuiltinPluginsSection />
       {builtins.map(renderCard)}
 
-      <div className="settings-sec settings-sec--gap">{t('settings.amadeusPlugins.externalTitle')}</div>
-      <div className="hint">{t('settings.amadeusPlugins.hint')}</div>
+      <div className="settings-sec settings-sec--gap">{t(managedFeatures ? 'settings.amadeusPlugins.unitExternalTitle' : 'settings.amadeusPlugins.externalTitle')}</div>
+      <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitHint' : 'settings.amadeusPlugins.hint')}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为,unitBridge 只有 notSupported 桩 —— 藏;重新装载(重拉 unit/plugins + unit/spaces)保留。 */}
         {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
         <button className="btn ghost sm" onClick={() => void reload().then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
         {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
       </div>
-      {externals.length === 0 && <div className="hint">{t('settings.amadeusPlugins.empty')}</div>}
+      {externals.length === 0 && <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitEmpty' : 'settings.amadeusPlugins.empty')}</div>}
       {externals.map(renderCard)}
     </div>
   )

@@ -8,15 +8,39 @@ import { getApiBase, getToken, installWebShim, redirectToLogin, requireLoginForP
 import { createCloudAmadeusBridge, setCloudNotify } from './amadeus/cloudBridge'
 import { installCloudCollab } from './amadeus/cloudCollab'
 import { showUnitBootError } from './unitBootError'
+import { unitProjectionRoute } from './unitProjectionRoute'
+import type { UnitCloudCapabilities } from './unitCloudTransport'
+
+const wireToast = (): Promise<void> => import('@/stores/appStore').then(({ useApp }) => {
+  setCloudNotify((text, isError) => useApp.getState().toast(text, isError))
+})
 
 async function bootstrap(): Promise<void> {
   const path = location.pathname
 
   if ((window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) {
-    // 设备页(方案 §11.4):unitWeb 出 index 时注入标记。**必须先于 webShim** —— webShim 的
-    // 无 token 路径会 location.replace 跳 Forsion 登录页,设备页(尤其 T1 无账号)绝不能进那条路。
-    // 不挂云端 Amadeus 桥:本页的数据面是对方设备,云库不属于它;本地 vault 面由 unitShim 内
-    // 挂 unitBridge(对方本地库经 /vault/*,v2.1 已落地)。
+    const meta = (window as unknown as { __FORSION_UNIT_PAGE__: {
+      instanceId: string; capabilities?: UnitCloudCapabilities; account?: { apiBase: string; loginPath: string }
+    } }).__FORSION_UNIT_PAGE__
+    const projectionBase = new URL('.', document.baseURI)
+    const route = unitProjectionRoute(new URL(location.href), projectionBase)
+    if (route && meta.capabilities?.amadeus) {
+      const apiBase = new URL(meta.capabilities.amadeus.apiBase, location.origin).href.replace(/\/+$/, '')
+      if (route.kind === 'share') {
+        const { mountSharePage } = await import('./sharePage')
+        mountSharePage(route.token, { apiBase })
+      } else {
+        if (!meta.account) throw new Error('Invitations require an account provider')
+        const { installUnitAccount } = await import('./unitAccount')
+        const visitor = await installUnitAccount({ instanceId: meta.instanceId, account: meta.account }, projectionBase)
+        if (!visitor.account.getIdentity()) { await visitor.login(); return }
+        const { mountInvitePage } = await import('./invitePage')
+        mountInvitePage(route.token, { apiBase, getToken: visitor.account.getToken,
+          request: visitor.capability.request, appBase: projectionBase.href })
+      }
+      return
+    }
+    // Unit 自己装配访客身份与插件能力,必须先于普通 Web 的全局账户路径。
     void import('./unitShim')
       .then(async (m) => {
         if (!(await m.installUnitShim())) return
@@ -27,6 +51,7 @@ async function bootstrap(): Promise<void> {
           uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
         } catch { /* private mode → 桌面布局 */ }
         await (uiMobile ? import('@mobile/mobileEntry') : import('@/main'))
+        if (meta.capabilities?.amadeus) await wireToast()
       })
       .catch((e) => { console.error('[unit-page] bootstrap failed:', e); showUnitBootError() })
   } else if (path.startsWith('/share/')) {
@@ -55,11 +80,6 @@ async function bootstrap(): Promise<void> {
     // window.tangu / window.amadeus 就位后再加载启动模块。手机单列(lcl.uiMode=mobile,index.html
     // 内联脚本在模块求值前已写好键)装载 Mobile 壳(@mobile/mobileEntry,与移动 App 同源码 —— 显示
     // 与 Mobile 全量对齐);桌面视口照旧走 desktop 启动(@ → ../desktop/frontend/src)。
-    const wireToast = (): Promise<void> =>
-      import('@/stores/appStore').then(({ useApp }) => {
-        // 云端桥的提示(保存冲突/仅桌面可用…)接到应用 toast。
-        setCloudNotify((text, isError) => useApp.getState().toast(text, isError))
-      })
     let uiMobile = false
     try {
       uiMobile = (new URLSearchParams(location.search).get('ui') || localStorage.getItem('lcl.uiMode')) === 'mobile'
@@ -71,4 +91,7 @@ async function bootstrap(): Promise<void> {
   // 未登录:installWebShim 已 location.replace 跳登录,不挂载。
 
 }
-void bootstrap().catch((error) => console.error('[tangu-web] Account bootstrap failed:', error))
+void bootstrap().catch((error) => {
+  console.error('[tangu-web] Account bootstrap failed:', error)
+  if ((window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) showUnitBootError()
+})

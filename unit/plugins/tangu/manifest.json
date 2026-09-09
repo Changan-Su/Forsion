@@ -1,0 +1,25 @@
+{
+  "id": "tangu",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "minAppVersion": "2.9.9",
+  "name": "Tangu",
+  "nameEn": "Tangu",
+  "description": "AI 对话与后台任务",
+  "descriptionEn": "Tangu for Forsion Unit",
+  "requires": [
+    "server-admin"
+  ],
+  "frontend": {
+    "features": [
+      "tangu"
+    ],
+    "services": {
+      "tangu": {
+        "adapter": "forsion-cloud-v1",
+        "apiBase": "/api",
+        "execution": "fleet"
+      }
+    }
+  }
+}

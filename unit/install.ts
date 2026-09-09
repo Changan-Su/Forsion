@@ -83,7 +83,7 @@ export async function installPackage(configPath: string, source: string) {
       } catch (error) { if (!unitIsOffline(error)) throw error }
       entries.push({ path: stage, enabled: true })
     }
-    if (!config.defaultSpace && ready.spaces.length) config.defaultSpace = [...ready.spaceIds][0]
+    if (!config.defaultSpace && ready.spaceIds.size) config.defaultSpace = [...ready.spaceIds][0]
     await writeConfig(file, config)
     committed = true
     return { id: ready.manifest.id, version: ready.manifest.version, path: stage }

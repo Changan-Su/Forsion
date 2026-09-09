@@ -10,7 +10,8 @@
  * 共享组件的 `window.tangu?.X` 可选链自然 no-op / 隐藏。
  */
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
-import { AccountChangedError, createBrowserAccount, type BrowserAccount } from './account'
+import { createBrowserAccount, type BrowserAccount } from './account'
+import { createAccountFetch } from './accountFetch'
 
 const TOKEN_KEY = 'forsion_token'
 
@@ -186,32 +187,22 @@ export async function installWebShim(): Promise<boolean> {
     },
   }
 
-  // Route this API's fetches through the same generation/body guard. Unrelated
-  // origins retain native fetch and never receive this account's credentials.
+  // The same transport guard serves regular Web and Unit visitors, using the
+  // account that each host already selected.
   const api = new URL(backendUrl)
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
-    const apiPath = api.pathname.replace(/\/+$/, '')
-    const insideApi = url.origin === api.origin && (url.pathname === apiPath || url.pathname.startsWith(apiPath + '/'))
-    if (!insideApi) return origFetch(input, init)
-    const requestToken = account.getToken()
-    const requestGeneration = account.generation
-    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
-    const supplied = headers.get('Authorization')
-    if (supplied && supplied !== `Bearer ${requestToken}`) throw new AccountChangedError()
-    let options = init
-    if (input instanceof Request) {
-      const merged = new Request(input, init)
-      options = { method: merged.method, headers: merged.headers, signal: merged.signal, body: merged.body,
-        ...(merged.body ? { duplex: 'half' } : {}) } as RequestInit
-    }
-    const res = await account.request(url.href, options)
-    if (requestToken === account.getToken() && requestGeneration === account.generation && res.status === 401 &&
-      (url.pathname.startsWith(apiPath + '/agent/') || url.pathname.startsWith(apiPath + '/amadeus/'))) {
-      redirectToLogin()
-    }
-    return res
-  }
+  const apiPath = api.pathname.replace(/\/+$/, '')
+  window.fetch = createAccountFetch({
+    apiBase: backendUrl, getToken: account.getToken, fallback: origFetch,
+    request: async (path, init) => {
+      const token = account.getToken()
+      const generation = account.generation
+      const response = await account.request(path, init)
+      const url = new URL(path)
+      if (token === account.getToken() && generation === account.generation && response.status === 401 &&
+        (url.pathname.startsWith(apiPath + '/agent/') || url.pathname.startsWith(apiPath + '/amadeus/'))) redirectToLogin()
+      return response
+    },
+  })
 
   // A different tab can replace the shared token without calling this window's logout hook.
   window.addEventListener('storage', (event) => {

@@ -84,7 +84,7 @@ export interface UnitWebDeps {
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
-  projection?: { mode: 'public'; basePath: string; product: ProductProfile }
+  projection?: { mode: 'public'; basePath: string; product: ProductProfile; capabilities?: () => object }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
    *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
   p2pAnswer?: (offerSdp: string) => Promise<string>
@@ -256,7 +256,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
         const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
-        const meta = { ...deps.meta, ...(deps.projection ? { projection: 'public', browserStorage: true, account: deps.account?.metadata() } : {}) }
+        const meta = { ...deps.meta, ...(deps.projection ? { projection: 'public', browserStorage: true, account: deps.account?.metadata(), capabilities: deps.projection?.capabilities?.() } : {}) }
         const baseTag = deps.projection ? `<base href="${deps.projection.basePath}">` : ''
         const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
@@ -311,7 +311,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (path === '/unit/spaces') { json(res, 200, { spaces: await deps.readSpaces() }); return }
       if (path === '/unit/config') { json(res, 200, { config: {} }); return }
       if (path === '/unit/providers') { json(res, 200, { providers: [] }); return }
-      if (path === '/unit/meta') { json(res, 200, { ...deps.meta, pair: false, projection: 'public', account: deps.account?.metadata() }); return }
+      if (path === '/unit/meta') { json(res, 200, { ...deps.meta, pair: false, projection: 'public', account: deps.account?.metadata(), capabilities: deps.projection?.capabilities?.() }); return }
       if (/^\/(?:unit|vault|engine)(?:\/|$)/.test(path)) { json(res, 403, { detail: 'Host capability is not published' }); return }
     }
 

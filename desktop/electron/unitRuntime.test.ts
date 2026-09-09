@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { build } from 'esbuild'
 import { startBasicUnit, type PluginInstallation } from '../../unit/host'
+import { readPackage } from '../../unit/packages'
 
 type Unit = Awaited<ReturnType<typeof startBasicUnit>>
 let root: string
@@ -100,6 +101,94 @@ const get = (handle: Unit, path: string) => fetch(base(handle) + path)
 const metadata = (handle: Unit) => get(handle, '/admin/unit/meta').then((r) => r.json())
 
 describe('composed Unit package lifecycle', () => {
+  it('composes native packages, suppresses unpublished Admin UI and preserves dependents through backend updates', async () => {
+    const server = await fixture('server-admin', { account: true })
+    const amadeus = resolve('../unit/plugins/amadeus'), calendar = resolve('../unit/plugins/calendar')
+    const app = await unit([{ path: server, publish: false }, amadeus, calendar], 'calendar')
+    try {
+      const html = await get(app, '/admin/').then((r) => r.text())
+      expect(html).toContain('"nativeFeatures":["amadeus","calendar"]')
+      expect(html).toContain('"defaultSpace":"calendar"')
+      expect((await metadata(app)).capabilities).toEqual({ amadeus: { adapter: 'forsion-cloud-v1', apiBase: '/api', collaboration: true } })
+      expect(await get(app, '/admin/unit/plugins').then((r) => r.json())).toMatchObject({ plugins: [] })
+      expect(await get(app, '/admin/unit/spaces').then((r) => r.json())).toMatchObject({ spaces: [] })
+      await expect(app.disable('amadeus')).rejects.toThrow('dependent')
+      await app.disable('calendar')
+      expect(await get(app, '/admin/').then((r) => r.text())).toContain('"nativeFeatures":["amadeus"]')
+      await app.enable('calendar')
+      await app.restart('server-admin')
+      expect(app.status().every((p) => p.state === 'active')).toBe(true)
+      const bad = await fixture('server-admin', { account: true, failStart: true, version: '1.1.0' })
+      await expect(app.update('server-admin', bad)).rejects.toThrow()
+      expect(app.status().every((p) => p.state === 'active')).toBe(true)
+      expect((await metadata(app)).capabilities.amadeus.apiBase).toBe('/api')
+      const good = await fixture('server-admin', { account: true, version: '1.2.0' })
+      await app.update('server-admin', good)
+      expect(app.status().find((p) => p.id === 'server-admin')?.version).toBe('1.2.0')
+      expect(app.status().every((p) => p.state === 'active')).toBe(true)
+    } finally { await close(app) }
+  })
+
+  it('restores the intended native dependents after a failed backend restart is repaired', async () => {
+    const server = await fixture('server-admin', { account: true })
+    const backend = join(server, 'backend.mjs')
+    const workingSource = await readFile(backend, 'utf8')
+    const app = await unit([
+      { path: server, publish: false },
+      resolve('../unit/plugins/amadeus'),
+      resolve('../unit/plugins/calendar'),
+      { path: resolve('../unit/plugins/public'), enabled: false },
+    ], 'calendar')
+    try {
+      // Changing only this temporary fixture simulates a transient startup failure;
+      // the second restart must retain the operator's original enable choices.
+      await writeFile(backend, workingSource.replace('if (false) throw', 'if (true) throw'))
+      await expect(app.restart('server-admin')).rejects.toThrow()
+      expect(app.status().find((p) => p.id === 'server-admin')?.state).toBe('failed')
+      expect(app.status().filter((p) => p.id !== 'server-admin').every((p) => p.state === 'disabled')).toBe(true)
+      expect(await get(app, '/admin/').then((r) => r.text())).toContain('"nativeFeatures":[]')
+      expect((await metadata(app)).capabilities).toEqual({})
+      expect((await get(app, '/api/health')).status).toBe(404)
+
+      await writeFile(backend, workingSource)
+      await app.restart('server-admin')
+      expect(app.status().filter((p) => p.id !== 'public').every((p) => p.state === 'active')).toBe(true)
+      expect(app.status().find((p) => p.id === 'public')?.state).toBe('disabled')
+      const html = await get(app, '/admin/').then((r) => r.text())
+      expect(html).toContain('"nativeFeatures":["amadeus","calendar"]')
+      expect(html).toContain('"defaultSpace":"calendar"')
+      expect((await metadata(app)).capabilities.amadeus.apiBase).toBe('/api')
+      expect((await get(app, '/api/health')).status).toBe(200)
+    } finally { await close(app) }
+  })
+
+  it('omits frontend dependents when their required UI is not published', async () => {
+    const server = await fixture('server-admin', { account: true })
+    const app = await unit([{ path: server, publish: false }, { path: resolve('../unit/plugins/amadeus'), publish: false }, resolve('../unit/plugins/calendar')], 'calendar')
+    try {
+      const html = await get(app, '/admin/').then((r) => r.text())
+      expect(html).toContain('"nativeFeatures":[]')
+      expect(html).toContain('"defaultSpace":"home"')
+      expect((await metadata(app)).capabilities).toEqual({})
+      expect((await get(app, '/api/health')).status).toBe(200)
+    } finally { await close(app) }
+  })
+
+  it('rejects unknown native features, missing feature dependencies and duplicate feature owners', async () => {
+    const pack = join(root, `native-${++sequence}`)
+    await mkdir(pack)
+    const manifest = { id: 'feature-test', version: '1.0.0', apiVersion: 1, frontend: { features: ['unknown'] } }
+    await writeFile(join(pack, 'manifest.json'), JSON.stringify(manifest))
+    await expect(readPackage(pack)).rejects.toThrow('native frontend')
+    manifest.frontend.features = ['calendar']
+    await writeFile(join(pack, 'manifest.json'), JSON.stringify(manifest))
+    await expect(unit([pack])).rejects.toThrow('Calendar requires')
+    manifest.frontend.features = ['amadeus']
+    await writeFile(join(pack, 'manifest.json'), JSON.stringify(manifest))
+    const server = await fixture('server-admin')
+    await expect(unit([server, pack, resolve('../unit/plugins/amadeus')])).rejects.toThrow('Duplicate Space')
+  })
+
   it('keeps two visitor accounts and plugin data separate across concurrent writes and plugin restart', async () => {
     const pack = await fixture('accounts', { account: true })
     const app = await unit([pack])

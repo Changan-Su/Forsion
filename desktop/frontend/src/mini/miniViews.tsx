@@ -1,3 +1,4 @@
+import { miniFeatureAvailable } from '../features/runtime'
 /** Native adapters share domain data/editors; each owns its compact interactions. */
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Bot, ListTodo, NotebookText, Plus } from 'lucide-react'
@@ -82,8 +83,8 @@ function MiniAmadeus({ leaf, params }: ViewProps) {
 }
 
 export function registerMiniViews(): void {
-  registerView({ type: 'mini-tangu', kind: 'aux', displayName: () => translate('mini.chat'), icon: Bot, factory: (p) => <MiniTangu {...p} /> })
-  registerView({ type: 'mini-amadeus', kind: 'aux', displayName: () => translate('mini.notes'), icon: NotebookText, factory: (p) => <MiniAmadeus {...p} /> })
-  registerView({ type: 'mini-todo', kind: 'aux', displayName: 'ToDo List', icon: ListTodo,
+  if (miniFeatureAvailable('tangu')) registerView({ type: 'mini-tangu', kind: 'aux', displayName: () => translate('mini.chat'), icon: Bot, factory: (p) => <MiniTangu {...p} /> })
+  if (miniFeatureAvailable('amadeus')) registerView({ type: 'mini-amadeus', kind: 'aux', displayName: () => translate('mini.notes'), icon: NotebookText, factory: (p) => <MiniAmadeus {...p} /> })
+  if (miniFeatureAvailable('calendar')) registerView({ type: 'mini-todo', kind: 'aux', displayName: 'ToDo List', icon: ListTodo,
     factory: ({ params }) => <div className="mini-native mini-todo"><Suspense fallback={null}><Todos params={{ ...params, miniSurface: true }} /></Suspense></div> })
 }

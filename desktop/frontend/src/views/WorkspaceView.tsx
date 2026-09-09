@@ -1,3 +1,4 @@
+import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
 /**
  * 统一「工作区」视图 + 统一「大纲」视图 —— 会话列表 / 工作区文件 / 笔记库(以及 目录 / Amadeus 大纲)
  * 底层合并为两套共享视图,按 (所在侧栏左右 × focus 的主视图类型) 自动切换模式,也可手动切换。
@@ -121,7 +122,8 @@ export function WorkspaceView({ leaf }: ViewProps) {
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const modePickerRef = useRef<HTMLDivElement>(null)
   const modeTriggerRef = useRef<HTMLButtonElement>(null)
-  const hasNotes = !!window.amadeus
+  const hasNotes = amadeusAvailable()
+  const hasSessions = sessionsAvailable()
   const mainType = useActiveMainType()
   const loc = leaf.loc
   // 插件列表源(P2):活着的源集合 —— override/auto 落到已死的源(插件被禁)时回退,
@@ -131,7 +133,7 @@ export function WorkspaceView({ leaf }: ViewProps) {
   // 手动覆盖存 leaf params(随布局持久化);'auto'(默认)跟随主视图。
   const raw = leaf.params.mode
   const override: WorkspaceModeEx | 'auto' =
-    raw === 'sessions' || raw === 'files' || (raw === 'notes' && hasNotes) ? raw
+    (raw === 'sessions' && hasSessions) || raw === 'files' || (raw === 'notes' && hasNotes) ? raw
     : typeof raw === 'string' && raw.startsWith('plugin:') && sourceAlive(raw) ? (raw as WorkspaceModeEx)
     : 'auto'
   // 主视图无硬规则时落本 Space 的默认档(如 Amadeus → 笔记);缺省 sessions = 与其它 Space 一致。
@@ -141,7 +143,12 @@ export function WorkspaceView({ leaf }: ViewProps) {
   const declared = mainType ? getView(mainType)?.workspaceSource ?? null : null
   const declaredLive = declared && (!declared.startsWith('plugin:') || sourceAlive(declared)) ? declared : null
   const auto = autoWorkspaceMode(loc, mainType, spaceAuto, declaredLive)
-  const { automatic: automaticMode, active: mode } = resolveWorkspaceModes(override, auto, hasNotes)
+  const resolvedModes = resolveWorkspaceModes(override, auto, hasNotes)
+  const availableMode = (mode: WorkspaceModeEx): WorkspaceModeEx => mode === 'sessions' && !hasSessions
+    ? hasNotes ? 'notes' : liveSources.length ? `plugin:${liveSources[0].pluginId}:${liveSources[0].item.id}` : 'files'
+    : mode
+  const automaticMode = availableMode(resolvedModes.automatic)
+  const mode = availableMode(resolvedModes.active)
 
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
@@ -162,7 +169,7 @@ export function WorkspaceView({ leaf }: ViewProps) {
     : null
 
   const modeOptions = [
-    ...MODE_KEYS.filter((m) => m.id !== 'notes' || hasNotes).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
+    ...MODE_KEYS.filter((m) => (m.id !== 'notes' || hasNotes) && (m.id !== 'sessions' || hasSessions)).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
     ...liveSources.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}` as WorkspaceModeEx, text: o.item.title })),
   ]
   const effectiveModeText = pluginSrc?.title ?? t(`workspace.mode.${mode}`)
@@ -315,7 +322,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
   //   两道一起补:①这里 ensureAmadeusReady() 把库唤起来(与 AgentDesk 同一处方);
   //   ②订阅 effect 以 vaultRoot 为键 —— 库落地/切库(Local↔Cloud)都重订阅,插件借机重读。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
-  useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
+  useEffect(() => { if (amadeusAvailable()) ensureAmadeusReady() }, [])
   useEffect(() => src.subscribe(() => force()), [src, vaultRoot])
   const [query, setQuery] = useState('')
   const [group, setGroup] = useState<string | null>(null)
@@ -487,8 +494,8 @@ export function OutlineView(props: Partial<ViewProps> = {}) {
   const { t } = useI18n()
   const mainType = useActiveMainType()
   const src = typeof props.params?.sourcePath === 'string' ? props.params.sourcePath : ''
-  if (src && window.amadeus) return <ScopedPageOutline path={src} scope={`${props.leaf?.id ?? 'outline'}::src`} />
+  if (src && amadeusAvailable()) return <ScopedPageOutline path={src} scope={`${props.leaf?.id ?? 'outline'}::src`} />
   if (mainType === 'chat') return <TocView />
-  if (mainType === 'amadeus-editor' && window.amadeus) return <AmadeusOutlineView />
+  if (mainType === 'amadeus-editor' && amadeusAvailable()) return <AmadeusOutlineView />
   return <div className="t2sw-empty">{t('outline.empty')}</div>
 }

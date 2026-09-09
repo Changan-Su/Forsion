@@ -13,6 +13,7 @@
  */
 
 export interface CloudEventsCfg {
+  signal?: AbortSignal
   /** 每次(重)连时求值 —— token 可能已轮换。 */
   url(): string
   clientId: string
@@ -53,7 +54,7 @@ const STRUCTURAL_RE = /structure|create|delete|remove|move|rename|mkdir|rmdir|fo
 /** 启动 SSE 循环;返回停止函数。 */
 export function startCloudEvents(cfg: CloudEventsCfg): () => void {
   let es: EventSource | null = null
-  let stopped = false
+  let stopped = cfg.signal?.aborted ?? false
   let backoff = 1000
   let retryTimer: ReturnType<typeof setTimeout> | null = null
   let structTimer: ReturnType<typeof setTimeout> | null = null
@@ -65,18 +66,21 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     if (structTimer) return
     structTimer = setTimeout(() => {
       structTimer = null
+      if (stopped) return
       cfg.onStructureChange()
     }, 300)
   }
 
   /** 断线补课 / reset:结构刷一次 + 当前笔记走 external-change(既有 LWW reconcile)。 */
   const recoverGap = (): void => {
+    if (stopped) return
     fireStructure()
     const lp = cfg.lastLoadedPage()
     if (lp) cfg.onPageChange(lp)
   }
 
   const handleChange = (raw: string): void => {
+    if (stopped) return
     let c: ChangeRecord
     try { c = JSON.parse(raw) as ChangeRecord } catch { return }
     const seq = typeof c.seq === 'number' ? c.seq : null
@@ -115,8 +119,9 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
       return
     }
     es = src
-    src.onopen = () => { backoff = 1000 }
+    src.onopen = () => { if (!stopped) backoff = 1000 }
     src.addEventListener('hello', (e) => {
+      if (stopped) return
       let seq: number | null = null
       try {
         const d = JSON.parse((e as MessageEvent).data as string) as { seq?: unknown }
@@ -130,9 +135,11 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     src.addEventListener('change', (e) => handleChange((e as MessageEvent).data as string))
     src.addEventListener('reset', () => recoverGap())
     src.addEventListener('presence', (e) => {
+      if (stopped) return
       try { cfg.onPresence?.(JSON.parse((e as MessageEvent).data as string)) } catch { /* ignore */ }
     })
     src.addEventListener('presence-roster', (e) => {
+      if (stopped) return
       try { cfg.onPresenceRoster?.(JSON.parse((e as MessageEvent).data as string)) } catch { /* ignore */ }
     })
     src.onerror = () => {
@@ -152,13 +159,15 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     }, delay)
   }
 
-  connect()
-
-  return () => {
+  const stop = () => {
     stopped = true
     es?.close()
     es = null
     if (retryTimer) clearTimeout(retryTimer)
     if (structTimer) clearTimeout(structTimer)
+    cfg.signal?.removeEventListener('abort', stop)
   }
+  cfg.signal?.addEventListener('abort', stop, { once: true })
+  connect()
+  return stop
 }

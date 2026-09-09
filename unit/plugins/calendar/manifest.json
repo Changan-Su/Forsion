@@ -1,0 +1,19 @@
+{
+  "id": "calendar",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "minAppVersion": "2.9.9",
+  "name": "Calendar",
+  "nameEn": "Calendar",
+  "description": "日历与日程",
+  "descriptionEn": "Calendar for Forsion Unit",
+  "requires": [
+    "server-admin",
+    "amadeus"
+  ],
+  "frontend": {
+    "features": [
+      "calendar"
+    ]
+  }
+}
