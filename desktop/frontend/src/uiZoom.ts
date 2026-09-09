@@ -8,8 +8,8 @@ import { addCommand, UI_ZOOM_EVENT } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 
 const KEY = 'forsion_ui_zoom'
-// 2.9.9 默认缩放回归:升级/重装可能保留旧 WebStorage,按发布批次只清一次历史值。
-const DEFAULT_MIGRATION_KEY = 'forsion_ui_zoom_default_2_9_9'
+// 2.10.0 默认缩放回归:升级/重装可能保留旧 WebStorage,按发布批次只清一次历史值。
+const DEFAULT_MIGRATION_KEY = 'forsion_ui_zoom_default_2_10_0'
 const STEP = 0.1
 const MIN = 0.5
 const MAX = 2
