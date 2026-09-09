@@ -14,16 +14,22 @@ interface EntrySyncStore {
   refresh(): Promise<void>
 }
 
+let refreshSequence = 0
+
 export const useEntrySync = create<EntrySyncStore>((set) => ({
   vaults: [],
   activeRoot: null,
   mirrorVaults: [],
   status: {},
   async refresh() {
+    const sequence = ++refreshSequence
     const api = window.amadeusSync
     if (!api?.entrySyncGet) return
     try {
       const st = await api.entrySyncGet()
+      // A move can emit several registry changes while the first IPC is still
+      // pending. Never let that old snapshot restore the previous paths.
+      if (sequence !== refreshSequence) return
       set({ vaults: st.vaults, activeRoot: st.activeRoot, mirrorVaults: st.mirrorVaults ?? [] })
     } catch {
       /* 旧主进程构建无此接口:保持空 */

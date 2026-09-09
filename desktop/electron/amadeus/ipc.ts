@@ -16,7 +16,7 @@ import { VaultIndex } from './fs/vaultIndex'
 import { withDbLock } from './fs/dbLock'
 import { writeVaultText } from './fs/pageWrite'
 import { findMarkLine } from '@amadeus-shared/mdMarks'
-import { cloudAccountNamespace, currentCloudAccountId, readConfig, writeConfig } from './settings'
+import { cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir } from '../forsionHome'
 import { builtinPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -339,37 +339,44 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // ── 按条目云同步:每个开过同步的本地 vault 一个绑定(localRoot=vault 根,serverDir=<云名>)。
   // own 镜像引擎不排除 <云名>/ 前缀 → 条目绑定推上去的内容被它当「另一台设备」拉进镜像,
   // 云端侧 UI 白得;两引擎靠 clientIdSuffix 区分回声。注册表在 AmadeusConfig.entrySync。
-  type EntryEngineRec = { engine: ReturnType<typeof createSyncEngine>; scope: { current: ScopeSet }; cloudName: string }
+  type EntryEngineRec = {
+    engine: ReturnType<typeof createSyncEngine>; scope: { current: ScopeSet }; cloudName: string
+    base: ScopeSet; pendingMoves: Set<ScopeSet>
+  }
+  const setEntryScope = (rec: EntryEngineRec, base = rec.base): void => {
+    rec.base = base
+    const scopes = [base, ...rec.pendingMoves]
+    rec.scope.current = buildScope(scopes.flatMap((s) => s.entries), scopes.flatMap((s) => s.exclude))
+  }
   const entryEngines = new Map<string, EntryEngineRec>()
   const entryMarkersEnsured = new Set<string>()
   const emitEntryChange = (): void => {
     notifyAll(SYNC_IPC.entryChange)
   }
   /** 远端结构事件(move/delete…)应用后跟进注册表,否则远端改名后 scope 失配静默停同步。 */
-  const onEntryRemote = (vaultRoot: string, ev: CloudChange): void => {
-    void (async () => {
-      const rec = entryEngines.get(vaultRoot)
-      if (!rec) return
-      const strip = (p: string | null | undefined): string | null =>
-        p && p.startsWith(`${rec.cloudName}/`) ? p.slice(rec.cloudName.length + 1) : null
-      const rel = strip(ev.path)
-      if (!rel) return
-      const cfg = await readConfig()
-      if (entryEngines.get(vaultRoot) !== rec) return
+  const onEntryRemote = async (vaultRoot: string, ev: CloudChange): Promise<void> => {
+    const rec = entryEngines.get(vaultRoot)
+    if (!rec) return
+    const strip = (p: string | null | undefined): string | null =>
+      p && p.startsWith(`${rec.cloudName}/`) ? p.slice(rec.cloudName.length + 1) : null
+    const rel = strip(ev.path)
+    if (!rel) return
+    let changed = false
+    await updateConfig((cfg) => {
+      if (entryEngines.get(vaultRoot) !== rec) return false
       const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === vaultRoot)
-      if (!v) return
+      if (!v) return false
       const op = ev.op as 'move' | 'rename-folder' | 'move-folder' | 'delete' | 'delete-folder'
       const newRel = strip(ev.newPath)
       const r = applyRemoteOpToEntries(v.entries, op, rel, newRel)
-      // exclude 也要跟着改名,否则被排除的子页面一改名就悄悄回到同步范围。
       const x = newRel ? rewritePathList(v.exclude ?? [], rel, newRel) : { changed: false, next: v.exclude ?? [] }
-      if (!r.changed && !x.changed) return
+      if (!r.changed && !x.changed) return false
+      changed = true
       v.entries = r.next
       if (x.changed) v.exclude = x.next
-      await writeConfig({ entrySync: cfg.entrySync }, cfg.cloudAccountId)
-      rec.scope.current = buildScope(v.entries, v.exclude ?? [])
-      emitEntryChange()
-    })()
+      setEntryScope(rec, buildScope(v.entries, v.exclude ?? []))
+    })
+    if (changed && entryEngines.get(vaultRoot) === rec) emitEntryChange()
   }
   const entryEngineDeps = (vaultRoot: string) => {
     const epoch = syncEpoch
@@ -381,7 +388,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           ...(status as object), pendingDeletions: totalPendingDeletions(), side: 'local', binding: vaultRoot,
         })
       },
-      onRemoteApplied: (ev: CloudChange) => { if (epoch === syncEpoch) onEntryRemote(vaultRoot, ev) },
+      onRemoteApplied: async (ev: CloudChange) => { if (epoch === syncEpoch) await onEntryRemote(vaultRoot, ev) },
     }
   }
   const refreshEntryBindings = async (): Promise<void> => {
@@ -405,7 +412,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     for (const v of list) {
       const existing = entryEngines.get(v.vaultRoot)
       if (existing) {
-        existing.scope.current = buildScope(v.entries, v.exclude ?? [])
+        setEntryScope(existing, buildScope(v.entries, v.exclude ?? []))
         continue
       }
       const scope = { current: buildScope(v.entries, v.exclude ?? []) }
@@ -424,7 +431,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           return scopeMatches(scope.current, sp.slice(cloudName.length + 1))
         },
       })
-      entryEngines.set(v.vaultRoot, { engine, scope, cloudName })
+      entryEngines.set(v.vaultRoot, { engine, scope, cloudName, base: scope.current, pendingMoves: new Set() })
       engine.start()
     }
     if (accountConfig.cloudSync?.enabled === false) return
@@ -444,35 +451,68 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       })()
     }
   }
-  /** 本地 vault 内移动/改名跟随:过渡期新旧路径并集进 scope(精确 move 两端过闸,.md 与 .fd
-   *  是两次独立 hook,宽限期让后到的 .fd move 也走精确通道),再落盘收敛。 */
-  const onLocalEntryMove = async (root: string, fromRel: string, toRel: string, rec: EntryEngineRec): Promise<void> => {
-    const from = fromRel.replace(/\\/g, '/')
-    const to = toRel.replace(/\\/g, '/')
-    const cfg = await readConfig()
-    if (entryEngines.get(root) !== rec) return
-    const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === root)
-    if (!v) {
-      rec.engine.notifyLocalMove(from, to)
-      return
+  /** Keep enrollment with the file; retain only the moving source scope until
+   * its actual cloud operation completes (a timer cannot bound an offline job). */
+  const onLocalEntryMove = async (root: string, fromRel: string, toRel: string, rec: EntryEngineRec, physicalKind?: 'file' | 'folder'): Promise<void> => {
+    const from = fromRel.replace(/\\/g, '/').normalize('NFC')
+    const to = toRel.replace(/\\/g, '/').normalize('NFC')
+    let changed = false
+    let lease: ScopeSet | undefined
+    let previous: ScopeSet | undefined
+    let next: ScopeSet | undefined
+    let movedKind: 'file' | 'folder' = physicalKind ?? 'file'
+    try {
+      await updateConfig(async (cfg) => {
+        if (entryEngines.get(root) !== rec) return false
+        const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === root)
+        if (!v) return false
+        const r = rewriteEntriesForMove(v.entries, from, to)
+        const x = rewritePathList(v.exclude ?? [], from, to)
+        const wasSynced = coversPath(v.entries, v.exclude, from)
+        if (!physicalKind && await fs.stat(path.join(root, ...to.split('/'))).then((st) => st.isDirectory(), () => false)) movedKind = 'folder'
+        const kind = movedKind === 'folder' ? 'folder' : /\.md$/i.test(to) ? 'page' : 'asset'
+        if (wasSynced && !coversPath(r.next, x.next, to)) {
+          r.next.push({ path: to, kind })
+          r.changed = true
+        }
+        changed = r.changed || x.changed
+        const moving = v.entries.filter((e) => rewriteEntriesForMove([e], from, to).changed)
+        if (wasSynced && !moving.some((e) => e.path === from)) moving.push({ path: from, kind })
+        // Unrelated exclusions are never leased; toggles outside this move must
+        // take effect immediately even when this operation remains offline.
+        lease = buildScope(moving, (v.exclude ?? []).filter((p) => rewritePathList([p], from, to).changed))
+        previous = rec.base
+        rec.pendingMoves.add(lease)
+        v.entries = r.next
+        v.exclude = x.next
+        next = buildScope(v.entries, v.exclude)
+        setEntryScope(rec, next)
+        return changed
+      })
+    } catch (error) {
+      if (lease) rec.pendingMoves.delete(lease)
+      setEntryScope(rec, rec.base === next && previous ? previous : rec.base)
+      throw error
     }
-    const r = rewriteEntriesForMove(v.entries, from, to)
-    const x = rewritePathList(v.exclude ?? [], from, to)
-    if (!r.changed && !x.changed) {
-      rec.engine.notifyLocalMove(from, to)
-      return
+    // Never send a cloud move before the enrollment transaction commits: the
+    // filesystem caller can still roll back a failed local configuration write.
+    try {
+    if (lease) await rec.engine.notifyLocalMove(from, to, () => {
+      rec.pendingMoves.delete(lease!)
+      setEntryScope(rec)
+    }, movedKind)
+    } catch (error) {
+      if (lease) rec.pendingMoves.delete(lease)
+      await updateConfig((cfg) => {
+        const v = cfg.entrySync?.find((v) => v.vaultRoot === root)
+        if (!v) return false
+        v.entries = rewriteEntriesForMove(v.entries, to, from).next
+        v.exclude = rewritePathList(v.exclude ?? [], to, from).next
+        setEntryScope(rec, buildScope(v.entries, v.exclude))
+      })
+      throw error
     }
-    // 排除项取新旧并集:过渡期两端都不许过闸(否则改名瞬间被排除的子页面会被推上云)。
-    rec.scope.current = buildScope([...v.entries, ...r.next], [...(v.exclude ?? []), ...x.next])
-    rec.engine.notifyLocalMove(from, to)
-    v.entries = r.next
-    v.exclude = x.next
-    await writeConfig({ entrySync: cfg.entrySync }, cfg.cloudAccountId)
-    emitEntryChange()
-    setTimeout(() => {
-      const cur = entryEngines.get(root)
-      if (cur === rec) cur.scope.current = buildScope(v.entries, v.exclude ?? [])
-    }, 10_000)
+    if (changed && entryEngines.get(root) === rec) emitEntryChange()
   }
   /** 按路径把应用内写事件路由到对应引擎(与我共享/<slug>/** → 该共享绑定;其余 → own)。 */
   const routeNotify = (rel: string): { engine: ReturnType<typeof createSyncEngine>; rel: string } => {
@@ -494,11 +534,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       }
       entryEngines.get(vault.getRoot() ?? '')?.engine.notifyLocal(rel, kind)
     },
-    (from, to) => {
+    (from, to, kind) => {
       if (onCloudSide()) {
         const f = routeNotify(from)
         const t = routeNotify(to)
-        if (f.engine === t.engine) f.engine.notifyLocalMove(f.rel, t.rel)
+        if (f.engine === t.engine) return f.engine.notifyLocalMove(f.rel, t.rel, undefined, kind)
         else {
           f.engine.notifyLocal(f.rel, 'remove')
           t.engine.notifyLocal(t.rel, 'write')
@@ -507,7 +547,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       }
       const root = vault.getRoot() ?? ''
       const rec = entryEngines.get(root)
-      if (rec) void onLocalEntryMove(root, from, to, rec)
+      if (rec) return onLocalEntryMove(root, from, to, rec, kind)
+    },
+    (from, to) => {
+      if (onCloudSide()) {
+        const f = routeNotify(from)
+        const t = routeNotify(to)
+        const releases = [f.engine.holdLocalMove(f.rel, t.rel)]
+        if (f.engine !== t.engine) releases.push(t.engine.holdLocalMove(f.rel, t.rel))
+        return () => { for (const release of releases) release() }
+      }
+      return entryEngines.get(vault.getRoot() ?? '')?.engine.holdLocalMove(from, to)
     },
   )
 
@@ -724,25 +774,37 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           } catch { /* ignore */ }
         })()
       }
-      const norm = (p: unknown): string => String(p ?? '').replace(/\\/g, '/').normalize('NFC')
-      const added = new Set<string>()
-      for (const en of payload.entries ?? []) {
-        const p = norm(en.path)
-        if (!p) continue
-        added.add(p)
-        if (v.entries.some((x) => x.path === p)) continue
-        v.entries.push({ path: p, kind: en.kind === 'folder' || en.kind === 'asset' ? en.kind : 'page' })
-      }
-      // 本次显式开启的路径 + 勾上的子页面退出排除名单;取消勾选的子页面进名单。
-      const excl = (payload.exclude ?? []).map(norm).filter(Boolean)
-      const inc = new Set([...added, ...(payload.include ?? []).map(norm).filter(Boolean)])
-      v.exclude = [...new Set([...(v.exclude ?? []).filter((p) => !inc.has(p)), ...excl])]
-      // 取消勾选的若本身还是显式条目,必须一并摘掉 —— coversPath 里精确条目压过 exclude,
-      // 留着它 = 用户取消了勾选却照传不误。
-      const exclSet = new Set(excl)
-      v.entries = v.entries.filter((e) => !exclSet.has(e.path))
       if (epoch !== syncEpoch || !syncReady) return { error: 'Cloud account changed; retry from the current account' }
-      await writeConfig({ entrySync: list }, cfg.cloudAccountId)
+      await updateConfig((latest) => {
+        if (epoch !== syncEpoch || !syncReady) return false
+        const currentList = latest.entrySync ?? []
+        let current = currentList.find((x) => x.vaultRoot === root)
+        if (!current) {
+          const error = validateCloudName(v!.cloudName, currentList.map((x) => x.cloudName))
+          if (error) throw new Error(error)
+          current = { vaultRoot: root, cloudName: v!.cloudName, entries: [] }
+          currentList.push(current)
+        }
+        const norm = (p: unknown): string => String(p ?? '').replace(/\\/g, '/').normalize('NFC')
+        const added = new Set<string>()
+        for (const en of payload.entries ?? []) {
+          const p = norm(en.path)
+          if (!p) continue
+          added.add(p)
+          if (current.entries.some((x) => x.path === p)) continue
+          current.entries.push({ path: p, kind: en.kind === 'folder' || en.kind === 'asset' ? en.kind : 'page' })
+        }
+        // 本次显式开启的路径 + 勾上的子页面退出排除名单;取消勾选的子页面进名单。
+        const excl = (payload.exclude ?? []).map(norm).filter(Boolean)
+        const inc = new Set([...added, ...(payload.include ?? []).map(norm).filter(Boolean)])
+        current.exclude = [...new Set([...(current.exclude ?? []).filter((p) => !inc.has(p)), ...excl])]
+        // 取消勾选的若本身还是显式条目,必须一并摘掉 —— coversPath 里精确条目压过 exclude,
+        // 留着它 = 用户取消了勾选却照传不误。
+        const exclSet = new Set(excl)
+        current.entries = current.entries.filter((e) => !exclSet.has(e.path))
+        latest.entrySync = currentList
+        v = current
+      }, cfg.cloudAccountId)
       if (epoch !== syncEpoch) return { error: 'Cloud account changed; retry from the current account' }
       await refreshEntryBindings()
       void entryEngines.get(root)?.engine.syncNow()
@@ -752,16 +814,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   )
   ipcMain.handle(SYNC_IPC.entryDisable, async (_e, p: string) => {
     const root = vault.getRoot()
-    const cfg = await readConfig()
-    const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === root)
-    if (!root || !v) return { ok: false }
-    const norm = String(p ?? '').replace(/\\/g, '/').normalize('NFC')
-    const before = v.entries.length
-    v.entries = v.entries.filter((x) => x.path !== norm)
-    // 仍被上级条目覆盖(子页面/文件夹子树)→ 记进 exclude,否则在子页面上点「关闭云同步」毫无反应。
-    if (coversPath(v.entries, v.exclude, norm)) v.exclude = [...new Set([...(v.exclude ?? []), norm])]
-    else if (v.entries.length === before) return { ok: false }
-    await writeConfig({ entrySync: cfg.entrySync }, cfg.cloudAccountId)
+    let changed = false
+    const epoch = syncEpoch
+    await updateConfig((cfg) => {
+      if (epoch !== syncEpoch || !syncReady) return false
+      const v = (cfg.entrySync ?? []).find((x) => x.vaultRoot === root)
+      if (!root || !v) return false
+      const norm = String(p ?? '').replace(/\\/g, '/').normalize('NFC')
+      const before = v.entries.length
+      v.entries = v.entries.filter((x) => x.path !== norm)
+      // An inherited child is explicitly excluded when its toggle is turned off.
+      if (coversPath(v.entries, v.exclude, norm)) v.exclude = [...new Set([...(v.exclude ?? []), norm])]
+      else if (v.entries.length === before) return false
+      changed = true
+    })
+    if (!changed || epoch !== syncEpoch) return { ok: false }
     await refreshEntryBindings() // scope 缩小=dropShadow 干净解绑;云端/镜像副本保留(撤共享同款纪律)
     emitEntryChange()
     return { ok: true }
@@ -930,7 +997,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   handle(IPC.listFiles, () => vault.listFiles())
 
   handle(IPC.loadPage, async (_e, pagePath: string) => {
-    const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso())
+    const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso(), { createIfMissing: false })
     await rememberPage(pagePath)
     return page
   })
@@ -939,8 +1006,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 编译器 loadPage 缺文件会 newPage 落盘,只读语义下不允许悄悄造文件。
   handle(IPC.readPage, async (_e, pagePath: string) => {
     const io = vault.pageIO(pagePath)
-    if (!(await io.exists(pageFileName(pagePath)))) throw new Error(`note not found: ${pagePath}`)
-    return loadPage(io, pagePath, nowIso())
+    return loadPage(io, pagePath, nowIso(), { createIfMissing: false })
   })
 
   handle(IPC.newPage, async (_e, pagePath: string) => {
@@ -1033,7 +1099,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     IPC.reconcilePage,
     async (_e, pagePath: string, _prevManifest: PageManifest, _prevContents: Record<string, string>) => {
       // v3 is single-file: an external edit just reloads (the .md is the single source).
-      const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso())
+      const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso(), { createIfMissing: false })
       await index.update(pagePath)
       return page
     },

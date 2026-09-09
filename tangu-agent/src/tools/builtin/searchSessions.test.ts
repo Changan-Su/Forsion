@@ -68,7 +68,7 @@ describe('dayArg', () => {
     expect(dayArg('2026-08-05 10:00:00')).toBe('2026-08-05');
   });
   it('非法/空 → null(乱串直传 PG 会在 timestamp cast 上炸)', () => {
-    for (const bad of ['昨天', '08-05', '2026/08/05', '', null]) expect(dayArg(bad)).toBeNull();
+    for (const bad of ['昨天', '08-05', '2026/08/05', '2026-99-99', '2026-02-30', '', null]) expect(dayArg(bad)).toBeNull();
   });
 });
 
@@ -119,7 +119,7 @@ else describe('search_sessions execute × 真 sqlite', async () => {
   const db = new sqliteMod.DatabaseSync(':memory:');
   db.exec(`
     CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT, app_id TEXT, title TEXT, summary TEXT,
-      archived INTEGER DEFAULT 0, kind TEXT DEFAULT 'user', updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+      agent_config TEXT, archived INTEGER DEFAULT 0, kind TEXT DEFAULT 'user', updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp INTEGER);`);
   const ins = db.prepare('INSERT INTO chat_sessions (id,user_id,app_id,title,summary,archived,kind,updated_at) VALUES (?,?,?,?,?,?,?,?)');
   ins.run('s-plugin', 'u1', 'tangu', 'Forsion插件开发咨询', '聊了两类插件形态', 0, 'user', '2026-08-05 10:00:00');

@@ -1,8 +1,8 @@
 /**
  * Historian 记忆两阶段流水线(借 Codex:采集 → 整固)集成测试:
  * 真 SQLite(内存)+ TANGU_HOME 临时目录 + fake llm(逐调用脚本)/brain。
- * 覆盖:候选采集(No-op 门/脱敏/不动正典)→ 攒批触发整固(去重合并→setMemory→raw 清场)→
- * NOCHANGE 消费 → 缩水守卫不消费 → 过期(stale)触发。
+ * 覆盖:候选采集(No-op 门/脱敏/不动正典)→ 攒批后的每 Agent 授权和旧 brain 安全降级。
+ * 新的整固/CAS/截断/取消/来源覆盖回归见 memoryDream.test.ts（真实本地仓库）。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
@@ -17,6 +17,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, updateRunStatus } from '../src/services/runStore.js';
 import { onUserRunDone, parseRawLines, redactSecrets, resetHistorianConsolidationState } from '../src/services/localHistorian.js';
+import { configureMemoryDream, getMemoryDream } from '../src/services/memoryDream.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 
 const USER = 'u1';
@@ -133,87 +134,27 @@ describe('Historian 记忆两阶段流水线', () => {
     expect(setMemoryCalls).toEqual([]);
   });
 
-  it('攒够 5 条触发整固:setMemory 收到整固产出,raw 清场,活动流记 memory_updated', async () => {
+  it('攒够候选仍需当前 Agent 单独启用 Dream；旧全文重写路径不再执行', async () => {
     seedRaw([1, 2, 3, 4].map((i) => `- [${today()} s:seed0000] 既有候选${i}`));
-    llmScript = [judgeOut(['第五条候选内容']), '- 合并后的记忆\n- 用户偏好中文回复'];
+    llmScript = [judgeOut(['第五条候选内容']), '- 不应被调用的旧全文覆盖'];
     await onUserRunDone('S', USER);
-
-    expect(llmPayloads.length).toBe(2); // judge + 整固
-    const consInput = String(llmPayloads[1].messages[1].content);
-    expect(consInput).toContain('[Current Memory]');
-    expect(consInput).toContain('旧条目:用户在学线性代数');
-    expect(consInput).toContain('既有候选1');
-    expect(consInput).toContain('第五条候选内容');
-    expect(setMemoryCalls).toEqual(['- 合并后的记忆\n- 用户偏好中文回复']);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(0); // 消费完毕
-
-    const act = await query<any[]>(`SELECT action FROM special_agent_log WHERE agent = 'historian' AND action = 'memory_updated'`);
-    expect(act.length).toBe(1);
-  });
-
-  it('NOCHANGE:候选被裁定无并入价值 → 不写正典,但消费 raw 防反复触发', async () => {
-    seedRaw([1, 2, 3, 4, 5].map((i) => `- [${today()} s:seed0000] 噪音候选${i}`));
-    llmScript = [judgeOut([]), 'NOCHANGE'];
-    await onUserRunDone('S', USER);
-
-    expect(llmPayloads.length).toBe(2);
+    expect(llmPayloads).toHaveLength(1);
     expect(setMemoryCalls).toEqual([]);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(0);
-    const act = await query<any[]>(`SELECT action FROM special_agent_log WHERE agent = 'historian' AND action = 'memory_consolidated'`);
-    expect(act.length).toBe(1);
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(5);
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).config.enabled).toBe(false);
   });
 
-  it('缩水守卫:整固产出骤降 → 不落盘、不消费 raw,且退避期内不再烧整固调用', async () => {
-    memContent = '- 很长的既有记忆。'.repeat(60); // >200 字
+  it('没有事务能力的旧 brain 明确失败，候选保留且不回退到无版本全文覆盖', async () => {
     seedRaw([1, 2, 3, 4, 5].map((i) => `- [${today()} s:seed0000] 候选${i}`));
-    llmScript = [judgeOut([]), '- 短'];
+    configureMemoryDream(DEFAULT_AGENT_SLUG, { enabled: true, modelId: 'm1' });
+    llmScript = [judgeOut([]), '- 不应被调用的旧全文覆盖'];
     await onUserRunDone('S', USER);
-
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(llmPayloads).toHaveLength(1);
     expect(setMemoryCalls).toEqual([]);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(5); // 原样保留
-
-    // 第二个到点轮(roundN=3):judge 照跑,但整固在退避期内被跳过 → 只多 1 次模型调用。
-    // 把首轮活动记录回拨到过去,既有消息即可越过「实质增量地板」(不依赖时间戳格式细节)。
-    await query(`UPDATE special_agent_log SET created_at = '2020-01-01 00:00:00' WHERE agent = 'historian'`);
-    for (const id of ['R2', 'R3']) {
-      await createRun({ id, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${id}-a`, input: { message: 'x', userMessageId: `${id}-u`, attachments: [], agentConfig: {} } });
-      await updateRunStatus(id, 'done');
-    }
-    const before = llmPayloads.length;
-    llmScript = [judgeOut([])];
-    await onUserRunDone('S', USER);
-    expect(llmPayloads.length).toBe(before + 1); // 无第二次整固调用
-    expect(setMemoryCalls).toEqual([]);
-  });
-
-  it('正典瞬时读失败:整固中止(不带空底盖写),raw 保留', async () => {
-    seedRaw([1, 2, 3, 4, 5].map((i) => `- [${today()} s:seed0000] 候选${i}`));
-    memThrow = true;
-    llmScript = [judgeOut([])];
-    await onUserRunDone('S', USER);
-
-    expect(llmPayloads.length).toBe(1); // 只有 judge,整固在读正典处止步
-    expect(setMemoryCalls).toEqual([]);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(5);
-  });
-
-  it('整固产出被 token 上限截断(finishReason=length):弃用,不落盘不消费', async () => {
-    seedRaw([1, 2, 3, 4, 5].map((i) => `- [${today()} s:seed0000] 候选${i}`));
-    llmScript = [judgeOut([]), { content: '- 被截断的半份产出', finishReason: 'length' }];
-    await onUserRunDone('S', USER);
-
-    expect(setMemoryCalls).toEqual([]);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(5);
-  });
-
-  it('写前复核:整固期间正典被并发修改 → 放弃盖写,raw 保留', async () => {
-    seedRaw([1, 2, 3, 4, 5].map((i) => `- [${today()} s:seed0000] 候选${i}`));
-    memQueue = ['- 快照A', '- 快照A + remember 刚追加的条目'];
-    llmScript = [judgeOut([]), '- 基于快照A 的整固产出'];
-    await onUserRunDone('S', USER);
-
-    expect(setMemoryCalls).toEqual([]);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(5);
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).status.state).toBe('failed');
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).status.detail).toContain('versioned memory');
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(5);
   });
 
   it('legacy memory 字符串(多行 bullet):按行拆成多条候选,不丢尾行', async () => {
@@ -224,14 +165,13 @@ describe('Historian 记忆两阶段流水线', () => {
     expect(raw.map((r) => r.text)).toEqual(['喜欢喝茶', '项目统一用 pnpm 管包']);
   });
 
-  it('过期触发:不足 5 条但最老候选超 7 天 → 照样整固', async () => {
-    seedRaw(['- [2026-01-01 s:seed0000] 很久以前的候选']);
-    llmScript = [judgeOut([]), '- 合并了旧候选的记忆'];
+  it('旧候选超过 7 天也不能绕过每 Agent 的 Dream 开关', async () => {
+    seedRaw(['- [2020-01-01 s:seed0000] 过期候选']);
+    llmScript = [judgeOut([])];
     await onUserRunDone('S', USER);
-
-    expect(llmPayloads.length).toBe(2);
-    expect(setMemoryCalls).toEqual(['- 合并了旧候选的记忆']);
-    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).length).toBe(0);
+    expect(llmPayloads).toHaveLength(1);
+    expect(setMemoryCalls).toEqual([]);
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(1);
   });
 });
 

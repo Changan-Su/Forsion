@@ -27,6 +27,7 @@ import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
+import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
 
 /** 从 Dockview panel.params 造可跨窗重建的 ViewRef({type, 用户 params});剥引擎私有 __loc/__type。 */
 function viewRefFromParams(params: Record<string, unknown> | undefined, component?: string): ViewRef | null {
@@ -447,10 +448,20 @@ export const WorkspaceHost: React.FC<{
     }
   }, [])
 
-  // 主面板前进/后退快捷键(⌘/Ctrl+⌥+←/→,捕获阶段先于视图内部键位)。作用于当前活动主 leaf 的栈;
+  // 工作区快捷键在捕获阶段先于视图内部键位:
+  // · Ctrl/⌘+Tab(Shift 反向)只循环当前聚焦 group 的标签,不跨左右栏/底栏。
+  // · ⌘/Ctrl+⌥+←/→作用于当前活动主 leaf 的前进/后退栈。
   // ⌘/Ctrl+⇧+[/] 走命令系统(nav-back/nav-forward,可重绑定),两组指向同一动作。
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      const delta = tabCycleDelta(e)
+      if (delta) {
+        const active = useWorkspace.getState().api?.activePanel
+        if (cycleFocusedGroupTab(active, delta)) {
+          e.preventDefault(); e.stopPropagation()
+        }
+        return
+      }
       if ((e.metaKey || e.ctrlKey) && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
         e.preventDefault(); e.stopPropagation()
         const api = useWorkspace.getState().api

@@ -26,6 +26,11 @@ export const MODEL_RETRY_BASE_MS = 1500; // 线性退避 1.5/3/4.5s:扛 Wi-Fi �
  */
 export const SLOW_FAIL_NO_RETRY_MS = Number(process.env.TANGU_SLOW_FAIL_NO_RETRY_MS) || 60_000;
 
+/** 重试链共用墙钟预算,包含退避;只决定是否再发请求,不假装中止仍在执行的请求。 */
+export function llmRetryBudgetExceeded(chainStartedAt: number, nextWaitMs = 0): boolean {
+  return Date.now() - chainStartedAt + nextWaitMs >= SLOW_FAIL_NO_RETRY_MS;
+}
+
 /**
  * 给一次性的 LLM 前置调用(resolve / build-payload)套同一套有界重试。
  *
@@ -40,27 +45,27 @@ export async function withLlmRetry<T>(
 ): Promise<T> {
   const t0 = Date.now();
   for (let attempt = 0; ; attempt++) {
-    const started = Date.now();
+    if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     try {
       return await fn();
     } catch (err) {
       // 慢失败按**累计**耗时判,不只看本次尝试:网关在完整收下大 body 后于 59s 回 502,逐次判定
       // 每次都「不算慢」,4 次重传一个数 MB 的 build-payload ≈ 249s + 4 倍上行(Codex 评审逮到)。
       // 整条重试链共用与单次慢失败同一个 60s 预算,便宜的秒级抖动照旧能重试满。
-      const spent = Date.now() - t0;
-      const slowFail = Date.now() - started >= SLOW_FAIL_NO_RETRY_MS || spent >= SLOW_FAIL_NO_RETRY_MS;
       // 退避期间用户点了停 → 立刻放弃并抛 AbortError,否则最终抛的是传输错、run 被误记成 failed。
       if (signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-      if (slowFail || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
       const wait = MODEL_RETRY_BASE_MS * (attempt + 1);
+      if (llmRetryBudgetExceeded(t0, wait) || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
       onRetry?.(attempt + 1, wait, err);
       await sleepOrAbort(wait, signal);
+      // timer/事件循环可能晚唤醒:睡前有余量不代表醒后仍可再发一次请求。
+      if (llmRetryBudgetExceeded(t0)) throw err;
     }
   }
 }
 
 /** 可中止的退避等待:signal 一 abort 就抛 AbortError,不再干等完整退避窗口。 */
-function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const abort = (): void => {
       clearTimeout(timer);

@@ -17,7 +17,7 @@ describe('uiSurfaceEnabledFor', () => {
     }
   });
 
-  it('没有 client tag 的 run 一律拒(TUI / 通道 / 自动化 / 嵌套 run)', () => {
+  it('没有 client tag 的 run 一律拒(TUI / 自动化 / 非 Desktop 宿主通道 / 嵌套 run)', () => {
     expect(uiSurfaceEnabledFor({ ...gui, client: undefined })).toBe(false);
     expect(uiSurfaceEnabledFor({ ...gui, client: '' })).toBe(false);
   });

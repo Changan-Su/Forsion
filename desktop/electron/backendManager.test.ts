@@ -7,7 +7,7 @@
  * 而免鉴权的 /engine/health 照常 200(所以看着像「连上了但没权限」)。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -46,5 +46,13 @@ describe('BackendManager.getToken', () => {
     expect(m.getToken()).toBe('live-1')
     writeAuth('live-2')
     expect(m.getToken()).toBe('live-2')
+  })
+})
+
+describe('BackendManager channel client attribution', () => {
+  it('spawns the managed engine with the real Desktop version for background channel runs', () => {
+    const source = readFileSync(new URL('./backendManager.ts', import.meta.url), 'utf8')
+    // 通道 run 不经 renderer startRun(),只有这个 spawn 契约能把真实 App 版本交给引擎。
+    expect(source).toContain('env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`')
   })
 })

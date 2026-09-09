@@ -45,21 +45,21 @@ const mentionedTools = (text: string): string[] => {
 };
 
 const HARD_REJECTED = [
-  'remember', 'log_event', 'read_log', 'amadeus_write_note', 'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
+  'amadeus_write_note', 'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
   'apply_patch', 'use_skill', 'delegate', 'self_brainstorm', 'inbox_send', 'ask_user', 'exit_plan_mode',
 ];
 
 describe('registry 级:chat 正向工具面', () => {
   const base: ToolContext = { userId: 'u1', sessionId: 's1', appId: cloud.appId, profile: cloud, execMode: 'sandbox', unlockTools: () => {} };
 
-  it('云端 sandbox:常驻面恰为 A 档 10 个(注册序不重排),≤ 7,000 B;GUI 端 + sketch = 11 个,≤ 10,400 B', () => {
+  it('云端 sandbox:常驻面恰为 A 档 + 显式记忆共 11 个(注册序不重排),≤ 8,500 B;GUI 端共 12 个,≤ 11,900 B', () => {
     configureTangu({ host: stub, brain: stub, billing: stub, profile: cloud });
     const chat = names({ ...base, preset: 'chat' });
-    expect(chat).toEqual(['get_datetime', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools']);
-    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(7_000);
+    expect(chat).toEqual(['get_datetime', 'remember', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools']);
+    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(8_500);
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
     expect(gui).toEqual([...chat, 'sketch']);
-    expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(10_400);
+    expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(11_900);
     // 对照:work 面不动(28 个),chat 是过滤出来的子集,不是重排
     const work = names(base);
     expect(work.length).toBe(28);
@@ -80,7 +80,7 @@ describe('registry 级:chat 正向工具面', () => {
     // load_tools:硬拒工具永远 "Unknown/not loadable"(只 defer 不硬拒的实现在这一格会变绿 = 假绿)
     const unlocked: string[] = [];
     const unlockCtx: ToolContext = { ...ctx, unlockTools: (ns) => unlocked.push(...ns) };
-    for (const n of ['run_bash', 'amadeus_write_note', 'delegate', 'apply_patch', 'remember', 'use_skill']) {
+    for (const n of ['run_bash', 'amadeus_write_note', 'delegate', 'apply_patch', 'use_skill']) {
       const r = await executeTool({ id: 'c', type: 'function', function: { name: 'load_tools', arguments: JSON.stringify({ names: [n] }) } } as any, unlockCtx);
       expect(String(r.result), n).toContain('Unknown/not loadable');
     }
@@ -223,14 +223,14 @@ describe('提示段级:Conversation Contract 与一致性', () => {
     expect(defaultPromptSections({ execMode: 'sandbox' }).environment[0]).toBe(sandboxOutputSection(true));
   });
 
-  it('§3.8 一致性:引擎直注段提到的每个工具 ∈ 常驻集;记忆指引只准提 deferred 的 search_sessions,绝不提 remember/log_event/read_log', () => {
+  it('§3.8 一致性:引擎直注段提到的每个工具 ∈ 常驻集;记忆操作与按需历史搜索必须可达', () => {
     // 契约段里「不可达工具不适用」那一行刻意点名 remember/log_event/apply_patch/view_image(creview 09-07 E7 + 二轮 #1/#3:
     // 默认人格明文要求调前两个,工具描述提到后两个);它必须住在引擎直注的契约段(profile 的 promptGuidance 覆盖不掉、且在人格之后),
     // 判据:该行必须同时说 not available;其余直注文本提到的每个工具 ∈ 常驻集。
     const contract = chatContractSection({ pyExec: true, workspace: true });
     const overrides = contract.split('\n').filter((l) => l.includes('not available'));
     expect(overrides.length).toBe(1);
-    for (const n of ['`remember`', '`log_event`', '`apply_patch`', '`view_image`']) expect(overrides[0]).toContain(n);
+    for (const n of ['`apply_patch`', '`view_image`']) expect(overrides[0]).toContain(n);
     const direct = [
       contract.split('\n').filter((l) => !l.includes('not available')).join('\n'),
       sandboxOutputSection(true, { applyPatch: false }),
@@ -246,7 +246,8 @@ describe('提示段级:Conversation Contract 与一致性', () => {
     for (const n of mentionedTools(CHAT_MEMORY_GUIDANCE)) {
       expect(CHAT_PRESET_RESIDENT.has(n) || CHAT_PRESET_DEFERRED.has(n), `记忆指引提到了 chat 够不到的 ${n}`).toBe(true);
     }
-    for (const n of ['`remember`', 'log_event', 'read_log']) expect(CHAT_MEMORY_GUIDANCE).not.toContain(n);
+    expect(CHAT_MEMORY_GUIDANCE).toContain('`remember`');
+    expect(CHAT_MEMORY_GUIDANCE).toContain('receipt');
     // 负对照:work 版环境段提到 apply_patch(非常驻)——同一判据在它身上必须抓得到,否则上面的绿是假绿
     expect(mentionedTools(sandboxOutputSection(true)).some((n) => !CHAT_PRESET_RESIDENT.has(n))).toBe(true);
   });
@@ -324,7 +325,7 @@ describe('loop 级:preset 是会话事实(空白会话锁,替换 D9)', () => {
     await saveAgent({ slug: DEFAULT_AGENT_SLUG, name: builtin.name, description: builtin.description, systemPrompt: builtin.systemPrompt, soul: builtin.soul });
     await runToDone('S', 'R1', { preset: 'chat', execMode: 'sandbox', agentSlug: DEFAULT_AGENT_SLUG });
     expect(await storedPreset('S')).toBe('chat');
-    expect(lastTools()).not.toContain('remember');
+    expect(lastTools()).toContain('remember');
     expect(lastTools()).not.toContain('apply_patch');
     expect(lastTools()).toContain('web_search');
     expect(lastSystem()).toContain('## Conversation Contract');
@@ -342,7 +343,7 @@ describe('loop 级:preset 是会话事实(空白会话锁,替换 D9)', () => {
 
     await runToDone('S', 'R2', { execMode: 'sandbox' }); // 老客户端/漏带:没有 preset = 请求 work
     expect(await storedPreset('S')).toBe('chat');
-    expect(lastTools()).not.toContain('remember'); // 仍是 chat 面,没有被切成 work
+    expect(lastTools()).toContain('remember'); // 仍是 chat 面,没有被切成 work
     expect(lastSystem()).toContain('## Conversation Contract');
     const ev = await query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'R2' AND type = 'status'`);
     const warned = ev.map((r) => (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload)).find((p) => p?.warning === 'preset_locked');

@@ -348,7 +348,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
             <div style={{ fontSize: 11.5, color: 'var(--text-faint)', margin: '2px 0 6px' }}>{t('settings.agents.brainSectionHint')}</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn ghost sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                onClick={() => setViewing({ slug: editing.slug!, name: editing.name } as NormalAgentDef)}>
+                onClick={() => setViewing({ slug: editing.slug!, name: editing.name, shareDefaultMemory: agents?.find((agent) => agent.slug === editing.slug)?.shareDefaultMemory } as NormalAgentDef)}>
                 <BookOpen size={13} /> {t('settings.agents.openBrain')}
               </button>
               {window.tangu?.openAgentDir && (
@@ -368,7 +368,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           {msg && <span style={{ fontSize: 12.5, color: 'var(--danger)' }}>{msg}</span>}
         </div>
       </div>
-      {viewing && <AgentMemoryModal cfg={cfg} slug={viewing.slug} name={viewing.name} onClose={() => setViewing(null)} />}
+      {viewing && <AgentMemoryModal cfg={cfg} slug={viewing.slug} name={viewing.name} shareDefaultMemory={viewing.shareDefaultMemory} onClose={() => setViewing(null)} />}
       </>
     )
   }
@@ -435,7 +435,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           </button>
         )}
       </div>
-      {viewing && <AgentMemoryModal cfg={cfg} slug={viewing.slug} name={viewing.name} onClose={() => setViewing(null)} />}
+      {viewing && <AgentMemoryModal cfg={cfg} slug={viewing.slug} name={viewing.name} shareDefaultMemory={viewing.shareDefaultMemory} onClose={() => setViewing(null)} />}
     </div>
   )
 }

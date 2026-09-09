@@ -23,7 +23,7 @@ describe('sketch visibility gating (GUI client tag)', () => {
     expect(toolNames({ ...base, appId: aiStudio.appId, profile: aiStudio, execMode: 'sandbox', client: 'mobile/2.7.9' })).not.toContain('sketch');
   });
 
-  it('is hidden without a client tag (TUI / channels / automation)', () => {
+  it('is hidden without a client tag (TUI / automation / non-Desktop channel host)', () => {
     expect(toolNames({ ...base, appId: tangu.appId, profile: tangu, execMode: 'host' })).not.toContain('sketch');
   });
 

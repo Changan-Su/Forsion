@@ -11,6 +11,8 @@
  * 未登录 / 离线:云端调用失败 → 整体 no-op(catch),本地记忆照常工作。
  */
 import { diff3Merge } from 'node-diff3';
+import { validLogDate } from './agentSyncPaths.js';
+import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { MemoryBrain } from '../seams/cloudBrain.js';
 import type { LocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 
@@ -80,7 +82,8 @@ export function mergeBlocks(a: string[], b: string[]): { merged: string[]; onlyI
 async function syncMemoryBlob(store: LocalMemoryStore, cloud: MemoryBrain, userId: string): Promise<SyncResult['memory']> {
   const cloudMem = await cloud.getMemory(userId);
   const meta = store.readMeta();
-  const localContent = store.readMemory();
+  const localSnapshot = store.readMemorySnapshot?.();
+  const localContent = localSnapshot?.content ?? store.readMemory();
   const cloudContent = cloudMem.content ?? '';
   const localTs = meta.memory.localUpdatedAt;
   const cloudTs = toEpoch(cloudMem.updatedAt);
@@ -101,7 +104,7 @@ async function syncMemoryBlob(store: LocalMemoryStore, cloud: MemoryBrain, userI
   const alignAfterPush = (updatedAt: any, content: string): void => {
     const newTs = toEpoch(updatedAt) || Date.now();
     const m = store.readMeta();
-    m.memory.localUpdatedAt = newTs;
+    if (store.readMemory() === content) m.memory.localUpdatedAt = newTs;
     m.memory.lastCloudUpdatedAt = newTs;
     store.writeMeta(m);
     setBase?.(content);
@@ -113,7 +116,7 @@ async function syncMemoryBlob(store: LocalMemoryStore, cloud: MemoryBrain, userI
     return content === localContent ? 'pushed' : 'merged';
   };
   const pull = (): SyncResult['memory'] => {
-    store.writeMemory(cloudContent);
+    store.writeMemory(cloudContent, localSnapshot?.version);
     const m = store.readMeta();
     m.memory.localUpdatedAt = cloudTs || m.memory.localUpdatedAt;
     m.memory.lastCloudUpdatedAt = cloudTs;
@@ -133,8 +136,8 @@ async function syncMemoryBlob(store: LocalMemoryStore, cloud: MemoryBrain, userI
       if (!cloud.setMemory) return 'skipped'; // 旧云端推不了任何结果:不合并不存档不覆盖,原样等待
       const merged = mergeText3(localContent, base, cloudContent);
       if (merged !== null) {
-        store.writeMemory(merged);
-        return push(merged);
+        store.writeMemory(merged, localSnapshot?.version);
+        return push(store.readMemory()); // repository may have filtered forgotten facts
       }
       // 合不干净:LWW 定胜负,输方先存档;**存档失败绝不覆盖**。
       if (localContent && localTs >= cloudTs) {
@@ -158,49 +161,67 @@ async function syncMemoryBlob(store: LocalMemoryStore, cloud: MemoryBrain, userI
 
 async function syncLogDate(
   store: LocalMemoryStore, cloud: MemoryBrain, userId: string, date: string,
-): Promise<{ date: string; pushed: number; pulled: number }> {
+  progress: { date: string; pushed: number; pulled: number },
+): Promise<void> {
+  if (!validLogDate(date)) throw new Error('invalid log date');
   const cloudLog = await cloud.getLog(userId, date);
   const local = splitLogBlocks(store.readLog(date));
   const remote = splitLogBlocks(cloudLog.content || '');
-  const { merged, onlyInA: localOnly, onlyInB: cloudOnly } = mergeBlocks(local.blocks, remote.blocks);
-
-  // 推:本地独有块 → 经 appendLogEntry(带 date/time)写云端,云端按 `### time\n<body>` 重建,与本地块一致
+  const { onlyInA: localOnly } = mergeBlocks(local.blocks, remote.blocks);
+  const errors: string[] = [];
   for (const block of localOnly) {
     const { time, body } = parseBlock(block);
-    try { await cloud.appendLogEntry(userId, body, { date, time }); } catch { /* 单条失败不阻断 */ }
+    try { await cloud.appendLogEntry(userId, body, { date, time }); progress.pushed++; }
+    catch (e) { errors.push(e instanceof Error ? e.message : String(e)); }
   }
-
-  // 拉/写回本地:若有云端独有块,本地文件改写为合并结果(header 优先用本地,空则用云端)
-  if (cloudOnly.length) {
-    const header = (local.header || remote.header || `# ${date}\n\n`).replace(/\s+$/, '');
-    const content = `${header}\n\n${merged.map((b) => b + '\n').join('\n')}`;
-    store.writeLog(date, content);
-  }
-
-  const m = store.readMeta();
-  m.logs[date] = { localUpdatedAt: store.logLocalUpdatedAt(date) || Date.now(), lastCloudUpdatedAt: toEpoch(cloudLog.updatedAt) };
-  store.writeMeta(m);
-  return { date, pushed: localOnly.length, pulled: cloudOnly.length };
+  // Re-read AFTER uploads: remember/log_event may have appended while the request was pending.
+  withMemoryDirectoryLock(store.baseDir, () => {
+    const snapshot = store.readLogSnapshot?.(date);
+    const latest = splitLogBlocks(snapshot?.content ?? store.readLog(date));
+    const { merged, onlyInB } = mergeBlocks(latest.blocks, remote.blocks);
+    if (onlyInB.length) {
+      const header = (latest.header || remote.header || `# ${date}`).trimEnd();
+      store.writeLog(date, `${header}\n\n${merged.map((b) => b + '\n').join('\n')}`, snapshot?.version);
+      progress.pulled += onlyInB.length;
+    }
+    if (!errors.length) {
+      const m = store.readMeta();
+      m.logs[date] = { localUpdatedAt: store.logLocalUpdatedAt(date) || Date.now(), lastCloudUpdatedAt: toEpoch(cloudLog.updatedAt) };
+      store.writeMeta(m);
+    }
+  });
+  if (errors.length) throw new Error(`log ${date}: ${errors.join('; ')}`);
 }
 
-/**
- * 跑一次完整同步:memory(LWW)+ 指定日期(或本地已有日期 + 今天)的日志(追加合并)。
- * 任一云端调用失败 → 返回 { ok:false, error };本地数据不被破坏。
- */
-export async function runMemorySync(
-  store: LocalMemoryStore,
-  cloud: MemoryBrain,
-  opts?: { userId?: string; dates?: string[] },
-): Promise<SyncResult> {
-  const userId = opts?.userId ?? '';
+export interface MemorySyncOptions { userId?: string; dates?: string[]; signal?: AbortSignal; assertActive?: () => void }
+/** Failed/cancelled calls retain truthful partial counters. No detached local writes continue after return. */
+export async function runMemorySync(store: LocalMemoryStore, cloud: MemoryBrain, opts: MemorySyncOptions = {}): Promise<SyncResult> {
+  const result: SyncResult = { ok: true, memory: 'skipped', logs: [] };
+  const guard = (): void => { opts.signal?.throwIfAborted(); opts.assertActive?.(); };
+  // Every store operation and request checks the captured account/consent, including after await.
+  const guardedStore = new Proxy(store, { get(target, key, receiver) {
+    const value = Reflect.get(target, key, receiver);
+    return typeof value === 'function' ? (...args: unknown[]) => { guard(); return value.apply(target, args); } : value;
+  } });
+  const io: MemoryBrain = {
+    ...cloud,
+    getMemory: async (uid) => { guard(); const r = await cloud.getMemory(uid, { signal: opts.signal }); guard(); return r; },
+    setMemory: cloud.setMemory ? async (uid, content) => { guard(); const r = await cloud.setMemory!(uid, content, { signal: opts.signal }); guard(); return r; } : undefined,
+    getLog: async (uid, date) => { guard(); const r = await cloud.getLog(uid, date, { signal: opts.signal }); guard(); return r; },
+    appendLogEntry: async (uid, text, o) => { guard(); const r = await cloud.appendLogEntry(uid, text, { ...o, signal: opts.signal }); guard(); return r; },
+  };
   try {
-    const memory = await syncMemoryBlob(store, cloud, userId);
-    const today = (() => { const d = new Date(); const p = (n: number): string => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })();
-    const dates = opts?.dates ?? Array.from(new Set([...store.listLogDates(), today]));
-    const logs: SyncResult['logs'] = [];
-    for (const date of dates) logs.push(await syncLogDate(store, cloud, userId, date));
-    return { ok: true, memory, logs };
-  } catch (e: any) {
-    return { ok: false, memory: 'skipped', logs: [], error: String(e?.message || e) };
-  }
+    guard();
+    // Validate dates before the first request, not after other memory has already synced.
+    if (opts.dates?.some((date) => !validLogDate(date))) throw new Error('invalid log date');
+    result.memory = await syncMemoryBlob(guardedStore, io, opts.userId ?? '');
+    const d = new Date(); const pad = (n: number): string => String(n).padStart(2, '0');
+    const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    for (const date of opts.dates ?? [...new Set([...store.listLogDates(), today])]) {
+      const progress = { date, pushed: 0, pulled: 0 };
+      result.logs.push(progress);
+      await syncLogDate(guardedStore, io, opts.userId ?? '', date, progress);
+    }
+  } catch (e) { result.ok = false; result.error = e instanceof Error ? e.message : String(e); }
+  return result;
 }

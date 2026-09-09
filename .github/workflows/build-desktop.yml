@@ -120,6 +120,15 @@ jobs:
         run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform linux
 
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
+      - name: Verify bundled Computer Use sealed apps
+        working-directory: desktop
+        run: node node_modules/@forsion/tangu-computer-use/scripts/verify-macos-bundles.mjs
+
+      - name: Check Computer Use installation without keychain access
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: node node_modules/@forsion/tangu-computer-use/scripts/keychain-free-install.check.mjs
+
       # GITHUB_TOKEN:beforeBuild 的 fetch-python 调 GitHub API 拉内置 Python,未鉴权在 runner 上会 403 限流。
       - name: Package installer
         working-directory: desktop

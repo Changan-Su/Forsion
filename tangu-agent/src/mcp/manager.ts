@@ -1,3 +1,4 @@
+import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 /**
  * MCP 管理器(仅 standalone/TUI 组装;deps().mcp 可选——microserver/worker 不构造,云端零影响):
  *   - 进程启动时连接 ~/.tangu/mcp.json 启用的 server(stdio / Streamable HTTP / SSE)
@@ -94,6 +95,7 @@ export function createMcpManager(configFile?: string): McpManager {
   async function connect(entry: ServerEntry): Promise<void> {
     entry.status = 'connecting';
     try {
+      if (isHostSandboxRestricted()) throw new Error('MCP servers are unavailable while the local sandbox is enabled');
       const client = new Client({ name: 'tangu-agent', version: '1.0.0' });
       const transport = buildTransport(entry.name, entry.cfg);
       const timeout = new Promise<never>((_, rej) =>
@@ -144,6 +146,7 @@ export function createMcpManager(configFile?: string): McpManager {
     },
 
     async callTool(bridged, args, signal) {
+      if (isHostSandboxRestricted()) return { text: 'Error: MCP is unavailable while the local sandbox is enabled', isError: true };
       const entry = servers.find((s) => s.name === bridged.serverName);
       if (!entry) return { text: `Error: MCP server "${bridged.serverName}" 未配置`, isError: true };
       // 懒重连:server 启动后掉线 / 初次没连上时,调用前按冷却(15s)尝试重连一次——

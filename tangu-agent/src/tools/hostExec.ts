@@ -8,7 +8,8 @@
  * 破坏性操作（run_bash / write_file / edit_file）由 agentLoop 在执行前经审批闸门把关
  * （见 services/approvals.ts）；本文件只管「真去做」，不含审批逻辑。
  */
-import { spawn } from 'node:child_process';
+import { spawnHostShell, hostSandboxEnabled } from '../sandbox/hostSandbox.js';
+import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -128,14 +129,16 @@ function runBash(
   cwd: string,
   signal?: AbortSignal,
   timeoutMs = BASH_TIMEOUT_MS,
+  ctx?: ToolContext,
 ): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean; aborted: boolean }> {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ stdout: '', stderr: '', code: -1, timedOut: false, aborted: true }); return; }
     // detached:true → 子进程自成进程组(pgid=child.pid);超时/中止时杀「整组」,连带它 fork 出的孙进程
     // (dev server / watch / http.server 等)。否则只杀 shell、孙进程残留撑着 stdout 管道 → 'close' 永不
     // 触发 → Promise 永不 resolve → 整个 run 挂死(本次修复的根因)。
     let child;
     try {
-      child = spawn(command, { cwd, shell: true, detached: true });
+      child = spawnHostShell(ctx || { cwd }, command);
     } catch (e: any) {
       resolve({ stdout: '', stderr: `[spawn error] ${e?.message || e}`, code: -1, timedOut: false, aborted: false });
       return;
@@ -217,7 +220,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const cwd = ctx.cwd || process.cwd();
       const timeout = Number.isFinite(Number(args.timeout_ms)) && Number(args.timeout_ms) > 0 ? Number(args.timeout_ms) : BASH_TIMEOUT_MS;
       const started = Date.now();
-      const r = await runBash(command, cwd, ctx.signal, timeout);
+      const r = await runBash(command, cwd, ctx.signal, timeout, ctx);
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
       if (r.stderr) out += `stderr:\n${r.stderr}\n`;
@@ -278,8 +281,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const limit = Number.isFinite(Number(args.limit)) && Number(args.limit) > 0 ? Number(args.limit) : undefined;
       let buf: Buffer;
       try {
-        buf = await fs.readFile(abs);
-      } catch {
+        buf = await hostSandboxFs(ctx).readFile(abs);
+      } catch (e: any) {
+        if (hostSandboxEnabled(ctx)) return `Error: ${e?.message || e}`;
         return `Error: file not found: ${args.path} (check the path with list_dir or glob_files)`;
       }
       // 末行引用锚点(2026-08-28,对齐 read_document 的经验):锚点必须是**可原样复制的具体路径**,
@@ -325,8 +329,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (guard.hardDeny) return `Error: ${guard.reason}`;
       const content = String(args.content ?? '');
       try {
-        await fs.mkdir(path.dirname(abs), { recursive: true });
-        await fs.writeFile(abs, content, 'utf-8');
+        await hostSandboxFs(ctx).mkdir(path.dirname(abs), { recursive: true });
+        await hostSandboxFs(ctx).writeFile(abs, content, 'utf-8');
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }
@@ -366,8 +370,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (!oldStr) return 'Error: old_string is required (to create a new file, use write_file)';
       let text: string;
       try {
-        text = await fs.readFile(abs, 'utf-8');
-      } catch {
+        text = await hostSandboxFs(ctx).readFile(abs, 'utf-8');
+      } catch (e: any) {
+        if (hostSandboxEnabled(ctx)) return `Error: ${e?.message || e}`;
         return `Error: file not found: ${args.path} (check the path with list_dir, or use write_file to create it)`;
       }
       const first = text.indexOf(oldStr);
@@ -380,7 +385,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       }
       const next = text.slice(0, first) + newStr + text.slice(first + oldStr.length);
       try {
-        await fs.writeFile(abs, next, 'utf-8');
+        await hostSandboxFs(ctx).writeFile(abs, next, 'utf-8');
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }
@@ -406,8 +411,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const abs = resolvePath(ctx, String(args.path ?? '.'));
       let entries;
       try {
-        entries = await fs.readdir(abs, { withFileTypes: true });
-      } catch {
+        entries = await hostSandboxFs(ctx).readdir(abs, { withFileTypes: true });
+      } catch (e: any) {
+        if (hostSandboxEnabled(ctx)) return `Error: ${e?.message || e}`;
         return `Error: directory not found: ${args.path ?? '.'}`;
       }
       if (!entries.length) return '(empty directory)';
@@ -417,7 +423,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         else {
           let size = 0;
           try {
-            size = (await fs.stat(path.join(abs, e.name))).size;
+            // The helper batches metadata reads in one sandbox launch for the whole directory.
+            size = hostSandboxEnabled(ctx) ? (e as any).sandboxSize : (await fs.stat(path.join(abs, e.name))).size;
           } catch {
             /* ignore */
           }
@@ -467,8 +474,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       if (!edits?.length) return 'Error: edits must be a non-empty array';
       let text: string;
       try {
-        text = await fs.readFile(abs, 'utf-8');
-      } catch {
+        text = await hostSandboxFs(ctx).readFile(abs, 'utf-8');
+      } catch (e: any) {
+        if (hostSandboxEnabled(ctx)) return `Error: ${e?.message || e}`;
         return `Error: file not found: ${args.path} (check the path with list_dir, or use write_file to create it)`;
       }
       // 先在内存里全部应用,任一失败整体放弃(原子性)
@@ -485,7 +493,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         next = next.slice(0, first) + newStr + next.slice(first + oldStr.length);
       }
       try {
-        await fs.writeFile(abs, next, 'utf-8');
+        await hostSandboxFs(ctx).writeFile(abs, next, 'utf-8');
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }
@@ -523,8 +531,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       }
       let buf: Buffer;
       try {
-        buf = await fs.readFile(abs);
-      } catch {
+        buf = await hostSandboxFs(ctx).readFile(abs);
+      } catch (e: any) {
+        if (hostSandboxEnabled(ctx)) return `Error: ${e?.message || e}`;
         return `Error: file not found: ${rawPath}`;
       }
       if (buf.length > VIEW_IMAGE_MAX_BYTES) {
@@ -588,8 +597,9 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const search = String(args.search ?? '').trim();
       let stat: { size: number; mtimeMs: number; ino: number };
       try {
-        stat = await fs.stat(abs);
-      } catch {
+        stat = await hostSandboxFs(ctx).stat(abs);
+      } catch (e: any) {
+        if (hostSandboxEnabled(ctx)) return `Error: ${e?.message || e}`;
         return `Error: file not found: ${rawPath}`;
       }
       if (stat.size > READ_DOC_MAX_BYTES) {
@@ -602,15 +612,15 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const memoKey = `${abs}|${stat.mtimeMs}|${stat.size}|${stat.ino}|${args.ocr === true}`;
       let pages = docMemo?.key === memoKey ? docMemo.pages : null;
       if (!pages) {
-        let LiteParse: any;
         try {
-          ({ LiteParse } = await import('@llamaindex/liteparse'));
-        } catch {
-          return 'Error: document parsing dependency @llamaindex/liteparse is not installed. Run `npm i @llamaindex/liteparse` inside the Tangu-Agent package and restart.';
-        }
-        try {
-          const parser = new LiteParse({ outputFormat: 'markdown', ocrEnabled: args.ocr === true, quiet: true, maxPages: READ_DOC_MAX_PAGES });
-          const result = await parser.parse(abs);
+          const options = { outputFormat: 'markdown', ocrEnabled: args.ocr === true, quiet: true, maxPages: READ_DOC_MAX_PAGES };
+          let result: any;
+          if (hostSandboxEnabled(ctx)) {
+            result = await parseHostDocument(ctx, abs, options);
+          } else {
+            const { LiteParse } = await import('@llamaindex/liteparse');
+            result = await new LiteParse(options as any).parse(abs);
+          }
           const md = String(typeof result === 'string' ? result : result?.text ?? result?.markdown ?? '').trim();
           const parsed = Array.isArray(result?.pages) ? result.pages : [];
           // pages 缺席 → 整篇当一页，页码标记退化但正文照给。

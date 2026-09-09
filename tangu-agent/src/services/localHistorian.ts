@@ -10,11 +10,11 @@
  * 三种工作模式（cfg.mode）：
  *   - independent（默认）：Historian 自己结构化判断并写 title/summary/LOG；memory 走两阶段(借 Codex
  *     记忆流水线):按轮只**采集候选**(带 No-op 门)进 <agent>/.memory-raw.md,攒够一批才跑**整固**
- *     (与正典 MEMORY 统一去重/合并/淘汰后全文改写,含缩水守卫)——见 maybeConsolidate。
+ *     (由单独启用的 Dream 做来源校验、版本提交与可恢复的整理)——见 maybeConsolidate。
  *   - assist（辅助）：标题/摘要仍独立维护；LOG/memory 到点时改为 branch 出隐藏讨论会话（kind='discussion'，
  *     继承最近 30 条），与主 Agent 开一场无主持人的简短群聊（Historian 临时人格先评估，主 Agent 定夺并
  *     自己调 log_event/remember 写入自己的记忆域）。首轮始终 independent。此模式下 memory 为追加式
- *     （remember），整文修订仅 independent 模式做。
+ *     （remember），候选整理由每 Agent 的 Dream 设置控制。
  *   - fork（分身判官）：judge 原文改由「尾部分叉补全」产出——agentLoop 主路径 run done 时传入
  *     workingMessages 快照(HistorianForkSeed),用**会话模型**在全量在存上下文尾部追加一条判官指令做
  *     一次补全(cacheKey=sessionId + 同工具面 + 同思考档 → provider 前缀缓存可命中;借 self_brainstorm
@@ -26,8 +26,7 @@
  * 成本：背景任务、用户未主动发起 → 只记 usage（projectSource='tangu-historian'），默认不扣配额。
  */
 import { v4 as uuidv4 } from 'uuid';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
@@ -36,32 +35,26 @@ import { enterRunContext, currentAgentSlug } from '../seams/runContext.js';
 import { getAgent, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
-import { DEFAULT_AGENT_SLUG, agentsDir } from '../core/tanguHome.js';
+import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
 import { modelContextWindow, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
 import { appendHarnessCandidates } from '../agents/harnessStore.js';
+import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
+import { startMemoryDream } from './memoryDream.js';
+export { parseRawLines } from './memoryCandidates.js';
+const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
 const MAX_TRANSCRIPT_CHARS = 8000;
 const CHARGE_USER = false;
 const MIN_NEW_CHARS = 120; // 自上次维护以来的新对话字符数地板;不足视为琐碎轮,跳过整次判断
 
-// ── raw 层(借 Codex 记忆流水线的两阶段:采集 → 整固)──────────────────────────
-// 独立模式不再按轮整文覆盖 MEMORY:judge 只产出「候选条目」追加进 <agent>/.memory-raw.md,
-// 攒够 RAW_CONSOLIDATE_MIN 条(或最老候选超 RAW_MAX_AGE_DAYS 天)才跑一次整固——把候选与正典
-// MEMORY(含 run 内 remember 写入的条目)统一去重/合并/淘汰后全文改写。整固是 Historian 侧唯一的
-// 正典写入点,双写仲裁归一;整文改写频率从「每 everyRounds 轮」降到「每攒一批」,侵蚀风险同步降。
-const RAW_FILE = '.memory-raw.md';
+// Historian collects source-linked candidates. Per-Agent Dream is separately opt-in,
+// versioned and bounded; no background whole-document rewrite is allowed here.
 const RAW_CONSOLIDATE_MIN = 5;
 const RAW_MAX_AGE_DAYS = 7;
-const RAW_MAX_PER_ROUND = 5; // 单轮最多采集条数(judge 提示词同步声明此上限)
-const HARNESS_RAW_MAX_PER_ROUND = 3; // 工作笔记候选更克制(judge 提示词同步声明)
-const CONSOLIDATE_MAX_TOKENS = 8000; // 须容得下整份 20K 字符记忆(中文 ≈1 字/token 也要够大半;截断另有 finishReason 闸)
-// 并发/退避护栏(Codex 评审 #2/#6):同 agent 整固互斥(进程内锁,localHistorian 本就 host 单进程);
-// 缩水守卫拒绝后按 slug 退避一天,防「合法瘦身永远被拒 + 每轮白烧一次模型调用」的活锁。
-const consolidatingSlugs = new Set<string>();
-const shrinkBackoffUntil = new Map<string, number>();
-const SHRINK_BACKOFF_MS = 86_400_000;
+const RAW_MAX_PER_ROUND = 5;
+const HARNESS_RAW_MAX_PER_ROUND = 3;
 // 会话级 Historian 互斥(Codex 评审 08-03 Critical):onUserRunDone 是 fire-and-forget,下一 run 的
 // done 可能在上一轮维护(judge/fork/整固)还在飞时到来——everyRounds=1 时必然。并发双跑会重复追加
 // LOG/候选、竞态覆盖标题/摘要。锁忙=直接跳过本轮(维护是尽力而为,下个到点轮自然补),绝不能把
@@ -70,8 +63,6 @@ const historianBusySessions = new Set<string>();
 
 /** 测试用:清空整固互斥/退避/会话互斥状态(模块级,跨用例会串)。 */
 export function resetHistorianConsolidationState(): void {
-  consolidatingSlugs.clear();
-  shrinkBackoffUntil.clear();
   historianBusySessions.clear();
 }
 
@@ -149,126 +140,15 @@ function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog
 
 export { redactSecrets }; // 实现已挪 core/redact.ts(harnessStore 共用,免拖依赖树);此处 re-export 保住旧引用面
 
-// ── raw 层文件 IO(host-only,与该 agent 的 MEMORY.md 同文件夹)────────────────
-// 兜底链与 localMemoryBrain 的域解析一致(currentAgentSlug() || DEFAULT):保证 raw 文件
-// 与 getMemory/setMemory 落同一个 agent 文件夹,不分叉。
-function rawPath(slug?: string): string {
-  return join(agentsDir(), slug || currentAgentSlug() || DEFAULT_AGENT_SLUG, RAW_FILE);
-}
-
-const RAW_LINE_RE = /^- \[(\d{4}-\d{2}-\d{2})[^\]]*\] (.+)$/;
-
-export function parseRawLines(content: string): { date: string; text: string; line: string }[] {
-  const out: { date: string; text: string; line: string }[] = [];
-  for (const line of String(content || '').split('\n')) {
-    const m = RAW_LINE_RE.exec(line.trim());
-    if (m) out.push({ date: m[1], text: m[2], line: line.trim() });
-  }
-  return out;
-}
-
-function readRaw(slug?: string): { date: string; text: string; line: string }[] {
-  try { return parseRawLines(readFileSync(rawPath(slug), 'utf8')); } catch { return []; }
-}
-
-function appendRawCandidates(slug: string | undefined, sessionId: string, cands: string[]): number {
-  if (!cands.length) return 0;
-  const p = rawPath(slug);
-  try { mkdirSync(dirname(p), { recursive: true }); } catch { /* ignore */ }
-  const today = new Date().toISOString().slice(0, 10);
-  const lines = cands.map((c) => `- [${today} s:${sessionId.slice(0, 8)}] ${c}`).join('\n') + '\n';
-  appendFileSync(p, lines, 'utf8');
-  return cands.length;
-}
-
-/** 整固成功后移除已消费的行(期间新追加的行原样保留)。 */
-function removeRawLines(slug: string | undefined, consumed: Set<string>): void {
-  const p = rawPath(slug);
-  try {
-    const kept = readFileSync(p, 'utf8').split('\n').filter((l) => l.trim() && !consumed.has(l.trim()));
-    writeFileSync(p, kept.length ? kept.join('\n') + '\n' : '', 'utf8');
-  } catch { /* ignore */ }
-}
-
-const CONSOLIDATION_PROMPT =
-  'You are the Historian consolidating an agent\'s long-term memory document.\n' +
-  'You get [Current Memory] (the canonical document; other writers may have appended entries directly) and [New Candidates] ' +
-  '(raw observations captured from recent conversations; may contain duplicates and noise).\n' +
-  'Rewrite the complete memory document:\n' +
-  '- Integrate candidates that add durable value; keep existing entries that still hold.\n' +
-  '- Deduplicate: each fact appears once, in its best wording (merge candidates against each other AND against current memory).\n' +
-  '- On contradiction, the newer statement wins. Candidates are listed oldest first, each prefixed with its capture date; ' +
-  'current-memory entries are undated and may be newer OR older than a candidate — judge recency from the dates and content, ' +
-  'and when truly ambiguous keep the current-memory version.\n' +
-  '- Drop candidates that are one-off, temporary, or task-status facts rather than stable facts/preferences/goals or hard-won procedural knowledge.\n' +
-  '- Keep it concise and itemized (markdown bullets). Never invent facts. Never store secrets — replace with [REDACTED].\n' +
-  'Output ONLY the full updated memory text — no code fences, no commentary. If no change is warranted, output exactly: NOCHANGE';
-
-/** 到期判定 + 整固执行。绝不抛;失败(模型/读写/截断)一律不消费 raw,下轮自然重试。 */
-async function maybeConsolidate(userId: string, slug: string | undefined, modelId: string, sessionRef: string): Promise<void> {
+/** Candidate collection stays cheap; opted-in Dream is scheduled outside the run. */
+async function maybeConsolidate(userId: string, slug: string | undefined, modelId: string, _sessionRef: string): Promise<void> {
+  historianSignal.getStore()?.throwIfAborted();
   const key = slug || currentAgentSlug() || DEFAULT_AGENT_SLUG;
-  if (consolidatingSlugs.has(key)) return; // 同 agent 整固互斥(Codex #2):并行到点轮直接让行
-  if ((shrinkBackoffUntil.get(key) || 0) > Date.now()) return; // 缩水拒绝后的退避期(Codex #6)
-  consolidatingSlugs.add(key);
-  try {
-    const raw = readRaw(slug);
-    if (!raw.length) return;
-    const oldest = raw[0]?.date || '';
-    const stale = oldest && (Date.now() - new Date(`${oldest}T00:00:00`).getTime()) / 86_400_000 > RAW_MAX_AGE_DAYS;
-    if (raw.length < RAW_CONSOLIDATE_MIN && !stale) return;
-
-    // 正典读取必须成功(Codex #1):瞬时读失败若被吞成空文档,缩水守卫会失效,
-    // 整固产出会把真记忆整个盖掉——宁可跳过本轮。
-    let curMem: string;
-    try {
-      curMem = String((await deps().brain.memory.getMemory(userId))?.content || '').trim();
-    } catch (e: any) {
-      log(`整固前读正典失败,跳过本轮: ${e?.message || e}`);
-      return;
-    }
-    const input =
-      `[Current Memory]\n${curMem || '(empty)'}\n\n[New Candidates]\n${raw.map((r) => `- [${r.date}] ${r.text}`).join('\n')}`;
-    const res = await complete('整固', modelId, CONSOLIDATION_PROMPT, input, userId, CONSOLIDATE_MAX_TOKENS);
-    const out = res.content.trim();
-    if (!out) return; // 模型失败:raw 保留,下轮重试
-    if (res.finishReason === 'length') {
-      // 截断的「全文改写」= 必然缺尾(Codex #3),40% 守卫拦不住中度侵蚀 → 直接弃用。
-      log(`整固产出被 token 上限截断(${out.length} 字),弃用本轮`);
-      return;
-    }
-
-    const consumed = new Set(raw.map((r) => r.line));
-    if (out.toUpperCase() === 'NOCHANGE') {
-      // 候选被裁定无并入价值:消费掉,防止同一批反复触发整固。
-      removeRawLines(slug, consumed);
-      await logActivity(userId, 'memory_consolidated', `${raw.length} 条候选,无需变更`, sessionRef);
-      log(`整固完成:${raw.length} 条候选,无需变更`);
-      return;
-    }
-    // 防异常缩水(沿用原守卫):旧记忆较多而产出骤降 → 疑似丢失,弃用且不消费 raw。
-    // 合法瘦身也可能触发 → 记退避,别每轮白烧模型调用(livelock 上限=每天一次)。
-    if (curMem.length > 200 && out.length < curMem.length * 0.4) {
-      shrinkBackoffUntil.set(key, Date.now() + SHRINK_BACKOFF_MS);
-      log(`整固产出疑似异常缩水(${curMem.length}→${out.length}),跳过并退避一天`);
-      return;
-    }
-    const setMem = deps().brain.memory.setMemory;
-    if (!setMem) { log('当前 brain 不支持 setMemory,跳过整固落盘'); return; }
-    // 写前复核(Codex #2 的 remember 竞态):整固期间正典若被别人改过(remember/另一路),
-    // 快照已过期,盖写会吞掉别人的追加 → 放弃本轮,raw 保留下轮带新快照重来。
-    try {
-      const recheck = String((await deps().brain.memory.getMemory(userId))?.content || '').trim();
-      if (recheck !== curMem) { log('整固期间正典被并发修改,放弃本轮盖写'); return; }
-    } catch { return; }
-    await setMem(userId, redactSecrets(out).slice(0, 20000));
-    removeRawLines(slug, consumed);
-    await logActivity(userId, 'memory_updated', `整固 ${raw.length} 条候选(${curMem.length}→${out.length} 字)`, sessionRef);
-    log(`整固完成:${raw.length} 条候选并入,${curMem.length}→${out.length} 字`);
-  } catch (e: any) {
-    log(`整固异常: ${e?.message || e}`);
-  } finally {
-    consolidatingSlugs.delete(key);
-  }
+  const raw = readRaw(key);
+  if (!raw.length) return;
+  const oldest = Math.min(...raw.map((r) => Date.parse(`${r.date}T00:00:00Z`)).filter(Number.isFinite));
+  if (raw.length < RAW_CONSOLIDATE_MIN && Date.now() - oldest <= RAW_MAX_AGE_DAYS * 86_400_000) return;
+  startMemoryDream(userId, key, { automatic: true, modelId });
 }
 
 /** 从模型输出里提取首个 JSON 对象(容忍代码围栏 / 前后噪声)。失败 → null。 */
@@ -316,11 +196,12 @@ async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   }
 }
 
-async function recentTranscript(sessionId: string, limit = 30): Promise<string> {
+async function recentTranscript(sessionId: string, limit = 30): Promise<{ text: string; anchorMessageId?: string }> {
   const rows = await query<any[]>(
-    `SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?`,
+    `SELECT id, role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?`,
     [sessionId, limit],
   );
+  const anchorMessageId = rows[0]?.id ? String(rows[0].id) : undefined;
   rows.reverse();
   const lines: string[] = [];
   for (const m of rows) {
@@ -331,24 +212,30 @@ async function recentTranscript(sessionId: string, limit = 30): Promise<string> 
   }
   let s = lines.join('\n');
   if (s.length > MAX_TRANSCRIPT_CHARS) s = s.slice(-MAX_TRANSCRIPT_CHARS);
-  return s;
+  return { text: s, anchorMessageId };
 }
 
 /** 单次轻量补全（系统提示 + transcript）。失败返回 content=''(并打日志说明原因)。记 usage（默认不扣配额）。
  *  finishReason 透传给调用方——整固「全文改写」被截断必须可检测(Codex #3)。 */
 async function complete(label: string, modelId: string, system: string, transcript: string, userId: string, maxTokens: number): Promise<{ content: string; finishReason?: string }> {
   try {
+    const signal = historianSignal.getStore();
+    signal?.throwIfAborted();
     const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
+    signal?.throwIfAborted();
     const payload = await deps().brain.llm.buildProviderPayload({
       model, apiModelId,
       messages: [{ role: 'system', content: system }, { role: 'user', content: transcript }] as ChatMessage[],
       projectSource: '', // 不叠项目层提示词
       usageSource: 'tangu', // 记账归进 Tangu 桶(本地特性,恒 tangu;否则云端兜底记 tangu-brain)
-      temperature: 0.3, maxTokens, stream: true,
+      temperature: 0.3, maxTokens, stream: true, signal,
       provider: (model as any)?.provider,
     } as any);
-    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });
+    historianSignal.getStore()?.throwIfAborted();
+    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: historianSignal.getStore() });
+    historianSignal.getStore()?.throwIfAborted();
     await recordJudgeUsage(userId, modelId, model, res);
+    historianSignal.getStore()?.throwIfAborted();
     const out = String(res?.content || '').trim();
     if (!out) log(`${label} 模型返回空内容(model=${modelId})`);
     return { content: out, finishReason: (res as any)?.finishReason };
@@ -415,10 +302,14 @@ async function forkJudge(
       attachments: [],
       stream: true,
       maxTokens: FORK_JUDGE_MAX_TOKENS,
+      signal: historianSignal.getStore(),
       cacheKey: sessionId, // 与主 loop 同键:同前缀必须同键(delegate 的 per-subId 分键方向相反)
     } as any);
-    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });
+    historianSignal.getStore()?.throwIfAborted();
+    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: historianSignal.getStore() });
+    historianSignal.getStore()?.throwIfAborted();
     await recordJudgeUsage(userId, seed.modelId, model, res);
+    historianSignal.getStore()?.throwIfAborted();
     const out = String(res?.content || '').trim();
     if (!out) {
       log(res?.toolCalls?.length ? 'fork 判官只回了工具调用(已丢弃),回落独立判断' : 'fork 判官返回空内容,回落独立判断');
@@ -462,10 +353,17 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
   // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
   // 加锁在首个 await 之前,并发 done 只有一个能进。
   if (historianBusySessions.has(sessionId)) { log(`会话 ${sessionId.slice(0, 8)} 上一轮维护尚在进行,跳过本轮`); return; }
+  if (historianBusySessions.size >= 2) return; // bounded background work; never queue user turns
   historianBusySessions.add(sessionId);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('Historian time budget exceeded')), 90_000);
+  timer.unref?.();
   try {
-    await runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed);
+    await historianSignal.run(controller.signal, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed));
+  } catch (e: any) {
+    log(`Historian skipped: ${e?.message || e}`);
   } finally {
+    clearTimeout(timer);
     historianBusySessions.delete(sessionId);
   }
 }
@@ -475,6 +373,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
   // 不保证继承原 run 的 ALS,故显式重设;云端 isLocal=false 已 return)。
+  const owner = await query<any[]>(`SELECT kind FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
+  if (!owner[0] || (owner[0].kind && owner[0].kind !== 'user')) return;
   let effectiveSlug = memScopeSlug;
   if (!effectiveSlug) {
     try {
@@ -483,14 +383,21 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       const cfg0 = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
       if (cfg0?.agentSlug) {
         const def = await getAgent(String(cfg0.agentSlug)).catch(() => null);
-        if (def) effectiveSlug = resolveMemorySlug(def);
+        if (!def) return;
+        effectiveSlug = resolveMemorySlug(def);
       }
-    } catch { /* ignore */ }
+    } catch { return; }
   }
-  if (effectiveSlug) enterRunContext(userId, undefined, effectiveSlug);
+  effectiveSlug ||= DEFAULT_AGENT_SLUG;
+  if (!isValidSlug(effectiveSlug)) return;
+  enterRunContext(userId, undefined, effectiveSlug);
   let cfg;
   try { cfg = loadSpecialAgentsConfig().historian; } catch { return; }
-  if (!cfg.enabled) return;
+  if (!cfg.enabled) {
+    // Explicit memories can still be maintained when transcript collection is off.
+    startMemoryDream(userId, effectiveSlug, { automatic: true });
+    return;
+  }
   // 模型解析:用户显式配置 > admin 后台默认槽 > 对话默认(未选模型=跟随云端)。
   cfg.modelId = await resolveBackgroundModelId(cfg.modelId).catch(() => '');
   if (!cfg.modelId) return;
@@ -538,7 +445,9 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const judgeHarness = due && !assistMode && cfg.harnessCandidates;
     log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
 
-    const transcript = await recentTranscript(sessionId);
+    const transcriptSnapshot = await recentTranscript(sessionId);
+    historianSignal.getStore()?.throwIfAborted();
+    const transcript = transcriptSnapshot.text;
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
 
     if (titleDue || judgeLog || judgeMemory) {
@@ -563,6 +472,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         const input = prevSummary ? `${transcript}\n\n[Previous summary]\n${prevSummary}` : transcript;
         raw = (await complete('判断', cfg.modelId, sys, input, userId, 1600)).content;
       }
+      historianSignal.getStore()?.throwIfAborted();
       const j = parseJudgement(raw);
       if (!j) {
         log(`判断输出无法解析为 JSON: "${raw.slice(0, 80)}"`); // 不 return:辅助讨论仍应发起
@@ -584,6 +494,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         log(`判断: title="${title}" log="${logText.slice(0, 30)}" 候选=${candidates.length} 条`);
 
         if (titleDue && okShort(title)) {
+          historianSignal.getStore()?.throwIfAborted();
           await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [title, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
           await logActivity(userId, 'title_updated', title, sessionId);
           log(`已更新标题: ${title}`);
@@ -592,6 +503,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         // 活动日志只在 UPDATE 真成功后写,否则工作视图会报告不存在的更新(Codex 评审 08-03 Minor)。
         const summaryText = String((j as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 500);
         if (summaryDue && summaryText.length >= 8 && summaryText.toUpperCase() !== 'NOTHING') {
+          historianSignal.getStore()?.throwIfAborted();
           const ok = await query(`UPDATE chat_sessions SET summary = ? WHERE id = ?`, [summaryText, sessionId])
             .then(() => true)
             .catch((e: any) => { log(`更新摘要失败: ${e?.message || e}`); return false; });
@@ -602,12 +514,14 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         }
         if (judgeLog && okShort(logText)) {
           // LOG = 当天流水(append-only)。共享 LOG 经 brain(云端)。
-          await deps().brain.memory.appendLogEntry(userId, logText).then(() => log('已写入 LOG')).catch((e: any) => log(`写 LOG 失败: ${e?.message || e}`));
+          historianSignal.getStore()?.throwIfAborted();
+          await deps().brain.memory.appendLogEntry(userId, logText, { signal: historianSignal.getStore() });
           await logActivity(userId, 'log_appended', logText, sessionId);
         }
+        historianSignal.getStore()?.throwIfAborted();
         if (judgeMemory && candidates.length) {
           // 采集:候选进 raw 层,正典 MEMORY 只由整固步骤改写(唯一仲裁点)。
-          const n = appendRawCandidates(effectiveSlug, sessionId, candidates);
+          const n = appendRawCandidates(effectiveSlug, sessionId, candidates, { anchorMessageId: transcriptSnapshot.anchorMessageId });
           if (n) {
             await logActivity(userId, 'memory_candidates', candidates.join(' | ').slice(0, 300), sessionId);
             log(`已采集 ${n} 条记忆候选进 raw 层`);
@@ -657,6 +571,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 辅助讨论只跟「记忆」周期(设置里的 每 Y 轮):此前挂在 logDue||memoryDue 上,而 logDue 跟随
     // 标题的高频周期(如 标题每2轮+记忆每3轮 → 讨论在 2,3,4,6,8,9… 轮触发),用户观感即「忽隔一轮
     // 忽隔两轮」。改为仅 memoryDue 拉起讨论,LOG 在辅助模式下随记忆周期一并商议,节奏可预期。
+    historianSignal.getStore()?.throwIfAborted();
     if (assistMode && memoryDue) {
       const discRunId = await startAssistDiscussion({ sessionId, userId, cfg, sk, wantLog: true, wantMemory: true });
       if (discRunId) {

@@ -19,14 +19,18 @@ export class VaultManager {
   private pluginExts: string[] = []
   /** 应用侧写盘钩子(云同步推送触发):自写走台账不进 watcher,同步引擎靠它感知应用内改动。 */
   private onMutate: ((rel: string, kind: 'write' | 'remove') => void) | null = null
-  private onMove: ((fromRel: string, toRel: string) => void) | null = null
+  private onBeforeMove: ((from: string, to: string) => (() => void) | undefined) | null = null
+  private moveQueue: Promise<void> = Promise.resolve()
+  private onMove: ((fromRel: string, toRel: string, kind?: 'file' | 'folder') => void | Promise<void>) | null = null
 
   setMutationHooks(
     onMutate: (rel: string, kind: 'write' | 'remove') => void,
-    onMove: (fromRel: string, toRel: string) => void,
+    onMove: (fromRel: string, toRel: string, kind?: 'file' | 'folder') => void | Promise<void>,
+    onBeforeMove?: (from: string, to: string) => (() => void) | undefined,
   ): void {
     this.onMutate = onMutate
     this.onMove = onMove
+    this.onBeforeMove = onBeforeMove ?? null
   }
 
   private emitMutate(abs: string, kind: 'write' | 'remove'): void {
@@ -347,17 +351,35 @@ export class VaultManager {
   }
 
   /** Move/rename a file or folder within the vault (both ends clamped). */
-  async moveEntry(srcRel: string, dstRel: string): Promise<void> {
+  moveEntry(srcRel: string, dstRel: string): Promise<void> {
+    const work = this.moveQueue.then(() => this.performMove(srcRel, dstRel))
+    this.moveQueue = work.catch(() => {})
+    return work
+  }
+
+  private async performMove(srcRel: string, dstRel: string): Promise<void> {
     const srcAbs = this.resolveInVault(srcRel)
     const dstAbs = this.resolveInVault(dstRel)
     await fs.mkdir(path.dirname(dstAbs), { recursive: true })
+    const movedKind = (await fs.stat(srcAbs)).isDirectory() ? 'folder' : 'file'
+    const finishMove = this.onBeforeMove?.(srcRel, dstRel)
+    try {
     await fs.rename(srcAbs, dstAbs)
     this.lastWritten.delete(srcAbs)
     if (this.onMove && this.root) {
       const from = path.relative(this.root, srcAbs)
       const to = path.relative(this.root, dstAbs)
-      if (!from.startsWith('..') && !to.startsWith('..')) this.onMove(from, to)
+      if (!from.startsWith('..') && !to.startsWith('..')) {
+        try { await this.onMove(from, to, movedKind) }
+        catch (error) {
+          // The local registration failed before cloud mutation was queued.
+          // Restore the source so the renderer can safely keep its old path.
+          if (!(await this.pathExists(srcRel))) await fs.rename(dstAbs, srcAbs)
+          throw error
+        }
+      }
     }
+    } finally { finishMove?.() }
   }
 
   /** Recursively remove a file or folder within the vault (never the root). */

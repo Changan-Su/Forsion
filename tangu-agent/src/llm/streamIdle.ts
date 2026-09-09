@@ -1,21 +1,24 @@
 /**
- * 流式空闲看门狗(复用工具)。把 httpBrain 的内联帧级 idle 看门狗抽成一次性 guard:
- * 合并外部 abort 源 + 内部空闲计时,任一触发即 abort 内部 AbortController。
+ * 流式看门狗:分别追踪传输字节与模型语义进展,并合并外部取消。
  *
  * 直连流(openaiCompat/anthropicMessages/openaiResponses)与 httpBrain 共用:fetch 用 guard.signal,
- * 每次 reader.read() 返回帧就 arm() 续命,结束 dispose()。
- *
- * 帧级(而非回调级 onToken)是有意为之:SSE keepalive(Anthropic 每 ~15-30s 一次 ping / OpenAI 注释行)会让
- * reader.read() 返回字节但不触发任何 onToken 回调;以「收到任意帧」续命才不会在模型静默思考期误杀健康流。
+ * 用 read(reader) 消费流,解析出非空正文/思考/工具增量后调用 progress(),结束 dispose()。
+ * keepalive 只能证明传输仍活跃,不能无限延长模型无进展的等待。两种计时沿用同一配置窗口,
+ * 从 fetch 前覆盖到最后一次 read;思考增量也算进展,不要求模型先输出正文。
  */
+import type { ReadableStreamDefaultReader, ReadableStreamReadResult } from 'node:stream/web';
 import { LlmError } from '../core/types.js';
 
 export interface StreamIdleGuard {
   /** 传给 fetch 的 signal(合并了 external abort 与内部空闲超时)。 */
   signal: AbortSignal;
-  /** 收到任意帧后调用,重置空闲计时。 */
+  /** 收到传输字节后调用,只重置传输空闲计时。read() 已自动调用。 */
   arm(): void;
-  /** 流正常/异常结束后调用,清计时器并摘除 external 监听(幂等)。 */
+  /** 解析出有效、非空的正文/思考/工具增量后调用。 */
+  progress(): void;
+  /** 可取消的 body 读取;取消不依赖 fetch 实现主动终止 reader。 */
+  read(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<ReadableStreamReadResult<Uint8Array>>;
+  /** 清计时器、监听与 reader 锁(幂等),不等待可能挂住的底层 cancel 回执。 */
   dispose(): void;
 }
 
@@ -24,6 +27,8 @@ const DEFAULT_IDLE_MS = Number(process.env.TANGU_STREAM_IDLE_TIMEOUT_MS) || 120_
 export function streamIdleGuard(externalSignal?: AbortSignal, idleMs = DEFAULT_IDLE_MS): StreamIdleGuard {
   const ac = new AbortController();
   let idle: ReturnType<typeof setTimeout> | null = null;
+  let progressIdle: ReturnType<typeof setTimeout> | null = null;
+  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
   let disposed = false;
   const onExt = (): void => ac.abort((externalSignal as any)?.reason ?? new Error('aborted'));
 
@@ -39,17 +44,54 @@ export function streamIdleGuard(externalSignal?: AbortSignal, idleMs = DEFAULT_I
     idle = setTimeout(() => ac.abort(new LlmError(504, 'stream idle timeout')), idleMs);
   };
 
+  const progress = (): void => {
+    if (disposed || ac.signal.aborted) return;
+    if (progressIdle) clearTimeout(progressIdle);
+    progressIdle = setTimeout(() => ac.abort(new LlmError(504, 'stream progress idle timeout')), idleMs);
+  };
+
+  const releaseReader = (reader: ReadableStreamDefaultReader<Uint8Array>): void => {
+    if (!readers.delete(reader)) return;
+    // cancel 关闭队列,releaseLock 释放 pending read;不让有问题的 cancel hook 阻塞用户停止。
+    try { void reader.cancel(ac.signal.reason).catch(() => undefined); } catch { /* already released */ }
+    try { reader.releaseLock(); } catch { /* already released */ }
+  };
+
+  const read = (reader: ReadableStreamDefaultReader<Uint8Array>): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    readers.add(reader);
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        releaseReader(reader);
+      };
+      if (ac.signal.aborted) { onAbort(); return; }
+      ac.signal.addEventListener('abort', onAbort, { once: true });
+      reader.read().then((chunk) => {
+        ac.signal.removeEventListener('abort', onAbort);
+        if (ac.signal.aborted) { onAbort(); return; }
+        if (!chunk.done && chunk.value.byteLength) arm();
+        resolve(chunk);
+      }, (err) => {
+        ac.signal.removeEventListener('abort', onAbort);
+        reject(err);
+      });
+    });
+  };
+
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
     if (idle) { clearTimeout(idle); idle = null; }
+    if (progressIdle) { clearTimeout(progressIdle); progressIdle = null; }
+    for (const reader of readers) releaseReader(reader);
     if (externalSignal) externalSignal.removeEventListener('abort', onExt);
   };
 
   // 建流即开表:调用点都是「构造 guard → 立刻 fetch」,而 `await fetch()`(DNS/TCP/TLS/等响应头)
   // 本身就会无限挂——半开连接、上游收了连接不回头都卡在这里。等首帧才计时等于这段完全裸奔。
   arm();
-  return { signal: ac.signal, arm, dispose };
+  progress();
+  return { signal: ac.signal, arm, progress, read, dispose };
 }
 
 /**
@@ -72,7 +114,7 @@ export function mapStreamAbort(err: unknown, guardSignal: AbortSignal, externalS
 
 /**
  * 给一段流式 fn 套上 idle 看门狗 + abort 语义还原 + 清理。fn 收到 guard:用 guard.signal 发 fetch、
- * 每帧 guard.arm()。供无现成 try/finally 的直连流薄包一层,避免整段 body 缩进。
+ * 用 guard.read(reader) 消费并在有效增量处 guard.progress()。供直连流共用清理路径。
  */
 export async function withStreamIdle<T>(
   externalSignal: AbortSignal | undefined,

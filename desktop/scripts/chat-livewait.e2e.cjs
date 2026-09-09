@@ -1,10 +1,11 @@
 /**
  * 等模型实况行(LiveWaitLine)—— 真 Electron × 真组件/store × 可编剧假引擎。
  *
- * 钉住的产品契约(2026-09-06 取证:本机 52% 墙钟在等首帧,原来只有一行不动的 shimmer,用户报「卡住」):
- *  ① status:llm_call sending → 显示「正在发送上下文 N KB」;accepted → 换成「等待模型首帧」;
- *  ② 2 秒起带「已等待 N 秒」且每秒递增;
- *  ③ 首帧(token)到达即整行消失;done 后不残留。
+ * 钉住的产品契约:
+ *  ① 测试性开关默认关:status:llm_call 只显示通用「思考中」,不泄露诊断详情;
+ *  ② 开关打开后 sending →「正在发送上下文 N KB」;accepted →「等待模型首帧」;
+ *  ③ 2 秒起带「已等待 N 秒」且每秒递增;
+ *  ④ 首帧(token)到达即整行消失;done 后不残留。
  *
  * 需先 npm run build。用法:npm run e2e:livewait
  * 负对照:node scripts/chat-livewait.e2e.cjs --nc(剧本改发未知 phase,实况行不该出现 → 存在类断言必须转红)。
@@ -113,6 +114,13 @@ async function main() {
     ])
     await send(win, '看看等模型时画什么')
     await win.waitForTimeout(700)
+    const defaultText = await liveText(win)
+    check('测试性开关默认关闭,只显示通用「思考中」', !!defaultText && defaultText.includes('思考中') && !defaultText.includes('发送上下文') && !defaultText.includes('首帧'), JSON.stringify(defaultText))
+    await win.evaluate(() => {
+      localStorage.setItem('forsion_chat_wait_details', '1')
+      window.dispatchEvent(new Event('forsion:chat-wait-details'))
+    })
+    await win.waitForTimeout(100)
     const t1 = await liveText(win)
     check('sending 阶段显示「正在发送上下文 N KB」', !!t1 && t1.includes('正在发送上下文') && t1.includes('320 KB'), JSON.stringify(t1))
     await win.waitForTimeout(1500)
@@ -165,6 +173,10 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await openChatSession(win)
+    await win.evaluate(() => {
+      localStorage.setItem('forsion_chat_wait_details', '1')
+      window.dispatchEvent(new Event('forsion:chat-wait-details'))
+    })
     stub2.script([
       { type: 'status', delay: 200, payload: { phase: PHASE, stage: 'sending', iteration: 0, bytes: 4096 } },
       { type: 'token', delay: 1200, payload: { delta: '首帧到了。' } },

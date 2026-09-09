@@ -1,3 +1,4 @@
+import type { HostSandboxConfig } from '../../shared/hostSandboxConfig'
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
 import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
@@ -790,6 +791,7 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   unitHostEnabled?: boolean
   cloudUrl: string
   sandbox: 'auto' | 'docker' | 'none'
+  hostSandbox?: HostSandboxConfig
   /** Python 来源:bundled=内置解释器(默认,免装/隔离);system=用系统已装 python。 */
   pythonMode?: 'bundled' | 'system'
   /** 网络镜像:china=中国大陆镜像源(pip/npm/git + 市场 github 下载);default=直连。 */

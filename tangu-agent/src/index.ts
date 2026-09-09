@@ -20,6 +20,7 @@ import visionRouter from './routes/vision.js';
 import enginesRouter from './routes/engines.js';
 import providersRouter from './routes/providers.js';
 import memoryRouter from './routes/memory.js';
+import memoryMaintenanceRouter from './routes/memoryMaintenance.js';
 import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import pluginsRouter from './routes/plugins.js';
@@ -86,6 +87,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(enginesRouter);
   dataRouter.use(providersRouter);
   dataRouter.use(memoryRouter);
+  dataRouter.use(memoryMaintenanceRouter);
   dataRouter.use(assetsRouter);
   dataRouter.use(agentsRouter);
   dataRouter.use(pluginsRouter);

@@ -74,6 +74,7 @@
 - **文件安全闸**（fsPolicy）：硬拒敏感目录（`.git` / `~/.ssh` / `~/.aws` / 云密钥…），越出工作区的写入升级为人工确认。
 - **后台进程**：`run_background` 起长任务、轮询输出、发交互输入、SIGTERM/SIGKILL 终止。
 - **Docker 沙箱**：`run_python`（Python 3.12，自动同步工作区，预装 20+ 库）+ 按需 `pip_install`；无 docker 自动降级禁用。
+- **本地 OS 沙箱（可选）**：macOS / Linux 的命令与文件写入隔离、网络开关；默认关闭，配置入口与边界见 [运行取消与本地沙箱](docs/runtime-safety.md)。
 - **看图 / 生成图**：`view_image` 识图、`generate_image` 文生图（行内缩略图）。
 - **联网**：本地浏览器工具（搜索 DuckDuckGo/Bing/Google/Baidu + 读 a11y 树 + 点击/输入/滚动/执行 JS）、`web_search`、`web_fetch`（带 SSRF 防护，拦内网/元数据地址）。
 - **MCP**：连接任意 MCP server（stdio / HTTP / SSE）扩展工具集。

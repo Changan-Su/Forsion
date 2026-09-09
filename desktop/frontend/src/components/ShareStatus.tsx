@@ -20,20 +20,26 @@ registerMessages({
 
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
-export function ShareStatus({ path: localPath, refreshKey, onOpen }: {
+interface ShareStatusProps {
   path: string
   refreshKey?: number // ShareCard 关闭后 bump 一下重新拉取
   onOpen: (x: number, y: number) => void
-}) {
-  const collab = window.amadeusCollab
-  const [shared, setShared] = useState(false)
-  const [pub, setPub] = useState<PublishState>({ kind: 'none' })
-  const { t } = useI18n()
+}
+
+export function ShareStatus({ path: localPath, refreshKey, onOpen }: ShareStatusProps) {
   // 共享/发布记录键的是**云端路径**;本地侧要先按注册表翻成 `<云名>/<path>`,未同步的页没有云端对象。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaults = useEntrySync((s) => s.vaults)
   const path = cloudPathFor(vaults, vaultRoot, vaultSide, localPath)
+  return <ShareStatusTarget key={JSON.stringify([vaultRoot, vaultSide, localPath, path])} path={path ?? ''} refreshKey={refreshKey} onOpen={onOpen} />
+}
+
+function ShareStatusTarget({ path, refreshKey, onOpen }: ShareStatusProps) {
+  const collab = window.amadeusCollab
+  const [shared, setShared] = useState(false)
+  const [pub, setPub] = useState<PublishState>({ kind: 'none' })
+  const { t } = useI18n()
 
   useEffect(() => {
     if (!collab || !path) { setShared(false); setPub({ kind: 'none' }); return }

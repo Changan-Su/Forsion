@@ -58,7 +58,7 @@ export class DesktopPermissions {
   private verification?: { pid: number; granted: boolean }
   private verifiedAt = 0
   private readPending?: Promise<{ snapshot: DesktopPermissionsSnapshot; settingsWindow?: Rect; settingsFrontmost?: boolean }>
-  private setupPending?: Promise<void>
+  private setupPending?: Promise<boolean>
   private actionPending = false
   private verifyPending?: Promise<DesktopPermissionsSnapshot>
   private generation = 0
@@ -120,13 +120,13 @@ export class DesktopPermissions {
     }
   }
 
-  private install(): Promise<void> {
-    if (this.setupPending) return this.setupPending
+  private runInstaller(checkOnly = false): Promise<boolean> {
+    if (!checkOnly && this.setupPending) return this.setupPending
     const root = builtinBundleSources({ isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath })
       .find((dir) => existsSync(path.join(dir, 'scripts/setup-helper.mjs')))
     if (!root) return Promise.reject(new Error('The bundled Computer Use installer is missing. Reinstall Forsion and retry.'))
-    const work = new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, [path.join(root, 'scripts/setup-helper.mjs'), '--runtime'], {
+    const work = new Promise<boolean>((resolve, reject) => {
+      const child = spawn(process.execPath, [path.join(root, 'scripts/setup-helper.mjs'), checkOnly ? '--check' : '--runtime'], {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BUN_BE_BUN: '1' },
         stdio: ['ignore', 'pipe', 'pipe'], detached: true,
       })
@@ -136,9 +136,12 @@ export class DesktopPermissions {
       child.stdout?.on('data', collect)
       child.stderr?.on('data', collect)
       child.once('error', reject)
-      child.once('close', (code) => code === 0 ? resolve() : reject(new Error(output.trim() || `Computer Use installer exited with ${code}`)))
+      child.once('close', (code) => code === 0 ? resolve(true)
+        : checkOnly && code === 10 ? resolve(false)
+        : reject(new Error(output.trim() || `Computer Use installer exited with ${code}`)))
     })
-    // Keep the shared promise tied to the process. A UI timeout must not interrupt codesign.
+    if (checkOnly) return work
+    // A UI timeout must not interrupt staging/atomic replacement of the helper.
     this.setupPending = work.finally(() => { this.setupPending = undefined })
     return this.setupPending
   }
@@ -152,7 +155,13 @@ export class DesktopPermissions {
     }
     if (snapshot.helperError === 'wrong-identity') throw new Error('Computer Use is running under another app. Close that helper and retry from Forsion.')
     if (snapshot.helperError === 'unreachable') throw new Error('Computer Use is not responding. Finish any active computer task, then retry.')
-    if (snapshot.helperError === 'outdated') {
+    // Only explicit setup checks installed bytes/signature. Passive status polling
+    // never runs an installer. This also finds same-protocol upgrades and partial
+    // apps left behind when a user rejected the old keychain prompt.
+    const needsInstall = !externalSocket && (!snapshot.helperInstalled || snapshot.helperError === 'outdated' || !await this.runInstaller(true))
+    if (!stillWanted()) return false
+    const restartNeeded = snapshot.helperError === 'outdated' || (needsInstall && snapshot.helperRunning)
+    if (restartNeeded) {
       // Old helpers have no in-flight-task API. liveView.active=false does NOT prove idle:
       // the very first look may still be building an AX tree. Only explicit consent may restart it.
       const zh = locale === 'zh'
@@ -169,16 +178,16 @@ export class DesktopPermissions {
       // Wait for the old socket server to exit before replacing its executable.
       await new Promise((resolve) => setTimeout(resolve, 400))
     }
-    if (!snapshot.helperInstalled || snapshot.helperError === 'outdated') {
+    if (needsInstall) {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        await Promise.race([this.install(), new Promise<never>((_, reject) => {
+        await Promise.race([this.runInstaller(), new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('Computer Use setup is still running. Wait a moment, then retry.')), 180_000)
         })])
       } finally { clearTimeout(timer) }
     }
     if (!stillWanted()) return false
-    if (!snapshot.helperRunning || snapshot.helperError === 'outdated') {
+    if (!snapshot.helperRunning || restartNeeded) {
       await mkdir(path.dirname(helperSocketPath()), { recursive: true })
       if (!stillWanted()) return false
       await exec('/usr/bin/open', ['-n', '-g', permissionHelperAppPath(), '--args', 'serve', '--socket', helperSocketPath()], { timeout: 10_000 })

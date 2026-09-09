@@ -196,7 +196,8 @@ router.get('/stats', async (_req, res) => {
 // runs.ts 白名单校验;与 app_id 正交(身份层恒 'tangu',**版本/端绝不进 app_id** —— 那会让
 // profile 解析/模型配置/记忆分区/workspace 路径全按版本碎裂)。`id` 给拼好的展示串
 // `tangu/desktop/2.7.4` —— 拼接放展示层,身份层各存各的。
-// '(untagged)' = server 自起的 run(automation/channels/special)或未升级的旧客户端/其它 app。
+// '(untagged)' = 无设备来源的后台 run(automation/special)、非 Desktop 宿主的 channel run,
+// 或未升级的旧客户端/其它 app。Desktop 托管的微信/TG/QQ run 从 2.9.9 修复起记 desktop/<版本>。
 router.get('/client-stats', async (_req, res) => {
   try {
     const expr = deps().host.getDbType() === 'sqlite' ? `json_extract(input, '$.client')` : `input->>'client'`;

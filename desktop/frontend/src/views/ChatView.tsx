@@ -32,6 +32,7 @@ import { useCodeStudio } from '../stores/codeStudioStore'
 import { projectName } from './coding/studioModel'
 import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
+import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -41,6 +42,7 @@ const EMPTY_STRS: string[] = []
 
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
+  const showWaitDetails = useChatWaitDetailsEnabled()
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatAreaRef = useRef<HTMLDivElement>(null)
   const streamingNodeRef = useRef<HTMLDivElement | null>(null)
@@ -439,6 +441,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                   <EditorialMessage
                     key={m.id}
                     msg={m}
+                    showWaitDetails={showWaitDetails}
                     rootRef={m.id === streamingId ? streamingNodeRef : undefined}
                     avatarUrl={m.role !== 'assistant' ? undefined : (() => {
                       // 群聊发言人:优先 agentId,缺失时按名反查 slug(agentDefs 晚到时自动纠正);仍无则不回退会话默认头像。

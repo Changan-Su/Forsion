@@ -57,8 +57,10 @@ async function main() {
   const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-home-glass-'))
   let app
   const stub = await startStubEngine({ models: [
-    { id: 'focus-a', name: 'Focus A', provider: 'stub', source: 'direct', contextWindow: 128000 },
-    { id: 'focus-b', name: 'Focus B', provider: 'stub', source: 'direct', contextWindow: 128000 },
+    // 这里是 external host：Homepage 未显式选项目时真实落点是默认云 Project，
+    // 因此模型夹具也必须是 Forsion 云模型，不能用只属于本机 host 的 direct 模型造假。
+    { id: 'focus-a', name: 'Focus A', provider: 'stub', source: 'forsion', contextWindow: 128000 },
+    { id: 'focus-b', name: 'Focus B', provider: 'stub', source: 'forsion', contextWindow: 128000 },
   ] })
   try {
     app = await electron.launch({

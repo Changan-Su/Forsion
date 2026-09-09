@@ -21,6 +21,7 @@ import {
 import path from 'node:path';
 import { agentsDir, readUserMd, writeUserMd } from '../core/tanguHome.js';
 import { listLoadoutTools } from '../tools/toolRegistry.js';
+import { createMemoryRepository, MemoryRepositoryError } from '../services/memoryRepository.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
@@ -94,7 +95,10 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       createdBy: 'user' as const,
     };
     const agent = cloud ? await cloudSaveAgent(uid, slug, input) : await saveAgent(input);
-    if (!cloud && scope && b.cloudSync != null) setAgentSyncPermission(slug, scope, !!b.cloudSync);
+    if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
+      const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
+      setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
+    }
     if (!cloud) agent.cloudSync = agentSyncPermission(slug, scope).enabled;
     res.json({ agent });
   } catch (e: any) {
@@ -131,7 +135,10 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
       toolsList: b.toolsList !== undefined ? b.toolsList : cur.toolsList,
     };
     const agent = cloud ? await cloudSaveAgent(req.user!.userId, slug, input) : await saveAgent(input);
-    if (!cloud && scope && b.cloudSync != null) setAgentSyncPermission(slug, scope, !!b.cloudSync);
+    if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
+      const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
+      setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
+    }
     if (!cloud) agent.cloudSync = agentSyncPermission(slug, scope).enabled;
     res.json({ agent });
   } catch (e: any) {
@@ -228,8 +235,11 @@ router.put('/agent/agents-meta', authMiddleware, async (req: AuthRequest, res) =
 // 某 agent 的 MEMORY/LOG。按 resolveMemorySlug 解析作用域(共用默认的 agent → 读写默认 agent 文件夹,
 // 与写入端 agentLoop/subAgent 的 resolveMemorySlug 一致),保证面板看到的就是该 agent 真正读写的那份。
 async function storeForAgent(slug: string): Promise<ReturnType<typeof createLocalMemoryStore> | null> {
+  if (!isValidSlug(slug)) throw new MemoryRepositoryError('MEMORY_UNSAFE_PATH', 'Invalid agent slug.');
   const def = await getAgent(slug);
   if (!def) return null;
+  const memorySlug = resolveMemorySlug(def);
+  if (!isValidSlug(memorySlug)) throw new MemoryRepositoryError('MEMORY_UNSAFE_PATH', 'Invalid memory scope.');
   return createLocalMemoryStore(path.join(agentsDir(), resolveMemorySlug(def)));
 }
 
@@ -238,7 +248,7 @@ router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
   try {
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
-    res.json({ content: store.readMemory() });
+    res.json(createMemoryRepository(store.baseDir).snapshot());
     // 后台拉一次云端(不阻塞响应):云端 worker 侧写的新记忆迟一拍到位,重开视图即最新。
     scheduleAgentFilesSync(req.user!.userId);
   } catch (e: any) {
@@ -251,11 +261,43 @@ router.put('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
   try {
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
-    store.writeMemory(String(req.body?.content ?? ''));
-    res.json({ ok: true });
+    if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required; reload memory before saving.' });
+    if (typeof req.body?.content !== 'string') return res.status(400).json({ detail: 'content must be a string' });
+    res.json(createMemoryRepository(store.baseDir).commit({ expectedVersion: req.body.expectedVersion, content: req.body.content, source: { kind: 'manual' } }));
   } catch (e: any) {
-    res.status(400).json({ detail: e?.message || 'write memory failed' });
+    res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message || 'write memory failed', code: e?.code });
   }
+});
+
+router.get('/agent/agents/:slug/memory/revisions', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const store = await storeForAgent(req.params.slug);
+    if (!store) return res.status(404).json({ detail: 'Agent not found' });
+    res.json({ revisions: createMemoryRepository(store.baseDir).revisions() });
+  } catch (e: any) { res.status(400).json({ detail: e?.message, code: e?.code }); }
+});
+
+router.post('/agent/agents/:slug/memory/restore', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const store = await storeForAgent(req.params.slug);
+    if (!store) return res.status(404).json({ detail: 'Agent not found' });
+    if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required' });
+    res.json(createMemoryRepository(store.baseDir).restore(String(req.body?.version ?? ''), req.body.expectedVersion));
+  } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
+});
+
+router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const store = await storeForAgent(req.params.slug);
+    if (!store) return res.status(404).json({ detail: 'Agent not found' });
+    const { action, id, fact, expectedVersion } = req.body ?? {};
+    if (!['add', 'update', 'forget'].includes(action)) return res.status(400).json({ detail: 'Invalid action' });
+    if (typeof expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required' });
+    res.json(createMemoryRepository(store.baseDir).mutate({ action, id, fact, expectedVersion, source: { kind: 'manual' } }));
+  } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
 });
 
 router.get('/agent/agents/:slug/logs', authMiddleware, async (req: AuthRequest, res) => {
@@ -277,7 +319,7 @@ router.get('/agent/agents/:slug/log', authMiddleware, async (req: AuthRequest, r
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     const date = String(req.query.date || '');
-    res.json({ date, content: date ? store.readLog(date) : '' });
+    res.json(date ? { date, ...store.readLogSnapshot!(date) } : { date, content: '', version: null });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read log failed' });
   }
@@ -291,10 +333,11 @@ router.put('/agent/agents/:slug/log', authMiddleware, async (req: AuthRequest, r
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     const date = String(req.query.date || '');
     if (!date) return res.status(400).json({ detail: 'date 必填' });
-    store.writeLog(date, String(req.body?.content ?? ''));
+    if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required; reload the log before saving.' });
+    store.writeLog(date, String(req.body?.content ?? ''), req.body.expectedVersion);
     res.json({ ok: true });
   } catch (e: any) {
-    res.status(400).json({ detail: e?.message || 'write log failed' });
+    res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message || 'write log failed', code: e?.code });
   }
 });
 

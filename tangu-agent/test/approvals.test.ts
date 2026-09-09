@@ -6,8 +6,22 @@ const call = (name: string, args: any) =>
   ({ id: 'c1', type: 'function', function: { name, arguments: JSON.stringify(args) } } as any);
 
 describe('isKnownSafeBash', () => {
+  it('does not treat mutating arguments, wrappers or executable search helpers as read-only', () => {
+    for (const c of [
+      'env touch /tmp/not-executed', 'find /tmp -delete', 'git branch -D unused',
+      'git branch new-name', 'git remote add unused https://example.invalid/repo',
+      'git diff --output=/tmp/not-executed', 'git log --output=/tmp/not-executed',
+      'git diff HEAD', 'rg --pre touch text', 'rg --pre=touch text',
+      'file -C', 'tree -o /tmp/not-executed', 'date -s 2000-01-01', 'hostname changed',
+      'git status\nrm file', 'echo $HOME', 'ls *',
+    ]) expect(isKnownSafeBash(c), c).toBe(false);
+    for (const c of ['git branch --list', 'git remote -v', 'git status --short', 'rg -n text src']) {
+      expect(isKnownSafeBash(c), c).toBe(true);
+    }
+  });
+
   it('allows simple read-only commands', () => {
-    for (const c of ['ls -la', 'git status', 'git diff HEAD', 'cat package.json', 'rg foo src', 'pwd']) {
+    for (const c of ['ls -la', 'git status', 'git diff --no-ext-diff --no-textconv HEAD', 'cat package.json', 'rg foo src', 'pwd']) {
       expect(isKnownSafeBash(c)).toBe(true);
     }
   });

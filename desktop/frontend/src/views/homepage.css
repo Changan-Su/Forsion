@@ -285,8 +285,10 @@
 .hp-root[data-wallpaper='true'] .hp-date,
 .hp-root[data-wallpaper='true'] .hp-greet { color: var(--text); opacity: 0.7; }
 
-/* ChatView 的 Composer2 本体原样复用,只取消它在聊天列里的外围 gutter。 */
+/* ChatView 的 ProjectSelector + Composer2 原样复用。Project pill 明示首页这条新会话的落点，
+ * 避免 Chat/Work 与别处残留草稿让用户发送后去各项目里盲找。 */
 .hp-composer { width: 100%; }
+.hp-projectbar { display: flex; align-items: center; padding: 0 4px 6px; }
 .hp-composer .t2c-inner { width: 100%; max-width: none; padding: 0; }
 .hp-composer .t2c-card { box-shadow: var(--card-shadow); }
 
@@ -1067,7 +1069,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 @media (max-height: 520px) {
   .hp-root { --hp-padding-block: 12px; }
   .hp-stack { gap: 10px; }
-  .hp-brand { margin-bottom: 0; font-size: 20px; }
+  /* Project pill 是新会话归属的关键信息；极矮视口收起纯装饰品牌字样给它让位。 */
+  .hp-brand { display: none; }
   .hp-clock { font-size: 32px; }
   .hp-date { margin-top: 3px; font-size: 11.5px; }
   .hp-greet { display: none; }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
+import { isRetryableLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
 import { LlmError } from '../core/types.js';
 
 describe('isRetryableLlmError', () => {
@@ -32,6 +32,25 @@ describe('isRetryableLlmError', () => {
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run src/llm/retry.test.ts
  */
 describe('withLlmRetry', () => {
+  it('已经取消时不启动第一次请求', async () => {
+    const ac = new AbortController(); ac.abort();
+    const fn = vi.fn();
+    await expect(withLlmRetry(fn, undefined, ac.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('59s 失败加退避将超过累计预算时不再启动下一次请求', async () => {
+    vi.useFakeTimers();
+    try {
+      const fn = vi.fn(async () => {
+        vi.advanceTimersByTime(SLOW_FAIL_NO_RETRY_MS - 1000);
+        throw new TypeError('fetch failed');
+      });
+      await expect(withLlmRetry(fn)).rejects.toThrow('fetch failed');
+      expect(fn).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
   it('便宜的传输错重试后成功', async () => {
     let calls = 0;
     const r = await withLlmRetry(async () => {
@@ -119,5 +138,30 @@ describe('withLlmRetry', () => {
       vi.useRealTimers();
     }
     expect(calls).toBe(MODEL_MAX_RETRIES + 1); // 首次 + 至多 3 次重试
+  });
+});
+
+describe('stream retry primitives', () => {
+  it('共享累计预算包括下一次退避,不只计算刚失败的尝试', () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      vi.advanceTimersByTime(40_000);
+      expect(llmRetryBudgetExceeded(started, 1500)).toBe(false);
+      vi.advanceTimersByTime(19_000);
+      expect(llmRetryBudgetExceeded(started, 1500)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('中流续写和首帧前重试的退避都可被即时取消,并清理 timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const ac = new AbortController();
+      const pending = sleepOrAbort(4500, ac.signal);
+      const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      ac.abort();
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 });
