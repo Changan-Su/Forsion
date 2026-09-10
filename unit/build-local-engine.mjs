@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
+import { checkBundleInputs } from './releasePolicy.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(join(root, 'desktop/package.json'))
@@ -47,8 +48,10 @@ export async function buildLocalEngine({ output, dependencyRoot, sqlitePackage =
   const lock = JSON.parse(await readFile(join(source, 'package-lock.json'), 'utf8'))
   const pkg = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'))
   await mkdir(target, { recursive: true })
-  await build({ entryPoints: [join(source, 'src/standalone/main.ts')], outfile: join(target, 'dist/standalone/main.mjs'), bundle: true,
+  const result = await build({ entryPoints: [join(source, 'src/standalone/main.ts')], outfile: join(target, 'dist/standalone/main.mjs'), bundle: true,
+    absWorkingDir: root, metafile: true,
     packages: 'external', platform: 'node', target: 'node20', format: 'esm', tsconfig: join(source, 'tsconfig.json') })
+  checkBundleInputs(Object.keys(result.metafile.inputs), root)
   await writeFile(join(target, 'package.json'), JSON.stringify({ name: '@forsion/unit-tangu-runtime', version: pkg.version, private: true, type: 'module', dependencies: pkg.dependencies }, null, 2) + '\n')
   await writeFile(join(target, 'package-lock.json'), JSON.stringify(lock, null, 2) + '\n')
   for (const asset of ['skills', 'agent-skills']) {

@@ -6,6 +6,7 @@
 import { resolve } from 'path'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { checkBundleInputs } from '../unit/releasePolicy.mjs'
 
 const DESKTOP_SRC = resolve(__dirname, '../desktop/frontend/src')
 
@@ -50,7 +51,10 @@ export default defineConfig(({ mode }) => {
   const DEV_PROXY = env.TANGU_DEV_PROXY || 'http://localhost:3001'
 
   return {
-    plugins: [react(), capacitorStubGate()],
+    plugins: [react(), capacitorStubGate(), ...(process.env.FORSION_UNIT_RELEASE === '1' ? [{
+      name: 'forsion:unit-release-inputs',
+      generateBundle() { checkBundleInputs([...this.getModuleIds()], resolve(__dirname, '..')) },
+    }] : [])],
     // publicDir 用 web 自己的(默认 web/public):白板引擎的自托管副本由 `npm run prepare-board`
     // 生成在那儿(见 package.json,build/dev 都会先跑一遍)。
     // ⚠️ **不能借 desktop 的 public** —— 那是 desktop postinstall 的产物、不入库,而 web 的镜像

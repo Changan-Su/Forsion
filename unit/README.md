@@ -1,230 +1,101 @@
 # Forsion Unit
 
-通用 Node 宿主复用 Genesis 渲染层和网页投射。Unit 持有唯一 HTTP 监听端口，
-安装包决定它提供什么业务。完整 Server 插件将 API、微后端模块、管理视图和 Space
-放在同一个包里；在服务器安装 Unit 和这个包即可运行 Admin，不需要另起 Forsion Server。
-数据库等外部服务仍由部署环境提供。
+Unit 是独立运行的 Forsion 基础框架，复用 Genesis Desktop 的界面、笔记处理器与 Tangu 引擎。它提供插件宿主和 Web UI；已安装的插件决定业务功能。本分支与独立发行包不包含商业 Forsion Server、Admin 管理界面或商业部署组合，相关产品在独立仓库装配。
 
-## 发行与安装
+Unit is the independently runnable Forsion framework, sharing the Genesis Desktop renderer, note handlers and Tangu engine. It provides the plugin host and Web UI; installed plugins supply business capabilities. This branch and its standalone releases exclude the commercial Forsion Server, its Admin UI and commercial deployment compositions. Those products are assembled in separate repositories.
+
+## Desktop 同步 / Desktop synchronization
+
+`upstream.json` 记录已合入的 Desktop 稳定版标签、提交和 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
+
+`upstream.json` records the merged Desktop stable tag, commit and Unit revision. Synchronization flows from Desktop into Unit. Shared features reuse source code; Unit maintains its host adapters. This branch does not automatically merge back into Desktop or import the commercial Server repository.
 
 ```sh
+# Refresh upstream refs, then inspect drift without changing source.
+git fetch origin main --tags
+node unit/check-sync.mjs
+```
+
+发现新稳定版后，在 Unit 分支合并对应标签并处理冲突；更新 `upstream.json`，运行类型、插件、账号和本地安装验收，再构建发行。尤其检查已抽取的共享处理器是否接到了上游修复。版本检查会拒绝“只改版本号、没有合入上游提交”的假同步。检查基于已获取的标签；它不会自行联网或自动合并。
+
+When a new stable release is available, merge its tag into the Unit branch, resolve conflicts, update `upstream.json`, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The version check rejects a version bump without the upstream commit in ancestry. It checks fetched tags and does not fetch or merge automatically.
+
+`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线、Unit 修订号及源码提交。检查本身不发布版本。
+
+`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline, Unit revision and source commit. Validation does not publish a release.
+
+## 构建与安装 / Build and install
+
+```sh
+# Framework + Web UI only.
 node unit/build.mjs --package
-# 将 unit/dist 搬到部署机；以下命令在发行目录中执行
-node main.mjs init /absolute/path/unit-state --port 3001 --host 127.0.0.1 --base /admin/
-node main.mjs install /absolute/path/unit-state/unit.json /absolute/path/server-plugin
-node main.mjs migrate /absolute/path/unit-state/unit.json server-admin
-node main.mjs run /absolute/path/unit-state/unit.json
-```
-
-发行目录包含 `main.mjs`、`backendWorker.mjs`、`package.json` 与 `web/`，只需 Node 20+
-即可运行 Unit，不依赖 Electron、源码目录或开发环境的 node_modules。插件的原生依赖
-必须匹配运行环境；完整 Server 包的构建命令见 Server 仓 `runtime/README.md`。
-`init` 的版本取实际 Unit 产品版本，并生成持久身份，不覆盖已有配置。
-旧形式 `node main.mjs unit.json` 仍可启动。
-
-`unit.json` 的插件项可用目录字符串，或 `{ "path": "...", "enabled": true,
-"config": {}, "env": {} }`。目录以配置文件为基准。业务参数通过环境变量、插件
-`env` 或 `config.env` 配置；这些字段不会发送到浏览器。`dataDir` 存放独立于代码的
-插件数据，更新保留。缺省回环监听，`UNIT_PORT` 可覆盖启动端口。
-
-```sh
-node main.mjs status /absolute/path/unit-state/unit.json
-node main.mjs disable /absolute/path/unit-state/unit.json server-admin
-node main.mjs enable /absolute/path/unit-state/unit.json server-admin
-node main.mjs restart /absolute/path/unit-state/unit.json server-admin
-# 相同插件ID的新包即更新；运行中的Unit会切换版本，启动失败会恢复旧版本
-node main.mjs install /absolute/path/unit-state/unit.json /absolute/path/new-server-plugin
-```
-
-启停与更新使用本机控制通道，Unix socket 位于临时目录中按数据目录哈希命名的
-用户专属目录（目录0700/socket0600），不发布为 HTTP 接口。添加新的插件需先停止 Unit；
-已安装插件可在原端口启停或更新。迁移仅在插件未激活时执行。安装使用不可变版本目录，
-旧版本保留；在线更新回复丢失时保留候选目录，避免清理仍在使用的代码。
-`data/run.lock` 防止同一个实例被重复启动；崩溃后的旧 PID 锁会在下次启动时回收。
-安装进程异常退出留下 `.install.lock` 时，确认没有安装进程后可删除此锁再重试。
-
-## 插件契约
-
-后端能力是现有插件 manifest 的可选字段，UI 和后端共享一个插件身份：
-
-```json
-{
-  "id": "server-admin",
-  "version": "1.0.0",
-  "apiVersion": 1,
-  "main": "main.js",
-  "backend": {
-    "apiVersion": 1,
-    "main": "backend/src/unitPlugin.js",
-    "dependencies": { "mode": "npm-ci" }
-  }
-}
-```
-
-`main` 是可选 UI 入口，`spaces/*/space.json` 提供空间配方。`requires` 可声明其他插件ID，
-宿主按依赖顺序激活，逆序停止，拒绝重复身份、Space、冲突路由和循环依赖。
-`minAppVersion`、插件API以及bundled依赖的平台/架构/Node ABI/Linux libc在安装时检查。
-`npm-ci` 模式在插件 `backend/` 执行锁定生产依赖安装，Node路径跟随运行Unit的解释器。
-
-后端默认导出工厂 `(context) => plugin`，详见 `backendTypes.ts`。工厂应无监听/定时任务副作用；
-`start()` 完成初始化，`stop()` 释放资源，`migrate()` 执行迁移。`handle` 是 Node HTTP handler，
-`mounts` 声明URL前缀，`upgrade` 可处理协议升级。宿主选择最长路径段前缀。
-上下文提供包目录、数据目录、私有配置、取消信号、日志和请求重启钩子。
-
-每次激活创建新的 worker thread，使用独立模块缓存与环境变量；Node HTTP请求通过进程内
-MessageChannel/Duplex流转发，无第二个TCP监听端口。停止时先中断在途连接，再释放插件资源；
-超时会终止线程。流式上传、SSE、连接升级及真实连接地址都会保留。
-插件崩溃影响该插件，Unit控制与网页投射继续工作。Worker用于生命周期隔离，
-可信后端插件仍具有运行Unit的OS用户权限，不构成恶意代码安全沙箱。
-
-## 网页投射
-
-`/admin/` 展示同一 Unit 的 Genesis 页面，页面来自安装插件的 Space；Server API
-由同一个 Unit 监听端口分发。`/admin/unit`、`/admin/vault`、`/admin/engine` 保留给宿主，
-插件不能覆盖。浏览器只获取UI字段和Space配方，不获取backend入口、依赖、env或私密配置。
-业务鉴权由插件自己的API执行。引擎、主机文件、vault、配对和宿主配置写入不向公开访问者开放；
-桌面Unit原有配对模式保持兼容。
-
-## 账号与访问者数据
-
-Unit 是框架宿主。账号接口属于宿主能力，具体身份验证由已安装的后端插件提供；
-目前 Server 插件复用现有 Forsion 用户、密码校验、JWT 和撤销记录，不创建第二套账号表。
-后端可贡献 `account: { metadata: { apiBase, loginPath }, resolve(token, { signal }) }`；
-同一 Unit 仅允许一个账号提供方激活。`resolve` 返回经过验证的 userId、username、role
-及 tenantId/workspaceId，私密字段不会进入网页。管理员权限取已签发令牌与当前数据库角色
-的交集；降权、停用与退出不等待缓存失效。
-
-网页复用 Web 的 BrowserAccount 和桌面 AccountCard；登录仍走现有 `/auth` 页面。
-Unit 使用每实例、每标签页的 sessionStorage，登录回跳需匹配该标签发起的 state。
-普通 Web 保留其既有账号存储方式。插件通过可选 `ctx.account` 使用 status/login/logout/
-request/subscribe，不再自行保存投射访问者的登录令牌。Admin 插件原有远程连接模式继续可用。
-
-`/admin/unit/account` 返回当前访问者身份，`/admin/unit/config` 的 GET/PUT 读取或更新
-此访问者的偏好白名单，`/admin/unit/plugin-data/:id` 的 GET/PUT 读写插件文本数据
-（PUT `{data:string}`，最大 1 MB）。每次请求验证身份，存储按账号提供方、用户、tenant、
-workspace 与插件隔离，目录标识由宿主计算，客户端传入的用户/租户字段不能选择所有者。
-数据位于 Unit dataDir 的 accounts 子目录；不读写宿主自己的偏好、vault 或凭据。
-退出成功后吊销当前会话并刷新页面；换号重新挂载应用，旧请求、响应体和延迟回调均不能
-进入新账号。退出网络失败会保留会话并报告错误。内容布局按访问者完整 scope 隔离。
-
-当前交付的是个人 workspace（`personal:<userId>`）以及 Admin API 的角色边界，
-不等同于组织、成员、共享资源 ACL 或所有业务插件已完成多租户迁移。后端插件仍须校验
-其业务数据权限；已签发的独立 MCP 凭据不因网页登录退出而自动撤销。
-
-## 验证
-
-```sh
-cd desktop
-npx tsc --noEmit
-npx vitest run electron/unitWeb.test.ts electron/basicUnit.test.ts electron/backendRunner.test.ts electron/unitRuntime.test.ts electron/unitInstall.test.ts
-```
-
-完整 Server 的独立 PostgreSQL 验收脚本位于 Server 仓 `scripts/verify-unit-installation.mjs`。
-
-## Genesis Web 组合
-
-Server 仓执行 `node scripts/prepare-unit-release.mjs --web`，产出可搬运的
-`runtime/genesis-web/`，包括 Unit、Server 和 Amadeus/Tangu/Calendar/Public
-安装包。部署机执行 `node install.mjs /absolute/path/instance --port 3001`，配置 Server
-环境变量、迁移数据库，再用 Unit CLI 启动；网页入口是 `/web/`。登录、退出与个人
-workspace 复用同一套 Forsion Account。无需独立 Web 服务或独立 Server 监听进程。
-Tangu 的 AI 执行仍需配置现有 fleet 执行节点和模型；Unit 不会隐式打开主机执行权限。
-
-官方前端包可声明共享原生功能，而不必伪造一个空的 JavaScript 入口：
-
-```json
-{
-  "id": "calendar", "version": "1.0.0", "apiVersion": 1,
-  "requires": ["amadeus"],
-  "frontend": { "features": ["calendar"] }
-}
-```
-
-`frontend.features` 支持 `amadeus`、`tangu`、`calendar`、`automation`、`public`。
-渲染实现由 Unit 的共享前端提供，安装包是实际注册这些视图、Space、入口的依据。
-没有声明的功能不能由本地旧开关开启；卸载/禁用后刷新页面即消失。新增原生实现仍需
-更新 Unit。第三方 JavaScript 插件继续使用 `main` 与既有插件 API。
-`frontend.services` 只允许已声明功能对应的 `forsion-cloud-v1` 适配器，声明同源
-`apiBase`；Amadeus 可带 `collaboration:true`，Tangu 使用 `execution:"fleet"`。
-Unit 仅投射依赖全部活跃且账号服务可用的云服务描述，不投射私密后端配置。
-
-插件安装项的 `publish:false` 保持后端工作但不将其管理 UI 加入当前投射。
-Genesis Web 默认对 Server 使用此选项；原 `/admin/` 组合照旧。它只控制 UI 组合，
-不是授权边界：Server API 仍逐项检查角色和数据所有者。旧管理兼容入口仍可访问。
-
-笔记、Calendar.db、会话、消息和任务使用现有后端数据；访问者不能用资源 ID 或
-伪造请求字段选择别人的数据。资源链接绑定当前会话，退出/撤销后不能继续使用；
-事件流随会话失效关闭。公开分享使用 `/web/share/:token`，邀请使用 `/web/invite/:token`，
-其公开性或协作权限仍由原 Amadeus 服务判定。
-
-Server 重启/更新只暂停其提供的云服务，Amadeus/Tangu 等功能入口保持已安装状态；
-没有可用账号提供方时不开放云数据，也不回落到宿主本地数据。包显式声明的真正依赖
-（例如 Calendar → Amadeus）仍按依赖顺序启停，更新失败恢复上一版本和原组合。UI 中的原生功能列表是安装状态展示，
-部署级启停由本机 Unit CLI 管理，不给普通访问者宿主管理权限。
-
-当前 Web 默认组合不含 Automation；定时执行、Inbox 及本地文件能力并未作为云端功能开放。
-
-## 本地设备：无需 Forsion Server
-
-Unit 是基础宿主。`workspace.mode = "local"` 表示一个设备所有者的工作区；公开站点
-继续用既有 Forsion Account 的访问者隔离。两种模式需要显式配置，不随网络状态切换。
-
-```sh
-# 构建一次，再搬运 unit/dist 到目标设备；必须匹配目标 OS / 架构 / Node ABI。
+# Framework + Web UI + optional local business plugin packages.
 node unit/build.mjs --package --local-plugins
+```
 
-# 以下命令在发行包所在目录执行，安装位置可在源码仓外。
+构建使用全新的暂存目录，通过检查后替换 `unit/dist`，不会继承旧发行目录中的额外插件。构建失败保留上一份完整发行。依赖安装后可直接构建，无需商业后端源码、数据库或凭据。Node 20+ 可运行框架；插件的原生依赖须匹配目标系统、CPU 和 Node ABI。
+
+Builds use a fresh staging directory and replace `unit/dist` after validation, preventing leftover plugins from entering the next release. Failed builds preserve the previous distribution. Once dependencies are installed, building requires no commercial backend source, database or credentials. The framework runs on Node 20+; native plugin dependencies must match the target OS, CPU and Node ABI.
+
+复制整个 `unit/dist` 到设备后，在发行目录中执行：
+
+Copy the entire `unit/dist` directory to the device, then run from that directory:
+
+```sh
 node main.mjs init /absolute/path/my-unit --mode local --port 3002 --base /web/
 node main.mjs install /absolute/path/my-unit/unit.json ./plugins/amadeus
 node main.mjs install /absolute/path/my-unit/unit.json ./plugins/tangu
 node main.mjs install /absolute/path/my-unit/unit.json ./plugins/calendar
-node main.mjs install /absolute/path/my-unit/unit.json /path/to/bluebird
 node main.mjs run /absolute/path/my-unit/unit.json
-# 另一终端取得设备所有者访问链接；浏览器也可手动输入设备访问密钥。
+# From another terminal, get this device owner's browser access link.
 node main.mjs access /absolute/path/my-unit/unit.json
 ```
 
-默认仅监听 `127.0.0.1`。访问密钥存于私有 `data/owner-token`；链接中的密钥位于
-fragment，页面消费后立即移除，仅存本标签会话，不进入请求 URL。它复用设备投射的
-Bearer 边界，不是另一套用户账号系统。删除并重新生成密钥后重启可撤销旧密钥。
-对外部署多用户站点应选择公开投射并安装账号提供方，不要共享设备所有者密钥。
+`--local-plugins` 提供 Amadeus、Tangu、Calendar、Automation、Public 的安装包，安装哪些由设备所有者决定。Amadeus 和 Tangu 包含本地运行实现；`unit/plugins` 中的源 manifest 仅为前端声明，不等于完整本地运行包。
 
-本地 Amadeus 包复用桌面 VaultManager、VaultIndex、编译器和同一套页/文件/数据库
-处理器，在 `data/workspace/vault` 保存笔记、Calendar.db 和附件。插件数据在该插件
-运行时的私有目录保存。没有安装 Amadeus 时，Unit 不自行创建业务笔记库。
+`--local-plugins` supplies Amadeus, Tangu, Calendar, Automation and Public packages for the owner to choose from. Amadeus and Tangu include local runtimes. Source manifests in `unit/plugins` are frontend declarations, not complete local runtime packages.
 
-本地 Tangu 包启动现有 standalone 引擎，单独的本机进程与 SQLite，不需要 PostgreSQL
-或 Forsion 登录；引擎只监听 loopback，由 Unit 验证访问密钥后代理。安装的 bundle
-使用桌面同一套 agents/skills/tangu-plugins 加载器；启停和更新时重新装配，已有用户
-人格和会话按桌面语义保留。没有安装 Tangu 时，Unit 不启动引擎。
+默认仅监听回环地址。设备所有者密钥保存在私有数据目录；访问链接用 fragment 传递密钥，网页消费后移除，仅保留在当前标签会话。实例数据目录应在发行目录外，更新代码不会覆盖数据。`init` 拒绝覆盖已有配置。
 
-模型配置复用 Tangu 原生配置：首次可在安装项 `config.engine` 提供 `providers` 等，
-之后修改 `data/plugins/tangu/config.json` 并执行 `restart ... tangu`。供应商密钥留在
-引擎侧，网页只读模型 ID 元数据。无模型也能显示聊天和插件 UI；生成内容需要可用的
-本地模型或模型服务。下载网页/视频需要网络及相应工具，这与依赖 Forsion Server 无关。
+The default listener is loopback-only. The owner key stays in private instance data; the browser consumes it from the URL fragment, removes it and retains it only for that tab session. Keep instance data outside the release directory so code updates preserve data. `init` refuses to overwrite existing configuration.
 
-Qbird/青鸟收藏夹的“收藏链接”可不联网写入本地笔记和收藏索引。浏览器资源使用
-`ctx.app.assetUrl`；主机输出路径使用 `ctx.app.hostPath`，虚拟/云端路径不会当成本机
-目录。分析还需要可用模型及媒体工具；无字幕音频转写需要相应桥能力，缺失会明确提示。
+## 插件与生命周期 / Plugins and lifecycle
 
-### 本地 runtime 契约
+```sh
+node main.mjs status /absolute/path/my-unit/unit.json
+node main.mjs disable /absolute/path/my-unit/unit.json calendar
+node main.mjs enable /absolute/path/my-unit/unit.json calendar
+node main.mjs restart /absolute/path/my-unit/unit.json tangu
+node main.mjs install /absolute/path/my-unit/unit.json /absolute/path/new-plugin-package
+```
 
-可信安装包可声明 `runtime: { apiVersion: 1, main: "runtime.mjs", dependencies? }`。
-入口导出 `createRuntime(context)`，返回 `runtimeTypes.ts` 定义的能力及 `close()`，
-可接收 `setPackages(roots)` 以同步已启用 bundle。Unit 只在 local 工作区加载入口，
-不会把入口、真实引擎令牌或配置投射给浏览器。每种本地能力同时只允许一个提供方。
-运行时依赖需捆在包内；当前本地运行时不执行 npm-ci。
+相同 ID 的新包是更新；已运行的插件可在线替换，激活失败恢复旧版本。依赖按顺序启停，不能先停用仍被其他活跃插件依赖的包。安装全新插件前停止 Unit。迁移命令 `migrate <config> <plugin-id>` 仅用于提供迁移能力且未激活的插件。控制通道仅对本机所有者开放，独立于网页访问者。
 
-本地 runtime 与已安装的桌面插件采用同一可信代码模型，在宿主进程中装配；Tangu
-引擎单独运行。它不提供恶意代码隔离。Server 后端插件仍使用原来的 worker 生命周期。
+Installing a new package with the same ID updates it. Running plugins can be replaced live, with rollback on activation failure. Dependencies determine lifecycle order; a dependency cannot be disabled while its dependents are active. Stop Unit before adding a new plugin. `migrate <config> <plugin-id>` applies only to inactive plugins that provide migrations. The local owner control channel is separate from browser visitor access.
 
-源 `unit/plugins/*/manifest.json` 是可直接安装的前端描述；带本地运行实现的完整包位于
-`unit/dist/plugins`。不可只复制前端描述便声称具备本地存储或执行能力。第三方 JS 插件
-继续使用原有 `main` 和 Space 配方，无需改写成“Unit 插件”。
+插件继续使用 Forsion 的 `main`、Space 配方和插件 API。可选 `frontend.features` 激活共享界面中的 Amadeus、Tangu、Calendar、Automation、Public 功能；新增界面实现仍需更新 Unit。可信插件可声明 `runtime` 提供设备能力，或声明 `backend` 提供 HTTP 服务。接口分别见 `runtimeTypes.ts` 和 `backendTypes.ts`；支持这些通用接口不代表预装任何商业实现。
 
-验证命令：`node unit/verify-local.mjs` 使用发行产物，隔离安装到临时目录，执行真实
-CLI/HTTP/重启持久化检查；`--serve` 保留独立预览。桌面测试还包括
-`unitLocalVault.test.ts`、`unitLocalEngine.test.ts`、`unitLocalWorkspace.test.ts`。
+Plugins use Forsion's existing `main`, Space recipes and plugin API. Optional `frontend.features` activates Amadeus, Tangu, Calendar, Automation or Public in the shared renderer; new UI implementations still require a Unit update. Trusted plugins can declare `runtime` for device capabilities or `backend` for HTTP services, as defined in `runtimeTypes.ts` and `backendTypes.ts`. Supporting these generic contracts does not bundle a commercial implementation.
 
-构建机的原生 SQLite ABI 不匹配时，可通过 `UNIT_SQLITE_PACKAGE` 指向同一锁定版本、
-匹配目标 Node 的已构建包；构建器仅复制到输出目录，并实际打开输出的 SQLite 验证 ABI。
+Unit 拥有投射端口，后端插件通过 worker 和进程内流接入；Tangu 的本地引擎由插件单独托管。未安装对应插件时不创建业务笔记库或启动引擎。账号身份可由外部插件提供，浏览器访问者的配置与插件数据按已验证身份隔离。公开投射与本地所有者模式必须显式选择，服务不可用不会回落到设备数据。
+
+Unit owns the projection port and dispatches backend plugin requests through workers and in-process streams. The Tangu plugin manages its own local engine. Without the relevant plugin, Unit creates no business vault or engine. External plugins may provide account identities; visitor preferences and plugin data are scoped to verified identities. Public projection and local owner mode are explicit choices; service failure never falls back to device data.
+
+本地运行时和后端插件采用可信代码模型，具有宿主用户权限；worker 提供生命周期隔离，不提供恶意代码沙箱。本地 Tangu 可使用直接配置的模型供应商，无需商业 Server；生成内容仍需要可用模型。
+
+Local runtimes and backend plugins are trusted code with the host user's permissions. Workers isolate lifecycle, not malicious code. Local Tangu can use directly configured model providers without the commercial Server; generation still requires an available model.
+
+## 验证 / Verification
+
+```sh
+node unit/check-sync.mjs
+node --test unit/releasePolicy.test.mjs
+cd desktop
+npm run typecheck
+npm run check:parity
+npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts
+```
+
+`node unit/verify-local.mjs --qbird /absolute/path/bluebird` 使用已构建的发行包，在临时目录验证安装、真实本地笔记、插件和引擎生命周期、重启持久化；不需要商业后端或数据库。`--serve` 可保留独立预览。必须使用与发行包原生模块匹配的 Node；构建时可用 `UNIT_SQLITE_PACKAGE` 指向同版本、目标 ABI 的 SQLite 包。
+
+`node unit/verify-local.mjs --qbird /absolute/path/bluebird` verifies the built release in a temporary directory, including installation, real local notes, plugin and engine lifecycle, and restart persistence. It needs no commercial backend or database. `--serve` retains an isolated preview. Use a Node runtime matching the package's native modules; `UNIT_SQLITE_PACKAGE` can select the same locked SQLite version built for the target ABI.
