@@ -89,7 +89,7 @@ Local runtimes and backend plugins are trusted code with the host user's permiss
 
 ```sh
 node unit/check-sync.mjs
-node --test unit/releasePolicy.test.mjs
+node --test unit/*.test.mjs
 cd desktop
 npm run typecheck
 npm run check:parity

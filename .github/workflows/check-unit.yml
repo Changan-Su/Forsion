@@ -23,7 +23,7 @@ jobs:
       - name: Check Desktop baseline and commercial exclusions
         run: |
           node unit/check-sync.mjs
-          node --test unit/releasePolicy.test.mjs
+          node --test unit/*.test.mjs
       - name: Install shared dependencies
         run: |
           npm ci --prefix tangu-agent --no-audit --no-fund
