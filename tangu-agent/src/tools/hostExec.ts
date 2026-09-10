@@ -9,6 +9,7 @@
  * （见 services/approvals.ts）；本文件只管「真去做」，不含审批逻辑。
  */
 import { spawnHostShell, hostSandboxEnabled } from '../sandbox/hostSandbox.js';
+import { hostShellName, hostShellQuoting } from './shellPrompt.js';
 import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -200,7 +201,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       function: {
         name: 'run_bash',
         description:
-          'Run a single shell command (/bin/sh -c) on the user\'s machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. ' +
+          `Run a single shell command (${hostShellName()}) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. ` +
+          hostShellQuoting() +
           'To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. ' +
           'Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. ' +
           'For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.',

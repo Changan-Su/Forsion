@@ -82,7 +82,7 @@ describe('registry 级:chat 正向工具面', () => {
     const unlockCtx: ToolContext = { ...ctx, unlockTools: (ns) => unlocked.push(...ns) };
     for (const n of ['run_bash', 'amadeus_write_note', 'delegate', 'apply_patch', 'use_skill']) {
       const r = await executeTool({ id: 'c', type: 'function', function: { name: 'load_tools', arguments: JSON.stringify({ names: [n] }) } } as any, unlockCtx);
-      expect(String(r.result), n).toContain('Unknown/not loadable');
+      expect(String(r.result), n).toContain('Unavailable in this session');
     }
     expect(unlocked).toEqual([]);
     const ok = await executeTool({ id: 'c', type: 'function', function: { name: 'load_tools', arguments: JSON.stringify({ names: ['search_sessions'] }) } } as any, unlockCtx);

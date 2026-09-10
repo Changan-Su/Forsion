@@ -34,6 +34,7 @@ import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
   modelContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
+  ContextUsageTracker, CompactionAttemptGuard,
 } from './contextBudget.js';
 import { getLatestSummary, compactWorkingMessages } from './compaction.js';
 import { getAgent, isValidSlug } from '../agents/agentRegistry.js';
@@ -44,6 +45,7 @@ import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
+import { replayAssistantHistory } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
@@ -77,16 +79,32 @@ const VERIFY_MAX_ROUNDS = 2;
 // 接受注入；排队中的 run 还没 AC → 拒收（前端回退起新 run）。
 interface SteerMsg { id: string; content: string; attachments?: any[] }
 const steerQueue = new Map<string, SteerMsg[]>();
+// Only the read-only model request is interruptible for steering. Tool execution and
+// the parent run keep their lifetime; completed work remains in workingMessages.
+const immediateSteers = new Set<string>();
+const steerWakeups = new Map<string, () => void>();
+
+export function expediteSteer(runId: string): boolean {
+  const ac = abortControllers.get(runId);
+  if (!ac || ac.signal.aborted) return false;
+  if (steerQueue.get(runId)?.length) {
+    immediateSteers.add(runId);
+    steerWakeups.get(runId)?.();
+  }
+  return true; // already consumed is an idempotent success, not a reason to resend
+}
 
 /** 入队一条转向消息；run 非活跃返回 false（前端据此回退 startRun）。 */
 export function enqueueSteer(runId: string, msg: SteerMsg): boolean {
-  if (!abortControllers.has(runId)) return false;
+  const ac = abortControllers.get(runId);
+  if (!ac || ac.signal.aborted) return false;
   const q = steerQueue.get(runId);
   if (q) q.push(msg);
   else steerQueue.set(runId, [msg]);
   return true;
 }
 function drainSteer(runId: string): SteerMsg[] {
+  immediateSteers.delete(runId);
   const q = steerQueue.get(runId);
   if (!q || !q.length) return [];
   steerQueue.delete(runId);
@@ -134,6 +152,20 @@ function assistantTurnOf(res: { outputItems?: any[] }, content: string, toolCall
 const sessionActive = new Map<string, string>(); // sessionId -> 活跃 runId
 const sessionQueue = new Map<string, string[]>(); // sessionId -> 排队 runId（FIFO）
 const runSession = new Map<string, string>(); // runId -> sessionId（abort/清理反查）
+// 终态事件早于 finally 清理;停止确认必须等待整个任务退出,不能只看 DB 的 status。
+const runTasks = new Map<string, Promise<void>>();
+
+export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Promise<boolean> {
+  const task = runTasks.get(runId);
+  if (!task) return !runSession.has(runId) && !abortControllers.has(runId);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task.then(() => true, () => false),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
 
 /** 入队一个 run：空闲则立刻起，否则排队等当前 run 跑完。同步 check-and-set（set 前无 await），单线程下无竞态。 */
 export function enqueueRun(sessionId: string, runId: string): void {
@@ -154,7 +186,7 @@ export function enqueueRun(sessionId: string, runId: string): void {
 export function startRun(runId: string): void {
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  void dispatchRun(runId, ac).catch(async (err) => {
+  const task = dispatchRun(runId, ac).catch(async (err) => {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
     const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
@@ -174,7 +206,8 @@ export function startRun(runId: string): void {
       if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
       setTimeout(() => cleanup(runId), 30_000);
     }
-  });
+  }).finally(() => { runTasks.delete(runId); });
+  runTasks.set(runId, task);
 }
 
 /** 当前 run 结束后推进同会话队列：起下一个排队 run（无则清掉 active 标记）。 */
@@ -274,11 +307,13 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       cwd: typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined,
       signal: ac.signal,
       publish: (type: string, payload: any) => {
+        if (ac.signal.aborted) return;
         void publish(runId, type, payload);
       },
       requestApproval: (preview: string, toolCall: ToolCall): Promise<ApprovalDecision> =>
         requestApproval(runId, toolCall, preview, ac.signal),
     });
+    ac.signal.throwIfAborted();
     finalContent = result.content || '';
     await finalizeAssistantMessage(
       assistantId, sessionId, modelId, finalContent, result.reasoning || '', result.toolCalls || [], result.toolResults || [],
@@ -323,7 +358,8 @@ export function abortRun(runId: string): void {
     if (i >= 0) q.splice(i, 1);
     if (!q.length) sessionQueue.delete(sid);
   }
-  void terminalizeQueuedAbort(runId);
+  const task = terminalizeQueuedAbort(runId).finally(() => { runTasks.delete(runId); });
+  runTasks.set(runId, task);
 }
 
 /** 排队中被取消的 run：标 aborted + 补一条终态事件，让 SSE/刷新能看到结束。 */
@@ -392,8 +428,10 @@ async function hydrateHistory(
     const role = r.role === 'model' ? 'assistant' : r.role;
     if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
     const content = r.content || '';
-    // 跳过空内容的 assistant 行（历史里以 tool_calls 收尾的轮次，无文本；空 assistant 会被部分 provider 拒绝）
-    if (role === 'assistant' && !content.trim()) continue;
+    if (role === 'assistant') {
+      out.push(...replayAssistantHistory(r));
+      continue;
+    }
     out.push({ role, content: capHistoryContent(content) } as ChatMessage);
     if (role === 'user' && r.attachments) {
       const imgs = normalizeImageAttachments(r.attachments);
@@ -704,7 +742,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 聊天框里贴的图也走「辅助模型 · 图像识别」—— 在此之前只有工具产出的图(view_image/截图)走,
     // 用户手贴的图恒定原样发给主模型:主模型没视觉时要么被 provider 拒、要么装作看见了瞎编。
     // 这就是「辅助模型-图像识别没有正常工作」的真身(2026-08-03)。
-    const history = await hydrateHistory(sessionId, run.assistant_message_id || '', async (imgs) => {
+    const describeUserImages = async (imgs: ReturnType<typeof normalizeImageAttachments>): Promise<string | null> => {
       if (ac.signal.aborted || !imgs.length) return null;
       try {
         if (!(await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined))) return null;
@@ -717,7 +755,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         console.warn(`[agent-core] run=${runId} 附件图像识别降级失败(退回直接送图):`, e?.message || e);
         return null;
       }
-    });
+    };
+    const history = await hydrateHistory(sessionId, run.assistant_message_id || '', describeUserImages);
 
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
     const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig);
@@ -1130,7 +1169,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           id: m.id, sessionId, content: m.content, modelId,
           attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
         });
-        workingMessages.push({ role: 'user', content: m.content } as ChatMessage);
+        const images = normalizeImageAttachments(m.attachments);
+        const described = images.length ? await describeUserImages(images) : null;
+        workingMessages.push({ role: 'user', content: described
+          ? `${m.content}\n\n[Attached images transcribed by the vision assistant]\n${described}`
+          : images.length ? toImageParts(m.content, images) : m.content } as ChatMessage);
       }
       finalContent = '';
       finalReasoning = '';
@@ -1389,7 +1432,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       user = { id: userId, username: 'local' };
     }
 
-    const estCost = await calculateCost(modelId, JSON.stringify(workingMessages).length / 4, 500);
+    const estCost = await calculateCost(modelId, estimateMessagesTokens(workingMessages), 500);
     const pre = await canConsumeTokenPoints(user.id, estCost);
     if (!pre.ok) {
       await publish(runId, 'error', { error: 'token_quota_exceeded', detail: pre });
@@ -1408,7 +1451,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let costTotal = 0; // 本 run 累计扣费点数(每-run 成本上限护栏用)
     const runCostLimit = runCostCeiling(); // TANGU_MAX_RUN_COST，<=0 关闭
 
-    let lastRealPromptTokens = 0; // 上一轮 provider 真实 prompt 用量(压缩触发的首选依据,对齐 Hermes)
+    const contextUsage = new ContextUsageTracker();
+    const compactionGuard = new CompactionAttemptGuard();
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
@@ -1431,39 +1475,45 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       //   ≥95%(FORCE_COMPACT_RATIO):总结当前工作快照并替换同一前缀(含本轮工具结果)。不推进持久化
       //     through_timestamp:当前助手段尚未落库,否则会删除未进摘要的工作或跳过后续消息。
       //   ≥50%(COMPACT_TRIGGER_RATIO):机械批量折叠中段(运行内、不落库),缓存 miss 摊薄成偶发。
-      // 取「上一轮真实用量」与「当前粗估」的较大者:真实值准但滞后一轮——上一轮之后刚追加的大工具
-      // 结果它看不见,小窗口模型会在下一次压缩机会到来前先撞 context overflow(Codex 评审盲点 3.4)。
-      const estPrompt = Math.max(lastRealPromptTokens, estimateMessagesTokens(workingMessages));
+      // 实测输入 + 尚未被实测覆盖的增量:不能让全历史粗估永远压过 provider 的真实用量。
+      const estPrompt = contextUsage.estimate(workingMessages);
       // —— PreCompact hook：压缩将触发时先问 hook（continue:false → 跳过本次压缩；host-only，云端 no-op）——
       let skipCompact = false;
       if (modelId && estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
         const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
         skipCompact = !!pcV.stop;
       }
-      if (!skipCompact && modelId && estPrompt > ctxWindowTokens * FORCE_COMPACT_RATIO) {
+      if (!skipCompact && modelId && estPrompt > ctxWindowTokens * FORCE_COMPACT_RATIO && compactionGuard.shouldAttempt(estPrompt, workingMessages)) {
         void publish(runId, 'status', { phase: 'compacting', forced: true, iteration });
         const cr = await compactWorkingMessages(workingMessages, modelId, appId, ac.signal);
         if (cr.ok && cr.summary) {
-          lastRealPromptTokens = 0;
+          contextUsage.invalidate();
           void publish(runId, 'status', { phase: 'compacted', forced: true, iteration });
         } else {
           const r = compactContext(workingMessages);
           if (r.changed) {
-            lastRealPromptTokens = 0;
+            contextUsage.invalidate();
             // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
             void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, savedChars: r.savedChars, iteration });
           }
         }
+        const afterTokens = contextUsage.estimate(workingMessages);
+        compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages);
+        void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens: estPrompt, afterTokens, changed: afterTokens < estPrompt });
       } else if (estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
         const r = compactContext(workingMessages);
         if (r.changed) {
-          lastRealPromptTokens = 0; // 折叠后旧用量失效,下轮重新以真实值为准
+          contextUsage.invalidate(); // 折叠后旧用量失效,下轮重新以真实值为准
           console.warn(
             `[agent-core] run=${runId} 上下文压缩:省 ${r.savedChars.toLocaleString()} 字符;` +
               `压缩前最大消息: ${r.breakdown.map((b) => `#${b.index}(${b.role},${b.chars.toLocaleString()}字符)`).join(' ')}`,
           );
           void publish(runId, 'status', { phase: 'compacted', savedChars: r.savedChars, iteration });
         }
+      }
+
+      if (!skipCompact && contextUsage.estimate(workingMessages) >= ctxWindowTokens) {
+        throw new Error('Context remains over the model input budget after compaction. Reduce large attachments or use a larger-context model; the original conversation has been preserved.');
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
@@ -1505,6 +1555,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       );
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
+      // A flush may have arrived while building the payload, before a model request exists.
+      if (immediateSteers.has(runId) && steerQueue.get(runId)?.length) { iteration -= 1; continue; }
       // 有界重试:兜「首帧前的瞬时传输错」(fetch failed / 网关 502 / idle 504 等——托管面偶发抖动的主因)。
       // 已吐帧的中流断线走下面的「段切分续写」恢复,不走本重试(重放整流会重复);用户 abort 与 4xx 不重试。
       let res!: Awaited<ReturnType<typeof streamProviderCompletion>>;
@@ -1518,12 +1570,24 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       let llmTiming: { ttftMs?: number; uploadMs?: number; llmMs?: number } = {};
       const retryChainStartedAt = Date.now();
       for (let attempt = 0; ; attempt++) {
+        if (immediateSteers.has(runId) && steerQueue.get(runId)?.length) {
+          await applySteering(drainSteer(runId));
+          resumedMidstream = true;
+          iteration -= 1;
+          break;
+        }
         let emitted = false;
         partialText = '';
         const attemptStart = Date.now();
         let acceptedAt = 0;
         let firstFrameAt = 0;
         const markFrame = (): void => { if (!firstFrameAt) firstFrameAt = Date.now(); };
+        const sampling = new AbortController();
+        const stopSampling = (): void => sampling.abort(ac.signal.reason);
+        ac.signal.addEventListener('abort', stopSampling, { once: true });
+        if (ac.signal.aborted) stopSampling();
+        const steerSampling = (): void => sampling.abort(new Error('Sampling interrupted for steering'));
+        steerWakeups.set(runId, steerSampling);
         void publish(runId, 'status', { phase: 'llm_call', stage: 'sending', iteration, bytes: requestBytes });
         try {
           res = await streamProviderCompletion({
@@ -1531,14 +1595,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             baseUrl,
             payload,
             provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
-            signal: ac.signal,
+            signal: sampling.signal,
             onResponseStart: () => {
+              if (sampling.signal.aborted) return;
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
             },
-            onToken: (d) => { emitted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
-            onReasoning: (d) => { emitted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            onToken: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             onToolCallDelta: (info) => {
+              if (sampling.signal.aborted) return;
               emitted = true;
               markFrame();
               // Stream the raw arg delta so the client can render a live "writing
@@ -1553,6 +1619,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               }
             },
           });
+          sampling.signal.throwIfAborted();
           llmTiming = {
             llmMs: Date.now() - attemptStart,
             ...(firstFrameAt ? { ttftMs: firstFrameAt - attemptStart } : {}),
@@ -1560,7 +1627,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           };
           break;
         } catch (err) {
-          if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
+          if (ac.signal.aborted) throw err;
+          if (sampling.signal.aborted && immediateSteers.has(runId)) {
+            if (partialText.trim()) {
+              appendFinal(partialText);
+              workingMessages.push({ role: 'assistant', content: partialText });
+            }
+            await applySteering(drainSteer(runId));
+            void publish(runId, 'status', { phase: 'steering_applied', iteration });
+            resumedMidstream = true;
+            iteration -= 1;
+            break;
+          }
+          if (err instanceof AbortLikeError) throw err;
           // 中流断线恢复(借 pi 的 session 级重试思想):此前「吐过帧就整 run 报废」对长任务是灾难——
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
           // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
@@ -1608,12 +1687,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           });
           await sleepOrAbort(wait, ac.signal);
           if (llmRetryBudgetExceeded(retryChainStartedAt)) throw err;
+        } finally {
+          ac.signal.removeEventListener('abort', stopSampling);
+          if (steerWakeups.get(runId) === steerSampling) steerWakeups.delete(runId);
         }
       }
 
       if (resumedMidstream) continue; // 中流断线已段切分回灌:res 未产出,直接进下一迭代续写(steer 照常在迭代顶注入)
 
-      lastRealPromptTokens = res.usage.prompt_tokens || 0;
+      // 供应商可能在取消之后才返回成功;不允许迟到的结果启动工具/续跑或发布 done。
+      ac.signal.throwIfAborted();
+      contextUsage.observe(workingMessages, res.usage.prompt_tokens || 0);
       const cachedTokens = res.usage.cached_tokens || 0;
       const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
@@ -1684,13 +1768,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 本轮为空(整条都是工具标记被剔空)时保留已累积值,仍为空则给一条可读提示,避免最终消息全空白。
         appendFinal(res.content || '');
         finalReasoning = res.reasoning || finalReasoning;
-        // 运行时转向:模型本想收尾,但用户在这一轮里发了消息 → 续跑而非结束(最后一轮仍须收尾)。先把刚
+        // 运行时转向:模型本想收尾,但用户在这一轮里发了消息 → 续跑而非结束(末轮也必须答复已接受的输入)。先把刚
         // 产出的最终文本作为助手轮并入上下文(只灌本轮文本——preamble 已在 workingMessages 里,
         // 全量灌 finalContent 会在模型上下文里重复),再切回合注入 U,continue 让下一迭代带着 U 继续。
         const steeredAtFinish = drainSteer(runId);
-        if (steeredAtFinish.length && !lastIter) {
+        if (steeredAtFinish.length) {
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           await applySteering(steeredAtFinish);
+          if (lastIter) iteration -= 1; // accepted input must be answered even at the final boundary
           continue;
         }
         // —— Stop hook：run 自然收尾即触发（host-only；云端 no-op）。decision:block+reason → 复用 steer 机制
@@ -1966,6 +2051,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await flush();
     abortControllers.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
+    immediateSteers.delete(runId);
+    steerWakeups.delete(runId);
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

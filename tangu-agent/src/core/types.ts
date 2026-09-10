@@ -13,8 +13,8 @@ export interface ToolCall {
   function: { name: string; arguments: string };
   /**
    * UI-only persistence anchor: UTF-16 offset in the finalized assistant text immediately before
-   * this tool call. The provider never receives hydrated tool calls, but Desktop can use this
-   * metadata to restore text -> tool/sketch -> text ordering after a history reload.
+   * this tool call. History replay strips this UI-only metadata before sending calls to
+   * the provider; Desktop uses it to restore text -> tool/sketch -> text ordering.
    */
   ui_content_offset?: number;
 }

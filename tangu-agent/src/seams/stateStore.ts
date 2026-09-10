@@ -45,6 +45,7 @@ export interface RawMessageRow {
   role: string;
   content: string | null;
   tool_calls: any;
+  tool_results?: any;
   attachments: any;
   /** 消息时间戳(ms)；压缩检查点 hydrate 用。本地 sqlStateStore 填充；httpStateStore 可能缺（则压缩检查点在 worker 退化为 no-op，fail-safe）。 */
   timestamp?: number;

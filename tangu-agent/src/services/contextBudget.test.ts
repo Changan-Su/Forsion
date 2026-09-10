@@ -109,10 +109,11 @@ describe('estimateMessageTokens / estimateMessagesTokens', () => {
   it('adds 8 role overhead + content estimate (string)', () => {
     expect(estimateMessageTokens({ role: 'user', content: 'abcd' })).toBe(9); // 8 + 1
   });
-  it('handles text parts and image_url length/8', () => {
+  it('handles text parts and budgets images independently of URL length', () => {
     expect(estimateMessageTokens({ role: 'user', content: [{ type: 'text', text: 'abcd' }] })).toBe(9);
     const url = 'x'.repeat(80);
-    expect(estimateMessageTokens({ role: 'user', content: [{ type: 'image_url', image_url: { url } }] })).toBe(18); // 8 + ceil(80/8)
+    expect(estimateMessageTokens({ role: 'user', content: [{ type: 'image_url', image_url: { url } }] })).toBe(4104); // role overhead + image heuristic
+    expect(estimateMessageTokens({ role: 'user', content: [{ type: 'image_url', image_url: { url: url.repeat(1000) } }] })).toBe(4104);
   });
   it('includes tool_calls arguments', () => {
     expect(estimateMessageTokens({ role: 'assistant', tool_calls: [{ function: { arguments: 'abcd' } }] })).toBe(9);

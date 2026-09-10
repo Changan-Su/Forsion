@@ -40,13 +40,12 @@ export function responseStyleSection(channelSession?: boolean, opts?: { noPreamb
   );
 }
 
-/** 任务持久性契约(借 Codex「Autonomy and Persistence」+ Thread Goals continuation 的精华):
- *  长任务中途松手 / 被打断后忘记继续,病根都是提示词没给「坚持到底」的压力(Codex 的 must keep going
- *  是刻在基础提示里的;PI 靠把中止消息从上下文里剔除来「装作没停过」——我们落库半截消息,必须补压力)。
+/** 任务持久性契约:与保留工具证据的历史重放、同 run 插话一起工作,不能靠提示词代替运行时状态。
  *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组(per-app 覆盖是整段替换,会被静默丢掉)。
  *  计划模式不注入(「carry through implementation」与只读工具集直接矛盾)。 */
 export const PERSISTENCE_SECTION =
   '## Task Persistence\n' +
+  '- A new message during active work normally updates the existing task; it does not replace the original objective. Incorporate corrections and constraints. For a question or status request, answer briefly, then continue the unfinished authorized task. Replace or abandon it only when the user clearly cancels, pauses, or requests an incompatible objective. If blocked, explain the blocker and what remains.\n' +
   '- Keep going until the user\'s request is fully resolved before ending your turn. Do not stop at analysis or a partial fix: carry the work through implementation and verification unless the user pauses or redirects you.\n' +
   '- Before ending your turn, re-read your last paragraph: if it is a plan, a promise ("I will..."), or a list of next steps, do that work now instead of stopping.\n' +
   '- For multi-step tasks, keep a running checklist with todo_write and keep it current; after each completed step, continue with the next item instead of yielding.\n' +
