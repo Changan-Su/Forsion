@@ -8,6 +8,8 @@ import { addCommand, UI_ZOOM_EVENT } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 
 const KEY = 'forsion_ui_zoom'
+// 2.10.0 默认缩放回归:升级/重装可能保留旧 WebStorage,按发布批次只清一次历史值。
+const DEFAULT_MIGRATION_KEY = 'forsion_ui_zoom_default_2_10_0'
 const STEP = 0.1
 const MIN = 0.5
 const MAX = 2
@@ -66,9 +68,22 @@ export function resetUiZoom(): void {
   apply(endpointDefault)
 }
 
+/** 首次进入本发布批次时回到端默认；迁移后用户再调的比例继续正常持久化。 */
+export function migrateUiZoomDefault(): boolean {
+  try {
+    if (localStorage.getItem(DEFAULT_MIGRATION_KEY) === '1') return false
+    localStorage.removeItem(KEY)
+    localStorage.setItem(DEFAULT_MIGRATION_KEY, '1')
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 入口调用:应用持久化值(无则端默认),并注册命令面板命令。 */
 export function initUiZoom(defaultZoom = 1): void {
   endpointDefault = defaultZoom
+  migrateUiZoomDefault()
   apply(getUiZoom())
   const tr = (k: string): string => useApp.getState().tr(k)
   // 等效 Ctrl/⌘+±。hotkey 只在 Electron 绑(web 浏览器让原生 Ctrl+± 管浏览器缩放,不抢)。

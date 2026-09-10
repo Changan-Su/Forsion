@@ -514,17 +514,47 @@ export const getAgentsMeta = (cfg: TanguDesktopConfig) =>
 export const putAgentsMeta = (cfg: TanguDesktopConfig, patch: Partial<AgentsMeta>) =>
   request<AgentsMeta>(cfg, '/agent/agents-meta', { method: 'PUT', body: JSON.stringify(patch) })
 
-// 某 agent 的 MEMORY / LOG(按 slug 读其文件夹)。
+// 某 agent 的 MEMORY / LOG(按 slug 读其文件夹)。读取失败必须显式呈现，禁止假空白后覆盖。
+export interface AgentMemorySource { kind: string; sessionId?: string; messageId?: string; runId?: string }
+export interface AgentMemoryEntry { id: string; content: string; source: AgentMemorySource; evidenceIds: string[]; createdAt: number; updatedAt: number }
+export interface AgentMemorySnapshot {
+  version: string; content: string; entries: AgentMemoryEntry[]; updatedAt: number
+  tombstones: Array<{ id: string; forgottenAt: number }>
+}
+export interface AgentMemoryRevision { version: string; createdAt: number; source: AgentMemorySource; content: string }
+export interface AgentMemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
+export interface AgentMemoryDreamStatus {
+  state: 'idle' | 'running' | 'cancelling' | 'completed' | 'skipped' | 'failed' | 'cancelled'
+  running: boolean; detail?: string; startedAt?: string; finishedAt?: string; calls?: number
+}
+export interface AgentMemoryDream { config: AgentMemoryDreamConfig; status: AgentMemoryDreamStatus; candidates: number }
+const agentMemoryPath = (slug: string) => `/agent/agents/${encodeURIComponent(slug)}/memory`
+export const getAgentMemorySnapshot = (cfg: TanguDesktopConfig, slug: string) => request<AgentMemorySnapshot>(cfg, agentMemoryPath(slug))
 export const getAgentMemory = (cfg: TanguDesktopConfig, slug: string) =>
-  request<{ content: string }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/memory`).then((r) => r.content).catch(() => '')
-export const putAgentMemory = (cfg: TanguDesktopConfig, slug: string, content: string) =>
-  request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/memory`, { method: 'PUT', body: JSON.stringify({ content }) })
+  getAgentMemorySnapshot(cfg, slug).then((r) => r.content)
+export const putAgentMemory = (cfg: TanguDesktopConfig, slug: string, content: string, expectedVersion: string) =>
+  request<AgentMemorySnapshot>(cfg, agentMemoryPath(slug), { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
+export const mutateAgentMemoryEntry = (cfg: TanguDesktopConfig, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
+  request<AgentMemorySnapshot>(cfg, `${agentMemoryPath(slug)}/entries`, { method: 'POST', body: JSON.stringify(body) })
+export const listAgentMemoryRevisions = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ revisions: AgentMemoryRevision[] }>(cfg, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
+export const restoreAgentMemory = (cfg: TanguDesktopConfig, slug: string, version: string, expectedVersion: string) =>
+  request<AgentMemorySnapshot>(cfg, `${agentMemoryPath(slug)}/restore`, { method: 'POST', body: JSON.stringify({ version, expectedVersion }) })
+export const getAgentMemoryDream = (cfg: TanguDesktopConfig, slug: string) => request<AgentMemoryDream>(cfg, `${agentMemoryPath(slug)}/dream`)
+export const configureAgentMemoryDream = (cfg: TanguDesktopConfig, slug: string, patch: Partial<AgentMemoryDreamConfig>) =>
+  request<AgentMemoryDream>(cfg, `${agentMemoryPath(slug)}/dream`, { method: 'PUT', body: JSON.stringify(patch) })
+export const startAgentMemoryDream = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ status: AgentMemoryDreamStatus }>(cfg, `${agentMemoryPath(slug)}/dream`, { method: 'POST' }).then((r) => r.status)
+export const cancelAgentMemoryDream = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ status: AgentMemoryDreamStatus }>(cfg, `${agentMemoryPath(slug)}/dream`, { method: 'DELETE' }).then((r) => r.status)
 export const listAgentLogDates = (cfg: TanguDesktopConfig, slug: string) =>
-  request<{ dates: string[] }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/logs`).then((r) => r.dates).catch(() => [] as string[])
+  request<{ dates: string[] }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/logs`).then((r) => r.dates)
+export const getAgentLogSnapshot = (cfg: TanguDesktopConfig, slug: string, date: string) =>
+  request<{ date: string; content: string; version: string }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`)
 export const getAgentLog = (cfg: TanguDesktopConfig, slug: string, date: string) =>
-  request<{ date: string; content: string }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`).then((r) => r.content).catch(() => '')
-export const putAgentLog = (cfg: TanguDesktopConfig, slug: string, date: string, content: string) =>
-  request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`, { method: 'PUT', body: JSON.stringify({ content }) })
+  getAgentLogSnapshot(cfg, slug, date).then((r) => r.content)
+export const putAgentLog = (cfg: TanguDesktopConfig, slug: string, date: string, content: string, expectedVersion: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`, { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
 
 // 某 agent 的 Library 文件(列表 / 读 / 写 / 删;用 agent 自身 slug)。
 export type AgentLibraryFile = { name: string; size: number; isBinary: boolean; mtimeMs: number }

@@ -9,6 +9,7 @@
  * 用户脚本因此可跨 Claude/Codex/Hermes/Tangu 复用。
  */
 import type { AppProfile } from '../seams/appProfile.js';
+import type { HostSandboxConfig } from '../sandbox/hostSandbox.js';
 
 /** 生命周期事件名（PascalCase，与 Claude Code / Codex 对齐）。 */
 export type HookEventName =
@@ -138,6 +139,7 @@ export interface HookVerdict {
 
 /** runHooks 运行上下文（host-only 闸所需 + payload 富集）。 */
 export interface HookRunContext {
+  hostSandbox?: HostSandboxConfig;
   profile?: AppProfile;
   execMode?: 'sandbox' | 'host';
   cwd?: string;

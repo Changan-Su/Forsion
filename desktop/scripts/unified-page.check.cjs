@@ -1479,7 +1479,7 @@ async function main() {
       return out.join(' | ')
     }, PM)
 
-    // K1 折叠态标题回车:新块落到隐藏区**之后**且可见(此前会插进 display:none,看着像没反应)
+    // K1 折叠态标题回车:先展开,再把新正文紧跟标题插入(此前会插进 display:none,看着像没反应)
     {
       const pg = await openSeed('# 甲\n\n甲一。\n\n甲二。\n\n# 乙\n')
       const h = await pg.evaluate((s) => {
@@ -1494,15 +1494,15 @@ async function main() {
       await caret(pg, '甲', 'end')
       await pg.waitForTimeout(150)
       await pg.keyboard.press('Enter')
-      await pg.keyboard.type('新标题')
+      await pg.keyboard.type('新正文')
       await pg.waitForTimeout(250)
       const k1 = await pg.evaluate((s) => {
         const pm = document.querySelector(s)
-        const el = [...pm.querySelectorAll('h1,h2,p')].find((x) => x.textContent.includes('新标题'))
+        const el = [...pm.querySelectorAll('h1,h2,p')].find((x) => x.textContent.includes('新正文'))
         return { order: [...pm.children].map((c) => c.textContent.replace(/^#+\s*/, '').slice(0, 4)).join('|'), visible: el ? el.offsetParent !== null : false, tag: el?.tagName ?? '' }
       }, PM)
-      record('K1 折叠态标题回车:新块落在折叠区之后且可见,继承标题级别',
-        k1.visible && k1.tag === 'H1' && k1.order.indexOf('新标') > k1.order.indexOf('甲二') && k1.order.indexOf('新标') < k1.order.indexOf('乙'),
+      record('K1 折叠态标题回车:先展开,新正文紧跟标题且可见',
+        k1.visible && k1.tag === 'P' && k1.order.indexOf('新正') < k1.order.indexOf('甲一'),
         JSON.stringify(k1))
       await pg.close()
     }

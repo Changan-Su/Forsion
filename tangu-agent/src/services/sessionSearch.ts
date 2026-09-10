@@ -1,16 +1,46 @@
 /**
- * 会话检索(内容级召回)的**共享真源**:模型侧 `search_sessions` 工具与桌面的搜索面共用这一条 SQL。
+ * 会话检索共享入口:管理界面保留全局用户搜索，运行时工具使用可信 Agent 范围与有界相关性窗口。
  * 两边各写一份的下场是「界面搜得到、模型搜不到」(或反过来),而两边看起来都对——这类错位没有类型能抓。
  *
  * 语义正典(勿改回,见 tools/builtin/searchSessions.ts 头注与记忆 project_tangu_session_recall):
  *  - 每个词「标题/摘要 OR 任一消息 EXISTS」,跨消息 AND(中英词常分散在一问一答两侧)。
  *  - **LIMIT 按会话计**:话痨会话再刷屏也挤不占别人的名额。
  *  - 无 query = 最近列表,且**空壳会话不进榜**(没标题没摘要 = 还没聊出内容)。
- *  - 归属:只按 (user_id, app_id) 且 kind='user';chat_messages 没有 user_id 列,内容检索必须
+ *  - 管理归属按 (user_id, app_id) 且 kind='user';工具额外限制 agent_config.agentSlug；内容检索必须
  *    JOIN chat_sessions 做租户隔离,别改成裸查 chat_messages。
  *  - 方言(desktop=sqlite / 云=PG 同一条 SQL):LOWER+LIKE+ESCAPE '\'、`||` 拼接、COALESCE 两边一致。
  */
-import { query } from '../core/db.js';
+import { getDbType, query } from '../core/db.js';
+import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { currentDisplayAgentSlug } from '../seams/runContext.js';
+
+/** Runtime-only scope. Management routes omit it; model arguments must never supply it. */
+export interface SessionToolScope { agentSlug: string; }
+export function sessionToolScope(agentSlug?: string): SessionToolScope {
+  const active = currentDisplayAgentSlug();
+  if (agentSlug && active && agentSlug !== active) throw new Error('History scope does not match the active Agent.');
+  return { agentSlug: agentSlug || active || DEFAULT_AGENT_SLUG };
+}
+
+/** Keep ownership in every SQL query, including exact message reads. Invalid config is never legacy. */
+export function sessionAgentPredicate(scope: SessionToolScope, alias = 's'): { sql: string; params: string[] } {
+  const col = `${alias}.agent_config`;
+  const slug = scope.agentSlug || DEFAULT_AGENT_SLUG;
+  if (getDbType() === 'sqlite') {
+    return {
+      sql: `(CASE WHEN ${col} IS NULL THEN ? WHEN json_valid(${col}) THEN`
+        + ` CASE WHEN json_type(${col}) = 'object' THEN COALESCE(NULLIF(json_extract(${col}, '$.agentSlug'), ''), ?) ELSE NULL END ELSE NULL END) = ?`,
+      params: [DEFAULT_AGENT_SLUG, DEFAULT_AGENT_SLUG, slug],
+    };
+  }
+  return { sql: `(CASE WHEN ${col} IS NULL THEN ? WHEN jsonb_typeof(${col}) = 'object'`
+    + ` THEN COALESCE(NULLIF(${col} ->> 'agentSlug', ''), ?) ELSE NULL END) = ?`,
+  params: [DEFAULT_AGENT_SLUG, DEFAULT_AGENT_SLUG, slug] };
+}
+
+export const SESSION_RECALL_MAX_SESSIONS = 64;
+export const SESSION_RECALL_MAX_MESSAGES = 64;
+export const SESSION_RECALL_MESSAGE_CHARS = 4000;
 
 /**
  * 查询词拆分:空白分隔,`"带空格的短语"` 算一个词,最多 5 个(防超长 AND 链),**单词截到 200 字**。
@@ -58,7 +88,10 @@ export function fmtDate(v: unknown): string {
  *  必须前置校验——乱串直传 PG 会在 timestamp cast 上炸整条查询(sqlite 只是静默不中)。 */
 export function dayArg(v: unknown): string | null {
   const s = String(v ?? '').trim();
-  return /^\d{4}-\d{2}-\d{2}([T ].*)?$/.test(s) ? s.slice(0, 10) : null;
+  if (!/^\d{4}-\d{2}-\d{2}([T ].*)?$/.test(s)) return null;
+  const day = s.slice(0, 10);
+  const parsed = new Date(`${day}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day ? day : null;
 }
 
 /** 消息 timestamp(BIGINT 毫秒;PG 驱动把 BIGINT 给成字符串)→ YYYY-MM-DD;非法给 ''。 */
@@ -104,6 +137,8 @@ export interface SessionHit {
   match?: string;
   /** 同一条命中的结构化形态(UI 用)。 */
   hit?: SessionHitMessage;
+  /** Scoped runtime results use bounded candidates; this is a lexical score, not embedding similarity. */
+  score?: number;
 }
 
 export interface SessionSearchInput {
@@ -117,6 +152,77 @@ export interface SessionSearchInput {
   limit: number;
   before?: string | null;
   after?: string | null;
+  toolScope?: SessionToolScope;
+  signal?: AbortSignal;
+  /** Runtime recall uses OR relevance; the search tool keeps its documented cross-message AND. */
+  matchAny?: boolean;
+  /** Trusted caller may choose smaller automatic-recall windows; never increases hard caps. */
+  candidateLimit?: number;
+  messagesPerSession?: number;
+  messageChars?: number;
+}
+
+/** No persistent index: edits/deletions/purge are visible on the next query without stale index resurrection.
+ * Search only a bounded recent window, narrowed by dates. Never scan/index the complete message store.
+ */
+async function searchScopedSessions(input: SessionSearchInput): Promise<SessionHit[]> {
+  const scope = input.toolScope!;
+  const ownership = sessionAgentPredicate(scope);
+  const bounded = (n: number | undefined, cap: number) => Math.min(cap, Math.max(1, Math.floor(n || cap)));
+  const candidateLimit = bounded(input.candidateLimit, SESSION_RECALL_MAX_SESSIONS);
+  const messageLimit = bounded(input.messagesPerSession, SESSION_RECALL_MAX_MESSAGES);
+  const messageChars = bounded(input.messageChars, SESSION_RECALL_MESSAGE_CHARS);
+  const terms = input.terms.slice(0, 5).map((term) => term.slice(0, MAX_TERM_CHARS).toLowerCase()).filter(Boolean);
+  const limit = Math.min(50, Math.max(1, Math.floor(input.limit) || 10));
+  const conditions = ["s.user_id = ?", "s.app_id = ?", "s.kind = 'user'", ownership.sql];
+  const params: unknown[] = [input.userId, input.appId, ...ownership.params];
+  if (input.excludeSessionId) { conditions.push('s.id <> ?'); params.push(input.excludeSessionId); }
+  if (input.before) { conditions.push('s.updated_at < ?'); params.push(input.before); }
+  if (input.after) { conditions.push('s.updated_at >= ?'); params.push(input.after); }
+  conditions.push("(COALESCE(s.title, '') <> '' OR COALESCE(s.summary, '') <> '')");
+  input.signal?.throwIfAborted();
+  const candidates = await query<SessionHit[]>(
+    `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 4000) AS summary, s.archived, s.updated_at`
+      + ` FROM chat_sessions s WHERE ${conditions.join(' AND ')} ORDER BY s.updated_at DESC, s.id DESC LIMIT ${candidateLimit}`,
+    params,
+  );
+  input.signal?.throwIfAborted();
+  if (!terms.length) return candidates.slice(0, limit);
+  const hits: SessionHit[] = [];
+  for (const candidate of candidates) {
+    input.signal?.throwIfAborted();
+    const title = String(candidate.title || '').toLowerCase();
+    const meta = `${title} ${candidate.summary || ''}`.toLowerCase();
+    const found = new Set(terms.filter((term) => meta.includes(term)));
+    let score = terms.reduce((n, term) => n + (title.includes(term) ? 6 : meta.includes(term) ? 3 : 0), 0);
+    const messages = await query<Array<{ id: string; role: string; content: string; timestamp: unknown }>>(
+      `SELECT m.id, m.role, substr(m.content, 1, ${messageChars}) AS content, m.timestamp`
+        + ` FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id`
+        + ` WHERE s.id = ? AND s.user_id = ? AND s.app_id = ? AND s.kind = 'user' AND ${ownership.sql}`
+        + ` ORDER BY m.timestamp DESC, m.id DESC LIMIT ${messageLimit}`,
+      [candidate.id, input.userId, input.appId, ...ownership.params],
+    );
+    input.signal?.throwIfAborted();
+    let best: SessionHitMessage | undefined;
+    let bestScore = 0;
+    for (const row of messages) {
+      const content = String(row.content || '');
+      const lower = content.toLowerCase();
+      const matched = terms.filter((term) => lower.includes(term));
+      matched.forEach((term) => found.add(term));
+      if (matched.length > bestScore) {
+        bestScore = matched.length;
+        best = { messageId: row.id, role: row.role === 'model' ? 'assistant' : row.role,
+          timestamp: tsNum(row.timestamp), snippet: snippetAround(content, matched[0], 220) };
+      }
+    }
+    if (input.matchAny ? found.size === 0 : found.size < terms.length) continue;
+    score += bestScore * 2;
+    hits.push({ ...candidate, score, ...(best ? { hit: best, match: `${best.role} ${tsDate(best.timestamp)}: "${best.snippet}"` } : {}) });
+  }
+  const updated = (value: unknown) => new Date(value instanceof Date ? value : String(value)).getTime() || 0;
+  return hits.sort((a, b) => (b.score || 0) - (a.score || 0)
+    || updated(b.updated_at) - updated(a.updated_at)).slice(0, limit);
 }
 
 /**
@@ -124,6 +230,7 @@ export interface SessionSearchInput {
  * 代表性命中消息(最新的那条)。
  */
 export async function searchSessions(input: SessionSearchInput): Promise<SessionHit[]> {
+  if (input.toolScope) return searchScopedSessions(input);
   const { userId, appId, excludeSessionId, terms, before, after } = input;
   const limit = Math.min(Math.max(1, Math.floor(input.limit) || 10), 50);
 

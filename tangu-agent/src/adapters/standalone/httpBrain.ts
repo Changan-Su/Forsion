@@ -44,9 +44,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
   const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
   const IMG_TIMEOUT_MS = Number(process.env.TANGU_IMAGE_HTTP_TIMEOUT_MS) || 180_000; // 生图比 LLM 慢,单独放宽
-  // 托管流的兜底窗口(只兜 server 进程死/网络整体失联)。上游判死归服务端 upstreamIdleGuard(默认 180s),
-  // 这里必须留足余量让服务端先响,否则用户看到的是本地 504 而非上游真实错因。
-  const BRAIN_STREAM_IDLE_MS = Number(process.env.TANGU_BRAIN_STREAM_IDLE_MS) || 300_000;
+  // 托管流的传输与语义兜底窗口。服务端 upstreamIdleGuard 默认 300s,
+  // 这里多留 60s 余量让服务端先响,否则用户看到的是本地 504 而非上游真实错因。
+  const BRAIN_STREAM_IDLE_MS = Number(process.env.TANGU_BRAIN_STREAM_IDLE_MS) || 360_000;
   // 超时随 body 放大:固定 60s 对 200 字节的 /llm/resolve 和带整页截图(view_image 的图按 base64
   // 进 messages,1.7MB PNG ≈ 2.3MB 文本)的 /llm/build-payload 是同一把尺子,后者在慢上行上必然
   // 先撞墙 —— 2026-08-27 桌面端 2.8.1 实证:两个 run 都恰好死在 view_image 之后那一 leg。
@@ -98,8 +98,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     return (await r.json()) as T;
   }
 
-  async function getJson<T>(path: string): Promise<T> {
-    const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal: reqSignal() })
+  async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+    const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal: reqSignal(signal) })
       .catch((e) => { throw netError(e, path, 0); });
     if (r.status === 404) return null as unknown as T;
     if (!r.ok) throw new Error(`brain ${path} ${r.status}`);
@@ -115,14 +115,14 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     return (await r.json()) as T;
   }
 
-  async function putJson<T>(path: string, body: any): Promise<T> {
+  async function putJson<T>(path: string, body: any, signal?: AbortSignal): Promise<T> {
     const raw = JSON.stringify(body);
     const bytes = Buffer.byteLength(raw, 'utf-8');
     const r = await fetch(`${base}${path}`, {
       method: 'PUT',
       headers: authHeaders(),
       body: raw,
-      signal: reqSignal(undefined, bytes),
+      signal: reqSignal(signal, bytes),
     }).catch((e) => { throw netError(e, path, bytes); });
     if (!r.ok) {
       const detail = await r.text().catch(() => '');
@@ -134,14 +134,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // ── LLM 流式:读 SSE,逐条转回 onToken/onReasoning/onToolCallDelta,done 时返回累积结果 ──
   async function streamProviderCompletion(opts: StreamOpts): Promise<StreamResult> {
     const modelId = String((opts.payload as any)?.__forsion_model_id ?? '');
-    // 流式空闲看门狗(复用 streamIdleGuard):idle 窗口内无新帧(server 进程死、连接半开)则主动 abort,
-    // 使 reader.read() 抛出而非无限 await(否则 run 卡死,且 worker 按 session 串行 → 整个 session
-    // 后续 run 全堵)。同时合并外部 run abort。详见 ../../llm/streamIdle.ts。
-    //
-    // ⚠️ 这里**只认 `data:` 帧**,与直连流的帧级续命相反。brain/llm/stream 每 15s 发的 `: ping` 是
-    // **服务端自己**发的(防边缘代理 60s 判 504),上游挂死时它照发不误——按帧续命等于被假活信号
-    // 一路喂饱,run 无声挂死且永不报错(2026-07-25 实测 400s+ 零 token 零错误)。直连流没这问题:
-    // 那边的 keepalive 由上游发出,确实代表上游还活着,故 openaiCompat/anthropicMessages 保持帧级。
+    // 传输与语义各自计时:server 的 : ping / alive 只续传输;有效正文、思考或工具增量才续语义。
+    // 这样持续心跳仍无法掩盖上游无进展,同时保留托管流原有 300s 预算。
     const guard = streamIdleGuard(opts.signal, BRAIN_STREAM_IDLE_MS);
     try {
       const r = await fetch(`${base}/api/brain/llm/stream`, {
@@ -165,9 +159,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      const toolProgress = new Map<string, { name: string; argsLen: number }>();
       guard.arm();
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await guard.read(reader);
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         let idx: number;
@@ -175,13 +170,26 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
           const frame = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
           const line = frame.split('\n').find((l) => l.startsWith('data:'));
-          if (!line) continue; // `: ping` 心跳落在这里被丢弃——刻意不续命,见上方 guard 注释
-          guard.arm(); // 只有真数据帧(token/reasoning/tool/done/error)才重置空闲计时
+          if (!line) continue;
           let ev: any;
           try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
-          if (ev.t === 'token') { result.content += ev.d; opts.onToken?.(ev.d); }
-          else if (ev.t === 'reasoning') { result.reasoning += ev.d; opts.onReasoning?.(ev.d); }
-          else if (ev.t === 'tool') {
+          if (ev.t === 'token' && typeof ev.d === 'string' && ev.d) {
+            guard.progress();
+            result.content += ev.d;
+            opts.onToken?.(ev.d);
+          } else if (ev.t === 'reasoning' && typeof ev.d === 'string' && ev.d) {
+            guard.progress();
+            result.reasoning += ev.d;
+            opts.onReasoning?.(ev.d);
+          } else if (ev.t === 'tool') {
+            const id = typeof ev.id === 'string' ? ev.id : '';
+            const name = typeof ev.name === 'string' ? ev.name : '';
+            const previous = toolProgress.get(id);
+            const argsLen = typeof ev.args === 'string' ? ev.args.length
+              : Number.isFinite(ev.argsLen) ? Math.max(0, ev.argsLen) : 0;
+            if ((typeof ev.argsDelta === 'string' && ev.argsDelta)
+              || argsLen > (previous?.argsLen ?? 0) || (id && name && !previous?.name)) guard.progress();
+            toolProgress.set(id, { name: name || previous?.name || '', argsLen: Math.max(argsLen, previous?.argsLen ?? 0) });
             opts.onToolCallDelta?.({ id: ev.id, name: ev.name, argsLen: ev.argsLen, args: ev.args, argsDelta: ev.argsDelta });
           } else if (ev.t === 'done') {
             result.content = ev.content ?? result.content;
@@ -225,23 +233,23 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // 记忆/日志按运行中 agent slug 作用域(B):非默认 agent 带 slug → server 路由到 per-agent 行;
     // 默认 xyra / 无 run 上下文 → 不带 slug → 旧全局(AI Studio 网页行为不变)。
     memory: {
-      getMemory: async (_userId: string) => {
+      getMemory: async (_userId: string, opts) => {
         const s = scopedSlug();
-        return getJson<{ content: string; updatedAt: any }>(`/api/brain/memory${s ? `?slug=${encodeURIComponent(s)}` : ''}`);
+        return getJson<{ content: string; updatedAt: any }>(`/api/brain/memory${s ? `?slug=${encodeURIComponent(s)}` : ''}`, opts?.signal);
       },
       appendMemoryEntry: async (_userId: string, text: string, opts) =>
-        postJson('/api/brain/memory', { text, dedup: opts?.dedup, cap: opts?.cap, slug: scopedSlug() || undefined }),
-      setMemory: async (_userId: string, content: string) =>
-        putJson<{ content: string; updatedAt: any }>('/api/brain/memory', { content, slug: scopedSlug() || undefined }),
+        postJson('/api/brain/memory', { text, dedup: opts?.dedup, cap: opts?.cap, slug: scopedSlug() || undefined }, opts?.signal),
+      setMemory: async (_userId: string, content: string, opts) =>
+        putJson<{ content: string; updatedAt: any }>('/api/brain/memory', { content, slug: scopedSlug() || undefined }, opts?.signal),
       appendLogEntry: async (_userId: string, text: string, opts) =>
-        postJson('/api/brain/log', { text, date: opts?.date, time: opts?.time, slug: scopedSlug() || undefined }),
-      getLog: async (_userId: string, date?: string) => {
+        postJson('/api/brain/log', { text, date: opts?.date, time: opts?.time, slug: scopedSlug() || undefined }, opts?.signal),
+      getLog: async (_userId: string, date: string | undefined, opts) => {
         const q = new URLSearchParams();
         if (date) q.set('date', date);
         const s = scopedSlug();
         if (s) q.set('slug', s);
         const qs = q.toString();
-        return getJson(`/api/brain/log${qs ? `?${qs}` : ''}`);
+        return getJson(`/api/brain/log${qs ? `?${qs}` : ''}`, opts?.signal);
       },
     },
     assets: {
@@ -365,20 +373,20 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     // Tangu 每-agent 云文件镜像(Phase 2):跨设备同步 + 云端运行水合。userId 由 token 隐含(忽略入参)。
     // put/delete 自带 fetch:CAS 409 需要结构化 body(postJson 只留 detail)→ 抛 AgentFileConflictError。
     agentFiles: {
-      getManifest: async (_userId: string) => {
-        const r = await getJson<{ agents: any[] }>('/api/brain/agents/manifest');
+      getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
+        const r = await getJson<{ agents: any[] }>('/api/brain/agents/manifest', opts?.signal);
         return r?.agents ?? [];
       },
-      getFile: async (_userId: string, slug: string, relPath: string) => {
-        const r = await postJson<any>('/api/brain/agents/file/get', { slug, relPath });
+      getFile: async (_userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }) => {
+        const r = await postJson<any>('/api/brain/agents/file/get', { slug, relPath }, opts?.signal);
         return !r || r.notFound ? null : r;
       },
-      putFile: async (_userId: string, slug: string, relPath: string, body: any) => {
+      putFile: async (_userId: string, slug: string, relPath: string, body: any, opts?: { signal?: AbortSignal }) => {
         const r = await fetch(`${base}/api/brain/agents/file/put`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ slug, relPath, ...body }),
-          signal: reqSignal(),
+          signal: reqSignal(opts?.signal),
         });
         if (r.status === 409) {
           const j: any = await r.json().catch(() => ({}));
@@ -390,12 +398,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (!r.ok) throw new Error(`brain agents/file/put ${r.status}: ${await r.text().catch(() => '')}`);
         return (await r.json()) as { mtimeMs: number; seq?: number; hash?: string | null };
       },
-      deleteFile: async (_userId: string, slug: string, relPath: string, mtimeMs: number, deviceId?: string, baseSeq?: number) => {
+      deleteFile: async (_userId: string, slug: string, relPath: string, mtimeMs: number, deviceId?: string, baseSeq?: number, opts?: { signal?: AbortSignal }) => {
         const r = await fetch(`${base}/api/brain/agents/file/delete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ slug, relPath, mtimeMs, deviceId, ...(baseSeq !== undefined ? { baseSeq } : {}) }),
-          signal: reqSignal(),
+          signal: reqSignal(opts?.signal),
         });
         if (r.status === 409) {
           const j: any = await r.json().catch(() => ({}));

@@ -7,9 +7,10 @@
  * cfg 纹丝不动 —— 看着存上了,实际没有。typecheck 抓不到(types.ts 把 setConfig 声明成必填,
  * 而垫片是 `as unknown` 硬塞的),boot 冒烟也抓不到(它不点设置)。
  *
- * 两条断言:
+ * 核心断言:
  *   A. 点模型不抛未捕获异常(崩溃回归)
  *   B. reload 后那一项仍然选中(持久化回归 —— 光修崩溃的话,这条依旧红:重启即回默认)
+ *   C. 「高级 → 测试性功能」里的 Agent 等待详情默认关,开启后 reload 仍保持
  *
  * 跑法:npm run build && npm run e2e:settingscfg。机制照抄 units-entry.e2e.cjs。
  */
@@ -39,6 +40,8 @@ const MODELS_BODY = JSON.stringify({
 const TAB_LABELS = ['模型/Provider', 'Model / Provider']
 const SUB_LABELS = ['模型', 'Models']
 const ABOUT_LABELS = ['关于', 'About']
+const ADVANCED_LABELS = ['高级', 'Advanced']
+const EXPERIMENTAL_LABELS = ['测试性功能', 'Experimental features']
 const FILING_NUMBER = '浙ICP备2026001145号-2A'
 
 function findChromium() {
@@ -129,17 +132,32 @@ async function main() {
       if (!b) throw new Error(`目标不可见: ${what}`)
       await tapBox(b)
     }
-    /** 抽屉 → 设置 → 模型页(m-models)。每次 reload 后都要重走一遍。 */
-    const openModelPage = async () => {
+    /** 抽屉 → 设置首页。每次 reload 后都要重走一遍。 */
+    const openSettingsHome = async () => {
       await tap(page.locator('.mb-topbar [aria-label="left panel"]'), '左抽屉')
       await page.waitForTimeout(500)
       await tap(page.locator('.mb-drawer--left.open .mb-foot-row .mb-icon-btn[aria-label="settings"]'), '设置钮')
       await page.waitForTimeout(700)
+    }
+    /** 设置首页 → 模型页(m-models)。 */
+    const openModelPage = async () => {
+      await openSettingsHome()
       const tabRow = page.locator('.settings-mobile-row', { hasText: new RegExp(TAB_LABELS.map((s) => s.replace(/[/]/g, '\\/')).join('|')) }).first()
       await tap(tabRow, '模型/Provider 一级项')        // 有子项 → 首次点击=展开
       await tap(page.locator('.settings-mobile-subitems .settings-mobile-subrow')
         .filter({ hasText: new RegExp(`^\\s*(${SUB_LABELS.join('|')})\\s*$`) }).first(), '模型 子项')
       await page.waitForSelector('.model-group-list', { timeout: 8000 })
+    }
+    /** 设置首页 → 高级 → 测试性功能。 */
+    const openExperimentalPageFromHome = async () => {
+      const advancedRow = page.locator('.settings-mobile-row', { hasText: new RegExp(`^\\s*(${ADVANCED_LABELS.join('|')})`) }).first()
+      await advancedRow.scrollIntoViewIfNeeded()
+      await tap(advancedRow, '高级 一级项')
+      const experimentalRow = page.locator('.settings-mobile-subitems .settings-mobile-subrow')
+        .filter({ hasText: new RegExp(`^\\s*(${EXPERIMENTAL_LABELS.join('|')})\\s*$`) }).first()
+      await experimentalRow.scrollIntoViewIfNeeded()
+      await tap(experimentalRow, '测试性功能 子项')
+      await page.locator('.settings-sub--advanced .settings-switch').waitFor({ state: 'visible', timeout: 8000 })
     }
 
     await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30_000 })
@@ -208,6 +226,33 @@ async function main() {
     ]
     if (JSON.stringify(openedUrls) === JSON.stringify(wantedUrls)) pass('备案与协议入口指向正确官方地址')
     else fail('备案与协议入口指向正确官方地址', JSON.stringify(openedUrls))
+
+    // D. Agent 等待诊断属于测试性功能:首次必须关,开后要即时反映并留在本机。
+    await tap(page.locator('.settings-mobile-detail-head > button').first(), '返回设置首页')
+    await openExperimentalPageFromHome()
+    const waitSwitch = page.locator('.settings-sub--advanced .settings-switch').first()
+    const initialWaitState = await waitSwitch.getAttribute('aria-checked')
+    const initialWaitPref = await page.evaluate(() => localStorage.getItem('forsion_chat_wait_details'))
+    if (initialWaitState === 'false' && initialWaitPref !== '1') pass('Agent 等待详情默认关闭')
+    else fail('Agent 等待详情默认关闭', `aria=${initialWaitState} stored=${initialWaitPref}`)
+
+    await tap(waitSwitch, 'Agent 响应等待详情开关')
+    const enabledWaitState = await waitSwitch.getAttribute('aria-checked')
+    const enabledWaitPref = await page.evaluate(() => localStorage.getItem('forsion_chat_wait_details'))
+    if (enabledWaitState === 'true' && enabledWaitPref === '1') pass('测试性开关即时开启并落盘')
+    else fail('测试性开关即时开启并落盘', `aria=${enabledWaitState} stored=${enabledWaitPref}`)
+
+    const experimentalShot = path.join(os.tmpdir(), 'forsion-settings-experimental.png')
+    await page.screenshot({ path: experimentalShot })
+    console.log(`screenshot → ${experimentalShot}`)
+
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+    await page.waitForTimeout(4000)
+    await openSettingsHome()
+    await openExperimentalPageFromHome()
+    const keptWaitState = await page.locator('.settings-sub--advanced .settings-switch').first().getAttribute('aria-checked')
+    if (keptWaitState === 'true') pass('重启后 Agent 等待详情仍保持开启')
+    else fail('重启后 Agent 等待详情仍保持开启', `aria=${keptWaitState}`)
 
     const shot = path.join(os.tmpdir(), 'forsion-settings-config.png')
     await page.screenshot({ path: shot })

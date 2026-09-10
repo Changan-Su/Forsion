@@ -1,6 +1,6 @@
 /**
  * 记忆 / 日志(桌面记忆面板;handler 自带 authMiddleware)。
- * MemoryBrain 接缝只有「读 + 追加」——编辑/整理在云端账户中心做,这里不扩接缝。
+ * 旧读/追加入口保兼容；本地管理返回版本化快照，Agent 面板的编辑/恢复走 agents.ts。
  *   GET  /agent/memory                → { content, updatedAt }
  *   POST /agent/memory { text, dedup? } → AppendMemoryResult
  *   GET  /agent/log?date=YYYY-MM-DD   → { date, content, updatedAt }
@@ -11,15 +11,34 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
-import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { getAgent, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
+import { MemoryRepositoryError } from '../services/memoryRepository.js';
 
 const router = Router();
 
+async function inRequestedMemoryScope<T>(req: AuthRequest, fn: () => Promise<T>): Promise<T> {
+  const requested = req.body?.slug ?? req.query.slug;
+  if (requested === undefined || requested === '') return fn();
+  if (typeof requested !== 'string' || !isValidSlug(requested)) throw new MemoryRepositoryError('MEMORY_UNSAFE_PATH', 'Invalid agent slug.');
+  if (!deps().profile.capabilities.hostExec) throw new MemoryRepositoryError('MEMORY_UNSUPPORTED', 'This memory backend does not support per-agent memory.');
+  const def = await getAgent(requested);
+  if (!def) throw new MemoryRepositoryError('MEMORY_NOT_FOUND', 'Agent not found.');
+  const scope = resolveMemorySlug(def);
+  if (!isValidSlug(scope)) throw new MemoryRepositoryError('MEMORY_UNSAFE_PATH', 'Invalid memory scope.');
+  return runWithAgentSlug(scope, fn);
+}
+function statusFor(e: any): number {
+  if (e?.code === 'MEMORY_NOT_FOUND') return 404;
+  if (e?.code === 'MEMORY_VERSION_CONFLICT' || e?.code === 'MEMORY_BUSY') return 409;
+  if (e?.code === 'MEMORY_UNSAFE_PATH' || e?.code === 'MEMORY_INVALID' || e?.code === 'MEMORY_UNSUPPORTED') return 400;
+  return 500;
+}
+
 router.get('/agent/memory', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    res.json(await deps().brain.memory.getMemory(req.user!.userId));
+    res.json(await inRequestedMemoryScope(req, () => deps().brain.memory.getMemorySnapshot?.(req.user!.userId) ?? deps().brain.memory.getMemory(req.user!.userId)));
   } catch (e: any) {
-    res.status(500).json({ detail: e?.message || 'get memory failed' });
+    res.status(statusFor(e)).json({ detail: e?.message || 'get memory failed', code: e?.code });
   }
 });
 
@@ -28,25 +47,18 @@ router.post('/agent/memory', authMiddleware, async (req: AuthRequest, res) => {
     const text = String(req.body?.text ?? '').trim();
     if (!text) return res.status(400).json({ detail: 'text is required' });
     const append = () => deps().brain.memory.appendMemoryEntry(req.user!.userId, text, { dedup: req.body?.dedup !== false });
-    // slug 指定(面板按当前 agent 追加)→ 在该 agent 记忆作用域内写(共用默认则落默认);否则按默认 agent。
-    const slug = req.body?.slug ? String(req.body.slug) : '';
-    if (slug) {
-      const def = await getAgent(slug).catch(() => null);
-      res.json(await runWithAgentSlug(def ? resolveMemorySlug(def) : slug, append));
-    } else {
-      res.json(await append());
-    }
+    res.json(await inRequestedMemoryScope(req, append));
   } catch (e: any) {
-    res.status(500).json({ detail: e?.message || 'append memory failed' });
+    res.status(statusFor(e)).json({ detail: e?.message || 'append memory failed', code: e?.code });
   }
 });
 
 router.get('/agent/log', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const date = req.query.date ? String(req.query.date) : undefined;
-    res.json(await deps().brain.memory.getLog(req.user!.userId, date));
+    res.json(await inRequestedMemoryScope(req, () => deps().brain.memory.getLog(req.user!.userId, date)));
   } catch (e: any) {
-    res.status(500).json({ detail: e?.message || 'get log failed' });
+    res.status(statusFor(e)).json({ detail: e?.message || 'get log failed', code: e?.code });
   }
 });
 
@@ -54,7 +66,7 @@ router.post('/agent/log', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const text = String(req.body?.text ?? '').trim();
     if (!text) return res.status(400).json({ detail: 'text is required' });
-    res.json(await deps().brain.memory.appendLogEntry(req.user!.userId, text));
+    res.json(await inRequestedMemoryScope(req, () => deps().brain.memory.appendLogEntry(req.user!.userId, text)));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'append log failed' });
   }

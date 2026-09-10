@@ -242,6 +242,10 @@ export class BackendManager {
       // **始终非空**,保证后端 validate(强制要 token)通过、无 Forsion 登录也能独立启动(BYOK/订阅可用)。
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
       env.TANGU_TOKEN = this.spawnToken = this.freshToken() // 钉住这一枚:getToken() 此后恒返回它
+      // 渲染层直接起的 run 会在请求体自报 desktop/<版本>;微信/TG/QQ 则由引擎后台起 run,
+      // 没有这个请求方。宿主在 spawn 时把同一个真实 App 版本交给引擎,供通道 run 写入 input.client;
+      // 源通道仍单独保留在 input.source.channel,不拿 wechat/telegram/qq 污染「端×版本」维度。
+      env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'
       env.TANGU_BROWSER_ENGINE = s.browserEngine || 'auto'
       env.TANGU_BROWSER_SEARCH_ENGINE = s.browserSearchEngine || 'duckduckgo'

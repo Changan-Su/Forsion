@@ -309,6 +309,39 @@ export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
 const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
   s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
 
+/** 新对话在「没有显式 Project 选择」时的真实落点。
+ *
+ * 发送链、/new 与 Homepage 的 Project pill 必须共用这一处：否则 Homepage 会显示一个项目，
+ * `send()` 却按 sessionMode/端能力把会话写进另一个项目（09-08 实报「聊完找不到」）。
+ * 显式项目永远原样保留；Chat 的隐式落点是「不在项目中工作」；Work 再按 host 能力落
+ * 本地默认工作区或默认云 Project。 */
+export function resolveNewSessionWorkspace(
+  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'defaultWsDir' | 'homeDir' | 'tr'>,
+  platform: 'desktop' | 'web' | 'mobile',
+): WorkspaceDescriptor {
+  if (s.newChatWs) return s.newChatWs
+  if (newSessionPreset(s.sessionMode, null, platform) === 'chat') return rootlessWs(s.tr)
+  if (isHostCapable(s)) {
+    const path = s.defaultWsDir || s.homeDir || null
+    return {
+      key: path || DEFAULT_LOCAL_WORKSPACE_KEY,
+      name: s.tr('app.defaultWorkspace'),
+      kind: 'local',
+      path,
+      system: true,
+      sessionKeys: path ? [path] : [],
+    }
+  }
+  return {
+    key: cloudProjectKey(DEFAULT_CLOUD_PROJECT),
+    name: DEFAULT_CLOUD_PROJECT,
+    kind: 'cloud',
+    path: null,
+    system: true,
+    project: DEFAULT_CLOUD_PROJECT,
+  }
+}
+
 const SESSION_MODE_KEY = 'forsion_tangu_session_mode'
 function loadSessionMode(): SessionMode | null {
   try { const v = localStorage.getItem(SESSION_MODE_KEY); return v === 'chat' || v === 'work' ? v : null } catch { return null }
@@ -1721,11 +1754,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 「新建会话」(/new、侧栏按钮)没有显式工作区 → 与空态打字同一条模式规则(newSessionPreset,D5):
     // chat → 无根会话;work → 有 host FS 走默认工作区,没有(web/mobile)走默认云项目——与 send() 的落点一致
     // (defaultWorkspace() 在 web 上是 path 为空的 local 描述符,会建出既无项目也非无根的会话;creview 09-07 F4)。
-    const preset = newSessionPreset(get().sessionMode, null, currentPlatform())
-    const ws: WorkspaceDescriptor = preset === 'chat' ? rootlessWs(get().tr)
-      : isHostCapable(get()) ? get().defaultWorkspace()
-      : { key: cloudProjectKey(DEFAULT_CLOUD_PROJECT), name: DEFAULT_CLOUD_PROJECT, kind: 'cloud', path: null, system: true, project: DEFAULT_CLOUD_PROJECT }
-    return get().createInWorkspace(ws)
+    return get().createInWorkspace(resolveNewSessionWorkspace(get(), currentPlatform()))
   },
 
   addLocalWorkspace: async () => {
@@ -1947,7 +1976,7 @@ export const useApp = create<AppState>((set, get) => ({
     const wasNewChat = !sid
     let implicitInit: AgentConfig | null = null
     if (!sid) {
-      const ws = get().newChatWs
+      const ws = resolveNewSessionWorkspace(get(), currentPlatform())
       // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
       // 已经 /unit/config 透传)。判成 external 会把新对话全建成云端 sandbox —— host 工具整个消失
       // (desk_present「当前环境没有该工具」)、直连模型被过滤、药丸显示「选择模型」(2026-08-24 用户实报三症状同根)。

@@ -5,9 +5,9 @@
  * agentLoop.hydrateHistory 见检查点则用 [总结] + through_timestamp 之后的消息重建上下文——
  * **确定性、前缀稳定**（总结文本一旦写定不再变），守住 prompt-cache 前缀（2026-06-10 审计）。
  *
- * 与机械 compactContext() 分工：后者是运行内即时折叠（>50% 触发、不落库）；本服务是跨 run 持久压缩
- * （slash / 满载 95% 触发，落 session_summaries）。本地特性（桌面/TUI）；数据访问经 core query()
- * （standalone 本地库）。所有读 fail-safe → 退回未压缩行为；绝不抛（调用方多在 run 内）。
+ * compactWorkingMessages：满载时总结当前工作快照,包含尚未落 chat_messages 的本轮工具进展。
+ * 它只替换该快照覆盖的内存前缀,不推进持久化 through_timestamp；slash 仍走 compactSession。
+ * 所有读 fail-safe → 退回未压缩行为；用户取消会抛出,调用方须终结 run 而非继续机械折叠。
  */
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
@@ -110,12 +110,110 @@ export function parseFileOps(summary: string): { ops: FileOps; stripped: string 
   return { ops, stripped: summary.replace(m[0], '') };
 }
 
-export interface CompactResultPersisted {
+export interface CompactResult {
   ok: boolean;
   summary?: string;
-  throughTimestamp?: number;
   summarizedCount?: number;
   reason?: string;
+}
+
+export interface CompactResultPersisted extends CompactResult {
+  throughTimestamp?: number;
+}
+
+/** build/stream 接缝支持真实取消;resolve 结束后复查,不再启动后续请求或修改检查点。 */
+async function summarizeTranscript(
+  transcript: string, incremental: boolean, modelId: string, appId: string, signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
+  const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
+  signal?.throwIfAborted();
+  const payload = await deps().brain.llm.buildProviderPayload({
+    model, apiModelId,
+    messages: [
+      { role: 'system', content: compactSystemPrompt(incremental) },
+      { role: 'user', content: transcript },
+    ] as ChatMessage[],
+    projectSource: '', usageSource: appId,
+    temperature: 0.3, maxTokens: SUMMARY_MAX_TOKENS, stream: true, signal,
+  });
+  signal?.throwIfAborted();
+  const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, signal });
+  signal?.throwIfAborted();
+  return String(res?.content || '').trim();
+}
+
+const SUMMARY_HEADING = '## Compacted Summary of Earlier Conversation\n';
+
+/** 同一边界用于「总结哪些消息」和「替换哪些消息」；工具调用/结果批次不能切开。 */
+function compactionRange(msgs: ChatMessage[], tail: number): { head: number; cut: number } | null {
+  let head = 0;
+  while (head < msgs.length && msgs[head].role === 'system' &&
+    !String(msgs[head].content || '').startsWith(SUMMARY_HEADING)) head++;
+  if (msgs.length - head <= tail + 1) return null;
+  let cut = msgs.length - tail;
+  while (cut > head && (msgs[cut] as any).role === 'tool') cut--;
+  return cut > head ? { head, cut } : null;
+}
+
+function summaryMessage(summary: string): ChatMessage {
+  return {
+    role: 'system',
+    content: SUMMARY_HEADING +
+      'This summarizes work already completed earlier in this conversation. Continue from it — do not restart the task or redo finished work.\n' + summary,
+  } as ChatMessage;
+}
+
+/** 将文本/调用/结果保序交给摘要模型；二进制图片和 provider 私有重放态不转写。 */
+function workingTranscript(msgs: ChatMessage[], fileOps: FileOps): string {
+  return msgs.map((m: any) => {
+    let content = typeof m.content === 'string' ? m.content : Array.isArray(m.content)
+      ? m.content.map((p: any) => p?.type === 'text' ? String(p.text ?? '') : `[${p?.type || 'attachment'} omitted; inspect the original artifact if needed]`).join('\n')
+      : '';
+    if (m.role === 'system' && content.startsWith(SUMMARY_HEADING)) {
+      const prev = parseFileOps(content);
+      for (const p of prev.ops.read) fileOps.read.add(p);
+      for (const p of prev.ops.modified) fileOps.modified.add(p);
+      content = `[Existing Summary]\n${prev.stripped}`;
+    }
+    extractFileOps(m.tool_calls, fileOps);
+    const calls = Array.isArray(m.tool_calls) && m.tool_calls.length
+      ? `\nTool calls: ${JSON.stringify(m.tool_calls)}` : '';
+    return `[${m.role}${m.tool_call_id ? ` tool_call_id=${m.tool_call_id}` : ''}]\n${content}${calls}`;
+  }).join('\n\n');
+}
+
+/** 满载运行内压缩。不读取或写入 DB；生成失败/快照变化时保留原消息,取消则向上抛出。
+ * 不用持久压缩的 60k 尾截断：被替换的每一条文本/工具结果必须进入本次摘要输入。
+ * 输入仍过大时让 provider 拒绝并回退机械折叠,不能无声删除没有总结过的工作。
+ */
+export async function compactWorkingMessages(
+  msgs: ChatMessage[], modelId: string, appId = 'tangu', signal?: AbortSignal, tail = 12,
+): Promise<CompactResult> {
+  signal?.throwIfAborted();
+  const range = compactionRange(msgs, tail);
+  if (!modelId || !range) return { ok: false, reason: 'nothing to compact' };
+  const original = msgs.slice();
+  const { head, cut } = range;
+  const prefix = structuredClone(original.slice(head, cut));
+  const fileOps: FileOps = { read: new Set(), modified: new Set() };
+  const transcript = workingTranscript(prefix, fileOps);
+  try {
+    const text = await summarizeTranscript(transcript, transcript.includes('[Existing Summary]'), modelId, appId, signal);
+    if (!text || text.length < 8) return { ok: false, reason: 'empty summary' };
+    // 压缩期间有外部改动时绝不把旧快照覆盖到新消息上；当前 loop 的 steer 是排队注入,通常不会命中。
+    if (msgs.length !== original.length || msgs.some((m, i) => m !== original[i]) ||
+      JSON.stringify(msgs.slice(head, cut)) !== JSON.stringify(prefix)) {
+      return { ok: false, reason: 'working context changed during compaction' };
+    }
+    const summary = text + formatFileOps(fileOps);
+    msgs.splice(head, cut - head, summaryMessage(summary));
+    return { ok: true, summary, summarizedCount: cut - head };
+  } catch (e: any) {
+    signal?.throwIfAborted();
+    if (e?.name === 'AbortError') throw e;
+    return { ok: false, reason: e?.message || 'summary generation failed' };
+  }
 }
 
 /** 读会话最新压缩检查点（无则 null）。失败 → null（fail-safe）。 */
@@ -139,9 +237,10 @@ export async function getLatestSummary(
 /**
  * 生成并持久化一个压缩检查点。modelId 用于总结调用（通常同会话模型）。
  * 已有检查点 → 增量压缩（已有摘要 + 其后新消息），写一条更晚 through_timestamp 的新行。
- * 无可压缩内容 / 总结失败 → {ok:false}。绝不抛。
+ * 无可压缩内容 / 总结失败 → {ok:false}；用户取消向上抛出。
  */
-export async function compactSession(sessionId: string, modelId: string, appId = 'tangu'): Promise<CompactResultPersisted> {
+export async function compactSession(sessionId: string, modelId: string, appId = 'tangu', signal?: AbortSignal): Promise<CompactResultPersisted> {
+  signal?.throwIfAborted();
   if (!sessionId || !modelId) return { ok: false, reason: 'missing session or model' };
 
   let rows: any[];
@@ -151,10 +250,12 @@ export async function compactSession(sessionId: string, modelId: string, appId =
       [sessionId],
     );
   } catch (e: any) {
+    signal?.throwIfAborted();
     return { ok: false, reason: e?.message || 'load messages failed' };
   }
 
   const prev = await getLatestSummary(sessionId);
+  signal?.throwIfAborted();
   const prevThrough = prev?.throughTimestamp || 0;
   // 文件操作机械追踪:先从上一份摘要继承(单调累积),再叠加本窗口 tool_calls;
   // 喂给摘要模型的 [Existing Summary] 用剥掉该块的正文(块由本函数尾部机械重建,不劳模型抄)。
@@ -177,23 +278,10 @@ export async function compactSession(sessionId: string, modelId: string, appId =
 
   let summary = '';
   try {
-    const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
-    const payload = await deps().brain.llm.buildProviderPayload({
-      model,
-      apiModelId,
-      messages: [
-        { role: 'system', content: compactSystemPrompt(!!prevSummaryBody.trim()) },
-        { role: 'user', content: transcript },
-      ] as ChatMessage[],
-      projectSource: '', // 不叠项目层提示词
-      usageSource: appId, // 但记账归进应用桶(否则云端兜底记 tangu-brain)
-      temperature: 0.3,
-      maxTokens: SUMMARY_MAX_TOKENS,
-      stream: true,
-    } as any);
-    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload });
-    summary = String(res?.content || '').trim();
+    summary = await summarizeTranscript(transcript, !!prevSummaryBody.trim(), modelId, appId, signal);
   } catch (e: any) {
+    signal?.throwIfAborted();
+    if (e?.name === 'AbortError') throw e;
     return { ok: false, reason: e?.message || 'summary generation failed' };
   }
   if (!summary || summary.length < 8) return { ok: false, reason: 'empty summary' };
@@ -213,23 +301,6 @@ export async function compactSession(sessionId: string, modelId: string, appId =
 
 /** hydrate 时把摘要折进内存消息数组（保头部 system 块 + 末尾 tail；中段替成摘要）。原地变更，幂等性由调用点保证。 */
 export function foldWorkingWithSummary(msgs: ChatMessage[], summary: string, tail = 12): void {
-  let head = 0;
-  while (head < msgs.length && (msgs[head] as any).role === 'system') head++;
-  if (msgs.length - head <= tail + 1) return; // 太短不值得折
-  // 折叠边界不许落在工具结果批次中间:孤立的 role:'tool'(前面没有带 tool_calls 的 assistant)
-  // 会被 OpenAI 协议校验直接拒、在 Anthropic 生成无 tool_use 配对的 tool_result。边界落在 tool 上
-  // 就往前扩到该批次的 assistant(大批工具调用时 tail 实际保留数会多于名义值,正确性优先)。
-  let cut = msgs.length - tail;
-  while (cut > head && (msgs[cut] as any).role === 'tool') cut--;
-  if (cut - head < 1) return; // 边界一路退到头:没有可折叠的前缀
-  // 连续性契约(借 Codex compact 框架语):压缩点最常见的病是模型把摘要当「回忆」而非「已完成的工作」,
-  // 从头重做已完成步骤。消费侧一句话点破。
-  const summaryMsg = {
-    role: 'system',
-    content:
-      '## Compacted Summary of Earlier Conversation\n' +
-      'This summarizes work already completed earlier in this conversation. Continue from it — do not restart the task or redo finished work.\n' +
-      summary,
-  } as ChatMessage;
-  msgs.splice(head, cut - head, summaryMsg);
+  const range = compactionRange(msgs, tail);
+  if (range) msgs.splice(range.head, range.cut - range.head, summaryMessage(summary));
 }

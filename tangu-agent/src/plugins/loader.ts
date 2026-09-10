@@ -1,3 +1,4 @@
+import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 /**
  * 插件发现 + 加载。仅扫描仓库内 `./plugins/`（相对**安装根**解析:`dist/plugins/loader.js`
  * → `<pkg>/plugins`）。纪律对齐 MCP loader（src/mcp/manager.ts）:启动期发现、按 id **确定性排序**、
@@ -108,6 +109,7 @@ export function discoverPlugins(): DiscoveredPlugin[] {
 
 /** 昂贵:动态 import 入口、取 default-export `TanguPlugin`、调 `activate(ctx)`。失败抛（调用方决定吞/抛）。 */
 export async function activatePlugin(d: DiscoveredPlugin, ctx: TanguPluginContext): Promise<TanguPlugin> {
+  if (isHostSandboxRestricted()) throw new Error('Native plugins are unavailable while the local sandbox is enabled');
   const mod = await import(d.entryUrl);
   const plugin: TanguPlugin = mod.default ?? mod.plugin;
   if (!plugin || typeof plugin.activate !== 'function') {

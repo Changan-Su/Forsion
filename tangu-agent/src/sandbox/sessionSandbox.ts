@@ -17,13 +17,15 @@
  * 局限：绕过 sys.stdout 的裸 fd 写（os.write(1,...) 等）会破坏帧 → 视为 kernel 死亡，杀容器重建并回退
  * ephemeral。文档生成类代码（print / 库写文件）不受影响。
  */
-import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process';
-import { createHash } from 'crypto';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { createHash, randomUUID } from 'crypto';
+import { ExecutionQueue } from './executionQueue.js';
+import { assertDockerWorkspaceAvailable, DockerCleanupError, removeDockerContainer, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  resolvePythonImage, ensurePkgDir, PKG_DIR,
+  resolvePythonImage, ensurePkgDir, warmContainerArgs,
   acquireSlot, releaseSlot, beginExec, endExec,
   runPython, DEFAULT_TIMEOUT_MS, MAX_CAPTURE, type ExecResult,
 } from './dockerProvider.js';
@@ -97,11 +99,14 @@ class PythonKernel {
 
   constructor(private readonly containerName: string) {}
 
-  start(timeoutMs = KERNEL_START_TIMEOUT_MS): Promise<boolean> {
+  start(signal?: AbortSignal, timeoutMs = KERNEL_START_TIMEOUT_MS): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const done = (ok: boolean) => { if (settled) return; settled = true; clearTimeout(t); resolve(ok); };
+      const done = (ok: boolean) => { if (settled) return; settled = true; clearTimeout(t); signal?.removeEventListener('abort', onAbort); resolve(ok); };
+      const onAbort = () => { this.dead = true; done(false); };
       const t = setTimeout(() => { this.dead = true; done(false); }, timeoutMs);
+      if (signal?.aborted) { onAbort(); return; }
+      signal?.addEventListener('abort', onAbort, { once: true });
       try {
         this.child = spawn('docker', ['exec', '-i', this.containerName, 'python3', '-u', '-c', KERNEL_DRIVER],
           { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -115,10 +120,11 @@ class PythonKernel {
   }
 
   private onData(d: Buffer): void {
+    if (this.buf.length + d.length > MAX_CAPTURE * 2) { this.dead = true; this.failAll(); return; }
     this.buf = Buffer.concat([this.buf, d]);
     while (this.buf.length >= 10) {
       const len = parseInt(this.buf.subarray(0, 10).toString('ascii'), 10);
-      if (!Number.isFinite(len) || len < 0) { this.dead = true; this.failAll(); return; } // 帧损坏
+      if (!Number.isFinite(len) || len < 0 || len > MAX_CAPTURE * 2) { this.dead = true; this.failAll(); return; } // 帧损坏
       if (this.buf.length < 10 + len) break;
       const payload = this.buf.subarray(10, 10 + len).toString('utf-8');
       this.buf = this.buf.subarray(10 + len);
@@ -193,80 +199,47 @@ interface Session {
   kernel: PythonKernel | null;
   lastUsed: number;
   dirty: boolean;        // 有未回写的本地改动
-  lock: Promise<unknown>; // per-session 串行链（kernel exec / snapshot / 容器生命周期）
+  lock: ExecutionQueue; // cancellable per-session admission; execution keeps its lease through cleanup
+  disposing?: Promise<void>;
+  quarantined?: Error;
 }
 
 const sessions = new Map<string, Session>();
 
 function keyStr(k: SessionKey): string {
   return k.wsProject
-    ? `${k.userId} ${k.appId} proj:${k.wsProject}`
-    : `${k.userId} ${k.appId} ${k.sessionId}`;
+    ? `${k.userId}\0${k.appId}\0proj:${k.wsProject}`
+    : `${k.userId}\0${k.appId}\0${k.sessionId}`;
 }
 function shortId(k: SessionKey): string {
   return createHash('sha1').update(keyStr(k)).digest('hex').slice(0, 24);
 }
 
 /** per-session 串行锁：保证同一会话的 exec / snapshot / 容器创建不并发交错。 */
-function withSessionLock<T>(s: Session, fn: () => Promise<T>): Promise<T> {
-  const run = s.lock.then(fn, fn);
-  s.lock = run.then(() => undefined, () => undefined);
-  return run;
-}
-
-function getUidGidArgs(): string[] {
+async function withSessionLock<T>(s: Session, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  await s.lock.acquire(signal);
   try {
-    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-    const gid = typeof process.getgid === 'function' ? process.getgid() : null;
-    if (uid != null && gid != null) return ['--user', `${uid}:${gid}`];
-  } catch { /* 非 POSIX */ }
-  return [];
+    signal?.throwIfAborted();
+    if (s.disposing || s.quarantined) throw s.quarantined || new Error('Sandbox session is being disposed');
+    assertDockerWorkspaceAvailable(s.dir);
+    return await fn();
+  } finally { s.lock.release(); }
 }
 
-// 容器内唯一「持久可写」的地方就是会话工作区（绑到 /workspace，并额外绑到 /mnt/data，
-// 因为 code-interpreter 训练出来的模型常默认往 /mnt/data 写——两者指向同一宿主目录，
-// 都会被 snapshot 回流到本会话云端工作区）。其余 rootfs 只读；HOME / 各类库缓存指到
-// 临时 /tmp（易失、不回流），避免缓存写穿只读 rootfs 报错、也避免污染用户工作区。
-const SANDBOX_ENV: Record<string, string> = {
-  PYTHONPATH: '/pkgs',
-  HOME: '/tmp',
-  TMPDIR: '/tmp',
-  MPLCONFIGDIR: '/tmp/mpl',
-  XDG_CACHE_HOME: '/tmp/.cache',
-  XDG_CONFIG_HOME: '/tmp/.config',
-  XDG_DATA_HOME: '/tmp/.local',
-};
-function sandboxEnvArgs(): string[] {
-  return Object.entries(SANDBOX_ENV).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
-}
-
-/** 起一个会话暖容器（sleep infinity，绑定会话工作区目录）。 */
-async function dockerRunContainer(name: string, dir: string, image: string): Promise<boolean> {
-  await new Promise<void>((r) => execFile('docker', ['rm', '-f', name], () => r())); // 清同名残留
-  const args = [
-    'run', '-d', '--name', name, '--init',
-    '--network', 'none', '--cpus', '1', '--memory', '512m', '--pids-limit', '128',
-    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--read-only', '--tmpfs', '/tmp:rw,size=64m',
-    ...getUidGidArgs(),
-    // 会话工作区：唯一持久可写处，/workspace 与 /mnt/data 同指它。
-    '-v', `${dir}:/workspace:rw`, '-v', `${dir}:/mnt/data:rw`,
-    '-v', `${PKG_DIR}:/pkgs:ro`,
-    ...sandboxEnvArgs(),
-    '--workdir', '/workspace', '--entrypoint', 'sleep', image, 'infinity',
-  ];
-  return new Promise<boolean>((resolve) => {
-    execFile('docker', args, { timeout: 60_000 }, (err) => resolve(!err));
-  });
-}
-
-/** 真停并清掉会话容器（runaway / abort / 淘汰）；保留 dir + manifest，下次懒重建。 */
-function disposeContainer(s: Session): void {
+/** Called with the session lease held. Do not clear identity until removal is acknowledged. */
+async function disposeContainer(s: Session): Promise<void> {
   const name = s.containerName;
   s.kernel?.dispose();
-  s.kernel = null;
-  s.containerName = null;
-  if (name) execFile('docker', ['rm', '-f', name], () => {});
+  if (!name) return;
+  try {
+    await removeDockerContainer(name, [s.dir]);
+    s.kernel = null;
+    s.containerName = null;
+    s.quarantined = undefined;
+  } catch (error) {
+    s.quarantined = error as Error;
+    throw error;
+  }
 }
 
 /** 确保会话工作区目录已从 Penzor hydrate（整会话只拉一次）。并发首调用去重。
@@ -303,51 +276,75 @@ async function ensureHydrated(s: Session): Promise<void> {
   await s.hydrating;
 }
 
-function evictIfOverCap(): void {
+async function evictIfOverCap(): Promise<void> {
   while (sessions.size >= MAX_SESSIONS) {
-    let lruKey: string | null = null;
-    let lruAt = Infinity;
-    for (const [ks, s] of sessions) {
-      if (s.lastUsed < lruAt) { lruAt = s.lastUsed; lruKey = ks; }
+    const candidates = [...sessions.values()].filter((s) => !s.disposing && !s.quarantined && s.lock.activeCount === 0 && s.lock.queued === 0)
+      .sort((a, b) => a.lastUsed - b.lastUsed);
+    if (!candidates.length) {
+      const disposing = [...sessions.values()].find((s) => s.disposing)?.disposing;
+      if (disposing) { await disposing; continue; }
+      throw new Error('Sandbox session capacity reached; all sessions are active or quarantined');
     }
-    if (!lruKey) break;
-    void disposeSession(lruKey); // fire-and-forget（含 best-effort snapshot）
+    await disposeSession(candidates[0].ks);
   }
 }
 
-async function getOrCreateSession(k: SessionKey): Promise<Session> {
+// Serialize admission only; hydration/execution retain their own session synchronization.
+const sessionAdmission = new ExecutionQueue(() => 1);
+async function getOrCreateSession(k: SessionKey, signal?: AbortSignal): Promise<Session> {
+  signal?.throwIfAborted();
+  await waitDockerStartupCleanup(signal);
+  signal?.throwIfAborted();
   const ks = keyStr(k);
-  let s = sessions.get(ks);
-  if (!s) {
-    evictIfOverCap();
-    s = {
-      ks, key: k, id: shortId(k), dir: path.join(BASE_DIR, shortId(k)),
-      manifest: new Map(), hydrated: false, hydrating: null,
-      containerName: null, kernel: null, lastUsed: Date.now(), dirty: false, lock: Promise.resolve(),
-    };
-    sessions.set(ks, s);
-  }
-  s.lastUsed = Date.now();
-  await ensureHydrated(s);
-  return s;
+  await sessionAdmission.acquire(signal);
+  let s: Session;
+  try {
+    const existing = sessions.get(ks);
+    if (existing) s = existing;
+    else {
+      await evictIfOverCap();
+      signal?.throwIfAborted();
+      s = { ks, key: k, id: shortId(k), dir: path.join(BASE_DIR, shortId(k)),
+        manifest: new Map(), hydrated: false, hydrating: null,
+        containerName: null, kernel: null, lastUsed: Date.now(), dirty: false, lock: new ExecutionQueue(() => 1) };
+      sessions.set(ks, s);
+    }
+    if (s.disposing || s.quarantined) throw s.quarantined || new Error('Sandbox session is being disposed');
+    assertDockerWorkspaceAvailable(s.dir);
+    s.lastUsed = Date.now();
+  } finally { sessionAdmission.release(); }
+  await ensureHydrated(s!);
+  signal?.throwIfAborted();
+  if (s!.disposing || s!.quarantined) throw s!.quarantined || new Error('Sandbox session is being disposed');
+  return s!;
 }
 
-/** 确保暖容器 + 持久 kernel 就绪（仅 run_python 触发；在 session 锁内调用，无并发竞态）。 */
-async function ensureContainerKernel(s: Session): Promise<boolean> {
+/** Startup has the same cancellation and cleanup contract as code execution. */
+async function ensureContainerKernel(s: Session, signal?: AbortSignal): Promise<boolean> {
+  signal?.throwIfAborted();
+  if (s.quarantined) throw s.quarantined;
   if (s.containerName && s.kernel && !s.kernel.dead) return true;
-  // 残留清理（kernel 死但容器名还在）
-  if (s.containerName && (!s.kernel || s.kernel.dead)) disposeContainer(s);
-  const image = await resolvePythonImage();
+  if (s.containerName) await disposeContainer(s);
+  const image = await resolvePythonImage(signal);
   await ensurePkgDir();
-  const name = `agent-sess-${s.id}`;
-  const okC = await dockerRunContainer(name, s.dir, image);
-  if (!okC) { s.containerName = null; s.kernel = null; return false; }
-  s.containerName = name;
-  const k = new PythonKernel(name);
-  const okK = await k.start();
-  if (!okK) { k.dispose(); disposeContainer(s); return false; }
-  s.kernel = k;
-  return true;
+  signal?.throwIfAborted();
+  const name = `agent-sess-${s.id}-${randomUUID()}`;
+  s.containerName = name; // identity exists before daemon work starts, including failed/late startup
+  try {
+    const okC = await startDockerContainer(name, warmContainerArgs(name, s.dir, image), [s.dir], signal);
+    if (!okC) { s.containerName = null; return false; }
+    signal?.throwIfAborted();
+    const kernel = new PythonKernel(name);
+    s.kernel = kernel;
+    const okK = await kernel.start(signal);
+    signal?.throwIfAborted();
+    if (!okK) { await disposeContainer(s); return false; }
+    return true;
+  } catch (error) {
+    if (error instanceof DockerCleanupError) { s.quarantined = error; throw error; }
+    await disposeContainer(s);
+    throw error;
+  }
 }
 
 // ── 对外 API（registry / agentLoop 调用）────────────────────────────────────
@@ -378,37 +375,39 @@ export async function runPythonInSession(
   code: string,
   opts?: { signal?: AbortSignal; runId?: string; timeoutMs?: number },
 ): Promise<ExecResult> {
-  const s = await getOrCreateSession(k);
+  opts?.signal?.throwIfAborted();
+  const s = await getOrCreateSession(k, opts?.signal);
+  opts?.signal?.throwIfAborted();
   return withSessionLock(s, async () => {
+    opts?.signal?.throwIfAborted();
     s.dirty = true;
     s.lastUsed = Date.now();
-    const ok = await ensureContainerKernel(s);
-    if (!ok || !s.kernel) {
-      // 回退：ephemeral 容器挂会话目录（仍受益于已 hydrate 的本地工作区，不必重拉 OSS）。
-      return runPython(code, { mountDir: s.dir, signal: opts?.signal, runId: opts?.runId });
-    }
-    await acquireSlot();
-    const cname = s.containerName!;
-    const startedAt = beginExec(cname, opts?.runId ?? null, 'python:session');
+    await acquireSlot(opts?.signal);
+    let quarantined = false;
+    let ownsSlot = true;
     try {
+      const ok = await ensureContainerKernel(s, opts?.signal);
+      opts?.signal?.throwIfAborted();
+      if (!ok || !s.kernel) {
+        // Ephemeral fallback acquires its own slot, but retains this session's workspace lease.
+        releaseSlot(); ownsSlot = false;
+        return await runPython(code, { mountDir: s.dir, signal: opts?.signal, runId: opts?.runId, timeoutMs: opts?.timeoutMs });
+      }
+      const cname = s.containerName!;
+      const startedAt = beginExec(cname, opts?.runId ?? null, 'python:session');
       const r = await s.kernel.exec(code, opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts?.signal);
+      if (r.timedOut || r.aborted || s.kernel.dead) await disposeContainer(s);
       endExec(cname, opts?.runId ?? null, 'python:session', startedAt, {
         exitCode: r.ok ? 0 : 1, timedOut: r.timedOut, aborted: r.aborted,
       });
-      // 超时/中止/kernel 死 → 真停容器（停掉容器内 runaway 代码并释放），下次懒重建。
-      if (r.timedOut || r.aborted || s.kernel?.dead) disposeContainer(s);
-      return {
-        // 不在此预截到 MAX_OUTPUT：放行到 MAX_CAPTURE，让 registry 决定预览+落盘还是直接回。
-        stdout: r.stdout.slice(0, MAX_CAPTURE),
-        stderr: r.stderr.slice(0, MAX_CAPTURE),
-        exitCode: r.ok ? 0 : 1,
-        timedOut: r.timedOut,
-        aborted: r.aborted,
-      };
-    } finally {
-      releaseSlot();
-    }
-  });
+      return { stdout: r.stdout.slice(0, MAX_CAPTURE), stderr: r.stderr.slice(0, MAX_CAPTURE),
+        exitCode: r.ok ? 0 : 1, timedOut: r.timedOut, aborted: r.aborted };
+    } catch (error) {
+      quarantined = error instanceof DockerCleanupError;
+      if (quarantined) s.quarantined = error as Error;
+      throw error;
+    } finally { if (ownsSlot && !quarantined) releaseSlot(); }
+  }, opts?.signal);
 }
 
 /** run 末把会话本地改动按 diff 选择性回写 Penzor（更新基线 manifest）。保持沙箱温（不杀）。 */
@@ -432,16 +431,33 @@ export async function snapshotSession(k: SessionKey): Promise<string[]> {
   });
 }
 
-/** 彻底回收一个会话：best-effort snapshot + 杀容器 + 删本地目录。 */
+/** 彻底回收一个会话：确认容器已停，再 snapshot 和删除本地目录；失败保留现场。 */
 export async function disposeSession(ks: string): Promise<void> {
   const s = sessions.get(ks);
   if (!s) return;
-  sessions.delete(ks);
-  if (s.dirty && s.hydrated) {
-    try { await snapshotDirToWorkspace(s.key.userId, s.key.appId, scopeOf(s.key), s.dir, s.manifest); } catch { /* best-effort */ }
-  }
-  disposeContainer(s);
-  await fsp.rm(s.dir, { recursive: true, force: true }).catch(() => {});
+  if (s.disposing) return s.disposing;
+  s.disposing = (async () => {
+    await s.lock.acquire(undefined, 0);
+    try {
+      // An in-flight hydration must finish before its directory can be removed.
+      await s.hydrating;
+      await disposeContainer(s);
+      assertDockerWorkspaceAvailable(s.dir);
+      if (s.dirty && s.hydrated) {
+        await snapshotDirToWorkspace(s.key.userId, s.key.appId, scopeOf(s.key), s.dir, s.manifest);
+        s.dirty = false;
+      }
+      await fsp.rm(s.dir, { recursive: true, force: true });
+      if (sessions.get(ks) === s) sessions.delete(ks);
+    } catch (error) {
+      // A confirmed-stopped container plus a transient upload/fs error is recoverable. Keep dirty
+      // data and permit another snapshot/dispose; only uncertain container cleanup stays sealed.
+      if (!(error instanceof DockerCleanupError) && !s.quarantined) s.disposing = undefined;
+      throw error;
+    } finally { s.lock.release(); }
+  })();
+  // Failure retains the session+directory. No same-key replacement while cleanup is uncertain.
+  return s.disposing;
 }
 
 // ── 后台维护 ────────────────────────────────────────────────────────────────
@@ -452,7 +468,9 @@ export function startSessionReaper(intervalMs = 60_000): void {
   reaperTimer = setInterval(() => {
     const now = Date.now();
     for (const [ks, s] of sessions) {
-      if (now - s.lastUsed > SESSION_TTL_MS) void disposeSession(ks);
+      if (!s.disposing && !s.quarantined && s.lock.activeCount === 0 && s.lock.queued === 0 && now - s.lastUsed > SESSION_TTL_MS) {
+        void disposeSession(ks).catch((e) => console.warn('[agent-core] session cleanup not confirmed:', e));
+      }
     }
   }, intervalMs);
   if (typeof reaperTimer.unref === 'function') reaperTimer.unref();
@@ -463,16 +481,12 @@ export function stopSessionReaper(): void {
   if (reaperTimer) { clearInterval(reaperTimer); reaperTimer = null; }
 }
 
-/** 进程启动时清理上个进程遗留的 agent-sess-* 容器 + 会话目录（孤儿）。 */
+/** 启动只读检查已有 agent-sess-* 的挂载；无法确认属主的冲突目录隔离，绝不按前缀杀其它实例。 */
 export function reapOrphanSessions(): void {
-  execFile('docker', ['ps', '-aq', '--filter', 'name=agent-sess-'], { timeout: 5000 }, (err, stdout) => {
-    if (!err && stdout) {
-      const ids = String(stdout).split('\n').map((x) => x.trim()).filter(Boolean);
-      if (ids.length) execFile('docker', ['rm', '-f', ...ids], () => {});
-    }
-  });
-  // 清空会话工作区根目录（重启后本地缓存失效，权威数据在 Penzor）。
-  fsp.rm(BASE_DIR, { recursive: true, force: true }).catch(() => {});
+  // Old directories remain recoverable. A matching name alone cannot establish orphan ownership.
+  if (sessions.size) return; // startup-only; never reap this process's live sessions
+  void scheduleDockerStartupInspection(['agent-sess-'])
+    .catch((e) => console.warn('[agent-core] existing session sandbox inspection failed:', e));
 }
 
 /** 进程内会话沙箱快照（供 admin 面板观测）。 */
@@ -486,6 +500,8 @@ export function getSessionSnapshot() {
       hasContainer: !!s.containerName,
       kernelAlive: !!(s.kernel && !s.kernel.dead),
       dirty: s.dirty,
+      disposing: !!s.disposing,
+      quarantined: s.quarantined?.message,
       idleMs: Date.now() - s.lastUsed,
     })),
   };

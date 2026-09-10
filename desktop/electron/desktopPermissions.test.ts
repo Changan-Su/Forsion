@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 const m = vi.hoisted(() => ({
   exists: vi.fn(), ask: vi.fn(), media: vi.fn(), requestMedia: vi.fn(), sources: vi.fn(),
-  open: vi.fn(), show: vi.fn(), close: vi.fn(), confirm: vi.fn(), handlers: new Map<string, (...args: any[]) => any>(),
+  open: vi.fn(), launch: vi.fn(), show: vi.fn(), close: vi.fn(), confirm: vi.fn(), handlers: new Map<string, (...args: any[]) => any>(),
 }))
 vi.mock('electron', () => ({
   app: { isPackaged: true, getName: () => 'Forsion', getAppPath: () => '/app', on: vi.fn() },
@@ -12,6 +12,7 @@ vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: m.media, askForMediaAccess: m.requestMedia },
 }))
 vi.mock('node:fs', () => ({ existsSync: m.exists, accessSync: vi.fn(), constants: { W_OK: 2 } }))
+vi.mock('node:child_process', () => ({ execFile: m.launch, spawn: vi.fn() }))
 vi.mock('./computerUse', () => ({ helperSocketPath: () => '/tmp/test-cu.sock', askHelper: m.ask }))
 vi.mock('./permissionGuide', () => ({ PermissionGuide: class { show = m.show; close = m.close } }))
 
@@ -24,6 +25,7 @@ beforeAll(() => Object.defineProperty(process, 'platform', { ...originalPlatform
 afterAll(() => Object.defineProperty(process, 'platform', originalPlatform))
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   vi.clearAllMocks()
   m.handlers.clear()
   m.exists.mockReturnValue(true)
@@ -32,6 +34,8 @@ beforeEach(() => {
   m.open.mockResolvedValue(undefined)
   m.show.mockResolvedValue(undefined)
   m.confirm.mockResolvedValue({ response: 0 })
+  m.launch.mockImplementation((_command, _args, _options, callback) => { m.exists.mockReturnValue(true); callback(null, '', '') })
+  vi.spyOn(DesktopPermissions.prototype as any, 'runInstaller').mockResolvedValue(true)
 })
 
 describe('permission attribution and passive checks', () => {
@@ -44,6 +48,7 @@ describe('permission attribution and passive checks', () => {
     expect(m.sources).not.toHaveBeenCalled()
     expect(m.requestMedia).not.toHaveBeenCalled()
     expect(m.open).not.toHaveBeenCalled()
+    expect((DesktopPermissions.prototype as any).runInstaller).not.toHaveBeenCalled()
   })
 
   it('missing helper/socket is unknown, not denied; reads do not install or start anything', async () => {
@@ -93,6 +98,45 @@ describe('permission attribution and passive checks', () => {
 })
 
 describe('explicit permission actions', () => {
+  it.each(['missing', 'partial'])('repairs a %s app before launching it and requesting access', async (scenario) => {
+    m.exists.mockImplementation(file => scenario === 'partial' && file !== '/tmp/test-cu.sock')
+    const installer = vi.mocked((DesktopPermissions.prototype as any).runInstaller)
+      .mockImplementation(async (checkOnly?: boolean) => !checkOnly)
+    await service().request('computerAccessibility')
+    expect(installer.mock.calls).toEqual(scenario === 'missing' ? [[]] : [[true], []])
+    expect(m.launch).toHaveBeenCalledOnce()
+    expect(m.launch.mock.calls[0].slice(0, 2)).toEqual(['/usr/bin/open', expect.arrayContaining(['-n', '-g', 'serve'])])
+    expect(installer.mock.invocationCallOrder.at(-1)!).toBeLessThan(m.launch.mock.invocationCallOrder[0])
+    expect(m.ask.mock.calls.map(call => call[1])).toContainEqual({ cmd: 'registerPermissions', kind: 'accessibility' })
+    expect(m.confirm).not.toHaveBeenCalled()
+  })
+
+  it('leaving during signature verification cannot reopen a restart prompt', async () => {
+    let release!: (value: boolean) => void
+    vi.mocked((DesktopPermissions.prototype as any).runInstaller).mockImplementation(() => new Promise(resolve => { release = resolve }))
+    const s = service(), action = s.request('computerAccessibility')
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    s.closeGuide(); release(false); await action
+    expect(m.confirm).not.toHaveBeenCalled()
+    expect(m.open).not.toHaveBeenCalled()
+  })
+
+  it('a same-protocol old installation requests consent before replacing a running helper', async () => {
+    const installer = vi.mocked((DesktopPermissions.prototype as any).runInstaller).mockResolvedValue(false)
+    await service().request('computerAccessibility', { locale: 'zh' })
+    expect(installer).toHaveBeenCalledExactlyOnceWith(true)
+    expect(m.confirm).toHaveBeenCalledOnce()
+    expect(m.ask.mock.calls.every((call) => call[1].cmd === 'permissionStatus')).toBe(true)
+    expect(m.open).not.toHaveBeenCalled()
+  })
+
+  it('current helpers are verified without replacement before requesting access', async () => {
+    await service().request('computerAccessibility')
+    expect((DesktopPermissions.prototype as any).runInstaller).toHaveBeenCalledExactlyOnceWith(true)
+    expect(m.confirm).not.toHaveBeenCalled()
+    expect(m.ask.mock.calls.map((call) => call[1])).toContainEqual({ cmd: 'registerPermissions', kind: 'accessibility' })
+  })
+
   it('an outdated helper cannot be stopped based on liveView reporting idle; cancellation leaves it alone', async () => {
     m.ask.mockRejectedValue(Object.assign(new Error('old helper'), { code: 'unknown_command' }))
     const result = await service().request('computerAccessibility', { locale: 'zh' })

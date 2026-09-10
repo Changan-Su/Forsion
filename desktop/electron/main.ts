@@ -1,4 +1,5 @@
 import { UNIT_PREFERENCE_KEYS } from '../shared/unitPreferences'
+import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
@@ -137,8 +138,12 @@ const homeConfigPath = (): string => join(tanguHomeDir(), 'config.json')
 async function readHomeConfig(): Promise<Record<string, any>> {
   try {
     const p = JSON.parse(await readFile(homeConfigPath(), 'utf8'))
-    return p && typeof p === 'object' ? p : {}
-  } catch { return {} }
+    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('Invalid config.json: expected an object')
+    return p
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw error // Never overwrite an unreadable security configuration with defaults.
+  }
 }
 async function writeHomeConfig(c: Record<string, any>): Promise<void> {
   await mkdir(tanguHomeDir(), { recursive: true })
@@ -345,6 +350,7 @@ interface TanguStoredConfig {
   lastChatThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
+  hostSandbox?: HostSandboxConfig
   /** Python 来源:bundled=内置解释器(默认,免装/隔离);system=用系统已装 python。 */
   pythonMode: 'bundled' | 'system'
   /** 网络镜像:china=中国大陆镜像源(pip/npm/git + 市场 github 下载);default=直连。 */
@@ -426,6 +432,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   lastChatThinkingLevel: '',
   cloudUrl: '',
   sandbox: 'auto',
+  hostSandbox: { mode: 'off', network: 'deny' },
   pythonMode: 'bundled',
   mirror: 'default',
   defaultWorkspaceDir: '',
@@ -539,6 +546,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
     ...shell, // 旧 desktop 文件:既给 shell 键,也作未迁移段的回落
     ...(home.cloud !== undefined ? { cloudUrl: cloud.url || '', modelId: cloud.defaultModel || '' } : {}),
     ...(home.sandbox !== undefined ? { sandbox: home.sandbox } : {}),
+    hostSandbox: normalizeHostSandboxConfig(home.hostSandbox),
     ...(home.workspace !== undefined ? { defaultWorkspaceDir: home.workspace } : {}),
     ...(home.browser !== undefined ? {
       browserEnabled: browser.enabled !== false, browserEngine: browser.engine || 'auto',
@@ -614,6 +622,7 @@ async function saveConfig(patch: Partial<TanguStoredConfig>, accountCreds = load
   if ('visionModelId' in patch) { auxModels.vision = patch.visionModelId; mT = true }
   if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
+  if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
   if ('browserEnabled' in patch) { browser.enabled = patch.browserEnabled; bT = true }
   if ('browserEngine' in patch) { browser.engine = patch.browserEngine; bT = true }
@@ -1800,7 +1809,7 @@ app.whenReady().then(async () => {
     if (patch.activeWindowEnabled !== undefined) activeWindowOn = patch.activeWindowEnabled === true
     // 模式/托管参数变化 → 重启托管后端(切到 external 则停掉)。
     const managedKeys: Array<keyof TanguStoredConfig> = [
-      'mode', 'cloudUrl', 'sandbox', 'pythonMode', 'mirror',
+      'mode', 'cloudUrl', 'sandbox', 'hostSandbox', 'pythonMode', 'mirror',
       'browserEnabled', 'browserEngine', 'browserSearchEngine', 'browserAllowPrivateUrls', 'browserCommandTimeoutMs',
       'unitHostEnabled', // 开着 = 引擎常驻(即使 mode≠managed),见 ensureBackend
     ]

@@ -8,6 +8,7 @@ import type { ApprovalDecision } from '../services/approvals.js';
 import { loadEngines, engineStatus, loadEnginePrefs, saveEngineDefaultModel, type EngineDef, type EngineStatus } from './config.js';
 import { runAcpEngine, probeAcpEngine } from './acpEngine.js';
 import { seedDshFiles } from './dsh.js';
+import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 
 /** externalEngineLoop 传入：一次外部引擎 turn 所需的上下文 + 回灌接缝。 */
 export interface EngineRunCtx {
@@ -83,6 +84,7 @@ export function createEngineManager(configFile?: string): EngineManager {
     }),
     has: (id) => byId.has(id),
     capabilities: async (id) => {
+      if (isHostSandboxRestricted()) throw new Error('External engine probing is unavailable while the local sandbox is enabled');
       const def = byId.get(id);
       if (!def) throw new Error(`unknown engine: ${id}`);
       // 静态声明优先(配了就不探测)。
@@ -99,7 +101,9 @@ export function createEngineManager(configFile?: string): EngineManager {
       saveEngineDefaultModel(id, modelId);
       prefs = loadEnginePrefs();
     },
-    run: (ctx) => {
+    run: async (ctx) => {
+      ctx.signal.throwIfAborted();
+      if (isHostSandboxRestricted()) throw new Error('External engines are unavailable while the local sandbox is enabled');
       const def = byId.get(ctx.engineId);
       if (!def) throw new Error(`unknown engine: ${ctx.engineId}`);
       // 用户未在本会话选模型 → 回退该引擎的默认模型偏好(设置页「Agent CLIs」配置)。

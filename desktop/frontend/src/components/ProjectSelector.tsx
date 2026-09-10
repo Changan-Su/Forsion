@@ -23,80 +23,158 @@ export const ProjectSelector: React.FC<{
   const [naming, setNaming] = useState(false)
   const [draft, setDraft] = useState('')
   const ref = useRef<HTMLDivElement>(null)
-  // 下拉是 absolute-in-relative + 固定 264px 宽、左对齐,窄屏会捅出右边缘 → 视口兜底。
+  const menuRef = useRef<HTMLDivElement>(null)
+  // 下拉是 absolute-in-relative + 标准选择面宽度、左对齐，窄屏用视口夹取兜底。
   const menuFix = useEdgeNudge(open)
 
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false); setQ(''); setNaming(false); setDraft('')
+      }
+    }
+    const escape = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setOpen(false); setQ(''); setNaming(false); setDraft('')
+      ref.current?.querySelector<HTMLButtonElement>('.project-pill')?.focus()
+    }
     window.addEventListener('mousedown', close)
-    return () => window.removeEventListener('mousedown', close)
+    window.addEventListener('keydown', escape)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('keydown', escape)
+    }
   }, [open])
 
-  // 仅在工作区(排除微信);选中项缺省取 value,再退回常驻系统本地区(Tangu 默认),再退回首个。
+  // 仅在工作区(排除微信);选中项先按真实 key 或默认工作区的历史路径别名匹配。
+  // 否则旧默认路径的草稿会被发送链归入当前默认组，pill 却显示别的项目。
   const pickable = workspaces.filter((w) => w.kind !== 'channel')
-  const selected = pickable.find((w) => w.key === value)
+  const selected = pickable.find((w) => w.key === value || (!!value && w.sessionKeys?.includes(value)))
     || pickable.find((w) => w.kind === 'local' && w.system)
     || pickable[0] || null
   const projectless = pickable.find((w) => w.kind === 'rootless') || null
-  const list = pickable.filter((w) => w.kind !== 'rootless' && (!q || w.name.toLowerCase().includes(q.toLowerCase())))
+  const projects = pickable.filter((w) => w.kind !== 'rootless')
+  const query = q.trim().toLowerCase()
+  const list = projects.filter((w) => !query || `${w.name} ${w.path || ''} ${w.project || ''}`.toLowerCase().includes(query))
+  // 项目少时搜索只是一行噪音；达到需要浏览的数量再渐进披露。
+  const showSearch = projects.length >= 6
   const SelectedIcon = selected?.kind === 'cloud' ? Cloud : selected?.kind === 'rootless' ? FolderX : Folder
+  const closeMenu = (): void => { setOpen(false); setQ(''); setNaming(false); setDraft('') }
+  const pick = (ws: WorkspaceDescriptor): void => { onChange(ws); closeMenu() }
+
+  useEffect(() => {
+    if (!open || isCoarsePointer()) return
+    const frame = requestAnimationFrame(() => {
+      const target = showSearch
+        ? menuRef.current?.querySelector<HTMLInputElement>('.project-menu-search input')
+        : menuRef.current?.querySelector<HTMLButtonElement>('.project-menu-item.active')
+      target?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [open, showSearch])
+
+  const moveMenuFocus = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('.project-menu-item:not(:disabled)') || [])]
+    if (!items.length) return
+    event.preventDefault()
+    const current = items.indexOf(document.activeElement as HTMLElement)
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? items.length - 1
+      : current < 0 ? (event.key === 'ArrowDown' ? 0 : items.length - 1)
+      : event.key === 'ArrowDown' ? (current + 1) % items.length
+      : (current - 1 + items.length) % items.length
+    items[next]?.focus()
+  }
 
   return (
-    <div className="project-selector" ref={ref}>
-      <button className="project-pill" onClick={() => setOpen((o) => !o)} title={t('input.project.label')}>
+    <div className={`project-selector${open ? ' is-open' : ''}`} ref={ref}>
+      <button
+        className={`composer-chip project-pill${open ? ' is-open' : ''}`}
+        onClick={() => open ? closeMenu() : setOpen(true)}
+        title={t('input.project.label')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
         <SelectedIcon size={13} />
         <span className="project-pill-name">{selected?.name || t('input.project.none')}</span>
         <ChevronDown size={12} />
       </button>
       {open && (
-        <div ref={menuFix.ref} className="project-menu" style={menuFix.style}>
-          <div className="project-menu-search">
-            <Search size={13} />
-            {/* ⚠️触屏不自动聚焦:软键盘一弹,向上开的菜单整块移位,点条目那一下 click 落不到条目上
-                (「移动端点工作区没反应、长按才行」的真身)。想搜就自己点这个框。见 ../touch.ts。 */}
-            <input autoFocus={!isCoarsePointer()} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('input.project.search')} />
-          </div>
+        <div
+          ref={(el) => { menuRef.current = el; menuFix.ref.current = el }}
+          className="composer-menu project-menu"
+          style={menuFix.style}
+          role="menu"
+          aria-label={t('input.project.label')}
+          onKeyDown={moveMenuFocus}
+        >
+          {showSearch && (
+            <label className="project-menu-search">
+              <Search size={13} />
+              {/* 触屏不自动聚焦：软键盘会让向上弹的菜单移位，导致首次点击落空。 */}
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('input.project.search')} />
+            </label>
+          )}
           <div className="project-menu-list">
             {list.map((w) => (
-              <button key={w.key} className="project-menu-item" onClick={() => { onChange(w); setOpen(false) }}>
+              <button
+                key={w.key}
+                className={`menu-item project-menu-item${w.key === selected?.key ? ' active' : ''}`}
+                role="menuitemradio"
+                aria-checked={w.key === selected?.key}
+                onClick={() => pick(w)}
+              >
                 {w.kind === 'cloud' ? <Cloud size={14} /> : <Folder size={14} />}
-                <span className="project-menu-name">{w.name}</span>
-                {w.key === selected?.key && <Check size={14} className="project-menu-check" />}
+                <span className="grow project-menu-name">{w.name}</span>
+                <span className="project-menu-check">{w.key === selected?.key ? <Check size={13} /> : null}</span>
               </button>
             ))}
+            {!list.length && <div className="project-menu-empty">{t('input.project.noMatches')}</div>}
           </div>
-          {/* Codex 同款项目外入口固定在项目列表底部,不混进搜索结果或「添加项目」动作。 */}
+          {/* 项目外是一种选择，与新建动作分组；每行保留自己的圆角和键盘聚焦底。 */}
           {projectless && (
-            <button className="project-menu-item project-menu-projectless" onClick={() => { onChange(projectless); setOpen(false) }}>
-              <FolderX size={14} />
-              <span className="project-menu-name">{t('input.project.dontWork')}</span>
-              {projectless.key === selected?.key && <Check size={14} className="project-menu-check" />}
-            </button>
-          )}
-          {onAddCloudProject && (naming ? (
-            <div className="project-menu-search project-menu-naming">
-              <Cloud size={13} />
-              <input
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder={t('input.project.cloudName')}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && draft.trim()) { onAddCloudProject(draft.trim()); setDraft(''); setNaming(false); setOpen(false) }
-                  if (e.key === 'Escape') { setDraft(''); setNaming(false) }
-                }}
-              />
+            <div className="project-menu-section project-menu-projectless-section" role="group">
+              <button
+                className={`menu-item project-menu-item project-menu-projectless${projectless.key === selected?.key ? ' active' : ''}`}
+                role="menuitemradio"
+                aria-checked={projectless.key === selected?.key}
+                onClick={() => pick(projectless)}
+              >
+                <FolderX size={14} />
+                <span className="grow project-menu-name">{t('input.project.dontWork')}</span>
+                <span className="project-menu-check">{projectless.key === selected?.key ? <Check size={13} /> : null}</span>
+              </button>
             </div>
-          ) : (
-            <button className="project-menu-item project-menu-add" onClick={() => setNaming(true)}>
-              <FolderPlus size={14} /> {t('input.project.addCloud')}
-            </button>
-          ))}
-          {onAddProject && (
-            <button className="project-menu-item project-menu-add" onClick={() => { onAddProject(); setOpen(false) }}>
-              <FolderPlus size={14} /> {t('input.project.add')}
-            </button>
+          )}
+          {(onAddCloudProject || onAddProject) && (
+            <div className="project-menu-section project-menu-actions" role="group">
+              {onAddCloudProject && (naming ? (
+                <label className="project-menu-search project-menu-naming">
+                  <Cloud size={13} />
+                  <input
+                    autoFocus
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    placeholder={t('input.project.cloudName')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && draft.trim()) { onAddCloudProject(draft.trim()); closeMenu() }
+                      if (e.key === 'Escape') { e.stopPropagation(); setDraft(''); setNaming(false) }
+                    }}
+                  />
+                </label>
+              ) : (
+                <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={() => setNaming(true)}>
+                  <Cloud size={14} /><span className="grow">{t('input.project.addCloud')}</span>
+                </button>
+              ))}
+              {onAddProject && (
+                <button className="menu-item project-menu-item project-menu-add" role="menuitem" onClick={() => { onAddProject(); closeMenu() }}>
+                  <FolderPlus size={14} /><span className="grow">{t('input.project.add')}</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

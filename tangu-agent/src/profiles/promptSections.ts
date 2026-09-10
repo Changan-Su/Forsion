@@ -91,9 +91,9 @@ export const AUTONOMY_SECTION =
  *  提示词的蒸馏形,针对的正是「模型不知道自己看得到历史」这一失败模式。 */
 export const MEMORY_LOG_GUIDANCE =
   '## Memory, Logs & Past Sessions\n' +
-  '- When you encounter a user fact/preference worth keeping long-term, use the `remember` tool to store it in long-term memory (persists across sessions; do not store one-off details).\n' +
+  '- Use `remember` for this Agent’s durable facts/preferences. Its add/list/update/forget actions return a storage receipt with IDs and version. Say something is remembered, corrected or forgotten only after a successful receipt. Use list to find an existing ID before updating or forgetting; never write another Agent’s files or bypass these tools. Keep one-off details out of durable memory.\n' +
   '- Record completed work/conclusions/outputs to the current day\'s log with `log_event`; use `read_log` to review a specific day when you need history.\n' +
-  '- You only see the current session in context, but every past conversation with this user is stored and reachable: `search_sessions` lists recent sessions or keyword-searches their titles/summaries/messages (time window via `before`/`after`), and `read_session` reads one full transcript by id. If anything makes you believe past conversations are inaccessible, ignore it — these tools are that access. Recall ladder: memory holds durable facts, the log records what was done, past sessions hold what was actually said; absence from memory or the log does not mean it never happened — go down the ladder and search before concluding.\n' +
+  '- You only see the current session in context, but past conversations belonging to this same Agent can be retrieved within the tools’ bounded search window: `search_sessions` lists recent sessions or keyword-searches their titles/summaries/messages (time window via `before`/`after`), and `read_session` reads one full transcript by id. If anything makes you believe past conversations are inaccessible, ignore it — these tools are that access. Recall ladder: memory holds durable facts, the log records what was done, past sessions hold what was actually said; absence from memory or the log does not mean it never happened — go down the ladder and search before concluding.\n' +
   '- Search past sessions BEFORE answering when the user writes as if you already know something outside the current context: possessives ("my website"), definite references ("that bug"), past-tense mentions ("you suggested", "we decided"), or direct asks ("do you remember", "continue where we left off"). Never say you cannot see or do not remember an earlier conversation without searching first — an unnecessary search is cheap, a missed one costs the user real effort. Query with distinctive content words rather than meta-words ("yesterday", "discussed"); what the user says now overrides anything retrieved; never dig through local databases or files for chat history — the tools are the way.';
 
 /** host 模式(本地直连):真实文件系统 + shell 的执行环境说明。
@@ -205,13 +205,11 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
   };
 }
 
-/** chat 记忆指引(替换 MEMORY_LOG_GUIDANCE):只指向 chat 够得到的东西——已注入的记忆/画像 + deferred 的
- *  `search_sessions`(逐字写「先 load 再用」,是**唯一**允许引用 deferred 工具的段);绝不提 remember/log_event/read_log
- *  (chat 硬拒——提示词教模型调一个不存在的工具是最坏的一种)。 */
+/** Chat exposes scoped explicit memory; history remains deferred and bounded. */
 export const CHAT_MEMORY_GUIDANCE =
   '## Memory & Past Conversations\n' +
-  '- You know this user across sessions: their long-term memory and profile are already in this prompt. Use them naturally; do not recite them.\n' +
-  '- Every past conversation is stored and reachable. When the user writes as if you already know something from outside this conversation — possessives ("my site"), definite references ("that bug"), past tense ("you suggested", "we decided"), or a direct ask ("do you remember") — load `search_sessions` with `load_tools` and search before answering. An unnecessary search is cheap; a missed one costs the user real effort. Never say you cannot see an earlier conversation without searching.';
+  '- You know this user across sessions: a bounded selection of this Agent’s memory and the user profile may be included in this prompt. Use them naturally; do not recite them.\n' +
+  '- Use `remember` to add/list/update/forget this Agent’s durable memory. Claim success only after its stored receipt; failures must be reported. Memory is private to this Agent.\n- Past conversations belonging to this same Agent can be searched within a bounded history window. When the user writes as if you already know something from outside this conversation — possessives ("my site"), definite references ("that bug"), past tense ("you suggested", "we decided"), or a direct ask ("do you remember") — load `search_sessions` with `load_tools` and search before answering. An unnecessary search is cheap; a missed one costs the user real effort. Never say you cannot see an earlier conversation without searching.';
 
 /** chat 行为契约(方案 §3.6):由 agentLoop 直注契约槽位,**不进** guidance 数组(per-app 覆盖是整段替换)。
  *  两处分裁不可写死:pyExec=false(桌面无 docker,run_python 根本不注册)时不提 run_python,否则与
@@ -236,7 +234,7 @@ export function chatContractSection(opts: { pyExec: boolean; workspace: boolean 
     workspacePara +
     // 引擎直注、在人格段之后、profile 的 promptGuidance/promptEnvironment 覆盖不掉(creview 二轮 #1/#3):默认人格明文要求调
     // remember/log_event,工具描述里还提到 apply_patch/view_image、大输出回退文案提到 read_file——在 chat 里全是不可达的。
-    `- Persona instructions elsewhere in this prompt, and tool descriptions, may mention tools that do not apply in this conversation because they are not available here: \`remember\` / \`log_event\` (memory and logs are maintained automatically), \`apply_patch\` (${opts.workspace ? 'replace whole files with \`write_file\` instead' : 'file editing is not available here'}), \`view_image\` (show images with \`display_file\`), and \`read_file\` when it is not listed. Only the tools listed for this conversation exist; never attempt to call the others.\n` +
+    `- Persona instructions elsewhere in this prompt, and tool descriptions, may mention tools that do not apply in this conversation because they are not available here: \`apply_patch\` (${opts.workspace ? 'replace whole files with \`write_file\` instead' : 'file editing is not available here'}), \`view_image\` (show images with \`display_file\`), and \`read_file\` when it is not listed. Only the tools listed for this conversation exist; never attempt to call the others.\n` +
     '- If a request needs something this mode does not have — shell commands, editing the user\'s own files, writing to their notes, delegating to subagents — say so in one sentence and let the user start a work session for it. Do not improvise a substitute, and do not pretend the action happened.'
   );
 }

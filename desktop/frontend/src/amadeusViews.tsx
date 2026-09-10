@@ -62,7 +62,7 @@ import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
 import { ShareStatus } from './components/ShareStatus'
 import { tipProps, tipT, fsTipLines, type TipLines } from './hoverTip'
-import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry } from './stores/entrySyncStore'
+import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor } from './stores/entrySyncStore'
 import { openCloudSyncDialog } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
@@ -155,6 +155,7 @@ registerMessages({
   'amxv.publish.done': { zh: '文件夹已发布,公开链接已复制(任何人可只读浏览)', en: 'Folder published — the public link is copied (anyone can read it)' },
   'amxv.publish.quota': { zh: '发布页数已达套餐上限', en: 'You have reached your plan limit for published pages' },
   'amxv.publish.ownerOnly': { zh: '只有库所有者能发布', en: 'Only the vault owner can publish' },
+  'amxv.publish.notUploaded': { zh: '云端尚未找到此文件夹,请等待同步完成后重试', en: 'This folder is not in the cloud yet. Wait for sync to finish and try again.' },
   'amxv.publish.failed': { zh: '发布失败', en: 'Publishing failed' },
 
   'amxv.mbar.insertBlock': { zh: '插入块', en: 'Insert block' },
@@ -957,16 +958,22 @@ export function AmadeusPagesView() {
   const dropTo = (folder: string): void => {
     // 拖的是已选中的行 → 整批搬。守卫逐项复核:单拖时 mergedDragOver 已挡过,但整批里
     // 可能只有其中一项非法(如把笔记拖进它自己的 .fd 子树),不能一票放行也不能一票否决。
-    for (const p of dragPath ? sel.batch(dragPath) : []) {
-      if (parentOf(p) === folder) continue
+    const paths = (dragPath ? sel.batch(dragPath) : []).filter((p) => {
+      if (parentOf(p) === folder) return false
       if (isNoteMd(p)) {
         const dfd = fdDirOf(p)
-        if (folder === dfd || folder.startsWith(`${dfd}/`)) continue
+        if (folder === dfd || folder.startsWith(`${dfd}/`)) return false
       }
-      void ps().movePage(p, folder)
-    }
+      return true
+    })
     setDragPath(null)
     setDragOver(null)
+    const store = pageStoreFor(activePageScope())
+    // 每项都带全局 flush、路径广播、.fd 级联与目录刷新。等上一项完整收尾后再搬下一项,
+    // 否则一批拖放会同时重写同步注册表,也会让较早的目录刷新盖掉后一个移动的结果。
+    void (async () => {
+      for (const p of paths) await store.getState().movePage(p, folder)
+    })().catch((e: unknown) => store.setState({ error: String(e) }))
   }
   // ── OS 文件拖入文件树 → 存入库为文件(不嵌入),类似文件管理器导入 ──
   const hasFilesType = (e: RDragEvent<HTMLElement>): boolean =>
@@ -1631,9 +1638,11 @@ export function AmadeusPagesView() {
             <button onClick={() => {
               const f = menu.path
               setMenu(null)
-              void window.amadeusCollab!.createPublish('subtree', f)
+              const cloudPath = cloudPathFor(entryVaults, vaultRoot, vaultSide, f)
+              if (!cloudPath) { openCloudSyncDialog(f, 'folder'); return }
+              void window.amadeusCollab!.createPublish('subtree', cloudPath)
                 .then((s) => navigator.clipboard.writeText(s.url).then(() => useApp.getState().toast(t('amxv.publish.done'))))
-                .catch((e) => useApp.getState().toast((e as any)?.code === 'QUOTA' ? ((e as Error).message || t('amxv.publish.quota')) : (e as any)?.status === 404 ? t('amxv.publish.ownerOnly') : t('amxv.publish.failed'), true))
+                .catch((e) => useApp.getState().toast((e as any)?.code === 'QUOTA' ? ((e as Error).message || t('amxv.publish.quota')) : (e as any)?.status === 404 ? t('amxv.publish.notUploaded') : t('amxv.publish.failed'), true))
             }}><Share2 size={13} /> {t('amxv.menu.publishFolder')}</button>
           )}
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>

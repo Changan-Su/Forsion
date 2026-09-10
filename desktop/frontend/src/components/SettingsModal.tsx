@@ -1,4 +1,5 @@
 import { PRODUCT } from '../product'
+import { HostSandboxSettings } from './HostSandboxSettings'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
@@ -77,6 +78,7 @@ import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
+import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
@@ -85,6 +87,16 @@ registerMessages({
   'settingsmodal.advanced.resetLayoutHint': {
     zh: '把工作区面板还原为默认黄金分割布局(中间 0.618 / 左右各 0.191),并清除已保存的自定义布局。',
     en: 'Restores the workspace panels to the default golden-ratio layout (0.618 in the middle, 0.191 on each side) and clears any saved custom layout.',
+  },
+  'settingsmodal.advanced.experimental': { zh: '测试性功能', en: 'Experimental features' },
+  'settingsmodal.advanced.experimentalNote': {
+    zh: '这些功能仍在测试中，可能随版本调整或移除；所有选项默认关闭。',
+    en: 'These features are still being tested and may change or be removed. All options are off by default.',
+  },
+  'settingsmodal.advanced.waitDetails': { zh: 'Agent 响应等待详情', en: 'Agent response wait details' },
+  'settingsmodal.advanced.waitDetailsHint': {
+    zh: '在 Agent 消息末尾显示发送上下文、等待模型首帧和已等待时间，用于诊断模型响应延迟。',
+    en: 'Show context upload, first-frame wait and elapsed time at the end of Agent messages for diagnosing model response latency.',
   },
   // 系统音色候选的显示名。⚠️ 只有**标签**进字典,音色 id(Cherry/Dylan/alloy…)是接口标识符,永不翻译。
   'settingsmodal.tts.voice.cherry': { zh: '百炼 芊悦(女)', en: 'Bailian · Qianyue (female)' },
@@ -211,6 +223,7 @@ export const SettingsModal: React.FC<{
   initialTab?: Tab
 }> = (p) => {
   const { t, locale } = useI18n()
+  const showWaitDetails = useChatWaitDetailsEnabled()
   // 真机、开发者移动预览、手机浏览器统一走两层设置 IA。不能只靠窄屏 media query:
   // 桌面里的手机框宽 390px,但物理 viewport 仍是宽屏,而真机又不经过 Root 的预览框。
   const mobileSettings = !!window.tangu?.mobile || UI_MODE === 'mobile' || (() => {
@@ -342,6 +355,10 @@ export const SettingsModal: React.FC<{
   }, [mobileSettings, tab])
 
   const [stored, setStored] = useState<StoredDesktopConfig | null>(null)
+  // Backend restarts refresh p.cfg/getConfig while this page stays open. Keep the
+  // user's policy draft separate so those responses cannot silently weaken it.
+  const [hostSandboxDraft, setHostSandboxDraft] = useState<StoredDesktopConfig['hostSandbox'] | null>(null)
+  useEffect(() => { if (!p.open) setHostSandboxDraft(null) }, [p.open])
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
   const [logs, setLogs] = useState<string[] | null>(null)
   // Forsion 账号 / provider OAuth 登录态
@@ -768,9 +785,10 @@ export const SettingsModal: React.FC<{
       mode: 'managed',
       cloudUrl: stored.cloudUrl,
       sandbox: stored.sandbox,
+      hostSandbox: hostSandboxDraft ?? stored.hostSandbox,
       pythonMode: stored.pythonMode || 'bundled',
       mirror: stored.mirror || 'default',
-    }).then(setStored)
+    }).then(setStored).catch((e: any) => setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`))
   }
 
   // 浏览器工具设置保存(原与微信共用;微信设置已迁「通道」tab,走引擎 /agent/channels)。
@@ -905,6 +923,7 @@ export const SettingsModal: React.FC<{
     advanced: [
       ...(isDesktop ? [['a-mcp', t('settings.sub.mcpServer')] as [string, string]] : []),
       ['a-ui', t('settings.sub.uiSession')],
+      ['a-experimental', t('settingsmodal.advanced.experimental')],
       ...(window.tangu?.clearAppData ? [['a-data', t('settings.sub.data')] as [string, string]] : []),
     ],
     skills: [
@@ -1267,7 +1286,7 @@ export const SettingsModal: React.FC<{
                           <div><strong>{t('settings.runtime.title')}</strong><p>{t('settings.runtime.description')}</p></div>
                         </div>
                         <div className="field-row">
-                          <div className="field" style={{ maxWidth: 160 }}>
+                          <div className="field" style={{ maxWidth: 260 }}>
                             <label>{t('settings.sandbox.label')}</label>
                             <select
                               value={stored.sandbox}
@@ -1279,6 +1298,7 @@ export const SettingsModal: React.FC<{
                             </select>
                           </div>
                         </div>
+                        <HostSandboxSettings value={hostSandboxDraft ?? stored.hostSandbox} onChange={setHostSandboxDraft} />
                         <div className="field-row">
                           <div className="field" style={{ maxWidth: 200 }}>
                             <label>{t('settings.python.label')}</label>
@@ -3106,6 +3126,23 @@ export const SettingsModal: React.FC<{
                       {exportMsg && <div className="hint" style={{ marginTop: 6, wordBreak: 'break-all' }}>{exportMsg}</div>}
                     </div>
 
+                  </>
+                )}
+
+                {tab === 'advanced' && activeSub === 'a-experimental' && (
+                  <>
+                    <div className="panel-note">{t('settingsmodal.advanced.experimentalNote')}</div>
+                    <SettingsRow
+                      label={t('settingsmodal.advanced.waitDetails')}
+                      description={t('settingsmodal.advanced.waitDetailsHint')}
+                      control={(
+                        <SettingsSwitch
+                          checked={showWaitDetails}
+                          onChange={setChatWaitDetailsEnabled}
+                          label={t('settingsmodal.advanced.waitDetails')}
+                        />
+                      )}
+                    />
                   </>
                 )}
 

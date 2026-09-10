@@ -32,7 +32,7 @@ describe('memory sync account boundary', () => {
     setSyncSources({ brain });
     await syncNow('a');
     expect(memorySync).not.toHaveBeenCalled();
-    setAgentSyncPermission('xyra', agentSyncScope(brain.agentFiles, 'a')!, true);
+    setAgentSyncPermission('xyra', agentSyncScope(brain.agentFiles, 'a')!, true, true);
     await syncNow('a');
     expect(memorySync).toHaveBeenCalledTimes(1);
     await syncNow('b');
@@ -44,7 +44,7 @@ describe('memory sync account boundary', () => {
     const a = source();
     const b = source();
     setSyncSources({ brain: a });
-    setAgentSyncPermission('xyra', agentSyncScope(a.agentFiles, 'a')!, true);
+    setAgentSyncPermission('xyra', agentSyncScope(a.agentFiles, 'a')!, true, true);
     let finish!: (value: typeof result) => void;
     agentFilesSync.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
     const pending = syncNow('a');
@@ -55,4 +55,18 @@ describe('memory sync account boundary', () => {
     expect(memorySync).not.toHaveBeenCalled();
     expect(getSyncStatus('b')).toMatchObject({ lastAt: null, lastResult: null });
   });
+});
+
+it('duplicate sync callers await the current operation instead of a previous success', async () => {
+  const brain = source(); setSyncSources({ brain });
+  let finish!: (value: typeof result) => void;
+  agentFilesSync.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const first = syncNow('a'); const second = syncNow('a');
+  expect(second).toBe(first); expect(getSyncStatus('a').running).toBe(true);
+  finish(result); await second; expect(agentFilesSync).toHaveBeenCalledTimes(1);
+});
+it('surfaces a partial historical sync failure', async () => {
+  const brain = source(); setSyncSources({ brain }); setAgentSyncPermission('xyra', agentSyncScope(brain.agentFiles, 'a')!, true, true);
+  memorySync.mockResolvedValue({ ok: false, memory: 'pulled', logs: [{ date: '2026-09-08', pushed: 1, pulled: 0 }], error: 'synthetic append failure' });
+  const r = await syncNow('a'); expect(r.ok).toBe(false); expect(r.memory).toBe('pulled'); expect(r.error).toContain('synthetic append failure'); expect(getSyncStatus('a').lastResult?.ok).toBe(false);
 });

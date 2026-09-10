@@ -25,6 +25,8 @@ export interface ToolContext {
   enabledSkillIds?: string[];
   /** 执行形态：'host'=本地直连真实 FS/shell（TUI），缺省/'sandbox'=云沙箱 + 云工作区。 */
   execMode?: 'sandbox' | 'host';
+  /** OS restrictions for local model-driven execution; independent from tool approval. */
+  hostSandbox?: import('../sandbox/hostSandbox.js').HostSandboxConfig;
   /** host 模式的工作目录（文件/命令相对此解析）。 */
   cwd?: string;
   /** host 模式的**额外工作文件夹**(绝对路径):并入可写根,免逐次「越界写」审批。

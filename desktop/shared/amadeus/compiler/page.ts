@@ -253,13 +253,20 @@ function parseV3(
 }
 
 /** Open a note: migrate v1/v2 if present, else parse v3, else adopt a foreign note, else create new. */
-export async function loadPage(io: CompilerIO, pagePath: string, now: string): Promise<LoadedPage> {
+export async function loadPage(
+  io: CompilerIO, pagePath: string, now: string,
+  options: { createIfMissing?: boolean } = {},
+): Promise<LoadedPage> {
   const base = stripPageBasename(pagePath)
   const pageFile = pageFileName(pagePath)
 
   // 版本闸必须先于 v1/v2 迁移:残留的旧 sidecar/bundle 会让 migrate 直接重写 main.md,
   // 未来格式的笔记就这样被「修复」回 v3(Codex)。
   const raw = (await io.exists(pageFile)) ? await io.readFile(pageFile) : null
+  // Navigation/reload can arrive after a move. Only an explicit creation flow
+  // may materialize a missing path; even leftover legacy sidecars must not
+  // resurrect the old note during a read.
+  if (raw == null && options.createIfMissing === false) throw new Error(`Note not found: ${pagePath}`)
   if (raw != null) {
     const fm = parseFrontmatter(raw)
     const major = schemaMajorOf(fm)

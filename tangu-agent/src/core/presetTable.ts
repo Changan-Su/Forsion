@@ -72,7 +72,7 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
  *  read_file/write_file/list_files 只认 mode:'sandbox' 的工作区版(host 版被 rejectHostMode 整族拒)。 */
 export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
   'run_python', 'web_fetch', 'web_search', 'read_file', 'display_file', 'pip_install', 'write_file',
-  'load_tools', 'list_files', 'get_datetime', 'sketch',
+  'load_tools', 'list_files', 'get_datetime', 'sketch', 'remember',
 ]);
 
 /** chat 按需面(方案 §3.3 B 档):目录一行,load_tools 可解锁。
@@ -80,7 +80,7 @@ export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
 export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'search_sessions', 'read_session', 'todo_write', 'todo_read', 'search_files', 'glob_files',
   'amadeus_list_notes', 'amadeus_read_note', 'amadeus_list_calendars', 'amadeus_list_events',
-  'calculator', 'generate_image',
+  'calculator', 'generate_image', 'read_log', 'log_event',
 ]);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),

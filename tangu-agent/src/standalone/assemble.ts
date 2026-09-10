@@ -68,7 +68,7 @@ export function loadProviders(cfg: StandaloneConfig): DirectProvider[] {
 
 function dockerAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
-    const p = execFile('docker', ['version', '--format', '{{.Server.Version}}'], (err) => resolve(!err));
+    const p = execFile('docker', ['version', '--format', '{{.Server.Version}}'], { timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }, (err) => resolve(!err));
     p.on('error', () => resolve(false));
   });
 }

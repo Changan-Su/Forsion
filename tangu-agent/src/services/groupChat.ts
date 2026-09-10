@@ -1,3 +1,4 @@
+import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 /**
  * 群聊模式(Group Chat)编排:用户选 ≥2 个 Normal Agent,发一条消息后 agents **轮流进入 run 并发言**。
  *
@@ -268,7 +269,7 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
   let turnDefsDirty = false;
   const toolCtx: ToolContext = {
     userId: p.userId, sessionId, appId, runId, signal,
-    execMode, cwd, extraRoots, approvalMode, profile, modelId: effModelId, planMode: false, muse: false,
+    execMode, cwd, extraRoots, approvalMode, profile, hostSandbox: execMode === 'host' ? resolveHostSandboxPolicy() : undefined, modelId: effModelId, planMode: false, muse: false,
     wsProject: p.wsProject,
     // 群聊发言人不可再起讨论(start_discussion/wait_discussion 隐藏)——防递归裂变。
     inDiscussion: true,

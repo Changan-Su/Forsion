@@ -15,7 +15,7 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import {
   clip, dayArg, fmtDate, likePattern, searchSessions, snippetAround, splitTerms, tsDate,
-  type SessionHit,
+  sessionToolScope, type SessionHit,
 } from '../../services/sessionSearch.js';
 
 // 纯函数面从服务层原样再导出:既有单测(searchSessions.test.ts)与其它 import 点不变。
@@ -38,10 +38,12 @@ function toBool(v: unknown): boolean {
 export function formatHit(h: SessionHit): string {
   const tag = toBool(h.archived) ? ' [archived]' : '';
   const desc = h.match ?? clip(String(h.summary ?? ''), 150);
-  return `- [[session:${h.id}|${safeTitle(h.title)}]] — ${fmtDate(h.updated_at)}${tag}${desc ? ` — ${desc}` : ''}`;
+  return `- [[session:${h.id}|${safeTitle(h.title)}]] — ${fmtDate(h.updated_at)}${tag}${desc ? ` — ${desc}` : ''}`
+    + (h.hit?.messageId ? ` [message_id=${h.hit.messageId}]` : '');
 }
 
-const FOOTER = 'Read a full transcript with `read_session` (pass the id).';
+const FOOTER = 'Read source text with `read_session` (session_id plus message_id when shown). '
+  + 'Search covers up to 64 recent sessions and the latest 64 messages per session (first 4000 characters); use before/after to target older sessions. Results belong only to the current Agent.';
 
 export const searchSessionsProvider: ToolProvider = {
   id: 'builtin:search_sessions',
@@ -56,7 +58,7 @@ export const searchSessionsProvider: ToolProvider = {
         function: {
           name: 'search_sessions',
           description:
-            "List or search the user's PAST chat sessions (their other conversations in this app; the current session is excluded — it is already in your context). "
+            "List or search this Agent's PAST chat sessions with the current user in this app (the current session is excluded). "
             + 'Use it whenever the user refers to an earlier conversation ("last time", "that chat about X") or asks what has been discussed before. '
             + 'Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like "yesterday" or "discussed"; put time anchors in `before`/`after` instead). '
             + 'Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.',
@@ -99,6 +101,8 @@ export const searchSessionsProvider: ToolProvider = {
           limit,
           before,
           after,
+          toolScope: sessionToolScope(ctx.agentSlug),
+          signal: ctx.signal,
         });
 
         if (!terms.length) {
@@ -114,10 +118,10 @@ export const searchSessionsProvider: ToolProvider = {
 
         if (!hits.length) {
           return `No past sessions matched "${terms.join(' ')}". Try fewer or broader keywords, `
-            + 'or call search_sessions without `query` to list recent sessions.';
+            + 'or call search_sessions without `query` to list recent sessions. ' + FOOTER;
         }
         const lines = hits.map(formatHit);
-        return `${hits.length} past session(s) matching "${terms.join(' ')}", newest first:\n${lines.join('\n')}\n${FOOTER}`;
+        return `${hits.length} past session(s) matching "${terms.join(' ')}", ranked by keyword relevance:\n${lines.join('\n')}\n${FOOTER}`;
       },
     },
   ],

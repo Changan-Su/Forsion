@@ -166,6 +166,73 @@ async function prefixEnter(browser) {
   }
 }
 
+/** D 组:标题回车与列表续项必须是两套语义。标题右半段降为正文；列表仍续同类列表项。 */
+async function headingEnter(browser) {
+  {
+    const page = await open(browser, '### abcd\n')
+    await caretAt(page, 0, 2) // ab|cd
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(400)
+    const s = await skeleton(page)
+    record('D1 标题中间回车:左半保留标题、右半变正文', s.join('|') === 'h3:ab|p:cd', JSON.stringify(s))
+    await page.close()
+  }
+  {
+    const page = await open(browser, '### abcd\n')
+    await caretAt(page, 0, 0)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(400)
+    const s = await skeleton(page)
+    record('D2 标题行首回车:上方插正文、原标题不降级', s.join('|') === 'p:|h3:abcd', JSON.stringify(s))
+    await page.close()
+  }
+  {
+    const page = await open(browser, '- abcd\n')
+    await caretAt(page, 0, 2) // ab|cd (首个顶层元素是 ul,caretAt 会找到 li 里的文本)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(400)
+    const s = await page.evaluate((pm) => [...document.querySelectorAll(`${pm} li`)].map((el) => (el.textContent || '').trim()), PM)
+    record('D3 列表中间回车:仍续两个列表项', s.join('|') === 'ab|cd', JSON.stringify(s))
+    await page.close()
+  }
+  {
+    const page = await open(browser, '# 甲\n\n甲一。\n\n# 乙\n')
+    const heading = await page.evaluate((pm) => {
+      const el = document.querySelector(`${pm} h1`)
+      const r = el.getBoundingClientRect()
+      return { x: r.left + 15, y: r.top + r.height / 2 }
+    }, PM)
+    await page.mouse.move(heading.x, heading.y, { steps: 3 })
+    await page.waitForTimeout(300)
+    await page.evaluate(() => document.querySelector('.unified-gutter .block-fold')?.click())
+    await page.evaluate(() => {
+      const view = window.__upage.probe.view()
+      let at = -1
+      view.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'heading' && node.textContent === '甲') at = pos + 1 + node.content.size
+      })
+      view.dispatch(view.state.tr.setSelection(view.state.selection.constructor.create(view.state.doc, at)))
+      view.focus()
+    })
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('新正文')
+    await page.waitForTimeout(400)
+    const s = await page.evaluate((pm) => {
+      const root = document.querySelector(pm)
+      const el = [...root.querySelectorAll('p')].find((node) => node.textContent.includes('新正文'))
+      return {
+        order: [...root.children].map((node) => node.textContent.trim()),
+        tag: el?.tagName ?? '',
+        visible: el ? el.offsetParent !== null : false,
+      }
+    }, PM)
+    const at = s.order.indexOf('新正文')
+    record('D4 折叠标题回车:先展开，右半正文紧跟标题且可见',
+      s.tag === 'P' && s.visible && at === s.order.indexOf('甲一。') - 1, JSON.stringify(s))
+    await page.close()
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   for (const [name, keys, seed] of CASES) {
@@ -176,6 +243,7 @@ async function main() {
       `before=${JSON.stringify(before)} c1=${JSON.stringify(c1.skel)} c2=${JSON.stringify(c2.skel)} disk=${JSON.stringify(disk)} disk2=${JSON.stringify(c2.disk)}`)
   }
   await prefixEnter(browser)
+  await headingEnter(browser)
   await browser.close()
   const bad = results.filter((r) => !r).length
   console.log(`\n${results.length - bad}/${results.length} 通过`)

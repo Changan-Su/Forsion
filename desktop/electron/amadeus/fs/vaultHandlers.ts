@@ -77,7 +77,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   handle(IPC.listFiles, () => vault.listFiles())
 
   handle(IPC.loadPage, async (_e, pagePath: string) => {
-    const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso())
+    const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso(), { createIfMissing: false })
     await rememberPage(pagePath)
     return page
   })
@@ -86,8 +86,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   // 编译器 loadPage 缺文件会 newPage 落盘,只读语义下不允许悄悄造文件。
   handle(IPC.readPage, async (_e, pagePath: string) => {
     const io = vault.pageIO(pagePath)
-    if (!(await io.exists(pageFileName(pagePath)))) throw new Error(`note not found: ${pagePath}`)
-    return loadPage(io, pagePath, nowIso())
+    return loadPage(io, pagePath, nowIso(), { createIfMissing: false })
   })
 
   handle(IPC.newPage, async (_e, pagePath: string) => {
@@ -180,7 +179,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     IPC.reconcilePage,
     async (_e, pagePath: string, _prevManifest: PageManifest, _prevContents: Record<string, string>) => {
       // v3 is single-file: an external edit just reloads (the .md is the single source).
-      const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso())
+      const page = await loadPage(vault.pageIO(pagePath), pagePath, nowIso(), { createIfMissing: false })
       await index.update(pagePath)
       return page
     },

@@ -19,12 +19,34 @@ describe('streamIdleGuard', () => {
     vi.useRealTimers();
   });
 
-  it('每帧 arm() 续命 → 不 abort', () => {
+  it('每帧有语义进展 → 总时长可以超过窗口', () => {
     vi.useFakeTimers();
     const g = streamIdleGuard(undefined, 100);
     g.arm();
-    for (let i = 0; i < 5; i++) { vi.advanceTimersByTime(80); g.arm(); } // 80ms < 100ms,每帧续命
+    for (let i = 0; i < 5; i++) { vi.advanceTimersByTime(80); g.arm(); g.progress(); }
     expect(g.signal.aborted).toBe(false);
+    g.dispose();
+    vi.useRealTimers();
+  });
+
+  it('持续传输心跳不延长语义窗口', () => {
+    vi.useFakeTimers();
+    const g = streamIdleGuard(undefined, 100);
+    for (let i = 0; i < 4; i++) { vi.advanceTimersByTime(20); g.arm(); }
+    vi.advanceTimersByTime(20);
+    expect(g.signal.reason).toMatchObject({ status: 504, message: 'stream progress idle timeout' });
+    g.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('语义续命不取消独立的传输空闲保护', () => {
+    vi.useFakeTimers();
+    const g = streamIdleGuard(undefined, 100);
+    vi.advanceTimersByTime(80);
+    g.progress();
+    vi.advanceTimersByTime(20);
+    expect(g.signal.reason).toMatchObject({ status: 504, message: 'stream idle timeout' });
     g.dispose();
     vi.useRealTimers();
   });

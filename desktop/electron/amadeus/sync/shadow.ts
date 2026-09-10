@@ -10,6 +10,14 @@ import { app } from 'electron'
 import { isDevMode } from '../../forsionHome'
 import type { ShadowEntry } from './reconcile'
 
+export interface LocalMove {
+  from: string
+  to: string
+  kind: 'file' | 'folder'
+  /** Relative suffix → content hash, retained across a lost response / failed acknowledgement write. */
+  hashes?: Record<string, string>
+}
+
 export interface SyncShadow {
   /** 绑定的本地 vault 根(绝对路径);当前打开的 vault 不是它 → 引擎不启动。 */
   vaultRoot: string
@@ -26,6 +34,9 @@ export interface SyncShadow {
   /** 被删除保护拦下、等用户确认的删除(serverPath → 哪一侧将被删)。持久化 = 重启绕不过确认
    *  (Codex 终审:重启后首轮全量对账只看到低于阈值的残余,会直接执行)。 */
   pending?: Record<string, 'local' | 'remote'>
+  /** Structural operations are replayed before reconciliation, preserving file
+   * identity and published links after a disconnect or process restart. */
+  moves?: LocalMove[]
 }
 
 /** name:每个同步绑定一份 shadow('amadeus-sync'=自己的云库;'amadeus-sync-share-<id>'=与我共享)。 */
@@ -45,12 +56,14 @@ export async function loadShadow(name: string): Promise<SyncShadow | null> {
   }
 }
 
-export function createShadowSaver(name: string): { save: (s: SyncShadow) => void; flush: () => Promise<void> } {
+export function createShadowSaver(name: string): { save: (s: SyncShadow) => void; flush: (strict?: boolean) => Promise<void> } {
   let pending: SyncShadow | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   let writing: Promise<void> = Promise.resolve()
+  let lastError: unknown = null
   const write = (): Promise<void> => {
     if (!pending) return writing
+    const retry = pending
     const snapshot = JSON.stringify(pending)
     pending = null
     writing = writing.then(async () => {
@@ -59,8 +72,10 @@ export function createShadowSaver(name: string): { save: (s: SyncShadow) => void
         const tmp = `${f}.tmp-${process.pid}-${Date.now()}-0`
         await fs.writeFile(tmp, snapshot, 'utf8')
         await fs.rename(tmp, f)
-      } catch {
-        /* best-effort;下次保存重试 */
+        lastError = null
+      } catch (error) {
+        pending ??= retry
+        lastError = error
       }
     })
     return writing
@@ -74,12 +89,13 @@ export function createShadowSaver(name: string): { save: (s: SyncShadow) => void
         void write()
       }, 500)
     },
-    async flush() {
+    async flush(strict = false) {
       if (timer) {
         clearTimeout(timer)
         timer = null
       }
       await write()
+      if (strict && lastError) throw lastError
     },
   }
 }
