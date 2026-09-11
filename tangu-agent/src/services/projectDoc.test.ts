@@ -54,7 +54,9 @@ describe('项目根定位', () => {
     const alias = path.join(root, 'homealias');
     symlinkSync(fakeHome, alias);
     const prevHome = process.env.HOME;
+    const prevProfile = process.env.USERPROFILE;
     process.env.HOME = fakeHome; // os.homedir() 在 POSIX 上读 $HOME
+    process.env.USERPROFILE = fakeHome; // Windows 上读 %USERPROFILE%
     try {
       expect(findProjectRoot(fakeHome)).toBeNull(); // 字面命中
       expect(findProjectRoot(alias)).toBeNull(); // ⚠️软链别名:修复前会返回 alias
@@ -63,6 +65,8 @@ describe('项目根定位', () => {
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
       else process.env.HOME = prevHome;
+      if (prevProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevProfile;
     }
   });
 });
