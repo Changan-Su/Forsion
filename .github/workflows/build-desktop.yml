@@ -109,8 +109,9 @@ jobs:
       # Windows 文件系统语义闸:test 门禁只在 ubuntu 上跑,2.10.0–2.10.2 的「目录 fsync → EPERM」因此在
       # Windows 上坏了三个版本、由用户撞见。这里只跑持久化写入相关的测试文件(2026-09-11 在 windows-2022
       # 上逐个探过,全绿);全量在 Windows 上从没验证过(原生 ABI、路径假设),名单外的红不该挡发版。
-      # 不在名单:codeStudioProjects.test.ts(可执行位与目录监听,Windows 上 4 条红,单独处理);
-      # agentLoopRuntimeSafety.test.ts(Windows 上清理临时目录偶发 ENOTEMPTY:异步写入的句柄还开着,与持久化写入无关)。
+      # codeStudioProjects.test.ts 同日补进:它在 Windows 上的红是真 bug(chokidar 交给 ignored 的根是 / 分隔,
+      # 整棵项目树不监听),修复后两轮独立 probe 全绿。
+      # 不在名单:agentLoopRuntimeSafety.test.ts(Windows 上清理临时目录偶发 ENOTEMPTY:异步写入的句柄还开着,与持久化写入无关)。
       - name: Windows durable-write tests
         if: runner.os == 'Windows'
         shell: bash
@@ -128,7 +129,7 @@ jobs:
           npx vitest run \
             electron/hostTextWrite.test.ts electron/forsionHome.test.ts electron/forsionAuth.test.ts \
             electron/amadeus/sync/engine.moves.test.ts electron/amadeus/sync/engine.lifecycle.test.ts \
-            electron/amadeus/sync/engine.massdelete.test.ts
+            electron/amadeus/sync/engine.massdelete.test.ts electron/codeStudioProjects.test.ts
 
       # Verify the distributed tool/prompt contract on every native runner, without operating its GUI.
       - name: Check bundled Computer Use platform contract
