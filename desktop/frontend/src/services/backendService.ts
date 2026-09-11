@@ -233,6 +233,13 @@ export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, model
 export const listModels = (cfg: TanguDesktopConfig) =>
   request<ModelsResponse>(cfg, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`)
 
+/** 本机 per-model 覆盖:上下文窗口(tokens;null = 清除,交还自动识别)。落引擎 config.json 的 modelOverrides 段,对下一条消息生效。 */
+export const setModelContextWindow = (cfg: TanguDesktopConfig, modelId: string, contextWindow: number | null) =>
+  request<{ overrides: Record<string, { contextWindow?: number }> }>(cfg, '/agent/models/overrides', {
+    method: 'PUT',
+    body: JSON.stringify({ modelId, contextWindow }),
+  })
+
 /** host 端外部 agent 引擎清单(含 available 检测 + 每引擎默认模型;云端/非 host → 抛或空 → 调用方回退 [])。 */
 export const listEngines = (cfg: TanguDesktopConfig) =>
   request<{ engines: Array<{ id: string; name: string; available?: boolean; status?: 'available' | 'needs-signin' | 'not-installed'; defaultModel?: string; setup?: string }> }>(cfg, '/agent/engines').then((r) => r.engines || [])
@@ -646,8 +653,19 @@ export const getHistorianActivity = (cfg: TanguDesktopConfig, limit = 50) =>
 export const getMuseTodos = (cfg: TanguDesktopConfig, status?: string) =>
   request<{ todos: MuseTodo[] }>(cfg, `/agent/special/muse/todos${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.todos)
 
-export const patchMuseTodo = (cfg: TanguDesktopConfig, id: string, status: MuseTodo['status']) =>
-  request<{ ok: boolean }>(cfg, `/agent/special/muse/todos/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+/** from = CAS:当前状态不是 from → 409(Error.code = 'todo_not_pending');不带 = 无条件(MuseView)。 */
+export const patchMuseTodo = (cfg: TanguDesktopConfig, id: string, status: MuseTodo['status'], from?: MuseTodo['status']) =>
+  request<{ ok: boolean }>(cfg, `/agent/special/muse/todos/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(from ? { status, from } : { status }) })
+
+/** 单条 TODO(收件箱任务卡按真状态决定给不给按钮);404 → Error.code = 'todo_not_found'。
+ *  12s 超时:authFetch 缺省不超时,挂住的请求会让卡片一直停在「正在确认」—— 超时按读失败处理(给重试)。 */
+export const getMuseTodo = (cfg: TanguDesktopConfig, id: string) =>
+  request<{ todo: Pick<MuseTodo, 'id' | 'title' | 'status'> }>(cfg, `/agent/special/muse/todos/${encodeURIComponent(id)}`, undefined, { timeoutMs: 12_000 }).then((r) => r.todo)
+
+/** 批准 Muse TODO(收件箱任务卡「交给 Muse 执行」):引擎按 id 读库里的任务书、CAS pending→injected、建一次性 Muse 日程。
+ *  409 的 error 码:muse_disabled / todo_not_pending(request() 把它挂在 Error.code 上)。 */
+export const approveMuseTodo = (cfg: TanguDesktopConfig, id: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/special/muse/todos/${encodeURIComponent(id)}/approve`, { method: 'POST' })
 
 export const injectMuseTodos = (cfg: TanguDesktopConfig, todoIds: string[], sessionId: string) =>
   request<{ ok: boolean; runId: string }>(cfg, '/agent/special/muse/todos/inject', { method: 'POST', body: JSON.stringify({ todoIds, sessionId }) })

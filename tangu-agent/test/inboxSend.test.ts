@@ -92,3 +92,16 @@ describe('inbox_send', () => {
     expect(tool.isEnabledFor!(cloud, ctx)).toBe(false);
   });
 });
+
+describe('inbox_send 正文上限(2026-09-11)', () => {
+  it('正文超过 4000 字 → 报错让它缩短(末尾任务卡不能被静默截掉),不落库', async () => {
+    const r = String(await tool.execute({ title: 't', body: 'x'.repeat(4001) }, ctx));
+    expect(r).toMatch(/^Error: body is 4001 characters/);
+    expect((await rows()).length).toBe(0);
+  });
+
+  it('刚好 4000 字照发', async () => {
+    expect(String(await tool.execute({ title: 't', body: 'x'.repeat(4000) }, ctx))).toContain('已投递');
+    expect((await rows())[0].body.length).toBe(4000);
+  });
+});

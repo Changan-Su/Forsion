@@ -196,8 +196,19 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
 /** Muse 自己 SCHEDULE.db 的到期 auto 条目(自触发 / Track)。 */
 export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[]> {
   const db = await loadSchedule(MUSE_AGENT_SLUG);
-  return db ? dueEntries(entriesOf(db), now) : [];
+  const due = db ? dueEntries(entriesOf(db), now) : [];
+  // 批准 TODO 建的条目(description = `todo <id>`)只在那条 TODO 真是 injected 时放行:批准路由「先落条目、后改状态」,
+  // 两步之间的孤儿条目要等重试把状态改成 injected 才生效;TODO 被忽略了也就不跑。查不到 = 一条都不放(Codex 09-11 P1)。
+  const ids = due.map((e) => MUSE_TODO_ENTRY.exec(e.description)?.[1]).filter((x): x is string => !!x);
+  if (!ids.length) return due;
+  let live = new Set<string>();
+  try {
+    const rows = await query<any[]>(`SELECT id FROM muse_todos WHERE status = 'injected' AND id IN (${ids.map(() => '?').join(',')})`, ids);
+    live = new Set((rows || []).map((r) => String(r.id)));
+  } catch { /* fail closed */ }
+  return due.filter((e) => { const m = MUSE_TODO_ENTRY.exec(e.description); return !m || live.has(m[1]); });
 }
+const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
 
 function scheduleKickoff(due: ScheduleEntry[]): string {
   if (!due.length) return '';

@@ -164,7 +164,7 @@ function validDate(s: string): boolean {
  * auto 日程会经 automation 管道拿到 full-auto 绕穿防线;现在 Muse 按权限档工作,且它的到期条目
  * **不走** automation 管道,而是回灌进 Muse 自己的周期(muse.ts 的 museDueSchedules),预算闸照过)。
  */
-export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: string } = {}):
+export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: string; maxPrompt?: number } = {}):
   | { ok: true; value: ValidatedEntry }
   | { ok: false; error: string } {
   const name = String(input.name || '').trim().slice(0, 120);
@@ -185,7 +185,8 @@ export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: str
   const auto = input.auto === true || input.auto === 'true';
   // 4000:任务卡「交给 Muse 追踪」把整份自包含任务书放进来(关键的复现步骤/验收条件常在尾部,500 会静默截掉);
   // 到期时它是 kickoff 消息的一部分,不进系统提示(upcomingScheduleLines 只注 name/description)。
-  const prompt = String(input.prompt || '').trim().slice(0, 4000);
+  // maxPrompt 只给批准 Muse TODO 那一处放宽(前缀 + 标题 + 4000 字 detail);别的入口不放大 —— 到期条目全拼进同一条 kickoff。
+  const prompt = String(input.prompt || '').trim().slice(0, opts.maxPrompt ?? 4000);
 
   void opts;
   if (auto) {
@@ -210,7 +211,28 @@ export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: str
 // ── 增删改 ───────────────────────────────────────────────────────────────────
 
 /** upsert:带 id=更新(保留 lastRun 与未知 cells);无 id=新建(MAX_ENTRIES 帽)。 */
-export async function upsertEntry(slug: string, v: ValidatedEntry, id?: string, agentName?: string):
+/** 同一 agent 的 SCHEDULE.db 读—改—写串行化:批准 TODO / manage_schedule / 到期写 lastRun 并发时,后写不再覆盖先写(Codex 09-11 P1)。
+ *  ponytail: 只管本进程;桌面直接改这个文件的路不在锁里,跨进程锁等真撞上再加。 */
+const scheduleLocks = new Map<string, Promise<unknown>>();
+function withScheduleLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+  const next = (scheduleLocks.get(slug) ?? Promise.resolve()).then(fn, fn);
+  scheduleLocks.set(slug, next.catch(() => {}));
+  return next;
+}
+
+export function upsertEntry(slug: string, v: ValidatedEntry, id?: string, agentName?: string): ReturnType<typeof upsertUnlocked> {
+  return withScheduleLock(slug, () => upsertUnlocked(slug, v, id, agentName));
+}
+
+/** 已有匹配的条目就原样返回,没有才建;整段在锁里 = 并发两次只建一条(批准 TODO 的重试幂等靠它)。 */
+export function ensureEntry(slug: string, v: ValidatedEntry, match: (e: ScheduleEntry) => boolean, agentName?: string): ReturnType<typeof upsertUnlocked> {
+  return withScheduleLock(slug, async () => {
+    const hit = entriesOf(await ensureScheduleDb(slug, agentName)).find(match);
+    return hit ? { ok: true as const, entry: hit, created: false } : upsertUnlocked(slug, v, undefined, agentName);
+  });
+}
+
+async function upsertUnlocked(slug: string, v: ValidatedEntry, id?: string, agentName?: string):
   Promise<{ ok: true; entry: ScheduleEntry; created: boolean } | { ok: false; error: string }> {
   const db = await ensureScheduleDb(slug, agentName);
   const patch: Record<string, CellValue> = {
@@ -236,23 +258,27 @@ export async function upsertEntry(slug: string, v: ValidatedEntry, id?: string, 
   return { ok: true, entry: entriesOf(db).find((e) => e.id === row.id)!, created: true };
 }
 
-export async function removeEntry(slug: string, id: string): Promise<boolean> {
-  const db = await loadSchedule(slug);
-  if (!db) return false;
-  const next = db.rows.filter((r) => r.id !== id);
-  if (next.length === db.rows.length) return false;
-  db.rows = next;
-  await saveSchedule(slug, db);
-  return true;
+export function removeEntry(slug: string, id: string): Promise<boolean> {
+  return withScheduleLock(slug, async () => {
+    const db = await loadSchedule(slug);
+    if (!db) return false;
+    const next = db.rows.filter((r) => r.id !== id);
+    if (next.length === db.rows.length) return false;
+    db.rows = next;
+    await saveSchedule(slug, db);
+    return true;
+  });
 }
 
 /** 触发后写回 lastRun(重读最新再只改一格,收窄与工具/路由并发写的覆盖面)。 */
-export async function markEntryFired(slug: string, rowId: string, at = new Date()): Promise<void> {
-  const db = await loadSchedule(slug);
-  const row = db?.rows.find((r) => r.id === rowId);
-  if (!db || !row) return;
-  row.cells.lastRun = at.toISOString();
-  await saveSchedule(slug, db);
+export function markEntryFired(slug: string, rowId: string, at = new Date()): Promise<void> {
+  return withScheduleLock(slug, async () => {
+    const db = await loadSchedule(slug);
+    const row = db?.rows.find((r) => r.id === rowId);
+    if (!db || !row) return;
+    row.cells.lastRun = at.toISOString();
+    await saveSchedule(slug, db);
+  });
 }
 
 // ── 到期判定(纯函数,测试注入 now) ────────────────────────────────────────────

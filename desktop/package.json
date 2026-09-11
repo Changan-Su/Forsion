@@ -1,6 +1,6 @@
 {
   "name": "forsion-desktop",
-  "version": "2.10.3",
+  "version": "2.10.4",
   "description": "Forsion Desktop — AI 驱动的应用生态系统的桌面端(Electron):Tangu Agent 引擎 + LCL 可停靠工作区框架 + 可插拔功能空间(对话/笔记/日历/收件箱/编码),按产品档案裁出全家桶与单品发行版",
   "author": "Forsion",
   "private": true,
@@ -35,6 +35,7 @@
     "e2e:recall": "node scripts/recall-rewind.e2e.cjs",
     "e2e:chatevents": "node scripts/chat-events.e2e.cjs",
     "e2e:chatshimmer": "node scripts/chat-shimmer.e2e.cjs",
+    "e2e:ctxwindow": "node scripts/ctxwindow-settings.e2e.cjs",
     "e2e:livewait": "node scripts/chat-livewait.e2e.cjs",
     "e2e:musespace": "node scripts/muse-space.e2e.cjs",
     "e2e:musesettings": "node scripts/muse-settings.e2e.cjs",

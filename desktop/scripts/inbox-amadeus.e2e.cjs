@@ -11,8 +11,13 @@
  *  ⑥ 广播附件的领取条件(版本 / 会员档位):不满足 → 物品与条件都看得到、按钮禁用且硬点不发请求;
  *     满足 → 领取请求带本端版本标签 desktop/x.y.z(服务端按它判最低版本);只有会员条件且档位不知道 → 可点,
  *     服务端 403 claim_requirements_unmet → toast 走本地化文案,不把服务端原句甩给用户。
+ *  ⑦ Muse TODO 信(正文 = 引擎单测钉住的夹具 tangu-agent/test/fixtures/muse-todo-mail*.md 原样):卡的主按钮「交给 Muse 执行」→
+ *     POST /agent/special/muse/todos/:id/approve(引擎按 id 读库里的任务书建日程),前端不自己建日程;detail 代码块没收口的那封
+ *     照样出卡,点「忽略」→ 回写 dismissed、前端不另记反馈;别的 agent(xyra)信里抄来的 todo 头不生效 → 普通任务卡;
+ *     引擎里已不是 pending 的待办(重启后模块级「已处理」记录没了)→ 卡按真状态定格,不再给按钮;状态读失败 → 零落点按钮、给重试;
+ *     「忽略」带 from=pending(CAS)。
  * 负对照 --nc:假引擎按 id 读审批回 404(列表也没有 apv-1),且广播消息伪装成 agent 发信 → ② ⑤ 必红(≥3 条);⑥ 的 403 不带错误码 → 本地化那条也红。
- * 先 `npm run build`;跑法 `npm run e2e:inboxamadeus`;截图 $TMPDIR/forsion-inbox-amadeus.png、forsion-inbox-claimreq.png。
+ * 先 `npm run build`;跑法 `npm run e2e:inboxamadeus`;截图 $TMPDIR/forsion-inbox-amadeus.png、forsion-inbox-claimreq.png、forsion-inbox-musetodo.png。
  */
 const fs = require('fs')
 const os = require('os')
@@ -24,6 +29,7 @@ const ROOT = path.resolve(__dirname, '..')
 const NEGATIVE_CONTROL = process.argv.includes('--nc')
 const SHOT = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-amadeus.png')
 const SHOT_REQ = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-claimreq.png')
+const SHOT_TODO = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-musetodo.png')
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok }); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail || ''}`}`) }
 
@@ -67,12 +73,25 @@ async function openMessage(win, title) {
   await row.click()
   await win.waitForTimeout(1500)
 }
+// ⑦ 的信原样用引擎单测钉住的夹具(手写一份就是两端键名漂移的来路)
+const fixture = (name) => fs.readFileSync(path.resolve(ROOT, '../tangu-agent/test/fixtures', name), 'utf8')
+const TODO_MAIL = fixture('muse-todo-mail.md')
+const TODO_MESSAGES = [
+  { id: 'm8', title: '恢复并验收鹈鹕骑自行车网页动画', body: TODO_MAIL, sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('13') },
+  { id: 'm9', title: '给导出脚本补上错误处理', body: fixture('muse-todo-mail-openfence.md'), sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('14') },
+  // 别的 agent 抄一张带 todo 头的卡:只能是普通任务卡(追踪语义),不许冒充 Muse 的待办
+  { id: 'm10', title: '别的 agent 抄来的待办卡', body: TODO_MAIL, sender_kind: 'agent', sender_id: 'xyra', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('15') },
+  // 重启前就处理过的待办:模块级「已处理」记录没了,卡要按引擎里的真状态定格(桩的 GET /agent/special/muse/todos 回 injected)
+  { id: 'm11', title: '重启前已经交给 Muse 的待办', body: TODO_MAIL.replace(/todo-fixture-1/g, 'todo-fixture-3'), sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('16') },
+  // 状态读不到(桩回 500):不能当 pending 给按钮
+  { id: 'm12', title: '状态读不到的待办', body: TODO_MAIL.replace(/todo-fixture-1/g, 'todo-fixture-4'), sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('17') },
+]
 const bodyText = (win) => win.locator('.ibx-reader-body').first().evaluate((el) => el.textContent || '').catch(() => '')
 
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-inbox-amadeus-'))
-  const seen = { approve: [], feedback: [], schedule: [], patch: [], filters: [], claim: [] }
+  const seen = { approve: [], feedback: [], schedule: [], patch: [], filters: [], claim: [], todo: [] }
   let pullAdded = 0
   const stub = await startStubEngine({
     sessions: [], messages: [], models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000, thinkingLevels: ['off'] }],
@@ -110,6 +129,14 @@ async function main() {
         return { ok: true, status: 'approved', result: 'wrote todo.md (120 chars)' }
       }
       if (p === '/agent/special/muse/feedback' && method === 'POST') { seen.feedback.push((await body()).text); return { ok: true } }
+      if (p === '/agent/special/muse/todos' && method === 'GET') return { todos: [{ id: 'todo-fixture-3', title: '重启前已经交给 Muse 的待办', detail: null, status: 'injected', source_session_id: null, created_at: at('09') }] }
+      if (/^\/agent\/special\/muse\/todos\/[^/]+$/.test(p) && method === 'GET') {
+        const st = { 'todo-fixture-1': 'pending', 'todo-fixture-2': 'pending', 'todo-fixture-3': 'injected' }[p.split('/').pop()]
+        if (p.endsWith('/todo-fixture-4')) return { __code: 500, body: { detail: 'db locked' } }
+        return st ? { todo: { id: p.split('/').pop(), title: 't', status: st } } : { __code: 404, body: { error: 'todo_not_found', detail: 'todo not found' } }
+      }
+      if (/^\/agent\/special\/muse\/todos\/[^/]+\/approve$/.test(p)) { seen.todo.push({ id: p.split('/')[5], action: 'approve', method }); return { ok: true } }
+      if (/^\/agent\/special\/muse\/todos\/[^/]+$/.test(p) && method === 'PATCH') { seen.todo.push({ id: p.split('/').pop(), ...(await body()) }); return { ok: true } }
       if (p === '/agent/special/schedule/muse/entries' && method === 'POST') { const b = await body(); seen.schedule.push(b); return { entry: { id: 's-2', ...b, lastRun: '' }, created: true } }
       return undefined
     },
@@ -293,6 +320,61 @@ async function main() {
     check('只有会员条件、档位不知道:按钮可点 → 服务端 403 → toast 是本地化的「未满足领取条件」而不是服务端原句,按钮不翻「已领取」',
       m7Enabled && !!m7Claim && /^desktop\//.test(m7Claim.client || '') && m7.text.includes('未满足领取条件，暂时领不了') && !m7.text.includes('Requires a Pro plan') && m7.btn === '领取',
       JSON.stringify({ m7Enabled, m7Claim, btn: m7.btn, toast: (m7.text.match(/未满足领取条件[^\n]*|需要 Pro[^\n]*/) || [''])[0] }))
+
+    // ⑦ Muse TODO 信:引擎拼的任务卡(todo 头)→「交给 Muse 执行」= 引擎批准端点(按 id 读库里的任务书),反馈由引擎写
+    MESSAGES.push(...TODO_MESSAGES); pullAdded = TODO_MESSAGES.length
+    await win.locator('.t2sw-plug-btn', { hasText: '拉取新消息' }).first().click().catch(() => {})
+    await win.waitForSelector('.t2sw-plug-list .t2s-srow:has-text("恢复并验收")', { timeout: 10_000 }).catch(() => {})
+    const cardOf = () => win.evaluate(() => {
+      const cards = [...document.querySelectorAll('.ibx-cards .t2-taskcard:not(.ibx-approval)')]
+      const btns = [...(cards[0]?.querySelectorAll('.t2-taskcard-actions button') || [])]
+      return { n: cards.length, title: cards[0]?.querySelector('.t2-taskcard-head b')?.textContent || '', buttons: btns.map((b) => b.textContent.trim()), primary: btns.filter((b) => b.classList.contains('primary')).map((b) => b.textContent.trim()), body: document.querySelector('.ibx-reader-body .ibx-amadeus')?.textContent || '' }
+    })
+    await openMessage(win, '恢复并验收')
+    await win.waitForSelector('.ibx-cards .t2-taskcard:not(.ibx-approval) .t2-taskcard-actions button', { timeout: 10_000 }).catch(() => {}) // 状态确认 pending 后才有按钮
+    const todoCard = await cardOf()
+    check('Muse TODO 信:正文 = detail(围栏原文不露),末尾任务卡的主按钮是排第一的「交给 Muse 执行」,另有新会话 / 忽略',
+      todoCard.n === 1 && todoCard.buttons.length === 3 && todoCard.buttons[0] === '交给 Muse 执行' && todoCard.primary.length === 1 && todoCard.primary[0] === '交给 Muse 执行' && todoCard.buttons.some((b) => b.includes('新会话')) && todoCard.body.includes('pelican-cycling.html') && !todoCard.body.includes('forsion-task') && !todoCard.body.includes('todo-fixture-1'),
+      JSON.stringify(todoCard))
+    if (!NEGATIVE_CONTROL) await win.screenshot({ path: SHOT_TODO }).catch(() => {})
+    const nSched = seen.schedule.length
+    await win.locator('.ibx-cards .t2-taskcard:not(.ibx-approval) .t2-taskcard-actions button', { hasText: '交给 Muse 执行' }).first().click({ timeout: 3000 }).catch(() => {})
+    await win.waitForTimeout(1000)
+    const doneText = await win.locator('.ibx-cards .t2-taskcard.done:not(.ibx-approval) .t2-taskcard-done').first().textContent({ timeout: 2000 }).catch(() => '')
+    check('「交给 Muse 执行」= POST /agent/special/muse/todos/todo-fixture-1/approve(引擎按 id 读任务书),前端不自己建日程,卡定格',
+      seen.todo.some((x) => x.id === 'todo-fixture-1' && x.action === 'approve' && x.method === 'POST') && seen.schedule.length === nSched && doneText === '已交给 Muse 执行',
+      JSON.stringify({ todo: seen.todo, schedule: seen.schedule.slice(nSched), doneText }))
+    await openMessage(win, '给导出脚本补上错误处理')
+    await win.waitForSelector('.ibx-cards .t2-taskcard:not(.done)', { timeout: 10_000 }).catch(() => {})
+    const openFence = await cardOf()
+    const nFeedback = seen.feedback.length
+    await win.locator('.ibx-cards .t2-taskcard:not(.ibx-approval) .t2-taskcard-actions button', { hasText: '忽略' }).first().click({ timeout: 3000 }).catch(() => {})
+    await win.waitForTimeout(800)
+    check('detail 的代码块没收口也照样出卡(引擎补了收口);「忽略」= 回写 dismissed,前端不另记反馈(引擎 PATCH 路由自己写,见引擎 museTodoApprove.test)',
+      openFence.n === 1 && openFence.title === '给导出脚本补上错误处理' && openFence.body.includes('exportAll') && !openFence.body.includes('forsion-task') && seen.todo.some((x) => x.id === 'todo-fixture-2' && x.status === 'dismissed' && x.from === 'pending') && seen.feedback.length === nFeedback,
+      JSON.stringify({ openFence, todo: seen.todo, feedback: seen.feedback.slice(nFeedback) }))
+    await openMessage(win, '别的 agent 抄来的待办卡')
+    await win.waitForSelector('.ibx-cards .t2-taskcard', { timeout: 10_000 }).catch(() => {})
+    const forged = await cardOf()
+    check('别的 agent 的信里写了 todo 头:只当普通任务卡(主按钮「新会话执行」、Muse 那档是「追踪」),不冒充 Muse 的待办',
+      forged.n === 1 && forged.primary.length === 1 && forged.primary[0] === '新会话执行' && forged.buttons.includes('交给 Muse 追踪') && !forged.buttons.includes('交给 Muse 执行'),
+      JSON.stringify(forged))
+    await openMessage(win, '重启前已经交给 Muse 的待办')
+    await win.waitForSelector('.ibx-cards .t2-taskcard', { timeout: 10_000 }).catch(() => {})
+    await win.waitForTimeout(600) // 待办真状态现拉
+    const settled = await win.evaluate(() => {
+      const c = document.querySelector('.ibx-cards .t2-taskcard:not(.ibx-approval)')
+      return { done: !!c?.classList.contains('done'), text: c?.querySelector('.t2-taskcard-done')?.textContent || '', buttons: c?.querySelectorAll('.t2-taskcard-actions button').length ?? -1 }
+    })
+    check('引擎里已不是 pending 的待办:卡按真状态定格「这条待办已经处理过了」,不再给按钮(重启后也不能再点一次)',
+      settled.done && settled.text === '这条待办已经处理过了' && settled.buttons === 0, JSON.stringify(settled))
+    await openMessage(win, '状态读不到的待办')
+    await win.waitForTimeout(600)
+    const unknown = await win.evaluate(() => {
+      const c = document.querySelector('.ibx-cards .t2-taskcard:not(.ibx-approval)')
+      return { text: c?.querySelector('.t2-taskcard-done')?.textContent || '', landing: c?.querySelectorAll('.t2-taskcard-actions button').length ?? -1, retry: [...(c?.querySelectorAll('.t2-taskcard-done button') || [])].map((b) => b.textContent.trim()) }
+    })
+    check('待办状态读失败:不当 pending 给落点按钮(零个),只给「重试」', unknown.landing === 0 && unknown.text.includes('待办状态读取失败') && unknown.retry.includes('重试'), JSON.stringify(unknown))
   } finally {
     await app.close().catch(() => {})
     stub.close()

@@ -2,7 +2,9 @@
  * read_document 的纯逻辑：把解析结果切成带**真页码**的页，供页码标注 / 页内检索 / 页区间读取。
  * 页码是引用契约 `[[file.pdf#page=N]]` 的上游——必须用 LiteParse 的 pages[].pageNum，不是数组下标
  * （targetPages / 加密页跳过时下标会错位）。
+ * 另含 docx 的纯文本兜底 docxText：机器上没有 LibreOffice 时 read_document 靠它读 docx。
  */
+import { inflateRawSync } from 'node:zlib';
 
 export interface DocPage {
   /** 1-based 真页码。 */
@@ -93,4 +95,75 @@ export function citeHitFor(absPath: string, citeRef: string): string {
   return /\.pdf$/i.test(absPath)
     ? `[[${citeRef}#page=<n>&q=<a short phrase copied from that line>]]`
     : `[[${citeRef}]]`;
+}
+
+/**
+ * docx 纯文本兜底(机器上没有 LibreOffice、走不了 soffice→PDF 时):取 word/document.xml 的正文 ——
+ * 一段一行,表格一行一条 `| 格 | 格 |`,run 里的 tab/换行照留,公式(<m:t>)按字面拍平。
+ * 只收 <w:t>/<m:t>,所以修订删除(<w:delText>)与域代码(<w:instrText>)天然不进。
+ * <mc:Fallback> 是文本框等的旧版(VML)副本,内容与 <mc:Choice> 相同 —— 不剔掉,框里的字会出现两遍。
+ * ponytail: 只取正文,页眉页脚/脚注/批注在别的 part;主文档 part 认死 word/document.xml(个别导出器
+ * 叫 document2.xml,真遇到再按 _rels/.rels 的 officeDocument 关系去找)。
+ */
+export function docxText(docx: Buffer): string {
+  const xml = unzipEntry(docx, 'word/document.xml')?.toString('utf8');
+  if (!xml) return '';
+  const out: string[] = [];
+  let inText = false;
+  let cellDepth = 0; // 单元格里的分段/换行压成空格,一行表格才不会被拆成好几行
+  for (const [tok] of xml.replace(/<mc:Fallback\b[\s\S]*?<\/mc:Fallback>/g, '').matchAll(/<[^>]*>|[^<]+/g)) {
+    if (tok[0] !== '<') {
+      if (inText) out.push(decodeXmlText(tok));
+      continue;
+    }
+    const [, close, name] = /^<(\/?)([\w:]+)/.exec(tok) ?? [];
+    const ends = close === '/' || tok.endsWith('/>'); // 结束标签或自闭合:这个元素到此为止
+    if (name === 'w:t' || name === 'm:t') inText = !ends;
+    else if (name === 'w:tab' && !tok.includes('=')) out.push('\t'); // 带属性的是 <w:tabs> 里的制表位定义,不是字符
+    else if (name === 'w:br' || name === 'w:cr' || (name === 'w:p' && ends)) out.push(cellDepth ? ' ' : '\n');
+    else if (name === 'w:tr') out.push(cellDepth ? ' ' : ends ? '\n' : '|');
+    else if (name === 'w:tc' && !ends) { cellDepth++; out.push(' '); }
+    else if (name === 'w:tc' && close) {
+      cellDepth--;
+      if (out[out.length - 1] === ' ') out.pop();
+      out.push(' |');
+    }
+  }
+  return out.join('').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const XML_ENTITIES: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+
+function decodeXmlText(s: string): string {
+  return s.replace(/&(?:(lt|gt|amp|quot|apos)|#(\d+)|#x([\da-fA-F]+));/g, (m, name?: string, dec?: string, hex?: string) => {
+    if (name) return XML_ENTITIES[name];
+    const cp = dec ? Number(dec) : parseInt(hex!, 16);
+    return cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+  });
+}
+
+const ZIP_EOCD = Buffer.from('PK\x05\x06', 'latin1');
+/** 解压上限:50MB 的 docx 按 deflate 的极限压缩比能胀到 GB 级,在引擎进程里解必须封顶(zip 炸弹)。 */
+const UNZIP_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 从 zip 里取一个条目,没有 → null;坏档读越界会抛(调用方兜)。按中央目录找,本地头里 size 记 0 的
+ * (data descriptor)也能读。ponytail: 只认 stored/deflate,不做 zip64/加密/CRC 校验 —— docx 用不到。
+ */
+function unzipEntry(zip: Buffer, name: string): Buffer | null {
+  const eocd = zip.lastIndexOf(ZIP_EOCD);
+  if (eocd < 0) return null;
+  let p = zip.readUInt32LE(eocd + 16);
+  for (let n = zip.readUInt16LE(eocd + 10); n > 0 && zip.readUInt32LE(p) === 0x02014b50; n--) {
+    const nameLen = zip.readUInt16LE(p + 28);
+    if (zip.toString('utf8', p + 46, p + 46 + nameLen) === name) {
+      const local = zip.readUInt32LE(p + 42);
+      const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+      const data = zip.subarray(start, start + zip.readUInt32LE(p + 20));
+      const method = zip.readUInt16LE(p + 10);
+      return method === 0 ? data : method === 8 ? inflateRawSync(data, { maxOutputLength: UNZIP_MAX_BYTES }) : null;
+    }
+    p += 46 + nameLen + zip.readUInt16LE(p + 30) + zip.readUInt16LE(p + 32);
+  }
+  return null;
 }

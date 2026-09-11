@@ -15,7 +15,7 @@ import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回�
 import { testConnection } from '../services/agentRunService'
 import {
   deleteUserCloudSkill, fetchProviderModels,
-  listModels, listSkills, listTools,
+  listModels, listSkills, listTools, setModelContextWindow,
   testProviderConnection, uploadSkillToCloud, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
   getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
@@ -1772,7 +1772,15 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
-                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} />}
+                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} onContextWindow={isDesktop ? async (modelId, tokens) => {
+                  // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
+                  await setModelContextWindow(p.cfg, modelId, tokens)
+                  const next = await listModels(p.cfg)
+                  setModels(next)
+                  // 进度环读的是 store 里启动时装的 modelsResp,且优先上一轮 run 的 context_info(只在切模型时清):
+                  // 两处都刷,否则改完窗口它还显示旧数直到下一条消息。
+                  useApp.setState((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([, v]) => v.modelId !== modelId)) }))
+                } : undefined} />}
 
                 {tab === 'model' && activeSub === 'm-providers' && (
                   <>

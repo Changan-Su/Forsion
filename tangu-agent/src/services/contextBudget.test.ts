@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   CONTEXT_WINDOW_TOKENS,
   INPUT_HARD_RATIO,
@@ -14,6 +14,10 @@ import {
   capToolResult,
   capHistoryContent,
 } from './contextBudget.js';
+import { resetModelOverridesForTest } from './modelOverrides.js';
+
+// 用户覆盖层默认读真家目录的 config.json —— 整个套件钉成内存表,开发机上有没有 modelOverrides 段都不影响断言。
+beforeEach(() => resetModelOverridesForTest());
 
 describe('modelContextWindowInfo 来源标注', () => {
   it('model 元数据 / family 族表 / default 兜底 三档来源正确', () => {
@@ -22,6 +26,24 @@ describe('modelContextWindowInfo 来源标注', () => {
     expect(modelContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
     // 无效元数据(<4k)不算 model 档,落到后续档位
     expect(modelContextWindowInfo('whatever', { context_window: 100 }).source).toBe('default')
+  })
+  it('族表同时按模型对象的 apiModelId 匹配:目录导入的 pr-<hash> id 不再一律落默认档(2026-09-11 生产实报)', () => {
+    const hashId = 'pr-4cbcb1891e630b889b329a3dd0a77df84c2406e0babae76e'
+    expect(modelContextWindowInfo(hashId, { contextWindow: null, apiModelId: 'gpt-6-astra' })).toEqual({ tokens: 272_000, source: 'family' })
+    expect(modelContextWindowInfo('Auto', { apiModelId: 'claude-opus-5' })).toEqual({ tokens: 1_000_000, source: 'family' })
+    // admin 把 272K 填成 272:模型自报值无效 → 仍靠 apiModelId 走族表,而不是默认档
+    expect(modelContextWindowInfo(hashId, { contextWindow: 272, apiModelId: 'gpt-6-astra' })).toEqual({ tokens: 272_000, source: 'family' })
+    // 有效的自报值压过族表
+    expect(modelContextWindowInfo(hashId, { contextWindow: 272_000, apiModelId: 'gpt-6-astra' }).source).toBe('model')
+    // id 命中优先于 apiModelId(数组顺序)
+    expect(modelContextWindowInfo('kimi/kimi-k3', { apiModelId: 'gpt-5' })).toEqual({ tokens: 1_000_000, source: 'family' })
+  })
+  it('用户本机 modelOverrides 压过模型自报 / 族表,但低于 4k 的脏值被滤掉', () => {
+    resetModelOverridesForTest({ 'pr-x': { contextWindow: 500_000 }, 'codex/gpt-5.6-sol': { contextWindow: 1_050_000 }, dirty: { contextWindow: 272 } })
+    expect(modelContextWindowInfo('pr-x', { contextWindow: 272_000, apiModelId: 'gpt-6-astra' })).toEqual({ tokens: 500_000, source: 'override' })
+    expect(modelContextWindowInfo('codex/gpt-5.6-sol')).toEqual({ tokens: 1_050_000, source: 'override' })
+    expect(modelContextWindowInfo('dirty')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
+    expect(modelContextWindowInfo('untouched', { contextWindow: 200_000 })).toEqual({ tokens: 200_000, source: 'model' })
   })
 })
 
@@ -82,10 +104,10 @@ describe('contextBudget constants', () => {
     expect(INPUT_WARN_RATIO).toBe(0.25);
     expect(COMPACT_TRIGGER_RATIO).toBe(0.5);
   });
-  it('default context window is 128k when env unset', () => {
+  it('default context window is 272k when env unset (2026-09-11 起;原 128k 让未收录模型 64k 就折叠)', () => {
     // CI 不设 TANGU_CONTEXT_WINDOW_TOKENS
     if (!process.env.TANGU_CONTEXT_WINDOW_TOKENS) {
-      expect(CONTEXT_WINDOW_TOKENS).toBe(128_000);
+      expect(CONTEXT_WINDOW_TOKENS).toBe(272_000);
     }
     expect(CONTEXT_WINDOW_TOKENS).toBeGreaterThanOrEqual(4_000);
   });

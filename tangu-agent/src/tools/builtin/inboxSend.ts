@@ -15,6 +15,8 @@ import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { forwardInboxToChannels } from '../../channels/forward.js';
 
 const MAX_PER_HOUR = 20;
+/** 正文上限(工具入口超了报错让模型缩短 —— 任务卡在末尾,静默截断会先截掉它;投递内核仍按它截,自动化 notify 行为不变)。 */
+const MAX_BODY = 4000;
 /** Muse 的发信人 id(与 agent slug 同名)。它的消息缺省**不**转发到微信/TG/QQ(M12):后台产出可能一小时几条,
  *  手机上全推就是打扰;只有 urgent 与日报走通道。 */
 export const MUSE_SENDER_ID = 'muse';
@@ -22,7 +24,8 @@ export const MUSE_SENDER_ID = 'muse';
 export interface InboxSendResult { ok: boolean; error?: string }
 
 /** 投递内核:频控+落库+通道转发。senderId 缺省=默认 agent;自动化 notify 传 `automation:<ruleId>`。
- *  forward 缺省 = 非 Muse 发信人都转发;urgent=true 强制转发。 */
+ *  forward 缺省 = 非 Muse 发信人都转发;urgent=true 强制转发。
+ *  maxBody 缺省 4000(工具入口的防刷屏上限);引擎自己拼的正文(TODO 投影 = detail + 任务卡)放宽,免得卡被截断成半截代码块。 */
 /** 转发到通道的裁决:urgent 强制转发(高于显式 forward:false,与注释一致 —— Codex 09-11 P2);
  *  否则显式 forward 说了算;都没说 = 非 Muse 发信人转发。 */
 export function shouldForward(msg: { forward?: boolean; urgent?: boolean }, senderId: string): boolean {
@@ -31,11 +34,11 @@ export function shouldForward(msg: { forward?: boolean; urgent?: boolean }, send
 
 export async function sendInboxMessage(
   userId: string,
-  msg: { title: string; body?: string; senderId?: string; forward?: boolean; urgent?: boolean },
+  msg: { title: string; body?: string; senderId?: string; forward?: boolean; urgent?: boolean; maxBody?: number },
 ): Promise<InboxSendResult> {
   const title = String(msg.title || '').trim().slice(0, 200);
   if (!title) return { ok: false, error: 'Error: title 必填' };
-  const body = String(msg.body || '').trim().slice(0, 4000);
+  const body = String(msg.body || '').trim().slice(0, msg.maxBody ?? MAX_BODY);
   const senderId = String(msg.senderId || DEFAULT_AGENT_SLUG).slice(0, 64);
   try {
     // 方言无关的窗口计数(muse_todos 同款 cutoff 法;禁 PG 专有 make_interval/::int)。
@@ -79,9 +82,13 @@ export const inboxSendProvider: ToolProvider = {
             'or follow-ups the user should notice outside this conversation — not as a substitute for replying here. ' +
             'Delivery is immediate; for a future or recurring reminder, create an automation instead ' +
             '(manage_automation with an at/every trigger and a notify action). ' +
-            'The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), ' +
-            '`![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run ' +
-            '(same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.',
+            `The body (max ${MAX_BODY} characters) is rendered as an Amadeus note, so write it as a short document that leads with the conclusion: ` +
+            'full markdown (tables, callouts, math, code) and `![[note]]` embeds of notes in the user\'s vault (mention other files by absolute path). ' +
+            'To offer a one-click follow-up, end the body with up to two task cards; the user can run one in a new session, hand it to Muse, or ignore it. Format:\n' +
+            '```forsion-task\ntitle: Short task title\ntldr: One line for the user (optional)\n---\n' +
+            'Self-contained brief for a fresh session: paths, symptoms, acceptance criteria.\n```\n' +
+            'Add `track: true` to the header when it needs follow-up over days rather than doing now. ' +
+            'A ```forsion-button block may reference an existing manual automation rule id.',
           parameters: {
             type: 'object',
             properties: {
@@ -93,9 +100,13 @@ export const inboxSendProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
+        const body = String(args.body || '').trim();
+        if (body.length > MAX_BODY) {
+          return `Error: body is ${body.length} characters; the inbox limit is ${MAX_BODY}. Shorten it (keep any task cards at the end) and send again.`;
+        }
         const r = await sendInboxMessage(ctx.userId, {
           title: String(args.title || ''),
-          body: String(args.body || ''),
+          body,
           senderId: ctx.agentSlug || DEFAULT_AGENT_SLUG,
         });
         if (!r.ok) return r.error || 'Error: send failed';

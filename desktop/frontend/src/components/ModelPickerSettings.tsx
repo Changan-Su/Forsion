@@ -22,9 +22,34 @@ registerMessages({
   'picker.moveDown': { zh: '下移分组', en: 'Move group down' },
   'picker.deleteGroup': { zh: '删除分组（模型返回提供方分组）', en: 'Delete group (models return to their provider group)' },
   'picker.emptyLocal': { zh: '添加提供方并拉取模型后，可在这里筛选和分组。', en: 'Add a provider and fetch its models to filter and group them here.' },
+  'picker.ctxWindowHint': { zh: '右侧数字是上下文窗口，按 token 填（272K = 272000）；灰色为自动识别值，填了即本机覆盖，留空恢复自动。对之后的新消息生效。', en: 'The number on the right is the context window in tokens (272K = 272000). Grey means auto-detected; typing a value overrides it on this device, clearing restores auto-detect. Applies to new messages.' },
+  'picker.ctxWindowFor': { zh: '{name} 的上下文窗口（tokens）', en: 'Context window for {name} (tokens)' },
+  'picker.ctxWindowInvalid': { zh: '按 token 填，最小 4000（272K 请填 272000）', en: 'Enter tokens, minimum 4000 (for 272K enter 272000)' },
 })
 
-export function ModelPickerSettings({ models }: { models: ModelInfo[] }) {
+/** 每行一个窗口输入框:有值 = 本机覆盖;占位符 = 引擎当前解析出的值;悬浮显示来源(自报 / 族表 / 兜底)。 */
+function CtxWindowInput({ model, onSave }: { model: ModelInfo; onSave: (modelId: string, tokens: number | null) => Promise<void> }) {
+  const { t } = useI18n()
+  const [error, setError] = useState('')
+  const overridden = model.contextWindowSource === 'override'
+  const commit = async (raw: string) => {
+    const text = raw.trim()
+    const tokens = text === '' ? null : Number(text)
+    if (tokens !== null && (!Number.isFinite(tokens) || tokens < 4000)) { setError(t('picker.ctxWindowInvalid')); return }
+    if (tokens === null ? !overridden : (overridden && tokens === model.contextWindow)) return // 没变化不打后端
+    try { await onSave(model.id, tokens); setError('') } catch (e: any) { setError(e?.message || String(e)) }
+  }
+  return <span className="model-catalog-ctx" title={t(`ctx.windowSource.${model.contextWindowSource || 'default'}`)}>
+    <input type="number" min={4000} step={1000} inputMode="numeric"
+      key={`${model.id}:${overridden ? model.contextWindow : ''}`} // 保存后列表刷新 → 用新值重挂,defaultValue 才会跟上
+      defaultValue={overridden ? model.contextWindow : ''} placeholder={String(model.contextWindow || '')}
+      aria-label={t('picker.ctxWindowFor', { name: model.name })} data-source={model.contextWindowSource || 'default'}
+      onBlur={(e) => void commit(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+    {error && <small className="model-catalog-error" role="alert">{error}</small>}
+  </span>
+}
+
+export function ModelPickerSettings({ models, onContextWindow }: { models: ModelInfo[]; onContextWindow?: (modelId: string, tokens: number | null) => Promise<void> }) {
   const { t } = useI18n()
   const prefs = useModelPickerPreferences()
   const [name, setName] = useState('')
@@ -50,12 +75,13 @@ export function ModelPickerSettings({ models }: { models: ModelInfo[] }) {
   }
   return <section className="field model-catalog-settings">
     <div className="hint">{t('picker.hint')}</div>
+    {onContextWindow && <div className="hint">{t('picker.ctxWindowHint')}</div>}
     <details className="model-catalog-cloud">
       <summary><LockKeyhole size={13} /> {t('model.group.forsion')} · {cloud.reduce((n, g) => n + g.models.length, 0)}</summary>
       <p className="hint">{t('picker.cloudHint')}</p>
       <div className="model-catalog-model-list">{cloud.map((g) => <div key={g.key}>
         {g.provider && <div className="model-source-heading">{g.provider}</div>}
-        {g.models.map((m) => <div key={m.id} className="model-catalog-model"><span className="model-catalog-name">{m.name}</span><ModelMetadata model={m} /></div>)}
+        {g.models.map((m) => <div key={m.id} className="model-catalog-model"><span className="model-catalog-name">{m.name}</span><ModelMetadata model={m} />{onContextWindow && (m.modelType || 'llm') === 'llm' && <CtxWindowInput model={m} onSave={onContextWindow} />}</div>)}
       </div>)}</div>
     </details>
     <div>
@@ -89,6 +115,7 @@ export function ModelPickerSettings({ models }: { models: ModelInfo[] }) {
         <option value="__provider__">{t('picker.byProvider')}</option><option value="">{t('picker.ungrouped')}</option>
         {prefs.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
       </select>
+      {onContextWindow && (m.modelType || 'llm') === 'llm' && <CtxWindowInput model={m} onSave={onContextWindow} />}
     </div>)}{!local.length && <div className="hint">{t('picker.emptyLocal')}</div>}</div>
     {error && <div className="hint model-catalog-error" role="alert">{error}</div>}
   </section>
