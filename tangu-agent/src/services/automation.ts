@@ -38,6 +38,7 @@ import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry
 import { executeTool } from '../tools/registry.js';
 import { declaredAutomationSafe } from '../tools/toolRegistry.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
+import { backgroundClientTag } from '../core/version.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
 function log(msg: string): void {
@@ -153,6 +154,7 @@ export async function launchUnattendedRun(spec: UnattendedSpec): Promise<boolean
       message: spec.message,
       userMessageId: uuidv4(),
       attachments: [],
+      client: backgroundClientTag('automation'), // 后台用量归因(api_usage_logs.client),与用户 run 可分
       agentConfig: {
         agentSlug: spec.agentSlug,
         execMode: 'host',
@@ -529,8 +531,10 @@ export async function launchDueSchedules(now: Date = new Date()): Promise<void> 
   let budget = MAX_SCHEDULE_LAUNCHES_PER_TICK;
   for (const a of agents) {
     if (budget <= 0) { log(`本 tick 日程起跑帽(${MAX_SCHEDULE_LAUNCHES_PER_TICK})已满,余下顺延`); break; }
-    // Muse 禁 auto 日程(防绕穿其 planMode+add_muse_todo 唯一写权限的安全设计);校验层同拒,这里防御性跳过。
+    // Muse 的到期条目**不走**这条管道:回灌进 Muse 自己的周期(muse.ts museDueSchedules → startCycle),
+    // 一个会话、一份预算、同一套 kickoff 上下文;否则 `sched:muse:<row>` 自动化会话会绕开 Muse 的七道闸。
     if (a.slug === MUSE_AGENT_SLUG) continue;
+
     let due: ScheduleEntry[];
     try {
       const db = await loadSchedule(a.slug);

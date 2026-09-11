@@ -2,6 +2,8 @@
 
 /** 黄金分割默认:中间 0.618,两侧每侧 0.382/2 = 0.191(= 1 - 0.618 平分)。 */
 export const SIDE_FRACTION = 0.191
+/** 临时二级 View 比普通侧栏略宽，给表单留出舒适的标签与输入空间。 */
+export const TRANSIENT_SIDE_SCALE = 1.2
 /** 可拖宽侧栏的下限(比钉宽档的 min 更松,允许用户拖窄)。 */
 export const RESIZABLE_MIN = 220
 
@@ -27,6 +29,14 @@ export function computeSideWidth(containerWidth: number, loc: 'left' | 'right', 
   const target = typeof o.saved === 'number' ? o.saved : Math.round(golden * (o.scale ?? 1))
   const hardMax = Math.max(RESIZABLE_MIN, Math.min(680, Math.round(containerWidth * 0.6)))
   return Math.min(hardMax, Math.max(RESIZABLE_MIN, target))
+}
+
+/** 新建临时二级 View 的默认宽度。调用方只在该侧没有用户宽度记录时使用；
+ *  小视口下绝不比普通侧栏更窄，也不超过可拖侧栏的 60% / 680px 硬上限。 */
+export function computeTransientSideWidth(containerWidth: number, regularWidth: number): number {
+  const hardMax = Math.max(RESIZABLE_MIN, Math.min(680, Math.round(containerWidth * 0.6)))
+  const widened = Math.round(regularWidth * TRANSIENT_SIDE_SCALE)
+  return Math.max(regularWidth, Math.min(hardMax, widened))
 }
 
 /** 底部面板高度下限(= shouldRecordSideWidth 的 measured<120 门槛,两者必须一致:

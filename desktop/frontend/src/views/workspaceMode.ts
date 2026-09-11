@@ -6,6 +6,10 @@ export type WorkspaceMode = 'sessions' | 'files' | 'notes'
 /** 扩展模式 = 内置三档 + 插件列表源(`plugin:<pid>:<srcId>`,View 基座 P2)。 */
 export type WorkspaceModeEx = WorkspaceMode | `plugin:${string}`
 
+/** 收件箱列表源(宿主内置,2026-09-11):Inbox Space 默认档 + 阅读面板的 workspaceSource 都指它。
+ *  插件列表源的命名空间(`plugin:<pid>:<srcId>`)对宿主内置源同样适用 —— 工作区视图不区分来源。 */
+export const INBOX_WORKSPACE_MODE = 'plugin:inbox:messages' as const
+
 /** 从笔记树点开的 Amadeus 文档 —— 主区 focus 它们时左栏一律回笔记树,**不分 Space**
  *  (在 Tangu Space 里点开一张图/一个 PDF 也该看见它在笔记树里的位置)。 */
 const NOTE_DOC_VIEWS = new Set(['amadeus-editor', 'amadeus-drawing', 'dashboard', 'amadeus-dashboard', 'amadeus-db', 'amadeus-pdf'])
@@ -23,7 +27,7 @@ export function autoWorkspaceMode(
   /** 'bottom' 与 left/main 同档:下面「右栏恒 files」那几条是**参考/附件栏**专属规则,底部面板不适用。 */
   loc: ViewLocation,
   mainType: string | null,
-  spaceDefault: WorkspaceMode = 'sessions',
+  spaceDefault: WorkspaceModeEx = 'sessions',
   /** 主视图注册时声明的 workspaceSource(ViewDefinition.workspaceSource,调用方查注册表后传入;
    *  View 基座 P2 的声明式联动位)。显式声明优先于内置硬规则;右栏仍恒 files 不受它管。 */
   mainSource?: string | null,

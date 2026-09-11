@@ -19,6 +19,10 @@
  *
  * UX 上并不因此变成「先去面板建规则」:未配置的按钮点一下就直接开构建器(宿主经 automationBridge
  * 提供),保存时替你建那条 manual 规则并回写 triggerId —— 体感是就地建按钮,落盘的却是引用。
+ *
+ * ## readOnly(只读页:分享页 / 收件箱消息 / 跨笔记嵌入,2026-09-11)
+ * 按钮照常可点(Notion 只读页的按钮也能按),但不给配置齿轮、未配置的按钮不开构建器 —— 只读页写不回
+ * triggerId,开了构建器也落不了盘。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { OverlayPortal } from '../../lib/overlayPortal'
@@ -63,7 +67,8 @@ type RunState =
 export const ButtonBlock: React.FC<{
   spec: ButtonSpec
   onChange(next: ButtonSpec): void
-}> = ({ spec, onChange }) => {
+  readOnly?: boolean
+}> = ({ spec, onChange, readOnly = false }) => {
   const { t } = useI18n()
   const bridge = getAutomationBridge()
   const [cfgOpen, setCfgOpen] = useState(false)
@@ -121,7 +126,7 @@ export const ButtonBlock: React.FC<{
 
   const onClick = (): void => {
     if (!bridge) return
-    if (unconfigured) { void openBuilder(); return }
+    if (unconfigured) { if (!readOnly) void openBuilder(); return }
     if (missing || off || run.k === 'running') return
     if (spec.confirm && run.k !== 'confirm') { setRun({ k: 'confirm' }); return }
     void fire()
@@ -147,7 +152,7 @@ export const ButtonBlock: React.FC<{
           className="amx-btnblock-btn"
           data-blank={unconfigured || undefined}
           data-confirm={run.k === 'confirm' || undefined}
-          disabled={run.k === 'running' || !bridge}
+          disabled={run.k === 'running' || !bridge || (unconfigured && readOnly)}
           onClick={onClick}
         >
           {run.k === 'running' ? t('btnblock.running')
@@ -158,7 +163,7 @@ export const ButtonBlock: React.FC<{
         {run.k === 'confirm' && (
           <button className="amx-btnblock-cancel" onClick={() => setRun({ k: 'idle' })}>{t('btnblock.cancel')}</button>
         )}
-        {!unconfigured && (
+        {!unconfigured && !readOnly && (
           <button className="amx-btnblock-gear" title={t('btnblock.gearTitle')} onClick={() => setCfgOpen(true)}>⚙</button>
         )}
       </div>

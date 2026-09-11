@@ -11,6 +11,7 @@ import {
   listInbox, getInboxUnreadCount, patchInboxMessage, readAllInbox, deleteInboxMessage, pullInbox, claimInboxAttachment,
   type InboxMessage, type InboxFilter,
 } from '../services/backendService'
+import { currentClientId } from '../services/agentRunService'
 
 export type { InboxMessage, InboxFilter }
 
@@ -20,6 +21,10 @@ let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
 let lastLatestId: string | null | undefined = undefined
 let lastServerCount = 0
+/** 未读轮询单飞(Codex 09-11 P2):挂载刷新、15s 轮询、多个列表实例撞在一起时,并发的 refreshUnread 会在
+ *  lastLatestId 更新前都判成「新消息」→ 同一条通知两遍。同一时刻只跑一个,期间再来的合成一次尾随重跑。 */
+let unreadRun: Promise<void> | null = null
+let unreadAgain = false
 
 /** 发件人显示名(列表/阅读/系统通知三处共用)。system 文案在调用点求值(防 i18n 早求值)。 */
 export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): string {
@@ -37,14 +42,18 @@ export function parseUtc(s: string | null): Date | null {
 }
 
 interface InboxState {
+  /** 未归档消息(服务端 filter=all)。 */
   messages: InboxMessage[]
-  filter: InboxFilter
+  /** 已归档消息:单独一份,不与 messages 共用一个「当前档」—— 工作区左右栏各选各的分组也不会互相切服务端档
+   *  (2026-09-11:旧版全局 filter + 列表源在渲染期切档,两个实例选不同分组会无限互拉)。 */
+  archived: InboxMessage[]
+  archivedLoaded: boolean
   selectedId: string | null
   unreadCount: number
   loading: boolean
   refreshList(): Promise<void>
   refreshUnread(): Promise<void>
-  setFilter(f: InboxFilter): void
+  refreshArchived(): Promise<void>
   select(id: string | null): void
   markRead(id: string, read: boolean): void
   markArchived(id: string, archived: boolean): void
@@ -60,10 +69,16 @@ interface InboxState {
 const cfg = () => useApp.getState().cfg
 const fail = (e: any) => useApp.getState().toast(useApp.getState().tr('inbox.opFail', { e: e?.message || e }), true)
 const setBadge = (n: number) => { void window.tangu?.setInboxBadge?.(n) }
+/** 未归档 / 已归档两份里找一封(阅读面板可能开着已归档的那封)。 */
+const findAny = (s: Pick<InboxState, 'messages' | 'archived'>, id: string): InboxMessage | undefined =>
+  s.messages.find((x) => x.id === id) ?? s.archived.find((x) => x.id === id)
+const mapBoth = (s: Pick<InboxState, 'messages' | 'archived'>, fn: (m: InboxMessage) => InboxMessage) =>
+  ({ messages: s.messages.map(fn), archived: s.archived.map(fn) })
 
 export const useInbox = create<InboxState>((set, get) => ({
   messages: [],
-  filter: 'all',
+  archived: [],
+  archivedLoaded: false,
   selectedId: null,
   unreadCount: 0,
   loading: false,
@@ -71,7 +86,7 @@ export const useInbox = create<InboxState>((set, get) => ({
   refreshList: async () => {
     set({ loading: true })
     try {
-      const messages = await listInbox(cfg(), get().filter)
+      const messages = await listInbox(cfg(), 'all')
       set({ messages })
     } catch { /* 静默:断连/老后端 404 */ } finally {
       set({ loading: false })
@@ -79,48 +94,52 @@ export const useInbox = create<InboxState>((set, get) => ({
   },
 
   // 轮询体:未读数 + 新消息检测 → 刷列表 + 系统通知 + 角标。
-  refreshUnread: async () => {
-    let r: { count: number; latestId: string | null }
-    try { r = await getInboxUnreadCount(cfg()) } catch { return }
-    const isNew = lastLatestId !== undefined && r.latestId && r.latestId !== lastLatestId && r.count > lastServerCount
-    if (isNew) {
-      try {
-        const msgs = await listInbox(cfg(), get().filter)
-        set({ messages: msgs })
-        const m = msgs.find((x) => x.id === r.latestId) ?? (await listInbox(cfg(), 'all')).find((x) => x.id === r.latestId)
-        // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
-        // 不再单发 notifyInbox,避免与统一系统通知重复)。
-        if (m) {
-          notifyApp({
-            event: 'inbox.message', level: 'info',
-            title: senderOf(m), text: m.title,
-            action: { label: useApp.getState().tr('ntf.view'), run: () => setActiveSpace('inbox') },
-          })
-        }
-      } catch { /* 静默 */ }
+  refreshUnread: () => {
+    if (unreadRun) { unreadAgain = true; return unreadRun }
+    const once = async (): Promise<void> => {
+      let r: { count: number; latestId: string | null }
+      try { r = await getInboxUnreadCount(cfg()) } catch { return }
+      const isNew = lastLatestId !== undefined && r.latestId && r.latestId !== lastLatestId && r.count > lastServerCount
+      if (isNew) {
+        try {
+          const msgs = await listInbox(cfg(), 'all')
+          set({ messages: msgs })
+          const m = msgs.find((x) => x.id === r.latestId)
+          // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
+          // 不再单发 notifyInbox,避免与统一系统通知重复)。
+          if (m) {
+            notifyApp({
+              event: 'inbox.message', level: 'info',
+              title: senderOf(m), text: m.title,
+              action: { label: useApp.getState().tr('ntf.view'), run: () => setActiveSpace('inbox') },
+            })
+          }
+        } catch { /* 静默 */ }
+      }
+      setBadge(r.count)
+      set({ unreadCount: r.count })
+      lastLatestId = r.latestId
+      lastServerCount = r.count
     }
-    setBadge(r.count)
-    set({ unreadCount: r.count })
-    lastLatestId = r.latestId
-    lastServerCount = r.count
+    unreadRun = (async () => { do { unreadAgain = false; await once() } while (unreadAgain) })().finally(() => { unreadRun = null })
+    return unreadRun
   },
 
-  setFilter: (f) => {
-    if (get().filter === f) return
-    set({ filter: f })
-    void get().refreshList()
+  refreshArchived: async () => {
+    try { set({ archived: await listInbox(cfg(), 'archived'), archivedLoaded: true }) } catch { /* 静默:同 refreshList */ }
   },
 
   // 选中即乐观标已读(Gmail 语义);PATCH 失败以服务器为准回收。
   select: (id) => {
     set({ selectedId: id })
     if (!id) return
-    const m = get().messages.find((x) => x.id === id)
+    const m = findAny(get(), id)
     if (m && !m.read_at) {
       const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
       set((s) => ({
-        messages: s.messages.map((x) => (x.id === id ? { ...x, read_at: now } : x)),
-        unreadCount: Math.max(0, s.unreadCount - 1),
+        ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: now } : x)),
+        // 未读数 = 服务端「未归档且未读」:读一封已归档的不动它
+        unreadCount: m.archived_at ? s.unreadCount : Math.max(0, s.unreadCount - 1),
       }))
       setBadge(get().unreadCount)
       void patchInboxMessage(cfg(), id, { read: true }).catch(() => void get().refreshUnread())
@@ -129,9 +148,10 @@ export const useInbox = create<InboxState>((set, get) => ({
 
   markRead: (id, read) => {
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
+    const counted = !findAny(get(), id)?.archived_at
     set((s) => ({
-      messages: s.messages.map((x) => (x.id === id ? { ...x, read_at: read ? now : null } : x)),
-      unreadCount: Math.max(0, s.unreadCount + (read ? -1 : 1)),
+      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null } : x)),
+      unreadCount: counted ? Math.max(0, s.unreadCount + (read ? -1 : 1)) : s.unreadCount,
     }))
     setBadge(get().unreadCount)
     void patchInboxMessage(cfg(), id, { read }).catch((e) => { fail(e); void get().refreshList(); void get().refreshUnread() })
@@ -139,13 +159,12 @@ export const useInbox = create<InboxState>((set, get) => ({
 
   markArchived: (id, archived) => {
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
-    set((s) => ({
-      // 当前 filter 视图外的行会在下次 refreshList 消失;先就地改字段,选中保留(reader 可「取消归档」)。
-      messages: s.messages.map((x) => (x.id === id ? { ...x, archived_at: archived ? now : null } : x)),
-    }))
+    // 先就地改字段(列表源按 archived_at 立即挪行),选中保留(reader 可「取消归档」);PATCH 后两份都以服务端为准。
+    set((s) => mapBoth(s, (x) => (x.id === id ? { ...x, archived_at: archived ? now : null } : x)))
     void patchInboxMessage(cfg(), id, { archived }).catch((e) => { fail(e) }).then(() => {
       void get().refreshList()
       void get().refreshUnread()
+      void get().refreshArchived()
     })
   },
 
@@ -160,6 +179,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     const wasUnread = !!get().messages.find((x) => x.id === id && !x.read_at)
     set((s) => ({
       messages: s.messages.filter((x) => x.id !== id),
+      archived: s.archived.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
       unreadCount: Math.max(0, s.unreadCount - (wasUnread ? 1 : 0)),
     }))
@@ -175,14 +195,12 @@ export const useInbox = create<InboxState>((set, get) => ({
     const t = useApp.getState().tr
     set({ claiming: id })
     try {
-      const r = await claimInboxAttachment(cfg(), id)
-      set((s) => ({
-        messages: s.messages.map((x) =>
-          x.id === id && x.attachments ? { ...x, attachments: { ...x.attachments, claimed: true } } : x),
-      }))
+      const r = await claimInboxAttachment(cfg(), id, currentClientId())
+      set((s) => mapBoth(s, (x) =>
+        x.id === id && x.attachments ? { ...x, attachments: { ...x.attachments, claimed: true } } : x))
       useApp.getState().toast(r.alreadyClaimed ? t('inbox.claim.already') : t('inbox.claim.ok'))
     } catch (e: any) {
-      useApp.getState().toast(e?.message || t('inbox.claim.fail'), true)
+      useApp.getState().toast(e?.code === 'claim_requirements_unmet' ? t('inbox.claim.unmet') : e?.message || t('inbox.claim.fail'), true)
       void get().refreshList() // 过期/已领等由服务端裁决,刷新拿真相
     } finally {
       set({ claiming: null })

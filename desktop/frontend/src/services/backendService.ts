@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
   NormalAgentDef, SessionRecord, SkillInfo, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
 } from '../types'
@@ -24,8 +24,13 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
   const r = await authFetch(`${cfg.backendUrl}${path}`, { ...init, headers: headers(cfg.token) }, opts)
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
-    try { detail = (await r.json())?.detail || detail } catch { /* keep */ }
-    throw new Error(detail)
+    let code: string | undefined
+    try {
+      const j = await r.json()
+      detail = j?.detail || detail
+      if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
+    } catch { /* keep */ }
+    throw Object.assign(new Error(detail), code ? { code } : {})
   }
   return r.json() as Promise<T>
 }
@@ -650,6 +655,28 @@ export const injectMuseTodos = (cfg: TanguDesktopConfig, todoIds: string[], sess
 export const getMuseStatus = (cfg: TanguDesktopConfig) =>
   request<{ status: MuseStatusInfo }>(cfg, '/agent/special/muse/status').then((r) => r.status)
 
+// 异步审批(Muse ask/agent 档的越界动作):列表 / 批准(引擎按原参数代执行,结果随响应回)/ 拒绝。
+export const listMuseApprovals = (cfg: TanguDesktopConfig, status?: string) =>
+  request<{ approvals: PendingApprovalInfo[] }>(cfg, `/agent/special/approvals${status ? `?status=${encodeURIComponent(status)}` : ''}`, undefined, { timeoutMs: 30000 }).then((r) => r.approvals)
+
+/** 按 id 读一行(收件箱审批卡;404 = 找不到 → 抛错,调用方区分「不存在」与「读失败」看 status)。 */
+export const getMuseApproval = (cfg: TanguDesktopConfig, id: string) =>
+  request<{ approval: PendingApprovalInfo }>(cfg, `/agent/special/approvals/${encodeURIComponent(id)}`, undefined, { timeoutMs: 30000 }).then((r) => r.approval)
+
+export const decideMuseApproval = (cfg: TanguDesktopConfig, id: string, decision: 'approve' | 'reject', note?: string) =>
+  request<{ ok: boolean; status: string; result?: string }>(cfg, `/agent/special/approvals/${encodeURIComponent(id)}/${decision}`, {
+    method: 'POST', body: JSON.stringify({ note }),
+  }, { timeoutMs: 120000 }) // approve 会同步执行工具(写文件通常毫秒级;bash 可能要跑一会)
+
+/** 往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等;下周期 read_log 即见)。 */
+export const postMuseFeedback = (cfg: TanguDesktopConfig, text: string) =>
+  request<{ ok: boolean }>(cfg, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
+
+/** Muse Library 目录树(Agent Space 左栏;root=绝对路径,files 为相对路径)。 */
+export const getMuseLibrary = (cfg: TanguDesktopConfig) =>
+  request<{ root: string; files: MuseLibraryEntry[] }>(cfg, '/agent/special/muse/library', undefined, { timeoutMs: 30000 })
+
+
 // ⚠️ 这两条是控制面(非流式),必须带超时:插件的「登记规则 / 停用规则」把它们放进了每插件串行链,
 // 后端半死时一笔永不 settle 的请求会把整条链焊住 —— 停用永远排不上,等于 codex 抓的那条 bug 换了触发条件。
 export const getMuseTriggers = (cfg: TanguDesktopConfig) =>
@@ -813,6 +840,13 @@ export interface InboxAttachmentItem {
   label?: { zh?: string; en?: string }
   [k: string]: unknown
 }
+/** 广播附件的领取条件(服务端 claimRequirements.ts 同形);只用来展示 + 本地预判,裁决在服务端。
+ *  不认识的键(服务端以后加的条件)按「另有条件」展示。 */
+export interface InboxClaimRequirements {
+  minVersion?: string
+  tiers?: string[]
+  [k: string]: unknown
+}
 export interface InboxMessage {
   id: string
   title: string
@@ -822,7 +856,7 @@ export interface InboxMessage {
   origin_broadcast_id: string | null
   read_at: string | null
   archived_at: string | null
-  attachments?: { items: InboxAttachmentItem[]; claimed: boolean } | null
+  attachments?: { items: InboxAttachmentItem[]; claimed: boolean; requires?: InboxClaimRequirements } | null
   expires_at?: string | null
   created_at: string | null
 }
@@ -859,11 +893,11 @@ export const pullInbox = (cfg: TanguDesktopConfig) =>
     ? localInbox.pull(cfg)
     : request<{ pulled: boolean; added: number; detail?: string }>(cfg, '/agent/inbox/pull', { method: 'POST' })
 
-/** 领取广播附件(发放全在服务端)。移动端本地收件箱无广播,不承载。 */
-export const claimInboxAttachment = (cfg: TanguDesktopConfig, id: string) =>
+/** 领取广播附件(发放全在服务端)。client=`desktop/2.10.1`,服务端按它判最低版本。移动端本地收件箱无广播,不承载。 */
+export const claimInboxAttachment = (cfg: TanguDesktopConfig, id: string, client?: string) =>
   window.tangu?.mobile
     ? Promise.reject(new Error('not supported on mobile'))
-    : request<{ ok: boolean; alreadyClaimed: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST' })
+    : request<{ ok: boolean; alreadyClaimed: boolean }>(cfg, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
 
 /** 本地系统消息(sender_kind='system';壳自用:插件引导提醒等)。移动端本地收件箱不承载,静默 no-op。 */
 export const postInboxMessage = (cfg: TanguDesktopConfig, msg: { title: string; body?: string; sender_id?: string }) =>

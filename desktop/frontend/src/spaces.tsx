@@ -2,6 +2,7 @@
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
 import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket } from 'lucide-react'
+import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
@@ -10,6 +11,8 @@ import { installAmadeusCommands } from './amadeusCommands'
 import { SpaceButton } from './components/SpaceButton'
 import { builtinEnabled } from './builtins'
 import { calendarAvailable, calendarSpace } from './builtins/calendar'
+import { museAvailable, museSpace } from './builtins/muse'
+
 import { homepageAvailable, homepageSpace } from './builtins/homepage'
 import { homeSlotSpaceId, installHomeSlot } from './homeSlot'
 
@@ -75,11 +78,12 @@ const tanguSpace: SpaceDefinition = {
   },
 }
 
-/** Inbox Space:左=邮件列表;右=工作区(默认收起,toggle 可展)。主区 = 阅读面板。
+/** Inbox Space:左=统一「工作区」(自动档 = 收件箱列表源,2026-09-11 起;独立的 inbox-list 左栏已退役,
+ *  老布局由 lcl 的 RETIRED_VIEW_MAP 迁成 workspace);右=工作区(文件,默认收起,toggle 可展)。主区 = 阅读面板。
  *  不定义 newPage(曾指向 singleton 的 inbox-reader,使 ＋ 键永远只是重激活已有面板 = 死键):
- *  ＋ 与「关掉最后一个主区 view」统一落 launcher,与 Tangu/Amadeus 一致。 */
+ *  ＋ 与「关掉最后一个主区 view」统一落 launcher,与 Tangu/Amadeus 一致 —— 主区是启动器时左栏靠 autoWorkspaceMode 仍是收件箱。 */
 const INBOX_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'inbox-list', params: {} }],
+  left: [{ type: 'workspace', params: {} }],
   right: [{ type: 'workspace', params: {} }],
 }
 
@@ -88,10 +92,11 @@ const inboxSpace: SpaceDefinition = {
   name: () => app().tr('space.inbox'),
   icon: Inbox,
   sidebarDefaults: INBOX_SIDE_VIEWS,
+  autoWorkspaceMode: INBOX_WORKSPACE_MODE,
   build() {
     ws().setSidebarDefaults(INBOX_SIDE_VIEWS)
     ws().openView('inbox-reader', {}, 'main')
-    ws().openView('inbox-list', {}, 'left')
+    ws().openView('workspace', {}, 'left')
     ws().initializeSidebar('right', false)
   },
 }
@@ -225,6 +230,9 @@ const SPACES: SpaceDefinition[] = [
   ...(PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
   ...(PRODUCT.spaces.includes('automation') && window.tangu?.backendStatus ? [automationSpace] : []),
+  // Muse 也是**内置插件**(builtins/muse:Space + 两个视图随插件启停;本地后端特性)。同 Calendar 的槽位纪律。
+  ...(museAvailable() && builtinEnabled('muse') ? [museSpace] : []),
+
   // Public:管理已发布网站/笔记。需 Connect 发布桥或 Amadeus 协作桥其一(Tangu Web 两者皆无 → 不注册)。
   ...(PRODUCT.spaces.includes('public') && (window.tangu?.connectPublish || window.amadeusCollab) ? [publicSpace] : []),
 ]

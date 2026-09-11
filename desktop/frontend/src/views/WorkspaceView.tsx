@@ -116,7 +116,7 @@ const MODE_KEYS: Array<{ id: WorkspaceMode | 'auto'; label: string }> = [
   { id: 'notes', label: 'workspace.mode.notes' },
 ]
 
-export function WorkspaceView({ leaf }: ViewProps) {
+export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?: WorkspaceModeEx }) {
   const { t } = useI18n()
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const modePickerRef = useRef<HTMLDivElement>(null)
@@ -129,13 +129,16 @@ export function WorkspaceView({ leaf }: ViewProps) {
   const liveSources = usePluginStore((s) => s.listSources)
   const sourceAlive = (id: string): boolean => liveSources.some((o) => `plugin:${o.pluginId}:${o.item.id}` === id)
   // 手动覆盖存 leaf params(随布局持久化);'auto'(默认)跟随主视图。
-  const raw = leaf.params.mode
+  // defaultMode:宿主给某个视图类型钉的起始档(如 inbox-list → 收件箱),布局里没存 mode 时用它(Codex 09-11 P1)。
+  const raw = leaf.params.mode ?? defaultMode
   const override: WorkspaceModeEx | 'auto' =
     raw === 'sessions' || raw === 'files' || (raw === 'notes' && hasNotes) ? raw
     : typeof raw === 'string' && raw.startsWith('plugin:') && sourceAlive(raw) ? (raw as WorkspaceModeEx)
     : 'auto'
-  // 主视图无硬规则时落本 Space 的默认档(如 Amadeus → 笔记);缺省 sessions = 与其它 Space 一致。
-  const spaceAuto = useSpaceStore((s) => s.spaces.find((sp) => sp.id === s.activeSpaceId)?.autoWorkspaceMode)
+  // 主视图无硬规则时落本 Space 的默认档(如 Amadeus → 笔记、Inbox → 收件箱列表源);缺省 sessions = 与其它 Space 一致。
+  // 默认档指向列表源而源已死(宿主没注册 / 插件被禁)→ 当没设,退回缺省档(与 declaredLive 同一道防线)。
+  const spaceAutoRaw = useSpaceStore((s) => s.spaces.find((sp) => sp.id === s.activeSpaceId)?.autoWorkspaceMode)
+  const spaceAuto = spaceAutoRaw && (!spaceAutoRaw.startsWith('plugin:') || sourceAlive(spaceAutoRaw)) ? spaceAutoRaw : undefined
   // 声明式联动(P2):主视图注册时声明的 workspaceSource(如青鸟视频视图 → 它的收藏夹源)优先于硬规则;
   // 指向的插件源已死同样回退 auto 常规路。
   const declared = mainType ? getView(mainType)?.workspaceSource ?? null : null
@@ -386,7 +389,8 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
       title={it.title}
       className={`${activeKey === it.key ? 'active' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}`.trim() || undefined}
       {...dropProps(`i:${it.key}`, { item: it })}
-      lead={<LeadIcon key={it.iconUrl ?? ''} item={it} />}
+      // 未读点(ListItem.unread,2026-09-11 收件箱接入时补):与未读会话同一个点,绝对定位贴在图标角上(见 SidebarPane)。
+      lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
       trailing={it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
       onClick={(e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
       onContextMenu={(e) => {

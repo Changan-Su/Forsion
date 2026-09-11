@@ -33,7 +33,9 @@ import { buildDbCsv, csvExportMode, exportCsvFile } from './csvExport'
 import './cellFormat.css'
 import './readOnlyCells.css'
 import { buildTree } from '@amadeus-shared/db/tree'
-import { dateGroupUnitOf, groupRowsByDate, type DateGroupUnit } from '@amadeus-shared/db/groupDate'
+import { GROUP_TYPES, groupRows, visibleGroups, type RowGroup } from '@amadeus-shared/db/groupRows'
+import { GroupMenu } from './GroupMenu'
+import { TableSearch } from './TableSearch'
 import { joinRel, toAssetUrl } from '@amadeus-shared/assets'
 import { useShallow } from 'zustand/react/shallow'
 import { parseCalDate, splitSide } from '@amadeus-shared/db/calDate'
@@ -47,7 +49,7 @@ import { renameDb } from '../../lib/dbFileOps'
 import { useNoteViewStore } from '../../store/noteViewStore'
 import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
-import { Settings2, ExternalLink, Plus, Paperclip, Sigma, Link2, ArrowRightLeft, ClipboardList, ChartGantt, ChevronRight, Download } from 'lucide-react'
+import { Settings2, ExternalLink, Plus, Paperclip, Sigma, Link2, ArrowRightLeft, ClipboardList, ChartGantt, ChevronRight, Columns3, Download } from 'lucide-react'
 import { openDb } from '../../../amadeusNav'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
@@ -68,6 +70,7 @@ import { GanttBody } from './GanttBody'
 import { ganttDateCols, ganttScaleOf, resolveGanttCols } from './ganttLogic'
 import { formFields } from './formLogic'
 import { CHART_AGGS, CHART_KINDS, chartAggOf, chartKindOf } from '@amadeus-shared/dashboardData'
+import { autoColumnWidths, type AutoWidthSample } from './autoColumnWidth'
 
 registerMessages({
   // 列类型 / 视图类型 / 聚合:模块级表只存**键**,文案在渲染时求值(写死字面量会冻在模块加载那一刻)
@@ -118,6 +121,9 @@ registerMessages({
   'dbembed.addView': { zh: '添加视图', en: 'Add view' },
   'dbembed.filter': { zh: '筛选', en: 'Filter' },
   'dbembed.filterThisView': { zh: '筛选(本视图)', en: 'Filter (this view)' },
+  'dbembed.autoSize': { zh: '自适应', en: 'Auto size' },
+  'dbembed.autoSizeOn': { zh: '自适应列宽已开启:按表头与主内容计算,副内容不参与', en: 'Auto-size is on: widths follow headers and primary content; secondary text is ignored' },
+  'dbembed.autoSizeOff': { zh: '自适应列宽已关闭:使用手动列宽', en: 'Auto-size is off: use manual column widths' },
   'dbembed.searchPlaceholder': { zh: '搜索…', en: 'Search…' },
   'dbembed.searchRows': { zh: '搜索行', en: 'Search rows' },
   'dbembed.openAsPage': { zh: '在新标签打开为页面', en: 'Open as a page in a new tab' },
@@ -141,7 +147,7 @@ registerMessages({
   'dbembed.dragRowBlocked': { zh: '有排序/筛选/搜索/分组/层级时不能手动调顺序 —— 先清掉', en: 'Manual ordering is off while sorting, filtering, search, grouping or hierarchy is on — clear them first' },
   'dbembed.colMenuHint': { zh: '{type} · 点击打开列菜单 · 拖拽调整列顺序', en: '{type} · click to open the column menu · drag to reorder columns' },
   'dbembed.colMenuHintFixed': { zh: '{type} · 点击打开列菜单(首列是标题列,位置固定)', en: '{type} · click to open the column menu (the first column is the title column and stays put)' },
-  'dbembed.resizeHint': { zh: '拖拽调整列宽 · 双击恢复弹性', en: 'Drag to resize · double-click for flexible width' },
+  'dbembed.resizeHint': { zh: '拖拽切换到手动列宽 · 双击恢复自适应', en: 'Drag to use manual widths · double-click to restore auto-size' },
   'dbembed.statTitle': { zh: '页脚统计(本视图,基于筛选后的行)', en: 'Footer summary (this view, over the filtered rows)' },
   'dbembed.stat': { zh: '统计', en: 'Summary' },
   'dbembed.statSec': { zh: '页脚统计 · {col}', en: 'Footer summary · {col}' },
@@ -423,7 +429,7 @@ function PopLayer({ children }: { children: ReactNode }): ReactNode {
 }
 
 interface Pop {
-  kind: 'options' | 'colmenu' | 'folder' | 'viewmenu' | 'addview' | 'row' | 'filters' | 'stat' | 'calendar'
+  kind: 'options' | 'colmenu' | 'folder' | 'viewmenu' | 'addview' | 'row' | 'filters' | 'stat' | 'calendar' | 'groups'
   colId?: string
   rowId?: string
   viewId?: string
@@ -669,13 +675,14 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   // 层级树(2.9):view.treeCol 指本表的自指关联列时,表格体按父子缩进渲染。判据单源在 rowLink.resolveTreeCol
   // (列还在且仍是 rowlink+refDb 指回本表);按 db.columns 解析而不是 visCols —— 把父列隐藏只看缩进是常见用法。
   const treeCol = isTableLike ? resolveTreeCol(db.columns, view.treeCol, [dbPath, dbRef]) : null
-  // 表格分组(2.8):view.groupBy 在表格视图也生效(单选列;2.9 起放开到日期列,档位见 view.groupUnit)。
+  // 表格按属性值分组；支持的基类见 groupRows.ts，日期档位见 view.groupUnit。
   // ⚠️ 与层级树**互斥,树优先**:树序是全表一条链,再切成组只会让父子跨组分离(父在别组 = 孤儿 = 整表退平铺,
   //    白开一场)。菜单里分组区在开了树时灰掉并写明理由。
+  const groupKind = (c: DbColumn): string => isDateish(c) ? 'date' : resolveBaseType(c.type)
+  const groupColumns = db.columns.filter((c) => c.id !== '__actions' && !['rowlink', 'lookup', 'file'].includes(c.type) && GROUP_TYPES.has(groupKind(c)))
   const tableGroupCol = isTableLike && view.groupBy && !treeCol
-    ? (db.columns.find((c) => c.id === view.groupBy && (resolveBaseType(c.type) === 'select' || isDateish(c))) ?? null)
+    ? (groupColumns.find((c) => c.id === view.groupBy) ?? null)
     : null
-  const groupUnit: DateGroupUnit = dateGroupUnitOf(view.groupUnit)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   // ponytail: 树节点折叠态只存内存(与分组折叠同款),**不落盘** —— 它是「我现在想看哪块」的临时视线,
   // 不是视图配置;落盘会让同一视图的多处嵌入/多标签互相抢折叠状态。键带 view.id:切视图自动复位。
@@ -1041,6 +1048,14 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     // eslint-disable-next-line react-hooks/exhaustive-deps -- kindOf/rowTitle 只依赖 db.columns,targetOf 只依赖 refPaths/refDbs(都已在列)
   }, [compRows, db.columns, sorts, view.filters, view.filterMode, q, refDbs, refPaths])
 
+  const tableGroups = tableGroupCol ? groupRows(rows, tableGroupCol, groupKind(tableGroupCol), view, compRows) : []
+  const shownGroups = visibleGroups(tableGroups, view)
+  // Hidden groups are excluded from counts, statistics and export; collapsed groups remain included.
+  const displayRows = tableGroupCol ? [...new Map(shownGroups.flatMap((g) => g.rows).map((r) => [r.id, r])).values()] : rows
+  const groupLabel = (g: RowGroup): string => g.value === null ? t('dbgroup.empty')
+    : typeof g.value === 'boolean' ? t(g.value ? 'dbgroup.checked' : 'dbgroup.unchecked')
+    : tableGroupCol?.optionLabels?.[String(g.value)] ?? String(g.value)
+
   /** 层级树摊平(纯逻辑 db/tree.ts;喂的是筛选 + 排序**之后**的 rows —— 所以用户排序只在兄弟节点之间生效)。
    *  环 / 超深 / 重复行 id → tree.flat=true,渲染自动回到平铺,一行不少。
    *  **孤儿(父被筛/搜没了)当根**,树照渲(裁决理由见 tree.ts 文件头);数量经 data-orphans 出到 DOM 上
@@ -1085,6 +1100,76 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     void renameDb(path, name).catch((e: unknown) => window.alert(t('dbembed.renameFail', { msg: e instanceof Error ? e.message : String(e) })))
   }
 
+  /** 自适应宽只保护表头与主内容。这里刻意不读取 meta.sub：第二行说明可以省略号，不能反客为主撑宽整列。 */
+  const autoWidths = useMemo(() => {
+    const depthByRow = new Map((treeNodes ?? []).map((node) => [node.row.id, node.depth]))
+    return autoColumnWidths(db.columns, rows, (row, col): AutoWidthSample => {
+      const meta = cellMeta?.[row.id]?.[col.id]
+      const common = {
+        mono: !!meta?.mono,
+        avatar: !!meta?.avatar,
+        dot: !!meta?.dot,
+        leading: col.id === identityId && treeNodes ? (depthByRow.get(row.id) ?? 0) * 14 + 20 : 0,
+      }
+      if (col.id === ACTIONS_COL_ID) {
+        return { ...common, kind: 'actions', pieces: (meta?.actions ?? []).map((action) => action.label) }
+      }
+      const base = resolveBaseType(col.type)
+      const raw = row.cells[col.id]
+      const value = coerceForDisplay(raw, base)
+      if (base === 'checkbox') return { ...common, kind: 'checkbox' }
+      if (base === 'select') {
+        const text = meta?.text !== undefined ? String(meta.text) : String(value ?? '')
+        return { ...common, kind: 'chips', pieces: text ? [text] : [] }
+      }
+      if (meta?.text !== undefined) return { ...common, text: String(meta.text) }
+      if (col.type === 'rowlink' || isLinksProjection(col)) {
+        const target = targetOf(col)
+        const pieces = rowLinkIds(raw).map((id) => {
+          const hit = target?.db.rows.find((targetRow) => targetRow.id === id)
+          return hit && target ? linkLabel(target.db, hit, col.titleCol) : id
+        })
+        return { ...common, kind: 'chips', pieces }
+      }
+      if (col.type === 'file') {
+        return { ...common, text: fileRefs(raw).map((ref) => ref.replace(/\\/g, '/').split('/').pop() || ref).join(', ') }
+      }
+      if (isComputed(col.type)) {
+        const text = raw == null ? '' : Array.isArray(raw) ? raw.join(', ')
+          : typeof raw === 'boolean' ? (raw ? '✓' : '✗')
+          : typeof raw === 'number' ? formatNumber(raw, col) : String(raw)
+        return { ...common, text }
+      }
+      if (base === 'number') {
+        const number = value as number | null
+        const plain = col.precision == null && !col.unitPrefix && !col.unitSuffix
+        return { ...common, text: number === null ? '' : plain ? number.toLocaleString() : formatNumber(number, col) }
+      }
+      if (base === 'multiselect') return { ...common, kind: 'chips', pieces: value as string[] }
+      if (base === 'date') {
+        const text = meta?.format ? fmtMetaDate(raw, meta.format)
+          : col.type === 'calendarDate' ? fmtCalDateL(parseCalDate(typeof raw === 'string' ? raw : ''))
+          : String(value ?? '')
+        return { ...common, text }
+      }
+      return { ...common, text: Array.isArray(value) ? value.join(', ') : String(value ?? '') }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- targetOf 只依赖 refPaths/refDbs；其余格式化函数是模块级纯函数
+  }, [db.columns, rows, cellMeta, identityId, treeNodes, refDbs, refPaths])
+  /** 缺省即开启，让既有 .db 与插件内存表无需迁移就修正旧的等分列宽。 */
+  const autoSize = view.autoSize !== false
+
+  /** 切到手动模式时把当前观感复制进本视图 widths：不会瞬间跳回旧宽，也不改其他视图的全局列宽。 */
+  const setAutoSizing = (on: boolean): void => {
+    if (on) { patchView(view.id, { autoSize: true }); return }
+    m((d) => ({
+      ...d,
+      views: viewsOf(d).map((candidate) => candidate.id === view.id
+        ? { ...candidate, autoSize: false, widths: { ...autoWidths } }
+        : candidate),
+    }))
+  }
+
   /** 本视图对某列生效的落盘宽:视图带 widths 时**只**看视图(没条目 = 弹性,不回落全局),否则看 column.width。 */
   const widthOf = (c: DbColumn): number | undefined => (view.widths ? view.widths[c.id] : c.width)
   /** 落盘一列宽(undefined = 恢复弹性):当前视图有 widths 写视图,否则写全局 column.width(现状)。
@@ -1119,8 +1204,9 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const startResize = (e: ReactPointerEvent, col: DbColumn): void => {
     e.preventDefault()
     const grip = e.currentTarget as HTMLElement
-    // 起点宽:优先已落盘宽,弹性列量 DOM 实际宽 → 首次拖拽从当前观感起步不跳变。
-    const startW = liveWidths[col.id] ?? widthOf(col) ?? (grip.parentElement?.getBoundingClientRect().width || 140)
+    // 起点宽:自适应态取当前计算宽；首次拖拽同时切到手动并把全列宽复制进本视图，观感不跳。
+    const startW = liveWidths[col.id] ?? (autoSize ? autoWidths[col.id] : widthOf(col)) ?? (grip.parentElement?.getBoundingClientRect().width || 140)
+    if (autoSize) setAutoSizing(false)
     const startX = e.clientX
     grip.setPointerCapture(e.pointerId)
     grip.setAttribute('data-active', '')
@@ -1141,9 +1227,9 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     grip.addEventListener('pointerup', onUp)
   }
 
-  // 拖过的列固定 px(clamp 100~800),没拖过的保持 minmax 弹性 —— 两者可混排。
+  // 自适应态每列都是按主内容算出的固定 px；手动态沿用旧契约（已拖 px，没拖 minmax 弹性）。
   const colW = (c: DbColumn): string => {
-    const w = liveWidths[c.id] ?? widthOf(c)
+    const w = liveWidths[c.id] ?? (autoSize ? autoWidths[c.id] : widthOf(c))
     return w === undefined ? 'minmax(140px, 1fr)' : `${clampW(w)}px`
   }
   const gridCols = `28px ${visCols.map(colW).join(' ')} 36px`
@@ -1174,7 +1260,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
             <FolderIcon /> {noteFolder || t('dbembed.wholeVault')}
           </button>
         )}
-        <span className="amx-db-count">{t('dbembed.rowCount', { n: rows.length })}</span>
+        <span className="amx-db-count">{t('dbembed.rowCount', { n: displayRows.length })}</span>
       </div>
       )}
 
@@ -1202,6 +1288,10 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           </button>
         )}
         <span className="amx-db-viewbar-sp" />
+        {isTableLike && <button className="amx-db-filterbtn amx-db-groupbtn" data-on={!!tableGroupCol || undefined}
+          aria-label={t('dbgroup.title')} onClick={(e) => openPop(e, { kind: 'groups' })}>
+          <Columns3 size={14} />{t('dbgroup.title')}{tableGroupCol ? ` · ${tableGroupCol.name}` : ''}
+        </button>}
         <button
           className="amx-db-filterbtn"
           data-on={(view.filters?.length ?? 0) > 0 || undefined}
@@ -1211,7 +1301,19 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           <FilterIcon />
           {t('dbembed.filter')}{(view.filters?.length ?? 0) > 0 && ` ${view.filters!.length}`}
         </button>
-        <input className="amx-db-search" placeholder={t('dbembed.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('dbembed.searchRows')} />
+        {isTableLike && (
+          <button
+            className="amx-db-filterbtn amx-db-autosize"
+            data-on={autoSize || undefined}
+            aria-pressed={autoSize}
+            onClick={() => setAutoSizing(!autoSize)}
+            title={t(autoSize ? 'dbembed.autoSizeOn' : 'dbembed.autoSizeOff')}
+          >
+            <Columns3 size={14} />
+            {t('dbembed.autoSize')}
+          </button>
+        )}
+        <TableSearch value={q} onChange={setQ} />
         {/* 内存源没有 dbPath 可开;插件面板里这颗按钮也只会把用户弹去别处 */}
         {!memory && !hideHead && (
           <button className="amx-db-iconbtn" onClick={() => openDb(dbPath)} title={t('dbembed.openAsPage')} aria-label="open as page"><ExternalLink size={15} /></button>
@@ -1221,9 +1323,9 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         {csvExportMode() !== 'off' && (
           <button
             className="amx-db-iconbtn"
-            onClick={() => void exportCsvFile(db.name, buildDbCsv(visCols, rows, { targetDb: refDbByPath }))
+            onClick={() => void exportCsvFile(db.name, buildDbCsv(visCols, displayRows, { targetDb: refDbByPath }))
               .catch((e: unknown) => window.alert(t('dbembed.exportFail', { msg: e instanceof Error ? e.message : String(e) })))}
-            title={t('dbembed.exportCsv', { cols: visCols.length, rows: rows.length })}
+            title={t('dbembed.exportCsv', { cols: visCols.length, rows: displayRows.length })}
             aria-label="export csv"
           ><Download size={15} /></button>
         )}
@@ -1315,7 +1417,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                   <div
                     className="amx-db-resize"
                     onPointerDown={(e) => startResize(e, col)}
-                    onDoubleClick={() => setColWidth(col.id, undefined)}
+                    onDoubleClick={() => setAutoSizing(true)}
                     title={t('dbembed.resizeHint')}
                   />
                 </div>
@@ -1434,34 +1536,12 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                 </>
               )
             }
-            // 分组渲染。两种键源:① 单选列 —— 泳道语义与看板一致(选项序 + 未分组兜底,空组照样出现);
-            // ② 日期列(2.9)—— 键 = 落盘串前 10/7 位(纯逻辑 db/groupDate.ts,不做时区换算),按键升序、
-            //    未设置恒最后、空组不凭空造。折叠态两者共用 collapsedGroups,仅本嵌入局部。
-            const isDateGroup = isDateish(tableGroupCol)
-            const opts = tableGroupCol.options ?? []
-            const groups: Array<{ key: string; label: ReactNode; rows: DbRow[]; add?: Record<string, CellValue> }> = isDateGroup
-              ? groupRowsByDate(rows, tableGroupCol.id, groupUnit).map((g) => ({
-                key: g.key || '__none',
-                label: g.key
-                  ? <span className={`amx-db-chip ${chipClass(g.key)}`}>{g.key}</span>
-                  : <span className="amx-db-lane-none">{t('dbembed.groupNone')}</span>,
-                rows: g.rows,
-                // 组内新建行预填该组的日期:只有日档的键(YYYY-MM-DD)是合法日期值;月档的 YYYY-MM 不是,
-                // 盖章列(created)更是写了也会被 addRow 压掉 —— 两种情形都不预填。
-                add: g.key && groupUnit === 'day' && tableGroupCol.type !== 'created' ? { [tableGroupCol.id]: g.key } : undefined,
-              }))
-              : [...opts, null].map((opt) => ({
-                key: opt ?? '__none',
-                label: opt ? <span className={`amx-db-chip ${chipClass(opt)}`}>{opt}</span> : <span className="amx-db-lane-none">{t('dbembed.laneNone')}</span>,
-                rows: rows.filter((r) => {
-                  const v = coerceForDisplay(r.cells[tableGroupCol.id], 'select') as string
-                  return opt === null ? !v || !opts.includes(v) : v === opt
-                }),
-                add: opt ? { [tableGroupCol.id]: opt } : undefined,
-              }))
-            return groups.map((g) => {
-              const gKey = `${view.id}|${g.key}`
+            return shownGroups.map((g) => {
+              const gKey = `${view.id}|${tableGroupCol.id}|${g.key}`
               const collapsed = collapsedGroups.has(gKey)
+              const kind = groupKind(tableGroupCol)
+              const canPrefill = tableGroupCol.type !== 'created' && !(kind === 'date' && view.groupUnit === 'month')
+              const add = canPrefill ? { [tableGroupCol.id]: kind === 'multiselect' ? (g.value == null ? [] : [String(g.value)]) : g.value } : undefined
               return (
                 <div key={gKey} className="amx-db-group" data-group={g.key}>
                   <button
@@ -1475,12 +1555,12 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                     aria-expanded={!collapsed}
                   >
                     <span className="amx-db-groupcaret" data-open={!collapsed || undefined}>▸</span>
-                    {g.label}
+                    <span className={g.value === null ? 'amx-db-lane-none' : `amx-db-chip ${chipClass(groupLabel(g))}`}>{groupLabel(g)}</span>
                     <span className="amx-db-lane-count">{g.rows.length}</span>
                   </button>
                   {!collapsed && g.rows.map((r) => renderRow(r))}
                   {!collapsed && !readOnly && (
-                    <button className="amx-db-addrow" onClick={() => addRow(g.add)}>{t('dbembed.addRow')}</button>
+                    <button className="amx-db-addrow" onClick={() => addRow(add)}>{t('dbembed.addRow')}</button>
                   )}
                 </div>
               )
@@ -1500,7 +1580,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                   onClick={(e) => openPop(e, { kind: 'stat', colId: col.id })}
                   title={t('dbembed.statTitle')}
                 >
-                  {stat ? `${STAT_LABEL[stat] ?? stat} ${computeStat(rows, col.id, kind, stat)}` : t('dbembed.stat')}
+                  {stat ? `${STAT_LABEL[stat] ?? stat} ${computeStat(displayRows, col.id, kind, stat)}` : t('dbembed.stat')}
                 </button>
               )
             })}
@@ -1562,6 +1642,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
             }}
             onToggleOwnCols={() => toggleOwnCols(popView.id)}
             onOpenFilters={() => setPop({ kind: 'filters', x: pop.x, y: pop.y })}
+            onOpenGroups={() => { pickView(popView); setPop({ kind: 'groups', x: pop.x, y: pop.y }) }}
             onOpenCalendar={() => setPop({ kind: 'calendar', x: pop.x, y: pop.y })}
             calendarActive={!!memberOf(vault, calByVault, dbPath)}
             readOnly={readOnly}
@@ -1569,6 +1650,14 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           />
         </PopShell>
       )}
+      {pop?.kind === 'groups' && <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
+        <GroupMenu columns={groupColumns} view={view} groups={tableGroups} labelOf={groupLabel} blocked={!!treeCol} dateGroup={!!tableGroupCol && isDateish(tableGroupCol)}
+          onPatch={(patch) => patchView(view.id, patch)} onCollapse={(collapse) => setCollapsedGroups((prev) => {
+            const next = new Set(prev)
+            for (const g of tableGroups) { const key = `${view.id}|${tableGroupCol?.id}|${g.key}`; if (collapse) next.add(key); else next.delete(key) }
+            return next
+          })} />
+      </PopShell>}
       {pop && pop.kind === 'calendar' && (
         <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <MemberColPicker
@@ -2847,7 +2936,7 @@ function OptionsPop({ x, y, col, row, setCell, createOption, onClose }: {
 }
 
 /** 视图 tab 菜单:改名 + 按类型的配置(看板/表格分组列/日历日期列)+ 列显隐 + 多列排序 + 删除。 */
-function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, onClearSorts, onRename, onPatch, onPickGroupBy, onPickDateCol, onToggleHidden, onToggleOwnCols, onOpenFilters, onOpenCalendar, calendarActive, readOnly, onDelete }: {
+function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, onClearSorts, onRename, onPatch, onPickGroupBy, onPickDateCol, onToggleHidden, onToggleOwnCols, onOpenFilters, onOpenGroups, onOpenCalendar, calendarActive, readOnly, onDelete }: {
   view: DbView
   columns: DbColumn[]
   sorts: Array<{ colId: string; dir: 'asc' | 'desc' }>
@@ -2866,6 +2955,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
   /** 「本视图独立列序/列宽」开关(开 = 拷全局序/宽进视图;关 = 清掉 order/widths)。 */
   onToggleOwnCols: () => void
   onOpenFilters: () => void
+  onOpenGroups: () => void
   onOpenCalendar: () => void
   calendarActive: boolean
   /** 只读表:砍改名 / 「本视图独立列序」/「加入日历」/ 删除;分组、隐藏列、排序、筛选照留(纯视图态)。 */
@@ -2910,8 +3000,6 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
       )}
       {!['kanban', 'calendar', 'gallery', 'chart', 'form', 'gantt'].includes(view.type) && (() => {
         const tCols = treeCols ?? []
-        const groupCands = [...selectCols, ...dateCols]
-        const groupIsDate = dateCols.some((c) => c.id === view.groupBy)
         // 树与分组互斥、树优先(渲染端同一条);这里只把分组区灰掉并写清理由,**不悄悄清掉 groupBy** ——
         // 关掉层级后用户原来的分组该原样回来。
         const treeOn = !!view.treeCol && tCols.some((c) => c.id === view.treeCol)
@@ -2923,23 +3011,9 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
               <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPatch({ treeCol: undefined })}>{t('dbembed.treeOff')}</button>
             )}
             <div className="amx-db-pop-sec">{treeOn ? t('dbembed.groupSecBlocked') : t('dbembed.groupSec')}</div>
-            {pickList(groupCands, view.groupBy, onPickGroupBy, t('dbembed.noGroupCol'), treeOn)}
+            <button className="amx-db-opt" disabled={treeOn} onClick={onOpenGroups}>{t('dbgroup.by')}<span className="amx-db-opt-check">›</span></button>
             {view.groupBy && !treeOn && (
               <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPatch({ groupBy: undefined })}>{t('dbembed.groupOff')}</button>
-            )}
-            {groupIsDate && !treeOn && (
-              <>
-                <div className="amx-db-pop-sec">{t('dbembed.groupUnitSec')}</div>
-                <div className="amx-db-pop-list amx-db-pop-row">
-                  {(['day', 'month'] as const).map((u) => (
-                    <button key={u} className="amx-db-opt" data-groupunit={u} data-dim={dateGroupUnitOf(view.groupUnit) !== u || undefined}
-                      onClick={() => onPatch({ groupUnit: u === 'day' ? undefined : u })}>
-                      {u === 'day' ? t('dbembed.byDay') : t('dbembed.byMonth')}
-                      {dateGroupUnitOf(view.groupUnit) === u && <span className="amx-db-opt-check">✓</span>}
-                    </button>
-                  ))}
-                </div>
-              </>
             )}
           </>
         )

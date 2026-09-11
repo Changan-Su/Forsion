@@ -858,7 +858,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
   const vaultRoot = scoped.getState().vaultRoot
-  const mode = useUiOverlay((s) => s.editorMode)
+  // 源码模式是全局开关(`</>`):只读实例(分享页 / 收件箱消息 / 库外预览)一律钉在所见即所得 —— 源码 textarea 可编辑但
+  // 什么也不会落盘,切走即丢,等于假编辑(Codex 09-11 P1)。
+  const globalMode = useUiOverlay((s) => s.editorMode)
+  const mode = readOnly ? 'wysiwyg' : globalMode
   const { t } = useI18n()
 
   const pipeRef = useRef<Pipe | null>(null)

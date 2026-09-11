@@ -17,7 +17,7 @@ import { withDbLock } from './fs/dbLock'
 import { writeVaultText } from './fs/pageWrite'
 import { findMarkLine } from '@amadeus-shared/mdMarks'
 import { cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
-import { defaultWorkspaceDir, forsionHomeDir } from '../forsionHome'
+import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHome'
 import { builtinPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
@@ -1588,9 +1588,80 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       : undefined
   }
 
+  /** Agent 自建 Space 插件(2026-09-11):`<tanguDataDir>/agents/<slug>/Space/{manifest.json,main.js}` 当外置插件装载。
+   *  · id 固定 `agent-<slug>`(manifest 写什么都不认,防顶掉真插件;主根同 id 先扫先赢);
+   *  · capabilities / fileExtensions / requiresApp / onboarding / events / bundle 一律不带 —— 没有「用户点安装」这一步授权,
+   *    引擎也只认一个 bundle 根(子目录放了也不生效);不可卸载,想不用关开关;
+   *  · 目录空 / 无 Space → 不列;有 main.js 但 manifest 缺失或坏 → 列出为 blocked:'invalid' 带原因,让桌面把失败回写给 agent
+   *    (agentSpaceSync),而不是静默消失。只有桌面 IPC 路径带它(unit 设备页不带:Space 主槽在桌面)。 */
+  const readAgentSpacePlugins = async (seen: Set<string>): Promise<ExternalPluginSource[]> => {
+    const out: ExternalPluginSource[] = []
+    const root = path.join(tanguDataDir(), 'agents')
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fs.readdir(root, { withFileTypes: true })
+    } catch {
+      return out
+    }
+    type SpaceManifest = { name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown; main?: unknown; apiVersion?: unknown; minAppVersion?: unknown }
+    for (const e of entries) {
+      if (!e.isDirectory() || !/^[a-z0-9][a-z0-9-]{0,40}$/.test(e.name)) continue
+      const id = `agent-${e.name}`
+      if (seen.has(id)) continue
+      const sdir = path.join(root, e.name, 'Space')
+      let m: SpaceManifest | null = null
+      let invalid = ''
+      try {
+        const parsed: unknown = JSON.parse(await fs.readFile(path.join(sdir, 'manifest.json'), 'utf8'))
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) invalid = 'manifest.json must be a JSON object'
+        else m = parsed as SpaceManifest
+      } catch (err) {
+        try { await fs.access(path.join(sdir, 'main.js')) } catch { continue } // 没有 Space(目录空)→ 不列
+        invalid = `manifest.json missing or unparsable: ${err instanceof Error ? err.message : String(err)}`
+      }
+      const str = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined)
+      const blocked = invalid ? 'invalid' : gatePluginManifest({ apiVersion: m?.apiVersion, minAppVersion: m?.minAppVersion }, app.getVersion())
+      let code = ''
+      if (!blocked) {
+        const mainName = str(m?.main, 120)
+        const rel = mainName && !mainName.includes('..') && !path.isAbsolute(mainName) ? mainName : 'main.js'
+        try {
+          code = await fs.readFile(path.join(sdir, rel), 'utf8')
+        } catch (err) {
+          invalid = `${rel} unreadable: ${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+      const [readme, changelog, iconUrl] = await Promise.all([
+        fs.readFile(path.join(sdir, 'README.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
+        fs.readFile(path.join(sdir, 'CHANGELOG.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
+        readPluginIconDataUrl(sdir),
+      ])
+      seen.add(id)
+      out.push({
+        id,
+        name: str(m?.name, 120) || `${e.name} Space`,
+        version: str(m?.version, 40) || '0.0.0',
+        description: str(m?.description, 2000),
+        nameEn: str(m?.nameEn, 120),
+        descriptionEn: str(m?.descriptionEn, 2000),
+        iconUrl,
+        code: invalid ? '' : code,
+        apiVersion: typeof m?.apiVersion === 'number' ? m.apiVersion : 1,
+        minAppVersion: str(m?.minAppVersion, 40),
+        readme,
+        changelog,
+        blocked: invalid ? 'invalid' : blocked ?? undefined,
+        blockedReason: invalid || undefined,
+        agent: e.name,
+      })
+    }
+    return out
+  }
+
   /** 外置插件全量读取(manifest 门禁 + bundle 收集 + 代码/文档)。IPC listPlugins 与
-   *  unitHost 的 /__unit/plugins 自服面共用 —— 设备互联把同一份插件面分发给远端渲染器。 */
-  const readExternalPlugins = async (): Promise<ExternalPluginSource[]> => {
+   *  unitHost 的 /__unit/plugins 自服面共用 —— 设备互联把同一份插件面分发给远端渲染器。
+   *  opts.agents:附带 agent 自建 Space 插件(只有桌面 IPC 传 true)。 */
+  const readExternalPlugins = async (opts: { agents?: boolean } = {}): Promise<ExternalPluginSource[]> => {
     const seen = new Set<string>()
     const out: ExternalPluginSource[] = []
     let entries: import('node:fs').Dirent[]
@@ -1680,9 +1751,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     // 主进程 listPages 排除的扩展名 → 用独立的 manifest 预扫(不依赖各插件 main.js 是否可读,Codex #3),
     // 而非从 out 派生。按 manifest 声明豁免(与启用态无关):禁用/坏掉的插件也不能让其文件掉回笔记被 compiler 改写=毁档。
     vault.setPluginFileExtensions(collectPluginExts())
+    if (opts.agents) out.push(...(await readAgentSpacePlugins(seen))) // 主根之后:同 id 主根先赢
     return out
   }
-  handle(IPC.listPlugins, () => readExternalPlugins())
+  handle(IPC.listPlugins, () => readExternalPlugins({ agents: true }))
 
   handle(IPC.openPluginsFolder, async () => {
     const dir = globalPluginsDir()

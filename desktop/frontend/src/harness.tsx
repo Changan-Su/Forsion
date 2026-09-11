@@ -1088,7 +1088,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   skin.appendChild(host)
   rootEl.appendChild(skin)
   const ROWS: TableSpec['rows'] = [
-    { id: 'm1', cells: { name: { text: 'DeepSeek-V4-Pro', sub: 'deepseek/v4-pro', avatar: { letter: 'D', attrs: { 'data-hook': 'fb-avatar' } } }, calls: { text: '58.5 万', sortValue: 585000 }, day: '2026-09-05', state: 'on', pub: true, site: { text: 'deepseek.com', href: 'https://deepseek.com' } } },
+    { id: 'm1', cells: { name: { text: 'DeepSeek-V4-Pro', sub: 'deepseek/v4-pro · intentionally very long secondary description that must not size the column', avatar: { letter: 'D', attrs: { 'data-hook': 'fb-avatar' } } }, calls: { text: '58.5 万', sortValue: 585000 }, day: '2026-09-05', state: 'on', pub: true, site: { text: 'deepseek.com', href: 'https://deepseek.com' } } },
     { id: 'm2', cells: { name: { text: 'Qwen3-Max', sub: 'qwen/qwen3-max', dot: 'green' }, calls: { text: '9', sortValue: 9 }, day: '2026-09-01', state: 'off', pub: false, site: null } },
     { id: 'm3', cells: { name: { text: 'moon/shot 1', mono: true, title: '带斜杠的 id' }, calls: { text: '1.2 万', sortValue: 12000 }, day: '2026-08-20', state: 'on', pub: true, site: null } },
     { id: 'm4', cells: { name: 'Claude-Fable', calls: { text: '77', sortValue: 77 }, day: '2026-08-11', state: { value: 'off' }, pub: false, site: null } },
@@ -1105,6 +1105,7 @@ if (new URLSearchParams(location.search).has('dock')) {
   })
   const specOf = (n: number): TableSpec => ({
     id: 'models',
+    ...(new URLSearchParams(location.search).has('tablegroup') ? { groupBy: { key: 'state', sort: 'manual' as const, order: ['off', 'on'], hideEmpty: true } } : {}),
     columns: [
       { key: 'name', label: '模型', kind: 'text', width: 200 },
       { key: 'calls', label: '调用', kind: 'number' },

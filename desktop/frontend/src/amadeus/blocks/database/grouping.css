@@ -1,0 +1,19 @@
+.amx-db-group-menu { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px; color: var(--text); }
+.amx-db-group-menu > strong { display: block; padding: 4px 6px 10px; font-size: 13px; }
+.amx-db-group-setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px; font-size: 12px; }
+.amx-db-group-setting select { min-width: 0; max-width: 150px; padding: 5px 7px; font: inherit; color: var(--text); background: var(--overlay-light); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
+.amx-db-group-setting input { flex: none; }
+.amx-db-group-bulk { display: flex; gap: 8px; padding: 8px 6px; border-top: var(--border-width) solid var(--border); margin-top: 4px; }
+.amx-db-group-bulk button { flex: 1; padding: 5px; color: var(--text-muted); background: var(--overlay-light); border: 0; border-radius: var(--radius-sm); font: inherit; font-size: 11px; cursor: pointer; }
+.amx-db-group-options { max-height: 240px; overflow: auto; }
+.amx-db-group-option { display: flex; align-items: center; gap: 5px; min-height: 30px; padding: 3px 5px; border-radius: var(--radius-sm); font-size: 12px; }
+.amx-db-group-option:hover { background: var(--overlay-light); }
+.amx-db-group-option > svg { flex: none; color: var(--text-faint); cursor: grab; }
+.amx-db-group-option-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-db-group-option[data-hidden] .amx-db-group-option-name { color: var(--text-faint); }
+.amx-db-group-option small { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.amx-db-group-option button { display: flex; align-items: center; justify-content: center; width: 23px; height: 24px; padding: 0; color: var(--text-muted); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
+.amx-db-group-option button:hover { background: var(--overlay-light); color: var(--text); }
+.amx-db-group-option button:disabled { opacity: .25; cursor: default; }
+.amx-db-group + .amx-db-group { margin-top: 12px; }
+.amx-db-grouphead .amx-db-lane-count { margin-left: 2px; }

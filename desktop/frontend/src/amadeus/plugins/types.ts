@@ -448,6 +448,9 @@ export interface ListItem {
    *  and the host falls back to `icon` if it fails to load. Older hosts ignore the field
    *  and just render `icon`, so always set both. */
   iconUrl?: string
+  /** Show the shared unread dot on the leading icon — the same marker unread chat sessions get
+   *  (2026-09-11+, added when the built-in inbox moved into the workspace sidebar). Older hosts ignore it. */
+  unread?: boolean
 }
 
 /** A selectable filter row (≈ a folder). The host owns which one is active and passes the
@@ -869,9 +872,11 @@ export interface TableSpec {
   error?: string
   /** 高亮行 id。 */
   selectedId?: string | null
-  /** 逐行操作按钮 → 渲染成尾列(表头 = `actionsLabel`,可为空串)。 */
+  /** 逐行操作按钮；默认尾列，actionsAfter 可指定插入位置。 */
   actions?: (row: TableRow) => TableAction[]
   actionsLabel?: string
+  /** Insert the actions column after this data-column key. The identity column stays first. */
+  actionsAfter?: string
   /** 挂到行元素上的附加属性(如 `{ 'data-act': 'open-user' }`),让插件既有的事件委托继续生效。 */
   rowAttrs?: (row: TableRow) => Record<string, string>
   /** 行点击 / Enter(点在按钮、链接、输入控件上时不触发)。用事件委托的面板可以不给。 */
@@ -881,6 +886,9 @@ export interface TableSpec {
   onRender?: (root: HTMLElement) => void
   /** 初始排序(仅首次生效;之后用户在表头改的排序由表自己记,`update()` 不会把它冲掉)。 */
   sort?: { key: string; dir: 'asc' | 'desc' } | null
+  /** Initial table grouping. `order` contains property values, not display labels.
+   * User view changes survive update(); grouping never edits the plugin's rows. */
+  groupBy?: { key: string; sort?: 'manual' | 'asc' | 'desc'; order?: string[]; hideEmpty?: boolean }
   /** 用户改排序时回调 —— 面板把它存进自己的状态,重渲染时姿态一致。 */
   onSort?: (s: { key: string; dir: 'asc' | 'desc' } | null) => void
 }
@@ -999,8 +1007,12 @@ export interface AmadeusPlugin {
   changelog?: string
   /** Declarative first-run setup card (manifest `onboarding`; sanitized by the host). */
   onboarding?: PluginOnboardingSpec
-  /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old. Never activated. */
-  blocked?: 'api' | 'minApp'
+  /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
+   *  'invalid' = agent-owned Space plugin with a missing/broken manifest (`blockedReason`). Never activated. */
+  blocked?: 'api' | 'minApp' | 'invalid'
+  blockedReason?: string
+  /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
+  agent?: string
   /** 捆绑包内嵌内容清单(引擎插件 id / agent / 技能 / Space;缺省 = 纯 UI 插件)。External plugins only. */
   bundle?: import('@amadeus-shared/ipc').PluginBundleInfo
   /** 插件声明会发的活动事件(manifest `events`,宿主已消毒)——自动化构建器事件目录用。External plugins only. */

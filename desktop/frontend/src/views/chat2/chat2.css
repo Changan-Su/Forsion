@@ -839,3 +839,47 @@
   100% { background: transparent; }
 }
 @media (prefers-reduced-motion: reduce) { .t2-jump-flash { animation: none; } }
+
+/* ====== 任务卡(```forsion-task:助手顺手发现的、不该塞进当前对话的活;落点三档) ====== */
+.t2-tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; max-width: 100%; }
+.t2-taskcard {
+  /* 卡面不描边(DESIGN.md 卡片描边纪律):靠 --bg-card 的层级差跟正文分开;透明边保住盒模型不跳。 */
+  border: var(--border-width, 1px) solid transparent;
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-card, transparent);
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  font-family: var(--font-ui); font-size: 12.5px; color: var(--text);
+}
+.t2-taskcard.done { opacity: .7; }
+.t2-taskcard-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.t2-taskcard-head > svg { color: var(--accent-ink); flex: none; }
+.t2-taskcard-head > b { font-weight: 600; overflow-wrap: anywhere; }
+.t2-taskcard-tag {
+  font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 999px;
+  background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text-muted);
+}
+.t2-taskcard-tldr { color: var(--text-muted); overflow-wrap: anywhere; }
+.t2-taskcard-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.t2-taskcard-actions > button {
+  border: var(--border-width, 1px) solid var(--border); border-radius: 999px; background: transparent; color: var(--text);
+  font-family: var(--font-ui); font-size: 12px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  transition: background var(--duration-fast, .15s);
+}
+.t2-taskcard-actions > button:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+.t2-taskcard-actions > button.primary { border-color: var(--accent-ink); color: var(--accent-ink); }
+.t2-taskcard-actions > button > svg { flex: none; }
+.t2-taskcard-done { color: var(--text-muted); font-size: 12px; }
+.t2-taskcard.busy .t2-taskcard-actions > button { opacity: .6; cursor: progress; }
+.t2-taskcard-toggle {
+  align-self: flex-start; border: none; background: transparent; padding: 0; cursor: pointer;
+  color: var(--text-muted); font-family: var(--font-ui); font-size: 12px; display: inline-flex; align-items: center; gap: 4px;
+}
+.t2-taskcard-toggle:hover { color: var(--text); }
+.t2-taskcard-prompt {
+  margin: 0; padding: 8px 10px; border-radius: var(--radius-sm, 8px);
+  background: var(--overlay-light, rgba(127,127,127,.08)); color: var(--text);
+  font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
+}
+

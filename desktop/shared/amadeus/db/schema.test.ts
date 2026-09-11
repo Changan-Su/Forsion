@@ -251,12 +251,12 @@ describe('db schema', () => {
     // gantt 缺 → 仍是合法视图(旧文件 / 渲染端缺省挑第一个 calendarDate 列)
     expect(parseDb(serializeDb({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'gantt' }] })).ok).toBe(true)
   })
-  it('views[].order / widths(每视图列序 / 列宽)往返无损;widths 只收正数;`{}` 是合法的开了没拖过态', () => {
+  it('views[].order / widths / autoSize(每视图列序 / 列宽 / 自适应开关)往返无损', () => {
     const db: DbFile = {
       ...SAMPLE,
       views: [
-        { id: 'v1', name: '表格', type: 'table', order: ['c7', 'c2', 'gone'], widths: { c2: 120, c7: 300.5 } },
-        { id: 'v2', name: '空开关', type: 'table', order: [], widths: {} },
+        { id: 'v1', name: '表格', type: 'table', order: ['c7', 'c2', 'gone'], widths: { c2: 120, c7: 300.5 }, autoSize: false },
+        { id: 'v2', name: '空开关', type: 'table', order: [], widths: {}, autoSize: true },
       ],
     }
     const r = parseDb(serializeDb(db))
@@ -265,15 +265,18 @@ describe('db schema', () => {
       // 逐字段点名:zod strip 漏一处时 toEqual 报「少了一个键」不如这里一眼看出是哪个
       expect(r.data.views?.[0].order).toEqual(['c7', 'c2', 'gone'])
       expect(r.data.views?.[0].widths).toEqual({ c2: 120, c7: 300.5 })
+      expect(r.data.views?.[0].autoSize).toBe(false)
       expect(r.data.views?.[1].order).toEqual([])
       expect(r.data.views?.[1].widths).toEqual({})
+      expect(r.data.views?.[1].autoSize).toBe(true)
       expect(serializeDb(r.data)).toBe(serializeDb(db))
     }
     // 负对照:非正宽 / order 不是字符串数组都是坏数据,不是被静默剥掉
     expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table', widths: { c2: 0 } }] })).ok).toBe(false)
     expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table', widths: { c2: -5 } }] })).ok).toBe(false)
     expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table', order: [1, 2] }] })).ok).toBe(false)
-    // 两字段缺 → 仍是合法视图(旧文件 / 未开独立列序的视图)
+    expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table', autoSize: 'yes' }] })).ok).toBe(false)
+    // 三字段缺 → 仍是合法视图(旧文件 / 未开独立列序的视图；渲染端把缺省 autoSize 当开启)
     expect(parseDb(serializeDb({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table' }] })).ok).toBe(true)
   })
 

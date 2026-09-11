@@ -15,13 +15,23 @@ import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { forwardInboxToChannels } from '../../channels/forward.js';
 
 const MAX_PER_HOUR = 20;
+/** Muse 的发信人 id(与 agent slug 同名)。它的消息缺省**不**转发到微信/TG/QQ(M12):后台产出可能一小时几条,
+ *  手机上全推就是打扰;只有 urgent 与日报走通道。 */
+export const MUSE_SENDER_ID = 'muse';
 
 export interface InboxSendResult { ok: boolean; error?: string }
 
-/** 投递内核:频控+落库+通道转发。senderId 缺省=默认 agent;自动化 notify 传 `automation:<ruleId>`。 */
+/** 投递内核:频控+落库+通道转发。senderId 缺省=默认 agent;自动化 notify 传 `automation:<ruleId>`。
+ *  forward 缺省 = 非 Muse 发信人都转发;urgent=true 强制转发。 */
+/** 转发到通道的裁决:urgent 强制转发(高于显式 forward:false,与注释一致 —— Codex 09-11 P2);
+ *  否则显式 forward 说了算;都没说 = 非 Muse 发信人转发。 */
+export function shouldForward(msg: { forward?: boolean; urgent?: boolean }, senderId: string): boolean {
+  return !!msg.urgent || (msg.forward ?? senderId !== MUSE_SENDER_ID);
+}
+
 export async function sendInboxMessage(
   userId: string,
-  msg: { title: string; body?: string; senderId?: string },
+  msg: { title: string; body?: string; senderId?: string; forward?: boolean; urgent?: boolean },
 ): Promise<InboxSendResult> {
   const title = String(msg.title || '').trim().slice(0, 200);
   if (!title) return { ok: false, error: 'Error: title 必填' };
@@ -42,8 +52,10 @@ export async function sendInboxMessage(
        VALUES (?, ?, ?, ?, 'agent', ?)`,
       [uuidv4(), userId, title, body, senderId],
     );
-    forwardInboxToChannels({ userId, title, body, senderKind: 'agent', senderId });
+    const forward = shouldForward(msg, senderId);
+    if (forward) forwardInboxToChannels({ userId, title, body, senderKind: 'agent', senderId });
     return { ok: true };
+
   } catch (e: any) {
     return { ok: false, error: `Error: ${e?.message || e}` };
   }
@@ -55,7 +67,9 @@ export const inboxSendProvider: ToolProvider = {
     {
       name: 'inbox_send',
       mode: 'both',
-      isEnabledFor: (profile) => !!profile.capabilities.hostExec, // 本地限定;云端 no-op 由此达成
+      // 本地限定(云端 no-op);Muse 不可见:它的出口是 add_muse_todo + 引擎侧回执/日报,直接发信会绕过 notify=digest(Codex 09-10 P2-10)。
+      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && !(ctx as any).muse,
+
       definition: {
         type: 'function',
         function: {
@@ -64,12 +78,15 @@ export const inboxSendProvider: ToolProvider = {
             "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, " +
             'or follow-ups the user should notice outside this conversation — not as a substitute for replying here. ' +
             'Delivery is immediate; for a future or recurring reminder, create an automation instead ' +
-            '(manage_automation with an at/every trigger and a notify action).',
+            '(manage_automation with an at/every trigger and a notify action). ' +
+            'The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), ' +
+            '`![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run ' +
+            '(same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.',
           parameters: {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'Concise message title shown in the inbox list' },
-              body: { type: 'string', description: 'Optional message body (plain text or simple markdown)' },
+              body: { type: 'string', description: 'Optional message body (markdown; rendered by the Amadeus note renderer, see above)' },
             },
             required: ['title'],
           },

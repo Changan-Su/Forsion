@@ -25,7 +25,7 @@ import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
 // 更要留着 —— 否则关掉期间被别人占了 id,重新启用时两份 Space 撞车。
-const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus', 'calendar'] as const
+const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus', 'calendar', 'muse'] as const
 /** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。 */
 const SPACE_ICONS: Record<string, LucideIcon> = {
   bot: Bot, inbox: Inbox, mail: Mail, 'notebook-text': NotebookText, 'book-open': BookOpen, briefcase: Briefcase,

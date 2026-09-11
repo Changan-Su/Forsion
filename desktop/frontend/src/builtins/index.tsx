@@ -20,6 +20,8 @@ import { useUnitRemote } from '../components/UnitSwitcher'
 import { windowKind } from '../windowKind'
 import { PluginLogo } from '../components/PluginLogo'
 import { calendarAvailable, installCalendarSpace, installCalendarViews, removeCalendarSpace } from './calendar'
+import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } from './muse'
+
 import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace } from './homepage'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
@@ -128,7 +130,18 @@ export const BUILTINS: BuiltinDef[] = [
     installSpace: installCalendarSpace,
     removeSpace: removeCalendarSpace,
   },
+  {
+    id: 'muse',
+    types: ['muse-library', 'muse-files', 'muse-panel'],
+    name: () => tr('space.muse'),
+    description: () => tr('muse.builtinDesc'),
+    available: museAvailable,
+    install: installMuseViews,
+    installSpace: installMuseSpace,
+    removeSpace: removeMuseSpace,
+  },
 ]
+
 
 /** 某内置插件当前开着吗(直读持久化开关):启动期 spaces.tsx 要在 store 建起来之前就问这一句。 */
 export const builtinEnabled = (id: string): boolean => readFlag(key(id))

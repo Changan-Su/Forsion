@@ -1,250 +1,150 @@
-/** 收件箱正文的只读块渲染器:按 Amadeus 顶层块切分(splitIntoBlocks),整块恰为 `![[...]]` 的走
- *  嵌入卡片(图片/数据库/画板/插件文件/文件/跨笔记引用,复用 Amadeus 叶子组件 + resolveEmbed),
- *  其余块仍走现成 <Markdown/>(gfm/math/高亮,与聊天一致)。嵌入必须包一层 .am-app tangu-lovable ——
- *  收件箱是独立 leaf,不在编辑器 .am-app 作用域内,而块样式(.embed-body/.md-block/.block-body)全挂在 .am-app 下。
- *  分类顺序与门禁与 BlockHost 一致(图片→db→画板→插件→文件→跨笔记),避免文件卡吃掉 db/画板/插件。 */
-import { Suspense, useEffect, useId, useMemo, useState } from 'react'
+/** 收件箱正文 = 真 Amadeus 只读页(2026-09-11,用户拍板「消息阅读」接入工作区形式):
+ *  `<UnifiedPage readOnly compact initial={text}>` 吃字符串,不经 pageStore / vault 桥(与 MuseLibraryView 同一条路);
+ *  于是笔记里有的它都有 —— 表格 / callout / 数学 / `![[…]]` 嵌入(图片、PDF、音视频、数据库、画板、跨笔记)/「按钮」块。
+ *  compact 去掉封面与属性面板;页面标题(=合成路径的 basename)由 inbox.css 隐掉,标题仍是阅读面板自己的 <h1>。
+ *  路径是合成的 `inbox/<id>.md`:库里不存在,挂载补读经桥返回 null 被忽略;readOnly 挡住所有写(与分享页同两道闸)。
+ *  旧版按块切分、`![[…]]` 走自家嵌入卡、其余走 react-markdown 的那套(含「网址一律书签卡、导图只给打开卡」的刻意分道)
+ *  整份退役 —— 阅读面板一次只显示一封,不再是流。已知缺口:思维导图 / 插件文件嵌入现在经 PluginEmbed 渲染在库外页上,未实测。
+ *
+ *  消息末尾的两种围栏摘出来单独渲染成卡(与聊天同一套解析 splitSuggestions,`kinds` 只认这两种):
+ *    ```forsion-task     任务卡(TaskCards;落点:新会话执行 / 交给 Muse / 忽略 —— 收件箱没有当前会话,不给「在此执行」)
+ *    ```forsion-approval 审批卡:只带 pending_approvals 行 id,工具 / 预览 / 理由按 id 从引擎读,**正文里的字一个不信**
+ *  **信任闸**:卡只对「本地引擎发来的 agent 消息」渲染;服务端广播 / 系统消息里的同名围栏一律按普通代码块显示 ——
+ *  防远端往用户面前放一个「执行」按钮。suggest 芯片不认(没处发),原样留在正文。
+ *  「按钮」块(forsion-button)无需闸:它只能引用本机已保存的手动自动化规则(见 ButtonBlock 头注),外来消息里的按钮找不到规则就是废按钮。 */
+import { Suspense, useEffect, useMemo, useState } from 'react'
+import { ShieldCheck, ShieldX } from 'lucide-react'
 import { lazyRetry } from '../../lazyRetry'
-import { splitIntoBlocks } from '@amadeus-shared/compiler/split'
-import { stripPageBasename } from '@amadeus-shared/compiler/names'
-import { toAssetUrl } from '@amadeus-shared/assets'
-import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
-import type { EmbedResolved } from '@amadeus-shared/ipc'
-import { amadeus } from '@amadeus/api'
-import { getBlockType } from '@amadeus/blocks/registry'
-import { DatabaseEmbed } from '@amadeus/blocks/database/DatabaseEmbed'
-import { ExcalidrawEmbed } from '@amadeus/blocks/excalidraw/ExcalidrawEmbed'
-import { PluginEmbed } from '@amadeus/blocks/plugin/PluginEmbed'
-import { usePluginStore, findEmbedRenderer } from '@amadeus/plugins/pluginStore'
-import { usePageStore } from '@amadeus/store/pageStore'
-import { resolveFileName, resolveVaultPath } from '@amadeus/lib/vaultFiles'
-// 判定与 embedLayer / BlockHost 同源同序:音视频后缀与 `#t=` 时刻锚都取 shared 这一份。
-import { parseMediaLinkInner, VIDEO_EXT_RE, mediaLabel, type MediaLoc, embedUrlOf} from '@amadeus-shared/pdfLink'
-import { isPlainNoteRef } from '@amadeus-shared/builtinTypes'
-import { MediaPlayer } from '@amadeus/components/MediaPlayer'
-import { BookmarkCard } from '@amadeus/components/BookmarkCard'
-import { Markdown } from '../../components/Markdown'
-import { openFile, openNote } from '../../amadeusNav'
-import { registerMessages, useI18n } from '../../i18n'
+import { useI18n } from '../../i18n'
+import { useApp } from '../../stores/appStore'
+import { setActiveSpace } from '@lcl/engine'
+import { getMuseApproval, decideMuseApproval, type InboxMessage } from '../../services/backendService'
+import type { PendingApprovalInfo } from '../../types'
+import { splitSuggestions } from '../chat2/suggest'
+import { TaskCards } from '../chat2/TaskCards'
+import { runTaskCard } from '../chat2/taskLanding'
 
-// 收件箱嵌入卡片的文案。与 BlockHost / embedLayer 是同一套界面的三条链,措辞刻意保持一致,
-// 但键各自独立(同键不同文案会被覆盖检查判红,见 i18nCoverage.test.ts 的 D 断言)。
-registerMessages({
-  'inboxbody.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
-  'inboxbody.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the default app' },
-  'inboxbody.open': { zh: '打开 ↗', en: 'Open ↗' },
-  'inboxbody.startAt': { zh: '起播时刻', en: 'Start time' },
-  'inboxbody.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
-  'inboxbody.loadingPdf': { zh: '加载 PDF…', en: 'Loading PDF…' },
-  'inboxbody.embedBadgeTitle': { zh: '跨笔记嵌入(只读)', en: 'Cross-note embed (read-only)' },
-  'inboxbody.embedBadge': { zh: '↪ 嵌入', en: '↪ Embed' },
-  'inboxbody.gotoSource': { zh: '去源头', en: 'Go to the source' },
-  'inboxbody.resolving': { zh: '解析中…', en: 'Resolving…' },
-  'inboxbody.embedMissing': { zh: '嵌入丢失:', en: 'Embed missing: ' },
-})
+const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
 
-const PdfEmbedViewer = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
+/** 卡片只信本地引擎发来的 agent 消息(与聊天任务卡的 museOk 同一道闸:Web / 移动端没有 /agent/special 端点)。 */
+export function inboxCardsAllowed(msg: Pick<InboxMessage, 'sender_kind'>): boolean {
+  return msg.sender_kind === 'agent' && !!window.tangu?.backendStatus
+}
 
-const EMBED_RE = /^!\[\[([^\]\n]+)\]\]$/
-const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
-const FILE_EXT_RE = /\.[a-z0-9]{1,8}$/i
-const DB_EXT_RE = /\.db$/i
-const PDF_EXT_RE = /\.pdf$/i
-const noop = (): void => {}
-
-export function InboxBody({ body }: { body: string }) {
-  const blocks = useMemo(() => splitIntoBlocks(body || ''), [body])
+export function InboxBody({ msg }: { msg: InboxMessage }) {
+  const body = msg.body || ''
+  const cardsOk = inboxCardsAllowed(msg)
+  const parsed = useMemo(() => (cardsOk ? splitSuggestions(body, { kinds: ['task', 'approval'] }) : null), [body, cardsOk])
+  const text = parsed ? parsed.text : body
+  const hasCards = !!parsed && (parsed.tasks.length > 0 || parsed.approvals.length > 0)
   return (
     <>
-      {blocks.map((content, i) => {
-        const m = EMBED_RE.exec(content.trim())
-        if (!m) return <Markdown key={i} content={content} />
-        return (
-          <div key={i} className="am-app tangu-lovable ibx-embed">
-            <InboxEmbed target={m[1]} />
-          </div>
-        )
-      })}
+      {text.trim() && (
+        <div className="am-app tangu-lovable amx-pane amx-editor ibx-amadeus" data-inbox-body="amadeus">
+          <Suspense fallback={<div className="ibx-body-plain">{text}</div>}>
+            <UnifiedPageLazy key={msg.id} path={`inbox/${msg.id}.md`} initial={text} readOnly compact />
+          </Suspense>
+        </div>
+      )}
+      {hasCards && (
+        <div className="ibx-cards" data-inbox-cards>
+          {parsed!.approvals.map((id) => <ApprovalCard key={id} id={id} />)}
+          <TaskCards
+            tasks={parsed!.tasks}
+            ownerId={msg.id}
+            noHere
+            onTask={(card, landing) => {
+              // 收件箱在自己的 Space 里:新会话必须先切到 Tangu Space,否则聊天开在收件箱布局里(同 InboxReaderView.chatWithSender)。
+              if (landing === 'new') setActiveSpace('tangu')
+              return runTaskCard(card, landing, null)
+            }}
+          />
+        </div>
+      )}
     </>
   )
 }
 
-/** 单个 `![[target]]` 块 → 按类型只读渲染(复用 BlockHost 的分类判定与叶子组件)。 */
-function InboxEmbed({ target }: { target: string }) {
-  const embedRenderers = usePluginStore((s) => s.embedRenderers)
-  const [rawPath, pipe] = target.split('|')
-  const p = rawPath.trim()
-  const seg = pipe?.trim()
-
-  // 图片(`![[pic.png|200]]`):裸文件名经 amadeus-asset:// 协议在全库定位(Obsidian 式)。
-  if (IMG_EXT_RE.test(p)) {
-    return (
-      <div className="block-body embed-image-body">
-        <img
-          className="embed-image"
-          src={toAssetUrl(p)}
-          alt={p}
-          draggable={false}
-          style={seg && /^\d+$/.test(seg) ? { width: Number(seg) } : undefined}
-        />
-      </div>
-    )
-  }
-  // `![[https://…]]` → 收件箱是**只读流**:一律书签卡,不给唤醒(在流里给每条消息挂一个渲染进程
-  // 是灾难)。**位置与另外两条链逐字同序**:图片之后、一切文件判定之前 —— URL 里的 `.db`/`.html`
-  // 会被下面的后缀判定当成文件后缀抢走。
-  // ⚠️ 刻意与另两条链**分道**的一点:笔记里 `![[youtube…]]` 会渲成 iframe 播放器,这里不会。
-  // 同一条理由 —— 一条流几十个跨源 iframe,和几十个 webview 一样是灾难。
-  // ⚠️ 用 embedUrlOf 吃整条 target(只剥末段宽度):`split('|')[0]` 会截断 `?q=a|b` 这类合法 URL。
-  const webUrl = embedUrlOf(target)
-  if (webUrl) {
-    return <div className="block-body"><BookmarkCard url={webUrl} /></div>
-  }
-  // 数据库(交互式表格,数据在独立 .db;pagePath='' 让裸名全库定位)。ponytail: 与笔记一致可交互,
-  // 收件箱里编辑即改真 .db;如需纯只读再加门(叶子组件当前无 readOnly)。
-  if (!p.includes('#') && DB_EXT_RE.test(p)) {
-    return <div className="block-body"><DatabaseEmbed target={p} pagePath="" initialView={seg || null} /></div>
-  }
-  // 画板(Excalidraw)
-  if (!p.includes('#') && isDrawingPath(p)) {
-    return <div className="block-body"><ExcalidrawEmbed target={p} pagePath="" /></div>
-  }
-  // 思维导图(内置文件类型):必须先于插件与「非图片文件」两条 —— 后者会把它丢给系统默认程序
-  // (在 TextEdit 里打开一张导图),而 `.mindmap.md` 走到最后一条又会被当成跨笔记引用渲染成生块。
-  if (!p.includes('#') && /\.[a-z0-9]+\.md$/i.test(p)) {
-    return <InboxPluginFileEmbed name={p} />
-  }
-  // 插件声明的文件类型:先拿完整 target 问一次(`#`/`|` 可能是文件名一部分),再退回 `#` 前问。
-  const pluginTarget = findEmbedRenderer(embedRenderers, target.trim())
-    ? target.trim()
-    : !p.includes('#') && findEmbedRenderer(embedRenderers, p) ? p : null
-  if (pluginTarget) {
-    return <div className="block-body"><PluginEmbed target={pluginTarget} pagePath="" /></div>
-  }
-  // 裸 `.md` = 笔记,不是文件卡。**这道闸 v4/v3 两条链 2026-08-20 就补了,收件箱一直没同步** ——
-  // 于是 `![[某笔记.md]]` 在收件箱里仍渲染成「📄 打开 ↗」文件卡(点了去调系统默认程序)。
-  if (isPlainNoteRef(p)) return <InboxNoteEmbed target={target} />
-  // 音视频(带或不带 `#t=` 时刻锚)。判定与另外两条链逐字同源。
-  const media = parseMediaLinkInner(p)
-  if (media) return <InboxFileEmbed name={media.target} loc={media.loc} badAnchor={p.includes('#') && !media.loc} />
-  // 非图片文件(pdf / 其它)
-  if (!p.includes('#') && FILE_EXT_RE.test(p)) {
-    return <InboxFileEmbed name={p} />
-  }
-  // 跨笔记块/笔记引用
-  return <InboxNoteEmbed target={target} />
-}
-
-/** 思维导图嵌入:收件箱不渲染画布(单活页 pageStore 装不下第二张图),给一张在应用内打开的卡片。 */
-function InboxPluginFileEmbed({ name }: { name: string }) {
+/** 审批卡:按 id 读 pending_approvals 行渲染(消息正文只是信封);批准 / 拒绝直接调引擎,决定后定格显示结果。
+ *  状态:loading → row(pending / executing / 终态)| missing(引擎 404)| error(读失败,可重试);executing 每 3s 重拉直到终态;
+ *  决定失败(409 = 别处已裁决 / 网络)→ 按 id 重拉,不把陈腐的 pending 按钮留在屏上(Codex 09-11 P1)。 */
+function ApprovalCard({ id }: { id: string }) {
   const { t } = useI18n()
-  const files = usePageStore((s) => s.files)
-  const full = useMemo(() => resolveVaultPath(name, files, '') ?? name, [name, files])
-  return (
-    <div className="block-body">
-      <button className="embed-file" onClick={() => openFile(full)} title={t('inboxbody.openInTab')}>
-        <span className="embed-file-ic" aria-hidden>🧠</span>
-        <span className="embed-file-name">{name}</span>
-        <span className="embed-file-open">{t('inboxbody.open')}</span>
-      </button>
-    </div>
-  )
-}
-
-/** 文件嵌入:pdf 内联只读阅读器(解析不出退回 iframe),音视频原生播放器,其它 = 打开按钮。 */
-function InboxFileEmbed({ name, loc, badAnchor }: { name: string; loc?: MediaLoc | null; badAnchor?: boolean }) {
-  const kind = PDF_EXT_RE.test(name) ? 'pdf' : VIDEO_EXT_RE.test(name) ? 'video' : /\.(mp3|wav|ogg|m4a|flac)$/i.test(name) ? 'audio' : 'other'
-  const { t } = useI18n()
-  const files = usePageStore((s) => s.files)
-  const pdfPath = useMemo(() => (kind === 'pdf' ? resolveFileName(name, files, '') : null), [kind, name, files])
-  if (kind === 'other') {
-    const full = resolveFileName(name, files, '') ?? name
-    return (
-      <div className="block-body">
-        <button className="embed-file" onClick={() => void amadeus.openVaultFile(full).catch(() => {})} title={t('inboxbody.openWithSystem')}>
-          <span className="embed-file-ic" aria-hidden>📄</span>
-          <span className="embed-file-name">{name}</span>
-          <span className="embed-file-open">{t('inboxbody.open')}</span>
-        </button>
-      </div>
-    )
-  }
-  const url = toAssetUrl(name)
-  return (
-    <div className="block-body">
-      <div className="embed-media">
-        <div className="embed-media-head">
-          <span className="embed-file-ic" aria-hidden>{kind === 'pdf' ? '📕' : kind === 'video' ? '🎬' : '🎵'}</span>
-          <span className="embed-file-name">{name}</span>
-          {loc && <span className="embed-media-at" title={t('inboxbody.startAt')}>@{mediaLabel(loc.at)}</span>}
-          {badAnchor && <span className="embed-media-warn">{t('inboxbody.badAnchor')}</span>}
-        </div>
-        {kind === 'pdf' && (pdfPath ? (
-          <div className="embed-pdf embed-pdf-live">
-            <Suspense fallback={<div className="embed-pdf-loading">{t('inboxbody.loadingPdf')}</div>}>
-              <PdfEmbedViewer pdfPath={pdfPath} readOnly />
-            </Suspense>
-          </div>
-        ) : (
-          // webhost-ok: 固定已知嵌入(Chromium 内置 PDF 阅读器),无 sandbox 属性 → 不削能力
-          <iframe className="embed-pdf" src={url} title={name} />
-        ))}
-        {/* 收件箱是只读流:不给截帧(insertAfter 缺席即隐藏按钮)。 */}
-        {(kind === 'video' || kind === 'audio') && (
-          <MediaPlayer kind={kind} url={url} name={name} pagePath="" loc={loc ?? null} />
-        )}
-      </div>
-    </div>
-  )
-}
-
-/** 跨笔记块/笔记引用:resolveEmbed → 用被引块自己的 BlockType.Editor 只读渲染(markdown 块自带
- *  Milkdown 实例,可独立挂载);头部「去源头」在编辑器打开该笔记。目标须在当前 Vault 已索引才解析得出。 */
-function InboxNoteEmbed({ target }: { target: string }) {
-  const { t } = useI18n()
-  const blockId = useId()
-  const [embed, setEmbed] = useState<EmbedResolved | null | 'loading'>('loading')
+  const cfg = useApp((s) => s.cfg)
+  const [row, setRow] = useState<PendingApprovalInfo | null | 'loading' | 'error'>('loading')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [tick, setTick] = useState(0)
   useEffect(() => {
     let alive = true
-    setEmbed('loading')
-    // ponytail: 消息静态,只在 target 变时解析一次;源笔记改了重开消息即重解析(不订阅 linkGraphVersion)。
-    amadeus.resolveEmbed(target).then((r) => { if (alive) setEmbed(r) }).catch(() => { if (alive) setEmbed(null) })
+    getMuseApproval(cfg, id)
+      .then((r) => { if (alive) setRow(r ?? null) })
+      // 只把本端点自己的 404 文案当「不存在」;别的 404(老引擎还没重启、没有这条路由)/ 网络错都是「读失败」,给重试而不是谎报记录没了。
+      .catch((e: any) => { if (alive) setRow(/approval not found/i.test(String(e?.message || e)) ? null : 'error') })
     return () => { alive = false }
-  }, [target])
-  const et = embed && embed !== 'loading' ? getBlockType(embed.type) : undefined
-  const EmbedEditor = et?.Editor
+  }, [cfg, id, tick])
+  const refresh = (): void => setTick((n) => n + 1)
+  // 执行中(别处批准了、工具还在跑):轮询到终态为止。
+  const executing = row !== 'loading' && row !== 'error' && row?.status === 'executing'
+  useEffect(() => {
+    if (!executing) return
+    const h = setTimeout(refresh, 3000)
+    return () => clearTimeout(h)
+  }, [executing, tick])
+
+  const decide = async (decision: 'approve' | 'reject'): Promise<void> => {
+    if (row === 'loading' || row === 'error' || !row || busy) return
+    setBusy(true)
+    setErr('')
+    try {
+      const r = await decideMuseApproval(cfg, row.id, decision)
+      // 200 也可能是「批准了但工具执行失败」(status=failed,result=错误文本):不能静默当成功。
+      setRow({ ...row, status: r.status as PendingApprovalInfo['status'], result: r.result ?? row.result, decided_by: 'user' })
+      if (r.status === 'failed') setErr(t('special.muse.execFailed', { e: String(r.result || '').slice(0, 200) }))
+    } catch (e: any) {
+      setErr(t('special.muse.approveFail', { e: e?.message || String(e) }))
+      refresh() // 409(别处已裁决)/ 网络错:以引擎里的真状态为准
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 理由(escalate / mode / custom-ask 的规则串)是引擎写的 JSON;坏了不影响卡。
+  let reason = ''
+  if (row && row !== 'loading' && row !== 'error' && row.reason) {
+    try { const o = JSON.parse(row.reason); reason = o?.kind === 'custom-ask' && o.rule ? String(o.rule) : String(o?.kind || '') } catch { /* ignore */ }
+  }
+  const status = row === 'loading' ? 'loading' : row === 'error' ? 'error' : row ? row.status : 'missing'
+  const doneKey = status === 'rejected' ? 'inbox.approval.rejected' : status === 'executing' ? 'inbox.approval.executing' : status === 'failed' ? 'inbox.approval.failed' : 'inbox.approval.approved'
+  const settled = row && row !== 'loading' && row !== 'error' && row.status !== 'pending'
   return (
-    <div className="block-body embed-body">
-      <div className="embed-head">
-        <span className="embed-badge" title={t('inboxbody.embedBadgeTitle')}>{t('inboxbody.embedBadge')}</span>
-        {embed && embed !== 'loading' && (
-          <button className="embed-src" onClick={() => void openNote(embed.owner)} title={t('inboxbody.gotoSource')}>
-            {stripPageBasename(embed.owner)} ↗
-          </button>
-        )}
-      </div>
-      {embed === 'loading' ? (
-        <div className="embed-loading">{t('inboxbody.resolving')}</div>
-      ) : embed && EmbedEditor ? (
-        <EmbedEditor
-          blockId={blockId}
-          content={embed.content}
-          pagePath={embed.owner}
-          readOnly
-          onChange={noop}
-          onInsertAfter={noop}
-          onDeleteEmpty={noop}
-          onMergePrev={noop}
-          onArrowOut={noop}
-          onMoveDir={noop}
-          focusPlace={null}
-          onFocused={noop}
-          requestSelfFocus={noop}
-          onOpenWiki={(name) => void usePageStore.getState().openWikiLink(name, embed.owner)}
-          getPageNames={() => usePageStore.getState().pages}
-        />
+    <div className={`t2-taskcard ibx-approval${settled ? ' done' : ''}`} data-approval-id={id} data-approval-status={status}>
+      <div className="t2-taskcard-head"><ShieldCheck size={13} /> <b>{t('inbox.approval.title')}</b></div>
+      {row === 'loading' ? (
+        <div className="ibx-approval-meta">{t('inbox.approval.loading')}</div>
+      ) : row === 'error' ? (
+        <div className="t2-taskcard-actions">
+          <span className="ibx-approval-err">{t('inbox.approval.loadFail')}</span>
+          <button onClick={refresh}>{t('inbox.approval.retry')}</button>
+        </div>
+      ) : !row ? (
+        <div className="ibx-approval-meta">{t('inbox.approval.missing')}</div>
       ) : (
-        <div className="embed-missing">{t('inboxbody.embedMissing')}<code>{target}</code></div>
+        <>
+          <div className="ibx-approval-preview">{row.preview}</div>
+          <div className="ibx-approval-meta">{row.tool}{row.cwd ? ` · ${row.cwd}` : ''}{reason ? ` · ${reason}` : ''}</div>
+          {row.note && <div className="ibx-approval-meta">{t('special.muse.approvalNote', { note: row.note })}</div>}
+          {row.status === 'pending' ? (
+            <div className="t2-taskcard-actions">
+              <button className="primary" disabled={busy} onClick={() => void decide('approve')}><ShieldCheck size={12} /> {t('special.muse.approve')}</button>
+              <button disabled={busy} onClick={() => void decide('reject')}><ShieldX size={12} /> {t('special.muse.reject')}</button>
+            </div>
+          ) : (
+            <div className="t2-taskcard-done">{t(doneKey)}</div>
+          )}
+          {row.status !== 'pending' && row.result && <pre className="ibx-approval-result">{row.result}</pre>}
+          {err && <div className="ibx-approval-err">{err}</div>}
+        </>
       )}
     </div>
   )

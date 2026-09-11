@@ -37,8 +37,9 @@ import { AmadeusPdfView } from './views/AmadeusPdfView'
 import { AmadeusImageView } from './views/AmadeusImageView'
 import { AmadeusMediaView } from './views/AmadeusMediaView'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from './amadeusPanels'
-import { InboxListView } from './views/inbox/InboxListView'
 import { InboxReaderView } from './views/inbox/InboxReaderView'
+import { registerInboxListSource } from './views/inbox/inboxListSource'
+import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { WsFileView } from './views/WsFileView'
 import { CodeStudioView } from './views/CodeStudioView'
 import { PublicView } from './views/PublicView'
@@ -217,16 +218,20 @@ export function installEngine(): void {
     // 仪表盘紧凑卡面(dashboard 契约)也在那里声明 —— 契约跟注册点走,别在这儿补。
   }
 
-  // Inbox Space:收件箱(左 邮件列表 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
+  // Inbox Space:收件箱(左 统一工作区·收件箱列表源 / 主 阅读面板)。数据来自本地后端 /agent/inbox。
   // gate = window.tangu?.backendStatus(桌面壳语义,含 external 模式;webShim 无 → Tangu Web 不注册,
   // 旧布局引用未注册视图由 workspaceStore.layoutViewsAllRegistered 整份回退,不崩)。
   if (window.tangu?.backendStatus || window.tangu?.mobile) {
+    // 收件箱列表 = 统一「工作区」视图的一个列表源(2026-09-11,与青鸟收藏夹同一条契约);阅读面板声明 workspaceSource,
+    // 它做活动主视图时左栏自动切到收件箱。inbox-list 类型保留给仪表盘卡片;整页渲染也换成 WorkspaceView ——
+    // 移动端单列壳的持久化布局不跑 lcl 的退役迁移,留着的 inbox-list 叶子照样落到新 UI。
+    registerInboxListSource()
     registerView({
       type: 'inbox-list', kind: 'collection', embeddable: true,
-      displayName: () => app().tr('inbox.list'), icon: Inbox, factory: () => <InboxListView />, singleton: true,
+      displayName: () => app().tr('inbox.list'), icon: Inbox, factory: (props) => <WorkspaceView {...props} defaultMode={INBOX_WORKSPACE_MODE} />, singleton: true,
       dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <InboxDashboardCard size={ctx.size} /> },
     })
-    registerView({ type: 'inbox-reader', kind: 'page', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true })
+    registerView({ type: 'inbox-reader', kind: 'page', displayName: () => app().tr('inbox.reader'), icon: Mail, factory: () => <InboxReaderView />, singleton: true, workspaceSource: INBOX_WORKSPACE_MODE })
   }
 
   // Space:注册(注册序 = ribbon 顶部默认序,排在商店等功能图标之上;每个 Space 贡献一个可拖动的 ribbon 顶部图标)。

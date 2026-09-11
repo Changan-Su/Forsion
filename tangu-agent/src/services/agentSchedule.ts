@@ -160,9 +160,9 @@ function validDate(s: string): boolean {
 }
 
 /**
- * 纯校验。opts.slug 用于 muse 特判:Muse 的既有安全设计=planMode+add_muse_todo 是唯一
- * 对用户的写通道,auto 日程会经 automation 管道拿到 full-auto,绕穿该防线 → 拒绝
- * (纯规划条目允许;Muse 到点做事走既有 daily_at 盯任务)。
+ * 纯校验。opts.slug 保留给调用方标注归属(2026-09-10 前这里对 muse 拒 auto:那时 Muse 跑只读 planMode,
+ * auto 日程会经 automation 管道拿到 full-auto 绕穿防线;现在 Muse 按权限档工作,且它的到期条目
+ * **不走** automation 管道,而是回灌进 Muse 自己的周期(muse.ts 的 museDueSchedules),预算闸照过)。
  */
 export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: string } = {}):
   | { ok: true; value: ValidatedEntry }
@@ -183,12 +183,16 @@ export function validateEntryInput(input: ScheduleEntryInput, opts: { slug?: str
     if (!date) return { ok: false, error: 'repeat requires a date (the anchor to roll from)' };
   }
   const auto = input.auto === true || input.auto === 'true';
-  const prompt = String(input.prompt || '').trim().slice(0, 500);
+  // 4000:任务卡「交给 Muse 追踪」把整份自包含任务书放进来(关键的复现步骤/验收条件常在尾部,500 会静默截掉);
+  // 到期时它是 kickoff 消息的一部分,不进系统提示(upcomingScheduleLines 只注 name/description)。
+  const prompt = String(input.prompt || '').trim().slice(0, 4000);
+
+  void opts;
   if (auto) {
     if (!date) return { ok: false, error: 'auto entries need a date' };
     if (!prompt) return { ok: false, error: 'auto entries need a prompt (what to do when due)' };
-    if (opts.slug === 'muse') return { ok: false, error: 'muse cannot have auto entries (planning-only); use manage_automation daily_at instead' };
   }
+
   return {
     ok: true,
     value: {

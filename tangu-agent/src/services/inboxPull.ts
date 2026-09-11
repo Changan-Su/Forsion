@@ -57,11 +57,18 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
         [userId, b.id],
       );
       if (dup?.length) continue;
-      // 附件物品:服务端 JSON 原文包一层 {items, claimed}(claimed 之后由 claim 路由本地翻真);脏 JSON 按无附件。
+      // 附件物品:服务端 JSON 原文包一层 {items, claimed, requires?}(claimed 之后由 claim 路由本地翻真;
+      // requires=领取条件,只给阅读面板展示,裁决在服务端);脏 JSON 按无附件 / 无条件。
       let attachments: string | null = null;
       if (b.attachments) {
-        try { attachments = JSON.stringify({ items: JSON.parse(String(b.attachments)), claimed: !!b.claimed }); }
-        catch { /* 脏行防御 */ }
+        let requires: unknown;
+        try { requires = b.claim_requirements ? JSON.parse(String(b.claim_requirements)) : undefined; } catch { /* 脏行:不展示 */ }
+        try {
+          attachments = JSON.stringify({
+            items: JSON.parse(String(b.attachments)), claimed: !!b.claimed,
+            ...(requires && typeof requires === 'object' && !Array.isArray(requires) ? { requires } : {}),
+          });
+        } catch { /* 脏行防御 */ }
       }
       // 无 conflict target 的 ON CONFLICT DO NOTHING:SQLite/PGlite/PG 同一写法合法,兜并发重复。
       const rowId = uuidv4();

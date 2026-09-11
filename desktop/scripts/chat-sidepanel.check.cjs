@@ -565,7 +565,8 @@ async function main() {
     ${ALPHA}
     const card = document.querySelector('.t2c-card')
     if (!card) return null
-    const cs = getComputedStyle(card)
+    const shell = getComputedStyle(card)
+    const cs = getComputedStyle(card, '::before')
     // 主区 vs 侧栏各插一颗输入卡探针:侧栏那边 CSS 模糊糊不出东西(backdrop 里没有 app 画的
     // 不透明像素),只能靠染色浓度盖住底下的字 → 两边**本来就该是不同浓度**,这里逐边量。
     const tier = {}
@@ -575,23 +576,61 @@ async function main() {
       const p = document.createElement('div')
       p.className = 't2c-card'
       host.appendChild(p)
-      tier[side ? 'side' : 'main'] = alphaOf(getComputedStyle(p).backgroundColor)
+      tier[side ? 'side' : 'main'] = alphaOf(getComputedStyle(p, '::before').backgroundColor)
       p.remove()
     }
     // 菜单 / 二级浮面只有交互时才渲染 → 插同类名探针,量的是材质表收没收它们
     const menus = {}
-    for (const cls of ['composer-menu', 'cm-sub', 'approval-hover-desc', 'ctx-menu', 'rb-menu', 'account-pop', 'ntf', 'wsfile-panel', 'amx-db-pop', 'amx-cal-cardwrap', 'dash-add-menu']) {
+    for (const [name, cls, pseudo, tierName] of [
+      ['composer-menu', 'composer-menu', '', 'menu'],
+      ['composer-menu--model', 'composer-menu composer-menu--model', '::before', 'menu'],
+      ['composer-menu--mode', 'composer-menu composer-menu--mode', '::before', 'menu'],
+      ['composer-menu--add', 'composer-menu composer-menu--add', '::before', 'menu'],
+      ['cm-sub', 'cm-sub', '', 'menu'],
+      ['approval-hover-desc', 'approval-hover-desc', '', 'menu'],
+      ['ctx-menu', 'ctx-menu', '', 'menu'],
+      ['rb-menu', 'rb-menu', '', 'fallback'],
+      ['account-pop', 'account-pop', '', 'menu'],
+      ['ntf', 'ntf', '', 'float'],
+      ['wsfile-panel', 'wsfile-panel', '', 'float'],
+      ['unitsw-menu', 'unitsw-menu', '', 'fallback'],
+      ['t2sw-plug-menu', 't2sw-plug-menu', '', 'fallback'],
+      ['t2-quote-menu', 't2-quote-menu', '', 'menu'],
+      ['amx-tip', 'amx-tip', '', 'fallback'],
+      ['amx-db-pop', 'amx-db-pop', '', 'menu'],
+      ['amx-cal-agenda', 'amx-cal-agenda', '', 'menu'],
+      ['amx-cal-cardwrap', 'amx-cal-cardwrap', '', 'menu'],
+      ['amx-qf', 'amx-qf', '', 'float'],
+      ['amx-qf-card', 'amx-qf-card', '', 'float'],
+      ['amx-trash-pop', 'amx-trash-pop', '', 'float'],
+      ['amx-hoverprev', 'amx-hoverprev', '', 'float'],
+      ['amx-toast', 'amx-toast', '', 'float'],
+      ['modal', 'modal', '', 'float'],
+      ['amxc-panel', 'amxc-panel', '', 'float'],
+      ['amxc-card', 'amxc-card', '', 'float'],
+      ['csx-pub-card', 'csx-pub-card', '', 'float'],
+      ['dash-add-menu', 'dash-add-menu', '', 'menu'],
+    ]) {
       const p = document.createElement('div')
       p.className = cls
       document.body.appendChild(p)
-      const s = getComputedStyle(p)
-      menus[cls] = { b: (s.backdropFilter || s.webkitBackdropFilter) !== 'none', a: alphaOf(s.backgroundColor) }
+      const s = getComputedStyle(p, pseudo || null)
+      menus[name] = { b: (s.backdropFilter || s.webkitBackdropFilter) !== 'none', a: alphaOf(s.backgroundColor), tier: tierName }
+      p.remove()
+    }
+    const sideGroup = [...document.querySelectorAll('.dv-groupview')].find((g) => g.querySelector('.wb-tab--icon'))
+    if (sideGroup) {
+      const p = document.createElement('div')
+      p.className = 'composer-menu composer-menu--model'
+      sideGroup.appendChild(p)
+      const s = getComputedStyle(p, '::before')
+      menus['side-model-menu'] = { b: (s.backdropFilter || s.webkitBackdropFilter) !== 'none', a: alphaOf(s.backgroundColor), tier: 'fallback' }
       p.remove()
     }
     return {
       blur: cs.backdropFilter || cs.webkitBackdropFilter,
       bgAlpha: alphaOf(cs.backgroundColor),
-      borderAlpha: alphaOf(cs.borderTopColor),
+      borderAlpha: alphaOf(shell.borderTopColor),
       tier,
       menus,
     }
@@ -606,12 +645,16 @@ async function main() {
     JSON.stringify({ blur: glass && glass.blur, tier: glass && glass.tier, borderAlpha: glass && glass.borderAlpha })
       + '(主区 ≈0.5 才糊得出来;侧栏须 ≥0.8,否则正文透过输入卡)',
   )
-  // 菜单必须走 float,而不是输入卡的 50% thin:否则浮层浓度设置对菜单无效,在没有有效 backdrop
-  // 的侧栏 / portal 位置又只剩透明染色。新二级面板也逐个列入,漏收一个就红。
+  // 三档共享同一磨砂配方,只按物理位置/内容密度调染色:菜单应接近 Chatbox,大型浮层稍厚,
+  // 侧栏 / ribbon 没有可靠页面像素可糊才回 84% 兜底。任何一档都不许退回实色或透明薄片。
+  const ranges = { menu: [0.55, 0.63], float: [0.68, 0.77], fallback: [0.8, 0.89] }
   check(
-    '25 glass 主题:一级/二级菜单均为可调 float 磨砂(不是透明薄片)',
-    !!glass && Object.values(glass.menus).every((m) => m.b && m.a >= 0.8 && m.a <= 0.9),
-    glass ? Object.entries(glass.menus).map(([k, v]) => `${k}:${v.b ? '糊' : '实色'}/${v.a}`).join(' ') : 'no probe',
+    '25 glass 主题:菜单与 Chatbox 同质,大型浮层/侧栏只按层级加厚',
+    !!glass && Object.values(glass.menus).every((m) => {
+      const [lo, hi] = ranges[m.tier]
+      return m.b && m.a >= lo && m.a <= hi
+    }),
+    glass ? Object.entries(glass.menus).map(([k, v]) => `${k}:${v.tier}/${v.b ? '糊' : '实色'}/${v.a}`).join(' ') : 'no probe',
   )
 
   await app.close()

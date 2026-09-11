@@ -63,3 +63,152 @@ describe('splitSuggestions', () => {
     expect(items).toEqual(['每天提醒我喝水', '每周五整理笔记', '每月底导出账单']) // 「继续」太短被挡:不给单词芯片洗成用户指令
   })
 })
+
+describe('splitSuggestions × forsion-task 任务卡', () => {
+  const card = (body: string): string => `${F}forsion-task\n${body}\n${F}`
+
+  it('头部 key: value + --- + 任务书 → 一张卡;正文里不留围栏', () => {
+    const raw = `顺手发现一个问题。\n\n${card('title: 修生图 slug 被当聊天模型\ntldr: grok-imagine 混进了聊天模型选择器\ntrack: false\n---\n在 desktop/frontend/src/… 里,direct provider 把 image 类 slug 也当聊天模型。\n复现:设置 → 模型 → xAI。')}\n`
+    const r = splitSuggestions(raw)
+    expect(r.text).toBe('顺手发现一个问题。')
+    expect(r.items).toEqual([])
+    expect(r.tasks).toEqual([{
+      title: '修生图 slug 被当聊天模型',
+      tldr: 'grok-imagine 混进了聊天模型选择器',
+      prompt: '在 desktop/frontend/src/… 里,direct provider 把 image 类 slug 也当聊天模型。\n复现:设置 → 模型 → xAI。',
+    }])
+  })
+
+  it('track: true 进卡;未知键忽略(扩展契约);没有 --- 时首行当标题、整段当任务书', () => {
+    const r1 = splitSuggestions(card('title: 盯着 CI\ntrack: yes\npriority: high\n---\n每天看一眼 build-desktop 的失败率。'))
+    expect(r1.tasks[0]).toEqual({ title: '盯着 CI', track: true, prompt: '每天看一眼 build-desktop 的失败率。' })
+    const r2 = splitSuggestions(card('整理下载文件夹\n把 ~/Downloads 里超过 30 天的安装包归档。'))
+    expect(r2.tasks[0].title).toBe('整理下载文件夹')
+    expect(r2.tasks[0].prompt).toBe('整理下载文件夹\n把 ~/Downloads 里超过 30 天的安装包归档。')
+  })
+
+  it('缺任务书的坏卡 → 原样还回正文,不吞字;每条消息最多 2 张', () => {
+    const bad = splitSuggestions(`说明\n${card('title: 只有标题')}`)
+    expect(bad.tasks).toEqual([])
+    expect(bad.text).toContain('title: 只有标题')
+    const many = splitSuggestions([card('title: a\n---\np1'), card('title: b\n---\np2'), card('title: c\n---\np3')].join('\n'))
+    expect(many.tasks.map((c) => c.title)).toEqual(['a', 'b'])
+    expect(many.text).toContain('p3') // 第三张超上限:原样还回正文(09-11 起),不再静默消失
+    expect(many.text).not.toContain('p2')
+  })
+
+  it('芯片与任务卡可同时出现;流式未收口的卡先藏起来;讲解示例(外层四反引号)不成卡', () => {
+    const both = splitSuggestions(`${F}forsion-suggest\n提醒我明天 8 点开会\n${F}\n${card('title: t\n---\np')}`)
+    expect(both.items).toEqual(['提醒我明天 8 点开会'])
+    expect(both.tasks.length).toBe(1)
+    const streaming = splitSuggestions(`好的。\n${F}forsion-task\ntitle: t\n---\n还在`, { streaming: true })
+    expect(streaming.text).toBe('好的。')
+    expect(streaming.tasks).toEqual([])
+    const taught = splitSuggestions(`写法:\n\`\`\`\`markdown\n${card('title: t\n---\np')}\n\`\`\`\`\n`)
+    expect(taught.tasks).toEqual([])
+    expect(taught.text).toContain('forsion-task')
+  })
+
+  it('围栏被工具块切成两段 —— 卡片状态续读', () => {
+    const a = splitSuggestions(`前文\n${F}forsion-task\ntitle: t\n---\n`, { streaming: true })
+    const b = splitSuggestions(`任务书正文\n${F}\n尾文`, { streaming: true, state: a.state })
+    expect(a.text).toBe('前文')
+    expect(b.text).toBe('尾文')
+    expect(b.tasks).toEqual([{ title: 't', prompt: '任务书正文' }])
+  })
+})
+
+describe('splitSuggestions × 围栏纪律(Codex 09-10 评审补钉)', () => {
+  it('~~~ 波浪线外层示例里的 forsion-task 不成卡、不被删(反引号收不了波浪线围栏)', () => {
+    const raw = `写法示例:\n~~~markdown\n${F}forsion-task\ntitle: t\n---\np\n${F}\n~~~\n结束`
+    const r = splitSuggestions(raw)
+    expect(r.tasks).toEqual([])
+    expect(r.items).toEqual([])
+    expect(r.text).toContain('forsion-task')
+    expect(r.text).toContain('结束')
+  })
+  it('波浪线围栏开的 forsion-task 也认,且只能用波浪线收口', () => {
+    const r = splitSuggestions(`~~~forsion-task\ntitle: t\n---\np\n~~~\n尾`)
+    expect(r.tasks).toEqual([{ title: 't', prompt: 'p' }])
+    expect(r.text).toBe('尾')
+    const notClosed = splitSuggestions(`~~~forsion-task\ntitle: t\n---\np\n${F}\n尾`)
+    expect(notClosed.tasks).toEqual([]) // 反引号收不了 → 未收口 → 还回正文
+    expect(notClosed.text).toContain('title: t')
+  })
+  it('写坏的卡按真实收口行还回正文(四反引号收口不改写成三个)', () => {
+    const r = splitSuggestions(`x\n${F}forsion-task\ntitle: 只有标题\n\`\`\`\`\ny`)
+    expect(r.tasks).toEqual([])
+    expect(r.text).toBe(`x\n${F}forsion-task\ntitle: 只有标题\n\`\`\`\`\ny`)
+  })
+  it('续读状态不可变:第二段解析不改第一段返回的 state', () => {
+    const a = splitSuggestions(`${F}forsion-task\ntitle: t\n---\n`, { streaming: true })
+    const snapshot = JSON.stringify(a.state)
+    splitSuggestions(`p\n${F}`, { streaming: true, state: a.state })
+    expect(JSON.stringify(a.state)).toBe(snapshot)
+  })
+  it('消息已完成但当前只是靠前的一段(streaming:true 由调用方标)→ 未收口先藏,尾段才还回', () => {
+    const a = splitSuggestions(`前文\n${F}forsion-task\ntitle: t\n---\n`, { streaming: true })
+    expect(a.text).toBe('前文')
+    const b = splitSuggestions(`p`, { streaming: false, state: a.state })
+    expect(b.text).toContain('title: t') // 尾段没收口 → 还回
+    expect(b.tasks).toEqual([])
+  })
+})
+
+describe('forsion-approval(收件箱审批卡,2026-09-11)', () => {
+  it('JSON 围栏 → 摘出 id,正文不留痕', () => {
+    const r = splitSuggestions(`write_file · write /tmp/x.md\n\n${F}forsion-approval\n{"id":"3f0c1a2b-1111-4222-8333-944455556666"}\n${F}`, { kinds: ['task', 'approval'] })
+    expect(r.approvals).toEqual(['3f0c1a2b-1111-4222-8333-944455556666'])
+    expect(r.text).toBe('write_file · write /tmp/x.md')
+  })
+
+  it('`id: …` 行与裸 id 也认;同 id 去重;写坏的(空 / 非法字符 / 坏 JSON)整块还回正文', () => {
+    const K = { kinds: ['task', 'approval'] as const }
+    expect(splitSuggestions(`${F}forsion-approval\nid: apv-1\n${F}`, { kinds: [...K.kinds] }).approvals).toEqual(['apv-1'])
+    expect(splitSuggestions(`${F}forsion-approval\napv-1\n${F}\n\n${F}forsion-approval\napv-1\n${F}`, { kinds: [...K.kinds] }).approvals).toEqual(['apv-1'])
+    const bad = splitSuggestions(`${F}forsion-approval\n{"id":"../x"}\n${F}`, { kinds: [...K.kinds] })
+    expect(bad.approvals).toEqual([])
+    expect(bad.text).toContain('forsion-approval')
+    const broken = splitSuggestions(`${F}forsion-approval\n{"id":\n${F}`, { kinds: [...K.kinds] })
+    expect(broken.approvals).toEqual([])
+    expect(broken.text).toContain('{"id":')
+  })
+
+  it('讲解用的外层围栏里的示例不是真审批卡', () => {
+    const r = splitSuggestions(`写法:\n\n\`\`\`\`markdown\n${F}forsion-approval\n{"id":"apv-1"}\n${F}\n\`\`\`\`\n`, { kinds: ['task', 'approval'] })
+    expect(r.approvals).toEqual([])
+    expect(r.text).toContain('apv-1')
+  })
+
+  it('kinds 只认 task/approval(收件箱):suggest 围栏原样留在正文,任务卡照摘', () => {
+    const raw = `正文。\n\n${F}forsion-suggest\n提醒我今天 11:30 准备会议\n${F}\n\n${F}forsion-task\ntitle: 修 slug\n---\n任务书正文。\n${F}`
+    const r = splitSuggestions(raw, { kinds: ['task', 'approval'] })
+    expect(r.items).toEqual([])
+    expect(r.text).toContain('forsion-suggest')
+    expect(r.text).toContain('提醒我今天 11:30 准备会议')
+    expect(r.tasks.map((c) => c.title)).toEqual(['修 slug'])
+    expect(r.text).not.toContain('forsion-task')
+  })
+})
+
+describe('缺省种类与上限(Codex 09-11)', () => {
+  it('聊天缺省不认 approval:围栏原样留在正文,不会被悄悄吃掉', () => {
+    const r = splitSuggestions(`正文。\n\n${F}forsion-approval\n{"id":"apv-1"}\n${F}`)
+    expect(r.approvals).toEqual([])
+    expect(r.text).toContain('forsion-approval')
+    expect(r.text).toContain('apv-1')
+  })
+
+  it('超过上限的合法任务卡 / 审批还回正文,绝不静默消失', () => {
+    const card = (n: number) => `${F}forsion-task\ntitle: 卡 ${n}\n---\n任务书 ${n}。\n${F}`
+    const r = splitSuggestions(`${card(1)}\n\n${card(2)}\n\n${card(3)}`)
+    expect(r.tasks.map((c) => c.title)).toEqual(['卡 1', '卡 2'])
+    expect(r.text).toContain('任务书 3。')
+    expect(r.text).not.toContain('任务书 2。')
+    const a = (id: string) => `${F}forsion-approval\n{"id":"${id}"}\n${F}`
+    const q = splitSuggestions(`${a('a1')}\n\n${a('a2')}\n\n${a('a3')}`, { kinds: ['task', 'approval'] })
+    expect(q.approvals).toEqual(['a1', 'a2'])
+    expect(q.text).toContain('"id":"a3"')
+  })
+})
+

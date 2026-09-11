@@ -84,8 +84,10 @@ async function resolveExternalSources(): Promise<ExternalPluginSource[]> {
     })
     if (!r.ok) throw new Error(`unit plugins HTTP ${r.status}`)
     const j = (await r.json()) as { plugins?: ExternalPluginSource[] }
-    const { CHANGELOG } = await import('../../changelog')
-    const myVersion = CHANGELOG[0]?.version || '0.0.0'
+    const { APP_VERSION } = await import('../../changelog')
+    // CHANGELOG 顶部允许是 `Unreleased`，兼容门禁只能消费已解析的正式版本。
+    // Unit meta 与实际运行包同源，优先采用；桥缺位时才回退 CHANGELOG 真源。
+    const myVersion = await window.tangu?.appVersion?.().catch(() => null) || APP_VERSION || '0.0.0'
     return (j.plugins || []).map((src) => {
       const blocked = gatePluginManifest({ apiVersion: src.apiVersion, minAppVersion: src.minAppVersion }, myVersion) ?? src.blocked
       return blocked ? { ...src, blocked, code: '' } : src
@@ -136,6 +138,11 @@ interface PluginState {
   isActive(id: string): boolean
   loadExternal(): Promise<void>
   reloadExternal(): Promise<void>
+  /** 只重载一个外置插件(拆它一个、重读来源、装回它一个);别的插件与它们开着的标签页不动。
+   *  Agent 自建 Space 每个周期都可能变,走 reloadExternal 会把所有插件拆装一遍(codex 09-11 勘察)。 */
+  reloadOne(id: string): Promise<void>
+  /** 最近一次 setup 抛错的信息(按插件 id;成功激活即清)。Agent 自建 Space 的加载失败靠它回写给 agent。 */
+  lastSetupError: Record<string, string>
   openPluginsFolder(): void
   scaffoldSample(): Promise<void>
 }
@@ -361,8 +368,12 @@ export function readDisabledPluginIds(): string[] {
   return readDisabled()
 }
 
+/** 外置插件最近装入的源码(按 id):reloadOne 用来跳过「磁盘内容没变」的重载(应用刚起第一次看到戳就不用拆装一遍)。 */
+const loadedCode = new Map<string, string>()
+
 /** Wrap an external source as a plugin whose setup() evaluates its code with `ctx`. */
 function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
+  loadedCode.set(src.id, src.code)
   return {
     id: src.id,
     name: src.name,
@@ -381,6 +392,8 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     changelog: src.changelog,
     onboarding: src.onboarding,
     blocked: src.blocked,
+    blockedReason: src.blockedReason,
+    agent: src.agent,
     bundle: src.bundle,
     events: src.events,
     setup: (ctx) => {
@@ -1035,6 +1048,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     viewOpener: null,
     setViewOpener: (fn) => set({ viewOpener: fn }),
     disposers: {},
+    lastSetupError: {},
     initialized: false,
 
     isActive: (id) => get().activeIds.includes(id),
@@ -1063,6 +1077,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       } catch (e) {
         console.error(`[amadeus] plugin "${id}" setup failed`, e)
         useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
+        set((s) => ({ lastSetupError: { ...s.lastSetupError, [id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) } }))
         // 抛错前它可能已经订了块表面/语言 —— 这条分支原来漏收(codex 评审 2026-08-14),补上。
         try { revokers[id]?.() } catch (err) { console.error(`[amadeus] plugin "${id}" revoke failed`, err) }
         revokers[id] = undefined
@@ -1093,6 +1108,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         activeIds: [...s.activeIds, id],
         disabledIds: s.disabledIds.filter((x) => x !== id),
         disposers: { ...s.disposers, [id]: dispose },
+        lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
       }))
       writeDisabled(get().disabledIds)
       // 上一轮禁用留下的「待停用」欠账作废:用户刚把插件打开,再让边沿去关它的规则就是倒着走。
@@ -1139,6 +1155,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
       for (const p of get().plugins) if (!p.builtin && get().activeIds.includes(p.id)) teardown(p.id)
       set((s) => ({ plugins: s.plugins.filter((p) => p.builtin) }))
       await get().loadExternal()
+    },
+
+    async reloadOne(id) {
+      let sources: ExternalPluginSource[] = []
+      try {
+        sources = await resolveExternalSources()
+      } catch {
+        return
+      }
+      const cur = get().plugins.find((p) => p.id === id)
+      if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
+      const src = sources.find((s) => s.id === id)
+      // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)
+      if (cur && src && loadedCode.get(id) === src.code && (cur.blocked ?? null) === (src.blocked ?? null)) return
+      if (get().activeIds.includes(id)) teardown(id)
+      if (!src) loadedCode.delete(id)
+      set((s) => ({
+        plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
+        lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
+      }))
+      if (src) applyPref(id)
     },
 
     openPluginsFolder() {

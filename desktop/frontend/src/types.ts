@@ -134,7 +134,39 @@ export interface MuseConfig {
   supervisorPollMinutes: number
   activeHours: { start: number; end: number } | null
   allowedFolders: string[]
+  /** 以下四个是 2026-09-10 加的:旧引擎的 GET /agent/special/config 没有它们,读端按可选处理、UI 显示缺省。
+   *  权限档(与普通 agent 审批档对齐):ask=越界排队待批 / agent=默认 agent 代批一次 / auto=全开。 */
+  mode?: 'ask' | 'agent' | 'auto'
+  /** 心跳间隔(分钟;0=只按日程/规则醒来)。2026-09-11 由小时改分钟;旧引擎仍回 heartbeatHours,读端 ×60 兜底。 */
+  heartbeatMinutes?: number
+  /** @deprecated 旧引擎字段(小时),只读不写。 */
+  heartbeatHours?: number
+  /** 通知策略:immediate=逐条进收件箱 / digest=只发日报。 */
+  notify?: 'immediate' | 'digest'
+  /** 难活升级给哪个 agent(slug;空=不指定)。 */
+  escalateTo?: string
 }
+/** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
+export interface PendingApprovalInfo {
+  id: string
+  session_id: string
+  run_id: string | null
+  agent_slug: string | null
+  tool: string
+  args: string
+  preview: string
+  reason: string | null
+  cwd: string | null
+  status: 'pending' | 'executing' | 'approved' | 'rejected' | 'failed'
+  decided_by: 'user' | 'agent' | null
+
+  note: string | null
+  result: string | null
+  created_at: string
+  decided_at: string | null
+}
+/** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
+export interface MuseLibraryEntry { path: string; size: number; mtime: number; dir: boolean }
 export interface SpecialAgentsConfig { historian: HistorianConfig; muse: MuseConfig }
 
 export interface HistorianActivityItem {
@@ -161,7 +193,16 @@ export interface MuseStatusInfo {
   lastCycleAt: number | null
   lastError: string | null
   sessionId: string | null
+  /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
+  mode?: 'ask' | 'agent' | 'auto'
+  heartbeatMinutes?: number
+  pendingApprovals?: number
+  libraryDir?: string
+  /** 自建 Space(2026-09-11):插件目录 + 内容戳(变了 → 只重载 agent-muse 插件)。旧引擎无 → undefined = 不同步。 */
+  spaceDir?: string
+  spaceStamp?: number
 }
+
 /** 自动化动作链步骤(引擎 museTriggers.ActionSpec 镜像;tool_call 只能在构建器创建)。 */
 export type AutomationActionSpec =
   | { type: 'notify'; title: string; body?: string }
@@ -482,6 +523,12 @@ export interface MessageRecord {
 }
 
 export interface ModelInfo {
+  groupId?: string | null
+  groupName?: string | null
+  groupSortOrder?: number
+  sortOrder?: number
+  tags?: Array<{ text: string; color: 'red' | 'orange' | 'amber' | 'green' | 'blue' | 'purple' | 'gray' }>
+  multiplier?: number | null
   id: string
   name: string
   provider: string

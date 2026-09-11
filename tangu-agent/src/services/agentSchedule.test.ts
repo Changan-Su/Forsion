@@ -94,11 +94,13 @@ describe('validateEntryInput', () => {
     const v = validateEntryInput({ name: ` ${'n'.repeat(200)} `, date: '2026-07-10', repeat: '3d' });
     expect(v.ok && v.value.name.length).toBe(120);
   });
-  it('auto 需 date+prompt;muse 拒 auto 但允许纯规划', () => {
+  it('auto 需 date+prompt;muse 与其它 agent 同规(2026-09-10 解禁:到期条目回灌 Muse 周期)', () => {
+
     expect(validateEntryInput({ name: 'x', auto: true, prompt: 'p' }).ok).toBe(false);
     expect(validateEntryInput({ name: 'x', auto: true, date: '2026-07-10' }).ok).toBe(false);
     expect(validateEntryInput({ name: 'x', auto: true, date: '2026-07-10', prompt: 'p' }).ok).toBe(true);
-    expect(validateEntryInput({ name: 'x', auto: true, date: '2026-07-10', prompt: 'p' }, { slug: 'muse' }).ok).toBe(false);
+    expect(validateEntryInput({ name: 'x', auto: true, date: '2026-07-10', prompt: 'p' }, { slug: 'muse' }).ok).toBe(true);
+
     expect(validateEntryInput({ name: 'x', date: '2026-07-10' }, { slug: 'muse' }).ok).toBe(true);
   });
 });

@@ -4,6 +4,7 @@
 //   T2  没有任何写入入口(加行/加列/删行/可编辑输入框)
 //   T3  rowAttrs 落在行元素上(面板既有的事件委托继续生效)+ selectedId 高亮
 //   T4  select 芯片与富边料(两行文案 / 头像)上屏
+//   T4b 自适应列宽默认开:短枚举列收紧、主内容完整、副内容再长也只截断；关/开状态可用
 //   T5  行点击 → onRowOpen 恰好一次
 //   T6  点操作按钮**不**算开行,且原生 click 带着 data-act 冒泡到宿主(委托监听照常收得到)
 //   T7  弹层逃出插件皮肤:挂载点套着 `container-type: inline-size; overflow:auto` 的盒子
@@ -98,6 +99,30 @@ async function shot(page, name) {
     }))
     check('T4 select 芯片(显示 option.label,按 option.color 取色)/ 头像 / 第二行 / 操作按钮都上屏', s4.chips >= 5 && s4.toneChips >= 5 && s4.avatars >= 1 && s4.subs >= 2 && s4.acts === 5, JSON.stringify(s4))
 
+    const s4b = await page.evaluate(() => {
+      const heads = [...document.querySelectorAll('.amx-plugtable .amx-db-hrow .amx-db-th')]
+      const widths = heads.map((head) => Math.round(head.getBoundingClientRect().width))
+      const first = document.querySelector('.amx-plugtable .amx-db-row:not(.amx-db-hrow) .amx-db-cell')
+      const primary = first?.querySelector('.amx-db-roprimary')
+      const secondary = first?.querySelector('.amx-db-rosub')
+      const button = document.querySelector('.amx-plugtable .amx-db-autosize')
+      return {
+        pressed: button?.getAttribute('aria-pressed'),
+        widths,
+        primaryFits: !!primary && primary.scrollWidth <= primary.clientWidth + 1,
+        secondaryClips: !!secondary && secondary.scrollWidth > secondary.clientWidth + 1,
+      }
+    })
+    check('T4b 自适应默认开:主内容完整、副内容超长仍截断，短枚举列不再平分剩余宽度',
+      s4b.pressed === 'true' && s4b.primaryFits && s4b.secondaryClips && s4b.widths[0] < 240 && s4b.widths[3] <= 110 && s4b.widths[4] <= 110,
+      JSON.stringify(s4b))
+    const autoButton = page.locator('.amx-plugtable .amx-db-autosize')
+    await autoButton.click()
+    const autoOff = await autoButton.getAttribute('aria-pressed')
+    await autoButton.click()
+    const autoOn = await autoButton.getAttribute('aria-pressed')
+    check('T4c 自适应按钮可关闭并再次开启', autoOff === 'false' && autoOn === 'true', `off=${autoOff} on=${autoOn}`)
+
     await shot(page, 'tablemount-1-light')
 
     // T5:点一格非交互区(日期列)= 开行
@@ -190,6 +215,51 @@ async function shot(page, name) {
     }))
     check('T12 暗色:外层与 body 级弹层宿主都带 data-mode="dark"', s12.wrap === 'dark' && s12.host === 'dark', JSON.stringify(s12))
     await shot(page, 'tablemount-3-dark')
+
+    // Group + autocomplete: use the actual native table, not the panel fixture's fallback table.
+    const query = page.locator('.amx-db-search')
+    check('T14 搜索显式关闭自动填充，非编辑态只读', await query.getAttribute('type') === 'search' && await query.getAttribute('autocomplete') === 'off' && await query.getAttribute('readonly') !== null)
+    await query.evaluate((input) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'https://api.siliconflow.cn/v1')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    check('T14b 后台填入地址不触发筛选且被清理', await page.locator(ROWS).count() === 5 && await query.inputValue() === '')
+    await query.click()
+    await query.fill('Qwen')
+    await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 1, ROWS)
+    await query.fill('')
+    await page.mouse.click(6, 6)
+    check('T14c 手动输入与清空正常', await page.locator(ROWS).count() === 5)
+
+    await page.locator('.amx-db-groupbtn').click()
+    const gm = page.locator('.amx-db-group-menu')
+    await gm.getByLabel('按属性分组', { exact: true }).selectOption('state')
+    check('T15 单选组显示名称和数量，空组可见', await page.locator('.amx-db-group').count() === 3 && (await page.locator('.amx-db-grouphead').first().innerText()).includes('启用'))
+    await gm.getByLabel('隐藏空组', { exact: true }).check()
+    check('T15b 隐藏空组立即生效', await page.locator('.amx-db-group').count() === 2)
+    await gm.getByRole('button', { name: '上移 停用', exact: true }).click()
+    check('T15c 手动调整组序', (await page.locator('.amx-db-grouphead').first().innerText()).includes('停用'))
+    await gm.getByRole('button', { name: '隐藏 启用', exact: true }).click()
+    check('T15d 隐藏组不删除数据', await page.locator(ROWS).count() === 2)
+    await gm.getByRole('button', { name: '显示 启用', exact: true }).click()
+    await gm.getByRole('button', { name: '折叠全部', exact: true }).click()
+    check('T15e 折叠后保留组头与数量', await page.locator(ROWS).count() === 0 && await page.locator('.amx-db-grouphead').count() === 2)
+    await gm.getByRole('button', { name: '展开全部', exact: true }).click()
+    await page.evaluate(() => window.__tableMount.update(3))
+    await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 3, ROWS)
+    check('T15f 数据刷新保留组序和隐藏空组', (await page.locator('.amx-db-grouphead').first().innerText()).includes('停用') && await gm.getByLabel('隐藏空组').isChecked())
+    check('T15g 分组菜单控件没有被弹层裁切', await gm.evaluate((el) => {
+      const r = el.closest('.amx-db-pop').getBoundingClientRect()
+      return [...el.querySelectorAll('select,input,button')].every((c) => { const b = c.getBoundingClientRect(); return b.left >= r.left && b.right <= r.right + 1 })
+    }))
+    await shot(page, 'tablemount-4-group-menu-dark')
+    await page.mouse.click(6, 6)
+    await shot(page, 'tablemount-5-grouped-dark')
+
+    await page.goto(`${BASE}?tablemount&tablegroup`)
+    await page.waitForSelector('.amx-db-group')
+    check('T16 插件初始分组规格生效', await page.locator('.amx-db-group').count() === 2 && (await page.locator('.amx-db-grouphead').first().innerText()).includes('停用'))
+    await shot(page, 'tablemount-6-grouped-light')
 
     check('T13 无未捕获页面错误', errors.length === 0, errors.slice(0, 2).join(' | '))
   } catch (e) {

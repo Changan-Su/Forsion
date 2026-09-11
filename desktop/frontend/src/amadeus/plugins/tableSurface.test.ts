@@ -40,6 +40,21 @@ const spec = (over: Partial<TableSpec> = {}): TableSpec => ({
 })
 
 describe('specToDb', () => {
+  it('places actions after a named column while retaining identity, cells and group keys', () => {
+    const s = spec({ actionsAfter: 'name', actions: () => [{ act: 'edit', label: 'Edit' }], groupBy: { key: 'state' } })
+    const db = specToDb(s)
+    expect(db.columns.slice(0, 3).map((c) => c.id)).toEqual(['name', TABLE_ACTIONS_COL, 'calls'])
+    expect(db.rows[0].cells.name).toBe('DeepSeek')
+    expect(db.views?.[0].groupBy).toBe('state')
+    expect(tableCellMeta(s).m1[TABLE_ACTIONS_COL].actions?.[0].act).toBe('edit')
+    expect(() => specToDb({ ...s, actionsAfter: 'missing' })).toThrow(/actionsAfter/)
+  })
+  it('grouping starts from a stable column value and keeps option display names', () => {
+    const db = specToDb(spec({ groupBy: { key: 'state', sort: 'manual', order: ['off', 'on'], hideEmpty: true } }))
+    expect(db.views?.[0]).toMatchObject({ groupBy: 'state', groupSort: 'manual', groupOrder: ['value:"off"', 'value:"on"'], groupHideEmpty: true })
+    expect(db.columns.find((c) => c.id === 'state')?.optionLabels).toEqual({ on: '启用', off: '停用' })
+    expect(() => specToDb(spec({ groupBy: { key: 'missing' } }))).toThrow(/group column/)
+  })
   it('列序 = spec 列序;kind 折算成多维表列类型', () => {
     const db = specToDb(spec())
     expect(db.columns.map((c) => c.id)).toEqual(['name', 'calls', 'day', 'state', 'pub', 'site'])

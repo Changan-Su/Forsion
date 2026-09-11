@@ -48,6 +48,9 @@ export interface ToolContext {
   planMode?: boolean;
   /** Muse run 标记:仅此时 add_muse_todo(Muse 唯一写权限)可见。 */
   muse?: boolean;
+  /** 无人值守 run 的异步审批档(仅引擎内部按 run 来源设定;delegate 子代理从父 ctx 继承,否则子代理越界会挂在同步审批上)。 */
+  approvalDeferral?: 'queue' | 'agent';
+
   /** 用户活动日志读取授权(config.toml activity_access;Muse 之外的 agent 用 read_activity 需显式开)。 */
   activityAccess?: boolean;
   /** 无人值守自动化的来源(triggerKey):活动行加 o= 标记,event_seen 评估据此跳过本规则自己产生的事件(防自激)。 */

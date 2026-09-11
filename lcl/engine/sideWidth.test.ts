@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeSideWidth } from './sideWidth'
+import { computeSideWidth, computeTransientSideWidth } from './sideWidth'
 
 const W = 1600 // 容器宽:1600×0.191 = 305.6 → 钳到 left 的 max=280
 
@@ -33,5 +33,11 @@ describe('computeSideWidth', () => {
   it('右侧的钳制档与左侧不同', () => {
     expect(computeSideWidth(W, 'right', { free: false, saved: null })).toBe(300) // max=300
     expect(computeSideWidth(900, 'right', { free: false, saved: null })).toBe(240) // min=240
+  })
+
+  it('临时二级 View 默认比普通侧栏宽 20%，窄屏不反向缩窄', () => {
+    expect(computeTransientSideWidth(W, 300)).toBe(360)
+    expect(computeTransientSideWidth(900, 240)).toBe(288)
+    expect(computeTransientSideWidth(360, 240)).toBe(240)
   })
 })

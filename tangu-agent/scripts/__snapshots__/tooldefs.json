@@ -2542,7 +2542,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2552,7 +2552,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -3365,7 +3365,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3375,7 +3375,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -4578,7 +4578,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4588,7 +4588,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -5919,7 +5919,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5929,7 +5929,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -6791,7 +6791,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6801,7 +6801,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -7573,7 +7573,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7583,7 +7583,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -8786,7 +8786,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8796,7 +8796,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -10127,7 +10127,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10137,7 +10137,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [
@@ -11449,7 +11449,7 @@
       "type": "function",
       "function": {
         "name": "inbox_send",
-        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action).",
+        "description": "Send a message to the user's inbox (the app's notification center). Use it for results, reminders, reports, or follow-ups the user should notice outside this conversation — not as a substitute for replying here. Delivery is immediate; for a future or recurring reminder, create an automation instead (manage_automation with an at/every trigger and a notify action). The body is rendered by the Amadeus note renderer: full markdown (tables, callouts, math, code), `![[file or note]]` embeds for attachments, a ```forsion-task fence for a task card the user can run (same format as in chat replies), and a ```forsion-button block referencing an existing manual automation rule id.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -11459,7 +11459,7 @@
             },
             "body": {
               "type": "string",
-              "description": "Optional message body (plain text or simple markdown)"
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
             }
           },
           "required": [

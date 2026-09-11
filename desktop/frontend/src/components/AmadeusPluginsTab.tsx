@@ -167,7 +167,9 @@ const PluginSettingsView: React.FC<{ pluginId: string; def: SettingsViewContribu
 const blockedLabel = (t: (k: string, v?: Record<string, string>) => string, p: AmadeusPlugin): string =>
   p.blocked === 'api'
     ? t('settings.amadeusPlugins.blockedApi', { v: String(p.apiVersion ?? '?') })
-    : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
+    : p.blocked === 'invalid'
+      ? t('settings.amadeusPlugins.blockedInvalid', { reason: p.blockedReason || '' })
+      : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
 
 /** 依赖应用区:探测 → 已连接/未检测到;一键安装(宿主白名单命令,envRun 执行) → 装完自动复测。 */
 const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
@@ -311,7 +313,7 @@ const PluginDetail: React.FC<{
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <b style={{ fontSize: 15 }}>{pluginDisplayName(p, locale)}</b>
             <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
-            <span style={badge}>{p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : t('settings.amadeusPlugins.external')}</span>
+            <span style={badge}>{p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : p.agent ? t('settings.amadeusPlugins.agentOwned', { agent: p.agent }) : t('settings.amadeusPlugins.external')}</span>
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
             )}
@@ -327,7 +329,8 @@ const PluginDetail: React.FC<{
         )}
         {/* 设备页 uninstallPlugin 是 notSupported 桩(truthy)——按标志再挡一道,免得按钮点了才报不支持 */}
         {/* 随 App 播种的(preinstalled)同样不给卸载:删了下次启动会种回来,想不用就关开关 */}
-        {!p.builtin && !p.preinstalled && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
+        {/* agent 自建 Space 同样不给卸载:那是 agent 目录里的活文件,想不用就关开关 */}
+        {!p.builtin && !p.preinstalled && !p.agent && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
           <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>

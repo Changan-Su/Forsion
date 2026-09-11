@@ -173,6 +173,51 @@ async function main() {
     }
   }
 
+  // 连续键入时不能等 transform 的 90ms 过渡跑完。用户眼前的文字会在 input 那一帧已落下，
+  // 若自绘 caret 还从旧坐标慢慢追，就会看成「内容越长光标越对不齐」。前面的几何用例等了
+  // 180ms 才量最终态，抓不到这个时序缺口；这里模拟真实 input 后只等下一帧。
+  await page.evaluate(() => {
+    document.body.style.zoom = ''
+    const ta = document.getElementById('ta')
+    ta.disabled = false
+    ta.value = ''
+    ta.focus()
+    ta.setSelectionRange(0, 0)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+  await page.waitForTimeout(180)
+  const typed = 'm'.repeat(50) // 连打的宽字符会折到第二行，覆盖录屏中的增长路径
+  const typedTruth = await page.evaluate(({ value, at }) => {
+    const ce = document.getElementById('truth')
+    ce.textContent = value
+    const r = document.createRange()
+    r.setStart(ce.firstChild, at)
+    r.collapse(true)
+    const b = r.getBoundingClientRect()
+    const cr = ce.getBoundingClientRect()
+    return { relLeft: b.left - cr.left, relTop: b.top - cr.top, height: b.height }
+  }, { value: typed, at: typed.length })
+  await page.evaluate((value) => {
+    const ta = document.getElementById('ta')
+    ta.value = value
+    ta.setSelectionRange(value.length, value.length)
+    ta.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'm' }))
+  }, typed)
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  const afterTyping = await drawn('textarea.t2c-ta')
+  check('聊天框 连续键入后覆盖层当帧贴住内容',
+    !!afterTyping
+      && Math.abs(afterTyping.relLeft - typedTruth.relLeft) <= 1.5
+      && Math.abs(afterTyping.relTop - typedTruth.relTop) <= 1.5
+      && Math.abs(afterTyping.height - typedTruth.height) <= 1.5,
+    afterTyping
+      ? `实画 rel(${afterTyping.relLeft.toFixed(1)}, ${afterTyping.relTop.toFixed(1)}) 高${afterTyping.height.toFixed(1)}; 真值 rel(${typedTruth.relLeft.toFixed(1)}, ${typedTruth.relTop.toFixed(1)}) 高${typedTruth.height.toFixed(1)}`
+      : '覆盖层没画出来')
+  // 后续用例复用 #truth 作为标准聊天文案的几何真值，不能把本例的连打文本带过去。
+  await page.evaluate(() => {
+    document.getElementById('truth').textContent = 'chat input line one, long enough to wrap somewhere around here\nline two'
+  })
+
   // 程序化清空(发送后 React setDraft('') 落到 DOM):不触发 input/selectionchange,
   // 光标必须自己归位到空框起点。病史:发完消息光标留在原文末尾不动。
   await page.evaluate(() => { document.body.style.zoom = '' })

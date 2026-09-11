@@ -22,7 +22,10 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { useEdgeNudge } from '@lcl/engine'
-import { splitSuggestions, type SuggestState } from './suggest'
+import { splitSuggestions, type SuggestState, type TaskCard } from './suggest'
+
+import { TaskCards, type TaskLanding } from './TaskCards'
+export type { TaskLanding }
 import './chat2.css'
 
 /** 流式光标该落在哪一段:整条消息**最后一个真正渲染出来的**段的下标。
@@ -183,6 +186,9 @@ export interface MessageHandlers {
   onSpeak?: (text: string) => void
   /** 点了自动化建议芯片:把这句话当作用户自己发的消息送出去(建议本身不建规则)。 */
   onSuggest?: (text: string) => void
+  /** 任务卡(```forsion-task)的落点点击:卡片本身什么也不做,点了才发消息 / 建 Muse 日程。
+   *  返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
+  onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
   onApproval?: (approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, unknown>) => void
   onInquiry?: (inquiryId: string, answer: string) => void | Promise<boolean | void>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
@@ -330,7 +336,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
 
   // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
   const streaming = msg.status === 'streaming'
-  const { text: body, items: suggestions } = splitSuggestions(msg.content, { streaming })
+  const { text: body, items: suggestions, tasks } = splitSuggestions(msg.content, { streaming })
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
   const voiceMode = !!voice?.on && (msg.status === 'done' || msg.status === 'stopped')
@@ -358,9 +364,12 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             const caretAt = msg.status === 'streaming' ? caretSegIndex(msg.segments, msg.toolEvents) : -1
             // 一道围栏可能被中间的工具块切成两段 —— 状态要续读,否则后半段的建议原文会漏进正文。
             let fenceState: SuggestState | undefined
+            // 只有**最后一个文本段**才能把未收口的围栏还回正文:靠前的段后面还有段,围栏可能在那里收口
+            // (工具块把一道围栏切成两截),提前还回 = 原文泄漏进正文 + 后半段永远拼不成卡。
+            const lastTextIdx = msg.segments.reduce((acc, s2, j) => (s2.t === 'text' ? j : acc), -1)
             return msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
-                const parsed = splitSuggestions(seg.text, { streaming, state: fenceState })
+                const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState })
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
@@ -405,7 +414,12 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             ))}
           </div>
         )}
+        {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。
+            渲染与落点按钮在 TaskCards(与收件箱共用)。 */}
+        {!!tasks.length && msg.status === 'done' && <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} />}
+
         {msg.planProposal && (
+
           // 配对 kind='plan' 的询问 → 计划卡自带三态决策(批准/编辑后批准/打回);
           // 没配上(重载后的历史、或 plan 事件缺失)就只渲染正文,询问仍走下面通用卡兜底。
           <PlanCard

@@ -10,14 +10,36 @@ describe('normalizeConfig', () => {
     expect(normalizeConfig({})).toEqual(SPECIAL_AGENTS_DEFAULTS);
     expect(normalizeConfig('nope' as any)).toEqual(SPECIAL_AGENTS_DEFAULTS);
   });
-  it('defaults: both disabled, z=10(找 1-3 条 TODO 不必更多迭代), t=5', () => {
+  it('defaults: both disabled, z=20(Muse 现在真干活,10 轮不够), t=5, 权限档 ask, 心跳 2h', () => {
     const d = SPECIAL_AGENTS_DEFAULTS;
     expect(d.historian.enabled).toBe(false);
     expect(d.muse.enabled).toBe(false);
-    expect(d.muse.maxIterationsPerCycle).toBe(10);
+    expect(d.muse.maxIterationsPerCycle).toBe(20);
     expect(d.muse.maxTodosPerWindow).toBe(5);
     expect(d.historian.everyRounds).toBe(3); // 周期合一:标题+LOG/memory 同一节奏
+    expect(d.muse.mode).toBe('ask');
+    expect(d.muse.heartbeatMinutes).toBe(120);
+    expect(d.muse.notify).toBe('immediate');
+    expect(d.muse.escalateTo).toBe('');
   });
+  it('muse 权限档/心跳/通知归一:未知值回落最保守档,心跳 0..10080 分钟(旧 heartbeatHours ×60 兼容),escalateTo 裁剪', () => {
+    expect(normalizeConfig({ muse: { mode: 'auto' } }).muse.mode).toBe('auto');
+    expect(normalizeConfig({ muse: { mode: 'agent' } }).muse.mode).toBe('agent');
+    expect(normalizeConfig({ muse: { mode: 'full-auto' } }).muse.mode).toBe('ask'); // 旧枚举名/错字 → ask
+    expect(normalizeConfig({ muse: { mode: 7 } }).muse.mode).toBe('ask');
+    expect(normalizeConfig({ muse: { heartbeatMinutes: 0 } }).muse.heartbeatMinutes).toBe(0);
+    expect(normalizeConfig({ muse: { heartbeatMinutes: 3 } }).muse.heartbeatMinutes).toBe(3);
+    expect(normalizeConfig({ muse: { heartbeatMinutes: 99999 } }).muse.heartbeatMinutes).toBe(10080);
+    expect(normalizeConfig({ muse: { heartbeatMinutes: 'x' } }).muse.heartbeatMinutes).toBe(120);
+    expect(normalizeConfig({ muse: { heartbeatHours: 2 } }).muse.heartbeatMinutes).toBe(120); // 旧字段 ×60
+    expect(normalizeConfig({ muse: { heartbeatHours: 0.5 } }).muse.heartbeatMinutes).toBe(30);
+    expect(normalizeConfig({ muse: { heartbeatHours: 'x' } }).muse.heartbeatMinutes).toBe(120);
+    expect(normalizeConfig({ muse: { heartbeatHours: 1, heartbeatMinutes: 7 } }).muse.heartbeatMinutes).toBe(7); // 新字段优先
+    expect(normalizeConfig({ muse: { notify: 'digest' } }).muse.notify).toBe('digest');
+    expect(normalizeConfig({ muse: { notify: 'loud' } }).muse.notify).toBe('immediate');
+    expect(normalizeConfig({ muse: { escalateTo: '  coder  ' } }).muse.escalateTo).toBe('coder');
+  });
+
   it('clamps out-of-range numbers', () => {
     const c = normalizeConfig({
       historian: { everyRounds: 0 },

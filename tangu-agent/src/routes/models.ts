@@ -58,7 +58,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     // provider/model 兜底,标灰方向两头都能错(评审实证:grok off 不该亮/qwen off 不该灰)。
     const thinkLv = (provider: string | undefined, modelId: string, baseUrl?: string): ThinkingLevel[] =>
       supportedThinkingLevels(resolveModelCapability({ provider, modelId, baseUrl }));
-    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; supportsVision: boolean; thinkingLevels?: ThinkingLevel[] }> = [];
+    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; supportsVision: boolean; thinkingLevels?: ThinkingLevel[]; groupId?: string | null; groupName?: string | null; groupSortOrder?: number; sortOrder?: number; tags?: Array<{ text: string; color: string }>; multiplier?: number | null }> = [];
 
     let forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null } = { status: 'ok', detail: null };
     let cloud: any[] = [];
@@ -87,7 +87,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       if (!m?.id) continue;
       // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm → 桌面把语音识别模型误当聊天模型(见 AsrModelChoice/ChatView 的 modelType 分流)。
       const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
+      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, groupId: m.groupId, groupName: m.groupName, groupSortOrder: m.groupSortOrder, sortOrder: m.sortOrder, tags: m.tags, multiplier: m.multiplier, contextWindow: modelContextWindow(m.id, m), supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
     }
     if (forsion.status === 'ok' && cloud.length === 0) {
       // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。

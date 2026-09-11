@@ -147,13 +147,21 @@ async function startStubEngine(data = {}) {
     if (/^\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: state.messages });
     if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
-    if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id });
+    if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id, directProviders: data.directProviders || [] });
     if (p === '/agent/agents') return json({ agents: data.agents || [] });
     if (p === '/agent/agents-meta') return json({ defaultSlug: 'xyra', order: [] });
     if (p === '/agent/engines') return json({ engines: data.engines || [] });
     if (/^\/agent\/engines\/[^/]+\/capabilities$/.test(p)) return json({ models: [], commands: [] });
     // 通道轮询(15s):不给这个端点的话 catch-all 缺 channels 字段,毒化 channelsStore → 侧栏崩「not iterable」
     if (p === '/agent/channels') return json({ channels: [], available: false });
+
+    // 用例自定义端点(data.handle):返回 undefined = 不认领,落到下面的 catch-all。
+    // 给 Muse Space / 特殊视图这类「桩里没写过的端点」用,不必每加一个面就改一次桩。
+    if (typeof data.handle === 'function') {
+      const r = await data.handle({ path: p, method: req.method, url: u, body });
+      if (r !== undefined) return json(r.__code ? r.body : r, r.__code || 200);
+    }
+
 
     // 其余给「空但结构正确」的应答:桌面启动会摸不少端点,少一个就卡在加载态。
     return json({

@@ -1,13 +1,16 @@
 /**
- * add_muse_todo —— Muse（后台常驻 Special Agent）的**唯一写权限**：向 Muse TODO 清单提交待办。
+ * add_muse_todo —— Muse（后台常驻 Special Agent）向用户提交待办建议。
  *
- * 可见性：仅 Muse run（ctx.muse=true）；并列入 PLAN_MODE_TOOLS，使 Muse 在只读 planMode 下仍可用它，
- * 从而实现「读全部 + 只写 TODO」。预算：每滚动窗口最多 maxTodosPerWindow 条（超出即拒绝）。
+ * 可见性：仅 Muse run（ctx.muse=true）；并列入 PLAN_MODE_TOOLS（历史上 Muse 跑只读 planMode 时的唯一写口;
+ * 2026-09-10 起 Muse 按权限档工作,本工具仍是「向用户提议」的正式通道）。预算：每滚动窗口最多
+ * maxTodosPerWindow 条（超出即拒绝）。落库后顺手直插一条收件箱消息(0 token,08-20 评审的第①刀):
+ * 产出不再只躺在 AgentsDetailView 里,全局角标 + 系统通知那条轨道自然带到。
  */
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../../core/db.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
+import { sendInboxMessage, MUSE_SENDER_ID } from './inboxSend.js';
 
 export const museTodoProvider: ToolProvider = {
   id: 'builtin:add_muse_todo',
@@ -21,7 +24,7 @@ export const museTodoProvider: ToolProvider = {
         function: {
           name: 'add_muse_todo',
           description:
-            'Submit one high-value, actionable todo to the Muse TODO list (this is your only write operation). Use each opportunity wisely; ' +
+            'Propose one high-value, actionable todo to the user (it lands on the Muse TODO list and in their inbox). Use each opportunity wisely; ' +
             'only submit suggestions truly worth the user\'s time and actionable right now; keep the title concise, and in detail explain why it is valuable and how to do it.',
           parameters: {
             type: 'object',
@@ -62,7 +65,13 @@ export const museTodoProvider: ToolProvider = {
             `INSERT INTO muse_todos (id, user_id, title, detail, status, source_session_id) VALUES (?, ?, ?, ?, 'pending', ?)`,
             [uuidv4(), ctx.userId, title, detail, ctx.sessionId],
           );
+          // 收件箱投影(失败不影响 TODO 本身;标题沿用模型写的原文=跟随用户语言,不硬编码文案)。
+          // digest 档不逐条打扰:日报里再汇总(muse.ts 写 Journal),这里只落 TODO。
+          let digest = false;
+          try { digest = loadSpecialAgentsConfig().muse.notify === 'digest'; } catch { /* 默认 immediate */ }
+          if (!digest) await sendInboxMessage(ctx.userId, { title, body: detail, senderId: MUSE_SENDER_ID }).catch(() => {});
           return `已记录 TODO：「${title}」（本时段还可提 ${Math.max(0, maxPerWindow - n - 1)} 条）。`;
+
         } catch (e: any) {
           return `Error: ${e?.message || e}`;
         }

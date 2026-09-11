@@ -603,6 +603,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
   const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+  // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
+  // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
+  // 单看它就能让普通 run 把同步审批改成排队甚至代批(Codex 09-10 P1)。普通 run 恒 undefined = 同步审批一字不变。
+  const approvalDeferral: 'queue' | 'agent' | undefined =
+    input.background === 'muse' && (agentConfig.approvalDeferral === 'queue' || agentConfig.approvalDeferral === 'agent')
+      ? agentConfig.approvalDeferral
+      : undefined;
+
   // 计划模式(类 Claude plan mode):工具集收敛为只读 + exit_plan_mode(toolRegistry 集中过滤),
   // custom/MCP 工具整体跳过;run 级冻结——批准退出后下一轮 run 才拿到完整工具集。
   const planMode = !!agentConfig.planMode && profile.capabilities.hostExec && ps.planMode;
@@ -1236,6 +1244,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
       muse: !!agentConfig.muse,
+      approvalDeferral,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
       toolsMode,
@@ -1334,7 +1343,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
-      const decision = await gateToolCall(runId, effCall, { sessionId, execMode, approvalMode, cwd, extraRoots, profile }, ac.signal);
+      const decision = await gateToolCall(runId, effCall, {
+        sessionId, execMode, approvalMode, cwd, extraRoots, profile,
+        approvalDeferral, userId, agentSlug: activeAgentSlug,
+      }, ac.signal);
+
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'reject') {
         // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)

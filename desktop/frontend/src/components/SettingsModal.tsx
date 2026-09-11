@@ -1,3 +1,4 @@
+import { ModelPickerSettings } from './ModelPickerSettings'
 import { HostSandboxSettings } from './HostSandboxSettings'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
@@ -35,11 +36,10 @@ import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
 import { RemoteSyncSection } from './RemoteSyncSection'
-import { CHANGELOG } from '../changelog'
+import { APP_VERSION, CHANGELOG } from '../changelog'
 import { Markdown } from './Markdown'
 import { UpdateActions } from './UpdateActions'
 import { openChangelogTab } from '../views/ChangelogView'
-import { ModelGroupList } from './ModelGroupList'
 import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
 import { AuxModelChoice } from './AuxModelChoice'
@@ -81,6 +81,28 @@ import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWai
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'modelsettings.title': { zh: '模型', en: 'Models' },
+  'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
+  'modelsettings.display': { zh: '分组与显示', en: 'Groups & visibility' },
+  'modelsettings.providers': { zh: '提供方', en: 'Providers' },
+  'modelsettings.defaultsHint': { zh: '按用途选择默认模型，修改后自动保存。', en: 'Choose default models for each purpose. Changes save automatically.' },
+  'modelsettings.displayHint': { zh: '整理模型选择器中的分组，选择本地模型的显示范围。', en: 'Organize picker groups and choose which local models appear.' },
+  'modelsettings.providersHint': { zh: '管理提供方登录、API 连接与模型拉取。', en: 'Manage provider sign-ins, API connections and model discovery.' },
+  'modelsettings.searchHint': { zh: '配置联网搜索的服务与凭据。', en: 'Configure web search services and credentials.' },
+  'modelsettings.voiceHint': { zh: '配置语音输入、朗读模型和音色。', en: 'Configure speech recognition, speech synthesis and voices.' },
+  'modelsettings.defaultUses': { zh: '按用途选择', en: 'Models by purpose' },
+  'modelsettings.refresh': { zh: '刷新模型', en: 'Refresh models' },
+  'modelsettings.chat': { zh: '对话与任务', en: 'Conversations & tasks' },
+  'modelsettings.chatHint': { zh: '新会话默认使用的主模型。', en: 'The main model for new conversations.' },
+  'modelsettings.image': { zh: '图像生成', en: 'Image generation' },
+  'modelsettings.imageHint': { zh: '用于生成和编辑图片。', en: 'For generating and editing images.' },
+  'modelsettings.followDefault': { zh: '跟随服务默认', en: 'Follow service default' },
+  'modelsettings.noModels': { zh: '暂无可用模型。可在提供方中配置连接，然后刷新模型。', en: 'No models available. Configure a provider connection, then refresh models.' },
+  'modelsettings.manageDisplay': { zh: '管理分组与显示', en: 'Manage groups & visibility' },
+  'modelsettings.manageProviders': { zh: '管理提供方', en: 'Manage providers' },
+  'modelsettings.apiProviders': { zh: 'API 连接', en: 'API connections' },
+  'modelsettings.providerHint': { zh: '添加服务地址和 API Key，拉取并保存该连接可用的模型。', en: 'Add a service URL and API key, then fetch and save the models available through that connection.' },
+  'modelsettings.loginHint': { zh: '使用提供方账号登录，完成后自动刷新可用模型。', en: 'Sign in with a provider account. Available models refresh after sign-in.' },
   'settingsmodal.model.providerSep': { zh: '、', en: ', ' },
   'settingsmodal.advanced.resetLayout': { zh: '恢复默认布局', en: 'Restore default layout' },
   'settingsmodal.advanced.resetLayoutHint': {
@@ -310,7 +332,7 @@ export const SettingsModal: React.FC<{
     // backendStatus)下这一页**每个块都是 false**——连接项全是桌面/自建后端专属——列出来点进去是白板,
     // 而它还是默认落点。整页无正文就别列。
     ...(!isDesktop && cloudWeb ? [] : ([['general', t('settings.tab.general')]] as Array<[Tab, string]>)),
-    ['model', t('settings.tab.model')],
+    ['model', t('modelsettings.title')],
     ...(isDesktop ? ([['agents', t('settings.tab.agents')]] as Array<[Tab, string]>) : []),
     // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
@@ -899,9 +921,10 @@ export const SettingsModal: React.FC<{
       ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
     ],
     model: [
-      ['m-models', t('settings.sub.models')],
+      ['m-models', t('modelsettings.defaults')],
+      ['m-display', t('modelsettings.display')],
+      ...(isDesktop ? [['m-providers', t('modelsettings.providers')] as [string, string]] : []),
       ...(isDesktop ? ([
-        ['m-providers', t('settings.sub.providers')],
         ...(wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
         ...(stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
       ] as Array<[string, string]>) : []),
@@ -940,6 +963,7 @@ export const SettingsModal: React.FC<{
   const subItems = subItemsForTab(tab)
   const activeSub = subItems.some(([k]) => k === sub) ? sub : (subItems[0]?.[0] ?? '')
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
+  const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
   // .settings-body,内层 `key` 重挂不会重置父容器的
   // scrollTop:在技能库往下滚过再切到另一个长分类,会直接落在新页中段(短分类则落到底)。
@@ -1190,8 +1214,8 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
-            <div className="settings-main-title">{activeTabLabel}</div>
-            {activeTabDescription && <p>{activeTabDescription}</p>}
+            <div className="settings-main-title">{tab === 'model' ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
+            {tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
         <div className="settings-body">
@@ -1705,65 +1729,55 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'model' && activeSub === 'm-models' && (
                   <>
-                    {/* 「默认模型」= 这个分组列表本身(点一下即写 modelId)。原先它上面还有一个手填
-                        `<providerId>/<model>` 的输入框,和列表写同一个值 —— 用户当然会问「怎么是手填的」。
-                        删掉输入框、把列表的标题从「可用模型」改成「默认模型」,一个入口。 */}
-                    <div className="field">
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {t('settings.model.defaultLabel')}
-                        <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => void loadModels()}>
-                          <RefreshCw size={12} className={modelsLoading ? 'spin' : ''} />
-                        </button>
-                      </label>
-                      {models?.models.length ? (
-                        <ModelGroupList
-                          models={models.models.filter((m) => (m.modelType || 'llm') === 'llm')}
-                          selectedId={draft.modelId}
-                          onSelect={(id) => {
-                            setDraft({ ...draft, modelId: id })
-                            p.onConfigChange({ modelId: id })
-                          }}
+                    <SettingsPanel className="model-defaults-panel" title={t('modelsettings.defaultUses')} actions={
+                      <button className="btn ghost sm" disabled={modelsLoading} onClick={() => void loadModels()}>
+                        <RefreshCw size={12} className={modelsLoading ? 'spin' : ''} />{t('modelsettings.refresh')}
+                      </button>
+                    }>
+                      <SettingsRow label={t('modelsettings.chat')} description={t('modelsettings.chatHint')} control={
+                        <ModelSelect
+                          models={(models?.models || []).filter((m) => (m.modelType || 'llm') === 'llm')}
+                          value={draft.modelId || ''}
+                          cloudDefaultId={models?.defaultModelId}
+                          defaultLabel={t('modelsettings.followDefault')}
+                          ariaLabel={t('modelsettings.chat')}
+                          icon={<MessageCircle size={13} />}
+                          disabled={modelsLoading}
+                          onChange={(modelId) => { setDraft({ ...draft, modelId }); p.onConfigChange({ modelId }) }}
                         />
-                      ) : (
-                        <div className="hint">{modelsLoading ? t('common.loading') : t('model.empty')}</div>
-                      )}
-                      {models?.forsion && models.forsion.status !== 'ok' && (
-                        <div className="hint" style={{ color: models.forsion.status === 'error' ? 'var(--danger)' : undefined, marginTop: 6 }}>
-                          {models.forsion.status === 'error' ? t('settings.model.cloudFetchError') : 'ℹ '}
-                          {models.forsion.detail}
-                        </div>
-                      )}
-                      {models?.directProviders.length ? (
-                        <div className="hint">
-                          {t('settings.model.directProviders')}{models.directProviders.map((d) => d.providerId).join(t('settingsmodal.model.providerSep'))}
-                        </div>
-                      ) : null}
+                      } />
+                      <SettingsRow label={t('modelsettings.image')} description={t('modelsettings.imageHint')} control={
+                        <ModelSelect
+                          models={(models?.models || []).filter((m) => m.modelType === 'image_gen')}
+                          value={draft.imageModelId || ''}
+                          cloudDefaultId={models?.imageModelId}
+                          ariaLabel={t('modelsettings.image')}
+                          icon={<ImageIcon size={13} />}
+                          disabled={modelsLoading}
+                          onChange={(imageModelId) => { setDraft({ ...draft, imageModelId }); p.onConfigChange({ imageModelId }) }}
+                        />
+                      } />
+                      {isDesktop && <AuxModelChoice models={models} compact />}
+                    </SettingsPanel>
+                    {models?.forsion && models.forsion.status !== 'ok' && (
+                      <div className="hint" role="status" style={{ color: models.forsion.status === 'error' ? 'var(--danger)' : undefined }}>
+                        {models.forsion.status === 'error' ? t('settings.model.cloudFetchError') : ''}{models.forsion.detail}
+                      </div>
+                    )}
+                    {!modelsLoading && !models?.models.length && <div className="hint">{t('modelsettings.noModels')}</div>}
+                    <div className="model-settings-links">
+                      <button className="btn ghost sm" onClick={() => setSub('m-display')}>{t('modelsettings.manageDisplay')}<ChevronRight size={12} /></button>
+                      {isDesktop && <button className="btn ghost sm" onClick={() => setSub('m-providers')}>{t('modelsettings.manageProviders')}<ChevronRight size={12} /></button>}
                     </div>
+                  </>
+                )}
 
-                    {/* 生图模型(generate_image 用):留空=跟随云端生图默认;无可用模型则给配置指引。 */}
-                    <div className="field">
-                      <label>{t('settings.model.imageModelsLabel')}</label>
-                      {(() => {
-                        const imgs = (models?.models || []).filter((m) => m.modelType === 'image_gen')
-                        if (!imgs.length) return <div className="hint">{modelsLoading ? t('common.loading') : t('settings.model.imageEmpty')}</div>
-                        return (
-                          <ModelSelect
-                            models={imgs}
-                            value={draft.imageModelId || ''}
-                            cloudDefaultId={models?.imageModelId}
-                            icon={<ImageIcon size={13} />}
-                            onChange={(v: string) => { setDraft({ ...draft, imageModelId: v }); p.onConfigChange({ imageModelId: v }) }}
-                          />
-                        )
-                      })()}
-                      <div className="hint" style={{ marginTop: 4 }}>{t('settings.model.imageHelp')}</div>
-                    </div>
+                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} />}
 
-                    {isDesktop && <AuxModelChoice models={models} />}
-
-                    {isDesktop && <AsrModelChoice models={models} />}
-
-                    {isDesktop && providers && providers.length > 0 && (
+                {tab === 'model' && activeSub === 'm-providers' && (
+                  <>
+                    {isDesktop && <>
+                    {providers && providers.length > 0 && (
                       <div className="field">
                         <label>{t('settings.provider.loginLabel')}</label>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1782,19 +1796,14 @@ export const SettingsModal: React.FC<{
                         </div>
                         {providerBusy && <div className="hint" style={{ marginTop: 6 }}>{t('settings.provider.loginBusy')}</div>}
                         <div className="hint">
-                          {t('settings.provider.loginHintPrefix')}<code>provider/model</code>{t('settings.provider.loginHintSuffix')}
+                          {t('modelsettings.loginHint')}
                         </div>
                       </div>
                     )}
-                  </>
-                )}
-
-                {tab === 'model' && isDesktop && activeSub === 'm-providers' && (
-                  <>
                     <div className="field">
-                      <label>{t('settings.customProvider.label')}</label>
+                      <label>{t('modelsettings.apiProviders')}</label>
                       <div className="hint" style={{ marginBottom: 8 }}>
-                        {t('settings.customProvider.introPrefix')}<code>--providers-file</code>{t('settings.customProvider.introMid')}<code>providerId/model</code>{t('settings.customProvider.introSuffix')}
+                        {t('modelsettings.providerHint')}
                       </div>
                       {customProviders.length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
@@ -1827,6 +1836,7 @@ export const SettingsModal: React.FC<{
                                   if (!window.confirm(t('settings.customProvider.deleteConfirm', { id: cp.providerId }))) return
                                   void window.tangu!.deleteProvider!(cp.providerId).then((list) => {
                                     setCustomProviders(list)
+                                    void loadModels()
                                     setProviderSaveMsg(t('settings.customProvider.deletedReloading'))
                                   })
                                 }}
@@ -2004,7 +2014,7 @@ export const SettingsModal: React.FC<{
                               }).then((list) => {
                                 setCustomProviders(list)
                                 setEditProvider(null)
-                                setModels(null) // 强制下次进模型页重新拉列表
+                                void loadModels() // Provider 保存/后端重启完成后立即刷新显示筛选目录
                                 setProviderSaveMsg(t('settings.customProvider.savedReloading'))
                               }).catch((e) => setProviderTestMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
                             }}
@@ -2064,6 +2074,7 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
 
+                    </>}
                   </>
                 )}
 
@@ -2187,6 +2198,7 @@ export const SettingsModal: React.FC<{
                 {/* 语音朗读(TTS):OpenAI 兼容 /audio/speech;模型 id 命中直连 provider 的 ttsModelIds 或 <providerId>/<model>。 */}
                 {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
                   <>
+                    <AsrModelChoice models={models} />
                     {stored && (
                       <>
                         <div className="field">
@@ -3353,7 +3365,7 @@ export const SettingsModal: React.FC<{
                             }
                           }}
                         >
-                          {t('about.version')} {appVersion || CHANGELOG[0]?.version || '—'}
+                          {t('about.version')} {appVersion || APP_VERSION || '—'}
                         </div>
                         {devMode ? (
                           <div className="hint" style={{ marginTop: 2, color: 'var(--accent-ink)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>

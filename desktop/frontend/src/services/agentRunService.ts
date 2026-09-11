@@ -4,7 +4,7 @@
  * 复刻 apps/Forsion-AI-Studio/client/services/cloudAgentService.ts 的成熟模式。
  */
 import type { AgentConfig, AgentRunEvent, Attachment, StartRunResult, TanguDesktopConfig } from '../types'
-import { CHANGELOG } from '../changelog'
+import { APP_VERSION } from '../changelog'
 import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
@@ -45,7 +45,7 @@ export function currentPlatform(): ClientPlatform {
     : 'desktop'
 }
 export function currentClientId(): string {
-  return `${currentPlatform()}/${CHANGELOG[0]?.version || '0'}`
+  return `${currentPlatform()}/${APP_VERSION || '0'}`
 }
 
 /** /health 之后追打的带鉴权探针:任一需要 authMiddleware 的轻量 GET 即可(special/config 无副作用、体积小)。 */

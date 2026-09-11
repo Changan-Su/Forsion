@@ -334,7 +334,11 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
 export async function gateToolCall(
   runId: string,
   call: ToolCall,
-  ctx: { sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile },
+  ctx: {
+    sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+    /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
+    approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
+  },
   signal?: AbortSignal,
 ): Promise<ApprovalDecision> {
   const name = call.function.name;
@@ -390,7 +394,13 @@ export async function gateToolCall(
     : escalate
       ? { kind: 'escalate', mode }
       : { kind: 'mode', mode };
+  // 无人值守 run:没有订阅者能应答 approval_request,await 就是永久卡死 → 排队 / 代批(动态 import 防模块环)。
+  if (ctx.approvalDeferral) {
+    const { deferApproval } = await import('./pendingApprovals.js');
+    return deferApproval(runId, call, preview, reason, ctx);
+  }
   const d = await requestApproval(runId, call, preview, signal, reason);
+
   if (d.action === 'approve_always') {
     // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
     if (!escalate && !forceAsk) allowAlways(ctx.sessionId, name);

@@ -231,7 +231,8 @@ describe('内存源 / 只读 / 开行接缝', () => {
     expect(h.querySelectorAll('.amx-db-name')).toHaveLength(0)
     expect(h.querySelectorAll('[aria-label="open as page"]')).toHaveLength(0)
     expect(h.querySelectorAll('.amx-db-viewtab')).toHaveLength(0) // 只有一个视图,tab 条不占行
-    expect(h.querySelectorAll('.amx-db-filterbtn')).toHaveLength(1)
+    expect(h.querySelectorAll('.amx-db-filterbtn')).toHaveLength(3) // 分组 + 筛选 + 默认开启的自适应列宽
+    expect(h.querySelector('.amx-db-autosize')?.getAttribute('aria-pressed')).toBe('true')
     expect(h.querySelectorAll('.amx-db-search')).toHaveLength(1)
     expect(h.querySelectorAll('[aria-label="view settings"]')).toHaveLength(1)
   })
@@ -318,5 +319,36 @@ describe('hideTools(分页数据 partial)', () => {
     await mount({ db, readOnly: true, hideHead: true, hideTools: true })
     expect(host().querySelectorAll('.amx-db-viewbar, .amx-db-filterbtn, .amx-db-search')).toHaveLength(0)
     expect(dataRows()).toHaveLength(1)
+  })
+})
+
+describe('自适应列宽', () => {
+  it('旧表默认开启并忽略既有坏宽；关闭时保留当前观感，按钮状态可再开启', async () => {
+    const db: DbFile = {
+      version: 1,
+      name: '用户',
+      columns: [
+        { id: 'user', name: '用户', type: 'text', width: 800 },
+        { id: 'role', name: '角色', type: 'select', width: 800 },
+      ],
+      rows: [{ id: 'u1', cells: { user: 'someone_1788504658526', role: 'USER' } }],
+    }
+    const cellMeta: DbCellMeta = { u1: { user: { sub: '副内容'.repeat(500) } } }
+    await mount({ db, readOnly: true, cellMeta })
+
+    const button = host().querySelector<HTMLButtonElement>('.amx-db-autosize')!
+    const header = host().querySelector<HTMLElement>('.amx-db-hrow')!
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(header.style.gridTemplateColumns).not.toContain('800px')
+    const autoGrid = header.style.gridTemplateColumns
+    const widths = autoGrid.match(/\d+px/g)?.map((value) => Number.parseInt(value, 10)) ?? []
+    expect(widths[1]).toBeGreaterThan(widths[2]) // user 主内容长，role=USER 收到 100px
+    expect(widths[2]).toBe(100)
+
+    await click(button)
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(header.style.gridTemplateColumns).toBe(autoGrid) // 关掉时先复制当前宽，不跳回旧的 800px
+    await click(button)
+    expect(button.getAttribute('aria-pressed')).toBe('true')
   })
 })

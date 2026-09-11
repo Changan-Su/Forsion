@@ -1,3 +1,4 @@
+import { useModelPickerPreferences } from '../../modelPickerPreferences'
 /**
  * Composer2 —— 输入区「完全重写」为编辑式新视觉(悬浮圆角卡 + 圆形发送 + 下方药丸 chips),
  * 逻辑与旧 MessageInput 等价、零功能损失:slash 命令 / @ 提及 / 附件(选/粘/拖)/ 云沙箱工作区文件 /
@@ -1101,7 +1102,8 @@ export const Composer2: React.FC<{
     setOpenMenu(null)
   }
 
-  const modelGroups = useMemo(() => groupModelsByProvider(models || []), [models])
+  const pickerPrefs = useModelPickerPreferences()
+  const modelGroups = useMemo(() => groupModelsByProvider(models || [], pickerPrefs), [models, pickerPrefs])
   const groupActive = !!groupChat && (groupAgents?.length || 0) >= 2
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
@@ -1120,8 +1122,8 @@ export const Composer2: React.FC<{
   const modelPillGroups: ModelPillGroup[] = isEngine
     ? [{ label: engineLabel, options: engineModels || [] }]
     : modelGroups.map((g) => ({
-        label: g.provider + (g.source === 'direct' ? ` · ${t('model.group.direct')}` : g.source === 'forsion' ? ` · ${t('model.group.forsion')}` : ''),
-        options: g.models.map((m) => ({ id: m.id, name: m.name, description: `${m.provider} · ${m.id}` })),
+        key: g.key, label: g.provider, source: g.source,
+        options: g.models.map((m) => ({ ...m, description: `${m.provider} · ${m.id}` })),
       }))
   const showModelPill = isEngine || !!onModelChange || !!onThinkingChange
 

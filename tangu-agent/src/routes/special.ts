@@ -16,8 +16,14 @@
  *   GET      /agent/special/automation/sessions        agent 自动化的常驻会话列表(?triggerId= 过滤)
  *   GET      /agent/special/automation/runs?sessionId= 某会话的历次运行(muse 会话与自动化会话通用)
  *   GET      /agent/special/schedule                    全 agent 日程聚合(SCHEDULE.db;Calendar/自动化 Space)
- *   POST     /agent/special/schedule/:slug/entries      upsert 日程条目(带 id 改/无 id 建)
+ *   POST     /agent/special/schedule/:slug/entries      upsert 日程条目(带 id 改/无 id 建;muse 的 auto 条目=自触发/Track)
  *   DELETE   /agent/special/schedule/:slug/entries/:id  删除一条日程条目
+ *   GET      /agent/special/approvals?status=           无人值守 run 的待批/已批清单(pending_approvals)
+ *   GET      /agent/special/approvals/:id               按 id 读一行(收件箱审批卡)
+ *   POST     /agent/special/approvals/:id/approve       用户批准 → 引擎按原参数执行(结果随响应回)
+ *   POST     /agent/special/approvals/:id/reject        用户拒绝({ note? })
+ *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
+ *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404。
  */
@@ -40,6 +46,10 @@ import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, removeEntry } from '../services/agentSchedule.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
+import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
+import { museLibraryDir } from '../services/muse.js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 
 const router = Router();
 
@@ -407,7 +417,8 @@ router.get('/agent/special/schedule', authMiddleware, async (_req: AuthRequest, 
   }
 });
 
-// upsert 日程条目(带 id 改/无 id 建;校验与 manage_schedule 工具共用,muse 拒 auto)。
+// upsert 日程条目(带 id 改/无 id 建;校验与 manage_schedule 工具共用)。muse 的 auto 条目 = 自触发 / Track
+// (任务卡「交给 Muse 追踪」就打到这里,slug=muse),到期由 muse.ts 回灌进 Muse 周期,不走 automation 会话。
 router.post('/agent/special/schedule/:slug/entries', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
@@ -440,7 +451,95 @@ router.delete('/agent/special/schedule/:slug/entries/:id', authMiddleware, async
   }
 });
 
+// 反馈行(任务卡「在此/新会话/交给 Muse/忽略」等用户动作):与 TODO 处理同一条 [feedback] 通道,下周期 read_log 即见。
+router.post('/agent/special/muse/feedback', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const text = String(req.body?.text || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!text) return res.status(400).json({ detail: 'text required' });
+  await appendMuseFeedback(req.user!.userId, `[feedback] ${text}`);
+  res.json({ ok: true });
+});
+
+// ── 异步审批(pending_approvals;Muse ask/agent 档的越界动作) ──────────────
+
+
+router.get('/agent/special/approvals', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const status = typeof req.query.status === 'string' && req.query.status ? req.query.status : undefined;
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+    res.json({ approvals: await listApprovals(req.user!.userId, status, limit) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'approvals failed' });
+  }
+});
+
+router.get('/agent/special/approvals/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const row = await getApproval(req.user!.userId, String(req.params.id || ''));
+    if (!row) return res.status(404).json({ detail: 'approval not found' });
+    res.json({ approval: row });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'approval failed' });
+  }
+});
+
+router.post('/agent/special/approvals/:id/approve', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', req.body?.note);
+    if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
+    res.json({ ok: true, status: r.status, result: r.result });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'approve failed' });
+  }
+});
+
+router.post('/agent/special/approvals/:id/reject', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'reject', 'user', req.body?.note);
+    if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
+    res.json({ ok: true, status: r.status });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'reject failed' });
+  }
+});
+
+// Muse Library 目录树(桌面 Agent Space 左栏)。routes/agents.ts 的 /library 是扁平的(拒子目录),
+// Journal/ 与草稿子目录需要递归;只列相对路径与大小,不读内容(内容走 fs 读接口/ /library/file)。
+router.get('/agent/special/muse/library', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const root = museLibraryDir();
+    const out: { path: string; size: number; mtime: number; dir: boolean }[] = [];
+    const walk = async (dir: string, rel: string, depth: number): Promise<void> => {
+      if (depth > 6 || out.length >= 2000) return;
+      let entries: import('node:fs').Dirent[] = [];
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (out.length >= 2000) return; // 帽子要在循环里也管用:一个 5000 文件的宽目录不能靠入口那一次检查兜住
+        if (e.name.startsWith('.')) continue;
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+
+        if (e.isDirectory()) { out.push({ path: relPath, size: 0, mtime: 0, dir: true }); await walk(path.join(dir, e.name), relPath, depth + 1); continue; }
+        if (!e.isFile()) continue;
+        try {
+          const st = await fs.stat(path.join(dir, e.name));
+          out.push({ path: relPath, size: st.size, mtime: st.mtimeMs, dir: false });
+        } catch { /* 竞态删除 */ }
+      }
+    };
+    await walk(root, '', 0);
+    res.json({ root, files: out });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'library failed' });
+  }
+});
+
 // 某会话的历次运行(muse 会话与自动化会话通用;只回自动化相关 kind,防任意会话被枚举 run 元数据)。
+
 router.get('/agent/special/automation/runs', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {

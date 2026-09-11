@@ -32,6 +32,8 @@
   --on-danger: #ffffff;
   --danger-light: rgba(163, 80, 63, 0.08);
   --warning: #806000;
+  --model-tag-blue: #2877b8;
+  --model-tag-purple: #8254b3;
   --warning-light: rgba(128, 96, 0, 0.1);
   --overlay-subtle: rgba(28, 28, 28, 0.03);
   --overlay-light: rgba(28, 28, 28, 0.04);
@@ -138,6 +140,8 @@
   --on-danger: #161018;
   --danger-light: rgba(217, 144, 128, 0.12);
   --warning: #e0b85b;
+  --model-tag-blue: #73b9ef;
+  --model-tag-purple: #bc9be8;
   --warning-light: rgba(224, 184, 91, 0.14);
   --overlay-subtle: rgba(242, 239, 232, 0.03);
   --overlay-light: rgba(242, 239, 232, 0.05);
@@ -251,7 +255,7 @@ input, textarea, select { font: inherit; color: var(--text); }
  * 新增这类「壳画框」的搜索框/输入区时,把选择器加进来;仪器:npm run check:formbase。 */
 :where(
   .settings-nav-search input, .settings-filter-input > input,
-  .t2s-search input, .model-search input, .mk-search input, .mk-sort select,
+  .t2s-search input, .model-search input, .model-picker-search input, .mk-search input, .mk-sort select,
   .project-menu-search input, .add-menu-search input,
   .composer-box textarea, .t2c-ta,
   .amx-qf-input, .amx-findbar input, .amx-coverpick-search input, .amx-prop-chips input
@@ -3643,6 +3647,8 @@ html.dark .brand-logo--dark { display: inline-block; }
 .agent-card-head .ac-title { font-weight: 600; font-size: 13.5px; display: inline-flex; align-items: center; gap: 7px; }
 .agent-card-head .grow { flex: 1; }
 .agent-card .ac-desc { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; }
+.agent-card .ac-sec { color: var(--text-muted); font-size: 12px; font-weight: 600; margin: 14px 0 6px; }
+.agent-card summary.ac-sec { cursor: pointer; }
 .agent-card.disabled { opacity: 0.66; }
 /* seg 紧凑变体(卡头开关) */
 .seg.seg-sm button { padding: 3px 12px; font-size: 12px; }

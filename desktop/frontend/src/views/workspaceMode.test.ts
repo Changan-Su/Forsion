@@ -1,6 +1,6 @@
 /** 统一工作区视图的自动模式规则 + 布局迁移(退役视图改名/主区 frame 化)。 */
 import { describe, it, expect } from 'vitest'
-import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath } from './workspaceMode'
+import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath, INBOX_WORKSPACE_MODE } from './workspaceMode'
 import { migrateLayoutBlob } from '@lcl/engine/dockviewStore'
 import { ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey } from '../types'
 
@@ -134,5 +134,35 @@ describe('migrateLayoutBlob', () => {
     const once = JSON.stringify(b1)
     migrateLayoutBlob(b1 as never)
     expect(JSON.stringify(b1)).toBe(once)
+  })
+})
+
+describe('收件箱接入统一工作区(2026-09-11)', () => {
+  it('老布局里的 inbox-list(左栏 panel 与收起态 stash)迁成 workspace', () => {
+    const b = {
+      dockview: { panels: { l: { contentComponent: 'inbox-list', params: { __loc: 'left', __type: 'inbox-list' } } } },
+      sidebars: { left: { visible: true, stash: [{ type: 'inbox-list', params: {} }] }, right: { visible: false, stash: [{ type: 'workspace', params: {} }] } },
+    }
+    migrateLayoutBlob(b as never)
+    expect(b.dockview.panels.l.params.__type).toBe('workspace')
+    expect(b.dockview.panels.l.contentComponent).toBe('workspace')
+    expect(b.sidebars.left.stash[0].type).toBe('workspace')
+    // 钉 mode = 收件箱列表源(旧叶子可能不在 Inbox Space,光改类型会落成会话 / 笔记);lcl 里的字面量与宿主常量同一个
+    expect((b.dockview.panels.l.params as Record<string, unknown>).mode).toBe(INBOX_WORKSPACE_MODE)
+    expect(b.sidebars.left.stash[0].params).toEqual({ mode: INBOX_WORKSPACE_MODE })
+  })
+  it('迁移只补缺的参数:布局里已存的 mode 不被覆盖;字符串映射(sessions 等)照旧不带参数', () => {
+    const b = {
+      dockview: { panels: { s: { contentComponent: 'sessions', params: { __loc: 'left', __type: 'sessions' } } } },
+      sidebars: { left: { visible: true, stash: [{ type: 'inbox-list', params: { mode: 'files' } }] }, right: { visible: false, stash: [] } },
+    }
+    migrateLayoutBlob(b as never)
+    expect(b.sidebars.left.stash[0].params).toEqual({ mode: 'files' })
+    expect((b.dockview.panels.s.params as Record<string, unknown>).mode).toBeUndefined()
+  })
+  it('Space 默认档可指列表源:主区是启动器时左栏仍是收件箱;阅读面板声明的 workspaceSource 同样生效;右栏仍恒文件', () => {
+    expect(autoWorkspaceMode('left', 'launcher', INBOX_WORKSPACE_MODE)).toBe(INBOX_WORKSPACE_MODE)
+    expect(autoWorkspaceMode('left', 'inbox-reader', 'sessions', INBOX_WORKSPACE_MODE)).toBe(INBOX_WORKSPACE_MODE)
+    expect(autoWorkspaceMode('right', 'launcher', INBOX_WORKSPACE_MODE)).toBe('files')
   })
 })

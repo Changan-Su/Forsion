@@ -36,9 +36,12 @@ const MODELS_BODY = JSON.stringify({
   directProviders: [],
   defaultModelId: null,
 })
-/** 一级项「模型/Provider」与它的子项「模型」——两语都认(台架不钉语言)。 */
-const TAB_LABELS = ['模型/Provider', 'Model / Provider']
-const SUB_LABELS = ['模型', 'Models']
+/** 一级项「模型」与它的子项「默认模型」——两语都认(台架不钉语言)。
+ *  2.10.2 起模型设置按用途分页:默认模型页是按用途的紧凑选择器(ModelSelect),不再平铺 ModelGroupList。 */
+const TAB_LABELS = ['模型', 'Models']
+const SUB_LABELS = ['默认模型', 'Default models']
+/** 默认模型页「对话与任务」选择器的 aria-label。 */
+const CHAT_LABELS = ['对话与任务', 'Conversations & tasks']
 const ABOUT_LABELS = ['关于', 'About']
 const ADVANCED_LABELS = ['高级', 'Advanced']
 const EXPERIMENTAL_LABELS = ['测试性功能', 'Experimental features']
@@ -139,15 +142,18 @@ async function main() {
       await tap(page.locator('.mb-drawer--left.open .mb-foot-row .mb-icon-btn[aria-label="settings"]'), '设置钮')
       await page.waitForTimeout(700)
     }
-    /** 设置首页 → 模型页(m-models)。 */
+    /** 设置首页 → 模型 → 默认模型(m-models)。一级项按 <strong> 标题精确匹配:别的行的 <small> 描述里也有「模型」。 */
     const openModelPage = async () => {
       await openSettingsHome()
-      const tabRow = page.locator('.settings-mobile-row', { hasText: new RegExp(TAB_LABELS.map((s) => s.replace(/[/]/g, '\\/')).join('|')) }).first()
-      await tap(tabRow, '模型/Provider 一级项')        // 有子项 → 首次点击=展开
+      const tabRow = page.locator('.settings-mobile-row')
+        .filter({ has: page.locator('strong', { hasText: new RegExp(`^\\s*(${TAB_LABELS.join('|')})\\s*$`) }) }).first()
+      await tap(tabRow, '模型 一级项')        // 有子项 → 首次点击=展开
       await tap(page.locator('.settings-mobile-subitems .settings-mobile-subrow')
-        .filter({ hasText: new RegExp(`^\\s*(${SUB_LABELS.join('|')})\\s*$`) }).first(), '模型 子项')
-      await page.waitForSelector('.model-group-list', { timeout: 8000 })
+        .filter({ hasText: new RegExp(`^\\s*(${SUB_LABELS.join('|')})\\s*$`) }).first(), '默认模型 子项')
+      await page.waitForSelector('.model-defaults-panel', { timeout: 8000 })
     }
+    const chatPicker = () => page.locator(CHAT_LABELS.map((l) => `.model-defaults-panel .model-select-btn[aria-label="${l}"]`).join(', ')).first()
+    const chatPickerText = async () => (await chatPicker().locator('.grow').first().innerText().catch(() => '')).trim()
     /** 设置首页 → 高级 → 测试性功能。 */
     const openExperimentalPageFromHome = async () => {
       const advancedRow = page.locator('.settings-mobile-row', { hasText: new RegExp(`^\\s*(${ADVANCED_LABELS.join('|')})`) }).first()
@@ -164,29 +170,30 @@ async function main() {
     await page.waitForTimeout(4000)
 
     await openModelPage()
-    // 分组默认折叠(没有选中项时);先展开再点模型。
-    await tap(page.locator('.model-group-list .model-group-head').first(), '模型分组')
-    await tap(page.locator('.model-group-list .file-row', { hasText: MODEL_NAME }).first(), `模型 ${MODEL_NAME}`)
+    // 防空过:起步就显示目标模型的话,下面 B 恒绿。
+    const before = await chatPickerText()
+    if (before === MODEL_NAME) fail('起步未选中目标模型', before)
+    await tap(chatPicker(), '对话与任务 选择器')
+    await tap(page.locator('.model-defaults-panel .composer-menu .menu-item')
+      .filter({ has: page.locator('.grow', { hasText: new RegExp(`^\\s*${MODEL_NAME}\\s*$`) }) }).first(), `模型 ${MODEL_NAME}`)
 
     // A. 点一下不许抛。这一条就是本次 bug 的直接复现(setConfig is not a function)。
     const cfgErr = pageErrors.filter((m) => /setConfig|is not a function/.test(m))
     if (cfgErr.length) fail('选模型不抛未捕获异常', cfgErr.join(' / '))
     else pass('选模型不抛未捕获异常')
 
-    // 勾选真的落到 cfg(不是只落 draft):没有崩的话这里必须是选中态。
-    const marked = await page.locator('.model-group-list .file-row.active').count()
-    if (marked !== 1) fail('选中项唯一', `active=${marked}`)
-    else pass('选中项唯一')
+    // 没有崩的话选择器必须显示刚选的模型(draft 层);真落盘由下面 B 与 getConfig 钉。
+    const shown = await chatPickerText()
+    if (shown !== MODEL_NAME) fail('选择器显示刚选的模型', `显示「${shown || '(空)'}」`)
+    else pass('选择器显示刚选的模型')
 
     // B. 重启后仍然选中 = 真的存下来了(mobileShim.setConfig/getConfig 落盘 + boot 回灌 cfg)。
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 })
     await page.waitForTimeout(4000)
     await openModelPage()
-    // 选中项所在分组会自动展开 → 直接查勾。
-    const keptName = await page.locator('.model-group-list .file-row.active .file-name').first()
-      .innerText().catch(() => '')
-    if (keptName.trim() === MODEL_NAME) pass('重启后默认模型仍是刚选的', keptName.trim())
-    else fail('重启后默认模型仍是刚选的', `实际选中「${keptName.trim() || '(无)'}」`)
+    const keptName = await chatPickerText()
+    if (keptName === MODEL_NAME) pass('重启后默认模型仍是刚选的', keptName)
+    else fail('重启后默认模型仍是刚选的', `实际显示「${keptName || '(无)'}」`)
 
     const stored = await page.evaluate(async () => {
       const c = await window.tangu.getConfig()

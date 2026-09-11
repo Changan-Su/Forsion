@@ -3,7 +3,9 @@
  *
  * 规则落 ~/.tangu/agents/muse/triggers.json,由 supervisor tick 零 token 评估(见 services/museTriggers.ts):
  * 命中 → 动作链(runActions)或旧式 agentSlug 无人值守 run,两者皆无则唤醒 Muse。
- * 可见性:本地限定(hostExec,照 inbox_send);不进 PLAN_MODE_TOOLS(写操作;Muse 自己的 planMode 周期设不了=防自激)。
+ * 可见性:本地限定(hostExec,照 inbox_send);不进 PLAN_MODE_TOOLS(写操作)。Muse(2026-09-10 起按权限档
+ * 工作,不再 planMode)能看见本工具,但**只能建目标为其它 agent 的规则**(execute 里拒 agent 为空/muse):
+ * 唤醒自己的规则=自激回路,Muse 自己的定时工作走 manage_schedule(回灌周期、过预算闸)。
  * **tool_call 步骤刻意不在本工具开放**(validateTriggerInput allowToolCall=false):
  * 聊天 agent 在 full-auto 下能自建规则,放开=自授权 run_bash 提权链;tool_call 只走桌面构建器(人工预批)。
  * 旧名 muse_watch 在 registry.executeTool 留静默别名(不进 defs/快照,只兜升级瞬间的存量调用)。
@@ -44,7 +46,10 @@ export const manageAutomationProvider: ToolProvider = {
     {
       name: 'manage_automation',
       mode: 'both',
-      isEnabledFor: (profile) => !!profile.capabilities.hostExec, // 本地限定;云端 no-op
+      // 本地限定(云端 no-op)。Muse 只在 auto 档可见:ask/agent 档的 Muse 若能建 agent_run 规则,到期起跑的是对方 agent 的
+      // full-auto 会话 —— 等于把自己的审批档洗成别人的全开(Codex 09-10 P0-2);它自己的定时工作走 manage_schedule。
+      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && !((ctx as any).muse && ctx.approvalMode !== 'full-auto'),
+
       deferred: true, // P0-2:3.3KB 大 schema,低频管理面 → 按需装载(Muse/自动化 run 例外全量可见)
       deferHint: 'Set up/list/remove automations: reminders ("remind me at 9am"), event watchers, scheduled or recurring agent tasks.',
       definition: {
@@ -150,6 +155,11 @@ export const manageAutomationProvider: ToolProvider = {
         // 工具参数名是 agent(对模型友好),校验层键是 agent_slug——这里显式映射(修 muse_watch 时代静默掉落的 bug)。
         const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: amadeusVaultPath() });
         if (!v.ok) return `Error: ${v.error}`;
+        // Muse 自激防线:没有 agent(=唤醒 Muse)或 agent=muse 的规则一律拒;含 agent_run→muse 的动作链在 validate 里已拒。
+        if (ctx.muse && (!v.value.agentSlug || v.value.agentSlug === 'muse')) {
+          return 'Error: Muse cannot create automations that wake itself (self-trigger loop). For your own timed follow-ups use manage_schedule; automations you create must target another agent (agent=<slug>).';
+        }
+
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
           return `Error: agent "${v.value.agentSlug}" 不存在(先用 manage_agent 查看可用 agent)`;
         }
