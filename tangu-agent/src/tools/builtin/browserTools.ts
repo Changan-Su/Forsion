@@ -98,6 +98,7 @@ async function validateUrl(raw: string): Promise<string> {
 
 export const __browserToolInternals = {
   validateUrl,
+  navigate,
 };
 
 function searchUrl(engine: SearchEngine, query: string): string {
@@ -221,6 +222,10 @@ async function navigate(ctx: ToolContext, rawUrl: string): Promise<Record<string
   if (snap.success) {
     out.snapshot = clipSnapshot(String(snap.data?.snapshot || snap.raw || ''));
     out.element_count = snap.data?.refs ? Object.keys(snap.data.refs).length : undefined;
+  } else {
+    // 页面打开了但快照失败(实测 Bing 跳转页让 snapshot 卡满 30s 超时):必须把错误带出去,
+    // 否则模型拿到「success 且无内容」只会换关键词重搜,再烧一轮 30-60s(2026-09-11 实锤)。
+    out.snapshotError = snap.error || 'snapshot failed';
   }
   return out;
 }

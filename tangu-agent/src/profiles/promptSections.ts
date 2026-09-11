@@ -114,7 +114,7 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
     extraLine +
     '- Use `run_bash` to run shell commands; `list_dir`/`read_file` to inspect; `edit_file` for precise local edits and `write_file` for new files — all act on the real filesystem (relative paths resolve against the current working directory).\n' +
     '- When a task involves existing files, or you are unsure what is in the working directory, call `list_dir` first instead of assuming it is empty.\n' +
-    (opts?.coding ? '' : '- For live web information prefer `browser_search`; to open a page, click, type, or take a screenshot use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` / `browser_screenshot`.\n') +
+    (opts?.coding ? '' : '- For live web information prefer `web_search` (fast API); use `browser_search` only when web_search fails or you must interact with the results page. To open a page, click, type, or take a screenshot use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` / `browser_screenshot`.\n') +
     '- To change an existing file, edit only the affected lines — use `edit_file` (one region), `multi_edit` (several regions of one file), or `apply_patch`; do NOT re-read and re-emit a whole file for a small change (it wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so old_string matches the file\'s raw text.\n' +
     '- Destructive operations (writing files / running commands) may require user approval; when denied, switch approach or ask the user — do not retry the same operation repeatedly.\n' +
     // 破坏性操作事故链拆解(借 Codex 5.6 Destructive Actions:目标解析→递归展开→不可恢复,逐环加锁)
