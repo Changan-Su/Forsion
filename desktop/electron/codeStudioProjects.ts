@@ -280,7 +280,7 @@ export function createCodeStudioProjectWatcher(
   onChange: (event: CodeStudioProjectChange) => void,
   onError?: (error: Error, root?: string) => void,
   options: { usePolling?: boolean } = {},
-): { setRoot(root: string | null): Promise<void>; close(): void } {
+): { setRoot(root: string | null): Promise<string | null>; close(): void } {
   let watcher: FSWatcher | null = null
   let generation = 0
   let closed = false
@@ -291,12 +291,14 @@ export function createCodeStudioProjectWatcher(
     if (old) void old.close().catch((error) => onError?.(error as Error))
   }
   return {
+    /** 返回事件里带的那个真实根。宿主须原样回给渲染层比对,别自己再 realpath 一遍:
+     *  JS 版 realpathSync 保留入参的大小写与 8.3 短名,原生 realpath 规整它们,两边会错开、事件被静默丢弃。 */
     async setRoot(root) {
       const gen = ++generation
       clear()
-      if (!root || closed) return
+      if (!root || closed) return null
       const real = await realRoot(root)
-      if (gen !== generation || closed) return
+      if (gen !== generation || closed) return real
       const begin = (usePolling: boolean): Promise<void> => new Promise((resolve, reject) => {
         if (gen !== generation || closed) { resolve(); return }
         const next = chokidar.watch(real, {
@@ -305,9 +307,10 @@ export function createCodeStudioProjectWatcher(
           interval: 300, binaryInterval: 1000,
           awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 30 },
           ignored: (candidate, stat) => {
-            if (candidate === real) return false
+            // chokidar 交给 ignored 的路径一律 / 分隔(Windows 上根是 C:/…),拿字符串和 real 比永不相等:
+            // 根会落到「空相对路径 → 排除」,整棵树一个事件都不出。path.relative 两种分隔都认。
             const rel = slash(path.relative(real, candidate))
-            return !includedPath(rel, false) || !!stat?.isSymbolicLink()
+            return !!rel && (!includedPath(rel, false) || !!stat?.isSymbolicLink())
           },
         })
         watcher = next
@@ -351,6 +354,7 @@ export function createCodeStudioProjectWatcher(
         })
       })
       await begin(options.usePolling ?? false)
+      return real
     },
     close() { closed = true; generation++; clear() },
   }

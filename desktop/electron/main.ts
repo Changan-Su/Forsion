@@ -2138,8 +2138,7 @@ app.whenReady().then(async () => {
       const id = e.sender.id
       e.sender.once('destroyed', () => { studioWatchers.get(id)?.close(); studioWatchers.delete(id) })
     }
-    await watcher.setRoot(rootDir)
-    return { root: rootDir ? realpathSync(rootDir) : null }
+    return { root: await watcher.setRoot(rootDir) }
   })
   ipcMain.handle('codeStudio:versions', async (e, rootDir: string) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
