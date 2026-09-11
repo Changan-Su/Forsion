@@ -209,6 +209,8 @@ function spawnRunner(
       }
     });
     child.stderr?.on('data', (d) => { if (stderr.length < OUTPUT_CAP) stderr += d.toString(); });
+    // 子进程没读完 stdin 就退 → 异步 EPIPE(下面的 try/catch 接不住,无监听即未捕获异常);结局由 'close' 汇报。
+    child.stdin?.on('error', () => { /* ignore */ });
     child.on('error', (e: any) => {
       finish({ success: false, error: e?.code === 'ENOENT' ? missingHint : String(e?.message || e), enoent: e?.code === 'ENOENT' });
     });

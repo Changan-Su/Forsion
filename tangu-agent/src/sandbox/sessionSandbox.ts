@@ -114,6 +114,8 @@ class PythonKernel {
       this.readyResolve = (ok) => done(ok);
       this.child.stdout.on('data', (d: Buffer) => this.onData(d));
       this.child.stderr.on('data', () => { /* driver 级 stderr：忽略（执行级 stderr 走帧） */ });
+      // kernel 已退时写帧 → 异步 EPIPE（exec 的 try/catch 接不住）；按 kernel 死亡处理，不能变成未捕获异常。
+      this.child.stdin.on('error', () => { this.dead = true; this.failAll(); });
       this.child.on('error', () => { this.dead = true; this.failAll(); done(false); });
       this.child.on('exit', () => { this.dead = true; this.failAll(); done(false); });
     });

@@ -44,6 +44,23 @@ describe('writeStdin + waitForOutput (interactive shell)', () => {
     // —— 同一个 flaky 的两副面孔)。留足余量,让「10s 内确实没退」才是红。
   }, 20_000);
 
+  it('does not leak an unhandled stdin EPIPE when the process closed its stdin', async () => {
+    // 关掉 fd 0 后仍在跑 → 管道已无读端,写一个字节就 EPIPE(异步 'error',try/catch 接不住)。
+    const uncaught: any[] = [];
+    const onUncaught = (e: unknown): void => { uncaught.push(e); };
+    process.on('uncaughtException', onUncaught);
+    try {
+      const p = startOk('exec 0<&-; echo ready; sleep 5');
+      await waitForOutput(p, 0, { idleMs: 100, capMs: 10_000 }); // 见到 ready 即返回;cap 只防 CI 慢
+      expect(p.output).toContain('ready');
+      expect(writeStdin(SID, p.id, 'x', true)).toMatch(/wrote/);
+      await new Promise((res) => setTimeout(res, 200));
+      expect(uncaught.map((e) => e?.code ?? String(e))).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+  }, 15_000);
+
   it('errors for an unknown process id', () => {
     expect(writeStdin(SID, 'bg_nope', 'x', true)).toMatch(/不存在/);
   });

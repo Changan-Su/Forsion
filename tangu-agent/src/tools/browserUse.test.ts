@@ -119,6 +119,22 @@ describe('spawnRunner stream protocol', () => {
     expect(steps[0].screenshot).toBe('QUJD');
   });
 
+  it('does not leak an unhandled stdin EPIPE when the runner exits without reading stdin', async () => {
+    // 4MB 灌不进管道缓冲,子进程不读就退 → 挂起的写必得 EPIPE。'close' 只等 stdout/stderr,
+    // spawnRunner 可能先 resolve、EPIPE 后到,所以等一拍再断言(否则会记到下一个用例头上)。
+    const uncaught: any[] = [];
+    const onUncaught = (e: unknown): void => { uncaught.push(e); };
+    process.on('uncaughtException', onUncaught);
+    try {
+      const r = await spawnRunner(process.execPath, ['-e', ''], 'x'.repeat(4 << 20), process.env, 10_000, 'hint', undefined);
+      await new Promise((res) => setTimeout(res, 200));
+      expect(r.success).toBe(false);
+      expect(uncaught.map((e) => e?.code ?? String(e))).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onUncaught);
+    }
+  }, 15_000);
+
   it('returns the install hint when the runner binary is missing', async () => {
     const r = await spawnRunner('tangu-definitely-missing-bin', [], '', process.env, 5_000, 'INSTALL HINT', undefined);
     expect(r.success).toBe(false);

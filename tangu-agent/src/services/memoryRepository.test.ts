@@ -20,6 +20,11 @@ vi.mock('node:fs', async (original) => {
       }
       return fs.renameSync(...args);
     },
+    // Windows semantics: FlushFileBuffers on a directory handle fails, surfaced by libuv as EPERM.
+    fsyncSync: (fd: number) => {
+      if (process.platform === 'win32' && fs.fstatSync(fd).isDirectory()) throw Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+      return fs.fsyncSync(fd);
+    },
   };
 });
 
@@ -225,6 +230,24 @@ describe('per-agent durable memory repository', () => {
     fault.rename = '.memory-state.json'; fault.remaining = 1;
     expect(() => repo.add('lost write')).toThrow('synthetic disk write failure');
     expect(repo.snapshot()).toEqual(old);
+  });
+
+  it('upgrades and commits on Windows, where a directory handle cannot be fsynced', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      writeFileSync(join(dir, 'MEMORY.md'), 'legacy fact\n');
+      const repo = createMemoryRepository(dir);
+      // The on-disk state 2.10.0–2.10.2 left on Windows: metadata committed, projection still pending.
+      fault.rename = 'MEMORY.md'; fault.remaining = 1;
+      expect(() => repo.snapshot()).toThrow('synthetic disk write failure');
+      expect(JSON.parse(readFileSync(join(dir, '.memory-state.json'), 'utf8')).projectionPending).toBe(true);
+      const migrated = repo.snapshot();
+      expect(migrated.content).toBe('legacy fact\n');
+      repo.add('new fact', { expectedVersion: migrated.version });
+      expect(readFileSync(join(dir, 'MEMORY.md'), 'utf8')).toBe('legacy fact\nnew fact');
+      expect(JSON.parse(readFileSync(join(dir, '.memory-state.json'), 'utf8')).projectionPending).toBe(false);
+    } finally { Object.defineProperty(process, 'platform', platform); }
   });
 
   it('rejects symlinked Agent directories and memory files', () => {
